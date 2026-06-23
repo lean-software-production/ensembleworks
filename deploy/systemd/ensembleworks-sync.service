@@ -1,0 +1,30 @@
+[Unit]
+Description=EnsembleWorks sync server (tldraw sync + assets + API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# OOM containment / slice membership lives in the
+# ensembleworks-sync.service.d/10-memory.conf drop-in (Slice + MemoryAccounting +
+# MemoryLow=512M). Kept there so all cgroup/memory policy is in one place; see
+# ensembleworks.slice for the policy.
+# Adjust user/paths for your VM. deploy/bootstrap-debian.sh installs this with
+# User=ensemble and the paths below already filled in.
+User=ensemble
+WorkingDirectory=/home/ensemble/ensembleworks/server
+Environment=PORT=8788
+# Canvas SQLite, uploads and transcripts. Kept under the ensemble user's home so
+# all session state backs up with the home dir. Match APP_USER if you change it.
+Environment=DATA_DIR=/home/ensemble/.local/share/ensembleworks
+# LiveKit Cloud project (URL + API key/secret) — the sync server mints client
+# tokens with these. Keep them out of git; see ~/.config/ensembleworks/sync.env.
+EnvironmentFile=/home/ensemble/.config/ensembleworks/sync.env
+# Dogfooding stage: `dev` runs tsx in watch mode, so editing the source live-
+# reloads the service. Switch to `start` (plain tsx, no watch) when hardening.
+ExecStart=/usr/local/bin/npm run dev
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=LiveKit OSS SFU (self-hosted media plane)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Dedicated unprivileged user (no login, no shell) — the only process listening
+# on the public UDP media range. Config (incl. API secret) lives in
+# /etc/livekit/livekit.yaml, root:ensemble-livekit 0640.
+User=ensemble-livekit
+Slice=ensembleworks-media.slice
+MemoryAccounting=yes
+ExecStart=/usr/local/bin/livekit-server --config /etc/livekit/livekit.yaml
+Restart=on-failure
+RestartSec=2
+# No EnvironmentFile — config lives in livekit.yaml (root-owned, 0640).
+
+[Install]
+WantedBy=multi-user.target

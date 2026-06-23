@@ -1,0 +1,37 @@
+# Shared cgroup slice for the EnsembleWorks dev services (sync, term, client,
+# scribe). The resource policy is inverted for easy resizing: the three core
+# services (sync/client/scribe) each reserve a protected working set via
+# MemoryLow, and term — the spiky, low-blast-radius tmux workload — gets "the
+# rest". MemoryLow here must be >= the sum of the children's MemoryLow so the
+# protection propagates (cgroup v2 clamps a child's effective low to its
+# ancestors'). MemoryHigh throttles/reclaims the collective first, and because
+# the core is Low-protected that pressure lands on term; MemoryMax is the hard
+# ceiling whose OOM kill targets the largest process — the runaway term pane —
+# leaving the gateway, sibling panes and the core alive. Each service joins via
+# `Slice=ensembleworks.slice`.
+#
+# Resizing the VM needs NO edits here: MemoryHigh/MemoryMax are a percentage of
+# physical RAM, so they auto-scale with the box. The core's MemoryLow numbers are
+# an absolute working set and stay fixed. Installed by deploy/bootstrap-debian.sh.
+[Unit]
+Description=Resource limits for EnsembleWorks dev services
+Before=slices.target
+
+[Slice]
+MemoryAccounting=yes
+# Protected reservation for the core: sync 512M + client 512M + scribe 256M.
+# Keep this equal to the sum of those services' MemoryLow.
+MemoryLow=1280M
+# Collective throttle (~4.6G) and hard ceiling (~5.3G) on a 7.6 GiB box.
+# Lowered from 78%/88% to leave OS headroom for the separate
+# ensembleworks-media.slice (LiveKit SFU, MemoryMax=1500M): dev ~5.3G + media
+# 1.5G ~= 6.8G, ~0.8G for kernel/Caddy/cloudflared. Percentages auto-scale
+# if the VM is resized; revisit if headroom proves tight under real RSS.
+MemoryHigh=60%
+MemoryMax=70%
+# CPUWeight=50 yields to the media slice (CPUWeight=200) under contention.
+# The dev slice's heaviest CPU consumer is the scribe (per-frame Opus decode +
+# RMS VAD), but it is async — STT lag is invisible to users — while the SFU is
+# latency-critical. Under load the SFU keeps ~80% of CPU; dev procs share ~20%,
+# which is enough for the scribe to keep up. See memory-resource-policy.md.
+CPUWeight=50

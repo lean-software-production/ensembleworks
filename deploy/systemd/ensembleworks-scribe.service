@@ -1,0 +1,35 @@
+[Unit]
+Description=EnsembleWorks transcriber bot (LiveKit subscriber -> Groq Whisper -> /api/transcript)
+After=network-online.target ensembleworks-sync.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# OOM containment / slice membership lives in the
+# ensembleworks-scribe.service.d/10-memory.conf drop-in (Slice + MemoryAccounting
+# + MemoryLow=256M). Kept there so all cgroup/memory policy is in one place; see
+# ensembleworks.slice for the policy.
+# Adjust user/paths for your VM.
+User=ensemble
+WorkingDirectory=/home/ensemble/ensembleworks/transcriber
+Environment=CANVAS_URL=http://localhost:8788
+Environment=CANVAS_ROOM=team
+# Groq's hosted OpenAI-compatible Whisper API. Put STT_API_KEY=gsk_... — plus
+# the LiveKit Cloud URL/key/secret the bot subscribes with — in the
+# EnvironmentFile below (keep them out of this unit / git).
+Environment=STT_URL=https://api.groq.com/openai/v1
+Environment=STT_MODEL=whisper-large-v3-turbo
+Environment=STT_LANGUAGE=en
+EnvironmentFile=/home/ensemble/.config/ensembleworks/scribe.env
+# Wait for the sync server (CANVAS_URL, port 8788) to actually accept connections
+# before fetching a LiveKit token. After= only orders unit *start*, not socket
+# readiness, so without this the bot races the server on a cold boot and dies on
+# ECONNREFUSED. curl (no -f) exits 0 on any HTTP reply, nonzero on conn-refused.
+ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "${CANVAS_URL}/"; do echo "waiting for sync server at ${CANVAS_URL} ..."; sleep 1; done'
+# Dogfooding stage: watch mode (`dev`). Switch to `start` when hardening.
+ExecStart=/usr/local/bin/npm run dev
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

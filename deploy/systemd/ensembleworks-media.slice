@@ -1,0 +1,16 @@
+[Unit]
+Description=EnsembleWorks media plane (LiveKit SFU) — own cap, latency-priority CPU
+
+[Slice]
+MemoryAccounting=yes
+MemoryHigh=1G
+MemoryMax=1500M
+# The SFU is the one latency-critical component: a delayed SFU backs up RTP
+# packets (nacks, bigger jitter buffers) and works HARDER, not slower — so
+# throttling it first is self-defeating. CPUWeight=200 makes it win contention
+# against the dev slice (CPUWeight=50): under load the SFU keeps ~80% of CPU
+# while the scribe / vite / esbuild back off. Verified against per-unit
+# CPUUsageNSec: the scribe burns ~2.4x the SFU's CPU (per-frame Opus decode +
+# RMS VAD), but the scribe is async — a 200ms STT lag is invisible, while a
+# 200ms SFU lag is a media stall. See memory-resource-policy.md.
+CPUWeight=200

@@ -1,0 +1,313 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+# canvas — CLI for the EnsembleWorks HTTP API (session MVP).
+# Lets agents flip the status light on their terminal shape and post advice
+# stickies. All argument validation happens locally before any network call.
+
+canvas_url="${CANVAS_URL:-http://localhost:8788}"
+canvas_room="${CANVAS_ROOM:-team}"
+
+valid_statuses='working needs-you done idle'
+valid_colors='black grey light-violet violet blue light-blue yellow orange green light-green light-red red white'
+
+usage() {
+  printf '%s\n' \
+    'Usage: canvas <subcommand> [args]' \
+    '' \
+    'Subcommands:' \
+    '  status <session-id> <working|needs-you|done|idle>' \
+    '      Set the status light on the terminal shape(s) with that session id.' \
+    '  sticky <text> [--frame <name>] [--color <color>] [--author <name>]' \
+    '      Post a sticky note; --frame parents it to the first frame whose' \
+    '      name contains <name> (case-insensitive). --author prefixes the' \
+    '      text with "🤖 <name>: " and defaults the colour to light-blue so' \
+    '      agent stickies are distinct from teammates'"'"' notes.' \
+    '  frames' \
+    '      List the frames in the room with their child counts (JSON).' \
+    '  read <frame>' \
+    '      Show a frame'"'"'s stickies, text, images and embeds (JSON). Matches' \
+    '      the frame by name the same way as sticky --frame.' \
+    '  pull-images <frame> [dir]' \
+    '      Download the frame'"'"'s images to <dir> (default: a temp dir) and' \
+    '      print each local path, one per line, so an agent can read them.' \
+    '  transcript [--since <ms-epoch>] [--limit <n>]' \
+    '      Read the room'"'"'s voice transcript (JSON, oldest first). Entries' \
+    '      carry the speaker, text and — when their tab was open — their' \
+    '      cursor and nearest frame. Chain polls with the returned "now".' \
+    '  say <text> [--name <who>]' \
+    '      Append a transcript line by hand (demo/testing: exercises the' \
+    '      minutes and conversation-map loops without live audio).' \
+    '  shape <json>' \
+    '      Create/update/delete a diagram shape via POST /api/shape; the JSON' \
+    '      is passed through, with CANVAS_ROOM injected unless it already has' \
+    '      a "room" key. Examples:' \
+    '        canvas shape '"'"'{"type":"geo","text":"retry bug","x":100,"y":80}'"'"'' \
+    '        canvas shape '"'"'{"type":"arrow","fromId":"shape:a","toId":"shape:b"}'"'"'' \
+    '        canvas shape '"'"'{"op":"update","id":"shape:a","text":"new label"}'"'"'' \
+    '' \
+    'Environment:' \
+    '  CANVAS_URL    Base URL of the sync server (default: http://localhost:8788).' \
+    '  CANVAS_ROOM   Room to write to (default: team).'
+}
+
+die() {
+  printf 'canvas: %s\n' "$1" >&2
+  exit 1
+}
+
+# json_escape renders a string safe for embedding in a JSON double-quoted
+# value (pragmatic MVP escaping: backslash, quote and common control chars).
+json_escape() {
+  local s="$1"
+  s=${s//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/\\n}
+  s=${s//$'\r'/\\r}
+  s=${s//$'\t'/\\t}
+  printf '%s' "$s"
+}
+
+post_json() {
+  local route="$1" payload="$2"
+  curl -fsS -X POST -H 'Content-Type: application/json' \
+    -d "$payload" "${canvas_url}${route}"
+}
+
+# get_query curls a GET endpoint, url-encoding each "key=value" arg so frame
+# names with spaces or em-dashes survive the trip.
+get_query() {
+  local route="$1"
+  shift
+  local args=()
+  local pair
+  for pair in "$@"; do
+    args+=(--data-urlencode "$pair")
+  done
+  curl -fsS -G "${args[@]}" "${canvas_url}${route}"
+}
+
+cmd_status() {
+  [[ $# -eq 2 ]] || die "status requires exactly <session-id> <status> (run 'canvas --help')"
+  local session_id="$1" status="$2"
+  [[ -n "$session_id" ]] || die 'session-id must be non-empty'
+  local word matched=false
+  for word in $valid_statuses; do
+    [[ "$status" == "$word" ]] && matched=true
+  done
+  [[ "$matched" == true ]] || die "invalid status '$status' (expected one of: $valid_statuses)"
+
+  post_json /api/terminal-status "$(printf '{"room":"%s","sessionId":"%s","status":"%s"}' \
+    "$(json_escape "$canvas_room")" "$(json_escape "$session_id")" "$status")"
+}
+
+cmd_sticky() {
+  [[ $# -ge 1 ]] || die "sticky requires <text> (run 'canvas --help')"
+  local text="$1" frame='' color='' author=''
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --frame)
+        [[ $# -ge 2 ]] || die '--frame requires a value'
+        frame="$2"
+        shift 2
+        ;;
+      --color)
+        [[ $# -ge 2 ]] || die '--color requires a value'
+        color="$2"
+        shift 2
+        ;;
+      --author)
+        [[ $# -ge 2 ]] || die '--author requires a value'
+        author="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+
+  # Authorship is convention, not schema: tag the text and, unless the caller
+  # picked a colour, default agent stickies to light-blue so they stand out
+  # from teammates' notes.
+  if [[ -n "$author" ]]; then
+    text="🤖 ${author}: ${text}"
+    [[ -n "$color" ]] || color='light-blue'
+  fi
+
+  local trimmed="${text//[$' \t\n\r']/}"
+  [[ -n "$trimmed" ]] || die 'sticky text must be non-empty'
+  ((${#text} <= 2000)) || die 'sticky text must be at most 2000 characters'
+  if [[ -n "$color" ]]; then
+    local word matched=false
+    for word in $valid_colors; do
+      [[ "$color" == "$word" ]] && matched=true
+    done
+    [[ "$matched" == true ]] || die "invalid color '$color' (expected one of: $valid_colors)"
+  fi
+
+  local payload
+  payload="$(printf '{"room":"%s","text":"%s"' \
+    "$(json_escape "$canvas_room")" "$(json_escape "$text")")"
+  [[ -n "$frame" ]] && payload+="$(printf ',"frame":"%s"' "$(json_escape "$frame")")"
+  [[ -n "$color" ]] && payload+="$(printf ',"color":"%s"' "$color")"
+  payload+='}'
+
+  post_json /api/sticky "$payload"
+}
+
+cmd_frames() {
+  [[ $# -eq 0 ]] || die "frames takes no arguments (run 'canvas --help')"
+  get_query /api/frames "room=${canvas_room}"
+}
+
+cmd_read() {
+  [[ $# -eq 1 ]] || die "read requires exactly <frame> (run 'canvas --help')"
+  [[ -n "$1" ]] || die 'frame must be non-empty'
+  get_query /api/frame "room=${canvas_room}" "name=$1"
+}
+
+cmd_pull_images() {
+  [[ $# -ge 1 && $# -le 2 ]] || die "pull-images requires <frame> [dir] (run 'canvas --help')"
+  local frame="$1" dir="${2:-}"
+  [[ -n "$frame" ]] || die 'frame must be non-empty'
+  [[ -n "$dir" ]] || dir="$(mktemp -d)"
+  mkdir -p "$dir"
+
+  local json
+  json="$(get_query /api/frame "room=${canvas_room}" "name=${frame}")"
+
+  # Only /uploads/* urls are stored assets we can download; iframe urls
+  # (/dev/...) are deliberately skipped. The JSON is server-controlled, so a
+  # grep for the upload paths is safe enough without a JSON parser.
+  local urls
+  urls="$(printf '%s' "$json" | grep -oE '"url":"/uploads/[^"]+"' | sed -E 's/^"url":"//; s/"$//')"
+  [[ -n "$urls" ]] || {
+    printf 'canvas: no images in frame %s\n' "$frame" >&2
+    return 0
+  }
+
+  local url dest
+  while IFS= read -r url; do
+    [[ -n "$url" ]] || continue
+    dest="${dir}/$(basename "$url")"
+    curl -fsS "${canvas_url}${url}" -o "$dest"
+    printf '%s\n' "$dest"
+  done <<< "$urls"
+}
+
+cmd_transcript() {
+  local since='' limit=''
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --since)
+        [[ $# -ge 2 ]] || die '--since requires a value'
+        since="$2"
+        shift 2
+        ;;
+      --limit)
+        [[ $# -ge 2 ]] || die '--limit requires a value'
+        limit="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+  [[ -z "$since" || "$since" =~ ^[0-9]+$ ]] || die '--since must be a ms-epoch number'
+  [[ -z "$limit" || "$limit" =~ ^[0-9]+$ ]] || die '--limit must be a positive number'
+
+  local args=("room=${canvas_room}")
+  [[ -n "$since" ]] && args+=("since=${since}")
+  [[ -n "$limit" ]] && args+=("limit=${limit}")
+  get_query /api/transcript "${args[@]}"
+}
+
+cmd_say() {
+  [[ $# -ge 1 ]] || die "say requires <text> (run 'canvas --help')"
+  local text="$1" name='demo'
+  shift
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --name)
+        [[ $# -ge 2 ]] || die '--name requires a value'
+        name="$2"
+        shift 2
+        ;;
+      *)
+        die "unknown argument: $1"
+        ;;
+    esac
+  done
+  local trimmed="${text//[$' \t\n\r']/}"
+  [[ -n "$trimmed" ]] || die 'say text must be non-empty'
+
+  post_json /api/transcript "$(printf '{"room":"%s","identity":"%s","name":"%s","text":"%s"}' \
+    "$(json_escape "$canvas_room")" "$(json_escape "$name")" "$(json_escape "$name")" \
+    "$(json_escape "$text")")"
+}
+
+cmd_shape() {
+  [[ $# -eq 1 ]] || die "shape requires exactly one <json> argument (run 'canvas --help')"
+  local json="$1"
+  [[ "$json" == \{* ]] || die 'shape payload must be a JSON object'
+  # Inject the room so callers don't have to repeat it; an explicit "room"
+  # key in the payload wins.
+  if [[ "$json" != *'"room"'* ]]; then
+    json="{\"room\":\"$(json_escape "$canvas_room")\",${json#\{}"
+  fi
+  post_json /api/shape "$json"
+}
+
+main() {
+  [[ $# -ge 1 ]] || {
+    usage >&2
+    exit 1
+  }
+  case "$1" in
+    -h | --help)
+      usage
+      ;;
+    status)
+      shift
+      cmd_status "$@"
+      ;;
+    sticky)
+      shift
+      cmd_sticky "$@"
+      ;;
+    frames)
+      shift
+      cmd_frames "$@"
+      ;;
+    read)
+      shift
+      cmd_read "$@"
+      ;;
+    pull-images)
+      shift
+      cmd_pull_images "$@"
+      ;;
+    transcript)
+      shift
+      cmd_transcript "$@"
+      ;;
+    say)
+      shift
+      cmd_say "$@"
+      ;;
+    shape)
+      shift
+      cmd_shape "$@"
+      ;;
+    *)
+      usage >&2
+      die "unknown subcommand: $1"
+      ;;
+  esac
+}
+
+main "$@"

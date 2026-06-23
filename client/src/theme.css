@@ -1,0 +1,101 @@
+/*
+ * Wellmaintained brand theme for the canvas itself.
+ * Token source of truth: src/theme.ts (keep the two in sync).
+ * Loaded after tldraw/tldraw.css so these overrides win the cascade.
+ * Fonts (JetBrains Mono, PT Sans) are loaded from index.html.
+ */
+
+:root {
+	--wm-bg: #fafaf7;
+	--wm-bg-warm: #f6f3ec;
+	--wm-panel: #f2f0ea;
+	--wm-ink: #0f172a;
+	--wm-ink-muted: rgba(15, 23, 42, 0.58);
+	--wm-rule: rgba(15, 23, 42, 0.1);
+	--wm-rule-strong: rgba(15, 23, 42, 0.22);
+	--wm-seal-blue: #004990;
+	--wm-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	--wm-sans: 'PT Sans', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+}
+
+/* The canvas is a sheet of paper, not a void. The warmer surface goes to
+   the room; terminals sit on it as lighter sheets (see theme.ts). */
+.tl-theme__light {
+	--tl-color-background: var(--wm-bg-warm);
+
+	/* tldraw UI chrome — menus, toolbar, style panel, zoom bar, popovers.
+	   Paper panels, ink text, seal-blue for active/selected states, and the
+	   default soft drop shadows swapped for the flat paper float with a
+	   hairline ring. */
+	--tl-color-panel: var(--wm-bg);
+	--tl-color-panel-contrast: var(--wm-bg);
+	--tl-color-low: var(--wm-panel);
+	--tl-color-low-border: #e6e2d8;
+	--tl-color-divider: var(--wm-rule);
+	--tl-color-text: var(--wm-ink);
+	--tl-color-text-0: var(--wm-ink);
+	--tl-color-text-1: var(--wm-ink);
+	--tl-color-text-3: var(--wm-ink-muted);
+	--tl-color-selected: var(--wm-seal-blue);
+	--tl-color-primary: var(--wm-seal-blue);
+	--tl-color-focus: var(--wm-seal-blue);
+	--tl-shadow-2: 0 4px 24px rgba(0, 0, 0, 0.08), inset 0 0 0 1px var(--wm-rule-strong);
+	--tl-shadow-3: 0 4px 24px rgba(0, 0, 0, 0.1), inset 0 0 0 1px var(--wm-rule-strong);
+}
+
+/* The UI inherits the page font; give it the brand sans. Submenus, dialogs
+   and toasts render through portals outside .tlui-layout, so target every
+   tlui element rather than relying on inheritance from the layout root. */
+[class^='tlui-'],
+[class*=' tlui-'] {
+	font-family: var(--wm-sans);
+}
+
+/* Frame labels in the signature eyebrow posture: ALL-CAPS tracked mono in
+   the brand accent — "DRAFTING — CREW-A (MIN SPECS)" reads like a section
+   label on a printed page. Applies to the name input while editing too. */
+.tl-theme__light .tl-frame-heading,
+.tl-theme__light .tl-frame-label {
+	font-family: var(--wm-mono);
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+	color: var(--wm-seal-blue);
+}
+.tl-theme__light .tl-frame-name-input {
+	font-family: var(--wm-mono);
+	text-transform: uppercase;
+	letter-spacing: 0.14em;
+}
+
+/* While dragging a terminal by its title, force the grabbing cursor everywhere
+   (tldraw's select tool otherwise re-sets the canvas cursor each pointer move).
+   Toggled by TerminalShapeUtil's title move-handle. */
+body.ew-dragging,
+body.ew-dragging * {
+	cursor: grabbing !important;
+}
+
+/* xterm.css ships a black .xterm-viewport background that the light theme
+   doesn't repaint (DOM renderer); it peeks out as a dark hairline around
+   the cell grid. Let the shape's paper background show through instead.
+   !important: import order vs xterm.css isn't guaranteed. */
+.xterm-viewport {
+	background-color: transparent !important;
+	/* scrollback is 0 (tmux owns history), so the viewport never scrolls. Drop
+	   xterm's default `overflow-y: scroll` and any scrollbar gutter so nothing is
+	   reserved on the right edge. */
+	overflow-y: hidden !important;
+	scrollbar-width: none;
+}
+.xterm-viewport::-webkit-scrollbar {
+	display: none;
+}
+
+/* FitAddon sizes the grid to whole columns, so the container width is rarely an
+   exact multiple of the cell width; the leftover (up to ~one cell) would all sit
+   on the right, making the terminal's side margins look uneven. The screen has a
+   definite pixel width, so margin-inline: auto centers it and splits the leftover
+   evenly left/right — symmetric padding regardless of shape size. */
+.xterm .xterm-screen {
+	margin-inline: auto;
+}

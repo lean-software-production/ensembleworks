@@ -1,0 +1,276 @@
+/**
+ * EnsembleWorks terminal gateway.
+ *
+ * Bridges browser xterm.js instances to tmux sessions on this VM. The gateway
+ * holds exactly ONE tmux client (a node-pty) per canvas session and fans its
+ * output out to every attached WebSocket, so all viewers see identical bytes.
+ * tmux is the substrate: sessions survive the gateway, the browser, and are
+ * reachable from a plain `ssh` + `tmux attach -t canvas-<id>`.
+ *
+ * Routes (Caddy proxies /term* here):
+ *   GET    /term/health
+ *   GET    /term/sessions        – live gateway sessions + detached tmux ones
+ *   DELETE /term/sessions/:id    – kill the underlying tmux session
+ *   WS     /term/ws?session=ID&cols=N&rows=N
+ *
+ * Wire protocol:
+ *   client → server (text JSON): {type:'input',data} | {type:'resize',cols,rows}
+ *   server → client: terminal output as BINARY frames (raw utf-8 bytes);
+ *                    control as text JSON {type:'resize'|'exit'|'attached',...}
+ */
+import { execFile } from 'node:child_process'
+import { existsSync } from 'node:fs'
+import http from 'node:http'
+import type { Socket } from 'node:net'
+import path from 'node:path'
+import { promisify } from 'node:util'
+import pty, { type IPty } from 'node-pty'
+import { WebSocketServer, type WebSocket } from 'ws'
+
+const PORT = Number(process.env.PORT ?? 8789)
+const TMUX_PREFIX = 'canvas-'
+const SCROLLBACK_LIMIT = 256 * 1024 // bytes replayed to newly attached clients
+const HEARTBEAT_INTERVAL_MS = 20_000
+
+// Omarchy-derived tmux config (see deploy/tmux-ensembleworks.conf). `-f` only
+// takes effect when the tmux *server* starts; for an already-running server
+// apply it with `tmux source-file <conf>`.
+const TMUX_CONF =
+	process.env.TMUX_CONF ?? path.resolve(import.meta.dirname, '../../deploy/tmux-ensembleworks.conf')
+const TMUX_BASE_ARGS = existsSync(TMUX_CONF) ? ['-f', TMUX_CONF] : []
+
+const execFileP = promisify(execFile)
+
+interface TermSession {
+	id: string
+	pty: IPty
+	clients: Set<WebSocket>
+	scrollback: Buffer[]
+	scrollbackBytes: number
+	cols: number
+	rows: number
+}
+
+const sessions = new Map<string, TermSession>()
+
+function sanitizeId(id: string): string | null {
+	return /^[a-zA-Z0-9_-]{1,48}$/.test(id) ? id : null
+}
+
+function getOrCreateSession(id: string, cols: number, rows: number): TermSession {
+	const existing = sessions.get(id)
+	if (existing) return existing
+
+	// `new-session -A` attaches when the session already exists, so terminals
+	// reconnect to live tmux sessions across gateway and browser restarts.
+	const proc = pty.spawn(
+		'tmux',
+		[...TMUX_BASE_ARGS, 'new-session', '-A', '-s', `${TMUX_PREFIX}${id}`],
+		{
+			name: 'xterm-256color',
+			cols,
+			rows,
+			cwd: process.env.HOME ?? process.cwd(),
+			env: {
+				...process.env,
+				TERM: 'xterm-256color',
+				// Light terminal background hint (fg 0, bg 15) — tmux < 3.4 drops
+				// OSC 11 queries, so theme auto-detection needs this fallback.
+				COLORFGBG: '0;15',
+				// The `q` binding in tmux-ensembleworks.conf reloads from this path.
+				ENSEMBLEWORKS_TMUX_CONF: TMUX_CONF,
+			} as Record<string, string>,
+		}
+	)
+
+	const session: TermSession = {
+		id,
+		pty: proc,
+		clients: new Set(),
+		scrollback: [],
+		scrollbackBytes: 0,
+		cols,
+		rows,
+	}
+
+	proc.onData((data) => {
+		const buf = Buffer.from(data, 'utf8')
+		session.scrollback.push(buf)
+		session.scrollbackBytes += buf.byteLength
+		while (session.scrollbackBytes > SCROLLBACK_LIMIT && session.scrollback.length > 1) {
+			session.scrollbackBytes -= session.scrollback.shift()!.byteLength
+		}
+		for (const ws of session.clients) {
+			if (ws.readyState === ws.OPEN) ws.send(buf, { binary: true })
+		}
+	})
+
+	proc.onExit(() => {
+		console.log(`[term ${id}] tmux client exited`)
+		for (const ws of session.clients) {
+			if (ws.readyState === ws.OPEN) {
+				ws.send(JSON.stringify({ type: 'exit' }))
+				ws.close()
+			}
+		}
+		sessions.delete(id)
+	})
+
+	sessions.set(id, session)
+	console.log(`[term ${id}] spawned tmux client (${cols}x${rows})`)
+	return session
+}
+
+function resizeSession(session: TermSession, cols: number, rows: number) {
+	if (!Number.isInteger(cols) || !Number.isInteger(rows)) return
+	cols = Math.max(20, Math.min(500, cols))
+	rows = Math.max(5, Math.min(200, rows))
+	if (cols === session.cols && rows === session.rows) return
+	session.cols = cols
+	session.rows = rows
+	session.pty.resize(cols, rows)
+	// Authoritative size fan-out: every viewer converges on the same grid.
+	const msg = JSON.stringify({ type: 'resize', cols, rows })
+	for (const ws of session.clients) {
+		if (ws.readyState === ws.OPEN) ws.send(msg)
+	}
+}
+
+async function listTmuxSessions(): Promise<string[]> {
+	try {
+		const { stdout } = await execFileP('tmux', ['list-sessions', '-F', '#{session_name}'])
+		return stdout
+			.split('\n')
+			.filter((name) => name.startsWith(TMUX_PREFIX))
+			.map((name) => name.slice(TMUX_PREFIX.length))
+	} catch {
+		return [] // no tmux server running yet
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HTTP + WS plumbing
+// ---------------------------------------------------------------------------
+
+const server = http.createServer(async (req, res) => {
+	const url = new URL(req.url ?? '', 'http://internal')
+	res.setHeader('content-type', 'application/json')
+
+	if (req.method === 'GET' && url.pathname === '/term/health') {
+		res.end(JSON.stringify({ ok: true, sessions: sessions.size }))
+		return
+	}
+
+	if (req.method === 'GET' && url.pathname === '/term/sessions') {
+		const detached = await listTmuxSessions()
+		const all = new Map<string, { id: string; attachedClients: number }>()
+		for (const id of detached) all.set(id, { id, attachedClients: 0 })
+		for (const s of sessions.values()) all.set(s.id, { id: s.id, attachedClients: s.clients.size })
+		res.end(JSON.stringify({ sessions: [...all.values()] }))
+		return
+	}
+
+	const killMatch = url.pathname.match(/^\/term\/sessions\/([^/]+)$/)
+	if (req.method === 'DELETE' && killMatch) {
+		const id = sanitizeId(killMatch[1]!)
+		if (!id) {
+			res.statusCode = 400
+			res.end(JSON.stringify({ error: 'bad session id' }))
+			return
+		}
+		try {
+			await execFileP('tmux', ['kill-session', '-t', `${TMUX_PREFIX}${id}`])
+		} catch {
+			// already gone
+		}
+		res.end(JSON.stringify({ ok: true }))
+		return
+	}
+
+	res.statusCode = 404
+	res.end(JSON.stringify({ error: 'not found' }))
+})
+
+const wss = new WebSocketServer({ noServer: true })
+const aliveClients = new WeakMap<WebSocket, boolean>()
+
+// Detect half-open proxy/network connections. Browser WebSockets answer ping
+// frames automatically; terminating a missed heartbeat triggers client retry.
+const heartbeat = setInterval(() => {
+	for (const ws of wss.clients) {
+		if (ws.readyState !== ws.OPEN) continue
+		if (aliveClients.get(ws) === false) {
+			ws.terminate()
+			continue
+		}
+		aliveClients.set(ws, false)
+		ws.ping()
+	}
+}, HEARTBEAT_INTERVAL_MS)
+heartbeat.unref()
+
+server.on('upgrade', (req, socket, head) => {
+	const url = new URL(req.url ?? '', 'http://internal')
+	if (url.pathname !== '/term/ws') {
+		socket.destroy()
+		return
+	}
+	const id = sanitizeId(url.searchParams.get('session') ?? '')
+	const cols = Number(url.searchParams.get('cols') ?? 80)
+	const rows = Number(url.searchParams.get('rows') ?? 24)
+	if (!id) {
+		socket.destroy()
+		return
+	}
+
+	// Terminal traffic is a stream of tiny frames — a keystroke up, a one-char
+	// echo back. Node sockets default to Nagle on, which can park those small
+	// echo frames for ~40ms waiting to coalesce, adding to every round-trip on
+	// top of raw network RTT. Disable it so characters paint as fast as the link
+	// allows (most noticeable for far-region users). The upgrade event types
+	// `socket` as a generic Duplex; over an HTTP/TCP server it is a net.Socket.
+	;(socket as Socket).setNoDelay(true)
+
+	wss.handleUpgrade(req, socket, head, (ws) => {
+		aliveClients.set(ws, true)
+		ws.on('pong', () => aliveClients.set(ws, true))
+		const session = getOrCreateSession(id, cols || 80, rows || 24)
+
+		// Bring the newcomer up to speed: current grid size, then the recent
+		// output so the screen renders immediately (tmux also repaints on its
+		// next output, which papers over any escape sequences cut mid-stream).
+		ws.send(JSON.stringify({ type: 'attached', cols: session.cols, rows: session.rows }))
+		if (session.scrollback.length > 0) {
+			ws.send(Buffer.concat(session.scrollback), { binary: true })
+		}
+		session.clients.add(ws)
+		console.log(`[term ${id}] client attached (${session.clients.size} attached)`)
+
+		ws.on('message', (raw, isBinary) => {
+			if (isBinary) return
+			let msg: { type?: string; data?: string; cols?: number; rows?: number }
+			try {
+				msg = JSON.parse(raw.toString())
+			} catch {
+				return
+			}
+			if (msg.type === 'input' && typeof msg.data === 'string') {
+				session.pty.write(msg.data)
+			} else if (msg.type === 'resize') {
+				resizeSession(session, Number(msg.cols), Number(msg.rows))
+			}
+		})
+
+		ws.on('close', () => {
+			session.clients.delete(ws)
+			console.log(`[term ${id}] client detached (${session.clients.size} attached)`)
+			// The pty (and tmux session) intentionally stays alive with zero
+			// clients — closing every browser must not kill the session (M1
+			// exit criterion).
+		})
+	})
+})
+
+server.listen(PORT, () => {
+	console.log(`ensembleworks terminal gateway listening on :${PORT}`)
+})

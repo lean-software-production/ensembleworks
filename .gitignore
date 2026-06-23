@@ -1,0 +1,10 @@
+node_modules/
+dist/
+data/
+nohup.out
+*.log
+.vite/
+.opencode/
+.env
+*.env
+.DS_Store

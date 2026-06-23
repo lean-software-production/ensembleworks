@@ -1,0 +1,25 @@
+[Unit]
+Description=EnsembleWorks terminal gateway (node-pty + tmux)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# OOM containment / slice membership lives in the
+# ensembleworks-term.service.d/10-memory.conf drop-in (Slice + MemoryAccounting,
+# no MemoryLow). term carries no reservation or cap — it gets "the rest" of the
+# slice, so a runaway tmux process is throttled (slice MemoryHigh) then OOM-killed
+# in-cgroup (slice MemoryMax) without disturbing the protected core. See
+# ensembleworks.slice for the policy.
+# Must run as the shared ensemble user — gateway terminals are that user's shell.
+User=ensemble
+WorkingDirectory=/home/ensemble/ensembleworks/server
+Environment=PORT=8789
+Environment=TMUX_CONF=/home/ensemble/ensembleworks/deploy/tmux-ensembleworks.conf
+# Dogfooding stage: watch mode (`dev:term`). Switch to `start:term` when hardening.
+ExecStart=/usr/local/bin/npm run dev:term
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
