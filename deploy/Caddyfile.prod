@@ -1,0 +1,37 @@
+# EnsembleWorks — PRODUCTION Caddy edge (deployed boxes). Unlike deploy/Caddyfile
+# (devcontainer/ash: forwards everything to the Vite dev server), there is NO Vite
+# here: Caddy serves the built static client and takes over the backend proxy
+# routes Vite used to handle (/sync /api /uploads /term), plus /livekit and the
+# /dev/{port} proxy. Plain HTTP on :8080; TLS terminated upstream by the
+# Cloudflare Tunnel. deploy/deploy.sh installs this to /etc/caddy/Caddyfile.
+# The site root resolves through the `current` symlink so a release swap + reload
+# serves the new build.
+
+:8080 {
+	@livekit path /livekit /livekit/*
+	handle @livekit {
+		uri strip_prefix /livekit
+		reverse_proxy localhost:7880
+	}
+
+	@dev path_regexp dev ^/dev/(\d+)(/.*)?$
+	handle @dev {
+		uri strip_prefix /dev/{re.dev.1}
+		reverse_proxy localhost:{re.dev.1}
+	}
+
+	# Backend routes formerly proxied by Vite. /sync and /term are WebSockets;
+	# Caddy upgrades them automatically.
+	handle /sync*    { reverse_proxy localhost:8788 }
+	handle /api*     { reverse_proxy localhost:8788 }
+	handle /uploads* { reverse_proxy localhost:8788 }
+	handle /term*    { reverse_proxy localhost:8789 }
+
+	# Static SPA: serve the built client, fall back to index.html for client-side
+	# routes. Root goes through the release symlink.
+	handle {
+		root * /home/ensembleworks/current/client/dist
+		try_files {path} /index.html
+		file_server
+	}
+}
