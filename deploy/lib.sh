@@ -9,7 +9,7 @@ extract_version() {
 
 # version_ge <a> <b> -> exit 0 iff a >= b (numeric, dotted; uses sort -V).
 version_ge() {
-	[ "$1" = "$2" ] && return 0
+	# sort -V handles equal inputs too — the lower of two equal strings is itself.
 	local lower
 	lower="$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -1)"
 	[ "$lower" = "$2" ]

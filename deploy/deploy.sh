@@ -66,7 +66,7 @@ while read -r name constraint required probe; do
   fi
 done < /tmp/ew-runtime-requirements
 if [ -n "\$problems" ]; then
-  echo "PREFLIGHT FAILED — host is behind. Update & re-run servers/ew-donkeyred-001/bootstrap.sh:" >&2
+  echo "PREFLIGHT FAILED — host is behind. Re-run the laingville servers/<host>/bootstrap.sh for ${SSH_TARGET}:" >&2
   printf '%s' "\$problems" >&2
   exit 1
 fi
@@ -191,7 +191,7 @@ sudo systemctl reload-or-restart caddy
 
 # ---- prune old releases (keep newest \$KEEP, never the live one) -------------
 echo "==> pruning releases (keep \${KEEP})"
-live="\$(asapp readlink -f "\${APP_HOME}/current")"
+live="\${NEW}"   # we just pointed current -> NEW; no need to re-resolve it
 # shellcheck disable=SC2012
 asapp bash -c "ls -1dt '\${RELEASES}'/*/ 2>/dev/null | tail -n +\$((KEEP+1)) | while read -r d; do d=\"\\\${d%/}\"; [ \"\\\$d\" = '\${live}' ] && continue; git -C '\${SRC}' worktree remove --force \"\\\$d\" 2>/dev/null || rm -rf \"\\\$d\"; done"
 asapp git -C "\${SRC}" worktree prune
