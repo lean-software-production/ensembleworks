@@ -195,9 +195,16 @@ asapp git -C "\${SRC}" worktree prune
 
 # ---- verify ------------------------------------------------------------------
 echo "==> deployed: \$(asapp git -C "\${NEW}" describe --tags --always)"
-sleep 2
-code="\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://localhost:\${EDGE_PORT}/" || true)"
+# Poll for readiness — the sync server (tsx + esbuild cold start) takes a few
+# seconds to bind :8788, so a fixed sleep would report a false 502 on success.
+code=000
+for _ in \$(seq 1 30); do
+  code="\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://localhost:\${EDGE_PORT}/" || true)"
+  [ "\$code" = "200" ] && break
+  sleep 1
+done
 echo "==> edge http://localhost:\${EDGE_PORT}/ -> \${code}"
+[ "\$code" = "200" ] || echo "    (warning: edge not 200 after 30s — check 'systemctl status ensembleworks-sync')"
 REMOTE_EOF
 )"
 
