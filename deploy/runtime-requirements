@@ -1,0 +1,16 @@
+# EnsembleWorks runtime requirements — the deploy preflight's source of truth.
+# Columns: name  constraint(exact|min|present)  version(- if present)  probe...
+# The probe is run on the target; the first MAJOR.MINOR[.PATCH] of its output is
+# compared per constraint. Bumping an `exact` pin is a deliberate two-repo change
+# (here + laingville servers/<host>/bootstrap.sh) — the preflight enforces it.
+# Floors below reflect Debian 13 (trixie) shipping versions + our pinned installs.
+node            exact    22.22.3    node -v
+livekit-server  exact    1.13.1     livekit-server --version
+caddy           min      2.7.0      caddy version
+cloudflared     min      2024.1.0   cloudflared --version
+npm             min      10.0.0     npm -v
+git             min      2.39.0     git --version
+tmux            min      3.3        tmux -V
+python3         min      3.11       python3 --version
+cc              present  -          cc --version
+pkg-config      present  -          pkg-config --version
