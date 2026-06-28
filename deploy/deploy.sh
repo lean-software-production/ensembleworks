@@ -75,7 +75,7 @@ systemctl cat ensembleworks.slice >/dev/null 2>&1 || { echo "ensembleworks.slice
 echo "    preflight ok"
 
 # ---- ensure base clone + fetch tags -----------------------------------------
-if [ ! -d "\${SRC}/.git" ]; then
+if ! asapp test -d "\${SRC}/.git"; then
   echo "==> cloning base repo to \${SRC}"
   asapp git clone "\${REPO_URL}" "\${SRC}"
 fi
@@ -83,14 +83,14 @@ asapp git -C "\${SRC}" fetch --tags --prune origin
 asapp git -C "\${SRC}" rev-parse "\${TAG}" >/dev/null 2>&1 || { echo "tag \${TAG} not found" >&2; exit 1; }
 
 # ---- build the release (old release keeps serving) ---------------------------
-PREV="\$(readlink -f "\${APP_HOME}/current" 2>/dev/null || true)"
-if [ -d "\${NEW}" ] && [ -f "\${NEW}/.ew-built" ]; then
+PREV="\$(asapp readlink -f "\${APP_HOME}/current" 2>/dev/null || true)"
+if asapp test -d "\${NEW}" && asapp test -f "\${NEW}/.ew-built"; then
   echo "==> \${VERSION} already built — swapping (rollback path)"
 else
   echo "==> creating worktree \${NEW} at \${TAG}"
   asapp mkdir -p "\${RELEASES}"
   asapp git -C "\${SRC}" worktree add --detach "\${NEW}" "\${TAG}"
-  if [ -n "\${PREV}" ] && [ -d "\${PREV}/node_modules" ] && cmp -s "\${PREV}/package-lock.json" "\${NEW}/package-lock.json"; then
+  if [ -n "\${PREV}" ] && asapp test -d "\${PREV}/node_modules" && asapp cmp -s "\${PREV}/package-lock.json" "\${NEW}/package-lock.json"; then
     echo "==> lockfile unchanged — reusing node_modules (reflink)"
     asapp cp -a --reflink=auto "\${PREV}/node_modules" "\${NEW}/node_modules"
   else
@@ -188,7 +188,7 @@ sudo systemctl reload-or-restart caddy
 
 # ---- prune old releases (keep newest \$KEEP, never the live one) -------------
 echo "==> pruning releases (keep \${KEEP})"
-live="\$(readlink -f "\${APP_HOME}/current")"
+live="\$(asapp readlink -f "\${APP_HOME}/current")"
 # shellcheck disable=SC2012
 asapp bash -c "ls -1dt '\${RELEASES}'/*/ 2>/dev/null | tail -n +\$((KEEP+1)) | while read -r d; do d=\"\\\${d%/}\"; [ \"\\\$d\" = '\${live}' ] && continue; git -C '\${SRC}' worktree remove --force \"\\\$d\" 2>/dev/null || rm -rf \"\\\$d\"; done"
 asapp git -C "\${SRC}" worktree prune
