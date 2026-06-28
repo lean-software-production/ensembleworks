@@ -101,7 +101,7 @@ curl -s "https://api.github.com/users/ensembleworks-lsp%5Bbot%5D" | jq '.id, .lo
 ## 6. Place the credentials on the box
 
 The box runs all services as a single **app user** — generically `ensemble` in
-`bootstrap-debian.sh`, but the actual dogfooding box runs as
+`bootstrap-debian-ash.sh`, but the actual dogfooding box runs as
 `ensembleworks-leansoftware-ai`. Put the config in **that user's**
 `~/.config/ensembleworks/` (mode **0600**) alongside the existing
 `sync.env` / `scribe.env` — that is the path `gh-app-token.bash` reads by default
@@ -118,7 +118,7 @@ GITHUB_BOT_LOGIN=ensembleworks-lsp[bot]
 ```
 
 Copy the `.pem` to `GITHUB_APP_PRIVATE_KEY_FILE` and `chmod 600` it (use the real
-absolute path, not `$HOME`, inside the file). `bootstrap-debian.sh` writes a
+absolute path, not `$HOME`, inside the file). `bootstrap-debian-ash.sh` writes a
 placeholder `github-app.env` (like it does for `sync.env`/`scribe.env`) so a
 fresh box prompts for these — fill in the values it leaves empty.
 
@@ -208,7 +208,7 @@ incident response you hope never to run:
 
 ## What plugs in where (build plan)
 
-- Step 6 secrets file → created as a placeholder by `bootstrap-debian.sh`.
+- Step 6 secrets file → created as a placeholder by `bootstrap-debian-ash.sh`.
 - Step 9 token minting → `bin/gh-app-token.bash`.
 - Steps 8–9 push + PR → the `bin/` commit tool, which reads co-authors from the
   sync server's `/api/participants?room=&page=` (Cloudflare Access identity).

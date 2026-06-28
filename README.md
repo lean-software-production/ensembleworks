@@ -236,11 +236,11 @@ The fastest path is the bootstrap script — it provisions a fresh **Debian 13
 systemd units and Caddyfile below):
 
 ```bash
-scp deploy/bootstrap-debian.sh root@<box>:/root/
-ssh root@<box> 'CF_TUNNEL_TOKEN=eyJ... PUBLIC_HOST=canvas.leansoftware.ai bash /root/bootstrap-debian.sh'
+scp deploy/bootstrap-debian-ash.sh root@<box>:/root/
+ssh root@<box> 'CF_TUNNEL_TOKEN=eyJ... PUBLIC_HOST=canvas.leansoftware.ai bash /root/bootstrap-debian-ash.sh'
 ```
 
-See [deploy/bootstrap-debian.sh](deploy/bootstrap-debian.sh) for the config
+See [deploy/bootstrap-debian-ash.sh](deploy/bootstrap-debian-ash.sh) for the config
 knobs (`REPO_BRANCH`, `APP_USER`, …). Everything the instance owns lives under
 `/home/ensemble`. What it sets up, and the manual steps:
 
@@ -293,7 +293,7 @@ under `~/.local/share/ensembleworks` (the `DATA_DIR`) — and the secrets
 the whole instance. The `*.env` files are segregated by service:
 `sync.env` / `scribe.env` feed their systemd units, `github-app.env` feeds
 `bin/gh-app-token.bash`, and `term.env` is sourced into every interactive
-shell by `~/.bashrc` (wired by `bootstrap-debian.sh`) so CLI tools launched
+shell by `~/.bashrc` (wired by `bootstrap-debian-ash.sh`) so CLI tools launched
 from canvas terminals see those vars — new terminals pick it up at startup,
 and editing `term.env` needs no gateway restart (just open a new terminal or
 `source ~/.bashrc`). Because the mob can edit the code the services run, the
