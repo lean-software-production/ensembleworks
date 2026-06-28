@@ -20,6 +20,7 @@ import { AvOverlay } from './av/AvOverlay'
 import { seedDemoCanvas } from './demo'
 import { seedSessionCanvas } from './session/seedSessionCanvas'
 import { toProxiedUrl } from './iframe/IframeShapeUtil'
+import { NEKO_DEFAULT_BASE, NEKO_DEFAULT_H, NEKO_DEFAULT_W, NEKO_ICON_NAME } from './neko/NekoShapeUtil'
 
 export function createTerminalShape(editor: Editor) {
 	// Short, human-typeable ID — it is also the tmux session name suffix, so
@@ -53,6 +54,19 @@ export function createDevServerShape(editor: Editor) {
 	editor.setSelectedShapes([id])
 }
 
+export function createNekoShape(editor: Editor) {
+	const { x, y } = editor.getViewportPageBounds().center
+	const id = createShapeId()
+	editor.createShape({
+		id,
+		type: 'neko',
+		x: x - NEKO_DEFAULT_W / 2,
+		y: y - NEKO_DEFAULT_H / 2,
+		props: { w: NEKO_DEFAULT_W, h: NEKO_DEFAULT_H, base: NEKO_DEFAULT_BASE, title: 'shared browser' },
+	})
+	editor.setSelectedShapes([id])
+}
+
 export const uiOverrides: TLUiOverrides = {
 	tools(editor, tools) {
 		tools['terminal'] = {
@@ -73,6 +87,15 @@ export const uiOverrides: TLUiOverrides = {
 				createDevServerShape(editor)
 			},
 		}
+		tools['neko'] = {
+			id: 'neko',
+			icon: NEKO_ICON_NAME,
+			label: 'New shared browser',
+			readonlyOk: false,
+			onSelect() {
+				createNekoShape(editor)
+			},
+		}
 		return tools
 	},
 }
@@ -84,6 +107,7 @@ function ToolbarWithTerminal() {
 			<DefaultToolbarContent />
 			{tools['terminal'] && <TldrawUiMenuItem {...tools['terminal']} />}
 			{tools['dev-server'] && <TldrawUiMenuItem {...tools['dev-server']} />}
+			{tools['neko'] && <TldrawUiMenuItem {...tools['neko']} />}
 		</DefaultToolbar>
 	)
 }

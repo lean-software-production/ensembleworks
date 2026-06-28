@@ -94,6 +94,7 @@ npx tsx src/canvas-api.test.ts  # canvas API: terminal-status, sticky, frames + 
 npx tsx src/scribe-api.test.ts  # transcript + shape APIs, scribe tokens
 cd ../client && npx tsx src/av/spatial.test.ts        # spatial gain model
 npx tsx src/session/layout.test.ts                    # session layout invariants
+npx tsx src/neko/neko.test.ts                         # neko shared-browser URL + aspect lock
 cd ../transcriber && npx tsx src/segmenter.test.ts    # utterance VAD
 npx tsx src/wav.test.ts                               # WAV encoder
 ```
