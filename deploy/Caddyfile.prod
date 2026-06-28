@@ -1,11 +1,11 @@
-# EnsembleWorks — PRODUCTION Caddy edge (deployed boxes). Unlike deploy/Caddyfile
-# (devcontainer/ash: forwards everything to the Vite dev server), there is NO Vite
-# here: Caddy serves the built static client and takes over the backend proxy
-# routes Vite used to handle (/sync /api /uploads /term), plus /livekit and the
-# /dev/{port} proxy. Plain HTTP on :8080; TLS terminated upstream by the
-# Cloudflare Tunnel. deploy/deploy.sh installs this to /etc/caddy/Caddyfile.
-# The site root resolves through the `current` symlink so a release swap + reload
-# serves the new build.
+# EnsembleWorks — PRODUCTION Caddy edge (deployed boxes). Plain HTTP on :8080;
+# TLS is terminated upstream by the Cloudflare Tunnel. Everything except the
+# media signaling (/livekit), the embedded dev-server proxy (/dev/{port}) and the
+# terminal gateway (/term) is proxied to the sync server on :8788 — which serves
+# /sync (tldraw WS), /api, /uploads AND the static client build + SPA fallback.
+# The sync server runs as the app user, so it reads the build from its own home;
+# Caddy never touches the home dir (keeps it 700). deploy/deploy.sh installs this
+# to /etc/caddy/Caddyfile.
 
 :8080 {
 	@livekit path /livekit /livekit/*
@@ -20,18 +20,14 @@
 		reverse_proxy localhost:{re.dev.1}
 	}
 
-	# Backend routes formerly proxied by Vite. /sync and /term are WebSockets;
-	# Caddy upgrades them automatically.
-	handle /sync*    { reverse_proxy localhost:8788 }
-	handle /api*     { reverse_proxy localhost:8788 }
-	handle /uploads* { reverse_proxy localhost:8788 }
-	handle /term*    { reverse_proxy localhost:8789 }
+	# Terminal gateway (node-pty + tmux; WebSocket).
+	handle /term* {
+		reverse_proxy localhost:8789
+	}
 
-	# Static SPA: serve the built client, fall back to index.html for client-side
-	# routes. Root goes through the release symlink.
+	# Everything else — the app + static client/SPA, /sync (WS), /api, /uploads —
+	# is served by the sync server (which serves client/dist in production).
 	handle {
-		root * /home/ensembleworks/current/client/dist
-		try_files {path} /index.html
-		file_server
+		reverse_proxy localhost:8788
 	}
 }

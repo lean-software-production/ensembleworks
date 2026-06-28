@@ -118,6 +118,7 @@ User=\${APP_USER}
 WorkingDirectory=\${APP_HOME}/current/server
 Environment=PORT=8788
 Environment=DATA_DIR=\${APP_HOME}/.local/share/ensembleworks
+Environment=CLIENT_DIST=\${APP_HOME}/current/client/dist
 EnvironmentFile=\${APP_HOME}/.config/ensembleworks/sync.env
 ExecStart=/usr/local/bin/npm run start
 Restart=on-failure
