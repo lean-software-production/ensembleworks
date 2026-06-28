@@ -98,7 +98,10 @@ else
     asapp env PATH="/usr/local/bin:\${PATH}" bash -c "cd '\${NEW}' && npm ci"
   fi
   echo "==> npm run build"
-  asapp env PATH="/usr/local/bin:\${PATH}" bash -c "cd '\${NEW}' && npm run build"
+  # Source build.env (e.g. VITE_TLDRAW_LICENSE_KEY) so Vite bakes build-time vars
+  # into the client bundle. tldraw enforces its license on real production domains;
+  # without VITE_TLDRAW_LICENSE_KEY the editor blanks. Kept off-repo on the box.
+  asapp env PATH="/usr/local/bin:\${PATH}" bash -c "set -a; [ -f '\${APP_HOME}/.config/ensembleworks/build.env' ] && . '\${APP_HOME}/.config/ensembleworks/build.env'; set +a; cd '\${NEW}' && npm run build"
   asapp touch "\${NEW}/.ew-built"
 fi
 
