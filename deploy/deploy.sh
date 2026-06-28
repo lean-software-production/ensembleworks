@@ -27,7 +27,11 @@ EDGE_PORT="8080"
 REQ_FILE="deploy/runtime-requirements"
 LIB_FILE="deploy/lib.sh"
 CADDY_PROD="deploy/Caddyfile.prod"
-for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD"; do
+PROD_UNITS="deploy/systemd/prod" # committed unit templates (@APP_USER@/@APP_HOME@)
+for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
+	"$PROD_UNITS"/ensembleworks-sync.service \
+	"$PROD_UNITS"/ensembleworks-term.service \
+	"$PROD_UNITS"/ensembleworks-scribe.service; do
 	[ -f "$f" ] || {
 		echo "missing $f — run from the repo root" >&2
 		exit 1
@@ -105,77 +109,18 @@ else
   asapp touch "\${NEW}/.ew-built"
 fi
 
-# ---- install prod systemd units (app sub-division; envelope is host-owned) ---
+# ---- install prod systemd units -----------------------------------------------
+# Units are committed templates in deploy/systemd/prod/ (scp'd to /tmp); sed fills
+# in @APP_USER@ / @APP_HOME@. Slice membership + per-service MemoryLow are folded
+# into each [Service] (the host owns the ensembleworks.slice envelope; these are
+# its sub-division, summing <= the envelope MemoryLow). \${CANVAS_URL} in the
+# scribe unit stays literal for systemd to expand — sed only touches @TOKENS@.
 echo "==> installing prod systemd units"
-write_unit() { sudo tee "/etc/systemd/system/\$1" >/dev/null; }
-write_dropin() { sudo install -d "/etc/systemd/system/\$1.d"; sudo tee "/etc/systemd/system/\$1.d/10-memory.conf" >/dev/null; }
-
-write_unit ensembleworks-sync.service <<UNIT
-[Unit]
-Description=EnsembleWorks sync server (tldraw sync + assets + API)
-After=network-online.target
-Wants=network-online.target
-[Service]
-Type=simple
-User=\${APP_USER}
-WorkingDirectory=\${APP_HOME}/current/server
-Environment=PORT=8788
-Environment=DATA_DIR=\${APP_HOME}/.local/share/ensembleworks
-Environment=CLIENT_DIST=\${APP_HOME}/current/client/dist
-EnvironmentFile=\${APP_HOME}/.config/ensembleworks/sync.env
-ExecStart=/usr/local/bin/npm run start
-Restart=on-failure
-RestartSec=2
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-write_unit ensembleworks-term.service <<UNIT
-[Unit]
-Description=EnsembleWorks terminal gateway (node-pty + tmux)
-After=network-online.target
-Wants=network-online.target
-[Service]
-Type=simple
-User=\${APP_USER}
-WorkingDirectory=\${APP_HOME}/current/server
-Environment=PORT=8789
-Environment=TMUX_CONF=\${APP_HOME}/current/deploy/tmux-ensembleworks.conf
-ExecStart=/usr/local/bin/npm run start:term
-Restart=on-failure
-RestartSec=2
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-write_unit ensembleworks-scribe.service <<UNIT
-[Unit]
-Description=EnsembleWorks transcriber (LiveKit -> Groq Whisper -> /api/transcript)
-After=network-online.target ensembleworks-sync.service
-Wants=network-online.target
-[Service]
-Type=simple
-User=\${APP_USER}
-WorkingDirectory=\${APP_HOME}/current/transcriber
-Environment=CANVAS_URL=http://localhost:8788
-Environment=CANVAS_ROOM=team
-Environment=STT_URL=https://api.groq.com/openai/v1
-Environment=STT_MODEL=whisper-large-v3-turbo
-Environment=STT_LANGUAGE=en
-EnvironmentFile=\${APP_HOME}/.config/ensembleworks/scribe.env
-ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "\\\${CANVAS_URL}/"; do sleep 1; done'
-ExecStart=/usr/local/bin/npm run start
-Restart=on-failure
-RestartSec=5
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-# Per-service MemoryLow sub-division (must sum <= host slice MemoryLow). term
-# carries none (the elastic "rest"). No client unit in prod.
-printf '[Service]\nSlice=ensembleworks.slice\nMemoryAccounting=yes\nMemoryLow=512M\n' | write_dropin ensembleworks-sync.service
-printf '[Service]\nSlice=ensembleworks.slice\nMemoryAccounting=yes\n'                | write_dropin ensembleworks-term.service
-printf '[Service]\nSlice=ensembleworks.slice\nMemoryAccounting=yes\nMemoryLow=256M\n' | write_dropin ensembleworks-scribe.service
+# Drop stale per-service drop-ins from older deploys (slice/MemoryLow now in-unit).
+sudo rm -rf /etc/systemd/system/ensembleworks-sync.service.d /etc/systemd/system/ensembleworks-term.service.d /etc/systemd/system/ensembleworks-scribe.service.d
+for u in ensembleworks-sync ensembleworks-term ensembleworks-scribe; do
+  sed -e "s|@APP_USER@|\${APP_USER}|g" -e "s|@APP_HOME@|\${APP_HOME}|g" "/tmp/\${u}.service" | sudo tee "/etc/systemd/system/\${u}.service" >/dev/null
+done
 
 # ---- install prod Caddyfile --------------------------------------------------
 sudo install -m0644 /tmp/ew-Caddyfile.prod /etc/caddy/Caddyfile
@@ -211,10 +156,13 @@ echo "==> edge http://localhost:\${EDGE_PORT}/ -> \${code}"
 REMOTE_EOF
 )"
 
-# Copy the small support files, then run the remote script.
+# Copy the small support files + the prod unit templates, then run the remote
+# script. The units land at /tmp/ensembleworks-*.service (the remote sed loop reads
+# /tmp/${u}.service); ${CANVAS_URL} inside them stays literal for systemd.
 scp -q "$LIB_FILE" "${SSH_TARGET}:/tmp/ew-lib.sh"
 scp -q "$REQ_FILE" "${SSH_TARGET}:/tmp/ew-runtime-requirements"
 scp -q "$CADDY_PROD" "${SSH_TARGET}:/tmp/ew-Caddyfile.prod"
+scp -q "$PROD_UNITS"/*.service "${SSH_TARGET}:/tmp/"
 ssh "$SSH_TARGET" "bash -s" <<<"$REMOTE"
 
 echo "==> done."

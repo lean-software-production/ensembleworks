@@ -1,0 +1,30 @@
+# EnsembleWorks transcriber ("scribe") — PRODUCTION unit (non-watch). Installed by
+# deploy/deploy.sh (@APP_USER@ / @APP_HOME@ substituted via sed). NOTE: ${CANVAS_URL}
+# in ExecStartPre is a LITERAL for systemd to expand from Environment= below — it is
+# NOT a sed token, which is the whole point of using committed files (no escaping).
+# Optional unit: deploy.sh only restarts it if already enabled.
+[Unit]
+Description=EnsembleWorks transcriber (LiveKit -> Groq Whisper -> /api/transcript)
+After=network-online.target ensembleworks-sync.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+WorkingDirectory=@APP_HOME@/current/transcriber
+Slice=ensembleworks.slice
+MemoryAccounting=yes
+MemoryLow=256M
+Environment=CANVAS_URL=http://localhost:8788
+Environment=CANVAS_ROOM=team
+Environment=STT_URL=https://api.groq.com/openai/v1
+Environment=STT_MODEL=whisper-large-v3-turbo
+Environment=STT_LANGUAGE=en
+EnvironmentFile=@APP_HOME@/.config/ensembleworks/scribe.env
+ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "${CANVAS_URL}/"; do sleep 1; done'
+ExecStart=/usr/local/bin/npm run start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

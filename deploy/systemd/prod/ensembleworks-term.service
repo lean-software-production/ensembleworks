@@ -1,0 +1,23 @@
+# EnsembleWorks terminal gateway — PRODUCTION unit (non-watch). Installed by
+# deploy/deploy.sh (@APP_USER@ / @APP_HOME@ substituted via sed). term carries NO
+# MemoryLow — it gets "the rest" of the ensembleworks.slice envelope, so a runaway
+# tmux pane is throttled/OOM-killed before the protected core (sync/scribe).
+[Unit]
+Description=EnsembleWorks terminal gateway (node-pty + tmux)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+WorkingDirectory=@APP_HOME@/current/server
+Slice=ensembleworks.slice
+MemoryAccounting=yes
+Environment=PORT=8789
+Environment=TMUX_CONF=@APP_HOME@/current/deploy/tmux-ensembleworks.conf
+ExecStart=/usr/local/bin/npm run start:term
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
