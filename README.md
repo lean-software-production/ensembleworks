@@ -339,10 +339,17 @@ sudo systemctl restart ensembleworks-sync    # or -term / -client / -scribe
 
 ## Releasing & deploying (production)
 
-Production client boxes (e.g. ew-donkeyred-001) run non-watch systemd units and a
-static client served by Caddy. The host (Node, Caddy, cloudflared, LiveKit, the
-resource envelope, secret placeholders) is provisioned by the **laingville** repo
-(`servers/<host>/bootstrap.sh`); this repo owns the app + its rollout.
+Production client boxes (e.g. ew-donkeyred-001) run non-watch systemd units; the
+sync server serves the static client (Caddy proxies to it). The host (Node, Caddy,
+cloudflared, LiveKit, the resource envelope, secret placeholders) is provisioned by
+the **laingville** repo (`servers/<host>/bootstrap.sh`); this repo owns the app + its
+rollout.
+
+> **Prerequisite — tldraw license.** On a real production domain tldraw enforces a
+> per-domain license; without one the editor blanks. Put `VITE_TLDRAW_LICENSE_KEY=…`
+> in `~<app-user>/.config/ensembleworks/build.env` on the box (key from tldraw.dev) —
+> `deploy.sh` sources it and Vite bakes it into the bundle at build time. Dev/watch
+> and localhost are exempt, so this only bites production builds.
 
 1. **Cut a release** (from a clean `main`):
 
