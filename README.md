@@ -231,6 +231,9 @@ return dofile("<repo>/ensembleworks/deploy/theme/neovim.lua")
 
 ## Deployment on the VM
 
+_This section covers the **ash dogfood box** (watch mode, self-editing). For
+production client boxes see [Releasing & deploying (production)](#releasing--deploying-production) below._
+
 The fastest path is the bootstrap script — it provisions a fresh **Debian 13
 (trixie)** box end to end (Node, Caddy, cloudflared, the `ensemble` user, the
 systemd units and Caddyfile below):
@@ -333,6 +336,34 @@ sudo systemctl restart ensembleworks-sync    # or -term / -client / -scribe
 > secrets to that service user so a terminal shell can no longer read or change
 > them. The single-user watch/HMR setup here is a deliberate dogfooding-stage
 > choice.
+
+## Releasing & deploying (production)
+
+Production client boxes (e.g. ew-donkeyred-001) run non-watch systemd units and a
+static client served by Caddy. The host (Node, Caddy, cloudflared, LiveKit, the
+resource envelope, secret placeholders) is provisioned by the **laingville** repo
+(`servers/<host>/bootstrap.sh`); this repo owns the app + its rollout.
+
+1. **Cut a release** (from a clean `main`):
+
+       deploy/release.sh patch        # or minor / major -> tags vX.Y.Z, pushes
+
+2. **Deploy a version** to a server (SSH over its tailnet name):
+
+       deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.2.0
+
+   deploy.sh preflights the host against `deploy/runtime-requirements`, builds the
+   tag into `~/releases/<ver>` (reusing `node_modules` when the lockfile is
+   unchanged), installs the prod units + `Caddyfile.prod`, swaps the `current`
+   symlink, restarts, and keeps the last 3 releases.
+
+3. **Roll back**: deploy an older version — its built dir is still present, so it
+   swaps the symlink instantly:
+
+       deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.1.0
+
+> The ash dogfood box uses `deploy/bootstrap-debian-ash.sh` (watch mode) — a
+> separate path that these scripts don't touch.
 
 ## The 10-minute team demo
 
