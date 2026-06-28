@@ -1,0 +1,56 @@
+# EnsembleWorks shared browser — PRODUCTION unit (neko container: a real Firefox
+# streamed over WebRTC). Installed by deploy/deploy.sh ONLY when shared-browser is
+# opted in (SHARED_BROWSER=1) and docker is present; @APP_HOME@ is substituted via
+# sed. Unlike sync/term/scribe this carries no release code — it just runs a
+# container — so deploy.sh enables + starts it if down, but does NOT restart it on
+# every deploy (that would kill the live shared session).
+#
+# It is infrastructure, the same class as the self-hosted LiveKit SFU: loopback
+# signaling behind Caddy (/shared-browser -> :8090), public UDP media on a pinned
+# advertised IP. Docker itself and the media UDP firewall rule are HOST concerns,
+# owned by the laingville bootstrap (like LiveKit's media range) — not by this unit.
+[Unit]
+Description=EnsembleWorks shared browser (neko container — a real Firefox streamed over WebRTC)
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+# Own cgroup slice (NOT the shared ensembleworks.slice app envelope): a real
+# browser + software video encode needs far more memory than the app core's
+# protection, and its CPU should yield to the voice SFU. See the .slice file.
+Slice=ensembleworks-shared-browser.slice
+
+# Runs the container, so it needs docker. Kept as root for simplicity — the neko
+# process drops to its own unprivileged user inside the container. To harden,
+# run rootless (podman quadlet, or a docker-group user) instead.
+
+# Config (image pin, passwords, screen, NAT1to1, UDP port) — copy
+# deploy/shared-browser.env.example to the path below and fill it in. Off-repo.
+EnvironmentFile=@APP_HOME@/.config/ensembleworks/shared-browser.env
+
+# Idempotent start: clear any leftover container, then run in the foreground so
+# systemd supervises it (Type=simple). HTTP is bound to loopback (Caddy reaches
+# it via the /shared-browser route); the UDP mux port is published publicly for
+# direct browser<->neko media, exactly like the LiveKit media range.
+ExecStartPre=-/usr/bin/docker rm -f ensembleworks-shared-browser
+ExecStart=/usr/bin/docker run --rm --name ensembleworks-shared-browser \
+  --shm-size=2g \
+  -p 127.0.0.1:8090:8080 \
+  -p ${NEKO_UDPMUX}:${NEKO_UDPMUX}/udp \
+  -e NEKO_DESKTOP_SCREEN=${NEKO_SCREEN} \
+  -e NEKO_MEMBER_PROVIDER=multiuser \
+  -e NEKO_MEMBER_MULTIUSER_USER_PASSWORD=${NEKO_USER_PASSWORD} \
+  -e NEKO_MEMBER_MULTIUSER_ADMIN_PASSWORD=${NEKO_ADMIN_PASSWORD} \
+  -e NEKO_SESSION_IMPLICIT_HOSTING=true \
+  -e NEKO_SESSION_INACTIVE_CURSORS=true \
+  -e NEKO_WEBRTC_UDPMUX=${NEKO_UDPMUX} \
+  -e NEKO_WEBRTC_NAT1TO1=${NEKO_NAT1TO1} \
+  ${NEKO_IMAGE}
+ExecStop=/usr/bin/docker stop ensembleworks-shared-browser
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

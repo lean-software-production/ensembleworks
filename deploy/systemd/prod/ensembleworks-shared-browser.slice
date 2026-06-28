@@ -1,0 +1,27 @@
+# Cgroup slice for the EnsembleWorks shared browser (neko container). Deliberately
+# separate from BOTH the dev slice and the media (SFU) slice:
+#
+#  - It is a real web browser + software video encoder, so its RSS (~0.8-1.5G,
+#    spiking with tabs/pages) would blow the SFU's MemoryMax=1500M and could OOM
+#    the voice plane. It gets its own headroom here instead.
+#  - Its CPU is heavy (~1 core sustained while anyone is watching) but, unlike the
+#    voice SFU, a momentary shared-browser-video stall is tolerable. So CPUWeight
+#    sits BELOW the SFU (200) and ABOVE the dev slice (50): under contention the
+#    voice SFU still wins, but the shared browser beats vite/esbuild/scribe.
+#
+# Installed by deploy/deploy.sh (only when shared-browser is opted in), as a
+# sibling of the host's ensembleworks.slice app envelope. Singleton: one shared
+# browser for the whole canvas — see docs/neko-poc-plan.md. If this ever becomes
+# per-room (N containers), revisit these caps: each instance is another ~1 core
+# + ~1G.
+[Unit]
+Description=Resource limits for the EnsembleWorks shared browser (neko)
+Before=slices.target
+
+[Slice]
+MemoryAccounting=yes
+# Browsers spike; give room but cap below the box so it can't starve the rest.
+MemoryHigh=1200M
+MemoryMax=1800M
+# Below the SFU (200), above the dev services (50).
+CPUWeight=100

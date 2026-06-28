@@ -231,21 +231,30 @@ a **container**, so the supervisor runs `docker run` instead of a binary. It is 
 **singleton** — one neko (one Firefox, one display) shared by the whole canvas;
 per-room instances are out of scope (each would be another ~1 core + ~1 GB).
 
+It is **release-independent** (it runs a container, not the app's release code),
+so on production boxes it's wired into `deploy/deploy.sh` as an **opt-in** extra:
+deploy with `SHARED_BROWSER=1` and the unit + slice are installed, enabled, and
+started if down. Because a restart would drop the live shared session, a routine
+deploy never restarts it — pick up a changed unit with a manual
+`systemctl restart ensembleworks-shared-browser`. `docker` itself and the media
+UDP firewall rule are **host** concerns owned by the laingville bootstrap (exactly
+like LiveKit), not by this repo's deploy scripts.
+
 Scaffolded in the repo (fill in host specifics, don't commit secrets):
 
 | Concern | Artifact |
 |---|---|
-| Supervision (prod) | `deploy/systemd/ensembleworks-shared-browser.service` — runs the container, `Restart=always` |
-| Resource isolation | `deploy/systemd/ensembleworks-shared-browser.slice` — its OWN slice (a browser's RSS would blow the SFU's 1.5G cap); `CPUWeight=100`, below the SFU's 200, above the dev slice's 50 |
-| Edge (HTTP/WS) | `deploy/Caddyfile` → dedicated **`@shared-browser`** route (strip `/shared-browser` → loopback `:8090`). The shape's `base` is `/shared-browser/` (`NekoShapeUtil.tsx`). Verified: page, assets and `/shared-browser/api/ws` all reach neko |
+| Supervision (prod) | `deploy/systemd/prod/ensembleworks-shared-browser.service` — runs the container, `Restart=always`. Installed/enabled by `deploy/deploy.sh` only when `SHARED_BROWSER=1` + docker + the env file are present |
+| Resource isolation | `deploy/systemd/prod/ensembleworks-shared-browser.slice` — its OWN slice, sibling of the app's `ensembleworks.slice` (a browser's RSS would dwarf the app envelope); `CPUWeight=100`, below the SFU's 200, above the dev slice's 50. Installed alongside the unit |
+| Edge (HTTP/WS) | the **`@shared-browser`** route (strip `/shared-browser` → loopback `:8090`) is in **both** `deploy/Caddyfile` (dev/ash) and `deploy/Caddyfile.prod` (deployed boxes). The shape's `base` is `/shared-browser/` (`NekoShapeUtil.tsx`). Verified: page, assets and `/shared-browser/api/ws` all reach neko |
 | Config / secrets | `deploy/shared-browser.env.example` → copy to `~/.config/ensembleworks/shared-browser.env`. Pinned image, screen, member passwords (admin is a real secret, never in a URL), `NEKO_UDPMUX` + `NEKO_NAT1TO1` (per-env) |
-| Media firewall | **prod only:** open `NEKO_UDPMUX/udp` in ufw + the Hetzner cloud firewall (rule `shared-browser-media-UDP`), like the LiveKit `50000-50300` range. Dev (tailnet) needs none |
-| Image | pin a digest in `NEKO_IMAGE` (not `:latest`) so dev == prod; `docker pull` in bootstrap; `--shm-size=2g` is mandatory |
+| Media firewall | **prod only, host-owned (laingville):** open `NEKO_UDPMUX/udp` in ufw + the Hetzner cloud firewall (rule `shared-browser-media-UDP`), like the LiveKit `50000-50300` range. `deploy.sh` does not touch the firewall. Dev (tailnet) needs none |
+| Image / docker | host-owned: pin a digest in `NEKO_IMAGE` (not `:latest`) so dev == prod; `docker` install + `docker pull` happen in the laingville bootstrap; `--shm-size=2g` is mandatory |
 
-On the **dev box** the same unit shape can instead be a gated `shared-browser`
+On the **dev box** the same container runs instead as a gated `shared-browser`
 window in `~/Work/ensembleworks-devserver` (foreground `docker run --rm` wrapped
-by `hold`, gated on the `shared-browser.env` being present) — mirroring how the
-`livekit`/`scribe` windows are gated.
+by `hold`, gated on `docker` being present / `SHARED_BROWSER_ENABLE`) — mirroring
+how the `livekit`/`scribe` windows are gated.
 
 Auth inherits CF Access (prod) / the tailnet (dev); neko's password is a second
 layer. Browser state is ephemeral (resets on restart) — mount a volume only if
@@ -257,18 +266,18 @@ persistent logins are wanted.
 
 Same container, same iframe, same `/dev/{port}` route. **Only the media path
 changes**, and it's the path the box already runs for LiveKit
-(`deploy/livekit-cutover.sh`, `docs/livekit-self-host-spec.md`):
+(`deploy/livekit-cutover-ash.sh`, `docs/livekit-self-host-spec.md`):
 
 | dev box (Phase 1) | Cloudflare box (Phase 2) |
 |---|---|
 | `NAT1TO1` = tailnet IP `100.127.227.76` | `NAT1TO1` = public IPv4 `178.156.162.162` |
-| media reachable over WireGuard, no firewall | open UDP `52000` in **both** `ufw` (`neko-media-UDP`) and the Hetzner cloud firewall |
+| media reachable over WireGuard, no firewall | open UDP `52000` in **both** `ufw` (`shared-browser-media-UDP`) and the Hetzner cloud firewall |
 | tailnet membership = auth | CF Access on the origin = auth; neko password second layer |
 
 Concretely:
 
 1. Same `docker run`, with `NEKO_WEBRTC_NAT1TO1=178.156.162.162`.
-2. `ufw allow 52000/udp comment 'neko-media-UDP'` **and** add the matching rule
+2. `ufw allow 52000/udp comment 'shared-browser-media-UDP'` **and** add the matching rule
    in the Hetzner cloud firewall (host ufw alone is insufficient when the cloud
    firewall is enabled — same lesson as the LiveKit range).
 3. Verify from off-tailnet that signaling **and** media connect; if media stalls

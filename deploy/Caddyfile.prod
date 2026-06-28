@@ -20,6 +20,19 @@
 		reverse_proxy localhost:{re.dev.1}
 	}
 
+	# The shared browser (neko, ensembleworks-shared-browser.service) — its own
+	# named route, not /dev/{port}. neko's HTTP+WS is on loopback :8090 and serves
+	# at root with relative paths, so stripping the prefix is all it needs (same
+	# mechanism as /dev); reverse_proxy upgrades the control WebSocket, while the
+	# WebRTC media is UDP and never passes through here. Harmless when the optional
+	# service isn't running (the shape just shows a 502). The neko shape's `base`
+	# points at /shared-browser/ (client/src/neko/NekoShapeUtil.tsx).
+	@shared-browser path /shared-browser /shared-browser/*
+	handle @shared-browser {
+		uri strip_prefix /shared-browser
+		reverse_proxy localhost:8090
+	}
+
 	# Terminal gateway (node-pty + tmux; WebSocket).
 	handle /term* {
 		reverse_proxy localhost:8789
