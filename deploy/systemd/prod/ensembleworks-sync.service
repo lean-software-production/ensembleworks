@@ -1,0 +1,27 @@
+# EnsembleWorks sync server — PRODUCTION unit (non-watch). Installed by
+# deploy/deploy.sh, which substitutes @APP_USER@ / @APP_HOME@ (sed). Slice
+# membership + the protected MemoryLow live here (the host owns the
+# ensembleworks.slice envelope; this is the app's sub-division). The sync server
+# also serves the static client build (CLIENT_DIST) in production.
+[Unit]
+Description=EnsembleWorks sync server (tldraw sync + assets + API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+WorkingDirectory=@APP_HOME@/current/server
+Slice=ensembleworks.slice
+MemoryAccounting=yes
+MemoryLow=512M
+Environment=PORT=8788
+Environment=DATA_DIR=@APP_HOME@/.local/share/ensembleworks
+Environment=CLIENT_DIST=@APP_HOME@/current/client/dist
+EnvironmentFile=@APP_HOME@/.config/ensembleworks/sync.env
+ExecStart=/usr/local/bin/npm run start
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

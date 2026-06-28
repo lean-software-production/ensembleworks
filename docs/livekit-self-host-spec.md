@@ -173,7 +173,7 @@ that lands before the cutover.)
 ## `livekit-server` install + config
 
 Install the `livekit-server` binary (Go, single static binary) from the official
-GitHub releases into `/usr/local/bin`. Add to `deploy/bootstrap-debian.sh` as a
+GitHub releases into `/usr/local/bin`. Add to `deploy/bootstrap-debian-ash.sh` as a
 new install step (idempotent, like the Caddy/cloudflared steps):
 
 ```sh
@@ -247,7 +247,7 @@ ports, tunnel dials out":
 | 7881 | TCP | disabled (`tcp_port: 0`) | ICE-TCP fallback | off by default; see Out of scope |
 | 443 / 8080 | TCP | via tunnel (unchanged) | app + /livekit signaling | no |
 
-Open the UDP range in the host firewall (add to `deploy/bootstrap-debian.sh`):
+Open the UDP range in the host firewall (add to `deploy/bootstrap-debian-ash.sh`):
 
 ```sh
 if command -v ufw >/dev/null 2>&1; then
@@ -353,7 +353,7 @@ MemoryMax=1500M
 CPUWeight=50
 ```
 
-`deploy/bootstrap-debian.sh` writes both, installs them, and adjusts the dev
+`deploy/bootstrap-debian-ash.sh` writes both, installs them, and adjusts the dev
 slice down: `systemctl set-property ensembleworks.slice MemoryHigh=60% MemoryMax=70%`
 (the memory policy doc already documents `set-property` for live changes).
 
@@ -369,7 +369,7 @@ slice down: `systemctl set-property ensembleworks.slice MemoryHigh=60% MemoryMax
 | `~/.config/ensembleworks/scribe.env` | `LIVEKIT_API_KEY` / `_SECRET` | same | |
 | `~/.config/ensembleworks/scribe.env` | `STT_*` | unchanged | Groq Whisper still offloaded |
 
-`bootstrap-debian.sh` writes these as placeholders only if absent (its existing
+`bootstrap-debian-ash.sh` writes these as placeholders only if absent (its existing
 policy), so re-runs never clobber real secrets. The placeholder comments should
 be updated to point at self-host values rather than `YOUR-PROJECT.livekit.cloud`.
 

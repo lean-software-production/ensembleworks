@@ -689,7 +689,7 @@ npm run dev:term
 | `client/src/terminals/gateway-registry.ts` | **New file.** Fetch and cache `/api/gateway/list`; resolve `termWsUrl` with direct + relay fallback. |
 | `client/src/App.tsx` | Add "New terminal" toolbar entry with gateway picker dropdown. |
 | `stereos/mixtapes/ensembleworks/package.nix` | **New file.** Custom stereOS mixtape adding `ensembleworks-term` to the agent PATH. |
-| `deploy/bootstrap-debian.sh` | Add `GATEWAY_ID`/`GATEWAY_SECRET` to `~/.config/ensembleworks/term.env`. |
+| `deploy/bootstrap-debian-ash.sh` | Add `GATEWAY_ID`/`GATEWAY_SECRET` to `~/.config/ensembleworks/term.env`. |
 | `deploy/systemd/ensembleworks-term.service` | Add `EnvironmentFile=…/term.env` for gateway configuration. |
 
 ## Implementation order
@@ -1234,7 +1234,7 @@ approaches:
 - The existing co-located deployment (Codespace and Debian VM) works unchanged:
   all terminals default to `gateway: undefined` and route through the Vite
   proxy to the co-located gateway.
-- The `deploy/bootstrap-debian.sh` setup creates `term.env` with `GATEWAY_ID`
+- The `deploy/bootstrap-debian-ash.sh` setup creates `term.env` with `GATEWAY_ID`
   and `GATEWAY_SECRET` placeholders alongside the existing `sync.env` and
   `scribe.env`.
 - A Docker container launched by `DockerOrchestrator` can:

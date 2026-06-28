@@ -1,22 +1,11 @@
 #!/usr/bin/env bash
 
-# Bootstrap a fresh Debian 13 (trixie) Hetzner box into an EnsembleWorks host.
+# Bootstrap the ASH dogfood box (Hetzner) into a self-editing EnsembleWorks host.
 #
-# Replaces the GitHub Codespace with an always-on, self-managed Linux VM:
-#   - Node 22 (pinned to match the devcontainer), Caddy, cloudflared
-#   - a single shared `ensemble` user that owns everything under its home
-#   - sync server, terminal gateway, client (Vite), and (optional) scribe as
-#     systemd units — the same processes the devcontainer runs under tmux
-#   - a Cloudflare Tunnel as the public edge (no inbound ports on the box)
-#
-# Dogfooding stage: the units run in WATCH mode (tsx watch + Vite HMR), so the
-# team mobs as ${APP_USER} and edits EnsembleWorks from inside a running
-# EnsembleWorks terminal — source edits reload live, no restart needed. Code,
-# canvas data and secrets all live under ${APP_USER}'s home (~/.local, ~/.config);
-# a tight sudoers rule also lets the mob `systemctl restart ensembleworks-*`
-# (for dependency changes or a wedged service), with no root shell. Nothing the
-# instance owns lives in /opt, /var or /etc. See the README "Hardening later"
-# note to disable self-edit.
+# ASH-ONLY. This is the watch-mode / in-place self-edit setup. Production client
+# boxes (e.g. ew-donkeyred-001 on OVH) are provisioned by the laingville repo's
+# servers/<host>/bootstrap.sh and deployed with deploy/deploy.sh — they do NOT
+# use this script. Folding ash onto that path is a future migration.
 #
 # !!! SECURITY — READ THIS !!!
 # A Cloudflare Tunnel publishes your hostname to the PUBLIC internet. The
@@ -30,8 +19,8 @@
 #
 # Run as root on a clean box. APP_USER and SRC_DIR are REQUIRED — no defaults,
 # so you state where the code lives and who runs it (no silent misconfiguration):
-#   scp deploy/bootstrap-debian.sh root@<box>:/root/
-#   ssh root@<box> 'APP_USER=ensemble SRC_DIR=/home/ensemble/.local/lean-software-production/ensembleworks SKIP_VCS=1 bash /root/bootstrap-debian.sh'
+#   scp deploy/bootstrap-debian-ash.sh root@<box>:/root/
+#   ssh root@<box> 'APP_USER=ensemble SRC_DIR=/home/ensemble/.local/lean-software-production/ensembleworks SKIP_VCS=1 bash /root/bootstrap-debian-ash.sh'
 # (clone the repo to SRC_DIR yourself first when using SKIP_VCS=1; drop SKIP_VCS
 # to have bootstrap clone REPO_URL into SRC_DIR as APP_USER.)
 #
@@ -82,14 +71,14 @@ NODE_SHA256="${NODE_SHA256:-2e5d13569282d016861fae7c8f935e741693c269101a5bebcf76
 # override to force a path — but keep it inside a home dir, never /var.
 DATA_DIR="${DATA_DIR:-}"
 
-EDGE_PORT="8080"                                       # Caddy's plain-HTTP port; the tunnel points here
+EDGE_PORT="8080" # Caddy's plain-HTTP port; the tunnel points here
 NPM_BIN="/usr/local/bin/npm"
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
 if [[ "${EUID}" -ne 0 ]]; then
-  echo "Run as root." >&2
-  exit 1
+	echo "Run as root." >&2
+	exit 1
 fi
 
 # -----------------------------------------------------------------------------
@@ -100,8 +89,8 @@ log "Installing base packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y --no-install-recommends \
-  ca-certificates curl git build-essential python3 pkg-config tmux jq sudo \
-  gnupg debian-keyring debian-archive-keyring apt-transport-https
+	ca-certificates curl git build-essential python3 pkg-config tmux jq sudo \
+	gnupg debian-keyring debian-archive-keyring apt-transport-https
 update-ca-certificates
 
 # -----------------------------------------------------------------------------
@@ -109,14 +98,14 @@ update-ca-certificates
 #    devcontainer Dockerfile so host == dev).
 # -----------------------------------------------------------------------------
 if [[ "$(node -v 2>/dev/null || true)" != "v${NODE_VERSION}" ]]; then
-  log "Installing Node ${NODE_VERSION}"
-  archive="node-v${NODE_VERSION}-linux-x64.tar.xz"
-  curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${archive}" -o "/tmp/${archive}"
-  echo "${NODE_SHA256}  /tmp/${archive}" | sha256sum -c -
-  tar -xJf "/tmp/${archive}" -C /usr/local --strip-components=1
-  rm -f "/tmp/${archive}"
+	log "Installing Node ${NODE_VERSION}"
+	archive="node-v${NODE_VERSION}-linux-x64.tar.xz"
+	curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${archive}" -o "/tmp/${archive}"
+	echo "${NODE_SHA256}  /tmp/${archive}" | sha256sum -c -
+	tar -xJf "/tmp/${archive}" -C /usr/local --strip-components=1
+	rm -f "/tmp/${archive}"
 else
-  log "Node ${NODE_VERSION} already present — skipping"
+	log "Node ${NODE_VERSION} already present — skipping"
 fi
 
 # -----------------------------------------------------------------------------
@@ -125,15 +114,15 @@ fi
 #    terminated upstream at the Cloudflare edge, so Caddy needs no certs.
 # -----------------------------------------------------------------------------
 if ! command -v caddy >/dev/null 2>&1; then
-  log "Installing Caddy"
-  curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
-    | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-  curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
-    | tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
-  apt-get update -y
-  apt-get install -y caddy
+	log "Installing Caddy"
+	curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key |
+		gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+	curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt |
+		tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+	apt-get update -y
+	apt-get install -y caddy
 else
-  log "Caddy already present — skipping"
+	log "Caddy already present — skipping"
 fi
 
 # -----------------------------------------------------------------------------
@@ -141,15 +130,15 @@ fi
 #    is opened on the box. Access (configured in the dashboard) is the auth gate.
 # -----------------------------------------------------------------------------
 if ! command -v cloudflared >/dev/null 2>&1; then
-  log "Installing cloudflared"
-  curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg \
-    | tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
-  echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
-    | tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
-  apt-get update -y
-  apt-get install -y cloudflared
+	log "Installing cloudflared"
+	curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg |
+		tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+	echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" |
+		tee /etc/apt/sources.list.d/cloudflared.list >/dev/null
+	apt-get update -y
+	apt-get install -y cloudflared
 else
-  log "cloudflared already present — skipping"
+	log "cloudflared already present — skipping"
 fi
 
 # -----------------------------------------------------------------------------
@@ -162,11 +151,11 @@ fi
 # -----------------------------------------------------------------------------
 LIVEKIT_VERSION="1.13.1" # pin a concrete release; bump deliberately
 if ! command -v livekit-server >/dev/null 2>&1; then
-  log "Installing livekit-server ${LIVEKIT_VERSION}"
-  curl -fsSL "https://github.com/livekit/livekit/releases/download/v${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION}_linux_amd64.tar.gz" \
-    | tar -xz -C /usr/local/bin livekit-server
+	log "Installing livekit-server ${LIVEKIT_VERSION}"
+	curl -fsSL "https://github.com/livekit/livekit/releases/download/v${LIVEKIT_VERSION}/livekit_${LIVEKIT_VERSION}_linux_amd64.tar.gz" |
+		tar -xz -C /usr/local/bin livekit-server
 else
-  log "livekit-server already present — skipping (pin: ${LIVEKIT_VERSION})"
+	log "livekit-server already present — skipping (pin: ${LIVEKIT_VERSION})"
 fi
 
 # -----------------------------------------------------------------------------
@@ -175,8 +164,8 @@ fi
 #    (overridable via SRC_DIR); data and secrets live in ~/.local/share and ~/.config.
 # -----------------------------------------------------------------------------
 if ! id -u "${APP_USER}" >/dev/null 2>&1; then
-  log "Creating user ${APP_USER}"
-  useradd --create-home --shell /bin/bash "${APP_USER}"
+	log "Creating user ${APP_USER}"
+	useradd --create-home --shell /bin/bash "${APP_USER}"
 fi
 # Read journald for its own units without sudo (journalctl -u ensembleworks-*).
 usermod -aG systemd-journal "${APP_USER}"
@@ -185,24 +174,24 @@ APP_HOME="$(getent passwd "${APP_USER}" | cut -d: -f6)"
 # APP_DIR symlinks to ${SRC_DIR} (the repo root IS the app) so the units (which
 # run as APP_USER) can cd into the app regardless of where the repo checkout lives.
 # DATA_DIR/CONF_DIR stay under APP_HOME (env files with secrets).
-APP_DIR="${APP_HOME}/ensembleworks"                    # symlink -> the repo checkout
+APP_DIR="${APP_HOME}/ensembleworks" # symlink -> the repo checkout
 DATA_DIR="${DATA_DIR:-${APP_HOME}/.local/share/ensembleworks}"
-CONF_DIR="${APP_HOME}/.config/ensembleworks"           # env files with secrets
+CONF_DIR="${APP_HOME}/.config/ensembleworks" # env files with secrets
 
 if [[ -n "${SKIP_VCS}" ]]; then
-  log "SKIP_VCS set — using the code already at ${SRC_DIR}"
-  if [[ ! -d "${SRC_DIR}/.git" ]]; then
-    echo "SKIP_VCS set but ${SRC_DIR} has no git checkout — clone the repo there first." >&2
-    exit 1
-  fi
+	log "SKIP_VCS set — using the code already at ${SRC_DIR}"
+	if [[ ! -d "${SRC_DIR}/.git" ]]; then
+		echo "SKIP_VCS set but ${SRC_DIR} has no git checkout — clone the repo there first." >&2
+		exit 1
+	fi
 else
-  log "Fetching code (${REPO_BRANCH}), as ${APP_USER}"
-  if [[ -d "${SRC_DIR}/.git" ]]; then
-    runuser -u "${APP_USER}" -- git -C "${SRC_DIR}" fetch --depth 1 origin "${REPO_BRANCH}"
-    runuser -u "${APP_USER}" -- git -C "${SRC_DIR}" checkout -B "${REPO_BRANCH}" "origin/${REPO_BRANCH}"
-  else
-    runuser -u "${APP_USER}" -- git clone --depth 1 --branch "${REPO_BRANCH}" "${REPO_URL}" "${SRC_DIR}"
-  fi
+	log "Fetching code (${REPO_BRANCH}), as ${APP_USER}"
+	if [[ -d "${SRC_DIR}/.git" ]]; then
+		runuser -u "${APP_USER}" -- git -C "${SRC_DIR}" fetch --depth 1 origin "${REPO_BRANCH}"
+		runuser -u "${APP_USER}" -- git -C "${SRC_DIR}" checkout -B "${REPO_BRANCH}" "origin/${REPO_BRANCH}"
+	else
+		runuser -u "${APP_USER}" -- git clone --depth 1 --branch "${REPO_BRANCH}" "${REPO_URL}" "${SRC_DIR}"
+	fi
 fi
 
 # Make sure the app user owns the whole tree — it may have been cloned by an
@@ -212,7 +201,7 @@ fi
 # checkout owned by another user, ensure APP_USER can read+execute the path
 # (the units run as APP_USER and cd into APP_DIR, which symlinks into SRC_DIR).
 if [[ -z "${SKIP_VCS}" ]]; then
-  chown -R "${APP_USER}:${APP_USER}" "${SRC_DIR}"
+	chown -R "${APP_USER}:${APP_USER}" "${SRC_DIR}"
 fi
 
 log "Wiring and building, as ${APP_USER}"
@@ -224,10 +213,10 @@ log "Wiring and building, as ${APP_USER}"
 # Stopping a not-yet-installed/stopped unit is non-fatal.
 RUNNING_BEFORE_BUILD=""
 for svc in sync term client scribe; do
-  if systemctl is-active --quiet "ensembleworks-${svc}.service" 2>/dev/null; then
-    RUNNING_BEFORE_BUILD="${RUNNING_BEFORE_BUILD} ${svc}"
-  fi
-  systemctl stop "ensembleworks-${svc}.service" 2>/dev/null || true
+	if systemctl is-active --quiet "ensembleworks-${svc}.service" 2>/dev/null; then
+		RUNNING_BEFORE_BUILD="${RUNNING_BEFORE_BUILD} ${svc}"
+	fi
+	systemctl stop "ensembleworks-${svc}.service" 2>/dev/null || true
 done
 runuser -u "${APP_USER}" -- ln -sfn "${SRC_DIR}" "${APP_DIR}"
 runuser -u "${APP_USER}" -- mkdir -p "${DATA_DIR}" "${CONF_DIR}"
@@ -256,8 +245,8 @@ visudo -cf /etc/sudoers.d/ensembleworks >/dev/null
 #    clobber real secrets.
 # -----------------------------------------------------------------------------
 if [[ ! -f "${CONF_DIR}/sync.env" ]]; then
-  log "Writing ${CONF_DIR}/sync.env placeholder — FILL THIS IN"
-  cat >"${CONF_DIR}/sync.env" <<'EOF'
+	log "Writing ${CONF_DIR}/sync.env placeholder — FILL THIS IN"
+	cat >"${CONF_DIR}/sync.env" <<'EOF'
 # Self-hosted LiveKit OSS. The sync server mints browser tokens with
 # LIVEKIT_URL (public signaling, proxied via Caddy /livekit + CF Access) and
 # calls RoomService (kick) against LIVEKIT_API_URL (internal, localhost).
@@ -269,8 +258,8 @@ LIVEKIT_API_SECRET=
 EOF
 fi
 if [[ ! -f "${CONF_DIR}/scribe.env" ]]; then
-  log "Writing ${CONF_DIR}/scribe.env placeholder — FILL THIS IN (optional scribe)"
-  cat >"${CONF_DIR}/scribe.env" <<'EOF'
+	log "Writing ${CONF_DIR}/scribe.env placeholder — FILL THIS IN (optional scribe)"
+	cat >"${CONF_DIR}/scribe.env" <<'EOF'
 # Groq key for Whisper STT (https://console.groq.com/keys).
 STT_API_KEY=gsk_...
 # Self-hosted LiveKit OSS — the scribe is co-located with the SFU, so it
@@ -287,7 +276,7 @@ fi
 # from the shared ensemble user that runs the four dev services. The unit
 # (ensembleworks-livekit.service, installed in section 10) runs as this user.
 if ! id ensemble-livekit >/dev/null 2>&1; then
-  useradd --system --no-create-home --shell /usr/sbin/nologin ensemble-livekit
+	useradd --system --no-create-home --shell /usr/sbin/nologin ensemble-livekit
 fi
 
 # livekit-server config. Generated at provision time (NOT a committed template —
@@ -313,12 +302,12 @@ fi
 #                     IS NAMED DIFFERENTLY (e.g. ens3, eth1), update this list.
 install -d -m 0750 -o root -g ensemble-livekit /etc/livekit
 if [[ ! -f /etc/livekit/livekit.yaml ]]; then
-  log "Writing /etc/livekit/livekit.yaml placeholder — FILL IN node_ip + keys"
-  # PUBLIC_IP is the box's stable public IPv4 (Hetzner IPs are stable; pin it
-  # deterministically rather than boot-time STUN). Override at provision time.
-  # The API key/secret MUST match LIVEKIT_API_KEY/LIVEKIT_API_SECRET in sync.env
-  # + scribe.env. Secret must be >=32 chars (openssl rand -hex 32 = 64 chars).
-  cat >/etc/livekit/livekit.yaml <<EOF
+	log "Writing /etc/livekit/livekit.yaml placeholder — FILL IN node_ip + keys"
+	# PUBLIC_IP is the box's stable public IPv4 (Hetzner IPs are stable; pin it
+	# deterministically rather than boot-time STUN). Override at provision time.
+	# The API key/secret MUST match LIVEKIT_API_KEY/LIVEKIT_API_SECRET in sync.env
+	# + scribe.env. Secret must be >=32 chars (openssl rand -hex 32 = 64 chars).
+	cat >/etc/livekit/livekit.yaml <<EOF
 # LiveKit OSS SFU config. Signaling (port 7880) is bound to loopback and
 # proxied via Caddy /livekit; media is UDP 50000-50300 (public). rtc.tcp_port
 # is 0 to disable the ICE-TCP listener (otherwise it opens *:7881 publicly).
@@ -343,12 +332,12 @@ keys:
 logging:
   level: info
 EOF
-  chown root:ensemble-livekit /etc/livekit/livekit.yaml
-  chmod 0640 /etc/livekit/livekit.yaml
+	chown root:ensemble-livekit /etc/livekit/livekit.yaml
+	chmod 0640 /etc/livekit/livekit.yaml
 fi
 if [[ ! -f "${CONF_DIR}/github-app.env" ]]; then
-  log "Writing ${CONF_DIR}/github-app.env placeholder — FILL THIS IN (see github-app-runbook.md)"
-  cat >"${CONF_DIR}/github-app.env" <<'EOF'
+	log "Writing ${CONF_DIR}/github-app.env placeholder — FILL THIS IN (see github-app-runbook.md)"
+	cat >"${CONF_DIR}/github-app.env" <<'EOF'
 # EnsembleWorks GitHub App (ensembleworks-lsp[bot]) — config for
 # bin/gh-app-token.bash, which mints short-lived installation tokens used to
 # push and call the GitHub API. Non-secret IDs; the real secret is the
@@ -363,8 +352,8 @@ GITHUB_BOT_LOGIN=
 EOF
 fi
 if [[ ! -f "${CONF_DIR}/term.env" ]]; then
-  log "Writing ${CONF_DIR}/term.env placeholder — FILL THIS IN"
-  cat >"${CONF_DIR}/term.env" <<'EOF'
+	log "Writing ${CONF_DIR}/term.env placeholder — FILL THIS IN"
+	cat >"${CONF_DIR}/term.env" <<'EOF'
 # Env vars for shells spawned in canvas xterm/tmux sessions (the
 # ensembleworks-term gateway: node-pty + tmux). Unlike sync.env / scribe.env /
 # github-app.env — which are read by systemd units or on-demand scripts — this
@@ -385,19 +374,19 @@ chmod 600 "${CONF_DIR}"/*.env
 BASHRC="${APP_HOME}/.bashrc"
 touch "${BASHRC}"
 if ! grep -q '__ew_term_env_file' "${BASHRC}"; then
-  log "Wiring ${CONF_DIR}/term.env into ${BASHRC}"
-  cat >>"${BASHRC}" <<'EOF'
+	log "Wiring ${CONF_DIR}/term.env into ${BASHRC}"
+	cat >>"${BASHRC}" <<'EOF'
 
 # --- EnsembleWorks terminal env ---
 # Source ~/.config/ensembleworks/term.env so CLI tools run from a canvas
 # xterm/tmux session see those vars. Sourced once at shell startup under set -a
 # (new terminals pick it up; edit term.env then open a new terminal or
-# `source ~/.bashrc`). Written by deploy/bootstrap-debian.sh.
+# `source ~/.bashrc`). Written by deploy/bootstrap-debian-ash.sh.
 __ew_term_env_file="${XDG_CONFIG_HOME:-$HOME/.config}/ensembleworks/term.env"
 [ -f "$__ew_term_env_file" ] && { set -a; . "$__ew_term_env_file" 2>/dev/null; set +a; }
 # --- end EnsembleWorks terminal env ---
 EOF
-  chown "${APP_USER}:${APP_USER}" "${BASHRC}"
+	chown "${APP_USER}:${APP_USER}" "${BASHRC}"
 fi
 
 # -----------------------------------------------------------------------------
@@ -407,14 +396,14 @@ fi
 #     with the per-service cgroup caps in §7. Idempotent: skip if swap is active.
 # -----------------------------------------------------------------------------
 if [[ -z "$(swapon --show --noheadings 2>/dev/null)" ]]; then
-  log "Creating 2G /swapfile (no active swap found)"
-  fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
-  chmod 600 /swapfile
-  mkswap /swapfile
-  swapon /swapfile
-  grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
+	log "Creating 2G /swapfile (no active swap found)"
+	fallocate -l 2G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=2048
+	chmod 600 /swapfile
+	mkswap /swapfile
+	swapon /swapfile
+	grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' >>/etc/fstab
 else
-  log "Swap already active — skipping swapfile creation"
+	log "Swap already active — skipping swapfile creation"
 fi
 
 # -----------------------------------------------------------------------------
@@ -557,16 +546,16 @@ EOF
 # largest process — a runaway term pane — while the protected core survives. The
 # slice's MemoryLow (deploy/systemd/ensembleworks.slice) must equal the sum of
 # these. See ensembleworks.slice for the full policy.
-declare -A SVC_MEMLOW=( [sync]=512M [client]=512M [scribe]=256M [term]= )
+declare -A SVC_MEMLOW=([sync]=512M [client]=512M [scribe]=256M [term]=)
 for svc in sync term client scribe; do
-  dropin_dir="/etc/systemd/system/ensembleworks-${svc}.service.d"
-  mkdir -p "$dropin_dir"
-  {
-    echo "[Service]"
-    echo "Slice=ensembleworks.slice"
-    echo "MemoryAccounting=yes"
-    [ -n "${SVC_MEMLOW[$svc]}" ] && echo "MemoryLow=${SVC_MEMLOW[$svc]}"
-  } >"${dropin_dir}/10-memory.conf"
+	dropin_dir="/etc/systemd/system/ensembleworks-${svc}.service.d"
+	mkdir -p "$dropin_dir"
+	{
+		echo "[Service]"
+		echo "Slice=ensembleworks.slice"
+		echo "MemoryAccounting=yes"
+		[ -n "${SVC_MEMLOW[$svc]}" ] && echo "MemoryLow=${SVC_MEMLOW[$svc]}"
+	} >"${dropin_dir}/10-memory.conf"
 done
 
 # -----------------------------------------------------------------------------
@@ -595,7 +584,7 @@ systemctl reload-or-restart caddy
 # running stay stopped (e.g. an optional scribe the operator hasn't enabled).
 systemctl enable ensembleworks-sync ensembleworks-term ensembleworks-client
 for svc in ${RUNNING_BEFORE_BUILD}; do
-  systemctl restart "ensembleworks-${svc}.service"
+	systemctl restart "ensembleworks-${svc}.service"
 done
 
 # Install the LiveKit SFU units. Enabled but NOT started here — starting
@@ -608,15 +597,15 @@ systemctl daemon-reload
 systemctl enable ensembleworks-livekit.service
 
 if [[ -z "${PUBLIC_HOST}" ]]; then
-  log "WARNING: PUBLIC_HOST is unset — the Vite client will reject the public"
-  printf '  Cloudflare hostname until you set Environment=ENSEMBLEWORKS_PUBLIC_HOST in\n'
-  printf '  /etc/systemd/system/ensembleworks-client.service and restart it.\n'
+	log "WARNING: PUBLIC_HOST is unset — the Vite client will reject the public"
+	printf '  Cloudflare hostname until you set Environment=ENSEMBLEWORKS_PUBLIC_HOST in\n'
+	printf '  /etc/systemd/system/ensembleworks-client.service and restart it.\n'
 fi
 
 if [[ -n "${CF_TUNNEL_TOKEN}" ]]; then
-  log "Installing cloudflared tunnel connector"
-  cloudflared service install "${CF_TUNNEL_TOKEN}"
-  systemctl enable --now cloudflared
+	log "Installing cloudflared tunnel connector"
+	cloudflared service install "${CF_TUNNEL_TOKEN}"
+	systemctl enable --now cloudflared
 fi
 
 # -----------------------------------------------------------------------------
