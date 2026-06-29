@@ -51,6 +51,14 @@
 	font-family: var(--wm-sans);
 }
 
+/* The neko "shared browser" tool icon in the brand seal-blue, so it reads as a
+   distinct, on-theme action in the toolbar. tldraw tints icons via currentColor
+   on .tlui-icon; override it for just this tool (its button has data-value="neko"
+   — see ui.tsx / NEKO_ICON_NAME). */
+[data-value='neko'] .tlui-icon {
+	color: var(--wm-seal-blue) !important;
+}
+
 /* Frame labels in the signature eyebrow posture: ALL-CAPS tracked mono in
    the brand accent — "DRAFTING — CREW-A (MIN SPECS)" reads like a section
    label on a printed page. Applies to the name input while editing too. */

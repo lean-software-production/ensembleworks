@@ -34,6 +34,19 @@
 		reverse_proxy localhost:{re.dev.1}
 	}
 
+	# The shared browser (neko container, ensembleworks-shared-browser.service) is
+	# a permanent service, so it gets its OWN named route rather than riding
+	# /dev/{port}. neko's HTTP+WS is on loopback :8090; it serves at root with
+	# relative asset/WS paths, so stripping the prefix is all it needs (verified —
+	# same mechanism as /dev). reverse_proxy upgrades the control WebSocket; the
+	# WebRTC media is UDP and does NOT pass through here. The neko shape's `base`
+	# points at /shared-browser/ (client/src/neko/NekoShapeUtil.tsx).
+	@shared-browser path /shared-browser /shared-browser/*
+	handle @shared-browser {
+		uri strip_prefix /shared-browser
+		reverse_proxy localhost:8090
+	}
+
 	# Everything else (app + HMR, and Vite's own proxying of /sync, /api,
 	# /uploads, /term to the sync server and terminal gateway) -> Vite.
 	handle {

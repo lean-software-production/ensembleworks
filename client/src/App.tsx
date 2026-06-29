@@ -14,10 +14,15 @@ import { assetStore } from './assetStore'
 import { getIdentity, getRoomId } from './identity'
 import { IframeShapeUtil } from './iframe/IframeShapeUtil'
 import { PasteUrlHandler } from './iframe/PasteUrlHandler'
+import { NEKO_ICON_NAME, NEKO_TOOLBAR_ICON, NekoShapeUtil } from './neko/NekoShapeUtil'
 import { TerminalShapeUtil } from './terminal/TerminalShapeUtil'
 import { components, uiOverrides } from './ui'
 
-const customShapeUtils = [TerminalShapeUtil, IframeShapeUtil]
+const customShapeUtils = [TerminalShapeUtil, IframeShapeUtil, NekoShapeUtil]
+
+// Register the custom neko toolbar icon (merged with tldraw's built-ins). Stable
+// module-level reference so the asset-url memo doesn't churn each render.
+const assetUrls = { icons: { [NEKO_ICON_NAME]: NEKO_TOOLBAR_ICON } }
 
 // One-time flag so we seed the color scheme only once per user. v2: the
 // Wellmaintained paper-light theme replaced the original dark seed, so
@@ -100,6 +105,7 @@ export function App() {
 				store={store}
 				onMount={handleMount}
 				deepLinks
+				assetUrls={assetUrls}
 				shapeUtils={customShapeUtils}
 				overrides={uiOverrides}
 				components={components}

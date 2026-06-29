@@ -94,6 +94,7 @@ npx tsx src/canvas-api.test.ts  # canvas API: terminal-status, sticky, frames + 
 npx tsx src/scribe-api.test.ts  # transcript + shape APIs, scribe tokens
 cd ../client && npx tsx src/av/spatial.test.ts        # spatial gain model
 npx tsx src/session/layout.test.ts                    # session layout invariants
+npx tsx src/neko/neko.test.ts                         # neko shared-browser URL + aspect lock
 cd ../transcriber && npx tsx src/segmenter.test.ts    # utterance VAD
 npx tsx src/wav.test.ts                               # WAV encoder
 ```
@@ -368,6 +369,21 @@ rollout.
    swaps the symlink instantly:
 
        deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.1.0
+
+4. **(Optional) shared browser** — a neko container (real Firefox streamed to the
+   canvas, the whole mob driving one browser). It's an opt-in extra service, off
+   by default; turn it on for a box with:
+
+       SHARED_BROWSER=1 deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.2.0
+
+   deploy.sh then installs/enables `ensembleworks-shared-browser` (its own unit +
+   resource slice) and adds the `/shared-browser` Caddy route. Being a container,
+   not release code, it's never restarted on a routine deploy (so the live shared
+   session survives). Prerequisites are **host**-owned by the laingville bootstrap
+   (like LiveKit): `docker` installed, the media UDP port opened in ufw + the cloud
+   firewall, and `~<app-user>/.config/ensembleworks/shared-browser.env` filled in
+   from [deploy/shared-browser.env.example](deploy/shared-browser.env.example).
+   See [docs/neko-poc-plan.md](docs/neko-poc-plan.md).
 
 > The ash dogfood box uses `deploy/bootstrap-debian-ash.sh` (watch mode) — a
 > separate path that these scripts don't touch.

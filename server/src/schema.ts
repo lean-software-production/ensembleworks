@@ -25,11 +25,20 @@ const iframeShapeProps = {
 	title: T.string,
 }
 
+// Keep in sync with client/src/neko/NekoShapeUtil.tsx
+const nekoShapeProps = {
+	w: T.number,
+	h: T.number,
+	base: T.string,
+	title: T.string,
+}
+
 export const schema = createTLSchema({
 	shapes: {
 		...defaultShapeSchemas,
 		terminal: { props: terminalShapeProps },
 		iframe: { props: iframeShapeProps },
+		neko: { props: nekoShapeProps },
 	},
 	bindings: defaultBindingSchemas,
 })

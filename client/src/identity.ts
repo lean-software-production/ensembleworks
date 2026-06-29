@@ -36,6 +36,19 @@ export function getIdentity(): Identity {
 	return { id, name, color: COLORS[hashCode(id) % COLORS.length]! }
 }
 
+/**
+ * Read the stored identity without prompting — for render paths (e.g. an iframe
+ * shape resolving a per-viewer URL) that must never pop a name prompt. Returns
+ * empty strings if the user hasn't been onboarded yet; by canvas-render time
+ * getIdentity() has already run at startup, so the name is set.
+ */
+export function peekIdentity(): { id: string; name: string } {
+	return {
+		id: localStorage.getItem(ID_KEY) ?? '',
+		name: localStorage.getItem(NAME_KEY) ?? '',
+	}
+}
+
 export function getRoomId(): string {
 	const room = new URLSearchParams(location.search).get('room') ?? 'team'
 	return /^[a-zA-Z0-9_-]{1,64}$/.test(room) ? room : 'team'

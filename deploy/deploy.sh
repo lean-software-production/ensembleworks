@@ -21,6 +21,13 @@ APP_USER="${APP_USER:-ensembleworks}"
 REPO_URL="${REPO_URL:-https://github.com/lean-software-production/ensembleworks.git}"
 KEEP="${KEEP:-3}"
 EDGE_PORT="8080"
+# The shared browser (neko) is an OPTIONAL extra service — off by default. Opt in
+# per box with SHARED_BROWSER=1; deploy.sh then installs + enables it (needs docker
+# and ~APP_USER/.config/ensembleworks/shared-browser.env on the host — both
+# provided by the laingville bootstrap, like LiveKit). It is release-independent
+# and never restarted on a routine deploy, so a live shared session survives app
+# rollouts; restart it by hand to pick up a changed unit.
+SHARED_BROWSER="${SHARED_BROWSER:-0}"
 
 # Ship the requirements manifest + lib to the box (the box may not have the repo
 # yet on a first deploy; the base src clone happens remotely below).
@@ -31,7 +38,9 @@ PROD_UNITS="deploy/systemd/prod" # committed unit templates (@APP_USER@/@APP_HOM
 for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	"$PROD_UNITS"/ensembleworks-sync.service \
 	"$PROD_UNITS"/ensembleworks-term.service \
-	"$PROD_UNITS"/ensembleworks-scribe.service; do
+	"$PROD_UNITS"/ensembleworks-scribe.service \
+	"$PROD_UNITS"/ensembleworks-shared-browser.service \
+	"$PROD_UNITS"/ensembleworks-shared-browser.slice; do
 	[ -f "$f" ] || {
 		echo "missing $f — run from the repo root" >&2
 		exit 1
@@ -51,6 +60,7 @@ TAG='${TAG}'
 REPO_URL='${REPO_URL}'
 KEEP='${KEEP}'
 EDGE_PORT='${EDGE_PORT}'
+SHARED_BROWSER='${SHARED_BROWSER}'
 APP_HOME="\$(getent passwd "\${APP_USER}" | cut -d: -f6)"
 SRC="\${APP_HOME}/src"
 RELEASES="\${APP_HOME}/releases"
@@ -122,6 +132,25 @@ for u in ensembleworks-sync ensembleworks-term ensembleworks-scribe; do
   sed -e "s|@APP_USER@|\${APP_USER}|g" -e "s|@APP_HOME@|\${APP_HOME}|g" "/tmp/\${u}.service" | sudo tee "/etc/systemd/system/\${u}.service" >/dev/null
 done
 
+# ---- install the OPTIONAL shared browser (neko) ------------------------------
+# Release-independent (it runs a container, not release code), so it's installed
+# only when opted in (SHARED_BROWSER=1) AND docker + its env file are present;
+# otherwise the box is left untouched (any already-running instance keeps serving).
+# Its own slice (a browser's RSS would dwarf the app envelope) installs alongside.
+SHARED_BROWSER_INSTALLED=0
+if [ "\$SHARED_BROWSER" = 1 ]; then
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "    SHARED_BROWSER=1 but docker is missing — skipping (provision it via the laingville bootstrap)" >&2
+  elif ! asapp test -f "\${APP_HOME}/.config/ensembleworks/shared-browser.env"; then
+    echo "    SHARED_BROWSER=1 but \${APP_HOME}/.config/ensembleworks/shared-browser.env is missing — skipping (copy deploy/shared-browser.env.example there)" >&2
+  else
+    echo "==> installing shared-browser unit + slice"
+    sudo install -m0644 /tmp/ensembleworks-shared-browser.slice /etc/systemd/system/ensembleworks-shared-browser.slice
+    sed -e "s|@APP_HOME@|\${APP_HOME}|g" /tmp/ensembleworks-shared-browser.service | sudo tee /etc/systemd/system/ensembleworks-shared-browser.service >/dev/null
+    SHARED_BROWSER_INSTALLED=1
+  fi
+fi
+
 # ---- install prod Caddyfile --------------------------------------------------
 sudo install -m0644 /tmp/ew-Caddyfile.prod /etc/caddy/Caddyfile
 
@@ -132,6 +161,13 @@ sudo systemctl daemon-reload
 sudo systemctl enable ensembleworks-sync ensembleworks-term >/dev/null 2>&1 || true
 sudo systemctl restart ensembleworks-sync ensembleworks-term
 sudo systemctl is-active --quiet ensembleworks-scribe && sudo systemctl restart ensembleworks-scribe || true
+# Shared browser: enable + start it if installed, but DON'T restart a running one
+# (a restart drops the live shared session). To pick up a changed unit, restart by
+# hand: sudo systemctl restart ensembleworks-shared-browser.
+if [ "\${SHARED_BROWSER_INSTALLED}" = 1 ]; then
+  sudo systemctl enable ensembleworks-shared-browser >/dev/null 2>&1 || true
+  sudo systemctl is-active --quiet ensembleworks-shared-browser || sudo systemctl start ensembleworks-shared-browser
+fi
 sudo systemctl reload-or-restart caddy
 
 # ---- prune old releases (keep newest \$KEEP, never the live one) -------------
@@ -163,6 +199,9 @@ scp -q "$LIB_FILE" "${SSH_TARGET}:/tmp/ew-lib.sh"
 scp -q "$REQ_FILE" "${SSH_TARGET}:/tmp/ew-runtime-requirements"
 scp -q "$CADDY_PROD" "${SSH_TARGET}:/tmp/ew-Caddyfile.prod"
 scp -q "$PROD_UNITS"/*.service "${SSH_TARGET}:/tmp/"
+# The shared-browser .slice ships alongside (the *.service glob already grabbed its
+# unit); the remote installs both only when SHARED_BROWSER=1.
+scp -q "$PROD_UNITS"/ensembleworks-shared-browser.slice "${SSH_TARGET}:/tmp/"
 ssh "$SSH_TARGET" "bash -s" <<<"$REMOTE"
 
 echo "==> done."
