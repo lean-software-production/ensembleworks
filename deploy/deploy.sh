@@ -50,7 +50,9 @@ for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	"$PROD_UNITS"/ensembleworks-shared-browser.service \
 	"$PROD_UNITS"/ensembleworks-shared-browser.slice \
 	deploy/agent-home/AGENTS.md \
-	deploy/agent-home/.claude/CLAUDE.md; do
+	deploy/agent-home/.claude/CLAUDE.md \
+	deploy/agent-home/term.env.example \
+	deploy/agent-home/term-env.bashrc; do
 	[ -f "$f" ] || {
 		echo "missing $f — run from the repo root" >&2
 		exit 1
@@ -181,6 +183,19 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
     sudo install -d -o "\${AGENT_USER}" -m0755 "\${AGENT_HOME}/.claude"
     sudo install -o "\${AGENT_USER}" -m0644 "\${NEW}/deploy/agent-home/AGENTS.md" "\${AGENT_HOME}/AGENTS.md"
     sudo install -o "\${AGENT_USER}" -m0644 "\${NEW}/deploy/agent-home/.claude/CLAUDE.md" "\${AGENT_HOME}/.claude/CLAUDE.md"
+  fi
+  # Tool env for canvas shells (OPENCODE_API_KEY, …): mirror the legacy app-user
+  # term.env mechanism for the sandbox user — a 600 env file it owns, sourced by its
+  # ~/.bashrc under set -a. Secret VALUES are operator-filled + off-repo; we only
+  # provision the placeholder (create-only, never clobbering a filled-in key) and the
+  # idempotent ~/.bashrc sourcing stanza (never clobbering the skel .bashrc).
+  if ! sudo -u "\${AGENT_USER}" test -f "\${AGENT_HOME}/.config/ensembleworks/term.env"; then
+    sudo install -d -o "\${AGENT_USER}" -m0700 "\${AGENT_HOME}/.config" "\${AGENT_HOME}/.config/ensembleworks"
+    sudo install -o "\${AGENT_USER}" -m0600 "\${NEW}/deploy/agent-home/term.env.example" "\${AGENT_HOME}/.config/ensembleworks/term.env"
+    echo "    seeded \${AGENT_HOME}/.config/ensembleworks/term.env (fill in OPENCODE_API_KEY)"
+  fi
+  if ! sudo -u "\${AGENT_USER}" grep -q __ew_term_env_file "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
+    sudo cat "\${NEW}/deploy/agent-home/term-env.bashrc" | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
   fi
 else
   echo "    sandbox user \${AGENT_USER} not present — skipping canvas CLI + agent-home seed"

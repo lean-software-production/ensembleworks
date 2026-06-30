@@ -392,8 +392,13 @@ rollout.
    fixed launcher via sudo; when the sandbox user is present, `deploy.sh` also puts
    the `canvas` CLI on its PATH and seeds `~ensembleworks-agent/AGENTS.md` +
    `.claude/CLAUDE.md` (from [deploy/agent-home/](deploy/agent-home/)) so agents
-   know how to use the canvas. Prerequisites are **host**-owned by the laingville
-   bootstrap (like the app user and docker):
+   know how to use the canvas. It also seeds a `600`
+   `~ensembleworks-agent/.config/ensembleworks/term.env` placeholder (sourced by the
+   sandbox user's `~/.bashrc` under `set -a`) — the same mechanism the legacy app
+   user used — so put `OPENCODE_API_KEY=…` (and any other CLI-tool vars) there and
+   open a new terminal; deploy.sh seeds it once and never overwrites the filled-in
+   key. Prerequisites are **host**-owned by the laingville bootstrap (like the app
+   user and docker):
 
    - create `ensembleworks-agent` — real shell, **locked password, no SSH**, own
      `700` home;
