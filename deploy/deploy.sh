@@ -53,6 +53,7 @@ for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	deploy/agent-home/.claude/CLAUDE.md \
 	deploy/agent-home/term.env.example \
 	deploy/agent-home/term-env.bashrc \
+	deploy/agent-home/gh-helper.bashrc \
 	deploy/ensembleworks-gh-token; do
 	[ -f "$f" ] || {
 		echo "missing $f — run from the repo root" >&2
@@ -212,6 +213,11 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   fi
   if ! sudo -u "\${AGENT_USER}" grep -q __ew_term_env_file "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
     sudo cat "\${NEW}/deploy/agent-home/term-env.bashrc" | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
+  fi
+  # gh wrapper (separate marker, so boxes that already have the term.env stanza still
+  # pick this up on a later deploy).
+  if ! sudo -u "\${AGENT_USER}" grep -q __ew_gh_helper "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
+    sudo cat "\${NEW}/deploy/agent-home/gh-helper.bashrc" | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
   fi
 else
   echo "    sandbox user \${AGENT_USER} not present — skipping canvas CLI + agent-home seed"

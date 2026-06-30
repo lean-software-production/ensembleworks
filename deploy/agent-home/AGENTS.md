@@ -59,6 +59,10 @@ TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token)          # all org repos
 git push "https://x-access-token:${TOKEN}@github.com/lean-software-production/<repo>.git" HEAD:my-branch
 ```
 
+The **`gh` CLI is pre-wrapped** to do this for you — `gh pr create …`, `gh api …`,
+`gh run …` mint a fresh token automatically and act as the bot, so you rarely need
+the raw `git push` above.
+
 `main` is branch-protected, so open a PR and let a human merge — pushes straight to
 `main` are rejected by design. Credit teammates who paired with you using
 `Co-authored-by:` trailers. If the wrapper says the App isn't provisioned on this
