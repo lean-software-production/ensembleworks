@@ -39,7 +39,81 @@ const TMUX_CONF =
 	process.env.TMUX_CONF ?? path.resolve(import.meta.dirname, '../../deploy/tmux-ensembleworks.conf')
 const TMUX_BASE_ARGS = existsSync(TMUX_CONF) ? ['-f', TMUX_CONF] : []
 
+// Privilege separation. When TERM_RUN_AS is set, every terminal shell is dropped
+// to that (less-privileged) user via sudo, so canvas terminals can't read the app
+// user's home — releases, build.env, the neko/LiveKit secrets. The gateway itself
+// stays as the app user because it must read its own code from that 700 home; only
+// the leaf pty drops privilege. A fixed host-provisioned launcher (allowed by a
+// narrow NOPASSWD sudoers rule) does the `cd $HOME` + `exec tmux …` with a box-wide
+// tmux.conf the sandbox user can read — keeping the privileged surface to one
+// binary. Unset (legacy -ash box, local dev) → shells run as the gateway user,
+// exactly as before. See deploy/systemd/prod/ensembleworks-term.service.
+const RUN_AS = process.env.TERM_RUN_AS?.trim() ?? ''
+const TERM_LAUNCHER = process.env.TERM_LAUNCHER ?? '/usr/local/bin/ensembleworks-term-launch'
+
 const execFileP = promisify(execFile)
+
+// How to spawn the tmux client for a session — directly as the gateway user, or
+// dropped to the sandbox user via sudo. Split out so getOrCreateSession stays
+// readable. When dropping, sudo's env_reset strips the gateway's environment and
+// -H points HOME at the sandbox user; the launcher owns the conf + `cd`, so we
+// pass a deliberately bare env and a neutral cwd (the gateway user may not be able
+// to chdir into the sandbox user's home).
+function tmuxSpawnSpec(id: string): {
+	file: string
+	args: string[]
+	cwd: string
+	env: Record<string, string>
+} {
+	const sessionName = `${TMUX_PREFIX}${id}`
+	if (RUN_AS) {
+		return {
+			file: 'sudo',
+			args: ['-n', '-H', '-u', RUN_AS, '--', TERM_LAUNCHER, sessionName],
+			cwd: '/',
+			env: { TERM: 'xterm-256color' },
+		}
+	}
+	return {
+		file: 'tmux',
+		// `new-session -A` attaches when the session already exists, so terminals
+		// reconnect to live tmux sessions across gateway and browser restarts.
+		args: [...TMUX_BASE_ARGS, 'new-session', '-A', '-s', sessionName],
+		cwd: process.env.HOME ?? process.cwd(),
+		env: {
+			...process.env,
+			TERM: 'xterm-256color',
+			// Light terminal background hint (fg 0, bg 15) — tmux < 3.4 drops OSC 11
+			// queries, so theme auto-detection needs this fallback.
+			COLORFGBG: '0;15',
+			// The `q` binding in tmux-ensembleworks.conf reloads from this path.
+			ENSEMBLEWORKS_TMUX_CONF: TMUX_CONF,
+		} as Record<string, string>,
+	}
+}
+
+// One-shot startup check: when TERM_RUN_AS is set, confirm the gateway can sudo to
+// it. On failure we log loudly but do NOT downgrade to the privileged gateway user
+// — sessions simply fail to spawn (fail closed) until the host grants the sudoers
+// rule, which is the safe posture for a segregation feature.
+function probeRunAs(): void {
+	if (!RUN_AS) {
+		console.log('[term] TERM_RUN_AS unset — terminals run as the gateway user')
+		return
+	}
+	execFile('sudo', ['-n', '-u', RUN_AS, 'true'], (err) => {
+		if (err) {
+			console.error(
+				`[term] WARNING: TERM_RUN_AS=${RUN_AS} but \`sudo -n -u ${RUN_AS}\` failed — ` +
+					'terminal sessions will NOT start until the host grants the NOPASSWD sudoers ' +
+					'rule for the launcher. Refusing to fall back to the privileged gateway user. ' +
+					`(${err.message})`
+			)
+		} else {
+			console.log(`[term] terminals drop to '${RUN_AS}' via sudo (launcher: ${TERM_LAUNCHER})`)
+		}
+	})
+}
 
 interface TermSession {
 	id: string
@@ -61,27 +135,14 @@ function getOrCreateSession(id: string, cols: number, rows: number): TermSession
 	const existing = sessions.get(id)
 	if (existing) return existing
 
-	// `new-session -A` attaches when the session already exists, so terminals
-	// reconnect to live tmux sessions across gateway and browser restarts.
-	const proc = pty.spawn(
-		'tmux',
-		[...TMUX_BASE_ARGS, 'new-session', '-A', '-s', `${TMUX_PREFIX}${id}`],
-		{
-			name: 'xterm-256color',
-			cols,
-			rows,
-			cwd: process.env.HOME ?? process.cwd(),
-			env: {
-				...process.env,
-				TERM: 'xterm-256color',
-				// Light terminal background hint (fg 0, bg 15) — tmux < 3.4 drops
-				// OSC 11 queries, so theme auto-detection needs this fallback.
-				COLORFGBG: '0;15',
-				// The `q` binding in tmux-ensembleworks.conf reloads from this path.
-				ENSEMBLEWORKS_TMUX_CONF: TMUX_CONF,
-			} as Record<string, string>,
-		}
-	)
+	const spec = tmuxSpawnSpec(id)
+	const proc = pty.spawn(spec.file, spec.args, {
+		name: 'xterm-256color',
+		cols,
+		rows,
+		cwd: spec.cwd,
+		env: spec.env,
+	})
 
 	const session: TermSession = {
 		id,
@@ -273,4 +334,5 @@ server.on('upgrade', (req, socket, head) => {
 
 server.listen(PORT, () => {
 	console.log(`ensembleworks terminal gateway listening on :${PORT}`)
+	probeRunAs()
 })

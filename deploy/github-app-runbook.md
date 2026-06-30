@@ -11,8 +11,17 @@ push half of the commit-identity model:
 
 ## Why a GitHub App (and not a PAT or the Access OAuth App)
 
-The deployed box is a **single `ensemble` user the whole mob has shell access to**
-(see `../README.md` "Security model"). So **any credential on the box is readable
+> **Two box models.** On the **legacy ash box** the whole mob shares the single
+> `ensemble` user's shell, so the reasoning below ("any credential on the box is
+> mob-readable") holds and the App key itself is exposed — mitigated only by short
+> tokens + rotation. On the **new prod boxes** terminals are dropped to a separate
+> `ensembleworks-agent` sandbox user that *cannot* read the app user's home, so the
+> App key is kept out of mob reach entirely and the mob mints tokens through a
+> sudo wrapper — see "On segregated boxes" below. The token-scope reasoning here
+> applies to both; only the *key's* exposure differs.
+
+The legacy ash box is a **single `ensemble` user the whole mob has shell access to**
+(see `../README.md` "Security model"). So **any credential on that box is readable
 by everyone in the room.** The scope here is **deliberately broad** — the App is
 installed on **all org repos** with **Contents + Pull requests + Workflows write**,
 because the mob wants to drive any repo (and its CI) from inside EnsembleWorks. Since
@@ -121,6 +130,45 @@ Copy the `.pem` to `GITHUB_APP_PRIVATE_KEY_FILE` and `chmod 600` it (use the rea
 absolute path, not `$HOME`, inside the file). `bootstrap-debian-ash.sh` writes a
 placeholder `github-app.env` (like it does for `sync.env`/`scribe.env`) so a
 fresh box prompts for these — fill in the values it leaves empty.
+
+## 6b. On segregated (prod) boxes — keep the key out of the mob's shell
+
+The prod boxes (e.g. `ew-lsp-001`) drop canvas terminals to a separate
+`ensembleworks-agent` sandbox user that can't read the **app** user's `700`
+`~/.config`. So, unlike the ash box, the App PEM + `github-app.env` are **not**
+mob-readable — keep them in the **app user's** `~/.config/ensembleworks/` exactly
+as in step 6, and let the sandbox user mint tokens (never touch the key) through a
+narrow wrapper run as the app user:
+
+- `deploy.sh` installs `bin/gh-app-token.bash` and the `deploy/ensembleworks-gh-token`
+  wrapper to `/usr/local/bin` when the sandbox user exists.
+- The host (laingville) adds the reverse sudoers rule:
+
+  ```
+  ensembleworks-agent ALL=(ensembleworks) NOPASSWD: /usr/local/bin/ensembleworks-gh-token
+  ```
+
+  > This lands in the same host file (`/etc/sudoers.d/ensembleworks-agent`) as the
+  > *forward* terminal-launcher rule
+  > (`ensembleworks ALL=(ensembleworks-agent) NOPASSWD: /usr/local/bin/ensembleworks-term-launch *, /usr/bin/true`).
+  > The `/usr/bin/true` there is required for the terminal gateway's startup probe
+  > (`sudo -n -u ensembleworks-agent true`) — without it the gateway logs a false
+  > "sessions will NOT start" warning even though sessions work. The laingville
+  > bootstrap provisions both rules.
+
+- A canvas agent then mints + pushes:
+
+  ```sh
+  TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token)        # or: … ensembleworks-gh-token myrepo
+  git push "https://x-access-token:${TOKEN}@github.com/lean-software-production/<repo>.git" HEAD:my-branch
+  ```
+
+The wrapper hardcodes `--env` to the app user's own `github-app.env` and accepts
+only a validated comma-separated repo allowlist — it never forwards arbitrary
+`gh-app-token.bash` flags, so the sandbox user can't redirect `--env` to read files
+as the app user. Net effect on a prod box: a leaked *token* still has a ~1h blast
+radius, but the *key* can no longer be exfiltrated by the mob at all. Revocation
+(step "Revocation") is unchanged.
 
 ## 7. Branch protection on `main` (the real control)
 

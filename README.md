@@ -385,6 +385,50 @@ rollout.
    from [deploy/shared-browser.env.example](deploy/shared-browser.env.example).
    See [docs/neko-poc-plan.md](docs/neko-poc-plan.md).
 
+5. **Terminal sandbox user.** On prod boxes the terminal gateway runs as the app
+   user but drops each shell to a less-privileged **`ensembleworks-agent`** user
+   (`TERM_RUN_AS` in the term unit), so canvas terminals can't read the app user's
+   home — releases, `build.env`, the neko/LiveKit secrets. The gateway calls a
+   fixed launcher via sudo; when the sandbox user is present, `deploy.sh` also puts
+   the `canvas` CLI on its PATH and seeds `~ensembleworks-agent/AGENTS.md` +
+   `.claude/CLAUDE.md` (from [deploy/agent-home/](deploy/agent-home/)) so agents
+   know how to use the canvas. It also seeds a `600`
+   `~ensembleworks-agent/.config/ensembleworks/term.env` placeholder (sourced by the
+   sandbox user's `~/.bashrc` under `set -a`) — the same mechanism the legacy app
+   user used — so put `OPENCODE_API_KEY=…` (and any other CLI-tool vars) there and
+   open a new terminal; deploy.sh seeds it once and never overwrites the filled-in
+   key. Prerequisites are **host**-owned by the laingville bootstrap (like the app
+   user and docker):
+
+   - create `ensembleworks-agent` — real shell, **locked password, no SSH**, own
+     `700` home;
+   - install `/usr/local/bin/ensembleworks-term-launch` (does `cd "$HOME"; exec
+     tmux -f /etc/ensembleworks/tmux.conf new-session -A -s "$1"`, exporting
+     `ENSEMBLEWORKS_TMUX_CONF`/`COLORFGBG`), and create `/etc/ensembleworks/` (the
+     box-wide `tmux.conf` is installed there by `deploy.sh` from the release, so the
+     sandbox user can read it);
+   - sudoers: `ensembleworks ALL=(ensembleworks-agent) NOPASSWD: /usr/local/bin/ensembleworks-term-launch *, /usr/bin/true`
+     — the `*` covers the session-name arg; `/usr/bin/true` is needed for the
+     gateway's startup probe (`sudo -n -u ensembleworks-agent true`), which would
+     otherwise be denied and log a false "sessions will NOT start" warning;
+   - **GitHub (optional)** — to let canvas agents push/PR as the `ensembleworks[bot]`
+     App without handing the mob the App private key, keep the App's PEM +
+     `github-app.env` in the **app user's** `~/.config/ensembleworks/` (700, like the
+     ash box — see [deploy/github-app-runbook.md](deploy/github-app-runbook.md)) and
+     add the reverse sudoers rule so the sandbox user can mint (only) short-lived
+     tokens through it: `ensembleworks-agent ALL=(ensembleworks) NOPASSWD:
+     /usr/local/bin/ensembleworks-gh-token`. deploy.sh installs `gh-app-token.bash`
+     + the `ensembleworks-gh-token` wrapper to `/usr/local/bin`; the key never leaves
+     the app user's zone, only the ~1h token does.
+
+   Until the host provides these, `deploy.sh`'s **preflight hard-fails** (the
+   sandbox user, the launcher, and the `ensembleworks → ensembleworks-agent` sudo
+   grant are all checked, pointing you back at the bootstrap); a missing GitHub
+   `github-app.env` only warns, since that feature is optional. If the term unit ran
+   without them anyway, the gateway **fails closed** (logs the missing sudoers rule,
+   won't start sessions) rather than running shells as the app user. Unset
+   `TERM_RUN_AS` (legacy `-ash` box / local dev) to run shells as the app user.
+
 > The ash dogfood box uses `deploy/bootstrap-debian-ash.sh` (watch mode) — a
 > separate path that these scripts don't touch.
 
