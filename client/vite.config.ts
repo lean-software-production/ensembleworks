@@ -1,5 +1,16 @@
+import { execSync } from 'node:child_process'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type ServerOptions } from 'vite'
+
+// Stamp the build with the git-described version so the client can show it
+// (see the About dialog). Tolerant of non-git builds (e.g. tarball deploys).
+function appVersion(): string {
+	try {
+		return execSync('git describe --tags --always --dirty', { encoding: 'utf8' }).trim()
+	} catch {
+		return '0.0.0-dev'
+	}
+}
 
 // Vite serves the app and proxies the backend services. We run it the same way
 // in the devcontainer and on the dogfooding server, so it always sits behind a
@@ -36,6 +47,9 @@ const proxiedServer: Partial<ServerOptions> =
 
 export default defineConfig({
 	plugins: [react()],
+	define: {
+		__APP_VERSION__: JSON.stringify(appVersion()),
+	},
 	server: {
 		// Caddy hard-targets localhost:5173, so a busy port must fail loudly
 		// rather than let Vite silently bind 5174 and 502 through Caddy.
