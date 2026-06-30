@@ -10,9 +10,14 @@ import {
 	Editor,
 	TLComponents,
 	TLUiOverrides,
+	TldrawUiDialogBody,
+	TldrawUiDialogCloseButton,
+	TldrawUiDialogHeader,
+	TldrawUiDialogTitle,
 	TldrawUiMenuGroup,
 	TldrawUiMenuItem,
 	createShapeId,
+	useDialogs,
 	useEditor,
 	useTools,
 } from 'tldraw'
@@ -112,8 +117,26 @@ function ToolbarWithTerminal() {
 	)
 }
 
+function AboutDialog(_props: { onClose: () => void }) {
+	return (
+		<>
+			<TldrawUiDialogHeader>
+				<TldrawUiDialogTitle>EnsembleWorks</TldrawUiDialogTitle>
+				<TldrawUiDialogCloseButton />
+			</TldrawUiDialogHeader>
+			<TldrawUiDialogBody style={{ maxWidth: 420 }}>
+				<p style={{ margin: '0 0 12px' }}>Multi-player Agentic Workspace for Teams</p>
+				<p style={{ margin: 0, opacity: 0.7 }}>
+					Version <code>{__APP_VERSION__}</code>
+				</p>
+			</TldrawUiDialogBody>
+		</>
+	)
+}
+
 function MainMenuWithDemo() {
 	const editor = useEditor()
+	const { addDialog } = useDialogs()
 	return (
 		<DefaultMainMenu>
 			<DefaultMainMenuContent />
@@ -134,10 +157,10 @@ function MainMenuWithDemo() {
 				/>
 				<TldrawUiMenuItem
 					id="about-sessions"
-					label="About: augmented sessions"
-					icon="external-link"
+					label="About"
+					icon="info-circle"
 					onSelect={() => {
-						window.open('/about.html', '_blank')
+						addDialog({ component: AboutDialog })
 					}}
 				/>
 			</TldrawUiMenuGroup>
