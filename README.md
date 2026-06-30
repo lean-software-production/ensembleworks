@@ -399,8 +399,13 @@ rollout.
      `700` home;
    - install `/usr/local/bin/ensembleworks-term-launch` (does `cd "$HOME"; exec
      tmux -f /etc/ensembleworks/tmux.conf new-session -A -s "$1"`, exporting
-     `ENSEMBLEWORKS_TMUX_CONF`/`COLORFGBG`) and the box-wide `/etc/ensembleworks/tmux.conf`;
-   - sudoers: `ensembleworks ALL=(ensembleworks-agent) NOPASSWD: /usr/local/bin/ensembleworks-term-launch *`.
+     `ENSEMBLEWORKS_TMUX_CONF`/`COLORFGBG`), and create `/etc/ensembleworks/` (the
+     box-wide `tmux.conf` is installed there by `deploy.sh` from the release, so the
+     sandbox user can read it);
+   - sudoers: `ensembleworks ALL=(ensembleworks-agent) NOPASSWD: /usr/local/bin/ensembleworks-term-launch *, /usr/bin/true`
+     — the `*` covers the session-name arg; `/usr/bin/true` is needed for the
+     gateway's startup probe (`sudo -n -u ensembleworks-agent true`), which would
+     otherwise be denied and log a false "sessions will NOT start" warning.
 
    Until the host provides these, the gateway **fails closed** (logs the missing
    sudoers rule and won't start sessions) rather than running shells as the app
