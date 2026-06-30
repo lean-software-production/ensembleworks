@@ -148,6 +148,14 @@ narrow wrapper run as the app user:
   ensembleworks-agent ALL=(ensembleworks) NOPASSWD: /usr/local/bin/ensembleworks-gh-token
   ```
 
+  > This lands in the same host file (`/etc/sudoers.d/ensembleworks-agent`) as the
+  > *forward* terminal-launcher rule
+  > (`ensembleworks ALL=(ensembleworks-agent) NOPASSWD: /usr/local/bin/ensembleworks-term-launch *, /usr/bin/true`).
+  > The `/usr/bin/true` there is required for the terminal gateway's startup probe
+  > (`sudo -n -u ensembleworks-agent true`) — without it the gateway logs a false
+  > "sessions will NOT start" warning even though sessions work. The laingville
+  > bootstrap provisions both rules.
+
 - A canvas agent then mints + pushes:
 
   ```sh
