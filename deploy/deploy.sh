@@ -100,6 +100,14 @@ if [ -n "\$problems" ]; then
 fi
 id -u "\${APP_USER}" >/dev/null 2>&1 || { echo "app user \${APP_USER} missing" >&2; exit 1; }
 systemctl cat ensembleworks.slice >/dev/null 2>&1 || { echo "ensembleworks.slice missing (host envelope) — run bootstrap.sh" >&2; exit 1; }
+# Terminal sandbox host deps (laingville-provisioned). The prod term unit always sets
+# TERM_RUN_AS, so these are required for terminals to work at all — fail fast here with
+# a clear pointer rather than letting the gateway fail closed after a "green" deploy.
+id -u "\${AGENT_USER}" >/dev/null 2>&1 || { echo "sandbox user \${AGENT_USER} missing — run the laingville bootstrap (terminals run as it; TERM_RUN_AS is set in the prod term unit)" >&2; exit 1; }
+test -x /usr/local/bin/ensembleworks-term-launch || { echo "/usr/local/bin/ensembleworks-term-launch missing/not executable — host-provisioned by the laingville bootstrap" >&2; exit 1; }
+sudo -u "\${APP_USER}" sudo -n -u "\${AGENT_USER}" true 2>/dev/null || { echo "sudo grant missing: \${APP_USER} -> \${AGENT_USER} (NOPASSWD ensembleworks-term-launch + /usr/bin/true) — run the laingville bootstrap" >&2; exit 1; }
+# GitHub App token minting is OPTIONAL — warn but don't block.
+sudo test -f "\${APP_HOME}/.config/ensembleworks/github-app.env" 2>/dev/null || echo "    note: \${APP_HOME}/.config/ensembleworks/github-app.env absent — GitHub token minting not provisioned (optional; deploy/github-app-runbook.md)" >&2
 echo "    preflight ok"
 
 # ---- ensure base clone + fetch tags -----------------------------------------

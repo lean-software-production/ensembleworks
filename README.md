@@ -421,10 +421,13 @@ rollout.
      + the `ensembleworks-gh-token` wrapper to `/usr/local/bin`; the key never leaves
      the app user's zone, only the ~1h token does.
 
-   Until the host provides these, the gateway **fails closed** (logs the missing
-   sudoers rule and won't start sessions) rather than running shells as the app
-   user. Unset `TERM_RUN_AS` (legacy `-ash` box / local dev) to run shells as the
-   app user, exactly as before.
+   Until the host provides these, `deploy.sh`'s **preflight hard-fails** (the
+   sandbox user, the launcher, and the `ensembleworks → ensembleworks-agent` sudo
+   grant are all checked, pointing you back at the bootstrap); a missing GitHub
+   `github-app.env` only warns, since that feature is optional. If the term unit ran
+   without them anyway, the gateway **fails closed** (logs the missing sudoers rule,
+   won't start sessions) rather than running shells as the app user. Unset
+   `TERM_RUN_AS` (legacy `-ash` box / local dev) to run shells as the app user.
 
 > The ash dogfood box uses `deploy/bootstrap-debian-ash.sh` (watch mode) — a
 > separate path that these scripts don't touch.
