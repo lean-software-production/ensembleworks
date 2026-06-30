@@ -16,6 +16,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+# Restart must NOT take down the tmux server. The gateway spawns ONE shared tmux
+# server (sessions named canvas-<id>) inside this unit's cgroup; the default
+# KillMode=control-group SIGKILLs the whole cgroup on `systemctl restart`, so a
+# deploy drops every live terminal. KillMode=process signals only the gateway
+# (npm 10 forwards SIGTERM to node, freeing :8789); the tmux server survives and the
+# restarted gateway reattaches via `tmux new-session -A` (see terminal-gateway.ts).
+# The surviving server is intentional and singular (one per box), not an orphan leak.
+KillMode=process
 User=@APP_USER@
 WorkingDirectory=@APP_HOME@/current/server
 Slice=ensembleworks.slice
