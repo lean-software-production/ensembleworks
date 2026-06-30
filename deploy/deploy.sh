@@ -173,6 +173,10 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   echo "==> seeding \${AGENT_USER} sandbox (canvas CLI + agent guidance)"
   AGENT_HOME="\$(getent passwd "\${AGENT_USER}" | cut -d: -f6)"
   sudo install -m0755 "\${NEW}/bin/canvas" /usr/local/bin/canvas
+  # Box-wide tmux conf the sandbox user CAN read (it can't read the app's 700 home
+  # where deploy/tmux-ensembleworks.conf ships). The host-provisioned launcher
+  # (/usr/local/bin/ensembleworks-term-launch) execs \`tmux -f /etc/ensembleworks/tmux.conf\`.
+  sudo install -D -m0644 "\${NEW}/deploy/tmux-ensembleworks.conf" /etc/ensembleworks/tmux.conf
   if asapp test -d "\${NEW}/deploy/agent-home"; then
     sudo install -d -o "\${AGENT_USER}" -m0755 "\${AGENT_HOME}/.claude"
     sudo install -o "\${AGENT_USER}" -m0644 "\${NEW}/deploy/agent-home/AGENTS.md" "\${AGENT_HOME}/AGENTS.md"
