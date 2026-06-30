@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# ensembleworks-gh-token — mint a short-lived (~1h) GitHub App installation token
+# for the terminal sandbox user WITHOUT exposing the App private key.
+#
+# The sandbox user (ensembleworks-agent) can't read the app user's 700 ~/.config,
+# where the App PEM + github-app.env live. This wrapper is the ONE command it may
+# run as the app user, via a narrow NOPASSWD sudoers rule:
+#
+#   ensembleworks-agent ALL=(ensembleworks) NOPASSWD: /usr/local/bin/ensembleworks-gh-token
+#
+# so the root key stays in the trusted zone and only the ephemeral token crosses
+# the boundary. Installed to /usr/local/bin by deploy/deploy.sh (alongside the
+# canvas CLI), when the sandbox user exists. See deploy/github-app-runbook.md.
+#
+# Usage (from a canvas terminal, i.e. as ensembleworks-agent):
+#   TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token)            # all org repos
+#   TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token myrepo)     # scope to one/some
+#   git push "https://x-access-token:${TOKEN}@github.com/lean-software-production/myrepo.git" HEAD:my-branch
+#
+# We deliberately do NOT forward arbitrary gh-app-token.bash flags: its --env would
+# let a caller redirect the sourced env file to an attacker path = code-exec as the
+# app user. Only an optional comma-separated repo-name allowlist is accepted, and
+# the env path is resolved from OUR OWN passwd entry — never from $HOME or an arg.
+set -euo pipefail
+
+repos="${1:-}"
+if [ -n "$repos" ]; then
+	case "$repos" in
+	-*) echo "ensembleworks-gh-token: repos must not start with '-'" >&2; exit 2 ;;
+	*[!A-Za-z0-9._,-]*) echo "ensembleworks-gh-token: invalid repos '$repos' (allowed: A-Za-z0-9 . _ , -)" >&2; exit 2 ;;
+	esac
+fi
+
+home="$(getent passwd "$(id -u)" | cut -d: -f6)"
+env_file="${home}/.config/ensembleworks/github-app.env"
+[ -f "$env_file" ] || {
+	echo "ensembleworks-gh-token: $env_file missing — provision the GitHub App (deploy/github-app-runbook.md)" >&2
+	exit 1
+}
+
+args=(--env "$env_file")
+[ -n "$repos" ] && args+=(--repos "$repos")
+exec /usr/local/bin/gh-app-token.bash "${args[@]}"

@@ -410,7 +410,16 @@ rollout.
    - sudoers: `ensembleworks ALL=(ensembleworks-agent) NOPASSWD: /usr/local/bin/ensembleworks-term-launch *, /usr/bin/true`
      — the `*` covers the session-name arg; `/usr/bin/true` is needed for the
      gateway's startup probe (`sudo -n -u ensembleworks-agent true`), which would
-     otherwise be denied and log a false "sessions will NOT start" warning.
+     otherwise be denied and log a false "sessions will NOT start" warning;
+   - **GitHub (optional)** — to let canvas agents push/PR as the `ensembleworks[bot]`
+     App without handing the mob the App private key, keep the App's PEM +
+     `github-app.env` in the **app user's** `~/.config/ensembleworks/` (700, like the
+     ash box — see [deploy/github-app-runbook.md](deploy/github-app-runbook.md)) and
+     add the reverse sudoers rule so the sandbox user can mint (only) short-lived
+     tokens through it: `ensembleworks-agent ALL=(ensembleworks) NOPASSWD:
+     /usr/local/bin/ensembleworks-gh-token`. deploy.sh installs `gh-app-token.bash`
+     + the `ensembleworks-gh-token` wrapper to `/usr/local/bin`; the key never leaves
+     the app user's zone, only the ~1h token does.
 
    Until the host provides these, the gateway **fails closed** (logs the missing
    sudoers rule and won't start sessions) rather than running shells as the app

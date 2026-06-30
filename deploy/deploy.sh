@@ -52,7 +52,8 @@ for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	deploy/agent-home/AGENTS.md \
 	deploy/agent-home/.claude/CLAUDE.md \
 	deploy/agent-home/term.env.example \
-	deploy/agent-home/term-env.bashrc; do
+	deploy/agent-home/term-env.bashrc \
+	deploy/ensembleworks-gh-token; do
 	[ -f "$f" ] || {
 		echo "missing $f — run from the repo root" >&2
 		exit 1
@@ -175,6 +176,13 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   echo "==> seeding \${AGENT_USER} sandbox (canvas CLI + agent guidance)"
   AGENT_HOME="\$(getent passwd "\${AGENT_USER}" | cut -d: -f6)"
   sudo install -m0755 "\${NEW}/bin/canvas" /usr/local/bin/canvas
+  # GitHub App token minting for the sandbox user WITHOUT exposing the App key: the
+  # PEM + github-app.env stay in the app user's 700 ~/.config (unreadable to the
+  # sandbox user); the agent runs the narrow ensembleworks-gh-token wrapper as the
+  # app user via a host-provided NOPASSWD sudoers rule, so only the ~1h token crosses
+  # the boundary. See deploy/github-app-runbook.md.
+  sudo install -m0755 "\${NEW}/bin/gh-app-token.bash" /usr/local/bin/gh-app-token.bash
+  sudo install -m0755 "\${NEW}/deploy/ensembleworks-gh-token" /usr/local/bin/ensembleworks-gh-token
   # Box-wide tmux conf the sandbox user CAN read (it can't read the app's 700 home
   # where deploy/tmux-ensembleworks.conf ships). The host-provisioned launcher
   # (/usr/local/bin/ensembleworks-term-launch) execs \`tmux -f /etc/ensembleworks/tmux.conf\`.

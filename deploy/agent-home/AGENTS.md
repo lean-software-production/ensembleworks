@@ -46,3 +46,20 @@ canvas shape '{"type":"geo","text":"retry bug","x":100,"y":80}'   # draw / updat
    `--author <you>` so the room knows who's talking. Keep them short.
 4. **Leave the canvas legible.** Give your terminal a meaningful title and don't
    flood frames — everyone shares this space.
+
+## Pushing to GitHub
+
+You commit and push as the **`ensembleworks[bot]`** GitHub App, never a personal
+account. You can't read the App key (it's outside this sandbox) — instead mint a
+short-lived (~1h) token through the wrapper, then push over HTTPS:
+
+```sh
+TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token)          # all org repos
+# TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token myrepo) # or scope to one
+git push "https://x-access-token:${TOKEN}@github.com/lean-software-production/<repo>.git" HEAD:my-branch
+```
+
+`main` is branch-protected, so open a PR and let a human merge — pushes straight to
+`main` are rejected by design. Credit teammates who paired with you using
+`Co-authored-by:` trailers. If the wrapper says the App isn't provisioned on this
+box, GitHub pushing just isn't set up here — carry on without it.
