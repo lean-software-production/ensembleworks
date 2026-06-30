@@ -385,6 +385,28 @@ rollout.
    from [deploy/shared-browser.env.example](deploy/shared-browser.env.example).
    See [docs/neko-poc-plan.md](docs/neko-poc-plan.md).
 
+5. **Terminal sandbox user.** On prod boxes the terminal gateway runs as the app
+   user but drops each shell to a less-privileged **`ensembleworks-agent`** user
+   (`TERM_RUN_AS` in the term unit), so canvas terminals can't read the app user's
+   home — releases, `build.env`, the neko/LiveKit secrets. The gateway calls a
+   fixed launcher via sudo; when the sandbox user is present, `deploy.sh` also puts
+   the `canvas` CLI on its PATH and seeds `~ensembleworks-agent/AGENTS.md` +
+   `.claude/CLAUDE.md` (from [deploy/agent-home/](deploy/agent-home/)) so agents
+   know how to use the canvas. Prerequisites are **host**-owned by the laingville
+   bootstrap (like the app user and docker):
+
+   - create `ensembleworks-agent` — real shell, **locked password, no SSH**, own
+     `700` home;
+   - install `/usr/local/bin/ensembleworks-term-launch` (does `cd "$HOME"; exec
+     tmux -f /etc/ensembleworks/tmux.conf new-session -A -s "$1"`, exporting
+     `ENSEMBLEWORKS_TMUX_CONF`/`COLORFGBG`) and the box-wide `/etc/ensembleworks/tmux.conf`;
+   - sudoers: `ensembleworks ALL=(ensembleworks-agent) NOPASSWD: /usr/local/bin/ensembleworks-term-launch *`.
+
+   Until the host provides these, the gateway **fails closed** (logs the missing
+   sudoers rule and won't start sessions) rather than running shells as the app
+   user. Unset `TERM_RUN_AS` (legacy `-ash` box / local dev) to run shells as the
+   app user, exactly as before.
+
 > The ash dogfood box uses `deploy/bootstrap-debian-ash.sh` (watch mode) — a
 > separate path that these scripts don't touch.
 

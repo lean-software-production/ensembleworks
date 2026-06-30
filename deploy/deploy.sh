@@ -29,6 +29,14 @@ EDGE_PORT="8080"
 # rollouts; restart it by hand to pick up a changed unit.
 SHARED_BROWSER="${SHARED_BROWSER:-0}"
 
+# Terminal shells are dropped to this sandbox user (must match TERM_RUN_AS in the
+# prod term unit) so canvas terminals can't read the app user's home. When the user
+# exists on the box, deploy.sh puts the canvas CLI on its PATH (it can't read the
+# 700 app home where bin/canvas lives) and (re)seeds its AGENTS.md/CLAUDE.md
+# guidance. The user itself + its NOPASSWD sudoers rule + the launcher are host
+# concerns owned by the laingville bootstrap (like the app user and docker).
+AGENT_USER="${AGENT_USER:-ensembleworks-agent}"
+
 # Ship the requirements manifest + lib to the box (the box may not have the repo
 # yet on a first deploy; the base src clone happens remotely below).
 REQ_FILE="deploy/runtime-requirements"
@@ -40,7 +48,9 @@ for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	"$PROD_UNITS"/ensembleworks-term.service \
 	"$PROD_UNITS"/ensembleworks-scribe.service \
 	"$PROD_UNITS"/ensembleworks-shared-browser.service \
-	"$PROD_UNITS"/ensembleworks-shared-browser.slice; do
+	"$PROD_UNITS"/ensembleworks-shared-browser.slice \
+	deploy/agent-home/AGENTS.md \
+	deploy/agent-home/.claude/CLAUDE.md; do
 	[ -f "$f" ] || {
 		echo "missing $f — run from the repo root" >&2
 		exit 1
@@ -61,6 +71,7 @@ REPO_URL='${REPO_URL}'
 KEEP='${KEEP}'
 EDGE_PORT='${EDGE_PORT}'
 SHARED_BROWSER='${SHARED_BROWSER}'
+AGENT_USER='${AGENT_USER}'
 APP_HOME="\$(getent passwd "\${APP_USER}" | cut -d: -f6)"
 SRC="\${APP_HOME}/src"
 RELEASES="\${APP_HOME}/releases"
@@ -149,6 +160,27 @@ if [ "\$SHARED_BROWSER" = 1 ]; then
     sed -e "s|@APP_HOME@|\${APP_HOME}|g" /tmp/ensembleworks-shared-browser.service | sudo tee /etc/systemd/system/ensembleworks-shared-browser.service >/dev/null
     SHARED_BROWSER_INSTALLED=1
   fi
+fi
+
+# ---- seed the terminal sandbox user ------------------------------------------
+# The prod term unit drops shells to \${AGENT_USER} (TERM_RUN_AS). That user can't
+# read the app user's 700 home, so put the canvas CLI on its PATH and (re)seed its
+# guidance from the freshly-built release. These are generated docs, not user data,
+# so we overwrite on every deploy to track the canvas CLI version. The user itself
+# + sudoers + launcher are host-provisioned (laingville); if it's absent we skip
+# and the gateway fails closed (no terminals) until the host catches up.
+if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
+  echo "==> seeding \${AGENT_USER} sandbox (canvas CLI + agent guidance)"
+  AGENT_HOME="\$(getent passwd "\${AGENT_USER}" | cut -d: -f6)"
+  sudo install -m0755 "\${NEW}/bin/canvas" /usr/local/bin/canvas
+  if asapp test -d "\${NEW}/deploy/agent-home"; then
+    sudo install -d -o "\${AGENT_USER}" -m0755 "\${AGENT_HOME}/.claude"
+    sudo install -o "\${AGENT_USER}" -m0644 "\${NEW}/deploy/agent-home/AGENTS.md" "\${AGENT_HOME}/AGENTS.md"
+    sudo install -o "\${AGENT_USER}" -m0644 "\${NEW}/deploy/agent-home/.claude/CLAUDE.md" "\${AGENT_HOME}/.claude/CLAUDE.md"
+  fi
+else
+  echo "    sandbox user \${AGENT_USER} not present — skipping canvas CLI + agent-home seed"
+  echo "    (provision it via the laingville bootstrap; the term gateway fails closed until then)" >&2
 fi
 
 # ---- install prod Caddyfile --------------------------------------------------

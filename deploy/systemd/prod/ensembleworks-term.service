@@ -2,6 +2,13 @@
 # deploy/deploy.sh (@APP_USER@ / @APP_HOME@ substituted via sed). term carries NO
 # MemoryLow — it gets "the rest" of the ensembleworks.slice envelope, so a runaway
 # tmux pane is throttled/OOM-killed before the protected core (sync/scribe).
+#
+# The gateway runs as the app user (it must read its own code from @APP_HOME@), but
+# TERM_RUN_AS drops each spawned shell to a less-privileged sandbox user so canvas
+# terminals can't read the app user's home (releases, secrets). The sandbox user,
+# its NOPASSWD sudoers rule for the launcher, the launcher itself, and the box-wide
+# tmux.conf are HOST concerns owned by the laingville bootstrap — like the app user
+# and docker. Unset TERM_RUN_AS to run shells as the app user (legacy -ash / dev).
 [Unit]
 Description=EnsembleWorks terminal gateway (node-pty + tmux)
 After=network-online.target
@@ -15,6 +22,9 @@ Slice=ensembleworks.slice
 MemoryAccounting=yes
 Environment=PORT=8789
 Environment=TMUX_CONF=@APP_HOME@/current/deploy/tmux-ensembleworks.conf
+# Drop each terminal shell to this sandbox user (see header). The host must provide
+# the user + a NOPASSWD sudoers rule for /usr/local/bin/ensembleworks-term-launch.
+Environment=TERM_RUN_AS=ensembleworks-agent
 ExecStart=/usr/local/bin/npm run start:term
 Restart=on-failure
 RestartSec=2
