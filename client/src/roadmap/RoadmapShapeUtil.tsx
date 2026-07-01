@@ -246,11 +246,11 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 		endDrag()
 	}
 
-	const keyBtn = (key: string) => (
+	const keyBtn = (key: string, style?: React.CSSProperties) => (
 		<button
 			className="rm-key"
 			title="Copy key"
-			style={copied === key ? { color: 'var(--rm-ok)' } : undefined}
+			style={{ ...style, ...(copied === key ? { color: 'var(--rm-ok)' } : undefined) }}
 			onClick={(e) => {
 				e.stopPropagation()
 				copyKey(key)
@@ -315,12 +315,11 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 		)
 	}
 
-	const renderInitiative = (ini: RoadmapInitiative, outcomeKey: string) => {
+	const renderInitiative = (ini: RoadmapInitiative, outcomeKey: string, list: RoadmapInitiative[]) => {
 		const isOpen = openState[ini.key] ?? true
 		const st = glyphFor(ini.status)
 		const container = `ini:${outcomeKey}`
 		const sig = `${container}:${ini.key}`
-		const list = doc?.outcomes.find((o) => o.key === outcomeKey)?.initiatives ?? []
 		return (
 			<div
 				key={ini.key}
@@ -439,25 +438,14 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 				>
 					<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
 						<span style={{ color: 'var(--rm-fg-subtle)', fontSize: 11, lineHeight: 1, letterSpacing: -2 }}>⠿</span>
-						<button
-							className="rm-key"
-							title="Copy key"
-							style={{
-								fontSize: 9.5,
-								letterSpacing: 1,
-								padding: '2px 7px',
-								background: 'var(--rm-panel)',
-								border: '1px solid var(--rm-rule)',
-								borderRadius: 2,
-								...(copied === oc.key ? { color: 'var(--rm-ok)' } : {}),
-							}}
-							onClick={(e) => {
-								e.stopPropagation()
-								copyKey(oc.key)
-							}}
-						>
-							{copied === oc.key ? 'copied ✓' : oc.key}
-						</button>
+						{keyBtn(oc.key, {
+							fontSize: 9.5,
+							letterSpacing: 1,
+							padding: '2px 7px',
+							background: 'var(--rm-panel)',
+							border: '1px solid var(--rm-rule)',
+							borderRadius: 2,
+						})}
 						<button
 							title="Cycle status"
 							onClick={(e) => {
@@ -494,7 +482,7 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 					</p>
 				</div>
 				<div style={{ display: 'flex', gap: 12, paddingTop: 12, alignItems: 'flex-start' }}>
-					{(oc.initiatives ?? []).map((ini) => renderInitiative(ini, oc.key))}
+					{(oc.initiatives ?? []).map((ini) => renderInitiative(ini, oc.key, oc.initiatives ?? []))}
 				</div>
 			</div>
 		)
@@ -510,7 +498,7 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 				<div style={{ fontFamily: 'var(--rm-serif)', fontWeight: 600, fontSize: 17, letterSpacing: -0.2 }}>
 					{doc?.meta.title ?? shape.props.roadmapId}
 				</div>
-				<div className="rm-label" style={{ fontSize: 9, letterSpacing: 1, textTransform: 'none' }}>
+				<div className="rm-label rm-label-plain" style={{ fontSize: 9 }}>
 					{doc
 						? `${[doc.meta.revision, doc.meta.updated].filter(Boolean).join(' · ')} · ${countsLine(doc)}`
 						: error
@@ -638,11 +626,11 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 
 	const legend = (
 		<div style={{ display: 'flex', gap: 18, padding: '10px 18px', borderTop: '1px solid var(--rm-rule-strong)' }}>
-			<span className="rm-label" style={{ letterSpacing: 1, textTransform: 'none' }}>✓ done</span>
-			<span className="rm-label" style={{ letterSpacing: 1, textTransform: 'none' }}>● in progress</span>
-			<span className="rm-label" style={{ letterSpacing: 1, textTransform: 'none' }}>○ planned</span>
+			<span className="rm-label rm-label-plain">✓ done</span>
+			<span className="rm-label rm-label-plain">● in progress</span>
+			<span className="rm-label rm-label-plain">○ planned</span>
 			<span style={{ flex: 1 }} />
-			<span className="rm-label" style={{ letterSpacing: 1, textTransform: 'none' }}>
+			<span className="rm-label rm-label-plain">
 				{isEditing ? '⠿ drag to reorder · click glyphs to set status · click keys to copy' : 'double-click to interact'}
 			</span>
 		</div>

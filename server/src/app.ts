@@ -328,22 +328,6 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	const transcripts = createTranscriptStore(path.join(opts.dataDir, 'transcripts'))
 	const roadmaps = createRoadmapStore(path.join(opts.dataDir, 'roadmaps'))
 
-	// POST bodies interleave across awaits; chain each room's write onto the
-	// previous one so read-modify-write is serialized (single process ≠
-	// serialized handlers).
-	const roadmapWriteLocks = new Map<string, Promise<void>>()
-	const withRoadmapLock = async <T>(roomId: string, fn: () => Promise<T>): Promise<T> => {
-		const prev = roadmapWriteLocks.get(roomId) ?? Promise.resolve()
-		let release!: () => void
-		roadmapWriteLocks.set(roomId, new Promise<void>((r) => (release = r)))
-		await prev
-		try {
-			return await fn()
-		} finally {
-			release()
-		}
-	}
-
 	// -------------------------------------------------------------------------
 	// Rooms: one TLSocketRoom per room ID, persisted via SQLite. Storage commits
 	// transactionally on every change, so there is no debounced-save dance and
@@ -1149,7 +1133,9 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		if (name.length > 128) return void res.status(400).json({ error: 'name must be 128 characters or fewer' })
 		const ifRev = typeof body.ifRev === 'number' && Number.isFinite(body.ifRev) ? body.ifRev : null
 
-		await withRoadmapLock(roomId, async () => {
+		// The store's lock serializes the whole read-modify-write; POST bodies
+		// interleave across awaits, so without it two writers read the same rev.
+		await roadmaps.withLock(roomId, async () => {
 			const existing = await roadmaps.get(roomId, name)
 			if (ifRev !== null && !existing) {
 				return void res

@@ -1,9 +1,9 @@
 /**
  * Roadmap store — one JSON file per roadmap (DATA_DIR/roadmaps/<room>/<id>.json),
  * following the transcript-store pattern: whole-file read/write, no SQL. The
- * documents are a few KB; however, per-room write serialization is required and
- * provided by the endpoint's promise-chain lock (single process does not
- * serialize multi-await handlers).
+ * documents are a few KB; however, per-room write serialization is required
+ * (single process does not serialize multi-await handlers) — every
+ * read-modify-write sequence must run inside the store's own withLock.
  *
  * Also owns the pure document logic shared by every writer: schema validation,
  * the unique-key rule, and the op vocabulary (replace | set | move) that both
@@ -273,10 +273,18 @@ export interface RoadmapStore {
 	list(roomId: string): Promise<Array<{ id: string; name: string; rev: number; updated: string }>>
 	get(roomId: string, query: string): Promise<({ id: string } & StoredRoadmap) | null>
 	write(roomId: string, id: string, stored: StoredRoadmap): Promise<void>
+	// Serializes writers per room: any get→applyOps→write sequence must run
+	// inside withLock, or concurrent writers read the same rev and the second
+	// silently clobbers the first.
+	withLock<T>(roomId: string, fn: () => Promise<T>): Promise<T>
 }
 
 export function createRoadmapStore(dir: string): RoadmapStore {
 	const roomDir = (roomId: string) => path.join(dir, roomId)
+
+	// Promise-chain mutex: each room's write chains onto the previous one.
+	// Entries are never evicted — bounded by room count, which is small.
+	const locks = new Map<string, Promise<void>>()
 
 	async function readAll(roomId: string): Promise<Array<{ id: string } & StoredRoadmap>> {
 		let files: string[]
@@ -326,6 +334,17 @@ export function createRoadmapStore(dir: string): RoadmapStore {
 			const tmp = path.join(dir, `${id}.json.tmp`)
 			await writeFile(tmp, JSON.stringify(stored, null, '\t'))
 			await rename(tmp, target)
+		},
+		async withLock(roomId, fn) {
+			const prev = locks.get(roomId) ?? Promise.resolve()
+			let release!: () => void
+			locks.set(roomId, new Promise<void>((r) => (release = r)))
+			await prev
+			try {
+				return await fn()
+			} finally {
+				release()
+			}
 		},
 	}
 }

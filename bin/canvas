@@ -278,12 +278,13 @@ cmd_shape() {
   post_json /api/shape "$json"
 }
 
-# roadmap_post POSTs to /api/roadmap without curl's -f, so error bodies (which
-# carry the current rev on 409) reach the caller; non-2xx exits non-zero.
-roadmap_post() {
-  local payload="$1" out status body
+# post_json_body is post_json without curl's -f: for endpoints whose error
+# bodies matter (the roadmap 409 carries the current rev), it prints the body
+# either way and exits non-zero on a non-2xx status.
+post_json_body() {
+  local route="$1" payload="$2" out status body
   out="$(curl -sS -o - -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
-    -d "$payload" "${canvas_url}/api/roadmap")"
+    -d "$payload" "${canvas_url}${route}")"
   status="${out##*$'\n'}"
   body="${out%$'\n'*}"
   printf '%s\n' "$body"
@@ -343,7 +344,7 @@ cmd_roadmap() {
         "$(json_escape "$canvas_room")" "$(json_escape "$name")" "$ops")"
       [[ -n "$if_rev" ]] && payload+=",\"ifRev\":${if_rev}"
       payload+='}'
-      roadmap_post "$payload"
+      post_json_body /api/roadmap "$payload"
       ;;
     *)
       die "unknown roadmap subcommand: $sub (expected list | read | push | ops)"

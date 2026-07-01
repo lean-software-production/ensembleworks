@@ -73,3 +73,9 @@
 .rm-drag:active {
 	cursor: grabbing;
 }
+
+/* .rm-label without the eyebrow posture — sentence-case legend/meta lines. */
+.rm-label-plain {
+	letter-spacing: 1px;
+	text-transform: none;
+}

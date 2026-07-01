@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createSyncApp } from './app.ts'
 import { ROADMAP_FIXTURE } from './roadmap-fixture.ts'
+import { makeTestClient } from './test-helpers.ts'
 
 const SHAPE_ID = 'shape:roadmap-1'
 
@@ -19,18 +20,7 @@ async function main() {
 	assert.ok(address && typeof address === 'object')
 	const base = `http://127.0.0.1:${address.port}`
 
-	const postJson = async (route: string, body: unknown) => {
-		const res = await fetch(`${base}${route}`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(body),
-		})
-		return { status: res.status, body: (await res.json()) as any }
-	}
-	const getJson = async (route: string) => {
-		const res = await fetch(`${base}${route}`)
-		return { status: res.status, body: (await res.json()) as any }
-	}
+	const { postJson, getJson } = makeTestClient(base)
 
 	// Seed a roadmap shape bound to the id "Product Roadmap" will slug to, so
 	// the fan-out check has a target. A fresh room contains page:page already.
