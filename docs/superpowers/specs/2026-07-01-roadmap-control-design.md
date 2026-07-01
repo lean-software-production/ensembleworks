@@ -1,7 +1,7 @@
 # Roadmap control — design
 
 **Date:** 2026-07-01
-**Status:** approved (brainstorming session)
+**Status:** approved (brainstorming session; simplified after sub-agent review)
 **Visual design source:** claude.ai/design project "React roadmap component design"
 (`https://claude.ai/design/p/168df00e-9e91-44a3-af1b-7bc6bf3982b0?file=Roadmap.dc.html`) — the
 `Roadmap.dc.html` design component and its `roadmap.json` sample data.
@@ -32,6 +32,12 @@ populate, patch, and read it back.
    (Approach A). Shape props hold a small reference; content rides HTTP —
    per the two-planes rule in `docs/architecture-spec.md`.
 
+A sub-agent over-engineering review then trimmed the elaboration (none of the
+five decisions changed): JSON-file store instead of SQLite, ops vocabulary
+reduced to `replace`/`set`/`move`, CLI reduced to a JSON ops passthrough,
+server-side shape placement (`--place`) dropped, endpoints collapsed to two,
+toolbar binding via name prompt, `move` addressing by index only.
+
 ## §1 Data model, identity, storage
 
 Wire format is the design project's `roadmap.json` schema, adopted verbatim:
@@ -46,15 +52,20 @@ feature:     { key, text, status }
 
 - `status ∈ planned | in-progress | done | parked` (all four already render in
   the design component).
+- `meta.updated` is stamped by the server on every write; client-supplied
+  values are ignored.
 - **Keys** (`O3`, `O3.I1`, `O3.I1.F2`) are unique across the whole document and
   are the addressing scheme for patch ops and CLI commands. The server
   validates uniqueness on every write.
 - **Identity:** a roadmap is `(room, id)`; `id` is a slug of the human `name`
   ("EnsembleWorks Roadmap" → `ensembleworks-roadmap`), validated by the
   existing `sanitizeId` rules. CLI addresses roadmaps by fuzzy name match.
-- **Storage:** a `roadmaps` table in the sync server's SQLite
-  (`room, id, name, json, rev, updated_at`), alongside existing room
-  persistence. Roadmap content is **not** stored in the tldraw document.
+- **Storage:** one JSON file per roadmap, following the `transcript-store.ts`
+  precedent: `DATA_DIR/roadmaps/<room>/<id>.json` holding
+  `{name, rev, updated, data}`. Whole-file read/write in a small
+  `roadmap-store.ts` module; documents are a few KB and the server is
+  single-process, so writes are serialized per request. Roadmap content is
+  **not** stored in the tldraw document.
 - **Concurrency:** `rev` is a monotonic integer bumped on every successful
   write. Patch ops are targeted so concurrent human/agent edits interleave
   without clobbering. Wholesale replace accepts optional `ifRev`; a stale
@@ -62,24 +73,28 @@ feature:     { key, text, status }
 
 ## §2 Server API and patch ops
 
-All endpoints in `createSyncApp` (`server/src/app.ts`), following the existing
+Two endpoints in `createSyncApp` (`server/src/app.ts`), following the existing
 validate → `getOrCreateRoom` → `{ok:true,…}` pattern:
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /api/roadmaps?room=` | List: id, name, rev, updated, counts. |
-| `GET /api/roadmap?room=&name=` | Full document + rev. Fuzzy name match (case-insensitive `includes`), like `/api/frame`. |
-| `PUT /api/roadmap` | Create or wholesale-replace. Body `{room, name, data, ifRev?}`. Validates schema + key uniqueness. |
-| `POST /api/roadmap/ops` | Atomic batch of patch ops. Body `{room, name, ops: […]}`. |
+| `GET /api/roadmap?room=[&name=]` | Without `name`: list roadmaps (id, name, rev, updated). With `name`: full document + rev, fuzzy name match (case-insensitive `includes`), like `/api/frame`. |
+| `POST /api/roadmap` | Atomic batch of ops. Body `{room, name, ops: […], ifRev?}`. Creates the roadmap when the first op is `replace` and it doesn't exist yet. |
 
-Patch-op vocabulary (each op addresses a node by `key`):
+Op vocabulary (ops address nodes by `key`):
 
+- `{op:"replace", data:{…}}` — wholesale create/replace of the document.
+  Validates schema + key uniqueness.
 - `{op:"set", key, fields:{status? | done? | title? | why? | statement? | text?}}`
-- `{op:"move", key, zone?, before?|after?|index?}` — outcomes move across
-  zones and/or reorder; initiatives/metrics/features reorder within parent.
-- `{op:"add", kind, parent?, item:{…}}` — server rejects duplicate keys.
-- `{op:"remove", key}`
-- `{op:"set-meta", fields:{title? | revision? | updated?}}`
+  — field updates; covers status cycling, metric done-toggling, and text
+  tweaks.
+- `{op:"move", key, zone?, index?}` — outcomes move across zones and/or
+  reorder; initiatives/metrics/features reorder within their parent by index.
+
+Structural changes (adding/removing outcomes, initiatives, metrics, features)
+are done by regenerating the document and pushing a `replace` — the `/roadmap`
+skill owns structure via `docs/ROADMAP.md`, so dedicated add/remove ops are
+not needed in v1.
 
 **Human edits use the same endpoint:** a drag or status-click in the shape
 component POSTs one op. One write path → one validation and one conflict
@@ -91,13 +106,10 @@ matches, via `room.updateStore` (the `/api/terminal-status` mechanism).
 tldraw sync broadcasts the prop change; clients refetch over HTTP. No polling,
 no extra websocket.
 
-**Shape creation — two doors:**
-
-- Toolbar button (humans): binds to the room's most recently updated roadmap,
-  or creates an empty "Roadmap" if none exist.
-- `canvas roadmap push … --place [frame]` (agents): after writing the doc,
-  creates a shape bound to it (in the named frame, else near the live cursor)
-  unless one already exists for that roadmap.
+**Shape creation:** toolbar only, following the `createDevServerShape`
+precedent — the toolbar button prompts for a roadmap name, slugs it, and
+creates a shape with that `roadmapId`. The shape renders its empty state until
+data is pushed to that name. No server-side shape placement.
 
 ## §3 Client shape
 
@@ -126,22 +138,20 @@ no extra websocket.
 ## §4 CLI surface
 
 New `roadmap` command family in `bin/canvas` (bash + curl, local validation,
-`die` on bad args, no jq):
+`die` on bad args, no jq). Four subcommands; writes are a JSON passthrough in
+the style of the existing `canvas shape '<json>'`:
 
 ```
 canvas roadmap list
-canvas roadmap read  <name>                        # full JSON + rev on stdout
-canvas roadmap push  <file.json> [--name N] [--if-rev R] [--place [frame]]
-canvas roadmap set   <key> [--status S] [--done true|false]
-                           [--title T] [--why W] [--statement S] [--text T]
-canvas roadmap move  <key> [--zone Z] [--before K | --after K | --index N]
-canvas roadmap add   <kind> [--parent K] --json '<item-json>'
-canvas roadmap remove <key>
+canvas roadmap read <name>                          # full JSON + rev on stdout
+canvas roadmap push <name> <file.json> [--if-rev R] # sugar for ops '[{"op":"replace",…}]'
+canvas roadmap ops  <name> '<ops-json>' [--if-rev R]
 ```
 
 Mapping to a `/roadmap` skill: INIT/REFRESH → generate JSON from
-`docs/ROADMAP.md`, `push --if-rev`; BUMP → a few `set`/`move` calls; before a
-REFRESH, `read` to fold human re-prioritisation back into `ROADMAP.md`.
+`docs/ROADMAP.md`, `push --if-rev`; BUMP → a small `ops` batch of
+`set`/`move`; before a REFRESH, `read` to fold human re-prioritisation
+(zone moves, reordering, status clicks) back into `ROADMAP.md`.
 
 ## §5 Errors, testing, scope cuts
 
@@ -152,15 +162,18 @@ all-or-nothing. The shape renders an empty state ("no roadmap data / server
 unreachable") rather than crashing.
 
 **Testing:** in-process HTTP tests in the `canvas-api.test.ts` style —
-create/replace, each op type, key-uniqueness rejection, failing-batch
-atomicity, `ifRev` conflict, rev fan-out onto a seeded roadmap shape. The
-design project's `roadmap.json` seeds the test fixture. Client-side, keep the
-view-builders as plain functions unit-testable without tldraw.
+replace (create + overwrite), `set` and `move` op behaviour, key-uniqueness
+rejection, failing-batch atomicity, `ifRev` conflict, rev fan-out onto a
+seeded roadmap shape. The design project's `roadmap.json` seeds the test
+fixture. Client-side, keep the view-builders as plain functions unit-testable
+without tldraw.
 
 **Docs to update:** `.claude/skills/canvas/SKILL.md`,
 `deploy/agent-home/AGENTS.md`.
 
 **Out of scope (v1):** inline text editing on canvas; add/remove items from
-the canvas UI; synced per-user view state; roadmap-data history/undo (git owns
-history via `ROADMAP.md`); auto-sync between `docs/ROADMAP.md` and the canvas
-(that orchestration belongs to the `/roadmap` skill, not this control).
+the canvas UI (and dedicated add/remove ops — structure changes go through
+`replace`); server-side shape placement; synced per-user view state;
+roadmap-data history/undo (git owns history via `ROADMAP.md`); auto-sync
+between `docs/ROADMAP.md` and the canvas (that orchestration belongs to the
+`/roadmap` skill, not this control).
