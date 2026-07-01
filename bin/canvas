@@ -46,6 +46,22 @@ usage() {
     '        canvas shape '"'"'{"type":"geo","text":"retry bug","x":100,"y":80}'"'"'' \
     '        canvas shape '"'"'{"type":"arrow","fromId":"shape:a","toId":"shape:b"}'"'"'' \
     '        canvas shape '"'"'{"op":"update","id":"shape:a","text":"new label"}'"'"'' \
+    '  roadmap list' \
+    '      List the room'"'"'s roadmaps (JSON: id, name, rev, updated).' \
+    '  roadmap read <name>' \
+    '      Read one roadmap (fuzzy name match, exact id first; JSON with data' \
+    '      + rev). Use the rev with push --if-rev to avoid clobbering edits.' \
+    '  roadmap push <name> <file.json> [--if-rev <n>]' \
+    '      Create or wholesale-replace a roadmap from a roadmap.json document.' \
+    '      NOTE: <name> matches existing roadmaps fuzzily first — pushing' \
+    '      "roadmap" updates an existing "Product Roadmap" rather than' \
+    '      creating a second one.' \
+    '  roadmap ops <name> <ops-json> [--if-rev <n>]' \
+    '      Apply targeted ops (JSON array). Ops:' \
+    '        {"op":"set","key":"O3.I1.F2","fields":{"status":"done"}}' \
+    '        {"op":"move","key":"O4","zone":"now","index":0}' \
+    '      set fields: status|done|title|why|statement|text (per node kind);' \
+    '      move: zone (outcomes only) and/or index (within zone/parent list).' \
     '' \
     'Environment:' \
     '  CANVAS_URL    Base URL of the sync server (default: http://localhost:8788).' \
@@ -262,6 +278,76 @@ cmd_shape() {
   post_json /api/shape "$json"
 }
 
+# roadmap_post POSTs to /api/roadmap without curl's -f, so error bodies (which
+# carry the current rev on 409) reach the caller; non-2xx exits non-zero.
+roadmap_post() {
+  local payload="$1" out status body
+  out="$(curl -sS -o - -w '\n%{http_code}' -X POST -H 'Content-Type: application/json' \
+    -d "$payload" "${canvas_url}/api/roadmap")"
+  status="${out##*$'\n'}"
+  body="${out%$'\n'*}"
+  printf '%s\n' "$body"
+  [[ "$status" == 2* ]] || exit 1
+}
+
+cmd_roadmap() {
+  [[ $# -ge 1 ]] || die "roadmap requires a subcommand: list | read | push | ops (run 'canvas --help')"
+  local sub="$1"
+  shift
+  case "$sub" in
+    list)
+      [[ $# -eq 0 ]] || die 'roadmap list takes no arguments'
+      get_query /api/roadmap "room=${canvas_room}"
+      ;;
+    read)
+      [[ $# -eq 1 ]] || die 'roadmap read requires exactly <name>'
+      [[ -n "$1" ]] || die 'name must be non-empty'
+      get_query /api/roadmap "room=${canvas_room}" "name=$1"
+      ;;
+    push | ops)
+      [[ $# -ge 2 ]] || die "roadmap $sub requires <name> and $([[ "$sub" == push ]] && echo '<file.json>' || echo "'<ops-json>'")"
+      local name="$1" arg="$2" if_rev=''
+      shift 2
+      while [[ $# -gt 0 ]]; do
+        case "$1" in
+          --if-rev)
+            [[ $# -ge 2 ]] || die '--if-rev requires a value'
+            if_rev="$2"
+            shift 2
+            ;;
+          *)
+            die "unknown argument: $1"
+            ;;
+        esac
+      done
+      [[ -n "$name" ]] || die 'name must be non-empty'
+      [[ -z "$if_rev" || "$if_rev" =~ ^[0-9]+$ ]] || die '--if-rev must be a number'
+
+      local ops
+      if [[ "$sub" == push ]]; then
+        [[ -f "$arg" ]] || die "no such file: $arg"
+        local data
+        data="$(cat "$arg")"
+        [[ "$data" == \{* ]] || die "$arg must contain a JSON object (the roadmap document)"
+        ops="[{\"op\":\"replace\",\"data\":${data}}]"
+      else
+        ops="$arg"
+        [[ "$ops" == \[* ]] || die 'ops must be a JSON array'
+      fi
+
+      local payload
+      payload="$(printf '{"room":"%s","name":"%s","ops":%s' \
+        "$(json_escape "$canvas_room")" "$(json_escape "$name")" "$ops")"
+      [[ -n "$if_rev" ]] && payload+=",\"ifRev\":${if_rev}"
+      payload+='}'
+      roadmap_post "$payload"
+      ;;
+    *)
+      die "unknown roadmap subcommand: $sub (expected list | read | push | ops)"
+      ;;
+  esac
+}
+
 main() {
   [[ $# -ge 1 ]] || {
     usage >&2
@@ -302,6 +388,10 @@ main() {
     shape)
       shift
       cmd_shape "$@"
+      ;;
+    roadmap)
+      shift
+      cmd_roadmap "$@"
       ;;
     *)
       usage >&2
