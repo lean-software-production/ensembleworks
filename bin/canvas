@@ -335,6 +335,9 @@ cmd_roadmap() {
         [[ "$ops" == \[* ]] || die 'ops must be a JSON array'
       fi
 
+      # $ops is embedded verbatim (no jq to sanitise it): malformed or
+      # mischievous JSON just breaks the payload and the server answers 400 —
+      # same trust model as the cmd_shape passthrough.
       local payload
       payload="$(printf '{"room":"%s","name":"%s","ops":%s' \
         "$(json_escape "$canvas_room")" "$(json_escape "$name")" "$ops")"
