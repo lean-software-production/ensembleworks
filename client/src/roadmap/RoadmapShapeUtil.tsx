@@ -156,6 +156,8 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 		}
 	}, [roadmapId, rev, refresh])
 
+	useEffect(() => () => clearTimeout(copyTimer.current), [])
+
 	// Optimistic write: mutate the local doc, POST the same op the CLI would,
 	// refetch on failure so the board reconverges with the server.
 	const postOp = useCallback(
