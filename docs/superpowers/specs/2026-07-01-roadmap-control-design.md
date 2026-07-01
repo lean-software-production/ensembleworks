@@ -64,7 +64,9 @@ feature:     { key, text, status }
   precedent: `DATA_DIR/roadmaps/<room>/<id>.json` holding
   `{name, rev, updated, data}`. Whole-file read/write in a small
   `roadmap-store.ts` module; documents are a few KB and the server is
-  single-process, so writes are serialized per request. Roadmap content is
+  single-process, but per-room write serialization is required and provided by
+  the endpoint's promise-chain lock (single process does not serialize
+  multi-await handlers). Roadmap content is
   **not** stored in the tldraw document.
 - **Concurrency:** `rev` is a monotonic integer bumped on every successful
   write. Patch ops are targeted so concurrent human/agent edits interleave

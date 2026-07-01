@@ -306,8 +306,9 @@ Create `server/src/roadmap-store.ts`:
 /**
  * Roadmap store — one JSON file per roadmap (DATA_DIR/roadmaps/<room>/<id>.json),
  * following the transcript-store pattern: whole-file read/write, no SQL. The
- * documents are a few KB and the server is single-process, so per-request
- * writes serialize naturally.
+ * documents are a few KB; however, per-room write serialization is required
+ * and provided by the endpoint's promise-chain lock (single process does not
+ * serialize multi-await handlers).
  *
  * Also owns the pure document logic shared by every writer: schema validation,
  * the unique-key rule, and the op vocabulary (replace | set | move) that both

@@ -1,8 +1,9 @@
 /**
  * Roadmap store — one JSON file per roadmap (DATA_DIR/roadmaps/<room>/<id>.json),
  * following the transcript-store pattern: whole-file read/write, no SQL. The
- * documents are a few KB and the server is single-process, so per-request
- * writes serialize naturally.
+ * documents are a few KB; however, per-room write serialization is required and
+ * provided by the endpoint's promise-chain lock (single process does not
+ * serialize multi-await handlers).
  *
  * Also owns the pure document logic shared by every writer: schema validation,
  * the unique-key rule, and the op vocabulary (replace | set | move) that both
@@ -10,7 +11,7 @@
  * all-or-nothing by the endpoint: applyOps works on a clone and throws OpError
  * without side effects.
  */
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 
 export const ROADMAP_ZONES = ['done', 'now', 'next', 'later'] as const
@@ -317,8 +318,14 @@ export function createRoadmapStore(dir: string): RoadmapStore {
 			)
 		},
 		async write(roomId, id, stored) {
-			await mkdir(roomDir(roomId), { recursive: true })
-			await writeFile(path.join(roomDir(roomId), `${id}.json`), JSON.stringify(stored, null, '\t'))
+			const dir = roomDir(roomId)
+			await mkdir(dir, { recursive: true })
+			// Write to a .tmp file then atomically rename over the target so a crash
+			// mid-write leaves the old file intact rather than torn JSON.
+			const target = path.join(dir, `${id}.json`)
+			const tmp = path.join(dir, `${id}.json.tmp`)
+			await writeFile(tmp, JSON.stringify(stored, null, '\t'))
+			await rename(tmp, target)
 		},
 	}
 }

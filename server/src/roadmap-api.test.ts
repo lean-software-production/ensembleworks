@@ -173,6 +173,47 @@ async function main() {
 		console.log('ok: edges (missing roadmap 404, bad op 400, bad name 400)')
 	}
 
+	// 7. Race regression: two concurrent POSTs targeting different features must
+	//    both land (distinct revs, both edits visible in the final GET).
+	{
+		const [r1, r2] = await Promise.all([
+			postJson('/api/roadmap', {
+				room: 'test',
+				name: 'product-roadmap',
+				ops: [{ op: 'set', key: 'O1.I1.F1', fields: { status: 'in-progress' } }],
+			}),
+			postJson('/api/roadmap', {
+				room: 'test',
+				name: 'product-roadmap',
+				ops: [{ op: 'set', key: 'O1.I1.F2', fields: { status: 'in-progress' } }],
+			}),
+		])
+		assert.equal(r1.status, 200, `race writer A: ${JSON.stringify(r1.body)}`)
+		assert.equal(r2.status, 200, `race writer B: ${JSON.stringify(r2.body)}`)
+		assert.notEqual(r1.body.rev, r2.body.rev, 'concurrent writes must produce distinct revs')
+		const read = await getJson('/api/roadmap?room=test&name=product-roadmap')
+		const features = read.body.data.outcomes[0].initiatives[0].features
+		assert.equal(features[0].status, 'in-progress', 'writer A edit (F1) survived')
+		assert.equal(features[1].status, 'in-progress', 'writer B edit (F2) survived')
+		console.log('ok: concurrent POSTs serialized — both edits applied, distinct revs')
+	}
+
+	// 8. ifRev on a missing roadmap is 409, nothing created.
+	{
+		const res = await postJson('/api/roadmap', {
+			room: 'test',
+			name: 'never-created-roadmap',
+			ifRev: 5,
+			ops: [{ op: 'replace', data: ROADMAP_FIXTURE }],
+		})
+		assert.equal(res.status, 409, `ifRev on missing should be 409, got ${res.status}`)
+		assert.match(res.body.error, /ifRev 5 given but no roadmap matches/)
+		const list = await getJson('/api/roadmap?room=test')
+		const names = list.body.roadmaps.map((r: any) => r.name)
+		assert.ok(!names.includes('never-created-roadmap'), 'no new roadmap created')
+		console.log('ok: ifRev on missing roadmap is 409, nothing created')
+	}
+
 	room.close()
 	await new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve())))
 }

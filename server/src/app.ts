@@ -328,6 +328,22 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	const transcripts = createTranscriptStore(path.join(opts.dataDir, 'transcripts'))
 	const roadmaps = createRoadmapStore(path.join(opts.dataDir, 'roadmaps'))
 
+	// POST bodies interleave across awaits; chain each room's write onto the
+	// previous one so read-modify-write is serialized (single process ≠
+	// serialized handlers).
+	const roadmapWriteLocks = new Map<string, Promise<void>>()
+	const withRoadmapLock = async <T>(roomId: string, fn: () => Promise<T>): Promise<T> => {
+		const prev = roadmapWriteLocks.get(roomId) ?? Promise.resolve()
+		let release!: () => void
+		roadmapWriteLocks.set(roomId, new Promise<void>((r) => (release = r)))
+		await prev
+		try {
+			return await fn()
+		} finally {
+			release()
+		}
+	}
+
 	// -------------------------------------------------------------------------
 	// Rooms: one TLSocketRoom per room ID, persisted via SQLite. Storage commits
 	// transactionally on every change, so there is no debounced-save dance and
@@ -1129,53 +1145,61 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		const name = typeof body.name === 'string' ? body.name.trim() : ''
-		if (!name || name.length > 128) return void res.status(400).json({ error: 'name is required' })
+		if (!name) return void res.status(400).json({ error: 'name is required' })
+		if (name.length > 128) return void res.status(400).json({ error: 'name must be 128 characters or fewer' })
 		const ifRev = typeof body.ifRev === 'number' && Number.isFinite(body.ifRev) ? body.ifRev : null
 
-		const existing = await roadmaps.get(roomId, name)
-		if (existing && ifRev !== null && ifRev !== existing.rev) {
-			return void res
-				.status(409)
-				.json({ error: `stale ifRev ${ifRev} (current rev is ${existing.rev})`, rev: existing.rev })
-		}
+		await withRoadmapLock(roomId, async () => {
+			const existing = await roadmaps.get(roomId, name)
+			if (ifRev !== null && !existing) {
+				return void res
+					.status(409)
+					.json({ error: `ifRev ${ifRev} given but no roadmap matches '${name}'` })
+			}
+			if (existing && ifRev !== null && ifRev !== existing.rev) {
+				return void res
+					.status(409)
+					.json({ error: `stale ifRev ${ifRev} (current rev is ${existing.rev})`, rev: existing.rev })
+			}
 
-		let data
-		try {
-			data = applyOps(existing?.data ?? null, body.ops as RoadmapOp[])
-		} catch (err) {
-			if (err instanceof OpError) return void res.status(err.status).json({ error: err.message })
-			return void res.status(400).json({ error: `invalid ops: ${err}` })
-		}
+			let data
+			try {
+				data = applyOps(existing?.data ?? null, body.ops as RoadmapOp[])
+			} catch (err) {
+				if (err instanceof OpError) return void res.status(err.status).json({ error: err.message })
+				return void res.status(400).json({ error: `invalid ops: ${err}` })
+			}
 
-		const id = existing?.id ?? slugify(name)
-		if (!id) return void res.status(400).json({ error: 'name does not reduce to a valid id' })
-		const rev = (existing?.rev ?? 0) + 1
-		const updated = new Date().toISOString().slice(0, 10)
-		data.meta.updated = updated // server-stamped; client-supplied values are ignored
-		await roadmaps.write(roomId, id, { name: existing?.name ?? name, rev, updated, data })
+			const id = existing?.id ?? slugify(name)
+			if (!id) return void res.status(400).json({ error: 'name does not reduce to a valid id' })
+			const rev = (existing?.rev ?? 0) + 1
+			const updated = new Date().toISOString().slice(0, 10)
+			data.meta.updated = updated // server-stamped; client-supplied values are ignored
+			await roadmaps.write(roomId, id, { name: existing?.name ?? name, rev, updated, data })
 
-		// Rev fan-out: stamp the new rev onto every shape bound to this roadmap
-		// so tldraw sync broadcasts "data changed" and open clients refetch over
-		// HTTP (the /api/terminal-status mechanism).
-		// Fan-out is best-effort; the store write already succeeded.
-		let shapesUpdated = 0
-		try {
-			await getOrCreateRoom(roomId).updateStore((store) => {
-				for (const record of store.getAll() as any[]) {
-					if (
-						record.typeName === 'shape' &&
-						record.type === 'roadmap' &&
-						record.props?.roadmapId === id
-					) {
-						store.put({ ...record, props: { ...record.props, rev } })
-						shapesUpdated++
+			// Rev fan-out: stamp the new rev onto every shape bound to this roadmap
+			// so tldraw sync broadcasts "data changed" and open clients refetch over
+			// HTTP (the /api/terminal-status mechanism).
+			// Fan-out is best-effort; the store write already succeeded.
+			let shapesUpdated = 0
+			try {
+				await getOrCreateRoom(roomId).updateStore((store) => {
+					for (const record of store.getAll() as any[]) {
+						if (
+							record.typeName === 'shape' &&
+							record.type === 'roadmap' &&
+							record.props?.roadmapId === id
+						) {
+							store.put({ ...record, props: { ...record.props, rev } })
+							shapesUpdated++
+						}
 					}
-				}
-			})
-		} catch (err) {
-			console.warn(`[room ${roomId}] roadmap rev fan-out failed`, err)
-		}
-		res.json({ ok: true, id, rev, shapesUpdated })
+				})
+			} catch (err) {
+				console.warn(`[room ${roomId}] roadmap rev fan-out failed`, err)
+			}
+			res.json({ ok: true, id, rev, shapesUpdated })
+		})
 	})
 
 	app.put('/uploads/:id', express.raw({ type: '*/*', limit: '100mb' }), async (req, res) => {

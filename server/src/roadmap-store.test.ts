@@ -122,6 +122,14 @@ async function main() {
 			['O3.I1.F2', 'O3.I1.F1']
 		)
 
+		// Combined zone+index: move to a zone AND land at index 0 in one op.
+		const zoneAndIndex = applyOps(ROADMAP_FIXTURE, [{ op: 'move', key: 'O4', zone: 'now', index: 0 }])
+		assert.deepEqual(
+			zoneAndIndex.outcomes.filter((o) => o.zone === 'now').map((o) => o.key),
+			['O4', 'O3'],
+			'combined zone+index: O4 lands at index 0 in now-zone, O3 follows'
+		)
+
 		expectOpError(
 			() => applyOps(ROADMAP_FIXTURE, [{ op: 'move', key: 'O3.I1.F1', zone: 'done' }]),
 			400,
