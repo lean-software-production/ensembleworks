@@ -1157,19 +1157,24 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		// Rev fan-out: stamp the new rev onto every shape bound to this roadmap
 		// so tldraw sync broadcasts "data changed" and open clients refetch over
 		// HTTP (the /api/terminal-status mechanism).
+		// Fan-out is best-effort; the store write already succeeded.
 		let shapesUpdated = 0
-		await getOrCreateRoom(roomId).updateStore((store) => {
-			for (const record of store.getAll() as any[]) {
-				if (
-					record.typeName === 'shape' &&
-					record.type === 'roadmap' &&
-					record.props?.roadmapId === id
-				) {
-					store.put({ ...record, props: { ...record.props, rev } })
-					shapesUpdated++
+		try {
+			await getOrCreateRoom(roomId).updateStore((store) => {
+				for (const record of store.getAll() as any[]) {
+					if (
+						record.typeName === 'shape' &&
+						record.type === 'roadmap' &&
+						record.props?.roadmapId === id
+					) {
+						store.put({ ...record, props: { ...record.props, rev } })
+						shapesUpdated++
+					}
 				}
-			}
-		})
+			})
+		} catch (err) {
+			console.warn(`[room ${roomId}] roadmap rev fan-out failed`, err)
+		}
 		res.json({ ok: true, id, rev, shapesUpdated })
 	})
 
