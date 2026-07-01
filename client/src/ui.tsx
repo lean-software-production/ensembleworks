@@ -26,6 +26,8 @@ import { seedDemoCanvas } from './demo'
 import { seedSessionCanvas } from './session/seedSessionCanvas'
 import { toProxiedUrl } from './iframe/IframeShapeUtil'
 import { NEKO_DEFAULT_BASE, NEKO_DEFAULT_H, NEKO_DEFAULT_W, NEKO_ICON_NAME } from './neko/NekoShapeUtil'
+import { ROADMAP_DEFAULT_H, ROADMAP_DEFAULT_W } from './roadmap/RoadmapShapeUtil'
+import { slugify } from './roadmap/model'
 
 export function createTerminalShape(editor: Editor) {
 	// Short, human-typeable ID — it is also the tmux session name suffix, so
@@ -72,6 +74,29 @@ export function createNekoShape(editor: Editor) {
 	editor.setSelectedShapes([id])
 }
 
+export function createRoadmapShape(editor: Editor) {
+	// The name is the CLI/agent addressing handle; its slug is the document id
+	// (createDevServerShape precedent: prompt, no server round-trip). The shape
+	// renders its empty state until someone pushes data to that name.
+	const name = window.prompt('Roadmap name:', 'Roadmap')?.trim()
+	if (!name) return
+	const roadmapId = slugify(name)
+	if (!roadmapId) {
+		window.alert('Roadmap name must contain at least one letter or digit.')
+		return
+	}
+	const { x, y } = editor.getViewportPageBounds().center
+	const id = createShapeId()
+	editor.createShape({
+		id,
+		type: 'roadmap',
+		x: x - ROADMAP_DEFAULT_W / 2,
+		y: y - ROADMAP_DEFAULT_H / 2,
+		props: { w: ROADMAP_DEFAULT_W, h: ROADMAP_DEFAULT_H, roadmapId },
+	})
+	editor.setSelectedShapes([id])
+}
+
 export const uiOverrides: TLUiOverrides = {
 	tools(editor, tools) {
 		tools['terminal'] = {
@@ -101,6 +126,15 @@ export const uiOverrides: TLUiOverrides = {
 				createNekoShape(editor)
 			},
 		}
+		tools['roadmap'] = {
+			id: 'roadmap',
+			icon: 'tool-note',
+			label: 'New roadmap',
+			readonlyOk: false,
+			onSelect() {
+				createRoadmapShape(editor)
+			},
+		}
 		return tools
 	},
 }
@@ -113,6 +147,7 @@ function ToolbarWithTerminal() {
 			{tools['terminal'] && <TldrawUiMenuItem {...tools['terminal']} />}
 			{tools['dev-server'] && <TldrawUiMenuItem {...tools['dev-server']} />}
 			{tools['neko'] && <TldrawUiMenuItem {...tools['neko']} />}
+			{tools['roadmap'] && <TldrawUiMenuItem {...tools['roadmap']} />}
 		</DefaultToolbar>
 	)
 }
