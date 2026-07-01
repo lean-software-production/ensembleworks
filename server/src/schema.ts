@@ -33,12 +33,24 @@ const nekoShapeProps = {
 	title: T.string,
 }
 
+// Keep in sync with client/src/roadmap/RoadmapShapeUtil.tsx
+const roadmapShapeProps = {
+	w: T.number,
+	h: T.number,
+	// Slug id of the roadmap document this shape renders (see roadmap-store.ts).
+	roadmapId: T.string,
+	// Bumped by POST /api/roadmap on every write so clients refetch; optional
+	// so existing rooms need no migration.
+	rev: T.number.optional(),
+}
+
 export const schema = createTLSchema({
 	shapes: {
 		...defaultShapeSchemas,
 		terminal: { props: terminalShapeProps },
 		iframe: { props: iframeShapeProps },
 		neko: { props: nekoShapeProps },
+		roadmap: { props: roadmapShapeProps },
 	},
 	bindings: defaultBindingSchemas,
 })

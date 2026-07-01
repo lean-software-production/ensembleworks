@@ -16,9 +16,10 @@ import { IframeShapeUtil } from './iframe/IframeShapeUtil'
 import { PasteUrlHandler } from './iframe/PasteUrlHandler'
 import { NEKO_ICON_NAME, NEKO_TOOLBAR_ICON, NekoShapeUtil } from './neko/NekoShapeUtil'
 import { TerminalShapeUtil } from './terminal/TerminalShapeUtil'
+import { RoadmapShapeUtil } from './roadmap/RoadmapShapeUtil'
 import { components, uiOverrides } from './ui'
 
-const customShapeUtils = [TerminalShapeUtil, IframeShapeUtil, NekoShapeUtil]
+const customShapeUtils = [TerminalShapeUtil, IframeShapeUtil, NekoShapeUtil, RoadmapShapeUtil]
 
 // Register the custom neko toolbar icon (merged with tldraw's built-ins). Stable
 // module-level reference so the asset-url memo doesn't churn each render.
