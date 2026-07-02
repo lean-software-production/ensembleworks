@@ -59,6 +59,10 @@ export interface ScreenShareShapeProps {
 	// people who never saw the stream. Optional: live shares don't have one,
 	// and existing rooms need no migration.
 	stillUrl?: string
+	// Hex of the sharer's identity colour, stamped at creation (share.ts) so
+	// every viewer's tile shows the same owner-coloured border. Optional: live
+	// shares stamp it, existing rooms need no migration.
+	ownerColor?: string
 }
 
 declare module '@tldraw/tlschema' {
@@ -80,6 +84,7 @@ export class ScreenShareShapeUtil extends BaseBoxShapeUtil<ScreenShareShape> {
 		title: T.string,
 		aspect: T.number,
 		stillUrl: T.string.optional(),
+		ownerColor: T.string.optional(),
 	}
 
 	override getDefaultProps(): ScreenShareShape['props'] {
@@ -126,7 +131,7 @@ export class ScreenShareShapeUtil extends BaseBoxShapeUtil<ScreenShareShape> {
 }
 
 function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
-	const { w, h, title, participantId, trackName, stillUrl } = shape.props
+	const { w, h, title, participantId, trackName, stillUrl, ownerColor } = shape.props
 	const editor = useEditor()
 	const state = useScreenShareTrack(participantId, trackName)
 	// Keyed on the track object (stable per publication) so version bumps that
@@ -225,7 +230,7 @@ function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
 				borderRadius: 4,
 				overflow: 'hidden',
 				background: '#000',
-				border: `1px solid ${wm.ruleStrong}`,
+				border: `2px solid ${ownerColor || wm.ruleStrong}`,
 				boxShadow: wm.shadowPaper,
 				// Display-only tile: all interaction is tldraw's (move/resize/
 				// annotate). No edit mode, unlike neko — there's nothing to drive.
