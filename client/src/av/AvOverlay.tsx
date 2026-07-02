@@ -720,8 +720,8 @@ function ParticipantRow(props: {
 // The roster colour dot. For remote users it's a static swatch. For the local
 // user it's a button that opens a picker of the identity palette — one control
 // that governs the user's whole colour identity (cursor, ring, roster dot, new
-// stickies, next-drawn shapes, and future screenshare borders). Lives on the
-// roster (not the faces rail) so it's reachable even with the camera off.
+// stickies, next-drawn shapes, and screenshare borders). Lives on the roster
+// (not the faces rail) so it's reachable even with the camera off.
 function ColorDot({ color, isLocal }: { color: string; isLocal: boolean }) {
 	const editor = useEditor()
 	const [open, setOpen] = useState(false)

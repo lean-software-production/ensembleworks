@@ -81,6 +81,16 @@ export function App() {
 			// Debug/e2e hook: headless probes (docs/headless-browser.md) drive
 			// the canvas through this. Harmless in production.
 			;(window as unknown as { __ewEditor?: Editor }).__ewEditor = editor
+			// Default users to the paper-light canvas, but only once: tldraw
+			// persists colorScheme in its own localStorage, so afterwards we leave
+			// whatever the user chose via Preferences → Color scheme alone.
+			if (!localStorage.getItem(COLOR_SCHEME_SEEDED_KEY)) {
+				editor.user.updateUserPreferences({ colorScheme: 'light' })
+				localStorage.setItem(COLOR_SCHEME_SEEDED_KEY, '1')
+			}
+			// Hex is derived from the theme as settled at mount time; a later
+			// Preferences → Color scheme toggle won't re-tint the cursor until
+			// the next reload or colour pick.
 			const isDark = editor.user.getIsDarkMode()
 			editor.user.updateUserPreferences({
 				name: identity.name,
@@ -114,13 +124,6 @@ export function App() {
 				decidedAt = Date.now()
 				if (!decision) return false
 			})
-			// Default users to the paper-light canvas, but only once: tldraw
-			// persists colorScheme in its own localStorage, so afterwards we leave
-			// whatever the user chose via Preferences → Color scheme alone.
-			if (!localStorage.getItem(COLOR_SCHEME_SEEDED_KEY)) {
-				editor.user.updateUserPreferences({ colorScheme: 'light' })
-				localStorage.setItem(COLOR_SCHEME_SEEDED_KEY, '1')
-			}
 
 			// React StrictMode mounts twice — without cleanup we'd register two
 			// handlers and the user would get two dialogs per delete.
