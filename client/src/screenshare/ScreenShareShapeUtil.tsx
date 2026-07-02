@@ -21,14 +21,12 @@ import {
 	resizeBox,
 } from 'tldraw'
 import { wm } from '../theme'
+import { SCREENSHARE_DEFAULT_W, SCREENSHARE_HEADER_HEIGHT, lockScreenShareAspect, propsForAspect } from './helpers'
 import { useScreenShareTrack } from './store'
 
-// ── Constants + pure helpers (unit-tested via screenshare.test.ts) ──────────
-
-// Fixed header band on top of the video area, same height as the neko shape's.
-export const SCREENSHARE_HEADER_HEIGHT = 28
-// Default tile width in page units — readable text without dwarfing the canvas.
-export const SCREENSHARE_DEFAULT_W = 1280
+// Pure constants + helpers live in helpers.ts (livekit-free so the unit test
+// exits cleanly); re-exported here for consumers of the shape module.
+export * from './helpers'
 
 // Toolbar icon: a monitor with an outgoing arrow ("share out"). Single-colour
 // silhouette rendered by tldraw as a CSS mask; registered via <Tldraw
@@ -41,64 +39,6 @@ const SCREENSHARE_ICON_SVG =
 	'<path d="M12 17v3M8 20h8" stroke-linecap="round"/>' +
 	'<path d="M8.5 12 12 8.5 15.5 12M12 8.5V14" stroke-linecap="round"/></svg>'
 export const SCREENSHARE_TOOLBAR_ICON = `data:image/svg+xml;utf8,${encodeURIComponent(SCREENSHARE_ICON_SVG)}`
-
-const FALLBACK_ASPECT = 16 / 9
-
-// getDisplayMedia settings can be empty on some platforms; never let a bad
-// aspect produce an Infinity/NaN-sized shape.
-function safeAspect(aspect: number): number {
-	return Number.isFinite(aspect) && aspect > 0 ? aspect : FALLBACK_ASPECT
-}
-
-/**
- * Lock a freely-resized box to the stream's aspect (no letterbox at rest).
- * Drives off whichever dimension the drag changed more, so corner and side
- * handles all feel responsive (same behaviour as lockNekoAspect, but the
- * ratio comes from the shape's props instead of a constant).
- */
-export function lockScreenShareAspect(
-	w: number,
-	h: number,
-	prevW: number,
-	prevH: number,
-	aspect: number
-): { w: number; h: number } {
-	const a = safeAspect(aspect)
-	if (Math.abs(h - prevH) > Math.abs(w - prevW)) {
-		return { w: (h - SCREENSHARE_HEADER_HEIGHT) * a, h }
-	}
-	return { w, h: w / a + SCREENSHARE_HEADER_HEIGHT }
-}
-
-/**
- * Height + aspect props for a tile of width `w` showing a surface with the
- * given aspect. Used at share time and again whenever the sharer's window is
- * resized (width is kept, height follows — the tile never drifts sideways).
- */
-export function propsForAspect(w: number, aspect: number): { h: number; aspect: number } {
-	const a = safeAspect(aspect)
-	return { h: Math.round(w / a) + SCREENSHARE_HEADER_HEIGHT, aspect: a }
-}
-
-/**
- * Chrome labels capture tracks with opaque ids like "screen:0:0" or
- * "window:12345:0"; real window titles (some platforms provide them) pass
- * through as the tile title.
- */
-export function titleFromTrackLabel(label: string): string {
-	if (!label || /^(screen|window|web-contents-media-stream):/i.test(label)) return 'screen share'
-	return label
-}
-
-/**
- * Tile title: who is sharing + what they're sharing. Baked into the synced
- * props at share time (not resolved from the room at render time) so a
- * tombstone tile still says whose window it was after the sharer leaves.
- */
-export function shareTitle(sharerName: string, trackLabel: string): string {
-	const who = sharerName.trim() || 'someone'
-	return `${who} · ${titleFromTrackLabel(trackLabel)}`
-}
 
 // ── Shape ────────────────────────────────────────────────────────────────────
 
@@ -209,13 +149,17 @@ function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
 		el.appendChild(video)
 		return () => {
 			// Freeze the final frame before the element goes away (the video
-			// still holds its last decoded frame at detach time).
+			// still holds its last decoded frame at detach time). Downscale to
+			// the tile's default width — a full 1080p+ data URL is hundreds of
+			// KB of base64 held in state per tombstone; 1280 keeps text legible
+			// under zoom at a fraction of that.
 			if (video.videoWidth > 0) {
 				try {
+					const scale = Math.min(1, 1280 / video.videoWidth)
 					const canvas = document.createElement('canvas')
-					canvas.width = video.videoWidth
-					canvas.height = video.videoHeight
-					canvas.getContext('2d')?.drawImage(video, 0, 0)
+					canvas.width = Math.round(video.videoWidth * scale)
+					canvas.height = Math.round(video.videoHeight * scale)
+					canvas.getContext('2d')?.drawImage(video, 0, 0, canvas.width, canvas.height)
 					setLastFrame(canvas.toDataURL('image/jpeg', 0.7))
 				} catch {
 					/* draw failed — the text placeholder covers it */
@@ -292,41 +236,42 @@ function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
 				</span>
 			</div>
 			<div ref={videoRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-				{state.kind !== 'live' && lastFrame && (
-					<img
-						src={lastFrame}
-						alt="last shared frame"
-						style={{
-							position: 'absolute',
-							inset: 0,
-							width: '100%',
-							height: '100%',
-							objectFit: 'contain',
-							background: '#000',
-							// Ended tiles read as a still, not a live feed.
-							filter: state.kind === 'ended' ? 'grayscale(0.5) brightness(0.8)' : undefined,
-						}}
-					/>
-				)}
 				{state.kind !== 'live' &&
 					(lastFrame ? (
-						<span
-							style={{
-								position: 'absolute',
-								top: 8,
-								left: 8,
-								padding: '2px 8px',
-								borderRadius: 3,
-								background: 'rgba(17,17,17,0.75)',
-								color: wm.cream,
-								fontFamily: wm.mono,
-								fontSize: 10,
-								textTransform: 'uppercase',
-								letterSpacing: 0.8,
-							}}
-						>
-							{state.kind === 'ended' ? 'share ended' : 'paused'}
-						</span>
+						<>
+							<img
+								src={lastFrame}
+								alt="last shared frame"
+								style={{
+									position: 'absolute',
+									inset: 0,
+									width: '100%',
+									height: '100%',
+									objectFit: 'contain',
+									background: '#000',
+									// Ended tiles read as a still, not a live feed.
+									filter:
+										state.kind === 'ended' ? 'grayscale(0.5) brightness(0.8)' : undefined,
+								}}
+							/>
+							<span
+								style={{
+									position: 'absolute',
+									top: 8,
+									left: 8,
+									padding: '2px 8px',
+									borderRadius: 3,
+									background: 'rgba(17,17,17,0.75)',
+									color: wm.cream,
+									fontFamily: wm.mono,
+									fontSize: 10,
+									textTransform: 'uppercase',
+									letterSpacing: 0.8,
+								}}
+							>
+								{state.kind === 'ended' ? 'share ended' : 'paused'}
+							</span>
+						</>
 					) : (
 						<div
 							style={{

@@ -14,7 +14,7 @@
  */
 import { ScreenSharePresets, Track, VideoPreset } from 'livekit-client'
 import { Editor, TLShapeId, createShapeId } from 'tldraw'
-import { SCREENSHARE_DEFAULT_W, propsForAspect, shareTitle } from './ScreenShareShapeUtil'
+import { SCREENSHARE_DEFAULT_W, propsForAspect, shareTitle } from './helpers'
 import { getScreenShareRoom } from './store'
 
 // Capped top layer: 1080p / 15 fps / 2.5 Mbps — screen content favours
@@ -85,14 +85,13 @@ export async function startScreenShare(editor: Editor): Promise<void> {
 		y: y - sized.h / 2,
 		props: {
 			w,
-			h: sized.h,
+			...sized,
 			participantId: room.localParticipant.identity,
 			trackName,
 			title: shareTitle(
 				room.localParticipant.name || room.localParticipant.identity,
 				mediaTrack.label
 			),
-			aspect: sized.aspect,
 		},
 	})
 	editor.setSelectedShapes([shapeId])

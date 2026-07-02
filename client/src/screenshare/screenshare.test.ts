@@ -8,7 +8,7 @@ import {
 	propsForAspect,
 	shareTitle,
 	titleFromTrackLabel,
-} from './ScreenShareShapeUtil'
+} from './helpers'
 
 const HDR = SCREENSHARE_HEADER_HEIGHT
 const WIDE = 16 / 9
@@ -53,8 +53,3 @@ assert.equal(shareTitle('David', 'screen:0:0'), 'David · screen share')
 assert.equal(shareTitle('  ', 'window:1:0'), 'someone · screen share')
 
 console.log('ALL SCREENSHARE HELPER TESTS PASSED')
-
-// The helpers file transitively imports livekit-client (via the shape's store
-// import), which keeps the node event loop alive after the assertions finish —
-// exit explicitly so `npx tsx` runs terminate.
-process.exit(0)

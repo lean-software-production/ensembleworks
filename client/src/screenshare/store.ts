@@ -73,7 +73,7 @@ export function useScreenShareTrack(participantId: string, trackName: string): S
 /** Sharing is offered only when A/V is up and this participant may publish
  * (the scribe role is subscribe-only). */
 export function useScreenShareAvailable(): boolean {
-	const v = useSyncExternalStore(subscribeStore, getVersion)
-	void v
+	// Subscribed purely for the re-render on room events; the value is unused.
+	useSyncExternalStore(subscribeStore, getVersion)
 	return room != null && room.localParticipant.permissions?.canPublish !== false
 }
