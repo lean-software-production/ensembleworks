@@ -18,6 +18,7 @@ import {
 	Track,
 } from 'livekit-client'
 import { useEffect, useRef, useState } from 'react'
+import { setScreenShareRoom } from '../screenshare/store'
 
 export interface RemotePeer {
 	identity: string
@@ -135,7 +136,13 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 				setStatus('disabled')
 				return
 			}
-			const r = new Room()
+			// adaptiveStream: delivered video layer follows the attached element's
+			// on-screen size, and fully hidden elements pause server-side (tldraw
+			// culls off-viewport shapes from the DOM, so panning away pauses the
+			// stream). dynacast: layers nobody subscribes to stop being ENCODED at
+			// the publisher. Both were unset pre-screen-share; camera bubbles in
+			// the faces rail benefit too. Audio is unaffected (video-only features).
+			const r = new Room({ adaptiveStream: true, dynacast: true })
 			lkRoom = r
 			r.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
 				if (track.kind === Track.Kind.Audio) attachAudio(track, participant)
@@ -179,6 +186,7 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 			setRoom(r)
 			setStatus('connected')
 			rebuildPeers(r)
+			setScreenShareRoom(r)
 		}
 
 		connect()
@@ -191,6 +199,7 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 			cancelled = true
 			document.removeEventListener('pointerdown', resume)
 			for (const id of [...pipelinesRef.current.keys()]) detachAudio(id)
+			setScreenShareRoom(null)
 			lkRoom?.disconnect()
 			audioCtxRef.current?.close()
 			audioCtxRef.current = null

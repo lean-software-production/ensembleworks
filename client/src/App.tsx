@@ -76,6 +76,9 @@ export function App() {
 
 	const handleMount = useMemo(
 		() => (editor: Editor) => {
+			// Debug/e2e hook: headless probes (docs/headless-browser.md) drive
+			// the canvas through this. Harmless in production.
+			;(window as unknown as { __ewEditor?: Editor }).__ewEditor = editor
 			editor.user.updateUserPreferences({ name: identity.name, color: identity.color })
 
 			// Terminals are easy to delete by accident (one stray Backspace on a

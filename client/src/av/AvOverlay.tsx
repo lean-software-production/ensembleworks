@@ -12,10 +12,11 @@
  *   even when LiveKit is disabled.
  * - Mic / camera / standup-mode toggles + connection status.
  */
-import { LocalTrack, RemoteTrack, Track } from 'livekit-client'
+import { LocalTrack, RemoteTrack, RemoteTrackPublication, Track } from 'livekit-client'
 import { useEffect, useRef, useState } from 'react'
 import { stopEventPropagation, useEditor, useValue } from 'tldraw'
 import { getRoomId } from '../identity'
+import { shouldBeSubscribed } from '../screenshare/visibility'
 import { wm } from '../theme'
 import { DEFAULT_SPATIAL_SETTINGS, distance, gainForDistance } from './spatial'
 import { useLiveKitRoom } from './useLiveKitRoom'
@@ -204,6 +205,39 @@ export function AvOverlay() {
 		}, 150)
 		return () => clearInterval(timer)
 	}, [editor, lk.audioContext])
+
+	// Viewport-scoped screen-share delivery (spec §6.3, deterministic path):
+	// subscribe only to screen tracks whose tile is in — or within a margin of
+	// — my viewport, with hysteresis so edge-panning doesn't flap. Same 150 ms
+	// cadence as the spatial audio loop above; audio subscriptions untouched.
+	useEffect(() => {
+		const room = lk.room
+		if (!room) return
+		const timer = setInterval(() => {
+			const viewport = editor.getViewportPageBounds()
+			const boundsByTrackName = new Map<string, { x: number; y: number; w: number; h: number }>()
+			for (const shape of editor.getCurrentPageShapes()) {
+				if (shape.type !== 'screenshare') continue
+				const bounds = editor.getShapePageBounds(shape.id)
+				if (bounds) {
+					boundsByTrackName.set((shape.props as { trackName: string }).trackName, bounds)
+				}
+			}
+			for (const participant of room.remoteParticipants.values()) {
+				for (const pub of participant.getTrackPublications() as RemoteTrackPublication[]) {
+					if (pub.source !== Track.Source.ScreenShare) continue
+					// A tile on another page (or deleted) maps to null → unsubscribe.
+					const want = shouldBeSubscribed(
+						boundsByTrackName.get(pub.trackName) ?? null,
+						viewport,
+						pub.isSubscribed
+					)
+					if (want !== pub.isSubscribed) pub.setSubscribed(want)
+				}
+			}
+		}, 150)
+		return () => clearInterval(timer)
+	}, [editor, lk.room])
 
 	const kickParticipant = async (participant: SessionParticipant) => {
 		if (!window.confirm(`Kick ${participant.name} from this session?`)) return
