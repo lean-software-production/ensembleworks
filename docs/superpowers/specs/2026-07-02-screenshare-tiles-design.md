@@ -94,9 +94,13 @@ Type `screenshare`, cloned structurally from `NekoShapeUtil`:
 - **States:** *connecting* (shape exists, track not yet attached), *live*,
   *ended* (track unpublished or participant left). Non-live tiles show a
   frozen still of the last frame that viewer saw (captured client-side when
-  the track detaches), with a "share ended"/"paused" badge; viewers who never
-  saw the stream get a text placeholder. The tombstone persists until someone
-  deletes it.
+  the track detaches), with a "share ended"/"paused" badge. When a share ends
+  gracefully, the sharer's client uploads that final frame (≤1280w JPEG) via
+  the existing `/uploads` asset path and stamps its URL into the synced
+  `stillUrl` prop — so the tombstone survives viewer refreshes and reaches
+  people who never saw the stream. Only if the sharer's tab dies before
+  uploading does a refreshed viewer fall back to the text placeholder. The
+  tombstone persists until someone deletes it.
 - **Title:** baked into the synced props at share time as
   `<sharer name> · <window title>` (falling back to "screen share" when the
   browser's track label is an opaque id), so tombstones still say whose

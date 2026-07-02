@@ -56,6 +56,9 @@ const screenshareShapeProps = {
 	// Captured surface aspect (width/height); updated by the sharer's client
 	// when the shared window is resized.
 	aspect: T.number,
+	// /uploads URL of the final frame, stamped by the sharer when the share
+	// ends; optional so live shares and existing rooms need no migration.
+	stillUrl: T.string.optional(),
 }
 
 export const schema = createTLSchema({

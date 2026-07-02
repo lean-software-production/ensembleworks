@@ -19,10 +19,11 @@ import {
 	TLBaseShape,
 	TLResizeInfo,
 	resizeBox,
+	useEditor,
 } from 'tldraw'
 import { wm } from '../theme'
 import { SCREENSHARE_DEFAULT_W, SCREENSHARE_HEADER_HEIGHT, lockScreenShareAspect, propsForAspect } from './helpers'
-import { useScreenShareTrack } from './store'
+import { getScreenShareRoom, useScreenShareTrack } from './store'
 
 // Pure constants + helpers live in helpers.ts (livekit-free so the unit test
 // exits cleanly); re-exported here for consumers of the shape module.
@@ -53,6 +54,11 @@ export interface ScreenShareShapeProps {
 	// Captured surface width/height ratio; the sharer's client rewrites it
 	// when the shared window is resized, and everyone's aspect lock follows.
 	aspect: number
+	// /uploads URL of the final frame, stamped by the sharer's client when the
+	// share ends, so the tombstone still survives viewer refreshes and reaches
+	// people who never saw the stream. Optional: live shares don't have one,
+	// and existing rooms need no migration.
+	stillUrl?: string
 }
 
 declare module '@tldraw/tlschema' {
@@ -73,6 +79,7 @@ export class ScreenShareShapeUtil extends BaseBoxShapeUtil<ScreenShareShape> {
 		trackName: T.string,
 		title: T.string,
 		aspect: T.number,
+		stillUrl: T.string.optional(),
 	}
 
 	override getDefaultProps(): ScreenShareShape['props'] {
@@ -119,7 +126,8 @@ export class ScreenShareShapeUtil extends BaseBoxShapeUtil<ScreenShareShape> {
 }
 
 function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
-	const { w, h, title, participantId, trackName } = shape.props
+	const { w, h, title, participantId, trackName, stillUrl } = shape.props
+	const editor = useEditor()
 	const state = useScreenShareTrack(participantId, trackName)
 	// Keyed on the track object (stable per publication) so version bumps that
 	// don't change the track never re-attach the video element.
@@ -169,6 +177,38 @@ function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
 			video.remove()
 		}
 	}, [track])
+
+	// Persist the tombstone across refreshes: when a share ends, the SHARER's
+	// client (the one guaranteed to have captured the final frame) uploads it
+	// once via the same /uploads path as dropped images and stamps the URL into
+	// the synced props. One bounded ≤1280w JPEG per stopped share, stored
+	// server-side — never inline in the sync document. Viewers who never saw
+	// the stream (or who reload) render this instead of their in-memory frame.
+	useEffect(() => {
+		if (state.kind !== 'ended' || !lastFrame || stillUrl) return
+		if (getScreenShareRoom()?.localParticipant.identity !== participantId) return
+		let cancelled = false
+		;(async () => {
+			try {
+				const blob = await (await fetch(lastFrame)).blob()
+				// No file extension: the server's sanitizeId allows [a-zA-Z0-9_-]
+				// only; browsers sniff the JPEG fine in an <img> context.
+				const id = `screenstill-${trackName.slice('screen:'.length)}`
+				const res = await fetch(`/uploads/${id}`, { method: 'PUT', body: blob })
+				if (!res.ok || cancelled || !editor.getShape(shape.id)) return
+				editor.updateShape({
+					id: shape.id,
+					type: 'screenshare',
+					props: { stillUrl: `/uploads/${id}` },
+				})
+			} catch {
+				/* best-effort — this viewer's in-memory frame still shows */
+			}
+		})()
+		return () => {
+			cancelled = true
+		}
+	}, [state.kind, lastFrame, stillUrl, participantId, trackName, shape.id, editor])
 
 	const statusColor =
 		state.kind === 'live' ? wm.ok : state.kind === 'connecting' ? wm.warn : wm.inkSubtle
@@ -235,12 +275,14 @@ function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
 					screen share · {state.kind}
 				</span>
 			</div>
+			{/* Prefer this session's in-memory capture; fall back to the synced
+			    upload so refreshed/late viewers still see the final frame. */}
 			<div ref={videoRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
 				{state.kind !== 'live' &&
-					(lastFrame ? (
+					(lastFrame || stillUrl ? (
 						<>
 							<img
-								src={lastFrame}
+								src={lastFrame ?? stillUrl}
 								alt="last shared frame"
 								style={{
 									position: 'absolute',

@@ -3,7 +3,9 @@
  *   1. sharer publishes a (fake) screen capture via the toolbar tool
  *   2. a second client sees the tile go live and render frames
  *   3. panning the viewer away unsubscribes the track at the SFU; back resubscribes
- *   4. the viewer deleting the tile stops the sharer's capture + publication
+ *   4. stopping the share keeps a tombstone tile whose final frame is uploaded
+ *      (stillUrl) and survives a viewer reload
+ *   5. the viewer deleting the tile removes it everywhere
  *
  * Run from the playwright scratch dir (docs/headless-browser.md):
  *   cd /tmp/canvas-probe && node <repo>/client/e2e/screenshare-probe.mjs
@@ -125,7 +127,42 @@ try {
 		return s !== null && s.isSubscribed === true
 	})
 
-	// ── Teardown: viewer deletes the tile → sharer stops capture + publication ──
+	// ── Graceful stop: tombstone persists, still is uploaded and survives reload ──
+	// Simulate the browser's "Stop sharing" bar: dispatch 'ended' on the local
+	// capture track (the same event the bar fires), which share.ts listens for.
+	await sharer.evaluate(() => {
+		const room = window.__ewScreenShareRoom
+		for (const pub of room.localParticipant.getTrackPublications()) {
+			if (pub.trackName?.startsWith('screen:')) {
+				pub.track.mediaStreamTrack.dispatchEvent(new Event('ended'))
+			}
+		}
+	})
+	await until(
+		'stopped share leaves an ended tombstone tile',
+		() => sharer.locator('[data-screenshare][data-screenshare-state="ended"]').count()
+	)
+	await until('sharer uploads the final frame (stillUrl stamped)', () =>
+		sharer.evaluate(() => {
+			const shape = window.__ewEditor
+				.getCurrentPageShapes()
+				.find((s) => s.type === 'screenshare')
+			return shape?.props.stillUrl?.startsWith('/uploads/') ?? false
+		})
+	)
+	// A reloaded viewer has no in-memory frame — the synced upload must carry it.
+	await viewer.goto(`${BASE}/?room=${ROOM}&${HOME}`, { waitUntil: 'domcontentloaded' })
+	await viewer.waitForSelector('.tl-canvas', { timeout: 20000 })
+	await until('reloaded viewer still sees the final frame', () =>
+		viewer.evaluate(() => {
+			const img = document.querySelector(
+				'[data-screenshare][data-screenshare-state="ended"] img'
+			)
+			return !!img && img.naturalWidth > 0
+		})
+	)
+
+	// ── Teardown: viewer deletes the tile → it disappears everywhere ──
 	await viewer.evaluate(() => {
 		const editor = window.__ewEditor
 		const shape = editor.getCurrentPageShapes().find((s) => s.type === 'screenshare')
