@@ -420,6 +420,60 @@ Each step ships independently on `main`:
    Yjs/Hocuspocus spike per `tldraw-replacement-analysis.md` — both land
    against stable seams instead of a monolith.
 
+## 7. Compatibility & upgrade path for existing installations
+
+Steps 1–6 roll out to existing boxes (ash, `ew-staging-001`, `ew-lsp-001`)
+as **ordinary releases via `release.sh` + `deploy.sh`, with zero data
+migration**. Two existing properties make this so:
+
+- **Deploys are atomic, so client/server skew doesn't exist.** The client
+  is a static build served by the sync server, and `deploy.sh` swaps one
+  `current` symlink — client, server, contracts and the regenerated CLI
+  ship as a single artifact. Internal interface changes between them are
+  invisible to an installation. "Breaking" therefore only means: persistent
+  state on disk, host-provisioned contracts, and conventions in agents'
+  heads (SKILL.md).
+- **Nearly all persistent state is untouched by the refactor:**
+
+  | State | Fate through step 6 |
+  |---|---|
+  | `rooms/<room>.sqlite` | Loads unchanged — shape schemas *move* into contracts but type names and prop shapes stay identical, so old room files just open. Future prop changes go through tldraw's existing migration machinery. |
+  | `transcripts/<room>.jsonl`, `uploads/` | Untouched; the memory service *reads* the JSONL for backfill. |
+  | `roadmaps/<room>/<id>.json` | The generalised `docStore` keeps reading today's format (or stamps a version envelope). |
+  | tmux sessions (`canvas-<id>`) | Survive everything, as they already survive deploys: naming convention and `KillMode=process` preserved; the gateway is untouched until the optional Go rewrite, which speaks the identical protocol (binary swap under the same unit). |
+  | `memory/<room>.sqlite` | Purely additive — new directory, new systemd unit, one backfill command on first deploy. |
+  | `~/.config/ensembleworks/*.env`, sudoers, launcher, agent-home | Unchanged. Host bootstrap (laingville) hears nothing until the Go gateway. |
+
+### 7.1 Compatibility keels (acceptance criteria for steps 2–6)
+
+1. **No existing `/api/*` route changes shape or path.** Plugin routers
+   mounting under `/api/<plugin>/` must not rename today's routes — that
+   would break the seeded skills, agent muscle-memory, and mid-upgrade
+   `bin/canvas` calls from live tmux sessions (the one place old-CLI vs
+   new-server skew *can* happen, since agent shells outlive deploys). The
+   tool registry keeps today's paths as canonical names, or the kernel
+   mounts aliases. Treat this as an acceptance test for step 2.
+2. **`DATA_DIR` changes are additive-only.** This also preserves rollback:
+   an older release from `~/releases/` must still run against data a newer
+   one wrote. Holds automatically for steps 1–5 given keel 1 and the
+   roadmap-format rule.
+3. **The default deployment profile reproduces today's build exactly.**
+   When `ensembleworks.config.ts` replaces `SHARED_BROWSER=1`-style flags
+   in step 6, an unmodified `deploy.sh` run must be a no-op upgrade.
+
+### 7.2 The one genuine breaking change
+
+The step-7 sync-engine swap (tldraw → Yjs/Hocuspocus) changes the room
+document format — a real data migration (a converter reading
+`rooms/<room>.sqlite` snapshots and authoring an equivalent `Y.Doc`,
+feasible since the server already reads full snapshots headlessly), or an
+accepted per-room reset. It also breaks rollback across that boundary and
+gets its own migration plan if/when decided. This is precisely why the
+plugin architecture lands first: by then the cutover touches one kernel
+service and the client `ShapeUtil`s, not fifteen features. The Go gateway
+carries no such cost — protocol compatibility makes it non-breaking by
+construction.
+
 ## Open questions
 
 - Embedding model/provider choice and chunking granularity for transcript
