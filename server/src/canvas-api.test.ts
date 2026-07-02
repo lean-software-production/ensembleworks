@@ -10,6 +10,7 @@ import path from 'node:path'
 import WebSocket from 'ws'
 import { createSyncApp } from './app.ts'
 import { schema } from './schema.ts'
+import { makeTestClient } from './test-helpers.ts'
 
 const TERMINAL_ID = 'shape:terminal-1'
 const FRAME_ID = 'shape:frame-advice'
@@ -24,14 +25,7 @@ async function main() {
 	assert.ok(address && typeof address === 'object', 'server.listen(0) should yield a port')
 	const base = `http://127.0.0.1:${address.port}`
 
-	const postJson = async (route: string, body: unknown) => {
-		const res = await fetch(`${base}${route}`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(body),
-		})
-		return { status: res.status, body: (await res.json()) as any }
-	}
+	const { postJson, getJson } = makeTestClient(base)
 	const openSocket = (url: string) =>
 		new Promise<WebSocket>((resolve, reject) => {
 			const ws = new WebSocket(url)
@@ -154,11 +148,6 @@ async function main() {
 		const emptyText = await postJson('/api/sticky', { room: 'test', text: '   ' })
 		assert.equal(emptyText.status, 400, 'text empty after trim is 400')
 		console.log('ok: sticky edge cases (unknown frame 404, empty text 400)')
-	}
-
-	const getJson = async (route: string) => {
-		const res = await fetch(`${base}${route}`)
-		return { status: res.status, body: (await res.json()) as any }
 	}
 
 	// 6b. Seed an image (+ its asset) into the advice frame so the read

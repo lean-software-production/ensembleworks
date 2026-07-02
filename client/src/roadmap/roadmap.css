@@ -1,0 +1,81 @@
+/*
+ * Roadmap shape styles. Tokens are the Wellmaintained design-system values
+ * used by Roadmap.dc.html (colors_and_type.css), scoped under .rm-root so
+ * they can't leak into tldraw chrome. Font stacks reuse the canvas theme's
+ * --wm-* tokens where they exist (theme.css).
+ */
+.rm-root {
+	--rm-bg: #fafaf7;
+	--rm-bg-warm: #f6f3ec;
+	--rm-panel: #f2f0ea;
+	--rm-fg: #0f172a;
+	--rm-fg-muted: rgba(15, 23, 42, 0.58);
+	--rm-fg-subtle: rgba(15, 23, 42, 0.4);
+	--rm-rule: rgba(15, 23, 42, 0.1);
+	--rm-rule-strong: rgba(15, 23, 42, 0.22);
+	--rm-rule-cool: rgba(15, 23, 42, 0.08);
+	--rm-seal-blue: #004990;
+	--rm-seal-cream: #f6efe2;
+	--rm-ok: #15a386;
+	--rm-serif: 'Source Serif 4', 'Source Serif Pro', Charter, 'Iowan Old Style', Georgia, serif;
+	--rm-sans: var(--wm-sans, 'PT Sans', system-ui, sans-serif);
+	--rm-mono: var(--wm-mono, 'JetBrains Mono', ui-monospace, monospace);
+
+	font-family: var(--rm-sans);
+	color: var(--rm-fg);
+	box-sizing: border-box;
+}
+.rm-root * {
+	box-sizing: border-box;
+}
+
+/* The signature ALL-CAPS tracked mono label. */
+.rm-label {
+	font-family: var(--rm-mono);
+	font-size: 8.5px;
+	letter-spacing: 1.5px;
+	text-transform: uppercase;
+	color: var(--rm-fg-subtle);
+	white-space: nowrap;
+}
+
+/* Copyable key chips ("O3.I1.F2 · click to copy"). */
+.rm-key {
+	font-family: var(--rm-mono);
+	font-size: 8.5px;
+	letter-spacing: 0.5px;
+	color: var(--rm-fg-muted);
+	background: none;
+	border: none;
+	padding: 0;
+	cursor: pointer;
+	align-self: flex-start;
+}
+.rm-key:hover {
+	color: var(--rm-seal-blue);
+}
+
+/* Bare glyph buttons (status cycle / metric toggle). */
+.rm-glyph {
+	background: none;
+	border: none;
+	padding: 0;
+	font-size: 10.5px;
+	width: 14px;
+	flex: none;
+	cursor: pointer;
+	line-height: 1.5;
+}
+
+.rm-drag {
+	cursor: grab;
+}
+.rm-drag:active {
+	cursor: grabbing;
+}
+
+/* .rm-label without the eyebrow posture — sentence-case legend/meta lines. */
+.rm-label-plain {
+	letter-spacing: 1px;
+	text-transform: none;
+}

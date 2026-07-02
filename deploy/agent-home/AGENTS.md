@@ -35,6 +35,33 @@ canvas transcript --since <ms>     # the room's voice transcript, oldest first
 canvas shape '{"type":"geo","text":"retry bug","x":100,"y":80}'   # draw / update / delete a shape
 ```
 
+## Roadmap
+
+A room can hold named roadmap controls — zoned outcome boards (Done / Now /
+Next / Later) that humans re-prioritise by dragging and clicking status
+glyphs, and agents populate and read back:
+
+- `canvas roadmap list` — the room's roadmaps (id, name, rev, updated).
+- `canvas roadmap read <name>` — full document + `rev`. Fuzzy name match,
+  exact id first. Read before you regenerate: human drags and status clicks
+  live here and nowhere else.
+- `canvas roadmap push <name> <file.json> [--if-rev <rev>]` — create or
+  wholesale-replace from a roadmap.json document
+  (`meta + outcomes[] → initiatives[] → metrics[]/features[]`; keys like
+  `O3.I1.F2` must be unique). Use `--if-rev` with the rev you read; a 409
+  reply means someone edited meanwhile — re-read, merge, retry.
+- `canvas roadmap ops <name> '<ops-json>' [--if-rev <rev>]` — targeted edits
+  without touching the rest:
+  `[{"op":"set","key":"O3.I1.F2","fields":{"status":"done"}}]`
+  `[{"op":"move","key":"O4","zone":"now","index":0}]`
+  `set` fields per kind — outcome: status/title/why; initiative:
+  status/title/statement; feature: status/text; metric: done/text. Statuses:
+  planned | in-progress | done | parked. `move` takes `zone` (outcomes only)
+  and/or `index` (position within the zone or parent list).
+
+Structural changes (add/remove outcomes, initiatives, metrics, features) go
+through `push` — regenerate the document and replace it.
+
 ## How to work here
 
 1. **Take your brief.** `canvas read <your-frame>` (often your crew name) to see

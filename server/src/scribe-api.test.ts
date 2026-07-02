@@ -10,6 +10,7 @@ import os from 'node:os'
 import path from 'node:path'
 import WebSocket from 'ws'
 import { schema } from './schema.ts'
+import { makeTestClient } from './test-helpers.ts'
 
 const FRAME_ID = 'shape:frame-drafting'
 
@@ -29,18 +30,7 @@ async function main() {
 	assert.ok(address && typeof address === 'object', 'server.listen(0) should yield a port')
 	const base = `http://127.0.0.1:${address.port}`
 
-	const postJson = async (route: string, body: unknown) => {
-		const res = await fetch(`${base}${route}`, {
-			method: 'POST',
-			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify(body),
-		})
-		return { status: res.status, body: (await res.json()) as any }
-	}
-	const getJson = async (route: string) => {
-		const res = await fetch(`${base}${route}`)
-		return { status: res.status, body: (await res.json()) as any }
-	}
+	const { postJson, getJson } = makeTestClient(base)
 
 	// Seed: one frame at a known spot so cursor stamping has a target.
 	const room = getOrCreateRoom('test')
