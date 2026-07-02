@@ -1,7 +1,15 @@
 // Unit tests for the pure roadmap client model.
 // Run with: npx tsx src/roadmap/model.test.ts
 import assert from 'node:assert/strict'
-import { applyLocalOp, cycleStatus, glyphFor, slugify, type RoadmapDoc } from './model'
+import {
+	applyLocalOp,
+	cycleStatus,
+	glyphFor,
+	metricMatchesFilter,
+	slugify,
+	statusMatchesFilter,
+	type RoadmapDoc,
+} from './model'
 
 const DOC: RoadmapDoc = {
 	meta: { title: 'T' },
@@ -44,6 +52,21 @@ console.log('ok: glyphFor')
 assert.equal(slugify('Product Roadmap'), 'product-roadmap')
 assert.equal(slugify('!!!'), null)
 console.log('ok: slugify')
+
+// Filter semantics: 'all' matches everything; otherwise exact status match.
+assert.equal(statusMatchesFilter('all', 'done'), true)
+assert.equal(statusMatchesFilter('in-progress', 'in-progress'), true)
+assert.equal(statusMatchesFilter('in-progress', 'done'), false)
+assert.equal(statusMatchesFilter('done', 'parked'), false)
+// Metrics are binary: done matches only 'done'; an open metric is live work,
+// so it matches every non-done filter.
+assert.equal(metricMatchesFilter('all', true), true)
+assert.equal(metricMatchesFilter('done', true), true)
+assert.equal(metricMatchesFilter('done', false), false)
+assert.equal(metricMatchesFilter('in-progress', true), false)
+assert.equal(metricMatchesFilter('in-progress', false), true)
+assert.equal(metricMatchesFilter('planned', false), true)
+console.log('ok: statusMatchesFilter + metricMatchesFilter')
 
 {
 	const next = applyLocalOp(DOC, { op: 'set', key: 'O1.I1.F1', fields: { status: 'done' } })

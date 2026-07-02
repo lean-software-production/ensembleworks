@@ -34,6 +34,8 @@ import {
 	countsLine,
 	cycleStatus,
 	glyphFor,
+	metricMatchesFilter,
+	statusMatchesFilter,
 	type RoadmapDoc,
 	type RoadmapInitiative,
 	type RoadmapOp,
@@ -184,6 +186,12 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 	}
 
 	// ---- drag core (port of DCLogic's drag core) ------------------------------
+	// dragover/drop handlers hang off the *capture*-phase props. tldraw's
+	// useDocumentEvents stops every native dragover/drop at its container
+	// (re-dispatching a clone onto .tl-canvas for file drops), so the bubble
+	// phase never reaches React — capture runs before tldraw's listener.
+	// Capture dispatches outermost-first, so every handler guards on the drag's
+	// type + container before claiming the event.
 	const startDrag = (e: React.DragEvent, info: DragInfo) => {
 		e.stopPropagation()
 		drag.current = info
@@ -207,15 +215,21 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 		}
 	}
 	const overShadow = (sig: string) => (over === sig ? '0 0 0 2px var(--rm-seal-blue) inset' : 'none')
+	// Zone containers wrap the outcome columns; with capture-phase dispatch the
+	// zone would always claim outcome drags first, so it defers whenever the
+	// pointer is over a column (which handles the drop itself).
+	const overOutcomeColumn = (e: React.DragEvent) =>
+		e.target instanceof Element && !!e.target.closest('[data-rm-outcome]')
 
 	// ---- drop handlers → move ops ---------------------------------------------
 	// Dropping outcome A on outcome B: A adopts B's zone and takes B's index
 	// within that zone (server move semantics are index-within-zone).
 	const dropOutcomeOn = (e: React.DragEvent, targetKey: string) => {
+		const d = drag.current
+		if (!d || d.type !== 'outcome') return
 		e.preventDefault()
 		e.stopPropagation()
-		const d = drag.current
-		if (!doc || !d || d.type !== 'outcome' || d.key === targetKey) return endDrag()
+		if (!doc || d.key === targetKey) return endDrag()
 		const target = doc.outcomes.find((o) => o.key === targetKey)
 		if (!target) return endDrag()
 		const zoneMembers = doc.outcomes.filter((o) => o.zone === target.zone && o.key !== d.key)
@@ -228,19 +242,26 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 		endDrag()
 	}
 	const dropOutcomeOnZone = (e: React.DragEvent, zoneId: string) => {
+		const d = drag.current
+		if (!d || d.type !== 'outcome') return
 		e.preventDefault()
 		e.stopPropagation()
-		const d = drag.current
-		if (!d || d.type !== 'outcome') return endDrag()
 		postOp({ op: 'move', key: d.key, zone: zoneId })
 		endDrag()
 	}
 	// Reorder within a nested list (initiatives / metrics / features).
-	const dropInList = (e: React.DragEvent, list: { key: string }[], targetKey: string) => {
+	const dropInList = (
+		e: React.DragEvent,
+		type: DragInfo['type'],
+		container: string,
+		list: { key: string }[],
+		targetKey: string
+	) => {
+		const d = drag.current
+		if (!d || d.type !== type || d.container !== container) return
 		e.preventDefault()
 		e.stopPropagation()
-		const d = drag.current
-		if (!d || d.key === targetKey) return endDrag()
+		if (d.key === targetKey) return endDrag()
 		const without = list.filter((x) => x.key !== d.key)
 		postOp({ op: 'move', key: d.key, index: without.findIndex((x) => x.key === targetKey) })
 		endDrag()
@@ -274,6 +295,9 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 			? { g: item.done ? '✓' : '○', c: item.done ? 'var(--rm-ok)' : 'var(--rm-fg-subtle)' }
 			: glyphFor(item.status ?? 'planned')
 		const list = (isMetric ? ini.metrics : ini.features) ?? []
+		const match = isMetric
+			? metricMatchesFilter(filter, item.done ?? false)
+			: statusMatchesFilter(filter, item.status ?? 'planned')
 		return (
 			<div
 				key={item.key}
@@ -281,13 +305,15 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 				draggable
 				onDragStart={(e) => startDrag(e, { type: 'child', container, key: item.key })}
 				onDragEnd={endDrag}
-				onDragOver={(e) => allowDrop(e, 'child', container, sig)}
-				onDrop={(e) => dropInList(e, list, item.key)}
+				onDragOverCapture={(e) => allowDrop(e, 'child', container, sig)}
+				onDropCapture={(e) => dropInList(e, 'child', container, list, item.key)}
 				style={{
 					display: 'flex',
 					gap: 6,
 					padding: '5px 0',
 					borderBottom: '1px solid var(--rm-rule-cool)',
+					opacity: match ? 1 : 0.22,
+					transition: 'opacity 120ms linear',
 					boxShadow: overShadow(sig),
 				}}
 			>
@@ -320,17 +346,20 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 		const st = glyphFor(ini.status)
 		const container = `ini:${outcomeKey}`
 		const sig = `${container}:${ini.key}`
+		const match = statusMatchesFilter(filter, ini.status)
 		return (
 			<div
 				key={ini.key}
-				onDragOver={(e) => allowDrop(e, 'ini', container, sig)}
-				onDrop={(e) => dropInList(e, list, ini.key)}
+				onDragOverCapture={(e) => allowDrop(e, 'ini', container, sig)}
+				onDropCapture={(e) => dropInList(e, 'ini', container, list, ini.key)}
 				style={{
 					width: 212,
 					flex: 'none',
 					border: '1px solid var(--rm-rule)',
 					borderRadius: 2,
 					background: 'var(--rm-bg)',
+					opacity: match ? 1 : 0.22,
+					transition: 'opacity 120ms linear',
 					boxShadow: overShadow(sig),
 				}}
 			>
@@ -406,14 +435,15 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 	}
 
 	const renderOutcome = (oc: RoadmapOutcome) => {
-		const match = filter === 'all' || oc.status === filter
+		const match = statusMatchesFilter(filter, oc.status)
 		const chip = chipFor(oc.status)
 		const sig = `oc:${oc.key}`
 		return (
 			<div
 				key={oc.key}
-				onDragOver={(e) => allowDrop(e, 'outcome', 'root', sig)}
-				onDrop={(e) => dropOutcomeOn(e, oc.key)}
+				data-rm-outcome
+				onDragOverCapture={(e) => allowDrop(e, 'outcome', 'root', sig)}
+				onDropCapture={(e) => dropOutcomeOn(e, oc.key)}
 				style={{
 					opacity: match ? 1 : 0.22,
 					borderRight: '1px solid var(--rm-rule)',
@@ -577,8 +607,8 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 							)}
 							<div style={{ flex: 'none', minWidth: 260, borderRight: '1px solid var(--rm-rule-strong)', background: zone.warm ? 'var(--rm-bg-warm)' : 'transparent' }}>
 								<div
-									onDragOver={(e) => allowDrop(e, 'outcome', 'root', zoneSig)}
-									onDrop={(e) => dropOutcomeOnZone(e, zone.id)}
+									onDragOverCapture={(e) => allowDrop(e, 'outcome', 'root', zoneSig)}
+									onDropCapture={(e) => dropOutcomeOnZone(e, zone.id)}
 									style={{ height: 36, display: 'flex', alignItems: 'center', padding: '0 14px', borderBottom: '1px solid var(--rm-rule-strong)', boxShadow: overShadow(zoneSig) }}
 								>
 									<span style={{ fontFamily: 'var(--rm-mono)', fontSize: 9.5, fontWeight: 500, letterSpacing: 2, color: 'var(--rm-seal-blue)', textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
@@ -590,8 +620,12 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 									</span>
 								</div>
 								<div
-									onDragOver={(e) => allowDrop(e, 'outcome', 'root', zoneSig)}
-									onDrop={(e) => dropOutcomeOnZone(e, zone.id)}
+									onDragOverCapture={(e) => {
+										if (!overOutcomeColumn(e)) allowDrop(e, 'outcome', 'root', zoneSig)
+									}}
+									onDropCapture={(e) => {
+										if (!overOutcomeColumn(e)) dropOutcomeOnZone(e, zone.id)
+									}}
 									style={{ display: 'flex', alignItems: 'stretch', minHeight: 120 }}
 								>
 									{outcomes.length === 0 ? (

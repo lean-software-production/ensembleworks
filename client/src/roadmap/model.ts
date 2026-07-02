@@ -73,6 +73,19 @@ export function cycleStatus(status: string): string {
 	return 'planned'
 }
 
+// Filter semantics: 'all' matches everything, otherwise exact status match.
+// Applied per node — an outcome, initiative or feature dims when its own
+// status misses the filter, independent of its parent.
+export function statusMatchesFilter(filter: string, status: string): boolean {
+	return filter === 'all' || status === filter
+}
+
+// Metrics are binary (done / open). Done matches only the 'done' filter; an
+// open metric is live work, so it matches every other filter.
+export function metricMatchesFilter(filter: string, done: boolean): boolean {
+	return filter === 'all' || (filter === 'done') === done
+}
+
 export function countsLine(doc: RoadmapDoc): string {
 	const nI = doc.outcomes.reduce((n, o) => n + (o.initiatives ?? []).length, 0)
 	const nF = doc.outcomes.reduce(
