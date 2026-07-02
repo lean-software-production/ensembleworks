@@ -22,6 +22,9 @@ import {
 	useTools,
 } from 'tldraw'
 import { AvOverlay } from './av/AvOverlay'
+import { SCREENSHARE_ICON_NAME } from './screenshare/ScreenShareShapeUtil'
+import { startScreenShare } from './screenshare/share'
+import { useScreenShareAvailable } from './screenshare/store'
 import { seedDemoCanvas } from './demo'
 import { seedSessionCanvas } from './session/seedSessionCanvas'
 import { toProxiedUrl } from './iframe/IframeShapeUtil'
@@ -135,12 +138,22 @@ export const uiOverrides: TLUiOverrides = {
 				createRoadmapShape(editor)
 			},
 		}
+		tools['screenshare'] = {
+			id: 'screenshare',
+			icon: SCREENSHARE_ICON_NAME,
+			label: 'Share screen',
+			readonlyOk: false,
+			onSelect() {
+				void startScreenShare(editor)
+			},
+		}
 		return tools
 	},
 }
 
 function ToolbarWithTerminal() {
 	const tools = useTools()
+	const screenShareAvailable = useScreenShareAvailable()
 	return (
 		<DefaultToolbar>
 			<DefaultToolbarContent />
@@ -148,6 +161,9 @@ function ToolbarWithTerminal() {
 			{tools['dev-server'] && <TldrawUiMenuItem {...tools['dev-server']} />}
 			{tools['neko'] && <TldrawUiMenuItem {...tools['neko']} />}
 			{tools['roadmap'] && <TldrawUiMenuItem {...tools['roadmap']} />}
+			{screenShareAvailable && tools['screenshare'] && (
+				<TldrawUiMenuItem {...tools['screenshare']} />
+			)}
 		</DefaultToolbar>
 	)
 }
