@@ -97,10 +97,13 @@ Flip the source of truth from arbitrary hex to a **named tldraw colour key**.
 
 ### 4. Swatch picker + change propagation
 
-- **UI:** the faces rail (`AvOverlay.tsx`) already renders the local user with a
-  coloured ring. Clicking **your own face** opens a small popover: a grid of the
-  10 palette swatches, current one marked, click to choose. Local popover state
-  only — no new menu plumbing or settings surface.
+- **UI:** the roster (`ParticipantRow` in `AvOverlay.tsx`) already renders the
+  local user's row with a coloured dot, and — unlike the faces rail — it is
+  visible regardless of camera state. Clicking **your own colour dot** opens a
+  small popover: a grid of the 10 palette swatches, current one marked, click to
+  choose. Local popover state only — no new menu plumbing or settings surface.
+  (The faces-rail ring is not a picker anchor: your face only exists when your
+  camera is on, so the picker would be unreachable with camera off.)
 - **On `setUserColor(key)`, three things fan out:**
   1. **Persist** — `localStorage["ensembleworks.userColor"] = key`.
   2. **Presence** — `editor.user.updateUserPreferences({ color: hexForColor(key,
