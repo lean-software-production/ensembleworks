@@ -16,6 +16,7 @@ import { LocalTrack, RemoteTrack, Track } from 'livekit-client'
 import { useEffect, useRef, useState } from 'react'
 import { stopEventPropagation, useEditor, useValue } from 'tldraw'
 import { getRoomId } from '../identity'
+import { updateScreenShareSubscriptions } from '../screenshare/subscriptions'
 import { wm } from '../theme'
 import { DEFAULT_SPATIAL_SETTINGS, distance, gainForDistance } from './spatial'
 import { useLiveKitRoom } from './useLiveKitRoom'
@@ -204,6 +205,17 @@ export function AvOverlay() {
 		}, 150)
 		return () => clearInterval(timer)
 	}, [editor, lk.audioContext])
+
+	// Viewport-scoped screen-share delivery: only receive screen tracks whose
+	// tile is in (or near) my viewport, with hysteresis so edge-panning doesn't
+	// flap. Same 150 ms cadence as the spatial audio loop above; the shape/track
+	// logic lives with the screenshare feature. Audio subscriptions untouched.
+	useEffect(() => {
+		const room = lk.room
+		if (!room) return
+		const timer = setInterval(() => updateScreenShareSubscriptions(editor, room), 150)
+		return () => clearInterval(timer)
+	}, [editor, lk.room])
 
 	const kickParticipant = async (participant: SessionParticipant) => {
 		if (!window.confirm(`Kick ${participant.name} from this session?`)) return

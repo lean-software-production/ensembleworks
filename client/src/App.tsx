@@ -15,15 +15,31 @@ import { getIdentity, getRoomId } from './identity'
 import { IframeShapeUtil } from './iframe/IframeShapeUtil'
 import { PasteUrlHandler } from './iframe/PasteUrlHandler'
 import { NEKO_ICON_NAME, NEKO_TOOLBAR_ICON, NekoShapeUtil } from './neko/NekoShapeUtil'
+import {
+	SCREENSHARE_ICON_NAME,
+	SCREENSHARE_TOOLBAR_ICON,
+	ScreenShareShapeUtil,
+} from './screenshare/ScreenShareShapeUtil'
 import { TerminalShapeUtil } from './terminal/TerminalShapeUtil'
 import { RoadmapShapeUtil } from './roadmap/RoadmapShapeUtil'
 import { components, uiOverrides } from './ui'
 
-const customShapeUtils = [TerminalShapeUtil, IframeShapeUtil, NekoShapeUtil, RoadmapShapeUtil]
+const customShapeUtils = [
+	TerminalShapeUtil,
+	IframeShapeUtil,
+	NekoShapeUtil,
+	RoadmapShapeUtil,
+	ScreenShareShapeUtil,
+]
 
 // Register the custom neko toolbar icon (merged with tldraw's built-ins). Stable
 // module-level reference so the asset-url memo doesn't churn each render.
-const assetUrls = { icons: { [NEKO_ICON_NAME]: NEKO_TOOLBAR_ICON } }
+const assetUrls = {
+	icons: {
+		[NEKO_ICON_NAME]: NEKO_TOOLBAR_ICON,
+		[SCREENSHARE_ICON_NAME]: SCREENSHARE_TOOLBAR_ICON,
+	},
+}
 
 // One-time flag so we seed the color scheme only once per user. v2: the
 // Wellmaintained paper-light theme replaced the original dark seed, so
@@ -60,6 +76,9 @@ export function App() {
 
 	const handleMount = useMemo(
 		() => (editor: Editor) => {
+			// Debug/e2e hook: headless probes (docs/headless-browser.md) drive
+			// the canvas through this. Harmless in production.
+			;(window as unknown as { __ewEditor?: Editor }).__ewEditor = editor
 			editor.user.updateUserPreferences({ name: identity.name, color: identity.color })
 
 			// Terminals are easy to delete by accident (one stray Backspace on a

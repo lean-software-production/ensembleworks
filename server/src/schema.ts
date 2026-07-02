@@ -44,6 +44,23 @@ const roadmapShapeProps = {
 	rev: T.number.optional(),
 }
 
+// Keep in sync with client/src/screenshare/ScreenShareShapeUtil.tsx
+const screenshareShapeProps = {
+	w: T.number,
+	h: T.number,
+	// LiveKit identity of the sharer + their published track name — the join
+	// key between the canvas shape and the media plane.
+	participantId: T.string,
+	trackName: T.string,
+	title: T.string,
+	// Captured surface aspect (width/height); updated by the sharer's client
+	// when the shared window is resized.
+	aspect: T.number,
+	// /uploads URL of the final frame, stamped by the sharer when the share
+	// ends; optional so live shares and existing rooms need no migration.
+	stillUrl: T.string.optional(),
+}
+
 export const schema = createTLSchema({
 	shapes: {
 		...defaultShapeSchemas,
@@ -51,6 +68,7 @@ export const schema = createTLSchema({
 		iframe: { props: iframeShapeProps },
 		neko: { props: nekoShapeProps },
 		roadmap: { props: roadmapShapeProps },
+		screenshare: { props: screenshareShapeProps },
 	},
 	bindings: defaultBindingSchemas,
 })
