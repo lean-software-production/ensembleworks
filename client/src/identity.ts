@@ -5,21 +5,29 @@
  * video bubbles get matched to cursors.
  */
 
+import { colorKeyForId, isIdentityColor, type IdentityColor } from './colors'
+
 const ID_KEY = 'ensembleworks.userId'
 const NAME_KEY = 'ensembleworks.userName'
+const COLOR_KEY = 'ensembleworks.userColor'
 
 export interface Identity {
 	id: string
 	name: string
-	color: string
+	// A tldraw palette colour name (see colors.ts). Override in localStorage if
+	// the user picked one, else a stable hash of their id.
+	colorKey: IdentityColor
 }
 
-const COLORS = ['#4f8fef', '#e0598b', '#39b27d', '#e8a33d', '#9d6ce8', '#d96c4a']
+/** The user's chosen colour, or the deterministic default for their id. */
+function resolveColorKey(id: string): IdentityColor {
+	const override = localStorage.getItem(COLOR_KEY)
+	return isIdentityColor(override) ? override : colorKeyForId(id)
+}
 
-function hashCode(s: string): number {
-	let h = 0
-	for (let i = 0; i < s.length; i++) h = (Math.imul(31, h) + s.charCodeAt(i)) | 0
-	return Math.abs(h)
+/** Persist a chosen colour so it survives reloads and wins over the hash. */
+export function setUserColor(key: IdentityColor): void {
+	localStorage.setItem(COLOR_KEY, key)
 }
 
 export function getIdentity(): Identity {
@@ -33,7 +41,7 @@ export function getIdentity(): Identity {
 		name = window.prompt('Your name (shown to teammates):')?.trim() || null
 	}
 	localStorage.setItem(NAME_KEY, name)
-	return { id, name, color: COLORS[hashCode(id) % COLORS.length]! }
+	return { id, name, colorKey: resolveColorKey(id) }
 }
 
 /**

@@ -59,6 +59,10 @@ const screenshareShapeProps = {
 	// /uploads URL of the final frame, stamped by the sharer when the share
 	// ends; optional so live shares and existing rooms need no migration.
 	stillUrl: T.string.optional(),
+	// Hex of the sharer's identity colour, stamped at creation so every viewer
+	// sees the same owner-coloured border; optional so existing tiles need no
+	// migration (border falls back to the neutral rule colour).
+	ownerColor: T.string.optional(),
 }
 
 export const schema = createTLSchema({

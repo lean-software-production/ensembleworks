@@ -92,6 +92,9 @@ export async function startScreenShare(editor: Editor): Promise<void> {
 				room.localParticipant.name || room.localParticipant.identity,
 				mediaTrack.label
 			),
+			// The sharer's identity colour (the same hex as their cursor/ring),
+			// captured here so it's synced to every viewer's tile border.
+			ownerColor: editor.user.getColor(),
 		},
 	})
 	editor.setSelectedShapes([shapeId])
