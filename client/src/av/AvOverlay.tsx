@@ -14,8 +14,9 @@
  */
 import { LocalTrack, RemoteTrack, Track } from 'livekit-client'
 import { useEffect, useRef, useState } from 'react'
-import { stopEventPropagation, useEditor, useValue } from 'tldraw'
-import { getRoomId } from '../identity'
+import { DefaultColorStyle, stopEventPropagation, useEditor, useValue } from 'tldraw'
+import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
+import { getRoomId, setUserColor } from '../identity'
 import { updateScreenShareSubscriptions } from '../screenshare/subscriptions'
 import { wm } from '../theme'
 import { DEFAULT_SPATIAL_SETTINGS, distance, gainForDistance } from './spatial'
@@ -643,6 +644,7 @@ function ParticipantRow(props: {
 				padding: 3,
 			}}
 		>
+			<ColorDot color={participant.color} isLocal={participant.isLocal} />
 			<button
 				type="button"
 				disabled={participant.isLocal}
@@ -663,15 +665,6 @@ function ParticipantRow(props: {
 					cursor: participant.isLocal ? 'default' : 'pointer',
 				}}
 			>
-				<span
-					style={{
-						width: 8,
-						height: 8,
-						borderRadius: '50%',
-						background: participant.color,
-						flex: '0 0 auto',
-					}}
-				/>
 				<span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
 					{participant.name}{participant.isLocal ? ' (you)' : ''}
 				</span>
@@ -719,6 +712,90 @@ function ParticipantRow(props: {
 				>
 					{props.kicking ? 'Kicking' : 'Kick'}
 				</button>
+			)}
+		</div>
+	)
+}
+
+// The roster colour dot. For remote users it's a static swatch. For the local
+// user it's a button that opens a picker of the identity palette — one control
+// that governs the user's whole colour identity (cursor, ring, roster dot, new
+// stickies, next-drawn shapes, and future screenshare borders). Lives on the
+// roster (not the faces rail) so it's reachable even with the camera off.
+function ColorDot({ color, isLocal }: { color: string; isLocal: boolean }) {
+	const editor = useEditor()
+	const [open, setOpen] = useState(false)
+
+	const dotStyle: React.CSSProperties = {
+		width: 8,
+		height: 8,
+		borderRadius: '50%',
+		background: color,
+		flex: '0 0 auto',
+	}
+
+	if (!isLocal) return <span style={dotStyle} />
+
+	const pick = (key: IdentityColor) => {
+		setUserColor(key)
+		const hex = hexForColor(key, editor.user.getIsDarkMode())
+		editor.user.updateUserPreferences({ color: hex })
+		editor.setStyleForNextShapes(DefaultColorStyle, key)
+		setOpen(false)
+	}
+
+	return (
+		<div style={{ position: 'relative', flex: '0 0 auto', display: 'flex' }}>
+			<button
+				type="button"
+				onClick={() => setOpen((v) => !v)}
+				title="Change your colour"
+				style={{
+					...dotStyle,
+					border: `1px solid ${wm.rule}`,
+					padding: 0,
+					cursor: 'pointer',
+				}}
+			/>
+			{open && (
+				<div
+					style={{
+						position: 'absolute',
+						top: 14,
+						left: 0,
+						zIndex: 10,
+						display: 'grid',
+						gridTemplateColumns: 'repeat(5, 16px)',
+						gap: 4,
+						padding: 6,
+						background: wm.panel,
+						border: `1px solid ${wm.rule}`,
+						borderRadius: 4,
+						boxShadow: wm.shadowPaper,
+					}}
+				>
+					{IDENTITY_COLORS.map((key) => {
+						const hex = hexForColor(key, editor.user.getIsDarkMode())
+						const selected = hex.toLowerCase() === color.toLowerCase()
+						return (
+							<button
+								key={key}
+								type="button"
+								onClick={() => pick(key)}
+								title={key}
+								style={{
+									width: 16,
+									height: 16,
+									borderRadius: '50%',
+									background: hex,
+									border: selected ? `2px solid ${wm.ink}` : `1px solid ${wm.rule}`,
+									padding: 0,
+									cursor: 'pointer',
+								}}
+							/>
+						)
+					})}
+				</div>
 			)}
 		</div>
 	)
