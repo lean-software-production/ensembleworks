@@ -121,6 +121,14 @@ function sanitizeId(id: string): string | null {
 	return /^[a-zA-Z0-9_-]{1,64}$/.test(id) ? id : null
 }
 
+// Uploaded asset ids may carry a file extension — the client assetStore keeps
+// dots from the original filename ("<uniqueId>-photo.png") — but must remain
+// one safe path segment: no leading dot (blocks ".", ".." and dotfiles), no
+// separators. Room ids keep the stricter sanitizeId above.
+function sanitizeAssetId(id: string): string | null {
+	return /^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,63}$/.test(id) ? id : null
+}
+
 // Recover plain text from a tldraw richText doc (the ProseMirror JSON that
 // toRichText produces). Top-level paragraphs join with newlines; text nodes
 // within a paragraph concatenate. The inverse of toRichText, server-side and
@@ -1189,14 +1197,14 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	})
 
 	app.put('/uploads/:id', express.raw({ type: '*/*', limit: '100mb' }), async (req, res) => {
-		const id = sanitizeId(req.params.id)
+		const id = sanitizeAssetId(req.params.id)
 		if (!id) return void res.status(400).json({ error: 'bad asset id' })
 		await writeFile(path.join(uploadsDir, id), req.body)
 		res.json({ ok: true })
 	})
 
 	app.get('/uploads/:id', async (req, res) => {
-		const id = sanitizeId(req.params.id)
+		const id = sanitizeAssetId(req.params.id)
 		if (!id) return void res.status(400).json({ error: 'bad asset id' })
 		try {
 			res.send(await readFile(path.join(uploadsDir, id)))
