@@ -59,7 +59,7 @@ export function AvOverlay() {
 	const color = useValue('userColor', () => editor.user.getColor(), [editor])
 	const lk = useLiveKitRoom(getRoomId(), identity, name)
 	const pulse = useSessionPulse(getRoomId(), identity)
-	const [standupMode, setStandupMode] = useState(false)
+	const [standupMode, setStandupMode] = useState(true)
 	const [transcriptOpen, setTranscriptOpen] = useState(false)
 	const [kickError, setKickError] = useState<string | null>(null)
 	const [kickingId, setKickingId] = useState<string | null>(null)
