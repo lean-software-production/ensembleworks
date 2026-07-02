@@ -63,7 +63,9 @@ Hook (used from the toolbar/UI layer, with the LiveKit `Room` from
   4. Create the shape (below) at the sharer's viewport center with the
      measured aspect.
 - Listens for the track's `ended` event (browser "Stop sharing" bar) →
-  unpublish + delete the shape.
+  unpublish, but KEEP the tile on the canvas as a frozen-last-frame tombstone
+  (an annotatable artifact of what was shown). Deleting the tile is how a
+  share is removed.
 - Listens for track dimension changes (source window resized) → update the
   shape's `aspect` prop, keeping `w` fixed and adjusting `h`.
 - If the shape is deleted on the canvas (by anyone) while the share is live,
@@ -90,8 +92,15 @@ Type `screenshare`, cloned structurally from `NekoShapeUtil`:
   delivers it. Iterate all publications by name; never use the
   source-keyed single-screen-share getter.
 - **States:** *connecting* (shape exists, track not yet attached), *live*,
-  *ended* (track unpublished or participant left → dimmed placeholder overlay;
-  the tombstone shape persists until someone deletes it).
+  *ended* (track unpublished or participant left). Non-live tiles show a
+  frozen still of the last frame that viewer saw (captured client-side when
+  the track detaches), with a "share ended"/"paused" badge; viewers who never
+  saw the stream get a text placeholder. The tombstone persists until someone
+  deletes it.
+- **Title:** baked into the synced props at share time as
+  `<sharer name> · <window title>` (falling back to "screen share" when the
+  browser's track label is an opaque id), so tombstones still say whose
+  window they were.
 - Registered in `client/src/App.tsx` `customShapeUtils` **and**
   `server/src/schema.ts` (both are required; missing the server entry breaks
   sync validation).

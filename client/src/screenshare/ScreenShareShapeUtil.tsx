@@ -11,7 +11,7 @@
  * so the tile always has the window's true proportions.
  */
 
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
@@ -88,6 +88,16 @@ export function propsForAspect(w: number, aspect: number): { h: number; aspect: 
 export function titleFromTrackLabel(label: string): string {
 	if (!label || /^(screen|window|web-contents-media-stream):/i.test(label)) return 'screen share'
 	return label
+}
+
+/**
+ * Tile title: who is sharing + what they're sharing. Baked into the synced
+ * props at share time (not resolved from the room at render time) so a
+ * tombstone tile still says whose window it was after the sharer leaves.
+ */
+export function shareTitle(sharerName: string, trackLabel: string): string {
+	const who = sharerName.trim() || 'someone'
+	return `${who} · ${titleFromTrackLabel(trackLabel)}`
 }
 
 // ── Shape ────────────────────────────────────────────────────────────────────
@@ -175,6 +185,11 @@ function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
 	// don't change the track never re-attach the video element.
 	const track = state.kind === 'live' ? state.track : null
 	const videoRef = useRef<HTMLDivElement>(null)
+	// Still of the last frame this viewer saw, captured as the track detaches.
+	// Shown while the tile is not live: a stopped share stays on the canvas as
+	// an annotatable artifact instead of a blank placeholder. Per-viewer and
+	// in-memory only — someone who never saw the stream gets the text fallback.
+	const [lastFrame, setLastFrame] = useState<string | null>(null)
 
 	useEffect(() => {
 		const el = videoRef.current
@@ -193,6 +208,19 @@ function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
 		})
 		el.appendChild(video)
 		return () => {
+			// Freeze the final frame before the element goes away (the video
+			// still holds its last decoded frame at detach time).
+			if (video.videoWidth > 0) {
+				try {
+					const canvas = document.createElement('canvas')
+					canvas.width = video.videoWidth
+					canvas.height = video.videoHeight
+					canvas.getContext('2d')?.drawImage(video, 0, 0)
+					setLastFrame(canvas.toDataURL('image/jpeg', 0.7))
+				} catch {
+					/* draw failed — the text placeholder covers it */
+				}
+			}
 			track.detach(video)
 			video.remove()
 		}
@@ -264,24 +292,59 @@ function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
 				</span>
 			</div>
 			<div ref={videoRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
-				{state.kind !== 'live' && (
-					<div
+				{state.kind !== 'live' && lastFrame && (
+					<img
+						src={lastFrame}
+						alt="last shared frame"
 						style={{
 							position: 'absolute',
 							inset: 0,
-							display: 'grid',
-							placeItems: 'center',
-							color: wm.inkMuted,
-							fontFamily: wm.mono,
-							fontSize: 12,
-							background: '#111',
+							width: '100%',
+							height: '100%',
+							objectFit: 'contain',
+							background: '#000',
+							// Ended tiles read as a still, not a live feed.
+							filter: state.kind === 'ended' ? 'grayscale(0.5) brightness(0.8)' : undefined,
 						}}
-					>
-						{state.kind === 'connecting'
-							? 'connecting…'
-							: 'share ended — safe to delete this tile'}
-					</div>
+					/>
 				)}
+				{state.kind !== 'live' &&
+					(lastFrame ? (
+						<span
+							style={{
+								position: 'absolute',
+								top: 8,
+								left: 8,
+								padding: '2px 8px',
+								borderRadius: 3,
+								background: 'rgba(17,17,17,0.75)',
+								color: wm.cream,
+								fontFamily: wm.mono,
+								fontSize: 10,
+								textTransform: 'uppercase',
+								letterSpacing: 0.8,
+							}}
+						>
+							{state.kind === 'ended' ? 'share ended' : 'paused'}
+						</span>
+					) : (
+						<div
+							style={{
+								position: 'absolute',
+								inset: 0,
+								display: 'grid',
+								placeItems: 'center',
+								color: wm.inkMuted,
+								fontFamily: wm.mono,
+								fontSize: 12,
+								background: '#111',
+							}}
+						>
+							{state.kind === 'connecting'
+								? 'connecting…'
+								: 'share ended — safe to delete this tile'}
+						</div>
+					))}
 			</div>
 		</HTMLContainer>
 	)

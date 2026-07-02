@@ -59,3 +59,8 @@ function videoRatio(w: number, h: number) {
 }
 
 console.log('ok - neko url composition + aspect lock')
+
+console.log("ALL NEKO TESTS PASSED")
+// The tldraw import keeps the node event loop alive after assertions finish —
+// exit explicitly so `npx tsx` runs terminate.
+process.exit(0)

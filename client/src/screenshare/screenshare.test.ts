@@ -6,6 +6,7 @@ import {
 	SCREENSHARE_HEADER_HEIGHT,
 	lockScreenShareAspect,
 	propsForAspect,
+	shareTitle,
 	titleFromTrackLabel,
 } from './ScreenShareShapeUtil'
 
@@ -45,4 +46,15 @@ assert.equal(titleFromTrackLabel('web-contents-media-stream://5:1'), 'screen sha
 assert.equal(titleFromTrackLabel(''), 'screen share')
 assert.equal(titleFromTrackLabel('main.ts — my-editor'), 'main.ts — my-editor')
 
+// Tile titles carry who is sharing and what: "<name> · <window>". The window
+// part reuses the label cleanup above; a blank sharer name falls back.
+assert.equal(shareTitle('David', 'main.ts — my-editor'), 'David · main.ts — my-editor')
+assert.equal(shareTitle('David', 'screen:0:0'), 'David · screen share')
+assert.equal(shareTitle('  ', 'window:1:0'), 'someone · screen share')
+
 console.log('ALL SCREENSHARE HELPER TESTS PASSED')
+
+// The helpers file transitively imports livekit-client (via the shape's store
+// import), which keeps the node event loop alive after the assertions finish —
+// exit explicitly so `npx tsx` runs terminate.
+process.exit(0)

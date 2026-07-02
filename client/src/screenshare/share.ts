@@ -1,9 +1,11 @@
 /**
  * Local screen-share lifecycle: capture → publish → shape, and teardown from
- * whichever end dies first (browser "Stop sharing" bar, tile deletion by
- * anyone, unpublish). Module-level rather than a hook so the toolbar tool —
- * a closure in uiOverrides with only the editor in hand — can call it; the
- * LiveKit room arrives via the screenshare store.
+ * whichever end dies first. Stopping the CAPTURE (browser "Stop sharing" bar)
+ * ends the stream but keeps the tile on the canvas as a frozen-last-frame
+ * tombstone; deleting the TILE (by anyone, locally or over sync) stops the
+ * capture too — the tile is the share's handle. Module-level rather than a
+ * hook so the toolbar tool — a closure in uiOverrides with only the editor in
+ * hand — can call it; the LiveKit room arrives via the screenshare store.
  *
  * Each call to startScreenShare is one independent share: one browser picker
  * (one surface — the browser's consent boundary, by design), one named track
@@ -12,11 +14,7 @@
  */
 import { ScreenSharePresets, Track, VideoPreset } from 'livekit-client'
 import { Editor, TLShapeId, createShapeId } from 'tldraw'
-import {
-	SCREENSHARE_DEFAULT_W,
-	propsForAspect,
-	titleFromTrackLabel,
-} from './ScreenShareShapeUtil'
+import { SCREENSHARE_DEFAULT_W, propsForAspect, shareTitle } from './ScreenShareShapeUtil'
 import { getScreenShareRoom } from './store'
 
 // Capped top layer: 1080p / 15 fps / 2.5 Mbps — screen content favours
@@ -90,7 +88,10 @@ export async function startScreenShare(editor: Editor): Promise<void> {
 			h: sized.h,
 			participantId: room.localParticipant.identity,
 			trackName,
-			title: titleFromTrackLabel(mediaTrack.label),
+			title: shareTitle(
+				room.localParticipant.name || room.localParticipant.identity,
+				mediaTrack.label
+			),
 			aspect: sized.aspect,
 		},
 	})
@@ -117,19 +118,21 @@ export async function startScreenShare(editor: Editor): Promise<void> {
 
 	active.set(trackName, { shapeId, mediaTrack, pollTimer })
 	// Browser "Stop sharing" bar (or the OS revoking capture) → tear down.
-	mediaTrack.addEventListener('ended', () => stopScreenShare(editor, trackName))
+	mediaTrack.addEventListener('ended', () => stopScreenShare(trackName))
 	installDeleteHandler(editor)
 }
 
-export function stopScreenShare(editor: Editor, trackName: string): void {
+export function stopScreenShare(trackName: string): void {
 	const share = active.get(trackName)
 	if (!share) return
 	active.delete(trackName)
 	clearInterval(share.pollTimer)
 	getScreenShareRoom()?.localParticipant.unpublishTrack(share.mediaTrack, true)
 	share.mediaTrack.stop()
-	// Absent when teardown started FROM a deletion (delete handler below).
-	if (editor.getShape(share.shapeId)) editor.deleteShape(share.shapeId)
+	// Deliberately NOT deleting the shape: a stopped share leaves its tile on
+	// the canvas as a frozen-last-frame tombstone (see ScreenShareComponent).
+	// Removing the tile is the user's call — and doing so stops the share via
+	// the delete handler below.
 }
 
 // Deleting a live share's tile — locally or by a teammate over sync — stops
@@ -140,6 +143,6 @@ function installDeleteHandler(editor: Editor) {
 	editor.sideEffects.registerAfterDeleteHandler('shape', (shape) => {
 		if (shape.type !== 'screenshare') return
 		const trackName = (shape.props as { trackName: string }).trackName
-		if (active.has(trackName)) stopScreenShare(editor, trackName)
+		if (active.has(trackName)) stopScreenShare(trackName)
 	})
 }
