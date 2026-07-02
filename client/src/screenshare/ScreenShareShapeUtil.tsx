@@ -230,7 +230,9 @@ function ScreenShareComponent({ shape }: { shape: ScreenShareShape }) {
 				borderRadius: 4,
 				overflow: 'hidden',
 				background: '#000',
-				border: `2px solid ${ownerColor || wm.ruleStrong}`,
+				// Owner-coloured tiles get a chunky, unmistakable border; legacy
+				// tiles with no ownerColor keep the thin neutral rule.
+				border: ownerColor ? `4px solid ${ownerColor}` : `1px solid ${wm.ruleStrong}`,
 				boxShadow: wm.shadowPaper,
 				// Display-only tile: all interaction is tldraw's (move/resize/
 				// annotate). No edit mode, unlike neko — there's nothing to drive.
