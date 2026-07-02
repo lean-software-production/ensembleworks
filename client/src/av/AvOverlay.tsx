@@ -741,6 +741,18 @@ function ColorDot({ color, isLocal }: { color: string; isLocal: boolean }) {
 		const hex = hexForColor(key, editor.user.getIsDarkMode())
 		editor.user.updateUserPreferences({ color: hex })
 		editor.setStyleForNextShapes(DefaultColorStyle, key)
+		// Re-tint any windows I'm already sharing. ownerColor is a synced prop,
+		// so updating it here recolours the tile for every viewer, not just me.
+		const myId = editor.user.getId()
+		for (const record of editor.store.allRecords()) {
+			if (
+				record.typeName === 'shape' &&
+				record.type === 'screenshare' &&
+				record.props.participantId === myId
+			) {
+				editor.updateShape({ id: record.id, type: 'screenshare', props: { ownerColor: hex } })
+			}
+		}
 		setOpen(false)
 	}
 
