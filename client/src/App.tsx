@@ -1,6 +1,7 @@
 import { useSync } from '@tldraw/sync'
 import { useMemo, useState } from 'react'
 import {
+	DefaultColorStyle,
 	Editor,
 	Tldraw,
 	defaultBindingUtils,
@@ -11,6 +12,7 @@ import {
 import 'tldraw/tldraw.css'
 import './theme.css'
 import { assetStore } from './assetStore'
+import { hexForColor } from './colors'
 import { getIdentity, getRoomId } from './identity'
 import { IframeShapeUtil } from './iframe/IframeShapeUtil'
 import { PasteUrlHandler } from './iframe/PasteUrlHandler'
@@ -54,7 +56,7 @@ setUserPreferences({
 	...getUserPreferences(),
 	id: identity.id,
 	name: identity.name,
-	color: identity.color,
+	color: hexForColor(identity.colorKey, false),
 })
 
 function wsBase(): string {
@@ -79,7 +81,15 @@ export function App() {
 			// Debug/e2e hook: headless probes (docs/headless-browser.md) drive
 			// the canvas through this. Harmless in production.
 			;(window as unknown as { __ewEditor?: Editor }).__ewEditor = editor
-			editor.user.updateUserPreferences({ name: identity.name, color: identity.color })
+			const isDark = editor.user.getIsDarkMode()
+			editor.user.updateUserPreferences({
+				name: identity.name,
+				color: hexForColor(identity.colorKey, isDark),
+			})
+			// New stickies/geo/draw/text the user creates start in their colour.
+			// It's a default, not a lock — tldraw's style panel still overrides
+			// per shape. Re-applied when they change colour (AvOverlay picker).
+			editor.setStyleForNextShapes(DefaultColorStyle, identity.colorKey)
 
 			// Terminals are easy to delete by accident (one stray Backspace on a
 			// selected shape). Veto local deletions unless the user confirms. One
