@@ -327,11 +327,14 @@ Each line is a complete record (greppable, crash-safe):
 ```
 
 `identity` = the speaker's canvas presence userId. `page`, `cursor`, and
-`frame` are the **spatial stamp** the server attaches at append time when
-the speaker has a browser tab open (null otherwise). `frame` is the frame
+`frame` are the **spatial stamp** — computed by the speaker's *own browser*
+from the CRDT replica it already holds and published on its presence record
+(`meta.stamp`); the server copies it onto the entry at append time when the
+speaker has a browser tab open (null otherwise). `frame` is the frame
 containing (dist 0) or nearest to the point the speaker was at — that
 *place* is what turns a flat transcript into minutes-with-places and
-threaded conversation maps.
+threaded conversation maps. (Computing the stamp client-side keeps the
+frame geometry off the server's cursor-serving event loop — see §6.6.)
 
 ### 4.3 Uploaded assets
 
@@ -398,12 +401,15 @@ holds the `terminal` shape with its `sessionId` reference.
    speaker so order is preserved), get text.
 4. `POST /api/transcript` with the speaker's media identity (== canvas
    userId) + name + text.
-5. The canvas server looks up the speaker's **live presence** (cursor +
-   page + viewport). It locates them by their **mouse cursor when it's
-   inside a frame** (they're pointing at something), **otherwise by their
-   viewport centre** (what they're looking at), and records that same
-   point so `at` and `frame` always agree. It finds the frame containing
-   (dist 0) or nearest to that point.
+5. The canvas server looks up the speaker's **live presence** and copies
+   the **spatial stamp their browser already computed** there (`meta.stamp`
+   = `{at, frame}`). The client is what locates them — by their **mouse
+   cursor when it's inside a frame** (they're pointing at something),
+   **otherwise by their viewport centre** (what they're looking at) —
+   recording that same point so `at` and `frame` always agree, and the
+   frame containing (dist 0) or nearest to it. The server does **no
+   geometry** on this path; a connected tab that published no stamp (an
+   old bundle) yields a null cursor/frame, self-healing on reload.
 6. Appends one JSONL line: speaker + text + page + cursor + frame.
 7. A minutes/conversation-map agent polls `/api/transcript?since=`, gets
    the new line, and maintains its artifacts.
@@ -431,12 +437,16 @@ service. One endpoint, both planes, by identity.
 ### 5.5 Proximity-sorted reads
 
 `/api/frames` and `/api/frame` pick the **most-recently-active cursor** on
-the relevant page and sort that page's items by distance to it (nearest
-first), each tagged with a rounded `dist`. Items on other pages trail in
-document order. The response carries a `sortedBy` block (who, which page,
-cursor) so callers know how to interpret the order — or `null` when no
-tab is connected and document order was used. This is a read-side
-overlay on ephemeral presence, never stored.
+the relevant page and sort that page's items by distance to the point that
+teammate is at — their client-computed **stamp point** (`meta.stamp.at`,
+what they're pointing at / looking at) when present, else their raw cursor.
+Nearest first, each tagged with a rounded `dist`; items on other pages
+trail in document order. The response carries a `sortedBy` block (who,
+which page, the point ranked by) so callers know how to interpret the
+order — or `null` when no tab is connected and document order was used.
+This is a read-side overlay on ephemeral presence, never stored. (Only the
+*sort point* comes from the client; the server still walks the page to
+build the response — see §6.6.)
 
 ---
 
@@ -511,8 +521,8 @@ OOM-killed), not host RAM.
 | Dimension | Most sensitive component |
 |---|---|
 | Network latency | 1. canvas cursor sync · 2. terminal echo · (media off-VM) |
-| CPU (VM) | 1. canvas sync server (proximity/CRDT) · 2. tmux rendering · 3. scribe VAD · (STT offloaded) |
-| CPU (browser) | 1. video encode/decode · 2. tldraw render · 3. terminal-emulator render |
+| CPU (VM) | 1. canvas sync server (read-endpoint proximity/CRDT) · 2. tmux rendering · 3. scribe VAD · (STT + transcript-stamp geometry offloaded) |
+| CPU (browser) | 1. video encode/decode · 2. tldraw render (incl. own spatial-stamp compute) · 3. terminal-emulator render |
 | RAM (VM) | 1. canvas sync server (all rooms in memory) · 2. tmux scrollback · 3. scribe audio buffers |
 | Bandwidth (VM) | 1. terminal output fan-out · 2. scribe audio uplink to STT · 3. canvas sync cursors/edits · (media ≈ 0) |
 | Bandwidth (browser) | 1. media (video) · 2. terminal downlink · 3. canvas sync |
@@ -537,12 +547,18 @@ full RTT to the box for both.
 
 **CPU — the non-obvious cost is proximity math.** The canvas sync server
 is the main VM CPU consumer, and it scales with **canvas size × access
-frequency**, not user count directly. The proximity/stamp logic (parent
-walks up to 50 deep, `frameAtPoint` iterating every frame on a page,
-`byProximity` sorts) runs synchronously on *every* `/api/frames`,
-`/api/frame`, and `POST /api/transcript` call (§5.2, §5.5) — a steady-
-state drain that competes with the latency-critical cursor path for the
-same event loop. CRDT merge itself is comparatively light. tmux
+frequency**, not user count directly. The remaining proximity logic
+(parent walks up to 50 deep, `byProximity` sorts) runs synchronously on
+the read endpoints `/api/frames` and `/api/frame` (§5.5) — a steady-state
+drain that competes with the latency-critical cursor path for the same
+event loop. Note what is **no longer** on this path: the frame-matching
+geometry (`frameAtPoint`/viewport-centre) has moved to the browsers, which
+each compute their own spatial stamp from the CRDT replica they already
+hold and publish it on presence (§4.2, §5.2). So `POST /api/transcript`
+now does *zero* document work — a per-utterance snapshot walk that used to
+compete with cursor sync is gone — and the read endpoints consume a
+client-provided sort point rather than recomputing it. CRDT merge itself
+is comparatively light. tmux
 rendering (escape parsing + grid render, proportional to output volume;
 a noisy build is the spike) is real CPU but lives in the tmux processes.
 The scribe is *light* on the VM because **STT is offloaded** — VAD is
@@ -577,12 +593,17 @@ constraint there, latency/scheduling is. On the **browser**, media
 
 **Two scaling cliffs for alternative implementations:**
 
-1. **Canvas size × read frequency** on sync-server CPU. The
-   proximity/stamp math is O(shapes)–O(shapes×frames) per read/transcript-
-   append and runs synchronously in the cursor-serving process. As the
-canvas grows and agent/scribe activity rises it competes with cursor
-sync. A precomputed spatial index, or moving reads off the
-   cursor-serving process, changes the scaling.
+1. **Canvas size × read frequency** on sync-server CPU. The remaining
+   proximity math is O(shapes)–O(shapes×frames) per `/api/frames` /
+   `/api/frame` read and runs synchronously in the cursor-serving process;
+   as the canvas grows and agent activity rises it competes with cursor
+sync. This cliff is now **half-closed**: the per-utterance
+   `POST /api/transcript` walk that used to sit on it has been eliminated
+   by computing the spatial stamp in each browser and publishing it on
+   presence (§4.2, §5.2), and the reads now consume a client-provided sort
+   point. What's left is the response-building walk on the two read
+   endpoints; a precomputed spatial index, or moving reads off the
+   cursor-serving process, would close the rest.
 2. **Terminal fan-out × viewers** on VM bandwidth. Fan-out is O(viewers)
    per terminal per output burst — for a large mob all watching one busy
    terminal, that's the bandwidth (and some CPU) cost that grows with
