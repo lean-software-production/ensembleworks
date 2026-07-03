@@ -58,7 +58,7 @@ export default defineConfig({
 		proxy: {
 			'/sync': { target: 'ws://localhost:8788', ws: true },
 			'/uploads': 'http://localhost:8788',
-			'/api': 'http://localhost:8788',
+			'/api': { target: 'http://localhost:8788', ws: true },
 			'/term': { target: 'ws://localhost:8789', ws: true },
 		},
 	},

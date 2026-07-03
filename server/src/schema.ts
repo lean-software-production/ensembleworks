@@ -15,6 +15,9 @@ const terminalShapeProps = {
 	// Optional status light set via POST /api/terminal-status; optional so
 	// existing rooms need no migration.
 	status: T.string.optional(),
+	// Remote gateway id (spike); optional so existing rooms need no migration.
+	// Keep in sync with client/src/terminal/TerminalShapeUtil.tsx
+	gateway: T.string.optional(),
 }
 
 // Keep in sync with client/src/iframe/IframeShapeUtil.tsx
