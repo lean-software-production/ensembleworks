@@ -8,3 +8,5 @@ nohup.out
 .env
 *.env
 .DS_Store
+gateway-go/termgw-feature/dist/
+gateway-go/termgw-feature/tmux.conf

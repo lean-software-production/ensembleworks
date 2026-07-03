@@ -1,0 +1,10 @@
+{
+	"id": "termgw",
+	"version": "0.1.0",
+	"name": "EnsembleWorks terminal gateway connector",
+	"description": "Hosts canvas terminal shapes in this devcontainer via the EnsembleWorks relay.",
+	"postStartCommand": "nohup /usr/local/share/termgw/termgw-supervisor.sh >>/tmp/termgw.log 2>&1 & disown || true",
+	"containerEnv": {
+		"TMUX_CONF": "/usr/local/share/termgw/tmux.conf"
+	}
+}

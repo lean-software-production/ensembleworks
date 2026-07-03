@@ -1,0 +1,13 @@
+{
+	"name": "termgw-example",
+	"image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+	"features": {
+		"../termgw-feature": {}
+	},
+	"remoteEnv": {
+		"CANVAS_URL": "${localEnv:CANVAS_URL}",
+		"GATEWAY_LABEL": "${localEnv:GATEWAY_LABEL}",
+		"CF_ACCESS_CLIENT_ID": "${localEnv:CF_ACCESS_CLIENT_ID}",
+		"CF_ACCESS_CLIENT_SECRET": "${localEnv:CF_ACCESS_CLIENT_SECRET}"
+	}
+}
