@@ -109,10 +109,13 @@ async function main() {
 		console.log('ok: transcript since/limit windowing')
 	}
 
-	// 4. Cursor stamping: a connected speaker's utterance carries their cursor
-	// and the frame it is inside. The scribe posts the raw LiveKit identity
-	// ("speaker-1") while tldraw presence stores the prefixed userId
-	// ("user:speaker-1"); the stamp must match across that prefix.
+	// 4. Spatial stamping: the speaker's browser computes {at, frame} from its
+	// own CRDT replica and publishes it as presence.meta.stamp; the server
+	// echoes it onto the transcript entry verbatim. The stamp's `at` is
+	// deliberately offset from the raw cursor to prove no server geometry runs.
+	// The scribe posts the raw LiveKit identity ("speaker-1") while tldraw
+	// presence stores the prefixed userId ("user:speaker-1"); the stamp must
+	// match across that prefix.
 	{
 		const ws = await new Promise<WebSocket>((resolve, reject) => {
 			const s = new WebSocket(
@@ -133,7 +136,6 @@ async function main() {
 			})
 		)
 		await connected
-		// Cursor at page (1200, 300) — inside the drafting frame (1000..1800 × 0..600).
 		ws.send(
 			JSON.stringify({
 				type: 'push', clock: 1,
@@ -141,7 +143,8 @@ async function main() {
 					userId: 'user:speaker-1', userName: 'Speaker One', color: '#FF0000', currentPageId: 'page:page',
 					cursor: { x: 1200, y: 300, type: 'default', rotation: 0 },
 					camera: { x: 0, y: 0, z: 1 }, selectedShapeIds: [], screenBounds: { x: 0, y: 0, w: 1, h: 1 },
-					lastActivityTimestamp: 10, followingUserId: null, brush: null, scribbles: [], chatMessage: '', meta: {},
+					lastActivityTimestamp: 10, followingUserId: null, brush: null, scribbles: [], chatMessage: '',
+					meta: { stamp: { at: { x: 1201, y: 301 }, frame: { name: 'Drafting — crew-a', dist: 0 } } },
 				}],
 			})
 		)
@@ -154,19 +157,18 @@ async function main() {
 			text: 'I think the spec is too loose here',
 		})
 		assert.equal(res.status, 200)
-		assert.deepEqual(res.body.entry.cursor, { x: 1200, y: 300 }, 'cursor is stamped')
+		assert.deepEqual(res.body.entry.cursor, { x: 1201, y: 301 }, 'stamp.at echoed, not the raw cursor')
 		assert.equal(res.body.entry.page, 'page:page')
-		assert.equal(res.body.entry.frame.name, 'Drafting — crew-a', 'frame containing the cursor')
-		assert.equal(res.body.entry.frame.dist, 0, 'inside the frame ⇒ dist 0')
+		assert.equal(res.body.entry.frame.name, 'Drafting — crew-a', 'stamp.frame echoed')
+		assert.equal(res.body.entry.frame.dist, 0)
 		ws.close()
 		await new Promise((r) => setTimeout(r, 100))
-		console.log('ok: transcript stamps speaker cursor + containing frame')
+		console.log('ok: transcript echoes the client-computed presence stamp')
 	}
 
-	// 4b. Viewport fallback: a talking speaker's cursor is parked outside every
-	// frame, so the stamp uses the frame at their viewport centre (what they are
-	// looking at) instead. Camera/screenBounds put that centre at page (1400,300)
-	// — inside the drafting frame — while the cursor sits far below it.
+	// 4b. Stampless presence (a tab still on a pre-stamp bundle): page is
+	// stamped from presence, but cursor/frame are null — same as no tab open.
+	// No server-side geometry fallback by design (spec decision 2).
 	{
 		const ws = await new Promise<WebSocket>((resolve, reject) => {
 			const s = new WebSocket(
@@ -192,11 +194,8 @@ async function main() {
 				type: 'push', clock: 1,
 				presence: ['put', {
 					userId: 'user:speaker-2', userName: 'Speaker Two', color: '#00FF00', currentPageId: 'page:page',
-					// Cursor parked far below every frame (dist > 0).
-					cursor: { x: 50, y: 5000, type: 'default', rotation: 0 },
-					// Viewport centre = (w/2/z - camX, h/2/z - camY) = (1400, 300), inside the frame.
-					camera: { x: -1000, y: -200, z: 1 },
-					selectedShapeIds: [], screenBounds: { x: 0, y: 0, w: 800, h: 200 },
+					cursor: { x: 1200, y: 300, type: 'default', rotation: 0 },
+					camera: { x: 0, y: 0, z: 1 }, selectedShapeIds: [], screenBounds: { x: 0, y: 0, w: 800, h: 200 },
 					lastActivityTimestamp: 20, followingUserId: null, brush: null, scribbles: [], chatMessage: '', meta: {},
 				}],
 			})
@@ -210,12 +209,12 @@ async function main() {
 			text: 'I reckon we cut this scope',
 		})
 		assert.equal(res.status, 200)
-		assert.deepEqual(res.body.entry.cursor, { x: 1400, y: 300 }, 'located by viewport centre, not the parked cursor')
-		assert.equal(res.body.entry.frame.name, 'Drafting — crew-a', 'frame at the viewport centre')
-		assert.equal(res.body.entry.frame.dist, 0, 'viewport centre is inside the frame ⇒ dist 0')
+		assert.equal(res.body.entry.page, 'page:page', 'page still stamped from presence')
+		assert.equal(res.body.entry.cursor, null, 'no stamp ⇒ no cursor (no server geometry fallback)')
+		assert.equal(res.body.entry.frame, null, 'no stamp ⇒ no frame')
 		ws.close()
 		await new Promise((r) => setTimeout(r, 100))
-		console.log('ok: transcript falls back to viewport frame when cursor is parked')
+		console.log('ok: stampless presence yields page-only stamp')
 	}
 
 	// 5. Shape create: a geo node inside the frame.

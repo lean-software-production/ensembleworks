@@ -151,6 +151,26 @@ function richTextToPlainText(rich: any): string {
 // best-effort overlay: with nobody connected the endpoints fall back to plain
 // document order.
 
+// The client-computed spatial stamp carried in presence.meta.stamp: the
+// point the speaker is at (their cursor when it's inside a frame, else
+// their viewport centre) and the frame containing/nearest that point —
+// computed by each browser from its own CRDT replica, so the server never
+// walks the document for it. Keep in sync with client/src/presence/stamp.ts.
+export interface SpatialStamp {
+	at: { x: number; y: number }
+	frame: { name: string; dist: number } | null
+}
+
+// Defensive parse of the wire value — never trust presence meta.
+function parseStamp(s: any): SpatialStamp | null {
+	if (!s || typeof s.at?.x !== 'number' || typeof s.at?.y !== 'number') return null
+	const frame =
+		s.frame && typeof s.frame.name === 'string' && typeof s.frame.dist === 'number'
+			? { name: s.frame.name.slice(0, 256), dist: Math.round(s.frame.dist) }
+			: null
+	return { at: { x: Math.round(s.at.x), y: Math.round(s.at.y) }, frame }
+}
+
 export interface CursorRef {
 	userId: string | null
 	userName: string
@@ -162,6 +182,8 @@ export interface CursorRef {
 	camera: { x: number; y: number; z: number } | null
 	screenBounds: { w: number; h: number } | null
 	lastActivityTimestamp: number
+	// Client-computed spatial stamp (null: pre-stamp bundle or non-canvas peer).
+	stamp: SpatialStamp | null
 }
 
 // tldraw presence stores userId as a prefixed TLUserId ("user:abc"), but the
@@ -196,6 +218,7 @@ function getCursorRefs(room: any): CursorRef[] {
 					? { w: p.screenBounds.w, h: p.screenBounds.h }
 					: null,
 			lastActivityTimestamp: p.lastActivityTimestamp ?? 0,
+			stamp: parseStamp(p.meta?.stamp),
 		}))
 }
 
@@ -237,18 +260,6 @@ export function buildParticipants(
 	return [...byUser.values()]
 }
 
-// The page point at the centre of a speaker's viewport — what they're looking
-// at — from their camera + screen size. tldraw screen→page is
-// page = (screen - screenBounds) / z - camera, evaluated at the screen centre.
-function viewportCenter(ref: CursorRef): { x: number; y: number } | null {
-	if (!ref.camera || !ref.screenBounds) return null
-	const z = ref.camera.z || 1
-	return {
-		x: ref.screenBounds.w / 2 / z - ref.camera.x,
-		y: ref.screenBounds.h / 2 / z - ref.camera.y,
-	}
-}
-
 // The most-recently-active cursor, optionally restricted to one page (a cursor
 // on another page can't meaningfully order shapes on this one).
 function pickCursor(refs: CursorRef[], pageId?: string): CursorRef | null {
@@ -283,33 +294,6 @@ function pagePoint(shape: any, byId: Map<string, any>): { x: number; y: number }
 
 function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
 	return Math.hypot(a.x - b.x, a.y - b.y)
-}
-
-// The frame a point is inside of (dist 0), or the nearest one on the same
-// page (distance to the frame's edge). Used to stamp transcript entries with
-// *where* the speaker was — "at the drafting table" — so minutes and the
-// conversation map can segment by place.
-function frameAtPoint(
-	shapes: any[],
-	byId: Map<string, any>,
-	pageId: string,
-	point: { x: number; y: number }
-): { name: string; dist: number } | null {
-	let best: { name: string; dist: number } | null = null
-	for (const f of shapes) {
-		if (f.type !== 'frame' || pageIdOf(f, byId) !== pageId) continue
-		const pt = pagePoint(f, byId)
-		const w = f.props?.w ?? 0
-		const h = f.props?.h ?? 0
-		// Distance from the point to the frame rect (0 when inside).
-		const dx = Math.max(pt.x - point.x, 0, point.x - (pt.x + w))
-		const dy = Math.max(pt.y - point.y, 0, point.y - (pt.y + h))
-		const d = Math.hypot(dx, dy)
-		if (!best || d < best.dist) {
-			best = { name: typeof f.props?.name === 'string' ? f.props.name : '', dist: Math.round(d) }
-		}
-	}
-	return best
 }
 
 // Sort items (each carrying a page-space `pt`) by distance to the cursor,
@@ -625,32 +609,15 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 			return void res.status(400).json({ error: 'text must be non-empty and at most 4000 chars' })
 		}
 
-		// Best-effort spatial stamp: which frame was this speaker at, and at what
-		// point? Their mouse cursor is the strongest signal *when it's actually
-		// inside a frame* (they're pointing at something) — but since the camera
-		// bubble was decoupled from the cursor, a talking speaker's cursor is just
-		// the native tldraw pointer, usually parked off-canvas. So otherwise we
-		// locate them by their viewport centre (what they're looking at), and
-		// record that same point so `at` and `frame` always agree.
+		// Best-effort spatial stamp, computed by the speaker's own browser from
+		// its CRDT replica and published as presence.meta.stamp — the server
+		// just copies the field (client/src/presence/stamp.ts owns the
+		// semantics: cursor-inside-frame wins, else viewport centre). No live
+		// tab, or a pre-stamp bundle, ⇒ unstamped entry. No server-side
+		// geometry fallback by design.
 		const room = getOrCreateRoom(roomId)
 		const want = rawUserId(identity)
 		const ref = getCursorRefs(room).find((r) => rawUserId(r.userId) === want) ?? null
-		let frame: { name: string; dist: number } | null = null
-		let at: { x: number; y: number } | null = null
-		if (ref) {
-			const records = room.getCurrentSnapshot().documents.map((d) => d.state as any)
-			const byId = new Map(records.map((r) => [r.id, r]))
-			const shapes = records.filter((r) => r.typeName === 'shape')
-			const atCursor = frameAtPoint(shapes, byId, ref.currentPageId, ref.cursor)
-			if (atCursor && atCursor.dist === 0) {
-				frame = atCursor
-				at = ref.cursor
-			} else {
-				const view = viewportCenter(ref)
-				at = view ?? ref.cursor
-				frame = frameAtPoint(shapes, byId, ref.currentPageId, at)
-			}
-		}
 
 		const entry = await transcripts.append(roomId, {
 			identity,
@@ -658,8 +625,8 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 			text,
 			t,
 			page: ref?.currentPageId ?? null,
-			cursor: at ? { x: Math.round(at.x), y: Math.round(at.y) } : null,
-			frame,
+			cursor: ref?.stamp?.at ?? null,
+			frame: ref?.stamp?.frame ?? null,
 		})
 		res.json({ ok: true, entry })
 	})
