@@ -167,12 +167,20 @@ func serveOnce(ctx context.Context, cfg Config, target string) error {
 			w.queue <- ctl // the open action itself is the first queue item
 		case "relay-msg", "relay-close":
 			if w, ok := workers[ctl.ChannelID]; ok {
+				sent := true
 				select {
 				case w.queue <- ctl:
 				default: // shed rather than block the shared read loop
+					sent = false
 				}
 				if ctl.Type == "relay-close" {
 					delete(workers, ctl.ChannelID)
+					if !sent {
+						// relay-close was shed: the map delete means the read loop
+						// will never enqueue again, so it is safe to close the queue.
+						// Without this, runChannel blocks on range w.queue forever.
+						close(w.queue)
+					}
 				}
 			}
 		}
