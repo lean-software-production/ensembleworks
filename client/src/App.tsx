@@ -6,6 +6,7 @@ import {
 	Tldraw,
 	defaultBindingUtils,
 	defaultShapeUtils,
+	getDefaultUserPresence,
 	getUserPreferences,
 	setUserPreferences,
 } from 'tldraw'
@@ -14,6 +15,7 @@ import './theme.css'
 import { assetStore } from './assetStore'
 import { hexForColor } from './colors'
 import { getIdentity, getRoomId } from './identity'
+import { computeStamp, type StampRecord } from './presence/stamp'
 import { IframeShapeUtil } from './iframe/IframeShapeUtil'
 import { PasteUrlHandler } from './iframe/PasteUrlHandler'
 import { NEKO_ICON_NAME, NEKO_TOOLBAR_ICON, NekoShapeUtil } from './neko/NekoShapeUtil'
@@ -51,6 +53,14 @@ const COLOR_SCHEME_SEEDED_KEY = 'ensembleworks.colorSchemeSeeded.v2'
 const identity = getIdentity()
 const roomId = getRoomId()
 
+// One reactive shape-record query per store, cached so getUserPresence
+// subscribes only to shape changes (and, via getDefaultUserPresence, our own
+// cursor/camera/page) — never to other peers' presence churn — and so we
+// don't allocate a fresh query on every recompute. computeStamp's parent walk
+// only ever looks up shape parents, so shapes alone are sufficient.
+let shapeQuery: { get: () => unknown[] } | null = null
+let shapeQueryStore: unknown = null
+
 // Keep tldraw presence, the sync connection and LiveKit on one stable ID.
 setUserPreferences({
 	...getUserPreferences(),
@@ -73,6 +83,28 @@ export function App() {
 		bindingUtils: useMemo(() => [...defaultBindingUtils], []),
 		onCustomMessageReceived(message) {
 			if (message?.type === 'kicked') setWasKicked(true)
+		},
+		// Publish the client-computed spatial stamp (client/src/presence/stamp.ts)
+		// on our presence record so the server just reads a field (transcript
+		// stamping, proximity-ordered reads). Reactive: recomputes when our own
+		// cursor/camera/page change or when any shape changes — scoped to shape
+		// records (see shapeQuery above) so other peers' cursor movement doesn't
+		// trigger it.
+		getUserPresence(store, user) {
+			const defaults = getDefaultUserPresence(store, user)
+			if (!defaults) return null
+			// Rebuild the cached query only if the store instance changed (remount).
+			if (shapeQueryStore !== store) {
+				shapeQueryStore = store
+				shapeQuery = store.query.records('shape')
+			}
+			const stamp = computeStamp(shapeQuery!.get() as unknown as StampRecord[], {
+				currentPageId: defaults.currentPageId,
+				cursor: defaults.cursor,
+				camera: defaults.camera ?? null,
+				screenBounds: defaults.screenBounds ?? null,
+			})
+			return { ...defaults, meta: { stamp } }
 		},
 	})
 

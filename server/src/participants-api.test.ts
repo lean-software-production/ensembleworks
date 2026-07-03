@@ -17,6 +17,7 @@ function ref(over: Partial<CursorRef> & { userId: string; currentPageId: string 
 		camera: null,
 		screenBounds: null,
 		lastActivityTimestamp: 0,
+		stamp: null,
 		...over,
 	}
 }

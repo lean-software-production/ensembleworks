@@ -294,6 +294,49 @@ async function main() {
 			typeof sorted.body.notes[0].dist === 'number',
 			'sorted notes carry a numeric dist'
 		)
+
+		// Same tab publishes a stamp whose point is on top of the FAR note while
+		// the raw cursor stays on NEAR: reads must sort by the stamp point (what
+		// the user is at/looking at), and sortedBy must report that point.
+		ws.send(
+			JSON.stringify({
+				type: 'push', clock: 2,
+				presence: ['put', {
+					userId: 'mover', userName: 'Mover', color: '#FF0000', currentPageId: 'page:page',
+					cursor: { x: FRAME_X + 600, y: 400, type: 'default', rotation: 0 },
+					camera: { x: 0, y: 0, z: 1 }, selectedShapeIds: [], screenBounds: { x: 0, y: 0, w: 1, h: 1 },
+					lastActivityTimestamp: 20, followingUserId: null, brush: null, scribbles: [], chatMessage: '',
+					meta: { stamp: { at: { x: FRAME_X + 10, y: 10 }, frame: { name: 'Advice — crew-a', dist: 0 } } },
+				}],
+			})
+		)
+		await new Promise((r) => setTimeout(r, 300))
+
+		const stamped = await getJson('/api/frame?room=test&name=advice')
+		assert.equal(stamped.status, 200)
+		assert.deepEqual(
+			stamped.body.sortedBy.cursor,
+			{ x: FRAME_X + 10, y: 10 },
+			'sortedBy reports the stamp point actually used'
+		)
+		const stampedTexts = stamped.body.notes.map((n: any) => n.text)
+		assert.ok(
+			stampedTexts.indexOf('FAR') < stampedTexts.indexOf('NEAR'),
+			`stamp point flips the order, got ${JSON.stringify(stampedTexts)}`
+		)
+		console.log('ok: /api/frame sorts by the presence stamp point when present')
+
+		// The sibling /api/frames endpoint shares the same sort wiring — confirm
+		// it too reports the stamp point (not the raw cursor) in sortedBy.
+		const framesStamped = await getJson('/api/frames?room=test')
+		assert.equal(framesStamped.status, 200)
+		assert.deepEqual(
+			framesStamped.body.sortedBy.cursor,
+			{ x: FRAME_X + 10, y: 10 },
+			'/api/frames sortedBy also reports the stamp point'
+		)
+		console.log('ok: /api/frames sortedBy reports the presence stamp point')
+
 		ws.close()
 		await new Promise((r) => setTimeout(r, 100))
 		console.log('ok: /api/frame orders stickies by nearest cursor when present')
