@@ -326,6 +326,17 @@ async function main() {
 		)
 		console.log('ok: /api/frame sorts by the presence stamp point when present')
 
+		// The sibling /api/frames endpoint shares the same sort wiring — confirm
+		// it too reports the stamp point (not the raw cursor) in sortedBy.
+		const framesStamped = await getJson('/api/frames?room=test')
+		assert.equal(framesStamped.status, 200)
+		assert.deepEqual(
+			framesStamped.body.sortedBy.cursor,
+			{ x: FRAME_X + 10, y: 10 },
+			'/api/frames sortedBy also reports the stamp point'
+		)
+		console.log('ok: /api/frames sortedBy reports the presence stamp point')
+
 		ws.close()
 		await new Promise((r) => setTimeout(r, 100))
 		console.log('ok: /api/frame orders stickies by nearest cursor when present')

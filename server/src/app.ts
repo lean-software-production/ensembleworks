@@ -306,9 +306,11 @@ function sortPointOf(ref: CursorRef): { x: number; y: number } {
 	return ref.stamp?.at ?? ref.cursor
 }
 
-// Sort items (each carrying a page-space `pt`) by distance to the cursor,
-// attaching a rounded `dist`. Returns a new array; input order on a tie is
-// preserved. With no cursor, returns the items unchanged and undistanced.
+// Sort items (each carrying a page-space `pt`) by distance to the sort point
+// (the teammate's stamp point when present, else their raw cursor — see
+// sortPointOf), attaching a rounded `dist`. Returns a new array; input order
+// on a tie is preserved. With no cursor, returns the items unchanged and
+// undistanced.
 function byProximity<T extends { pt: { x: number; y: number } }>(
 	items: T[],
 	cursor: CursorRef | null
