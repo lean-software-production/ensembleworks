@@ -110,7 +110,7 @@ async function main() {
 			stdio: ['ignore', 'pipe', 'inherit'],
 		})
 		await new Promise<void>((resolve, reject) => {
-			termGw!.stdout.on('data', (d: Buffer) => {
+			termGw!.stdout!.on('data', (d: Buffer) => {
 				if (d.toString().includes('listening')) resolve()
 			})
 			termGw!.once('exit', () => reject(new Error('terminal gateway exited early')))
@@ -120,7 +120,7 @@ async function main() {
 		const dataDir = await mkdtemp(path.join(os.tmpdir(), 'relay-loopback-test-'))
 		const { server: appServer } = createSyncApp({ dataDir })
 		server = appServer
-		await new Promise<void>((resolve) => server.listen(0, resolve))
+		await new Promise<void>((resolve) => server!.listen(0, resolve))
 		const port = (server.address() as { port: number }).port
 		const wsBase = `ws://127.0.0.1:${port}`
 		shim = await startShim(wsBase)
