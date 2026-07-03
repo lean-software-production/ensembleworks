@@ -13,6 +13,7 @@
 package session
 
 import (
+	"fmt"
 	"io"
 	"sync"
 
@@ -133,6 +134,9 @@ func (m *Manager) Attach(sessionID string, channelID uint32, cols, rows int, sin
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.gone {
+		return fmt.Errorf("session %s has exited", sessionID)
+	}
 	// attached carries the SESSION's current size — a newcomer's requested
 	// grid must not resize existing viewers (spike spec §2).
 	sink.SendMsg(protocol.Inner{Type: "attached", Cols: s.cols, Rows: s.rows})

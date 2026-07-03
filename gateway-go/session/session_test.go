@@ -163,6 +163,60 @@ func TestPtyExitBroadcastsExitAndForgets(t *testing.T) {
 	}
 }
 
+// TestAttachOnGoneSessionReturnsError exercises the stranded-sink race window:
+// a caller holds a stale *sessionState that readLoop already marked gone, then
+// Attach is called on it. The guard added after s.mu.Lock() must reject the
+// attach with an error, leaving the sink untouched and unsubscribed.
+func TestAttachOnGoneSessionReturnsError(t *testing.T) {
+	pty := newStubPty()
+	m := NewManager(func(string, int, int) (Pty, error) { return pty, nil })
+
+	// First Attach creates the session.
+	s1 := &recSink{}
+	if err := m.Attach("dead", 1, 80, 24, s1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Capture the live sessionState pointer before it becomes gone.
+	stale := m.lookup("dead")
+	if stale == nil {
+		t.Fatal("session not found after Attach")
+	}
+
+	// Drive the session to EOF — readLoop sets gone=true and deletes from map.
+	pty.Close()
+	waitFor(t, func() bool { stale.mu.Lock(); defer stale.mu.Unlock(); return stale.gone })
+
+	// Re-inject the stale (gone) state into the manager map to reproduce the race:
+	// getOrCreate finds the stale entry and returns it without spawning a new pty,
+	// then Attach tries to subscribe a sink to a dead session.
+	m.mu.Lock()
+	m.sessions["dead"] = stale
+	m.mu.Unlock()
+
+	sink := &recSink{}
+	err := m.Attach("dead", 99, 80, 24, sink)
+	if err == nil {
+		t.Fatal("Attach on gone session must return an error")
+	}
+
+	// Sink must NOT have received any message (especially not "attached").
+	sink.mu.Lock()
+	msgs := append([]protocol.Inner{}, sink.msgs...)
+	sink.mu.Unlock()
+	if len(msgs) != 0 {
+		t.Fatalf("sink must receive no messages from dead session, got %v", msgs)
+	}
+
+	// Sink must NOT have been inserted into s.channels.
+	stale.mu.Lock()
+	_, present := stale.channels[99]
+	stale.mu.Unlock()
+	if present {
+		t.Fatal("sink must not be inserted into channels of dead session")
+	}
+}
+
 func TestDetachAllLeavesPtyRunning(t *testing.T) {
 	pty := newStubPty()
 	m := NewManager(func(string, int, int) (Pty, error) { return pty, nil })
