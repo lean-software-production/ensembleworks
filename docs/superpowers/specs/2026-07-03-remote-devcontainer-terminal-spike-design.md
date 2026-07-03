@@ -79,10 +79,18 @@ Findings feed back into `distributed-terminals-design.md`.
   full design later. A connect with an already-registered id replaces the
   old connection (the reconnecting connector wins; stale channels are
   closed).
-- **Browsers always reach remote terminals same-origin**
-  (`/term/ws?session=X&gateway=Y`). No direct path in the spike: no
-  client-side URL gymnastics, works from any network the canvas works
-  from.
+- **Browsers always reach remote terminals same-origin**, at
+  `/api/term/relay?session=X&gateway=Y`. The path lives under `/api`
+  (not `/term`) because prod Caddy routes `/term*` to the existing
+  gateway on :8789 — `/api*` already reaches the sync server in both
+  prod Caddy and dev Vite, so no proxy config changes (dev Vite needs
+  `ws: true` on the `/api` proxy entry). No direct path in the spike.
+- **Strictly alongside the existing terminal path.** Shapes with no
+  `gateway` prop (all existing shapes) connect same-origin to the
+  existing Node gateway exactly as today; it remains the "This canvas"
+  default. The relay is parallel plumbing, exercised only by
+  remote-gateway shapes. `gateway-go/` is not an npm workspace, so
+  `npm run build`/`typecheck` and the deploy pipeline are unaffected.
 - **Cloudflare Access:** the connector sends
   `CF-Access-Client-Id`/`-Secret` headers on the dial when targeting a
   prod canvas; against the ash box over the tailnet, no headers.
@@ -130,8 +138,9 @@ Dependencies: `creack/pty` + `coder/websocket` only.
   `client/src/terminal/TerminalShapeUtil.tsx` and
   `server/src/schema.ts` — one last "keep in sync" edit, noted as
   motivation for the contracts package.
-- The WS URL builder appends `&gateway=<id>` when set. No other
-  protocol-handling changes.
+- The WS URL builder targets `/api/term/relay?session=…&gateway=<id>`
+  when the prop is set (same-origin `/term/ws` otherwise, unchanged). No
+  other protocol-handling changes.
 - The "New terminal" toolbar button gains a dropdown: "This canvas
   (default)" + entries from `/api/gateway/list`, fetched on open.
   Remote-gateway shapes show the gateway label in their title chip so
@@ -163,8 +172,11 @@ Dependencies: `creack/pty` + `coder/websocket` only.
 1. **Node unit:** splicer channel bookkeeping against a scripted fake
    gateway WS (existing in-process `test-helpers.ts` pattern).
 2. **Node integration (loopback relay):** the existing Node gateway on
-   localhost forced through the relay path; reuse the
-   `smoke-terminal.ts` assertions. Proves the plane before Go exists.
+   localhost reached through the relay path via a ~50-line test-only
+   bridging shim (dials `/api/gateway/connect`, proxies relay channels
+   to `ws://localhost:8789/term/ws` — the existing gateway never dials
+   out and stays unmodified); reuse the `smoke-terminal.ts` assertions.
+   Proves the plane with a known-good gateway before Go exists.
 3. **Go unit:** protocol codec round-trips; session manager against a
    stub pty.
 4. **Go integration:** connector against a scripted mock relay server —
