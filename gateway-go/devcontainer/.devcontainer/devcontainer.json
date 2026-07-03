@@ -2,7 +2,7 @@
 	"name": "termgw-example",
 	"image": "mcr.microsoft.com/devcontainers/base:ubuntu",
 	"features": {
-		"../termgw-feature": {}
+		"./termgw-feature": {}
 	},
 	"remoteEnv": {
 		"CANVAS_URL": "${localEnv:CANVAS_URL}",

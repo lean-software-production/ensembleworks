@@ -2438,12 +2438,14 @@ bash -n gateway-go/termgw-feature/install.sh gateway-go/termgw-feature/termgw-su
 gateway-go/build.bash
 ```
 Expected: no syntax errors; `built termgw-feature/dist/termgw`.
+`build.bash` also stages the built feature to `devcontainer/.devcontainer/termgw-feature/` (the devcontainer CLI resolves `./termgw-feature` relative to the config at `devcontainer/.devcontainer/devcontainer.json`). The staged copy is gitignored.
 If Docker + the devcontainer CLI are available locally:
 ```bash
 CANVAS_URL=http://host.docker.internal:8788 GATEWAY_LABEL="Local devcontainer" \
   devcontainer up --workspace-folder gateway-go/devcontainer
 curl -s localhost:8788/api/gateway/list
 ```
+The config lives at `gateway-go/devcontainer/.devcontainer/devcontainer.json` so `--workspace-folder gateway-go/devcontainer` is the correct path (the CLI discovers `.devcontainer/devcontainer.json` inside the workspace folder).
 Expected: the gateway appears in the list within ~5 s of container start.
 
 - [ ] **Step 7: Commit**
@@ -2461,8 +2463,8 @@ No code. **Preconditions:** a Docker-capable SSH box, the devcontainer CLI on it
 
 - [ ] **Step 1: Run the demo checklist (record everything for the findings):**
 
-1. `gateway-go/build.bash`, copy `gateway-go/` to the remote box (`rsync -a gateway-go/ box:~/termgw-spike/`).
-2. On the box: `CANVAS_URL=http://<ash-tailnet>:8788 GATEWAY_LABEL="workshops box" devcontainer up --workspace-folder ~/termgw-spike/devcontainer`.
+1. `gateway-go/build.bash` (builds the binary and stages `termgw-feature/` to `devcontainer/.devcontainer/termgw-feature/`), then copy `gateway-go/` to the remote box (`rsync -a gateway-go/ box:~/termgw-spike/`).
+2. On the box: `CANVAS_URL=http://<ash-tailnet>:8788 GATEWAY_LABEL="workshops box" devcontainer up --workspace-folder ~/termgw-spike/devcontainer` (the CLI discovers `~/termgw-spike/devcontainer/.devcontainer/devcontainer.json`; the feature is resolved as `./termgw-feature` from that config's directory).
 3. In a browser on the canvas: "New terminal" dropdown shows "workshops box" → create → typing round-trip. Record subjective feel + the WAN echo RTT (rerun `measureEcho` logic manually or time visually).
 4. Second browser: identical bytes; resize one viewer → both converge (authoritative resize).
 5. Refresh a browser → reattaches with scrollback.

@@ -91,9 +91,14 @@ func dialURL(cfg Config) (string, error) {
 	return u.String(), nil
 }
 
+// healthyDuration is how long a connection must survive to be considered
+// healthy and reset the exponential backoff counter.
+const healthyDuration = 30 * time.Second
+
 // Run dials, serves one connection, and reconnects with jittered exponential
 // backoff (1s base, 30s cap) until ctx is done. Sessions (tmux) survive
-// disconnects; only viewers are detached.
+// disconnects; only viewers are detached. The backoff counter resets when
+// a connection survives longer than healthyDuration.
 func Run(ctx context.Context, cfg Config) error {
 	target, err := dialURL(cfg)
 	if err != nil {
@@ -101,12 +106,17 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	attempt := 0
 	for {
+		start := time.Now()
 		if err := serveOnce(ctx, cfg, target); err != nil && ctx.Err() == nil {
 			log.Printf("[relay] connection lost: %v", err)
 		}
 		cfg.Manager.DetachAll()
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+		// Reset the backoff counter when the connection was healthy long enough.
+		if time.Since(start) > healthyDuration {
+			attempt = 0
 		}
 		attempt++
 		backoff := time.Duration(1<<min(attempt-1, 5)) * time.Second // 1..32s → capped below
@@ -122,6 +132,9 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 	}
 }
+
+// pingInterval matches the splicer's heartbeat period (spec §5).
+const pingInterval = 20 * time.Second
 
 func serveOnce(ctx context.Context, cfg Config, target string) error {
 	opts := &websocket.DialOptions{}
@@ -139,7 +152,31 @@ func serveOnce(ctx context.Context, cfg Config, target string) error {
 	conn.SetReadLimit(1 << 20)
 	log.Printf("[relay] connected to %s as %s", cfg.CanvasURL, cfg.GatewayID)
 
-	writer := &wsWriter{conn: conn, ctx: ctx}
+	// Connection-scoped context: the ping loop cancels it on half-open detection,
+	// which unblocks conn.Read and causes serveOnce to return to the redial loop.
+	connCtx, connCancel := context.WithCancel(ctx)
+	defer connCancel()
+
+	// Ping loop — detects half-open links (e.g. NAT drop with no TCP RST).
+	// coder/websocket handles pong replies automatically at the transport level.
+	go func() {
+		ticker := time.NewTicker(pingInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-connCtx.Done():
+				return
+			case <-ticker.C:
+				if err := conn.Ping(connCtx); err != nil {
+					log.Printf("[relay] ping failed: %v — forcing redial", err)
+					connCancel()
+					return
+				}
+			}
+		}
+	}()
+
+	writer := &wsWriter{conn: conn, ctx: connCtx}
 	workers := make(map[uint32]*channelWorker)
 	defer func() {
 		for _, w := range workers {
@@ -148,7 +185,7 @@ func serveOnce(ctx context.Context, cfg Config, target string) error {
 	}()
 
 	for {
-		typ, data, err := conn.Read(ctx)
+		typ, data, err := conn.Read(connCtx)
 		if err != nil {
 			return err
 		}

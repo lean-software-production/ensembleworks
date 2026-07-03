@@ -10,3 +10,4 @@ nohup.out
 .DS_Store
 gateway-go/termgw-feature/dist/
 gateway-go/termgw-feature/tmux.conf
+gateway-go/devcontainer/.devcontainer/termgw-feature/
