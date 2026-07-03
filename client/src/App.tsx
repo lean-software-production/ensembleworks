@@ -6,6 +6,7 @@ import {
 	Tldraw,
 	defaultBindingUtils,
 	defaultShapeUtils,
+	getDefaultUserPresence,
 	getUserPreferences,
 	setUserPreferences,
 } from 'tldraw'
@@ -14,6 +15,7 @@ import './theme.css'
 import { assetStore } from './assetStore'
 import { hexForColor } from './colors'
 import { getIdentity, getRoomId } from './identity'
+import { computeStamp, type StampRecord } from './presence/stamp'
 import { IframeShapeUtil } from './iframe/IframeShapeUtil'
 import { PasteUrlHandler } from './iframe/PasteUrlHandler'
 import { NEKO_ICON_NAME, NEKO_TOOLBAR_ICON, NekoShapeUtil } from './neko/NekoShapeUtil'
@@ -73,6 +75,22 @@ export function App() {
 		bindingUtils: useMemo(() => [...defaultBindingUtils], []),
 		onCustomMessageReceived(message) {
 			if (message?.type === 'kicked') setWasKicked(true)
+		},
+		// Publish the client-computed spatial stamp (client/src/presence/stamp.ts)
+		// on our presence record. Reactive: recomputes exactly when the cursor,
+		// camera, page or frames change, so the server (transcript stamping,
+		// proximity-ordered reads) only ever reads a field. O(frames on page)
+		// per recompute — noise next to tldraw's own pointer hit-testing.
+		getUserPresence(store, user) {
+			const defaults = getDefaultUserPresence(store, user)
+			if (!defaults) return null
+			const stamp = computeStamp(store.allRecords() as unknown as StampRecord[], {
+				currentPageId: defaults.currentPageId,
+				cursor: defaults.cursor,
+				camera: defaults.camera ?? null,
+				screenBounds: defaults.screenBounds ?? null,
+			})
+			return { ...defaults, meta: { stamp } }
 		},
 	})
 
