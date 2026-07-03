@@ -17,6 +17,11 @@
  *   binary     connector→canvas: 4-byte BE uint32 channelId prefix + raw pty bytes
  */
 
+import type { IncomingMessage } from 'node:http'
+import type { Socket } from 'node:net'
+import type { Duplex } from 'node:stream'
+import { WebSocketServer, type WebSocket } from 'ws'
+
 export const WS_OPEN = 1
 // A browser that can't drain 4 MB is closed rather than buffered forever —
 // its reconnect-with-backoff re-attaches; full flow control is out of spike scope.
@@ -163,5 +168,97 @@ export function onGatewayFrame(entry: GatewayEntry, data: Buffer, isBinary: bool
 	} else if (msg.type === 'relay-closed') {
 		entry.channels.delete(msg.channelId)
 		browser?.close()
+	}
+}
+
+// ---------------------------------------------------------------------------
+// HTTP/WS wiring — createSyncApp mounts listHandler and calls handleUpgrade
+// before its /sync matching. Kept here so app.ts gains only two lines.
+// ---------------------------------------------------------------------------
+
+const ID_RE = /^[a-zA-Z0-9_-]{1,48}$/
+const HEARTBEAT_INTERVAL_MS = 20_000
+
+export function createGatewayPlane() {
+	const registry = new GatewayRegistry()
+	const wss = new WebSocketServer({ noServer: true })
+	const alive = new WeakMap<WebSocket, boolean>()
+
+	// Same half-open detection as the terminal gateway: unanswered ping → kill.
+	const heartbeat = setInterval(() => {
+		for (const ws of wss.clients) {
+			if (ws.readyState !== ws.OPEN) continue
+			if (alive.get(ws) === false) {
+				ws.terminate()
+				continue
+			}
+			alive.set(ws, false)
+			ws.ping()
+		}
+	}, HEARTBEAT_INTERVAL_MS)
+	heartbeat.unref()
+
+	function accept(req: IncomingMessage, socket: Duplex, head: Buffer): Promise<WebSocket> {
+		;(socket as Socket).setNoDelay(true)
+		return new Promise((resolve) => {
+			wss.handleUpgrade(req, socket, head, (ws) => {
+				alive.set(ws, true)
+				ws.on('pong', () => alive.set(ws, true))
+				resolve(ws)
+			})
+		})
+	}
+
+	return {
+		registry,
+
+		listHandler(_req: unknown, res: { json(body: unknown): void }) {
+			res.json({ gateways: registry.list() })
+		},
+
+		/** Returns true when it owned the upgrade (matched path), else false. */
+		handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean {
+			if (url.pathname === '/api/gateway/connect') {
+				const gatewayId = url.searchParams.get('gatewayId') ?? ''
+				if (!ID_RE.test(gatewayId)) {
+					socket.destroy()
+					return true
+				}
+				const label = (url.searchParams.get('label') || gatewayId).slice(0, 64)
+				void accept(req, socket, head).then((ws) => {
+					const entry = registry.connect(gatewayId, label, ws)
+					console.log(`[gateway ${gatewayId}] connected (${label})`)
+					ws.on('message', (data, isBinary) => onGatewayFrame(entry, data as Buffer, isBinary))
+					ws.on('close', () => {
+						registry.disconnect(gatewayId, ws)
+						console.log(`[gateway ${gatewayId}] disconnected`)
+					})
+				})
+				return true
+			}
+
+			if (url.pathname === '/api/term/relay') {
+				const sessionId = url.searchParams.get('session') ?? ''
+				const gatewayId = url.searchParams.get('gateway') ?? ''
+				const cols = Number(url.searchParams.get('cols') ?? 80) || 80
+				const rows = Number(url.searchParams.get('rows') ?? 24) || 24
+				const entry = registry.get(gatewayId)
+				if (!ID_RE.test(sessionId) || !entry || entry.ws.readyState !== WS_OPEN) {
+					socket.destroy() // offline gateway → immediate destroy (client backoff handles it)
+					return true
+				}
+				void accept(req, socket, head).then((ws) => {
+					const channelId = openChannel(entry, ws, sessionId, cols, rows)
+					ws.on('message', (raw, isBinary) => {
+						if (isBinary) return // browsers never send binary (matches terminal-gateway.ts)
+						onBrowserMessage(entry, channelId, raw.toString())
+					})
+					ws.on('close', () => closeChannel(entry, channelId))
+				})
+				return true
+			}
+
+			return false
+		},
 	}
 }

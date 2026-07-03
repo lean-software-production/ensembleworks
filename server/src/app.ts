@@ -34,6 +34,7 @@ import express from 'express'
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk'
 import { WebSocketServer } from 'ws'
 import { type AccessIdentity, getAccessIdentity } from './access-identity.ts'
+import { createGatewayPlane } from './gateway-registry.ts'
 import { resolveRoomServiceUrl } from './livekit-url.ts'
 import { schema } from './schema.ts'
 import { OpError, applyOps, createRoadmapStore, slugify, type RoadmapOp } from './roadmap-store.ts'
@@ -383,6 +384,11 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	app.get('/api/health', (_req, res) => {
 		res.json({ ok: true, rooms: [...rooms.keys()] })
 	})
+
+	// Remote terminal gateways (spike): connect-equals-register + relay splicer.
+	// See docs/superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md
+	const gatewayPlane = createGatewayPlane()
+	app.get('/api/gateway/list', gatewayPlane.listHandler)
 
 	app.get('/api/livekit-token', async (req, res) => {
 		if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET || !LIVEKIT_URL) {
@@ -1236,6 +1242,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 	server.on('upgrade', (req, socket, head) => {
 		const url = new URL(req.url ?? '', 'http://internal')
+		if (gatewayPlane.handleUpgrade(req, socket, head, url)) return
 		const match = url.pathname.match(/^\/sync\/([^/]+)$/)
 		const roomId = match ? sanitizeId(match[1]!) : null
 		const sessionId = url.searchParams.get('sessionId')
