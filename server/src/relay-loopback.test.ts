@@ -3,8 +3,9 @@
 // test-only bridging shim. Also prints relay-vs-direct echo latency.
 // Precondition: tmux on PATH. Run with: npx tsx src/relay-loopback.test.ts
 import assert from 'node:assert/strict'
-import { execFile, spawn } from 'node:child_process'
+import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp } from 'node:fs/promises'
+import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -98,27 +99,32 @@ async function measureEcho(ws: WebSocket, rounds: number): Promise<number[]> {
 const pct = (xs: number[], p: number) => xs[Math.min(xs.length - 1, Math.floor((p / 100) * xs.length))]!
 
 async function main() {
-	// 1. Spawn the real terminal gateway, unmodified, on a fixed test port.
-	const termGw = spawn('npx', ['tsx', 'src/terminal-gateway.ts'], {
-		env: { ...process.env, PORT: String(TERM_PORT) },
-		stdio: ['ignore', 'pipe', 'inherit'],
-	})
-	await new Promise<void>((resolve, reject) => {
-		termGw.stdout.on('data', (d: Buffer) => {
-			if (d.toString().includes('listening')) resolve()
-		})
-		termGw.once('exit', () => reject(new Error('terminal gateway exited early')))
-	})
-
-	// 2. Boot the sync app + shim.
-	const dataDir = await mkdtemp(path.join(os.tmpdir(), 'relay-loopback-test-'))
-	const { server } = createSyncApp({ dataDir })
-	await new Promise<void>((resolve) => server.listen(0, resolve))
-	const port = (server.address() as { port: number }).port
-	const wsBase = `ws://127.0.0.1:${port}`
-	const shim = await startShim(wsBase)
+	let termGw: ChildProcess | null = null
+	let server: http.Server | null = null
+	let shim: WebSocket | null = null
 
 	try {
+		// 1. Spawn the real terminal gateway, unmodified, on a fixed test port.
+		termGw = spawn('npx', ['tsx', 'src/terminal-gateway.ts'], {
+			env: { ...process.env, PORT: String(TERM_PORT) },
+			stdio: ['ignore', 'pipe', 'inherit'],
+		})
+		await new Promise<void>((resolve, reject) => {
+			termGw!.stdout.on('data', (d: Buffer) => {
+				if (d.toString().includes('listening')) resolve()
+			})
+			termGw!.once('exit', () => reject(new Error('terminal gateway exited early')))
+		})
+
+		// 2. Boot the sync app + shim.
+		const dataDir = await mkdtemp(path.join(os.tmpdir(), 'relay-loopback-test-'))
+		const { server: appServer } = createSyncApp({ dataDir })
+		server = appServer
+		await new Promise<void>((resolve) => server.listen(0, resolve))
+		const port = (server.address() as { port: number }).port
+		const wsBase = `ws://127.0.0.1:${port}`
+		shim = await startShim(wsBase)
+
 		// 3. Browser through the relay: attached handshake + echo round-trip.
 		const relayUrl = `${wsBase}/api/term/relay?session=${SESSION}&gateway=loopback&cols=80&rows=24`
 		const b1 = await openSocket(relayUrl)
@@ -157,9 +163,9 @@ async function main() {
 
 		console.log('relay-loopback.test.ts: all assertions passed')
 	} finally {
-		shim.close()
-		server.close()
-		termGw.kill()
+		shim?.close()
+		server?.close()
+		termGw?.kill()
 		await execFileP('tmux', ['kill-session', '-t', `canvas-${SESSION}`]).catch(() => {})
 	}
 	process.exit(0)
