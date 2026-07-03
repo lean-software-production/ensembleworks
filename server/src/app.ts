@@ -298,6 +298,14 @@ function dist(a: { x: number; y: number }, b: { x: number; y: number }): number 
 	return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
+// The point a teammate's reads are ordered by: their client-computed stamp
+// point when present (where they're at / looking at — the cursor is usually
+// parked off-canvas since the camera bubble decoupled from it), else the raw
+// cursor. Point *selection* only; no geometry is recomputed here.
+function sortPointOf(ref: CursorRef): { x: number; y: number } {
+	return ref.stamp?.at ?? ref.cursor
+}
+
 // Sort items (each carrying a page-space `pt`) by distance to the cursor,
 // attaching a rounded `dist`. Returns a new array; input order on a tie is
 // preserved. With no cursor, returns the items unchanged and undistanced.
@@ -307,7 +315,7 @@ function byProximity<T extends { pt: { x: number; y: number } }>(
 ): Array<Omit<T, 'pt'> & { dist: number | null }> {
 	const decorated = items.map((it, i) => {
 		const { pt, ...rest } = it
-		const d = cursor ? dist(pt, cursor.cursor) : null
+		const d = cursor ? dist(pt, sortPointOf(cursor)) : null
 		return { rest, d, i }
 	})
 	if (cursor) decorated.sort((a, b) => a.d! - b.d! || a.i - b.i)
@@ -983,7 +991,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 		res.json({
 			ok: true,
-			sortedBy: cursor ? { userName: cursor.userName, page: cursor.currentPageId, cursor: cursor.cursor } : null,
+			sortedBy: cursor ? { userName: cursor.userName, page: cursor.currentPageId, cursor: sortPointOf(cursor) } : null,
 			frames: ordered,
 		})
 	})
@@ -1055,7 +1063,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		res.json({
 			ok: true,
 			frame: { id: frame.id, name: frame.props?.name, page: framePage },
-			sortedBy: cursor ? { userName: cursor.userName, cursor: cursor.cursor } : null,
+			sortedBy: cursor ? { userName: cursor.userName, cursor: sortPointOf(cursor) } : null,
 			notes,
 			texts,
 			images,
