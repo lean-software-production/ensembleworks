@@ -133,4 +133,85 @@ const NO_VIEW = { camera: null, screenBounds: null }
 	console.log('ok: at is rounded')
 }
 
+// A second frame far from the first, for the selection-override cases.
+const FRAME_B: StampRecord = {
+	id: 'shape:frame-review',
+	typeName: 'shape',
+	type: 'frame',
+	parentId: 'page:page',
+	x: 3000,
+	y: 0,
+	props: { w: 800, h: 600, name: 'Review — crew-b' }, // page 3000..3800 × 0..600, centre (3400, 300)
+}
+
+// 8. Selection wins over the cursor: the cursor is inside FRAME (Drafting) but
+// FRAME_B (Review) is selected ⇒ stamp the selected frame, at = its centre.
+{
+	const stamp = computeStamp([PAGE_RECORD, FRAME, FRAME_B], {
+		currentPageId: 'page:page',
+		cursor: { x: 1200, y: 300 }, // inside Drafting
+		camera: { x: 0, y: 0, z: 1 },
+		screenBounds: { w: 1920, h: 1080 },
+		selectedShapeIds: ['shape:frame-review'],
+	})
+	assert.equal(stamp.frame?.name, 'Review — crew-b', 'a selected frame wins over cursor-in-another-frame')
+	assert.equal(stamp.frame?.dist, 0, 'selected frame ⇒ dist 0')
+	assert.deepEqual(stamp.at, { x: 3400, y: 300 }, 'at is the selected frame centre')
+	console.log('ok: selected frame wins over cursor')
+}
+
+// 9. Selecting a shape *inside* a frame stamps the containing frame, using the
+// shape's centre as the point — even with the cursor parked far away.
+{
+	const note: StampRecord = {
+		id: 'shape:note-1',
+		typeName: 'shape',
+		type: 'note',
+		parentId: 'shape:frame-drafting', // page point 1000+100, 0+100 = (1100,100); centre (1200,200)
+		x: 100,
+		y: 100,
+		props: { w: 200, h: 200 },
+	}
+	const stamp = computeStamp([PAGE_RECORD, FRAME, note], {
+		currentPageId: 'page:page',
+		cursor: { x: 50, y: 5000 }, // parked outside every frame
+		...NO_VIEW,
+		selectedShapeIds: ['shape:note-1'],
+	})
+	assert.equal(stamp.frame?.name, 'Drafting — crew-a', 'selecting a shape stamps its containing frame')
+	assert.equal(stamp.frame?.dist, 0, 'shape centre is inside its frame ⇒ dist 0')
+	assert.deepEqual(stamp.at, { x: 1200, y: 200 }, 'at is the selected shape centre')
+	console.log('ok: selecting a shape stamps its containing frame')
+}
+
+// 10. An empty selection is ignored ⇒ unchanged cursor→viewport behaviour
+// (identical inputs to case 1).
+{
+	const stamp = computeStamp([PAGE_RECORD, FRAME], {
+		currentPageId: 'page:page',
+		cursor: { x: 1200, y: 300 },
+		camera: { x: 0, y: 0, z: 1 },
+		screenBounds: { w: 1920, h: 1080 },
+		selectedShapeIds: [],
+	})
+	assert.deepEqual(stamp.at, { x: 1200, y: 300 }, 'empty selection falls back to the cursor')
+	assert.equal(stamp.frame?.name, 'Drafting — crew-a')
+	console.log('ok: empty selection ⇒ cursor/viewport fallback unchanged')
+}
+
+// 11. A selection that isn't on the current page (or references missing shapes)
+// is ignored ⇒ fallback, not a null/garbage stamp.
+{
+	const stamp = computeStamp([PAGE_RECORD, FRAME], {
+		currentPageId: 'page:page',
+		cursor: { x: 1200, y: 300 },
+		camera: { x: 0, y: 0, z: 1 },
+		screenBounds: { w: 1920, h: 1080 },
+		selectedShapeIds: ['shape:does-not-exist'],
+	})
+	assert.deepEqual(stamp.at, { x: 1200, y: 300 }, 'unknown selection falls back to the cursor')
+	assert.equal(stamp.frame?.name, 'Drafting — crew-a')
+	console.log('ok: unresolved selection ⇒ fallback')
+}
+
 console.log('stamp.test.ts: all tests passed')

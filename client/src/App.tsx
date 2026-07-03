@@ -87,9 +87,9 @@ export function App() {
 		// Publish the client-computed spatial stamp (client/src/presence/stamp.ts)
 		// on our presence record so the server just reads a field (transcript
 		// stamping, proximity-ordered reads). Reactive: recomputes when our own
-		// cursor/camera/page change or when any shape changes — scoped to shape
-		// records (see shapeQuery above) so other peers' cursor movement doesn't
-		// trigger it.
+		// selection/cursor/camera/page change or when any shape changes — scoped
+		// to shape records (see shapeQuery above) so other peers' cursor movement
+		// doesn't trigger it.
 		getUserPresence(store, user) {
 			const defaults = getDefaultUserPresence(store, user)
 			if (!defaults) return null
@@ -103,6 +103,7 @@ export function App() {
 				cursor: defaults.cursor,
 				camera: defaults.camera ?? null,
 				screenBounds: defaults.screenBounds ?? null,
+				selectedShapeIds: defaults.selectedShapeIds,
 			})
 			return { ...defaults, meta: { stamp } }
 		},

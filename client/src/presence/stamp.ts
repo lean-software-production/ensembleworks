@@ -5,12 +5,13 @@
  * server reads the field instead of walking the document (transcript
  * stamping, proximity-ordered agent reads).
  *
- * Semantics (ported verbatim from the server's former frameAtPoint /
- * viewportCenter): the mouse cursor wins when it is inside a frame (they're
- * pointing at something); otherwise the viewport centre (what they're
- * looking at), falling back to the cursor when camera/screenBounds are
- * unavailable. `at` and `frame` always agree — `frame` was matched against
- * exactly the point recorded in `at`.
+ * Semantics: the current-page selection wins when there is one (an explicit
+ * "I'm working here" — `at` is the selection centre); otherwise this falls
+ * back to the rule ported verbatim from the server's former frameAtPoint /
+ * viewportCenter — the mouse cursor when it is inside a frame (pointing at
+ * something), else the viewport centre (what they're looking at), else the
+ * cursor when camera/screenBounds are unavailable. `at` and `frame` always
+ * agree — `frame` was matched against exactly the point recorded in `at`.
  *
  * Pure and dependency-free so it is unit-testable and safe inside the
  * reactive getUserPresence derivation.
@@ -35,6 +36,10 @@ export interface StampInputs {
 	cursor: { x: number; y: number }
 	camera: { x: number; y: number; z: number } | null
 	screenBounds: { w: number; h: number } | null
+	// The shapes the user has selected on the current page. When non-empty it
+	// wins over cursor/viewport: an explicit "I'm working here" signal. Optional
+	// so pre-selection callers/tests keep the cursor→viewport behaviour.
+	selectedShapeIds?: readonly string[]
 }
 
 // The wire shape carried in presence.meta.stamp. A `type` (not interface) so
@@ -93,6 +98,32 @@ function frameAtPoint(
 	return best
 }
 
+// The centre of the user's current-page selection in page space — the "I'm
+// working *here*" point. Averages the centres of the selected shapes (a single
+// selection is just its own centre). Returns null when nothing resolvable is
+// selected on this page, so the caller falls back to cursor/viewport.
+function selectionCenter(
+	selectedShapeIds: readonly string[] | undefined,
+	byId: Map<string, StampRecord>,
+	pageId: string
+): { x: number; y: number } | null {
+	if (!selectedShapeIds || selectedShapeIds.length === 0) return null
+	let sx = 0
+	let sy = 0
+	let n = 0
+	for (const id of selectedShapeIds) {
+		const s = byId.get(id)
+		if (!s || s.typeName !== 'shape' || pageIdOf(s, byId) !== pageId) continue
+		const pt = pagePoint(s, byId)
+		const w = typeof s.props?.w === 'number' ? s.props.w : 0
+		const h = typeof s.props?.h === 'number' ? s.props.h : 0
+		sx += pt.x + w / 2
+		sy += pt.y + h / 2
+		n++
+	}
+	return n > 0 ? { x: sx / n, y: sy / n } : null
+}
+
 // The page point at the centre of my viewport — what I'm looking at.
 // tldraw screen→page is page = screen/z − camera, evaluated at the centre.
 function viewportCenter(
@@ -107,6 +138,14 @@ function viewportCenter(
 export function computeStamp(records: readonly StampRecord[], inputs: StampInputs): SpatialStamp {
 	const byId = new Map(records.map((r) => [r.id, r]))
 	const shapes = records.filter((r) => r.typeName === 'shape')
+	// Selection wins: an explicit "I'm working here" beats where the cursor
+	// happens to rest or what's centred on screen. `at` is the selection centre;
+	// `frame` is the frame that centre lands in (or nearest, same as any point).
+	const selected = selectionCenter(inputs.selectedShapeIds, byId, inputs.currentPageId)
+	if (selected) {
+		const frame = frameAtPoint(shapes, byId, inputs.currentPageId, selected)
+		return { at: { x: Math.round(selected.x), y: Math.round(selected.y) }, frame }
+	}
 	const atCursor = frameAtPoint(shapes, byId, inputs.currentPageId, inputs.cursor)
 	let at = inputs.cursor
 	let frame = atCursor
