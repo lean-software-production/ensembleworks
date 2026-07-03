@@ -21,7 +21,33 @@ async function main() {
 	process.env.LIVEKIT_API_KEY = 'testkey'
 	process.env.LIVEKIT_API_SECRET = 'testsecret-testsecret-testsecret'
 	process.env.LIVEKIT_URL = 'wss://example.test/livekit'
-	const { createSyncApp } = await import('./app.ts')
+	const { createSyncApp, parseStamp } = await import('./app.ts')
+
+	// 0. parseStamp is the server's trust boundary for client-asserted presence
+	// meta — it must reject garbage and non-finite numbers without throwing.
+	{
+		assert.equal(parseStamp(undefined), null, 'undefined ⇒ null')
+		assert.equal(parseStamp(null), null, 'null ⇒ null')
+		assert.equal(parseStamp({}), null, 'no at ⇒ null')
+		assert.equal(parseStamp({ at: { x: 'a', y: 2 } }), null, 'non-numeric at ⇒ null')
+		assert.equal(parseStamp({ at: { x: 1e400, y: 2 } }), null, 'Infinity at ⇒ null')
+		assert.deepEqual(
+			parseStamp({ at: { x: 1200.6, y: 300.4 }, frame: null }),
+			{ at: { x: 1201, y: 300 }, frame: null },
+			'rounds at, null frame passes'
+		)
+		assert.deepEqual(
+			parseStamp({ at: { x: 10, y: 20 }, frame: { name: 'F', dist: -5 } }),
+			{ at: { x: 10, y: 20 }, frame: { name: 'F', dist: 0 } },
+			'negative dist floored to 0'
+		)
+		assert.equal(
+			parseStamp({ at: { x: 1, y: 2 }, frame: { name: 5, dist: 3 } })!.frame,
+			null,
+			'non-string frame.name ⇒ frame null'
+		)
+		console.log('ok: parseStamp rejects garbage and non-finite input')
+	}
 
 	const dataDir = await mkdtemp(path.join(os.tmpdir(), 'scribe-api-test-'))
 	const { server, getOrCreateRoom } = createSyncApp({ dataDir })

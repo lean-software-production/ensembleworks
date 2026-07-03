@@ -161,12 +161,14 @@ export interface SpatialStamp {
 	frame: { name: string; dist: number } | null
 }
 
-// Defensive parse of the wire value — never trust presence meta.
-function parseStamp(s: any): SpatialStamp | null {
-	if (!s || typeof s.at?.x !== 'number' || typeof s.at?.y !== 'number') return null
+// Defensive parse of the wire value — never trust presence meta. Numeric
+// fields must be finite (JSON can carry Infinity via overflow literals like
+// 1e400); dist is a non-negative distance.
+export function parseStamp(s: any): SpatialStamp | null {
+	if (!s || !Number.isFinite(s.at?.x) || !Number.isFinite(s.at?.y)) return null
 	const frame =
-		s.frame && typeof s.frame.name === 'string' && typeof s.frame.dist === 'number'
-			? { name: s.frame.name.slice(0, 256), dist: Math.round(s.frame.dist) }
+		s.frame && typeof s.frame.name === 'string' && Number.isFinite(s.frame.dist)
+			? { name: s.frame.name.slice(0, 256), dist: Math.max(0, Math.round(s.frame.dist)) }
 			: null
 	return { at: { x: Math.round(s.at.x), y: Math.round(s.at.y) }, frame }
 }
