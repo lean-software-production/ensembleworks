@@ -1,7 +1,14 @@
 // Tests for bin/dev's pure logic (service table gating, parsers).
 // Run with: npx tsx bin/dev.test.ts
 import assert from 'node:assert/strict'
-import { PORTS, buildServices, hold, parseDotEnv, parseNvmrc } from './dev-lib.mjs'
+import {
+	PORTS,
+	buildServices,
+	hold,
+	parseDotEnv,
+	parseNvmrc,
+	parsePublicOrigin,
+} from './dev-lib.mjs'
 
 // A baseline context: everything installed, no keys, no public host — what a
 // fresh devcontainer looks like before dev.env exists.
@@ -9,7 +16,8 @@ function ctx(overrides: Record<string, unknown> = {}) {
 	return {
 		repoDir: '/repo',
 		dataDir: '/home/u/.local/share/ensembleworks',
-		publicHost: null,
+		publicOrigin: null,
+		livekitNodeIp: null,
 		livekitConf: null,
 		whisperModel: '/usr/local/share/whisper/ggml-base.bin',
 		tailscaleIp: null,
@@ -133,12 +141,59 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 	console.log('ok: scribe startup gate')
 }
 
-// Public host (tailnet/tunnel): wss LiveKit url, Vite told the host.
+// parsePublicOrigin: PUBLIC_ORIGIN is the general form (scheme optional → http);
+// PUBLIC_HOST is back-compat shorthand for https://<host>; junk → null.
 {
-	const s = buildServices(ctx({ publicHost: 'baljeet.cyprus-macaroni.ts.net' }))
-	assert.ok(svc(s, 'sync').cmd.includes("LIVEKIT_URL='wss://baljeet.cyprus-macaroni.ts.net/livekit'"))
-	assert.ok(svc(s, 'client').cmd.includes("ENSEMBLEWORKS_PUBLIC_HOST='baljeet.cyprus-macaroni.ts.net'"))
-	console.log('ok: public host wiring')
+	assert.deepEqual(parsePublicOrigin('http://192.168.1.77:8080', undefined), {
+		scheme: 'http',
+		host: '192.168.1.77',
+		port: 8080,
+	})
+	assert.deepEqual(parsePublicOrigin('192.168.1.77:8080', undefined), {
+		scheme: 'http',
+		host: '192.168.1.77',
+		port: 8080,
+	}, 'bare host:port defaults to http')
+	assert.deepEqual(parsePublicOrigin('https://x.ts.net', undefined), {
+		scheme: 'https',
+		host: 'x.ts.net',
+		port: null,
+	})
+	assert.deepEqual(parsePublicOrigin(undefined, 'x.ts.net'), {
+		scheme: 'https',
+		host: 'x.ts.net',
+		port: null,
+	}, 'PUBLIC_HOST back-compat → https')
+	assert.equal(parsePublicOrigin('http://o', 'ignored')?.host, 'o', 'origin wins over host')
+	assert.equal(parsePublicOrigin(undefined, undefined), null, 'neither → localhost')
+	console.log('ok: parsePublicOrigin')
+}
+
+// LAN over plain http:8080 — the browser reaches baljeet's LAN address, so the
+// LiveKit signaling url and the origin handed to Vite are ws / :8080, not wss.
+{
+	const s = buildServices(ctx({ publicOrigin: parsePublicOrigin('http://192.168.1.77:8080', undefined) }))
+	assert.ok(svc(s, 'sync').cmd.includes("LIVEKIT_URL='ws://192.168.1.77:8080/livekit'"), 'ws signaling on :8080')
+	assert.ok(svc(s, 'client').cmd.includes("ENSEMBLEWORKS_PUBLIC_ORIGIN='http://192.168.1.77:8080'"), 'origin to Vite')
+	console.log('ok: LAN http origin wiring')
+}
+
+// TLS edge (tailnet/tunnel): wss LiveKit url with the default port omitted.
+{
+	const s = buildServices(ctx({ publicOrigin: parsePublicOrigin(undefined, 'baljeet.cyprus-macaroni.ts.net') }))
+	assert.ok(svc(s, 'sync').cmd.includes("LIVEKIT_URL='wss://baljeet.cyprus-macaroni.ts.net/livekit'"), 'wss, no :443')
+	assert.ok(svc(s, 'client').cmd.includes("ENSEMBLEWORKS_PUBLIC_ORIGIN='https://baljeet.cyprus-macaroni.ts.net'"))
+	console.log('ok: tls edge wiring')
+}
+
+// LiveKit node_ip: 127.0.0.1 by default (localhost-only voice); a LAN IP makes
+// the SFU advertise a browser-reachable media address.
+{
+	assert.ok(svc(buildServices(ctx()), 'livekit').cmd.includes('--node-ip 127.0.0.1'), 'default localhost')
+	const lan = svc(buildServices(ctx({ livekitNodeIp: '192.168.1.77' })), 'livekit')
+	assert.ok(lan.cmd.includes('--node-ip 192.168.1.77'), 'advertises the LAN IP')
+	assert.ok(lan.cmd.includes('--bind 0.0.0.0'), 'still binds all interfaces')
+	console.log('ok: livekit node_ip override')
 }
 
 // Shared browser: docker + default-on; SHARED_BROWSER_ENABLE=0 kills it;

@@ -12,6 +12,10 @@ transcription working keylessly. Setting up natively instead: run
 Most contributors drive development with a coding agent (Claude Code &c.);
 `AGENTS.md` / `CLAUDE.md` give agents the same contract in brief.
 
+Running the devcontainer on a remote box and reaching it (canvas, terminals,
+voice) from your laptop over the LAN? See "Developing on a remote box (LAN)"
+in README "Development".
+
 ## Verify your changes
 
 - `npm run typecheck` and `npm run build` must pass (three workspaces +

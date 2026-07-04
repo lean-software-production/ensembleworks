@@ -103,10 +103,23 @@ bin/dev down           # stop everything
 State lives at `~/.local/share/ensembleworks` (canvas SQLite, uploads,
 transcripts); optional config at `~/.config/ensembleworks/dev.env`
 (`STT_API_KEY` for hosted STT, `LIVEKIT_*` + `livekit-dev.yaml` for a real
-SFU setup, `ENSEMBLEWORKS_PUBLIC_HOST` when serving over a tailnet/tunnel).
+SFU setup, `ENSEMBLEWORKS_PUBLIC_ORIGIN` when serving on a remote origin).
 In the devcontainer both paths are symlinks into the git-ignored `.local/`
 workspace folder, so they survive container rebuilds; `rm -rf .local` is a
 factory reset.
+
+**Developing on a remote box (LAN).** Run the devcontainer on another machine
+and reach it — canvas, terminals, transcription **and voice** — from your
+laptop's browser, no tailscale needed. Set
+`ENSEMBLEWORKS_PUBLIC_ORIGIN=http://<host-lan-ip>:8080` in that box's
+`.local/config/ensembleworks/dev.env` (e.g. `http://192.168.1.77:8080`); the
+devcontainer's `initializeCommand` auto-detects the host's LAN IP so LiveKit
+advertises a browser-reachable media address (override with
+`ENSEMBLEWORKS_LIVEKIT_NODE_IP`). Then open `http://<host-lan-ip>:8080` from
+any machine on the LAN. LiveKit uses its public dev keys in this mode — fine on
+a trusted LAN, not a hostile network. `ENSEMBLEWORKS_PUBLIC_ORIGIN` also takes
+an `https://…` origin for a TLS edge (tailscale serve / a tunnel);
+`ENSEMBLEWORKS_PUBLIC_HOST` remains as shorthand for `https://<host>`.
 
 Smoke tests (gateway must be running for the second one):
 

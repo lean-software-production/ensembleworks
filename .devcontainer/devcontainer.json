@@ -1,8 +1,12 @@
-// EnsembleWorks devcontainer. The canvas is on forwarded port 8080 (Caddy).
-// Voice/video (LiveKit) needs UDP: works for LOCAL devcontainers via runArgs
-// port mappings below; Codespaces forwards TCP only, so AV stays silent there
-// — everything else works. State/keys live in the git-ignored .local/ folder
-// (symlinked to the home-dir paths by post-create.bash) and survive rebuilds.
+// EnsembleWorks devcontainer. The canvas is on port 8080 (Caddy), published to
+// the host so a teammate can reach it over the LAN at http://<host-ip>:8080 —
+// not just localhost. LiveKit voice needs UDP: TCP 7881 + UDP mux 7882 are
+// published too, and initializeCommand detects the host LAN IP so the SFU
+// advertises a browser-reachable media address (see .devcontainer/detect-lan-ip.sh
+// and ENSEMBLEWORKS_LIVEKIT_NODE_IP in bin/dev). Codespaces forwards TCP only,
+// so AV stays silent there — everything else works. State/keys live in the
+// git-ignored .local/ folder (symlinked to the home-dir paths by
+// post-create.bash) and survive rebuilds.
 {
 	"name": "EnsembleWorks",
 	"build": { "dockerfile": "Dockerfile", "context": ".." },
@@ -11,9 +15,12 @@
 	"portsAttributes": {
 		"8080": { "label": "EnsembleWorks (Caddy edge)", "onAutoForward": "openBrowserOnce" }
 	},
-	// LiveKit dev-mode media: TCP 7881 + UDP mux 7882, advertised at 127.0.0.1
-	// (bin/dev passes --node-ip 127.0.0.1). Ignored by Codespaces — harmless.
-	"runArgs": ["-p", "7881:7881", "-p", "7882:7882/udp"],
+	// Publish the Caddy edge (8080) and LiveKit dev-mode media (TCP 7881 + UDP
+	// mux 7882) to the host, so both the canvas and voice are reachable from
+	// another LAN machine. Ignored by Codespaces — harmless.
+	"runArgs": ["-p", "8080:8080", "-p", "7881:7881", "-p", "7882:7882/udp"],
+	// Host-side: detect this host's LAN IP for LiveKit's node_ip (LAN voice).
+	"initializeCommand": "bash .devcontainer/detect-lan-ip.sh",
 	"postCreateCommand": "bash .devcontainer/post-create.bash",
 	"postStartCommand": "bin/dev up --no-install"
 }

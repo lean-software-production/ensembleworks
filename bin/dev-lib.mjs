@@ -16,6 +16,59 @@ export const PORTS = {
 }
 
 /**
+ * Resolve the browser-facing public origin. ENSEMBLEWORKS_PUBLIC_ORIGIN
+ * (`scheme://host[:port]`, scheme optional → http) is the general form, so a
+ * remote box reachable over the LAN as plain http on :8080 works — not only a
+ * TLS edge on :443. ENSEMBLEWORKS_PUBLIC_HOST is kept as back-compat shorthand
+ * for `https://<host>` (tailscale serve / a tunnel). Returns null for plain
+ * localhost (neither set). Mirrored in client/vite.config.ts (HMR +
+ * allowedHosts) — keep the two in sync.
+ * @param {string | undefined | null} origin
+ * @param {string | undefined | null} host
+ * @returns {{ scheme: 'http' | 'https', host: string, port: number | null } | null}
+ */
+export function parsePublicOrigin(origin, host) {
+	const trimmed = origin?.trim()
+	const raw = trimmed
+		? /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+			? trimmed
+			: `http://${trimmed}`
+		: host?.trim()
+			? `https://${host.trim()}`
+			: ''
+	if (!raw) return null
+	try {
+		const u = new URL(raw)
+		return {
+			scheme: u.protocol === 'https:' ? 'https' : 'http',
+			host: u.hostname,
+			port: u.port ? Number(u.port) : null,
+		}
+	} catch {
+		return null
+	}
+}
+
+/**
+ * Canonical `scheme://host[:port]` string for a parsed origin (or null).
+ * @param {{ scheme: string, host: string, port: number | null } | null} o
+ */
+export function originToString(o) {
+	return o ? `${o.scheme}://${o.host}${o.port ? `:${o.port}` : ''}` : null
+}
+
+/**
+ * Browser-facing LiveKit signaling URL (behind Caddy's /livekit route) for a
+ * parsed origin: wss for https, ws otherwise; localhost caddy when null.
+ * @param {{ scheme: string, host: string, port: number | null } | null} o
+ */
+export function livekitBrowserUrl(o) {
+	if (!o) return `ws://localhost:${PORTS.caddy}/livekit`
+	const ws = o.scheme === 'https' ? 'wss' : 'ws'
+	return `${ws}://${o.host}${o.port ? `:${o.port}` : ''}/livekit`
+}
+
+/**
  * Wrap a service command so its tmux window survives a crash OR a Ctrl-C: run
  * the command, then drop into an interactive shell with the exit code and
  * scrollback intact (instead of the window vanishing, which is what hid a
@@ -69,7 +122,10 @@ export function parseDotEnv(text) {
  * @typedef {object} ServiceCtx
  * @property {string} repoDir
  * @property {string} dataDir              DATA_DIR for the sync server
- * @property {string | null} publicHost    ENSEMBLEWORKS_PUBLIC_HOST (tailnet/tunnel edge) or null = localhost
+ * @property {{ scheme: 'http' | 'https', host: string, port: number | null } | null} publicOrigin
+ *           browser-facing origin (parsePublicOrigin) or null = localhost
+ * @property {string | null} livekitNodeIp  --node-ip for livekit --dev (the IP the
+ *           SFU advertises for media; a LAN IP makes cross-machine voice work). null → 127.0.0.1
  * @property {string | null} livekitConf   path to livekit-dev.yaml IFF the file exists, else null
  * @property {string} whisperModel         ggml model path (existence pre-checked by the caller)
  * @property {string | null} tailscaleIp   first tailscale IPv4, for neko NAT1TO1
@@ -105,11 +161,11 @@ export function buildServices(ctx) {
 		: true
 	const livekitOn = ctx.has.livekit && livekitKeysOk
 
-	// Browser-facing signaling URL goes through Caddy's /livekit route: wss
-	// when a TLS edge fronts us (public host), plain ws for localhost.
-	const livekitPublicUrl = ctx.publicHost
-		? `wss://${ctx.publicHost}/livekit`
-		: `ws://localhost:${PORTS.caddy}/livekit`
+	// Browser-facing signaling URL goes through Caddy's /livekit route: wss for
+	// an https edge, plain ws for LAN http / localhost — derived from the same
+	// public origin the client (vite) uses for HMR/allowedHosts.
+	const livekitPublicUrl = livekitBrowserUrl(ctx.publicOrigin)
+	const publicOriginStr = originToString(ctx.publicOrigin)
 
 	const syncEnv = [`DATA_DIR='${ctx.dataDir}'`]
 	if (livekitOn) {
@@ -141,7 +197,7 @@ export function buildServices(ctx) {
 		name: 'client',
 		enabled: true,
 		reason: 'always',
-		cmd: `${ctx.publicHost ? `ENSEMBLEWORKS_PUBLIC_HOST='${ctx.publicHost}' ` : ''}npm run dev --workspace=client`,
+		cmd: `${publicOriginStr ? `ENSEMBLEWORKS_PUBLIC_ORIGIN='${publicOriginStr}' ` : ''}npm run dev --workspace=client`,
 		health: { kind: 'port', port: PORTS.client },
 	})
 
@@ -165,9 +221,13 @@ export function buildServices(ctx) {
 				: ctx.livekitConf
 					? `config ${ctx.livekitConf}`
 					: 'dev mode (built-in devkey/secret)',
+		// --node-ip is what the SFU advertises for media. 127.0.0.1 keeps voice
+		// localhost-only; a LAN IP (auto-detected on the host) makes voice work
+		// from a browser on another LAN machine. Media rides the published udp
+		// mux (7882) regardless.
 		cmd: ctx.livekitConf
 			? `livekit-server --config '${ctx.livekitConf}'`
-			: 'livekit-server --dev --bind 0.0.0.0 --node-ip 127.0.0.1',
+			: `livekit-server --dev --bind 0.0.0.0 --node-ip ${ctx.livekitNodeIp ?? '127.0.0.1'}`,
 		health: { kind: 'port', port: PORTS.livekit },
 	})
 

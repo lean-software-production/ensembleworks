@@ -17,7 +17,15 @@ import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
-import { PORTS, buildServices, hold, parseDotEnv, parseNvmrc } from './dev-lib.mjs'
+import {
+	PORTS,
+	buildServices,
+	hold,
+	originToString,
+	parseDotEnv,
+	parseNvmrc,
+	parsePublicOrigin,
+} from './dev-lib.mjs'
 import { runDoctor } from './dev-doctor.mjs'
 
 export const repoDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
@@ -74,6 +82,14 @@ const livekitConfPath =
 	path.join(homedir(), '.config', 'ensembleworks', 'livekit-dev.yaml')
 const whisperModel = process.env.WHISPER_MODEL ?? '/usr/local/share/whisper/ggml-base.bin'
 
+// LiveKit --node-ip for LAN voice: explicit env wins; else the LAN IP the
+// devcontainer's initializeCommand detected (host-lan-ip, next to dev.env,
+// symlinked into the container); else null → 127.0.0.1 (localhost-only voice).
+const hostLanIpPath = path.join(path.dirname(devEnvPath), 'host-lan-ip')
+const hostLanIp = existsSync(hostLanIpPath)
+	? readFileSync(hostLanIpPath, 'utf8').trim() || null
+	: null
+
 function tailscaleIp() {
 	try {
 		const out = execSync('tailscale ip -4', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
@@ -88,7 +104,11 @@ export function makeCtx() {
 	return {
 		repoDir,
 		dataDir,
-		publicHost: process.env.ENSEMBLEWORKS_PUBLIC_HOST ?? null,
+		publicOrigin: parsePublicOrigin(
+			process.env.ENSEMBLEWORKS_PUBLIC_ORIGIN,
+			process.env.ENSEMBLEWORKS_PUBLIC_HOST,
+		),
+		livekitNodeIp: process.env.ENSEMBLEWORKS_LIVEKIT_NODE_IP ?? hostLanIp,
 		livekitConf: existsSync(livekitConfPath) ? livekitConfPath : null,
 		whisperModel,
 		tailscaleIp: tailscaleIp(),
@@ -199,11 +219,14 @@ async function up(flags) {
 
 /** @param {import('./dev-lib.mjs').Service[]} enabled */
 function cheatSheet(enabled) {
-	const url = process.env.ENSEMBLEWORKS_PUBLIC_HOST
-		? `https://${process.env.ENSEMBLEWORKS_PUBLIC_HOST}`
-		: `http://localhost:${PORTS.caddy}`
+	const ctx = makeCtx()
+	const url = originToString(ctx.publicOrigin) ?? `http://localhost:${PORTS.caddy}`
+	const voice =
+		enabled.some((s) => s.name === 'livekit') && ctx.livekitNodeIp
+			? `\n  voice: LiveKit advertises ${ctx.livekitNodeIp} (media udp mux 7882)`
+			: ''
 	console.log(`
-EnsembleWorks dev stack — ${url}
+EnsembleWorks dev stack — ${url}${voice}
   windows: ${enabled.map((s) => s.name).join('  ')}
   bin/dev status | logs <svc> | restart <svc> | attach | down   (agents: status --json)
   tmux: prefix Ctrl-Space (Ctrl-b works too) — prefix+<n> switch window, prefix+d detach`)
