@@ -19,11 +19,11 @@ import { ClipboardAddon, type IClipboardProvider } from '@xterm/addon-clipboard'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
+import { terminalShapeProps } from '@ensembleworks/contracts'
 import { useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
-	T,
 	TLBaseShape,
 	TLResizeInfo,
 	resizeBox,
@@ -82,15 +82,7 @@ function xtermCell(term: Terminal): { width: number; height: number } | null {
 
 export class TerminalShapeUtil extends BaseBoxShapeUtil<TerminalShape> {
 	static override type = 'terminal' as const
-	// Keep in sync with server/src/schema.ts
-	static override props = {
-		w: T.number,
-		h: T.number,
-		sessionId: T.string,
-		title: T.string,
-		status: T.string.optional(),
-		gateway: T.string.optional(),
-	}
+	static override props = terminalShapeProps
 
 	override getDefaultProps(): TerminalShape['props'] {
 		return { w: 720, h: 440, sessionId: 'default', title: 'terminal' }

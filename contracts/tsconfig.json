@@ -5,8 +5,7 @@
     "moduleResolution": "nodenext",
     "strict": true,
     "noEmit": true,
-    "skipLibCheck": true,
-    "allowImportingTsExtensions": true
+    "skipLibCheck": true
   },
   "include": ["src"]
 }

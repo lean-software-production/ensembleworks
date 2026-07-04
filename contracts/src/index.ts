@@ -1,3 +1,5 @@
 // @ensembleworks/contracts — the single source of truth for shapes, wire
 // protocols and shared conventions. See docs/unified-architecture-design.md §1.5.
-export {}
+// Convention: intra-package relative imports use the `.js` extension
+// (nodenext-style; resolves to the .ts source everywhere).
+export * from './shapes.js'
