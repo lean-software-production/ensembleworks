@@ -91,9 +91,9 @@ README.md                # "Open in Codespaces → run ./connect.sh"
 ### `connect.sh` — the single script
 
 Bash, `set -euo pipefail`, `shellcheck`-clean. A single overridable
-`RELEASE_REPO="ensembleworks-dev/ensembleworks"` variable near the top (env
-override `RELEASE_REPO=...`) so the pending org move — or a fork — is a one-line
-change. Steps:
+`RELEASE_REPO="lean-software-production/ensembleworks"` variable near the top
+(env override `RELEASE_REPO=...`) so the pending org move under
+`ensembleworks-dev` — or a fork — is a one-line change. Steps:
 
 1. **Resolve config.** Precedence: existing env vars → git-ignored
    `.termgw.env` → interactive prompt. Required: `CANVAS_URL`,
@@ -123,9 +123,10 @@ A GitHub Actions workflow triggered when a `v*` release is **published**:
 - Attach all three to the release as public assets.
 
 No change to the Go connector source. The main repo is public, so
-`connect.sh` downloads assets directly — no mirror repo, no token. When the repo
-moves under `ensembleworks-dev`, update `RELEASE_REPO` (one line) and the assets
-follow automatically.
+`connect.sh` downloads assets directly — no mirror repo, no token. `RELEASE_REPO`
+defaults to the current `lean-software-production/ensembleworks`; when the repo
+moves under `ensembleworks-dev`, update that one line (or set the env override)
+and the assets follow automatically.
 
 ## Error handling
 
