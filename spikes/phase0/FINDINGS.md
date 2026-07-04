@@ -3,7 +3,7 @@
 | Spike | Result | Notes |
 |---|---|---|
 | A: compiled sync server | FAIL as-is; PASS with shim | compile OK (92M binary); boot fails — `node:sqlite` unsupported by Bun 1.3.14 (not `--compile`-specific). Addendum: with a 12-line `bun:sqlite` shim, health + ws-sync PASS; static needs explicit `CLIENT_DIST` (bundle-relative path breaks under `--compile`). See detail below. |
-| B: Vite build under Bun | _pending_ | |
+| B: Vite build under Bun | PASS (2026-07-05) | `bun --bun run build` (tsc --noEmit && vite build) exits 0; `dist/index.html` + hashed JS/CSS assets produced. See detail below. |
 | C: rtc-node under Bun | _pending_ | |
 | D: Bun.Terminal PTY | PASS (2026-07-04) | see unified doc §2.1 |
 
@@ -48,3 +48,12 @@ needs (1) a sqlite adapter (a trivial `bun:sqlite`-backed `DatabaseSync` shim su
 methods sync-core uses) or a Bun release that ships `node:sqlite`, and (2) an explicit
 `CLIENT_DIST` (or equivalent) for static serving, since bundle-relative path resolution breaks
 under `--compile`.
+
+## Spike B detail
+
+Environment: `bun 1.3.14` (via mise). `rm -rf client/dist && cd client && bun --bun run build`.
+
+- **build** — PASS, exit 0. `bun --bun run build` ran the package's own script (`tsc --noEmit && vite build`) with Bun forced as the JS runtime for both `tsc` and `vite`. tsc reported no type errors; Vite (v7.3.5) transformed 897 modules and emitted `dist/index.html`, `dist/assets/index-*.css` (83.77 kB), `dist/assets/sanitizeSvg-*.js` (7.32 kB), and `dist/assets/index-*.js` (2,925.81 kB) — the same file set/sizes as a Node build, just different content hashes. Vite's stock "chunk larger than 500 kB" warning appeared, as it does under Node; no Bun-specific warnings or errors.
+- **output check** — PASS. `test -f client/dist/index.html` succeeded; `ls client/dist/assets` showed `index-*.js`, `index-*.css`, `sanitizeSvg-*.js`.
+- **timing vs Node** — comparable, no meaningful difference. Bun run: `real 0m5.392s` (Vite reported "built in 3.49s"). Immediately after, a plain Node build (`npm run build --workspace=client`) took `real 0m4.722s` (Vite "built in 3.23s") on the same machine/cache state. Single-run numbers, within normal noise for this sample size — not a basis for a performance claim either way.
+- **final `client/dist` state** — left populated by the last successful build (the Node comparison run above), so later spike tasks that expect `client/dist` to exist have it; contents are equivalent to the Bun-built output (same modules/sizes, different hashes).
