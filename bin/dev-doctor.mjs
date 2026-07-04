@@ -67,7 +67,7 @@ export async function runDoctor(opts) {
 	checks.push({
 		name: '.local ignored',
 		level: 'required',
-		ok: spawnSync('git', ['-C', repoDir, 'check-ignore', '-q', '.local'], { stdio: 'ignore' }).status === 0,
+		ok: spawnSync('git', ['-C', repoDir, 'check-ignore', '-q', '.local/probe'], { stdio: 'ignore' }).status === 0,
 		detail: 'the devcontainer keeps state+keys under <repo>/.local — it must never be committed',
 		remedy: 'add a `.local/` line to .gitignore',
 	})
