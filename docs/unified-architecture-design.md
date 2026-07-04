@@ -199,15 +199,30 @@ flags and raw mode: a complete node-pty replacement. Verified:
 - The API is absent in Bun 1.3.4 — **Bun ≥ 1.3.14 is the build floor**
   (build-time only; compiled binaries embed the runtime).
 
+Phase-0 battery results (2026-07-05, see `spikes/phase0/FINDINGS.md`):
+
+- Spike A (compiled sync server): PASS with two Phase-3 work items — Bun
+  lacks `node:sqlite` (a `bun:sqlite` adapter is needed; a throwaway shim
+  proved express 5, the `ws` upgrade path, sync-core and sqlite persistence
+  all work compiled), and the compiled binary needs an explicit
+  `CLIENT_DIST` (the `import.meta.dirname` default resolves into the
+  bundle's virtual filesystem).
+- Spike B (Vite build under Bun): PASS — `bun --bun run build` works,
+  output and timing equivalent to Node.
+- Spike C (rtc-node under Bun): PASS — import, transcriber runtime, and
+  compiled binary with the embedded `.node` addon all work; the LiveKit
+  `room.connect()` path itself was not exercised (deferred to the Phase-3
+  transcriber cutover checklist).
+
 ### 2.2 Component table
 
 | Component | Decision | Reasoning |
 |---|---|---|
 | Contracts + plugin API | **TypeScript + Zod** | The design hinges on client/server/CLI/MCP sharing one schema object. |
 | Client | **TypeScript + React** (keep) | tldraw, LiveKit client and xterm.js are TS-first. Keep tldraw for now; the Yjs+Hocuspocus question stays open behind the `canvas` capability seam. Vite build driven by Bun (Phase 0 spike line-item). |
-| Sync server / kernel | **TypeScript on Bun** (restructure per §1; compiled in CI) | Must execute the shared shape schemas — TS-native. Express 5 + per-plugin routers is fine at this scale. Bun replaces Node after the Phase 0 compat spike (express 5, `ws` upgrade path under sync-core traffic, `node:sqlite`, static serving from a compiled bundle). |
+| Sync server / kernel | **TypeScript on Bun** (restructure per §1; compiled in CI) | Must execute the shared shape schemas — TS-native. Express 5 + per-plugin routers is fine at this scale. Bun replaces Node after the Phase 0 compat spike (express 5, `ws` upgrade path under sync-core traffic, `node:sqlite`, static serving from a compiled bundle). Phase-0 found two cutover work items: a `bun:sqlite` adapter until Bun ships `node:sqlite`, and an explicit `CLIENT_DIST` for compiled binaries. |
 | Terminal gateway / connector | **TypeScript on Bun, shared session manager** — the Go rewrite is retired | Supersedes the previous "Go when the fleet design executes" recommendation. `Bun.Terminal` removes node-pty; `bun build --compile` gives the same curl-one-static-binary property that motivated Go; and the server gateway + CLI connector share one session-manager implementation instead of forking it across languages. The Go termgw spike validated the relay protocol, which carries over message-for-message. |
-| Transcriber / workers | **TypeScript** (keep); spiked under Bun; **Python sanctioned for ML-heavy workers** | `@livekit/rtc-node` (napi over LiveKit's Rust core) is the one native risk: Phase 0 spikes it compiled-under-Bun. Pass → compiled artifact like the rest; fail → contained Node exception (devcontainer + one prod unit). The **Python + livekit-agents rewrite** is the transcriber's named future — most mature audio pipeline (AudioStream PCM, Silero VAD, STT plugins) — triggered by the first local-Whisper/diarisation feature, as its own spec. The worker SPI is process-level (env in, HTTP/LiveKit out), so worker language is invisible by construction. |
+| Transcriber / workers | **TypeScript** (keep); spiked under Bun; **Python sanctioned for ML-heavy workers** | `@livekit/rtc-node` (napi over LiveKit's Rust core) is the one native risk: Phase 0 spikes it compiled-under-Bun. Pass → compiled artifact like the rest; fail → contained Node exception (devcontainer + one prod unit). (Phase 0: passed — including the compiled-binary check; `room.connect()` exercise deferred to cutover.) The **Python + livekit-agents rewrite** is the transcriber's named future — most mature audio pipeline (AudioStream PCM, Silero VAD, STT plugins) — triggered by the first local-Whisper/diarisation feature, as its own spec. The worker SPI is process-level (env in, HTTP/LiveKit out), so worker language is invisible by construction. |
 | Agent CLI | **One compiled Bun binary, `ensembleworks`** (§6) — generic renderer of the server tool manifest, plus native `auth`/`terminal connect` | Absorbs `bin/canvas`, termgw and connect.sh. Supersedes "TypeScript CLI generated from contracts at build time": rendering the manifest at runtime is stronger — no verb knowledge in the binary to drift, and new plugin tools appear in installed CLIs without a release. |
 | Memory store | **SQLite** (FTS5 + sqlite-vec) — see §4 | |
 | Edge / infra | **Keep Caddy + systemd + Cloudflare Tunnel/Access.** `deploy.sh` becomes artifact-based: fetch-verify-swap of CI-built binaries (§6.5); no JS runtime or build toolchain on prod hosts | k8s still rejected per `deploy-orchestration-options.md`. Plugin config slots into `~/.config/ensembleworks/*.env` plus `ensembleworks.config.ts`. |
