@@ -15,4 +15,5 @@ ln -sfn "$repo/.local/config/ensembleworks" "$HOME/.config/ensembleworks"
 
 cd "$repo"
 npm ci
+npm rebuild node-pty     # ensure native module is compiled for this container's platform
 bin/dev doctor || true   # informational on first build — shows what's lit up
