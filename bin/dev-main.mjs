@@ -18,6 +18,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { PORTS, buildServices, hold, parseDotEnv, parseNvmrc } from './dev-lib.mjs'
+import { runDoctor } from './dev-doctor.mjs'
 
 export const repoDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const session = process.env.WORKSPACE_TMUX_SESSION ?? 'workspace'
@@ -278,6 +279,7 @@ function usage() {
   bin/dev logs <svc> [--tail N]          one service's scrollback (default 200 lines)
   bin/dev restart <svc>                  respawn one service window
   bin/dev attach                         enter the tmux session (prefix Ctrl-Space, prefix+d detaches)
+  bin/dev doctor [--json]                environment check — every failure prints its remedy
 
 Config: ~/.config/ensembleworks/dev.env (optional). Data: ~/.local/share/ensembleworks.
 Optional binaries light up more services: caddy, livekit-server, whisper-server, docker.`)
@@ -314,6 +316,9 @@ switch (cmd) {
 		break
 	case 'attach':
 		attach()
+		break
+	case 'doctor':
+		process.exit(await runDoctor({ json: flags.json }))
 		break
 	case undefined:
 		usage()
