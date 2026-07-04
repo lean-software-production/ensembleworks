@@ -5,7 +5,7 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 IMG=sample-remote-terminal-test
 docker build -t "$IMG" "$HERE/../.devcontainer"
-run() { echo "== $1"; docker run --rm "$IMG" bash -lc "$1"; }
+run() { echo "== $1"; docker run --rm --user vscode "$IMG" bash -lc "$1"; }
 run 'tmux -V'
 run 'nvim --version | head -1'
 run 'node --version'
