@@ -1272,3 +1272,115 @@ approaches:
   `ensembleworks-term` in the same VM. agentd supports this natively via
   multiple `[[agents]]` entries, but the UX and gateway routing for multiple
   agents per VM needs further design.
+---
+
+## Spike findings (2026-07-03)
+
+A spike validated the remote-gateway path end to end: a devcontainer on a
+separate box (`candace`) hosting a **Go** connector, dialling the canvas on
+`baljeet` over the tailnet, with its terminal rendered as a live shape. Branch
+`worktree-remote-terminal-spike` (PR #11). Spec + plan:
+[`docs/superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md`](./superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md),
+[`docs/superpowers/plans/2026-07-03-remote-devcontainer-terminal-spike.md`](./superpowers/plans/2026-07-03-remote-devcontainer-terminal-spike.md).
+
+The spike deliberately scoped **narrower** than this document's full design —
+one relay-only gateway, no orchestrator, no direct path — to answer three
+questions. Verdicts:
+
+### 1. Go for the gateway — confirmed, do it
+
+The connector is ~600 lines of Go across three packages (`protocol`,
+`session`, `relay`) plus `main`, with only two dependencies (`creack/pty`,
+`coder/websocket`). It reimplements the terminal protocol (tmux `new-session
+-A`, 256 KB scrollback replay, authoritative resize with dedup, per-viewer
+fan-out) and ran **race-clean** under `go test -race`. A cross-plane smoke
+(real Go connector ↔ real Node sync server ↔ real tmux) found **zero interop
+bugs** — the wire contract held because the Go `protocol` tests assert the
+exact JSON byte strings the Node splicer emits. This is strong evidence the
+eventual full-fleet gateway (Layer 1) should be the Go rewrite this document
+anticipates, not a ported `terminal-gateway.ts`.
+
+### 2. Relay latency — acceptable
+
+Loopback (browser → sync server → connector, all on `baljeet`) measured
+**relay p50 1.3–4.2 ms / p95 3.9–8 ms vs direct `/term/ws` p50 0.9–2.8 ms** —
+a relay overhead of ~0.5–1.5 ms at p50, dominated by the extra in-process WS
+hop. Over the real `candace → baljeet` tailnet hop the terminal was
+subjectively indistinguishable from a local one for interactive use. The
+splicer's single multiplexed WS per gateway means bulk output in one session
+can head-of-line-block others on that gateway; the spike accepts this and caps
+per-browser buffering at 4 MB (see accepted risks in the spec). The
+second-attach in the loopback harness biases the *direct* number slightly high
+— treat the gap as an upper bound on relay cost, not a precise delta.
+
+### 3. Devcontainer packaging — works, but the lifecycle is the hard part
+
+Packaged as a devcontainer **feature** so a repo adopts it with one line in
+`devcontainer.json`. Three packaging bugs only surfaced on a real remote box,
+each worth recording for the Cycle 5/6 implementation:
+
+- **A `postStartCommand` daemon does not survive.** The devcontainer CLI
+  reaps the hook's `docker exec` process tree when it returns; `nohup` and
+  `setsid` both left an empty log and no process. **Fix: a feature
+  `entrypoint`** (the mechanism the official `sshd` feature uses), which the
+  CLI chains into the container's persistent init. This is the load-bearing
+  lesson — any Cycle-5 devcontainer integration must launch the gateway from
+  an entrypoint, not a lifecycle command.
+- **`remoteEnv` does not reliably reach a backgrounded daemon.** Config
+  (`CANVAS_URL`, label) must be **baked at build time** — the spike takes it
+  as feature *options* and writes `/etc/termgw.env`, which the supervisor
+  sources. No runtime env propagation to fight.
+- **Env-file values must be quoted.** A label with a space
+  (`GATEWAY_LABEL=workshops box`) written unquoted made the sourcing shell run
+  the tail as a command and leave the var unset — the connector then fell back
+  to `GATEWAY_ID` → container hostname, which showed up as the gateway's label
+  in the picker. Emit single-quoted, metachar-safe `KEY='value'` lines.
+
+### 4. Client toolbar — nested dropdown dies in the overflow popover
+
+The gateway picker was first built as a Radix dropdown on the toolbar button.
+At common widths tldraw pushes custom tools into the "More" overflow popover,
+where a **nested dropdown trigger silently closes the popover instead of
+opening** (found via headless probe). Fix: render the picker as a plain
+`TldrawUiMenuItem` whose `onSelect` opens a tldraw **dialog** — which works
+identically whether the item is on the main bar or in the overflow. With zero
+remote gateways registered the dialog is skipped and a local terminal is
+created immediately (one fewer click for the common case).
+
+### Protocol note — supersedes the relay-splicer sketch above
+
+The spike's wire framing replaces the sketch in **The relay splicer** and
+**The relay protocol** sections above. Instead of `{type:'relay-data', data}`
+with **base64** payloads and **`crypto.randomUUID()`** channel ids, the spike
+uses:
+
+- **`channelId` as a monotonic `uint32`**, allocated by the splicer per
+  gateway connection;
+- **terminal output as binary WS frames with a 4-byte big-endian channelId
+  prefix** (no base64, no JSON parse on the hot path) — the splicer strips the
+  prefix and forwards raw bytes;
+- inner control messages (`input`/`resize`/`attached`/`exit`) wrapped as
+  `{type:'relay-msg', channelId, msg}` text frames.
+
+This preserves the browser-facing protocol byte-for-byte (the existing
+`TerminalShapeUtil` needed no protocol-handling changes, only a URL builder
+that targets `/api/term/relay?gateway=…`). Adopt this framing when
+implementing the real relay; the base64/UUID sketch above is retained only for
+historical context.
+
+### Still unproven by the spike
+
+Direct (non-relay) LAN path; the registration/heartbeat REST protocol (the
+spike collapses it into "connect = register" over the outbound WS, which
+forward-ports cleanly but was not exercised); `GATEWAY_SECRET` auth (the spike
+runs unauthenticated behind the tailnet/CF-Access boundary — a named accepted
+risk); and the orchestrator layer (launch was manual `devcontainer up`).
+
+**CF Access dialing is currently unwired in the devcontainer feature.** The
+connector still reads `CF_ACCESS_CLIENT_ID`/`_SECRET` (main.go), but the feature
+bakes only `CANVAS_URL`/`GATEWAY_LABEL`/`GATEWAY_ID` from its options — so
+pointing `canvasUrl` at a CF-Access-protected prod URL would fail with an opaque
+403 loop. Wiring it means either CF Access **service-token** options baked into
+`/etc/termgw.env` (note: that file is world-readable 0644 in an image layer — a
+secret-handling decision to make explicitly, not by accident) or a runtime
+secret mount. Deferred; the spike demo targets a tailnet URL with no CF Access.

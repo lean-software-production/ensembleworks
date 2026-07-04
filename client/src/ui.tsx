@@ -21,6 +21,7 @@ import {
 	useEditor,
 	useTools,
 } from 'tldraw'
+import { TerminalToolbarItem } from './terminal/TerminalToolbarItem'
 import { AvOverlay } from './av/AvOverlay'
 import { SCREENSHARE_ICON_NAME } from './screenshare/ScreenShareShapeUtil'
 import { startScreenShare } from './screenshare/share'
@@ -31,22 +32,6 @@ import { toProxiedUrl } from './iframe/IframeShapeUtil'
 import { NEKO_DEFAULT_BASE, NEKO_DEFAULT_H, NEKO_DEFAULT_W, NEKO_ICON_NAME } from './neko/NekoShapeUtil'
 import { ROADMAP_DEFAULT_H, ROADMAP_DEFAULT_W } from './roadmap/RoadmapShapeUtil'
 import { slugify } from './roadmap/model'
-
-export function createTerminalShape(editor: Editor) {
-	// Short, human-typeable ID — it is also the tmux session name suffix, so
-	// `ssh vm` + `tmux attach -t canvas-<id>` works.
-	const sessionId = `${Date.now().toString(36).slice(-4)}${Math.random().toString(36).slice(2, 6)}`
-	const { x, y } = editor.getViewportPageBounds().center
-	const id = createShapeId()
-	editor.createShape({
-		id,
-		type: 'terminal',
-		x: x - 360,
-		y: y - 220,
-		props: { w: 720, h: 440, sessionId, title: 'terminal' },
-	})
-	editor.setSelectedShapes([id])
-}
 
 export function createDevServerShape(editor: Editor) {
 	const input = window.prompt('Dev server port (or full URL):', '3000')?.trim()
@@ -102,15 +87,6 @@ export function createRoadmapShape(editor: Editor) {
 
 export const uiOverrides: TLUiOverrides = {
 	tools(editor, tools) {
-		tools['terminal'] = {
-			id: 'terminal',
-			icon: 'tool-frame',
-			label: 'New terminal',
-			readonlyOk: false,
-			onSelect() {
-				createTerminalShape(editor)
-			},
-		}
 		tools['dev-server'] = {
 			id: 'dev-server',
 			icon: 'tool-embed',
@@ -157,7 +133,7 @@ function ToolbarWithTerminal() {
 	return (
 		<DefaultToolbar>
 			<DefaultToolbarContent />
-			{tools['terminal'] && <TldrawUiMenuItem {...tools['terminal']} />}
+			<TerminalToolbarItem />
 			{tools['dev-server'] && <TldrawUiMenuItem {...tools['dev-server']} />}
 			{tools['neko'] && <TldrawUiMenuItem {...tools['neko']} />}
 			{tools['roadmap'] && <TldrawUiMenuItem {...tools['roadmap']} />}

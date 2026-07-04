@@ -32,6 +32,7 @@ import {
 } from 'tldraw'
 import { paperTerminalTheme, wm } from '../theme'
 import { type CellSize, gridFor, quantizeCell } from './grid'
+import { termWsUrl } from './wsUrl'
 
 export interface TerminalShapeProps {
 	w: number
@@ -40,6 +41,9 @@ export interface TerminalShapeProps {
 	title: string
 	// Optional status light set by agents via POST /api/terminal-status.
 	status?: string
+	// Remote gateway id (spike): undefined = same-origin gateway, zero
+	// migration for existing rooms. See /api/gateway/list.
+	gateway?: string
 }
 
 // Register the shape in tldraw's global shape union (tldraw v5 pattern), so
@@ -85,6 +89,7 @@ export class TerminalShapeUtil extends BaseBoxShapeUtil<TerminalShape> {
 		sessionId: T.string,
 		title: T.string,
 		status: T.string.optional(),
+		gateway: T.string.optional(),
 	}
 
 	override getDefaultProps(): TerminalShape['props'] {
@@ -117,11 +122,6 @@ export class TerminalShapeUtil extends BaseBoxShapeUtil<TerminalShape> {
 		path.rect(0, 0, shape.props.w, shape.props.h)
 		return path
 	}
-}
-
-function termWsUrl(sessionId: string, cols: number, rows: number) {
-	const proto = location.protocol === 'https:' ? 'wss' : 'ws'
-	return `${proto}://${location.host}/term/ws?session=${sessionId}&cols=${cols}&rows=${rows}`
 }
 
 // Copy from inside a user gesture. The async Clipboard API is refused outside a
@@ -313,7 +313,9 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 
 			setConnection(attempt === 0 ? 'connecting' : 'reconnecting')
 			setRetryAttempt(attempt)
-			const ws = new WebSocket(termWsUrl(shape.props.sessionId, term.cols, term.rows))
+			const ws = new WebSocket(
+				termWsUrl(shape.props.sessionId, term.cols, term.rows, shape.props.gateway)
+			)
 			ws.binaryType = 'arraybuffer'
 			wsRef.current = ws
 

@@ -1,0 +1,27 @@
+{
+	"id": "termgw",
+	"version": "0.2.0",
+	"name": "EnsembleWorks terminal gateway connector",
+	"description": "Hosts canvas terminal shapes in this devcontainer via the EnsembleWorks relay.",
+	"options": {
+		"canvasUrl": {
+			"type": "string",
+			"default": "",
+			"description": "Canvas sync-server base URL the connector dials, e.g. http://host:8788"
+		},
+		"gatewayLabel": {
+			"type": "string",
+			"default": "",
+			"description": "Human label shown in the New-terminal picker (defaults to hostname)"
+		},
+		"gatewayId": {
+			"type": "string",
+			"default": "",
+			"description": "Stable gateway id (defaults to hostname)"
+		}
+	},
+	"entrypoint": "/usr/local/share/termgw/termgw-entrypoint.sh",
+	"containerEnv": {
+		"TMUX_CONF": "/usr/local/share/termgw/tmux.conf"
+	}
+}

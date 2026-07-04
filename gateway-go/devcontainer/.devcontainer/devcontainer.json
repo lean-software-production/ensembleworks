@@ -1,0 +1,10 @@
+{
+	"name": "termgw-example",
+	"image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+	"features": {
+		"./termgw-feature": {
+			"canvasUrl": "${localEnv:CANVAS_URL}",
+			"gatewayLabel": "${localEnv:GATEWAY_LABEL}"
+		}
+	}
+}
