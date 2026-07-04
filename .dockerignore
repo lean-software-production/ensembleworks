@@ -1,0 +1,8 @@
+# Devcontainer build context (.devcontainer/devcontainer.json context: "..")
+# only ever COPYs .nvmrc — keep bulk and secrets out of the docker daemon.
+node_modules
+.git
+.local
+.claude
+dist
+data

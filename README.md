@@ -77,12 +77,36 @@ hold only small references — a tmux session id, a URL.
 
 ## Development
 
+The blessed path is the **devcontainer** (`.devcontainer/`, Debian 13 — the
+same OS as the production boxes): open the repo in VS Code, Codespaces or the
+devcontainer CLI and it builds with everything baked in — Node from `.nvmrc`,
+tmux, Caddy, a LiveKit SFU in dev mode, whisper.cpp for transcription. On
+start it runs `bin/dev up`; open forwarded port 8080 and you have a working
+canvas with terminals, voice and transcription, **zero accounts or keys**.
+(Two devcontainer caveats: WebRTC voice needs UDP, so it works locally but
+not over Codespaces port-forwarding; and the neko shared browser needs
+docker-in-docker, so it's native-host only.)
+
+Running natively instead: `bin/dev doctor` tells you exactly what's missing
+and how to fix it (Node 22.22.3 and tmux are required; caddy, livekit-server,
+whisper-server and docker each light up more services).
+
 ```bash
-npm install
-npm run dev        # vite on :5173, sync server :8788, terminal gateway :8789
-npm run typecheck
-npm run build
+bin/dev up             # npm ci + every service in a tmux session; idempotent
+bin/dev status --json  # per-service health, machine-readable (for agents)
+bin/dev logs client    # one service's scrollback (--tail N)
+bin/dev restart sync   # respawn one service, leave the rest alone
+bin/dev attach         # enter the tmux session (prefix Ctrl-Space, prefix+d detaches)
+bin/dev down           # stop everything
 ```
+
+State lives at `~/.local/share/ensembleworks` (canvas SQLite, uploads,
+transcripts); optional config at `~/.config/ensembleworks/dev.env`
+(`STT_API_KEY` for hosted STT, `LIVEKIT_*` + `livekit-dev.yaml` for a real
+SFU setup, `ENSEMBLEWORKS_PUBLIC_HOST` when serving over a tailnet/tunnel).
+In the devcontainer both paths are symlinks into the git-ignored `.local/`
+workspace folder, so they survive container rebuilds; `rm -rf .local` is a
+factory reset.
 
 Smoke tests (gateway must be running for the second one):
 

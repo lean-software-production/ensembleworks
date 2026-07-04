@@ -1,0 +1,19 @@
+// EnsembleWorks devcontainer. The canvas is on forwarded port 8080 (Caddy).
+// Voice/video (LiveKit) needs UDP: works for LOCAL devcontainers via runArgs
+// port mappings below; Codespaces forwards TCP only, so AV stays silent there
+// — everything else works. State/keys live in the git-ignored .local/ folder
+// (symlinked to the home-dir paths by post-create.bash) and survive rebuilds.
+{
+	"name": "EnsembleWorks",
+	"build": { "dockerfile": "Dockerfile", "context": ".." },
+	"remoteUser": "dev",
+	"forwardPorts": [8080],
+	"portsAttributes": {
+		"8080": { "label": "EnsembleWorks (Caddy edge)", "onAutoForward": "openBrowserOnce" }
+	},
+	// LiveKit dev-mode media: TCP 7881 + UDP mux 7882, advertised at 127.0.0.1
+	// (bin/dev passes --node-ip 127.0.0.1). Ignored by Codespaces — harmless.
+	"runArgs": ["-p", "7881:7881", "-p", "7882:7882/udp"],
+	"postCreateCommand": "bash .devcontainer/post-create.bash",
+	"postStartCommand": "bin/dev up --no-install"
+}

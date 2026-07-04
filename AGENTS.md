@@ -3,6 +3,23 @@
 Multiplayer infinite-canvas team room: tldraw + tmux terminals + LiveKit spatial audio.
 Workspaces: `client`, `server`, `transcriber` (npm workspaces).
 
+## Local dev — bin/dev
+
+`bin/dev up` runs the whole stack (sync :8788, terminal gateway :8789, Vite
+:5173, Caddy :8080, plus livekit/whisper/scribe when their binaries are
+present) in the `workspace` tmux session; the canvas is at
+http://localhost:8080. It's idempotent. The commands you'll actually use:
+
+- `bin/dev status --json` — per-service enabled/health, machine-readable
+- `bin/dev logs <svc> --tail 500` — one service's scrollback (crashes keep
+  their window: exit code + scrollback survive)
+- `bin/dev restart <svc>` — respawn one service (after `npm install`, etc.)
+- `bin/dev doctor` — environment check; every failure prints its remedy
+
+State: `~/.local/share/ensembleworks`. Optional keys:
+`~/.config/ensembleworks/dev.env`. Verify changes with `npm run typecheck`
+and the smoke tests in README "Development".
+
 ## Releasing — always use the script
 
 Cut releases with `deploy/release.sh`, never by hand-editing `package.json` /
