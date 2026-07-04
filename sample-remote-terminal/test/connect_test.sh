@@ -43,6 +43,7 @@ contains "label default from CODESPACE_NAME" "$out" "label: my-space"
 # Sourcing re-applies connect.sh's `set -e`; disable it again so a failed
 # assertion below reports instead of aborting the test. The BASH_SOURCE guard
 # keeps main() from running on source.
+# shellcheck source=/dev/null
 source "$CONNECT"
 set +e
 tmpf=$(mktemp); printf 'hello' > "$tmpf"

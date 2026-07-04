@@ -60,6 +60,7 @@ write_env_file() {
 }
 
 resolve_config() {
+  # shellcheck source=/dev/null
   [ -f "$ENV_FILE" ] && . "$ENV_FILE"
   prompt_var CANVAS_URL "Canvas URL (https://…)"
   prompt_var CF_ACCESS_CLIENT_ID "CF Access Client ID"
