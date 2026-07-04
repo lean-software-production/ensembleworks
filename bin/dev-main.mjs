@@ -295,12 +295,19 @@ function restart(name) {
 }
 
 function down() {
-	if (!sessionRunning()) {
+	if (sessionRunning()) {
+		tmux('kill-session', '-t', session)
+		console.log(`killed tmux session '${session}'`)
+	} else {
 		console.log(`session '${session}' is not running`)
-		return
 	}
-	tmux('kill-session', '-t', session)
-	console.log(`killed tmux session '${session}'`)
+	// Caddy reads the pane-close SIGHUP as "reload", not "exit", so it outlives
+	// the session and keeps holding :8080 — which then blocks the next `up`
+	// (and left a stale plain-HTTP caddy in front of a new TLS one). Reap any
+	// stray caddy still serving our Caddyfile.
+	spawnSync('pkill', ['-f', `caddy run --config ${path.join(repoDir, 'deploy', 'Caddyfile')}`], {
+		stdio: 'ignore',
+	})
 }
 
 function attach() {

@@ -110,16 +110,26 @@ factory reset.
 
 **Developing on a remote box (LAN).** Run the devcontainer on another machine
 and reach it — canvas, terminals, transcription **and voice** — from your
-laptop's browser, no tailscale needed. Set
-`ENSEMBLEWORKS_PUBLIC_ORIGIN=http://<host-lan-ip>:8080` in that box's
-`.local/config/ensembleworks/dev.env` (e.g. `http://192.168.1.77:8080`); the
-devcontainer's `initializeCommand` auto-detects the host's LAN IP so LiveKit
-advertises a browser-reachable media address (override with
-`ENSEMBLEWORKS_LIVEKIT_NODE_IP`). Then open `http://<host-lan-ip>:8080` from
-any machine on the LAN. LiveKit uses its public dev keys in this mode — fine on
-a trusted LAN, not a hostile network. `ENSEMBLEWORKS_PUBLIC_ORIGIN` also takes
-an `https://…` origin for a TLS edge (tailscale serve / a tunnel);
-`ENSEMBLEWORKS_PUBLIC_HOST` remains as shorthand for `https://<host>`.
+laptop's browser, no tailscale needed. Browsers gate `crypto.randomUUID` (app
+boot) and `getUserMedia` (the mic — so voice) behind a **secure context**, and
+a LAN IP over plain http is not one, so Caddy serves **HTTPS with its own
+internal CA**. In that box's `.local/config/ensembleworks/dev.env` set:
+
+```
+ENSEMBLEWORKS_PUBLIC_ORIGIN=https://<host-lan-ip>:8080   # e.g. https://192.168.1.77:8080
+ENSEMBLEWORKS_CADDY_TLS=internal                         # Caddy terminates TLS (self-signed)
+```
+
+The devcontainer's `initializeCommand` auto-detects the host's LAN IP so
+LiveKit advertises a browser-reachable media address (override with
+`ENSEMBLEWORKS_LIVEKIT_NODE_IP`). Open `https://<host-lan-ip>:8080` from any
+machine on the LAN and **click through the self-signed-certificate warning
+once** — after that it's a secure context and everything works. LiveKit uses
+its public dev keys in this mode — fine on a trusted LAN, not a hostile
+network. `ENSEMBLEWORKS_PUBLIC_ORIGIN` also takes an `https://…` origin fronted
+by a real TLS edge (tailscale serve / a tunnel) — omit `ENSEMBLEWORKS_CADDY_TLS`
+there since TLS is terminated upstream; `ENSEMBLEWORKS_PUBLIC_HOST` remains as
+shorthand for `https://<host>`.
 
 Smoke tests (gateway must be running for the second one):
 

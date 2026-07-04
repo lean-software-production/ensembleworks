@@ -7,12 +7,32 @@
 # Production client boxes use deploy/Caddyfile.prod instead (static client served
 # by the sync server; no Vite), installed by deploy/deploy.sh.
 #
-# Caddy serves plain HTTP on :8080 — TLS is always terminated upstream. Vite
-# (the client dev server) serves the app and proxies the backend services
-# (/sync, /api, /uploads, /term), so Caddy's ONLY job is the same-origin
-# /dev/{port} proxy that Vite can't express. Everything else goes to Vite.
+# Caddy serves plain HTTP on :8080 by default — TLS is normally terminated
+# upstream (Codespaces, a Cloudflare Tunnel, tailscale serve). Vite (the client
+# dev server) serves the app and proxies the backend services (/sync, /api,
+# /uploads, /term), so Caddy's ONLY job is the same-origin /dev/{port} proxy
+# that Vite can't express. Everything else goes to Vite.
+#
+# Direct LAN access has no upstream TLS terminator, but browsers gate
+# crypto.randomUUID and getUserMedia (the mic — so voice) behind a secure
+# context, which a LAN IP over plain http is NOT. So bin/dev can make Caddy
+# terminate TLS itself with its internal (self-signed) CA: it sets
+# ENSEMBLEWORKS_CADDY_SITE=https://<host>:8080 and CADDY_TLS_DIRECTIVE="tls
+# internal". Both default to the plain-:8080 shape, so upstream-TLS and native
+# users are unaffected.
 
-:8080 {
+# auto_https disable_redirects: serve TLS on the site's port but don't try to
+# bind :80 for an http->https redirect (fails as non-root, and unwanted here).
+# ENSEMBLEWORKS_CADDY_GLOBAL carries `default_sni <host>` in TLS mode: a browser
+# hitting a bare IP sends no SNI, so Caddy needs a default to pick the cert.
+# Empty (a blank line) by default.
+{
+	auto_https disable_redirects
+	{$ENSEMBLEWORKS_CADDY_GLOBAL:}
+}
+
+{$ENSEMBLEWORKS_CADDY_SITE::8080} {
+	{$ENSEMBLEWORKS_CADDY_TLS_DIRECTIVE:}
 	# LiveKit OSS signaling WS -> livekit-server on localhost:7880. Media (UDP
 	# 50000-50300) flows direct browser<->SFU and does NOT go through Caddy.
 	# CF Access covers the whole canvas.leansoftware.ai domain, so /livekit

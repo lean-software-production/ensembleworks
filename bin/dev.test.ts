@@ -215,4 +215,34 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 	console.log('ok: caddy gating')
 }
 
+// Caddy TLS: plain :8080 by default; CADDY_TLS=internal + an https origin makes
+// Caddy self-terminate TLS (secure context for LAN — crypto.randomUUID, mic).
+{
+	const plain = svc(buildServices(ctx()), 'caddy')
+	assert.ok(plain.cmd.includes("ENSEMBLEWORKS_CADDY_SITE=':8080'"), 'default plain :8080')
+	assert.ok(plain.cmd.includes("ENSEMBLEWORKS_CADDY_TLS_DIRECTIVE=''"), 'no tls by default')
+
+	const tls = svc(
+		buildServices(
+			ctx({
+				publicOrigin: parsePublicOrigin('https://192.168.1.77:8080', undefined),
+				env: { ENSEMBLEWORKS_CADDY_TLS: 'internal' },
+			}),
+		),
+		'caddy',
+	)
+	assert.ok(tls.cmd.includes("ENSEMBLEWORKS_CADDY_SITE='https://192.168.1.77:8080'"), 'https site')
+	assert.ok(tls.cmd.includes("ENSEMBLEWORKS_CADDY_TLS_DIRECTIVE='tls internal'"), 'internal CA')
+	assert.ok(tls.cmd.includes("ENSEMBLEWORKS_CADDY_GLOBAL='default_sni 192.168.1.77'"), 'default_sni for no-SNI IP access')
+	assert.match(tls.reason, /self-signed/, 'reason warns about the click-through')
+
+	// CADDY_TLS=internal but an http origin (or none) must NOT enable TLS.
+	const httpOrigin = svc(
+		buildServices(ctx({ publicOrigin: parsePublicOrigin('http://192.168.1.77:8080', undefined), env: { ENSEMBLEWORKS_CADDY_TLS: 'internal' } })),
+		'caddy',
+	)
+	assert.ok(httpOrigin.cmd.includes("ENSEMBLEWORKS_CADDY_SITE=':8080'"), 'http origin stays plain')
+	console.log('ok: caddy TLS internal')
+}
+
 console.log('all dev-lib tests passed')

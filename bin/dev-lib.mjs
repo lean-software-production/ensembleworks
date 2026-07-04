@@ -201,13 +201,29 @@ export function buildServices(ctx) {
 		health: { kind: 'port', port: PORTS.client },
 	})
 
+	// Direct LAN access needs a secure context (crypto.randomUUID, the mic), so
+	// bin/dev can make Caddy terminate TLS itself with its internal CA when
+	// ENSEMBLEWORKS_CADDY_TLS=internal and the origin is https. The Caddyfile
+	// reads these; both default to the plain-:8080 shape (upstream-TLS/native).
+	const caddyTlsInternal =
+		ctx.env.ENSEMBLEWORKS_CADDY_TLS === 'internal' && ctx.publicOrigin?.scheme === 'https'
+	const caddySite =
+		caddyTlsInternal && ctx.publicOrigin
+			? `https://${ctx.publicOrigin.host}:${ctx.publicOrigin.port ?? PORTS.caddy}`
+			: `:${PORTS.caddy}`
+	// default_sni: a browser hitting a bare IP sends no SNI, so Caddy needs a
+	// default to select the internal cert (else the handshake internal-errors).
+	const caddyGlobal = caddyTlsInternal && ctx.publicOrigin ? `default_sni ${ctx.publicOrigin.host}` : ''
+	const caddyEnv = `ENSEMBLEWORKS_CADDY_SITE='${caddySite}' ENSEMBLEWORKS_CADDY_TLS_DIRECTIVE='${caddyTlsInternal ? 'tls internal' : ''}' ENSEMBLEWORKS_CADDY_GLOBAL='${caddyGlobal}'`
 	services.push({
 		name: 'caddy',
 		enabled: ctx.has.caddy,
-		reason: ctx.has.caddy
-			? 'edge on :8080'
-			: 'caddy not on PATH — no :8080 edge (/dev/{port}, /livekit, /shared-browser routes)',
-		cmd: `caddy run --config '${ctx.repoDir}/deploy/Caddyfile' --adapter caddyfile`,
+		reason: !ctx.has.caddy
+			? 'caddy not on PATH — no :8080 edge (/dev/{port}, /livekit, /shared-browser routes)'
+			: caddyTlsInternal
+				? `edge at ${caddySite} (TLS internal — self-signed, click through once)`
+				: 'edge on :8080',
+		cmd: `${caddyEnv} caddy run --config '${ctx.repoDir}/deploy/Caddyfile' --adapter caddyfile`,
 		health: { kind: 'port', port: PORTS.caddy },
 	})
 
