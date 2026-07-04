@@ -69,6 +69,58 @@ export function livekitBrowserUrl(o) {
 }
 
 /**
+ * Which role bin/dev plays. Inside the container the Dockerfile sets
+ * ENSEMBLEWORKS_IN_DEVCONTAINER=1 → the **engine** that runs the tmux stack;
+ * ENSEMBLEWORKS_NATIVE=1 forces the engine on the host too (no-Docker escape
+ * hatch). Otherwise, on the host, bin/dev is the **controller** that drives the
+ * devcontainer (up starts it; status/logs/… forward into it).
+ * @param {Record<string, string | undefined>} env
+ * @returns {'engine' | 'controller'}
+ */
+export function resolveMode(env) {
+	if (env.ENSEMBLEWORKS_IN_DEVCONTAINER === '1' || env.ENSEMBLEWORKS_NATIVE === '1') return 'engine'
+	return 'controller'
+}
+
+/**
+ * The devcontainer mounts the workspace at /workspaces/<folder-name>; a
+ * forwarded `docker exec` must cd there (the image's WORKDIR isn't it, so a
+ * bare `bin/dev` wouldn't be found).
+ * @param {string} repoDir  absolute host path to the repo
+ */
+export function workspaceDirFor(repoDir) {
+	return `/workspaces/${repoDir.split('/').filter(Boolean).pop() ?? 'workspace'}`
+}
+
+/**
+ * The `docker` argv that runs bin/dev inside the devcontainer with the right
+ * cwd. An array (for execFileSync/spawnSync) so nothing needs shell quoting.
+ * @param {string} container      container id or name
+ * @param {string} workspaceDir   cwd inside the container (workspaceDirFor)
+ * @param {string[]} args         the bin/dev subcommand + flags to forward
+ * @returns {string[]}
+ */
+export function forwardArgv(container, workspaceDir, args) {
+	return ['exec', '-w', workspaceDir, container, 'bin/dev', ...args]
+}
+
+/**
+ * What `bin/dev attach` prints on the host instead of nesting into the
+ * container's tmux (which traps your prefix and strands you).
+ * @param {string} container  container id or name
+ */
+export function attachInstructions(container) {
+	return [
+		"Attach to the devcontainer's tmux stack with:",
+		'',
+		`  docker exec -it ${container} tmux attach -t workspace`,
+		'',
+		'Detach again with:  Ctrl-b Ctrl-b d   (double-tap sends the prefix to the inner tmux)',
+		'Or drive it without attaching:  bin/dev status | logs <svc> | restart <svc>',
+	].join('\n')
+}
+
+/**
  * Wrap a service command so its tmux window survives a crash OR a Ctrl-C: run
  * the command, then drop into an interactive shell with the exit code and
  * scrollback intact (instead of the window vanishing, which is what hid a

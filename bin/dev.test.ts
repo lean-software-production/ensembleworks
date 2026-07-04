@@ -3,11 +3,15 @@
 import assert from 'node:assert/strict'
 import {
 	PORTS,
+	attachInstructions,
 	buildServices,
+	forwardArgv,
 	hold,
 	parseDotEnv,
 	parseNvmrc,
 	parsePublicOrigin,
+	resolveMode,
+	workspaceDirFor,
 } from './dev-lib.mjs'
 
 // A baseline context: everything installed, no keys, no public host — what a
@@ -243,6 +247,35 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 	)
 	assert.ok(httpOrigin.cmd.includes("ENSEMBLEWORKS_CADDY_SITE=':8080'"), 'http origin stays plain')
 	console.log('ok: caddy TLS internal')
+}
+
+// Host controller: mode detection (engine inside the container or under the
+// native escape hatch; controller on the host by default).
+{
+	assert.equal(resolveMode({ ENSEMBLEWORKS_IN_DEVCONTAINER: '1' }), 'engine', 'inside container → engine')
+	assert.equal(resolveMode({ ENSEMBLEWORKS_NATIVE: '1' }), 'engine', 'native escape hatch → engine')
+	assert.equal(resolveMode({}), 'controller', 'plain host → controller')
+	console.log('ok: resolveMode')
+}
+
+// Forwarding: the workspace cwd and the docker exec argv the controller builds.
+{
+	assert.equal(workspaceDirFor('/home/u/Work/ensembleworks'), '/workspaces/ensembleworks')
+	assert.equal(workspaceDirFor('/home/u/Work/ensembleworks/'), '/workspaces/ensembleworks', 'trailing slash ok')
+	assert.deepEqual(
+		forwardArgv('c123', '/workspaces/ensembleworks', ['status', '--json']),
+		['exec', '-w', '/workspaces/ensembleworks', 'c123', 'bin/dev', 'status', '--json'],
+	)
+	console.log('ok: forwardArgv + workspaceDirFor')
+}
+
+// attach on the host prints instructions (the exec line + the nested-detach
+// caveat), never nests into the container tmux.
+{
+	const text = attachInstructions('lucid_hofstadter')
+	assert.ok(text.includes('docker exec -it lucid_hofstadter tmux attach'), 'attach command')
+	assert.ok(text.includes('Ctrl-b Ctrl-b d'), 'nested-detach caveat')
+	console.log('ok: attachInstructions')
 }
 
 console.log('all dev-lib tests passed')

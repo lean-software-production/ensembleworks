@@ -25,12 +25,27 @@ import {
 	parseDotEnv,
 	parseNvmrc,
 	parsePublicOrigin,
+	resolveMode,
 } from './dev-lib.mjs'
 import { runDoctor } from './dev-doctor.mjs'
+import { runController } from './dev-host.mjs'
 
 export const repoDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const session = process.env.WORKSPACE_TMUX_SESSION ?? 'workspace'
 const tmuxConf = path.join(repoDir, 'deploy', 'tmux-ensembleworks.conf')
+
+// ---- role dispatch: controller (host) vs engine (in the container / native) --
+// The expected usage is from the HOST: there bin/dev drives the devcontainer
+// (up starts it; status/logs/… forward into it) and needs none of the engine's
+// Node/tmux/caddy machinery — so dispatch to the controller here, before the
+// Node-version gate and dev.env sourcing below. runController() never returns.
+if (resolveMode(process.env) === 'controller') {
+	runController(repoDir, process.argv.slice(2))
+}
+// Engine mode (inside the container, or ENSEMBLEWORKS_NATIVE=1 on the host):
+process.stderr.write(
+	`bin/dev [${process.env.ENSEMBLEWORKS_IN_DEVCONTAINER === '1' ? 'devcontainer' : 'native'}] · executing natively\n`,
+)
 
 /** @param {string} bin */
 export const onPath = (bin) => spawnSync('which', [bin], { stdio: 'ignore' }).status === 0
@@ -340,10 +355,16 @@ const { values: flags, positionals } = parseArgs({
 		attach: { type: 'boolean', default: false },
 		'no-install': { type: 'boolean', default: false },
 		tail: { type: 'string', default: '200' },
+		help: { type: 'boolean', short: 'h', default: false },
 	},
 	allowPositionals: true,
 })
 const [cmd, arg] = positionals
+
+if (flags.help || cmd === 'help') {
+	usage()
+	process.exit(0)
+}
 
 switch (cmd) {
 	case 'up':
