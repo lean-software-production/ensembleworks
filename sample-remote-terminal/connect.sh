@@ -4,6 +4,9 @@
 # verifies its checksum, then runs it against the canvas behind Cloudflare Access.
 set -euo pipefail
 
+# Resolve paths relative to this script, not the caller's CWD.
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # --- overridable configuration -------------------------------------------------
 RELEASE_REPO="${RELEASE_REPO:-lean-software-production/ensembleworks}"
 TERMGW_VERSION="${TERMGW_VERSION:-latest}"   # a release tag (e.g. v0.9.0) or "latest"
@@ -113,6 +116,7 @@ main() {
   echo "  (a 403 here means the CF Access service-token pair is wrong or lacks a policy)"
   export CANVAS_URL CF_ACCESS_CLIENT_ID CF_ACCESS_CLIENT_SECRET GATEWAY_LABEL
   export TMUX_CONF="$PWD/tmux.conf"
+  export ENSEMBLEWORKS_TMUX_CONF="$PWD/tmux.conf"
   exec "$bin"
 }
 

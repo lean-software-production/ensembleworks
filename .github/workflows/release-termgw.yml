@@ -1,7 +1,7 @@
 name: release-termgw
 on:
-  release:
-    types: [published]
+  push:
+    tags: ['v*']
 
 jobs:
   build:
@@ -30,6 +30,8 @@ jobs:
       - name: Attach binaries to the release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
           files: |
             termgw-linux-amd64
             termgw-linux-arm64
