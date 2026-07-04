@@ -16,7 +16,7 @@ fi
 
 # README covers the essentials.
 for needle in "Codespaces" "./connect.sh" "CANVAS_URL" "Cloudflare Access"; do
-  grep -qi "$needle" "$ROOT/README.md" && ok "README mentions $needle" || no "README missing $needle"
+  if grep -qi "$needle" "$ROOT/README.md"; then ok "README mentions $needle"; else no "README missing $needle"; fi
 done
 
 [ "$fail" -eq 0 ] && echo "PASS" || echo "SOME TESTS FAILED"
