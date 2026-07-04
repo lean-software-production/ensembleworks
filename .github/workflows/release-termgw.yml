@@ -14,6 +14,8 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.24'
+          cache: true
+          cache-dependency-path: gateway-go/go.sum
 
       - name: Build termgw (amd64 + arm64)
         working-directory: gateway-go
@@ -28,7 +30,7 @@ jobs:
         run: sha256sum termgw-linux-amd64 termgw-linux-arm64 > termgw-checksums.txt
 
       - name: Attach binaries to the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.ref_name }}
           generate_release_notes: true
