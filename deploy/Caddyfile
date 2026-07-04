@@ -1,5 +1,5 @@
 # EnsembleWorks — DEV/watch Caddy edge config (Vite-fronted). Used by:
-#   - devcontainer: workspace-up.bash runs `caddy run` against this directly;
+#   - devcontainer/native dev stack: bin/dev (caddy window) runs `caddy run` against this;
 #     GitHub Codespaces forwards port 8080 over HTTPS.
 #   - ash dogfood box: bootstrap-debian-ash.sh copies this to /etc/caddy/Caddyfile;
 #     a Cloudflare Tunnel forwards the public hostname to http://localhost:8080,

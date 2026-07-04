@@ -170,6 +170,10 @@ async function up(flags) {
 		process.env.ENSEMBLEWORKS_TMUX_CONF = tmuxConf
 		tmux('-f', tmuxConf, 'new-session', '-d', '-s', session, '-n', first.name, '-c', repoDir, hold(first.cmd, first.name))
 		tmux('set-environment', '-g', 'ENSEMBLEWORKS_TMUX_CONF', tmuxConf)
+		// -f above only applies when this call STARTS the tmux server; if the
+		// contributor already had one running, the session came up without our
+		// conf — source it unconditionally so the bindings always apply.
+		tmux('source-file', tmuxConf)
 		for (const s of rest) {
 			tmux('new-window', '-t', session, '-n', s.name, '-c', repoDir, hold(s.cmd, s.name))
 		}
