@@ -11,7 +11,10 @@
     "skipLibCheck": true,
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
-    "noUncheckedIndexedAccess": true
+    "noUncheckedIndexedAccess": true,
+    "paths": {
+      "@ensembleworks/contracts": ["../contracts/src/index.ts"]
+    }
   },
   "include": ["src"]
 }
