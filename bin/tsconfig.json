@@ -1,0 +1,13 @@
+{
+	"compilerOptions": {
+		"allowJs": true,
+		"checkJs": true,
+		"noEmit": true,
+		"strict": true,
+		"target": "es2022",
+		"module": "nodenext",
+		"moduleResolution": "nodenext",
+		"types": ["node"]
+	},
+	"include": ["dev-lib.mjs", "dev-main.mjs", "dev-doctor.mjs"]
+}

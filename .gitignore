@@ -1,6 +1,7 @@
 node_modules/
 dist/
 data/
+.local/
 nohup.out
 *.log
 .vite/

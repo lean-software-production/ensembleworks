@@ -1,0 +1,346 @@
+// @ts-check
+/**
+ * bin/dev — the EnsembleWorks dev stack, one command. tmux is the engine:
+ * each service runs in a window of the `workspace` session (the same shape
+ * the Debian boxes run under systemd), wrapped by hold() so a crash leaves
+ * exit code + scrollback + a live shell instead of a vanished window.
+ *
+ * Pure logic (service table, gating, parsing) lives in ./dev-lib.mjs and is
+ * unit-tested; this file owns the I/O: process env, tmux, health polls, CLI.
+ * Dependency-free on purpose — node: builtins only — so it runs on a fresh
+ * clone before npm ci.
+ */
+import { execFileSync, execSync, spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { connect } from 'node:net'
+import { homedir } from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parseArgs } from 'node:util'
+import { PORTS, buildServices, hold, parseDotEnv, parseNvmrc } from './dev-lib.mjs'
+import { runDoctor } from './dev-doctor.mjs'
+
+export const repoDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
+const session = process.env.WORKSPACE_TMUX_SESSION ?? 'workspace'
+const tmuxConf = path.join(repoDir, 'deploy', 'tmux-ensembleworks.conf')
+
+/** @param {string} bin */
+export const onPath = (bin) => spawnSync('which', [bin], { stdio: 'ignore' }).status === 0
+/** @param {...string} args */
+const tmux = (...args) => execFileSync('tmux', args, { encoding: 'utf8' })
+/** @param {...string} args */
+const tmuxOk = (...args) => spawnSync('tmux', args, { stdio: 'ignore' }).status === 0
+export const sessionRunning = () => tmuxOk('has-session', '-t', session)
+
+/** @param {string} msg @returns {never} */
+function die(msg) {
+	console.error(`bin/dev: ${msg}`)
+	process.exit(1)
+}
+
+// ---- Node version: enforce, don't provide -----------------------------------
+// The pin exists for node-pty's prebuilt ABI. If mise is on PATH, re-exec
+// through it once (same trick the retired host launcher used); otherwise fail
+// with the exact remedy. .nvmrc is the single source of truth.
+export const wantedNode = parseNvmrc(readFileSync(path.join(repoDir, '.nvmrc'), 'utf8'))
+if (process.version !== `v${wantedNode}`) {
+	if (onPath('mise') && !process.env.ENSEMBLEWORKS_DEV_REEXEC) {
+		const r = spawnSync(
+			'mise',
+			['exec', `node@${wantedNode}`, '--', 'node', ...process.argv.slice(1)],
+			{ stdio: 'inherit', env: { ...process.env, ENSEMBLEWORKS_DEV_REEXEC: '1' } },
+		)
+		process.exit(r.status ?? 1)
+	}
+	die(
+		`running node ${process.version}, but .nvmrc pins v${wantedNode} (node-pty ABI).\n` +
+			`  fix: install it — e.g. \`mise use -g node@${wantedNode}\` or \`nvm install ${wantedNode}\` — and re-run.`,
+	)
+}
+
+// ---- config: dev.env (set -a semantics), data dir, optional livekit conf ----
+export const devEnvPath =
+	process.env.ENSEMBLEWORKS_DEV_ENV ?? path.join(homedir(), '.config', 'ensembleworks', 'dev.env')
+if (existsSync(devEnvPath)) {
+	for (const [k, v] of Object.entries(parseDotEnv(readFileSync(devEnvPath, 'utf8')))) {
+		if (process.env[k] === undefined) process.env[k] = v // real env wins over dev.env
+	}
+}
+
+const dataDir =
+	process.env.ENSEMBLEWORKS_DATA_DIR ?? path.join(homedir(), '.local', 'share', 'ensembleworks')
+const livekitConfPath =
+	process.env.ENSEMBLEWORKS_LIVEKIT_CONF ??
+	path.join(homedir(), '.config', 'ensembleworks', 'livekit-dev.yaml')
+const whisperModel = process.env.WHISPER_MODEL ?? '/usr/local/share/whisper/ggml-base.bin'
+
+function tailscaleIp() {
+	try {
+		const out = execSync('tailscale ip -4', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] })
+		return out.split('\n')[0].trim() || null
+	} catch {
+		return null
+	}
+}
+
+/** @returns {import('./dev-lib.mjs').ServiceCtx} */
+export function makeCtx() {
+	return {
+		repoDir,
+		dataDir,
+		publicHost: process.env.ENSEMBLEWORKS_PUBLIC_HOST ?? null,
+		livekitConf: existsSync(livekitConfPath) ? livekitConfPath : null,
+		whisperModel,
+		tailscaleIp: tailscaleIp(),
+		has: {
+			caddy: onPath('caddy'),
+			livekit: onPath('livekit-server'),
+			whisper: onPath('whisper-server') && existsSync(whisperModel),
+			docker: onPath('docker'),
+		},
+		env: process.env,
+	}
+}
+
+// ---- health ------------------------------------------------------------------
+/** @param {string} host @param {number} port @param {number} timeoutMs */
+function probeAddr(host, port, timeoutMs) {
+	return new Promise((resolve) => {
+		const sock = connect({ port, host })
+		/** @param {boolean} ok */
+		const done = (ok) => {
+			sock.destroy()
+			resolve(ok)
+		}
+		sock.once('connect', () => done(true))
+		sock.once('error', () => done(false))
+		sock.setTimeout(timeoutMs, () => done(false))
+	})
+}
+
+/**
+ * Node 22 binds localhost-listening services (vite) to ::1 while others sit
+ * on 127.0.0.1 — a port is healthy when EITHER loopback family answers.
+ * @param {number} port
+ */
+export async function probePort(port, timeoutMs = 1000) {
+	const results = await Promise.all([
+		probeAddr('127.0.0.1', port, timeoutMs),
+		probeAddr('::1', port, timeoutMs),
+	])
+	return results.some(Boolean)
+}
+
+/** @param {import('./dev-lib.mjs').Service['health']} health */
+async function probe(health) {
+	if (!health) return null
+	if (health.kind === 'port') return probePort(health.port)
+	try {
+		const res = await fetch(health.url, { signal: AbortSignal.timeout(1000) })
+		return res.ok
+	} catch {
+		return false
+	}
+}
+
+/** @param {import('./dev-lib.mjs').Service[]} enabled */
+async function waitHealthy(enabled, timeoutMs = 180_000) {
+	const pending = new Set(enabled.filter((s) => s.health))
+	const deadline = Date.now() + timeoutMs
+	while (pending.size && Date.now() < deadline) {
+		for (const svc of [...pending]) {
+			if (await probe(svc.health)) {
+				console.log(`  ✓ ${svc.name}`)
+				pending.delete(svc)
+			}
+		}
+		if (pending.size) await new Promise((r) => setTimeout(r, 1500))
+	}
+	if (pending.size) {
+		const names = [...pending].map((s) => s.name).join(', ')
+		die(`not healthy after ${timeoutMs / 1000}s: ${names} — check \`bin/dev logs <svc>\``)
+	}
+}
+
+// ---- subcommands ---------------------------------------------------------------
+/** @param {{ noInstall: boolean, attach: boolean }} flags */
+async function up(flags) {
+	mkdirSync(dataDir, { recursive: true })
+	const services = buildServices(makeCtx())
+	const enabled = services.filter((s) => s.enabled)
+	if (sessionRunning()) {
+		tmux('set-environment', '-g', 'ENSEMBLEWORKS_TMUX_CONF', tmuxConf)
+		tmux('source-file', tmuxConf)
+		console.log(`already running (tmux session '${session}').`)
+	} else {
+		if (!flags.noInstall) {
+			console.log('==> npm ci (skip with --no-install)')
+			execFileSync('npm', ['ci'], { cwd: repoDir, stdio: 'inherit' })
+		}
+		for (const s of services.filter((x) => !x.enabled)) console.log(`  - ${s.name} off: ${s.reason}`)
+		const [first, ...rest] = enabled
+		// Exported before the tmux SERVER starts, so canvas terminals inherit it.
+		process.env.ENSEMBLEWORKS_TMUX_CONF = tmuxConf
+		tmux('-f', tmuxConf, 'new-session', '-d', '-s', session, '-n', first.name, '-c', repoDir, hold(first.cmd, first.name))
+		tmux('set-environment', '-g', 'ENSEMBLEWORKS_TMUX_CONF', tmuxConf)
+		// -f above only applies when this call STARTS the tmux server; if the
+		// contributor already had one running, the session came up without our
+		// conf — source it unconditionally so the bindings always apply.
+		tmux('source-file', tmuxConf)
+		for (const s of rest) {
+			tmux('new-window', '-t', session, '-n', s.name, '-c', repoDir, hold(s.cmd, s.name))
+		}
+		console.log('==> waiting for services')
+		await waitHealthy(enabled)
+	}
+	cheatSheet(enabled)
+	if (flags.attach) attach()
+}
+
+/** @param {import('./dev-lib.mjs').Service[]} enabled */
+function cheatSheet(enabled) {
+	const url = process.env.ENSEMBLEWORKS_PUBLIC_HOST
+		? `https://${process.env.ENSEMBLEWORKS_PUBLIC_HOST}`
+		: `http://localhost:${PORTS.caddy}`
+	console.log(`
+EnsembleWorks dev stack — ${url}
+  windows: ${enabled.map((s) => s.name).join('  ')}
+  bin/dev status | logs <svc> | restart <svc> | attach | down   (agents: status --json)
+  tmux: prefix Ctrl-Space (Ctrl-b works too) — prefix+<n> switch window, prefix+d detach`)
+}
+
+function windowNames() {
+	if (!sessionRunning()) return []
+	return tmux('list-windows', '-t', session, '-F', '#{window_name}').trim().split('\n')
+}
+
+/** @param {{ json: boolean }} flags */
+async function status(flags) {
+	const services = buildServices(makeCtx())
+	const windows = windowNames()
+	const rows = []
+	for (const s of services) {
+		rows.push({
+			name: s.name,
+			enabled: s.enabled,
+			reason: s.reason,
+			window: windows.includes(s.name),
+			healthy: s.enabled ? await probe(s.health) : null,
+			health: s.health,
+		})
+	}
+	if (flags.json) {
+		console.log(JSON.stringify({ session, running: sessionRunning(), services: rows }, null, 2))
+		return
+	}
+	console.log(`session '${session}': ${sessionRunning() ? 'running' : 'not running'}`)
+	for (const r of rows) {
+		const state = !r.enabled
+			? `off — ${r.reason}`
+			: r.healthy === true
+				? 'healthy'
+				: r.healthy === false
+					? r.window
+						? 'UNHEALTHY (window up, probe failing)'
+						: 'not started'
+					: r.window
+						? 'running (no probe)'
+						: 'not started'
+		console.log(`  ${r.name.padEnd(15)} ${state}`)
+	}
+}
+
+/** @param {string} name @param {number} tail */
+function logs(name, tail) {
+	if (!sessionRunning()) die(`session '${session}' is not running`)
+	if (!windowNames().includes(name)) die(`no window '${name}' — bin/dev status lists services`)
+	process.stdout.write(tmux('capture-pane', '-p', '-t', `${session}:${name}`, '-S', `-${tail}`))
+}
+
+/** @param {string} name */
+function restart(name) {
+	if (!sessionRunning()) die(`session '${session}' is not running — use bin/dev up`)
+	const svc = buildServices(makeCtx()).find((s) => s.name === name)
+	if (!svc) die(`unknown service '${name}' — bin/dev status lists services`)
+	if (!svc.enabled) die(`'${name}' is disabled: ${svc.reason}`)
+	if (windowNames().includes(name)) {
+		tmux('respawn-window', '-k', '-t', `${session}:${name}`, hold(svc.cmd, svc.name))
+	} else {
+		tmux('new-window', '-t', session, '-n', svc.name, '-c', repoDir, hold(svc.cmd, svc.name))
+	}
+	console.log(`respawned ${name}`)
+}
+
+function down() {
+	if (!sessionRunning()) {
+		console.log(`session '${session}' is not running`)
+		return
+	}
+	tmux('kill-session', '-t', session)
+	console.log(`killed tmux session '${session}'`)
+}
+
+function attach() {
+	if (!sessionRunning()) die(`session '${session}' is not running — use bin/dev up`)
+	const args = process.env.TMUX ? ['switch-client', '-t', session] : ['attach', '-t', session]
+	const r = spawnSync('tmux', args, { stdio: 'inherit' })
+	process.exit(r.status ?? 0)
+}
+
+function usage() {
+	console.log(`bin/dev — the EnsembleWorks dev stack (tmux session '${session}')
+
+  bin/dev up [--attach] [--no-install]   start everything (idempotent; npm ci on fresh start)
+  bin/dev down                           kill the session
+  bin/dev status [--json]                per-service state (--json for agents)
+  bin/dev logs <svc> [--tail N]          one service's scrollback (default 200 lines)
+  bin/dev restart <svc>                  respawn one service window
+  bin/dev attach                         enter the tmux session (prefix Ctrl-Space, prefix+d detaches)
+  bin/dev doctor [--json]                environment check — every failure prints its remedy
+
+Config: ~/.config/ensembleworks/dev.env (optional). Data: ~/.local/share/ensembleworks.
+Optional binaries light up more services: caddy, livekit-server, whisper-server, docker.`)
+}
+
+// ---- dispatch ------------------------------------------------------------------
+const { values: flags, positionals } = parseArgs({
+	args: process.argv.slice(2),
+	options: {
+		json: { type: 'boolean', default: false },
+		attach: { type: 'boolean', default: false },
+		'no-install': { type: 'boolean', default: false },
+		tail: { type: 'string', default: '200' },
+	},
+	allowPositionals: true,
+})
+const [cmd, arg] = positionals
+
+switch (cmd) {
+	case 'up':
+		await up({ noInstall: flags['no-install'], attach: flags.attach })
+		break
+	case 'down':
+		down()
+		break
+	case 'status':
+		await status({ json: flags.json })
+		break
+	case 'logs':
+		logs(arg ?? die('usage: bin/dev logs <svc> [--tail N]'), Number(flags.tail))
+		break
+	case 'restart':
+		restart(arg ?? die('usage: bin/dev restart <svc>'))
+		break
+	case 'attach':
+		attach()
+		break
+	case 'doctor':
+		process.exit(await runDoctor({ json: flags.json }))
+		break
+	case undefined:
+		usage()
+		break
+	default:
+		usage()
+		process.exit(1)
+}
