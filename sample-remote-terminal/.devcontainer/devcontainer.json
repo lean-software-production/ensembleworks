@@ -1,0 +1,9 @@
+{
+  "name": "sample-remote-terminal",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "vscode",
+  "postCreateCommand": "chmod +x connect.sh",
+  "postAttachCommand": {
+    "hint": "echo 'Ready. Run ./connect.sh to join an EnsembleWorks canvas.'"
+  }
+}
