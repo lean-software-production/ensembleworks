@@ -3,7 +3,7 @@
 import WebSocket from 'ws'
 import { schema } from './schema.ts'
 
-const ws = new WebSocket('ws://localhost:8788/sync/smoke?sessionId=smoke-1&storeId=s1')
+const ws = new WebSocket('ws://localhost:8788/sync/smoke?sessionId=smoke-1&userId=smoke-user&storeId=s1')
 ws.on('message', (d) => {
 	const msg = JSON.parse(d.toString())
 	console.log('server replied:', msg.type, 'connectRequestId:', msg.connectRequestId, 'hydration type:', msg.hydrationType)
