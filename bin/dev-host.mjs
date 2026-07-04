@@ -44,13 +44,31 @@ function findDevcontainer(repoDir) {
 }
 
 /**
+ * When bin/dev runs from a linked git worktree, resolve the main checkout path
+ * so devcontainer operations target the canonical folder (which carries the
+ * devcontainer.local_folder label and the port bindings).
+ * @param {string} repoDir
+ * @returns {string}
+ */
+function resolveMainRepoDir(repoDir) {
+	const r = spawnSync('git', ['worktree', 'list', '--porcelain'], { cwd: repoDir, encoding: 'utf8' })
+	if (r.status !== 0) return repoDir
+	const firstLine = (r.stdout ?? '').split('\n').find((l) => l.startsWith('worktree '))
+	if (!firstLine) return repoDir
+	const mainPath = firstLine.slice('worktree '.length).trim()
+	if (mainPath !== repoDir) narrate(`git worktree — targeting main checkout at ${mainPath}`)
+	return mainPath
+}
+
+/**
  * @param {string} repoDir  absolute host path to the repo
  * @param {string[]} argv    process.argv.slice(2) — subcommand + flags
  * @returns {never}
  */
 export function runController(repoDir, argv) {
 	const cmd = argv[0]
-	const workspaceDir = workspaceDirFor(repoDir)
+	const mainRepoDir = resolveMainRepoDir(repoDir)
+	const workspaceDir = workspaceDirFor(mainRepoDir)
 	narrate('not inside a devcontainer → controller mode')
 
 	if (!cmd || cmd === 'help' || cmd === '--help' || cmd === '-h') {
@@ -58,15 +76,15 @@ export function runController(repoDir, argv) {
 		process.exit(0)
 	}
 
-	const dc = findDevcontainer(repoDir)
+	const dc = findDevcontainer(mainRepoDir)
 
 	if (cmd === 'up') {
 		if (dc) narrate(`devcontainer '${dc.name}' already running — devcontainer up is idempotent`)
 		if (!onPath('docker')) die('docker is not on PATH — install Docker to run the devcontainer')
 		if (!onPath('devcontainer'))
 			die('the devcontainer CLI is required — install it: npm i -g @devcontainers/cli')
-		narrate(`starting → devcontainer up --workspace-folder ${repoDir}`)
-		const r = spawnSync('devcontainer', ['up', '--workspace-folder', repoDir], { stdio: 'inherit' })
+		narrate(`starting → devcontainer up --workspace-folder ${mainRepoDir}`)
+		const r = spawnSync('devcontainer', ['up', '--workspace-folder', mainRepoDir], { stdio: 'inherit' })
 		process.exit(r.status ?? 0)
 	}
 
@@ -112,7 +130,7 @@ export function runController(repoDir, argv) {
 	// status / logs / restart / anything else → forward into the container.
 	if (!dc) {
 		die(
-			`no devcontainer running (searched label devcontainer.local_folder=${repoDir}) — start it with \`bin/dev up\``,
+			`no devcontainer running (searched label devcontainer.local_folder=${mainRepoDir}) — start it with \`bin/dev up\``,
 		)
 	}
 	narrate(`devcontainer '${dc.name}' running`)
