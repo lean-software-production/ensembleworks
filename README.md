@@ -87,18 +87,28 @@ canvas with terminals, voice and transcription, **zero accounts or keys**.
 not over Codespaces port-forwarding; and the neko shared browser needs
 docker-in-docker, so it's native-host only.)
 
-Running natively instead: `bin/dev doctor` tells you exactly what's missing
-and how to fix it (Node 22.22.3 and tmux are required; caddy, livekit-server,
-whisper-server and docker each light up more services).
+You drive it all with **`bin/dev` from the host** (the repo root). From there
+it's a controller: `up` starts the devcontainer and the other commands forward
+into it — no `devcontainer exec` or container name needed. Detection and
+forwarding are narrated on stderr, so `status --json`'s stdout stays clean.
 
 ```bash
-bin/dev up             # npm ci + every service in a tmux session; idempotent
-bin/dev status --json  # per-service health, machine-readable (for agents)
-bin/dev logs client    # one service's scrollback (--tail N)
-bin/dev restart sync   # respawn one service, leave the rest alone
-bin/dev attach         # enter the tmux session (prefix Ctrl-Space, prefix+d detaches)
-bin/dev down           # stop everything
+bin/dev up             # start the devcontainer (devcontainer up); stack comes up inside
+bin/dev status --json  # forwarded; clean JSON on stdout (2>/dev/null for agents)
+bin/dev logs client    # forwarded: one service's scrollback (--tail N)
+bin/dev restart sync   # forwarded: respawn one service, leave the rest alone
+bin/dev attach         # prints how to attach (never nests tmux) + the detach caveat
+bin/dev down           # stop the whole devcontainer (docker stop)
+bin/dev doctor         # host prereqs (docker, @devcontainers/cli), then the inner doctor
+bin/dev --help         # usage (-h works too)
 ```
+
+Requires `docker` and the `@devcontainers/cli` (`npm i -g @devcontainers/cli`)
+on the host; `bin/dev up` names anything missing. Running **natively without
+Docker** (the engine directly on the host): `ENSEMBLEWORKS_NATIVE=1 bin/dev up`,
+and `bin/dev doctor` tells you what's missing (Node 22.22.3 and tmux required;
+caddy, livekit-server, whisper-server, docker each light up more services).
+Inside the container `bin/dev` is that same engine.
 
 State lives at `~/.local/share/ensembleworks` (canvas SQLite, uploads,
 transcripts); optional config at `~/.config/ensembleworks/dev.env`

@@ -5,16 +5,29 @@ Workspaces: `client`, `server`, `transcriber` (npm workspaces).
 
 ## Local dev — bin/dev
 
-`bin/dev up` runs the whole stack (sync :8788, terminal gateway :8789, Vite
-:5173, Caddy :8080, plus livekit/whisper/scribe when their binaries are
-present) in the `workspace` tmux session; the canvas is at
-http://localhost:8080. It's idempotent. The commands you'll actually use:
+Run `bin/dev` **from the host** (the repo root). There it's a *controller*: it
+drives the devcontainer and forwards commands into it — you never need
+`devcontainer exec …` or the container name.
 
-- `bin/dev status --json` — per-service enabled/health, machine-readable
-- `bin/dev logs <svc> --tail 500` — one service's scrollback (crashes keep
-  their window: exit code + scrollback survive)
-- `bin/dev restart <svc>` — respawn one service (after `npm install`, etc.)
-- `bin/dev doctor` — environment check; every failure prints its remedy
+- `bin/dev up` — start the devcontainer (`devcontainer up`); its stack (sync
+  :8788, gateway :8789, Vite :5173, Caddy :8080, plus livekit/whisper/scribe)
+  comes up inside.
+- `bin/dev status --json` — forwards in; **stdout is clean JSON** (all
+  detection/forwarding narration goes to stderr, so `2>/dev/null` gives pure
+  JSON for agents).
+- `bin/dev logs <svc> --tail 500` / `bin/dev restart <svc>` — forwarded.
+- `bin/dev doctor` — host prerequisites (docker, the `@devcontainers/cli`),
+  then the container's own doctor.
+- `bin/dev attach` — **prints** how to attach (`docker exec -it … tmux attach`)
+  plus the nested-tmux detach caveat; it never nests tmux for you.
+- `bin/dev down` — stops the whole devcontainer (`docker stop`).
+- `bin/dev --help` / `-h` — usage.
+
+Inside the container (the Dockerfile sets `ENSEMBLEWORKS_IN_DEVCONTAINER=1`)
+`bin/dev` is the *engine* that actually manages the tmux stack — the same
+commands, run natively. `ENSEMBLEWORKS_NATIVE=1` forces engine mode on the host
+(the no-Docker path). Every call narrates on stderr which mode it picked and
+what it forwarded.
 
 State: `~/.local/share/ensembleworks`. Optional keys:
 `~/.config/ensembleworks/dev.env`. Verify changes with `npm run typecheck`

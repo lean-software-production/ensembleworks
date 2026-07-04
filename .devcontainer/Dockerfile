@@ -20,6 +20,10 @@ ENV LANG=en_US.UTF-8
 # Node 18+ prefers ::1 for "localhost"; force IPv4 so Vite binds 127.0.0.1
 # and probePort (which connects to 127.0.0.1) can reach it.
 ENV NODE_OPTIONS=--dns-result-order=ipv4first
+# Marks that bin/dev is running INSIDE the devcontainer, so it acts as the
+# engine (runs the tmux stack) rather than the host controller (which forwards
+# in). See resolveMode() in bin/dev-lib.mjs.
+ENV ENSEMBLEWORKS_IN_DEVCONTAINER=1
 
 # Node — exact version read from .nvmrc (single source of truth; bin/dev and
 # the deploy preflight enforce the same pin at runtime).
