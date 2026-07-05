@@ -31,24 +31,23 @@ import { TLSocketRoom } from '@tldraw/sync-core'
 import { createBindingId, createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
 import express from 'express'
-import { AccessToken, RoomServiceClient } from 'livekit-server-sdk'
 import { WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
-import { GEO_TYPES, NOTE_COLORS, PULSE_STALE_MS, STICKY_GRID_COLS, STICKY_GRID_STEP } from './canvas/constants.ts'
+import { GEO_TYPES, NOTE_COLORS, STICKY_GRID_COLS, STICKY_GRID_STEP } from './canvas/constants.ts'
 import { pageIdOf, pagePoint, richTextToPlainText } from './canvas/geometry.ts'
 import { sanitizeId } from './canvas/ids.ts'
+import { createAvRouter } from './features/av.ts'
 import { createTerminalStatusRouter } from './features/terminal-status.ts'
 import { createUploadsRouter } from './features/uploads.ts'
 import { createGatewayPlane } from './gateway-registry.ts'
 import type { PluginServerContext } from './kernel/context.ts'
-import { buildParticipants, byProximity, getCursorRefs, pickCursor, rawUserId, sortPointOf } from './kernel/presence.ts'
+import { createMediaService } from './kernel/media.ts'
+import { byProximity, getCursorRefs, pickCursor, rawUserId, sortPointOf } from './kernel/presence.ts'
 import { createRoomHost } from './kernel/rooms.ts'
 import { createSessionRegistry } from './kernel/sessions.ts'
-import { resolveRoomServiceUrl } from './livekit-url.ts'
 import { schema } from './schema.ts'
 import { OpError, applyOps, createRoadmapStore, type RoadmapOp } from './roadmap-store.ts'
 import { createTranscriptStore } from './transcript-store.ts'
-import { readVmStats } from './vm-stats.ts'
 
 export { buildParticipants, type CursorRef, type Participant } from './kernel/presence.ts'
 
@@ -56,26 +55,6 @@ export interface SyncApp {
 	server: http.Server // not yet listening
 	getOrCreateRoom(roomId: string): TLSocketRoom
 }
-
-// LiveKit token endpoint configuration. The tldraw presence userId is used as
-// the LiveKit participant identity, which is how the client matches video
-// bubbles to cursors. When LiveKit isn't configured the client hides all A/V UI.
-const LIVEKIT_API_KEY = process.env.LIVEKIT_API_KEY
-const LIVEKIT_API_SECRET = process.env.LIVEKIT_API_SECRET
-// Public signaling URL returned to browser clients (wss://…/livekit via tunnel).
-const LIVEKIT_URL = process.env.LIVEKIT_URL
-// Internal HTTP base for the server's own RoomService calls (kick). Co-located
-// with livekit-server -> hit localhost and skip the tunnel + CF Access round
-// trip. Defaults to the public URL's HTTP form for LiveKit Cloud.
-const LIVEKIT_API_URL = process.env.LIVEKIT_API_URL
-// Guard on the RESOLVED url, not on LIVEKIT_API_URL directly — otherwise
-// pre-cutover (LiveKit Cloud, no LIVEKIT_API_URL) liveKitRoomService would be
-// null and /api/kick's removeParticipant would silently stop working.
-const roomServiceUrl = resolveRoomServiceUrl(LIVEKIT_URL, LIVEKIT_API_URL)
-const liveKitRoomService =
-	LIVEKIT_API_KEY && LIVEKIT_API_SECRET && roomServiceUrl
-		? new RoomServiceClient(roomServiceUrl, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
-		: null
 
 export function createSyncApp(opts: { dataDir: string; clientDist?: string }): SyncApp {
 	const uploadsDir = path.join(opts.dataDir, 'uploads')
@@ -85,10 +64,12 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 	const roomHost = createRoomHost(opts.dataDir)
 	const registry = createSessionRegistry()
+	const media = createMediaService()
 
 	const ctx: PluginServerContext = {
 		rooms: roomHost,
 		sessions: registry,
+		media,
 		storage: { transcripts, roadmaps, uploadsDir },
 	}
 
@@ -113,113 +94,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	const gatewayPlane = createGatewayPlane()
 	app.get('/api/gateway/list', gatewayPlane.listHandler)
 
-	app.get('/api/livekit-token', async (req, res) => {
-		if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET || !LIVEKIT_URL) {
-			res.json({ enabled: false })
-			return
-		}
-		const room = sanitizeId(String(req.query.room ?? ''))
-		const identity = String(req.query.identity ?? '').slice(0, 128)
-		const name = String(req.query.name ?? 'teammate').slice(0, 64)
-		// role=scribe mints a subscribe-only token for the transcriber bot: it
-		// hears every track but can never publish audio/video into the room.
-		const role = String(req.query.role ?? 'member')
-		if (!room || !identity) {
-			res.status(400).json({ error: 'room and identity are required' })
-			return
-		}
-		if (role !== 'member' && role !== 'scribe') {
-			res.status(400).json({ error: 'role must be member or scribe' })
-			return
-		}
-		const token = new AccessToken(LIVEKIT_API_KEY, LIVEKIT_API_SECRET, {
-			identity,
-			name,
-			ttl: '12h',
-		})
-		token.addGrant({
-			room: `canvas-${room}`,
-			roomJoin: true,
-			canPublish: role === 'member',
-			canSubscribe: true,
-		})
-		res.json({ enabled: true, token: await token.toJwt(), url: LIVEKIT_URL })
-	})
-
-	app.post('/api/kick', async (req, res) => {
-		const body = (req.body ?? {}) as Record<string, unknown>
-		const roomId = sanitizeId(String(body.room ?? ''))
-		const userId = typeof body.userId === 'string' ? body.userId.slice(0, 128) : ''
-		if (!roomId || !userId) {
-			return void res.status(400).json({ error: 'room and userId are required' })
-		}
-
-		const room = roomHost.rooms.get(roomId)
-		const sessionIds = [...(registry.sessionsByUser.get(roomId)?.get(userId) ?? [])]
-		for (const sessionId of sessionIds) {
-			room?.sendCustomMessage(sessionId, { type: 'kicked' })
-			room?.closeSession(sessionId, 'PERMISSION_DENIED')
-		}
-
-		if (liveKitRoomService) {
-			try {
-				await liveKitRoomService.removeParticipant(`canvas-${roomId}`, userId)
-			} catch (error) {
-				if (!(error instanceof Error && 'status' in error && error.status === 404)) {
-					console.warn(`[room ${roomId}] LiveKit kick failed for ${userId}`, error)
-				}
-			}
-		}
-
-		res.json({ ok: true, disconnected: sessionIds.length })
-	})
-
-	// Who is currently in a room — live presence joined with each person's
-	// verified Cloudflare Access identity. With ?page= it's filtered to one
-	// tldraw page, which is the git co-author rule (same room AND page). The
-	// commit tool reads this to build `Co-authored-by` trailers.
-	app.get('/api/participants', (req, res) => {
-		const roomId = sanitizeId(String(req.query.room ?? 'team'))
-		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
-		const page = req.query.page ? String(req.query.page) : null
-		const room = roomHost.rooms.get(roomId)
-		const refs = room && !room.isClosed() ? getCursorRefs(room) : []
-		res.json({
-			room: roomId,
-			page,
-			participants: buildParticipants(refs, registry.identitiesByUser.get(roomId), page),
-		})
-	})
-
-	// Session pulse: one heartbeat that carries both features in the "In session"
-	// panel. The client measures the round-trip of its *previous* pulse and
-	// reports it here (rttMs); the server records it, prunes stale samples, and
-	// returns the live per-user latency map plus a single shared VM-pressure
-	// reading. One client timer, one endpoint, no extra storage or schema.
-	app.post('/api/pulse', (req, res) => {
-		const body = (req.body ?? {}) as Record<string, unknown>
-		const roomId = sanitizeId(String(body.room ?? 'team'))
-		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
-		const userId = typeof body.userId === 'string' ? rawUserId(body.userId.slice(0, 128)) : ''
-		const rtt =
-			typeof body.rttMs === 'number' && Number.isFinite(body.rttMs) && body.rttMs >= 0
-				? Math.min(60_000, Math.round(body.rttMs))
-				: null
-		const now = Date.now()
-
-		let room = registry.latencyByUser.get(roomId)
-		if (!room) registry.latencyByUser.set(roomId, (room = new Map()))
-		if (userId && rtt !== null) room.set(userId, { rtt, t: now })
-
-		const latencies: Record<string, { rtt: number; t: number }> = {}
-		for (const [uid, sample] of room) {
-			if (now - sample.t > PULSE_STALE_MS) room.delete(uid)
-			else latencies[uid] = sample
-		}
-		if (room.size === 0) registry.latencyByUser.delete(roomId)
-
-		res.json({ ok: true, now, vm: readVmStats(now), latencies })
-	})
+	app.use(createAvRouter(ctx))
 
 	// Canvas API (session MVP): lets agents flip the status light on their
 	// terminal shape and post advice stickies, whether or not the room is open.
