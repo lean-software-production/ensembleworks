@@ -26,27 +26,28 @@ import { readFile, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
-import {
-	isTerminalStatus,
-	parseStamp,
-	slugify,
-	type SpatialStamp,
-	TERMINAL_STATUSES,
-} from '@ensembleworks/contracts'
-import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
+import { isTerminalStatus, slugify, TERMINAL_STATUSES } from '@ensembleworks/contracts'
+import { TLSocketRoom } from '@tldraw/sync-core'
 import { createBindingId, createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
 import express from 'express'
 import { AccessToken, RoomServiceClient } from 'livekit-server-sdk'
 import { WebSocketServer } from 'ws'
-import { type AccessIdentity, getAccessIdentity } from './access-identity.ts'
+import { getAccessIdentity } from './access-identity.ts'
+import { GEO_TYPES, NOTE_COLORS, PULSE_STALE_MS, STICKY_GRID_COLS, STICKY_GRID_STEP } from './canvas/constants.ts'
+import { byProximity, pageIdOf, pagePoint, richTextToPlainText, sortPointOf } from './canvas/geometry.ts'
+import { sanitizeAssetId, sanitizeId } from './canvas/ids.ts'
 import { createGatewayPlane } from './gateway-registry.ts'
+import { buildParticipants, getCursorRefs, pickCursor, rawUserId } from './kernel/presence.ts'
+import { createRoomHost } from './kernel/rooms.ts'
+import { createSessionRegistry } from './kernel/sessions.ts'
 import { resolveRoomServiceUrl } from './livekit-url.ts'
 import { schema } from './schema.ts'
 import { OpError, applyOps, createRoadmapStore, type RoadmapOp } from './roadmap-store.ts'
 import { createTranscriptStore } from './transcript-store.ts'
 import { readVmStats } from './vm-stats.ts'
+
+export { buildParticipants, type CursorRef, type Participant } from './kernel/presence.ts'
 
 export interface SyncApp {
 	server: http.Server // not yet listening
@@ -73,288 +74,14 @@ const liveKitRoomService =
 		? new RoomServiceClient(roomServiceUrl, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
 		: null
 
-// A per-user latency sample older than this is dropped from /api/pulse — the
-// client polls every PULSE_INTERVAL (~30s, client-side), so this is ~2.5×
-// that: a user who misses one beat still shows; one who left disappears.
-const PULSE_STALE_MS = 75_000
-
-// The note colours tldraw's default schema accepts (see TLDefaultColorStyle).
-const NOTE_COLORS = [
-	'black',
-	'grey',
-	'light-violet',
-	'violet',
-	'blue',
-	'light-blue',
-	'yellow',
-	'orange',
-	'green',
-	'light-green',
-	'light-red',
-	'red',
-	'white',
-]
-
-// In-frame stickies land on a simple grid: 3 per row, 220px columns/rows.
-const STICKY_GRID_COLS = 3
-const STICKY_GRID_STEP = 220
-
-// The geo styles tldraw's default schema accepts (see GeoShapeGeoStyle).
-const GEO_TYPES = [
-	'cloud',
-	'rectangle',
-	'ellipse',
-	'triangle',
-	'diamond',
-	'pentagon',
-	'hexagon',
-	'octagon',
-	'star',
-	'rhombus',
-	'rhombus-2',
-	'oval',
-	'trapezoid',
-	'arrow-right',
-	'arrow-left',
-	'arrow-up',
-	'arrow-down',
-	'x-box',
-	'check-box',
-	'heart',
-]
-
-function sanitizeId(id: string): string | null {
-	return /^[a-zA-Z0-9_-]{1,64}$/.test(id) ? id : null
-}
-
-// Uploaded asset ids may carry a file extension — the client assetStore keeps
-// dots from the original filename ("<uniqueId>-photo.png") — but must remain
-// one safe path segment: no leading dot (blocks ".", ".." and dotfiles), no
-// separators. Room ids keep the stricter sanitizeId above.
-function sanitizeAssetId(id: string): string | null {
-	return /^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,63}$/.test(id) ? id : null
-}
-
-// Recover plain text from a tldraw richText doc (the ProseMirror JSON that
-// toRichText produces). Top-level paragraphs join with newlines; text nodes
-// within a paragraph concatenate. The inverse of toRichText, server-side and
-// without an Editor — used by the read endpoints to surface sticky/text bodies.
-function richTextToPlainText(rich: any): string {
-	if (!rich || !Array.isArray(rich.content)) return ''
-	const textOf = (node: any): string => {
-		if (!node) return ''
-		if (typeof node.text === 'string') return node.text
-		if (Array.isArray(node.content)) return node.content.map(textOf).join('')
-		return ''
-	}
-	return rich.content.map(textOf).join('\n')
-}
-
-// --- Proximity ---------------------------------------------------------------
-// The read endpoints sort their results by nearness to a teammate's live
-// cursor, *when one is available*. Presence (cursor + currentPageId) is
-// ephemeral and only exists while a browser tab is connected, so this is a
-// best-effort overlay: with nobody connected the endpoints fall back to plain
-// document order.
-
-// The client-computed spatial stamp carried in presence.meta.stamp, and its
-// server-side trust boundary (parseStamp — never trust presence meta) live
-// in @ensembleworks/contracts, shared verbatim with the client's computeStamp.
-
-export interface CursorRef {
-	userId: string | null
-	userName: string
-	currentPageId: string
-	cursor: { x: number; y: number }
-	// Camera + viewport, used to stamp the frame a speaker is *looking at* when
-	// their mouse cursor isn't pointing inside a frame (null on tldraw versions
-	// or presence records that omit them).
-	camera: { x: number; y: number; z: number } | null
-	screenBounds: { w: number; h: number } | null
-	lastActivityTimestamp: number
-	// Client-computed spatial stamp (null: pre-stamp bundle or non-canvas peer).
-	stamp: SpatialStamp | null
-}
-
-// tldraw presence stores userId as a prefixed TLUserId ("user:abc"), but the
-// LiveKit identity the scribe posts is the raw form ("abc"). Normalise both to
-// raw before matching a speaker to their cursor.
-function rawUserId(id: string | null): string {
-	return (id ?? '').replace(/^user:/, '')
-}
-
-// Live presence records for a room, via the (internal, untyped) accessor.
-// Guarded so a tldraw version without it just disables proximity sorting.
-function getCursorRefs(room: any): CursorRef[] {
-	let presence: Record<string, any> = {}
-	try {
-		presence = room.getPresenceRecords?.() ?? {}
-	} catch {
-		return []
-	}
-	return Object.values(presence)
-		.filter((p: any) => p?.cursor && typeof p.currentPageId === 'string')
-		.map((p: any) => ({
-			userId: typeof p.userId === 'string' ? p.userId : null,
-			userName: typeof p.userName === 'string' ? p.userName : 'teammate',
-			currentPageId: p.currentPageId,
-			cursor: { x: p.cursor.x, y: p.cursor.y },
-			camera:
-				p.camera && typeof p.camera.x === 'number' && typeof p.camera.y === 'number'
-					? { x: p.camera.x, y: p.camera.y, z: typeof p.camera.z === 'number' ? p.camera.z : 1 }
-					: null,
-			screenBounds:
-				p.screenBounds && typeof p.screenBounds.w === 'number' && typeof p.screenBounds.h === 'number'
-					? { w: p.screenBounds.w, h: p.screenBounds.h }
-					: null,
-			lastActivityTimestamp: p.lastActivityTimestamp ?? 0,
-			stamp: parseStamp(p.meta?.stamp),
-		}))
-}
-
-// A person currently connected to a room, as reported to /api/participants —
-// the join of live presence (name + page) with their captured Cloudflare Access
-// identity (email). `email` is null when their identity wasn't captured (dev /
-// header-trust gaps); `pageId` is the tldraw page they're on.
-export interface Participant {
-	userId: string
-	name: string
-	email: string | null
-	verified: boolean
-	pageId: string
-}
-
-// Join live presence with captured Access identities into a deduped participant
-// list. With `page` set, only people on that tldraw page are included — this is
-// the co-author rule: present in the same room AND on the same page. Pure, so
-// it's unit-tested directly.
-export function buildParticipants(
-	refs: CursorRef[],
-	identities: Map<string, AccessIdentity> | undefined,
-	page?: string | null,
-): Participant[] {
-	const byUser = new Map<string, Participant>()
-	for (const ref of refs) {
-		if (page && ref.currentPageId !== page) continue
-		const uid = rawUserId(ref.userId)
-		if (!uid || byUser.has(uid)) continue
-		const id = identities?.get(uid)
-		byUser.set(uid, {
-			userId: uid,
-			name: ref.userName,
-			email: id?.email ?? null,
-			verified: id?.verified ?? false,
-			pageId: ref.currentPageId,
-		})
-	}
-	return [...byUser.values()]
-}
-
-// The most-recently-active cursor, optionally restricted to one page (a cursor
-// on another page can't meaningfully order shapes on this one).
-function pickCursor(refs: CursorRef[], pageId?: string): CursorRef | null {
-	const candidates = pageId ? refs.filter((r) => r.currentPageId === pageId) : refs
-	if (!candidates.length) return null
-	return candidates.reduce((a, b) => (b.lastActivityTimestamp > a.lastActivityTimestamp ? b : a))
-}
-
-// The page id a shape ultimately lives on (walks up nested parents).
-function pageIdOf(shape: any, byId: Map<string, any>): string | null {
-	let pid: string | undefined = shape.parentId
-	let guard = 0
-	while (pid && pid.startsWith('shape:') && guard++ < 50) {
-		pid = byId.get(pid)?.parentId
-	}
-	return pid ?? null
-}
-
-// A shape's top-left in page coordinates (child x/y are parent-relative).
-function pagePoint(shape: any, byId: Map<string, any>): { x: number; y: number } {
-	let x = shape.x ?? 0
-	let y = shape.y ?? 0
-	let parent = byId.get(shape.parentId)
-	let guard = 0
-	while (parent && parent.typeName === 'shape' && guard++ < 50) {
-		x += parent.x ?? 0
-		y += parent.y ?? 0
-		parent = byId.get(parent.parentId)
-	}
-	return { x, y }
-}
-
-function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
-	return Math.hypot(a.x - b.x, a.y - b.y)
-}
-
-// The point a teammate's reads are ordered by: their client-computed stamp
-// point when present (where they're at / looking at — the cursor is usually
-// parked off-canvas since the camera bubble decoupled from it), else the raw
-// cursor. Point *selection* only; no geometry is recomputed here.
-function sortPointOf(ref: CursorRef): { x: number; y: number } {
-	return ref.stamp?.at ?? ref.cursor
-}
-
-// Sort items (each carrying a page-space `pt`) by distance to the sort point
-// (the teammate's stamp point when present, else their raw cursor — see
-// sortPointOf), attaching a rounded `dist`. Returns a new array; input order
-// on a tie is preserved. With no cursor, returns the items unchanged and
-// undistanced.
-function byProximity<T extends { pt: { x: number; y: number } }>(
-	items: T[],
-	cursor: CursorRef | null
-): Array<Omit<T, 'pt'> & { dist: number | null }> {
-	const decorated = items.map((it, i) => {
-		const { pt, ...rest } = it
-		const d = cursor ? dist(pt, sortPointOf(cursor)) : null
-		return { rest, d, i }
-	})
-	if (cursor) decorated.sort((a, b) => a.d! - b.d! || a.i - b.i)
-	return decorated.map((e) => ({ ...(e.rest as Omit<T, 'pt'>), dist: e.d === null ? null : Math.round(e.d) }))
-}
-
 export function createSyncApp(opts: { dataDir: string; clientDist?: string }): SyncApp {
-	const roomsDir = path.join(opts.dataDir, 'rooms')
 	const uploadsDir = path.join(opts.dataDir, 'uploads')
-	mkdirSync(roomsDir, { recursive: true })
 	mkdirSync(uploadsDir, { recursive: true })
 	const transcripts = createTranscriptStore(path.join(opts.dataDir, 'transcripts'))
 	const roadmaps = createRoadmapStore(path.join(opts.dataDir, 'roadmaps'))
 
-	// -------------------------------------------------------------------------
-	// Rooms: one TLSocketRoom per room ID, persisted via SQLite. Storage commits
-	// transactionally on every change, so there is no debounced-save dance and
-	// the room survives process restarts (M0 exit criterion).
-	// -------------------------------------------------------------------------
-
-	const rooms = new Map<string, TLSocketRoom>()
-	const sessionsByUser = new Map<string, Map<string, Set<string>>>()
-	// Verified Cloudflare Access identity per connected user (roomId -> rawUserId
-	// -> identity), captured at WS upgrade from the Cf-Access headers and read by
-	// /api/participants. Cleared when the user's last session closes, so it only
-	// ever covers currently-connected people.
-	const identitiesByUser = new Map<string, Map<string, AccessIdentity>>()
-	// Most-recent client-measured round-trip per connected user (roomId ->
-	// rawUserId -> { rtt ms, t }). Reported and read back via POST /api/pulse;
-	// pruned by age on every read so it only ever reflects live participants.
-	const latencyByUser = new Map<string, Map<string, { rtt: number; t: number }>>()
-
-	function getOrCreateRoom(roomId: string): TLSocketRoom {
-		let room = rooms.get(roomId)
-		if (room && !room.isClosed()) return room
-		const db = new DatabaseSync(path.join(roomsDir, `${roomId}.sqlite`))
-		const storage = new SQLiteSyncStorage({ sql: new NodeSqliteWrapper(db) })
-		room = new TLSocketRoom({
-			storage,
-			schema,
-			log: {
-				warn: (...args) => console.warn(`[room ${roomId}]`, ...args),
-				error: (...args) => console.error(`[room ${roomId}]`, ...args),
-			},
-		})
-		rooms.set(roomId, room)
-		console.log(`[room ${roomId}] opened`)
-		return room
-	}
+	const roomHost = createRoomHost(opts.dataDir)
+	const registry = createSessionRegistry()
 
 	// -------------------------------------------------------------------------
 	// HTTP app
@@ -365,7 +92,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	app.use('/api', express.json())
 
 	app.get('/api/health', (_req, res) => {
-		res.json({ ok: true, rooms: [...rooms.keys()] })
+		res.json({ ok: true, rooms: [...roomHost.rooms.keys()] })
 	})
 
 	// Remote terminal gateways (spike): connect-equals-register + relay splicer.
@@ -414,8 +141,8 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 			return void res.status(400).json({ error: 'room and userId are required' })
 		}
 
-		const room = rooms.get(roomId)
-		const sessionIds = [...(sessionsByUser.get(roomId)?.get(userId) ?? [])]
+		const room = roomHost.rooms.get(roomId)
+		const sessionIds = [...(registry.sessionsByUser.get(roomId)?.get(userId) ?? [])]
 		for (const sessionId of sessionIds) {
 			room?.sendCustomMessage(sessionId, { type: 'kicked' })
 			room?.closeSession(sessionId, 'PERMISSION_DENIED')
@@ -442,12 +169,12 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		const page = req.query.page ? String(req.query.page) : null
-		const room = rooms.get(roomId)
+		const room = roomHost.rooms.get(roomId)
 		const refs = room && !room.isClosed() ? getCursorRefs(room) : []
 		res.json({
 			room: roomId,
 			page,
-			participants: buildParticipants(refs, identitiesByUser.get(roomId), page),
+			participants: buildParticipants(refs, registry.identitiesByUser.get(roomId), page),
 		})
 	})
 
@@ -467,8 +194,8 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 				: null
 		const now = Date.now()
 
-		let room = latencyByUser.get(roomId)
-		if (!room) latencyByUser.set(roomId, (room = new Map()))
+		let room = registry.latencyByUser.get(roomId)
+		if (!room) registry.latencyByUser.set(roomId, (room = new Map()))
 		if (userId && rtt !== null) room.set(userId, { rtt, t: now })
 
 		const latencies: Record<string, { rtt: number; t: number }> = {}
@@ -476,7 +203,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 			if (now - sample.t > PULSE_STALE_MS) room.delete(uid)
 			else latencies[uid] = sample
 		}
-		if (room.size === 0) latencyByUser.delete(roomId)
+		if (room.size === 0) registry.latencyByUser.delete(roomId)
 
 		res.json({ ok: true, now, vm: readVmStats(now), latencies })
 	})
@@ -497,7 +224,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 				.json({ error: `status must be one of ${TERMINAL_STATUSES.join(' | ')}` })
 		}
 		let updated = 0
-		await getOrCreateRoom(roomId).updateStore((store) => {
+		await roomHost.getOrCreateRoom(roomId).updateStore((store) => {
 			for (const record of store.getAll() as any[]) {
 				if (
 					record.typeName === 'shape' &&
@@ -527,7 +254,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		}
 		let createdId: string | null = null
 		let frameFound = true
-		await getOrCreateRoom(roomId).updateStore((store) => {
+		await roomHost.getOrCreateRoom(roomId).updateStore((store) => {
 			const records = store.getAll() as any[]
 			const shapes = records.filter((r) => r.typeName === 'shape')
 
@@ -620,7 +347,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		// semantics: cursor-inside-frame wins, else viewport centre). No live
 		// tab, or a pre-stamp bundle, ⇒ unstamped entry. No server-side
 		// geometry fallback by design.
-		const room = getOrCreateRoom(roomId)
+		const room = roomHost.getOrCreateRoom(roomId)
 		const want = rawUserId(identity)
 		const ref = getCursorRefs(room).find((r) => rawUserId(r.userId) === want) ?? null
 
@@ -681,7 +408,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 			const id = typeof body.id === 'string' ? body.id : ''
 			if (!id) return void res.status(400).json({ error: 'id is required' })
 			let deleted = 0
-			await getOrCreateRoom(roomId).updateStore((store) => {
+			await roomHost.getOrCreateRoom(roomId).updateStore((store) => {
 				const records = store.getAll() as any[]
 				const target = records.find((r) => r.id === id)
 				if (!target) return
@@ -705,7 +432,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 			if (!id) return void res.status(400).json({ error: 'id is required' })
 			let found = false
 			try {
-				await getOrCreateRoom(roomId).updateStore((store) => {
+				await roomHost.getOrCreateRoom(roomId).updateStore((store) => {
 					const record = (store.getAll() as any[]).find(
 						(r) => r.typeName === 'shape' && r.id === id
 					)
@@ -752,7 +479,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		let problem: { status: number; error: string } | null = null
 
 		try {
-			await getOrCreateRoom(roomId).updateStore((store) => {
+			await roomHost.getOrCreateRoom(roomId).updateStore((store) => {
 				const records = store.getAll() as any[]
 				const byId = new Map(records.map((r) => [r.id, r]))
 				const shapes = records.filter((r) => r.typeName === 'shape')
@@ -946,7 +673,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	app.get('/api/frames', (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
-		const room = getOrCreateRoom(roomId)
+		const room = roomHost.getOrCreateRoom(roomId)
 		const records = room.getCurrentSnapshot().documents.map((d) => d.state as any)
 		const byId = new Map(records.map((r) => [r.id, r]))
 		const shapes = records.filter((r) => r.typeName === 'shape')
@@ -999,7 +726,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		const name = typeof req.query.name === 'string' ? req.query.name : ''
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		if (!name) return void res.status(400).json({ error: 'name is required' })
-		const room = getOrCreateRoom(roomId)
+		const room = roomHost.getOrCreateRoom(roomId)
 		const records = room.getCurrentSnapshot().documents.map((d) => d.state as any)
 		const byId = new Map(records.map((r) => [r.id, r]))
 		const shapes = records.filter((r) => r.typeName === 'shape')
@@ -1149,7 +876,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 			// Fan-out is best-effort; the store write already succeeded.
 			let shapesUpdated = 0
 			try {
-				await getOrCreateRoom(roomId).updateStore((store) => {
+				await roomHost.getOrCreateRoom(roomId).updateStore((store) => {
 					for (const record of store.getAll() as any[]) {
 						if (
 							record.typeName === 'shape' &&
@@ -1228,14 +955,14 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		void getAccessIdentity(req.headers)
 			.then((id) => {
 				if (!id) return
-				let m = identitiesByUser.get(roomId)
-				if (!m) identitiesByUser.set(roomId, (m = new Map()))
+				let m = registry.identitiesByUser.get(roomId)
+				if (!m) registry.identitiesByUser.set(roomId, (m = new Map()))
 				m.set(rawUserId(userId), id)
 			})
 			.catch(() => {})
 		wss.handleUpgrade(req, socket, head, (ws) => {
-			let roomUsers = sessionsByUser.get(roomId)
-			if (!roomUsers) sessionsByUser.set(roomId, (roomUsers = new Map()))
+			let roomUsers = registry.sessionsByUser.get(roomId)
+			if (!roomUsers) registry.sessionsByUser.set(roomId, (roomUsers = new Map()))
 			let userSessions = roomUsers.get(userId)
 			if (!userSessions) roomUsers.set(userId, (userSessions = new Set()))
 			userSessions.add(sessionId)
@@ -1243,16 +970,16 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 				userSessions.delete(sessionId)
 				if (userSessions.size === 0) {
 					roomUsers.delete(userId)
-					identitiesByUser.get(roomId)?.delete(rawUserId(userId))
+					registry.identitiesByUser.get(roomId)?.delete(rawUserId(userId))
 				}
 				if (roomUsers.size === 0) {
-					sessionsByUser.delete(roomId)
-					identitiesByUser.delete(roomId)
+					registry.sessionsByUser.delete(roomId)
+					registry.identitiesByUser.delete(roomId)
 				}
 			})
-			getOrCreateRoom(roomId).handleSocketConnect({ sessionId, socket: ws })
+			roomHost.getOrCreateRoom(roomId).handleSocketConnect({ sessionId, socket: ws })
 		})
 	})
 
-	return { server, getOrCreateRoom }
+	return { server, getOrCreateRoom: roomHost.getOrCreateRoom }
 }
