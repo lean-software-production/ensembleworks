@@ -2,7 +2,9 @@
  * MediaService — LiveKit credentials/config + RoomServiceClient. Config is
  * captured at construction (inside createSyncApp), NOT at module import:
  * this removes the env-before-import ordering that scribe-api.test.ts
- * previously had to work around with a dynamic import.
+ * previously had to work around with a dynamic import. Config is captured
+ * per-construction, so two createSyncApp() instances in one process can
+ * differ if env changes between them.
  */
 import { RoomServiceClient } from 'livekit-server-sdk'
 import { resolveRoomServiceUrl } from '../livekit-url.ts'
