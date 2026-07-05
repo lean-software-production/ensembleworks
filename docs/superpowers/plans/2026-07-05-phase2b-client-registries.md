@@ -1690,3 +1690,68 @@ git add -A && git commit -m "docs(plan): phase2b execution postscript"
 - **Spec coverage:** §7 Phase 2 client scope = plugin list iteration (Tasks 4–8), roomHooks (Tasks 2, 4, 5, 7), scheduler (Tasks 1, 5, 9, 10), AvOverlay dismemberment (Tasks 9–10). Contracts `rawUserId` (Task 3) implements the §1.5 "user:-prefix stripping" line.
 - **Type consistency:** `ClientPlugin` fields (`shapeUtils/icons/tools/ToolbarItems/MenuItems/Overlay/uiSlots/roomHooks`) are used with exactly those names in Tasks 4–8; `RoomHooks.beforeShapeDelete/afterShapeDelete/cleanup` match between Task 2 and Tasks 4–5; `scheduler.every`/`useEvery`/`CancelCadence` match between Task 1 and Tasks 5, 9, 10; `LiveKitState`/`RemotePeer` are the real exported names in `useLiveKitRoom.ts`.
 - **Known judgment points for implementers:** exact tldraw type names (`TLUiToolItem`, `TLAnyShapeUtilConstructor`, the `source` union on delete handlers) — verify against the installed tldraw d.ts, don't loosen types; `LiveKitState` field names in Task 10; the server `rawUserId` body check in Task 3.
+
+---
+
+## Execution postscript (2026-07-05)
+
+**Result: all 11 tasks landed; branch READY TO MERGE (final review, no Critical/Important issues).**
+
+Sequence (12 commits on `phase2b-client-registries` off `81213a8`): plan doc →
+scheduler → plugin/roomHooks → contracts rawUserId → 4 feature plugins →
+screenshare plugin → av/demo/session + registry → App.tsx switchover →
+ui.tsx switchover → AvOverlay leaves → AvOverlay orchestrator.
+
+Model split as directed: sonnet implementers, opus per-task two-stage reviews,
+opus final review (Fable was out of credits at final-review time; the session
+default had already been switched to Opus 4.8, so the whole-branch integration
+review ran on Opus).
+
+### Verification (all green)
+- `npm run typecheck` + `npm run build` across all workspaces.
+- 27 test suites: 13 client (incl. new `kernel/scheduler`, `kernel/plugin`,
+  `kernel/roomHooks`), 3 contracts (incl. new `user-id`), 11 server — all pass.
+- Mechanical ledger audit: registry order correct; **zero** `setInterval`/
+  `setTimeout` left in `client/src/av/` (all cadences via scheduler/useEvery);
+  delete handlers register only in `kernel/roomHooks.ts`; `__ewEditor` +
+  `__ewScreenShareRoom` preserved; App.tsx and ui.tsx both consume `./plugins`.
+- Final review traced end-to-end composition, the delete-hook semantics change
+  (lazy→eager screenshare after-delete + composed terminal veto — proven
+  equivalent for the mixed terminal+tile batch), the three cadence refactors
+  (<1-period phase shift only, ledger-sanctioned), import layering (no new
+  cycle; av→screenshare coupling pre-existed), and the 14-item parity ledger.
+
+### AvOverlay shrinkage
+1,302 lines → 184-line orchestrator + 8 focused modules
+(`icons`, `gauges`, `TranscriptModal`, `rail`, `SessionPanel`, `leashes`,
+`useSpatialGainLoop`, plus the screenshare `SubscriptionLoop` that left the AV
+layer entirely).
+
+### Deviations from the plan (all minor, all accepted in review)
+1. **Task 3** — the plan's literal `export { rawUserId } from '@ensembleworks/contracts'`
+   would break `presence.ts`'s internal `buildParticipants` call (a bare
+   `export … from` binds nothing in module scope). Implemented as
+   `import { …, rawUserId } from …` + `export { rawUserId }` — same intent
+   (contracts owns the definition, consumers untouched), internal use intact.
+2. **Task 7** — a stale comment in `stopScreenShare` ("…the delete handler
+   below") referred to the removed `installDeleteHandler`; reworded to point at
+   `stopShareForDeletedShape`, the plugin's after-delete room hook. Amended into
+   the task commit.
+3. **Line-count estimates** — the plan guessed AvOverlay would shrink to ~260
+   lines and Task 9 would remove ~450; actual final orchestrator is 184 lines
+   (Task 9 removed 578, Task 10 the rest). Estimate drift only; every move was
+   diff-verified byte-identical.
+
+### Non-blocking observations for later phases
+- **SubscriptionLoop room source**: the screenshare subscription loop now keys
+  on `useScreenShareRoom()` (the module registration store) rather than
+  AvOverlay's local `lk.room` — necessary now the loop lives in the screenshare
+  feature with no `lk` in hand. Same lifecycle (`useLiveKitRoom`→
+  `setScreenShareRoom`), behaviour-equivalent; noted because it's the one place
+  the room *reference source* differs from pre-branch rather than just moving.
+- **Deferred to later phases (unchanged from the plan's scope exclusions)**:
+  per-shape feature-internal timers (terminal reconnect/font-probe, neko
+  mute/nudge, roadmap copied-flag, screenshare 1 s aspect poll) stay as raw
+  timers; `useLiveKitRoom`→`setScreenShareRoom` room registration and
+  `session/layout.ts`→`av/spatial` import stay; a general "local colour changed"
+  hook (replacing `ColorDot`'s direct `retintLocalShares` call) is Phase 6.
