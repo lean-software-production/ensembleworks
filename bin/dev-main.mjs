@@ -8,7 +8,7 @@
  * Pure logic (service table, gating, parsing) lives in ./dev-lib.mjs and is
  * unit-tested; this file owns the I/O: process env, tmux, health polls, CLI.
  * Dependency-free on purpose — node: builtins only — so it runs on a fresh
- * clone before npm ci.
+ * clone before bun install.
  */
 import { execFileSync, execSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
@@ -19,11 +19,12 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import {
 	PORTS,
+	atLeast,
 	buildServices,
 	hold,
 	originToString,
 	parseDotEnv,
-	parseNvmrc,
+	parseToolVersions,
 	parsePublicOrigin,
 	resolveMode,
 } from './dev-lib.mjs'
@@ -37,8 +38,8 @@ const tmuxConf = path.join(repoDir, 'deploy', 'tmux-ensembleworks.conf')
 // ---- role dispatch: controller (host) vs engine (in the container / native) --
 // The expected usage is from the HOST: there bin/dev drives the devcontainer
 // (up starts it; status/logs/… forward into it) and needs none of the engine's
-// Node/tmux/caddy machinery — so dispatch to the controller here, before the
-// Node-version gate and dev.env sourcing below. runController() never returns.
+// Bun/tmux/caddy machinery — so dispatch to the controller here, before the
+// Bun-version gate and dev.env sourcing below. runController() never returns.
 if (resolveMode(process.env) === 'controller') {
 	runController(repoDir, process.argv.slice(2))
 }
@@ -61,23 +62,32 @@ function die(msg) {
 	process.exit(1)
 }
 
-// ---- Node version: enforce, don't provide -----------------------------------
-// The pin exists for node-pty's prebuilt ABI. If mise is on PATH, re-exec
-// through it once (same trick the retired host launcher used); otherwise fail
-// with the exact remedy. .nvmrc is the single source of truth.
-export const wantedNode = parseNvmrc(readFileSync(path.join(repoDir, '.nvmrc'), 'utf8'))
-if (process.version !== `v${wantedNode}`) {
+// ---- Bun version: enforce the floor, re-exec through mise if it can ----------
+// bin/dev runs under Bun (shebang). The floor exists because Bun.Terminal + the
+// build need >= 1.3.14 while the default mise bun was 1.3.4 during the
+// migration. .tool-versions is the single source of truth. If a too-old bun is
+// running and mise is on PATH, re-exec once through the pinned bun; else fail
+// with the exact remedy.
+export const wantedBun = parseToolVersions(readFileSync(path.join(repoDir, '.tool-versions'), 'utf8'), 'bun')
+const runningBun = process.versions.bun
+if (!runningBun) {
+	die(
+		`bin/dev must run under Bun, but it is running under Node ${process.version}.\n` +
+			`  fix: install Bun >= ${wantedBun} (\`mise use -g bun@${wantedBun}\` or https://bun.sh) and re-run.`,
+	)
+}
+if (!atLeast(runningBun, wantedBun)) {
 	if (onPath('mise') && !process.env.ENSEMBLEWORKS_DEV_REEXEC) {
 		const r = spawnSync(
 			'mise',
-			['exec', `node@${wantedNode}`, '--', 'node', ...process.argv.slice(1)],
+			['exec', `bun@${wantedBun}`, '--', 'bun', ...process.argv.slice(1)],
 			{ stdio: 'inherit', env: { ...process.env, ENSEMBLEWORKS_DEV_REEXEC: '1' } },
 		)
 		process.exit(r.status ?? 1)
 	}
 	die(
-		`running node ${process.version}, but .nvmrc pins v${wantedNode} (node-pty ABI).\n` +
-			`  fix: install it — e.g. \`mise use -g node@${wantedNode}\` or \`nvm install ${wantedNode}\` — and re-run.`,
+		`running bun ${runningBun}, but .tool-versions pins bun ${wantedBun} (Bun.Terminal + build floor).\n` +
+			`  fix: install it — e.g. \`mise use -g bun@${wantedBun}\` — and re-run.`,
 	)
 }
 
@@ -209,8 +219,8 @@ async function up(flags) {
 		console.log(`already running (tmux session '${session}').`)
 	} else {
 		if (!flags.noInstall) {
-			console.log('==> npm ci (skip with --no-install)')
-			execFileSync('npm', ['ci'], { cwd: repoDir, stdio: 'inherit' })
+			console.log('==> bun install (skip with --no-install)')
+			execFileSync('bun', ['install'], { cwd: repoDir, stdio: 'inherit' })
 		}
 		for (const s of services.filter((x) => !x.enabled)) console.log(`  - ${s.name} off: ${s.reason}`)
 		const [first, ...rest] = enabled
@@ -335,7 +345,7 @@ function attach() {
 function usage() {
 	console.log(`bin/dev — the EnsembleWorks dev stack (tmux session '${session}')
 
-  bin/dev up [--attach] [--no-install]   start everything (idempotent; npm ci on fresh start)
+  bin/dev up [--attach] [--no-install]   start everything (idempotent; bun install on fresh start)
   bin/dev down                           kill the session
   bin/dev status [--json]                per-service state (--json for agents)
   bin/dev logs <svc> [--tail N]          one service's scrollback (default 200 lines)

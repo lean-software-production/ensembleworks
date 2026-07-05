@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 // CJS shim: the repo root has no "type": "module", so this extensionless
 // entry loads as CommonJS; the implementation is ESM in dev-main.mjs.
 const { pathToFileURL } = require('node:url')

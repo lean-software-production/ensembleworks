@@ -3,12 +3,13 @@
 import assert from 'node:assert/strict'
 import {
 	PORTS,
+	atLeast,
 	attachInstructions,
 	buildServices,
 	forwardArgv,
 	hold,
 	parseDotEnv,
-	parseNvmrc,
+	parseToolVersions,
 	parsePublicOrigin,
 	resolveMode,
 	workspaceDirFor,
@@ -39,19 +40,23 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 
 // hold() wraps a command so the tmux window survives crash and Ctrl-C.
 {
-	const w = hold('npm run dev', 'client')
+	const w = hold('bun run dev', 'client')
 	assert.ok(w.startsWith('trap ":" INT; '), 'SIGINT trap is first (load-bearing)')
-	assert.ok(w.includes('npm run dev'), 'command included')
+	assert.ok(w.includes('bun run dev'), 'command included')
 	assert.ok(w.includes('[client exited $code]'), 'label in the epilogue')
 	assert.ok(w.endsWith('exec bash'), 'drops to an interactive shell')
 	console.log('ok: hold() wrapper shape')
 }
 
-// parseNvmrc tolerates v-prefix and whitespace.
+// parseToolVersions reads a tool's pin from .tool-versions; atLeast does the floor compare.
 {
-	assert.equal(parseNvmrc('22.22.3\n'), '22.22.3')
-	assert.equal(parseNvmrc('v22.22.3'), '22.22.3')
-	console.log('ok: parseNvmrc')
+	assert.equal(parseToolVersions('bun 1.3.14\n', 'bun'), '1.3.14')
+	assert.equal(parseToolVersions('# comment\nbun v1.3.14\n', 'bun'), '1.3.14', 'v-prefix + comments tolerated')
+	assert.equal(parseToolVersions('node 22\n', 'bun'), '', 'absent tool -> empty')
+	assert.equal(atLeast('1.3.14', '1.3.14'), true, 'equal satisfies the floor')
+	assert.equal(atLeast('1.3.20', '1.3.14'), true)
+	assert.equal(atLeast('1.3.4', '1.3.14'), false, 'the 1.3.4 default is below the floor')
+	console.log('ok: parseToolVersions + atLeast')
 }
 
 // parseDotEnv: comments/blanks skipped, quotes stripped, export prefix ok,
