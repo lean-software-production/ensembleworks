@@ -1,5 +1,3 @@
-import type { CursorRef } from '../kernel/presence.ts'
-
 // --- Proximity ---------------------------------------------------------------
 // The read endpoints sort their results by nearness to a teammate's live
 // cursor, *when one is available*. Presence (cursor + currentPageId) is
@@ -52,30 +50,4 @@ export function pagePoint(shape: any, byId: Map<string, any>): { x: number; y: n
 
 export function dist(a: { x: number; y: number }, b: { x: number; y: number }): number {
 	return Math.hypot(a.x - b.x, a.y - b.y)
-}
-
-// The point a teammate's reads are ordered by: their client-computed stamp
-// point when present (where they're at / looking at — the cursor is usually
-// parked off-canvas since the camera bubble decoupled from it), else the raw
-// cursor. Point *selection* only; no geometry is recomputed here.
-export function sortPointOf(ref: CursorRef): { x: number; y: number } {
-	return ref.stamp?.at ?? ref.cursor
-}
-
-// Sort items (each carrying a page-space `pt`) by distance to the sort point
-// (the teammate's stamp point when present, else their raw cursor — see
-// sortPointOf), attaching a rounded `dist`. Returns a new array; input order
-// on a tie is preserved. With no cursor, returns the items unchanged and
-// undistanced.
-export function byProximity<T extends { pt: { x: number; y: number } }>(
-	items: T[],
-	cursor: CursorRef | null
-): Array<Omit<T, 'pt'> & { dist: number | null }> {
-	const decorated = items.map((it, i) => {
-		const { pt, ...rest } = it
-		const d = cursor ? dist(pt, sortPointOf(cursor)) : null
-		return { rest, d, i }
-	})
-	if (cursor) decorated.sort((a, b) => a.d! - b.d! || a.i - b.i)
-	return decorated.map((e) => ({ ...(e.rest as Omit<T, 'pt'>), dist: e.d === null ? null : Math.round(e.d) }))
 }

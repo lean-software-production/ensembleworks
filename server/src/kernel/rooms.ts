@@ -1,16 +1,16 @@
+/**
+ * RoomHost — owns the TLSocketRoom registry and SQLite-backed room loading.
+ * The one place that constructs rooms; every feature router reaches rooms
+ * through this. (Moved from app.ts's closure: rooms map + getOrCreateRoom.)
+ */
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 import { schema } from '../schema.ts'
 
-/**
- * RoomHost — owns the TLSocketRoom registry and SQLite-backed room loading.
- * The one place that constructs rooms; every feature router reaches rooms
- * through this. (Moved from app.ts's closure: rooms map + getOrCreateRoom.)
- */
 export interface RoomHost {
-	rooms: Map<string, TLSocketRoom>
+	rooms: ReadonlyMap<string, TLSocketRoom>
 	getOrCreateRoom(roomId: string): TLSocketRoom
 }
 
