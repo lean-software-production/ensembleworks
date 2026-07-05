@@ -31,4 +31,14 @@ console.log('ok: leading/trailing dashes stripped')
 	console.log('ok: >64-char names truncate to 64')
 }
 
+// Ordering: truncation happens AFTER dash-strip but BEFORE the final regex,
+// so a slug cut at a '-' boundary keeps that trailing dash (the regex only
+// constrains the first character).
+{
+	const slug = slugify('a'.repeat(63) + '-xyz')
+	assert.equal(slug, 'a'.repeat(63) + '-', 'slice lands on the dash and keeps it')
+	assert.equal(slug?.length, 64)
+	console.log('ok: truncation at a dash boundary keeps the trailing dash')
+}
+
 console.log('slug.test.ts: all tests passed')

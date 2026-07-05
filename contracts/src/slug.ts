@@ -1,7 +1,7 @@
 /**
  * Roadmap-name slugification — the id under which a roadmap is stored and
- * fuzzily matched. Client (model.ts) and server (roadmap-store.ts) must
- * agree or pushes create duplicates.
+ * fuzzily matched. Client (ui.tsx) and server (app.ts) must agree or pushes
+ * create duplicates.
  */
 export function slugify(name: string): string | null {
 	const slug = name
