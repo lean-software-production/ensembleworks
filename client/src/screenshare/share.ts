@@ -32,7 +32,6 @@ interface ActiveShare {
 
 // Keyed by trackName. Only the sharer's own client has entries here.
 const active = new Map<string, ActiveShare>()
-const deleteHandlerInstalled = new WeakSet<Editor>()
 
 export async function startScreenShare(editor: Editor): Promise<void> {
 	const room = getScreenShareRoom()
@@ -121,7 +120,6 @@ export async function startScreenShare(editor: Editor): Promise<void> {
 	active.set(trackName, { shapeId, mediaTrack, pollTimer })
 	// Browser "Stop sharing" bar (or the OS revoking capture) → tear down.
 	mediaTrack.addEventListener('ended', () => stopScreenShare(trackName))
-	installDeleteHandler(editor)
 }
 
 export function stopScreenShare(trackName: string): void {
@@ -134,7 +132,7 @@ export function stopScreenShare(trackName: string): void {
 	// Deliberately NOT deleting the shape: a stopped share leaves its tile on
 	// the canvas as a frozen-last-frame tombstone (see ScreenShareComponent).
 	// Removing the tile is the user's call — and doing so stops the share via
-	// the delete handler below.
+	// stopShareForDeletedShape, the screenshare plugin's after-delete room hook.
 }
 
 /**
@@ -165,12 +163,4 @@ export function retintLocalShares(editor: Editor, hex: string): void {
 			editor.updateShape({ id: record.id, type: 'screenshare', props: { ownerColor: hex } })
 		}
 	}
-}
-
-// Deleting a live share's tile — locally or by a teammate over sync — stops
-// the capture: a tile-less stream would otherwise keep uploading invisibly.
-function installDeleteHandler(editor: Editor) {
-	if (deleteHandlerInstalled.has(editor)) return
-	deleteHandlerInstalled.add(editor)
-	editor.sideEffects.registerAfterDeleteHandler('shape', stopShareForDeletedShape)
 }
