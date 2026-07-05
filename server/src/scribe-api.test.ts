@@ -15,9 +15,11 @@ import { makeTestClient } from './test-helpers.ts'
 const FRAME_ID = 'shape:frame-drafting'
 
 async function main() {
-	// LiveKit env must exist before app.ts is imported (module-level consts),
-	// so the import is dynamic and the keys are fakes — we only decode the JWT
-	// locally, nothing talks to a real LiveKit server.
+	// LiveKit config is captured when createSyncApp() constructs the
+	// MediaService (kernel/media.ts), so the env just needs setting before
+	// createSyncApp — the dynamic import below is vestigial (kept to avoid
+	// churn). The keys are fakes — we only decode the JWT locally, nothing
+	// talks to a real LiveKit server.
 	process.env.LIVEKIT_API_KEY = 'testkey'
 	process.env.LIVEKIT_API_SECRET = 'testsecret-testsecret-testsecret'
 	process.env.LIVEKIT_URL = 'wss://example.test/livekit'

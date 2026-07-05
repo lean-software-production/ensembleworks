@@ -389,3 +389,23 @@ Expected: everything green; smoke prints `server replied: connect …`; health r
 
 - [ ] **Step 3: Line-count + import audit.** `wc -l server/src/app.ts server/src/features/*.ts server/src/kernel/*.ts` (report the numbers); `grep -rn "getPresenceRecords" server/src` → exactly one hit, in `kernel/presence.ts`.
 - [ ] **Step 4:** Commit only if Steps 1–3 forced fixes: `git add server/src && git commit -m "refactor(server): kernel-split parity fixes"`.
+
+---
+
+## Execution postscript (2026-07-05) — deferred items for Phase 3+
+
+Recorded at final review so they don't evaporate:
+
+1. **av.ts cohesion** — `/api/participants` and `/api/pulse` are presence/
+   heartbeat concerns, not A/V; move them to their own router when Phase 3
+   renames route paths anyway.
+2. **Typed store-walk helper** — six `store.getAll() as any[]` walks across
+   terminal-status/shape/roadmap/sticky; give `PluginServerContext` a typed
+   record-iteration capability to retire the casts (Phase 6 candidate).
+3. **sticky.ts schema-direct import** — the one feature file reaching past
+   ctx into `schema.ts` (`schema.types.shape.create`); route through a
+   kernel shape-factory capability when one exists.
+
+Also already recorded elsewhere: SessionRegistry accessors stay deliberately
+dumb until Phase 6 (see Task 1); `sortPointOf`/`byProximity` moved to
+kernel/presence.ts during Task 1 review (supersedes Task 8's import list).
