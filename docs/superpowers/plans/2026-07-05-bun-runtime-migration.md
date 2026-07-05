@@ -1649,3 +1649,117 @@ behaviour-neutral (they made the task's own "typecheck green" gate meaningful):
    swaps the runtime engine, not the AV dependency versions (same rationale as
    the tldraw pin). The other two minor drifts the review found are left on their
    ranges: `tsx` (removed entirely in Task 5) and `@types/node` (types-only).
+
+## Bun.Terminal API notes
+
+Confirmed against **Bun 1.3.14** (`bun --version` → `1.3.14`), via a throwaway
+script at `server/src/terminal/_pty_spike.ts` (spawned `tmux -V` and an
+interactive `bash --noprofile --norc` session, then deleted — not committed).
+The project's own `node_modules/bun-types@1.3.14/bun.d.ts` ships full JSDoc for
+this API and matches the runtime behaviour exactly; excerpts from it are
+quoted below alongside the empirical confirmation.
+
+**The plan's hypothesis was wrong on the read mechanism and partially wrong on
+the handle shape.** Bun 1.3.14's PTY API is **callback-based**, not
+`for await (const chunk of term.readable)` — there is no `.readable` stream on
+the terminal object at all. Details:
+
+1. **Spawn form — confirmed, close to hypothesis.**
+   `Bun.spawn([cmd, ...args], { terminal: { cols, rows, name, data, exit, drain } })`.
+   The option key is `terminal` (matches hypothesis) but its value is a
+   `TerminalOptions` object whose *callbacks* (`data`, `exit`, `drain`) are how
+   you read output — there is no separate "get a stream" step. Key name is
+   `name` (not `term`) for the terminal type string (default
+   `"xterm-256color"`). You may also pass a pre-built `new Bun.Terminal(opts)`
+   instead of a plain options object, to reuse one PTY across multiple spawns.
+
+2. **Handle location — confirmed.** `proc.terminal` is the PTY handle (a
+   `Bun.Terminal` instance), exactly as hypothesized. `proc.stdin` /
+   `proc.stdout` / `proc.stderr` are all `null` when `terminal` is used.
+   `Object.keys(proc)` returns `[]` (all Subprocess members are prototype
+   getters); `Terminal`'s own prototype methods are:
+   `close, closed, controlFlags, inputFlags, localFlags, outputFlags, ref,
+   resize, setRawMode, unref, write, constructor`.
+
+3. **Output read — differs from hypothesis.** NOT `for await` over a
+   `.readable`. It's the `data` **callback** passed in `TerminalOptions`:
+   `data?: (terminal: Terminal, data: Uint8Array<ArrayBuffer>) => void`.
+   Chunks arrive as **`Uint8Array`**, not `string` — confirmed empirically
+   (`Object.prototype.toString.call(data)` → `"[object Uint8Array]"`,
+   `data instanceof Uint8Array` → `true`). **The wrapper MUST decode with
+   `TextDecoder` (`{ stream: true }` across calls, to not split multi-byte
+   UTF-8 sequences at chunk boundaries) before handing a string to
+   `handle.onData`.**
+
+4. **Write — confirmed.** `terminal.write(data: string | BufferSource): number`
+   — accepts a string directly (no manual encoding needed) and returns the
+   number of bytes written. Confirmed: `term.write("echo SPIKE_MARKER_$((1+1))\n")`
+   returned `27` and the shell echoed `SPIKE_MARKER_2` back through the `data`
+   callback.
+
+5. **Resize — confirmed.** `terminal.resize(cols: number, rows: number): void`.
+   Confirmed by resizing 80×24 → 120×40 then running `stty size` inside the
+   PTY'd bash session, which echoed back `40 120` (rows cols), matching the
+   new size exactly.
+
+6. **Exit — confirmed, with an important nuance.** The subprocess's real exit
+   code/lifecycle comes from **`await proc.exited: Promise<number>`** (and the
+   synchronous `proc.exitCode` once resolved) — this is what the wrapper's
+   `onExit` should be driven from. There is *also* a `TerminalOptions.exit`
+   callback (`(terminal, exitCode, signal) => void`), but per `bun.d.ts` its
+   `exitCode` is "a PTY lifecycle status (0=clean EOF, 1=error), NOT the
+   subprocess exit code" — confirmed empirically: in both the `tmux -V` and
+   `bash` sub-experiments, this callback fired **twice** — once with
+   `exitCode: 1` (when the child closed its end of the PTY, before
+   `proc.exited` resolved) and again with `exitCode: 0` (when we explicitly
+   called `terminal.close()`). **Do not wire the wrapper's `onExit` to
+   `TerminalOptions.exit` — use `proc.exited` instead**; treat the terminal's
+   own `exit` callback (if used at all) as an internal stream-lifecycle signal
+   only.
+
+7. **Kill — confirmed.** `proc.kill(exitCode?: number | NodeJS.Signals): void`
+   on the `Subprocess`, same as normal (non-PTY) Bun subprocesses — there is no
+   separate `terminal.kill()`. `Terminal` itself has `close(): void` (and
+   `[Symbol.asyncDispose]` for `await using`) to release the PTY resource;
+   calling `proc.kill()` after the child already exited was confirmed to be a
+   safe no-throw no-op.
+
+**Verbatim working shape** (spawn → read → write → resize → exit → kill), the
+exact pattern Task 4 should reproduce:
+
+```ts
+const decoder = new TextDecoder();
+let collected = "";
+
+const proc = Bun.spawn(["bash", "--noprofile", "--norc"], {
+  terminal: {
+    cols: 80,
+    rows: 24,
+    name: "xterm-256color",
+    data: (term, data) => {
+      collected += decoder.decode(data, { stream: true }); // Uint8Array -> string
+    },
+    exit: (term, exitCode, signal) => {
+      // PTY stream lifecycle only — NOT the process exit code. Ignore for onExit.
+    },
+  },
+});
+
+const term = proc.terminal!;         // PTY handle lives at proc.terminal
+term.write("echo hello\n");          // write(string | BufferSource): number
+term.resize(120, 40);                // resize(cols, rows): void
+
+const exitCode = await proc.exited;  // real subprocess exit code (Promise<number>)
+proc.kill();                         // Subprocess.kill(), not Terminal.kill()
+term.close();                        // release the PTY (Terminal.close(): void)
+```
+
+**Mapping to the node-pty surface `terminal-gateway.ts` expects:**
+| node-pty (current)              | Bun 1.3.14 equivalent                                                        |
+|----------------------------------|-------------------------------------------------------------------------------|
+| `pty.spawn(file, args, opts)`     | `Bun.spawn([file, ...args], { terminal: { cols, rows, name } })`             |
+| `handle.onData((s: string) => …)` | `TerminalOptions.data` callback, `Uint8Array` — decode with `TextDecoder` (`{ stream: true }`) before calling the wrapper's `onData(str)` |
+| `handle.onExit(() => …)`          | `await proc.exited` (not `TerminalOptions.exit`, which is PTY-stream lifecycle, not process exit, and can fire twice) |
+| `handle.resize(cols, rows)`       | `proc.terminal.resize(cols, rows)`                                            |
+| `handle.write(data: string)`      | `proc.terminal.write(data)` (accepts string directly)                        |
+| `handle.kill()`                   | `proc.kill()` (on the `Subprocess`, not the `Terminal`); call `proc.terminal.close()` afterward to release the PTY |
