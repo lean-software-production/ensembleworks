@@ -31,9 +31,9 @@ import { TLSocketRoom } from '@tldraw/sync-core'
 import express from 'express'
 import { WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
-import { pageIdOf, pagePoint, richTextToPlainText } from './canvas/geometry.ts'
 import { sanitizeId } from './canvas/ids.ts'
 import { createAvRouter } from './features/av.ts'
+import { createFramesRouter } from './features/frames.ts'
 import { createShapeRouter } from './features/shape.ts'
 import { createStickyRouter } from './features/sticky.ts'
 import { createTerminalStatusRouter } from './features/terminal-status.ts'
@@ -42,7 +42,7 @@ import { createUploadsRouter } from './features/uploads.ts'
 import { createGatewayPlane } from './gateway-registry.ts'
 import type { PluginServerContext } from './kernel/context.ts'
 import { createMediaService } from './kernel/media.ts'
-import { byProximity, getCursorRefs, pickCursor, rawUserId, sortPointOf } from './kernel/presence.ts'
+import { rawUserId } from './kernel/presence.ts'
 import { createRoomHost } from './kernel/rooms.ts'
 import { createSessionRegistry } from './kernel/sessions.ts'
 import { OpError, applyOps, createRoadmapStore, type RoadmapOp } from './roadmap-store.ts'
@@ -106,145 +106,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 	app.use(createShapeRouter(ctx))
 
-	// Read side (mirror of the write endpoints): let agents see what's on the
-	// canvas. Both read from getCurrentSnapshot() so they work whether or not a
-	// browser is connected, just like the write endpoints' updateStore().
-
-	// GET /api/frames?room= — discovery: every frame with its child counts.
-	// Frames on the active teammate's page are ordered nearest-cursor-first;
-	// the rest keep document order (see sortedBy in the response).
-	app.get('/api/frames', (req, res) => {
-		const roomId = sanitizeId(String(req.query.room ?? 'team'))
-		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
-		const room = roomHost.getOrCreateRoom(roomId)
-		const records = room.getCurrentSnapshot().documents.map((d) => d.state as any)
-		const byId = new Map(records.map((r) => [r.id, r]))
-		const shapes = records.filter((r) => r.typeName === 'shape')
-		const cursor = pickCursor(getCursorRefs(room))
-
-		const frames = shapes
-			.filter((r) => r.type === 'frame')
-			.map((f) => {
-				const children = shapes.filter((r) => r.parentId === f.id)
-				const countOf = (t: string) => children.filter((r) => r.type === t).length
-				const pt = pagePoint(f, byId)
-				return {
-					pt,
-					id: f.id,
-					name: typeof f.props?.name === 'string' ? f.props.name : '',
-					page: pageIdOf(f, byId),
-					x: f.x,
-					y: f.y,
-					w: f.props?.w,
-					h: f.props?.h,
-					notes: countOf('note'),
-					texts: countOf('text'),
-					images: countOf('image'),
-					terminals: countOf('terminal'),
-					iframes: countOf('iframe'),
-				}
-			})
-
-		// Only frames on the cursor's page can be ranked by it; others trail in
-		// document order. byProximity strips `pt` and attaches `dist`.
-		const ordered = cursor
-			? [
-					...byProximity(frames.filter((f) => f.page === cursor.currentPageId), cursor),
-					...byProximity(frames.filter((f) => f.page !== cursor.currentPageId), null),
-				]
-			: byProximity(frames, null)
-
-		res.json({
-			ok: true,
-			sortedBy: cursor ? { userName: cursor.userName, page: cursor.currentPageId, cursor: sortPointOf(cursor) } : null,
-			frames: ordered,
-		})
-	})
-
-	// GET /api/frame?room=&name= — the contents of one fuzzy-matched frame:
-	// stickies, text, images (resolved to their /uploads URL), terminals,
-	// iframes. Same case-insensitive name match as POST /api/sticky.
-	app.get('/api/frame', (req, res) => {
-		const roomId = sanitizeId(String(req.query.room ?? 'team'))
-		const name = typeof req.query.name === 'string' ? req.query.name : ''
-		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
-		if (!name) return void res.status(400).json({ error: 'name is required' })
-		const room = roomHost.getOrCreateRoom(roomId)
-		const records = room.getCurrentSnapshot().documents.map((d) => d.state as any)
-		const byId = new Map(records.map((r) => [r.id, r]))
-		const shapes = records.filter((r) => r.typeName === 'shape')
-		const frame = shapes.find(
-			(r) =>
-				r.type === 'frame' &&
-				typeof r.props?.name === 'string' &&
-				r.props.name.toLowerCase().includes(name.toLowerCase())
-		)
-		if (!frame) return void res.status(404).json({ error: 'frame not found' })
-
-		const children = shapes.filter((r) => r.parentId === frame.id)
-		const assetById = new Map(records.filter((r) => r.typeName === 'asset').map((a) => [a.id, a]))
-		const byType = (t: string) => children.filter((r) => r.type === t)
-
-		// A child's page-space point is the frame's point plus its own offset.
-		const framePt = pagePoint(frame, byId)
-		const ptOf = (c: any) => ({ x: framePt.x + (c.x ?? 0), y: framePt.y + (c.y ?? 0) })
-
-		// Only a cursor on this frame's own page can rank its contents.
-		const framePage = pageIdOf(frame, byId)
-		const cursor = pickCursor(getCursorRefs(room), framePage ?? undefined)
-
-		const notes = byProximity(
-			byType('note').map((n) => ({
-				pt: ptOf(n),
-				id: n.id,
-				text: richTextToPlainText(n.props?.richText),
-				color: n.props?.color,
-			})),
-			cursor
-		)
-		const texts = byProximity(
-			byType('text').map((t) => ({
-				pt: ptOf(t),
-				id: t.id,
-				text: richTextToPlainText(t.props?.richText),
-			})),
-			cursor
-		)
-		const images = byProximity(
-			byType('image').map((img) => {
-				const asset = img.props?.assetId ? assetById.get(img.props.assetId) : null
-				return {
-					pt: ptOf(img),
-					id: img.id,
-					url: asset?.props?.src ?? null,
-					name: asset?.props?.name ?? null,
-					w: img.props?.w,
-					h: img.props?.h,
-				}
-			}),
-			cursor
-		)
-
-		res.json({
-			ok: true,
-			frame: { id: frame.id, name: frame.props?.name, page: framePage },
-			sortedBy: cursor ? { userName: cursor.userName, cursor: sortPointOf(cursor) } : null,
-			notes,
-			texts,
-			images,
-			terminals: byType('terminal').map((t) => ({
-				id: t.id,
-				sessionId: t.props?.sessionId,
-				title: t.props?.title,
-				status: t.props?.status ?? null,
-			})),
-			iframes: byType('iframe').map((f) => ({
-				id: f.id,
-				url: f.props?.url,
-				title: f.props?.title,
-			})),
-		})
-	})
+	app.use(createFramesRouter(ctx))
 
 	// Roadmap (two-way roadmap control): the document lives in the roadmap
 	// store, not the tldraw document — shapes hold only { roadmapId, rev }.
