@@ -4,6 +4,7 @@
  * frame's stickies/text/images/embeds.
  */
 import express from 'express'
+import { findFrameByName } from '../canvas/frames-helper.ts'
 import { pageIdOf, pagePoint, richTextToPlainText } from '../canvas/geometry.ts'
 import { sanitizeId } from '../canvas/ids.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
@@ -79,12 +80,7 @@ export function createFramesRouter(ctx: PluginServerContext): express.Router {
 		const records = room.getCurrentSnapshot().documents.map((d) => d.state as any)
 		const byId = new Map(records.map((r) => [r.id, r]))
 		const shapes = records.filter((r) => r.typeName === 'shape')
-		const frame = shapes.find(
-			(r) =>
-				r.type === 'frame' &&
-				typeof r.props?.name === 'string' &&
-				r.props.name.toLowerCase().includes(name.toLowerCase())
-		)
+		const frame = findFrameByName(shapes, name)
 		if (!frame) return void res.status(404).json({ error: 'frame not found' })
 
 		const children = shapes.filter((r) => r.parentId === frame.id)

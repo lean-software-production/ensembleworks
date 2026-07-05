@@ -6,6 +6,7 @@ import { createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
 import express from 'express'
 import { NOTE_COLORS, STICKY_GRID_COLS, STICKY_GRID_STEP } from '../canvas/constants.ts'
+import { findFrameByName } from '../canvas/frames-helper.ts'
 import { sanitizeId } from '../canvas/ids.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
 import { schema } from '../schema.ts'
@@ -39,12 +40,7 @@ export function createStickyRouter(ctx: PluginServerContext): express.Router {
 			let x: number
 			let y: number
 			if (frame) {
-				const target = shapes.find(
-					(r) =>
-						r.type === 'frame' &&
-						typeof r.props?.name === 'string' &&
-						r.props.name.toLowerCase().includes(frame.toLowerCase())
-				)
+				const target = findFrameByName(shapes, frame)
 				if (!target) {
 					frameFound = false
 					return

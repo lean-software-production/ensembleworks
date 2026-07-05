@@ -7,6 +7,7 @@ import { createBindingId, createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
 import express from 'express'
 import { GEO_TYPES, NOTE_COLORS } from '../canvas/constants.ts'
+import { findFrameByName } from '../canvas/frames-helper.ts'
 import { pagePoint } from '../canvas/geometry.ts'
 import { sanitizeId } from '../canvas/ids.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
@@ -120,12 +121,7 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 				// Resolve the parent: a fuzzy-matched frame, or the (first) page.
 				let parentId = records.find((r) => r.typeName === 'page')?.id ?? 'page:page'
 				if (frameName) {
-					const target = shapes.find(
-						(r) =>
-							r.type === 'frame' &&
-							typeof r.props?.name === 'string' &&
-							r.props.name.toLowerCase().includes(frameName.toLowerCase())
-					)
+					const target = findFrameByName(shapes, frameName)
 					if (!target) {
 						problem = { status: 404, error: 'frame not found' }
 						return
