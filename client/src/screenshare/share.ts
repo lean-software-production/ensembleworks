@@ -13,7 +13,7 @@
  * Never setScreenShareEnabled(): it manages exactly one screen track.
  */
 import { ScreenSharePresets, Track, VideoPreset } from 'livekit-client'
-import { Editor, TLShapeId, createShapeId } from 'tldraw'
+import { Editor, TLShape, TLShapeId, createShapeId } from 'tldraw'
 import { SCREENSHARE_DEFAULT_W, propsForAspect, shareTitle } from './helpers'
 import { getScreenShareRoom } from './store'
 
@@ -32,7 +32,6 @@ interface ActiveShare {
 
 // Keyed by trackName. Only the sharer's own client has entries here.
 const active = new Map<string, ActiveShare>()
-const deleteHandlerInstalled = new WeakSet<Editor>()
 
 export async function startScreenShare(editor: Editor): Promise<void> {
 	const room = getScreenShareRoom()
@@ -121,7 +120,6 @@ export async function startScreenShare(editor: Editor): Promise<void> {
 	active.set(trackName, { shapeId, mediaTrack, pollTimer })
 	// Browser "Stop sharing" bar (or the OS revoking capture) → tear down.
 	mediaTrack.addEventListener('ended', () => stopScreenShare(trackName))
-	installDeleteHandler(editor)
 }
 
 export function stopScreenShare(trackName: string): void {
@@ -134,17 +132,35 @@ export function stopScreenShare(trackName: string): void {
 	// Deliberately NOT deleting the shape: a stopped share leaves its tile on
 	// the canvas as a frozen-last-frame tombstone (see ScreenShareComponent).
 	// Removing the tile is the user's call — and doing so stops the share via
-	// the delete handler below.
+	// stopShareForDeletedShape, the screenshare plugin's after-delete room hook.
 }
 
-// Deleting a live share's tile — locally or by a teammate over sync — stops
-// the capture: a tile-less stream would otherwise keep uploading invisibly.
-function installDeleteHandler(editor: Editor) {
-	if (deleteHandlerInstalled.has(editor)) return
-	deleteHandlerInstalled.add(editor)
-	editor.sideEffects.registerAfterDeleteHandler('shape', (shape) => {
-		if (shape.type !== 'screenshare') return
-		const trackName = (shape.props as { trackName: string }).trackName
-		if (active.has(trackName)) stopScreenShare(trackName)
-	})
+/**
+ * Room-hook body (registered by plugin.tsx): deleting a live share's tile —
+ * locally or by a teammate over sync — stops the capture, since a tile-less
+ * stream would otherwise keep uploading invisibly.
+ */
+export function stopShareForDeletedShape(shape: TLShape): void {
+	if (shape.type !== 'screenshare') return
+	const trackName = (shape.props as { trackName: string }).trackName
+	if (active.has(trackName)) stopScreenShare(trackName)
+}
+
+/**
+ * Re-tint every screenshare tile owned by the local user. ownerColor is a
+ * synced prop, so this recolours the tile for every viewer, not just me.
+ * Called by the roster colour picker; owning it here keeps knowledge of the
+ * screenshare shape type and its props out of the A/V layer.
+ */
+export function retintLocalShares(editor: Editor, hex: string): void {
+	const myId = editor.user.getId()
+	for (const record of editor.store.allRecords()) {
+		if (
+			record.typeName === 'shape' &&
+			record.type === 'screenshare' &&
+			record.props.participantId === myId
+		) {
+			editor.updateShape({ id: record.id, type: 'screenshare', props: { ownerColor: hex } })
+		}
+	}
 }

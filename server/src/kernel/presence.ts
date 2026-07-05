@@ -1,4 +1,4 @@
-import { parseStamp, type SpatialStamp } from '@ensembleworks/contracts'
+import { parseStamp, rawUserId, type SpatialStamp } from '@ensembleworks/contracts'
 import type { AccessIdentity } from '../access-identity.ts'
 import { dist } from '../canvas/geometry.ts'
 
@@ -24,12 +24,9 @@ export interface CursorRef {
 	stamp: SpatialStamp | null
 }
 
-// tldraw presence stores userId as a prefixed TLUserId ("user:abc"), but the
-// LiveKit identity the scribe posts is the raw form ("abc"). Normalise both to
-// raw before matching a speaker to their cursor.
-export function rawUserId(id: string | null): string {
-	return (id ?? '').replace(/^user:/, '')
-}
+// tldraw presence stores userId as a prefixed TLUserId ("user:abc") while the
+// LiveKit/session planes use the raw form — the strip lives in contracts now.
+export { rawUserId }
 
 // Live presence records for a room, via the (internal, untyped) accessor.
 // Guarded so a tldraw version without it just disables proximity sorting.

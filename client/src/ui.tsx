@@ -1,14 +1,14 @@
 /**
- * UI customisation: a "New terminal" toolbar button that drops a terminal
- * shape (backed by a fresh tmux session) at the viewport centre.
+ * Kernel UI assembly: tldraw overrides and component slots built from the
+ * plugin registry — custom tools, toolbar items after tldraw's defaults,
+ * the EnsembleWorks main-menu group, and plugin-owned component slots
+ * (the A/V overlay claims SharePanel).
  */
-import { slugify } from '@ensembleworks/contracts'
 import {
 	DefaultMainMenu,
 	DefaultMainMenuContent,
 	DefaultToolbar,
 	DefaultToolbarContent,
-	Editor,
 	TLComponents,
 	TLUiOverrides,
 	TldrawUiDialogBody,
@@ -17,129 +17,28 @@ import {
 	TldrawUiDialogTitle,
 	TldrawUiMenuGroup,
 	TldrawUiMenuItem,
-	createShapeId,
 	useDialogs,
-	useEditor,
-	useTools,
 } from 'tldraw'
-import { TerminalToolbarItem } from './terminal/TerminalToolbarItem'
-import { AvOverlay } from './av/AvOverlay'
-import { SCREENSHARE_ICON_NAME } from './screenshare/ScreenShareShapeUtil'
-import { startScreenShare } from './screenshare/share'
-import { useScreenShareAvailable } from './screenshare/store'
-import { seedDemoCanvas } from './demo'
-import { seedSessionCanvas } from './session/seedSessionCanvas'
-import { toProxiedUrl } from './iframe/IframeShapeUtil'
-import { NEKO_DEFAULT_BASE, NEKO_DEFAULT_H, NEKO_DEFAULT_W, NEKO_ICON_NAME } from './neko/NekoShapeUtil'
-import { ROADMAP_DEFAULT_H, ROADMAP_DEFAULT_W } from './roadmap/RoadmapShapeUtil'
-
-export function createDevServerShape(editor: Editor) {
-	const input = window.prompt('Dev server port (or full URL):', '3000')?.trim()
-	if (!input) return
-	const url = /^\d+$/.test(input) ? `/dev/${input}/` : toProxiedUrl(input)
-	const { x, y } = editor.getViewportPageBounds().center
-	const id = createShapeId()
-	editor.createShape({
-		id,
-		type: 'iframe',
-		x: x - 400,
-		y: y - 300,
-		props: { w: 800, h: 600, url, title: `dev server ${input}` },
-	})
-	editor.setSelectedShapes([id])
-}
-
-export function createNekoShape(editor: Editor) {
-	const { x, y } = editor.getViewportPageBounds().center
-	const id = createShapeId()
-	editor.createShape({
-		id,
-		type: 'neko',
-		x: x - NEKO_DEFAULT_W / 2,
-		y: y - NEKO_DEFAULT_H / 2,
-		props: { w: NEKO_DEFAULT_W, h: NEKO_DEFAULT_H, base: NEKO_DEFAULT_BASE, title: 'shared browser' },
-	})
-	editor.setSelectedShapes([id])
-}
-
-export function createRoadmapShape(editor: Editor) {
-	// The name is the CLI/agent addressing handle; its slug is the document id
-	// (createDevServerShape precedent: prompt, no server round-trip). The shape
-	// renders its empty state until someone pushes data to that name.
-	const name = window.prompt('Roadmap name:', 'Roadmap')?.trim()
-	if (!name) return
-	const roadmapId = slugify(name)
-	if (!roadmapId) {
-		window.alert('Roadmap name must contain at least one letter or digit.')
-		return
-	}
-	const { x, y } = editor.getViewportPageBounds().center
-	const id = createShapeId()
-	editor.createShape({
-		id,
-		type: 'roadmap',
-		x: x - ROADMAP_DEFAULT_W / 2,
-		y: y - ROADMAP_DEFAULT_H / 2,
-		props: { w: ROADMAP_DEFAULT_W, h: ROADMAP_DEFAULT_H, roadmapId },
-	})
-	editor.setSelectedShapes([id])
-}
+import { collectUiSlots } from './kernel/plugin'
+import { plugins } from './plugins'
 
 export const uiOverrides: TLUiOverrides = {
 	tools(editor, tools) {
-		tools['dev-server'] = {
-			id: 'dev-server',
-			icon: 'tool-embed',
-			label: 'Embed dev server',
-			readonlyOk: false,
-			onSelect() {
-				createDevServerShape(editor)
-			},
-		}
-		tools['neko'] = {
-			id: 'neko',
-			icon: NEKO_ICON_NAME,
-			label: 'New shared browser',
-			readonlyOk: false,
-			onSelect() {
-				createNekoShape(editor)
-			},
-		}
-		tools['roadmap'] = {
-			id: 'roadmap',
-			icon: 'tool-note',
-			label: 'New roadmap',
-			readonlyOk: false,
-			onSelect() {
-				createRoadmapShape(editor)
-			},
-		}
-		tools['screenshare'] = {
-			id: 'screenshare',
-			icon: SCREENSHARE_ICON_NAME,
-			label: 'Share screen',
-			readonlyOk: false,
-			onSelect() {
-				void startScreenShare(editor)
-			},
+		for (const plugin of plugins) {
+			if (plugin.tools) Object.assign(tools, plugin.tools(editor))
 		}
 		return tools
 	},
 }
 
-function ToolbarWithTerminal() {
-	const tools = useTools()
-	const screenShareAvailable = useScreenShareAvailable()
+function PluginToolbar() {
 	return (
 		<DefaultToolbar>
 			<DefaultToolbarContent />
-			<TerminalToolbarItem />
-			{tools['dev-server'] && <TldrawUiMenuItem {...tools['dev-server']} />}
-			{tools['neko'] && <TldrawUiMenuItem {...tools['neko']} />}
-			{tools['roadmap'] && <TldrawUiMenuItem {...tools['roadmap']} />}
-			{screenShareAvailable && tools['screenshare'] && (
-				<TldrawUiMenuItem {...tools['screenshare']} />
-			)}
+			{plugins.map((plugin) => {
+				const Item = plugin.ToolbarItems
+				return Item ? <Item key={plugin.id} /> : null
+			})}
 		</DefaultToolbar>
 	)
 }
@@ -161,42 +60,37 @@ function AboutDialog(_props: { onClose: () => void }) {
 	)
 }
 
-function MainMenuWithDemo() {
-	const editor = useEditor()
+function AboutMenuItem() {
 	const { addDialog } = useDialogs()
+	return (
+		<TldrawUiMenuItem
+			id="about-sessions"
+			label="About"
+			icon="info-circle"
+			onSelect={() => {
+				addDialog({ component: AboutDialog })
+			}}
+		/>
+	)
+}
+
+function PluginMainMenu() {
 	return (
 		<DefaultMainMenu>
 			<DefaultMainMenuContent />
 			<TldrawUiMenuGroup id="ensembleworks-demo">
-				<TldrawUiMenuItem
-					id="seed-demo"
-					label="Seed demo layout"
-					icon="duplicate"
-					onSelect={() => seedDemoCanvas(editor)}
-				/>
-				<TldrawUiMenuItem
-					id="seed-session"
-					label="Seed session layout"
-					icon="duplicate"
-					onSelect={() => {
-						seedSessionCanvas(editor)
-					}}
-				/>
-				<TldrawUiMenuItem
-					id="about-sessions"
-					label="About"
-					icon="info-circle"
-					onSelect={() => {
-						addDialog({ component: AboutDialog })
-					}}
-				/>
+				{plugins.map((plugin) => {
+					const Items = plugin.MenuItems
+					return Items ? <Items key={plugin.id} /> : null
+				})}
+				<AboutMenuItem />
 			</TldrawUiMenuGroup>
 		</DefaultMainMenu>
 	)
 }
 
 export const components: TLComponents = {
-	Toolbar: ToolbarWithTerminal,
-	MainMenu: MainMenuWithDemo,
-	SharePanel: AvOverlay,
+	Toolbar: PluginToolbar,
+	MainMenu: PluginMainMenu,
+	...collectUiSlots(plugins),
 }

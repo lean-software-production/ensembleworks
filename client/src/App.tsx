@@ -12,38 +12,21 @@ import {
 } from 'tldraw'
 import 'tldraw/tldraw.css'
 import './theme.css'
+import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
 import { hexForColor } from './colors'
 import { getIdentity, getRoomId } from './identity'
-import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
-import { IframeShapeUtil } from './iframe/IframeShapeUtil'
-import { PasteUrlHandler } from './iframe/PasteUrlHandler'
-import { NEKO_ICON_NAME, NEKO_TOOLBAR_ICON, NekoShapeUtil } from './neko/NekoShapeUtil'
-import {
-	SCREENSHARE_ICON_NAME,
-	SCREENSHARE_TOOLBAR_ICON,
-	ScreenShareShapeUtil,
-} from './screenshare/ScreenShareShapeUtil'
-import { TerminalShapeUtil } from './terminal/TerminalShapeUtil'
-import { RoadmapShapeUtil } from './roadmap/RoadmapShapeUtil'
+import { collectIcons, collectShapeUtils } from './kernel/plugin'
+import { attachRoomHooks } from './kernel/roomHooks'
+import { plugins } from './plugins'
 import { components, uiOverrides } from './ui'
 
-const customShapeUtils = [
-	TerminalShapeUtil,
-	IframeShapeUtil,
-	NekoShapeUtil,
-	RoadmapShapeUtil,
-	ScreenShareShapeUtil,
-]
-
-// Register the custom neko toolbar icon (merged with tldraw's built-ins). Stable
-// module-level reference so the asset-url memo doesn't churn each render.
-const assetUrls = {
-	icons: {
-		[NEKO_ICON_NAME]: NEKO_TOOLBAR_ICON,
-		[SCREENSHARE_ICON_NAME]: SCREENSHARE_TOOLBAR_ICON,
-	},
-}
+// Feature composition is registry-driven: every shape util, toolbar icon,
+// overlay and room hook comes from the plugin list, in registry order.
+// Module-level so the references stay stable across renders (the asset-url
+// and shape-util props must not churn).
+const customShapeUtils = collectShapeUtils(plugins)
+const assetUrls = { icons: collectIcons(plugins) }
 
 // One-time flag so we seed the color scheme only once per user. v2: the
 // Wellmaintained paper-light theme replaced the original dark seed, so
@@ -134,33 +117,10 @@ export function App() {
 			// per shape. Re-applied when they change colour (AvOverlay picker).
 			editor.setStyleForNextShapes(DefaultColorStyle, identity.colorKey)
 
-			// Terminals are easy to delete by accident (one stray Backspace on a
-			// selected shape). Veto local deletions unless the user confirms. One
-			// dialog covers the whole delete gesture: batch members reach the
-			// handler microseconds apart, so a decision is reused (and its window
-			// extended) while calls keep arriving within 250ms of the last one —
-			// measured from when the dialog closed, since confirm() blocks for
-			// however long the user thinks. The tmux session itself survives.
-			let decision = false
-			let decidedAt = 0
-			const unregister = editor.sideEffects.registerBeforeDeleteHandler('shape', (shape, source) => {
-				if (source !== 'user' || shape.type !== 'terminal') return
-				const props = shape.props as { title?: string; sessionId?: string }
-				if (Date.now() - decidedAt > 250) {
-					decision = window.confirm(
-						`Delete terminal "${props.title ?? ''}"` +
-							` (and any other terminals in this selection)?\n\n` +
-							`tmux sessions keep running on the VM — reattach with: ` +
-							`tmux attach -t canvas-${props.sessionId ?? '<id>'}`
-					)
-				}
-				decidedAt = Date.now()
-				if (!decision) return false
-			})
-
-			// React StrictMode mounts twice — without cleanup we'd register two
-			// handlers and the user would get two dialogs per delete.
-			return unregister
+			// Feature room hooks (the terminal delete-veto, the screenshare
+			// after-delete) come from the plugin registry. React StrictMode
+			// mounts twice — the returned cleanup keeps hooks from doubling up.
+			return attachRoomHooks(editor, plugins)
 		},
 		[]
 	)
@@ -176,7 +136,10 @@ export function App() {
 				overrides={uiOverrides}
 				components={components}
 			>
-				<PasteUrlHandler />
+				{plugins.map((plugin) => {
+					const Overlay = plugin.Overlay
+					return Overlay ? <Overlay key={plugin.id} /> : null
+				})}
 			</Tldraw>
 			{wasKicked && (
 				<div
