@@ -17,6 +17,7 @@ import { useEffect, useRef, useState } from 'react'
 import { DefaultColorStyle, stopEventPropagation, useEditor, useValue } from 'tldraw'
 import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
 import { getRoomId, setUserColor } from '../identity'
+import { retintLocalShares } from '../screenshare/share'
 import { updateScreenShareSubscriptions } from '../screenshare/subscriptions'
 import { wm } from '../theme'
 import { DEFAULT_SPATIAL_SETTINGS, distance, gainForDistance } from './spatial'
@@ -743,16 +744,7 @@ function ColorDot({ color, isLocal }: { color: string; isLocal: boolean }) {
 		editor.setStyleForNextShapes(DefaultColorStyle, key)
 		// Re-tint any windows I'm already sharing. ownerColor is a synced prop,
 		// so updating it here recolours the tile for every viewer, not just me.
-		const myId = editor.user.getId()
-		for (const record of editor.store.allRecords()) {
-			if (
-				record.typeName === 'shape' &&
-				record.type === 'screenshare' &&
-				record.props.participantId === myId
-			) {
-				editor.updateShape({ id: record.id, type: 'screenshare', props: { ownerColor: hex } })
-			}
-		}
+		retintLocalShares(editor, hex)
 		setOpen(false)
 	}
 

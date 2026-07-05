@@ -13,7 +13,7 @@
  * Never setScreenShareEnabled(): it manages exactly one screen track.
  */
 import { ScreenSharePresets, Track, VideoPreset } from 'livekit-client'
-import { Editor, TLShapeId, createShapeId } from 'tldraw'
+import { Editor, TLShape, TLShapeId, createShapeId } from 'tldraw'
 import { SCREENSHARE_DEFAULT_W, propsForAspect, shareTitle } from './helpers'
 import { getScreenShareRoom } from './store'
 
@@ -137,14 +137,40 @@ export function stopScreenShare(trackName: string): void {
 	// the delete handler below.
 }
 
+/**
+ * Room-hook body (registered by plugin.tsx): deleting a live share's tile —
+ * locally or by a teammate over sync — stops the capture, since a tile-less
+ * stream would otherwise keep uploading invisibly.
+ */
+export function stopShareForDeletedShape(shape: TLShape): void {
+	if (shape.type !== 'screenshare') return
+	const trackName = (shape.props as { trackName: string }).trackName
+	if (active.has(trackName)) stopScreenShare(trackName)
+}
+
+/**
+ * Re-tint every screenshare tile owned by the local user. ownerColor is a
+ * synced prop, so this recolours the tile for every viewer, not just me.
+ * Called by the roster colour picker; owning it here keeps knowledge of the
+ * screenshare shape type and its props out of the A/V layer.
+ */
+export function retintLocalShares(editor: Editor, hex: string): void {
+	const myId = editor.user.getId()
+	for (const record of editor.store.allRecords()) {
+		if (
+			record.typeName === 'shape' &&
+			record.type === 'screenshare' &&
+			record.props.participantId === myId
+		) {
+			editor.updateShape({ id: record.id, type: 'screenshare', props: { ownerColor: hex } })
+		}
+	}
+}
+
 // Deleting a live share's tile — locally or by a teammate over sync — stops
 // the capture: a tile-less stream would otherwise keep uploading invisibly.
 function installDeleteHandler(editor: Editor) {
 	if (deleteHandlerInstalled.has(editor)) return
 	deleteHandlerInstalled.add(editor)
-	editor.sideEffects.registerAfterDeleteHandler('shape', (shape) => {
-		if (shape.type !== 'screenshare') return
-		const trackName = (shape.props as { trackName: string }).trackName
-		if (active.has(trackName)) stopScreenShare(trackName)
-	})
+	editor.sideEffects.registerAfterDeleteHandler('shape', stopShareForDeletedShape)
 }

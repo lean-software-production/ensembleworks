@@ -77,3 +77,9 @@ export function useScreenShareAvailable(): boolean {
 	useSyncExternalStore(subscribeStore, getVersion)
 	return room != null && room.localParticipant.permissions?.canPublish !== false
 }
+
+/** The registered LiveKit room, reactively (null while A/V is down). */
+export function useScreenShareRoom(): Room | null {
+	useSyncExternalStore(subscribeStore, getVersion)
+	return room
+}
