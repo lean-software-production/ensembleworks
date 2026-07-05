@@ -21,12 +21,15 @@ import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
 import { promisify } from 'node:util'
-import { termClientMessage, type TermServerMessage } from '@ensembleworks/contracts'
+import {
+	termClientMessage,
+	TMUX_SESSION_PREFIX,
+	type TermServerMessage,
+} from '@ensembleworks/contracts'
 import pty, { type IPty } from 'node-pty'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 const PORT = Number(process.env.PORT ?? 8789)
-const TMUX_PREFIX = 'canvas-'
 const SCROLLBACK_LIMIT = 256 * 1024 // bytes replayed to newly attached clients
 const HEARTBEAT_INTERVAL_MS = 20_000
 
@@ -63,7 +66,7 @@ function tmuxSpawnSpec(id: string): {
 	cwd: string
 	env: Record<string, string>
 } {
-	const sessionName = `${TMUX_PREFIX}${id}`
+	const sessionName = `${TMUX_SESSION_PREFIX}${id}`
 	if (RUN_AS) {
 		return {
 			file: 'sudo',
@@ -202,8 +205,8 @@ async function listTmuxSessions(): Promise<string[]> {
 		const { stdout } = await execFileP('tmux', ['list-sessions', '-F', '#{session_name}'])
 		return stdout
 			.split('\n')
-			.filter((name) => name.startsWith(TMUX_PREFIX))
-			.map((name) => name.slice(TMUX_PREFIX.length))
+			.filter((name) => name.startsWith(TMUX_SESSION_PREFIX))
+			.map((name) => name.slice(TMUX_SESSION_PREFIX.length))
 	} catch {
 		return [] // no tmux server running yet
 	}
@@ -240,7 +243,7 @@ const server = http.createServer(async (req, res) => {
 			return
 		}
 		try {
-			await execFileP('tmux', ['kill-session', '-t', `${TMUX_PREFIX}${id}`])
+			await execFileP('tmux', ['kill-session', '-t', `${TMUX_SESSION_PREFIX}${id}`])
 		} catch {
 			// already gone
 		}

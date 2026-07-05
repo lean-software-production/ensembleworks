@@ -4,3 +4,4 @@
 // (nodenext-style; resolves to the .ts source everywhere).
 export * from './shapes.js'
 export * from './terminal-protocol.js'
+export * from './constants.js'

@@ -27,6 +27,7 @@ import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { TERMINAL_STATUSES } from '@ensembleworks/contracts'
 import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 import { createBindingId, createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
@@ -65,8 +66,6 @@ const liveKitRoomService =
 	LIVEKIT_API_KEY && LIVEKIT_API_SECRET && roomServiceUrl
 		? new RoomServiceClient(roomServiceUrl, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
 		: null
-
-const TERMINAL_STATUSES = ['working', 'needs-you', 'done', 'idle']
 
 // A per-user latency sample older than this is dropped from /api/pulse — the
 // client polls every PULSE_INTERVAL (~30s, client-side), so this is ~2.5×
@@ -504,7 +503,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		const status = typeof body.status === 'string' ? body.status : ''
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		if (!sessionId) return void res.status(400).json({ error: 'sessionId is required' })
-		if (!TERMINAL_STATUSES.includes(status)) {
+		if (!(TERMINAL_STATUSES as readonly string[]).includes(status)) {
 			return void res
 				.status(400)
 				.json({ error: `status must be one of ${TERMINAL_STATUSES.join(' | ')}` })
