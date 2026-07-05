@@ -2,6 +2,7 @@
  * UI customisation: a "New terminal" toolbar button that drops a terminal
  * shape (backed by a fresh tmux session) at the viewport centre.
  */
+import { slugify } from '@ensembleworks/contracts'
 import {
 	DefaultMainMenu,
 	DefaultMainMenuContent,
@@ -31,7 +32,6 @@ import { seedSessionCanvas } from './session/seedSessionCanvas'
 import { toProxiedUrl } from './iframe/IframeShapeUtil'
 import { NEKO_DEFAULT_BASE, NEKO_DEFAULT_H, NEKO_DEFAULT_W, NEKO_ICON_NAME } from './neko/NekoShapeUtil'
 import { ROADMAP_DEFAULT_H, ROADMAP_DEFAULT_W } from './roadmap/RoadmapShapeUtil'
-import { slugify } from './roadmap/model'
 
 export function createDevServerShape(editor: Editor) {
 	const input = window.prompt('Dev server port (or full URL):', '3000')?.trim()

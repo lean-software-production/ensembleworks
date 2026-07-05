@@ -95,16 +95,6 @@ export function countsLine(doc: RoadmapDoc): string {
 	return `${doc.outcomes.length} outcomes · ${nI} initiatives · ${nF} features`
 }
 
-// Keep in sync with server/src/roadmap-store.ts (slugify).
-export function slugify(name: string): string | null {
-	const slug = name
-		.toLowerCase()
-		.replace(/[^a-z0-9_-]+/g, '-')
-		.replace(/^-+|-+$/g, '')
-		.slice(0, 64)
-	return /^[a-z0-9][a-z0-9_-]*$/.test(slug) ? slug : null
-}
-
 function findNode(doc: RoadmapDoc, key: string): { node: any; list: any[] } | null {
 	for (const o of doc.outcomes) {
 		if (o.key === key) return { node: o, list: doc.outcomes }
