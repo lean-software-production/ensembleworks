@@ -53,7 +53,7 @@ browser ─HTTPS─► Cloudflare edge ─[Access auth]─► tunnel ─► clou
                                                                                                    /sync/{room} ─► sync server :8788 (TLSocketRoom + SQLite)
                                                                                                    /uploads,/api ─► sync server :8788 (assets, health,
                                                                                                                     LiveKit tokens, transcript, shapes)
-                                                                                                   /term        ─► terminal gateway :8789 (node-pty ⇄ tmux)
+                                                                                                   /term        ─► terminal gateway :8789 (Bun PTY ⇄ tmux)
 
 browser ──► LiveKit Cloud (WebRTC voice/video, direct)
 
@@ -79,7 +79,7 @@ hold only small references — a tmux session id, a URL.
 
 The blessed path is the **devcontainer** (`.devcontainer/`, Debian 13 — the
 same OS as the production boxes): open the repo in VS Code, Codespaces or the
-devcontainer CLI and it builds with everything baked in — Node from `.nvmrc`,
+devcontainer CLI and it builds with everything baked in — Bun (pinned in `.tool-versions`),
 tmux, Caddy, a LiveKit SFU in dev mode, whisper.cpp for transcription. On
 start it runs `bin/dev up`; open forwarded port 8080 and you have a working
 canvas with terminals, voice and transcription, **zero accounts or keys**.
@@ -106,7 +106,7 @@ bin/dev --help         # usage (-h works too)
 Requires `docker` and the `@devcontainers/cli` (`npm i -g @devcontainers/cli`)
 on the host; `bin/dev up` names anything missing. Running **natively without
 Docker** (the engine directly on the host): `ENSEMBLEWORKS_NATIVE=1 bin/dev up`,
-and `bin/dev doctor` tells you what's missing (Node 22.22.3 and tmux required;
+and `bin/dev doctor` tells you what's missing (Bun 1.3.14 and tmux required;
 caddy, livekit-server, whisper-server, docker each light up more services).
 Inside the container `bin/dev` is that same engine.
 
@@ -145,15 +145,15 @@ Smoke tests (gateway must be running for the second one):
 
 ```bash
 cd server
-npx tsx src/smoke-client.ts     # tldraw sync handshake
-npx tsx src/smoke-terminal.ts   # gateway: io, scrollback, resize, tmux survival
-npx tsx src/canvas-api.test.ts  # canvas API: terminal-status, sticky, frames + frame read
-npx tsx src/scribe-api.test.ts  # transcript + shape APIs, scribe tokens
-cd ../client && npx tsx src/av/spatial.test.ts        # spatial gain model
-npx tsx src/session/layout.test.ts                    # session layout invariants
-npx tsx src/neko/neko.test.ts                         # neko shared-browser URL + aspect lock
-cd ../transcriber && npx tsx src/segmenter.test.ts    # utterance VAD
-npx tsx src/wav.test.ts                               # WAV encoder
+bun src/smoke-client.ts     # tldraw sync handshake
+bun src/smoke-terminal.ts   # gateway: io, scrollback, resize, tmux survival
+bun src/canvas-api.test.ts  # canvas API: terminal-status, sticky, frames + frame read
+bun src/scribe-api.test.ts  # transcript + shape APIs, scribe tokens
+cd ../client && bun src/av/spatial.test.ts        # spatial gain model
+bun src/session/layout.test.ts                    # session layout invariants
+bun src/neko/neko.test.ts                         # neko shared-browser URL + aspect lock
+cd ../transcriber && bun src/segmenter.test.ts    # utterance VAD
+bun src/wav.test.ts                               # WAV encoder
 ```
 
 ## Canvas API — agents on the canvas
@@ -214,7 +214,7 @@ frame**. The transcript knows not just who said what, but *where on the
 canvas they were working* when they said it.
 
 ```bash
-npm run start --workspace=transcriber   # env: CANVAS_URL, CANVAS_ROOM, STT_URL, STT_MODEL, STT_API_KEY
+bun run --filter '@ensembleworks/transcriber' start   # env: CANVAS_URL, CANVAS_ROOM, STT_URL, STT_MODEL, STT_API_KEY
 
 canvas transcript --since <ms-epoch>    # poll the tail (returns `now` to chain polls)
 canvas say "let's cap retries" --name alice   # inject a line by hand (demo/testing)
@@ -293,7 +293,7 @@ _This section covers the **ash dogfood box** (watch mode, self-editing). For
 production client boxes see [Releasing & deploying (production)](#releasing--deploying-production) below._
 
 The fastest path is the bootstrap script — it provisions a fresh **Debian 13
-(trixie)** box end to end (Node, Caddy, cloudflared, the `ensemble` user, the
+(trixie)** box end to end (Bun, Caddy, cloudflared, the `ensemble` user, the
 systemd units and Caddyfile below):
 
 ```bash
@@ -307,7 +307,7 @@ knobs (`REPO_BRANCH`, `APP_USER`, …). Everything the instance owns lives under
 
 1. **Code**: the repo is cloned to `~ensemble/.local/lean-software-production/ensembleworks`
    (the repo root *is* the app), with `~ensemble/ensembleworks` symlinked to that
-   checkout; `npm ci && npm run build`. The `ensemble` user owns it, so the mob can edit
+   checkout; `bun install && bun run build`. The `ensemble` user owns it, so the mob can edit
    it in place (see "Editing from inside" below).
 2. **LiveKit + STT** are hosted (LiveKit Cloud, Groq) — nothing to run locally.
    Put the project's `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`
@@ -317,7 +317,7 @@ knobs (`REPO_BRANCH`, `APP_USER`, …). Everything the instance owns lives under
    shells spawned in canvas terminals, e.g. `OPENCODE_API_KEY`).
 3. **systemd**: `ensembleworks-sync`, `ensembleworks-term`,
    `ensembleworks-client` (Vite), and (optional) `ensembleworks-scribe` —
-   installed and enabled, run as `ensemble` in **watch mode** (tsx watch + Vite
+   installed and enabled, run as `ensemble` in **watch mode** (`bun --watch` + Vite
    HMR), the same processes the devcontainer runs under tmux. The client unit
    needs `ENSEMBLEWORKS_PUBLIC_HOST` set to your Cloudflare hostname (pass
    `PUBLIC_HOST=` to the script, or edit the unit) so Vite accepts it.
@@ -369,18 +369,18 @@ run in watch mode, so you just edit — you are `ensemble`:
 ```bash
 cd ~/ensembleworks                 # the app (symlink to the repo checkout)
 $EDITOR client/src/App.tsx         # Vite HMR updates browsers in place
-$EDITOR server/src/sync-server.ts  # tsx watch reloads the sync server
+$EDITOR server/src/sync-server.ts  # bun --watch reloads the sync server
 ```
 
 Client edits hot-swap seamlessly via HMR. Server-side edits (sync, gateway,
-scribe) make `tsx watch` restart that process — which **briefly drops live
+scribe) make `bun --watch` restart that process — which **briefly drops live
 connections** (canvases reconnect; gateway terminals reset), so make those edits
 during a lull. A tight sudoers rule (`/etc/sudoers.d/ensembleworks`) also grants
 `ensemble` `systemctl restart|start|stop ensembleworks-*` (no root shell) for
 dependency changes or a wedged unit:
 
 ```bash
-npm install <pkg>                            # then:
+bun add <pkg>                                # then:
 sudo systemctl restart ensembleworks-sync    # or -term / -client / -scribe
 ```
 
@@ -398,7 +398,7 @@ sudo systemctl restart ensembleworks-sync    # or -term / -client / -scribe
 ## Releasing & deploying (production)
 
 Production client boxes (e.g. ew-donkeyred-001) run non-watch systemd units; the
-sync server serves the static client (Caddy proxies to it). The host (Node, Caddy,
+sync server serves the static client (Caddy proxies to it). The host (Bun, Caddy,
 cloudflared, LiveKit, the resource envelope, secret placeholders) is provisioned by
 the **laingville** repo (`servers/<host>/bootstrap.sh`); this repo owns the app + its
 rollout.

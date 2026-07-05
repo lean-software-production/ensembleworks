@@ -1806,3 +1806,49 @@ are unchanged. The full suite is green: **`all 31 suites passed`**.
 Runner note: `scripts/run-tests.ts` discovers suites from the repo root and runs
 each with `bun <repo-root-relative-path>` (CWD = repo root). Fix #3 makes the one
 CWD-dependent suite robust to that; the other 30 suites are CWD-independent.
+
+## Task 9 — final static verification
+
+Docs updated (`AGENTS.md`, symlinked as `CLAUDE.md`; `README.md`): every
+runtime/install instruction now says `bun`/`bun install`/`bun run …`, kept
+`npm version` in the release docs (release.sh's tag tool), and swapped the
+smoke-test block's `npx tsx` invocations for plain `bun`. Beyond the
+prescribed edits, the sweep also caught three additional stale references
+that the prescribed grep pattern didn't target but the code no longer
+matches: the architecture diagram's `(node-pty ⇄ tmux)` (Task 4 replaced
+node-pty with Bun's built-in PTY — now `(Bun PTY ⇄ tmux)`), and two
+dogfood-editing mentions of `tsx watch` / `npm install <pkg>` under
+"Editing from inside" (the systemd units and `package.json` scripts now run
+`bun --watch`; dependency changes are `bun add <pkg>`). Left `npm i -g
+@devcontainers/cli` in README.md alone — `bin/dev-host.mjs`'s actual doctor
+remedy message still says `npm i -g @devcontainers/cli` (that's a host-level
+CLI tool install, not this repo's runtime, and changing it would be a code
+change outside this task's scope).
+
+Static verification gate (all run from
+`.worktrees/bun-runtime-migration`, Bun 1.3.14 on PATH):
+
+| Gate | Result | Key final line |
+|---|---|---|
+| `bun --version` | PASS | `1.3.14` |
+| `bun install` | PASS | `Checked 359 installs across 412 packages (no changes)` — idempotent, no lockfile drift |
+| `bun run typecheck` | PASS | all four workspace typechecks (`contracts`, `client`, `server`, `transcriber`) plus `bin/tsconfig.json` exited 0 |
+| `bun run test` | PASS | `all 31 suites passed` |
+| `bun run build` | PASS | client (Vite v7.3.6 under Bun) + server + transcriber all exited 0 |
+| `bun bin/dev.test.ts` | PASS | `all dev-lib tests passed` |
+| `bash deploy/test/lib_test.sh` | PASS | `ALL PASS` |
+
+`bin/dev doctor` (non-fatal, no live devcontainer from this worktree):
+```
+bin/dev [host] · git worktree — targeting main checkout at /home/mrdavidlaing/Work/lean-software-production/ensembleworks
+bin/dev [host] · not inside a devcontainer → controller mode
+✓ docker           host prerequisite
+✓ devcontainer CLI host prerequisite
+
+(no devcontainer running — `bin/dev up`, then doctor checks inside too)
+```
+Ran clean — host prerequisites (docker, the devcontainer CLI) both present;
+it correctly reported no devcontainer running rather than erroring, since
+`bin/dev up` was deliberately not run.
+
+R1 (does `bun --watch` hot-reload over the devcontainer bind mount?): NOT YET VERIFIED — deferred to the live `bin/dev up` smoke, which the human runs (it needs the devcontainer + a browser and would disturb a running stack). To check: with the stack up, edit a server/src/*.ts file and watch `bin/dev logs sync`/`bin/dev logs term` for a reload; if it doesn't fire, document `bin/dev restart <svc>` as the accepted fallback.
