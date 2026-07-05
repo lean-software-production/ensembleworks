@@ -27,7 +27,7 @@ import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { isTerminalStatus, TERMINAL_STATUSES } from '@ensembleworks/contracts'
+import { isTerminalStatus, parseStamp, type SpatialStamp, TERMINAL_STATUSES } from '@ensembleworks/contracts'
 import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 import { createBindingId, createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
@@ -151,27 +151,12 @@ function richTextToPlainText(rich: any): string {
 // best-effort overlay: with nobody connected the endpoints fall back to plain
 // document order.
 
-// The client-computed spatial stamp carried in presence.meta.stamp: the
-// point the speaker is at (their cursor when it's inside a frame, else
-// their viewport centre) and the frame containing/nearest that point —
-// computed by each browser from its own CRDT replica, so the server never
-// walks the document for it. Keep in sync with client/src/presence/stamp.ts.
-export interface SpatialStamp {
-	at: { x: number; y: number }
-	frame: { name: string; dist: number } | null
-}
-
-// Defensive parse of the wire value — never trust presence meta. Numeric
-// fields must be finite (JSON can carry Infinity via overflow literals like
-// 1e400); dist is a non-negative distance.
-export function parseStamp(s: any): SpatialStamp | null {
-	if (!s || !Number.isFinite(s.at?.x) || !Number.isFinite(s.at?.y)) return null
-	const frame =
-		s.frame && typeof s.frame.name === 'string' && Number.isFinite(s.frame.dist)
-			? { name: s.frame.name.slice(0, 256), dist: Math.max(0, Math.round(s.frame.dist)) }
-			: null
-	return { at: { x: Math.round(s.at.x), y: Math.round(s.at.y) }, frame }
-}
+// The client-computed spatial stamp carried in presence.meta.stamp, and its
+// server-side trust boundary (parseStamp — never trust presence meta) now
+// live in @ensembleworks/contracts, shared verbatim with the client's
+// computeStamp. Re-exported below so existing imports of this module keep
+// working.
+export { parseStamp, type SpatialStamp } from '@ensembleworks/contracts'
 
 export interface CursorRef {
 	userId: string | null

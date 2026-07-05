@@ -5,3 +5,4 @@
 export * from './shapes.js'
 export * from './terminal-protocol.js'
 export * from './constants.js'
+export * from './stamp.js'
