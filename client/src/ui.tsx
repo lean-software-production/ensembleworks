@@ -2,13 +2,11 @@
  * UI customisation: a "New terminal" toolbar button that drops a terminal
  * shape (backed by a fresh tmux session) at the viewport centre.
  */
-import { slugify } from '@ensembleworks/contracts'
 import {
 	DefaultMainMenu,
 	DefaultMainMenuContent,
 	DefaultToolbar,
 	DefaultToolbarContent,
-	Editor,
 	TLComponents,
 	TLUiOverrides,
 	TldrawUiDialogBody,
@@ -17,7 +15,6 @@ import {
 	TldrawUiDialogTitle,
 	TldrawUiMenuGroup,
 	TldrawUiMenuItem,
-	createShapeId,
 	useDialogs,
 	useEditor,
 	useTools,
@@ -29,61 +26,10 @@ import { startScreenShare } from './screenshare/share'
 import { useScreenShareAvailable } from './screenshare/store'
 import { seedDemoCanvas } from './demo'
 import { seedSessionCanvas } from './session/seedSessionCanvas'
-import { toProxiedUrl } from './iframe/IframeShapeUtil'
-import { NEKO_DEFAULT_BASE, NEKO_DEFAULT_H, NEKO_DEFAULT_W, NEKO_ICON_NAME } from './neko/NekoShapeUtil'
-import { ROADMAP_DEFAULT_H, ROADMAP_DEFAULT_W } from './roadmap/RoadmapShapeUtil'
-
-export function createDevServerShape(editor: Editor) {
-	const input = window.prompt('Dev server port (or full URL):', '3000')?.trim()
-	if (!input) return
-	const url = /^\d+$/.test(input) ? `/dev/${input}/` : toProxiedUrl(input)
-	const { x, y } = editor.getViewportPageBounds().center
-	const id = createShapeId()
-	editor.createShape({
-		id,
-		type: 'iframe',
-		x: x - 400,
-		y: y - 300,
-		props: { w: 800, h: 600, url, title: `dev server ${input}` },
-	})
-	editor.setSelectedShapes([id])
-}
-
-export function createNekoShape(editor: Editor) {
-	const { x, y } = editor.getViewportPageBounds().center
-	const id = createShapeId()
-	editor.createShape({
-		id,
-		type: 'neko',
-		x: x - NEKO_DEFAULT_W / 2,
-		y: y - NEKO_DEFAULT_H / 2,
-		props: { w: NEKO_DEFAULT_W, h: NEKO_DEFAULT_H, base: NEKO_DEFAULT_BASE, title: 'shared browser' },
-	})
-	editor.setSelectedShapes([id])
-}
-
-export function createRoadmapShape(editor: Editor) {
-	// The name is the CLI/agent addressing handle; its slug is the document id
-	// (createDevServerShape precedent: prompt, no server round-trip). The shape
-	// renders its empty state until someone pushes data to that name.
-	const name = window.prompt('Roadmap name:', 'Roadmap')?.trim()
-	if (!name) return
-	const roadmapId = slugify(name)
-	if (!roadmapId) {
-		window.alert('Roadmap name must contain at least one letter or digit.')
-		return
-	}
-	const { x, y } = editor.getViewportPageBounds().center
-	const id = createShapeId()
-	editor.createShape({
-		id,
-		type: 'roadmap',
-		x: x - ROADMAP_DEFAULT_W / 2,
-		y: y - ROADMAP_DEFAULT_H / 2,
-		props: { w: ROADMAP_DEFAULT_W, h: ROADMAP_DEFAULT_H, roadmapId },
-	})
-	editor.setSelectedShapes([id])
-}
+import { createDevServerShape } from './iframe/createDevServerShape'
+import { createNekoShape } from './neko/createNekoShape'
+import { createRoadmapShape } from './roadmap/createRoadmapShape'
+import { NEKO_ICON_NAME } from './neko/NekoShapeUtil'
 
 export const uiOverrides: TLUiOverrides = {
 	tools(editor, tools) {
