@@ -22,11 +22,10 @@
  *   GET  /*                     – static client build (production)
  */
 import { existsSync, mkdirSync } from 'node:fs'
-import { readFile, writeFile } from 'node:fs/promises'
 import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
-import { isTerminalStatus, slugify, TERMINAL_STATUSES } from '@ensembleworks/contracts'
+import { slugify } from '@ensembleworks/contracts'
 import { TLSocketRoom } from '@tldraw/sync-core'
 import { createBindingId, createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
@@ -36,7 +35,9 @@ import { WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
 import { GEO_TYPES, NOTE_COLORS, PULSE_STALE_MS, STICKY_GRID_COLS, STICKY_GRID_STEP } from './canvas/constants.ts'
 import { pageIdOf, pagePoint, richTextToPlainText } from './canvas/geometry.ts'
-import { sanitizeAssetId, sanitizeId } from './canvas/ids.ts'
+import { sanitizeId } from './canvas/ids.ts'
+import { createTerminalStatusRouter } from './features/terminal-status.ts'
+import { createUploadsRouter } from './features/uploads.ts'
 import { createGatewayPlane } from './gateway-registry.ts'
 import type { PluginServerContext } from './kernel/context.ts'
 import { buildParticipants, byProximity, getCursorRefs, pickCursor, rawUserId, sortPointOf } from './kernel/presence.ts'
@@ -222,33 +223,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	// Canvas API (session MVP): lets agents flip the status light on their
 	// terminal shape and post advice stickies, whether or not the room is open.
 
-	app.post('/api/terminal-status', async (req, res) => {
-		const body = (req.body ?? {}) as Record<string, unknown>
-		const roomId = sanitizeId(String(body.room ?? 'team'))
-		const sessionId = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : null
-		const status = typeof body.status === 'string' ? body.status : ''
-		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
-		if (!sessionId) return void res.status(400).json({ error: 'sessionId is required' })
-		if (!isTerminalStatus(status)) {
-			return void res
-				.status(400)
-				.json({ error: `status must be one of ${TERMINAL_STATUSES.join(' | ')}` })
-		}
-		let updated = 0
-		await roomHost.getOrCreateRoom(roomId).updateStore((store) => {
-			for (const record of store.getAll() as any[]) {
-				if (
-					record.typeName === 'shape' &&
-					record.type === 'terminal' &&
-					record.props?.sessionId === sessionId
-				) {
-					store.put({ ...record, props: { ...record.props, status } })
-					updated++
-				}
-			}
-		})
-		res.json({ ok: true, updated })
-	})
+	app.use(createTerminalStatusRouter(ctx))
 
 	app.post('/api/sticky', async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
@@ -906,22 +881,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		})
 	})
 
-	app.put('/uploads/:id', express.raw({ type: '*/*', limit: '100mb' }), async (req, res) => {
-		const id = sanitizeAssetId(req.params.id)
-		if (!id) return void res.status(400).json({ error: 'bad asset id' })
-		await writeFile(path.join(uploadsDir, id), req.body)
-		res.json({ ok: true })
-	})
-
-	app.get('/uploads/:id', async (req, res) => {
-		const id = sanitizeAssetId(req.params.id)
-		if (!id) return void res.status(400).json({ error: 'bad asset id' })
-		try {
-			res.send(await readFile(path.join(uploadsDir, id)))
-		} catch {
-			res.status(404).json({ error: 'not found' })
-		}
-	})
+	app.use(createUploadsRouter(ctx))
 
 	// In production the sync server also serves the static client build; Caddy
 	// just reverse-proxies everything here.
