@@ -13,12 +13,12 @@
   },
   "dependencies": {
     "@ensembleworks/contracts": "*",
-    "@tldraw/sync-core": "^5.1.0",
-    "@tldraw/tlschema": "^5.1.0",
-    "@tldraw/utils": "^5.1.0",
-    "@tldraw/validate": "^5.1.0",
+    "@tldraw/sync-core": "5.1.0",
+    "@tldraw/tlschema": "5.1.0",
+    "@tldraw/utils": "5.1.0",
+    "@tldraw/validate": "5.1.0",
     "express": "^5.0.0",
-    "livekit-server-sdk": "^2.15.4",
+    "livekit-server-sdk": "2.15.4",
     "node-pty": "^1.1.0",
     "tsx": "^4.19.0",
     "ws": "^8.18.0"

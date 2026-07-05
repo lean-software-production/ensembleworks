@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@tldraw/validate": "^5.1.0",
+    "@tldraw/validate": "5.1.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

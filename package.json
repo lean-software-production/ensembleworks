@@ -10,8 +10,8 @@
     "transcriber"
   ],
   "scripts": {
-    "dev": "npm run dev --workspace=server & npm run dev:term --workspace=server & npm run dev --workspace=client & wait",
-    "build": "npm run build --workspace=client && npm run build --workspace=server && npm run build --workspace=transcriber",
-    "typecheck": "npm run typecheck --workspace=contracts && npm run typecheck --workspace=client && npm run typecheck --workspace=server && npm run typecheck --workspace=transcriber && tsc -p bin/tsconfig.json"
+    "dev": "bun run --filter '@ensembleworks/server' dev & bun run --filter '@ensembleworks/server' dev:term & bun run --filter '@ensembleworks/client' dev & wait",
+    "build": "bun run --filter '@ensembleworks/client' build && bun run --filter '@ensembleworks/server' build && bun run --filter '@ensembleworks/transcriber' build",
+    "typecheck": "bun run --filter '@ensembleworks/contracts' typecheck && bun run --filter '@ensembleworks/client' typecheck && bun run --filter '@ensembleworks/server' typecheck && bun run --filter '@ensembleworks/transcriber' typecheck && bunx tsc -p bin/tsconfig.json"
   }
 }
