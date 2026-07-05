@@ -70,18 +70,6 @@ export class OpError extends Error {
 	}
 }
 
-// "EnsembleWorks Roadmap" → "ensembleworks-roadmap". The result must satisfy
-// app.ts's sanitizeId shape so ids are safe in file paths and shape props.
-// Keep in sync with client/src/roadmap/model.ts (slugify).
-export function slugify(name: string): string | null {
-	const slug = name
-		.toLowerCase()
-		.replace(/[^a-z0-9_-]+/g, '-')
-		.replace(/^-+|-+$/g, '')
-		.slice(0, 64)
-	return /^[a-z0-9][a-z0-9_-]*$/.test(slug) ? slug : null
-}
-
 // Returns an error message, or null when the document is valid. Checks the
 // wire-format shape (design project roadmap.json schema) and that every key
 // is unique across the whole document — keys are the addressing scheme.

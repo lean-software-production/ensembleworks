@@ -7,11 +7,11 @@
  * (scroll position, session) is intentionally per-user. Double-click to
  * interact with the page; click away to go back to canvas navigation.
  */
+import { iframeShapeProps } from '@ensembleworks/contracts'
 import { useRef } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
-	T,
 	TLBaseShape,
 	TLResizeInfo,
 	resizeBox,
@@ -57,13 +57,7 @@ export function toProxiedUrl(raw: string): string {
 
 export class IframeShapeUtil extends BaseBoxShapeUtil<IframeShape> {
 	static override type = 'iframe' as const
-	// Keep in sync with server/src/schema.ts
-	static override props = {
-		w: T.number,
-		h: T.number,
-		url: T.string,
-		title: T.string,
-	}
+	static override props = iframeShapeProps
 
 	override getDefaultProps(): IframeShape['props'] {
 		return { w: 800, h: 600, url: 'about:blank', title: 'web view' }

@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@ensembleworks/contracts": "*",
     "@tldraw/sync-core": "^5.1.0",
     "@tldraw/tlschema": "^5.1.0",
     "@tldraw/utils": "^5.1.0",

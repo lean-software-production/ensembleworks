@@ -27,6 +27,13 @@ import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import {
+	isTerminalStatus,
+	parseStamp,
+	slugify,
+	type SpatialStamp,
+	TERMINAL_STATUSES,
+} from '@ensembleworks/contracts'
 import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 import { createBindingId, createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
@@ -37,7 +44,7 @@ import { type AccessIdentity, getAccessIdentity } from './access-identity.ts'
 import { createGatewayPlane } from './gateway-registry.ts'
 import { resolveRoomServiceUrl } from './livekit-url.ts'
 import { schema } from './schema.ts'
-import { OpError, applyOps, createRoadmapStore, slugify, type RoadmapOp } from './roadmap-store.ts'
+import { OpError, applyOps, createRoadmapStore, type RoadmapOp } from './roadmap-store.ts'
 import { createTranscriptStore } from './transcript-store.ts'
 import { readVmStats } from './vm-stats.ts'
 
@@ -65,8 +72,6 @@ const liveKitRoomService =
 	LIVEKIT_API_KEY && LIVEKIT_API_SECRET && roomServiceUrl
 		? new RoomServiceClient(roomServiceUrl, LIVEKIT_API_KEY, LIVEKIT_API_SECRET)
 		: null
-
-const TERMINAL_STATUSES = ['working', 'needs-you', 'done', 'idle']
 
 // A per-user latency sample older than this is dropped from /api/pulse — the
 // client polls every PULSE_INTERVAL (~30s, client-side), so this is ~2.5×
@@ -152,27 +157,9 @@ function richTextToPlainText(rich: any): string {
 // best-effort overlay: with nobody connected the endpoints fall back to plain
 // document order.
 
-// The client-computed spatial stamp carried in presence.meta.stamp: the
-// point the speaker is at (their cursor when it's inside a frame, else
-// their viewport centre) and the frame containing/nearest that point —
-// computed by each browser from its own CRDT replica, so the server never
-// walks the document for it. Keep in sync with client/src/presence/stamp.ts.
-export interface SpatialStamp {
-	at: { x: number; y: number }
-	frame: { name: string; dist: number } | null
-}
-
-// Defensive parse of the wire value — never trust presence meta. Numeric
-// fields must be finite (JSON can carry Infinity via overflow literals like
-// 1e400); dist is a non-negative distance.
-export function parseStamp(s: any): SpatialStamp | null {
-	if (!s || !Number.isFinite(s.at?.x) || !Number.isFinite(s.at?.y)) return null
-	const frame =
-		s.frame && typeof s.frame.name === 'string' && Number.isFinite(s.frame.dist)
-			? { name: s.frame.name.slice(0, 256), dist: Math.max(0, Math.round(s.frame.dist)) }
-			: null
-	return { at: { x: Math.round(s.at.x), y: Math.round(s.at.y) }, frame }
-}
+// The client-computed spatial stamp carried in presence.meta.stamp, and its
+// server-side trust boundary (parseStamp — never trust presence meta) live
+// in @ensembleworks/contracts, shared verbatim with the client's computeStamp.
 
 export interface CursorRef {
 	userId: string | null
@@ -504,7 +491,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		const status = typeof body.status === 'string' ? body.status : ''
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		if (!sessionId) return void res.status(400).json({ error: 'sessionId is required' })
-		if (!TERMINAL_STATUSES.includes(status)) {
+		if (!isTerminalStatus(status)) {
 			return void res
 				.status(400)
 				.json({ error: `status must be one of ${TERMINAL_STATUSES.join(' | ')}` })
@@ -629,7 +616,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 		// Best-effort spatial stamp, computed by the speaker's own browser from
 		// its CRDT replica and published as presence.meta.stamp — the server
-		// just copies the field (client/src/presence/stamp.ts owns the
+		// just copies the field (contracts/src/stamp.ts owns the
 		// semantics: cursor-inside-frame wins, else viewport centre). No live
 		// tab, or a pre-stamp bundle, ⇒ unstamped entry. No server-side
 		// geometry fallback by design.

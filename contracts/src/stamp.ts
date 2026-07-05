@@ -13,11 +13,12 @@
  * cursor when camera/screenBounds are unavailable. `at` and `frame` always
  * agree — `frame` was matched against exactly the point recorded in `at`.
  *
- * Pure and dependency-free so it is unit-testable and safe inside the
- * reactive getUserPresence derivation.
+ * Pure and dependency-free so it is unit-testable and safe to call inside
+ * a reactive derivation.
  *
- * Keep in sync with the server-side consumer: SpatialStamp / parseStamp in
- * server/src/app.ts. (Early extraction candidate for @ensembleworks/contracts.)
+ * Shared verbatim by the client (computeStamp, below) and the server
+ * (parseStamp, below — the server's trust boundary for client-asserted
+ * presence).
  */
 
 // The minimal structural slice of a tldraw store record the stamp needs.
@@ -42,8 +43,12 @@ export interface StampInputs {
 	selectedShapeIds?: readonly string[]
 }
 
-// The wire shape carried in presence.meta.stamp. A `type` (not interface) so
-// it structurally satisfies tldraw's JsonObject for the meta field.
+// The wire shape carried in presence.meta.stamp: the point the speaker is at
+// (their cursor when it's inside a frame, else their viewport centre) and the
+// frame containing/nearest that point — computed by each browser from its own
+// CRDT replica, so the server never walks the document for it. A `type` (not
+// interface) so it structurally satisfies tldraw's JsonObject for the meta
+// field.
 export type SpatialStamp = {
 	at: { x: number; y: number }
 	frame: { name: string; dist: number } | null
@@ -154,4 +159,16 @@ export function computeStamp(records: readonly StampRecord[], inputs: StampInput
 		frame = frameAtPoint(shapes, byId, inputs.currentPageId, at)
 	}
 	return { at: { x: Math.round(at.x), y: Math.round(at.y) }, frame }
+}
+
+// Defensive parse of the wire value — never trust presence meta. Numeric
+// fields must be finite (JSON can carry Infinity via overflow literals like
+// 1e400); dist is a non-negative distance.
+export function parseStamp(s: any): SpatialStamp | null {
+	if (!s || !Number.isFinite(s.at?.x) || !Number.isFinite(s.at?.y)) return null
+	const frame =
+		s.frame && typeof s.frame.name === 'string' && Number.isFinite(s.frame.dist)
+			? { name: s.frame.name.slice(0, 256), dist: Math.max(0, Math.round(s.frame.dist)) }
+			: null
+	return { at: { x: Math.round(s.at.x), y: Math.round(s.at.y) }, frame }
 }

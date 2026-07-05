@@ -15,11 +15,11 @@
  * (drag/filter/status-click active), Esc or click away to go back to canvas
  * navigation. View state (filter, collapse, drag hover) is local per client.
  */
+import { roadmapShapeProps } from '@ensembleworks/contracts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
-	T,
 	TLBaseShape,
 	TLResizeInfo,
 	resizeBox,
@@ -66,13 +66,7 @@ const MIN_H = 320
 
 export class RoadmapShapeUtil extends BaseBoxShapeUtil<RoadmapShape> {
 	static override type = 'roadmap' as const
-	// Keep in sync with server/src/schema.ts
-	static override props = {
-		w: T.number,
-		h: T.number,
-		roadmapId: T.string,
-		rev: T.number.optional(),
-	}
+	static override props = roadmapShapeProps
 
 	override getDefaultProps(): RoadmapShape['props'] {
 		return { w: ROADMAP_DEFAULT_W, h: ROADMAP_DEFAULT_H, roadmapId: 'roadmap' }

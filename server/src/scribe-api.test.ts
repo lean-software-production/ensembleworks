@@ -21,7 +21,8 @@ async function main() {
 	process.env.LIVEKIT_API_KEY = 'testkey'
 	process.env.LIVEKIT_API_SECRET = 'testsecret-testsecret-testsecret'
 	process.env.LIVEKIT_URL = 'wss://example.test/livekit'
-	const { createSyncApp, parseStamp } = await import('./app.ts')
+	const { createSyncApp } = await import('./app.ts')
+	const { parseStamp } = await import('@ensembleworks/contracts')
 
 	// 0. parseStamp is the server's trust boundary for client-asserted presence
 	// meta — it must reject garbage and non-finite numbers without throwing.
