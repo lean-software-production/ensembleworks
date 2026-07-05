@@ -63,16 +63,15 @@ CF_TUNNEL_TOKEN="${CF_TUNNEL_TOKEN:-}"
 # it. Defaults to this deployment's hostname; override for a different box.
 PUBLIC_HOST="${PUBLIC_HOST:-canvas.leansoftware.ai}"
 
-# Node pinned to the devcontainer's version + amd64 checksum (Hetzner CPX/CCX are x86_64).
-NODE_VERSION="${NODE_VERSION:-22.22.3}"
-NODE_SHA256="${NODE_SHA256:-2e5d13569282d016861fae7c8f935e741693c269101a5bebcf761a5376d1f99f}"
+# Bun pinned to match the devcontainer / .tool-versions (Hetzner CPX/CCX are x86_64).
+BUN_VERSION="${BUN_VERSION:-1.3.14}"
 
 # Where canvas state goes. Defaults under the user's home (resolved in step 5);
 # override to force a path — but keep it inside a home dir, never /var.
 DATA_DIR="${DATA_DIR:-}"
 
 EDGE_PORT="8080" # Caddy's plain-HTTP port; the tunnel points here
-NPM_BIN="/usr/local/bin/npm"
+BUN_BIN="/usr/local/bin/bun"
 
 log() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
@@ -82,30 +81,27 @@ if [[ "${EUID}" -ne 0 ]]; then
 fi
 
 # -----------------------------------------------------------------------------
-# 1. Base packages (build-essential + python3 + pkg-config for node-pty's native
-#    addon; tmux backs the gateway terminals; sudo lets the mob redeploy).
+# 1. Base packages (build-essential kept as a general toolchain; unzip for the
+#    Bun installer; tmux backs the gateway terminals; sudo lets the mob
+#    redeploy). node-pty is gone, so python3 + pkg-config are no longer needed.
 # -----------------------------------------------------------------------------
 log "Installing base packages"
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -y
 apt-get install -y --no-install-recommends \
-	ca-certificates curl git build-essential python3 pkg-config tmux jq sudo \
+	ca-certificates curl git build-essential unzip tmux jq sudo \
 	gnupg debian-keyring debian-archive-keyring apt-transport-https
 update-ca-certificates
 
 # -----------------------------------------------------------------------------
-# 2. Node 22 — pinned tarball into /usr/local, checksum-verified (matches the
-#    devcontainer Dockerfile so host == dev).
+# 2. Bun — pinned install into /usr/local/bin (matches the devcontainer
+#    Dockerfile / .tool-versions so host == dev). The only JS runtime.
 # -----------------------------------------------------------------------------
-if [[ "$(node -v 2>/dev/null || true)" != "v${NODE_VERSION}" ]]; then
-	log "Installing Node ${NODE_VERSION}"
-	archive="node-v${NODE_VERSION}-linux-x64.tar.xz"
-	curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/${archive}" -o "/tmp/${archive}"
-	echo "${NODE_SHA256}  /tmp/${archive}" | sha256sum -c -
-	tar -xJf "/tmp/${archive}" -C /usr/local --strip-components=1
-	rm -f "/tmp/${archive}"
+if [[ "$(bun --version 2>/dev/null || true)" != "${BUN_VERSION}" ]]; then
+	log "Installing Bun ${BUN_VERSION}"
+	BUN_INSTALL=/usr/local curl -fsSL https://bun.sh/install | BUN_INSTALL=/usr/local bash -s "bun-v${BUN_VERSION}"
 else
-	log "Node ${NODE_VERSION} already present — skipping"
+	log "Bun ${BUN_VERSION} already present — skipping"
 fi
 
 # -----------------------------------------------------------------------------
@@ -205,10 +201,9 @@ if [[ -z "${SKIP_VCS}" ]]; then
 fi
 
 log "Wiring and building, as ${APP_USER}"
-# Stop the running watch-mode app units BEFORE npm ci — npm ci wipes node_modules,
-# and tsx watch/Vite import from it live; a mid-reinstall import races with the
-# unlink storm and crashes (Cannot find module '.../tsx/dist/preflight.cjs').
-# Record which were running so we restart exactly those after the rebuild
+# Stop the running watch-mode app units BEFORE bun install — it rewrites
+# node_modules, and bun --watch/Vite import from it live; a mid-reinstall import
+# can race with the rewrite. Record which were running so we restart exactly those.
 # (don't auto-start an optional unit like scribe the operator hasn't enabled).
 # Stopping a not-yet-installed/stopped unit is non-fatal.
 RUNNING_BEFORE_BUILD=""
@@ -223,8 +218,8 @@ runuser -u "${APP_USER}" -- mkdir -p "${DATA_DIR}" "${CONF_DIR}"
 runuser -u "${APP_USER}" -- env PATH="/usr/local/bin:${PATH}" bash -c "
   set -euo pipefail
   cd '${APP_DIR}'
-  npm ci
-  npm run build
+  bun install
+  bun run build
 "
 
 # Let the mob redeploy after editing the code in place — only restart/start/stop
@@ -355,7 +350,7 @@ if [[ ! -f "${CONF_DIR}/term.env" ]]; then
 	log "Writing ${CONF_DIR}/term.env placeholder — FILL THIS IN"
 	cat >"${CONF_DIR}/term.env" <<'EOF'
 # Env vars for shells spawned in canvas xterm/tmux sessions (the
-# ensembleworks-term gateway: node-pty + tmux). Unlike sync.env / scribe.env /
+# ensembleworks-term gateway: Bun.Terminal + tmux). Unlike sync.env / scribe.env /
 # github-app.env — which are read by systemd units or on-demand scripts — this
 # file is sourced into every interactive shell by ~/.bashrc (set -a), so
 # anything launched from a canvas terminal (opencode, gh-app-token, ad-hoc
@@ -444,7 +439,7 @@ MemoryMax=70%
 CPUWeight=50
 EOF
 
-# Dogfooding stage: units run the watch/dev npm scripts (tsx watch + Vite HMR),
+# Dogfooding stage: units run the watch/dev bun scripts (bun --watch + Vite HMR),
 # the same the devcontainer uses, so source edits reload live. See the README
 # "Hardening later" note to switch to the non-watch `start` scripts + static
 # client when you want the instance to stop being self-editable.
@@ -462,7 +457,7 @@ WorkingDirectory=${APP_DIR}/server
 Environment=PORT=8788
 Environment=DATA_DIR=${DATA_DIR}
 EnvironmentFile=${CONF_DIR}/sync.env
-ExecStart=${NPM_BIN} run dev
+ExecStart=${BUN_BIN} run dev
 Restart=on-failure
 RestartSec=2
 
@@ -472,7 +467,7 @@ EOF
 
 cat >/etc/systemd/system/ensembleworks-term.service <<EOF
 [Unit]
-Description=EnsembleWorks terminal gateway (node-pty + tmux)
+Description=EnsembleWorks terminal gateway (Bun.Terminal + tmux)
 After=network-online.target
 Wants=network-online.target
 
@@ -482,7 +477,7 @@ User=${APP_USER}
 WorkingDirectory=${APP_DIR}/server
 Environment=PORT=8789
 Environment=TMUX_CONF=${APP_DIR}/deploy/tmux-ensembleworks.conf
-ExecStart=${NPM_BIN} run dev:term
+ExecStart=${BUN_BIN} run dev:term
 Restart=on-failure
 RestartSec=2
 
@@ -501,7 +496,7 @@ Type=simple
 User=${APP_USER}
 WorkingDirectory=${APP_DIR}/client
 Environment=ENSEMBLEWORKS_PUBLIC_HOST=${PUBLIC_HOST}
-ExecStart=${NPM_BIN} run dev
+ExecStart=${BUN_BIN} run dev
 Restart=on-failure
 RestartSec=2
 
@@ -530,7 +525,7 @@ EnvironmentFile=${CONF_DIR}/scribe.env
 # readiness, so without this the bot races the server on a cold boot and dies on
 # ECONNREFUSED. curl (no -f) exits 0 on any HTTP reply, nonzero on conn-refused.
 ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "\${CANVAS_URL}/"; do echo "waiting for sync server at \${CANVAS_URL} ..."; sleep 1; done'
-ExecStart=${NPM_BIN} run dev
+ExecStart=${BUN_BIN} run dev
 Restart=on-failure
 RestartSec=5
 
@@ -578,7 +573,7 @@ systemctl daemon-reload
 systemctl enable caddy
 systemctl reload-or-restart caddy
 # Restart the app units that were running before the rebuild (we stopped them
-# before npm ci to avoid the reinstall race). Use restart, not enable --now:
+# before bun install to avoid the reinstall race). Use restart, not enable --now:
 # enable --now is a no-op on already-enabled units, so it wouldn't start units
 # we just stopped. Restart also picks up the rebuilt code. Units that weren't
 # running stay stopped (e.g. an optional scribe the operator hasn't enabled).
@@ -669,7 +664,7 @@ cat <<EOF
   ${APP_USER}), then just edit — the units run in watch mode, so server/client
   changes reload live:
        cd ~/ensembleworks        # symlink to ${SRC_DIR}
-       \$EDITOR server/src/...    # tsx watch / Vite HMR pick it up automatically
+       \$EDITOR server/src/...    # bun --watch / Vite HMR pick it up automatically
        sudo systemctl restart ensembleworks-sync   # only for dep changes / a wedged unit
 
   Logs:  journalctl -u ensembleworks-sync -f   (also -term, -client, -scribe; caddy, cloudflared need sudo)
