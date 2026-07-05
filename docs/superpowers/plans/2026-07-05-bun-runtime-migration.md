@@ -28,7 +28,7 @@ These are baked into the task order below; violating them breaks the branch mid-
 
 5. **Per-task green + commits.** Every task ends by committing, and every task must leave `bun run typecheck` green. Each commit uses these trailer lines:
    ```
-   Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+   Co-Authored-By: Claude <noreply@anthropic.com>
    Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
    ```
    (Git wrapper note: this repo's `git` runs through a direnv wrapper — commit exactly as shown.)
@@ -97,7 +97,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   build(bun): pin bun 1.3.14, bun.lock, root scripts to --filter form
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -251,7 +251,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   feat(server): bun:sqlite DatabaseSync adapter; rooms.ts off node:sqlite
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -303,7 +303,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   docs(plan): record Bun.Terminal API surface from the 1.3.14 spike
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -476,7 +476,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   feat(server): node-pty -> Bun.Terminal wrapper; drop node-pty dep
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -606,7 +606,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   build(bun): workspace scripts node-independent (bun/--bun vite/bunx tsc), drop tsx
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -768,7 +768,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   test(bun): single bun run test entrypoint; headers npx tsx -> bun; convert user-id suite
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -1198,7 +1198,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   build(dev): bin/dev + devcontainer onto Bun; enforce bun floor; drop .nvmrc
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -1456,7 +1456,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   build(deploy): drop Node pin references; release build gate + bootstrap onto Bun
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -1597,7 +1597,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   docs(bun): contributor runtime Node -> bun; record migration verification + R1
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -1608,3 +1608,44 @@ These are baked into the task order below; violating them breaks the branch mid-
 ## Execution notes
 
 _(Executors: fill this section as you go — capture the Task 3 `Bun.Terminal API notes`, the Task 9 R1 hot-reload result, and any deviations from the verbatim blocks above.)_
+
+### Commit trailer (updated 2026-07-05)
+
+All commit blocks originally specified a `Co-Authored-By: Claude Fable 5` trailer.
+Fable is out of credits for this run, so **every commit uses the generic trailer**:
+```
+Co-Authored-By: Claude <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
+```
+
+### Task 1 deviations (commit 3126094)
+
+Two additions beyond the verbatim block, both to keep the runtime swap
+behaviour-neutral (they made the task's own "typecheck green" gate meaningful):
+
+1. **`bunfig.toml` (new)** — `[install] linker = "hoisted"`. Bun 1.3.14's default
+   *isolated* linker does not hoist transitive deps into a flat `node_modules`,
+   so the client's phantom `@tldraw/tlschema` module-augmentation
+   (`declare module '@tldraw/tlschema'` in the five ShapeUtil files) failed to
+   resolve. The hoisted linker restores npm-parity flat `node_modules`.
+
+2. **tldraw family pinned to exact `5.1.0`** across `client/package.json`
+   (`tldraw`, `@tldraw/sync`), `server/package.json` (`@tldraw/sync-core`,
+   `@tldraw/tlschema`, `@tldraw/utils`, `@tldraw/validate`) and
+   `contracts/package.json` (`@tldraw/validate`). The parent branch's
+   `package-lock.json` locked the whole `@tldraw/*` scope at 5.1.0; dropping the
+   lock let the `^5.1.0` ranges float to 5.2.2, which (a) tightened
+   `Editor.zoomToUser()` to a branded `TLUserId` and (b) hoisted a 5.2.2
+   `tlschema` to root (via the server's `@tldraw/sync-core`) that the client's
+   5.1.0-based augmentation then bound to — breaking the custom-shape unions.
+   Pinning reproduces the shipped 5.1.0 closure exactly (a single
+   `@tldraw/tlschema@5.1.0` hoisted at root). A tldraw *upgrade* is deliberately
+   left as separate future work — not part of a runtime migration.
+
+3. **LiveKit runtime SDKs pinned to shipped versions** — `livekit-client`
+   (`2.19.2`, client) and `livekit-server-sdk` (`2.15.4`, server). The lockfile
+   regen also floated these two `^`-ranged runtime deps by a minor version
+   (2.20.0 / 2.16.0); pinned to what the parent lock shipped so the migration
+   swaps the runtime engine, not the AV dependency versions (same rationale as
+   the tldraw pin). The other two minor drifts the review found are left on their
+   ranges: `tsx` (removed entirely in Task 5) and `@types/node` (types-only).
