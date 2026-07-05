@@ -1852,3 +1852,25 @@ it correctly reported no devcontainer running rather than erroring, since
 `bin/dev up` was deliberately not run.
 
 R1 (does `bun --watch` hot-reload over the devcontainer bind mount?): NOT YET VERIFIED — deferred to the live `bin/dev up` smoke, which the human runs (it needs the devcontainer + a browser and would disturb a running stack). To check: with the stack up, edit a server/src/*.ts file and watch `bin/dev logs sync`/`bin/dev logs term` for a reload; if it doesn't fire, document `bin/dev restart <svc>` as the accepted fallback.
+
+## Devcontainer Bun-only image rebuild — PASSED (blessed proof)
+
+`devcontainer build --workspace-folder .` (devcontainer CLI 0.80.3, Docker
+29.5.1) rebuilt the image from the new Bun Dockerfile: `{"outcome":"success"}`,
+image `vsc-bun-runtime-migration-…` (1.55 GB). Verified inside the built image:
+
+```
+bun --version        -> 1.3.14   (at /usr/local/bin/bun)
+command -v node      -> not found (NODE_ABSENT)
+command -v npm       -> not found (npm ABSENT)
+tmux -V              -> tmux 3.5a
+```
+
+The devcontainer now builds and contains Bun as the only JS runtime — no Node,
+no npm. This is the plan's blessed "rebuild the devcontainer image and confirm
+it builds with Bun only" proof. The Node→Bun install swap in
+`.devcontainer/Dockerfile` (Task 7) works end to end.
+
+Still deferred to a live `bin/dev up` (not run here): the in-browser smoke
+(toolbar/session panel render, terminal create+delete confirm dialog) and R1
+(`bun --watch` hot-reload over the bind mount).
