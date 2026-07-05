@@ -1,3 +1,8 @@
+/**
+ * Terminal status-light feature — POST /api/terminal-status sets the status
+ * prop on the terminal shape(s) with a given sessionId (agents flip this via
+ * the canvas CLI). Statuses/type-guard come from @ensembleworks/contracts.
+ */
 import { isTerminalStatus, TERMINAL_STATUSES } from '@ensembleworks/contracts'
 import express from 'express'
 import { sanitizeId } from '../canvas/ids.ts'

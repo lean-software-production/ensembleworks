@@ -5,6 +5,7 @@
  * tests can boot it in-process on an ephemeral port (see canvas-api.test.ts).
  *
  * Routes:
+ * Feature routes live in ./features/*; this block is the route index.
  *   GET  /api/health            – liveness probe
  *   GET  /api/livekit-token     – mint a LiveKit access token (M2)
  *   POST /api/kick              – disconnect one user from canvas + LiveKit

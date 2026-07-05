@@ -1,3 +1,8 @@
+/**
+ * Uploads feature — PUT/GET /uploads/:id, raw-body blob storage on disk.
+ * Deliberately outside the /api json parser: the PUT carries its own
+ * express.raw middleware (100mb).
+ */
 import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import express from 'express'
