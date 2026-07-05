@@ -22,30 +22,49 @@ function header(headers: IncomingHttpHeaders, name: string): string | undefined 
 	return Array.isArray(v) ? v[0] : v
 }
 
+// Extract the CF Access service-token common_name from the request headers
+// (verified in verified mode; decoded-unverified in header-trust mode — the same
+// tunnel trust basis as the Cf-Access-…-Email header). Shared by resolveCaller
+// and resolveWriteScope.
+async function serviceTokenCommonName(headers: IncomingHttpHeaders): Promise<string | undefined> {
+	const jwt = header(headers, JWT_HEADER)
+	if (!jwt) return undefined
+	if (accessVerificationEnabled()) {
+		try {
+			return (await verifyCfAccessClaims(jwt))?.commonName
+		} catch {
+			return undefined
+		}
+	}
+	return decodeCfAccessClaimsUnverified(jwt)?.commonName
+}
+
 export async function resolveCaller(headers: IncomingHttpHeaders): Promise<Whoami> {
 	// 1. Human — the existing three-mode CF Access resolution (email present).
 	const human = await getAccessIdentity(headers)
 	if (human) return { identity: human.name ?? human.email, kind: 'human', via: 'sso' }
 
 	// 2. Bot — a CF Access service token, keyed by its common_name.
-	const jwt = header(headers, JWT_HEADER)
-	if (jwt) {
-		let commonName: string | undefined
-		if (accessVerificationEnabled()) {
-			try {
-				commonName = (await verifyCfAccessClaims(jwt))?.commonName
-			} catch {
-				commonName = undefined
-			}
-		} else {
-			commonName = decodeCfAccessClaimsUnverified(jwt)?.commonName
-		}
-		if (commonName) {
-			const entry = lookupServiceToken(commonName)
-			if (entry) return { identity: entry.identity, kind: 'bot', via: 'service-token' }
-		}
+	const commonName = await serviceTokenCommonName(headers)
+	if (commonName) {
+		const entry = lookupServiceToken(commonName)
+		if (entry) return { identity: entry.identity, kind: 'bot', via: 'service-token' }
 	}
 
 	// 3. Anonymous.
 	return { identity: null, kind: 'anonymous', via: 'none' }
+}
+
+/**
+ * The caller's service-token write scope, or null if the caller is not a
+ * recognised service token (a human, an anonymous caller, or an unknown/unmapped
+ * token — all "open" for the write guard). Scope is an authz detail, kept out of
+ * the Whoami identity envelope.
+ */
+export async function resolveWriteScope(
+	headers: IncomingHttpHeaders,
+): Promise<'read-only' | 'read-write' | null> {
+	const commonName = await serviceTokenCommonName(headers)
+	if (!commonName) return null
+	return lookupServiceToken(commonName)?.scope ?? null
 }
