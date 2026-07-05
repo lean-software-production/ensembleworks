@@ -13,8 +13,8 @@ import { schema } from '../schema.ts'
 export function createStickyRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
-	// Canvas API (session MVP): lets agents flip the status light on their
-	// terminal shape and post advice stickies, whether or not the room is open.
+	// Canvas API (session MVP): lets agents post advice stickies, whether or
+	// not the room is open.
 
 	router.post('/api/sticky', async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
