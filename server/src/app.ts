@@ -152,11 +152,8 @@ function richTextToPlainText(rich: any): string {
 // document order.
 
 // The client-computed spatial stamp carried in presence.meta.stamp, and its
-// server-side trust boundary (parseStamp — never trust presence meta) now
-// live in @ensembleworks/contracts, shared verbatim with the client's
-// computeStamp. Re-exported below so existing imports of this module keep
-// working.
-export { parseStamp, type SpatialStamp } from '@ensembleworks/contracts'
+// server-side trust boundary (parseStamp — never trust presence meta) live
+// in @ensembleworks/contracts, shared verbatim with the client's computeStamp.
 
 export interface CursorRef {
 	userId: string | null
@@ -613,7 +610,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 		// Best-effort spatial stamp, computed by the speaker's own browser from
 		// its CRDT replica and published as presence.meta.stamp — the server
-		// just copies the field (client/src/presence/stamp.ts owns the
+		// just copies the field (contracts/src/stamp.ts owns the
 		// semantics: cursor-inside-frame wins, else viewport centre). No live
 		// tab, or a pre-stamp bundle, ⇒ unstamped entry. No server-side
 		// geometry fallback by design.

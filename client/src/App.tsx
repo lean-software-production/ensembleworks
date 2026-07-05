@@ -15,7 +15,7 @@ import './theme.css'
 import { assetStore } from './assetStore'
 import { hexForColor } from './colors'
 import { getIdentity, getRoomId } from './identity'
-import { computeStamp, type StampRecord } from './presence/stamp'
+import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { IframeShapeUtil } from './iframe/IframeShapeUtil'
 import { PasteUrlHandler } from './iframe/PasteUrlHandler'
 import { NEKO_ICON_NAME, NEKO_TOOLBAR_ICON, NekoShapeUtil } from './neko/NekoShapeUtil'
@@ -84,7 +84,7 @@ export function App() {
 		onCustomMessageReceived(message) {
 			if (message?.type === 'kicked') setWasKicked(true)
 		},
-		// Publish the client-computed spatial stamp (client/src/presence/stamp.ts)
+		// Publish the client-computed spatial stamp (contracts/src/stamp.ts)
 		// on our presence record so the server just reads a field (transcript
 		// stamping, proximity-ordered reads). Reactive: recomputes when our own
 		// selection/cursor/camera/page change or when any shape changes — scoped

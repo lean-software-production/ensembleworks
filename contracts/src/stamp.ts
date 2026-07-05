@@ -13,8 +13,8 @@
  * cursor when camera/screenBounds are unavailable. `at` and `frame` always
  * agree — `frame` was matched against exactly the point recorded in `at`.
  *
- * Pure and dependency-free so it is unit-testable and safe inside the
- * reactive getUserPresence derivation.
+ * Pure and dependency-free so it is unit-testable and safe to call inside
+ * a reactive derivation.
  *
  * Shared verbatim by the client (computeStamp, below) and the server
  * (parseStamp, below — the server's trust boundary for client-asserted
