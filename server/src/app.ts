@@ -33,10 +33,11 @@ import { getIndexAbove, sortByIndex } from '@tldraw/utils'
 import express from 'express'
 import { WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
-import { GEO_TYPES, NOTE_COLORS, STICKY_GRID_COLS, STICKY_GRID_STEP } from './canvas/constants.ts'
+import { GEO_TYPES, NOTE_COLORS } from './canvas/constants.ts'
 import { pageIdOf, pagePoint, richTextToPlainText } from './canvas/geometry.ts'
 import { sanitizeId } from './canvas/ids.ts'
 import { createAvRouter } from './features/av.ts'
+import { createStickyRouter } from './features/sticky.ts'
 import { createTerminalStatusRouter } from './features/terminal-status.ts'
 import { createTranscriptRouter } from './features/transcript.ts'
 import { createUploadsRouter } from './features/uploads.ts'
@@ -46,7 +47,6 @@ import { createMediaService } from './kernel/media.ts'
 import { byProximity, getCursorRefs, pickCursor, rawUserId, sortPointOf } from './kernel/presence.ts'
 import { createRoomHost } from './kernel/rooms.ts'
 import { createSessionRegistry } from './kernel/sessions.ts'
-import { schema } from './schema.ts'
 import { OpError, applyOps, createRoadmapStore, type RoadmapOp } from './roadmap-store.ts'
 import { createTranscriptStore } from './transcript-store.ts'
 
@@ -102,88 +102,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 	app.use(createTerminalStatusRouter(ctx))
 
-	app.post('/api/sticky', async (req, res) => {
-		const body = (req.body ?? {}) as Record<string, unknown>
-		const roomId = sanitizeId(String(body.room ?? 'team'))
-		const text = typeof body.text === 'string' ? body.text.trim() : ''
-		const frame = typeof body.frame === 'string' ? body.frame : null
-		const color = typeof body.color === 'string' ? body.color : 'yellow'
-		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
-		if (!text || text.length > 2000) {
-			return void res.status(400).json({ error: 'text must be non-empty and at most 2000 chars' })
-		}
-		if (!NOTE_COLORS.includes(color)) {
-			return void res.status(400).json({ error: `color must be one of ${NOTE_COLORS.join(' | ')}` })
-		}
-		let createdId: string | null = null
-		let frameFound = true
-		await roomHost.getOrCreateRoom(roomId).updateStore((store) => {
-			const records = store.getAll() as any[]
-			const shapes = records.filter((r) => r.typeName === 'shape')
-
-			let parentId: string
-			let x: number
-			let y: number
-			if (frame) {
-				const target = shapes.find(
-					(r) =>
-						r.type === 'frame' &&
-						typeof r.props?.name === 'string' &&
-						r.props.name.toLowerCase().includes(frame.toLowerCase())
-				)
-				if (!target) {
-					frameFound = false
-					return
-				}
-				parentId = target.id
-				// Grid inside the frame, based on how many notes it already holds.
-				const count = shapes.filter((r) => r.type === 'note' && r.parentId === parentId).length
-				x = 20 + (count % STICKY_GRID_COLS) * STICKY_GRID_STEP
-				y = 20 + Math.floor(count / STICKY_GRID_COLS) * STICKY_GRID_STEP
-			} else {
-				// No frame: page origin area, offset by note count so stickies
-				// don't stack exactly.
-				parentId = records.find((r) => r.typeName === 'page')?.id ?? 'page:page'
-				const count = shapes.filter((r) => r.type === 'note' && r.parentId === parentId).length
-				x = count * 40
-				y = count * 40
-			}
-
-			const siblings = shapes.filter(
-				(r) => r.parentId === parentId && typeof r.index === 'string'
-			)
-			const topIndex = siblings.length ? siblings.sort(sortByIndex).at(-1)!.index : undefined
-			const id = createShapeId()
-			const note = (schema.types.shape as any).create({
-				id,
-				type: 'note',
-				parentId,
-				index: getIndexAbove(topIndex),
-				x,
-				y,
-				props: {
-					richText: toRichText(text),
-					color,
-					labelColor: 'black',
-					size: 'm',
-					font: 'draw',
-					// Multiplier on the label font size (1 = unadjusted). 0 would
-					// render the text at 0px — i.e. an invisible label.
-					fontSizeAdjustment: 1,
-					align: 'middle',
-					verticalAlign: 'middle',
-					growY: 0,
-					url: '',
-					scale: 1,
-					textFirstEditedBy: null,
-				},
-			})
-			store.put(note)
-			createdId = id
-		})
-		if (!frameFound) return void res.status(404).json({ error: 'frame not found' })
-		res.json({ ok: true, id: createdId })
-	})
+	app.use(createStickyRouter(ctx))
 
 	app.use(createTranscriptRouter(ctx))
 
