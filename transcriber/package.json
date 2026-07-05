@@ -4,14 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "tsx watch src/transcriber.ts",
-    "start": "tsx src/transcriber.ts",
-    "build": "tsc --noEmit",
-    "typecheck": "tsc --noEmit"
+    "dev": "bun --watch src/transcriber.ts",
+    "start": "bun src/transcriber.ts",
+    "build": "bunx tsc --noEmit",
+    "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
-    "@livekit/rtc-node": "^0.13.29",
-    "tsx": "^4.19.0"
+    "@livekit/rtc-node": "^0.13.29"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
