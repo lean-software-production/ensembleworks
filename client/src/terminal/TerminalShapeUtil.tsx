@@ -19,7 +19,11 @@ import { ClipboardAddon, type IClipboardProvider } from '@xterm/addon-clipboard'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
-import { terminalShapeProps } from '@ensembleworks/contracts'
+import {
+	terminalShapeProps,
+	type TermClientMessage,
+	type TermServerMessage,
+} from '@ensembleworks/contracts'
 import { useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
@@ -331,7 +335,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			ws.onerror = () => ws.close()
 			ws.onmessage = (ev) => {
 				if (typeof ev.data === 'string') {
-					let msg: { type?: string; cols?: number; rows?: number }
+					let msg: TermServerMessage
 					try {
 						msg = JSON.parse(ev.data)
 					} catch {
@@ -402,7 +406,8 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		term.onData((data) => {
 			const ws = wsRef.current
 			if (ws?.readyState === WebSocket.OPEN) {
-				ws.send(JSON.stringify({ type: 'input', data }))
+				const msg: TermClientMessage = { type: 'input', data }
+				ws.send(JSON.stringify(msg))
 			}
 		})
 
@@ -507,7 +512,8 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows)
 		const ws = wsRef.current
 		if (ws?.readyState === WebSocket.OPEN) {
-			ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+			const msg: TermClientMessage = { type: 'resize', cols, rows }
+			ws.send(JSON.stringify(msg))
 		}
 	}, [shape.props.w, shape.props.h, cellSize, connection])
 

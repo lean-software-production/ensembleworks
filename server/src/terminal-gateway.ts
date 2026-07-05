@@ -13,10 +13,7 @@
  *   DELETE /term/sessions/:id    – kill the underlying tmux session
  *   WS     /term/ws?session=ID&cols=N&rows=N
  *
- * Wire protocol:
- *   client → server (text JSON): {type:'input',data} | {type:'resize',cols,rows}
- *   server → client: terminal output as BINARY frames (raw utf-8 bytes);
- *                    control as text JSON {type:'resize'|'exit'|'attached',...}
+ * Wire protocol: see @ensembleworks/contracts terminal-protocol
  */
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
@@ -24,6 +21,7 @@ import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
 import { promisify } from 'node:util'
+import { termClientMessage, type TermServerMessage } from '@ensembleworks/contracts'
 import pty, { type IPty } from 'node-pty'
 import { WebSocketServer, type WebSocket } from 'ws'
 
@@ -168,9 +166,10 @@ function getOrCreateSession(id: string, cols: number, rows: number): TermSession
 
 	proc.onExit(() => {
 		console.log(`[term ${id}] tmux client exited`)
+		const exitMsg: TermServerMessage = { type: 'exit' }
 		for (const ws of session.clients) {
 			if (ws.readyState === ws.OPEN) {
-				ws.send(JSON.stringify({ type: 'exit' }))
+				ws.send(JSON.stringify(exitMsg))
 				ws.close()
 			}
 		}
@@ -191,7 +190,8 @@ function resizeSession(session: TermSession, cols: number, rows: number) {
 	session.rows = rows
 	session.pty.resize(cols, rows)
 	// Authoritative size fan-out: every viewer converges on the same grid.
-	const msg = JSON.stringify({ type: 'resize', cols, rows })
+	const resizeMsg: TermServerMessage = { type: 'resize', cols, rows }
+	const msg = JSON.stringify(resizeMsg)
 	for (const ws of session.clients) {
 		if (ws.readyState === ws.OPEN) ws.send(msg)
 	}
@@ -300,7 +300,8 @@ server.on('upgrade', (req, socket, head) => {
 		// Bring the newcomer up to speed: current grid size, then the recent
 		// output so the screen renders immediately (tmux also repaints on its
 		// next output, which papers over any escape sequences cut mid-stream).
-		ws.send(JSON.stringify({ type: 'attached', cols: session.cols, rows: session.rows }))
+		const attachedMsg: TermServerMessage = { type: 'attached', cols: session.cols, rows: session.rows }
+		ws.send(JSON.stringify(attachedMsg))
 		if (session.scrollback.length > 0) {
 			ws.send(Buffer.concat(session.scrollback), { binary: true })
 		}
@@ -309,16 +310,19 @@ server.on('upgrade', (req, socket, head) => {
 
 		ws.on('message', (raw, isBinary) => {
 			if (isBinary) return
-			let msg: { type?: string; data?: string; cols?: number; rows?: number }
+			let parsed: unknown
 			try {
-				msg = JSON.parse(raw.toString())
+				parsed = JSON.parse(raw.toString())
 			} catch {
 				return
 			}
-			if (msg.type === 'input' && typeof msg.data === 'string') {
+			const result = termClientMessage.safeParse(parsed)
+			if (!result.success) return
+			const msg = result.data
+			if (msg.type === 'input') {
 				session.pty.write(msg.data)
 			} else if (msg.type === 'resize') {
-				resizeSession(session, Number(msg.cols), Number(msg.rows))
+				resizeSession(session, msg.cols, msg.rows)
 			}
 		})
 
