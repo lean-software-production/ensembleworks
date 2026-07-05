@@ -31,6 +31,7 @@ import { createTerminalStatusRouter } from './features/terminal-status.ts'
 import { createTranscriptRouter } from './features/transcript.ts'
 import { createUploadsRouter } from './features/uploads.ts'
 import { createWhoamiRouter } from './features/whoami.ts'
+import { createWriteScopeGuard } from './features/write-scope.ts'
 import { createGatewayPlane } from './gateway-registry.ts'
 import type { PluginServerContext } from './kernel/context.ts'
 import { createMediaService } from './kernel/media.ts'
@@ -75,6 +76,9 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	// av (livekit-token, kick, participants, pulse) → terminal-status → sticky
 	// → transcript → shape → frames → roadmap → uploads
 	app.use('/api', express.json())
+
+	// Write scoping: read-only service tokens are 403'd on mutating requests.
+	app.use(createWriteScopeGuard())
 
 	app.get('/api/health', (_req, res) => {
 		res.json({ ok: true, rooms: [...roomHost.rooms.keys()] })
