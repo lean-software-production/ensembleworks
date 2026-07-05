@@ -26,7 +26,7 @@ import {
 	TMUX_SESSION_PREFIX,
 	type TermServerMessage,
 } from '@ensembleworks/contracts'
-import { spawnPty, type Pty } from './terminal/pty.ts'
+import { openTmuxSession, type TmuxSession } from '@ensembleworks/contracts/session-manager'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 const PORT = Number(process.env.PORT ?? 8789)
@@ -118,12 +118,10 @@ function probeRunAs(): void {
 
 interface TermSession {
 	id: string
-	pty: Pty
+	pty: TmuxSession
 	clients: Set<WebSocket>
 	scrollback: Buffer[]
 	scrollbackBytes: number
-	cols: number
-	rows: number
 }
 
 const sessions = new Map<string, TermSession>()
@@ -136,14 +134,7 @@ function getOrCreateSession(id: string, cols: number, rows: number): TermSession
 	const existing = sessions.get(id)
 	if (existing) return existing
 
-	const spec = tmuxSpawnSpec(id)
-	const proc = spawnPty(spec.file, spec.args, {
-		name: 'xterm-256color',
-		cols,
-		rows,
-		cwd: spec.cwd,
-		env: spec.env,
-	})
+	const proc = openTmuxSession(tmuxSpawnSpec(id), cols, rows)
 
 	const session: TermSession = {
 		id,
@@ -151,8 +142,6 @@ function getOrCreateSession(id: string, cols: number, rows: number): TermSession
 		clients: new Set(),
 		scrollback: [],
 		scrollbackBytes: 0,
-		cols,
-		rows,
 	}
 
 	proc.onData((data) => {
@@ -185,15 +174,9 @@ function getOrCreateSession(id: string, cols: number, rows: number): TermSession
 }
 
 function resizeSession(session: TermSession, cols: number, rows: number) {
-	if (!Number.isInteger(cols) || !Number.isInteger(rows)) return
-	cols = Math.max(20, Math.min(500, cols))
-	rows = Math.max(5, Math.min(200, rows))
-	if (cols === session.cols && rows === session.rows) return
-	session.cols = cols
-	session.rows = rows
-	session.pty.resize(cols, rows)
+	if (!session.pty.resize(cols, rows)) return
 	// Authoritative size fan-out: every viewer converges on the same grid.
-	const resizeMsg: TermServerMessage = { type: 'resize', cols, rows }
+	const resizeMsg: TermServerMessage = { type: 'resize', cols: session.pty.cols, rows: session.pty.rows }
 	const msg = JSON.stringify(resizeMsg)
 	for (const ws of session.clients) {
 		if (ws.readyState === ws.OPEN) ws.send(msg)
@@ -303,7 +286,7 @@ server.on('upgrade', (req, socket, head) => {
 		// Bring the newcomer up to speed: current grid size, then the recent
 		// output so the screen renders immediately (tmux also repaints on its
 		// next output, which papers over any escape sequences cut mid-stream).
-		const attachedMsg: TermServerMessage = { type: 'attached', cols: session.cols, rows: session.rows }
+		const attachedMsg: TermServerMessage = { type: 'attached', cols: session.pty.cols, rows: session.pty.rows }
 		ws.send(JSON.stringify(attachedMsg))
 		if (session.scrollback.length > 0) {
 			ws.send(Buffer.concat(session.scrollback), { binary: true })

@@ -1,17 +1,14 @@
 /**
- * Server-local PTY wrapper presenting the exact node-pty surface the terminal
- * gateway consumes (spawn/onData/onExit/resize/write/kill), backed by Bun's
- * built-in PTY. node-pty is a native Node addon Bun cannot load — this is the
- * minimal in-place replacement. Sub-project 2 extracts this into
- * contracts/src/session-manager.ts shared with the CLI connector; for now it
- * lives in the server so this slice stays self-contained.
+ * PTY wrapper backing the shared tmux session manager: presents the node-pty
+ * surface (spawn/onData/onExit/resize/write/kill) over Bun's built-in PTY.
+ * node-pty is a native Node addon Bun cannot load — this is the replacement.
+ * Internal to @ensembleworks/contracts (imported by session-manager.ts); reached
+ * only via the ./session-manager subpath, never the browser barrel (index.ts).
  *
- * Bun PTY API pinned against Bun >= 1.3.14 by the Task 3 spike (see the
- * "Bun.Terminal API notes" in the plan's Execution notes): output is delivered
- * via the `terminal.data` callback as Uint8Array (decoded here to a string),
- * NOT a readable stream; process exit comes from `proc.exited`, never the
- * terminal's own `exit` callback (which is PTY-stream lifecycle and fires
- * twice).
+ * Bun PTY API pinned against Bun >= 1.3.14: output is delivered via the
+ * `terminal.data` callback as Uint8Array (decoded here to a string), NOT a
+ * readable stream; process exit comes from `proc.exited`, never the terminal's
+ * own `exit` callback (which is PTY-stream lifecycle and fires twice).
  */
 export interface PtyOptions {
   name: string
@@ -36,7 +33,7 @@ export function spawnPty(file: string, args: string[], opts: PtyOptions): Pty {
 
   // Bun delivers PTY output through the terminal `data` callback as a
   // Uint8Array; decode (stream:true so multi-byte UTF-8 isn't split at chunk
-  // boundaries) and hand the gateway a string. Key is `name`, not `term`.
+  // boundaries) and hand the caller a string. Key is `name`, not `term`.
   const proc = Bun.spawn([file, ...args], {
     cwd: opts.cwd,
     env: opts.env,
