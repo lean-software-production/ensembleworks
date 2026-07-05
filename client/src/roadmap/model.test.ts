@@ -1,5 +1,5 @@
 // Unit tests for the pure roadmap client model.
-// Run with: npx tsx src/roadmap/model.test.ts
+// Run with: bun src/roadmap/model.test.ts
 import assert from 'node:assert/strict'
 import {
 	applyLocalOp,

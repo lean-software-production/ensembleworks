@@ -2,7 +2,7 @@
 // Boots the express app in-process via createSyncApp, seeds a room through
 // getOrCreateRoom().updateStore(), then exercises /api/terminal-status,
 // /api/sticky and the /api/health regression guard.
-// Run with: npx tsx src/canvas-api.test.ts
+// Run with: bun src/canvas-api.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'

@@ -2,7 +2,7 @@
  * Tests for the client-computed spatial stamp — the {at, frame} pair each
  * browser publishes via presence.meta.stamp. Semantics must match what the
  * server used to compute in app.ts (frameAtPoint/viewportCenter), relocated.
- * Run with: npx tsx contracts/src/stamp.test.ts
+ * Run with: bun contracts/src/stamp.test.ts
  */
 import assert from 'node:assert/strict'
 import { computeStamp, type StampRecord } from './stamp.js'

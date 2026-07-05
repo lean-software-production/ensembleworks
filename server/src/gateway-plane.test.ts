@@ -1,6 +1,6 @@
 // Integration test for the gateway plane: connect-equals-register, list,
 // relay splicing end-to-end over real WebSockets against an in-process app.
-// Run with: npx tsx src/gateway-plane.test.ts
+// Run with: bun src/gateway-plane.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
@@ -14,7 +14,11 @@ const openSocket = (url: string) =>
 	new Promise<WebSocket>((resolve, reject) => {
 		const ws = new WebSocket(url)
 		ws.once('open', () => resolve(ws))
-		ws.once('error', reject)
+		// Persistent (not once): a rejected upgrade can emit 'error' more than once
+		// under Bun's ws, and a second error with no listener would escape as an
+		// unhandled crash. reject() on an already-settled promise is a harmless
+		// no-op, so this stays correct for both the reject-path and opened sockets.
+		ws.on('error', reject)
 	})
 
 const nextMessage = (ws: WebSocket) =>
@@ -22,7 +26,16 @@ const nextMessage = (ws: WebSocket) =>
 		ws.once('message', (data, isBinary) => resolve({ data: data as Buffer, isBinary }))
 	})
 
-const closed = (ws: WebSocket) => new Promise<void>((resolve) => ws.once('close', () => resolve()))
+const closed = (ws: WebSocket) =>
+	new Promise<void>((resolve) => {
+		// A replacement connect closes this socket as a side effect of the new
+		// socket's open resolving; under Bun's timing that 'close' can already have
+		// fired by the time we attach the listener (readyState CLOSED), so a bare
+		// once('close') would wait forever. Resolve immediately if already closed —
+		// robust under both Node and Bun; the assertions below are unchanged.
+		if (ws.readyState === WebSocket.CLOSED) return resolve()
+		ws.once('close', () => resolve())
+	})
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 async function main() {

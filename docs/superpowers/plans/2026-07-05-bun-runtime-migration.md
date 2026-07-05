@@ -1763,3 +1763,46 @@ term.close();                        // release the PTY (Terminal.close(): void)
 | `handle.resize(cols, rows)`       | `proc.terminal.resize(cols, rows)`                                            |
 | `handle.write(data: string)`      | `proc.terminal.write(data)` (accepts string directly)                        |
 | `handle.kill()`                   | `proc.kill()` (on the `Subprocess`, not the `Terminal`); call `proc.terminal.close()` afterward to release the PTY |
+
+## Task 6 — Node→Bun test divergences fixed (beyond the header sweep)
+
+Running the unchanged suites under `bun` instead of `npx tsx` surfaced four latent
+Node-timing / Node-fetch assumptions. All fixes are behaviour-neutral for
+production (they only touch test helpers / test request shapes); the assertions
+are unchanged. The full suite is green: **`all 31 suites passed`**.
+
+1. **`server/src/gateway-plane.test.ts` — `closed()` already-closed guard.** A
+   replacement gateway connect closes the old socket + its riding browser as a
+   side effect of the new socket's `open` resolving. Under Bun that close
+   completes fast enough that `readyState` is already `CLOSED` (3) by the time the
+   test attaches `ws.once('close', …)`, so a bare `once` waited forever (hang).
+   Fix: resolve immediately if already closed. Under Node the event happened to
+   land after attach; the guard is robust under both.
+
+2. **`server/src/gateway-plane.test.ts` — persistent `openSocket` error handler.**
+   A rejected upgrade (offline/bad gateway, steps 9–10) emits `error` more than
+   once under Bun's `ws`; `.once('error', reject)` left the second error with no
+   listener → unhandled-error crash. Fix: `.on('error', reject)` (reject on an
+   already-settled promise is a no-op, so it stays handled).
+
+3. **`server/src/relay-loopback.test.ts` — CWD-independent gateway spawn.** The
+   test spawned the gateway child with a CWD-relative `src/terminal-gateway.ts`.
+   That worked when the suite ran from `server/` (`cd server && npx tsx …`), but
+   the new `bun run test` runner launches every suite from the repo root, so the
+   child could not resolve the path (`Module not found`). Fix: spawn via
+   `path.join(import.meta.dir, 'terminal-gateway.ts')` with `cwd` pinned to the
+   server workspace root — CWD-independent, gateway keeps its standalone cwd.
+
+4. **`server/src/uploads-api.test.ts` — explicit `Content-Type` on the PUT.**
+   `express.raw({ type: '*/*' })` matches on the request's content type. Node's
+   fetch defaulted a string body to `text/plain`, so the header was implicit;
+   Bun's fetch sends **no** Content-Type for a string body, so body-parser skipped
+   and `req.body` was `undefined` → `writeFile(path, undefined)` threw 500. Real
+   uploads (the tldraw assetStore) always carry a content type, and a genuinely
+   content-type-less PUT would 500 identically under Node — so this is a test
+   artifact, not a production regression. Fix: the `put()` helper sends
+   `Content-Type: application/octet-stream` (what a real binary upload carries).
+
+Runner note: `scripts/run-tests.ts` discovers suites from the repo root and runs
+each with `bun <repo-root-relative-path>` (CWD = repo root). Fix #3 makes the one
+CWD-dependent suite robust to that; the other 30 suites are CWD-independent.

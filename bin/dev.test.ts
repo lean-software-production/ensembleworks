@@ -1,5 +1,5 @@
 // Tests for bin/dev's pure logic (service table gating, parsers).
-// Run with: npx tsx bin/dev.test.ts
+// Run with: bun bin/dev.test.ts
 import assert from 'node:assert/strict'
 import {
 	PORTS,

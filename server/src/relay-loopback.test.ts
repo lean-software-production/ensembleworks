@@ -1,7 +1,7 @@
 // Loopback-relay integration test (spike spec §7.2): the EXISTING Node
 // terminal gateway, unmodified, reached through the relay plane via a
 // test-only bridging shim. Also prints relay-vs-direct echo latency.
-// Precondition: tmux on PATH. Run with: npx tsx src/relay-loopback.test.ts
+// Precondition: tmux on PATH. Run with: bun src/relay-loopback.test.ts
 import assert from 'node:assert/strict'
 import { execFile, spawn, type ChildProcess } from 'node:child_process'
 import { mkdtemp } from 'node:fs/promises'
@@ -105,7 +105,13 @@ async function main() {
 
 	try {
 		// 1. Spawn the real terminal gateway, unmodified, on a fixed test port.
-		termGw = spawn('bun', ['src/terminal-gateway.ts'], {
+		// Resolve the gateway script relative to THIS file, not the CWD: the
+		// `bun run test` runner launches every suite from the repo root, so a
+		// CWD-relative 'src/terminal-gateway.ts' would not resolve. cwd is pinned
+		// to the server workspace root so the child keeps the working directory it
+		// had when the suite was run standalone (cd server && bun src/...).
+		termGw = spawn('bun', [path.join(import.meta.dir, 'terminal-gateway.ts')], {
+			cwd: path.join(import.meta.dir, '..'),
 			env: { ...process.env, PORT: String(TERM_PORT) },
 			stdio: ['ignore', 'pipe', 'inherit'],
 		})

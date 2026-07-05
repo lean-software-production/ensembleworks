@@ -1,5 +1,5 @@
 // Tests for the VM-pressure reading and the /api/pulse heartbeat.
-// Run with: npx tsx src/vm-stats.test.ts
+// Run with: bun src/vm-stats.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'

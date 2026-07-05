@@ -1,4 +1,4 @@
-// Tests for the RoomService URL resolver. Run with: npx tsx src/livekit-url.test.ts
+// Tests for the RoomService URL resolver. Run with: bun src/livekit-url.test.ts
 import assert from 'node:assert/strict'
 import { resolveRoomServiceUrl } from './livekit-url.ts'
 

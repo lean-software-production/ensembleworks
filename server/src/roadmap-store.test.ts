@@ -1,5 +1,5 @@
 // Unit tests for the pure roadmap document logic and the JSON-file store.
-// Run with: npx tsx src/roadmap-store.test.ts
+// Run with: bun src/roadmap-store.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'

@@ -1,5 +1,5 @@
 /**
- * Run: npx tsx src/kernel/plugin.test.ts
+ * Run: bun src/kernel/plugin.test.ts
  */
 import assert from 'node:assert/strict'
 import type { ClientPlugin } from './plugin'

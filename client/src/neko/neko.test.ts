@@ -1,5 +1,5 @@
 /**
- * neko per-viewer URL composition. Run: npx tsx src/neko/neko.test.ts
+ * neko per-viewer URL composition. Run: bun src/neko/neko.test.ts
  */
 import assert from 'node:assert/strict'
 import {
@@ -62,5 +62,5 @@ console.log('ok - neko url composition + aspect lock')
 
 console.log("ALL NEKO TESTS PASSED")
 // The tldraw import keeps the node event loop alive after assertions finish —
-// exit explicitly so `npx tsx` runs terminate.
+// exit explicitly so `bun` runs terminate.
 process.exit(0)

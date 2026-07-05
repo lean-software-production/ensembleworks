@@ -1,4 +1,4 @@
-// Run with: npx tsx src/terminal/wsUrl.test.ts   (from client/)
+// Run with: bun src/terminal/wsUrl.test.ts   (from client/)
 import assert from 'node:assert/strict'
 import { buildTermWsUrl } from './wsUrl'
 

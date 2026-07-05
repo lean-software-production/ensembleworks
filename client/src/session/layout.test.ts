@@ -1,6 +1,6 @@
 /**
  * Tiny dependency-free test for the session layout geometry.
- * Run with: npx tsx src/session/layout.test.ts
+ * Run with: bun src/session/layout.test.ts
  *
  * Covers the 9 invariants from docs/session-mvp-plan.md, Cycle 1.
  */
