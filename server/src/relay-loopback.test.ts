@@ -105,7 +105,7 @@ async function main() {
 
 	try {
 		// 1. Spawn the real terminal gateway, unmodified, on a fixed test port.
-		termGw = spawn('npx', ['tsx', 'src/terminal-gateway.ts'], {
+		termGw = spawn('bun', ['src/terminal-gateway.ts'], {
 			env: { ...process.env, PORT: String(TERM_PORT) },
 			stdio: ['ignore', 'pipe', 'inherit'],
 		})

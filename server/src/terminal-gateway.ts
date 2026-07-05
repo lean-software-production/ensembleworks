@@ -2,7 +2,7 @@
  * EnsembleWorks terminal gateway.
  *
  * Bridges browser xterm.js instances to tmux sessions on this VM. The gateway
- * holds exactly ONE tmux client (a node-pty) per canvas session and fans its
+ * holds exactly ONE tmux client (a PTY) per canvas session and fans its
  * output out to every attached WebSocket, so all viewers see identical bytes.
  * tmux is the substrate: sessions survive the gateway, the browser, and are
  * reachable from a plain `ssh` + `tmux attach -t canvas-<id>`.
@@ -26,7 +26,7 @@ import {
 	TMUX_SESSION_PREFIX,
 	type TermServerMessage,
 } from '@ensembleworks/contracts'
-import pty, { type IPty } from 'node-pty'
+import { spawnPty, type Pty } from './terminal/pty.ts'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 const PORT = Number(process.env.PORT ?? 8789)
@@ -118,7 +118,7 @@ function probeRunAs(): void {
 
 interface TermSession {
 	id: string
-	pty: IPty
+	pty: Pty
 	clients: Set<WebSocket>
 	scrollback: Buffer[]
 	scrollbackBytes: number
@@ -137,7 +137,7 @@ function getOrCreateSession(id: string, cols: number, rows: number): TermSession
 	if (existing) return existing
 
 	const spec = tmuxSpawnSpec(id)
-	const proc = pty.spawn(spec.file, spec.args, {
+	const proc = spawnPty(spec.file, spec.args, {
 		name: 'xterm-256color',
 		cols,
 		rows,
