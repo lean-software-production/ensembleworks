@@ -14,6 +14,8 @@
  * feel more live (keep the server's PULSE_STALE_MS at ~2.5× whatever you pick).
  */
 import { useEffect, useRef, useState } from 'react'
+import { rawUserId } from '@ensembleworks/contracts'
+import { scheduler } from '../kernel/scheduler'
 
 export const PULSE_INTERVAL_MS = 30_000
 
@@ -55,12 +57,6 @@ interface PulseResponse {
 	latencies: Record<string, LatencySample>
 }
 
-// editor.user.getId() is a prefixed TLUserId ("user:abc"); the server keys
-// latency by the raw form, matching presence elsewhere in the AV overlay.
-function rawId(id: string): string {
-	return id.replace(/^user:/, '')
-}
-
 export function useSessionPulse(roomId: string, identity: string): SessionPulse {
 	const [pulse, setPulse] = useState<SessionPulse>({ vm: null, latencies: {}, history: {} })
 	// The round-trip we measured on the previous tick, reported on the next one.
@@ -71,7 +67,7 @@ export function useSessionPulse(roomId: string, identity: string): SessionPulse 
 
 	useEffect(() => {
 		let cancelled = false
-		const userId = rawId(identity)
+		const userId = rawUserId(identity)
 
 		const tick = async () => {
 			const t0 = performance.now()
@@ -114,10 +110,12 @@ export function useSessionPulse(roomId: string, identity: string): SessionPulse 
 		}
 
 		tick()
-		const timer = setInterval(tick, PULSE_INTERVAL_MS)
+		const cancel = scheduler.every(PULSE_INTERVAL_MS, () => {
+			void tick()
+		})
 		return () => {
 			cancelled = true
-			clearInterval(timer)
+			cancel()
 		}
 	}, [roomId, identity])
 
