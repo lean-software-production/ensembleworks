@@ -30,6 +30,7 @@ import { createStickyRouter } from './features/sticky.ts'
 import { createTerminalStatusRouter } from './features/terminal-status.ts'
 import { createTranscriptRouter } from './features/transcript.ts'
 import { createUploadsRouter } from './features/uploads.ts'
+import { createWhoamiRouter } from './features/whoami.ts'
 import { createGatewayPlane } from './gateway-registry.ts'
 import type { PluginServerContext } from './kernel/context.ts'
 import { createMediaService } from './kernel/media.ts'
@@ -83,6 +84,9 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	// See docs/superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md
 	const gatewayPlane = createGatewayPlane()
 	app.get('/api/gateway/list', gatewayPlane.listHandler)
+
+	// Auth-plane foundation: caller identity envelope (human|bot|anonymous).
+	app.use(createWhoamiRouter())
 
 	app.use(createAvRouter(ctx))
 
