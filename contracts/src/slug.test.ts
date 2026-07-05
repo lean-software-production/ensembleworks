@@ -2,7 +2,7 @@
  * Tests for roadmap-name slugification — the id under which a roadmap is
  * stored and fuzzily matched. Client (ui.tsx) and server (app.ts) both call
  * this; a drift here means pushes create duplicate roadmaps.
- * Run with: npx tsx contracts/src/slug.test.ts
+ * Run with: bun contracts/src/slug.test.ts
  */
 import assert from 'node:assert/strict'
 import { slugify } from './slug.js'

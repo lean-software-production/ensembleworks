@@ -5,7 +5,7 @@
  */
 import { mkdirSync } from 'node:fs'
 import path from 'node:path'
-import { DatabaseSync } from 'node:sqlite'
+import { DatabaseSync } from './sqlite.ts'
 import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 import { schema } from '../schema.ts'
 

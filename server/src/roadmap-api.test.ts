@@ -1,7 +1,7 @@
 // Contract tests for the roadmap HTTP API. Boots the express app in-process
 // via createSyncApp, seeds a roadmap shape for the rev fan-out check, then
 // exercises GET/POST /api/roadmap end to end.
-// Run with: npx tsx src/roadmap-api.test.ts
+// Run with: bun src/roadmap-api.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'

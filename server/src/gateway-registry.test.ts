@@ -1,5 +1,5 @@
 // Unit tests for the relay framing + registry core (spike spec §1/§2/§5).
-// Pure fakes — no sockets, no HTTP. Run with: npx tsx src/gateway-registry.test.ts
+// Pure fakes — no sockets, no HTTP. Run with: bun src/gateway-registry.test.ts
 import assert from 'node:assert/strict'
 import {
 	BROWSER_BUFFER_LIMIT,

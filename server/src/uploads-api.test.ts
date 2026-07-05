@@ -2,7 +2,7 @@
 // asset-id rules: the client assetStore keeps dots from the original filename
 // ("<uniqueId>-photo.png"), so ids with extensions must be accepted, while
 // path-traversal shapes (".", "..", dotfiles, separators) stay rejected.
-// Run with: npx tsx src/uploads-api.test.ts
+// Run with: bun src/uploads-api.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
@@ -18,7 +18,17 @@ async function main() {
 	const base = `http://127.0.0.1:${address.port}`
 
 	const put = (id: string, body: string) =>
-		fetch(`${base}/uploads/${id}`, { method: 'PUT', body })
+		// A real asset upload (the tldraw assetStore) always carries a content type,
+		// which is what express.raw({ type: '*/*' }) matches on. Node's fetch
+		// defaulted a string body to text/plain so the header was implicit; Bun's
+		// fetch sends no Content-Type for a string body, so send one explicitly —
+		// otherwise body-parser skips and req.body is undefined. This mirrors
+		// production; the asset-id assertions below are unchanged.
+		fetch(`${base}/uploads/${id}`, {
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/octet-stream' },
+			body,
+		})
 
 	// The assetStore's real id shape — uniqueId prefix + sanitized filename
 	// with its extension dot — must round-trip.

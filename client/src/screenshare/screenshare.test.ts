@@ -1,5 +1,5 @@
 /**
- * Screen-share aspect lock + title helpers. Run: npx tsx src/screenshare/screenshare.test.ts
+ * Screen-share aspect lock + title helpers. Run: bun src/screenshare/screenshare.test.ts
  */
 import assert from 'node:assert/strict'
 import {

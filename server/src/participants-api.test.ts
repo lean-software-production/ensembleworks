@@ -2,7 +2,7 @@
 // Exercises the pure helpers directly (getAccessIdentity, buildParticipants) and
 // boots the app for the HTTP contract. Verified-JWT mode needs live Cloudflare
 // keys, so it's covered by config + manual validation, not here.
-// Run with: npx tsx src/participants-api.test.ts
+// Run with: bun src/participants-api.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'

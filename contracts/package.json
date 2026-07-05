@@ -7,10 +7,10 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "typecheck": "tsc --noEmit"
+    "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
-    "@tldraw/validate": "^5.1.0",
+    "@tldraw/validate": "5.1.0",
     "zod": "^4.0.0"
   },
   "devDependencies": {

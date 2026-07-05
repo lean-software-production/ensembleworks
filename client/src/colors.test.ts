@@ -1,5 +1,5 @@
 /**
- * Pure identity-colour palette. Run: npx tsx src/colors.test.ts
+ * Pure identity-colour palette. Run: bun src/colors.test.ts
  */
 import assert from 'node:assert/strict'
 import {

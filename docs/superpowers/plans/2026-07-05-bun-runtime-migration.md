@@ -28,7 +28,7 @@ These are baked into the task order below; violating them breaks the branch mid-
 
 5. **Per-task green + commits.** Every task ends by committing, and every task must leave `bun run typecheck` green. Each commit uses these trailer lines:
    ```
-   Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+   Co-Authored-By: Claude <noreply@anthropic.com>
    Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
    ```
    (Git wrapper note: this repo's `git` runs through a direnv wrapper — commit exactly as shown.)
@@ -97,7 +97,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   build(bun): pin bun 1.3.14, bun.lock, root scripts to --filter form
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -251,7 +251,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   feat(server): bun:sqlite DatabaseSync adapter; rooms.ts off node:sqlite
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -303,7 +303,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   docs(plan): record Bun.Terminal API surface from the 1.3.14 spike
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -476,7 +476,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   feat(server): node-pty -> Bun.Terminal wrapper; drop node-pty dep
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -606,7 +606,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   build(bun): workspace scripts node-independent (bun/--bun vite/bunx tsc), drop tsx
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -768,7 +768,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   test(bun): single bun run test entrypoint; headers npx tsx -> bun; convert user-id suite
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -1198,7 +1198,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   build(dev): bin/dev + devcontainer onto Bun; enforce bun floor; drop .nvmrc
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -1456,7 +1456,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   build(deploy): drop Node pin references; release build gate + bootstrap onto Bun
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -1597,7 +1597,7 @@ These are baked into the task order below; violating them breaks the branch mid-
   git commit -m "$(cat <<'EOF'
   docs(bun): contributor runtime Node -> bun; record migration verification + R1
 
-  Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>
+  Co-Authored-By: Claude <noreply@anthropic.com>
   Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
   EOF
   )"
@@ -1608,3 +1608,269 @@ These are baked into the task order below; violating them breaks the branch mid-
 ## Execution notes
 
 _(Executors: fill this section as you go — capture the Task 3 `Bun.Terminal API notes`, the Task 9 R1 hot-reload result, and any deviations from the verbatim blocks above.)_
+
+### Commit trailer (updated 2026-07-05)
+
+All commit blocks originally specified a `Co-Authored-By: Claude Fable 5` trailer.
+Fable is out of credits for this run, so **every commit uses the generic trailer**:
+```
+Co-Authored-By: Claude <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01HfDBiUzPoSUBADt5QpaVTC
+```
+
+### Task 1 deviations (commit 3126094)
+
+Two additions beyond the verbatim block, both to keep the runtime swap
+behaviour-neutral (they made the task's own "typecheck green" gate meaningful):
+
+1. **`bunfig.toml` (new)** — `[install] linker = "hoisted"`. Bun 1.3.14's default
+   *isolated* linker does not hoist transitive deps into a flat `node_modules`,
+   so the client's phantom `@tldraw/tlschema` module-augmentation
+   (`declare module '@tldraw/tlschema'` in the five ShapeUtil files) failed to
+   resolve. The hoisted linker restores npm-parity flat `node_modules`.
+
+2. **tldraw family pinned to exact `5.1.0`** across `client/package.json`
+   (`tldraw`, `@tldraw/sync`), `server/package.json` (`@tldraw/sync-core`,
+   `@tldraw/tlschema`, `@tldraw/utils`, `@tldraw/validate`) and
+   `contracts/package.json` (`@tldraw/validate`). The parent branch's
+   `package-lock.json` locked the whole `@tldraw/*` scope at 5.1.0; dropping the
+   lock let the `^5.1.0` ranges float to 5.2.2, which (a) tightened
+   `Editor.zoomToUser()` to a branded `TLUserId` and (b) hoisted a 5.2.2
+   `tlschema` to root (via the server's `@tldraw/sync-core`) that the client's
+   5.1.0-based augmentation then bound to — breaking the custom-shape unions.
+   Pinning reproduces the shipped 5.1.0 closure exactly (a single
+   `@tldraw/tlschema@5.1.0` hoisted at root). A tldraw *upgrade* is deliberately
+   left as separate future work — not part of a runtime migration.
+
+3. **LiveKit runtime SDKs pinned to shipped versions** — `livekit-client`
+   (`2.19.2`, client) and `livekit-server-sdk` (`2.15.4`, server). The lockfile
+   regen also floated these two `^`-ranged runtime deps by a minor version
+   (2.20.0 / 2.16.0); pinned to what the parent lock shipped so the migration
+   swaps the runtime engine, not the AV dependency versions (same rationale as
+   the tldraw pin). The other two minor drifts the review found are left on their
+   ranges: `tsx` (removed entirely in Task 5) and `@types/node` (types-only).
+
+## Bun.Terminal API notes
+
+Confirmed against **Bun 1.3.14** (`bun --version` → `1.3.14`), via a throwaway
+script at `server/src/terminal/_pty_spike.ts` (spawned `tmux -V` and an
+interactive `bash --noprofile --norc` session, then deleted — not committed).
+The project's own `node_modules/bun-types@1.3.14/bun.d.ts` ships full JSDoc for
+this API and matches the runtime behaviour exactly; excerpts from it are
+quoted below alongside the empirical confirmation.
+
+**The plan's hypothesis was wrong on the read mechanism and partially wrong on
+the handle shape.** Bun 1.3.14's PTY API is **callback-based**, not
+`for await (const chunk of term.readable)` — there is no `.readable` stream on
+the terminal object at all. Details:
+
+1. **Spawn form — confirmed, close to hypothesis.**
+   `Bun.spawn([cmd, ...args], { terminal: { cols, rows, name, data, exit, drain } })`.
+   The option key is `terminal` (matches hypothesis) but its value is a
+   `TerminalOptions` object whose *callbacks* (`data`, `exit`, `drain`) are how
+   you read output — there is no separate "get a stream" step. Key name is
+   `name` (not `term`) for the terminal type string (default
+   `"xterm-256color"`). You may also pass a pre-built `new Bun.Terminal(opts)`
+   instead of a plain options object, to reuse one PTY across multiple spawns.
+
+2. **Handle location — confirmed.** `proc.terminal` is the PTY handle (a
+   `Bun.Terminal` instance), exactly as hypothesized. `proc.stdin` /
+   `proc.stdout` / `proc.stderr` are all `null` when `terminal` is used.
+   `Object.keys(proc)` returns `[]` (all Subprocess members are prototype
+   getters); `Terminal`'s own prototype methods are:
+   `close, closed, controlFlags, inputFlags, localFlags, outputFlags, ref,
+   resize, setRawMode, unref, write, constructor`.
+
+3. **Output read — differs from hypothesis.** NOT `for await` over a
+   `.readable`. It's the `data` **callback** passed in `TerminalOptions`:
+   `data?: (terminal: Terminal, data: Uint8Array<ArrayBuffer>) => void`.
+   Chunks arrive as **`Uint8Array`**, not `string` — confirmed empirically
+   (`Object.prototype.toString.call(data)` → `"[object Uint8Array]"`,
+   `data instanceof Uint8Array` → `true`). **The wrapper MUST decode with
+   `TextDecoder` (`{ stream: true }` across calls, to not split multi-byte
+   UTF-8 sequences at chunk boundaries) before handing a string to
+   `handle.onData`.**
+
+4. **Write — confirmed.** `terminal.write(data: string | BufferSource): number`
+   — accepts a string directly (no manual encoding needed) and returns the
+   number of bytes written. Confirmed: `term.write("echo SPIKE_MARKER_$((1+1))\n")`
+   returned `27` and the shell echoed `SPIKE_MARKER_2` back through the `data`
+   callback.
+
+5. **Resize — confirmed.** `terminal.resize(cols: number, rows: number): void`.
+   Confirmed by resizing 80×24 → 120×40 then running `stty size` inside the
+   PTY'd bash session, which echoed back `40 120` (rows cols), matching the
+   new size exactly.
+
+6. **Exit — confirmed, with an important nuance.** The subprocess's real exit
+   code/lifecycle comes from **`await proc.exited: Promise<number>`** (and the
+   synchronous `proc.exitCode` once resolved) — this is what the wrapper's
+   `onExit` should be driven from. There is *also* a `TerminalOptions.exit`
+   callback (`(terminal, exitCode, signal) => void`), but per `bun.d.ts` its
+   `exitCode` is "a PTY lifecycle status (0=clean EOF, 1=error), NOT the
+   subprocess exit code" — confirmed empirically: in both the `tmux -V` and
+   `bash` sub-experiments, this callback fired **twice** — once with
+   `exitCode: 1` (when the child closed its end of the PTY, before
+   `proc.exited` resolved) and again with `exitCode: 0` (when we explicitly
+   called `terminal.close()`). **Do not wire the wrapper's `onExit` to
+   `TerminalOptions.exit` — use `proc.exited` instead**; treat the terminal's
+   own `exit` callback (if used at all) as an internal stream-lifecycle signal
+   only.
+
+7. **Kill — confirmed.** `proc.kill(exitCode?: number | NodeJS.Signals): void`
+   on the `Subprocess`, same as normal (non-PTY) Bun subprocesses — there is no
+   separate `terminal.kill()`. `Terminal` itself has `close(): void` (and
+   `[Symbol.asyncDispose]` for `await using`) to release the PTY resource;
+   calling `proc.kill()` after the child already exited was confirmed to be a
+   safe no-throw no-op.
+
+**Verbatim working shape** (spawn → read → write → resize → exit → kill), the
+exact pattern Task 4 should reproduce:
+
+```ts
+const decoder = new TextDecoder();
+let collected = "";
+
+const proc = Bun.spawn(["bash", "--noprofile", "--norc"], {
+  terminal: {
+    cols: 80,
+    rows: 24,
+    name: "xterm-256color",
+    data: (term, data) => {
+      collected += decoder.decode(data, { stream: true }); // Uint8Array -> string
+    },
+    exit: (term, exitCode, signal) => {
+      // PTY stream lifecycle only — NOT the process exit code. Ignore for onExit.
+    },
+  },
+});
+
+const term = proc.terminal!;         // PTY handle lives at proc.terminal
+term.write("echo hello\n");          // write(string | BufferSource): number
+term.resize(120, 40);                // resize(cols, rows): void
+
+const exitCode = await proc.exited;  // real subprocess exit code (Promise<number>)
+proc.kill();                         // Subprocess.kill(), not Terminal.kill()
+term.close();                        // release the PTY (Terminal.close(): void)
+```
+
+**Mapping to the node-pty surface `terminal-gateway.ts` expects:**
+| node-pty (current)              | Bun 1.3.14 equivalent                                                        |
+|----------------------------------|-------------------------------------------------------------------------------|
+| `pty.spawn(file, args, opts)`     | `Bun.spawn([file, ...args], { terminal: { cols, rows, name } })`             |
+| `handle.onData((s: string) => …)` | `TerminalOptions.data` callback, `Uint8Array` — decode with `TextDecoder` (`{ stream: true }`) before calling the wrapper's `onData(str)` |
+| `handle.onExit(() => …)`          | `await proc.exited` (not `TerminalOptions.exit`, which is PTY-stream lifecycle, not process exit, and can fire twice) |
+| `handle.resize(cols, rows)`       | `proc.terminal.resize(cols, rows)`                                            |
+| `handle.write(data: string)`      | `proc.terminal.write(data)` (accepts string directly)                        |
+| `handle.kill()`                   | `proc.kill()` (on the `Subprocess`, not the `Terminal`); call `proc.terminal.close()` afterward to release the PTY |
+
+## Task 6 — Node→Bun test divergences fixed (beyond the header sweep)
+
+Running the unchanged suites under `bun` instead of `npx tsx` surfaced four latent
+Node-timing / Node-fetch assumptions. All fixes are behaviour-neutral for
+production (they only touch test helpers / test request shapes); the assertions
+are unchanged. The full suite is green: **`all 31 suites passed`**.
+
+1. **`server/src/gateway-plane.test.ts` — `closed()` already-closed guard.** A
+   replacement gateway connect closes the old socket + its riding browser as a
+   side effect of the new socket's `open` resolving. Under Bun that close
+   completes fast enough that `readyState` is already `CLOSED` (3) by the time the
+   test attaches `ws.once('close', …)`, so a bare `once` waited forever (hang).
+   Fix: resolve immediately if already closed. Under Node the event happened to
+   land after attach; the guard is robust under both.
+
+2. **`server/src/gateway-plane.test.ts` — persistent `openSocket` error handler.**
+   A rejected upgrade (offline/bad gateway, steps 9–10) emits `error` more than
+   once under Bun's `ws`; `.once('error', reject)` left the second error with no
+   listener → unhandled-error crash. Fix: `.on('error', reject)` (reject on an
+   already-settled promise is a no-op, so it stays handled).
+
+3. **`server/src/relay-loopback.test.ts` — CWD-independent gateway spawn.** The
+   test spawned the gateway child with a CWD-relative `src/terminal-gateway.ts`.
+   That worked when the suite ran from `server/` (`cd server && npx tsx …`), but
+   the new `bun run test` runner launches every suite from the repo root, so the
+   child could not resolve the path (`Module not found`). Fix: spawn via
+   `path.join(import.meta.dir, 'terminal-gateway.ts')` with `cwd` pinned to the
+   server workspace root — CWD-independent, gateway keeps its standalone cwd.
+
+4. **`server/src/uploads-api.test.ts` — explicit `Content-Type` on the PUT.**
+   `express.raw({ type: '*/*' })` matches on the request's content type. Node's
+   fetch defaulted a string body to `text/plain`, so the header was implicit;
+   Bun's fetch sends **no** Content-Type for a string body, so body-parser skipped
+   and `req.body` was `undefined` → `writeFile(path, undefined)` threw 500. Real
+   uploads (the tldraw assetStore) always carry a content type, and a genuinely
+   content-type-less PUT would 500 identically under Node — so this is a test
+   artifact, not a production regression. Fix: the `put()` helper sends
+   `Content-Type: application/octet-stream` (what a real binary upload carries).
+
+Runner note: `scripts/run-tests.ts` discovers suites from the repo root and runs
+each with `bun <repo-root-relative-path>` (CWD = repo root). Fix #3 makes the one
+CWD-dependent suite robust to that; the other 30 suites are CWD-independent.
+
+## Task 9 — final static verification
+
+Docs updated (`AGENTS.md`, symlinked as `CLAUDE.md`; `README.md`): every
+runtime/install instruction now says `bun`/`bun install`/`bun run …`, kept
+`npm version` in the release docs (release.sh's tag tool), and swapped the
+smoke-test block's `npx tsx` invocations for plain `bun`. Beyond the
+prescribed edits, the sweep also caught three additional stale references
+that the prescribed grep pattern didn't target but the code no longer
+matches: the architecture diagram's `(node-pty ⇄ tmux)` (Task 4 replaced
+node-pty with Bun's built-in PTY — now `(Bun PTY ⇄ tmux)`), and two
+dogfood-editing mentions of `tsx watch` / `npm install <pkg>` under
+"Editing from inside" (the systemd units and `package.json` scripts now run
+`bun --watch`; dependency changes are `bun add <pkg>`). Left `npm i -g
+@devcontainers/cli` in README.md alone — `bin/dev-host.mjs`'s actual doctor
+remedy message still says `npm i -g @devcontainers/cli` (that's a host-level
+CLI tool install, not this repo's runtime, and changing it would be a code
+change outside this task's scope).
+
+Static verification gate (all run from
+`.worktrees/bun-runtime-migration`, Bun 1.3.14 on PATH):
+
+| Gate | Result | Key final line |
+|---|---|---|
+| `bun --version` | PASS | `1.3.14` |
+| `bun install` | PASS | `Checked 359 installs across 412 packages (no changes)` — idempotent, no lockfile drift |
+| `bun run typecheck` | PASS | all four workspace typechecks (`contracts`, `client`, `server`, `transcriber`) plus `bin/tsconfig.json` exited 0 |
+| `bun run test` | PASS | `all 31 suites passed` |
+| `bun run build` | PASS | client (Vite v7.3.6 under Bun) + server + transcriber all exited 0 |
+| `bun bin/dev.test.ts` | PASS | `all dev-lib tests passed` |
+| `bash deploy/test/lib_test.sh` | PASS | `ALL PASS` |
+
+`bin/dev doctor` (non-fatal, no live devcontainer from this worktree):
+```
+bin/dev [host] · git worktree — targeting main checkout at /home/mrdavidlaing/Work/lean-software-production/ensembleworks
+bin/dev [host] · not inside a devcontainer → controller mode
+✓ docker           host prerequisite
+✓ devcontainer CLI host prerequisite
+
+(no devcontainer running — `bin/dev up`, then doctor checks inside too)
+```
+Ran clean — host prerequisites (docker, the devcontainer CLI) both present;
+it correctly reported no devcontainer running rather than erroring, since
+`bin/dev up` was deliberately not run.
+
+R1 (does `bun --watch` hot-reload over the devcontainer bind mount?): NOT YET VERIFIED — deferred to the live `bin/dev up` smoke, which the human runs (it needs the devcontainer + a browser and would disturb a running stack). To check: with the stack up, edit a server/src/*.ts file and watch `bin/dev logs sync`/`bin/dev logs term` for a reload; if it doesn't fire, document `bin/dev restart <svc>` as the accepted fallback.
+
+## Devcontainer Bun-only image rebuild — PASSED (blessed proof)
+
+`devcontainer build --workspace-folder .` (devcontainer CLI 0.80.3, Docker
+29.5.1) rebuilt the image from the new Bun Dockerfile: `{"outcome":"success"}`,
+image `vsc-bun-runtime-migration-…` (1.55 GB). Verified inside the built image:
+
+```
+bun --version        -> 1.3.14   (at /usr/local/bin/bun)
+command -v node      -> not found (NODE_ABSENT)
+command -v npm       -> not found (npm ABSENT)
+tmux -V              -> tmux 3.5a
+```
+
+The devcontainer now builds and contains Bun as the only JS runtime — no Node,
+no npm. This is the plan's blessed "rebuild the devcontainer image and confirm
+it builds with Bun only" proof. The Node→Bun install swap in
+`.devcontainer/Dockerfile` (Task 7) works end to end.
+
+Still deferred to a live `bin/dev up` (not run here): the in-browser smoke
+(toolbar/session panel render, terminal create+delete confirm dialog) and R1
+(`bun --watch` hot-reload over the bind mount).

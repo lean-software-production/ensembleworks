@@ -1,5 +1,5 @@
 /**
- * Run: npx tsx src/kernel/roomHooks.test.ts
+ * Run: bun src/kernel/roomHooks.test.ts
  *
  * Uses a duck-typed editor (the screenshare/resolve.ts RoomLike precedent):
  * type-only tldraw imports keep the test runnable under plain tsx.

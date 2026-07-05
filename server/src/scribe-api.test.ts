@@ -3,7 +3,7 @@
 //   /api/shape                  – geo/text/note/arrow create, update, delete
 //   /api/livekit-token?role=    – subscribe-only scribe tokens
 // Boots the express app in-process via createSyncApp, same style as
-// canvas-api.test.ts. Run with: npx tsx src/scribe-api.test.ts
+// canvas-api.test.ts. Run with: bun src/scribe-api.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'

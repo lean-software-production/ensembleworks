@@ -1,6 +1,6 @@
 # EnsembleWorks devcontainer — Debian 13 (trixie), the same OS as the
 # production and dogfood boxes. Everything a keyless contributor needs is
-# baked in: Node (exact version from .nvmrc), tmux, Caddy, the LiveKit OSS
+# baked in: Bun (pinned in .tool-versions), tmux, Caddy, the LiveKit OSS
 # SFU (voice/video via --dev keys) and whisper.cpp + a small model (keyless
 # transcription). Version pins follow deploy/runtime-requirements — bump them
 # together. The shared browser (neko) is deliberately absent: it needs
@@ -13,7 +13,7 @@ ARG WHISPER_TAG=v1.9.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
 		build-essential ca-certificates cmake curl git gh less locales \
-		pkg-config procps python3 sudo tmux xz-utils \
+		pkg-config procps python3 sudo tmux unzip xz-utils \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen
 ENV LANG=en_US.UTF-8
@@ -25,15 +25,14 @@ ENV NODE_OPTIONS=--dns-result-order=ipv4first
 # in). See resolveMode() in bin/dev-lib.mjs.
 ENV ENSEMBLEWORKS_IN_DEVCONTAINER=1
 
-# Node — exact version read from .nvmrc (single source of truth; bin/dev and
-# the deploy preflight enforce the same pin at runtime).
-COPY .nvmrc /tmp/.nvmrc
+# Bun — pinned to match .tool-versions (single source of truth; bin/dev and the
+# deploy preflight enforce the same floor at runtime). Installed system-wide to
+# /usr/local/bin via the official installer (BUN_INSTALL sets the prefix).
+ARG BUN_VERSION=1.3.14
+ENV BUN_INSTALL=/usr/local
 RUN set -eux; \
-	ver="$(tr -d 'v[:space:]' < /tmp/.nvmrc)"; \
-	case "$(dpkg --print-architecture)" in amd64) a=x64;; arm64) a=arm64;; *) echo "unsupported arch" >&2; exit 1;; esac; \
-	curl -fsSL "https://nodejs.org/dist/v${ver}/node-v${ver}-linux-${a}.tar.xz" \
-		| tar -xJ -C /usr/local --strip-components=1; \
-	node -v
+	curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"; \
+	bun --version
 
 # Caddy — static binary (not packaged in Debian main).
 RUN set -eux; \

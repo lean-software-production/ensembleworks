@@ -1,5 +1,5 @@
 // Tests for the energy-based utterance segmenter, with synthesized PCM.
-// Run with: npx tsx src/segmenter.test.ts
+// Run with: bun src/segmenter.test.ts
 import assert from 'node:assert/strict'
 import { createSegmenter, type Utterance } from './segmenter.ts'
 

@@ -1,5 +1,5 @@
 /**
- * Run: npx tsx src/kernel/scheduler.test.ts
+ * Run: bun src/kernel/scheduler.test.ts
  */
 import assert from 'node:assert/strict'
 import { createScheduler } from './scheduler'

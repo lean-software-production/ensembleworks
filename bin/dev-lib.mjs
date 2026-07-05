@@ -126,7 +126,7 @@ export function attachInstructions(container) {
  * scrollback intact (instead of the window vanishing, which is what hid a
  * missing-deps failure — and what closes the window when you C-c a service to
  * restart it). The `trap ":" INT` is load-bearing: without it, a child killed
- * *by* SIGINT (e.g. vite under `npm run dev`) makes this non-interactive
+ * *by* SIGINT (e.g. vite under `bun run dev`) makes this non-interactive
  * wrapper shell abort the list before reaching `exec bash`, so the window
  * closes. tsx-based services hid this because tsx catches SIGINT and exits 0;
  * vite does not. The trap makes the wrapper survive the signal while the
@@ -143,9 +143,39 @@ export function hold(cmd, label) {
 	return `trap ":" INT; ${cmd}; code=$?; echo; echo "[${label} exited $code] — shell follows, scrollback intact"; exec bash`
 }
 
-/** @param {string} text  .nvmrc content, e.g. "22.22.3\n" or "v22.22.3" */
-export function parseNvmrc(text) {
-	return text.trim().replace(/^v/, '')
+/**
+ * Read a tool's pinned version from `.tool-versions` (asdf/mise format:
+ * `<tool> <version>` per line; `#` comments and blanks skipped). Returns the
+ * version string, or '' if the tool is absent.
+ * @param {string} text  .tool-versions content
+ * @param {string} tool  e.g. 'bun'
+ * @returns {string}
+ */
+export function parseToolVersions(text, tool) {
+	for (const line of text.split('\n')) {
+		const m = /^\s*([^\s#]+)\s+([^\s#]+)/.exec(line)
+		if (m && m[1] === tool) return m[2].replace(/^v/, '')
+	}
+	return ''
+}
+
+/**
+ * Floor compare for the Bun version check: true iff `have` >= `want`, comparing
+ * dot-separated numeric parts (missing parts treated as 0).
+ * @param {string} have
+ * @param {string} want
+ * @returns {boolean}
+ */
+export function atLeast(have, want) {
+	const h = have.split('.').map(Number)
+	const w = want.split('.').map(Number)
+	for (let i = 0; i < Math.max(h.length, w.length); i++) {
+		const a = h[i] ?? 0
+		const b = w[i] ?? 0
+		if (a > b) return true
+		if (a < b) return false
+	}
+	return true
 }
 
 /**
@@ -233,7 +263,7 @@ export function buildServices(ctx) {
 		name: 'sync',
 		enabled: true,
 		reason: 'always',
-		cmd: `${syncEnv.join(' ')} npm run dev --workspace=server`,
+		cmd: `${syncEnv.join(' ')} bun run --filter '@ensembleworks/server' dev`,
 		health: { kind: 'http', url: `http://localhost:${PORTS.sync}/api/health` },
 	})
 
@@ -241,7 +271,7 @@ export function buildServices(ctx) {
 		name: 'term',
 		enabled: true,
 		reason: 'always',
-		cmd: 'npm run dev:term --workspace=server',
+		cmd: "bun run --filter '@ensembleworks/server' dev:term",
 		health: { kind: 'port', port: PORTS.term },
 	})
 
@@ -249,7 +279,7 @@ export function buildServices(ctx) {
 		name: 'client',
 		enabled: true,
 		reason: 'always',
-		cmd: `${publicOriginStr ? `ENSEMBLEWORKS_PUBLIC_ORIGIN='${publicOriginStr}' ` : ''}npm run dev --workspace=client`,
+		cmd: `${publicOriginStr ? `ENSEMBLEWORKS_PUBLIC_ORIGIN='${publicOriginStr}' ` : ''}bun run --filter '@ensembleworks/client' dev`,
 		health: { kind: 'port', port: PORTS.client },
 	})
 
@@ -335,7 +365,7 @@ export function buildServices(ctx) {
 				: 'no STT backend — set STT_API_KEY (e.g. Groq) or STT_URL in dev.env, or install whisper-server',
 		// Waits for BOTH the sync server (its token fetch) and the SFU's
 		// signaling port so its startup doesn't race the others.
-		cmd: `${scribeExports.join('; ')}; until curl -fsS http://localhost:${PORTS.sync}/api/health >/dev/null 2>&1 && timeout 1 bash -c '</dev/tcp/localhost/${PORTS.livekit}' 2>/dev/null; do sleep 2; done; npm run dev --workspace=transcriber`,
+		cmd: `${scribeExports.join('; ')}; until curl -fsS http://localhost:${PORTS.sync}/api/health >/dev/null 2>&1 && timeout 1 bash -c '</dev/tcp/localhost/${PORTS.livekit}' 2>/dev/null; do sleep 2; done; bun run --filter '@ensembleworks/transcriber' dev`,
 		health: null,
 	})
 
