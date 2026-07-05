@@ -38,6 +38,7 @@ import { GEO_TYPES, NOTE_COLORS, PULSE_STALE_MS, STICKY_GRID_COLS, STICKY_GRID_S
 import { pageIdOf, pagePoint, richTextToPlainText } from './canvas/geometry.ts'
 import { sanitizeAssetId, sanitizeId } from './canvas/ids.ts'
 import { createGatewayPlane } from './gateway-registry.ts'
+import type { PluginServerContext } from './kernel/context.ts'
 import { buildParticipants, byProximity, getCursorRefs, pickCursor, rawUserId, sortPointOf } from './kernel/presence.ts'
 import { createRoomHost } from './kernel/rooms.ts'
 import { createSessionRegistry } from './kernel/sessions.ts'
@@ -83,12 +84,22 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	const roomHost = createRoomHost(opts.dataDir)
 	const registry = createSessionRegistry()
 
+	const ctx: PluginServerContext = {
+		rooms: roomHost,
+		sessions: registry,
+		storage: { transcripts, roadmaps, uploadsDir },
+	}
+
 	// -------------------------------------------------------------------------
 	// HTTP app
 	// -------------------------------------------------------------------------
 
 	const app = express()
 
+	// Feature routers mount here IN THIS ORDER (today's registration order —
+	// Express matches top-down and the static catch-all below must stay last):
+	// av (livekit-token, kick, participants, pulse) → terminal-status → sticky
+	// → transcript → shape → frames → roadmap → uploads
 	app.use('/api', express.json())
 
 	app.get('/api/health', (_req, res) => {
