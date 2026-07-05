@@ -27,7 +27,7 @@ import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { TERMINAL_STATUSES } from '@ensembleworks/contracts'
+import { isTerminalStatus, TERMINAL_STATUSES } from '@ensembleworks/contracts'
 import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
 import { createBindingId, createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
@@ -503,7 +503,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		const status = typeof body.status === 'string' ? body.status : ''
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		if (!sessionId) return void res.status(400).json({ error: 'sessionId is required' })
-		if (!(TERMINAL_STATUSES as readonly string[]).includes(status)) {
+		if (!isTerminalStatus(status)) {
 			return void res
 				.status(400)
 				.json({ error: `status must be one of ${TERMINAL_STATUSES.join(' | ')}` })
