@@ -83,9 +83,12 @@ async function getJwk(teamDomain: string, kid: string): Promise<any | null> {
 	return jwk ?? null
 }
 
-// Verify a Cf-Access-Jwt-Assertion and return its email claim, or null if the
-// token is malformed / unsigned-by-us / expired / wrong-audience.
-async function verifyCfAccessJwt(token: string): Promise<{ email: string } | null> {
+// Verify a Cf-Access-Jwt-Assertion and return its identity claims (email for
+// humans, common_name for service tokens), or null if the token is malformed /
+// unsigned-by-us / expired / wrong-audience / carries no identity claim.
+export async function verifyCfAccessClaims(
+	token: string,
+): Promise<{ email?: string; commonName?: string } | null> {
 	const { teamDomain, aud } = cfg()
 	if (!teamDomain) return null
 	const parts = token.split('.')
@@ -104,8 +107,30 @@ async function verifyCfAccessJwt(token: string): Promise<{ email: string } | nul
 	if (payload.iss && payload.iss !== `https://${teamDomain}`) return null
 	const auds = Array.isArray(payload.aud) ? payload.aud : [payload.aud]
 	if (aud && !auds.includes(aud)) return null
-	if (typeof payload.email !== 'string') return null
-	return { email: payload.email }
+	const email = typeof payload.email === 'string' ? payload.email : undefined
+	const commonName = typeof payload.common_name === 'string' ? payload.common_name : undefined
+	if (!email && !commonName) return null
+	return { email, commonName }
+}
+
+// Decode a Cf-Access-Jwt-Assertion's identity claims WITHOUT verifying its
+// signature — used only in header-trust mode, the same tunnel trust basis as
+// reading the Cf-Access-Authenticated-User-Email header. Returns null for a
+// malformed token or one carrying no identity claim.
+export function decodeCfAccessClaimsUnverified(
+	token: string,
+): { email?: string; commonName?: string } | null {
+	const parts = token.split('.')
+	if (parts.length !== 3) return null
+	try {
+		const payload = b64urlToJson(parts[1] as string)
+		const email = typeof payload.email === 'string' ? payload.email : undefined
+		const commonName = typeof payload.common_name === 'string' ? payload.common_name : undefined
+		if (!email && !commonName) return null
+		return { email, commonName }
+	} catch {
+		return null
+	}
 }
 
 function devFallback(): AccessIdentity | null {
@@ -119,8 +144,8 @@ export async function getAccessIdentity(headers: IncomingHttpHeaders): Promise<A
 		const jwt = header(headers, JWT_HEADER)
 		if (!jwt) return devFallback() // no assertion to verify (e.g. local dev)
 		try {
-			const v = await verifyCfAccessJwt(jwt)
-			if (v) return { email: v.email, verified: true }
+			const c = await verifyCfAccessClaims(jwt)
+			if (c?.email) return { email: c.email, verified: true }
 		} catch (err) {
 			console.warn('[access] JWT verification error', err)
 		}
