@@ -43,10 +43,10 @@ export interface TerminalShapeProps {
 	h: number
 	sessionId: string
 	title: string
-	// Optional status light set by agents via POST /api/terminal-status.
+	// Optional status light set by agents via POST /api/terminal/status.
 	status?: string
 	// Remote gateway id (spike): undefined = same-origin gateway, zero
-	// migration for existing rooms. See /api/gateway/list.
+	// migration for existing rooms. See /api/terminal/list.
 	gateway?: string
 }
 

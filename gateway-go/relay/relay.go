@@ -1,5 +1,5 @@
 // Package relay maintains the single outbound WS to the canvas
-// (/api/gateway/connect — connecting IS registering) and demuxes relay
+// (/api/terminal/connect — connecting IS registering) and demuxes relay
 // channels onto the session manager. Messages are processed per-channel
 // FIFO: the read loop enqueues onto a per-channel goroutine, so
 // relay-open → relay-msg{resize} ordering survives concurrency (spec §3).
@@ -83,7 +83,7 @@ func dialURL(cfg Config) (string, error) {
 	if u.Scheme == "" {
 		return "", fmt.Errorf("CANVAS_URL must be http(s)://…, got %q", cfg.CanvasURL)
 	}
-	u.Path = strings.TrimSuffix(u.Path, "/") + "/api/gateway/connect"
+	u.Path = strings.TrimSuffix(u.Path, "/") + "/api/terminal/connect"
 	q := u.Query()
 	q.Set("gatewayId", cfg.GatewayID)
 	q.Set("label", cfg.Label)

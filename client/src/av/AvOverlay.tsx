@@ -122,7 +122,7 @@ export function AvOverlay() {
 		setKickError(null)
 		setKickingId(participant.id)
 		try {
-			const response = await fetch('/api/kick', {
+			const response = await fetch('/api/av/kick', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ room: getRoomId(), userId: rawUserId(participant.id) }),

@@ -9,7 +9,7 @@
  * it wires up storage/rooms/sessions/media into a PluginServerContext and
  * mounts each feature router in order. Only a couple of routes stay inline:
  *   GET  /api/health            – liveness probe
- *   GET  /api/gateway/list      – remote terminal gateway registry (spike)
+ *   GET  /api/terminal/list     – remote terminal gateway registry (spike)
  *   WS   /sync/:roomId          – tldraw sync (TLSocketRoom)
  *   GET  /*                     – static client build (production)
  */
@@ -24,6 +24,7 @@ import { getAccessIdentity } from './access-identity.ts'
 import { sanitizeId } from './canvas/ids.ts'
 import { createAvRouter } from './features/av.ts'
 import { createFramesRouter } from './features/frames.ts'
+import { createParticipantsRouter } from './features/participants.ts'
 import { createRoadmapRouter } from './features/roadmap.ts'
 import { createShapeRouter } from './features/shape.ts'
 import { createStickyRouter } from './features/sticky.ts'
@@ -71,10 +72,10 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 	const app = express()
 
-	// Feature routers mount here IN THIS ORDER (today's registration order —
-	// Express matches top-down and the static catch-all below must stay last):
-	// av (livekit-token, kick, participants, pulse) → terminal-status → sticky
-	// → transcript → shape → frames → roadmap → uploads
+	// Feature routers mount here IN THIS ORDER (Express matches top-down and the
+	// static catch-all below must stay last): whoami → participants (kernel) → av
+	// (av/token, av/kick, av/pulse) → terminal-status → sticky → transcript →
+	// shape → frames → roadmap → uploads
 	app.use('/api', express.json())
 
 	// Write scoping: read-only service tokens are 403'd on mutating requests.
@@ -87,10 +88,12 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	// Remote terminal gateways (spike): connect-equals-register + relay splicer.
 	// See docs/superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md
 	const gatewayPlane = createGatewayPlane()
-	app.get('/api/gateway/list', gatewayPlane.listHandler)
+	app.get('/api/terminal/list', gatewayPlane.listHandler)
 
 	// Auth-plane foundation: caller identity envelope (human|bot|anonymous).
 	app.use(createWhoamiRouter())
+
+	app.use(createParticipantsRouter(ctx))   // kernel-reserved: /api/participants
 
 	app.use(createAvRouter(ctx))
 

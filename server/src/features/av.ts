@@ -1,18 +1,18 @@
 /**
- * A/V feature — LiveKit token minting, kick, participants roster, client pulse.
+ * A/V feature — LiveKit token minting, kick, client pulse.
  */
 import express from 'express'
 import { AccessToken } from 'livekit-server-sdk'
 import { PULSE_STALE_MS } from '../canvas/constants.ts'
 import { sanitizeId } from '../canvas/ids.ts'
-import { buildParticipants, getCursorRefs, rawUserId } from '../kernel/presence.ts'
+import { rawUserId } from '../kernel/presence.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
 import { readVmStats } from '../vm-stats.ts'
 
 export function createAvRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
-	router.get('/api/livekit-token', async (req, res) => {
+	router.get('/api/av/token', async (req, res) => {
 		if (!ctx.media.apiKey || !ctx.media.apiSecret || !ctx.media.url) {
 			res.json({ enabled: false })
 			return
@@ -45,7 +45,7 @@ export function createAvRouter(ctx: PluginServerContext): express.Router {
 		res.json({ enabled: true, token: await token.toJwt(), url: ctx.media.url })
 	})
 
-	router.post('/api/kick', async (req, res) => {
+	router.post('/api/av/kick', async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? ''))
 		const userId = typeof body.userId === 'string' ? body.userId.slice(0, 128) : ''
@@ -73,29 +73,12 @@ export function createAvRouter(ctx: PluginServerContext): express.Router {
 		res.json({ ok: true, disconnected: sessionIds.length })
 	})
 
-	// Who is currently in a room — live presence joined with each person's
-	// verified Cloudflare Access identity. With ?page= it's filtered to one
-	// tldraw page, which is the git co-author rule (same room AND page). The
-	// commit tool reads this to build `Co-authored-by` trailers.
-	router.get('/api/participants', (req, res) => {
-		const roomId = sanitizeId(String(req.query.room ?? 'team'))
-		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
-		const page = req.query.page ? String(req.query.page) : null
-		const room = ctx.rooms.rooms.get(roomId)
-		const refs = room && !room.isClosed() ? getCursorRefs(room) : []
-		res.json({
-			room: roomId,
-			page,
-			participants: buildParticipants(refs, ctx.sessions.identitiesByUser.get(roomId), page),
-		})
-	})
-
 	// Session pulse: one heartbeat that carries both features in the "In session"
 	// panel. The client measures the round-trip of its *previous* pulse and
 	// reports it here (rttMs); the server records it, prunes stale samples, and
 	// returns the live per-user latency map plus a single shared VM-pressure
 	// reading. One client timer, one endpoint, no extra storage or schema.
-	router.post('/api/pulse', (req, res) => {
+	router.post('/api/av/pulse', (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })

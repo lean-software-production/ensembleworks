@@ -5,7 +5,7 @@
  * teammate's audio track into utterances (energy VAD, see segmenter.ts),
  * transcribes them against a hosted OpenAI-compatible STT server (Groq's
  * Whisper API by default), and posts the text to the sync server's
- * /api/transcript — where each line gets stamped with the speaker's live
+ * /api/scribe/transcript — where each line gets stamped with the speaker's live
  * cursor position and nearest frame.
  *
  * Deliberately visible: it appears in the participant list as "📝 scribe" so
@@ -55,7 +55,7 @@ async function fetchToken(): Promise<{ url: string; token: string } | null> {
 		name: SCRIBE_NAME,
 		role: 'scribe',
 	})
-	const res = await fetch(`${CANVAS_URL}/api/livekit-token?${params}`)
+	const res = await fetch(`${CANVAS_URL}/api/av/token?${params}`)
 	if (!res.ok) throw new Error(`token endpoint ${res.status}`)
 	const info = (await res.json()) as { enabled: boolean; url?: string; token?: string }
 	if (!info.enabled || !info.url || !info.token) return null
@@ -66,7 +66,7 @@ async function fetchToken(): Promise<{ url: string; token: string } | null> {
 }
 
 async function postTranscript(participant: RemoteParticipant, text: string) {
-	const res = await fetch(`${CANVAS_URL}/api/transcript`, {
+	const res = await fetch(`${CANVAS_URL}/api/scribe/transcript`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({

@@ -129,7 +129,7 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 
 		async function connect() {
 			const params = new URLSearchParams({ room: roomId, identity, name })
-			const res = await fetch(`/api/livekit-token?${params}`)
+			const res = await fetch(`/api/av/token?${params}`)
 			const info = await res.json()
 			if (cancelled) return
 			if (!info.enabled) {

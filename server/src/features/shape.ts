@@ -1,5 +1,5 @@
 /**
- * Shape feature — POST /api/shape: create/update/delete diagram shapes (geo,
+ * Shape feature — POST /api/canvas/shape: create/update/delete diagram shapes (geo,
  * arrow with bindings, text, note) for agents; arrows resolve endpoints to
  * shape centres.
  */
@@ -24,7 +24,7 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 	//   update — { id, text?, x?, y?, w?, h?, color?, fill?, geo?, props? }
 	//   delete — { id } (cascades bindings touching the shape)
 
-	router.post('/api/shape', async (req, res) => {
+	router.post('/api/canvas/shape', async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
@@ -256,7 +256,7 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 						},
 					} as any)
 				} else {
-					// note — same record /api/sticky builds, but at an explicit spot.
+					// note — same record /api/canvas/sticky builds, but at an explicit spot.
 					if (!text) {
 						problem = { status: 400, error: 'note shapes require text' }
 						return

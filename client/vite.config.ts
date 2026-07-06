@@ -91,8 +91,11 @@ export default defineConfig({
 		proxy: {
 			'/sync': { target: 'ws://localhost:8788', ws: true },
 			'/uploads': 'http://localhost:8788',
+			// Terminal local plane (health/sessions/ws) is served by the :8789 gateway
+			// process; the relay plane (status/list/connect/relay) stays on :8788. Must
+			// precede the '/api' catch-all. The alternation also covers /sessions/:id.
+			'^/api/terminal/(health|sessions|ws)': { target: 'ws://localhost:8789', ws: true },
 			'/api': { target: 'http://localhost:8788', ws: true },
-			'/term': { target: 'ws://localhost:8789', ws: true },
 		},
 	},
 })

@@ -34,7 +34,7 @@ if (!cmd) {
 }
 
 const serverRev = async () => {
-	const list = (await (await fetch(`${URL_}/api/roadmap?room=${ROOM}`)).json()).roadmaps
+	const list = (await (await fetch(`${URL_}/api/roadmap/doc?room=${ROOM}`)).json()).roadmaps
 	return list.length ? { name: list[0].name, rev: list[0].rev } : null
 }
 
@@ -54,7 +54,7 @@ await page.waitForTimeout(6000) // let sync deliver the room
 await page.evaluate(() => {
 	const orig = window.fetch
 	window.fetch = (...a) => {
-		if (String(a[0]).includes('/api/roadmap') && a[1]?.method === 'POST')
+		if (String(a[0]).includes('/api/roadmap/doc') && a[1]?.method === 'POST')
 			console.log('[probe-post] ' + a[1].body)
 		return orig(...a)
 	}

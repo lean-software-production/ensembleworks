@@ -46,18 +46,18 @@ function waitForOutput(ws: WebSocket, needle: string, timeoutMs = 10_000): Promi
 }
 
 /** Test-only bridging shim: registers as gateway 'loopback' and proxies each
- * relay channel to the real gateway's /term/ws — a per-channel protocol
+ * relay channel to the real gateway's /api/terminal/ws — a per-channel protocol
  * translator (relay framing ↔ plain frames). ~The existing gateway never
  * dials out, so this shim is what lets the splicer reach it. */
 async function startShim(canvasWsBase: string) {
-	const gw = await openSocket(`${canvasWsBase}/api/gateway/connect?gatewayId=loopback&label=Loopback`)
+	const gw = await openSocket(`${canvasWsBase}/api/terminal/connect?gatewayId=loopback&label=Loopback`)
 	const channels = new Map<number, WebSocket>()
 	gw.on('message', (data, isBinary) => {
 		if (isBinary) return // canvas→connector is all text
 		const msg = JSON.parse(data.toString())
 		if (msg.type === 'relay-open') {
 			const term = new WebSocket(
-				`ws://127.0.0.1:${TERM_PORT}/term/ws?session=${msg.sessionId}&cols=${msg.cols}&rows=${msg.rows}`
+				`ws://127.0.0.1:${TERM_PORT}/api/terminal/ws?session=${msg.sessionId}&cols=${msg.cols}&rows=${msg.rows}`
 			)
 			channels.set(msg.channelId, term)
 			term.on('message', (tData, tBinary) => {
@@ -132,7 +132,7 @@ async function main() {
 		shim = await startShim(wsBase)
 
 		// 3. Browser through the relay: attached handshake + echo round-trip.
-		const relayUrl = `${wsBase}/api/term/relay?session=${SESSION}&gateway=loopback&cols=80&rows=24`
+		const relayUrl = `${wsBase}/api/terminal/relay?session=${SESSION}&gateway=loopback&cols=80&rows=24`
 		const b1 = await openSocket(relayUrl)
 		const attached = await new Promise<any>((resolve) => {
 			b1.on('message', (data, isBinary) => {
@@ -159,7 +159,7 @@ async function main() {
 
 		// 5. Latency: relay vs direct, printed for the findings write-back.
 		const relayTimes = await measureEcho(b1, 20)
-		const direct = await openSocket(`ws://127.0.0.1:${TERM_PORT}/term/ws?session=${SESSION}&cols=80&rows=24`)
+		const direct = await openSocket(`ws://127.0.0.1:${TERM_PORT}/api/terminal/ws?session=${SESSION}&cols=80&rows=24`)
 		await new Promise((r) => setTimeout(r, 300)) // let attach replay settle
 		const directTimes = await measureEcho(direct, 20)
 		console.log(`LATENCY relay  p50=${pct(relayTimes, 50).toFixed(1)}ms p95=${pct(relayTimes, 95).toFixed(1)}ms`)

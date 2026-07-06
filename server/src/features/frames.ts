@@ -1,6 +1,6 @@
 /**
- * Frames feature — GET /api/frames lists frames with child counts,
- * proximity-ordered from the caller's cursor; GET /api/frame reads one
+ * Frames feature — GET /api/canvas/frames lists frames with child counts,
+ * proximity-ordered from the caller's cursor; GET /api/canvas/frame reads one
  * frame's stickies/text/images/embeds.
  */
 import express from 'express'
@@ -17,10 +17,10 @@ export function createFramesRouter(ctx: PluginServerContext): express.Router {
 	// canvas. Both read from getCurrentSnapshot() so they work whether or not a
 	// browser is connected, just like the write endpoints' updateStore().
 
-	// GET /api/frames?room= — discovery: every frame with its child counts.
+	// GET /api/canvas/frames?room= — discovery: every frame with its child counts.
 	// Frames on the active teammate's page are ordered nearest-cursor-first;
 	// the rest keep document order (see sortedBy in the response).
-	router.get('/api/frames', (req, res) => {
+	router.get('/api/canvas/frames', (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		const room = ctx.rooms.getOrCreateRoom(roomId)
@@ -68,10 +68,10 @@ export function createFramesRouter(ctx: PluginServerContext): express.Router {
 		})
 	})
 
-	// GET /api/frame?room=&name= — the contents of one fuzzy-matched frame:
+	// GET /api/canvas/frame?room=&name= — the contents of one fuzzy-matched frame:
 	// stickies, text, images (resolved to their /uploads URL), terminals,
-	// iframes. Same case-insensitive name match as POST /api/sticky.
-	router.get('/api/frame', (req, res) => {
+	// iframes. Same case-insensitive name match as POST /api/canvas/sticky.
+	router.get('/api/canvas/frame', (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		const name = typeof req.query.name === 'string' ? req.query.name : ''
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })

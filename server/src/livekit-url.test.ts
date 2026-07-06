@@ -6,7 +6,7 @@ import { resolveRoomServiceUrl } from './livekit-url.ts'
 // the public signaling URL. NOTE: the original code was `url.replace(/^ws/,
 // 'http')`, so `wss://` -> `https://` (the trailing `s` survives) — that's
 // correct and desired (LiveKit Cloud wss signaling -> https RoomService). This
-// is the regression-guard case — it MUST stay non-undefined so /api/kick keeps
+// is the regression-guard case — it MUST stay non-undefined so /api/av/kick keeps
 // working pre-cutover.
 {
 	const got = resolveRoomServiceUrl('wss://x/livekit', undefined)

@@ -10,8 +10,8 @@
 # Caddy serves plain HTTP on :8080 by default — TLS is normally terminated
 # upstream (Codespaces, a Cloudflare Tunnel, tailscale serve). Vite (the client
 # dev server) serves the app and proxies the backend services (/sync, /api,
-# /uploads, /term), so Caddy's ONLY job is the same-origin /dev/{port} proxy
-# that Vite can't express. Everything else goes to Vite.
+# /uploads, /api/terminal), so Caddy's ONLY job is the same-origin /dev/{port}
+# proxy that Vite can't express. Everything else goes to Vite.
 #
 # Direct LAN access has no upstream TLS terminator, but browsers gate
 # crypto.randomUUID and getUserMedia (the mic — so voice) behind a secure
@@ -68,7 +68,7 @@
 	}
 
 	# Everything else (app + HMR, and Vite's own proxying of /sync, /api,
-	# /uploads, /term to the sync server and terminal gateway) -> Vite.
+	# /uploads, /api/terminal to the sync server and terminal gateway) -> Vite.
 	handle {
 		reverse_proxy localhost:5173
 	}

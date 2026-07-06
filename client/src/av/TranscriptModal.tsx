@@ -3,7 +3,7 @@ import { stopEventPropagation } from 'tldraw'
 import { scheduler } from '../kernel/scheduler'
 import { wm } from '../theme'
 
-// The shape of a transcript entry as served by GET /api/transcript. Mirrors the
+// The shape of a transcript entry as served by GET /api/scribe/transcript. Mirrors the
 // server's TranscriptEntry; only the fields the modal renders are typed here.
 interface TranscriptLine {
 	id: string
@@ -26,7 +26,7 @@ export function TranscriptModal({ roomId, onClose }: { roomId: string; onClose: 
 		let cancelled = false
 		const load = async () => {
 			try {
-				const res = await fetch(`/api/transcript?room=${encodeURIComponent(roomId)}&limit=500`)
+				const res = await fetch(`/api/scribe/transcript?room=${encodeURIComponent(roomId)}&limit=500`)
 				const body = (await res.json()) as { entries?: TranscriptLine[]; error?: string }
 				if (cancelled) return
 				if (!res.ok) throw new Error(body.error || 'Failed to load transcript')

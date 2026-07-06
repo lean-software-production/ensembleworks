@@ -1,6 +1,6 @@
 // Contract tests for the roadmap HTTP API. Boots the express app in-process
 // via createSyncApp, seeds a roadmap shape for the rev fan-out check, then
-// exercises GET/POST /api/roadmap end to end.
+// exercises GET/POST /api/roadmap/doc end to end.
 // Run with: bun src/roadmap-api.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
@@ -45,7 +45,7 @@ async function main() {
 
 	// 1. Create via replace: rev 1, id slugged from the name, shape stamped.
 	{
-		const res = await postJson('/api/roadmap', {
+		const res = await postJson('/api/roadmap/doc', {
 			room: 'test',
 			name: 'Product Roadmap',
 			ops: [{ op: 'replace', data: ROADMAP_FIXTURE }],
@@ -62,27 +62,27 @@ async function main() {
 
 	// 2. List and read (fuzzy name + exact id).
 	{
-		const list = await getJson('/api/roadmap?room=test')
+		const list = await getJson('/api/roadmap/doc?room=test')
 		assert.equal(list.status, 200)
 		assert.equal(list.body.roadmaps.length, 1)
 		assert.equal(list.body.roadmaps[0].id, 'product-roadmap')
 		assert.equal(list.body.roadmaps[0].rev, 1)
 
-		const read = await getJson('/api/roadmap?room=test&name=product')
+		const read = await getJson('/api/roadmap/doc?room=test&name=product')
 		assert.equal(read.status, 200)
 		assert.equal(read.body.name, 'Product Roadmap')
 		assert.equal(read.body.rev, 1)
 		assert.equal(read.body.data.outcomes.length, 3)
 		assert.ok(read.body.updated, 'read carries the server-stamped updated date')
 
-		const missing = await getJson('/api/roadmap?room=test&name=definitely-not-here')
+		const missing = await getJson('/api/roadmap/doc?room=test&name=definitely-not-here')
 		assert.equal(missing.status, 404)
 		console.log('ok: list + read (fuzzy match), 404 on unknown name')
 	}
 
 	// 3. Patch ops bump rev, persist, and re-stamp the shape.
 	{
-		const res = await postJson('/api/roadmap', {
+		const res = await postJson('/api/roadmap/doc', {
 			room: 'test',
 			name: 'product-roadmap',
 			ops: [
@@ -92,7 +92,7 @@ async function main() {
 		})
 		assert.equal(res.status, 200)
 		assert.equal(res.body.rev, 2)
-		const read = await getJson('/api/roadmap?room=test&name=product-roadmap')
+		const read = await getJson('/api/roadmap/doc?room=test&name=product-roadmap')
 		assert.equal(read.body.data.outcomes[1].initiatives[0].features[0].status, 'done')
 		assert.equal(read.body.data.outcomes.find((o: any) => o.key === 'O4').zone, 'now')
 		const shape = documents().find((r) => r.id === SHAPE_ID)
@@ -102,7 +102,7 @@ async function main() {
 
 	// 4. Concurrency guard: stale ifRev is 409 and carries the current rev.
 	{
-		const res = await postJson('/api/roadmap', {
+		const res = await postJson('/api/roadmap/doc', {
 			room: 'test',
 			name: 'product-roadmap',
 			ifRev: 1,
@@ -110,14 +110,14 @@ async function main() {
 		})
 		assert.equal(res.status, 409)
 		assert.equal(res.body.rev, 2, '409 carries the current rev')
-		const read = await getJson('/api/roadmap?room=test&name=product-roadmap')
+		const read = await getJson('/api/roadmap/doc?room=test&name=product-roadmap')
 		assert.equal(read.body.data.outcomes[0].status, 'done', 'stale write did not apply')
 		console.log('ok: stale ifRev is 409, nothing applied')
 	}
 
 	// 5. Atomicity: a batch with one bad op leaves the document untouched.
 	{
-		const res = await postJson('/api/roadmap', {
+		const res = await postJson('/api/roadmap/doc', {
 			room: 'test',
 			name: 'product-roadmap',
 			ops: [
@@ -126,7 +126,7 @@ async function main() {
 			],
 		})
 		assert.equal(res.status, 404, 'unknown key is 404')
-		const read = await getJson('/api/roadmap?room=test&name=product-roadmap')
+		const read = await getJson('/api/roadmap/doc?room=test&name=product-roadmap')
 		assert.equal(read.body.data.outcomes[0].status, 'done', 'first op rolled back with the batch')
 		assert.equal(read.body.rev, 2, 'rev unchanged')
 		console.log('ok: failing batch is all-or-nothing')
@@ -134,27 +134,27 @@ async function main() {
 
 	// 6. Edges: ops on a missing roadmap 404; bad op 400; bad names 400.
 	{
-		const missing = await postJson('/api/roadmap', {
+		const missing = await postJson('/api/roadmap/doc', {
 			room: 'test',
 			name: 'no-such-roadmap',
 			ops: [{ op: 'set', key: 'O1', fields: { status: 'done' } }],
 		})
 		assert.equal(missing.status, 404)
 
-		const badOp = await postJson('/api/roadmap', {
+		const badOp = await postJson('/api/roadmap/doc', {
 			room: 'test',
 			name: 'product-roadmap',
 			ops: [{ op: 'destroy', key: 'O1' }],
 		})
 		assert.equal(badOp.status, 400)
 
-		const noName = await postJson('/api/roadmap', {
+		const noName = await postJson('/api/roadmap/doc', {
 			room: 'test',
 			ops: [{ op: 'replace', data: ROADMAP_FIXTURE }],
 		})
 		assert.equal(noName.status, 400)
 
-		const badSlug = await postJson('/api/roadmap', {
+		const badSlug = await postJson('/api/roadmap/doc', {
 			room: 'test',
 			name: '***',
 			ops: [{ op: 'replace', data: ROADMAP_FIXTURE }],
@@ -167,12 +167,12 @@ async function main() {
 	//    both land (distinct revs, both edits visible in the final GET).
 	{
 		const [r1, r2] = await Promise.all([
-			postJson('/api/roadmap', {
+			postJson('/api/roadmap/doc', {
 				room: 'test',
 				name: 'product-roadmap',
 				ops: [{ op: 'set', key: 'O1.I1.F1', fields: { status: 'in-progress' } }],
 			}),
-			postJson('/api/roadmap', {
+			postJson('/api/roadmap/doc', {
 				room: 'test',
 				name: 'product-roadmap',
 				ops: [{ op: 'set', key: 'O1.I1.F2', fields: { status: 'in-progress' } }],
@@ -181,7 +181,7 @@ async function main() {
 		assert.equal(r1.status, 200, `race writer A: ${JSON.stringify(r1.body)}`)
 		assert.equal(r2.status, 200, `race writer B: ${JSON.stringify(r2.body)}`)
 		assert.notEqual(r1.body.rev, r2.body.rev, 'concurrent writes must produce distinct revs')
-		const read = await getJson('/api/roadmap?room=test&name=product-roadmap')
+		const read = await getJson('/api/roadmap/doc?room=test&name=product-roadmap')
 		const features = read.body.data.outcomes[0].initiatives[0].features
 		assert.equal(features[0].status, 'in-progress', 'writer A edit (F1) survived')
 		assert.equal(features[1].status, 'in-progress', 'writer B edit (F2) survived')
@@ -190,7 +190,7 @@ async function main() {
 
 	// 8. ifRev on a missing roadmap is 409, nothing created.
 	{
-		const res = await postJson('/api/roadmap', {
+		const res = await postJson('/api/roadmap/doc', {
 			room: 'test',
 			name: 'never-created-roadmap',
 			ifRev: 5,
@@ -198,7 +198,7 @@ async function main() {
 		})
 		assert.equal(res.status, 409, `ifRev on missing should be 409, got ${res.status}`)
 		assert.match(res.body.error, /ifRev 5 given but no roadmap matches/)
-		const list = await getJson('/api/roadmap?room=test')
+		const list = await getJson('/api/roadmap/doc?room=test')
 		const names = list.body.roadmaps.map((r: any) => r.name)
 		assert.ok(!names.includes('never-created-roadmap'), 'no new roadmap created')
 		console.log('ok: ifRev on missing roadmap is 409, nothing created')
