@@ -147,11 +147,19 @@ function parseLoginFlags(args: string[], globals: Globals): import('./auth/login
 function tryExtension(group: string, args: string[], conn: Conn, env: NodeJS.ProcessEnv): number | null {
 	const dir = path.join(path.dirname(hostsPath(env)), 'extensions')
 	const bin = path.join(dir, `ensembleworks-${group}`)
+	let realBin: string
+	let realDir: string
 	try {
-		realpathSync(bin) // must exist inside the trusted dir (symlinks followed)
+		// must exist AND resolve (post-symlink) to a direct child of the trusted
+		// dir — `group` is raw argv, so without this containment check a
+		// traversal payload (e.g. `../../../../tmp/evil`) could make `bin`
+		// resolve outside `dir` entirely and still pass a bare existence check.
+		realBin = realpathSync(bin)
+		realDir = realpathSync(dir)
 	} catch {
 		return null
 	}
+	if (path.dirname(realBin) !== realDir) return null
 	const childEnv: NodeJS.ProcessEnv = {
 		...env,
 		ENSEMBLEWORKS_URL: conn.url,
