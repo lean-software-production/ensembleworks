@@ -170,6 +170,16 @@ parked, to be settled if/when Phase 5 is picked up.
   version the CLI cache keys on) and an informational `server` build string.
   Grouping is client-side; the shape matches a future MCP `tools/list`.
 
+### #4 gate ratifications (user, 2026-07-06)
+
+- The six verb-surface changes forced by the frozen manifest + 3a route table
+  are ACCEPTED with no alias layer: `canvas read`→`canvas frame`,
+  `roadmap list/push/ops`→`roadmap read/write`, `scribe say` positional
+  identity, sticky auto-light-blue dropped, `canvas status`→`terminal status`,
+  `transcript`/`say`→`scribe transcript`/`scribe say`.
+- Layer-2 extension dispatch is IN #4 (trusted `~/.config/ensembleworks/extensions/`
+  dir only — never bare PATH).
+
 ## Phase 6 — Plugin packages (gated slice; conventions pre-pinned)
 
 - **`ensembleworks.config.ts`:** typed
