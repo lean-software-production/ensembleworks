@@ -203,12 +203,12 @@ const server = http.createServer(async (req, res) => {
 	const url = new URL(req.url ?? '', 'http://internal')
 	res.setHeader('content-type', 'application/json')
 
-	if (req.method === 'GET' && url.pathname === '/api/terminal/health') {        // was /term/health
+	if (req.method === 'GET' && url.pathname === '/api/terminal/health') {
 		res.end(JSON.stringify({ ok: true, sessions: sessions.size }))
 		return
 	}
 
-	if (req.method === 'GET' && url.pathname === '/api/terminal/sessions') {      // was /term/sessions
+	if (req.method === 'GET' && url.pathname === '/api/terminal/sessions') {
 		const detached = await listTmuxSessions()
 		const all = new Map<string, { id: string; attachedClients: number }>()
 		for (const id of detached) all.set(id, { id, attachedClients: 0 })
@@ -258,7 +258,7 @@ heartbeat.unref()
 
 server.on('upgrade', (req, socket, head) => {
 	const url = new URL(req.url ?? '', 'http://internal')
-	if (url.pathname !== '/api/terminal/ws') {                                    // was !== '/term/ws'
+	if (url.pathname !== '/api/terminal/ws') {
 		socket.destroy()
 		return
 	}

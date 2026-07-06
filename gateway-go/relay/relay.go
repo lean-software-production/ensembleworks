@@ -83,7 +83,7 @@ func dialURL(cfg Config) (string, error) {
 	if u.Scheme == "" {
 		return "", fmt.Errorf("CANVAS_URL must be http(s)://…, got %q", cfg.CanvasURL)
 	}
-	u.Path = strings.TrimSuffix(u.Path, "/") + "/api/terminal/connect"   // was /api/gateway/connect
+	u.Path = strings.TrimSuffix(u.Path, "/") + "/api/terminal/connect"
 	q := u.Query()
 	q.Set("gatewayId", cfg.GatewayID)
 	q.Set("label", cfg.Label)

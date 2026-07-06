@@ -223,7 +223,7 @@ export function createGatewayPlane() {
 
 		/** Returns true when it owned the upgrade (matched path), else false. */
 		handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean {
-			if (url.pathname === '/api/terminal/connect') {   // was /api/gateway/connect
+			if (url.pathname === '/api/terminal/connect') {
 				const gatewayId = url.searchParams.get('gatewayId') ?? ''
 				if (!ID_RE.test(gatewayId)) {
 					socket.destroy()
@@ -262,7 +262,7 @@ export function createGatewayPlane() {
 				return true
 			}
 
-			if (url.pathname === '/api/terminal/relay') {     // was /api/term/relay
+			if (url.pathname === '/api/terminal/relay') {
 				const sessionId = url.searchParams.get('session') ?? ''
 				const gatewayId = url.searchParams.get('gateway') ?? ''
 				const cols = Number(url.searchParams.get('cols') ?? 80) || 80

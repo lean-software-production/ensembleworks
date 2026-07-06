@@ -11,7 +11,7 @@ import type { PluginServerContext } from '../kernel/context.ts'
 export function createTerminalStatusRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
-	router.post('/api/terminal/status', async (req, res) => {   // was /api/terminal-status
+	router.post('/api/terminal/status', async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		const sessionId = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : null

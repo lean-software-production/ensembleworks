@@ -88,7 +88,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	// Remote terminal gateways (spike): connect-equals-register + relay splicer.
 	// See docs/superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md
 	const gatewayPlane = createGatewayPlane()
-	app.get('/api/terminal/list', gatewayPlane.listHandler)   // was /api/gateway/list
+	app.get('/api/terminal/list', gatewayPlane.listHandler)
 
 	// Auth-plane foundation: caller identity envelope (human|bot|anonymous).
 	app.use(createWhoamiRouter())
