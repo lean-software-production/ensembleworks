@@ -14,7 +14,7 @@
 | 3 | 3c attribution | autonomous | ✅ merged 2026-07-06 | `7885d2c` | panel 3/3 + fix round; final review caught a CRITICAL (anonymous roadmap meta.author forge via replace-op passthrough) — fixed `13599f2` (server always wins: stamp-or-delete) + forge/stale regressions; suite 43→45 |
 | 4 | #4 ensembleworks CLI | **gated** | ✅ merged 2026-07-06 | `7bd9a50` | user gate passed (6 verb changes, Layer-2 in); 8 tasks; TWO security catches: implementer found+fixed plan's extension path-traversal (`69fc44a`), final review found+fixed backslash same-origin bypass (`855d5c6`); suite 45→52; SKILL.md×4 reseeded; bin/canvas + gateway-go stay until #8 |
 | 5 | #5 connector | autonomous | queued | — | retires gateway-go; validate vs relay-loopback.test.ts |
-| 6 | #6 transcriber cutover | autonomous | queued | — | parallelizable beside 3a–#5 |
+| 6 | #6 transcriber cutover | autonomous | ✅ merged 2026-07-06 | `cc80d06` | HARD GATE PASSED (--strict, in-container vs live dev stack): transcript "testing 1, 2, 3"; timings ms: preflight 5, publish-visible 187, connect→…→POST 4006, total 4198 — compiled binary, every hop proven, no Node fallback. Root-caused en route: rtc-node captureFrame drops Int16Array subarray views under Bun (copy fix + spec note). Suite 52→53 |
 | 7 | #7 distribution | autonomous | queued | — | compile + fetch-verify-swap deploy |
 | 8 | #8 cutover release | **manual (user)** | queued | — | track preps checklist; phase-boundary review before |
 | 9 | Phase 4: docStore + tools + /mcp | **gated** | queued | — | builds on branch regardless of #8 timing |
