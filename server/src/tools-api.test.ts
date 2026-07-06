@@ -72,6 +72,7 @@ async function main() {
 
 	server.close()
 	console.log(`ok: /api/tools manifest — envelope v1, 15 tools, ${mounted.size} routes match both directions`)
+	process.exit(0) // createSyncApp's intervals keep the loop alive (house pattern: whoami-api, canvas-api)
 }
 
 main().catch((err) => {
