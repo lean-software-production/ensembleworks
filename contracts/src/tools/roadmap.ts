@@ -49,6 +49,7 @@ export const roadmapWrite: ToolDef = {
 		name: z.string().min(1).max(128).describe('roadmap name (required); a new doc must start with a replace op'),
 		ifRev: z.number().optional().describe('optimistic-concurrency guard; 409 on mismatch'),
 		ops: z.array(roadmapOp).min(1).describe('all-or-nothing op batch'),
+		author: z.string().optional().describe('accepted for wire-shape uniformity but currently inert: ignored when the caller is credentialed, and roadmap has no cosmetic badge surface for anonymous authors'),
 	}),
 	zodOutput: z.object({
 		ok: z.literal(true),

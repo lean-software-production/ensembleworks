@@ -15,6 +15,7 @@ export const canvasSticky: ToolDef = {
 		text: z.string().min(1).max(2000).describe('sticky body; trimmed, 1–2000 chars'),
 		frame: z.string().optional().describe('fuzzy (case-insensitive substring) frame name'),
 		color: z.enum(NOTE_COLORS as [string, ...string[]]).optional().describe('defaults to yellow server-side'),
+		author: z.string().optional().describe('voluntary display name; honoured only on anonymous/"none" instances — ignored when the caller is credentialed'),
 	}),
 	zodOutput: okId,
 }
@@ -44,6 +45,7 @@ export const canvasShape: ToolDef = {
 		w: z.number().optional(),
 		h: z.number().optional(),
 		props: z.record(z.string(), z.unknown()).optional().describe('raw prop merge (update)'),
+		author: z.string().optional().describe('voluntary display name; honoured only on anonymous/"none" instances — ignored when the caller is credentialed'),
 	}),
 	// create/update → { ok, id }; delete → { ok, deleted }. Union both success shapes.
 	zodOutput: z.union([okId, z.object({ ok: z.literal(true), deleted: z.number() })]),
