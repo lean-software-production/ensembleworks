@@ -1,6 +1,6 @@
 /**
- * Transcript feature — POST /api/transcript appends a line (stamped with the
- * speaker's live cursor/frame when present); GET /api/transcript reads the
+ * Transcript feature — POST /api/scribe/transcript appends a line (stamped with the
+ * speaker's live cursor/frame when present); GET /api/scribe/transcript reads the
  * room's transcript.
  */
 import express from 'express'
@@ -17,7 +17,7 @@ export function createTranscriptRouter(ctx: PluginServerContext): express.Router
 	// canvas tab is open — the scribe posts the raw LiveKit identity, which
 	// equals the tldraw presence userId once its "user:" prefix is stripped.
 
-	router.post('/api/transcript', async (req, res) => {
+	router.post('/api/scribe/transcript', async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		const identity = typeof body.identity === 'string' ? body.identity.slice(0, 128) : ''
@@ -52,10 +52,10 @@ export function createTranscriptRouter(ctx: PluginServerContext): express.Router
 		res.json({ ok: true, entry })
 	})
 
-	// GET /api/transcript?room=&since=&limit= — entries with t > since, oldest
+	// GET /api/scribe/transcript?room=&since=&limit= — entries with t > since, oldest
 	// first. `now` is the server clock so pollers can chain since=now without
 	// trusting their own clock.
-	router.get('/api/transcript', async (req, res) => {
+	router.get('/api/scribe/transcript', async (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		const since = Number(req.query.since ?? 0)

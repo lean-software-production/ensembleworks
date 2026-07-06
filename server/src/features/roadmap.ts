@@ -1,6 +1,6 @@
 /**
- * Roadmap feature — GET /api/roadmap lists/reads roadmap docs; POST
- * /api/roadmap creates/replaces or applies targeted ops with ifRev
+ * Roadmap feature — GET /api/roadmap/doc lists/reads roadmap docs; POST
+ * /api/roadmap/doc creates/replaces or applies targeted ops with ifRev
  * concurrency, bumping the rev prop on canvas shapes that reference the doc.
  */
 import { slugify } from '@ensembleworks/contracts'
@@ -14,9 +14,9 @@ export function createRoadmapRouter(ctx: PluginServerContext): express.Router {
 
 	// Roadmap (two-way roadmap control): the document lives in the roadmap
 	// store, not the tldraw document — shapes hold only { roadmapId, rev }.
-	// GET /api/roadmap?room=[&name=] — without name: list; with name: full
+	// GET /api/roadmap/doc?room=[&name=] — without name: list; with name: full
 	// document + rev (exact-id first, then fuzzy name match like /api/frame).
-	router.get('/api/roadmap', async (req, res) => {
+	router.get('/api/roadmap/doc', async (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		const name = typeof req.query.name === 'string' ? req.query.name.trim() : ''
@@ -35,12 +35,12 @@ export function createRoadmapRouter(ctx: PluginServerContext): express.Router {
 		})
 	})
 
-	// POST /api/roadmap — one write path for humans (canvas drags/status
+	// POST /api/roadmap/doc — one write path for humans (canvas drags/status
 	// clicks) and agents (CLI): an all-or-nothing op batch. Creates the
 	// roadmap when the batch starts with replace and nothing matches `name`.
 	// ifRev guards wholesale regenerate-and-push flows against clobbering
 	// edits that landed since the caller last read (409 carries current rev).
-	router.post('/api/roadmap', async (req, res) => {
+	router.post('/api/roadmap/doc', async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })

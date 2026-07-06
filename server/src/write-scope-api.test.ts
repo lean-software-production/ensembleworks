@@ -36,7 +36,7 @@ const base = `http://127.0.0.1:${address.port}`
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
 const jwt = (payload: Record<string, unknown>) => `${b64({ alg: 'none' })}.${b64(payload)}.`
 const postSticky = (extra: Record<string, string>) =>
-	fetch(`${base}/api/sticky`, {
+	fetch(`${base}/api/canvas/sticky`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json', ...extra },
 		body: JSON.stringify({ room: 'team', text: 'hello from a scoping test' }),

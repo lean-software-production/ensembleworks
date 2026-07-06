@@ -1,4 +1,4 @@
-// Tests for the VM-pressure reading and the /api/pulse heartbeat.
+// Tests for the VM-pressure reading and the /api/av/pulse heartbeat.
 // Run with: bun src/vm-stats.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
@@ -30,7 +30,7 @@ async function main() {
 	// Second call within the cache window returns the identical object.
 	assert.equal(readVmStats(), vm, 'reading is cached (~2s)')
 
-	// --- POST /api/pulse contract --------------------------------------------
+	// --- POST /api/av/pulse contract --------------------------------------------
 	const dataDir = await mkdtemp(path.join(os.tmpdir(), 'pulse-test-'))
 	const { server } = createSyncApp({ dataDir })
 	await new Promise<void>((resolve) => server.listen(0, resolve))
@@ -39,7 +39,7 @@ async function main() {
 	const base = `http://127.0.0.1:${addr.port}`
 
 	const post = (body: unknown) =>
-		fetch(`${base}/api/pulse`, {
+		fetch(`${base}/api/av/pulse`, {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
 			body: JSON.stringify(body),

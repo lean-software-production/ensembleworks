@@ -2,7 +2,7 @@
  * The session pulse: one timer that powers both the VM-pressure strip and the
  * per-user latency badges in the "In session" panel.
  *
- * Each tick POSTs /api/pulse, measuring its own wall-clock round-trip and
+ * Each tick POSTs /api/av/pulse, measuring its own wall-clock round-trip and
  * reporting it as the *next* tick's rttMs — so the heartbeat is self-measuring
  * and needs no separate ping. The server returns a single shared VM reading
  * plus the live latency map (every connected user's last round-trip), keyed by
@@ -72,7 +72,7 @@ export function useSessionPulse(roomId: string, identity: string): SessionPulse 
 		const tick = async () => {
 			const t0 = performance.now()
 			try {
-				const res = await fetch('/api/pulse', {
+				const res = await fetch('/api/av/pulse', {
 					method: 'POST',
 					headers: { 'content-type': 'application/json' },
 					body: JSON.stringify({ room: roomId, userId, rttMs: lastRtt.current }),

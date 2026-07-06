@@ -1,7 +1,7 @@
 // Contract tests for the transcription + diagram plane:
-//   /api/transcript (POST/GET)  – utterances in, tail out, cursor stamping
-//   /api/shape                  – geo/text/note/arrow create, update, delete
-//   /api/livekit-token?role=    – subscribe-only scribe tokens
+//   /api/scribe/transcript (POST/GET)  – utterances in, tail out, cursor stamping
+//   /api/canvas/shape                  – geo/text/note/arrow create, update, delete
+//   /api/av/token?role=    – subscribe-only scribe tokens
 // Boots the express app in-process via createSyncApp, same style as
 // canvas-api.test.ts. Run with: bun src/scribe-api.test.ts
 import assert from 'node:assert/strict'
@@ -83,7 +83,7 @@ async function main() {
 
 	// 1. Transcript append without presence: no cursor, no frame, t stamped.
 	{
-		const res = await postJson('/api/transcript', {
+		const res = await postJson('/api/scribe/transcript', {
 			room: 'test',
 			identity: 'alice',
 			name: 'Alice',
@@ -100,20 +100,20 @@ async function main() {
 
 	// 2. Transcript edge cases.
 	{
-		const noIdentity = await postJson('/api/transcript', { room: 'test', text: 'hi' })
+		const noIdentity = await postJson('/api/scribe/transcript', { room: 'test', text: 'hi' })
 		assert.equal(noIdentity.status, 400, 'missing identity is 400')
-		const emptyText = await postJson('/api/transcript', { room: 'test', identity: 'a', text: '  ' })
+		const emptyText = await postJson('/api/scribe/transcript', { room: 'test', identity: 'a', text: '  ' })
 		assert.equal(emptyText.status, 400, 'empty text is 400')
 		console.log('ok: transcript edge cases (missing identity, empty text)')
 	}
 
 	// 3. since/limit windowing with explicit timestamps.
 	{
-		await postJson('/api/transcript', { room: 'win', identity: 'a', text: 'first', t: 100 })
-		await postJson('/api/transcript', { room: 'win', identity: 'a', text: 'second', t: 200 })
-		await postJson('/api/transcript', { room: 'win', identity: 'a', text: 'third', t: 300 })
+		await postJson('/api/scribe/transcript', { room: 'win', identity: 'a', text: 'first', t: 100 })
+		await postJson('/api/scribe/transcript', { room: 'win', identity: 'a', text: 'second', t: 200 })
+		await postJson('/api/scribe/transcript', { room: 'win', identity: 'a', text: 'third', t: 300 })
 
-		const all = await getJson('/api/transcript?room=win')
+		const all = await getJson('/api/scribe/transcript?room=win')
 		assert.equal(all.status, 200)
 		assert.deepEqual(
 			all.body.entries.map((e: any) => e.text),
@@ -122,14 +122,14 @@ async function main() {
 		)
 		assert.ok(typeof all.body.now === 'number', 'response carries the server clock')
 
-		const since = await getJson('/api/transcript?room=win&since=150')
+		const since = await getJson('/api/scribe/transcript?room=win&since=150')
 		assert.deepEqual(
 			since.body.entries.map((e: any) => e.text),
 			['second', 'third'],
 			'since filters strictly t > since'
 		)
 
-		const limited = await getJson('/api/transcript?room=win&limit=1')
+		const limited = await getJson('/api/scribe/transcript?room=win&limit=1')
 		assert.deepEqual(
 			limited.body.entries.map((e: any) => e.text),
 			['third'],
@@ -179,7 +179,7 @@ async function main() {
 		)
 		await new Promise((r) => setTimeout(r, 300))
 
-		const res = await postJson('/api/transcript', {
+		const res = await postJson('/api/scribe/transcript', {
 			room: 'test',
 			identity: 'speaker-1',
 			name: 'Speaker One',
@@ -231,7 +231,7 @@ async function main() {
 		)
 		await new Promise((r) => setTimeout(r, 300))
 
-		const res = await postJson('/api/transcript', {
+		const res = await postJson('/api/scribe/transcript', {
 			room: 'test',
 			identity: 'speaker-2',
 			name: 'Speaker Two',
@@ -250,7 +250,7 @@ async function main() {
 	let nodeA = ''
 	let nodeB = ''
 	{
-		const res = await postJson('/api/shape', {
+		const res = await postJson('/api/canvas/shape', {
 			room: 'test',
 			type: 'geo',
 			frame: 'drafting',
@@ -268,7 +268,7 @@ async function main() {
 		assert.equal(geo.props.geo, 'rectangle', 'geo defaults to rectangle')
 		assert.ok(JSON.stringify(geo.props.richText).includes('retry bug'), 'label text lands')
 
-		const res2 = await postJson('/api/shape', {
+		const res2 = await postJson('/api/canvas/shape', {
 			room: 'test',
 			type: 'geo',
 			geo: 'ellipse',
@@ -287,7 +287,7 @@ async function main() {
 	// 6. Arrow create binds both terminals so the connector follows the nodes.
 	let arrowId = ''
 	{
-		const res = await postJson('/api/shape', {
+		const res = await postJson('/api/canvas/shape', {
 			room: 'test',
 			type: 'arrow',
 			fromId: nodeA,
@@ -312,7 +312,7 @@ async function main() {
 			'bindings point at the two nodes'
 		)
 
-		const dangling = await postJson('/api/shape', {
+		const dangling = await postJson('/api/canvas/shape', {
 			room: 'test',
 			type: 'arrow',
 			fromId: nodeA,
@@ -324,7 +324,7 @@ async function main() {
 
 	// 7. Shape update: move a node and change its label.
 	{
-		const res = await postJson('/api/shape', {
+		const res = await postJson('/api/canvas/shape', {
 			room: 'test',
 			op: 'update',
 			id: nodeB,
@@ -338,29 +338,29 @@ async function main() {
 		assert.equal(ellipse.props.color, 'green', 'color updated')
 		assert.ok(JSON.stringify(ellipse.props.richText).includes('jitter'), 'label updated')
 
-		const missing = await postJson('/api/shape', { room: 'test', op: 'update', id: 'shape:nope', text: 'x' })
+		const missing = await postJson('/api/canvas/shape', { room: 'test', op: 'update', id: 'shape:nope', text: 'x' })
 		assert.equal(missing.status, 404, 'updating a missing shape is 404')
 		console.log('ok: shape update (position, colour, label)')
 	}
 
 	// 8. Create edge cases.
 	{
-		const badType = await postJson('/api/shape', { room: 'test', type: 'star-chart' })
+		const badType = await postJson('/api/canvas/shape', { room: 'test', type: 'star-chart' })
 		assert.equal(badType.status, 400, 'unknown type is 400')
-		const badGeo = await postJson('/api/shape', { room: 'test', type: 'geo', geo: 'dodecahedron' })
+		const badGeo = await postJson('/api/canvas/shape', { room: 'test', type: 'geo', geo: 'dodecahedron' })
 		assert.equal(badGeo.status, 400, 'unknown geo is 400')
-		const badColor = await postJson('/api/shape', { room: 'test', type: 'note', text: 'x', color: 'mauve' })
+		const badColor = await postJson('/api/canvas/shape', { room: 'test', type: 'note', text: 'x', color: 'mauve' })
 		assert.equal(badColor.status, 400, 'unknown colour is 400')
-		const noFrame = await postJson('/api/shape', { room: 'test', type: 'geo', frame: 'no-such-frame' })
+		const noFrame = await postJson('/api/canvas/shape', { room: 'test', type: 'geo', frame: 'no-such-frame' })
 		assert.equal(noFrame.status, 404, 'unknown frame is 404')
-		const noText = await postJson('/api/shape', { room: 'test', type: 'text' })
+		const noText = await postJson('/api/canvas/shape', { room: 'test', type: 'text' })
 		assert.equal(noText.status, 400, 'text shape without text is 400')
 		console.log('ok: shape create edge cases')
 	}
 
 	// 9. Delete cascades bindings that touch the deleted shape.
 	{
-		const res = await postJson('/api/shape', { room: 'test', op: 'delete', id: nodeA })
+		const res = await postJson('/api/canvas/shape', { room: 'test', op: 'delete', id: nodeA })
 		assert.equal(res.status, 200, 'delete should be 200')
 		assert.ok(res.body.deleted >= 2, 'node + its binding are deleted')
 		assert.ok(!documents().some((r) => r.id === nodeA), 'node is gone')
@@ -372,14 +372,14 @@ async function main() {
 		)
 		assert.ok(documents().some((r) => r.id === arrowId), 'the arrow shape itself survives')
 
-		const missing = await postJson('/api/shape', { room: 'test', op: 'delete', id: 'shape:nope' })
+		const missing = await postJson('/api/canvas/shape', { room: 'test', op: 'delete', id: 'shape:nope' })
 		assert.equal(missing.status, 404, 'deleting a missing shape is 404')
 		console.log('ok: shape delete cascades bindings')
 	}
 
 	// 10. role=scribe mints a subscribe-only token.
 	{
-		const res = await getJson('/api/livekit-token?room=test&identity=scribe-bot&name=Scribe&role=scribe')
+		const res = await getJson('/api/av/token?room=test&identity=scribe-bot&name=Scribe&role=scribe')
 		assert.equal(res.status, 200)
 		assert.equal(res.body.enabled, true)
 		const payload = JSON.parse(
@@ -389,13 +389,13 @@ async function main() {
 		assert.equal(payload.video.canPublish, false, 'scribe tokens cannot publish')
 		assert.equal(payload.video.canSubscribe, true, 'scribe tokens can subscribe')
 
-		const member = await getJson('/api/livekit-token?room=test&identity=alice')
+		const member = await getJson('/api/av/token?room=test&identity=alice')
 		const memberPayload = JSON.parse(
 			Buffer.from(member.body.token.split('.')[1], 'base64url').toString()
 		)
 		assert.equal(memberPayload.video.canPublish, true, 'default role still publishes')
 
-		const badRole = await getJson('/api/livekit-token?room=test&identity=x&role=admin')
+		const badRole = await getJson('/api/av/token?room=test&identity=x&role=admin')
 		assert.equal(badRole.status, 400, 'unknown role is 400')
 		console.log('ok: scribe tokens are subscribe-only')
 	}
