@@ -231,27 +231,33 @@ export function createGatewayPlane() {
 				}
 				const label = (url.searchParams.get('label') || gatewayId).slice(0, 64)
 				void (async () => {
-					const owner = await resolveGatewayOwner(req.headers)
-					if (owner === null) {
-						// No resolvable identity (config error, or an anonymous/dev connect
-						// to an authenticated instance) — refuse before upgrading.
-						console.warn(`[gateway ${gatewayId}] rejected: no resolvable identity`)
+					try {
+						const owner = await resolveGatewayOwner(req.headers)
+						if (owner === null) {
+							// No resolvable identity (config error, or an anonymous/dev connect
+							// to an authenticated instance) — refuse before upgrading.
+							console.warn(`[gateway ${gatewayId}] rejected: no resolvable identity`)
+							socket.destroy()
+							return
+						}
+						const ws = await accept(req, socket, head)
+						const entry = registry.connect(gatewayId, label, ws, owner)
+						if (!entry) {
+							console.warn(`[gateway ${gatewayId}] rejected: id owned by another identity`)
+							ws.close(1008, 'gateway id owned by another identity')
+							return
+						}
+						console.log(`[gateway ${gatewayId}] connected (${label}) as ${owner}`)
+						ws.on('message', (data, isBinary) => onGatewayFrame(entry, data as Buffer, isBinary))
+						ws.on('close', () => {
+							registry.disconnect(gatewayId, ws)
+							console.log(`[gateway ${gatewayId}] disconnected`)
+						})
+					} catch (err) {
+						// Fail closed: never leave an unidentified upgrade half-open.
+						console.warn(`[gateway ${gatewayId}] connect failed:`, err)
 						socket.destroy()
-						return
 					}
-					const ws = await accept(req, socket, head)
-					const entry = registry.connect(gatewayId, label, ws, owner)
-					if (!entry) {
-						console.warn(`[gateway ${gatewayId}] rejected: id owned by another identity`)
-						ws.close(1008, 'gateway id owned by another identity')
-						return
-					}
-					console.log(`[gateway ${gatewayId}] connected (${label}) as ${owner}`)
-					ws.on('message', (data, isBinary) => onGatewayFrame(entry, data as Buffer, isBinary))
-					ws.on('close', () => {
-						registry.disconnect(gatewayId, ws)
-						console.log(`[gateway ${gatewayId}] disconnected`)
-					})
 				})()
 				return true
 			}
