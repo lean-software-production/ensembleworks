@@ -518,3 +518,13 @@ follow-ups for #7/#8, recorded so nothing is dropped:
   whisper-server non-empty-transcription check before committing it are pinned
   in the gate design — an unverified fixture is the one way to bake a
   never-passing gate into the repo.
+
+## Known issue discovered by the gate (2026-07-06)
+
+**rtc-node `AudioSource.captureFrame` silently captures SILENCE from
+`Int16Array` subarray views (non-zero byteOffset) under Bun.** Always pass a
+copied `Int16Array` (`new Int16Array(chunk)`), never a `.subarray()` view.
+Found driving this slice's `--strict` gate (frames flowed at peak=1 until the
+copy fix); the subscribe side (`AudioStream`) is unaffected. Any future code
+that PUBLISHES audio via rtc-node under Bun (e.g. a connector TTS/playback
+path) must heed this. Fix + inline comment: `transcriber/src/e2e-gate.ts`.
