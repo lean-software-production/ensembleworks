@@ -1,4 +1,4 @@
-// A per-user latency sample older than this is dropped from /api/pulse — the
+// A per-user latency sample older than this is dropped from /api/av/pulse — the
 // client polls every PULSE_INTERVAL (~30s, client-side), so this is ~2.5×
 // that: a user who misses one beat still shows; one who left disappears.
 export const PULSE_STALE_MS = 75_000

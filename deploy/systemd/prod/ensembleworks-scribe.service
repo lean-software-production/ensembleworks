@@ -4,7 +4,7 @@
 # NOT a sed token, which is the whole point of using committed files (no escaping).
 # Optional unit: deploy.sh only restarts it if already enabled.
 [Unit]
-Description=EnsembleWorks transcriber (LiveKit -> Groq Whisper -> /api/transcript)
+Description=EnsembleWorks transcriber (LiveKit -> Groq Whisper -> /api/scribe/transcript)
 After=network-online.target ensembleworks-sync.service
 Wants=network-online.target
 

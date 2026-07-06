@@ -4,7 +4,7 @@
  * status list until it is retired in Phase 3.)
  */
 
-/** Valid values of the terminal shape's status light (POST /api/terminal-status). */
+/** Valid values of the terminal shape's status light (POST /api/terminal/status). */
 export const TERMINAL_STATUSES = ['working', 'needs-you', 'done', 'idle'] as const
 export type TerminalStatus = (typeof TERMINAL_STATUSES)[number]
 

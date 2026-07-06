@@ -6,7 +6,7 @@ description: Use when debugging or testing the roadmap canvas control — drag-a
 # Debugging the Roadmap Control
 
 Two planes: **content** lives server-side (`server/src/roadmap-store.ts`) behind
-`GET/POST /api/roadmap`; the tldraw shape holds only `{roadmapId, rev}` and
+`GET/POST /api/roadmap/doc`; the tldraw shape holds only `{roadmapId, rev}` and
 refetches when the server stamps a new `rev` onto it after each write.
 **Ground truth is the server doc** — the UI renders optimistically, so verify
 every interaction by rev bump + data change, never by screenshot alone.

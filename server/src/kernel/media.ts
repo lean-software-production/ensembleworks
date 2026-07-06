@@ -30,7 +30,7 @@ export function createMediaService(env: NodeJS.ProcessEnv = process.env): MediaS
 	const apiUrl = env.LIVEKIT_API_URL
 	// Guard on the RESOLVED url, not on LIVEKIT_API_URL directly — otherwise
 	// pre-cutover (LiveKit Cloud, no LIVEKIT_API_URL) roomService would be
-	// null and /api/kick's removeParticipant would silently stop working.
+	// null and /api/av/kick's removeParticipant would silently stop working.
 	const roomServiceUrl = resolveRoomServiceUrl(url, apiUrl)
 	const roomService =
 		apiKey && apiSecret && roomServiceUrl ? new RoomServiceClient(roomServiceUrl, apiKey, apiSecret) : null

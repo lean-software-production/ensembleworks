@@ -506,7 +506,7 @@ EOF
 
 cat >/etc/systemd/system/ensembleworks-scribe.service <<EOF
 [Unit]
-Description=EnsembleWorks transcriber bot (LiveKit subscriber -> Groq Whisper -> /api/transcript)
+Description=EnsembleWorks transcriber bot (LiveKit subscriber -> Groq Whisper -> /api/scribe/transcript)
 After=network-online.target ensembleworks-sync.service
 Wants=network-online.target
 

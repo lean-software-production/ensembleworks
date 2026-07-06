@@ -11,7 +11,7 @@ export const terminalShapeProps = {
 	h: T.number,
 	sessionId: T.string,
 	title: T.string,
-	// Optional status light set via POST /api/terminal-status; optional so
+	// Optional status light set via POST /api/terminal/status; optional so
 	// existing rooms need no migration.
 	status: T.string.optional(),
 	// Remote gateway id (spike); optional so existing rooms need no migration.
@@ -37,7 +37,7 @@ export const roadmapShapeProps = {
 	h: T.number,
 	// Slug id of the roadmap document this shape renders (see roadmap-store.ts).
 	roadmapId: T.string,
-	// Bumped by POST /api/roadmap on every write so clients refetch; optional
+	// Bumped by POST /api/roadmap/doc on every write so clients refetch; optional
 	// so existing rooms need no migration.
 	rev: T.number.optional(),
 }

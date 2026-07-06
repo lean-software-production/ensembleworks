@@ -14,7 +14,7 @@ export interface SessionRegistry {
 	// ever covers currently-connected people.
 	identitiesByUser: Map<string, Map<string, AccessIdentity>>
 	// Most-recent client-measured round-trip per connected user (roomId ->
-	// rawUserId -> { rtt ms, t }). Reported and read back via POST /api/pulse;
+	// rawUserId -> { rtt ms, t }). Reported and read back via POST /api/av/pulse;
 	// pruned by age on every read so it only ever reflects live participants.
 	latencyByUser: Map<string, Map<string, { rtt: number; t: number }>>
 }

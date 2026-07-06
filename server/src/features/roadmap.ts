@@ -15,7 +15,7 @@ export function createRoadmapRouter(ctx: PluginServerContext): express.Router {
 	// Roadmap (two-way roadmap control): the document lives in the roadmap
 	// store, not the tldraw document — shapes hold only { roadmapId, rev }.
 	// GET /api/roadmap/doc?room=[&name=] — without name: list; with name: full
-	// document + rev (exact-id first, then fuzzy name match like /api/frame).
+	// document + rev (exact-id first, then fuzzy name match like /api/canvas/frame).
 	router.get('/api/roadmap/doc', async (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
