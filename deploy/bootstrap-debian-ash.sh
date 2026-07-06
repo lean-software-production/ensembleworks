@@ -9,7 +9,7 @@
 #
 # !!! SECURITY — READ THIS !!!
 # A Cloudflare Tunnel publishes your hostname to the PUBLIC internet. The
-# terminal gateway (/term) is shell access as the `ensemble` user. You MUST put
+# terminal gateway (/api/terminal) is shell access as the `ensemble` user. You MUST put
 # a Cloudflare Access policy in front of the hostname (see the printed steps at
 # the end) or anyone on the internet gets a shell on this box. Access is the
 # auth boundary here, the way the tailnet was with Tailscale. Because the mob
@@ -106,7 +106,7 @@ fi
 
 # -----------------------------------------------------------------------------
 # 3. Caddy — official apt repo. Internal reverse proxy only: serves plain HTTP
-#    on :${EDGE_PORT} and does the /term, /dev/{port}, and app routing. TLS is
+#    on :${EDGE_PORT} and does the /api/terminal, /dev/{port}, and app routing. TLS is
 #    terminated upstream at the Cloudflare edge, so Caddy needs no certs.
 # -----------------------------------------------------------------------------
 if ! command -v caddy >/dev/null 2>&1; then
@@ -636,7 +636,7 @@ cat <<EOF
        Zero Trust -> Access -> Applications -> Add a Self-hosted application:
          Application domain: canvas.leansoftware.ai   (the same hostname, whole path)
          Policy: Allow -> e.g. "Emails" = your allowlist, or a Google/GitHub IdP.
-       Until this exists, /term is an OPEN SHELL to the public internet.
+       Until this exists, /api/terminal is an OPEN SHELL to the public internet.
 
   3. Set the client's public host (if you didn't pass PUBLIC_HOST): put your
      Cloudflare hostname in ensembleworks-client.service, then restart it:

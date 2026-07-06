@@ -217,7 +217,7 @@ const server = http.createServer(async (req, res) => {
 		return
 	}
 
-	const killMatch = url.pathname.match(/^\/api\/terminal\/sessions\/([^/]+)$/)  // was /^\/term\/sessions\/([^/]+)$/
+	const killMatch = url.pathname.match(/^\/api\/terminal\/sessions\/([^/]+)$/)
 	if (req.method === 'DELETE' && killMatch) {
 		const id = sanitizeId(killMatch[1]!)
 		if (!id) {
