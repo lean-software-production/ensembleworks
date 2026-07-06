@@ -48,4 +48,20 @@ process.env.EW_DEV_IDENTITY_EMAIL = 'dev@example.com'
 assert.equal(await resolveGatewayOwner({}), null, 'strict: dev fallback (unverified) → reject')
 delete process.env.EW_DEV_IDENTITY_EMAIL
 
+assert.equal(
+	await resolveGatewayOwner({ 'cf-access-jwt-assertion': jwt({ email: 'x@y.com' }) }),
+	null,
+	'strict: forged alg-none email JWT → reject',
+)
+assert.equal(
+	await resolveGatewayOwner({ 'cf-access-jwt-assertion': jwt({ common_name: 'a.access' }) }),
+	null,
+	'strict: forged alg-none token JWT → reject',
+)
+assert.equal(
+	await resolveGatewayOwner({ 'cf-access-authenticated-user-email': 'x@y.com' }),
+	null,
+	'strict: spoofed email header → reject',
+)
+
 console.log('ok: resolveGatewayOwner')
