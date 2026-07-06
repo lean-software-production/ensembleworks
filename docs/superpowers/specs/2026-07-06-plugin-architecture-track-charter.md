@@ -160,6 +160,16 @@ parked, to be settled if/when Phase 5 is picked up.
   terminal-status becomes an **ephemeral (non-persisted)** docStore sharing
   only the fan-out.
 
+### Ratified extensions (user, 2026-07-06, via 3b panel escalation)
+
+- **ToolDef has a 6th field `plugin`** (beyond the five pinned above) —
+  required for globally-unique MCP tool names `${plugin}.${id}`.
+- **The `/api/tools` envelope:** flat `tools[]` of
+  `{plugin, id, method, path, help, input, output}` (input/output are JSON
+  Schema via zod's native `z.toJSONSchema`), plus `version: 1` (format
+  version the CLI cache keys on) and an informational `server` build string.
+  Grouping is client-side; the shape matches a future MCP `tools/list`.
+
 ## Phase 6 — Plugin packages (gated slice; conventions pre-pinned)
 
 - **`ensembleworks.config.ts`:** typed
