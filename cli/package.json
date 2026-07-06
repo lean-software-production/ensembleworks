@@ -13,10 +13,12 @@
 	},
 	"dependencies": {
 		"@ensembleworks/contracts": "*",
-		"smol-toml": "^1.7.0"
+		"smol-toml": "^1.7.0",
+		"ws": "^8.21.0"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
+		"@types/ws": "^8.18.1",
 		"bun-types": "1.3.14",
 		"typescript": "^5.7.0"
 	}
