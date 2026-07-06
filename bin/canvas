@@ -114,7 +114,7 @@ cmd_status() {
   done
   [[ "$matched" == true ]] || die "invalid status '$status' (expected one of: $valid_statuses)"
 
-  post_json /api/terminal-status "$(printf '{"room":"%s","sessionId":"%s","status":"%s"}' \
+  post_json /api/terminal/status "$(printf '{"room":"%s","sessionId":"%s","status":"%s"}' \
     "$(json_escape "$canvas_room")" "$(json_escape "$session_id")" "$status")"
 }
 

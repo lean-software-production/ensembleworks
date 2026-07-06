@@ -47,11 +47,11 @@ const closed = (ws: WebSocket) =>
 	const wsBase = `ws://127.0.0.1:${address.port}`
 	const { getJson } = makeTestClient(base)
 	const ids = async () =>
-		((await getJson('/api/gateway/list')).body.gateways as Array<{ gatewayId: string }>).map((g) => g.gatewayId)
+		((await getJson('/api/terminal/list')).body.gateways as Array<{ gatewayId: string }>).map((g) => g.gatewayId)
 	const openGw = (id: string, token?: string) =>
 		new Promise<WebSocket>((resolve, reject) => {
 			const headers = token ? { 'cf-access-jwt-assertion': jwt({ common_name: token }) } : {}
-			const ws = new WebSocket(`${wsBase}/api/gateway/connect?gatewayId=${id}&label=${id}`, { headers })
+			const ws = new WebSocket(`${wsBase}/api/terminal/connect?gatewayId=${id}&label=${id}`, { headers })
 			ws.once('open', () => resolve(ws))
 			ws.on('error', reject)
 		})
@@ -89,7 +89,7 @@ const closed = (ws: WebSocket) =>
 	const wsBase = `ws://127.0.0.1:${address.port}`
 	await assert.rejects(
 		new Promise<WebSocket>((resolve, reject) => {
-			const ws = new WebSocket(`${wsBase}/api/gateway/connect?gatewayId=g9&label=g9`)
+			const ws = new WebSocket(`${wsBase}/api/terminal/connect?gatewayId=g9&label=g9`)
 			ws.once('open', () => resolve(ws))
 			ws.on('error', reject)
 		}),

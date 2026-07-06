@@ -30,7 +30,7 @@ interface GatewayInfo {
 
 async function fetchGateways(): Promise<GatewayInfo[]> {
 	try {
-		const res = await fetch('/api/gateway/list')
+		const res = await fetch('/api/terminal/list')
 		if (!res.ok) return []
 		const body = (await res.json()) as { gateways: GatewayInfo[] }
 		return body.gateways ?? []

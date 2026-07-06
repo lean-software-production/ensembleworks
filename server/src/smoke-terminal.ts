@@ -6,7 +6,7 @@
 import { execFileSync } from 'node:child_process'
 import WebSocket from 'ws'
 
-const BASE = 'ws://localhost:8789/term/ws'
+const BASE = 'ws://localhost:8789/api/terminal/ws'   // was ws://localhost:8789/term/ws
 const SESSION = `smoke${Date.now().toString(36)}`
 
 function connect(cols = 80, rows = 24) {

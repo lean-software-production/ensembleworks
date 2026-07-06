@@ -2,8 +2,8 @@
  * Gateway registry + relay splice core for remote terminal gateways
  * (spike spec: docs/superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md).
  *
- * A remote connector dials ONE outbound WS to /api/gateway/connect; browsers
- * attach at /api/term/relay?gateway=… and are spliced onto that WS as
+ * A remote connector dials ONE outbound WS to /api/terminal/connect; browsers
+ * attach at /api/terminal/relay?gateway=… and are spliced onto that WS as
  * multiplexed channels. This module is the pure core — sockets are duck-typed
  * (RelaySocket) so the whole thing unit-tests with fakes; the HTTP/WS upgrade
  * wiring lives in createGatewayPlane() (added in the next slice).
@@ -223,7 +223,7 @@ export function createGatewayPlane() {
 
 		/** Returns true when it owned the upgrade (matched path), else false. */
 		handleUpgrade(req: IncomingMessage, socket: Duplex, head: Buffer, url: URL): boolean {
-			if (url.pathname === '/api/gateway/connect') {
+			if (url.pathname === '/api/terminal/connect') {   // was /api/gateway/connect
 				const gatewayId = url.searchParams.get('gatewayId') ?? ''
 				if (!ID_RE.test(gatewayId)) {
 					socket.destroy()
@@ -262,7 +262,7 @@ export function createGatewayPlane() {
 				return true
 			}
 
-			if (url.pathname === '/api/term/relay') {
+			if (url.pathname === '/api/terminal/relay') {     // was /api/term/relay
 				const sessionId = url.searchParams.get('session') ?? ''
 				const gatewayId = url.searchParams.get('gateway') ?? ''
 				const cols = Number(url.searchParams.get('cols') ?? 80) || 80

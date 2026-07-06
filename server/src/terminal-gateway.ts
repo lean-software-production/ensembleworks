@@ -7,11 +7,11 @@
  * tmux is the substrate: sessions survive the gateway, the browser, and are
  * reachable from a plain `ssh` + `tmux attach -t canvas-<id>`.
  *
- * Routes (Caddy proxies /term* here):
- *   GET    /term/health
- *   GET    /term/sessions        – live gateway sessions + detached tmux ones
- *   DELETE /term/sessions/:id    – kill the underlying tmux session
- *   WS     /term/ws?session=ID&cols=N&rows=N
+ * Routes (Caddy proxies /api/terminal/* here):
+ *   GET    /api/terminal/health
+ *   GET    /api/terminal/sessions        – live gateway sessions + detached tmux ones
+ *   DELETE /api/terminal/sessions/:id    – kill the underlying tmux session
+ *   WS     /api/terminal/ws?session=ID&cols=N&rows=N
  *
  * Wire protocol: see @ensembleworks/contracts terminal-protocol
  */
@@ -203,12 +203,12 @@ const server = http.createServer(async (req, res) => {
 	const url = new URL(req.url ?? '', 'http://internal')
 	res.setHeader('content-type', 'application/json')
 
-	if (req.method === 'GET' && url.pathname === '/term/health') {
+	if (req.method === 'GET' && url.pathname === '/api/terminal/health') {        // was /term/health
 		res.end(JSON.stringify({ ok: true, sessions: sessions.size }))
 		return
 	}
 
-	if (req.method === 'GET' && url.pathname === '/term/sessions') {
+	if (req.method === 'GET' && url.pathname === '/api/terminal/sessions') {      // was /term/sessions
 		const detached = await listTmuxSessions()
 		const all = new Map<string, { id: string; attachedClients: number }>()
 		for (const id of detached) all.set(id, { id, attachedClients: 0 })
@@ -217,7 +217,7 @@ const server = http.createServer(async (req, res) => {
 		return
 	}
 
-	const killMatch = url.pathname.match(/^\/term\/sessions\/([^/]+)$/)
+	const killMatch = url.pathname.match(/^\/api\/terminal\/sessions\/([^/]+)$/)  // was /^\/term\/sessions\/([^/]+)$/
 	if (req.method === 'DELETE' && killMatch) {
 		const id = sanitizeId(killMatch[1]!)
 		if (!id) {
@@ -258,7 +258,7 @@ heartbeat.unref()
 
 server.on('upgrade', (req, socket, head) => {
 	const url = new URL(req.url ?? '', 'http://internal')
-	if (url.pathname !== '/term/ws') {
+	if (url.pathname !== '/api/terminal/ws') {                                    // was !== '/term/ws'
 		socket.destroy()
 		return
 	}

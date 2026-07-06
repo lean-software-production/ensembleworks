@@ -1,6 +1,6 @@
 // Contract tests for the canvas HTTP API (session MVP plan, Cycle 2).
 // Boots the express app in-process via createSyncApp, seeds a room through
-// getOrCreateRoom().updateStore(), then exercises /api/terminal-status,
+// getOrCreateRoom().updateStore(), then exercises /api/terminal/status,
 // /api/canvas/sticky and the /api/health regression guard.
 // Run with: bun src/canvas-api.test.ts
 import assert from 'node:assert/strict'
@@ -71,7 +71,7 @@ async function main() {
 
 	// 3. terminal-status happy path: flips props.status on the matching shape.
 	{
-		const res = await postJson('/api/terminal-status', {
+		const res = await postJson('/api/terminal/status', {
 			room: 'test',
 			sessionId: 'abc123',
 			status: 'needs-you',
@@ -87,7 +87,7 @@ async function main() {
 
 	// 4. terminal-status edge cases.
 	{
-		const unknown = await postJson('/api/terminal-status', {
+		const unknown = await postJson('/api/terminal/status', {
 			room: 'test',
 			sessionId: 'does-not-exist',
 			status: 'working',
@@ -95,14 +95,14 @@ async function main() {
 		assert.equal(unknown.status, 200, 'unknown sessionId is not an error')
 		assert.equal(unknown.body.updated, 0, 'unknown sessionId updates nothing')
 
-		const badStatus = await postJson('/api/terminal-status', {
+		const badStatus = await postJson('/api/terminal/status', {
 			room: 'test',
 			sessionId: 'abc123',
 			status: 'bogus',
 		})
 		assert.equal(badStatus.status, 400, 'status outside working|needs-you|done|idle is 400')
 
-		const missingSession = await postJson('/api/terminal-status', {
+		const missingSession = await postJson('/api/terminal/status', {
 			room: 'test',
 			status: 'working',
 		})

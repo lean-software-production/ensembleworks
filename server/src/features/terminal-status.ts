@@ -1,5 +1,5 @@
 /**
- * Terminal status-light feature — POST /api/terminal-status sets the status
+ * Terminal status-light feature — POST /api/terminal/status sets the status
  * prop on the terminal shape(s) with a given sessionId (agents flip this via
  * the canvas CLI). Statuses/type-guard come from @ensembleworks/contracts.
  */
@@ -11,7 +11,7 @@ import type { PluginServerContext } from '../kernel/context.ts'
 export function createTerminalStatusRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
-	router.post('/api/terminal-status', async (req, res) => {
+	router.post('/api/terminal/status', async (req, res) => {   // was /api/terminal-status
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		const sessionId = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : null

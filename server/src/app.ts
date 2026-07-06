@@ -9,7 +9,7 @@
  * it wires up storage/rooms/sessions/media into a PluginServerContext and
  * mounts each feature router in order. Only a couple of routes stay inline:
  *   GET  /api/health            – liveness probe
- *   GET  /api/gateway/list      – remote terminal gateway registry (spike)
+ *   GET  /api/terminal/list     – remote terminal gateway registry (spike)
  *   WS   /sync/:roomId          – tldraw sync (TLSocketRoom)
  *   GET  /*                     – static client build (production)
  */
@@ -88,7 +88,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	// Remote terminal gateways (spike): connect-equals-register + relay splicer.
 	// See docs/superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md
 	const gatewayPlane = createGatewayPlane()
-	app.get('/api/gateway/list', gatewayPlane.listHandler)
+	app.get('/api/terminal/list', gatewayPlane.listHandler)   // was /api/gateway/list
 
 	// Auth-plane foundation: caller identity envelope (human|bot|anonymous).
 	app.use(createWhoamiRouter())

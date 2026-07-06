@@ -43,7 +43,7 @@ func TestRelayEndToEnd(t *testing.T) {
 
 	// Mock canvas: accept the connector, record every frame it sends.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/gateway/connect" {
+		if r.URL.Path != "/api/terminal/connect" {   // was /api/gateway/connect
 			http.NotFound(w, r)
 			return
 		}

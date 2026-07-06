@@ -81,7 +81,7 @@ export function createRoadmapRouter(ctx: PluginServerContext): express.Router {
 
 			// Rev fan-out: stamp the new rev onto every shape bound to this roadmap
 			// so tldraw sync broadcasts "data changed" and open clients refetch over
-			// HTTP (the /api/terminal-status mechanism).
+			// HTTP (the /api/terminal/status mechanism).
 			// Fan-out is best-effort; the store write already succeeded.
 			let shapesUpdated = 0
 			try {
