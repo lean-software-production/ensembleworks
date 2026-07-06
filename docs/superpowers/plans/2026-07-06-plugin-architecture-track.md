@@ -11,7 +11,7 @@
 | 0 | Charter | user sitting | ✅ done 2026-07-06 | — | 33 decisions mined (6-agent sweep); 7 user-arbitrated; rest pinned to recommendations |
 | 1 | 3a clean routes | autonomous | ✅ merged 2026-07-06 | `1524708` | panel 2 rounds (r1: inventory gaps → fixed; r2: 2/2 pass); 6 tasks; suite stays 41; deviations: '// was' breadcrumbs stripped by Task-6 backstop; README route docs consciously stale (sweep in #4) |
 | 2 | 3b tool manifest | autonomous | ✅ merged 2026-07-06 | `de6aaad` | panel 3/3 r1; envelope+plugin field escalated → user RATIFIED (charter ext.); suite 41→43; deviations: runtime pkg.json version read, process.exit(0) plan omission fixed after suite hang. Carry-forward for #4: some zodInputs stricter than handler coercion (CLI must not over-reject) |
-| 3 | 3c attribution | autonomous* | queued | — | *promotes to gated if charter leaves mechanism murky |
+| 3 | 3c attribution | autonomous | ✅ merged 2026-07-06 | `7885d2c` | panel 3/3 + fix round; final review caught a CRITICAL (anonymous roadmap meta.author forge via replace-op passthrough) — fixed `13599f2` (server always wins: stamp-or-delete) + forge/stale regressions; suite 43→45 |
 | 4 | #4 ensembleworks CLI | **gated** | queued | — | retires bin/canvas |
 | 5 | #5 connector | autonomous | queued | — | retires gateway-go; validate vs relay-loopback.test.ts |
 | 6 | #6 transcriber cutover | autonomous | queued | — | parallelizable beside 3a–#5 |
