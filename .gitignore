@@ -16,3 +16,6 @@ gateway-go/devcontainer/.devcontainer/termgw-feature/
 # git worktrees (superpowers convention)
 .worktrees/
 spikes/phase0/dist/
+
+# pi coding agent project configuration
+.pi/
