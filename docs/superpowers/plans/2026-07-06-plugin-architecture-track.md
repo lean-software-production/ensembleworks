@@ -8,7 +8,7 @@
 
 | # | Slice | Gate tier | Status | Merge | Notes |
 |---|---|---|---|---|---|
-| 0 | Charter | user sitting | **in progress** | — | sweep workflow running |
+| 0 | Charter | user sitting | ✅ done 2026-07-06 | — | 33 decisions mined (6-agent sweep); 7 user-arbitrated; rest pinned to recommendations |
 | 1 | 3a clean routes | autonomous | queued | — | route table pinned by charter |
 | 2 | 3b tool manifest | autonomous | queued | — | depends on 3a |
 | 3 | 3c attribution | autonomous* | queued | — | *promotes to gated if charter leaves mechanism murky |
@@ -18,7 +18,7 @@
 | 7 | #7 distribution | autonomous | queued | — | compile + fetch-verify-swap deploy |
 | 8 | #8 cutover release | **manual (user)** | queued | — | track preps checklist; phase-boundary review before |
 | 9 | Phase 4: docStore + tools + /mcp | **gated** | queued | — | builds on branch regardless of #8 timing |
-| 10 | Phase 5: memory service | **gated** | queued | — | |
+| 10 | ~~Phase 5: memory service~~ | — | **DEFERRED** (user, 2026-07-06) | — | out of track; embedding decisions parked in charter |
 | 11 | Phase 6: plugin packages | **gated** | queued | — | default profile must reproduce Phase-3 build |
 
 ## Completed before the track (context)
