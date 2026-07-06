@@ -15,3 +15,46 @@ export function isTerminalStatus(s: string): s is TerminalStatus {
 
 /** tmux sessions backing canvas terminals are named `canvas-<sessionId>`. */
 export const TMUX_SESSION_PREFIX = 'canvas-'
+
+// The note colours tldraw's default schema accepts (see TLDefaultColorStyle).
+// Owned by contracts (protocol-by-naming); re-exported from the server's
+// canvas/constants.ts so its importers keep their path.
+export const NOTE_COLORS = [
+	'black',
+	'grey',
+	'light-violet',
+	'violet',
+	'blue',
+	'light-blue',
+	'yellow',
+	'orange',
+	'green',
+	'light-green',
+	'light-red',
+	'red',
+	'white',
+]
+
+// The geo styles tldraw's default schema accepts (see GeoShapeGeoStyle).
+export const GEO_TYPES = [
+	'cloud',
+	'rectangle',
+	'ellipse',
+	'triangle',
+	'diamond',
+	'pentagon',
+	'hexagon',
+	'octagon',
+	'star',
+	'rhombus',
+	'rhombus-2',
+	'oval',
+	'trapezoid',
+	'arrow-right',
+	'arrow-left',
+	'arrow-up',
+	'arrow-down',
+	'x-box',
+	'check-box',
+	'heart',
+]
