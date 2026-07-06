@@ -17,6 +17,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
+import { terminalList } from '@ensembleworks/contracts'
 import { TLSocketRoom } from '@tldraw/sync-core'
 import express from 'express'
 import { WebSocketServer } from 'ws'
@@ -29,6 +30,7 @@ import { createRoadmapRouter } from './features/roadmap.ts'
 import { createShapeRouter } from './features/shape.ts'
 import { createStickyRouter } from './features/sticky.ts'
 import { createTerminalStatusRouter } from './features/terminal-status.ts'
+import { createToolsRouter } from './features/tools.ts'
 import { createTranscriptRouter } from './features/transcript.ts'
 import { createUploadsRouter } from './features/uploads.ts'
 import { createWhoamiRouter } from './features/whoami.ts'
@@ -47,6 +49,7 @@ export { buildParticipants, type CursorRef, type Participant } from './kernel/pr
 export interface SyncApp {
 	server: http.Server // not yet listening
 	getOrCreateRoom(roomId: string): TLSocketRoom
+	app: express.Express   // NEW — read-only test seam for route introspection
 }
 
 export function createSyncApp(opts: { dataDir: string; clientDist?: string }): SyncApp {
@@ -88,12 +91,14 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	// Remote terminal gateways (spike): connect-equals-register + relay splicer.
 	// See docs/superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md
 	const gatewayPlane = createGatewayPlane()
-	app.get('/api/terminal/list', gatewayPlane.listHandler)
+	app.get(terminalList.http.path, gatewayPlane.listHandler)   // path from the tool def
 
 	// Auth-plane foundation: caller identity envelope (human|bot|anonymous).
 	app.use(createWhoamiRouter())
 
 	app.use(createParticipantsRouter(ctx))   // kernel-reserved: /api/participants
+
+	app.use(createToolsRouter())             // kernel-reserved: GET /api/tools
 
 	app.use(createAvRouter(ctx))
 
@@ -185,5 +190,5 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		})
 	})
 
-	return { server, getOrCreateRoom: roomHost.getOrCreateRoom }
+	return { server, getOrCreateRoom: roomHost.getOrCreateRoom, app }
 }

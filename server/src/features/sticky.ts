@@ -2,6 +2,7 @@
  * Sticky feature — POST /api/canvas/sticky posts a note to the canvas, optionally
  * parented to a fuzzy-matched frame, with agent-author styling.
  */
+import { canvasSticky } from '@ensembleworks/contracts'
 import { createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
 import express from 'express'
@@ -17,7 +18,7 @@ export function createStickyRouter(ctx: PluginServerContext): express.Router {
 	// Canvas API (session MVP): lets agents post advice stickies, whether or
 	// not the room is open.
 
-	router.post('/api/canvas/sticky', async (req, res) => {
+	router.post(canvasSticky.http.path, async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		const text = typeof body.text === 'string' ? body.text.trim() : ''

@@ -3,7 +3,7 @@
  * /api/roadmap/doc creates/replaces or applies targeted ops with ifRev
  * concurrency, bumping the rev prop on canvas shapes that reference the doc.
  */
-import { slugify } from '@ensembleworks/contracts'
+import { roadmapRead, roadmapWrite, slugify } from '@ensembleworks/contracts'
 import express from 'express'
 import { sanitizeId } from '../canvas/ids.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
@@ -16,7 +16,7 @@ export function createRoadmapRouter(ctx: PluginServerContext): express.Router {
 	// store, not the tldraw document — shapes hold only { roadmapId, rev }.
 	// GET /api/roadmap/doc?room=[&name=] — without name: list; with name: full
 	// document + rev (exact-id first, then fuzzy name match like /api/canvas/frame).
-	router.get('/api/roadmap/doc', async (req, res) => {
+	router.get(roadmapRead.http.path, async (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		const name = typeof req.query.name === 'string' ? req.query.name.trim() : ''
@@ -40,7 +40,7 @@ export function createRoadmapRouter(ctx: PluginServerContext): express.Router {
 	// roadmap when the batch starts with replace and nothing matches `name`.
 	// ifRev guards wholesale regenerate-and-push flows against clobbering
 	// edits that landed since the caller last read (409 carries current rev).
-	router.post('/api/roadmap/doc', async (req, res) => {
+	router.post(roadmapWrite.http.path, async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
