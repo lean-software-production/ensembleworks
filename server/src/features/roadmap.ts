@@ -84,7 +84,10 @@ export function createRoadmapRouter(ctx: PluginServerContext): express.Router {
 			const rev = (existing?.rev ?? 0) + 1
 			const updated = new Date().toISOString().slice(0, 10)
 			data.meta.updated = updated // server-stamped; client-supplied values are ignored
-			if (attribution.metaAuthor) data.meta.author = attribution.metaAuthor // server-stamped, like `updated`
+			// Server-stamped like `updated`: the server always wins, so an anonymous
+			// caller can neither forge nor inherit a structured author.
+			if (attribution.metaAuthor) data.meta.author = attribution.metaAuthor
+			else delete data.meta.author
 			await ctx.storage.roadmaps.write(roomId, id, { name: existing?.name ?? name, rev, updated, data })
 
 			// Rev fan-out: stamp the new rev onto every shape bound to this roadmap

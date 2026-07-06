@@ -114,7 +114,22 @@ const shapeById = (id: string) =>
 	assert.equal(anon.status, 200)
 	const readAnon = await fetch(`${base}/api/roadmap/doc?room=team&name=anon-roadmap`)
 	assert.equal(((await readAnon.json()) as any).data.meta.author, undefined, 'anonymous roadmap write stamps no author')
-	console.log('ok: roadmap stamps doc-level meta.author for a credential, nothing for anonymous')
+
+	// Forge attempt: an anonymous replace carrying a crafted data.meta.author must
+	// NOT persist it (the server always wins — stamp or delete, like `updated`).
+	const forged = structuredClone(ROADMAP_FIXTURE) as any
+	forged.meta.author = '🤖 codespace-3'
+	const forge = await post('/api/roadmap/doc', { room: 'team', name: 'forge-roadmap', ops: [{ op: 'replace', data: forged }] })
+	assert.equal(forge.status, 200)
+	const readForge = await fetch(`${base}/api/roadmap/doc?room=team&name=forge-roadmap`)
+	assert.equal(((await readForge.json()) as any).data.meta.author, undefined, 'crafted anonymous meta.author is dropped')
+
+	// And an anonymous replace of a credentialed doc must not inherit the old author.
+	const anonOverwrite = await post('/api/roadmap/doc', { room: 'team', name: 'attr-roadmap', ops: [{ op: 'replace', data: ROADMAP_FIXTURE }] })
+	assert.equal(anonOverwrite.status, 200)
+	const readOverwrite = await fetch(`${base}/api/roadmap/doc?room=team&name=attr-roadmap`)
+	assert.equal(((await readOverwrite.json()) as any).data.meta.author, undefined, 'anonymous replace clears the stale author (last-writer semantics)')
+	console.log('ok: roadmap stamps doc-level meta.author for a credential, nothing for anonymous, forge dropped')
 }
 
 server.close()
