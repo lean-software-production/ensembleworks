@@ -181,6 +181,10 @@ async function startSpeaker(sfuUrl: string, signal: AbortSignal): Promise<Room> 
 	}
 	const silence = new Int16Array((SAMPLE_RATE * GAP_MS) / 1000)
 
+	// NOTE: frames are passed as COPIES (new Int16Array(chunk)), never subarray
+	// views: rtc-node's captureFrame mishandles TypedArray views with a non-zero
+	// byteOffset under Bun and captures silence (found 2026-07-06 driving this
+	// gate; subscribe side is unaffected).
 	// Background pump: feed 20 ms frames, AWAITING captureFrame — its resolved
 	// promise is the backpressure that keeps the loop real-time. An un-awaited
 	// tight loop overruns the source's queue and mispaces the WAV, so the audio
@@ -190,11 +194,11 @@ async function startSpeaker(sfuUrl: string, signal: AbortSignal): Promise<Room> 
 			while (!signal.aborted) {
 				for (let i = 0; i < samples.length && !signal.aborted; i += FRAME_SAMPLES) {
 					const chunk = samples.subarray(i, Math.min(i + FRAME_SAMPLES, samples.length))
-					await source.captureFrame(new AudioFrame(chunk, SAMPLE_RATE, CHANNELS, chunk.length))
+					await source.captureFrame(new AudioFrame(new Int16Array(chunk), SAMPLE_RATE, CHANNELS, chunk.length))
 				}
 				for (let i = 0; i < silence.length && !signal.aborted; i += FRAME_SAMPLES) {
 					const chunk = silence.subarray(i, Math.min(i + FRAME_SAMPLES, silence.length))
-					await source.captureFrame(new AudioFrame(chunk, SAMPLE_RATE, CHANNELS, chunk.length))
+					await source.captureFrame(new AudioFrame(new Int16Array(chunk), SAMPLE_RATE, CHANNELS, chunk.length))
 				}
 			}
 		} catch (err) {
