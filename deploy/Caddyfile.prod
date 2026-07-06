@@ -1,8 +1,9 @@
 # EnsembleWorks — PRODUCTION Caddy edge (deployed boxes). Plain HTTP on :8080;
 # TLS is terminated upstream by the Cloudflare Tunnel. Everything except the
 # media signaling (/livekit), the embedded dev-server proxy (/dev/{port}) and the
-# terminal gateway (/term) is proxied to the sync server on :8788 — which serves
-# /sync (tldraw WS), /api, /uploads AND the static client build + SPA fallback.
+# terminal LOCAL plane (/api/terminal/{health,sessions,ws}) is proxied to the
+# sync server on :8788 — which serves /sync (tldraw WS), /api (including the
+# terminal RELAY plane), /uploads AND the static client build + SPA fallback.
 # The sync server runs as the app user, so it reads the build from its own home;
 # Caddy never touches the home dir (keeps it 700). deploy/deploy.sh installs this
 # to /etc/caddy/Caddyfile.
@@ -33,8 +34,11 @@
 		reverse_proxy localhost:8090
 	}
 
-	# Terminal gateway (node-pty + tmux; WebSocket).
-	handle /term* {
+	# Terminal LOCAL plane (node-pty + tmux; WebSocket) — served by the separate
+	# gateway process on :8789. The RELAY plane (/api/terminal/{status,list,
+	# connect,relay}) stays on the sync server (:8788) via the handle{} below.
+	@term_local path /api/terminal/health /api/terminal/sessions /api/terminal/sessions/* /api/terminal/ws
+	handle @term_local {
 		reverse_proxy localhost:8789
 	}
 
