@@ -44,7 +44,7 @@ export interface RoadmapOutcome {
 	initiatives?: RoadmapInitiative[]
 }
 export interface RoadmapDoc {
-	meta: { title: string; revision?: string; updated?: string }
+	meta: { title: string; revision?: string; updated?: string; author?: string }
 	outcomes: RoadmapOutcome[]
 }
 export interface StoredRoadmap {

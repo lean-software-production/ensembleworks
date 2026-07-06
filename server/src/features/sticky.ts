@@ -11,6 +11,8 @@ import { findFrameByName } from '../canvas/frames-helper.ts'
 import { sanitizeId } from '../canvas/ids.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
 import { schema } from '../schema.ts'
+import { badgeText, resolveAttribution } from '../kernel/attribution.ts'
+import { resolveCaller } from '../whoami.ts'
 
 export function createStickyRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
@@ -31,6 +33,14 @@ export function createStickyRouter(ctx: PluginServerContext): express.Router {
 		if (!NOTE_COLORS.includes(color)) {
 			return void res.status(400).json({ error: `color must be one of ${NOTE_COLORS.join(' | ')}` })
 		}
+
+		// Attribution: stamp the real caller (credential wins; anonymous body.author
+		// is a cosmetic badge only). Resolved once, before the store transaction.
+		// The 2000-char check above ran on the pre-badge text — the badge is server
+		// chrome and must not eat the caller's budget.
+		const attribution = resolveAttribution(await resolveCaller(req.headers), body.author)
+		const badged = badgeText(text, attribution.display)
+
 		let createdId: string | null = null
 		let frameFound = true
 		await ctx.rooms.getOrCreateRoom(roomId).updateStore((store) => {
@@ -72,8 +82,9 @@ export function createStickyRouter(ctx: PluginServerContext): express.Router {
 				index: getIndexAbove(topIndex),
 				x,
 				y,
+				meta: attribution.metaAuthor ? { author: attribution.metaAuthor } : {},
 				props: {
-					richText: toRichText(text),
+					richText: toRichText(badged),
 					color,
 					labelColor: 'black',
 					size: 'm',
