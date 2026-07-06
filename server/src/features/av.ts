@@ -1,11 +1,11 @@
 /**
- * A/V feature — LiveKit token minting, kick, participants roster, client pulse.
+ * A/V feature — LiveKit token minting, kick, client pulse.
  */
 import express from 'express'
 import { AccessToken } from 'livekit-server-sdk'
 import { PULSE_STALE_MS } from '../canvas/constants.ts'
 import { sanitizeId } from '../canvas/ids.ts'
-import { buildParticipants, getCursorRefs, rawUserId } from '../kernel/presence.ts'
+import { rawUserId } from '../kernel/presence.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
 import { readVmStats } from '../vm-stats.ts'
 
@@ -71,23 +71,6 @@ export function createAvRouter(ctx: PluginServerContext): express.Router {
 		}
 
 		res.json({ ok: true, disconnected: sessionIds.length })
-	})
-
-	// Who is currently in a room — live presence joined with each person's
-	// verified Cloudflare Access identity. With ?page= it's filtered to one
-	// tldraw page, which is the git co-author rule (same room AND page). The
-	// commit tool reads this to build `Co-authored-by` trailers.
-	router.get('/api/participants', (req, res) => {
-		const roomId = sanitizeId(String(req.query.room ?? 'team'))
-		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
-		const page = req.query.page ? String(req.query.page) : null
-		const room = ctx.rooms.rooms.get(roomId)
-		const refs = room && !room.isClosed() ? getCursorRefs(room) : []
-		res.json({
-			room: roomId,
-			page,
-			participants: buildParticipants(refs, ctx.sessions.identitiesByUser.get(roomId), page),
-		})
 	})
 
 	// Session pulse: one heartbeat that carries both features in the "In session"
