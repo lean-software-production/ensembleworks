@@ -21,6 +21,7 @@ import type { IncomingMessage } from 'node:http'
 import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from 'ws'
+import { resolveGatewayOwner } from './whoami.ts'
 
 export const WS_OPEN = 1
 // A browser that can't drain 4 MB is closed rather than buffered forever —
@@ -39,6 +40,7 @@ export interface GatewayEntry {
 	gatewayId: string
 	label: string
 	ws: RelaySocket
+	ownerIdentity: string
 	connectedAt: number
 	channels: Map<number, RelaySocket>
 	nextChannelId: number
@@ -58,11 +60,13 @@ export function decodeBinaryFrame(frame: Buffer): { channelId: number; payload: 
 export class GatewayRegistry {
 	private gateways = new Map<string, GatewayEntry>()
 
-	/** Connect-equals-register. A reconnect with a live id replaces it: the old
-	 * socket and every browser riding it are closed (their client-side backoff
-	 * re-establishes channels on the new connection). */
-	connect(gatewayId: string, label: string, ws: RelaySocket): GatewayEntry {
+	/** Connect-equals-register, bound to the caller's identity. A reconnect by the
+	 * SAME owner replaces the live id (old socket + riding browsers closed; their
+	 * client-side backoff re-establishes channels). A connect by a DIFFERENT owner
+	 * is rejected (returns null) and leaves the existing gateway untouched. */
+	connect(gatewayId: string, label: string, ws: RelaySocket, ownerIdentity: string): GatewayEntry | null {
 		const existing = this.gateways.get(gatewayId)
+		if (existing && existing.ownerIdentity !== ownerIdentity) return null
 		if (existing) {
 			for (const browser of existing.channels.values()) browser.close()
 			existing.channels.clear()
@@ -72,6 +76,7 @@ export class GatewayRegistry {
 			gatewayId,
 			label,
 			ws,
+			ownerIdentity,
 			connectedAt: Date.now(),
 			channels: new Map(),
 			nextChannelId: 1,
@@ -225,15 +230,35 @@ export function createGatewayPlane() {
 					return true
 				}
 				const label = (url.searchParams.get('label') || gatewayId).slice(0, 64)
-				void accept(req, socket, head).then((ws) => {
-					const entry = registry.connect(gatewayId, label, ws)
-					console.log(`[gateway ${gatewayId}] connected (${label})`)
-					ws.on('message', (data, isBinary) => onGatewayFrame(entry, data as Buffer, isBinary))
-					ws.on('close', () => {
-						registry.disconnect(gatewayId, ws)
-						console.log(`[gateway ${gatewayId}] disconnected`)
-					})
-				})
+				void (async () => {
+					try {
+						const owner = await resolveGatewayOwner(req.headers)
+						if (owner === null) {
+							// No resolvable identity (config error, or an anonymous/dev connect
+							// to an authenticated instance) — refuse before upgrading.
+							console.warn(`[gateway ${gatewayId}] rejected: no resolvable identity`)
+							socket.destroy()
+							return
+						}
+						const ws = await accept(req, socket, head)
+						const entry = registry.connect(gatewayId, label, ws, owner)
+						if (!entry) {
+							console.warn(`[gateway ${gatewayId}] rejected: id owned by another identity`)
+							ws.close(1008, 'gateway id owned by another identity')
+							return
+						}
+						console.log(`[gateway ${gatewayId}] connected (${label}) as ${owner}`)
+						ws.on('message', (data, isBinary) => onGatewayFrame(entry, data as Buffer, isBinary))
+						ws.on('close', () => {
+							registry.disconnect(gatewayId, ws)
+							console.log(`[gateway ${gatewayId}] disconnected`)
+						})
+					} catch (err) {
+						// Fail closed: never leave an unidentified upgrade half-open.
+						console.warn(`[gateway ${gatewayId}] connect failed:`, err)
+						socket.destroy()
+					}
+				})()
 				return true
 			}
 
