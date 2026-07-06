@@ -9,7 +9,7 @@
 | # | Slice | Gate tier | Status | Merge | Notes |
 |---|---|---|---|---|---|
 | 0 | Charter | user sitting | ✅ done 2026-07-06 | — | 33 decisions mined (6-agent sweep); 7 user-arbitrated; rest pinned to recommendations |
-| 1 | 3a clean routes | autonomous | queued | — | route table pinned by charter |
+| 1 | 3a clean routes | autonomous | ✅ merged 2026-07-06 | `1524708` | panel 2 rounds (r1: inventory gaps → fixed; r2: 2/2 pass); 6 tasks; suite stays 41; deviations: '// was' breadcrumbs stripped by Task-6 backstop; README route docs consciously stale (sweep in #4) |
 | 2 | 3b tool manifest | autonomous | queued | — | depends on 3a |
 | 3 | 3c attribution | autonomous* | queued | — | *promotes to gated if charter leaves mechanism murky |
 | 4 | #4 ensembleworks CLI | **gated** | queued | — | retires bin/canvas |
