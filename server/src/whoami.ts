@@ -68,3 +68,23 @@ export async function resolveWriteScope(
 	if (!commonName) return null
 	return lookupServiceToken(commonName)?.scope ?? null
 }
+
+/**
+ * The principal to bind a terminal-gateway registration to, or null to REJECT
+ * the connect. accessVerificationEnabled() is the strict (production) switch:
+ * strict instances require a real verified identity and reject anonymous / dev
+ * fallbacks; non-strict (dev) instances synthesise a `dev` owner for an
+ * otherwise anonymous caller. Prefixed so principals can't collide.
+ */
+export async function resolveGatewayOwner(headers: IncomingHttpHeaders): Promise<string | null> {
+	const strict = accessVerificationEnabled()
+	const human = await getAccessIdentity(headers)
+	if (human) {
+		if (strict && !human.verified) return null // dev/unverified identity in production
+		return `sso:${human.email}`
+	}
+	const commonName = await serviceTokenCommonName(headers)
+	if (commonName && lookupServiceToken(commonName)) return `token:${commonName}`
+	// Anonymous — no resolvable identity.
+	return strict ? null : 'dev'
+}
