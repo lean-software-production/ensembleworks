@@ -1,7 +1,9 @@
 // terminal connect slot (§10): resolveConnectConfig builds the ws url + defaults
 // (gateway-id = a stable per-box id, NOT bare hostname; label = hostname); the
-// slot prints the config on --dry-run (exit 0) and the #5 notice otherwise
-// (exit non-zero). Network-free. Run with: bun src/native/connect.test.ts
+// slot prints the config on --dry-run (exit 0). A plain run now dispatches to
+// runConnector (slice #5) — that real-dial path is network-free-incompatible,
+// so it is pinned end-to-end by the booted server/src/connector-loopback.test.ts,
+// not exercised here. Network-free. Run with: bun src/native/connect.test.ts
 import assert from 'node:assert/strict'
 import { hostname } from 'node:os'
 import type { Conn } from '../resolve.ts'
@@ -41,7 +43,9 @@ const conn: Conn = {
 	assert.ok(cfg.wsUrl.startsWith('ws://localhost:8788/api/terminal/connect?'))
 }
 
-// Slot behaviour: --dry-run prints JSON to stdout (exit 0); plain run → #5 notice, non-zero.
+// Slot behaviour: --dry-run prints JSON to stdout (exit 0). A plain run now
+// dials the real connector (runConnector) — that path is covered end-to-end by
+// the booted server/src/connector-loopback.test.ts, not here (network-free).
 {
 	const env = { ...process.env, ENSEMBLEWORKS_URL: 'http://localhost:8788' } as NodeJS.ProcessEnv
 	const outChunks: string[] = []
@@ -57,18 +61,6 @@ const conn: Conn = {
 	const printed = JSON.parse(outChunks.join(''))
 	assert.equal(printed.url, 'http://localhost:8788')
 	assert.ok(printed.wsUrl.startsWith('ws://localhost:8788/api/terminal/connect?'))
-
-	const errChunks: string[] = []
-	const realErr = process.stderr.write.bind(process.stderr)
-	;(process.stderr as any).write = (s: string) => { errChunks.push(String(s)); return true }
-	let realCode: number
-	try {
-		realCode = await connectSlot([], { refresh: false, json: false, dryRun: false, help: false }, env)
-	} finally {
-		;(process.stderr as any).write = realErr
-	}
-	assert.notEqual(realCode, 0, 'a plain connect exits non-zero in #4')
-	assert.ok(errChunks.join('').includes('sub-project #5'), 'the #5 notice is printed to stderr')
 }
 
-console.log('ok: connect — ws url + stable-gateway-id/hostname defaults, flags win, --dry-run config, #5 notice')
+console.log('ok: connect — ws url + stable-gateway-id/hostname defaults, flags win, --dry-run config')

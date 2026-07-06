@@ -14,8 +14,9 @@ import path from 'node:path'
 import type { Globals } from '../dispatch.ts'
 import { CliError } from '../errors.ts'
 import { hostsPath, loadHosts } from '../hosts.ts'
-import { emitJson, narrate } from '../output.ts'
-import { type Conn, readEnv, resolveConn } from '../resolve.ts'
+import { emitJson } from '../output.ts'
+import { authHeaders, type Conn, readEnv, resolveConn } from '../resolve.ts'
+import { runConnector } from '../connector/index.ts'
 
 export interface ConnectConfig {
 	url: string
@@ -44,8 +45,7 @@ export async function connectSlot(args: string[], globals: Globals, env: NodeJS.
 		emitJson(cfg)
 		return 0
 	}
-	narrate('terminal connect: the connector engine ships in sub-project #5')
-	return 1
+	return runConnector(cfg, authHeaders(conn.auth), env) // conn + env already in scope
 }
 
 function parseConnectFlags(args: string[]): { label?: string; gatewayId?: string } {
