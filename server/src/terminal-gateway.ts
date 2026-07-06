@@ -26,7 +26,7 @@ import {
 	TMUX_SESSION_PREFIX,
 	type TermServerMessage,
 } from '@ensembleworks/contracts'
-import { openTmuxSession, type TmuxSession } from '@ensembleworks/contracts/session-manager'
+import { canvasTmuxSpawnSpec, openTmuxSession, type TmuxSession } from '@ensembleworks/contracts/session-manager'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 const PORT = Number(process.env.PORT ?? 8789)
@@ -75,22 +75,7 @@ function tmuxSpawnSpec(id: string): {
 			env: { TERM: 'xterm-256color' },
 		}
 	}
-	return {
-		file: 'tmux',
-		// `new-session -A` attaches when the session already exists, so terminals
-		// reconnect to live tmux sessions across gateway and browser restarts.
-		args: [...TMUX_BASE_ARGS, 'new-session', '-A', '-s', sessionName],
-		cwd: process.env.HOME ?? process.cwd(),
-		env: {
-			...process.env,
-			TERM: 'xterm-256color',
-			// Light terminal background hint (fg 0, bg 15) — tmux < 3.4 drops OSC 11
-			// queries, so theme auto-detection needs this fallback.
-			COLORFGBG: '0;15',
-			// The `q` binding in tmux-ensembleworks.conf reloads from this path.
-			ENSEMBLEWORKS_TMUX_CONF: TMUX_CONF,
-		} as Record<string, string>,
-	}
+	return canvasTmuxSpawnSpec({ sessionId: id, tmuxConf: TMUX_CONF, home: process.env.HOME })
 }
 
 // One-shot startup check: when TERM_RUN_AS is set, confirm the gateway can sudo to

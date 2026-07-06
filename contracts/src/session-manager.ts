@@ -8,7 +8,9 @@
  * Bun/server-only (spawns a PTY via Bun.spawn). Reachable only through the
  * `@ensembleworks/contracts/session-manager` subpath — never the browser barrel.
  */
+import { existsSync } from 'node:fs'
 import { spawnPty, type Pty } from './pty.js'
+import { TMUX_SESSION_PREFIX } from './constants.js'
 
 /** How to spawn the tmux client on this host (the caller's policy). */
 export interface SpawnSpec {
@@ -69,4 +71,43 @@ export function openTmuxSession(spec: SpawnSpec, cols: number, rows: number): Tm
       return curRows
     },
   }
+}
+
+/** The tmux grid bounds get one exported home (the same literals resize()
+ *  clamps with; no second copy anywhere). session.go's getOrCreate clamps the
+ *  initial grid BEFORE spawn — openTmuxSession stores its construction size
+ *  unclamped (its clamp lives only in resize()), so the connector's session
+ *  manager clamps here first. */
+export function clampTmuxGrid(cols: number, rows: number): { cols: number; rows: number } {
+	return { cols: clamp(cols, COLS_MIN, COLS_MAX), rows: clamp(rows, ROWS_MIN, ROWS_MAX) }
+}
+
+export interface CanvasTmuxSpawnOptions {
+	sessionId: string
+	/** tmux config path; `-f` is applied only when the file exists (missing conf
+	 *  silently degrades clipboard/status-bar, never crashes — tmux.go semantics). */
+	tmuxConf?: string
+	/** cwd for the tmux client; defaults to $HOME then process.cwd(). */
+	home?: string
+}
+
+/** The canvas tmux spawn policy shared by the server gateway and the connector:
+ *  `tmux [-f conf] new-session -A -s canvas-<id>` with the xterm-256color /
+ *  light-bg / conf-reload env. Behaviour-identical to terminal-gateway.ts's
+ *  direct (non-RUN_AS) branch (charter §"#5"). */
+export function canvasTmuxSpawnSpec(opts: CanvasTmuxSpawnOptions): SpawnSpec {
+	const sessionName = `${TMUX_SESSION_PREFIX}${opts.sessionId}`
+	const baseArgs = opts.tmuxConf && existsSync(opts.tmuxConf) ? ['-f', opts.tmuxConf] : []
+	const env: Record<string, string> = {
+		...(process.env as Record<string, string>),
+		TERM: 'xterm-256color',
+		COLORFGBG: '0;15', // light-bg hint for tmux < 3.4 (drops OSC 11 queries)
+	}
+	if (opts.tmuxConf) env.ENSEMBLEWORKS_TMUX_CONF = opts.tmuxConf // the `q` reload binding reads this
+	return {
+		file: 'tmux',
+		args: [...baseArgs, 'new-session', '-A', '-s', sessionName],
+		cwd: opts.home ?? process.env.HOME ?? process.cwd(),
+		env,
+	}
 }
