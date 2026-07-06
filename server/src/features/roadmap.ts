@@ -8,6 +8,8 @@ import express from 'express'
 import { sanitizeId } from '../canvas/ids.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
 import { OpError, applyOps, type RoadmapOp } from '../roadmap-store.ts'
+import { resolveAttribution } from '../kernel/attribution.ts'
+import { resolveCaller } from '../whoami.ts'
 
 export function createRoadmapRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
@@ -49,6 +51,11 @@ export function createRoadmapRouter(ctx: PluginServerContext): express.Router {
 		if (name.length > 128) return void res.status(400).json({ error: 'name must be 128 characters or fewer' })
 		const ifRev = typeof body.ifRev === 'number' && Number.isFinite(body.ifRev) ? body.ifRev : null
 
+		// Attribution: doc-level last-writer, credential-only — stamped beside the
+		// server-owned `updated`. An anonymous "none" write stamps neither (roadmap
+		// has no cosmetic text surface, so display is unused here).
+		const attribution = resolveAttribution(await resolveCaller(req.headers), body.author)
+
 		// The store's lock serializes the whole read-modify-write; POST bodies
 		// interleave across awaits, so without it two writers read the same rev.
 		await ctx.storage.roadmaps.withLock(roomId, async () => {
@@ -77,6 +84,10 @@ export function createRoadmapRouter(ctx: PluginServerContext): express.Router {
 			const rev = (existing?.rev ?? 0) + 1
 			const updated = new Date().toISOString().slice(0, 10)
 			data.meta.updated = updated // server-stamped; client-supplied values are ignored
+			// Server-stamped like `updated`: the server always wins, so an anonymous
+			// caller can neither forge nor inherit a structured author.
+			if (attribution.metaAuthor) data.meta.author = attribution.metaAuthor
+			else delete data.meta.author
 			await ctx.storage.roadmaps.write(roomId, id, { name: existing?.name ?? name, rev, updated, data })
 
 			// Rev fan-out: stamp the new rev onto every shape bound to this roadmap

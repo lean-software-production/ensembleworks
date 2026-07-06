@@ -12,6 +12,8 @@ import { findFrameByName } from '../canvas/frames-helper.ts'
 import { pagePoint } from '../canvas/geometry.ts'
 import { sanitizeId } from '../canvas/ids.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
+import { badgeText, resolveAttribution } from '../kernel/attribution.ts'
+import { resolveCaller } from '../whoami.ts'
 
 export function createShapeRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
@@ -37,6 +39,11 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 			return void res.status(400).json({ error: `color must be one of ${NOTE_COLORS.join(' | ')}` })
 		}
 		const num = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : undefined)
+
+		// Attribution: stamp the real caller (credential wins; anonymous body.author
+		// is a cosmetic badge only). Resolved once; only the create branch consumes
+		// it — update/delete do NOT re-attribute (author is the shape's creator).
+		const attribution = resolveAttribution(await resolveCaller(req.headers), body.author)
 
 		// ---- delete -----------------------------------------------------------
 		if (op === 'delete') {
@@ -110,6 +117,7 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 			return void res.status(400).json({ error: 'type must be geo | text | note | arrow' })
 		}
 		const frameName = typeof body.frame === 'string' ? body.frame : null
+		const badged = badgeText(text ?? '', attribution.display)
 		let createdId: string | null = null
 		let problem: { status: number; error: string } | null = null
 
@@ -144,7 +152,7 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 					rotation: 0,
 					isLocked: false,
 					opacity: 1,
-					meta: {},
+					meta: attribution.metaAuthor ? { author: attribution.metaAuthor } : {},
 				}
 
 				if (type === 'arrow') {
@@ -183,7 +191,7 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 							start: { x: 0, y: 0 },
 							end: { x: b.x - a.x, y: b.y - a.y },
 							bend: 0,
-							richText: toRichText(text ?? ''),
+							richText: toRichText(badged),
 							labelPosition: 0.5,
 							scale: 1,
 							elbowMidPoint: 0.5,
@@ -233,7 +241,7 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 							font: 'draw',
 							align: 'middle',
 							verticalAlign: 'middle',
-							richText: toRichText(text ?? ''),
+							richText: toRichText(badged),
 						},
 					} as any)
 				} else if (type === 'text') {
@@ -251,7 +259,7 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 							font: 'draw',
 							textAlign: 'start',
 							w: w ?? 300,
-							richText: toRichText(text),
+							richText: toRichText(badged),
 							scale: 1,
 							autoSize: w === undefined,
 						},
@@ -266,7 +274,7 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 						...base,
 						type: 'note',
 						props: {
-							richText: toRichText(text),
+							richText: toRichText(badged),
 							color: color ?? 'yellow',
 							labelColor: 'black',
 							size: 'm',

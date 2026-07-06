@@ -21,9 +21,10 @@ usage() {
     '      Set the status light on the terminal shape(s) with that session id.' \
     '  sticky <text> [--frame <name>] [--color <color>] [--author <name>]' \
     '      Post a sticky note; --frame parents it to the first frame whose' \
-    '      name contains <name> (case-insensitive). --author prefixes the' \
-    '      text with "🤖 <name>: " and defaults the colour to light-blue so' \
-    '      agent stickies are distinct from teammates'"'"' notes.' \
+    '      name contains <name> (case-insensitive). --author sends the author' \
+    '      to the server, which stamps the "🤖 <name>: " badge, and defaults' \
+    '      the colour to light-blue so agent stickies are distinct from' \
+    '      teammates'"'"' notes.' \
     '  frames' \
     '      List the frames in the room with their child counts (JSON).' \
     '  read <frame>' \
@@ -145,11 +146,10 @@ cmd_sticky() {
     esac
   done
 
-  # Authorship is convention, not schema: tag the text and, unless the caller
-  # picked a colour, default agent stickies to light-blue so they stand out
-  # from teammates' notes.
+  # Author is now a wire field: the server stamps the 🤖 badge and meta.author
+  # from the request's credential. On a "none" instance --author still shows as a
+  # cosmetic badge. Keep the light-blue default so agent stickies stand out.
   if [[ -n "$author" ]]; then
-    text="🤖 ${author}: ${text}"
     [[ -n "$color" ]] || color='light-blue'
   fi
 
@@ -169,6 +169,7 @@ cmd_sticky() {
     "$(json_escape "$canvas_room")" "$(json_escape "$text")")"
   [[ -n "$frame" ]] && payload+="$(printf ',"frame":"%s"' "$(json_escape "$frame")")"
   [[ -n "$color" ]] && payload+="$(printf ',"color":"%s"' "$color")"
+  [[ -n "$author" ]] && payload+="$(printf ',"author":"%s"' "$(json_escape "$author")")"
   payload+='}'
 
   post_json /api/canvas/sticky "$payload"
