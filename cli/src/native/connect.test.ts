@@ -1,0 +1,74 @@
+// terminal connect slot (§10): resolveConnectConfig builds the ws url + defaults
+// (gateway-id = a stable per-box id, NOT bare hostname; label = hostname); the
+// slot prints the config on --dry-run (exit 0) and the #5 notice otherwise
+// (exit non-zero). Network-free. Run with: bun src/native/connect.test.ts
+import assert from 'node:assert/strict'
+import { hostname } from 'node:os'
+import type { Conn } from '../resolve.ts'
+import { connectSlot, resolveConnectConfig } from './connect.ts'
+
+const conn: Conn = {
+	url: 'https://canvas.example.com',
+	room: 'team',
+	auth: { method: 'service-token', tokenId: 'i', tokenSecret: 's' },
+}
+
+// Config resolution + defaults.
+{
+	const cfg = resolveConnectConfig(conn, {}, process.env)
+	assert.equal(cfg.url, 'https://canvas.example.com')
+	assert.equal(cfg.room, 'team')
+	assert.equal(cfg.authMethod, 'service-token')
+	assert.equal(cfg.label, hostname(), 'label defaults to hostname')
+	assert.ok(cfg.gatewayId.startsWith(`${hostname()}-`), 'gateway-id is hostname + a stable per-box suffix')
+	assert.notEqual(cfg.gatewayId, hostname(), 'gateway-id is NOT the bare hostname (would collide, tripping resolveGatewayOwner)')
+	assert.ok(cfg.wsUrl.startsWith('wss://canvas.example.com/api/terminal/connect?'), 'wss ws url on the connect route')
+	assert.ok(cfg.wsUrl.includes(`gatewayId=${encodeURIComponent(cfg.gatewayId)}`))
+	assert.ok(cfg.wsUrl.includes(`label=${encodeURIComponent(cfg.label)}`))
+}
+
+// Explicit flags win.
+{
+	const cfg = resolveConnectConfig(conn, { label: 'my-box', gatewayId: 'fixed-id' }, process.env)
+	assert.equal(cfg.label, 'my-box')
+	assert.equal(cfg.gatewayId, 'fixed-id')
+}
+
+// http url → ws (not wss) for a none/localhost instance.
+{
+	const local: Conn = { url: 'http://localhost:8788', room: 'team', auth: { method: 'none' } }
+	const cfg = resolveConnectConfig(local, {}, process.env)
+	assert.ok(cfg.wsUrl.startsWith('ws://localhost:8788/api/terminal/connect?'))
+}
+
+// Slot behaviour: --dry-run prints JSON to stdout (exit 0); plain run → #5 notice, non-zero.
+{
+	const env = { ...process.env, ENSEMBLEWORKS_URL: 'http://localhost:8788' } as NodeJS.ProcessEnv
+	const outChunks: string[] = []
+	const realOut = process.stdout.write.bind(process.stdout)
+	;(process.stdout as any).write = (s: string) => { outChunks.push(String(s)); return true }
+	let dryCode: number
+	try {
+		dryCode = await connectSlot([], { refresh: false, json: false, dryRun: true, help: false }, env)
+	} finally {
+		;(process.stdout as any).write = realOut
+	}
+	assert.equal(dryCode, 0, '--dry-run exits 0')
+	const printed = JSON.parse(outChunks.join(''))
+	assert.equal(printed.url, 'http://localhost:8788')
+	assert.ok(printed.wsUrl.startsWith('ws://localhost:8788/api/terminal/connect?'))
+
+	const errChunks: string[] = []
+	const realErr = process.stderr.write.bind(process.stderr)
+	;(process.stderr as any).write = (s: string) => { errChunks.push(String(s)); return true }
+	let realCode: number
+	try {
+		realCode = await connectSlot([], { refresh: false, json: false, dryRun: false, help: false }, env)
+	} finally {
+		;(process.stderr as any).write = realErr
+	}
+	assert.notEqual(realCode, 0, 'a plain connect exits non-zero in #4')
+	assert.ok(errChunks.join('').includes('sub-project #5'), 'the #5 notice is printed to stderr')
+}
+
+console.log('ok: connect — ws url + stable-gateway-id/hostname defaults, flags win, --dry-run config, #5 notice')
