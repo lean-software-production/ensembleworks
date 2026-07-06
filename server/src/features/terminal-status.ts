@@ -3,7 +3,7 @@
  * prop on the terminal shape(s) with a given sessionId (agents flip this via
  * the canvas CLI). Statuses/type-guard come from @ensembleworks/contracts.
  */
-import { isTerminalStatus, TERMINAL_STATUSES } from '@ensembleworks/contracts'
+import { isTerminalStatus, terminalStatus, TERMINAL_STATUSES } from '@ensembleworks/contracts'
 import express from 'express'
 import { sanitizeId } from '../canvas/ids.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
@@ -11,7 +11,7 @@ import type { PluginServerContext } from '../kernel/context.ts'
 export function createTerminalStatusRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
-	router.post('/api/terminal/status', async (req, res) => {
+	router.post(terminalStatus.http.path, async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		const sessionId = typeof body.sessionId === 'string' && body.sessionId ? body.sessionId : null

@@ -3,6 +3,7 @@
  * speaker's live cursor/frame when present); GET /api/scribe/transcript reads the
  * room's transcript.
  */
+import { scribeSay, scribeTranscript } from '@ensembleworks/contracts'
 import express from 'express'
 import { sanitizeId } from '../canvas/ids.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
@@ -17,7 +18,7 @@ export function createTranscriptRouter(ctx: PluginServerContext): express.Router
 	// canvas tab is open — the scribe posts the raw LiveKit identity, which
 	// equals the tldraw presence userId once its "user:" prefix is stripped.
 
-	router.post('/api/scribe/transcript', async (req, res) => {
+	router.post(scribeSay.http.path, async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		const identity = typeof body.identity === 'string' ? body.identity.slice(0, 128) : ''
@@ -55,7 +56,7 @@ export function createTranscriptRouter(ctx: PluginServerContext): express.Router
 	// GET /api/scribe/transcript?room=&since=&limit= — entries with t > since, oldest
 	// first. `now` is the server clock so pollers can chain since=now without
 	// trusting their own clock.
-	router.get('/api/scribe/transcript', async (req, res) => {
+	router.get(scribeTranscript.http.path, async (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		const since = Number(req.query.since ?? 0)

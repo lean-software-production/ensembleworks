@@ -1,6 +1,7 @@
 /**
  * A/V feature — LiveKit token minting, kick, client pulse.
  */
+import { avKick, avPulse, avToken } from '@ensembleworks/contracts'
 import express from 'express'
 import { AccessToken } from 'livekit-server-sdk'
 import { PULSE_STALE_MS } from '../canvas/constants.ts'
@@ -12,7 +13,7 @@ import { readVmStats } from '../vm-stats.ts'
 export function createAvRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
-	router.get('/api/av/token', async (req, res) => {
+	router.get(avToken.http.path, async (req, res) => {
 		if (!ctx.media.apiKey || !ctx.media.apiSecret || !ctx.media.url) {
 			res.json({ enabled: false })
 			return
@@ -45,7 +46,7 @@ export function createAvRouter(ctx: PluginServerContext): express.Router {
 		res.json({ enabled: true, token: await token.toJwt(), url: ctx.media.url })
 	})
 
-	router.post('/api/av/kick', async (req, res) => {
+	router.post(avKick.http.path, async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? ''))
 		const userId = typeof body.userId === 'string' ? body.userId.slice(0, 128) : ''
@@ -78,7 +79,7 @@ export function createAvRouter(ctx: PluginServerContext): express.Router {
 	// reports it here (rttMs); the server records it, prunes stale samples, and
 	// returns the live per-user latency map plus a single shared VM-pressure
 	// reading. One client timer, one endpoint, no extra storage or schema.
-	router.post('/api/av/pulse', (req, res) => {
+	router.post(avPulse.http.path, (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })

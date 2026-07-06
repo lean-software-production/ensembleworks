@@ -3,6 +3,7 @@
  * proximity-ordered from the caller's cursor; GET /api/canvas/frame reads one
  * frame's stickies/text/images/embeds.
  */
+import { canvasFrame, canvasFrames } from '@ensembleworks/contracts'
 import express from 'express'
 import { findFrameByName } from '../canvas/frames-helper.ts'
 import { pageIdOf, pagePoint, richTextToPlainText } from '../canvas/geometry.ts'
@@ -20,7 +21,7 @@ export function createFramesRouter(ctx: PluginServerContext): express.Router {
 	// GET /api/canvas/frames?room= — discovery: every frame with its child counts.
 	// Frames on the active teammate's page are ordered nearest-cursor-first;
 	// the rest keep document order (see sortedBy in the response).
-	router.get('/api/canvas/frames', (req, res) => {
+	router.get(canvasFrames.http.path, (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 		const room = ctx.rooms.getOrCreateRoom(roomId)
@@ -71,7 +72,7 @@ export function createFramesRouter(ctx: PluginServerContext): express.Router {
 	// GET /api/canvas/frame?room=&name= — the contents of one fuzzy-matched frame:
 	// stickies, text, images (resolved to their /uploads URL), terminals,
 	// iframes. Same case-insensitive name match as POST /api/canvas/sticky.
-	router.get('/api/canvas/frame', (req, res) => {
+	router.get(canvasFrame.http.path, (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
 		const name = typeof req.query.name === 'string' ? req.query.name : ''
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })

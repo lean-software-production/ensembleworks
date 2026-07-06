@@ -3,6 +3,7 @@
  * arrow with bindings, text, note) for agents; arrows resolve endpoints to
  * shape centres.
  */
+import { canvasShape } from '@ensembleworks/contracts'
 import { createBindingId, createShapeId, toRichText } from '@tldraw/tlschema'
 import { getIndexAbove, sortByIndex } from '@tldraw/utils'
 import express from 'express'
@@ -24,7 +25,7 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 	//   update — { id, text?, x?, y?, w?, h?, color?, fill?, geo?, props? }
 	//   delete — { id } (cascades bindings touching the shape)
 
-	router.post('/api/canvas/shape', async (req, res) => {
+	router.post(canvasShape.http.path, async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
