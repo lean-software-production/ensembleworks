@@ -73,7 +73,7 @@ try {
 
 	// 7. poisoned-path guard: three bad forms all throw BEFORE any request builds.
 	const before = fetchCount
-	for (const bad of ['https://evil.example/x', '//evil.example/x', 'api/x']) {
+	for (const bad of ['https://evil.example/x', '//evil.example/x', 'api/x', '/\\evil.example/x']) {
 		assert.throws(() => toRequestUrl(conn.url, bad, cachePath(conn.url, env)), (e) => e instanceof CliError)
 	}
 	assert.ok(toRequestUrl(conn.url, '/api/tools').href.startsWith('http://localhost:8788/api/tools'), 'a /-rooted path is accepted')

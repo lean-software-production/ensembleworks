@@ -26,14 +26,20 @@ export interface HttpResult {
  *  /-rooted relative path. `hint` (a cache-file path) is named in the error so a
  *  poisoned cache is diagnosable. Pure — throws BEFORE any request is built. */
 export function toRequestUrl(base: string, path: string, hint = ''): URL {
-	if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//')) {
-		throw new CliError(
+	const baseUrl = base.endsWith('/') ? base : `${base}/`
+	const bad = () =>
+		new CliError(
 			`refusing request to non-same-origin path ${JSON.stringify(path)}` +
 				(hint ? ` (poisoned manifest cache: ${hint})` : ''),
 			2,
 		)
-	}
-	return new URL(path, base.endsWith('/') ? base : `${base}/`)
+	// WHATWG URL treats \ as / for http(s), so `/\evil.com` would resolve
+	// cross-origin past a plain //-prefix check — reject backslashes outright,
+	// then gate definitively on the resolved origin.
+	if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) throw bad()
+	const url = new URL(path, baseUrl)
+	if (url.origin !== new URL(baseUrl).origin) throw bad()
+	return url
 }
 
 export async function request(conn: Conn, req: Req, hint = ''): Promise<HttpResult> {
