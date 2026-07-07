@@ -89,6 +89,7 @@ for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	bin/gh-app-token.bash \
 	deploy/agent-home/AGENTS.md \
 	deploy/agent-home/.claude/CLAUDE.md \
+	deploy/agent-home/.claude/skills/publish-doc/SKILL.md \
 	deploy/agent-home/term.env.example \
 	deploy/agent-home/term-env.bashrc \
 	deploy/agent-home/gh-helper.bashrc; do
@@ -235,6 +236,11 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
     sudo install -d -o "\${AGENT_USER}" -m0755 "\${AGENT_HOME}/.claude"
     sudo install -o "\${AGENT_USER}" -m0644 /tmp/ew-agent-home/AGENTS.md "\${AGENT_HOME}/AGENTS.md"
     sudo install -o "\${AGENT_USER}" -m0644 /tmp/ew-agent-home/.claude/CLAUDE.md "\${AGENT_HOME}/.claude/CLAUDE.md"
+    # publish-doc: the file-viewer's adoption surface (spec §6) — every agent in
+    # every repo on the box picks this up via the same user-level skills dir.
+    sudo install -d -o "\${AGENT_USER}" -m0755 "\${AGENT_HOME}/.claude/skills/publish-doc"
+    sudo install -o "\${AGENT_USER}" -m0644 /tmp/ew-agent-home/.claude/skills/publish-doc/SKILL.md \
+      "\${AGENT_HOME}/.claude/skills/publish-doc/SKILL.md"
   fi
   # Tool env for canvas shells (OPENCODE_API_KEY, …): mirror the legacy app-user
   # term.env mechanism for the sandbox user — a 600 env file it owns, sourced by its
