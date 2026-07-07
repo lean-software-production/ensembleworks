@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-07
 **Status:** Approved design. Implementation deliberately deferred until the
-plugin-architecture refactor lands; Section 7 records the code mapping as
+plugin-architecture refactor lands; Section 8 records the code mapping as
 designed against today's `client/src`, to be revalidated then.
 **Mockups:** `.superpowers/brainstorm/266756-1783410227/content/` (gitignored,
 local only) — `section1-anatomy-v3.html`, `section2-panel-behaviors.html` are
@@ -131,7 +131,26 @@ Shows today's style controls (colour, fill, dash, size, font…) filtered to
 the selection; disappears on deselect/Esc. Undo/redo/delete/duplicate live in
 ☰ and on their keyboard shortcuts.
 
-## 7. Code mapping (as designed 2026-07-07 — revalidate post-refactor)
+## 7. Focus view (full-screen terminal)
+
+Any terminal can be expanded to fill the **canvas region** — the area between
+the right panel and the command bar. The panel (presence, rec indicator) and
+bar stay visible; collapse the panel to the rail for near-full-width. Focus
+is **purely local** to the user, like panel width.
+
+- **Enter:** ⛶ button on the terminal's shape chrome, or a keyboard shortcut
+  while the terminal is selected (exact binding at implementation time).
+- **Exit:** a persistent ⛶ exit button on the focused view's edge, plus a
+  chord that terminals can't swallow (e.g. Ctrl+Shift+Enter). Plain Esc is
+  deliberately NOT the exit — a focused terminal captures keys and Esc
+  belongs to vim/tmux.
+- **While focused:** the terminal owns the keyboard; canvas tools in the bar
+  are disabled except Present and zoom-independent actions; clicking a page
+  section header exits focus first, then navigates.
+- **Mechanism is shape-agnostic** (a "focus this shape" chrome state), so
+  cast tiles and iframes can adopt it later; v1 wires it for terminals only.
+
+## 8. Code mapping (as designed 2026-07-07 — revalidate post-refactor)
 
 Designed against `client/src` as of branch `unified-architecture-migration`;
 the plugin-architecture refactor may move these seams. Treat as intent, not
@@ -160,7 +179,7 @@ letter.
   `localStorage` under `ensembleworks.*` keys (pattern:
   `COLOR_SCHEME_SEEDED_KEY`).
 
-## 8. Phasing (post-refactor)
+## 9. Phasing (post-refactor)
 
 Each phase shippable alone:
 
@@ -172,15 +191,17 @@ Each phase shippable alone:
    settings dialog (incl. GitHub handle, dock edge).
 3. **Behaviours** — resize/collapse/f2f reflow, Present broadcast + follow,
    dock-edge vertical variant.
+4. **Focus view** (§7) — independent of the others; can ship alongside any
+   phase since it only needs the terminal plugin + a chrome state.
 
-## 9. Out of scope
+## 10. Out of scope
 
 - Drag-to-dock for the command bar (dock setting only in v1).
 - Auto-adaptive modes (chrome reacting to activity on its own).
 - Any new auth for avatars (GitHub handle is a plain settings string).
 - Touch/tablet-specific layouts (revisit after v1 feedback).
 
-## 10. Decision log
+## 11. Decision log
 
 | Decision | Choice | Rejected |
 |---|---|---|
@@ -193,3 +214,4 @@ Each phase shippable alone:
 | Roster/videos | Unified: tiles grouped under page sections | Separate roster + video strip |
 | Shortcut display | Underlined accelerator in label | Keycap badges below icons |
 | Docking v1 | Setting (right-click → dock edge) | Drag-to-dock in v1; bottom-only |
+| Terminal focus view | Fills canvas region, local-only, non-Esc exit chord | Whole-window takeover; whole-window + rail |
