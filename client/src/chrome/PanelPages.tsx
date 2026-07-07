@@ -26,7 +26,7 @@ interface PageSectionData {
 export function PanelPages({ editor }: { editor: Editor }) {
 	const snap = useAvSnapshot()
 
-	const { currentPageId, sections } = useValue(
+	const { currentPageId, sections, unknownParticipants } = useValue(
 		'panel-page-sections',
 		() => {
 			const pages = editor.getPages()
@@ -63,7 +63,17 @@ export function PanelPages({ editor }: { editor: Editor }) {
 				participants: byPage.get(page.id) ?? [],
 			}))
 
-			return { currentPageId, sections }
+			// A collaborator's presence can point at a page that no longer exists
+			// (deleted from under them, or presence arriving mid-churn). Keep them
+			// visible — the old AvOverlay roster grouped these under 'Unknown page'
+			// — in one catch-all section rather than dropping them from the roster.
+			const knownIds = new Set(pages.map((page) => page.id))
+			const unknownParticipants: PanelTileParticipant[] = []
+			for (const [pageId, list] of byPage) {
+				if (!knownIds.has(pageId)) unknownParticipants.push(...list)
+			}
+
+			return { currentPageId, sections, unknownParticipants }
 		},
 		[editor]
 	)
@@ -80,7 +90,50 @@ export function PanelPages({ editor }: { editor: Editor }) {
 					snap={snap}
 				/>
 			))}
+			{unknownParticipants.length > 0 && (
+				<UnknownPageSection editor={editor} participants={unknownParticipants} snap={snap} />
+			)}
 			<NewPageButton editor={editor} />
+		</div>
+	)
+}
+
+// Catch-all for participants whose presence points at a page we can't find:
+// a static header (nothing to navigate to, nothing to rename or delete) over
+// the usual tiles, so nobody silently vanishes from the roster.
+function UnknownPageSection({
+	editor,
+	participants,
+	snap,
+}: {
+	editor: Editor
+	participants: PanelTileParticipant[]
+	snap: ReturnType<typeof useAvSnapshot>
+}) {
+	return (
+		<div data-roster-page="Unknown page">
+			<div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
+				<span
+					style={{
+						fontFamily: wm.mono,
+						fontSize: 10,
+						fontWeight: 700,
+						textTransform: 'uppercase',
+						letterSpacing: 0.9,
+						color: wm.inkMuted,
+					}}
+				>
+					Unknown page
+				</span>
+				<span style={{ fontFamily: wm.mono, fontSize: 10, color: wm.inkMuted, flex: '0 0 auto' }}>
+					{participants.length}
+				</span>
+			</div>
+			<div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+				{participants.map((participant) => (
+					<PanelTile key={participant.rawId} editor={editor} participant={participant} snap={snap} />
+				))}
+			</div>
 		</div>
 	)
 }

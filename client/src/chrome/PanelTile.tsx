@@ -15,7 +15,7 @@ import { useEffect, useRef, useState } from 'react'
 import { DefaultColorStyle, type Editor } from 'tldraw'
 import { registerFaceEl, setHoveredFace, type AvPanelSnapshot } from '../av/bridge'
 import { LatencyPill } from '../av/gauges'
-import { AvIconButton } from '../av/icons'
+import { AvIcon, AvIconButton } from '../av/icons'
 import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
 import { setUserColor } from '../identity'
 import { retintLocalShares } from '../screenshare/share'
@@ -175,9 +175,24 @@ export function PanelTile({
 				<div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: 4 }}>
 					<div>
 						{!isLocal && (
-							// Cam-status icon derived from track presence. Mic isn't tracked
-							// per-peer today, so it's omitted rather than invented.
-							<AvIconButton kind="camera" enabled={!!videoTrack} available={false} onClick={() => {}} />
+							// Cam-status icon derived from track presence — a read-only
+							// status glyph, NOT a button (a disabled AvIconButton would
+							// read "unavailable" and swallow the tile's click-to-zoom).
+							// Mic isn't tracked per-peer today, so it's omitted rather
+							// than invented.
+							<span
+								title={videoTrack ? 'camera on' : 'camera off'}
+								style={{
+									width: 25,
+									height: 25,
+									display: 'grid',
+									placeItems: 'center',
+									pointerEvents: 'none',
+									color: videoTrack ? wm.cream : wm.inkMuted,
+								}}
+							>
+								<AvIcon kind="camera" crossedOut={!videoTrack} />
+							</span>
 						)}
 					</div>
 					<div style={{ background: 'rgba(15,23,42,0.55)', borderRadius: 3, padding: '1px 3px' }}>
