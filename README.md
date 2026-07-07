@@ -453,14 +453,10 @@ rollout.
 > **Prerequisite — tldraw license.** On a real production domain tldraw enforces a
 > per-domain license; without one the editor blanks. `VITE_TLDRAW_LICENSE_KEY` is a
 > **CI secret** (`.github/workflows/release-cli.yml`'s `client-dist` job); CI fails
-> loudly rather than baking a blank-canvas bundle. `deploy/deploy.sh` normally
-> *fetches* that CI-built `client-dist.tar.gz` from the GitHub release, so the box
-> never rebuilds the client and needs no local copy of the key. The `BUILD_FROM_SOURCE=1`
-> escape hatch (unpushed branch, or offline — needs `bun` on the box) builds the
-> client on the box instead, and for *that* path only, put
-> `VITE_TLDRAW_LICENSE_KEY=…` in `~<app-user>/.config/ensembleworks/build.env` (key
-> from tldraw.dev) — `deploy.sh` sources it and warns if it's absent. Dev/watch and
-> localhost are exempt either way.
+> loudly rather than baking a blank-canvas bundle. `deploy/deploy.sh` *fetches* that
+> CI-built `client-dist.tar.gz` from the GitHub release — the box never rebuilds the
+> client, needs no local copy of the key, and needs no build toolchain at all.
+> Dev/watch and localhost are exempt either way.
 
 1. **Cut a release** (from a clean `main`):
 

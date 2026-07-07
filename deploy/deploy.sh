@@ -15,8 +15,6 @@
 # Flags / env:
 #   --dry-run             local verify half only (no box): fetch to a scratch dir,
 #                         checksum, ew_boot_check, print the swap plan. No ssh/swap.
-#   BUILD_FROM_SOURCE=1   escape hatch: build the artifacts from source at TAG on the
-#                         box instead of fetching (unpushed branch / offline; needs bun).
 #   DEPLOY_FETCH_DIR=dir  read release assets from a local dir instead of gh (tests/dry-run).
 #   EW_ALLOW_ERA_CROSS=1  permit the one sanctioned cross-era swap (cutover.sh sets it).
 set -euo pipefail
@@ -28,7 +26,6 @@ VERSION="${VERSION#v}" # accept 0.2.0 or v0.2.0
 TAG="v${VERSION}"
 DRY_RUN=0; [ "${3:-}" = "--dry-run" ] && DRY_RUN=1
 APP_USER="${APP_USER:-ensembleworks}"
-REPO_URL="${REPO_URL:-https://github.com/lean-software-production/ensembleworks.git}"
 REPO_SLUG="${REPO_SLUG:-lean-software-production/ensembleworks}"
 KEEP="${KEEP:-3}"
 EDGE_PORT="8080"
@@ -39,7 +36,6 @@ EDGE_PORT="8080"
 # and never restarted on a routine deploy, so a live shared session survives app
 # rollouts; restart it by hand to pick up a changed unit.
 SHARED_BROWSER="${SHARED_BROWSER:-0}"
-BUILD_FROM_SOURCE="${BUILD_FROM_SOURCE:-0}"
 
 # Terminal shells are dropped to this sandbox user (must match TERM_RUN_AS in the
 # prod term unit) so canvas terminals can't read the app user's home. When the user
@@ -111,15 +107,12 @@ set -euo pipefail
 APP_USER='${APP_USER}'
 VERSION='${VERSION}'
 TAG='${TAG}'
-REPO_URL='${REPO_URL}'
 REPO_SLUG='${REPO_SLUG}'
 KEEP='${KEEP}'
 EDGE_PORT='${EDGE_PORT}'
 SHARED_BROWSER='${SHARED_BROWSER}'
-BUILD_FROM_SOURCE='${BUILD_FROM_SOURCE}'
 AGENT_USER='${AGENT_USER}'
 APP_HOME="\$(getent passwd "\${APP_USER}" | cut -d: -f6)"
-SRC="\${APP_HOME}/src"
 RELEASES="\${APP_HOME}/releases"
 NEW="\${RELEASES}/\${VERSION}"
 RUN="sudo -u \${APP_USER}"
@@ -154,7 +147,7 @@ sudo -u "\${APP_USER}" sudo -n -u "\${AGENT_USER}" true 2>/dev/null || { echo "s
 sudo test -f "\${APP_HOME}/.config/ensembleworks/github-app.env" 2>/dev/null || echo "    note: \${APP_HOME}/.config/ensembleworks/github-app.env absent — GitHub token minting not provisioned (optional; deploy/github-app-runbook.md)" >&2
 echo "    preflight ok"
 
-# ---- fetch (or build-from-source) the tag's artifacts into \${NEW} -----------
+# ---- fetch the tag's artifacts into \${NEW} -----------------------------------
 # Was: git worktree + npm ci + npm run build. Now: gh release download + checksum
 # verify + client-dist extract (ew_fetch_release). .ew-verified marks a release dir
 # that already passed fetch+boot-check, so a rollback re-swap skips re-fetching.
@@ -162,36 +155,8 @@ PREV="\$(asapp readlink -f "\${APP_HOME}/current" 2>/dev/null || true)"
 if asapp test -f "\${NEW}/.ew-verified"; then
   echo "==> \${VERSION} already fetched+verified — swapping (rollback path)"
 else
-  if [ "\${BUILD_FROM_SOURCE}" = 1 ]; then
-    echo "==> BUILD_FROM_SOURCE=1 — building artifacts at \${TAG} on the box (needs bun)"
-    command -v bun >/dev/null 2>&1 || { echo "bun not on PATH — BUILD_FROM_SOURCE needs it" >&2; exit 1; }
-    asapp test -d "\${SRC}/.git" || asapp git clone "\${REPO_URL}" "\${SRC}"
-    asapp git -C "\${SRC}" fetch --tags --prune origin
-    asapp git -C "\${SRC}" rev-parse "\${TAG}" >/dev/null 2>&1 || { echo "tag \${TAG} not found" >&2; exit 1; }
-    asapp mkdir -p "\${NEW}/client-dist"
-    TMPB="\$(asapp mktemp -d)"
-    asapp bash -c "cd '\${SRC}' && git archive '\${TAG}' | tar -x -C '\${TMPB}'"
-    A="\$(uname -m | sed 's/x86_64/linux-x64/;s/aarch64/linux-arm64/')"
-    # The client build must bake VITE_TLDRAW_LICENSE_KEY or it ships a
-    # blank-canvas bundle no boot-check catches (the CI client-dist path carries
-    # it as a secret + a fail-loud guard). On this source-build escape hatch the
-    # key lives in the app user's build.env, sourced here as the old build-on-box
-    # path did; a warn fires if it is absent so the footgun is loud, not silent.
-    asapp bash -c "test -f \"\${APP_HOME}/.config/ensembleworks/build.env\" || echo '    WARNING: build.env absent — client build will have no VITE_TLDRAW_LICENSE_KEY (blank canvas in prod)' >&2"
-    asapp env PATH="/usr/local/bin:\${PATH}" EW_TARGET="bun-\${A}" bash -c "cd '\${TMPB}' && bun install --frozen-lockfile \
-      && bun run --cwd server build:binary && bun run --cwd cli build:binary && bun run --cwd transcriber build:binary \
-      && { [ -f \"\${APP_HOME}/.config/ensembleworks/build.env\" ] && set -a && . \"\${APP_HOME}/.config/ensembleworks/build.env\" && set +a; true; } \
-      && bun run --filter @ensembleworks/client build"
-    asapp cp "\${TMPB}/server/dist/ensembleworks-server" "\${NEW}/ensembleworks-server"
-    asapp cp "\${TMPB}/cli/dist/ensembleworks" "\${NEW}/ensembleworks"
-    asapp cp "\${TMPB}/transcriber/dist/ensembleworks-transcriber" "\${NEW}/ensembleworks-transcriber"
-    asapp chmod +x "\${NEW}"/ensembleworks*
-    asapp cp -a "\${TMPB}/client/dist/." "\${NEW}/client-dist/"
-    asapp rm -rf "\${TMPB}"
-  else
-    echo "==> fetching v\${VERSION} artifacts"
-    ew_fetch_release "\${VERSION}" "\${NEW}" "\${REPO_SLUG}" "\${RUN}"
-  fi
+  echo "==> fetching v\${VERSION} artifacts"
+  ew_fetch_release "\${VERSION}" "\${NEW}" "\${REPO_SLUG}" "\${RUN}"
   # stamp the posture-era marker BEFORE the swap (spec §6.2/§9).
   asapp cp /tmp/ew-posture-era "\${NEW}/.ew-era"
   # ---- pre-swap boot-check (spec §6.3) — refuse the swap if it fails ----------
