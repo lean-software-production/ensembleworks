@@ -6,10 +6,11 @@
  * the mic/cam/spatial controls and the identity-colour swatch; other tiles
  * get a cam-status icon and a hover-revealed kick button.
  *
- * The video-attach effect is copied from av/rail.tsx's RailFace (79-90); the
- * colour swatch ports av/SessionPanel.tsx's ColorDot (283-363) verbatim in
- * behaviour. Tiles register their DOM element with the A/V bridge
- * (av/bridge.ts) so leashes anchor here instead of the old faces rail.
+ * The video-attach effect is copied from the old faces rail's RailFace
+ * (79-90, deleted at Task 5 cutover); the colour swatch ports the old
+ * floating session-panel roster's ColorDot (283-363) verbatim in behaviour.
+ * Tiles register their DOM element with the A/V bridge (av/bridge.ts) so
+ * leashes anchor here instead of the old faces rail.
  */
 import { Track, type LocalTrack, type RemoteTrack } from 'livekit-client'
 import { useEffect, useRef, useState } from 'react'
@@ -264,8 +265,9 @@ export function PanelTile({
 }
 
 // The identity-colour swatch — the only tile with one. Ported verbatim in
-// behaviour from av/SessionPanel.tsx's ColorDot: one control that governs the
-// user's whole colour identity (cursor, ring, roster dot, new stickies,
+// behaviour from the old floating session-panel roster's ColorDot (deleted
+// at Task 5 cutover): one control that governs the user's whole colour
+// identity (cursor, ring, roster dot, new stickies,
 // next-drawn shapes, screenshare borders).
 function ColorSwatch({ editor, color }: { editor: Editor; color: string }) {
 	const [open, setOpen] = useState(false)

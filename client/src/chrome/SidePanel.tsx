@@ -19,8 +19,9 @@ import { wm } from '../theme'
 import { PanelFooter } from './PanelFooter'
 import { PanelPages } from './PanelPages'
 
-// Blink animation for the recording dot, ported from av/SessionPanel.tsx's
-// ScribeRow (368-422) — kept as a scoped <style> tag next to its only user.
+// Blink animation for the recording dot, ported from the old floating
+// session-panel roster's ScribeRow (deleted at Task 5 cutover) — kept as a
+// scoped <style> tag next to its only user.
 const scribeBlinkKeyframes =
 	'@keyframes scribe-rec-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }'
 
@@ -125,8 +126,8 @@ export function SidePanel({ editor }: { editor: Editor }) {
 // A roster row for a subscribe-only bot (the transcriber scribe). Unlike a
 // participant tile it isn't clickable (no cursor to zoom to) or kickable —
 // it's session infrastructure, shown purely so people know they're being
-// recorded. Ported from av/SessionPanel.tsx's ScribeRow (368-422) verbatim
-// in behaviour.
+// recorded. Ported from the old floating session-panel roster's ScribeRow
+// (deleted at Task 5 cutover) verbatim in behaviour.
 function ScribeRow({ name, onOpenTranscript }: { name: string; onOpenTranscript: () => void }) {
 	return (
 		<div
