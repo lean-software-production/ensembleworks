@@ -6,18 +6,27 @@
  * useDialogs, no tldraw CSS variables here — plain overlays + wm tokens only.
  *
  * Header (room + participant count) + VM strip + connection-status line, then
- * the page sections + user tiles (PanelPages.tsx). Recording row and the
- * settings/help/about footer land in a later task.
+ * the page sections + user tiles (PanelPages.tsx), the recording row (when a
+ * scribe bot is present), and the settings/help/about footer (PanelFooter.tsx).
  */
+import { useState } from 'react'
 import { type Editor, useValue } from 'tldraw'
 import { useAvSnapshot } from '../av/bridge'
 import { VmStrip } from '../av/gauges'
+import { TranscriptModal } from '../av/TranscriptModal'
 import { getRoomId } from '../identity'
 import { wm } from '../theme'
+import { PanelFooter } from './PanelFooter'
 import { PanelPages } from './PanelPages'
+
+// Blink animation for the recording dot, ported from av/SessionPanel.tsx's
+// ScribeRow (368-422) — kept as a scoped <style> tag next to its only user.
+const scribeBlinkKeyframes =
+	'@keyframes scribe-rec-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }'
 
 export function SidePanel({ editor }: { editor: Editor }) {
 	const snap = useAvSnapshot()
+	const [transcriptOpen, setTranscriptOpen] = useState(false)
 	const participantCount = useValue(
 		'panel-participant-count',
 		() => editor.getCollaborators().length + 1,
@@ -79,6 +88,97 @@ export function SidePanel({ editor }: { editor: Editor }) {
 			<div style={{ padding: '0 12px 12px' }}>
 				<PanelPages editor={editor} />
 			</div>
+
+			{snap && snap.scribes.length > 0 && (
+				<div style={{ padding: '0 12px 12px' }} data-roster-scribes>
+					<style>{scribeBlinkKeyframes}</style>
+					<div
+						style={{
+							fontFamily: wm.mono,
+							fontSize: 9,
+							fontWeight: 700,
+							textTransform: 'uppercase',
+							letterSpacing: 0.9,
+							color: wm.crit,
+							marginBottom: 3,
+						}}
+					>
+						Recording
+					</div>
+					<div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+						{snap.scribes.map((scribe) => (
+							<ScribeRow key={scribe.id} name={scribe.name} onOpenTranscript={() => setTranscriptOpen(true)} />
+						))}
+					</div>
+				</div>
+			)}
+
+			<PanelFooter />
+
+			{transcriptOpen && (
+				<TranscriptModal roomId={getRoomId()} onClose={() => setTranscriptOpen(false)} />
+			)}
+		</div>
+	)
+}
+
+// A roster row for a subscribe-only bot (the transcriber scribe). Unlike a
+// participant tile it isn't clickable (no cursor to zoom to) or kickable —
+// it's session infrastructure, shown purely so people know they're being
+// recorded. Ported from av/SessionPanel.tsx's ScribeRow (368-422) verbatim
+// in behaviour.
+function ScribeRow({ name, onOpenTranscript }: { name: string; onOpenTranscript: () => void }) {
+	return (
+		<div
+			title="Transcribing the session into the live minutes"
+			style={{
+				display: 'flex',
+				alignItems: 'center',
+				gap: 6,
+				border: `1px solid ${wm.rule}`,
+				borderRadius: 2,
+				background: wm.panel,
+				padding: '4px 5px',
+				fontFamily: wm.sans,
+				fontSize: 12,
+				color: wm.ink,
+			}}
+		>
+			<span
+				aria-hidden="true"
+				style={{
+					width: 8,
+					height: 8,
+					borderRadius: '50%',
+					background: wm.crit,
+					flex: '0 0 auto',
+					animation: 'scribe-rec-blink 1.4s ease-in-out infinite',
+				}}
+			/>
+			<span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+				{name}
+			</span>
+			<button
+				type="button"
+				onClick={onOpenTranscript}
+				title="Show the live transcript"
+				style={{
+					marginLeft: 'auto',
+					border: `1px solid ${wm.ruleStrong}`,
+					borderRadius: 2,
+					background: 'transparent',
+					color: wm.sealBlue,
+					padding: '3px 6px',
+					fontFamily: wm.mono,
+					fontSize: 9,
+					textTransform: 'uppercase',
+					letterSpacing: 0.9,
+					cursor: 'pointer',
+					flex: '0 0 auto',
+				}}
+			>
+				Transcript
+			</button>
 		</div>
 	)
 }

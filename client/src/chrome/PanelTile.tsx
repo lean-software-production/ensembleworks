@@ -1,7 +1,8 @@
 /**
  * A single roster tile (canvas-controls spec §3 item 3): video when the
- * camera is on, else a GitHub avatar (local user only — see readGithubHandle
- * below), else big initials tinted in the participant's colour. Own tile gets
+ * camera is on, else a GitHub avatar (local user only — from ./settings'
+ * useSettings(), since remote handles aren't synced), else big initials
+ * tinted in the participant's colour. Own tile gets
  * the mic/cam/spatial controls and the identity-colour swatch; other tiles
  * get a cam-status icon and a hover-revealed kick button.
  *
@@ -20,6 +21,7 @@ import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
 import { setUserColor } from '../identity'
 import { retintLocalShares } from '../screenshare/share'
 import { wm } from '../theme'
+import { useSettings } from './settings'
 
 export interface PanelTileParticipant {
 	prefixedId: string
@@ -30,26 +32,6 @@ export interface PanelTileParticipant {
 }
 
 const TILE_HEIGHT = 84
-const SETTINGS_KEY = 'ensembleworks.settings.v1'
-
-/**
- * Placeholder read for the GitHub-avatar fallback — chrome/settings.ts is
- * Task 4's module store; until it lands, read the same localStorage key its
- * shape will use (`{ githubHandle }`), parsed defensively. Task 4 formalizes
- * this into a reactive useSettings() hook; keep the key aligned so migrating
- * is a no-op.
- */
-function readGithubHandle(): string | null {
-	try {
-		const raw = localStorage.getItem(SETTINGS_KEY)
-		if (!raw) return null
-		const parsed = JSON.parse(raw) as { githubHandle?: unknown }
-		const handle = typeof parsed.githubHandle === 'string' ? parsed.githubHandle.trim() : ''
-		return handle || null
-	} catch {
-		return null
-	}
-}
 
 function initialsFor(name: string): string {
 	const words = name.trim().split(/\s+/).filter(Boolean)
@@ -96,7 +78,8 @@ export function PanelTile({
 	const [avatarFailed, setAvatarFailed] = useState(false)
 	// Remote users' GitHub handles aren't synced anywhere today (settings live
 	// in per-browser localStorage) — only the local user can show one.
-	const githubHandle = isLocal ? readGithubHandle() : null
+	const localSettings = useSettings()
+	const githubHandle = isLocal ? localSettings.githubHandle.trim() || null : null
 	const showAvatar = isLocal && !videoTrack && githubHandle && !avatarFailed
 
 	const [hovered, setHovered] = useState(false)
