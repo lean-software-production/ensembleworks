@@ -1,16 +1,14 @@
 /**
- * Terminal plugin: shape util, the "New terminal" toolbar button, and the
+ * Terminal plugin: shape util, the "New terminal" command-bar entry, and the
  * delete-veto room hook.
  */
 import type { ClientPlugin } from '../kernel/plugin'
 import { openNewTerminal } from './openNewTerminal'
 import { TerminalShapeUtil } from './TerminalShapeUtil'
-import { TerminalToolbarItem } from './TerminalToolbarItem'
 
 export const terminalPlugin: ClientPlugin = {
 	id: 'terminal',
 	shapeUtils: [TerminalShapeUtil],
-	ToolbarItems: TerminalToolbarItem,
 	barItems: [
 		{
 			id: 'terminal',

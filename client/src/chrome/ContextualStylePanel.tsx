@@ -42,6 +42,14 @@ export function ContextualStylePanel() {
 			),
 		[editor]
 	)
+	// Editor viewport width, not window.innerWidth: the canvas region won't
+	// span the whole window once Phase 2 adds a right-hand side panel, and
+	// this stays reactive to resize (useValue re-runs on viewport change).
+	const viewportWidth = useValue(
+		'viewport width',
+		() => editor.getViewportScreenBounds().width,
+		[editor]
+	)
 
 	// useRelevantStyles() returns the ReadonlySharedStyleMap directly (it IS
 	// the map, not a wrapper with a `.styles` field) — node_modules/@tldraw/
@@ -54,8 +62,10 @@ export function ContextualStylePanel() {
 	let style: CSSProperties
 	if (selectionBounds) {
 		const margin = 8
-		const left = Math.min(Math.max(selectionBounds.midX, 90), window.innerWidth - 90)
+		const left = Math.min(Math.max(selectionBounds.midX, 90), viewportWidth - 90)
 		const top = selectionBounds.minY - margin
+		// 60: flip threshold — approximate headroom the panel needs above the
+		// selection before it's worth anchoring there instead of below.
 		if (top < 60) {
 			// No headroom above the selection — drop below it instead.
 			style = {
@@ -68,6 +78,8 @@ export function ContextualStylePanel() {
 			style = { position: 'absolute', left, top, transform: 'translate(-50%, -100%)' }
 		}
 	} else if (STYLE_TOOLS.has(currentToolId)) {
+		// 72: approx command-bar height + margin, so the floating panel sits
+		// just above the bar. Retune against the real bar's measured height.
 		style = { position: 'absolute', left: '50%', bottom: 72, transform: 'translateX(-50%)' }
 	} else {
 		return null

@@ -63,9 +63,7 @@ export interface ClientPlugin {
 	icons?: Readonly<Record<string, string>>
 	/** Custom tools merged into the tldraw tool map (uiOverrides.tools). */
 	tools?: (editor: Editor) => Record<string, TLUiToolItem>
-	/** Rendered after DefaultToolbarContent, in registry order. */
-	ToolbarItems?: ComponentType
-	/** Declarative command-bar entries; replaces ToolbarItems (spec §8). */
+	/** Declarative command-bar entries, rendered by the CommandBar (spec §8). */
 	barItems?: readonly BarItemDescriptor[]
 	/** Rendered inside the EnsembleWorks main-menu group, in registry order. */
 	MenuItems?: ComponentType
