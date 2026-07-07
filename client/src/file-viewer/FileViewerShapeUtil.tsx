@@ -156,7 +156,10 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 			</div>
 			{path ? (
 				<iframe
-					src={`/files/${path}?rev=${rev ?? 0}`}
+					// Per-segment encode so exotic names (#, ?, %) round-trip the
+					// route's decode-once contract (features/files.ts re-encodes the
+					// decoded express param the same way before hitting the file-server).
+					src={`/files/${path.split('/').map(encodeURIComponent).join('/')}?rev=${rev ?? 0}`}
 					title={displayTitle}
 					style={{ flex: 1, minHeight: 0, border: 'none', width: '100%', pointerEvents: isEditing ? 'all' : 'none' }}
 					// SECURITY: no `allow-same-origin`, ever. Without it the iframe's
