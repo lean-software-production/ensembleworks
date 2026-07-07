@@ -57,8 +57,10 @@ Two constraints shape the design:
   agent-generated JS cannot ride the viewer's CF Access session. Trade-off
   accepted: unguarded `localStorage` access in a document throws.
 - **Naming** — route `/files/*`, shape type `file-viewer`, stack service
-  `file-server`, CLI verb `canvas file …`. (`/docs/` rejected: too easy to
-  confuse with repos' own `docs/` folders appearing inside the path.)
+  `file-server`, CLI verbs `ensembleworks file …` (a top-level verb group —
+  ratified: documents are their own plane, not a canvas-shapes operation).
+  (`/docs/` rejected: too easy to confuse with repos' own `docs/` folders
+  appearing inside the path.)
 
 ## Components
 
@@ -153,14 +155,18 @@ New ToolDef pair in `contracts/src/tools/` and feature router
     shape in the room whose `path` (and `gateway`) match, via
     `room.updateStore` (the roadmap rev fan-out pattern). Returns
     `{ ok, updated: n }`.
-- `bin/canvas` subcommands:
-  - `canvas file open <path> [--frame --title]`
-  - `canvas file refresh <path>`
-  Both send `gateway: $ENSEMBLEWORKS_GATEWAY_ID` when that env var is set (the
-  connector will export it into the tmux sessions it spawns; local sessions
-  don't have it). The CLI resolves a relative `<path>` against `$PWD` and
-  then home-relativises it, so `canvas file open docs/report.html` works from
-  inside a repo.
+- CLI subcommands — a **top-level `file` verb group** on the `ensembleworks`
+  surface (ratified: it is a document plane, not a canvas-shapes operation;
+  the #4 charter verb table gains `file`):
+  - `ensembleworks file open <path> [--frame --title]`
+  - `ensembleworks file refresh <path>`
+  If v1 lands before the #4 CLI ships, the same commands go into `bin/canvas`
+  as `canvas file …` interim aliases; the ToolDef + endpoint are the stable
+  part either way. Both send `gateway: $ENSEMBLEWORKS_GATEWAY_ID` when that
+  env var is set (the connector will export it into the tmux sessions it
+  spawns; local sessions don't have it). The CLI resolves a relative `<path>`
+  against `$PWD` and then home-relativises it, so
+  `ensembleworks file open docs/report.html` works from inside a repo.
 - Mutations respect the write-scope guard (`write-scope.ts`) like every other
   POST.
 
@@ -197,6 +203,31 @@ custom `meta` on `TLInstancePresence` and that it syncs through
 `TLSocketRoom`. If it does not, fall back to the already-connected LiveKit
 data channel (topic `file-viewer-scroll`) — same message shape, same
 component logic; the transport is isolated behind one small module either way.
+
+### 6. `publish-doc` agent skill (v1 deliverable)
+
+A user-level Claude Code skill at `deploy/agent-home/.claude/skills/publish-doc/SKILL.md`,
+installed into `${AGENT_HOME}/.claude/skills/` by `deploy/deploy.sh` (the same
+mechanism that ships `AGENTS.md` / `.claude/CLAUDE.md`), so **every agent in
+every repo** on a canvas box gets it. This is the feature's adoption surface —
+demand was proven by an agent independently publishing a Cloudflare Pages
+workaround skill (`lean-software-production/workshops#34`). Content:
+
+- **When to use:** the user wants to see a rich document (report, plan,
+  storyboard, mockup) — write it to a file in the home dir and
+  `ensembleworks file open <path>`; iterate with `file refresh`. The
+  **external publish route is retired**: do not publish team documents to
+  public URLs; the one remaining alternative is a claude.ai Artifact when the
+  audience is a private Claude workspace rather than the canvas room.
+- **Authoring guidance:** standalone HTML skeleton with inline CSS
+  (relative-path assets also work — the portal serves siblings);
+  light+dark via `prefers-color-scheme`; **no unguarded `localStorage`/
+  cookies** (opaque origin throws); prefer SVG charts over `<canvas>`
+  (identical today, mirrors better when the rrweb rung lands); markdown is
+  fine for prose-only documents.
+- **Presenting:** tell the humans about the header's Present toggle for
+  walkthroughs; `file refresh` after each significant edit so every viewer
+  reloads.
 
 ## Error handling
 
@@ -279,9 +310,14 @@ component logic; the transport is isolated behind one small module either way.
 - **Other file types** (images/PDF/source as top-level documents), directory
   listings, asset bundling (unneeded — the portal serves siblings natively).
 - **`canvas file close`** — deleting the shape by hand is fine for v1.
-- Migration to the `ensembleworks` CLI (#4/#8): `canvas file …` follows the
-  current `bin/canvas` verb style; the endpoint + ToolDef are what carry
-  forward at the cutover.
+- **Workshops follow-up PR** — after v1 ships, PR
+  `lean-software-production/workshops` to retire the `publish-preview` skill's
+  Cloudflare Pages route in favour of the `publish-doc` skill (§6): fix the
+  "canvas cannot host a live page" claim and point at
+  `ensembleworks file open`. Their repo, their merge; not a v1 gate.
+- The `file` verb group rides the #4 `ensembleworks` CLI surface (§4); at the
+  #8 cutover any interim `bin/canvas file …` aliases retire with `bin/canvas`
+  itself — the endpoint + ToolDef carry forward.
 
 ## Risks
 
@@ -293,8 +329,8 @@ component logic; the transport is isolated behind one small module either way.
   `ensembleworks-agent` adds a second sudoers/launcher entry; must stay as
   narrow as the terminal one (fixed binary path, no args from the app user).
 - **R3 — opaque-origin gotcha.** Agent-generated HTML that touches
-  `localStorage` unguarded will throw. Mitigation: document the constraint in
-  the agent-facing skill/help text for `canvas file open`.
+  `localStorage` unguarded will throw. Mitigation: the `publish-doc` skill's
+  authoring guidance (§6) states the constraint.
 - **R4 — port 8791 collision.** Chosen as the next free port after
   sync (8788) / gateway (8789); verify against neko (8090), livekit (7880),
   whisper at plan time.
