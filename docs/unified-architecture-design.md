@@ -1,7 +1,20 @@
 # EnsembleWorks unified architecture — plugin kernel, Bun runtime, `ensembleworks` CLI, and the migration roadmap
 
-- **Status:** Proposed (design; pty spike run and passed 2026-07-04, no other implementation yet)
-- **Date:** 2026-07-05
+- **Status:** **As-built.** Phases 0–3 are implemented and merged on branch
+  `unified-architecture-migration` (the autonomous plugin-architecture track,
+  slice log `superpowers/plans/2026-07-06-plugin-architecture-track.md`; test
+  suite **59 green**). The three design-time contradictions are realised in
+  code: the **Go gateway is retired for the Bun connector**, the **server runs
+  on Bun**, and the **CLI renders the server tool manifest**. What remains: the
+  **#8 cutover — the production deploy — is the operator's decision and run**
+  (readiness packet
+  `superpowers/specs/2026-07-07-cutover-readiness-packet.md`); Phase 4
+  (docStore + routes-as-tools + `/mcp`) is queued on the branch (gated) and
+  **not built**; Phase 5 (memory service, §4) is **deferred out of the track**
+  (user decision 2026-07-06); Phase 6 (plugin packages, §1) is gated and not
+  built. Section-level status is stamped inline below with `(implemented: …)`
+  pointers to the delivering slice.
+- **Date:** 2026-07-05 (original design). **Last updated 2026-07-07 — as-built.**
 - **Supersedes:**
   [`plugin-architecture-design.md`](./plugin-architecture-design.md) and
   [`superpowers/specs/2026-07-04-unified-cli-design.md`](./superpowers/specs/2026-07-04-unified-cli-design.md)
@@ -25,7 +38,14 @@
 
 ## Context
 
-EnsembleWorks today is three npm workspaces (`client`, `server`,
+> **As-built note.** This section describes the pre-track monolith — the
+> problem the design set out to solve. Phases 1–2 (contracts spine + kernel
+> split + client registries) and Phase 3 (Bun, CLI, connector, auth plane,
+> per-plugin routes) have since resolved every item below; they survive here as
+> the design rationale, not as a description of the current tree. `bin/canvas`
+> and `gateway-go/` are still on disk but retire at the #8 cutover.
+
+EnsembleWorks was three npm workspaces (`client`, `server`,
 `transcriber`) plus `bin/canvas`, the `gateway-go/` termgw spike, and the
 deploy scripts. The feature *folders* are well-separated — the pure logic
 (`terminal/grid.ts`, `av/spatial.ts`, `screenshare/resolve.ts`,
@@ -93,6 +113,20 @@ including the five existing shapes. The acid test: terminal, screenshare,
 neko, roadmap and iframe must each be expressible as a plugin package with
 zero edits to kernel files.
 
+> **As-built (implemented: Phase 2 kernel split `81213a8`, client registries
+> `711cf7f`).** The kernel now exists as `server/src/kernel/` (rooms,
+> presence, media, attribution, sessions, sqlite, capability `context`) with
+> per-feature routers under `server/src/features/` receiving a
+> `PluginServerContext`; the client iterates a plugin list in
+> `client/src/plugins.ts`. What is *not* yet built: the **Doc-store service**
+> (generalised rev-fan-out) and the **MCP server** are Phase 4 (queued, gated —
+> today the roadmap store and terminal status-light fan-out remain bespoke, and
+> only `GET /api/tools` ships, see §5); the **Memory service** is Phase 5
+> (deferred out of the track, §4); the **plugin *packages*** with build-time
+> composition (`packages/plugin-*`, `ensembleworks.config.ts`) are Phase 6
+> (gated, not built — `packages/` is empty). The acid test is therefore proven
+> at the router/registry level, not yet at the package level.
+
 ### 1.1 The plugin manifest
 
 A plugin is an npm workspace package exporting a manifest:
@@ -159,6 +193,15 @@ engine swappable; and it makes plugin server code testable in isolation.
 
 ### 1.5 Contracts as the spine
 
+> **As-built (implemented: Phase 1 contracts).** `contracts/src/` exists and is
+> consumed by client, server, transcriber and the CLI: shape prop schemas
+> (`shapes.ts`), the `terminal-protocol.ts` 5-message protocol, shared
+> constants, the `whoami.ts` identity envelope, the attribution `stamp.ts`
+> helper, relay-parity constants, and the `session-manager.ts` tmux/PTY manager
+> shared by the server gateway and the CLI connector. Tool definitions live in
+> `contracts/src/tools/` (15 verbs across av/canvas/kernel/roadmap/scribe/
+> terminal); their JSON-Schema projection is served at `GET /api/tools` (3b).
+
 `@ensembleworks/contracts` (aggregating per-plugin contract entries):
 
 - **Zod schemas** for every shape's props, every HTTP request/response,
@@ -183,6 +226,17 @@ engine swappable; and it makes plugin server code testable in isolation.
 binaries as the only thing installed on servers.** Contributor host
 requirement becomes **bun + docker** (`bunx @devcontainers/cli`); Node
 version pins are deleted; `bun install` + `bun.lock` replace npm.
+
+> **As-built (implemented: Phase 3 Bun runtime `140d7d7`, session-manager
+> `c6fecb0`, distribution `8fd2f30`).** Done in the repo: root scripts run
+> under Bun (`bun run` for dev/build/typecheck/test), `bin/dev` runs on Bun,
+> node-pty and the Node host/engine pins are gone, and the spike work items are
+> resolved (a `bun:sqlite` adapter in `server/src/kernel/sqlite.ts`, explicit
+> `CLIENT_DIST` for compiled binaries). The artifact-based deploy machinery
+> (`deploy/deploy.sh` fetch-verify-swap, `deploy/cutover.sh`) is built and
+> proven by `deploy/test/fake-release.sh`. **Still true only of the machinery,
+> not yet of production:** "CI-compiled binaries as the only thing on servers"
+> lands when the operator runs the #8 cutover.
 
 ### 2.1 Spike results (2026-07-04)
 
@@ -231,6 +285,17 @@ Phase-0 battery results (2026-07-05, see `spikes/phase0/FINDINGS.md`):
 
 ## 3. Existing features re-expressed as plugins
 
+> **As-built (partial).** The *server-side* decomposition in this table is
+> built: each row's routes live in `server/src/features/` behind the pinned 3a
+> per-plugin prefixes (`/api/canvas/*`, `/api/av/*`, `/api/roadmap/*`,
+> `/api/scribe/*`, `/api/terminal/*`), the scribe `worker` is the compiled Bun
+> transcriber (#6 `cc80d06`), and the listed `tools` are the 15 verbs in
+> `contracts/src/tools/`. What this table depicts as *packages* — one npm
+> package per plugin with a manifest — is **Phase 6 (gated, not built)**; today
+> the same code lives as feature routers + a client plugin list, not as
+> `packages/plugin-*`. `AvOverlay`'s dismemberment and the scheduler move land
+> in Phase 2.
+
 | Plugin | shapes | server | worker | tools | Notes |
 |---|---|---|---|---|---|
 | `terminal` | `terminal` | gateway registration, status docStore | — | `terminal status` | Delete-veto via `roomHooks.onShapeDelete` |
@@ -250,6 +315,13 @@ polling loops move to the scheduler.
 ---
 
 ## 4. Project memory — a kernel service
+
+> **DEFERRED — not built.** Phase 5 (the memory service) was **deferred out of
+> the plugin-architecture track by user decision (2026-07-06)**; the two
+> memory-specific decisions (embedding default, `memoryHooks` versioning) are
+> parked in the charter, to be settled if/when Phase 5 is picked up. Nothing
+> below exists in the tree yet. The design is retained intact as the plan of
+> record for that future work.
 
 ### 4.1 Purpose
 
@@ -339,6 +411,21 @@ prov      (chunk_id, shape_id?, frame_name?, transcript_id?, t)
 
 ## 5. Agent access: one tool registry, three facades
 
+> **As-built (partial — implemented: tool manifest 3b `de6aaad`).** Shipped so
+> far is facade #2 only: the 15 tool definitions in `contracts/src/tools/` and
+> their JSON-Schema projection served read-only at **`GET /api/tools`**
+> (`server/src/features/tools.ts`), which the `ensembleworks` CLI renders (§6.3).
+> The manifest envelope is `{ version, server, tools[] }` where each tool is
+> `{ plugin, id, method, path, help, input, output }` (the `plugin` field and
+> envelope were user-ratified via the 3b panel). **Not yet built (Phase 4,
+> gated):** the kernel tool *registry* that mounts every route from its
+> definition (facade #1 as a single mechanism), and the **MCP server at `/mcp`**
+> (facade #3) — `grep` finds no `/mcp` route in `server/src`. The HTTP routes
+> today are hand-mounted feature routers, not registry-derived; §5's "the three
+> surfaces cannot drift because they *are* each other" is the Phase-4 end state,
+> not the current one (HTTP + manifest are kept in step by the shared contracts,
+> and MCP does not exist yet).
+
 Plugins declare `tools` once — verbs with Zod input/output schemas — and
 the agent gateway derives:
 
@@ -369,6 +456,22 @@ Tool results carry the same provenance the memory service produces.
 ---
 
 ## 6. The unified `ensembleworks` CLI
+
+> **As-built (implemented: CLI #4 `7bd9a50`, connector #5 `1bcd655`,
+> auth-foundation `a6ebdfe`, write-scoping `2b2526d`, gateway-binding
+> `7f5bcbf`, attribution 3c `7885d2c`, distribution #7 `8fd2f30`).** The CLI
+> exists as the `cli/` workspace with `bin/ensembleworks` + the `bin/ew`
+> hardlink: the manifest renderer (`cli/src/render/`), `auth` (`cli/src/auth/`,
+> `hosts.toml` with `default_instance` + per-variable env merge), native
+> `terminal connect` (`cli/src/connector/`, speaking the relay protocol
+> message-for-message against `relay-loopback`/`connector-loopback` tests), and
+> Layer-2 extension dispatch (trusted `~/.config/ensembleworks/extensions/`
+> only). The auth plane is complete server-side: `GET /api/whoami`,
+> `service-tokens.toml` common-name→identity map, per-token write scoping, the
+> shared attribution stamp helper on content-write routes, and gateway-id→
+> identity binding (`resolveGatewayOwner`). The six verb-surface changes below
+> shipped with **no alias layer** (user-ratified). **Still present, retiring at
+> the #8 cutover:** `bin/canvas`, `gateway-go/`, `sample-remote-terminal/connect.sh`.
 
 One compiled Bun binary absorbing `bin/canvas` (canvas verbs), the termgw
 Go connector (remote terminal daemon) and `connect.sh` (setup UX).
@@ -548,20 +651,29 @@ no dual-CLI window, no Go-connector overlap, no Node kept on hosts for
 cross-boundary rollback. Breakage concentrates in Phase 3, the cutover
 release.
 
-| Phase | Delivers | Retires |
-|---|---|---|
-| **0. Spike battery** | Compiled server under Bun (express 5, `ws` upgrade path under sync-core traffic, `node:sqlite`, static serving from a bundle); Vite-driven-by-Bun build; compiled transcriber with embedded rtc-node addon. Pty spike already ✅ (§2.1) | — |
-| **1. Contracts** | `contracts/` in full: shape prop schemas, API types, terminal WS protocol, shared constants, tool definitions. Client, server and transcriber consume it. Zero behaviour change | Every "Keep in sync with…" comment |
-| **2. Kernel split + client registries** | `app.ts` → kernel (rooms, WS upgrade, identity, uploads, static) + per-feature routers receiving `PluginServerContext` (mounted at today's paths until Phase 3); `getPresenceRecords` quarantined; `App.tsx`/`ui.tsx` iterate a plugin list; delete-veto and after-delete become `roomHooks`; scheduler service; `AvOverlay` dismembered | The ~1,300-line closure; type-string switches in core code |
-| **3. THE CUTOVER RELEASE** | Clean per-plugin route layout (`/api/<plugin>/…`, no aliases); the `ensembleworks` CLI (auth, whoami, attribution, write scoping, `/api/tools` manifest + renderer, canvas verbs); the connector (`terminal connect`, shared session manager, gateway-id identity binding, validated against `relay-loopback.test.ts`); server runtime → Bun; artifact-based `deploy.sh` (fetch-verify-swap); transcriber per spike result; `bin/dev` under Bun; `bun install` at the root. Rollout: deploy, restart terminal agents, reseed SKILL.md + `ENSEMBLEWORKS_*` env, users hard-refresh. A pre-deploy check confirms every room/roadmap/transcript file loads | `bin/canvas`; `gateway-go/`; `sample-remote-terminal/connect.sh`; `release-termgw.yml`; node-pty; `npm ci` on prod hosts; Node (hosts and engines pins); `CANVAS_URL`/`CANVAS_ROOM` |
-| **4. Registry completion** | `docStore` generalised from the roadmap store (terminal status light re-expressed on it); *all* routes become registered tools; **MCP server at `/mcp` generated from the registry** | Remaining hand-mounted routes |
-| **5. Memory service** | Store + ingestion hooks + backfill + worker + `memory search` (appears in every installed CLI via the manifest, for free; the killer MCP tool) | — |
-| **6. Plugin packages** | `packages/plugin-*` with manifests + `ensembleworks.config.ts` deployment profiles; default profile reproduces the Phase-3 build exactly | `SHARED_BROWSER=1`-style flags |
-| **7. When motivated** | Yjs/Hocuspocus spike per `tldraw-replacement-analysis.md`, landing against stable seams | (the former "Go gateway" line item is deleted — superseded by the Bun connector) |
+Status legend: ✅ DONE (merged on `unified-architecture-migration`) · ⏳ PENDING
+(operator) · ⛔ NOT BUILT (queued/gated) · 🚫 DEFERRED (out of track).
 
-Phases 1–2 are deliberately pre-cutover: they are behaviour-neutral
-restructures that shrink the blast radius of Phase 3 to "new surfaces on
-an already-modular core" rather than "restructure and break at once".
+| Phase | Status | Delivers | Retires |
+|---|---|---|---|
+| **0. Spike battery** | ✅ `b65e2c7` (spikes + contracts foundation) | Compiled server under Bun (express 5, `ws` upgrade path under sync-core traffic, `node:sqlite`, static serving from a bundle); Vite-driven-by-Bun build; compiled transcriber with embedded rtc-node addon. Pty spike already ✅ (§2.1) | — |
+| **1. Contracts** | ✅ done (foundation with Phase 0) | `contracts/` in full: shape prop schemas, API types, terminal WS protocol, shared constants, tool definitions. Client, server and transcriber consume it. Zero behaviour change | Every "Keep in sync with…" comment |
+| **2. Kernel split + client registries** | ✅ kernel split `81213a8`, client registries `711cf7f` | `app.ts` → kernel (rooms, WS upgrade, identity, uploads, static) + per-feature routers receiving `PluginServerContext` (mounted at today's paths until Phase 3); `getPresenceRecords` quarantined; `App.tsx`/`ui.tsx` iterate a plugin list; delete-veto and after-delete become `roomHooks`; scheduler service; `AvOverlay` dismembered | The ~1,300-line closure; type-string switches in core code |
+| **3. THE CUTOVER RELEASE** (landed as many reviewed slices; see the slice log) | ✅ all pre-cutover slices merged · ⏳ #8 production deploy PENDING (operator) | Clean per-plugin route layout (3a `1524708`); the `ensembleworks` CLI (#4 `7bd9a50`) with auth-foundation (`a6ebdfe`), write-scoping (`2b2526d`), gateway-id binding (`7f5bcbf`), attribution (3c `7885d2c`), and the `/api/tools` manifest + renderer (3b `de6aaad`); the connector `terminal connect` (#5 `1bcd655`) with the shared session-manager (`c6fecb0`), validated against `relay-loopback`/`connector-loopback`; server runtime → Bun (`140d7d7`); artifact-based `deploy.sh` + `cutover.sh` (#7 `8fd2f30`); transcriber compiled under Bun (#6 `cc80d06`); `bin/dev` under Bun; `bun install` at the root. Phase-boundary review remediation `eb6d6d5` (data-load keel, auth-posture boot log). **#8 (operator-run) still owes:** the actual deploy + restart terminal agents + hard-refresh, the `ensembleworks-cli` devcontainer feature, and the deletions in the Retires column | ⏳ *at #8:* `bin/canvas`; `gateway-go/`; `sample-remote-terminal/connect.sh` — **all still present on disk, boundary held**. ✅ *already gone:* `release-termgw.yml`; node-pty; `npm ci` on prod hosts; Node host/engine pins |
+| **4. Registry completion** | ⛔ NOT BUILT (queued on the branch, gated) | `docStore` generalised from the roadmap store (terminal status light re-expressed on it); *all* routes become registered tools; **MCP server at `/mcp` generated from the registry**. Today only `GET /api/tools` + the 15 tool defs exist (3b); no `/mcp`, and routes are still hand-mounted feature routers | Remaining hand-mounted routes |
+| **5. Memory service** | 🚫 DEFERRED out of the track (user, 2026-07-06) | Store + ingestion hooks + backfill + worker + `memory search` (appears in every installed CLI via the manifest, for free; the killer MCP tool) | — |
+| **6. Plugin packages** | ⛔ NOT BUILT (gated; `packages/` empty) | `packages/plugin-*` with manifests + `ensembleworks.config.ts` deployment profiles; default profile reproduces the Phase-3 build exactly | `SHARED_BROWSER=1`-style flags |
+| **7. When motivated** | — future | Yjs/Hocuspocus spike per `tldraw-replacement-analysis.md`, landing against stable seams | (the former "Go gateway" line item is deleted — superseded by the Bun connector) |
+
+Phases 1–2 were deliberately pre-cutover: behaviour-neutral restructures
+that shrank the blast radius of Phase 3 to "new surfaces on an
+already-modular core" rather than "restructure and break at once". That
+worked — Phase 3 landed as a dozen independently reviewed slices (suite 41 →
+59) with the pre-cutover/#8 boundary held intact. The three design-time
+contradictions the doc set out to resolve are now realised in code: the
+**Go→Bun connector shipped** (#5), the **Node→Bun server shipped** (Phase 3),
+and the **manifest-rendered CLI shipped** (#4/3b) — no verb knowledge baked
+into the binary.
 
 ### 7.1 Keels (what survives the big bang)
 
@@ -603,20 +715,39 @@ not fifteen features.
 
 ## Open questions
 
-- Whether `ew` should be the documented primary spelling (SKILL.md) with
-  `ensembleworks` as the formal name, or vice versa.
+Several of these were settled by the track charter
+(`superpowers/specs/2026-07-06-plugin-architecture-track-charter.md`) — marked
+**RESOLVED**/**PINNED**/**PARKED** below; the remainder stay genuinely open.
+
+- ~~Whether `ew` should be the documented primary spelling (SKILL.md) with
+  `ensembleworks` as the formal name, or vice versa.~~ **RESOLVED (charter
+  decision 3):** `ensembleworks` is the canonical documented spelling (help,
+  errors, SKILL.md); `ew` is a convenience hardlink mentioned once at install.
 - musl builds: add `bun-linux-{x64,arm64}-musl` targets only when an
-  Alpine-family box appears.
-- Manifest cache staleness policy: start with on-miss + `--refresh`, tune.
+  Alpine-family box appears. **CONFIRMED (charter #7):** musl stays deferred
+  until an Alpine box exists.
+- ~~Manifest cache staleness policy: start with on-miss + `--refresh`, tune.~~
+  **RESOLVED (charter #4, implemented in #4):** fetch on cache-miss only +
+  explicit `--refresh` / `tools refresh`; never auto-refetch on a hit.
 - Whether `auth login` should offer to mint/register the service token
-  via a canvas-side admin flow (today: paste a pair created in the
-  Cloudflare dashboard).
+  via a canvas-side admin flow. **RESOLVED for v1 (charter #4):** paste the
+  id+secret pair from the Cloudflare dashboard now (verified via `/api/whoami`);
+  the mint/admin flow is a documented seam for later.
 - Embedding model/provider choice and chunking granularity (tune during
-  Phase 5; the seam is env-config).
+  Phase 5; the seam is env-config). **PARKED** — Phase 5 (memory) is deferred
+  out of the track.
 - Whether `memoryHooks` need a re-index/versioning story when a plugin
   changes its tagging (likely: `pipeline_ver` per chunk, lazy re-process).
-- MCP write-tool scoping granularity — per-token allowlist first.
+  **PARKED** with the Phase 5 deferral.
+- MCP write-tool scoping granularity — per-token allowlist first. **PINNED
+  (charter Phase 4, not yet built):** binary read-only/read-write is the v1
+  default, with an optional per-token tool-id allowlist enforced at registry
+  dispatch.
 - Whether the sessions/seed-layouts plugin should become data
-  (layout-as-docStore) rather than code.
-- Phase-0 spike outcomes may reshape Phase 3 (e.g. the transcriber
-  Node-exception path) without changing the end state.
+  (layout-as-docStore) rather than code. **RESOLVED for v1 (charter Phase 6):**
+  seed layouts stay code (client menu entries); revisit only if non-developers
+  need to author layouts.
+- ~~Phase-0 spike outcomes may reshape Phase 3~~ **RESOLVED:** Phase 0 passed
+  (compiled server, Vite-under-Bun, compiled transcriber — see §2.1) and Phase 3
+  landed without a Node-exception path; the transcriber runs as a compiled Bun
+  binary (#6, no Node fallback).

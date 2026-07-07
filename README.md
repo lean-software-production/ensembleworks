@@ -50,21 +50,36 @@ EnsembleWorks is free software, licensed under the
 browser ─HTTPS─► Cloudflare edge ─[Access auth]─► tunnel ─► cloudflared ─► Caddy :8080 ─┬─ /dev/{port}/ ─► any dev server on the VM
                                                                                         │
                                                                                         └─ * ─► Vite :5173 ── app + HMR, and proxies:
-                                                                                                   /sync/{room} ─► sync server :8788 (TLSocketRoom + SQLite)
-                                                                                                   /uploads,/api ─► sync server :8788 (assets, health,
-                                                                                                                    LiveKit tokens, transcript, shapes)
-                                                                                                   /term        ─► terminal gateway :8789 (Bun PTY ⇄ tmux)
+                                                                                                   /sync/{room}                        ─► sync server :8788 (TLSocketRoom + SQLite)
+                                                                                                   /uploads                            ─► sync server :8788 (assets)
+                                                                                                   /api/health,/whoami,/participants,   ─► sync server :8788 (kernel: liveness,
+                                                                                                     /tools                                  identity, presence, tool manifest)
+                                                                                                   /api/av/*                           ─► sync server :8788 (LiveKit tokens, kick, pulse)
+                                                                                                   /api/canvas/*                       ─► sync server :8788 (sticky, shape, frames)
+                                                                                                   /api/roadmap/*                      ─► sync server :8788 (roadmap doc read/write)
+                                                                                                   /api/scribe/*                       ─► sync server :8788 (transcript read/write)
+                                                                                                   /api/terminal/status,/list,         ─► sync server :8788 (status light + the
+                                                                                                     /connect,/relay                        gateway-registry RELAY plane)
+                                                                                                   /api/terminal/health,/sessions,/ws  ─► terminal gateway :8789 (the box-LOCAL
+                                                                                                                                              plane: Bun PTY ⇄ tmux for canvas terminals)
 
 browser ──► LiveKit Cloud (WebRTC voice/video, direct)
 
 scribe bot ──► LiveKit Cloud (subscribe-only) ──► Groq Whisper API (hosted STT)
-                                                   └──► POST /api/transcript
+                                                   └──► POST /api/scribe/transcript
 ```
 
 Caddy's only job is the same-origin `/dev/{port}` proxy; **Vite** serves the app
 (with HMR) and proxies the backend routes. The devcontainer runs this exact same
 topology under tmux, reached via Codespaces port-forwarding instead of Cloudflare
-— so dev and the dogfooding server run identically.
+— so dev and the dogfooding server run identically. Both `sync` and `term` are
+modes of the same compiled `ensembleworks-server` binary (Bun-only runtime — no
+Node, no npm on the boxes); `ensembleworks-server sync` (kernel + per-plugin
+routes) and `ensembleworks-server term` (the local PTY/tmux plane) run as
+separate systemd units in production. Remote (non-canvas-VM) terminals — e.g. a
+devcontainer on another box — reach the RELAY plane over a single outbound
+WebSocket dialed by the `ensembleworks terminal connect` connector (part of the
+`ensembleworks` CLI), not a separate gateway process.
 
 Voice/video runs on **LiveKit Cloud** and STT on **Groq**, so the VM hosts no
 media server and needs no GPU — browsers connect to LiveKit Cloud directly,
@@ -174,46 +189,60 @@ The fetch-verify-swap deploy path is proven locally without a production box:
 ## Canvas API — agents on the canvas
 
 Agents (and anything else on the VM) both **read** and **write** the canvas
-over HTTP via `bin/canvas`. The agent isn't blind: it can see what teammates
-have placed in a frame, then report back.
+over HTTP via the **`ensembleworks` CLI** (`ew` for short — installed on `PATH`
+on the boxes; run from a repo checkout in dev via `bin/ensembleworks` /
+`bin/ew`). The agent isn't blind: it can see what teammates have placed in a
+frame, then report back.
 
 ```bash
 # write
-bin/canvas status <session-id> <working|needs-you|done|idle>   # status chip on the terminal shape
-bin/canvas sticky "shipped the fix" --frame advice --author crew-a   # 🤖-tagged, light-blue
-bin/canvas sticky "risk: retry loop has no backoff" --frame advice --color yellow
+ensembleworks terminal status <session-id> <working|needs-you|done|idle>   # status chip on the terminal shape
+ensembleworks canvas sticky "shipped the fix" --frame advice --author crew-a --color light-blue   # 🤖-tagged
+ensembleworks canvas sticky "risk: retry loop has no backoff" --frame advice --color yellow
 
 # read
-bin/canvas frames                       # every frame + child counts (JSON)
-bin/canvas read advice                  # a frame's stickies, text, images, embeds (JSON)
-bin/canvas pull-images drafting [dir]   # download a frame's images; prints local paths
+ensembleworks canvas frames                       # every frame + child counts (JSON)
+ensembleworks canvas frame advice                 # a frame's stickies, text, images, embeds (JSON)
+ensembleworks canvas pull-images drafting [dir]   # download a frame's images; prints local paths
 ```
 
-`CANVAS_URL` (default `http://localhost:8788`) and `CANVAS_ROOM` (default
-`team`) configure the target. The `<session-id>` is shown in each terminal's
-title bar (`tmux: canvas-<id>`); in a seeded session it equals the crew name.
-Frame args match the first frame whose name *contains* the value, case-
-insensitively. `read` recovers plain text from each sticky and returns
-`/uploads/...` urls for images; `pull-images` downloads them so a multimodal
-agent can open the files and actually see them. `--author` tags a sticky
-`🤖 <crew>: …` in light-blue so humans can tell agent notes from their own.
+`ENSEMBLEWORKS_URL` (default `http://localhost:8788`) and `ENSEMBLEWORKS_ROOM`
+(default `team`) configure the target (or the CLI's own `--url`/`--room`
+flags and `ensembleworks auth login` for a service-token instance — see
+`.claude/skills/canvas/SKILL.md`). The `<session-id>` is shown in each
+terminal's title bar (`tmux: canvas-<id>`); in a seeded session it equals the
+crew name. Frame args match the first frame whose name *contains* the value,
+case-insensitively. `canvas frame` recovers plain text from each sticky and
+returns `/uploads/...` urls for images; `pull-images` downloads them so a
+multimodal agent can open the files and actually see them. `--author` tags a
+sticky `🤖 <crew>: …` in light-blue so humans can tell agent notes from their
+own.
 
-**Proximity ordering.** `read` and `frames` sort their results by nearness to
-a connected teammate's live cursor — nearest first, each item tagged with a
-`dist`, plus a top-level `sortedBy: { userName, cursor }`. So the sticky a human
-is hovering lands at `notes[0]`. This uses ephemeral tldraw presence (cursor +
-`currentPageId`), so it only applies while a browser tab is open; with nobody
-connected, `sortedBy` is `null` and results fall back to document order.
+**Proximity ordering.** `canvas frame` and `canvas frames` sort their results
+by nearness to a connected teammate's live cursor — nearest first, each item
+tagged with a `dist`, plus a top-level `sortedBy: { userName, cursor }`. So the
+sticky a human is hovering lands at `notes[0]`. This uses ephemeral tldraw
+presence (cursor + `currentPageId`), so it only applies while a browser tab is
+open; with nobody connected, `sortedBy` is `null` and results fall back to
+document order.
 
-The HTTP routes behind the CLI: `POST /api/terminal-status`, `POST /api/sticky`,
-`GET /api/frames`, `GET /api/frame?name=<frame>`.
+The HTTP routes behind the CLI: `POST /api/terminal/status`,
+`POST /api/canvas/sticky`, `GET /api/canvas/frames`,
+`GET /api/canvas/frame?name=<frame>` (plus kernel-reserved
+`GET /api/health`, `/api/whoami`, `/api/participants`, `/api/tools`).
 
-Typical wiring: a Claude Code Stop hook runs `canvas status $SESSION needs-you`
-so the drafting table can see at a glance which agents want attention; an agent
-opens with `canvas read <crew>` to take its brief, then posts its Wise Crowds
-advice with `canvas sticky … --frame advice --author <crew>`. The bundled
-**`canvas` skill** (`.claude/skills/canvas/`) teaches an agent this read →
-work → report loop end-to-end.
+Typical wiring: a Claude Code Stop hook runs
+`ensembleworks terminal status $SESSION needs-you` so the drafting table can
+see at a glance which agents want attention; an agent opens with
+`ensembleworks canvas frame <crew>` to take its brief, then posts its Wise
+Crowds advice with
+`ensembleworks canvas sticky … --frame advice --author <crew> --color light-blue`.
+The bundled **`canvas` skill** (`.claude/skills/canvas/`) teaches an agent
+this read → work → report loop end-to-end.
+
+`bin/canvas` — the old flat-route bash CLI (`CANVAS_URL`/`CANVAS_ROOM`,
+`bin/canvas status|sticky|frames|read|pull-images`) — still exists but is
+retired at the #8 cutover; the `ensembleworks` CLI above is the current tool.
 
 ## Voice transcription — minutes & conversation maps
 
@@ -221,7 +250,7 @@ The **scribe bot** (`transcriber/`) joins the LiveKit room with a
 subscribe-only token, splits each teammate's audio into utterances (energy
 VAD), transcribes them against **Groq's hosted Whisper API**
 (`whisper-large-v3-turbo`; any OpenAI-compatible STT works via `STT_URL`), and
-posts each line to `POST /api/transcript`. No
+posts each line to `POST /api/scribe/transcript`. No
 diarization needed — LiveKit gives one track per participant, and the
 participant identity *is* the tldraw presence userId, so every line arrives
 pre-attributed **and stamped with the speaker's cursor position + nearest
@@ -229,10 +258,10 @@ frame**. The transcript knows not just who said what, but *where on the
 canvas they were working* when they said it.
 
 ```bash
-bun run --filter '@ensembleworks/transcriber' start   # env: CANVAS_URL, CANVAS_ROOM, STT_URL, STT_MODEL, STT_API_KEY
+bun run --filter '@ensembleworks/transcriber' start   # env: ENSEMBLEWORKS_URL, ENSEMBLEWORKS_ROOM, STT_URL, STT_MODEL, STT_API_KEY
 
-canvas transcript --since <ms-epoch>    # poll the tail (returns `now` to chain polls)
-canvas say "let's cap retries" --name alice   # inject a line by hand (demo/testing)
+ensembleworks scribe transcript --since <ms-epoch>       # poll the tail (returns `now` to chain polls)
+ensembleworks scribe say alice "let's cap retries"       # inject a line by hand (demo/testing): identity, then text
 ```
 
 Two bundled skills consume the feed (point a Claude Code agent at them in a
@@ -244,14 +273,14 @@ canvas terminal):
   markdown file plus a live-updated text shape in a Minutes frame.
 - **`conversation-map`** (`.claude/skills/conversation-map/`) — maintains a
   live IBIS-style dialogue map of the discussion (questions, ideas,
-  pros/cons, decisions) as real tldraw shapes via `POST /api/shape`. Arrows
-  are bound at both ends, so humans can drag the nodes around and the
+  pros/cons, decisions) as real tldraw shapes via `POST /api/canvas/shape`.
+  Arrows are bound at both ends, so humans can drag the nodes around and the
   structure survives.
 
-`POST /api/shape` is the diagram plane behind that second skill: create
+`POST /api/canvas/shape` is the diagram plane behind that second skill: create
 `geo`/`text`/`note`/`arrow` shapes (arrows take `fromId`/`toId` and get real
 bindings), update labels/colours/positions by id, delete with cascade. The
-CLI wrapper is `canvas shape '<json>'`.
+CLI wrapper is `ensembleworks canvas shape '<json>'`.
 
 Two design choices to keep in mind: the scribe is **deliberately visible**
 (it appears as 📝 scribe in the participant list — the room should know it's
@@ -260,9 +289,10 @@ hears **everyone at full volume** — spatial audio is a client-side gain, not
 an access control, so huddle conversations land in the transcript too (they
 stay separable via the frame stamps).
 
-The HTTP routes: `POST /api/transcript` (scribe writes), `GET /api/transcript?since=&limit=`
-(agents read), `POST /api/shape` (diagram ops), and
-`GET /api/livekit-token?role=scribe` (subscribe-only tokens).
+The HTTP routes: `POST /api/scribe/transcript` (scribe writes),
+`GET /api/scribe/transcript?since=&limit=` (agents read),
+`POST /api/canvas/shape` (diagram ops), and
+`GET /api/av/token?role=scribe` (subscribe-only LiveKit tokens).
 
 ## Terminals & tmux
 
@@ -350,14 +380,16 @@ knobs (`REPO_BRANCH`, `APP_USER`, …). Everything the instance owns lives under
 8. (Optional) transcription: put `STT_API_KEY=gsk_...` (a Groq key) plus the
    LiveKit values in `~ensemble/.config/ensembleworks/scribe.env`, then
    `systemctl enable --now ensembleworks-scribe`. Check it's hearing the room:
-   `canvas transcript`.
+   `ensembleworks scribe transcript`.
 
 Security model: **Cloudflare Access is the auth boundary.** The terminal
 gateway is interactive shell access as the shared `ensemble` user — the same
 access the team already has over ssh, via a different door. The Cloudflare
 Tunnel publishes the hostname to the public internet, so the Access policy in
-front of it is what keeps `/term` from being an open shell. The box itself opens
-no inbound ports (cloudflared dials out), so lock its firewall down to ssh only.
+front of it is what keeps the terminal gateway's local PTY/tmux plane
+(`/api/terminal/health`, `/sessions`, `/ws`) from being an open shell. The box
+itself opens no inbound ports (cloudflared dials out), so lock its firewall
+down to ssh only.
 
 Users & data: there is **one shared OS user** (`ensemble`) — everyone mobs as
 it, and the named people you see are app-level only (a name in browser storage),
@@ -419,26 +451,39 @@ the **laingville** repo (`servers/<host>/bootstrap.sh`); this repo owns the app 
 rollout.
 
 > **Prerequisite — tldraw license.** On a real production domain tldraw enforces a
-> per-domain license; without one the editor blanks. Put `VITE_TLDRAW_LICENSE_KEY=…`
-> in `~<app-user>/.config/ensembleworks/build.env` on the box (key from tldraw.dev) —
-> `deploy.sh` sources it and Vite bakes it into the bundle at build time. Dev/watch
-> and localhost are exempt, so this only bites production builds.
+> per-domain license; without one the editor blanks. `VITE_TLDRAW_LICENSE_KEY` is a
+> **CI secret** (`.github/workflows/release-cli.yml`'s `client-dist` job); CI fails
+> loudly rather than baking a blank-canvas bundle. `deploy/deploy.sh` normally
+> *fetches* that CI-built `client-dist.tar.gz` from the GitHub release, so the box
+> never rebuilds the client and needs no local copy of the key. The `BUILD_FROM_SOURCE=1`
+> escape hatch (unpushed branch, or offline — needs `bun` on the box) builds the
+> client on the box instead, and for *that* path only, put
+> `VITE_TLDRAW_LICENSE_KEY=…` in `~<app-user>/.config/ensembleworks/build.env` (key
+> from tldraw.dev) — `deploy.sh` sources it and warns if it's absent. Dev/watch and
+> localhost are exempt either way.
 
 1. **Cut a release** (from a clean `main`):
 
        deploy/release.sh patch        # or minor / major -> tags vX.Y.Z, pushes
 
+   CI then compiles the tag's binaries (`ensembleworks`, `ensembleworks-server`,
+   `ensembleworks-transcriber`) and the client bundle, and attaches them + a
+   checksums file to the GitHub release.
+
 2. **Deploy a version** to a server (SSH over its tailnet name):
 
        deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.2.0
 
-   deploy.sh preflights the host against `deploy/runtime-requirements`, builds the
-   tag into `~/releases/<ver>` (reusing `node_modules` when the lockfile is
-   unchanged), installs the prod units + `Caddyfile.prod`, swaps the `current`
-   symlink, restarts, and keeps the last 3 releases.
+   deploy.sh is **fetch-verify-swap**: it preflights the host against
+   `deploy/runtime-requirements`, downloads the tag's CI-compiled binaries +
+   `client-dist.tar.gz` from the GitHub release into `~/releases/<ver>`, verifies
+   their checksums, runs a hermetic pre-swap boot-check of the fetched
+   server + transcriber, installs the prod units + `Caddyfile.prod`, swaps the
+   `current` symlink, restarts, and keeps the last 3 releases. No `bun install`/build
+   on the box, no Node — Bun runs the compiled binaries directly.
 
-3. **Roll back**: deploy an older version — its built dir is still present, so it
-   swaps the symlink instantly:
+3. **Roll back**: deploy an older version — its fetched dir is still present, so it
+   swaps the symlink instantly (within the same posture era; see `EW_ALLOW_ERA_CROSS`):
 
        deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.1.0
 
@@ -462,7 +507,8 @@ rollout.
    (`TERM_RUN_AS` in the term unit), so canvas terminals can't read the app user's
    home — releases, `build.env`, the neko/LiveKit secrets. The gateway calls a
    fixed launcher via sudo; when the sandbox user is present, `deploy.sh` also puts
-   the `canvas` CLI on its PATH and seeds `~ensembleworks-agent/AGENTS.md` +
+   the `ensembleworks` CLI (and its `ew` symlink) on its PATH and seeds
+   `~ensembleworks-agent/AGENTS.md` +
    `.claude/CLAUDE.md` (from [deploy/agent-home/](deploy/agent-home/)) so agents
    know how to use the canvas. It also seeds a `600`
    `~ensembleworks-agent/.config/ensembleworks/term.env` placeholder (sourced by the
