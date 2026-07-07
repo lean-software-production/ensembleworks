@@ -20,7 +20,7 @@ import path from 'node:path'
 import { terminalList } from '@ensembleworks/contracts'
 import { TLSocketRoom } from '@tldraw/sync-core'
 import express from 'express'
-import { WebSocketServer } from 'ws'
+import { type WebSocket, WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
 import { sanitizeId } from './canvas/ids.ts'
 import { createAvRouter } from './features/av.ts'
@@ -44,6 +44,7 @@ import { createRoomHost } from './kernel/rooms.ts'
 import { createSessionRegistry } from './kernel/sessions.ts'
 import { createRoadmapStore } from './roadmap-store.ts'
 import { attachSyncSocket } from './sync-attach.ts'
+import { classifyBackpressure } from './sync-backpressure.ts'
 import { createTelemetryStore } from './telemetry-store.ts'
 import { createTranscriptStore } from './transcript-store.ts'
 
@@ -168,6 +169,9 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 	const server = http.createServer(app)
 	const wss = new WebSocketServer({ noServer: true })
+	// Per-socket context for the backpressure sampler's log lines (WeakMap so a
+	// closed socket's entry is collected with it).
+	const syncMeta = new WeakMap<WebSocket, { roomId: string; userId: string; sessionId: string }>()
 
 	server.on('upgrade', (req, socket, head) => {
 		const url = new URL(req.url ?? '', 'http://internal')
@@ -202,6 +206,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 			let userSessions = roomUsers.get(userId)
 			if (!userSessions) roomUsers.set(userId, (userSessions = new Set()))
 			userSessions.add(sessionId)
+			syncMeta.set(ws, { roomId, userId, sessionId })
 			console.log(`[sync] open room=${roomId} user=${userId} session=${sessionId}`)
 			ws.on('error', (err) =>
 				console.warn(`[sync] error room=${roomId} user=${userId} session=${sessionId}: ${err?.message ?? err}`)
@@ -221,6 +226,28 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 			attachSyncSocket(roomHost, ws, roomId, sessionId)
 		})
 	})
+
+	// Backpressure: a client that can't drain its socket would grow bufferedAmount
+	// unbounded and eventually OOM the shared sync process. Sample every ~10s;
+	// warn when it crosses 1MB, close at 4MB (a fresh reconnect gets a clean
+	// snapshot). unref() so this monitor never keeps the process alive in tests.
+	const backpressure = setInterval(() => {
+		for (const ws of wss.clients) {
+			if (ws.readyState !== ws.OPEN) continue
+			const verdict = classifyBackpressure(ws.bufferedAmount)
+			if (verdict === 'ok') continue
+			const m = syncMeta.get(ws)
+			const tag = m ? `room=${m.roomId} user=${m.userId} session=${m.sessionId}` : 'room=?'
+			const mb = (ws.bufferedAmount / (1024 * 1024)).toFixed(1)
+			if (verdict === 'warn') {
+				console.warn(`[sync] backpressure ${mb}MB buffered ${tag}`)
+			} else {
+				console.warn(`[sync] backpressure ${mb}MB — closing ${tag}`)
+				ws.close(1013, 'backpressure')
+			}
+		}
+	}, 10_000)
+	backpressure.unref()
 
 	return { server, getOrCreateRoom: roomHost.getOrCreateRoom, app }
 }
