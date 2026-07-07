@@ -91,6 +91,16 @@ export interface CanvasTmuxSpawnOptions {
 	home?: string
 }
 
+/** Credential env vars the connector/gateway hold to authenticate, that a
+ *  hosted canvas terminal must never inherit (it would let any terminal user
+ *  exfiltrate the machine's service-token). Stripped in canvasTmuxSpawnSpec. */
+export const SPAWN_ENV_SCRUB = [
+	'ENSEMBLEWORKS_TOKEN_ID',
+	'ENSEMBLEWORKS_TOKEN_SECRET',
+	'CF_ACCESS_CLIENT_ID', // belt-and-suspenders: the pre-clean-break spelling
+	'CF_ACCESS_CLIENT_SECRET',
+] as const
+
 /** The canvas tmux spawn policy shared by the server gateway and the connector:
  *  `tmux [-f conf] new-session -A -s canvas-<id>` with the xterm-256color /
  *  light-bg / conf-reload env. Behaviour-identical to terminal-gateway.ts's
@@ -98,8 +108,10 @@ export interface CanvasTmuxSpawnOptions {
 export function canvasTmuxSpawnSpec(opts: CanvasTmuxSpawnOptions): SpawnSpec {
 	const sessionName = `${TMUX_SESSION_PREFIX}${opts.sessionId}`
 	const baseArgs = opts.tmuxConf && existsSync(opts.tmuxConf) ? ['-f', opts.tmuxConf] : []
+	const parentEnv = { ...(process.env as Record<string, string>) }
+	for (const k of SPAWN_ENV_SCRUB) delete parentEnv[k]
 	const env: Record<string, string> = {
-		...(process.env as Record<string, string>),
+		...parentEnv,
 		TERM: 'xterm-256color',
 		COLORFGBG: '0;15', // light-bg hint for tmux < 3.4 (drops OSC 11 queries)
 	}
