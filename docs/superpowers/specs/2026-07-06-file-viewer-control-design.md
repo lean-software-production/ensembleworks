@@ -198,8 +198,36 @@ New ToolDef pair in `contracts/src/tools/` and feature router
 - **Remote file transport** — an HTTP-request channel over the gateway relay +
   file reads in the connector; lands with sub-project #5 (connector engine).
   v1 ships the `gateway` prop, the routing seam, and the env-var convention.
-- **Shared scroll / follow-presenter** — postMessage bridge from the iframe;
-  the docserver/route is the natural place to inject the helper script later.
+- **Shared viewing** — a ladder of presentation modes, all deferred; v1's only
+  obligations to them are the seams it already has (script injection at the
+  `/files/` route, the postMessage-friendly sandbox, and a future `presenter`
+  concept). In fidelity-vs-cost order:
+  1. **Scroll-follow** — injected helper posts the presenter's throttled
+     scroll position up via postMessage; broadcast over tldraw *presence* (not
+     shape props — ephemeral, high-frequency); viewers' helpers apply it.
+     Needs a presenter token + echo suppression. Viewers keep native
+     rendering, selection, their own zoom.
+  2. **rrweb DOM mirror** — the presenter's iframe records (full DOM snapshot
+     + MutationObserver deltas as JSON); viewers run the rrweb replayer, not
+     the document, so there is no JS-divergence problem and framework-driven
+     state mirrors for free. Server cost is JSON fan-out only (a small
+     dedicated WS room; snapshots are too big for presence). Weak spots:
+     `<canvas>`/WebGL capture is partial (nudge agents toward SVG charts),
+     viewers are followers (drive = handoff, i.e. a new recorder). Subsumes
+     any form-sync bridge — don't build that separately.
+  3. **Screenshare piggyback** — a "Present" affordance opens `/files/<path>`
+     in a popup and starts the existing LiveKit screenshare flow
+     (`client/src/screenshare/share.ts`) so the window lands on the canvas as
+     a normal screenshare tile. Full browser fidelity (canvas/WebGL/video
+     included), near-zero server cost (SFU relay; encoding on the presenter's
+     machine), thin glue. Costs: video-soft for viewers, requires a human
+     presenter's browser + upstream bandwidth, dies with their session, and a
+     human must click through the `getDisplayMedia` picker (agents can't
+     initiate it).
+  4. **neko handoff** — "Open in shared browser" pointing the existing neko
+     shape at the `/files/` URL. The only mode where everyone can drive one
+     real browser; also the only one with heavy *server* cost (headless
+     Chromium + video encode per shared doc). Escape hatch, not default.
 - **Other file types** (images/PDF/source as top-level documents), directory
   listings, asset bundling (unneeded — the portal serves siblings natively).
 - **`canvas file close`** — deleting the shape by hand is fine for v1.
