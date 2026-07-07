@@ -25,6 +25,7 @@ import { type WebSocket, WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
 import { sanitizeId } from './canvas/ids.ts'
 import { createAvRouter } from './features/av.ts'
+import { createFileViewerRouter } from './features/file-viewer.ts'
 import { createFilesRouter } from './features/files.ts'
 import { createFramesRouter } from './features/frames.ts'
 import { createParticipantsRouter } from './features/participants.ts'
@@ -106,8 +107,8 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 	// Feature routers mount here IN THIS ORDER (Express matches top-down and the
 	// static catch-all below must stay last): whoami → participants (kernel) → av
-	// (av/token, av/kick, av/pulse) → terminal-status → sticky → transcript →
-	// shape → frames → roadmap → uploads → files
+	// (av/token, av/kick, av/pulse) → terminal-status → sticky → file-viewer →
+	// transcript → shape → frames → roadmap → uploads → files
 	app.use('/api', express.json())
 
 	// Write scoping: read-only service tokens are 403'd on mutating requests.
@@ -137,6 +138,8 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	app.use(createTerminalStatusRouter(ctx))
 
 	app.use(createStickyRouter(ctx))
+
+	app.use(createFileViewerRouter(ctx))
 
 	app.use(createTranscriptRouter(ctx))
 	app.use(createTelemetryRouter(ctx))       // POST /api/telemetry/connection (write-only beacon)
