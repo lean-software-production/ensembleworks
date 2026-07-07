@@ -6,10 +6,11 @@
  * The screenshare subscription loop lives with the screenshare plugin.
  */
 import { rawUserId } from '@ensembleworks/contracts'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useEditor, useValue } from 'tldraw'
 import { getRoomId } from '../identity'
 import { wm } from '../theme'
+import { publishAvSnapshot } from './bridge'
 import { LeashOverlay, useLeashes } from './leashes'
 import { FacesRail, type RailFaceData } from './rail'
 import { SessionPanel, type SessionParticipant } from './SessionPanel'
@@ -117,15 +118,19 @@ export function AvOverlay() {
 	// Spatial audio loop.
 	useSpatialGainLoop(editor, lk, standupMode)
 
-	const kickParticipant = async (participant: SessionParticipant) => {
-		if (!window.confirm(`Kick ${participant.name} from this session?`)) return
+	// Takes (id, name) rather than a full SessionParticipant: those are the only
+	// two fields it uses, and it doubles as the bridge's `actions.kick` — which
+	// only has a raw id + display name to offer (the panel tile isn't a
+	// SessionParticipant).
+	const kickParticipant = async (id: string, name: string) => {
+		if (!window.confirm(`Kick ${name} from this session?`)) return
 		setKickError(null)
-		setKickingId(participant.id)
+		setKickingId(id)
 		try {
 			const response = await fetch('/api/av/kick', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ room: getRoomId(), userId: rawUserId(participant.id) }),
+				body: JSON.stringify({ room: getRoomId(), userId: rawUserId(id) }),
 			})
 			const body = (await response.json()) as { error?: string }
 			if (!response.ok) throw new Error(body.error || 'Kick failed')
@@ -135,6 +140,61 @@ export function AvOverlay() {
 			setKickingId(null)
 		}
 	}
+
+	// Publish A/V state for the side panel (an App-level flex sibling outside
+	// tldraw context — see av/bridge.ts) on every relevant change. Scribes are
+	// LiveKit-only (no tldraw presence) so they're excluded from `peers`.
+	useEffect(() => {
+		publishAvSnapshot({
+			status: lk.status,
+			micEnabled: lk.micEnabled,
+			camEnabled: lk.camEnabled,
+			standupMode,
+			localVideoTrack: lk.localVideoTrack,
+			localSpeaking: lk.localSpeaking,
+			peers: lk.peers
+				.filter((peer) => !peer.readOnly)
+				.map((peer) => ({
+					id: rawUserId(peer.identity),
+					name: peer.name,
+					videoTrack: peer.videoTrack,
+					isSpeaking: peer.isSpeaking,
+				})),
+			scribes: scribes.map((scribe) => ({ id: scribe.identity, name: scribe.name })),
+			vm: pulse.vm,
+			latencies: pulse.latencies,
+			latencyHistory: pulse.history,
+			kickingId,
+			kickError,
+			actions: {
+				onMic: () => lk.setMicEnabled(!lk.micEnabled),
+				onCam: () => lk.setCamEnabled(!lk.camEnabled),
+				onStandup: () => setStandupMode((s) => !s),
+				kick: kickParticipant,
+			},
+		})
+	}, [
+		lk.status,
+		lk.micEnabled,
+		lk.camEnabled,
+		standupMode,
+		lk.localVideoTrack,
+		lk.localSpeaking,
+		lk.peers,
+		scribes,
+		pulse.vm,
+		pulse.latencies,
+		pulse.history,
+		kickingId,
+		kickError,
+	])
+
+	// Cleanup lives in its own mount-only effect so intermediate re-renders
+	// (the effect above fires often) don't flash the panel back to null
+	// between an old snapshot and the next one.
+	useEffect(() => {
+		return () => publishAvSnapshot(null)
+	}, [])
 
 	return (
 		<>
@@ -162,7 +222,7 @@ export function AvOverlay() {
 					latencyHistory={pulse.history}
 					scribes={scribes.map((scribe) => ({ id: scribe.identity, name: scribe.name }))}
 					onParticipantClick={(id) => editor.zoomToUser(id)}
-					onParticipantKick={kickParticipant}
+					onParticipantKick={(participant) => kickParticipant(participant.id, participant.name)}
 					onOpenTranscript={() => setTranscriptOpen(true)}
 					kickingId={kickingId}
 					kickError={kickError}
