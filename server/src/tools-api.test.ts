@@ -10,9 +10,12 @@ import path from 'node:path'
 import { allTools } from '@ensembleworks/contracts'
 import { createSyncApp } from './app.ts'
 
-// Exempt predicate — the two kernel meta-routes (see spec "Exempt"). Every
-// other exempt thing (static, uploads, WS) is not an express `route` layer.
-const isExempt = (p: string) => p === '/api/health' || p === '/api/tools'
+// Exempt predicate — the kernel meta-routes plus the write-only telemetry beacon
+// (see spec "Exempt"): none are agent-facing tools, so none belong in the
+// manifest. Every other exempt thing (static, uploads, WS) is not an express
+// `route` layer.
+const isExempt = (p: string) =>
+	p === '/api/health' || p === '/api/tools' || p === '/api/telemetry/connection'
 
 async function main() {
 	const dataDir = await mkdtemp(path.join(os.tmpdir(), 'tools-api-test-'))
