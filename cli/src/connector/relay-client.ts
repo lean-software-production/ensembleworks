@@ -50,10 +50,12 @@ export function serveOnce(
 		let alive = true
 		let heartbeat: ReturnType<typeof setInterval> | undefined
 		let settled = false
+		const onAbort = () => done()
 		const done = (err?: Error) => {
 			if (settled) return
 			settled = true
 			if (heartbeat) deps.timers.clearInterval(heartbeat)
+			signal.removeEventListener('abort', onAbort)
 			try {
 				ws.terminate()
 			} catch {
@@ -61,7 +63,7 @@ export function serveOnce(
 			}
 			err ? reject(err) : resolve()
 		}
-		signal.addEventListener('abort', () => done(), { once: true })
+		signal.addEventListener('abort', onAbort)
 		ws.on('open', () => {
 			heartbeat = deps.timers.setInterval(() => {
 				if (!alive) {
@@ -103,15 +105,14 @@ export async function runTransport(
 		if (deps.timers.now() - start > RELAY_HEALTHY_RESET_MS) attempt = 0
 		attempt++
 		await new Promise<void>((r) => {
-			const h = deps.timers.setTimeout(r, computeBackoff(attempt, deps.rng))
-			signal.addEventListener(
-				'abort',
-				() => {
-					deps.timers.clearTimeout(h)
-					r()
-				},
-				{ once: true },
-			)
+			const settle = () => {
+				deps.timers.clearTimeout(h)
+				signal.removeEventListener('abort', onAbort)
+				r()
+			}
+			const onAbort = () => settle()
+			const h = deps.timers.setTimeout(settle, computeBackoff(attempt, deps.rng))
+			signal.addEventListener('abort', onAbort)
 		})
 	}
 }

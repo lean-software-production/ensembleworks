@@ -16,7 +16,6 @@
  * Wire protocol: see @ensembleworks/contracts terminal-protocol
  */
 import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
 import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
@@ -38,7 +37,6 @@ const HEARTBEAT_INTERVAL_MS = 20_000
 // apply it with `tmux source-file <conf>`.
 const TMUX_CONF =
 	process.env.TMUX_CONF ?? path.resolve(import.meta.dirname, '../../deploy/tmux-ensembleworks.conf')
-const TMUX_BASE_ARGS = existsSync(TMUX_CONF) ? ['-f', TMUX_CONF] : []
 
 // Privilege separation. When TERM_RUN_AS is set, every terminal shell is dropped
 // to that (less-privileged) user via sudo, so canvas terminals can't read the app
