@@ -33,6 +33,12 @@ Environment=TMUX_CONF=/etc/ensembleworks/tmux.conf
 # Drop each terminal shell to this sandbox user (see header). The host must provide
 # the user + a NOPASSWD sudoers rule for /usr/local/bin/ensembleworks-term-launch.
 Environment=TERM_RUN_AS=ensembleworks-agent
+# KillMode=process only signals MainPID, so a start wrapper (npm/tsx) that exits
+# without its node child orphans a gateway that keeps :8789 — the new unit then
+# EADDRINUSE-crash-loops forever (happened 2026-07-04..07: a 0.3.1 gateway held the
+# port across deploys). Clear any stale listener before binding; `-` tolerates the
+# normal case where the port is free.
+ExecStartPre=-/usr/bin/fuser -k -TERM 8789/tcp
 ExecStart=@APP_HOME@/current/ensembleworks-server term
 Restart=on-failure
 RestartSec=2
