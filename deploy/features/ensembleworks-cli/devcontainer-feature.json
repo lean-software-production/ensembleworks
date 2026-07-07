@@ -1,0 +1,42 @@
+{
+	"id": "ensembleworks-cli",
+	"version": "1.0.0",
+	"name": "EnsembleWorks CLI + terminal connector",
+	"description": "Installs the `ensembleworks` CLI and runs `ensembleworks terminal connect`, so this container hosts canvas terminal shapes via the EnsembleWorks relay. Replaces the retired Go termgw feature.",
+	"options": {
+		"version": {
+			"type": "string",
+			"default": "latest",
+			"description": "Which ensembleworks release to install (e.g. 0.11.0), or 'latest'."
+		},
+		"url": {
+			"type": "string",
+			"default": "",
+			"description": "EnsembleWorks instance base URL the connector dials -> ENSEMBLEWORKS_URL, e.g. https://canvas.example.com. Required unless supplied at runtime."
+		},
+		"gatewayLabel": {
+			"type": "string",
+			"default": "",
+			"description": "Human label shown in the New-terminal picker -> --label (defaults to the container hostname)."
+		},
+		"gatewayId": {
+			"type": "string",
+			"default": "",
+			"description": "Stable gateway id -> --gateway-id. Leave empty to let the CLI derive a stable per-box id (hostname + machine-id); set only to pin a friendly id."
+		},
+		"tokenId": {
+			"type": "string",
+			"default": "",
+			"description": "CF Access service-token id -> ENSEMBLEWORKS_TOKEN_ID. SECURITY: a value here is BAKED INTO THE IMAGE LAYER (readable by anyone with the image). Only for trusted or throwaway images; prefer runtime injection (see README)."
+		},
+		"tokenSecret": {
+			"type": "string",
+			"default": "",
+			"description": "CF Access service-token secret -> ENSEMBLEWORKS_TOKEN_SECRET. SECURITY: same image-layer warning as tokenId. Prefer runtime injection."
+		}
+	},
+	"entrypoint": "/usr/local/share/ensembleworks-connect/entrypoint.sh",
+	"containerEnv": {
+		"TMUX_CONF": "/usr/local/share/ensembleworks-connect/tmux-ensembleworks.conf"
+	}
+}
