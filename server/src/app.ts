@@ -29,6 +29,7 @@ import { createParticipantsRouter } from './features/participants.ts'
 import { createRoadmapRouter } from './features/roadmap.ts'
 import { createShapeRouter } from './features/shape.ts'
 import { createStickyRouter } from './features/sticky.ts'
+import { createTelemetryRouter } from './features/telemetry.ts'
 import { createTerminalStatusRouter } from './features/terminal-status.ts'
 import { createToolsRouter } from './features/tools.ts'
 import { createTranscriptRouter } from './features/transcript.ts'
@@ -42,6 +43,7 @@ import { rawUserId } from './kernel/presence.ts'
 import { createRoomHost } from './kernel/rooms.ts'
 import { createSessionRegistry } from './kernel/sessions.ts'
 import { createRoadmapStore } from './roadmap-store.ts'
+import { createTelemetryStore } from './telemetry-store.ts'
 import { createTranscriptStore } from './transcript-store.ts'
 
 export { buildParticipants, type CursorRef, type Participant } from './kernel/presence.ts'
@@ -57,6 +59,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	mkdirSync(uploadsDir, { recursive: true })
 	const transcripts = createTranscriptStore(path.join(opts.dataDir, 'transcripts'))
 	const roadmaps = createRoadmapStore(path.join(opts.dataDir, 'roadmaps'))
+	const telemetry = createTelemetryStore(path.join(opts.dataDir, 'telemetry'))
 
 	const roomHost = createRoomHost(opts.dataDir)
 
@@ -88,7 +91,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		rooms: roomHost,
 		sessions: registry,
 		media,
-		storage: { transcripts, roadmaps, uploadsDir },
+		storage: { transcripts, roadmaps, telemetry, uploadsDir },
 	}
 
 	// -------------------------------------------------------------------------
@@ -132,6 +135,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	app.use(createStickyRouter(ctx))
 
 	app.use(createTranscriptRouter(ctx))
+	app.use(createTelemetryRouter(ctx))       // POST /api/telemetry/connection (write-only beacon)
 
 	app.use(createShapeRouter(ctx))
 

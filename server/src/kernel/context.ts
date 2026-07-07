@@ -5,6 +5,7 @@
  */
 import type express from 'express'
 import type { createRoadmapStore } from '../roadmap-store.ts'
+import type { createTelemetryStore } from '../telemetry-store.ts'
 import type { createTranscriptStore } from '../transcript-store.ts'
 import type { MediaService } from './media.ts'
 import type { RoomHost } from './rooms.ts'
@@ -17,6 +18,7 @@ export interface PluginServerContext {
 	storage: {
 		transcripts: ReturnType<typeof createTranscriptStore>
 		roadmaps: ReturnType<typeof createRoadmapStore>
+		telemetry: ReturnType<typeof createTelemetryStore>
 		uploadsDir: string
 	}
 }
