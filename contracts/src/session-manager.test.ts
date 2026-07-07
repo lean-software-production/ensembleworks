@@ -4,7 +4,7 @@
 // needed here — the tmux path stays covered by server/src/relay-loopback.test.ts.
 import assert from 'node:assert/strict'
 import os from 'node:os'
-import { openTmuxSession } from './session-manager.js'
+import { canvasTmuxSpawnSpec, openTmuxSession } from './session-manager.js'
 
 const env = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>
 
@@ -55,4 +55,30 @@ await Promise.race([
 ])
 
 console.log('ok: TmuxSession primitive')
+
+// Token scrub (spec §4.2): canvasTmuxSpawnSpec must strip the connector's
+// service-token credential vars from the spawned terminal env so a hosted
+// canvas terminal can never read them — while preserving TERM and WITHOUT
+// mutating process.env (a shallow copy is scrubbed, not the live env).
+process.env.ENSEMBLEWORKS_TOKEN_ID = 'id-xxx'
+process.env.ENSEMBLEWORKS_TOKEN_SECRET = 'shhh-machine-cred'
+process.env.CF_ACCESS_CLIENT_ID = 'cf-id'
+process.env.CF_ACCESS_CLIENT_SECRET = 'cf-secret'
+process.env.EW_BENIGN_MARKER = 'keep-me' // a non-scrubbed parent var that the copy must carry through
+const scrubbed = canvasTmuxSpawnSpec({ sessionId: 't1' })
+for (const k of ['ENSEMBLEWORKS_TOKEN_ID', 'ENSEMBLEWORKS_TOKEN_SECRET', 'CF_ACCESS_CLIENT_ID', 'CF_ACCESS_CLIENT_SECRET']) {
+	assert.equal(k in scrubbed.env, false, `${k} must not leak into the spawn env`)
+}
+assert.equal(scrubbed.env.TERM, 'xterm-256color', 'scrub must not clobber TERM')
+// Prove the parent env is actually carried through (not that TERM is set unconditionally):
+// a non-scrubbed parent var survives the copy.
+assert.equal(scrubbed.env.EW_BENIGN_MARKER, 'keep-me', 'non-scrubbed parent vars must survive the copy')
+assert.equal(process.env.ENSEMBLEWORKS_TOKEN_SECRET, 'shhh-machine-cred', 'process.env must NOT be mutated (shallow copy scrubbed)')
+delete process.env.ENSEMBLEWORKS_TOKEN_ID
+delete process.env.ENSEMBLEWORKS_TOKEN_SECRET
+delete process.env.CF_ACCESS_CLIENT_ID
+delete process.env.CF_ACCESS_CLIENT_SECRET
+delete process.env.EW_BENIGN_MARKER
+console.log('ok: canvasTmuxSpawnSpec scrubs the service-token from the spawned terminal env')
+
 process.exit(0)
