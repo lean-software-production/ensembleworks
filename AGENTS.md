@@ -1,7 +1,7 @@
 # Agent notes — EnsembleWorks
 
 Multiplayer infinite-canvas team room: tldraw + tmux terminals + LiveKit spatial audio.
-Workspaces: `client`, `server`, `transcriber` (npm workspaces).
+Workspaces: `client`, `server`, `transcriber` (Bun workspaces).
 
 ## Local dev — bin/dev
 
@@ -30,7 +30,7 @@ commands, run natively. `ENSEMBLEWORKS_NATIVE=1` forces engine mode on the host
 what it forwarded.
 
 State: `~/.local/share/ensembleworks`. Optional keys:
-`~/.config/ensembleworks/dev.env`. Verify changes with `npm run typecheck`
+`~/.config/ensembleworks/dev.env`. Verify changes with `bun run typecheck`
 and the smoke tests in README "Development".
 
 ## Releasing — always use the script
@@ -44,7 +44,7 @@ deploy/release.sh patch     # or minor / major
 ```
 
 It: validates `main` is clean and in sync with `origin`, runs
-`npm ci && npm run typecheck && npm run build`, then `npm version <bump> -m "release: %s"`
+`bun install && bun run typecheck && bun run build`, then `npm version <bump> -m "release: %s"`
 (bumps `package.json`, commits `release: X.Y.Z`, creates the **annotated** tag
 `vX.Y.Z`), and pushes `main --follow-tags`.
 
@@ -65,4 +65,4 @@ tldraw license-key requirement for prod builds.
 
 ## Checks
 
-- `npm run typecheck` and `npm run build` cover all three workspaces.
+- `bun run typecheck` and `bun run build` cover all three workspaces.

@@ -4,28 +4,29 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "CHOKIDAR_USEPOLLING=1 CHOKIDAR_INTERVAL=500 tsx watch src/sync-server.ts",
-    "dev:term": "CHOKIDAR_USEPOLLING=1 CHOKIDAR_INTERVAL=500 tsx watch src/terminal-gateway.ts",
-    "start": "tsx src/sync-server.ts",
-    "start:term": "tsx src/terminal-gateway.ts",
-    "build": "tsc --noEmit",
-    "typecheck": "tsc --noEmit"
+    "dev": "bun --watch src/sync-server.ts",
+    "dev:term": "bun --watch src/terminal-gateway.ts",
+    "start": "bun src/sync-server.ts",
+    "start:term": "bun src/terminal-gateway.ts",
+    "build:binary": "bun build --compile --sourcemap --target=${EW_TARGET:-bun-linux-x64} src/main.ts --outfile dist/ensembleworks-server",
+    "build": "bunx tsc --noEmit",
+    "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
-    "@tldraw/sync-core": "^5.1.0",
-    "@tldraw/tlschema": "^5.1.0",
-    "@tldraw/utils": "^5.1.0",
-    "@tldraw/validate": "^5.1.0",
+    "@ensembleworks/contracts": "*",
+    "@tldraw/sync-core": "5.1.0",
+    "@tldraw/tlschema": "5.1.0",
+    "@tldraw/utils": "5.1.0",
+    "@tldraw/validate": "5.1.0",
     "express": "^5.0.0",
-    "livekit-server-sdk": "^2.15.4",
-    "node-pty": "^1.1.0",
-    "tsx": "^4.19.0",
+    "livekit-server-sdk": "2.15.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.0.0",
     "@types/ws": "^8.5.0",
+    "bun-types": "1.3.14",
     "typescript": "^5.7.0"
   }
 }

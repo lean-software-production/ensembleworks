@@ -1,5 +1,5 @@
 /**
- * Shape-props → LiveKit track resolution. Run: npx tsx src/screenshare/resolve.test.ts
+ * Shape-props → LiveKit track resolution. Run: bun src/screenshare/resolve.test.ts
  */
 import assert from 'node:assert/strict'
 import {

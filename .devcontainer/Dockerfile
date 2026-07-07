@@ -1,10 +1,12 @@
 # EnsembleWorks devcontainer — Debian 13 (trixie), the same OS as the
 # production and dogfood boxes. Everything a keyless contributor needs is
-# baked in: Node (exact version from .nvmrc), tmux, Caddy, the LiveKit OSS
-# SFU (voice/video via --dev keys) and whisper.cpp + a small model (keyless
+# baked in: Bun (pinned in .tool-versions), Node (dev-only — runs the Vite dev
+# server; see the Node block below), tmux, Caddy, the LiveKit OSS SFU
+# (voice/video via --dev keys) and whisper.cpp + a small model (keyless
 # transcription). Version pins follow deploy/runtime-requirements — bump them
-# together. The shared browser (neko) is deliberately absent: it needs
-# docker-in-docker; use a native host for that.
+# together (Node is dev-only, so it is NOT in runtime-requirements). The shared
+# browser (neko) is deliberately absent: it needs docker-in-docker; use a native
+# host for that.
 FROM debian:trixie
 
 ARG CADDY_VERSION=2.10.0
@@ -13,7 +15,7 @@ ARG WHISPER_TAG=v1.9.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
 		build-essential ca-certificates cmake curl git gh less locales \
-		pkg-config procps python3 sudo tmux xz-utils \
+		pkg-config procps python3 sudo tmux unzip xz-utils \
 	&& rm -rf /var/lib/apt/lists/* \
 	&& sed -i 's/# en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen && locale-gen
 ENV LANG=en_US.UTF-8
@@ -25,15 +27,14 @@ ENV NODE_OPTIONS=--dns-result-order=ipv4first
 # in). See resolveMode() in bin/dev-lib.mjs.
 ENV ENSEMBLEWORKS_IN_DEVCONTAINER=1
 
-# Node — exact version read from .nvmrc (single source of truth; bin/dev and
-# the deploy preflight enforce the same pin at runtime).
-COPY .nvmrc /tmp/.nvmrc
+# Bun — pinned to match .tool-versions (single source of truth; bin/dev and the
+# deploy preflight enforce the same floor at runtime). Installed system-wide to
+# /usr/local/bin via the official installer (BUN_INSTALL sets the prefix).
+ARG BUN_VERSION=1.3.14
+ENV BUN_INSTALL=/usr/local
 RUN set -eux; \
-	ver="$(tr -d 'v[:space:]' < /tmp/.nvmrc)"; \
-	case "$(dpkg --print-architecture)" in amd64) a=x64;; arm64) a=arm64;; *) echo "unsupported arch" >&2; exit 1;; esac; \
-	curl -fsSL "https://nodejs.org/dist/v${ver}/node-v${ver}-linux-${a}.tar.xz" \
-		| tar -xJ -C /usr/local --strip-components=1; \
-	node -v
+	curl -fsSL https://bun.sh/install | bash -s "bun-v${BUN_VERSION}"; \
+	bun --version
 
 # Caddy — static binary (not packaged in Debian main).
 RUN set -eux; \
@@ -61,6 +62,23 @@ RUN set -eux; \
 	mkdir -p /usr/local/share/whisper; \
 	curl -fsSL -o /usr/local/share/whisper/ggml-base.bin \
 		"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+
+# Node.js — DEV-ONLY, and only for the Vite dev server (client workspace). Vite's
+# dev server, HMR, and server.proxy WebSocket forwarding target Node's runtime;
+# Bun 1.3.14 has gaps there (missing net.Socket#destroySoon → crash-loop; no
+# upstream-WS proxying → the /sync canvas socket hangs). So `client` runs Vite on
+# Node (package.json scripts are plain `vite`, no `bun --bun`). EVERYTHING THAT
+# SHIPS still runs on Bun — server, transcriber, connector, CLI, and the compiled
+# prod binaries; production serves a static `vite build` with no Node at all.
+# Node therefore lives ONLY in this dev image. Placed last of the tool installs so
+# a Node bump doesn't invalidate the (slow) whisper build cache. Installed
+# system-wide to /usr/local (bin/node, lib/, etc.).
+ARG NODE_VERSION=22.12.0
+RUN set -eux; \
+	case "$(dpkg --print-architecture)" in amd64) a=x64;; arm64) a=arm64;; esac; \
+	curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${a}.tar.xz" \
+		| tar -xJ -C /usr/local --strip-components=1 --no-same-owner; \
+	node --version; npm --version
 
 # Non-root user, uid 1000 — what VS Code / Codespaces expects.
 RUN useradd -m -s /bin/bash -u 1000 dev \

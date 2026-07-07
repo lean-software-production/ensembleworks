@@ -21,9 +21,10 @@ usage() {
     '      Set the status light on the terminal shape(s) with that session id.' \
     '  sticky <text> [--frame <name>] [--color <color>] [--author <name>]' \
     '      Post a sticky note; --frame parents it to the first frame whose' \
-    '      name contains <name> (case-insensitive). --author prefixes the' \
-    '      text with "🤖 <name>: " and defaults the colour to light-blue so' \
-    '      agent stickies are distinct from teammates'"'"' notes.' \
+    '      name contains <name> (case-insensitive). --author sends the author' \
+    '      to the server, which stamps the "🤖 <name>: " badge, and defaults' \
+    '      the colour to light-blue so agent stickies are distinct from' \
+    '      teammates'"'"' notes.' \
     '  frames' \
     '      List the frames in the room with their child counts (JSON).' \
     '  read <frame>' \
@@ -40,7 +41,7 @@ usage() {
     '      Append a transcript line by hand (demo/testing: exercises the' \
     '      minutes and conversation-map loops without live audio).' \
     '  shape <json>' \
-    '      Create/update/delete a diagram shape via POST /api/shape; the JSON' \
+    '      Create/update/delete a diagram shape via POST /api/canvas/shape; the JSON' \
     '      is passed through, with CANVAS_ROOM injected unless it already has' \
     '      a "room" key. Examples:' \
     '        canvas shape '"'"'{"type":"geo","text":"retry bug","x":100,"y":80}'"'"'' \
@@ -114,7 +115,7 @@ cmd_status() {
   done
   [[ "$matched" == true ]] || die "invalid status '$status' (expected one of: $valid_statuses)"
 
-  post_json /api/terminal-status "$(printf '{"room":"%s","sessionId":"%s","status":"%s"}' \
+  post_json /api/terminal/status "$(printf '{"room":"%s","sessionId":"%s","status":"%s"}' \
     "$(json_escape "$canvas_room")" "$(json_escape "$session_id")" "$status")"
 }
 
@@ -145,11 +146,10 @@ cmd_sticky() {
     esac
   done
 
-  # Authorship is convention, not schema: tag the text and, unless the caller
-  # picked a colour, default agent stickies to light-blue so they stand out
-  # from teammates' notes.
+  # Author is now a wire field: the server stamps the 🤖 badge and meta.author
+  # from the request's credential. On a "none" instance --author still shows as a
+  # cosmetic badge. Keep the light-blue default so agent stickies stand out.
   if [[ -n "$author" ]]; then
-    text="🤖 ${author}: ${text}"
     [[ -n "$color" ]] || color='light-blue'
   fi
 
@@ -169,20 +169,21 @@ cmd_sticky() {
     "$(json_escape "$canvas_room")" "$(json_escape "$text")")"
   [[ -n "$frame" ]] && payload+="$(printf ',"frame":"%s"' "$(json_escape "$frame")")"
   [[ -n "$color" ]] && payload+="$(printf ',"color":"%s"' "$color")"
+  [[ -n "$author" ]] && payload+="$(printf ',"author":"%s"' "$(json_escape "$author")")"
   payload+='}'
 
-  post_json /api/sticky "$payload"
+  post_json /api/canvas/sticky "$payload"
 }
 
 cmd_frames() {
   [[ $# -eq 0 ]] || die "frames takes no arguments (run 'canvas --help')"
-  get_query /api/frames "room=${canvas_room}"
+  get_query /api/canvas/frames "room=${canvas_room}"
 }
 
 cmd_read() {
   [[ $# -eq 1 ]] || die "read requires exactly <frame> (run 'canvas --help')"
   [[ -n "$1" ]] || die 'frame must be non-empty'
-  get_query /api/frame "room=${canvas_room}" "name=$1"
+  get_query /api/canvas/frame "room=${canvas_room}" "name=$1"
 }
 
 cmd_pull_images() {
@@ -193,7 +194,7 @@ cmd_pull_images() {
   mkdir -p "$dir"
 
   local json
-  json="$(get_query /api/frame "room=${canvas_room}" "name=${frame}")"
+  json="$(get_query /api/canvas/frame "room=${canvas_room}" "name=${frame}")"
 
   # Only /uploads/* urls are stored assets we can download; iframe urls
   # (/dev/...) are deliberately skipped. The JSON is server-controlled, so a
@@ -239,7 +240,7 @@ cmd_transcript() {
   local args=("room=${canvas_room}")
   [[ -n "$since" ]] && args+=("since=${since}")
   [[ -n "$limit" ]] && args+=("limit=${limit}")
-  get_query /api/transcript "${args[@]}"
+  get_query /api/scribe/transcript "${args[@]}"
 }
 
 cmd_say() {
@@ -261,7 +262,7 @@ cmd_say() {
   local trimmed="${text//[$' \t\n\r']/}"
   [[ -n "$trimmed" ]] || die 'say text must be non-empty'
 
-  post_json /api/transcript "$(printf '{"room":"%s","identity":"%s","name":"%s","text":"%s"}' \
+  post_json /api/scribe/transcript "$(printf '{"room":"%s","identity":"%s","name":"%s","text":"%s"}' \
     "$(json_escape "$canvas_room")" "$(json_escape "$name")" "$(json_escape "$name")" \
     "$(json_escape "$text")")"
 }
@@ -275,7 +276,7 @@ cmd_shape() {
   if [[ "$json" != *'"room"'* ]]; then
     json="{\"room\":\"$(json_escape "$canvas_room")\",${json#\{}"
   fi
-  post_json /api/shape "$json"
+  post_json /api/canvas/shape "$json"
 }
 
 # post_json_body is post_json without curl's -f: for endpoints whose error
@@ -298,12 +299,12 @@ cmd_roadmap() {
   case "$sub" in
     list)
       [[ $# -eq 0 ]] || die 'roadmap list takes no arguments'
-      get_query /api/roadmap "room=${canvas_room}"
+      get_query /api/roadmap/doc "room=${canvas_room}"
       ;;
     read)
       [[ $# -eq 1 ]] || die 'roadmap read requires exactly <name>'
       [[ -n "$1" ]] || die 'name must be non-empty'
-      get_query /api/roadmap "room=${canvas_room}" "name=$1"
+      get_query /api/roadmap/doc "room=${canvas_room}" "name=$1"
       ;;
     push | ops)
       [[ $# -ge 2 ]] || die "roadmap $sub requires <name> and $([[ "$sub" == push ]] && echo '<file.json>' || echo "'<ops-json>'")"
@@ -344,7 +345,7 @@ cmd_roadmap() {
         "$(json_escape "$canvas_room")" "$(json_escape "$name")" "$ops")"
       [[ -n "$if_rev" ]] && payload+=",\"ifRev\":${if_rev}"
       payload+='}'
-      post_json_body /api/roadmap "$payload"
+      post_json_body /api/roadmap/doc "$payload"
       ;;
     *)
       die "unknown roadmap subcommand: $sub (expected list | read | push | ops)"

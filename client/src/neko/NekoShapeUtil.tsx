@@ -10,11 +10,11 @@
  * stream itself is per-user — but the loaded URL is personalised so each
  * teammate auto-joins under their own canvas identity (see buildNekoSrc).
  */
+import { nekoShapeProps } from '@ensembleworks/contracts'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
-	T,
 	TLBaseShape,
 	TLResizeInfo,
 	resizeBox,
@@ -138,13 +138,7 @@ const HEADER_HEIGHT = NEKO_HEADER_HEIGHT
 
 export class NekoShapeUtil extends BaseBoxShapeUtil<NekoShape> {
 	static override type = 'neko' as const
-	// Keep in sync with server/src/schema.ts
-	static override props = {
-		w: T.number,
-		h: T.number,
-		base: T.string,
-		title: T.string,
-	}
+	static override props = nekoShapeProps
 
 	override getDefaultProps(): NekoShape['props'] {
 		return { w: NEKO_DEFAULT_W, h: NEKO_DEFAULT_H, base: NEKO_DEFAULT_BASE, title: 'shared browser' }

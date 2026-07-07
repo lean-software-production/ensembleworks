@@ -9,9 +9,11 @@
 #
 # Caddy serves plain HTTP on :8080 by default — TLS is normally terminated
 # upstream (Codespaces, a Cloudflare Tunnel, tailscale serve). Vite (the client
-# dev server) serves the app and proxies the backend services (/sync, /api,
-# /uploads, /term), so Caddy's ONLY job is the same-origin /dev/{port} proxy
-# that Vite can't express. Everything else goes to Vite.
+# dev server) serves the app + HMR; the backend services (/sync WS, /api,
+# /uploads, /api/terminal) are routed by Caddy DIRECTLY to the sync server and
+# terminal gateway, NOT through Vite — Vite's server.proxy can't forward an
+# upstream WebSocket under Bun's runtime, so /sync would hang if funnelled
+# through it. This mirrors the prod split (deploy/Caddyfile.prod).
 #
 # Direct LAN access has no upstream TLS terminator, but browsers gate
 # crypto.randomUUID and getUserMedia (the mic — so voice) behind a secure
@@ -67,9 +69,32 @@
 		reverse_proxy localhost:8090
 	}
 
-	# Everything else (app + HMR, and Vite's own proxying of /sync, /api,
-	# /uploads, /term to the sync server and terminal gateway) -> Vite.
+	# Terminal LOCAL plane (node-pty + tmux; WebSocket) -> the gateway process on
+	# :8789. The RELAY plane (/api/terminal/{status,list,connect,relay}) stays on
+	# the sync server via @backend below. Mirrors deploy/Caddyfile.prod.
+	@term_local path /api/terminal/health /api/terminal/sessions /api/terminal/sessions/* /api/terminal/ws
+	handle @term_local {
+		reverse_proxy 127.0.0.1:8789
+	}
+
+	# Backend traffic -> the sync server on :8788 DIRECTLY (not via Vite). Vite's
+	# server.proxy cannot forward an upstream WebSocket under Bun's runtime (its
+	# built-in HMR ws works, but proxied upstream ws upgrades never complete), so
+	# the /sync tldraw socket must reach the sync server through Caddy. /api and
+	# /uploads ride the same route for symmetry with prod. Caddy upgrades the WS
+	# natively. (vite.config.ts still lists these under server.proxy for the rare
+	# case of hitting Vite on :5173 directly; behind Caddy this route wins first.)
+	@backend path /sync /sync/* /api /api/* /uploads /uploads/*
+	handle @backend {
+		reverse_proxy 127.0.0.1:8788
+	}
+
+	# Everything else — the app shell, HMR (/@vite/client WS), and client assets
+	# -> Vite. 127.0.0.1, not localhost: vite.config.ts pins Vite to the IPv4
+	# loopback (Bun ignores the container's --dns-result-order=ipv4first, so
+	# `localhost` would otherwise resolve to IPv6 ::1). Caddy resolves `localhost`
+	# to ::1 first, so a `localhost` upstream here would 502 on connection-refused.
 	handle {
-		reverse_proxy localhost:5173
+		reverse_proxy 127.0.0.1:5173
 	}
 }

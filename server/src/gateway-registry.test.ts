@@ -1,5 +1,5 @@
 // Unit tests for the relay framing + registry core (spike spec §1/§2/§5).
-// Pure fakes — no sockets, no HTTP. Run with: npx tsx src/gateway-registry.test.ts
+// Pure fakes — no sockets, no HTTP. Run with: bun src/gateway-registry.test.ts
 import assert from 'node:assert/strict'
 import {
 	BROWSER_BUFFER_LIMIT,
@@ -48,7 +48,8 @@ async function main() {
 	// --- connect / list ---
 	const reg = new GatewayRegistry()
 	const gw1 = fakeSocket()
-	const entry1 = reg.connect('gw-a', 'Box A', gw1)
+	const entry1 = reg.connect('gw-a', 'Box A', gw1, 'token:a')
+	assert.ok(entry1, 'first connect registers')
 	assert.equal(reg.list()[0]!.gatewayId, 'gw-a')
 	assert.equal(reg.list()[0]!.label, 'Box A')
 	assert.equal(reg.list()[0]!.relayOnly, true)
@@ -118,7 +119,8 @@ async function main() {
 	const browser5 = fakeSocket()
 	openChannel(entry1, browser5, 'sess1', 80, 24)
 	const gw2 = fakeSocket()
-	const entry2 = reg.connect('gw-a', 'Box A again', gw2)
+	const entry2 = reg.connect('gw-a', 'Box A again', gw2, 'token:a')
+	assert.ok(entry2, 'same-owner reconnect replaces')
 	assert.equal(gw1.closed, true)
 	assert.equal(browser5.closed, true)
 	assert.equal(reg.get('gw-a'), entry2)
@@ -129,6 +131,30 @@ async function main() {
 	reg.disconnect('gw-a', gw2) // genuine close
 	assert.equal(reg.get('gw-a'), undefined)
 	assert.equal(reg.list().length, 0)
+
+	// --- owner binding: reject a different identity, allow same-identity replace ---
+	{
+		const reg2 = new GatewayRegistry()
+		const wsA = fakeSocket()
+		const a = reg2.connect('g', 'A', wsA, 'token:a')
+		assert.ok(a, 'first connect registers')
+		const browser = fakeSocket()
+		openChannel(a, browser, 's1', 80, 24)
+		// A different identity is rejected; A + its browser survive.
+		const wsB = fakeSocket()
+		assert.equal(reg2.connect('g', 'B', wsB, 'token:b'), null, 'different owner → rejected')
+		assert.equal(wsA.closed, false, 'existing gateway untouched')
+		assert.equal(browser.closed, false, 'riding browser untouched')
+		assert.equal(reg2.list()[0]!.label, 'A', 'still A')
+		// Same identity reconnects → replaces (old socket + browser closed).
+		const wsA2 = fakeSocket()
+		const a2 = reg2.connect('g', 'A2', wsA2, 'token:a')
+		assert.ok(a2, 'same owner reconnect replaces')
+		assert.equal(wsA.closed, true, 'old gateway socket closed on replace')
+		assert.equal(browser.closed, true, 'old riding browser closed on replace')
+		assert.equal(reg2.list()[0]!.label, 'A2', 'now A2')
+		console.log('ok: gateway owner binding')
+	}
 
 	console.log('gateway-registry.test.ts: all assertions passed')
 }

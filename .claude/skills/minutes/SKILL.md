@@ -11,13 +11,14 @@ frame they were working in** when they said it. Your job is to turn that raw
 feed into minutes a teammate who missed the session would actually want to
 read.
 
-You need the `canvas` CLI on PATH (`CANVAS_URL`, `CANVAS_ROOM` env as usual).
+You need the `ensembleworks` CLI on PATH (`ENSEMBLEWORKS_URL`,
+`ENSEMBLEWORKS_ROOM` env as usual).
 
 ## Reading the transcript
 
 ```bash
-canvas transcript                    # everything so far (JSON, oldest first)
-canvas transcript --since 1750000000000   # only entries newer than that ms-epoch
+ensembleworks scribe transcript                    # everything so far (JSON, oldest first)
+ensembleworks scribe transcript --since 1750000000000   # only entries newer than that ms-epoch
 ```
 
 The response carries a top-level `now` (server clock). **Chain your polls with
@@ -36,11 +37,11 @@ conversation, just without a place.
 
 ## The loop
 
-1. **Set up once.** `canvas frames` to find (or pick a spot for) a frame whose
-   name contains `minutes`; humans usually seed one. Create the minutes file,
-   e.g. `minutes-$(date +%F).md`, with the session name and start time. Post
-   one sticky so the room knows minutes are running:
-   `canvas sticky "minutes started" --frame minutes --author scribe`.
+1. **Set up once.** `ensembleworks canvas frames` to find (or pick a spot for)
+   a frame whose name contains `minutes`; humans usually seed one. Create the
+   minutes file, e.g. `minutes-$(date +%F).md`, with the session name and start
+   time. Post one sticky so the room knows minutes are running:
+   `ensembleworks canvas sticky "minutes started" --frame minutes --author scribe --color light-blue`.
 2. **Poll.** Every 2–3 minutes (`sleep 150`), fetch the new tail with
    `--since`. No new entries → just sleep again.
 3. **Distil — don't transcribe.** Fold the new entries into the minutes:
@@ -61,21 +62,21 @@ conversation, just without a place.
      minutes frame — create it once and remember the id, then update in
      place so the frame doesn't fill with stale copies:
      ```bash
-     canvas shape '{"type":"text","frame":"minutes","x":24,"y":24,"w":560,"text":"…"}'
-     canvas shape '{"op":"update","id":"shape:<saved-id>","text":"…refreshed summary…"}'
+     ensembleworks canvas shape '{"type":"text","frame":"minutes","x":24,"y":24,"w":560,"text":"…"}'
+     ensembleworks canvas shape '{"op":"update","id":"shape:<saved-id>","text":"…refreshed summary…"}'
      ```
      Keep it to ~15 lines: latest decisions + actions on top.
 6. **On "wrap up" / session end:** do a final pass over the whole transcript
-   (`canvas transcript` with no `--since`), write the complete minutes —
-   attendees (distinct `name`s), timeline of topics with rough times,
+   (`ensembleworks scribe transcript` with no `--since`), write the complete
+   minutes — attendees (distinct `name`s), timeline of topics with rough times,
    decisions, actions, open questions — and post a closing sticky:
-   `canvas sticky "minutes ready: <path>" --frame minutes --author scribe`.
+   `ensembleworks canvas sticky "minutes ready: <path>" --frame minutes --author scribe --color light-blue`.
 
 ## Judgement calls
 
 - Speech-to-text is imperfect: names and jargon arrive mangled. Use the
-  canvas for context (`canvas read <frame>` shows what the speakers were
-  looking at) before guessing what a garbled term meant.
+  canvas for context (`ensembleworks canvas frame <frame>` shows what the
+  speakers were looking at) before guessing what a garbled term meant.
 - Standup mode produces one big room-wide conversation — frame stamps still
   tell you what people were *looking at* while speaking.
 - Don't editorialise; minutes record what the room decided, not what you

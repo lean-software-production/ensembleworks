@@ -1,6 +1,6 @@
 /**
  * Tiny dependency-free tests for deterministic terminal-grid geometry.
- * Run with: npx tsx src/terminal/grid.test.ts
+ * Run with: bun src/terminal/grid.test.ts
  *
  * The point of a deterministic grid is that every client computes the SAME
  * cols/rows from the same shared inputs (shape w/h + a quantised cell size), so

@@ -15,11 +15,11 @@
  * (drag/filter/status-click active), Esc or click away to go back to canvas
  * navigation. View state (filter, collapse, drag hover) is local per client.
  */
+import { roadmapShapeProps } from '@ensembleworks/contracts'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
-	T,
 	TLBaseShape,
 	TLResizeInfo,
 	resizeBox,
@@ -47,7 +47,7 @@ export interface RoadmapShapeProps {
 	w: number
 	h: number
 	roadmapId: string
-	// Bumped server-side on every write (POST /api/roadmap) to trigger refetch.
+	// Bumped server-side on every write (POST /api/roadmap/doc) to trigger refetch.
 	rev?: number
 }
 
@@ -66,13 +66,7 @@ const MIN_H = 320
 
 export class RoadmapShapeUtil extends BaseBoxShapeUtil<RoadmapShape> {
 	static override type = 'roadmap' as const
-	// Keep in sync with server/src/schema.ts
-	static override props = {
-		w: T.number,
-		h: T.number,
-		roadmapId: T.string,
-		rev: T.number.optional(),
-	}
+	static override props = roadmapShapeProps
 
 	override getDefaultProps(): RoadmapShape['props'] {
 		return { w: ROADMAP_DEFAULT_W, h: ROADMAP_DEFAULT_H, roadmapId: 'roadmap' }
@@ -138,7 +132,7 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 	useEffect(() => {
 		let cancelled = false
 		fetch(
-			`/api/roadmap?room=${encodeURIComponent(getRoomId())}&name=${encodeURIComponent(roadmapId)}`
+			`/api/roadmap/doc?room=${encodeURIComponent(getRoomId())}&name=${encodeURIComponent(roadmapId)}`
 		)
 			.then(async (r) => {
 				if (r.status === 404) return null
@@ -165,7 +159,7 @@ function RoadmapShapeComponent({ shape }: { shape: RoadmapShape }) {
 	const postOp = useCallback(
 		(op: RoadmapOp) => {
 			setDoc((d) => (d ? applyLocalOp(d, op) : d))
-			fetch('/api/roadmap', {
+			fetch('/api/roadmap/doc', {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
 				body: JSON.stringify({ room: getRoomId(), name: roadmapId, ops: [op] }),

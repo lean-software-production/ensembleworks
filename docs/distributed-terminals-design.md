@@ -1,5 +1,19 @@
 # Distributed Terminal Gateways — Design and Implementation Plan
 
+> **As-built note (2026-07-07).** This is the original design record. The
+> gateway model, relay/splice protocol and session semantics it describes are
+> implemented, but two specifics have since changed and this doc is **not**
+> rewritten to match — see the current sources instead:
+> - The **Go gateway (`gateway-go/`) is superseded by the Bun connector**
+>   (`ensembleworks terminal connect`), a wire-parity port sharing the tmux
+>   session primitive. Spec: `superpowers/specs/2026-07-06-connector-design.md`
+>   (merged; `gateway-go/` retires at the #8 cutover).
+> - Routes moved to the per-plugin layout: `/term/*` and `/api/gateway/*` →
+>   **`/api/terminal/*`** (see `unified-architecture-design.md` §7 and the
+>   clean-routes slice).
+> The `ensembleworks-term` binary named below is now the
+> `ensembleworks-server term` subcommand + the CLI's `terminal connect`.
+
 ## Why
 
 Every keystroke in a canvas terminal round-trips through the public internet

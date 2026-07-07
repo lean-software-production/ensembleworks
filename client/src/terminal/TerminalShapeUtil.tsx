@@ -19,11 +19,15 @@ import { ClipboardAddon, type IClipboardProvider } from '@xterm/addon-clipboard'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
+import {
+	terminalShapeProps,
+	type TermClientMessage,
+	type TermServerMessage,
+} from '@ensembleworks/contracts'
 import { useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
-	T,
 	TLBaseShape,
 	TLResizeInfo,
 	resizeBox,
@@ -39,10 +43,10 @@ export interface TerminalShapeProps {
 	h: number
 	sessionId: string
 	title: string
-	// Optional status light set by agents via POST /api/terminal-status.
+	// Optional status light set by agents via POST /api/terminal/status.
 	status?: string
 	// Remote gateway id (spike): undefined = same-origin gateway, zero
-	// migration for existing rooms. See /api/gateway/list.
+	// migration for existing rooms. See /api/terminal/list.
 	gateway?: string
 }
 
@@ -82,15 +86,7 @@ function xtermCell(term: Terminal): { width: number; height: number } | null {
 
 export class TerminalShapeUtil extends BaseBoxShapeUtil<TerminalShape> {
 	static override type = 'terminal' as const
-	// Keep in sync with server/src/schema.ts
-	static override props = {
-		w: T.number,
-		h: T.number,
-		sessionId: T.string,
-		title: T.string,
-		status: T.string.optional(),
-		gateway: T.string.optional(),
-	}
+	static override props = terminalShapeProps
 
 	override getDefaultProps(): TerminalShape['props'] {
 		return { w: 720, h: 440, sessionId: 'default', title: 'terminal' }
@@ -339,7 +335,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			ws.onerror = () => ws.close()
 			ws.onmessage = (ev) => {
 				if (typeof ev.data === 'string') {
-					let msg: { type?: string; cols?: number; rows?: number }
+					let msg: TermServerMessage
 					try {
 						msg = JSON.parse(ev.data)
 					} catch {
@@ -410,7 +406,8 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		term.onData((data) => {
 			const ws = wsRef.current
 			if (ws?.readyState === WebSocket.OPEN) {
-				ws.send(JSON.stringify({ type: 'input', data }))
+				const msg: TermClientMessage = { type: 'input', data }
+				ws.send(JSON.stringify(msg))
 			}
 		})
 
@@ -515,7 +512,8 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows)
 		const ws = wsRef.current
 		if (ws?.readyState === WebSocket.OPEN) {
-			ws.send(JSON.stringify({ type: 'resize', cols, rows }))
+			const msg: TermClientMessage = { type: 'resize', cols, rows }
+			ws.send(JSON.stringify(msg))
 		}
 	}, [shape.props.w, shape.props.h, cellSize, connection])
 

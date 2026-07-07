@@ -1,5 +1,5 @@
 /**
- * Viewport-vs-tile subscription geometry. Run: npx tsx src/screenshare/visibility.test.ts
+ * Viewport-vs-tile subscription geometry. Run: bun src/screenshare/visibility.test.ts
  */
 import assert from 'node:assert/strict'
 import { DEFAULT_VISIBILITY_SETTINGS, shouldBeSubscribed } from './visibility'

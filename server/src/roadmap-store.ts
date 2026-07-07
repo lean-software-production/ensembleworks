@@ -44,7 +44,7 @@ export interface RoadmapOutcome {
 	initiatives?: RoadmapInitiative[]
 }
 export interface RoadmapDoc {
-	meta: { title: string; revision?: string; updated?: string }
+	meta: { title: string; revision?: string; updated?: string; author?: string }
 	outcomes: RoadmapOutcome[]
 }
 export interface StoredRoadmap {
@@ -68,18 +68,6 @@ export class OpError extends Error {
 	) {
 		super(message)
 	}
-}
-
-// "EnsembleWorks Roadmap" → "ensembleworks-roadmap". The result must satisfy
-// app.ts's sanitizeId shape so ids are safe in file paths and shape props.
-// Keep in sync with client/src/roadmap/model.ts (slugify).
-export function slugify(name: string): string | null {
-	const slug = name
-		.toLowerCase()
-		.replace(/[^a-z0-9_-]+/g, '-')
-		.replace(/^-+|-+$/g, '')
-		.slice(0, 64)
-	return /^[a-z0-9][a-z0-9_-]*$/.test(slug) ? slug : null
 }
 
 // Returns an error message, or null when the document is valid. Checks the

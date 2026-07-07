@@ -20,7 +20,7 @@ no() { if "$@" >/dev/null 2>&1; then
 else echo "ok  : !($*)"; fi; }
 
 # extract_version: first MAJOR.MINOR[.PATCH] token
-eq "$(extract_version 'v22.22.3')" "22.22.3" "node -v"
+eq "$(extract_version '1.3.14')" "1.3.14" "bun --version"
 eq "$(extract_version 'cloudflared version 2024.6.1 (built 2024-...)')" "2024.6.1" "cloudflared"
 eq "$(extract_version 'tmux 3.3a')" "3.3" "tmux"
 eq "$(extract_version 'git version 2.39.5')" "2.39.5" "git"
@@ -29,13 +29,13 @@ eq "$(extract_version 'no digits here')" "" "no version"
 # version_ge A B  -> 0 (true) iff A >= B
 yes version_ge 2.8.1 2.8.0
 yes version_ge 2.8.0 2.8.0
-yes version_ge 22.22.3 22.22.3
+yes version_ge 1.3.14 1.3.14
 no version_ge 2.7.9 2.8.0
-no version_ge 22.21.0 22.22.3
+no version_ge 1.3.4 1.3.14
 
 # check_constraint name constraint required found
-yes check_constraint node exact 22.22.3 22.22.3
-no check_constraint node exact 22.22.3 22.21.0
+yes check_constraint bun min 1.3.14 1.3.14
+no check_constraint bun min 1.3.14 1.3.4
 yes check_constraint caddy min 2.7.0 2.8.1
 no check_constraint caddy min 2.7.0 2.6.0
 yes check_constraint cc present - anything

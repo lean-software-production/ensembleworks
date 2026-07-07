@@ -46,16 +46,18 @@ browser ─HTTPS─► edge (auth boundary) ─► tunnel ─► reverse-proxy :
                 ┌─────────────────────────────────────────────────┤
                 │                                                 │
         /dev/{port} ─► any dev server on the VM                   │
+        /api/terminal/{health,sessions,ws} ─► terminal gateway    │
         *            ─► app dev server / static app                │
                           and proxies:                            │
                           /sync/{room} ─► canvas sync server      │
                           /uploads,/api ─► canvas sync server     │
-                          /term       ─► terminal gateway          │
+                            (incl. /api/terminal/{connect,relay,  │
+                             list,status} — the remote relay plane)│
 
 browser ──► media plane (WebRTC voice/video, hosted) ─── direct
 
 scribe bot ──► media plane (subscribe-only) ──► hosted STT
-                                                └──► POST /api/transcript
+                                                └──► POST /api/scribe/transcript
 ```
 
 ### 2.1 Planes, deliberately separated
@@ -77,13 +79,17 @@ independently, and means a heavy content stream can't starve cursor sync.
 
 ### 2.2 The reverse proxy's only bespoke job
 
-The reverse proxy in front of the app has exactly **one non-trivial route**:
+The reverse proxy in front of the app has one primary bespoke route:
 same-origin `/dev/{port}` → any dev server listening on that local port on
 the VM (so embedded dev-server iframes are same-origin with the app and
-can be interacted with without cross-origin restrictions). **Everything
-else** goes to the app server, which serves the static app and proxies the
-backend routes. In dev this same topology runs locally, reached via
-port-forwarding instead of a tunnel.
+can be interacted with without cross-origin restrictions). It also splits
+the terminal surface by path: the **local** terminal plane
+(`/api/terminal/{health,sessions,ws}`) goes to the standalone terminal
+gateway process, while the **remote relay** plane
+(`/api/terminal/{connect,relay,list,status}`) and **everything else** go to
+the app server, which serves the static app and proxies the backend routes.
+In dev this same topology runs locally, reached via port-forwarding instead
+of a tunnel.
 
 ---
 
@@ -95,10 +101,27 @@ port-forwarding instead of a tunnel.
 room, plus the HTTP surface for agents, uploads, transcripts, and media
 token minting. Serves the static app build in production.
 
-**Current instance:** an Express HTTP server + a WebSocket server; one
-in-process `TLSocketRoom` per room, persisted one-SQLite-file-per-room via
-`SQLiteSyncStorage`; schema = tldraw schema + two custom shape types
-(`terminal`, `iframe`).
+**Current instance:** a Bun process running Express + a WebSocket server,
+compiled to a single binary (`ensembleworks-server sync`, the default
+sub-command of a `sync|term` dispatcher); one in-process `TLSocketRoom` per
+room, persisted one-SQLite-file-per-room via `SQLiteSyncStorage`; schema =
+tldraw schema + two custom shape types (`terminal`, `iframe`).
+
+**Contract — kernel + plugins:** the HTTP surface is assembled as a **thin
+kernel** plus **per-plugin feature routers**. The kernel owns what every
+plugin shares — rooms, the sync WS upgrade, caller identity, uploads, and
+the static build — and reserves a small set of routes (`/api/health`,
+`/api/whoami`, `/api/participants`, `/api/tools`). Each plugin owns a
+namespaced slice of `/api/<plugin>/…` and is mounted as an Express router
+against a shared `PluginServerContext` (rooms, sessions, media, storage).
+The current plugins are **av** (`/api/av/token|kick|pulse`), **canvas**
+(`/api/canvas/sticky|shape|frames|frame`), **scribe**
+(`/api/scribe/transcript`), **roadmap** (`/api/roadmap/doc`), and
+**terminal** (`/api/terminal/status|list` + the relay upgrade routes,
+§3.2). Routers mount in a fixed order and the static catch-all stays last;
+`/uploads` remains a top-level (non-`/api`) route. The direction of travel
+is a plugin registry: routes, their JSON-Schema, and the CLI/`/api/tools`
+manifest (§3.6) all derive from one contracts tool registry.
 
 **Contract — persistence:** every canvas mutation commits to that room's
 SQLite file transactionally on the change (no debounced save), so the room
@@ -121,12 +144,31 @@ so that (a) many browsers can view/type into one terminal, (b) the session
 outlives every browser and the gateway itself, and (c) the same session is
 reachable from a plain SSH shell.
 
-**Current instance:** a small HTTP + WebSocket server. Per canvas terminal
-session it holds **exactly one** node-pty process that runs `tmux
-new-session -A -s canvas-<id>` (attach-or-create). That one pty's output is
-**fanned out** to every attached WebSocket, so all viewers see identical
-bytes. The PTY is *a single tmux client*, not the session — the tmux
-session is the durable substrate; the pty and the gateway are ephemeral.
+**Current instance:** a small Bun HTTP + WebSocket server
+(`ensembleworks-server term`, the second sub-command of the compiled server
+binary). Per canvas terminal session it holds **exactly one** PTY —
+spawned via `Bun.spawn` (a small in-tree PTY wrapper replaces node-pty,
+which is a native Node addon Bun can't load) — running `tmux new-session -A
+-s canvas-<id>` (attach-or-create). That one pty's output is **fanned out**
+to every attached WebSocket, so all viewers see identical bytes. The PTY is
+*a single tmux client*, not the session — the tmux session is the durable
+substrate; the pty and the gateway are ephemeral. The tmux spawn is a
+**shared spec** (`canvasTmuxSpawnSpec` in `@ensembleworks/contracts`) so the
+local gateway and the remote connector (below) open byte-identical sessions.
+
+**Current instance — remote gateways (relay plane):** a box that isn't the
+canvas VM (a devcontainer, a Codespace) exposes its terminals by running
+the **Bun connector** (`ensembleworks terminal connect`), which dials **one
+outbound** WebSocket to the sync server's `/api/terminal/connect`. Connect
+equals register, and the registration is **bound to the connector's resolved
+identity** (§3.7). Browsers attach at `/api/terminal/relay?gateway=<id>` and
+are **spliced** onto that connector's single WS as multiplexed channels
+(a 4-byte channel-id prefix on binary output, JSON `relay-*` control
+frames); `/api/terminal/list` enumerates the live gateways for the shape's
+picker. The connector runs the same `canvasTmuxSpawnSpec` tmux substrate, so
+a remote box's terminals behave identically to local ones. This Bun
+connector is the instance; the earlier Go gateway (`gateway-go`) is
+superseded and retires at the #8 cutover.
 
 **Contract — survival:** with zero attached clients the pty (and its tmux
 session) **stays alive** by design; closing every browser must not kill
@@ -143,13 +185,17 @@ gateway**: one attached viewer resizing fans a `resize` message to all
 others, and the PTY (hence the tmux session) is resized to match. All
 viewers converge on one shared grid.
 
-**Wire protocol (gateway WS):**
+**Wire protocol (gateway WS, `/api/terminal/ws?session=&cols=&rows=`):**
 - client → server (text JSON): `{type:'input',data}` | `{type:'resize',cols,rows}`
 - server → client: terminal output as **binary** frames (raw bytes);
   control as text JSON `{type:'attached'|'resize'|'exit', ...}`.
 
-**HTTP surface:** health; list live + detached sessions; kill a session
-(which kills the underlying tmux session).
+The remote relay carries this same inner protocol wrapped per channel
+(`relay-msg`), so a spliced browser can't tell it's on a remote gateway.
+
+**HTTP surface:** `/api/terminal/health`; `/api/terminal/sessions` (list
+live + detached tmux sessions); `DELETE /api/terminal/sessions/:id` (kill a
+session, which kills the underlying tmux session).
 
 ### 3.3 Media plane (voice/video)
 
@@ -157,11 +203,12 @@ viewers converge on one shared grid.
 subscribe-only door for the scribe bot. The VM hosts **no media server**
 and needs no GPU; browsers connect to the hosted media plane directly.
 
-**Current instance:** LiveKit Cloud (WebRTC SFU). The canvas sync server
-**only mints access tokens** (member = publish+subscribe; scribe =
-subscribe-only, can never publish) and can call the media plane's room
-service to remove a participant (used by `/api/kick`). The media plane is
-otherwise unmediated by the app backend.
+**Current instance:** LiveKit Cloud (WebRTC SFU). The canvas sync server's
+**av** plugin **only mints access tokens** (`GET /api/av/token`; member =
+publish+subscribe; scribe = subscribe-only, can never publish) and can call
+the media plane's room service to remove a participant (used by
+`POST /api/av/kick`). The media plane is otherwise unmediated by the app
+backend.
 
 **Contract — identity coupling:** the participant identity minted into
 the token *is* the canvas presence userId (stripped of any prefix), so a
@@ -197,11 +244,13 @@ utterance with a hosted STT service, and `POST` the text to the canvas
 sync server's transcript endpoint. Deliberately **visible** in the
 participant list (the room should know it's being transcribed).
 
-**Current instance:** a Node process using the LiveKit RTC SDK; per
-participant an `AudioStream` (resampled to 16kHz mono) → an **energy-VAD
-segmenter** (utterance splitting) → a **WAV/PCM-16 encoder** → a call to
-an OpenAI-compatible STT endpoint (Groq Whisper by default; any
-OpenAI-compatible STT works via `STT_URL`).
+**Current instance:** a Bun process (compiled to a single binary) using the
+LiveKit RTC SDK; per participant an `AudioStream` (resampled to 16kHz mono)
+→ an **energy-VAD segmenter** (utterance splitting) → a **WAV/PCM-16
+encoder** → a call to an OpenAI-compatible STT endpoint (Groq Whisper by
+default; any OpenAI-compatible STT works via `STT_URL`). It `POST`s each
+line to `/api/scribe/transcript`. (Under Bun the RTC SDK's `captureFrame`
+needed a copy of `Int16Array` subarray views, which the binary applies.)
 
 **Contract — per-speaker ordering:** STT calls are chained *per
 participant* (a slow transcription can't reorder one speaker's
@@ -220,7 +269,17 @@ exits and is restarted by its process supervisor.
 **Role:** let on-VM agents (and anything on the box) read and write the
 canvas over HTTP, without a browser. The agent isn't blind: it can see
 what teammates have placed in a frame, then report back. There is also a
-CLI wrapper (`bin/canvas`) so agents and shells can use the same surface.
+CLI so agents and shells can use the same surface.
+
+**Current instance:** the `ensembleworks` CLI (a compiled Bun binary). It is
+**manifest-rendered**: each `<group> <verb>` (e.g. `ensembleworks canvas
+sticky`, `ensembleworks canvas frame`, `ensembleworks terminal status`) maps
+to a tool in the manifest fetched from `GET /api/tools`, so the CLI's verbs,
+flags, and validation track the server's contracts rather than being
+hand-coded. A few verbs are native (`terminal connect`, `canvas
+pull-images`, `auth`, `version`); a trusted extension dir can add
+`ensembleworks-<group>` sub-commands. This replaces the earlier `bin/canvas`
+wrapper, which retires at the #8 cutover.
 
 **Write surface:**
 - flip a status light on a terminal shape (`working|needs-you|done|idle`),
@@ -260,10 +319,12 @@ backend turns that into an `AccessIdentity`.
 the email header is `Cf-Access-Authenticated-User-Email` and the JWT is
 `Cf-Access-Jwt-Assertion`, verified against the team's JWKS.
 
-**Contract — three modes by configuration:**
-1. **verified** — JWKS team domain + audience configured → the JWT's
-   signature/aud/exp is verified. A forged header is rejected. This is
-   the production posture.
+**Contract — three modes by configuration:** the switch is a single boolean,
+`accessVerificationEnabled()` (both `CF_ACCESS_TEAM_DOMAIN` and
+`CF_ACCESS_AUD` set); the server logs which posture it booted in.
+1. **verified** — team domain + audience configured → the JWT's
+   signature/aud/exp is verified against the team's JWKS. A forged header is
+   rejected. This is the production posture.
 2. **header-trust** — neither configured → trust the email header. Safe
    *only because* the box has no inbound ports and is reachable only via
    the tunnel (the gateway overwrites that header, so nothing can forge
@@ -271,11 +332,37 @@ the email header is `Cf-Access-Authenticated-User-Email` and the JWT is
 3. **dev** — no access headers at all (local / port-forwarded) → fall back
    to a dev identity env var, else null.
 
+**Contract — the app-side identity plane.** The injected identity is no
+longer just captured-for-attribution; the app backend resolves every caller
+into a small **Whoami envelope** (`GET /api/whoami`) — `human` (CF Access
+email/SSO), `bot` (a CF Access **service token**, keyed by its
+`common_name` and mapped to an identity + write-scope in a
+`service-tokens.toml`), or `anonymous`. Three things read that resolution:
+- **Write-scope guard** — an app-wide middleware that 403s a **read-only**
+  service token on any mutating request; humans, read-write tokens, and
+  anonymous callers pass untouched (a no-op unless a read-only token is
+  configured).
+- **Attribution stamping** — canvas content writes (sticky/shape/roadmap)
+  are stamped **server-side**: a credentialed caller's identity becomes the
+  trusted structured `meta.author` (a voluntary `author` in the body is
+  ignored), while an anonymous caller's `author` is a cosmetic badge only,
+  never structured — the server always wins, so `meta.author` can't be
+  forged.
+- **Gateway-owner binding** — a remote terminal connector's registration is
+  bound to `resolveGatewayOwner(headers)`: on a verified instance an
+  anonymous/dev connect is **rejected**, and a gateway id already owned by a
+  different identity can't be hijacked (§3.2).
+
 **Why it matters:** the verified email is what gets matched to a git
 committer identity for `Co-authored-by` attribution (§6.3). The terminal
 gateway is interactive shell access as the shared OS user, so the access
-policy in front of the tunnel is what keeps `/term` from being an open
-shell.
+policy in front of the tunnel is what keeps the terminal routes from being
+an open shell. **Explicit seam — remote terminals are team-wide.** The
+gateway-owner binding governs who may *register* a gateway, not who may
+*attach*: `/api/terminal/list` and `/api/terminal/relay` are unfiltered, so
+any authenticated teammate who knows a `gatewayId`+`sessionId` can attach to
+any terminal. That is acceptable for one trusted team behind the access
+gateway; a per-identity attach check would be a future slice.
 
 ### 3.8 VM pressure monitor
 
@@ -329,8 +416,9 @@ Each line is a complete record (greppable, crash-safe):
 `identity` = the speaker's canvas presence userId. `page`, `cursor`, and
 `frame` are the **spatial stamp** — computed by the speaker's *own browser*
 from the CRDT replica it already holds and published on its presence record
-(`meta.stamp`); the server copies it onto the entry at append time when the
-speaker has a browser tab open (null otherwise). `frame` is the frame
+(`meta.stamp`); the server copies it onto the entry at append time (on `POST
+/api/scribe/transcript`) when the speaker has a browser tab open (null
+otherwise). `frame` is the frame
 containing (dist 0) or nearest to the point the speaker was at — that
 *place* is what turns a flat transcript into minutes-with-places and
 threaded conversation maps. (Computing the stamp client-side keeps the
@@ -377,8 +465,10 @@ all session state for the instance.
 
 ### 5.1 A terminal byte round-trip
 
-1. Browser opens a terminal shape, reads `sessionId` from its props,
-   opens a WS to the gateway with `?session=<id>&cols&rows`.
+1. Browser opens a terminal shape, reads `sessionId` from its props, opens
+   a WS with `?session=<id>&cols&rows` — to `/api/terminal/ws` for a local
+   session, or `/api/terminal/relay?gateway=<id>` to be spliced onto a
+   remote connector (§3.2).
 2. Gateway runs (or reattaches) one pty → `tmux new-session -A -s
    canvas-<id>`. Sends `attached` + current grid size + scrollback.
 3. Keystrokes → `{type:'input',data}` → pty.write → tmux.
@@ -399,8 +489,8 @@ holds the `terminal` shape with its `sessionId` reference.
    mono, runs energy-VAD, accumulates an utterance.
 3. On utterance close: encode WAV, call the hosted STT (chained per
    speaker so order is preserved), get text.
-4. `POST /api/transcript` with the speaker's media identity (== canvas
-   userId) + name + text.
+4. `POST /api/scribe/transcript` with the speaker's media identity (==
+   canvas userId) + name + text.
 5. The canvas server looks up the speaker's **live presence** and copies
    the **spatial stamp their browser already computed** there (`meta.stamp`
    = `{at, frame}`). The client is what locates them — by their **mouse
@@ -411,32 +501,32 @@ holds the `terminal` shape with its `sessionId` reference.
    geometry** on this path; a connected tab that published no stamp (an
    old bundle) yields a null cursor/frame, self-healing on reload.
 6. Appends one JSONL line: speaker + text + page + cursor + frame.
-7. A minutes/conversation-map agent polls `/api/transcript?since=`, gets
-   the new line, and maintains its artifacts.
+7. A minutes/conversation-map agent polls `GET /api/scribe/transcript?since=`,
+   gets the new line, and maintains its artifacts.
 
 ### 5.3 An agent reads a frame, works, reports back
 
-1. Agent runs `canvas read <frame>` → `GET /api/frame?name=`. Server
-   fuzzy-matches the frame, returns stickies/text/images (as `/uploads`
-   URLs)/terminals/iframes, **proximity-sorted** to the nearest live
-   cursor. Agent takes its brief (possibly `canvas pull-images` to
-   actually see images).
+1. Agent runs `ensembleworks canvas frame <name>` → `GET
+   /api/canvas/frame?name=`. Server fuzzy-matches the frame, returns
+   stickies/text/images (as `/uploads` URLs)/terminals/iframes,
+   **proximity-sorted** to the nearest live cursor. Agent takes its brief
+   (possibly `ensembleworks canvas pull-images` to actually see images).
 2. Agent does its work in a canvas terminal.
-3. Agent reports: `canvas sticky … --frame advice --author <crew>`
-   (agent-tagged, distinct colour) and/or `canvas status <session>
-   needs-you` so the drafting table can see at a glance which agents want
-   attention.
+3. Agent reports: `ensembleworks canvas sticky … --frame advice`
+   (server-stamped by the caller's identity, §3.7; agent-tagged, distinct
+   colour) and/or `ensembleworks terminal status <session> needs-you` so the
+   drafting table can see at a glance which agents want attention.
 
 ### 5.4 Kicking a user
 
-`POST /api/kick` disconnects one user from **both** planes: it closes all
+`POST /api/av/kick` disconnects one user from **both** planes: it closes all
 their canvas sync sessions (sending a `kicked` custom message the client
 surfaces) *and* removes them from the media plane via the media room
 service. One endpoint, both planes, by identity.
 
 ### 5.5 Proximity-sorted reads
 
-`/api/frames` and `/api/frame` pick the **most-recently-active cursor** on
+`/api/canvas/frames` and `/api/canvas/frame` pick the **most-recently-active cursor** on
 the relevant page and sort that page's items by distance to the point that
 teammate is at — their client-computed **stamp point** (`meta.stamp.at`,
 what they're pointing at / looking at) when present, else their raw cursor.
@@ -454,8 +544,9 @@ build the response — see §6.6.)
 
 ### 6.1 Latency & the session pulse
 
-One heartbeat endpoint carries **two** features at once: each client
-measures the round-trip of its *previous* pulse and reports it; the
+One heartbeat endpoint (`POST /api/av/pulse`) carries **two** features at
+once: each client measures the round-trip of its *previous* pulse and
+reports it; the
 server records per-user RTT, prunes stale samples, and returns the live
 per-user latency map **plus** the shared VM-pressure reading. One client
 timer, one endpoint, no extra storage. Stale samples (~2.5× the poll
@@ -549,12 +640,12 @@ full RTT to the box for both.
 is the main VM CPU consumer, and it scales with **canvas size × access
 frequency**, not user count directly. The remaining proximity logic
 (parent walks up to 50 deep, `byProximity` sorts) runs synchronously on
-the read endpoints `/api/frames` and `/api/frame` (§5.5) — a steady-state
+the read endpoints `/api/canvas/frames` and `/api/canvas/frame` (§5.5) — a steady-state
 drain that competes with the latency-critical cursor path for the same
 event loop. Note what is **no longer** on this path: the frame-matching
 geometry (`frameAtPoint`/viewport-centre) has moved to the browsers, which
 each compute their own spatial stamp from the CRDT replica they already
-hold and publish it on presence (§4.2, §5.2). So `POST /api/transcript`
+hold and publish it on presence (§4.2, §5.2). So `POST /api/scribe/transcript`
 now does *zero* document work — a per-utterance snapshot walk that used to
 compete with cursor sync is gone — and the read endpoints consume a
 client-provided sort point rather than recomputing it. CRDT merge itself
@@ -594,11 +685,11 @@ constraint there, latency/scheduling is. On the **browser**, media
 **Two scaling cliffs for alternative implementations:**
 
 1. **Canvas size × read frequency** on sync-server CPU. The remaining
-   proximity math is O(shapes)–O(shapes×frames) per `/api/frames` /
-   `/api/frame` read and runs synchronously in the cursor-serving process;
+   proximity math is O(shapes)–O(shapes×frames) per `/api/canvas/frames` /
+   `/api/canvas/frame` read and runs synchronously in the cursor-serving process;
    as the canvas grows and agent activity rises it competes with cursor
 sync. This cliff is now **half-closed**: the per-utterance
-   `POST /api/transcript` walk that used to sit on it has been eliminated
+   `POST /api/scribe/transcript` walk that used to sit on it has been eliminated
    by computing the spatial stamp in each browser and publishing it on
    presence (§4.2, §5.2), and the reads now consume a client-provided sort
    point. What's left is the response-building walk on the two read
@@ -619,9 +710,21 @@ sync. This cliff is now **half-closed**: the per-utterance
 
 One VM, no inbound ports. A reverse-tunnel client dials out; an access
 gateway sits in front of the public hostname. A reverse proxy on `:8080`
-does the `/dev/{port}` same-origin proxy and forwards everything else to
-the app server. TLS terminates at the edge; the reverse proxy needs no
-certs.
+does the `/dev/{port}` same-origin proxy, routes the local terminal plane
+(`/api/terminal/{health,sessions,ws}`) to the terminal gateway process, and
+forwards everything else (including the terminal relay plane) to the app
+server. TLS terminates at the edge; the reverse proxy needs no certs.
+
+**Artifacts & deploy.** The server, terminal gateway, transcriber, and CLI
+are compiled Bun single-file binaries (the server and gateway are the two
+sub-commands of one `ensembleworks-server sync|term` binary). Deploy is
+**fetch-verify-swap** (`deploy/deploy.sh <target> <version>`): download the
+tagged release artifacts to `releases/<version>`, checksum-verify, run a
+hermetic pre-swap boot-check of the fetched server + transcriber, stamp a
+posture-era marker, swap the `current` symlink, restart the units, and prune
+to the last few releases (rollback = re-swap an older still-present release).
+The one-shot `deploy/cutover.sh` wraps a data-load check + `DATA_DIR` backup
++ env reseed around a sanctioned cross-era `deploy.sh`.
 
 ### 7.2 Secrets, segregated by service
 
@@ -642,10 +745,12 @@ self-editing room, so only admit people you'd trust with those keys.
 
 ### 7.3 Process units
 
-One supervisor unit each for: sync server, terminal gateway, app dev
-server (or static serving in hardened mode), and (optional) scribe. A
-tight sudoers rule grants the shared user `restart|start|stop` on these
-units only (no root shell), for dependency changes or a wedged unit.
+One supervisor unit each for: the sync server (`ensembleworks-server sync`,
+which also serves the static build in production — no separate app-server
+unit in hardened mode), the terminal gateway (`ensembleworks-server term`),
+and (optional) the scribe binary. A tight sudoers rule grants the shared
+user `restart|start|stop` on these units only (no root shell), for
+dependency changes or a wedged unit.
 
 ### 7.4 The terminal substrate config
 
@@ -673,14 +778,14 @@ could re-implement without touching the others:
 | Seam | Contract (abstract) | Current instance | Alternative space |
 |---|---|---|---|
 | **Canvas spatial store** | a CRDT-synced, per-room, durably-persisted document of shapes + presence, with a shared schema | tldraw sync + per-room SQLite | any CRDT/OT doc store; Yjs, Automerge, a Durable-Object-style backend |
-| **Terminal substrate** | a durable PTY-backed multiplexer session, attachable from browser and plain SSH, with fan-out + bounded scrollback | tmux + node-pty | any persistent PTY + multiplexer (zellij, abduco); a k8s-container-per-terminal; see `docs/distributed-terminals-design.md` |
+| **Terminal substrate** | a durable PTY-backed multiplexer session, attachable from browser and plain SSH, with fan-out + bounded scrollback | tmux + a `Bun.spawn` PTY wrapper; local gateway process + a Bun relay connector for remote boxes | any persistent PTY + multiplexer (zellij, abduco); a k8s-container-per-terminal; see `docs/distributed-terminals-design.md` |
 | **Media plane** | hosted WebRTC SFU carrying peer audio/video + a subscribe-only door | LiveKit Cloud | any WebRTC SFU / SFU-less mesh; a self-hosted LiveKit; see `docs/livekit-replacement-plan.md` |
 | **STT** | an OpenAI-compatible transcription endpoint (audio in, text out) | Groq Whisper (hosted) | any OpenAI-compatible STT; local Whisper; a different VAD/segmenter |
 | **Access boundary** | an edge gateway authenticating users and injecting a verified identity (header + JWT) | Cloudflare Access + Tunnel | any zero-trust access gateway (Tailscale Funnel, Oauth2 Proxy, mTLS) |
 | **Reverse proxy** | same-origin `/dev/{port}` proxy + default route to app | Caddy | any reverse proxy (nginx, traefik) |
-| **App backend / HTTP surface** | the HTTP+WS routes + read/write/proximity/transcript logic | Express + ws on Node | any HTTP/WS server; the route contracts in §3, §5 are the spec |
+| **App backend / HTTP surface** | a thin kernel (rooms/WS/identity/uploads/static + reserved routes) + per-plugin `/api/<plugin>/…` feature routers | Bun + Express + ws, compiled to `ensembleworks-server sync` | any HTTP/WS server; the route contracts in §3, §5 are the spec |
 | **Client app** | a canvas renderer with custom terminal/iframe shapes + spatial audio + media client | React + tldraw + LiveKit client + xterm.js | any canvas framework + terminal emulator + WebRTC client |
-| **Scribe** | subscribe-only media client → VAD → STT → POST transcript | Node + LiveKit RTC SDK | any media client + STT; the per-speaker-ordering + visible-participant contracts in §3.5 are the spec |
+| **Scribe** | subscribe-only media client → VAD → STT → POST transcript | Bun (compiled binary) + LiveKit RTC SDK | any media client + STT; the per-speaker-ordering + visible-participant contracts in §3.5 are the spec |
 
 The two **non-seams** to be aware of: the **identity coupling** (canvas
 presence userId == media-plane identity == transcript speaker identity)

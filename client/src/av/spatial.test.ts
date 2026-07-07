@@ -1,6 +1,6 @@
 /**
  * Tiny dependency-free test for the spatial gain model.
- * Run with: npx tsx src/av/spatial.test.ts
+ * Run with: bun src/av/spatial.test.ts
  */
 import { DEFAULT_SPATIAL_SETTINGS, distance, gainForDistance } from './spatial'
 

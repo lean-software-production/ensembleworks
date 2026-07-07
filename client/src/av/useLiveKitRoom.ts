@@ -17,7 +17,10 @@ import {
 	RoomEvent,
 	Track,
 } from 'livekit-client'
+import { computeBackoff, RELAY_HEALTHY_RESET_MS } from '@ensembleworks/contracts/relay-parity'
 import { useEffect, useRef, useState } from 'react'
+import { logConnectionEvent } from './connectionLog'
+import { classifyDisconnect } from './reconnect'
 import { setScreenShareRoom } from '../screenshare/store'
 
 export interface RemotePeer {
@@ -42,7 +45,7 @@ interface AudioPipeline {
 }
 
 export interface LiveKitState {
-	status: 'disabled' | 'connecting' | 'connected' | 'error'
+	status: 'disabled' | 'connecting' | 'connected' | 'reconnecting' | 'retrying' | 'error'
 	room: Room | null
 	peers: RemotePeer[]
 	localParticipant: LocalParticipant | null
@@ -72,10 +75,20 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 	const [speakingIds, setSpeakingIds] = useState<Set<string>>(new Set())
 	const audioCtxRef = useRef<AudioContext | null>(null)
 	const pipelinesRef = useRef(new Map<string, AudioPipeline>())
+	// Desired publish state, mirrored from the setters so a re-joined Room (which
+	// starts with nothing published) can restore what the user had live.
+	const micEnabledRef = useRef(false)
+	const camEnabledRef = useRef(false)
 
 	useEffect(() => {
 		let cancelled = false
 		let lkRoom: Room | null = null
+		// Re-join bookkeeping: `attempt` drives the backoff ladder; `connectedAt`
+		// dates the last healthy connect so a long-lived session that drops once
+		// restarts the ladder at ~1s (not ~30s); `rejoinTimer` is the pending retry.
+		let attempt = 0
+		let connectedAt = 0
+		let rejoinTimer: ReturnType<typeof setTimeout> | null = null
 
 		const rebuildPeers = (r: Room) => {
 			const next: RemotePeer[] = []
@@ -127,66 +140,142 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 			}
 		}
 
+		// Fully retire a Room: drop its listeners (so its own disconnect can't
+		// re-enter these handlers), tear down every audio pipeline, disconnect.
+		const teardownRoom = (r: Room | null) => {
+			if (!r) return
+			r.removeAllListeners()
+			for (const id of [...pipelinesRef.current.keys()]) detachAudio(id)
+			r.disconnect()
+		}
+
+		// Retire the current Room and schedule a from-scratch re-join with jittered
+		// backoff (the connector's curve, so A/V and terminals reconnect alike).
+		// `r` may be null when the failure was before a Room existed (token fetch).
+		const scheduleRejoin = (r: Room | null) => {
+			teardownRoom(r)
+			if (connectedAt && Date.now() - connectedAt > RELAY_HEALTHY_RESET_MS) attempt = 0
+			connectedAt = 0
+			attempt += 1
+			const delay = computeBackoff(attempt)
+			console.debug(`[av] re-join #${attempt} in ${delay}ms`)
+			logConnectionEvent('livekit', 'rejoin', { attempt, delay })
+			rejoinTimer = setTimeout(() => {
+				if (!cancelled) connect()
+			}, delay)
+		}
+
 		async function connect() {
-			const params = new URLSearchParams({ room: roomId, identity, name })
-			const res = await fetch(`/api/livekit-token?${params}`)
-			const info = await res.json()
-			if (cancelled) return
-			if (!info.enabled) {
-				setStatus('disabled')
-				return
-			}
-			// adaptiveStream: delivered video layer follows the attached element's
-			// on-screen size, and fully hidden elements pause server-side (tldraw
-			// culls off-viewport shapes from the DOM, so panning away pauses the
-			// stream). dynacast: layers nobody subscribes to stop being ENCODED at
-			// the publisher. Both were unset pre-screen-share; camera bubbles in
-			// the faces rail benefit too. Audio is unaffected (video-only features).
-			const r = new Room({ adaptiveStream: true, dynacast: true })
-			lkRoom = r
-			r.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
-				if (track.kind === Track.Kind.Audio) attachAudio(track, participant)
-				rebuildPeers(r)
-			})
-			r.on(RoomEvent.TrackUnsubscribed, (track, _pub, participant) => {
-				if (track.kind === Track.Kind.Audio) detachAudio(participant.identity)
-				rebuildPeers(r)
-			})
-			r.on(RoomEvent.LocalTrackPublished, (pub: LocalTrackPublication) => {
-				if (pub.source === Track.Source.Camera) setLocalVideoTrack(pub.track ?? null)
-			})
-			r.on(RoomEvent.LocalTrackUnpublished, (pub: LocalTrackPublication) => {
-				if (pub.source === Track.Source.Camera) setLocalVideoTrack(null)
-			})
-			r.on(RoomEvent.TrackMuted, () => rebuildPeers(r))
-			r.on(RoomEvent.TrackUnmuted, () => rebuildPeers(r))
-			r.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
-				setSpeakingIds(new Set(speakers.map((p) => p.identity)))
-			})
-			r.on(RoomEvent.ParticipantConnected, () => rebuildPeers(r))
-			// canPublish lands with the join info but can also change later;
-			// rebuild so a subscribe-only scribe is flagged readOnly either way.
-			r.on(RoomEvent.ParticipantPermissionsChanged, () => rebuildPeers(r))
-			r.on(RoomEvent.ParticipantDisconnected, (p) => {
-				detachAudio(p.identity)
-				rebuildPeers(r)
-			})
-			r.on(RoomEvent.Disconnected, () => setStatus('error'))
+			// `joined` gates the Disconnected handler: a failed *initial* connect
+			// rejects the promise (handled by the catch below) and may also emit
+			// Disconnected — without this guard both would schedule a re-join.
+			let joined = false
+			let r: Room | null = null
 			try {
-				await r.connect(info.url, info.token)
+				const params = new URLSearchParams({ room: roomId, identity, name })
+				const res = await fetch(`/api/av/token?${params}`)
+				const info = await res.json()
+				if (cancelled) return
+				if (!info.enabled) {
+					setStatus('disabled')
+					return
+				}
+				// adaptiveStream: delivered video layer follows the attached element's
+				// on-screen size, and fully hidden elements pause server-side (tldraw
+				// culls off-viewport shapes from the DOM, so panning away pauses the
+				// stream). dynacast: layers nobody subscribes to stop being ENCODED at
+				// the publisher. Both were unset pre-screen-share; camera bubbles in
+				// the faces rail benefit too. Audio is unaffected (video-only features).
+				const room = new Room({ adaptiveStream: true, dynacast: true })
+				r = room
+				lkRoom = room
+				room.on(RoomEvent.TrackSubscribed, (track, _pub, participant) => {
+					if (track.kind === Track.Kind.Audio) attachAudio(track, participant)
+					rebuildPeers(room)
+				})
+				room.on(RoomEvent.TrackUnsubscribed, (track, _pub, participant) => {
+					if (track.kind === Track.Kind.Audio) detachAudio(participant.identity)
+					rebuildPeers(room)
+				})
+				room.on(RoomEvent.LocalTrackPublished, (pub: LocalTrackPublication) => {
+					if (pub.source === Track.Source.Camera) setLocalVideoTrack(pub.track ?? null)
+				})
+				room.on(RoomEvent.LocalTrackUnpublished, (pub: LocalTrackPublication) => {
+					if (pub.source === Track.Source.Camera) setLocalVideoTrack(null)
+				})
+				room.on(RoomEvent.TrackMuted, () => rebuildPeers(room))
+				room.on(RoomEvent.TrackUnmuted, () => rebuildPeers(room))
+				room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+					setSpeakingIds(new Set(speakers.map((p) => p.identity)))
+				})
+				room.on(RoomEvent.ParticipantConnected, () => rebuildPeers(room))
+				// canPublish lands with the join info but can also change later;
+				// rebuild so a subscribe-only scribe is flagged readOnly either way.
+				room.on(RoomEvent.ParticipantPermissionsChanged, () => rebuildPeers(room))
+				room.on(RoomEvent.ParticipantDisconnected, (p) => {
+					detachAudio(p.identity)
+					rebuildPeers(room)
+				})
+				// Per-participant link quality — telemetry only (no state); the
+				// downlink-saturation theory needs these recorded per viewpoint.
+				room.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
+					logConnectionEvent('livekit', 'quality', { identity: participant.identity, quality })
+				})
+				// The SDK's own recovery is in flight — media/peers are still live.
+				room.on(RoomEvent.Reconnecting, () => {
+					if (cancelled) return
+					setStatus('reconnecting')
+					logConnectionEvent('livekit', 'reconnecting')
+				})
+				room.on(RoomEvent.SignalReconnecting, () => {
+					if (cancelled) return
+					setStatus('reconnecting')
+					logConnectionEvent('livekit', 'signal-reconnecting')
+				})
+				room.on(RoomEvent.Reconnected, () => {
+					if (cancelled) return
+					setStatus('connected')
+					connectedAt = Date.now()
+					logConnectionEvent('livekit', 'reconnected')
+					rebuildPeers(room) // subscriptions may have churned while away
+				})
+				// Terminal disconnect: a kick / duplicate-identity / room-delete is a
+				// dead end; anything else self-heals with a fresh from-scratch re-join.
+				room.on(RoomEvent.Disconnected, (reason) => {
+					if (cancelled || !joined) return
+					logConnectionEvent('livekit', 'disconnected', {
+						reason,
+						fatal: classifyDisconnect(reason) === 'fatal',
+					})
+					if (classifyDisconnect(reason) === 'fatal') {
+						teardownRoom(room)
+						setStatus('error')
+						return
+					}
+					setStatus('retrying')
+					scheduleRejoin(room)
+				})
+				await room.connect(info.url, info.token)
+				joined = true
+				if (cancelled) {
+					teardownRoom(room)
+					return
+				}
+				setRoom(room)
+				setStatus('connected')
+				connectedAt = Date.now()
+				logConnectionEvent('livekit', 'connected')
+				rebuildPeers(room)
+				setScreenShareRoom(room)
+				// Restore what the user had live — a re-joined Room starts empty.
+				if (micEnabledRef.current) room.localParticipant.setMicrophoneEnabled(true).catch(console.error)
+				if (camEnabledRef.current) room.localParticipant.setCameraEnabled(true).catch(console.error)
 			} catch (err) {
-				console.error('LiveKit connect failed', err)
-				if (!cancelled) setStatus('error')
-				return
+				if (cancelled) return
+				console.error('LiveKit connect/join failed', err)
+				setStatus('retrying')
+				scheduleRejoin(r)
 			}
-			if (cancelled) {
-				r.disconnect()
-				return
-			}
-			setRoom(r)
-			setStatus('connected')
-			rebuildPeers(r)
-			setScreenShareRoom(r)
 		}
 
 		connect()
@@ -197,21 +286,23 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 
 		return () => {
 			cancelled = true
+			if (rejoinTimer) clearTimeout(rejoinTimer)
 			document.removeEventListener('pointerdown', resume)
-			for (const id of [...pipelinesRef.current.keys()]) detachAudio(id)
 			setScreenShareRoom(null)
-			lkRoom?.disconnect()
+			teardownRoom(lkRoom)
 			audioCtxRef.current?.close()
 			audioCtxRef.current = null
 		}
 	}, [roomId, identity, name])
 
 	const setMicEnabled = (on: boolean) => {
+		micEnabledRef.current = on
 		room?.localParticipant.setMicrophoneEnabled(on).catch(console.error)
 		audioCtxRef.current?.resume()
 		setMicState(on)
 	}
 	const setCamEnabled = (on: boolean) => {
+		camEnabledRef.current = on
 		room?.localParticipant.setCameraEnabled(on).catch(console.error)
 		setCamState(on)
 	}

@@ -11,11 +11,11 @@
  * so the tile always has the window's true proportions.
  */
 
+import { screenshareShapeProps } from '@ensembleworks/contracts'
 import { useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
-	T,
 	TLBaseShape,
 	TLResizeInfo,
 	resizeBox,
@@ -75,17 +75,7 @@ export type ScreenShareShape = TLBaseShape<'screenshare', ScreenShareShapeProps>
 
 export class ScreenShareShapeUtil extends BaseBoxShapeUtil<ScreenShareShape> {
 	static override type = 'screenshare' as const
-	// Keep in sync with server/src/schema.ts
-	static override props = {
-		w: T.number,
-		h: T.number,
-		participantId: T.string,
-		trackName: T.string,
-		title: T.string,
-		aspect: T.number,
-		stillUrl: T.string.optional(),
-		ownerColor: T.string.optional(),
-	}
+	static override props = screenshareShapeProps
 
 	override getDefaultProps(): ScreenShareShape['props'] {
 		return {

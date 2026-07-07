@@ -8,6 +8,7 @@
  */
 import { existsSync } from 'node:fs'
 import path from 'node:path'
+import { accessVerificationEnabled } from './access-identity.ts'
 import { createSyncApp } from './app.ts'
 
 const PORT = Number(process.env.PORT ?? 8788)
@@ -20,4 +21,5 @@ server.listen(PORT, () => {
 	console.log(`ensembleworks sync server listening on :${PORT}`)
 	console.log(`  data dir: ${DATA_DIR}`)
 	console.log(`  client build: ${existsSync(CLIENT_DIST) ? CLIENT_DIST : '(not built — dev mode)'}`)
+	console.log(`  auth posture: ${accessVerificationEnabled() ? 'verified (CF Access JWT signatures checked)' : 'header-trust (no CF_ACCESS_TEAM_DOMAIN/AUD — trusting edge headers)'}`)
 })

@@ -6,7 +6,7 @@ description: Use when debugging or testing the roadmap canvas control — drag-a
 # Debugging the Roadmap Control
 
 Two planes: **content** lives server-side (`server/src/roadmap-store.ts`) behind
-`GET/POST /api/roadmap`; the tldraw shape holds only `{roadmapId, rev}` and
+`GET/POST /api/roadmap/doc`; the tldraw shape holds only `{roadmapId, rev}` and
 refetches when the server stamps a new `rev` onto it after each write.
 **Ground truth is the server doc** — the UI renders optimistically, so verify
 every interaction by rev bump + data change, never by screenshot alone.
@@ -14,14 +14,17 @@ every interaction by rev bump + data change, never by screenshot alone.
 ## Data plane (no browser)
 
 ```bash
-export CANVAS_URL=http://localhost:5173   # vite proxies /api (sync server: :8788)
-export CANVAS_ROOM=debug-roadmap          # NEVER 'team' — that's the live roadmap
-bin/canvas roadmap list|read|push|ops ... # see canvas --help
+export ENSEMBLEWORKS_URL=http://localhost:5173   # vite proxies /api (sync server: :8788)
+export ENSEMBLEWORKS_ROOM=debug-roadmap          # NEVER 'team' — that's the live roadmap
+ensembleworks roadmap read [name]                # list (no name) or read one
+ensembleworks roadmap write <name> --ops '<ops-json>' [--if-rev <rev>]   # apply an op batch
+# (the old `push`/`ops` verbs are now both `write --ops`; wholesale-replace is
+#  --ops '[{"op":"replace","data":<doc>}]', or --ops @wrap.json from a file.)
 ```
 
-`roadmap read` first — the scratch room may already hold a usable doc. If
-seeding, use ≥2 initiatives in ONE outcome with mixed statuses — drag
-containers are per-parent, so one-initiative-per-outcome fixtures can't
+`ensembleworks roadmap read <name>` first — the scratch room may already hold a
+usable doc. If seeding, use ≥2 initiatives in ONE outcome with mixed statuses —
+drag containers are per-parent, so one-initiative-per-outcome fixtures can't
 exercise initiative reorder at all.
 
 ## UI plane (headless probe)

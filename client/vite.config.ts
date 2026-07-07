@@ -84,15 +84,23 @@ export default defineConfig({
 		__APP_VERSION__: JSON.stringify(appVersion()),
 	},
 	server: {
-		// Caddy hard-targets localhost:5173, so a busy port must fail loudly
+		// Bind the IPv4 loopback explicitly. The dev server sits behind Caddy,
+		// which dials 127.0.0.1:5173 (see deploy/Caddyfile). The container also
+		// sets NODE_OPTIONS=--dns-result-order=ipv4first so `localhost` resolves to
+		// 127.0.0.1, but pinning the host here removes any IPv4/IPv6 ambiguity.
+		host: '127.0.0.1',
+		// Caddy hard-targets 127.0.0.1:5173, so a busy port must fail loudly
 		// rather than let Vite silently bind 5174 and 502 through Caddy.
 		strictPort: true,
 		...proxiedServer,
 		proxy: {
 			'/sync': { target: 'ws://localhost:8788', ws: true },
 			'/uploads': 'http://localhost:8788',
+			// Terminal local plane (health/sessions/ws) is served by the :8789 gateway
+			// process; the relay plane (status/list/connect/relay) stays on :8788. Must
+			// precede the '/api' catch-all. The alternation also covers /sessions/:id.
+			'^/api/terminal/(health|sessions|ws)': { target: 'ws://localhost:8789', ws: true },
 			'/api': { target: 'http://localhost:8788', ws: true },
-			'/term': { target: 'ws://localhost:8789', ws: true },
 		},
 	},
 })

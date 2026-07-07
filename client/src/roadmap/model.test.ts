@@ -1,12 +1,11 @@
 // Unit tests for the pure roadmap client model.
-// Run with: npx tsx src/roadmap/model.test.ts
+// Run with: bun src/roadmap/model.test.ts
 import assert from 'node:assert/strict'
 import {
 	applyLocalOp,
 	cycleStatus,
 	glyphFor,
 	metricMatchesFilter,
-	slugify,
 	statusMatchesFilter,
 	type RoadmapDoc,
 } from './model'
@@ -48,10 +47,6 @@ assert.equal(glyphFor('in-progress').g, '●')
 assert.equal(glyphFor('parked').g, '–')
 assert.equal(glyphFor('planned').g, '○')
 console.log('ok: glyphFor')
-
-assert.equal(slugify('Product Roadmap'), 'product-roadmap')
-assert.equal(slugify('!!!'), null)
-console.log('ok: slugify')
 
 // Filter semantics: 'all' matches everything; otherwise exact status match.
 assert.equal(statusMatchesFilter('all', 'done'), true)

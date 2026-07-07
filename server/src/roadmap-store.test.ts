@@ -1,17 +1,12 @@
 // Unit tests for the pure roadmap document logic and the JSON-file store.
-// Run with: npx tsx src/roadmap-store.test.ts
+// Run with: bun src/roadmap-store.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { slugify } from '@ensembleworks/contracts'
 import { ROADMAP_FIXTURE } from './roadmap-fixture.ts'
-import {
-	OpError,
-	applyOps,
-	createRoadmapStore,
-	slugify,
-	validateRoadmap,
-} from './roadmap-store.ts'
+import { OpError, applyOps, createRoadmapStore, validateRoadmap } from './roadmap-store.ts'
 
 function expectOpError(fn: () => void, status: number, label: string) {
 	try {

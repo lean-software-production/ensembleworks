@@ -6,7 +6,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { PORTS } from './dev-lib.mjs'
+import { atLeast, PORTS } from './dev-lib.mjs'
 import {
 	devEnvPath,
 	makeCtx,
@@ -14,7 +14,7 @@ import {
 	probePort,
 	repoDir,
 	sessionRunning,
-	wantedNode,
+	wantedBun,
 } from './dev-main.mjs'
 
 /**
@@ -28,14 +28,17 @@ export async function runDoctor(opts) {
 	/** @type {Check[]} */
 	const checks = []
 
-	// Node: if we're executing, the version gate in dev-main already passed
-	// (or re-exec'd via mise) — report it for completeness.
+	// Bun: if we're executing, the floor gate in dev-main already passed (or
+	// re-exec'd via mise) — report it for completeness.
+	const runningBun = process.versions.bun
 	checks.push({
-		name: 'node',
+		name: 'bun',
 		level: 'required',
-		ok: process.version === `v${wantedNode}`,
-		detail: `${process.version} (want v${wantedNode} from .nvmrc — node-pty ABI pin)`,
-		remedy: `install Node ${wantedNode}: \`mise use -g node@${wantedNode}\` or \`nvm install ${wantedNode}\``,
+		ok: runningBun !== undefined && atLeast(runningBun, wantedBun),
+		detail: runningBun
+			? `bun ${runningBun} (want >= ${wantedBun} from .tool-versions)`
+			: `not running under Bun (${process.version})`,
+		remedy: `install Bun >= ${wantedBun}: \`mise use -g bun@${wantedBun}\` or https://bun.sh`,
 	})
 
 	const tmuxV = spawnSync('tmux', ['-V'], { encoding: 'utf8' })
@@ -46,22 +49,6 @@ export async function runDoctor(opts) {
 		ok: tmuxVer !== null && Number.parseFloat(tmuxVer) >= 3.3,
 		detail: tmuxVer ? `tmux ${tmuxVer} (min 3.3)` : 'not on PATH',
 		remedy: 'apt install tmux (>= 3.3, per deploy/runtime-requirements)',
-	})
-
-	const nm = existsSync(`${repoDir}/node_modules`)
-	const pty = nm
-		? spawnSync('node', ['-e', "require('node-pty')"], { cwd: repoDir, stdio: 'ignore' }).status === 0
-		: false
-	checks.push({
-		name: 'node-pty',
-		level: 'required',
-		ok: pty,
-		detail: nm
-			? pty
-				? 'loads (ABI matches)'
-				: 'node_modules present but node-pty fails to load — Node/ABI mismatch at install time'
-			: 'node_modules missing',
-		remedy: nm ? 'reinstall with the pinned Node: `npm ci`' : 'run `npm ci` (or just `bin/dev up`)',
 	})
 
 	checks.push({

@@ -1,5 +1,5 @@
 // Tests for the WAV encoder: header fields + payload round-trip.
-// Run with: npx tsx src/wav.test.ts
+// Run with: bun src/wav.test.ts
 import assert from 'node:assert/strict'
 import { encodeWavPcm16 } from './wav.ts'
 

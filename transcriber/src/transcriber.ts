@@ -5,7 +5,7 @@
  * teammate's audio track into utterances (energy VAD, see segmenter.ts),
  * transcribes them against a hosted OpenAI-compatible STT server (Groq's
  * Whisper API by default), and posts the text to the sync server's
- * /api/transcript — where each line gets stamped with the speaker's live
+ * /api/scribe/transcript — where each line gets stamped with the speaker's live
  * cursor position and nearest frame.
  *
  * Deliberately visible: it appears in the participant list as "📝 scribe" so
@@ -14,8 +14,8 @@
  * gain, not an access control.
  *
  * Environment:
- *   CANVAS_URL    sync server (default http://localhost:8788)
- *   CANVAS_ROOM   room to scribe (default team)
+ *   ENSEMBLEWORKS_URL    sync server (default http://localhost:8788)
+ *   ENSEMBLEWORKS_ROOM   room to scribe (default team)
  *   STT_URL       OpenAI-compatible STT server (default Groq, https://api.groq.com/openai/v1)
  *   STT_MODEL     model name (default whisper-large-v3-turbo)
  *   STT_LANGUAGE  optional language hint, e.g. en
@@ -30,13 +30,13 @@ import {
 	type RemoteParticipant,
 	type RemoteTrack,
 } from '@livekit/rtc-node'
+import { readScribeEndpoint } from './config.ts'
 import { resolveScribeConnectUrl } from './livekit-url.ts'
 import { createSegmenter } from './segmenter.ts'
 import { transcribeWav } from './stt.ts'
 import { encodeWavPcm16 } from './wav.ts'
 
-const CANVAS_URL = process.env.CANVAS_URL ?? 'http://localhost:8788'
-const CANVAS_ROOM = process.env.CANVAS_ROOM ?? 'team'
+const { url: SYNC_URL, room: SYNC_ROOM } = readScribeEndpoint(process.env)
 const STT_URL = process.env.STT_URL ?? 'https://api.groq.com/openai/v1'
 const STT_MODEL = process.env.STT_MODEL ?? 'whisper-large-v3-turbo'
 const STT_LANGUAGE = process.env.STT_LANGUAGE
@@ -44,18 +44,26 @@ const STT_API_KEY = process.env.STT_API_KEY
 const SCRIBE_IDENTITY = process.env.SCRIBE_IDENTITY ?? 'scribe'
 const SCRIBE_NAME = process.env.SCRIBE_NAME ?? '📝 scribe'
 
+if (process.argv.includes('--check')) {
+	// The rtc-node import above has loaded the embedded native addon; the config
+	// reads above have parsed the env. Reaching here == the binary is intact for
+	// this arch. No room.connect() — pipeline correctness is the #6 e2e-gate's job.
+	console.log(`scribe --check ok (${SYNC_ROOM} @ ${SYNC_URL})`)
+	process.exit(0)
+}
+
 const SAMPLE_RATE = 16_000 // AudioStream resamples for us; whisper's native rate
 
-const log = (...args: unknown[]) => console.log(`[scribe ${CANVAS_ROOM}]`, ...args)
+const log = (...args: unknown[]) => console.log(`[scribe ${SYNC_ROOM}]`, ...args)
 
 async function fetchToken(): Promise<{ url: string; token: string } | null> {
 	const params = new URLSearchParams({
-		room: CANVAS_ROOM,
+		room: SYNC_ROOM,
 		identity: SCRIBE_IDENTITY,
 		name: SCRIBE_NAME,
 		role: 'scribe',
 	})
-	const res = await fetch(`${CANVAS_URL}/api/livekit-token?${params}`)
+	const res = await fetch(`${SYNC_URL}/api/av/token?${params}`)
 	if (!res.ok) throw new Error(`token endpoint ${res.status}`)
 	const info = (await res.json()) as { enabled: boolean; url?: string; token?: string }
 	if (!info.enabled || !info.url || !info.token) return null
@@ -66,11 +74,11 @@ async function fetchToken(): Promise<{ url: string; token: string } | null> {
 }
 
 async function postTranscript(participant: RemoteParticipant, text: string) {
-	const res = await fetch(`${CANVAS_URL}/api/transcript`, {
+	const res = await fetch(`${SYNC_URL}/api/scribe/transcript`, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
 		body: JSON.stringify({
-			room: CANVAS_ROOM,
+			room: SYNC_ROOM,
 			identity: participant.identity,
 			name: participant.name || participant.identity,
 			text,
@@ -161,7 +169,7 @@ async function main() {
 	})
 
 	await room.connect(info.url, info.token, { autoSubscribe: true, dynacast: false })
-	log(`connected to ${info.url} as ${SCRIBE_NAME}; posting to ${CANVAS_URL}`)
+	log(`connected to ${info.url} as ${SCRIBE_NAME}; posting to ${SYNC_URL}`)
 
 	const shutdown = async () => {
 		for (const ctl of pumps.values()) ctl.abort()

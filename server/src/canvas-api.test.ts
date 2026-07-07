@@ -1,8 +1,8 @@
 // Contract tests for the canvas HTTP API (session MVP plan, Cycle 2).
 // Boots the express app in-process via createSyncApp, seeds a room through
-// getOrCreateRoom().updateStore(), then exercises /api/terminal-status,
-// /api/sticky and the /api/health regression guard.
-// Run with: npx tsx src/canvas-api.test.ts
+// getOrCreateRoom().updateStore(), then exercises /api/terminal/status,
+// /api/canvas/sticky and the /api/health regression guard.
+// Run with: bun src/canvas-api.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
@@ -71,7 +71,7 @@ async function main() {
 
 	// 3. terminal-status happy path: flips props.status on the matching shape.
 	{
-		const res = await postJson('/api/terminal-status', {
+		const res = await postJson('/api/terminal/status', {
 			room: 'test',
 			sessionId: 'abc123',
 			status: 'needs-you',
@@ -87,7 +87,7 @@ async function main() {
 
 	// 4. terminal-status edge cases.
 	{
-		const unknown = await postJson('/api/terminal-status', {
+		const unknown = await postJson('/api/terminal/status', {
 			room: 'test',
 			sessionId: 'does-not-exist',
 			status: 'working',
@@ -95,14 +95,14 @@ async function main() {
 		assert.equal(unknown.status, 200, 'unknown sessionId is not an error')
 		assert.equal(unknown.body.updated, 0, 'unknown sessionId updates nothing')
 
-		const badStatus = await postJson('/api/terminal-status', {
+		const badStatus = await postJson('/api/terminal/status', {
 			room: 'test',
 			sessionId: 'abc123',
 			status: 'bogus',
 		})
 		assert.equal(badStatus.status, 400, 'status outside working|needs-you|done|idle is 400')
 
-		const missingSession = await postJson('/api/terminal-status', {
+		const missingSession = await postJson('/api/terminal/status', {
 			room: 'test',
 			status: 'working',
 		})
@@ -113,7 +113,7 @@ async function main() {
 	// 5. sticky happy path: note parented to the matching frame, rich text
 	// contains the text.
 	{
-		const res = await postJson('/api/sticky', {
+		const res = await postJson('/api/canvas/sticky', {
 			room: 'test',
 			text: STICKY_TEXT,
 			frame: 'advice',
@@ -137,7 +137,7 @@ async function main() {
 
 	// 6. sticky edge cases.
 	{
-		const noFrame = await postJson('/api/sticky', {
+		const noFrame = await postJson('/api/canvas/sticky', {
 			room: 'test',
 			text: 'orphan advice',
 			frame: 'definitely-no-such-frame',
@@ -145,7 +145,7 @@ async function main() {
 		assert.equal(noFrame.status, 404, 'unknown frame is 404')
 		assert.equal(noFrame.body.error, 'frame not found')
 
-		const emptyText = await postJson('/api/sticky', { room: 'test', text: '   ' })
+		const emptyText = await postJson('/api/canvas/sticky', { room: 'test', text: '   ' })
 		assert.equal(emptyText.status, 400, 'text empty after trim is 400')
 		console.log('ok: sticky edge cases (unknown frame 404, empty text 400)')
 	}
@@ -195,22 +195,22 @@ async function main() {
 		} as any)
 	})
 
-	// 6c. /api/frames lists every frame with its child counts.
+	// 6c. /api/canvas/frames lists every frame with its child counts.
 	{
-		const res = await getJson('/api/frames?room=test')
-		assert.equal(res.status, 200, '/api/frames should be 200')
+		const res = await getJson('/api/canvas/frames?room=test')
+		assert.equal(res.status, 200, '/api/canvas/frames should be 200')
 		const advice = res.body.frames.find((f: any) => f.name === 'Advice — crew-a')
 		assert.ok(advice, 'frames listing includes the advice frame')
 		assert.equal(advice.notes, 1, 'advice frame reports its one sticky')
 		assert.equal(advice.images, 1, 'advice frame reports its one image')
-		console.log('ok: /api/frames lists frames with child counts')
+		console.log('ok: /api/canvas/frames lists frames with child counts')
 	}
 
-	// 6d. /api/frame returns a frame's stickies + images as structured data,
+	// 6d. /api/canvas/frame returns a frame's stickies + images as structured data,
 	// recovering plain text from richText and resolving images to their url.
 	{
-		const res = await getJson('/api/frame?room=test&name=advice')
-		assert.equal(res.status, 200, '/api/frame should be 200')
+		const res = await getJson('/api/canvas/frame?room=test&name=advice')
+		assert.equal(res.status, 200, '/api/canvas/frame should be 200')
 		assert.equal(res.body.frame.name, 'Advice — crew-a')
 		assert.ok(
 			res.body.notes.some((n: any) => n.text === STICKY_TEXT),
@@ -223,16 +223,16 @@ async function main() {
 			'image resolves to its asset src url'
 		)
 
-		const missing = await getJson('/api/frame?room=test&name=definitely-no-such-frame')
+		const missing = await getJson('/api/canvas/frame?room=test&name=definitely-no-such-frame')
 		assert.equal(missing.status, 404, 'unknown frame is 404')
 		assert.equal(missing.body.error, 'frame not found')
 
-		const noName = await getJson('/api/frame?room=test')
+		const noName = await getJson('/api/canvas/frame?room=test')
 		assert.equal(noName.status, 400, 'missing name is 400')
 
 		// With nobody connected there is no cursor to sort by.
 		assert.equal(res.body.sortedBy, null, 'no presence ⇒ sortedBy is null (document order)')
-		console.log('ok: /api/frame returns stickies + image urls, 404/400 on edges')
+		console.log('ok: /api/canvas/frame returns stickies + image urls, 404/400 on edges')
 	}
 
 	// 6e. Proximity sort: a connected teammate's cursor orders the stickies,
@@ -281,7 +281,7 @@ async function main() {
 		)
 		await new Promise((r) => setTimeout(r, 300)) // let the push apply
 
-		const sorted = await getJson('/api/frame?room=test&name=advice')
+		const sorted = await getJson('/api/canvas/frame?room=test&name=advice')
 		assert.equal(sorted.status, 200)
 		assert.ok(sorted.body.sortedBy, 'a connected cursor populates sortedBy')
 		assert.equal(sorted.body.sortedBy.userName, 'Mover')
@@ -312,7 +312,7 @@ async function main() {
 		)
 		await new Promise((r) => setTimeout(r, 300))
 
-		const stamped = await getJson('/api/frame?room=test&name=advice')
+		const stamped = await getJson('/api/canvas/frame?room=test&name=advice')
 		assert.equal(stamped.status, 200)
 		assert.deepEqual(
 			stamped.body.sortedBy.cursor,
@@ -324,22 +324,22 @@ async function main() {
 			stampedTexts.indexOf('FAR') < stampedTexts.indexOf('NEAR'),
 			`stamp point flips the order, got ${JSON.stringify(stampedTexts)}`
 		)
-		console.log('ok: /api/frame sorts by the presence stamp point when present')
+		console.log('ok: /api/canvas/frame sorts by the presence stamp point when present')
 
-		// The sibling /api/frames endpoint shares the same sort wiring — confirm
+		// The sibling /api/canvas/frames endpoint shares the same sort wiring — confirm
 		// it too reports the stamp point (not the raw cursor) in sortedBy.
-		const framesStamped = await getJson('/api/frames?room=test')
+		const framesStamped = await getJson('/api/canvas/frames?room=test')
 		assert.equal(framesStamped.status, 200)
 		assert.deepEqual(
 			framesStamped.body.sortedBy.cursor,
 			{ x: FRAME_X + 10, y: 10 },
-			'/api/frames sortedBy also reports the stamp point'
+			'/api/canvas/frames sortedBy also reports the stamp point'
 		)
-		console.log('ok: /api/frames sortedBy reports the presence stamp point')
+		console.log('ok: /api/canvas/frames sortedBy reports the presence stamp point')
 
 		ws.close()
 		await new Promise((r) => setTimeout(r, 100))
-		console.log('ok: /api/frame orders stickies by nearest cursor when present')
+		console.log('ok: /api/canvas/frame orders stickies by nearest cursor when present')
 	}
 
 	// 7. Kick disconnects every canvas tab registered to the target user.
@@ -353,7 +353,7 @@ async function main() {
 			new Promise<void>((resolve) => bob2.once('close', () => resolve())),
 		])
 
-		const kicked = await postJson('/api/kick', { room: 'test', userId: 'bob' })
+		const kicked = await postJson('/api/av/kick', { room: 'test', userId: 'bob' })
 		assert.equal(kicked.status, 200)
 		assert.equal(kicked.body.disconnected, 2, 'all tabs for the target user are disconnected')
 		await bobClosed
