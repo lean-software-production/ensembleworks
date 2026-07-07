@@ -192,11 +192,16 @@ letter.
 Each phase shippable alone:
 
 1. **CommandBar** — priority tools, underlined accelerators, new bindings
-   (S alias, M, C, P), ⋯ overflow with last-used adoption, hide stock
-   toolbar/menus, contextual style panel.
+   (S alias, M, C — the P binding lands with Present in phase 3), ⋯ overflow
+   with last-used adoption, hide stock toolbar/menus, contextual style panel.
+   *Shipped 2026-07-07 (branch canvas-controls-ux). As-built deltas: overflow
+   carries rectangle + ellipse rather than the full shape grid; ☰ still shows
+   tldraw's full default menu content — trimming it to canvas verbs moves to
+   phase 2.*
 2. **SidePanel** — split layout, page sections + navigation, user tiles
    (video/initials/avatar, colour swatch, mic-cam), recording row, footer,
-   settings dialog (incl. GitHub handle, dock edge).
+   settings dialog (incl. GitHub handle, dock edge); trim ☰ to canvas verbs
+   only (§4).
 3. **Behaviours** — resize/collapse/f2f reflow, Present broadcast + follow,
    dock-edge vertical variant.
 4. **Focus view** (§7) — independent of the others; can ship alongside any
