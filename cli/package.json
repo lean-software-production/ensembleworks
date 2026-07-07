@@ -8,6 +8,7 @@
 		"ew": "src/main.ts"
 	},
 	"scripts": {
+		"build:binary": "bun build --compile --sourcemap --target=${EW_TARGET:-bun-linux-x64} src/main.ts --outfile dist/ensembleworks",
 		"build": "bunx tsc --noEmit",
 		"typecheck": "bunx tsc --noEmit"
 	},

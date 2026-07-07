@@ -1,0 +1,130 @@
+name: release-cli
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck the shipped deploy scripts (spec §10.1)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq && sudo apt-get install -y shellcheck
+          shellcheck deploy/lib.sh deploy/deploy.sh deploy/install.sh \
+            deploy/cutover.sh deploy/cutover-dataload-check.sh deploy/cutover-reseed.sh \
+            deploy/test/fake-release.sh
+
+  binaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - run: bun install --frozen-lockfile
+      - name: Compile CLI + server (cross-compiled from x64)
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          for pair in linux-x64 linux-arm64 darwin-arm64; do
+            EW_TARGET="bun-$pair" bun --cwd cli run build:binary
+            cp cli/dist/ensembleworks "out/ensembleworks-$pair"
+            case "$pair" in
+            linux-*) # server ships linux only
+              EW_TARGET="bun-$pair" bun --cwd server run build:binary
+              cp server/dist/ensembleworks-server "out/ensembleworks-server-$pair" ;;
+            esac
+          done
+      - uses: actions/upload-artifact@v4
+        with: { name: binaries, path: out/ }
+
+  transcriber-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - run: bun install --frozen-lockfile
+      - name: Compile the transcriber natively (x64; addon resolved for this host)
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          EW_TARGET=bun-linux-x64 bun --cwd transcriber run build:binary
+          cp transcriber/dist/ensembleworks-transcriber out/ensembleworks-transcriber-linux-x64
+      - uses: actions/upload-artifact@v4
+        with: { name: transcriber-x64, path: out/ }
+
+  transcriber-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - run: bun install --frozen-lockfile
+      - name: Compile the transcriber natively (arm64; addon resolved for this host)
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          EW_TARGET=bun-linux-arm64 bun --cwd transcriber run build:binary
+          cp transcriber/dist/ensembleworks-transcriber out/ensembleworks-transcriber-linux-arm64
+      - uses: actions/upload-artifact@v4
+        with: { name: transcriber-arm64, path: out/ }
+
+  client-dist:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - run: bun install --frozen-lockfile
+      - name: Build the client bundle (licence key baked in — spec §4.3)
+        env:
+          # Build-time Vite var; tldraw enforces its licence on real prod domains,
+          # so it MUST be present or the shipped bundle renders a blank editor.
+          VITE_TLDRAW_LICENSE_KEY: ${{ secrets.VITE_TLDRAW_LICENSE_KEY }}
+        run: |
+          set -euo pipefail
+          : "${VITE_TLDRAW_LICENSE_KEY:?FATAL: VITE_TLDRAW_LICENSE_KEY secret is unset — refusing to ship a blank-canvas bundle (spec §4.3)}"
+          bun --bun run --filter @ensembleworks/client build
+          tar czf client-dist.tar.gz -C client/dist .
+      - uses: actions/upload-artifact@v4
+        with: { name: client-dist, path: client-dist.tar.gz }
+
+  smoke:
+    needs: [binaries, transcriber-x64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dl }
+      - name: Boot-check the compiled x64 binaries (the deploy.sh gate — spec §6.3/§4.2)
+        run: |
+          set -euo pipefail
+          . deploy/lib.sh
+          dir="$(mktemp -d)/smoke"; mkdir -p "$dir/client-dist"
+          cp dl/binaries/ensembleworks-server-linux-x64 "$dir/ensembleworks-server"
+          cp dl/transcriber-x64/ensembleworks-transcriber-linux-x64 "$dir/ensembleworks-transcriber"
+          chmod +x "$dir"/ensembleworks-*
+          ew_boot_check "$dir" ""   # server sync + term + transcriber --check, all 200/exit0
+
+  publish:
+    needs: [lint, binaries, transcriber-x64, transcriber-arm64, client-dist, smoke]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: dl }
+      - name: Assemble, checksum, install.sh
+        run: |
+          set -euo pipefail
+          mkdir rel
+          find dl -type f \( -name 'ensembleworks-*' -o -name 'client-dist.tar.gz' \) -exec cp {} rel/ \;
+          cp deploy/install.sh rel/install.sh
+          ( cd rel && sha256sum ensembleworks-* client-dist.tar.gz > ensembleworks-checksums.txt )
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: rel/*
