@@ -43,6 +43,7 @@ import { rawUserId } from './kernel/presence.ts'
 import { createRoomHost } from './kernel/rooms.ts'
 import { createSessionRegistry } from './kernel/sessions.ts'
 import { createRoadmapStore } from './roadmap-store.ts'
+import { attachSyncSocket } from './sync-attach.ts'
 import { createTelemetryStore } from './telemetry-store.ts'
 import { createTranscriptStore } from './transcript-store.ts'
 
@@ -212,7 +213,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 					registry.identitiesByUser.delete(roomId)
 				}
 			})
-			roomHost.getOrCreateRoom(roomId).handleSocketConnect({ sessionId, socket: ws })
+			attachSyncSocket(roomHost, ws, roomId, sessionId)
 		})
 	})
 
