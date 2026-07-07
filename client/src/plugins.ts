@@ -4,7 +4,9 @@
  * command-bar order (spec §8: priority items, then overflow items) and menu
  * order, and reproduces the pre-registry hard-coded ordering exactly:
  *   shape utils  terminal, iframe, neko, roadmap, screenshare
- *   bar items    terminal, dev-server, neko, roadmap, screenshare
+ *   bar items    priority items (terminal, cast) render in the bar; overflow
+ *                items (dev-server, neko/browser, roadmap) render in the ⋯
+ *                menu — each group in registry order
  *   menu         seed-demo, seed-session
  */
 import { avPlugin } from './av/plugin'

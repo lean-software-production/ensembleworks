@@ -70,4 +70,23 @@ assert.throws(() =>
 	collectBarItems([{ id: 'bad', barItems: [{ ...mkItem('x', 'priority'), label: 'shell', accelerator: 'q' }] }], 'priority')
 )
 
+// Validation runs over all placements, not just the one being collected —
+// an invalid accelerator on an overflow item must still throw when collecting
+// 'priority'.
+assert.throws(() =>
+	collectBarItems(
+		[{ id: 'bad', barItems: [{ ...mkItem('x', 'overflow'), label: 'shell', accelerator: 'q' }] }],
+		'priority'
+	)
+)
+
+// Two items sharing the same accelerator (case-insensitive) is a programmer
+// error, regardless of placement.
+assert.throws(() =>
+	collectBarItems(
+		[{ id: 'dup', barItems: [mkItem('terminal', 'priority', 'm'), mkItem('menu', 'overflow', 'M')] }],
+		'priority'
+	)
+)
+
 console.log('plugin.test.ts: all assertions passed')

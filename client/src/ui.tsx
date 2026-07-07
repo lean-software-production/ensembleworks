@@ -17,6 +17,9 @@ export const uiOverrides: TLUiOverrides = {
 		// S aliases V for select, so the bar's underlined accelerator ("s̲elect")
 		// works without breaking tldraw muscle memory (spec §4).
 		if (tools.select) tools.select = { ...tools.select, kbd: 'v,s' }
+		// No plugin currently contributes a `tools` factory (barItems only model
+		// one-shot actions) — kept as the deliberate extension point for future
+		// armed/stateful tools.
 		for (const plugin of plugins) {
 			if (plugin.tools) Object.assign(tools, plugin.tools(editor))
 		}

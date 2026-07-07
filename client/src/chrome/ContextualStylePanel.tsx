@@ -17,6 +17,10 @@ import {
 // Tools whose next-shape styles are worth editing before drawing.
 const STYLE_TOOLS = new Set(['draw', 'highlight', 'arrow', 'line', 'geo', 'note', 'text', 'frame'])
 
+// DefaultStylePanel renders ~300px tall; flip below the selection unless the
+// full panel plus margin fits above it.
+const PANEL_FLIP_HEADROOM = 320
+
 export function ContextualStylePanel() {
 	const editor = useEditor()
 	const styles = useRelevantStyles()
@@ -64,9 +68,7 @@ export function ContextualStylePanel() {
 		const margin = 8
 		const left = Math.min(Math.max(selectionBounds.midX, 90), viewportWidth - 90)
 		const top = selectionBounds.minY - margin
-		// 60: flip threshold — approximate headroom the panel needs above the
-		// selection before it's worth anchoring there instead of below.
-		if (top < 60) {
+		if (top < PANEL_FLIP_HEADROOM) {
 			// No headroom above the selection — drop below it instead.
 			style = {
 				position: 'absolute',

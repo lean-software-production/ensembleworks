@@ -95,15 +95,25 @@ export function collectBarItems(
 	plugins: readonly ClientPlugin[],
 	placement: BarItemDescriptor['placement']
 ): BarItemDescriptor[] {
-	const items = plugins.flatMap((plugin) =>
-		(plugin.barItems ?? []).filter((item) => item.placement === placement)
-	)
-	for (const item of items) {
-		if (item.accelerator && !item.label.toLowerCase().includes(item.accelerator.toLowerCase())) {
+	const allItems = plugins.flatMap((plugin) => [...(plugin.barItems ?? [])])
+
+	const acceleratorOwners = new Map<string, string>()
+	for (const item of allItems) {
+		if (!item.accelerator) continue
+		if (!item.label.toLowerCase().includes(item.accelerator.toLowerCase())) {
 			throw new Error(
 				`barItems: accelerator "${item.accelerator}" not in label "${item.label}" (item ${item.id})`
 			)
 		}
+		const key = item.accelerator.toLowerCase()
+		const owner = acceleratorOwners.get(key)
+		if (owner) {
+			throw new Error(
+				`barItems: duplicate accelerator "${item.accelerator}" on items "${owner}" and "${item.id}"`
+			)
+		}
+		acceleratorOwners.set(key, item.id)
 	}
-	return items
+
+	return allItems.filter((item) => item.placement === placement)
 }
