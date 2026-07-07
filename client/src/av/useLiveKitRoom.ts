@@ -19,6 +19,7 @@ import {
 } from 'livekit-client'
 import { computeBackoff, RELAY_HEALTHY_RESET_MS } from '@ensembleworks/contracts/relay-parity'
 import { useEffect, useRef, useState } from 'react'
+import { logConnectionEvent } from './connectionLog'
 import { classifyDisconnect } from './reconnect'
 import { setScreenShareRoom } from '../screenshare/store'
 
@@ -158,6 +159,7 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 			attempt += 1
 			const delay = computeBackoff(attempt)
 			console.debug(`[av] re-join #${attempt} in ${delay}ms`)
+			logConnectionEvent('livekit', 'rejoin', { attempt, delay })
 			rejoinTimer = setTimeout(() => {
 				if (!cancelled) connect()
 			}, delay)
@@ -214,23 +216,37 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 					detachAudio(p.identity)
 					rebuildPeers(room)
 				})
+				// Per-participant link quality — telemetry only (no state); the
+				// downlink-saturation theory needs these recorded per viewpoint.
+				room.on(RoomEvent.ConnectionQualityChanged, (quality, participant) => {
+					logConnectionEvent('livekit', 'quality', { identity: participant.identity, quality })
+				})
 				// The SDK's own recovery is in flight — media/peers are still live.
 				room.on(RoomEvent.Reconnecting, () => {
-					if (!cancelled) setStatus('reconnecting')
+					if (cancelled) return
+					setStatus('reconnecting')
+					logConnectionEvent('livekit', 'reconnecting')
 				})
 				room.on(RoomEvent.SignalReconnecting, () => {
-					if (!cancelled) setStatus('reconnecting')
+					if (cancelled) return
+					setStatus('reconnecting')
+					logConnectionEvent('livekit', 'signal-reconnecting')
 				})
 				room.on(RoomEvent.Reconnected, () => {
 					if (cancelled) return
 					setStatus('connected')
 					connectedAt = Date.now()
+					logConnectionEvent('livekit', 'reconnected')
 					rebuildPeers(room) // subscriptions may have churned while away
 				})
 				// Terminal disconnect: a kick / duplicate-identity / room-delete is a
 				// dead end; anything else self-heals with a fresh from-scratch re-join.
 				room.on(RoomEvent.Disconnected, (reason) => {
 					if (cancelled || !joined) return
+					logConnectionEvent('livekit', 'disconnected', {
+						reason,
+						fatal: classifyDisconnect(reason) === 'fatal',
+					})
 					if (classifyDisconnect(reason) === 'fatal') {
 						teardownRoom(room)
 						setStatus('error')
@@ -248,6 +264,7 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 				setRoom(room)
 				setStatus('connected')
 				connectedAt = Date.now()
+				logConnectionEvent('livekit', 'connected')
 				rebuildPeers(room)
 				setScreenShareRoom(room)
 				// Restore what the user had live — a re-joined Room starts empty.
