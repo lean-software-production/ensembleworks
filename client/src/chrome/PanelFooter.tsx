@@ -127,7 +127,7 @@ function HelpSection() {
 			</ShortcutLine>
 			<ShortcutLine>
 				tldraw defaults: draw <b>D</b> · eraser <b>E</b> · arrow <b>A</b> · line <b>L</b> · rectangle{' '}
-				<b>R</b> · laser <b>K</b> · hand <b>H</b>
+				<b>R</b> · ellipse <b>O</b> · highlight <b>⇧D</b> · laser <b>K</b> · hand <b>H</b>
 			</ShortcutLine>
 		</div>
 	)

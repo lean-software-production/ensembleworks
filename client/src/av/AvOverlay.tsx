@@ -9,10 +9,10 @@
  * consume.
  */
 import { rawUserId } from '@ensembleworks/contracts'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useEditor, useValue } from 'tldraw'
 import { getRoomId } from '../identity'
-import { avSnapshotsEqual, getFaceEl, publishAvSnapshot, useHoveredFace, type AvPanelSnapshot } from './bridge'
+import { avSnapshotsEqual, getAvSnapshot, getFaceEl, publishAvSnapshot, useHoveredFace, type AvPanelSnapshot } from './bridge'
 import { LeashOverlay, useLeashes } from './leashes'
 import { useLiveKitRoom } from './useLiveKitRoom'
 import { useSessionPulse } from './useSessionPulse'
@@ -83,10 +83,16 @@ export function AvOverlay() {
 	//
 	// No dep array: useLiveKitRoom re-maps `peers` on every render, so deps
 	// would never compare equal anyway. Instead the effect runs each render
-	// and bails via content comparison against the last published snapshot
-	// (actions excluded — see avSnapshotsEqual) so useAvSnapshot() consumers
-	// only re-render when A/V state actually changed.
-	const lastPublishedRef = useRef<AvPanelSnapshot | null>(null)
+	// and bails via content comparison against the bridge's own current
+	// snapshot (actions excluded — see avSnapshotsEqual) so useAvSnapshot()
+	// consumers only re-render when A/V state actually changed. Comparing
+	// against the bridge itself (not a local ref) matters under
+	// React.StrictMode's dev double-invoke: the mount-only cleanup below
+	// publishes null on the throwaway first mount, so a local ref would still
+	// hold the pre-cleanup snapshot and wrongly dedupe the republish on
+	// remount, leaving the panel stuck showing null ("connecting…"). Reading
+	// the bridge's actual value means a null-cleanup is always followed by a
+	// republish.
 	useEffect(() => {
 		const snap: AvPanelSnapshot = {
 			status: lk.status,
@@ -116,8 +122,8 @@ export function AvOverlay() {
 				kick: kickParticipant,
 			},
 		}
-		if (lastPublishedRef.current && avSnapshotsEqual(lastPublishedRef.current, snap)) return
-		lastPublishedRef.current = snap
+		const last = getAvSnapshot()
+		if (last && avSnapshotsEqual(last, snap)) return
 		publishAvSnapshot(snap)
 	})
 

@@ -15,7 +15,7 @@
 import { Track, type LocalTrack, type RemoteTrack } from 'livekit-client'
 import { useEffect, useRef, useState } from 'react'
 import { DefaultColorStyle, type Editor } from 'tldraw'
-import { registerFaceEl, setHoveredFace, type AvPanelSnapshot } from '../av/bridge'
+import { getHoveredFace, registerFaceEl, setHoveredFace, type AvPanelSnapshot } from '../av/bridge'
 import { LatencyPill } from '../av/gauges'
 import { AvIcon, AvIconButton } from '../av/icons'
 import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
@@ -82,6 +82,15 @@ export function PanelTile({
 	const localSettings = useSettings()
 	const githubHandle = isLocal ? localSettings.githubHandle.trim() || null : null
 	const showAvatar = isLocal && !videoTrack && githubHandle && !avatarFailed
+
+	// If this tile unmounts while hovered (e.g. the peer switches page),
+	// onPointerLeave never fires and the leash would stick to a now-gone
+	// face — clear it here so the bridge's hovered id can't outlive the tile.
+	useEffect(() => {
+		return () => {
+			if (getHoveredFace() === rawId) setHoveredFace(null)
+		}
+	}, [rawId])
 
 	const [hovered, setHovered] = useState(false)
 	const onEnter = () => {
