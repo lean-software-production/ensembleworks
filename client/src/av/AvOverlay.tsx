@@ -168,12 +168,21 @@ export function AvOverlay() {
 					kickError={kickError}
 				/>
 				{railFaces.length > 0 && (
-					<FacesRail
-						faces={railFaces}
-						hoveredId={hoveredId}
-						onHover={setHoveredId}
-						faceRefs={faceRefs}
-					/>
+					// Dim (don't clear) the rail while the link is degraded — frozen
+					// faded faces read as "my connection is bad", not "everyone left".
+					<div
+						style={{
+							opacity: lk.status === 'reconnecting' || lk.status === 'retrying' ? 0.45 : 1,
+							transition: 'opacity 0.3s',
+						}}
+					>
+						<FacesRail
+							faces={railFaces}
+							hoveredId={hoveredId}
+							onHover={setHoveredId}
+							faceRefs={faceRefs}
+						/>
+					</div>
 				)}
 			</div>
 			{transcriptOpen && (

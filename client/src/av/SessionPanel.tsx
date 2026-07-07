@@ -160,7 +160,12 @@ export function SessionPanel(props: {
 			{props.kickError && <span style={{ fontSize: 11, color: wm.crit }}>{props.kickError}</span>}
 			{props.status !== 'connected' && (
 				<span style={{ fontSize: 11, color: wm.inkSubtle }}>
-					Audio/video: {props.status === 'disabled' ? 'unavailable' : props.status}
+					Audio/video:{' '}
+					{props.status === 'disabled'
+						? 'unavailable'
+						: props.status === 'reconnecting' || props.status === 'retrying'
+							? 'reconnecting…'
+							: props.status}
 				</span>
 			)}
 		</div>
