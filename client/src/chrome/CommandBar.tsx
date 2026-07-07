@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties }
 import {
 	DefaultZoomMenu,
 	TldrawUiButtonIcon,
+	TldrawUiToolbar,
 	stopEventPropagation,
 	useDialogs,
 	useEditor,
@@ -346,7 +347,17 @@ export function CommandBar() {
 			/>
 
 			<div style={dividerStyle} />
-			<DefaultZoomMenu />
+			{/* DefaultZoomMenu's trigger is a Radix RovingFocusGroupItem, so it
+			    must live inside a Radix Toolbar.Root — TldrawUiToolbar provides
+			    it (cf. DefaultNavigationPanel). Scoped to just the zoom menu;
+			    style neutralized so our paper bar styling stays authoritative. */}
+			<TldrawUiToolbar
+				label="Zoom"
+				orientation="horizontal"
+				style={{ padding: 0, background: 'transparent', border: 'none', boxShadow: 'none' }}
+			>
+				<DefaultZoomMenu />
+			</TldrawUiToolbar>
 
 			{overflowOpen ? (
 				<div
