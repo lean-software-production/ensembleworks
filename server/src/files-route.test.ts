@@ -36,6 +36,7 @@ async function main() {
 	const rHtml = await fetch(`${base}/files/docs/r.html`)
 	assert.equal(rHtml.status, 200)
 	assert.equal(rHtml.headers.get('cache-control'), 'no-store')
+	assert.equal(rHtml.headers.get('access-control-allow-origin'), '*', 'ACAO for opaque-origin sibling fetch')
 	const htmlText = await rHtml.text()
 	assert.ok(htmlText.includes('<h1>R</h1>') && htmlText.includes('ew-file-viewer-ready'), 'html + bridge')
 
@@ -48,6 +49,7 @@ async function main() {
 	const rCss = await fetch(`${base}/files/docs/s.css`)
 	assert.equal(await rCss.text(), 'body{color:red}')
 	assert.ok((rCss.headers.get('content-type') ?? '').includes('text/css'))
+	assert.equal(rCss.headers.get('access-control-allow-origin'), '*', 'assets carry ACAO too')
 
 	// unsupported top-level type → styled page (200 with explanation; assert content)
 	const rBin = await fetch(`${base}/files/docs/x.bin`)
