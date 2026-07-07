@@ -249,5 +249,18 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	}, 10_000)
 	backpressure.unref()
 
+	// Event-loop lag: a 1s tick that logs when the observed gap exceeds the
+	// scheduled 1s by more than 1s — direct evidence for/against event-loop
+	// starvation (the incident's leading theory). unref() so it can't hold the
+	// process open in tests.
+	let lastTick = Date.now()
+	const lagMonitor = setInterval(() => {
+		const now = Date.now()
+		const drift = now - lastTick - 1000
+		lastTick = now
+		if (drift > 1000) console.warn(`[sync] event-loop lag ${drift}ms`)
+	}, 1000)
+	lagMonitor.unref()
+
 	return { server, getOrCreateRoom: roomHost.getOrCreateRoom, app }
 }
