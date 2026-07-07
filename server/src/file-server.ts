@@ -15,7 +15,7 @@ const ROOT = process.env.ENSEMBLEWORKS_FILES_ROOT ?? os.homedir()
 
 const server = http.createServer(async (req, res) => {
 	if (req.method !== 'GET' && req.method !== 'HEAD') {
-		res.writeHead(405).end()
+		res.writeHead(405, { allow: 'GET, HEAD' }).end()
 		return
 	}
 	const url = new URL(req.url ?? '/', 'http://internal')

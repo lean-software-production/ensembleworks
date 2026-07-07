@@ -66,6 +66,7 @@ export async function serveFile(rootDir: string, rawPath: string): Promise<Serve
 	if (real !== root && !real.startsWith(root + path.sep)) {
 		return { status: 403, headers: { ...BASE_HEADERS }, body: null }
 	}
+	// TOCTOU: v1 accepts the realpath->read race (single-user home, localhost only).
 	const st = await stat(real)
 	if (st.isDirectory()) return { status: 404, headers: { ...BASE_HEADERS }, body: null }
 	const type = TYPES[path.extname(real).toLowerCase()] ?? 'application/octet-stream'
