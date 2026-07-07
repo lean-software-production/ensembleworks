@@ -1,24 +1,35 @@
 #!/usr/bin/env bash
-# Install/update EnsembleWorks to a tagged version on a server.
+# Install/update EnsembleWorks to a tagged version on a server (fetch-verify-swap).
 #
-#   deploy/deploy.sh <ssh-target> <version>
-#   e.g. deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.2.0
+#   deploy/deploy.sh <ssh-target> <version> [--dry-run]
+#   e.g. deploy/deploy.sh mrdavidlaing@ew-donkeyred-001-tailnet 0.11.0
 #
-# Connects as an admin user with passwordless sudo. Builds the release as the app
-# user into ~APP_USER/releases/<version> (a git worktree at tag v<version>),
-# reusing node_modules via --reflink=auto + skipping npm ci when the lockfile is
-# unchanged, then installs prod units + Caddyfile, swaps the `current` symlink,
-# restarts, and prunes to KEEP releases. Rollback = re-run with an older version
-# (its built dir is still present -> instant symlink swap).
+# Downloads the tag's CI-compiled binaries (ensembleworks, ensembleworks-server,
+# ensembleworks-transcriber) + client-dist.tar.gz from the GitHub release into
+# ~APP_USER/releases/<version>, verifies checksums, runs a hermetic pre-swap
+# boot-check of the fetched server + transcriber, stamps the posture-era marker,
+# installs prod units + Caddyfile, swaps the `current` symlink, restarts, and
+# prunes to KEEP releases. Rollback = re-run with an older version (its fetched
+# dir is still present -> instant symlink swap) — WITHIN a posture era.
+#
+# Flags / env:
+#   --dry-run             local verify half only (no box): fetch to a scratch dir,
+#                         checksum, ew_boot_check, print the swap plan. No ssh/swap.
+#   BUILD_FROM_SOURCE=1   escape hatch: build the artifacts from source at TAG on the
+#                         box instead of fetching (unpushed branch / offline; needs bun).
+#   DEPLOY_FETCH_DIR=dir  read release assets from a local dir instead of gh (tests/dry-run).
+#   EW_ALLOW_ERA_CROSS=1  permit the one sanctioned cross-era swap (cutover.sh sets it).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
-SSH_TARGET="${1:?usage: deploy.sh <ssh-target> <version>}"
-VERSION="${2:?usage: deploy.sh <ssh-target> <version>}"
+SSH_TARGET="${1:?usage: deploy.sh <ssh-target> <version> [--dry-run]}"
+VERSION="${2:?usage: deploy.sh <ssh-target> <version> [--dry-run]}"
 VERSION="${VERSION#v}" # accept 0.2.0 or v0.2.0
 TAG="v${VERSION}"
+DRY_RUN=0; [ "${3:-}" = "--dry-run" ] && DRY_RUN=1
 APP_USER="${APP_USER:-ensembleworks}"
 REPO_URL="${REPO_URL:-https://github.com/lean-software-production/ensembleworks.git}"
+REPO_SLUG="${REPO_SLUG:-lean-software-production/ensembleworks}"
 KEEP="${KEEP:-3}"
 EDGE_PORT="8080"
 # The shared browser (neko) is an OPTIONAL extra service — off by default. Opt in
@@ -28,17 +39,43 @@ EDGE_PORT="8080"
 # and never restarted on a routine deploy, so a live shared session survives app
 # rollouts; restart it by hand to pick up a changed unit.
 SHARED_BROWSER="${SHARED_BROWSER:-0}"
+BUILD_FROM_SOURCE="${BUILD_FROM_SOURCE:-0}"
 
 # Terminal shells are dropped to this sandbox user (must match TERM_RUN_AS in the
 # prod term unit) so canvas terminals can't read the app user's home. When the user
-# exists on the box, deploy.sh puts the canvas CLI on its PATH (it can't read the
-# 700 app home where bin/canvas lives) and (re)seeds its AGENTS.md/CLAUDE.md
-# guidance. The user itself + its NOPASSWD sudoers rule + the launcher are host
-# concerns owned by the laingville bootstrap (like the app user and docker).
+# exists on the box, deploy.sh puts the ensembleworks CLI on its PATH (it can't read
+# the 700 app home) and (re)seeds its AGENTS.md/CLAUDE.md guidance. The user itself
+# + its NOPASSWD sudoers rule + the launcher are host concerns owned by the
+# laingville bootstrap (like the app user and docker).
 AGENT_USER="${AGENT_USER:-ensembleworks-agent}"
 
-# Ship the requirements manifest + lib to the box (the box may not have the repo
-# yet on a first deploy; the base src clone happens remotely below).
+# ---- --dry-run: the local verify half (no box, no licence key — spec §10.2) ---
+# Sources lib.sh, fetches into a scratch release dir, verifies checksums, runs the
+# real ew_boot_check against the fetched server + transcriber (launcher prefix "" =
+# current user, no sudo), stamps .ew-era, prints the resolved swap plan, exits.
+# Never scps, sshs, swaps, or restarts. Does NOT validate the client bundle — no
+# tldraw licence key exists off-CI (spec §4.3), so client-dist is machinery-only.
+if [ "$DRY_RUN" = 1 ]; then
+	# shellcheck disable=SC1091 # relative path, resolved via `cd` to repo root above
+	. deploy/lib.sh
+	scratch="$(mktemp -d)"; trap 'rm -rf "$scratch"' EXIT
+	NEW="${scratch}/${VERSION}"
+	echo "==> [dry-run] fetching v${VERSION} into ${NEW}"
+	ew_fetch_release "${VERSION}" "${NEW}" "${REPO_SLUG}" ""
+	cp deploy/posture-era "${NEW}/.ew-era"
+	echo "==> [dry-run] boot-check"
+	# shellcheck disable=SC2015 # C is a bare `exit 1` after echo — B (echo) never fails
+	ew_boot_check "${NEW}" "" && echo "    boot-check OK" || { echo "    boot-check FAILED" >&2; exit 1; }
+	echo "==> [dry-run] swap plan:"
+	echo "    release dir : ~${APP_USER}/releases/${VERSION}"
+	echo "    new era     : $(cat "${NEW}/.ew-era")"
+	echo "    units       : ensembleworks-sync ensembleworks-term (+ scribe if enabled)"
+	echo "    keep        : ${KEEP} newest (prune walks releases/ only; backups/ exempt)"
+	echo "==> [dry-run] done (no box touched)."
+	exit 0
+fi
+
+# Ship the requirements manifest + lib + the re-homed support files to the box.
 REQ_FILE="deploy/runtime-requirements"
 LIB_FILE="deploy/lib.sh"
 CADDY_PROD="deploy/Caddyfile.prod"
@@ -49,12 +86,15 @@ for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	"$PROD_UNITS"/ensembleworks-scribe.service \
 	"$PROD_UNITS"/ensembleworks-shared-browser.service \
 	"$PROD_UNITS"/ensembleworks-shared-browser.slice \
+	deploy/posture-era \
+	deploy/tmux-ensembleworks.conf \
+	deploy/ensembleworks-gh-token \
+	bin/gh-app-token.bash \
 	deploy/agent-home/AGENTS.md \
 	deploy/agent-home/.claude/CLAUDE.md \
 	deploy/agent-home/term.env.example \
 	deploy/agent-home/term-env.bashrc \
-	deploy/agent-home/gh-helper.bashrc \
-	deploy/ensembleworks-gh-token; do
+	deploy/agent-home/gh-helper.bashrc; do
 	[ -f "$f" ] || {
 		echo "missing $f — run from the repo root" >&2
 		exit 1
@@ -72,14 +112,17 @@ APP_USER='${APP_USER}'
 VERSION='${VERSION}'
 TAG='${TAG}'
 REPO_URL='${REPO_URL}'
+REPO_SLUG='${REPO_SLUG}'
 KEEP='${KEEP}'
 EDGE_PORT='${EDGE_PORT}'
 SHARED_BROWSER='${SHARED_BROWSER}'
+BUILD_FROM_SOURCE='${BUILD_FROM_SOURCE}'
 AGENT_USER='${AGENT_USER}'
 APP_HOME="\$(getent passwd "\${APP_USER}" | cut -d: -f6)"
 SRC="\${APP_HOME}/src"
 RELEASES="\${APP_HOME}/releases"
 NEW="\${RELEASES}/\${VERSION}"
+RUN="sudo -u \${APP_USER}"
 asapp() { sudo -u "\${APP_USER}" "\$@"; }
 
 # ---- preflight: validate host deps against the shipped manifest --------------
@@ -111,42 +154,52 @@ sudo -u "\${APP_USER}" sudo -n -u "\${AGENT_USER}" true 2>/dev/null || { echo "s
 sudo test -f "\${APP_HOME}/.config/ensembleworks/github-app.env" 2>/dev/null || echo "    note: \${APP_HOME}/.config/ensembleworks/github-app.env absent — GitHub token minting not provisioned (optional; deploy/github-app-runbook.md)" >&2
 echo "    preflight ok"
 
-# ---- ensure base clone + fetch tags -----------------------------------------
-if ! asapp test -d "\${SRC}/.git"; then
-  echo "==> cloning base repo to \${SRC}"
-  asapp git clone "\${REPO_URL}" "\${SRC}"
-fi
-asapp git -C "\${SRC}" fetch --tags --prune origin
-asapp git -C "\${SRC}" rev-parse "\${TAG}" >/dev/null 2>&1 || { echo "tag \${TAG} not found" >&2; exit 1; }
-
-# ---- build the release (old release keeps serving) ---------------------------
+# ---- fetch (or build-from-source) the tag's artifacts into \${NEW} -----------
+# Was: git worktree + npm ci + npm run build. Now: gh release download + checksum
+# verify + client-dist extract (ew_fetch_release). .ew-verified marks a release dir
+# that already passed fetch+boot-check, so a rollback re-swap skips re-fetching.
 PREV="\$(asapp readlink -f "\${APP_HOME}/current" 2>/dev/null || true)"
-if asapp test -d "\${NEW}" && asapp test -f "\${NEW}/.ew-built"; then
-  echo "==> \${VERSION} already built — swapping (rollback path)"
+if asapp test -f "\${NEW}/.ew-verified"; then
+  echo "==> \${VERSION} already fetched+verified — swapping (rollback path)"
 else
-  echo "==> creating worktree \${NEW} at \${TAG}"
-  asapp mkdir -p "\${RELEASES}"
-  asapp git -C "\${SRC}" worktree add --detach "\${NEW}" "\${TAG}"
-  if [ -n "\${PREV}" ] && asapp test -d "\${PREV}/node_modules" && asapp cmp -s "\${PREV}/package-lock.json" "\${NEW}/package-lock.json"; then
-    echo "==> lockfile unchanged — reusing node_modules (reflink)"
-    asapp cp -a --reflink=auto "\${PREV}/node_modules" "\${NEW}/node_modules"
+  if [ "\${BUILD_FROM_SOURCE}" = 1 ]; then
+    echo "==> BUILD_FROM_SOURCE=1 — building artifacts at \${TAG} on the box (needs bun)"
+    command -v bun >/dev/null 2>&1 || { echo "bun not on PATH — BUILD_FROM_SOURCE needs it" >&2; exit 1; }
+    asapp test -d "\${SRC}/.git" || asapp git clone "\${REPO_URL}" "\${SRC}"
+    asapp git -C "\${SRC}" fetch --tags --prune origin
+    asapp git -C "\${SRC}" rev-parse "\${TAG}" >/dev/null 2>&1 || { echo "tag \${TAG} not found" >&2; exit 1; }
+    asapp mkdir -p "\${NEW}/client-dist"
+    TMPB="\$(asapp mktemp -d)"
+    asapp bash -c "cd '\${SRC}' && git archive '\${TAG}' | tar -x -C '\${TMPB}'"
+    A="\$(uname -m | sed 's/x86_64/linux-x64/;s/aarch64/linux-arm64/')"
+    asapp env PATH="/usr/local/bin:\${PATH}" EW_TARGET="bun-\${A}" bash -c "cd '\${TMPB}' && bun install --frozen-lockfile \
+      && bun --cwd server run build:binary && bun --cwd cli run build:binary && bun --cwd transcriber run build:binary \
+      && bun run --filter @ensembleworks/client build"
+    asapp cp "\${TMPB}/server/dist/ensembleworks-server" "\${NEW}/ensembleworks-server"
+    asapp cp "\${TMPB}/cli/dist/ensembleworks" "\${NEW}/ensembleworks"
+    asapp cp "\${TMPB}/transcriber/dist/ensembleworks-transcriber" "\${NEW}/ensembleworks-transcriber"
+    asapp chmod +x "\${NEW}"/ensembleworks*
+    asapp cp -a "\${TMPB}/client/dist/." "\${NEW}/client-dist/"
+    asapp rm -rf "\${TMPB}"
   else
-    echo "==> npm ci"
-    asapp env PATH="/usr/local/bin:\${PATH}" bash -c "cd '\${NEW}' && npm ci"
+    echo "==> fetching v\${VERSION} artifacts"
+    ew_fetch_release "\${VERSION}" "\${NEW}" "\${REPO_SLUG}" "\${RUN}"
   fi
-  echo "==> npm run build"
-  # Source build.env (e.g. VITE_TLDRAW_LICENSE_KEY) so Vite bakes build-time vars
-  # into the client bundle. tldraw enforces its license on real production domains;
-  # without VITE_TLDRAW_LICENSE_KEY the editor blanks. Kept off-repo on the box.
-  asapp env PATH="/usr/local/bin:\${PATH}" bash -c "set -a; [ -f '\${APP_HOME}/.config/ensembleworks/build.env' ] && . '\${APP_HOME}/.config/ensembleworks/build.env'; set +a; cd '\${NEW}' && npm run build"
-  asapp touch "\${NEW}/.ew-built"
+  # stamp the posture-era marker BEFORE the swap (spec §6.2/§9).
+  asapp cp /tmp/ew-posture-era "\${NEW}/.ew-era"
+  # ---- pre-swap boot-check (spec §6.3) — refuse the swap if it fails ----------
+  echo "==> boot-check v\${VERSION}"
+  if ! ew_boot_check "\${NEW}" "\${RUN}"; then
+    echo "==> refusing to swap: boot-check failed on v\${VERSION}" >&2; exit 1
+  fi
+  asapp touch "\${NEW}/.ew-verified"
 fi
 
 # ---- install prod systemd units -----------------------------------------------
 # Units are committed templates in deploy/systemd/prod/ (scp'd to /tmp); sed fills
 # in @APP_USER@ / @APP_HOME@. Slice membership + per-service MemoryLow are folded
 # into each [Service] (the host owns the ensembleworks.slice envelope; these are
-# its sub-division, summing <= the envelope MemoryLow). \${CANVAS_URL} in the
+# its sub-division, summing <= the envelope MemoryLow). \${ENSEMBLEWORKS_URL} in the
 # scribe unit stays literal for systemd to expand — sed only touches @TOKENS@.
 echo "==> installing prod systemd units"
 # Drop stale per-service drop-ins from older deploys (slice/MemoryLow now in-unit).
@@ -175,31 +228,33 @@ if [ "\$SHARED_BROWSER" = 1 ]; then
 fi
 
 # ---- seed the terminal sandbox user ------------------------------------------
-# The prod term unit drops shells to \${AGENT_USER} (TERM_RUN_AS). That user can't
-# read the app user's 700 home, so put the canvas CLI on its PATH and (re)seed its
-# guidance from the freshly-built release. These are generated docs, not user data,
-# so we overwrite on every deploy to track the canvas CLI version. The user itself
-# + sudoers + launcher are host-provisioned (laingville); if it's absent we skip
-# and the gateway fails closed (no terminals) until the host catches up.
+# The artifact release dir carries NO worktree, so every file the old deploy.sh
+# installed from \${NEW}/bin or \${NEW}/deploy is re-homed: the canvas CLI is now the
+# ensembleworks ARTIFACT in \${NEW}; the rest ride from this operator checkout as
+# /tmp/ew-* (scp'd below). Install targets/modes/owners + marker-gated appends are
+# unchanged (spec §6.4). Generated docs, so overwrite on every deploy.
 if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
-  echo "==> seeding \${AGENT_USER} sandbox (canvas CLI + agent guidance)"
+  echo "==> seeding \${AGENT_USER} sandbox (ensembleworks CLI + agent guidance)"
   AGENT_HOME="\$(getent passwd "\${AGENT_USER}" | cut -d: -f6)"
-  sudo install -m0755 "\${NEW}/bin/canvas" /usr/local/bin/canvas
+  sudo install -m0755 "\${NEW}/ensembleworks" /usr/local/bin/ensembleworks
+  sudo ln -f /usr/local/bin/ensembleworks /usr/local/bin/ew
+  sudo -u "\${AGENT_USER}" /usr/local/bin/ensembleworks version >/dev/null 2>&1 || \
+    echo "    warn: installed CLI failed 'version' self-check" >&2
   # GitHub App token minting for the sandbox user WITHOUT exposing the App key: the
   # PEM + github-app.env stay in the app user's 700 ~/.config (unreadable to the
   # sandbox user); the agent runs the narrow ensembleworks-gh-token wrapper as the
   # app user via a host-provided NOPASSWD sudoers rule, so only the ~1h token crosses
   # the boundary. See deploy/github-app-runbook.md.
-  sudo install -m0755 "\${NEW}/bin/gh-app-token.bash" /usr/local/bin/gh-app-token.bash
-  sudo install -m0755 "\${NEW}/deploy/ensembleworks-gh-token" /usr/local/bin/ensembleworks-gh-token
+  sudo install -m0755 /tmp/ew-gh-app-token.bash /usr/local/bin/gh-app-token.bash
+  sudo install -m0755 /tmp/ew-ensembleworks-gh-token /usr/local/bin/ensembleworks-gh-token
   # Box-wide tmux conf the sandbox user CAN read (it can't read the app's 700 home
   # where deploy/tmux-ensembleworks.conf ships). The host-provisioned launcher
   # (/usr/local/bin/ensembleworks-term-launch) execs \`tmux -f /etc/ensembleworks/tmux.conf\`.
-  sudo install -D -m0644 "\${NEW}/deploy/tmux-ensembleworks.conf" /etc/ensembleworks/tmux.conf
-  if asapp test -d "\${NEW}/deploy/agent-home"; then
+  sudo install -D -m0644 /tmp/ew-tmux.conf /etc/ensembleworks/tmux.conf
+  if [ -d /tmp/ew-agent-home ]; then
     sudo install -d -o "\${AGENT_USER}" -m0755 "\${AGENT_HOME}/.claude"
-    sudo install -o "\${AGENT_USER}" -m0644 "\${NEW}/deploy/agent-home/AGENTS.md" "\${AGENT_HOME}/AGENTS.md"
-    sudo install -o "\${AGENT_USER}" -m0644 "\${NEW}/deploy/agent-home/.claude/CLAUDE.md" "\${AGENT_HOME}/.claude/CLAUDE.md"
+    sudo install -o "\${AGENT_USER}" -m0644 /tmp/ew-agent-home/AGENTS.md "\${AGENT_HOME}/AGENTS.md"
+    sudo install -o "\${AGENT_USER}" -m0644 /tmp/ew-agent-home/.claude/CLAUDE.md "\${AGENT_HOME}/.claude/CLAUDE.md"
   fi
   # Tool env for canvas shells (OPENCODE_API_KEY, …): mirror the legacy app-user
   # term.env mechanism for the sandbox user — a 600 env file it owns, sourced by its
@@ -208,26 +263,38 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   # idempotent ~/.bashrc sourcing stanza (never clobbering the skel .bashrc).
   if ! sudo -u "\${AGENT_USER}" test -f "\${AGENT_HOME}/.config/ensembleworks/term.env"; then
     sudo install -d -o "\${AGENT_USER}" -m0700 "\${AGENT_HOME}/.config" "\${AGENT_HOME}/.config/ensembleworks"
-    sudo install -o "\${AGENT_USER}" -m0600 "\${NEW}/deploy/agent-home/term.env.example" "\${AGENT_HOME}/.config/ensembleworks/term.env"
+    sudo install -o "\${AGENT_USER}" -m0600 /tmp/ew-agent-home/term.env.example "\${AGENT_HOME}/.config/ensembleworks/term.env"
     echo "    seeded \${AGENT_HOME}/.config/ensembleworks/term.env (fill in OPENCODE_API_KEY)"
   fi
   if ! sudo -u "\${AGENT_USER}" grep -q __ew_term_env_file "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
-    sudo cat "\${NEW}/deploy/agent-home/term-env.bashrc" | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
+    sudo cat /tmp/ew-agent-home/term-env.bashrc | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
   fi
   # gh wrapper (separate marker, so boxes that already have the term.env stanza still
   # pick this up on a later deploy).
   if ! sudo -u "\${AGENT_USER}" grep -q __ew_gh_helper "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
-    sudo cat "\${NEW}/deploy/agent-home/gh-helper.bashrc" | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
+    sudo cat /tmp/ew-agent-home/gh-helper.bashrc | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
   fi
 else
-  echo "    sandbox user \${AGENT_USER} not present — skipping canvas CLI + agent-home seed"
+  echo "    sandbox user \${AGENT_USER} not present — skipping CLI + agent-home seed"
   echo "    (provision it via the laingville bootstrap; the term gateway fails closed until then)" >&2
 fi
 
 # ---- install prod Caddyfile --------------------------------------------------
 sudo install -m0644 /tmp/ew-Caddyfile.prod /etc/caddy/Caddyfile
 
-# ---- swap current -> new, reload --------------------------------------------
+# ---- era gate + swap current -> new, reload ----------------------------------
+# Refuse a swap that would cross the Phase-3 posture-era boundary (spec §9). A
+# fresh box (no current) is not a crossing; the one sanctioned forward crossing is
+# cutover.sh (EW_ALLOW_ERA_CROSS=1).
+if ! ew_era_gate "\${NEW}/.ew-era" "\${APP_HOME}/current" "\${RUN}"; then
+  live_target="\$(asapp readlink -f "\${APP_HOME}/current" 2>/dev/null || true)"
+  live_era="\$(asapp cat "\${live_target}/.ew-era" 2>/dev/null || echo legacy)"
+  new_era="\$(asapp cat "\${NEW}/.ew-era" 2>/dev/null || echo legacy)"
+  echo "REFUSING era-crossing swap: live='\${live_era}' new='\${new_era}'." >&2
+  echo "  Rollback across the Phase-3 boundary is unsupported (keel 3)." >&2
+  echo "  The one-time forward crossing is deploy/cutover.sh (sets EW_ALLOW_ERA_CROSS=1)." >&2
+  exit 1
+fi
 echo "==> swapping current -> \${VERSION}"
 asapp ln -sfn "\${NEW}" "\${APP_HOME}/current"
 sudo systemctl daemon-reload
@@ -244,16 +311,14 @@ fi
 sudo systemctl reload-or-restart caddy
 
 # ---- prune old releases (keep newest \$KEEP, never the live one) -------------
+# Walks \${RELEASES} ONLY — ~/backups/pre-cutover-* is structurally exempt (spec D8).
 echo "==> pruning releases (keep \${KEEP})"
-live="\${NEW}"   # we just pointed current -> NEW; no need to re-resolve it
-# shellcheck disable=SC2012
-asapp bash -c "ls -1dt '\${RELEASES}'/*/ 2>/dev/null | tail -n +\$((KEEP+1)) | while read -r d; do d=\"\\\${d%/}\"; [ \"\\\$d\" = '\${live}' ] && continue; git -C '\${SRC}' worktree remove --force \"\\\$d\" 2>/dev/null || rm -rf \"\\\$d\"; done"
-asapp git -C "\${SRC}" worktree prune
+ew_prune_releases "\${RELEASES}" "\${KEEP}" "\${NEW}" "\${RUN}"
 
 # ---- verify ------------------------------------------------------------------
-echo "==> deployed: \$(asapp git -C "\${NEW}" describe --tags --always)"
-# Poll for readiness — the sync server (tsx + esbuild cold start) takes a few
-# seconds to bind :8788, so a fixed sleep would report a false 502 on success.
+echo "==> deployed: v\${VERSION} (era \$(asapp cat "\${NEW}/.ew-era"))"
+# Poll for readiness — the sync server takes a moment to bind :8788, so a fixed
+# sleep would report a false 502 on success.
 code=000
 for _ in \$(seq 1 30); do
   code="\$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 "http://localhost:\${EDGE_PORT}/" || true)"
@@ -265,9 +330,10 @@ echo "==> edge http://localhost:\${EDGE_PORT}/ -> \${code}"
 REMOTE_EOF
 )"
 
-# Copy the small support files + the prod unit templates, then run the remote
-# script. The units land at /tmp/ensembleworks-*.service (the remote sed loop reads
-# /tmp/${u}.service); ${CANVAS_URL} inside them stays literal for systemd.
+# Copy the small support files + the prod unit templates + the re-homed sandbox
+# sources, then run the remote script. The units land at /tmp/ensembleworks-*.service
+# (the remote sed loop reads /tmp/${u}.service); ${ENSEMBLEWORKS_URL} inside the
+# scribe unit stays literal for systemd (committed file, no escaping).
 scp -q "$LIB_FILE" "${SSH_TARGET}:/tmp/ew-lib.sh"
 scp -q "$REQ_FILE" "${SSH_TARGET}:/tmp/ew-runtime-requirements"
 scp -q "$CADDY_PROD" "${SSH_TARGET}:/tmp/ew-Caddyfile.prod"
@@ -275,6 +341,11 @@ scp -q "$PROD_UNITS"/*.service "${SSH_TARGET}:/tmp/"
 # The shared-browser .slice ships alongside (the *.service glob already grabbed its
 # unit); the remote installs both only when SHARED_BROWSER=1.
 scp -q "$PROD_UNITS"/ensembleworks-shared-browser.slice "${SSH_TARGET}:/tmp/"
+scp -q deploy/posture-era "${SSH_TARGET}:/tmp/ew-posture-era"
+scp -q deploy/tmux-ensembleworks.conf "${SSH_TARGET}:/tmp/ew-tmux.conf"
+scp -q deploy/ensembleworks-gh-token "${SSH_TARGET}:/tmp/ew-ensembleworks-gh-token"
+scp -q bin/gh-app-token.bash "${SSH_TARGET}:/tmp/ew-gh-app-token.bash"
+scp -qr deploy/agent-home "${SSH_TARGET}:/tmp/ew-agent-home"
 ssh "$SSH_TARGET" "bash -s" <<<"$REMOTE"
 
 echo "==> done."
