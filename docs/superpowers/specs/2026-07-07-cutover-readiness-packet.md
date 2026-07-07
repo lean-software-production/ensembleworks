@@ -8,6 +8,9 @@ phase-boundary review (correctness/integration, security posture, data-keel
 integrity, charter-drift) 2026-07-07; the blocking + cheap track-owned
 findings were fixed (merge `eb6d6d5`); the rest are your runbook items below.
 
+**The ordered operator procedure is in the companion runbook:
+`2026-07-07-cutover-runbook.md`.**
+
 ## Readiness verdict
 
 **Ready to schedule #8, with the operator prerequisites below.** Three of four
