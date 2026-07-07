@@ -6,7 +6,7 @@
  * overflow items, last-used item adopted next to the ⋯ trigger), and zoom.
  * Present button lands in Phase 3.
  */
-import { useEffect, useMemo, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
 	DefaultZoomMenu,
 	TldrawUiButtonIcon,
@@ -76,7 +76,7 @@ function AccelLabel({ label, accelerator }: { label: string; accelerator?: strin
 	const split = splitAccelLabel(label, accelerator ?? undefined)
 	if (split) {
 		return (
-			<span style={{ fontSize: 11 }}>
+			<span style={{ fontSize: 11, color: wm.inkMuted }}>
 				{split.pre}
 				<u
 					style={{
@@ -93,7 +93,7 @@ function AccelLabel({ label, accelerator }: { label: string; accelerator?: strin
 		)
 	}
 	return (
-		<span style={{ fontSize: 11 }}>
+		<span style={{ fontSize: 11, color: wm.inkMuted }}>
 			{label}
 			{accelerator ? <span style={{ fontSize: 9, color: wm.inkSubtle }}> {accelerator}</span> : null}
 		</span>
@@ -179,6 +179,26 @@ function PluginBarButton({
 	)
 }
 
+/**
+ * Always-mounted invisible probe: calls an item's useAvailable hook and
+ * reports the result upward, so availability is known even for overflow items
+ * whose buttons only mount while the ⋯ menu is open. One instance per item
+ * (hooks rules), keyed by item id; only rendered for items with a hook.
+ */
+function AvailabilityProbe({
+	item,
+	report,
+}: {
+	item: BarItemDescriptor
+	report: (id: string, available: boolean) => void
+}) {
+	const available = item.useAvailable!()
+	useEffect(() => {
+		report(item.id, available)
+	}, [item.id, available, report])
+	return null
+}
+
 export function CommandBar() {
 	const editor = useEditor()
 	const tools = useTools()
@@ -194,6 +214,24 @@ export function CommandBar() {
 
 	const priorityItems = useMemo(() => collectBarItems(plugins, 'priority'), [])
 	const overflowItems = useMemo(() => collectBarItems(plugins, 'overflow'), [])
+
+	// Availability of plugin items with a useAvailable hook, fed by the
+	// always-mounted probes below. The ref keeps the keydown listener current
+	// without re-subscribing; the version bump re-renders the overflow menu.
+	const availabilityRef = useRef<Map<string, boolean>>(new Map())
+	const [, setAvailabilityVersion] = useState(0)
+	const reportAvailability = useCallback((id: string, available: boolean) => {
+		if (availabilityRef.current.get(id) === available) return
+		availabilityRef.current.set(id, available)
+		setAvailabilityVersion((v) => v + 1)
+	}, [])
+	const probeItems = useMemo(
+		() => [...priorityItems, ...overflowItems].filter((item) => item.useAvailable),
+		[priorityItems, overflowItems]
+	)
+	// Items without a hook are always available.
+	const isItemAvailable = (item: BarItemDescriptor) =>
+		!item.useAvailable || (availabilityRef.current.get(item.id) ?? true)
 
 	useEffect(() => {
 		const itemsByAccelerator = new Map<string, BarItemDescriptor>()
@@ -214,6 +252,8 @@ export function CommandBar() {
 
 			const item = itemsByAccelerator.get(e.key.toLowerCase())
 			if (!item) return
+			// Unavailable items have their accelerator disabled (plugin contract).
+			if (item.useAvailable && availabilityRef.current.get(item.id) === false) return
 			e.preventDefault()
 			item.onSelect(editor, helpers)
 		}
@@ -241,6 +281,9 @@ export function CommandBar() {
 			onPointerDown={stopEventPropagation}
 			style={{ position: 'relative', ...barStyle }}
 		>
+			{probeItems.map((item) => (
+				<AvailabilityProbe key={item.id} item={item} report={reportAvailability} />
+			))}
 			<EnsembleMainMenu />
 			<div style={dividerStyle} />
 
@@ -320,20 +363,24 @@ export function CommandBar() {
 							/>
 						)
 					})}
-					{overflowItems.map((item) => (
-						<BarButton
-							key={item.id}
-							id={item.id}
-							icon={item.icon}
-							label={item.label}
-							accelerator={item.accelerator}
-							onClick={() => {
-								item.onSelect(editor, helpers)
-								recordLastOverflow(item.id)
-								setOverflowOpen(false)
-							}}
-						/>
-					))}
+					{overflowItems.map((item) => {
+						// Unavailable plugin items are hidden (plugin contract).
+						if (!isItemAvailable(item)) return null
+						return (
+							<BarButton
+								key={item.id}
+								id={item.id}
+								icon={item.icon}
+								label={item.label}
+								accelerator={item.accelerator}
+								onClick={() => {
+									item.onSelect(editor, helpers)
+									recordLastOverflow(item.id)
+									setOverflowOpen(false)
+								}}
+							/>
+						)
+					})}
 				</div>
 			) : null}
 		</div>
