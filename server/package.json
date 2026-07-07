@@ -6,8 +6,10 @@
   "scripts": {
     "dev": "bun --watch src/sync-server.ts",
     "dev:term": "bun --watch src/terminal-gateway.ts",
+    "dev:files": "bun --watch src/file-server.ts",
     "start": "bun src/sync-server.ts",
     "start:term": "bun src/terminal-gateway.ts",
+    "start:files": "bun src/file-server.ts",
     "build:binary": "bun build --compile --sourcemap --target=${EW_TARGET:-bun-linux-x64} src/main.ts --outfile dist/ensembleworks-server",
     "build": "bunx tsc --noEmit",
     "typecheck": "bunx tsc --noEmit"
