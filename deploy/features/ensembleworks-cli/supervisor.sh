@@ -16,6 +16,7 @@ if [ -f /etc/ensembleworks-connect.env ]; then
 		case "$key" in ''|'#'*) continue ;; esac   # skip blanks + the header comment
 		[ -n "${!key:-}" ] && continue             # runtime value present — keep it
 		val=${val#\'}; val=${val%\'}               # strip the single-quotes emit() added
+		val=${val//\'\\\'\'/\'}                     # reverse emit()'s '\'' escaping of embedded quotes
 		export "$key=$val"
 	done < /etc/ensembleworks-connect.env
 fi
