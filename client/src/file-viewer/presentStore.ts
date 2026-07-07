@@ -18,6 +18,12 @@ import { atom } from 'tldraw'
 export type Presenting = {
 	shapeId: string
 	fraction: number
+	// Toggle-on time (Date.now()). Presence tokens can't be cleared across
+	// users, so followers resolve competing tokens by the LARGEST ts (true
+	// last-writer-wins, spec §5). Callers must PRESERVE this across scroll
+	// updates — re-stamping on every scroll would let a scrolling incumbent
+	// perpetually out-stamp anyone trying to steal the presentation.
+	ts: number
 }
 
 const current = atom<Presenting | null>('fileViewerPresent', null)

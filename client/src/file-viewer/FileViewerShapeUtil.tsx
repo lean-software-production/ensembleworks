@@ -101,7 +101,9 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	// via presentStore, followers read it off collaborator presence.
 	const iframeRef = useRef<HTMLIFrameElement | null>(null)
 	const lastFractionRef = useRef(0)
-	const [optOut, setOptOut] = useState(false)
+	// "stop" opts out of ONE presenter (their userId), not of following in
+	// general — a gapless A→B handoff must still start following B.
+	const [optOutId, setOptOutId] = useState<string | null>(null)
 
 	// Am I presenting THIS shape? (presentStore wraps a tldraw atom → reactive.)
 	const presenting = useValue('fvPresenting', () => presentStore.get(), [])
@@ -109,11 +111,34 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 
 	// A peer presenting this shape (never me — getCollaborators is remote-only,
 	// but guard on userId too). Following is mutually exclusive with presenting.
+	// The selector collapses to a PRIMITIVE key (userId\tuserName\tfraction) so
+	// the useValue epoch only bumps when the presenter/fraction actually changes
+	// — getCollaborators() returns a fresh array on every remote cursor move, and
+	// an object return here would re-render every file-viewer for each of them.
+	// presenterFor stays the single source of matching logic.
 	const myId = useValue('fvUserId', () => editor.user.getId(), [editor])
-	const collaborators = useValue('fvCollab', () => editor.getCollaborators(), [editor])
-	const peer = presenterFor(collaborators, shape.id)
+	const presenterKey = useValue(
+		'fvPresenterKey',
+		() => {
+			const p = presenterFor(editor.getCollaborators(), shape.id)
+			return p ? `${p.userId}\t${p.userName}\t${p.fraction}` : null
+		},
+		[editor, shape.id]
+	)
+	let peer: PresenterInfo | null = null
+	if (presenterKey !== null) {
+		// fraction is the last field; join the middle back in case a userName
+		// ever contains a tab (defensive — tldraw names are plain strings).
+		const parts = presenterKey.split('\t')
+		peer = {
+			userId: parts[0],
+			userName: parts.slice(1, -1).join('\t'),
+			fraction: Number(parts[parts.length - 1]),
+		}
+	}
 	const peerPresenter = peer && peer.userId !== myId ? peer : null
-	const activePresenter: PresenterInfo | null = !isPresentingThis && !optOut ? peerPresenter : null
+	const activePresenter: PresenterInfo | null =
+		!isPresentingThis && peerPresenter && peerPresenter.userId !== optOutId ? peerPresenter : null
 
 	// targetOrigin '*' is REQUIRED: the sandboxed document loads at an opaque
 	// (null) origin (no allow-same-origin), so no concrete origin can ever match.
@@ -147,7 +172,10 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 				lastFractionRef.current = d.fraction
 				const mine = presentStore.get()
 				if (mine && mine.shapeId === shape.id) {
-					presentStore.set({ shapeId: shape.id, fraction: d.fraction })
+					// PRESERVE the toggle-time ts: if scrolling re-stamped it, an
+					// incumbent who keeps scrolling could never be stolen from
+					// (their token would perpetually out-stamp the stealer's).
+					presentStore.set({ shapeId: shape.id, fraction: d.fraction, ts: mine.ts })
 				}
 			}
 		}
@@ -163,16 +191,19 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [activePresenter?.fraction, activePresenter?.userId])
 
-	// A local "stop following" opt-out only lasts for the current presentation —
-	// once the presenter is gone, reset so the next presentation is followed.
+	// A local "stop following" opt-out only lasts while someone is presenting —
+	// once no presenter remains, reset so the next presentation is followed.
+	// (An A→B handoff needs no reset: the opt-out is keyed to A's userId.)
+	const hasPeerPresenter = peerPresenter !== null
 	useEffect(() => {
-		if (!peerPresenter) setOptOut(false)
-	}, [peerPresenter])
+		if (!hasPeerPresenter) setOptOutId(null)
+	}, [hasPeerPresenter])
 
 	const togglePresent = () => {
 		if (isPresentingThis) presentStore.set(null)
-		// Turning on overwrites any other presenter (last-writer-wins, spec §5).
-		else presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current })
+		// Turning on overwrites any other presenter: followers resolve competing
+		// tokens by the freshest ts (last-writer-wins, spec §5).
+		else presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current, ts: Date.now() })
 	}
 
 	return (
@@ -225,7 +256,10 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 				</span>
 				<span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'all' }}>
 					{activePresenter && (
-						<FollowingChip name={activePresenter.userName} onStop={() => setOptOut(true)} />
+						<FollowingChip
+							name={activePresenter.userName}
+							onStop={() => setOptOutId(activePresenter.userId)}
+						/>
 					)}
 					<HeaderButton label="↻" title="Refresh (reloads for everyone)" onClick={refresh} />
 					<HeaderButton

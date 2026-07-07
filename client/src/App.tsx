@@ -90,12 +90,12 @@ export function App() {
 				screenBounds: defaults.screenBounds ?? null,
 				selectedShapeIds: defaults.selectedShapeIds,
 			})
-				// Merge the file-viewer presenter token next to the spatial stamp.
-				// presentStore reads a tldraw atom, so this read is tracked by the
-				// presence derivation: toggling Present or scrolling while idle
-				// re-emits presence. Null when not presenting (a valid JsonValue —
-				// syncs, and followers treat "no token" and "null token" alike).
-				return { ...defaults, meta: { stamp, fileViewerPresent: presentStore.get() } }
+			// Merge the file-viewer presenter token next to the spatial stamp.
+			// presentStore reads a tldraw atom, so this read is tracked by the
+			// presence derivation: toggling Present or scrolling while idle
+			// re-emits presence. Null when not presenting (a valid JsonValue —
+			// syncs, and followers treat "no token" and "null token" alike).
+			return { ...defaults, meta: { stamp, fileViewerPresent: presentStore.get() } }
 		},
 	})
 
