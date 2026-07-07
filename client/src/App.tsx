@@ -1,5 +1,5 @@
 import { useSync } from '@tldraw/sync'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
 	DefaultColorStyle,
 	Editor,
@@ -15,6 +15,7 @@ import './theme.css'
 import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
 import { hexForColor } from './colors'
+import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
 import { getIdentity, getRoomId } from './identity'
 import { collectIcons, collectShapeUtils } from './kernel/plugin'
 import { attachRoomHooks } from './kernel/roomHooks'
@@ -91,6 +92,25 @@ export function App() {
 			return { ...defaults, meta: { stamp } }
 		},
 	})
+
+	// Connection telemetry (spec §2): configure the beacon once, flush on the way
+	// out (the last events are usually the interesting ones), and log every tldraw
+	// sync status transition — online/offline mark the moments remote presence is
+	// wiped ("everyone vanished"). Pairs with the LiveKit events in useLiveKitRoom.
+	useEffect(() => {
+		configureConnectionLog({ roomId, userId: identity.id })
+		const onHide = () => flushConnectionLog()
+		window.addEventListener('pagehide', onHide)
+		return () => window.removeEventListener('pagehide', onHide)
+	}, [])
+
+	const syncStatus = store.status === 'synced-remote' ? store.connectionStatus : store.status
+	const lastSyncStatus = useRef<string | null>(null)
+	useEffect(() => {
+		if (syncStatus === lastSyncStatus.current) return
+		lastSyncStatus.current = syncStatus
+		logConnectionEvent('sync', String(syncStatus))
+	}, [syncStatus])
 
 	const handleMount = useMemo(
 		() => (editor: Editor) => {
