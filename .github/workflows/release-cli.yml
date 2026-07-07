@@ -107,7 +107,9 @@ jobs:
           cp dl/binaries/ensembleworks-server-linux-x64 "$dir/ensembleworks-server"
           cp dl/transcriber-x64/ensembleworks-transcriber-linux-x64 "$dir/ensembleworks-transcriber"
           chmod +x "$dir"/ensembleworks-*
-          ew_boot_check "$dir" ""   # server sync + term + transcriber --check, all 200/exit0
+          # Guarded like every other call site: a bare call under set -e aborts
+          # with the killed server's 143 from the function's own `wait`.
+          ew_boot_check "$dir" "" || { echo "boot-check FAILED" >&2; exit 1; }
 
   publish:
     needs: [lint, binaries, transcriber-x64, transcriber-arm64, client-dist, smoke]
