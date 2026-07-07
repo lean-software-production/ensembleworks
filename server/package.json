@@ -22,6 +22,7 @@
     "@tldraw/validate": "5.1.0",
     "express": "^5.0.0",
     "livekit-server-sdk": "2.15.4",
+    "marked": "^18.0.5",
     "ws": "^8.18.0"
   },
   "devDependencies": {
