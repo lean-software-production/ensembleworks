@@ -4,7 +4,7 @@
 # room the DATA_DIR carries. ABORT (exit 1) if any room fails to load.
 set -euo pipefail
 VERSION="${1:?usage: cutover-dataload-check.sh <version>}"
-# shellcheck source=deploy/lib.sh disable=SC1091
+# shellcheck disable=SC1091 # /tmp/ew-lib.sh is deploy/lib.sh, scp'd there by cutover.sh
 . /tmp/ew-lib.sh
 APP_USER=ensembleworks
 REPO_SLUG="${REPO_SLUG:-lean-software-production/ensembleworks}"

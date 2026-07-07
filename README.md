@@ -156,6 +156,21 @@ cd ../transcriber && bun src/segmenter.test.ts    # utterance VAD
 bun src/wav.test.ts                               # WAV encoder
 ```
 
+### Deploy machinery proofs (no box required)
+
+The fetch-verify-swap deploy path is proven locally without a production box:
+
+- `deploy/deploy.sh <target> <ver> --dry-run` runs the *verify half*: it fetches
+  the tag's release assets (or a local `DEPLOY_FETCH_DIR`), verifies checksums, runs
+  the real hermetic boot-check of the fetched server + transcriber, and prints the
+  swap plan — no ssh, no swap, no restart.
+- `deploy/test/fake-release.sh` is the end-to-end round-trip: it compiles the host
+  binaries, fakes a GitHub release, and drives `deploy/lib.sh`'s
+  fetch/verify/boot-check/era-gate/prune functions against a throwaway tree, with
+  byte-flip + truncated-binary negative cases. Neither validates the tldraw licence
+  bake (no `VITE_TLDRAW_LICENSE_KEY` off-CI) — that is CI's `client-dist` job + the
+  manual canvas-render gate in `deploy/cutover.sh`.
+
 ## Canvas API — agents on the canvas
 
 Agents (and anything else on the VM) both **read** and **write** the canvas
