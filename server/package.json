@@ -8,6 +8,7 @@
     "dev:term": "bun --watch src/terminal-gateway.ts",
     "start": "bun src/sync-server.ts",
     "start:term": "bun src/terminal-gateway.ts",
+    "build:binary": "bun build --compile --sourcemap --target=${EW_TARGET:-bun-linux-x64} src/main.ts --outfile dist/ensembleworks-server",
     "build": "bunx tsc --noEmit",
     "typecheck": "bunx tsc --noEmit"
   },

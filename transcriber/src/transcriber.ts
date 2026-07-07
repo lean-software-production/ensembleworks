@@ -44,6 +44,14 @@ const STT_API_KEY = process.env.STT_API_KEY
 const SCRIBE_IDENTITY = process.env.SCRIBE_IDENTITY ?? 'scribe'
 const SCRIBE_NAME = process.env.SCRIBE_NAME ?? '📝 scribe'
 
+if (process.argv.includes('--check')) {
+	// The rtc-node import above has loaded the embedded native addon; the config
+	// reads above have parsed the env. Reaching here == the binary is intact for
+	// this arch. No room.connect() — pipeline correctness is the #6 e2e-gate's job.
+	console.log(`scribe --check ok (${SYNC_ROOM} @ ${SYNC_URL})`)
+	process.exit(0)
+}
+
 const SAMPLE_RATE = 16_000 // AudioStream resamples for us; whisper's native rate
 
 const log = (...args: unknown[]) => console.log(`[scribe ${SYNC_ROOM}]`, ...args)
