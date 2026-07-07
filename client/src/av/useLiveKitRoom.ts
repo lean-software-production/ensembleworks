@@ -42,7 +42,7 @@ interface AudioPipeline {
 }
 
 export interface LiveKitState {
-	status: 'disabled' | 'connecting' | 'connected' | 'error'
+	status: 'disabled' | 'connecting' | 'connected' | 'reconnecting' | 'retrying' | 'error'
 	room: Room | null
 	peers: RemotePeer[]
 	localParticipant: LocalParticipant | null
@@ -72,6 +72,10 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 	const [speakingIds, setSpeakingIds] = useState<Set<string>>(new Set())
 	const audioCtxRef = useRef<AudioContext | null>(null)
 	const pipelinesRef = useRef(new Map<string, AudioPipeline>())
+	// Desired publish state, mirrored from the setters so a re-joined Room (which
+	// starts with nothing published) can restore what the user had live.
+	const micEnabledRef = useRef(false)
+	const camEnabledRef = useRef(false)
 
 	useEffect(() => {
 		let cancelled = false
@@ -207,11 +211,13 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 	}, [roomId, identity, name])
 
 	const setMicEnabled = (on: boolean) => {
+		micEnabledRef.current = on
 		room?.localParticipant.setMicrophoneEnabled(on).catch(console.error)
 		audioCtxRef.current?.resume()
 		setMicState(on)
 	}
 	const setCamEnabled = (on: boolean) => {
+		camEnabledRef.current = on
 		room?.localParticipant.setCameraEnabled(on).catch(console.error)
 		setCamState(on)
 	}
