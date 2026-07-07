@@ -6,8 +6,10 @@
  *
  * Help text lists the command bar's actual accelerators (chrome/CommandBar.tsx
  * PRIORITY_TOOLS/OVERFLOW_TOOLS + the terminal/screenshare plugin barItems) —
- * kept honest against that file rather than invented. Note tldraw's `select`
- * tool kbd is only 'v' (no 's' alternative), so it's listed as "select V".
+ * kept honest against that file rather than invented. Note select is S/V:
+ * tldraw's own kbd is just 'v', but ui.tsx's tools override aliases it to
+ * 'v,s' (the Phase-1 "s̲elect" accelerator, spec §4), and displayKeyForKbd
+ * makes the bar underline the S — so S leads here too.
  */
 import { useState, type ReactNode } from 'react'
 import { wm } from '../theme'
@@ -120,7 +122,7 @@ function HelpSection() {
 	return (
 		<div style={sectionStyle}>
 			<ShortcutLine>
-				select <b>V</b> · note <b>N</b> · text <b>T</b> · frame <b>F</b> · terminal <b>M</b> · cast{' '}
+				select <b>S/V</b> · note <b>N</b> · text <b>T</b> · frame <b>F</b> · terminal <b>M</b> · cast{' '}
 				<b>C</b>
 			</ShortcutLine>
 			<ShortcutLine>
