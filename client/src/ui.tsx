@@ -24,7 +24,13 @@ export const uiOverrides: TLUiOverrides = {
 	},
 }
 
-/** Pages-only top-left panel: page switching must survive Phase 1 (spec §9). */
+/**
+ * Pages-only top-left panel: page switching must survive Phase 1 (spec §9).
+ * Deliberately omits vs tldraw's DefaultMenuPanel: no menu-zone chrome (main
+ * menu / people menu wrapper), no wheel pass-through to the canvas, and no
+ * auto-hide when there's only a single page — acceptable Phase-1 interim
+ * behavior, to be revisited when pages move into the side panel.
+ */
 function PagesMenuPanel() {
 	return (
 		<div style={{ margin: 8, pointerEvents: 'auto' }}>

@@ -2,8 +2,8 @@
  * The client plugin manifest (unified-architecture-design.md §1.1/§1.2,
  * client half). A plugin is a plain module object — composition is
  * build-time via the ordered list in ../plugins.ts. Registry order is
- * meaningful: it fixes shape-util registration order and toolbar/menu
- * render order.
+ * meaningful: it fixes shape-util registration order and command-bar order
+ * (priority and overflow bar items) and menu order.
  */
 import type { ComponentType } from 'react'
 import type {
