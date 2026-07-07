@@ -202,7 +202,12 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 			let userSessions = roomUsers.get(userId)
 			if (!userSessions) roomUsers.set(userId, (userSessions = new Set()))
 			userSessions.add(sessionId)
-			ws.once('close', () => {
+			console.log(`[sync] open room=${roomId} user=${userId} session=${sessionId}`)
+			ws.on('error', (err) =>
+				console.warn(`[sync] error room=${roomId} user=${userId} session=${sessionId}: ${err?.message ?? err}`)
+			)
+			ws.once('close', (code: number) => {
+				console.log(`[sync] close room=${roomId} user=${userId} session=${sessionId} code=${code}`)
 				userSessions.delete(sessionId)
 				if (userSessions.size === 0) {
 					roomUsers.delete(userId)
