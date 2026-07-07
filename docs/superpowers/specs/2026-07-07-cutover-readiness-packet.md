@@ -103,17 +103,11 @@ boot-check and aborts the cutover, fail-closed).
   whole machinery (verify/boot-check/era-gate/prune, incl. negative cases).
   Green.
 
-## Known follow-ups (non-blocking, found during the doc sweep)
+## Known follow-ups (found during the doc sweep)
 
-- **`deploy/bootstrap-debian-ash.sh` scribe unit still writes
-  `Environment=CANVAS_URL/CANVAS_ROOM`** (lines 517-518) — the transcriber
-  ignores these after the #6 clean break (reads `ENSEMBLEWORKS_URL/_ROOM`), so
-  a freshly-bootstrapped ash box silently falls back to the built-in
-  `localhost:8788`/`team` defaults. Harmless only because those defaults
-  coincide with what ash sets; a non-default room would be lost. ASH-dogfood
-  only — the prod path uses `deploy.sh` + the #7-renamed systemd units. Rename
-  the two `Environment=` lines (and the `${CANVAS_URL}` uses in the
-  ExecStartPre wait) to `ENSEMBLEWORKS_*`.
+- ✅ **Fixed `6f690f5`** — `deploy/bootstrap-debian-ash.sh` scribe unit wrote
+  `Environment=CANVAS_URL/CANVAS_ROOM` (dead after the #6 clean break) →
+  renamed to `ENSEMBLEWORKS_URL/_ROOM` (+ the ExecStartPre readiness-wait uses).
 
 ## After #8
 
