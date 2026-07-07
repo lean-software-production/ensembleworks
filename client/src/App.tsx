@@ -14,6 +14,7 @@ import 'tldraw/tldraw.css'
 import './theme.css'
 import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
+import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
 import { presentStore } from './file-viewer/presentStore'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
@@ -61,6 +62,7 @@ function wsBase(): string {
 
 export function App() {
 	const [wasKicked, setWasKicked] = useState(false)
+	const [editor, setEditor] = useState<Editor | null>(null)
 	const store = useSync({
 		uri: `${wsBase()}/sync/${roomId}?userId=${encodeURIComponent(identity.id)}`,
 		assets: assetStore,
@@ -123,6 +125,9 @@ export function App() {
 			// Debug/e2e hook: headless probes (docs/headless-browser.md) drive
 			// the canvas through this. Harmless in production.
 			;(window as unknown as { __ewEditor?: Editor }).__ewEditor = editor
+			// Flows the Editor instance to the App-level side panel, which lives
+			// outside tldraw's React context (plan: split layout, Task 2).
+			setEditor(editor)
 			// Default users to the paper-light canvas, but only once: tldraw
 			// persists colorScheme in its own localStorage, so afterwards we leave
 			// whatever the user chose via Preferences → Color scheme alone.
@@ -152,21 +157,24 @@ export function App() {
 	)
 
 	return (
-		<div style={{ position: 'fixed', inset: 0 }}>
-			<Tldraw
-				store={store}
-				onMount={handleMount}
-				deepLinks
-				assetUrls={assetUrls}
-				shapeUtils={customShapeUtils}
-				overrides={uiOverrides}
-				components={components}
-			>
-				{plugins.map((plugin) => {
-					const Overlay = plugin.Overlay
-					return Overlay ? <Overlay key={plugin.id} /> : null
-				})}
-			</Tldraw>
+		<div style={{ position: 'fixed', inset: 0, display: 'flex' }}>
+			<div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+				<Tldraw
+					store={store}
+					onMount={handleMount}
+					deepLinks
+					assetUrls={assetUrls}
+					shapeUtils={customShapeUtils}
+					overrides={uiOverrides}
+					components={components}
+				>
+					{plugins.map((plugin) => {
+						const Overlay = plugin.Overlay
+						return Overlay ? <Overlay key={plugin.id} /> : null
+					})}
+				</Tldraw>
+			</div>
+			{editor && <SidePanel editor={editor} />}
 			{wasKicked && (
 				<div
 					style={{
