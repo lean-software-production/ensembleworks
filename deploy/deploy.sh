@@ -179,7 +179,7 @@ else
     # path did; a warn fires if it is absent so the footgun is loud, not silent.
     asapp bash -c "test -f \"\${APP_HOME}/.config/ensembleworks/build.env\" || echo '    WARNING: build.env absent — client build will have no VITE_TLDRAW_LICENSE_KEY (blank canvas in prod)' >&2"
     asapp env PATH="/usr/local/bin:\${PATH}" EW_TARGET="bun-\${A}" bash -c "cd '\${TMPB}' && bun install --frozen-lockfile \
-      && bun --cwd server run build:binary && bun --cwd cli run build:binary && bun --cwd transcriber run build:binary \
+      && bun run --cwd server build:binary && bun run --cwd cli build:binary && bun run --cwd transcriber build:binary \
       && { [ -f \"\${APP_HOME}/.config/ensembleworks/build.env\" ] && set -a && . \"\${APP_HOME}/.config/ensembleworks/build.env\" && set +a; true; } \
       && bun run --filter @ensembleworks/client build"
     asapp cp "\${TMPB}/server/dist/ensembleworks-server" "\${NEW}/ensembleworks-server"

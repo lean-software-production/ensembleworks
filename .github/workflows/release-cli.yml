@@ -29,11 +29,11 @@ jobs:
           set -euo pipefail
           mkdir -p out
           for pair in linux-x64 linux-arm64 darwin-arm64; do
-            EW_TARGET="bun-$pair" bun --cwd cli run build:binary
+            EW_TARGET="bun-$pair" bun run --cwd cli build:binary
             cp cli/dist/ensembleworks "out/ensembleworks-$pair"
             case "$pair" in
             linux-*) # server ships linux only
-              EW_TARGET="bun-$pair" bun --cwd server run build:binary
+              EW_TARGET="bun-$pair" bun run --cwd server build:binary
               cp server/dist/ensembleworks-server "out/ensembleworks-server-$pair" ;;
             esac
           done
@@ -51,7 +51,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          EW_TARGET=bun-linux-x64 bun --cwd transcriber run build:binary
+          EW_TARGET=bun-linux-x64 bun run --cwd transcriber build:binary
           cp transcriber/dist/ensembleworks-transcriber out/ensembleworks-transcriber-linux-x64
       - uses: actions/upload-artifact@v4
         with: { name: transcriber-x64, path: out/ }
@@ -67,7 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p out
-          EW_TARGET=bun-linux-arm64 bun --cwd transcriber run build:binary
+          EW_TARGET=bun-linux-arm64 bun run --cwd transcriber build:binary
           cp transcriber/dist/ensembleworks-transcriber out/ensembleworks-transcriber-linux-arm64
       - uses: actions/upload-artifact@v4
         with: { name: transcriber-arm64, path: out/ }
