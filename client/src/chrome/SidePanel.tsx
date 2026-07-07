@@ -84,6 +84,14 @@ export function SidePanel({ editor }: { editor: Editor }) {
 								: snap.status}
 					</span>
 				)}
+
+				{/* A failed kick (server 4xx / network) must not fail silently —
+				    the tile's "Kicking" label reverts on its own, so this line is
+				    the only feedback. Same red treatment as the old floating
+				    session panel's. */}
+				{snap?.kickError && (
+					<span style={{ fontSize: 11, color: wm.crit }}>{snap.kickError}</span>
+				)}
 			</div>
 
 			<div style={{ padding: '0 12px 12px' }}>

@@ -5,6 +5,12 @@
  * centre (a live DOM element looked up via `getFaceEl`, pull-based — see
  * av/bridge.ts), so it must recompute after tiles render — the useValue
  * below re-derives on camera pans, peer changes and hover changes.
+ *
+ * Behaviour change vs the old faces rail (Task 5 cutover): every panel tile
+ * registers as an anchor, camera on or off — the rail only registered
+ * camera-on faces, so camera-off teammates never leashed. Deliberate: tiles
+ * are always present in the panel, so speaking/hovered camera-off users now
+ * leash to their cursor too.
  */
 import { Editor, useValue } from 'tldraw'
 import { rawUserId } from '@ensembleworks/contracts'
