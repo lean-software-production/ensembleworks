@@ -52,7 +52,7 @@ else ok "checksum: a byte-flipped binary fails -c"; fi
 
 # --- (2) boot-check passes; a truncated server binary FAILS -------------------
 cp deploy/posture-era "$NEW/.ew-era"
-ew_boot_check "$NEW" "" && ok "boot-check: sync + term + transcriber --check pass" || bad "boot-check pass"
+ew_boot_check "$NEW" "" && ok "boot-check: sync + term + files + transcriber --check pass" || bad "boot-check pass"
 trunc="$home/releases/1.0.1"; mkdir -p "$trunc/client-dist"
 head -c 4096 "$NEW/ensembleworks-server" > "$trunc/ensembleworks-server"; chmod +x "$trunc/ensembleworks-server"
 cp "$NEW/ensembleworks-transcriber" "$trunc/"
