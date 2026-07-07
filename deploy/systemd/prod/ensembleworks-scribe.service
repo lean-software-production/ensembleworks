@@ -1,5 +1,5 @@
 # EnsembleWorks transcriber ("scribe") — PRODUCTION unit (non-watch). Installed by
-# deploy/deploy.sh (@APP_USER@ / @APP_HOME@ substituted via sed). NOTE: ${CANVAS_URL}
+# deploy/deploy.sh (@APP_USER@ / @APP_HOME@ substituted via sed). NOTE: ${ENSEMBLEWORKS_URL}
 # in ExecStartPre is a LITERAL for systemd to expand from Environment= below — it is
 # NOT a sed token, which is the whole point of using committed files (no escaping).
 # Optional unit: deploy.sh only restarts it if already enabled.
@@ -11,18 +11,18 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=@APP_USER@
-WorkingDirectory=@APP_HOME@/current/transcriber
+WorkingDirectory=@APP_HOME@/current
 Slice=ensembleworks.slice
 MemoryAccounting=yes
 MemoryLow=256M
-Environment=CANVAS_URL=http://localhost:8788
-Environment=CANVAS_ROOM=team
+Environment=ENSEMBLEWORKS_URL=http://localhost:8788
+Environment=ENSEMBLEWORKS_ROOM=team
 Environment=STT_URL=https://api.groq.com/openai/v1
 Environment=STT_MODEL=whisper-large-v3-turbo
 Environment=STT_LANGUAGE=en
 EnvironmentFile=@APP_HOME@/.config/ensembleworks/scribe.env
-ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "${CANVAS_URL}/"; do sleep 1; done'
-ExecStart=/usr/local/bin/npm run start
+ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "${ENSEMBLEWORKS_URL}/"; do sleep 1; done'
+ExecStart=@APP_HOME@/current/ensembleworks-transcriber
 Restart=on-failure
 RestartSec=5
 

@@ -11,15 +11,15 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=@APP_USER@
-WorkingDirectory=@APP_HOME@/current/server
+WorkingDirectory=@APP_HOME@/current
 Slice=ensembleworks.slice
 MemoryAccounting=yes
 MemoryLow=512M
 Environment=PORT=8788
 Environment=DATA_DIR=@APP_HOME@/.local/share/ensembleworks
-Environment=CLIENT_DIST=@APP_HOME@/current/client/dist
+Environment=CLIENT_DIST=@APP_HOME@/current/client-dist
 EnvironmentFile=@APP_HOME@/.config/ensembleworks/sync.env
-ExecStart=/usr/local/bin/npm run start
+ExecStart=@APP_HOME@/current/ensembleworks-server sync
 Restart=on-failure
 RestartSec=2
 
