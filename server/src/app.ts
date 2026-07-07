@@ -13,7 +13,7 @@
  *   WS   /sync/:roomId          – tldraw sync (TLSocketRoom)
  *   GET  /*                     – static client build (production)
  */
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
@@ -59,6 +59,28 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	const roadmaps = createRoadmapStore(path.join(opts.dataDir, 'roadmaps'))
 
 	const roomHost = createRoomHost(opts.dataDir)
+
+	// EW_WARM_ROOMS=1 (default OFF — normal prod boot stays lazy): eagerly open
+	// every rooms/*.sqlite through getOrCreateRoom, forcing each one through the
+	// @tldraw schema at boot instead of on first WS connect / mutating call.
+	// This is what the cutover data-load check needs: a freshly-fetched binary
+	// booted against a COPY of the live DATA_DIR must prove every room still
+	// loads under the new schema, not just that the process starts. If any
+	// sqlite fails to load, getOrCreateRoom throws, createSyncApp throws, the
+	// server never comes up, and the boot-check's health poll fails — a
+	// deliberate fail-closed so a bad cutover aborts instead of shipping.
+	if (process.env.EW_WARM_ROOMS === '1') {
+		const roomsDir = path.join(opts.dataDir, 'rooms')
+		if (existsSync(roomsDir)) {
+			for (const entry of readdirSync(roomsDir)) {
+				if (!entry.endsWith('.sqlite')) continue
+				const roomId = entry.slice(0, -'.sqlite'.length)
+				roomHost.getOrCreateRoom(roomId)
+				console.log(`[warm] loaded room ${roomId}`)
+			}
+		}
+	}
+
 	const registry = createSessionRegistry()
 	const media = createMediaService()
 

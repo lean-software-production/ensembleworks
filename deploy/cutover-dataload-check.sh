@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
 # Runs ON the box (piped by cutover.sh). $1 = version. Fetch the server binary,
-# boot it against a COPY of the live DATA_DIR, and assert /api/health lists every
-# room the DATA_DIR carries. ABORT (exit 1) if any room fails to load.
+# boot it against a COPY of the live DATA_DIR with EW_WARM_ROOMS=1 (forces every
+# rooms/<room>.sqlite through getOrCreateRoom — and so through the @tldraw
+# schema — at boot instead of lazily on first WS connect), and assert
+# /api/health lists every room the DATA_DIR carries. ABORT (exit 1) if any
+# room fails to load.
 set -euo pipefail
 VERSION="${1:?usage: cutover-dataload-check.sh <version>}"
 # shellcheck disable=SC1091 # /tmp/ew-lib.sh is deploy/lib.sh, scp'd there by cutover.sh
@@ -20,7 +23,7 @@ echo "==> booting against a copy of the live DATA_DIR"
 work="$(${RUN} mktemp -d)"; cdir="$(${RUN} mktemp -d)"
 ${RUN} cp -a "${DATA_DIR}/." "${work}/"
 port="$(ew_free_port)"
-${RUN} env PORT="$port" DATA_DIR="$work" CLIENT_DIST="$cdir" \
+${RUN} env PORT="$port" DATA_DIR="$work" CLIENT_DIST="$cdir" EW_WARM_ROOMS=1 \
   "${fetchdir}/ensembleworks-server" sync >/tmp/ew-dataload.log 2>&1 & pid=$!
 ew_poll_health "http://127.0.0.1:$port/api/health" "$pid" || { echo "ABORT: server did not come up on the copied DATA_DIR" >&2; kill "$pid" 2>/dev/null; exit 1; }
 
