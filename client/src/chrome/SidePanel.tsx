@@ -5,15 +5,16 @@
  * context) and to AvOverlay via the av/bridge module store. No useEditor, no
  * useDialogs, no tldraw CSS variables here — plain overlays + wm tokens only.
  *
- * This task lays down the skeleton: header (room + participant count) + VM
- * strip + connection-status line. Page sections/tiles, recording row and the
- * settings/help/about footer land in later tasks.
+ * Header (room + participant count) + VM strip + connection-status line, then
+ * the page sections + user tiles (PanelPages.tsx). Recording row and the
+ * settings/help/about footer land in a later task.
  */
 import { type Editor, useValue } from 'tldraw'
 import { useAvSnapshot } from '../av/bridge'
 import { VmStrip } from '../av/gauges'
 import { getRoomId } from '../identity'
 import { wm } from '../theme'
+import { PanelPages } from './PanelPages'
 
 export function SidePanel({ editor }: { editor: Editor }) {
 	const snap = useAvSnapshot()
@@ -73,6 +74,10 @@ export function SidePanel({ editor }: { editor: Editor }) {
 								: snap.status}
 					</span>
 				)}
+			</div>
+
+			<div style={{ padding: '0 12px 12px' }}>
+				<PanelPages editor={editor} />
 			</div>
 		</div>
 	)
