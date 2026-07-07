@@ -42,6 +42,18 @@ export const roadmapShapeProps = {
 	rev: T.number.optional(),
 }
 
+export const fileViewerShapeProps = {
+	w: T.number,
+	h: T.number,
+	// Path relative to the agent user's home, e.g. "my-repo/docs/report.html".
+	path: T.string,
+	title: T.string,
+	// Bumped by POST /api/canvas/file-viewer refresh so every client reloads.
+	rev: T.number.optional(),
+	// Remote gateway id (future); optional so existing rooms need no migration.
+	gateway: T.string.optional(),
+}
+
 export const screenshareShapeProps = {
 	w: T.number,
 	h: T.number,

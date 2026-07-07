@@ -1,8 +1,12 @@
 // server/src/main.ts — the ensembleworks-server compile entry.
 // `ensembleworks-server sync` (default) runs the sync/kernel server; `… term`
-// runs the terminal gateway. Literal-specifier dynamic import() means bun bundles
-// BOTH entrypoints into the binary but only the selected one's top-level executes
-// (ES modules evaluate on first import) — so exactly one server.listen() fires.
+// runs the terminal gateway; `… files` runs the read-only $HOME file-server
+// (:8791 — see deploy/systemd/prod/ensembleworks-files.service, which runs
+// this arm AS the agent sandbox user via a fixed, world-readable copy of this
+// binary, not from @APP_HOME@/current). Literal-specifier dynamic import() means
+// bun bundles ALL entrypoints into the binary but only the selected one's
+// top-level executes (ES modules evaluate on first import) — so exactly one
+// server.listen() fires.
 //
 // DELIBERATE exception to the connector spec's "static imports only" compile rule
 // (#5 §8) — do NOT rewrite these to top-level `import` statements. The specifiers
@@ -22,8 +26,9 @@ export {}
 
 const mode = process.argv[2] ?? 'sync'
 if (mode === 'term') await import('./terminal-gateway.ts')
+else if (mode === 'files') await import('./file-server.ts')
 else if (mode === 'sync') await import('./sync-server.ts')
 else {
-	console.error(`ensembleworks-server: unknown mode '${mode}' (expected sync|term)`)
+	console.error(`ensembleworks-server: unknown mode '${mode}' (expected sync|term|files)`)
 	process.exit(2)
 }

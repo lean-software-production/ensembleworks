@@ -71,7 +71,7 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 // shared-browser off (no docker).
 {
 	const s = buildServices(ctx())
-	for (const name of ['sync', 'term', 'client', 'caddy', 'livekit', 'whisper']) {
+	for (const name of ['sync', 'term', 'files', 'client', 'caddy', 'livekit', 'whisper']) {
 		assert.equal(svc(s, name).enabled, true, `${name} enabled`)
 	}
 	assert.equal(svc(s, 'scribe').enabled, true, 'scribe enabled via local whisper')

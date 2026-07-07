@@ -1,8 +1,9 @@
 /**
  * Global-flag extraction + the three-layer dispatch (spec §6.1):
  *   1. native single-word groups: version, auth, tools, help
- *   2. native (group, verb) pairs: terminal connect, canvas pull-images
- *      (checked BEFORE the manifest so they win over like-named future verbs)
+ *   2. native (group, verb) pairs: terminal connect, canvas pull-images,
+ *      file open, file refresh (checked BEFORE the manifest so they win over
+ *      like-named future verbs)
  *   3. manifest-rendered: <group> matches a plugin and <verb> a tool id
  *   4. extension (Layer 2): ensembleworks-<group> from the TRUSTED
  *      ~/.config/ensembleworks/extensions/ dir ONLY (never bare PATH — it
@@ -18,6 +19,7 @@ import { status } from './auth/status.ts'
 import { CliError } from './errors.ts'
 import { hostsPath, loadHosts } from './hosts.ts'
 import { connectSlot } from './native/connect.ts'
+import { fileOpen, fileRefresh } from './native/file.ts'
 import { pullImages } from './native/pull-images.ts'
 import { tools } from './native/tools.ts'
 import { version } from './native/version.ts'
@@ -79,6 +81,8 @@ export async function dispatch(rest: string[], globals: Globals, env: NodeJS.Pro
 	// 2. Native (group, verb) pairs — win over the manifest.
 	if (group === 'terminal' && verb === 'connect') return connectSlot(rest.slice(2), globals, env)
 	if (group === 'canvas' && verb === 'pull-images') return pullImages(rest.slice(2), { url: globals.url, room: globals.room }, env)
+	if (group === 'file' && verb === 'open') return fileOpen(rest.slice(2), globals, env)
+	if (group === 'file' && verb === 'refresh') return fileRefresh(rest.slice(2), globals, env)
 
 	// Verb help works without a configured instance (embedded manifest).
 	if (globals.help) {
@@ -186,7 +190,7 @@ function unknownError(group: string, verb: string | undefined, all: { plugin: st
 function printTopHelp(): number {
 	emitLine('ensembleworks <group> <verb> [args] — a generic renderer of GET /api/tools')
 	emitLine('')
-	emitLine('native: auth login|status|logout · tools [refresh] · version · terminal connect · canvas pull-images')
+	emitLine('native: auth login|status|logout · tools [refresh] · version · terminal connect · canvas pull-images · file open|refresh <path>')
 	emitLine('rendered: any verb from `ensembleworks tools` (canvas/roadmap/scribe/terminal/av/kernel)')
 	emitLine('global flags: --url --room --refresh --json --dry-run -h/--help')
 	return 0

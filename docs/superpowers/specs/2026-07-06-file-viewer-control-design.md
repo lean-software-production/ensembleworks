@@ -81,6 +81,15 @@ the developer. Prod: a systemd unit modelled on
 `deploy/systemd/prod/ensembleworks-term.service`, launched as
 `ensembleworks-agent` via the existing launcher/sudoers pattern.
 
+> **Implementation deviation (ratified at review):** the prod unit uses
+> `User=ensembleworks-agent` directly — systemd performs the privilege drop, so
+> no NOPASSWD sudoers entry or launcher binary is added at all (strictly
+> narrower than the term pattern; over-satisfies R2). Because the agent user
+> cannot read `@APP_HOME@/current` (700), `deploy.sh` installs a world-readable
+> copy of the compiled server binary at `/usr/local/bin/ensembleworks-server`
+> (no baked secrets — everything is runtime env) and the unit's `ExecStart`
+> points there. `ew_boot_check` gates the `files` arm pre-swap like sync/term.
+
 ### 2. `/files/*` route on the sync server (:8788)
 
 The single routing layer the iframe talks to (`server/src/features/files.ts`,

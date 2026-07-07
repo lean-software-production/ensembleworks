@@ -80,11 +80,12 @@
 	# Backend traffic -> the sync server on :8788 DIRECTLY (not via Vite). Vite's
 	# server.proxy cannot forward an upstream WebSocket under Bun's runtime (its
 	# built-in HMR ws works, but proxied upstream ws upgrades never complete), so
-	# the /sync tldraw socket must reach the sync server through Caddy. /api and
-	# /uploads ride the same route for symmetry with prod. Caddy upgrades the WS
-	# natively. (vite.config.ts still lists these under server.proxy for the rare
-	# case of hitting Vite on :5173 directly; behind Caddy this route wins first.)
-	@backend path /sync /sync/* /api /api/* /uploads /uploads/*
+	# the /sync tldraw socket must reach the sync server through Caddy. /api,
+	# /uploads and /files ride the same route for symmetry with prod. Caddy
+	# upgrades the WS natively. (vite.config.ts still lists these under
+	# server.proxy for the rare case of hitting Vite on :5173 directly; behind
+	# Caddy this route wins first.)
+	@backend path /sync /sync/* /api /api/* /uploads /uploads/* /files /files/*
 	handle @backend {
 		reverse_proxy 127.0.0.1:8788
 	}

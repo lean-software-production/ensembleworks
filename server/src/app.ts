@@ -11,6 +11,7 @@
  *   GET  /api/health            – liveness probe
  *   GET  /api/terminal/list     – remote terminal gateway registry (spike)
  *   WS   /sync/:roomId          – tldraw sync (TLSocketRoom)
+ *   GET  /files/*               – file-viewer proxy (outside /api, see below)
  *   GET  /*                     – static client build (production)
  */
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
@@ -24,6 +25,8 @@ import { type WebSocket, WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
 import { sanitizeId } from './canvas/ids.ts'
 import { createAvRouter } from './features/av.ts'
+import { createFileViewerRouter } from './features/file-viewer.ts'
+import { createFilesRouter } from './features/files.ts'
 import { createFramesRouter } from './features/frames.ts'
 import { createParticipantsRouter } from './features/participants.ts'
 import { createRoadmapRouter } from './features/roadmap.ts'
@@ -104,8 +107,8 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 	// Feature routers mount here IN THIS ORDER (Express matches top-down and the
 	// static catch-all below must stay last): whoami → participants (kernel) → av
-	// (av/token, av/kick, av/pulse) → terminal-status → sticky → transcript →
-	// shape → frames → roadmap → uploads
+	// (av/token, av/kick, av/pulse) → terminal-status → sticky → file-viewer →
+	// transcript → shape → frames → roadmap → uploads → files
 	app.use('/api', express.json())
 
 	// Write scoping: read-only service tokens are 403'd on mutating requests.
@@ -136,6 +139,8 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 
 	app.use(createStickyRouter(ctx))
 
+	app.use(createFileViewerRouter(ctx))
+
 	app.use(createTranscriptRouter(ctx))
 	app.use(createTelemetryRouter(ctx))       // POST /api/telemetry/connection (write-only beacon)
 
@@ -148,6 +153,10 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	app.use(createRoadmapRouter(ctx))
 
 	app.use(createUploadsRouter(ctx))
+
+	// File-viewer proxy: also outside the /api json parser (GETs only, no body
+	// to parse) and, like uploads, must sit above the static catch-all.
+	app.use(createFilesRouter())
 
 	// In production the sync server also serves the static client build; Caddy
 	// just reverse-proxies everything here.
