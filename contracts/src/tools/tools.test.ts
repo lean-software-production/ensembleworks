@@ -11,10 +11,10 @@ import {
 } from './index.js'
 
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'DELETE']
-const PLUGINS = ['kernel', 'av', 'canvas', 'scribe', 'roadmap', 'terminal']
+const PLUGINS = ['kernel', 'av', 'canvas', 'scribe', 'roadmap', 'terminal', 'file']
 
-// 1. Exactly 15 declared verbs.
-assert.equal(allTools.length, 15, 'expected 15 tool defs')
+// 1. Exactly 17 declared verbs.
+assert.equal(allTools.length, 17, 'expected 17 tool defs')
 
 // 2. Every def is well-formed.
 for (const t of allTools) {
@@ -26,11 +26,18 @@ for (const t of allTools) {
 }
 
 // 3. (plugin, id) pairs unique; (method, path) pairs unique (GET+POST may share
-//    a path across methods — scribe/roadmap overloads — but never collide).
+//    a path across methods — scribe/roadmap overloads — but never collide),
+//    EXCEPT deliberately op-discriminated same-method routes (file open/refresh
+//    both POST /api/canvas/file-viewer, disambiguated by body `op`).
 const pluginIds = new Set(allTools.map((t) => `${t.plugin}.${t.id}`))
 assert.equal(pluginIds.size, allTools.length, 'duplicate (plugin, id)')
-const methodPaths = new Set(allTools.map((t) => `${t.http.method} ${t.http.path}`))
-assert.equal(methodPaths.size, allTools.length, 'duplicate (method, path)')
+const OP_DISCRIMINATED = new Set(['POST /api/canvas/file-viewer'])
+const methodPathList = allTools.map((t) => `${t.http.method} ${t.http.path}`)
+const nonExemptMethodPaths = methodPathList.filter((mp) => !OP_DISCRIMINATED.has(mp))
+assert.equal(
+	new Set(nonExemptMethodPaths).size, nonExemptMethodPaths.length,
+	'duplicate (method, path) outside op-discriminated routes',
+)
 
 // 4. Every schema projects to JSON Schema without throwing (guards against an
 //    un-serialisable Zod construct reaching the wire / 500-ing /api/tools).
@@ -42,6 +49,6 @@ for (const t of allTools) {
 // 5. buildManifest wraps them in the envelope.
 const manifest = buildManifest(allTools, '0.0.0')
 assert.equal(manifest.version, MANIFEST_VERSION, 'manifest.version')
-assert.equal(manifest.tools.length, 15, 'manifest.tools length')
+assert.equal(manifest.tools.length, 17, 'manifest.tools length')
 
-console.log('ok: tool registry — 15 defs, unique ids/paths, all schemas serialise')
+console.log('ok: tool registry — 17 defs, unique ids/paths, all schemas serialise')
