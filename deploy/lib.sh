@@ -77,7 +77,10 @@ ew_fetch_release() {
 	$run mv "$dest/ensembleworks-server-$a" "$dest/ensembleworks-server"
 	$run mv "$dest/ensembleworks-transcriber-$a" "$dest/ensembleworks-transcriber"
 	$run mv "$dest/ensembleworks-$a" "$dest/ensembleworks"
-	$run chmod +x "$dest"/ensembleworks*
+	# Expand the glob under $run (not the caller): $dest is a 700 mktemp dir owned
+	# by the app user, so on the sudo fetch path the calling shell can't traverse
+	# it and the glob would pass through literal. Mirrors the sha256sum line above.
+	$run bash -c "chmod +x '$dest'/ensembleworks*"
 	$run mkdir -p "$dest/client-dist"
 	$run tar xzf "$dest/client-dist.tar.gz" -C "$dest/client-dist"
 }
