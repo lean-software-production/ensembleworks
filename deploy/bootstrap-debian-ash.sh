@@ -514,17 +514,18 @@ Wants=network-online.target
 Type=simple
 User=${APP_USER}
 WorkingDirectory=${APP_DIR}/transcriber
-Environment=CANVAS_URL=http://localhost:8788
-Environment=CANVAS_ROOM=team
+Environment=ENSEMBLEWORKS_URL=http://localhost:8788
+Environment=ENSEMBLEWORKS_ROOM=team
 Environment=STT_URL=https://api.groq.com/openai/v1
 Environment=STT_MODEL=whisper-large-v3-turbo
 Environment=STT_LANGUAGE=en
 EnvironmentFile=${CONF_DIR}/scribe.env
-# Wait for the sync server (CANVAS_URL, port 8788) to actually accept connections
-# before fetching a LiveKit token. After= only orders unit *start*, not socket
-# readiness, so without this the bot races the server on a cold boot and dies on
-# ECONNREFUSED. curl (no -f) exits 0 on any HTTP reply, nonzero on conn-refused.
-ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "\${CANVAS_URL}/"; do echo "waiting for sync server at \${CANVAS_URL} ..."; sleep 1; done'
+# Wait for the sync server (ENSEMBLEWORKS_URL, port 8788) to actually accept
+# connections before fetching a LiveKit token. After= only orders unit *start*,
+# not socket readiness, so without this the bot races the server on a cold boot
+# and dies on ECONNREFUSED. curl (no -f) exits 0 on any HTTP reply, nonzero on
+# conn-refused.
+ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "\${ENSEMBLEWORKS_URL}/"; do echo "waiting for sync server at \${ENSEMBLEWORKS_URL} ..."; sleep 1; done'
 ExecStart=${BUN_BIN} run dev
 Restart=on-failure
 RestartSec=5
