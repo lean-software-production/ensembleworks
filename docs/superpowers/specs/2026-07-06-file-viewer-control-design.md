@@ -7,6 +7,11 @@ canvas rendering that file in a sandboxed iframe. Relative references inside
 the document (CSS, images, sibling JSON) resolve against the real directory and
 just work — nothing is copied or pushed. The file on disk is the document.
 
+v1 also includes **scroll-follow** (rung 1 of the shared-viewing ladder): a
+participant can toggle "Present" on a control and everyone else's iframe
+tracks their scroll position, while keeping native per-user rendering,
+selection and zoom.
+
 ## Background
 
 Agents already produce rich HTML reports/plans; today the only way to see one
@@ -42,10 +47,11 @@ Two constraints shape the design:
   change reloads the iframe via cache-buster query param.
 - **v1 renders HTML + Markdown** — anything else gets a styled
   "unsupported type" page. Markdown is converted to styled HTML server-side.
-- **Per-user interaction** — scroll/inputs inside the iframe are per-user
-  (default iframe behaviour). Designed-for-later: a postMessage bridge for
-  shared-scroll / follow-presenter; nothing in v1 blocks it (`postMessage`
-  works from a sandboxed opaque-origin iframe).
+- **Per-user interaction, plus scroll-follow in v1** — inputs/selection inside
+  the iframe are per-user (default iframe behaviour), but v1 ships the
+  postMessage scroll bridge: an explicit presenter broadcasts scroll position
+  and other clients follow (`postMessage` works from a sandboxed opaque-origin
+  iframe). Form-sync and DOM mirroring stay deferred.
 - **Sandbox without `allow-same-origin`** — served documents run in an opaque
   origin: no cookies/localStorage, no credentialed calls to `/api/*`, so
   agent-generated JS cannot ride the viewer's CF Access session. Trade-off
@@ -95,6 +101,10 @@ mounted in `server/src/app.ts`; dev also needs a Vite proxy entry for
 - File missing / file-server down → a small styled error page (the control
   shows it rather than a broken iframe).
 - Sits behind CF Access like every other :8788 route; `no-store` caching.
+- **Injects the scroll-bridge helper** into every top-level HTML document it
+  serves (and into rendered markdown): a small inline script appended before
+  `</body>` (or at end of document — injection must not break documents
+  without a `</body>` tag). See §5.
 
 ### 3. `file-viewer` shape (`client/src/file-viewer/`)
 
@@ -117,7 +127,7 @@ A sibling of the existing iframe shape, following the plugin pattern
   }
   ```
 
-- Renders a header bar (filename + manual refresh button) above
+- Renders a header bar (filename + refresh button + **Present toggle**) above
   `<iframe src={`/files/${path}?rev=${rev ?? 0}`} sandbox="allow-scripts allow-forms allow-downloads">`
   — deliberately **no `allow-same-origin`**.
 - `rev` change → iframe reloads (the `src` changes; no extra effort needed).
@@ -154,6 +164,40 @@ New ToolDef pair in `contracts/src/tools/` and feature router
 - Mutations respect the write-scope guard (`write-scope.ts`) like every other
   POST.
 
+### 5. Scroll-follow bridge
+
+Three cooperating pieces, all v1:
+
+- **Helper script** (injected by the `/files/` route, §2): on load, posts
+  `{ type: 'ew-file-viewer-ready' }` to the parent. Listens to window scroll,
+  throttled to ~10Hz, and posts
+  `{ type: 'ew-scroll', fraction }` where
+  `fraction = scrollY / (scrollHeight − innerHeight)` (0 when the document
+  doesn't scroll) — a fraction, not pixels, so different viewer sizes land in
+  the same place. Listens for `{ type: 'ew-scroll-set', fraction }` from the
+  parent and applies it, setting an internal flag so the resulting scroll
+  event is not re-broadcast (echo suppression at the source).
+- **Presenter state**: rides tldraw **presence**, not shape props — it must
+  die with the presenter's session, never fossilise in the document. The
+  presenting client stamps `{ fileViewerPresenter: <shapeId>, scrollFraction }`
+  into its presence record's `meta`; followers watch presence for any peer
+  presenting their shape id. Presence disappearing (tab closed, network drop)
+  ends the presentation naturally. One presenter per shape; a second "Present"
+  click steals the token (last-writer-wins — acceptable for a team room).
+- **Shape component**: the Present toggle in the header. While presenting:
+  relay `ew-scroll` messages from the iframe into presence meta. While a peer
+  presents: apply their `scrollFraction` to the iframe via `ew-scroll-set`,
+  and show a "Following <name> — stop" affordance in the header; "stop" sets a
+  local opt-out (React state) until the presentation ends. The presenter's own
+  manual refresh/rev reload re-applies the last fraction after the iframe's
+  `ready` message.
+
+**Plan-time verification (V1):** confirm the tldraw version in use supports
+custom `meta` on `TLInstancePresence` and that it syncs through
+`TLSocketRoom`. If it does not, fall back to the already-connected LiveKit
+data channel (topic `file-viewer-scroll`) — same message shape, same
+component logic; the transport is isolated behind one small module either way.
+
 ## Error handling
 
 | Failure | Behaviour |
@@ -175,9 +219,17 @@ New ToolDef pair in `contracts/src/tools/` and feature router
 - **Unit (endpoint):** open normalises paths and rejects bad ones; refresh
   bumps `rev` only on matching shapes (store-level, like existing feature
   tests).
+- **Unit (bridge):** helper-script logic (fraction maths incl. the
+  non-scrolling document, throttle, echo-suppression flag) extracted into a
+  testable module; injection preserves documents with and without `</body>`.
 - **Smoke:** write a file into the (dev) home → `canvas file open` → shape
   exists in room with expected props → `GET /files/<path>` returns rendered
-  content → `canvas file refresh` → `rev` bumped.
+  content **with the helper injected** → `canvas file refresh` → `rev` bumped.
+- **Interaction (scroll-follow):** two headless-browser clients on one room
+  (the `.claude/skills/debugging-roadmap-control/` pattern) — presenter
+  scrolls, follower's iframe lands on the same fraction; follower "stop"
+  opts out; presenter tab close ends following. This one IS a v1 gate —
+  scroll-follow can't be meaningfully verified below the browser level.
 - Whole-suite gates: `bun run typecheck`, `bun run test`, `bun run build`.
 - The headless-browser pattern from `.claude/skills/debugging-roadmap-control/`
   is available if interaction bugs appear; not a v1 gate.
@@ -198,15 +250,11 @@ New ToolDef pair in `contracts/src/tools/` and feature router
 - **Remote file transport** — an HTTP-request channel over the gateway relay +
   file reads in the connector; lands with sub-project #5 (connector engine).
   v1 ships the `gateway` prop, the routing seam, and the env-var convention.
-- **Shared viewing** — a ladder of presentation modes, all deferred; v1's only
-  obligations to them are the seams it already has (script injection at the
-  `/files/` route, the postMessage-friendly sandbox, and a future `presenter`
-  concept). In fidelity-vs-cost order:
-  1. **Scroll-follow** — injected helper posts the presenter's throttled
-     scroll position up via postMessage; broadcast over tldraw *presence* (not
-     shape props — ephemeral, high-frequency); viewers' helpers apply it.
-     Needs a presenter token + echo suppression. Viewers keep native
-     rendering, selection, their own zoom.
+- **Shared viewing beyond scroll-follow** — rung 1 of the ladder
+  (scroll-follow) ships in v1 (§5); the higher rungs stay deferred and reuse
+  the same seams (script injection at the `/files/` route, the
+  postMessage-friendly sandbox, the presenter concept). In fidelity-vs-cost
+  order:
   2. **rrweb DOM mirror** — the presenter's iframe records (full DOM snapshot
      + MutationObserver deltas as JSON); viewers run the rrweb replayer, not
      the document, so there is no JS-divergence problem and framework-driven
@@ -250,3 +298,12 @@ New ToolDef pair in `contracts/src/tools/` and feature router
 - **R4 — port 8791 collision.** Chosen as the next free port after
   sync (8788) / gateway (8789); verify against neko (8090), livekit (7880),
   whisper at plan time.
+- **R5 — presence transport uncertainty.** Scroll-follow assumes presence
+  `meta` syncs through `TLSocketRoom` (verification V1 in §5); the LiveKit
+  data-channel fallback is specified so a negative answer changes one module,
+  not the design.
+- **R6 — script injection fragility.** Injecting into arbitrary agent HTML
+  can theoretically collide with document JS (message-type namespace, global
+  leakage). Mitigation: everything in one IIFE, `ew-` prefixed message types,
+  no globals; injection failure degrades to a working non-followable
+  document, never a broken one.
