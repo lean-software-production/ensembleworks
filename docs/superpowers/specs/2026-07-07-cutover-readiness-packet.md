@@ -61,13 +61,15 @@ boot-check and aborts the cutover, fail-closed).
 
 ## #8 must-do (work the charter assigned to the cutover, not yet built)
 
-1. **Create the `ensembleworks-cli` devcontainer feature; retire
-   `gateway-go/termgw-feature/`.** Charter §#5 assigns this to #8. #7 shipped
-   `install.sh` only. Remote boxes/Codespaces that bootstrap a terminal via the
-   devcontainer feature need a feature that installs `ensembleworks` and runs
-   `ensembleworks terminal connect` (same entrypoint/supervisor pattern as the
-   Go termgw-feature). Local `.devcontainer/` does not depend on it (not a
-   local-dev blocker).
+1. ✅ **Done (merge `18c3bf6`)** — the `ensembleworks-cli` devcontainer feature
+   is built at `deploy/features/ensembleworks-cli/` (installs the checksum-
+   verified CLI, runs `ensembleworks terminal connect`, `ENSEMBLEWORKS_*`
+   options, 0600 baked env). It also closed a **net-new credential exposure**:
+   `canvasTmuxSpawnSpec` now scrubs `ENSEMBLEWORKS_TOKEN_*` / `CF_ACCESS_CLIENT_*`
+   from the tmux spawn env, so hosted canvas terminals can't read the connector's
+   service token. Remaining at #8: the real `devcontainer build` smoke needs a
+   published `ensembleworks-<arch>` release asset (first post-#7 tag), and
+   `gateway-go/termgw-feature/` deletes with the rest of `gateway-go/`.
 2. **Confirm where prod canvas agents load skills from.** #4 reseeded the repo's
    four `.claude/skills/*/SKILL.md`; if prod agents run from a repo checkout they
    get them for free, but if they load from the agent sandbox home, the four

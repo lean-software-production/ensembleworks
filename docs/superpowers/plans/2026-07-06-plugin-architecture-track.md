@@ -36,3 +36,9 @@ _(none yet)_
 ## Deviations log
 
 _(none yet)_
+
+## Post-track slices (after the phase-boundary review)
+
+| Slice | Gate tier | Status | Merge | Notes |
+|---|---|---|---|---|
+| ensembleworks-cli devcontainer feature | autonomous | ✅ merged 2026-07-07 | `18c3bf6` | #8-must-do #1 closed early: installs the CLI + runs `terminal connect`; panel 3/3 + r2; added a connector-side token scrub (canvasTmuxSpawnSpec strips ENSEMBLEWORKS_TOKEN_*/CF_ACCESS_CLIENT_* — net-new credential exposure the feature would otherwise ship) + 0600 baked env. gateway-go/termgw-feature retires at #8. Suite 59. |

@@ -75,13 +75,14 @@ ssh <ssh-target> 'sudo -u ensembleworks grep -c CF_ACCESS_ ~/.config/ensemblewor
 
 **A5. Resolve the two #8-must-do items** (readiness packet):
 
-- **Remote terminal boxes need the `ensembleworks-cli` devcontainer feature.**
-  At cutover the Go termgw is retired; a remote box reconnects a terminal only
-  by running `ensembleworks terminal connect`, which needs the CLI installed via
-  a devcontainer feature that **does not exist yet** (`gateway-go/termgw-feature/`
-  is the old one). If you use remote terminal boxes, **build that feature before
-  cutover** (or keep those boxes on the Go termgw through a transition — but the
-  big-bang retires it). If all terminals are local to the prod box, this is moot.
+- **Remote terminal boxes: the `ensembleworks-cli` devcontainer feature is
+  built** (`deploy/features/ensembleworks-cli/`, merge `18c3bf6`) — point remote
+  boxes/Codespaces at it (pin the CLI `version` option to the cutover release).
+  Its supervisor runs `ensembleworks terminal connect`; the connector's service
+  token is scrubbed from hosted terminals. One follow-through: run the real
+  `devcontainer build` smoke against the first post-#7 tag (needs the published
+  `ensembleworks-<arch>` asset) before a remote box depends on it. If all
+  terminals are local to the prod box, this is moot.
 - **SKILL.md on the prod agent sandbox.** `cutover-reseed.sh`'s comment claims
   the SKILL reseed rides the deploy.sh sandbox seed — it does not; deploy.sh
   installs only `AGENTS.md` + `.claude/CLAUDE.md`. The four `.claude/skills/*/SKILL.md`
