@@ -4,21 +4,8 @@
  * the EnsembleWorks main-menu group, and plugin-owned component slots
  * (the A/V overlay claims SharePanel).
  */
-import {
-	DefaultMainMenu,
-	DefaultMainMenuContent,
-	DefaultToolbar,
-	DefaultToolbarContent,
-	TLComponents,
-	TLUiOverrides,
-	TldrawUiDialogBody,
-	TldrawUiDialogCloseButton,
-	TldrawUiDialogHeader,
-	TldrawUiDialogTitle,
-	TldrawUiMenuGroup,
-	TldrawUiMenuItem,
-	useDialogs,
-} from 'tldraw'
+import { DefaultToolbar, DefaultToolbarContent, TLComponents, TLUiOverrides } from 'tldraw'
+import { EnsembleMainMenu } from './chrome/MainMenu'
 import { collectUiSlots } from './kernel/plugin'
 import { plugins } from './plugins'
 
@@ -43,54 +30,8 @@ function PluginToolbar() {
 	)
 }
 
-function AboutDialog(_props: { onClose: () => void }) {
-	return (
-		<>
-			<TldrawUiDialogHeader>
-				<TldrawUiDialogTitle>EnsembleWorks</TldrawUiDialogTitle>
-				<TldrawUiDialogCloseButton />
-			</TldrawUiDialogHeader>
-			<TldrawUiDialogBody style={{ maxWidth: 420 }}>
-				<p style={{ margin: '0 0 12px' }}>Multi-player Agentic Workspace for Teams</p>
-				<p style={{ margin: 0, opacity: 0.7 }}>
-					Version <code>{__APP_VERSION__}</code>
-				</p>
-			</TldrawUiDialogBody>
-		</>
-	)
-}
-
-function AboutMenuItem() {
-	const { addDialog } = useDialogs()
-	return (
-		<TldrawUiMenuItem
-			id="about-sessions"
-			label="About"
-			icon="info-circle"
-			onSelect={() => {
-				addDialog({ component: AboutDialog })
-			}}
-		/>
-	)
-}
-
-function PluginMainMenu() {
-	return (
-		<DefaultMainMenu>
-			<DefaultMainMenuContent />
-			<TldrawUiMenuGroup id="ensembleworks-demo">
-				{plugins.map((plugin) => {
-					const Items = plugin.MenuItems
-					return Items ? <Items key={plugin.id} /> : null
-				})}
-				<AboutMenuItem />
-			</TldrawUiMenuGroup>
-		</DefaultMainMenu>
-	)
-}
-
 export const components: TLComponents = {
 	Toolbar: PluginToolbar,
-	MainMenu: PluginMainMenu,
+	MainMenu: EnsembleMainMenu,
 	...collectUiSlots(plugins),
 }

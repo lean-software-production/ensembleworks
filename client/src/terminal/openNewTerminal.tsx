@@ -3,6 +3,10 @@
  * command bar (barItems) and keyboard accelerator can call it. Fast path: no
  * remote gateways registered → create a local terminal immediately;
  * otherwise open the gateway-picker dialog.
+ *
+ * The picker is a tldraw *dialog*, not a nested dropdown, by design: a nested
+ * Radix dropdown trigger inside tldraw's toolbar "More" popover silently
+ * closes the popover instead of opening (found via headless probe).
  */
 import {
 	TldrawUiButton,
