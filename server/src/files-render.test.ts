@@ -22,6 +22,28 @@ const noBody = injectBridge('<p>bare</p>')
 assert.ok(noBody.startsWith('<p>bare</p>'), 'original content leads')
 assert.ok(noBody.includes(BRIDGE_SCRIPT), 'bridge appended')
 
+// regression: injection only ever targets a REAL closing body tag (spec R6)
+// 1. uppercase </BODY>
+const upper = injectBridge('<html><BODY><p>x</p></BODY></html>')
+assert.ok(upper.indexOf(BRIDGE_SCRIPT) < upper.indexOf('</BODY>'), 'injected before uppercase </BODY>')
+// 2. '</body >' with whitespace before '>'
+const spaced = injectBridge('<html><body><p>x</p></body ></html>')
+assert.ok(spaced.indexOf(BRIDGE_SCRIPT) < spaced.indexOf('</body >'), 'injected before spaced </body >')
+// 3. corruption repro: '</body' substring inside a script string AFTER the real tag
+const tricky = '<html><body><h1>R</h1></body>\n<script>var note = "footer </body tag";</script></html>'
+const trickyOut = injectBridge(tricky)
+assert.ok(trickyOut.indexOf(BRIDGE_SCRIPT) < trickyOut.indexOf('</body>'), 'bridge lands before the real </body>')
+assert.ok(trickyOut.includes('footer </body tag'), 'agent script string intact')
+assert.equal(trickyOut.split('footer </body tag').length, 2, 'script string appears exactly once, unbroken')
+// 4. multiple real </body> tags → injected before the LAST one
+const multi = injectBridge('<body>a</body><body>b</body>')
+assert.ok(multi.indexOf(BRIDGE_SCRIPT) > multi.indexOf('</body>'), 'first </body> untouched')
+assert.ok(multi.indexOf(BRIDGE_SCRIPT) < multi.lastIndexOf('</body>'), 'injected before the last </body>')
+// 5. errorPage escapes title/message
+const escapedPage = errorPage('<script>x</script>', 'm')
+assert.ok(escapedPage.includes('&lt;script&gt;'), 'title escaped')
+assert.ok(!escapedPage.includes('<script>x'), 'no raw script tag from title')
+
 // bridge contract strings (the client + injected script must agree)
 assert.ok(BRIDGE_SCRIPT.includes('ew-file-viewer-ready'))
 assert.ok(BRIDGE_SCRIPT.includes('ew-scroll'))

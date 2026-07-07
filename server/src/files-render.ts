@@ -19,7 +19,9 @@ export const BRIDGE_SCRIPT = `<script>(function () {
 		return max > 0 ? window.scrollY / max : 0
 	}
 	window.addEventListener('scroll', function () {
+		// Echo suppression assumes instant scrollTo (one scroll event). smooth-behavior docs may re-broadcast; v1-accepted.
 		if (applying) { applying = false; return }
+		// Leading-edge throttle: the final scroll inside a window is not re-sent (v1-accepted; followers rest ≤1 event behind).
 		var now = Date.now()
 		if (now - last < 100) return
 		last = now
@@ -36,11 +38,18 @@ export const BRIDGE_SCRIPT = `<script>(function () {
 	parent.postMessage({ type: 'ew-file-viewer-ready' }, '*')
 })()</script>`
 
-/** Inject the bridge before </body> (last occurrence, case-insensitive), else append. */
+/**
+ * Inject the bridge before the last REAL closing body tag (case-insensitive,
+ * optional whitespace before '>'), else append. The insertion offset uses the
+ * same matcher as the presence check, so a bare '</body' substring (e.g.
+ * inside a script string) can never attract the injection mid-document and
+ * corrupt it (spec R6: never a broken document).
+ */
 export function injectBridge(html: string): string {
-	const m = /<\/body\s*>/i.exec(html)
-	if (!m) return html + BRIDGE_SCRIPT
-	const idx = html.toLowerCase().lastIndexOf('</body')
+	const re = /<\/body\s*>/gi
+	let idx = -1
+	for (let m = re.exec(html); m; m = re.exec(html)) idx = m.index
+	if (idx < 0) return html + BRIDGE_SCRIPT
 	return html.slice(0, idx) + BRIDGE_SCRIPT + html.slice(idx)
 }
 
