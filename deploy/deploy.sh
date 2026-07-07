@@ -65,7 +65,7 @@ if [ "$DRY_RUN" = 1 ]; then
 	echo "==> [dry-run] swap plan:"
 	echo "    release dir : ~${APP_USER}/releases/${VERSION}"
 	echo "    new era     : $(cat "${NEW}/.ew-era")"
-	echo "    units       : ensembleworks-sync ensembleworks-term (+ scribe if enabled)"
+	echo "    units       : ensembleworks-sync ensembleworks-term ensembleworks-files (+ scribe if enabled)"
 	echo "    keep        : ${KEEP} newest (prune walks releases/ only; backups/ exempt)"
 	echo "==> [dry-run] done (no box touched)."
 	exit 0
@@ -79,6 +79,7 @@ PROD_UNITS="deploy/systemd/prod" # committed unit templates (@APP_USER@/@APP_HOM
 for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	"$PROD_UNITS"/ensembleworks-sync.service \
 	"$PROD_UNITS"/ensembleworks-term.service \
+	"$PROD_UNITS"/ensembleworks-files.service \
 	"$PROD_UNITS"/ensembleworks-scribe.service \
 	"$PROD_UNITS"/ensembleworks-shared-browser.service \
 	"$PROD_UNITS"/ensembleworks-shared-browser.slice \
@@ -176,8 +177,8 @@ fi
 # scribe unit stays literal for systemd to expand — sed only touches @TOKENS@.
 echo "==> installing prod systemd units"
 # Drop stale per-service drop-ins from older deploys (slice/MemoryLow now in-unit).
-sudo rm -rf /etc/systemd/system/ensembleworks-sync.service.d /etc/systemd/system/ensembleworks-term.service.d /etc/systemd/system/ensembleworks-scribe.service.d
-for u in ensembleworks-sync ensembleworks-term ensembleworks-scribe; do
+sudo rm -rf /etc/systemd/system/ensembleworks-sync.service.d /etc/systemd/system/ensembleworks-term.service.d /etc/systemd/system/ensembleworks-files.service.d /etc/systemd/system/ensembleworks-scribe.service.d
+for u in ensembleworks-sync ensembleworks-term ensembleworks-files ensembleworks-scribe; do
   sed -e "s|@APP_USER@|\${APP_USER}|g" -e "s|@APP_HOME@|\${APP_HOME}|g" "/tmp/\${u}.service" | sudo tee "/etc/systemd/system/\${u}.service" >/dev/null
 done
 
@@ -213,6 +214,12 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   sudo ln -f /usr/local/bin/ensembleworks /usr/local/bin/ew
   sudo -u "\${AGENT_USER}" /usr/local/bin/ensembleworks version >/dev/null 2>&1 || \
     echo "    warn: installed CLI failed 'version' self-check" >&2
+  # ensembleworks-files.service runs the compiled server binary AS \${AGENT_USER}
+  # for its whole lifetime (it serves that user's $HOME — see the unit's header
+  # comment), so it can't exec \${NEW}/ensembleworks-server in place: that path
+  # lives under \${APP_HOME}, 700 to \${APP_USER}. A world-readable copy at this
+  # fixed path (same mechanism as the CLI install above) is what the unit execs.
+  sudo install -m0755 "\${NEW}/ensembleworks-server" /usr/local/bin/ensembleworks-server
   # GitHub App token minting for the sandbox user WITHOUT exposing the App key: the
   # PEM + github-app.env stay in the app user's 700 ~/.config (unreadable to the
   # sandbox user); the agent runs the narrow ensembleworks-gh-token wrapper as the
@@ -271,8 +278,8 @@ fi
 echo "==> swapping current -> \${VERSION}"
 asapp ln -sfn "\${NEW}" "\${APP_HOME}/current"
 sudo systemctl daemon-reload
-sudo systemctl enable ensembleworks-sync ensembleworks-term >/dev/null 2>&1 || true
-sudo systemctl restart ensembleworks-sync ensembleworks-term
+sudo systemctl enable ensembleworks-sync ensembleworks-term ensembleworks-files >/dev/null 2>&1 || true
+sudo systemctl restart ensembleworks-sync ensembleworks-term ensembleworks-files
 sudo systemctl is-active --quiet ensembleworks-scribe && sudo systemctl restart ensembleworks-scribe || true
 # Shared browser: enable + start it if installed, but DON'T restart a running one
 # (a restart drops the live shared session). To pick up a changed unit, restart by

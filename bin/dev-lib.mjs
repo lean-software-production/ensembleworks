@@ -9,6 +9,7 @@
 export const PORTS = {
 	sync: 8788,
 	term: 8789,
+	files: 8791,
 	client: 5173,
 	caddy: 8080,
 	livekit: 7880,
@@ -273,6 +274,14 @@ export function buildServices(ctx) {
 		reason: 'always',
 		cmd: "bun run --filter '@ensembleworks/server' dev:term",
 		health: { kind: 'port', port: PORTS.term },
+	})
+
+	services.push({
+		name: 'files',
+		enabled: true,
+		reason: 'file portal on :8791',
+		cmd: "bun run --filter '@ensembleworks/server' dev:files",
+		health: { kind: 'port', port: PORTS.files },
 	})
 
 	services.push({

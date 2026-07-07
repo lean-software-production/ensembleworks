@@ -1,0 +1,58 @@
+# EnsembleWorks file-server — PRODUCTION unit (non-watch). Installed by
+# deploy/deploy.sh. Modelled on ensembleworks-term.service, but with one
+# deliberate difference: this unit does NOT run as @APP_USER@.
+#
+# file-server (server/src/file-server.ts) serves the invoking user's $HOME
+# read-only — that IS its job, unlike term/sync which merely READ CODE from
+# @APP_HOME@. The sandbox user's home (ensembleworks-agent) is deliberately
+# unreadable to the app user (and vice versa: @APP_HOME@ is 700, unreadable to
+# the sandbox user), so a process that must serve $HOME/... for the agent has
+# to run WITH that UID for its whole lifetime. That's different from the term
+# gateway, which runs as @APP_USER@ and drops only each individual SPAWNED
+# SHELL to the sandbox user at runtime via a NOPASSWD sudo launcher
+# (/usr/local/bin/ensembleworks-term-launch, TERM_RUN_AS=ensembleworks-agent) —
+# there is no long-lived "term" process that itself needs to BE the sandbox
+# user. file-server has no children to drop privilege for; the whole unit must
+# already be that user before it opens its first file. systemd (running as
+# root/PID 1) does that privilege drop directly via User= below — no runtime
+# sudo hop, no new sudoers entry, which keeps the launcher surface at least as
+# narrow as term's (design doc R2: fixed binary path, no args from the app
+# user, nothing constructed at runtime).
+#
+# Because ensembleworks-agent cannot read @APP_HOME@ (700, owned by
+# @APP_USER@), ExecStart can't point at @APP_HOME@/current like sync/term do —
+# systemd resolves User= BEFORE the execve, so the target user needs read+exec
+# on the binary itself. deploy.sh's agent-seed step therefore installs a
+# world-readable copy of the compiled server binary to the SAME fixed path it
+# already uses for the ensembleworks/ew CLI (/usr/local/bin), and this unit
+# execs that fixed path with the `files` subcommand.
+#
+# localhost-only (server/src/file-server.ts binds 127.0.0.1); the sole
+# consumer is the sync server's /files/* route (server/src/features/files.ts),
+# which proxies to it over loopback.
+[Unit]
+Description=EnsembleWorks file-server (read-only $HOME portal)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ensembleworks-agent
+Slice=ensembleworks.slice
+MemoryAccounting=yes
+Environment=PORT=8791
+# No ExecStartPre port guard (unlike term's `fuser -k -TERM 8789/tcp`, added
+# after a 2026-07-04..07 incident where a start wrapper exited without its
+# child, orphaning a gateway that kept :8789 held across deploys — see term's
+# comment). That risk is specific to term's KillMode=process + a wrapper
+# process (npm/tsx) fronting the real listener. file-server has neither: it is
+# the single ExecStart binary directly (systemd signals it, no wrapper hop) and
+# uses the default KillMode=control-group, so `systemctl restart` always tears
+# down its whole cgroup — no orphaned listener can survive a restart/deploy to
+# EADDRINUSE-crash-loop the next start.
+ExecStart=/usr/local/bin/ensembleworks-server files
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
