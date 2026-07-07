@@ -1,10 +1,12 @@
 # EnsembleWorks devcontainer — Debian 13 (trixie), the same OS as the
 # production and dogfood boxes. Everything a keyless contributor needs is
-# baked in: Bun (pinned in .tool-versions), tmux, Caddy, the LiveKit OSS
-# SFU (voice/video via --dev keys) and whisper.cpp + a small model (keyless
+# baked in: Bun (pinned in .tool-versions), Node (dev-only — runs the Vite dev
+# server; see the Node block below), tmux, Caddy, the LiveKit OSS SFU
+# (voice/video via --dev keys) and whisper.cpp + a small model (keyless
 # transcription). Version pins follow deploy/runtime-requirements — bump them
-# together. The shared browser (neko) is deliberately absent: it needs
-# docker-in-docker; use a native host for that.
+# together (Node is dev-only, so it is NOT in runtime-requirements). The shared
+# browser (neko) is deliberately absent: it needs docker-in-docker; use a native
+# host for that.
 FROM debian:trixie
 
 ARG CADDY_VERSION=2.10.0
@@ -60,6 +62,23 @@ RUN set -eux; \
 	mkdir -p /usr/local/share/whisper; \
 	curl -fsSL -o /usr/local/share/whisper/ggml-base.bin \
 		"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin"
+
+# Node.js — DEV-ONLY, and only for the Vite dev server (client workspace). Vite's
+# dev server, HMR, and server.proxy WebSocket forwarding target Node's runtime;
+# Bun 1.3.14 has gaps there (missing net.Socket#destroySoon → crash-loop; no
+# upstream-WS proxying → the /sync canvas socket hangs). So `client` runs Vite on
+# Node (package.json scripts are plain `vite`, no `bun --bun`). EVERYTHING THAT
+# SHIPS still runs on Bun — server, transcriber, connector, CLI, and the compiled
+# prod binaries; production serves a static `vite build` with no Node at all.
+# Node therefore lives ONLY in this dev image. Placed last of the tool installs so
+# a Node bump doesn't invalidate the (slow) whisper build cache. Installed
+# system-wide to /usr/local (bin/node, lib/, etc.).
+ARG NODE_VERSION=22.12.0
+RUN set -eux; \
+	case "$(dpkg --print-architecture)" in amd64) a=x64;; arm64) a=arm64;; esac; \
+	curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${a}.tar.xz" \
+		| tar -xJ -C /usr/local --strip-components=1 --no-same-owner; \
+	node --version; npm --version
 
 # Non-root user, uid 1000 — what VS Code / Codespaces expects.
 RUN useradd -m -s /bin/bash -u 1000 dev \

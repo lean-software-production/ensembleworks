@@ -4,10 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "bun --bun vite",
-    "build": "bunx tsc --noEmit && bun --bun vite build",
+    "dev": "vite",
+    "build": "bunx tsc --noEmit && vite build",
     "typecheck": "bunx tsc --noEmit",
-    "preview": "bun --bun vite preview"
+    "preview": "vite preview"
   },
   "dependencies": {
     "@ensembleworks/contracts": "*",

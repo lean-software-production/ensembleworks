@@ -84,7 +84,12 @@ export default defineConfig({
 		__APP_VERSION__: JSON.stringify(appVersion()),
 	},
 	server: {
-		// Caddy hard-targets localhost:5173, so a busy port must fail loudly
+		// Bind the IPv4 loopback explicitly. The dev server sits behind Caddy,
+		// which dials 127.0.0.1:5173 (see deploy/Caddyfile). The container also
+		// sets NODE_OPTIONS=--dns-result-order=ipv4first so `localhost` resolves to
+		// 127.0.0.1, but pinning the host here removes any IPv4/IPv6 ambiguity.
+		host: '127.0.0.1',
+		// Caddy hard-targets 127.0.0.1:5173, so a busy port must fail loudly
 		// rather than let Vite silently bind 5174 and 502 through Caddy.
 		strictPort: true,
 		...proxiedServer,
