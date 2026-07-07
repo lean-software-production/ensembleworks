@@ -202,6 +202,18 @@ Each phase shippable alone:
    (video/initials/avatar, colour swatch, mic-cam), recording row, footer,
    settings dialog (incl. GitHub handle, dock edge); trim ☰ to canvas verbs
    only (§4).
+   *Shipped 2026-07-07 (branch canvas-controls-ux). As-built deltas: fixed
+   280px width (resize/collapse → phase 3); page ⋯ menu is rename·delete only
+   (reorder/seed/export deferred; seed items stay under ☰); settings is an
+   inline footer section with only the GitHub handle (dock edge → phase 3);
+   avatars are local-user-only (handles aren't synced — remote users get
+   initials); other tiles show a cam-status glyph only (no per-peer mic state
+   exists); own tile gained a third toggle (spatial/standup); ☰ keeps a
+   trimmed Preferences submenu (colour scheme has no panel home yet) while
+   Language + Keyboard-shortcuts went; every tile is a leash anchor so
+   camera-off speakers now leash; kick is a hover-revealed button; an
+   unknown-page catch-all section lists participants on deleted pages; name
+   editing was never absorbed (only colour) — startup prompt remains.*
 3. **Behaviours** — resize/collapse/f2f reflow, Present broadcast + follow,
    dock-edge vertical variant.
 4. **Focus view** (§7) — independent of the others; can ship alongside any
