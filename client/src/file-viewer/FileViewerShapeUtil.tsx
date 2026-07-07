@@ -12,6 +12,7 @@
  * Double-click to interact; click away to go back to canvas navigation.
  */
 import { fileViewerShapeProps } from '@ensembleworks/contracts'
+import { useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
@@ -23,6 +24,8 @@ import {
 	useValue,
 } from 'tldraw'
 import { wm } from '../theme'
+import { presenterFor, type PresenterInfo } from './followLogic'
+import { presentStore } from './presentStore'
 
 export interface FileViewerShapeProps {
 	w: number
@@ -94,6 +97,84 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 		})
 	}
 
+	// Scroll-follow (spec §5). All per-user; presenter token rides presence meta
+	// via presentStore, followers read it off collaborator presence.
+	const iframeRef = useRef<HTMLIFrameElement | null>(null)
+	const lastFractionRef = useRef(0)
+	const [optOut, setOptOut] = useState(false)
+
+	// Am I presenting THIS shape? (presentStore wraps a tldraw atom → reactive.)
+	const presenting = useValue('fvPresenting', () => presentStore.get(), [])
+	const isPresentingThis = presenting?.shapeId === shape.id
+
+	// A peer presenting this shape (never me — getCollaborators is remote-only,
+	// but guard on userId too). Following is mutually exclusive with presenting.
+	const myId = useValue('fvUserId', () => editor.user.getId(), [editor])
+	const collaborators = useValue('fvCollab', () => editor.getCollaborators(), [editor])
+	const peer = presenterFor(collaborators, shape.id)
+	const peerPresenter = peer && peer.userId !== myId ? peer : null
+	const activePresenter: PresenterInfo | null = !isPresentingThis && !optOut ? peerPresenter : null
+
+	// targetOrigin '*' is REQUIRED: the sandboxed document loads at an opaque
+	// (null) origin (no allow-same-origin), so no concrete origin can ever match.
+	// The payload is only a scroll fraction — nothing sensitive leaves the room.
+	const postScrollSet = (fraction: number) => {
+		iframeRef.current?.contentWindow?.postMessage({ type: 'ew-scroll-set', fraction }, '*')
+	}
+
+	// Latest follow target for the (stable) message listener to read without
+	// re-subscribing on every fraction change.
+	const activePresenterRef = useRef<PresenterInfo | null>(activePresenter)
+	activePresenterRef.current = activePresenter
+
+	// Bridge listener: accept ONLY this iframe's own messages (source check).
+	useEffect(() => {
+		const onMessage = (e: MessageEvent) => {
+			if (e.source !== iframeRef.current?.contentWindow) return
+			const d = e.data as { type?: unknown; fraction?: unknown } | null
+			if (!d || typeof d !== 'object') return
+			if (d.type === 'ew-file-viewer-ready') {
+				// Presenter's own refresh/rev reload → re-apply the last fraction so
+				// the reloaded document lands where the presenter left it (spec §5).
+				const mine = presentStore.get()
+				if (mine && mine.shapeId === shape.id) {
+					postScrollSet(mine.fraction)
+				} else if (activePresenterRef.current) {
+					// Follower mid-presentation reload → re-apply the presenter's spot.
+					postScrollSet(activePresenterRef.current.fraction)
+				}
+			} else if (d.type === 'ew-scroll' && typeof d.fraction === 'number') {
+				lastFractionRef.current = d.fraction
+				const mine = presentStore.get()
+				if (mine && mine.shapeId === shape.id) {
+					presentStore.set({ shapeId: shape.id, fraction: d.fraction })
+				}
+			}
+		}
+		window.addEventListener('message', onMessage)
+		return () => window.removeEventListener('message', onMessage)
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [shape.id])
+
+	// Follower: drive the iframe whenever the presenter's fraction (or identity)
+	// changes. Guarded so the presenter never feeds their own loop back in.
+	useEffect(() => {
+		if (activePresenter) postScrollSet(activePresenter.fraction)
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [activePresenter?.fraction, activePresenter?.userId])
+
+	// A local "stop following" opt-out only lasts for the current presentation —
+	// once the presenter is gone, reset so the next presentation is followed.
+	useEffect(() => {
+		if (!peerPresenter) setOptOut(false)
+	}, [peerPresenter])
+
+	const togglePresent = () => {
+		if (isPresentingThis) presentStore.set(null)
+		// Turning on overwrites any other presenter (last-writer-wins, spec §5).
+		else presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current })
+	}
+
 	return (
 		<HTMLContainer
 			style={{
@@ -142,20 +223,27 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 				<span style={{ opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
 					{path}
 				</span>
-				<span style={{ marginLeft: 'auto', display: 'flex', gap: 6, pointerEvents: 'all' }}>
+				<span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'all' }}>
+					{activePresenter && (
+						<FollowingChip name={activePresenter.userName} onStop={() => setOptOut(true)} />
+					)}
 					<HeaderButton label="↻" title="Refresh (reloads for everyone)" onClick={refresh} />
-					{/* v1 placeholder — Task 7 wires actual scroll-follow presenting. */}
 					<HeaderButton
-						label="▶"
-						title="coming in this build: scroll-follow"
-						onClick={() => {}}
-						disabled
+						label={isPresentingThis ? 'Presenting — stop' : 'Present'}
+						title={
+							isPresentingThis
+								? 'Stop presenting — others stop following your scroll'
+								: 'Present — everyone follows your scroll position'
+						}
+						active={isPresentingThis}
+						onClick={togglePresent}
 					/>
 				</span>
 				{!isEditing && <span style={{ opacity: 0.6 }}>double-click to interact</span>}
 			</div>
 			{path ? (
 				<iframe
+					ref={iframeRef}
 					// Per-segment encode so exotic names (#, ?, %) round-trip the
 					// route's decode-once contract (features/files.ts re-encodes the
 					// decoded express param the same way before hitting the file-server).
@@ -189,7 +277,13 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	)
 }
 
-function HeaderButton(props: { label: string; title: string; onClick: () => void; disabled?: boolean }) {
+function HeaderButton(props: {
+	label: string
+	title: string
+	onClick: () => void
+	disabled?: boolean
+	active?: boolean
+}) {
 	return (
 		<button
 			title={props.title}
@@ -198,15 +292,54 @@ function HeaderButton(props: { label: string; title: string; onClick: () => void
 			onClick={props.onClick}
 			style={{
 				border: 'none',
-				background: 'transparent',
+				background: props.active ? wm.sealBlue : 'transparent',
+				borderRadius: 3,
 				cursor: props.disabled ? 'not-allowed' : 'pointer',
-				fontSize: 13,
-				color: props.disabled ? wm.inkSubtle : wm.inkMuted,
+				fontSize: 11,
+				fontWeight: props.active ? 700 : 400,
+				color: props.active ? '#fff' : props.disabled ? wm.inkSubtle : wm.inkMuted,
 				opacity: props.disabled ? 0.5 : 1,
-				padding: '0 2px',
+				padding: '2px 6px',
+				whiteSpace: 'nowrap',
 			}}
 		>
 			{props.label}
 		</button>
+	)
+}
+
+// Shown while a peer is presenting this shape and you are tracking their scroll.
+// "stop" opts out locally until their presentation ends (spec §5).
+function FollowingChip(props: { name: string; onStop: () => void }) {
+	return (
+		<span
+			onPointerDown={stopEventPropagation}
+			style={{
+				display: 'inline-flex',
+				alignItems: 'center',
+				gap: 4,
+				fontSize: 10,
+				color: wm.inkMuted,
+				whiteSpace: 'nowrap',
+			}}
+		>
+			<span style={{ opacity: 0.85 }}>Following {props.name}</span>
+			<button
+				title="Stop following this presenter"
+				onPointerDown={stopEventPropagation}
+				onClick={props.onStop}
+				style={{
+					border: 'none',
+					background: 'transparent',
+					cursor: 'pointer',
+					fontSize: 10,
+					fontWeight: 700,
+					color: wm.sealBlue,
+					padding: '0 2px',
+				}}
+			>
+				stop
+			</button>
+		</span>
 	)
 }
