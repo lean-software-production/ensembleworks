@@ -5,7 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
-    "./session-manager": "./src/session-manager.ts"
+    "./session-manager": "./src/session-manager.ts",
+    "./relay-parity": "./src/relay-parity.ts"
   },
   "scripts": {
     "typecheck": "bunx tsc --noEmit"

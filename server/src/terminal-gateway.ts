@@ -16,7 +16,6 @@
  * Wire protocol: see @ensembleworks/contracts terminal-protocol
  */
 import { execFile } from 'node:child_process'
-import { existsSync } from 'node:fs'
 import http from 'node:http'
 import type { Socket } from 'node:net'
 import path from 'node:path'
@@ -26,7 +25,7 @@ import {
 	TMUX_SESSION_PREFIX,
 	type TermServerMessage,
 } from '@ensembleworks/contracts'
-import { openTmuxSession, type TmuxSession } from '@ensembleworks/contracts/session-manager'
+import { canvasTmuxSpawnSpec, openTmuxSession, type TmuxSession } from '@ensembleworks/contracts/session-manager'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 const PORT = Number(process.env.PORT ?? 8789)
@@ -38,7 +37,6 @@ const HEARTBEAT_INTERVAL_MS = 20_000
 // apply it with `tmux source-file <conf>`.
 const TMUX_CONF =
 	process.env.TMUX_CONF ?? path.resolve(import.meta.dirname, '../../deploy/tmux-ensembleworks.conf')
-const TMUX_BASE_ARGS = existsSync(TMUX_CONF) ? ['-f', TMUX_CONF] : []
 
 // Privilege separation. When TERM_RUN_AS is set, every terminal shell is dropped
 // to that (less-privileged) user via sudo, so canvas terminals can't read the app
@@ -75,22 +73,7 @@ function tmuxSpawnSpec(id: string): {
 			env: { TERM: 'xterm-256color' },
 		}
 	}
-	return {
-		file: 'tmux',
-		// `new-session -A` attaches when the session already exists, so terminals
-		// reconnect to live tmux sessions across gateway and browser restarts.
-		args: [...TMUX_BASE_ARGS, 'new-session', '-A', '-s', sessionName],
-		cwd: process.env.HOME ?? process.cwd(),
-		env: {
-			...process.env,
-			TERM: 'xterm-256color',
-			// Light terminal background hint (fg 0, bg 15) — tmux < 3.4 drops OSC 11
-			// queries, so theme auto-detection needs this fallback.
-			COLORFGBG: '0;15',
-			// The `q` binding in tmux-ensembleworks.conf reloads from this path.
-			ENSEMBLEWORKS_TMUX_CONF: TMUX_CONF,
-		} as Record<string, string>,
-	}
+	return canvasTmuxSpawnSpec({ sessionId: id, tmuxConf: TMUX_CONF, home: process.env.HOME })
 }
 
 // One-shot startup check: when TERM_RUN_AS is set, confirm the gateway can sudo to
