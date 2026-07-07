@@ -6,7 +6,14 @@
  * render order.
  */
 import type { ComponentType } from 'react'
-import type { Editor, TLAnyShapeUtilConstructor, TLComponents, TLShape, TLUiToolItem } from 'tldraw'
+import type {
+	Editor,
+	TLAnyShapeUtilConstructor,
+	TLComponents,
+	TLShape,
+	TLUiDialogProps,
+	TLUiToolItem,
+} from 'tldraw'
 
 export interface RoomHooks {
 	/**
@@ -23,6 +30,31 @@ export interface RoomHooks {
 /** Called once per editor mount, so hook closures get per-mount state. */
 export type RoomHooksFactory = (editor: Editor) => RoomHooks
 
+export interface BarItemHelpers {
+	/** tldraw's dialog opener (from useDialogs), passed through by the bar. */
+	addDialog: (dialog: { id?: string; component: ComponentType<TLUiDialogProps> }) => void
+}
+
+/**
+ * A declarative command-bar entry (canvas-controls spec §8). The bar renders
+ * icon + label with the accelerator letter underlined, and fires onSelect on
+ * click or on the bare accelerator key.
+ */
+export interface BarItemDescriptor {
+	id: string
+	/** Lower-case label; if `accelerator` is set it must occur in this string. */
+	label: string
+	/** Single lower-case letter fired without modifiers. Optional. */
+	accelerator?: string
+	/** tldraw icon name — built-in, or contributed via the plugin's `icons`. */
+	icon: string
+	placement: 'priority' | 'overflow'
+	onSelect: (editor: Editor, helpers: BarItemHelpers) => void
+	/** Optional availability hook; the bar hides the item (and disables its
+	 * accelerator) when it returns false. Must be a stable hook function. */
+	useAvailable?: () => boolean
+}
+
 export interface ClientPlugin {
 	id: string
 	/** ShapeUtil classes contributed to the editor, in declaration order. */
@@ -33,6 +65,8 @@ export interface ClientPlugin {
 	tools?: (editor: Editor) => Record<string, TLUiToolItem>
 	/** Rendered after DefaultToolbarContent, in registry order. */
 	ToolbarItems?: ComponentType
+	/** Declarative command-bar entries; replaces ToolbarItems (spec §8). */
+	barItems?: readonly BarItemDescriptor[]
 	/** Rendered inside the EnsembleWorks main-menu group, in registry order. */
 	MenuItems?: ComponentType
 	/** Rendered as a child of <Tldraw> (inside editor context). */
@@ -57,4 +91,21 @@ export function collectUiSlots(plugins: readonly ClientPlugin[]): Partial<TLComp
 	const slots: Partial<TLComponents> = {}
 	for (const plugin of plugins) Object.assign(slots, plugin.uiSlots ?? {})
 	return slots
+}
+
+export function collectBarItems(
+	plugins: readonly ClientPlugin[],
+	placement: BarItemDescriptor['placement']
+): BarItemDescriptor[] {
+	const items = plugins.flatMap((plugin) =>
+		(plugin.barItems ?? []).filter((item) => item.placement === placement)
+	)
+	for (const item of items) {
+		if (item.accelerator && !item.label.toLowerCase().includes(item.accelerator.toLowerCase())) {
+			throw new Error(
+				`barItems: accelerator "${item.accelerator}" not in label "${item.label}" (item ${item.id})`
+			)
+		}
+	}
+	return items
 }
