@@ -29,4 +29,13 @@ export const nekoPlugin: ClientPlugin = {
 		},
 	}),
 	ToolbarItems: NekoToolbarItem,
+	barItems: [
+		{
+			id: 'neko',
+			label: 'browser',
+			icon: NEKO_ICON_NAME,
+			placement: 'overflow',
+			onSelect: (editor) => createNekoShape(editor),
+		},
+	],
 }

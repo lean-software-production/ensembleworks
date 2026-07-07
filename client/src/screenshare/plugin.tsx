@@ -12,7 +12,7 @@ import {
 	ScreenShareShapeUtil,
 } from './ScreenShareShapeUtil'
 import { startScreenShare, stopShareForDeletedShape } from './share'
-import { useScreenShareAvailable } from './store'
+import { isScreenShareAvailable, useScreenShareAvailable } from './store'
 import { ScreenShareSubscriptionLoop } from './SubscriptionLoop'
 
 function ScreenShareToolbarItem() {
@@ -38,6 +38,20 @@ export const screensharePlugin: ClientPlugin = {
 		},
 	}),
 	ToolbarItems: ScreenShareToolbarItem,
+	barItems: [
+		{
+			id: 'cast',
+			label: 'cast',
+			accelerator: 'c',
+			icon: SCREENSHARE_ICON_NAME,
+			placement: 'priority',
+			onSelect: (editor) => {
+				if (!isScreenShareAvailable()) return
+				void startScreenShare(editor)
+			},
+			useAvailable: useScreenShareAvailable,
+		},
+	],
 	Overlay: ScreenShareSubscriptionLoop,
 	roomHooks: () => ({
 		afterShapeDelete: stopShareForDeletedShape,

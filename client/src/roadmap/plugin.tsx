@@ -28,4 +28,13 @@ export const roadmapPlugin: ClientPlugin = {
 		},
 	}),
 	ToolbarItems: RoadmapToolbarItem,
+	barItems: [
+		{
+			id: 'roadmap',
+			label: 'roadmap',
+			icon: 'tool-note',
+			placement: 'overflow',
+			onSelect: (editor) => createRoadmapShape(editor),
+		},
+	],
 }

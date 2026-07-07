@@ -30,5 +30,14 @@ export const iframePlugin: ClientPlugin = {
 		},
 	}),
 	ToolbarItems: DevServerToolbarItem,
+	barItems: [
+		{
+			id: 'dev-server',
+			label: 'dev server',
+			icon: 'tool-embed',
+			placement: 'overflow',
+			onSelect: (editor) => createDevServerShape(editor),
+		},
+	],
 	Overlay: PasteUrlHandler,
 }

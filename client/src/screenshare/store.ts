@@ -78,6 +78,11 @@ export function useScreenShareAvailable(): boolean {
 	return room != null && room.localParticipant.permissions?.canPublish !== false
 }
 
+/** Non-reactive twin of useScreenShareAvailable, for keyboard handlers. */
+export function isScreenShareAvailable(): boolean {
+	return room != null && room.localParticipant.permissions?.canPublish !== false
+}
+
 /** The registered LiveKit room, reactively (null while A/V is down). */
 export function useScreenShareRoom(): Room | null {
 	useSyncExternalStore(subscribeStore, getVersion)

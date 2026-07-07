@@ -3,6 +3,7 @@
  * delete-veto room hook.
  */
 import type { ClientPlugin } from '../kernel/plugin'
+import { openNewTerminal } from './openNewTerminal'
 import { TerminalShapeUtil } from './TerminalShapeUtil'
 import { TerminalToolbarItem } from './TerminalToolbarItem'
 
@@ -10,6 +11,16 @@ export const terminalPlugin: ClientPlugin = {
 	id: 'terminal',
 	shapeUtils: [TerminalShapeUtil],
 	ToolbarItems: TerminalToolbarItem,
+	barItems: [
+		{
+			id: 'terminal',
+			label: 'terminal',
+			accelerator: 'm',
+			icon: 'tool-frame',
+			placement: 'priority',
+			onSelect: openNewTerminal,
+		},
+	],
 	roomHooks: () => {
 		// Terminals are easy to delete by accident (one stray Backspace on a
 		// selected shape). Veto local deletions unless the user confirms. One
