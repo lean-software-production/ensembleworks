@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useEditor, useValue } from 'tldraw'
 import { getRoomId } from '../identity'
 import { wm } from '../theme'
-import { publishAvSnapshot } from './bridge'
+import { avSnapshotsEqual, publishAvSnapshot, type AvPanelSnapshot } from './bridge'
 import { LeashOverlay, useLeashes } from './leashes'
 import { FacesRail, type RailFaceData } from './rail'
 import { SessionPanel, type SessionParticipant } from './SessionPanel'
@@ -62,6 +62,8 @@ export function AvOverlay() {
 	// in the page-grouped roster above; surface them on their own so the room
 	// can see at a glance that it is being recorded.
 	const scribes = lk.peers.filter((peer) => peer.readOnly)
+	// The {id, name} projection SessionPanel and the bridge snapshot both take.
+	const scribeInfos = scribes.map((scribe) => ({ id: scribe.identity, name: scribe.name }))
 
 	// The faces shown in the rail: yourself (when your camera is on) followed by
 	// every camera-on teammate *on the page you're viewing*. Colours match each
@@ -142,10 +144,17 @@ export function AvOverlay() {
 	}
 
 	// Publish A/V state for the side panel (an App-level flex sibling outside
-	// tldraw context — see av/bridge.ts) on every relevant change. Scribes are
+	// tldraw context — see av/bridge.ts) on every real change. Scribes are
 	// LiveKit-only (no tldraw presence) so they're excluded from `peers`.
+	//
+	// No dep array: useLiveKitRoom re-maps `peers` on every render, so deps
+	// would never compare equal anyway. Instead the effect runs each render
+	// and bails via content comparison against the last published snapshot
+	// (actions excluded — see avSnapshotsEqual) so useAvSnapshot() consumers
+	// only re-render when A/V state actually changed.
+	const lastPublishedRef = useRef<AvPanelSnapshot | null>(null)
 	useEffect(() => {
-		publishAvSnapshot({
+		const snap: AvPanelSnapshot = {
 			status: lk.status,
 			micEnabled: lk.micEnabled,
 			camEnabled: lk.camEnabled,
@@ -160,7 +169,7 @@ export function AvOverlay() {
 					videoTrack: peer.videoTrack,
 					isSpeaking: peer.isSpeaking,
 				})),
-			scribes: scribes.map((scribe) => ({ id: scribe.identity, name: scribe.name })),
+			scribes: scribeInfos,
 			vm: pulse.vm,
 			latencies: pulse.latencies,
 			latencyHistory: pulse.history,
@@ -172,22 +181,11 @@ export function AvOverlay() {
 				onStandup: () => setStandupMode((s) => !s),
 				kick: kickParticipant,
 			},
-		})
-	}, [
-		lk.status,
-		lk.micEnabled,
-		lk.camEnabled,
-		standupMode,
-		lk.localVideoTrack,
-		lk.localSpeaking,
-		lk.peers,
-		scribes,
-		pulse.vm,
-		pulse.latencies,
-		pulse.history,
-		kickingId,
-		kickError,
-	])
+		}
+		if (lastPublishedRef.current && avSnapshotsEqual(lastPublishedRef.current, snap)) return
+		lastPublishedRef.current = snap
+		publishAvSnapshot(snap)
+	})
 
 	// Cleanup lives in its own mount-only effect so intermediate re-renders
 	// (the effect above fires often) don't flash the panel back to null
@@ -220,7 +218,7 @@ export function AvOverlay() {
 					vm={pulse.vm}
 					latencies={pulse.latencies}
 					latencyHistory={pulse.history}
-					scribes={scribes.map((scribe) => ({ id: scribe.identity, name: scribe.name }))}
+					scribes={scribeInfos}
 					onParticipantClick={(id) => editor.zoomToUser(id)}
 					onParticipantKick={(participant) => kickParticipant(participant.id, participant.name)}
 					onOpenTranscript={() => setTranscriptOpen(true)}

@@ -40,6 +40,54 @@ export interface AvPanelSnapshot {
 	}
 }
 
+/**
+ * Shallow content equality for snapshots — the publisher's dedupe gate.
+ * useLiveKitRoom returns a freshly-mapped `peers` array on every render, so
+ * AvOverlay's publish effect can't rely on reference-equal deps; instead it
+ * compares content and skips publishing when nothing real changed. Track and
+ * pulse fields compare by reference (livekit hands back stable track objects
+ * while the publication is unchanged; pulse sub-objects only change per tick).
+ * `actions` is deliberately excluded: the closures are recreated each render
+ * but always act on current state.
+ */
+export function avSnapshotsEqual(a: AvPanelSnapshot, b: AvPanelSnapshot): boolean {
+	if (
+		a.status !== b.status ||
+		a.micEnabled !== b.micEnabled ||
+		a.camEnabled !== b.camEnabled ||
+		a.standupMode !== b.standupMode ||
+		a.localVideoTrack !== b.localVideoTrack ||
+		a.localSpeaking !== b.localSpeaking ||
+		a.vm !== b.vm ||
+		a.latencies !== b.latencies ||
+		a.latencyHistory !== b.latencyHistory ||
+		a.kickingId !== b.kickingId ||
+		a.kickError !== b.kickError ||
+		a.peers.length !== b.peers.length ||
+		a.scribes.length !== b.scribes.length
+	) {
+		return false
+	}
+	for (let i = 0; i < a.peers.length; i++) {
+		const p = a.peers[i]
+		const q = b.peers[i]
+		if (
+			p.id !== q.id ||
+			p.name !== q.name ||
+			p.videoTrack !== q.videoTrack ||
+			p.isSpeaking !== q.isSpeaking
+		) {
+			return false
+		}
+	}
+	for (let i = 0; i < a.scribes.length; i++) {
+		if (a.scribes[i].id !== b.scribes[i].id || a.scribes[i].name !== b.scribes[i].name) {
+			return false
+		}
+	}
+	return true
+}
+
 // --- A/V snapshot store ------------------------------------------------
 
 let snapshot: AvPanelSnapshot | null = null
