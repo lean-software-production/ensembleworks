@@ -1,5 +1,13 @@
 # Augmented Session MVP — implementation plan
 
+> **As-built note (2026-07-07).** Historical plan record; the MVP shipped. Two
+> specifics named below have since changed (this doc is not rewritten): the
+> flat Canvas API is now the per-plugin `/api/<plugin>/…` layout, and the
+> **`bin/canvas` CLI is superseded by the `ensembleworks` CLI** (manifest-
+> rendered from `GET /api/tools`; `bin/canvas` retires at the #8 cutover). See
+> `unified-architecture-design.md` and the current `README.md` for the live
+> command surface.
+
 The tooling needed to run an augmented team session for real (see
 `/sessions/` on the website and `../README.md` for the session design):
 
