@@ -172,8 +172,15 @@ else
     TMPB="\$(asapp mktemp -d)"
     asapp bash -c "cd '\${SRC}' && git archive '\${TAG}' | tar -x -C '\${TMPB}'"
     A="\$(uname -m | sed 's/x86_64/linux-x64/;s/aarch64/linux-arm64/')"
+    # The client build must bake VITE_TLDRAW_LICENSE_KEY or it ships a
+    # blank-canvas bundle no boot-check catches (the CI client-dist path carries
+    # it as a secret + a fail-loud guard). On this source-build escape hatch the
+    # key lives in the app user's build.env, sourced here as the old build-on-box
+    # path did; a warn fires if it is absent so the footgun is loud, not silent.
+    asapp bash -c "test -f \"\${APP_HOME}/.config/ensembleworks/build.env\" || echo '    WARNING: build.env absent — client build will have no VITE_TLDRAW_LICENSE_KEY (blank canvas in prod)' >&2"
     asapp env PATH="/usr/local/bin:\${PATH}" EW_TARGET="bun-\${A}" bash -c "cd '\${TMPB}' && bun install --frozen-lockfile \
       && bun --cwd server run build:binary && bun --cwd cli run build:binary && bun --cwd transcriber run build:binary \
+      && { [ -f \"\${APP_HOME}/.config/ensembleworks/build.env\" ] && set -a && . \"\${APP_HOME}/.config/ensembleworks/build.env\" && set +a; true; } \
       && bun run --filter @ensembleworks/client build"
     asapp cp "\${TMPB}/server/dist/ensembleworks-server" "\${NEW}/ensembleworks-server"
     asapp cp "\${TMPB}/cli/dist/ensembleworks" "\${NEW}/ensembleworks"

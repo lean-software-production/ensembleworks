@@ -107,21 +107,21 @@ ew_poll_health() {
 # transcriber (--check) all boot on scratch dirs/ephemeral ports. Hermetic: fresh
 # DATA_DIR/CLIENT_DIST, no TERM_RUN_AS, no room.connect(). Fail-closed.
 ew_boot_check() {
-	local NEW="$1" run="${2:-}" ddir cdir port pid ok=1
+	local NEW="$1" run="${2:-}" ddir cdir port pid ok=1 log="/tmp/ew-bootcheck-$$"
 	ddir="$($run mktemp -d)"; cdir="$($run mktemp -d)"
 	# --- server sync: /api/health -> 200 ---
 	port="$(ew_free_port)"
 	$run env PORT="$port" DATA_DIR="$ddir" CLIENT_DIST="$cdir" \
-		"${NEW}/ensembleworks-server" sync >/tmp/ew-bootcheck-sync.log 2>&1 & pid=$!
+		"${NEW}/ensembleworks-server" sync >"${log}-sync.log" 2>&1 & pid=$!
 	ew_poll_health "http://127.0.0.1:$port/api/health" "$pid" || { echo "boot-check FAILED: server sync" >&2; ok=0; }
 	kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 	# --- server term: /api/terminal/health -> 200 (NO TERM_RUN_AS -> no tmux spawn) ---
 	port="$(ew_free_port)"
-	$run env PORT="$port" "${NEW}/ensembleworks-server" term >/tmp/ew-bootcheck-term.log 2>&1 & pid=$!
+	$run env PORT="$port" "${NEW}/ensembleworks-server" term >"${log}-term.log" 2>&1 & pid=$!
 	ew_poll_health "http://127.0.0.1:$port/api/terminal/health" "$pid" || { echo "boot-check FAILED: server term" >&2; ok=0; }
 	kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
 	# --- transcriber: addon links + config parses (arch integrity), exit 0 ---
-	$run timeout 15 "${NEW}/ensembleworks-transcriber" --check >/tmp/ew-bootcheck-scribe.log 2>&1 \
+	$run timeout 15 "${NEW}/ensembleworks-transcriber" --check >"${log}-scribe.log" 2>&1 \
 		|| { echo "boot-check FAILED: transcriber --check nonzero" >&2; ok=0; }
 	$run rm -rf "$ddir" "$cdir"
 	[ "$ok" = 1 ]
