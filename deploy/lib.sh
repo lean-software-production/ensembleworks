@@ -59,21 +59,27 @@ check_constraint() {
 # Honors DEPLOY_FETCH_DIR (a local dir of assets) so --dry-run / fake-release.sh
 # run with no `gh` and no network.
 ew_fetch_release() {
-	local ver="$1" dest="$2" slug="$3" run="${4:-}" arch a
+	local ver="$1" dest="$2" slug="$3" run="${4:-}" arch a f base
 	$run mkdir -p "$dest"
-	if [ -n "${DEPLOY_FETCH_DIR:-}" ]; then
-		$run cp "$DEPLOY_FETCH_DIR"/ensembleworks-* "$DEPLOY_FETCH_DIR"/client-dist.tar.gz "$dest"/
-	else
-		$run gh release download "v${ver}" -R "$slug" -D "$dest" --clobber \
-			-p 'ensembleworks-*' -p 'client-dist.tar.gz' -p 'ensembleworks-checksums.txt'
-	fi
-	$run bash -c "cd '$dest' && sha256sum -c ensembleworks-checksums.txt --ignore-missing"
 	arch="$($run uname -m)"
 	case "$arch" in
 	x86_64) a=linux-x64 ;;
 	aarch64) a=linux-arm64 ;;
 	*) echo "ew_fetch_release: unsupported arch '$arch'" >&2; return 1 ;;
 	esac
+	if [ -n "${DEPLOY_FETCH_DIR:-}" ]; then
+		$run cp "$DEPLOY_FETCH_DIR"/ensembleworks-* "$DEPLOY_FETCH_DIR"/client-dist.tar.gz "$dest"/
+	else
+		# Release assets are public (unauthenticated `curl`, same URL shape
+		# deploy/install.sh already uses) — no `gh` auth needed or wanted on
+		# the box. Only this arch's binaries; the checksums file lists every
+		# arch, and --ignore-missing below tolerates the ones we didn't fetch.
+		base="https://github.com/${slug}/releases/download/v${ver}"
+		for f in "ensembleworks-${a}" "ensembleworks-server-${a}" "ensembleworks-transcriber-${a}" client-dist.tar.gz ensembleworks-checksums.txt; do
+			$run curl -fsSL "${base}/${f}" -o "${dest}/${f}"
+		done
+	fi
+	$run bash -c "cd '$dest' && sha256sum -c ensembleworks-checksums.txt --ignore-missing"
 	$run mv "$dest/ensembleworks-server-$a" "$dest/ensembleworks-server"
 	$run mv "$dest/ensembleworks-transcriber-$a" "$dest/ensembleworks-transcriber"
 	$run mv "$dest/ensembleworks-$a" "$dest/ensembleworks"

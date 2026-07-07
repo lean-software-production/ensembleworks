@@ -6,11 +6,13 @@
 # Floors below reflect Debian 13 (trixie) shipping versions + our pinned installs.
 # bun is NOT required here: deploy.sh only fetches CI-precompiled `bun build
 # --compile` binaries (self-contained executables), it never runs bun on the box.
+# gh is NOT required either: ew_fetch_release uses plain `curl` against the
+# repo's public release-asset URLs (same shape deploy/install.sh uses) — the
+# assets are public, so no `gh auth login` bootstrapping is needed on the box.
 livekit-server  exact    1.13.1     livekit-server --version
 caddy           min      2.7.0      caddy version
 cloudflared     min      2024.1.0   cloudflared --version
 git             min      2.39.0     git --version
-gh              min      2.0.0      gh --version
 tmux            min      3.3        tmux -V
 python3         min      3.11       python3 --version
 cc              present  -          cc --version

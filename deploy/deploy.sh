@@ -15,7 +15,7 @@
 # Flags / env:
 #   --dry-run             local verify half only (no box): fetch to a scratch dir,
 #                         checksum, ew_boot_check, print the swap plan. No ssh/swap.
-#   DEPLOY_FETCH_DIR=dir  read release assets from a local dir instead of gh (tests/dry-run).
+#   DEPLOY_FETCH_DIR=dir  read release assets from a local dir instead of curl (tests/dry-run).
 #   EW_ALLOW_ERA_CROSS=1  permit the one sanctioned cross-era swap (cutover.sh sets it).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
@@ -149,7 +149,7 @@ sudo test -f "\${APP_HOME}/.config/ensembleworks/github-app.env" 2>/dev/null || 
 echo "    preflight ok"
 
 # ---- fetch the tag's artifacts into \${NEW} -----------------------------------
-# Was: git worktree + npm ci + npm run build. Now: gh release download + checksum
+# Was: git worktree + npm ci + npm run build. Now: public curl fetch + checksum
 # verify + client-dist extract (ew_fetch_release). .ew-verified marks a release dir
 # that already passed fetch+boot-check, so a rollback re-swap skips re-fetching.
 PREV="\$(asapp readlink -f "\${APP_HOME}/current" 2>/dev/null || true)"
