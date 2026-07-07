@@ -331,6 +331,13 @@ scp -q deploy/posture-era "${SSH_TARGET}:/tmp/ew-posture-era"
 scp -q deploy/tmux-ensembleworks.conf "${SSH_TARGET}:/tmp/ew-tmux.conf"
 scp -q deploy/ensembleworks-gh-token "${SSH_TARGET}:/tmp/ew-ensembleworks-gh-token"
 scp -q bin/gh-app-token.bash "${SSH_TARGET}:/tmp/ew-gh-app-token.bash"
+# Pre-clean the remote dir: `scp -r src host:dest` is non-idempotent — if dest
+# already exists (a prior deploy's copy survives in /tmp until reboot), scp nests
+# the tree as dest/src/ instead of refreshing dest/, so the seed step below reads
+# STALE top-level files and hard-fails on any path new to this release. Remove
+# first so every deploy re-copies a clean tree. (The other /tmp/ew-* are single
+# files — scp overwrites those idempotently; only this directory copy needs it.)
+ssh "$SSH_TARGET" 'rm -rf /tmp/ew-agent-home'
 scp -qr deploy/agent-home "${SSH_TARGET}:/tmp/ew-agent-home"
 ssh "$SSH_TARGET" "bash -s" <<<"$REMOTE"
 
