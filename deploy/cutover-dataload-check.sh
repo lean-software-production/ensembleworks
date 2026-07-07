@@ -41,7 +41,10 @@ if ${RUN} test -d "${work}/rooms"; then
     esac
   done < <(${RUN} bash -c "ls '${work}/rooms'/*.sqlite 2>/dev/null || true")
 fi
-kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+# `wait` on the just-killed server returns 143 (SIGTERM); under `set -e` that
+# would abort the script AFTER the check already passed. Guard it — the room
+# verdict is captured in $rc above and gated below.
+kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null || true
 ${RUN} rm -rf "$fetchdir" "$work" "$cdir"
 [ "$rc" = 0 ] || { echo "ABORT: data-load check failed — do NOT cut over" >&2; exit 1; }
 echo "==> data-load check passed: every room loads under v${VERSION}"
