@@ -207,10 +207,15 @@ export function CommandBar() {
 
 	const currentToolId = useValue('current tool', () => editor.getCurrentToolId(), [editor])
 
+	const rootRef = useRef<HTMLDivElement>(null)
 	const [overflowOpen, setOverflowOpen] = useState(false)
 	const [lastOverflowId, setLastOverflowId] = useState<string | null>(() =>
 		localStorage.getItem(LAST_OVERFLOW_KEY)
 	)
+	const recordLastOverflow = useCallback((id: string) => {
+		setLastOverflowId(id)
+		localStorage.setItem(LAST_OVERFLOW_KEY, id)
+	}, [])
 
 	const priorityItems = useMemo(() => collectBarItems(plugins, 'priority'), [])
 	const overflowItems = useMemo(() => collectBarItems(plugins, 'overflow'), [])
@@ -225,6 +230,8 @@ export function CommandBar() {
 		availabilityRef.current.set(id, available)
 		setAvailabilityVersion((v) => v + 1)
 	}, [])
+	// Priority items subscribe twice — a probe here plus PluginBarButton's own
+	// hook call. Intentional and harmless; the probe covers the keydown map.
 	const probeItems = useMemo(
 		() => [...priorityItems, ...overflowItems].filter((item) => item.useAvailable),
 		[priorityItems, overflowItems]
@@ -256,16 +263,32 @@ export function CommandBar() {
 			if (item.useAvailable && availabilityRef.current.get(item.id) === false) return
 			e.preventDefault()
 			item.onSelect(editor, helpers)
+			// Overflow items fired via accelerator get adopted next to ⋯ too.
+			if (item.placement === 'overflow') recordLastOverflow(item.id)
 		}
 
 		window.addEventListener('keydown', onKeyDown)
 		return () => window.removeEventListener('keydown', onKeyDown)
-	}, [editor, helpers, priorityItems, overflowItems])
+	}, [editor, helpers, priorityItems, overflowItems, recordLastOverflow])
 
-	function recordLastOverflow(id: string) {
-		setLastOverflowId(id)
-		localStorage.setItem(LAST_OVERFLOW_KEY, id)
-	}
+	// Dismiss the overflow menu on outside pointerdown or Escape. Escape is
+	// safe to handle even where the accelerator typing guards would apply.
+	useEffect(() => {
+		if (!overflowOpen) return
+		function onPointerDown(e: PointerEvent) {
+			const root = rootRef.current
+			if (root && e.target instanceof Node && !root.contains(e.target)) setOverflowOpen(false)
+		}
+		function onKeyDown(e: KeyboardEvent) {
+			if (e.key === 'Escape') setOverflowOpen(false)
+		}
+		window.addEventListener('pointerdown', onPointerDown)
+		window.addEventListener('keydown', onKeyDown)
+		return () => {
+			window.removeEventListener('pointerdown', onPointerDown)
+			window.removeEventListener('keydown', onKeyDown)
+		}
+	}, [overflowOpen])
 
 	const lastOverflowNativeTool =
 		lastOverflowId && (OVERFLOW_TOOLS as readonly string[]).includes(lastOverflowId)
@@ -277,6 +300,7 @@ export function CommandBar() {
 
 	return (
 		<div
+			ref={rootRef}
 			data-testid="ew-command-bar"
 			onPointerDown={stopEventPropagation}
 			style={{ position: 'relative', ...barStyle }}
@@ -350,7 +374,7 @@ export function CommandBar() {
 						return (
 							<BarButton
 								key={id}
-								id={id}
+								id={'overflow-' + id}
 								icon={tool.icon}
 								label={NATIVE_LABELS[id] ?? id}
 								accelerator={accel}
@@ -369,7 +393,7 @@ export function CommandBar() {
 						return (
 							<BarButton
 								key={item.id}
-								id={item.id}
+								id={'overflow-' + item.id}
 								icon={item.icon}
 								label={item.label}
 								accelerator={item.accelerator}
