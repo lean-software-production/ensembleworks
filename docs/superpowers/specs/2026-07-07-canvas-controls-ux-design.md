@@ -147,6 +147,14 @@ is **purely local** to the user, like panel width.
 - **While focused:** the terminal owns the keyboard; canvas tools in the bar
   are disabled except Present and zoom-independent actions; clicking a page
   section header exits focus first, then navigates.
+- **Aspect ratio is preserved — focus never resizes the terminal.** The
+  cols×rows grid belongs to the shared tmux PTY, which has one size for all
+  viewers, so a local focus must not reflow it. Focus scales the shape
+  uniformly to the largest fit in the canvas region, centred, and mattes the
+  leftover space (dimmed, like Present). Remote viewers see no change.
+  Implementation note: this is naturally "zoom the tldraw camera to the
+  shape's bounds and lock it" — uniform zoom preserves aspect by
+  construction, and the letterbox is just the surrounding canvas, dimmed.
 - **Mechanism is shape-agnostic** (a "focus this shape" chrome state), so
   cast tiles and iframes can adopt it later; v1 wires it for terminals only.
 
