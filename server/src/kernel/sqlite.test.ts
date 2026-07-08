@@ -11,6 +11,11 @@ import { DatabaseSync } from './sqlite.ts'
 const dir = mkdtempSync(path.join(os.tmpdir(), 'ew-sqlite-test-'))
 const db = new DatabaseSync(path.join(dir, 'test.sqlite'))
 
+// journal_mode: WAL is enabled at construction (persisted in the DB header),
+// which is what cut the sync server's fsync-heavy write amplification (#18).
+const journalRows = db.prepare('PRAGMA journal_mode').all() as { journal_mode: string }[]
+assert.equal(journalRows[0]?.journal_mode, 'wal', 'constructor enables WAL journal mode')
+
 // exec: multi-statement DDL, no result.
 db.exec('CREATE TABLE kv (k TEXT PRIMARY KEY, v TEXT NOT NULL)')
 
