@@ -1,31 +1,20 @@
 /**
- * File-viewer plugin: the sandboxed-iframe file shape and its toolbar tool.
+ * File-viewer plugin: the sandboxed-iframe file shape and its command-bar entry.
  */
-import type { Editor } from 'tldraw'
-import { TldrawUiMenuItem, useTools } from 'tldraw'
 import type { ClientPlugin } from '../kernel/plugin'
 import { createFileViewerShape } from './createFileViewerShape'
 import { FileViewerShapeUtil } from './FileViewerShapeUtil'
 
-function FileViewerToolbarItem() {
-	const tools = useTools()
-	if (!tools['file-viewer']) return null
-	return <TldrawUiMenuItem {...tools['file-viewer']} />
-}
-
 export const fileViewerPlugin: ClientPlugin = {
 	id: 'file-viewer',
 	shapeUtils: [FileViewerShapeUtil],
-	tools: (editor: Editor) => ({
-		'file-viewer': {
+	barItems: [
+		{
 			id: 'file-viewer',
+			label: 'file viewer',
 			icon: 'tool-text',
-			label: 'File viewer',
-			readonlyOk: false,
-			onSelect() {
-				createFileViewerShape(editor)
-			},
+			placement: 'overflow',
+			onSelect: (editor) => createFileViewerShape(editor),
 		},
-	}),
-	ToolbarItems: FileViewerToolbarItem,
+	],
 }
