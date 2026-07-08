@@ -15,8 +15,10 @@ import './theme.css'
 import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
 import { presentingAtom } from './chrome/present'
+import { getSettings, updateSettings } from './chrome/settings'
 import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
+import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
 import { presentStore } from './file-viewer/presentStore'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
 import { getIdentity, getRoomId } from './identity'
@@ -124,6 +126,30 @@ export function App() {
 		const onHide = () => flushConnectionLog()
 		window.addEventListener('pagehide', onHide)
 		return () => window.removeEventListener('pagehide', onHide)
+	}, [])
+
+	// Auto-fill the GitHub avatar handle from the Cloudflare Access identity —
+	// the first slice of the GitHub-keyed identity design (Milestone A, the
+	// id→login lookup it lists under future polish). Only behind Access:
+	// get-identity 404s off it (local dev / Codespaces) → no-op. Only fills when
+	// the field is empty, so a manual value (or a prior auto-fill) always wins.
+	// Fire-and-forget and bounded, so it never blocks canvas load. Writing
+	// settings.githubHandle re-renders the tile (useSettings), so the avatar
+	// lights up on its own — no other wiring needed.
+	useEffect(() => {
+		if (getSettings().githubHandle) return
+		let cancelled = false
+		void (async () => {
+			const gh = await fetchAccessGithubIdentity()
+			if (cancelled || !gh) return
+			const login = await resolveGithubLogin(gh.numericId)
+			if (cancelled || !login) return
+			// Re-check: the user may have typed a handle during the async gap.
+			if (!getSettings().githubHandle) updateSettings({ githubHandle: login })
+		})()
+		return () => {
+			cancelled = true
+		}
 	}, [])
 
 	const syncStatus = store.status === 'synced-remote' ? store.connectionStatus : store.status
