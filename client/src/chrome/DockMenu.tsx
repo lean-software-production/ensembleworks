@@ -5,11 +5,7 @@
  */
 import { wm } from '../theme'
 import { popoverBoxStyle, popoverPositionStyle } from './popover'
-import { updateSettings, type DockEdge } from './settings'
-
-// Dock-to menu order, matching the spec §4 wording verbatim ("Dock to:
-// bottom · left · top · right").
-const DOCK_EDGE_OPTIONS: readonly DockEdge[] = ['bottom', 'left', 'top', 'right']
+import { DOCK_EDGE_OPTIONS, updateSettings, type DockEdge } from './settings'
 
 export function DockMenu({ dockEdge, onClose }: { dockEdge: DockEdge; onClose: () => void }) {
 	return (

@@ -16,6 +16,12 @@
  */
 import { atom, useValue, type Editor } from 'tldraw'
 
+// tldraw's TLInstancePresence type isn't re-exported from the 'tldraw'
+// package root (only reachable via @tldraw/tlschema, not a direct
+// dependency here) — derive it from Editor.getCollaborators()'s own return
+// type instead of importing across that boundary.
+type Collaborator = ReturnType<Editor['getCollaborators']>[number]
+
 /** Local atom: is *this* client presenting? Read by App.tsx's getUserPresence
  * so flipping it republishes our presence meta (see App.tsx's comment). */
 export const presentingAtom = atom('ew presenting', false)
@@ -31,6 +37,17 @@ export interface Presenter {
 }
 
 /**
+ * Shared predicate: does this collaborator's presence meta say they're
+ * presenting? Both `usePresenter` (scanning for who) and `tryStartPresenting`
+ * (checking whether anyone already is) need exactly this check — kept in one
+ * place so the `meta.presenting === true` shape is only asserted once.
+ */
+function isPresentingCollaborator(c: Collaborator): boolean {
+	const meta = c.meta as { presenting?: unknown } | undefined
+	return meta?.presenting === true
+}
+
+/**
  * The current presenter among collaborators (never self — this only scans
  * peer presence), or null if nobody else is presenting. Reactive: recomputes
  * whenever any collaborator's presence changes.
@@ -39,10 +56,7 @@ export function usePresenter(editor: Editor): Presenter | null {
 	return useValue(
 		'ew presenter',
 		() => {
-			const presenter = editor.getCollaborators().find((c) => {
-				const meta = c.meta as { presenting?: unknown } | undefined
-				return meta?.presenting === true
-			})
+			const presenter = editor.getCollaborators().find(isPresentingCollaborator)
 			if (!presenter) return null
 			return { userId: presenter.userId, userName: presenter.userName?.trim() || 'Anonymous' }
 		},
@@ -64,10 +78,7 @@ export function usePresenter(editor: Editor): Presenter | null {
  * Returns whether presenting actually started.
  */
 export function tryStartPresenting(editor: Editor): boolean {
-	const someoneElse = editor.getCollaborators().some((c) => {
-		const meta = c.meta as { presenting?: unknown } | undefined
-		return meta?.presenting === true
-	})
+	const someoneElse = editor.getCollaborators().some(isPresentingCollaborator)
 	if (someoneElse) return false
 	presentingAtom.set(true)
 	return true

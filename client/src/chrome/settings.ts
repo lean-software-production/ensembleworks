@@ -18,6 +18,14 @@ export type DockEdge = 'bottom' | 'left' | 'right' | 'top'
 
 const DOCK_EDGES: readonly DockEdge[] = ['bottom', 'left', 'right', 'top']
 
+/** Display order for "Dock to" pickers (spec §4 wording verbatim: "Dock to:
+ * bottom · left · top · right") — shared by the bar's right-click DockMenu
+ * and the panel footer's settings row so the two pickers can't drift apart.
+ * Deliberately a different order than `DOCK_EDGES` above (validation set,
+ * unordered in effect) — that one just needs membership, this one needs the
+ * spec's exact reading order. */
+export const DOCK_EDGE_OPTIONS: readonly DockEdge[] = ['bottom', 'left', 'top', 'right']
+
 export interface EnsembleSettings {
 	githubHandle: string
 	dockEdge: DockEdge

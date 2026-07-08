@@ -13,12 +13,7 @@
  */
 import { useState, type ReactNode } from 'react'
 import { wm } from '../theme'
-import { updateSettings, useSettings, type DockEdge } from './settings'
-
-// Same order as the command bar's right-click "Dock to" popover (spec §4
-// wording: "bottom · left · top · right") — the footer row is the
-// discoverable path to the same setting, right-click stays the fast path.
-const DOCK_EDGE_OPTIONS: readonly DockEdge[] = ['bottom', 'left', 'top', 'right']
+import { DOCK_EDGE_OPTIONS, updateSettings, useSettings } from './settings'
 
 type OpenSection = 'settings' | 'help' | 'about' | null
 

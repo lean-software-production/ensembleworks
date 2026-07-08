@@ -29,6 +29,11 @@ const DEFAULT_LAYOUT: PanelLayout = {
 const MIN_WIDTH = 180
 const MAX_WIDTH_CAP = 720
 
+// Collapsed-rail width — consumed by SidePanel's own rail render AND by
+// CommandBar's right-dock offset (`panelRightOffset`), so the two stay in
+// lockstep instead of two hand-copied `32`s drifting apart.
+export const RAIL_WIDTH = 32
+
 // Below this dragged width the grip collapses the panel to the rail (spec §3
 // "Panel states": "drag below ~140px (snaps)").
 const COLLAPSE_THRESHOLD = 140

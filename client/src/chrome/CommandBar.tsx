@@ -54,7 +54,7 @@ import {
 import { DockMenu } from './DockMenu'
 import { EnsembleMainMenu } from './MainMenu'
 import { OverflowMenu } from './OverflowMenu'
-import { usePanelLayout } from './panelLayout'
+import { RAIL_WIDTH, usePanelLayout } from './panelLayout'
 import { presentingAtom, tryStartPresenting, useIsPresenting, usePresenter } from './present'
 import { PresenterStrip, ViewerStrip } from './presentStrips'
 import { useSettings, type DockEdge } from './settings'
@@ -84,7 +84,17 @@ function dockWrapperStyle(dockEdge: DockEdge, panelRightOffset: number): CSSProp
 	const base: CSSProperties = { position: 'fixed', zIndex: 300, pointerEvents: 'auto' }
 	switch (dockEdge) {
 		case 'top':
-			return { ...base, top: 8, left: '50%', transform: 'translateX(-50%)' }
+			// Centered on the CANVAS region, not the window: the side panel
+			// eats `panelRightOffset` px off the right, so the canvas region's
+			// midpoint sits `panelRightOffset / 2` left of the window's — same
+			// compensation the 'right' case makes via its own offset, just
+			// expressed as a horizontal shift instead of an edge inset.
+			return {
+				...base,
+				top: 8,
+				left: `calc(50% - ${panelRightOffset / 2}px)`,
+				transform: 'translateX(-50%)',
+			}
 		case 'left':
 			return { ...base, left: 8, top: '50%', transform: 'translateY(-50%)' }
 		case 'right':
@@ -187,7 +197,7 @@ export function CommandBar() {
 	// collapsed, else its stored width) + 8px margin — see dockWrapperStyle's
 	// doc comment above.
 	const panelLayout = usePanelLayout()
-	const panelRightOffset = panelLayout.collapsed ? 32 : panelLayout.width
+	const panelRightOffset = panelLayout.collapsed ? RAIL_WIDTH : panelLayout.width
 
 	const [dockMenuOpen, setDockMenuOpen] = useState(false)
 	const onBarContextMenu = useCallback((e: MouseEvent) => {
@@ -274,14 +284,14 @@ export function CommandBar() {
 					presentingAtom.set(false)
 					return
 				}
-				if (presenter && !optedOut) {
+				if (presenter?.userId && !optedOut) {
 					e.preventDefault()
 					stopFollowing()
 					return
 				}
 				return
 			}
-			if (e.key.toLowerCase() === 'p' && !isPresenting && !presenter) {
+			if (e.key.toLowerCase() === 'p' && !isPresenting && !presenter?.userId) {
 				e.preventDefault()
 				// tryStartPresenting re-checks collaborators imperatively: the
 				// `presenter` in this closure is render-fresh at best, so two
@@ -303,7 +313,11 @@ export function CommandBar() {
 
 		window.addEventListener('keydown', onKeyDown)
 		return () => window.removeEventListener('keydown', onKeyDown)
-	}, [editor, helpers, priorityItems, overflowItems, recordLastOverflow, isPresenting, presenter, optedOut, stopFollowing])
+		// presenter?.userId, not `presenter`: the handler only needs
+		// existence/identity (checked above via presenter?.userId), so
+		// depending on the whole object would recreate this listener on every
+		// presence tick that merely touches unrelated fields (e.g. userName).
+	}, [editor, helpers, priorityItems, overflowItems, recordLastOverflow, isPresenting, presenter?.userId, optedOut, stopFollowing])
 
 	// Dismiss the overflow menu on outside pointerdown or Escape. Escape is
 	// safe to handle even where the accelerator typing guards would apply.

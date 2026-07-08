@@ -29,6 +29,7 @@ import { wm } from '../theme'
 import {
 	getPanelLayout,
 	panelDragAction,
+	RAIL_WIDTH,
 	setPanelCollapsed,
 	setPanelWidth,
 	togglePanelCollapsed,
@@ -50,8 +51,6 @@ const scribeBlinkKeyframes =
 // spec's "wide = face-to-face" ceiling (past ~40% of window — leave headroom
 // above that before the hard clamp bites).
 const MAX_WIDTH_FRACTION = 0.6
-
-const RAIL_WIDTH = 32
 
 export function SidePanel({ editor }: { editor: Editor }) {
 	const snap = useAvSnapshot()
