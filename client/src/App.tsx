@@ -14,6 +14,7 @@ import 'tldraw/tldraw.css'
 import './theme.css'
 import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
+import { presentingAtom } from './chrome/present'
 import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
 import { presentStore } from './file-viewer/presentStore'
@@ -76,7 +77,11 @@ export function App() {
 		// stamping, proximity-ordered reads). Reactive: recomputes when our own
 		// selection/cursor/camera/page change or when any shape changes — scoped
 		// to shape records (see shapeQuery above) so other peers' cursor movement
-		// doesn't trigger it.
+		// doesn't trigger it. Also publishes `presenting` (chrome/present.ts,
+		// spec §5 "Present"): reading presentingAtom inside this reactive
+		// derivation means flipping the atom republishes presence too — same
+		// mechanism as the stamp's reactive inputs, just a second one. Riding
+		// this existing channel means Present needs no server changes.
 		getUserPresence(store, user) {
 			const defaults = getDefaultUserPresence(store, user)
 			if (!defaults) return null
@@ -92,12 +97,21 @@ export function App() {
 				screenBounds: defaults.screenBounds ?? null,
 				selectedShapeIds: defaults.selectedShapeIds,
 			})
-			// Merge the file-viewer presenter token next to the spatial stamp.
-			// presentStore reads a tldraw atom, so this read is tracked by the
-			// presence derivation: toggling Present or scrolling while idle
-			// re-emits presence. Null when not presenting (a valid JsonValue —
-			// syncs, and followers treat "no token" and "null token" alike).
-			return { ...defaults, meta: { stamp, fileViewerPresent: presentStore.get() } }
+			// Merge two presenter tokens next to the spatial stamp — both ride
+			// this presence blob so neither needs server changes:
+			//   fileViewerPresent (file-viewer/presentStore): shapeId + scroll
+			//     fraction the file-viewer follow uses. Null when not presenting
+			//     (a valid JsonValue — followers treat "no token" and "null
+			//     token" alike).
+			//   presenting (chrome/present.ts, canvas-controls spec §5): a bare
+			//     boolean for the canvas Present mode's viewer-follow.
+			// Both read tldraw atoms inside this reactive derivation, so flipping
+			// either (or scrolling while idle) re-emits presence — same tracking
+			// mechanism as the stamp's inputs.
+			return {
+				...defaults,
+				meta: { stamp, fileViewerPresent: presentStore.get(), presenting: presentingAtom.get() },
+			}
 		},
 	})
 
