@@ -216,6 +216,20 @@ Each phase shippable alone:
    editing was never absorbed (only colour) — startup prompt remains.*
 3. **Behaviours** — resize/collapse/f2f reflow, Present broadcast + follow,
    dock-edge vertical variant.
+   *Shipped 2026-07-08 (branch canvas-controls-ux). As-built deltas: two-up
+   reflow triggers at a fixed 480px panel width (not ~40% of window) with two
+   discrete tile sizes; collapse snap has a 140/180 hysteresis band and
+   restores the pre-drag width; width capped at 720px / 60% of window;
+   Present rides presence meta (zero server changes; expiry self-heals
+   disconnects) — the render-lag double-present race is guarded client-side
+   and the residual network race is surfaced ("also presenting" notice), not
+   prevented; viewer canvas dim skipped (tldraw's follow border signals);
+   presenter/viewer strips ignore dockEdge (always bottom-center); P/Esc
+   share the bar accelerator guards so Esc won't end presenting from inside
+   a text field; viewer opt-out is per-presenter-session and not durable
+   across a presenter presence blip; pan-away ends the follow and the strip
+   label honestly flips to "⟨name⟩ is presenting"; dock menu includes
+   'bottom'; DefaultZoomMenu dropdown direction stays radix-managed.*
 4. **Focus view** (§7) — independent of the others; can ship alongside any
    phase since it only needs the terminal plugin + a chrome state.
 
