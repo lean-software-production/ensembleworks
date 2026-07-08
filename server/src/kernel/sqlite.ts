@@ -24,6 +24,14 @@ export class DatabaseSync {
 
   constructor(filename: string) {
     this.#db = new Database(filename)
+    // WAL mode replaces rollback-journal's create→fsync→delete cycle per write
+    // transaction with append-to-WAL + periodic checkpoint, and synchronous=NORMAL
+    // drops an fsync per commit (durability weakens only on OS crash, not app
+    // crash). Under concurrent multi-user canvas writes this cut the sync
+    // server's fsync-heavy disk I/O that stalled it into D-state (see #18).
+    // Note: WAL adds -wal/-shm sidecar files next to the DB.
+    this.#db.exec('PRAGMA journal_mode = WAL')
+    this.#db.exec('PRAGMA synchronous = NORMAL')
   }
 
   exec(sql: string): void {
