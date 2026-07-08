@@ -9,6 +9,7 @@
 import { TLComponents, TLUiOverrides } from 'tldraw'
 import { CommandBar } from './chrome/CommandBar'
 import { ContextualStylePanel } from './chrome/ContextualStylePanel'
+import { FocusOverlay } from './chrome/FocusOverlay'
 import { collectUiSlots } from './kernel/plugin'
 import { plugins } from './plugins'
 
@@ -27,11 +28,25 @@ export const uiOverrides: TLUiOverrides = {
 	},
 }
 
+// InFrontOfTheCanvas takes one component, so the contextual style panel
+// (spec §6) and the focus-view overlay (spec §7) — two independent chrome
+// concerns that both need to render inside tldraw's canvas-region layer —
+// share the slot via a small fragment wrapper rather than one merging into
+// the other's file.
+function InFrontOfTheCanvas() {
+	return (
+		<>
+			<ContextualStylePanel />
+			<FocusOverlay />
+		</>
+	)
+}
+
 export const components: TLComponents = {
 	Toolbar: CommandBar,
 	StylePanel: null,
 	MenuPanel: null,
 	NavigationPanel: null,
-	InFrontOfTheCanvas: ContextualStylePanel,
+	InFrontOfTheCanvas,
 	...collectUiSlots(plugins),
 }
