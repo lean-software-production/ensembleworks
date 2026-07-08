@@ -209,7 +209,7 @@ export function SidePanel({ editor }: { editor: Editor }) {
 			</div>
 
 			<div style={{ padding: '0 12px 12px' }}>
-				<PanelPages editor={editor} />
+				<PanelPages editor={editor} width={layout.width} />
 			</div>
 
 			{snap && snap.scribes.length > 0 && (

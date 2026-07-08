@@ -32,7 +32,17 @@ export interface PanelTileParticipant {
 	isLocal: boolean
 }
 
-const TILE_HEIGHT = 84
+// Two size steps only (canvas-controls spec §3 "Panel states": "Wide =
+// face-to-face: … tiles reflow two-up per section and grow") — no continuous
+// clamp. PanelPages.tsx decides which step applies (by panel width) and
+// passes `twoUp` down; kept as plain named constants here rather than duplicated.
+const TILE_HEIGHT_DEFAULT = 84
+const TILE_HEIGHT_TWO_UP = 150
+
+// Initials font size grows a step alongside the tile so it doesn't look lost
+// in the taller two-up tile.
+const INITIALS_FONT_DEFAULT = 26
+const INITIALS_FONT_TWO_UP = 40
 
 // Exported so the collapsed rail's avatar dots (SidePanel.tsx) can share the
 // same initial-derivation as the full tile.
@@ -47,12 +57,18 @@ export function PanelTile({
 	editor,
 	participant,
 	snap,
+	twoUp = false,
 }: {
 	editor: Editor
 	participant: PanelTileParticipant
 	snap: AvPanelSnapshot | null
+	// Set by PanelPages.tsx once the panel is wide enough for its two-up grid
+	// (spec §3 "wide = face-to-face"): grows the tile and its initials a step.
+	twoUp?: boolean
 }) {
 	const { rawId, prefixedId, name, color, isLocal } = participant
+	const tileHeight = twoUp ? TILE_HEIGHT_TWO_UP : TILE_HEIGHT_DEFAULT
+	const initialsFontSize = twoUp ? INITIALS_FONT_TWO_UP : INITIALS_FONT_DEFAULT
 
 	const peer = !isLocal ? (snap?.peers.find((p) => p.id === rawId) ?? null) : null
 	const videoTrack: LocalTrack | RemoteTrack | null = isLocal
@@ -115,7 +131,7 @@ export function PanelTile({
 			}}
 			style={{
 				position: 'relative',
-				height: TILE_HEIGHT,
+				height: tileHeight,
 				overflow: 'hidden',
 				borderRadius: 4,
 				borderLeft: `4px solid ${color}`,
@@ -145,7 +161,7 @@ export function PanelTile({
 							placeItems: 'center',
 							background: `${color}22`,
 							color,
-							fontSize: 26,
+							fontSize: initialsFontSize,
 							fontWeight: 700,
 							fontFamily: wm.sans,
 						}}

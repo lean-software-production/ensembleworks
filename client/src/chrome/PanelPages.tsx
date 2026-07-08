@@ -23,8 +23,17 @@ interface PageSectionData {
 	participants: PanelTileParticipant[]
 }
 
-export function PanelPages({ editor }: { editor: Editor }) {
+// Spec §3 "Panel states": "Wide = face-to-face: past ~40% of window, tiles
+// reflow two-up per section and grow." The panel itself doesn't know the
+// window width fraction — SidePanel.tsx already resolves that against the
+// resize-grip clamp (MAX_WIDTH_FRACTION) — so this is a plain pixel
+// threshold on the width SidePanel hands down as a prop (kept a prop rather
+// than a second store read, per the plan, so the reflow stays obvious/testable).
+export const TWO_UP_MIN_WIDTH = 480
+
+export function PanelPages({ editor, width }: { editor: Editor; width: number }) {
 	const snap = useAvSnapshot()
+	const twoUp = width >= TWO_UP_MIN_WIDTH
 
 	const { currentPageId, sections, unknownParticipants } = useValue(
 		'panel-page-sections',
@@ -88,14 +97,25 @@ export function PanelPages({ editor }: { editor: Editor }) {
 					isCurrent={section.id === currentPageId}
 					isOnlyPage={sections.length === 1}
 					snap={snap}
+					twoUp={twoUp}
 				/>
 			))}
 			{unknownParticipants.length > 0 && (
-				<UnknownPageSection editor={editor} participants={unknownParticipants} snap={snap} />
+				<UnknownPageSection editor={editor} participants={unknownParticipants} snap={snap} twoUp={twoUp} />
 			)}
 			<NewPageButton editor={editor} />
 		</div>
 	)
+}
+
+// The tile-list container: single column below TWO_UP_MIN_WIDTH, a 2-column
+// grid at/above it (spec §3 "tiles reflow two-up per section and grow").
+// Shared by every section (including the unknown-page catch-all) so the
+// reflow is identical everywhere tiles render.
+function tileListStyle(twoUp: boolean): CSSProperties {
+	return twoUp
+		? { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 6 }
+		: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }
 }
 
 // Catch-all for participants whose presence points at a page we can't find:
@@ -105,10 +125,12 @@ function UnknownPageSection({
 	editor,
 	participants,
 	snap,
+	twoUp,
 }: {
 	editor: Editor
 	participants: PanelTileParticipant[]
 	snap: ReturnType<typeof useAvSnapshot>
+	twoUp: boolean
 }) {
 	return (
 		<div data-roster-page="Unknown page">
@@ -129,9 +151,9 @@ function UnknownPageSection({
 					{participants.length}
 				</span>
 			</div>
-			<div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+			<div style={tileListStyle(twoUp)}>
 				{participants.map((participant) => (
-					<PanelTile key={participant.rawId} editor={editor} participant={participant} snap={snap} />
+					<PanelTile key={participant.rawId} editor={editor} participant={participant} snap={snap} twoUp={twoUp} />
 				))}
 			</div>
 		</div>
@@ -144,24 +166,27 @@ function PageSectionView({
 	isCurrent,
 	isOnlyPage,
 	snap,
+	twoUp,
 }: {
 	editor: Editor
 	section: PageSectionData
 	isCurrent: boolean
 	isOnlyPage: boolean
 	snap: ReturnType<typeof useAvSnapshot>
+	twoUp: boolean
 }) {
 	return (
 		<div>
 			<SectionHeader editor={editor} section={section} isCurrent={isCurrent} isOnlyPage={isOnlyPage} />
 			{section.participants.length > 0 && (
-				<div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }}>
+				<div style={tileListStyle(twoUp)}>
 					{section.participants.map((participant) => (
 						<PanelTile
 							key={participant.rawId}
 							editor={editor}
 							participant={participant}
 							snap={snap}
+							twoUp={twoUp}
 						/>
 					))}
 				</div>
