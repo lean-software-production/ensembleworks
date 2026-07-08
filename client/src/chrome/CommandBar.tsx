@@ -31,7 +31,7 @@ import { plugins } from '../plugins'
 import { wm } from '../theme'
 import { displayKeyForKbd, splitAccelLabel } from './accel'
 import { EnsembleMainMenu } from './MainMenu'
-import { presentingAtom, useIsPresenting, usePresenter } from './present'
+import { presentingAtom, tryStartPresenting, useIsPresenting, usePresenter, type Presenter } from './present'
 
 // Native tldraw tools shown as first-class verbs, in bar order (spec §4).
 const PRIORITY_TOOLS = ['select', 'note', 'text', 'frame'] as const
@@ -284,14 +284,23 @@ function AccentButton({
 // PRESENTING (+ rec dot)"): replaces the ENTIRE bar. Laser/note reuse the
 // native tools (same NativeToolButton the normal bar uses for its priority
 // tools) so arming them behaves identically to picking them off the full bar.
+//
+// `otherPresenter`: tryStartPresenting (present.ts) closes the render-lag
+// simultaneous-press race, but two P presses can still cross on the network —
+// both clients present, neither's guard saw the other. When that happens a
+// collaborator's presenting meta shows up WHILE we present; surface it here
+// so the collision is visible and one of them can END, rather than each
+// silently assuming they have the room.
 function PresenterStrip({
 	tools,
 	currentToolId,
 	showRecDot,
+	otherPresenter,
 }: {
 	tools: ReturnType<typeof useTools>
 	currentToolId: string
 	showRecDot: boolean
+	otherPresenter: Presenter | null
 }) {
 	const laserTool = tools['laser']
 	const noteTool = tools['note']
@@ -313,22 +322,52 @@ function PresenterStrip({
 				onClick={() => presentingAtom.set(false)}
 			/>
 			{showRecDot && <RecDot />}
+			{otherPresenter && (
+				<span
+					data-testid="ew-bar-also-presenting"
+					style={{ fontSize: 11, color: wm.warn, padding: '0 8px', whiteSpace: 'nowrap' }}
+				>
+					{otherPresenter.userName} is also presenting
+				</span>
+			)}
 		</div>
 	)
 }
 
 // Viewer mode (spec §5 "Viewers: … bar becomes 'Following ⟨name⟩ · STOP
 // FOLLOWING'. Esc or STOP opts out locally (chrome stays minimal until
-// presenting ends or they exit)."): once opted out the STOP button disappears
-// (there's nothing left to stop) but the strip itself stays — the bar does
-// NOT return to its normal contents until the presenter's meta clears.
-function ViewerStrip({ presenterName, optedOut, onStop }: { presenterName: string; optedOut: boolean; onStop: () => void }) {
+// presenting ends or they exit)."): once no longer following, the STOP button
+// disappears (there's nothing left to stop) but the strip itself stays — the
+// bar does NOT return to its normal contents until the presenter's meta clears.
+//
+// "Following" is derived from the editor's ACTUAL follow state
+// (getInstanceState().followingUserId), not from our opt-out flag: tldraw
+// itself stops following on any user pan/zoom, and a label driven by optedOut
+// alone would keep claiming "Following" after such a manual pan-away. The
+// opt-out flag still exists, but only up in CommandBar, solely to keep Esc
+// from firing stopFollowing twice — it plays no part in what this strip shows.
+// (A pan-away deliberately does NOT set optedOut; the auto-follow effect only
+// fires on presenter-id change, so nothing yanks the viewport back either way.)
+function ViewerStrip({
+	editor,
+	presenter,
+	onStop,
+}: {
+	editor: ReturnType<typeof useEditor>
+	presenter: Presenter
+	onStop: () => void
+}) {
+	const isFollowing = useValue(
+		'ew following presenter',
+		() => editor.getInstanceState().followingUserId === presenter.userId,
+		[editor, presenter.userId]
+	)
 	return (
 		<div data-testid="ew-command-bar" onPointerDown={stopEventPropagation} style={barStyle}>
 			<span style={{ fontSize: 11, color: wm.inkMuted, padding: '0 8px', whiteSpace: 'nowrap' }}>
-				{optedOut ? `${presenterName} is presenting` : `Following ${presenterName}`}
+				{isFollowing ? `Following ${presenter.userName}` : `${presenter.userName} is presenting`}
 			</span>
-			{!optedOut && (
+			{isFollowing && (
 				<AccentButton
 					id="stop-following"
 					icon="cross-circle"
@@ -467,7 +506,11 @@ export function CommandBar() {
 			}
 			if (e.key.toLowerCase() === 'p' && !isPresenting && !presenter) {
 				e.preventDefault()
-				presentingAtom.set(true)
+				// tryStartPresenting re-checks collaborators imperatively: the
+				// `presenter` in this closure is render-fresh at best, so two
+				// people pressing P near-simultaneously would both pass the
+				// guard above (see present.ts's doc comment).
+				tryStartPresenting(editor)
 				return
 			}
 
@@ -507,11 +550,20 @@ export function CommandBar() {
 	// Present mode replaces the ENTIRE bar (spec §5) — these two branches
 	// return BEFORE the normal bar's remaining derived state/JSX below, which
 	// is fine: every hook this component uses has already run above them.
+	// While WE present, `presenter` (never self) being non-null means a
+	// network-race second presenter — passed through for the collision notice.
 	if (isPresenting) {
-		return <PresenterStrip tools={tools} currentToolId={currentToolId} showRecDot={!!snap && snap.scribes.length > 0} />
+		return (
+			<PresenterStrip
+				tools={tools}
+				currentToolId={currentToolId}
+				showRecDot={!!snap && snap.scribes.length > 0}
+				otherPresenter={presenter}
+			/>
+		)
 	}
 	if (presenter) {
-		return <ViewerStrip presenterName={presenter.userName} optedOut={optedOut} onStop={stopFollowing} />
+		return <ViewerStrip editor={editor} presenter={presenter} onStop={stopFollowing} />
 	}
 
 	const lastOverflowNativeTool =
@@ -577,7 +629,11 @@ export function CommandBar() {
 				accelerator="p"
 				accentColor={wm.ok}
 				title="Present (P)"
-				onClick={() => presentingAtom.set(true)}
+				// tryStartPresenting, not presentingAtom.set(true): the button is
+				// hidden while someone else presents, but render state lags
+				// presence — two near-simultaneous clicks would otherwise both
+				// start presenting (see present.ts's doc comment).
+				onClick={() => tryStartPresenting(editor)}
 			/>
 
 			<div style={dividerStyle} />

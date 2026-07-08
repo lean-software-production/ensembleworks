@@ -49,3 +49,26 @@ export function usePresenter(editor: Editor): Presenter | null {
 		[editor],
 	)
 }
+
+/**
+ * Start presenting UNLESS someone else already is. This is the imperative
+ * guard for the Present button/accelerator: render-derived state (the hidden
+ * button, the keydown closure's `presenter`) lags presence updates, so two
+ * people pressing P inside that window would BOTH flip their atoms and never
+ * learn about each other. Scanning collaborators at click-time closes the
+ * render-lag half of that race; the residual network-propagation race (both
+ * presses land before either presence update arrives) can't be closed
+ * client-side and is surfaced instead — PresenterStrip shows "⟨name⟩ is also
+ * presenting" whenever a second presenter's meta appears.
+ *
+ * Returns whether presenting actually started.
+ */
+export function tryStartPresenting(editor: Editor): boolean {
+	const someoneElse = editor.getCollaborators().some((c) => {
+		const meta = c.meta as { presenting?: unknown } | undefined
+		return meta?.presenting === true
+	})
+	if (someoneElse) return false
+	presentingAtom.set(true)
+	return true
+}
