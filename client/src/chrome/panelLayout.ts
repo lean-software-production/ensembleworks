@@ -29,6 +29,10 @@ const DEFAULT_LAYOUT: PanelLayout = {
 const MIN_WIDTH = 180
 const MAX_WIDTH_CAP = 720
 
+// Below this dragged width the grip collapses the panel to the rail (spec §3
+// "Panel states": "drag below ~140px (snaps)").
+const COLLAPSE_THRESHOLD = 140
+
 /**
  * Clamp a candidate panel width to [180, min(720, maxWidth)]. Pure — no
  * window/localStorage access — so it can be shared by the setter, the
@@ -37,6 +41,25 @@ const MAX_WIDTH_CAP = 720
 export function clampPanelWidth(width: number, maxWidth: number = MAX_WIDTH_CAP): number {
 	const max = Math.min(MAX_WIDTH_CAP, maxWidth)
 	return Math.min(Math.max(width, MIN_WIDTH), max)
+}
+
+/**
+ * What a single pointermove of the resize grip should do for a dragged width:
+ *
+ * - `< 140`     → 'collapse' — snap to the rail (setPanelCollapsed(true) only)
+ * - `140 – 179` → 'ignore'   — dead band; deliberately NO store write, because
+ *                  a setPanelWidth here would let clampPanelWidth's 180 floor
+ *                  overwrite the remembered width on the way into a collapse
+ *                  (drag from 400px into the rail must re-expand to 400, not 180)
+ * - `≥ 180`     → 'resize'   — write the width (and re-expand if collapsed)
+ *
+ * Pure, so the collapse/dead-band/resize hysteresis is pinned by bare-bun
+ * tests instead of living implicitly in the grip's event handler.
+ */
+export function panelDragAction(width: number): 'collapse' | 'resize' | 'ignore' {
+	if (width < COLLAPSE_THRESHOLD) return 'collapse'
+	if (width < MIN_WIDTH) return 'ignore'
+	return 'resize'
 }
 
 /**

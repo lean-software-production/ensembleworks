@@ -14,7 +14,7 @@
  * grip on the panel's left edge drags the width, snapping to a 32px
  * collapsed rail below ~140px.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { rawUserId } from '@ensembleworks/contracts'
 import { type Editor, useValue } from 'tldraw'
 import { useAvSnapshot, type AvPanelSnapshot } from '../av/bridge'
@@ -23,6 +23,8 @@ import { TranscriptModal } from '../av/TranscriptModal'
 import { getRoomId } from '../identity'
 import { wm } from '../theme'
 import {
+	getPanelLayout,
+	panelDragAction,
 	setPanelCollapsed,
 	setPanelWidth,
 	togglePanelCollapsed,
@@ -37,12 +39,6 @@ import { initialsFor, type PanelTileParticipant } from './PanelTile'
 // scoped <style> tag next to its only user.
 const scribeBlinkKeyframes =
 	'@keyframes scribe-rec-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }'
-
-// Below this dragged width the panel snaps to the collapsed rail (store width
-// stays untouched — only `collapsed` flips); at/above 180 while collapsed a
-// drag back out re-expands. Spec §3 "Panel states": "drag below ~140px
-// (snaps)".
-const COLLAPSE_THRESHOLD = 140
 
 // The clamp ceiling passed to setPanelWidth is a fraction of window width
 // rather than the module's hard 720 cap, so the drag itself never fights the
@@ -106,7 +102,7 @@ export function SidePanel({ editor }: { editor: Editor }) {
 					borderLeft: `1px solid ${wm.ruleStrong}`,
 				}}
 			>
-				<PanelResizeGrip collapsed={layout.collapsed} />
+				<PanelResizeGrip />
 				{railParticipants.map((participant) => (
 					<RailAvatarDot key={participant.rawId} participant={participant} snap={snap} />
 				))}
@@ -166,7 +162,7 @@ export function SidePanel({ editor }: { editor: Editor }) {
 				overflowY: 'auto',
 			}}
 		>
-			<PanelResizeGrip collapsed={layout.collapsed} />
+			<PanelResizeGrip />
 			<div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
 				<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
 					<span
@@ -314,22 +310,22 @@ function ScribeRow({ name, onOpenTranscript }: { name: string; onOpenTranscript:
 // double-click to toggle the collapsed rail. Rendered as the first child of
 // both the full panel and the rail so the grip survives the collapse.
 //
-// `collapsed` is read into a ref (rather than closed over directly) so the
-// pointermove handler — attached once per render but potentially firing many
-// times between renders during a fast drag — always sees the latest
-// collapsed/expanded status when deciding whether crossing the 180px
-// re-expand threshold should also flip `collapsed` back to false.
-function PanelResizeGrip({ collapsed }: { collapsed: boolean }) {
-	const collapsedRef = useRef(collapsed)
-	useEffect(() => {
-		collapsedRef.current = collapsed
-	}, [collapsed])
-
+// Collapse state is read synchronously from the store (getPanelLayout())
+// inside the handlers rather than from a prop, so a fast drag firing many
+// pointermoves between renders always sees the current value.
+function PanelResizeGrip() {
 	const draggingRef = useRef(false)
+	// The stored width when this drag began. A drag that ends in the rail
+	// live-resizes through 220 → 200 → 181 on the way down, so by the time
+	// 'collapse' fires the store holds ~180, not where the user started —
+	// restoring this snapshot at collapse-entry is what makes expand return
+	// to the pre-drag width (e.g. 400), not the drag's last live value.
+	const dragStartWidthRef = useRef(0)
 
 	const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
 		e.preventDefault()
 		draggingRef.current = true
+		dragStartWidthRef.current = getPanelLayout().width
 		e.currentTarget.setPointerCapture(e.pointerId)
 		document.body.style.userSelect = 'none'
 	}
@@ -338,20 +334,23 @@ function PanelResizeGrip({ collapsed }: { collapsed: boolean }) {
 		if (!draggingRef.current) return
 		const width = window.innerWidth - e.clientX
 
-		if (width < COLLAPSE_THRESHOLD) {
-			// Snap to the rail; the stored width is deliberately left alone so
-			// re-expanding (chevron or drag-out) restores the last real width.
-			setPanelCollapsed(true)
-			return
-		}
-
-		// Live-update the stored width during the drag. clampPanelWidth's own
-		// 180 floor absorbs the 140-180 band while still collapsed (harmless —
-		// the rail is what's rendered until the 180 re-expand threshold below).
-		setPanelWidth(width, window.innerWidth * MAX_WIDTH_FRACTION)
-
-		if (collapsedRef.current && width >= 180) {
-			setPanelCollapsed(false)
+		// panelDragAction's dead band (140-179) guarantees no store write below
+		// 180, so clampPanelWidth's floor can never leak into the store; the
+		// collapse branch then restores the drag-start width (see ref above).
+		switch (panelDragAction(width)) {
+			case 'collapse':
+				if (!getPanelLayout().collapsed) {
+					setPanelWidth(dragStartWidthRef.current)
+					setPanelCollapsed(true)
+				}
+				break
+			case 'resize':
+				setPanelWidth(width, window.innerWidth * MAX_WIDTH_FRACTION)
+				if (getPanelLayout().collapsed) setPanelCollapsed(false)
+				break
+			case 'ignore':
+				// Dead band: no store writes — stay expanded/collapsed as-is.
+				break
 		}
 	}
 

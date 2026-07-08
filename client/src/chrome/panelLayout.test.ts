@@ -39,6 +39,7 @@ class MemoryStorage {
 const {
 	parsePanelLayout,
 	clampPanelWidth,
+	panelDragAction,
 	getPanelLayout,
 	setPanelWidth,
 	setPanelCollapsed,
@@ -63,6 +64,19 @@ assert.equal(clampPanelWidth(1000), 720, 'above the hard cap clamps to 720')
 assert.equal(clampPanelWidth(500, 400), 400, 'a caller-supplied maxWidth below 720 wins')
 assert.equal(clampPanelWidth(300, 400), 300, 'in-range width under a supplied maxWidth passes through')
 assert.equal(clampPanelWidth(50, 400), 180, 'the 180 floor still applies under a supplied maxWidth')
+
+// --- panelDragAction: the grip's per-pointermove decision. The 140-179 band
+// is deliberate hysteresis — writing the store there would let clampPanelWidth's
+// 180 floor clobber the remembered width on the way INTO a collapse (the
+// data-loss bug this function exists to prevent). Boundaries pinned exactly:
+// 139 collapses, 140 and 179 are dead, 180 resizes.
+
+assert.equal(panelDragAction(139), 'collapse', 'below 140 the drag collapses to the rail')
+assert.equal(panelDragAction(140), 'ignore', '140 is inside the dead band — no store write')
+assert.equal(panelDragAction(179), 'ignore', '179 is inside the dead band — no store write')
+assert.equal(panelDragAction(180), 'resize', 'at 180 the drag resumes writing the width')
+assert.equal(panelDragAction(0), 'collapse', 'far past the threshold still collapses')
+assert.equal(panelDragAction(400), 'resize', 'ordinary widths resize')
 
 // --- parsePanelLayout: defensive parsing of every raw shape ---
 
