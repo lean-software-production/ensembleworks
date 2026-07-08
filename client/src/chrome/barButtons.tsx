@@ -153,12 +153,16 @@ export function NativeToolButton({
 	currentToolId,
 	iconOnly,
 	disabled,
+	title,
 }: {
 	tool: TLUiToolItem
 	label: string
 	currentToolId: string
 	iconOnly?: boolean
 	disabled?: boolean
+	/** Overrides the default tooltip. Used for `select` to surface the
+	 * pan hint (Space / middle-drag) rather than a separate hand button. */
+	title?: string
 }) {
 	const accel = displayKeyForKbd(tool.kbd, label)
 	return (
@@ -170,6 +174,7 @@ export function NativeToolButton({
 			active={currentToolId === tool.id}
 			iconOnly={iconOnly}
 			disabled={disabled}
+			title={title}
 			onClick={() => tool.onSelect('toolbar')}
 		/>
 	)

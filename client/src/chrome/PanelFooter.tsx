@@ -15,7 +15,7 @@ import { useState, type ReactNode } from 'react'
 import { wm } from '../theme'
 import { DOCK_EDGE_OPTIONS, updateSettings, useSettings } from './settings'
 
-type OpenSection = 'settings' | 'help' | 'about' | null
+type OpenSection = 'settings' | 'help' | null
 
 const footerButtonStyle = {
 	flex: 1,
@@ -59,17 +59,27 @@ export function PanelFooter() {
 				>
 					? help
 				</button>
-				<button
-					type="button"
-					onClick={() => toggle('about')}
-					style={{ ...footerButtonStyle, color: open === 'about' ? wm.sealBlue : wm.inkMuted }}
+				{/* The old "about" button just toggled a panel that showed the
+				    version — so show the version here directly (spec §3 footer).
+				    __APP_VERSION__ (vite.config.ts) is `git describe`, and release
+				    tags are `vX.Y.Z`, so the leading "v" is already there. */}
+				<span
+					title="EnsembleWorks version"
+					style={{
+						...footerButtonStyle,
+						cursor: 'default',
+						color: wm.inkSubtle,
+						whiteSpace: 'nowrap',
+						overflow: 'hidden',
+						textOverflow: 'ellipsis',
+						textAlign: 'center',
+					}}
 				>
-					about
-				</button>
+					{__APP_VERSION__}
+				</span>
 			</div>
 			{open === 'settings' && <SettingsSection />}
 			{open === 'help' && <HelpSection />}
-			{open === 'about' && <AboutSection />}
 		</div>
 	)
 }
@@ -166,18 +176,10 @@ function HelpSection() {
 				tldraw defaults: draw <b>D</b> · eraser <b>E</b> · arrow <b>A</b> · line <b>L</b> · rectangle{' '}
 				<b>R</b> · ellipse <b>O</b> · highlight <b>⇧D</b> · laser <b>K</b> · hand <b>H</b>
 			</ShortcutLine>
+			<ShortcutLine>
+				pan the canvas: hold <b>Space</b> and drag, or drag with the <b>middle mouse button</b>
+			</ShortcutLine>
 		</div>
 	)
 }
 
-function AboutSection() {
-	// __APP_VERSION__ is `git describe --tags --always --dirty` (vite.config.ts)
-	// and release tags are already `vX.Y.Z` (deploy/release.sh), so the string
-	// already carries its leading "v" — MainMenu.tsx's About dialog renders it
-	// bare for the same reason; don't prepend a second one here.
-	return (
-		<div style={sectionStyle}>
-			<span style={{ fontSize: 11, color: wm.inkMuted }}>EnsembleWorks {__APP_VERSION__}</span>
-		</div>
-	)
-}

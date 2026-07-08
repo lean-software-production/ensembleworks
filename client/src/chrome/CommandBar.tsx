@@ -64,6 +64,11 @@ import { wm } from '../theme'
 // Native tldraw tools shown as first-class verbs, in bar order (spec §4).
 const PRIORITY_TOOLS = ['select', 'note', 'text', 'frame'] as const
 
+// Tooltip for the select button. Rather than a separate hand/pan tool (or a
+// select↔hand toggle), we keep just the select verb and surface the two
+// built-in ways to pan the canvas — tldraw supports both out of the box.
+const SELECT_TITLE = 'select (S) · pan: hold Space and drag, or drag with the middle mouse button'
+
 const LAST_OVERFLOW_KEY = 'ensembleworks.commandBar.lastOverflow.v1'
 
 /**
@@ -412,6 +417,7 @@ export function CommandBar() {
 						currentToolId={currentToolId}
 						iconOnly={vertical}
 						disabled={!!focusedShapeId}
+						title={id === 'select' ? SELECT_TITLE : undefined}
 					/>
 				)
 			})}

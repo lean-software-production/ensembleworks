@@ -47,10 +47,12 @@ const scribeBlinkKeyframes =
 	'@keyframes scribe-rec-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }'
 
 // The clamp ceiling passed to setPanelWidth is a fraction of window width
-// rather than the module's hard 720 cap, so the drag itself never fights the
-// spec's "wide = face-to-face" ceiling (past ~40% of window — leave headroom
-// above that before the hard clamp bites).
-const MAX_WIDTH_FRACTION = 0.6
+// rather than the module's hard cap, so the drag itself governs how wide the
+// panel can get. Raised to 0.85 so it can take over the majority of the page
+// for a "video-chat" layout (spec §3 "wide = face-to-face", extended) — the
+// participant tiles grow with it (PanelPages' responsive grid). Leaves a sliver
+// of canvas so the split never fully disappears.
+const MAX_WIDTH_FRACTION = 0.85
 
 export function SidePanel({ editor }: { editor: Editor }) {
 	const snap = useAvSnapshot()
@@ -343,6 +345,7 @@ function ScribeRow({ name, onOpenTranscript }: { name: string; onOpenTranscript:
 // double-click toggle — so the panelLayout store genuinely stays untouched
 // while presenting forces the rail, per this file's header comment.
 function PanelResizeGrip({ locked }: { locked?: boolean }) {
+	const [hovered, setHovered] = useState(false)
 	const draggingRef = useRef(false)
 	// The stored width when this drag began. A drag that ends in the rail
 	// live-resizes through 220 → 200 → 181 on the way down, so by the time
@@ -398,6 +401,8 @@ function PanelResizeGrip({ locked }: { locked?: boolean }) {
 			onPointerMove={onPointerMove}
 			onPointerUp={endDrag}
 			onPointerCancel={endDrag}
+			onPointerEnter={() => setHovered(true)}
+			onPointerLeave={() => setHovered(false)}
 			onDoubleClick={() => {
 				if (!locked) togglePanelCollapsed()
 			}}
@@ -407,11 +412,30 @@ function PanelResizeGrip({ locked }: { locked?: boolean }) {
 				top: 0,
 				bottom: 0,
 				width: 6,
+				display: 'flex',
+				alignItems: 'center',
+				justifyContent: 'center',
 				cursor: locked ? 'default' : 'ew-resize',
 				zIndex: 2,
 				touchAction: 'none',
 			}}
-		/>
+		>
+			{/* Visible grab pill: makes the (otherwise invisible) drag affordance
+			    obvious. Hidden while locked (Present's rail override), where the
+			    grip is inert and a pill would falsely imply it's draggable. */}
+			{!locked && (
+				<span
+					aria-hidden="true"
+					style={{
+						width: 4,
+						height: 30,
+						borderRadius: 2,
+						background: hovered ? wm.sealBlue : wm.ruleStrong,
+						transition: 'background 120ms ease',
+					}}
+				/>
+			)}
+		</div>
 	)
 }
 

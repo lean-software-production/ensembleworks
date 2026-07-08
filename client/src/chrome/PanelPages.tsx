@@ -12,7 +12,7 @@
  */
 import { rawUserId } from '@ensembleworks/contracts'
 import { useEffect, useRef, useState, type CSSProperties } from 'react'
-import { type Editor, type TLPageId, useValue } from 'tldraw'
+import { getIndexBetween, type Editor, type IndexKey, type TLPageId, useValue } from 'tldraw'
 import { useAvSnapshot } from '../av/bridge'
 import { wm } from '../theme'
 import { exitFocus } from './focus'
@@ -21,6 +21,10 @@ import { PanelTile, type PanelTileParticipant } from './PanelTile'
 interface PageSectionData {
 	id: TLPageId
 	name: string
+	// The page's fractional sort key (pages render in ascending `index` order).
+	// Carried here so the ⋯ menu's Move up/down can compute a new key between
+	// neighbours (getIndexBetween) without re-reading the editor.
+	index: IndexKey
 	participants: PanelTileParticipant[]
 }
 
@@ -70,6 +74,7 @@ export function PanelPages({ editor, width }: { editor: Editor; width: number })
 			const sections: PageSectionData[] = pages.map((page) => ({
 				id: page.id,
 				name: page.name,
+				index: page.index,
 				participants: byPage.get(page.id) ?? [],
 			}))
 
@@ -90,13 +95,35 @@ export function PanelPages({ editor, width }: { editor: Editor; width: number })
 
 	return (
 		<div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-			{sections.map((section) => (
+			{sections.map((section, i) => (
 				<PageSectionView
 					key={section.id}
 					editor={editor}
 					section={section}
 					isCurrent={section.id === currentPageId}
 					isOnlyPage={sections.length === 1}
+					// Move up/down reorder the page by writing a fractional index
+					// between the neighbours it's hopping over (getIndexBetween
+					// handles the ends via null). undefined at the list ends so the
+					// menu item disables. Pages render in ascending index order.
+					onMoveUp={
+						i > 0
+							? () =>
+									editor.updatePage({
+										id: section.id,
+										index: getIndexBetween(sections[i - 2]?.index ?? null, sections[i - 1]!.index),
+									})
+							: undefined
+					}
+					onMoveDown={
+						i < sections.length - 1
+							? () =>
+									editor.updatePage({
+										id: section.id,
+										index: getIndexBetween(sections[i + 1]!.index, sections[i + 2]?.index ?? null),
+									})
+							: undefined
+					}
 					snap={snap}
 					twoUp={twoUp}
 				/>
@@ -166,6 +193,8 @@ function PageSectionView({
 	section,
 	isCurrent,
 	isOnlyPage,
+	onMoveUp,
+	onMoveDown,
 	snap,
 	twoUp,
 }: {
@@ -173,12 +202,21 @@ function PageSectionView({
 	section: PageSectionData
 	isCurrent: boolean
 	isOnlyPage: boolean
+	onMoveUp?: () => void
+	onMoveDown?: () => void
 	snap: ReturnType<typeof useAvSnapshot>
 	twoUp: boolean
 }) {
 	return (
 		<div>
-			<SectionHeader editor={editor} section={section} isCurrent={isCurrent} isOnlyPage={isOnlyPage} />
+			<SectionHeader
+				editor={editor}
+				section={section}
+				isCurrent={isCurrent}
+				isOnlyPage={isOnlyPage}
+				onMoveUp={onMoveUp}
+				onMoveDown={onMoveDown}
+			/>
 			{section.participants.length > 0 && (
 				<div style={tileListStyle(twoUp)}>
 					{section.participants.map((participant) => (
@@ -212,14 +250,27 @@ function SectionHeader({
 	section,
 	isCurrent,
 	isOnlyPage,
+	onMoveUp,
+	onMoveDown,
 }: {
 	editor: Editor
 	section: PageSectionData
 	isCurrent: boolean
 	isOnlyPage: boolean
+	onMoveUp?: () => void
+	onMoveDown?: () => void
 }) {
 	const [menuOpen, setMenuOpen] = useState(false)
 	const rootRef = useRef<HTMLDivElement>(null)
+
+	// Run a move handler (if enabled) and close the menu. undefined handlers
+	// come from the list ends — their buttons render disabled, so this is only
+	// reached for a live move.
+	const move = (handler?: () => void) => {
+		if (!handler) return
+		setMenuOpen(false)
+		handler()
+	}
 
 	// Dismiss on outside click, same pattern as CommandBar's overflow popover.
 	useEffect(() => {
@@ -333,6 +384,22 @@ function SectionHeader({
 						overflow: 'hidden',
 					}}
 				>
+					<button
+						type="button"
+						onClick={() => move(onMoveUp)}
+						disabled={!onMoveUp}
+						style={{ ...menuItemStyle, opacity: onMoveUp ? 1 : 0.4, cursor: onMoveUp ? 'pointer' : 'not-allowed' }}
+					>
+						Move up
+					</button>
+					<button
+						type="button"
+						onClick={() => move(onMoveDown)}
+						disabled={!onMoveDown}
+						style={{ ...menuItemStyle, opacity: onMoveDown ? 1 : 0.4, cursor: onMoveDown ? 'pointer' : 'not-allowed' }}
+					>
+						Move down
+					</button>
 					<button type="button" onClick={rename} style={menuItemStyle}>
 						Rename
 					</button>

@@ -60,8 +60,9 @@ assert.deepEqual(
 
 assert.equal(clampPanelWidth(280), 280, 'in-range width passes through')
 assert.equal(clampPanelWidth(100), 180, 'below the floor clamps to 180')
-assert.equal(clampPanelWidth(1000), 720, 'above the hard cap clamps to 720')
-assert.equal(clampPanelWidth(500, 400), 400, 'a caller-supplied maxWidth below 720 wins')
+assert.equal(clampPanelWidth(1000), 1000, 'in-range width below the hard cap passes through')
+assert.equal(clampPanelWidth(2000), 1600, 'above the hard cap clamps to 1600')
+assert.equal(clampPanelWidth(500, 400), 400, 'a caller-supplied maxWidth below the cap wins')
 assert.equal(clampPanelWidth(300, 400), 300, 'in-range width under a supplied maxWidth passes through')
 assert.equal(clampPanelWidth(50, 400), 180, 'the 180 floor still applies under a supplied maxWidth')
 
@@ -91,8 +92,8 @@ assert.deepEqual(
 	'wrong-typed fields fall back to their defaults'
 )
 assert.deepEqual(
-	parsePanelLayout(JSON.stringify({ width: 1000, collapsed: true })),
-	{ width: 720, collapsed: true },
+	parsePanelLayout(JSON.stringify({ width: 2000, collapsed: true })),
+	{ width: 1600, collapsed: true },
 	'a valid shape round-trips, with width clamped to the hard cap'
 )
 assert.deepEqual(

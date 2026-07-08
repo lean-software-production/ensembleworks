@@ -27,7 +27,13 @@ const DEFAULT_LAYOUT: PanelLayout = {
 }
 
 const MIN_WIDTH = 180
-const MAX_WIDTH_CAP = 720
+// Hard ceiling on the stored width. Raised well past the old 720 so the panel
+// can be dragged to take over the majority of the page for a "video-chat"
+// layout (spec §3 "wide = face-to-face", extended): the participant tiles keep
+// growing into it (PanelPages' responsive grid). The window-fraction clamp the
+// resize grip passes (SidePanel's MAX_WIDTH_FRACTION) is what actually bites on
+// normal screens; this cap only guards absurd widths on very large monitors.
+const MAX_WIDTH_CAP = 1600
 
 // Collapsed-rail width — consumed by SidePanel's own rail render AND by
 // CommandBar's right-dock offset (`panelRightOffset`), so the two stay in

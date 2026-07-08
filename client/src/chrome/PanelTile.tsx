@@ -32,15 +32,16 @@ export interface PanelTileParticipant {
 	isLocal: boolean
 }
 
-// Two size steps only (canvas-controls spec §3 "Panel states": "Wide =
-// face-to-face: … tiles reflow two-up per section and grow") — no continuous
-// clamp. PanelPages.tsx decides which step applies (by panel width) and
-// passes `twoUp` down; kept as plain named constants here rather than duplicated.
-const TILE_HEIGHT_DEFAULT = 84
-const TILE_HEIGHT_TWO_UP = 150
+// The media area holds a FIXED 4:3 aspect ratio at every panel width (webcam
+// feel). This is the fix for the face-cropping niggle: a fixed-height tile that
+// fills a variable width is wide-and-short, so `object-fit: cover` crops the
+// face top/bottom. Letting height track width at a constant aspect keeps the
+// whole face visible whether the tile is a narrow single-column row or a big
+// two-up/wide "video chat" tile — the aspect never changes, only the size.
+const MEDIA_ASPECT = '4 / 3'
 
-// Initials font size grows a step alongside the tile so it doesn't look lost
-// in the taller two-up tile.
+// Initials font grows a step alongside the tile (twoUp = the wider two-column
+// layout PanelPages switches to) so it doesn't look lost in the bigger tile.
 const INITIALS_FONT_DEFAULT = 26
 const INITIALS_FONT_TWO_UP = 40
 
@@ -67,13 +68,18 @@ export function PanelTile({
 	twoUp?: boolean
 }) {
 	const { rawId, prefixedId, name, color, isLocal } = participant
-	const tileHeight = twoUp ? TILE_HEIGHT_TWO_UP : TILE_HEIGHT_DEFAULT
 	const initialsFontSize = twoUp ? INITIALS_FONT_TWO_UP : INITIALS_FONT_DEFAULT
 
 	const peer = !isLocal ? (snap?.peers.find((p) => p.id === rawId) ?? null) : null
-	const videoTrack: LocalTrack | RemoteTrack | null = isLocal
+	// When the LOCAL camera is toggled off, LiveKit keeps the camera track
+	// published-but-muted (no LocalTrackUnpublished fires), so localVideoTrack
+	// stays set and the attached <video> shows a black frame instead of the
+	// avatar. Gate the local video on the actual camEnabled flag so an off
+	// camera falls through to the avatar/initials like a remote peer's does.
+	const rawVideoTrack: LocalTrack | RemoteTrack | null = isLocal
 		? (snap?.localVideoTrack ?? null)
 		: (peer?.videoTrack ?? null)
+	const videoTrack = isLocal ? ((snap?.camEnabled ?? false) ? rawVideoTrack : null) : rawVideoTrack
 	const isSpeaking = isLocal ? (snap?.localSpeaking ?? false) : (peer?.isSpeaking ?? false)
 	const latency = snap?.latencies[rawId] ?? null
 	const latencyHistory = snap?.latencyHistory[rawId] ?? []
@@ -130,8 +136,8 @@ export function PanelTile({
 				if (!isLocal) editor.zoomToUser(prefixedId)
 			}}
 			style={{
-				position: 'relative',
-				height: tileHeight,
+				display: 'flex',
+				flexDirection: 'column',
 				overflow: 'hidden',
 				borderRadius: 4,
 				borderLeft: `4px solid ${color}`,
@@ -141,8 +147,18 @@ export function PanelTile({
 				cursor: isLocal ? 'default' : 'pointer',
 			}}
 		>
-			{/* Background layer: video > GitHub avatar (local only) > initials. */}
-			<div style={{ position: 'absolute', inset: 0 }}>
+			{/* Media area — FIXED 4:3 (MEDIA_ASPECT) so a wide tile never crops
+			    the face. video > GitHub avatar (local only) > initials, with the
+			    latency pill and remote cam-status glyph floated over it. */}
+			<div
+				style={{
+					position: 'relative',
+					width: '100%',
+					aspectRatio: MEDIA_ASPECT,
+					overflow: 'hidden',
+					background: `${color}22`,
+				}}
+			>
 				{videoTrack ? (
 					<div ref={videoRef} style={{ width: '100%', height: '100%' }} />
 				) : showAvatar ? (
@@ -159,7 +175,6 @@ export function PanelTile({
 							height: '100%',
 							display: 'grid',
 							placeItems: 'center',
-							background: `${color}22`,
 							color,
 							fontSize: initialsFontSize,
 							fontWeight: 700,
@@ -169,123 +184,123 @@ export function PanelTile({
 						{initialsFor(name)}
 					</div>
 				)}
-			</div>
-
-			{/* Foreground content: top row (cam status + latency), bottom row
-			    (colour swatch + name + own controls / kick). */}
-			<div
-				style={{
-					position: 'relative',
-					zIndex: 1,
-					height: '100%',
-					display: 'flex',
-					flexDirection: 'column',
-					justifyContent: 'space-between',
-				}}
-			>
-				<div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', padding: 4 }}>
-					<div>
-						{!isLocal && (
-							// Cam-status icon derived from track presence — a read-only
-							// status glyph, NOT a button (a disabled AvIconButton would
-							// read "unavailable" and swallow the tile's click-to-zoom).
-							// Mic isn't tracked per-peer today, so it's omitted rather
-							// than invented.
-							<span
-								title={videoTrack ? 'camera on' : 'camera off'}
-								style={{
-									width: 25,
-									height: 25,
-									display: 'grid',
-									placeItems: 'center',
-									pointerEvents: 'none',
-									color: videoTrack ? wm.cream : wm.inkMuted,
-								}}
-							>
-								<AvIcon kind="camera" crossedOut={!videoTrack} />
-							</span>
-						)}
-					</div>
-					<div style={{ background: 'rgba(15,23,42,0.55)', borderRadius: 3, padding: '1px 3px' }}>
-						<LatencyPill latency={latency} history={latencyHistory} />
-					</div>
-				</div>
 
 				<div
 					style={{
-						display: 'flex',
-						alignItems: 'center',
-						gap: 6,
-						padding: '10px 5px 5px',
-						background: 'linear-gradient(0deg, rgba(15,23,42,0.62), transparent)',
+						position: 'absolute',
+						top: 4,
+						right: 4,
+						background: 'rgba(15,23,42,0.55)',
+						borderRadius: 3,
+						padding: '1px 3px',
 					}}
 				>
-					{isLocal && <ColorSwatch editor={editor} color={color} />}
+					<LatencyPill latency={latency} history={latencyHistory} />
+				</div>
+
+				{!isLocal && (
+					// Read-only cam-status glyph (NOT a button — a disabled
+					// AvIconButton would read "unavailable" and swallow the tile's
+					// click-to-zoom). Mic isn't tracked per-peer today, so it's
+					// omitted rather than invented.
 					<span
+						title={videoTrack ? 'camera on' : 'camera off'}
 						style={{
-							flex: 1,
-							minWidth: 0,
-							overflow: 'hidden',
-							textOverflow: 'ellipsis',
-							whiteSpace: 'nowrap',
-							fontFamily: wm.sans,
-							fontSize: 12,
-							fontWeight: 600,
-							color: wm.cream,
-							textShadow: '0 1px 2px rgba(0,0,0,0.5)',
+							position: 'absolute',
+							top: 4,
+							left: 4,
+							width: 22,
+							height: 22,
+							display: 'grid',
+							placeItems: 'center',
+							pointerEvents: 'none',
+							borderRadius: 3,
+							background: 'rgba(15,23,42,0.45)',
+							color: videoTrack ? wm.cream : wm.inkMuted,
 						}}
 					>
-						{name}
-						{isLocal ? ' (you)' : ''}
+						<AvIcon kind="camera" crossedOut={!videoTrack} />
 					</span>
-					{isLocal && (
-						<div style={{ display: 'flex', gap: 3, flex: '0 0 auto' }}>
-							<AvIconButton
-								kind="mic"
-								enabled={snap?.micEnabled ?? false}
-								available={avAvailable}
-								onClick={() => snap?.actions.onMic()}
-							/>
-							<AvIconButton
-								kind="camera"
-								enabled={snap?.camEnabled ?? false}
-								available={avAvailable}
-								onClick={() => snap?.actions.onCam()}
-							/>
-							<AvIconButton
-								kind="spatial"
-								enabled={!(snap?.standupMode ?? true)}
-								available={avAvailable}
-								onClick={() => snap?.actions.onStandup()}
-							/>
-						</div>
-					)}
-					{!isLocal && hovered && snap && (
-						<button
-							type="button"
-							disabled={kicking}
-							onClick={(e) => {
-								e.stopPropagation()
-								snap.actions.kick(rawId, name)
-							}}
-							aria-label={`Kick ${name}`}
-							style={{
-								flex: '0 0 auto',
-								border: `1px solid ${wm.ruleStrong}`,
-								borderRadius: 2,
-								background: wm.bg,
-								color: wm.crit,
-								padding: '2px 5px',
-								fontFamily: wm.mono,
-								fontSize: 9,
-								textTransform: 'uppercase',
-								cursor: 'pointer',
-							}}
-						>
-							{kicking ? 'Kicking' : 'Kick'}
-						</button>
-					)}
-				</div>
+				)}
+			</div>
+
+			{/* Control strip — BELOW the media on a solid panel background, so the
+			    mic/cam/spatial buttons (and name / kick) are always legible rather
+			    than overlaid on a dark video. Colour swatch + name + own controls,
+			    or a hover-revealed kick for peers. */}
+			<div
+				style={{
+					display: 'flex',
+					alignItems: 'center',
+					gap: 6,
+					padding: '5px 6px',
+					background: wm.panel,
+				}}
+			>
+				{isLocal && <ColorSwatch editor={editor} color={color} />}
+				<span
+					style={{
+						flex: 1,
+						minWidth: 0,
+						overflow: 'hidden',
+						textOverflow: 'ellipsis',
+						whiteSpace: 'nowrap',
+						fontFamily: wm.sans,
+						fontSize: 12,
+						fontWeight: 600,
+						color: wm.ink,
+					}}
+				>
+					{name}
+					{isLocal ? ' (you)' : ''}
+				</span>
+				{isLocal && (
+					<div style={{ display: 'flex', gap: 3, flex: '0 0 auto' }}>
+						<AvIconButton
+							kind="mic"
+							enabled={snap?.micEnabled ?? false}
+							available={avAvailable}
+							onClick={() => snap?.actions.onMic()}
+						/>
+						<AvIconButton
+							kind="camera"
+							enabled={snap?.camEnabled ?? false}
+							available={avAvailable}
+							onClick={() => snap?.actions.onCam()}
+						/>
+						<AvIconButton
+							kind="spatial"
+							enabled={!(snap?.standupMode ?? true)}
+							available={avAvailable}
+							onClick={() => snap?.actions.onStandup()}
+						/>
+					</div>
+				)}
+				{!isLocal && hovered && snap && (
+					<button
+						type="button"
+						disabled={kicking}
+						onClick={(e) => {
+							e.stopPropagation()
+							snap.actions.kick(rawId, name)
+						}}
+						aria-label={`Kick ${name}`}
+						style={{
+							flex: '0 0 auto',
+							border: `1px solid ${wm.ruleStrong}`,
+							borderRadius: 2,
+							background: wm.bg,
+							color: wm.crit,
+							padding: '2px 5px',
+							fontFamily: wm.mono,
+							fontSize: 9,
+							textTransform: 'uppercase',
+							cursor: 'pointer',
+						}}
+					>
+						{kicking ? 'Kicking' : 'Kick'}
+					</button>
+				)}
 			</div>
 		</div>
 	)

@@ -14,17 +14,19 @@ const STORAGE_KEY = 'ensembleworks.settings.v1'
  * "Docking"). 'bottom' is the v1 default — everything else is a right-click
  * (or panel-footer) opt-in that renders the bar as a vertical, icon-only
  * strip (chrome/CommandBar.tsx). */
+// The `right` edge is intentionally NOT offered any more (it docked the bar
+// awkwardly against the side panel). The type keeps it so the CommandBar's
+// existing right-dock rendering branch still type-checks as dead code, but
+// nothing produces it: it's absent from DOCK_EDGES (so a previously-saved
+// 'right' fails validation and coerces to the default) and from
+// DOCK_EDGE_OPTIONS (so no picker shows it).
 export type DockEdge = 'bottom' | 'left' | 'right' | 'top'
 
-const DOCK_EDGES: readonly DockEdge[] = ['bottom', 'left', 'right', 'top']
+const DOCK_EDGES: readonly DockEdge[] = ['bottom', 'left', 'top']
 
-/** Display order for "Dock to" pickers (spec §4 wording verbatim: "Dock to:
- * bottom · left · top · right") — shared by the bar's right-click DockMenu
- * and the panel footer's settings row so the two pickers can't drift apart.
- * Deliberately a different order than `DOCK_EDGES` above (validation set,
- * unordered in effect) — that one just needs membership, this one needs the
- * spec's exact reading order. */
-export const DOCK_EDGE_OPTIONS: readonly DockEdge[] = ['bottom', 'left', 'top', 'right']
+/** Display order for the "Dock to" pickers — shared by the bar's right-click
+ * DockMenu and the panel footer's settings row so the two can't drift apart. */
+export const DOCK_EDGE_OPTIONS: readonly DockEdge[] = ['bottom', 'left', 'top']
 
 export interface EnsembleSettings {
 	githubHandle: string

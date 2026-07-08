@@ -74,10 +74,14 @@ assert.deepEqual(parseSettings(JSON.stringify({ dockEdge: 123 })), { githubHandl
 // just non-strings — that's the defensive-parse case the plan calls out.
 assert.deepEqual(parseSettings(JSON.stringify({ dockEdge: 'sideways' })), { githubHandle: '', dockEdge: 'bottom' })
 
-// Each valid edge round-trips as-is.
-for (const edge of ['bottom', 'left', 'right', 'top']) {
+// Each offered edge round-trips as-is.
+for (const edge of ['bottom', 'left', 'top']) {
 	assert.deepEqual(parseSettings(JSON.stringify({ dockEdge: edge })), { githubHandle: '', dockEdge: edge })
 }
+
+// 'right' is no longer an offered dock edge — a value persisted by an older
+// build coerces to the default rather than sticking with nowhere to change it.
+assert.deepEqual(parseSettings(JSON.stringify({ dockEdge: 'right' })), { githubHandle: '', dockEdge: 'bottom' })
 
 // --- updateSettings: persists + notifies subscribers ---
 {
