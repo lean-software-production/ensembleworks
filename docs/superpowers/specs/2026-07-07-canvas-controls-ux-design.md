@@ -232,6 +232,18 @@ Each phase shippable alone:
    'bottom'; DefaultZoomMenu dropdown direction stays radix-managed.*
 4. **Focus view** (§7) — independent of the others; can ship alongside any
    phase since it only needs the terminal plugin + a chrome state.
+   *Shipped 2026-07-08 (branch canvas-controls-ux). As-built deltas: enter is
+   a selection-anchored ⛶ overlay (not a button on the terminal's own shape
+   chrome) and no enter keyboard shortcut shipped; exit keeps the camera
+   zoomed on the terminal rather than restoring the pre-focus view; Present
+   wins in both directions (focus force-exits when presenting starts and is
+   unenterable while anyone presents, incl. opted-out viewers); while focused
+   a capture-phase listener swallows all unmodified tool keys on non-editable
+   targets (p and Ctrl/Cmd+Shift+Enter are the only pass-throughs; the
+   terminal keeps every key); the zoom menu stays clickable but no-ops
+   against the locked camera; clicking the matte deliberately does not exit;
+   the matte is paper-toned, not a dark scrim; mechanism is shape-agnostic
+   via FOCUSABLE_SHAPE_TYPES, armed for terminals only.*
 
 ## 10. Out of scope
 
