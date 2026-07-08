@@ -40,6 +40,16 @@ export interface PanelTileParticipant {
 // two-up/wide "video chat" tile — the aspect never changes, only the size.
 const MEDIA_ASPECT = '4 / 3'
 
+// Tiles flow in a centered wrap row (PanelPages' tileListStyle). Each grows to
+// fill the row up to TILE_MAX_WIDTH and shrinks to share it; the flex BASIS (not
+// a hard min) sets the wrap point — a second tile wraps below ~2×basis. There's
+// deliberately no minWidth, so a lone tile in a narrow panel shrinks to fit
+// rather than overflowing. Capping the max is what smooths the resize: a single
+// tile tops out at TILE_MAX_WIDTH instead of ballooning full-width and then
+// snapping to half-width when a column boundary is crossed.
+const TILE_BASIS_WIDTH = 220
+const TILE_MAX_WIDTH = 320
+
 // Initials font grows a step alongside the tile (twoUp = the wider two-column
 // layout PanelPages switches to) so it doesn't look lost in the bigger tile.
 const INITIALS_FONT_DEFAULT = 26
@@ -136,6 +146,8 @@ export function PanelTile({
 				if (!isLocal) editor.zoomToUser(prefixedId)
 			}}
 			style={{
+				flex: `1 1 ${TILE_BASIS_WIDTH}px`,
+				maxWidth: TILE_MAX_WIDTH,
 				display: 'flex',
 				flexDirection: 'column',
 				overflow: 'hidden',

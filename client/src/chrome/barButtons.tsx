@@ -13,9 +13,11 @@ import { displayKeyForKbd, splitAccelLabel } from './accel'
 
 // Demoted native tools living in the ⋯ overflow, in menu order (spec §4).
 // Lives here rather than in OverflowMenu.tsx because CommandBar also needs it
-// (the "last-used overflow item adopted next to ⋯" lookup).
+// (the "last-used overflow item adopted next to ⋯" lookup). No `hand` — panning
+// is steered via Space / middle-drag (the select button's hint + help line),
+// so a hand tool button would be redundant; the H shortcut still works.
 export const OVERFLOW_TOOLS = [
-	'draw', 'eraser', 'arrow', 'line', 'rectangle', 'ellipse', 'highlight', 'laser', 'hand',
+	'draw', 'eraser', 'arrow', 'line', 'rectangle', 'ellipse', 'highlight', 'laser',
 ] as const
 
 // Lowercase display labels for native tools; tool.label is a translation key,

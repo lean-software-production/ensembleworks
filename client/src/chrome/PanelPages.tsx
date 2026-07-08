@@ -136,14 +136,15 @@ export function PanelPages({ editor, width }: { editor: Editor; width: number })
 	)
 }
 
-// The tile-list container: single column below TWO_UP_MIN_WIDTH, a 2-column
-// grid at/above it (spec §3 "tiles reflow two-up per section and grow").
-// Shared by every section (including the unknown-page catch-all) so the
-// reflow is identical everywhere tiles render.
-function tileListStyle(twoUp: boolean): CSSProperties {
-	return twoUp
-		? { display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, marginTop: 6 }
-		: { display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6 }
+// The tile-list container: a centered wrap row (spec §3 "tiles reflow … and
+// grow"). Each tile grows to fill up to its max width and shrinks to share the
+// row, wrapping to more-per-row only when there's genuine room (PanelTile owns
+// the flex basis/max). This replaced a hard single↔two-column grid breakpoint
+// whose lone tile snapped from full-width to half-width mid-resize — the wrap
+// flow grows tiles continuously instead. Shared by every section (including the
+// unknown-page catch-all) so the reflow is identical everywhere tiles render.
+function tileListStyle(): CSSProperties {
+	return { display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 6 }
 }
 
 // Catch-all for participants whose presence points at a page we can't find:
@@ -179,7 +180,7 @@ function UnknownPageSection({
 					{participants.length}
 				</span>
 			</div>
-			<div style={tileListStyle(twoUp)}>
+			<div style={tileListStyle()}>
 				{participants.map((participant) => (
 					<PanelTile key={participant.rawId} editor={editor} participant={participant} snap={snap} twoUp={twoUp} />
 				))}
@@ -218,7 +219,7 @@ function PageSectionView({
 				onMoveDown={onMoveDown}
 			/>
 			{section.participants.length > 0 && (
-				<div style={tileListStyle(twoUp)}>
+				<div style={tileListStyle()}>
 					{section.participants.map((participant) => (
 						<PanelTile
 							key={participant.rawId}
