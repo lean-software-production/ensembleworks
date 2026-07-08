@@ -10,26 +10,41 @@ import { useSyncExternalStore } from 'react'
 
 const STORAGE_KEY = 'ensembleworks.settings.v1'
 
+/** Which screen edge the command bar docks to (canvas-controls spec §4
+ * "Docking"). 'bottom' is the v1 default — everything else is a right-click
+ * (or panel-footer) opt-in that renders the bar as a vertical, icon-only
+ * strip (chrome/CommandBar.tsx). */
+export type DockEdge = 'bottom' | 'left' | 'right' | 'top'
+
+const DOCK_EDGES: readonly DockEdge[] = ['bottom', 'left', 'right', 'top']
+
 export interface EnsembleSettings {
 	githubHandle: string
+	dockEdge: DockEdge
 }
 
 const DEFAULT_SETTINGS: EnsembleSettings = {
 	githubHandle: '',
+	dockEdge: 'bottom',
 }
 
 /**
  * Parse a raw localStorage value into settings, defensively: malformed JSON,
- * a missing/non-string field, or a `null` (nothing stored yet) all fall back
- * to defaults rather than throwing. Exported so the test can exercise every
- * shape directly, without needing to reload the module between cases.
+ * a missing/non-string field, an unrecognised `dockEdge` string, or a `null`
+ * (nothing stored yet) all fall back to defaults rather than throwing.
+ * Exported so the test can exercise every shape directly, without needing to
+ * reload the module between cases.
  */
 export function parseSettings(raw: string | null): EnsembleSettings {
 	if (!raw) return { ...DEFAULT_SETTINGS }
 	try {
-		const parsed = JSON.parse(raw) as { githubHandle?: unknown }
+		const parsed = JSON.parse(raw) as { githubHandle?: unknown; dockEdge?: unknown }
 		const githubHandle = typeof parsed.githubHandle === 'string' ? parsed.githubHandle.trim() : ''
-		return { githubHandle }
+		const dockEdge =
+			typeof parsed.dockEdge === 'string' && (DOCK_EDGES as readonly string[]).includes(parsed.dockEdge)
+				? (parsed.dockEdge as DockEdge)
+				: DEFAULT_SETTINGS.dockEdge
+		return { githubHandle, dockEdge }
 	} catch {
 		return { ...DEFAULT_SETTINGS }
 	}

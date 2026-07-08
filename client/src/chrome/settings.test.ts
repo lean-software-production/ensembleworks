@@ -40,26 +40,49 @@ const { parseSettings, getSettings, updateSettings, subscribeSettings } = await 
 // --- parseSettings: defensive parsing of every raw shape ---
 
 // No value stored yet.
-assert.deepEqual(parseSettings(null), { githubHandle: '' })
+assert.deepEqual(parseSettings(null), { githubHandle: '', dockEdge: 'bottom' })
 
 // Malformed JSON falls back to defaults rather than throwing.
-assert.deepEqual(parseSettings('{not json'), { githubHandle: '' })
+assert.deepEqual(parseSettings('{not json'), { githubHandle: '', dockEdge: 'bottom' })
 
 // A non-string field (wrong shape) is treated as absent.
-assert.deepEqual(parseSettings(JSON.stringify({ githubHandle: 123 })), { githubHandle: '' })
+assert.deepEqual(parseSettings(JSON.stringify({ githubHandle: 123 })), { githubHandle: '', dockEdge: 'bottom' })
 
 // A valid value round-trips, trimmed.
 assert.deepEqual(parseSettings(JSON.stringify({ githubHandle: '  octocat  ' })), {
 	githubHandle: 'octocat',
+	dockEdge: 'bottom',
 })
 
 // A completely unrelated JSON shape (missing the field entirely) also falls
 // back to the default rather than crashing on a missing key.
-assert.deepEqual(parseSettings(JSON.stringify({ somethingElse: true })), { githubHandle: '' })
+assert.deepEqual(parseSettings(JSON.stringify({ somethingElse: true })), { githubHandle: '', dockEdge: 'bottom' })
+
+// --- dockEdge: defensive parsing, same "reject unknown, fall back to
+// default" stance as githubHandle above ---
+
+// Missing entirely → default.
+assert.deepEqual(parseSettings(JSON.stringify({ githubHandle: 'ada' })), {
+	githubHandle: 'ada',
+	dockEdge: 'bottom',
+})
+
+// A non-string field (wrong shape) is treated as absent.
+assert.deepEqual(parseSettings(JSON.stringify({ dockEdge: 123 })), { githubHandle: '', dockEdge: 'bottom' })
+
+// An unknown string (not one of the four valid edges) is rejected too, not
+// just non-strings — that's the defensive-parse case the plan calls out.
+assert.deepEqual(parseSettings(JSON.stringify({ dockEdge: 'sideways' })), { githubHandle: '', dockEdge: 'bottom' })
+
+// Each valid edge round-trips as-is.
+for (const edge of ['bottom', 'left', 'right', 'top']) {
+	assert.deepEqual(parseSettings(JSON.stringify({ dockEdge: edge })), { githubHandle: '', dockEdge: edge })
+}
 
 // --- updateSettings: persists + notifies subscribers ---
 {
 	assert.equal(getSettings().githubHandle, '', 'starts from the shimmed empty store')
+	assert.equal(getSettings().dockEdge, 'bottom', 'dockEdge starts from the shimmed default')
 
 	let calls = 0
 	const unsubscribe = subscribeSettings(() => {
@@ -75,16 +98,23 @@ assert.deepEqual(parseSettings(JSON.stringify({ somethingElse: true })), { githu
 	// this assertion exercises the real round-trip, not just a string match.
 	const raw = localStorage.getItem(STORAGE_KEY)
 	assert.ok(raw, 'update should persist to localStorage')
-	assert.deepEqual(parseSettings(raw), { githubHandle: 'ada' })
+	assert.deepEqual(parseSettings(raw), { githubHandle: 'ada', dockEdge: 'bottom' })
 
 	updateSettings({ githubHandle: 'grace' })
 	assert.equal(calls, 2, 'a second update should notify again, exactly once')
 	assert.equal(getSettings().githubHandle, 'grace')
 
+	// dockEdge updates independently of githubHandle and persists too.
+	updateSettings({ dockEdge: 'left' })
+	assert.equal(calls, 3, 'dockEdge update should also notify')
+	assert.equal(getSettings().dockEdge, 'left')
+	assert.equal(getSettings().githubHandle, 'grace', 'unrelated field is untouched by the patch')
+	assert.deepEqual(parseSettings(localStorage.getItem(STORAGE_KEY)), { githubHandle: 'grace', dockEdge: 'left' })
+
 	// --- unsubscribe stops notifications ---
 	unsubscribe()
 	updateSettings({ githubHandle: 'margaret' })
-	assert.equal(calls, 2, 'unsubscribed listener should not be notified')
+	assert.equal(calls, 3, 'unsubscribed listener should not be notified')
 	assert.equal(getSettings().githubHandle, 'margaret', 'the update itself still applies')
 }
 

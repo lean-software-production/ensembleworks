@@ -13,7 +13,12 @@
  */
 import { useState, type ReactNode } from 'react'
 import { wm } from '../theme'
-import { updateSettings, useSettings } from './settings'
+import { updateSettings, useSettings, type DockEdge } from './settings'
+
+// Same order as the command bar's right-click "Dock to" popover (spec §4
+// wording: "bottom · left · top · right") — the footer row is the
+// discoverable path to the same setting, right-click stays the fast path.
+const DOCK_EDGE_OPTIONS: readonly DockEdge[] = ['bottom', 'left', 'top', 'right']
 
 type OpenSection = 'settings' | 'help' | 'about' | null
 
@@ -108,6 +113,43 @@ function SettingsSection() {
 					fontSize: 12,
 				}}
 			/>
+
+			<span
+				style={{
+					fontFamily: wm.mono,
+					fontSize: 9,
+					fontWeight: 700,
+					textTransform: 'uppercase',
+					letterSpacing: 0.9,
+					color: wm.inkMuted,
+					marginTop: 4,
+				}}
+			>
+				Command bar
+			</span>
+			<div style={{ display: 'flex', gap: 4 }}>
+				{DOCK_EDGE_OPTIONS.map((edge) => (
+					<button
+						key={edge}
+						type="button"
+						data-testid={'ew-settings-dock-' + edge}
+						onClick={() => updateSettings({ dockEdge: edge })}
+						style={{
+							flex: 1,
+							border: edge === settings.dockEdge ? `1px solid ${wm.sealBlue}` : `1px solid ${wm.rule}`,
+							borderRadius: 3,
+							background: edge === settings.dockEdge ? wm.accentSoft : wm.bg,
+							color: wm.ink,
+							padding: '5px 4px',
+							fontFamily: wm.sans,
+							fontSize: 11,
+							cursor: 'pointer',
+						}}
+					>
+						{edge}
+					</button>
+				))}
+			</div>
 		</div>
 	)
 }

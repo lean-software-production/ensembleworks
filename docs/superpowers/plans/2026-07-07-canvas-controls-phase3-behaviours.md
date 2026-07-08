@@ -48,15 +48,16 @@
 - [ ] **Panel override**: while anyone presents (self or other), SidePanel renders the collapsed rail regardless of the layout store (temporary override — store untouched, restores on end; presenter's dot gets a ring). Canvas dim for viewers: skip actual dimming (tldraw's follow border already signals) — record as an as-built delta rather than adding an overlay.
 - [ ] Gates + commit `feat(present): presenter strip, viewer follow with opt-out, panel rail override`.
 
-### Task 5: Dock-edge setting + vertical bar
+### Task 5: Dock-edge setting + vertical bar — DONE
 
-**Files:** modify `chrome/settings.ts` (+ test), `chrome/CommandBar.tsx`, `chrome/PanelFooter.tsx`, `client/src/ui.tsx` (only if slot placement needs a wrapper).
+**Files:** modified `chrome/settings.ts` (+ test), `chrome/CommandBar.tsx`, `chrome/PanelFooter.tsx`. `client/src/ui.tsx` untouched — the Toolbar slot wrapper approach worked as anticipated, no slot-placement change needed.
 
-- [ ] `settings.ts`: add `dockEdge: 'bottom' | 'left' | 'right' | 'top'` (default 'bottom', defensive parse rejects unknown values → default). Extend the test.
-- [ ] CommandBar: read dockEdge. 'bottom'/'top' → horizontal as today; 'left'/'right' → vertical column, icon-only (labels dropped; `title` carries "label (KEY)"), overflow menu + zoom dropdown open away from the docked edge (`bottom/top/left/right` CSS on the popover per edge). Positioning: the Toolbar slot is anchored bottom-center by tldraw's layout — for non-bottom edges render the bar via a `position: fixed` wrapper positioned per edge WITHIN the canvas region (remember the side panel occupies the right ~280px+: compute `right` offset from the panel's current width via `usePanelLayout` + collapsed flag; add a comment). Verify the slot approach actually works before fighting it: rendering a fixed-position child from the Toolbar slot is legitimate; the slot's own container just ends up empty.
-- [ ] Right-click (`onContextMenu`, preventDefault) on the bar → small popover "Dock to: bottom · left · top · right" (`data-testid="ew-bar-dock-menu"`), current edge marked, persists via settings.
-- [ ] PanelFooter settings section: a dock-edge selector row (four small buttons) mirroring the same setting (discoverable path; right-click stays the fast path).
-- [ ] Gates + headless sanity (set dockEdge left via settings UI → bar renders vertical on the left; restore bottom) + commit `feat(chrome): dock-edge setting with vertical command bar`.
+- [x] `settings.ts`: added `dockEdge: 'bottom' | 'left' | 'right' | 'top'` (default 'bottom', defensive parse rejects unknown values → default). Extended `settings.test.ts` TDD (confirmed red before the implementation, green after).
+- [x] CommandBar: reads dockEdge via `useSettings()`. 'bottom' renders with no wrapper (unchanged from before); 'top'/'left'/'right' render inside a `position: fixed` wrapper (`dockWrapperStyle`, zIndex 300) positioned within the canvas region — right-docked offset computed as `usePanelLayout` (`collapsed ? 32 : width`) + 8px, commented. Vertical (`left`/`right`) drops AccelLabel (icon-only via a new `iconOnly` prop threaded through BarButton/NativeToolButton/PluginBarButton/AccentButton), title becomes "label (KEY)". Overflow popover + the new dock-menu popover share `popoverPositionStyle(dockEdge)`, opening away from the docked edge. DefaultZoomMenu's own dropdown direction was left alone (radix-managed) as instructed — as-built delta, not fought.
+- [x] Right-click (`onContextMenu`, preventDefault) on the normal bar → popover `data-testid="ew-bar-dock-menu"` listing bottom/left/top/right (`data-testid="ew-bar-dock-<edge>"`), current edge highlighted, click calls `updateSettings`; dismiss on outside-pointerdown/Escape (same pattern as the existing overflow-menu effect).
+- [x] PanelFooter settings section: added a "Command bar" row with four buttons (`data-testid="ew-settings-dock-<edge>"`), current highlighted, writes the same setting.
+- [x] Presenter/viewer strips deliberately ignore dockEdge (stay bottom-center, horizontal) — commented as a transient-overlay simplification, per the plan.
+- [x] Gates green: `bun client/src/chrome/settings.test.ts`, `bun run typecheck`, `bun scripts/run-tests.ts` (69 suites), `bun run build`. Headless smoke (Playwright via Caddy :8080): right-click → dock menu appears; pick left → bar renders vertical at the left edge (icon-only, confirmed via empty innerText + "select (S)" title), overflow opens rightward; pick right → bar sits left of the side panel (offset confirmed > panel width); footer buttons show the matching highlighted state; restored to bottom, horizontal again. Zero page errors throughout.
 
 ### Task 6: Verification + final review
 
