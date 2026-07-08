@@ -13,6 +13,7 @@ import {
 	useRelevantStyles,
 	useValue,
 } from 'tldraw'
+import { useMidGesture } from './useMidGesture'
 
 // Tools whose next-shape styles are worth editing before drawing.
 const STYLE_TOOLS = new Set(['draw', 'highlight', 'arrow', 'line', 'geo', 'note', 'text', 'frame'])
@@ -33,19 +34,7 @@ export function ContextualStylePanel() {
 		},
 		[editor]
 	)
-	const midGesture = useValue(
-		'mid gesture',
-		() =>
-			editor.isInAny(
-				'select.translating',
-				'select.resizing',
-				'select.rotating',
-				'select.brushing',
-				'select.pointing_shape',
-				'select.dragging_handle'
-			),
-		[editor]
-	)
+	const midGesture = useMidGesture()
 	// Editor viewport width, not window.innerWidth: the canvas region won't
 	// span the whole window once Phase 2 adds a right-hand side panel, and
 	// this stays reactive to resize (useValue re-runs on viewport change).

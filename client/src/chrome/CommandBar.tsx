@@ -480,7 +480,12 @@ export function CommandBar() {
 			    style neutralized so our paper bar styling stays authoritative.
 			    Its own dropdown's open direction is radix-managed — NOT flipped
 			    per dock edge here (see this file's header comment); orientation
-			    still tracks vertical/horizontal for correct roving-focus nav. */}
+			    still tracks vertical/horizontal for correct roving-focus nav.
+			    Fix 5 (spec §7): unlike the tool buttons above, this is never
+			    given `disabled={!!focusedShapeId}` — while focused the camera
+			    is locked (chrome/focus.ts's enterFocus), so zoom actions just
+			    no-op against it. Accepted: harmless dead clicks, not worth the
+			    extra disabled-prop plumbing DefaultZoomMenu doesn't expose. */}
 			<TldrawUiToolbar
 				label="Zoom"
 				orientation={vertical ? 'vertical' : 'horizontal'}
