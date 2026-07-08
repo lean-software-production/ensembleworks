@@ -52,6 +52,12 @@ let previousIsLocked = false
  * and the click landing) — nothing to zoom to, so nothing to lock.
  */
 export function enterFocus(editor: Editor, shapeId: TLShapeId) {
+	// Defense-in-depth reentrancy guard: a double-call (e.g. a fast double
+	// click on the enter affordance) must not re-snapshot `previousIsLocked`
+	// while already focused — that second snapshot would capture isLocked
+	// TRUE (this session's lock), so exitFocus would then "restore" true and
+	// leave the camera permanently locked instead of unlocking it.
+	if (focusedShapeIdAtom.get() !== null) return
 	const bounds = editor.getShapePageBounds(shapeId)
 	if (!bounds) return
 	previousIsLocked = editor.getCameraOptions().isLocked

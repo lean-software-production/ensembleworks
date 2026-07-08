@@ -52,6 +52,7 @@ import {
 	verticalDividerStyle,
 } from './barButtons'
 import { DockMenu } from './DockMenu'
+import { useFocusedShapeId } from './focus'
 import { EnsembleMainMenu } from './MainMenu'
 import { OverflowMenu } from './OverflowMenu'
 import { RAIL_WIDTH, usePanelLayout } from './panelLayout'
@@ -131,6 +132,11 @@ export function CommandBar() {
 	const helpers: BarItemHelpers = useMemo(() => ({ addDialog }), [addDialog])
 
 	const currentToolId = useValue('current tool', () => editor.getCurrentToolId(), [editor])
+
+	// Focus view (spec §7): while a terminal is focused, canvas tools in the
+	// bar disable (Present and zoom stay active — see the JSX and the
+	// accelerator guard below).
+	const focusedShapeId = useFocusedShapeId()
 
 	// Present (spec §5). isPresenting: am I broadcasting? presenter: who (if
 	// anyone else) is — derived from presence meta, see chrome/present.ts.
@@ -230,6 +236,13 @@ export function CommandBar() {
 		}
 	}, [dockMenuOpen])
 
+	// Focus view (spec §7): if the ⋯ menu happens to be open when focus
+	// starts (e.g. entered via a shortcut while the menu was up), close it —
+	// its contents are all disabled canvas tools while focused anyway.
+	useEffect(() => {
+		if (focusedShapeId) setOverflowOpen(false)
+	}, [focusedShapeId])
+
 	const priorityItems = useMemo(() => collectBarItems(plugins, 'priority'), [])
 	const overflowItems = useMemo(() => collectBarItems(plugins, 'overflow'), [])
 
@@ -269,6 +282,15 @@ export function CommandBar() {
 			}
 			if (editor.getEditingShapeId() !== null) return
 			if (!editor.getInstanceState().isFocused) return
+
+			// Focus view (spec §7): a focused terminal owns the keyboard, so every
+			// bar accelerator is suppressed except 'p' — Present must stay
+			// reachable so it can preempt focus (FocusOverlay.tsx exits focus
+			// first once presenting starts, per its "Present wins" effect). The
+			// capture-phase Ctrl+Shift+Enter chord in FocusOverlay.tsx is the real
+			// exit; everything else (laser, note, Esc, ...) is reachable again
+			// once the user exits focus first.
+			if (focusedShapeId && e.key.toLowerCase() !== 'p') return
 
 			// Present (spec §5): Esc always returns to Work chrome — ends the
 			// broadcast if I'm presenting, opts out of follow if I'm watching.
@@ -317,7 +339,7 @@ export function CommandBar() {
 		// existence/identity (checked above via presenter?.userId), so
 		// depending on the whole object would recreate this listener on every
 		// presence tick that merely touches unrelated fields (e.g. userName).
-	}, [editor, helpers, priorityItems, overflowItems, recordLastOverflow, isPresenting, presenter?.userId, optedOut, stopFollowing])
+	}, [editor, helpers, priorityItems, overflowItems, recordLastOverflow, isPresenting, presenter?.userId, optedOut, stopFollowing, focusedShapeId])
 
 	// Dismiss the overflow menu on outside pointerdown or Escape. Escape is
 	// safe to handle even where the accelerator typing guards would apply.
@@ -389,12 +411,20 @@ export function CommandBar() {
 						label={NATIVE_LABELS[id] ?? id}
 						currentToolId={currentToolId}
 						iconOnly={vertical}
+						disabled={!!focusedShapeId}
 					/>
 				)
 			})}
 
 			{priorityItems.map((item) => (
-				<PluginBarButton key={item.id} item={item} editor={editor} helpers={helpers} iconOnly={vertical} />
+				<PluginBarButton
+					key={item.id}
+					item={item}
+					editor={editor}
+					helpers={helpers}
+					iconOnly={vertical}
+					disabled={!!focusedShapeId}
+				/>
 			))}
 
 			{lastOverflowNativeTool ? (
@@ -403,15 +433,23 @@ export function CommandBar() {
 					label={NATIVE_LABELS[lastOverflowNativeTool.id] ?? lastOverflowNativeTool.id}
 					currentToolId={currentToolId}
 					iconOnly={vertical}
+					disabled={!!focusedShapeId}
 				/>
 			) : lastOverflowPluginItem ? (
-				<PluginBarButton item={lastOverflowPluginItem} editor={editor} helpers={helpers} iconOnly={vertical} />
+				<PluginBarButton
+					item={lastOverflowPluginItem}
+					editor={editor}
+					helpers={helpers}
+					iconOnly={vertical}
+					disabled={!!focusedShapeId}
+				/>
 			) : null}
 
 			<BarButton
 				id="overflow"
 				icon="dots-horizontal"
 				title="More tools"
+				disabled={!!focusedShapeId}
 				onClick={() => {
 					// Mutually exclusive with the dock menu — see onBarContextMenu.
 					setDockMenuOpen(false)

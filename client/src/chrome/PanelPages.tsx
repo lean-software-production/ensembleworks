@@ -15,6 +15,7 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { type Editor, type TLPageId, useValue } from 'tldraw'
 import { useAvSnapshot } from '../av/bridge'
 import { wm } from '../theme'
+import { exitFocus } from './focus'
 import { PanelTile, type PanelTileParticipant } from './PanelTile'
 
 interface PageSectionData {
@@ -249,7 +250,16 @@ function SectionHeader({
 		<div ref={rootRef} data-roster-page={section.name} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 2 }}>
 			<button
 				type="button"
-				onClick={() => editor.setCurrentPage(section.id)}
+				onClick={() => {
+					// Focus view (spec §7): "clicking a page section header exits
+					// focus first, then navigates." exitFocus is idempotent (a no-op
+					// when nothing's focused — see its doc comment), so this calls it
+					// unconditionally rather than reading focusedShapeIdAtom first;
+					// simpler than threading a reactive read into this non-reactive
+					// click handler for no behavioural difference.
+					exitFocus(editor)
+					editor.setCurrentPage(section.id)
+				}}
 				style={{
 					flex: 1,
 					minWidth: 0,
@@ -352,6 +362,10 @@ function NewPageButton({ editor }: { editor: Editor }) {
 			type="button"
 			data-testid="ew-panel-new-page"
 			onClick={() => {
+				// Focus view (spec §7): exit before navigating, same as the page
+				// header click above — exitFocus is idempotent so this is safe
+				// unconditionally.
+				exitFocus(editor)
 				// createPage returns the Editor, not the new page — diff the page
 				// list before/after to find the id it was given (name dedup means
 				// we can't predict it from the requested name alone).

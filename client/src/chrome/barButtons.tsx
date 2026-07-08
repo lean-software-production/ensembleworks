@@ -111,16 +111,22 @@ interface BarButtonProps {
 	/** Vertical dock edges (spec §4): drop the visible label, keep the
 	 * shortcut discoverable via `title` ("label (KEY)") instead. */
 	iconOnly?: boolean
+	/** Focus view (spec §7): canvas tools disable while a terminal is
+	 * focused. Native button `disabled` (keyboard/AT-correct, blocks clicks
+	 * for free) plus dimmed opacity + default cursor so it visibly reads as
+	 * inert rather than merely unstyled. */
+	disabled?: boolean
 	onClick: () => void
 }
 
-export function BarButton({ id, icon, label, accelerator, active, title, iconOnly, onClick }: BarButtonProps) {
+export function BarButton({ id, icon, label, accelerator, active, title, iconOnly, disabled, onClick }: BarButtonProps) {
 	const resolvedTitle = title ?? (iconOnly && label ? iconOnlyTitle(label, accelerator) : undefined)
 	return (
 		<button
 			type="button"
 			data-testid={'ew-bar-' + id}
 			title={resolvedTitle}
+			disabled={disabled}
 			onClick={onClick}
 			style={{
 				display: 'flex',
@@ -131,7 +137,8 @@ export function BarButton({ id, icon, label, accelerator, active, title, iconOnl
 				background: active ? wm.accentSoft : 'transparent',
 				border: active ? `1px solid ${wm.sealBlue}` : '1px solid transparent',
 				borderRadius: 4,
-				cursor: 'pointer',
+				cursor: disabled ? 'default' : 'pointer',
+				opacity: disabled ? 0.4 : 1,
 			}}
 		>
 			<TldrawUiButtonIcon icon={icon} small />
@@ -145,11 +152,13 @@ export function NativeToolButton({
 	label,
 	currentToolId,
 	iconOnly,
+	disabled,
 }: {
 	tool: TLUiToolItem
 	label: string
 	currentToolId: string
 	iconOnly?: boolean
+	disabled?: boolean
 }) {
 	const accel = displayKeyForKbd(tool.kbd, label)
 	return (
@@ -160,6 +169,7 @@ export function NativeToolButton({
 			accelerator={accel}
 			active={currentToolId === tool.id}
 			iconOnly={iconOnly}
+			disabled={disabled}
 			onClick={() => tool.onSelect('toolbar')}
 		/>
 	)
@@ -170,11 +180,13 @@ export function PluginBarButton({
 	editor,
 	helpers,
 	iconOnly,
+	disabled,
 }: {
 	item: BarItemDescriptor
 	editor: Editor
 	helpers: BarItemHelpers
 	iconOnly?: boolean
+	disabled?: boolean
 }) {
 	const available = item.useAvailable?.() ?? true
 	if (!available) return null
@@ -185,6 +197,7 @@ export function PluginBarButton({
 			label={item.label}
 			accelerator={item.accelerator}
 			iconOnly={iconOnly}
+			disabled={disabled}
 			onClick={() => item.onSelect(editor, helpers)}
 		/>
 	)
