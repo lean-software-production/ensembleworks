@@ -1,10 +1,15 @@
 #!/usr/bin/env bash
-# Package a version: validate, bump, tag, push. Run from a clean `main` on your
-# laptop. The public repo is the artifact store; the tag is the release.
+# Package a version: validate, bump, tag, push. The public repo is the artifact
+# store; the tag is the release (CI builds every `v*` tag and publishes its
+# GitHub release, which deploy.sh then fetches).
 #
-#   deploy/release.sh patch|minor|major          # a normal release
+#   deploy/release.sh patch|minor|major          # a normal release — from clean main
 #   deploy/release.sh rc patch|minor|major       # START an rc series: 0.11.0 -> `rc minor` -> 0.12.0-rc.1
 #   deploy/release.sh rc                         # CONTINUE it:         0.12.0-rc.1 -> 0.12.0-rc.2
+#
+# Final releases come only from a clean main. An `rc` may be cut from ANY branch:
+# it's a throwaway prerelease whose CI-built assets you can deploy to staging
+# before the branch merges. The bump commit + tag land on the current branch.
 #
 # Graduating an rc to the real release is the plain form: from 0.12.0-rc.N,
 # `release.sh minor` (or patch/major — whichever matches the series target)
@@ -36,10 +41,15 @@ rc)
 esac
 
 branch="$(git rev-parse --abbrev-ref HEAD)"
-[ "$branch" = "main" ] || {
-	echo "release from main only (on '$branch')" >&2
+# Final releases (patch|minor|major) are the real artifact and still come only
+# from main. An `rc` is a throwaway prerelease we cut to get CI-built assets to
+# deploy to staging BEFORE a branch merges, so it may be cut from any branch: its
+# bump commit + tag land on that branch and ride into main when the PR merges
+# (graduating the rc to the final release then happens from main — see header).
+if [ "$BUMP" != rc ] && [ "$branch" != "main" ]; then
+	echo "final release from main only (on '$branch') — cut a prerelease with: release.sh rc [patch|minor|major]" >&2
 	exit 1
-}
+fi
 if ! git diff --quiet || ! git diff --cached --quiet; then
 	echo "working tree not clean" >&2
 	exit 1
@@ -49,11 +59,16 @@ fi
 # release gate — including "does it disturb a running bin/dev stack?" — at
 # any time. A real release still requires clean main == origin/main.
 if [ -z "${RELEASE_DRY_RUN:-}" ]; then
-	git fetch origin main
-	[ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ] || {
-		echo "local main != origin/main" >&2
-		exit 1
-	}
+	# Sync-check the branch we're releasing FROM (main for a final release, the
+	# feature branch for an rc). A branch not yet on origin is fine — the push
+	# below creates it — so only compare when the upstream ref exists.
+	git fetch origin "$branch" 2>/dev/null || true
+	if git rev-parse --verify --quiet "origin/$branch" >/dev/null; then
+		[ "$(git rev-parse HEAD)" = "$(git rev-parse "origin/$branch")" ] || {
+			echo "local $branch != origin/$branch — push or pull first" >&2
+			exit 1
+		}
+	fi
 fi
 
 echo "==> preflight: bun meets the .tool-versions floor"
@@ -122,5 +137,5 @@ echo "==> npm version ${VERSION_ARG}"
 new="$(npm version $VERSION_ARG -m "release: %s")" # bumps package.json, commits, tags vX.Y.Z[-rc.N]
 echo "==> tagged ${new}"
 
-git push origin main --follow-tags
-echo "==> pushed main + ${new}. Deploy with: deploy/deploy.sh <ssh-target> ${new#v}"
+git push origin "$branch" --follow-tags
+echo "==> pushed $branch + ${new}. Deploy with: deploy/deploy.sh <ssh-target> ${new#v}"

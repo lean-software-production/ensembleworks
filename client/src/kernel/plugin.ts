@@ -2,11 +2,18 @@
  * The client plugin manifest (unified-architecture-design.md §1.1/§1.2,
  * client half). A plugin is a plain module object — composition is
  * build-time via the ordered list in ../plugins.ts. Registry order is
- * meaningful: it fixes shape-util registration order and toolbar/menu
- * render order.
+ * meaningful: it fixes shape-util registration order and command-bar order
+ * (priority and overflow bar items) and menu order.
  */
 import type { ComponentType } from 'react'
-import type { Editor, TLAnyShapeUtilConstructor, TLComponents, TLShape, TLUiToolItem } from 'tldraw'
+import type {
+	Editor,
+	TLAnyShapeUtilConstructor,
+	TLComponents,
+	TLShape,
+	TLUiDialogProps,
+	TLUiToolItem,
+} from 'tldraw'
 
 export interface RoomHooks {
 	/**
@@ -23,6 +30,31 @@ export interface RoomHooks {
 /** Called once per editor mount, so hook closures get per-mount state. */
 export type RoomHooksFactory = (editor: Editor) => RoomHooks
 
+export interface BarItemHelpers {
+	/** tldraw's dialog opener (from useDialogs), passed through by the bar. */
+	addDialog: (dialog: { id?: string; component: ComponentType<TLUiDialogProps> }) => void
+}
+
+/**
+ * A declarative command-bar entry (canvas-controls spec §8). The bar renders
+ * icon + label with the accelerator letter underlined, and fires onSelect on
+ * click or on the bare accelerator key.
+ */
+export interface BarItemDescriptor {
+	id: string
+	/** Lower-case label; if `accelerator` is set it must occur in this string. */
+	label: string
+	/** Single lower-case letter fired without modifiers. Optional. */
+	accelerator?: string
+	/** tldraw icon name — built-in, or contributed via the plugin's `icons`. */
+	icon: string
+	placement: 'priority' | 'overflow'
+	onSelect: (editor: Editor, helpers: BarItemHelpers) => void
+	/** Optional availability hook; the bar hides the item (and disables its
+	 * accelerator) when it returns false. Must be a stable hook function. */
+	useAvailable?: () => boolean
+}
+
 export interface ClientPlugin {
 	id: string
 	/** ShapeUtil classes contributed to the editor, in declaration order. */
@@ -31,8 +63,8 @@ export interface ClientPlugin {
 	icons?: Readonly<Record<string, string>>
 	/** Custom tools merged into the tldraw tool map (uiOverrides.tools). */
 	tools?: (editor: Editor) => Record<string, TLUiToolItem>
-	/** Rendered after DefaultToolbarContent, in registry order. */
-	ToolbarItems?: ComponentType
+	/** Declarative command-bar entries, rendered by the CommandBar (spec §8). */
+	barItems?: readonly BarItemDescriptor[]
 	/** Rendered inside the EnsembleWorks main-menu group, in registry order. */
 	MenuItems?: ComponentType
 	/** Rendered as a child of <Tldraw> (inside editor context). */
@@ -57,4 +89,31 @@ export function collectUiSlots(plugins: readonly ClientPlugin[]): Partial<TLComp
 	const slots: Partial<TLComponents> = {}
 	for (const plugin of plugins) Object.assign(slots, plugin.uiSlots ?? {})
 	return slots
+}
+
+export function collectBarItems(
+	plugins: readonly ClientPlugin[],
+	placement: BarItemDescriptor['placement']
+): BarItemDescriptor[] {
+	const allItems = plugins.flatMap((plugin) => [...(plugin.barItems ?? [])])
+
+	const acceleratorOwners = new Map<string, string>()
+	for (const item of allItems) {
+		if (!item.accelerator) continue
+		if (!item.label.toLowerCase().includes(item.accelerator.toLowerCase())) {
+			throw new Error(
+				`barItems: accelerator "${item.accelerator}" not in label "${item.label}" (item ${item.id})`
+			)
+		}
+		const key = item.accelerator.toLowerCase()
+		const owner = acceleratorOwners.get(key)
+		if (owner) {
+			throw new Error(
+				`barItems: duplicate accelerator "${item.accelerator}" on items "${owner}" and "${item.id}"`
+			)
+		}
+		acceleratorOwners.set(key, item.id)
+	}
+
+	return allItems.filter((item) => item.placement === placement)
 }

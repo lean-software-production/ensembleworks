@@ -1,10 +1,16 @@
 /**
- * Leashes from rail faces to their teammate's live cursor — drawn only for
- * the active speaker or the face you're hovering, and only when that cursor
- * is on the page you're viewing. The leash anchors at the face's on-screen
- * centre (live DOM rects from the rail's ref map), so it must recompute
- * after faces render — the useValue below re-derives on camera pans, peer
- * changes and hover changes.
+ * Leashes from panel tiles to their teammate's live cursor — drawn only for
+ * the active speaker or the tile you're hovering, and only when that cursor
+ * is on the page you're viewing. The leash anchors at the tile's on-screen
+ * centre (a live DOM element looked up via `getFaceEl`, pull-based — see
+ * av/bridge.ts), so it must recompute after tiles render — the useValue
+ * below re-derives on camera pans, peer changes and hover changes.
+ *
+ * Behaviour change vs the old faces rail (Task 5 cutover): every panel tile
+ * registers as an anchor, camera on or off — the rail only registered
+ * camera-on faces, so camera-off teammates never leashed. Deliberate: tiles
+ * are always present in the panel, so speaking/hovered camera-off users now
+ * leash to their cursor too.
  */
 import { Editor, useValue } from 'tldraw'
 import { rawUserId } from '@ensembleworks/contracts'
@@ -24,7 +30,7 @@ export function useLeashes(
 	editor: Editor,
 	peers: RemotePeer[],
 	hoveredId: string | null,
-	faceRefs: React.MutableRefObject<Map<string, HTMLDivElement>>
+	getFaceEl: (id: string) => HTMLElement | null
 ): Leash[] {
 	return useValue<Leash[]>(
 		'leashes',
@@ -37,7 +43,7 @@ export function useLeashes(
 				if (!peer.isSpeaking && hoveredId !== id) continue
 				const presence = collaborators.find((c) => rawUserId(c.userId) === id)
 				if (!presence?.cursor) continue
-				const el = faceRefs.current.get(id)
+				const el = getFaceEl(id)
 				if (!el) continue
 				const rect = el.getBoundingClientRect()
 				const end = editor.pageToViewport({ x: presence.cursor.x, y: presence.cursor.y })
@@ -53,7 +59,7 @@ export function useLeashes(
 			}
 			return out
 		},
-		[editor, peers, hoveredId]
+		[editor, peers, hoveredId, getFaceEl]
 	)
 }
 

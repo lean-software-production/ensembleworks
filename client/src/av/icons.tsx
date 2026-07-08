@@ -40,7 +40,9 @@ export function AvIconButton(props: {
 	)
 }
 
-function AvIcon({ kind, crossedOut }: { kind: AvIconKind; crossedOut: boolean }) {
+// Exported for non-interactive status uses too (e.g. a panel tile showing a
+// remote peer's cam state) — the glyph alone, no button chrome.
+export function AvIcon({ kind, crossedOut }: { kind: AvIconKind; crossedOut: boolean }) {
 	return (
 		<svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
 			{kind === 'mic' && (

@@ -14,7 +14,11 @@ import 'tldraw/tldraw.css'
 import './theme.css'
 import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
+import { presentingAtom } from './chrome/present'
+import { getSettings, updateSettings } from './chrome/settings'
+import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
+import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
 import { presentStore } from './file-viewer/presentStore'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
 import { getIdentity, getRoomId } from './identity'
@@ -61,6 +65,7 @@ function wsBase(): string {
 
 export function App() {
 	const [wasKicked, setWasKicked] = useState(false)
+	const [editor, setEditor] = useState<Editor | null>(null)
 	const store = useSync({
 		uri: `${wsBase()}/sync/${roomId}?userId=${encodeURIComponent(identity.id)}`,
 		assets: assetStore,
@@ -74,7 +79,11 @@ export function App() {
 		// stamping, proximity-ordered reads). Reactive: recomputes when our own
 		// selection/cursor/camera/page change or when any shape changes — scoped
 		// to shape records (see shapeQuery above) so other peers' cursor movement
-		// doesn't trigger it.
+		// doesn't trigger it. Also publishes `presenting` (chrome/present.ts,
+		// spec §5 "Present"): reading presentingAtom inside this reactive
+		// derivation means flipping the atom republishes presence too — same
+		// mechanism as the stamp's reactive inputs, just a second one. Riding
+		// this existing channel means Present needs no server changes.
 		getUserPresence(store, user) {
 			const defaults = getDefaultUserPresence(store, user)
 			if (!defaults) return null
@@ -90,12 +99,21 @@ export function App() {
 				screenBounds: defaults.screenBounds ?? null,
 				selectedShapeIds: defaults.selectedShapeIds,
 			})
-			// Merge the file-viewer presenter token next to the spatial stamp.
-			// presentStore reads a tldraw atom, so this read is tracked by the
-			// presence derivation: toggling Present or scrolling while idle
-			// re-emits presence. Null when not presenting (a valid JsonValue —
-			// syncs, and followers treat "no token" and "null token" alike).
-			return { ...defaults, meta: { stamp, fileViewerPresent: presentStore.get() } }
+			// Merge two presenter tokens next to the spatial stamp — both ride
+			// this presence blob so neither needs server changes:
+			//   fileViewerPresent (file-viewer/presentStore): shapeId + scroll
+			//     fraction the file-viewer follow uses. Null when not presenting
+			//     (a valid JsonValue — followers treat "no token" and "null
+			//     token" alike).
+			//   presenting (chrome/present.ts, canvas-controls spec §5): a bare
+			//     boolean for the canvas Present mode's viewer-follow.
+			// Both read tldraw atoms inside this reactive derivation, so flipping
+			// either (or scrolling while idle) re-emits presence — same tracking
+			// mechanism as the stamp's inputs.
+			return {
+				...defaults,
+				meta: { stamp, fileViewerPresent: presentStore.get(), presenting: presentingAtom.get() },
+			}
 		},
 	})
 
@@ -108,6 +126,30 @@ export function App() {
 		const onHide = () => flushConnectionLog()
 		window.addEventListener('pagehide', onHide)
 		return () => window.removeEventListener('pagehide', onHide)
+	}, [])
+
+	// Auto-fill the GitHub avatar handle from the Cloudflare Access identity —
+	// the first slice of the GitHub-keyed identity design (Milestone A, the
+	// id→login lookup it lists under future polish). Only behind Access:
+	// get-identity 404s off it (local dev / Codespaces) → no-op. Only fills when
+	// the field is empty, so a manual value (or a prior auto-fill) always wins.
+	// Fire-and-forget and bounded, so it never blocks canvas load. Writing
+	// settings.githubHandle re-renders the tile (useSettings), so the avatar
+	// lights up on its own — no other wiring needed.
+	useEffect(() => {
+		if (getSettings().githubHandle) return
+		let cancelled = false
+		void (async () => {
+			const gh = await fetchAccessGithubIdentity()
+			if (cancelled || !gh) return
+			const login = await resolveGithubLogin(gh.numericId)
+			if (cancelled || !login) return
+			// Re-check: the user may have typed a handle during the async gap.
+			if (!getSettings().githubHandle) updateSettings({ githubHandle: login })
+		})()
+		return () => {
+			cancelled = true
+		}
 	}, [])
 
 	const syncStatus = store.status === 'synced-remote' ? store.connectionStatus : store.status
@@ -123,6 +165,9 @@ export function App() {
 			// Debug/e2e hook: headless probes (docs/headless-browser.md) drive
 			// the canvas through this. Harmless in production.
 			;(window as unknown as { __ewEditor?: Editor }).__ewEditor = editor
+			// Flows the Editor instance to the App-level side panel, which lives
+			// outside tldraw's React context (plan: split layout, Task 2).
+			setEditor(editor)
 			// Default users to the paper-light canvas, but only once: tldraw
 			// persists colorScheme in its own localStorage, so afterwards we leave
 			// whatever the user chose via Preferences → Color scheme alone.
@@ -152,21 +197,24 @@ export function App() {
 	)
 
 	return (
-		<div style={{ position: 'fixed', inset: 0 }}>
-			<Tldraw
-				store={store}
-				onMount={handleMount}
-				deepLinks
-				assetUrls={assetUrls}
-				shapeUtils={customShapeUtils}
-				overrides={uiOverrides}
-				components={components}
-			>
-				{plugins.map((plugin) => {
-					const Overlay = plugin.Overlay
-					return Overlay ? <Overlay key={plugin.id} /> : null
-				})}
-			</Tldraw>
+		<div style={{ position: 'fixed', inset: 0, display: 'flex' }}>
+			<div style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+				<Tldraw
+					store={store}
+					onMount={handleMount}
+					deepLinks
+					assetUrls={assetUrls}
+					shapeUtils={customShapeUtils}
+					overrides={uiOverrides}
+					components={components}
+				>
+					{plugins.map((plugin) => {
+						const Overlay = plugin.Overlay
+						return Overlay ? <Overlay key={plugin.id} /> : null
+					})}
+				</Tldraw>
+			</div>
+			{editor && <SidePanel editor={editor} />}
 			{wasKicked && (
 				<div
 					style={{

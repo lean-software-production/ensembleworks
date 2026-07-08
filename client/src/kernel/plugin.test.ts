@@ -32,4 +32,61 @@ assert.deepEqual(Object.keys(collectUiSlots(plugins)), ['SharePanel'])
 // Aggregators never mutate their inputs.
 assert.equal(plugins[0]!.shapeUtils!.length, 2)
 
+// --- barItems ---------------------------------------------------------------
+import { collectBarItems, type BarItemDescriptor } from './plugin'
+
+const noop = () => {}
+const mkItem = (
+	id: string,
+	placement: BarItemDescriptor['placement'],
+	accelerator?: string
+): BarItemDescriptor => ({
+	id,
+	label: id,
+	accelerator,
+	icon: 'tool-frame',
+	placement,
+	onSelect: noop,
+})
+
+const barPlugins: ClientPlugin[] = [
+	{ id: 'p1', barItems: [mkItem('terminal', 'priority', 'm'), mkItem('roadmap', 'overflow')] },
+	{ id: 'p2' },
+	{ id: 'p3', barItems: [mkItem('cast', 'priority', 'c')] },
+]
+
+// Placement filter + registry order preserved.
+assert.deepEqual(
+	collectBarItems(barPlugins, 'priority').map((i) => i.id),
+	['terminal', 'cast']
+)
+assert.deepEqual(
+	collectBarItems(barPlugins, 'overflow').map((i) => i.id),
+	['roadmap']
+)
+
+// An accelerator that doesn't occur in the label is a programmer error.
+assert.throws(() =>
+	collectBarItems([{ id: 'bad', barItems: [{ ...mkItem('x', 'priority'), label: 'shell', accelerator: 'q' }] }], 'priority')
+)
+
+// Validation runs over all placements, not just the one being collected —
+// an invalid accelerator on an overflow item must still throw when collecting
+// 'priority'.
+assert.throws(() =>
+	collectBarItems(
+		[{ id: 'bad', barItems: [{ ...mkItem('x', 'overflow'), label: 'shell', accelerator: 'q' }] }],
+		'priority'
+	)
+)
+
+// Two items sharing the same accelerator (case-insensitive) is a programmer
+// error, regardless of placement.
+assert.throws(() =>
+	collectBarItems(
+		[{ id: 'dup', barItems: [mkItem('terminal', 'priority', 'm'), mkItem('menu', 'overflow', 'M')] }],
+		'priority'
+	)
+)
+
 console.log('plugin.test.ts: all assertions passed')

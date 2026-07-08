@@ -1,13 +1,12 @@
 /**
- * "New terminal" toolbar item with a gateway picker (spike spec §4).
+ * The "new terminal" flow, decoupled from any toolbar component so both the
+ * command bar (barItems) and keyboard accelerator can call it. Fast path: no
+ * remote gateways registered → create a local terminal immediately;
+ * otherwise open the gateway-picker dialog.
  *
- * Rendered as a plain TldrawUiMenuItem so tldraw's toolbar overflow can
- * manage it — at common widths the custom tools live in the "More" popover,
- * where a nested Radix dropdown trigger silently closes the popover instead
- * of opening (found via headless probe). onSelect therefore opens a tldraw
- * *dialog* to pick the gateway, which works from both toolbar contexts.
- * Fast path: no remote gateways registered → create a local terminal
- * immediately, exactly like the pre-spike button.
+ * The picker is a tldraw *dialog*, not a nested dropdown, by design: a nested
+ * Radix dropdown trigger inside tldraw's toolbar "More" popover silently
+ * closes the popover instead of opening (found via headless probe).
  */
 import {
 	TldrawUiButton,
@@ -15,12 +14,10 @@ import {
 	TldrawUiDialogCloseButton,
 	TldrawUiDialogHeader,
 	TldrawUiDialogTitle,
-	TldrawUiMenuItem,
-	useDialogs,
-	useEditor,
 	type Editor,
 	type TLUiDialogProps,
 } from 'tldraw'
+import type { BarItemHelpers } from '../kernel/plugin'
 import { createTerminalShape } from './createTerminalShape'
 
 interface GatewayInfo {
@@ -68,30 +65,17 @@ function GatewayPickerDialog({
 	)
 }
 
-export function TerminalToolbarItem() {
-	const editor = useEditor()
-	const { addDialog } = useDialogs()
-
-	return (
-		<TldrawUiMenuItem
-			id="terminal"
-			icon="tool-frame"
-			label="New terminal"
-			readonlyOk={false}
-			onSelect={() => {
-				void fetchGateways().then((gateways) => {
-					if (gateways.length === 0) {
-						createTerminalShape(editor)
-						return
-					}
-					addDialog({
-						id: 'terminal-gateway-picker', // dedupe: double-activation reuses the one dialog
-						component: (props) => (
-							<GatewayPickerDialog {...props} editor={editor} gateways={gateways} />
-						),
-					})
-				})
-			}}
-		/>
-	)
+export function openNewTerminal(editor: Editor, helpers: BarItemHelpers): void {
+	void fetchGateways().then((gateways) => {
+		if (gateways.length === 0) {
+			createTerminalShape(editor)
+			return
+		}
+		helpers.addDialog({
+			id: 'terminal-gateway-picker', // dedupe: double-activation reuses the one dialog
+			component: (props: TLUiDialogProps) => (
+				<GatewayPickerDialog {...props} editor={editor} gateways={gateways} />
+			),
+		})
+	})
 }

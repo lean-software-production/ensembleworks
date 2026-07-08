@@ -192,15 +192,58 @@ letter.
 Each phase shippable alone:
 
 1. **CommandBar** — priority tools, underlined accelerators, new bindings
-   (S alias, M, C, P), ⋯ overflow with last-used adoption, hide stock
-   toolbar/menus, contextual style panel.
+   (S alias, M, C — the P binding lands with Present in phase 3), ⋯ overflow
+   with last-used adoption, hide stock toolbar/menus, contextual style panel.
+   *Shipped 2026-07-07 (branch canvas-controls-ux). As-built deltas: overflow
+   carries rectangle + ellipse rather than the full shape grid; ☰ still shows
+   tldraw's full default menu content — trimming it to canvas verbs moves to
+   phase 2.*
 2. **SidePanel** — split layout, page sections + navigation, user tiles
    (video/initials/avatar, colour swatch, mic-cam), recording row, footer,
-   settings dialog (incl. GitHub handle, dock edge).
+   settings dialog (incl. GitHub handle, dock edge); trim ☰ to canvas verbs
+   only (§4).
+   *Shipped 2026-07-07 (branch canvas-controls-ux). As-built deltas: fixed
+   280px width (resize/collapse → phase 3); page ⋯ menu is rename·delete only
+   (reorder/seed/export deferred; seed items stay under ☰); settings is an
+   inline footer section with only the GitHub handle (dock edge → phase 3);
+   avatars are local-user-only (handles aren't synced — remote users get
+   initials); other tiles show a cam-status glyph only (no per-peer mic state
+   exists); own tile gained a third toggle (spatial/standup); ☰ keeps a
+   trimmed Preferences submenu (colour scheme has no panel home yet) while
+   Language + Keyboard-shortcuts went; every tile is a leash anchor so
+   camera-off speakers now leash; kick is a hover-revealed button; an
+   unknown-page catch-all section lists participants on deleted pages; name
+   editing was never absorbed (only colour) — startup prompt remains.*
 3. **Behaviours** — resize/collapse/f2f reflow, Present broadcast + follow,
    dock-edge vertical variant.
+   *Shipped 2026-07-08 (branch canvas-controls-ux). As-built deltas: two-up
+   reflow triggers at a fixed 480px panel width (not ~40% of window) with two
+   discrete tile sizes; collapse snap has a 140/180 hysteresis band and
+   restores the pre-drag width; width capped at 720px / 60% of window;
+   Present rides presence meta (zero server changes; expiry self-heals
+   disconnects) — the render-lag double-present race is guarded client-side
+   and the residual network race is surfaced ("also presenting" notice), not
+   prevented; viewer canvas dim skipped (tldraw's follow border signals);
+   presenter/viewer strips ignore dockEdge (always bottom-center); P/Esc
+   share the bar accelerator guards so Esc won't end presenting from inside
+   a text field; viewer opt-out is per-presenter-session and not durable
+   across a presenter presence blip; pan-away ends the follow and the strip
+   label honestly flips to "⟨name⟩ is presenting"; dock menu includes
+   'bottom'; DefaultZoomMenu dropdown direction stays radix-managed.*
 4. **Focus view** (§7) — independent of the others; can ship alongside any
    phase since it only needs the terminal plugin + a chrome state.
+   *Shipped 2026-07-08 (branch canvas-controls-ux). As-built deltas: enter is
+   a selection-anchored ⛶ overlay (not a button on the terminal's own shape
+   chrome) and no enter keyboard shortcut shipped; exit keeps the camera
+   zoomed on the terminal rather than restoring the pre-focus view; Present
+   wins in both directions (focus force-exits when presenting starts and is
+   unenterable while anyone presents, incl. opted-out viewers); while focused
+   a capture-phase listener swallows all unmodified tool keys on non-editable
+   targets (p and Ctrl/Cmd+Shift+Enter are the only pass-throughs; the
+   terminal keeps every key); the zoom menu stays clickable but no-ops
+   against the locked camera; clicking the matte deliberately does not exit;
+   the matte is paper-toned, not a dark scrim; mechanism is shape-agnostic
+   via FOCUSABLE_SHAPE_TYPES, armed for terminals only.*
 
 ## 10. Out of scope
 
