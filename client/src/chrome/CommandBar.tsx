@@ -3,8 +3,14 @@
  * canvas verbs replacing tldraw's DefaultToolbar. Left to right: ☰ main menu,
  * priority tools (native select/note/text/frame + plugin barItems) with
  * underlined accelerators, the ⋯ overflow (demoted native tools + plugin
- * overflow items, last-used item adopted next to the ⋯ trigger), and zoom.
- * Present button lands in Phase 3.
+ * overflow items, last-used item adopted next to the ⋯ trigger), ▶ Present,
+ * and zoom.
+ *
+ * Present (spec §5) replaces the ENTIRE bar with a slim strip in two cases:
+ * presenting locally (laser · note · END PRESENTING · rec dot) or watching
+ * someone else present (Following ⟨name⟩ · STOP FOLLOWING, until opted out).
+ * See `PresenterStrip`/`ViewerStrip` below and `chrome/present.ts` for the
+ * presence-meta plumbing those read.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
@@ -19,11 +25,13 @@ import {
 	type TLUiIconJsx,
 	type TLUiToolItem,
 } from 'tldraw'
+import { useAvSnapshot } from '../av/bridge'
 import { collectBarItems, type BarItemDescriptor, type BarItemHelpers } from '../kernel/plugin'
 import { plugins } from '../plugins'
 import { wm } from '../theme'
 import { displayKeyForKbd, splitAccelLabel } from './accel'
 import { EnsembleMainMenu } from './MainMenu'
+import { presentingAtom, useIsPresenting, usePresenter } from './present'
 
 // Native tldraw tools shown as first-class verbs, in bar order (spec §4).
 const PRIORITY_TOOLS = ['select', 'note', 'text', 'frame'] as const
@@ -200,6 +208,140 @@ function AvailabilityProbe({
 	return null
 }
 
+// Blink animation for the presenter strip's rec dot — same visual language as
+// the side panel's recording indicators (SidePanel.tsx's scribeBlinkKeyframes
+// / PanelFooter), duplicated locally rather than imported since CommandBar
+// lives outside that module and the keyframe name/rule is trivially small.
+const barRecBlinkKeyframes =
+	'@keyframes ew-bar-rec-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }'
+
+function RecDot() {
+	return (
+		<>
+			<style>{barRecBlinkKeyframes}</style>
+			<span
+				aria-hidden="true"
+				title="Recording"
+				style={{
+					width: 8,
+					height: 8,
+					borderRadius: '50%',
+					background: wm.crit,
+					flex: '0 0 auto',
+					animation: 'ew-bar-rec-blink 1.4s ease-in-out infinite',
+				}}
+			/>
+		</>
+	)
+}
+
+// A bar button with a permanent colour accent (border + tinted background)
+// rather than BarButton's active-state accent — used for ▶ Present (green,
+// wm.ok) and the crit/red END PRESENTING · STOP FOLLOWING buttons, which need
+// to read as set-off from the rest of the bar regardless of interaction state.
+function AccentButton({
+	id,
+	icon,
+	label,
+	accelerator,
+	accentColor,
+	title,
+	onClick,
+}: {
+	id: string
+	icon: string
+	label: string
+	accelerator?: string
+	accentColor: string
+	title?: string
+	onClick: () => void
+}) {
+	return (
+		<button
+			type="button"
+			data-testid={'ew-bar-' + id}
+			title={title}
+			onClick={onClick}
+			style={{
+				display: 'flex',
+				flexDirection: 'column',
+				alignItems: 'center',
+				gap: 1,
+				padding: '4px 8px',
+				background: `${accentColor}1a`,
+				border: `1px solid ${accentColor}`,
+				borderRadius: 4,
+				cursor: 'pointer',
+			}}
+		>
+			<TldrawUiButtonIcon icon={icon} small />
+			<AccelLabel label={label} accelerator={accelerator} />
+		</button>
+	)
+}
+
+// Presenter mode (spec §5 "Presenter: bar becomes laser · note · END
+// PRESENTING (+ rec dot)"): replaces the ENTIRE bar. Laser/note reuse the
+// native tools (same NativeToolButton the normal bar uses for its priority
+// tools) so arming them behaves identically to picking them off the full bar.
+function PresenterStrip({
+	tools,
+	currentToolId,
+	showRecDot,
+}: {
+	tools: ReturnType<typeof useTools>
+	currentToolId: string
+	showRecDot: boolean
+}) {
+	const laserTool = tools['laser']
+	const noteTool = tools['note']
+	return (
+		<div data-testid="ew-command-bar" onPointerDown={stopEventPropagation} style={barStyle}>
+			{laserTool && (
+				<NativeToolButton tool={laserTool} label={NATIVE_LABELS.laser ?? 'laser'} currentToolId={currentToolId} />
+			)}
+			{noteTool && (
+				<NativeToolButton tool={noteTool} label={NATIVE_LABELS.note ?? 'note'} currentToolId={currentToolId} />
+			)}
+			<div style={dividerStyle} />
+			<AccentButton
+				id="end-present"
+				icon="cross-circle"
+				label="end presenting"
+				accentColor={wm.crit}
+				title="End presenting (Esc)"
+				onClick={() => presentingAtom.set(false)}
+			/>
+			{showRecDot && <RecDot />}
+		</div>
+	)
+}
+
+// Viewer mode (spec §5 "Viewers: … bar becomes 'Following ⟨name⟩ · STOP
+// FOLLOWING'. Esc or STOP opts out locally (chrome stays minimal until
+// presenting ends or they exit)."): once opted out the STOP button disappears
+// (there's nothing left to stop) but the strip itself stays — the bar does
+// NOT return to its normal contents until the presenter's meta clears.
+function ViewerStrip({ presenterName, optedOut, onStop }: { presenterName: string; optedOut: boolean; onStop: () => void }) {
+	return (
+		<div data-testid="ew-command-bar" onPointerDown={stopEventPropagation} style={barStyle}>
+			<span style={{ fontSize: 11, color: wm.inkMuted, padding: '0 8px', whiteSpace: 'nowrap' }}>
+				{optedOut ? `${presenterName} is presenting` : `Following ${presenterName}`}
+			</span>
+			{!optedOut && (
+				<AccentButton
+					id="stop-following"
+					icon="cross-circle"
+					label="stop following"
+					accentColor={wm.crit}
+					title="Stop following (Esc)"
+					onClick={onStop}
+				/>
+			)}
+		</div>
+	)
+}
+
 export function CommandBar() {
 	const editor = useEditor()
 	const tools = useTools()
@@ -207,6 +349,50 @@ export function CommandBar() {
 	const helpers: BarItemHelpers = useMemo(() => ({ addDialog }), [addDialog])
 
 	const currentToolId = useValue('current tool', () => editor.getCurrentToolId(), [editor])
+
+	// Present (spec §5). isPresenting: am I broadcasting? presenter: who (if
+	// anyone else) is — derived from presence meta, see chrome/present.ts.
+	const isPresenting = useIsPresenting()
+	const presenter = usePresenter(editor)
+	const snap = useAvSnapshot()
+
+	// Viewer opt-out: STOP FOLLOWING (or Esc) sets this without touching
+	// `presenter`, so the auto-follow effect below — keyed only on
+	// presenter?.userId — does NOT re-trigger and drag the viewport back.
+	const [optedOut, setOptedOut] = useState(false)
+	// Tracks the previous presenter id purely to detect session BOUNDARIES
+	// (someone starts/stops presenting) inside a single effect below, without
+	// needing presenter identity in the auto-follow effect's own deps.
+	const prevPresenterIdRef = useRef<string | null>(null)
+
+	// Session-boundary effect: when the presenter changes (including to/from
+	// nobody), reset the local opt-out for the new session, and — if a
+	// presenter session just ENDED — stop following them (only if we're still
+	// actually following; STOP already did this if we'd opted out).
+	useEffect(() => {
+		const currentId = presenter?.userId ?? null
+		const prevId = prevPresenterIdRef.current
+		if (currentId === prevId) return
+		if (prevId && !currentId && editor.getInstanceState().followingUserId === prevId) {
+			editor.stopFollowingUser()
+		}
+		prevPresenterIdRef.current = currentId
+		setOptedOut(false)
+	}, [editor, presenter?.userId])
+
+	// Auto-follow (spec §5 "auto-follow ONCE per presenter session"): keyed
+	// ONLY on presenter?.userId, deliberately excluding `optedOut` — a manual
+	// STOP flips optedOut without changing presenter.userId, so this effect
+	// does not re-run and does not re-trigger following after STOP.
+	useEffect(() => {
+		if (!presenter) return
+		editor.startFollowingUser(presenter.userId)
+	}, [editor, presenter?.userId])
+
+	const stopFollowing = useCallback(() => {
+		editor.stopFollowingUser()
+		setOptedOut(true)
+	}, [editor])
 
 	const rootRef = useRef<HTMLDivElement>(null)
 	const [overflowOpen, setOverflowOpen] = useState(false)
@@ -258,6 +444,33 @@ export function CommandBar() {
 			if (editor.getEditingShapeId() !== null) return
 			if (!editor.getInstanceState().isFocused) return
 
+			// Present (spec §5): Esc always returns to Work chrome — ends the
+			// broadcast if I'm presenting, opts out of follow if I'm watching.
+			// 'p' starts presenting from the normal bar. Both share this
+			// handler's typing/editing guards above rather than getting an
+			// always-on path: a deliberate tradeoff (noted in the plan) — Esc
+			// won't reach Present while a shape is being edited or a text
+			// field is focused, same as every other accelerator here, for
+			// uniform behaviour rather than a special case.
+			if (e.key === 'Escape') {
+				if (isPresenting) {
+					e.preventDefault()
+					presentingAtom.set(false)
+					return
+				}
+				if (presenter && !optedOut) {
+					e.preventDefault()
+					stopFollowing()
+					return
+				}
+				return
+			}
+			if (e.key.toLowerCase() === 'p' && !isPresenting && !presenter) {
+				e.preventDefault()
+				presentingAtom.set(true)
+				return
+			}
+
 			const item = itemsByAccelerator.get(e.key.toLowerCase())
 			if (!item) return
 			// Unavailable items have their accelerator disabled (plugin contract).
@@ -270,7 +483,7 @@ export function CommandBar() {
 
 		window.addEventListener('keydown', onKeyDown)
 		return () => window.removeEventListener('keydown', onKeyDown)
-	}, [editor, helpers, priorityItems, overflowItems, recordLastOverflow])
+	}, [editor, helpers, priorityItems, overflowItems, recordLastOverflow, isPresenting, presenter, optedOut, stopFollowing])
 
 	// Dismiss the overflow menu on outside pointerdown or Escape. Escape is
 	// safe to handle even where the accelerator typing guards would apply.
@@ -290,6 +503,16 @@ export function CommandBar() {
 			window.removeEventListener('keydown', onKeyDown)
 		}
 	}, [overflowOpen])
+
+	// Present mode replaces the ENTIRE bar (spec §5) — these two branches
+	// return BEFORE the normal bar's remaining derived state/JSX below, which
+	// is fine: every hook this component uses has already run above them.
+	if (isPresenting) {
+		return <PresenterStrip tools={tools} currentToolId={currentToolId} showRecDot={!!snap && snap.scribes.length > 0} />
+	}
+	if (presenter) {
+		return <ViewerStrip presenterName={presenter.userName} optedOut={optedOut} onStop={stopFollowing} />
+	}
 
 	const lastOverflowNativeTool =
 		lastOverflowId && (OVERFLOW_TOOLS as readonly string[]).includes(lastOverflowId)
@@ -344,6 +567,17 @@ export function CommandBar() {
 				icon="dots-horizontal"
 				title="More tools"
 				onClick={() => setOverflowOpen((open) => !open)}
+			/>
+
+			<div style={dividerStyle} />
+			<AccentButton
+				id="present"
+				icon="share-1"
+				label="present"
+				accelerator="p"
+				accentColor={wm.ok}
+				title="Present (P)"
+				onClick={() => presentingAtom.set(true)}
 			/>
 
 			<div style={dividerStyle} />

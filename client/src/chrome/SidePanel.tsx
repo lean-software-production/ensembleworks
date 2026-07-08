@@ -12,7 +12,11 @@
  * Width and collapsed (rail) state come from the panelLayout module store
  * (canvas-controls spec §3 "Panel states"), not a fixed constant: a resize
  * grip on the panel's left edge drags the width, snapping to a 32px
- * collapsed rail below ~140px.
+ * collapsed rail below ~140px. Present (spec §5 "Everyone: panel
+ * auto-collapses to the rail") temporarily OVERRIDES that store — while
+ * anyone presents, the rail renders regardless of `layout.collapsed`, and
+ * the resize grip locks (no store writes) so the user's actual width/collapsed
+ * preference is untouched and simply resumes once presenting ends.
  */
 import { useRef, useState } from 'react'
 import { rawUserId } from '@ensembleworks/contracts'
@@ -33,6 +37,7 @@ import {
 import { PanelFooter } from './PanelFooter'
 import { PanelPages } from './PanelPages'
 import { initialsFor, type PanelTileParticipant } from './PanelTile'
+import { useIsPresenting, usePresenter } from './present'
 
 // Blink animation for the recording dot, ported from the old floating
 // session-panel roster's ScribeRow (deleted at Task 5 cutover) — kept as a
@@ -57,6 +62,16 @@ export function SidePanel({ editor }: { editor: Editor }) {
 		() => editor.getCollaborators().length + 1,
 		[editor]
 	)
+
+	// Present (spec §5 "Everyone: panel auto-collapses to the rail (presenter's
+	// dot ringed); prior width restored on exit"). `forcedRail` overrides
+	// `layout.collapsed` for the duration of anyone's presentation — the store
+	// itself is never written here, so exiting presenting just falls back to
+	// whatever `layout` already held.
+	const isPresenting = useIsPresenting()
+	const presenter = usePresenter(editor)
+	const forcedRail = isPresenting || presenter !== null
+	const presentingUserId = isPresenting ? editor.user.getId() : (presenter?.userId ?? null)
 
 	// Self + collaborators, for the collapsed rail's avatar dots — same
 	// self-first shape PanelPages.tsx builds for page-section rosters, minus
@@ -84,7 +99,7 @@ export function SidePanel({ editor }: { editor: Editor }) {
 		[editor]
 	)
 
-	if (layout.collapsed) {
+	if (layout.collapsed || forcedRail) {
 		return (
 			<div
 				data-testid="ew-panel-rail"
@@ -102,9 +117,14 @@ export function SidePanel({ editor }: { editor: Editor }) {
 					borderLeft: `1px solid ${wm.ruleStrong}`,
 				}}
 			>
-				<PanelResizeGrip />
+				<PanelResizeGrip locked={forcedRail} />
 				{railParticipants.map((participant) => (
-					<RailAvatarDot key={participant.rawId} participant={participant} snap={snap} />
+					<RailAvatarDot
+						key={participant.rawId}
+						participant={participant}
+						snap={snap}
+						isPresentingUser={presentingUserId === participant.prefixedId}
+					/>
 				))}
 				{snap && snap.scribes.length > 0 && (
 					<>
@@ -126,14 +146,20 @@ export function SidePanel({ editor }: { editor: Editor }) {
 				<button
 					type="button"
 					data-testid="ew-panel-expand"
+					// Disabled during the Present override — layout.collapsed is
+					// untouched by this button, so toggling it here would silently
+					// do nothing visible until presenting ends anyway; disabling is
+					// the honest affordance rather than a click that appears to fail.
+					disabled={forcedRail}
 					onClick={() => setPanelCollapsed(false)}
-					title="Expand panel"
+					title={forcedRail ? 'Panel stays collapsed while presenting' : 'Expand panel'}
 					style={{
 						marginTop: 'auto',
 						border: 0,
 						background: 'transparent',
 						color: wm.inkMuted,
-						cursor: 'pointer',
+						cursor: forcedRail ? 'not-allowed' : 'pointer',
+						opacity: forcedRail ? 0.35 : 1,
 						fontSize: 16,
 						lineHeight: 1,
 						padding: 4,
@@ -313,7 +339,11 @@ function ScribeRow({ name, onOpenTranscript }: { name: string; onOpenTranscript:
 // Collapse state is read synchronously from the store (getPanelLayout())
 // inside the handlers rather than from a prop, so a fast drag firing many
 // pointermoves between renders always sees the current value.
-function PanelResizeGrip() {
+//
+// `locked` (Present's rail override): the grip becomes inert — no drag, no
+// double-click toggle — so the panelLayout store genuinely stays untouched
+// while presenting forces the rail, per this file's header comment.
+function PanelResizeGrip({ locked }: { locked?: boolean }) {
 	const draggingRef = useRef(false)
 	// The stored width when this drag began. A drag that ends in the rail
 	// live-resizes through 220 → 200 → 181 on the way down, so by the time
@@ -323,6 +353,7 @@ function PanelResizeGrip() {
 	const dragStartWidthRef = useRef(0)
 
 	const onPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+		if (locked) return
 		e.preventDefault()
 		draggingRef.current = true
 		dragStartWidthRef.current = getPanelLayout().width
@@ -331,7 +362,7 @@ function PanelResizeGrip() {
 	}
 
 	const onPointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
-		if (!draggingRef.current) return
+		if (locked || !draggingRef.current) return
 		const width = window.innerWidth - e.clientX
 
 		// panelDragAction's dead band (140-179) guarantees no store write below
@@ -368,14 +399,16 @@ function PanelResizeGrip() {
 			onPointerMove={onPointerMove}
 			onPointerUp={endDrag}
 			onPointerCancel={endDrag}
-			onDoubleClick={() => togglePanelCollapsed()}
+			onDoubleClick={() => {
+				if (!locked) togglePanelCollapsed()
+			}}
 			style={{
 				position: 'absolute',
 				left: -3,
 				top: 0,
 				bottom: 0,
 				width: 6,
-				cursor: 'ew-resize',
+				cursor: locked ? 'default' : 'ew-resize',
 				zIndex: 2,
 				touchAction: 'none',
 			}}
@@ -386,19 +419,27 @@ function PanelResizeGrip() {
 // One dot per participant in the collapsed rail: colour-tinted circle with
 // the first initial, ringed while speaking — same ring colour/semantics as
 // PanelTile's full-tile outline (spec §3 "Panel states": "ring = speaking").
+// `isPresentingUser` (spec §5 "presenter's dot ringed") takes precedence over
+// the speaking ring: there's one outline slot on the dot, and who's
+// presenting is rarer and more important to spot at a glance than the
+// flickering speaking indicator — a presenter who's also talking just keeps
+// the presenter's colour rather than the two trying to combine.
 function RailAvatarDot({
 	participant,
 	snap,
+	isPresentingUser,
 }: {
 	participant: PanelTileParticipant
 	snap: AvPanelSnapshot | null
+	isPresentingUser: boolean
 }) {
 	const peer = !participant.isLocal ? (snap?.peers.find((p) => p.id === participant.rawId) ?? null) : null
 	const isSpeaking = participant.isLocal ? (snap?.localSpeaking ?? false) : (peer?.isSpeaking ?? false)
+	const ringColor = isPresentingUser ? wm.ok : isSpeaking ? wm.sealBlue : null
 
 	return (
 		<div
-			title={participant.name + (participant.isLocal ? ' (you)' : '')}
+			title={participant.name + (participant.isLocal ? ' (you)' : '') + (isPresentingUser ? ' — presenting' : '')}
 			style={{
 				width: 20,
 				height: 20,
@@ -411,7 +452,7 @@ function RailAvatarDot({
 				fontFamily: wm.sans,
 				fontSize: 10,
 				fontWeight: 700,
-				outline: isSpeaking ? `2px solid ${wm.sealBlue}` : 'none',
+				outline: ringColor ? `2px solid ${ringColor}` : 'none',
 				outlineOffset: 1,
 			}}
 		>
