@@ -13,13 +13,15 @@ import { createSyncApp } from './app.ts'
 
 const PORT = Number(process.env.PORT ?? 8788)
 const DATA_DIR = process.env.DATA_DIR ?? path.join(process.cwd(), 'data')
+const DATABASE_DIR = process.env.DATABASE_DIR // optional: fast boot-disk path for room DBs
 const CLIENT_DIST = process.env.CLIENT_DIST ?? path.join(import.meta.dirname, '../../client/dist')
 
-const { server } = createSyncApp({ dataDir: DATA_DIR, clientDist: CLIENT_DIST })
+const { server } = createSyncApp({ dataDir: DATA_DIR, databaseDir: DATABASE_DIR, clientDist: CLIENT_DIST })
 
 server.listen(PORT, () => {
 	console.log(`ensembleworks sync server listening on :${PORT}`)
 	console.log(`  data dir: ${DATA_DIR}`)
+	console.log(`  database dir: ${DATABASE_DIR ?? '(unset — room DBs under data dir)'}`)
 	console.log(`  client build: ${existsSync(CLIENT_DIST) ? CLIENT_DIST : '(not built — dev mode)'}`)
 	console.log(`  auth posture: ${accessVerificationEnabled() ? 'verified (CF Access JWT signatures checked)' : 'header-trust (no CF_ACCESS_TEAM_DOMAIN/AUD — trusting edge headers)'}`)
 })
