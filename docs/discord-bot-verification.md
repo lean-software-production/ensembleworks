@@ -51,39 +51,28 @@ room participants mutually trusted). Revisit if multi-tenancy ever appears.
    — opening it should zoom the canvas to that frame once it hydrates. Also verify
    the overflow *copy frame link* action copies that URL.
 
-## C. Deferred: release + deploy pipeline wiring (needs a real deploy in the loop)
+## C. Release + deploy pipeline — WIRED (operator steps in the runbook)
 
-The bot builds and runs, and its systemd units exist
-(`deploy/systemd/ensembleworks-discord.service` and `…/prod/…`), but it is **not yet
-wired into `deploy/deploy.sh` / `deploy/release.sh`**. Doing this blind (without a
-real deploy to verify) risks breaking a working production script, so it was left as
-an explicit step:
+The bot is now wired end-to-end into the release/deploy pipeline and the machinery is
+**locally verified** via `deploy/test/fake-release.sh` (fetch → checksum → boot-check
+including `ensembleworks-discord --check` all pass):
 
-1. **`deploy/release.sh`** already gates on `npm run build` which now includes the
-   discord workspace (its `build` = `tsc --noEmit`). If the bot ships as a **compiled
-   binary** like the server/transcriber, add `@ensembleworks/discord`’s `build:binary`
-   (→ `dist/ensembleworks-discord`) to the artifact build + the GitHub release upload.
-2. **`deploy/deploy.sh`**:
-   - fetch the `ensembleworks-discord` binary alongside the server/transcriber
-     artifacts (see the artifact list around the top-of-file comment);
-   - add `ensembleworks-discord` to the prod unit install list (the
-     `sudo rm -rf …service.d` + `for u in …` loop and the `PROD_UNITS` copy) with the
-     `@APP_USER@`/`@APP_HOME@` sed substitution;
-   - add it to the enable/restart block near the end (mirror the scribe line:
-     `systemctl is-active --quiet ensembleworks-discord && restart || true` if you want
-     it optional, or add it to the unconditional restart list if always-on);
-   - ensure a boot-check of the fetched binary if the script boot-checks the others.
-3. **Secrets on the box:** create `~/.config/ensembleworks/discord.env` with
-   `DISCORD_BOT_TOKEN` + `DISCORD_INTERNAL_SECRET`, and ensure the **sync server's**
-   EnvironmentFile (`sync.env`) carries the **same** `DISCORD_INTERNAL_SECRET` (and
-   optionally `DISCORD_PORT=8790`). Without the shared secret, outbound posts 401.
-4. **Prod bot→server auth:** the bot creates stickies via `POST /api/canvas/sticky`
-   using a Cloudflare Access service token (`CF_ACCESS_CLIENT_ID`/`_SECRET`), the same
-   pattern as other bots — provision one and map its `common_name` in
-   `service-tokens.toml` to a read-write identity.
+- **CI** (`.github/workflows/release-cli.yml`) cross-compiles `ensembleworks-discord`
+  (linux x64 + arm64) in the `binaries` job, boot-checks it in `smoke`, and the
+  `publish` job uploads it with the other release assets.
+- **`deploy/lib.sh`** fetches + re-homes + boot-checks the binary
+  (`ew_fetch_release`, `ew_boot_check`).
+- **`deploy/deploy.sh`** ships the prod unit, installs it, and restarts it
+  **if enabled** (opt-in, like the scribe).
+- **`discord/src/main.ts --check`** is the boot-check entrypoint (links + binds
+  `/post`, exits 0, never connects to Discord).
 
-Verify the first deploy by watching `journalctl -u ensembleworks-discord` for a clean
-`gateway connected`, then run the B.3–B.5 round-trips against the deployed instance.
+The remaining work is **operator setup on the box** (env files, the shared secret,
+the Cloudflare Access service token, enabling the unit) and the **first real deploy** —
+all documented step-by-step in **[discord-bot-runbook.md](discord-bot-runbook.md) §5**.
+What has *not* happened is an actual production deploy + live Discord round-trip; the
+runbook's verification step (`journalctl -u ensembleworks-discord` → `gateway
+connected`, then the §4 round-trips) closes that out.
 
 ## D. Outstanding local-UI verification debt
 

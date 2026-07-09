@@ -297,7 +297,9 @@ The HTTP routes: `POST /api/scribe/transcript` (scribe writes),
 ## Discord bot
 
 The **Discord bot** (`discord/`, `@ensembleworks/discord`, Bun) bridges a guild
-to the canvas both ways. **Inbound**: messages in a bound Discord channel land as
+to the canvas both ways. Full setup — creating the bot, permissions, dev testing,
+and production deploy — is in [docs/discord-bot-runbook.md](docs/discord-bot-runbook.md).
+**Inbound**: messages in a bound Discord channel land as
 stickies inside the frame that channel is bound to. **Outbound**: on a trigger,
 summaries / action-items / decisions / frame-links from a room are posted into a
 bound channel. It holds the bot token and the gateway connection, and exposes an
