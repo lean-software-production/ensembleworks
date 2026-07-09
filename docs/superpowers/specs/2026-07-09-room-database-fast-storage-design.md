@@ -29,6 +29,18 @@ orthogonal to this fix and has its own blast radius (hardcoded path
 references in `deploy/cutover-dataload-check.sh` and all four hosts'
 `bootstrap.sh`), so it's out of scope here.
 
+## Goals / done when
+
+- Room SQLite writes hit fast (boot-disk) storage, not the slow `/home`
+  volume — eliminating the fsync-latency source behind incident #18.
+- The "boot disk is disposable / rebuildable without data loss" property is
+  preserved: a durable copy of every room DB lands on `/home` at least every
+  15 minutes.
+- A boot-disk rebuild is recoverable via a single documented, manually-run
+  restore step.
+- No change to where uploads/transcripts/roadmaps/telemetry live, and — the
+  hard constraint — no data loss during the migration itself.
+
 ## Architecture
 
 ```
@@ -52,18 +64,33 @@ Boot disk (fast — ~0.37ms write, ~0.14ms flush; ext4, no COW concerns)
 ```
 
 Every 15 minutes, `ensembleworks-database-backup.timer` runs a script that
-uses SQLite's Online Backup API (`sqlite3 <room>.sqlite ".backup <tmp>"` +
-atomic `mv`) — safe to run against a live, actively-written WAL-mode
-database — to copy each room file from the boot disk into the existing
-`rooms/` location on `/home`.
+uses SQLite's Online Backup API (safe to run against a live,
+actively-written WAL-mode database) to copy each room file from the boot
+disk into the existing `rooms/` location on `/home`. The temp-file-then-mv
+mechanics that make this crash-safe across the two filesystems are detailed
+under Backup and restore below.
 
 **Why reuse the existing `rooms/` path on `/home` rather than a new
-directory name:** `deploy/cutover.sh`'s existing backup step (`cp -a` of the
+directory name:** it keeps `deploy/cutover.sh`'s backup step (`cp -a` of the
 whole `DATA_DIR` during version cutovers) and `deploy/cutover-dataload-check.sh`
 (which boots a test server against a copy of `DATA_DIR` to verify every room
-loads under new app code) both need zero changes — they already look for
-room data at `DATA_DIR/rooms/`, and the fallback described below means that's
-exactly where the backup lands by default.
+loads under new app code) working essentially as-is — they already look for
+room data at `DATA_DIR/rooms/`, and that is exactly where the backup lands.
+Two caveats follow and must be handled:
+
+- **Freshness of the cutover safety backup.** `cutover.sh`'s `cp -a` of
+  `DATA_DIR` previously captured *live* room state; post-migration
+  `DATA_DIR/rooms/` is only as fresh as the last 15-minute backup, so the
+  pre-cutover rollback snapshot is up to ~15 minutes stale for room data.
+  Acceptable (cutovers are planned, and the live data is still safe on the
+  boot disk), but should be understood rather than assumed away.
+- **`cutover-dataload-check.sh` must set `DATABASE_DIR` to its scratch copy.**
+  Today it boots the server with only `DATA_DIR="$work"` set, so it relies on
+  the `DATABASE_DIR`-unset fallback to find rooms under `$work/rooms` — which
+  works only because the ssh shell running the check has no ambient
+  `DATABASE_DIR`. To be robust and to exercise the *same* resolution path
+  production uses, the check should explicitly set `DATABASE_DIR="$work"` when
+  booting the test server. This is the one change the cutover scripts do need.
 
 **Recovery model:** if the boot disk is lost, at most 15 minutes of edits
 since the last periodic backup are gone. Nothing else is at risk — uploads,
@@ -109,24 +136,32 @@ Both scripts live together in the ops repo (likely
 cross-host helper scripts, since neither has host-specific logic — both are
 parameterized only by `APP_HOME`). This mirrors where the closest existing
 analog, the daily `home-snapshot` btrfs-snapshot logic, already lives
-entirely in the ops repo — and keeps backup and restore, which share the
-same path conventions and file-set assumptions, from drifting out of sync
-the way splitting them across two repos would risk.
+entirely in the ops repo, and keeps the backup/restore pair — which share
+the same path conventions and file-set assumptions — together in one place.
 
-Both scripts are driven by the same small, explicit, hardcoded list of
-subdirectory names that are database-backed (today: just `rooms`) —
-duplicated between the two scripts (they can't share a sourced variable
-across the repo boundary that separates their invocations from the app
-repo's conventions) with a comment in each pointing at the other as a
-"keep these in sync" reminder. This is deliberate: it's what makes it safe
-for these scripts to never touch `uploads/`, `transcripts/`, `roadmaps/`, or
-`telemetry/` — they only ever act on directory names in the list, not "the
-whole tree."
+Both scripts act only on an explicit list of database-backed subdirectory
+names (today: just `rooms`). Because both scripts live in the same ops repo,
+that list lives in a single shared file (e.g. `database-backed-dirs.sh`) that
+both `source` — one definition, no drift.
+
+This allowlist is the safety mechanism, and it stands on its own: the scripts
+only ever touch directory names in the list, so `uploads/`, `transcripts/`,
+`roadmaps/`, and `telemetry/` are structurally impossible to touch — the
+scripts never walk "the whole tree." Adding a future database-backed
+subsystem is a one-line edit to the shared list.
 
 **`database-backup.sh`:** for each name in the list, walks
-`DATABASE_DIR/<name>` for `*.sqlite` files, backs each up via
-`sqlite3 <src> ".backup <src>.tmp"` then atomic `mv` into `DATA_DIR/<name>/`
-on `/home`.
+`DATABASE_DIR/<name>` for `*.sqlite` files, and for each one runs
+`sqlite3 <src> ".backup DATA_DIR/<name>/<db>.tmp"` — writing the temp file
+onto `/home`, the *same* filesystem as the final destination — then an atomic
+`mv` within `/home` to `DATA_DIR/<name>/<db>`. Writing the temp on the
+destination filesystem is what makes the `mv` a real `rename(2)`; a temp next
+to the source (on the boot disk, a *different* filesystem — `/dev/sda1` vs
+`/dev/sdb`) would make the `mv` a cross-filesystem copy, which is not atomic
+and could expose a half-written file to a concurrent reader such as
+`cutover.sh`'s `cp -a`. The `.backup` API is safe to run against the live
+WAL-mode database, and produces a single checkpointed `.sqlite` file — no
+`-wal`/`-shm` sidecars accompany it into `/home`.
 
 **`restore-database.sh`:** the reverse — for each name in the list, copies
 `DATA_DIR/<name>/*.sqlite` into `DATABASE_DIR/<name>/`, fixing ownership.
@@ -161,27 +196,53 @@ a clean boot.
 
 ## Rollout
 
+The migration must **seed the boot disk from the live data before the new
+server starts.** Today the authoritative room data lives at `DATA_DIR/rooms/`
+on `/home`. If the new server (with `DATABASE_DIR` set) starts against an
+empty `DATABASE_DIR/rooms/`, it creates fresh *empty* room databases on the
+boot disk — and worse, the first 15-minute backup then copies those empty
+databases over the authoritative copy on `/home`, destroying it. The restore
+guard protects `DATABASE_DIR` from being clobbered, but nothing protects
+`DATA_DIR`; the only defense is doing the seed first. `restore-database.sh` is
+the seed tool — its `DATA_DIR → DATABASE_DIR` copy direction and its
+non-empty-target guard are exactly what a clean initial seed needs.
+
 1. App-repo code change (PR, tests, review, merge), release cut via the
    normal `release.sh`/`deploy.sh` pipeline (same pattern as v0.13.1).
-2. Apply the new `bootstrap.sh` pieces to `ew-staging-001` only (directory,
-   `sqlite3` package, both scripts, the timer unit).
-3. Deploy the new app version to staging.
-4. Verify on staging: `DATABASE_DIR` populated on first room open, the timer
-   fires and a backup lands at the existing `DATA_DIR/rooms/` path,
-   `cutover.sh` and `cutover-dataload-check.sh` are unaffected, and
-   `restore-database.sh` works end-to-end (deliberately simulate boot-disk
-   loss: stop sync, empty the `DATABASE_DIR`, run the restore script,
-   restart sync, confirm the room loads).
-5. Roll to `ew-lsp-001`, `ew-donkeyred-001`, `ew-rink-001` one at a time, in
-   a quiet window on each (no live incident forcing urgency this time).
+2. Apply the new `bootstrap.sh` pieces to `ew-staging-001` only: create the
+   empty `DATABASE_DIR`, install the `sqlite3` package, both scripts + the
+   shared allowlist, and the timer unit — **but do not enable the timer yet.**
+3. **Seed, then start** (this ordering is what prevents data loss):
+   1. Stop `ensembleworks-sync` so `DATA_DIR/rooms/` on `/home` is quiescent
+      and current.
+   2. Run `restore-database.sh` to copy the live `DATA_DIR/rooms/*.sqlite`
+      into the empty `DATABASE_DIR/rooms/`; its non-empty guard confirms this
+      is a clean first seed.
+   3. Deploy the new app version (the systemd unit now sets `DATABASE_DIR`)
+      and start `ensembleworks-sync`. Confirm it opens the *seeded* databases
+      on the boot disk and every room loads with its data intact.
+   4. Only now enable `ensembleworks-database-backup.timer`.
+4. Verify on staging: live writes land in `DATABASE_DIR/rooms/` on the boot
+   disk, the timer fires and a backup lands *atomically* at the existing
+   `DATA_DIR/rooms/` path, `cutover.sh` / `cutover-dataload-check.sh` still
+   pass (with the `DATABASE_DIR="$work"` fix applied to the latter), and a
+   full DR cycle works end-to-end (stop sync, empty `DATABASE_DIR`, run
+   `restore-database.sh`, restart sync, confirm the room loads with data
+   intact).
+5. Roll to `ew-lsp-001`, `ew-donkeyred-001`, `ew-rink-001` one at a time, each
+   following the same stop → seed → start → enable-timer order, in a quiet
+   window (no live incident forcing urgency this time).
 
 ### Testing (ops repo)
 
-Script-level tests for `database-backup.sh` and `restore-database.sh`
-following the existing `deploy/test/fake-release.sh` harness style in this
-repo: a fake WAL-mode SQLite file, verifying the atomic-backup behavior and
-that the restore script's non-empty-target safety check actually refuses to
-run without `--force`.
+Script-level tests for `database-backup.sh` and `restore-database.sh` (living
+in the ops repo alongside the scripts), modelled on the app repo's
+`deploy/test/fake-release.sh` harness style: a fake WAL-mode SQLite file,
+verifying (a) the backup writes its temp
+onto the destination directory and completes with an atomic rename, (b) the
+shared allowlist is honoured — a non-listed sibling directory placed beside
+`rooms/` is never touched — and (c) the restore/seed script's
+non-empty-target guard actually refuses to run without `--force`.
 
 ## Out of scope
 
