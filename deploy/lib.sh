@@ -75,7 +75,7 @@ ew_fetch_release() {
 		# the box. Only this arch's binaries; the checksums file lists every
 		# arch, and --ignore-missing below tolerates the ones we didn't fetch.
 		base="https://github.com/${slug}/releases/download/v${ver}"
-		for f in "ensembleworks-${a}" "ensembleworks-server-${a}" "ensembleworks-transcriber-${a}" client-dist.tar.gz ensembleworks-checksums.txt; do
+		for f in "ensembleworks-${a}" "ensembleworks-server-${a}" "ensembleworks-transcriber-${a}" "ensembleworks-discord-${a}" client-dist.tar.gz ensembleworks-checksums.txt; do
 			$run curl -fsSL "${base}/${f}" -o "${dest}/${f}"
 		done
 	fi
@@ -83,6 +83,7 @@ ew_fetch_release() {
 	$run mv "$dest/ensembleworks-server-$a" "$dest/ensembleworks-server"
 	$run mv "$dest/ensembleworks-transcriber-$a" "$dest/ensembleworks-transcriber"
 	$run mv "$dest/ensembleworks-$a" "$dest/ensembleworks"
+	$run mv "$dest/ensembleworks-discord-$a" "$dest/ensembleworks-discord"
 	# Expand the glob under $run (not the caller): $dest is a 700 mktemp dir owned
 	# by the app user, so on the sudo fetch path the calling shell can't traverse
 	# it and the glob would pass through literal. Mirrors the sha256sum line above.
@@ -140,6 +141,9 @@ ew_boot_check() {
 	# --- transcriber: addon links + config parses (arch integrity), exit 0 ---
 	$run timeout 15 "${NEW}/ensembleworks-transcriber" --check >"${log}-scribe.log" 2>&1 \
 		|| { echo "boot-check FAILED: transcriber --check nonzero" >&2; ok=0; }
+	# --- discord bot: --check links + /post face binds, exit 0 (arch integrity) ---
+	$run timeout 15 "${NEW}/ensembleworks-discord" --check >"${log}-discord.log" 2>&1 \
+		|| { echo "boot-check FAILED: discord --check nonzero" >&2; ok=0; }
 	$run rm -rf "$ddir" "$cdir" "$fdir"
 	[ "$ok" = 1 ]
 }

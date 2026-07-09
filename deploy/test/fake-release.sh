@@ -25,8 +25,13 @@ bad() { echo "FAIL: $1" >&2; fail=1; }
 ARCH="$(uname -m)"; case "$ARCH" in x86_64) PAIR=linux-x64;; aarch64) PAIR=linux-arm64;; *) echo "unsupported arch $ARCH" >&2; exit 1;; esac
 
 # --- build the host binaries if missing ---------------------------------------
-for w in server cli transcriber; do
-  bin="$w/dist/$( [ "$w" = server ] && echo ensembleworks-server || { [ "$w" = cli ] && echo ensembleworks || echo ensembleworks-transcriber; } )"
+for w in server cli transcriber discord; do
+  case "$w" in
+    server) bin="server/dist/ensembleworks-server";;
+    cli) bin="cli/dist/ensembleworks";;
+    transcriber) bin="transcriber/dist/ensembleworks-transcriber";;
+    discord) bin="discord/dist/ensembleworks-discord";;
+  esac
   [ -x "$bin" ] || (cd "$w" && bun run build:binary)
 done
 
@@ -35,6 +40,7 @@ rel="$(mktemp -d)"
 cp server/dist/ensembleworks-server "$rel/ensembleworks-server-$PAIR"
 cp cli/dist/ensembleworks "$rel/ensembleworks-$PAIR"
 cp transcriber/dist/ensembleworks-transcriber "$rel/ensembleworks-transcriber-$PAIR"
+cp discord/dist/ensembleworks-discord "$rel/ensembleworks-discord-$PAIR"
 stub="$(mktemp -d)"; tar czf "$rel/client-dist.tar.gz" -C "$stub" .   # empty-dir bundle (machinery only)
 ( cd "$rel" && sha256sum ensembleworks-* client-dist.tar.gz > ensembleworks-checksums.txt )
 
@@ -52,10 +58,11 @@ else ok "checksum: a byte-flipped binary fails -c"; fi
 
 # --- (2) boot-check passes; a truncated server binary FAILS -------------------
 cp deploy/posture-era "$NEW/.ew-era"
-ew_boot_check "$NEW" "" && ok "boot-check: sync + term + files + transcriber --check pass" || bad "boot-check pass"
+ew_boot_check "$NEW" "" && ok "boot-check: sync + term + files + transcriber --check + discord --check pass" || bad "boot-check pass"
 trunc="$home/releases/1.0.1"; mkdir -p "$trunc/client-dist"
 head -c 4096 "$NEW/ensembleworks-server" > "$trunc/ensembleworks-server"; chmod +x "$trunc/ensembleworks-server"
 cp "$NEW/ensembleworks-transcriber" "$trunc/"
+cp "$NEW/ensembleworks-discord" "$trunc/"
 if ew_boot_check "$trunc" "" 2>/dev/null; then bad "truncated server should have failed boot-check"; else ok "boot-check: a truncated server binary fails (the check gates)"; fi
 
 # --- (3) era stamp ------------------------------------------------------------

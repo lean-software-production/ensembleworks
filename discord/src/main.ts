@@ -10,6 +10,17 @@ const syncBase = process.env.SYNC_BASE ?? 'http://127.0.0.1:8788'
 
 if (!secret) console.warn('[discord] DISCORD_INTERNAL_SECRET unset — outbound /post will reject all callers')
 
+if (process.argv.includes('--check')) {
+	// Deploy boot-check (parallels `transcriber --check`): prove the compiled
+	// binary links and the internal /post face binds on an ephemeral loopback
+	// port — WITHOUT connecting to Discord. Then exit 0.
+	const gateway = new DiscordJsGateway(token ?? '')
+	const { httpFace } = wireBot(gateway, { syncBase, secret, port: 0 })
+	console.log(`[discord] --check ok (/post bound on 127.0.0.1:${httpFace.port})`)
+	httpFace.stop()
+	process.exit(0)
+}
+
 // Construct the gateway. Even without a token we still start the internal /post
 // face so outbound wiring is inspectable; inbound just won't connect.
 const gateway = new DiscordJsGateway(token ?? '')
