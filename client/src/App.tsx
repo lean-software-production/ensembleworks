@@ -173,6 +173,8 @@ export function App() {
 		if (!editor || didDeepLink.current) return
 		const frameId = getFrameId()
 		if (!frameId) return
+		// Assumes the target frame is on the current page (rooms are single-page today);
+		// a cross-page target would zoom the current page to empty space.
 		const dispose = react('deep-link frame', () => {
 			if (didDeepLink.current) return
 			const bounds = editor.getShapePageBounds(frameId as TLShapeId)
