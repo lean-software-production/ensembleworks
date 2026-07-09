@@ -1,0 +1,159 @@
+{
+  "name": "sprint-cli-frames-draw",
+  "version": 1,
+  "extends": "sprint",
+  "description": "Variant of the canonical sprint pipeline for adding frame + drawing-shape CREATION to the EnsembleWorks CLI (a server/contracts slice, unlike the frame-picker client/chrome slice it descends from). Same shape as sprint-frame-picker: skips persona-interview + dogfood, swaps executable acceptance tests for an agent-driven CLI->browser walkthrough (repo has no acceptance harness), keeps the multi-model code-quality gate before the human bossman gate. DIFFERENCE vs sprint-frame-picker: design-protos (ux-prototype) is swapped for an api-surface design note (there is no UI to prototype; the risky design is the exact tldraw-5.1.0 record shapes), and that note gets its OWN paired adversarial review gate (api-surface-review) per the Second Iron Rule.",
+  "inputs": {
+    "goal": "Let a CLI-only agent create frames and drawing shapes, reparent shapes into/out of frames, and delete a frame without corrupting its contents. New CLI surface: canvas shape create frame|line|draw|highlight; canvas shape update <id> --frame|--to-page|--rotate|--lock (reparent + riders); canvas shape delete <id> [--with-children]. Contracts + server only; the CLI is a pure manifest projection (zero cli/src changes).",
+    "project_dir": "/Users/zaza/workspace/lean-software-production/ensembleworks",
+    "sid": "EW-CLI-DRAW-0001",
+    "approved_plan": "/Users/zaza/.claude/plans/i-want-you-to-frolicking-hopcroft.md"
+  },
+  "loop": {
+    "until": "human (bossman) approved the iteration",
+    "max_iterations": 1
+  },
+  "steps": [
+    {
+      "id": "preplan",
+      "phase": "CONTRACT",
+      "type": "prompt",
+      "skill": "sprint-preplan",
+      "effort": "high",
+      "description": "Enumerate acceptance criteria as a CHECKLIST (this repo has no executable acceptance harness — do not fabricate one). Cover each new verb (frame/line/draw/highlight create, reparent in/out, rotate/lock, delete default vs --with-children), that each record RENDERS in the browser, that reparent does not visually jump the shape, and the excluded scope stays unbuilt.",
+      "outputs": ["docs/acceptance/cli-frames-draw.md"],
+      "gate": {
+        "kind": "human",
+        "prompt": "Approve the AC checklist. Is every new verb + delete/reparent semantic specified end-to-end and objectively checkable, with the browser-render check explicit?",
+        "on_fail": "preplan"
+      },
+      "retro": [
+        {
+          "origin": "EnsembleWorks/EW-FRAMES-0001",
+          "lesson": "When a repo doesn't do executable acceptance tests our normal way, enumerate ACs as a checklist and verify with an agent-driven walkthrough of the live app — match the repo's conventions, don't import ceremony."
+        }
+      ]
+    },
+    {
+      "id": "preflight-gates",
+      "phase": "CONTRACT",
+      "type": "script",
+      "description": "Mechanical pre-build gates: the new unit tests fail correctly (RED-is-real — assertion on the real expected record, not a missing module) and every checklist item is objectively checkable.",
+      "gate": { "kind": "auto", "on_fail": "preplan" }
+    },
+    {
+      "id": "api-surface",
+      "phase": "RESEARCH",
+      "type": "subagent",
+      "description": "SWAP for design-protos (no UI to prototype). Author the API-surface design note: exact verb signatures + flags, and the EXACT tldraw-5.1.0 record props for each new type (frame needs color + non-zero w/h; line points is a keyed {id,index,x,y} dict; draw/highlight segments are base64 via compressLegacySegments + scaleX/scaleY; highlight has no fill/dash/isClosed), plus every error case (bad/missing points -> 400, frame not found -> 404). The record-shape precision IS the risky design here.",
+      "inputs": ["the approved plan", "server/src/features/shape.ts", "@tldraw/tlschema 5.1.0 shape prop validators"],
+      "outputs": ["docs/design/cli-frames-draw-api.md"]
+    },
+    {
+      "id": "api-surface-review",
+      "phase": "RESEARCH",
+      "type": "subagent",
+      "effort": "high",
+      "description": "NEW paired review (Second Iron Rule: the design note is an artifact and must be refuted before it is trusted). Fresh-context adversarial claim-verification: for EVERY record prop the note specifies, confirm it against the real @tldraw/tlschema 5.1.0 validator and the server put-validation path (mark each VERIFIED / FALSE / UNVALIDATED with a file:line). Attack: would any record 400 on put? are required props missing? is the base64 segment / keyed-line-points shape exactly right? Also flag over-engineering and any excluded-scope leakage.",
+      "inputs": ["docs/design/cli-frames-draw-api.md", "node_modules/@tldraw/tlschema", "server/src/features/shape.ts"],
+      "gate": {
+        "kind": "auto",
+        "prompt": "Every record-prop claim is VERIFIED against tldraw 5.1.0; no record would 400 on put; no excluded scope crept in.",
+        "on_fail": "api-surface"
+      }
+    },
+    {
+      "id": "plan",
+      "phase": "PLAN",
+      "type": "subagent",
+      "skill": "sprint-planner",
+      "effort": "high",
+      "description": "Plan the slice against the reuse map (shape.ts base-record builder + getIndexAbove/sortByIndex, canvas/geometry.ts pagePoint, canvas/frames-helper.ts findFrameByName, @tldraw/tlschema compressLegacySegments, scribe-api.test.ts real-app test pattern). Order: pure drawShapes helper -> contracts enum/fields -> server branches.",
+      "inputs": ["docs/design/cli-frames-draw-api.md", "the approved plan"]
+    },
+    {
+      "id": "plan-review",
+      "phase": "PLAN",
+      "type": "subagent",
+      "effort": "high",
+      "description": "Adversarial fresh-context review of the plan: refute every file:line reuse claim against the real code; re-verify every record-prop claim against tldraw 5.1.0; flag over-engineering vs the locked scope and any excluded-scope (eraser/laser/align/group/image-upload) leakage.",
+      "gate": { "kind": "auto", "on_fail": "plan" }
+    },
+    {
+      "id": "execute",
+      "phase": "BUILD",
+      "type": "subagent",
+      "skill": "sprint-execute",
+      "description": "TDD: Navigator writes the failing node:assert tests (pure drawShapes helpers first, then HTTP round-trips that boot the real app), Driver implements: drawShapes.ts helper -> contracts enum/fields -> server create branches + update-reparent + delete-children. Match repo conventions exactly (node:assert under src/, boot real app in-process, real SQLite, no mock lib, no new deps).",
+      "outputs": [
+        "contracts/src/tools/canvas.ts",
+        "server/src/canvas/drawShapes.ts",
+        "server/src/canvas/drawShapes.test.ts",
+        "server/src/features/shape.ts",
+        "server/src/shape-api.test.ts"
+      ]
+    },
+    {
+      "id": "self-review",
+      "phase": "VALIDATE",
+      "type": "script",
+      "skill": "sprint-self-review",
+      "description": "Test-pyramid + no-mock + test-first-commit checks; typecheck + build green across all workspaces (build also refreshes the CLI embedded manifest snapshot).",
+      "gate": { "kind": "auto", "on_fail": "execute" }
+    },
+    {
+      "id": "acceptance-walkthrough",
+      "phase": "VALIDATE",
+      "type": "subagent",
+      "skill": "webapp-testing",
+      "description": "Agent-driven acceptance: bin/dev up, then drive the CLI (ew canvas shape create frame|line|draw|highlight, reparent a sticky in/out, delete a frame both ways) against a live room, and verify IN THE BROWSER that each record renders (frame clips its children; line/draw/highlight visible) and both delete paths behave. Record PASS/FAIL + screenshot/log evidence per checklist line. The CLI-writes -> browser-renders loop is the real end-to-end.",
+      "inputs": ["docs/acceptance/cli-frames-draw.md", "the live app"],
+      "outputs": ["docs/acceptance/cli-frames-draw-walkthrough.md"],
+      "gate": { "kind": "auto", "on_fail": "execute" }
+    },
+    {
+      "id": "code-quality-panel",
+      "phase": "VALIDATE",
+      "type": "subagent",
+      "effort": "high",
+      "parallel_group": "quality",
+      "description": "Multi-model quality gate: three independent judges on DIFFERENT model families (claude-opus-4-8, gemini, codex) each score the diff + tests + neighbor files against a repo-derived rubric and answer 'at least as high quality as the surrounding code?'. Rubric: naming/altitude match neighbors (shape.ts, canvas/*); tests indistinguishable from scribe-api.test.ts (node:assert, boots real createSyncApp, real SQLite, no mock lib, pure logic extracted to drawShapes.ts + duck-typed/real records); no new deps (compressLegacySegments already in @tldraw/tlschema); record props EXACTLY match tldraw 5.1.0 (no 400 on put); typecheck+build green; RED-is-real; nothing built for the excluded scope.",
+      "inputs": ["the working diff", "the new tests", "representative neighbor files"],
+      "outputs": ["docs/pipeline/code-quality-panel-EW-CLI-DRAW-0001.md"],
+      "gate": {
+        "kind": "auto",
+        "prompt": "All responding judges return at_least_as_good=true with zero must-fix findings (each must-fix verified on the merits against the real code before it is accepted or refuted).",
+        "on_fail": "execute"
+      },
+      "retro": [
+        {
+          "origin": "EnsembleWorks/EW-FRAMES-0001",
+          "lesson": "Have multiple models independently confirm new code + tests are at least as good as the surrounding code before a friend's-repo PR. Judges are adversarial finders, not vetoes — check each must-fix against the real code before accepting or refuting it."
+        }
+      ]
+    },
+    {
+      "id": "bossman",
+      "phase": "VALIDATE",
+      "type": "subagent",
+      "skill": "bossman-walkthrough",
+      "description": "Human gate: browser walkthrough with the user of the built verbs against the AC checklist (CLI writes -> browser renders). THE AUTONOMOUS RUN STOPS HERE and waits for the human.",
+      "gate": { "kind": "human", "on_fail": "execute" }
+    },
+    {
+      "id": "retro-close",
+      "phase": "CLOSE",
+      "type": "subagent",
+      "skill": "sprint-retro",
+      "description": "Retrospect the slice; append learnings to the ledger."
+    },
+    {
+      "id": "open-pr",
+      "phase": "CLOSE",
+      "type": "prompt",
+      "skill": "finishing-a-development-branch",
+      "description": "Open the PR against main with unit tests, the completed AC checklist + walkthrough evidence, and the quality-panel verdict attached. No version bump / tag / merge (maintainer-cut only).",
+      "outputs": ["a PR against main"]
+    }
+  ]
+}
