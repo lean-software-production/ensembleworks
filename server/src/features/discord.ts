@@ -59,6 +59,46 @@ export function createDiscordRouter(ctx: PluginServerContext): express.Router {
 		res.json({ ok: true, id: binding.id, binding })
 	})
 
+	// POST /api/discord/post — the server → bot mediator. The client triggers an
+	// outbound post; we resolve the room's outbound bindings and forward each to
+	// the bot's loopback /post (the only process holding the Discord token). Best
+	// effort: a bot outage never 500s the caller — we log and report delivered:0.
+	router.post('/api/discord/post', async (req, res) => {
+		const body = (req.body ?? {}) as Record<string, unknown>
+
+		const roomId = sanitizeId(String(body.room ?? ''))
+		if (!roomId) return void res.status(400).json({ error: 'room' })
+
+		const kind = body.kind
+		if (kind !== 'summary' && kind !== 'action-items' && kind !== 'decision' && kind !== 'frame-link') return void res.status(400).json({ error: 'kind' })
+
+		const data = body.data
+		if (typeof data !== 'object' || data === null || Array.isArray(data)) return void res.status(400).json({ error: 'data' })
+
+		const bindings = await ctx.storage.discord.listOutbound(roomId)
+		if (bindings.length === 0) return void res.json({ ok: true, delivered: 0 })
+
+		// Env read inside the handler so config can change per-request (and tests).
+		const botPort = process.env.DISCORD_PORT ?? '8790'
+		const secret = process.env.DISCORD_INTERNAL_SECRET ?? ''
+
+		let delivered = 0
+		for (const binding of bindings) {
+			try {
+				const forward = await fetch(`http://127.0.0.1:${botPort}/post`, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json', 'x-internal-secret': secret },
+					body: JSON.stringify({ channelId: binding.channelId, payload: { kind, room: roomId, data } }),
+				})
+				if (forward.ok) delivered++
+				else console.error('[discord] forward failed', { channelId: binding.channelId, status: forward.status })
+			} catch (err) {
+				console.error('[discord] forward failed', { channelId: binding.channelId, err })
+			}
+		}
+		res.json({ ok: true, delivered })
+	})
+
 	// DELETE /api/discord/bindings/:id — idempotent removal.
 	router.delete('/api/discord/bindings/:id', async (req, res) => {
 		await ctx.storage.discord.remove(req.params.id)

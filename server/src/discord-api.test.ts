@@ -55,10 +55,61 @@ async function main() {
 	const empty = await getJson('/api/discord/bindings?room=test')
 	assert.equal(empty.body.bindings.length, 0)
 
+	// POST /api/discord/post — server → bot mediator (E3).
+	{
+		// Stub bot: records the loopback /post it receives, returns 2xx.
+		const received: { secret: string | null; body: any }[] = []
+		const stub = Bun.serve({
+			port: 0,
+			async fetch(req) {
+				if (new URL(req.url).pathname === '/post' && req.method === 'POST') {
+					received.push({ secret: req.headers.get('x-internal-secret'), body: await req.json() })
+					return Response.json({ ok: true })
+				}
+				return new Response('not found', { status: 404 })
+			},
+		})
+		process.env.DISCORD_PORT = String(stub.port)
+		process.env.DISCORD_INTERNAL_SECRET = 'testsecret'
+
+		// Outbound binding for room 'test'.
+		const outCreated = await postJson('/api/discord/bindings', {
+			room: 'test', guildId: 'g', channelId: 'chan-out', direction: 'out',
+			route: { handler: 'summary', params: {} },
+		})
+		assert.equal(outCreated.status, 200)
+
+		// Trigger the post — should forward to the stub bot once.
+		const posted = await postJson('/api/discord/post', { room: 'test', kind: 'summary', data: { text: 'we shipped' } })
+		assert.equal(posted.status, 200)
+		assert.equal(posted.body.delivered, 1)
+		assert.equal(received.length, 1)
+		const forwarded = received[0]
+		assert.ok(forwarded, 'stub bot received a forward')
+		assert.equal(forwarded.secret, 'testsecret')
+		assert.equal(forwarded.body.channelId, 'chan-out')
+		assert.equal(forwarded.body.payload.kind, 'summary')
+		assert.equal(forwarded.body.payload.room, 'test')
+		assert.equal(forwarded.body.payload.data.text, 'we shipped')
+
+		// Room with no outbound binding → delivered 0, still ok.
+		const none = await postJson('/api/discord/post', { room: 'unbound', kind: 'summary', data: { text: 'x' } })
+		assert.equal(none.status, 200)
+		assert.equal(none.body.ok, true)
+		assert.equal(none.body.delivered, 0)
+
+		// Validation: bad kind → 400.
+		const badKind = await postJson('/api/discord/post', { room: 'test', kind: 'nope', data: {} })
+		assert.equal(badKind.status, 400)
+
+		stub.stop()
+	}
+
 	await new Promise<void>((resolve, reject) =>
 		server.close((err) => (err ? reject(err) : resolve()))
 	)
 	console.log('ok: discord-api')
+	console.log('ok: discord-post')
 	process.exit(0)
 }
 
