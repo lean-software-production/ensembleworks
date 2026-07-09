@@ -28,20 +28,20 @@ export function createDiscordRouter(ctx: PluginServerContext): express.Router {
 		if (!roomId) return void res.status(400).json({ error: 'room' })
 
 		const guildId = body.guildId
-		if (typeof guildId !== 'string' || !guildId) return void res.status(400).json({ error: 'guildId' })
+		if (typeof guildId !== 'string' || !guildId || guildId.length > 64) return void res.status(400).json({ error: 'guildId' })
 
 		const channelId = body.channelId
-		if (typeof channelId !== 'string' || !channelId) return void res.status(400).json({ error: 'channelId' })
+		if (typeof channelId !== 'string' || !channelId || channelId.length > 64) return void res.status(400).json({ error: 'channelId' })
 
 		const direction = body.direction
 		if (direction !== 'in' && direction !== 'out') return void res.status(400).json({ error: 'direction' })
 
 		const route = body.route
-		if (typeof route !== 'object' || route === null) return void res.status(400).json({ error: 'route' })
+		if (typeof route !== 'object' || route === null || Array.isArray(route)) return void res.status(400).json({ error: 'route' })
 		const handler = (route as Record<string, unknown>).handler
-		if (typeof handler !== 'string' || !handler) return void res.status(400).json({ error: 'route.handler' })
+		if (typeof handler !== 'string' || !handler || handler.length > 64) return void res.status(400).json({ error: 'route.handler' })
 		const rawParams = (route as Record<string, unknown>).params ?? {}
-		if (typeof rawParams !== 'object' || rawParams === null) return void res.status(400).json({ error: 'route.params' })
+		if (typeof rawParams !== 'object' || rawParams === null || Array.isArray(rawParams)) return void res.status(400).json({ error: 'route.params' })
 		const params = rawParams as Record<string, unknown>
 
 		// Attribution: stamp the caller's identity (null/anonymous callers → 'anonymous').

@@ -26,7 +26,7 @@ async function main() {
 	})
 	assert.equal(created.status, 200)
 	assert.ok(created.body.id, 'returns id')
-	assert.equal(created.body.binding.createdBy !== undefined, true)
+	assert.equal(created.body.binding.createdBy, 'anonymous')
 
 	// list
 	const list = await getJson('/api/discord/bindings?room=test')
@@ -41,6 +41,13 @@ async function main() {
 	// validation: missing handler → 400
 	const bad2 = await postJson('/api/discord/bindings', { room: 'test', guildId: 'g', channelId: 'c', direction: 'in', route: {} })
 	assert.equal(bad2.status, 400)
+
+	// array params rejected
+	const badParams = await postJson('/api/discord/bindings', { room: 'test', guildId: 'g', channelId: 'c', direction: 'in', route: { handler: 'frame-sticky', params: [] } })
+	assert.equal(badParams.status, 400)
+	// over-long channelId rejected
+	const longId = await postJson('/api/discord/bindings', { room: 'test', guildId: 'g', channelId: 'c'.repeat(100), direction: 'in', route: { handler: 'frame-sticky' } })
+	assert.equal(longId.status, 400)
 
 	// delete
 	const del = await fetch(`${base}/api/discord/bindings/${created.body.id}`, { method: 'DELETE' })
