@@ -294,6 +294,46 @@ The HTTP routes: `POST /api/scribe/transcript` (scribe writes),
 `POST /api/canvas/shape` (diagram ops), and
 `GET /api/av/token?role=scribe` (subscribe-only LiveKit tokens).
 
+## Discord bot
+
+The **Discord bot** (`discord/`, `@ensembleworks/discord`, Bun) bridges a guild
+to the canvas both ways. **Inbound**: messages in a bound Discord channel land as
+stickies inside the frame that channel is bound to. **Outbound**: on a trigger,
+summaries / action-items / decisions / frame-links from a room are posted into a
+bound channel. It holds the bot token and the gateway connection, and exposes an
+internal loopback `POST /post` on **:8790** (guarded by `DISCORD_INTERNAL_SECRET`)
+that the sync server forwards outbound posts to — nothing binds a public port, so
+there is no Caddy / Cloudflare entry for it.
+
+**Discord app setup.** In the [Discord Developer Portal](https://discord.com/developers/applications):
+create an application, add a **Bot** to it, and copy the bot token. Under **Bot ->
+Privileged Gateway Intents**, enable **MESSAGE_CONTENT** — reading message text
+needs this privileged intent, and enabling it in code is not enough. Invite the
+bot with an OAuth2 URL granting only the `bot` scope and the minimal permissions
+*Read Messages / View Channels* and *Send Messages* — nothing more.
+
+**Secrets.** `DISCORD_BOT_TOKEN` (the bot token) and `DISCORD_INTERNAL_SECRET` (a
+high-entropy shared secret). In dev put both in `~/.config/ensembleworks/dev.env`;
+in prod put them in `~/.config/ensembleworks/discord.env` (the bot unit's
+EnvironmentFile). **Critical:** `DISCORD_INTERNAL_SECRET` must be set to the *same
+value* in **both** the bot's env **and** the sync server's env — the sync server
+forwards each outbound post to the bot's loopback `/post` with
+`x-internal-secret: $DISCORD_INTERNAL_SECRET`, so a mismatch rejects every post
+`401`. The sync server may also set `DISCORD_PORT` (default 8790) to reach the bot.
+
+**Binding channels.** From the canvas, open the overflow menu -> **discord
+bindings** to bind a Discord channel to a frame (inbound) or a room to a channel
+(outbound). Inbound frame bindings match on a fuzzy frame **name**, so renaming a
+frame keeps the binding.
+
+The bot reads `DISCORD_BOT_TOKEN`, `DISCORD_INTERNAL_SECRET`, `PORT` (default
+8790), and `SYNC_BASE` (default `http://127.0.0.1:8788`). It is **off unless
+`DISCORD_BOT_TOKEN` is set** — `bin/dev` gates the service on it, and without a
+token the internal `/post` face still starts (so outbound wiring is inspectable)
+but the inbound gateway never connects. Bot -> sync-server calls (creating
+stickies) use the same bot -> server auth as the other bots: a Cloudflare Access
+service token in prod, a plain loopback call in dev.
+
 ## Terminals & tmux
 
 Canvas terminals run an Omarchy-derived tmux config

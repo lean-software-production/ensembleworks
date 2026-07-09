@@ -1,0 +1,39 @@
+# EnsembleWorks Discord bot — PRODUCTION unit (non-watch). Installed by
+# deploy/deploy.sh (@APP_USER@ / @APP_HOME@ substituted via sed). NOTE: ${SYNC_BASE}
+# in ExecStartPre is a LITERAL for systemd to expand from Environment= below — it is
+# NOT a sed token, which is the whole point of using committed files (no escaping).
+# Optional unit: deploy.sh only restarts it if already enabled.
+#
+# TWO THINGS THAT WILL SILENTLY BREAK THIS:
+#  (a) Reading Discord message text requires the privileged MESSAGE_CONTENT intent.
+#      Enable it in the Discord Developer Portal (Bot -> Privileged Gateway Intents);
+#      without it inbound messages arrive with empty content.
+#  (b) DISCORD_INTERNAL_SECRET (in discord.env below) MUST be byte-for-byte identical
+#      to the same var in the sync server's environment (sync.env). The sync server
+#      forwards outbound posts to this bot's loopback /post with
+#      x-internal-secret: $DISCORD_INTERNAL_SECRET — a mismatch fails every post 401.
+[Unit]
+Description=EnsembleWorks Discord bot (gateway <-> router -> stickies; internal /post for outbound)
+After=network-online.target ensembleworks-sync.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@APP_USER@
+WorkingDirectory=@APP_HOME@/current
+Slice=ensembleworks.slice
+MemoryAccounting=yes
+MemoryLow=256M
+Environment=SYNC_BASE=http://localhost:8788
+Environment=PORT=8790
+# DISCORD_BOT_TOKEN + DISCORD_INTERNAL_SECRET (and, in prod, the bot->server
+# Cloudflare Access service token CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET)
+# live in the EnvironmentFile — out of this unit / git.
+EnvironmentFile=@APP_HOME@/.config/ensembleworks/discord.env
+ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "${SYNC_BASE}/"; do sleep 1; done'
+ExecStart=@APP_HOME@/current/ensembleworks-discord
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
