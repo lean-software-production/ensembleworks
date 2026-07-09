@@ -48,7 +48,7 @@ export function BindingsPanel({ onClose }: TLUiDialogProps) {
 	const [guildId, setGuildId] = useState('')
 	const [direction, setDirection] = useState<'in' | 'out'>('in')
 	const [handler, setHandler] = useState('frame-sticky')
-	const [frameId, setFrameId] = useState('')
+	const [frameName, setFrameName] = useState('')
 
 	const refetch = () => {
 		listBindings(room)
@@ -80,7 +80,7 @@ export function BindingsPanel({ onClose }: TLUiDialogProps) {
 		if (busy) return
 		setError(null)
 		setBusy(true)
-		const params: Record<string, unknown> = frameId.trim() ? { frameId: frameId.trim() } : {}
+		const params: Record<string, unknown> = frameName.trim() ? { frame: frameName.trim() } : {}
 		createBinding({
 			room,
 			guildId,
@@ -92,7 +92,7 @@ export function BindingsPanel({ onClose }: TLUiDialogProps) {
 				refetch()
 				setChannelId('')
 				setGuildId('')
-				setFrameId('')
+				setFrameName('')
 			})
 			.catch((err) => setError(String(err?.message ?? err)))
 			.finally(() => setBusy(false))
@@ -174,11 +174,12 @@ export function BindingsPanel({ onClose }: TLUiDialogProps) {
 						/>
 					</label>
 					<label style={labelStyle}>
-						frame id (optional)
+						frame name (fuzzy match, optional)
 						<input
 							style={inputStyle}
-							value={frameId}
-							onChange={(e) => setFrameId(e.currentTarget.value)}
+							value={frameName}
+							placeholder="frame name (fuzzy match)"
+							onChange={(e) => setFrameName(e.currentTarget.value)}
 						/>
 					</label>
 					<div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
