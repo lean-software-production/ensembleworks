@@ -34,6 +34,14 @@ async function main() {
 	const reopened = createDiscordStore(dir)
 	assert.equal((await reopened.listOutbound('r')).length, 1, 'persists to disk across instances')
 
+	// concurrent writes must both land (mutex serializes read-modify-write)
+	const store2 = createDiscordStore(await mkdtemp(path.join(os.tmpdir(), 'discord-store-conc-')))
+	await Promise.all([
+		store2.create({ room: 'x', guildId: 'g', channelId: 'a', direction: 'in', route: { handler: 'frame-sticky', params: {} }, createdBy: 'u' }),
+		store2.create({ room: 'x', guildId: 'g', channelId: 'b', direction: 'in', route: { handler: 'frame-sticky', params: {} }, createdBy: 'u' }),
+	])
+	assert.equal((await store2.listByRoom('x')).length, 2, 'both concurrent creates survive')
+
 	console.log('ok: discord-store')
 	process.exit(0)
 }

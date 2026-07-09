@@ -48,9 +48,14 @@ export function createDiscordStore(dataDir: string): DiscordStore {
 	async function load(): Promise<DiscordBinding[]> {
 		try {
 			return JSON.parse(await readFile(file, 'utf8'))
-		} catch {
-			// Missing file (first run) or a torn write: start empty.
-			return []
+		} catch (err) {
+			// Only a missing file (first run — bindings.json not created yet) is
+			// benign. Writes are atomic (tmp+rename), so a torn file is impossible;
+			// a parse error or any other read failure means genuine corruption or
+			// tampering. Fail loud rather than return [] and let the next write
+			// overwrite the single global file, erasing every binding.
+			if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+			throw err
 		}
 	}
 
