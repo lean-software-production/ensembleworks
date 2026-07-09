@@ -84,12 +84,13 @@
       "phase": "BUILD",
       "type": "subagent",
       "skill": "sprint-execute",
-      "description": "TDD: Navigator writes the failing node:assert tests (pure drawShapes helpers first, then HTTP round-trips that boot the real app), Driver implements: drawShapes.ts helper -> contracts enum/fields -> server create branches + update-reparent + delete-children. Match repo conventions exactly (node:assert under src/, boot real app in-process, real SQLite, no mock lib, no new deps).",
+      "description": "TDD: Navigator writes the failing node:assert tests (pure drawShapes helpers first, then HTTP round-trips that boot the real app), Driver implements: drawShapes.ts helper -> contracts enum/fields + read-output extension -> server create branches + update-reparent + delete-children + the frame read-symmetry extension (frames.ts surfaces geo/line/draw/highlight). SCOPE NOTE: the AC-gate human review added read symmetry (AC15-AC17) and hardened every geometry AC to a numeric decoded-record assertion. Match repo conventions exactly (node:assert under src/, boot real app in-process, real SQLite, no mock lib, no new deps).",
       "outputs": [
         "contracts/src/tools/canvas.ts",
         "server/src/canvas/drawShapes.ts",
         "server/src/canvas/drawShapes.test.ts",
         "server/src/features/shape.ts",
+        "server/src/features/frames.ts",
         "server/src/shape-api.test.ts"
       ]
     },
