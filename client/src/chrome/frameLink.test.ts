@@ -1,6 +1,6 @@
 // client/src/chrome/frameLink.test.ts
 import assert from 'node:assert/strict'
-import { parseFrameId, buildFrameLink } from './frameLink'
+import { parseFrameId, buildFrameLink, readFrameId } from './frameLink'
 
 // parseFrameId validates a tldraw shape id from a raw query value.
 assert.equal(parseFrameId(null), null, 'absent ⇒ null')
@@ -17,3 +17,9 @@ assert.equal(
 )
 
 console.log('ok: frameLink helpers')
+
+// readFrameId parses the `frame` param out of a raw location.search string.
+assert.equal(readFrameId('?room=team&frame=shape:abc123'), 'shape:abc123')
+assert.equal(readFrameId('?room=team'), null, 'no frame param ⇒ null')
+assert.equal(readFrameId('?frame=garbage'), null, 'invalid ⇒ null')
+console.log('ok: readFrameId')

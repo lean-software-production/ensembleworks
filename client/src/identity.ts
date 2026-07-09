@@ -6,6 +6,7 @@
  */
 
 import { colorKeyForId, isIdentityColor, type IdentityColor } from './colors'
+import { readFrameId } from './chrome/frameLink'
 
 const ID_KEY = 'ensembleworks.userId'
 const NAME_KEY = 'ensembleworks.userName'
@@ -60,4 +61,9 @@ export function peekIdentity(): { id: string; name: string } {
 export function getRoomId(): string {
 	const room = new URLSearchParams(location.search).get('room') ?? 'team'
 	return /^[a-zA-Z0-9_-]{1,64}$/.test(room) ? room : 'team'
+}
+
+// Returns the deep-link target frame id from the current URL, or null.
+export function getFrameId(): string | null {
+	return readFrameId(location.search)
 }

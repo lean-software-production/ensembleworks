@@ -13,3 +13,7 @@ export function buildFrameLink(origin: string, room: string, frameId: string): s
 	const params = new URLSearchParams({ room, frame: frameId })
 	return `${origin}/?${params.toString()}`
 }
+
+export function readFrameId(search: string): string | null {
+	return parseFrameId(new URLSearchParams(search).get('frame'))
+}
