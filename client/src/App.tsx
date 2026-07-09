@@ -8,7 +8,9 @@ import {
 	defaultShapeUtils,
 	getDefaultUserPresence,
 	getUserPreferences,
+	react,
 	setUserPreferences,
+	type TLShapeId,
 } from 'tldraw'
 import 'tldraw/tldraw.css'
 import './theme.css'
@@ -21,7 +23,7 @@ import { hexForColor } from './colors'
 import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
 import { presentStore } from './file-viewer/presentStore'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
-import { getIdentity, getRoomId } from './identity'
+import { getFrameId, getIdentity, getRoomId } from './identity'
 import { collectIcons, collectShapeUtils } from './kernel/plugin'
 import { attachRoomHooks } from './kernel/roomHooks'
 import { plugins } from './plugins'
@@ -159,6 +161,27 @@ export function App() {
 		lastSyncStatus.current = syncStatus
 		logConnectionEvent('sync', String(syncStatus))
 	}, [syncStatus])
+
+	// Deep-link (frameLink spec): with `?frame=<shapeId>` in the URL, zoom the
+	// camera to that frame exactly once. The shape may not have synced in yet, so
+	// watch reactively — getShapePageBounds returns undefined until it hydrates,
+	// so it doubles as the "has it arrived?" check — then zoom and stop. Plain
+	// zoomToBounds (not enterFocus): a link recipient must not be trapped behind
+	// a camera lock + matte.
+	const didDeepLink = useRef(false)
+	useEffect(() => {
+		if (!editor || didDeepLink.current) return
+		const frameId = getFrameId()
+		if (!frameId) return
+		const dispose = react('deep-link frame', () => {
+			if (didDeepLink.current) return
+			const bounds = editor.getShapePageBounds(frameId as TLShapeId)
+			if (!bounds) return
+			didDeepLink.current = true
+			editor.zoomToBounds(bounds, { inset: 16, animation: { duration: 220 } })
+		})
+		return dispose
+	}, [editor])
 
 	const handleMount = useMemo(
 		() => (editor: Editor) => {
