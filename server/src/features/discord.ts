@@ -19,6 +19,15 @@ export function createDiscordRouter(ctx: PluginServerContext): express.Router {
 		res.json({ ok: true, bindings: await ctx.storage.discord.listByRoom(roomId) })
 	})
 
+	// GET /api/discord/resolve?channelId=<id> — channel → inbound binding reverse
+	// lookup for the bot. It receives a message on a channel and needs the room +
+	// route it's bound to. Read-only; the bot authenticates via CF Access in prod.
+	router.get('/api/discord/resolve', async (req, res) => {
+		const channelId = String(req.query.channelId ?? '').trim()
+		if (!channelId) return void res.status(400).json({ error: 'channelId' })
+		res.json({ ok: true, bindings: await ctx.storage.discord.listInboundByChannel(channelId) })
+	})
+
 	// POST /api/discord/bindings — create a binding. All-or-nothing validation of
 	// room/guildId/channelId/direction/route before it reaches the store.
 	router.post('/api/discord/bindings', async (req, res) => {

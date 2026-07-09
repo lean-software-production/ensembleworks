@@ -122,11 +122,51 @@ async function main() {
 		}
 	}
 
+	// GET /api/discord/resolve — channel → inbound binding reverse lookup (F1).
+	{
+		// Inbound binding on chan-in.
+		const inCreated = await postJson('/api/discord/bindings', {
+			room: 'test', guildId: 'g', channelId: 'chan-in', direction: 'in',
+			route: { handler: 'frame-sticky', params: { frame: 'Ideas' } },
+		})
+		assert.equal(inCreated.status, 200)
+
+		// Resolve chan-in → the inbound binding.
+		const resolved = await getJson('/api/discord/resolve?channelId=chan-in')
+		assert.equal(resolved.status, 200)
+		assert.equal(resolved.body.bindings.length, 1)
+		const binding = resolved.body.bindings[0]
+		assert.ok(binding, 'resolve returns a binding')
+		assert.equal(binding.room, 'test')
+		assert.equal(binding.route.handler, 'frame-sticky')
+		assert.equal(binding.route.params.frame, 'Ideas')
+
+		// Unbound channel → no bindings.
+		const nope = await getJson('/api/discord/resolve?channelId=nope')
+		assert.equal(nope.status, 200)
+		assert.equal(nope.body.bindings.length, 0)
+
+		// Outbound binding: resolve (inbound-only) must not match it.
+		const outCreated = await postJson('/api/discord/bindings', {
+			room: 'test', guildId: 'g', channelId: 'chan-out-only', direction: 'out',
+			route: { handler: 'summary', params: {} },
+		})
+		assert.equal(outCreated.status, 200)
+		const outResolved = await getJson('/api/discord/resolve?channelId=chan-out-only')
+		assert.equal(outResolved.status, 200)
+		assert.equal(outResolved.body.bindings.length, 0)
+
+		// Missing channelId → 400.
+		const missing = await getJson('/api/discord/resolve')
+		assert.equal(missing.status, 400)
+	}
+
 	await new Promise<void>((resolve, reject) =>
 		server.close((err) => (err ? reject(err) : resolve()))
 	)
 	console.log('ok: discord-api')
 	console.log('ok: discord-post')
+	console.log('ok: discord-resolve')
 	process.exit(0)
 }
 
