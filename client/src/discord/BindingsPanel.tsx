@@ -42,6 +42,7 @@ export function BindingsPanel({ onClose }: TLUiDialogProps) {
 	const room = getRoomId()
 	const [bindings, setBindings] = useState<DiscordBinding[]>([])
 	const [error, setError] = useState<string | null>(null)
+	const [busy, setBusy] = useState(false)
 
 	const [channelId, setChannelId] = useState('')
 	const [guildId, setGuildId] = useState('')
@@ -65,13 +66,20 @@ export function BindingsPanel({ onClose }: TLUiDialogProps) {
 	}, [])
 
 	const onDelete = (id: string) => {
+		if (busy) return
+		setError(null)
+		setBusy(true)
 		deleteBinding(id)
 			.then(() => refetch())
 			.catch((err) => setError(String(err?.message ?? err)))
+			.finally(() => setBusy(false))
 	}
 
 	const onAdd = (e: React.FormEvent) => {
 		e.preventDefault()
+		if (busy) return
+		setError(null)
+		setBusy(true)
 		const params: Record<string, unknown> = frameId.trim() ? { frameId: frameId.trim() } : {}
 		createBinding({
 			room,
@@ -87,6 +95,7 @@ export function BindingsPanel({ onClose }: TLUiDialogProps) {
 				setFrameId('')
 			})
 			.catch((err) => setError(String(err?.message ?? err)))
+			.finally(() => setBusy(false))
 	}
 
 	return (
@@ -118,7 +127,7 @@ export function BindingsPanel({ onClose }: TLUiDialogProps) {
 							<span style={{ flex: 1 }}>
 								<strong>{b.channelId}</strong> · {b.direction} · {b.route.handler}
 							</span>
-							<TldrawUiButton type="danger" onClick={() => onDelete(b.id)}>
+							<TldrawUiButton type="danger" disabled={busy} onClick={() => onDelete(b.id)}>
 								delete
 							</TldrawUiButton>
 						</div>
@@ -176,7 +185,7 @@ export function BindingsPanel({ onClose }: TLUiDialogProps) {
 						<TldrawUiButton type="normal" onClick={() => onClose()}>
 							close
 						</TldrawUiButton>
-						<TldrawUiButton type="primary" onClick={onAdd}>
+						<TldrawUiButton type="primary" htmlButtonType="submit" disabled={busy}>
 							add binding
 						</TldrawUiButton>
 					</div>

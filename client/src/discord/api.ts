@@ -3,30 +3,14 @@
  * B1/B2). Pure request builders are split out so they can be unit-tested
  * without touching the network; the async wrappers are thin fetch calls that
  * mirror the roadmap idiom (throw on non-ok so the UI can surface the error).
- *
- * `DiscordBinding` is duplicated locally rather than imported from
- * `@ensembleworks/contracts` — the contracts package does not re-export the
- * type from its root, so a local interface avoids a fragile deep import.
  */
+import type { DiscordBinding } from '@ensembleworks/contracts'
 
-export interface DiscordBinding {
-	id: string
-	room: string
-	guildId: string
-	channelId: string
-	direction: 'in' | 'out'
-	route: { handler: string; params: Record<string, unknown> }
-	createdBy: string
-	createdAt: number
-}
+export type { DiscordBinding }
 
-export interface CreateBindingInput {
-	room: string
-	guildId: string
-	channelId: string
-	direction: 'in' | 'out'
-	route: { handler: string; params: Record<string, unknown> }
-}
+// Derived from the contract so it can't drift: the fields a caller supplies
+// on create (the server fills in id/createdBy/createdAt).
+export type CreateBindingInput = Omit<DiscordBinding, 'id' | 'createdBy' | 'createdAt'>
 
 // Pure request builders (unit-tested in api.test.ts).
 
