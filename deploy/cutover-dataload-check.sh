@@ -23,7 +23,7 @@ echo "==> booting against a copy of the live DATA_DIR"
 work="$(${RUN} mktemp -d)"; cdir="$(${RUN} mktemp -d)"
 ${RUN} cp -a "${DATA_DIR}/." "${work}/"
 port="$(ew_free_port)"
-${RUN} env PORT="$port" DATA_DIR="$work" CLIENT_DIST="$cdir" EW_WARM_ROOMS=1 \
+${RUN} env PORT="$port" DATA_DIR="$work" DATABASE_DIR="$work" CLIENT_DIST="$cdir" EW_WARM_ROOMS=1 \
   "${fetchdir}/ensembleworks-server" sync >/tmp/ew-dataload.log 2>&1 & pid=$!
 ew_poll_health "http://127.0.0.1:$port/api/health" "$pid" || { echo "ABORT: server did not come up on the copied DATA_DIR" >&2; kill "$pid" 2>/dev/null; exit 1; }
 
