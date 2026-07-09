@@ -112,9 +112,13 @@ human-visible ACs. Evidence lands in [`cli-frames-draw-walkthrough.md`](./cli-fr
       `align|group|eraser|laser|image` exists. `canvas shape create group` (and `…image`, `…eraser`) →
       **400** (type not in enum).
 - [ ] **AC21 — Agent attribution is consistent & objective.** On a credentialed instance, frame/line/
-      draw/highlight records have `meta.author === <resolved caller>`; on an anonymous instance with
-      `--author X`, `meta.author === X`; with no author context, `meta === {}`. None of the four
-      throws/500s for lacking richText. Text-bearing shapes (note/geo/text) still get the 🤖 badge.
+      draw/highlight records have `meta.author === <resolved caller>`; with no author context (and on an
+      anonymous instance, since `--author` is a *cosmetic badge stamped into richText only* per
+      `kernel/attribution.ts` — and these four types have no richText), `meta === {}`. None of the four
+      throws/500s for lacking richText. Each of the four stamps `meta` identically to a reference `geo`
+      created the same way. Text-bearing shapes (note/geo/text) still get the 🤖 badge in their richText.
+      *(Corrected during execute: the draft's "anon `--author X` → `meta.author === X`" contradicted the
+      real attribution design — anonymous author never becomes a structured `meta.author`.)*
 - [ ] **AC22 — Documented limitation (rotated-parent reparent).** Reparent's coordinate translation is
       correct for **unrotated** parents; reparenting into/out of a **rotated** frame is explicitly out of
       scope for this slice (server has no rotation-aware page math). This AC passes when the limitation is
