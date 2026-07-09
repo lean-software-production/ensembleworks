@@ -22,4 +22,8 @@ console.log('ok: frameLink helpers')
 assert.equal(readFrameId('?room=team&frame=shape:abc123'), 'shape:abc123')
 assert.equal(readFrameId('?room=team'), null, 'no frame param ⇒ null')
 assert.equal(readFrameId('?frame=garbage'), null, 'invalid ⇒ null')
+// round-trips the encoded form buildFrameLink actually emits
+assert.equal(readFrameId('?frame=shape%3Aabc123'), 'shape:abc123')
+const link = buildFrameLink('https://ew.example', 'team', 'shape:abc123')
+assert.equal(readFrameId(link.slice(link.indexOf('?'))), 'shape:abc123')
 console.log('ok: readFrameId')
