@@ -148,6 +148,13 @@ test -x /usr/local/bin/ensembleworks-term-launch || { echo "/usr/local/bin/ensem
 sudo -u "\${APP_USER}" sudo -n -u "\${AGENT_USER}" true 2>/dev/null || { echo "sudo grant missing: \${APP_USER} -> \${AGENT_USER} (NOPASSWD ensembleworks-term-launch + /usr/bin/true) — run the laingville bootstrap" >&2; exit 1; }
 # GitHub App token minting is OPTIONAL — warn but don't block.
 sudo test -f "\${APP_HOME}/.config/ensembleworks/github-app.env" 2>/dev/null || echo "    note: \${APP_HOME}/.config/ensembleworks/github-app.env absent — GitHub token minting not provisioned (optional; deploy/github-app-runbook.md)" >&2
+# Room-database backup freshness — non-blocking heads-up (room-db-fast-storage spec).
+# Skips silently on hosts not yet migrated (script absent). A stale DR copy never
+# blocks a deploy: the live room data is on the boot disk, not this backup.
+if test -x /usr/local/bin/check-database-backup-fresh.sh; then
+  sudo -u "\${APP_USER}" /usr/local/bin/check-database-backup-fresh.sh >/dev/null 2>&1 \
+    || echo "    note: room-database backup on /home is STALE — investigate (deploy not blocked)" >&2
+fi
 echo "    preflight ok"
 
 # ---- fetch the tag's artifacts into \${NEW} -----------------------------------

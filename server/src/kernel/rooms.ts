@@ -14,8 +14,7 @@ export interface RoomHost {
 	getOrCreateRoom(roomId: string): TLSocketRoom
 }
 
-export function createRoomHost(dataDir: string): RoomHost {
-	const roomsDir = path.join(dataDir, 'rooms')
+export function createRoomHost(roomsDir: string): RoomHost {
 	mkdirSync(roomsDir, { recursive: true })
 
 	// -------------------------------------------------------------------------
