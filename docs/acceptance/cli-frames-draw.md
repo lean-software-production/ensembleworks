@@ -28,7 +28,7 @@ human-visible ACs. Evidence lands in [`cli-frames-draw-walkthrough.md`](./cli-fr
 > Every geometry/position AC must assert the **decoded record** (points, `parentId`, page-point,
 > `index`, `rotation`) numerically, ±1px. A browser glance corroborates; it never substitutes.
 
-> **Status: 0 / 23 — not yet built.**
+> **Status: 24 ACs (23 original + AC24 from the quality panel).**
 
 ## Checklist
 
@@ -71,6 +71,12 @@ human-visible ACs. Evidence lands in [`cli-frames-draw-walkthrough.md`](./cli-fr
 - [ ] **AC10 — Rotate & lock riders (exact, persist).** `--rotate 0.5` → `record.rotation === 0.5`
       exactly; `--lock` → `record.isLocked === true`. Both survive a reload (re-read snapshot). Invalid
       `--rotate` (non-numeric / NaN / Infinity) → **400**.
+- [ ] **AC24 — Reparent cannot create a parent cycle → 400.** `update <frameId> --frame "<its own
+      name>"` (a frame fuzzy-matches itself) and `update <frameId> --frame "<a descendant frame>"` both
+      → **400**, `parentId` unchanged. `store.put` would *accept* a cyclic `parentId` (the base validator
+      only checks the id prefix), so this is guarded in code (`wouldCreateCycle`); a non-cyclic reparent
+      into a sibling frame still → 200. *(Added by the code-quality panel: Codex found this adversarial
+      edge that no other AC covered.)*
 
 ### Delete semantics
 - [ ] **AC11 — Delete a frame KEEPS its children (default), on the right page, unmoved.** Frame with 2

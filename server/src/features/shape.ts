@@ -15,6 +15,7 @@ import {
 	parsePoints,
 	toLocal,
 	translateForReparent,
+	wouldCreateCycle,
 } from '../canvas/drawShapes.ts'
 import { findFrameByName } from '../canvas/frames-helper.ts'
 import { pageIdOf, pagePoint } from '../canvas/geometry.ts'
@@ -180,6 +181,16 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 						const target = findFrameByName(shapes, body.frame)
 						if (!target) {
 							problem = { status: 404, error: 'frame not found' }
+							return
+						}
+						// A frame fuzzy-matches its own name, and it may match a descendant —
+						// either would set parentId to self/a child and cycle the tree. store.put
+						// accepts it (base validator only checks the id prefix), so guard here.
+						if (wouldCreateCycle(id, target.id, byId)) {
+							problem = {
+								status: 400,
+								error: 'cannot reparent a shape into itself or its own descendant',
+							}
 							return
 						}
 						newParentId = target.id
@@ -402,8 +413,9 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 						},
 					} as any)
 				} else if (type === 'line') {
-					// Points arrive in page space; normalize to a bbox-min local origin
-					// so the shape sits at (minX,minY) and vertices are stored local.
+					// Points are parent-relative (page coords on a page, frame-local under --frame,
+					// same convention as geo/text/note); normalize to a bbox-min origin so the
+						// shape sits at (minX,minY) and vertices are stored local.
 					const pts = parsePoints(body.points, 2)
 					const origin = originOf(pts)
 					store.put({

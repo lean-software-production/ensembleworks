@@ -327,6 +327,26 @@ async function main() {
 		assert.ok(Math.abs(after.x - 1200) <= 1 && Math.abs(after.y - 560) <= 1, 'page-point unchanged ±1px')
 	})
 
+	await check('AC24: reparent cannot create a parent cycle (self or descendant) → 400', async () => {
+		await seed('ac24', [
+			frameRec({ id: 'shape:ac24A', parentId: 'page:page', x: 100, y: 100, index: 'a1', name: 'Cycle outer' }),
+			frameRec({ id: 'shape:ac24B', parentId: 'shape:ac24A', x: 10, y: 10, index: 'a1', name: 'Cycle inner' }),
+			frameRec({ id: 'shape:ac24C', parentId: 'page:page', x: 900, y: 100, index: 'a2', name: 'Cycle sibling' }),
+		])
+		// self-cycle: a frame fuzzy-matches its own name → must be refused (store.put would ACCEPT parentId==self)
+		const self = await postJson('/api/canvas/shape', { room: 'ac24', op: 'update', id: 'shape:ac24A', frame: 'Cycle outer' })
+		assert.equal(self.status, 400, 'reparent a frame into itself → 400')
+		assert.equal(docs('ac24').find((d) => d.id === 'shape:ac24A').parentId, 'page:page', 'self-cycle rejected: parentId unchanged')
+		// descendant-cycle: reparent outer frame A into its own child B → cycle A→B→A
+		const desc = await postJson('/api/canvas/shape', { room: 'ac24', op: 'update', id: 'shape:ac24A', frame: 'Cycle inner' })
+		assert.equal(desc.status, 400, 'reparent a frame into its own descendant → 400')
+		assert.equal(docs('ac24').find((d) => d.id === 'shape:ac24A').parentId, 'page:page', 'descendant-cycle rejected: parentId unchanged')
+		// control: a genuinely non-cyclic reparent (A into a sibling frame C) still works
+		const ok = await postJson('/api/canvas/shape', { room: 'ac24', op: 'update', id: 'shape:ac24A', frame: 'Cycle sibling' })
+		assert.equal(ok.status, 200, 'non-cyclic reparent into a sibling frame → 200')
+		assert.equal(docs('ac24').find((d) => d.id === 'shape:ac24A').parentId, 'shape:ac24C', 'A reparented under sibling C')
+	})
+
 	await check('AC10: rotate/lock riders exact & persist; invalid rotate → 400', async () => {
 		await seed('ac10', [geoRec({ id: 'shape:ac10S', parentId: 'page:page', text: 'r' })])
 		const rot = await postJson('/api/canvas/shape', { room: 'ac10', op: 'update', id: 'shape:ac10S', rotate: 0.5 })

@@ -132,3 +132,27 @@ export function translateForReparent(
 		newParent && newParent.typeName === 'shape' ? pagePoint(newParent, byId) : { x: 0, y: 0 }
 	return { x: P.x - NP.x, y: P.y - NP.y }
 }
+
+/**
+ * True if reparenting `shapeId` under `newParentId` would create a parent cycle —
+ * i.e. `newParentId` IS the shape, or is one of its descendants. tldraw's base
+ * validator only checks the id prefix, so `store.put` would ACCEPT a cyclic
+ * parentId; the read helpers (pageIdOf/pagePoint) then bail after 50 hops and the
+ * browser tldraw renderer, which assumes an acyclic tree, can break. Walk UP from
+ * newParentId: if we reach shapeId (or loop) before a page, it is a cycle.
+ */
+export function wouldCreateCycle(
+	shapeId: string,
+	newParentId: string,
+	byId: Map<string, any>,
+): boolean {
+	let cur: string | undefined = newParentId
+	const seen = new Set<string>()
+	while (typeof cur === 'string' && cur.startsWith('shape:')) {
+		if (cur === shapeId) return true
+		if (seen.has(cur)) return true // pre-existing cycle upstream — refuse to extend it
+		seen.add(cur)
+		cur = byId.get(cur)?.parentId
+	}
+	return false
+}

@@ -20,6 +20,7 @@ import {
 	toLocal,
 	translateForReparent,
 	type Vec,
+	wouldCreateCycle,
 } from './drawShapes.ts'
 
 // Decode a segment's base64 path back to points (the real tldraw round-trip).
@@ -189,6 +190,26 @@ async function main() {
 		assert.equal(intoG.x, -1050, 'reparent into nested G: local x = 50 − 1100')
 		assert.equal(intoG.y, -70, 'reparent into nested G: local y = 30 − 100')
 		console.log('ok: translateForReparent preserves page position for frame↔page moves')
+	}
+
+	// -----------------------------------------------------------------------
+	// wouldCreateCycle — refuse a reparent that would loop the parent tree
+	// -----------------------------------------------------------------------
+	{
+		// F ⊃ G ⊃ H; S is a free page shape.
+		const F = { id: 'shape:F', typeName: 'shape', type: 'frame', parentId: 'page:p1' }
+		const G = { id: 'shape:G', typeName: 'shape', type: 'frame', parentId: 'shape:F' }
+		const H = { id: 'shape:H', typeName: 'shape', type: 'frame', parentId: 'shape:G' }
+		const S = { id: 'shape:S', typeName: 'shape', type: 'geo', parentId: 'page:p1' }
+		const byId = new Map<string, any>([[F.id, F], [G.id, G], [H.id, H], [S.id, S]])
+
+		assert.equal(wouldCreateCycle('shape:F', 'shape:F', byId), true, 'self-parent is a cycle')
+		assert.equal(wouldCreateCycle('shape:F', 'shape:G', byId), true, 'into a direct child is a cycle')
+		assert.equal(wouldCreateCycle('shape:F', 'shape:H', byId), true, 'into a deeper descendant is a cycle')
+		assert.equal(wouldCreateCycle('shape:G', 'shape:S', byId), false, 'into an unrelated shape is fine')
+		assert.equal(wouldCreateCycle('shape:F', 'page:p1', byId), false, 'onto a page is never a cycle')
+		assert.equal(wouldCreateCycle('shape:H', 'shape:F', byId), false, 'child under ancestor stays acyclic')
+		console.log('ok: wouldCreateCycle detects self/descendant parent loops')
 	}
 }
 
