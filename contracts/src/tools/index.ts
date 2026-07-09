@@ -8,6 +8,7 @@ import { scribeTools } from './scribe.js'
 import { roadmapTools } from './roadmap.js'
 export * from './kernel.js'; export * from './av.js'; export * from './terminal.js'
 export * from './canvas.js'; export * from './file.js'; export * from './scribe.js'; export * from './roadmap.js'
+export * from './discord.js'
 
 /** The tool registry — every declared verb, in a stable order. */
 export const allTools = [
