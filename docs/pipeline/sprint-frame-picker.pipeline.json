@@ -1,0 +1,143 @@
+{
+  "name": "sprint-frame-picker",
+  "version": 1,
+  "extends": "sprint",
+  "description": "One-shot variant of the canonical sprint pipeline for the EnsembleWorks Frames-drawer feature. Skips persona-interview + dogfood (no personas; not a pipeline tool), swaps executable acceptance tests for an agent-driven walkthrough (this repo has no acceptance harness), and adds a multi-model code-quality gate before the human bossman gate.",
+  "inputs": {
+    "goal": "Add fast frame navigation: a caret on the left of the current page's side-panel section flies a Frames drawer out to the left; hover peeks, click pins (persists); clicking a frame flies the camera there.",
+    "project_dir": "/Users/zaza/workspace/lean-software-production/ensembleworks",
+    "sid": "EW-FRAMES-0001"
+  },
+  "loop": {
+    "until": "human (bossman) approved the iteration",
+    "max_iterations": 1
+  },
+  "steps": [
+    {
+      "id": "preplan",
+      "phase": "CONTRACT",
+      "type": "prompt",
+      "skill": "sprint-preplan",
+      "effort": "high",
+      "description": "Enumerate acceptance criteria as a CHECKLIST (this repo has no executable acceptance harness — do not fabricate one). Design-first: every user-facing flow of the drawer walked end-to-end against the v5 prototype.",
+      "outputs": ["docs/acceptance/frames-drawer.md"],
+      "gate": {
+        "kind": "human",
+        "prompt": "Approve the AC checklist. Is every drawer flow specified end-to-end and objectively checkable?",
+        "on_fail": "preplan"
+      },
+      "retro": [
+        {
+          "origin": "EnsembleWorks/zach",
+          "lesson": "When a repo doesn't do executable acceptance tests our normal way, enumerate ACs as a checklist and verify with an agent-driven walkthrough of the live app — match the repo's conventions, don't import ceremony."
+        }
+      ]
+    },
+    {
+      "id": "preflight-gates",
+      "phase": "CONTRACT",
+      "type": "script",
+      "description": "Mechanical pre-build gates: the new unit tests fail correctly (RED-is-real, assertion on the real expected value, not a missing module) and every checklist item is objectively checkable.",
+      "gate": { "kind": "auto", "on_fail": "preplan" }
+    },
+    {
+      "id": "design-protos",
+      "phase": "RESEARCH",
+      "type": "subagent",
+      "skill": "ux-prototype",
+      "description": "The v5 interactive artifact is the seed (5 rounds, user-approved). Produce the final before/after for the walkthrough."
+    },
+    {
+      "id": "plan",
+      "phase": "PLAN",
+      "type": "subagent",
+      "skill": "sprint-planner",
+      "effort": "high",
+      "description": "Plan the slice against the reuse map (focus.ts jump, panelLayout store pattern, CommandBar accelerator guard, PanelPages section header)."
+    },
+    {
+      "id": "plan-review",
+      "phase": "PLAN",
+      "type": "subagent",
+      "effort": "high",
+      "description": "Adversarial fresh-context review of the plan: refute every file:line reuse claim against the real code; flag over-engineering vs the deliberately-minimal v1 scope.",
+      "gate": { "kind": "auto", "on_fail": "plan" }
+    },
+    {
+      "id": "execute",
+      "phase": "BUILD",
+      "type": "subagent",
+      "skill": "sprint-execute",
+      "description": "TDD: Navigator writes the failing node:assert unit tests (store + pure helpers), Driver implements; then the tldraw-touching component + wiring. Match repo conventions exactly (inline wm tokens, data-testid, useValue, no new deps, no .tsx tests).",
+      "outputs": [
+        "client/src/chrome/framesDrawerLayout.ts",
+        "client/src/chrome/frameNav.ts",
+        "client/src/chrome/FramesDrawer.tsx",
+        "client/src/chrome/framesDrawerLayout.test.ts",
+        "client/src/chrome/frameNav.test.ts"
+      ]
+    },
+    {
+      "id": "self-review",
+      "phase": "VALIDATE",
+      "type": "script",
+      "skill": "sprint-self-review",
+      "description": "Test-pyramid + no-mock + test-first-commit checks; typecheck + build green across all workspaces.",
+      "gate": { "kind": "auto", "on_fail": "execute" }
+    },
+    {
+      "id": "acceptance-walkthrough",
+      "phase": "VALIDATE",
+      "type": "subagent",
+      "skill": "webapp-testing",
+      "description": "NEW — agent-driven acceptance: drive the live app (bin/dev up, seed session layout) through every item in docs/acceptance/frames-drawer.md, recording PASS/FAIL + screenshot/log evidence per line. Replaces executable acceptance tests for this repo.",
+      "inputs": ["docs/acceptance/frames-drawer.md", "the live app"],
+      "outputs": ["docs/acceptance/frames-drawer-walkthrough.md"],
+      "gate": { "kind": "auto", "on_fail": "execute" }
+    },
+    {
+      "id": "code-quality-panel",
+      "phase": "VALIDATE",
+      "type": "subagent",
+      "effort": "high",
+      "parallel_group": "quality",
+      "description": "NEW — multi-model quality gate: three independent judges on DIFFERENT models (claude-opus-4-8, gemini, codex) each score the diff + tests + neighbor files against a repo-derived rubric and answer 'at least as high quality as the surrounding code?'. Rubric: naming/altitude match neighbors; tests indistinguishable from panelLayout.test.ts / roomHooks.test.ts (node:assert, under src/, no mock lib, pure logic extracted, duck-typed fake editor); inline wm tokens + data-testid + useValue; no new deps; no .tsx tests; typecheck+build green; RED-is-real; nothing built for the deferred scope.",
+      "inputs": ["the working diff", "the new tests", "representative neighbor files"],
+      "outputs": ["docs/pipeline/code-quality-panel-EW-FRAMES-0001.md"],
+      "gate": {
+        "kind": "auto",
+        "prompt": "All three judges return at_least_as_good=true with zero must-fix findings.",
+        "on_fail": "execute"
+      },
+      "retro": [
+        {
+          "origin": "EnsembleWorks/zach",
+          "lesson": "Have multiple models independently confirm new code + tests are at least as good as the surrounding code before a friend's-repo PR. Calibrate the gate: it must go RED once on a deliberately-worse patch before it is trusted."
+        }
+      ]
+    },
+    {
+      "id": "bossman",
+      "phase": "VALIDATE",
+      "type": "subagent",
+      "skill": "bossman-walkthrough",
+      "description": "Human gate: browser walkthrough with the user of the built drawer against the AC checklist. THE AUTONOMOUS RUN STOPS HERE and waits for the human.",
+      "gate": { "kind": "human", "on_fail": "execute" }
+    },
+    {
+      "id": "retro-close",
+      "phase": "CLOSE",
+      "type": "subagent",
+      "skill": "sprint-retro",
+      "description": "Retrospect the slice; append learnings to the ledger."
+    },
+    {
+      "id": "open-pr",
+      "phase": "CLOSE",
+      "type": "prompt",
+      "skill": "finishing-a-development-branch",
+      "description": "NEW — open the PR against main with unit tests, the completed AC checklist + walkthrough evidence, and the quality-panel verdict attached. No version bump / tag (maintainer-cut only).",
+      "outputs": ["a PR against main"]
+    }
+  ]
+}
