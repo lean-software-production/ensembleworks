@@ -38,6 +38,9 @@ references in `deploy/cutover-dataload-check.sh` and all four hosts'
   15 minutes.
 - A boot-disk rebuild is recoverable via a single documented, manually-run
   restore step.
+- A failed or silently-stopped backup is surfaced loudly in the journal (no
+  silent DR-copy rot) and checked before deploy/rebuild — closing the same
+  silent-drift failure class that caused incident #18.
 - No change to where uploads/transcripts/roadmaps/telemetry live, and — the
   hard constraint — no data loss during the migration itself.
 
@@ -76,7 +79,11 @@ whole `DATA_DIR` during version cutovers) and `deploy/cutover-dataload-check.sh`
 (which boots a test server against a copy of `DATA_DIR` to verify every room
 loads under new app code) working essentially as-is — they already look for
 room data at `DATA_DIR/rooms/`, and that is exactly where the backup lands.
-Two caveats follow and must be handled:
+Two caveats follow. Both bite only at the next era-crossing `cutover.sh` run —
+a rare, one-time, hand-supervised event, **not** the normal `deploy.sh` path
+this feature ships through (`deploy.sh` never touches `DATA_DIR` at all). They
+are forward-looking notes for whoever next runs an era cutover, not blockers
+for this rollout:
 
 - **Freshness of the cutover safety backup.** `cutover.sh`'s `cp -a` of
   `DATA_DIR` previously captured *live* room state; post-migration
@@ -118,8 +125,10 @@ complexity with no corresponding risk reduction.
 - `createRoomHost` (`server/src/kernel/rooms.ts`) changes to accept the
   resolved rooms directory directly, rather than deriving `rooms/` from a
   `dataDir` parameter itself.
-- This is the entire app-repo footprint of this design. The app has no
-  knowledge of, and no code path related to, how `DATABASE_DIR` gets backed
+- This is the entire *server-code* footprint of this design. The only other
+  app-repo touch is a small, non-blocking freshness warning in `deploy.sh`'s
+  preflight (see "Detecting a failed or stale backup"). The running server has
+  no knowledge of, and no code path related to, how `DATABASE_DIR` gets backed
   up or restored — that's entirely an ops-repo concern (see below).
 
 ### Testing (this repo)
@@ -172,6 +181,47 @@ never silently overwrite live data with a stale backup. Prints a summary of
 what was restored and how stale it is, and reminds the operator to start
 `ensembleworks-sync` afterward.
 
+### Detecting a failed or stale backup
+
+There is no dedicated monitoring yet, so detection uses only native systemd
+features and must be loud in the journal. This matters because the failure it
+guards against is *silent*: a backup that stops running leaves everything
+looking healthy until a boot-disk rebuild reaches for a DR copy that turns out
+to be stale — the same silent-drift class as the nodatacow gap behind incident
+#18. Three pieces:
+
+1. **Fail loudly at the source.** `database-backup.sh` runs under
+   `set -euo pipefail` and exits non-zero if any room's `.backup` fails, so a
+   bad run marks `ensembleworks-database-backup.service` failed — queryable
+   with zero infrastructure via `systemctl --failed` /
+   `systemctl is-failed ensembleworks-database-backup.service`. The service
+   carries `OnFailure=ensembleworks-database-backup-failed.service`, a oneshot
+   that logs at error priority (`logger -p daemon.err "database backup FAILED —
+   DR copy on /home is stale; investigate before any boot-disk rebuild"`), so
+   failures surface under `journalctl -p err`.
+2. **A shared freshness check.** `check-database-backup-fresh.sh` (ops repo,
+   driven by the same shared allowlist as backup/restore) finds the newest
+   `*.sqlite` mtime under each listed dir in `DATA_DIR/` and exits non-zero
+   with a loud message if it is older than **2× the interval (30 minutes)**.
+   Unlike the OnFailure path this is an *outcome* check — it asserts a fresh
+   backup actually exists, so it also catches the mode OnFailure cannot: a
+   timer that silently stopped firing (disabled, wedged, or never enabled).
+3. **A passive freshness timer.**
+   `ensembleworks-database-backup-freshness.timer` runs the check hourly and
+   logs loudly at error priority when stale, so a silently-stopped backup is
+   noticed on its own within the hour rather than only when someone next
+   deploys or rebuilds.
+
+The check is also wired into the two moments where staleness has consequences:
+
+- **Boot-disk rebuild / restore runbook:** run `check-database-backup-fresh.sh`
+  and require an explicit operator acknowledgement before wiping the boot disk
+  — this is where a stale backup actually costs data.
+- **`deploy.sh` preflight:** run the check as a *non-blocking warning* (and
+  skip gracefully if the script isn't installed, for hosts not yet migrated).
+  A deploy does not endanger data — the live copy is on the boot disk — so a
+  stale DR copy is a heads-up to investigate, not a reason to block shipping.
+
 ### Host provisioning (`bootstrap.sh`, all four hosts)
 
 - Create `/var/lib/ensembleworks/databases` —
@@ -181,11 +231,15 @@ what was restored and how stale it is, and reminds the operator to start
   problem this whole incident traced back to doesn't apply there at all.
 - Add `sqlite3` to the apt package list (needed by `database-backup.sh` /
   `restore-database.sh`; confirmed not currently installed on `ew-lsp-001`).
-- Install `database-backup.sh` and `restore-database.sh` to a fixed path
+- Install `database-backup.sh`, `restore-database.sh`,
+  `check-database-backup-fresh.sh`, and the shared allowlist to a fixed path
   (e.g. `/usr/local/bin/`).
 - Install and enable `ensembleworks-database-backup.timer` (15 min) +
   `.service` (`ExecStart=/usr/local/bin/ensembleworks-database-backup.sh`),
   matching the existing `home-snapshot.timer` pattern.
+- Install the `ensembleworks-database-backup-failed.service` OnFailure handler
+  and the `ensembleworks-database-backup-freshness.timer` (hourly) + `.service`
+  (see "Detecting a failed or stale backup").
 
 Rather than re-running the full multi-hundred-line `bootstrap.sh` against an
 already-live host (riskier — the script does far more than this feature),
@@ -221,14 +275,17 @@ non-empty-target guard are exactly what a clean initial seed needs.
    3. Deploy the new app version (the systemd unit now sets `DATABASE_DIR`)
       and start `ensembleworks-sync`. Confirm it opens the *seeded* databases
       on the boot disk and every room loads with its data intact.
-   4. Only now enable `ensembleworks-database-backup.timer`.
+   4. Only now enable `ensembleworks-database-backup.timer` and
+      `ensembleworks-database-backup-freshness.timer`.
 4. Verify on staging: live writes land in `DATABASE_DIR/rooms/` on the boot
    disk, the timer fires and a backup lands *atomically* at the existing
-   `DATA_DIR/rooms/` path, `cutover.sh` / `cutover-dataload-check.sh` still
-   pass (with the `DATABASE_DIR="$work"` fix applied to the latter), and a
-   full DR cycle works end-to-end (stop sync, empty `DATABASE_DIR`, run
-   `restore-database.sh`, restart sync, confirm the room loads with data
-   intact).
+   `DATA_DIR/rooms/` path, `check-database-backup-fresh.sh` passes while
+   backups are current and fails loudly when they are made stale (e.g. stop
+   the backup timer and wait out the threshold), `cutover.sh` /
+   `cutover-dataload-check.sh` still pass (with the `DATABASE_DIR="$work"` fix
+   applied to the latter), and a full DR cycle works end-to-end (stop sync,
+   empty `DATABASE_DIR`, run `restore-database.sh`, restart sync, confirm the
+   room loads with data intact).
 5. Roll to `ew-lsp-001`, `ew-donkeyred-001`, `ew-rink-001` one at a time, each
    following the same stop → seed → start → enable-timer order, in a quiet
    window (no live incident forcing urgency this time).
@@ -241,8 +298,10 @@ in the ops repo alongside the scripts), modelled on the app repo's
 verifying (a) the backup writes its temp
 onto the destination directory and completes with an atomic rename, (b) the
 shared allowlist is honoured — a non-listed sibling directory placed beside
-`rooms/` is never touched — and (c) the restore/seed script's
-non-empty-target guard actually refuses to run without `--force`.
+`rooms/` is never touched, (c) the restore/seed script's non-empty-target
+guard actually refuses to run without `--force`, and (d)
+`check-database-backup-fresh.sh` passes for a recent backup and exits
+non-zero (loudly) once the newest backup is older than the threshold.
 
 ## Out of scope
 
