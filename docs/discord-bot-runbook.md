@@ -57,8 +57,8 @@ secret). A mismatch → every outbound post is rejected 401.
    ```
    In dev, `bin/dev` sources this into the tmux-server environment, so **both** the
    discord service and the sync server inherit `DISCORD_INTERNAL_SECRET` from the one
-   entry — exactly what the outbound path needs. (Dev is loopback-only, so no
-   Cloudflare Access token is needed for the bot→server sticky calls.)
+   entry — exactly what the outbound path needs. The inbound path (bot → sync sticky
+   calls) is a plain loopback POST and needs no credential — same as prod.
 2. `bin/dev up`. Confirm the bot: `bin/dev status --json 2>/dev/null` shows `discord`
    enabled + healthy; `bin/dev logs discord` shows `gateway connected`. (No token ⇒
    the service is skipped by design.)
@@ -96,21 +96,18 @@ The bot ships as a compiled binary through the normal release → CI → deploy 
    ```
    DISCORD_BOT_TOKEN=<bot token>
    DISCORD_INTERNAL_SECRET=<the shared secret>
-   # bot -> sync server auth (prod is behind Cloudflare Access):
-   CF_ACCESS_CLIENT_ID=<service-token client id>
-   CF_ACCESS_CLIENT_SECRET=<service-token client secret>
    ```
 2. **Sync server env** — add the SAME `DISCORD_INTERNAL_SECRET` (and optionally
    `DISCORD_PORT=8790`) to the sync server's EnvironmentFile
    (`~ensemble/.config/ensembleworks/sync.env`), so `POST /api/discord/post` can reach
    the bot's `/post`.
-3. **Cloudflare Access service token** — the bot creates stickies via
-   `POST /api/canvas/sticky`, which is behind CF Access in prod. Provision a CF Access
-   **service token**, put its client id/secret in `discord.env` (above), and map its
-   `common_name` to a **read-write** identity in
-   `~ensemble/.config/ensembleworks/service-tokens.toml` (same mechanism as the other
-   bots). Without this, inbound stickies are rejected at the edge.
-4. **Enable the unit** (first time only — deploy.sh won't force-enable it):
+   > **Inbound is loopback-only.** The bot creates stickies with a plain
+   > `POST http://localhost:8788/api/canvas/sticky` on the same box — it does **not**
+   > go through the Cloudflare edge, so no CF Access service token is needed (the
+   > sticky lands as an anonymous caller; the Discord author rides in the `author`
+   > field). Giving local services a real scoped identity over loopback is tracked
+   > separately — see issue #24.
+3. **Enable the unit** (first time only — deploy.sh won't force-enable it):
    ```
    sudo systemctl enable --now ensembleworks-discord
    ```
@@ -135,7 +132,6 @@ Run the §4.3 inbound + outbound + echo round-trips against the deployed instanc
 | `bin/dev status` shows discord disabled | `DISCORD_BOT_TOKEN` not set in the env it reads (dev.env / discord.env). |
 | Inbound stickies are **blank** | **MESSAGE CONTENT** privileged intent not enabled in the Developer Portal. |
 | Outbound posts silently do nothing; server logs `delivered: 0` | `DISCORD_INTERNAL_SECRET` mismatch between the bot and the sync server (401), or no **outbound** binding for the room. The server also warns if the secret is unset. |
-| Inbound sticky POST rejected in prod (403) | Missing/mis-mapped Cloudflare Access service token — check `discord.env` CF creds + the `service-tokens.toml` entry. |
 | Bot connects but nothing routes | No binding for that **channel id**, or the inbound frame name doesn't fuzzy-match any frame. Re-check the binding in the dialog. |
 | `gateway connect failed` in logs | Bad/expired `DISCORD_BOT_TOKEN`, or the intent isn't enabled. Outbound `/post` still works; inbound won't until the gateway connects. |
 

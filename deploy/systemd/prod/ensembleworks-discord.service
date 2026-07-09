@@ -26,9 +26,9 @@ MemoryAccounting=yes
 MemoryLow=256M
 Environment=SYNC_BASE=http://localhost:8788
 Environment=PORT=8790
-# DISCORD_BOT_TOKEN + DISCORD_INTERNAL_SECRET (and, in prod, the bot->server
-# Cloudflare Access service token CF_ACCESS_CLIENT_ID / CF_ACCESS_CLIENT_SECRET)
-# live in the EnvironmentFile — out of this unit / git.
+# DISCORD_BOT_TOKEN + DISCORD_INTERNAL_SECRET live in the EnvironmentFile — out of
+# this unit / git. Inbound (bot -> sync sticky calls) is a plain loopback POST to
+# SYNC_BASE on the same box, so it needs no credential of its own.
 EnvironmentFile=@APP_HOME@/.config/ensembleworks/discord.env
 ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "${SYNC_BASE}/"; do sleep 1; done'
 ExecStart=@APP_HOME@/current/ensembleworks-discord

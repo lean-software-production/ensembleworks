@@ -68,7 +68,7 @@ including `ensembleworks-discord --check` all pass):
   `/post`, exits 0, never connects to Discord).
 
 The remaining work is **operator setup on the box** (env files, the shared secret,
-the Cloudflare Access service token, enabling the unit) and the **first real deploy** —
+enabling the unit) and the **first real deploy** —
 all documented step-by-step in **[discord-bot-runbook.md](discord-bot-runbook.md) §5**.
 What has *not* happened is an actual production deploy + live Discord round-trip; the
 runbook's verification step (`journalctl -u ensembleworks-discord` → `gateway

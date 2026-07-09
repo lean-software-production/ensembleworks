@@ -333,8 +333,11 @@ The bot reads `DISCORD_BOT_TOKEN`, `DISCORD_INTERNAL_SECRET`, `PORT` (default
 `DISCORD_BOT_TOKEN` is set** — `bin/dev` gates the service on it, and without a
 token the internal `/post` face still starts (so outbound wiring is inspectable)
 but the inbound gateway never connects. Bot -> sync-server calls (creating
-stickies) use the same bot -> server auth as the other bots: a Cloudflare Access
-service token in prod, a plain loopback call in dev.
+stickies) are a plain loopback POST to `SYNC_BASE` on the same box in both dev and
+prod — no credential of their own, so the sticky lands as an anonymous caller and
+the Discord author rides in the `author` field. (Giving co-located services a real
+scoped identity over loopback, without cutting terminal agents off from the CLI, is
+tracked as separate internal-service-auth work — see issue #24.)
 
 ## Terminals & tmux
 
