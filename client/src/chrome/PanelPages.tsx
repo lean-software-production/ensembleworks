@@ -16,6 +16,7 @@ import { getIndexBetween, type Editor, type IndexKey, type TLPageId, useValue } 
 import { useAvSnapshot } from '../av/bridge'
 import { wm } from '../theme'
 import { exitFocus } from './focus'
+import { peekCloseSoon, peekOpen, togglePinned, useFramesDrawer } from './framesDrawerLayout'
 import { PanelTile, type PanelTileParticipant } from './PanelTile'
 
 interface PageSectionData {
@@ -246,6 +247,46 @@ const menuItemStyle: CSSProperties = {
 	cursor: 'pointer',
 }
 
+// The caret on the LEFT of the current page's section header: the Frames drawer
+// trigger. Hover peeks the drawer open (a short grace bridges the caret→drawer
+// gap); click pins it open (persisted). Points left because the drawer flies out
+// to the left of the panel; turns seal-blue when pinned. The drawer itself lives
+// in FramesDrawer.tsx — this is only its handle.
+function FramesCaret() {
+	const { pinned, peeking } = useFramesDrawer()
+	return (
+		<button
+			type="button"
+			data-testid="ew-frames-caret"
+			onClick={() => togglePinned()}
+			onMouseEnter={peekOpen}
+			onMouseLeave={peekCloseSoon}
+			title={pinned ? 'Hide frames' : 'Show frames (J)'}
+			aria-label={pinned ? 'Hide frames on this page' : 'Show frames on this page'}
+			// Reflects whether the drawer is actually on screen — pinned OR peeking.
+			aria-expanded={pinned || peeking}
+			style={{
+				flex: '0 0 auto',
+				width: 16,
+				height: 16,
+				display: 'flex',
+				alignItems: 'center',
+				justifyContent: 'center',
+				border: 0,
+				background: 'transparent',
+				borderRadius: 4,
+				padding: 0,
+				cursor: 'pointer',
+				fontSize: 12,
+				lineHeight: 1,
+				color: pinned ? wm.sealBlue : peeking ? wm.kraft : wm.inkMuted,
+			}}
+		>
+			‹
+		</button>
+	)
+}
+
 function SectionHeader({
 	editor,
 	section,
@@ -300,6 +341,14 @@ function SectionHeader({
 
 	return (
 		<div ref={rootRef} data-roster-page={section.name} style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 2 }}>
+			{/* Frames drawer trigger — only the current page's frames are jumpable,
+			    so only its section carries the caret (spec: current page only). A
+			    matched-width spacer on other sections keeps page names aligned. */}
+			{isCurrent ? (
+				<FramesCaret />
+			) : (
+				<span aria-hidden="true" style={{ width: 16, flex: '0 0 auto' }} />
+			)}
 			<button
 				type="button"
 				onClick={() => {

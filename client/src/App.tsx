@@ -14,6 +14,7 @@ import 'tldraw/tldraw.css'
 import './theme.css'
 import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
+import { FramesDrawer } from './chrome/FramesDrawer'
 import { presentingAtom } from './chrome/present'
 import { getSettings, updateSettings } from './chrome/settings'
 import { SidePanel } from './chrome/SidePanel'
@@ -215,6 +216,9 @@ export function App() {
 				</Tldraw>
 			</div>
 			{editor && <SidePanel editor={editor} />}
+			{/* Frames drawer flies out to the LEFT of the side panel; an App-level
+			    sibling so it can anchor to the panel's live width (see FramesDrawer). */}
+			{editor && <FramesDrawer editor={editor} />}
 			{wasKicked && (
 				<div
 					style={{
