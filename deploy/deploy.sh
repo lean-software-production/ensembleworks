@@ -65,7 +65,7 @@ if [ "$DRY_RUN" = 1 ]; then
 	echo "==> [dry-run] swap plan:"
 	echo "    release dir : ~${APP_USER}/releases/${VERSION}"
 	echo "    new era     : $(cat "${NEW}/.ew-era")"
-	echo "    units       : ensembleworks-sync ensembleworks-term ensembleworks-files (+ scribe if enabled)"
+	echo "    units       : ensembleworks-sync ensembleworks-term ensembleworks-files (+ scribe/discord if enabled)"
 	echo "    keep        : ${KEEP} newest (prune walks releases/ only; backups/ exempt)"
 	echo "==> [dry-run] done (no box touched)."
 	exit 0
@@ -81,6 +81,7 @@ for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	"$PROD_UNITS"/ensembleworks-term.service \
 	"$PROD_UNITS"/ensembleworks-files.service \
 	"$PROD_UNITS"/ensembleworks-scribe.service \
+	"$PROD_UNITS"/ensembleworks-discord.service \
 	"$PROD_UNITS"/ensembleworks-shared-browser.service \
 	"$PROD_UNITS"/ensembleworks-shared-browser.slice \
 	deploy/posture-era \
@@ -178,8 +179,8 @@ fi
 # scribe unit stays literal for systemd to expand — sed only touches @TOKENS@.
 echo "==> installing prod systemd units"
 # Drop stale per-service drop-ins from older deploys (slice/MemoryLow now in-unit).
-sudo rm -rf /etc/systemd/system/ensembleworks-sync.service.d /etc/systemd/system/ensembleworks-term.service.d /etc/systemd/system/ensembleworks-files.service.d /etc/systemd/system/ensembleworks-scribe.service.d
-for u in ensembleworks-sync ensembleworks-term ensembleworks-files ensembleworks-scribe; do
+sudo rm -rf /etc/systemd/system/ensembleworks-sync.service.d /etc/systemd/system/ensembleworks-term.service.d /etc/systemd/system/ensembleworks-files.service.d /etc/systemd/system/ensembleworks-scribe.service.d /etc/systemd/system/ensembleworks-discord.service.d
+for u in ensembleworks-sync ensembleworks-term ensembleworks-files ensembleworks-scribe ensembleworks-discord; do
   sed -e "s|@APP_USER@|\${APP_USER}|g" -e "s|@APP_HOME@|\${APP_HOME}|g" "/tmp/\${u}.service" | sudo tee "/etc/systemd/system/\${u}.service" >/dev/null
 done
 
@@ -287,6 +288,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable ensembleworks-sync ensembleworks-term ensembleworks-files >/dev/null 2>&1 || true
 sudo systemctl restart ensembleworks-sync ensembleworks-term ensembleworks-files
 sudo systemctl is-active --quiet ensembleworks-scribe && sudo systemctl restart ensembleworks-scribe || true
+sudo systemctl is-active --quiet ensembleworks-discord && sudo systemctl restart ensembleworks-discord || true
 # Shared browser: enable + start it if installed, but DON'T restart a running one
 # (a restart drops the live shared session). To pick up a changed unit, restart by
 # hand: sudo systemctl restart ensembleworks-shared-browser.
