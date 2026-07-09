@@ -59,14 +59,21 @@ export interface SyncApp {
 	app: express.Express   // NEW — read-only test seam for route introspection
 }
 
-export function createSyncApp(opts: { dataDir: string; clientDist?: string }): SyncApp {
+export function createSyncApp(opts: { dataDir: string; databaseDir?: string; clientDist?: string }): SyncApp {
 	const uploadsDir = path.join(opts.dataDir, 'uploads')
 	mkdirSync(uploadsDir, { recursive: true })
 	const transcripts = createTranscriptStore(path.join(opts.dataDir, 'transcripts'))
 	const roadmaps = createRoadmapStore(path.join(opts.dataDir, 'roadmaps'))
 	const telemetry = createTelemetryStore(path.join(opts.dataDir, 'telemetry'))
 
-	const roomHost = createRoomHost(opts.dataDir)
+	// Room DBs live on the fast boot disk when DATABASE_DIR is set (see the
+	// room-database-fast-storage spec); otherwise they stay nested under DATA_DIR
+	// (local dev, tests, a host mid-rollout that hasn't been migrated yet).
+	const roomsDir = opts.databaseDir
+		? path.join(opts.databaseDir, 'rooms')
+		: path.join(opts.dataDir, 'rooms')
+
+	const roomHost = createRoomHost(roomsDir)
 
 	// EW_WARM_ROOMS=1 (default OFF — normal prod boot stays lazy): eagerly open
 	// every rooms/*.sqlite through getOrCreateRoom, forcing each one through the
@@ -78,7 +85,6 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	// server never comes up, and the boot-check's health poll fails — a
 	// deliberate fail-closed so a bad cutover aborts instead of shipping.
 	if (process.env.EW_WARM_ROOMS === '1') {
-		const roomsDir = path.join(opts.dataDir, 'rooms')
 		if (existsSync(roomsDir)) {
 			for (const entry of readdirSync(roomsDir)) {
 				if (!entry.endsWith('.sqlite')) continue
