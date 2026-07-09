@@ -25,6 +25,7 @@ import { type WebSocket, WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
 import { sanitizeId } from './canvas/ids.ts'
 import { createAvRouter } from './features/av.ts'
+import { createDiscordRouter } from './features/discord.ts'
 import { createFileViewerRouter } from './features/file-viewer.ts'
 import { createFilesRouter } from './features/files.ts'
 import { createFramesRouter } from './features/frames.ts'
@@ -45,6 +46,7 @@ import { createMediaService } from './kernel/media.ts'
 import { rawUserId } from './kernel/presence.ts'
 import { createRoomHost } from './kernel/rooms.ts'
 import { createSessionRegistry } from './kernel/sessions.ts'
+import { createDiscordStore } from './discord-store.ts'
 import { createRoadmapStore } from './roadmap-store.ts'
 import { attachSyncSocket } from './sync-attach.ts'
 import { classifyBackpressure } from './sync-backpressure.ts'
@@ -65,6 +67,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	const transcripts = createTranscriptStore(path.join(opts.dataDir, 'transcripts'))
 	const roadmaps = createRoadmapStore(path.join(opts.dataDir, 'roadmaps'))
 	const telemetry = createTelemetryStore(path.join(opts.dataDir, 'telemetry'))
+	const discord = createDiscordStore(opts.dataDir)
 
 	const roomHost = createRoomHost(opts.dataDir)
 
@@ -96,7 +99,7 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 		rooms: roomHost,
 		sessions: registry,
 		media,
-		storage: { transcripts, roadmaps, telemetry, uploadsDir },
+		storage: { transcripts, roadmaps, telemetry, discord, uploadsDir },
 	}
 
 	// -------------------------------------------------------------------------
@@ -151,6 +154,8 @@ export function createSyncApp(opts: { dataDir: string; clientDist?: string }): S
 	// Roadmap (two-way roadmap control): the document lives in the roadmap
 	// store, not the tldraw document — shapes hold only { roadmapId, rev }.
 	app.use(createRoadmapRouter(ctx))
+
+	app.use(createDiscordRouter(ctx))
 
 	app.use(createUploadsRouter(ctx))
 

@@ -4,6 +4,7 @@
  * scope: only capabilities that exist today).
  */
 import type express from 'express'
+import type { createDiscordStore } from '../discord-store.ts'
 import type { createRoadmapStore } from '../roadmap-store.ts'
 import type { createTelemetryStore } from '../telemetry-store.ts'
 import type { createTranscriptStore } from '../transcript-store.ts'
@@ -18,6 +19,7 @@ export interface PluginServerContext {
 	storage: {
 		transcripts: ReturnType<typeof createTranscriptStore>
 		roadmaps: ReturnType<typeof createRoadmapStore>
+		discord: ReturnType<typeof createDiscordStore>
 		telemetry: ReturnType<typeof createTelemetryStore>
 		uploadsDir: string
 	}
