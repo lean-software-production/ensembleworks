@@ -81,21 +81,28 @@ export function createDiscordRouter(ctx: PluginServerContext): express.Router {
 		// Env read inside the handler so config can change per-request (and tests).
 		const botPort = process.env.DISCORD_PORT ?? '8790'
 		const secret = process.env.DISCORD_INTERNAL_SECRET ?? ''
+		if (!secret) console.warn('[discord] DISCORD_INTERNAL_SECRET unset — outbound posts will be rejected by the bot')
 
-		let delivered = 0
-		for (const binding of bindings) {
-			try {
-				const forward = await fetch(`http://127.0.0.1:${botPort}/post`, {
+		// Forward all bindings in parallel: one stalled bot can't serialize behind
+		// the others, and AbortSignal.timeout caps a single forward (accept-then-
+		// stall) so the whole handler resolves in ~one timeout worst case.
+		const results = await Promise.allSettled(
+			bindings.map((binding) =>
+				fetch(`http://127.0.0.1:${botPort}/post`, {
 					method: 'POST',
 					headers: { 'content-type': 'application/json', 'x-internal-secret': secret },
 					body: JSON.stringify({ channelId: binding.channelId, payload: { kind, room: roomId, data } }),
-				})
-				if (forward.ok) delivered++
-				else console.error('[discord] forward failed', { channelId: binding.channelId, status: forward.status })
-			} catch (err) {
-				console.error('[discord] forward failed', { channelId: binding.channelId, err })
-			}
-		}
+					signal: AbortSignal.timeout(5000),
+				}).then((forward) => {
+					if (!forward.ok) console.error('[discord] forward failed', { channelId: binding.channelId, status: forward.status })
+					return forward.ok
+				}, (err) => {
+					console.error('[discord] forward failed', { channelId: binding.channelId, err })
+					return false
+				}),
+			),
+		)
+		const delivered = results.filter((r) => r.status === 'fulfilled' && r.value === true).length
 		res.json({ ok: true, delivered })
 	})
 

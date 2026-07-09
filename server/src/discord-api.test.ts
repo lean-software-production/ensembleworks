@@ -57,6 +57,8 @@ async function main() {
 
 	// POST /api/discord/post — server → bot mediator (E3).
 	{
+		const priorPort = process.env.DISCORD_PORT
+		const priorSecret = process.env.DISCORD_INTERNAL_SECRET
 		// Stub bot: records the loopback /post it receives, returns 2xx.
 		const received: { secret: string | null; body: any }[] = []
 		const stub = Bun.serve({
@@ -69,40 +71,55 @@ async function main() {
 				return new Response('not found', { status: 404 })
 			},
 		})
-		process.env.DISCORD_PORT = String(stub.port)
-		process.env.DISCORD_INTERNAL_SECRET = 'testsecret'
+		try {
+			process.env.DISCORD_PORT = String(stub.port)
+			process.env.DISCORD_INTERNAL_SECRET = 'testsecret'
 
-		// Outbound binding for room 'test'.
-		const outCreated = await postJson('/api/discord/bindings', {
-			room: 'test', guildId: 'g', channelId: 'chan-out', direction: 'out',
-			route: { handler: 'summary', params: {} },
-		})
-		assert.equal(outCreated.status, 200)
+			// Outbound binding for room 'test'.
+			const outCreated = await postJson('/api/discord/bindings', {
+				room: 'test', guildId: 'g', channelId: 'chan-out', direction: 'out',
+				route: { handler: 'summary', params: {} },
+			})
+			assert.equal(outCreated.status, 200)
 
-		// Trigger the post — should forward to the stub bot once.
-		const posted = await postJson('/api/discord/post', { room: 'test', kind: 'summary', data: { text: 'we shipped' } })
-		assert.equal(posted.status, 200)
-		assert.equal(posted.body.delivered, 1)
-		assert.equal(received.length, 1)
-		const forwarded = received[0]
-		assert.ok(forwarded, 'stub bot received a forward')
-		assert.equal(forwarded.secret, 'testsecret')
-		assert.equal(forwarded.body.channelId, 'chan-out')
-		assert.equal(forwarded.body.payload.kind, 'summary')
-		assert.equal(forwarded.body.payload.room, 'test')
-		assert.equal(forwarded.body.payload.data.text, 'we shipped')
+			// Trigger the post — should forward to the stub bot once.
+			const posted = await postJson('/api/discord/post', { room: 'test', kind: 'summary', data: { text: 'we shipped' } })
+			assert.equal(posted.status, 200)
+			assert.equal(posted.body.delivered, 1)
+			assert.equal(received.length, 1)
+			const forwarded = received[0]
+			assert.ok(forwarded, 'stub bot received a forward')
+			assert.equal(forwarded.secret, 'testsecret')
+			assert.equal(forwarded.body.channelId, 'chan-out')
+			assert.equal(forwarded.body.payload.kind, 'summary')
+			assert.equal(forwarded.body.payload.room, 'test')
+			assert.equal(forwarded.body.payload.data.text, 'we shipped')
 
-		// Room with no outbound binding → delivered 0, still ok.
-		const none = await postJson('/api/discord/post', { room: 'unbound', kind: 'summary', data: { text: 'x' } })
-		assert.equal(none.status, 200)
-		assert.equal(none.body.ok, true)
-		assert.equal(none.body.delivered, 0)
+			// Room with no outbound binding → delivered 0, still ok.
+			const none = await postJson('/api/discord/post', { room: 'unbound', kind: 'summary', data: { text: 'x' } })
+			assert.equal(none.status, 200)
+			assert.equal(none.body.ok, true)
+			assert.equal(none.body.delivered, 0)
 
-		// Validation: bad kind → 400.
-		const badKind = await postJson('/api/discord/post', { room: 'test', kind: 'nope', data: {} })
-		assert.equal(badKind.status, 400)
+			// Bot down (closed port) → fail-soft: 200, delivered 0, no hang/500.
+			// Port 1 is privileged and unbound in test env → connection refused fast.
+			process.env.DISCORD_PORT = '1'
+			const down = await postJson('/api/discord/post', { room: 'test', kind: 'summary', data: { text: 'lost' } })
+			assert.equal(down.status, 200)
+			assert.equal(down.body.ok, true)
+			assert.equal(down.body.delivered, 0)
+			process.env.DISCORD_PORT = String(stub.port)
 
-		stub.stop()
+			// Validation: bad kind → 400.
+			const badKind = await postJson('/api/discord/post', { room: 'test', kind: 'nope', data: {} })
+			assert.equal(badKind.status, 400)
+		} finally {
+			stub.stop()
+			if (priorPort === undefined) delete process.env.DISCORD_PORT
+			else process.env.DISCORD_PORT = priorPort
+			if (priorSecret === undefined) delete process.env.DISCORD_INTERNAL_SECRET
+			else process.env.DISCORD_INTERNAL_SECRET = priorSecret
+		}
 	}
 
 	await new Promise<void>((resolve, reject) =>
