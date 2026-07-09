@@ -9,6 +9,7 @@
 export const PORTS = {
 	sync: 8788,
 	term: 8789,
+	discord: 8790,
 	files: 8791,
 	client: 5173,
 	caddy: 8080,
@@ -336,6 +337,16 @@ export function buildServices(ctx) {
 			? `livekit-server --config '${ctx.livekitConf}'`
 			: `livekit-server --dev --bind 0.0.0.0 --node-ip ${ctx.livekitNodeIp ?? '127.0.0.1'}`,
 		health: { kind: 'port', port: PORTS.livekit },
+	})
+
+	services.push({
+		name: 'discord',
+		enabled: Boolean(ctx.env.DISCORD_BOT_TOKEN),
+		reason: ctx.env.DISCORD_BOT_TOKEN
+			? 'DISCORD_BOT_TOKEN present'
+			: 'no DISCORD_BOT_TOKEN — discord bot off (set it in dev.env)',
+		cmd: "bun run --filter '@ensembleworks/discord' dev",
+		health: { kind: 'port', port: PORTS.discord },
 	})
 
 	services.push({
