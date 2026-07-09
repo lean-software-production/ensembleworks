@@ -3,11 +3,15 @@
  * highlight / reparent). Fiddly, unit-testable logic lives here — behind a
  * `node:assert` script (drawShapes.test.ts) — so shape.ts stays a thin
  * store.put() shell. See docs/design/cli-frames-draw-api.md §7 (test seams).
- *
- * NAVIGATOR STUB (EW-CLI-DRAW-0001): signatures only; every body throws
- * `not implemented`. The Driver fills them so drawShapes.test.ts goes green.
- * Do NOT implement here as the Navigator.
  */
+import { compressLegacySegments } from '@tldraw/tlschema'
+import { getIndicesAbove } from '@tldraw/utils'
+import { pagePoint } from './geometry.ts'
+
+/** Max absolute page-coordinate a caller may supply (draw/highlight bypass T.number). */
+const MAX_COORD = 1e6
+/** Float16 max finite value — a larger consecutive delta encodes to Infinity. */
+const FLOAT16_MAX = 65504
 
 /** A tldraw VecModel: page-or-local point with optional pen pressure `z`. */
 export interface Vec {
@@ -38,22 +42,44 @@ export interface LinePoint {
  * schema). Returns the parsed `{x,y,z?}[]`.
  */
 export function parsePoints(raw: unknown, min: number): Vec[] {
-	void raw
-	void min
-	throw new Error('not implemented')
+	if (!Array.isArray(raw)) throw new Error('points must be an array')
+	if (raw.length < min) throw new Error(`points must have at least ${min} point(s)`)
+	const out: Vec[] = []
+	for (const row of raw) {
+		if (!Array.isArray(row) || row.length < 2 || row.length > 3) {
+			throw new Error('each point must be [x,y] or [x,y,pressure]')
+		}
+		for (const c of row) {
+			if (typeof c !== 'number' || !Number.isFinite(c)) {
+				throw new Error('point coordinates must be finite numbers')
+			}
+		}
+		const [x, y, z] = row as number[]
+		if (Math.abs(x!) > MAX_COORD || Math.abs(y!) > MAX_COORD) {
+			throw new Error(`point coordinates must have |value| ≤ ${MAX_COORD}`)
+		}
+		out.push(z === undefined ? { x: x!, y: y! } : { x: x!, y: y!, z })
+	}
+	const distinct = new Set(out.map((p) => `${p.x},${p.y}`))
+	if (distinct.size < 2) throw new Error('need at least 2 distinct points')
+	return out
 }
 
 /** Bounding-box minimum (top-left) of a point set. */
 export function originOf(points: Vec[]): { x: number; y: number } {
-	void points
-	throw new Error('not implemented')
+	return {
+		x: Math.min(...points.map((p) => p.x)),
+		y: Math.min(...points.map((p) => p.y)),
+	}
 }
 
 /** Re-anchor points so the bbox top-left sits at (0,0): `p - origin`. */
 export function toLocal(points: Vec[], origin: { x: number; y: number }): Vec[] {
-	void points
-	void origin
-	throw new Error('not implemented')
+	return points.map((p) =>
+		p.z === undefined
+			? { x: p.x - origin.x, y: p.y - origin.y }
+			: { x: p.x - origin.x, y: p.y - origin.y, z: p.z }
+	)
 }
 
 /**
@@ -63,8 +89,16 @@ export function toLocal(points: Vec[], origin: { x: number; y: number }): Vec[] 
  * THEN encodes. Lives here (not parsePoints) so `line` stays immune.
  */
 export function buildSegments(localPoints: Vec[]): DrawSegment[] {
-	void localPoints
-	throw new Error('not implemented')
+	for (let i = 1; i < localPoints.length; i++) {
+		const dx = Math.abs(localPoints[i]!.x - localPoints[i - 1]!.x)
+		const dy = Math.abs(localPoints[i]!.y - localPoints[i - 1]!.y)
+		if (dx > FLOAT16_MAX || dy > FLOAT16_MAX) {
+			throw new Error(`consecutive point delta exceeds the Float16 ceiling (${FLOAT16_MAX})`)
+		}
+	}
+	return compressLegacySegments([
+		{ type: 'free', points: localPoints.map((p) => ({ x: p.x, y: p.y, z: 0.5 })) },
+	] as any) as DrawSegment[]
 }
 
 /**
@@ -72,8 +106,13 @@ export function buildSegments(localPoints: Vec[]): DrawSegment[] {
  * tldraw's key === id === index convention. No handles, no scaleX/scaleY.
  */
 export function buildLinePoints(localPoints: Vec[]): Record<string, LinePoint> {
-	void localPoints
-	throw new Error('not implemented')
+	const keys = getIndicesAbove(null as any, localPoints.length)
+	const dict: Record<string, LinePoint> = {}
+	localPoints.forEach((p, i) => {
+		const key = keys[i]!
+		dict[key] = { id: key, index: key, x: p.x, y: p.y }
+	})
+	return dict
 }
 
 /**
@@ -87,8 +126,9 @@ export function translateForReparent(
 	newParentId: string,
 	byId: Map<string, any>,
 ): { x: number; y: number } {
-	void shape
-	void newParentId
-	void byId
-	throw new Error('not implemented')
+	const P = pagePoint(shape, byId)
+	const newParent = byId.get(newParentId)
+	const NP =
+		newParent && newParent.typeName === 'shape' ? pagePoint(newParent, byId) : { x: 0, y: 0 }
+	return { x: P.x - NP.x, y: P.y - NP.y }
 }
