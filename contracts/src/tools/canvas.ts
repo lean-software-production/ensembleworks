@@ -26,7 +26,7 @@ export const canvasShape: ToolDef = {
 	http: { method: 'POST', path: '/api/canvas/shape' },
 	help:
 		'Create/update/delete a diagram shape. create type ∈ geo|text|note|arrow|frame|line|draw|highlight. ' +
-		'line/draw/highlight take --points (page coords, [[x,y],…] or [x,y,pressure], JSON or @file); ' +
+		'line/draw/highlight take --points (parent-relative: page coords on the page, or frame-local when --frame is set — same convention as geo/text/note; [[x,y],…] or [x,y,pressure], JSON or @file); ' +
 		'draw takes --closed/--fill, line takes --spline line|cubic. ' +
 		'update <id> --frame <name> reparents INTO a frame, --to-page reparents OUT to its page ' +
 		'(both preserve page-position; correct for UNROTATED parents only), --rotate <rad>/--lock are riders. ' +
@@ -41,7 +41,7 @@ export const canvasShape: ToolDef = {
 		fromId: z.string().optional().describe('arrow start shape id'),
 		toId: z.string().optional().describe('arrow end shape id'),
 		name: z.string().optional().describe('frame caption (props.name)'),
-		points: z.array(z.array(z.number())).optional().describe('line/draw/highlight polyline/stroke points, page coords'),
+		points: z.array(z.array(z.number())).optional().describe('line/draw/highlight polyline/stroke points; parent-relative (page coords on the page, frame-local under --frame)'),
 		spline: z.enum(['line', 'cubic']).optional().describe('line only; default line'),
 		closed: z.boolean().optional().describe('draw only; sets isClosed'),
 		// update / delete

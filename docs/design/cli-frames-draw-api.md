@@ -202,6 +202,15 @@ This makes **AC7 hold by construction**: for an unrotated shape on a page,
 (`shape.x + local`). Every AC4–AC6 input is already (0,0)-anchored (`minX=minY=0`), so local == input
 there too; normalization only matters when a caller supplies non-zero-anchored points.
 
+> **Parented create is PARENT-RELATIVE (matches the whole create API).** `shape.x` is stored raw
+> and, when `--frame` is set, `parentId` is the frame — so `shape.x` is interpreted **relative to the
+> frame origin**, exactly as `geo`/`text`/`note`/`sticky` framed-create already behave (`base.x =
+> body.x ?? 0`, `shape.ts:145-156`). So `--points` are page coords **on the page** and **frame-local
+> under `--frame`**. This is deliberate consistency, NOT the reparent case: `update --frame` translates
+> to *preserve* page-position because it MOVES an existing shape; create PLACES at parent-relative
+> coords like every other create. The AC7/AC4 page-space assertions above all use unparented shapes,
+> where parent-relative == page. (Help text says "parent-relative" so no caller is misled.)
+
 ### frame — `store.put`
 ```ts
 store.put({
