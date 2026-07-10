@@ -11,15 +11,17 @@
 // for a full-frame TUI).
 // Run from a directory with playwright installed (docs/headless-browser.md):
 //   node <repo>/client/e2e/terminal-zoom-probe.mjs 'http://localhost:5173/?room=probe'
+// PROBE_DPR=2 node ... re-runs the magnified pass used in the findings.
 import { createRequire } from 'node:module'
 const { chromium } = createRequire(process.cwd() + '/')('playwright')
 
 const url = process.argv[2] ?? 'http://localhost:5173/?room=probe'
 const ZOOMS = [0.75, 1.1, 1.33]
+const DPR = Number(process.env.PROBE_DPR ?? 1)
 
 const browser = await chromium.launch()
 try {
-	const page = await browser.newPage({ viewport: { width: 1400, height: 900 } })
+	const page = await browser.newPage({ viewport: { width: 1400, height: 900 }, deviceScaleFactor: DPR })
 	// The name prompt is a blocking window.prompt() — answer before navigating.
 	page.on('dialog', (d) => d.accept('probe-bot').catch(() => {}))
 	await page.goto(url, { waitUntil: 'domcontentloaded' })
@@ -61,6 +63,9 @@ try {
 		const box = await screen.boundingBox()
 		if (!box) throw new Error(`FAIL: .xterm-screen has no bounding box at zoom ${z}`)
 		const shotPath = `zoom-${z}.png`
+		// Clipping to the bbox relies on the host counter-scale (scale(1/zoom))
+		// keeping the on-screen size ~constant across zooms — a counter-scale
+		// regression shows up here as a wrong/failed clip.
 		await page.screenshot({ path: shotPath, clip: box })
 
 		// Selection accuracy: shift+drag across the middle row. A fractional

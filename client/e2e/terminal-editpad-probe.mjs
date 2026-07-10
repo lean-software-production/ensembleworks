@@ -19,11 +19,20 @@ try {
 	const screen = page.locator('.xterm-screen').first()
 	await screen.waitFor({ timeout: 15000 })
 	const before = await screen.boundingBox()
+	if (!before) throw new Error('FAIL: .xterm-screen has no bounding box')
 
 	// Double-click enters editing; Esc Esc leaves it. Verify each transition via
 	// the app's __ewEditor hook (App.tsx) — otherwise a failed toggle would leave
 	// before==during==after and the probe would pass having measured nothing.
-	await screen.dblclick()
+	//
+	// NOTE: screen.dblclick() (Playwright's locator action) reliably times out
+	// here — its actionability check reports "<div class=\"tl-background\">
+	// intercepts pointer events" even though the element is visible/stable and
+	// centred correctly. It's a tldraw + Playwright locator-actionability quirk
+	// (same on terminal-zoom-probe.mjs). Dispatching the double-click via
+	// page.mouse at the measured bounding-box centre (no actionability check)
+	// works reliably.
+	await page.mouse.dblclick(before.x + before.width / 2, before.y + before.height / 2)
 	await page.waitForTimeout(300)
 	const editingId = await page.evaluate(() => window.__ewEditor?.getEditingShapeId() ?? null)
 	if (!editingId) {
