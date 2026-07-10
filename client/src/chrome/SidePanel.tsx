@@ -35,6 +35,8 @@ import {
 	togglePanelCollapsed,
 	usePanelLayout,
 } from './panelLayout'
+import { selfAway } from './away'
+import { isAwayPresence } from './awayLogic'
 import { PanelFooter } from './PanelFooter'
 import { PanelPages } from './PanelPages'
 import { initialsFor, type PanelTileParticipant } from './PanelTile'
@@ -87,6 +89,7 @@ export function SidePanel({ editor }: { editor: Editor }) {
 				name: editor.user.getName() ?? 'teammate',
 				color: editor.user.getColor(),
 				isLocal: true,
+				away: selfAway(),
 			}
 			const collaborators: PanelTileParticipant[] = editor.getCollaborators().map((presence) => ({
 				prefixedId: presence.userId,
@@ -94,6 +97,7 @@ export function SidePanel({ editor }: { editor: Editor }) {
 				name: presence.userName?.trim() || 'Anonymous',
 				color: presence.color,
 				isLocal: false,
+				away: isAwayPresence(presence),
 			}))
 			return [self, ...collaborators]
 		},
@@ -462,7 +466,12 @@ function RailAvatarDot({
 
 	return (
 		<div
-			title={participant.name + (participant.isLocal ? ' (you)' : '') + (isPresentingUser ? ' — presenting' : '')}
+			title={
+				participant.name +
+				(participant.isLocal ? ' (you)' : '') +
+				(isPresentingUser ? ' — presenting' : '') +
+				(participant.away ? ' — away' : '')
+			}
 			style={{
 				width: 20,
 				height: 20,
@@ -477,6 +486,9 @@ function RailAvatarDot({
 				fontWeight: 700,
 				outline: ringColor ? `2px solid ${ringColor}` : 'none',
 				outlineOffset: 1,
+				// AFK: fade the dot so an away teammate reads as inactive in the
+				// rail — the ring slot stays reserved for speaking/presenting.
+				opacity: participant.away ? 0.4 : 1,
 			}}
 		>
 			{initialsFor(participant.name)}

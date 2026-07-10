@@ -14,6 +14,7 @@ import 'tldraw/tldraw.css'
 import './theme.css'
 import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
+import { selfAway, useAutoAway } from './chrome/away'
 import { presentingAtom } from './chrome/present'
 import { getSettings, updateSettings } from './chrome/settings'
 import { SidePanel } from './chrome/SidePanel'
@@ -107,15 +108,30 @@ export function App() {
 			//     token" alike).
 			//   presenting (chrome/present.ts, canvas-controls spec §5): a bare
 			//     boolean for the canvas Present mode's viewer-follow.
-			// Both read tldraw atoms inside this reactive derivation, so flipping
-			// either (or scrolling while idle) re-emits presence — same tracking
+			//   away (chrome/away.ts): a bare boolean marking this client AFK
+			//     (manual toggle or auto-idle). Peers derive who's away by
+			//     scanning for meta.away === true — an away client stays in the
+			//     roster/count, just shown away, so nobody drops off.
+			// All read tldraw atoms inside this reactive derivation, so flipping
+			// any (or scrolling while idle) re-emits presence — same tracking
 			// mechanism as the stamp's inputs.
 			return {
 				...defaults,
-				meta: { stamp, fileViewerPresent: presentStore.get(), presenting: presentingAtom.get() },
+				meta: {
+					stamp,
+					fileViewerPresent: presentStore.get(),
+					presenting: presentingAtom.get(),
+					away: selfAway(),
+				},
 			}
 		},
 	})
+
+	// AFK (chrome/away.ts): watch for input idleness and auto-flip this client
+	// to "away" after AWAY_AFTER_MS, clearing on the next input. Mounted here so
+	// it tracks the whole session regardless of which chrome is on screen; the
+	// published away flag rides presence meta (getUserPresence above).
+	useAutoAway()
 
 	// Connection telemetry (spec §2): configure the beacon once, flush on the way
 	// out (the last events are usually the interesting ones), and log every tldraw

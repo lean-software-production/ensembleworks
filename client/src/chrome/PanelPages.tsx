@@ -15,6 +15,8 @@ import { useEffect, useRef, useState, type CSSProperties } from 'react'
 import { getIndexBetween, type Editor, type IndexKey, type TLPageId, useValue } from 'tldraw'
 import { useAvSnapshot } from '../av/bridge'
 import { wm } from '../theme'
+import { selfAway } from './away'
+import { isAwayPresence } from './awayLogic'
 import { exitFocus } from './focus'
 import { PanelTile, type PanelTileParticipant } from './PanelTile'
 
@@ -53,6 +55,9 @@ export function PanelPages({ editor, width }: { editor: Editor; width: number })
 				name: editor.user.getName() ?? 'teammate',
 				color: editor.user.getColor(),
 				isLocal: true,
+				// Reading selfAway() inside this reactive derivation re-runs the
+				// roster when our away atoms flip, so our own tile shows away too.
+				away: selfAway(),
 			}
 
 			// Self goes in first under the page it's currently viewing; collaborator
@@ -67,6 +72,7 @@ export function PanelPages({ editor, width }: { editor: Editor; width: number })
 					name: presence.userName?.trim() || 'Anonymous',
 					color: presence.color,
 					isLocal: false,
+					away: isAwayPresence(presence),
 				})
 				byPage.set(presence.currentPageId, list)
 			}

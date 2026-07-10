@@ -22,6 +22,7 @@ import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
 import { setUserColor } from '../identity'
 import { retintLocalShares } from '../screenshare/share'
 import { wm } from '../theme'
+import { toggleAway } from './away'
 import { useSettings } from './settings'
 
 export interface PanelTileParticipant {
@@ -30,6 +31,10 @@ export interface PanelTileParticipant {
 	name: string
 	color: string
 	isLocal: boolean
+	// AFK (chrome/away.ts): this participant is shown as away — for self it's
+	// our own manual/auto-idle state, for peers it's their presence meta.away.
+	// Purely a display flag: an away participant stays in the roster and count.
+	away: boolean
 }
 
 // The media area holds a FIXED 4:3 aspect ratio at every panel width (webcam
@@ -77,7 +82,7 @@ export function PanelTile({
 	// (spec §3 "wide = face-to-face"): grows the tile and its initials a step.
 	twoUp?: boolean
 }) {
-	const { rawId, prefixedId, name, color, isLocal } = participant
+	const { rawId, prefixedId, name, color, isLocal, away } = participant
 	const initialsFontSize = twoUp ? INITIALS_FONT_TWO_UP : INITIALS_FONT_DEFAULT
 
 	const peer = !isLocal ? (snap?.peers.find((p) => p.id === rawId) ?? null) : null
@@ -234,6 +239,40 @@ export function PanelTile({
 						<AvIcon kind="camera" crossedOut={!videoTrack} />
 					</span>
 				)}
+
+				{/* AFK (chrome/away.ts): a scrim + amber AWAY chip fades the face so
+				    an away teammate reads as inactive at a glance — over video,
+				    avatar or initials alike. The tile itself stays put; only the
+				    "face" dims. The control strip below keeps full opacity so the
+				    name (and, on your own tile, the toggle back) stay legible. */}
+				{away && (
+					<div
+						data-testid={'ew-away-' + rawId}
+						style={{
+							position: 'absolute',
+							inset: 0,
+							display: 'grid',
+							placeItems: 'center',
+							background: 'rgba(15,23,42,0.32)',
+						}}
+					>
+						<span
+							style={{
+								fontFamily: wm.mono,
+								fontSize: 10,
+								fontWeight: 700,
+								textTransform: 'uppercase',
+								letterSpacing: 1,
+								color: wm.cream,
+								background: wm.warn,
+								padding: '2px 8px',
+								borderRadius: 3,
+							}}
+						>
+							Away
+						</span>
+					</div>
+				)}
 			</div>
 
 			{/* Control strip — BELOW the media on a solid panel background, so the
@@ -266,6 +305,7 @@ export function PanelTile({
 					{name}
 					{isLocal ? ' (you)' : ''}
 				</span>
+				{isLocal && <AwayToggle away={away} />}
 				{isLocal && (
 					<div style={{ display: 'flex', gap: 3, flex: '0 0 auto' }}>
 						<AvIconButton
@@ -315,6 +355,45 @@ export function PanelTile({
 				)}
 			</div>
 		</div>
+	)
+}
+
+// The manual AFK toggle — own tile only (you can't send a teammate away).
+// Uppercase-mono chip in the Kick/Transcript idiom rather than an AV icon
+// button: away is a presence status, not an A/V device, so it reads as its own
+// thing. "AFK" is the verb when present (click to go away); "Away" is the amber
+// status when away (click to come back). toggleAway (chrome/away.ts) owns the
+// manual-vs-auto-idle rules; this is just the button. stopPropagation so the
+// click never bubbles to the tile (the local tile's click is a no-op today,
+// but a peer tile's is zoom-to-user — kept defensive/consistent).
+function AwayToggle({ away }: { away: boolean }) {
+	return (
+		<button
+			type="button"
+			data-testid="ew-away-toggle"
+			aria-pressed={away}
+			onClick={(e) => {
+				e.stopPropagation()
+				toggleAway()
+			}}
+			title={away ? 'You are shown as away — click to come back' : 'Show yourself as away (AFK)'}
+			style={{
+				flex: '0 0 auto',
+				border: `1px solid ${away ? wm.warn : wm.ruleStrong}`,
+				borderRadius: 2,
+				background: away ? `${wm.warn}1a` : 'transparent',
+				color: away ? wm.warn : wm.inkMuted,
+				padding: '2px 5px',
+				fontFamily: wm.mono,
+				fontSize: 9,
+				fontWeight: 700,
+				textTransform: 'uppercase',
+				letterSpacing: 0.6,
+				cursor: 'pointer',
+			}}
+		>
+			{away ? 'Away' : 'AFK'}
+		</button>
 	)
 }
 
