@@ -5,13 +5,16 @@
  * order, and reproduces the pre-registry hard-coded ordering exactly:
  *   shape utils  terminal, iframe, neko, roadmap, screenshare
  *   bar items    priority items (terminal, cast) render in the bar; overflow
- *                items (dev-server, neko/browser, roadmap) render in the ⋯
- *                menu — each group in registry order
+ *                items (dev-server, neko/browser, roadmap, copy-frame-link,
+ *                discord-bindings) render in the ⋯ menu — each group in
+ *                registry order
  *   menu         seed-demo, seed-session
  */
 import { avPlugin } from './av/plugin'
 import { demoPlugin } from './demo/plugin'
+import { discordPlugin } from './discord/plugin'
 import { fileViewerPlugin } from './file-viewer/plugin'
+import { frameLinkPlugin } from './framelink/plugin'
 import { iframePlugin } from './iframe/plugin'
 import type { ClientPlugin } from './kernel/plugin'
 import { nekoPlugin } from './neko/plugin'
@@ -27,6 +30,8 @@ export const plugins: readonly ClientPlugin[] = [
 	roadmapPlugin,
 	fileViewerPlugin,
 	screensharePlugin,
+	frameLinkPlugin,
+	discordPlugin,
 	avPlugin,
 	demoPlugin,
 	sessionPlugin,

@@ -29,7 +29,7 @@ export function useFocusedShapeId(): TLShapeId | null {
  * assumes "terminal" beyond this policy set. Widening focus to another shape
  * type is just adding to this Set.
  */
-export const FOCUSABLE_SHAPE_TYPES = new Set(['terminal'])
+export const FOCUSABLE_SHAPE_TYPES = new Set(['terminal', 'frame'])
 
 // Camera isLocked at the moment we entered focus, so exitFocus can restore it
 // exactly rather than assuming it was always false beforehand. Module-level

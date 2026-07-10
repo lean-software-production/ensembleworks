@@ -1,0 +1,20 @@
+{
+  "name": "@ensembleworks/discord",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/main.ts",
+    "start": "bun src/main.ts",
+    "build:binary": "bun build --compile --sourcemap --target=${EW_TARGET:-bun-linux-x64} src/main.ts --outfile dist/ensembleworks-discord",
+    "build": "bunx tsc --noEmit",
+    "typecheck": "bunx tsc --noEmit"
+  },
+  "dependencies": {
+    "discord.js": "^14.26.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}

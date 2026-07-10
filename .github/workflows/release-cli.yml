@@ -32,9 +32,11 @@ jobs:
             EW_TARGET="bun-$pair" bun run --cwd cli build:binary
             cp cli/dist/ensembleworks "out/ensembleworks-$pair"
             case "$pair" in
-            linux-*) # server ships linux only
+            linux-*) # server + discord ship linux only
               EW_TARGET="bun-$pair" bun run --cwd server build:binary
-              cp server/dist/ensembleworks-server "out/ensembleworks-server-$pair" ;;
+              cp server/dist/ensembleworks-server "out/ensembleworks-server-$pair"
+              EW_TARGET="bun-$pair" bun run --cwd discord build:binary
+              cp discord/dist/ensembleworks-discord "out/ensembleworks-discord-$pair" ;;
             esac
           done
       - uses: actions/upload-artifact@v4
@@ -106,6 +108,7 @@ jobs:
           dir="$(mktemp -d)/smoke"; mkdir -p "$dir/client-dist"
           cp dl/binaries/ensembleworks-server-linux-x64 "$dir/ensembleworks-server"
           cp dl/transcriber-x64/ensembleworks-transcriber-linux-x64 "$dir/ensembleworks-transcriber"
+          cp dl/binaries/ensembleworks-discord-linux-x64 "$dir/ensembleworks-discord"
           chmod +x "$dir"/ensembleworks-*
           # Guarded like every other call site: a bare call under set -e aborts
           # with the killed server's 143 from the function's own `wait`.

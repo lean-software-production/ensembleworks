@@ -1,0 +1,46 @@
+[Unit]
+Description=EnsembleWorks Discord bot (gateway <-> router -> stickies; internal /post for outbound)
+After=network-online.target ensembleworks-sync.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust user/paths for your VM.
+User=ensemble
+WorkingDirectory=/home/ensemble/ensembleworks/discord
+# Sync server the bot creates frame stickies against (inbound) and that the bot
+# defaults SYNC_BASE to. PORT is the internal loopback /post face the sync server
+# forwards outbound posts to (sync server: DISCORD_PORT, default 8790).
+Environment=SYNC_BASE=http://localhost:8788
+Environment=PORT=8790
+# DISCORD_BOT_TOKEN (the bot token, required for inbound gateway) and
+# DISCORD_INTERNAL_SECRET (guards POST /post) live in the EnvironmentFile — keep
+# them out of this unit / git.
+#
+# TWO THINGS THAT WILL SILENTLY BREAK THIS:
+#  (a) Reading Discord message text requires the privileged MESSAGE_CONTENT
+#      intent. Enable it in the Discord Developer Portal (Bot -> Privileged
+#      Gateway Intents) — code alone is not enough; without it inbound messages
+#      arrive with empty content.
+#  (b) DISCORD_INTERNAL_SECRET below MUST be byte-for-byte identical to the same
+#      var in the sync server's environment (ensembleworks-sync.service's
+#      EnvironmentFile). The sync server forwards outbound posts to this bot's
+#      loopback /post with x-internal-secret: $DISCORD_INTERNAL_SECRET — a
+#      mismatch makes every outbound post fail 401.
+EnvironmentFile=/home/ensemble/.config/ensembleworks/discord.env
+# Wait for the sync server (SYNC_BASE, port 8788) to actually accept connections
+# before the bot starts creating stickies. After= only orders unit *start*, not
+# socket readiness, so without this the bot races the server on a cold boot.
+# curl (no -f) exits 0 on any HTTP reply, nonzero on conn-refused.
+ExecStartPre=/bin/sh -c 'until curl -s -o /dev/null --connect-timeout 2 "${SYNC_BASE}/"; do echo "waiting for sync server at ${SYNC_BASE} ..."; sleep 1; done'
+# Dogfooding stage: launch the workspace via Bun. The repo is on Bun, so the
+# discord workspace runs with `bun run start` (start = `bun src/main.ts`, a plain
+# non-watch process suited to a unit; use `dev` for watch mode). Assumes `bun` is
+# on PATH at /usr/local/bin/bun (mirrors scribe's /usr/local/bin launcher path
+# convention) — adjust if your box installs Bun elsewhere.
+ExecStart=/usr/local/bin/bun run start
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

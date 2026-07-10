@@ -1,7 +1,9 @@
 # Agent notes — EnsembleWorks
 
 Multiplayer infinite-canvas team room: tldraw + tmux terminals + LiveKit spatial audio.
-Workspaces: `client`, `server`, `transcriber` (Bun workspaces).
+Workspaces: `contracts`, `client`, `server`, `transcriber`, `cli`, `discord` (Bun
+workspaces). `discord` is the Discord bridge bot (inbound messages → frame
+stickies; outbound summaries → bound channels; internal /post on :8790).
 
 ## Local dev — bin/dev
 
