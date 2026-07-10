@@ -272,7 +272,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		// the DOM renderer instead of freezing on a stale frame. Machines whose
 		// driver corrupts the atlas *silently* (no loss event) opt out via
 		// localStorage — see ./webgl.
-		if (webglEnabled(localStorage)) {
+		if (webglEnabled(() => localStorage)) {
 			const webgl = new WebglAddon()
 			webgl.onContextLoss(() => {
 				// Degraded but functional: surface it so a silently DOM-rendered

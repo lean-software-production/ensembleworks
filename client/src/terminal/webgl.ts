@@ -12,9 +12,15 @@
 
 export const WEBGL_PREF_KEY = 'ensembleworks:webgl'
 
-export function webglEnabled(store: Pick<Storage, 'getItem'>): boolean {
+/**
+ * True unless this machine opted out. Takes the storage lazily (a function)
+ * because accessing window.localStorage ITSELF throws in browsers with
+ * storage fully blocked — the whole read path must sit inside the try.
+ * The flag is read once per terminal mount, so changes take effect on reload.
+ */
+export function webglEnabled(getStore: () => Pick<Storage, 'getItem'>): boolean {
 	try {
-		return store.getItem(WEBGL_PREF_KEY) !== 'off'
+		return getStore().getItem(WEBGL_PREF_KEY) !== 'off'
 	} catch {
 		return true
 	}
