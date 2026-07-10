@@ -33,6 +33,7 @@ const snapshot = (): AvPanelSnapshot => ({
 	micEnabled: false,
 	camEnabled: false,
 	standupMode: true,
+	crosstalkLevel: 0,
 	localVideoTrack: null,
 	localSpeaking: false,
 	peers: [],
@@ -46,6 +47,7 @@ const snapshot = (): AvPanelSnapshot => ({
 		onMic: () => {},
 		onCam: () => {},
 		onStandup: () => {},
+		setCrosstalk: () => {},
 		kick: () => {},
 	},
 })
@@ -134,6 +136,8 @@ assert.equal(getAvSnapshot(), null)
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), micEnabled: true }), false)
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), status: 'retrying' }), false)
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), kickError: 'nope' }), false)
+	// A crosstalk-level change must republish so the slider (and gain loop) update.
+	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), crosstalkLevel: 0.5 }), false)
 
 	// Pulse sub-objects compare by reference (a fresh object means a new tick).
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), latencies: { u: { rtt: 1, t: 1 } } }), false)

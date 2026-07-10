@@ -13,6 +13,7 @@ import { useEffect, useState } from 'react'
 import { useEditor, useValue } from 'tldraw'
 import { getRoomId } from '../identity'
 import { avSnapshotsEqual, getAvSnapshot, getFaceEl, publishAvSnapshot, useHoveredFace, type AvPanelSnapshot } from './bridge'
+import { clampCrosstalk, DEFAULT_CROSSTALK_LEVEL } from './crosstalk'
 import { LeashOverlay, useLeashes } from './leashes'
 import { useLiveKitRoom } from './useLiveKitRoom'
 import { useSessionPulse } from './useSessionPulse'
@@ -25,6 +26,9 @@ export function AvOverlay() {
 	const lk = useLiveKitRoom(getRoomId(), identity, name)
 	const pulse = useSessionPulse(getRoomId(), identity)
 	const [standupMode, setStandupMode] = useState(true)
+	// Cross-room "crosstalk" bleed: how loudly off-page teammates are heard.
+	// Defaults to silence, so behaviour is unchanged until you dial it up.
+	const [crosstalkLevel, setCrosstalkLevel] = useState(DEFAULT_CROSSTALK_LEVEL)
 	const [kickError, setKickError] = useState<string | null>(null)
 	const [kickingId, setKickingId] = useState<string | null>(null)
 
@@ -51,8 +55,8 @@ export function AvOverlay() {
 	// needs deriving here). Recomputes on camera pans and cursor moves.
 	const leashes = useLeashes(editor, lk.peers, hoveredId, getFaceEl)
 
-	// Spatial audio loop.
-	useSpatialGainLoop(editor, lk, standupMode)
+	// Spatial audio loop (also carries the crosstalk bleed level for off-page peers).
+	useSpatialGainLoop(editor, lk, standupMode, crosstalkLevel)
 
 	// Takes (id, name) rather than a full participant object: those are the
 	// only two fields it uses, and it doubles as the bridge's `actions.kick` —
@@ -99,6 +103,7 @@ export function AvOverlay() {
 			micEnabled: lk.micEnabled,
 			camEnabled: lk.camEnabled,
 			standupMode,
+			crosstalkLevel,
 			localVideoTrack: lk.localVideoTrack,
 			localSpeaking: lk.localSpeaking,
 			peers: lk.peers
@@ -119,6 +124,7 @@ export function AvOverlay() {
 				onMic: () => lk.setMicEnabled(!lk.micEnabled),
 				onCam: () => lk.setCamEnabled(!lk.camEnabled),
 				onStandup: () => setStandupMode((s) => !s),
+				setCrosstalk: (level: number) => setCrosstalkLevel(clampCrosstalk(level)),
 				kick: kickParticipant,
 			},
 		}

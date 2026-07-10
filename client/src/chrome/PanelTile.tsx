@@ -280,12 +280,7 @@ export function PanelTile({
 							available={avAvailable}
 							onClick={() => snap?.actions.onCam()}
 						/>
-						<AvIconButton
-							kind="spatial"
-							enabled={!(snap?.standupMode ?? true)}
-							available={avAvailable}
-							onClick={() => snap?.actions.onStandup()}
-						/>
+						<CrosstalkControl snap={snap} available={avAvailable} />
 					</div>
 				)}
 				{!isLocal && hovered && snap && (
@@ -314,6 +309,148 @@ export function PanelTile({
 					</button>
 				)}
 			</div>
+		</div>
+	)
+}
+
+// The self-tile crosstalk control — this button used to be the spatial-audio
+// (standup) toggle. It now opens a slider governing how loudly you hear
+// teammates who are on OTHER pages / in other rooms: 0 = they go silent the
+// moment they navigate away (the old behaviour), full = as if they were on your
+// page. The bleed rides the same single per-participant gain as in-room voice
+// (av/crosstalk.ts + useSpatialGainLoop) — no echo, no doubled voice, and it
+// survives page hops/reconnects because the gain node is per-participant, not
+// per-page. The popover keeps the proximity (standup) toggle this button used
+// to carry so that mode isn't lost. Reuses the concentric-waves "spatial" glyph
+// and mirrors AvIconButton's styling for a consistent control strip.
+function CrosstalkControl({
+	snap,
+	available,
+}: {
+	snap: AvPanelSnapshot | null
+	available: boolean
+}) {
+	const [open, setOpen] = useState(false)
+	const rootRef = useRef<HTMLDivElement>(null)
+	const level = snap?.crosstalkLevel ?? 0
+	const active = level > 0
+	const pct = Math.round(level * 100)
+	const label = `Crosstalk ${active ? `${pct}%` : 'off'}`
+
+	// Close on an outside click (same pattern as ColorSwatch below).
+	useEffect(() => {
+		if (!open) return
+		function onPointerDown(e: PointerEvent) {
+			if (rootRef.current && e.target instanceof Node && !rootRef.current.contains(e.target)) {
+				setOpen(false)
+			}
+		}
+		window.addEventListener('pointerdown', onPointerDown)
+		return () => window.removeEventListener('pointerdown', onPointerDown)
+	}, [open])
+
+	return (
+		<div ref={rootRef} style={{ position: 'relative', flex: '0 0 auto', display: 'flex' }}>
+			<button
+				type="button"
+				data-testid="ew-tile-crosstalk"
+				disabled={!available}
+				onClick={(e) => {
+					e.stopPropagation()
+					setOpen((v) => !v)
+				}}
+				aria-label={label}
+				title={available ? label : 'Crosstalk unavailable'}
+				style={{
+					width: 25,
+					height: 25,
+					display: 'grid',
+					placeItems: 'center',
+					border: `1px solid ${active ? wm.sealBlue : wm.ruleStrong}`,
+					borderRadius: 2,
+					padding: 3,
+					background: active ? wm.sealBlue : 'transparent',
+					color: active ? wm.cream : wm.inkMuted,
+					cursor: available ? 'pointer' : 'not-allowed',
+					opacity: available ? 1 : 0.4,
+				}}
+			>
+				<AvIcon kind="spatial" crossedOut={!active} />
+			</button>
+			{open && snap && (
+				<div
+					onClick={(e) => e.stopPropagation()}
+					data-testid="ew-crosstalk-popover"
+					style={{
+						position: 'absolute',
+						bottom: 30,
+						right: 0,
+						zIndex: 10,
+						width: 194,
+						display: 'flex',
+						flexDirection: 'column',
+						gap: 8,
+						padding: 10,
+						background: wm.panel,
+						border: `1px solid ${wm.rule}`,
+						borderRadius: 4,
+						boxShadow: wm.shadowPaper,
+					}}
+				>
+					<div style={{ fontFamily: wm.sans, fontSize: 11, fontWeight: 700, color: wm.ink }}>
+						Crosstalk
+					</div>
+					<div
+						style={{ fontFamily: wm.sans, fontSize: 10, color: wm.inkMuted, lineHeight: 1.35 }}
+					>
+						How loudly you hear people on other pages. Off = they go silent when they leave your page.
+					</div>
+					<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+						<input
+							type="range"
+							min={0}
+							max={1}
+							step={0.05}
+							value={level}
+							data-testid="ew-crosstalk-slider"
+							aria-label="Crosstalk level"
+							onChange={(e) => snap.actions.setCrosstalk(Number(e.target.value))}
+							style={{ flex: 1, minWidth: 0, accentColor: wm.sealBlue, cursor: 'pointer' }}
+						/>
+						<span
+							style={{
+								flex: '0 0 auto',
+								width: 30,
+								textAlign: 'right',
+								fontFamily: wm.mono,
+								fontSize: 10,
+								color: wm.inkMuted,
+							}}
+						>
+							{active ? `${pct}%` : 'off'}
+						</span>
+					</div>
+					<label
+						style={{
+							display: 'flex',
+							alignItems: 'center',
+							gap: 6,
+							fontFamily: wm.sans,
+							fontSize: 10,
+							color: wm.inkMuted,
+							cursor: 'pointer',
+						}}
+					>
+						<input
+							type="checkbox"
+							checked={!snap.standupMode}
+							onChange={() => snap.actions.onStandup()}
+							style={{ accentColor: wm.sealBlue, cursor: 'pointer' }}
+						/>
+						Proximity audio on this page
+					</label>
+				</div>
+			)}
 		</div>
 	)
 }

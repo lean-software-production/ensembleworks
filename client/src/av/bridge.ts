@@ -23,6 +23,10 @@ export interface AvPanelSnapshot {
 	micEnabled: boolean
 	camEnabled: boolean
 	standupMode: boolean
+	/** Cross-room "crosstalk" bleed level (0..1): how loudly off-page teammates
+	 * are heard. 0 = silent (they vanish when they leave your page, as before);
+	 * 1 = as loud as if they were on your page. */
+	crosstalkLevel: number
 	localVideoTrack: LocalTrack | null
 	localSpeaking: boolean
 	peers: AvPanelPeer[]
@@ -36,6 +40,8 @@ export interface AvPanelSnapshot {
 		onMic: () => void
 		onCam: () => void
 		onStandup: () => void
+		/** Set the crosstalk bleed level (clamped to 0..1 by the publisher). */
+		setCrosstalk: (level: number) => void
 		kick: (id: string, name: string) => void
 	}
 }
@@ -56,6 +62,7 @@ export function avSnapshotsEqual(a: AvPanelSnapshot, b: AvPanelSnapshot): boolea
 		a.micEnabled !== b.micEnabled ||
 		a.camEnabled !== b.camEnabled ||
 		a.standupMode !== b.standupMode ||
+		a.crosstalkLevel !== b.crosstalkLevel ||
 		a.localVideoTrack !== b.localVideoTrack ||
 		a.localSpeaking !== b.localSpeaking ||
 		a.vm !== b.vm ||
