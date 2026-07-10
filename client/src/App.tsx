@@ -14,7 +14,7 @@ import 'tldraw/tldraw.css'
 import './theme.css'
 import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
-import { presentingAtom } from './chrome/present'
+import { handoffAtom, handRaisedAtom, presentingAtom } from './chrome/present'
 import { getSettings, updateSettings } from './chrome/settings'
 import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
@@ -112,7 +112,16 @@ export function App() {
 			// mechanism as the stamp's inputs.
 			return {
 				...defaults,
-				meta: { stamp, fileViewerPresent: presentStore.get(), presenting: presentingAtom.get() },
+				meta: {
+					stamp,
+					fileViewerPresent: presentStore.get(),
+					presenting: presentingAtom.get(),
+					// The request-to-present queue (chrome/present.ts): our raise
+					// timestamp (null when down) and any promotion we've handed to a
+					// peer. Tiny JSON, same channel, no server message.
+					handRaised: handRaisedAtom.get(),
+					handoff: handoffAtom.get(),
+				},
 			}
 		},
 	})

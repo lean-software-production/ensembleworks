@@ -56,8 +56,15 @@ import { useFocusedShapeId } from './focus'
 import { EnsembleMainMenu } from './MainMenu'
 import { OverflowMenu } from './OverflowMenu'
 import { RAIL_WIDTH, usePanelLayout } from './panelLayout'
-import { presentingAtom, tryStartPresenting, useIsPresenting, usePresenter } from './present'
-import { PresenterStrip, ViewerStrip } from './presentStrips'
+import {
+	presentingAtom,
+	toggleHand,
+	tryStartPresenting,
+	useConsumeHandoff,
+	useIsPresenting,
+	usePresenter,
+} from './present'
+import { PresenterStrip, RaiseHandButton, ViewerStrip } from './presentStrips'
 import { useSettings, type DockEdge } from './settings'
 import { wm } from '../theme'
 
@@ -148,6 +155,12 @@ export function CommandBar() {
 	const isPresenting = useIsPresenting()
 	const presenter = usePresenter(editor)
 	const snap = useAvSnapshot()
+
+	// Request-to-present queue (chrome/present.ts): consume any promotion handed
+	// to us. Runs unconditionally, before the Present/viewer early returns below,
+	// so a viewer promoted while watching still takes over. becoming the
+	// presenter here flips isPresenting and re-renders into the PresenterStrip.
+	useConsumeHandoff(editor)
 
 	// Viewer opt-out: STOP FOLLOWING (or Esc) sets this without touching
 	// `presenter`, so the auto-follow effect below — keyed only on
@@ -327,6 +340,15 @@ export function CommandBar() {
 				tryStartPresenting(editor)
 				return
 			}
+			// 'q' toggles raising your hand to request the room (spec: request-to-
+			// present queue). Works whether or not someone is presenting — the
+			// queue forms even with no presenter — but not while WE present
+			// (a presenter has the room, nothing to request).
+			if (e.key.toLowerCase() === 'q' && !isPresenting) {
+				e.preventDefault()
+				toggleHand()
+				return
+			}
 
 			const item = itemsByAccelerator.get(e.key.toLowerCase())
 			if (!item) return
@@ -373,6 +395,7 @@ export function CommandBar() {
 	if (isPresenting) {
 		return (
 			<PresenterStrip
+				editor={editor}
 				tools={tools}
 				currentToolId={currentToolId}
 				showRecDot={!!snap && snap.scribes.length > 0}
@@ -464,6 +487,9 @@ export function CommandBar() {
 			/>
 
 			<div style={barDividerStyle} />
+			{/* Raise a hand to request the room. On the NORMAL bar so raising
+			    works with nobody presenting; the viewer strip carries its own. */}
+			<RaiseHandButton editor={editor} iconOnly={vertical} />
 			<AccentButton
 				id="present"
 				icon="share-1"

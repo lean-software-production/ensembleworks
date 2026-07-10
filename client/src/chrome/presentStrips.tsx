@@ -8,7 +8,15 @@
 import { stopEventPropagation, useValue, type Editor, type TLUiToolsContextType } from 'tldraw'
 import { wm } from '../theme'
 import { AccentButton, barStyle, dividerStyle, NATIVE_LABELS, NativeToolButton } from './barButtons'
-import { presentingAtom, type Presenter } from './present'
+import {
+	presentingAtom,
+	promoteTo,
+	toggleHand,
+	useHandPosition,
+	useHandQueue,
+	useHandRaised,
+	type Presenter,
+} from './present'
 
 // Blink animation for the presenter strip's rec dot — same visual language as
 // the side panel's recording indicators (SidePanel.tsx's scribeBlinkKeyframes
@@ -37,6 +45,66 @@ function RecDot() {
 	)
 }
 
+// Request-to-present queue, presenter's view (see chrome/handQueue.ts): the
+// ordered hands-up list (front bolded) plus a one-click hand-off that promotes
+// the FRONT of the queue. Renders nothing when no hands are up. `promoteTo`
+// stamps a handoff token in our presence meta and steps us down; the promoted
+// client sees the token and takes over (present.ts's useConsumeHandoff) — no
+// server message, same presence channel as everything else in Present mode.
+function QueueControl({ editor }: { editor: Editor }) {
+	const queue = useHandQueue(editor)
+	if (queue.length === 0) return null
+	const next = queue[0]!
+	return (
+		<>
+			<div style={dividerStyle} />
+			<span
+				data-testid="ew-hand-queue"
+				aria-label={`Hands raised: ${queue.map((r) => r.userName).join(', ')}`}
+				style={{ fontSize: 11, color: wm.inkMuted, whiteSpace: 'nowrap' }}
+			>
+				<span aria-hidden="true">{'✋ '}</span>
+				{queue.map((r, i) => (
+					<span
+						key={r.userId}
+						style={{ color: i === 0 ? wm.ink : wm.inkMuted, fontWeight: i === 0 ? 700 : 400 }}
+					>
+						{i > 0 ? ', ' : ''}
+						{r.userName}
+					</span>
+				))}
+			</span>
+			<AccentButton
+				id="promote-next"
+				icon="chevron-up"
+				label="hand off"
+				accentColor={wm.ok}
+				title={`Hand off to ${next.userName}`}
+				onClick={() => promoteTo(next.userId)}
+			/>
+		</>
+	)
+}
+
+// Raise-hand toggle (see chrome/handQueue.ts): request the room. Shown in the
+// viewer strip; also lives on the normal bar (CommandBar) so raising works when
+// nobody is presenting. Amber when raised (waiting), with your place in line.
+export function RaiseHandButton({ editor, iconOnly }: { editor: Editor; iconOnly?: boolean }) {
+	const raised = useHandRaised()
+	const position = useHandPosition(editor)
+	return (
+		<AccentButton
+			id="raise-hand"
+			icon="tool-hand"
+			label={raised ? (position ? `hand raised · #${position}` : 'hand raised') : 'raise hand'}
+			accentColor={raised ? wm.warn : wm.sealBlue}
+			title={raised ? 'Lower hand (Q)' : 'Raise hand to request to present (Q)'}
+			iconOnly={iconOnly}
+			onClick={toggleHand}
+		/>
+	)
+}
+
 // Presenter mode (spec §5 "Presenter: bar becomes laser · note · END
 // PRESENTING (+ rec dot)"): replaces the ENTIRE bar. Laser/note reuse the
 // native tools (same NativeToolButton the normal bar uses for its priority
@@ -49,11 +117,13 @@ function RecDot() {
 // so the collision is visible and one of them can END, rather than each
 // silently assuming they have the room.
 export function PresenterStrip({
+	editor,
 	tools,
 	currentToolId,
 	showRecDot,
 	otherPresenter,
 }: {
+	editor: Editor
 	tools: TLUiToolsContextType
 	currentToolId: string
 	showRecDot: boolean
@@ -78,6 +148,7 @@ export function PresenterStrip({
 				title="End presenting (Esc)"
 				onClick={() => presentingAtom.set(false)}
 			/>
+			<QueueControl editor={editor} />
 			{showRecDot && <RecDot />}
 			{otherPresenter && (
 				<span
@@ -134,6 +205,8 @@ export function ViewerStrip({
 					onClick={onStop}
 				/>
 			)}
+			<div style={dividerStyle} />
+			<RaiseHandButton editor={editor} />
 		</div>
 	)
 }
