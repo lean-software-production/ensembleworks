@@ -178,6 +178,16 @@ else
   asapp touch "\${NEW}/.ew-verified"
 fi
 
+# ---- ensure the fast-disk room-DB base dir exists ----------------------------
+# The sync unit sets DATABASE_DIR=/var/lib/ensembleworks/databases; the server
+# creates only the rooms/ leaf (as \${APP_USER}) and CANNOT create the root-owned
+# /var/lib parent, so guarantee the app-owned base dir here (idempotent). Without
+# it the sync unit crashes on first room open. Also provisioned by the laingville
+# bootstrap; kept here so a deploy can never half-apply the DATABASE_DIR change
+# (the failure mode behind the 2026-07-10 room-DB corruption incident).
+sudo install -d -m 0755 /var/lib/ensembleworks
+sudo install -d -m 0700 -o "\${APP_USER}" -g "\${APP_USER}" /var/lib/ensembleworks/databases
+
 # ---- install prod systemd units -----------------------------------------------
 # Units are committed templates in deploy/systemd/prod/ (scp'd to /tmp); sed fills
 # in @APP_USER@ / @APP_HOME@. Slice membership + per-service MemoryLow are folded
