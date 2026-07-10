@@ -1,0 +1,6 @@
+sprints:
+  - id: EW-CLI-DRAW-0001
+    title: CLI frame + drawing-shape creation, reparent, delete
+    status: planned
+    created: "2026-07-09T19:18:06+00:00"
+    updated: "2026-07-09T19:18:06+00:00"

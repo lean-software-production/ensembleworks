@@ -11,6 +11,10 @@ import { sanitizeId } from '../canvas/ids.ts'
 import type { PluginServerContext } from '../kernel/context.ts'
 import { byProximity, getCursorRefs, pickCursor, sortPointOf } from '../kernel/presence.ts'
 
+// Shapes surfaced together as one "drawings" bucket by the read endpoints —
+// spans geo (which was never on the read side) + the CLI drawing shapes.
+const DRAWING_TYPES = ['geo', 'line', 'draw', 'highlight']
+
 export function createFramesRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
@@ -50,6 +54,7 @@ export function createFramesRouter(ctx: PluginServerContext): express.Router {
 					images: countOf('image'),
 					terminals: countOf('terminal'),
 					iframes: countOf('iframe'),
+					drawings: children.filter((r) => DRAWING_TYPES.includes(r.type)).length,
 				}
 			})
 
@@ -146,6 +151,14 @@ export function createFramesRouter(ctx: PluginServerContext): express.Router {
 				url: f.props?.url,
 				title: f.props?.title,
 			})),
+			// One bucket for geo + line/draw/highlight. `text` only where the shape
+			// carries a richText label (geo does; line/draw/highlight don't).
+			drawings: children
+				.filter((r) => DRAWING_TYPES.includes(r.type))
+				.map((c) => {
+					const text = richTextToPlainText(c.props?.richText)
+					return text ? { id: c.id, type: c.type, text } : { id: c.id, type: c.type }
+				}),
 		})
 	})
 
