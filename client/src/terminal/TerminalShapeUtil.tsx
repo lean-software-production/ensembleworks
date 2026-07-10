@@ -36,6 +36,7 @@ import {
 } from 'tldraw'
 import { paperTerminalTheme, wm } from '../theme'
 import { type CellSize, gridFor, quantizeCell } from './grid'
+import { ptyInputForKey } from './keys'
 import { termWsUrl } from './wsUrl'
 
 export interface TerminalShapeProps {
@@ -413,6 +414,18 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 
 		// Double-Esc exits editing; a single Esc is the terminal's (vim!).
 		term.attachCustomKeyEventHandler((e) => {
+			// Shift/Alt+Enter → newline (ESC CR) instead of submit — see ./keys.
+			// preventDefault + return false so xterm doesn't also send \r.
+			const ptyInput = ptyInputForKey(e)
+			if (ptyInput) {
+				e.preventDefault()
+				const ws = wsRef.current
+				if (ws?.readyState === WebSocket.OPEN) {
+					const msg: TermClientMessage = { type: 'input', data: ptyInput }
+					ws.send(JSON.stringify(msg))
+				}
+				return false
+			}
 			if (e.type === 'keydown' && (e.ctrlKey || e.metaKey)) {
 				const key = e.key.toLowerCase()
 				// Paste: Ctrl/Cmd+V and Ctrl+Shift+V → route the clipboard through the
