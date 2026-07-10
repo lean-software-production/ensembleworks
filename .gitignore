@@ -19,3 +19,7 @@ spikes/phase0/dist/
 
 # pi coding agent project configuration
 .pi/
+
+# Playwright MCP walkthrough artifacts (evidence, not source)
+.playwright-mcp/
+bossman-*.png
