@@ -149,6 +149,41 @@ orthogonal to grid sizing; the gateway stays authoritative with dedup. If a
 candidate fix threatens an invariant, the item stops and reports findings
 instead of shipping.
 
+**Findings (investigated 2026-07-11), under headless Chromium (`client/e2e/terminal-zoom-probe.mjs`)
+at zooms 0.75 / 1.1 / 1.33 against a live dev stack (room "probe", a real
+tmux session rendering box-drawing content):**
+
+- At these three zooms, effective `fontSize = BASE_FONT × zoom` is 12px
+  (0.75 — integer by coincidence), 17.6px (1.1) and 21.28px (1.33) — the
+  latter two are genuinely fractional, so the hypothesis had real cases to
+  bite on.
+- **Box-drawing seams: not reproduced.** Screenshots of a `┌─│└` rectangle
+  at all three zooms, including a second pass at `deviceScaleFactor: 2`
+  (magnified crops of the border), show continuous, unbroken lines — no
+  horizontal/vertical gaps at any zoom.
+- **Off-by-one drag-selection: not reproduced.** A scripted shift+drag
+  across one row's vertical middle, screenshotted immediately after release,
+  shows the selection highlight band confined to exactly the one dragged
+  row at all three zooms — no bleed into the row above/below.
+  (`window.getSelection()` was also read per the plan, but its content's
+  provenance in this app is unclear — no `.xterm-accessibility` tree or any
+  DOM text node was found matching the terminal's content, yet
+  `toString()` sometimes returned terminal-glyph-shaped text anyway; it was
+  treated as a secondary, not authoritative, signal. The selection
+  screenshots are the reliable evidence.)
+- Suspect: the WebGL glyph-atlas renderer (already in use here, see item 2)
+  samples a texture atlas at the target scale rather than compositing
+  sub-pixel DOM/canvas borders, which plausibly closes exactly this failure
+  mode independent of whether the font-size math is integer or fractional —
+  consistent with the earlier grilled-symptoms note that ghostty-web (a
+  different fixed-cell GPU renderer) was also expected to close this one
+  "for free." Could also be specific to this headless/DPR-1 and DPR-2
+  Chromium environment rather than the reporting user's real machine/DPI.
+- **Decision: candidate fix (rounding `fontSize` to whole px + compensating
+  `fontFactor` host counter-scale) not applied** — neither symptom
+  reproduced, so there is nothing to verify the fix against, and the plan's
+  own bar for shipping this item is reproduction first.
+
 ## Sequencing & verification
 
 Land order: **1 → 3 → 2 → 4 → 5 → 6**, each as its own commit(s) on a
