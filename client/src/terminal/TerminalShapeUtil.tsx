@@ -37,6 +37,7 @@ import {
 import { paperTerminalTheme, wm } from '../theme'
 import { type CellSize, gridFor, quantizeCell } from './grid'
 import { ptyInputForKey } from './keys'
+import { webglEnabled } from './webgl'
 import { termWsUrl } from './wsUrl'
 
 export interface TerminalShapeProps {
@@ -268,15 +269,19 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		// while the tldraw camera pans/zooms. Must load AFTER term.open(). Browsers
 		// cap concurrent WebGL contexts (~16 in Chrome); if ours is dropped (many
 		// terminals open at once) we dispose the addon so this terminal falls back to
-		// the DOM renderer instead of freezing on a stale frame.
-		const webgl = new WebglAddon()
-		webgl.onContextLoss(() => {
-			// Degraded but functional: surface it so a silently DOM-rendered
-			// terminal isn't invisible to anyone watching the console.
-			console.warn('[terminal] WebGL context lost — falling back to DOM renderer')
-			webgl.dispose()
-		})
-		term.loadAddon(webgl)
+		// the DOM renderer instead of freezing on a stale frame. Machines whose
+		// driver corrupts the atlas *silently* (no loss event) opt out via
+		// localStorage — see ./webgl.
+		if (webglEnabled(localStorage)) {
+			const webgl = new WebglAddon()
+			webgl.onContextLoss(() => {
+				// Degraded but functional: surface it so a silently DOM-rendered
+				// terminal isn't invisible to anyone watching the console.
+				console.warn('[terminal] WebGL context lost — falling back to DOM renderer')
+				webgl.dispose()
+			})
+			term.loadAddon(webgl)
+		}
 		// Bootstrap the spawn size synchronously (so the PTY starts ~right and the
 		// WS URL below carries it); the deterministic effect refines it to the exact
 		// grid once the web font's cell is measured. fontSize is BASE_FONT here, so
@@ -366,7 +371,16 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			connect()
 		}
 		const reconnectWhenVisible = () => {
-			if (document.visibilityState === 'visible') reconnectNow()
+			if (document.visibilityState !== 'visible') return
+			// Returning to the tab is the cheap moment to discard a possibly-rotten
+			// WebGL glyph atlas (silent corruption never fires onContextLoss) —
+			// clearTextureAtlas re-rasterises every glyph on the next frame.
+			try {
+				term.clearTextureAtlas()
+			} catch {
+				/* renderer variance — a repaint miss is not worth crashing over */
+			}
+			reconnectNow()
 		}
 
 		window.addEventListener('online', reconnectNow)
@@ -487,10 +501,22 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		}
 	}, [shape.props.sessionId, editor, shape.id])
 
-	// Editing state drives keyboard focus.
+	// Editing state drives keyboard focus. Entering edit also heals a possibly
+	// corrupted WebGL glyph atlas — the user's "click the terminal" replaces
+	// "refresh the page" when tofu appears (see ./webgl for the failure mode).
 	useEffect(() => {
-		if (isEditing) termRef.current?.focus()
-		else termRef.current?.blur()
+		const term = termRef.current
+		if (!term) return
+		if (isEditing) {
+			try {
+				term.clearTextureAtlas()
+			} catch {
+				/* renderer variance */
+			}
+			term.focus()
+		} else {
+			term.blur()
+		}
 	}, [isEditing])
 
 	// Counter-scale the font to the canvas zoom so text stays crisp and xterm's
