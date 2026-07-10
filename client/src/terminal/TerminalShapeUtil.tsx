@@ -420,8 +420,11 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		// the WebGL atlas caches whatever it first rasterised (tofu). Force the
 		// load, then discard the atlas so PUA glyphs re-rasterise from the real
 		// font. Grid untouched — the fallback never supplies the measured cell.
+		// The sample char must sit inside the face's unicode-range: fonts.load()
+		// filters faces against the sample text's code points, and the default
+		// " " sample is outside the PUA range, so it would skip the fetch.
 		document.fonts
-			.load('16px "Symbols Nerd Font Mono"')
+			.load('16px "Symbols Nerd Font Mono"', '\uE0B0')
 			.then(() => {
 				if (disposed) return
 				try {

@@ -118,9 +118,12 @@ Accepted as reasonable ergonomics.
 ### 5. Nerd Font symbol coverage
 
 `wm.mono` (`client/src/theme.ts`) is unpatched Google-Fonts JetBrains Mono.
-Fix: self-host **Symbols Nerd Font Mono** (symbols-only fallback, OFL —
-AGPL-compatible) as a woff2 under `client/public/`, declare it with
-`@font-face`, and append it to `wm.mono` after JetBrains Mono.
+Fix: self-host **Symbols Nerd Font Mono** (symbols-only fallback, MIT — the
+nerd-fonts release LICENSE, vendored at
+`client/public/fonts/LICENSE-SymbolsNerdFont.txt`, equally AGPL-compatible)
+as the release TTF under `client/public/` (woff2 subsetting noted as
+optional future polish), declare it with `@font-face`, and append it to
+`wm.mono` after JetBrains Mono.
 
 The primary font — and therefore the measured cell, its quantisation, and
 the deterministic grid — is untouched; the fallback only supplies glyphs
