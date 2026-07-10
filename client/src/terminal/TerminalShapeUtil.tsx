@@ -658,6 +658,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 				style={{
 					flex: 1,
 					minHeight: 0,
+					// KEEP IN SYNC with TERMINAL_PAD in ./grid.ts — one fact, recorded twice.
 					padding: '10px 20px 4px 12px',
 					opacity: connection === 'live' ? 1 : 0.28,
 					filter: connection === 'live' ? undefined : 'grayscale(0.8)',
