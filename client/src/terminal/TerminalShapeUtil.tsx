@@ -636,10 +636,12 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 					borderRadius: 4,
 					overflow: 'hidden',
 					background: '#fff',
-					// Thin dark line to match the canvas frames' 1px stroke (was the
-					// fainter ruleStrong); seal-blue only while editing for selection.
-					border: isEditing ? `2px solid ${wm.sealBlue}` : `1px solid ${wm.ink}`,
-					boxShadow: wm.shadowPaper,
+					// Constant 1px border in BOTH modes: a border-width change would
+					// shrink the content box and visibly shift the terminal text on
+					// every edit toggle. The editing highlight is an outer box-shadow
+					// ring instead — zero layout impact.
+					border: `1px solid ${isEditing ? wm.sealBlue : wm.ink}`,
+					boxShadow: isEditing ? `0 0 0 1.5px ${wm.sealBlue}, ${wm.shadowPaper}` : wm.shadowPaper,
 				}}
 			>
 			{/* No in-frame header: tmux's own status bar (status-position top in
@@ -656,7 +658,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 				style={{
 					flex: 1,
 					minHeight: 0,
-					padding: '10px 20px 0 12px',
+					padding: '10px 20px 4px 12px',
 					opacity: connection === 'live' ? 1 : 0.28,
 					filter: connection === 'live' ? undefined : 'grayscale(0.8)',
 					transition: 'opacity 160ms ease, filter 160ms ease',
