@@ -69,6 +69,7 @@ export function PanelTile({
 	participant,
 	snap,
 	twoUp = false,
+	leashable = true,
 }: {
 	editor: Editor
 	participant: PanelTileParticipant
@@ -76,6 +77,13 @@ export function PanelTile({
 	// Set by PanelPages.tsx once the panel is wide enough for its two-up grid
 	// (spec §3 "wide = face-to-face"): grows the tile and its initials a step.
 	twoUp?: boolean
+	// False for pop-out tiles (chrome/AvPopoutHost.tsx): they render in a
+	// SEPARATE window, so they must not register as leash anchors or set the
+	// hovered-face — a leash drawn from a child-window element onto the canvas
+	// window's viewport (av/leashes.tsx uses getBoundingClientRect against the
+	// canvas viewport) would be geometric nonsense across the two coordinate
+	// spaces. The video still attaches; only the cursor-leash wiring is skipped.
+	leashable?: boolean
 }) {
 	const { rawId, prefixedId, name, color, isLocal } = participant
 	const initialsFontSize = twoUp ? INITIALS_FONT_TWO_UP : INITIALS_FONT_DEFAULT
@@ -129,16 +137,19 @@ export function PanelTile({
 	const [hovered, setHovered] = useState(false)
 	const onEnter = () => {
 		setHovered(true)
-		setHoveredFace(rawId)
+		if (leashable) setHoveredFace(rawId)
 	}
 	const onLeave = () => {
 		setHovered(false)
-		setHoveredFace(null)
+		if (leashable) setHoveredFace(null)
 	}
 
 	return (
 		<div
-			ref={(el) => registerFaceEl(rawId, el)}
+			ref={(el) => {
+				// Pop-out tiles opt out of the leash registry (see `leashable`).
+				if (leashable) registerFaceEl(rawId, el)
+			}}
 			data-testid={'ew-tile-' + rawId}
 			onPointerEnter={onEnter}
 			onPointerLeave={onLeave}

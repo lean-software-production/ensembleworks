@@ -35,6 +35,8 @@ import {
 	togglePanelCollapsed,
 	usePanelLayout,
 } from './panelLayout'
+import { usePopoutState } from './avPopout'
+import { closeAvPopout, openAvPopout } from './avPopoutWindow'
 import { PanelFooter } from './PanelFooter'
 import { PanelPages } from './PanelPages'
 import { initialsFor, type PanelTileParticipant } from './PanelTile'
@@ -57,6 +59,12 @@ const MAX_WIDTH_FRACTION = 0.85
 export function SidePanel({ editor }: { editor: Editor }) {
 	const snap = useAvSnapshot()
 	const layout = usePanelLayout()
+	// Pop-out A/V (chrome/avPopout.ts): while popped, the video tiles live in a
+	// separate window, so the panel shows a placeholder in their place. Only
+	// offer the pop-out control when A/V is actually up — nothing to pop out
+	// otherwise.
+	const popout = usePopoutState()
+	const avAvailable = snap != null && snap.status !== 'disabled' && snap.status !== 'error'
 	const [transcriptOpen, setTranscriptOpen] = useState(false)
 	const participantCount = useValue(
 		'panel-participant-count',
@@ -204,9 +212,12 @@ export function SidePanel({ editor }: { editor: Editor }) {
 					>
 						{getRoomId()}
 					</span>
-					<span style={{ fontFamily: wm.mono, fontSize: 11, color: wm.inkMuted }}>
-						{participantCount}
-					</span>
+					<div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+						{avAvailable && popout === 'docked' && <PopOutButton />}
+						<span style={{ fontFamily: wm.mono, fontSize: 11, color: wm.inkMuted }}>
+							{participantCount}
+						</span>
+					</div>
 				</div>
 
 				{snap === null && (
@@ -236,7 +247,11 @@ export function SidePanel({ editor }: { editor: Editor }) {
 			</div>
 
 			<div style={{ padding: '0 12px 12px' }}>
-				<PanelPages editor={editor} width={layout.width} />
+				{popout === 'popped' ? (
+					<PoppedOutPlaceholder />
+				) : (
+					<PanelPages editor={editor} width={layout.width} />
+				)}
 			</div>
 
 			{snap && snap.scribes.length > 0 && (
@@ -480,6 +495,104 @@ function RailAvatarDot({
 			}}
 		>
 			{initialsFor(participant.name)}
+		</div>
+	)
+}
+
+// Pop-out control (chrome/avPopout.ts): sends the video tiles into a separate
+// window. An "open in new window" glyph in the panel header, shown only while
+// docked and A/V is up. The separate window and the docked placeholder below
+// both carry the matching Bring-back.
+function PopOutButton() {
+	return (
+		<button
+			type="button"
+			data-testid="ew-av-popout"
+			// Acquired inside the click gesture — Document PiP needs transient
+			// user activation (see chrome/avPopoutWindow.ts).
+			onClick={() => void openAvPopout()}
+			title="Pop the video out into its own window"
+			aria-label="Pop the video out into its own window"
+			style={{
+				display: 'grid',
+				placeItems: 'center',
+				width: 22,
+				height: 22,
+				border: `1px solid ${wm.ruleStrong}`,
+				borderRadius: 3,
+				background: 'transparent',
+				color: wm.inkMuted,
+				cursor: 'pointer',
+				padding: 0,
+			}}
+		>
+			<PopOutIcon />
+		</button>
+	)
+}
+
+// "Open in a new window" glyph, drawn in the same 24-box stroke idiom as
+// av/icons.tsx's AvIcon so it sits naturally beside the other panel chrome.
+function PopOutIcon() {
+	return (
+		<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+			<path
+				d="M13 4h7v7M20 4l-9 9"
+				stroke="currentColor"
+				strokeWidth="2"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			/>
+			<path
+				d="M18 14v4a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4"
+				stroke="currentColor"
+				strokeWidth="2"
+				strokeLinecap="round"
+				strokeLinejoin="round"
+			/>
+		</svg>
+	)
+}
+
+// Stands in for the roster tiles while the A/V is popped out into its own
+// window: a quiet note plus a Bring-back that docks the tiles again (the
+// separate window has its own Bring-back too).
+function PoppedOutPlaceholder() {
+	return (
+		<div
+			data-testid="ew-av-popped-placeholder"
+			style={{
+				display: 'flex',
+				flexDirection: 'column',
+				alignItems: 'center',
+				gap: 8,
+				border: `1px dashed ${wm.ruleStrong}`,
+				borderRadius: 4,
+				padding: '16px 12px',
+				textAlign: 'center',
+			}}
+		>
+			<span style={{ fontSize: 12, color: wm.inkMuted, lineHeight: 1.4 }}>
+				Video is in a separate window.
+			</span>
+			<button
+				type="button"
+				data-testid="ew-av-dock"
+				onClick={() => closeAvPopout()}
+				title="Bring the video tiles back into this window"
+				style={{
+					border: `1px solid ${wm.ruleStrong}`,
+					borderRadius: 4,
+					background: wm.bg,
+					color: wm.ink,
+					padding: '5px 12px',
+					fontFamily: wm.sans,
+					fontSize: 12,
+					cursor: 'pointer',
+				}}
+			>
+				Bring back
+			</button>
 		</div>
 	)
 }

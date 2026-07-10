@@ -14,6 +14,7 @@ import 'tldraw/tldraw.css'
 import './theme.css'
 import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
+import { AvPopoutHost } from './chrome/AvPopoutHost'
 import { presentingAtom } from './chrome/present'
 import { getSettings, updateSettings } from './chrome/settings'
 import { SidePanel } from './chrome/SidePanel'
@@ -215,6 +216,9 @@ export function App() {
 				</Tldraw>
 			</div>
 			{editor && <SidePanel editor={editor} />}
+			{/* Pop-out A/V host: renders nothing here (only a portal into the
+			    child window while popped), so it doesn't affect the split layout. */}
+			{editor && <AvPopoutHost editor={editor} />}
 			{wasKicked && (
 				<div
 					style={{
