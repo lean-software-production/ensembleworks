@@ -415,6 +415,22 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 				captureCell()
 			})
 			.catch(captureCell)
+		// The symbols fallback needs the same treatment: canvas fillText neither
+		// waits for web fonts nor reliably triggers a unicode-range download, and
+		// the WebGL atlas caches whatever it first rasterised (tofu). Force the
+		// load, then discard the atlas so PUA glyphs re-rasterise from the real
+		// font. Grid untouched — the fallback never supplies the measured cell.
+		document.fonts
+			.load('16px "Symbols Nerd Font Mono"')
+			.then(() => {
+				if (disposed) return
+				try {
+					term.clearTextureAtlas()
+				} catch {
+					/* renderer variance */
+				}
+			})
+			.catch(() => {})
 		// Safety net: capture from whatever font is active if the load stalls.
 		const cellFallbackTimer = setTimeout(captureCell, 1500)
 

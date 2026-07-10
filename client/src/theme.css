@@ -19,7 +19,8 @@
 }
 
 /* Symbols-only Nerd Font fallback for terminal glyphs (powerline, devicons —
-   ryanoasis/nerd-fonts NerdFontsSymbolsOnly release, SIL OFL). Listed AFTER
+   ryanoasis/nerd-fonts NerdFontsSymbolsOnly release, MIT — see
+   /fonts/LICENSE-SymbolsNerdFont.txt). Listed AFTER
    JetBrains Mono in --wm-mono so the primary font's metrics — and therefore
    the terminal's measured cell and deterministic grid — are untouched.
    unicode-range limits the download to sessions that actually hit the
