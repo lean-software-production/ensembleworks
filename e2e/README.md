@@ -16,7 +16,7 @@ and the implementation plan,
 
 ## Commands (run from `e2e/`)
 
-- `bunx playwright test --project=e2e` — smoke, seed, feel, multiplayer, visual
+- `bunx playwright test --project=e2e` — smoke, seed, feel, multiplayer, visual, canvas-v2 (Agent API v2 HTTP smoke)
 - `bunx playwright test --project=perf` — perf scenarios (sanity floor only, no budgets yet)
 - `EW_CAPTURE=1 bunx playwright test --project=e2e -g feel` — rewrite `goldens/feel.json`
 - `EW_CAPTURE=1 bunx playwright test --project=perf` — rewrite `baselines/tldraw-perf.json`

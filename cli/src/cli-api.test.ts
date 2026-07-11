@@ -135,7 +135,7 @@ let stickyId: string
 	const { out, code } = await run(['tools', 'refresh'])
 	assert.equal(code, 0)
 	const { out: listOut } = await run(['tools', '--json'])
-	assert.equal(JSON.parse(listOut).tools.length, 17, 'the cached manifest has 17 verbs')
+	assert.equal(JSON.parse(listOut).tools.length, 22, 'the cached manifest has 22 verbs (17 + 5 canvas-v2)')
 }
 
 // 8. version prints the CLI + server strings.

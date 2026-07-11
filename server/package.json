@@ -15,6 +15,7 @@
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
+    "@ensembleworks/canvas-model": "*",
     "@ensembleworks/contracts": "*",
     "@tldraw/sync-core": "5.1.0",
     "@tldraw/tlschema": "5.1.0",
