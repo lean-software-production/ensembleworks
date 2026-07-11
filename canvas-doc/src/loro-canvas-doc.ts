@@ -88,7 +88,21 @@ export class LoroCanvasDoc implements CanvasDoc {
     const n = this.nodeByShapeId(id)
     if (n) this.tree.delete(n.id)
   }
-  reparent(_id: string, _parentId: string, _index?: number): void { throw new Error('C3') }
+  reparent(id: string, parentId: string, index?: number): void {
+    const node = this.nodeByShapeId(id)
+    if (!node) return
+    // Resolve the target and perform the tree move FIRST: Loro's native cycle
+    // guard throws if parentId names a descendant of id, and we must not touch
+    // data.parentId if that happens.
+    if (parentId.startsWith('page:')) {
+      this.tree.move(node.id, undefined, index)
+    } else {
+      const parent = this.nodeByShapeId(parentId)
+      if (!parent) throw new Error(`reparent: unknown parent ${parentId}`)
+      this.tree.move(node.id, parent.id, index)
+    }
+    node.data.set('parentId', parentId)
+  }
   getText(_id: string): string { throw new Error('C4') }
   setText(_id: string, _t: string): void { throw new Error('C4') }
 
