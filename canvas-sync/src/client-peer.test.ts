@@ -100,6 +100,23 @@ const normalize = (m: CanvasDocument) => ({
     clientB.doc.listShapes().some((s) => s.id === 'shape:while-b-offline'),
     'B also caught up on what it missed while offline',
   )
+  // The still-connected third party: B's backfill Update must flow past the
+  // server to A via the raw-delta relay (server-peer's broadcast(frame, from)).
+  assert.ok(
+    clientA.doc.listShapes().some((s) => s.id === 'shape:b-offline-edit'),
+    "B's offline edit reached A via server relay",
+  )
+  // Full three-way convergence: A == server == B, normalized.
+  assert.deepEqual(
+    normalize(dumpModel(clientA.doc)),
+    normalize(dumpModel(server.doc)),
+    'A and the server hold identical normalized state after the reconnect round',
+  )
+  assert.deepEqual(
+    normalize(dumpModel(clientB.doc)),
+    normalize(dumpModel(server.doc)),
+    'B and the server hold identical normalized state after the reconnect round',
+  )
   assert.deepEqual(checkInvariants(dumpModel(server.doc)), [], 'converged server state is invariant-clean')
 }
 
