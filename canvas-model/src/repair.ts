@@ -1,4 +1,4 @@
-import { type CanvasDocument, makeDocument } from './document.js'
+import { type CanvasDocument, type Page, makeDocument } from './document.js'
 import { checkInvariants, type InvariantRule } from './invariants.js'
 
 export type RepairOp =
@@ -20,11 +20,29 @@ function opFor(rule: InvariantRule, id: string): RepairOp {
   }
 }
 
+// The canonical root page every reparentToRoot targets: the lexicographically
+// SMALLEST page id, chosen explicitly. Repair must be a pure function of
+// converged state, so the target can't depend on container iteration order
+// (e.g. LoroMap.keys() happens to converge sorted today, but that's an
+// undocumented Loro internal — nothing pins it). Both applyRepairToModel and
+// LoroCanvasDoc.repair() use this helper so the two can't drift.
+export function canonicalPageId(pages: readonly Page[]): Page['id'] | undefined {
+  return pages.map((p) => p.id).sort((a, b) => a.localeCompare(b))[0]
+}
+
 // Pure: identical input ⇒ identical plan on every peer. Sorted by (op,id) so the
 // order is stable regardless of input order or which peer computes it.
 export function repairPlan(doc: CanvasDocument): RepairOp[] {
   const ops: RepairOp[] = []
-  for (const v of checkInvariants(doc)) ops.push(opFor(v.rule, v.id))
+  // Zero-page docs: orphans are unrepairable (no target); the violation is
+  // left standing rather than emitting a non-converging op (reparenting to a
+  // made-up page id would leave the shape just as orphaned, forever).
+  const canReparent = doc.pages.length > 0
+  for (const v of checkInvariants(doc)) {
+    const o = opFor(v.rule, v.id)
+    if (o.op === 'reparentToRoot' && !canReparent) continue
+    ops.push(o)
+  }
   // Dedup by id: an invalid shape flagged both validProps and noOrphans drops (dropShape wins over reparent).
   const byId = new Map<string, RepairOp>()
   for (const o of ops) {
@@ -48,7 +66,10 @@ export function applyRepairToModel(doc: CanvasDocument, plan: RepairOp[]): Canva
     grew = false
     for (const s of doc.shapes) if (!dropAll.has(s.id) && dropAll.has(s.parentId)) { dropAll.add(s.id); grew = true }
   }
-  const pageId = doc.pages[0]?.id ?? 'page:orphans'
+  // The 'page:orphans' fallback is unreachable when `plan` comes from
+  // repairPlan (it emits no reparentToRoot ops for a zero-page doc); kept as
+  // dead-code safety for hand-built plans.
+  const pageId = canonicalPageId(doc.pages) ?? 'page:orphans'
   const shapes = doc.shapes
     .filter((s) => !dropAll.has(s.id))
     .map((s) => (toRoot.has(s.id) ? { ...s, parentId: pageId } : s))

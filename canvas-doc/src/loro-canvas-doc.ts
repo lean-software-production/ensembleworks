@@ -1,5 +1,5 @@
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
-import { makeDocument, repairPlan, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
+import { canonicalPageId, makeDocument, repairPlan, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
 import type { CanvasDoc, ImportResult } from './canvas-doc.js'
 
 // Node.data layout: we store the whole model shape envelope as flat keys on the
@@ -183,13 +183,30 @@ export class LoroCanvasDoc implements CanvasDoc {
   repair(): RepairOp[] {
     const model = makeDocument({ pages: this.listPages(), shapes: this.listShapes(), bindings: this.listBindings() })
     const plan = repairPlan(model)
+    // Same-pass binding cascade: dropShape deletes the shape's whole subtree,
+    // so a binding whose endpoint is in that subtree becomes dangling MID-pass
+    // (it wasn't dangling when the plan was computed, so the plan has no
+    // deleteBinding op for it). applyRepairToModel filters those bindings out
+    // via its dropAll cascade; delete them here too so a SINGLE repair() call
+    // converges to the same state — not only the second.
+    const dropAll = new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id))
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const s of model.shapes) if (!dropAll.has(s.id) && dropAll.has(s.parentId)) { dropAll.add(s.id); grew = true }
+    }
     for (const o of plan) {
       if (o.op === 'deleteBinding') this.deleteBinding(o.id)
       else if (o.op === 'dropShape') this.deleteShape(o.id) // cascade + text cleanup
       else if (o.op === 'reparentToRoot') {
-        const pageId = model.pages[0]?.id ?? 'page:orphans'
+        // 'page:orphans' is unreachable: repairPlan emits no reparentToRoot
+        // ops for a zero-page doc (dead-code safety only).
+        const pageId = canonicalPageId(model.pages) ?? 'page:orphans'
         this.reparent(o.id, pageId) // page id ⇒ Loro root
       }
+    }
+    for (const b of model.bindings) {
+      if (dropAll.has(b.fromId) || dropAll.has(b.toId)) this.deleteBinding(b.id)
     }
     return plan
   }

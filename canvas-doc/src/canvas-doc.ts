@@ -69,12 +69,16 @@ export interface CanvasDoc {
   import(bytes: Uint8Array): ImportResult
   /**
    * Compute the deterministic repairPlan (canvas-model) from this doc's own
-   * converged state and apply it: reparent orphans/cycle members to page
-   * root, delete dangling bindings, drop shapes with invalid props (cascade).
-   * Pure function of the converged model, so every peer that calls repair()
-   * on the same state computes and applies the identical plan — no
-   * coordination needed. Idempotent: calling repair() again on an
-   * already-clean doc returns []. Caller must commit() after to persist.
+   * converged state and apply it: reparent orphans/cycle members to the
+   * canonical page root (lexicographically smallest page id — see
+   * canonicalPageId), delete dangling bindings, drop shapes with invalid
+   * props (cascades to their subtree AND to bindings whose endpoint drops in
+   * the same pass). Pure function of the converged model, so every peer that
+   * calls repair() on the same state computes and applies the identical plan
+   * — no coordination needed. Idempotent: calling repair() again on an
+   * already-clean doc returns []. Zero-page docs: orphans are unrepairable
+   * (no target page) — the violation is left standing rather than looping on
+   * a non-converging op. Caller must commit() after to persist.
    */
   repair(): RepairOp[]
   subscribe(listener: () => void): () => void

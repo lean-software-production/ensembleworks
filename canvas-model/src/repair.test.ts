@@ -34,4 +34,33 @@ const repaired = applyRepairToModel(doc, plan)
 assert.deepEqual(checkInvariants(repaired), [])
 assert.deepEqual(repairPlan(repaired), [], 'repair is idempotent — a repaired doc needs no repair')
 
+// Canonical page is EXPLICIT, not iteration-order luck: pages listed in
+// non-sorted order (page:z first) — the orphan must land on the
+// lexicographically smallest page id (page:a) on every peer.
+const twoPage = makeDocument({
+  pages: [{ id: 'page:z', name: 'Z' }, { id: 'page:a', name: 'A' }],
+  shapes: [{ id: 'shape:orphan', kind: 'note', parentId: 'shape:ghost', props: {}, ...base() } as any],
+  bindings: [],
+})
+const twoPagePlan = repairPlan(twoPage)
+assert.deepEqual(twoPagePlan, [{ op: 'reparentToRoot', id: 'shape:orphan' }])
+const twoPageRepaired = applyRepairToModel(twoPage, twoPagePlan)
+assert.equal(
+  twoPageRepaired.byId.get('shape:orphan')!.parentId,
+  'page:a',
+  'orphan re-roots to the lexicographically smallest page id, not pages[0]',
+)
+assert.deepEqual(checkInvariants(twoPageRepaired), [])
+
+// Zero-page doc: orphans are unrepairable (no target page). repairPlan emits
+// NO reparentToRoot op — checkInvariants still reports the orphan, and that's
+// the honest outcome: a standing violation, not a forever-non-converging op.
+const noPages = makeDocument({
+  pages: [],
+  shapes: [{ id: 'shape:orphan', kind: 'note', parentId: 'shape:ghost', props: {}, ...base() } as any],
+  bindings: [],
+})
+assert.deepEqual(repairPlan(noPages), [], 'zero-page doc: no non-converging reparent op emitted')
+assert.ok(checkInvariants(noPages).some((v) => v.rule === 'noOrphans'), 'the orphan violation stands — unrepairable')
+
 console.log('ok: repair (model)')
