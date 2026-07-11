@@ -29,6 +29,19 @@ const cycle = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [
 ], bindings: [] } as any)
 assert.ok(checkInvariants(cycle).some((v) => v.rule === 'noCycles'))
 
+// 3-cycle a→b→c→a plus descendant d→a: every affected shape gets its own
+// noCycles violation (once per shape, not per cycle).
+const cycle3 = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [
+  { id: 'shape:a', kind: 'frame', parentId: 'shape:b', index: 'a1', x: 0, y: 0, props: { w: 1, h: 1 }, ...base() } as any,
+  { id: 'shape:b', kind: 'frame', parentId: 'shape:c', index: 'a1', x: 0, y: 0, props: { w: 1, h: 1 }, ...base() } as any,
+  { id: 'shape:c', kind: 'frame', parentId: 'shape:a', index: 'a1', x: 0, y: 0, props: { w: 1, h: 1 }, ...base() } as any,
+  { id: 'shape:d', kind: 'note', parentId: 'shape:a', index: 'a1', x: 0, y: 0, props: {}, ...base() } as any,
+], bindings: [] } as any)
+assert.deepEqual(
+  checkInvariants(cycle3).filter((v) => v.rule === 'noCycles').map((v) => v.id).sort(),
+  ['shape:a', 'shape:b', 'shape:c', 'shape:d'],
+)
+
 // Dangling binding.
 const dangling = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [
   { id: 'shape:ar', kind: 'arrow', parentId: 'page:p', index: 'a1', x: 0, y: 0, props: {}, ...base() } as any,

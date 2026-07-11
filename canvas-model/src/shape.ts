@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { ShapeId, ParentId } from './ids.js'
+import { shapeIdField, parentIdField, type ShapeId, type ParentId } from './ids.js'
 
 // The shape kinds a room can contain: tldraw defaults we use + image + the six
 // custom HTML-box shapes (contracts/src/shapes.ts).
@@ -31,16 +31,12 @@ const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   terminal: box, iframe: box, neko: box, roadmap: box, screenshare: box, 'file-viewer': box,
 }
 
-// Branded id fields: template literals so Shape['id'] / Shape['parentId'] infer
-// as the branded types from ids.ts, not plain string.
-const idField = z.templateLiteral(['shape:', z.string()])
-const parentField = z.union([z.templateLiteral(['shape:', z.string()]), z.templateLiteral(['page:', z.string()])])
-
 // The strict envelope shared by every shape. props is refined per-kind below.
+// Branded id fields come from ids.ts so the prefix rules live in one module.
 const envelope = z.object({
-  id: idField,
+  id: shapeIdField,
   kind: z.enum(SHAPE_KINDS),
-  parentId: parentField,
+  parentId: parentIdField,
   index: z.string().min(1),          // fractional-index string (z-order), kept verbatim
   x: z.number(),
   y: z.number(),
