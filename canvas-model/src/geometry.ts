@@ -1,17 +1,39 @@
 import { type CanvasDocument } from './document.js'
+import { isPageId, type PageId } from './ids.js'
 import { type Shape } from './shape.js'
 
 export interface Bounds { minX: number; minY: number; maxX: number; maxY: number }
 
 const DEFAULTS: Partial<Record<Shape['kind'], { w: number; h: number }>> = {
-  note: { w: 200, h: 200 }, geo: { w: 220, h: 120 }, frame: { w: 800, h: 600 },
+  geo: { w: 220, h: 120 }, frame: { w: 800, h: 600 },
   text: { w: 200, h: 40 }, image: { w: 200, h: 200 },
 }
+// Rendered size, clamped to >= 0 so inverted bounds can never reach downstream
+// rectangle math. Notes never store w/h in tldraw: their real rendered size is
+// 200*scale × (200+growY)*scale. Other kinds: props.w/h → per-kind default →
+// 100, times props.scale (tldraw's uniform render multiplier) when present.
 function size(s: Shape): { w: number; h: number } {
   const p = s.props as any
+  const scale = typeof p?.scale === 'number' ? p.scale : 1
+  if (s.kind === 'note') {
+    const growY = typeof p?.growY === 'number' ? p.growY : 0
+    return { w: Math.max(0, 200 * scale), h: Math.max(0, (200 + growY) * scale) }
+  }
   const w = typeof p?.w === 'number' ? p.w : DEFAULTS[s.kind]?.w ?? 100
   const h = typeof p?.h === 'number' ? p.h : DEFAULTS[s.kind]?.h ?? 100
-  return { w, h }
+  return { w: Math.max(0, w * scale), h: Math.max(0, h * scale) }
+}
+
+// The page a shape ultimately lives on, walking parents with the same guard<50
+// tolerance as pageOrigin (malformed trees yield undefined, not an error).
+export function pageIdOf(doc: CanvasDocument, s: Shape): PageId | undefined {
+  let cur: Shape | undefined = s
+  let guard = 0
+  while (cur && guard++ < 50) {
+    if (isPageId(cur.parentId)) return cur.parentId
+    cur = doc.byId.get(cur.parentId)
+  }
+  return undefined
 }
 
 // Page-space top-left: sum this shape's x/y with every ancestor shape's x/y.
