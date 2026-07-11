@@ -554,7 +554,7 @@ rollout.
 5. **Terminal sandbox user.** On prod boxes the terminal gateway runs as the app
    user but drops each shell to a less-privileged **`ensembleworks-agent`** user
    (`TERM_RUN_AS` in the term unit), so canvas terminals can't read the app user's
-   home — releases, `build.env`, the neko/LiveKit secrets. The gateway calls a
+   home — releases, `sync.env`/`storage.env`, the neko/LiveKit secrets. The gateway calls a
    fixed launcher via sudo; when the sandbox user is present, `deploy.sh` also puts
    the `ensembleworks` CLI (and its `ew` symlink) on its PATH and seeds
    `~ensembleworks-agent/AGENTS.md` +
