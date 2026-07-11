@@ -9,8 +9,11 @@
  * The engine that actually runs the tmux stack lives in dev-main.mjs and runs
  * INSIDE the container (or under ENSEMBLEWORKS_NATIVE=1). See resolveMode().
  */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
 import { spawnSync } from 'node:child_process'
-import { attachInstructions, forwardArgv, workspaceDirFor } from './dev-lib.mjs'
+import { attachInstructions, forwardArgv, parsePortOffset, portsFor, workspaceDirFor } from './dev-lib.mjs'
+import { probePort } from './dev-net.mjs'
 
 /** @param {string} msg  narrate to stderr (keeps stdout clean for --json) */
 function narrate(msg) {
@@ -61,11 +64,45 @@ function resolveMainRepoDir(repoDir) {
 }
 
 /**
+ * The stack's port offset as configured on the host: env > .local/port-offset.
+ * Returns null when neither is set (auto-pick may then choose one on `up`).
+ * Dies on an invalid value.
+ * @param {string} mainRepoDir
+ * @returns {number | null}
+ */
+function configuredOffset(mainRepoDir) {
+	const file = path.join(mainRepoDir, '.local', 'port-offset')
+	const raw =
+		process.env.ENSEMBLEWORKS_PORT_OFFSET ||
+		(existsSync(file) ? readFileSync(file, 'utf8').trim() : '')
+	if (!raw) return null
+	const n = parsePortOffset(raw)
+	if (n === null)
+		die(`invalid port offset '${raw}' (ENSEMBLEWORKS_PORT_OFFSET or .local/port-offset) — use a non-negative integer, e.g. 100`)
+	return n
+}
+
+/**
+ * First free offset in {0, 100, …, 900}: free = neither the edge (caddy) nor
+ * LiveKit's ICE-TCP host port answers on loopback. UDP isn't probed — it rides
+ * the same offset. Used only when no offset is configured and no container is
+ * already running for this checkout.
+ * @returns {Promise<number | null>}
+ */
+async function pickFreeOffset() {
+	for (const cand of [0, 100, 200, 300, 400, 500, 600, 700, 800, 900]) {
+		const p = portsFor(cand)
+		if (!(await probePort(p.caddy)) && !(await probePort(p.livekitTcp))) return cand
+	}
+	return null
+}
+
+/**
  * @param {string} repoDir  absolute host path to the repo
  * @param {string[]} argv    process.argv.slice(2) — subcommand + flags
- * @returns {never}
+ * @returns {Promise<never>}
  */
-export function runController(repoDir, argv) {
+export async function runController(repoDir, argv) {
 	const cmd = argv[0]
 	const mainRepoDir = resolveMainRepoDir(repoDir)
 	const workspaceDir = workspaceDirFor(mainRepoDir)
@@ -79,12 +116,39 @@ export function runController(repoDir, argv) {
 	const dc = findDevcontainer(mainRepoDir)
 
 	if (cmd === 'up') {
-		if (dc) narrate(`devcontainer '${dc.name}' already running — devcontainer up is idempotent`)
 		if (!onPath('docker')) die('docker is not on PATH — install Docker to run the devcontainer')
 		if (!onPath('devcontainer'))
 			die('the devcontainer CLI is required — install it: npm i -g @devcontainers/cli')
+		let offset = configuredOffset(mainRepoDir)
+		if (dc) {
+			narrate(`devcontainer '${dc.name}' already running — devcontainer up is idempotent`)
+			offset ??= 0 // ports were published at create; never re-pick under a live container
+		} else if (offset === null) {
+			offset = await pickFreeOffset()
+			if (offset === null)
+				die('no free port offset in 0..900 (probed caddy + livekit-tcp) — set ENSEMBLEWORKS_PORT_OFFSET')
+			if (offset !== 0) {
+				const f = path.join(mainRepoDir, '.local', 'port-offset')
+				mkdirSync(path.dirname(f), { recursive: true })
+				writeFileSync(f, `${offset}\n`)
+				narrate(`default ports busy — picked port offset ${offset} (persisted to .local/port-offset)`)
+			}
+		}
+		const p = portsFor(offset)
+		if (offset) narrate(`port offset ${offset} → edge http://localhost:${p.caddy}`)
 		narrate(`starting → devcontainer up --workspace-folder ${mainRepoDir}`)
-		const r = spawnSync('devcontainer', ['up', '--workspace-folder', mainRepoDir], { stdio: 'inherit' })
+		const r = spawnSync('devcontainer', ['up', '--workspace-folder', mainRepoDir], {
+			stdio: 'inherit',
+			// Consumed by ${localEnv:…} substitutions in .devcontainer/devcontainer.json
+			// (published host ports) and containerEnv (the engine's offset).
+			env: {
+				...process.env,
+				ENSEMBLEWORKS_PORT_OFFSET: String(offset),
+				ENSEMBLEWORKS_HOSTPORT_CADDY: String(p.caddy),
+				ENSEMBLEWORKS_HOSTPORT_LIVEKIT_TCP: String(p.livekitTcp),
+				ENSEMBLEWORKS_HOSTPORT_LIVEKIT_UDP: String(p.livekitUdp),
+			},
+		})
 		process.exit(r.status ?? 0)
 	}
 
@@ -101,7 +165,8 @@ export function runController(repoDir, argv) {
 	if (cmd === 'attach') {
 		if (!dc) die('no devcontainer running — start it with `bin/dev up` first')
 		narrate(`devcontainer '${dc.name}' running — printing attach instructions (attach never nests tmux)`)
-		process.stdout.write(`${attachInstructions(dc.id, 'workspace')}\n`)
+		const offset = configuredOffset(mainRepoDir) ?? 0
+		process.stdout.write(`${attachInstructions(dc.id, offset ? `workspace-${offset}` : 'workspace')}\n`)
 		process.exit(0)
 	}
 
@@ -142,7 +207,7 @@ export function runController(repoDir, argv) {
 function usage() {
 	return `bin/dev — drives the EnsembleWorks devcontainer from the host
 
-  bin/dev up                 start the devcontainer (devcontainer up)
+  bin/dev up                 start the devcontainer (devcontainer up; picks a free port offset if the defaults are busy)
   bin/dev down               stop the whole devcontainer (docker stop)
   bin/dev status [--json]    forward into the container (agents: --json)
   bin/dev logs <svc> [-...]  forward one service's scrollback

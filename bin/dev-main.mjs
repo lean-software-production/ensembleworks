@@ -66,9 +66,10 @@ const tmuxConf = path.join(repoDir, 'deploy', 'tmux-ensembleworks.conf')
 // The expected usage is from the HOST: there bin/dev drives the devcontainer
 // (up starts it; status/logs/… forward into it) and needs none of the engine's
 // Bun/tmux/caddy machinery — so dispatch to the controller here, before the
-// Bun-version gate and dev.env sourcing below. runController() never returns.
+// Bun-version gate and dev.env sourcing below. runController() never resolves
+// — every path exits the process — so nothing below this block runs for it.
 if (resolveMode(process.env) === 'controller') {
-	runController(repoDir, process.argv.slice(2))
+	await runController(repoDir, process.argv.slice(2))
 }
 // Engine mode (inside the container, or ENSEMBLEWORKS_NATIVE=1 on the host):
 process.stderr.write(
