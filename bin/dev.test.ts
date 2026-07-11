@@ -8,6 +8,7 @@ import {
 	buildServices,
 	forwardArgv,
 	hold,
+	livekitDevConfigYaml,
 	parseDotEnv,
 	parsePortOffset,
 	parseToolVersions,
@@ -364,7 +365,7 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 		lk.cmd.includes("--config '/home/u/.local/share/ensembleworks-100/livekit-dev.generated.yaml'"),
 		'offset livekit uses the generated config (dev mode has fixed ports)',
 	)
-	assert.ok(!lk.cmd.includes('--dev'), 'not dev mode when offset');
+	assert.ok(!lk.cmd.includes('--dev'), 'not dev mode when offset')
 	const discord = svc(s, 'discord')
 	assert.ok(discord.cmd.includes("PORT='8890'"), 'discord PORT shifted')
 	assert.ok(discord.cmd.includes("SYNC_BASE='http://127.0.0.1:8888'"), 'discord dials shifted sync')
@@ -406,6 +407,19 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 	assert.ok(attachInstructions('abc', 'workspace').includes('tmux attach -t workspace'))
 	assert.ok(attachInstructions('abc', 'workspace-100').includes('tmux attach -t workspace-100'))
 	console.log('ok: attachInstructions session')
+}
+
+// livekitDevConfigYaml: shifted ports + dev keys; node_ip only when known.
+{
+	const y = livekitDevConfigYaml(portsFor(100), '192.168.1.194')
+	assert.ok(y.includes('port: 7980'), 'signaling port')
+	assert.ok(y.includes('tcp_port: 7981'), 'ICE-TCP port')
+	assert.ok(y.includes('udp_port: 7982'), 'UDP mux — must match the published host port')
+	assert.ok(y.includes('node_ip: 192.168.1.194'), 'advertised media IP')
+	assert.ok(y.includes('devkey: secret'), 'dev keys inline (matches the sync env)')
+	const local = livekitDevConfigYaml(portsFor(100), null)
+	assert.ok(!local.includes('node_ip'), 'no node_ip line when unknown (localhost voice)')
+	console.log('ok: livekitDevConfigYaml')
 }
 
 console.log('all dev-lib tests passed')
