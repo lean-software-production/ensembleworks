@@ -354,4 +354,69 @@ function wireFakeClient(t: Transport, peerId: bigint): LoroCanvasDoc {
   )
 }
 
+// (d) REPAIR-TRIGGERING variant (carried-forward hardening): a client Update
+// that induces a repair delta — same bind-to-concurrently-deleted-shape
+// construction as scenario 4 — must still persist BEFORE BOTH
+// observer-visible legs: the repair-delta broadcast (doc.commit() inside the
+// `if (r.changed)` block) AND the raw-frame relay that follows it. A prior
+// reviewer probe confirmed this passes on current code; pinning it in-suite
+// so a future reorder of onFrame can't silently violate durable-first.
+{
+  const seed = LoroCanvasDoc.create({ peerId: 41n })
+  seed.putPage({ id: 'page:p', name: 'P' })
+  seed.putShape(shape('shape:a'))
+  seed.putShape(shape('shape:b'))
+  seed.commit()
+  const seedSnapshot = seed.exportSnapshot()
+  const seedVersion = seed.versionBytes()
+
+  const seq: string[] = []
+  const server = new SyncServerPeer({
+    peerId: 40n,
+    initialSnapshot: seedSnapshot,
+    onUpdatePayload: () => seq.push('persist'),
+  })
+  const [senderServerEnd, senderClientEnd] = makePair()
+  const [observerServerEnd, observerClientEnd] = makePair()
+  server.connect(senderServerEnd)
+  server.connect(observerServerEnd)
+  observerClientEnd.onMessage(() => seq.push('observer-recv'))
+
+  // Two peers fork from the SAME seed and diverge concurrently (scenario 4's
+  // pattern): one deletes shape:b, the other adds a binding pointing AT
+  // shape:b (which still exists in ITS OWN view — not dangling when written).
+  const docDelete = LoroCanvasDoc.fromSnapshot(seedSnapshot, { peerId: 42n })
+  docDelete.deleteShape('shape:b')
+  docDelete.commit()
+  const deleteDelta = docDelete.exportUpdate(seedVersion)
+
+  const docBind = LoroCanvasDoc.fromSnapshot(seedSnapshot, { peerId: 43n })
+  docBind.putBinding({ id: 'binding:ab', fromId: 'shape:a', toId: 'shape:b', props: {}, meta: {} })
+  docBind.commit()
+  const bindDelta = docBind.exportUpdate(seedVersion)
+
+  // The delete lands first: changed, but no violation exists YET (no binding
+  // references shape:b on the server) — persists and relays, but repair has
+  // nothing to do, so there is no repair-delta broadcast.
+  senderClientEnd.send(encode(Frame.Update, deleteDelta))
+  assert.deepEqual(
+    seq,
+    ['persist', 'observer-recv'],
+    'the delete alone: persist + raw relay only — repair had nothing to repair yet',
+  )
+
+  // Isolate the REPAIR-TRIGGERING update: the binding merges in pointing at
+  // an ALREADY-DELETED shape on the server -> repair sweeps the dangling
+  // binding -> commit() fires a genuine repair-delta broadcast, in addition
+  // to the raw relay of this same Update.
+  seq.length = 0
+  senderClientEnd.send(encode(Frame.Update, bindDelta))
+  assert.deepEqual(
+    seq,
+    ['persist', 'observer-recv', 'observer-recv'],
+    'persist fires BEFORE both observer-visible legs: the repair-delta broadcast AND the raw relay',
+  )
+  assert.deepEqual(server.doc.listBindings(), [], 'the dangling binding was swept by repair (scenario 4 invariant still holds)')
+}
+
 console.log('ok: server-peer')
