@@ -1,0 +1,16 @@
+{
+  "name": "@ensembleworks/e2e",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "bunx tsc --noEmit",
+    "test": "bunx playwright test --project=e2e",
+    "perf": "bunx playwright test --project=perf"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.53.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
