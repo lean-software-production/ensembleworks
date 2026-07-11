@@ -21,8 +21,26 @@ export class LoroCanvasDoc implements CanvasDoc {
   }
 
   // id → Loro node, resolved from the tree each call (cheap; correctness over caching).
+  // PERF: an id→node index was suggested by review but deferred — revisit only if
+  // this O(n) scan becomes a measured problem at real scale.
   protected nodeByShapeId(id: string): LoroTreeNode | undefined {
     return this.tree.nodes().find((n) => !n.isDeleted() && n.data.get('shapeId') === id)
+  }
+
+  // Make the Loro tree the single source of truth for hierarchy: move `n` so its
+  // real tree parent matches `parentId`. A page id means "root". If parentId
+  // names a shape that has no node yet (bulk load inserting children before
+  // parents), leave `n` where it is — its data.parentId is retained and a later
+  // reparent pass (see bridge.ts loadModel) fixes placement.
+  private placeInTree(n: LoroTreeNode, parentId: string): void {
+    const current = n.parent()
+    if (parentId.startsWith('page:')) {
+      if (current) this.tree.move(n.id, undefined)
+      return
+    }
+    const parent = this.nodeByShapeId(parentId)
+    if (!parent) return
+    if (!current || current.id !== parent.id) this.tree.move(n.id, parent.id)
   }
 
   private static PROP_KEY = '__props'
@@ -58,6 +76,7 @@ export class LoroCanvasDoc implements CanvasDoc {
     d.set('index', s.index); d.set('x', s.x); d.set('y', s.y)
     d.set('rotation', s.rotation); d.set('isLocked', s.isLocked); d.set('opacity', s.opacity)
     d.set('meta', s.meta as any); d.set(LoroCanvasDoc.PROP_KEY, s.props as any)
+    this.placeInTree(n, s.parentId)
   }
   updateProps(id: string, props: Record<string, unknown>): void {
     const n = this.nodeByShapeId(id)

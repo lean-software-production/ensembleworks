@@ -52,4 +52,20 @@ src.commit()
 const dst = LoroCanvasDoc.fromSnapshot(src.exportSnapshot(), { peerId: 5n })
 assert.deepEqual(dst.getShape('shape:deep'), deep, 'deep meta/props equal after snapshot round-trip')
 
+// --- putShape places the node in the REAL tree (single source of truth) ---
+const treeDoc = LoroCanvasDoc.create({ peerId: 6n })
+treeDoc.putShape(shape('shape:f', { kind: 'frame', parentId: 'page:p', props: { w: 10, h: 10 } }) as any)
+treeDoc.putShape(shape('shape:c', { parentId: 'shape:f' }) as any)
+treeDoc.commit()
+assert.deepEqual(treeDoc.listShapes().map((s) => s.id).sort(), ['shape:c', 'shape:f'])
+// deleteShape cascades the real subtree: deleting the frame removes its child too.
+treeDoc.deleteShape('shape:f')
+assert.deepEqual(treeDoc.listShapes(), [], 'cascade delete removed the child along with the parent')
+
+// --- bulk-load order resilience: child put before its parent exists ---
+const bulkDoc = LoroCanvasDoc.create({ peerId: 7n })
+assert.doesNotThrow(() => bulkDoc.putShape(shape('shape:child', { parentId: 'shape:notyet' }) as any))
+bulkDoc.commit()
+assert.equal(bulkDoc.getShape('shape:child')!.parentId, 'shape:notyet', 'data.parentId retained even though the tree node stayed a root')
+
 console.log('ok: crud')
