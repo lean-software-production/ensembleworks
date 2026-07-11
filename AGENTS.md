@@ -27,6 +27,13 @@ drives the devcontainer and forwards commands into it — you never need
   plus the nested-tmux detach caveat; it never nests tmux for you.
 - `bin/dev down` — stops the whole devcontainer (`docker stop`).
 - `bin/dev --help` / `-h` — usage.
+- Multiple stacks per host: every dev port shifts by `ENSEMBLEWORKS_PORT_OFFSET`
+  (persisted per-checkout in `.local/port-offset`; `bin/dev up` auto-picks
+  100/200/… when the defaults are busy and narrates the edge URL). Offset
+  stacks use tmux session `workspace-<offset>` and data dir
+  `~/.local/share/ensembleworks-<offset>`. Use separate clones (not linked
+  worktrees — the controller targets the main checkout). `bin/canvas` needs
+  `CANVAS_URL=http://localhost:<8788+offset>` against an offset stack.
 
 Inside the container (the Dockerfile sets `ENSEMBLEWORKS_IN_DEVCONTAINER=1`)
 `bin/dev` is the *engine* that actually manages the tmux stack — the same

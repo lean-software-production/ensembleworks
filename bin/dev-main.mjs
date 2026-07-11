@@ -55,6 +55,9 @@ process.stderr.write(
 // ---- port offset: env > .local/port-offset (written by the host controller's
 // auto-pick; bind-mounted, so both sides read the same file) > 0. Everything
 // per-stack hangs off it: the port map, the tmux session, the data dir.
+// dev.env can't set this: it's resolved (right here) before dev.env is sourced
+// below, and the host controller never sources dev.env at all — use the env
+// var or .local/port-offset instead.
 function readLocalPortOffset() {
 	const f = path.join(repoDir, '.local', 'port-offset')
 	try {
