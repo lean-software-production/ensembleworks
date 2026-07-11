@@ -23,6 +23,11 @@ for (const t of allTools) {
 	assert.ok(typeof t.help === 'string' && t.help.length > 0, `no help on ${t.plugin}.${t.id}`)
 	assert.ok(METHODS.includes(t.http.method), `bad method on ${t.plugin}.${t.id}`)
 	assert.ok(t.http.path.startsWith('/api/'), `path must start /api/ on ${t.plugin}.${t.id}`)
+	// No `:param` path segments: the CLI's generic renderer (cli/src/render/args.ts)
+	// emits entry.path verbatim and never substitutes them, so a path-param tool
+	// would silently ship a literal `:id` to the server. Keep key fields in
+	// query/body — this keeps every declared tool CLI-renderable.
+	assert.ok(!/\/:/.test(t.http.path), `path param not renderable by the CLI on ${t.plugin}.${t.id}: ${t.http.path}`)
 }
 
 // 3. (plugin, id) pairs unique; (method, path) pairs unique (GET+POST may share

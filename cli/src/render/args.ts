@@ -102,6 +102,14 @@ function coerce(p: JsonSchemaProp | undefined, raw: string): unknown {
 }
 
 export function buildRequest(entry: ManifestEntry, argv: string[], conn: Conn): Req {
+	// buildRequest emits entry.path VERBATIM — it never substitutes `:param`
+	// segments. A tool declaring one would ship the literal `:id` to the server,
+	// which typically no-ops and reports ok (silent data loss). Fail loud on the
+	// broken declaration; tools carry their key fields as query/body, not the path.
+	if (/\/:/.test(entry.path)) {
+		throw new CliError(`tool ${entry.plugin} ${entry.id} declares an unsupported path param in ${entry.path} (the renderer does not substitute :segments — pass the value as query/body instead)`, 2)
+	}
+
 	const schema = (entry.input ?? {}) as JsonSchema
 	const props = schema.properties ?? {}
 	const slots = positionalSlots(schema)

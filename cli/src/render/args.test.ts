@@ -95,4 +95,16 @@ const conn: Conn = { url: 'http://localhost:8788', room: 'team', auth: { method:
 	assert.deepEqual(req.query, { page: 'page:main', room: 'team' })
 }
 
-console.log('ok: args — positional required-first order, scalar-slot rule, JSON spread, kebab→camel, @file, room inject, method→location')
+// Guard: an unsubstituted `:param` path segment must throw, not silently ship a
+// literal `:id` to the server (which would no-op and report ok). buildRequest
+// does not substitute path params, so no manifest tool may declare one — this is
+// the runtime backstop for the contract-level no-`:`-path invariant (tools.test.ts).
+{
+	const pathParamEntry: ManifestEntry = {
+		plugin: 'discord', id: 'unbind', method: 'DELETE', path: '/api/discord/bindings/:id',
+		help: 'x', input: { type: 'object', properties: { id: { type: 'string' } } }, output: {},
+	}
+	assert.throws(() => buildRequest(pathParamEntry, ['abc'], conn), /path param|:id|substitut/i, 'unsubstituted :param path must throw')
+}
+
+console.log('ok: args — positional required-first order, scalar-slot rule, JSON spread, kebab→camel, @file, room inject, method→location, path-param guard')

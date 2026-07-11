@@ -115,9 +115,14 @@ export function createDiscordRouter(ctx: PluginServerContext): express.Router {
 		res.json({ ok: true, delivered })
 	})
 
-	// DELETE /api/discord/bindings/:id — idempotent removal.
-	router.delete('/api/discord/bindings/:id', async (req, res) => {
-		await ctx.storage.discord.remove(req.params.id)
+	// DELETE /api/discord/bindings?id=<id> — idempotent removal. The id is a query
+	// param, NOT a path segment: the CLI's generic renderer emits GET/DELETE input
+	// as query and never substitutes a `:id`, so a path-param route would silently
+	// no-op (delete nothing, report ok). Missing id is a 400 rather than a no-op.
+	router.delete('/api/discord/bindings', async (req, res) => {
+		const id = String(req.query.id ?? '').trim()
+		if (!id) return void res.status(400).json({ error: 'id' })
+		await ctx.storage.discord.remove(id)
 		res.json({ ok: true })
 	})
 

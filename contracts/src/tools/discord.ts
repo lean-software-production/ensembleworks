@@ -87,7 +87,10 @@ export const discordPost: ToolDef = {
 export const discordBindingsDelete: ToolDef = {
 	plugin: 'discord',
 	id: 'unbind',
-	http: { method: 'DELETE', path: '/api/discord/bindings/:id' },
+	// id is a query param (?id=), never a `:id` path segment — the CLI renderer
+	// emits DELETE input as query and does not substitute path params, so a
+	// path-param route would silently no-op. See cli/src/render/args.ts.
+	http: { method: 'DELETE', path: '/api/discord/bindings' },
 	help: 'Remove a Discord channel binding by id (idempotent).',
 	zodInput: z.object({ id: z.string().describe('the binding id to remove') }),
 	zodOutput: z.object({ ok: z.literal(true) }),
