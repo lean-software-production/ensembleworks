@@ -6,7 +6,10 @@
     "strict": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["node"]
+    "allowImportingTsExtensions": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node", "bun-types"]
   },
   "include": ["playwright.config.ts", "lib/**/*.ts", "tests/**/*.ts", "perf/**/*.ts", "scripts/**/*.ts"]
 }
