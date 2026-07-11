@@ -1,5 +1,5 @@
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
-import type { Binding, Page, Shape } from '@ensembleworks/canvas-model'
+import { makeDocument, repairPlan, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
 import type { CanvasDoc, ImportResult } from './canvas-doc.js'
 
 // Node.data layout: we store the whole model shape envelope as flat keys on the
@@ -176,6 +176,22 @@ export class LoroCanvasDoc implements CanvasDoc {
     // to the engine-agnostic boolean (true iff there are actual pending spans).
     const status = this.doc.import(bytes)
     return { pending: status.pending !== null && status.pending.size > 0 }
+  }
+  // Compute the model inline from this doc's own lists (not via bridge.ts's
+  // dumpModel) to avoid a bridge↔impl import cycle: bridge.ts imports
+  // LoroCanvasDoc for its type, so LoroCanvasDoc must not import bridge.ts back.
+  repair(): RepairOp[] {
+    const model = makeDocument({ pages: this.listPages(), shapes: this.listShapes(), bindings: this.listBindings() })
+    const plan = repairPlan(model)
+    for (const o of plan) {
+      if (o.op === 'deleteBinding') this.deleteBinding(o.id)
+      else if (o.op === 'dropShape') this.deleteShape(o.id) // cascade + text cleanup
+      else if (o.op === 'reparentToRoot') {
+        const pageId = model.pages[0]?.id ?? 'page:orphans'
+        this.reparent(o.id, pageId) // page id ⇒ Loro root
+      }
+    }
+    return plan
   }
   subscribe(listener: () => void): () => void { return this.doc.subscribe(() => listener()) }
   subscribeLocalUpdates(listener: (bytes: Uint8Array) => void): () => void {

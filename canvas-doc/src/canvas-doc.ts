@@ -1,4 +1,4 @@
-import type { Binding, Page, Shape } from '@ensembleworks/canvas-model'
+import type { Binding, Page, RepairOp, Shape } from '@ensembleworks/canvas-model'
 
 /** Result of applying a remote update. `pending` is true when some received
  * ops depend on history this doc hasn't seen yet — the caller should follow
@@ -67,6 +67,16 @@ export interface CanvasDoc {
    * request (send versionBytes() to the source peer) to fill the gap.
    */
   import(bytes: Uint8Array): ImportResult
+  /**
+   * Compute the deterministic repairPlan (canvas-model) from this doc's own
+   * converged state and apply it: reparent orphans/cycle members to page
+   * root, delete dangling bindings, drop shapes with invalid props (cascade).
+   * Pure function of the converged model, so every peer that calls repair()
+   * on the same state computes and applies the identical plan — no
+   * coordination needed. Idempotent: calling repair() again on an
+   * already-clean doc returns []. Caller must commit() after to persist.
+   */
+  repair(): RepairOp[]
   subscribe(listener: () => void): () => void
   /**
    * Fires with the encoded bytes of each locally-committed change (not
