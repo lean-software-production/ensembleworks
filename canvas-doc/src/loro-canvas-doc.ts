@@ -173,5 +173,8 @@ export class LoroCanvasDoc implements CanvasDoc {
   versionBytes(): Uint8Array { return this.doc.oplogVersion().encode() }
   import(bytes: Uint8Array): ImportStatus { return this.doc.import(bytes) }
   subscribe(listener: () => void): () => void { return this.doc.subscribe(() => listener()) }
+  subscribeLocalUpdates(listener: (bytes: Uint8Array) => void): () => void {
+    return this.doc.subscribeLocalUpdates(listener)
+  }
   commit(): void { this.doc.commit() }
 }

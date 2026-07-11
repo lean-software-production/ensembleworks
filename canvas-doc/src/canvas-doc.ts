@@ -59,5 +59,12 @@ export interface CanvasDoc {
   versionBytes(): Uint8Array
   import(bytes: Uint8Array): ImportStatus
   subscribe(listener: () => void): () => void
+  /**
+   * Fires with the encoded bytes of each locally-committed change (not
+   * changes arriving via import() from elsewhere — no echo loop), the
+   * sync-transport hook: forward the bytes to peers so they can import() an
+   * incremental delta instead of re-shipping a snapshot.
+   */
+  subscribeLocalUpdates(listener: (bytes: Uint8Array) => void): () => void
   commit(): void
 }
