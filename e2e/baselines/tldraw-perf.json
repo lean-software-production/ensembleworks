@@ -1,10 +1,10 @@
 {
   "shapes-100": {
-    "loadMs": 1082,
+    "loadMs": 1085,
     "pan": {
       "frames": 119,
       "p50ms": 16.7,
-      "p95ms": 16.7,
+      "p95ms": 16.8,
       "maxms": 16.8,
       "droppedOver25ms": 0
     },
@@ -15,15 +15,15 @@
       "maxms": 16.8,
       "droppedOver25ms": 0
     },
-    "heapMB": 47.4
-  },
-  "_meta": {
-    "engine": "tldraw@5.1.0",
-    "capturedAt": "2026-07-11",
-    "host": "dev-linux"
+    "heapMB": 47.4,
+    "_meta": {
+      "engine": "tldraw@5.1.0",
+      "capturedAt": "2026-07-11T04:28:47.581Z",
+      "host": "zeus-arch"
+    }
   },
   "shapes-1000": {
-    "loadMs": 1881,
+    "loadMs": 1916,
     "pan": {
       "frames": 182,
       "p50ms": 16.7,
@@ -34,10 +34,15 @@
     "zoom": {
       "frames": 123,
       "p50ms": 16.7,
-      "p95ms": 16.8,
+      "p95ms": 16.7,
       "maxms": 16.8,
       "droppedOver25ms": 0
     },
-    "heapMB": 97.4
+    "heapMB": 97.4,
+    "_meta": {
+      "engine": "tldraw@5.1.0",
+      "capturedAt": "2026-07-11T04:28:58.034Z",
+      "host": "zeus-arch"
+    }
   }
 }

@@ -2,6 +2,7 @@
 // no CDP dependency. Inject BEFORE page load; measure around a scenario.
 import type { Page } from '@playwright/test'
 import { mkdirSync, readFileSync, writeFileSync, existsSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 
 export const installSampler = (page: Page) =>
@@ -14,6 +15,9 @@ export const installSampler = (page: Page) =>
 		}
 		requestAnimationFrame(loop)
 	})
+
+// A frame gap over this counts as a dropped/janky frame (~1.5x a 60fps tick).
+const JANK_THRESHOLD_MS = 25
 
 export interface FrameStats {
 	frames: number
@@ -41,16 +45,35 @@ export async function measure(page: Page, scenario: () => Promise<void>): Promis
 		p50ms: Number(pick(0.5).toFixed(2)),
 		p95ms: Number(pick(0.95).toFixed(2)),
 		maxms: Number((sorted[sorted.length - 1] ?? 0).toFixed(2)),
-		droppedOver25ms: deltas.filter((d: number) => d > 25).length,
+		droppedOver25ms: deltas.filter((d: number) => d > JANK_THRESHOLD_MS).length,
 	}
 }
 
 const FILE = path.join(import.meta.dirname, '../baselines/tldraw-perf.json')
 export const capturing = process.env.EW_CAPTURE === '1'
-export function record(key: string, value: unknown) {
+
+// Read the engine version from the client's manifest at capture time — never
+// hardcode provenance, or recaptures would silently stamp stale facts.
+function engineVersion(): string {
+	const pkg = JSON.parse(
+		readFileSync(path.join(import.meta.dirname, '../../client/package.json'), 'utf8'),
+	)
+	return `tldraw@${pkg.dependencies.tldraw}`
+}
+
+// Merge semantics: recapturing one scenario (e.g. via -g) updates only its key.
+// Provenance is therefore PER KEY — a partial recapture must not restamp
+// scenarios it didn't rerun.
+export function record(key: string, value: Record<string, unknown>) {
 	mkdirSync(path.dirname(FILE), { recursive: true })
 	const all = existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')) : {}
-	all[key] = value
-	all._meta = { engine: 'tldraw@5.1.0', capturedAt: '2026-07-11', host: 'dev-linux' }
+	all[key] = {
+		...value,
+		_meta: {
+			engine: engineVersion(),
+			capturedAt: new Date().toISOString(),
+			host: os.hostname(),
+		},
+	}
 	writeFileSync(FILE, JSON.stringify(all, null, 2) + '\n')
 }

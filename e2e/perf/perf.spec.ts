@@ -5,6 +5,10 @@ import { test, expect } from '../lib/fixtures'
 import { shape } from '../lib/seed'
 import { installSampler, measure, record, capturing } from '../lib/perf'
 
+// ~0.5s of frames at 60fps — generous sanity floor tied to wall-clock, not a
+// budget. Only guards that the sampler and scenarios actually ran.
+const MIN_FRAMES_FLOOR = 30
+
 async function seedGrid(room: string, n: number) {
 	const cols = Math.ceil(Math.sqrt(n))
 	const batch: Promise<unknown>[] = []
@@ -36,6 +40,11 @@ for (const n of [100, 1000]) {
 			ed.zoomToFit({ animation: { duration: 0 } })
 		})
 
+		// Known limitation: at 100/1k shapes these pan/zoom runs are vsync-locked
+		// (p50 ≈ p95 ≈ 16.7ms, 0 drops), so the frame metrics carry no
+		// discriminating signal yet — loadMs and heapMB are the informative axes.
+		// Phase 3 should add heavier scenarios (continuous drag of a large
+		// selection, 5k/10k rooms) when engine comparison begins.
 		const pan = await measure(page, async () => {
 			for (let i = 0; i < 60; i++) await page.mouse.wheel(40, 40)
 		})
@@ -46,6 +55,9 @@ for (const n of [100, 1000]) {
 			await page.keyboard.up('Control')
 		})
 
+		// performance.memory is non-standard and quantized by Chromium — adequate
+		// for order-of-magnitude tracking; switch to CDP heap metrics if heap ever
+		// becomes a load-bearing comparison.
 		const heapMB = await page.evaluate(() =>
 			Number((((performance as any).memory?.usedJSHeapSize ?? 0) / 1e6).toFixed(1)),
 		)
@@ -55,7 +67,7 @@ for (const n of [100, 1000]) {
 		if (capturing) record(`shapes-${n}`, result)
 
 		// Sanity floor only — real budgets come with the new engine.
-		expect(pan.frames).toBeGreaterThan(30)
-		expect(zoom.frames).toBeGreaterThan(30)
+		expect(pan.frames).toBeGreaterThan(MIN_FRAMES_FLOOR)
+		expect(zoom.frames).toBeGreaterThan(MIN_FRAMES_FLOOR)
 	})
 }
