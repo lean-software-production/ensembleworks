@@ -1,5 +1,5 @@
-import { LoroDoc, type LoroTree, type LoroTreeNode } from 'loro-crdt'
-import type { Shape } from '@ensembleworks/canvas-model'
+import { LoroDoc, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
+import type { Binding, Page, Shape } from '@ensembleworks/canvas-model'
 import type { CanvasDoc } from './canvas-doc.js'
 
 // Node.data layout: we store the whole model shape envelope as flat keys on the
@@ -138,6 +138,30 @@ export class LoroCanvasDoc implements CanvasDoc {
     const t = this.doc.getText(this.textKey(id))
     t.delete(0, t.length)
     t.insert(0, text)
+  }
+
+  // Top-level LoroMaps keyed by id (bindings/pages are not tree-shaped, so a
+  // flat map is the natural container — see A1 in the phase-2 plan).
+  private bindings(): LoroMap { return this.doc.getMap('bindings') }
+  private pages(): LoroMap { return this.doc.getMap('pages') }
+
+  putBinding(b: Binding): void { this.bindings().set(b.id, b as any) }
+  deleteBinding(id: string): void {
+    const m = this.bindings()
+    if (m.get(id) !== undefined) m.delete(id)
+  }
+  listBindings(): Binding[] {
+    const m = this.bindings()
+    return m.keys().map((k) => m.get(k) as Binding).filter(Boolean)
+  }
+  putPage(p: Page): void { this.pages().set(p.id, p as any) }
+  deletePage(id: string): void {
+    const m = this.pages()
+    if (m.get(id) !== undefined) m.delete(id)
+  }
+  listPages(): Page[] {
+    const m = this.pages()
+    return m.keys().map((k) => m.get(k) as Page).filter(Boolean)
   }
 
   exportSnapshot(): Uint8Array { return this.doc.export({ mode: 'snapshot' }) }

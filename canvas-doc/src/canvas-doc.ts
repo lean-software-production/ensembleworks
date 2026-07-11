@@ -1,4 +1,4 @@
-import type { Shape } from '@ensembleworks/canvas-model'
+import type { Binding, Page, Shape } from '@ensembleworks/canvas-model'
 
 // The engine-agnostic contract. LoroCanvasDoc implements it today; a Yjs-backed
 // impl could replace it without touching callers (design's swappability rule).
@@ -35,6 +35,16 @@ export interface CanvasDoc {
   getText(id: string): string
   /** Silent no-op if no shape with this id exists. */
   setText(id: string, text: string): void
+  /** Upsert a binding by id into the top-level bindings map. */
+  putBinding(binding: Binding): void
+  /** Silent no-op if the binding id is absent. */
+  deleteBinding(id: string): void
+  listBindings(): Binding[]
+  /** Upsert a page by id into the top-level pages map. */
+  putPage(page: Page): void
+  /** Silent no-op if the page id is absent. */
+  deletePage(id: string): void
+  listPages(): Page[]
   exportSnapshot(): Uint8Array
   exportUpdate(): Uint8Array
   import(bytes: Uint8Array): void
