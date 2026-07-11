@@ -1,12 +1,12 @@
-import { mkdtempSync } from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
 import { defineConfig } from '@playwright/test'
 
-// Fresh server data dir per run → deterministic rooms for goldens.
-const dataDir = mkdtempSync(path.join(os.tmpdir(), 'ew-e2e-'))
-
 export default defineConfig({
+	// Fresh server data dir per run → deterministic rooms for goldens. The dir
+	// is created AND removed by scripts/start-server.ts itself, not here:
+	// workers re-require this config, so a top-level mkdtempSync would leak one
+	// temp dir per worker per run — and globalSetup can't hand the server a dir
+	// either, because Playwright launches webServer commands during plugin
+	// setup, before globalSetup runs.
 	projects: [
 		{ name: 'e2e', testDir: './tests' },
 		{ name: 'perf', testDir: './perf', timeout: 120_000 },
@@ -26,13 +26,18 @@ export default defineConfig({
 	expect: {
 		toHaveScreenshot: { maxDiffPixelRatio: 0.02, animations: 'disabled' },
 	},
+	// Goldens are Linux-only by convention — capture/update only on Linux
+	// (devcontainer/CI), never a host Mac.
 	snapshotPathTemplate: '{testDir}/../goldens/visual/{arg}{ext}',
 	webServer: [
 		{
+			// start-server.ts creates its own temp data dir and deletes it on
+			// shutdown. gracefulShutdown is required for that: Playwright's default
+			// teardown is SIGKILL, which would skip the server's cleanup hook.
 			command: 'bun scripts/start-server.ts',
 			url: 'http://127.0.0.1:8788/api/health',
 			reuseExistingServer: false,
-			env: { EW_E2E_DATA_DIR: dataDir },
+			gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
 		},
 		{
 			command: 'bunx vite --host 127.0.0.1 --port 5273 --strictPort',
