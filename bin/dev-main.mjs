@@ -152,6 +152,12 @@ export function makeCtx() {
 			docker: onPath('docker'),
 		},
 		env: process.env,
+		// TODO(port-offset): a later task parses ENSEMBLEWORKS_PORT_OFFSET here
+		// (parsePortOffset, from Task 1) and writes the generated LiveKit yaml;
+		// offset-0 defaults keep current behavior unchanged for now.
+		ports: PORTS,
+		portOffset: 0,
+		livekitGeneratedConf: path.join(dataDir, 'livekit-dev.generated.yaml'),
 	}
 }
 

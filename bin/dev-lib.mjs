@@ -98,9 +98,10 @@ export function originToString(o) {
  * Browser-facing LiveKit signaling URL (behind Caddy's /livekit route) for a
  * parsed origin: wss for https, ws otherwise; localhost caddy when null.
  * @param {{ scheme: string, host: string, port: number | null } | null} o
+ * @param {number} caddyPort
  */
-export function livekitBrowserUrl(o) {
-	if (!o) return `ws://localhost:${PORTS.caddy}/livekit`
+export function livekitBrowserUrl(o, caddyPort) {
+	if (!o) return `ws://localhost:${caddyPort}/livekit`
 	const ws = o.scheme === 'https' ? 'wss' : 'ws'
 	return `${ws}://${o.host}${o.port ? `:${o.port}` : ''}/livekit`
 }
@@ -145,12 +146,13 @@ export function forwardArgv(container, workspaceDir, args) {
  * What `bin/dev attach` prints on the host instead of nesting into the
  * container's tmux (which traps your prefix and strands you).
  * @param {string} container  container id or name
+ * @param {string} session    tmux session name (offset-aware — e.g. `workspace-100`)
  */
-export function attachInstructions(container) {
+export function attachInstructions(container, session) {
 	return [
 		"Attach to the devcontainer's tmux stack with:",
 		'',
-		`  docker exec -it ${container} tmux attach -t workspace`,
+		`  docker exec -it ${container} tmux attach -t ${session}`,
 		'',
 		'Detach again with:  Ctrl-b Ctrl-b d   (double-tap sends the prefix to the inner tmux)',
 		'Or drive it without attaching:  bin/dev status | logs <svc> | restart <svc>',
@@ -253,6 +255,9 @@ export function parseDotEnv(text) {
  * @property {{ caddy: boolean, livekit: boolean, whisper: boolean, docker: boolean }} has
  *           binary presence; `whisper` means binary AND model file present
  * @property {Record<string, string | undefined>} env  process env AFTER the dev.env merge
+ * @property {Record<string, number>} ports      portsFor(portOffset) — every cmd/health derives from this
+ * @property {number} portOffset                 ENSEMBLEWORKS_PORT_OFFSET (0 = defaults)
+ * @property {string} livekitGeneratedConf       path dev-main writes the offset LiveKit yaml to
  */
 
 /**
@@ -272,6 +277,8 @@ export function parseDotEnv(text) {
  * @returns {Service[]}
  */
 export function buildServices(ctx) {
+	const p = ctx.ports
+
 	/** @type {Service[]} */
 	const services = []
 
@@ -285,7 +292,7 @@ export function buildServices(ctx) {
 	// Browser-facing signaling URL goes through Caddy's /livekit route: wss for
 	// an https edge, plain ws for LAN http / localhost — derived from the same
 	// public origin the client (vite) uses for HMR/allowedHosts.
-	const livekitPublicUrl = livekitBrowserUrl(ctx.publicOrigin)
+	const livekitPublicUrl = livekitBrowserUrl(ctx.publicOrigin, p.caddy)
 	const publicOriginStr = originToString(ctx.publicOrigin)
 
 	// The full storage triple: the sync server refuses to start without it
@@ -294,11 +301,14 @@ export function buildServices(ctx) {
 		`DATA_DIR='${ctx.dataDir}'`,
 		`DATABASE_DIR='${ctx.databaseDir}'`,
 		`DATABASE_BACKUPS_DIR='${ctx.databaseBackupsDir}'`,
+		`PORT='${p.sync}'`,
+		`ENSEMBLEWORKS_FILES_PORT='${p.files}'`,
+		`DISCORD_PORT='${p.discord}'`,
 	]
 	if (livekitOn) {
 		syncEnv.push(
 			`LIVEKIT_URL='${livekitPublicUrl}'`,
-			`LIVEKIT_API_URL='http://localhost:${PORTS.livekit}'`,
+			`LIVEKIT_API_URL='http://localhost:${p.livekit}'`,
 		)
 		// --dev mode keys are public constants, safe inline. Config-file mode
 		// keys come from dev.env via the inherited environment instead.
@@ -309,31 +319,31 @@ export function buildServices(ctx) {
 		enabled: true,
 		reason: 'always',
 		cmd: `${syncEnv.join(' ')} bun run --filter '@ensembleworks/server' dev`,
-		health: { kind: 'http', url: `http://localhost:${PORTS.sync}/api/health` },
+		health: { kind: 'http', url: `http://localhost:${p.sync}/api/health` },
 	})
 
 	services.push({
 		name: 'term',
 		enabled: true,
 		reason: 'always',
-		cmd: "bun run --filter '@ensembleworks/server' dev:term",
-		health: { kind: 'port', port: PORTS.term },
+		cmd: `PORT='${p.term}' bun run --filter '@ensembleworks/server' dev:term`,
+		health: { kind: 'port', port: p.term },
 	})
 
 	services.push({
 		name: 'files',
 		enabled: true,
-		reason: 'file portal on :8791',
-		cmd: "bun run --filter '@ensembleworks/server' dev:files",
-		health: { kind: 'port', port: PORTS.files },
+		reason: `file portal on :${p.files}`,
+		cmd: `PORT='${p.files}' bun run --filter '@ensembleworks/server' dev:files`,
+		health: { kind: 'port', port: p.files },
 	})
 
 	services.push({
 		name: 'client',
 		enabled: true,
 		reason: 'always',
-		cmd: `${publicOriginStr ? `ENSEMBLEWORKS_PUBLIC_ORIGIN='${publicOriginStr}' ` : ''}bun run --filter '@ensembleworks/client' dev`,
-		health: { kind: 'port', port: PORTS.client },
+		cmd: `ENSEMBLEWORKS_PORT_OFFSET='${ctx.portOffset}' ${publicOriginStr ? `ENSEMBLEWORKS_PUBLIC_ORIGIN='${publicOriginStr}' ` : ''}bun run --filter '@ensembleworks/client' dev`,
+		health: { kind: 'port', port: p.client },
 	})
 
 	// Direct LAN access needs a secure context (crypto.randomUUID, the mic), so
@@ -344,24 +354,30 @@ export function buildServices(ctx) {
 		ctx.env.ENSEMBLEWORKS_CADDY_TLS === 'internal' && ctx.publicOrigin?.scheme === 'https'
 	const caddySite =
 		caddyTlsInternal && ctx.publicOrigin
-			? `https://${ctx.publicOrigin.host}:${ctx.publicOrigin.port ?? PORTS.caddy}`
-			: `:${PORTS.caddy}`
+			? `https://${ctx.publicOrigin.host}:${ctx.publicOrigin.port ?? p.caddy}`
+			: `:${p.caddy}`
 	// default_sni: a browser hitting a bare IP sends no SNI, so Caddy needs a
 	// default to select the internal cert (else the handshake internal-errors).
 	const caddyGlobal = caddyTlsInternal && ctx.publicOrigin ? `default_sni ${ctx.publicOrigin.host}` : ''
-	const caddyEnv = `ENSEMBLEWORKS_CADDY_SITE='${caddySite}' ENSEMBLEWORKS_CADDY_TLS_DIRECTIVE='${caddyTlsInternal ? 'tls internal' : ''}' ENSEMBLEWORKS_CADDY_GLOBAL='${caddyGlobal}'`
+	const caddyEnv =
+		`ENSEMBLEWORKS_CADDY_SITE='${caddySite}' ENSEMBLEWORKS_CADDY_TLS_DIRECTIVE='${caddyTlsInternal ? 'tls internal' : ''}' ENSEMBLEWORKS_CADDY_GLOBAL='${caddyGlobal}' ` +
+		`ENSEMBLEWORKS_PORT_SYNC='${p.sync}' ENSEMBLEWORKS_PORT_TERM='${p.term}' ENSEMBLEWORKS_PORT_CLIENT='${p.client}' ` +
+		`ENSEMBLEWORKS_PORT_LIVEKIT='${p.livekit}' ENSEMBLEWORKS_PORT_NEKO='${p.neko}'`
 	services.push({
 		name: 'caddy',
 		enabled: ctx.has.caddy,
 		reason: !ctx.has.caddy
-			? 'caddy not on PATH — no :8080 edge (/dev/{port}, /livekit, /shared-browser routes)'
+			? `caddy not on PATH — no :${p.caddy} edge (/dev/{port}, /livekit, /shared-browser routes)`
 			: caddyTlsInternal
 				? `edge at ${caddySite} (TLS internal — self-signed, click through once)`
-				: 'edge on :8080',
+				: `edge on :${p.caddy}`,
 		cmd: `${caddyEnv} caddy run --config '${ctx.repoDir}/deploy/Caddyfile' --adapter caddyfile`,
-		health: { kind: 'port', port: PORTS.caddy },
+		health: { kind: 'port', port: p.caddy },
 	})
 
+	// A user-supplied conf still wins at any offset; otherwise a nonzero offset
+	// needs the generated conf (--dev mode has fixed ports, so it can't shift).
+	const livekitConf = ctx.livekitConf ?? (ctx.portOffset ? ctx.livekitGeneratedConf : null)
 	services.push({
 		name: 'livekit',
 		enabled: livekitOn,
@@ -371,15 +387,17 @@ export function buildServices(ctx) {
 				? `${ctx.livekitConf} present but LIVEKIT_API_KEY/LIVEKIT_API_SECRET unset (put them in dev.env)`
 				: ctx.livekitConf
 					? `config ${ctx.livekitConf}`
-					: 'dev mode (built-in devkey/secret)',
+					: ctx.portOffset
+						? `generated config (dev keys, port offset ${ctx.portOffset})`
+						: 'dev mode (built-in devkey/secret)',
 		// --node-ip is what the SFU advertises for media. 127.0.0.1 keeps voice
 		// localhost-only; a LAN IP (auto-detected on the host) makes voice work
 		// from a browser on another LAN machine. Media rides the published udp
 		// mux (7882) regardless.
-		cmd: ctx.livekitConf
-			? `livekit-server --config '${ctx.livekitConf}'`
+		cmd: livekitConf
+			? `livekit-server --config '${livekitConf}'`
 			: `livekit-server --dev --bind 0.0.0.0 --node-ip ${ctx.livekitNodeIp ?? '127.0.0.1'}`,
-		health: { kind: 'port', port: PORTS.livekit },
+		health: { kind: 'port', port: p.livekit },
 	})
 
 	services.push({
@@ -388,29 +406,32 @@ export function buildServices(ctx) {
 		reason: ctx.env.DISCORD_BOT_TOKEN
 			? 'DISCORD_BOT_TOKEN present'
 			: 'no DISCORD_BOT_TOKEN — discord bot off (set it in dev.env)',
-		cmd: "bun run --filter '@ensembleworks/discord' dev",
-		health: { kind: 'port', port: PORTS.discord },
+		cmd: `PORT='${p.discord}' SYNC_BASE='http://127.0.0.1:${p.sync}' bun run --filter '@ensembleworks/discord' dev`,
+		health: { kind: 'port', port: p.discord },
 	})
 
 	services.push({
 		name: 'whisper',
 		enabled: ctx.has.whisper,
 		reason: ctx.has.whisper
-			? `local STT on :${PORTS.whisper}`
+			? `local STT on :${p.whisper}`
 			: 'whisper-server (or its model) missing — no keyless transcription',
 		// --inference-path makes whisper.cpp serve the OpenAI-compatible path,
 		// so STT_URL=http://localhost:8091/v1 satisfies the scribe's contract.
-		cmd: `whisper-server --host 127.0.0.1 --port ${PORTS.whisper} -m '${ctx.whisperModel}' --inference-path /v1/audio/transcriptions`,
-		health: { kind: 'port', port: PORTS.whisper },
+		cmd: `whisper-server --host 127.0.0.1 --port ${p.whisper} -m '${ctx.whisperModel}' --inference-path /v1/audio/transcriptions`,
+		health: { kind: 'port', port: p.whisper },
 	})
 
 	// Scribe: needs the SFU (to hear the room) and an STT backend. Resolution:
 	// explicit STT_URL (dev.env) > hosted STT_API_KEY (transcriber defaults to
 	// Groq) > the local whisper window above.
 	const whisperOn = services[services.length - 1].enabled
-	const localSttUrl = whisperOn ? `http://localhost:${PORTS.whisper}/v1` : undefined
+	const localSttUrl = whisperOn ? `http://localhost:${p.whisper}/v1` : undefined
 	const scribeOn = livekitOn && Boolean(ctx.env.STT_URL || ctx.env.STT_API_KEY || localSttUrl)
-	const scribeExports = [`export LIVEKIT_URL='ws://localhost:${PORTS.livekit}'`]
+	const scribeExports = [
+		`export LIVEKIT_URL='ws://localhost:${p.livekit}'`,
+		`export ENSEMBLEWORKS_URL='http://localhost:${p.sync}'`,
+	]
 	if (!ctx.env.STT_URL && !ctx.env.STT_API_KEY && localSttUrl) {
 		scribeExports.push(`export STT_URL='${localSttUrl}' STT_MODEL='${ctx.env.STT_MODEL ?? 'whisper-1'}'`)
 	}
@@ -428,7 +449,7 @@ export function buildServices(ctx) {
 				: 'no STT backend — set STT_API_KEY (e.g. Groq) or STT_URL in dev.env, or install whisper-server',
 		// Waits for BOTH the sync server (its token fetch) and the SFU's
 		// signaling port so its startup doesn't race the others.
-		cmd: `${scribeExports.join('; ')}; until curl -fsS http://localhost:${PORTS.sync}/api/health >/dev/null 2>&1 && timeout 1 bash -c '</dev/tcp/localhost/${PORTS.livekit}' 2>/dev/null; do sleep 2; done; bun run --filter '@ensembleworks/transcriber' dev`,
+		cmd: `${scribeExports.join('; ')}; until curl -fsS http://localhost:${p.sync}/api/health >/dev/null 2>&1 && timeout 1 bash -c '</dev/tcp/localhost/${p.livekit}' 2>/dev/null; do sleep 2; done; bun run --filter '@ensembleworks/transcriber' dev`,
 		health: null,
 	})
 
@@ -444,12 +465,12 @@ export function buildServices(ctx) {
 		reason: !ctx.has.docker
 			? 'docker not on PATH — shared browser off (fine; it is optional)'
 			: sbOn
-				? `neko on :8090, WebRTC udp ${nekoUdp} at ${nekoNat}`
+				? `neko on :${p.neko}, WebRTC udp ${nekoUdp} at ${nekoNat}`
 				: 'disabled by SHARED_BROWSER_ENABLE=0',
 		cmd:
 			'docker rm -f ensembleworks-shared-browser >/dev/null 2>&1; ' +
 			'docker run --rm --name ensembleworks-shared-browser --shm-size=2g ' +
-			`-p 127.0.0.1:8090:8080 -p ${nekoUdp}:${nekoUdp}/udp ` +
+			`-p 127.0.0.1:${p.neko}:8080 -p ${nekoUdp}:${nekoUdp}/udp ` +
 			`-e NEKO_DESKTOP_SCREEN='${ctx.env.NEKO_SCREEN ?? '1280x720@30'}' ` +
 			'-e NEKO_MEMBER_PROVIDER=multiuser ' +
 			`-e NEKO_MEMBER_MULTIUSER_USER_PASSWORD='${ctx.env.NEKO_USER_PASSWORD ?? 'neko'}' ` +

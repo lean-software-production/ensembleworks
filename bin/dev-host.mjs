@@ -101,7 +101,7 @@ export function runController(repoDir, argv) {
 	if (cmd === 'attach') {
 		if (!dc) die('no devcontainer running — start it with `bin/dev up` first')
 		narrate(`devcontainer '${dc.name}' running — printing attach instructions (attach never nests tmux)`)
-		process.stdout.write(`${attachInstructions(dc.id)}\n`)
+		process.stdout.write(`${attachInstructions(dc.id, 'workspace')}\n`)
 		process.exit(0)
 	}
 
