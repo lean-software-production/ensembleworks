@@ -30,8 +30,10 @@ export class LoroCanvasDoc implements CanvasDoc {
   // Make the Loro tree the single source of truth for hierarchy: move `n` so its
   // real tree parent matches `parentId`. A page id means "root". If parentId
   // names a shape that has no node yet (bulk load inserting children before
-  // parents), leave `n` where it is — its data.parentId is retained and a later
-  // reparent pass (see bridge.ts loadModel) fixes placement.
+  // parents), detach `n` to a root — never leave it under a STALE real parent
+  // (split-brain: data.parentId says X, tree says Y, and deleting Y would
+  // cascade-delete a shape that logically moved away). data.parentId is
+  // retained and a later reparent pass (see bridge.ts loadModel) fixes placement.
   private placeInTree(n: LoroTreeNode, parentId: string): void {
     const current = n.parent()
     if (parentId.startsWith('page:')) {
@@ -39,7 +41,7 @@ export class LoroCanvasDoc implements CanvasDoc {
       return
     }
     const parent = this.nodeByShapeId(parentId)
-    if (!parent) return
+    if (!parent) { if (current) this.tree.move(n.id, undefined); return }
     if (!current || current.id !== parent.id) this.tree.move(n.id, parent.id)
   }
 

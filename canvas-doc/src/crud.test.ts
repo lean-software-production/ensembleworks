@@ -68,4 +68,19 @@ assert.doesNotThrow(() => bulkDoc.putShape(shape('shape:child', { parentId: 'sha
 bulkDoc.commit()
 assert.equal(bulkDoc.getShape('shape:child')!.parentId, 'shape:notyet', 'data.parentId retained even though the tree node stayed a root')
 
+// --- upsert to a not-yet-loaded parent DETACHES from the old real parent ---
+// (regression: leaving the node under its stale parent would let deleteShape
+// of the old parent cascade-delete a shape that logically moved away)
+const detachDoc = LoroCanvasDoc.create({ peerId: 8n })
+detachDoc.putShape(shape('shape:A', { kind: 'frame', props: { w: 10, h: 10 } }) as any)
+detachDoc.putShape(shape('shape:childA', { parentId: 'shape:A' }) as any)
+detachDoc.commit()
+// Upsert the child to point at a parent whose node isn't loaded yet.
+detachDoc.putShape(shape('shape:childA', { parentId: 'shape:notloaded' }) as any)
+detachDoc.deleteShape('shape:A')
+detachDoc.commit()
+const survivor = detachDoc.getShape('shape:childA')
+assert.ok(survivor, 'child survives deletion of its former real parent (now a root)')
+assert.equal(survivor!.parentId, 'shape:notloaded', 'data.parentId retained for the later reparent pass')
+
 console.log('ok: crud')
