@@ -411,7 +411,7 @@ const list = await getJson('/api/discord/bindings?room=test')
 assert.equal(list.status, 200)
 assert.equal(list.body.bindings.length, 1)
 
-const del = await (await fetch(`${base}/api/discord/bindings/${created.body.id}`,
+const del = await (await fetch(`${base}/api/discord/bindings?id=${created.body.id}`,
   { method: 'DELETE' })).status
 assert.equal(del, 200)
 const empty = await getJson('/api/discord/bindings?room=test')
@@ -423,7 +423,7 @@ assert.equal(empty.body.bindings.length, 0)
 **Step 3: Implement the router** (`createDiscordRouter(ctx)`), routes:
 - `GET  /api/discord/bindings?room=` → `{ bindings: await ctx.storage.discord.listByRoom(room) }`
 - `POST /api/discord/bindings` → validate body, `createdBy` from `resolveCaller(req.headers)` (see `whoami.ts:42`), return the binding.
-- `DELETE /api/discord/bindings/:id` → `remove`, `{ ok: true }`.
+- `DELETE /api/discord/bindings?id=` → `remove`, `{ ok: true }` (400 on missing id). The id is a **query param, not a `:id` path segment** — the shared tool manifest can't declare a path param (the CLI's generic renderer never substitutes one), so the route keeps the id in the query. See `contracts/src/tools/discord.ts` and the no-`:`-path invariant in `contracts/src/tools/tools.test.ts`.
 
 Wire it: construct the store at `app.ts:66` (`const discord = createDiscordStore(dataDir)`), add to context storage (`context.ts`), `app.use(createDiscordRouter(ctx))` in the mount list. This route is under `/api` so it inherits `express.json()` (`app.ts:112`) and the write-scope guard (`app.ts:115`).
 
