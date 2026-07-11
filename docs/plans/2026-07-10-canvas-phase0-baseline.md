@@ -4,7 +4,7 @@
 
 **Goal:** Stand up the Playwright + perf rigs against the *current tldraw app* and capture executable baselines — visual goldens, interaction "feel" numbers, multi-client convergence, and performance metrics — that the new canvas engine will be measured against (see `docs/plans/2026-07-10-canvas-rewrite-design.md`, Phase 0).
 
-**Architecture:** A new `e2e` Bun workspace holding a Playwright rig. The rig boots the real server in-process-style (`createSyncApp` on :8788, fresh temp data dir per run) plus the Vite dev client on :5173 via Playwright `webServer`. Tests seed rooms through the *agent HTTP API* (dogfooding the surface bots use), read app state through a tiny dev-only `window.__ew.editor` handle, and write baseline artifacts (screenshots, `feel.json`, perf JSONs) that are committed to the repo.
+**Architecture:** A new `e2e` Bun workspace holding a Playwright rig. The rig boots the real server in-process-style (`createSyncApp` on :8788, fresh temp data dir per run) plus the Vite dev client on :5273 (5173 stays free for the normal dev stack) via Playwright `webServer`. Tests seed rooms through the *agent HTTP API* (dogfooding the surface bots use), read app state through a tiny dev-only `window.__ew.editor` handle, and write baseline artifacts (screenshots, `feel.json`, perf JSONs) that are committed to the repo.
 
 **Tech Stack:** Bun 1.3.14 (workspace + server), Node 22.12.0 (Playwright runner — the CLI shebang uses node), `@playwright/test` + Chromium, the existing Express/tldraw-sync server, Vite dev server.
 
@@ -14,12 +14,12 @@
 
 - **Run everything from the worktree root** `.worktrees/canvas-phase0/` with bun on PATH:
   `export PATH="$HOME/.bun/bin:$PATH"`. Node comes from asdf (`.tool-versions` pins 22.12.0).
-- **The app:** `client/` is a Vite React app embedding tldraw. A room is `http://127.0.0.1:5173/?room=<id>` (`[a-zA-Z0-9_-]{1,64}`, default `team`). Vite proxies `/sync` (ws), `/api`, `/uploads`, `/files` → `http://localhost:8788` (see `client/vite.config.ts`). The terminal gateway (:8789) is NOT needed — we never seed terminal shapes.
+- **The app:** `client/` is a Vite React app embedding tldraw. A room is `http://127.0.0.1:5273/?room=<id>` (`[a-zA-Z0-9_-]{1,64}`, default `team`). Vite proxies `/sync` (ws), `/api`, `/uploads`, `/files` → `http://localhost:8788` (see `client/vite.config.ts`). The terminal gateway (:8789) is NOT needed — we never seed terminal shapes.
 - **The server:** `createSyncApp({ dataDir })` from `server/src/app.ts` returns `{ server, getOrCreateRoom }`; `server.listen(port)`. `GET /api/health` is the liveness probe. Room docs persist as `<dataDir>/rooms/<roomId>.sqlite` — a fresh temp `dataDir` per test run = clean, deterministic rooms. Precedent: `cli/src/cli-api.test.ts` boots exactly this way.
 - **Seeding API** (`POST http://127.0.0.1:8788/api/canvas/shape`, JSON body — contract in `contracts/src/tools/canvas.ts`): `{ room, op: 'create', type: 'geo'|'text'|'note'|'arrow'|'frame'|'line'|'draw'|'highlight', x, y, w, h, text?, color?, geo?, name? (frame caption), frame? (parent frame by fuzzy name), fromId?/toId? (arrow bindings), points? (line/draw) }` → `{ ok: true, id }`. Also `POST /api/canvas/sticky` `{ room, text, frame? }` and `GET /api/canvas/frames?room=<id>`.
 - **Identity:** first load calls `window.prompt` for a name unless localStorage has `ensembleworks.userId` / `ensembleworks.userName` (`client/src/identity.ts`). Tests pre-seed these via Playwright `storageState` — a prompt appearing means the fixture broke; fail loudly.
 - **bun test discovery** (`scripts/run-tests.ts`) globs `**/src/**/*.test.ts`. Our specs live in `e2e/tests/*.spec.ts` and `e2e/perf/*.spec.ts` — outside `src/`, `.spec.ts` suffix — so plain `bun test`/CI smoke never tries to run Playwright specs under bun. Do not "fix" this by renaming.
-- **Port discipline:** the rig binds :8788 and :5173 with `reuseExistingServer: false`. If `bin/dev` / the devcontainer stack is running, STOP IT first (`bin/dev down` from the main checkout) or Playwright fails at startup — that's intentional (never test against a dirty stack).
+- **Port discipline:** the rig binds :8788 and :5273 with `reuseExistingServer: false`. If `bin/dev` / the devcontainer stack is running, STOP IT first (`bin/dev down` from the main checkout) or Playwright fails at startup — that's intentional (never test against a dirty stack).
 - **tldraw DOM anchors** (stable classes): `.tl-container` (root), `.tl-shape` (each shape), `.tl-cursor` (collaborator cursors).
 
 ## Task 0: Preflight (no commit)
@@ -36,7 +36,7 @@ node --version       # expect v22.12.0 (asdf; if "No version is set": asdf insta
 **Step 2: Verify ports free**
 
 ```bash
-ss -ltn | grep -E ':(8788|5173) ' || echo PORTS-FREE
+ss -ltn | grep -E ':(8788|5273) ' || echo PORTS-FREE
 ```
 Expected: `PORTS-FREE`. If not, stop the dev stack (`bin/dev down` in the main checkout).
 
@@ -202,7 +202,7 @@ export default defineConfig({
 	workers: 1,
 	retries: 0, // a flaky baseline is a broken baseline — fix, don't retry
 	use: {
-		baseURL: 'http://127.0.0.1:5173',
+		baseURL: 'http://127.0.0.1:5273',
 		viewport: { width: 1280, height: 720 },
 		deviceScaleFactor: 1,
 		colorScheme: 'light',
@@ -222,9 +222,9 @@ export default defineConfig({
 			env: { EW_E2E_DATA_DIR: dataDir },
 		},
 		{
-			command: 'bunx vite --host 127.0.0.1 --port 5173 --strictPort',
+			command: 'bunx vite --host 127.0.0.1 --port 5273 --strictPort',
 			cwd: '../client',
-			url: 'http://127.0.0.1:5173',
+			url: 'http://127.0.0.1:5273',
 			reuseExistingServer: false,
 		},
 	],
@@ -245,7 +245,7 @@ function identityState(name: string, id: string) {
 		cookies: [],
 		origins: [
 			{
-				origin: 'http://127.0.0.1:5173',
+				origin: 'http://127.0.0.1:5273',
 				localStorage: [
 					{ name: 'ensembleworks.userId', value: id },
 					{ name: 'ensembleworks.userName', value: name },
@@ -925,7 +925,7 @@ baselines are the executable spec for the canvas rewrite
 
 ## Prereqs
 - bun 1.3.14 (`export PATH="$HOME/.bun/bin:$PATH"`), node 22.12.0 (asdf)
-- Ports 8788/5173 free — stop `bin/dev` first
+- Ports 8788/5273 free — stop `bin/dev` first
 - `cd e2e && bunx playwright install chromium` once
 
 ## Commands (from `e2e/`)
@@ -944,7 +944,7 @@ baselines are the executable spec for the canvas rewrite
 - `baselines/tldraw-perf.json` — frame stats/load/heap at 100/1k shapes (committed)
 - `lib/` — fixtures (identity storageState), agent-API seeding, samplers
 - The stack boots via `playwright.config.ts` webServer: real server (:8788,
-  fresh temp data dir per run) + Vite dev client (:5173)
+  fresh temp data dir per run) + Vite dev client (:5273; 5173 is left to the normal dev stack)
 
 ## Rules
 - Seed rooms ONLY through the agent HTTP API (`lib/seed.ts`) — the rig doubles
