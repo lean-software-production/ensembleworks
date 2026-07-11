@@ -26,7 +26,12 @@ const GAP_K = 0.9
 
 export function clusterShapes(doc: CanvasDocument, shapes: readonly Shape[], k = GAP_K): ClusterResult {
   const notes = shapes.filter((s) => s.kind === 'note')
-  const threshold = medianSize(notes) * k
+  // One scope-level scale unit (median note size over the whole analysed set),
+  // shared by the gap threshold, classify, and confidence. Per-cluster units
+  // would make a cluster's own metrics scale-inconsistent with the threshold
+  // that formed it.
+  const unit = medianSize(notes)
+  const threshold = unit * k
   const bounds = new Map<string, Bounds>(notes.map((s) => [s.id, pageBounds(doc, s)]))
 
   // Single-linkage union-find on gap ≤ threshold.
@@ -52,8 +57,8 @@ export function clusterShapes(doc: CanvasDocument, shapes: readonly Shape[], k =
     }
     clusters.push({
       members: [...members].sort((a, b) => a.localeCompare(b)),
-      arrangement: classify(bs, medianSize(notes)),
-      confidence: confidence(doc, members),
+      arrangement: classify(bs, unit),
+      confidence: confidence(doc, members, unit),
       label: nearestLabel(doc, shapes, centroid(cb)),
       bounds: cb,
     })
@@ -73,16 +78,21 @@ function classify(bs: Bounds[], unit: number): Arrangement {
   return 'loose'
 }
 
-// confidence = 0.5 * colour uniformity + 0.5 * axis alignment.
-function confidence(doc: CanvasDocument, members: string[]): number {
+// confidence = 0.5 * colour uniformity + 0.5 * axis alignment. `unit` is the
+// scope-level median size from clusterShapes (not recomputed per cluster) so
+// the score stays scale-consistent with the threshold that formed the cluster.
+// Known limitation (deliberate, first-cut): the alignment term measures
+// single-axis tightness (min of x/y centroid spread), so a perfect grid — tight
+// on neither single axis — can't score above ~0.5 + 0.5 * colourUniformity
+// contribution; calibration/metric redesign is deferred by design.
+function confidence(doc: CanvasDocument, members: string[], unit: number): number {
   const shapes = members.map((id) => doc.byId.get(id)!)
   const colors = shapes.map((s) => String((s.props as any)?.color ?? ''))
   const modal = Math.max(...[...new Set(colors)].map((c) => colors.filter((x) => x === c).length))
   const colourUniformity = modal / members.length
   const cs = shapes.map((s) => centroid(pageBounds(doc, s)))
   const spread = (vals: number[]) => { const m = vals.reduce((a, b) => a + b, 0) / vals.length; return Math.sqrt(vals.reduce((a, b) => a + (b - m) ** 2, 0) / vals.length) }
-  const unit = medianSize(shapes) || 1
-  const alignment = 1 - Math.min(1, Math.min(spread(cs.map((c) => c.x)), spread(cs.map((c) => c.y))) / unit)
+  const alignment = 1 - Math.min(1, Math.min(spread(cs.map((c) => c.x)), spread(cs.map((c) => c.y))) / (unit || 1))
   return Number((0.5 * colourUniformity + 0.5 * alignment).toFixed(3))
 }
 

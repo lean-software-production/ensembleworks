@@ -10,20 +10,33 @@ export interface SemanticView { clusters: Cluster[]; outliers: string[]; relatio
 // a whole page). Pure.
 export function semanticView(doc: CanvasDocument, shapes: readonly Shape[]): SemanticView {
   const { clusters, outliers } = clusterShapes(doc, shapes)
-  const clusterOf = (shapeId: string): number => clusters.findIndex((c) => c.members.includes(shapeId))
+  // member shape id → cluster index, built once (O(1) lookups instead of a
+  // findIndex/includes scan per binding endpoint).
+  const clusterIndex = new Map<string, number>()
+  clusters.forEach((c, i) => { for (const id of c.members) clusterIndex.set(id, i) })
 
   const relations: Relation[] = []
   const inScope = new Set(shapes.map((s) => s.id))
-  // Group bindings by arrow (fromId = the arrow shape), then relate the two
-  // endpoints' clusters.
-  const byArrow = new Map<string, string[]>()
+  // Group bindings by arrow (fromId = the arrow shape), keeping each target's
+  // terminal ('start' | 'end' — tldraw arrow bindings carry props.terminal) so
+  // the relation is oriented by the arrow's real direction, not array order.
+  const byArrow = new Map<string, { toId: string; terminal: unknown }[]>()
   for (const b of doc.bindings) {
     if (!inScope.has(b.fromId)) continue
-    ;(byArrow.get(b.fromId) ?? byArrow.set(b.fromId, []).get(b.fromId)!).push(b.toId)
+    ;(byArrow.get(b.fromId) ?? byArrow.set(b.fromId, []).get(b.fromId)!)
+      .push({ toId: b.toId, terminal: (b.props as any)?.terminal })
   }
   for (const [arrowId, targets] of byArrow) {
     if (targets.length < 2) continue
-    const [c1, c2] = [clusterOf(targets[0]!), clusterOf(targets[1]!)]
+    // Orient by terminals when unambiguous (exactly one 'start' and one 'end');
+    // otherwise fall back to deterministic binding array order.
+    const starts = targets.filter((t) => t.terminal === 'start')
+    const ends = targets.filter((t) => t.terminal === 'end')
+    const [src, dst] = starts.length === 1 && ends.length === 1 ? [starts[0]!, ends[0]!] : [targets[0]!, targets[1]!]
+    const c1 = clusterIndex.get(src.toId) ?? -1
+    const c2 = clusterIndex.get(dst.toId) ?? -1
+    // Cluster↔cluster relations only — a deliberate scope limit: arrows whose
+    // endpoint is an outlier (or any unclustered shape) yield no relation.
     if (c1 >= 0 && c2 >= 0 && c1 !== c2) relations.push({ arrowId, fromCluster: c1, toCluster: c2 })
   }
   return { clusters, outliers, relations }
