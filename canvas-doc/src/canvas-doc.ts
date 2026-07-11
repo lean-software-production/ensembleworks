@@ -78,7 +78,9 @@ export interface CanvasDoc {
    * — no coordination needed. Idempotent: calling repair() again on an
    * already-clean doc returns []. Zero-page docs: orphans are unrepairable
    * (no target page) — the violation is left standing rather than looping on
-   * a non-converging op. Caller must commit() after to persist.
+   * a non-converging op. The returned array is the plan as computed, not a
+   * full change log — shapes and bindings removed only via cascade (not named
+   * in the plan) are not itemized. Caller must commit() after to persist.
    */
   repair(): RepairOp[]
   subscribe(listener: () => void): () => void

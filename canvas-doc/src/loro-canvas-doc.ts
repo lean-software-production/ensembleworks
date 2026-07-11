@@ -1,5 +1,5 @@
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
-import { canonicalPageId, makeDocument, repairPlan, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
+import { canonicalPageId, cascadeDropSet, makeDocument, repairPlan, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
 import type { CanvasDoc, ImportResult } from './canvas-doc.js'
 
 // Node.data layout: we store the whole model shape envelope as flat keys on the
@@ -183,22 +183,27 @@ export class LoroCanvasDoc implements CanvasDoc {
   repair(): RepairOp[] {
     const model = makeDocument({ pages: this.listPages(), shapes: this.listShapes(), bindings: this.listBindings() })
     const plan = repairPlan(model)
-    // Same-pass binding cascade: dropShape deletes the shape's whole subtree,
-    // so a binding whose endpoint is in that subtree becomes dangling MID-pass
-    // (it wasn't dangling when the plan was computed, so the plan has no
-    // deleteBinding op for it). applyRepairToModel filters those bindings out
-    // via its dropAll cascade; delete them here too so a SINGLE repair() call
-    // converges to the same state — not only the second.
-    const dropAll = new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id))
-    let grew = true
-    while (grew) {
-      grew = false
-      for (const s of model.shapes) if (!dropAll.has(s.id) && dropAll.has(s.parentId)) { dropAll.add(s.id); grew = true }
-    }
+    // dropAll = the plan's dropShape ids plus their transitive descendants in
+    // the MODEL (shared cascadeDropSet — same fixpoint applyRepairToModel
+    // runs, so the two applications cannot drift). It serves two purposes:
+    // 1. Skip-set: a reparentToRoot op whose id is in dropAll is SKIPPED, so
+    //    plan-application order can never matter — without the skip, applying
+    //    reparent(descendant) before dropShape(ancestor) would move the
+    //    descendant out of the doomed subtree and silently resurrect it,
+    //    diverging from applyRepairToModel (which always drops it).
+    // 2. Binding sweep: a binding whose endpoint is in dropAll becomes
+    //    dangling MID-pass (it wasn't when the plan was computed, so the plan
+    //    has no deleteBinding op for it); delete it here so a SINGLE repair()
+    //    call converges — not only the second.
+    const dropAll = cascadeDropSet(model.shapes, new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id)))
+    // PERF: each deleteBinding/deleteShape/reparent below re-resolves its id
+    // via the O(n) nodeByShapeId scan (see that method's deferred-index PERF
+    // note), so a large plan costs O(n²). Same revisit-if-measured stance.
     for (const o of plan) {
       if (o.op === 'deleteBinding') this.deleteBinding(o.id)
       else if (o.op === 'dropShape') this.deleteShape(o.id) // cascade + text cleanup
       else if (o.op === 'reparentToRoot') {
+        if (dropAll.has(o.id)) continue // claimed by a drop cascade — see above
         // 'page:orphans' is unreachable: repairPlan emits no reparentToRoot
         // ops for a zero-page doc (dead-code safety only).
         const pageId = canonicalPageId(model.pages) ?? 'page:orphans'

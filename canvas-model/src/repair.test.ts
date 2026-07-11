@@ -34,6 +34,53 @@ const repaired = applyRepairToModel(doc, plan)
 assert.deepEqual(checkInvariants(repaired), [])
 assert.deepEqual(repairPlan(repaired), [], 'repair is idempotent — a repaired doc needs no repair')
 
+// Cascade fixpoint (3 levels): dropping the invalid root removes the WHOLE
+// descendant chain, and a binding touching a cascaded shape (not the dropped
+// shape itself) goes too. Descendants are listed BEFORE ancestors on purpose:
+// a single in-order pass over the array cannot reach the grandchild (its
+// parent isn't in the set yet when it's visited), so only a true fixpoint
+// passes — a single-pass mutation of cascadeDropSet must fail here.
+const chain = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [
+    { id: 'shape:ar2', kind: 'arrow', parentId: 'page:p', props: {}, ...base() } as any,
+    { id: 'shape:grandchild', kind: 'note', parentId: 'shape:child', props: {}, ...base() } as any,
+    { id: 'shape:child', kind: 'note', parentId: 'shape:bad2', props: {}, ...base() } as any,
+    { id: 'shape:bad2', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' as any } as any,
+  ],
+  bindings: [{ id: 'binding:g', fromId: 'shape:ar2', toId: 'shape:grandchild', props: {}, meta: {} }],
+})
+const chainPlan = repairPlan(chain)
+assert.deepEqual(chainPlan, [{ op: 'dropShape', id: 'shape:bad2' }], 'only the invalid root is in the plan — descendants cascade')
+const chainRepaired = applyRepairToModel(chain, chainPlan)
+assert.deepEqual(chainRepaired.shapes.map((s) => s.id), ['shape:ar2'], 'bad2, child AND grandchild all dropped')
+assert.deepEqual(chainRepaired.bindings, [], 'binding touching the cascaded grandchild dropped too')
+assert.deepEqual(checkInvariants(chainRepaired), [], 'invariant-clean after ONE pass')
+
+// Dedup collision: a shape BOTH orphaned (parent names nothing) and invalid
+// (validProps) gets exactly ONE op — dropShape wins over reparentToRoot.
+const dual = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [{ id: 'shape:dual', kind: 'note', parentId: 'shape:ghost', props: {}, ...base(), opacity: 'no' as any } as any],
+  bindings: [],
+})
+assert.deepEqual(repairPlan(dual), [{ op: 'dropShape', id: 'shape:dual' }], 'exactly one op for the doubly-flagged shape: dropShape')
+
+// Sort tiebreak: two same-op violations constructed in REVERSE id order come
+// out id-ascending — the (op, id) sort decides, not input order.
+const rev = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [
+    { id: 'shape:zz', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' as any } as any,
+    { id: 'shape:aa', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' as any } as any,
+  ],
+  bindings: [],
+})
+assert.deepEqual(repairPlan(rev), [
+  { op: 'dropShape', id: 'shape:aa' },
+  { op: 'dropShape', id: 'shape:zz' },
+], 'same-op ops sort id-ascending regardless of construction order')
+
 // Canonical page is EXPLICIT, not iteration-order luck: pages listed in
 // non-sorted order (page:z first) — the orphan must land on the
 // lexicographically smallest page id (page:a) on every peer.

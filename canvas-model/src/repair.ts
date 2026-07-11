@@ -52,6 +52,24 @@ export function repairPlan(doc: CanvasDocument): RepairOp[] {
   return [...byId.values()].sort((a, b) => rank[a.op] - rank[b.op] || a.id.localeCompare(b.id))
 }
 
+// Transitive closure of shapes to drop: the seed ids plus every shape whose
+// ancestry passes through a seed — a fixpoint over parentId edges, so chains
+// of any depth are caught regardless of input order. Shared by
+// applyRepairToModel AND LoroCanvasDoc.repair() (its reparent skip-set and
+// binding sweep): one implementation, zero drift.
+export function cascadeDropSet(
+  shapes: readonly { id: string; parentId: string }[],
+  seed: ReadonlySet<string>,
+): Set<string> {
+  const out = new Set(seed)
+  let grew = true
+  while (grew) {
+    grew = false
+    for (const s of shapes) if (!out.has(s.id) && out.has(s.parentId)) { out.add(s.id); grew = true }
+  }
+  return out
+}
+
 // Reference application on the pure model (used by tests and the convergence rig
 // to compute the expected post-repair state). canvas-doc applies the same plan
 // to Loro; both must agree.
@@ -59,13 +77,10 @@ export function applyRepairToModel(doc: CanvasDocument, plan: RepairOp[]): Canva
   const drop = new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id))
   const toRoot = new Set(plan.filter((o) => o.op === 'reparentToRoot').map((o) => o.id))
   const delBind = new Set(plan.filter((o) => o.op === 'deleteBinding').map((o) => o.id))
-  // Drop invalid shapes AND their descendants (cascade).
-  const dropAll = new Set(drop)
-  let grew = true
-  while (grew) {
-    grew = false
-    for (const s of doc.shapes) if (!dropAll.has(s.id) && dropAll.has(s.parentId)) { dropAll.add(s.id); grew = true }
-  }
+  // Drop invalid shapes AND their descendants (cascade). The filter below runs
+  // before the toRoot map, so a shape both cascade-dropped and reparent-flagged
+  // is DROPPED — same precedence as repair()'s skip of reparent ops in dropAll.
+  const dropAll = cascadeDropSet(doc.shapes, drop)
   // The 'page:orphans' fallback is unreachable when `plan` comes from
   // repairPlan (it emits no reparentToRoot ops for a zero-page doc); kept as
   // dead-code safety for hand-built plans.
