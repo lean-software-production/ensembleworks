@@ -1,4 +1,4 @@
-import { LoroDoc, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
+import { LoroDoc, VersionVector, type ImportStatus, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
 import type { Binding, Page, Shape } from '@ensembleworks/canvas-model'
 import type { CanvasDoc } from './canvas-doc.js'
 
@@ -165,8 +165,13 @@ export class LoroCanvasDoc implements CanvasDoc {
   }
 
   exportSnapshot(): Uint8Array { return this.doc.export({ mode: 'snapshot' }) }
-  exportUpdate(): Uint8Array { return this.doc.export({ mode: 'update' }) }
-  import(bytes: Uint8Array): void { this.doc.import(bytes) }
+  exportUpdate(sinceVersion?: Uint8Array): Uint8Array {
+    if (!sinceVersion) return this.doc.export({ mode: 'update' })
+    const from = VersionVector.decode(sinceVersion)
+    return this.doc.export({ mode: 'update', from })
+  }
+  versionBytes(): Uint8Array { return this.doc.oplogVersion().encode() }
+  import(bytes: Uint8Array): ImportStatus { return this.doc.import(bytes) }
   subscribe(listener: () => void): () => void { return this.doc.subscribe(() => listener()) }
   commit(): void { this.doc.commit() }
 }

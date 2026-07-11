@@ -1,4 +1,5 @@
 import type { Binding, Page, Shape } from '@ensembleworks/canvas-model'
+import type { ImportStatus } from 'loro-crdt'
 
 // The engine-agnostic contract. LoroCanvasDoc implements it today; a Yjs-backed
 // impl could replace it without touching callers (design's swappability rule).
@@ -46,8 +47,17 @@ export interface CanvasDoc {
   deletePage(id: string): void
   listPages(): Page[]
   exportSnapshot(): Uint8Array
-  exportUpdate(): Uint8Array
-  import(bytes: Uint8Array): void
+  /**
+   * Without sinceVersion: exports the whole history (as before). With
+   * sinceVersion — bytes from another peer's versionBytes() — exports only
+   * the ops that peer is missing, so peers can converge incrementally
+   * instead of re-shipping a full snapshot on every sync.
+   */
+  exportUpdate(sinceVersion?: Uint8Array): Uint8Array
+  /** This doc's current oplog version, encoded for handing to a peer so it can
+   * ask for (or compute) a delta against it. */
+  versionBytes(): Uint8Array
+  import(bytes: Uint8Array): ImportStatus
   subscribe(listener: () => void): () => void
   commit(): void
 }
