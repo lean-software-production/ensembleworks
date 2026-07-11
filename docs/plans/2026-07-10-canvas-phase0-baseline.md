@@ -964,7 +964,7 @@ git commit -m "docs(e2e): baseline rig runbook"
 - [x] `goldens/feel.json` committed — {5, 1, 10, 1.1}, each corroborated against tldraw source constants (dragDistanceSquared=16, MINOR/MAJOR_NUDGE_FACTOR, wheel zoom math)
 - [x] `baselines/tldraw-perf.json` committed with `shapes-100` + `shapes-1000`, per-key runtime provenance
 - [x] Multi-client convergence + presence smoke green (presence via editor API — tldraw 5.1 paints cursors on a canvas overlay, no DOM node)
-- [ ] CI `e2e` job green on the PR; nightly perf job dispatchable — **pending push/PR** (workflow landed; cannot verify pre-push)
+- [x] CI `e2e` job green on the PR (PR #33, first run, 1m8s — visual goldens held on ubuntu within the 0.02 ratio); nightly perf job dispatchable (perf-nightly correctly skipped on the PR event)
 - [x] `bun run typecheck` green (all 7 workspaces). **Caveat:** the full suite runner `bun run test` (`scripts/run-tests.ts`) fails on a PRE-EXISTING issue inherited from the branch point, outside this branch's diff: `server/src/tools-api.test.ts` — "mounted route not declared: GET /api/discord/bindings" (discord feature gap; `server/` has zero diff on this branch). Raw `bun test` (which this checklist originally named) only discovers 2 of ~80 suites and passes — future plans should say `bun run test`. Follow-up filed against the discord work.
 
 Out of scope for Phase 0 (design doc phases 1+): any new packages (`canvas-model` etc.), budgets/gates on perf numbers, soak/chaos rigs, snap-distance and rotation feel goldens (add when the select-tool work starts in Phase 3), goldens for terminal/iframe/screenshare shapes (need live backends; covered by Phase 3 dogfooding).
