@@ -991,9 +991,9 @@ everyone. Visibility-return atlas heal stays for view-mode WebGL."
 
 **Files:** Modify `client/src/terminal/TerminalShapeUtil.tsx` (font effect + host counter-scale)
 
-- [ ] **Step 1: Round the rendered font.** Replace the font effect body: `const nextFont = Math.max(6, Math.round(BASE_FONT * editZoom))` (comment: fractional font sizes made DOM row heights quantise per row × ~25 rows → bottom-edge drift; rounding is render-only, the grid is untouched because captureCell normalises by fontSize/BASE_FONT).
+- [ ] **Step 1: Floor the rendered font.** Replace the font effect body: `const nextFont = Math.max(1, Math.floor(BASE_FONT * editZoom))` (comment: fractional font sizes made DOM row heights quantise per row × ~25 rows → bottom-edge drift; flooring is render-only, the grid is untouched because captureCell normalises by fontSize/BASE_FONT). (superseded during review: counter-scale stays on editZoom — net scale must be exactly 1 for xterm selection; font floors so content only under-fills; see spec item 8 as shipped)
 
-- [ ] **Step 2: Counter-scale by the font's actual factor.** Next to `const { w, h } = shape.props` add `const fontFactor = Math.max(6, Math.round(BASE_FONT * editZoom)) / BASE_FONT` (comment: must invert the FONT's factor, not the raw zoom, to keep net on-screen scale exactly 1). Host style uses `fontFactor` in all three places (width calc, height calc, `scale(${1 / fontFactor})`).
+- [ ] **Step 2:** (superseded during review: counter-scale stays on editZoom — net scale must be exactly 1 for xterm selection; font floors so content only under-fills; see spec item 8 as shipped)
 
 - [ ] **Step 3: Verify + commit.** Typecheck + unit tests as before.
 
@@ -1077,7 +1077,7 @@ export function nextFontSize(current: number, action: FontSizeAction): number {
   - `TerminalShapeProps` interface: add `fontSize?: number`.
   - In the component: `const baseFont = shape.props.fontSize ?? FONT_SIZE_DEFAULT` and a render-updated ref `const baseFontRef = useRef(baseFont); baseFontRef.current = baseFont` (captureCell in the mount effect must normalise against the CURRENT base font, not the mount-time closure).
   - Mount effect: `new Terminal({ fontSize: baseFont, ... })`; in `captureCell`, `const scale = (term.options.fontSize ?? baseFontRef.current) / baseFontRef.current`.
-  - Font effect becomes deps `[editZoom, baseFont]` with `Math.max(6, Math.round(baseFont * editZoom))`; `fontFactor` uses `baseFont` likewise.
+  - Font effect becomes deps `[editZoom, baseFont]` with `Math.max(1, Math.floor(baseFont * editZoom))`. (superseded during review: counter-scale stays on editZoom — net scale must be exactly 1 for xterm selection; font floors so content only under-fills; see spec item 8 as shipped)
   - New effect AFTER the font effect — re-capture the cell when the shared base font changes (same quantised value on every client ⇒ same grid):
 
 ```ts

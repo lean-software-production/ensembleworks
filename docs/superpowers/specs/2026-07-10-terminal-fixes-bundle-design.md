@@ -238,12 +238,17 @@ Context-loss fallback stays for view mode.
 
 ### 8. Integer-px font while editing
 
-The item 6 candidate fix, now evidence-backed by the live machine: rendered
-font is `max(6, round(base × zoom))` with the host counter-scale using the
-same effective factor (net on-screen scale exactly 1). Kills the bottom-edge
-drift (stable DOM row heights) and reduces row seams. The four
-`terminal-grid-sizing.md` invariants hold: the grid still derives from the
-shared box + base-font cell; the rounding is render-only.
+The item 6 candidate fix, now evidence-backed by the live machine, as
+SHIPPED: rendered font is `max(1, floor(base × zoom))`; the host
+counter-scale inverts the RAW zoom (not the font's own factor), so net
+on-screen scale is exactly 1 — xterm's `getCoords` divides
+transform-inclusive screen px by transform-independent CSS cell size, so
+selection is exact only at net scale 1. Kills the bottom-edge drift
+(stable DOM row heights) and reduces row seams. Flooring means the grid
+under-fills the box by up to ~7.5% of width at fractional zooms (measured;
+see item 10 findings) — it never clips. The four `terminal-grid-sizing.md`
+invariants hold: the grid still derives from the shared box + base-font
+cell; the flooring is render-only.
 
 ### 9. Per-terminal base font size (shared prop + keys)
 
@@ -321,9 +326,25 @@ All checks were run at BOTH DPRs; results were identical unless noted.
    across all rows — zero between-row 1px seams.
 7. **Editpad probe: PASS** (editShift 0, roundTrip 0).
 
-Known-accepted residuals, restated with numbers: (a) below ~37.5% zoom
-the `max(6, …)` min-font clamp makes the rendered font larger than
-zoom-exact, so content can overflow the box (not probed here — outside
-the zoom range users edit at); (b) the floor under-fill strip above
-(item 3) — up to ~7.5% of width right, up to ~40 logical px bottom at
-the worst zoom × DPR combination measured.
+Known-accepted residuals, restated with numbers: (a) *(resolved during
+pre-merge review — the min-font clamp was `max(6, …)` at findings time,
+which re-broke net-scale-1 below ~37.5% zoom at the new baseFont-8
+minimum and could overflow the box; shipped as `max(1, …)`, whose only
+job is fontSize ≥ 1, so this residual no longer applies)*; (b) the floor
+under-fill strip above (item 3) — up to ~7.5% of width right, up to ~40
+logical px bottom at the worst zoom × DPR combination measured.
+
+### Deferred follow-up
+
+**Cross-client cell-measurement divergence.** The `[baseFont]` re-measure
+effect reads the cell from whichever renderer is active. The WebGL
+renderer DPR-quantises its reported cell dimensions (`floor(width × DPR) /
+DPR`), while the DOM renderer reports raw floats. Two viewers on different
+DPRs (or different active renderers) can therefore quantise the same
+logical cell into different 0.1px buckets and echo different grids on a
+shared `fontSize` change. This is bounded by the gateway's authoritative
+dedup and is partially pre-existing (not introduced by this branch), but
+it is a known residual, not yet fixed. Proposed fix: capture the cell from
+a renderer-independent source (e.g. xterm's `CharSizeService`), or only
+re-measure in view-mode/base-font conditions, plus a two-DPR two-client
+convergence probe to verify.
