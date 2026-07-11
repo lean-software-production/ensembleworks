@@ -202,3 +202,63 @@ claude-code session.
 - tmux `M-Escape` kill-pane binding (also steals a chord, but nobody has
   reported it; note for later).
 - Any change to the terminal WS protocol, gateway, or relay plane.
+
+## Addendum (2026-07-11) — renderer strategy & font size
+
+Live testing on the affected Wayland machine (fractional DPR: 1.1 external
+monitor, 2.2 laptop) after items 1–5 landed produced new evidence:
+
+- Edit mode at 65% zoom: text blurrier than view mode; left/right margins
+  drift with zoom (too much padding zoomed out, cutoff zoomed in).
+- Edit mode at 379% zoom on the high-DPR screen: glyphs render as square
+  boxes — deterministic, not random. Item 2's "random mid-session tofu" is
+  now largely reattributed to this: zoom-scaled fonts (base × zoom × DPR ≈
+  130+ device px) overflow the WebGL glyph atlas.
+- Forcing the DOM renderer (item 2's escape-hatch flag) cured the blur, the
+  side margins, and the boxes. Remaining: bottom edge drifts with zoom
+  (DOM row heights quantise to whole px at fractional font sizes × ~25
+  rows), and 1px seams between rows on box-drawing TUIs (DOM renders font
+  glyphs; only atlas renderers draw box chars procedurally via customGlyphs).
+
+Root cause: re-rasterising the editing terminal at `fontSize = base × zoom`
+pushes any atlas renderer outside its envelope in both directions. Four
+follow-up items, folded into this bundle:
+
+### 7. Hybrid renderer — WebGL in view, DOM in edit (unconditional)
+
+View mode keeps the WebGL addon: many terminals compositing while the
+camera pans/zooms, glyphs at base font (atlas comfort zone). Entering edit
+disposes the addon (xterm falls back to its DOM renderer: no atlas, crisp
+at any fractional size); leaving edit loads a fresh addon instance.
+**Supersedes item 2's `ensembleworks:webgl` escape hatch, which is removed**
+(`webgl.ts` + test deleted) — everyone runs the same renderer strategy. The
+visibility-return `clearTextureAtlas()` heal stays (protects view-mode
+WebGL); the edit-enter heal is dropped (renderer swap makes it moot).
+Context-loss fallback stays for view mode.
+
+### 8. Integer-px font while editing
+
+The item 6 candidate fix, now evidence-backed by the live machine: rendered
+font is `max(6, round(base × zoom))` with the host counter-scale using the
+same effective factor (net on-screen scale exactly 1). Kills the bottom-edge
+drift (stable DOM row heights) and reduces row seams. The four
+`terminal-grid-sizing.md` invariants hold: the grid still derives from the
+shared box + base-font cell; the rounding is render-only.
+
+### 9. Per-terminal base font size (shared prop + keys)
+
+`fontSize: T.number.optional()` on `terminalShapeProps` (contracts — single
+definition; optional ⇒ no migration; absent = 16). SHARED semantics: one
+PTY grid per terminal, so font size is a property of the terminal, not the
+viewer — changing it re-grids for everyone (deterministic: the cell is
+measured at the shared base font and quantised, so every client derives the
+same grid). UI: Ctrl/Cmd +/− (and 0 to reset) while editing, clamped 8–32,
+handled in the existing key handler so browser page-zoom never fires.
+
+### 10. Verification & findings write-back
+
+Headless probes at `PROBE_DPR` 1.1 and 2.2 (the real machine's values):
+renderer actually swaps (canvas present in view, absent in edit), bottom
+margin stable across zooms in edit (±2px), box-drawing seams screenshot at
+integer fonts (accept or mitigate based on evidence), editpad + zoom probes
+still pass. Findings appended here.
