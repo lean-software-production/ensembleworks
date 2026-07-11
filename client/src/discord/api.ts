@@ -19,7 +19,7 @@ export function bindingsUrl(room: string): string {
 }
 
 export function deleteBindingUrl(id: string): string {
-	return `/api/discord/bindings/${encodeURIComponent(id)}`
+	return `/api/discord/bindings?${new URLSearchParams({ id }).toString()}`
 }
 
 // Thin async wrappers (real fetch — not unit-tested).

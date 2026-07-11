@@ -87,7 +87,7 @@ export const discordPost: ToolDef = {
 export const discordBindingsDelete: ToolDef = {
 	plugin: 'discord',
 	id: 'unbind',
-	http: { method: 'DELETE', path: '/api/discord/bindings/:id' },
+	http: { method: 'DELETE', path: '/api/discord/bindings' },
 	help: 'Remove a Discord channel binding by id (idempotent).',
 	zodInput: z.object({ id: z.string().describe('the binding id to remove') }),
 	zodOutput: z.object({ ok: z.literal(true) }),

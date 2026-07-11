@@ -50,10 +50,14 @@ async function main() {
 	assert.equal(longId.status, 400)
 
 	// delete
-	const del = await fetch(`${base}/api/discord/bindings/${created.body.id}`, { method: 'DELETE' })
+	const del = await fetch(`${base}/api/discord/bindings?id=${encodeURIComponent(created.body.id)}`, { method: 'DELETE' })
 	assert.equal(del.status, 200)
 	const empty = await getJson('/api/discord/bindings?room=test')
 	assert.equal(empty.body.bindings.length, 0)
+
+	// delete without id → 400
+	const delMissing = await fetch(`${base}/api/discord/bindings`, { method: 'DELETE' })
+	assert.equal(delMissing.status, 400)
 
 	// POST /api/discord/post — server → bot mediator (E3).
 	{
