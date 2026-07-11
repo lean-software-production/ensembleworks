@@ -22,6 +22,12 @@
 # ENSEMBLEWORKS_CADDY_SITE=https://<host>:8080 and CADDY_TLS_DIRECTIVE="tls
 # internal". Both default to the plain-:8080 shape, so upstream-TLS and native
 # users are unaffected.
+#
+# The five upstream targets below are also env-parameterized, for the same
+# ENSEMBLEWORKS_PORT_OFFSET multi-stack-per-host dev feature (bin/dev sets
+# these alongside ENSEMBLEWORKS_CADDY_SITE); their defaults are today's
+# production ports, so an unset environment (e.g. the ash dogfood box, which
+# copies this file with no env set) reproduces this file's pre-offset shape.
 
 # auto_https disable_redirects: serve TLS on the site's port but don't try to
 # bind :80 for an http->https redirect (fails as non-root, and unwanted here).
@@ -45,7 +51,7 @@
 		# not /livekit — strip the prefix before proxying or the SFU returns 404
 		# and browser media never connects.
 		uri strip_prefix /livekit
-		reverse_proxy localhost:7880
+		reverse_proxy localhost:{$ENSEMBLEWORKS_PORT_LIVEKIT:7880}
 	}
 
 	# Embedded dev servers, proxied under the canvas origin so the iframes are
@@ -66,7 +72,7 @@
 	@shared-browser path /shared-browser /shared-browser/*
 	handle @shared-browser {
 		uri strip_prefix /shared-browser
-		reverse_proxy localhost:8090
+		reverse_proxy localhost:{$ENSEMBLEWORKS_PORT_NEKO:8090}
 	}
 
 	# Terminal LOCAL plane (node-pty + tmux; WebSocket) -> the gateway process on
@@ -74,7 +80,7 @@
 	# the sync server via @backend below. Mirrors deploy/Caddyfile.prod.
 	@term_local path /api/terminal/health /api/terminal/sessions /api/terminal/sessions/* /api/terminal/ws
 	handle @term_local {
-		reverse_proxy 127.0.0.1:8789
+		reverse_proxy 127.0.0.1:{$ENSEMBLEWORKS_PORT_TERM:8789}
 	}
 
 	# Backend traffic -> the sync server on :8788 DIRECTLY (not via Vite). Vite's
@@ -87,7 +93,7 @@
 	# Caddy this route wins first.)
 	@backend path /sync /sync/* /api /api/* /uploads /uploads/* /files /files/*
 	handle @backend {
-		reverse_proxy 127.0.0.1:8788
+		reverse_proxy 127.0.0.1:{$ENSEMBLEWORKS_PORT_SYNC:8788}
 	}
 
 	# Everything else — the app shell, HMR (/@vite/client WS), and client assets
@@ -96,6 +102,6 @@
 	# `localhost` would otherwise resolve to IPv6 ::1). Caddy resolves `localhost`
 	# to ::1 first, so a `localhost` upstream here would 502 on connection-refused.
 	handle {
-		reverse_proxy 127.0.0.1:5173
+		reverse_proxy 127.0.0.1:{$ENSEMBLEWORKS_PORT_CLIENT:5173}
 	}
 }
