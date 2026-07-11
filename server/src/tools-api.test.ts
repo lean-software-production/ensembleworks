@@ -34,7 +34,7 @@ async function main() {
 		tools: Array<{ plugin: string; id: string; method: string; path: string }>
 	}
 	assert.equal(manifest.version, 1, 'manifest.version === 1')
-	assert.equal(manifest.tools.length, 17, 'manifest declares 17 tools')
+	assert.equal(manifest.tools.length, 22, 'manifest declares 22 tools (17 + 5 canvas-v2)')
 	assert.equal(typeof manifest.server, 'string', 'manifest.server is a string')
 
 	// --- Direction A: declared ⊆ mounted (every verb is reachable) -------------
