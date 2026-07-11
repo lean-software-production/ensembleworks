@@ -560,17 +560,24 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 	// the edited terminal's editZoom changes — idle terminals stay at 1 — so this
 	// does not re-render every terminal when the board zooms. The grid (cols/rows)
 	// is gateway-authoritative and unaffected; only the rendered font size changes.
-	// Rendered font is the zoom-scaled base ROUNDED TO WHOLE PIXELS: fractional
-	// font sizes make row heights quantise per row (DOM renderer) and cell
-	// metrics fractional (atlas renderers) — the source of the bottom-edge
-	// drift and row seams while editing. The host counter-scale below inverts
-	// the FONT's actual factor, so the net on-screen scale stays exactly 1 and
-	// mouse→cell math stays exact. Grid unaffected: captureCell normalises by
-	// (fontSize / BASE_FONT), which remains the true factor.
+	// Rendered font is the zoom-scaled base FLOORED TO WHOLE PIXELS: fractional
+	// font sizes make the DOM renderer quantise row heights per row — the
+	// source of the bottom-edge drift and row seams while editing — and blur
+	// atlas glyphs. Because the font is floored while the host is
+	// counter-scaled by the exact zoom, the rendered grid under-fills the box
+	// by up to one font-px worth (≤ ~6%, a small background strip at
+	// right/bottom) — deliberately traded for exact mouse→cell selection:
+	// xterm's getCoords assumes net on-screen scale 1 (it divides
+	// transform-inclusive screen px by transform-independent CSS cell size),
+	// so the counter-scale MUST invert the raw zoom, not the font's factor.
+	// Floor, not round: rounding up made the content LARGER than the box and
+	// clipped the right edge; flooring only ever under-fills. Grid unaffected:
+	// captureCell normalises by (fontSize / BASE_FONT), which remains the
+	// true factor.
 	useEffect(() => {
 		const term = termRef.current
 		if (!term) return
-		const nextFont = Math.max(6, Math.round(BASE_FONT * editZoom))
+		const nextFont = Math.max(6, Math.floor(BASE_FONT * editZoom))
 		if (term.options.fontSize !== nextFont) term.options.fontSize = nextFont
 	}, [editZoom])
 
@@ -595,10 +602,6 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 
 	// w/h drive the shape's rendered box.
 	const { w, h } = shape.props
-	// The counter-scale must invert the FONT's actual factor, not the raw zoom:
-	// the rendered font is rounded to whole px (see the font effect), so we
-	// scale the host by the same effective factor to keep net scale exactly 1.
-	const fontFactor = Math.max(6, Math.round(BASE_FONT * editZoom)) / BASE_FONT
 
 	return (
 		<HTMLContainer
@@ -733,17 +736,15 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 				}}
 			>
 				{/* xterm renders here. While editing at zoom ≠ 1 the host is sized
-				    up by the rendered font's factor (≈ zoom, rounded to whole px —
-				    see the font effect) and scaled back down by its inverse, giving
-				    the element a net on-screen scale of 1 (so xterm's mouse→cell math
-				    is exact) while still filling the frame. At zoom 1 this is the
-				    identity. */}
+				    up by the zoom and scaled back down by 1/zoom, giving the element
+				    a net on-screen scale of 1 (so xterm's mouse→cell math is exact)
+				    while still filling the frame. At zoom 1 this is the identity. */}
 				<div
 					ref={hostRef}
 					style={{
-						width: `calc(100% * ${fontFactor})`,
-						height: `calc(100% * ${fontFactor})`,
-						transform: `scale(${1 / fontFactor})`,
+						width: `calc(100% * ${editZoom})`,
+						height: `calc(100% * ${editZoom})`,
+						transform: `scale(${1 / editZoom})`,
 						transformOrigin: 'top left',
 					}}
 				/>
