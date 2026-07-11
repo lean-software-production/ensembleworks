@@ -364,12 +364,29 @@ function down() {
 		console.log(`session '${session}' is not running`)
 	}
 	// Caddy reads the pane-close SIGHUP as "reload", not "exit", so it outlives
-	// the session and keeps holding :8080 — which then blocks the next `up`
-	// (and left a stale plain-HTTP caddy in front of a new TLS one). Reap any
-	// stray caddy still serving our Caddyfile.
-	spawnSync('pkill', ['-f', `caddy run --config ${path.join(repoDir, 'deploy', 'Caddyfile')}`], {
-		stdio: 'ignore',
-	})
+	// the session and keeps holding the edge port — which then blocks the next
+	// `up` (and left a stale plain-HTTP caddy in front of a new TLS one). Reap
+	// any stray caddy still serving our Caddyfile — but ONLY this stack's: a
+	// parallel offset stack runs the same cmdline, so a plain pkill -f would
+	// reap its caddy too. The stack is identified by ENSEMBLEWORKS_CADDY_SITE
+	// in the process env (`:<port>` or `https://host:<port>` — always ends with
+	// our edge port), which never appears on the cmdline.
+	reapStrayCaddy()
+}
+
+function reapStrayCaddy() {
+	const pgrep = spawnSync(
+		'pgrep',
+		['-f', `caddy run --config ${path.join(repoDir, 'deploy', 'Caddyfile')}`],
+		{ encoding: 'utf8' },
+	)
+	for (const pid of (pgrep.stdout ?? '').trim().split('\n').filter(Boolean)) {
+		try {
+			const environ = readFileSync(`/proc/${pid}/environ`, 'utf8')
+			const site = environ.split('\0').find((e) => e.startsWith('ENSEMBLEWORKS_CADDY_SITE='))
+			if (site?.endsWith(`:${ports.caddy}`)) process.kill(Number(pid))
+		} catch {} // pid vanished or environ unreadable — skip
+	}
 }
 
 function attach() {
