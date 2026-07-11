@@ -1,9 +1,10 @@
 // Run: bun src/client-peer.test.ts
 import assert from 'node:assert/strict'
-import { dumpModel } from '@ensembleworks/canvas-doc'
+import { LoroCanvasDoc, dumpModel } from '@ensembleworks/canvas-doc'
 import { checkInvariants, type CanvasDocument } from '@ensembleworks/canvas-model'
 import { SyncClientPeer } from './client-peer.js'
 import { makePair } from './memory-transport.js'
+import { Frame, encode } from './protocol.js'
 import { SyncServerPeer } from './server-peer.js'
 
 const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {} })
@@ -134,6 +135,93 @@ const normalize = (m: CanvasDocument) => ({
     !server.doc.listShapes().some((s) => s.id === 'shape:after-close'),
     'a local put after close() never reaches the server',
   )
+}
+
+// --- (4) repair is gated on ImportResult.changed: a redundant Update (all
+// ops already known) must NOT pay the O(doc) repair marshal ---
+{
+  const [fakeServerEnd, clientEnd] = makePair()
+  // No real server: we drive frames by hand from the far end of the pair.
+  fakeServerEnd.onMessage(() => {}) // swallow the client's SyncRequest/Updates
+  const client = new SyncClientPeer({ peerId: 401n, transport: clientEnd })
+
+  // Spy: shadow the instance's repair with a counting wrapper.
+  let repairs = 0
+  const realRepair = client.doc.repair.bind(client.doc)
+  ;(client.doc as any).repair = () => { repairs++; return realRepair() }
+
+  const writer = LoroCanvasDoc.create({ peerId: 402n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:gated'))
+  writer.commit()
+  const delta = writer.exportUpdate()
+
+  fakeServerEnd.send(encode(Frame.Update, delta))
+  assert.equal(repairs, 1, 'a fresh Update runs repair once')
+  assert.deepEqual(client.doc.listShapes().map((s) => s.id), ['shape:gated'])
+
+  fakeServerEnd.send(encode(Frame.Update, delta)) // exact same bytes again
+  assert.equal(repairs, 1, 'a no-op (changed: false) import skips repair entirely')
+}
+
+// --- (5) reconnect() closes the abandoned transport: even if the old channel
+// is still open (zombie — e.g. a half-dead ws the client gave up on), the
+// server must drop it (onClose -> clients.delete), so fan-out stops flowing
+// down the stale channel (no unbounded client-set leak / double-relay). ---
+{
+  const server = new SyncServerPeer({ peerId: 6n })
+  const [serverEnd1, clientEnd1] = makePair()
+  server.connect(serverEnd1)
+  const client = new SyncClientPeer({ peerId: 601n, transport: clientEnd1 })
+
+  // Reconnect WITHOUT the old transport having died first.
+  const [serverEnd2, clientEnd2] = makePair()
+  server.connect(serverEnd2)
+  client.reconnect(clientEnd2)
+
+  // Watch the old channel: nothing may arrive here anymore.
+  let staleFrames = 0
+  clientEnd1.onMessage(() => staleFrames++)
+
+  // A third party writes; the server fans out to its live clients.
+  const [writerServerEnd, writerClientEnd] = makePair()
+  server.connect(writerServerEnd)
+  const writer = LoroCanvasDoc.create({ peerId: 602n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:after-swap'))
+  writer.commit()
+  writerClientEnd.send(encode(Frame.Update, writer.exportUpdate()))
+
+  assert.ok(
+    client.doc.listShapes().some((s) => s.id === 'shape:after-swap'),
+    'the new transport delivers: client stays live after the swap',
+  )
+  assert.equal(staleFrames, 0, 'the abandoned transport receives nothing — reconnect() closed it')
+}
+
+// --- (6) close() ignores late frames: a real ws can deliver buffered frames
+// after the app-level close; they must not mutate the closed peer's doc.
+// Double-close is safe. ---
+{
+  let msgCb: ((b: Uint8Array) => void) | null = null
+  let closed = false
+  const fake: import('./protocol.js').Transport = {
+    send: () => {},
+    onMessage: (cb) => { msgCb = cb },
+    onClose: () => {},
+    close: () => { closed = true },
+  }
+  const client = new SyncClientPeer({ peerId: 801n, transport: fake })
+  client.close()
+  assert.ok(closed, 'close() closes the transport')
+  assert.doesNotThrow(() => client.close(), 'close() is idempotent')
+
+  const writer = LoroCanvasDoc.create({ peerId: 802n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:late'))
+  writer.commit()
+  msgCb!(encode(Frame.Update, writer.exportUpdate())) // buffered frame lands post-close
+  assert.deepEqual(client.doc.listShapes(), [], 'a post-close inbound Update is dropped, not applied')
 }
 
 console.log('ok: client-peer')

@@ -174,12 +174,27 @@ export class LoroCanvasDoc implements CanvasDoc {
   import(bytes: Uint8Array): ImportResult {
     // Loro's ImportStatus.pending is Map<PeerID, CounterSpan> | null; collapse
     // to the engine-agnostic boolean (true iff there are actual pending spans).
+    // ImportStatus.success maps each peer to the span of ops NEWLY APPLIED by
+    // this call — probed against loro-crdt 1.13.6: a fresh import yields a
+    // non-empty map, an exact repeat (or an empty-history update) yields an
+    // EMPTY map, and a partial overlap lists only the newly-applied span. So
+    // `changed` = success non-empty.
     const status = this.doc.import(bytes)
-    return { pending: status.pending !== null && status.pending.size > 0 }
+    return {
+      pending: status.pending !== null && status.pending.size > 0,
+      changed: status.success.size > 0,
+    }
   }
   // Compute the model inline from this doc's own lists (not via bridge.ts's
   // dumpModel) to avoid a bridge↔impl import cycle: bridge.ts imports
   // LoroCanvasDoc for its type, so LoroCanvasDoc must not import bridge.ts back.
+  //
+  // PERF (measured, Phase 2 review): ~7.36ms/call at 1k shapes on a CLEAN doc
+  // — i.e. that's the floor even when the plan is empty — with ~70% of it in
+  // the three list*() WASM marshals above; cost is linear in doc size. Sync
+  // peers therefore gate repair() on ImportResult.changed (no-op imports skip
+  // it entirely). The deferred id→node index (see nodeByShapeId's PERF note)
+  // is the lever if this floor ever matters at real scale.
   repair(): RepairOp[] {
     const model = makeDocument({ pages: this.listPages(), shapes: this.listShapes(), bindings: this.listBindings() })
     const plan = repairPlan(model)

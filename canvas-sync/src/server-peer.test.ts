@@ -159,4 +159,77 @@ function wireFakeClient(t: Transport, peerId: bigint): LoroCanvasDoc {
   assert.deepEqual(server.doc.listBindings(), [], 'the dangling binding was swept by repair')
 }
 
+// --- (5) redundant Update frames are NOT re-relayed: a delta the server has
+// already applied (changed: false) means every client already got those ops
+// (the server relayed/broadcast them when it FIRST applied them), so relaying
+// again only multiplies waste ---
+{
+  const server = new SyncServerPeer({ peerId: 5n })
+  const [senderServerEnd, senderClientEnd] = makePair()
+  const [observerServerEnd, observerClientEnd] = makePair()
+  server.connect(senderServerEnd)
+  server.connect(observerServerEnd)
+
+  let observerFrames = 0
+  observerClientEnd.onMessage(() => observerFrames++)
+
+  const writer = LoroCanvasDoc.create({ peerId: 501n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:once'))
+  writer.commit()
+  const delta = writer.exportUpdate()
+
+  senderClientEnd.send(encode(Frame.Update, delta))
+  assert.equal(observerFrames, 1, 'first delivery relays to the observer exactly once')
+
+  // Same bytes again (stale channel / reconnect backfill double-delivery).
+  senderClientEnd.send(encode(Frame.Update, delta))
+  assert.equal(observerFrames, 1, 'a no-op (changed: false) import is not re-relayed')
+  assert.deepEqual(
+    server.doc.listShapes().map((s) => s.id),
+    ['shape:once'],
+    'server state untouched by the redundant delivery',
+  )
+}
+
+// --- (6) close() is a REAL close: transports dropped, connect-after-close
+// throws, in-flight frames after close are ignored (not misuse — a real ws
+// can deliver buffered frames post-close), double-close is safe ---
+{
+  // A fake transport whose deliver() bypasses the closed flag, simulating a
+  // ws that flushes buffered frames after the app-level close.
+  const fakeTransport = () => {
+    let msgCb: ((b: Uint8Array) => void) | null = null
+    let closeCb: (() => void) | null = null
+    let closed = false
+    const t: Transport = {
+      send: () => {},
+      onMessage: (cb) => { msgCb = cb },
+      onClose: (cb) => { closeCb = cb },
+      close: () => { if (!closed) { closed = true; closeCb?.() } },
+    }
+    return { t, deliver: (b: Uint8Array) => msgCb?.(b), isClosed: () => closed }
+  }
+
+  const server = new SyncServerPeer({ peerId: 7n })
+  const f = fakeTransport()
+  server.connect(f.t)
+
+  server.close()
+  assert.ok(f.isClosed(), 'close() closes every connected transport')
+  assert.doesNotThrow(() => server.close(), 'close() is idempotent')
+
+  // A buffered frame arriving after close must not mutate the doc.
+  const writer = LoroCanvasDoc.create({ peerId: 701n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:late'))
+  writer.commit()
+  f.deliver(encode(Frame.Update, writer.exportUpdate()))
+  assert.deepEqual(server.doc.listShapes(), [], 'a post-close inbound Update is dropped, not applied')
+
+  // Lifecycle misuse is loud (fail-loud house convention).
+  const [extra] = makePair()
+  assert.throws(() => server.connect(extra), /SyncServerPeer is closed/, 'connect after close throws')
+}
+
 console.log('ok: server-peer')

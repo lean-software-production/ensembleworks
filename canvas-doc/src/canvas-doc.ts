@@ -2,8 +2,12 @@ import type { Binding, Page, RepairOp, Shape } from '@ensembleworks/canvas-model
 
 /** Result of applying a remote update. `pending` is true when some received
  * ops depend on history this doc hasn't seen yet — the caller should follow
- * up with a sync request (send versionBytes() to the source peer). */
-export interface ImportResult { pending: boolean }
+ * up with a sync request (send versionBytes() to the source peer).
+ * `changed` is true iff the import newly applied at least one op; a no-op
+ * import (all ops already known to this doc) reports `changed: false`, so
+ * callers can skip downstream work (repair, rebroadcast) that only matters
+ * when state actually moved. */
+export interface ImportResult { pending: boolean; changed: boolean }
 
 // The engine-agnostic contract. LoroCanvasDoc implements it today; a Yjs-backed
 // impl could replace it without touching callers (design's swappability rule).

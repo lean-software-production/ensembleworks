@@ -23,7 +23,20 @@ const delta = a.exportUpdate(bVersion)
 const status = b.import(delta)
 b.commit()
 assert.equal(status.pending, false, 'delta applied cleanly, nothing pending')
+assert.equal(status.changed, true, 'a fresh delta reports changed: true')
 assert.deepEqual(b.listShapes().map((s) => s.id).sort(), ['shape:a1', 'shape:a2'])
+
+// Re-importing the SAME delta is a no-op: all ops already known.
+const repeat = b.import(delta)
+assert.equal(repeat.changed, false, 'a repeat import reports changed: false')
+assert.equal(repeat.pending, false, 'nothing pending on a no-op import either')
+assert.deepEqual(b.listShapes().map((s) => s.id).sort(), ['shape:a1', 'shape:a2'], 'state untouched by the no-op')
+
+// Partial overlap: a full-history export where b already has SOME of the ops
+// still reports changed: true (at least one op newly applied).
+a.putShape(shape('shape:a3') as any); a.commit()
+assert.equal(b.import(a.exportUpdate()).changed, true, 'partial-overlap import reports changed: true')
+assert.deepEqual(b.listShapes().map((s) => s.id).sort(), ['shape:a1', 'shape:a2', 'shape:a3'])
 
 // A delta computed against a stale version is smaller than the full history.
 assert.ok(delta.byteLength < a.exportUpdate().byteLength, 'incremental delta < full history')

@@ -11,6 +11,7 @@ export class SyncClientPeer {
   readonly doc: LoroCanvasDoc
   private transport: Transport
   private unsubLocal: () => void
+  private closed = false
 
   constructor(opts: SyncClientOpts) {
     this.doc = LoroCanvasDoc.create({ peerId: opts.peerId })
@@ -35,9 +36,13 @@ export class SyncClientPeer {
 
   /**
    * Swap to a fresh transport after a disconnect, keeping the doc (and any ops
-   * made while offline). Re-wires onMessage/onClose on the new transport and
-   * re-runs the sync handshake. The old transport is assumed dead (closed);
-   * we do not close it here.
+   * made while offline). Closes the OLD transport first: if it already died,
+   * close() is an idempotent no-op (Transport contract), and if it's a zombie
+   * (half-dead channel we gave up on) closing it fires its onClose on the
+   * server side, which drops the stale entry from the server's client set —
+   * otherwise every reconnect would leak one entry and double-relay down the
+   * dead channel. Then re-wires onMessage/onClose on the new transport and
+   * re-runs the sync handshake.
    *
    * Offline edits, and how they reach the server: while disconnected, this
    * peer's own commits still fire subscribeLocalUpdates, but that send() lands
@@ -53,6 +58,7 @@ export class SyncClientPeer {
    * server has acked) — left as a follow-up, noted in the execution report.
    */
   reconnect(transport: Transport): void {
+    this.transport.close() // idempotent if already dead; evicts a zombie from the server's client set
     this.transport = transport
     this.wireTransport(this.transport)
     this.requestSync()
@@ -60,12 +66,30 @@ export class SyncClientPeer {
   }
 
   private onFrame(frame: Uint8Array): void {
+    // A real ws can deliver buffered frames after the app-level close — not
+    // misuse; drop them silently rather than mutating a closed peer's doc.
+    if (this.closed) return
     const { tag, payload } = decode(frame)
-    if (tag === Frame.Update) { this.doc.import(payload); this.doc.repair(); this.doc.commit() }
+    if (tag === Frame.Update) {
+      // Gate repair/commit on whether the import newly applied anything:
+      // repair() costs O(doc) even with an empty plan (~7ms/call at 1k shapes
+      // — see LoroCanvasDoc.repair's PERF note), and redundant deliveries
+      // (e.g. our own reconnect backfill echoed via a stale channel) would
+      // otherwise pay it for nothing.
+      const r = this.doc.import(payload)
+      if (r.changed) { this.doc.repair(); this.doc.commit() }
+    }
     // Frame.Presence: B5. Unknown tags: deliberately ignored.
   }
 
   putShape(s: Shape): void { this.doc.putShape(s); this.doc.commit() }
 
-  close(): void { this.unsubLocal(); this.transport.close() }
+  /** Idempotent: unsubscribes local updates, closes the transport, and marks
+   * this peer closed so late-arriving frames are ignored (see onFrame). */
+  close(): void {
+    if (this.closed) return
+    this.closed = true
+    this.unsubLocal()
+    this.transport.close()
+  }
 }
