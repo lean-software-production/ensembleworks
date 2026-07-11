@@ -14,6 +14,13 @@ export class SyncServerPeer {
   private clients = new Set<Transport>()
   private unsubLocal: () => void
   private closed = false
+  /** Count of inbound Updates whose import reported pending (ops dependent on
+   * history this doc hasn't seen). Should be ~0 in healthy operation — a
+   * climbing value means clients are sending deltas out of causal order
+   * (broken channel ordering or a buggy sender). Intended to be surfaced by
+   * the D3 shadow-metrics endpoint. */
+  get pendingImports(): number { return this.pendingCount }
+  private pendingCount = 0
 
   constructor(opts: SyncServerOpts) {
     this.doc = opts.initialSnapshot
@@ -44,26 +51,35 @@ export class SyncServerPeer {
       from.send(encode(Frame.Update, this.doc.exportUpdate(payload)))
     } else if (tag === Frame.Update) {
       const r = this.doc.import(payload)
-      // Gate ALL downstream work on whether the import newly applied anything:
-      // repair() costs O(doc) even when the plan is empty (~7ms/call at 1k
-      // shapes, mostly list*() WASM marshaling — see LoroCanvasDoc.repair's
-      // PERF note), and redundant deliveries (reconnect backfill, stale
-      // channels) are common under churn.
+      if (r.pending) this.pendingCount++
+      // Repair/commit are gated on `changed` alone: repair() costs O(doc) even
+      // when the plan is empty (~7ms/call at 1k shapes, mostly list*() WASM
+      // marshaling — see LoroCanvasDoc.repair's PERF note), and a pending
+      // import applied NOTHING, so there is nothing to repair yet (the
+      // gap-filling import that later applies the pended ops reports
+      // changed: true and pays for repair then).
       if (r.changed) {
         this.doc.repair()
         this.doc.commit() // fires subscribeLocalUpdates -> broadcast (see constructor)
-        // Also relay the raw client delta to peers other than the sender (so peers
-        // converge even on ops that produced no server-local repair delta).
-        // Skipping the relay when changed === false is safe: unchanged means the
-        // SERVER already had every op in this frame, and each of those ops was
-        // already propagated when the server FIRST acquired it — via this relay
-        // + the repair-delta broadcast (client Update), via the local-updates
-        // broadcast (server-local write), or via the SyncRequest handshake reply
-        // every client performs on connect/reconnect (ops predating the client's
-        // connection, incl. initialSnapshot history). Re-relaying would only
-        // multiply redundant frames.
-        this.broadcast(frame, from)
       }
+      // Relay the raw client delta to peers other than the sender (so peers
+      // converge even on ops that produced no server-local repair delta).
+      // changed: false covers TWO very different cases and only one may skip:
+      // - No-op import (changed: false, pending: false): the server already
+      //   had every op, and each was already propagated when the server FIRST
+      //   acquired it — via this relay + the repair-delta broadcast (client
+      //   Update), via the local-updates broadcast (server-local write), or
+      //   via the SyncRequest handshake reply every client performs on
+      //   connect/reconnect (ops predating the client's connection, incl.
+      //   initialSnapshot history). Re-relaying would only multiply redundant
+      //   frames — skip.
+      // - PENDING import (changed: false, pending: true): the ops are only
+      //   CACHED, dependent on history the server hasn't seen — the server
+      //   does NOT hold them, so nothing else will ever carry them to the
+      //   other clients (the later gap-filler relay carries only its own
+      //   bytes). MUST relay, so observers pend the same frame identically
+      //   and converge the moment the gap fills.
+      if (r.changed || r.pending) this.broadcast(frame, from)
     }
     // Frame.Presence: B5. Unknown tags: deliberately ignored.
   }

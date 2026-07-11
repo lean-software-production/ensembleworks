@@ -192,6 +192,48 @@ function wireFakeClient(t: Transport, peerId: bigint): LoroCanvasDoc {
   )
 }
 
+// --- (5b) out-of-order deltas: a PENDING import also reports changed: false,
+// but unlike a no-op the server does NOT hold those ops — the frame must
+// still be relayed so fully-connected observers can pend it identically and
+// converge when the gap-filler arrives. (Reviewer-demonstrated stranding:
+// skipping the relay on pending left an observer permanently one shape
+// short, because the later gap-filling relay only carries the gap-filler's
+// own bytes.) ---
+{
+  const server = new SyncServerPeer({ peerId: 55n })
+  const [senderServerEnd, senderClientEnd] = makePair()
+  const [observerServerEnd, observerClientEnd] = makePair()
+  server.connect(senderServerEnd)
+  server.connect(observerServerEnd)
+  const observer = wireFakeClient(observerClientEnd, 551n)
+
+  const writer = LoroCanvasDoc.create({ peerId: 552n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:first'))
+  writer.commit()
+  const delta1 = writer.exportUpdate()
+  const v1 = writer.versionBytes()
+  writer.putShape(shape('shape:second'))
+  writer.commit()
+  const delta2 = writer.exportUpdate(v1) // depends on delta1's history
+
+  assert.equal(server.pendingImports, 0, 'pending-imports counter starts at zero')
+  senderClientEnd.send(encode(Frame.Update, delta2)) // arrives FIRST: server must pend it
+  assert.equal(server.pendingImports, 1, 'the out-of-order delta is counted as a pending import')
+  senderClientEnd.send(encode(Frame.Update, delta1)) // gap-filler: server applies both
+
+  assert.deepEqual(
+    server.doc.listShapes().map((s) => s.id).sort(),
+    ['shape:first', 'shape:second'],
+    'server converges once the gap fills',
+  )
+  assert.deepEqual(
+    observer.listShapes().map((s) => s.id).sort(),
+    ['shape:first', 'shape:second'],
+    'a fully-connected observer converges too — the pending frame was relayed, not swallowed',
+  )
+}
+
 // --- (6) close() is a REAL close: transports dropped, connect-after-close
 // throws, in-flight frames after close are ignored (not misuse — a real ws
 // can deliver buffered frames post-close), double-close is safe ---

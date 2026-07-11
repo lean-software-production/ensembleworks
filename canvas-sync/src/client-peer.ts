@@ -75,7 +75,13 @@ export class SyncClientPeer {
       // repair() costs O(doc) even with an empty plan (~7ms/call at 1k shapes
       // — see LoroCanvasDoc.repair's PERF note), and redundant deliveries
       // (e.g. our own reconnect backfill echoed via a stale channel) would
-      // otherwise pay it for nothing.
+      // otherwise pay it for nothing. A PENDING import (changed: false,
+      // pending: true — ops dependent on unseen history) also applied nothing,
+      // so it too skips repair. Unlike the server we relay to no one, so no
+      // gate change is needed for pending here: Loro auto-applies the pended
+      // ops when the gap-filler arrives (the server relays it), and worst case
+      // the next requestSync() self-heals — the server's reply carries the
+      // full missing delta.
       const r = this.doc.import(payload)
       if (r.changed) { this.doc.repair(); this.doc.commit() }
     }
