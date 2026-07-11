@@ -103,8 +103,17 @@ export class LoroCanvasDoc implements CanvasDoc {
     }
     node.data.set('parentId', parentId)
   }
-  getText(_id: string): string { throw new Error('C4') }
-  setText(_id: string, _t: string): void { throw new Error('C4') }
+  // Each shape gets a dedicated LoroText container keyed by shape id. Full
+  // ProseMirror binding is Phase 3; plain text proves the container this phase.
+  private textKey(id: string): string { return `text:${id}` }
+  /** Missing shape: the container was never written, so this returns ''. */
+  getText(id: string): string { return this.doc.getText(this.textKey(id)).toString() }
+  setText(id: string, text: string): void {
+    if (!this.nodeByShapeId(id)) return
+    const t = this.doc.getText(this.textKey(id))
+    t.delete(0, t.length)
+    t.insert(0, text)
+  }
 
   exportSnapshot(): Uint8Array { return this.doc.export({ mode: 'snapshot' }) }
   exportUpdate(): Uint8Array { return this.doc.export({ mode: 'update' }) }

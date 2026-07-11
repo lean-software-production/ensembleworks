@@ -22,6 +22,7 @@ export interface CanvasDoc {
    * left unchanged.
    */
   reparent(id: string, parentId: string, index?: number): void
+  /** Returns '' if no shape with this id exists (or it has no text set yet). */
   getText(id: string): string
   /** Silent no-op if no shape with this id exists. */
   setText(id: string, text: string): void
