@@ -348,3 +348,25 @@ it is a known residual, not yet fixed. Proposed fix: capture the cell from
 a renderer-independent source (e.g. xterm's `CharSizeService`), or only
 re-measure in view-mode/base-font conditions, plus a two-DPR two-client
 convergence probe to verify.
+
+### Live-machine findings (2026-07-11, post-addendum) — margin root cause closed
+
+Live testing at real DPR 1.1 (external) and 2.2 (laptop) with fractional
+char advances (charW16 = 9.6) found residual edit-mode margin defects the
+headless environment could not reproduce (its browser rounds char advances
+to integer px). Root cause confirmed in source: the shared grid cell was
+captured from the ACTIVE renderer, and WebGL floors its cell to whole
+device pixels (9.6 → 9.09 css at DPR 1.1) while the DOM renderer draws
+true fractional advances. Shipped fix (commit ef8b1c6): grid cell from the
+renderer-independent charSizeService (width exact, height +1 as the
+universal row-rounding bound — supersedes this addendum's earlier
+"deferred follow-up", now closed); exact fractional edit font (supersedes
+item 8's floor — the floor made the rendered cell diverge from the grid
+cell by a zoom-dependent fraction); and a per-axis view-mode host scale
+(grid cell / rendered cell, clamped ≤1.15) compensating WebGL's
+quantisation on fractional-DPR screens. Accepted residuals: view-mode
+glyphs run ≤ ~5% wide on fractional-DPR screens (the compensation trade),
+and bottom under-fill ≤ 1px per row ("not perfect but manageable" — user
+verdict). Edit-mode selection stays exact: net on-screen scale 1 is
+preserved (the compensation applies only in view mode, where there is no
+selection).
