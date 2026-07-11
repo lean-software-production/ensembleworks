@@ -16,18 +16,21 @@ Slice=ensembleworks.slice
 MemoryAccounting=yes
 MemoryLow=512M
 Environment=PORT=8788
-Environment=DATA_DIR=@APP_HOME@/.local/share/ensembleworks
-# Room SQLite DBs live on the fast boot disk, not the slow /home data volume
-# (room-database-fast-storage design). Fixed absolute path — same on every host,
-# so unlike DATA_DIR it needs no @APP_HOME@ templating. deploy.sh guarantees this
-# dir exists and is @APP_USER@-owned before start; a 15-min timer backs it up to
-# DATA_DIR/rooms on /home. DO NOT REMOVE: leaving DATABASE_DIR unset silently
-# reverts rooms to DATA_DIR/rooms, which — with the backup timer active — makes
-# the backup destination collide with live writes and corrupts the room DB (the
-# 2026-07-10 ew-lsp-001 outage). See docs/superpowers/specs/2026-07-09-room-database-fast-storage-design.md.
-Environment=DATABASE_DIR=/var/lib/ensembleworks/databases
 Environment=CLIENT_DIST=@APP_HOME@/current/client-dist
 EnvironmentFile=@APP_HOME@/.config/ensembleworks/sync.env
+# Storage geometry contract: DATA_DIR + DATABASE_DIR + DATABASE_BACKUPS_DIR
+# come ONLY from storage.env — deliberately no Environment= lines for them
+# here (EnvironmentFile= outranks Environment=, so a unit-level value would be
+# shadow config the moment an env file disagreed). The same file is sourced by
+# the laingville ensembleworks-database-backup/restore units, so the sync
+# server and the backup timer cannot disagree about the paths; the server
+# validates the triple at startup and REFUSES TO BOOT on missing or
+# collision-shaped values (live DBs nested in the data root, backup
+# destination overlapping live DBs — the 2026-07-10 ew-lsp-001 corruption
+# shapes). A missing storage.env fails the unit start: that is the fail-closed
+# design, not a bug. Provisioned by the laingville bootstrap; see
+# docs/superpowers/specs/2026-07-11-required-database-dirs-design.md.
+EnvironmentFile=@APP_HOME@/.config/ensembleworks/storage.env
 ExecStart=@APP_HOME@/current/ensembleworks-server sync
 Restart=on-failure
 RestartSec=2

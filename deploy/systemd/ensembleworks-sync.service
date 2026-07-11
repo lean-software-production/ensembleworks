@@ -14,9 +14,14 @@ Type=simple
 User=ensemble
 WorkingDirectory=/home/ensemble/ensembleworks/server
 Environment=PORT=8788
-# Canvas SQLite, uploads and transcripts. Kept under the ensemble user's home so
-# all session state backs up with the home dir. Match APP_USER if you change it.
-Environment=DATA_DIR=/home/ensemble/.local/share/ensembleworks
+# Storage geometry triple — all three are REQUIRED (the sync server validates
+# them at startup and refuses collision shapes; see kernel/storage-geometry.ts
+# and the 2026-07-11 required-database-dirs spec). Dev/dogfood box: no
+# fast/slow disk split, so the three sit as siblings under the ensemble user's
+# home and all back up with it. Match APP_USER if you change it.
+Environment=DATA_DIR=/home/ensemble/data
+Environment=DATABASE_DIR=/home/ensemble/databases
+Environment=DATABASE_BACKUPS_DIR=/home/ensemble/data/database-backups
 # LiveKit Cloud project (URL + API key/secret) — the sync server mints client
 # tokens with these. Keep them out of git; see ~/.config/ensembleworks/sync.env.
 EnvironmentFile=/home/ensemble/.config/ensembleworks/sync.env

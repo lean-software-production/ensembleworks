@@ -69,9 +69,12 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 	const telemetry = createTelemetryStore(path.join(opts.dataDir, 'telemetry'))
 	const discord = createDiscordStore(opts.dataDir)
 
-	// Room DBs live on the fast boot disk when DATABASE_DIR is set (see the
-	// room-database-fast-storage spec); otherwise they stay nested under DATA_DIR
-	// (local dev, tests, a host mid-rollout that hasn't been migrated yet).
+	// Room DBs live under databaseDir (the fast boot disk in prod). The
+	// dataDir/rooms fallback below is a TEST/LIB-ONLY convenience for the ~25
+	// in-process test harnesses that construct createSyncApp({ dataDir }); the
+	// prod entry point (sync-server.ts) validates the storage triple and always
+	// passes databaseDir — an unset DATABASE_DIR no longer boots there (see
+	// kernel/storage-geometry.ts and the 2026-07-11 required-database-dirs spec).
 	const roomsDir = opts.databaseDir
 		? path.join(opts.databaseDir, 'rooms')
 		: path.join(opts.dataDir, 'rooms')

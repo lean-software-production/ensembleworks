@@ -125,8 +125,13 @@ and `bin/dev doctor` tells you what's missing (Bun 1.3.14 and tmux required;
 caddy, livekit-server, whisper-server, docker each light up more services).
 Inside the container `bin/dev` is that same engine.
 
-State lives at `~/.local/share/ensembleworks` (canvas SQLite, uploads,
-transcripts); optional config at `~/.config/ensembleworks/dev.env`
+State lives under `~/.local/share/ensembleworks` as the required storage
+triple: `data/` (uploads, transcripts — `DATA_DIR`), `databases/` (live canvas
+SQLite — `DATABASE_DIR`), `database-backups/` (`DATABASE_BACKUPS_DIR`). All
+three are required by the sync server, which validates them at startup and
+refuses collision shapes (existing dev state from before the split sits at the
+root level and is disposable — or `mv` uploads/transcripts into `data/` to
+keep it). Optional config at `~/.config/ensembleworks/dev.env`
 (`STT_API_KEY` for hosted STT, `LIVEKIT_*` + `livekit-dev.yaml` for a real
 SFU setup, `ENSEMBLEWORKS_PUBLIC_ORIGIN` when serving on a remote origin).
 In the devcontainer both paths are symlinks into the git-ignored `.local/`
@@ -440,11 +445,14 @@ Users & data: there is **one shared OS user** (`ensemble`) — everyone mobs as
 it, and the named people you see are app-level only (a name in browser storage),
 not OS accounts. Everything `ensemble` owns lives under its home: the editable
 code (`~/.local/lean-software-production/ensembleworks`, symlinked at
-`~/ensembleworks`), all session state — canvas SQLite, uploads and transcripts
-under `~/.local/share/ensembleworks` (the `DATA_DIR`) — and the secrets
+`~/ensembleworks`), all session state — uploads and transcripts under `~/data`
+(the `DATA_DIR`), live canvas SQLite under `~/databases` (the `DATABASE_DIR`),
+DR copies under `~/data/database-backups` — and the secrets
 (`~/.config/ensembleworks/*.env`). So one backup of `/home/ensemble` captures
 the whole instance. The `*.env` files are segregated by service:
-`sync.env` / `scribe.env` feed their systemd units, `github-app.env` feeds
+`storage.env` carries the required storage triple (sourced by the sync unit,
+validated at startup), `sync.env` / `scribe.env` feed their systemd units,
+`github-app.env` feeds
 `bin/gh-app-token.bash`, and `term.env` is sourced into every interactive
 shell by `~/.bashrc` (wired by `bootstrap-debian-ash.sh`) so CLI tools launched
 from canvas terminals see those vars — new terminals pick it up at startup,

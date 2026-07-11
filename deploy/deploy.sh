@@ -156,6 +156,16 @@ if test -x /usr/local/bin/check-database-backup-fresh.sh; then
   sudo -u "\${APP_USER}" /usr/local/bin/check-database-backup-fresh.sh >/dev/null 2>&1 \
     || echo "    note: room-database backup on /home is STALE — investigate (deploy not blocked)" >&2
 fi
+# Storage geometry contract — REQUIRED (required-database-dirs spec). The sync
+# unit sources storage.env and the server refuses to boot on a missing or
+# collision-shaped triple, so a bad file would strand the box AFTER the swap;
+# catch it here instead, before any fetch. Key-presence only — the server's
+# startup validation owns the geometry rules.
+STORAGE_ENV="\${APP_HOME}/.config/ensembleworks/storage.env"
+sudo test -f "\$STORAGE_ENV" || { echo "PREFLIGHT FAILED: \$STORAGE_ENV missing — provision it (laingville bootstrap / required-database-dirs migration runbook)" >&2; exit 1; }
+for k in DATA_DIR DATABASE_DIR DATABASE_BACKUPS_DIR; do
+  sudo grep -q "^\${k}=" "\$STORAGE_ENV" || { echo "PREFLIGHT FAILED: \${k}= missing from \$STORAGE_ENV" >&2; exit 1; }
+done
 echo "    preflight ok"
 
 # ---- fetch the tag's artifacts into \${NEW} -----------------------------------
@@ -179,14 +189,16 @@ else
 fi
 
 # ---- ensure the fast-disk room-DB base dir exists ----------------------------
-# The sync unit sets DATABASE_DIR=/var/lib/ensembleworks/databases; the server
-# creates only the rooms/ leaf (as \${APP_USER}) and CANNOT create the root-owned
-# /var/lib parent, so guarantee the app-owned base dir here (idempotent). Without
-# it the sync unit crashes on first room open. Also provisioned by the laingville
-# bootstrap; kept here so a deploy can never half-apply the DATABASE_DIR change
-# (the failure mode behind the 2026-07-10 room-DB corruption incident).
-sudo install -d -m 0755 /var/lib/ensembleworks
-sudo install -d -m 0700 -o "\${APP_USER}" -g "\${APP_USER}" /var/lib/ensembleworks/databases
+# DATABASE_DIR comes from the box's storage.env (preflight proved it's there —
+# no hardcoded path here, one source of truth). The server creates only the
+# rooms/ leaf (as \${APP_USER}) and CANNOT create the root-owned /var/lib
+# parent, so guarantee the app-owned base dir here (idempotent). Also
+# provisioned by the laingville bootstrap; kept here so a deploy can never
+# half-apply the geometry change (the drift class behind the 2026-07-10
+# room-DB corruption incident).
+DB_DIR="\$(sudo grep '^DATABASE_DIR=' "\$STORAGE_ENV" | tail -n1 | cut -d= -f2-)"
+sudo install -d -m 0755 "\$(dirname "\$DB_DIR")"
+sudo install -d -m 0700 -o "\${APP_USER}" -g "\${APP_USER}" "\$DB_DIR"
 
 # ---- install prod systemd units -----------------------------------------------
 # Units are committed templates in deploy/systemd/prod/ (scp'd to /tmp); sed fills
