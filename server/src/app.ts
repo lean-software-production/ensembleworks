@@ -25,6 +25,7 @@ import { type WebSocket, WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
 import { sanitizeId } from './canvas/ids.ts'
 import { createAvRouter } from './features/av.ts'
+import { createCanvasV2Router } from './features/canvas-v2.ts'
 import { createDiscordRouter } from './features/discord.ts'
 import { createFileViewerRouter } from './features/file-viewer.ts'
 import { createFilesRouter } from './features/files.ts'
@@ -117,7 +118,7 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 	// Feature routers mount here IN THIS ORDER (Express matches top-down and the
 	// static catch-all below must stay last): whoami → participants (kernel) → av
 	// (av/token, av/kick, av/pulse) → terminal-status → sticky → file-viewer →
-	// transcript → shape → frames → roadmap → uploads → files
+	// transcript → shape → frames → canvas-v2 → roadmap → uploads → files
 	app.use('/api', express.json())
 
 	// Write scoping: read-only service tokens are 403'd on mutating requests.
@@ -156,6 +157,10 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 	app.use(createShapeRouter(ctx))
 
 	app.use(createFramesRouter(ctx))
+
+	// Agent API v2 (read side, Phase 1): versioned reads of the new canvas-model
+	// document, converted live from the same tldraw store as the routers above.
+	app.use(createCanvasV2Router(ctx))
 
 	// Roadmap (two-way roadmap control): the document lives in the roadmap
 	// store, not the tldraw document — shapes hold only { roadmapId, rev }.
