@@ -560,10 +560,17 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 	// the edited terminal's editZoom changes — idle terminals stay at 1 — so this
 	// does not re-render every terminal when the board zooms. The grid (cols/rows)
 	// is gateway-authoritative and unaffected; only the rendered font size changes.
+	// Rendered font is the zoom-scaled base ROUNDED TO WHOLE PIXELS: fractional
+	// font sizes make row heights quantise per row (DOM renderer) and cell
+	// metrics fractional (atlas renderers) — the source of the bottom-edge
+	// drift and row seams while editing. The host counter-scale below inverts
+	// the FONT's actual factor, so the net on-screen scale stays exactly 1 and
+	// mouse→cell math stays exact. Grid unaffected: captureCell normalises by
+	// (fontSize / BASE_FONT), which remains the true factor.
 	useEffect(() => {
 		const term = termRef.current
 		if (!term) return
-		const nextFont = BASE_FONT * editZoom
+		const nextFont = Math.max(6, Math.round(BASE_FONT * editZoom))
 		if (term.options.fontSize !== nextFont) term.options.fontSize = nextFont
 	}, [editZoom])
 
@@ -588,6 +595,10 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 
 	// w/h drive the shape's rendered box.
 	const { w, h } = shape.props
+	// The counter-scale must invert the FONT's actual factor, not the raw zoom:
+	// the rendered font is rounded to whole px (see the font effect), so we
+	// scale the host by the same effective factor to keep net scale exactly 1.
+	const fontFactor = Math.max(6, Math.round(BASE_FONT * editZoom)) / BASE_FONT
 
 	return (
 		<HTMLContainer
@@ -722,15 +733,17 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 				}}
 			>
 				{/* xterm renders here. While editing at zoom ≠ 1 the host is sized
-				    up by the zoom and scaled back down by 1/zoom, giving the element
-				    a net on-screen scale of 1 (so xterm's mouse→cell math is exact)
-				    while still filling the frame. At zoom 1 this is the identity. */}
+				    up by the rendered font's factor (≈ zoom, rounded to whole px —
+				    see the font effect) and scaled back down by its inverse, giving
+				    the element a net on-screen scale of 1 (so xterm's mouse→cell math
+				    is exact) while still filling the frame. At zoom 1 this is the
+				    identity. */}
 				<div
 					ref={hostRef}
 					style={{
-						width: `calc(100% * ${editZoom})`,
-						height: `calc(100% * ${editZoom})`,
-						transform: `scale(${1 / editZoom})`,
+						width: `calc(100% * ${fontFactor})`,
+						height: `calc(100% * ${fontFactor})`,
+						transform: `scale(${1 / fontFactor})`,
 						transformOrigin: 'top left',
 					}}
 				/>
