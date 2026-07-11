@@ -71,8 +71,8 @@ scribe bot ──► LiveKit Cloud (subscribe-only) ──► Groq Whisper API (
 
 Caddy's only job is the same-origin `/dev/{port}` proxy; **Vite** serves the app
 (with HMR) and proxies the backend routes. The devcontainer runs this exact same
-topology under tmux, reached via Codespaces port-forwarding instead of Cloudflare
-— so dev and the dogfooding server run identically. Both `sync` and `term` are
+topology under tmux, reached via Codespaces port-forwarding — so local and
+devcontainer dev run identically. Both `sync` and `term` are
 modes of the same compiled `ensembleworks-server` binary (Bun-only runtime — no
 Node, no npm on the boxes); `ensembleworks-server sync` (kernel + per-plugin
 routes) and `ensembleworks-server term` (the local PTY/tmux plane) run as
@@ -377,116 +377,6 @@ the brand tokens). Wire it up with a one-line stub:
 return dofile("<repo>/ensembleworks/deploy/theme/neovim.lua")
 ```
 
-## Deployment on the VM
-
-_This section covers the **ash dogfood box** (watch mode, self-editing). For
-production client boxes see [Releasing & deploying (production)](#releasing--deploying-production) below._
-
-The fastest path is the bootstrap script — it provisions a fresh **Debian 13
-(trixie)** box end to end (Bun, Caddy, cloudflared, the `ensemble` user, the
-systemd units and Caddyfile below):
-
-```bash
-scp deploy/bootstrap-debian-ash.sh root@<box>:/root/
-ssh root@<box> 'CF_TUNNEL_TOKEN=eyJ... PUBLIC_HOST=canvas.leansoftware.ai bash /root/bootstrap-debian-ash.sh'
-```
-
-See [deploy/bootstrap-debian-ash.sh](deploy/bootstrap-debian-ash.sh) for the config
-knobs (`REPO_BRANCH`, `APP_USER`, …). Everything the instance owns lives under
-`/home/ensemble`. What it sets up, and the manual steps:
-
-1. **Code**: the repo is cloned to `~ensemble/.local/lean-software-production/ensembleworks`
-   (the repo root *is* the app), with `~ensemble/ensembleworks` symlinked to that
-   checkout; `bun install && bun run build`. The `ensemble` user owns it, so the mob can edit
-   it in place (see "Editing from inside" below).
-2. **LiveKit + STT** are hosted (LiveKit Cloud, Groq) — nothing to run locally.
-   Put the project's `LIVEKIT_URL` / `LIVEKIT_API_KEY` / `LIVEKIT_API_SECRET`
-   in `~ensemble/.config/ensembleworks/sync.env`. The bootstrap also writes
-   placeholders for `scribe.env` (STT), `github-app.env` (the EnsembleWorks
-   bot — see `deploy/github-app-runbook.md`), and `term.env` (env vars for
-   shells spawned in canvas terminals, e.g. `OPENCODE_API_KEY`).
-3. **systemd**: `ensembleworks-sync`, `ensembleworks-term`,
-   `ensembleworks-client` (Vite), and (optional) `ensembleworks-scribe` —
-   installed and enabled, run as `ensemble` in **watch mode** (`bun --watch` + Vite
-   HMR), the same processes the devcontainer runs under tmux. The client unit
-   needs `ENSEMBLEWORKS_PUBLIC_HOST` set to your Cloudflare hostname (pass
-   `PUBLIC_HOST=` to the script, or edit the unit) so Vite accepts it.
-4. **Caddy**: serves plain HTTP on `:8080`; its only route is the `/dev/{port}`
-   proxy — everything else goes to Vite, which serves the app and proxies the
-   backends. TLS is terminated at the Cloudflare edge, so Caddy needs no certs.
-   The Caddyfile is `deploy/Caddyfile` (the same one the devcontainer uses).
-5. **Cloudflare Tunnel**: create a tunnel in the Zero Trust dashboard, run
-   `cloudflared service install <token>` (or pass `CF_TUNNEL_TOKEN`), and add a
-   Public Hostname → `HTTP localhost:8080`.
-6. **Cloudflare Access (required)**: add a Self-hosted Access application over
-   that hostname with an allow policy (email allowlist or team SSO). This is
-   the auth boundary — see Security model below.
-7. Open the URL from two laptops, sign in via Access, draw a sticky on each.
-8. (Optional) transcription: put `STT_API_KEY=gsk_...` (a Groq key) plus the
-   LiveKit values in `~ensemble/.config/ensembleworks/scribe.env`, then
-   `systemctl enable --now ensembleworks-scribe`. Check it's hearing the room:
-   `ensembleworks scribe transcript`.
-
-Security model: **Cloudflare Access is the auth boundary.** The terminal
-gateway is interactive shell access as the shared `ensemble` user — the same
-access the team already has over ssh, via a different door. The Cloudflare
-Tunnel publishes the hostname to the public internet, so the Access policy in
-front of it is what keeps the terminal gateway's local PTY/tmux plane
-(`/api/terminal/health`, `/sessions`, `/ws`) from being an open shell. The box
-itself opens no inbound ports (cloudflared dials out), so lock its firewall
-down to ssh only.
-
-Users & data: there is **one shared OS user** (`ensemble`) — everyone mobs as
-it, and the named people you see are app-level only (a name in browser storage),
-not OS accounts. Everything `ensemble` owns lives under its home: the editable
-code (`~/.local/lean-software-production/ensembleworks`, symlinked at
-`~/ensembleworks`), all session state — canvas SQLite, uploads and transcripts
-under `~/.local/share/ensembleworks` (the `DATA_DIR`) — and the secrets
-(`~/.config/ensembleworks/*.env`). So one backup of `/home/ensemble` captures
-the whole instance. The `*.env` files are segregated by service:
-`sync.env` / `scribe.env` feed their systemd units, `github-app.env` feeds
-`bin/gh-app-token.bash`, and `term.env` is sourced into every interactive
-shell by `~/.bashrc` (wired by `bootstrap-debian-ash.sh`) so CLI tools launched
-from canvas terminals see those vars — new terminals pick it up at startup,
-and editing `term.env` needs no gateway restart (just open a new terminal or
-`source ~/.bashrc`). Because the mob can edit the code the services run, the
-LiveKit/Groq keys are effectively readable by anyone with a terminal — that's
-inherent to a self-editing room, so only admit people you'd trust with those
-keys.
-
-Editing from inside (dogfooding): the point of this stage is that you can change
-EnsembleWorks *from a running EnsembleWorks terminal* and see it live. The units
-run in watch mode, so you just edit — you are `ensemble`:
-
-```bash
-cd ~/ensembleworks                 # the app (symlink to the repo checkout)
-$EDITOR client/src/App.tsx         # Vite HMR updates browsers in place
-$EDITOR server/src/sync-server.ts  # bun --watch reloads the sync server
-```
-
-Client edits hot-swap seamlessly via HMR. Server-side edits (sync, gateway,
-scribe) make `bun --watch` restart that process — which **briefly drops live
-connections** (canvases reconnect; gateway terminals reset), so make those edits
-during a lull. A tight sudoers rule (`/etc/sudoers.d/ensembleworks`) also grants
-`ensemble` `systemctl restart|start|stop ensembleworks-*` (no root shell) for
-dependency changes or a wedged unit:
-
-```bash
-bun add <pkg>                                # then:
-sudo systemctl restart ensembleworks-sync    # or -term / -client / -scribe
-```
-
-> **Hardening later:** to make the instance *un*-editable from itself (once past
-> dogfooding): switch the units off watch mode (the `dev`/`dev:term` ExecStarts
-> back to `start`/`start:term`), drop the `ensembleworks-client` Vite unit and
-> serve the static `vite build` from the sync server instead (Caddy default route
-> back to `:8788`), then split the human and service identities apart — run the
-> units as a separate locked-down `ensembleworks` user that owns the code
-> read-only to `ensemble`, drop `/etc/sudoers.d/ensembleworks`, and move the
-> secrets to that service user so a terminal shell can no longer read or change
-> them. The single-user watch/HMR setup here is a deliberate dogfooding-stage
-> choice.
-
 ## Releasing & deploying (production)
 
 Production client boxes (e.g. ew-donkeyred-001) run non-watch systemd units; the
@@ -572,8 +462,8 @@ rollout.
      otherwise be denied and log a false "sessions will NOT start" warning;
    - **GitHub (optional)** — to let canvas agents push/PR as the `ensembleworks[bot]`
      App without handing the mob the App private key, keep the App's PEM +
-     `github-app.env` in the **app user's** `~/.config/ensembleworks/` (700, like the
-     ash box — see [deploy/github-app-runbook.md](deploy/github-app-runbook.md)) and
+     `github-app.env` in the **app user's** `~/.config/ensembleworks/` (700 —
+     see [deploy/github-app-runbook.md](deploy/github-app-runbook.md)) and
      add the reverse sudoers rule so the sandbox user can mint (only) short-lived
      tokens through it: `ensembleworks-agent ALL=(ensembleworks) NOPASSWD:
      /usr/local/bin/ensembleworks-gh-token`. deploy.sh installs `gh-app-token.bash`
@@ -586,10 +476,7 @@ rollout.
    `github-app.env` only warns, since that feature is optional. If the term unit ran
    without them anyway, the gateway **fails closed** (logs the missing sudoers rule,
    won't start sessions) rather than running shells as the app user. Unset
-   `TERM_RUN_AS` (legacy `-ash` box / local dev) to run shells as the app user.
-
-> The ash dogfood box uses `deploy/bootstrap-debian-ash.sh` (watch mode) — a
-> separate path that these scripts don't touch.
+   `TERM_RUN_AS` (local dev) to run shells as the app user.
 
 ## The 10-minute team demo
 

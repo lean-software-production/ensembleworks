@@ -1,9 +1,6 @@
 # EnsembleWorks — DEV/watch Caddy edge config (Vite-fronted). Used by:
 #   - devcontainer/native dev stack: bin/dev (caddy window) runs `caddy run` against this;
 #     GitHub Codespaces forwards port 8080 over HTTPS.
-#   - ash dogfood box: bootstrap-debian-ash.sh copies this to /etc/caddy/Caddyfile;
-#     a Cloudflare Tunnel forwards the public hostname to http://localhost:8080,
-#     with a Cloudflare Access policy in front.
 # Production client boxes use deploy/Caddyfile.prod instead (static client served
 # by the sync server; no Vite), installed by deploy/deploy.sh.
 #
