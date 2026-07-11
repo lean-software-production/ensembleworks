@@ -46,6 +46,7 @@ export type FontSizeAction = 'up' | 'down' | 'reset'
 // Known trade-off: while editing, Ctrl+-/_ can no longer reach the PTY as
 // 0x1F (readline undo, C-_). Deliberate — GNOME Terminal/Konsole shadow the
 // same keys for font zoom, and readline's C-x C-u remains available.
+// Ctrl+0 (emacs digit-argument) is shadowed likewise.
 export function fontSizeActionForKey(e: EnterKeyEvent): FontSizeAction | null {
 	if (e.type !== 'keydown' || !(e.ctrlKey || e.metaKey) || e.altKey) return null
 	if (e.key === '+' || e.key === '=') return 'up'

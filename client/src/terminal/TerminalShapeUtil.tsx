@@ -586,8 +586,10 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 	// source of the bottom-edge drift and row seams while editing — and blur
 	// atlas glyphs. Because the font is floored while the host is
 	// counter-scaled by the exact zoom, the rendered grid under-fills the box
-	// by up to one font-px worth (≤ ~6%, a small background strip at
-	// right/bottom) — deliberately traded for exact mouse→cell selection:
+	// by up to one font-px worth (typically a few percent, measured up to
+	// ~7.5% of width at fractional zooms — see spec addendum findings; a
+	// small background strip at right/bottom) — deliberately traded for
+	// exact mouse→cell selection:
 	// xterm's getCoords assumes net on-screen scale 1 (it divides
 	// transform-inclusive screen px by transform-independent CSS cell size),
 	// so the counter-scale MUST invert the raw zoom, not the font's factor.
@@ -595,17 +597,24 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 	// clipped the right edge; flooring only ever under-fills. Grid unaffected:
 	// captureCell normalises by (fontSize / the base font), which remains the
 	// true factor.
+	// The lower clamp is 1, not a legibility floor: any larger clamp re-breaks
+	// net-scale-1 whenever it binds (right/bottom clipping + mouse→cell
+	// selection drift — see above). The floor's only job is fontSize >= 1;
+	// the user's own zoom choice governs legibility.
 	useEffect(() => {
 		const term = termRef.current
 		if (!term) return
-		const nextFont = Math.max(6, Math.floor(baseFont * editZoom))
+		const nextFont = Math.max(1, Math.floor(baseFont * editZoom))
 		if (term.options.fontSize !== nextFont) term.options.fontSize = nextFont
 	}, [editZoom, baseFont])
 
 	// Shared font-size changes re-measure the cell; the deterministic grid
-	// effect then re-derives cols/rows from the same shared inputs everywhere
-	// (baseFont is a synced shape prop, and the cell is quantised — same value
-	// on every client, so there is still no proposer race).
+	// effect then re-derives cols/rows from the same shared inputs everywhere.
+	// baseFont is a synced shape prop and the cell is quantised, which keeps
+	// clients on the SAME renderer+DPR in lockstep; clients on different DPRs
+	// can still measure cells a bucket apart because the WebGL renderer
+	// DPR-quantises its reported cell — a known residual (see spec addendum
+	// follow-ups), bounded by the gateway's authoritative dedup.
 	useEffect(() => {
 		const term = termRef.current
 		if (!term) return

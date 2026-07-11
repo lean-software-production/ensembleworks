@@ -1,6 +1,6 @@
 // Probe: box-drawing seams and selection accuracy at fractional zooms.
 //
-// fontSize = BASE_FONT * editZoom (TerminalShapeUtil.tsx) is fractional at
+// fontSize = floor(per-terminal base font × editZoom) (TerminalShapeUtil.tsx) is fractional at
 // most zooms — the prime suspect for box-drawing seams and off-by-one
 // drag-selection (docs/superpowers/specs/2026-07-10-terminal-fixes-bundle-design.md
 // item 6). This probe attempts to reproduce both symptoms under headless
@@ -86,11 +86,13 @@ try {
 		const selEmpty = sel.length === 0
 
 		// window.getSelection() is read per the plan, but its provenance in
-		// this app is uncertain: xterm renders into <canvas> (WebGL raster +
-		// 2D link layer) with no `.xterm-accessibility` tree and no DOM text
-		// node matching terminal content found on inspection, yet toString()
-		// sometimes returns terminal-glyph text anyway. There is also no
-		// window-exposed handle to xterm's own SelectionService (only
+		// this app differs by mode: in VIEW mode xterm renders into <canvas>
+		// (WebGL raster + 2D link layer) with no `.xterm-accessibility` tree
+		// and no DOM text node matching terminal content found on inspection,
+		// yet toString() sometimes returns terminal-glyph text anyway. In EDIT
+		// mode (DOM renderer) `.xterm-rows`/`.xterm-selection` divs do exist,
+		// and their rects are the reliable selection evidence. There is also
+		// no window-exposed handle to xterm's own SelectionService (only
 		// __ewEditor is exposed — App.tsx). Treat selRows as a secondary
 		// signal only; the reliable evidence is the selection screenshot
 		// below — the highlighted band's row extent is directly visible.
