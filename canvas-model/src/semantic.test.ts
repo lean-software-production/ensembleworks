@@ -22,12 +22,12 @@ const doc = makeDocument({
   bindings: [
     // Array order lists the A-side target first, but the terminals say the
     // arrow points B → A. Terminal must win over order.
-    { id: 'binding:1', fromId: 'shape:ar', toId: 'shape:a1', props: { terminal: 'end' } },
-    { id: 'binding:2', fromId: 'shape:ar', toId: 'shape:b1', props: { terminal: 'start' } },
-    { id: 'binding:3', fromId: 'shape:ar2', toId: 'shape:a1', props: { terminal: 'start' } },
-    { id: 'binding:4', fromId: 'shape:ar2', toId: 'shape:z', props: { terminal: 'end' } },
-    { id: 'binding:5', fromId: 'shape:ar3', toId: 'shape:a2', props: {} },
-    { id: 'binding:6', fromId: 'shape:ar3', toId: 'shape:b2', props: {} },
+    { id: 'binding:1', fromId: 'shape:ar', toId: 'shape:a1', props: { terminal: 'end' }, meta: {} },
+    { id: 'binding:2', fromId: 'shape:ar', toId: 'shape:b1', props: { terminal: 'start' }, meta: {} },
+    { id: 'binding:3', fromId: 'shape:ar2', toId: 'shape:a1', props: { terminal: 'start' }, meta: {} },
+    { id: 'binding:4', fromId: 'shape:ar2', toId: 'shape:z', props: { terminal: 'end' }, meta: {} },
+    { id: 'binding:5', fromId: 'shape:ar3', toId: 'shape:a2', props: {}, meta: {} },
+    { id: 'binding:6', fromId: 'shape:ar3', toId: 'shape:b2', props: {}, meta: {} },
   ],
 })
 

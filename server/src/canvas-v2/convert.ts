@@ -29,6 +29,10 @@ function shapeFromRecord(r: any): Shape | null {
 	}
 }
 
+// NOTE: props and meta are passed by REFERENCE from the input records (which
+// may be live store state). The read path must not mutate the resulting
+// document's props/meta; the Phase 5 migration tool must clone before
+// transforming.
 export function fromTldraw(records: any[]): CanvasDocument {
 	const pages: Page[] = []
 	const shapes: Shape[] = []
@@ -74,7 +78,7 @@ export function toTldraw(doc: CanvasDocument): any[] {
 		})
 	}
 	for (const b of doc.bindings) {
-		out.push({ typeName: 'binding', id: b.id, type: 'arrow', fromId: b.fromId, toId: b.toId, props: b.props, meta: (b as any).meta ?? {} })
+		out.push({ typeName: 'binding', id: b.id, type: 'arrow', fromId: b.fromId, toId: b.toId, props: b.props, meta: b.meta })
 	}
 	return out
 }

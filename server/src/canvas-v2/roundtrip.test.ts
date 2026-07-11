@@ -82,7 +82,10 @@ async function main() {
 				},
 			}) as any
 		)
-		store.put(base({ id: termId, type: 'terminal', index: 'a3', props: { w: 640, h: 480, sessionId: 'abc', title: 't' } }) as any)
+		// Non-empty shape meta: must survive the round trip verbatim.
+		store.put(
+			base({ id: termId, type: 'terminal', index: 'a3', meta: { assignee: 'x' }, props: { w: 640, h: 480, sessionId: 'abc', title: 't' } }) as any
+		)
 		store.put(
 			base({
 				id: arrowId,
@@ -108,9 +111,10 @@ async function main() {
 				},
 			}) as any
 		)
-		for (const [terminal, target] of [
-			['start', geoId],
-			['end', frameId],
+		// One binding carries non-empty meta: must survive the round trip verbatim.
+		for (const [terminal, target, meta] of [
+			['start', geoId, { assignee: 'x' }],
+			['end', frameId, {}],
 		] as const)
 			store.put({
 				id: createBindingId(),
@@ -118,7 +122,7 @@ async function main() {
 				type: 'arrow',
 				fromId: arrowId,
 				toId: target,
-				meta: {},
+				meta,
 				props: { terminal, normalizedAnchor: { x: 0.5, y: 0.5 }, isExact: false, isPrecise: false, snap: 'none' },
 			} as any)
 	})
@@ -128,20 +132,36 @@ async function main() {
 	const back = toTldraw(model)
 	const backById = new Map(back.map((r) => [r.id, r]))
 
-	// Every model shape re-emits with identical envelope + props.
+	// Every model shape re-emits with identical envelope + props + meta.
 	for (const s of model.shapes) {
 		const r = backById.get(s.id)
 		assert.ok(r, `shape ${s.id} re-emitted`)
 		assert.equal(r.type, s.kind)
 		assert.equal(r.parentId, s.parentId)
+		assert.equal(r.index, s.index)
 		assert.equal(r.x, s.x)
 		assert.equal(r.y, s.y)
+		assert.equal(r.rotation, s.rotation)
+		assert.equal(r.isLocked, s.isLocked)
+		assert.equal(r.opacity, s.opacity)
+		assert.deepEqual(r.meta, s.meta) // lossless meta
 		assert.deepEqual(r.props, s.props) // lossless props incl. richText
 	}
-	// Bindings survive.
-	assert.equal(
-		back.filter((r) => r.typeName === 'binding').length,
-		2
+	// Non-empty shape meta made it all the way around.
+	assert.deepEqual(backById.get(termId)!.meta, { assignee: 'x' })
+	// Bindings survive, meta included.
+	const backBindings = back.filter((r) => r.typeName === 'binding')
+	assert.equal(backBindings.length, 2)
+	for (const b of model.bindings) {
+		const r = backById.get(b.id)
+		assert.ok(r, `binding ${b.id} re-emitted`)
+		assert.deepEqual(r.props, b.props)
+		assert.deepEqual(r.meta, b.meta)
+	}
+	// The non-empty binding meta made it all the way around.
+	assert.deepEqual(
+		backBindings.find((r) => r.toId === geoId)!.meta,
+		{ assignee: 'x' }
 	)
 	// Custom + default kinds all present.
 	const kinds = new Set(model.shapes.map((s) => s.kind))

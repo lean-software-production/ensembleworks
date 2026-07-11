@@ -9,6 +9,10 @@ export const bindingSchema = z.looseObject({
   fromId: shapeIdField, // the arrow shape
   toId: shapeIdField, // the bound shape
   props: z.record(z.string(), z.unknown()),
+  // Carried verbatim for lossless round-trip through the converter seam.
+  // default({}) keeps pre-existing fixtures (built without meta) valid while
+  // the parsed type always carries meta.
+  meta: z.record(z.string(), z.unknown()).default({}),
 })
 export type Binding = z.infer<typeof bindingSchema>
 
