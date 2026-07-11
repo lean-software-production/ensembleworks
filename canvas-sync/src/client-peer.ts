@@ -1,8 +1,16 @@
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import type { Shape } from '@ensembleworks/canvas-model'
 import { Frame, type Transport, decode, encode } from './protocol.js'
+import type { PresenceStore } from './presence.js'
 
-export interface SyncClientOpts { peerId: bigint; transport: Transport }
+export interface SyncClientOpts {
+  peerId: bigint
+  transport: Transport
+  /** Optional: wires Frame.Presence both ways. Omitted entirely for rigs that
+   * only care about docs — presence-less peers simply drop Presence frames
+   * (no send subscription set up, and onFrame's Presence branch is a no-op). */
+  presence?: PresenceStore
+}
 
 // Headless sync client. No renderer (Phase 3): callers mutate via the doc and
 // read listShapes()/dumpModel(). Repair runs after every remote merge so this
@@ -11,16 +19,23 @@ export class SyncClientPeer {
   readonly doc: LoroCanvasDoc
   private transport: Transport
   private unsubLocal: () => void
+  private presence?: PresenceStore
+  private unsubPresence?: () => void
   private closed = false
 
   constructor(opts: SyncClientOpts) {
     this.doc = LoroCanvasDoc.create({ peerId: opts.peerId })
     this.transport = opts.transport
+    this.presence = opts.presence
     // Forward every committed local op to whichever transport is CURRENT: the
     // closure reads the `this.transport` field on each fire, not a value
     // captured at subscribe time — so a later reconnect() swap is honored
     // without re-subscribing.
     this.unsubLocal = this.doc.subscribeLocalUpdates((bytes) => this.transport.send(encode(Frame.Update, bytes)))
+    // Same pattern for presence: one subscription, set up once, that reads
+    // `this.transport` at fire time — a reconnect() swap is honored without
+    // re-subscribing here either. Only wired if a PresenceStore was injected.
+    this.unsubPresence = this.presence?.onLocalUpdate((bytes) => this.transport.send(encode(Frame.Presence, bytes)))
     this.wireTransport(this.transport)
     // Ask the server for anything we're missing.
     this.requestSync()
@@ -84,18 +99,26 @@ export class SyncClientPeer {
       // full missing delta.
       const r = this.doc.import(payload)
       if (r.changed) { this.doc.repair(); this.doc.commit() }
+    } else if (tag === Frame.Presence) {
+      // Ephemeral bytes: no changed-gating, no repair — just hand the raw
+      // encoded state to the store (LWW/merge is Loro's job). A no-op if
+      // this peer wasn't constructed with a presence store.
+      this.presence?.apply(payload)
     }
-    // Frame.Presence: B5. Unknown tags: deliberately ignored.
+    // Unknown tags: deliberately ignored.
   }
 
   putShape(s: Shape): void { this.doc.putShape(s); this.doc.commit() }
 
-  /** Idempotent: unsubscribes local updates, closes the transport, and marks
-   * this peer closed so late-arriving frames are ignored (see onFrame). */
+  /** Idempotent: unsubscribes local updates (doc AND presence, if wired),
+   * closes the transport, and marks this peer closed so late-arriving frames
+   * are ignored (see onFrame). Does NOT destroy() an injected PresenceStore —
+   * this peer doesn't own its lifecycle, only its own subscription to it. */
   close(): void {
     if (this.closed) return
     this.closed = true
     this.unsubLocal()
+    this.unsubPresence?.()
     this.transport.close()
   }
 }

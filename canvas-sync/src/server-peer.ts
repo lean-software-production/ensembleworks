@@ -1,9 +1,18 @@
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import { Frame, type Transport, decode, encode } from './protocol.js'
+import type { PresenceStore } from './presence.js'
 
 export interface SyncServerOpts {
   peerId: bigint
   initialSnapshot?: Uint8Array
+  /** Optional: wires Frame.Presence — inbound frames are applied (if this
+   * store is provided) and always relayed to other clients; connect() sends
+   * a late-joiner bootstrap (encodeAll()) so a client joining mid-session
+   * sees existing cursors immediately. Omitted entirely for rigs that only
+   * care about docs — presence-less servers still relay Presence frames
+   * between clients (see the onFrame Presence branch), they just don't track
+   * state themselves or bootstrap late joiners. */
+  presence?: PresenceStore
   /** Fired synchronously with the raw inbound Update payload whenever the frame
    * may carry ops this peer does not durably hold — i.e. when the import newly
    * applied ops (changed) OR parked them as pending (dependent on unseen
@@ -35,6 +44,8 @@ export class SyncServerPeer {
   readonly doc: LoroCanvasDoc
   private clients = new Set<Transport>()
   private unsubLocal: () => void
+  private presence?: PresenceStore
+  private unsubPresenceLocal?: () => void
   private closed = false
   /** Count of inbound Updates whose import reported pending (ops dependent on
    * history this doc hasn't seen). Should be ~0 in healthy operation — a
@@ -47,6 +58,7 @@ export class SyncServerPeer {
 
   constructor(opts: SyncServerOpts) {
     this.onUpdatePayload = opts.onUpdatePayload
+    this.presence = opts.presence
     this.doc = opts.initialSnapshot
       ? LoroCanvasDoc.fromSnapshot(opts.initialSnapshot, { peerId: opts.peerId })
       : LoroCanvasDoc.create({ peerId: opts.peerId })
@@ -55,6 +67,11 @@ export class SyncServerPeer {
     // triggered it, since a repair delta can touch data beyond what that
     // client sent (e.g. a cascading delete of a binding it never saw).
     this.unsubLocal = this.doc.subscribeLocalUpdates((bytes) => this.broadcast(encode(Frame.Update, bytes), null))
+    // Same pattern for presence: if THIS process publishes its own presence
+    // (e.g. a future agent avatar), broadcast it to every connected client —
+    // no `except` exclusion, mirroring the doc's local-update broadcast above
+    // (the server is the writer here, not relaying someone else's frame).
+    this.unsubPresenceLocal = this.presence?.onLocalUpdate((bytes) => this.broadcast(encode(Frame.Presence, bytes), null))
   }
 
   connect(t: Transport): void {
@@ -63,6 +80,11 @@ export class SyncServerPeer {
     this.clients.add(t)
     t.onMessage((frame) => this.onFrame(t, frame))
     t.onClose(() => this.clients.delete(t))
+    // Late-joiner bootstrap: a client connecting mid-session must see existing
+    // cursors immediately, not just future publishes — send the full presence
+    // snapshot as a Presence frame right away. A small, deliberate extension
+    // beyond the plan text (see Task B5 execution report).
+    if (this.presence) t.send(encode(Frame.Presence, this.presence.encodeAll()))
   }
 
   private onFrame(from: Transport, frame: Uint8Array): void {
@@ -117,8 +139,16 @@ export class SyncServerPeer {
       //   bytes). MUST relay, so observers pend the same frame identically
       //   and converge the moment the gap fills.
       if (r.changed || r.pending) this.broadcast(frame, from)
+    } else if (tag === Frame.Presence) {
+      // Ephemeral bytes are cheap and idempotent — no changed-gating (unlike
+      // Update). Apply for this server's own tracking/bootstrap (if a
+      // presence store was wired) — a no-op otherwise — then ALWAYS relay to
+      // every other client, so connected peers exchange presence even when
+      // this server instance doesn't itself track presence state.
+      this.presence?.apply(payload)
+      this.broadcast(frame, from)
     }
-    // Frame.Presence: B5. Unknown tags: deliberately ignored.
+    // Unknown tags: deliberately ignored.
   }
 
   private broadcast(frame: Uint8Array, except: Transport | null): void {
@@ -127,13 +157,16 @@ export class SyncServerPeer {
 
   snapshot(): Uint8Array { return this.doc.exportSnapshot() }
 
-  /** Real close: release the local-updates subscription and close every
-   * connected transport (their onClose handlers clear the client set). After
-   * this, connect() throws and inbound frames are dropped. Idempotent. */
+  /** Real close: release the local-updates subscriptions (doc AND presence,
+   * if wired) and close every connected transport (their onClose handlers
+   * clear the client set). After this, connect() throws and inbound frames
+   * are dropped. Idempotent. Does NOT destroy() an injected PresenceStore —
+   * this peer doesn't own its lifecycle, only its own subscription to it. */
   close(): void {
     if (this.closed) return
     this.closed = true // set BEFORE closing transports: reentrant onFrame during teardown must see it
     this.unsubLocal()
+    this.unsubPresenceLocal?.()
     for (const t of [...this.clients]) t.close()
     this.clients.clear()
   }
