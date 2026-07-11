@@ -51,3 +51,30 @@ export function fromTldraw(records: any[]): CanvasDocument {
 	}
 	return makeDocument({ pages, shapes, bindings })
 }
+
+// model Shape → tldraw shape record. Inverse of shapeFromRecord; props (and
+// meta) pass through verbatim, so this composed with fromTldraw is lossless
+// over the fields the model tracks.
+export function toTldraw(doc: CanvasDocument): any[] {
+	const out: any[] = []
+	for (const s of doc.shapes) {
+		out.push({
+			typeName: 'shape',
+			id: s.id,
+			type: s.kind,
+			parentId: s.parentId,
+			index: s.index,
+			x: s.x,
+			y: s.y,
+			rotation: s.rotation,
+			isLocked: s.isLocked,
+			opacity: s.opacity,
+			meta: s.meta,
+			props: s.props,
+		})
+	}
+	for (const b of doc.bindings) {
+		out.push({ typeName: 'binding', id: b.id, type: 'arrow', fromId: b.fromId, toId: b.toId, props: b.props, meta: (b as any).meta ?? {} })
+	}
+	return out
+}
