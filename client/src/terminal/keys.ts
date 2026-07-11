@@ -43,6 +43,9 @@ export type FontSizeAction = 'up' | 'down' | 'reset'
 
 // Ctrl/Cmd +/- (and 0 to reset) while editing. '=' is the unshifted '+' key,
 // '_' the shifted '-'. Alt combos are left alone (tmux Meta bindings).
+// Known trade-off: while editing, Ctrl+-/_ can no longer reach the PTY as
+// 0x1F (readline undo, C-_). Deliberate — GNOME Terminal/Konsole shadow the
+// same keys for font zoom, and readline's C-x C-u remains available.
 export function fontSizeActionForKey(e: EnterKeyEvent): FontSizeAction | null {
 	if (e.type !== 'keydown' || !(e.ctrlKey || e.metaKey) || e.altKey) return null
 	if (e.key === '+' || e.key === '=') return 'up'
