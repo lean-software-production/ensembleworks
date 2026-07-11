@@ -35,6 +35,23 @@ import { probePort } from './dev-net.mjs'
 
 export const repoDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 
+// ---- role dispatch: controller (host) vs engine (in the container / native) --
+// The expected usage is from the HOST: there bin/dev drives the devcontainer
+// (up starts it; status/logs/… forward into it) and needs none of the engine's
+// Bun/tmux/caddy machinery — so dispatch to the controller here, before the
+// Bun-version gate and dev.env sourcing below. runController() never resolves
+// — every path exits the process — so nothing below this block runs for it.
+// The engine's offset resolution MUST stay below this dispatch: it defaults an
+// unset ENSEMBLEWORKS_PORT_OFFSET to '0' in process.env, which would destroy
+// the controller's unset-vs-0 distinction and make auto-pick unreachable.
+if (resolveMode(process.env) === 'controller') {
+	await runController(repoDir, process.argv.slice(2))
+}
+// Engine mode (inside the container, or ENSEMBLEWORKS_NATIVE=1 on the host):
+process.stderr.write(
+	`bin/dev [${process.env.ENSEMBLEWORKS_IN_DEVCONTAINER === '1' ? 'devcontainer' : 'native'}] · executing natively\n`,
+)
+
 // ---- port offset: env > .local/port-offset (written by the host controller's
 // auto-pick; bind-mounted, so both sides read the same file) > 0. Everything
 // per-stack hangs off it: the port map, the tmux session, the data dir.
@@ -61,20 +78,6 @@ process.env.ENSEMBLEWORKS_PORT_OFFSET = String(portOffset)
 export const ports = portsFor(portOffset)
 const session = process.env.WORKSPACE_TMUX_SESSION ?? (portOffset ? `workspace-${portOffset}` : 'workspace')
 const tmuxConf = path.join(repoDir, 'deploy', 'tmux-ensembleworks.conf')
-
-// ---- role dispatch: controller (host) vs engine (in the container / native) --
-// The expected usage is from the HOST: there bin/dev drives the devcontainer
-// (up starts it; status/logs/… forward into it) and needs none of the engine's
-// Bun/tmux/caddy machinery — so dispatch to the controller here, before the
-// Bun-version gate and dev.env sourcing below. runController() never resolves
-// — every path exits the process — so nothing below this block runs for it.
-if (resolveMode(process.env) === 'controller') {
-	await runController(repoDir, process.argv.slice(2))
-}
-// Engine mode (inside the container, or ENSEMBLEWORKS_NATIVE=1 on the host):
-process.stderr.write(
-	`bin/dev [${process.env.ENSEMBLEWORKS_IN_DEVCONTAINER === '1' ? 'devcontainer' : 'native'}] · executing natively\n`,
-)
 
 /** @param {string} bin */
 export const onPath = (bin) => spawnSync('which', [bin], { stdio: 'ignore' }).status === 0
