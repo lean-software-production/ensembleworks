@@ -1,9 +1,12 @@
 # Agent notes — EnsembleWorks
 
 Multiplayer infinite-canvas team room: tldraw + tmux terminals + LiveKit spatial audio.
-Workspaces: `contracts`, `client`, `server`, `transcriber`, `cli`, `discord` (Bun
-workspaces). `discord` is the Discord bridge bot (inbound messages → frame
-stickies; outbound summaries → bound channels; internal /post on :8790).
+Workspaces: `contracts`, `canvas-model`, `canvas-doc`, `client`, `server`,
+`transcriber`, `cli`, `discord`, `e2e` (Bun workspaces). `discord` is the Discord
+bridge bot (inbound messages → frame stickies; outbound summaries → bound
+channels; internal /post on :8790). `canvas-model` (pure typed canvas model) and
+`canvas-doc` (Loro CRDT wrapper) are the canvas-rewrite foundations — clean-room,
+never import server/tldraw.
 
 ## Local dev — bin/dev
 
@@ -31,9 +34,13 @@ commands, run natively. `ENSEMBLEWORKS_NATIVE=1` forces engine mode on the host
 (the no-Docker path). Every call narrates on stderr which mode it picked and
 what it forwarded.
 
-State: `~/.local/share/ensembleworks`. Optional keys:
-`~/.config/ensembleworks/dev.env`. Verify changes with `bun run typecheck`
-and the smoke tests in README "Development".
+State root: `~/.local/share/ensembleworks`, holding the required storage
+triple as siblings — `data/` (DATA_DIR), `databases/` (DATABASE_DIR, live room
+SQLite), `database-backups/` (DATABASE_BACKUPS_DIR). The sync server refuses
+to start unless all three are set and non-colliding (`server/src/kernel/`
+`storage-geometry.ts`). Optional keys: `~/.config/ensembleworks/dev.env`.
+Verify changes with `bun run typecheck` and the smoke tests in README
+"Development".
 
 ## Releasing — always use the script
 

@@ -20,7 +20,9 @@ import {
 function ctx(overrides: Record<string, unknown> = {}) {
 	return {
 		repoDir: '/repo',
-		dataDir: '/home/u/.local/share/ensembleworks',
+		dataDir: '/home/u/.local/share/ensembleworks/data',
+		databaseDir: '/home/u/.local/share/ensembleworks/databases',
+		databaseBackupsDir: '/home/u/.local/share/ensembleworks/database-backups',
 		publicOrigin: null,
 		livekitNodeIp: null,
 		livekitConf: null,
@@ -89,7 +91,15 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 	assert.ok(sync.cmd.includes(`LIVEKIT_URL='ws://localhost:${PORTS.caddy}/livekit'`), 'localhost ws url')
 	assert.ok(sync.cmd.includes("LIVEKIT_API_KEY='devkey'"), 'dev key inline (not a secret)')
 	assert.ok(sync.cmd.includes(`LIVEKIT_API_URL='http://localhost:${PORTS.livekit}'`), 'loopback RoomService')
-	assert.ok(sync.cmd.includes(`DATA_DIR='/home/u/.local/share/ensembleworks'`), 'data dir inline')
+	assert.ok(sync.cmd.includes(`DATA_DIR='/home/u/.local/share/ensembleworks/data'`), 'data dir inline')
+	assert.ok(
+		sync.cmd.includes(`DATABASE_DIR='/home/u/.local/share/ensembleworks/databases'`),
+		'database dir inline (required triple)',
+	)
+	assert.ok(
+		sync.cmd.includes(`DATABASE_BACKUPS_DIR='/home/u/.local/share/ensembleworks/database-backups'`),
+		'database backups dir inline (required triple)',
+	)
 	console.log('ok: livekit dev mode wiring')
 }
 

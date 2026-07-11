@@ -100,8 +100,14 @@ if (existsSync(devEnvPath)) {
 	}
 }
 
-const dataDir =
+const stateDir =
 	process.env.ENSEMBLEWORKS_DATA_DIR ?? path.join(homedir(), '.local', 'share', 'ensembleworks')
+// Storage geometry triple — the sync server REQUIRES all three and validates
+// them at startup (kernel/storage-geometry.ts). Nested as siblings under the
+// dev state root so the no-nesting rules pass on a single-disk dev box.
+const dataDir = path.join(stateDir, 'data')
+const databaseDir = path.join(stateDir, 'databases')
+const databaseBackupsDir = path.join(stateDir, 'database-backups')
 const livekitConfPath =
 	process.env.ENSEMBLEWORKS_LIVEKIT_CONF ??
 	path.join(homedir(), '.config', 'ensembleworks', 'livekit-dev.yaml')
@@ -129,6 +135,8 @@ export function makeCtx() {
 	return {
 		repoDir,
 		dataDir,
+		databaseDir,
+		databaseBackupsDir,
 		publicOrigin: parsePublicOrigin(
 			process.env.ENSEMBLEWORKS_PUBLIC_ORIGIN,
 			process.env.ENSEMBLEWORKS_PUBLIC_HOST,
@@ -211,6 +219,8 @@ async function waitHealthy(enabled, timeoutMs = 180_000) {
 /** @param {{ noInstall: boolean, attach: boolean }} flags */
 async function up(flags) {
 	mkdirSync(dataDir, { recursive: true })
+	mkdirSync(databaseDir, { recursive: true })
+	mkdirSync(databaseBackupsDir, { recursive: true })
 	const services = buildServices(makeCtx())
 	const enabled = services.filter((s) => s.enabled)
 	if (sessionRunning()) {
@@ -353,7 +363,7 @@ function usage() {
   bin/dev attach                         enter the tmux session (prefix Ctrl-Space, prefix+d detaches)
   bin/dev doctor [--json]                environment check — every failure prints its remedy
 
-Config: ~/.config/ensembleworks/dev.env (optional). Data: ~/.local/share/ensembleworks.
+Config: ~/.config/ensembleworks/dev.env (optional). State: ~/.local/share/ensembleworks/{data,databases,database-backups}.
 Optional binaries light up more services: caddy, livekit-server, whisper-server, docker.`)
 }
 

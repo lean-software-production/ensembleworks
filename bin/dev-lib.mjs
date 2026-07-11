@@ -206,6 +206,8 @@ export function parseDotEnv(text) {
  * @typedef {object} ServiceCtx
  * @property {string} repoDir
  * @property {string} dataDir              DATA_DIR for the sync server
+ * @property {string} databaseDir          DATABASE_DIR (live room SQLite; required triple)
+ * @property {string} databaseBackupsDir   DATABASE_BACKUPS_DIR (required triple; validated, unused in dev)
  * @property {{ scheme: 'http' | 'https', host: string, port: number | null } | null} publicOrigin
  *           browser-facing origin (parsePublicOrigin) or null = localhost
  * @property {string | null} livekitNodeIp  --node-ip for livekit --dev (the IP the
@@ -251,7 +253,13 @@ export function buildServices(ctx) {
 	const livekitPublicUrl = livekitBrowserUrl(ctx.publicOrigin)
 	const publicOriginStr = originToString(ctx.publicOrigin)
 
-	const syncEnv = [`DATA_DIR='${ctx.dataDir}'`]
+	// The full storage triple: the sync server refuses to start without it
+	// (storage-geometry validation; required-database-dirs spec).
+	const syncEnv = [
+		`DATA_DIR='${ctx.dataDir}'`,
+		`DATABASE_DIR='${ctx.databaseDir}'`,
+		`DATABASE_BACKUPS_DIR='${ctx.databaseBackupsDir}'`,
+	]
 	if (livekitOn) {
 		syncEnv.push(
 			`LIVEKIT_URL='${livekitPublicUrl}'`,

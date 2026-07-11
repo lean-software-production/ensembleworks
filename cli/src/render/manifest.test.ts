@@ -66,7 +66,7 @@ try {
 	r = await loadManifest(offlineConn, { env })
 	assert.equal(r.source, 'embedded')
 	assert.equal(r.envelope.version, MANIFEST_VERSION)
-	assert.equal(r.envelope.tools.length, 22, 'embedded snapshot is the 22-def allTools')
+	assert.equal(r.envelope.tools.length, 27, 'embedded snapshot is the 27-def allTools (17 base + 5 canvas-v2 + 5 discord)')
 
 	// 6. per-instance keying: different urls → different cache files.
 	assert.notEqual(cachePath('http://a:1', env), cachePath('http://b:2', env))
@@ -80,7 +80,7 @@ try {
 	assert.equal(fetchCount, before, 'the guard fired with no fetch')
 
 	// embeddedManifest is the compiled-in allTools (server field = CLI_BUILD).
-	assert.equal(embeddedManifest().tools.length, 22)
+	assert.equal(embeddedManifest().tools.length, 27)
 
 	console.log('ok: manifest — on-miss fetch, on-hit no-refetch, --refresh, version-mismatch→embedded, offline→embedded, per-instance key, poisoned-path guard')
 } finally {
