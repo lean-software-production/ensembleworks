@@ -7,7 +7,17 @@
 import assert from 'node:assert/strict'
 import { Glob } from 'bun'
 
-const FORBIDDEN = [/from ['"]ws['"]/, /from ['"]express['"]/, /@tldraw\//, /from ['"](\.\.\/)*server/, /Date\.now\(/, /Math\.random\(/]
+// ws/express patterns cover static imports AND call styles — require('ws') and
+// await import('ws') both RESOLVE from this package today (server's deps are
+// hoisted to the root node_modules), so from-only matching is not enough.
+const FORBIDDEN = [
+  /(?:from|require\(|import\()\s*['"]ws['"]/,
+  /(?:from|require\(|import\()\s*['"]express['"]/,
+  /@tldraw\//,
+  /from ['"](\.\.\/)*server/,
+  /Date\.now\(/,
+  /Math\.random\(/,
+]
 const glob = new Glob('**/*.ts')
 const files: string[] = []
 for await (const f of glob.scan({ cwd: import.meta.dirname, onlyFiles: true })) {
