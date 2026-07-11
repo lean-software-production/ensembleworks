@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { ShapeId, ParentId } from './ids.js'
 
 // The shape kinds a room can contain: tldraw defaults we use + image + the six
 // custom HTML-box shapes (contracts/src/shapes.ts).
@@ -20,9 +21,9 @@ const box = z.looseObject({ w: z.number().optional(), h: z.number().optional() }
 const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   note: withText,
   text: withText,
-  geo: z.looseObject({ richText: richText.optional(), color: z.string().optional(), w: z.number().optional(), h: z.number().optional() }),
-  arrow: z.looseObject({ richText: richText.optional(), color: z.string().optional() }),
-  frame: z.looseObject({ name: z.string().optional(), w: z.number().optional(), h: z.number().optional() }),
+  geo: withText.extend(box.shape),
+  arrow: withText,
+  frame: box.extend({ name: z.string().optional() }),
   line: z.looseObject({}),
   draw: z.looseObject({}),
   highlight: z.looseObject({}),
@@ -30,8 +31,10 @@ const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   terminal: box, iframe: box, neko: box, roadmap: box, screenshare: box, 'file-viewer': box,
 }
 
-const idField = z.string().regex(/^shape:/)
-const parentField = z.string().regex(/^(shape|page):/)
+// Branded id fields: template literals so Shape['id'] / Shape['parentId'] infer
+// as the branded types from ids.ts, not plain string.
+const idField = z.templateLiteral(['shape:', z.string()])
+const parentField = z.union([z.templateLiteral(['shape:', z.string()]), z.templateLiteral(['page:', z.string()])])
 
 // The strict envelope shared by every shape. props is refined per-kind below.
 const envelope = z.object({
@@ -49,6 +52,14 @@ const envelope = z.object({
 })
 
 export type Shape = z.infer<typeof envelope>
+
+// Compile-time drift guards: the schema's inferred id types must stay assignable
+// to ids.ts's branded types (and vice versa). A mismatch is a type error here.
+type _IdMatches = [Shape['id'] extends ShapeId ? true : never, ShapeId extends Shape['id'] ? true : never]
+type _ParentMatches = [Shape['parentId'] extends ParentId ? true : never, ParentId extends Shape['parentId'] ? true : never]
+const _idCheck: _IdMatches = [true, true]
+const _parentCheck: _ParentMatches = [true, true]
+void _idCheck, void _parentCheck
 
 // Full schema: envelope + per-kind props refinement (superRefine keeps a single
 // discriminant while validating props against the kind's schema).

@@ -25,4 +25,9 @@ assert.equal((kept.props as any).mystery, 'x')
 // Bad envelope is rejected with a typed error, never thrown past validateShape.
 const bad = validateShape({ ...note, id: 'nope', kind: 'note' })
 assert.equal(bad.ok, false)
+
+// Bad per-kind props are rejected too (the superRefine branch): a typed field
+// with the wrong type fails validation even though the envelope is fine.
+const badProps = validateShape({ ...note, props: { color: 123 } })
+assert.equal(badProps.ok, false)
 console.log('ok: shape schema')
