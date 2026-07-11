@@ -15,30 +15,36 @@ async function post(path: string, body: Json): Promise<Json> {
 }
 
 export const shape = (room: string, body: Json) => post('/api/canvas/shape', { room, ...body })
+// Kept for future sticky-endpoint coverage; currently unused by the golden board.
 export const sticky = (room: string, body: Json) => post('/api/canvas/sticky', { room, ...body })
 
 /** Deterministic board exercising every seedable shape kind. Returns created ids. */
 export async function seedGoldenBoard(room: string): Promise<string[]> {
 	const ids: string[] = []
-	const keep = async (p: Promise<Json>) => ids.push(String((await p).id))
+	// Creations must stay sequential (not Promise.all'd) — z-order comes from creation order.
+	const create = async (body: Json) => {
+		const id = String((await shape(room, body)).id)
+		ids.push(id)
+		return id
+	}
 
-	await keep(shape(room, { type: 'text', x: 100, y: 40, text: 'Golden Board' }))
-	await keep(shape(room, { type: 'frame', x: 100, y: 120, w: 640, h: 480, name: 'Planning' }))
+	await create({ type: 'text', x: 100, y: 40, text: 'Golden Board' })
+	await create({ type: 'frame', x: 100, y: 120, w: 640, h: 720, name: 'Planning' })
 	// A sticky cluster inside the frame (frame-local coords), plus one outlier.
+	// tldraw notes are a fixed 200×200 (the server ignores w/h for notes), so
+	// spacing must be ≥ ~210 to keep them from overlapping.
 	for (const [i, txt] of ['alpha', 'beta', 'gamma'].entries())
-		await keep(shape(room, { type: 'note', frame: 'Planning', x: 40, y: 40 + i * 110, text: txt, color: 'yellow' }))
-	await keep(shape(room, { type: 'note', frame: 'Planning', x: 420, y: 320, text: 'outlier', color: 'blue' }))
+		await create({ type: 'note', frame: 'Planning', x: 40, y: 40 + i * 220, text: txt, color: 'yellow' })
+	await create({ type: 'note', frame: 'Planning', x: 420, y: 320, text: 'outlier', color: 'blue' })
 	// Two geos joined by a bound arrow (page coords).
-	await keep(shape(room, { type: 'geo', geo: 'rectangle', x: 820, y: 160, w: 160, h: 100, text: 'A' }))
-	await keep(shape(room, { type: 'geo', geo: 'ellipse', x: 820, y: 420, w: 160, h: 100, text: 'B' }))
-	await keep(shape(room, { type: 'arrow', fromId: ids[6], toId: ids[7] }))
+	const rectId = await create({ type: 'geo', geo: 'rectangle', x: 820, y: 160, w: 160, h: 100, text: 'A' })
+	const ellipseId = await create({ type: 'geo', geo: 'ellipse', x: 820, y: 420, w: 160, h: 100, text: 'B' })
+	await create({ type: 'arrow', fromId: rectId, toId: ellipseId })
 	// A deterministic ink stroke.
-	await keep(
-		shape(room, {
-			type: 'draw',
-			points: [[1040, 200], [1080, 240], [1060, 300], [1120, 340], [1100, 400]],
-		}),
-	)
+	await create({
+		type: 'draw',
+		points: [[1040, 200], [1080, 240], [1060, 300], [1120, 340], [1100, 400]],
+	})
 	return ids
 }
 export const GOLDEN_BOARD_SHAPE_COUNT = 10
