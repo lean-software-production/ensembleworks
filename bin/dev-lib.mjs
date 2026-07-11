@@ -334,8 +334,9 @@ export function buildServices(ctx) {
 			`LIVEKIT_URL='${livekitPublicUrl}'`,
 			`LIVEKIT_API_URL='http://localhost:${p.livekit}'`,
 		)
-		// --dev mode keys are public constants, safe inline. Config-file mode
-		// keys come from dev.env via the inherited environment instead.
+		// --dev mode keys are public constants, safe inline. User-config-file mode
+		// keys come from dev.env via the inherited environment instead (the
+		// generated offset conf keeps the dev keys).
 		if (!ctx.livekitConf) syncEnv.push(`LIVEKIT_API_KEY='devkey'`, `LIVEKIT_API_SECRET='secret'`)
 	}
 	services.push({
@@ -373,7 +374,7 @@ export function buildServices(ctx) {
 	// Direct LAN access needs a secure context (crypto.randomUUID, the mic), so
 	// bin/dev can make Caddy terminate TLS itself with its internal CA when
 	// ENSEMBLEWORKS_CADDY_TLS=internal and the origin is https. The Caddyfile
-	// reads these; both default to the plain-:8080 shape (upstream-TLS/native).
+	// reads these; both default to the plain-http edge-port shape (upstream-TLS/native).
 	const caddyTlsInternal =
 		ctx.env.ENSEMBLEWORKS_CADDY_TLS === 'internal' && ctx.publicOrigin?.scheme === 'https'
 	const caddySite =
@@ -417,7 +418,7 @@ export function buildServices(ctx) {
 		// --node-ip is what the SFU advertises for media. 127.0.0.1 keeps voice
 		// localhost-only; a LAN IP (auto-detected on the host) makes voice work
 		// from a browser on another LAN machine. Media rides the published udp
-		// mux (7882) regardless.
+		// mux regardless.
 		cmd: livekitConf
 			? `livekit-server --config '${livekitConf}'`
 			: `livekit-server --dev --bind 0.0.0.0 --node-ip ${ctx.livekitNodeIp ?? '127.0.0.1'}`,
@@ -441,7 +442,7 @@ export function buildServices(ctx) {
 			? `local STT on :${p.whisper}`
 			: 'whisper-server (or its model) missing — no keyless transcription',
 		// --inference-path makes whisper.cpp serve the OpenAI-compatible path,
-		// so STT_URL=http://localhost:8091/v1 satisfies the scribe's contract.
+		// so STT_URL=http://localhost:<whisper>/v1 satisfies the scribe's contract.
 		cmd: `whisper-server --host 127.0.0.1 --port ${p.whisper} -m '${ctx.whisperModel}' --inference-path /v1/audio/transcriptions`,
 		health: { kind: 'port', port: p.whisper },
 	})

@@ -11,20 +11,22 @@
  * clone before bun install.
  */
 import { execFileSync, execSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import {
-	PORTS,
 	atLeast,
 	buildServices,
 	hold,
+	livekitDevConfigYaml,
 	originToString,
 	parseDotEnv,
 	parseToolVersions,
+	parsePortOffset,
 	parsePublicOrigin,
+	portsFor,
 	resolveMode,
 } from './dev-lib.mjs'
 import { runDoctor } from './dev-doctor.mjs'
@@ -32,7 +34,32 @@ import { runController } from './dev-host.mjs'
 import { probePort } from './dev-net.mjs'
 
 export const repoDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const session = process.env.WORKSPACE_TMUX_SESSION ?? 'workspace'
+
+// ---- port offset: env > .local/port-offset (written by the host controller's
+// auto-pick; bind-mounted, so both sides read the same file) > 0. Everything
+// per-stack hangs off it: the port map, the tmux session, the data dir.
+function readLocalPortOffset() {
+	const f = path.join(repoDir, '.local', 'port-offset')
+	try {
+		return readFileSync(f, 'utf8').trim() || undefined
+	} catch {
+		return undefined
+	}
+}
+const rawOffset = process.env.ENSEMBLEWORKS_PORT_OFFSET || readLocalPortOffset()
+const parsedOffset = parsePortOffset(rawOffset)
+if (parsedOffset === null) {
+	console.error(
+		`bin/dev: invalid port offset '${rawOffset}' (ENSEMBLEWORKS_PORT_OFFSET or .local/port-offset) — use a non-negative integer, e.g. 100`,
+	)
+	process.exit(1)
+}
+export const portOffset = parsedOffset
+// Windows inherit the tmux server env; inline env in each cmd is authoritative,
+// this is belt-and-braces for anything spawned from a canvas terminal.
+process.env.ENSEMBLEWORKS_PORT_OFFSET = String(portOffset)
+export const ports = portsFor(portOffset)
+const session = process.env.WORKSPACE_TMUX_SESSION ?? (portOffset ? `workspace-${portOffset}` : 'workspace')
 const tmuxConf = path.join(repoDir, 'deploy', 'tmux-ensembleworks.conf')
 
 // ---- role dispatch: controller (host) vs engine (in the container / native) --
@@ -100,8 +127,10 @@ if (existsSync(devEnvPath)) {
 	}
 }
 
+// Per-offset state root — two stacks must never share storage.
 const stateDir =
-	process.env.ENSEMBLEWORKS_DATA_DIR ?? path.join(homedir(), '.local', 'share', 'ensembleworks')
+	process.env.ENSEMBLEWORKS_DATA_DIR ??
+	path.join(homedir(), '.local', 'share', portOffset ? `ensembleworks-${portOffset}` : 'ensembleworks')
 // Storage geometry triple — the sync server REQUIRES all three and validates
 // them at startup (kernel/storage-geometry.ts). Nested as siblings under the
 // dev state root so the no-nesting rules pass on a single-disk dev box.
@@ -111,6 +140,7 @@ const databaseBackupsDir = path.join(stateDir, 'database-backups')
 const livekitConfPath =
 	process.env.ENSEMBLEWORKS_LIVEKIT_CONF ??
 	path.join(homedir(), '.config', 'ensembleworks', 'livekit-dev.yaml')
+const livekitGeneratedConf = path.join(stateDir, 'livekit-dev.generated.yaml')
 const whisperModel = process.env.WHISPER_MODEL ?? '/usr/local/share/whisper/ggml-base.bin'
 
 // LiveKit --node-ip for LAN voice: explicit env wins; else the LAN IP the
@@ -152,13 +182,21 @@ export function makeCtx() {
 			docker: onPath('docker'),
 		},
 		env: process.env,
-		// TODO(port-offset): a later task parses ENSEMBLEWORKS_PORT_OFFSET here
-		// (parsePortOffset, from Task 1) and writes the generated LiveKit yaml;
-		// offset-0 defaults keep current behavior unchanged for now.
-		ports: PORTS,
-		portOffset: 0,
-		livekitGeneratedConf: path.join(dataDir, 'livekit-dev.generated.yaml'),
+		ports,
+		portOffset,
+		livekitGeneratedConf,
 	}
+}
+
+/**
+ * Offset stacks run LiveKit from a generated config (dev mode's ports are
+ * fixed). (Re)written on up/restart so a changed offset or LAN IP is picked up.
+ * @param {import('./dev-lib.mjs').ServiceCtx} ctx
+ */
+function ensureLivekitGeneratedConf(ctx) {
+	if (!ctx.portOffset || ctx.livekitConf || !ctx.has.livekit) return
+	mkdirSync(stateDir, { recursive: true })
+	writeFileSync(livekitGeneratedConf, livekitDevConfigYaml(ctx.ports, ctx.livekitNodeIp))
 }
 
 // ---- health ------------------------------------------------------------------
@@ -199,7 +237,9 @@ async function up(flags) {
 	mkdirSync(dataDir, { recursive: true })
 	mkdirSync(databaseDir, { recursive: true })
 	mkdirSync(databaseBackupsDir, { recursive: true })
-	const services = buildServices(makeCtx())
+	const upCtx = makeCtx()
+	ensureLivekitGeneratedConf(upCtx)
+	const services = buildServices(upCtx)
 	const enabled = services.filter((s) => s.enabled)
 	if (sessionRunning()) {
 		tmux('set-environment', '-g', 'ENSEMBLEWORKS_TMUX_CONF', tmuxConf)
@@ -233,13 +273,13 @@ async function up(flags) {
 /** @param {import('./dev-lib.mjs').Service[]} enabled */
 function cheatSheet(enabled) {
 	const ctx = makeCtx()
-	const url = originToString(ctx.publicOrigin) ?? `http://localhost:${PORTS.caddy}`
+	const url = originToString(ctx.publicOrigin) ?? `http://localhost:${ports.caddy}`
 	const voice =
 		enabled.some((s) => s.name === 'livekit') && ctx.livekitNodeIp
-			? `\n  voice: LiveKit advertises ${ctx.livekitNodeIp} (media udp mux 7882)`
+			? `\n  voice: LiveKit advertises ${ctx.livekitNodeIp} (media udp mux ${ports.livekitUdp})`
 			: ''
 	console.log(`
-EnsembleWorks dev stack — ${url}${voice}
+EnsembleWorks dev stack — ${url}${portOffset ? ` (port offset ${portOffset})` : ''}${voice}
   windows: ${enabled.map((s) => s.name).join('  ')}
   bin/dev status | logs <svc> | restart <svc> | attach | down   (agents: status --json)
   tmux: prefix Ctrl-Space (Ctrl-b works too) — prefix+<n> switch window, prefix+d detach`)
@@ -296,7 +336,9 @@ function logs(name, tail) {
 /** @param {string} name */
 function restart(name) {
 	if (!sessionRunning()) die(`session '${session}' is not running — use bin/dev up`)
-	const svc = buildServices(makeCtx()).find((s) => s.name === name)
+	const rCtx = makeCtx()
+	ensureLivekitGeneratedConf(rCtx)
+	const svc = buildServices(rCtx).find((s) => s.name === name)
 	if (!svc) die(`unknown service '${name}' — bin/dev status lists services`)
 	if (!svc.enabled) die(`'${name}' is disabled: ${svc.reason}`)
 	if (windowNames().includes(name)) {
@@ -342,6 +384,7 @@ function usage() {
   bin/dev doctor [--json]                environment check — every failure prints its remedy
 
 Config: ~/.config/ensembleworks/dev.env (optional). State: ~/.local/share/ensembleworks/{data,databases,database-backups}.
+Ports: ENSEMBLEWORKS_PORT_OFFSET=<n> (or .local/port-offset) shifts every service port by n — run parallel stacks with n=100, 200, …
 Optional binaries light up more services: caddy, livekit-server, whisper-server, docker.`)
 }
 
