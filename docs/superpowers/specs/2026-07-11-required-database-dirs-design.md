@@ -192,9 +192,10 @@ per box:
    (same-filesystem rename, instant).
 4. Write `storage.env` (the triple, 600, app-owned). Delete the
    `DATABASE_DIR` line from `sync.env`.
-5. `mv ~ensembleworks/data/rooms ~ensembleworks/data/rooms.pre-backups-dir`
-   (archive — the old backup copies must not linger at a path nothing writes
-   to; prune after the fleet is verified).
+5. `mv ~ensembleworks/data/rooms ~ensembleworks/backups/rooms-pre-storage-env-<date>`
+   (archive under `~/backups`, which release pruning is structurally barred
+   from — the old copies must not linger at a path the backup machinery once
+   wrote to; remove after the box has soaked).
 6. Re-run the laingville install (updated `install-room-db.sh`) to refresh
    backup units/scripts; `deploy/deploy.sh <box> <new-version>` installs the
    new sync unit + creates `database-backups/`.
