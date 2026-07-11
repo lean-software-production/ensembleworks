@@ -1,6 +1,6 @@
-import { LoroDoc, VersionVector, type ImportStatus, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
+import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
 import type { Binding, Page, Shape } from '@ensembleworks/canvas-model'
-import type { CanvasDoc } from './canvas-doc.js'
+import type { CanvasDoc, ImportResult } from './canvas-doc.js'
 
 // Node.data layout: we store the whole model shape envelope as flat keys on the
 // Loro tree node's data map. The tldraw/model shape id lives under 'shapeId'
@@ -171,7 +171,12 @@ export class LoroCanvasDoc implements CanvasDoc {
     return this.doc.export({ mode: 'update', from })
   }
   versionBytes(): Uint8Array { return this.doc.oplogVersion().encode() }
-  import(bytes: Uint8Array): ImportStatus { return this.doc.import(bytes) }
+  import(bytes: Uint8Array): ImportResult {
+    // Loro's ImportStatus.pending is Map<PeerID, CounterSpan> | null; collapse
+    // to the engine-agnostic boolean (true iff there are actual pending spans).
+    const status = this.doc.import(bytes)
+    return { pending: status.pending !== null && status.pending.size > 0 }
+  }
   subscribe(listener: () => void): () => void { return this.doc.subscribe(() => listener()) }
   subscribeLocalUpdates(listener: (bytes: Uint8Array) => void): () => void {
     return this.doc.subscribeLocalUpdates(listener)

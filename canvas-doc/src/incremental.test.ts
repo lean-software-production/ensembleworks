@@ -22,7 +22,7 @@ a.putShape(shape('shape:a2') as any); a.commit()
 const delta = a.exportUpdate(bVersion)
 const status = b.import(delta)
 b.commit()
-assert.equal(status.pending, null, 'delta applied cleanly, nothing pending')
+assert.equal(status.pending, false, 'delta applied cleanly, nothing pending')
 assert.deepEqual(b.listShapes().map((s) => s.id).sort(), ['shape:a1', 'shape:a2'])
 
 // A delta computed against a stale version is smaller than the full history.

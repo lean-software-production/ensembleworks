@@ -12,18 +12,23 @@ const unsub = a.subscribeLocalUpdates((bytes) => { b.import(bytes) })
 a.putShape(shape('shape:x') as any); a.commit()
 assert.deepEqual(b.listShapes().map((s) => s.id), ['shape:x'], 'local update forwarded to b')
 
-// b's own imports must NOT echo back as a's local updates (no loop).
+// Remotely-imported changes must NOT fire a's local-updates listeners (no
+// echo loop): b commits its own change and a imports it — a experiences a
+// real remote event here, so the zero count below is meaningful, not vacuous.
 let aLocalFires = 0
 a.subscribeLocalUpdates(() => { aLocalFires++ })
 b.putShape(shape('shape:y') as any); b.commit()
-assert.equal(aLocalFires, 0, 'a sees no local update from b activity')
+a.import(b.exportUpdate()) // a receives a remote change
+assert.equal(aLocalFires, 0, "a's local-updates listener doesn't fire for remotely-imported changes")
+assert.deepEqual(a.listShapes().map((s) => s.id).sort(), ['shape:x', 'shape:y'], 'a converged on the remote change')
 
 unsub()
 a.putShape(shape('shape:z') as any); a.commit()
-// b is not wired to forward its own changes back to a, and forwarding from a
-// to b stopped at unsub() — so b's shapes are exactly what it had before:
-// 'shape:x' (forwarded from a) plus 'shape:y' (its own local put). It must NOT
-// have gained 'shape:z'.
+// Positive control: the still-subscribed counter listener fires for a's own
+// commit — proving it was live when it read 0 above.
+assert.equal(aLocalFires, 1, 'still-subscribed listener fires once for a genuinely local commit')
+// The unsubscribed forwarder is dead: b keeps 'shape:x' (forwarded earlier)
+// plus its own 'shape:y', and must NOT gain 'shape:z'.
 assert.deepEqual(b.listShapes().map((s) => s.id).sort(), ['shape:x', 'shape:y'], 'no forwarding after unsub')
 
 console.log('ok: local-updates')

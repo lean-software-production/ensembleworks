@@ -1,5 +1,9 @@
 import type { Binding, Page, Shape } from '@ensembleworks/canvas-model'
-import type { ImportStatus } from 'loro-crdt'
+
+/** Result of applying a remote update. `pending` is true when some received
+ * ops depend on history this doc hasn't seen yet — the caller should follow
+ * up with a sync request (send versionBytes() to the source peer). */
+export interface ImportResult { pending: boolean }
 
 // The engine-agnostic contract. LoroCanvasDoc implements it today; a Yjs-backed
 // impl could replace it without touching callers (design's swappability rule).
@@ -57,7 +61,12 @@ export interface CanvasDoc {
   /** This doc's current oplog version, encoded for handing to a peer so it can
    * ask for (or compute) a delta against it. */
   versionBytes(): Uint8Array
-  import(bytes: Uint8Array): ImportStatus
+  /**
+   * Apply update bytes from a peer. `pending: true` means some received ops
+   * depend on history this doc hasn't seen yet — follow up with a sync
+   * request (send versionBytes() to the source peer) to fill the gap.
+   */
+  import(bytes: Uint8Array): ImportResult
   subscribe(listener: () => void): () => void
   /**
    * Fires with the encoded bytes of each locally-committed change (not
