@@ -2512,35 +2512,52 @@ in the main checkout).
 
 ## Done Criteria (Phase 1 exit)
 
-- [ ] `canvas-model` package builds, typechecks, and its suite is green: ids,
+- [x] `canvas-model` package builds, typechecks, and its suite is green: ids,
       shape schema (lossless passthrough), document/accessors, invariants
       (orphans/cycles/dangling/props), geometry, neighbors, clustering, semantic
       view. Zero runtime deps but `zod`; no Loro/tldraw/DOM import; no
-      `Date.now`/`Math.random`.
-- [ ] `canvas-doc` package builds, typechecks, and its suite is green: `CanvasDoc`
+      `Date.now`/`Math.random`. (verified: 9/9 suites green via
+      `bun run --filter '@ensembleworks/canvas-model' test`.)
+- [x] `canvas-doc` package builds, typechecks, and its suite is green: `CanvasDoc`
       interface + `LoroCanvasDoc` (snapshot round-trip, CRUD, reparent + z-order
       via the movable tree with native cycle rejection, `LoroText`, subscriptions,
       `loadModel`/`dumpModel` bridge). Imports only `canvas-model` + `loro-crdt`
-      (pinned `1.13.6`); never imports `server`.
-- [ ] Converter (`server/src/canvas-v2/convert.ts`) round-trips tldraw ↔
+      (pinned `1.13.6`); never imports `server`. (verified: 6/6 suites green via
+      `bun run --filter '@ensembleworks/canvas-doc' test`.)
+- [x] Converter (`server/src/canvas-v2/convert.ts`) round-trips tldraw ↔
       `canvas-model` losslessly over the full shape zoo (geo/text/note/arrow/
       frame/line/draw/highlight/image + the 6 custom shapes) **plus bindings**,
-      proven against a real seeded room.
-- [ ] Agent API v2 read endpoints live and green: `GET /api/v2/canvas/document`,
+      proven against a real seeded room. (verified:
+      `server/src/canvas-v2/convert-from-tldraw.test.ts` +
+      `server/src/canvas-v2/roundtrip.test.ts` both green.)
+- [x] Agent API v2 read endpoints live and green: `GET /api/v2/canvas/document`,
       `…/frames`, `…/frame`, `…/semantic` (clusters/outliers/relations with
       arrangement, confidence, label), `…/neighbors` — each serving the new model
       via live conversion; declared as `ToolDef`s in `contracts` and discoverable
-      via `GET /api/tools`.
-- [ ] E2E HTTP smoke drives every v2 endpoint against the real server and passes.
-- [ ] `bun run typecheck` green across all workspaces (now including
-      `canvas-model` + `canvas-doc`).
-- [ ] `bun run test`: the **only** failure is the pre-existing accepted baseline
+      via `GET /api/tools`. (verified: `server/src/canvas-v2-api.test.ts` +
+      `server/src/canvas-v2-semantic.test.ts` green; manifest count is 22.)
+- [x] E2E HTTP smoke drives every v2 endpoint against the real server and passes.
+      (verified: `bunx playwright test --project=e2e` → 8 passed, including
+      `tests/canvas-v2.spec.ts`.)
+- [x] `bun run typecheck` green across all workspaces (now including
+      `canvas-model` + `canvas-doc`). (verified: exit 0, all 9 workspace filters.)
+- [x] `bun run test`: the **only** failure is the pre-existing accepted baseline
       `server/src/tools-api.test.ts` → `GET /api/discord/bindings`. All new suites
       verified green independently. The v2 additions did NOT introduce any new
-      failure (count bumped to 22; v2 routes declared).
-- [ ] No changes to the live editing/write path (`updateStore` handlers) and no
-      client UI changes (`git diff` confirms).
-- [ ] All work committed on branch `canvas-phase1` in reviewable, seam-aligned
+      failure (count bumped to 22; v2 routes declared). (nuance: two other suites —
+      `cli/src/cli-api.test.ts` and `cli/src/render/manifest.test.ts` — still
+      carried the pre-canvas-v2 hardcoded count of 17 and were failing before this
+      run; bumped alongside `contracts/src/tools/tools.test.ts`'s own 17→22 assert
+      and its `PLUGINS` list (missing `canvas-v2`) during this verification pass.
+      After the fix, `bun run test` halts only at the accepted
+      `server/src/tools-api.test.ts` baseline, confirmed message-only about
+      `GET /api/discord/bindings`.)
+- [x] No changes to the live editing/write path (`updateStore` handlers) and no
+      client UI changes (`git diff` confirms). (verified:
+      `git diff --stat main -- client/` and
+      `git diff main -- server/src/features/shape.ts server/src/features/sticky.ts`
+      both empty.)
+- [x] All work committed on branch `canvas-phase1` in reviewable, seam-aligned
       commits (canvas-model → canvas-doc → converter → API v2 → wiring).
 
 ---
@@ -2588,3 +2605,14 @@ in the main checkout).
    controller wants strict, self-documenting v2 output contracts, the response
    types would need to live in (or be mirrored into) `contracts` — a small
    duplication cost flagged for a decision.
+
+## Execution notes (2026-07-12)
+
+Accepted deferrals recorded during execution:
+
+- zodInput/zodOutput on ToolDefs are manifest documentation only — no request-validation middleware exists repo-wide; follow-up: a shared parseQuery(zodInput) helper for routers.
+- semanticView clustering is O(n²) per request with no shape-count cap — fine at current room scale; add a guard before Phase 2 exposes it to bigger boards.
+- scripts/run-tests.ts halts on the first failing suite (the accepted tools-api baseline masks later suites in one run); follow-up: continue-on-error runner or quarantine list.
+- Group shapes get the 100×100 geometry fallback (not clustered/counted — cosmetic only).
+- canvas-doc's exportUpdate() has no since-version parameter yet; Phase 2 sync needs one (Loro supports export({mode:'update', from})).
+- Grid-arrangement clusters cap near confidence 0.5 + 0.5·colorUniformity (single-axis alignment metric) — documented at the formula; metric redesign deferred with calibration.
