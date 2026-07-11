@@ -11,10 +11,10 @@ import {
 } from './index.js'
 
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'DELETE']
-const PLUGINS = ['kernel', 'av', 'canvas', 'scribe', 'roadmap', 'terminal', 'file']
+const PLUGINS = ['kernel', 'av', 'canvas', 'scribe', 'roadmap', 'terminal', 'file', 'discord']
 
-// 1. Exactly 17 declared verbs.
-assert.equal(allTools.length, 17, 'expected 17 tool defs')
+// 1. Exactly 22 declared verbs.
+assert.equal(allTools.length, 22, 'expected 22 tool defs')
 
 // 2. Every def is well-formed.
 for (const t of allTools) {
@@ -49,6 +49,6 @@ for (const t of allTools) {
 // 5. buildManifest wraps them in the envelope.
 const manifest = buildManifest(allTools, '0.0.0')
 assert.equal(manifest.version, MANIFEST_VERSION, 'manifest.version')
-assert.equal(manifest.tools.length, 17, 'manifest.tools length')
+assert.equal(manifest.tools.length, 22, 'manifest.tools length')
 
-console.log('ok: tool registry — 17 defs, unique ids/paths, all schemas serialise')
+console.log('ok: tool registry — 22 defs, unique ids/paths, all schemas serialise')
