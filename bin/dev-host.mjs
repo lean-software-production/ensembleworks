@@ -29,14 +29,25 @@ const onPath = (bin) => spawnSync('which', [bin], { stdio: 'ignore' }).status ==
 
 /**
  * Find this repo's devcontainer by the label the devcontainer CLI stamps on it.
+ * Running containers only by default; `all: true` includes stopped ones
+ * (`devcontainer up` restarts a stopped container rather than recreating it,
+ * so `up` must consider them when resolving the port offset).
  * @param {string} repoDir
+ * @param {{ all?: boolean }} [opts]
  * @returns {{ id: string, name: string } | null}
  */
-function findDevcontainer(repoDir) {
+function findDevcontainer(repoDir, opts = {}) {
 	if (!onPath('docker')) return null
 	const out = spawnSync(
 		'docker',
-		['ps', '--filter', `label=devcontainer.local_folder=${repoDir}`, '--format', '{{.ID}} {{.Names}}'],
+		[
+			'ps',
+			...(opts.all ? ['-a'] : []),
+			'--filter',
+			`label=devcontainer.local_folder=${repoDir}`,
+			'--format',
+			'{{.ID}} {{.Names}}',
+		],
 		{ encoding: 'utf8' },
 	)
 	const lines = (out.stdout ?? '').trim().split('\n').filter(Boolean)
@@ -61,6 +72,20 @@ function resolveMainRepoDir(repoDir) {
 	const mainPath = firstLine.slice('worktree '.length).trim()
 	if (mainPath !== repoDir) narrate(`git worktree — targeting main checkout at ${mainPath}`)
 	return mainPath
+}
+
+/**
+ * The port offset a container was created with (containerEnv stamps it).
+ * Missing/empty -> 0 (pre-offset containers).
+ * @param {string} id
+ * @returns {number}
+ */
+function containerOffset(id) {
+	const out = spawnSync('docker', ['inspect', '-f', '{{range .Config.Env}}{{println .}}{{end}}', id], {
+		encoding: 'utf8',
+	})
+	const line = (out.stdout ?? '').split('\n').find((l) => l.startsWith('ENSEMBLEWORKS_PORT_OFFSET='))
+	return parsePortOffset(line?.slice('ENSEMBLEWORKS_PORT_OFFSET='.length)) ?? 0
 }
 
 /**
@@ -120,24 +145,46 @@ export async function runController(repoDir, argv) {
 		if (!onPath('devcontainer'))
 			die('the devcontainer CLI is required — install it: npm i -g @devcontainers/cli')
 		let offset = configuredOffset(mainRepoDir)
+		const upArgs = ['up', '--workspace-folder', mainRepoDir]
 		if (dc) {
 			narrate(`devcontainer '${dc.name}' already running — devcontainer up is idempotent`)
-			offset ??= 0 // ports were published at create; never re-pick under a live container
-		} else if (offset === null) {
-			offset = await pickFreeOffset()
-			if (offset === null)
-				die('no free port offset in 0..900 (probed caddy + livekit-tcp) — set ENSEMBLEWORKS_PORT_OFFSET')
-			if (offset !== 0) {
-				const f = path.join(mainRepoDir, '.local', 'port-offset')
-				mkdirSync(path.dirname(f), { recursive: true })
-				writeFileSync(f, `${offset}\n`)
-				narrate(`default ports busy — picked port offset ${offset} (persisted to .local/port-offset)`)
+			const have = containerOffset(dc.id)
+			if (offset !== null && offset !== have)
+				narrate(
+					`configured offset ${offset} != running container's ${have} — keeping ${have}; run \`bin/dev down\` first to apply the new offset`,
+				)
+			offset = have // a live container's published ports are immutable
+		} else {
+			const stopped = findDevcontainer(mainRepoDir, { all: true })
+			if (stopped) {
+				const have = containerOffset(stopped.id)
+				if (offset === null || offset === have) {
+					// Adopt the container's offset — don't write .local/port-offset;
+					// persistence is an auto-pick-only concern.
+					offset = have
+					narrate(`stopped devcontainer '${stopped.name}' (port offset ${have}) — restarting it`)
+				} else {
+					narrate(
+						`port offset changed ${have} → ${offset} — recreating the devcontainer (published ports are fixed at create)`,
+					)
+					upArgs.splice(1, 0, '--remove-existing-container')
+				}
+			} else if (offset === null) {
+				offset = await pickFreeOffset()
+				if (offset === null)
+					die('no free port offset in 0..900 (probed caddy + livekit-tcp) — set ENSEMBLEWORKS_PORT_OFFSET')
+				if (offset !== 0) {
+					const f = path.join(mainRepoDir, '.local', 'port-offset')
+					mkdirSync(path.dirname(f), { recursive: true })
+					writeFileSync(f, `${offset}\n`)
+					narrate(`default ports busy — picked port offset ${offset} (persisted to .local/port-offset)`)
+				}
 			}
 		}
 		const p = portsFor(offset)
 		if (offset) narrate(`port offset ${offset} → edge http://localhost:${p.caddy}`)
-		narrate(`starting → devcontainer up --workspace-folder ${mainRepoDir}`)
-		const r = spawnSync('devcontainer', ['up', '--workspace-folder', mainRepoDir], {
+		narrate(`starting → devcontainer ${upArgs.join(' ')}`)
+		const r = spawnSync('devcontainer', upArgs, {
 			stdio: 'inherit',
 			// Consumed by ${localEnv:…} substitutions in .devcontainer/devcontainer.json
 			// (published host ports) and containerEnv (the engine's offset).

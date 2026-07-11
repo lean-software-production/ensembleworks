@@ -143,9 +143,11 @@ factory reset.
 it survives across `up`/`down`. `bin/dev up` auto-picks 100, 200, … when the
 default ports are busy and narrates the resulting edge URL; at a nonzero
 offset LiveKit runs from a generated config (`<dataDir>/livekit-dev.generated.yaml`)
-since `--dev` mode has fixed ports. Changing the offset needs
-`bin/dev down` then `bin/dev up` — published ports are fixed at container
-create. Offset stacks use tmux session `workspace-<offset>` and data dir
+since `--dev` mode has fixed ports. To change the offset, `bin/dev down`,
+then `ENSEMBLEWORKS_PORT_OFFSET=<n> bin/dev up` (or edit
+`.local/port-offset`) — bin/dev detects the offset change and recreates the
+container (published ports are fixed at create).
+Offset stacks use tmux session `workspace-<offset>` and data dir
 `~/.local/share/ensembleworks-<offset>`; use separate clones rather than
 linked worktrees (the controller always targets the main checkout).
 
