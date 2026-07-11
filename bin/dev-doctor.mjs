@@ -11,11 +11,11 @@ import {
 	devEnvPath,
 	makeCtx,
 	onPath,
-	probePort,
 	repoDir,
 	sessionRunning,
 	wantedBun,
 } from './dev-main.mjs'
+import { probePort } from './dev-net.mjs'
 
 /**
  * @typedef {{ name: string, level: 'required' | 'optional' | 'info',
