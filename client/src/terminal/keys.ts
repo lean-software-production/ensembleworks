@@ -30,3 +30,29 @@ export function ptyInputForKey(e: EnterKeyEvent): string | null {
 	if (e.ctrlKey || e.metaKey) return null
 	return e.shiftKey || e.altKey ? NEWLINE_INPUT : null
 }
+
+// Shared per-terminal font size: one PTY grid per terminal, so font size is
+// a property of the terminal, not the viewer. Clamped so the deterministic
+// grid stays sane (MIN keeps cols/rows finite; MAX keeps the WebGL atlas in
+// its comfort zone in view mode).
+export const FONT_SIZE_MIN = 8
+export const FONT_SIZE_MAX = 32
+export const FONT_SIZE_DEFAULT = 16
+
+export type FontSizeAction = 'up' | 'down' | 'reset'
+
+// Ctrl/Cmd +/- (and 0 to reset) while editing. '=' is the unshifted '+' key,
+// '_' the shifted '-'. Alt combos are left alone (tmux Meta bindings).
+export function fontSizeActionForKey(e: EnterKeyEvent): FontSizeAction | null {
+	if (e.type !== 'keydown' || !(e.ctrlKey || e.metaKey) || e.altKey) return null
+	if (e.key === '+' || e.key === '=') return 'up'
+	if (e.key === '-' || e.key === '_') return 'down'
+	if (e.key === '0') return 'reset'
+	return null
+}
+
+export function nextFontSize(current: number, action: FontSizeAction): number {
+	if (action === 'reset') return FONT_SIZE_DEFAULT
+	const next = action === 'up' ? current + 1 : current - 1
+	return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, next))
+}

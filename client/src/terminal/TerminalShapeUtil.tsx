@@ -36,7 +36,7 @@ import {
 } from 'tldraw'
 import { paperTerminalTheme, wm } from '../theme'
 import { type CellSize, gridFor, quantizeCell } from './grid'
-import { ptyInputForKey } from './keys'
+import { FONT_SIZE_DEFAULT, fontSizeActionForKey, nextFontSize, ptyInputForKey } from './keys'
 import { termWsUrl } from './wsUrl'
 
 export interface TerminalShapeProps {
@@ -49,6 +49,10 @@ export interface TerminalShapeProps {
 	// Remote gateway id (spike): undefined = same-origin gateway, zero
 	// migration for existing rooms. See /api/terminal/list.
 	gateway?: string
+	// Per-terminal base font size (px) — SHARED: one PTY grid per terminal, so
+	// font size belongs to the terminal, not the viewer; changing it re-grids
+	// for every client. Optional so existing rooms need no migration (= 16).
+	fontSize?: number
 }
 
 // Register the shape in tldraw's global shape union (tldraw v5 pattern), so
@@ -63,9 +67,6 @@ export type TerminalShape = TLBaseShape<'terminal', TerminalShapeProps>
 
 const MIN_W = 360
 const MIN_H = 220
-// Base font at 100% canvas zoom. The editing terminal scales this with zoom so
-// the derived grid stays constant (see the counter-scale effect below).
-const BASE_FONT = 16
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 10_000
 
@@ -158,6 +159,12 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		editor,
 		isEditing,
 	])
+	// Shared base font (px). A ref shadows it for closures created at mount
+	// (captureCell) — they must normalise against the CURRENT base font, not
+	// the mount-time value.
+	const baseFont = shape.props.fontSize ?? FONT_SIZE_DEFAULT
+	const baseFontRef = useRef(baseFont)
+	baseFontRef.current = baseFont
 
 	const containerRef = useRef<HTMLDivElement>(null)
 	const hostRef = useRef<HTMLDivElement>(null)
@@ -236,7 +243,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		if (!container || !host) return
 
 		const term = new Terminal({
-			fontSize: BASE_FONT,
+			fontSize: baseFontRef.current,
 			fontFamily: wm.mono,
 			// tmux owns scrollback (mouse on → wheel enters copy-mode, 50k line
 			// history). A local xterm buffer would fight it for wheel events.
@@ -266,8 +273,8 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		term.open(host)
 		// Bootstrap the spawn size synchronously (so the PTY starts ~right and the
 		// WS URL below carries it); the deterministic effect refines it to the exact
-		// grid once the web font's cell is measured. fontSize is BASE_FONT here, so
-		// the measured cell is already at base scale.
+		// grid once the web font's cell is measured. fontSize is the base font here,
+		// so the measured cell is already at base scale.
 		const bootCell = xtermCell(term)
 		if (bootCell) {
 			const { cols, rows } = gridFor(
@@ -383,9 +390,9 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			if (disposed) return
 			const cell = xtermCell(term)
 			if (!cell) return
-			// Normalise to BASE_FONT: the zoom effect may have scaled fontSize, but the
-			// grid must be zoom-invariant.
-			const scale = (term.options.fontSize ?? BASE_FONT) / BASE_FONT
+			// Normalise to the base font: the zoom effect may have scaled fontSize, but
+			// the grid must be zoom-invariant.
+			const scale = (term.options.fontSize ?? baseFontRef.current) / baseFontRef.current
 			setCellSize(quantizeCell(cell.width / scale, cell.height / scale))
 		}
 		document.fonts
@@ -438,6 +445,20 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 				if (ws?.readyState === WebSocket.OPEN) {
 					const msg: TermClientMessage = { type: 'input', data: ptyInput }
 					ws.send(JSON.stringify(msg))
+				}
+				return false
+			}
+			// Ctrl/Cmd +/-/0: shared per-terminal font size (see ./keys). Owned
+			// here so the browser's page-zoom never fires while editing. Read the
+			// LIVE shape — this closure's `shape` is stale after prop changes.
+			const fontAction = fontSizeActionForKey(e)
+			if (fontAction) {
+				e.preventDefault()
+				const live = editor.getShape(shape.id) as TerminalShape | undefined
+				const current = live?.props.fontSize ?? FONT_SIZE_DEFAULT
+				const next = nextFontSize(current, fontAction)
+				if (live && next !== current) {
+					editor.updateShape({ id: shape.id, type: shape.type, props: { fontSize: next } })
 				}
 				return false
 			}
@@ -572,14 +593,27 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 	// so the counter-scale MUST invert the raw zoom, not the font's factor.
 	// Floor, not round: rounding up made the content LARGER than the box and
 	// clipped the right edge; flooring only ever under-fills. Grid unaffected:
-	// captureCell normalises by (fontSize / BASE_FONT), which remains the
+	// captureCell normalises by (fontSize / the base font), which remains the
 	// true factor.
 	useEffect(() => {
 		const term = termRef.current
 		if (!term) return
-		const nextFont = Math.max(6, Math.floor(BASE_FONT * editZoom))
+		const nextFont = Math.max(6, Math.floor(baseFont * editZoom))
 		if (term.options.fontSize !== nextFont) term.options.fontSize = nextFont
-	}, [editZoom])
+	}, [editZoom, baseFont])
+
+	// Shared font-size changes re-measure the cell; the deterministic grid
+	// effect then re-derives cols/rows from the same shared inputs everywhere
+	// (baseFont is a synced shape prop, and the cell is quantised — same value
+	// on every client, so there is still no proposer race).
+	useEffect(() => {
+		const term = termRef.current
+		if (!term) return
+		const cell = xtermCell(term)
+		if (!cell) return
+		const scale = (term.options.fontSize ?? baseFont) / baseFont
+		setCellSize(quantizeCell(cell.width / scale, cell.height / scale))
+	}, [baseFont])
 
 	// Deterministic grid: cols/rows are a pure function of the shared box (shape
 	// w/h) and the quantised base-font cell size (see ./grid), so every client

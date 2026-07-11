@@ -1,6 +1,10 @@
 // Run with: bun src/terminal/keys.test.ts   (from client/)
 import assert from 'node:assert/strict'
-import { NEWLINE_INPUT, ptyInputForKey } from './keys'
+import {
+	FONT_SIZE_DEFAULT, FONT_SIZE_MAX, FONT_SIZE_MIN,
+	fontSizeActionForKey, nextFontSize,
+	NEWLINE_INPUT, ptyInputForKey,
+} from './keys'
 
 const ev = (over: Partial<Parameters<typeof ptyInputForKey>[0]> = {}) => ({
 	type: 'keydown',
@@ -31,5 +35,21 @@ assert.equal(ptyInputForKey(ev({ type: 'keyup', shiftKey: true })), null)
 
 // Non-Enter keys pass through untouched.
 assert.equal(ptyInputForKey(ev({ key: 'a', shiftKey: true })), null)
+
+// Ctrl/Cmd +/-/0 map to font actions; '=' is unshifted '+', '_' shifted '-'.
+assert.equal(fontSizeActionForKey(ev({ key: '+', ctrlKey: true })), 'up')
+assert.equal(fontSizeActionForKey(ev({ key: '=', metaKey: true })), 'up')
+assert.equal(fontSizeActionForKey(ev({ key: '-', ctrlKey: true })), 'down')
+assert.equal(fontSizeActionForKey(ev({ key: '_', ctrlKey: true })), 'down')
+assert.equal(fontSizeActionForKey(ev({ key: '0', metaKey: true })), 'reset')
+// No modifier / alt combos / keyup: not ours.
+assert.equal(fontSizeActionForKey(ev({ key: '+' })), null)
+assert.equal(fontSizeActionForKey(ev({ key: '+', ctrlKey: true, altKey: true })), null)
+assert.equal(fontSizeActionForKey(ev({ key: '+', ctrlKey: true, type: 'keyup' })), null)
+// Clamping and reset.
+assert.equal(nextFontSize(16, 'up'), 17)
+assert.equal(nextFontSize(FONT_SIZE_MAX, 'up'), FONT_SIZE_MAX)
+assert.equal(nextFontSize(FONT_SIZE_MIN, 'down'), FONT_SIZE_MIN)
+assert.equal(nextFontSize(23, 'reset'), FONT_SIZE_DEFAULT)
 
 console.log('keys.test.ts: all assertions passed')
