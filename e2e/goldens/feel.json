@@ -1,0 +1,6 @@
+{
+  "dragThresholdPx": 5,
+  "nudgePx": 1,
+  "shiftNudgePx": 10,
+  "wheelZoomRatio": 1.1
+}
