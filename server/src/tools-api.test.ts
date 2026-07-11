@@ -34,7 +34,7 @@ async function main() {
 		tools: Array<{ plugin: string; id: string; method: string; path: string }>
 	}
 	assert.equal(manifest.version, 1, 'manifest.version === 1')
-	assert.equal(manifest.tools.length, 22, 'manifest declares 22 tools (17 + 5 canvas-v2)')
+	assert.equal(manifest.tools.length, 27, 'manifest declares 27 tools (17 base + 5 canvas-v2 + 5 discord)')
 	assert.equal(typeof manifest.server, 'string', 'manifest.server is a string')
 
 	// --- Direction A: declared ⊆ mounted (every verb is reachable) -------------
@@ -74,7 +74,7 @@ async function main() {
 	assert.equal(mounted.size, declared.size, 'mounted and declared /api route sets must match exactly')
 
 	server.close()
-	console.log(`ok: /api/tools manifest — envelope v1, 22 tools, ${mounted.size} routes match both directions`)
+	console.log(`ok: /api/tools manifest — envelope v1, 27 tools, ${mounted.size} routes match both directions`)
 	process.exit(0) // createSyncApp's intervals keep the loop alive (house pattern: whoami-api, canvas-api)
 }
 

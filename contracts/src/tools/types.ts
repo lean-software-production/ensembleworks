@@ -8,7 +8,7 @@ export interface ToolDef {
 	/** Bare verb id, unique within its plugin (e.g. 'sticky', 'read'). */
 	id: string
 	/** Plugin group this verb belongs to (design §3 ids + 'kernel'). */
-	plugin: 'kernel' | 'av' | 'canvas' | 'canvas-v2' | 'scribe' | 'roadmap' | 'terminal' | 'file'
+	plugin: 'kernel' | 'av' | 'canvas' | 'canvas-v2' | 'scribe' | 'roadmap' | 'terminal' | 'file' | 'discord'
 	/** The one HTTP route that backs this verb — the drift anchor. */
 	http: { method: HttpMethod; path: string }
 	/** One-line help, rendered by `ensembleworks <plugin> <id> --help`. */

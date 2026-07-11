@@ -19,7 +19,10 @@ export function bindingsUrl(room: string): string {
 }
 
 export function deleteBindingUrl(id: string): string {
-	return `/api/discord/bindings/${encodeURIComponent(id)}`
+	// id is a query param (?id=), not a path segment: the server route is DELETE
+	// /api/discord/bindings and the shared tool contract can't declare a `:id`
+	// path (the CLI renderer never substitutes it).
+	return `/api/discord/bindings?${new URLSearchParams({ id }).toString()}`
 }
 
 // Thin async wrappers (real fetch — not unit-tested).

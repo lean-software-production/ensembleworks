@@ -11,10 +11,10 @@ import {
 } from './index.js'
 
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'DELETE']
-const PLUGINS = ['kernel', 'av', 'canvas', 'scribe', 'roadmap', 'terminal', 'file', 'canvas-v2']
+const PLUGINS = ['kernel', 'av', 'canvas', 'canvas-v2', 'scribe', 'roadmap', 'terminal', 'file', 'discord']
 
-// 1. Exactly 22 declared verbs (17 + 5 canvas-v2).
-assert.equal(allTools.length, 22, 'expected 22 tool defs (17 + 5 canvas-v2)')
+// 1. Exactly 27 declared verbs (17 base + 5 canvas-v2 + 5 discord).
+assert.equal(allTools.length, 27, 'expected 27 tool defs (17 base + 5 canvas-v2 + 5 discord)')
 
 // 2. Every def is well-formed.
 for (const t of allTools) {
@@ -23,6 +23,11 @@ for (const t of allTools) {
 	assert.ok(typeof t.help === 'string' && t.help.length > 0, `no help on ${t.plugin}.${t.id}`)
 	assert.ok(METHODS.includes(t.http.method), `bad method on ${t.plugin}.${t.id}`)
 	assert.ok(t.http.path.startsWith('/api/'), `path must start /api/ on ${t.plugin}.${t.id}`)
+	// No `:param` path segments: the CLI's generic renderer (cli/src/render/args.ts)
+	// emits entry.path verbatim and never substitutes them, so a path-param tool
+	// would silently ship a literal `:id` to the server. Keep key fields in
+	// query/body — this keeps every declared tool CLI-renderable.
+	assert.ok(!/\/:/.test(t.http.path), `path param not renderable by the CLI on ${t.plugin}.${t.id}: ${t.http.path}`)
 }
 
 // 3. (plugin, id) pairs unique; (method, path) pairs unique (GET+POST may share
@@ -49,6 +54,6 @@ for (const t of allTools) {
 // 5. buildManifest wraps them in the envelope.
 const manifest = buildManifest(allTools, '0.0.0')
 assert.equal(manifest.version, MANIFEST_VERSION, 'manifest.version')
-assert.equal(manifest.tools.length, 22, 'manifest.tools length')
+assert.equal(manifest.tools.length, 27, 'manifest.tools length')
 
-console.log('ok: tool registry — 22 defs, unique ids/paths, all schemas serialise')
+console.log('ok: tool registry — 27 defs, unique ids/paths, all schemas serialise')
