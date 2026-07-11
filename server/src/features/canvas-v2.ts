@@ -5,10 +5,10 @@
  * @ensembleworks/contracts (canvas-v2).
  */
 import {
-	canvasV2Document, canvasV2Frame, canvasV2Frames,
+	canvasV2Document, canvasV2Frame, canvasV2Frames, canvasV2Neighbors, canvasV2Semantic,
 } from '@ensembleworks/contracts'
 import {
-	childrenOf, frames as modelFrames, pageBounds, plainText,
+	childrenOf, frames as modelFrames, neighbors, pageBounds, plainText, rootShapes, semanticView, shapeById,
 	type CanvasDocument, type Shape,
 } from '@ensembleworks/canvas-model'
 import express from 'express'
@@ -133,22 +133,65 @@ export function createCanvasV2Router(ctx: PluginServerContext): express.Router {
 		})
 	)
 
-	// Unit 10 (E3) seam: semantic + neighbors mount here once their ToolDefs are
-	// wired in. Kept as a no-op call so this diff stays document/frames/frame-only.
 	attachSemantic(router, { modelFor, roomOf, findFrame })
 
 	return router
 }
 
-// Unit 10 (E3) fills this in: GET /api/v2/canvas/semantic + GET
-// /api/v2/canvas/neighbors, reusing modelFor/roomOf/findFrame above.
+// GET /api/v2/canvas/semantic + GET /api/v2/canvas/neighbors — spatial
+// semantics (clusters/outliers/relations) and shape-proximity reads, built on
+// the same modelFor/roomOf/findFrame helpers as document/frames/frame above.
 function attachSemantic(
-	_router: express.Router,
-	_deps: {
+	router: express.Router,
+	deps: {
 		modelFor: (roomId: string) => CanvasDocument
 		roomOf: (req: express.Request) => string | null
 		findFrame: (doc: CanvasDocument, name: string) => Shape | undefined
 	}
 ): void {
-	/* E3 */
+	// GET /api/v2/canvas/semantic?room=&frame= — clusters/outliers/relations for
+	// a fuzzy-matched frame's descendants, or the whole first page if omitted.
+	router.get(
+		canvasV2Semantic.http.path,
+		guard((req, res) => {
+			const roomId = deps.roomOf(req)
+			if (!roomId) return void res.status(400).json({ error: 'bad room id' })
+			const doc = deps.modelFor(roomId)
+			const frameName = typeof req.query.frame === 'string' ? req.query.frame : ''
+			let scope: Shape[]
+			let frameInfo: { id: string; name: string } | null = null
+			if (frameName) {
+				const frame = deps.findFrame(doc, frameName)
+				if (!frame) return void res.status(404).json({ error: 'frame not found' })
+				frameInfo = { id: frame.id, name: String((frame.props as any)?.name ?? '') }
+				scope = childrenOf(doc, frame.id)
+			} else {
+				scope = rootShapes(doc)
+			}
+			const view = semanticView(doc, scope)
+			res.json({ ok: true, model: API_MODEL, frame: frameInfo, ...view })
+		})
+	)
+
+	// GET /api/v2/canvas/neighbors?room=&id=&radius= — shapes within radius of a
+	// given shape (nearest first, same page only).
+	router.get(
+		canvasV2Neighbors.http.path,
+		guard((req, res) => {
+			const roomId = deps.roomOf(req)
+			const id = typeof req.query.id === 'string' ? req.query.id : ''
+			const radius = Number(req.query.radius ?? 400)
+			if (!roomId) return void res.status(400).json({ error: 'bad room id' })
+			if (!id) return void res.status(400).json({ error: 'id is required' })
+			const doc = deps.modelFor(roomId)
+			if (!shapeById(doc, id)) return void res.status(404).json({ error: 'shape not found' })
+			res.json({
+				ok: true,
+				model: API_MODEL,
+				id,
+				radius,
+				neighbors: neighbors(doc, id, Number.isFinite(radius) ? radius : 400),
+			})
+		})
+	)
 }
