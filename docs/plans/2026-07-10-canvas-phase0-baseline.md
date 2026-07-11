@@ -4,7 +4,7 @@
 
 **Goal:** Stand up the Playwright + perf rigs against the *current tldraw app* and capture executable baselines — visual goldens, interaction "feel" numbers, multi-client convergence, and performance metrics — that the new canvas engine will be measured against (see `docs/plans/2026-07-10-canvas-rewrite-design.md`, Phase 0).
 
-**Architecture:** A new `e2e` Bun workspace holding a Playwright rig. The rig boots the real server in-process-style (`createSyncApp` on :8788, fresh temp data dir per run) plus the Vite dev client on :5273 (5173 stays free for the normal dev stack) via Playwright `webServer`. Tests seed rooms through the *agent HTTP API* (dogfooding the surface bots use), read app state through a tiny dev-only `window.__ew.editor` handle, and write baseline artifacts (screenshots, `feel.json`, perf JSONs) that are committed to the repo.
+**Architecture:** A new `e2e` Bun workspace holding a Playwright rig. The rig boots the real server in-process-style (`createSyncApp` on :8788, fresh temp data dir per run) plus the Vite dev client on :5273 (5173 stays free for the normal dev stack) via Playwright `webServer`. Tests seed rooms through the *agent HTTP API* (dogfooding the surface bots use), read app state through a tiny dev-only `window.__ewEditor` handle, and write baseline artifacts (screenshots, `feel.json`, perf JSONs) that are committed to the repo.
 
 **Tech Stack:** Bun 1.3.14 (workspace + server), Node 22.12.0 (Playwright runner — the CLI shebang uses node), `@playwright/test` + Chromium, the existing Express/tldraw-sync server, Vite dev server.
 
@@ -293,62 +293,48 @@ bun run --filter '@ensembleworks/e2e' typecheck
 git add e2e && git commit -m "test(e2e): playwright rig — booted stack, identity fixture, smoke spec"
 ```
 
-## Task 5: Dev-only editor handle in the client
+## Task 5: Editor handle smoke coverage (uses the existing `__ewEditor` hook)
+
+> **Amended during execution:** the client already exposes the editor as
+> `window.__ewEditor` in `client/src/App.tsx` (`handleMount`) — an established
+> convention used by `docs/headless-browser.md` and the acceptance docs. No
+> client change is needed; the rig uses that hook. All later tasks reference
+> `(window as any).__ewEditor` (an `Editor`, NOT wrapped in an object).
 
 **Files:**
-- Modify: `client/src/App.tsx` (the `onMount` callback passed to `<Tldraw>`)
 - Modify: `e2e/tests/smoke.spec.ts`
 
-**Step 1: Extend the smoke spec (failing first)**
+**Step 1: Extend the smoke spec**
 
 Append to `smoke.spec.ts`:
 
 ```ts
-test('dev editor handle is exposed and the fresh room is empty', async ({ page }) => {
+test('editor debug hook is exposed and the fresh room is empty', async ({ page }) => {
 	await page.goto('/?room=smoke-handle')
 	await expect(page.locator('.tl-container')).toBeVisible({ timeout: 15_000 })
+	// waitForFunction polls until truthy — wrap in an object so a legitimate
+	// count of 0 (falsy) still resolves.
 	const count = await page.waitForFunction(() => {
-		const ew = (window as any).__ew
-		return ew?.editor ? ew.editor.getCurrentPageShapes().length : null
+		const ed = (window as any).__ewEditor
+		return ed ? { n: ed.getCurrentPageShapes().length } : null
 	})
-	expect(await count.jsonValue()).toBe(0)
+	expect((await count.jsonValue())!.n).toBe(0)
 })
 ```
 
-**Step 2: Run to verify it fails**
-
-```bash
-cd e2e && bunx playwright test --project=e2e -g "editor handle" && cd ..
-```
-Expected: FAIL (timeout — `window.__ew` undefined).
-
-**Step 3: Expose the handle in `client/src/App.tsx`**
-
-Find the `onMount` callback on the `<Tldraw>` element. At its top, add (preserving everything already there):
-
-```ts
-// e2e/dev handle: lets the Playwright rig read editor state and set the
-// camera deterministically. Dev builds only — never ships in prod bundles.
-if (import.meta.env.DEV) {
-	;(window as unknown as { __ew?: unknown }).__ew = { editor }
-}
-```
-
-If `onMount` receives the editor under a different name, use that binding. If there is no `onMount` prop yet, add one: `onMount={(editor) => { ...the snippet... }}`.
-
-**Step 4: Run to verify it passes**
+**Step 2: Run to verify it passes**
 
 ```bash
 cd e2e && bunx playwright test --project=e2e && cd ..
 ```
 Expected: `2 passed`.
 
-**Step 5: Client typecheck + commit**
+**Step 3: Typecheck + commit**
 
 ```bash
-bun run --filter '@ensembleworks/client' typecheck
-git add client/src/App.tsx e2e/tests/smoke.spec.ts
-git commit -m "test(e2e): dev-only window.__ew editor handle + smoke coverage"
+bun run --filter '@ensembleworks/e2e' typecheck
+git add e2e/tests/smoke.spec.ts
+git commit -m "test(e2e): editor-hook smoke coverage via existing __ewEditor"
 ```
 
 ## Task 6: Seed library (agent-API dogfooding)
@@ -455,7 +441,7 @@ import { seedGoldenBoard, GOLDEN_BOARD_SHAPE_COUNT } from '../lib/seed'
 async function settle(page: import('@playwright/test').Page, count: number) {
 	await expect(page.locator('.tl-shape')).toHaveCount(count, { timeout: 15_000 })
 	await page.evaluate(() => {
-		const { editor } = (window as any).__ew
+		const editor = (window as any).__ewEditor
 		editor.zoomToFit({ animation: { duration: 0 } })
 	})
 	await page.waitForTimeout(500) // let fonts/last paint settle
@@ -541,20 +527,20 @@ async function setup(page: import('@playwright/test').Page, room: string) {
 	await page.goto(`/?room=${room}`)
 	await expect(page.locator('.tl-shape')).toHaveCount(1, { timeout: 15_000 })
 	await page.evaluate(() => {
-		const { editor } = (window as any).__ew
+		const editor = (window as any).__ewEditor
 		editor.setCamera({ x: 0, y: 0, z: 1 }, { animation: { duration: 0 } })
 	})
 	return String(id)
 }
 
 const shapeX = (page: import('@playwright/test').Page, id: string) =>
-	page.evaluate((sid) => (window as any).__ew.editor.getShape(sid).x, id)
+	page.evaluate((sid) => (window as any).__ewEditor.editor.getShape(sid).x, id)
 
 // Screen point of the note's center at camera {0,0,z:1}: page coords == screen
 // coords offset by the canvas origin; read the true center from the editor.
 async function centerOnScreen(page: import('@playwright/test').Page, id: string) {
 	return page.evaluate((sid) => {
-		const { editor } = (window as any).__ew
+		const editor = (window as any).__ewEditor
 		const b = editor.getShapePageBounds(sid)
 		const p = editor.pageToViewport({ x: b.midX, y: b.midY })
 		const r = editor.getContainer().getBoundingClientRect()
@@ -588,12 +574,12 @@ test('feel numbers match golden', async ({ page }) => {
 	const shiftNudgePx = (await shapeX(page, id)) - x0 - nudgePx
 	await page.keyboard.press('Escape')
 
-	const z0 = await page.evaluate(() => (window as any).__ew.editor.getZoomLevel())
+	const z0 = await page.evaluate(() => (window as any).__ewEditor.editor.getZoomLevel())
 	await page.keyboard.down('Control')
 	await page.mouse.wheel(0, -100)
 	await page.keyboard.up('Control')
 	await page.waitForTimeout(300)
-	const z1 = await page.evaluate(() => (window as any).__ew.editor.getZoomLevel())
+	const z1 = await page.evaluate(() => (window as any).__ewEditor.editor.getZoomLevel())
 
 	const observed: FeelNumbers = {
 		dragThresholdPx,
@@ -654,7 +640,7 @@ test('two clients converge: shapes and presence', async ({ page, browser }) => {
 
 	// A creates a note through the real editor (flows through real sync).
 	await page.evaluate(() => {
-		const { editor } = (window as any).__ew
+		const editor = (window as any).__ewEditor
 		editor.createShape({ type: 'note', x: 200, y: 200, props: {} })
 	})
 	await expect(pageB.locator('.tl-shape')).toHaveCount(1, { timeout: 10_000 })
@@ -787,7 +773,7 @@ for (const n of [100, 1000]) {
 		await expect(page.locator('.tl-shape').first()).toBeVisible({ timeout: 60_000 })
 		const loadMs = Date.now() - t0
 		await page.evaluate(() => {
-			const { editor } = (window as any).__ew
+			const editor = (window as any).__ewEditor
 			editor.zoomToFit({ animation: { duration: 0 } })
 		})
 
