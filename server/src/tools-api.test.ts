@@ -74,7 +74,7 @@ async function main() {
 	assert.equal(mounted.size, declared.size, 'mounted and declared /api route sets must match exactly')
 
 	server.close()
-	console.log(`ok: /api/tools manifest — envelope v1, 17 tools, ${mounted.size} routes match both directions`)
+	console.log(`ok: /api/tools manifest — envelope v1, 22 tools, ${mounted.size} routes match both directions`)
 	process.exit(0) // createSyncApp's intervals keep the loop alive (house pattern: whoami-api, canvas-api)
 }
 

@@ -45,7 +45,8 @@ export const canvasV2Semantic: ToolDef = {
 	help:
 		'Spatial semantics for a frame (or the whole page): clusters (members, arrangement, confidence, label), outliers, ' +
 		'and arrow relations between clusters. Scale-relative thresholds. Cluster indices (and relation fromCluster/toCluster) ' +
-		"are positions in THIS response's clusters array — recomputed per request, not stable ids; do not cache them across calls.",
+		"are positions in THIS response's clusters array — recomputed per request, not stable ids; do not cache them across calls. " +
+		'Scope includes nested shapes (groups etc.); frame counts elsewhere are direct children only.',
 	zodInput: z.object({ room, frame: z.string().optional().describe('fuzzy frame name; omitted = whole first page') }),
 	zodOutput: ok,
 }

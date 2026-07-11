@@ -67,6 +67,22 @@ const records = [
 		meta: {},
 		props: { color: 'black' },
 	},
+	// A native tldraw group (Ctrl+G): a structural container with empty props.
+	// Must survive conversion — dropping it would orphan its children's parentId.
+	{
+		typeName: 'shape',
+		id: 'shape:grp',
+		type: 'group',
+		parentId: 'shape:f',
+		index: 'a4',
+		x: 5,
+		y: 5,
+		rotation: 0,
+		isLocked: false,
+		opacity: 1,
+		meta: {},
+		props: {},
+	},
 	{ typeName: 'binding', id: 'binding:1', type: 'arrow', fromId: 'shape:ar', toId: 'shape:f', meta: {}, props: { terminal: 'start' } },
 	{ typeName: 'binding', id: 'binding:2', type: 'arrow', fromId: 'shape:ar', toId: 'shape:n', meta: {}, props: { terminal: 'end' } },
 	{ typeName: 'asset', id: 'asset:x', props: { src: 'http://x' } },
@@ -94,8 +110,9 @@ assert.deepEqual(
 	doc.pages.map((p) => p.id),
 	['page:p']
 )
-assert.equal(doc.shapes.length, 4) // 4 shapes, asset/page/document/bogus excluded
+assert.equal(doc.shapes.length, 5) // 5 shapes, asset/page/document/bogus excluded
 assert.equal(doc.byId.get('shape:term')!.kind, 'terminal') // custom shape preserved
+assert.equal(doc.byId.get('shape:grp')!.kind, 'group') // native group survives (container, not dropped)
 assert.equal((doc.byId.get('shape:n')!.props as any).richText.content[0].content[0].text, 'hi') // richText verbatim
 assert.equal(doc.byId.get('shape:bogus'), undefined) // unknown shape type dropped
 assert.equal(doc.bindings.length, 2) // non-arrow binding dropped

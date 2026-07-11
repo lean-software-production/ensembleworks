@@ -56,4 +56,21 @@ export const childrenOf = (doc: CanvasDocument, parentId: string): Shape[] =>
   doc.shapes.filter((s) => s.parentId === parentId)
 export const rootShapes = (doc: CanvasDocument): Shape[] =>
   doc.shapes.filter((s) => s.parentId.startsWith('page:'))
+// All shapes transitively under a parent (BFS over childrenOf), so containers
+// like groups don't hide their contents from structural reads. Cycle-safe: a
+// malformed parent cycle terminates via the seen set instead of looping.
+export const descendantsOf = (doc: CanvasDocument, id: string): Shape[] => {
+  const out: Shape[] = []
+  const seen = new Set<string>([id])
+  const queue = [id]
+  while (queue.length > 0) {
+    for (const child of childrenOf(doc, queue.shift()!)) {
+      if (seen.has(child.id)) continue
+      seen.add(child.id)
+      out.push(child)
+      queue.push(child.id)
+    }
+  }
+  return out
+}
 export const frames = (doc: CanvasDocument): Shape[] => doc.shapes.filter((s) => s.kind === 'frame')

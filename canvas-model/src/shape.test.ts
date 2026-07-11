@@ -2,10 +2,10 @@
 import assert from 'node:assert/strict'
 import { SHAPE_KINDS, shapeSchema, validateShape, plainText } from './shape.js'
 
-// Every kind the room can contain is enumerated (8 tldraw + image + 6 custom).
+// Every kind the room can contain is enumerated (9 tldraw incl. group + image + 6 custom).
 assert.deepEqual(
   [...SHAPE_KINDS].sort(),
-  ['arrow','draw','file-viewer','frame','geo','highlight','iframe','image','line','neko','note','roadmap','screenshare','terminal','text'].sort(),
+  ['arrow','draw','file-viewer','frame','geo','group','highlight','iframe','image','line','neko','note','roadmap','screenshare','terminal','text'].sort(),
 )
 
 const note = {

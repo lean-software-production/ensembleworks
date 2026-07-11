@@ -8,7 +8,7 @@ import {
 	canvasV2Document, canvasV2Frame, canvasV2Frames, canvasV2Neighbors, canvasV2Semantic,
 } from '@ensembleworks/contracts'
 import {
-	childrenOf, frames as modelFrames, neighbors, pageBounds, plainText, rootShapes, semanticView, shapeById,
+	childrenOf, descendantsOf, frames as modelFrames, neighbors, pageBounds, pageIdOf, plainText, semanticView, shapeById,
 	type CanvasDocument, type Shape,
 } from '@ensembleworks/canvas-model'
 import express from 'express'
@@ -150,7 +150,11 @@ function attachSemantic(
 	}
 ): void {
 	// GET /api/v2/canvas/semantic?room=&frame= — clusters/outliers/relations for
-	// a fuzzy-matched frame's descendants, or the whole first page if omitted.
+	// a fuzzy-matched frame's DESCENDANTS (containers crossed, so group-nested
+	// notes are seen), or every shape on the first page if no frame is given.
+	// Deliberate asymmetry with /frames and /frame above: those stay
+	// direct-children (v1 count parity — their numbers must keep meaning
+	// "immediate members"), while semantics wants everything a human sees.
 	router.get(
 		canvasV2Semantic.http.path,
 		guard((req, res) => {
@@ -164,9 +168,13 @@ function attachSemantic(
 				const frame = deps.findFrame(doc, frameName)
 				if (!frame) return void res.status(404).json({ error: 'frame not found' })
 				frameInfo = { id: frame.id, name: String((frame.props as any)?.name ?? '') }
-				scope = childrenOf(doc, frame.id)
+				scope = descendantsOf(doc, frame.id)
 			} else {
-				scope = rootShapes(doc)
+				// Whole-page scope must include frame-nested content (the common
+				// case) — rootShapes alone would see only direct page children and
+				// yield empty clusters for any framed board.
+				const firstPage = doc.pages[0]
+				scope = firstPage ? doc.shapes.filter((s) => pageIdOf(doc, s) === firstPage.id) : []
 			}
 			const view = semanticView(doc, scope)
 			res.json({ ok: true, model: API_MODEL, frame: frameInfo, ...view })
@@ -180,18 +188,16 @@ function attachSemantic(
 		guard((req, res) => {
 			const roomId = deps.roomOf(req)
 			const id = typeof req.query.id === 'string' ? req.query.id : ''
-			const radius = Number(req.query.radius ?? 400)
+			// Echo the EFFECTIVE radius — the one actually queried — so a garbage
+			// ?radius= can't make the response claim one thing (NaN → null in JSON)
+			// while the query used another (the 400 default).
+			const raw = Number(req.query.radius ?? 400)
+			const radius = Number.isFinite(raw) ? raw : 400
 			if (!roomId) return void res.status(400).json({ error: 'bad room id' })
 			if (!id) return void res.status(400).json({ error: 'id is required' })
 			const doc = deps.modelFor(roomId)
 			if (!shapeById(doc, id)) return void res.status(404).json({ error: 'shape not found' })
-			res.json({
-				ok: true,
-				model: API_MODEL,
-				id,
-				radius,
-				neighbors: neighbors(doc, id, Number.isFinite(radius) ? radius : 400),
-			})
+			res.json({ ok: true, model: API_MODEL, id, radius, neighbors: neighbors(doc, id, radius) })
 		})
 	)
 }

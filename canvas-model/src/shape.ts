@@ -1,10 +1,12 @@
 import { z } from 'zod'
 import { shapeIdField, parentIdField, type ShapeId, type ParentId } from './ids.js'
 
-// The shape kinds a room can contain: tldraw defaults we use + image + the six
-// custom HTML-box shapes (contracts/src/shapes.ts).
+// The shape kinds a room can contain: tldraw defaults we use (incl. 'group' —
+// a structural container users create with Ctrl+G; dropping it would orphan
+// its children's parentId chains) + image + the six custom HTML-box shapes
+// (contracts/src/shapes.ts).
 export const SHAPE_KINDS = [
-  'note', 'text', 'geo', 'arrow', 'frame', 'line', 'draw', 'highlight', 'image',
+  'note', 'text', 'geo', 'arrow', 'frame', 'group', 'line', 'draw', 'highlight', 'image',
   'terminal', 'iframe', 'neko', 'roadmap', 'screenshare', 'file-viewer',
 ] as const
 export type ShapeKind = (typeof SHAPE_KINDS)[number]
@@ -24,6 +26,7 @@ const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   geo: withText.extend(box.shape),
   arrow: withText,
   frame: box.extend({ name: z.string().optional() }),
+  group: z.looseObject({}), // tldraw groups carry no props; container only
   line: z.looseObject({}),
   draw: z.looseObject({}),
   highlight: z.looseObject({}),
