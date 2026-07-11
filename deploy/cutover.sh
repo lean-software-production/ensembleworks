@@ -22,10 +22,14 @@ ssh "$SSH_TARGET" 'bash -s' -- "$VERSION" < deploy/cutover-dataload-check.sh
 ssh "$SSH_TARGET" "bash -s" <<'EOF'
 set -euo pipefail
 APP_HOME="$(getent passwd ensembleworks | cut -d: -f6)"
+# DATA_DIR from the box's storage.env — the single source of truth for the
+# storage geometry (required-database-dirs spec).
+DATA_DIR="$(sudo grep '^DATA_DIR=' "$APP_HOME/.config/ensembleworks/storage.env" | tail -n1 | cut -d= -f2-)"
+[ -n "$DATA_DIR" ] || { echo "ABORT: DATA_DIR missing from storage.env" >&2; exit 1; }
 ts="$(date +%Y%m%dT%H%M%S)"
 sudo -u ensembleworks mkdir -p "$APP_HOME/backups"
 sudo -u ensembleworks cp -a --reflink=auto \
-  "$APP_HOME/.local/share/ensembleworks" "$APP_HOME/backups/pre-cutover-$ts"
+  "$DATA_DIR" "$APP_HOME/backups/pre-cutover-$ts"
 echo "backed up DATA_DIR -> ~/backups/pre-cutover-$ts (rollback across the era boundary)"
 EOF
 

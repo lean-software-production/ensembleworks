@@ -171,7 +171,12 @@ APP_HOME="$(getent passwd "${APP_USER}" | cut -d: -f6)"
 # run as APP_USER) can cd into the app regardless of where the repo checkout lives.
 # DATA_DIR/CONF_DIR stay under APP_HOME (env files with secrets).
 APP_DIR="${APP_HOME}/ensembleworks" # symlink -> the repo checkout
-DATA_DIR="${DATA_DIR:-${APP_HOME}/.local/share/ensembleworks}"
+DATA_DIR="${DATA_DIR:-${APP_HOME}/data}"
+# Storage geometry triple (required-database-dirs spec): the sync server
+# REQUIRES all three and refuses collision shapes at startup. Single-disk dev
+# box, so live DBs sit as a sibling of DATA_DIR under the app home.
+DATABASE_DIR="${DATABASE_DIR:-${APP_HOME}/databases}"
+DATABASE_BACKUPS_DIR="${DATABASE_BACKUPS_DIR:-${DATA_DIR}/database-backups}"
 CONF_DIR="${APP_HOME}/.config/ensembleworks" # env files with secrets
 
 if [[ -n "${SKIP_VCS}" ]]; then
@@ -214,7 +219,7 @@ for svc in sync term client scribe; do
 	systemctl stop "ensembleworks-${svc}.service" 2>/dev/null || true
 done
 runuser -u "${APP_USER}" -- ln -sfn "${SRC_DIR}" "${APP_DIR}"
-runuser -u "${APP_USER}" -- mkdir -p "${DATA_DIR}" "${CONF_DIR}"
+runuser -u "${APP_USER}" -- mkdir -p "${DATA_DIR}" "${DATABASE_DIR}" "${DATABASE_BACKUPS_DIR}" "${CONF_DIR}"
 runuser -u "${APP_USER}" -- env PATH="/usr/local/bin:${PATH}" bash -c "
   set -euo pipefail
   cd '${APP_DIR}'
@@ -239,6 +244,19 @@ visudo -cf /etc/sudoers.d/ensembleworks >/dev/null
 #    by ${APP_USER}. Written with placeholders ONLY if absent, so re-runs never
 #    clobber real secrets.
 # -----------------------------------------------------------------------------
+if [[ ! -f "${CONF_DIR}/storage.env" ]]; then
+	log "Writing ${CONF_DIR}/storage.env (storage geometry contract)"
+	cat >"${CONF_DIR}/storage.env" <<EOF
+# Storage geometry contract — sourced by ensembleworks-sync.service (and, on
+# laingville-managed prod boxes, by the database-backup/restore units). The
+# sync server validates the triple at startup and refuses collision shapes.
+# One file, one truth. See docs/superpowers/specs/2026-07-11-required-database-dirs-design.md.
+DATA_DIR=${DATA_DIR}
+DATABASE_DIR=${DATABASE_DIR}
+DATABASE_BACKUPS_DIR=${DATABASE_BACKUPS_DIR}
+EOF
+fi
+
 if [[ ! -f "${CONF_DIR}/sync.env" ]]; then
 	log "Writing ${CONF_DIR}/sync.env placeholder — FILL THIS IN"
 	cat >"${CONF_DIR}/sync.env" <<'EOF'
@@ -455,8 +473,10 @@ Type=simple
 User=${APP_USER}
 WorkingDirectory=${APP_DIR}/server
 Environment=PORT=8788
-Environment=DATA_DIR=${DATA_DIR}
 EnvironmentFile=${CONF_DIR}/sync.env
+# Storage triple (DATA_DIR/DATABASE_DIR/DATABASE_BACKUPS_DIR) — validated at
+# startup; the unit fails to start if the file is missing (fail-closed).
+EnvironmentFile=${CONF_DIR}/storage.env
 ExecStart=${BUN_BIN} run dev
 Restart=on-failure
 RestartSec=2

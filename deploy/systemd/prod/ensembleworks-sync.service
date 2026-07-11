@@ -16,9 +16,21 @@ Slice=ensembleworks.slice
 MemoryAccounting=yes
 MemoryLow=512M
 Environment=PORT=8788
-Environment=DATA_DIR=@APP_HOME@/.local/share/ensembleworks
 Environment=CLIENT_DIST=@APP_HOME@/current/client-dist
 EnvironmentFile=@APP_HOME@/.config/ensembleworks/sync.env
+# Storage geometry contract: DATA_DIR + DATABASE_DIR + DATABASE_BACKUPS_DIR
+# come ONLY from storage.env — deliberately no Environment= lines for them
+# here (EnvironmentFile= outranks Environment=, so a unit-level value would be
+# shadow config the moment an env file disagreed). The same file is sourced by
+# the laingville ensembleworks-database-backup/restore units, so the sync
+# server and the backup timer cannot disagree about the paths; the server
+# validates the triple at startup and REFUSES TO BOOT on missing or
+# collision-shaped values (live DBs nested in the data root, backup
+# destination overlapping live DBs — the 2026-07-10 ew-lsp-001 corruption
+# shapes). A missing storage.env fails the unit start: that is the fail-closed
+# design, not a bug. Provisioned by the laingville bootstrap; see
+# docs/superpowers/specs/2026-07-11-required-database-dirs-design.md.
+EnvironmentFile=@APP_HOME@/.config/ensembleworks/storage.env
 ExecStart=@APP_HOME@/current/ensembleworks-server sync
 Restart=on-failure
 RestartSec=2
