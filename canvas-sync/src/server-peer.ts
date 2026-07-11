@@ -1,7 +1,29 @@
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import { Frame, type Transport, decode, encode } from './protocol.js'
 
-export interface SyncServerOpts { peerId: bigint; initialSnapshot?: Uint8Array }
+export interface SyncServerOpts {
+  peerId: bigint
+  initialSnapshot?: Uint8Array
+  /** Fired synchronously with the raw inbound Update payload whenever the frame
+   * may carry ops this peer does not durably hold — i.e. when the import newly
+   * applied ops (changed) OR parked them as pending (dependent on unseen
+   * history). Fires BEFORE repair/commit/relay: durable-first — a persistence
+   * layer (the room-host DocumentActor, Task C2) appends here so no peer can
+   * observe a delta the server hasn't durably captured. NOT fired for no-op
+   * imports (all ops already known) — reconnect full-history backfills don't
+   * bloat the log. Plain Uint8Array callback: engine- and server-agnostic.
+   *
+   * Why pending fires too (same gate as the relay, deliberately): a PENDING
+   * payload's ops exist nowhere durable — the server only cached them, and the
+   * later gap-filler frame carries only its own bytes, so a changed-only log
+   * would lose the pended ops on recovery. Loro replay handles out-of-order
+   * logs (replaying pended-then-gap-filler converges). The invariant: persist
+   * and relay exactly the frames that may carry ops we don't durably hold.
+   *
+   * The payload ALIASES the inbound frame buffer (decode() is zero-copy) —
+   * copy if you retain it beyond the callback. */
+  onUpdatePayload?: (payload: Uint8Array) => void
+}
 
 // One authoritative peer per room. Transport-agnostic: server.connect(transport)
 // registers a client; the server never imports ws. Every merge is followed by
@@ -21,8 +43,10 @@ export class SyncServerPeer {
    * the D3 shadow-metrics endpoint. */
   get pendingImports(): number { return this.pendingCount }
   private pendingCount = 0
+  private onUpdatePayload?: (payload: Uint8Array) => void
 
   constructor(opts: SyncServerOpts) {
+    this.onUpdatePayload = opts.onUpdatePayload
     this.doc = opts.initialSnapshot
       ? LoroCanvasDoc.fromSnapshot(opts.initialSnapshot, { peerId: opts.peerId })
       : LoroCanvasDoc.create({ peerId: opts.peerId })
@@ -52,6 +76,13 @@ export class SyncServerPeer {
     } else if (tag === Frame.Update) {
       const r = this.doc.import(payload)
       if (r.pending) this.pendingCount++
+      // Durable-first: hand the raw payload to the persistence layer BEFORE
+      // repair/commit (whose subscribeLocalUpdates broadcast is the first
+      // externally-visible effect) and before the relay — no peer may observe
+      // a delta the server hasn't durably captured (prod tldraw parity:
+      // persist → ack → broadcast). Same gate as the relay below, deliberately
+      // — see SyncServerOpts.onUpdatePayload for the pending rationale.
+      if (r.changed || r.pending) this.onUpdatePayload?.(payload)
       // Repair/commit are gated on `changed` alone: repair() costs O(doc) even
       // when the plan is empty (~7ms/call at 1k shapes, mostly list*() WASM
       // marshaling — see LoroCanvasDoc.repair's PERF note), and a pending
@@ -60,7 +91,13 @@ export class SyncServerPeer {
       // changed: true and pays for repair then).
       if (r.changed) {
         this.doc.repair()
-        this.doc.commit() // fires subscribeLocalUpdates -> broadcast (see constructor)
+        // commit() fires subscribeLocalUpdates -> broadcast (see constructor).
+        // ORDERING NOTE: this repair-delta broadcast reaches other clients
+        // BEFORE the raw-frame relay below, so a repair delta can reference
+        // ops a client hasn't received yet. Benign-by-pending: the client's
+        // import reports pending, and the raw frame lands one step later
+        // (same tick on the sync transport), converging it immediately.
+        this.doc.commit()
       }
       // Relay the raw client delta to peers other than the sender (so peers
       // converge even on ops that produced no server-local repair delta).

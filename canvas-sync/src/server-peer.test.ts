@@ -274,4 +274,84 @@ function wireFakeClient(t: Transport, peerId: bigint): LoroCanvasDoc {
   assert.throws(() => server.connect(extra), /SyncServerPeer is closed/, 'connect after close throws')
 }
 
+// --- (7) onUpdatePayload: the durability hook (Task C2's persistence seam).
+// Fired with the raw inbound payload BEFORE relay whenever the frame may
+// carry ops the server does not durably hold (changed OR pending); NOT fired
+// for no-op imports. Replaying the captured log into a fresh doc must
+// reconstruct the state — the recovery-correctness pin that would have
+// caught the plan's C2 hole (subscribeLocalUpdates never fires on imports,
+// so client edits were never logged). ---
+
+// (a) + (b): changed Update fires exactly once, byte-identical, BEFORE the
+// observer receives the relay; a redundant re-import does not fire it.
+{
+  const seq: string[] = []
+  const persisted: Uint8Array[] = []
+  const server = new SyncServerPeer({
+    peerId: 8n,
+    onUpdatePayload: (payload) => {
+      seq.push('persist')
+      persisted.push(payload.slice()) // decode() payload aliases the frame buffer — copy to retain
+    },
+  })
+  const [senderServerEnd, senderClientEnd] = makePair()
+  const [observerServerEnd, observerClientEnd] = makePair()
+  server.connect(senderServerEnd)
+  server.connect(observerServerEnd)
+  observerClientEnd.onMessage(() => seq.push('observer-recv'))
+
+  const writer = LoroCanvasDoc.create({ peerId: 801n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:d1'))
+  writer.commit()
+  const delta1 = writer.exportUpdate()
+
+  senderClientEnd.send(encode(Frame.Update, delta1))
+  assert.deepEqual(seq, ['persist', 'observer-recv'], 'persist fires BEFORE the observer receives the relay')
+  assert.equal(persisted.length, 1, 'a changed Update fires the hook exactly once')
+  assert.deepEqual(persisted[0], delta1, 'the hook receives the byte-identical raw payload')
+
+  // (b) redundant re-import (same bytes): ops already durably held — the
+  // reconnect full-history backfill must not bloat the append-log.
+  senderClientEnd.send(encode(Frame.Update, delta1))
+  assert.equal(persisted.length, 1, 'a no-op import does not fire the durability hook')
+}
+
+// (c) out-of-order pending: BOTH frames fire the hook (delta2 pending, then
+// delta1 changed), and replaying the captured log IN LOG ORDER into a fresh
+// doc reconstructs both shapes — recovery survives an out-of-order log.
+{
+  const persisted: Uint8Array[] = []
+  const server = new SyncServerPeer({
+    peerId: 9n,
+    onUpdatePayload: (payload) => persisted.push(payload.slice()),
+  })
+  const [senderServerEnd, senderClientEnd] = makePair()
+  server.connect(senderServerEnd)
+
+  const writer = LoroCanvasDoc.create({ peerId: 901n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:first'))
+  writer.commit()
+  const delta1 = writer.exportUpdate()
+  const v1 = writer.versionBytes()
+  writer.putShape(shape('shape:second'))
+  writer.commit()
+  const delta2 = writer.exportUpdate(v1) // depends on delta1's history
+
+  senderClientEnd.send(encode(Frame.Update, delta2)) // pending on the server
+  senderClientEnd.send(encode(Frame.Update, delta1)) // gap-filler
+  assert.equal(persisted.length, 2, 'BOTH frames fire the hook — a pending payload is not durably held anywhere else')
+
+  // Recovery: replay the log in captured (out-of-causal) order.
+  const recovered = LoroCanvasDoc.create({ peerId: 902n })
+  for (const bytes of persisted) recovered.import(bytes)
+  recovered.commit()
+  assert.deepEqual(
+    recovered.listShapes().map((s) => s.id).sort(),
+    ['shape:first', 'shape:second'],
+    'replaying the append-log (pended frame first) reconstructs the full state',
+  )
+}
+
 console.log('ok: server-peer')

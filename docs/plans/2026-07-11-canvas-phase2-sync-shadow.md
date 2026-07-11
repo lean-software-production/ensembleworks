@@ -1583,3 +1583,56 @@ lockfile/typecheck fixups: `chore(canvas-phase2): full-suite + typecheck green`.
 - **Seam F — finalize:** F1 docs, F2 full-suite gate. (2 tasks)
 
 Plus Task 0 (preflight). **Total: 21 tasks + preflight.**
+
+---
+
+## Amendments (2026-07-11, post-review)
+
+**Task C2's persistence design as written above has a proven crash-consistency
+hole — do not implement it verbatim.** The actor sketch persists via
+`peer.doc.subscribeLocalUpdates` only, but that hook fires exclusively for
+committed LOCAL ops and never for imports (the exact no-echo property Unit 1
+pinned). Client edits arrive at the server as imports, so they are NEVER
+appended: probe-proven, two client edits through the planned wiring → zero
+append-log rows → empty recovery. A crash between compactions loses all
+client work.
+
+**Ratified fix (implemented in Unit 4): durable-first via
+`SyncServerOpts.onUpdatePayload`.**
+
+- `SyncServerPeer` now accepts `onUpdatePayload?: (payload: Uint8Array) => void`,
+  fired synchronously with the raw inbound Update payload BEFORE
+  repair/commit/relay, gated on `changed || pending` — the same gate as the
+  relay, deliberately: *persist and relay exactly the frames that may carry
+  ops the server does not durably hold.* Pending payloads MUST be logged
+  (changed-only would strand them: the ops exist nowhere durable and the later
+  gap-filler frame carries only its own bytes); Loro replay handles the
+  resulting out-of-order log. No-op imports (reconnect full-history backfills)
+  do not fire it, so they don't bloat the log. Order inside the Update branch:
+  persist → repair/commit (repair-delta broadcast) → raw-frame relay. This
+  restores persist-before-broadcast parity with the prod tldraw stack.
+- The payload aliases the frame buffer (zero-copy decode) — the persistence
+  layer must copy (SQLite binding does implicitly).
+- **C2 must persist via BOTH hooks:** `onUpdatePayload` (client-sourced ops) AND
+  `peer.doc.subscribeLocalUpdates` (server-local ops: repair deltas, agent
+  writes). Neither alone covers both directions.
+- **C2 load path:** after snapshot + update replay, run `repair()` + `commit()`
+  ONCE before serving — the log may end mid-merge (crash after append, before
+  the repair commit landed in any persisted update).
+- **C1 compaction order is load-bearing:** INSERT/UPSERT the snapshot, then
+  DELETE the folded-in updates (as sketched). Never reverse it — a crash
+  between the two statements must leave a recoverable superset, not a hole.
+- **C2's test must drive edits through a CONNECTED CLIENT transport** (the
+  plan's current actor test puts shapes via an in-memory client but should
+  assert specifically that client-sourced ops survive a fresh-actor recovery).
+  A test that mutates `actor.peer.doc` directly masks the hole this amendment
+  fixes.
+- Related Unit 4 deltas to the B3/B4 sketches: `ImportResult` is now
+  `{ pending, changed }` (canvas-doc); repair/commit in both peers is gated on
+  `changed`; the server relay fires on `changed || pending` (pending frames
+  must reach observers or they strand); `SyncServerPeer.pendingImports`
+  counter exposed for the D3 metrics endpoint (healthy ≈ 0); client
+  `reconnect()` closes the old transport and pushes its full history as an
+  Update (offline edits have no other path upstream; delta-since-acked-version
+  is a deferred optimization); both peers have real idempotent `close()`
+  semantics (server `connect()` after close throws).
