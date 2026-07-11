@@ -188,6 +188,11 @@ export function App() {
 
 	const handleMount = useMemo(
 		() => (editor: Editor) => {
+			// e2e/dev handle: lets the Playwright rig read editor state and set the
+			// camera deterministically. Dev builds only — never ships in prod bundles.
+			if (import.meta.env.DEV) {
+				;(window as unknown as { __ew?: unknown }).__ew = { editor }
+			}
 			// Debug/e2e hook: headless probes (docs/headless-browser.md) drive
 			// the canvas through this. Harmless in production.
 			;(window as unknown as { __ewEditor?: Editor }).__ewEditor = editor
