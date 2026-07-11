@@ -899,3 +899,246 @@ Expected: all clean. Also re-run the two probes if the dev stack is up.
 - [ ] **Step 2: Finish the branch**
 
 Use the superpowers:finishing-a-development-branch skill — PR to `main` with the per-item acceptance evidence (claude-code Shift+Enter check, probe outputs, tmux list-keys output, glyph screenshot) in the description.
+
+---
+
+# Addendum tasks (2026-07-11) — spec items 7–10 folded in
+
+### Task 8: Hybrid renderer (WebGL view / DOM edit) + remove the webgl flag
+
+**Files:**
+- Delete: `client/src/terminal/webgl.ts`, `client/src/terminal/webgl.test.ts`
+- Modify: `client/src/terminal/TerminalShapeUtil.tsx`
+
+- [ ] **Step 1: Remove the flag.** `git rm client/src/terminal/webgl.ts client/src/terminal/webgl.test.ts`; remove the `import { webglEnabled } from './webgl'` line.
+
+- [ ] **Step 2: Remove the mount-effect WebGL block.** Delete the whole `if (webglEnabled(() => localStorage)) { const webgl = new WebglAddon() ... term.loadAddon(webgl) }` block (with its comment) from the mount effect — the renderer is now managed by a dedicated effect (Step 4). Keep the `clearTextureAtlas` call inside `reconnectWhenVisible` exactly as is.
+
+- [ ] **Step 3: Simplify the editing-focus effect** back to focus/blur only (the edit-enter atlas heal is moot — edit mode has no atlas):
+
+```ts
+	// Editing state drives keyboard focus. (Renderer swap on edit lives in its
+	// own effect below.)
+	useEffect(() => {
+		if (isEditing) termRef.current?.focus()
+		else termRef.current?.blur()
+	}, [isEditing])
+```
+
+- [ ] **Step 4: Add the renderer-strategy effect.** Add `const webglRef = useRef<WebglAddon | null>(null)` beside the other refs. Declare this effect AFTER the mount effect (so the terminal is open when it first runs). In the mount effect's cleanup, add `webglRef.current = null` right after `term.dispose()` (the dispose tears the addon down; the ref must not go stale across a session remount).
+
+```ts
+	// Renderer strategy: WebGL while viewing, DOM while editing — everyone,
+	// always (no per-machine flag).
+	// - View mode can have many terminals compositing while the tldraw camera
+	//   pans/zooms; the WebGL renderer is cheap there and glyphs stay at the
+	//   base font, inside the atlas's comfort zone.
+	// - Edit mode renders at fontSize ≈ base × zoom. Feeding that to an atlas
+	//   renderer produced the blur (fractional sizes), drifting side margins
+	//   (device-px cell rounding × cols) and square-box glyphs at high
+	//   zoom × DPR (atlas overflow) — verified live at DPR 1.1/2.2. The DOM
+	//   renderer has no atlas; browser text is crisp at any fractional size.
+	// Disposing the addon drops xterm to its DOM renderer; going back needs a
+	// fresh instance (disposed addons cannot be reloaded).
+	useEffect(() => {
+		const term = termRef.current
+		if (!term) return
+		if (isEditing) {
+			webglRef.current?.dispose()
+			webglRef.current = null
+			return
+		}
+		const webgl = new WebglAddon()
+		webgl.onContextLoss(() => {
+			// Degraded but functional: surface it so a silently DOM-rendered
+			// terminal isn't invisible to anyone watching the console.
+			console.warn('[terminal] WebGL context lost — falling back to DOM renderer')
+			webgl.dispose()
+			if (webglRef.current === webgl) webglRef.current = null
+		})
+		term.loadAddon(webgl)
+		webglRef.current = webgl
+		return () => {
+			// Skip if context-loss already disposed it (ref was nulled).
+			if (webglRef.current === webgl) {
+				webgl.dispose()
+				webglRef.current = null
+			}
+		}
+	}, [isEditing, shape.props.sessionId])
+```
+
+(`shape.props.sessionId` in the deps re-arms the effect after a session remount recreates the Terminal.)
+
+- [ ] **Step 5: Verify.** `cd client && bunx tsc --noEmit && bun src/terminal/keys.test.ts && bun src/terminal/grid.test.ts && bun src/terminal/wsUrl.test.ts` — clean/pass (webgl.test.ts is gone).
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add -A client/src/terminal/
+git commit -m "fix(terminal): WebGL in view, DOM renderer in edit mode
+
+Editing re-renders at base-font x zoom; atlas renderers blur at
+fractional sizes, drift the side margins (device-px cell rounding x
+cols) and drop glyphs to boxes when zoom x DPR overflows the atlas
+(deterministic at 379% on DPR 2.2). The DOM renderer has no atlas and
+is crisp at any size — and one focused terminal is its cheap case.
+Removes the ensembleworks:webgl escape hatch: same strategy for
+everyone. Visibility-return atlas heal stays for view-mode WebGL."
+```
+
+### Task 9: Integer-px font while editing
+
+**Files:** Modify `client/src/terminal/TerminalShapeUtil.tsx` (font effect + host counter-scale)
+
+- [ ] **Step 1: Round the rendered font.** Replace the font effect body: `const nextFont = Math.max(6, Math.round(BASE_FONT * editZoom))` (comment: fractional font sizes made DOM row heights quantise per row × ~25 rows → bottom-edge drift; rounding is render-only, the grid is untouched because captureCell normalises by fontSize/BASE_FONT).
+
+- [ ] **Step 2: Counter-scale by the font's actual factor.** Next to `const { w, h } = shape.props` add `const fontFactor = Math.max(6, Math.round(BASE_FONT * editZoom)) / BASE_FONT` (comment: must invert the FONT's factor, not the raw zoom, to keep net on-screen scale exactly 1). Host style uses `fontFactor` in all three places (width calc, height calc, `scale(${1 / fontFactor})`).
+
+- [ ] **Step 3: Verify + commit.** Typecheck + unit tests as before.
+
+```bash
+git add client/src/terminal/TerminalShapeUtil.tsx
+git commit -m "fix(terminal): integer-px font while editing kills bottom-edge drift"
+```
+
+### Task 10: Per-terminal base font size (shared prop + Ctrl/Cmd keys)
+
+**Files:**
+- Modify: `contracts/src/shapes.ts` (terminalShapeProps), `client/src/terminal/keys.ts`, `client/src/terminal/keys.test.ts`, `client/src/terminal/TerminalShapeUtil.tsx`
+
+- [ ] **Step 1: Failing tests first** — extend `keys.test.ts`:
+
+```ts
+import {
+	FONT_SIZE_DEFAULT, FONT_SIZE_MAX, FONT_SIZE_MIN,
+	fontSizeActionForKey, nextFontSize,
+} from './keys'
+
+// Ctrl/Cmd +/-/0 map to font actions; '=' is unshifted '+', '_' shifted '-'.
+assert.equal(fontSizeActionForKey(ev({ key: '+', ctrlKey: true })), 'up')
+assert.equal(fontSizeActionForKey(ev({ key: '=', metaKey: true })), 'up')
+assert.equal(fontSizeActionForKey(ev({ key: '-', ctrlKey: true })), 'down')
+assert.equal(fontSizeActionForKey(ev({ key: '_', ctrlKey: true })), 'down')
+assert.equal(fontSizeActionForKey(ev({ key: '0', metaKey: true })), 'reset')
+// No modifier / alt combos / keyup: not ours.
+assert.equal(fontSizeActionForKey(ev({ key: '+' })), null)
+assert.equal(fontSizeActionForKey(ev({ key: '+', ctrlKey: true, altKey: true })), null)
+assert.equal(fontSizeActionForKey(ev({ key: '+', ctrlKey: true, type: 'keyup' })), null)
+// Clamping and reset.
+assert.equal(nextFontSize(16, 'up'), 17)
+assert.equal(nextFontSize(FONT_SIZE_MAX, 'up'), FONT_SIZE_MAX)
+assert.equal(nextFontSize(FONT_SIZE_MIN, 'down'), FONT_SIZE_MIN)
+assert.equal(nextFontSize(23, 'reset'), FONT_SIZE_DEFAULT)
+```
+
+(`ev` needs its default `key` overridable — it already is.) Run, expect FAIL (missing exports).
+
+- [ ] **Step 2: Implement in keys.ts:**
+
+```ts
+// Shared per-terminal font size: one PTY grid per terminal, so font size is
+// a property of the terminal, not the viewer. Clamped so the deterministic
+// grid stays sane (MIN keeps cols/rows finite; MAX keeps the WebGL atlas in
+// its comfort zone in view mode).
+export const FONT_SIZE_MIN = 8
+export const FONT_SIZE_MAX = 32
+export const FONT_SIZE_DEFAULT = 16
+
+export type FontSizeAction = 'up' | 'down' | 'reset'
+
+// Ctrl/Cmd +/- (and 0 to reset) while editing. '=' is the unshifted '+' key,
+// '_' the shifted '-'. Alt combos are left alone (tmux Meta bindings).
+export function fontSizeActionForKey(e: EnterKeyEvent): FontSizeAction | null {
+	if (e.type !== 'keydown' || !(e.ctrlKey || e.metaKey) || e.altKey) return null
+	if (e.key === '+' || e.key === '=') return 'up'
+	if (e.key === '-' || e.key === '_') return 'down'
+	if (e.key === '0') return 'reset'
+	return null
+}
+
+export function nextFontSize(current: number, action: FontSizeAction): number {
+	if (action === 'reset') return FONT_SIZE_DEFAULT
+	const next = action === 'up' ? current + 1 : current - 1
+	return Math.min(FONT_SIZE_MAX, Math.max(FONT_SIZE_MIN, next))
+}
+```
+
+- [ ] **Step 3: contracts prop.** In `contracts/src/shapes.ts` terminalShapeProps, after `gateway`:
+
+```ts
+	// Per-terminal base font size (px) — SHARED: one PTY grid per terminal, so
+	// font size belongs to the terminal, not the viewer; changing it re-grids
+	// for every client. Optional so existing rooms need no migration (= 16).
+	fontSize: T.number.optional(),
+```
+
+- [ ] **Step 4: Wire into TerminalShapeUtil.tsx.**
+  - `TerminalShapeProps` interface: add `fontSize?: number`.
+  - In the component: `const baseFont = shape.props.fontSize ?? FONT_SIZE_DEFAULT` and a render-updated ref `const baseFontRef = useRef(baseFont); baseFontRef.current = baseFont` (captureCell in the mount effect must normalise against the CURRENT base font, not the mount-time closure).
+  - Mount effect: `new Terminal({ fontSize: baseFont, ... })`; in `captureCell`, `const scale = (term.options.fontSize ?? baseFontRef.current) / baseFontRef.current`.
+  - Font effect becomes deps `[editZoom, baseFont]` with `Math.max(6, Math.round(baseFont * editZoom))`; `fontFactor` uses `baseFont` likewise.
+  - New effect AFTER the font effect — re-capture the cell when the shared base font changes (same quantised value on every client ⇒ same grid):
+
+```ts
+	// Shared font-size changes re-measure the cell; the deterministic grid
+	// effect then re-derives cols/rows from the same shared inputs everywhere.
+	useEffect(() => {
+		const term = termRef.current
+		if (!term) return
+		const cell = xtermCell(term)
+		if (!cell) return
+		const scale = (term.options.fontSize ?? baseFont) / baseFont
+		setCellSize(quantizeCell(cell.width / scale, cell.height / scale))
+	}, [baseFont])
+```
+
+  - Key handler, after the ptyInput block (before the ctrl/meta copy-paste block):
+
+```ts
+			// Ctrl/Cmd +/-/0: shared per-terminal font size (see ./keys). Owned
+			// here so the browser's page-zoom never fires while editing. Read the
+			// LIVE shape — this closure's `shape` is stale after prop changes.
+			const fontAction = fontSizeActionForKey(e)
+			if (fontAction) {
+				e.preventDefault()
+				const live = editor.getShape(shape.id) as TerminalShape | undefined
+				const current = live?.props.fontSize ?? FONT_SIZE_DEFAULT
+				const next = nextFontSize(current, fontAction)
+				if (live && next !== current) {
+					editor.updateShape({ id: shape.id, type: shape.type, props: { fontSize: next } })
+				}
+				return false
+			}
+```
+
+  - Imports: `fontSizeActionForKey, nextFontSize, FONT_SIZE_DEFAULT` from './keys'.
+
+- [ ] **Step 5: Verify.** `cd client && bun src/terminal/keys.test.ts && bun src/terminal/grid.test.ts && bunx tsc --noEmit && cd .. && bun run typecheck` (contracts + server must also compile — the props object is the single source).
+
+- [ ] **Step 6: Commit.**
+
+```bash
+git add contracts/src/shapes.ts client/src/terminal/keys.ts client/src/terminal/keys.test.ts client/src/terminal/TerminalShapeUtil.tsx
+git commit -m "feat(terminal): shared per-terminal font size, Ctrl/Cmd +/- while editing
+
+fontSize is a shape prop (optional, no migration; default 16, clamp
+8-32): one PTY grid per terminal means font size belongs to the
+terminal, not the viewer. Every client re-measures the cell at the
+shared base font and re-derives the same grid deterministically."
+```
+
+### Task 11: DPR-faithful verification + findings write-back
+
+**Files:** possibly modify `client/e2e/terminal-zoom-probe.mjs`; modify spec addendum (findings)
+
+- [ ] **Step 1:** Bring up the dev stack (`bun run dev`, seeded room "probe" from the Task 6 session), box-drawing content in the tmux session.
+- [ ] **Step 2:** Renderer-swap check via the probe or a page.evaluate: `.xterm-screen canvas` exists in view mode, absent while editing (DOM renderer).
+- [ ] **Step 3:** Run zoom + editpad probes at `PROBE_DPR=1.1` and `PROBE_DPR=2.2` (the live machine's values), zooms including 0.65 and 3.79. Assert/inspect: no square boxes at 3.79 while editing; bottom gap between `.xterm-screen` bottom and container bottom stable (±2px) across zooms while editing; box-drawing seams screenshot at integer fonts — record verdict (gone / acceptable / needs mitigation).
+- [ ] **Step 4:** Font-size keys end-to-end: while editing, dispatch Ctrl+'+' twice via the probe, assert `shape.props.fontSize` becomes 18 (via `window.__ewEditor.getShape(...)`) and the grid re-derives (cols shrink).
+- [ ] **Step 5:** Append findings to the spec addendum (item 10 section), commit docs + any probe tweaks:
+
+```bash
+git add client/e2e/ docs/superpowers/specs/2026-07-10-terminal-fixes-bundle-design.md
+git commit -m "docs(terminal): DPR-faithful verification findings for renderer strategy"
+```
