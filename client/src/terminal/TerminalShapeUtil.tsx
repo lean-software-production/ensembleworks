@@ -37,7 +37,6 @@ import {
 import { paperTerminalTheme, wm } from '../theme'
 import { type CellSize, gridFor, quantizeCell } from './grid'
 import { ptyInputForKey } from './keys'
-import { webglEnabled } from './webgl'
 import { termWsUrl } from './wsUrl'
 
 export interface TerminalShapeProps {
@@ -164,6 +163,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 	const hostRef = useRef<HTMLDivElement>(null)
 	const termRef = useRef<Terminal | null>(null)
 	const wsRef = useRef<WebSocket | null>(null)
+	const webglRef = useRef<WebglAddon | null>(null)
 	// Base-font cell size (CSS px), measured once the web font is ready (null until
 	// then). The deterministic grid divides the shape box by this; see ./grid.
 	const [cellSize, setCellSize] = useState<CellSize | null>(null)
@@ -264,24 +264,6 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		// xterm renders into an inner host so we can counter-scale it against the
 		// canvas zoom without disturbing the padded frame box (containerRef).
 		term.open(host)
-		// Hardware-accelerated renderer: draws every row into one GL bitmap, which
-		// removes the DOM renderer's per-row sub-pixel seams and is cheaper to paint
-		// while the tldraw camera pans/zooms. Must load AFTER term.open(). Browsers
-		// cap concurrent WebGL contexts (~16 in Chrome); if ours is dropped (many
-		// terminals open at once) we dispose the addon so this terminal falls back to
-		// the DOM renderer instead of freezing on a stale frame. Machines whose
-		// driver corrupts the atlas *silently* (no loss event) opt out via
-		// localStorage — see ./webgl.
-		if (webglEnabled(() => localStorage)) {
-			const webgl = new WebglAddon()
-			webgl.onContextLoss(() => {
-				// Degraded but functional: surface it so a silently DOM-rendered
-				// terminal isn't invisible to anyone watching the console.
-				console.warn('[terminal] WebGL context lost — falling back to DOM renderer')
-				webgl.dispose()
-			})
-			term.loadAddon(webgl)
-		}
 		// Bootstrap the spawn size synchronously (so the PTY starts ~right and the
 		// WS URL below carries it); the deterministic effect refines it to the exact
 		// grid once the web font's cell is measured. fontSize is BASE_FONT here, so
@@ -515,28 +497,57 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			document.removeEventListener('visibilitychange', reconnectWhenVisible)
 			wsRef.current?.close()
 			term.dispose()
+			webglRef.current = null
 			termRef.current = null
 			wsRef.current = null
 		}
 	}, [shape.props.sessionId, editor, shape.id])
 
-	// Editing state drives keyboard focus. Entering edit also heals a possibly
-	// corrupted WebGL glyph atlas — the user's "click the terminal" replaces
-	// "refresh the page" when tofu appears (see ./webgl for the failure mode).
+	// Editing state drives keyboard focus. (Renderer swap on edit lives in its
+	// own effect below.)
+	useEffect(() => {
+		if (isEditing) termRef.current?.focus()
+		else termRef.current?.blur()
+	}, [isEditing])
+
+	// Renderer strategy: WebGL while viewing, DOM while editing — everyone,
+	// always (no per-machine flag).
+	// - View mode can have many terminals compositing while the tldraw camera
+	//   pans/zooms; the WebGL renderer is cheap there and glyphs stay at the
+	//   base font, inside the atlas's comfort zone.
+	// - Edit mode renders at fontSize ≈ base × zoom. Feeding that to an atlas
+	//   renderer produced the blur (fractional sizes), drifting side margins
+	//   (device-px cell rounding × cols) and square-box glyphs at high
+	//   zoom × DPR (atlas overflow) — verified live at DPR 1.1/2.2. The DOM
+	//   renderer has no atlas; browser text is crisp at any fractional size.
+	// Disposing the addon drops xterm to its DOM renderer; going back needs a
+	// fresh instance (disposed addons cannot be reloaded).
 	useEffect(() => {
 		const term = termRef.current
 		if (!term) return
 		if (isEditing) {
-			try {
-				term.clearTextureAtlas()
-			} catch {
-				/* renderer variance */
-			}
-			term.focus()
-		} else {
-			term.blur()
+			webglRef.current?.dispose()
+			webglRef.current = null
+			return
 		}
-	}, [isEditing])
+		const webgl = new WebglAddon()
+		webgl.onContextLoss(() => {
+			// Degraded but functional: surface it so a silently DOM-rendered
+			// terminal isn't invisible to anyone watching the console.
+			console.warn('[terminal] WebGL context lost — falling back to DOM renderer')
+			webgl.dispose()
+			if (webglRef.current === webgl) webglRef.current = null
+		})
+		term.loadAddon(webgl)
+		webglRef.current = webgl
+		return () => {
+			// Skip if context-loss already disposed it (ref was nulled).
+			if (webglRef.current === webgl) {
+				webgl.dispose()
+				webglRef.current = null
+			}
+		}
+	}, [isEditing, shape.props.sessionId])
 
 	// Counter-scale the font to the canvas zoom so text stays crisp and xterm's
 	// mouse→cell math is exact (the host's CSS transform, in JSX, keeps the net
