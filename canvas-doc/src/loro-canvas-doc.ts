@@ -71,14 +71,18 @@ export class LoroCanvasDoc implements CanvasDoc {
     return n ? this.readNode(n) : undefined
   }
   putShape(s: Shape): void {
+    // Placement FIRST, data second (same discipline as reparent): for an
+    // existing node Loro's cycle guard throws if s.parentId names a real
+    // descendant of it, and no data field may be modified in that case.
+    // A freshly created node has no descendants, so its placement cannot cycle.
     let n = this.nodeByShapeId(s.id)
     if (!n) n = this.tree.createNode()
+    this.placeInTree(n, s.parentId)
     const d = n.data
     d.set('shapeId', s.id); d.set('kind', s.kind); d.set('parentId', s.parentId)
     d.set('index', s.index); d.set('x', s.x); d.set('y', s.y)
     d.set('rotation', s.rotation); d.set('isLocked', s.isLocked); d.set('opacity', s.opacity)
     d.set('meta', s.meta as any); d.set(LoroCanvasDoc.PROP_KEY, s.props as any)
-    this.placeInTree(n, s.parentId)
   }
   updateProps(id: string, props: Record<string, unknown>): void {
     const n = this.nodeByShapeId(id)
@@ -88,7 +92,23 @@ export class LoroCanvasDoc implements CanvasDoc {
   }
   deleteShape(id: string): void {
     const n = this.nodeByShapeId(id)
-    if (n) this.tree.delete(n.id)
+    if (!n) return
+    // Collect the shapeIds of the whole real subtree before the cascade delete,
+    // then clear each shape's text container. The emptied Loro container itself
+    // persists as a CRDT tombstone (known bloat category per design); clearing
+    // its content prevents text resurrection when a shape id is reused.
+    const ids: string[] = []
+    const collect = (node: LoroTreeNode): void => {
+      const sid = node.data.get('shapeId') as string | undefined
+      if (sid) ids.push(sid)
+      for (const c of node.children() ?? []) collect(c)
+    }
+    collect(n)
+    this.tree.delete(n.id)
+    for (const sid of ids) {
+      const t = this.doc.getText(this.textKey(sid))
+      if (t.length > 0) t.delete(0, t.length)
+    }
   }
   reparent(id: string, parentId: string, index?: number): void {
     const node = this.nodeByShapeId(id)
@@ -108,8 +128,11 @@ export class LoroCanvasDoc implements CanvasDoc {
   // Each shape gets a dedicated LoroText container keyed by shape id. Full
   // ProseMirror binding is Phase 3; plain text proves the container this phase.
   private textKey(id: string): string { return `text:${id}` }
-  /** Missing shape: the container was never written, so this returns ''. */
-  getText(id: string): string { return this.doc.getText(this.textKey(id)).toString() }
+  /** Contract: missing shape → '' (guarded, not just "container never written"). */
+  getText(id: string): string {
+    if (!this.nodeByShapeId(id)) return ''
+    return this.doc.getText(this.textKey(id)).toString()
+  }
   setText(id: string, text: string): void {
     if (!this.nodeByShapeId(id)) return
     const t = this.doc.getText(this.textKey(id))

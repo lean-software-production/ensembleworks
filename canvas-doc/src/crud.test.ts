@@ -83,4 +83,15 @@ const survivor = detachDoc.getShape('shape:childA')
 assert.ok(survivor, 'child survives deletion of its former real parent (now a root)')
 assert.equal(survivor!.parentId, 'shape:notloaded', 'data.parentId retained for the later reparent pass')
 
+// --- atomic putShape: cyclic placement throws with NO data mutation ---
+// (regression: upserting existing A under its own real descendant B must be
+// rejected by Loro's cycle guard BEFORE any data key is written)
+const cycleDoc = LoroCanvasDoc.create({ peerId: 9n })
+cycleDoc.putShape(shape('shape:A2', { kind: 'frame', props: { w: 10, h: 10 } }) as any)
+cycleDoc.putShape(shape('shape:B2', { kind: 'frame', parentId: 'shape:A2', props: { w: 5, h: 5 } }) as any)
+cycleDoc.commit()
+const beforeA2 = cycleDoc.getShape('shape:A2')!
+assert.throws(() => cycleDoc.putShape(shape('shape:A2', { kind: 'frame', parentId: 'shape:B2', x: 99, props: { w: 10, h: 10 } }) as any))
+assert.deepEqual(cycleDoc.getShape('shape:A2'), beforeA2, 'no fields (parentId, x, ...) modified after rejected cyclic upsert')
+
 console.log('ok: crud')

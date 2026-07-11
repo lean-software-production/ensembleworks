@@ -14,6 +14,9 @@ export function loadModel(doc: LoroCanvasDoc, model: CanvasDocument): void {
 
 // Dump the CanvasDoc back to a pure model document (pages/bindings are not held
 // in the tree this phase — callers that need them keep them alongside).
+// The output is only invariant-clean once all putShape+reparent pairs of a
+// batch have completed: dumped mid-batch, transitional states may contain
+// parentIds naming shapes not yet present.
 export function dumpModel(doc: LoroCanvasDoc): CanvasDocument {
   return makeDocument({ pages: [], shapes: doc.listShapes(), bindings: [] })
 }

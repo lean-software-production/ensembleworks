@@ -5,14 +5,23 @@ import type { Shape } from '@ensembleworks/canvas-model'
 export interface CanvasDoc {
   listShapes(): Shape[]
   getShape(id: string): Shape | undefined
-  /** Upsert: creates the shape if the id is new, otherwise overwrites its fields. */
+  /**
+   * Upsert: creates the shape if the id is new, otherwise overwrites its fields.
+   * Throws if placement would create a cycle (existing shape upserted under its
+   * own descendant); no fields are modified in that case. Asymmetry every
+   * implementation must preserve: putShape TOLERATES a parentId naming a
+   * not-yet-loaded shape (the node falls back to root; the parentId field is
+   * retained for a later reparent pass), whereas reparent THROWS on an unknown
+   * parent.
+   */
   putShape(shape: Shape): void
   /** Silent no-op if no shape with this id exists. */
   updateProps(id: string, props: Record<string, unknown>): void
   /**
    * Silent no-op if no shape with this id exists. Cascades: deletes the shape's
    * entire subtree in the real Loro tree — any shape whose ancestry passes
-   * through `id` (e.g. a frame's children) is deleted too.
+   * through `id` (e.g. a frame's children) is deleted too, and every deleted
+   * shape's text container is cleared (no resurrection if the id is reused).
    */
   deleteShape(id: string): void
   /**
