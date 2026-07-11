@@ -23,9 +23,16 @@ export class PresenceStore {
   ) {
     this.store = new EphemeralStore(timeoutMs)
   }
+  /** Callers are responsible for rate-limiting publishes (e.g. cursor moves):
+   * every set() goes to the wire uncoalesced, and the server fans each frame
+   * out to N-1 clients. Phase 3's renderer must throttle pointer-move-rate
+   * publishes before wiring them here. */
   publish(p: Presence): void {
     this.store.set(this.selfKey, p as any)
   }
+  /** Includes the caller's own published entry under `selfKey` — Phase 3
+   * renderers should filter it out (rendering your own cursor from
+   * round-tripped network state is a stale duplicate of the local one). */
   all(): Record<string, Presence> {
     return this.store.getAllStates() as any
   }
