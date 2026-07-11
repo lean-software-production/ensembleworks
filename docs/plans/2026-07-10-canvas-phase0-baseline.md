@@ -534,7 +534,7 @@ async function setup(page: import('@playwright/test').Page, room: string) {
 }
 
 const shapeX = (page: import('@playwright/test').Page, id: string) =>
-	page.evaluate((sid) => (window as any).__ewEditor.editor.getShape(sid).x, id)
+	page.evaluate((sid) => (window as any).__ewEditor.getShape(sid).x, id)
 
 // Screen point of the note's center at camera {0,0,z:1}: page coords == screen
 // coords offset by the canvas origin; read the true center from the editor.
@@ -574,12 +574,12 @@ test('feel numbers match golden', async ({ page }) => {
 	const shiftNudgePx = (await shapeX(page, id)) - x0 - nudgePx
 	await page.keyboard.press('Escape')
 
-	const z0 = await page.evaluate(() => (window as any).__ewEditor.editor.getZoomLevel())
+	const z0 = await page.evaluate(() => (window as any).__ewEditor.getZoomLevel())
 	await page.keyboard.down('Control')
 	await page.mouse.wheel(0, -100)
 	await page.keyboard.up('Control')
 	await page.waitForTimeout(300)
-	const z1 = await page.evaluate(() => (window as any).__ewEditor.editor.getZoomLevel())
+	const z1 = await page.evaluate(() => (window as any).__ewEditor.getZoomLevel())
 
 	const observed: FeelNumbers = {
 		dragThresholdPx,
