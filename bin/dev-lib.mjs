@@ -6,7 +6,7 @@
  * (tmux, health polls, CLI) lives in bin/dev-main.mjs.
  */
 
-export const PORTS = {
+const BASE_PORTS = {
 	sync: 8788,
 	term: 8789,
 	discord: 8790,
@@ -14,7 +14,42 @@ export const PORTS = {
 	client: 5173,
 	caddy: 8080,
 	livekit: 7880,
-	whisper: 8091, // 8090 is the shared browser (neko)
+	livekitTcp: 7881, // ICE-TCP; published by the devcontainer
+	// livekitUdp is the UDP mux, also published by the devcontainer. It is
+	// advertised in ICE candidates, so the real port MUST equal the published port.
+	livekitUdp: 7882,
+	neko: 8090, // shared browser (native hosts with docker only)
+	whisper: 8091,
+}
+
+/**
+ * The dev stack's port map, shifted by ENSEMBLEWORKS_PORT_OFFSET. A raw
+ * addend (recommend multiples of 100 — the sync family is 4 consecutive
+ * ports, and +10 would land caddy on neko's 8090).
+ * @param {number} offset
+ * @returns {Record<keyof typeof BASE_PORTS, number>}
+ */
+export function portsFor(offset) {
+	return /** @type {any} */ (
+		Object.fromEntries(Object.entries(BASE_PORTS).map(([k, v]) => [k, v + offset]))
+	)
+}
+
+/** The offset-0 defaults (docs, doctor, tests). */
+export const PORTS = portsFor(0)
+
+/**
+ * Parse a port-offset value: unset/empty -> 0, a non-negative integer string
+ * -> its value, anything else -> null (the caller dies with the remedy).
+ * Capped so the largest base port stays under 65536.
+ * @param {string | undefined | null} raw
+ * @returns {number | null}
+ */
+export function parsePortOffset(raw) {
+	if (raw === undefined || raw === null || raw === '') return 0
+	const n = Number(raw)
+	if (!Number.isInteger(n) || n < 0 || n > 57000) return null
+	return n
 }
 
 /**

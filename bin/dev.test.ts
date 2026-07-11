@@ -9,8 +9,10 @@ import {
 	forwardArgv,
 	hold,
 	parseDotEnv,
+	parsePortOffset,
 	parseToolVersions,
 	parsePublicOrigin,
+	portsFor,
 	resolveMode,
 	workspaceDirFor,
 } from './dev-lib.mjs'
@@ -291,6 +293,38 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 	assert.ok(text.includes('docker exec -it lucid_hofstadter tmux attach'), 'attach command')
 	assert.ok(text.includes('Ctrl-b Ctrl-b d'), 'nested-detach caveat')
 	console.log('ok: attachInstructions')
+}
+
+// portsFor: every port shifted by the offset; 0 = the documented defaults.
+{
+	const base = portsFor(0)
+	assert.equal(base.sync, 8788)
+	assert.equal(base.caddy, 8080)
+	assert.equal(base.livekit, 7880)
+	assert.equal(base.livekitTcp, 7881)
+	assert.equal(base.livekitUdp, 7882)
+	assert.equal(base.neko, 8090)
+	assert.equal(base.whisper, 8091)
+	const off = portsFor(100)
+	for (const [name, port] of Object.entries(base)) {
+		assert.equal((off as Record<string, number>)[name], port + 100, `${name} shifted by 100`)
+	}
+	assert.deepEqual(PORTS, base, 'PORTS stays the offset-0 map')
+	console.log('ok: portsFor')
+}
+
+// parsePortOffset: unset/empty -> 0; a non-negative int string -> the int;
+// anything else -> null (caller dies with the remedy).
+{
+	assert.equal(parsePortOffset(undefined), 0)
+	assert.equal(parsePortOffset(''), 0)
+	assert.equal(parsePortOffset('0'), 0)
+	assert.equal(parsePortOffset('100'), 100)
+	assert.equal(parsePortOffset('-1'), null)
+	assert.equal(parsePortOffset('1.5'), null)
+	assert.equal(parsePortOffset('abc'), null)
+	assert.equal(parsePortOffset('60000'), null, 'ports must stay < 65536')
+	console.log('ok: parsePortOffset')
 }
 
 console.log('all dev-lib tests passed')
