@@ -5,6 +5,10 @@ import { test, expect } from '../lib/fixtures'
 import { shape } from '../lib/seed'
 import { capturing, loadFeel, saveFeel, type FeelNumbers } from '../lib/feel'
 
+// Let tldraw's wheel-zoom easing finish before reading the final zoom level;
+// 300ms was stable across 3 capture/verify runs.
+const ZOOM_SETTLE_MS = 300
+
 async function setup(page: import('@playwright/test').Page, room: string) {
 	const { id } = await shape(room, { type: 'note', x: 400, y: 300, text: 'probe' })
 	await page.goto(`/?room=${room}`)
@@ -65,7 +69,7 @@ test('feel numbers match golden', async ({ page }) => {
 	await page.keyboard.down('Control')
 	await page.mouse.wheel(0, -100)
 	await page.keyboard.up('Control')
-	await page.waitForTimeout(300)
+	await page.waitForTimeout(ZOOM_SETTLE_MS)
 	const z1 = await page.evaluate(() => (window as any).__ewEditor.getZoomLevel())
 
 	const observed: FeelNumbers = {
@@ -76,6 +80,8 @@ test('feel numbers match golden', async ({ page }) => {
 	}
 
 	if (capturing) {
+		if (dragThresholdPx < 0)
+			throw new Error('drag threshold not detected within 12px — probe broken, refusing to write golden')
 		saveFeel(observed)
 		console.log('[feel] captured', observed)
 	} else {
