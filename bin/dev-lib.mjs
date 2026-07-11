@@ -41,14 +41,14 @@ export const PORTS = portsFor(0)
 /**
  * Parse a port-offset value: unset/empty -> 0, a non-negative integer string
  * -> its value, anything else -> null (the caller dies with the remedy).
- * Capped so the largest base port stays under 65536.
+ * Capped so files (8791) is the largest base port; 8791 + 56744 = 65535.
  * @param {string | undefined | null} raw
  * @returns {number | null}
  */
 export function parsePortOffset(raw) {
 	if (raw === undefined || raw === null || raw === '') return 0
 	const n = Number(raw)
-	if (!Number.isInteger(n) || n < 0 || n > 57000) return null
+	if (!Number.isInteger(n) || n < 0 || n > 56744) return null
 	return n
 }
 

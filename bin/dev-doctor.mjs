@@ -94,7 +94,8 @@ export async function runDoctor(opts) {
 	if (!sessionRunning()) {
 		const taken = []
 		for (const [name, port] of Object.entries(ctx.ports).filter(
-			([name]) => name !== 'neko' || ctx.has.docker,
+			// livekitUdp can't be detected by a TCP probe (it's a UDP mux) — skip it.
+			([name]) => name !== 'livekitUdp' && (name !== 'neko' || ctx.has.docker),
 		)) {
 			if (await probePort(port)) taken.push(`${name}:${port}`)
 		}

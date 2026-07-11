@@ -368,23 +368,30 @@ function down() {
 	// `up` (and left a stale plain-HTTP caddy in front of a new TLS one). Reap
 	// any stray caddy still serving our Caddyfile — but ONLY this stack's: a
 	// parallel offset stack runs the same cmdline, so a plain pkill -f would
-	// reap its caddy too. The stack is identified by ENSEMBLEWORKS_CADDY_SITE
-	// in the process env (`:<port>` or `https://host:<port>` — always ends with
-	// our edge port), which never appears on the cmdline.
+	// reap its caddy too. The stack is identified by ENSEMBLEWORKS_PORT_SYNC in
+	// the process env, matched by EXACT equality: ENSEMBLEWORKS_CADDY_SITE's
+	// shape varies (`:<port>` vs `https://host:<port>` for TLS-internal/custom
+	// origin port) so an endsWith(':<port>') check misses that shape and leaves
+	// a stray caddy behind; ENSEMBLEWORKS_PORT_SYNC is always a plain per-stack
+	// number (same caddyEnv), so an exact `KEY=value` match is shape-independent.
 	reapStrayCaddy()
 }
 
 function reapStrayCaddy() {
-	const pgrep = spawnSync(
-		'pgrep',
-		['-f', `caddy run --config ${path.join(repoDir, 'deploy', 'Caddyfile')}`],
-		{ encoding: 'utf8' },
-	)
+	const caddyfile = path.join(repoDir, 'deploy', 'Caddyfile')
+	if (!existsSync('/proc')) {
+		// macOS (ENSEMBLEWORKS_NATIVE=1): no /proc to read environ from. Native
+		// mode is single-stack (no offset siblings to spare), so the old broad
+		// pkill -f is fine here — losing the reap entirely would be worse.
+		spawnSync('pkill', ['-f', `caddy run --config ${caddyfile}`])
+		return
+	}
+	const pgrep = spawnSync('pgrep', ['-f', `caddy run --config ${caddyfile}`], { encoding: 'utf8' })
+	const wanted = `ENSEMBLEWORKS_PORT_SYNC=${ports.sync}`
 	for (const pid of (pgrep.stdout ?? '').trim().split('\n').filter(Boolean)) {
 		try {
 			const environ = readFileSync(`/proc/${pid}/environ`, 'utf8')
-			const site = environ.split('\0').find((e) => e.startsWith('ENSEMBLEWORKS_CADDY_SITE='))
-			if (site?.endsWith(`:${ports.caddy}`)) process.kill(Number(pid))
+			if (environ.split('\0').includes(wanted)) process.kill(Number(pid))
 		} catch {} // pid vanished or environ unreadable — skip
 	}
 }

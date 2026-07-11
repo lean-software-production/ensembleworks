@@ -115,6 +115,8 @@ function configuredOffset(mainRepoDir) {
  * @returns {Promise<number | null>}
  */
 async function pickFreeOffset() {
+	// Two concurrent fresh `up`s can race probe→create and pick the same offset;
+	// accepted (dev tool; rerun one of them) — don't add locking.
 	for (const cand of [0, 100, 200, 300, 400, 500, 600, 700, 800, 900]) {
 		const p = portsFor(cand)
 		if (!(await probePort(p.caddy)) && !(await probePort(p.livekitTcp))) return cand
@@ -212,7 +214,10 @@ export async function runController(repoDir, argv) {
 	if (cmd === 'attach') {
 		if (!dc) die('no devcontainer running — start it with `bin/dev up` first')
 		narrate(`devcontainer '${dc.name}' running — printing attach instructions (attach never nests tmux)`)
-		const offset = configuredOffset(mainRepoDir) ?? 0
+		// The running container's stamped offset is authoritative — configuredOffset
+		// reads host-side env/.local/port-offset, which is empty in the env-only
+		// workflow (no file written) and would name the wrong session.
+		const offset = containerOffset(dc.id)
 		process.stdout.write(`${attachInstructions(dc.id, offset ? `workspace-${offset}` : 'workspace')}\n`)
 		process.exit(0)
 	}

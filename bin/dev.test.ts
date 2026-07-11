@@ -328,6 +328,8 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 	assert.equal(parsePortOffset('1.5'), null)
 	assert.equal(parsePortOffset('abc'), null)
 	assert.equal(parsePortOffset('60000'), null, 'ports must stay < 65536')
+	assert.equal(parsePortOffset('56744'), 56744)
+	assert.equal(parsePortOffset('56745'), null)
 	console.log('ok: parsePortOffset')
 }
 

@@ -1,6 +1,6 @@
 # Multi-Stack Port Offset Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Run multiple EnsembleWorks dev stacks on one host via a single `ENSEMBLEWORKS_PORT_OFFSET` integer added to every dev port, with `bin/dev up` auto-picking a free offset when the defaults are taken.
 
@@ -42,7 +42,7 @@ Out of scope (all env-overridable already, documented in Task 9): `bin/canvas` (
 - Modify: `bin/dev-lib.mjs:9-18` (the `PORTS` const)
 - Test: `bin/dev.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `bin/dev.test.ts` (imports go in the existing import block at the top — add `portsFor`, `parsePortOffset`):
 
@@ -80,12 +80,12 @@ Append to `bin/dev.test.ts` (imports go in the existing import block at the top 
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `bun bin/dev.test.ts`
 Expected: FAIL — `portsFor` / `parsePortOffset` not exported.
 
-- [ ] **Step 3: Implement in `bin/dev-lib.mjs`**
+- [x] **Step 3: Implement in `bin/dev-lib.mjs`**
 
 Replace the `PORTS` const (lines 9–18) with:
 
@@ -136,12 +136,12 @@ export function parsePortOffset(raw) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `bun bin/dev.test.ts`
 Expected: all `ok:` lines including `ok: portsFor`, `ok: parsePortOffset`.
 
-- [ ] **Step 5: Typecheck and commit**
+- [x] **Step 5: Typecheck and commit**
 
 Run: `bun run typecheck` — expected clean.
 
@@ -158,7 +158,7 @@ git commit -m "feat(dev): portsFor/parsePortOffset — offset-shifted dev port m
 - Modify: `bin/dev-lib.mjs` (`livekitBrowserUrl`, `attachInstructions`, `ServiceCtx` typedef, `buildServices`)
 - Test: `bin/dev.test.ts`
 
-- [ ] **Step 1: Update the test baseline ctx and write failing tests**
+- [x] **Step 1: Update the test baseline ctx and write failing tests**
 
 In `bin/dev.test.ts`, extend the `ctx()` helper's object with three new properties (before `...overrides`):
 
@@ -250,12 +250,12 @@ Append these tests:
 }
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `bun bin/dev.test.ts`
 Expected: FAIL on the offset service-table assertions (e.g. `sync PORT shifted`).
 
-- [ ] **Step 3: Implement in `bin/dev-lib.mjs`**
+- [x] **Step 3: Implement in `bin/dev-lib.mjs`**
 
 3a. `livekitBrowserUrl` takes the caddy port (signature change):
 
@@ -353,12 +353,12 @@ and the wait-loop URLs use `p.sync` / `p.livekit`.
 - shared-browser: `-p 127.0.0.1:${p.neko}:8080` and reason `` `neko on :${p.neko}, …` ``.
 - Any remaining `PORTS.` references inside `buildServices` are replaced by `p.` (grep to confirm none remain).
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `bun bin/dev.test.ts`
 Expected: all `ok:` lines. Existing assertions (they use `PORTS.…` on an offset-0 ctx) still pass. If any old assertion fails, it is comparing a cmd string that gained inline env — update the assertion to the new string, never the code.
 
-- [ ] **Step 5: Fix remaining callers, typecheck, commit**
+- [x] **Step 5: Fix remaining callers, typecheck, commit**
 
 `livekitBrowserUrl`/`attachInstructions` callers outside dev-lib (`bin/dev-host.mjs:104` passes one arg) are updated in Tasks 3/7 — for this commit, make the minimal call-site fix so typecheck passes: in `dev-host.mjs` change to `attachInstructions(dc.id, 'workspace')` (Task 7 makes it offset-aware).
 
@@ -378,7 +378,7 @@ git commit -m "feat(dev): thread ctx.ports through the service table"
 - Test: `bin/dev.test.ts`
 - Reference: `deploy/livekit-cutover-ash.sh:130-140` (a known-good config shape)
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```ts
 // livekitDevConfigYaml: shifted ports + dev keys; node_ip only when known.
@@ -395,11 +395,11 @@ git commit -m "feat(dev): thread ctx.ports through the service table"
 }
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `bun bin/dev.test.ts` — FAIL: `livekitDevConfigYaml` not exported.
 
-- [ ] **Step 3: Implement in `bin/dev-lib.mjs`** (near `livekitBrowserUrl`)
+- [x] **Step 3: Implement in `bin/dev-lib.mjs`** (near `livekitBrowserUrl`)
 
 ```js
 /**
@@ -426,11 +426,11 @@ ${nodeIp ? `  node_ip: ${nodeIp}\n` : ''}keys:
 }
 ```
 
-- [ ] **Step 4: Run tests, typecheck**
+- [x] **Step 4: Run tests, typecheck**
 
 Run: `bun bin/dev.test.ts` then `bun run typecheck` — expected pass/clean.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bin/dev-lib.mjs bin/dev.test.ts
@@ -447,7 +447,7 @@ The controller (Task 7) needs `probePort` for auto-pick, but it cannot import `d
 - Create: `bin/dev-net.mjs`
 - Modify: `bin/dev-main.mjs:150-177` (remove `probeAddr`/`probePort`), `bin/dev-doctor.mjs:10-18` (import path)
 
-- [ ] **Step 1: Create `bin/dev-net.mjs`**
+- [x] **Step 1: Create `bin/dev-net.mjs`**
 
 ```js
 // @ts-check
@@ -487,16 +487,16 @@ export async function probePort(port, timeoutMs = 1000) {
 }
 ```
 
-- [ ] **Step 2: Rewire dev-main and dev-doctor**
+- [x] **Step 2: Rewire dev-main and dev-doctor**
 
 In `bin/dev-main.mjs`: delete the `probeAddr`/`probePort` definitions (lines 151–177) and the now-unused `import { connect } from 'node:net'`; add `import { probePort } from './dev-net.mjs'` and re-export it (`export { probePort }`) so `dev-doctor`'s existing import keeps working — OR (preferred, one less indirection) change `bin/dev-doctor.mjs` to import `probePort` from `'./dev-net.mjs'` and drop it from the `dev-main` import list. Use the preferred form.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run: `bun bin/dev.test.ts && bun run typecheck` — expected pass/clean.
 Run (inside the container or wherever the stack runs): `bin/dev doctor` — expected: same output shape as before.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add bin/dev-net.mjs bin/dev-main.mjs bin/dev-doctor.mjs
@@ -512,7 +512,7 @@ git commit -m "refactor(dev): extract loopback probe to dev-net.mjs"
 
 No unit-test seam here (this file is the I/O side); verification is by running commands in Step 4.
 
-- [ ] **Step 1: Resolve the offset once, derive session/dataDir/ports**
+- [x] **Step 1: Resolve the offset once, derive session/dataDir/ports**
 
 In `bin/dev-main.mjs`, extend the dev-lib import with `parsePortOffset, portsFor, livekitDevConfigYaml`, add `writeFileSync` to the `node:fs` import, and replace line 35 (`const session = …`) with:
 
@@ -554,7 +554,7 @@ const dataDir =
 	path.join(homedir(), '.local', 'share', portOffset ? `ensembleworks-${portOffset}` : 'ensembleworks')
 ```
 
-- [ ] **Step 2: Generated LiveKit conf + ctx fields**
+- [x] **Step 2: Generated LiveKit conf + ctx fields**
 
 Below `livekitConfPath` add:
 
@@ -602,7 +602,7 @@ and in `restart()` after building the ctx:
 	const svc = buildServices(rCtx).find((s) => s.name === name)
 ```
 
-- [ ] **Step 3: Offset-aware output**
+- [x] **Step 3: Offset-aware output**
 
 - `cheatSheet()`: `const url = originToString(ctx.publicOrigin) ?? \`http://localhost:${ports.caddy}\`` and the voice line `` `(media udp mux ${ports.livekitUdp})` ``; when `portOffset` is nonzero append `` ` (port offset ${portOffset})` `` after the URL.
 - `usage()`: add under the Config line: `Ports: ENSEMBLEWORKS_PORT_OFFSET=<n> (or .local/port-offset) shifts every service port by n — run parallel stacks with n=100, 200, …`
@@ -619,7 +619,7 @@ and in `restart()` after building the ctx:
 	})
 ```
 
-- [ ] **Step 4: Verify by running the engine**
+- [x] **Step 4: Verify by running the engine**
 
 All from the host repo root (the controller forwards into the running container):
 
@@ -627,7 +627,7 @@ Run: `bun run typecheck && bun bin/dev.test.ts` — clean/pass.
 Run: `bin/dev status --json 2>/dev/null` — default stack still reports its services on 8788/8789/… and healthy (offset 0 regression).
 Run: `bin/dev doctor` — shows `port offset     none (default ports)`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bin/dev-main.mjs bin/dev-doctor.mjs
@@ -641,7 +641,7 @@ git commit -m "feat(dev): engine resolves ENSEMBLEWORKS_PORT_OFFSET (session/dat
 **Files:**
 - Modify: `client/vite.config.ts`, `deploy/Caddyfile`
 
-- [ ] **Step 1: `client/vite.config.ts`**
+- [x] **Step 1: `client/vite.config.ts`**
 
 Replace line 22 (`const CADDY_PORT = 8080`) with:
 
@@ -674,7 +674,7 @@ In the `server:` block add `port: CLIENT_PORT,` directly above `strictPort: true
 
 Also update the two comments that hardcode `127.0.0.1:5173` to say "the client port (5173 + offset)".
 
-- [ ] **Step 2: `deploy/Caddyfile`**
+- [x] **Step 2: `deploy/Caddyfile`**
 
 Caddy substitutes `{$VAR:default}` env placeholders anywhere in the file before parsing; the site address already works this way. bin/dev's caddy window exports the `ENSEMBLEWORKS_PORT_*` vars (Task 2); defaults keep the ash box (which copies this file, no env) on today's ports. Replace the four hardcoded upstreams:
 
@@ -684,13 +684,13 @@ Caddy substitutes `{$VAR:default}` env placeholders anywhere in the file before 
 - `reverse_proxy 127.0.0.1:8788` → `reverse_proxy 127.0.0.1:{$ENSEMBLEWORKS_PORT_SYNC:8788}`
 - `reverse_proxy 127.0.0.1:5173` → `reverse_proxy 127.0.0.1:{$ENSEMBLEWORKS_PORT_CLIENT:5173}`
 
-- [ ] **Step 3: Verify the default stack still works end-to-end**
+- [x] **Step 3: Verify the default stack still works end-to-end**
 
 Run: `bin/dev restart caddy && bin/dev restart client` (forwards into the container), wait ~10s, then:
 Run: `curl -fsS http://localhost:8080/api/health && curl -fsSo /dev/null -w '%{http_code}\n' http://localhost:8080/`
 Expected: health JSON and `200` (Caddy → Vite unchanged at offset 0).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add client/vite.config.ts deploy/Caddyfile
@@ -704,7 +704,7 @@ git commit -m "feat(dev): vite + caddy derive ports from ENSEMBLEWORKS_PORT_OFFS
 **Files:**
 - Modify: `bin/dev-host.mjs`, `bin/dev-main.mjs:43-45` (async call site)
 
-- [ ] **Step 1: Imports and offset helpers in `bin/dev-host.mjs`**
+- [x] **Step 1: Imports and offset helpers in `bin/dev-host.mjs`**
 
 ```js
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -750,7 +750,7 @@ async function pickFreeOffset() {
 }
 ```
 
-- [ ] **Step 2: Make `runController` async and wire `up`**
+- [x] **Step 2: Make `runController` async and wire `up`**
 
 Change the signature to `export async function runController(repoDir, argv)` and in `bin/dev-main.mjs` change the dispatch to `await runController(repoDir, process.argv.slice(2))` (top-level await is fine; every controller path exits the process).
 
@@ -795,7 +795,7 @@ Replace the `up` branch body (keep the existing docker/devcontainer-CLI checks) 
 	}
 ```
 
-- [ ] **Step 3: Offset-aware attach**
+- [x] **Step 3: Offset-aware attach**
 
 In the `attach` branch:
 
@@ -804,13 +804,13 @@ In the `attach` branch:
 		process.stdout.write(`${attachInstructions(dc.id, offset ? `workspace-${offset}` : 'workspace')}\n`)
 ```
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 Run: `bun run typecheck && bun bin/dev.test.ts` — clean/pass.
 Run: `bin/dev up` (container already running) — narrates idempotent reuse, exits 0, no re-pick.
 Run: `bin/dev attach` — prints `tmux attach -t workspace` (offset 0).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add bin/dev-host.mjs bin/dev-main.mjs
@@ -824,7 +824,7 @@ git commit -m "feat(dev): controller auto-picks a free port offset and threads i
 **Files:**
 - Modify: `.devcontainer/devcontainer.json`
 
-- [ ] **Step 1: Edit `runArgs` + add `containerEnv`**
+- [x] **Step 1: Edit `runArgs` + add `containerEnv`**
 
 Replace the `runArgs` line and add `containerEnv` (keep `forwardPorts`/`portsAttributes` at 8080 — they're Codespaces/VS Code cosmetics; offset stacks on Codespaces are out of scope):
 
@@ -849,18 +849,18 @@ Replace the `runArgs` line and add `containerEnv` (keep `forwardPorts`/`portsAtt
 	"containerEnv": { "ENSEMBLEWORKS_PORT_OFFSET": "${localEnv:ENSEMBLEWORKS_PORT_OFFSET}" },
 ```
 
-- [ ] **Step 2: Verify the substitution syntax against this CLI version**
+- [x] **Step 2: Verify the substitution syntax against this CLI version**
 
 `${localEnv:VAR:default}` default-values are in the containers.dev spec, but confirm this installed CLI (0.80.x) honours them **before recreating anything**:
 
 Run: `devcontainer read-configuration --workspace-folder . 2>/dev/null | head -c 2000`
 Expected: the printed config shows `runArgs` with `8080`/`7881`/`7882` substituted in (NOT literal `${localEnv…}` text, NOT empty strings). If defaults are unsupported (empty strings appear), fall back: keep literal ports as today's `runArgs` in the file and have the controller pass `--override-config` instead — flag this to the human before proceeding.
 
-- [ ] **Step 3: Recreate the container on defaults (regression)**
+- [x] **Step 3: Recreate the container on defaults (regression)**
 
 Run: `bin/dev down && bin/dev up` — then `bin/dev status --json 2>/dev/null` (all healthy) and `docker ps --format '{{.Ports}}' --filter label=devcontainer.local_folder=$(pwd)` shows `8080->8080`, `7881->7881`, `7882->7882/udp`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add .devcontainer/devcontainer.json
@@ -874,7 +874,7 @@ git commit -m "feat(dev): devcontainer publishes offset host ports via localEnv 
 **Files:**
 - Modify: `CLAUDE.md` (Local dev section), `README.md` (Development section), `AGENTS.md` (if it repeats the port list)
 
-- [ ] **Step 1: Document the offset**
+- [x] **Step 1: Document the offset**
 
 Add to `CLAUDE.md`'s "Local dev — bin/dev" section (after the `bin/dev --help` bullet):
 
@@ -890,7 +890,7 @@ Add to `CLAUDE.md`'s "Local dev — bin/dev" section (after the `bin/dev --help`
 
 Add the equivalent prose to README's Development section (match its voice; mention that LiveKit runs from a generated config when offset ≠ 0, and that changing an offset requires `bin/dev down` + `up` since published ports are fixed at container create). Grep `AGENTS.md` for the port table and add one line pointing at the offset if it repeats the ports.
 
-- [ ] **Step 2: Commit**
+- [x] **Step 2: Commit**
 
 ```bash
 git add CLAUDE.md README.md AGENTS.md
@@ -903,11 +903,11 @@ git commit -m "docs(dev): ENSEMBLEWORKS_PORT_OFFSET multi-stack usage"
 
 No new files — this proves the feature. The cheapest true two-stack test runs the second (offset) engine inside the same container: it exercises port shifting, tmux/dataDir isolation, generated LiveKit config, Caddy env placeholders, and Vite's offset — everything except a second container's host-port publish (verified at offset 0 in Task 8; optionally with a second clone below).
 
-- [ ] **Step 1: Default stack healthy (stack A)**
+- [x] **Step 1: Default stack healthy (stack A)**
 
 Run: `bin/dev status --json 2>/dev/null` — every enabled service healthy; `curl -fsS http://localhost:8080/api/health` OK.
 
-- [ ] **Step 2: Bring up stack B at offset 100 inside the container**
+- [x] **Step 2: Bring up stack B at offset 100 inside the container**
 
 ```bash
 CID=$(docker ps -q --filter label=devcontainer.local_folder=$(pwd))
@@ -916,7 +916,7 @@ docker exec -w /workspaces/ensembleworks-opencode-web -e ENSEMBLEWORKS_PORT_OFFS
 
 Expected: `- … off:` lines as usual, then `✓` for sync/term/files/client/caddy/livekit/whisper and a cheat-sheet URL `http://localhost:8180 (port offset 100)`.
 
-- [ ] **Step 3: Probe stack B and confirm stack A is untouched**
+- [x] **Step 3: Probe stack B and confirm stack A is untouched**
 
 ```bash
 docker exec $CID curl -fsS http://localhost:8180/api/health          # B edge -> sync
@@ -929,7 +929,7 @@ curl -fsS http://localhost:8080/api/health                            # A still 
 bin/dev status --json 2>/dev/null | grep -c '"healthy": true'         # A count unchanged
 ```
 
-- [ ] **Step 4: Tear down stack B, confirm A survives**
+- [x] **Step 4: Tear down stack B, confirm A survives**
 
 ```bash
 docker exec -w /workspaces/ensembleworks-opencode-web -e ENSEMBLEWORKS_PORT_OFFSET=100 $CID bin/dev down
@@ -939,7 +939,7 @@ curl -fsS http://localhost:8080/api/health     # A healthy
 
 Note: stack B's `down` pkills by Caddyfile path, which would also hit stack A's caddy — check `bin/dev status` for A afterward and `bin/dev restart caddy` if its caddy was reaped. If it WAS reaped, add the offset to the pkill match in `down()` (`dev-main.mjs:333`): scope the pattern to the session's caddy by matching `ENSEMBLEWORKS_CADDY_SITE=':<port>'` instead — implement, retest, include in the fix commit.
 
-- [ ] **Step 5 (optional, needs a second clone): true host-level two-container test**
+- [x] **Step 5 (optional, needs a second clone): true host-level two-container test**
 
 ```bash
 git clone <repo> ../ensembleworks-b && cd ../ensembleworks-b && bin/dev up
@@ -947,7 +947,7 @@ git clone <repo> ../ensembleworks-b && cd ../ensembleworks-b && bin/dev up
 
 Expected: controller narrates `default ports busy — picked port offset 100`, `.local/port-offset` contains `100`, `docker ps` shows the second container publishing `8180/7981/7982`, and `curl -fsS http://localhost:8180/api/health` works from the host. `bin/dev down` in each clone stops only its own container.
 
-- [ ] **Step 6: Final checks + commit any fixes**
+- [x] **Step 6: Final checks + commit any fixes**
 
 Run: `bun bin/dev.test.ts && bun run typecheck && bun run build` — all clean.
 
@@ -964,3 +964,21 @@ git add -A && git commit -m "test(dev): two-stack port-offset verification fixes
 - Auto-pick never runs when a container already exists for the checkout (ports were bound at create).
 - Sync's inline `devkey/secret` stays keyed off `ctx.livekitConf` (user conf), not the generated conf, which embeds the same dev keys.
 - `down()`'s caddy pkill is repo-scoped but not offset-scoped — explicitly probed in Task 10 Step 4 with the fix path spelled out.
+
+## Completion note (2026-07-11)
+
+All tasks done. Three mid-review deviations from the plan as written:
+
+- (a) The engine's offset resolution (`bin/dev-main.mjs`) moved to *below* the controller dispatch — the original placement defaulted an unset `ENSEMBLEWORKS_PORT_OFFSET` to `'0'` in `process.env` before the controller ran, poisoning its unset-vs-0 distinction and making auto-pick unreachable.
+- (b) The controller (`bin/dev-host.mjs`) now adopts a stopped or running container's stamped port offset (`containerOffset`) rather than always defaulting to 0, and recreates the container via `--remove-existing-container` when the configured offset differs from what's running (published ports are fixed at create).
+- (c) `down()`'s caddy reap (`bin/dev-main.mjs`) is environ-scoped per stack rather than a bare repo-scoped `pkill -f`, per the Task 10 Step 4 note.
+
+Final-review fixes (one line each):
+
+- Offset dataDirs (`ensembleworks-<offset>`) now get the same `.local/share` symlink persistence as the unsuffixed dataDir, so they survive container rebuilds (`.devcontainer/post-create.bash`).
+- `bin/dev attach` now names the session from the running container's stamped offset (`containerOffset(dc.id)`), not `configuredOffset`, which is empty in the env-only workflow.
+- `reapStrayCaddy()`'s stack discriminator switched from an `ENSEMBLEWORKS_CADDY_SITE` `endsWith(':<port>')` check (misses the TLS-internal/custom-origin-port shape) to an exact `ENSEMBLEWORKS_PORT_SYNC=<n>` environ match.
+- `parsePortOffset`'s cap corrected from 57000 to 56744 (files:8791 is the largest base port; 8791 + 56744 = 65535), with two new boundary tests.
+- `reapStrayCaddy()` falls back to a broad `pkill -f` when `/proc` doesn't exist (macOS native mode), restoring the old behavior lost when the environ-based reap was introduced.
+- Doctor's ports-free loop now also excludes `livekitUdp` (a TCP probe can never detect a UDP squatter).
+- `pickFreeOffset()` documents the accepted concurrent-`up` race (no locking) inline.
