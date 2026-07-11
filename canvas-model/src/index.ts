@@ -4,3 +4,8 @@
 // Convention: intra-package relative imports use the `.js` extension
 // (nodenext-style; resolves to the .ts source everywhere).
 export const CANVAS_MODEL_VERSION = 1 as const
+
+export * from './ids.js'
+export * from './shape.js'
+export * from './document.js'
+export * from './invariants.js'
