@@ -29,11 +29,14 @@ const API_MODEL = 2
 
 // Catch-all so an unexpected throw deep in conversion (a malformed record, a
 // pathological tree) returns a clean 500 instead of Express's default HTML
-// error page / a hung response. Logs the real error server-side.
-function guard(handler: (req: express.Request, res: express.Response) => void) {
-	return (req: express.Request, res: express.Response) => {
+// error page / a hung response. Logs the real error server-side. Awaits the
+// handler so ASYNC handlers (house style; Unit 10 adds some through this
+// wrapper) are covered too — a sync-only try/catch would silently miss a
+// rejected promise and hang the response.
+function guard(handler: (req: express.Request, res: express.Response) => void | Promise<void>) {
+	return async (req: express.Request, res: express.Response) => {
 		try {
-			handler(req, res)
+			await handler(req, res)
 		} catch (err) {
 			console.error('[canvas-v2] unexpected error', err)
 			res.status(500).json({ error: 'internal error' })
@@ -62,6 +65,12 @@ export function createCanvasV2Router(ctx: PluginServerContext): express.Router {
 		bounds: pageBounds(doc, s),
 	})
 
+	// The page a directly page-parented frame lives on (frames are page children
+	// in this schema; a nested/malformed parent yields null, mirroring v1's
+	// nullable page field).
+	const pageOf = (doc: CanvasDocument, f: Shape): string | null =>
+		doc.pages.find((p) => p.id === f.parentId)?.id ?? null
+
 	// GET /api/v2/canvas/document?room= — the whole room as a canvas-model
 	// document: pages, shapes, bindings, converted live from the tldraw store.
 	router.get(
@@ -88,7 +97,7 @@ export function createCanvasV2Router(ctx: PluginServerContext): express.Router {
 				return {
 					id: f.id,
 					name: String((f.props as any)?.name ?? ''),
-					page: doc.pages.find((p) => p.id === f.parentId)?.id ?? null,
+					page: pageOf(doc, f),
 					bounds: pageBounds(doc, f),
 					notes: countOf('note'),
 					texts: countOf('text'),
@@ -118,7 +127,7 @@ export function createCanvasV2Router(ctx: PluginServerContext): express.Router {
 			res.json({
 				ok: true,
 				model: API_MODEL,
-				frame: { id: frame.id, name: String((frame.props as any)?.name ?? '') },
+				frame: { id: frame.id, name: String((frame.props as any)?.name ?? ''), page: pageOf(doc, frame) },
 				members,
 			})
 		})

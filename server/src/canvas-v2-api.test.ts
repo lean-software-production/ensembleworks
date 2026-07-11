@@ -46,12 +46,38 @@ async function main() {
 	const one = await get('/api/v2/canvas/frame?room=r&name=plan')
 	assert.equal(one.status, 200)
 	assert.deepEqual(one.body.members.map((m: any) => m.text).sort(), ['alpha', 'beta'])
+	// v1 parity: the frame object carries its page (same field /frames reports).
+	assert.equal(one.body.frame.page, frames.body.frames[0].page)
+	assert.ok(String(one.body.frame.page).startsWith('page:'), 'frame.page is a real page id')
 
 	// 404 on unknown frame
 	const miss = await get('/api/v2/canvas/frame?room=r&name=zzz')
 	assert.equal(miss.status, 404)
 
-	console.log('ok: canvas-v2 api (document/frames/frame)')
+	// Bad room id (sanitizeId rejects dots) → 400 on every route.
+	const badDoc = await get('/api/v2/canvas/document?room=..bad..')
+	assert.equal(badDoc.status, 400, 'bad room id is 400 on /document')
+	const badFrames = await get('/api/v2/canvas/frames?room=..bad..')
+	assert.equal(badFrames.status, 400, 'bad room id is 400 on /frames')
+	const badFrame = await get('/api/v2/canvas/frame?room=..bad..&name=x')
+	assert.equal(badFrame.status, 400, 'bad room id is 400 on /frame')
+
+	// A never-seeded room converts to an empty model (a fresh room holds only
+	// document:document + page:page): 200 with empty shapes/frames arrays.
+	const emptyDoc = await get('/api/v2/canvas/document?room=fresh')
+	assert.equal(emptyDoc.status, 200)
+	assert.deepEqual(emptyDoc.body.shapes, [])
+	const emptyFrames = await get('/api/v2/canvas/frames?room=fresh')
+	assert.equal(emptyFrames.status, 200)
+	assert.deepEqual(emptyFrames.body.frames, [])
+
+	// NOTE: guard()'s 500 path is not exercised end-to-end — provoking a genuine
+	// throw inside the live conversion would need in-process monkeypatching that
+	// doesn't cross the HTTP boundary cleanly (controller-accepted gap; the
+	// wrapper awaits the handler, so sync AND async throws are covered by
+	// construction, and it typechecks against both signatures).
+
+	console.log('ok: canvas-v2 api (document/frames/frame + edge cases)')
 
 	server.close()
 	process.exit(0)
