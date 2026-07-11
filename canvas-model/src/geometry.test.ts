@@ -35,6 +35,16 @@ const gb = pageBounds(grown, grown.byId.get('shape:g')!)
 assert.deepEqual({ w: gb.maxX - gb.minX, h: gb.maxY - gb.minY }, { w: 400, h: 600 })
 assert.equal(medianSize(grown.shapes), 600) // max(w,h) feeds the median
 
+// Geo sizing: props.w/h are ALREADY scaled (tldraw GeoShapeUtil divides by scale
+// to recover the unscaled size) and rendered height adds growY — no scale multiply.
+const geoScaled = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [{ id: 'shape:gs', kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, props: { w: 100, h: 50, growY: 30, scale: 2 }, ...base() } as any],
+  bindings: [],
+})
+const gsb = pageBounds(geoScaled, geoScaled.byId.get('shape:gs')!)
+assert.deepEqual({ w: gsb.maxX - gsb.minX, h: gsb.maxY - gsb.minY }, { w: 100, h: 80 })
+
 // Negative sizes clamp to 0: bounds never invert.
 const neg = makeDocument({
   pages: [{ id: 'page:p', name: 'P' }],
