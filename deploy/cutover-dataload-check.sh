@@ -18,7 +18,9 @@ APP_HOME="$(getent passwd "$APP_USER" | cut -d: -f6)"
 STORAGE_ENV="${APP_HOME}/.config/ensembleworks/storage.env"
 DATA_DIR="$(sudo grep '^DATA_DIR=' "$STORAGE_ENV" | tail -n1 | cut -d= -f2-)"
 DATABASE_DIR="$(sudo grep '^DATABASE_DIR=' "$STORAGE_ENV" | tail -n1 | cut -d= -f2-)"
-[ -n "$DATA_DIR" ] && [ -n "$DATABASE_DIR" ] || { echo "ABORT: DATA_DIR/DATABASE_DIR missing from $STORAGE_ENV" >&2; exit 1; }
+if [ -z "$DATA_DIR" ] || [ -z "$DATABASE_DIR" ]; then
+  echo "ABORT: DATA_DIR/DATABASE_DIR missing from $STORAGE_ENV" >&2; exit 1
+fi
 
 echo "==> fetching v${VERSION} server binary for the data-load check"
 fetchdir="$(${RUN} mktemp -d)"
