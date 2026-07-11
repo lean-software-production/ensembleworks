@@ -262,3 +262,68 @@ renderer actually swaps (canvas present in view, absent in edit), bottom
 margin stable across zooms in edit (±2px), box-drawing seams screenshot at
 integer fonts (accept or mitigate based on evidence), editpad + zoom probes
 still pass. Findings appended here.
+
+**Findings (verified 2026-07-11, HEAD f397898)** — headless Chromium at
+`deviceScaleFactor` 1.1 and 2.2, live dev stack, room "probe" (720×440
+terminal shape, real tmux session with box-drawing + known-text rows).
+All checks were run at BOTH DPRs; results were identical unless noted.
+
+1. **Renderer swap: PASS.** View mode: 2 `<canvas>` in `.xterm-screen`,
+   0 `.xterm-rows`. Editing: 0 canvases, 1 `.xterm-rows` (DOM renderer).
+   After Esc Esc: 2 canvases, 0 `.xterm-rows` again (fresh WebglAddon).
+   Verified via `__ewEditor` edit-state assertions at each step.
+2. **No boxes at extreme zoom: PASS.** editZoom 3.79 while editing, DPR
+   2.2 (rendered font 60px, ≈132 device px): every glyph renders as a
+   real crisp character — zero square boxes (`t11-dpr2.2-zoom3.79.png`).
+3. **Bottom/right gap while editing** (gap = padded container edge −
+   `.xterm-screen` edge, screen px, normalised by zoom to logical px;
+   4px bottom / 20px right CSS padding subtracted to isolate under-fill):
+
+   | zoom | bottom under-fill, logical px (DPR 1.1 / 2.2) | right under-fill (both) | right gap % of width |
+   |---|---|---|---|
+   | 0.65 | 25.5 / 39.4 | 29.2 | 6.9 |
+   | 1.1 | 31.3 / 39.5 | 33.9 | 7.5 |
+   | 1.33 | 34.5 / 34.5 | 10.7 | 4.3 |
+   | 2.0 | 9.5 / 14.0 | 20.0 | 5.6 |
+
+   Honest read: the strip is **not** within the hoped-for ±2px across
+   zooms — it swings ~10–40 logical px (bottom) and ~11–34 px (right,
+   4.3–7.5% of width, bracketing the predicted ~4–6%) as the floored
+   font's fractional loss varies with zoom, compounded by DOM row-height
+   device-px rounding (hence the DPR 1.1 vs 2.2 spread at z<1.33). What
+   the fix actually guarantees held everywhere: the gap is **always an
+   under-fill, never a clip** (all values positive at every zoom × DPR),
+   and it is stable over time at a given zoom — this is the accepted
+   under-fill-strip residual, larger than the ±2px hope but benign.
+4. **Selection endpoint accuracy: PASS — regression guard clear.**
+   Shift+drag from cell (row 2, col 5) centre to (last row, col cols−2)
+   centre at editZoom 0.65, 3.79 AND 1 (control). Highlight geometry read
+   from the DOM renderer's `.xterm-selection` divs: right-edge error vs
+   the drag end point is **exactly −0.50 cells at all three zooms and
+   both DPRs** (−3px at cellW 6, −5px at cellW 10, −18px at cellW 36).
+   The z=1 control proves this constant is xterm's exclusive-end
+   convention (drop at a cell's centre selects up to that cell's left
+   boundary), not a zoom artifact: it is perfectly zoom- and
+   DPR-invariant, within the ±half-cell tolerance, with no off-by-one
+   drift. (No window-exposed Terminal handle exists, so
+   `term.getSelectionPosition()` was not reachable; the highlight-rect
+   assertion + screenshots `t11-dpr*-sel-z*.png` are the evidence.)
+5. **Font-size keys e2e: PASS.** While editing: Ctrl+'=' ×2 →
+   `props.fontSize` 16→17→18 and the deterministic grid re-derived
+   (rows 19→18); Ctrl+'0' → 16, rows back to 19. Caveat: the custom key
+   handler only sees keys while xterm's helper textarea has focus —
+   probe drags can steal focus, so the check re-enters editing first.
+6. **Seams at integer fonts (DOM renderer, editing): GONE.** DPR 2.2,
+   z=1 (font 16) and z=0.65 (font 10), box-drawing rectangle,
+   pixel-profiled with ImageMagick: horizontal borders ≥98% dark pixels
+   along the line (the ~2% light pixels are corner/edge antialiasing,
+   invisible at 1:1); the vertical border column is 100% continuous
+   across all rows — zero between-row 1px seams.
+7. **Editpad probe: PASS** (editShift 0, roundTrip 0).
+
+Known-accepted residuals, restated with numbers: (a) below ~37.5% zoom
+the `max(6, …)` min-font clamp makes the rendered font larger than
+zoom-exact, so content can overflow the box (not probed here — outside
+the zoom range users edit at); (b) the floor under-fill strip above
+(item 3) — up to ~7.5% of width right, up to ~40 logical px bottom at
+the worst zoom × DPR combination measured.
