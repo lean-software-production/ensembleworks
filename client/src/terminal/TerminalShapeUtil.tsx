@@ -72,12 +72,31 @@ const RECONNECT_MAX_MS = 10_000
 
 type TerminalConnection = 'connecting' | 'live' | 'reconnecting' | 'disconnected' | 'ended'
 
-// xterm exposes its rendered cell size only on the internal render service (the
-// same field FitAddon reads). Returns the cell dimensions in CSS px, or null if
-// the renderer hasn't measured yet. This is the one input to the deterministic
-// grid that must be *measured* rather than shared — quantised in ./grid so every
-// client agrees on it.
+// The grid cell, from xterm's renderer-INDEPENDENT char measurement
+// (_charSizeService: pure font metrics in CSS px). The render service's cell
+// must NOT be used here: it is quantised to device pixels by the ACTIVE
+// renderer — WebGL floors width (9.6px → 9.09 at DPR 1.1) while the DOM
+// renderer draws true fractional advances — so a grid derived from it packs
+// more columns than edit mode can fit (≈5% clipped at DPR 1.1). Width: charW
+// is a safe upper bound for both renderers (WebGL ≤ charW, DOM = charW).
+// Height: renderers round rows UP to at most charH + 1/DPR css px, so the
+// grid uses charH + 1 — the deterministic safe bound; no renderer ever clips
+// the last row, at the cost of ≤1px per row of bottom under-fill. This is the
+// one input to the deterministic grid that must be *measured* rather than
+// shared — quantised in ./grid so every client agrees on it (and, being pure
+// font metrics, it no longer varies by renderer or DPR at all).
 function xtermCell(term: Terminal): { width: number; height: number } | null {
+	const cs = (
+		term as unknown as {
+			_core?: { _charSizeService?: { width?: number; height?: number } }
+		}
+	)._core?._charSizeService
+	return cs?.width && cs?.height ? { width: cs.width, height: cs.height + 1 } : null
+}
+
+// The ACTIVE renderer's cell (CSS px) — used ONLY for the view-mode fill
+// compensation; the shared grid must never read this (see xtermCell above).
+function rendererCell(term: Terminal): { width: number; height: number } | null {
 	const cell = (
 		term as unknown as {
 			_core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } }
@@ -570,6 +589,8 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		}
 	}, [isEditing, shape.props.sessionId])
 
+	const [viewFit, setViewFit] = useState<{ fx: number; fy: number } | null>(null)
+
 	// Counter-scale the font to the canvas zoom so text stays crisp and xterm's
 	// mouse→cell math is exact (the host's CSS transform, in JSX, keeps the net
 	// on-screen scale at 1). This must track editZoom *in lockstep with that
@@ -604,9 +625,46 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 	useEffect(() => {
 		const term = termRef.current
 		if (!term) return
-		const nextFont = Math.max(1, Math.floor(baseFont * editZoom))
+		// Exact fractional font: only the DOM renderer ever sees a non-integer
+		// size (view mode is editZoom=1 → integer base font for WebGL), and it
+		// lays out fractional advances crisply. Flooring — an atlas-era remedy —
+		// made the rendered cell diverge from the shared grid cell by a
+		// zoom-dependent fraction, which live testing showed as wandering
+		// margins at every non-integer zoom.
+		const nextFont = Math.max(1, baseFont * editZoom)
 		if (term.options.fontSize !== nextFont) term.options.fontSize = nextFont
 	}, [editZoom, baseFont])
+
+	// View-mode fill compensation. The shared grid cell is pure font metrics
+	// (9.6px at 16px JetBrains Mono), but WebGL physically renders cells at
+	// whole device pixels — floor(9.6 × DPR)/DPR, e.g. 9.09 CSS px at DPR 1.1
+	// — so view-mode content under-fills the grid box by up to half a device
+	// pixel per cell (~35px across a wide terminal on a fractional-DPR
+	// screen). Scale the host by the per-axis ratio grid-cell / rendered-cell
+	// so the box fills exactly. Local cosmetics only: each client compensates
+	// its own renderer; the shared grid is untouched, selection doesn't exist
+	// in view mode, and edit mode (DOM renderer, true fractional advances)
+	// never needs it. Declared AFTER the renderer-strategy and font effects so
+	// it measures the fresh WebGL renderer at the base font on edit-exit; the
+	// font normalisation and the clamp are belt-and-braces on top of that
+	// ordering (a bad measurement can never distort wildly).
+	useEffect(() => {
+		const term = termRef.current
+		if (isEditing || !cellSize || !term) {
+			setViewFit(null)
+			return
+		}
+		const rs = rendererCell(term)
+		if (!rs) return
+		// Normalise to the base font, mirroring captureCell — harmless when the
+		// font effect has already run (scale 1), correct if it somehow hasn't.
+		const scale = (term.options.fontSize ?? baseFont) / baseFont
+		const clamp = (v: number) => Math.min(1.15, Math.max(1, v))
+		setViewFit({
+			fx: clamp(cellSize.w / (rs.width / scale)),
+			fy: clamp(cellSize.h / (rs.height / scale)),
+		})
+	}, [isEditing, cellSize, baseFont, shape.props.sessionId])
 
 	// Shared font-size changes re-measure the cell; the deterministic grid
 	// effect then re-derives cols/rows from the same shared inputs everywhere.
@@ -781,15 +839,28 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 				{/* xterm renders here. While editing at zoom ≠ 1 the host is sized
 				    up by the zoom and scaled back down by 1/zoom, giving the element
 				    a net on-screen scale of 1 (so xterm's mouse→cell math is exact)
-				    while still filling the frame. At zoom 1 this is the identity. */}
+				    while still filling the frame. At zoom 1 this is the identity.
+				    In view mode the host instead applies the fill compensation
+				    (viewFit): WebGL's device-pixel cells run slightly smaller than
+				    the shared grid cell on fractional-DPR screens, so the content
+				    is scaled up per-axis to fill the box (see the viewFit effect). */}
 				<div
 					ref={hostRef}
-					style={{
-						width: `calc(100% * ${editZoom})`,
-						height: `calc(100% * ${editZoom})`,
-						transform: `scale(${1 / editZoom})`,
-						transformOrigin: 'top left',
-					}}
+					style={
+						!isEditing && viewFit
+							? {
+									width: `calc(100% / ${viewFit.fx})`,
+									height: `calc(100% / ${viewFit.fy})`,
+									transform: `scale(${viewFit.fx}, ${viewFit.fy})`,
+									transformOrigin: 'top left',
+								}
+							: {
+									width: `calc(100% * ${editZoom})`,
+									height: `calc(100% * ${editZoom})`,
+									transform: `scale(${1 / editZoom})`,
+									transformOrigin: 'top left',
+								}
+					}
 				/>
 			</div>
 			{connection !== 'live' && (
