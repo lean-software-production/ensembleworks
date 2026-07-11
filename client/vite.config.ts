@@ -83,6 +83,29 @@ export default defineConfig({
 	define: {
 		__APP_VERSION__: JSON.stringify(appVersion()),
 	},
+	build: {
+		// One 3 MB chunk means every release invalidates the whole bundle. The
+		// heavyweights (tldraw, LiveKit, xterm, React) change only on dependency
+		// bumps, so give each a stable chunk that stays browser-cached across
+		// deploys; the remaining app chunk is what actually churns. All of them
+		// load at boot regardless — this is cache granularity, not lazy loading.
+		rollupOptions: {
+			output: {
+				manualChunks(id: string) {
+					if (!id.includes('node_modules')) return undefined
+					if (id.includes('/node_modules/@tldraw/') || id.includes('/node_modules/tldraw/'))
+						return 'tldraw'
+					if (id.includes('/node_modules/livekit-client/')) return 'livekit'
+					if (id.includes('/node_modules/@xterm/')) return 'xterm'
+					if (id.includes('/node_modules/react')) return 'react'
+					return undefined
+				},
+			},
+		},
+		// tldraw alone is legitimately ~1.5 MB minified; keep the warning armed
+		// just above it so it still fires on real regressions.
+		chunkSizeWarningLimit: 1800,
+	},
 	server: {
 		// Bind the IPv4 loopback explicitly. The dev server sits behind Caddy,
 		// which dials 127.0.0.1:5173 (see deploy/Caddyfile). The container also
