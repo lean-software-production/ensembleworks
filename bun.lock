@@ -102,6 +102,9 @@
       "name": "@ensembleworks/client",
       "version": "0.1.0",
       "dependencies": {
+        "@ensembleworks/canvas-editor": "*",
+        "@ensembleworks/canvas-model": "*",
+        "@ensembleworks/canvas-react": "*",
         "@ensembleworks/contracts": "*",
         "@tldraw/sync": "5.1.0",
         "@xterm/addon-clipboard": "^0.2.0",
