@@ -59,9 +59,9 @@ const noPathHtml = renderToStaticMarkup(
 assert.ok(noPathHtml.includes('no file'), 'renders the no-file placeholder when path is empty')
 
 console.log('ok: FileViewerShape — fileViewerContentFrom + static-render smoke')
-// House rule (see canvas-react/src/embed/embed-reconciler.test.ts): explicit
-// exit for any test whose import graph can hold the event loop open —
-// FileViewerShape -> presentStore -> tldraw's `atom` pulls in the tldraw
-// package at module scope, and that import keeps bun alive after the last
-// assertion (verified: without this the suite hung here indefinitely).
-process.exit(0)
+// No process.exit needed anymore: the tldraw-atom import that used to hold
+// bun's event loop open is gone — FileViewerShape now uses the tldraw-free
+// presentStoreV2 (see that file's header for the bundle-leak story) and the
+// remaining import graph (canvas-model/canvas-editor/canvas-react/
+// react-dom/server/theme) exits cleanly on its own — verified by running
+// this file directly under `bun` with a timeout.

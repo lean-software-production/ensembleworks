@@ -64,6 +64,13 @@
  * shape body in this contract cannot mutate the canvas document at all.
  * Every such gap is called out at its own shape body and summarized in this
  * unit's completion report. That parity work is G2-golden/Phase-4 territory.
+ * SINGLE-FOCUS INVARIANT: although focus state is per-body local, at most
+ * one body is ever 'focused' — guaranteed by useInteractionMode's
+ * CAPTURE-PHASE document pointerdown listener: the pointerdown that begins
+ * any focus gesture on body B lands outside a currently-focused body A's
+ * root, so A's click-outside exit fires (capture phase, before any
+ * bubble-phase handler B might stop) before B's own dblclick can set B
+ * focused.
  *
  * ---------------------------------------------------------------------------
  * NEKO/FILE-VIEWER EMBED RECLASSIFICATION (a Task-E2 finding, recorded here

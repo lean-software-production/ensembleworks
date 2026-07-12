@@ -115,6 +115,18 @@ export function RoadmapShape({ shape }: ShapeBodyProps) {
 
   useEffect(() => () => clearTimeout(copyTimer.current), [])
 
+  // Unmount guard for postOp's async continuations — the same
+  // don't-setState-after-unmount discipline as the fetch effect's
+  // `cancelled` flag above, in the ref form a useCallback (which has no
+  // cleanup of its own) needs.
+  const unmountedRef = useRef(false)
+  useEffect(
+    () => () => {
+      unmountedRef.current = true
+    },
+    []
+  )
+
   const postOp = useCallback(
     (op: RoadmapOp) => {
       setDoc((d) => (d ? applyLocalOp(d, op) : d))
@@ -124,9 +136,11 @@ export function RoadmapShape({ shape }: ShapeBodyProps) {
         body: JSON.stringify({ room: getRoomId(), name: roadmapId, ops: [op] }),
       })
         .then((r) => {
-          if (!r.ok) setRefresh((n) => n + 1)
+          if (!r.ok && !unmountedRef.current) setRefresh((n) => n + 1)
         })
-        .catch(() => setRefresh((n) => n + 1))
+        .catch(() => {
+          if (!unmountedRef.current) setRefresh((n) => n + 1)
+        })
     },
     [roadmapId]
   )

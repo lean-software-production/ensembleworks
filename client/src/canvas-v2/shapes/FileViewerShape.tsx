@@ -3,11 +3,13 @@
  * from the agent home rendered as a sandboxed iframe portal (HTML reports,
  * rendered markdown, …), pointed at `/files/{path}`.
  *
- * REUSED: `presentStore` from client/src/file-viewer/presentStore.ts as-is
- * (a bare get/set over a tldraw `atom` — no React binding required, so this
- * body just calls `.get()`/`.set()` directly rather than importing tldraw's
- * `useValue` into a canvas-v2 module; see DROPPED below for the reactivity
- * this costs).
+ * PRESENT STORE: uses canvas-v2's OWN `presentStoreV2` (a plain get/set
+ * module), NOT the legacy client/src/file-viewer/presentStore.ts — the
+ * legacy store's tldraw `atom` pulled the whole tldraw package into the v2
+ * import graph at module scope (quality-review finding; probe-measured
+ * before/after in presentStoreV2.ts's header). The two stores are
+ * INDEPENDENT by design — see presentStoreV2.ts for why that's acceptable
+ * (one engine per room per user).
  *
  * DROPPED for this v1 port, both are STRUCTURAL gaps (not cut for scope) —
  * this contract gives a shape body no way to reach them at all:
@@ -40,8 +42,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { Shape } from '@ensembleworks/canvas-model'
 import type { ShapeBodyProps } from '@ensembleworks/canvas-react'
-import { presentStore } from '../../file-viewer/presentStore.js'
 import { wm } from '../../theme.js'
+import { presentStoreV2 as presentStore } from './presentStoreV2.js'
 import { canvasV2EmbedLifecycles } from './embedLifecycles.js'
 import { useInteractionMode } from './useInteractionMode.js'
 
