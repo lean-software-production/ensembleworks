@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { checkInvariants } from '@ensembleworks/canvas-model'
+import { checkInvariants, stableStringify } from '@ensembleworks/canvas-model'
 import { dumpModel } from '@ensembleworks/canvas-doc'
 import { SyncClientPeer, makePair } from '@ensembleworks/canvas-sync'
 import { DocumentActor } from './actor.ts'
@@ -420,4 +420,104 @@ const shape = (id: string, over: any = {}) =>
 
 	rmSync(dir, { recursive: true, force: true })
 	console.log('ok: actor — constructor releases the store fd when the load path throws')
+}
+
+// ---------------------------------------------------------------------------
+// Test 10 — dedupe repair × crash recovery COMPOSITION. The duplicate-shape
+// reconnect race (two clients delete+recreate the same id offline, then both
+// reconnect — canvas-sync client-peer.test.ts scenario 8) is deduped by the
+// server's post-import repair; this pins that the deduped outcome also
+// SURVIVES a true crash (actor dropped with NO close(), so no final compact —
+// recovery replays the raw append-log, including both divergent backfills,
+// and the load-path repair must land on the same single content winner).
+// ---------------------------------------------------------------------------
+{
+	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-v2-actor-dedupe-crash-'))
+	const roomId = 'room-dedupe-crash'
+
+	const actor = new DocumentActor({ dir, roomId, peerId: 1n })
+	const [serverEndA, clientEndA] = makePair()
+	const [serverEndB, clientEndB] = makePair()
+	actor.connect(serverEndA)
+	actor.connect(serverEndB)
+	const clientA = new SyncClientPeer({ peerId: 91n, transport: clientEndA })
+	const clientB = new SyncClientPeer({ peerId: 92n, transport: clientEndB })
+
+	// Seed a shared shape:x through A; converge to B via the actor.
+	clientA.doc.putPage({ id: 'page:p', name: 'P' })
+	clientA.doc.commit()
+	clientA.putShape(shape('shape:x'))
+	assert.ok(clientB.doc.getShape('shape:x'), 'precondition: converged before the split')
+
+	// Both go offline (transports die under them).
+	clientEndA.close()
+	clientEndB.close()
+
+	// Both delete + recreate shape:x offline with DIFFERENT content. Derive the
+	// expected winner from the election rule itself (smallest stableStringify
+	// of the whole entry — see canvas-model/stable-stringify.ts) rather than
+	// hardcoding which kind wins.
+	const recreatedA = shape('shape:x', { kind: 'note', x: 500 })
+	const recreatedB = shape('shape:x', { kind: 'geo' })
+	const expectedWinner =
+		stableStringify(recreatedA) < stableStringify(recreatedB) ? recreatedA : recreatedB
+	assert.equal(expectedWinner.kind, 'geo', 'sanity: the entries first diverge at "kind", and "geo" < "note"')
+	clientA.doc.deleteShape('shape:x')
+	clientA.doc.putShape(recreatedA)
+	clientA.doc.commit()
+	clientB.doc.deleteShape('shape:x')
+	clientB.doc.putShape(recreatedB)
+	clientB.doc.commit()
+
+	// Both reconnect: full-history backfills land as changed imports, so the
+	// actor's post-import repair dedupes — and, by the durable-first contract,
+	// both raw backfills AND the dedupe repair delta hit the append-log.
+	const [serverEndA2, clientEndA2] = makePair()
+	actor.connect(serverEndA2)
+	clientA.reconnect(clientEndA2)
+	const [serverEndB2, clientEndB2] = makePair()
+	actor.connect(serverEndB2)
+	clientB.reconnect(clientEndB2)
+	assert.equal(
+		actor.peer.doc.listShapes().filter((s) => s.id === 'shape:x').length,
+		1,
+		'precondition: the live actor deduped after the reconnect race',
+	)
+
+	// TRUE CRASH: drop the actor with NO close() — no final compact, recovery
+	// must come from the raw append-log alone.
+	clientA.close()
+	clientB.close()
+	const recovered = new DocumentActor({ dir, roomId, peerId: 1n })
+	const [serverEndF, clientEndF] = makePair()
+	recovered.connect(serverEndF)
+	const freshClient = new SyncClientPeer({ peerId: 93n, transport: clientEndF })
+	freshClient.requestSync()
+
+	for (const [name, doc] of [
+		['recovered actor', recovered.peer.doc],
+		['fresh client', freshClient.doc],
+	] as const) {
+		assert.equal(
+			doc.listShapes().filter((s) => s.id === 'shape:x').length,
+			1,
+			`${name} holds exactly ONE shape:x after crash recovery`,
+		)
+		assert.equal(
+			doc.getShape('shape:x')!.kind,
+			expectedWinner.kind,
+			`${name}'s survivor is the stableStringify content winner`,
+		)
+		assert.deepEqual(checkInvariants(dumpModel(doc)), [], `${name} is invariant-clean`)
+	}
+
+	// The recovered id is genuinely deletable end-to-end (no undeletable
+	// survivor hiding behind a second physical node).
+	freshClient.doc.deleteShape('shape:x')
+	freshClient.doc.commit()
+	assert.equal(recovered.peer.doc.getShape('shape:x'), undefined, 'actor: shape:x fully deleted end-to-end')
+	assert.equal(freshClient.doc.getShape('shape:x'), undefined, 'fresh client: shape:x fully deleted')
+
+	rmSync(dir, { recursive: true, force: true })
+	console.log('ok: actor — dedupe repair composes with crash recovery (single content winner survives)')
 }
