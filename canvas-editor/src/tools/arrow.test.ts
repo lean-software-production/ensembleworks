@@ -200,4 +200,65 @@ function setup() {
   console.log('ok: self-binding (same target both ends) is allowed')
 }
 
+// ============================================================================
+// 7. Threshold gate -- no abandoned-draw orphan: a bare click (down+up, no
+//    movement) and a sub-threshold wiggle both leave ZERO shapes and ZERO
+//    bindings in the doc. The exposure this pins (red-first): an ungated
+//    StartArrow on pointerdown commits immediately, so a click with no
+//    completing gesture would permanently orphan a zero-length arrow
+//    visible to all peers -- create.ts by contrast commits nothing until
+//    threshold-crossing/click-complete, and this tool must match.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  run(editor, tool, script().down(50, 50).up().events()) // bare click, empty canvas
+  assert.equal(editor.doc.listShapes().length, 0, 'a bare click creates NO arrow shape')
+  assert.equal(editor.doc.listBindings().length, 0, 'and no binding')
+
+  run(editor, tool, script().down(50, 50).move(52, 51).up().events()) // sub-threshold wiggle (< 4px)
+  assert.equal(editor.doc.listShapes().length, 0, 'a sub-threshold wiggle creates NO arrow shape either')
+  console.log('ok: bare click / sub-threshold gesture commits nothing (no abandoned-draw orphan)')
+}
+
+// ============================================================================
+// 8. No bindings mid-draw: start unbound on empty canvas, drag the preview
+//    OVER shape:b and then OVER shape:a before releasing on shape:a --
+//    listBindings() must be EMPTY at every intermediate move (a speculative
+//    mid-draw binding could never be retracted when the pointer drags off
+//    the shape again -- see arrow.ts's module header), and pointerup writes
+//    EXACTLY ONE binding, to the shape under the final release point.
+// ============================================================================
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(geoShape('shape:b', 200, 0, 100, 100)) // spans x [200,300]
+  doc.putShape(geoShape('shape:a', 600, 0, 100, 100)) // spans x [600,700]
+  doc.commit()
+
+  let state = tool.initialState
+  const dispatch = (events: readonly import('../input.js').InputEvent[]) => {
+    for (const event of events) {
+      const result = tool.onEvent(state, event)
+      state = result.state
+      if (result.intents.length > 0) editor.applyAll(result.intents)
+    }
+  }
+
+  dispatch(script().down(400, 300).events()) // empty canvas -- unbound start
+  assert.equal(editor.doc.listBindings().length, 0, 'no binding at pointerdown')
+
+  const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
+  dispatch([{ type: 'pointermove', x: 250, y: 50, buttons: 1, modifiers: NEUTRAL, t: 100 }]) // over shape:b
+  assert.equal(editor.doc.listBindings().length, 0, 'no binding while the preview hovers shape:b mid-draw')
+
+  dispatch([{ type: 'pointermove', x: 650, y: 50, buttons: 1, modifiers: NEUTRAL, t: 116 }]) // over shape:a
+  assert.equal(editor.doc.listBindings().length, 0, 'no binding while the preview hovers shape:a mid-draw')
+
+  dispatch([{ type: 'pointerup', x: 650, y: 50, buttons: 0, modifiers: NEUTRAL, t: 132 }]) // release on shape:a
+  const bindings = editor.doc.listBindings()
+  assert.equal(bindings.length, 1, 'exactly ONE binding after pointerup')
+  assert.equal(bindings[0]!.toId, 'shape:a', 'bound to the shape under the RELEASE point, not any hovered-over shape')
+  assert.ok(bindings[0]!.id.endsWith('-end'), 'and it is the END binding')
+  console.log('ok: no bindings are written mid-draw; exactly one end-binding at pointerup')
+}
+
 console.log('ok: arrow tool FSM + bindings')

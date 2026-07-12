@@ -1,7 +1,29 @@
-// The arrow tool: idle -> drawing, back to idle on pointerup. Built against
-// the shared ToolContext (tool-context.ts) exactly like select/create — see
-// that module's doc comment for the once-per-commit hitTestTopmost/snapshot
-// refresh cadence this tool relies on for resolving a binding target.
+// The arrow tool: idle -> pointing -> drawing (threshold-crossed), back to
+// idle on pointerup. Built against the shared ToolContext (tool-context.ts)
+// exactly like select/create — see that module's doc comment for the
+// once-per-commit hitTestTopmost/snapshot refresh cadence this tool relies
+// on for resolving a binding target.
+//
+// THRESHOLD GATE (same discipline as create.ts — nothing commits until the
+// gesture proves it's a drag): pointerdown only records the down point;
+// StartArrow (the first doc write) fires at the first pointermove that
+// crosses DRAG_THRESHOLD, and a bare click / sub-threshold wiggle commits
+// NOTHING (idle again on pointerup, zero intents — a click-only arrow would
+// be a zero-length orphan, useless by construction). Without this gate a
+// pointerdown with no completing gesture would permanently orphan a
+// zero-length arrow visible to all peers. Pinned by arrow.test.ts's
+// bare-click test.
+//
+// ABANDONMENT GAP (shared across ALL drag-capable tools — create.ts's
+// drag-to-size and this tool alike; noted here because the arrow preview is
+// the most user-visible case): once the threshold IS crossed, the in-flight
+// preview shape is committed to the doc on every pointermove (see the
+// COMMIT CADENCE note in the drawing state), so a gesture that never
+// reaches pointerup — tool switched mid-drag, tab close/WS disconnect,
+// component unmount — leaves the preview shape permanently in the doc,
+// visible to every peer. The cancel path (Escape/blur/unmount emitting
+// DeleteShapes for the in-flight id) is owned by the Seam D/G3 wiring that
+// owns those lifecycle events; this package's FSMs never see them.
 //
 // LIVE PREVIEW, NO SPECULATIVE BINDINGS (the "CreateShape-upsert pattern or
 // props update" choice the task spec asks for): every pointermove during
@@ -18,7 +40,7 @@
 // only WRITE a binding, never clear one — see intents.ts), leaving a stale/
 // wrong binding from a shape the arrow no longer visually touches. Resolving
 // once, at the end, means there is only ever one binding-writing moment to
-// reason about.
+// reason about. Pinned by arrow.test.ts's no-bindings-mid-draw test.
 import { resolveArrowAnchor, type Shape } from '@ensembleworks/canvas-model'
 import type { ArrowBinding, Intent } from '../intents.js'
 import { crossedThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
@@ -27,12 +49,22 @@ import type { ToolContext } from './tool-context.js'
 interface Idle {
   readonly mode: 'idle'
 }
+interface Pointing {
+  readonly mode: 'pointing'
+  /** SCREEN point of the pointerdown — the arrow's start point (converted
+   * to world at threshold-crossing time) AND the crossedThreshold origin. */
+  readonly downScreen: { readonly x: number; readonly y: number }
+  /** The pointerdown's timestamp, kept for makeId: the id is minted at
+   * threshold-crossing time but derives from the DOWN event's own t/x/y —
+   * the gesture's identity is where it started, not where it crossed. */
+  readonly downT: number
+}
 interface Drawing {
   readonly mode: 'drawing'
   readonly id: string
 }
 
-export type ArrowState = Idle | Drawing
+export type ArrowState = Idle | Pointing | Drawing
 
 const IDLE: ArrowState = { mode: 'idle' }
 
@@ -74,25 +106,58 @@ export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
       switch (state.mode) {
         case 'idle': {
           if (event.type !== 'pointerdown') return { state, intents: [] }
-          const worldPt = worldOf(event)
-          const id = makeId(event, editor.random)
-          // SELF-BINDING (OURS, matching tldraw parity): allowed. Start and
-          // end may bind to the SAME target shape — no special-casing here
-          // or in routeArrow (canvas-model/src/arrow-route.ts), which
-          // resolves each terminal's binding independently regardless of
-          // whether they happen to name the same toId.
-          const shape: Shape = {
-            id, kind: 'arrow', parentId: pageId, index: 'a1', x: worldPt.x, y: worldPt.y, rotation: 0,
-            isLocked: false, opacity: 1, meta: {}, props: { end: { x: 0, y: 0 } },
-          } as Shape
-          const fromBinding = bindingAt(worldPt, id)
-          return { state: { mode: 'drawing', id }, intents: [{ type: 'StartArrow', shape, fromBinding }] }
+          // No doc write yet — see the THRESHOLD GATE note in the header.
+          return { state: { mode: 'pointing', downScreen: { x: event.x, y: event.y }, downT: event.t }, intents: [] }
+        }
+
+        case 'pointing': {
+          if (event.type === 'pointermove') {
+            const here = crossedThreshold(state.downScreen, event)
+            if (!here) return { state, intents: [] }
+            const startWorld = worldOf(state.downScreen)
+            const id = makeId({ t: state.downT, x: state.downScreen.x, y: state.downScreen.y }, editor.random)
+            // SELF-BINDING (OURS, matching tldraw parity): allowed. Start
+            // and end may bind to the SAME target shape — no special-casing
+            // here or in routeArrow (canvas-model/src/arrow-route.ts), which
+            // resolves each terminal's binding independently regardless of
+            // whether they happen to name the same toId.
+            const shape: Shape = {
+              id, kind: 'arrow', parentId: pageId, index: 'a1', x: startWorld.x, y: startWorld.y, rotation: 0,
+              isLocked: false, opacity: 1, meta: {}, props: { end: { x: 0, y: 0 } },
+            } as Shape
+            const fromBinding = bindingAt(startWorld, id)
+            // StartArrow + the first live end-point preview share ONE batch
+            // (one commit — editor.ts's commit granularity): the arrow
+            // appears already stretched to the pointer, never as a
+            // zero-length flicker frame.
+            return {
+              state: { mode: 'drawing', id },
+              intents: [
+                { type: 'StartArrow', shape, fromBinding },
+                { type: 'CompleteArrow', id, end: worldOf(here) },
+              ],
+            }
+          }
+          // Bare click / sub-threshold gesture: abandon with ZERO doc writes
+          // (see the THRESHOLD GATE note in the header).
+          if (event.type === 'pointerup') return { state: IDLE, intents: [] }
+          return { state, intents: [] }
         }
 
         case 'drawing': {
           if (event.type === 'pointermove') {
             const worldPt = worldOf(event)
             // Live preview only — see the module header: no toBinding here.
+            //
+            // COMMIT CADENCE WATCH-ITEM (owned by the H3 perf rig): each of
+            // these per-pointermove CompleteArrow previews becomes ONE
+            // doc.commit() (script.ts's run() applies per event) — one sync
+            // frame per mouse move for the whole draw gesture. The
+            // ToolContext's lazy rebuild keeps the LOCAL index cost off
+            // this path; the wire/undo-granularity cost of per-move commits
+            // is unmeasured until H3 profiles it. Same note in select.ts's
+            // onDragging, create.ts's dragging state, and transform.ts's
+            // onResizing.
             return { state, intents: [{ type: 'CompleteArrow', id: state.id, end: worldPt }] }
           }
           if (event.type === 'pointerup') {
