@@ -42,6 +42,7 @@
  *   `LoroCanvasDoc.create` and so callers can pick something stable/debuggable
  *   per room if they want to, not because collision safety demands it here.
  */
+import { isDeepStrictEqual } from 'node:util'
 import { LoroCanvasDoc, dumpModel } from '@ensembleworks/canvas-doc'
 import { checkInvariants, type CanvasDocument } from '@ensembleworks/canvas-model'
 import { fromTldraw } from './convert.ts'
@@ -49,6 +50,14 @@ import { reconcile } from './reconcile.ts'
 
 export interface ShadowMetrics {
 	ticks: number
+	/**
+	 * Cumulative shape puts across all ticks. At steady state (no room edits
+	 * between ticks) the per-tick puts rate should be ~0 — a persistently
+	 * NONZERO puts rate at steady state is itself a churn alarm (e.g. the
+	 * key-order-sensitive comparison bug this module was patched for; measured
+	 * ~3.3ms steady-state vs ~64ms cold tick at 200 shapes). D3's driver may
+	 * add a puts-rate heuristic on top of this counter.
+	 */
 	puts: number
 	deletes: number
 	divergences: number
@@ -121,17 +130,43 @@ export class ShadowMirror {
 	}
 }
 
-// Structural comparison ignoring order; returns the first (well, a summary)
-// difference string or null. Normalizes by sorting shapes/bindings/pages by
-// id before a deep JSON comparison, so insertion-order differences between
-// the mirror and a freshly-converted target never register as a divergence.
-function diverges(a: CanvasDocument, b: CanvasDocument): string | null {
-	const norm = (d: CanvasDocument) => ({
-		shapes: [...d.shapes].sort((x, y) => x.id.localeCompare(y.id)).map((s) => ({ ...s })),
-		bindings: [...d.bindings].sort((x, y) => x.id.localeCompare(y.id)),
-		pages: [...d.pages].sort((x, y) => x.id.localeCompare(y.id)),
-	})
-	const na = JSON.stringify(norm(a))
-	const nb = JSON.stringify(norm(b))
-	return na === nb ? null : `mirror(${a.shapes.length} shapes) != source(${b.shapes.length} shapes)`
+// Structural comparison, fully order-independent, naming the first
+// difference (or null when equal). Two order dimensions must not register:
+// collection/insertion order (handled by comparing per sorted id, not per
+// position) and OBJECT KEY order — Loro's tree-node data map does not
+// round-trip JS key insertion order, so this must use isDeepStrictEqual,
+// never JSON.stringify (a stringify comparator false-positived a divergence
+// on every clean multi-key-prop mirror — shadow.test.ts case 5 pins this).
+function diverges(mirror: CanvasDocument, source: CanvasDocument): string | null {
+	return (
+		diffCollection('shape', mirror.shapes, source.shapes) ??
+		diffCollection('binding', mirror.bindings, source.bindings) ??
+		diffCollection('page', mirror.pages, source.pages)
+	)
+}
+
+// First difference between two id-keyed record collections, walked in sorted
+// id order: a record missing from / extra in the mirror, or the first record
+// whose content differs — naming the first differing field so the divergence
+// string is actionable (`shape shape:n differs (x: mirror vs source)`), not
+// just a count line.
+function diffCollection(
+	kind: 'shape' | 'binding' | 'page',
+	mirror: readonly { id: string }[],
+	source: readonly { id: string }[]
+): string | null {
+	const m = new Map(mirror.map((r) => [r.id, r]))
+	const s = new Map(source.map((r) => [r.id, r]))
+	const ids = [...new Set([...m.keys(), ...s.keys()])].sort()
+	for (const id of ids) {
+		const a = m.get(id)
+		const b = s.get(id)
+		if (!a) return `${kind} ${id} missing from mirror`
+		if (!b) return `${kind} ${id} extra in mirror`
+		if (isDeepStrictEqual(a, b)) continue
+		const keys = [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()
+		const field = keys.find((k) => !isDeepStrictEqual((a as any)[k], (b as any)[k]))
+		return `${kind} ${id} differs${field ? ` (${field}: mirror vs source)` : ''}`
+	}
+	return null
 }

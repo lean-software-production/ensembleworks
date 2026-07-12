@@ -26,6 +26,7 @@
  * let it propagate — a mirror tick failing loudly beats silently applying a
  * partial diff. ShadowMirror (D2) wraps tick() and counts the failure.
  */
+import { isDeepStrictEqual } from 'node:util'
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 import { dumpModel, type LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 
@@ -36,6 +37,14 @@ import { dumpModel, type LoroCanvasDoc } from '@ensembleworks/canvas-doc'
  * sets, unconditionally upserted/deleted every call — see the plan's Task D1
  * semantics note) — this is the plan's chosen definition, kept as-is.
  * One commit() at the end.
+ *
+ * Absent-parent tolerance: a target shape whose parentId names a shape absent
+ * from `target` inherits putShape's bulk-load tolerance — its real Loro node
+ * parks at the tree root while data.parentId retains the missing id (the
+ * pre-existing LoroCanvasDoc split-brain-avoidance behavior; see
+ * placeInTree's comment). This is deterministic and idempotent, and it IS
+ * reachable here: shadow consumes arbitrary live-room data, and fromTldraw
+ * drops unknown shape types, which can orphan a surviving child's parentId.
  */
 export function reconcile(doc: LoroCanvasDoc, target: CanvasDocument): { puts: number; deletes: number } {
 	const current = dumpModel(doc)
@@ -92,8 +101,17 @@ function depth(doc: CanvasDocument, id: string, guard = 0): number {
 	return 1 + depth(doc, s.parentId, guard + 1)
 }
 
+// Envelope + deep props/meta equality. props/meta MUST be compared
+// order-independently (isDeepStrictEqual, NOT JSON.stringify): Loro's
+// tree-node data map does not round-trip JS object key insertion order
+// (probe: set {n,color,z,b} → get {n,z,b,color}), so a stringify comparison
+// against the dumped mirror re-puts every 2+-key shape on every tick forever
+// — permanent churn on an unchanged target (reconcile.test.ts case 6 pins
+// this). `kind` is compared too (ratified ruling: reconcile's contract is
+// bring-in-line; no carve-out for "kind never changes in real tldraw").
 function shallowEqualShape(a: Shape, b: Shape): boolean {
 	return (
+		a.kind === b.kind &&
 		a.parentId === b.parentId &&
 		a.index === b.index &&
 		a.x === b.x &&
@@ -101,8 +119,8 @@ function shallowEqualShape(a: Shape, b: Shape): boolean {
 		a.rotation === b.rotation &&
 		a.isLocked === b.isLocked &&
 		a.opacity === b.opacity &&
-		JSON.stringify(a.props) === JSON.stringify(b.props) &&
-		JSON.stringify(a.meta) === JSON.stringify(b.meta)
+		isDeepStrictEqual(a.props, b.props) &&
+		isDeepStrictEqual(a.meta, b.meta)
 	)
 }
 

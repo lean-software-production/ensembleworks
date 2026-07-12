@@ -72,27 +72,47 @@ mirror.tick() // ticks=2
 mirror.tick() // ticks=3
 mirror.tick() // ticks=4
 
-// --- 3) force a NON-HEALABLE divergence: putShape directly on the mirror,
-// out-of-band, with every field identical to what reconcile computes EXCEPT
-// `kind`. reconcile's shallowEqualShape (by design — a shape's kind is
-// immutable per id in real tldraw; you cannot morph a note into a frame
-// while keeping its id) does not compare `kind`, so this survives reconcile
-// indefinitely — the exact kind of latent gap divergence-detection exists to
-// catch. A corruption reconcile itself would silently repair (e.g. mutating
-// x/y) would NOT prove this test, since reconcile heals it before the
-// post-reconcile comparison in checkDivergence ever sees it. ---
+// --- 3) divergence tripwire, via FAULT INJECTION: simulate an upstream
+// reconcile/converter bug. In a correct pipeline reconcile heals any mirror
+// corruption before checkDivergence ever sees it (that is its entire job),
+// so a REAL lasting divergence can only come from a bug in that pipeline.
+// We inject exactly that: (a) corrupt the mirror out-of-band (shape:n's x
+// pushed to 12345), then (b) stub the mirror doc's putShape to a no-op for
+// one tick — standing in for a reconcile/apply bug that fails to bring the
+// doc in line. The check tick then fires on genuinely-unhealed state.
+// Afterwards the stub is removed and a later healthy cycle must heal the
+// corruption with NO further divergences. ---
 const targetNote = fromTldraw(records).byId.get('shape:n')!
-mirror.doc.putShape({ ...targetNote, kind: 'bogus-kind' } as any)
+mirror.doc.putShape({ ...targetNote, x: 12345 } as any) // out-of-band corruption
 mirror.doc.commit()
+// Inject the fault: an instance own-property shadows the prototype method,
+// so reconcile's doc.putShape(s) calls hit the no-op.
+;(mirror.doc as any).putShape = () => {}
 
-mirror.tick() // ticks=5 — the checkEvery boundary
+mirror.tick() // ticks=5 — the checkEvery boundary; reconcile tried and "failed" to heal
 {
 	const m = mirror.metrics()
 	assert.equal(m.ticks, 5)
-	assert.equal(m.divergences, 1)
-	assert.ok(m.lastDivergence, 'lastDivergence is a non-null description')
+	assert.equal(m.divergences, 1, 'check tick fired on genuinely-unhealed state')
+	// Fix-3 pin: the divergence string names the differing element and field,
+	// not just a shape-count summary line.
+	assert.ok(
+		m.lastDivergence?.includes('shape shape:n differs') && m.lastDivergence.includes('(x:'),
+		`lastDivergence names the element + field, got: ${m.lastDivergence}`
+	)
 	assert.equal(m.shapeCount, fromTldraw(records).shapes.length)
 	assert.ok(m.snapshotBytes > 0, 'snapshotBytes sampled on the check-tick')
+}
+
+// Remove the fault: the next healthy cycle heals, and the next check tick
+// (ticks=10) reports NO new divergence.
+delete (mirror.doc as any).putShape
+for (let i = 0; i < 5; i++) mirror.tick() // ticks 6..10
+{
+	const m = mirror.metrics()
+	assert.equal(m.ticks, 10)
+	assert.equal(m.divergences, 1, 'no further divergences once the injected fault is removed')
+	assert.equal(dumpModel(mirror.doc).byId.get('shape:n')?.x, 99, 'healthy reconcile healed the corruption')
 }
 
 // --- 4) a getRecords that throws → tickErrors 1; a subsequent healthy tick recovers ---
@@ -121,6 +141,26 @@ mirror2.tick() // ticks=2, recovers
 	assert.equal(m.tickErrors, 1, 'no new error on the healthy tick')
 	assert.ok(m.puts >= 1, 'the healthy tick actually reconciled')
 	assert.deepEqual(sortedIds(dumpModel(mirror2.doc).shapes), sortedIds(fromTldraw(goodRecords).shapes))
+}
+
+// --- 5) ORDER-INDEPENDENT DIVERGENCE CHECK: a completely CLEAN mirror over
+// records with multi-key props must report divergences:0 through a full
+// checkEvery cycle. Loro does not preserve JS key insertion order in
+// tree-node data, so a key-order-sensitive comparator (JSON.stringify)
+// false-positives here — the mirror is semantically identical to the source,
+// only key order differs. The frame()'s 4-key and note()'s 2-key props are
+// enough to trip it. Also pins the reconcile side end-to-end: puts must stay
+// at the initial load count (no per-tick key-order churn). ---
+const cleanRecords: any[] = [page, frame(), note()]
+const mirror3 = new ShadowMirror('room3', 3n, () => cleanRecords, 5)
+for (let i = 0; i < 5; i++) mirror3.tick()
+{
+	const m = mirror3.metrics()
+	assert.equal(m.ticks, 5)
+	assert.equal(m.divergences, 0, 'clean mirror must NOT false-positive on Loro key reordering')
+	assert.equal(m.lastDivergence, null)
+	assert.equal(m.tickErrors, 0)
+	assert.equal(m.puts, 2, 'initial load puts only (frame+note) — no steady-state churn from key reordering')
 }
 
 console.log('ok: shadow')

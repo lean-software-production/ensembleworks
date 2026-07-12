@@ -146,4 +146,52 @@ const r5 = reconcile(doc3, withTextEdited)
 assert.deepEqual(r5, { puts: 1, deletes: 0 })
 assert.equal(plainText(byId(dumpModel(doc3), 'shape:note')), 'updated')
 
+// --- 6) ORDER-INDEPENDENT COMPARISON: Loro's tree-node data map does NOT
+// round-trip JS object key insertion order (probe: set {n,color,z,b} → get
+// {n,z,b,color}). A key-order-sensitive comparison (JSON.stringify) against
+// the dumped mirror therefore reports "changed" forever for any shape with
+// 2+ prop keys — permanent {puts:1} churn on an unchanged target, the exact
+// failure reconcile exists to prevent. Every earlier case in this file used
+// single-key (or intentionally-changed) props, which MASKED this. ---
+const doc4 = LoroCanvasDoc.create({ peerId: 4n })
+const multiKey = makeDocument({
+	pages: [{ id: 'page:p', name: 'Page' }],
+	shapes: [
+		{
+			id: 'shape:m',
+			kind: 'geo',
+			parentId: 'page:p',
+			props: { n: 1, color: 'red', z: true, b: 'x' },
+			...base(),
+			meta: { alpha: 1, beta: 2 },
+		} as any,
+	],
+	bindings: [],
+})
+const r6a = reconcile(doc4, multiKey)
+assert.deepEqual(r6a, { puts: 1, deletes: 0 })
+const r6b = reconcile(doc4, multiKey)
+assert.deepEqual(r6b, { puts: 0, deletes: 0 }, 'multi-key props: steady state must be {0,0}, not key-order churn')
+
+// --- 7) kind joins the comparator (ratified ruling: reconcile's contract is
+// bring-in-line, no principled carve-out for kind): a kind-only change on an
+// otherwise identical shape must be re-put. ---
+const kindChanged = makeDocument({
+	pages: [{ id: 'page:p', name: 'Page' }],
+	shapes: [
+		{
+			id: 'shape:m',
+			kind: 'note', // was 'geo'
+			parentId: 'page:p',
+			props: { n: 1, color: 'red', z: true, b: 'x' },
+			...base(),
+			meta: { alpha: 1, beta: 2 },
+		} as any,
+	],
+	bindings: [],
+})
+const r7 = reconcile(doc4, kindChanged)
+assert.deepEqual(r7, { puts: 1, deletes: 0 }, 'kind-only change is a real change')
+assert.equal(byId(dumpModel(doc4), 'shape:m').kind, 'note')
+
 console.log('ok: reconcile')
