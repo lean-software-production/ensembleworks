@@ -218,10 +218,12 @@ function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolCo
 }
 
 // 9. EmbedHost, rendered directly: the ACTIVE case shows the embed body
-//    with normal (visible) wrapper styling. EmbedHost's own controller
-//    always starts 'active' (renderToStaticMarkup never runs the tick
-//    effect — react-dom/server runs no effects at all, see
-//    viewport.test.ts's header), so the SUSPENDED case is instead proven
+//    with normal (visible) wrapper styling. Under renderToStaticMarkup
+//    EmbedHost has NO controller at all (the controller is created in a
+//    mount EFFECT — EmbedHost.tsx's "ONE CONTROLLER PER COMMIT LIFETIME,
+//    RE-ARMABLE" block — and react-dom/server runs no effects, see
+//    viewport.test.ts's header), so the rendered state is the documented
+//    'active' fallback; the SUSPENDED case is instead proven
 //    via `EmbedBodyFrame` — the PURE render function EmbedHost delegates
 //    to, factored out for exactly this reason (see EmbedHost.tsx's module
 //    header) — rendered with an explicit `state: 'suspended'` prop: the
@@ -237,9 +239,10 @@ function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolCo
 
   const editorState: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null })
 
-  // ACTIVE, via the real stateful EmbedHost: visible=true, tick=0 — the
-  // controller starts 'active' and a construction-time render observes
-  // exactly that.
+  // ACTIVE, via the real stateful EmbedHost: no effects run under
+  // renderToStaticMarkup, so this observes the pre-controller 'active'
+  // fallback (see the block comment above). The LIVE mount path — real
+  // controller, real ticks, StrictMode — is embed-reconciler.test.ts's job.
   const activeHtml = renderToStaticMarkup(
     createElement(EmbedHost, { shape: embedShapeVisible, snapshot: doc, editorState, visible: true, tick: 0, suspendAfterTicks: 1 }),
   )

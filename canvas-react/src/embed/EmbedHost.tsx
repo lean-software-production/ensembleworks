@@ -53,18 +53,56 @@
 // the whole point) — so individual ported embed bodies never have to
 // reimplement this.
 //
-// ONE CONTROLLER PER MOUNT, LAZILY, VIA A REF (StrictMode-safe — this is
-// the React-docs-blessed "create an expensive object once, in render"
-// pattern, not a side effect smuggled into render): `controllerRef.current`
-// starts `null` and is set exactly once, the first time this component
-// renders; React's ref persists across StrictMode's dev-only double-
-// invocation of a component's render body, so the `=== null` guard
-// prevents a second controller (and hence a second `onMount`) even though
-// the render function itself runs twice. `useEffect`s (not the render body)
-// own advancing the tick machine and disposing on unmount — both are
-// ordinary, safe side-effect timing; the ONE deliberate render-time side
-// effect is the lazy controller construction, which is safe for the reason
-// just given.
+// ONE CONTROLLER PER COMMIT LIFETIME, RE-ARMABLE (StrictMode-safe — FIXED
+// after a reviewer probe with a real react-dom/client + StrictMode
+// reconciler proved the original design dead-on-arrival in dev): the
+// controller is created in a MOUNT EFFECT (commit-scoped), and that
+// effect's cleanup both disposes the controller AND resets
+// `controllerRef.current = null` so the effect's re-run creates a FRESH
+// controller. Why this exact shape is load-bearing: React StrictMode
+// (dev-only — and client/src/main.tsx wraps the whole app in it) simulates
+// a remount on every initial mount — mount → run effects → run cleanups →
+// re-run effects, with NO re-render in between. The original design (lazy
+// ref-init in the render body + a dispose-only cleanup) permanently killed
+// the controller under that simulation: the cleanup disposed the one
+// controller (disposed=true, no re-arm), the ref still pointed at the dead
+// object, and since no render intervened before the effects re-ran,
+// nothing ever recreated it — every subsequent tick() was a documented
+// no-op and the embed stayed frozen 'active' forever, silently defeating
+// the entire suspend/resume contract in dev (probe-verified: lifecycle
+// calls were ["mount","unmount"] and never moved again; pinned red-first
+// by embed-reconciler.test.ts). Prior art for this hazard class elsewhere
+// in this repo: client/src/av/AvOverlay.tsx (StrictMode's mount-only
+// cleanup vs a local-ref dedupe — reads the bridge, not a ref, for the
+// same reason) and client/src/kernel/roomHooks.ts (cleanup returned
+// explicitly "for StrictMode double-mount and real unmounts").
+//
+// THE SIMULATED REMOUNT'S onUnmount+onMount PAIR IS CORRECT, NOT A BUG TO
+// SUPPRESS: under StrictMode dev, the embed body's callbacks see mount →
+// unmount → mount on initial mount. That pair is semantically exactly what
+// a REAL remount produces, and producing it is StrictMode's whole job —
+// embed bodies' onMount/onUnmount are setup/teardown by contract, so a
+// body that tolerates a real remount (it must) tolerates this for free.
+// Deduping the pair away (e.g. an "already mounted once" latch) would hide
+// real remount bugs — precisely what StrictMode exists to surface.
+// Corollary: onMount now fires at COMMIT time (inside the mount effect),
+// never during render — ALSO more correct than the original: the "lazy ref
+// init in render" blessing covers object CREATION, not observable side
+// effects, and an embed body's onMount is an arbitrary side effect.
+//
+// STATE LAG (one render, by construction): the wrapper's rendered
+// `data-embed-state`/style reflect the controller's state AS OF THE
+// PREVIOUS render — `controller.tick()` runs in an effect AFTER the render
+// that delivered the new `tick`/`visible` props, and nothing here forces a
+// re-render on a state transition; the NEXT render (the next tick-prop
+// bump, ~1s later under G3's documented cadence) picks the new state up.
+// The lifecycle CALLBACKS (the part that actually pauses/resumes streams)
+// fire immediately, in the effect — only the visual hide/show lags one
+// tick. Accepted for v1: a freshly-suspended embed is off-screen by
+// definition, so a one-tick-late visibility:hidden is unobservable; the
+// resume direction shows one tick of hidden-while-visible, bounded by the
+// tick cadence. Pinned by embed-reconciler.test.ts's "state catches up on
+// the next render" assertions.
 //
 // TEST-HARNESS LIMITATION (same posture as Viewport.tsx's ACKNOWLEDGED
 // LIMITATION): this house rig has no DOM emulator (no jsdom/
@@ -186,29 +224,49 @@ export function EmbedBodyFrame({ shape, snapshot, editorState, state }: EmbedBod
 }
 
 export function EmbedHost({ shape, snapshot, editorState, visible, tick, suspendAfterTicks, lifecycle }: EmbedHostProps) {
-  // ONE controller for this EmbedHost's whole mount lifetime — see module
-  // header's "ONE CONTROLLER PER MOUNT" note for why this lazy-ref-init
-  // pattern is StrictMode-safe.
   const controllerRef = useRef<EmbedController | null>(null)
-  if (controllerRef.current === null) {
-    controllerRef.current = createEmbedController(lifecycle ?? {}, { suspendAfterTicks })
-  }
-  const controller = controllerRef.current
+  // Latest-value refs for the mount effect below (bound once per commit
+  // lifetime, empty deps) — same latest-ref pattern as Viewport.tsx's
+  // onInputRef: the effect must not close over one particular render's
+  // lifecycle/threshold, and re-subscribing on every prop change would
+  // wrongly dispose+recreate the controller (a spurious unmount/mount pair
+  // for a mere prop identity change).
+  const lifecycleRef = useRef(lifecycle)
+  lifecycleRef.current = lifecycle
+  const suspendAfterTicksRef = useRef(suspendAfterTicks)
+  suspendAfterTicksRef.current = suspendAfterTicks
+
+  // Controller lifetime = COMMIT lifetime. Declared BEFORE the tick effect
+  // so on any (re)mount this effect runs first and the tick effect below
+  // finds a live controller. The cleanup DISPOSES AND RE-ARMS (nulls the
+  // ref) — the load-bearing half of the StrictMode fix; see the module
+  // header's "ONE CONTROLLER PER COMMIT LIFETIME, RE-ARMABLE" block for the
+  // frozen-forever failure the dispose-only version caused, and
+  // embed-reconciler.test.ts for the red-first pin. Real unmount (a doc
+  // deletion — EmbedLayer's `.map()` simply stops rendering this EmbedHost
+  // once the shape leaves the snapshot) runs the same cleanup; the re-arm
+  // is then simply never followed by a re-run.
+  useEffect(() => {
+    controllerRef.current = createEmbedController(lifecycleRef.current ?? {}, { suspendAfterTicks: suspendAfterTicksRef.current })
+    return () => {
+      controllerRef.current?.dispose()
+      controllerRef.current = null // RE-ARM: a following effect re-run (StrictMode's simulated remount) creates a FRESH controller — see module header
+    }
+  }, [])
 
   // Advance the tick machine in an effect (deferred to commit, standard
   // React timing) whenever the tick counter or the visibility flag changes.
+  // `?.`: under renderToStaticMarkup effects never run at all, and even in
+  // a live reconciler this guard is belt-and-braces ordering tolerance —
+  // with both effects in this component, mount order is declaration order,
+  // so the controller exists by the time this runs.
   useEffect(() => {
-    controller.tick(visible)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `controller` is ref-stable for this mount's lifetime; re-running this effect for it would be a no-op anyway, but omitting it keeps the dep list to exactly "what actually changes"
+    controllerRef.current?.tick(visible)
   }, [tick, visible])
 
-  // Dispose exactly once, on real unmount (a doc deletion — see EmbedLayer,
-  // whose `.map()` simply stops rendering this EmbedHost once the shape
-  // leaves the snapshot, an ordinary React unmount).
-  useEffect(() => {
-    return () => controller.dispose()
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount/unmount only, deliberately empty deps
-  }, [])
-
-  return <EmbedBodyFrame shape={shape} snapshot={snapshot} editorState={editorState} state={controller.getState()} />
+  // 'active' fallback: before the mount effect has run (the very first
+  // render, and any renderToStaticMarkup render — no effects there at all)
+  // there is no controller yet; a brand-new embed is by definition active.
+  const state = controllerRef.current?.getState() ?? 'active'
+  return <EmbedBodyFrame shape={shape} snapshot={snapshot} editorState={editorState} state={state} />
 }

@@ -29,6 +29,23 @@
 // `worldBounds` is simpler and exactly as correct for this narrower job —
 // it also means EmbedLayer has no dependency on the shared SpatialIndex's
 // rebuild cadence at all.
+//
+// H3 WATCH-ITEM (cost trajectory, same profile-first posture as
+// Selection.tsx's H3 WATCH-ITEM and Arrows.tsx's viewport-cull note): this
+// layer's cost is O(embed-kind shapes IN THE DOC) per render — a filter +
+// worldBounds check over snapshot.shapes, plus one ALWAYS-MOUNTED EmbedHost
+// (DOM subtree and all) per embed shape, on-screen or not; that
+// always-mounted part is not an oversight, it is the layer's entire
+// contract (mount persistence is WHY it exists). Accepted for v1 because
+// embed counts are structurally small in practice: embeds are the
+// heavyweight kinds (terminal/iframe/screenshare — each one a live
+// session/process/stream a human deliberately created), so a room holds a
+// handful, not the hundreds-to-thousands the note/geo layers are sized
+// for. If dogfood ever produces embed-heavy rooms, the mitigations are
+// known and contained (suspend already pauses the streams; an
+// off-screen-longest LRU cap on mounted-but-suspended hosts would be the
+// next lever) — whether any of that is needed is H3's to MEASURE, not this
+// unit's to pre-build.
 import type { Bounds, CanvasDocument } from '@ensembleworks/canvas-model'
 import { worldBounds } from '@ensembleworks/canvas-model'
 import type { Camera, ToolContext } from '@ensembleworks/canvas-editor'
