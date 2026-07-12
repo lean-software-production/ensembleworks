@@ -383,7 +383,11 @@ export class LoroCanvasDoc implements CanvasDoc {
     // defense-in-depth backstop against repair()'s raw tree ops — cheap
     // relative to the list*() scans above, and correctness must not depend on
     // this method's internals staying in perfect lockstep with the index.
-    this.reindex()
+    // Skipped when the plan was empty: an empty plan (and therefore an empty
+    // dropAll) touches nothing above, so the index is provably still exact —
+    // this keeps the common idempotent repair() call (already-clean doc) from
+    // paying for a rebuild it doesn't need.
+    if (plan.length > 0) this.reindex()
     return plan
   }
   subscribe(listener: () => void): () => void { return this.doc.subscribe(() => listener()) }
