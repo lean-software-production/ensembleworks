@@ -11,42 +11,76 @@
  * clone before bun install.
  */
 import { execFileSync, execSync, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync } from 'node:fs'
-import { connect } from 'node:net'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import {
-	PORTS,
 	atLeast,
 	buildServices,
 	hold,
+	livekitDevConfigYaml,
 	originToString,
 	parseDotEnv,
 	parseToolVersions,
+	parsePortOffset,
 	parsePublicOrigin,
+	portsFor,
 	resolveMode,
 } from './dev-lib.mjs'
 import { runDoctor } from './dev-doctor.mjs'
 import { runController } from './dev-host.mjs'
+import { probePort } from './dev-net.mjs'
 
 export const repoDir = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
-const session = process.env.WORKSPACE_TMUX_SESSION ?? 'workspace'
-const tmuxConf = path.join(repoDir, 'deploy', 'tmux-ensembleworks.conf')
 
 // ---- role dispatch: controller (host) vs engine (in the container / native) --
 // The expected usage is from the HOST: there bin/dev drives the devcontainer
 // (up starts it; status/logs/… forward into it) and needs none of the engine's
 // Bun/tmux/caddy machinery — so dispatch to the controller here, before the
-// Bun-version gate and dev.env sourcing below. runController() never returns.
+// Bun-version gate and dev.env sourcing below. runController() never resolves
+// — every path exits the process — so nothing below this block runs for it.
+// The engine's offset resolution MUST stay below this dispatch: it defaults an
+// unset ENSEMBLEWORKS_PORT_OFFSET to '0' in process.env, which would destroy
+// the controller's unset-vs-0 distinction and make auto-pick unreachable.
 if (resolveMode(process.env) === 'controller') {
-	runController(repoDir, process.argv.slice(2))
+	await runController(repoDir, process.argv.slice(2))
 }
 // Engine mode (inside the container, or ENSEMBLEWORKS_NATIVE=1 on the host):
 process.stderr.write(
 	`bin/dev [${process.env.ENSEMBLEWORKS_IN_DEVCONTAINER === '1' ? 'devcontainer' : 'native'}] · executing natively\n`,
 )
+
+// ---- port offset: env > .local/port-offset (written by the host controller's
+// auto-pick; bind-mounted, so both sides read the same file) > 0. Everything
+// per-stack hangs off it: the port map, the tmux session, the data dir.
+// dev.env can't set this: it's resolved (right here) before dev.env is sourced
+// below, and the host controller never sources dev.env at all — use the env
+// var or .local/port-offset instead.
+function readLocalPortOffset() {
+	const f = path.join(repoDir, '.local', 'port-offset')
+	try {
+		return readFileSync(f, 'utf8').trim() || undefined
+	} catch {
+		return undefined
+	}
+}
+const rawOffset = process.env.ENSEMBLEWORKS_PORT_OFFSET || readLocalPortOffset()
+const parsedOffset = parsePortOffset(rawOffset)
+if (parsedOffset === null) {
+	console.error(
+		`bin/dev: invalid port offset '${rawOffset}' (ENSEMBLEWORKS_PORT_OFFSET or .local/port-offset) — use a non-negative integer, e.g. 100`,
+	)
+	process.exit(1)
+}
+export const portOffset = parsedOffset
+// Windows inherit the tmux server env; inline env in each cmd is authoritative,
+// this is belt-and-braces for anything spawned from a canvas terminal.
+process.env.ENSEMBLEWORKS_PORT_OFFSET = String(portOffset)
+export const ports = portsFor(portOffset)
+const session = process.env.WORKSPACE_TMUX_SESSION ?? (portOffset ? `workspace-${portOffset}` : 'workspace')
+const tmuxConf = path.join(repoDir, 'deploy', 'tmux-ensembleworks.conf')
 
 /** @param {string} bin */
 export const onPath = (bin) => spawnSync('which', [bin], { stdio: 'ignore' }).status === 0
@@ -100,8 +134,10 @@ if (existsSync(devEnvPath)) {
 	}
 }
 
+// Per-offset state root — two stacks must never share storage.
 const stateDir =
-	process.env.ENSEMBLEWORKS_DATA_DIR ?? path.join(homedir(), '.local', 'share', 'ensembleworks')
+	process.env.ENSEMBLEWORKS_DATA_DIR ??
+	path.join(homedir(), '.local', 'share', portOffset ? `ensembleworks-${portOffset}` : 'ensembleworks')
 // Storage geometry triple — the sync server REQUIRES all three and validates
 // them at startup (kernel/storage-geometry.ts). Nested as siblings under the
 // dev state root so the no-nesting rules pass on a single-disk dev box.
@@ -111,6 +147,7 @@ const databaseBackupsDir = path.join(stateDir, 'database-backups')
 const livekitConfPath =
 	process.env.ENSEMBLEWORKS_LIVEKIT_CONF ??
 	path.join(homedir(), '.config', 'ensembleworks', 'livekit-dev.yaml')
+const livekitGeneratedConf = path.join(stateDir, 'livekit-dev.generated.yaml')
 const whisperModel = process.env.WHISPER_MODEL ?? '/usr/local/share/whisper/ggml-base.bin'
 
 // LiveKit --node-ip for LAN voice: explicit env wins; else the LAN IP the
@@ -152,38 +189,24 @@ export function makeCtx() {
 			docker: onPath('docker'),
 		},
 		env: process.env,
+		ports,
+		portOffset,
+		livekitGeneratedConf,
 	}
 }
 
-// ---- health ------------------------------------------------------------------
-/** @param {string} host @param {number} port @param {number} timeoutMs */
-function probeAddr(host, port, timeoutMs) {
-	return new Promise((resolve) => {
-		const sock = connect({ port, host })
-		/** @param {boolean} ok */
-		const done = (ok) => {
-			sock.destroy()
-			resolve(ok)
-		}
-		sock.once('connect', () => done(true))
-		sock.once('error', () => done(false))
-		sock.setTimeout(timeoutMs, () => done(false))
-	})
-}
-
 /**
- * Node 22 binds localhost-listening services (vite) to ::1 while others sit
- * on 127.0.0.1 — a port is healthy when EITHER loopback family answers.
- * @param {number} port
+ * Offset stacks run LiveKit from a generated config (dev mode's ports are
+ * fixed). (Re)written on up/restart so a changed offset or LAN IP is picked up.
+ * @param {import('./dev-lib.mjs').ServiceCtx} ctx
  */
-export async function probePort(port, timeoutMs = 1000) {
-	const results = await Promise.all([
-		probeAddr('127.0.0.1', port, timeoutMs),
-		probeAddr('::1', port, timeoutMs),
-	])
-	return results.some(Boolean)
+function ensureLivekitGeneratedConf(ctx) {
+	if (!ctx.portOffset || ctx.livekitConf || !ctx.has.livekit) return
+	mkdirSync(stateDir, { recursive: true })
+	writeFileSync(livekitGeneratedConf, livekitDevConfigYaml(ctx.ports, ctx.livekitNodeIp))
 }
 
+// ---- health ------------------------------------------------------------------
 /** @param {import('./dev-lib.mjs').Service['health']} health */
 async function probe(health) {
 	if (!health) return null
@@ -221,7 +244,9 @@ async function up(flags) {
 	mkdirSync(dataDir, { recursive: true })
 	mkdirSync(databaseDir, { recursive: true })
 	mkdirSync(databaseBackupsDir, { recursive: true })
-	const services = buildServices(makeCtx())
+	const upCtx = makeCtx()
+	ensureLivekitGeneratedConf(upCtx)
+	const services = buildServices(upCtx)
 	const enabled = services.filter((s) => s.enabled)
 	if (sessionRunning()) {
 		tmux('set-environment', '-g', 'ENSEMBLEWORKS_TMUX_CONF', tmuxConf)
@@ -255,13 +280,13 @@ async function up(flags) {
 /** @param {import('./dev-lib.mjs').Service[]} enabled */
 function cheatSheet(enabled) {
 	const ctx = makeCtx()
-	const url = originToString(ctx.publicOrigin) ?? `http://localhost:${PORTS.caddy}`
+	const url = originToString(ctx.publicOrigin) ?? `http://localhost:${ports.caddy}`
 	const voice =
 		enabled.some((s) => s.name === 'livekit') && ctx.livekitNodeIp
-			? `\n  voice: LiveKit advertises ${ctx.livekitNodeIp} (media udp mux 7882)`
+			? `\n  voice: LiveKit advertises ${ctx.livekitNodeIp} (media udp mux ${ports.livekitUdp})`
 			: ''
 	console.log(`
-EnsembleWorks dev stack — ${url}${voice}
+EnsembleWorks dev stack — ${url}${portOffset ? ` (port offset ${portOffset})` : ''}${voice}
   windows: ${enabled.map((s) => s.name).join('  ')}
   bin/dev status | logs <svc> | restart <svc> | attach | down   (agents: status --json)
   tmux: prefix Ctrl-Space (Ctrl-b works too) — prefix+<n> switch window, prefix+d detach`)
@@ -318,7 +343,9 @@ function logs(name, tail) {
 /** @param {string} name */
 function restart(name) {
 	if (!sessionRunning()) die(`session '${session}' is not running — use bin/dev up`)
-	const svc = buildServices(makeCtx()).find((s) => s.name === name)
+	const rCtx = makeCtx()
+	ensureLivekitGeneratedConf(rCtx)
+	const svc = buildServices(rCtx).find((s) => s.name === name)
 	if (!svc) die(`unknown service '${name}' — bin/dev status lists services`)
 	if (!svc.enabled) die(`'${name}' is disabled: ${svc.reason}`)
 	if (windowNames().includes(name)) {
@@ -337,12 +364,36 @@ function down() {
 		console.log(`session '${session}' is not running`)
 	}
 	// Caddy reads the pane-close SIGHUP as "reload", not "exit", so it outlives
-	// the session and keeps holding :8080 — which then blocks the next `up`
-	// (and left a stale plain-HTTP caddy in front of a new TLS one). Reap any
-	// stray caddy still serving our Caddyfile.
-	spawnSync('pkill', ['-f', `caddy run --config ${path.join(repoDir, 'deploy', 'Caddyfile')}`], {
-		stdio: 'ignore',
-	})
+	// the session and keeps holding the edge port — which then blocks the next
+	// `up` (and left a stale plain-HTTP caddy in front of a new TLS one). Reap
+	// any stray caddy still serving our Caddyfile — but ONLY this stack's: a
+	// parallel offset stack runs the same cmdline, so a plain pkill -f would
+	// reap its caddy too. The stack is identified by ENSEMBLEWORKS_PORT_SYNC in
+	// the process env, matched by EXACT equality: ENSEMBLEWORKS_CADDY_SITE's
+	// shape varies (`:<port>` vs `https://host:<port>` for TLS-internal/custom
+	// origin port) so an endsWith(':<port>') check misses that shape and leaves
+	// a stray caddy behind; ENSEMBLEWORKS_PORT_SYNC is always a plain per-stack
+	// number (same caddyEnv), so an exact `KEY=value` match is shape-independent.
+	reapStrayCaddy()
+}
+
+function reapStrayCaddy() {
+	const caddyfile = path.join(repoDir, 'deploy', 'Caddyfile')
+	if (!existsSync('/proc')) {
+		// macOS (ENSEMBLEWORKS_NATIVE=1): no /proc to read environ from. Native
+		// mode is single-stack (no offset siblings to spare), so the old broad
+		// pkill -f is fine here — losing the reap entirely would be worse.
+		spawnSync('pkill', ['-f', `caddy run --config ${caddyfile}`])
+		return
+	}
+	const pgrep = spawnSync('pgrep', ['-f', `caddy run --config ${caddyfile}`], { encoding: 'utf8' })
+	const wanted = `ENSEMBLEWORKS_PORT_SYNC=${ports.sync}`
+	for (const pid of (pgrep.stdout ?? '').trim().split('\n').filter(Boolean)) {
+		try {
+			const environ = readFileSync(`/proc/${pid}/environ`, 'utf8')
+			if (environ.split('\0').includes(wanted)) process.kill(Number(pid))
+		} catch {} // pid vanished or environ unreadable — skip
+	}
 }
 
 function attach() {
@@ -364,6 +415,7 @@ function usage() {
   bin/dev doctor [--json]                environment check — every failure prints its remedy
 
 Config: ~/.config/ensembleworks/dev.env (optional). State: ~/.local/share/ensembleworks/{data,databases,database-backups}.
+Ports: ENSEMBLEWORKS_PORT_OFFSET=<n> (or .local/port-offset) shifts every service port by n — run parallel stacks with n=100, 200, …
 Optional binaries light up more services: caddy, livekit-server, whisper-server, docker.`)
 }
 
