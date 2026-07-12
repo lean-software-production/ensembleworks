@@ -137,8 +137,12 @@ export function worldTransform(doc: CanvasDocument, shape: Shape): RigidTransfor
 // corners worldBounds takes the AABB of). Exposed on its own because exact
 // (non-AABB) intersection tests — e.g. spatial-index's marquee 'intersect'
 // mode — need the true rotated rectangle, not just its bounding box.
-export function worldCorners(doc: CanvasDocument, shape: Shape): Point[] {
-  const t = worldTransform(doc, shape)
+// `precomputedTransform` is an optional perf escape hatch: a caller that
+// already has this shape's worldTransform (e.g. because it also needs
+// `.rotation` for its own purposes, as queryMarquee's 'intersect' mode
+// does) can pass it in to avoid a second walk up the parent chain.
+export function worldCorners(doc: CanvasDocument, shape: Shape, precomputedTransform?: RigidTransform): Point[] {
+  const t = precomputedTransform ?? worldTransform(doc, shape)
   const lb = localBounds(shape)
   return [
     { x: lb.minX, y: lb.minY }, { x: lb.maxX, y: lb.minY },

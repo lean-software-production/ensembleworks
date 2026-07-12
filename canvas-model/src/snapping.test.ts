@@ -1,7 +1,7 @@
 // Run: bun src/snapping.test.ts
 import assert from 'node:assert/strict'
 import { makeDocument, type CanvasDocument } from './document.js'
-import { medianSize } from './geometry.js'
+import { localBounds, medianSize, worldTransform } from './geometry.js'
 import { buildSpatialIndex } from './spatial-index.js'
 import { snapCandidates, resolveArrowAnchor, anchorToWorld } from './snapping.js'
 
@@ -122,18 +122,32 @@ function twoBoxDoc(gap: number): CanvasDocument {
     ],
     bindings: [],
   })
-  // An interior world point: derive it FORWARD via anchorToWorld at a known
-  // (nx,ny), so it's guaranteed inside the local box (no clamping possible)
-  // and the round-trip must be exact.
+  const target = doc.byId.get('shape:target')!
+
+  // Independent oracle for the expected world point at a KNOWN anchor:
+  // duplicate trig (see hit-test.test.ts's `rotate`) applied to the
+  // PUBLIC worldTransform/localBounds — NOT anchorToWorld itself — so this
+  // exercises both anchorToWorld and resolveArrowAnchor against a ground
+  // truth neither of them produced.
   const knownAnchor = { nx: 0.3, ny: 0.7 }
-  const worldPoint = anchorToWorld(doc, 'shape:target', knownAnchor)
-  const resolved = resolveArrowAnchor(doc, 'shape:target', worldPoint)
+  const t = worldTransform(doc, target)
+  const lb = localBounds(target)
+  const localX = lb.minX + knownAnchor.nx * (lb.maxX - lb.minX)
+  const localY = lb.minY + knownAnchor.ny * (lb.maxY - lb.minY)
+  const cos = Math.cos(t.rotation), sin = Math.sin(t.rotation)
+  const expectedWorldPoint = { x: localX * cos - localY * sin + t.x, y: localX * sin + localY * cos + t.y }
+
   const EPS = 1e-9
+  const worldPoint = anchorToWorld(doc, 'shape:target', knownAnchor)
+  assert.ok(Math.abs(worldPoint.x - expectedWorldPoint.x) < EPS, 'anchorToWorld matches the independently-derived world x')
+  assert.ok(Math.abs(worldPoint.y - expectedWorldPoint.y) < EPS, 'anchorToWorld matches the independently-derived world y')
+
+  const resolved = resolveArrowAnchor(doc, 'shape:target', expectedWorldPoint)
   assert.ok(Math.abs(resolved.nx - knownAnchor.nx) < EPS, `nx round-trips: expected ${knownAnchor.nx}, got ${resolved.nx}`)
   assert.ok(Math.abs(resolved.ny - knownAnchor.ny) < EPS, `ny round-trips: expected ${knownAnchor.ny}, got ${resolved.ny}`)
   const roundTripped = anchorToWorld(doc, 'shape:target', resolved)
-  assert.ok(Math.abs(roundTripped.x - worldPoint.x) < EPS, 'world x round-trips')
-  assert.ok(Math.abs(roundTripped.y - worldPoint.y) < EPS, 'world y round-trips')
+  assert.ok(Math.abs(roundTripped.x - expectedWorldPoint.x) < EPS, 'world x round-trips')
+  assert.ok(Math.abs(roundTripped.y - expectedWorldPoint.y) < EPS, 'world y round-trips')
 
   // Clamping: a point far outside the target's box resolves to a clamped
   // (0..1) anchor, never negative / never >1.

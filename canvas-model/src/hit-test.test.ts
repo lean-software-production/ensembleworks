@@ -139,4 +139,21 @@ assert.ok(
   'cyclic parent chain yields a finite transform',
 )
 
+// Self-parent (length-1 cycle: a shape naming itself as its own parent) —
+// the degenerate case one step shorter than the mutual a<->b cycle above.
+// Must still terminate on the very first repeat, not just for cycles of
+// length >= 2.
+const docSelfParent = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [{ id: 'shape:self', kind: 'geo', parentId: 'shape:self', x: 3, y: 4, rotation: 0, props: { w: 10, h: 10 }, ...base() } as any],
+  bindings: [],
+})
+const selfTransform = worldTransform(docSelfParent, docSelfParent.byId.get('shape:self')!)
+assert.ok(
+  Number.isFinite(selfTransform.x) && Number.isFinite(selfTransform.y) && Number.isFinite(selfTransform.rotation),
+  'a shape parented to itself yields a finite transform',
+)
+const selfBounds = worldBounds(docSelfParent, docSelfParent.byId.get('shape:self')!)
+assert.ok(Number.isFinite(selfBounds.minX) && Number.isFinite(selfBounds.maxY), 'self-parent world bounds are finite')
+
 console.log('ok: hit-test')

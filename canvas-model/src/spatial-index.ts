@@ -22,9 +22,40 @@ export interface SpatialIndex {
    * area / cellSize²). Without this clamp, queryViewport over a huge
    * viewport would try to loop literally billions of empty cells. */
   readonly cellRange: { minCx: number; maxCx: number; minCy: number; maxCy: number } | null
+  /** Shape ids whose worldBounds is non-finite (NaN/±Infinity — e.g. a
+   * shape built from a non-finite x/y/w/h; the envelope's schema doesn't
+   * bound these) or would fan out into more than MAX_CELLS_PER_SHAPE cells
+   * (a shape orders of magnitude larger than the rest of the document).
+   * These are never fanned into `cells` — doing so is either impossible
+   * (NaN cell keys) or a genuine hang (a shape spanning ~1e8+ cells). They
+   * are instead always included as a query candidate everywhere (see
+   * candidatesFor/hitTestTopmost), relying on the caller's exact
+   * boundsIntersect/hitTestPoint check for correctness — the index just
+   * can't spatially partition something with no meaningful spatial extent. */
+  readonly overflow: readonly string[]
 }
 
 const cellKey = (cx: number, cy: number): string => `${cx},${cy}`
+
+// A single pathological shape must never make index-build cost unbounded:
+// this caps how many cells ONE shape may fan into before it's routed to
+// `overflow` instead. 4096 is generous (a 64x64 cell footprint at the
+// default ~one-median-shape cell size) while still being small compared to
+// "iterate the entire spanned range" for a shape whose bounds are
+// orders of magnitude larger than the document's typical size.
+const MAX_CELLS_PER_SHAPE = 4096
+
+// Is this shape's cell span small and finite enough to fan out into `cells`?
+// False for non-finite bounds (NaN/Infinity anywhere — Math.floor of those
+// is NaN/Infinity, and a `for` loop from/to a non-finite bound never
+// terminates) and for a finite-but-huge span (e.g. props.w = 1e10 while
+// every other shape is ~100 — cellSize stays small, so this one shape would
+// otherwise iterate ~1e8+ cells).
+function cellSpanIsSane(minCx: number, maxCx: number, minCy: number, maxCy: number): boolean {
+  if (![minCx, maxCx, minCy, maxCy].every(Number.isFinite)) return false
+  const spanX = maxCx - minCx + 1, spanY = maxCy - minCy + 1
+  return spanX * spanY <= MAX_CELLS_PER_SHAPE
+}
 
 // Build the grid. Cell size = medianSize(doc.shapes) — "about one median
 // shape" per cell, the same scale-relative unit clusterShapes/snapCandidates
@@ -35,16 +66,25 @@ const cellKey = (cx: number, cy: number): string => `${cx},${cy}`
 //   - all-zero-size shapes: medianSize could legitimately be 0, which would
 //     make every shape span infinitely many cells (division by zero) — floor
 //     the cell size at 1.
+//   - non-finite medianSize (e.g. one shape with props.w = Infinity skews
+//     the median itself, not just that shape's own span) — fall back to a
+//     fixed default (100, matching geometry.ts's own kind-default unit)
+//     rather than building a NaN/Infinity-sized grid.
+//   - a single pathologically-huge or non-finite shape — see
+//     cellSpanIsSane/overflow above.
 export function buildSpatialIndex(doc: CanvasDocument): SpatialIndex {
-  const cellSize = Math.max(medianSize(doc.shapes), 1)
+  const rawCellSize = medianSize(doc.shapes)
+  const cellSize = Number.isFinite(rawCellSize) ? Math.max(rawCellSize, 1) : 100
   const cells = new Map<string, string[]>()
   const boundsById = new Map<string, Bounds>()
+  const overflow: string[] = []
   let cellRange: SpatialIndex['cellRange'] = null
   for (const shape of doc.shapes) {
     const bounds = worldBounds(doc, shape)
     boundsById.set(shape.id, bounds)
     const minCx = Math.floor(bounds.minX / cellSize), maxCx = Math.floor(bounds.maxX / cellSize)
     const minCy = Math.floor(bounds.minY / cellSize), maxCy = Math.floor(bounds.maxY / cellSize)
+    if (!cellSpanIsSane(minCx, maxCx, minCy, maxCy)) { overflow.push(shape.id); continue }
     cellRange = cellRange === null
       ? { minCx, maxCx, minCy, maxCy }
       : {
@@ -60,7 +100,7 @@ export function buildSpatialIndex(doc: CanvasDocument): SpatialIndex {
       }
     }
   }
-  return { cellSize, cells, boundsById, cellRange }
+  return { cellSize, cells, boundsById, cellRange, overflow }
 }
 
 function boundsIntersect(a: Bounds, b: Bounds): boolean {
@@ -71,16 +111,19 @@ function boundsContains(outer: Bounds, inner: Bounds): boolean {
   return inner.minX >= outer.minX && inner.maxX <= outer.maxX && inner.minY >= outer.minY && inner.maxY <= outer.maxY
 }
 
-// Candidate ids from every cell `bounds` overlaps, deduped. A broad-phase
-// superset: every caller here (queryViewport itself, and queryMarquee's two
-// modes) narrows it further with an exact test. The query's own cell range
-// is clamped to the index's populated cellRange FIRST (see SpatialIndex's
-// doc comment) — otherwise a "select everything" huge viewport would loop
-// its entire (possibly billions-of-cells) span instead of just the
-// populated ones.
+// Candidate ids from every cell `bounds` overlaps, deduped, PLUS every
+// overflow shape (see SpatialIndex.overflow — a shape the grid couldn't
+// spatially partition is always a candidate everywhere; the exact
+// boundsIntersect/hitTestPoint check downstream is what keeps this correct
+// rather than over-selecting). A broad-phase superset: every caller here
+// (queryViewport itself, and queryMarquee's two modes) narrows it further
+// with an exact test. The query's own cell range is clamped to the index's
+// populated cellRange FIRST (see SpatialIndex's doc comment) — otherwise a
+// "select everything" huge viewport would loop its entire (possibly
+// billions-of-cells) span instead of just the populated ones.
 function candidatesFor(index: SpatialIndex, bounds: Bounds): string[] {
-  const ids = new Set<string>()
-  if (index.cellRange === null) return []
+  const ids = new Set<string>(index.overflow)
+  if (index.cellRange === null) return [...ids]
   const minCx = Math.max(Math.floor(bounds.minX / index.cellSize), index.cellRange.minCx)
   const maxCx = Math.min(Math.floor(bounds.maxX / index.cellSize), index.cellRange.maxCx)
   const minCy = Math.max(Math.floor(bounds.minY / index.cellSize), index.cellRange.minCy)
@@ -130,8 +173,11 @@ export function queryMarquee(
   return pool.filter((id) => {
     const shape = doc.byId.get(id)
     if (!shape) return false
-    const rotation = worldTransform(doc, shape).rotation
-    return rectQuadIntersects(bounds, worldCorners(doc, shape), rotation)
+    // One worldTransform call, reused for both the rotation (SAT axes) and
+    // the corners (worldCorners' precomputedTransform param) — avoids
+    // walking the parent chain twice per candidate.
+    const t = worldTransform(doc, shape)
+    return rectQuadIntersects(bounds, worldCorners(doc, shape, t), t.rotation)
   })
 }
 
@@ -184,34 +230,42 @@ function isDescendantOf(doc: CanvasDocument, id: string, ancestorId: string): bo
   return false
 }
 
-// Topmost shape at a point, by z-order. Tie-break (exact, deterministic):
-// pairwise-fold over every shape whose true (rotated) quad contains the
-// point, keeping a running "best":
-//   1. if the candidate is a DESCENDANT of the current best, the candidate
-//      wins (a child always draws over its ancestor container, regardless
-//      of array position);
-//   2. else if the current best is a descendant of the candidate, the
-//      current best is kept;
-//   3. else (unrelated shapes — siblings or different subtrees) the one
-//      LATER in `doc.shapes` wins — document array order is treated as
-//      z-order for shapes with no ancestor relationship.
-// Broad-phase candidates come from the point's own grid cell: correctness
-// holds because hitTestPoint(shape, point) true implies point is inside
-// shape's worldBounds (the quad is a subset of its own AABB), and
-// buildSpatialIndex adds a shape to every cell its worldBounds spans — so
-// the point's cell is guaranteed to include every shape that could possibly
-// hit-test true there.
+// Topmost shape at a point, by z-order. Tie-break (exact, deterministic),
+// computed in TWO passes over every shape whose true (rotated) quad
+// contains the point — NOT a single pairwise fold keeping a running "best"
+// (a fold isn't safe here: "descendant beats ancestor" is only a PARTIAL
+// order, and folding it together with the "last in doc.shapes" total order
+// pairwise-by-pairwise is not transitive — e.g. hits [b (child of a), c
+// (unrelated, later in doc.shapes than b), a (parent of b, later still)]:
+// b beats a directly, c beats b by array order, but a beats c by array
+// order — a genuine 3-way cycle. Folding left-to-right can then return the
+// ancestor `a` over its own descendant `b`, violating the rule below):
+//   1. Drop every hit that is an ANCESTOR of some other hit — an ancestor
+//      never wins over its own descendant, full stop, regardless of array
+//      order (a child always draws over its ancestor container).
+//   2. Among what's left (now a true antichain — no remaining hit is an
+//      ancestor of another), the one LATEST in `doc.shapes` wins — document
+//      array order is treated as z-order for shapes with no ancestor
+//      relationship.
+// Broad-phase candidates come from the point's own grid cell PLUS the
+// index's overflow list (see SpatialIndex.overflow): correctness holds
+// because hitTestPoint(shape, point) true implies point is inside shape's
+// worldBounds (the quad is a subset of its own AABB), and buildSpatialIndex
+// adds a shape to every (sane-sized) cell its worldBounds spans — so the
+// point's cell is guaranteed to include every non-overflow shape that could
+// possibly hit-test true there, and overflow shapes are always candidates.
 export function hitTestTopmost(index: SpatialIndex, doc: CanvasDocument, point: Point): string | null {
   const key = cellKey(Math.floor(point.x / index.cellSize), Math.floor(point.y / index.cellSize))
-  const candidates = index.cells.get(key) ?? []
+  const candidates = [...(index.cells.get(key) ?? []), ...index.overflow]
   const hits = candidates.filter((id) => { const s = doc.byId.get(id); return s ? hitTestPoint(doc, s, point) : false })
   if (hits.length === 0) return null
+  if (hits.length === 1) return hits[0]!
+  const isAncestorOfAnotherHit = (id: string) => hits.some((other) => other !== id && isDescendantOf(doc, other, id))
+  const antichain = hits.filter((id) => !isAncestorOfAnotherHit(id))
   const order = new Map<string, number>(doc.shapes.map((s, i) => [s.id, i]))
-  let best = hits[0]!
-  for (let i = 1; i < hits.length; i++) {
-    const candidate = hits[i]!
-    if (isDescendantOf(doc, candidate, best)) { best = candidate; continue }
-    if (isDescendantOf(doc, best, candidate)) continue
+  let best = antichain[0]!
+  for (let i = 1; i < antichain.length; i++) {
+    const candidate = antichain[i]!
     if (order.get(candidate)! > order.get(best)!) best = candidate
   }
   return best

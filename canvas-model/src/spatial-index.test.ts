@@ -92,6 +92,87 @@ assert.equal(hitTestTopmost(zIndex, zDoc, { x: 15, y: 15 }), 'shape:child', 'chi
 // A point with no shapes: null.
 assert.equal(hitTestTopmost(zIndex, zDoc, { x: 99999, y: 99999 }), null, 'no hits: null')
 
+// Regression: the tie-break must NOT be a naive pairwise fold (best = fold
+// over hits comparing each new candidate only against the running "best").
+// "Descendant beats ancestor" is a partial order; combined pairwise with
+// "last-in-array wins" (a total order) it is NOT transitive, so a fold can
+// let an ancestor beat its own descendant depending on scan order. Array
+// order here is deliberately [b, c, a] (b=child of a, c=unrelated, a=parent
+// of b): a naive fold visits b -> c (c wins on array order, index 1 > 0)
+// -> a (a wins on array order, index 2 > 1) and WRONGLY returns the
+// ancestor `a`. The correct answer: `a` is dropped outright (it's an
+// ancestor of a hit, `b`), leaving the antichain {b, c}; c wins there on
+// array order (index 1 > 0) -- so the correct result is 'shape:c', never
+// 'shape:a'.
+const cycleTieDoc = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [
+    geo('shape:b', 'shape:a', 10, 10, 0, 20, 20),  // child of shape:a; world [10,30]x[10,30]
+    geo('shape:c', 'page:p', 0, 0, 0, 100, 100),   // unrelated; world [0,100]x[0,100]
+    geo('shape:a', 'page:p', 0, 0, 0, 100, 100),   // parent of shape:b; world [0,100]x[0,100]
+  ],
+  bindings: [],
+})
+const cycleTieIndex = buildSpatialIndex(cycleTieDoc)
+assert.equal(
+  hitTestTopmost(cycleTieIndex, cycleTieDoc, { x: 15, y: 15 }),
+  'shape:c',
+  'ancestor (shape:a) must never win, even via array-order transitivity through an unrelated shape',
+)
+
+// ---- pathological bounds must never hang index build or queries ----
+// FIVE ordinary-sized shapes (so medianSize -- and therefore cellSize --
+// stays ~100 despite the one huge outlier; with only 1 normal shape the
+// huge value would itself skew the median enough that cellSize grows to
+// match it, accidentally sidestepping the very case this is testing) plus
+// one shape with a huge (but finite) width: naively fanning the huge one
+// into every cell it spans at cellSize~100 would be ~1e8 iterations.
+// buildSpatialIndex must route it to `overflow` instead — verified
+// indirectly here by simply requiring the whole thing completes fast, not
+// by reaching into the private cell grid.
+{
+  const started = performance.now()
+  const doc = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }],
+    shapes: [
+      geo('shape:n1', 'page:p', 0, 0, 0, 100, 100),
+      geo('shape:n2', 'page:p', 200, 0, 0, 100, 100),
+      geo('shape:n3', 'page:p', 400, 0, 0, 100, 100),
+      geo('shape:n4', 'page:p', 600, 0, 0, 100, 100),
+      geo('shape:n5', 'page:p', 800, 0, 0, 100, 100),
+      geo('shape:huge', 'page:p', 0, 0, 0, 1e10, 1e10), // spans ~1e8 cells at cellSize~100 if naively fanned out
+    ],
+    bindings: [],
+  })
+  const index = buildSpatialIndex(doc)
+  assert.equal(index.cellSize < 1000, true, 'precondition: cellSize stayed small (median dominated by the 5 ordinary shapes, not skewed by the one huge outlier)')
+  const viewportResult = queryViewport(index, { minX: -1e12, minY: -1e12, maxX: 1e12, maxY: 1e12 })
+  assert.ok(viewportResult.includes('shape:huge') && viewportResult.includes('shape:n1'), 'both the huge overflow shape and an ordinary indexed shape are found')
+  assert.equal(hitTestTopmost(index, doc, { x: 50, y: 50 }), 'shape:huge', 'huge shape is still found by a point query (last in array order, both contain the point)')
+  const elapsedMs = performance.now() - started
+  assert.ok(elapsedMs < 2000, `pathological-bounds case must stay fast (took ${elapsedMs.toFixed(0)}ms) -- a regression here means a hang, not just a slowdown`)
+}
+
+// A shape with a NON-FINITE bound (Infinity coordinate): Math.floor of a
+// non-finite value is non-finite, and a `for` loop bounded by it would
+// never terminate. Must also route to overflow / never hang.
+{
+  const started = performance.now()
+  const doc = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }],
+    shapes: [
+      geo('shape:normal', 'page:p', 0, 0, 0, 100, 100),
+      geo('shape:infinite', 'page:p', Infinity, 0, 0, 100, 100),
+    ],
+    bindings: [],
+  })
+  const index = buildSpatialIndex(doc)
+  const viewportResult = queryViewport(index, { minX: -1e6, minY: -1e6, maxX: 1e6, maxY: 1e6 })
+  assert.ok(viewportResult.includes('shape:normal'), 'the ordinary shape is still findable')
+  const elapsedMs = performance.now() - started
+  assert.ok(elapsedMs < 2000, `non-finite bounds must stay fast (took ${elapsedMs.toFixed(0)}ms) -- a regression here means a hang, not just a slowdown`)
+}
+
 // ---- property test (seeded, ~1000 cases) ----
 // mulberry32 copied verbatim from canvas-sync/src/rig/prng.ts: canvas-model
 // cannot import canvas-sync (dependency direction — canvas-model is the pure
