@@ -1,24 +1,11 @@
 // Run: bun src/server-peer.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc, dumpModel } from '@ensembleworks/canvas-doc'
-import { checkInvariants, type CanvasDocument } from '@ensembleworks/canvas-model'
+import { checkInvariants } from '@ensembleworks/canvas-model'
 import { makePair } from './memory-transport.js'
 import { Frame, decode, encode, type Transport } from './protocol.js'
 import { SyncServerPeer } from './server-peer.js'
-
-const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {} })
-const shape = (id: string, over: any = {}) =>
-  ({ id, kind: 'note', parentId: 'page:p', props: {}, ...base(), ...over }) as any
-
-// Normalize for cross-peer comparison: Loro list order need not match array
-// order across independently-built docs — sort by id (same approach as the
-// plan's convergence `diverges` helper).
-const byIdAsc = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id)
-const normalize = (m: CanvasDocument) => ({
-  pages: [...m.pages].sort(byIdAsc),
-  shapes: [...m.shapes].sort(byIdAsc),
-  bindings: [...m.bindings].sort(byIdAsc),
-})
+import { normalize, shape } from './test-helpers.js'
 
 // B3 doesn't exist yet at this point in the build order (B4 lands first), so
 // this is a minimal hand-rolled "client": a raw LoroCanvasDoc wired to a

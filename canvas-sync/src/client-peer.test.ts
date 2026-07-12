@@ -1,24 +1,12 @@
 // Run: bun src/client-peer.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc, dumpModel } from '@ensembleworks/canvas-doc'
-import { checkInvariants, type CanvasDocument } from '@ensembleworks/canvas-model'
+import { checkInvariants } from '@ensembleworks/canvas-model'
 import { SyncClientPeer } from './client-peer.js'
 import { makePair } from './memory-transport.js'
 import { Frame, encode } from './protocol.js'
 import { SyncServerPeer } from './server-peer.js'
-
-const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {} })
-const shape = (id: string, over: any = {}) =>
-  ({ id, kind: 'note', parentId: 'page:p', props: {}, ...base(), ...over }) as any
-
-// Normalize for cross-peer comparison (same approach as server-peer.test.ts /
-// the plan's convergence `diverges` helper): sort shapes/bindings/pages by id.
-const byIdAsc = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id)
-const normalize = (m: CanvasDocument) => ({
-  pages: [...m.pages].sort(byIdAsc),
-  shapes: [...m.shapes].sort(byIdAsc),
-  bindings: [...m.bindings].sort(byIdAsc),
-})
+import { normalize, shape } from './test-helpers.js'
 
 // --- (1) two clients + one server: A's write converges to the server AND B ---
 {

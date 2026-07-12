@@ -26,6 +26,20 @@ export class LoroCanvasDoc implements CanvasDoc {
   protected nodeByShapeId(id: string): LoroTreeNode | undefined {
     return this.tree.nodes().find((n) => !n.isDeleted() && n.data.get('shapeId') === id)
   }
+  // ALL non-deleted physical nodes tagged with this shapeId — normally exactly
+  // one (nodeByShapeId's single-match assumption holds under ordinary usage),
+  // but Loro's tree CRDT resolves conflicting structural ops per NODE
+  // identity, not per our application-level shapeId convention layered on
+  // top of it: under heavy concurrent churn across peers (independent
+  // creates/moves racing on a shared id), the merge CAN converge into more
+  // than one physical node sharing a shapeId (probe-proven by the E1
+  // convergence rig — canvas-sync/src/convergence.test.ts). repair() uses
+  // this (see below) so it reconciles EVERY duplicate, matching
+  // applyRepairToModel (canvas-model/repair.ts), which operates over the
+  // full shapes ARRAY and so never misses one either.
+  private nodesByShapeId(id: string): LoroTreeNode[] {
+    return this.tree.nodes().filter((n) => !n.isDeleted() && n.data.get('shapeId') === id)
+  }
 
   // Make the Loro tree the single source of truth for hierarchy: move `n` so its
   // real tree parent matches `parentId`. A page id means "root". If parentId
@@ -90,9 +104,10 @@ export class LoroCanvasDoc implements CanvasDoc {
     const cur = (n.data.get(LoroCanvasDoc.PROP_KEY) as Record<string, unknown>) ?? {}
     n.data.set(LoroCanvasDoc.PROP_KEY, { ...cur, ...props } as any)
   }
-  deleteShape(id: string): void {
-    const n = this.nodeByShapeId(id)
-    if (!n) return
+  // Node-level core of deleteShape, factored out so repair() can apply it to
+  // EVERY physical node sharing an id (see nodesByShapeId) while the public
+  // single-id deleteShape keeps its existing first-match behavior unchanged.
+  private deleteNode(n: LoroTreeNode): void {
     // Collect the shapeIds of the whole real subtree before the cascade delete,
     // then clear each shape's text container. The emptied Loro container itself
     // persists as a CRDT tombstone (known bloat category per design); clearing
@@ -109,6 +124,11 @@ export class LoroCanvasDoc implements CanvasDoc {
       const t = this.doc.getText(this.textKey(sid))
       if (t.length > 0) t.delete(0, t.length)
     }
+  }
+  deleteShape(id: string): void {
+    const n = this.nodeByShapeId(id)
+    if (!n) return
+    this.deleteNode(n)
   }
   reparent(id: string, parentId: string, index?: number): void {
     const node = this.nodeByShapeId(id)
@@ -216,13 +236,23 @@ export class LoroCanvasDoc implements CanvasDoc {
     // note), so a large plan costs O(n²). Same revisit-if-measured stance.
     for (const o of plan) {
       if (o.op === 'deleteBinding') this.deleteBinding(o.id)
-      else if (o.op === 'dropShape') this.deleteShape(o.id) // cascade + text cleanup
+      // dropShape/reparentToRoot are applied to EVERY physical node sharing
+      // this id (nodesByShapeId), not just the first match — see that
+      // method's comment: under concurrent churn there can be more than one,
+      // and applyRepairToModel (the pure reference this must agree with)
+      // operates over the full shapes array, so it never misses a duplicate
+      // either. Normal (non-duplicated) docs see exactly one node here, so
+      // this is behavior-preserving for every existing single-node case.
+      else if (o.op === 'dropShape') for (const n of this.nodesByShapeId(o.id)) this.deleteNode(n) // cascade + text cleanup
       else if (o.op === 'reparentToRoot') {
         if (dropAll.has(o.id)) continue // claimed by a drop cascade — see above
         // 'page:orphans' is unreachable: repairPlan emits no reparentToRoot
         // ops for a zero-page doc (dead-code safety only).
         const pageId = canonicalPageId(model.pages) ?? 'page:orphans'
-        this.reparent(o.id, pageId) // page id ⇒ Loro root
+        for (const n of this.nodesByShapeId(o.id)) {
+          this.tree.move(n.id, undefined) // page id ⇒ Loro root
+          n.data.set('parentId', pageId)
+        }
       }
     }
     for (const b of model.bindings) {
