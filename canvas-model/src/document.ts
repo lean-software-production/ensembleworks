@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import type { Shape } from './shape.js'
 import { bindingIdField, shapeIdField, pageIdField, type BindingId, type PageId, type ShapeId } from './ids.js'
+import { stableStringify } from './stable-stringify.js'
 
 // NOTE: checkInvariants' validProps rule covers shapes only; bindingSchema and
 // pageSchema are consumed by the converter seam later, not by the invariants.
@@ -46,7 +47,27 @@ export function makeDocument(input: {
   shapes: readonly Shape[]
   bindings: readonly Binding[]
 }): CanvasDocument {
-  const byId = new Map(input.shapes.map((s) => [s.id, s]))
+  // byId under DUPLICATE ids (reachable via the offline delete+recreate
+  // reconnect race — see invariants.ts's uniqueIds rule): keep the CONTENT
+  // winner — smallest stableStringify — i.e. exactly the entry the dedupe
+  // repair will keep. Two reasons this is load-bearing, both rig-proven:
+  // 1. Determinism: a last-entry-wins byId tracks Loro's tree traversal
+  //    order, which differs across converged peers, so byId-based analysis
+  //    (noCycles walks parents through byId) could compute DIFFERENT
+  //    violations — hence different repair plans — on peers holding the
+  //    identical converged multiset.
+  // 2. One-pass repair: noCycles must analyze the topology that will exist
+  //    AFTER dedupe collapses the duplicates; sampling a losing entry's
+  //    parentId can hide a cycle that dedupe then surfaces, leaving a
+  //    standing violation after a single repair() (the E1 rig caught exactly
+  //    this at seed 27 before this rule existed).
+  // stableStringify costs are collision-only: unique ids never pay it.
+  const byId = new Map<string, Shape>()
+  for (const s of input.shapes) {
+    const prev = byId.get(s.id)
+    if (!prev) byId.set(s.id, s)
+    else if (stableStringify(s) < stableStringify(prev)) byId.set(s.id, s)
+  }
   return { pages: input.pages, shapes: input.shapes, bindings: input.bindings, byId }
 }
 

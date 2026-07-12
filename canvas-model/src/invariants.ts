@@ -1,10 +1,10 @@
 import { type CanvasDocument } from './document.js'
 import { validateShape } from './shape.js'
 
-export type InvariantRule = 'noOrphans' | 'noCycles' | 'noDanglingBindings' | 'validProps'
+export type InvariantRule = 'noOrphans' | 'noCycles' | 'noDanglingBindings' | 'validProps' | 'uniqueIds'
 export interface Violation { rule: InvariantRule; id: string; detail: string }
 
-// All four executable predicates in one pass. Pure; deterministic order (input
+// All five executable predicates in one pass. Pure; deterministic order (input
 // order). The design's canvas-doc repair pass (Phase 2) will consume these.
 export function checkInvariants(doc: CanvasDocument): Violation[] {
   const out: Violation[] = []
@@ -52,5 +52,19 @@ export function checkInvariants(doc: CanvasDocument): Violation[] {
     if (!ids.has(b.fromId)) out.push({ rule: 'noDanglingBindings', id: b.id, detail: `missing fromId ${b.fromId}` })
     if (!ids.has(b.toId)) out.push({ rule: 'noDanglingBindings', id: b.id, detail: `missing toId ${b.toId}` })
   }
+
+  // uniqueIds: at most ONE shape entry per id. Duplicates are reachable in
+  // production via the supported offline reconnect flow (two clients each
+  // delete+recreate the same id while disconnected; the tree CRDT resolves
+  // conflicts per NODE identity, not per our shapeId convention, so the merge
+  // keeps both physical nodes) — and they are poison downstream: first-match
+  // APIs (getShape/deleteShape) exhibit the "undeletable shape" anomaly, and
+  // byId silently picks one entry. One violation per duplicated id (not per
+  // entry) so repairPlan emits exactly one dedupeShape op. Scoped to SHAPES
+  // only: pages and bindings live in LoroMap containers keyed by id (LWW per
+  // key), so they cannot duplicate by construction.
+  const counts = new Map<string, number>()
+  for (const s of doc.shapes) counts.set(s.id, (counts.get(s.id) ?? 0) + 1)
+  for (const [id, n] of counts) if (n > 1) out.push({ rule: 'uniqueIds', id, detail: `${n} shape entries share this id` })
   return out
 }

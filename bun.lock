@@ -30,6 +30,20 @@
         "typescript": "^5.7.0",
       },
     },
+    "canvas-sync": {
+      "name": "@ensembleworks/canvas-sync",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ensembleworks/canvas-doc": "*",
+        "@ensembleworks/canvas-model": "*",
+        "loro-crdt": "1.13.6",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
+        "bun-types": "1.3.14",
+        "typescript": "^5.7.0",
+      },
+    },
     "cli": {
       "name": "@ensembleworks/cli",
       "version": "0.1.0",
@@ -110,7 +124,9 @@
       "name": "@ensembleworks/server",
       "version": "0.1.0",
       "dependencies": {
+        "@ensembleworks/canvas-doc": "*",
         "@ensembleworks/canvas-model": "*",
+        "@ensembleworks/canvas-sync": "*",
         "@ensembleworks/contracts": "*",
         "@tldraw/sync-core": "5.1.0",
         "@tldraw/tlschema": "5.1.0",
@@ -199,6 +215,8 @@
     "@ensembleworks/canvas-doc": ["@ensembleworks/canvas-doc@workspace:canvas-doc"],
 
     "@ensembleworks/canvas-model": ["@ensembleworks/canvas-model@workspace:canvas-model"],
+
+    "@ensembleworks/canvas-sync": ["@ensembleworks/canvas-sync@workspace:canvas-sync"],
 
     "@ensembleworks/cli": ["@ensembleworks/cli@workspace:cli"],
 

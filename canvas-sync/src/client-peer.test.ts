@@ -1,0 +1,304 @@
+// Run: bun src/client-peer.test.ts
+import assert from 'node:assert/strict'
+import { LoroCanvasDoc, dumpModel } from '@ensembleworks/canvas-doc'
+import { checkInvariants } from '@ensembleworks/canvas-model'
+import { SyncClientPeer } from './client-peer.js'
+import { makePair } from './memory-transport.js'
+import { Frame, encode } from './protocol.js'
+import { SyncServerPeer } from './server-peer.js'
+import { normalize, shape } from './test-helpers.js'
+
+// --- (1) two clients + one server: A's write converges to the server AND B ---
+{
+  const server = new SyncServerPeer({ peerId: 1n })
+  const [serverEndA, clientEndA] = makePair()
+  const [serverEndB, clientEndB] = makePair()
+  server.connect(serverEndA)
+  server.connect(serverEndB)
+  const clientA = new SyncClientPeer({ peerId: 101n, transport: clientEndA })
+  const clientB = new SyncClientPeer({ peerId: 102n, transport: clientEndB })
+
+  clientA.doc.putPage({ id: 'page:p', name: 'P' })
+  clientA.doc.commit()
+  clientA.putShape(shape('shape:a1'))
+
+  assert.deepEqual(normalize(dumpModel(server.doc)), normalize(dumpModel(clientA.doc)), 'server converges with the writer')
+  assert.deepEqual(normalize(dumpModel(clientB.doc)), normalize(dumpModel(clientA.doc)), 'the other client converges via server relay')
+}
+
+// --- (2) THE REBASE SCENARIO: B goes offline, edits happen on both sides
+// while disconnected, then B reconnects and catches up exactly — AND its
+// offline edit reaches the server. ---
+{
+  const server = new SyncServerPeer({ peerId: 2n })
+  const [serverEndA, clientEndA] = makePair()
+  const [serverEndB, clientEndB] = makePair()
+  server.connect(serverEndA)
+  server.connect(serverEndB)
+  const clientA = new SyncClientPeer({ peerId: 111n, transport: clientEndA })
+  const clientB = new SyncClientPeer({ peerId: 112n, transport: clientEndB })
+
+  clientA.doc.putPage({ id: 'page:p', name: 'P' })
+  clientA.doc.commit()
+  clientA.putShape(shape('shape:before'))
+  assert.deepEqual(normalize(dumpModel(clientB.doc)), normalize(dumpModel(clientA.doc)), 'precondition: converged before the split')
+
+  // Disconnect B: close ONLY the transport (not clientB itself — clientB is
+  // still "alive", just offline). This fires onClose on both pair ends, so
+  // the server removes serverEndB from its client set.
+  clientEndB.close()
+
+  // A makes more changes while B is offline: server + A converge, B does not.
+  clientA.putShape(shape('shape:while-b-offline'))
+  assert.deepEqual(
+    normalize(dumpModel(server.doc)),
+    normalize(dumpModel(clientA.doc)),
+    'server keeps converging with A while B is offline',
+  )
+  assert.notDeepEqual(
+    normalize(dumpModel(clientB.doc)),
+    normalize(dumpModel(server.doc)),
+    'B has NOT seen A\'s while-offline edit yet',
+  )
+
+  // B ALSO edits while offline. This commits locally (doc.subscribeLocalUpdates
+  // fires and attempts transport.send(), but clientEndB is closed, so per the
+  // Transport contract that send is a silent no-op — the edit is NOT queued
+  // for automatic resend, it just sits in B's own oplog until reconnect.
+  clientB.putShape(shape('shape:b-offline-edit'))
+  assert.ok(
+    !server.doc.listShapes().some((s) => s.id === 'shape:b-offline-edit'),
+    'precondition: the offline edit has not reached the server yet',
+  )
+
+  // Reconnect B on a fresh transport pair (the old one is dead).
+  const [serverEndB2, clientEndB2] = makePair()
+  server.connect(serverEndB2)
+  clientB.reconnect(clientEndB2)
+
+  assert.deepEqual(
+    normalize(dumpModel(clientB.doc)),
+    normalize(dumpModel(server.doc)),
+    'B caught up exactly to the server after reconnect (rebase via SyncRequest)',
+  )
+  assert.ok(
+    server.doc.listShapes().some((s) => s.id === 'shape:b-offline-edit'),
+    'B\'s offline edit reached the server after reconnect (via the full-history Update reconnect() sends)',
+  )
+  assert.ok(
+    clientB.doc.listShapes().some((s) => s.id === 'shape:while-b-offline'),
+    'B also caught up on what it missed while offline',
+  )
+  // The still-connected third party: B's backfill Update must flow past the
+  // server to A via the raw-delta relay (server-peer's broadcast(frame, from)).
+  assert.ok(
+    clientA.doc.listShapes().some((s) => s.id === 'shape:b-offline-edit'),
+    "B's offline edit reached A via server relay",
+  )
+  // Full three-way convergence: A == server == B, normalized.
+  assert.deepEqual(
+    normalize(dumpModel(clientA.doc)),
+    normalize(dumpModel(server.doc)),
+    'A and the server hold identical normalized state after the reconnect round',
+  )
+  assert.deepEqual(
+    normalize(dumpModel(clientB.doc)),
+    normalize(dumpModel(server.doc)),
+    'B and the server hold identical normalized state after the reconnect round',
+  )
+  assert.deepEqual(checkInvariants(dumpModel(server.doc)), [], 'converged server state is invariant-clean')
+}
+
+// --- (3) close(): after close, local puts don't throw and don't reach the server ---
+{
+  const server = new SyncServerPeer({ peerId: 3n })
+  const [serverEnd, clientEnd] = makePair()
+  server.connect(serverEnd)
+  const client = new SyncClientPeer({ peerId: 301n, transport: clientEnd })
+
+  client.close()
+
+  assert.doesNotThrow(() => client.putShape(shape('shape:after-close')), 'a local put after close() does not throw')
+  assert.ok(
+    !server.doc.listShapes().some((s) => s.id === 'shape:after-close'),
+    'a local put after close() never reaches the server',
+  )
+}
+
+// --- (4) repair is gated on ImportResult.changed: a redundant Update (all
+// ops already known) must NOT pay the O(doc) repair marshal ---
+{
+  const [fakeServerEnd, clientEnd] = makePair()
+  // No real server: we drive frames by hand from the far end of the pair.
+  fakeServerEnd.onMessage(() => {}) // swallow the client's SyncRequest/Updates
+  const client = new SyncClientPeer({ peerId: 401n, transport: clientEnd })
+
+  // Spy: shadow the instance's repair with a counting wrapper.
+  let repairs = 0
+  const realRepair = client.doc.repair.bind(client.doc)
+  ;(client.doc as any).repair = () => { repairs++; return realRepair() }
+
+  const writer = LoroCanvasDoc.create({ peerId: 402n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:gated'))
+  writer.commit()
+  const delta = writer.exportUpdate()
+
+  fakeServerEnd.send(encode(Frame.Update, delta))
+  assert.equal(repairs, 1, 'a fresh Update runs repair once')
+  assert.deepEqual(client.doc.listShapes().map((s) => s.id), ['shape:gated'])
+
+  fakeServerEnd.send(encode(Frame.Update, delta)) // exact same bytes again
+  assert.equal(repairs, 1, 'a no-op (changed: false) import skips repair entirely')
+}
+
+// --- (5) reconnect() closes the abandoned transport: even if the old channel
+// is still open (zombie — e.g. a half-dead ws the client gave up on), the
+// server must drop it (onClose -> clients.delete), so fan-out stops flowing
+// down the stale channel (no unbounded client-set leak / double-relay). ---
+{
+  const server = new SyncServerPeer({ peerId: 6n })
+  const [serverEnd1, clientEnd1] = makePair()
+  server.connect(serverEnd1)
+  const client = new SyncClientPeer({ peerId: 601n, transport: clientEnd1 })
+
+  // Reconnect WITHOUT the old transport having died first.
+  const [serverEnd2, clientEnd2] = makePair()
+  server.connect(serverEnd2)
+  client.reconnect(clientEnd2)
+
+  // Watch the old channel: nothing may arrive here anymore.
+  let staleFrames = 0
+  clientEnd1.onMessage(() => staleFrames++)
+
+  // A third party writes; the server fans out to its live clients.
+  const [writerServerEnd, writerClientEnd] = makePair()
+  server.connect(writerServerEnd)
+  const writer = LoroCanvasDoc.create({ peerId: 602n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:after-swap'))
+  writer.commit()
+  writerClientEnd.send(encode(Frame.Update, writer.exportUpdate()))
+
+  assert.ok(
+    client.doc.listShapes().some((s) => s.id === 'shape:after-swap'),
+    'the new transport delivers: client stays live after the swap',
+  )
+  assert.equal(staleFrames, 0, 'the abandoned transport receives nothing — reconnect() closed it')
+}
+
+// --- (6) close() ignores late frames: a real ws can deliver buffered frames
+// after the app-level close; they must not mutate the closed peer's doc.
+// Double-close is safe. ---
+{
+  let msgCb: ((b: Uint8Array) => void) | null = null
+  let closed = false
+  const fake: import('./protocol.js').Transport = {
+    send: () => {},
+    onMessage: (cb) => { msgCb = cb },
+    onClose: () => {},
+    close: () => { closed = true },
+  }
+  const client = new SyncClientPeer({ peerId: 801n, transport: fake })
+  client.close()
+  assert.ok(closed, 'close() closes the transport')
+  assert.doesNotThrow(() => client.close(), 'close() is idempotent')
+
+  const writer = LoroCanvasDoc.create({ peerId: 802n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:late'))
+  writer.commit()
+  msgCb!(encode(Frame.Update, writer.exportUpdate())) // buffered frame lands post-close
+  assert.deepEqual(client.doc.listShapes(), [], 'a post-close inbound Update is dropped, not applied')
+}
+
+// --- (7) malformed frames from a buggy/hostile server: log-and-drop, never
+// throw (same E2 guard as the server peer — a crash here would take down
+// whichever process hosts the client, e.g. a shadow driver or an agent). ---
+{
+  const server = new SyncServerPeer({ peerId: 1n })
+  const [serverEnd, clientEnd] = makePair()
+  server.connect(serverEnd)
+  const client = new SyncClientPeer({ peerId: 701n, transport: clientEnd })
+  client.putShape(shape('shape:before'))
+
+  // Deliver malformed frames straight down the server->client leg: zero-byte
+  // (decode throws) and a garbage Update payload (doc.import throws).
+  serverEnd.send(new Uint8Array(0))
+  const garbage = new Uint8Array(201)
+  garbage[0] = Frame.Update
+  for (let i = 1; i < garbage.length; i++) garbage[i] = (i * 53) % 256
+  serverEnd.send(garbage)
+
+  // The client is still fully alive: it can keep editing and converging.
+  client.putShape(shape('shape:after'))
+  assert.deepEqual(
+    server.doc.listShapes().map((s) => s.id).sort(),
+    ['shape:after', 'shape:before'],
+    'the client keeps operating after malformed inbound frames',
+  )
+}
+
+// --- (8) THE DUPLICATE-SHAPE RECONNECT RACE (production path): both clients
+// delete+recreate the SAME shape id while offline, then reconnect. The merge
+// keeps both physical tree nodes for the id — the convergence rig's discovery,
+// reachable through this exact documented flow. The server repairs on every
+// changed import, so dedupe must fire automatically post-reconnect: all three
+// parties converge to exactly ONE shape:x (the content winner), invariants
+// clean, and the id is genuinely deletable again (no "undeletable shape"). ---
+{
+  const server = new SyncServerPeer({ peerId: 8n })
+  const [serverEndA, clientEndA] = makePair()
+  const [serverEndB, clientEndB] = makePair()
+  server.connect(serverEndA)
+  server.connect(serverEndB)
+  const clientA = new SyncClientPeer({ peerId: 811n, transport: clientEndA })
+  const clientB = new SyncClientPeer({ peerId: 812n, transport: clientEndB })
+
+  clientA.doc.putPage({ id: 'page:p', name: 'P' })
+  clientA.doc.commit()
+  clientA.putShape(shape('shape:x'))
+  assert.deepEqual(normalize(dumpModel(clientB.doc)), normalize(dumpModel(clientA.doc)), 'precondition: converged before the split')
+
+  // Both go offline.
+  clientEndA.close()
+  clientEndB.close()
+
+  // Both delete + recreate shape:x offline, with DIFFERENT content. Winner
+  // rule is content-based (smallest stableStringify): the entries first
+  // diverge at "kind" — "geo" < "note" — so B's recreation must win.
+  clientA.doc.deleteShape('shape:x')
+  clientA.doc.putShape(shape('shape:x', { kind: 'note', x: 500 }))
+  clientA.doc.commit()
+  clientB.doc.deleteShape('shape:x')
+  clientB.doc.putShape(shape('shape:x', { kind: 'geo' }))
+  clientB.doc.commit()
+
+  // Reconnect both on fresh pairs.
+  const [serverEndA2, clientEndA2] = makePair()
+  server.connect(serverEndA2)
+  clientA.reconnect(clientEndA2)
+  const [serverEndB2, clientEndB2] = makePair()
+  server.connect(serverEndB2)
+  clientB.reconnect(clientEndB2)
+
+  for (const [name, doc] of [['server', server.doc], ['clientA', clientA.doc], ['clientB', clientB.doc]] as const) {
+    assert.equal(
+      doc.listShapes().filter((s) => s.id === 'shape:x').length, 1,
+      `${name} holds exactly ONE shape:x after the reconnect race — dedupe repair fired`,
+    )
+    assert.equal(doc.getShape('shape:x')!.kind, 'geo', `${name}'s survivor is the content winner`)
+    assert.deepEqual(checkInvariants(dumpModel(doc)), [], `${name} is invariant-clean`)
+  }
+  assert.deepEqual(normalize(dumpModel(clientA.doc)), normalize(dumpModel(server.doc)), 'A == server')
+  assert.deepEqual(normalize(dumpModel(clientB.doc)), normalize(dumpModel(server.doc)), 'B == server')
+
+  // The id is genuinely deletable again, end to end.
+  clientA.doc.deleteShape('shape:x')
+  clientA.doc.commit()
+  for (const [name, doc] of [['server', server.doc], ['clientA', clientA.doc], ['clientB', clientB.doc]] as const) {
+    assert.equal(doc.getShape('shape:x'), undefined, `${name}: shape:x fully deleted — no undeletable survivor`)
+  }
+}
+
+console.log('ok: client-peer')
