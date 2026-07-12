@@ -102,4 +102,68 @@ const shape = (id: string) =>
 	console.log('ok: actors — close() tears down every registered actor')
 }
 
+// ---------------------------------------------------------------------------
+// Test 4 — a tainted-actor eviction is recorded (D3's metrics gap-fix): the
+// fresh replacement actor reports healthy, so taint visibility would
+// otherwise vanish the instant getOrCreate replaces it. evictions() must
+// surface a per-room {count, lastReason} that survives the replacement.
+// ---------------------------------------------------------------------------
+{
+	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-actors-evictions-'))
+	const actors = createCanvasActors(dir)
+	assert.deepEqual([...actors.evictions().entries()], [], 'no evictions recorded before any taint')
+
+	const actor = actors.getOrCreate('room-e')
+	const [serverTransport, clientTransport] = makePair()
+	actor.connect(serverTransport)
+	const client = new SyncClientPeer({ peerId: 2n, transport: clientTransport })
+
+	const store = (actor as unknown as { store: CanvasV2Store }).store
+	store.appendUpdate = () => {
+		throw new Error('disk hiccup (injected, evictions test)')
+	}
+	store.compact = () => {
+		throw new Error('disk hiccup (injected, compact, evictions test)')
+	}
+	client.putShape(shape('shape:poisoned-e'))
+	assert.ok(actor.tainted, 'precondition: the actor is now tainted')
+
+	// Nothing recorded yet — the record is written on the NEXT getOrCreate,
+	// which is where eviction actually happens.
+	assert.equal(actors.evictions().get('room-e'), undefined, 'no eviction recorded until getOrCreate evicts')
+
+	const fresh = actors.getOrCreate('room-e')
+	assert.notEqual(fresh, actor, 'sanity: eviction really happened')
+	const record = actors.evictions().get('room-e')
+	assert.ok(record, 'an eviction record exists for room-e after the tainted actor was replaced')
+	assert.equal(record!.count, 1, 'first eviction for this room counts as 1')
+	assert.match(record!.lastReason, /disk hiccup \(injected, evictions test\)/, 'lastReason carries the taint message')
+
+	// A second taint+eviction cycle on the SAME room increments the count.
+	const store2 = (fresh as unknown as { store: CanvasV2Store }).store
+	store2.appendUpdate = () => {
+		throw new Error('disk hiccup (injected, second taint)')
+	}
+	store2.compact = () => {
+		throw new Error('disk hiccup (injected, second taint, compact)')
+	}
+	const [serverTransport2, clientTransport2] = makePair()
+	fresh.connect(serverTransport2)
+	const client2 = new SyncClientPeer({ peerId: 3n, transport: clientTransport2 })
+	client2.putShape(shape('shape:poisoned-e2'))
+	assert.ok(fresh.tainted, 'precondition: the fresh actor is now ALSO tainted')
+	actors.getOrCreate('room-e')
+	const record2 = actors.evictions().get('room-e')
+	assert.equal(record2!.count, 2, 'a second eviction on the same room increments the count')
+	assert.match(record2!.lastReason, /second taint/, 'lastReason reflects the MOST RECENT eviction')
+
+	// entries() surfaces the live (post-eviction) actor set for introspection.
+	assert.ok(actors.entries().has('room-e'), 'entries() lists the live actor for room-e')
+	assert.notEqual(actors.entries().get('room-e'), actor, 'entries() reflects the current live actor, not the evicted one')
+
+	actors.close()
+	rmSync(dir, { recursive: true, force: true })
+	console.log('ok: actors — evictions() records per-room {count, lastReason} across replacements')
+}
+
 console.log('actors.test.ts: all tests passed')

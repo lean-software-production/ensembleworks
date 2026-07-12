@@ -25,8 +25,10 @@ import { type WebSocket, WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
 import { sanitizeId } from './canvas/ids.ts'
 import { type CanvasActors, createCanvasActors } from './canvas-v2/actors.ts'
+import { ShadowMirror } from './canvas-v2/shadow.ts'
 import { wsTransport } from './canvas-v2/ws-transport.ts'
 import { createAvRouter } from './features/av.ts'
+import { createCanvasMetricsRouter } from './features/canvas-metrics.ts'
 import { createCanvasV2Router } from './features/canvas-v2.ts'
 import { createDiscordRouter } from './features/discord.ts'
 import { createFileViewerRouter } from './features/file-viewer.ts'
@@ -58,18 +60,41 @@ import { createTranscriptStore } from './transcript-store.ts'
 
 export { buildParticipants, type CursorRef, type Participant } from './kernel/presence.ts'
 
+// Fixed peerId for every Task D3 ShadowMirror in this process. Per shadow.ts's
+// class doc: mirror docs are single-peer and never merge with any other doc
+// (never synced to a client, never mounted on /sync), so peerId collisions
+// can't cause the corruption they would in a real multi-peer sync — any
+// constant works, and a fixed one keeps mirror doc bytes reproducible across
+// restarts for the same room.
+const SHADOW_PEER_ID = 9999n
+
 export interface SyncApp {
 	server: http.Server // not yet listening
 	getOrCreateRoom(roomId: string): TLSocketRoom
 	app: express.Express   // NEW — read-only test seam for route introspection
 	/** Phase 2 canvas-v2 actor registry — non-null exactly when EW_CANVAS_SYNC=1
-	 * was set at construction time. Exposed for the mount integration test
-	 * today, and for Seam D next: the D3 metrics endpoint reads each actor's
+	 * was set at construction time. Exposed for the mount integration test, and
+	 * for the D3 metrics endpoint, which reads each actor's
 	 * peer.pendingImports / peer.malformedFrames / tainted through it. */
 	canvasActors: CanvasActors | null
+	/** Task D3's clock-polled shadow driver — non-null exactly when
+	 * EW_CANVAS_SHADOW=1 was set at construction time. Maps roomId to its
+	 * ShadowMirror plus the last document clock value seen for that room.
+	 * Exposed for tests and for the /api/canvas/metrics endpoint (same
+	 * null-when-flag-off pattern as canvasActors above). */
+	shadowMirrors: Map<string, { mirror: ShadowMirror; lastClock: number }> | null
 }
 
-export function createSyncApp(opts: { dataDir: string; databaseDir?: string; clientDist?: string }): SyncApp {
+export function createSyncApp(opts: {
+	dataDir: string
+	databaseDir?: string
+	clientDist?: string
+	/** Task D3 test-only knob: how often the shadow driver's setInterval fires.
+	 * Defaults to the real ~1000ms cadence; tests shrink this (e.g. 20-30ms) so
+	 * they can observe several ticks without a multi-second sleep. Production
+	 * callers never set this. */
+	shadowIntervalMs?: number
+}): SyncApp {
 	const uploadsDir = path.join(opts.dataDir, 'uploads')
 	mkdirSync(uploadsDir, { recursive: true })
 	const transcripts = createTranscriptStore(path.join(opts.dataDir, 'transcripts'))
@@ -125,6 +150,56 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 	// roomHost or otherwise), call `canvasActors?.close()` from it too.
 	const canvasActors = process.env.EW_CANVAS_SYNC === '1' ? createCanvasActors(opts.databaseDir ?? opts.dataDir) : null
 
+	// Task D3: clock-polled shadow driver, gated on EW_CANVAS_SHADOW=1 and
+	// INDEPENDENT of EW_CANVAS_SYNC above — this mirrors the LEGACY tldraw
+	// rooms living in roomHost, not the canvas-v2 actors (those are already
+	// covered by ShadowMirror's own pre-cutover purpose: telemetry ahead of the
+	// real Phase 3/5 cutover, not a canvas-v2 concern). A single setInterval,
+	// unref()'d like the backpressure sampler below so it never keeps the
+	// process alive in tests. Every sweep (~1000ms, or opts.shadowIntervalMs
+	// for tests): for each room roomHost currently knows about, compare
+	// getCurrentDocumentClock() to the last value seen for that room and, on
+	// change (including first sight, where lastClock starts at NaN — NaN !==
+	// NaN unconditionally forces the first tick), call mirror.tick(). Gating on
+	// the clock keeps an idle room's mirror motionless between edits: the
+	// entire reason to clock-poll rather than tick every room unconditionally
+	// every sweep.
+	const shadowMirrors = process.env.EW_CANVAS_SHADOW === '1'
+		? new Map<string, { mirror: ShadowMirror; lastClock: number }>()
+		: null
+	if (shadowMirrors) {
+		const shadowInterval = setInterval(() => {
+			for (const roomId of roomHost.rooms.keys()) {
+				const clock = roomHost.getOrCreateRoom(roomId).getCurrentDocumentClock()
+				let entry = shadowMirrors.get(roomId)
+				if (!entry) {
+					entry = {
+						mirror: new ShadowMirror(roomId, SHADOW_PEER_ID, () =>
+							roomHost.getOrCreateRoom(roomId).getCurrentSnapshot().documents.map((d) => d.state as any)
+						),
+						lastClock: Number.NaN,
+					}
+					shadowMirrors.set(roomId, entry)
+				}
+				if (entry.lastClock !== clock) {
+					entry.mirror.tick()
+					entry.lastClock = clock
+				}
+			}
+			// Bound the map to rooms roomHost still knows about each sweep — cheap,
+			// and correct by construction if/when room eviction is ever added to
+			// RoomHost. Today this is a NO-OP: kernel/rooms.ts's `rooms` map never
+			// removes an entry once a room is opened (rooms live for the process
+			// lifetime, per its own comments), so there is nothing to prove this
+			// branch against yet — it exists so a future eviction doesn't silently
+			// leak one ShadowMirror per ever-opened room forever.
+			for (const roomId of shadowMirrors.keys()) {
+				if (!roomHost.rooms.has(roomId)) shadowMirrors.delete(roomId)
+			}
+		}, opts.shadowIntervalMs ?? 1000)
+		shadowInterval.unref()
+	}
+
 	const registry = createSessionRegistry()
 	const media = createMediaService()
 
@@ -144,7 +219,8 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 	// Feature routers mount here IN THIS ORDER (Express matches top-down and the
 	// static catch-all below must stay last): whoami → participants (kernel) → av
 	// (av/token, av/kick, av/pulse) → terminal-status → sticky → file-viewer →
-	// transcript → shape → frames → canvas-v2 → roadmap → uploads → files
+	// transcript → shape → frames → canvas-v2 → roadmap → discord →
+	// canvas-metrics → uploads → files
 	app.use('/api', express.json())
 
 	// Write scoping: read-only service tokens are 403'd on mutating requests.
@@ -193,6 +269,12 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 	app.use(createRoadmapRouter(ctx))
 
 	app.use(createDiscordRouter(ctx))
+
+	// D3 metrics (internal/ops-facing, NOT an agent tool — see the router's own
+	// JSDoc and tools-api.test.ts's EXEMPT predicate): mounted UNCONDITIONALLY,
+	// readable regardless of EW_CANVAS_SHADOW / EW_CANVAS_SYNC — both flags off
+	// still returns { ok: true, shadow: {}, sync: {}, evictions: {} }.
+	app.use(createCanvasMetricsRouter({ shadowMirrors, canvasActors }))
 
 	app.use(createUploadsRouter(ctx))
 
@@ -354,5 +436,5 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 	}, 1000)
 	lagMonitor.unref()
 
-	return { server, getOrCreateRoom: roomHost.getOrCreateRoom, app, canvasActors }
+	return { server, getOrCreateRoom: roomHost.getOrCreateRoom, app, canvasActors, shadowMirrors }
 }

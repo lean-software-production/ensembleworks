@@ -15,6 +15,18 @@ import { DocumentActor } from './actor.ts'
 // isolated by directory/file (one CanvasV2Store per room), not by peerId.
 const SERVER_PEER_ID = 1n
 
+/** D3's metrics gap-fix: an eviction ends a tainted actor's life and starts a
+ * fresh, healthy one in its place — the fresh actor's `.tainted` reads null,
+ * so without a separate record the fact that THIS room ever lost durability
+ * is invisible the instant getOrCreate replaces it. `count` accumulates across
+ * every eviction this room has ever had; `lastReason` is the message of the
+ * MOST RECENT tainted actor evicted (not cumulative — read it as "why did the
+ * last replacement happen", pairing with `count` for "how often"). */
+export interface EvictionRecord {
+	count: number
+	lastReason: string
+}
+
 export interface CanvasActors {
 	/** Live, non-tainted actor for roomId — memoized. A tainted actor is
 	 * evicted (closed, which is safe/idempotent) and replaced with a fresh one
@@ -23,6 +35,13 @@ export interface CanvasActors {
 	 * compact succeeded after the storage recovered (DocumentActor.close()'s
 	 * tainted-outcome log lines say which happened). */
 	getOrCreate(roomId: string): DocumentActor
+	/** Every currently-registered (live) actor, keyed by room id — read-only
+	 * introspection for the D3 metrics endpoint (server/src/features/canvas-metrics.ts),
+	 * which reads each actor's peer.pendingImports/malformedFrames and .tainted. */
+	entries(): ReadonlyMap<string, DocumentActor>
+	/** Per-room eviction history — see EvictionRecord's doc comment. Exposed
+	 * for the D3 metrics endpoint. */
+	evictions(): ReadonlyMap<string, EvictionRecord>
 	/** Close every actor currently registered (server shutdown). */
 	close(): void
 }
@@ -37,12 +56,15 @@ export interface CanvasActors {
 export function createCanvasActors(databaseDir: string): CanvasActors {
 	const dir = path.join(databaseDir, 'canvas-v2')
 	const actors = new Map<string, DocumentActor>()
+	const evictions = new Map<string, EvictionRecord>()
 
 	function getOrCreate(roomId: string): DocumentActor {
 		const existing = actors.get(roomId)
 		if (existing) {
 			if (!existing.tainted) return existing
 			console.warn(`[canvas-v2 ${roomId}] evicting tainted actor and constructing a fresh one`)
+			const prev = evictions.get(roomId)
+			evictions.set(roomId, { count: (prev?.count ?? 0) + 1, lastReason: existing.tainted.message })
 			existing.close() // idempotent/safe per DocumentActor.close()'s contract
 			actors.delete(roomId)
 		}
@@ -51,10 +73,18 @@ export function createCanvasActors(databaseDir: string): CanvasActors {
 		return actor
 	}
 
+	function entries(): ReadonlyMap<string, DocumentActor> {
+		return actors
+	}
+
+	function getEvictions(): ReadonlyMap<string, EvictionRecord> {
+		return evictions
+	}
+
 	function close(): void {
 		for (const actor of actors.values()) actor.close()
 		actors.clear()
 	}
 
-	return { getOrCreate, close }
+	return { getOrCreate, entries, evictions: getEvictions, close }
 }
