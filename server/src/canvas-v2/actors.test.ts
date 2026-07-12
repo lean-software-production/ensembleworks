@@ -166,4 +166,188 @@ const shape = (id: string) =>
 	console.log('ok: actors — evictions() records per-room {count, lastReason} across replacements')
 }
 
+// ---------------------------------------------------------------------------
+// Test 5 (F1) — an idle actor is evicted by sweepIdle() past idleTtlMs; a
+// subsequent getOrCreate constructs a FRESH actor that reloads the durable
+// state from disk (full round trip: create, mutate, persist, evict,
+// getOrCreate again, content survives via the store).
+// ---------------------------------------------------------------------------
+{
+	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-actors-idle-'))
+	let clock = 1_000_000
+	const actors = createCanvasActors(dir, { now: () => clock })
+
+	const actor = actors.getOrCreate('room-idle')
+	const [serverTransport, clientTransport] = makePair()
+	actor.connect(serverTransport)
+	const client = new SyncClientPeer({ peerId: 2n, transport: clientTransport })
+	client.putShape(shape('shape:survives-idle'))
+	// Disconnect: the client transport closing must clear connectionCount to 0
+	// (a live socket is never evicted regardless of idleness).
+	clientTransport.close()
+	assert.equal(actor.connectionCount, 0, 'precondition: no connected transports after the client disconnects')
+
+	const idleTtlMs = 60_000
+	clock += idleTtlMs - 1
+	actors.sweepIdle(idleTtlMs)
+	// entries(), NOT getOrCreate(), for this check — getOrCreate() itself
+	// counts as activity (by design: see actors.ts) and would reset the very
+	// clock this assertion is trying to observe.
+	assert.ok(actors.entries().has('room-idle'), 'just under the TTL: the actor is not yet evicted')
+
+	clock += 2 // now >= idleTtlMs past last activity
+	actors.sweepIdle(idleTtlMs)
+	assert.ok(!actors.entries().has('room-idle'), 'past the TTL with zero connections: the actor is evicted from the registry')
+
+	const fresh = actors.getOrCreate('room-idle')
+	assert.notEqual(fresh, actor, 'getOrCreate after an idle eviction constructs a fresh actor')
+	assert.deepEqual(
+		fresh.peer.doc.listShapes().map((s) => s.id),
+		['shape:survives-idle'],
+		'the fresh actor reloads the durably-persisted shape from disk',
+	)
+
+	actors.close()
+	rmSync(dir, { recursive: true, force: true })
+	console.log('ok: actors — sweepIdle() evicts a disconnected, idle-past-TTL actor; data survives via the store')
+}
+
+// ---------------------------------------------------------------------------
+// Test 6 (F1) — an actor with a connected transport is NEVER evicted by
+// sweepIdle(), no matter how idle (how far past idleTtlMs).
+// ---------------------------------------------------------------------------
+{
+	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-actors-idle-connected-'))
+	let clock = 0
+	const actors = createCanvasActors(dir, { now: () => clock })
+
+	const actor = actors.getOrCreate('room-connected')
+	const [serverTransport] = makePair()
+	actor.connect(serverTransport)
+	assert.equal(actor.connectionCount, 1, 'precondition: one live transport')
+
+	clock += 10 * 60_000 // wildly past any reasonable TTL
+	actors.sweepIdle(1000)
+	assert.equal(actors.getOrCreate('room-connected'), actor, 'a connected actor is never evicted for idleness')
+	assert.ok(actors.entries().has('room-connected'), 'entries() still lists the connected actor')
+
+	actors.close()
+	rmSync(dir, { recursive: true, force: true })
+	console.log('ok: actors — a connected actor is never evicted by sweepIdle(), regardless of idleness')
+}
+
+// ---------------------------------------------------------------------------
+// Test 7 (F1) — activity (a persisted update, or a getOrCreate hit) resets
+// the idle clock: an actor that was about to go idle is spared by fresh
+// activity, and only goes idle idleTtlMs after THAT activity.
+// ---------------------------------------------------------------------------
+{
+	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-actors-idle-reset-'))
+	let clock = 0
+	const actors = createCanvasActors(dir, { now: () => clock })
+	const idleTtlMs = 1000
+
+	const actor = actors.getOrCreate('room-reset')
+	const [serverTransport, clientTransport] = makePair()
+	actor.connect(serverTransport)
+	const client = new SyncClientPeer({ peerId: 2n, transport: clientTransport })
+	client.putShape(shape('shape:one')) // activity at clock=0, bumps via onActivity
+
+	clock += idleTtlMs - 1 // just shy of eviction
+	client.putShape(shape('shape:two')) // fresh activity resets the clock
+	clientTransport.close()
+	assert.equal(actor.connectionCount, 0, 'disconnected before the sweep')
+
+	clock += idleTtlMs - 1 // would be stale relative to clock=0, but not relative to the reset
+	actors.sweepIdle(idleTtlMs)
+	// entries(), not getOrCreate() — a getOrCreate hit is itself activity and
+	// would reset the very clock this assertion observes.
+	assert.ok(actors.entries().has('room-reset'), 'activity reset the clock: not yet evicted')
+
+	clock += 2
+	actors.sweepIdle(idleTtlMs)
+	assert.ok(!actors.entries().has('room-reset'), 'idleTtlMs after the LAST activity, the actor is now evicted')
+
+	actors.close()
+	rmSync(dir, { recursive: true, force: true })
+	console.log('ok: actors — activity (a persisted update) resets the idle clock')
+}
+
+// ---------------------------------------------------------------------------
+// Test 8 (F1) — taint evictions and idle evictions share one per-room
+// eviction counter but are distinguishable via lastKind; neither regresses
+// the other's visibility.
+// ---------------------------------------------------------------------------
+{
+	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-actors-idle-taint-mix-'))
+	let clock = 0
+	const actors = createCanvasActors(dir, { now: () => clock })
+	const idleTtlMs = 1000
+
+	// First: a taint eviction.
+	const actor = actors.getOrCreate('room-mix')
+	const [serverTransport, clientTransport] = makePair()
+	actor.connect(serverTransport)
+	const client = new SyncClientPeer({ peerId: 2n, transport: clientTransport })
+	const store = (actor as unknown as { store: CanvasV2Store }).store
+	store.appendUpdate = () => {
+		throw new Error('disk hiccup (injected, mix test)')
+	}
+	store.compact = () => {
+		throw new Error('disk hiccup (injected, mix test, compact)')
+	}
+	client.putShape(shape('shape:poisoned-mix'))
+	assert.ok(actor.tainted, 'precondition: tainted')
+	const fresh = actors.getOrCreate('room-mix')
+	let record = actors.evictions().get('room-mix')
+	assert.equal(record!.count, 1, 'first eviction (taint) counts as 1')
+	assert.equal(record!.lastKind, 'taint', 'taint eviction is recorded with lastKind "taint"')
+
+	// Then: idle-evict the fresh replacement (it has zero live connections —
+	// `fresh` was constructed by getOrCreate above and nothing has connected
+	// to it yet).
+	assert.equal(fresh.connectionCount, 0, 'precondition: the fresh replacement has no connections')
+	clock += idleTtlMs + 1
+	actors.sweepIdle(idleTtlMs)
+	assert.ok(!actors.entries().has('room-mix'), 'the fresh replacement is idle-evicted in turn')
+	record = actors.evictions().get('room-mix')
+	assert.equal(record!.count, 2, 'the idle eviction increments the SAME per-room counter the taint eviction started')
+	assert.equal(record!.lastKind, 'idle', 'lastKind now reflects the most recent (idle) eviction')
+	assert.match(record!.lastReason, /idle/, 'lastReason describes the idle cause, not the stale taint message')
+
+	actors.close()
+	rmSync(dir, { recursive: true, force: true })
+	console.log('ok: actors — taint and idle evictions share one counter, distinguished by lastKind; taint visibility unregressed')
+}
+
+// ---------------------------------------------------------------------------
+// Test 9 (F1) — sweep exception-safety: one actor's close() throwing during
+// sweepIdle() must not skip evicting the other idle actors in the same sweep.
+// ---------------------------------------------------------------------------
+{
+	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-actors-idle-sweep-safety-'))
+	let clock = 0
+	const actors = createCanvasActors(dir, { now: () => clock })
+	const idleTtlMs = 1000
+
+	const poisoned = actors.getOrCreate('room-poisoned')
+	const healthy = actors.getOrCreate('room-healthy')
+	const originalClose = poisoned.close.bind(poisoned)
+	poisoned.close = () => {
+		throw new Error('close() blew up (injected)')
+	}
+
+	clock += idleTtlMs + 1
+	actors.sweepIdle(idleTtlMs)
+
+	assert.ok(actors.entries().has('room-poisoned'), 'the poisoned actor whose close() threw is left registered (not half-evicted)')
+	assert.ok(!actors.entries().has('room-healthy'), "the healthy actor's eviction is NOT skipped by the poisoned one's throw")
+	poisoned.close = originalClose // restore the real close() for the suite's own teardown below
+	assert.equal(actors.getOrCreate('room-healthy').tainted, null, 'the healthy room reconstructs cleanly')
+
+	actors.close()
+	rmSync(dir, { recursive: true, force: true })
+	console.log('ok: actors — sweepIdle() is per-actor exception-safe: one close() throwing does not skip the rest')
+}
+
 console.log('actors.test.ts: all tests passed')
