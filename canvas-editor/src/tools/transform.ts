@@ -98,11 +98,15 @@ export function hitHandle(handles: readonly Handle[], screenPoint: Point, camera
   return best.distSq <= tolerancePx * tolerancePx ? best.handle : null
 }
 
-// Hit tolerance in SCREEN pixels (OURS — a comfortable click target,
-// slightly larger than DRAG_THRESHOLD's 4px drag-start distance since a
-// handle is a small fixed target a user must land ON, not a "did you move"
-// gesture threshold).
-const HIT_TOLERANCE_PX = 8
+/** Hit tolerance in SCREEN pixels (OURS — a comfortable click target,
+ * slightly larger than DRAG_THRESHOLD's 4px drag-start distance since a
+ * handle is a small fixed target a user must land ON, not a "did you move"
+ * gesture threshold). EXPORTED so the renderer's handle glyphs (canvas-react,
+ * overlay/Handles.tsx) size themselves FROM this constant rather than
+ * mirroring the value by citation — one number, two consumers (this tool's
+ * hitHandle call below and the rendered square's side length), so the visual
+ * target and the hit target can't silently drift apart. */
+export const HIT_TOLERANCE_PX = 8
 
 const OPPOSITE: Partial<Record<HandleId, HandleId>> = {
   nw: 'se', ne: 'sw', se: 'nw', sw: 'ne', n: 's', s: 'n', e: 'w', w: 'e',

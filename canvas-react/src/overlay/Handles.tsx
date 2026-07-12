@@ -13,7 +13,7 @@
 // computes — a single rotated shape's handles come out axis-aligned here too,
 // automatically, with no special-casing: this component inherits the scope
 // limit rather than re-deciding it.
-import { selectionHandles, worldToScreen, type Camera, type Handle } from '@ensembleworks/canvas-editor'
+import { HIT_TOLERANCE_PX, selectionHandles, worldToScreen, type Camera, type Handle } from '@ensembleworks/canvas-editor'
 import type { Bounds } from '@ensembleworks/canvas-model'
 
 export interface HandlesProps {
@@ -22,16 +22,15 @@ export interface HandlesProps {
 }
 
 // Rendered handle size, SCREEN pixels, zoom-independent (a fixed px square at
-// every zoom — see the module header's "fixed screen-size glyphs"). Chosen to
-// visually match transform.ts's OWN hit-tolerance constant: that file defines
-// `HIT_TOLERANCE_PX = 8` (a private, non-exported module constant — cited
-// here by VALUE since it can't be imported) as "a comfortable click target...
-// slightly larger than DRAG_THRESHOLD's 4px". HANDLE_SIZE_PX below is that
-// same 8px, used as the rendered square's SIDE LENGTH (not diameter) — so the
-// visible handle sits comfortably inside its own 8px-radius (16px-diameter)
-// hit-tolerance disk, with a few px of forgiving margin around the glyph
-// itself. OURS: not tuned against tldraw's own handle chrome.
-const HANDLE_SIZE_PX = 8
+// every zoom — see the module header's "fixed screen-size glyphs"). IMPORTED
+// from transform.ts's own hit-tolerance constant (HIT_TOLERANCE_PX, exported
+// for exactly this consumer — see its doc comment there), used as the
+// rendered square's SIDE LENGTH (not diameter): 8px, so the visible handle
+// sits comfortably inside its own 8px-RADIUS (16px-diameter) hit-tolerance
+// disk with a few px of forgiving margin around the glyph. One constant, two
+// consumers — hitHandle's tolerance and this glyph size can't silently drift
+// apart. OURS: not tuned against tldraw's own handle chrome.
+const HANDLE_SIZE_PX = HIT_TOLERANCE_PX
 const ROTATE_HANDLE_RADIUS_PX = 5
 
 const HANDLE_FILL = 'var(--canvas-handle, #ffffff)'
