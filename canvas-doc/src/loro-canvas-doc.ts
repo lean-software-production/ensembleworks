@@ -1,5 +1,5 @@
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
-import { canonicalPageId, cascadeDropSet, makeDocument, repairPlan, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
+import { canonicalPageId, cascadeDropSet, makeDocument, repairPlan, stableStringify, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
 import type { CanvasDoc, ImportResult } from './canvas-doc.js'
 
 // Node.data layout: we store the whole model shape envelope as flat keys on the
@@ -130,6 +130,66 @@ export class LoroCanvasDoc implements CanvasDoc {
     if (!n) return
     this.deleteNode(n)
   }
+  // Collapse every physical tree node sharing `id` down to ONE — the plan's
+  // dedupeShape op (repair() only; not public API). Winner = the node whose
+  // dumped shape has the smallest stableStringify: the SAME content rule
+  // applyRepairToModel uses, so the two applications cannot drift. Exact
+  // content ties are broken by TreeID — identical strings on every converged
+  // peer (Loro node ids are `counter@peer`, shared history) — because the
+  // PHYSICAL choice must also agree across peers: content ties are
+  // model-invisible, but if two peers kept different physical survivors,
+  // their repair deltas would cross-delete each other's survivor and the
+  // shape would vanish everywhere. Traversal order is forbidden as a tiebreak
+  // (probe-proven unstable across converged peers — see test-helpers.ts's
+  // byIdAsc note).
+  private dedupeShapeNodes(id: string): void {
+    const nodes = this.nodesByShapeId(id)
+    if (nodes.length <= 1) return // already single (or gone) — idempotent
+    const keyed = nodes.map((n) => ({ n, key: stableStringify(this.readNode(n)) }))
+    keyed.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : a.n.id < b.n.id ? -1 : a.n.id > b.n.id ? 1 : 0))
+    const winner = keyed[0]!.n
+    const losers = keyed.slice(1).map((k) => k.n)
+    const loserTreeIds = new Set(losers.map((l) => l.id))
+    // If the winner sits INSIDE a loser's subtree, park it at Loro root first:
+    // deleting that loser would otherwise cascade-kill the winner, and
+    // rescuing a subtree that contains the winner under the winner would trip
+    // Loro's cycle guard. Parking is model-invisible (data.parentId is not
+    // touched); physical placement is restored best-effort below.
+    let parked = false
+    for (let anc = winner.parent(); anc; anc = anc.parent()) {
+      if (loserTreeIds.has(anc.id)) { this.tree.move(winner.id, undefined); parked = true; break }
+    }
+    // RESCUE CHILDREN before any deletion: every physical child of every
+    // loser moves under the winner — the model says those children survive
+    // (their parentId is the ID, which keeps resolving), so the physical
+    // cascade of the loser's deletion must not take them. Placement order
+    // under the winner is irrelevant (z-order comes from data.index).
+    // Children that are themselves losers are skipped (they are about to be
+    // deleted; their own children are rescued by their own loop turn).
+    // Cycle-safe: the winner is not inside any loser's subtree (parked
+    // above), so no rescued child's subtree can contain it.
+    for (const l of losers) {
+      for (const c of [...(l.children() ?? [])]) {
+        if (c.id === winner.id || loserTreeIds.has(c.id)) continue
+        this.tree.move(c.id, winner.id)
+      }
+    }
+    // Delete losers via tree.delete directly — NOT deleteNode: the per-id
+    // text container (text:<id>) is SHARED by every physical copy, and
+    // deleteNode's text cleanup would wipe the SURVIVOR's text. A loser
+    // nested under another loser dies by that ancestor's cascade first —
+    // guard on isDeleted() so the second delete is a no-op, not a throw.
+    for (const l of losers) if (!l.isDeleted()) this.tree.delete(l.id)
+    // Restore the winner's physical placement to its data.parentId if we
+    // parked it. May legitimately hit Loro's cycle guard in split-brain
+    // states (data.parentId naming a shape that is now physically the
+    // winner's descendant after rescue) — leave the winner at root then:
+    // placeInTree's own philosophy (root over impossible placement), and
+    // model-invisible either way since data.parentId is not modified.
+    if (parked) {
+      try { this.placeInTree(winner, winner.data.get('parentId') as string) } catch { /* leave at root */ }
+    }
+  }
   reparent(id: string, parentId: string, index?: number): void {
     const node = this.nodeByShapeId(id)
     if (!node) return
@@ -244,6 +304,19 @@ export class LoroCanvasDoc implements CanvasDoc {
       // either. Normal (non-duplicated) docs see exactly one node here, so
       // this is behavior-preserving for every existing single-node case.
       else if (o.op === 'dropShape') for (const n of this.nodesByShapeId(o.id)) this.deleteNode(n) // cascade + text cleanup
+      else if (o.op === 'dedupeShape') {
+        if (dropAll.has(o.id)) {
+          // The id is claimed by a drop CASCADE (an ancestor of one of its
+          // copies is being dropped): cascadeDropSet is keyed by id, so the
+          // model drops EVERY entry of this id — mirror that here by
+          // deleting all physical copies (deleteNode's text cleanup is
+          // correct in this branch: the id is model-dead) instead of
+          // collapsing them to a winner the model would not keep.
+          for (const n of this.nodesByShapeId(o.id)) this.deleteNode(n)
+        } else {
+          this.dedupeShapeNodes(o.id)
+        }
+      }
       else if (o.op === 'reparentToRoot') {
         if (dropAll.has(o.id)) continue // claimed by a drop cascade — see above
         // 'page:orphans' is unreachable: repairPlan emits no reparentToRoot

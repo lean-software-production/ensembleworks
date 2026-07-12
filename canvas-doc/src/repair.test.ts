@@ -109,4 +109,92 @@ assert.deepEqual(doc4.listShapes().map((s) => s.id), ['shape:ar4'], 'bad4, child
 assert.deepEqual(doc4.listBindings(), [], 'binding touching the cascaded grandchild swept in the same pass')
 assert.deepEqual(checkInvariants(dumpModel(doc4)), [], 'invariant-clean after ONE repair()')
 
+// ---- (5) dedupe: duplicate physical nodes for ONE shape id (the reviewer's
+// raw-doc repro of the offline delete+recreate race). Two docs fork from a
+// shared genesis holding shape:x; both delete+recreate shape:x concurrently
+// (different content) and cross-import: the tree CRDT keeps BOTH new physical
+// nodes — every peer now lists two entries for shape:x. Also builds the
+// CHILD-RESCUE case: shape:y is created under the copy that will LOSE the
+// content-winner election, and must survive the dedupe under the winner. ----
+{
+  const genesis = LoroCanvasDoc.create({ peerId: 50n })
+  genesis.putPage({ id: 'page:p', name: 'P' })
+  genesis.putShape({ id: 'shape:x', kind: 'note', parentId: 'page:p', props: {}, ...base() } as any)
+  genesis.commit()
+  const snap = genesis.exportSnapshot()
+
+  const docA = LoroCanvasDoc.fromSnapshot(snap, { peerId: 51n })
+  const docB = LoroCanvasDoc.fromSnapshot(snap, { peerId: 52n })
+
+  // A: delete + recreate as 'note' (the content LOSER — "note" > "geo" at the
+  // first divergent key of the key-sorted serialization), then hang a child
+  // under it: y's physical node lands under A's (losing) copy.
+  docA.deleteShape('shape:x')
+  docA.putShape({ id: 'shape:x', kind: 'note', parentId: 'page:p', props: {}, ...base(), x: 500 } as any)
+  docA.putShape({ id: 'shape:y', kind: 'note', parentId: 'shape:x', props: {}, ...base() } as any)
+  docA.commit()
+
+  // B: delete + recreate as 'geo' (the content WINNER).
+  docB.deleteShape('shape:x')
+  docB.putShape({ id: 'shape:x', kind: 'geo', parentId: 'page:p', props: {}, ...base() } as any)
+  docB.commit()
+
+  const updA = docA.exportUpdate()
+  const updB = docB.exportUpdate()
+  docA.import(updB); docA.commit()
+  docB.import(updA); docB.commit()
+
+  assert.equal(
+    docA.listShapes().filter((s) => s.id === 'shape:x').length, 2,
+    'precondition: the merge kept BOTH physical nodes for shape:x',
+  )
+  assert.ok(
+    checkInvariants(dumpModel(docA)).some((v) => v.rule === 'uniqueIds' && v.id === 'shape:x'),
+    'the duplicate is VISIBLE to invariants (uniqueIds)',
+  )
+
+  // PIN the pre-repair public-API anomaly on a throwaway clone — the textbook
+  // "undeletable shape": deleteShape kills only the first physical match, so
+  // getShape still answers for the id afterwards. This documents the REAL
+  // misbehavior dedupe exists to heal (it is intentionally not "fixed" at the
+  // deleteShape level: repair is the healing pass, first-match is the
+  // documented single-node contract).
+  {
+    const clone = LoroCanvasDoc.fromSnapshot(docA.exportSnapshot(), { peerId: 53n })
+    clone.deleteShape('shape:x')
+    assert.ok(
+      clone.getShape('shape:x') !== undefined,
+      'PINNED pre-repair symptom: deleteShape removed only one physical copy — the id is undeletable',
+    )
+  }
+
+  // Repair: every peer computes the same content winner and collapses to it.
+  const before5 = dumpModel(docA)
+  const plan5 = repairPlan(before5)
+  assert.deepEqual(plan5, [{ op: 'dedupeShape', id: 'shape:x' }], 'the plan names exactly one dedupe')
+  const expected5 = applyRepairToModel(before5, plan5)
+
+  const appliedA = docA.repair(); docA.commit()
+  const appliedB = docB.repair(); docB.commit()
+  assert.deepEqual(appliedA, plan5)
+  assert.deepEqual(appliedB, plan5, 'both peers compute the identical plan from converged state')
+
+  assert.equal(docA.listShapes().filter((s) => s.id === 'shape:x').length, 1, 'exactly ONE physical node survives')
+  assert.equal(docA.getShape('shape:x')!.kind, 'geo', 'the survivor is the content winner (smallest stableStringify)')
+  assert.ok(docA.getShape('shape:y'), 'CHILD RESCUE: the child parented under the LOSING node survives')
+  assert.equal(docA.getShape('shape:y')!.parentId, 'shape:x', 'the rescued child still resolves its parent by id')
+  assert.deepEqual(checkInvariants(dumpModel(docA)), [], 'invariant-clean after ONE repair()')
+  assert.deepEqual(normalize(dumpModel(docA)), normalize(expected5), 'model-agreement: Loro repair == applyRepairToModel')
+  assert.deepEqual(normalize(dumpModel(docA)), normalize(dumpModel(docB)), 'both peers converge to the identical repaired state')
+  assert.deepEqual(docA.repair(), [], 'dedupe is idempotent')
+
+  // The id is genuinely deletable now — and the cascade takes the RESCUED
+  // child with it, proving y was physically re-homed under the winner (not
+  // left dangling under a tombstone).
+  docA.deleteShape('shape:x')
+  docA.commit()
+  assert.equal(docA.getShape('shape:x'), undefined, 'post-repair, deleteShape actually deletes the id')
+  assert.equal(docA.getShape('shape:y'), undefined, 'the rescued child cascades with the winner — physical rescue proven')
+}
+
 console.log('ok: repair (doc)')

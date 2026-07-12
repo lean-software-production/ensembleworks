@@ -239,4 +239,66 @@ import { normalize, shape } from './test-helpers.js'
   )
 }
 
+// --- (8) THE DUPLICATE-SHAPE RECONNECT RACE (production path): both clients
+// delete+recreate the SAME shape id while offline, then reconnect. The merge
+// keeps both physical tree nodes for the id — the convergence rig's discovery,
+// reachable through this exact documented flow. The server repairs on every
+// changed import, so dedupe must fire automatically post-reconnect: all three
+// parties converge to exactly ONE shape:x (the content winner), invariants
+// clean, and the id is genuinely deletable again (no "undeletable shape"). ---
+{
+  const server = new SyncServerPeer({ peerId: 8n })
+  const [serverEndA, clientEndA] = makePair()
+  const [serverEndB, clientEndB] = makePair()
+  server.connect(serverEndA)
+  server.connect(serverEndB)
+  const clientA = new SyncClientPeer({ peerId: 811n, transport: clientEndA })
+  const clientB = new SyncClientPeer({ peerId: 812n, transport: clientEndB })
+
+  clientA.doc.putPage({ id: 'page:p', name: 'P' })
+  clientA.doc.commit()
+  clientA.putShape(shape('shape:x'))
+  assert.deepEqual(normalize(dumpModel(clientB.doc)), normalize(dumpModel(clientA.doc)), 'precondition: converged before the split')
+
+  // Both go offline.
+  clientEndA.close()
+  clientEndB.close()
+
+  // Both delete + recreate shape:x offline, with DIFFERENT content. Winner
+  // rule is content-based (smallest stableStringify): the entries first
+  // diverge at "kind" — "geo" < "note" — so B's recreation must win.
+  clientA.doc.deleteShape('shape:x')
+  clientA.doc.putShape(shape('shape:x', { kind: 'note', x: 500 }))
+  clientA.doc.commit()
+  clientB.doc.deleteShape('shape:x')
+  clientB.doc.putShape(shape('shape:x', { kind: 'geo' }))
+  clientB.doc.commit()
+
+  // Reconnect both on fresh pairs.
+  const [serverEndA2, clientEndA2] = makePair()
+  server.connect(serverEndA2)
+  clientA.reconnect(clientEndA2)
+  const [serverEndB2, clientEndB2] = makePair()
+  server.connect(serverEndB2)
+  clientB.reconnect(clientEndB2)
+
+  for (const [name, doc] of [['server', server.doc], ['clientA', clientA.doc], ['clientB', clientB.doc]] as const) {
+    assert.equal(
+      doc.listShapes().filter((s) => s.id === 'shape:x').length, 1,
+      `${name} holds exactly ONE shape:x after the reconnect race — dedupe repair fired`,
+    )
+    assert.equal(doc.getShape('shape:x')!.kind, 'geo', `${name}'s survivor is the content winner`)
+    assert.deepEqual(checkInvariants(dumpModel(doc)), [], `${name} is invariant-clean`)
+  }
+  assert.deepEqual(normalize(dumpModel(clientA.doc)), normalize(dumpModel(server.doc)), 'A == server')
+  assert.deepEqual(normalize(dumpModel(clientB.doc)), normalize(dumpModel(server.doc)), 'B == server')
+
+  // The id is genuinely deletable again, end to end.
+  clientA.doc.deleteShape('shape:x')
+  clientA.doc.commit()
+  for (const [name, doc] of [['server', server.doc], ['clientA', clientA.doc], ['clientB', clientB.doc]] as const) {
+    assert.equal(doc.getShape('shape:x'), undefined, `${name}: shape:x fully deleted — no undeletable survivor`)
+  }
+}
+
 console.log('ok: client-peer')
