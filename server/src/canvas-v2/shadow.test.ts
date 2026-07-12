@@ -139,6 +139,7 @@ mirror2.tick() // ticks=2, recovers
 	const m = mirror2.metrics()
 	assert.equal(m.ticks, 2)
 	assert.equal(m.tickErrors, 1, 'no new error on the healthy tick')
+	assert.ok(m.lastError?.includes('boom'), 'lastError is sticky — forensics survive recovery')
 	assert.ok(m.puts >= 1, 'the healthy tick actually reconciled')
 	assert.deepEqual(sortedIds(dumpModel(mirror2.doc).shapes), sortedIds(fromTldraw(goodRecords).shapes))
 }

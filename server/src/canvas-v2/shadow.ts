@@ -66,6 +66,10 @@ export interface ShadowMetrics {
 	snapshotBytes: number
 	/** Ticks whose body threw (getRecords, fromTldraw, or reconcile). Counted, never propagated. */
 	tickErrors: number
+	/** Sticky by design: the last tick error SINCE MIRROR CREATION, never
+	 * cleared by a later healthy tick — read it as forensics ("has this
+	 * mirror ever failed, and how"), not current state; pair with
+	 * tickErrors to see whether failures are ongoing. */
 	lastError: string | null
 }
 
