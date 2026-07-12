@@ -71,6 +71,22 @@ function excludedIds(doc: CanvasDocument, movingIds: readonly string[]): Set<str
  * a unit, not shape-by-shape). `movingIds` names the shapes being dragged
  * (their descendants are excluded too — see excludedIds).
  *
+ * STALENESS: consult SpatialIndex's staleness contract (spatial-index.ts) —
+ * this reads the index's build-time buckets/bounds, so targets are where
+ * they were at the last rebuild; the moving selection's own correctness
+ * comes from the exclusion set, not from the index.
+ *
+ * `opts.excludedIds` is a perf escape hatch mirroring worldCorners'
+ * precomputedTransform: deriving the excluded set costs a descendantsOf BFS
+ * per moving id (O(n) filter per BFS node — measured ~2.4ms/call derived
+ * vs ~0.02ms precomputed at 1k shapes dragging a frame with 999 children),
+ * and movingIds does not change mid-gesture, so Seam C should compute the
+ * set ONCE at drag-start
+ * (movingIds ∪ all their descendants — exactly what the derived path
+ * builds) and pass it on every pointermove. The supplied set is trusted
+ * verbatim: a set missing descendants will let a moving child be offered
+ * as its own snap target.
+ *
  * Independently finds the single best (closest) snap on the X axis and on
  * the Y axis, across every candidate target's edge/edge, center/center, and
  * edge/center feature pairs. "Best" = smallest |delta|; ties are broken by
@@ -83,8 +99,9 @@ export function snapCandidates(
   doc: CanvasDocument,
   movingIds: readonly string[],
   bounds: Bounds,
+  opts?: { excludedIds?: ReadonlySet<string> },
 ): SnapResult {
-  const excluded = excludedIds(doc, movingIds)
+  const excluded = opts?.excludedIds ?? excludedIds(doc, movingIds)
   const unit = medianSize(doc.shapes)
   const threshold = unit * SNAP_THRESHOLD_K
   // Search area padded by SEARCH_RADIUS_K (not `threshold` — see its
@@ -134,7 +151,14 @@ export function snapCandidates(
 // Arrow anchor resolution (Seam C7 dependency)
 // ============================================================================
 
-const clamp01 = (v: number): number => Math.max(0, Math.min(1, v))
+// Clamp to [0,1], TOTAL over all number inputs: Math.max/Math.min PROPAGATE
+// NaN rather than clamping it, so a bare max/min chain would let a
+// NaN-poisoned caller point produce a NaN anchor — which, persisted into a
+// binding, silently breaks that arrow forever (anchorToWorld does no
+// re-validation). Non-finite input (NaN from arithmetic on a NaN point;
+// ±Infinity likewise) falls back to 0.5 — center, matching
+// resolveArrowAnchor's missing-target fallback philosophy.
+const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5)
 
 /**
  * Normalized anchor (0..1 on both axes, clamped) of a world `point` within

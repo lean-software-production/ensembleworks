@@ -173,6 +173,38 @@ assert.equal(
   assert.ok(elapsedMs < 2000, `non-finite bounds must stay fast (took ${elapsedMs.toFixed(0)}ms) -- a regression here means a hang, not just a slowdown`)
 }
 
+// ---- bimodal size distribution: MULTI-shape overflow ----
+// The overflow trigger is median-relative, so this is NOT a one-outlier
+// path: 501 tiny (1x1) + 499 large (100x100) shapes gives median size 1 →
+// cellSize 1 → every large shape spans 100x100 = 10,000 cells > the 4096
+// cap, so the ENTIRE large mode (499 shapes, half the doc) lands in
+// overflow at once. Pins the documented degradation contract: correctness
+// fully preserved (everything still findable, point probes still resolve
+// the right shape) while every query pays O(overflow) — accepted tradeoff,
+// but the behavior must not silently change shape.
+{
+  const started = performance.now()
+  const shapes: any[] = []
+  for (let i = 0; i < 501; i++) shapes.push(geo(`shape:tiny${i}`, 'page:p', i * 10, 0, 0, 1, 1))
+  for (let i = 0; i < 499; i++) shapes.push(geo(`shape:large${i}`, 'page:p', i * 300, 1000, 0, 100, 100))
+  const doc = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes, bindings: [] })
+  const index = buildSpatialIndex(doc)
+  assert.equal(index.cellSize, 1, 'precondition: median (and thus cellSize) is the tiny mode')
+  assert.equal(index.overflow.length, 499, 'the ENTIRE large mode overflows -- median-relative trigger, not a one-outlier path')
+  // Correctness preserved despite half the doc being un-partitioned:
+  const everything = queryViewport(index, { minX: -1e9, minY: -1e9, maxX: 1e9, maxY: 1e9 })
+  assert.equal(everything.length, 1000, 'a huge viewport still returns every shape, overflow included')
+  assert.equal(hitTestTopmost(index, doc, { x: 300 * 42 + 50, y: 1050 }), 'shape:large42', 'a point probe inside one specific large (overflow) shape resolves it')
+  assert.equal(hitTestTopmost(index, doc, { x: 10 * 42, y: 0.5 }), 'shape:tiny42', 'a point probe inside a tiny (indexed) shape still resolves it -- overflow shapes are candidates but lose the exact test')
+  assert.deepEqual(
+    queryMarquee(index, doc, { minX: 300 * 7 - 5, minY: 995, maxX: 300 * 7 + 105, maxY: 1105 }, 'contain'),
+    ['shape:large7'],
+    'contain-marquee around one large shape selects exactly it, out of 499 overflow candidates',
+  )
+  const elapsedMs = performance.now() - started
+  assert.ok(elapsedMs < 2000, `bimodal case must stay fast (took ${elapsedMs.toFixed(0)}ms)`)
+}
+
 // ---- property test (seeded, ~1000 cases) ----
 // mulberry32 copied verbatim from canvas-sync/src/rig/prng.ts: canvas-model
 // cannot import canvas-sync (dependency direction — canvas-model is the pure

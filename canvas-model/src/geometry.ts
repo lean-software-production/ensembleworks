@@ -51,6 +51,21 @@ function rotatePoint(p: Point, theta: number): Point {
   return { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos }
 }
 
+// The two edge-direction unit axes of a rectangle rotated by `theta` under
+// the NORMATIVE convention above: the images of the local x/y unit vectors,
+// i.e. the rotation matrix's columns [{cosθ, sinθ}, {−sinθ, cosθ}] (equal
+// to rotatePoint({1,0}) and rotatePoint({0,1})). Exported so consumers that
+// need the axes directly — e.g. spatial-index's SAT rectangle intersection
+// projects onto exactly these — derive them HERE, from the same matrix
+// rotatePoint applies, instead of re-deriving cos/sin locally and silently
+// depending on this file's sign convention with no compiler link
+// (drift-proofing: a convention change now breaks exactly one function, not
+// one function plus a stealth copy in another file).
+export function rotationAxes(theta: number): [Point, Point] {
+  const cos = Math.cos(theta), sin = Math.sin(theta)
+  return [{ x: cos, y: sin }, { x: -sin, y: cos }]
+}
+
 // Compose a parent's world rigid transform with a child's local (relative to
 // parent) rigid transform, yielding the child's world rigid transform.
 // Derivation: World(p) = parentWorld(rotate(p, local.rotation) + local.xy)

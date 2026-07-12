@@ -35,6 +35,26 @@ function twoBoxDoc(gap: number): CanvasDocument {
   assert.ok(result.guides.some((g) => g.axis === 'x' && g.at === 100 && g.kind === 'edge'), 'an edge guide line at x=100')
 }
 
+// ---- precomputed excludedIds (opts) path ----
+// Seam C computes the excluded set ONCE at drag-start and passes it per
+// pointermove; results must be IDENTICAL to the per-call derived path, and
+// the passed set must actually be CONSUMED (an implementation that ignores
+// opts would pass the equivalence check trivially — the anchor-excluded
+// case below is what catches that).
+{
+  const doc = twoBoxDoc(3)
+  const index = buildSpatialIndex(doc)
+  const bounds = { minX: 103, minY: 0, maxX: 203, maxY: 100 }
+  const derived = snapCandidates(index, doc, ['shape:moving'], bounds)
+  const viaOpts = snapCandidates(index, doc, ['shape:moving'], bounds, { excludedIds: new Set(['shape:moving']) })
+  assert.deepEqual(viaOpts, derived, 'a correctly-precomputed excludedIds set produces identical results to the derived path')
+  // Consumption proof: a caller-supplied set that ALSO excludes the anchor
+  // makes the snap vanish entirely — impossible if opts were ignored.
+  const anchorExcluded = snapCandidates(index, doc, ['shape:moving'], bounds, { excludedIds: new Set(['shape:moving', 'shape:anchor']) })
+  assert.equal(anchorExcluded.dx, 0, 'excluding the only target via opts kills the x snap')
+  assert.deepEqual(anchorExcluded.guides, [], 'no guides when the caller-supplied set excludes every candidate')
+}
+
 // ---- outside threshold: no snap ----
 {
   const doc = twoBoxDoc(20) // gap 20 > threshold 5
@@ -154,6 +174,23 @@ function twoBoxDoc(gap: number): CanvasDocument {
   const farAway = { x: 100000, y: 100000 }
   const clamped = resolveArrowAnchor(doc, 'shape:target', farAway)
   assert.ok(clamped.nx >= 0 && clamped.nx <= 1 && clamped.ny >= 0 && clamped.ny <= 1, 'anchor is always clamped to 0..1')
+
+  // NaN-poisoned caller point: the documented "clamped 0..1" invariant must
+  // hold even then — Math.max/Math.min PROPAGATE NaN rather than clamping
+  // it, and a NaN anchor persisted into a binding would silently break that
+  // arrow forever (anchorToWorld does no re-validation). The target is
+  // rotated, so one NaN coordinate poisons BOTH local axes through the
+  // inverse rotation; the fallback is 0.5 per axis (center — matching
+  // resolveArrowAnchor's missing-target fallback philosophy).
+  const nanResolved = resolveArrowAnchor(doc, 'shape:target', { x: NaN, y: 50 })
+  assert.equal(nanResolved.nx, 0.5, 'NaN x input falls back to the 0.5 center anchor, never NaN')
+  assert.equal(nanResolved.ny, 0.5, 'NaN poisons both axes through the inverse rotation; both fall back to 0.5')
+  const infResolved = resolveArrowAnchor(doc, 'shape:target', { x: Infinity, y: Infinity })
+  assert.ok(
+    Number.isFinite(infResolved.nx) && infResolved.nx >= 0 && infResolved.nx <= 1 &&
+    Number.isFinite(infResolved.ny) && infResolved.ny >= 0 && infResolved.ny <= 1,
+    'Infinity inputs also resolve to a finite clamped anchor',
+  )
 }
 
 console.log('ok: snapping')

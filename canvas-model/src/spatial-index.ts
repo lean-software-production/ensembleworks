@@ -1,12 +1,46 @@
 // Uniform-grid spatial index over a CanvasDocument's shapes: culling
 // (queryViewport), marquee selection (queryMarquee, both AABB-'contain' and
 // quad-accurate 'intersect'), and z-ordered point picking (hitTestTopmost).
-// Built once per snapshot of `doc` — callers rebuild after any mutation
-// (this package has no mutation/subscription machinery; that's the editor's
-// job in a later seam).
+//
+// ============================================================================
+// STALENESS CONTRACT (Seam C/D: read this before wiring the editor to it)
+//
+// REBUILD CADENCE: rebuild on DOC COMMIT, not per-pointermove. "Any
+// mutation" includes REMOTE peers' edits arriving through sync — a doc that
+// changed under you for any reason needs a rebuild before the index
+// reflects it. This package has no mutation/subscription machinery; wiring
+// rebuild-on-commit is the editor's job in a later seam.
+//
+// WHAT A STALE INDEX DOES, precisely (per query — the two families differ):
+//   - The quad-exact queries — hitTestTopmost, queryMarquee('intersect') —
+//     take candidates from BUILD-TIME cell buckets but run their exact test
+//     (hitTestPoint / SAT) against the CURRENT doc. Staleness therefore
+//     produces OMISSIONS ONLY (a shape that moved into the queried region
+//     since the build isn't in the right bucket yet), never false
+//     positives: a bucket hit that no longer overlaps fails the exact test
+//     and is filtered out.
+//   - The AABB queries — queryViewport, queryMarquee('contain') — answer
+//     entirely from build-time boundsById: they can BOTH omit a shape that
+//     moved in AND report a shape at its build-time position after it moved
+//     away. For culling this over-inclusion is deliberate and harmless
+//     (drawing a shape that would have been culled is correct, just
+//     unclipped); for 'contain' marquees it means selection reflects the
+//     last committed positions — which is exactly what a user mid-someone-
+//     else's-drag should see anyway.
+//
+// DRAGGING: during a drag, the moving selection's correctness comes from
+// snapCandidates' movingIds/excludedIds EXCLUSION, not from re-querying the
+// selection's own (stale) indexed position — unmoving shapes sitting in a
+// slightly-old index is the design, not a bug to fix with per-move rebuilds.
+//
+// NO IDENTITY CHECK: nothing ties an index to the doc it was built from.
+// Passing a mismatched (index, doc) pair is not detected — it fails
+// SILENTLY as omissions (and, for the AABB queries, as answers about the
+// wrong doc's geometry). Keep the pairing straight at the call site.
+// ============================================================================
 import { type CanvasDocument } from './document.js'
 import {
-  type Bounds, type Point, medianSize, worldBounds, worldCorners, worldTransform, hitTestPoint,
+  type Bounds, type Point, medianSize, rotationAxes, worldBounds, worldCorners, worldTransform, hitTestPoint,
 } from './geometry.js'
 
 export interface SpatialIndex {
@@ -22,27 +56,39 @@ export interface SpatialIndex {
    * area / cellSize²). Without this clamp, queryViewport over a huge
    * viewport would try to loop literally billions of empty cells. */
   readonly cellRange: { minCx: number; maxCx: number; minCy: number; maxCy: number } | null
-  /** Shape ids whose worldBounds is non-finite (NaN/±Infinity — e.g. a
-   * shape built from a non-finite x/y/w/h; the envelope's schema doesn't
-   * bound these) or would fan out into more than MAX_CELLS_PER_SHAPE cells
-   * (a shape orders of magnitude larger than the rest of the document).
-   * These are never fanned into `cells` — doing so is either impossible
-   * (NaN cell keys) or a genuine hang (a shape spanning ~1e8+ cells). They
-   * are instead always included as a query candidate everywhere (see
-   * candidatesFor/hitTestTopmost), relying on the caller's exact
-   * boundsIntersect/hitTestPoint check for correctness — the index just
-   * can't spatially partition something with no meaningful spatial extent. */
+  /** Shape ids the grid could not spatially partition. The trigger is
+   * MEDIAN-RELATIVE, not "one pathological shape": a shape lands here when
+   * its worldBounds is non-finite (NaN/±Infinity — the envelope's schema
+   * doesn't bound these) OR spans more than MAX_CELLS_PER_SHAPE cells at
+   * cellSize ≈ medianSize(doc.shapes). Because the cell size tracks the
+   * MEDIAN, a bimodal size distribution routes the entire large mode here —
+   * e.g. 501 tiny + 499 huge shapes puts ALL 499 huge ones in overflow
+   * (median = tiny), not just an outlier or two.
+   *
+   * DEGRADATION MODE: overflow ids are unconditionally added to EVERY
+   * query's candidate pool — including a 10×10 point probe on the far side
+   * of the canvas — so each query silently pays O(overflow) extra exact
+   * tests (boundsIntersect / hitTestPoint / SAT). Correctness is fully
+   * preserved (the exact tests decide; nothing is dropped), but for the
+   * overflow subset the index degrades to a linear scan. This is the
+   * accepted tradeoff: the alternative — fanning a huge-relative-to-median
+   * shape into its ~1e8 spanned cells — is a build-time hang, and NaN cell
+   * keys are impossible. Pinned by spatial-index.test.ts's bimodal-doc
+   * case. */
   readonly overflow: readonly string[]
 }
 
 const cellKey = (cx: number, cy: number): string => `${cx},${cy}`
 
-// A single pathological shape must never make index-build cost unbounded:
-// this caps how many cells ONE shape may fan into before it's routed to
-// `overflow` instead. 4096 is generous (a 64x64 cell footprint at the
-// default ~one-median-shape cell size) while still being small compared to
-// "iterate the entire spanned range" for a shape whose bounds are
-// orders of magnitude larger than the document's typical size.
+// No shape may make index-build cost unbounded: this caps how many cells
+// any one shape may fan into before it's routed to `overflow` instead.
+// 4096 is generous (a 64x64 cell footprint at the default
+// ~one-median-shape cell size) while still being small compared to
+// "iterate the entire spanned range" for a shape whose bounds are orders
+// of magnitude larger than the document's MEDIAN size. Note the trigger is
+// median-relative: in a bimodal doc, EVERY shape of the large mode
+// exceeds this and lands in overflow — see SpatialIndex.overflow for the
+// degradation mode that implies.
 const MAX_CELLS_PER_SHAPE = 4096
 
 // Is this shape's cell span small and finite enough to fan out into `cells`?
@@ -60,7 +106,20 @@ function cellSpanIsSane(minCx: number, maxCx: number, minCy: number, maxCy: numb
 // Build the grid. Cell size = medianSize(doc.shapes) — "about one median
 // shape" per cell, the same scale-relative unit clusterShapes/snapCandidates
 // use, so a typical shape spans O(1) cells (few candidates per cell) without
-// so many cells that a large shape spans hundreds of them. Degenerate paths:
+// so many cells that a large shape spans hundreds of them.
+//
+// COST (relevant because the staleness contract above says rebuild on every
+// doc commit): O(n·depth) — each shape's worldBounds walks its own parent
+// chain to the root with NO cross-shape ancestor memoization, so deeply
+// nested trees pay the chain repeatedly (measured: ~2ms at 1k flat shapes;
+// ~4ms at a 200-deep chain; ~80ms at 1600-deep — super-linear in depth). The
+// working assumption is that real canvases nest shallowly (frames/groups a
+// few levels deep); a pathologically deep parent chain is a KNOWN,
+// UNMITIGATED perf risk of the rebuild-per-commit model. If it ever bites,
+// the fix is memoizing worldTransform per build pass — an internal change,
+// no API impact.
+//
+// Degenerate paths:
 //   - empty doc: medianSize's own empty-doc fallback (100) applies — no
 //     special case needed here.
 //   - all-zero-size shapes: medianSize could legitimately be 0, which would
@@ -142,6 +201,9 @@ function candidatesFor(index: SpatialIndex, bounds: Bounds): string[] {
 // matters at cell borders: a shape can share a candidate cell with the query
 // without their bounds actually overlapping (e.g. touching only at the
 // cell's far corner).
+// STALENESS: answers entirely from build-time bounds — can both omit
+// moved-in shapes and report moved-away shapes at their old position (by
+// design for culling; see the contract at the top of this file).
 export function queryViewport(index: SpatialIndex, bounds: Bounds): string[] {
   return candidatesFor(index, bounds).filter((id) => boundsIntersect(index.boundsById.get(id)!, bounds))
 }
@@ -162,6 +224,10 @@ export function queryViewport(index: SpatialIndex, bounds: Bounds): string[] {
 // intersection, and true-quad intersection implies AABB intersection (the
 // quad's own AABB is a superset of the quad), so narrowing from that pool
 // loses nothing.
+// STALENESS: 'intersect' runs its exact SAT test against the CURRENT doc
+// (stale index ⇒ omissions only); 'contain' answers from build-time bounds
+// (stale index ⇒ omissions AND last-committed positions). Contract at the
+// top of this file.
 export function queryMarquee(
   index: SpatialIndex,
   doc: CanvasDocument,
@@ -195,18 +261,20 @@ function projectOntoAxis(points: readonly Point[], axis: Point): [number, number
 // rectangle (4 corners, known rotation). Both operands are rectangles
 // (parallelograms with right angles), so only 4 axes are ever candidate
 // separators: the rect's own 2 edge normals (x, y) and the rotated
-// rectangle's 2 edge normals (perpendicular to each other, derived from
-// `rotation`). If every axis's projected intervals overlap, the shapes
-// intersect; any one separating axis proves they don't. Inclusive (touching
-// counts as intersecting), matching worldBounds/hitTestPoint's inclusive
-// boundary convention.
+// rectangle's 2 edge axes — taken from geometry.ts's rotationAxes so the
+// sign convention has a single source of truth (see that function's
+// drift-proofing note) rather than a local cos/sin re-derivation. If every
+// axis's projected intervals overlap, the shapes intersect; any one
+// separating axis proves they don't. Inclusive (touching counts as
+// intersecting), matching worldBounds/hitTestPoint's inclusive boundary
+// convention.
 function rectQuadIntersects(rect: Bounds, quadCorners: readonly Point[], rotation: number): boolean {
   const rectCorners: Point[] = [
     { x: rect.minX, y: rect.minY }, { x: rect.maxX, y: rect.minY },
     { x: rect.maxX, y: rect.maxY }, { x: rect.minX, y: rect.maxY },
   ]
-  const cos = Math.cos(rotation), sin = Math.sin(rotation)
-  const axes: Point[] = [{ x: 1, y: 0 }, { x: 0, y: 1 }, { x: cos, y: sin }, { x: -sin, y: cos }]
+  const [quadAxisX, quadAxisY] = rotationAxes(rotation)
+  const axes: Point[] = [{ x: 1, y: 0 }, { x: 0, y: 1 }, quadAxisX, quadAxisY]
   for (const axis of axes) {
     const [rMin, rMax] = projectOntoAxis(rectCorners, axis)
     const [qMin, qMax] = projectOntoAxis(quadCorners, axis)
@@ -254,6 +322,9 @@ function isDescendantOf(doc: CanvasDocument, id: string, ancestorId: string): bo
 // adds a shape to every (sane-sized) cell its worldBounds spans — so the
 // point's cell is guaranteed to include every non-overflow shape that could
 // possibly hit-test true there, and overflow shapes are always candidates.
+// STALENESS: candidates come from build-time buckets but hitTestPoint runs
+// against the CURRENT doc — stale index ⇒ omissions only, never a false
+// hit (contract at the top of this file).
 export function hitTestTopmost(index: SpatialIndex, doc: CanvasDocument, point: Point): string | null {
   const key = cellKey(Math.floor(point.x / index.cellSize), Math.floor(point.y / index.cellSize))
   const candidates = [...(index.cells.get(key) ?? []), ...index.overflow]

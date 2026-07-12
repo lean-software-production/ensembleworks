@@ -28,7 +28,11 @@ const docUnrotated = makeDocument({
   shapes: [{ id: 'shape:a', kind: 'geo', parentId: 'page:p', x: 10, y: 20, rotation: 0, props: { w: 100, h: 50 }, ...base() } as any],
   bindings: [],
 })
-assert.deepEqual(worldBounds(docUnrotated, docUnrotated.byId.get('shape:a')!), { minX: 10, minY: 20, maxX: 110, maxY: 70 })
+assert.deepEqual(
+  worldBounds(docUnrotated, docUnrotated.byId.get('shape:a')!),
+  { minX: 10, minY: 20, maxX: 110, maxY: 70 },
+  'unrotated box: world bounds are origin + w/h exactly',
+)
 
 // ---- (2) rotated-box case, exact trig-derived expectations ----
 // 100x100 box at (0,0) rotated pi/4: corners (0,0), (70.71,70.71), (0,141.42), (-70.71,70.71).
