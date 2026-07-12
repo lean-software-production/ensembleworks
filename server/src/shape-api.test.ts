@@ -550,8 +550,8 @@ async function main() {
 		assert.deepEqual([...shape.input.properties.op.enum].sort(), ['create', 'delete', 'update'], 'op enum is exactly create|update|delete')
 		assert.deepEqual(
 			[...shape.input.properties.type.enum].sort(),
-			['arrow', 'draw', 'frame', 'geo', 'highlight', 'line', 'note', 'text'],
-			'create type enum is exactly the 8',
+			['arrow', 'draw', 'frame', 'geo', 'highlight', 'iframe', 'line', 'note', 'text'],
+			'create type enum is exactly the 9',
 		)
 		for (const bad of ['align', 'group', 'eraser', 'laser', 'image']) {
 			assert.ok(!Object.keys(shape.input.properties).includes(bad), `no input field named ${bad}`)
@@ -628,6 +628,53 @@ async function main() {
 			assert.ok(s, `${survivor} survives on the page`)
 			assert.ok(d.some((x) => x.id === s.parentId), `${survivor} has no dangling parentId after frame delete`)
 		}
+	})
+
+	// =========================================================================
+	// IFRAME WEB VIEWS
+	// =========================================================================
+	await check('AC25: iframe create — defaults (w/h/title from host), explicit props, frame parenting, http(s)-only, update url', async () => {
+		// defaults: w 800, h 600, title = URL host; url stored verbatim
+		const def = await postJson('/api/canvas/shape', { room: 'ac25', type: 'iframe', url: 'https://example.com/docs' })
+		assert.equal(def.status, 200, 'iframe create → 200')
+		const drec = docs('ac25').find((d) => d.id === def.body.id)
+		assert.equal(drec.type, 'iframe')
+		assert.equal(drec.props.url, 'https://example.com/docs', 'url stored verbatim')
+		assert.equal(drec.props.w, 800, 'default w = 800')
+		assert.equal(drec.props.h, 600, 'default h = 600')
+		assert.equal(drec.props.title, 'example.com', 'default title = URL host')
+		// explicit props — a localhost dev url stays verbatim (NOT proxied server-side)
+		const exp = await postJson('/api/canvas/shape', {
+			room: 'ac25', type: 'iframe', url: 'http://localhost:5173/app', title: 'Vite', x: 100, y: 80, w: 640, h: 480,
+		})
+		assert.equal(exp.status, 200)
+		const erec = docs('ac25').find((d) => d.id === exp.body.id)
+		assert.equal(erec.props.url, 'http://localhost:5173/app', 'localhost url stored verbatim (no /dev/ proxy rewrite)')
+		assert.equal(erec.props.title, 'Vite', 'explicit title honoured')
+		assert.equal(erec.props.w, 640, 'explicit w')
+		assert.equal(erec.props.h, 480, 'explicit h')
+		assert.equal(erec.x, 100, 'page-point x')
+		assert.equal(erec.y, 80, 'page-point y')
+		// frame parenting (same convention as geo/note)
+		const f = await postJson('/api/canvas/shape', { room: 'ac25', type: 'frame', name: 'Web frame' })
+		const framed = await postJson('/api/canvas/shape', { room: 'ac25', type: 'iframe', url: 'https://example.com', frame: 'Web frame' })
+		assert.equal(framed.status, 200, 'iframe --frame → 200')
+		assert.equal(docs('ac25').find((d) => d.id === framed.body.id).parentId, f.body.id, 'iframe parented to the frame')
+		// invalid url → 400, no record written
+		const before = docs('ac25').filter((d) => d.type === 'iframe').length
+		for (const bad of [{ url: 'ftp://example.com' }, { url: 'not a url' }, { url: 'javascript:alert(1)' }, {}]) {
+			const r = await postJson('/api/canvas/shape', { room: 'ac25', type: 'iframe', ...bad })
+			assert.equal(r.status, 400, `invalid iframe url (${JSON.stringify(bad)}) → 400`)
+		}
+		assert.equal(docs('ac25').filter((d) => d.type === 'iframe').length, before, 'no iframe record written on any 400')
+		// update url/title via the generic --props merge (no iframe-specific update logic)
+		const upd = await postJson('/api/canvas/shape', {
+			room: 'ac25', op: 'update', id: def.body.id, props: { url: 'https://example.org/changed', title: 'Changed' },
+		})
+		assert.equal(upd.status, 200, 'update iframe props → 200')
+		const urec = docs('ac25').find((d) => d.id === def.body.id)
+		assert.equal(urec.props.url, 'https://example.org/changed', 'url updated via --props')
+		assert.equal(urec.props.title, 'Changed', 'title updated via --props')
 	})
 
 	// --- summary --------------------------------------------------------------

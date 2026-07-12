@@ -1,7 +1,7 @@
 /**
  * Shape feature — POST /api/canvas/shape: create/update/delete diagram shapes (geo,
- * arrow with bindings, text, note) for agents; arrows resolve endpoints to
- * shape centres.
+ * arrow with bindings, text, note, iframe web views) for agents; arrows resolve
+ * endpoints to shape centres.
  */
 import { canvasShape } from '@ensembleworks/contracts'
 import { createBindingId, createShapeId, toRichText } from '@tldraw/tlschema'
@@ -245,10 +245,10 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 
 		// ---- create -----------------------------------------------------------
 		const type = typeof body.type === 'string' ? body.type : ''
-		if (!['geo', 'text', 'note', 'arrow', 'frame', 'line', 'draw', 'highlight'].includes(type)) {
+		if (!['geo', 'text', 'note', 'arrow', 'frame', 'line', 'draw', 'highlight', 'iframe'].includes(type)) {
 			return void res
 				.status(400)
-				.json({ error: 'type must be geo | text | note | arrow | frame | line | draw | highlight' })
+				.json({ error: 'type must be geo | text | note | arrow | frame | line | draw | highlight | iframe' })
 		}
 		const frameName = typeof body.frame === 'string' ? body.frame : null
 		const badged = badgeText(text ?? '', attribution.display)
@@ -475,6 +475,30 @@ export function createShapeRouter(ctx: PluginServerContext): express.Router {
 							scale: 1,
 							scaleX: 1,
 							scaleY: 1,
+						},
+					} as any)
+				} else if (type === 'iframe') {
+					// A web view (dev server, docs, dashboard). The url is stored VERBATIM —
+					// no proxy rewriting (the client's toProxiedUrl is a paste-time nicety;
+					// an API caller knows the exact url it wants). Only http(s) is allowed.
+					const url = typeof body.url === 'string' ? body.url : ''
+					let host = ''
+					try {
+						const parsed = new URL(url)
+						if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('not http(s)')
+						host = parsed.host
+					} catch {
+						problem = { status: 400, error: 'iframe url must be an http(s) URL' }
+						return
+					}
+					store.put({
+						...base,
+						type: 'iframe',
+						props: {
+							w: num(body.w) ?? 800,
+							h: num(body.h) ?? 600,
+							url,
+							title: typeof body.title === 'string' ? body.title : host || 'web view',
 						},
 					} as any)
 				} else {
