@@ -13,6 +13,7 @@
 // a later unit; this package is only the substrate they run on.
 export const CANVAS_EDITOR_VERSION = 1 as const
 
-// Public re-exports land as each piece is built: the Intent vocabulary +
-// Editor (state store + intent application) next, then normalized input
-// events + the interaction-script DSL after that.
+export * from './intents.js'
+export * from './editor.js'
+
+// Normalized input events + the interaction-script DSL land next (Task C3).
