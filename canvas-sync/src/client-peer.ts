@@ -84,6 +84,22 @@ export class SyncClientPeer {
     // A real ws can deliver buffered frames after the app-level close — not
     // misuse; drop them silently rather than mutating a closed peer's doc.
     if (this.closed) return
+    // Malformed-frame guard, mirroring SyncServerPeer.onFrame's (see its
+    // comment for the full rationale): a buggy or hostile server must not
+    // crash whichever process hosts this client (a shadow driver, an agent,
+    // a rig) via an uncaught decode()/import() throw inside the transport's
+    // message dispatch. Log and drop. No malformedFrames counter here,
+    // deliberately: client-side metrics are Phase 3's concern (the D3
+    // metrics endpoint only scrapes server peers), and an unread counter is
+    // dead surface until then.
+    try {
+      this.handleFrame(frame)
+    } catch (err) {
+      console.warn('[canvas-sync] client peer dropped a malformed inbound frame:', err)
+    }
+  }
+
+  private handleFrame(frame: Uint8Array): void {
     const { tag, payload } = decode(frame)
     if (tag === Frame.Update) {
       // Gate repair/commit on whether the import newly applied anything:

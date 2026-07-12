@@ -419,4 +419,39 @@ function wireFakeClient(t: Transport, peerId: bigint): LoroCanvasDoc {
   assert.deepEqual(server.doc.listBindings(), [], 'the dangling binding was swept by repair (scenario 4 invariant still holds)')
 }
 
+// --- (last) malformed frames: log-and-drop, never throw (E2 guard, pulled ---
+// --- forward by Unit 7 — a real ws mount made these throw sites reachable ---
+// --- by adversarial bytes, and an uncaught throw there kills the process). ---
+{
+  const server = new SyncServerPeer({ peerId: 1n })
+  const [serverEnd, clientEnd] = makePair()
+  server.connect(serverEnd)
+  const clientDoc = wireFakeClient(clientEnd, 101n)
+  clientDoc.putShape(shape('shape:before'))
+  clientDoc.commit()
+  assert.equal(server.malformedFrames, 0, 'healthy traffic: malformedFrames stays 0')
+
+  // Zero-byte frame: decode() throws 'empty frame' — must be caught, counted.
+  clientEnd.send(new Uint8Array(0))
+  assert.equal(server.malformedFrames, 1, 'a zero-byte frame is dropped and counted, not thrown')
+
+  // Garbage Update payload: decode() succeeds (tag byte 1) but doc.import
+  // throws a Loro decode error — must also be caught, counted.
+  const garbage = new Uint8Array(201)
+  garbage[0] = Frame.Update
+  for (let i = 1; i < garbage.length; i++) garbage[i] = (i * 37) % 256
+  clientEnd.send(garbage)
+  assert.equal(server.malformedFrames, 2, 'a garbage Update payload is dropped and counted, not thrown')
+
+  // The peer is still fully alive: a healthy edit after the malformed frames
+  // converges normally.
+  clientDoc.putShape(shape('shape:after'))
+  clientDoc.commit()
+  assert.deepEqual(
+    server.doc.listShapes().map((s) => s.id).sort(),
+    ['shape:after', 'shape:before'],
+    'the server keeps serving after malformed frames',
+  )
+}
+
 console.log('ok: server-peer')

@@ -18,11 +18,21 @@ const SERVER_PEER_ID = 1n
 export interface CanvasActors {
 	/** Live, non-tainted actor for roomId — memoized. A tainted actor is
 	 * evicted (closed, which is safe/idempotent) and replaced with a fresh one
-	 * that reloads the durable prefix still intact on disk. */
+	 * that reloads whatever is durable at eviction time — which may
+	 * retroactively include the tainted edit, if the close-path's final
+	 * compact succeeded after the storage recovered (DocumentActor.close()'s
+	 * tainted-outcome log lines say which happened). */
 	getOrCreate(roomId: string): DocumentActor
 	/** Close every actor currently registered (server shutdown). */
 	close(): void
 }
+
+// Idle-actor eviction is DELIBERATELY deferred (same register as the
+// shutdown-gap note at app.ts's construction site): Phase 2 is rigs-only
+// behind EW_CANVAS_SYNC, so a handful of test rooms living for the process
+// lifetime costs nothing. Revisit before the Phase 3 cutover, when every
+// live room gets an actor and idle rooms should release their doc + SQLite
+// handle.
 
 export function createCanvasActors(databaseDir: string): CanvasActors {
 	const dir = path.join(databaseDir, 'canvas-v2')

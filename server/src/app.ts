@@ -24,7 +24,7 @@ import express from 'express'
 import { type WebSocket, WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
 import { sanitizeId } from './canvas/ids.ts'
-import { createCanvasActors } from './canvas-v2/actors.ts'
+import { type CanvasActors, createCanvasActors } from './canvas-v2/actors.ts'
 import { wsTransport } from './canvas-v2/ws-transport.ts'
 import { createAvRouter } from './features/av.ts'
 import { createCanvasV2Router } from './features/canvas-v2.ts'
@@ -62,6 +62,11 @@ export interface SyncApp {
 	server: http.Server // not yet listening
 	getOrCreateRoom(roomId: string): TLSocketRoom
 	app: express.Express   // NEW — read-only test seam for route introspection
+	/** Phase 2 canvas-v2 actor registry — non-null exactly when EW_CANVAS_SYNC=1
+	 * was set at construction time. Exposed for the mount integration test
+	 * today, and for Seam D next: the D3 metrics endpoint reads each actor's
+	 * peer.pendingImports / peer.malformedFrames / tainted through it. */
+	canvasActors: CanvasActors | null
 }
 
 export function createSyncApp(opts: { dataDir: string; databaseDir?: string; clientDist?: string }): SyncApp {
@@ -239,6 +244,11 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 					return
 				}
 				;(socket as Socket).setNoDelay(true)
+				// v2 sockets inherit the existing backpressure sampler for free:
+				// handleUpgrade registers them on the SAME shared `wss`, and the
+				// sampler (`const backpressure = setInterval(...)` below) iterates
+				// `wss.clients` generically — v2 clients just log with `room=?`
+				// (no syncMeta entry), and still get the warn/1013-close ladder.
 				wss.handleUpgrade(req, socket, head, (ws) => {
 					try {
 						canvasActors.getOrCreate(roomId).connect(wsTransport(ws))
@@ -344,5 +354,5 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 	}, 1000)
 	lagMonitor.unref()
 
-	return { server, getOrCreateRoom: roomHost.getOrCreateRoom, app }
+	return { server, getOrCreateRoom: roomHost.getOrCreateRoom, app, canvasActors }
 }

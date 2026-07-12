@@ -121,7 +121,9 @@ async function main() {
 		process.env.EW_CANVAS_SYNC = '1'
 		let server: import('node:http').Server
 		try {
-			;({ server } = createSyncApp({ dataDir, databaseDir }))
+			let canvasActors: ReturnType<typeof createSyncApp>['canvasActors']
+			;({ server, canvasActors } = createSyncApp({ dataDir, databaseDir }))
+			assert.ok(canvasActors, 'flag on: createSyncApp exposes the live canvasActors registry')
 			await new Promise<void>((r) => server.listen(0, r))
 			const port = (server.address() as { port: number }).port
 			const roomId = 'testroom'
@@ -164,6 +166,51 @@ async function main() {
 			clientA.close()
 			clientB.close()
 			console.log('ok: canvas-v2-sync-mount — real ws round trip converges and persists to disk')
+
+			// -----------------------------------------------------------------------
+			// Part 3 — malformed frames over a REAL socket must not kill the process
+			// (the plan's E2 log-and-drop guard, pulled forward: Unit 7's real ws
+			// mount made the unguarded decode()/import() throw sites in onFrame
+			// reachable by adversarial bytes for the first time, and an uncaught
+			// throw inside ws's 'message' emit crashes the ENTIRE server — every
+			// legacy tldraw room included). A raw ws client sends both shapes of
+			// poison: a zero-byte binary message (decode() throws 'empty frame')
+			// and a garbage Update payload (tag byte 1 + noise; doc.import throws
+			// a Loro decode error). The server must stay alive, keep serving the
+			// room, and count both on the room actor's peer.malformedFrames.
+			// -----------------------------------------------------------------------
+			const wsHealthy = await openWs(wsUrl)
+			const healthy = new SyncClientPeer({ peerId: 4n, transport: wsTransport(wsHealthy) })
+			await waitUntil(() => healthy.doc.listShapes().some((s) => s.id === 'shape:a'))
+
+			const roomPeer = canvasActors.getOrCreate(roomId).peer // same memoized live actor the mount serves
+			assert.equal(roomPeer.malformedFrames, 0, 'precondition: healthy traffic counted no malformed frames')
+
+			const wsRaw = await openWs(wsUrl)
+			wsRaw.send(new Uint8Array(0)) // zero-byte binary frame
+			const garbage = new Uint8Array(201)
+			garbage[0] = 1 // Frame.Update tag
+			for (let i = 1; i < garbage.length; i++) garbage[i] = (i * 91) % 256
+			wsRaw.send(garbage)
+			await waitUntil(() => roomPeer.malformedFrames === 2)
+			assert.equal(roomPeer.malformedFrames, 2, "both malformed frames were dropped and counted on the room's peer")
+
+			// Process alive + server still serves: the healthy client can put
+			// another shape and a brand-new real ws client converges to both.
+			healthy.putShape(shape('shape:after-poison'))
+			const wsC = await openWs(wsUrl)
+			const clientC = new SyncClientPeer({ peerId: 5n, transport: wsTransport(wsC) })
+			await waitUntil(() => clientC.doc.listShapes().some((s) => s.id === 'shape:after-poison'))
+			assert.deepEqual(
+				clientC.doc.listShapes().map((s) => s.id).sort(),
+				['shape:a', 'shape:after-poison'],
+				'the server keeps serving the room after malformed frames',
+			)
+
+			healthy.close()
+			clientC.close()
+			wsRaw.close()
+			console.log('ok: canvas-v2-sync-mount — malformed frames are dropped and counted; the process survives')
 		} finally {
 			delete process.env.EW_CANVAS_SYNC
 			if (server!) await new Promise<void>((r) => server.close(() => r()))

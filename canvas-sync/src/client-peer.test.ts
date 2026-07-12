@@ -224,4 +224,31 @@ const normalize = (m: CanvasDocument) => ({
   assert.deepEqual(client.doc.listShapes(), [], 'a post-close inbound Update is dropped, not applied')
 }
 
+// --- (7) malformed frames from a buggy/hostile server: log-and-drop, never
+// throw (same E2 guard as the server peer — a crash here would take down
+// whichever process hosts the client, e.g. a shadow driver or an agent). ---
+{
+  const server = new SyncServerPeer({ peerId: 1n })
+  const [serverEnd, clientEnd] = makePair()
+  server.connect(serverEnd)
+  const client = new SyncClientPeer({ peerId: 701n, transport: clientEnd })
+  client.putShape(shape('shape:before'))
+
+  // Deliver malformed frames straight down the server->client leg: zero-byte
+  // (decode throws) and a garbage Update payload (doc.import throws).
+  serverEnd.send(new Uint8Array(0))
+  const garbage = new Uint8Array(201)
+  garbage[0] = Frame.Update
+  for (let i = 1; i < garbage.length; i++) garbage[i] = (i * 53) % 256
+  serverEnd.send(garbage)
+
+  // The client is still fully alive: it can keep editing and converging.
+  client.putShape(shape('shape:after'))
+  assert.deepEqual(
+    server.doc.listShapes().map((s) => s.id).sort(),
+    ['shape:after', 'shape:before'],
+    'the client keeps operating after malformed inbound frames',
+  )
+}
+
 console.log('ok: client-peer')

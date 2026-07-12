@@ -54,6 +54,14 @@ export class SyncServerPeer {
    * the D3 shadow-metrics endpoint. */
   get pendingImports(): number { return this.pendingCount }
   private pendingCount = 0
+  /** Count of inbound frames dropped because handling them threw — decode()
+   * on an empty/garbled frame, doc.import() on a non-Loro Update payload,
+   * etc. Should be ~0 in healthy operation — a climbing value means a buggy
+   * or hostile sender is on the wire (a real ws delivers whatever bytes
+   * arrive; nothing upstream validates them). Intended to be surfaced by the
+   * D3 shadow-metrics endpoint, alongside pendingImports. */
+  get malformedFrames(): number { return this.malformedCount }
+  private malformedCount = 0
   private onUpdatePayload?: (payload: Uint8Array) => void
 
   constructor(opts: SyncServerOpts) {
@@ -91,6 +99,26 @@ export class SyncServerPeer {
     // In-flight frames during/after teardown are not misuse (a real ws can
     // deliver buffered frames post-close) — drop them silently.
     if (this.closed) return
+    // Malformed-frame guard (the plan's Task E2 contract, pulled forward when
+    // Unit 7's real ws mount made these throw sites reachable by adversarial
+    // bytes): decode() throws on an empty frame, doc.import() throws on a
+    // garbage Update payload, and an uncaught throw here propagates through
+    // ws's 'message' emit and kills the whole process — every room in it.
+    // Policy: log and DROP the frame, never close the transport (a healthy
+    // client that sent one bad frame keeps its session), and never let
+    // repair/commit/relay run for a frame whose handling threw (the throw
+    // aborts the body before those legs). Room-agnostic context only: this
+    // peer doesn't know its room id — the counter is per-peer (= per-room),
+    // so D3's metrics endpoint attributes it.
+    try {
+      this.handleFrame(from, frame)
+    } catch (err) {
+      this.malformedCount++
+      console.warn('[canvas-sync] server peer dropped a malformed inbound frame:', err)
+    }
+  }
+
+  private handleFrame(from: Transport, frame: Uint8Array): void {
     const { tag, payload } = decode(frame)
     if (tag === Frame.SyncRequest) {
       // Reply with exactly the delta this client is missing.

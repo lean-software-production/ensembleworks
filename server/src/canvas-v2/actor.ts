@@ -72,7 +72,12 @@ export class DocumentActor {
 	/** Non-null once a persist failed: durability is lost, the peer has been
 	 * closed, and connect() refuses. Read by the C3 registry (evict/replace)
 	 * and the D3 metrics endpoint. Never resets on a live actor — recovery is
-	 * a NEW DocumentActor on the same dir (it reloads the durable prefix). */
+	 * a NEW DocumentActor on the same dir, which reloads whatever is durable
+	 * at eviction time. That may retroactively include the tainted edit: the
+	 * eviction path's close() still attempts one final compact, and if the
+	 * storage has recovered by then the snapshot durably rescues the full
+	 * in-memory doc, un-appended edit included — close() logs which outcome
+	 * actually happened (see its tainted-outcome lines). */
 	get tainted(): Error | null {
 		return this._tainted
 	}
@@ -210,12 +215,28 @@ export class DocumentActor {
 		this.unsubPersist()
 		try {
 			this.compact()
+			// Re-couple the DURABILITY LOST banner to its actual outcome for
+			// operators: on a tainted actor the final compact just decided whether
+			// the un-appended edit was rescued or is gone from disk.
+			if (this._tainted) {
+				console.warn(
+					`[canvas-v2] tainted room ${this.roomId}: final compact succeeded — ` +
+						'in-memory state (including the un-appended edit) was durably rescued',
+				)
+			}
 		} catch (err) {
-			console.error(
-				`[canvas-v2 ${this.roomId}] final compaction on close failed (non-fatal: ` +
-					'the append-log is intact, nothing durable is lost — the next load just replays more updates)',
-				err,
-			)
+			if (this._tainted) {
+				console.error(
+					`[canvas-v2] tainted room ${this.roomId}: final compact failed — disk holds only the durable prefix`,
+					err,
+				)
+			} else {
+				console.error(
+					`[canvas-v2 ${this.roomId}] final compaction on close failed (non-fatal: ` +
+						'the append-log is intact, nothing durable is lost — the next load just replays more updates)',
+					err,
+				)
+			}
 		} finally {
 			this.peer.close()
 			this.store.close()
