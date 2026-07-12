@@ -292,4 +292,33 @@ const EPS = 1e-6
   console.log('ok: rotate through the tool is world-correct for a shape nested under a rotated parent')
 }
 
+// ============================================================================
+// 10. Through-anchor drag, end to end through the TOOL: dragging the SE
+//     corner of a 100x100 box THROUGH the NW anchor to (-50,-50) implies a
+//     -0.5 scale on both axes -- the editor's minimum-size clamp
+//     (editor.ts's clampScale; red-first pinned at the intent level by
+//     editor.test.ts's test 20) must floor the STORED w/h at 1 world unit,
+//     never persisting negative geometry. tldraw flips instead -- a
+//     documented Phase-4 parity item (intents.ts's ResizeShapes doc).
+// ============================================================================
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(geoShape('shape:thru', 0, 0, 100, 100))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:thru'] })
+
+  const events = script().down(100, 100).move(-50, -50).up().events()
+  run(editor, tool, events)
+
+  const thru = editor.doc.getShape('shape:thru')!
+  const w = (thru.props as any).w as number, h = (thru.props as any).h as number
+  assert.ok(w > 0, `stored w never negative after a through-anchor drag, got ${w}`)
+  assert.ok(h > 0, `stored h never negative, got ${h}`)
+  assert.ok(Math.abs(w - 1) < 1e-9, `w floors at 1 world unit, got ${w}`)
+  assert.ok(Math.abs(h - 1) < 1e-9, `h floors at 1 world unit, got ${h}`)
+  assert.ok(Math.abs(thru.x - 0) < 1e-9, 'origin stays at the NW anchor (clamped scale drives position too)')
+  assert.ok(Math.abs(thru.y - 0) < 1e-9)
+  console.log('ok: through-anchor corner drag clamps stored w/h at the floor, never negative')
+}
+
 console.log('ok: transform tool (resize/rotate handles) + world-correct frame conversion')

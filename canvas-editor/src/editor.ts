@@ -165,7 +165,7 @@ export class Editor {
    * the doc (e.g. CreateShape then TranslateShapes on the shape it just
    * created), and invalidating/rebuilding it correctly is more moving parts
    * than just reading the doc live. Reading live costs O(depth) per id for
-   * the translate dedupe walk (see dedupeForTranslate) instead of O(1) off a
+   * the ancestor-dedupe walk (see dedupeAncestorOverlap) instead of O(1) off a
    * snapshot — a fine trade at editor-interaction scale.
    *
    * TOLERANCE CONTRACT: mutation intents NEVER throw on stale/vanished
@@ -203,7 +203,7 @@ export class Editor {
         return { state, docMutated: true, stateChanged: false }
 
       case 'TranslateShapes': {
-        const ids = dedupeForTranslate(this.doc, intent.ids)
+        const ids = dedupeAncestorOverlap(this.doc, intent.ids)
         let mutated = false
         for (const id of ids) {
           const shape = this.doc.getShape(id)
@@ -216,24 +216,42 @@ export class Editor {
 
       case 'ResizeShapes': {
         // Scale the shape's own origin about the fixed anchor, then scale
-        // any explicit w/h props by the same per-axis factor. C8 DEFERRAL
-        // CLOSURE: `intent.anchor` is WORLD space but shape.x/y lives in the
-        // shape's OWN PARENT's frame — worldToParentFrame converts the
-        // anchor into that frame, per shape, before composing (see its doc
-        // comment for the derivation and why this fixes a shape nested
-        // under a ROTATED parent, previously a documented SCOPE LIMIT).
+        // any explicit w/h props by the same per-axis factor — CLAMPED per
+        // shape/axis so stored w/h can never go negative or below
+        // MIN_STORED_SIZE (see clampScale). ANCESTOR DEDUPE (the same rule
+        // TranslateShapes has always had, extended here after a reviewer
+        // probe proved the double-transform): a selection containing both a
+        // parent and its descendant transforms the PARENT only — the
+        // child's world frame follows the parent's via composition, and
+        // transforming the child too would (a) apply the change twice and
+        // (b) convert against the already-mutated parent read live
+        // mid-batch, compounding the error. C8 DEFERRAL CLOSURE:
+        // `intent.anchor` is WORLD space but shape.x/y lives in the shape's
+        // OWN PARENT's frame — worldToParentFrame converts the anchor into
+        // that frame, per shape, before composing (see its doc comment).
         // props.w/h scale independently of any frame (a shape's own local,
-        // unrotated dimensions), unaffected by this fix.
+        // unrotated dimensions), unaffected by that conversion.
+        const ids = dedupeAncestorOverlap(this.doc, intent.ids)
         let mutated = false
-        for (const id of intent.ids) {
+        for (const id of ids) {
           const shape = this.doc.getShape(id)
           if (!shape) continue
-          const anchor = worldToParentFrame(this.doc, shape, intent.anchor)
-          const x = anchor.x + (shape.x - anchor.x) * intent.scaleX
-          const y = anchor.y + (shape.y - anchor.y) * intent.scaleY
           const props: Record<string, unknown> = { ...shape.props }
-          if (typeof props.w === 'number') props.w = props.w * intent.scaleX
-          if (typeof props.h === 'number') props.h = props.h * intent.scaleY
+          const w = typeof props.w === 'number' ? props.w : undefined
+          const h = typeof props.h === 'number' ? props.h : undefined
+          // Per-shape clamp: the SAME clamped factor drives both the
+          // position math and the w/h scaling, so a clamped shape stays
+          // internally consistent (its origin never crosses the anchor
+          // while its size floors). Different shapes in one intent may
+          // clamp to different factors (each has its own w/h) — the
+          // per-shape putShape below already makes that coherent.
+          const scaleX = clampScale(intent.scaleX, w)
+          const scaleY = clampScale(intent.scaleY, h)
+          const anchor = worldToParentFrame(this.doc, shape, intent.anchor)
+          const x = anchor.x + (shape.x - anchor.x) * scaleX
+          const y = anchor.y + (shape.y - anchor.y) * scaleY
+          if (w !== undefined) props.w = w * scaleX
+          if (h !== undefined) props.h = h * scaleY
           this.doc.putShape({ ...shape, x, y, props })
           mutated = true
         }
@@ -245,17 +263,22 @@ export class Editor {
         // own rotation field by the same delta — "rotations add, position
         // orbits", the same composition rule canvas-model/src/geometry.ts's
         // composeTransform documents for a parent-child pair, applied here
-        // to a transient rotation instead. C8 DEFERRAL CLOSURE: `center` is
-        // WORLD space but shape.x/y lives in the shape's own PARENT's frame
-        // — worldToParentFrame converts it per shape before orbiting (see
+        // to a transient rotation instead. ANCESTOR DEDUPE (same as
+        // ResizeShapes above — see that case's comment for the reviewer-
+        // probed double-transform this prevents): parent+descendant
+        // selections rotate the parent only; the child's world frame
+        // follows for free. C8 DEFERRAL CLOSURE: `center` is WORLD space
+        // but shape.x/y lives in the shape's own PARENT's frame —
+        // worldToParentFrame converts it per shape before orbiting (see
         // its doc comment). The rotation-field update itself (`shape.rotation
         // + dRadians`) needs NO such conversion and is UNCHANGED by this
         // fix — worldToParentFrame's doc comment explains why adding
         // dRadians to the shape's own local rotation is already correct
         // regardless of the parent's rotation.
+        const ids = dedupeAncestorOverlap(this.doc, intent.ids)
         let mutated = false
         const cos = Math.cos(intent.dRadians), sin = Math.sin(intent.dRadians)
-        for (const id of intent.ids) {
+        for (const id of ids) {
           const shape = this.doc.getShape(id)
           if (!shape) continue
           const center = worldToParentFrame(this.doc, shape, intent.center)
@@ -462,15 +485,54 @@ function worldToParentFrame(doc: CanvasDoc, shape: Shape, worldPoint: Point): Po
   return toLocalPoint(liveDocAdapter(doc), parent, worldPoint)
 }
 
-// Drop any id whose selection has an ANCESTOR also present in `ids` — the
-// TranslateShapes dedupe rule (see TranslateShapes's doc comment in
-// intents.ts). Reads the doc LIVE (doc.getShape) rather than via a snapshot:
-// this walk only needs each id's own parent chain, not the whole document,
-// so there's no snapshot to invalidate. Literal duplicate ids in the input
+// The ResizeShapes minimum stored size, in world units: stored props.w/h may
+// never drop below this (and, transitively, never go NEGATIVE — a corner
+// dragged THROUGH the opposite anchor implies a negative scale, which
+// uncorrected would persist inverted geometry forever; geometry.ts's size()
+// clamps the RENDERED size to >= 0, but the STORED envelope would stay
+// corrupt and every other consumer of props.w/h would see it). tldraw
+// instead FLIPS the shape across the anchor — real scope (routing/anchor
+// implications for bound arrows, handle relabeling), deferred as a
+// documented Phase-4 parity item; the clamp is the safe v1 behavior.
+const MIN_STORED_SIZE = 1
+
+// Clamp one axis's scale factor so `dim * scale` (the stored size this
+// resize would write) stays >= MIN_STORED_SIZE. Shapes without a stored
+// dimension on this axis (note — kind-default-sized, no props.w/h) pass the
+// scale through untouched: there is no stored geometry to corrupt, and their
+// position legitimately scales about the anchor like any other shape's. A
+// degenerate stored dim (<= 0 — pre-existing corrupt data this clamp exists
+// to prevent, or a legacy zero) can't derive a meaningful floor factor;
+// forbid sign flips (scale floored at 0) so the corruption at least never
+// gets WORSE. NOTE (behavioral edge, documented not hidden): once a drag
+// gesture's absolute scale is clamped here, the emitting tool's own
+// incremental-ratio bookkeeping (transform.ts) diverges from the doc until
+// the pointer returns past the floor — dragging through the anchor and back
+// lands near the floor rather than exactly retracing; exact retrace (like
+// flip itself) is part of the same Phase-4 parity item.
+function clampScale(scale: number, dim: number | undefined): number {
+  if (dim === undefined) return scale
+  if (!(dim > 0)) return Math.max(scale, 0)
+  return Math.max(scale, MIN_STORED_SIZE / dim)
+}
+
+// Drop any id that has an ANCESTOR also present in `ids` — the shared
+// dedupe rule for ALL THREE whole-shape transform intents
+// (Translate/Resize/RotateShapes; see their doc comments in intents.ts): a
+// child's world transform is parentWorld ∘ local (geometry.ts's
+// composeTransform), so transforming the parent already carries every
+// descendant's world frame — transforming a selected descendant TOO would
+// apply the change twice, and for Resize/Rotate would additionally convert
+// against the already-mutated parent read live mid-batch (reviewer-probed:
+// parent+child rotate about the parent's position left the child at DOUBLE
+// the intended world rotation before this rule covered those intents).
+// Reads the doc LIVE (doc.getShape) rather than via a snapshot: this walk
+// only needs each id's own parent chain, not the whole document, so
+// there's no snapshot to invalidate. Literal duplicate ids in the input
 // collapse for free (a Set dedupes them before the ancestor filter runs).
 // Cycle-safe: a `visited` set stops the climb the first time a parentId
 // repeats, matching geometry.ts's worldTransform guard.
-function dedupeForTranslate(doc: CanvasDoc, ids: readonly string[]): string[] {
+function dedupeAncestorOverlap(doc: CanvasDoc, ids: readonly string[]): string[] {
   const idSet = new Set(ids)
   return [...idSet].filter((id) => !hasAncestorIn(doc, id, idSet))
 }

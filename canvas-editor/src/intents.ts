@@ -34,11 +34,13 @@ export interface CreateShape { readonly type: 'CreateShape'; readonly shape: Sha
 
 /** Move every shape in `ids` by (dx, dy) in its own parent's local frame.
  * `ids` is DEDUPED against ancestor/descendant overlap before mutation — see
- * editor.ts's dedupeForTranslate: a selection containing both a parent and
- * one of its (possibly indirect) children moves the child only once, via the
- * parent's translation, because a child's world position is already
- * relative to its parent (translating the parent moves the child's world
- * position for free; translating the child TOO would double-move it). */
+ * editor.ts's dedupeAncestorOverlap (the rule shared by ALL THREE
+ * whole-shape transform intents: Translate/Resize/RotateShapes): a
+ * selection containing both a parent and one of its (possibly indirect)
+ * children moves the child only once, via the parent's translation, because
+ * a child's world position is already relative to its parent (translating
+ * the parent moves the child's world position for free; translating the
+ * child TOO would double-move it). */
 export interface TranslateShapes { readonly type: 'TranslateShapes'; readonly ids: readonly string[]; readonly dx: number; readonly dy: number }
 
 /** Scale every shape in `ids` about the fixed world point `anchor` (e.g. the
@@ -47,7 +49,19 @@ export interface TranslateShapes { readonly type: 'TranslateShapes'; readonly id
  * worldToParentFrame helper) for the exact transform: `anchor` is WORLD
  * space and is converted into EACH shape's own PARENT frame before composing
  * with that shape's x/y (which already lives there), so a shape nested under
- * a rotated parent resizes correctly, not just a page-rooted one. */
+ * a rotated parent resizes correctly, not just a page-rooted one.
+ *
+ * ANCESTOR DEDUPE (same rule as TranslateShapes — see its doc comment and
+ * editor.ts's dedupeAncestorOverlap): a parent + its descendant in the same
+ * `ids` scales the PARENT only; the descendant rides along via the parent's
+ * frame instead of being transformed a second time.
+ *
+ * MINIMUM-SIZE CLAMP (editor.ts's clampScale): the per-shape/per-axis scale
+ * is floored so stored props.w/h never drop below 1 world unit — in
+ * particular a negative scale (corner dragged THROUGH the opposite anchor)
+ * can never persist negative stored geometry. tldraw instead FLIPS the
+ * shape across the anchor; flip semantics (with their routing/bound-anchor
+ * implications) are a documented Phase-4 parity item, not v1 scope. */
 export interface ResizeShapes {
   readonly type: 'ResizeShapes'
   readonly ids: readonly string[]
@@ -68,7 +82,13 @@ export interface ResizeShapes {
  * this conversion, since a shape's own `rotation` field composes additively
  * regardless of the parent's rotation (see worldToParentFrame's doc comment
  * for why). A mixed selection (some shapes root-parented, some nested under
- * a rotated parent) converts each shape independently in the same intent. */
+ * a rotated parent) converts each shape independently in the same intent.
+ *
+ * ANCESTOR DEDUPE (same rule as Translate/ResizeShapes — editor.ts's
+ * dedupeAncestorOverlap): a parent + its descendant in the same `ids`
+ * rotates the PARENT only — the descendant's world frame follows via
+ * composition; rotating it too would double both its world rotation and
+ * its orbit (reviewer-probed before this rule covered Rotate/Resize). */
 export interface RotateShapes {
   readonly type: 'RotateShapes'
   readonly ids: readonly string[]

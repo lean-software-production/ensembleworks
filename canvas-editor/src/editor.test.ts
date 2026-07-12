@@ -566,4 +566,108 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: RotateShapes mixed selection (rotated-parent-nested + root) both compute correctly in one intent')
 }
 
+// ============================================================================
+// 18. Parent + descendant in ONE RotateShapes intent must transform the
+//     parent ONLY (ancestor dedupe — the same rule TranslateShapes has
+//     always had): the parent's own rotation already carries the child via
+//     composition (a child's world transform is parentWorld ∘ local, so
+//     rotating the parent rotates the child's world frame for free);
+//     rotating the child TOO double-transforms it. Reviewer probe: parent
+//     at (100,100) rotation 0, child at LOCAL (10,0); rotate BOTH about
+//     world (100,100) by pi/2.
+//
+//     HAND-COMPUTED expected (rigid-body orbit, independent of the
+//     implementation): the whole parent+child assembly is one rigid body
+//     rotating pi/2 about (100,100). Child's world position BEFORE:
+//     (100,100) + (10,0) = (110,100). Orbit about (100,100) by pi/2:
+//     relative (10,0) -> (0,10) -> world (100,110). Child's world rotation:
+//     exactly pi/2 (the parent's new rotation; the child's own field must
+//     stay 0). The BUG this pins (red-first, reviewer-reproduced): without
+//     dedupe the child's own rotation field ALSO got +pi/2 (world rotation
+//     pi, double) and its position was orbited a second time against the
+//     already-rotated parent read live mid-batch.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:rp', { x: 100, y: 100 }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:rc', { x: 10, y: 0, parentId: 'shape:rp' }) })
+
+  editor.apply({ type: 'RotateShapes', ids: ['shape:rp', 'shape:rc'], center: { x: 100, y: 100 }, dRadians: Math.PI / 2 })
+
+  const EPS = 1e-9
+  const model = dumpModel(doc)
+  const childWorld = worldTransform(model, model.byId.get('shape:rc')!)
+  assert.ok(Math.abs(childWorld.rotation - Math.PI / 2) < EPS, `child world rotation EXACTLY pi/2 (parent's rotation only), got ${childWorld.rotation}`)
+  assert.ok(Math.abs(childWorld.x - 100) < EPS, `child world x ~= 100 (rigid-body orbit), got ${childWorld.x}`)
+  assert.ok(Math.abs(childWorld.y - 110) < EPS, `child world y ~= 110 (rigid-body orbit), got ${childWorld.y}`)
+
+  // The child's OWN local fields are untouched — it moved only via the parent.
+  const childRaw = editor.doc.getShape('shape:rc')!
+  assert.equal(childRaw.x, 10, 'child local x untouched')
+  assert.equal(childRaw.y, 0, 'child local y untouched')
+  assert.equal(childRaw.rotation, 0, 'child own rotation field untouched')
+
+  console.log('ok: RotateShapes dedupes parent+descendant overlap (child transforms exactly once, via the parent)')
+}
+
+// ============================================================================
+// 19. Parent + descendant in ONE ResizeShapes intent: same ancestor-dedupe
+//     rule — only the parent is scaled; the child's local fields (position
+//     within the parent AND its own w/h) are untouched, riding along via
+//     the parent's frame rather than being scaled a second time.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:sp', { x: 100, y: 100, kind: 'geo', props: { w: 40, h: 20 } }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:sc', { x: 10, y: 0, parentId: 'shape:sp', kind: 'geo', props: { w: 20, h: 10 } }) })
+
+  editor.apply({ type: 'ResizeShapes', ids: ['shape:sp', 'shape:sc'], anchor: { x: 100, y: 100 }, scaleX: 2, scaleY: 2 })
+
+  const parent = editor.doc.getShape('shape:sp')!
+  assert.equal(parent.x, 100, 'parent at the anchor: position fixed')
+  assert.equal(parent.y, 100)
+  assert.equal((parent.props as any).w, 80, 'parent w scaled once')
+  assert.equal((parent.props as any).h, 40)
+
+  const child = editor.doc.getShape('shape:sc')!
+  assert.equal(child.x, 10, 'child local x untouched — it rides the parent, not its own scale')
+  assert.equal(child.y, 0)
+  assert.equal((child.props as any).w, 20, 'child w NOT scaled a second time')
+  assert.equal((child.props as any).h, 10)
+
+  console.log('ok: ResizeShapes dedupes parent+descendant overlap (child scales exactly once, via the parent)')
+}
+
+// ============================================================================
+// 20. Minimum-size clamp: a resize whose scale would drive stored props.w/h
+//     negative (corner dragged THROUGH the opposite anchor) or below 1
+//     world unit is clamped per shape/axis — stored geometry can never go
+//     negative (tldraw FLIPS instead; flip semantics are a documented
+//     Phase-4 parity item, see intents.ts's ResizeShapes doc).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:clamp', { x: 20, y: 20, kind: 'geo', props: { w: 100, h: 50 } }) })
+
+  // Through-anchor: negative scale on both axes.
+  editor.apply({ type: 'ResizeShapes', ids: ['shape:clamp'], anchor: { x: 20, y: 20 }, scaleX: -0.5, scaleY: -0.5 })
+
+  const s = editor.doc.getShape('shape:clamp')!
+  const w = (s.props as any).w as number, h = (s.props as any).h as number
+  assert.ok(w > 0, `stored w must never go negative, got ${w}`)
+  assert.ok(h > 0, `stored h must never go negative, got ${h}`)
+  assert.ok(Math.abs(w - 1) < 1e-9, `w clamps at the 1-world-unit floor, got ${w}`)
+  assert.ok(Math.abs(h - 1) < 1e-9, `h clamps at the 1-world-unit floor, got ${h}`)
+  assert.equal(s.x, 20, 'position math uses the SAME clamped scale (shape at the anchor: fixed)')
+  assert.equal(s.y, 20)
+
+  // A legitimate resize above the floor is untouched by the clamp.
+  editor.apply({ type: 'ResizeShapes', ids: ['shape:clamp'], anchor: { x: 20, y: 20 }, scaleX: 3, scaleY: 4 })
+  const s2 = editor.doc.getShape('shape:clamp')!
+  assert.ok(Math.abs((s2.props as any).w - 3) < 1e-9, 'scale above the floor applies exactly')
+  assert.ok(Math.abs((s2.props as any).h - 4) < 1e-9)
+
+  console.log('ok: ResizeShapes clamps stored w/h at a 1-world-unit floor — never negative')
+}
+
 console.log('ok: canvas-editor editor + intents')
