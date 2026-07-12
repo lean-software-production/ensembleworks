@@ -15,8 +15,10 @@
     "paths": {
       "@ensembleworks/contracts": ["../contracts/src/index.ts"],
       "@ensembleworks/canvas-model": ["../canvas-model/src/index.ts"],
+      "@ensembleworks/canvas-doc": ["../canvas-doc/src/index.ts"],
       "@ensembleworks/canvas-editor": ["../canvas-editor/src/index.ts"],
-      "@ensembleworks/canvas-react": ["../canvas-react/src/index.ts"]
+      "@ensembleworks/canvas-react": ["../canvas-react/src/index.ts"],
+      "@ensembleworks/canvas-sync": ["../canvas-sync/src/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts"]

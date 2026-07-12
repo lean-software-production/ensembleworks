@@ -1,6 +1,8 @@
 import { execSync } from 'node:child_process'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type ServerOptions } from 'vite'
+import topLevelAwait from 'vite-plugin-top-level-await'
+import wasm from 'vite-plugin-wasm'
 
 // Stamp the build with the git-described version so the client can show it
 // (see the About dialog). Tolerant of non-git builds (e.g. tarball deploys).
@@ -86,11 +88,15 @@ const proxiedServer: Partial<ServerOptions> =
 			: {}
 
 export default defineConfig({
-	plugins: [react()],
+	plugins: [react(), wasm(), topLevelAwait()],
 	define: {
 		__APP_VERSION__: JSON.stringify(appVersion()),
 	},
 	build: {
+		// vite-plugin-top-level-await (required by vite-plugin-wasm for the
+		// loro-crdt wasm-bindgen bundle) needs a target that natively supports
+		// top-level await; the default modern-browser target list doesn't.
+		target: 'esnext',
 		// One 3 MB chunk means every release invalidates the whole bundle. The
 		// heavyweights (tldraw, LiveKit, xterm, React) change only on dependency
 		// bumps, so give each a stable chunk that stays browser-cached across
