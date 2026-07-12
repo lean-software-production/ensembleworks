@@ -78,5 +78,31 @@ store.appendUpdate(new Uint8Array([4]))
 	)
 }
 
+// --- close(): releases the SQLite handle so a registry can evict rooms
+// without leaking fds. Closed-handle behavior pinned to what bun:sqlite
+// actually does: this store re-prepares on every call, so any post-close use
+// hits prepare()'s RangeError "Cannot use a closed database" (a statement
+// prepared BEFORE close would refuse run() with "Database has closed" but
+// still serve reads — pinned in kernel/sqlite.test.ts). Reopening a fresh
+// store on the same file works — close corrupts nothing.
+{
+	const closable = new CanvasV2Store(dir, 'closable')
+	closable.appendUpdate(new Uint8Array([7]))
+	closable.close()
+	assert.throws(
+		() => closable.appendUpdate(new Uint8Array([8])),
+		/Cannot use a closed database/,
+		'appendUpdate on a closed store errors loudly',
+	)
+	assert.throws(() => closable.load(), /Cannot use a closed database/, 'load on a closed store errors loudly')
+	const reopenedClosable = new CanvasV2Store(dir, 'closable')
+	assert.deepEqual(
+		reopenedClosable.load().updates.map((u) => Array.from(u)),
+		[[7]],
+		'a fresh store on the same file sees the pre-close rows',
+	)
+	reopenedClosable.close()
+}
+
 rmSync(dir, { recursive: true, force: true })
 console.log('ok: canvas-v2 store')

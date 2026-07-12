@@ -30,9 +30,6 @@ const shape = (id: string, over: any = {}) =>
 		props: {},
 		...over,
 	}) as any
-// ASI hazard: a bare top-level `{` block directly after an unterminated
-// `=> ({...})` arrow-function statement is misparsed by tsc — hence the `;`.
-;
 
 // ---------------------------------------------------------------------------
 // Test 1 — THE HOLE-CATCHER. This is the exact scenario that would have
@@ -224,6 +221,165 @@ const shape = (id: string, over: any = {}) =>
 	// The peer really is closed: connecting a new transport throws.
 	assert.throws(() => actor.connect(makePair()[0]), /closed/i, 'connect() after close throws (peer close semantics)')
 
+	// close() also closed the SQLite handle: appending through the actor's own
+	// (now-closed) store instance errors — pinned to bun:sqlite's actual
+	// closed-handle behavior (the store re-prepares per call, so it hits
+	// prepare()'s "Cannot use a closed database"; pre-close statements refuse
+	// writes with "Database has closed" — see kernel/sqlite.test.ts). A FRESH
+	// store on the same file still works (nothing corrupt).
+	const closedStore = (actor as unknown as { store: CanvasV2Store }).store
+	assert.throws(
+		() => closedStore.appendUpdate(new Uint8Array([1])),
+		/closed database|Database has closed/,
+		'the actor closed its SQLite handle',
+	)
+	const reopened = new CanvasV2Store(dir, roomId)
+	assert.ok(reopened.load().snapshot !== null, 'a fresh store on the same file still reads the compacted snapshot')
+	reopened.close()
+
 	rmSync(dir, { recursive: true, force: true })
 	console.log('ok: actor — close() compacts, is idempotent, and really closes the peer')
+}
+
+// ---------------------------------------------------------------------------
+// Test 7 — persist failure is loud and terminal (taint), never silent poison.
+// Why this matters: persist() runs inside a Loro callback boundary on the
+// sending peer, and loro's wasm-bindgen handleError shim SWALLOWS exceptions
+// thrown there — without an explicit taint, a single failed appendUpdate
+// would leave the doc mutating and relaying while the log silently rotted,
+// and (Loro ops being causally chained per peer) every later op from that
+// client session would recover as pending-forever: one transient disk
+// hiccup = a room that restarts with ZERO shapes.
+// ---------------------------------------------------------------------------
+{
+	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-v2-actor-taint-'))
+	const roomId = 'room-taint'
+
+	const actor = new DocumentActor({ dir, roomId, peerId: 1n })
+	const [serverTransport, clientTransport] = makePair()
+	actor.connect(serverTransport)
+	const client = new SyncClientPeer({ peerId: 2n, transport: clientTransport })
+
+	// One durable edit first, so recovery has a known last-durable state.
+	client.putShape(shape('shape:durable'))
+	const durableRows = new CanvasV2Store(dir, roomId).load().updates.length
+	assert.ok(durableRows > 0, 'precondition: the first edit is durably logged')
+	// Read through a local: assert/strict's equal() has an `asserts actual is T`
+	// signature that would otherwise narrow the PROPERTY to null for the scope.
+	const preTaint: Error | null = actor.tainted
+	assert.equal(preTaint, null, 'precondition: a healthy actor is not tainted')
+
+	// Make the NEXT append fail once (a transient disk hiccup), then restore.
+	const store = (actor as unknown as { store: CanvasV2Store }).store
+	const realAppend = store.appendUpdate.bind(store)
+	let injected = 0
+	store.appendUpdate = () => {
+		store.appendUpdate = realAppend
+		injected++
+		throw new Error('disk hiccup (injected)')
+	}
+
+	client.putShape(shape('shape:poisoned'))
+	assert.equal(injected, 1, 'the poisoned edit hit the failing append')
+
+	// Taint is set and loud-refusal wired.
+	const taint: Error | null = actor.tainted
+	assert.ok(taint instanceof Error, 'persist failure taints the actor')
+	assert.match(taint.message, /disk hiccup/)
+	assert.throws(
+		() => actor.connect(makePair()[0]),
+		/tainted: durability lost/,
+		'connect() on a tainted actor is refused',
+	)
+
+	// The durability property: NO row was appended for the poisoned edit (and,
+	// via the tainted guard in persist, none will be for any later causally-
+	// chained op — a partial suffix would recover as pending-forever).
+	assert.equal(
+		new CanvasV2Store(dir, roomId).load().updates.length,
+		durableRows,
+		'the log still holds exactly the durable prefix — no poisoned row',
+	)
+
+	// The taint path closed every client transport: subsequent edits no longer
+	// reach the server doc (the client keeps them in its own replica only).
+	client.putShape(shape('shape:after'))
+	assert.ok(
+		!actor.peer.doc.listShapes().some((s) => s.id === 'shape:after'),
+		'a disconnected client cannot keep editing a tainted room',
+	)
+
+	// Fresh actor on the same dir recovers cleanly to the last durable state.
+	const recovered = new DocumentActor({ dir, roomId, peerId: 1n })
+	const [serverTransport2, clientTransport2] = makePair()
+	recovered.connect(serverTransport2)
+	const freshClient = new SyncClientPeer({ peerId: 3n, transport: clientTransport2 })
+	freshClient.requestSync()
+	assert.deepEqual(
+		freshClient.doc.listShapes().map((s) => s.id),
+		['shape:durable'],
+		'recovery lands on the last durable state — no pending-forever ops',
+	)
+
+	// The poisoning client's local replica is intact, and its full-history
+	// reconnect backfill carries the lost edits into a HEALTHY actor.
+	const dir2 = mkdtempSync(path.join(tmpdir(), 'canvas-v2-actor-taint-healthy-'))
+	const healthy = new DocumentActor({ dir: dir2, roomId, peerId: 1n })
+	const [serverTransport3, clientTransport3] = makePair()
+	healthy.connect(serverTransport3)
+	client.reconnect(clientTransport3)
+	assert.deepEqual(
+		healthy.peer.doc.listShapes().map((s) => s.id).sort(),
+		['shape:after', 'shape:durable', 'shape:poisoned'],
+		'the client backfills its full history into a healthy actor',
+	)
+	assert.ok(
+		new CanvasV2Store(dir2, roomId).load().updates.length > 0,
+		'the healthy actor durably logged the backfill',
+	)
+
+	rmSync(dir, { recursive: true, force: true })
+	rmSync(dir2, { recursive: true, force: true })
+	console.log('ok: actor — persist failure taints loudly (no silent poison)')
+}
+
+// ---------------------------------------------------------------------------
+// Test 8 — close() exception safety: a throwing final compact() must not
+// abort teardown. Before the fix, closed=true was set BEFORE the fallible
+// compact, so a throw skipped peer.close() and the idempotency guard made
+// every retry a silent no-op — peer + transports leaked forever.
+// ---------------------------------------------------------------------------
+{
+	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-v2-actor-close-throws-'))
+	const roomId = 'room-close-throws'
+
+	const actor = new DocumentActor({ dir, roomId, peerId: 1n })
+	const [serverTransport, clientTransport] = makePair()
+	actor.connect(serverTransport)
+	const client = new SyncClientPeer({ peerId: 2n, transport: clientTransport })
+	client.putShape(shape('shape:a'))
+
+	const store = (actor as unknown as { store: CanvasV2Store }).store
+	store.compact = () => {
+		throw new Error('compact failed (injected)')
+	}
+
+	actor.close() // must complete teardown despite the compaction throw
+
+	// The peer is really closed…
+	assert.throws(() => actor.connect(makePair()[0]), /closed/i, 'teardown completed: connect() refuses')
+	// …and a second close() is a clean no-op.
+	actor.close()
+
+	// Nothing durable was lost: the append-log rows are intact (only the final
+	// snapshot is missing), so a fresh actor recovers the edit fully.
+	const recovered = new DocumentActor({ dir, roomId, peerId: 1n })
+	assert.deepEqual(
+		recovered.peer.doc.listShapes().map((s) => s.id),
+		['shape:a'],
+		'append-log intact — a failed final compaction loses nothing durable',
+	)
+
+	rmSync(dir, { recursive: true, force: true })
+	console.log('ok: actor — close() completes teardown even when the final compact throws')
 }

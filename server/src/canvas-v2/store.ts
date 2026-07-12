@@ -95,4 +95,14 @@ export class CanvasV2Store {
 			throw err
 		}
 	}
+
+	/**
+	 * Release the SQLite handle (DatabaseSync.close → bun:sqlite Database.close)
+	 * so a room registry can evict actors without leaking fds. Any later call
+	 * on THIS instance errors loudly ("Cannot use a closed database" — pinned
+	 * in store.test.ts); a fresh CanvasV2Store on the same file works normally.
+	 */
+	close(): void {
+		this.db.close()
+	}
 }

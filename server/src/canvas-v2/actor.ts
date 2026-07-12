@@ -62,12 +62,24 @@ export interface ActorOpts {
 export class DocumentActor {
 	readonly peer: SyncServerPeer
 	private store: CanvasV2Store
+	private roomId: string
 	private sinceCompaction = 0
 	private compactEvery: number
 	private closed = false
+	private _tainted: Error | null = null
+	private unsubPersist!: () => void
+
+	/** Non-null once a persist failed: durability is lost, the peer has been
+	 * closed, and connect() refuses. Read by the C3 registry (evict/replace)
+	 * and the D3 metrics endpoint. Never resets on a live actor — recovery is
+	 * a NEW DocumentActor on the same dir (it reloads the durable prefix). */
+	get tainted(): Error | null {
+		return this._tainted
+	}
 
 	constructor(opts: ActorOpts) {
 		this.store = new CanvasV2Store(opts.dir, opts.roomId)
+		this.roomId = opts.roomId
 		this.compactEvery = opts.compactEvery ?? 500
 
 		// --- Load: snapshot + replay updates, then repair once (see class doc). ---
@@ -96,42 +108,104 @@ export class DocumentActor {
 		// Server-local ops: repair deltas (from the peer's own onFrame handling)
 		// and direct agent writes to `this.peer.doc`. These never pass through
 		// onUpdatePayload (that hook only sees inbound client frames), so this
-		// second leg is required to durably capture them.
-		this.peer.doc.subscribeLocalUpdates((bytes) => this.persist(bytes))
+		// second leg is required to durably capture them. The unsub is kept so
+		// close() can release it — the peer's close() only detaches the PEER's
+		// own subscription, not this one, and a post-close agent write must not
+		// fire persist into a closed store.
+		this.unsubPersist = this.peer.doc.subscribeLocalUpdates((bytes) => this.persist(bytes))
 	}
 
 	/** The single append point both persistence hooks feed. */
 	private persist(bytes: Uint8Array): void {
-		// CanvasV2Store.appendUpdate copies the blob at bind time (see store.ts's
-		// probe note) — safe even though `bytes` here may alias a reused frame
-		// buffer (onUpdatePayload's payload does; see its JSDoc).
-		this.store.appendUpdate(bytes)
+		// Once durability is lost, NEVER append again: Loro ops are causally
+		// chained per peer, so an op logged after a lost one recovers as
+		// pending-forever (its causal parent is missing). Dropping keeps the
+		// on-disk log a valid durable prefix that recovery can always load.
+		if (this._tainted) return
+		try {
+			// CanvasV2Store.appendUpdate copies the blob at bind time (see
+			// store.ts's probe note) — safe even though `bytes` here may alias a
+			// reused frame buffer (onUpdatePayload's payload does; see its JSDoc).
+			this.store.appendUpdate(bytes)
+		} catch (err) {
+			// FAIL LOUD (storage-geometry convention). This exception would
+			// otherwise be SWALLOWED: persist runs synchronously inside a Loro
+			// subscribeLocalUpdates callback boundary on the sending peer, and
+			// loro's wasm-bindgen handleError shim eats anything thrown there —
+			// the doc would stay mutated and keep relaying while the log silently
+			// rotted, and every later op from the session would recover as
+			// pending-forever. So: taint the actor, banner the journal, and drop
+			// every transport — clients disconnect loudly, their reconnects fail
+			// (connect-after-close throws on the peer, and connect() below
+			// refuses while tainted). NO in-place retry: a failed WAL insert
+			// means the storage layer is sick; retrying would hide it.
+			this._tainted = err instanceof Error ? err : new Error(String(err))
+			console.error(
+				`[canvas-v2 ${this.roomId}] DURABILITY LOST — appendUpdate failed; ` +
+					'tainting the actor and disconnecting all clients (no retry: the storage layer is sick). ' +
+					'Clients keep their local replicas and can backfill into a healthy actor on reconnect.',
+				err,
+			)
+			this.peer.close()
+			return
+		}
 		if (++this.sinceCompaction >= this.compactEvery) this.compact()
 	}
 
 	connect(t: Transport): void {
+		if (this._tainted) {
+			throw new Error(
+				`canvas-v2 room ${this.roomId} is tainted: durability lost — ${this._tainted.message}`,
+			)
+		}
 		this.peer.connect(t)
 	}
 
-	/** Persist a fresh snapshot covering everything appended so far and prune the folded-in log rows. */
+	/**
+	 * Persist a fresh snapshot covering everything appended so far and prune
+	 * the folded-in log rows. Note: a threshold-crossing compaction fired from
+	 * persist()'s onUpdatePayload leg may snapshot imported-but-not-yet-
+	 * repaired state (exportSnapshot includes imported-uncommitted data —
+	 * probe-established); correct by construction, because the load path
+	 * unconditionally re-runs repair()+commit() before serving.
+	 */
 	compact(): void {
 		this.store.compact(this.peer.snapshot())
 		this.sinceCompaction = 0
 	}
 
 	/**
-	 * Close the underlying peer (real close semantics per Unit 4: idempotent,
-	 * detaches subscriptions, closes every connected transport; connect() after
-	 * close throws). Also compacts one last time — cheap (this actor already
-	 * holds the doc and the store open) and it makes the NEXT restart's load
-	 * fast (a short or empty log to replay) rather than replaying the whole
-	 * session's updates. Exercises nothing risky: compact() is just an
-	 * INSERT-then-DELETE the store already does routinely.
+	 * Full teardown, exception-safe. Compacts one last time — cheap, and it
+	 * makes the NEXT restart's load fast (a short or empty log to replay)
+	 * rather than replaying the whole session's updates. The final compaction
+	 * is fallible and must NOT abort teardown: if it throws we log and move
+	 * on — nothing durable is lost (the append-log the snapshot would have
+	 * folded in is still intact on disk; the next load just replays it), but
+	 * a skipped peer.close() would leak the peer and every transport forever
+	 * (the closed-guard makes retries silent no-ops). Teardown order in the
+	 * finally: (1) the persist subscription was already released up top and
+	 * (2) the peer closes before the store — persist fires from peer
+	 * callbacks (onUpdatePayload / subscribeLocalUpdates), so only after both
+	 * is it safe to close the SQLite handle. On a TAINTED actor the compact
+	 * attempt is still made: if the storage recovered it snapshots the full
+	 * doc (snapshot supersedes the log — durability restored); if not, the
+	 * catch logs it.
 	 */
 	close(): void {
 		if (this.closed) return
 		this.closed = true
-		this.compact()
-		this.peer.close()
+		this.unsubPersist()
+		try {
+			this.compact()
+		} catch (err) {
+			console.error(
+				`[canvas-v2 ${this.roomId}] final compaction on close failed (non-fatal: ` +
+					'the append-log is intact, nothing durable is lost — the next load just replays more updates)',
+				err,
+			)
+		} finally {
+			this.peer.close()
+			this.store.close()
+		}
 	}
 }
