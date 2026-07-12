@@ -140,25 +140,30 @@ export class LoroCanvasDoc implements CanvasDoc {
   // EVERY physical node sharing an id (see nodesByShapeId) while the public
   // single-id deleteShape keeps its existing first-match behavior unchanged.
   private deleteNode(n: LoroTreeNode): void {
-    // Collect the shapeIds (and node refs, for index eviction) of the whole
+    // Collect the shapeIds (and TreeIDs, for index eviction) of the whole
     // real subtree before the cascade delete, then clear each shape's text
     // container. The emptied Loro container itself persists as a CRDT
     // tombstone (known bloat category per design); clearing its content
     // prevents text resurrection when a shape id is reused.
-    const collected: { sid: string; node: LoroTreeNode }[] = []
+    // Eviction below matches on TreeID (n.id), not object identity: each call
+    // to node.children() returns freshly-constructed LoroTreeNode wrapper
+    // objects (probed — a descendant read via .children() is NOT the same JS
+    // object as the one stored in the index), but TreeID is a stable value
+    // (`counter@peer`) that compares equal across those wrappers.
+    const collected: { sid: string; treeId: LoroTreeNode['id'] }[] = []
     const collect = (node: LoroTreeNode): void => {
       const sid = node.data.get('shapeId') as string | undefined
-      if (sid) collected.push({ sid, node })
+      if (sid) collected.push({ sid, treeId: node.id })
       for (const c of node.children() ?? []) collect(c)
     }
     collect(n)
     this.tree.delete(n.id)
-    for (const { sid, node } of collected) {
+    for (const { sid, treeId } of collected) {
       const t = this.doc.getText(this.textKey(sid))
       if (t.length > 0) t.delete(0, t.length)
       const arr = this.index.get(sid)
       if (arr) {
-        const i = arr.indexOf(node)
+        const i = arr.findIndex((x) => x.id === treeId)
         if (i !== -1) arr.splice(i, 1)
         if (arr.length === 0) this.index.delete(sid)
       }
