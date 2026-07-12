@@ -9,14 +9,22 @@
  * covered by resolve.test.ts/screenshare.test.ts/visibility.test.ts.
  * `SCREENSHARE_HEADER_HEIGHT` from helpers.ts.
  *
- * DROPPED for this v1 port (both require `editor.updateShape`, which a
- * shape body in this contract cannot call — see ./index.ts's
- * INTERACTIVE-CONTENT EVENT POLICY note): stamping a captured `lastFrame`
- * into the shared `stillUrl` prop so OTHER viewers/reloads see the
- * tombstone (kept as LOCAL-only in-memory state here — this viewer, while
- * mounted, still sees its own captured last frame); resize-driven aspect
- * relocking (`lockScreenShareAspect`, itself just math — resizing a shape at
- * all is a different seam's job here, not the body's).
+ * DROPPED for this v1 port: (a) stamping a captured `lastFrame` into the
+ * shared `stillUrl` prop so OTHER viewers/reloads see the tombstone (kept
+ * as LOCAL-only in-memory state here — this viewer, while mounted, still
+ * sees its own captured last frame), and (b) resize-driven aspect relocking
+ * (`lockScreenShareAspect`, itself just math — resizing a shape at all is a
+ * different seam's job here, not the body's) — both require
+ * `editor.updateShape`, which a shape body in this contract cannot call
+ * (see ./index.ts's INTERACTIVE-CONTENT EVENT POLICY note); plus (c) the
+ * header's freeze-warning tooltip ("A minimized or fully covered source
+ * window may freeze — keep it visible on the sharer's machine") — cosmetic,
+ * cut for scope, trivial to re-add.
+ * KEPT (restored after review — these are pure LOCAL track-state UI, no
+ * dependency on the dropped stillUrl stamp-back): the ended/paused badge
+ * chip over the still frame and the grayscale/brightness "this is a still,
+ * not a live feed" filter on ended tiles — see
+ * `screenshareStillTreatment` below (pure, unit-tested).
  *
  * EMBED LIFECYCLE — onSuspend/onResume detach/reattach the LiveKit video
  * element from the track: the REAL bandwidth win the phase-3 plan calls out
@@ -67,6 +75,18 @@ export function screenshareContentFrom(shape: Shape): ScreenshareShapeContent {
     stillUrl: typeof p.stillUrl === 'string' ? p.stillUrl : undefined,
     ownerColor: typeof p.ownerColor === 'string' ? p.ownerColor : undefined,
   }
+}
+
+/** Pure not-live still treatment (unit-tested in ScreenshareShape.test.ts):
+ * what badge + CSS filter the still frame gets for a given non-live track
+ * state — same values as the legacy component's inline expressions. An
+ * 'ended' tile reads as a still, not a live feed (grayscale + dimmed, badge
+ * "share ended"); any other non-live state ('connecting' — e.g. between
+ * subscription cycles while a frame is already held) reads as "paused". */
+export function screenshareStillTreatment(kind: 'connecting' | 'ended'): { label: string; filter: string | undefined } {
+  return kind === 'ended'
+    ? { label: 'share ended', filter: 'grayscale(0.5) brightness(0.8)' }
+    : { label: 'paused', filter: undefined }
 }
 
 export function ScreenshareShape({ shape }: ShapeBodyProps) {
@@ -170,11 +190,38 @@ export function ScreenshareShape({ shape }: ShapeBodyProps) {
       </div>
       <div ref={videoRef} style={{ flex: 1, minHeight: 0, position: 'relative' }}>
         {state.kind !== 'live' && (lastFrame || stillUrl) && (
-          <img
-            src={lastFrame ?? stillUrl}
-            alt="last shared frame"
-            style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'contain', background: '#000' }}
-          />
+          <>
+            <img
+              src={lastFrame ?? stillUrl}
+              alt="last shared frame"
+              style={{
+                position: 'absolute',
+                inset: 0,
+                width: '100%',
+                height: '100%',
+                objectFit: 'contain',
+                background: '#000',
+                filter: screenshareStillTreatment(state.kind).filter,
+              }}
+            />
+            <span
+              style={{
+                position: 'absolute',
+                top: 8,
+                left: 8,
+                padding: '2px 8px',
+                borderRadius: 3,
+                background: 'rgba(17,17,17,0.75)',
+                color: wm.cream,
+                fontFamily: wm.mono,
+                fontSize: 10,
+                textTransform: 'uppercase',
+                letterSpacing: 0.8,
+              }}
+            >
+              {screenshareStillTreatment(state.kind).label}
+            </span>
+          </>
         )}
         {state.kind !== 'live' && !lastFrame && !stillUrl && (
           <div style={{ position: 'absolute', inset: 0, display: 'grid', placeItems: 'center', color: wm.inkMuted, fontFamily: wm.mono, fontSize: 12 }}>

@@ -7,13 +7,14 @@
 // third argument for a hook actually invoked during render; ScreenshareShape
 // unconditionally calls the hook, so rendering it (even via
 // renderToStaticMarkup) is not safely testable in this house rig without a
-// DOM emulator. This file therefore tests ONLY the pure half:
-// `screenshareContentFrom`. Real mounting (LiveKit track attach/detach,
-// suspend/resume) is G2-golden/H2 E2E territory — see TerminalShape.test.ts's
-// identical note for the sibling heavy embed.
+// DOM emulator. This file therefore tests ONLY the pure halves:
+// `screenshareContentFrom` + `screenshareStillTreatment`. Real mounting
+// (LiveKit track attach/detach, suspend/resume) is G2-golden/H2 E2E
+// territory — see TerminalShape.test.ts's identical note for the sibling
+// heavy embed.
 import assert from 'node:assert/strict'
 import type { Shape } from '@ensembleworks/canvas-model'
-import { screenshareContentFrom } from './ScreenshareShape.js'
+import { screenshareContentFrom, screenshareStillTreatment } from './ScreenshareShape.js'
 
 function shapeWithProps(props: Record<string, unknown>): Shape {
   return { id: 'shape:s1', kind: 'screenshare', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props } as Shape
@@ -51,7 +52,20 @@ function shapeWithProps(props: Record<string, unknown>): Shape {
   assert.ok(content.w > 0 && content.h > 0)
 }
 
-console.log('ok: ScreenshareShape — screenshareContentFrom adapter (pure half only; see header for the SSR limitation)')
+// --- screenshareStillTreatment: the restored ended/paused badge + filter
+// (pure — same values as the legacy component's inline expressions) ---
+assert.deepEqual(
+  screenshareStillTreatment('ended'),
+  { label: 'share ended', filter: 'grayscale(0.5) brightness(0.8)' },
+  'an ended tile reads as a still: grayscale/dimmed + "share ended" badge'
+)
+assert.deepEqual(
+  screenshareStillTreatment('connecting'),
+  { label: 'paused', filter: undefined },
+  'a connecting tile with a held frame reads as paused, unfiltered'
+)
+
+console.log('ok: ScreenshareShape — screenshareContentFrom + screenshareStillTreatment (pure halves only; see header for the SSR limitation)')
 // House rule (see canvas-react/src/embed/embed-reconciler.test.ts): explicit
 // exit — ScreenshareShape's import graph pulls in livekit-client (via
 // screenshare/store.ts) at module scope, which can hold the event loop open.

@@ -44,7 +44,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { makeDocument, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import type { EditorState } from '@ensembleworks/canvas-editor'
-import { NekoShape, buildNekoSrc, nekoContentFrom } from './NekoShape.js'
+import { NEKO_NUDGE_DELAYS_MS, NekoShape, buildNekoSrc, nekoContentFrom } from './NekoShape.js'
 
 // --- buildNekoSrc: pure URL composition ---
 assert.equal(
@@ -73,6 +73,14 @@ function shapeWithProps(props: Record<string, unknown>): Shape {
   assert.equal(content.title, 'shared browser')
   assert.ok(content.w > 0 && content.h > 0)
 }
+
+// --- layout-nudge schedule (the PURE part of the restored nudge loop) ---
+// The nudge itself (dispatching synthetic 'resize' events into the iframe on
+// this schedule after load, so neko's player re-measures its container
+// across its async mount + a cold WebRTC connect) needs a live iframe —
+// that half is coverage-limited to G2-golden/H2 E2E; the schedule values
+// are what keeps this port honest against the legacy loop's.
+assert.deepEqual([...NEKO_NUDGE_DELAYS_MS], [0, 250, 750, 1500, 3000], 'nudge schedule matches the legacy onFrameLoad loop')
 
 // --- static-render smoke ---
 const shape = shapeWithProps({ w: 900, h: 600, base: '/shared-browser/', title: 'shared browser' })

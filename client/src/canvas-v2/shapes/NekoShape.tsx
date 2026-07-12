@@ -52,6 +52,16 @@ const NEKO_HEADER_HEIGHT = 28
 const NEKO_VIDEO_RATIO = 720 / 1280
 const NEKO_DEFAULT_W = 2000
 
+/** Re-measure schedule for the layout nudge (ms after iframe load) — same
+ * values as the legacy onFrameLoad's loop: neko's player measures its
+ * container only on a window 'resize' event, and on first mount it can
+ * latch onto a transient layout (the first-mount flicker a manual resize
+ * later clears); the spread covers neko's async mount + a cold WebRTC
+ * connect taking a couple of seconds. Exported for NekoShape.test.ts —
+ * the schedule is the PURE part of the nudge (the dispatch itself needs a
+ * live iframe; see the test's coverage note). */
+export const NEKO_NUDGE_DELAYS_MS = [0, 250, 750, 1500, 3000] as const
+
 export function buildNekoSrc(base: string, viewerName: string): string {
   const q = `usr=${encodeURIComponent(viewerName)}&pwd=${encodeURIComponent(NEKO_USER_PASSWORD)}&embed=1`
   return base.includes('?') ? `${base}&${q}` : `${base}?${q}`
@@ -83,6 +93,10 @@ export function NekoShape({ shape }: ShapeBodyProps) {
   const prefMuted = useRef(true)
   const [muted, setMuted] = useState(true)
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  // Pending layout-nudge timers (see NEKO_NUDGE_DELAYS_MS) — tracked so a
+  // reload re-arms a fresh batch and unmount clears any still pending (the
+  // legacy component leaked these across unmount; fixed in this port).
+  const nudgeTimersRef = useRef<ReturnType<typeof setTimeout>[]>([])
 
   const getVideo = (): HTMLVideoElement | null => {
     try {
@@ -127,7 +141,13 @@ export function NekoShape({ shape }: ShapeBodyProps) {
 
   useEffect(() => {
     startPolling()
-    return stopPolling
+    return () => {
+      stopPolling()
+      // Clear any still-pending layout nudges (a late nudge after unmount
+      // would dereference a dead iframe ref — harmless but sloppy).
+      for (const t of nudgeTimersRef.current) clearTimeout(t)
+      nudgeTimersRef.current = []
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -152,6 +172,19 @@ export function NekoShape({ shape }: ShapeBodyProps) {
     setMuted(prefMuted.current)
   }
 
+  // neko's player measures its container only on a window 'resize' event —
+  // same-origin lets us dispatch one into the iframe to force a clean
+  // re-measure (re-implemented from the legacy nudgeNekoLayout; the helper
+  // itself lives inside the tldraw-coupled NekoShapeUtil.tsx and is not
+  // importable without dragging tldraw in — see DUPLICATED, NOT IMPORTED).
+  const nudgeNekoLayout = () => {
+    try {
+      frameRef.current?.contentWindow?.dispatchEvent(new Event('resize'))
+    } catch {
+      /* contentWindow not reachable yet — the next nudge (or a real resize) covers it */
+    }
+  }
+
   const onFrameLoad = () => {
     try {
       const win = frameRef.current?.contentWindow
@@ -166,6 +199,11 @@ export function NekoShape({ shape }: ShapeBodyProps) {
     } catch {
       /* content* not reachable yet — cosmetic only */
     }
+    // Re-measure across neko's async mount + WebRTC stream start (which can
+    // be a couple of seconds on a cold connect) — see NEKO_NUDGE_DELAYS_MS.
+    // A reload (onLoad firing again) clears the previous batch first.
+    for (const t of nudgeTimersRef.current) clearTimeout(t)
+    nudgeTimersRef.current = NEKO_NUDGE_DELAYS_MS.map((delay) => setTimeout(nudgeNekoLayout, delay))
   }
 
   return (

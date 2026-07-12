@@ -27,6 +27,16 @@
  * an already-good boot estimate), term.onData -> ws input forwarding, the
  * Shift/Alt+Enter -> newline translation, and the focus-swallow policy.
  *
+ * ESCAPE SEMANTICS (differs from the legacy double-Esc — know this before
+ * chasing a "vim lost focus" bug report): under this seam's shared policy a
+ * SINGLE Escape exits interactive mode (useInteractionMode's document-level
+ * keydown listener), and because that listener never preventDefault/
+ * stopPropagations the key, the SAME Escape still reaches xterm and is
+ * forwarded to the PTY — vim/emacs/Claude Code see their Esc, the canvas
+ * just also defocuses. The legacy double-Esc-within-350ms disambiguation
+ * (single Esc stays in the terminal) is a documented global non-goal of the
+ * v1 policy — see ./index.ts's INTERACTIVE-CONTENT EVENT POLICY.
+ *
  * EMBED LIFECYCLE — onSuspend closes the WebSocket, onResume reconnects:
  * a REAL bandwidth/CPU win (mirrors the legacy file's own precedent — its
  * `reconnectWhenVisible` already cycles the connection on
