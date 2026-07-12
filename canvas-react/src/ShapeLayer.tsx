@@ -1,6 +1,27 @@
 // Reads the doc snapshot (via the shared ToolContext) + camera, culls to
 // what's actually visible, and renders one ShapeBody per surviving shape.
 //
+// TOOLCONTEXT OWNERSHIP: the `toolContext` prop is CALLER-OWNED — this
+// component subscribes through it but never disposes it. The owner (G3,
+// which constructs Editor + ToolContext once and shares them) MUST call
+// `toolContext.dispose()` on unmount — see tool-context.ts's dispose() doc
+// comment for the strict-mode/HMR leak this prevents (every undisposed
+// context keeps its doc listener registered forever, re-marking itself
+// dirty on every commit).
+//
+// CULLING UNMOUNTS BODIES (prominent warning for D8 and every stateful
+// embed): a shape culled out of the viewport is not hidden — its ShapeBody
+// (and everything the registered component rendered inside it) is
+// UNMOUNTED, and remounted from scratch when it scrolls back in. For
+// stateless bodies (BoxShape, note/text/geo renders) that is exactly
+// right: cheapest possible off-screen cost, no correctness impact. For
+// STATEFUL embeds it is destructive TODAY: panning a live terminal
+// (xterm + websocket), an iframe, or a screenshare tile off-screen and
+// back destroys and recreates its session/connection/DOM state. That
+// keep-alive/suspend policy is D8's EmbedHost contract, NOT this layer's —
+// culling stays dumb here by design. Until D8 lands, heavy shapes MUST NOT
+// assume mount persistence across viewport exits.
+//
 // DEVIATION FROM THE PLAN'S LITERAL TEXT, noted here for the same reason
 // ShapeBody.tsx documents its own: the task spec describes culling as
 // `queryViewport(toolContext.index(), viewportWorldBounds)` — but

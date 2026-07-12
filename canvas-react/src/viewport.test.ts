@@ -8,12 +8,25 @@
 // `React.createElement` instead of JSX syntax, so this house's test globs
 // (this package's test.ts AND the root scripts/run-tests.ts, both
 // `**/*.test.ts` only) don't need a `.tsx` variant.
+//
+// ACKNOWLEDGED LIMITATION: Viewport's useEffect-wired NON-PASSIVE wheel
+// path (the addEventListener('wheel', ..., { passive: false }) branch and
+// its ctrl/meta preventDefault) is NOT exercised here — react-dom/server
+// never runs effects and static markup carries no event listeners at all,
+// so no house test can observe it. The same applies to the pointer-capture
+// calls in handlePointer (verified by code-reading; the guards are
+// documented in Viewport.tsx's POINTER CAPTURE header). Those paths get
+// their first real coverage when a browser-driven e2e exists for the
+// canvas rewrite. What static markup CAN show — the root div's focusability
+// (tabIndex), its clipping styles, and the layer composition order — is
+// pinned below.
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { cameraTransform, WorldLayer } from './WorldLayer.js'
 import { Grid } from './Grid.js'
+import { Viewport } from './Viewport.js'
 import { keyEventToInput, pointerEventToInput, wheelEventToInput, type KeyEventLike, type PointerEventLike, type RectLike, type WheelEventLike } from './dom-events.js'
 
 // ============================================================================
@@ -123,4 +136,36 @@ import { keyEventToInput, pointerEventToInput, wheelEventToInput, type KeyEventL
   console.log('ok: dom-events mappers — exact InputEvents from fabricated structural events, including a nonzero rect offset')
 }
 
-console.log('ok: viewport (transform string, worldToScreen agreement, WorldLayer/Grid rendering, dom-events mappers)')
+// ============================================================================
+// 6. Viewport composition smoke (renderToStaticMarkup — see the ACKNOWLEDGED
+//    LIMITATION in the header for what this deliberately cannot cover):
+//    the root div is focusable (tabindex="0" — without it neither key
+//    events nor the onViewportBlur hook could ever fire), clips its content
+//    (overflow:hidden, position:relative), and composes the layers in the
+//    STACKING CONTRACT's DOM order (Viewport.tsx header): Grid renders
+//    BEFORE WorldLayer — DOM order is the stacking mechanism (no z-index),
+//    so this string-order assertion IS the paint-order assertion.
+// ============================================================================
+{
+  const camera: Camera = { x: 3, y: 4, z: 1 }
+  const html = renderToStaticMarkup(
+    createElement(
+      Viewport,
+      { onInput: () => {} },
+      createElement(Grid, { camera }),
+      createElement(WorldLayer, { camera }),
+    ),
+  )
+  assert.match(html, /tabindex="0"/, 'root div must be keyboard-focusable')
+  assert.match(html, /overflow:\s*hidden/, 'root div must clip (overflow hidden)')
+  assert.match(html, /position:\s*relative/, 'root div must be the positioning context for its layers')
+
+  const gridAt = html.indexOf('data-canvas-layer="grid"')
+  const worldAt = html.indexOf('data-canvas-layer="world"')
+  assert.ok(gridAt !== -1 && worldAt !== -1, `both layers must render: ${html}`)
+  assert.ok(gridAt < worldAt, 'Grid must precede WorldLayer in DOM order — the stacking contract (later siblings paint on top; no z-index)')
+
+  console.log('ok: Viewport composition smoke — focusable clipping root, Grid before WorldLayer in DOM order')
+}
+
+console.log('ok: viewport (transform string, worldToScreen agreement, WorldLayer/Grid rendering, dom-events mappers, composition smoke)')

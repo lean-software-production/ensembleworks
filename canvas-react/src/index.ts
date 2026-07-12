@@ -8,6 +8,18 @@
 // @ensembleworks/canvas-editor + @ensembleworks/canvas-model + react +
 // react-dom (enforced by boundary.test.ts). DOM access is fair game here —
 // unlike canvas-editor/canvas-model, THIS package's whole job is the DOM.
+//
+// CALLER OBLIGATIONS (G3, the seam that constructs Editor + ToolContext
+// once and passes both down as props):
+//   - `toolContext.dispose()` MUST be called on unmount. React strict
+//     mode's double-mount, room switches, and HMR all construct fresh
+//     contexts, and every undisposed predecessor keeps its doc listener
+//     registered forever — see tool-context.ts's dispose() doc comment.
+//     Nothing in this package disposes it (the context is caller-owned;
+//     ShapeLayer only reads through it).
+//   - Viewport's `onViewportBlur` is the abandonment-gap cancel hook —
+//     wire it (plus Escape/unmount) to the in-flight-gesture cleanup
+//     described in tools/arrow.ts's ABANDONMENT GAP note.
 export const CANVAS_REACT_VERSION = 1 as const
 
 export * from './dom-events.js'

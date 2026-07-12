@@ -21,6 +21,22 @@
 // One props object, not three separate props, so a future field (Seam E/D7)
 // is one contract change instead of a signature change at every call site.
 //
+// MEMO STRATEGY (design constraint Seam E implements against — see
+// ShapeBody.tsx's MEMO STRATEGY block for the full derivation): reference-
+// based React.memo on these props is USELESS — dumpModel materializes
+// all-new shape objects on every doc commit even for untouched shapes, and
+// the whole-document `snapshot` prop changes identity every commit
+// regardless. Heavy embeds (terminal/iframe/screenshare) MUST memo on
+// CONTENT (`a.shape.id === b.shape.id && stableStringify(a.shape) ===
+// stableStringify(b.shape)` — canvas-model exports stableStringify) and
+// SHOULD NOT read `snapshot` at all: it is OPTIONAL-BY-CONVENTION — always
+// passed (the type keeps it required so a component that genuinely needs
+// sibling/children data, roadmap/file-viewer plausibly, just uses it), but
+// reading it forfeits any content-memo win, since no per-shape comparator
+// can prove the rest of the document irrelevant. Read `snapshot` only if
+// you truly render from other shapes' data — and then you own the
+// re-render cost.
+//
 // FALLBACK POLICY: an unregistered kind renders as BoxShape, not an error
 // and not a blank div — this unit ships the six custom shapes' EVENTUAL kind
 // strings (terminal/iframe/neko/roadmap/screenshare/file-viewer) and the

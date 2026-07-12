@@ -30,6 +30,18 @@
 // `performance.now` call of its own, keeping the makeId collision contract's
 // clock domain (input.ts: "t is ALWAYS caller-injected") intact all the way
 // out to the real browser event.
+//
+// SINGLE-POINTER V1 SCOPE (deliberate, not an oversight): these mappers
+// carry NO pointerType (mouse/pen/touch) and NO pointer identity into the
+// mapped InputEvent — input.ts's PointerInputEvent has no field for either,
+// so multi-touch gestures (two simultaneous pointers pinching) and
+// pen/touch discrimination (tldraw's coarse-pointer drag threshold,
+// pressure, tilt) are structurally unrepresentable downstream today. One
+// pointer at a time is the v1 model. Viewport.tsx's pointer CAPTURE does
+// read `e.pointerId` (hence PointerEventLike's optional field below), but
+// that id never enters the mapped event. Widening the event union for
+// multi-pointer/pointer-kind is a Phase 4 concern that starts in
+// canvas-editor's input.ts, not here.
 import type { InputEvent, KeyInputEvent, Modifiers, PointerInputEvent, WheelInputEvent } from '@ensembleworks/canvas-editor'
 
 /** Subset of DOMRect this module needs — a plain `{ left, top }` object
@@ -65,6 +77,11 @@ export interface PointerEventLike extends ModifierFields {
    * doc comment). */
   readonly buttons: number
   readonly timeStamp: number
+  /** OPTIONAL — the mapper never reads it (see SINGLE-POINTER V1 SCOPE in
+   * the module header). Declared here so the structural type stays honest
+   * about what Viewport.tsx's pointer-capture path consumes off the same
+   * event object, and so fabricated test events remain valid without it. */
+  readonly pointerId?: number
 }
 
 export function pointerEventToInput(e: PointerEventLike, viewportRect: RectLike): PointerInputEvent {

@@ -48,6 +48,21 @@ export function WorldLayer({ camera, children }: WorldLayerProps): ReactNode {
         top: 0,
         transformOrigin: '0 0',
         transform: cameraTransform(camera),
+        // Rendering hints, stated rather than silent: `contain` isolates
+        // this subtree's layout/style from the page; `will-change` asks
+        // for a compositor layer so pan/zoom is a transform update, not a
+        // repaint. H3 owns MEASURING whether either actually helps (and
+        // removing them if not). `paint` is DELIBERATELY absent from the
+        // contain list: paint containment clips descendants to the
+        // element's border box, and this container's border box is 0x0
+        // (auto-sized absolute div whose children are all absolutely
+        // positioned) — `contain: paint` here would clip every shape
+        // invisible, and no fixed container size can fix that for an
+        // infinite canvas whose children live at unbounded world
+        // coordinates in every direction. Viewport's own overflow:hidden
+        // already provides the visible clipping boundary.
+        contain: 'layout style',
+        willChange: 'transform',
       }}
     >
       {children}

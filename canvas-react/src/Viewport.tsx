@@ -22,6 +22,43 @@
 // camera.ts's applyWheel), and letting the browser ALSO zoom the page at
 // the same time is a broken double-zoom.
 //
+// POINTER CAPTURE (why drags don't die at the viewport edge): on
+// pointerdown the viewport element captures the pointer
+// (`setPointerCapture(e.pointerId)`), so every subsequent pointermove AND
+// the terminating pointerup are delivered to THIS element even after the
+// pointer physically leaves its bounds — without capture, a drag that
+// exits the viewport (drag a shape toward the toolbar, overshoot the
+// window edge) loses its pointerup entirely: the tool FSM is stranded
+// mid-gesture with no terminating event. The blur hook does NOT cover this
+// case — keyboard focus stays on the viewport while the pointer wanders,
+// so no blur ever fires. Capture is released on pointerup. Both calls are
+// feature-guarded AND try/catch-wrapped: fabricated/synthetic events carry
+// pointerIds no real pointer owns (setPointerCapture throws NotFoundError
+// for an unknown pointerId; releasePointerCapture throws when that pointer
+// isn't captured), and non-browser render environments may lack the API
+// entirely — capture is an enhancement to event DELIVERY, never a gate on
+// event FORWARDING, so a failed capture must not swallow the input.
+//
+// STACKING CONTRACT (the composition D4's overlay builds against): a
+// caller composes the canvas as, in DOM order inside this Viewport —
+//   1. <Grid>       — SCREEN-space, bottom layer (its own screen-space div
+//                     computes dot pitch/offset from the camera; it does
+//                     NOT live inside WorldLayer's transformed container).
+//   2. <WorldLayer> — THE transformed world container, holding ShapeLayer
+//                     (every shape body).
+//   3. D4's selection overlay — a SCREEN-SPACE full-viewport SVG, a
+//                     SIBLING of WorldLayer placed AFTER it in DOM order,
+//                     drawing outlines/handles in screen coordinates via
+//                     worldToScreen (per the plan's "one full-viewport SVG
+//                     overlay" design). It does NOT live inside the
+//                     transformed container — screen-space drawing is what
+//                     keeps handle strokes and hit areas zoom-invariant
+//                     (1px is 1px at any zoom).
+// DOM ORDER IS THE MECHANISM: later siblings paint over earlier ones; no
+// z-index anywhere in this package. The Grid-before-WorldLayer half is
+// pinned by viewport.test.ts's composition smoke case; the overlay half is
+// D4's to pin when it lands.
+//
 // ABANDONMENT-GAP HOOK: arrow.ts's ABANDONMENT GAP note (tools/arrow.ts
 // header) documents that an in-flight drag/arrow-draw gesture has no cancel
 // path inside canvas-editor's tool FSMs themselves — Seam D/G3 owns wiring
@@ -79,7 +116,17 @@ export function Viewport({ onInput, onViewportBlur, children, className, style }
   }, [])
 
   function handlePointer(e: PointerEvent<HTMLDivElement>): void {
-    onInput(pointerEventToInput(e, e.currentTarget.getBoundingClientRect()))
+    const el = e.currentTarget
+    // POINTER CAPTURE — see the module header. Guarded twice: optional-call
+    // (`?.`) tolerates environments where the API is absent altogether, and
+    // try/catch tolerates a pointerId the browser doesn't recognize
+    // (fabricated/synthetic events) or a release of a never-captured
+    // pointer. A capture failure never blocks forwarding the event below.
+    try {
+      if (e.type === 'pointerdown') el.setPointerCapture?.(e.pointerId)
+      else if (e.type === 'pointerup') el.releasePointerCapture?.(e.pointerId)
+    } catch { /* capture is best-effort — see header */ }
+    onInput(pointerEventToInput(e, el.getBoundingClientRect()))
   }
 
   function handleKey(e: KeyboardEvent<HTMLDivElement>): void {

@@ -44,6 +44,35 @@
 // STALENESS CONTRACT tradeoff for queryViewport. POSITIONING uses the rigid
 // transform (this file). Different geometry for different jobs, not an
 // inconsistency.
+//
+// MEMO STRATEGY (design constraint for Seam E's heavy embeds — direction,
+// not implementation; Seam E implements it):
+//   (a) PROVEN (code-read, canvas-doc/src/bridge.ts + loro-canvas-doc.ts):
+//       every dumpModel() call materializes ALL-NEW Shape objects —
+//       listShapes() maps readNode(n) per node, per call — so after ANY
+//       commit, every shape in the fresh snapshot is a new reference even
+//       if that shape's data didn't change. Reference-based React.memo
+//       (shallow prop comparison) therefore NEVER bails out across
+//       commits: `shape` is always "new".
+//   (b) The whole-document `snapshot` prop makes this true INDEPENDENTLY:
+//       it changes identity on every commit by design (tool-context.ts's
+//       IDENTITY SEMANTICS — that's how consumers detect doc change), so
+//       any component receiving it shallow-fails memo on every commit no
+//       matter what happens to `shape`.
+//   (c) CONSEQUENCE for heavy embeds (terminal/iframe/screenshare — any
+//       body whose re-render is expensive or state-destructive): they MUST
+//       wrap in React.memo with a CONTENT comparator —
+//         (a, b) => a.shape.id === b.shape.id
+//                && stableStringify(a.shape) === stableStringify(b.shape)
+//       (canvas-model exports stableStringify; it's the same canonical
+//       serialization makeDocument's duplicate-id dedupe already trusts) —
+//       and SHOULD NOT read `snapshot` unless they truly render from
+//       sibling/children data (roadmap/file-viewer plausibly do; a
+//       terminal does not). `snapshot` is OPTIONAL-BY-CONVENTION for
+//       exactly this reason: always passed, but touching it forfeits the
+//       content-memo win. (`editorState` is cheap-and-cached — see
+//       use-editor-state.ts — but a content comparator must still decide
+//       which of its fields, if any, the embed cares about.)
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 import { localBounds, worldTransform } from '@ensembleworks/canvas-model'
 import type { EditorState } from '@ensembleworks/canvas-editor'
