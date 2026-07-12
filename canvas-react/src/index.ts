@@ -9,3 +9,8 @@
 // react-dom (enforced by boundary.test.ts). DOM access is fair game here —
 // unlike canvas-editor/canvas-model, THIS package's whole job is the DOM.
 export const CANVAS_REACT_VERSION = 1 as const
+
+export * from './dom-events.js'
+export * from './Viewport.js'
+export * from './WorldLayer.js'
+export * from './Grid.js'
