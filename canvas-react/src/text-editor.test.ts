@@ -16,7 +16,8 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { makeDocument, worldTransform, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import type { Editor, EditorState, ToolContext } from '@ensembleworks/canvas-editor'
-import { TextEditor, handleTextChange, handleEditorKeyDown } from './TextEditor.js'
+import { TextEditor, createCompositionState, handleCompositionStart, handleCompositionEnd, handleTextChange, handleEditorKeyDown } from './TextEditor.js'
+import { registerShape, type ShapeBodyProps } from './shapeRegistry.js'
 
 // 'geo' (not 'note') is deliberate: geometry.ts's size() hard-codes note to
 // a fixed 200x200 (scale-adjusted) regardless of props.w/h, so a note
@@ -31,10 +32,11 @@ function geoShape(id: string, x: number, y: number, rotation = 0, w = 200, h = 1
 
 const editingShape = geoShape('shape:editing', 30, 40, Math.PI / 8)
 const otherShape = geoShape('shape:other', 500, 500)
+const embedShape = { ...geoShape('shape:embed', 100, 100), kind: 'terminal' } as Shape
 
 const doc: CanvasDocument = makeDocument({
   pages: [{ id: 'page:p', name: 'P' }],
-  shapes: [editingShape, otherShape],
+  shapes: [editingShape, otherShape, embedShape],
   bindings: [],
 })
 
@@ -126,9 +128,10 @@ function fakeToolContext(editingId: string | null): ToolContext {
 //    path.
 // ============================================================================
 {
+  const composition = createCompositionState()
   let changed: [string, string] | null = null
-  handleTextChange('shape:editing', 'new text', (id, text) => { changed = [id, text] })
-  assert.deepEqual(changed, ['shape:editing', 'new text'], 'handleTextChange forwards (id, text) to onTextChange verbatim')
+  handleTextChange(composition, 'shape:editing', 'new text', (id, text) => { changed = [id, text] })
+  assert.deepEqual(changed, ['shape:editing', 'new text'], 'handleTextChange forwards (id, text) to onTextChange verbatim (outside composition)')
 
   let ended = false
   handleEditorKeyDown('Escape', () => { ended = true })
@@ -140,4 +143,45 @@ function fakeToolContext(editingId: string | null): ToolContext {
   console.log('ok: callback props fire via direct handler invocation')
 }
 
-console.log('ok: text-editor (mount gating, controlled value, world-space positioning, callback props)')
+// ============================================================================
+// 5. IME COMPOSITION (see TextEditor.tsx's header IME section): while a
+//    composition session is open, intermediate onChange events must NOT
+//    dispatch onTextChange (each dispatch is a whole-string CRDT
+//    delete+insert commit — see the LWW section — so per-composition-
+//    keystroke commits are pure waste AND ship half-composed text to
+//    peers); compositionEnd flushes the FINAL value exactly once.
+// ============================================================================
+{
+  const composition = createCompositionState()
+  const dispatched: string[] = []
+  const onTextChange = (_id: string, text: string) => { dispatched.push(text) }
+
+  handleCompositionStart(composition)
+  handleTextChange(composition, 'shape:editing', 'ｎ', onTextChange) // intermediate — skipped
+  handleTextChange(composition, 'shape:editing', 'ｎｉ', onTextChange) // intermediate — skipped
+  assert.deepEqual(dispatched, [], 'onChange during composition must not dispatch')
+
+  handleCompositionEnd(composition, 'shape:editing', '日本語', onTextChange)
+  assert.deepEqual(dispatched, ['日本語'], 'compositionEnd flushes the final value exactly once')
+
+  handleTextChange(composition, 'shape:editing', '日本語!', onTextChange)
+  assert.deepEqual(dispatched, ['日本語', '日本語!'], 'after composition ends, plain changes dispatch again')
+  console.log('ok: IME composition — intermediate changes skipped, final value flushed once')
+}
+
+// ============================================================================
+// 6. EMBED-KIND GUARD: an editingId pointing at an embed-kind shape mounts
+//    NOTHING — a future generic BeginEdit trigger must never float a
+//    textarea over a live terminal/iframe (see TextEditor.tsx's header).
+// ============================================================================
+{
+  function FakeTerminal(_props: ShapeBodyProps) { return null }
+  registerShape('terminal', FakeTerminal, { embed: true })
+  const html = renderToStaticMarkup(
+    createElement(TextEditor, { toolContext: fakeToolContext('shape:embed'), onTextChange: () => {}, onEndEdit: () => {} }),
+  )
+  assert.equal(html, '', 'TextEditor must render nothing for an embed-kind editing target')
+  console.log('ok: no mount for an embed-kind editingId')
+}
+
+console.log('ok: text-editor (mount gating, controlled value, world-space positioning, callback props, IME composition, embed guard)')

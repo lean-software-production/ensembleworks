@@ -39,13 +39,29 @@
 // entirely — capture is an enhancement to event DELIVERY, never a gate on
 // event FORWARDING, so a failed capture must not swallow the input.
 //
-// STACKING CONTRACT (the composition D4's overlay builds against): a
-// caller composes the canvas as, in DOM order inside this Viewport —
+// STACKING CONTRACT (the composition D4's overlay builds against — THE
+// canonical layer list; other files cite this block by name and G3 reads
+// it to assemble the mount): a caller composes the canvas as, in DOM order
+// inside this Viewport —
 //   1. <Grid>       — SCREEN-space, bottom layer (its own screen-space div
 //                     computes dot pitch/offset from the camera; it does
 //                     NOT live inside WorldLayer's transformed container).
-//   2. <WorldLayer> — THE transformed world container, holding ShapeLayer
-//                     (every shape body).
+//   2. <WorldLayer> — THE transformed world container, holding, as FLAT
+//                     SIBLINGS (ShapeBody.tsx's flat-sibling rule):
+//                     2a. <ShapeLayer> — every culled, non-embed shape
+//                                        body.
+//                     2b. <EmbedLayer> — every embed-kind shape,
+//                                        culling-EXEMPT (D8). Order
+//                                        between 2a/2b is NOT load-
+//                                        bearing: they render disjoint
+//                                        kind sets by isEmbedKind's
+//                                        construction (EmbedLayer.tsx's
+//                                        stacking note).
+//                     2c. <TextEditor> — the D7 editing mount, WORLD-
+//                                        space, AFTER ShapeLayer so the
+//                                        editing surface paints above the
+//                                        shape it edits (TextEditor.tsx's
+//                                        world-space decision block).
 //   3. D4's selection overlay — a SCREEN-SPACE full-viewport SVG, a
 //                     SIBLING of WorldLayer placed AFTER it in DOM order,
 //                     drawing outlines/handles in screen coordinates via

@@ -75,6 +75,28 @@
 // The alternative (local-state-first, reconciling remote updates only when
 // the field is blurred) is more moving parts this v1 does not need.
 //
+// IME COMPOSITION (sits directly on the LWW section above — same
+// whole-string SetText, different trigger cadence): without composition
+// tracking, EVERY intermediate keystroke of an IME session (each kana of a
+// Japanese word being composed, each pinyin letter) would round-trip a
+// whole-string CRDT commit — pure churn locally AND half-composed text
+// shipped to peers. So: `compositionstart` opens a window during which
+// `onChange` SKIPS dispatching onTextChange entirely; `compositionend`
+// flushes the FINAL committed value exactly once (handlers exported pure —
+// handleCompositionStart/handleCompositionEnd — and the sequence is pinned
+// by text-editor.test.ts). CAVEAT (v1, documented): while the window is
+// open the DOM textarea legitimately diverges from the controlled `value`
+// (React deliberately does not clobber a mid-composition input); a remote
+// SetText arriving mid-composition therefore doesn't repaint until the
+// composition ends — one more face of the same LWW honesty above.
+//
+// TRIGGER UNASSIGNED: nothing fires BeginEdit yet — double-click-to-edit
+// lands with the G-seam wiring (Unit 13).
+//
+// WATCH-ITEM (cost, same accumulator as EmbedLayer's H3 note): whole-string
+// SetText is O(len) per change through Loro's delete+insert — fine at
+// sticky-note scale; H3 measures and Phase-4 rich text owns long-text cost.
+//
 // NEVER CONSTRUCTS AN INTENT (the package's logic-free boundary, restated
 // for this file specifically): text edits are reported via the
 // `onTextChange(id, text)` callback prop; Escape and blur are reported via
@@ -82,11 +104,12 @@
 // `SetText`/`EndEdit` Intents applied through `editor.apply` — this
 // component only reads editor/doc state and forwards raw DOM change/key
 // events, exactly like Viewport.tsx forwards raw pointer/wheel/key events.
-import type { ChangeEvent, KeyboardEvent } from 'react'
+import { useRef, type ChangeEvent, type CompositionEvent, type KeyboardEvent } from 'react'
 import { localBounds } from '@ensembleworks/canvas-model'
 import type { ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { shapeBodyTransform } from './ShapeBody.js'
+import { isEmbedKind } from './shapeRegistry.js'
 
 export interface TextEditorProps {
   readonly toolContext: ToolContext
@@ -102,6 +125,14 @@ export interface TextEditorProps {
   readonly onEndEdit: () => void
 }
 
+/** IME composition tracking (see the module header's IME COMPOSITION
+ * section): a single mutable flag, held per-mount in a ref by the
+ * component and threaded explicitly through the pure handlers below so
+ * text-editor.test.ts can drive the exact start→change→end sequence with
+ * no DOM at all. */
+export interface TextCompositionState { composing: boolean }
+export function createCompositionState(): TextCompositionState { return { composing: false } }
+
 /** Pure — exported so text-editor.test.ts can invoke it directly with a
  * fake event-shaped object and a spy callback. renderToStaticMarkup (this
  * house rig's only component-test tool — see viewport.test.ts's header)
@@ -109,8 +140,30 @@ export interface TextEditorProps {
  * test can literally "type into" the rendered textarea; testing the pure
  * handler function directly (same limitation/workaround shape-layer.test.ts
  * and viewport.test.ts already document for their own event-adjacent
- * paths) is the exercised alternative. */
-export function handleTextChange(id: string, text: string, onTextChange: (id: string, text: string) => void): void {
+ * paths) is the exercised alternative.
+ *
+ * SKIPS dispatch while an IME composition is open — see the module
+ * header's IME COMPOSITION section; handleCompositionEnd flushes the
+ * final value. */
+export function handleTextChange(composition: TextCompositionState, id: string, text: string, onTextChange: (id: string, text: string) => void): void {
+  if (composition.composing) return
+  onTextChange(id, text)
+}
+
+/** Pure — same exported-for-direct-invocation reasoning as handleTextChange.
+ * Opens the composition window: onChange stops dispatching until
+ * handleCompositionEnd. */
+export function handleCompositionStart(composition: TextCompositionState): void {
+  composition.composing = true
+}
+
+/** Pure — same exported-for-direct-invocation reasoning as handleTextChange.
+ * Closes the composition window and flushes the FINAL composed value
+ * exactly once (the browser fires compositionend with the textarea already
+ * holding the committed text — `text` here is the element's current
+ * value). */
+export function handleCompositionEnd(composition: TextCompositionState, id: string, text: string, onTextChange: (id: string, text: string) => void): void {
+  composition.composing = false
   onTextChange(id, text)
 }
 
@@ -126,9 +179,22 @@ export function handleEditorKeyDown(key: string, onEndEdit: () => void): void {
 export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorProps) {
   const snapshot = useDocSnapshot(toolContext)
   const editorState = useEditorState(toolContext.editor)
+  // Per-mount IME composition flag (see the module header's IME COMPOSITION
+  // section). A ref, not state: mid-composition transitions must not force
+  // re-renders — the flag only gates dispatch inside event handlers.
+  // Declared BEFORE the early returns below (rules of hooks).
+  const composition = useRef<TextCompositionState>({ composing: false })
   const editingId = editorState.editingId
   const shape = editingId ? snapshot.byId.get(editingId) : undefined
   if (!editingId || !shape) return null // no active edit, or the editing shape vanished — mount nothing (see module header)
+  // EMBED GUARD: never mount a text editor over an embed-kind shape
+  // (terminal/iframe/screenshare — shapeRegistry.ts's isEmbedKind, the same
+  // flag ShapeLayer/EmbedLayer split on). Embeds carry no doc text to edit,
+  // and a future GENERIC BeginEdit trigger (double-click on any shape —
+  // Unit 13, see the header's TRIGGER UNASSIGNED note) must never float a
+  // textarea over a live terminal session. Guarded here, at the mount
+  // decision, rather than trusting every future trigger to remember.
+  if (isEmbedKind(shape.kind)) return null
 
   const { maxX: w, maxY: h } = localBounds(shape) // localBounds is always {minX:0, minY:0, maxX:w, maxY:h} — geometry.ts's contract, same as ShapeBody.tsx
   const text = toolContext.editor.doc.getText(editingId) // READ through editor.doc — see module header's "not an import" note
@@ -150,7 +216,9 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorP
         data-text-editor-input={editingId}
         autoFocus
         value={text}
-        onChange={(e: ChangeEvent<HTMLTextAreaElement>) => handleTextChange(editingId, e.target.value, onTextChange)}
+        onChange={(e: ChangeEvent<HTMLTextAreaElement>) => handleTextChange(composition.current, editingId, e.target.value, onTextChange)}
+        onCompositionStart={() => handleCompositionStart(composition.current)}
+        onCompositionEnd={(e: CompositionEvent<HTMLTextAreaElement>) => handleCompositionEnd(composition.current, editingId, e.currentTarget.value, onTextChange)}
         onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => handleEditorKeyDown(e.key, onEndEdit)}
         onBlur={onEndEdit}
         style={{
