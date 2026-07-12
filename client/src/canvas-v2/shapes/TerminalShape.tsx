@@ -76,6 +76,7 @@ import {
   transition,
   type TerminalConnAction,
   type TerminalConnEvent,
+  type TerminalConnState,
   type TerminalConnStatus,
 } from './terminalConnection.js'
 import { useInteractionMode } from './useInteractionMode.js'
@@ -130,6 +131,19 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
   // registration effect (latest-ref pattern: registration must not remount
   // when the session remounts under it).
   const dispatchRef = useRef<((event: TerminalConnEvent) => void) | null>(null)
+  // Unit 12 residual (b): SURVIVES a sessionId/gateway remount of the mount
+  // effect below (a component-level ref persists across that effect
+  // re-running on the SAME component instance — it only resets on a real
+  // unmount, which is not this case). Toggled by the lifecycle-registration
+  // effect's onSuspend/onResume, alongside the machine dispatch. Consulted by
+  // the mount effect at connect time: without this, a sessionId/gateway
+  // change that fires while the embed is off-screen and suspended would spin
+  // up a BRAND NEW connection machine (createInitialState() -> 'connecting')
+  // and unconditionally dispatch 'connect' — opening a live, invisible
+  // WebSocket the user never asked to reconnect, and clobbering the correctly
+  // -displayed "Off-screen — paused" with "Connecting…". See the mount effect
+  // below for the skip-connect fix this drives.
+  const suspendedRef = useRef(false)
   // Mount-time font only; later fontSize changes are applied in place by
   // the resize effect below, never by remounting the session.
   const fontSizeRef = useRef(fontSize)
@@ -146,7 +160,18 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
     termRef.current = term
 
     // ---- the machine driver: pure transitions in, real I/O out ----------
-    let state = createInitialState()
+    // Unit 12 residual (b): if the embed was already suspended (off-screen)
+    // when this effect fires — a sessionId/gateway change on a hidden
+    // terminal — start the FRESH machine instance already in 'suspended'
+    // rather than the default 'connecting', so the dispatch below can SKIP
+    // connect entirely (see suspendedRef's doc comment above). epoch 0
+    // matches createInitialState()'s own starting epoch; 'resume' only
+    // requires status === 'suspended' to act, so a later onResume dispatches
+    // correctly against this hand-set state exactly as it would against one
+    // the machine itself produced.
+    let state: TerminalConnState = suspendedRef.current
+      ? { epoch: 0, status: 'suspended', attempt: 0 }
+      : createInitialState()
     let socket: WebSocket | null = null
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -176,8 +201,19 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
 
     const dispatch = (event: TerminalConnEvent) => {
       const result = transition(state, event)
+      // Unit 12 residual (a): bail on setConn() when the transition was a
+      // no-op — transition()'s `noop` helper (terminalConnection.ts) returns
+      // the SAME state reference for an event that didn't change
+      // status/attempt (pinned by terminalConnection.test.ts's
+      // reference-identity assertion). A chatty PTY session dispatches a
+      // 'message' event per data chunk, and while connected/open that's
+      // ALWAYS a noop for display purposes (deliver is the only action) — the
+      // previous unconditional setConn({...state}) minted a fresh object and
+      // forced a React re-render on every single chunk for a value that
+      // never changed.
+      const changed = result.state !== state
       state = result.state
-      setConn({ status: state.status, attempt: state.attempt })
+      if (changed) setConn({ status: state.status, attempt: state.attempt })
       for (const action of result.actions) execute(action)
       return result
     }
@@ -247,7 +283,16 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
     })
 
     dispatchRef.current = dispatch
-    dispatch({ type: 'connect' })
+    // Unit 12 residual (b): SKIP connect (rather than connect-then-suspend)
+    // when the embed was already suspended going into this remount — the
+    // simplest correct option that opens zero sockets for a hidden embed.
+    // conn's initial React state may still read a previous 'suspended' value
+    // from before the remount (useState isn't reset by this effect re-running
+    // on the same component instance), but reflect it explicitly here too
+    // (harmless if redundant, correct if this is this component's very first
+    // mount already suspended — e.g. a shape created off-screen).
+    if (suspendedRef.current) setConn({ status: state.status, attempt: state.attempt })
+    else dispatch({ type: 'connect' })
 
     return () => {
       dispatch({ type: 'dispose' }) // closes socket, clears timers, makes every in-flight handler stale
@@ -289,8 +334,18 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
   // (sessionId change) does not churn the registration.
   useEffect(() => {
     return canvasV2EmbedLifecycles.register(shape.id, {
-      onSuspend: () => dispatchRef.current?.({ type: 'suspend' }),
-      onResume: () => dispatchRef.current?.({ type: 'resume' }),
+      // suspendedRef is set BEFORE dispatching — see its declaration above:
+      // a sessionId/gateway change that races a suspend/resume must see the
+      // flag as of the CURRENT lifecycle call, not a stale one from before
+      // this event.
+      onSuspend: () => {
+        suspendedRef.current = true
+        dispatchRef.current?.({ type: 'suspend' })
+      },
+      onResume: () => {
+        suspendedRef.current = false
+        dispatchRef.current?.({ type: 'resume' })
+      },
     })
   }, [shape.id])
 

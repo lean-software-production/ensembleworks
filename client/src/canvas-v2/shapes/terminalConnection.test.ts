@@ -56,6 +56,18 @@ const has = (log: string[], entry: string) => log.includes(entry)
 
   r = transition(s, { type: 'message', epoch: 1 })
   assert.ok(r.actions.some((a) => a.type === 'deliver'), 'a current-epoch message delivers while open')
+  // Unit 12 residual (a): TerminalShape.tsx's dispatch() bails on calling
+  // setConn() when `result.state` is REFERENCE-IDENTICAL to the state it
+  // dispatched against — every 'message' event during a live PTY stream hits
+  // this path (a chatty session emits one per data chunk), and without the
+  // bail the driver was minting a fresh `{status, attempt}` object and
+  // calling setConn() on EVERY chunk, forcing a React re-render per byte
+  // burst for a value that never actually changed. This assertion pins the
+  // fact the fix leans on: a 'message' transition that doesn't change status/
+  // attempt returns the SAME state object (`noop`'s `{ state, actions: [] }`,
+  // not a copy) — if this ever regressed to always cloning, the component's
+  // reference-equality bail would silently stop working.
+  assert.ok(r.state === s, "a delivering message with no status/attempt change returns the SAME state reference (noop, not a clone) — this is what TerminalShape.tsx's dispatch() bails setConn() on")
 
   r = transition(s, { type: 'dispose' })
   s = r.state
