@@ -11,6 +11,7 @@
 // boundary.test.ts). Tools (select/hand/create/arrow/transform — C4-C8) are
 // FSMs that turn InputEvent sequences into Intents, built against a shared
 // ToolContext (tools/tool-context.ts) and plugged into `run()` (script.ts).
+// Session recording/replay (replay.ts, C9) wraps that same run() loop.
 export const CANVAS_EDITOR_VERSION = 1 as const
 
 export * from './intents.js'
@@ -18,6 +19,7 @@ export * from './editor.js'
 export * from './input.js'
 export * from './script.js'
 export * from './camera.js'
+export * from './replay.js'
 export * from './tools/tool-context.js'
 export * from './tools/select.js'
 export * from './tools/hand.js'
