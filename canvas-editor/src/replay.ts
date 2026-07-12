@@ -163,6 +163,10 @@ export interface Session {
  *     wrap the doc, coupling it to a specific CanvasDoc instance; an
  *     explicit call at the sync layer is simpler and keeps this class doc-
  *     agnostic, matching Tool.wrap's own "decorate, don't own" shape).
+ *
+ * SCOPE: intended for test/debug-scoped sessions (E2E failure capture,
+ * bug-report repros), not a long-running production log — `steps` grows
+ * without bound for the recorder's lifetime, by design.
  */
 export class SessionRecorder {
   private readonly meta: SessionMeta
@@ -262,9 +266,16 @@ export interface ReplayResult {
  * update — this is what keeps the op SEQUENCE (not just the converged
  * content) identical between recording and replay, which matters for
  * BYTE-level equality: an imported blob and an equivalent local commit are
- * NOT interchangeable at the physical CRDT level even when they converge to
- * the same model (see replay.test.ts's bit-for-bit test, which bootstraps
- * this way on both sides for exactly this reason).
+ * not interchangeable IN GENERAL — in particular NEVER for a
+ * DIFFERENT-peer donor, which is exactly the realistic pre-existing-room
+ * case (the room's page was created by some other peer/the server, so its
+ * ops carry that donor's peerId in the encoded history, unreproducible by
+ * a local commit under the session's own peerId). A SAME-peer,
+ * fresh-counter donor CAN coincidentally produce byte-identical results
+ * (reviewer-constructed both ways) — but replay must not lean on that
+ * coincidence, hence the rule: run the bootstrap identically as LOCAL
+ * history on both sides (see replay.test.ts's bit-for-bit test, which
+ * bootstraps this way on both sides for exactly this reason).
  */
 export function replaySession(session: Session, buildTools: (editor: Editor) => Readonly<Record<string, Tool<unknown>>>, bootstrap?: (editor: Editor) => void): ReplayResult {
   const { now, random } = deriveEditorClock(session.meta.seed)

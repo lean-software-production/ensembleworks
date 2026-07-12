@@ -128,10 +128,11 @@ function recordMixedSession(): { session: Session; doc: LoroCanvasDoc; editor: E
   // hidden non-determinism survives seed-derived now/random + a shared
   // peerId + an IDENTICAL op sequence (including the bootstrap running as a
   // local commit on both sides, not an import -- see bootstrapPage's
-  // comment: an import and a local commit of equivalent CONTENT are not
-  // the same physical op sequence, so byte-equality needs the bootstrap
-  // itself replayed as a local commit too, not folded into `Session.steps`
-  // as a synthetic remote update).
+  // comment and replaySession's `bootstrap` doc: import-vs-local-commit are
+  // not interchangeable in general -- never for a DIFFERENT-peer donor,
+  // whose peerId is baked into the encoded history -- so the bootstrap must
+  // be replayed as a local commit too, not folded into `Session.steps` as a
+  // synthetic remote update).
   assert.equal(Buffer.compare(Buffer.from(replaySnapshot), Buffer.from(originalSnapshot)), 0, 'exportSnapshot() is BYTE-identical between the original recording and its replay')
   console.log('ok: replay is bit-for-bit identical to the original recording (dumpModel AND exportSnapshot bytes)')
 }
