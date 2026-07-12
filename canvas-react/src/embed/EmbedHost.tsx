@@ -9,23 +9,46 @@
 // + `localBounds` math, reused not re-derived) — EmbedHost is the embed
 // analogue of ShapeBody, with the lifecycle/visibility layer added on top.
 //
-// LIFECYCLE CALLBACKS "VIA PROPS" (the plan's two sanctioned mechanisms were
-// "props/registration" — this unit picks props, the simpler of the two):
-// EmbedHost accepts an optional `lifecycle: EmbedLifecycle` prop directly.
-// A real ported embed body (Seam E: terminal/iframe/screenshare) is
-// expected to construct its OWN `EmbedLifecycle` object (binding
-// `onSuspend`/`onResume` to its actual session's pause()/resume(), `onMount`
-// /`onUnmount` to setup/teardown) and have whatever renders its EmbedHost
-// pass that object straight through. EmbedHost itself never constructs or
-// inspects the callbacks' internals — it only calls them, via
-// embedLifecycle.ts's controller, at the right transitions. A ref-based
-// registration (the plan's other sanctioned mechanism) was considered and
-// rejected for v1: it would need the embed body to call something in a
-// `useEffect`/`useImperativeHandle`, and this house test rig has NO DOM
-// emulator (renderToStaticMarkup never runs effects or commits refs — see
-// viewport.test.ts's header) — a contract that can ONLY be exercised via a
-// real browser buys this unit nothing testable today. Props are exactly as
-// expressive and are exercisable by embed.test.ts import-and-call directly.
+// LIFECYCLE WIRING — THE REGISTRY, NOT BARE PROPS (corrected after a
+// review round caught the original prose describing an impossible flow:
+// "the body constructs its own EmbedLifecycle and passes it through" can't
+// work, because props flow TOP-DOWN and the body sits BELOW EmbedHost in
+// the tree — ShapeBodyProps has no upward registration slot, and a child
+// cannot hand a props object to its own parent). The workable pattern is
+// embedLifecycle.ts's `createLifecycleRegistry()`: an out-of-band id-keyed
+// channel with lazy, CALL-TIME lookup. Concretely, a Seam-E terminal body:
+//
+//   // module scope (or a G3-owned shared instance):
+//   //   const embedLifecycles = createLifecycleRegistry()
+//   function TerminalShape({ shape }: ShapeBodyProps) {
+//     const session = useTerminalSession(shape)   // xterm + ws, etc.
+//     useEffect(() => {
+//       return embedLifecycles.register(shape.id, {
+//         onSuspend: () => session.pause(),  // stop painting/polling; keep ws
+//         onResume:  () => session.resume(),
+//       })                                   // register() returns the cleanup
+//     }, [shape.id, session])
+//     ...
+//   }
+//   // and wherever the layer mounts:
+//   //   <EmbedLayer ... lifecycleFor={embedLifecycles.lifecycleFor} />
+//
+// Two ordering facts make this correct — 1. child effects commit BEFORE
+// parent effects (the body has registered by the time this host's mount
+// effect fires onMount), and 2. lifecycleFor's facade re-looks-up the
+// registry at CALL time (so the render-time lifecycleFor call, which
+// happens before ANY registration exists, still reaches hooks registered
+// later). A third, empirically-pinned fact completes the picture: unmount
+// cleanups run PARENT-first (deletion traverses top-down), so this host's
+// dispose delivers onUnmount while the body is still registered — the
+// registry carries the full, correctly-paired lifecycle in both
+// directions. All three facts are documented in full at
+// embedLifecycle.ts's LIFECYCLE REGISTRY block and pinned by
+// embed-reconciler.test.ts's end-to-end case. The `lifecycle` PROP on this
+// component remains the raw low-level slot the registry facade plugs into
+// (EmbedLayer: `lifecycle={lifecycleFor?.(shape.id)}`) — callers with a
+// static hooks object (tests, a hypothetical non-registry caller) may
+// still pass one directly.
 //
 // VISIBLE-BUT-HIDDEN, NOT UNMOUNTED (decision, documented): a suspended
 // embed's wrapper gets `visibility: hidden; pointerEvents: none`, NOT

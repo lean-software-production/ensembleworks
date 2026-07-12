@@ -121,6 +121,88 @@ export function createEmbedController(lifecycle: EmbedLifecycle, opts: EmbedCont
   }
 }
 
+export interface EmbedLifecycleRegistry {
+  /** Register `hooks` as shape `shapeId`'s lifecycle. Returns the
+   * unregister function — the registering body calls it in its own mount
+   * effect's CLEANUP (i.e. `useEffect(() => registry.register(id, hooks),
+   * [id])` — the register call's return value IS the cleanup). A second
+   * register for the same id REPLACES the first (no error — mirrors
+   * registerShape's own replace semantics); the replaced registration's
+   * unregister fn goes stale and becomes a silent no-op, so an
+   * out-of-order cleanup can never tear down its successor. */
+  register(shapeId: string, hooks: EmbedLifecycle): () => void
+  /** A per-shape EmbedLifecycle FACADE suitable for EmbedHost's/EmbedLayer's
+   * `lifecycle`/`lifecycleFor` props. ALWAYS returns a facade in practice
+   * (the `| undefined` in the type only mirrors EmbedLayer's optional-prop
+   * contract): each of the facade's four callbacks does a FRESH registry
+   * lookup AT CALL TIME — the load-bearing half of the whole design; see
+   * the LIFECYCLE REGISTRY block for why a snapshot-at-lookup-time design
+   * could never work. */
+  lifecycleFor(shapeId: string): EmbedLifecycle | undefined
+}
+
+/** LIFECYCLE REGISTRY — how an embed BODY actually wires its hooks to the
+ * EmbedHost ABOVE it. Plain props cannot do this: props flow top-down, and
+ * the body is EmbedHost's CHILD — there is no upward slot in ShapeBodyProps
+ * for the body to hand a hooks object to its own host. The registry is the
+ * out-of-band channel: the body registers its hooks under its OWN shape id
+ * from its OWN mount effect, and the layer passes
+ * `lifecycleFor={registry.lifecycleFor}` so each EmbedHost pulls the right
+ * hooks by id (see EmbedHost.tsx's LIFECYCLE WIRING header for the
+ * concrete terminal-body sketch). Two ordering facts make this safe — both
+ * pinned by embed-reconciler.test.ts's end-to-end case:
+ *
+ *   1. CHILD EFFECTS COMMIT BEFORE PARENT EFFECTS. The body (EmbedHost's
+ *      child) registers in its mount effect; EmbedHost creates its
+ *      controller (and fires onMount) in its OWN mount effect — which
+ *      React runs strictly AFTER every child's. By the time onMount goes
+ *      looking for hooks, the body has already registered them.
+ *   2. CALL-TIME LOOKUP. `lifecycleFor` is called during the layer's
+ *      RENDER — before ANY effect has run, i.e. before the body has
+ *      registered anything. The facade it returns therefore does a fresh
+ *      `.get(shapeId)` inside each callback, at call time, instead of
+ *      capturing the (empty) registration at lookup time — so the
+ *      registration that lands later (the only kind there is, per fact
+ *      1's ordering) is seen the first time a callback actually fires.
+ *
+ * ORDERING, UNMOUNT DIRECTION (empirically pinned — the first draft of the
+ * end-to-end test predicted the opposite and the real reconciler proved it
+ * wrong): unmount CLEANUPS run PARENT-FIRST (React traverses a deleted
+ * subtree top-down — the mirror image of mount effects' child-first
+ * order), so EmbedHost's dispose fires the facade's onUnmount while the
+ * body is STILL registered — onUnmount IS delivered through the registry,
+ * on StrictMode's simulated cleanup and on a real unmount alike. The
+ * body's own unregister cleanup runs after. Net: the registry delivers
+ * the complete lifecycle, correctly paired in both directions (the
+ * end-to-end test asserts mounts === unmounts after a real unmount).
+ * Bodies should still treat onMount as idempotent "host is live" and
+ * onUnmount as redundant with their own effect cleanup (both fire on a
+ * StrictMode simulated remount, in dev, without the body's DOM actually
+ * going anywhere) — the registry's irreplaceable payload is
+ * onSuspend/onResume, the signals a body cannot infer from its own React
+ * lifecycle. */
+export function createLifecycleRegistry(): EmbedLifecycleRegistry {
+  const hooksById = new Map<string, EmbedLifecycle>()
+  return {
+    register: (shapeId, hooks) => {
+      hooksById.set(shapeId, hooks)
+      return () => {
+        // Identity-guarded: only remove OUR registration. If a later
+        // register() replaced it, this unregister is stale and must not
+        // tear down the replacement (see the interface doc).
+        if (hooksById.get(shapeId) === hooks) hooksById.delete(shapeId)
+      }
+    },
+    lifecycleFor: (shapeId) => ({
+      // Fresh .get per CALL — fact 2 above; load-bearing, not style.
+      onMount: () => hooksById.get(shapeId)?.onMount?.(),
+      onSuspend: () => hooksById.get(shapeId)?.onSuspend?.(),
+      onResume: () => hooksById.get(shapeId)?.onResume?.(),
+      onUnmount: () => hooksById.get(shapeId)?.onUnmount?.(),
+    }),
+  }
+}
+
 /** The embed CONTENT-MEMO comparator (see ShapeBody.tsx's MEMO STRATEGY
  * block for the underlying problem this solves): `dumpModel()` mints a
  * brand-new Shape object on every doc commit even for shapes whose data

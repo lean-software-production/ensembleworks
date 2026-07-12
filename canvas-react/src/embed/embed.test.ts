@@ -30,7 +30,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { buildSpatialIndex, makeDocument, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import type { Editor, EditorState, ToolContext } from '@ensembleworks/canvas-editor'
-import { createEmbedController, sameEmbedContent, type EmbedLifecycle } from './embedLifecycle.js'
+import { createEmbedController, createLifecycleRegistry, sameEmbedContent, type EmbedLifecycle } from './embedLifecycle.js'
 import { EmbedBodyFrame, EmbedHost, embedWrapperStyle } from './EmbedHost.js'
 import { EmbedLayer, boundsIntersect } from './EmbedLayer.js'
 import { ShapeLayer } from '../ShapeLayer.js'
@@ -135,6 +135,56 @@ function fakeLifecycle() {
   assert.equal(sameEmbedContent(shapeA, shapeAMoved), false, 'a changed field (x) makes the content different')
   assert.equal(sameEmbedContent(shapeA, shapeB), false, 'a different id is never the same content')
   console.log('ok: sameEmbedContent — the content-memo comparator (render-count-probe logic, tested directly)')
+}
+
+// 7. createLifecycleRegistry — the out-of-band wiring bodies actually use
+//    (see EmbedHost.tsx's LIFECYCLE WIRING header for why props alone can't
+//    work: the body sits BELOW EmbedHost in the tree, so it can't hand a
+//    props object UP to it). Pinned here: register/unregister round-trip,
+//    LATE registration through an already-handed-out facade (lifecycleFor's
+//    closures do a FRESH map lookup at CALL time, so a facade obtained
+//    before the body registered still reaches the hooks afterward — the
+//    fact that makes the EmbedLayer render-time lifecycleFor call safe even
+//    though the body only registers in its own mount effect), and
+//    stale-unregister safety (an unregister fn from a REPLACED registration
+//    must not remove the replacement).
+{
+  const registry = createLifecycleRegistry()
+  const calls: string[] = []
+
+  // LATE REGISTRATION: facade handed out BEFORE anything registers.
+  const facade = registry.lifecycleFor('shape:reg')!
+  facade.onMount?.() // nothing registered — silent no-op, not a crash
+  // .length, not deepEqual(calls, []): node:assert/strict's deepEqual has an
+  // `asserts actual is T` signature, and a `[]` literal would NARROW `calls`
+  // to never[], breaking every later push() under typecheck.
+  assert.equal(calls.length, 0, 'a facade callback with nothing registered is a silent no-op')
+
+  const unregister = registry.register('shape:reg', {
+    onMount: () => calls.push('mount'),
+    onSuspend: () => calls.push('suspend'),
+  })
+  facade.onMount?.() // the SAME pre-registration facade now reaches the hooks
+  facade.onSuspend?.()
+  assert.deepEqual(calls, ['mount', 'suspend'], 'late registration is visible through a facade handed out earlier (call-time lookup)')
+
+  unregister()
+  facade.onSuspend?.() // unregistered — silent no-op again
+  assert.deepEqual(calls, ['mount', 'suspend'], 'after unregister the facade goes back to no-op')
+
+  // STALE UNREGISTER: replacing a registration invalidates the OLD
+  // unregister fn — calling it must not tear down the replacement.
+  const unregisterFirst = registry.register('shape:reg', { onMount: () => calls.push('first') })
+  registry.register('shape:reg', { onMount: () => calls.push('second') })
+  unregisterFirst() // stale — must be a no-op
+  registry.lifecycleFor('shape:reg')!.onMount?.()
+  assert.deepEqual(calls, ['mount', 'suspend', 'second'], 'a stale unregister must not remove a replacement registration')
+
+  // Independence: a second id has its own slot.
+  registry.register('shape:other', { onMount: () => calls.push('other-mount') })
+  registry.lifecycleFor('shape:other')!.onMount?.()
+  assert.deepEqual(calls, ['mount', 'suspend', 'second', 'other-mount'])
+  console.log('ok: createLifecycleRegistry — register/unregister, late registration via call-time lookup, stale-unregister safety')
 }
 
 // ============================================================================
