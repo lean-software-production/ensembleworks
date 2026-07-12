@@ -167,23 +167,45 @@ export function createSyncApp(opts: {
 	const shadowMirrors = process.env.EW_CANVAS_SHADOW === '1'
 		? new Map<string, { mirror: ShadowMirror; lastClock: number }>()
 		: null
+	// Sweep bodies that threw, across all rooms and all sweeps. Lives OUTSIDE
+	// ShadowMetrics deliberately: the dominant throw site is the clock read
+	// (sync-core's SQLiteSyncStorage.getClock runs a live prepared-statement
+	// query — a realistic disk-error throw site), which can fire BEFORE the
+	// room's mirror even exists, so there may be no ShadowMetrics to count it
+	// on. Surfaced as the metrics payload's top-level `sweepErrors`;
+	// post-construction tick failures are ADDITIONALLY counted on that
+	// mirror's own tickErrors/lastError (shadow.ts).
+	let shadowSweepErrors = 0
 	if (shadowMirrors) {
 		const shadowInterval = setInterval(() => {
 			for (const roomId of roomHost.rooms.keys()) {
-				const clock = roomHost.getOrCreateRoom(roomId).getCurrentDocumentClock()
-				let entry = shadowMirrors.get(roomId)
-				if (!entry) {
-					entry = {
-						mirror: new ShadowMirror(roomId, SHADOW_PEER_ID, () =>
-							roomHost.getOrCreateRoom(roomId).getCurrentSnapshot().documents.map((d) => d.state as any)
-						),
-						lastClock: Number.NaN,
+				// Per-room isolation: this body runs inside a setInterval callback,
+				// where an uncaught throw is FATAL to the whole process (probe-proven:
+				// one poisoned clock getter exited the process mid-sweep — the other
+				// rooms' ticks never ran and HTTP/WS/AV died with it). tick()
+				// self-guards, but the clock read and mirror construction sit outside
+				// it — so the whole per-room body is wrapped for defense-in-depth:
+				// count, log with the room id, continue to the next room. The failed
+				// room just shows stale ticks until its storage recovers.
+				try {
+					const clock = roomHost.getOrCreateRoom(roomId).getCurrentDocumentClock()
+					let entry = shadowMirrors.get(roomId)
+					if (!entry) {
+						entry = {
+							mirror: new ShadowMirror(roomId, SHADOW_PEER_ID, () =>
+								roomHost.getOrCreateRoom(roomId).getCurrentSnapshot().documents.map((d) => d.state as any)
+							),
+							lastClock: Number.NaN,
+						}
+						shadowMirrors.set(roomId, entry)
 					}
-					shadowMirrors.set(roomId, entry)
-				}
-				if (entry.lastClock !== clock) {
-					entry.mirror.tick()
-					entry.lastClock = clock
+					if (entry.lastClock !== clock) {
+						entry.mirror.tick()
+						entry.lastClock = clock
+					}
+				} catch (err) {
+					shadowSweepErrors++
+					console.error(`[shadow ${roomId}] sweep error — room skipped this sweep:`, err)
 				}
 			}
 			// Bound the map to rooms roomHost still knows about each sweep — cheap,
@@ -274,7 +296,7 @@ export function createSyncApp(opts: {
 	// JSDoc and tools-api.test.ts's EXEMPT predicate): mounted UNCONDITIONALLY,
 	// readable regardless of EW_CANVAS_SHADOW / EW_CANVAS_SYNC — both flags off
 	// still returns { ok: true, shadow: {}, sync: {}, evictions: {} }.
-	app.use(createCanvasMetricsRouter({ shadowMirrors, canvasActors }))
+	app.use(createCanvasMetricsRouter({ shadowMirrors, canvasActors, sweepErrors: () => shadowSweepErrors }))
 
 	app.use(createUploadsRouter(ctx))
 

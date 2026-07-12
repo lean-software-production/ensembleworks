@@ -11,6 +11,12 @@
 //      a poisoned frame bumps malformedFrames.
 //   D. an evicted, tainted canvas-v2 actor's history survives in
 //      evictions.<room> (reusing actors.test.ts's taint-injection pattern).
+//   E. sweep isolation — one room whose getCurrentDocumentClock() throws (a
+//      realistic SQLite failure: sync-core's SQLiteSyncStorage.getClock runs a
+//      live prepared-statement query) must NOT kill the process or starve the
+//      other rooms' mirrors; the driver counts it in the top-level sweepErrors.
+// Scenarios B and C double as the flag-matrix corner pins: B is SHADOW-only
+// (sync must stay {}), C is SYNC-only (shadow must stay {}).
 // Run with: bun src/features/canvas-metrics.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -56,11 +62,15 @@ async function main() {
 		const base = `http://127.0.0.1:${(server.address() as any).port}`
 
 		const body = await getMetrics(base)
-		assert.deepEqual(body, { ok: true, shadow: {}, sync: {}, evictions: {} }, 'flags off: empty envelope, ok:true')
+		assert.deepEqual(
+			body,
+			{ ok: true, shadow: {}, sync: {}, evictions: {}, sweepErrors: 0 },
+			'flags off: empty envelope, ok:true'
+		)
 
 		await new Promise<void>((r) => server.close(() => r()))
 		await rm(dataDir, { recursive: true, force: true })
-		console.log('ok: canvas-metrics — both flags off returns { ok: true, shadow: {}, sync: {}, evictions: {} }')
+		console.log('ok: canvas-metrics — both flags off returns the empty envelope (ok, {}, {}, {}, sweepErrors 0)')
 	}
 
 	// -------------------------------------------------------------------------
@@ -111,6 +121,11 @@ async function main() {
 			assert.ok(afterMutate.shadow[roomId].ticks > ticksAfterFirst, 'a mutation triggers a fresh tick')
 			assert.equal(afterMutate.shadow[roomId].shapeCount, 2, 'mirror shapeCount reflects the mutation')
 
+			// Flag-matrix corner (SHADOW-only): the sync/evictions sections stay
+			// empty — no canvas-v2 registry exists without EW_CANVAS_SYNC.
+			assert.deepEqual(afterMutate.sync, {}, 'SHADOW-only: sync section stays empty')
+			assert.deepEqual(afterMutate.evictions, {}, 'SHADOW-only: evictions section stays empty')
+
 			console.log('ok: canvas-metrics — shadow driver ticks on clock change, reflects mutations, idles cleanly')
 		} finally {
 			delete process.env.EW_CANVAS_SHADOW
@@ -154,6 +169,10 @@ async function main() {
 				return m.sync[roomId].malformedFrames === 1 ? m : null
 			})
 			assert.equal(metrics.sync[roomId].malformedFrames, 1, 'a poisoned frame is counted via the metrics endpoint')
+
+			// Flag-matrix corner (SYNC-only): the shadow section stays empty — no
+			// shadow driver exists without EW_CANVAS_SHADOW.
+			assert.deepEqual(metrics.shadow, {}, 'SYNC-only: shadow section stays empty')
 
 			ws.close()
 			console.log('ok: canvas-metrics — sync section reports live v2-actor counters, incl. malformed frames')
@@ -226,6 +245,66 @@ async function main() {
 			console.log('ok: canvas-metrics — evictions.<room> survives a tainted-actor replacement')
 		} finally {
 			delete process.env.EW_CANVAS_SYNC
+			if (server!) await new Promise<void>((r) => server.close(() => r()))
+			await rm(dataDir, { recursive: true, force: true })
+		}
+	}
+
+	// -------------------------------------------------------------------------
+	// E — sweep isolation: one room whose clock read throws must not kill the
+	// process (an unguarded throw inside the driver's setInterval is an
+	// uncaught exception — fatal to HTTP/WS/AV and every other room's mirror).
+	// The healthy room's mirror must keep advancing, and the driver counts the
+	// failure in the top-level sweepErrors.
+	// -------------------------------------------------------------------------
+	{
+		const dataDir = await mkdtemp(path.join(os.tmpdir(), 'canvas-metrics-sweeperr-'))
+		process.env.EW_CANVAS_SHADOW = '1'
+		let server: import('node:http').Server
+		try {
+			let getOrCreateRoom: ReturnType<typeof createSyncApp>['getOrCreateRoom']
+			;({ server, getOrCreateRoom } = createSyncApp({ dataDir, shadowIntervalMs: 25 }))
+			await new Promise<void>((r) => server.listen(0, r))
+			const base = `http://127.0.0.1:${(server.address() as any).port}`
+
+			const post = (room: string, text: string): Promise<any> =>
+				fetch(`${base}/api/canvas/shape`, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ room, type: 'note', text }),
+				}).then((r) => r.json())
+
+			// Seed two rooms (opens both in roomHost), then poison ONE room's clock
+			// getter on the memoized TLSocketRoom instance — the same instance the
+			// driver reads every sweep. Realistic failure mode: the real getter runs
+			// a live SQLite prepared-statement query (SQLiteSyncStorage.getClock),
+			// so a disk error throws exactly here.
+			assert.ok((await post('goodroom', 'g1')).ok, 'seeded goodroom')
+			assert.ok((await post('badroom', 'b1')).ok, 'seeded badroom')
+			getOrCreateRoom('badroom').getCurrentDocumentClock = () => {
+				throw new Error('sqlite disk error (injected clock read)')
+			}
+
+			// The poisoned room now throws on EVERY sweep. The process must survive
+			// it, and the healthy room's mirror must still track a fresh mutation.
+			const before = await pollUntil(async () => {
+				const m = await getMetrics(base)
+				return m.shadow.goodroom && m.shadow.goodroom.ticks >= 1 ? m : null
+			})
+			assert.ok((await post('goodroom', 'g2')).ok, 'mutated goodroom while badroom is poisoned')
+			const after = await pollUntil(async () => {
+				const m = await getMetrics(base)
+				return m.shadow.goodroom.shapeCount === 2 ? m : null
+			})
+			assert.ok(
+				after.shadow.goodroom.ticks > before.shadow.goodroom.ticks,
+				'the healthy room keeps ticking while another room throws each sweep'
+			)
+			assert.ok(after.sweepErrors > 0, 'sweepErrors counts the poisoned room\'s failed sweeps')
+
+			console.log('ok: canvas-metrics — one room\'s clock-read failure is isolated; sweepErrors counts it')
+		} finally {
+			delete process.env.EW_CANVAS_SHADOW
 			if (server!) await new Promise<void>((r) => server.close(() => r()))
 			await rm(dataDir, { recursive: true, force: true })
 		}

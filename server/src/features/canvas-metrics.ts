@@ -11,9 +11,9 @@
  *
  * Mounted UNCONDITIONALLY in app.ts, regardless of EW_CANVAS_SHADOW or
  * EW_CANVAS_SYNC — readable even with both flags off, returning empty
- * `shadow`/`sync`/`evictions` sections rather than 404ing, so a curl against a
- * flags-off deployment gets a clean envelope instead of having to guess
- * whether the route exists.
+ * `shadow`/`sync`/`evictions` sections (and `sweepErrors: 0`) rather than
+ * 404ing, so a curl against a flags-off deployment gets a clean envelope
+ * instead of having to guess whether the route exists.
  */
 import express from 'express'
 import type { CanvasActors } from '../canvas-v2/actors.ts'
@@ -26,6 +26,13 @@ export interface CanvasMetricsDeps {
 	/** Task C3's canvas-v2 actor registry — null when EW_CANVAS_SYNC was not
 	 * set at createSyncApp construction time. */
 	canvasActors: CanvasActors | null
+	/** Cumulative count of shadow-driver sweep bodies that threw (all rooms,
+	 * all sweeps) — a getter because the counter is a closure variable inside
+	 * createSyncApp. Top-level in the payload rather than inside any room's
+	 * ShadowMetrics: the dominant throw site is the per-room clock read, which
+	 * can fire BEFORE that room's mirror (and hence its ShadowMetrics) exists.
+	 * Always 0 when EW_CANVAS_SHADOW is off — the driver never runs. */
+	sweepErrors: () => number
 }
 
 export function createCanvasMetricsRouter(deps: CanvasMetricsDeps): express.Router {
@@ -52,7 +59,7 @@ export function createCanvasMetricsRouter(deps: CanvasMetricsDeps): express.Rout
 			}
 		}
 
-		res.json({ ok: true, shadow, sync, evictions })
+		res.json({ ok: true, shadow, sync, evictions, sweepErrors: deps.sweepErrors() })
 	})
 
 	return router
