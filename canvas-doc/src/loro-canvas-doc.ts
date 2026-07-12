@@ -6,7 +6,21 @@ import type { CanvasDoc, ImportResult } from './canvas-doc.js'
 // Loro tree node's data map. The tldraw/model shape id lives under 'shapeId'
 // (the Loro TreeID is separate). Loro's movable tree owns parent/child/z-order.
 export class LoroCanvasDoc implements CanvasDoc {
-  private constructor(private doc: LoroDoc, private tree: LoroTree) {}
+  // id → ALL live tree nodes tagged with that shapeId (see nodesByShapeId for
+  // why more than one can exist). Maintained incrementally by the
+  // single-shape mutators (putShape/reparent/deleteShape) and rebuilt
+  // wholesale by reindex() after any bulk/opaque tree rewrite (import(),
+  // fromSnapshot, repair()'s raw tree.delete/tree.move calls). Entries are
+  // NOT eagerly pruned by tree.move (moves don't change node identity), but
+  // ARE pruned by deleteNode/dedupeShapeNodes when a node is actually
+  // deleted; any residual staleness is caught by filtering isDeleted() at
+  // read time (Loro cascades subtree deletion without a per-node callback,
+  // so a descendant's entry can go stale without us observing it directly).
+  private index = new Map<string, LoroTreeNode[]>()
+
+  private constructor(private doc: LoroDoc, private tree: LoroTree) {
+    this.reindex()
+  }
 
   static create(opts: { peerId: bigint }): LoroCanvasDoc {
     const doc = new LoroDoc()
@@ -20,11 +34,24 @@ export class LoroCanvasDoc implements CanvasDoc {
     return new LoroCanvasDoc(doc, doc.getTree('shapes'))
   }
 
-  // id → Loro node, resolved from the tree each call (cheap; correctness over caching).
-  // PERF: an id→node index was suggested by review but deferred — revisit only if
-  // this O(n) scan becomes a measured problem at real scale.
+  // Rebuild the id→node index from a full tree scan. Called on construction
+  // and after any path that rewrites the tree without going through the
+  // single-shape mutators below (import, fromSnapshot, repair's raw ops).
+  private reindex(): void {
+    this.index = new Map()
+    for (const n of this.tree.nodes()) {
+      if (n.isDeleted()) continue
+      const sid = n.data.get('shapeId') as string | undefined
+      if (!sid) continue
+      const arr = this.index.get(sid)
+      if (arr) arr.push(n); else this.index.set(sid, [n])
+    }
+  }
+
+  // id → Loro node, resolved via the index (O(1) amortized) instead of a
+  // per-call tree scan. First element of the index bucket is the answer.
   protected nodeByShapeId(id: string): LoroTreeNode | undefined {
-    return this.tree.nodes().find((n) => !n.isDeleted() && n.data.get('shapeId') === id)
+    return this.index.get(id)?.find((n) => !n.isDeleted())
   }
   // ALL non-deleted physical nodes tagged with this shapeId — normally exactly
   // one (nodeByShapeId's single-match assumption holds under ordinary usage),
@@ -38,7 +65,7 @@ export class LoroCanvasDoc implements CanvasDoc {
   // applyRepairToModel (canvas-model/repair.ts), which operates over the
   // full shapes ARRAY and so never misses one either.
   private nodesByShapeId(id: string): LoroTreeNode[] {
-    return this.tree.nodes().filter((n) => !n.isDeleted() && n.data.get('shapeId') === id)
+    return this.index.get(id)?.filter((n) => !n.isDeleted()) ?? []
   }
 
   // Make the Loro tree the single source of truth for hierarchy: move `n` so its
@@ -90,13 +117,18 @@ export class LoroCanvasDoc implements CanvasDoc {
     // descendant of it, and no data field may be modified in that case.
     // A freshly created node has no descendants, so its placement cannot cycle.
     let n = this.nodeByShapeId(s.id)
-    if (!n) n = this.tree.createNode()
+    let isNew = false
+    if (!n) { n = this.tree.createNode(); isNew = true }
     this.placeInTree(n, s.parentId)
     const d = n.data
     d.set('shapeId', s.id); d.set('kind', s.kind); d.set('parentId', s.parentId)
     d.set('index', s.index); d.set('x', s.x); d.set('y', s.y)
     d.set('rotation', s.rotation); d.set('isLocked', s.isLocked); d.set('opacity', s.opacity)
     d.set('meta', s.meta as any); d.set(LoroCanvasDoc.PROP_KEY, s.props as any)
+    if (isNew) {
+      const arr = this.index.get(s.id)
+      if (arr) arr.push(n); else this.index.set(s.id, [n])
+    }
   }
   updateProps(id: string, props: Record<string, unknown>): void {
     const n = this.nodeByShapeId(id)
@@ -108,21 +140,28 @@ export class LoroCanvasDoc implements CanvasDoc {
   // EVERY physical node sharing an id (see nodesByShapeId) while the public
   // single-id deleteShape keeps its existing first-match behavior unchanged.
   private deleteNode(n: LoroTreeNode): void {
-    // Collect the shapeIds of the whole real subtree before the cascade delete,
-    // then clear each shape's text container. The emptied Loro container itself
-    // persists as a CRDT tombstone (known bloat category per design); clearing
-    // its content prevents text resurrection when a shape id is reused.
-    const ids: string[] = []
+    // Collect the shapeIds (and node refs, for index eviction) of the whole
+    // real subtree before the cascade delete, then clear each shape's text
+    // container. The emptied Loro container itself persists as a CRDT
+    // tombstone (known bloat category per design); clearing its content
+    // prevents text resurrection when a shape id is reused.
+    const collected: { sid: string; node: LoroTreeNode }[] = []
     const collect = (node: LoroTreeNode): void => {
       const sid = node.data.get('shapeId') as string | undefined
-      if (sid) ids.push(sid)
+      if (sid) collected.push({ sid, node })
       for (const c of node.children() ?? []) collect(c)
     }
     collect(n)
     this.tree.delete(n.id)
-    for (const sid of ids) {
+    for (const { sid, node } of collected) {
       const t = this.doc.getText(this.textKey(sid))
       if (t.length > 0) t.delete(0, t.length)
+      const arr = this.index.get(sid)
+      if (arr) {
+        const i = arr.indexOf(node)
+        if (i !== -1) arr.splice(i, 1)
+        if (arr.length === 0) this.index.delete(sid)
+      }
     }
   }
   deleteShape(id: string): void {
@@ -189,6 +228,9 @@ export class LoroCanvasDoc implements CanvasDoc {
     if (parked) {
       try { this.placeInTree(winner, winner.data.get('parentId') as string) } catch { /* leave at root */ }
     }
+    // Collapse the index bucket to the sole survivor — losers were deleted
+    // via raw tree.delete above (not deleteNode), so they were never pruned.
+    this.index.set(id, [winner])
   }
   reparent(id: string, parentId: string, index?: number): void {
     const node = this.nodeByShapeId(id)
@@ -260,9 +302,15 @@ export class LoroCanvasDoc implements CanvasDoc {
     // EMPTY map, and a partial overlap lists only the newly-applied span. So
     // `changed` = success non-empty.
     const status = this.doc.import(bytes)
+    const changed = status.success.size > 0
+    // A merge can restructure the tree arbitrarily (create/move/delete nodes
+    // outside our mutators' incremental bookkeeping) — rebuild the index
+    // wholesale rather than try to diff it. Skipped on a no-op import (the
+    // tree didn't move) to keep the common re-import case cheap.
+    if (changed) this.reindex()
     return {
       pending: status.pending !== null && status.pending.size > 0,
-      changed: status.success.size > 0,
+      changed,
     }
   }
   // Compute the model inline from this doc's own lists (not via bridge.ts's
@@ -273,8 +321,9 @@ export class LoroCanvasDoc implements CanvasDoc {
   // — i.e. that's the floor even when the plan is empty — with ~70% of it in
   // the three list*() WASM marshals above; cost is linear in doc size. Sync
   // peers therefore gate repair() on ImportResult.changed (no-op imports skip
-  // it entirely). The deferred id→node index (see nodeByShapeId's PERF note)
-  // is the lever if this floor ever matters at real scale.
+  // it entirely). The id→node index (see nodeByShapeId) removes the O(n)
+  // rescan per plan op below, so cost on a DIRTY doc no longer compounds to
+  // O(n²) with plan size — see repair-cost.test.ts for the pinned floor.
   repair(): RepairOp[] {
     const model = makeDocument({ pages: this.listPages(), shapes: this.listShapes(), bindings: this.listBindings() })
     const plan = repairPlan(model)
@@ -291,9 +340,6 @@ export class LoroCanvasDoc implements CanvasDoc {
     //    has no deleteBinding op for it); delete it here so a SINGLE repair()
     //    call converges — not only the second.
     const dropAll = cascadeDropSet(model.shapes, new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id)))
-    // PERF: each deleteBinding/deleteShape/reparent below re-resolves its id
-    // via the O(n) nodeByShapeId scan (see that method's deferred-index PERF
-    // note), so a large plan costs O(n²). Same revisit-if-measured stance.
     for (const o of plan) {
       if (o.op === 'deleteBinding') this.deleteBinding(o.id)
       // dropShape/reparentToRoot are applied to EVERY physical node sharing
@@ -331,6 +377,13 @@ export class LoroCanvasDoc implements CanvasDoc {
     for (const b of model.bindings) {
       if (dropAll.has(b.fromId) || dropAll.has(b.toId)) this.deleteBinding(b.id)
     }
+    // repair() above already keeps the index coherent incrementally (deleteNode
+    // and dedupeShapeNodes both maintain it, and reparentToRoot's raw move
+    // doesn't change node identity), but rebuild wholesale anyway as a
+    // defense-in-depth backstop against repair()'s raw tree ops — cheap
+    // relative to the list*() scans above, and correctness must not depend on
+    // this method's internals staying in perfect lockstep with the index.
+    this.reindex()
     return plan
   }
   subscribe(listener: () => void): () => void { return this.doc.subscribe(() => listener()) }
