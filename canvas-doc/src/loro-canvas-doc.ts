@@ -1,5 +1,6 @@
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
-import { canonicalPageId, cascadeDropSet, makeDocument, repairPlan, stableStringify, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
+import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
+import { dumpModel } from './bridge.js'
 import type { CanvasDoc, ImportResult } from './canvas-doc.js'
 
 // Node.data layout: we store the whole model shape envelope as flat keys on the
@@ -327,19 +328,16 @@ export class LoroCanvasDoc implements CanvasDoc {
       changed,
     }
   }
-  // Compute the model inline from this doc's own lists (not via bridge.ts's
-  // dumpModel) to avoid a bridge↔impl import cycle: bridge.ts imports
-  // LoroCanvasDoc for its type, so LoroCanvasDoc must not import bridge.ts back.
-  //
   // PERF (measured, Phase 2 review): ~7.36ms/call at 1k shapes on a CLEAN doc
   // — i.e. that's the floor even when the plan is empty — with ~70% of it in
-  // the three list*() WASM marshals above; cost is linear in doc size. Sync
-  // peers therefore gate repair() on ImportResult.changed (no-op imports skip
-  // it entirely). The id→node index (see nodeByShapeId) removes the O(n)
-  // rescan per plan op below, so cost on a DIRTY doc no longer compounds to
-  // O(n²) with plan size — see repair-cost.test.ts for the pinned floor.
+  // the three list*() WASM marshals inside dumpModel; cost is linear in doc
+  // size. Sync peers therefore gate repair() on ImportResult.changed (no-op
+  // imports skip it entirely). The id→node index (see nodeByShapeId) removes
+  // the O(n) rescan per plan op below, so cost on a DIRTY doc no longer
+  // compounds to O(n²) with plan size — see repair-cost.test.ts for the
+  // pinned floor.
   repair(): RepairOp[] {
-    const model = makeDocument({ pages: this.listPages(), shapes: this.listShapes(), bindings: this.listBindings() })
+    const model = dumpModel(this)
     const plan = repairPlan(model)
     // dropAll = the plan's dropShape ids plus their transitive descendants in
     // the MODEL (shared cascadeDropSet — same fixpoint applyRepairToModel
