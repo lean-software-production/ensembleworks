@@ -11,11 +11,17 @@ export class LoroCanvasDoc implements CanvasDoc {
   // single-shape mutators (putShape/reparent/deleteShape) and rebuilt
   // wholesale by reindex() after any bulk/opaque tree rewrite (import(),
   // fromSnapshot, repair()'s raw tree.delete/tree.move calls). Entries are
-  // NOT eagerly pruned by tree.move (moves don't change node identity), but
-  // ARE pruned by deleteNode/dedupeShapeNodes when a node is actually
-  // deleted; any residual staleness is caught by filtering isDeleted() at
-  // read time (Loro cascades subtree deletion without a per-node callback,
-  // so a descendant's entry can go stale without us observing it directly).
+  // NOT touched by tree.move (moves change neither node identity nor bucket
+  // membership) and ARE evicted precisely on deletion: deleteNode's
+  // collect() walks the whole subtree BEFORE the cascade delete and evicts
+  // every collected node from its bucket by TreeID, so cascade-deleted
+  // descendants are pruned too, not just the top-level node. Read-time
+  // isDeleted() filtering is defense-in-depth, not the primary mechanism;
+  // its remaining genuine consumer is repair()'s raw tree.delete on dedupe
+  // losers — and dedupeShapeNodes covers that itself by collapsing the
+  // bucket to [winner]. Reviewer-traced conclusion (post-068e23d): there is
+  // no known unbounded-growth path for index buckets on docs that never
+  // import/repair — the incremental mutators alone keep the index precise.
   private index = new Map<string, LoroTreeNode[]>()
 
   private constructor(private doc: LoroDoc, private tree: LoroTree) {
@@ -237,6 +243,9 @@ export class LoroCanvasDoc implements CanvasDoc {
     // via raw tree.delete above (not deleteNode), so they were never pruned.
     this.index.set(id, [winner])
   }
+  // No index maintenance needed here: tree.move repositions the SAME node
+  // object already sitting in its id bucket — no identity change, no bucket
+  // membership change.
   reparent(id: string, parentId: string, index?: number): void {
     const node = this.nodeByShapeId(id)
     if (!node) return

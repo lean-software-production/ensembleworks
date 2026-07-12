@@ -62,11 +62,16 @@ function meanRepairMs(build: () => LoroCanvasDoc, iters: number): { mean: number
 const clean = meanRepairMs(cleanDoc, 20)
 assert.equal(clean.planLen, 0, 'precondition: doc is invariant-clean, empty plan')
 console.log(`repair-cost: CLEAN 1k-shape doc, mean ${clean.mean.toFixed(3)}ms/call over 20 runs`)
-// Generous ceiling: measured mean ~6-7ms (unchanged from the 7.36ms Phase-2
-// floor, as expected for an empty plan). 20ms catches a real regression
-// (e.g. an accidental O(n) scan reintroduced into the hot path) without
-// being sensitive to normal CI jitter.
-assert.ok(clean.mean < 20, `clean-doc repair() mean ${clean.mean.toFixed(3)}ms exceeds the 20ms ceiling`)
+// Generous ceiling: measured mean ~6-7ms on the dev box (unchanged from the
+// 7.36ms Phase-2 floor, as expected for an empty plan). Margin math for the
+// 50ms ceiling: a 16-core saturation test on the dev box pushed this to
+// 15.0ms at only ~2.4x slowdown, and shared CI runners (GH Actions) run
+// 3-5x slower than that box — 6.3ms x 5 ≈ 31.5ms, which would breach a 20ms
+// ceiling on a bad day. 50ms gives full 5x slow-runner headroom while an
+// O(n) regression in the hot path lands orders of magnitude above it; the
+// structural tree.nodes() call-count gate below remains the primary
+// regression detector, this wall-clock pin is the coarse backstop.
+assert.ok(clean.mean < 50, `clean-doc repair() mean ${clean.mean.toFixed(3)}ms exceeds the 50ms ceiling`)
 
 // --- scenario 2: dirty 1k-shape doc, 500-op plan (the O(n^2) scenario) ---
 const dirty = meanRepairMs(dirtyDoc, 10)
