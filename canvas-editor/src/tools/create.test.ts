@@ -140,8 +140,15 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   } as Shape)
   doc.commit()
 
-  // Rebuild the ToolContext AFTER the fixture is committed (the one built in
-  // setup() predates these putShape calls).
+  // Build a second ToolContext for the tool under test and DISPOSE the
+  // setup() one first (ToolContext.dispose's contract: an undisposed
+  // context keeps its doc listener registered forever — this test was the
+  // in-repo reproducer of exactly that leak). Note the second context is no
+  // longer strictly NEEDED for freshness — the lazy rebuild means the
+  // setup() context would see the fixture commits on its next query anyway
+  // — but two-contexts-one-editor is a real Seam-D shape (remount), so keep
+  // the pattern and dispose correctly.
+  ctx.dispose()
   const freshCtx = createToolContext(editor)
   const tool = createCreateTool(freshCtx, 'frame')
   const events = script().down(0, 0).move(60, 60).up().events()
@@ -152,7 +159,11 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   assert.equal(editor.doc.getShape('shape:root')!.parentId, frame.id, 'a fully-contained ROOT-LEVEL shape is captured into the new frame')
   assert.equal(editor.doc.getShape('shape:child-of-other')!.parentId, 'shape:other-frame', 'a shape already parented elsewhere is NEVER stolen, even if geometrically contained')
   assert.equal(editor.doc.getShape('shape:overlap')!.parentId, 'page:p', 'a root-level shape that only OVERLAPS (not fully contained) is not captured')
+  // Self-exclusion: the drag-created frame is in the snapshot at pointerup
+  // (its per-move upserts committed), but must never be captured by itself.
+  assert.equal(frame.parentId, 'page:p', 'the new frame never reparents (or self-parents) via its own capture query')
 
+  freshCtx.dispose()
   console.log('ok: frame capture reparents only fully-contained root-level shapes')
 }
 
