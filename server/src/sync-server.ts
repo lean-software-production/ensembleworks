@@ -11,6 +11,7 @@ import path from 'node:path'
 import { accessVerificationEnabled } from './access-identity.ts'
 import { createSyncApp } from './app.ts'
 import { resolveStorageGeometry } from './kernel/storage-geometry.ts'
+import { createShutdownHandler } from './shutdown-signals.ts'
 
 const PORT = Number(process.env.PORT ?? 8788)
 const CLIENT_DIST = process.env.CLIENT_DIST ?? path.join(import.meta.dirname, '../../client/dist')
@@ -42,30 +43,17 @@ server.listen(PORT, () => {
 	console.log(`  auth posture: ${accessVerificationEnabled() ? 'verified (CF Access JWT signatures checked)' : 'header-trust (no CF_ACCESS_TEAM_DOMAIN/AUD — trusting edge headers)'}`)
 })
 
-// F2 graceful shutdown: the FIRST SIGTERM/SIGINT runs the full teardown
-// (app.ts's close() — stops the shadow/idle-sweep intervals, force-closes
-// every ws client, persists + releases every canvas-v2 actor, then closes the
-// http server with its own bounded fallback) and exits 0 once it resolves. A
-// SECOND signal received while that's still in flight means the operator
-// wants OUT now (e.g. close() itself is hung on something its own bound
-// didn't anticipate) — exit(1) immediately, no more teardown attempted.
-let shuttingDown = false
-function shutdown(signal: NodeJS.Signals): void {
-	if (shuttingDown) {
-		console.warn(`ensembleworks sync server: received ${signal} again during shutdown — exiting immediately`)
-		process.exit(1)
-	}
-	shuttingDown = true
-	console.log(`ensembleworks sync server: received ${signal}, shutting down gracefully...`)
-	close()
-		.then(() => {
-			console.log('ensembleworks sync server: shutdown complete')
-			process.exit(0)
-		})
-		.catch((err) => {
-			console.error('ensembleworks sync server: shutdown hook threw — exiting anyway', err)
-			process.exit(1)
-		})
-}
+// F2 graceful shutdown: first signal = full teardown (app.ts's close()) then
+// exit 0; second signal mid-teardown = exit 1 immediately. The state machine
+// lives in shutdown-signals.ts (unit-tested there — this entrypoint boots a
+// real server on import, so its logic can't be tested from here); this file
+// only binds the real deps and the real signals.
+const shutdown = createShutdownHandler({
+	close,
+	exit: (code) => process.exit(code),
+	log: (msg) => console.log(msg),
+	warn: (msg) => console.warn(msg),
+	error: (msg, err) => console.error(msg, err),
+})
 process.on('SIGTERM', () => shutdown('SIGTERM'))
 process.on('SIGINT', () => shutdown('SIGINT'))
