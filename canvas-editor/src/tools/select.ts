@@ -14,7 +14,7 @@
 // behind the ToolContext, onEvent always returns the same (state', intents),
 // so a recorded script replays deterministically.
 import type { Intent } from '../intents.js'
-import { exceedsDragThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
+import { crossedThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
 
 interface Idle {
@@ -23,7 +23,7 @@ interface Idle {
 interface Pointing {
   readonly mode: 'pointing'
   /** SCREEN point of the pointerdown that started this gesture — threshold
-   * comparisons are screen-space (input.ts's exceedsDragThreshold), so this
+   * comparisons are screen-space (input.ts's crossedThreshold), so this
    * is kept in screen space, not world space. */
   readonly downScreen: { readonly x: number; readonly y: number }
   /** hitTestTopmost's result at pointerdown, or null on a miss. Null steers
@@ -117,8 +117,8 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
 
   function onPointing(state: Pointing, event: InputEvent): { state: SelectState; intents: Intent[] } {
     if (event.type === 'pointermove') {
-      const here = { x: event.x, y: event.y }
-      if (!exceedsDragThreshold(state.downScreen, here)) return { state, intents: [] }
+      const here = crossedThreshold(state.downScreen, event)
+      if (!here) return { state, intents: [] }
 
       if (state.targetId !== null) {
         const targetId = state.targetId
@@ -182,6 +182,13 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // vanished target just makes this event a no-op translate, never a
       // throw. We still emit the intent unconditionally; the editor's own
       // per-id skip is what makes that safe.
+      //
+      // COMMIT CADENCE WATCH-ITEM (owned by the H3 perf rig): each of these
+      // per-pointermove TranslateShapes intents becomes ONE doc.commit()
+      // (script.ts's run() applies per event), i.e. one sync frame per
+      // mouse move during a drag. The ToolContext's lazy rebuild keeps the
+      // LOCAL index cost off this path, but the wire/undo-granularity cost
+      // of per-move commits is unmeasured until H3 profiles it.
       if (dx !== 0 || dy !== 0) {
         intents.push({ type: 'TranslateShapes', ids: [...editor.get().selection], dx, dy })
       }

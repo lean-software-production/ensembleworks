@@ -16,7 +16,7 @@
 // translate, which has no such concern since doc writes there are exact
 // deltas on plain numbers) would slowly accumulate.
 import type { Intent } from '../intents.js'
-import { exceedsDragThreshold, type Camera, type InputEvent, type Tool } from '../input.js'
+import { crossedThreshold, type Camera, type InputEvent, type Tool } from '../input.js'
 import { applyWheel } from '../camera.js'
 import type { ToolContext } from './tool-context.js'
 
@@ -70,8 +70,8 @@ export function createHandTool(ctx: ToolContext): Tool<HandState> {
 
         case 'pointing': {
           if (event.type === 'pointermove') {
-            const here = { x: event.x, y: event.y }
-            if (!exceedsDragThreshold(state.downScreen, here)) return { state, intents: [] }
+            const here = crossedThreshold(state.downScreen, event)
+            if (!here) return { state, intents: [] }
             const initialCamera = editor.get().camera
             const next = panCamera(initialCamera, state.downScreen, here)
             return {

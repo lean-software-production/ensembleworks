@@ -82,6 +82,23 @@ export function exceedsDragThreshold(a: { readonly x: number; readonly y: number
   return dx * dx + dy * dy > DRAG_THRESHOLD * DRAG_THRESHOLD
 }
 
+/**
+ * The pointing-state pointermove guard every drag-capable tool shares
+ * (select/hand/create today; the arrow/transform tools of C7/C8 next): has
+ * this pointermove crossed DRAG_THRESHOLD from `downScreen`? Returns the
+ * event's SCREEN point ({x, y}, ready to use as the drag's first "here")
+ * when it has, or null when the tool should stay in its pointing state.
+ * Exactly exceedsDragThreshold plus the point-plucking every call site was
+ * repeating — extracted once so the threshold idiom can't drift between
+ * tools.
+ */
+export function crossedThreshold(
+  downScreen: { readonly x: number; readonly y: number },
+  event: { readonly x: number; readonly y: number },
+): { x: number; y: number } | null {
+  return exceedsDragThreshold(downScreen, event) ? { x: event.x, y: event.y } : null
+}
+
 // ============================================================================
 // CAMERA CONVENTION (NORMATIVE — D2's CSS world transform and C5's
 // zoom-about-cursor must BOTH derive from these two helpers, never re-derive

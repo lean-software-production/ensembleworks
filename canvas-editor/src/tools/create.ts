@@ -14,7 +14,7 @@
 // case) is picked up here for free, with zero duplicated numbers.
 import { localBounds, type Bounds, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from '../intents.js'
-import { exceedsDragThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
+import { crossedThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
 
 export type CreateKind = 'note' | 'text' | 'geo' | 'frame'
@@ -82,6 +82,23 @@ function makeShape(kind: CreateKind, id: string, pageId: string, x: number, y: n
 // this folds in the EVENT's own varying fields (t, x, y — all part of the
 // deterministic InputEvent the FSM is already threading through) alongside
 // one random() draw, rather than a monotonic counter living outside state.
+//
+// COLLISION PRECONDITION (explicit contract, not an afterthought):
+// uniqueness rides on BOTH of
+//   1. event.t being monotone within ONE clock domain — true inside a
+//      single session (script.ts guarantees strictly-increasing t; a real
+//      DOM event stream's timestamps are monotone per page), but NOT across
+//      independently-initialized sessions: two tabs/peers each starting
+//      their event clock at 0 (or a reload resetting a relative-origin
+//      clock) can replay identical (t, x, y) triples; and
+//   2. the random() draw separating those cross-domain twins.
+// Two sessions with equal (t, x, y) AND colliding random() outputs (e.g.
+// both injected a constant — reviewer-reproduced) WILL therefore mint the
+// same id, and CreateShape's upsert semantics silently merge the two shapes.
+// Division of labor for closing this for real: D2 owns wiring real DOM
+// timestamps (a shared wall-clock domain instead of per-session relative
+// origins); G3 owns injecting real entropy for `random`. Until both land,
+// treat cross-session id uniqueness as UNGUARANTEED by this factory.
 function makeId(event: { readonly t: number; readonly x: number; readonly y: number }, random: () => number): string {
   const salt = Math.floor(random() * 1e9).toString(36)
   return `shape:${event.t}-${Math.round(event.x)}-${Math.round(event.y)}-${salt}`
@@ -94,17 +111,24 @@ function makeId(event: { readonly t: number; readonly x: number; readonly y: num
 // if it's geometrically contained too. `frame` is root-level and
 // rotation-0 by construction (this tool never creates a rotated frame), so
 // its own x/y/w/h ARE its world bounds directly — no doc/parent-chain walk
-// needed. queryMarquee runs against ctx's snapshot from BEFORE this
-// gesture's own CreateShape commits (the ToolContext refreshes on doc
-// commit, and we're still mid-batch), so the new frame can never
-// accidentally "contain" (and thus try to reparent) itself.
+// needed.
+//
+// SELF-EXCLUSION: on a DRAG-create the frame itself is already in the
+// context's snapshot by pointerup — the drag's per-pointermove CreateShape
+// upserts each committed, so the lazily-rebuilt snapshot this query runs
+// against contains the in-progress frame, whose bounds trivially "contain"
+// themselves (inclusive containment). The editor's canReparent would skip
+// the resulting self-parent anyway (degenerate cycle), but relying on the
+// downstream tolerance to swallow an intent we KNOW is wrong at emission
+// time would be sloppy — filter it here. (Click-create never hits this: no
+// commit happens mid-gesture, so the frame isn't in the snapshot yet.)
 function frameCaptureIntents(ctx: ToolContext, frame: Shape): Intent[] {
   const w = (frame.props as { w?: number }).w ?? 0
   const h = (frame.props as { h?: number }).h ?? 0
   const bounds: Bounds = { minX: frame.x, minY: frame.y, maxX: frame.x + w, maxY: frame.y + h }
   const pageId = frame.parentId
   const contained = ctx.queryMarquee(bounds, 'contain')
-    .filter((id) => ctx.snapshot().byId.get(id)?.parentId === pageId)
+    .filter((id) => id !== frame.id && ctx.snapshot().byId.get(id)?.parentId === pageId)
   if (contained.length === 0) return []
   return [{ type: 'ReparentShapes', ids: contained, parentId: frame.id }]
 }
@@ -174,8 +198,8 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
 
         case 'pointing': {
           if (event.type === 'pointermove') {
-            const here = { x: event.x, y: event.y }
-            if (!exceedsDragThreshold(state.downScreen, here)) return { state, intents: [] }
+            const here = crossedThreshold(state.downScreen, event)
+            if (!here) return { state, intents: [] }
             // CreateShape upserts (a plain "put this shape") repeatedly
             // during the drag — deliberately NOT ResizeShapes (which scales
             // an EXISTING doc shape's props about an anchor and needs a live
@@ -202,6 +226,14 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
 
         case 'dragging': {
           if (event.type === 'pointermove') {
+            // COMMIT CADENCE WATCH-ITEM (owned by the H3 perf rig): each of
+            // these per-pointermove CreateShape upserts becomes ONE
+            // doc.commit() (script.ts's run() applies per event) — one sync
+            // frame per mouse move for the whole drag-to-size gesture. The
+            // ToolContext's lazy rebuild keeps the LOCAL index cost off this
+            // path; the wire/undo-granularity cost of per-move commits is
+            // unmeasured until H3 profiles it. Same note in select.ts's
+            // onDragging.
             const shape = dragShape(state.id, state.downWorld, worldOf({ x: event.x, y: event.y }))
             return { state, intents: [{ type: 'CreateShape', shape }] }
           }
