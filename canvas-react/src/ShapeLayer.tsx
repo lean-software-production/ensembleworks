@@ -9,18 +9,23 @@
 // context keeps its doc listener registered forever, re-marking itself
 // dirty on every commit).
 //
-// CULLING UNMOUNTS BODIES (prominent warning for D8 and every stateful
-// embed): a shape culled out of the viewport is not hidden — its ShapeBody
-// (and everything the registered component rendered inside it) is
-// UNMOUNTED, and remounted from scratch when it scrolls back in. For
-// stateless bodies (BoxShape, note/text/geo renders) that is exactly
-// right: cheapest possible off-screen cost, no correctness impact. For
-// STATEFUL embeds it is destructive TODAY: panning a live terminal
-// (xterm + websocket), an iframe, or a screenshare tile off-screen and
-// back destroys and recreates its session/connection/DOM state. That
-// keep-alive/suspend policy is D8's EmbedHost contract, NOT this layer's —
-// culling stays dumb here by design. Until D8 lands, heavy shapes MUST NOT
-// assume mount persistence across viewport exits.
+// CULLING UNMOUNTS BODIES (D8 RESOLVED — embed kinds route around this):
+// a shape culled out of the viewport is not hidden — its ShapeBody (and
+// everything the registered component rendered inside it) is UNMOUNTED,
+// and remounted from scratch when it scrolls back in. For stateless bodies
+// (BoxShape, note/text/geo renders) that is exactly right: cheapest
+// possible off-screen cost, no correctness impact. For STATEFUL embeds
+// (terminal/iframe/screenshare) it would be destructive — panning a live
+// terminal (xterm + websocket) off-screen and back would destroy and
+// recreate its session/connection/DOM state — so this layer does not
+// render embed-kind shapes AT ALL (see the `isEmbedKind` filter below):
+// they are exclusively `embed/EmbedLayer.tsx`'s job, a culling-EXEMPT
+// sibling layer that stays mounted for the shape's whole lifetime in the
+// doc and drives visual suspend/resume instead of mount/unmount (see
+// `embed/embedLifecycle.ts` for the state machine and `embed/EmbedHost.tsx`
+// for the wrapper). This layer's culling stays dumb BY DESIGN for every
+// kind it still handles — that split (cull-and-unmount here, stay-mounted-
+// and-suspend there) is the whole point of the isEmbedKind flag.
 //
 // CONSUMPTION NOTE (was a DEVIATION, now resolved — Seam D consolidation
 // item queued from Unit 7's review): tool-context.ts now exposes
@@ -42,6 +47,7 @@ import { queryViewport, type Bounds } from '@ensembleworks/canvas-model'
 import { screenToWorld, type Camera, type ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { ShapeBody } from './ShapeBody.js'
+import { isEmbedKind } from './shapeRegistry.js'
 
 export interface ViewportSize {
   readonly width: number
@@ -82,6 +88,7 @@ export function ShapeLayer({ toolContext, camera, viewportSize }: ShapeLayerProp
       {visibleIds.map((id) => {
         const shape = snapshot.byId.get(id)
         if (!shape) return null // vanished between index build and this render — omit, never throw (matches the STALENESS CONTRACT's "omissions only" posture)
+        if (isEmbedKind(shape.kind)) return null // embed kinds are EmbedLayer's exclusive job — see module header
         return <ShapeBody key={id} shape={shape} snapshot={snapshot} editorState={editorState} />
       })}
     </>

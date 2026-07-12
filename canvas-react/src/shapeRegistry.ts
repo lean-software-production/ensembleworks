@@ -46,6 +46,17 @@
 // core kinds their own richer bodies. Until then, "falls back to a labeled
 // box" is a safe, visible default — never a shape silently disappearing
 // because its kind has no registered renderer yet.
+//
+// EMBED FLAG (D8): a kind may be registered with `{ embed: true }` — the
+// heavy custom shapes (terminal/iframe/screenshare, ported in Seam E) that
+// need the culling-safe EmbedHost/EmbedLayer lifecycle instead of
+// ShapeLayer's plain cull-and-unmount treatment (see ShapeLayer.tsx's
+// CULLING UNMOUNTS BODIES header and embed/embedLifecycle.ts). `isEmbedKind`
+// is the single source of truth both ShapeLayer (to SKIP embed kinds) and
+// EmbedLayer (to SELECT embed kinds) consult, so the two layers can never
+// disagree about which kind renders where. Defaults to non-embed (`false`)
+// for any kind registered via the two-argument call, so every pre-D8
+// `registerShape(kind, Component)` call site keeps working unchanged.
 import type { ComponentType } from 'react'
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 import type { EditorState } from '@ensembleworks/canvas-editor'
@@ -57,16 +68,36 @@ export interface ShapeBodyProps {
   readonly editorState: EditorState
 }
 
-const registry = new Map<string, ComponentType<ShapeBodyProps>>()
+export interface RegisterShapeOptions {
+  /** True iff `kind` is a heavy embed (terminal/iframe/screenshare, …) that
+   * must survive being panned off-screen — see the module header. Defaults
+   * to false. */
+  readonly embed?: boolean
+}
+
+interface RegistryEntry {
+  readonly component: ComponentType<ShapeBodyProps>
+  readonly embed: boolean
+}
+
+const registry = new Map<string, RegistryEntry>()
 
 /** Register (or REPLACE — a second call for the same kind overwrites the
- * first, no error) the component that renders shapes of `kind`. */
-export function registerShape(kind: string, component: ComponentType<ShapeBodyProps>): void {
-  registry.set(kind, component)
+ * first, no error) the component that renders shapes of `kind`, and whether
+ * `kind` is an embed (see EMBED FLAG above). */
+export function registerShape(kind: string, component: ComponentType<ShapeBodyProps>, options: RegisterShapeOptions = {}): void {
+  registry.set(kind, { component, embed: options.embed ?? false })
 }
 
 /** The component for `kind`, or BoxShape if `kind` has no registered
  * component (see FALLBACK POLICY above). */
 export function lookupShapeComponent(kind: string): ComponentType<ShapeBodyProps> {
-  return registry.get(kind) ?? BoxShape
+  return registry.get(kind)?.component ?? BoxShape
+}
+
+/** True iff `kind` was registered with `{ embed: true }`. An unregistered
+ * kind is never an embed (BoxShape's fallback is stateless — see FALLBACK
+ * POLICY). */
+export function isEmbedKind(kind: string): boolean {
+  return registry.get(kind)?.embed ?? false
 }
