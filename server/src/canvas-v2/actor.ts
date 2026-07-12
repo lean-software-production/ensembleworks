@@ -82,37 +82,50 @@ export class DocumentActor {
 		this.roomId = opts.roomId
 		this.compactEvery = opts.compactEvery ?? 500
 
-		// --- Load: snapshot + replay updates, then repair once (see class doc). ---
-		const { snapshot, updates } = this.store.load()
-		const doc = snapshot
-			? LoroCanvasDoc.fromSnapshot(snapshot, { peerId: opts.peerId })
-			: LoroCanvasDoc.create({ peerId: opts.peerId })
-		for (const u of updates) doc.import(u)
-		doc.commit()
-		// Reconstruct any repair delta lost in the crash micro-window. Repair is
-		// deterministic — this is a no-op if nothing was actually lost, and
-		// correct (byte-for-byte, per the peer-id probe above) if something was.
-		doc.repair()
-		doc.commit()
+		// Everything below opens the SQLite handle already held by `this.store`
+		// (load/replay/repair can throw on a corrupt log; SyncServerPeer's own
+		// construction cannot realistically throw but is included for the same
+		// reason). A throw here must not leak that fd: the registry (C3) treats
+		// "constructor threw" as "try the next room again later", so if we don't
+		// close it ourselves nobody ever will, and every retried construction
+		// leaks one more handle. Close-then-rethrow keeps a failed construction
+		// exception-safe: the caller sees the original error, the fd is gone.
+		try {
+			// --- Load: snapshot + replay updates, then repair once (see class doc). ---
+			const { snapshot, updates } = this.store.load()
+			const doc = snapshot
+				? LoroCanvasDoc.fromSnapshot(snapshot, { peerId: opts.peerId })
+				: LoroCanvasDoc.create({ peerId: opts.peerId })
+			for (const u of updates) doc.import(u)
+			doc.commit()
+			// Reconstruct any repair delta lost in the crash micro-window. Repair is
+			// deterministic — this is a no-op if nothing was actually lost, and
+			// correct (byte-for-byte, per the peer-id probe above) if something was.
+			doc.repair()
+			doc.commit()
 
-		// --- Build the peer around the recovered doc. ---
-		this.peer = new SyncServerPeer({
-			peerId: opts.peerId,
-			initialSnapshot: doc.exportSnapshot(),
-			// Durable-first: client-sourced ops (imports), persisted BEFORE the
-			// peer's own repair/commit/relay — see SyncServerOpts.onUpdatePayload's
-			// JSDoc for exactly which frames fire this and why (pending payloads
-			// included: they're cached nowhere else durable).
-			onUpdatePayload: (payload) => this.persist(payload),
-		})
-		// Server-local ops: repair deltas (from the peer's own onFrame handling)
-		// and direct agent writes to `this.peer.doc`. These never pass through
-		// onUpdatePayload (that hook only sees inbound client frames), so this
-		// second leg is required to durably capture them. The unsub is kept so
-		// close() can release it — the peer's close() only detaches the PEER's
-		// own subscription, not this one, and a post-close agent write must not
-		// fire persist into a closed store.
-		this.unsubPersist = this.peer.doc.subscribeLocalUpdates((bytes) => this.persist(bytes))
+			// --- Build the peer around the recovered doc. ---
+			this.peer = new SyncServerPeer({
+				peerId: opts.peerId,
+				initialSnapshot: doc.exportSnapshot(),
+				// Durable-first: client-sourced ops (imports), persisted BEFORE the
+				// peer's own repair/commit/relay — see SyncServerOpts.onUpdatePayload's
+				// JSDoc for exactly which frames fire this and why (pending payloads
+				// included: they're cached nowhere else durable).
+				onUpdatePayload: (payload) => this.persist(payload),
+			})
+			// Server-local ops: repair deltas (from the peer's own onFrame handling)
+			// and direct agent writes to `this.peer.doc`. These never pass through
+			// onUpdatePayload (that hook only sees inbound client frames), so this
+			// second leg is required to durably capture them. The unsub is kept so
+			// close() can release it — the peer's close() only detaches the PEER's
+			// own subscription, not this one, and a post-close agent write must not
+			// fire persist into a closed store.
+			this.unsubPersist = this.peer.doc.subscribeLocalUpdates((bytes) => this.persist(bytes))
+		} catch (err) {
+			this.store.close()
+			throw err
+		}
 	}
 
 	/** The single append point both persistence hooks feed. */

@@ -6,7 +6,7 @@
 // ops — a proven hole that loses every client edit on crash. Test 1 below is
 // the test that catches exactly that hole; it drove the corrected design.
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { checkInvariants } from '@ensembleworks/canvas-model'
@@ -382,4 +382,42 @@ const shape = (id: string, over: any = {}) =>
 
 	rmSync(dir, { recursive: true, force: true })
 	console.log('ok: actor — close() completes teardown even when the final compact throws')
+}
+
+// ---------------------------------------------------------------------------
+// Test 9 — constructor hardening: a load-path throw (e.g. a corrupt log) must
+// close the store's SQLite handle before rethrowing, not leak the fd. The
+// registry (C3) treats "construction threw" as retryable — every leaked fd on
+// a retried construction would accumulate forever. Probed via /proc/self/fd's
+// entry count (Linux): unchanged across a failed construction proves the
+// store handle it opened was released, not merely that no NEW error occurred.
+// ---------------------------------------------------------------------------
+{
+	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-v2-actor-ctor-throw-'))
+	const roomId = 'room-ctor-throw'
+
+	const realLoad = CanvasV2Store.prototype.load
+	CanvasV2Store.prototype.load = function () {
+		throw new Error('corrupt log (injected)')
+	}
+	try {
+		const before = readdirSync('/proc/self/fd').length
+		assert.throws(
+			() => new DocumentActor({ dir, roomId, peerId: 1n }),
+			/corrupt log/,
+			'a load-path throw propagates out of the constructor',
+		)
+		const after = readdirSync('/proc/self/fd').length
+		assert.equal(after, before, 'the store fd was released — /proc/self/fd count unchanged across the failed construction')
+	} finally {
+		CanvasV2Store.prototype.load = realLoad
+	}
+
+	// A fresh, un-patched construction on the same dir/room proves nothing else
+	// was left wedged either (no stray lock, no half-open handle blocking it).
+	const recovered = new DocumentActor({ dir, roomId, peerId: 1n })
+	assert.deepEqual(recovered.peer.doc.listShapes(), [], 'a normal construction still works after the failed one')
+
+	rmSync(dir, { recursive: true, force: true })
+	console.log('ok: actor — constructor releases the store fd when the load path throws')
 }
