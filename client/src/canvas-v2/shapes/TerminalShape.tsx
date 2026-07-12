@@ -10,22 +10,35 @@
  * (`paperTerminalTheme`, `wm`) — all four are already unit-tested in place
  * (grid.test.ts/keys.test.ts/wsUrl.test.ts) and untouched by this port.
  *
- * REWRITTEN (the mount/connect effect itself is inherently coupled inline in
- * the legacy file's single big component, not exported as a reusable hook —
- * this body re-implements the xterm+WS wiring using the pure helpers above,
- * simplified relative to the legacy version): DROPPED for this v1 port —
- * WebGL-vs-DOM renderer switching on edit/view, the zoom-counterscaled edit
- * host, view-mode sub-pixel fill compensation, OSC-52 clipboard bridging,
- * and the title-rename / title-drag-to-move affordance (the last of these
- * needs `editor.updateShape`, which a shape body in this contract cannot
- * call at all — see ./index.ts's INTERACTIVE-CONTENT EVENT POLICY note).
- * These are cosmetic/parity-polish, not the terminal's live-session
- * substance; full parity is G2-golden/Phase-4 territory. KEPT: xterm
- * mounted once per `sessionId`, WS connect with backoff reconnect, the
- * shared deterministic grid (measured once per mount — the legacy file's
- * async web-font remeasure is dropped for the same reason: it only refines
- * an already-good boot estimate), term.onData -> ws input forwarding, the
- * Shift/Alt+Enter -> newline translation, and the focus-swallow policy.
+ * CONNECTION WIRING — ONE MACHINE, ONE CONNECT PATH (restructured after a
+ * quality review; see terminalConnection.ts's module header for the full
+ * bug inventory of the previous two-effect version): ALL connect/retry/
+ * suspend/resume/ended/dispose sequencing lives in terminalConnection.ts's
+ * pure state machine, driven from the mount effect below. The machine's
+ * monotonic EPOCH invalidates in-flight socket callbacks (every handler
+ * tags its events with the epoch its socket was opened under; stale =
+ * dropped), and `dispatchRef` exposes the ONE dispatch to the lifecycle-
+ * registration effect — onResume therefore runs THE REAL connect (backoff
+ * preserved, `ended` respected: resuming an ended session shows "Session
+ * ended", never a fresh shell) instead of the hand-rolled second socket
+ * path the review rejected.
+ *
+ * REWRITTEN vs the legacy component (which is one big inline component, not
+ * exported hooks): DROPPED for this v1 port — WebGL-vs-DOM renderer
+ * switching on edit/view, the zoom-counterscaled edit host, view-mode
+ * sub-pixel fill compensation, OSC-52 clipboard bridging, and the
+ * title-rename / title-drag-to-move affordance (the last of these needs
+ * `editor.updateShape`, which a shape body in this contract cannot call at
+ * all — see ./index.ts's INTERACTIVE-CONTENT EVENT POLICY note). These are
+ * cosmetic/parity-polish, not the terminal's live-session substance; full
+ * parity is G2-golden/Phase-4 territory. KEPT: xterm mounted once per
+ * `sessionId`, WS connect with backoff reconnect, the shared deterministic
+ * grid (measured once per mount — the legacy file's async web-font
+ * remeasure is dropped for the same reason: it only refines an already-good
+ * boot estimate), term.onData -> ws input forwarding, the Shift/Alt+Enter
+ * -> newline translation, and the focus-swallow policy. fontSize is an
+ * IN-PLACE update (`term.options.fontSize`, re-grid alongside the [w,h]
+ * resize effect) — only sessionId/gateway remount the session.
  *
  * ESCAPE SEMANTICS (differs from the legacy double-Esc — know this before
  * chasing a "vim lost focus" bug report): under this seam's shared policy a
@@ -57,14 +70,18 @@ import { FONT_SIZE_DEFAULT, ptyInputForKey } from '../../terminal/keys.js'
 import { termWsUrl } from '../../terminal/wsUrl.js'
 import { paperTerminalTheme, wm } from '../../theme.js'
 import { canvasV2EmbedLifecycles } from './embedLifecycles.js'
+import {
+  createInitialState,
+  reconnectDelayMs,
+  transition,
+  type TerminalConnAction,
+  type TerminalConnEvent,
+  type TerminalConnStatus,
+} from './terminalConnection.js'
 import { useInteractionMode } from './useInteractionMode.js'
 
 const MIN_W = 360
 const MIN_H = 220
-const RECONNECT_BASE_MS = 500
-const RECONNECT_MAX_MS = 10_000
-
-type TerminalConnection = 'connecting' | 'live' | 'reconnecting' | 'disconnected' | 'ended' | 'suspended'
 
 export interface TerminalShapeContent {
   readonly w: number
@@ -90,10 +107,18 @@ export function terminalContentFrom(shape: Shape): TerminalShapeContent {
 
 // Base-font cell measurement — the one input the deterministic grid divides
 // by; see grid.ts's module header for why it must be measured, not shared.
+// (fontSize is the SHARED shape prop, so measuring at the current fontSize
+// IS the base-font cell — the legacy component's zoom normalisation doesn't
+// apply here because this port never zoom-scales the font.)
 function xtermCell(term: Terminal): CellSize | null {
   const cs = (term as unknown as { _core?: { _charSizeService?: { width?: number; height?: number } } })._core
     ?._charSizeService
   return cs?.width && cs?.height ? quantizeCell(cs.width, cs.height + 1) : null
+}
+
+interface ConnDisplay {
+  readonly status: TerminalConnStatus
+  readonly attempt: number
 }
 
 export function TerminalShape({ shape }: ShapeBodyProps) {
@@ -101,53 +126,74 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
-  const suspendedRef = useRef(false)
-  const [connection, setConnection] = useState<TerminalConnection>('connecting')
+  // THE one dispatch — set by the mount effect, consumed by the lifecycle-
+  // registration effect (latest-ref pattern: registration must not remount
+  // when the session remounts under it).
+  const dispatchRef = useRef<((event: TerminalConnEvent) => void) | null>(null)
+  // Mount-time font only; later fontSize changes are applied in place by
+  // the resize effect below, never by remounting the session.
+  const fontSizeRef = useRef(fontSize)
+  fontSizeRef.current = fontSize
+  const [conn, setConn] = useState<ConnDisplay>({ status: 'connecting', attempt: 0 })
   const { mode, swallow, rootRef, onDoubleClick } = useInteractionMode()
 
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
 
-    const term = new Terminal({ fontSize, fontFamily: wm.mono, scrollback: 0, theme: paperTerminalTheme })
+    const term = new Terminal({ fontSize: fontSizeRef.current, fontFamily: wm.mono, scrollback: 0, theme: paperTerminalTheme })
     term.open(container)
     termRef.current = term
 
-    let disposed = false
-    let ended = false
-    let attempt = 0
+    // ---- the machine driver: pure transitions in, real I/O out ----------
+    let state = createInitialState()
+    let socket: WebSocket | null = null
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null
 
-    const clearReconnectTimer = () => {
-      if (reconnectTimer) clearTimeout(reconnectTimer)
-      reconnectTimer = null
+    const execute = (action: TerminalConnAction): void => {
+      switch (action.type) {
+        case 'clearReconnect':
+          if (reconnectTimer) clearTimeout(reconnectTimer)
+          reconnectTimer = null
+          break
+        case 'closeSocket': {
+          const previous = socket
+          socket = null
+          wsRef.current = null
+          previous?.close()
+          break
+        }
+        case 'openSocket':
+          openSocket(action.epoch)
+          break
+        case 'scheduleReconnect':
+          reconnectTimer = setTimeout(() => dispatch({ type: 'connect' }), reconnectDelayMs(action.attempt, Math.random()))
+          break
+        case 'deliver':
+          break // handled by the dispatching onmessage handler itself
+      }
     }
 
-    const connect = () => {
-      if (disposed || ended || suspendedRef.current) return
-      clearReconnectTimer()
-      const previous = wsRef.current
-      if (previous && previous.readyState < WebSocket.CLOSING) previous.close()
+    const dispatch = (event: TerminalConnEvent) => {
+      const result = transition(state, event)
+      state = result.state
+      setConn({ status: state.status, attempt: state.attempt })
+      for (const action of result.actions) execute(action)
+      return result
+    }
 
-      setConnection(attempt === 0 ? 'connecting' : 'reconnecting')
+    const openSocket = (epoch: number): void => {
       const ws = new WebSocket(termWsUrl(sessionId, term.cols, term.rows, gateway))
       ws.binaryType = 'arraybuffer'
+      socket = ws
       wsRef.current = ws
-
-      ws.onopen = () => {
-        attempt = 0
-      }
-      ws.onclose = () => {
-        if (wsRef.current !== ws) return
-        wsRef.current = null
-        if (disposed || ended || suspendedRef.current) return
-        attempt++
-        setConnection('disconnected')
-        const exponential = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** (attempt - 1))
-        reconnectTimer = setTimeout(connect, exponential * (0.8 + Math.random() * 0.4))
-      }
       ws.onerror = () => ws.close()
+      // Every handler is tagged with THIS socket's epoch — the machine
+      // drops anything stale (suspend/resume/reconnect bumped past it).
+      ws.onclose = () => dispatch({ type: 'closed', epoch })
       ws.onmessage = (ev) => {
+        const guard = dispatch({ type: 'message', epoch })
+        if (!guard.actions.some((a) => a.type === 'deliver')) return // stale/disposed — never touches term
         if (typeof ev.data === 'string') {
           let msg: { type?: string; cols?: number; rows?: number }
           try {
@@ -158,12 +204,11 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
           if ((msg.type === 'resize' || msg.type === 'attached') && msg.cols && msg.rows) {
             if (msg.type === 'attached') {
               term.reset() // gateway replays recent output after every attach
-              setConnection('live')
+              dispatch({ type: 'opened', epoch }) // 'open' means ATTACHED — see terminalConnection.ts
             }
             term.resize(msg.cols, msg.rows)
           } else if (msg.type === 'exit') {
-            ended = true
-            setConnection('ended')
+            dispatch({ type: 'exit', epoch })
             term.write('\r\n\x1b[31m[session ended]\x1b[0m\r\n')
           }
         } else {
@@ -171,6 +216,7 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
         }
       }
     }
+    // ----------------------------------------------------------------------
 
     // Boot grid from the base-font cell, computed synchronously once xterm
     // has opened (charSizeService is populated at open() time for a font
@@ -200,27 +246,32 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
       return true
     })
 
-    connect()
+    dispatchRef.current = dispatch
+    dispatch({ type: 'connect' })
 
     return () => {
-      disposed = true
-      clearReconnectTimer()
-      wsRef.current?.close()
+      dispatch({ type: 'dispose' }) // closes socket, clears timers, makes every in-flight handler stale
+      dispatchRef.current = null
       term.dispose()
       termRef.current = null
       wsRef.current = null
     }
-    // sessionId/gateway/fontSize changes remount the whole session — a
-    // different sessionId is a DIFFERENT tmux pane, not a resize.
+    // ONLY sessionId/gateway remount the session — a different sessionId is
+    // a DIFFERENT tmux pane. fontSize is applied in place below; w/h resize
+    // in place below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, gateway, fontSize])
+  }, [sessionId, gateway])
 
-  // Re-derive the deterministic grid whenever the shape's box changes
-  // (independent of the connect effect, matching the legacy file's own
-  // split between "mount the session" and "resize the box").
+  // Re-derive the deterministic grid whenever the shape's box OR the shared
+  // font size changes. fontSize is set in place first (an xterm options
+  // update — no session teardown), then the cell is re-measured at the new
+  // font and the grid re-derived, matching the legacy component's
+  // "fontSize is a shared prop, changing it re-grids for every client"
+  // semantics without its zoom machinery.
   useEffect(() => {
     const term = termRef.current
     if (!term) return
+    if (term.options.fontSize !== fontSize) term.options.fontSize = fontSize
     const cell = xtermCell(term)
     if (!cell) return
     const { cols, rows } = gridFor(w, h, cell)
@@ -229,55 +280,28 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
       const ws = wsRef.current
       if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'resize', cols, rows }))
     }
-  }, [w, h])
+  }, [w, h, fontSize])
 
+  // Lifecycle registration: suspend/resume go through THE machine — the
+  // same connect path, backoff, and ended-guard as everything else (the
+  // review's finding 1..3/5 fix; see terminalConnection.ts). Deps are
+  // [shape.id] only: dispatchRef is a latest-ref, so a session remount
+  // (sessionId change) does not churn the registration.
   useEffect(() => {
     return canvasV2EmbedLifecycles.register(shape.id, {
-      // Real bandwidth/CPU win, not a placeholder — see module header.
-      onSuspend: () => {
-        suspendedRef.current = true
-        setConnection('suspended')
-        wsRef.current?.close()
-      },
-      onResume: () => {
-        suspendedRef.current = false
-        // The mount effect's own `connect` isn't reachable here (out of
-        // scope), so resuming re-triggers a WebSocket the same way a
-        // reconnect would; the gateway's `attached` replay make this
-        // gapless from the viewer's perspective.
-        const term = termRef.current
-        if (!term || wsRef.current) return
-        setConnection('connecting')
-        const ws = new WebSocket(termWsUrl(sessionId, term.cols, term.rows, gateway))
-        ws.binaryType = 'arraybuffer'
-        wsRef.current = ws
-        ws.onmessage = (ev) => {
-          if (typeof ev.data === 'string') {
-            let msg: { type?: string; cols?: number; rows?: number }
-            try {
-              msg = JSON.parse(ev.data)
-            } catch {
-              return
-            }
-            if ((msg.type === 'resize' || msg.type === 'attached') && msg.cols && msg.rows) {
-              if (msg.type === 'attached') {
-                term.reset()
-                setConnection('live')
-              }
-              term.resize(msg.cols, msg.rows)
-            } else if (msg.type === 'exit') {
-              setConnection('ended')
-            }
-          } else {
-            term.write(new Uint8Array(ev.data as ArrayBuffer))
-          }
-        }
-        ws.onclose = () => {
-          if (wsRef.current === ws) wsRef.current = null
-        }
-      },
+      onSuspend: () => dispatchRef.current?.({ type: 'suspend' }),
+      onResume: () => dispatchRef.current?.({ type: 'resume' }),
     })
-  }, [shape.id, sessionId, gateway])
+  }, [shape.id])
+
+  const overlayText =
+    conn.status === 'ended'
+      ? 'Session ended'
+      : conn.status === 'suspended'
+        ? 'Off-screen — paused'
+        : conn.attempt > 0
+          ? `Connection lost — reconnecting (${conn.attempt})…`
+          : 'Connecting…'
 
   return (
     <div
@@ -319,11 +343,11 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
           position: 'absolute',
           inset: 0,
           padding: '10px 20px 4px 12px', // KEEP IN SYNC with grid.ts's TERMINAL_PAD
-          opacity: connection === 'live' ? 1 : 0.28,
+          opacity: conn.status === 'open' ? 1 : 0.28,
           pointerEvents: swallow ? 'auto' : 'none',
         }}
       />
-      {connection !== 'live' && (
+      {conn.status !== 'open' && (
         <div
           style={{
             position: 'absolute',
@@ -331,7 +355,7 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
             display: 'grid',
             placeItems: 'center',
             background: 'rgba(250,250,247,0.45)',
-            color: connection === 'ended' ? wm.crit : wm.inkMuted,
+            color: conn.status === 'ended' ? wm.crit : wm.inkMuted,
             fontFamily: wm.mono,
             fontSize: 11,
             fontWeight: 700,
@@ -340,11 +364,7 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
             pointerEvents: 'none',
           }}
         >
-          {connection === 'ended'
-            ? 'Session ended'
-            : connection === 'suspended'
-              ? 'Off-screen — paused'
-              : 'Connecting…'}
+          {overlayText}
         </div>
       )}
       {mode === 'idle' && (
