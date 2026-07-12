@@ -15,5 +15,5 @@ export const CANVAS_EDITOR_VERSION = 1 as const
 
 export * from './intents.js'
 export * from './editor.js'
-
-// Normalized input events + the interaction-script DSL land next (Task C3).
+export * from './input.js'
+export * from './script.js'
