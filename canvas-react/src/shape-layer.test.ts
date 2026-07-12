@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { makeDocument, worldTransform, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
+import { buildSpatialIndex, makeDocument, worldTransform, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import type { Editor, EditorState, ToolContext } from '@ensembleworks/canvas-editor'
 import { ShapeBody, shapeBodyTransform } from './ShapeBody.js'
 import { ShapeLayer } from './ShapeLayer.js'
@@ -49,8 +49,9 @@ const editorState: EditorState = {
 
 // ============================================================================
 // FAKE TOOLCONTEXT: ShapeLayer's only actual uses of `toolContext` are
-// `.editor` (passed straight to useEditorState) and `.snapshot()` (via
-// useDocSnapshot) plus `.editor.doc.subscribe` (useDocSnapshot's subscribe
+// `.editor` (passed straight to useEditorState), `.snapshot()` (via
+// useDocSnapshot), and now `.index()` (read directly — see ShapeLayer.tsx's
+// CONSUMPTION NOTE), plus `.editor.doc.subscribe` (useDocSnapshot's subscribe
 // function) — `hitTestTopmost`/`queryMarquee`/`dispose` are never called by
 // the renderer. renderToStaticMarkup never invokes useSyncExternalStore's
 // `subscribe` at all (a plain synchronous server render has no later
@@ -59,7 +60,12 @@ const editorState: EditorState = {
 // Editor/ToolContext here would require @ensembleworks/canvas-doc, which is
 // NOT a declared dependency of canvas-react (by design — see boundary.test.ts)
 // and would only resolve today via bun's workspace hoisting, an
-// implementation detail this test correctly declines to lean on.
+// implementation detail this test correctly declines to lean on. `index()`
+// is faked with a plain (un-cached) buildSpatialIndex(snapshot) call — this
+// test doesn't probe tool-context.ts's rebuild cadence (that's
+// tool-context.test.ts's job); it only needs a real SpatialIndex over the
+// SAME snapshot so ShapeLayer's queryViewport culling produces correct
+// results.
 function fakeToolContext(snapshot: CanvasDocument): ToolContext {
   const editor = {
     doc: { subscribe: (_listener: () => void) => () => {} },
@@ -69,6 +75,7 @@ function fakeToolContext(snapshot: CanvasDocument): ToolContext {
   return {
     editor,
     snapshot: () => snapshot,
+    index: () => buildSpatialIndex(snapshot),
     hitTestTopmost: () => null,
     queryMarquee: () => [],
     dispose: () => {},

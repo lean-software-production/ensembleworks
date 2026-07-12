@@ -108,4 +108,60 @@ function countingBuilder() {
   console.log('ok: dispose() detaches the doc listener — no dirtying, no rebuilds, stale-by-design answers')
 }
 
-console.log('ok: tool-context (lazy rebuild cadence, snapshot identity, dispose)')
+// ============================================================================
+// 4. index() — same lazy/dirty rebuild cadence and identity stability as
+//    snapshot() (the Seam D consolidation item): stable (===) between
+//    rebuilds, a NEW reference at the first index()/snapshot() call after a
+//    commit (either order), and the counting builder proves both are
+//    produced by the SAME rebuild pass — reading index() after snapshot()
+//    (or vice versa) with no commit in between must NOT trigger a second
+//    build.
+// ============================================================================
+{
+  const { editor } = setup()
+  const { counter, buildIndex } = countingBuilder()
+  const ctx = createToolContext(editor, { buildIndex })
+  assert.equal(counter.builds, 1, 'construction builds the initial index once')
+
+  const i1 = ctx.index()
+  assert.equal(ctx.index(), i1, 'no commit in between: identical index reference')
+  assert.equal(counter.builds, 1, 'reading index() again with no commit triggers no rebuild')
+
+  editor.apply({ type: 'CreateShape', shape: geoShape('shape:c', 500, 500) })
+  // Read snapshot() FIRST after the commit — index() must come back already
+  // fresh (same pass), not trigger its OWN separate rebuild.
+  const s2 = ctx.snapshot()
+  assert.equal(counter.builds, 2, 'first read after a commit (via snapshot()) rebuilds exactly once')
+  const i2 = ctx.index()
+  assert.equal(counter.builds, 2, 'index() read right after snapshot(), same commit, reuses the pair — NO second rebuild')
+  assert.notEqual(i2, i1, 'index() DOES get a fresh reference once the pair rebuilds')
+  assert.ok(i2.boundsById.has('shape:c'), 'and it reflects the committed change')
+  assert.equal(s2.byId.has('shape:c'), true, 'snapshot() and index() from this same read cycle agree on doc state (coherence guarantee)')
+
+  ctx.dispose()
+  console.log('ok: index() — lazy/dirty cadence and identity stability match snapshot(), coherent same-cycle rebuild')
+}
+
+// ============================================================================
+// 5. index() rebuilt lazily WITH snapshot() during an unqueried multi-commit
+//    drag: zero rebuilds mid-gesture, exactly one on the first post-drag
+//    query, whether that first query is index() or snapshot().
+// ============================================================================
+{
+  const { editor } = setup()
+  const { counter, buildIndex } = countingBuilder()
+  const ctx = createToolContext(editor, { buildIndex })
+  const tool = createSelectTool(ctx)
+  const events = script().down(50, 50).move(150, 150, { steps: 49 }).up().events()
+  run(editor, tool, events)
+  assert.equal(counter.builds, 1, 'a 50-move drag triggers ZERO index rebuilds while unqueried')
+
+  const idx = ctx.index()
+  assert.equal(counter.builds, 2, 'the first post-drag query — index() this time — triggers exactly ONE rebuild')
+  assert.ok(idx.boundsById.get('shape:a'), 'and the rebuilt index reflects the post-drag doc state')
+
+  ctx.dispose()
+  console.log('ok: index() shares snapshot()\'s lazy rebuild cadence — zero mid-drag, exactly one on next read')
+}
+
+console.log('ok: tool-context (lazy rebuild cadence, snapshot identity, index() coherence, dispose)')

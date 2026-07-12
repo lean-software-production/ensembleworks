@@ -10,10 +10,19 @@
 // instead comes from the tool reading LIVE selection state and the editor's
 // own tolerant apply (see select.ts's dragging state).
 //
+// PUBLIC INDEX ACCESSOR (Seam D consolidation item, queued from Unit 7's
+// review): `index()` exposes the SAME SpatialIndex this file already
+// maintains internally — previously private to `fresh()`. Before this
+// accessor existed, canvas-react's ShapeLayer built its OWN redundant index
+// via `useMemo(buildSpatialIndex(snapshot))` as a documented workaround (see
+// ShapeLayer.tsx's git history); now every caller shares the ONE index this
+// context builds per commit, via the COHERENCE GUARANTEE documented on
+// ToolContext.index() below.
+//
 // LAZY REBUILD (load-bearing, not an optimization nicety): the commit
 // listener does NOT rebuild — it only marks the pair dirty; the rebuild
-// happens on the next snapshot()/hitTestTopmost()/queryMarquee() call that
-// finds the flag set. Rationale: the hot drag paths (select.ts's
+// happens on the next snapshot()/index()/hitTestTopmost()/queryMarquee()
+// call that finds the flag set. Rationale: the hot drag paths (select.ts's
 // drag-translate, create.ts's drag-to-size) COMMIT once per pointermove
 // (script.ts's run() applies once per event) and never query the context
 // mid-gesture — an eager rebuild-in-listener would therefore run
@@ -54,10 +63,27 @@ export interface ToolContext {
   readonly editor: Editor
   /** The CanvasDocument snapshot as of the last rebuild. Stable (===)
    * between rebuilds; a fresh reference appears at the first
-   * snapshot()/hitTestTopmost()/queryMarquee() call after a doc commit (see
-   * IDENTITY SEMANTICS in the module header). A tool holding one across a
-   * single event's onEvent call sees a consistent view. */
+   * snapshot()/index()/hitTestTopmost()/queryMarquee() call after a doc
+   * commit (see IDENTITY SEMANTICS in the module header). A tool holding one
+   * across a single event's onEvent call sees a consistent view. */
   snapshot(): CanvasDocument
+  /** The SpatialIndex built over the SAME doc read as the last snapshot() —
+   * same lazy/dirty semantics, identity-stable between rebuilds, rebuilt
+   * lazily on the next snapshot()/index()/hitTestTopmost()/queryMarquee()
+   * call after a commit (see fresh() below: both are produced by ONE rebuild
+   * pass, never two independent ones).
+   *
+   * COHERENCE GUARANTEE (why a consumer may freely call both in the same
+   * render/turn): because fresh() rebuilds snap and index TOGETHER behind
+   * one `dirty` flag, index() and snapshot() read with no commit in between
+   * ALWAYS describe the identical doc state — whichever of the two is called
+   * FIRST after a commit triggers the single rebuild, and the other's
+   * subsequent call in that same read cycle sees the already-fresh pair.
+   * There is no way to observe snapshot() from one doc state and index()
+   * from another. Consumers (e.g. canvas-react's ShapeLayer, reading both
+   * once per render): "index() and snapshot() from the same post-commit
+   * read cycle always describe the same doc state." */
+  index(): SpatialIndex
   /** hitTestTopmost against the current index+snapshot pair (see
    * canvas-model/spatial-index.ts) — `point` is WORLD space; the caller
    * (a tool) converts screen->world via screenToWorld before calling. */
@@ -112,6 +138,7 @@ export function createToolContext(editor: Editor, opts: ToolContextOpts = {}): T
   return {
     editor,
     snapshot: () => fresh().snap,
+    index: () => fresh().index,
     hitTestTopmost: (point) => {
       const { snap: s, index: i } = fresh()
       return hitTestTopmostIndexed(i, s, point)

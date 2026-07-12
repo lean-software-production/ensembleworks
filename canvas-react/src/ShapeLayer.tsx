@@ -22,31 +22,23 @@
 // culling stays dumb here by design. Until D8 lands, heavy shapes MUST NOT
 // assume mount persistence across viewport exits.
 //
-// DEVIATION FROM THE PLAN'S LITERAL TEXT, noted here for the same reason
-// ShapeBody.tsx documents its own: the task spec describes culling as
-// `queryViewport(toolContext.index(), viewportWorldBounds)` — but
-// tool-context.ts's exported `ToolContext` interface has NO `.index()`
-// accessor and no `queryViewport` method; it exposes exactly `editor`,
-// `snapshot()`, `hitTestTopmost()`, `queryMarquee()`, and `dispose()` (see
-// that file — its internal `index`/`buildIndex`/`fresh()` machinery is a
-// PRIVATE implementation detail of `createToolContext`, never returned to
-// callers). Modifying canvas-editor's tool-context.ts to expose its
-// internal index was out of scope for this seam (it's substrate owned by
-// C4-C8/tool-context.ts, not Seam D) and unnecessary: canvas-model's
-// `buildSpatialIndex`/`queryViewport` are already a direct, allowed
-// dependency of this package, so ShapeLayer builds its OWN spatial index
-// from the SAME `toolContext.snapshot()` every tool already reads, via
-// `useMemo` keyed on the snapshot's reference. Because `snapshot()` is
-// documented as stable (===) between doc commits (tool-context.ts's
-// IDENTITY SEMANTICS — a fresh reference appears only on the first read
-// after a commit), this `useMemo` rebuilds at the SAME cadence
-// (once-per-commit, on first read) the STALENESS CONTRACT already mandates
-// for a spatial index — it is a second index instance, not a second
-// rebuild cadence. The alternative (having ShapeLayer share the tool's
-// exact index object) would need a new accessor on ToolContext; this
-// achieves the same asymptotic behavior without touching that file.
-import { useMemo } from 'react'
-import { buildSpatialIndex, queryViewport, type Bounds } from '@ensembleworks/canvas-model'
+// CONSUMPTION NOTE (was a DEVIATION, now resolved — Seam D consolidation
+// item queued from Unit 7's review): tool-context.ts now exposes
+// `ToolContext.index()`, the SAME SpatialIndex the context already builds
+// internally per commit — ShapeLayer previously built its OWN redundant
+// index via `useMemo(buildSpatialIndex(snapshot))` because no accessor
+// existed yet (see git history for that workaround). Reading
+// `toolContext.index()` directly here (no local `useMemo`) is safe and
+// correct because of tool-context.ts's own COHERENCE GUARANTEE: `index()`
+// and `snapshot()` share one lazy `dirty` flag and are rebuilt TOGETHER by
+// the same `fresh()` pass, so within one render — where this component
+// reads `useDocSnapshot(toolContext)` (-> `toolContext.snapshot()`) and then
+// `toolContext.index()` — both accessors are guaranteed to describe the
+// IDENTICAL post-commit doc state; there is no way to observe one from a
+// newer/older doc read than the other. No local memoization is needed
+// because `index()` is itself already stable (===) between rebuilds, exactly
+// like `snapshot()`.
+import { queryViewport, type Bounds } from '@ensembleworks/canvas-model'
 import { screenToWorld, type Camera, type ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { ShapeBody } from './ShapeBody.js'
@@ -79,10 +71,9 @@ export function viewportWorldBounds(camera: Camera, size: ViewportSize): Bounds 
 export function ShapeLayer({ toolContext, camera, viewportSize }: ShapeLayerProps) {
   const snapshot = useDocSnapshot(toolContext)
   const editorState = useEditorState(toolContext.editor)
-  // See DEVIATION note above: this index is OURS (canvas-model's own
-  // buildSpatialIndex), rebuilt only when `snapshot` changes identity —
-  // i.e. at most once per doc commit, never per render/pan/zoom.
-  const index = useMemo(() => buildSpatialIndex(snapshot), [snapshot])
+  // See CONSUMPTION NOTE above: the shared index, coherent with `snapshot`
+  // by tool-context.ts's construction — no local memoization needed.
+  const index = toolContext.index()
   const bounds = viewportWorldBounds(camera, viewportSize)
   const visibleIds = queryViewport(index, bounds)
 
