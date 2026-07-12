@@ -124,7 +124,9 @@
       "name": "@ensembleworks/server",
       "version": "0.1.0",
       "dependencies": {
+        "@ensembleworks/canvas-doc": "*",
         "@ensembleworks/canvas-model": "*",
+        "@ensembleworks/canvas-sync": "*",
         "@ensembleworks/contracts": "*",
         "@tldraw/sync-core": "5.1.0",
         "@tldraw/tlschema": "5.1.0",
