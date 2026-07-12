@@ -31,32 +31,50 @@
 //   (b) EITHER bound target's id is in that same queryViewport set (one
 //       O(bindings) pass over snapshot.bindings builds the arrowId ->
 //       {start/end target} map per render — binding rows carry fromId +
-//       props.terminal, see arrow-route.ts's ARROW PROPS SCHEMA);
-//   (c) the APPROXIMATE segment bbox intersects the viewport: endpoints
-//       approximated as the arrow's own stored point (unbound terminal —
-//       toWorldPoint of {0,0} / props.end, exactly resolveEndpoint's unbound
-//       arm) or the bound target's worldBounds CENTER (bound terminal — the
-//       true anchor is somewhere inside the target; the target's own
-//       half-extent slack is absorbed by over-inclusion), the bbox inflated
-//       by |bend| (a curved arrow's control point sits |bend| off the chord,
-//       so the curve can bulge outside the chord's bbox by at most that).
-//       This is what saves the long-arrow-spanning-the-screen case (both
-//       endpoints off-viewport, segment crossing it) WITHOUT routing it.
+//       props.terminal, see arrow-route.ts's ARROW PROPS SCHEMA). Since (c)
+//       now unions each bound target's WHOLE worldBounds into its bbox (see
+//       below), (b) is logically REDUNDANT — a visible target's bounds
+//       intersect the viewport, so (c) would catch it too — but it is kept
+//       as a cheap early-out: a Set.has beats (c)'s worldBounds/toWorldPoint
+//       parent-chain walks;
+//   (c) the CONSERVATIVE segment bbox intersects the viewport: the UNION of
+//       each terminal's contribution — an unbound terminal contributes the
+//       arrow's own stored point exactly (toWorldPoint of {0,0}/props.end,
+//       resolveEndpoint's unbound arm); a BOUND terminal contributes the
+//       target's ENTIRE worldBounds (already computed — same cost as its
+//       center was) — inflated by |bend| for the curve bulge. SOUNDNESS
+//       (why this union never drops a visible arrow, per the review-round-3
+//       counterexample that killed the earlier centroid version): the bound
+//       anchor lies in the target's quad ⊆ the target's worldBounds, and
+//       the unbound endpoint is exact — so the union bbox contains BOTH raw
+//       endpoints; a bbox is convex, so it contains the whole raw segment,
+//       hence every clipped point on it (clipToBoundary only returns points
+//       ON that segment); the quadratic's control point sits ≤ |bend|
+//       perpendicular off the clipped chord and the curve stays inside the
+//       {start, mid, end} hull, so the |bend| inflation covers it. The
+//       CENTROID version violated exactly this: an anchor near a large
+//       target's corner can be a half-extent away from the center, shifting
+//       the bbox off a genuinely visible segment — UNDER-inclusion, the one
+//       failure mode this cull is not allowed to have (pinned by
+//       overlay.test.ts's counterexample regression). This is also what
+//       saves the long-arrow-spanning-the-screen case (both endpoints
+//       off-viewport, segment crossing it) WITHOUT routing it.
 //
 // OVER-INCLUSION SEMANTICS (deliberate, one-sided): every check errs toward
 // RENDERING — a few extra near-edge/near-miss arrows get routed and drawn
 // (harmless: the SVG clips them; cost is a handful of spare routeArrow
-// calls), but an arrow whose visible path could touch the viewport is never
-// dropped. Same posture as spatial-index.ts's culling tradeoff ("drawing a
-// shape that would have been culled is correct, just unclipped") and
-// ShapeLayer's AABB body culling. Staleness: (a)/(b) read the index's
-// build-time buckets (queryViewport can omit a target that moved INTO view
-// since the last commit — the same staleness window as every other index
-// consumer, healed at the next commit's rebuild), while (c) reads the
-// CURRENT snapshot, so a moved endpoint is caught by (c) even before the
-// index rebuilds. Routing cost is now bounded by (visible + spanning)
-// arrows, not doc-total — pinned by overlay.test.ts's routeFn-counter case
-// via the test seam below.
+// calls; a bound target's whole-bounds union adds a little more slack for
+// large targets, same one-sided direction), but an arrow whose visible path
+// could touch the viewport is never dropped. Same posture as
+// spatial-index.ts's culling tradeoff ("drawing a shape that would have
+// been culled is correct, just unclipped") and ShapeLayer's AABB body
+// culling. Staleness: (a)/(b) read the index's build-time buckets
+// (queryViewport can omit a target that moved INTO view since the last
+// commit — the same staleness window as every other index consumer, healed
+// at the next commit's rebuild), while (c) reads the CURRENT snapshot, so a
+// moved endpoint is caught by (c) even before the index rebuilds. Routing
+// cost is now bounded by (visible + spanning) arrows, not doc-total —
+// pinned by overlay.test.ts's routeFn-counter case via the test seam below.
 // ============================================================================
 //
 // CURVE RENDERING: `kind === 'straight'` -> `M start L end`; `kind ===
@@ -80,7 +98,7 @@
 // this file renders arrow-kind shapes ONLY; a hypothetical Ink.tsx is
 // deferred, not stubbed.
 import type { Binding, Bounds, CanvasDocument, Point, Shape, SpatialIndex } from '@ensembleworks/canvas-model'
-import { centroid, queryViewport, routeArrow, toWorldPoint, worldBounds } from '@ensembleworks/canvas-model'
+import { queryViewport, routeArrow, toWorldPoint, worldBounds } from '@ensembleworks/canvas-model'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { viewportWorldBounds, type ViewportSize } from '../ShapeLayer.js'
 
@@ -157,18 +175,21 @@ function boundTargetsByArrow(bindings: readonly Binding[]): Map<string, BoundTer
   return map
 }
 
-// Cull check (c)'s endpoint approximation — deliberately NOT routeArrow:
-// bound terminal -> the target's worldBounds center (the true anchor lies
-// somewhere inside the target; over-inclusion absorbs the difference);
-// unbound (or vanished-target, matching routeArrow's own fallback family) ->
-// the arrow's own stored point, exactly resolveEndpoint's unbound arm.
-function approxEndpoint(snapshot: CanvasDocument, arrow: Shape, terminal: 'start' | 'end', targetId: string | undefined): Point {
+// Cull check (c)'s per-terminal bbox contribution — deliberately NOT
+// routeArrow: a BOUND terminal contributes its target's ENTIRE worldBounds
+// (the anchor lies somewhere in the target's quad ⊆ these bounds — see the
+// module header's SOUNDNESS note; a centroid here was review-round-3's
+// under-inclusion bug); an unbound (or vanished-target, matching
+// routeArrow's own fallback family) terminal contributes the arrow's own
+// stored point exactly, as a degenerate bbox — resolveEndpoint's unbound arm.
+function terminalBounds(snapshot: CanvasDocument, arrow: Shape, terminal: 'start' | 'end', targetId: string | undefined): Bounds {
   if (targetId) {
     const target = snapshot.byId.get(targetId)
-    if (target) return centroid(worldBounds(snapshot, target))
+    if (target) return worldBounds(snapshot, target)
   }
   const localPt: Point = terminal === 'start' ? { x: 0, y: 0 } : ((arrow.props as { end?: Point })?.end ?? { x: 0, y: 0 })
-  return toWorldPoint(snapshot, arrow, localPt)
+  const p = toWorldPoint(snapshot, arrow, localPt)
+  return { minX: p.x, minY: p.y, maxX: p.x, maxY: p.y }
 }
 
 export function Arrows({ snapshot, camera, viewportSize, index, routeFn }: ArrowsProps) {
@@ -183,15 +204,19 @@ export function Arrows({ snapshot, camera, viewportSize, index, routeFn }: Arrow
   const relevant = allArrows.filter((arrow) => {
     if (visibleIds.has(arrow.id)) return true // (a) own shape bbox on-screen
     const t = terminals.get(arrow.id)
-    if (t && ((t.start !== undefined && visibleIds.has(t.start)) || (t.end !== undefined && visibleIds.has(t.end)))) return true // (b) a bound target on-screen
-    // (c) approximate segment bbox, inflated by |bend| for the curve bulge.
-    const p1 = approxEndpoint(snapshot, arrow, 'start', t?.start)
-    const p2 = approxEndpoint(snapshot, arrow, 'end', t?.end)
+    // (b) a bound target on-screen — logically implied by (c)'s whole-bounds
+    // union, kept as a cheap early-out (see module header).
+    if (t && ((t.start !== undefined && visibleIds.has(t.start)) || (t.end !== undefined && visibleIds.has(t.end)))) return true
+    // (c) conservative segment bbox: union of both terminals' contributions
+    // (whole target worldBounds for bound, exact stored point for unbound),
+    // inflated by |bend| for the curve bulge — see the SOUNDNESS note.
+    const b1 = terminalBounds(snapshot, arrow, 'start', t?.start)
+    const b2 = terminalBounds(snapshot, arrow, 'end', t?.end)
     const rawBend = (arrow.props as { bend?: number })?.bend
     const bend = typeof rawBend === 'number' && Number.isFinite(rawBend) ? Math.abs(rawBend) : 0
     const bbox: Bounds = {
-      minX: Math.min(p1.x, p2.x) - bend, minY: Math.min(p1.y, p2.y) - bend,
-      maxX: Math.max(p1.x, p2.x) + bend, maxY: Math.max(p1.y, p2.y) + bend,
+      minX: Math.min(b1.minX, b2.minX) - bend, minY: Math.min(b1.minY, b2.minY) - bend,
+      maxX: Math.max(b1.maxX, b2.maxX) + bend, maxY: Math.max(b1.maxY, b2.maxY) + bend,
     }
     return boundsIntersect(bbox, viewport)
   })

@@ -371,4 +371,43 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
   console.log('ok: Arrows — routing cost bounded by visible+spanning (routeFn called 2x for 7 arrows)')
 }
 
+// ============================================================================
+// 14. Culling soundness REGRESSION (reviewer's constructed counterexample —
+//     the centroid approximation violated the one-sided guarantee): target
+//     rect x∈[-900,-100], y∈[-800,700], entirely LEFT of the viewport
+//     [0,800]x[0,600] (cull check (b) fails); arrow start BOUND at anchor
+//     (nx=1, ny=1) -> world (-100,700) (the rect's bottom-right corner);
+//     unbound end at world (900,-100); the arrow's own x/y parked at
+//     (5000,5000) (check (a) fails). The routed segment (-100,700) ->
+//     (900,-100) crosses the viewport — enters at (25,600), passes through
+//     (100,540) at t=0.2 — but the OLD check (c) approximated the bound
+//     terminal by the target's worldBounds CENTROID (-500,-50), giving a
+//     segment bbox with maxY=-50 that misses the viewport entirely: a
+//     VISIBLE arrow was dropped. RED-FIRST: this block failed against the
+//     centroid-based (c) (shape:sneaky absent from the output); green after
+//     (c) unions the target's WHOLE worldBounds into the bbox.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 } // viewport = world [0,800]x[0,600]
+  const target = geoShape('shape:tall', -900, -800, 800, 1500) // worldBounds [-900,-100]x[-800,700]
+  // props.end is a LOCAL OFFSET from the arrow's own x/y: world end =
+  // (5000-4100, 5000-5100) = (900,-100).
+  const arrow = arrowShape('shape:sneaky', 5000, 5000, { end: { x: -4100, y: -5100 } })
+  const bindings = [startBinding('shape:sneaky', 'shape:tall', 1, 1)] // anchor world (-100, 700)
+  const doc = docOf([target, arrow], bindings)
+
+  // Sanity on the construction itself (independent arithmetic): the raw
+  // segment from the anchor (-100,700) to the unbound end (900,-100) at
+  // t=0.2 sits at (100,540) — inside the viewport — while the OLD centroid
+  // bbox topped out at maxY=-50, entirely above the viewport's y range.
+  const segAt = (t: number) => ({ x: -100 + t * 1000, y: 700 - t * 800 })
+  const probe = segAt(0.2)
+  assert.deepEqual(probe, { x: 100, y: 540 }, 'construction sanity: the routed chord passes through (100,540)')
+  assert.ok(probe.x >= 0 && probe.x <= 800 && probe.y >= 0 && probe.y <= 600, 'construction sanity: that point is inside the viewport')
+
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.ok(html.includes('data-shape-id="shape:sneaky"'), `a VISIBLE bound arrow must never be culled — check (c) must union the target's whole worldBounds: ${html}`)
+  console.log('ok: Arrows — culling soundness: bound-terminal counterexample (visible segment, off-screen target + endpoints) renders')
+}
+
 console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing + viewport culling)')
