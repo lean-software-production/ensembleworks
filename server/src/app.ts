@@ -24,6 +24,8 @@ import express from 'express'
 import { type WebSocket, WebSocketServer } from 'ws'
 import { getAccessIdentity } from './access-identity.ts'
 import { sanitizeId } from './canvas/ids.ts'
+import { createCanvasActors } from './canvas-v2/actors.ts'
+import { wsTransport } from './canvas-v2/ws-transport.ts'
 import { createAvRouter } from './features/av.ts'
 import { createCanvasV2Router } from './features/canvas-v2.ts'
 import { createDiscordRouter } from './features/discord.ts'
@@ -101,6 +103,22 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 			}
 		}
 	}
+
+	// Phase 2 new-engine sync (Task C3), OFF by default — zero user exposure
+	// until EW_CANVAS_SYNC=1 is set (see the gated upgrade branch below).
+	// Constructed LAZILY, only when the flag is on, so a flag-off deployment
+	// never creates the canvas-v2 directory or opens a single actor: the
+	// registry itself (server/src/canvas-v2/actors.ts) is the only thing that
+	// knows the on-disk layout (databaseDir/canvas-v2/<roomId>.sqlite).
+	//
+	// Shutdown wiring: there is currently NO graceful-shutdown hook anywhere in
+	// this file or sync-server.ts (no process.on('SIGTERM'/'SIGINT'), and
+	// roomHost itself exposes no close()) — the process today relies entirely
+	// on SQLite's own crash-safe append/commit semantics and exits via signal
+	// with no teardown callback. So there is nothing to wire
+	// `canvasActors.close()` into yet; when a shutdown hook is added (for
+	// roomHost or otherwise), call `canvasActors?.close()` from it too.
+	const canvasActors = process.env.EW_CANVAS_SYNC === '1' ? createCanvasActors(opts.databaseDir ?? opts.dataDir) : null
 
 	const registry = createSessionRegistry()
 	const media = createMediaService()
@@ -204,6 +222,42 @@ export function createSyncApp(opts: { dataDir: string; databaseDir?: string; cli
 	server.on('upgrade', (req, socket, head) => {
 		const url = new URL(req.url ?? '', 'http://internal')
 		if (gatewayPlane.handleUpgrade(req, socket, head, url)) return
+
+		// Phase 2: new-engine sync (Task C3), gated on EW_CANVAS_SYNC=1 and
+		// checked BEFORE the legacy /sync/:roomId match below (a real room id
+		// could theoretically collide with the literal segment "v2", so the
+		// more specific route must win). Real users never hit this: the flag
+		// is off in every production deployment today and the client build
+		// never references /sync/v2. `canvasActors` is non-null exactly when
+		// this branch can be reached (see its construction above).
+		if (canvasActors) {
+			const v2Match = url.pathname.match(/^\/sync\/v2\/([^/]+)$/)
+			if (v2Match) {
+				const roomId = sanitizeId(v2Match[1]!)
+				if (!roomId) {
+					socket.destroy()
+					return
+				}
+				;(socket as Socket).setNoDelay(true)
+				wss.handleUpgrade(req, socket, head, (ws) => {
+					try {
+						canvasActors.getOrCreate(roomId).connect(wsTransport(ws))
+					} catch (err) {
+						// getOrCreate can throw if constructing a fresh DocumentActor
+						// fails (e.g. a corrupt on-disk log); connect() throws if the
+						// actor was tainted by a concurrent persist failure between
+						// getOrCreate and this callback. Either way: fail loud in the
+						// log, close just this one socket (1011 = internal error) —
+						// mirrors sync-attach.ts's guard for the legacy /sync path —
+						// and leave every other room untouched.
+						console.error(`[canvas-v2] room ${roomId} failed to attach — closing socket:`, err)
+						ws.close(1011, 'room load failed')
+					}
+				})
+				return
+			}
+		}
+
 		const match = url.pathname.match(/^\/sync\/([^/]+)$/)
 		const roomId = match ? sanitizeId(match[1]!) : null
 		const sessionId = url.searchParams.get('sessionId')
