@@ -830,8 +830,10 @@ branch on `selectEngine(getRoomId())` — `'tldraw'` renders the existing
 `<App/>` UNCHANGED; `'v2'` renders `CanvasV2App`. **Open Q1 mechanism (default):**
 `selectEngine` returns `'v2'` iff the room id is in a build-time allowlist
 (`import.meta.env.VITE_CANVAS_V2_ROOMS` comma-split) OR `?engine=v2` is in the
-URL; else `'tldraw'`. `team` is never in the allowlist ⇒ untouched by
-construction. `CanvasV2App` dials `${wsBase()}/sync/v2/${roomId}` via
+URL; else `'tldraw'`. **Ratified Q1 amendment: `team` is HARD-EXCLUDED — it
+resolves to `'tldraw'` unconditionally, even if it appears in the allowlist or
+`?engine=v2` is present.** The room the whole team lives in must be unreachable
+by construction, not merely by configuration discipline. `CanvasV2App` dials `${wsBase()}/sync/v2/${roomId}` via
 `wsTransport`-equivalent client transport → `SyncClientPeer` → `canvas-editor`
 `Editor` → `canvas-react`. Set `window.__ew = { editor }` (the design's E2E hook)
 for v2. Commit `feat(client): per-room engine selector + dogfood canvas-v2 mount`.
@@ -876,6 +878,9 @@ for (const r of ['team', 'random', 'planning', 'x'.repeat(64)])
 assert.equal(selectEngine('dogfood', { allowlist: ['dogfood'], engineParam: null }), 'v2')
 assert.equal(selectEngine('team', { allowlist: ['dogfood'], engineParam: null }), 'tldraw')
 assert.equal(selectEngine('anything', { allowlist: [], engineParam: 'v2' }), 'v2')
+// 2b. Ratified Q1 amendment: `team` is HARD-EXCLUDED — even a misconfigured
+// allowlist or an explicit ?engine=v2 override never flips it.
+assert.equal(selectEngine('team', { allowlist: ['team'], engineParam: 'v2' }), 'tldraw')
 // 3. main.tsx/App.tsx: the v2 mount is reachable ONLY through selectEngine.
 import { readFileSync } from 'node:fs'
 const appEntry = readFileSync(new URL('../client/src/main.tsx', import.meta.url), 'utf8')
@@ -1106,3 +1111,23 @@ probe (P1–P3) or an item below.**
     to v2 is Phase 4 (design). Confirming so no task wires agent writes into the
     dogfood engine. *Alternative:* begin agent writes to v2 in dogfood rooms now
     (pulls Phase 4 forward; needs the validating semantic API, not built). [—]
+
+---
+
+## Ratification (2026-07-12, controller)
+
+All 13 open questions ratified with the plan's defaults, with ONE amendment:
+
+- **Q1 amended:** the `?engine=v2` URL override as originally specified could
+  flip the `team` room to v2 for any user who typed the param. `team` is now
+  HARD-EXCLUDED in `selectEngine` — it resolves to `'tldraw'` unconditionally,
+  regardless of allowlist contents or URL override. G3's task text and G6's
+  audit code were amended in place; G6 pins the exclusion with an explicit
+  `selectEngine('team', { allowlist: ['team'], engineParam: 'v2' }) ===
+  'tldraw'` assertion.
+- **Q4 stays gated on P3's empirical verdict** (plain text unless
+  `loro-prosemirror` proves compatible with the exact loro-crdt 1.13.6 pin);
+  the default task text in D7 already encodes this.
+- Preflight verdicts (P1–P3) must be recorded durably in this file under a
+  `## Preflight verdicts` section (committed), not only in an agent's final
+  message — Seam G implements from that record.
