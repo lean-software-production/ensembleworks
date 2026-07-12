@@ -302,9 +302,19 @@ export class Editor {
         return { state, docMutated: mutated, stateChanged: false }
       }
 
-      case 'SetText':
+      case 'SetText': {
+        // Consistent with DeleteShapes/TranslateShapes/etc: a real mutated
+        // flag gated on the id actually resolving, not CanvasDoc.setText's
+        // own silent-no-op contract — committing a no-op batch happens to be
+        // harmless on Loro, but that's an engine detail the mutated flag
+        // must not lean on (same reasoning as DeleteShapes's comment above).
+        // Housekeeping fix (Unit 5 review item): this case used to report
+        // docMutated: true unconditionally, unlike every other mutation
+        // intent in this switch.
+        if (!this.doc.getShape(intent.id)) return { state, docMutated: false, stateChanged: false }
         this.doc.setText(intent.id, intent.text)
         return { state, docMutated: true, stateChanged: false }
+      }
 
       case 'StartArrow': {
         // Malformed intent (kind !== 'arrow') is SKIPPED, not asserted: a

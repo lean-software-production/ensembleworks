@@ -420,4 +420,28 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: CompleteArrow on a vanished arrow writes neither props nor a dangling binding')
 }
 
+// ============================================================================
+// 14. Housekeeping (Unit 5 review item): SetText's mutated flag must be
+//     REAL — gated on the id resolving — like every other mutation intent's,
+//     not unconditionally true. Proven via commit-counting (the same
+//     technique test 4 uses): a SetText on a vanished id must commit ZERO
+//     times, not one.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a') })
+  editor.apply({ type: 'DeleteShapes', ids: ['shape:a'] }) // shape:a vanishes
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+  editor.apply({ type: 'SetText', id: 'shape:a', text: 'hello' })
+  assert.equal(commits, 0, 'SetText on a vanished id must not commit — docMutated must be false, not unconditionally true')
+
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b') })
+  editor.apply({ type: 'SetText', id: 'shape:b', text: 'hi' })
+  assert.equal(editor.doc.getText('shape:b'), 'hi', 'SetText on a resolving id still writes the text and commits')
+
+  console.log('ok: SetText reports a real mutated flag (skip on vanished id), consistent with its siblings')
+}
+
 console.log('ok: canvas-editor editor + intents')
