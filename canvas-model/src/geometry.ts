@@ -132,17 +132,26 @@ export function worldTransform(doc: CanvasDocument, shape: Shape): RigidTransfor
   return transform
 }
 
-// World-space AABB of a (possibly rotated, possibly nested) shape: transform
-// the 4 corners of its local box and take the min/max. For an unrotated
-// shape with unrotated ancestors this degenerates to pageBounds' result (see
-// the cross-check in hit-test.test.ts).
-export function worldBounds(doc: CanvasDocument, shape: Shape): Bounds {
+// The shape's 4 corners in WORLD space, in local-box order (top-left,
+// top-right, bottom-right, bottom-left of the unrotated box — i.e. the same
+// corners worldBounds takes the AABB of). Exposed on its own because exact
+// (non-AABB) intersection tests — e.g. spatial-index's marquee 'intersect'
+// mode — need the true rotated rectangle, not just its bounding box.
+export function worldCorners(doc: CanvasDocument, shape: Shape): Point[] {
   const t = worldTransform(doc, shape)
   const lb = localBounds(shape)
-  const corners: Point[] = [
+  return [
     { x: lb.minX, y: lb.minY }, { x: lb.maxX, y: lb.minY },
     { x: lb.maxX, y: lb.maxY }, { x: lb.minX, y: lb.maxY },
   ].map((p) => { const r = rotatePoint(p, t.rotation); return { x: r.x + t.x, y: r.y + t.y } })
+}
+
+// World-space AABB of a (possibly rotated, possibly nested) shape: the
+// min/max of its worldCorners. For an unrotated shape with unrotated
+// ancestors this degenerates to pageBounds' result (see the cross-check in
+// hit-test.test.ts).
+export function worldBounds(doc: CanvasDocument, shape: Shape): Bounds {
+  const corners = worldCorners(doc, shape)
   return {
     minX: Math.min(...corners.map((c) => c.x)), minY: Math.min(...corners.map((c) => c.y)),
     maxX: Math.max(...corners.map((c) => c.x)), maxY: Math.max(...corners.map((c) => c.y)),
