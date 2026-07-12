@@ -1,7 +1,7 @@
 // Run: bun src/editor.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc, dumpModel, type CanvasDoc } from '@ensembleworks/canvas-doc'
-import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
+import { worldTransform, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import { Editor } from './editor.js'
 
 // Injected clock/PRNG — fixed, non-advancing: proves the editor never
@@ -442,6 +442,128 @@ const normalize = (m: CanvasDocument) => ({
   assert.equal(editor.doc.getText('shape:b'), 'hi', 'SetText on a resolving id still writes the text and commits')
 
   console.log('ok: SetText reports a real mutated flag (skip on vanished id), consistent with its siblings')
+}
+
+// ============================================================================
+// 15. C8 DEFERRAL CLOSURE — RotateShapes under a ROTATED PARENT: the exact
+//     probe from Unit 4's review. Parent rotated 90° (pi/2) at world
+//     (100,100); child at LOCAL (10,0), rotation 0. Rotating the child about
+//     a WORLD center (100,100) — coinciding with the parent's own world
+//     position, for simplicity — by another pi/2 must orbit/spin the CHILD's
+//     WORLD position/rotation correctly, not just its raw x/y in whatever
+//     frame the old SCOPE LIMIT silently assumed.
+//
+//     HAND-COMPUTED expected (independent of this file's implementation,
+//     via canvas-model's own worldTransform/rotation convention — see
+//     geometry.ts's ROTATION CONVENTION block): the child's world position
+//     BEFORE this rotate is parent.xy + rotate(local, parent.rotation) =
+//     (100,100) + rotate((10,0), pi/2) = (100,100) + (0,10) = (100,110).
+//     Orbiting (100,110) around the world center (100,100) by pi/2:
+//     relative = (0,10); rotate((0,10), pi/2) = (0*cos90-10*sin90,
+//     0*sin90+10*cos90) = (-10, 0); new world = (100,100) + (-10,0) =
+//     (90,100). World rotation: parent.rotation is UNCHANGED (rotating the
+//     child does not touch the parent), so child.rotation must become
+//     dRadians (0 + pi/2) for the child's WORLD rotation (parent.rotation +
+//     child.rotation) to increase by exactly dRadians, per composeTransform.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:parent', { x: 100, y: 100, rotation: Math.PI / 2 }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:child', { x: 10, y: 0, parentId: 'shape:parent' }) })
+
+  editor.apply({ type: 'RotateShapes', ids: ['shape:child'], center: { x: 100, y: 100 }, dRadians: Math.PI / 2 })
+
+  const EPS = 1e-9
+  const model = dumpModel(doc)
+  const childWorld = worldTransform(model, model.byId.get('shape:child')!)
+  assert.ok(Math.abs(childWorld.x - 90) < EPS, `child world x ~= 90 (hand-computed), got ${childWorld.x}`)
+  assert.ok(Math.abs(childWorld.y - 100) < EPS, `child world y ~= 100 (hand-computed), got ${childWorld.y}`)
+  assert.ok(Math.abs(childWorld.rotation - Math.PI) < EPS, `child world rotation ~= pi (parent pi/2 + child pi/2), got ${childWorld.rotation}`)
+
+  // The parent itself must be untouched by rotating just the child.
+  const parentAfter = editor.doc.getShape('shape:parent')!
+  assert.equal(parentAfter.x, 100)
+  assert.equal(parentAfter.y, 100)
+  assert.equal(parentAfter.rotation, Math.PI / 2)
+
+  console.log('ok: RotateShapes is world-correct under a ROTATED parent (deferral closure, hand-verified via worldTransform)')
+}
+
+// ============================================================================
+// 16. C8 DEFERRAL CLOSURE — ResizeShapes under a ROTATED PARENT: same parent
+//     setup as test 15. Scaling the child about a WORLD anchor coinciding
+//     with the parent's own world position by (scaleX:2, scaleY:3).
+//
+//     HAND-COMPUTED expected: the world anchor (100,100) converts into the
+//     parent's LOCAL frame as (0,0) — the parent's own world position IS
+//     its local frame's origin, so a world point coinciding with it maps to
+//     local (0,0) regardless of the parent's rotation. Scaling the child's
+//     LOCAL x/y (10,0) about local anchor (0,0) by (2,3) gives local (20,0)
+//     — scaling happens along the PARENT's local axes (rotated 90° from
+//     world), which is why this does NOT equal naively scaling the world
+//     offset by (2,3) (that would give local (10,0) unchanged on x, since
+//     the world offset from anchor to the child was entirely on world y).
+//     props.w/h scale independently of any frame: 20*2=40, 10*3=30.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:parent2', { x: 100, y: 100, rotation: Math.PI / 2 }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:child2', { x: 10, y: 0, parentId: 'shape:parent2', kind: 'geo', props: { w: 20, h: 10 } }) })
+
+  editor.apply({ type: 'ResizeShapes', ids: ['shape:child2'], anchor: { x: 100, y: 100 }, scaleX: 2, scaleY: 3 })
+
+  const child2 = editor.doc.getShape('shape:child2')!
+  assert.equal(child2.x, 20, 'child LOCAL x scaled about the FRAME-CONVERTED anchor, not the raw world anchor')
+  assert.equal(child2.y, 0)
+  assert.equal((child2.props as any).w, 40)
+  assert.equal((child2.props as any).h, 30)
+
+  // World cross-check (independent of this file's own math): child world
+  // position must equal parent.xy + rotate(childLocal, parent.rotation) =
+  // (100,100) + rotate((20,0), pi/2) = (100,100) + (0,20) = (100,120).
+  const EPS = 1e-9
+  const model = dumpModel(doc)
+  const childWorld = worldTransform(model, model.byId.get('shape:child2')!)
+  assert.ok(Math.abs(childWorld.x - 100) < EPS, `child2 world x ~= 100, got ${childWorld.x}`)
+  assert.ok(Math.abs(childWorld.y - 120) < EPS, `child2 world y ~= 120, got ${childWorld.y}`)
+
+  console.log('ok: ResizeShapes is world-correct under a ROTATED parent (deferral closure, hand-verified via worldTransform)')
+}
+
+// ============================================================================
+// 17. Mixed selection (parented under a rotated parent + root-parented) in
+//     ONE RotateShapes intent: both must resolve correctly, proving the fix
+//     applies PER-SHAPE (each against its own parent's frame), not globally.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:parent3', { x: 50, y: 50, rotation: Math.PI / 2 }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:nested', { x: 10, y: 0, parentId: 'shape:parent3' }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:root', { x: 20, y: 0 }) }) // parentId: page:p (root)
+
+  editor.apply({ type: 'RotateShapes', ids: ['shape:nested', 'shape:root'], center: { x: 0, y: 0 }, dRadians: Math.PI / 2 })
+
+  const EPS = 1e-9
+  // Root shape: its parent is the page (identity frame) -- the ORIGINAL
+  // (pre-fix) math already handled this case, and must still: (20,0)
+  // orbited pi/2 about (0,0) -> (0,20).
+  const root = editor.doc.getShape('shape:root')!
+  assert.ok(Math.abs(root.x - 0) < EPS, `root x ~= 0, got ${root.x}`)
+  assert.ok(Math.abs(root.y - 20) < EPS, `root y ~= 20, got ${root.y}`)
+  assert.ok(Math.abs(root.rotation - Math.PI / 2) < EPS)
+
+  // Nested shape: world cross-check only (simplest independent hand-check —
+  // orbit the shape's KNOWN pre-rotate world point, computed the same way
+  // as test 15's, around the world center). Original world point:
+  // parent3.xy + rotate((10,0), pi/2) = (50,50) + (0,10) = (50,60).
+  // Orbiting (50,60) around (0,0) by pi/2: x' = 50*cos90-60*sin90 = -60;
+  // y' = 50*sin90+60*cos90 = 50.
+  const model = dumpModel(editor.doc)
+  const nestedWorld = worldTransform(model, model.byId.get('shape:nested')!)
+  assert.ok(Math.abs(nestedWorld.x - -60) < EPS, `nested world x ~= -60, got ${nestedWorld.x}`)
+  assert.ok(Math.abs(nestedWorld.y - 50) < EPS, `nested world y ~= 50, got ${nestedWorld.y}`)
+
+  console.log('ok: RotateShapes mixed selection (rotated-parent-nested + root) both compute correctly in one intent')
 }
 
 console.log('ok: canvas-editor editor + intents')

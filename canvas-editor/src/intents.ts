@@ -43,10 +43,11 @@ export interface TranslateShapes { readonly type: 'TranslateShapes'; readonly id
 
 /** Scale every shape in `ids` about the fixed world point `anchor` (e.g. the
  * opposite handle from the one being dragged). Applied per-shape to x/y and,
- * where present, props.w/h — see editor.ts's applyOne for the exact
- * transform and its documented scope limit (assumes `anchor` and each
- * shape's x/y share a coordinate frame; nested-rotated-parent resize is
- * deferred to C8 alongside the rest of tldraw-parity). */
+ * where present, props.w/h — see editor.ts's applyOne (and its
+ * worldToParentFrame helper) for the exact transform: `anchor` is WORLD
+ * space and is converted into EACH shape's own PARENT frame before composing
+ * with that shape's x/y (which already lives there), so a shape nested under
+ * a rotated parent resizes correctly, not just a page-rooted one. */
 export interface ResizeShapes {
   readonly type: 'ResizeShapes'
   readonly ids: readonly string[]
@@ -60,15 +61,14 @@ export interface ResizeShapes {
  * its own `rotation` field (spins it in place) — the same "rotations add,
  * position orbits" composition canvas-model/src/geometry.ts's
  * composeTransform documents for parent-child chains, applied here to a
- * transient rotation delta instead of a parent relationship. SCOPE LIMIT
- * (the same one ResizeShapes documents above, for the same reason):
- * `center` and each shape's x/y are assumed to share a coordinate frame —
- * correct for page-rooted, unrotated-ancestor shapes; a shape nested under
- * a ROTATED parent is silently wrong here (its x/y lives in the parent's
- * rotated local frame while `center` is world — orbiting one around the
- * other mixes frames). Nested-rotated-parent correctness is deferred to C8
- * (the transform tool), which owns converting center/anchor into each
- * shape's parent frame before emitting these intents. */
+ * transient rotation delta instead of a parent relationship. `center` is
+ * WORLD space; editor.ts's applyOne converts it into EACH shape's own PARENT
+ * frame (worldToParentFrame) before orbiting that shape's x/y, so a shape
+ * nested under a ROTATED parent orbits correctly — only the position needs
+ * this conversion, since a shape's own `rotation` field composes additively
+ * regardless of the parent's rotation (see worldToParentFrame's doc comment
+ * for why). A mixed selection (some shapes root-parented, some nested under
+ * a rotated parent) converts each shape independently in the same intent. */
 export interface RotateShapes {
   readonly type: 'RotateShapes'
   readonly ids: readonly string[]

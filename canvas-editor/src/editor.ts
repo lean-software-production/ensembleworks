@@ -4,6 +4,7 @@
 // mutators; everything upstream (tools, scripts, the renderer) only ever
 // produces or reads Intents/EditorState.
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'
+import { toLocalPoint, type CanvasDocument, type Point, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from './intents.js'
 
 // ============================================================================
@@ -214,20 +215,22 @@ export class Editor {
       }
 
       case 'ResizeShapes': {
+        // Scale the shape's own origin about the fixed anchor, then scale
+        // any explicit w/h props by the same per-axis factor. C8 DEFERRAL
+        // CLOSURE: `intent.anchor` is WORLD space but shape.x/y lives in the
+        // shape's OWN PARENT's frame — worldToParentFrame converts the
+        // anchor into that frame, per shape, before composing (see its doc
+        // comment for the derivation and why this fixes a shape nested
+        // under a ROTATED parent, previously a documented SCOPE LIMIT).
+        // props.w/h scale independently of any frame (a shape's own local,
+        // unrotated dimensions), unaffected by this fix.
         let mutated = false
         for (const id of intent.ids) {
           const shape = this.doc.getShape(id)
           if (!shape) continue
-          // Scale the shape's own origin about the fixed anchor, then scale
-          // any explicit w/h props by the same per-axis factor. SCOPE LIMIT
-          // (documented on ResizeShapes in intents.ts): anchor and
-          // shape.x/y are assumed to share a coordinate frame — correct for
-          // page-rooted, unrotated-ancestor shapes (the common case a
-          // marquee-resize acts on); a shape nested under a rotated parent
-          // would need anchor/x/y both converted to that parent's local
-          // frame first. Deferred to C8 alongside tldraw-parity polish.
-          const x = intent.anchor.x + (shape.x - intent.anchor.x) * intent.scaleX
-          const y = intent.anchor.y + (shape.y - intent.anchor.y) * intent.scaleY
+          const anchor = worldToParentFrame(this.doc, shape, intent.anchor)
+          const x = anchor.x + (shape.x - anchor.x) * intent.scaleX
+          const y = anchor.y + (shape.y - anchor.y) * intent.scaleY
           const props: Record<string, unknown> = { ...shape.props }
           if (typeof props.w === 'number') props.w = props.w * intent.scaleX
           if (typeof props.h === 'number') props.h = props.h * intent.scaleY
@@ -238,27 +241,27 @@ export class Editor {
       }
 
       case 'RotateShapes': {
+        // Orbit the shape's origin around `center` by dRadians AND spin its
+        // own rotation field by the same delta — "rotations add, position
+        // orbits", the same composition rule canvas-model/src/geometry.ts's
+        // composeTransform documents for a parent-child pair, applied here
+        // to a transient rotation instead. C8 DEFERRAL CLOSURE: `center` is
+        // WORLD space but shape.x/y lives in the shape's own PARENT's frame
+        // — worldToParentFrame converts it per shape before orbiting (see
+        // its doc comment). The rotation-field update itself (`shape.rotation
+        // + dRadians`) needs NO such conversion and is UNCHANGED by this
+        // fix — worldToParentFrame's doc comment explains why adding
+        // dRadians to the shape's own local rotation is already correct
+        // regardless of the parent's rotation.
         let mutated = false
         const cos = Math.cos(intent.dRadians), sin = Math.sin(intent.dRadians)
         for (const id of intent.ids) {
           const shape = this.doc.getShape(id)
           if (!shape) continue
-          // Orbit the shape's origin around `center` by dRadians AND spin
-          // its own rotation field by the same delta — "rotations add,
-          // position orbits", the same composition rule
-          // canvas-model/src/geometry.ts's composeTransform documents for a
-          // parent-child pair, applied here to a transient rotation instead.
-          // SCOPE LIMIT (identical to ResizeShapes's above, documented
-          // in both places so C8's implementer finds it either way):
-          // `center` and shape.x/y are assumed to share a coordinate frame
-          // — correct for page-rooted, unrotated-ancestor shapes; a shape
-          // nested under a ROTATED parent is silently wrong here (x/y is in
-          // the parent's rotated local frame, center is world). Deferred to
-          // C8, which owns converting center into each shape's parent frame
-          // before emitting the intent.
-          const dx = shape.x - intent.center.x, dy = shape.y - intent.center.y
-          const x = intent.center.x + (dx * cos - dy * sin)
-          const y = intent.center.y + (dx * sin + dy * cos)
+          const center = worldToParentFrame(this.doc, shape, intent.center)
+          const dx = shape.x - center.x, dy = shape.y - center.y
+          const x = center.x + (dx * cos - dy * sin)
+          const y = center.y + (dx * sin + dy * cos)
           this.doc.putShape({ ...shape, x, y, rotation: shape.rotation + intent.dRadians })
           mutated = true
         }
@@ -409,6 +412,54 @@ export class Editor {
     }
     return true
   }
+}
+
+// A byId-only CanvasDocument adapter over LIVE doc.getShape reads.
+// canvas-model/src/geometry.ts's worldTransform/toLocalPoint — the ONLY
+// canvas-model functions worldToParentFrame below calls — touch NOTHING on
+// their `doc` argument except `.byId.get`, so this minimal shim lets
+// Resize/RotateShapes reuse those NORMATIVE conversions against LIVE reads
+// (this.doc.getShape) instead of a whole-doc dumpModel() snapshot —
+// consistent with applyAll's documented "read live, never snapshot
+// mid-batch" discipline (see its big doc comment above) and avoiding an
+// O(shapes) dumpModel call on every Resize/Rotate intent.
+function liveDocAdapter(doc: CanvasDoc): CanvasDocument {
+  return {
+    pages: [], shapes: [], bindings: [],
+    byId: { get: (id: string) => doc.getShape(id) } as unknown as CanvasDocument['byId'],
+  }
+}
+
+// Convert a WORLD point into the frame `shape.x`/`shape.y` ITSELF lives in —
+// i.e. `shape`'s PARENT's world rigid transform, NOT the shape's own (which
+// would additionally undo the shape's OWN rotation — the wrong operation:
+// x/y is defined relative to the PARENT, prior to the shape composing its
+// own rotate-then-translate on top, per geometry.ts's ROTATION CONVENTION/
+// composeTransform). THE C8 DEFERRAL CLOSURE this function exists for:
+// ResizeShapes/RotateShapes below convert their world-space anchor/center
+// through this before composing with a shape's x/y, fixing both cases'
+// previously-documented SCOPE LIMIT — a nested shape under a ROTATED parent
+// was silently wrong because anchor/center (world) and shape.x/y (parent-
+// local) were composed as though they shared one frame, which coincidentally
+// holds for a ROOT-parented shape (the page has no rotation of its own) but
+// not for a shape nested under a rotated ancestor.
+//
+// Missing parent (shape.parentId names a page, or a vanished ancestor — the
+// same "treat as page-root" tolerance canvas-model's worldTransform itself
+// documents for this exact situation) means the parent's frame IS the world
+// frame, so the point passes through unchanged with no canvas-model call at
+// all — this is also why a ROOT-parented shape's Resize/Rotate math is
+// UNCHANGED by this fix (worldToParentFrame is the identity for it).
+//
+// Only the position (anchor/center) needs this conversion — a shape's own
+// `rotation` field composes additively regardless of the parent's rotation
+// (world rotation = parent.rotation + shape.rotation, and parent.rotation is
+// untouched by rotating a child), so RotateShapes's `shape.rotation +
+// intent.dRadians` needs no corresponding fix.
+function worldToParentFrame(doc: CanvasDoc, shape: Shape, worldPoint: Point): Point {
+  const parent = doc.getShape(shape.parentId)
+  if (!parent) return worldPoint
+  return toLocalPoint(liveDocAdapter(doc), parent, worldPoint)
 }
 
 // Drop any id whose selection has an ANCESTOR also present in `ids` — the
