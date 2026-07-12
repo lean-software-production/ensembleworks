@@ -16,7 +16,7 @@
  * instead of having to guess whether the route exists.
  */
 import express from 'express'
-import type { CanvasActors } from '../canvas-v2/actors.ts'
+import type { CanvasActors, EvictionRecord } from '../canvas-v2/actors.ts'
 import type { ShadowMirror } from '../canvas-v2/shadow.ts'
 
 export interface CanvasMetricsDeps {
@@ -45,7 +45,15 @@ export function createCanvasMetricsRouter(deps: CanvasMetricsDeps): express.Rout
 		}
 
 		const sync: Record<string, { pendingImports: number; malformedFrames: number; tainted: string | null }> = {}
-		const evictions: Record<string, { count: number; lastReason: string }> = {}
+		// Declared as the registry's own EvictionRecord type (not a hand-copied
+		// inline shape) so the payload's declared type can never silently drift
+		// from what the runtime spread below actually serves — the F1 spec
+		// review caught exactly that drift once. Alarm guidance: key on
+		// `taintCount > 0` / `lastTaintReason` — the taint pair is STICKY
+		// (never overwritten by an idle eviction; see EvictionRecord's doc
+		// comment in ../canvas-v2/actors.ts), so routine idle churn cannot
+		// noise-trip a taint alarm.
+		const evictions: Record<string, EvictionRecord> = {}
 		if (deps.canvasActors) {
 			for (const [roomId, actor] of deps.canvasActors.entries()) {
 				sync[roomId] = {

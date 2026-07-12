@@ -19,19 +19,29 @@ const SERVER_PEER_ID = 1n
  * one in its place (a tainted replacement, or — F1 — an idle actor's
  * lazily-reconstructed successor) — the fresh actor's `.tainted` reads null
  * either way, so without a separate record the fact that THIS room was ever
- * evicted is invisible the instant getOrCreate replaces it. `count`
- * accumulates across EVERY eviction this room has ever had, taint and idle
- * evictions sharing one counter; `lastReason`/`lastKind` describe the MOST
- * RECENT eviction only (not cumulative — read it as "why did the last
- * replacement happen", pairing with `count` for "how often"). `lastKind`
- * distinguishes the two causes for operators: 'taint' means durability was
- * actually lost (see DocumentActor's tainted doc comment — investigate the
- * storage layer); 'idle' is routine housekeeping (an unused room's doc +
- * SQLite handle was released — nothing was wrong, do not page anyone). */
+ * evicted is invisible the instant getOrCreate replaces it.
+ *
+ * The two causes get SEPARATE counter/reason pairs, deliberately NOT a shared
+ * {count, lastReason, lastKind} triple: after a taint eviction, the healthy
+ * replacement will ROUTINELY idle-evict some time later (that is F1 working
+ * as designed), and a shared last-slot would let that routine churn OVERWRITE
+ * the durability-loss incident — re-introducing the exact visibility loss
+ * this record was built to prevent, and noise-tripping any count-based alarm
+ * with ordinary idle patterns. The taint fields are STICKY: only another
+ * taint eviction touches taintCount/lastTaintReason, so an alarm keyed on
+ * `taintCount > 0` is immune to idle churn. Per pair: the count accumulates
+ * across every eviction of that kind this room has ever had; the reason is
+ * the MOST RECENT of that kind only (null until the first). 'taint' means
+ * durability was actually lost (see DocumentActor's tainted doc comment —
+ * investigate the storage layer); 'idle' is routine housekeeping (an unused
+ * room's doc + SQLite handle was released — nothing was wrong, do not page
+ * anyone). */
 export interface EvictionRecord {
-	count: number
-	lastReason: string
-	lastKind: 'taint' | 'idle'
+	taintCount: number
+	idleCount: number
+	/** STICKY — never overwritten by an idle eviction. */
+	lastTaintReason: string | null
+	lastIdleReason: string | null
 }
 
 export interface CanvasActors {
@@ -55,7 +65,8 @@ export interface CanvasActors {
 	 * connectionCount, read fresh — a live socket is NEVER evicted regardless
 	 * of how stale its last-activity timestamp is). Eviction = actor.close()
 	 * (idempotent, close-path compact persists) + registry removal + an
-	 * EvictionRecord with lastKind 'idle'. Called externally on a timer (see
+	 * idle-side EvictionRecord increment (idleCount/lastIdleReason — the taint
+	 * pair is sticky and untouched). Called externally on a timer (see
 	 * app.ts) — this registry has no clock of its own beyond the injected
 	 * `now`. Per-actor exception-safe: one actor's close() throwing is logged
 	 * and skipped, every other idle actor in the same sweep is still evicted
@@ -80,9 +91,16 @@ export function createCanvasActors(databaseDir: string, opts: { now?: () => numb
 	// timestamp from the room id it happens to share.
 	const lastActivity = new Map<string, number>()
 
+	// Two increment paths, one per kind — see EvictionRecord's doc comment for
+	// why the taint pair is sticky and never shares a slot with idle churn.
 	function recordEviction(roomId: string, reason: string, kind: 'taint' | 'idle'): void {
-		const prev = evictions.get(roomId)
-		evictions.set(roomId, { count: (prev?.count ?? 0) + 1, lastReason: reason, lastKind: kind })
+		const prev = evictions.get(roomId) ?? { taintCount: 0, idleCount: 0, lastTaintReason: null, lastIdleReason: null }
+		evictions.set(
+			roomId,
+			kind === 'taint'
+				? { ...prev, taintCount: prev.taintCount + 1, lastTaintReason: reason }
+				: { ...prev, idleCount: prev.idleCount + 1, lastIdleReason: reason },
+		)
 	}
 
 	function construct(roomId: string): DocumentActor {

@@ -106,7 +106,8 @@ const shape = (id: string) =>
 // Test 4 — a tainted-actor eviction is recorded (D3's metrics gap-fix): the
 // fresh replacement actor reports healthy, so taint visibility would
 // otherwise vanish the instant getOrCreate replaces it. evictions() must
-// surface a per-room {count, lastReason} that survives the replacement.
+// surface a per-room record with a taint-scoped counter/reason that survives
+// the replacement.
 // ---------------------------------------------------------------------------
 {
 	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-actors-evictions-'))
@@ -136,8 +137,10 @@ const shape = (id: string) =>
 	assert.notEqual(fresh, actor, 'sanity: eviction really happened')
 	const record = actors.evictions().get('room-e')
 	assert.ok(record, 'an eviction record exists for room-e after the tainted actor was replaced')
-	assert.equal(record!.count, 1, 'first eviction for this room counts as 1')
-	assert.match(record!.lastReason, /disk hiccup \(injected, evictions test\)/, 'lastReason carries the taint message')
+	assert.equal(record!.taintCount, 1, 'first taint eviction for this room counts as 1')
+	assert.match(record!.lastTaintReason!, /disk hiccup \(injected, evictions test\)/, 'lastTaintReason carries the taint message')
+	assert.equal(record!.idleCount, 0, 'no idle evictions have happened')
+	assert.equal(record!.lastIdleReason, null, 'no idle reason recorded yet')
 
 	// A second taint+eviction cycle on the SAME room increments the count.
 	const store2 = (fresh as unknown as { store: CanvasV2Store }).store
@@ -154,8 +157,8 @@ const shape = (id: string) =>
 	assert.ok(fresh.tainted, 'precondition: the fresh actor is now ALSO tainted')
 	actors.getOrCreate('room-e')
 	const record2 = actors.evictions().get('room-e')
-	assert.equal(record2!.count, 2, 'a second eviction on the same room increments the count')
-	assert.match(record2!.lastReason, /second taint/, 'lastReason reflects the MOST RECENT eviction')
+	assert.equal(record2!.taintCount, 2, 'a second taint eviction on the same room increments taintCount')
+	assert.match(record2!.lastTaintReason!, /second taint/, 'lastTaintReason reflects the MOST RECENT taint eviction')
 
 	// entries() surfaces the live (post-eviction) actor set for introspection.
 	assert.ok(actors.entries().has('room-e'), 'entries() lists the live actor for room-e')
@@ -163,7 +166,7 @@ const shape = (id: string) =>
 
 	actors.close()
 	rmSync(dir, { recursive: true, force: true })
-	console.log('ok: actors — evictions() records per-room {count, lastReason} across replacements')
+	console.log('ok: actors — evictions() records per-room taint counters/reasons across replacements')
 }
 
 // ---------------------------------------------------------------------------
@@ -274,9 +277,13 @@ const shape = (id: string) =>
 }
 
 // ---------------------------------------------------------------------------
-// Test 8 (F1) — taint evictions and idle evictions share one per-room
-// eviction counter but are distinguishable via lastKind; neither regresses
-// the other's visibility.
+// Test 8 (F1) — the 3am-operator property: after a taint eviction, the
+// healthy replacement will ROUTINELY idle-evict some time later (that's F1
+// working as designed) — and that routine idle eviction must NOT erase or
+// dilute the durability-loss incident. taintCount / lastTaintReason are
+// STICKY: only another taint eviction may touch them; idleCount /
+// lastIdleReason track the idle churn independently. An alarm keyed on
+// taintCount > 0 is therefore immune to ordinary idle patterns.
 // ---------------------------------------------------------------------------
 {
 	const dir = mkdtempSync(path.join(tmpdir(), 'canvas-actors-idle-taint-mix-'))
@@ -300,24 +307,31 @@ const shape = (id: string) =>
 	assert.ok(actor.tainted, 'precondition: tainted')
 	const fresh = actors.getOrCreate('room-mix')
 	let record = actors.evictions().get('room-mix')
-	assert.equal(record!.count, 1, 'first eviction (taint) counts as 1')
-	assert.equal(record!.lastKind, 'taint', 'taint eviction is recorded with lastKind "taint"')
+	assert.equal(record!.taintCount, 1, 'the taint eviction counts on taintCount')
+	assert.match(record!.lastTaintReason!, /disk hiccup \(injected, mix test\)/, 'lastTaintReason carries the taint message')
+	assert.equal(record!.idleCount, 0, 'no idle eviction yet')
+	assert.equal(record!.lastIdleReason, null, 'no idle reason yet')
 
-	// Then: idle-evict the fresh replacement (it has zero live connections —
-	// `fresh` was constructed by getOrCreate above and nothing has connected
-	// to it yet).
+	// Then: the fresh replacement idle-evicts in the fullness of time (it has
+	// zero live connections — nothing has connected to it since getOrCreate
+	// constructed it).
 	assert.equal(fresh.connectionCount, 0, 'precondition: the fresh replacement has no connections')
 	clock += idleTtlMs + 1
 	actors.sweepIdle(idleTtlMs)
 	assert.ok(!actors.entries().has('room-mix'), 'the fresh replacement is idle-evicted in turn')
 	record = actors.evictions().get('room-mix')
-	assert.equal(record!.count, 2, 'the idle eviction increments the SAME per-room counter the taint eviction started')
-	assert.equal(record!.lastKind, 'idle', 'lastKind now reflects the most recent (idle) eviction')
-	assert.match(record!.lastReason, /idle/, 'lastReason describes the idle cause, not the stale taint message')
+	assert.equal(record!.taintCount, 1, 'STICKY: the idle eviction did NOT touch taintCount')
+	assert.match(
+		record!.lastTaintReason!,
+		/disk hiccup \(injected, mix test\)/,
+		'STICKY: lastTaintReason still names the durability-loss incident, not the routine idle churn',
+	)
+	assert.equal(record!.idleCount, 1, 'the idle eviction counts on its own idleCount')
+	assert.match(record!.lastIdleReason!, /idle/, 'lastIdleReason describes the idle cause')
 
 	actors.close()
 	rmSync(dir, { recursive: true, force: true })
-	console.log('ok: actors — taint and idle evictions share one counter, distinguished by lastKind; taint visibility unregressed')
+	console.log('ok: actors — taint records are sticky: an idle eviction of the replacement never erases the incident')
 }
 
 // ---------------------------------------------------------------------------
