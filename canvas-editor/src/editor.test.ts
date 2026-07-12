@@ -179,7 +179,7 @@ const normalize = (m: CanvasDocument) => ({
 }
 
 // ============================================================================
-// 6. ResizeSelection: scales x/y about a fixed anchor and props.w/h by the
+// 6. ResizeShapes: scales x/y about a fixed anchor and props.w/h by the
 //    same per-axis factor.
 // ============================================================================
 {
@@ -188,7 +188,7 @@ const normalize = (m: CanvasDocument) => ({
   // Anchor at the box's own origin (20,20): scaling by (2, 3) should leave
   // the anchor fixed and double/triple the box's size, x/y unchanged (the
   // anchor coincides with x/y here, so (x - anchor) is 0 on both axes).
-  editor.apply({ type: 'ResizeSelection', ids: ['shape:box'], anchor: { x: 20, y: 20 }, scaleX: 2, scaleY: 3 })
+  editor.apply({ type: 'ResizeShapes', ids: ['shape:box'], anchor: { x: 20, y: 20 }, scaleX: 2, scaleY: 3 })
   const s = editor.doc.getShape('shape:box')!
   assert.equal(s.x, 20)
   assert.equal(s.y, 20)
@@ -197,16 +197,16 @@ const normalize = (m: CanvasDocument) => ({
 
   // Anchor away from x/y: the origin itself must move too (scale about a
   // fixed point, not the shape's own corner).
-  editor.apply({ type: 'ResizeSelection', ids: ['shape:box'], anchor: { x: 0, y: 0 }, scaleX: 2, scaleY: 2 })
+  editor.apply({ type: 'ResizeShapes', ids: ['shape:box'], anchor: { x: 0, y: 0 }, scaleX: 2, scaleY: 2 })
   const s2 = editor.doc.getShape('shape:box')!
   assert.equal(s2.x, 40, 'x scaled about the anchor: 0 + (20-0)*2')
   assert.equal(s2.y, 40)
 
-  console.log('ok: ResizeSelection scales x/y about the anchor and props.w/h per axis')
+  console.log('ok: ResizeShapes scales x/y about the anchor and props.w/h per axis')
 }
 
 // ============================================================================
-// 7. RotateSelection: orbits the shape's origin around `center` and spins
+// 7. RotateShapes: orbits the shape's origin around `center` and spins
 //    its own rotation field by the same delta.
 // ============================================================================
 {
@@ -214,14 +214,14 @@ const normalize = (m: CanvasDocument) => ({
   editor.apply({ type: 'CreateShape', shape: shape('shape:r', { x: 10, y: 0 }) })
   // Rotate 90 degrees (pi/2) about the origin (0,0): (10,0) -> (0,10) under
   // the package's rotation convention (x' = x cosθ - y sinθ, y' = x sinθ + y cosθ).
-  editor.apply({ type: 'RotateSelection', ids: ['shape:r'], center: { x: 0, y: 0 }, dRadians: Math.PI / 2 })
+  editor.apply({ type: 'RotateShapes', ids: ['shape:r'], center: { x: 0, y: 0 }, dRadians: Math.PI / 2 })
   const s = editor.doc.getShape('shape:r')!
   const EPS = 1e-9
   assert.ok(Math.abs(s.x - 0) < EPS, `x ~= 0, got ${s.x}`)
   assert.ok(Math.abs(s.y - 10) < EPS, `y ~= 10, got ${s.y}`)
   assert.ok(Math.abs(s.rotation - Math.PI / 2) < EPS, 'rotation field accumulates the delta')
 
-  console.log('ok: RotateSelection orbits the origin about center and spins rotation')
+  console.log('ok: RotateShapes orbits the origin about center and spins rotation')
 }
 
 // ============================================================================

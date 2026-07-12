@@ -213,14 +213,14 @@ export class Editor {
         return { state, docMutated: mutated, stateChanged: false }
       }
 
-      case 'ResizeSelection': {
+      case 'ResizeShapes': {
         let mutated = false
         for (const id of intent.ids) {
           const shape = this.doc.getShape(id)
           if (!shape) continue
           // Scale the shape's own origin about the fixed anchor, then scale
           // any explicit w/h props by the same per-axis factor. SCOPE LIMIT
-          // (documented on ResizeSelection in intents.ts): anchor and
+          // (documented on ResizeShapes in intents.ts): anchor and
           // shape.x/y are assumed to share a coordinate frame — correct for
           // page-rooted, unrotated-ancestor shapes (the common case a
           // marquee-resize acts on); a shape nested under a rotated parent
@@ -237,7 +237,7 @@ export class Editor {
         return { state, docMutated: mutated, stateChanged: false }
       }
 
-      case 'RotateSelection': {
+      case 'RotateShapes': {
         let mutated = false
         const cos = Math.cos(intent.dRadians), sin = Math.sin(intent.dRadians)
         for (const id of intent.ids) {
@@ -248,7 +248,7 @@ export class Editor {
           // position orbits", the same composition rule
           // canvas-model/src/geometry.ts's composeTransform documents for a
           // parent-child pair, applied here to a transient rotation instead.
-          // SCOPE LIMIT (identical to ResizeSelection's above, documented
+          // SCOPE LIMIT (identical to ResizeShapes's above, documented
           // in both places so C8's implementer finds it either way):
           // `center` and shape.x/y are assumed to share a coordinate frame
           // — correct for page-rooted, unrotated-ancestor shapes; a shape

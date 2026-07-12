@@ -6,14 +6,18 @@
 // canvas-sync, or server, and never touches a DOM global or a wall
 // clock/PRNG directly — every clock/id/PRNG the editor needs is injected via
 // the Editor constructor (`now`, `random`) instead. Copy-adapted from
-// canvas-sync/src/boundary.test.ts, HARDENED one step further than that
-// original: require('x'), dynamic import('x'), AND a bare side-effect
-// `import 'x'` (no `from`, no parens — valid ES module syntax that
-// canvas-sync's from|require\(|import\( set does not catch) all resolve
-// from this workspace today (deps hoisted to the root node_modules), so a
-// package-name check must match all three styles, not just the first two.
-// Probe-proven: the original two-style pattern let `import 'loro-crdt'`
-// through silently in this file during development.
+// canvas-sync/src/boundary.test.ts, HARDENED one step further: require('x'),
+// dynamic import('x'), AND a bare side-effect `import 'x'` (no `from`, no
+// parens — valid ES module syntax the original two-style
+// from|require\(|import\( set did not catch; probe-proven here, then
+// backported to canvas-sync) all resolve from this workspace today (deps
+// hoisted to the root node_modules), so a package-name check must match all
+// three styles.
+// COMMENTS ARE IN SCOPE, deliberately: the regexes scan raw file text with
+// no comment-stripping, so even a comment spelling out a forbidden call
+// (e.g. the literal wall-clock-read expression) fails the test. That keeps
+// the scan simple and unbypassable; src comments just phrase around the
+// forbidden spellings, as this file's own header does.
 // NOTE: import.meta.dirname here is canvas-editor/src itself, so the glob is
 // scanned relative to THIS directory (pattern '**/*.ts', not 'src/**/*.ts' —
 // that would look for a nested canvas-editor/src/src/).

@@ -47,8 +47,8 @@ export interface TranslateShapes { readonly type: 'TranslateShapes'; readonly id
  * transform and its documented scope limit (assumes `anchor` and each
  * shape's x/y share a coordinate frame; nested-rotated-parent resize is
  * deferred to C8 alongside the rest of tldraw-parity). */
-export interface ResizeSelection {
-  readonly type: 'ResizeSelection'
+export interface ResizeShapes {
+  readonly type: 'ResizeShapes'
   readonly ids: readonly string[]
   readonly anchor: Point
   readonly scaleX: number
@@ -61,7 +61,7 @@ export interface ResizeSelection {
  * position orbits" composition canvas-model/src/geometry.ts's
  * composeTransform documents for parent-child chains, applied here to a
  * transient rotation delta instead of a parent relationship. SCOPE LIMIT
- * (the same one ResizeSelection documents above, for the same reason):
+ * (the same one ResizeShapes documents above, for the same reason):
  * `center` and each shape's x/y are assumed to share a coordinate frame —
  * correct for page-rooted, unrotated-ancestor shapes; a shape nested under
  * a ROTATED parent is silently wrong here (its x/y lives in the parent's
@@ -69,8 +69,8 @@ export interface ResizeSelection {
  * other mixes frames). Nested-rotated-parent correctness is deferred to C8
  * (the transform tool), which owns converting center/anchor into each
  * shape's parent frame before emitting these intents. */
-export interface RotateSelection {
-  readonly type: 'RotateSelection'
+export interface RotateShapes {
+  readonly type: 'RotateShapes'
   readonly ids: readonly string[]
   readonly center: Point
   readonly dRadians: number
@@ -120,8 +120,10 @@ export interface StartArrow {
  * shape to `end` expressed as a LOCAL offset from the shape's own x/y (the
  * arrow's x/y is its start point, by StartArrow's convention above), then —
  * if `toBinding` is present — puts the END binding (see StartArrow's id
- * convention). Silent no-op on the shape update if `id` doesn't resolve
- * (mirrors CanvasDoc.updateProps's own contract). */
+ * convention). If `id` doesn't resolve (the arrow vanished — e.g. a remote
+ * delete raced the local gesture) the WHOLE intent is a silent no-op:
+ * neither the props update NOR the binding is written, so a vanished arrow
+ * can never leave a dangling binding behind. */
 export interface CompleteArrow {
   readonly type: 'CompleteArrow'
   readonly id: string
@@ -143,8 +145,8 @@ export interface EndEdit { readonly type: 'EndEdit' }
 export type Intent =
   | CreateShape
   | TranslateShapes
-  | ResizeSelection
-  | RotateSelection
+  | ResizeShapes
+  | RotateShapes
   | ReparentShapes
   | DeleteShapes
   | SetText
