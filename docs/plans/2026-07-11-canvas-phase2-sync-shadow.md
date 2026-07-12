@@ -1542,32 +1542,49 @@ lockfile/typecheck fixups: `chore(canvas-phase2): full-suite + typecheck green`.
 
 ## Done criteria (maps to Phase 2 scope)
 
-- [ ] **`canvas-sync` workspace** exists, clean-room (boundary test green),
-      registered in root `package.json` + typecheck + `AGENTS.md`. [B1, F1]
-- [ ] **Loro update exchange protocol** (client + server halves) over an injected
-      transport, with sync-request **rebase** on (re)connect. [B2–B4]
-- [ ] **Presence** via `EphemeralStore` (cursor, viewport, stamp, presenting
+- [x] **`canvas-sync` workspace** exists, clean-room (boundary test green),
+      registered in root `package.json` + typecheck + `AGENTS.md`. [B1, F1] —
+      `canvas-sync/src/boundary.test.ts`; `AGENTS.md` Workspaces line.
+- [x] **Loro update exchange protocol** (client + server halves) over an injected
+      transport, with sync-request **rebase** on (re)connect. [B2–B4] —
+      `canvas-sync/src/protocol.test.ts`, `client-peer.test.ts`,
+      `server-peer.test.ts`, `memory-transport.test.ts`.
+- [x] **Presence** via `EphemeralStore` (cursor, viewport, stamp, presenting
       tokens) exercised headlessly; deeper presence deferred to Phase 3 (Open
-      Q4). [B5]
-- [ ] **Room host document actor** in `server`: one Loro doc per room, append-log
+      Q4). [B5] — `canvas-sync/src/presence.test.ts`, `presence-peers.test.ts`.
+- [x] **Room host document actor** in `server`: one Loro doc per room, append-log
       + periodic **shallow-snapshot compaction** into per-room SQLite, under
-      `DATABASE_DIR/canvas-v2/`. [C1–C2]
-- [ ] **Incremental sync** (`exportUpdate(sinceVersion)` + `versionBytes`) —
-      Phase-1 deferral closed. [A2]
-- [ ] **Deterministic repair pass** (pure `repairPlan` + `canvas-doc.repair()`)
-      run after every remote merge on every peer; idempotent. [A4]
-- [ ] Full document — **pages + bindings**, not just shapes — round-trips through
-      the CRDT (prereq for real merges + dangling-binding repair). [A1]
-- [ ] **Shadow mode**: every live tldraw room clock-polled → `fromTldraw` →
+      `DATABASE_DIR/canvas-v2/`. [C1–C2] — `server/src/canvas-v2/store.test.ts`,
+      `actor.test.ts`, `actors.test.ts`.
+- [x] **Incremental sync** (`exportUpdate(sinceVersion)` + `versionBytes`) —
+      Phase-1 deferral closed. [A2] — `canvas-doc/src/incremental.test.ts`.
+- [x] **Deterministic repair pass** (pure `repairPlan` + `canvas-doc.repair()`)
+      run after every remote merge on every peer; idempotent. [A4] —
+      `canvas-doc/src/repair.test.ts`.
+- [x] Full document — **pages + bindings**, not just shapes — round-trips through
+      the CRDT (prereq for real merges + dangling-binding repair). [A1] —
+      `canvas-doc/src/bindings-pages.test.ts`, `tree-ops.test.ts`.
+- [x] **Shadow mode**: every live tldraw room clock-polled → `fromTldraw` →
       `reconcile` into a Loro doc, with periodic **divergence detection** and
-      **metrics**, gated `EW_CANVAS_SHADOW`, **zero user exposure**. [D1–D3]
-- [ ] **Test rigs:** property-based convergence (per-commit, shrinking) [E1];
+      **metrics**, gated `EW_CANVAS_SHADOW`, **zero user exposure**. [D1–D3] —
+      `server/src/canvas-v2/reconcile.test.ts`, `shadow.test.ts`,
+      `server/src/features/canvas-metrics.test.ts`.
+- [x] **Test rigs:** property-based convergence (per-commit, shrinking) [E1];
       fuzzing (garbage never crashes the peer) [E2]; crash recovery (kill -9,
       replay, converge) [E3]; nightly soak + per-commit smoke, chaos proxy,
-      flat-RSS + bounded-growth assertions [E4].
-- [ ] `/sync/v2` WS mounted but `EW_CANVAS_SYNC`-gated off; no user-facing
-      surface; tools manifest still 27. [C3, D3, F2]
-- [ ] `bun run typecheck` and `bun run test` green (modulo the Task-0 baseline).
+      flat-RSS + bounded-growth assertions [E4]. —
+      `canvas-sync/src/convergence.test.ts`; `canvas-sync/src/fuzz.test.ts`;
+      `server/src/canvas-v2/crash-recovery.test.ts`;
+      `canvas-sync/src/soak-smoke.test.ts` + `canvas-sync/soak-cli.ts` +
+      `.github/workflows/canvas-soak.yml`.
+- [x] `/sync/v2` WS mounted but `EW_CANVAS_SYNC`-gated off; no user-facing
+      surface; tools manifest still 27. [C3, D3, F2] —
+      `server/src/canvas-v2/canvas-v2-sync-mount.test.ts`,
+      `server/src/canvas-v2/ws-transport.test.ts`,
+      `server/src/tools-api.test.ts` (27-tool manifest, exempt set unchanged).
+- [x] `bun run typecheck` and `bun run test` green (modulo the Task-0 baseline).
+      — Unit 12 gate: `bun run typecheck` exit 0 all workspaces; `bun run test`
+      141/141.
 
 ---
 
@@ -1636,3 +1653,78 @@ client work.
   Update (offline edits have no other path upstream; delta-since-acked-version
   is a deferred optimization); both peers have real idempotent `close()`
   semantics (server `connect()` after close throws).
+
+---
+
+## Execution notes (2026-07-12)
+
+### Accepted deferrals & scoped decisions
+
+- `reconnect()` backfills the client's FULL history (correct-but-fat; Loro
+  imports are idempotent). A since-last-acked-version delta optimization is
+  deferred — and dangerous to do naively: gapped deltas → pending imports (see
+  next).
+- Pending imports: relay+persist gates are `changed || pending`. No
+  re-request mechanism exists for a server holding pending ops (rescue = the
+  sender's own reconnect backfill); a server→sender `SyncRequest` would be a
+  protocol extension, deferred. `SyncServerPeer.pendingImports` (and
+  `malformedFrames`) surface anomalies via `/api/canvas/metrics`. Residual
+  pre-existing edge: a client connecting DURING a pending window cannot
+  receive the pended ops until its own next reconnect (handshake exports
+  exclude pended ops).
+- `repair()` costs 7.36ms/call at 1k shapes (~70% list*() WASM marshal),
+  linear in doc size; gated on changed imports. The O(n) `nodeByShapeId` scan
+  behind it is now MEASURED as material (it also drives the soak's
+  superlinear growth: 4.3GB peak RSS at 20k ops) — **graduated from
+  "deferred" to a Phase 3 prerequisite: an id→node index before any renderer
+  traffic**.
+- Nightly soak runs 5 clients × 20k ops (the largest end-to-end-validated
+  scale; the plan's illustrative 200k×10 would exceed runner memory — the
+  20k-op run already peaks ~4.3GB RSS, ~60% of a standard GitHub-hosted
+  runner's 7GB). Revisit after the id→node index; also consider a
+  DocumentActor-based soak variant (with compaction) for a prod-faithful
+  growth curve — the canvas-sync rig has no compaction by design, so its
+  growth curve overstates prod.
+- Bounded-growth K=30×300B is calibrated only for the shipped chaos 0.3/0.5
+  configs; flat-RSS tolerance is 20x (measured no-compaction baseline ~10x).
+- Idle actor eviction is deferred to pre-Phase-3; no app-wide shutdown hook
+  exists yet (documented in `server/src/app.ts`; when one is added: wire
+  `canvasActors.close()` into it, and note `http.Server.close()` may hang with
+  abruptly-terminated sockets in flight).
+- Taint semantics: a persist failure taints the actor, leaves a durable
+  prefix on disk, closes the peer, and refuses further connects; the
+  close-path compact may retroactively rescue the in-memory state (outcome
+  logged either way); the actor registry keeps eviction records for
+  post-eviction incident visibility.
+- `stableStringify`'s key sorting is guarded by a unit pin only — a
+  single-engine rig structurally cannot detect de-sorting (Loro marshals key
+  order identically for all peers). Its real locus of risk is
+  cross-representation comparison (converter-built objects vs Loro
+  round-trips).
+- Known-lossy-but-convergent repair edges: `dropShape` on a duplicated id
+  also drops the valid twin; an orphaned loser entry can emit
+  `reparentToRoot` that relocates the winner. Deterministic, peer-identical,
+  UX-lossy — revisit if Phase 3 surfaces repair effects to users.
+- The fuzz corpus pin `malformedFrames=999/1000` is coupled to loro-crdt
+  1.13.6 (re-pin on upgrade).
+- Presence: publishes are NOT rate-limited (Phase 3's renderer must
+  throttle); `PresenceStore.all()` includes self (renderers filter);
+  constructed stores must be `destroy()`'d or the WASM timer holds the
+  process open.
+- Zero-page docs: orphans are deliberately unrepairable (no reparent target;
+  the violation is left standing).
+- Phase-1 deferrals still open: `zodInput` middleware, O(n²) clustering cap,
+  run-tests halt-on-first.
+
+### What the review process caught before merge (for reviewer orientation)
+
+The plan's C2 persistence design would have lost all client edits (imports
+never fire `subscribeLocalUpdates` — probe-proven, redesigned durable-first
+with prod-parity persist-before-broadcast); concurrent offline delete+recreate
+converged to duplicate physical nodes per shape id (52% of rig seeds; healed
+by the new `uniqueIds`/`dedupeShape` repair with content-based winner
+election); `JSON.stringify` comparators were key-order-sensitive against
+Loro's key reordering (permanent churn + false divergence); the reconcile
+sketch's cascade-delete data loss; and three whole-process crash modes at
+real-I/O boundaries (malformed ws frames, persist-failure poisoning, driver
+clock-read) — all fixed with red-first tests.

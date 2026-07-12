@@ -1,12 +1,14 @@
 # Agent notes — EnsembleWorks
 
 Multiplayer infinite-canvas team room: tldraw + tmux terminals + LiveKit spatial audio.
-Workspaces: `contracts`, `canvas-model`, `canvas-doc`, `client`, `server`,
-`transcriber`, `cli`, `discord`, `e2e` (Bun workspaces). `discord` is the Discord
-bridge bot (inbound messages → frame stickies; outbound summaries → bound
-channels; internal /post on :8790). `canvas-model` (pure typed canvas model) and
-`canvas-doc` (Loro CRDT wrapper) are the canvas-rewrite foundations — clean-room,
-never import server/tldraw.
+Workspaces: `contracts`, `canvas-model`, `canvas-doc`, `canvas-sync`, `client`,
+`server`, `transcriber`, `cli`, `discord`, `e2e` (Bun workspaces). `discord` is
+the Discord bridge bot (inbound messages → frame stickies; outbound summaries →
+bound channels; internal /post on :8790). `canvas-model` (pure typed canvas
+model) and `canvas-doc` (Loro CRDT wrapper) are the canvas-rewrite foundations —
+clean-room, never import server/tldraw. `canvas-sync` (Loro update exchange +
+presence over an injected transport; clean-room, never imports
+server/tldraw/ws).
 
 ## Local dev — bin/dev
 
