@@ -129,6 +129,11 @@ export interface SoakResult {
 // run-to-run variance (different seeds/chaos/pool sizes) while still
 // catching a genuine multi-x regression (e.g. a repair/dedupe bug that stops
 // reclaiming tombstones at all).
+// CAVEAT: this K=30 calibration is scoped to the two shipped configurations
+// above (chaos 0.3 smoke, chaos 0.5 nightly). chaos=0 / low-shape-count
+// configs measured ~21.9KB over just 2 live shapes — far outside this
+// envelope — and WILL false-positive the tripwire; recalibrate before adding
+// any new runSoak() caller with different parameters.
 export const BOUNDED_GROWTH_K = 30
 export const AVG_SHAPE_SIZE_BYTES = 300
 

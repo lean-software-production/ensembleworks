@@ -4,7 +4,8 @@
 // for the full design + the nightly's real parameters). Runs under `bun run
 // test` on every commit, so it must complete in well under a second — the
 // nightly workflow (.github/workflows/canvas-soak.yml) is what exercises the
-// real scale (10 clients × 200k ops).
+// real scale — 5 clients × 20,000 ops (see canvas-soak.yml for the
+// calibration rationale).
 import assert from 'node:assert/strict'
 import { AVG_SHAPE_SIZE_BYTES, BOUNDED_GROWTH_K, runSoak } from './soak.js'
 
