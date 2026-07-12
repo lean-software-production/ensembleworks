@@ -158,15 +158,33 @@ export function worldBounds(doc: CanvasDocument, shape: Shape): Bounds {
   }
 }
 
-// Is `point` (world/page space) inside this shape's rotated box? Inverse-
-// transforms the point into the shape's local frame (undo translate, then
-// undo rotate by rotating -rotation) and tests it against the axis-aligned
-// local box — cheaper and exactly equivalent to testing the point against
-// the rotated quad in world space. Inclusive of the boundary (matches
-// worldBounds treating min/max as part of the box).
-export function hitTestPoint(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+// Inverse-transform a WORLD point into `shape`'s LOCAL frame: undo the
+// translate, then undo the rotate (by rotating -rotation) — the exact
+// inverse of worldTransform + a forward rotate/translate. Used by
+// hitTestPoint (test against the local box) and by snapping.ts's
+// resolveArrowAnchor (Seam C7's normalized arrow anchors need this same
+// operation), so it's factored out once rather than duplicated.
+export function toLocalPoint(doc: CanvasDocument, shape: Shape, point: Point): Point {
   const t = worldTransform(doc, shape)
-  const local = rotatePoint({ x: point.x - t.x, y: point.y - t.y }, -t.rotation)
+  return rotatePoint({ x: point.x - t.x, y: point.y - t.y }, -t.rotation)
+}
+
+// Forward-transform a LOCAL point (in `shape`'s own unrotated frame) into
+// WORLD space — the exact inverse of toLocalPoint. Used by snapping.ts's
+// anchorToWorld (the round-trip counterpart of resolveArrowAnchor).
+export function toWorldPoint(doc: CanvasDocument, shape: Shape, point: Point): Point {
+  const t = worldTransform(doc, shape)
+  const r = rotatePoint(point, t.rotation)
+  return { x: r.x + t.x, y: r.y + t.y }
+}
+
+// Is `point` (world/page space) inside this shape's rotated box? Inverse-
+// transforms the point into local space (toLocalPoint) and tests it against
+// the axis-aligned local box — cheaper and exactly equivalent to testing
+// the point against the rotated quad in world space. Inclusive of the
+// boundary (matches worldBounds treating min/max as part of the box).
+export function hitTestPoint(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+  const local = toLocalPoint(doc, shape, point)
   const lb = localBounds(shape)
   return local.x >= lb.minX && local.x <= lb.maxX && local.y >= lb.minY && local.y <= lb.maxY
 }
