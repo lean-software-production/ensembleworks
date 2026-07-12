@@ -1131,3 +1131,206 @@ All 13 open questions ratified with the plan's defaults, with ONE amendment:
 - Preflight verdicts (P1–P3) must be recorded durably in this file under a
   `## Preflight verdicts` section (committed), not only in an agent's final
   message — Seam G implements from that record.
+
+## Preflight verdicts (2026-07-12)
+
+All probes run in `.worktrees/canvas-phase3` (branch `canvas-phase3`), scratch
+state reverted after each; `git status` is clean at the end of this record.
+
+### Task 0: baseline
+
+- `git branch --show-current` → `canvas-phase3`.
+- `bun install` → `Checked 392 installs across 445 packages (no changes)`.
+- `bun run typecheck` → exit 0 across all 11 filtered workspaces (contracts,
+  canvas-model, canvas-doc, canvas-sync, client, server, transcriber, cli,
+  `bunx tsc -p bin/tsconfig.json`, discord, e2e).
+- `bun run test` → `all 142 suites passed`.
+
+### P1: loro-crdt in the Vite browser build — VERDICT: candidate (a),
+### vite-plugin-wasm + vite-plugin-top-level-await, with one extra option
+
+**The plan's premise was half right.** `loro-crdt`'s `exports["."]` is:
+
+```json
+{
+  "types": "./bundler/index.d.ts",
+  "browser": { "development": "./bundler/index.js", "default": "./browser/index.js" },
+  "node": "./nodejs/index.js",
+  "import": "./bundler/index.js",
+  "require": "./nodejs/index.js",
+  "default": "./bundler/index.js"
+}
+```
+
+Because `"browser"` is listed *before* `"import"`/`"default"` in the map, and
+Vite always sets the `browser` condition, resolution goes through the nested
+`browser` branch, not straight to `"import"`. Which of its two sub-conditions
+wins depends on whether Vite's `development` condition is active:
+
+- **`vite build` (production mode):** `development` is inactive → falls to
+  `"default": "./browser/index.js"`, whose `loro_wasm.js` does
+  `new URL("./loro_wasm_bg.wasm", import.meta.url)` (fetch-based, Vite-native
+  asset handling). **Observed: `bun run --filter '@ensembleworks/client'
+  build` passed with zero plugins**, emitting
+  `dist/assets/loro_wasm_bg-*.wasm` as a plain asset.
+- **`vite dev` (dev server / dependency optimizer):** `development` **is**
+  active → resolves to `"./bundler/index.js"`, whose `loro_wasm.js` does
+  `import * as rawWasm from "./loro_wasm_bg.wasm"` (the wasm-bindgen bundler
+  target, a raw ESM `.wasm` import). **Observed**: starting `vite --port 5199`
+  and requesting `/src/__probe/loro-probe.ts` (which imports
+  `@ensembleworks/canvas-doc` → `loro-crdt`) produced exactly the predicted
+  failure in the server log:
+  `Pre-transform error: "ESM integration proposal for Wasm" is not supported
+  currently. Use vite-plugin-wasm or other community plugins to handle this.`
+  Confirmed via `node_modules/.vite/deps/_metadata.json`:
+  `"loro-crdt": { "src": "../../../../node_modules/loro-crdt/bundler/index.js" }`
+  — the dependency optimizer pre-bundles the `bundler/` target regardless of
+  what the production build resolves to.
+
+So **dev and prod resolve to different loro-crdt entry points today**, and
+only prod happens to work. A real fix is required for `bun run
+--filter '@ensembleworks/client' dev` to work at all with `canvas-doc`
+imported.
+
+**Candidate (a) — `vite-plugin-wasm` + `vite-plugin-top-level-await`:**
+installed (`bun add -D vite-plugin-wasm vite-plugin-top-level-await` from
+`client/`) → `vite-plugin-wasm@3.6.0`, `vite-plugin-top-level-await@1.6.0`.
+Plugins added to `vite.config.ts` fixed the dev-server error (rebuilt
+`node_modules/.vite/deps/_metadata.json` shows `loro-crdt` still optimized
+from `bundler/index.js`, but the wasm import is now handled — no
+pre-transform error, `curl` of the probe module returns 200 with no errors in
+the server log).
+
+**One extra option was required beyond the plan's literal steps** (allowed
+per the plan's own exception for "an extra option" in the same spirit): with
+just the two plugins, `vite build` **failed** —
+`[vite-plugin-top-level-await] Transform failed with 136 errors: Transforming
+destructuring to the configured target environment ("chrome87", "edge88",
+"es2020", "firefox78", "safari14") is not supported yet`. Fix: add
+`build.target: 'esnext'` (top-level await needs a target that supports it
+natively; the project's default modern-browser target list predates it).
+After that addition, `vite build` again succeeded (same asset output as the
+zero-plugin case, `dist/assets/loro_wasm_bg-*.wasm` present).
+
+**Exact `vite.config.ts` diff for Seam G to re-apply:**
+
+```diff
+--- a/client/vite.config.ts
++++ b/client/vite.config.ts
+@@ -1,6 +1,8 @@
+ import { execSync } from 'node:child_process'
+ import react from '@vitejs/plugin-react'
+ import { defineConfig, type ServerOptions } from 'vite'
++import topLevelAwait from 'vite-plugin-top-level-await'
++import wasm from 'vite-plugin-wasm'
+ 
+ // Stamp the build with the git-described version so the client can show it
+ // (see the About dialog). Tolerant of non-git builds (e.g. tarball deploys).
+@@ -86,11 +88,15 @@ const proxiedServer: Partial<ServerOptions> =
+ 			: {}
+ 
+ export default defineConfig({
+-	plugins: [react()],
++	plugins: [react(), wasm(), topLevelAwait()],
+ 	define: {
+ 		__APP_VERSION__: JSON.stringify(appVersion()),
+ 	},
+ 	build: {
++		// vite-plugin-top-level-await (required by vite-plugin-wasm for the
++		// loro-crdt wasm-bindgen bundle) needs a target that natively supports
++		// top-level await; the default modern-browser target list doesn't.
++		target: 'esnext',
+ 		// One 3 MB chunk means every release invalidates the whole bundle. The
+ 		// heavyweights (tldraw, LiveKit, xterm, React) change only on dependency
+ 		// bumps, so give each a stable chunk that stays browser-cached across
+```
+
+Plus in `client/package.json`: new devDeps `"vite-plugin-top-level-await":
+"^1.6.0"` and `"vite-plugin-wasm": "^3.6.0"`; new dependency
+`"@ensembleworks/canvas-doc": "*"` (needed once real callers import it — not
+part of the wasm fix itself).
+
+**Async boot gate: not required.** Neither `vite-plugin-wasm` nor the
+`browser/index.js` prod path needed an explicit `await init()` call before
+first use — `LoroCanvasDoc.create()` worked synchronously in both the
+`vite build` prod bundle and the plugin-patched dev path.
+
+**Browser-probe observation (the load-bearing check):** built the client with
+the probe (`client/src/__probe/loro-probe.ts` side-effect-imported from
+`main.tsx`, `LoroCanvasDoc.create` → `putShape` → `commit` → `listShapes().length`
+stashed on `globalThis.__loroProbe`), served it with `vite preview --port
+5198`, and drove headless Chromium (`playwright@1.61.1`, pre-installed
+`chromium-1228` cache) via a one-off script in `e2e/` ending in
+`process.exit(0)`. **Result: `window.__loroProbe === 1`.** (Console also
+logged expected, unrelated `WebSocket connection ... failed` errors from the
+app's own tldraw sync client trying to reach a sync server that wasn't
+running — harmless per the plan's expectation that the probe import runs
+independent of app boot.)
+
+All scratch reverted: `client/src/__probe/` deleted, `client/package.json`,
+`client/vite.config.ts`, `client/src/main.tsx`, and `bun.lock` restored via
+`git checkout`; confirmed with a post-revert `bun install` (`no changes`) and
+`bun run typecheck` (exit 0 across all workspaces).
+
+### P2: workspace-dep + boundary reality check — VERDICT: works as-is, no
+### tsconfig changes needed
+
+Added `@ensembleworks/canvas-model`, `@ensembleworks/canvas-doc`,
+`@ensembleworks/canvas-sync` as `"*"` deps of `client`, `bun install`, then
+referenced one symbol from each in the scratch probe file
+(`CANVAS_MODEL_VERSION`, `LoroCanvasDoc`, `makePair`) so `tsc` would actually
+have to resolve each package's `exports: { ".": "./src/index.ts" }` under the
+client's `tsconfig.json` (`moduleResolution: "bundler"`, no path aliasing
+added). **Observed: `bun run --filter '@ensembleworks/client' typecheck` →
+exit 0**, with zero changes to `client/tsconfig.json`. The client's existing
+`paths` entry for `@ensembleworks/contracts` is pre-existing and was not
+touched or needed for the three canvas-* packages — resolution went through
+`exports` natively. All scratch reverted (`client/package.json`, `bun.lock`
+restored via `git checkout`; probe symbols were part of the same P1 probe
+file, also deleted).
+
+### P3: rich-text feasibility (`loro-prosemirror`) — VERDICT: defer rich
+### text to Phase 4
+
+Ran `bun add loro-prosemirror` from `canvas-doc/` (scratch). Installed
+`loro-prosemirror@0.4.3`.
+
+- **Peer range:** `loro-prosemirror`'s `package.json` declares
+  `"peerDependencies": { "loro-crdt": "^1.10.2" }` — **not an exact pin** to
+  `1.13.6` (the plan's gating condition was "the exact pin **1.13.6**"; it is
+  not). `1.13.6` does satisfy the `^1.10.2` range.
+- **Dedupe:** confirmed a **single** `loro-crdt` install. `find . -path
+  "*/node_modules/loro-crdt" -type d` returned exactly one directory; `bun.lock`
+  has exactly one `"loro-crdt": ["loro-crdt@1.13.6", ...]` entry, and
+  `loro-prosemirror`'s lockfile entry has no nested/duplicate `loro-crdt`. No
+  second WASM copy.
+- **Binding API shape:** read `loro-prosemirror`'s `src/sync-plugin.ts`,
+  `src/lib.ts`, `src/sync-plugin-key.ts`, and its README. `LoroSyncPlugin({
+  doc, containerId })` expects `containerId` to point at a **`LoroMap`**
+  container representing an entire ProseMirror document tree (keyed by
+  `NODE_NAME_KEY`/`CHILDREN_KEY`/`ATTRIBUTES_KEY`, defaulting to
+  `doc.getMap("doc")` when no `containerId` is given), with `LoroText`
+  containers created internally only as leaf text runs inside that tree
+  (`createLoroText` inserts a new `LoroText` into a parent list). The README's
+  own multi-editor example is `const map = doc.getMap("<unique-id-per-editor-instance>");
+  LoroSyncPlugin({ doc, containerId: map.id })` — i.e., **one dedicated
+  `LoroMap` root per editor instance**, not a bare `LoroText`.
+
+  `LoroCanvasDoc` (`canvas-doc/src/loro-canvas-doc.ts`) currently stores
+  per-shape text as a **flat `LoroText`** via `doc.getText('text:<id>')`.
+  That is a structural mismatch with what `loro-prosemirror` expects to own
+  (a `LoroMap` document tree per shape) — wiring it in is not just "add the
+  dependency," it requires changing the per-shape text storage primitive in
+  `canvas-doc` itself.
+
+**Verdict: defer rich text to Phase 4.** Versions are compatible (peer range
+satisfied, single dedupe, no double-WASM risk), so there is no hard blocker
+on the dependency itself — but the API requires a different per-shape
+container shape than `LoroCanvasDoc` uses today, which is a design change to
+`canvas-doc`'s text model, not a Phase-3-sized wiring task. Per the
+ratification note above, Q4 (rich text) resolves to its plan default: **plain
+text in Phase 3**.
+
+All scratch reverted (`canvas-doc/package.json`, `bun.lock` restored via `git
+checkout`; confirmed clean `git status` and a post-revert `bun install` /
+`bun run typecheck` / `bun run test` all green).
