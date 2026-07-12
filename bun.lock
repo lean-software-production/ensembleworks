@@ -43,6 +43,27 @@
         "typescript": "^5.7.0",
       },
     },
+    "canvas-react": {
+      "name": "@ensembleworks/canvas-react",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ensembleworks/canvas-editor": "*",
+        "@ensembleworks/canvas-model": "*",
+      },
+      "devDependencies": {
+        "@types/node": "^22.0.0",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "bun-types": "1.3.14",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+        "typescript": "^5.7.0",
+      },
+      "peerDependencies": {
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+      },
+    },
     "canvas-sync": {
       "name": "@ensembleworks/canvas-sync",
       "version": "0.1.0",
@@ -230,6 +251,8 @@
     "@ensembleworks/canvas-editor": ["@ensembleworks/canvas-editor@workspace:canvas-editor"],
 
     "@ensembleworks/canvas-model": ["@ensembleworks/canvas-model@workspace:canvas-model"],
+
+    "@ensembleworks/canvas-react": ["@ensembleworks/canvas-react@workspace:canvas-react"],
 
     "@ensembleworks/canvas-sync": ["@ensembleworks/canvas-sync@workspace:canvas-sync"],
 
