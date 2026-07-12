@@ -149,4 +149,57 @@ function doc(shapes: Shape[], bindings: Binding[] = []): CanvasDocument {
   console.log('ok: self-binding (same target both ends) is tolerated -- degenerate but total')
 }
 
+// ============================================================================
+// 8. ROTATED-target clipping (the reviewer's probe): a 100x100 target
+//    rotated 45 degrees, positioned so its CENTER sits at world (200,200)
+//    -- i.e. a diamond with vertices at (200 +/- 100/sqrt(2), 200) and
+//    (200, 200 +/- 100/sqrt(2)). An arrow anchored at that center with its
+//    unbound start far to the LEFT at y=200 rides a horizontal ray that
+//    enters the diamond at its LEFT VERTEX: (200 - 100*sin(pi/4), 200) =
+//    (129.28932188134524, 200).
+//
+//    The expectation below is constructed INDEPENDENTLY of the
+//    implementation: the four corners are hand-rotated with explicit
+//    cos/sin arithmetic (the package's NORMATIVE rotation convention,
+//    geometry.ts: world = rotate(local, theta) + position -- x' = x cos -
+//    y sin, y' = x sin + y cos), NOT read back from worldCorners, so a sign
+//    or pivot error in the geometry pipeline cannot cancel itself out of
+//    this test.
+// ============================================================================
+{
+  const theta = Math.PI / 4
+  const cos = Math.cos(theta), sin = Math.sin(theta)
+  // Choose the shape's position so the box CENTER lands at (200,200):
+  // center = position + rotate((50,50), theta); rotate((50,50), pi/4) =
+  // (50cos - 50sin, 50sin + 50cos) = (0, 100*sin(pi/4)) since cos==sin.
+  const posX = 200, posY = 200 - 100 * sin // = 200 - (50sin + 50cos)
+  // Hand-rotated corners (local (0,0), (100,0), (100,100), (0,100)):
+  const corner = (lx: number, ly: number) => ({ x: posX + lx * cos - ly * sin, y: posY + lx * sin + ly * cos })
+  const c0 = corner(0, 0), c1 = corner(100, 0), c2 = corner(100, 100), c3 = corner(0, 100)
+  // Sanity on the independent construction itself: c3 IS the diamond's left
+  // vertex at exactly (200 - 100 sin(pi/4), 200) -- the reviewer's number.
+  assert.ok(Math.abs(c3.x - 129.28932188134524) < 1e-12, `left vertex x, got ${c3.x}`)
+  assert.ok(Math.abs(c3.y - 200) < 1e-12, `left vertex y, got ${c3.y}`)
+  // And the two edges meeting at c3 (c2->c3 and c3->c0) straddle y=200:
+  // both other corners on the left half (c2 below at y>200, c0 above at
+  // y<200), so a horizontal ray at y=200 entering from the left crosses
+  // the boundary exactly at the c3 vertex.
+  assert.ok(c0.y < 200 && c2.y > 200, 'edge construction sanity: c0 above, c2 below the ray')
+
+  const target: Shape = ({
+    id: 'shape:diamond', kind: 'geo', parentId: 'page:p', index: 'a1', x: posX, y: posY, rotation: theta,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 100, h: 100 },
+  } as Shape)
+  // Arrow: unbound start far to the left at y=200; end bound to the
+  // diamond's center anchor (0.5, 0.5) -> world (200,200).
+  const arrow = arrowShape('shape:arrow', 0, 200)
+  const bindings = [endBinding('shape:arrow', 'shape:diamond', 0.5, 0.5)]
+  const path = routeArrow(doc([target, arrow], bindings), arrow, bindings)
+
+  assert.deepEqual(path.start, { x: 0, y: 200 })
+  assert.ok(Math.abs(path.end.x - 129.28932188134524) < 1e-9, `clipped end x = 200 - 100 sin(pi/4) (independently hand-rotated edge), got ${path.end.x}`)
+  assert.ok(Math.abs(path.end.y - 200) < 1e-9, `clipped end y = 200, got ${path.end.y}`)
+  console.log('ok: clipping against a ROTATED target quad matches the independently hand-rotated edge')
+}
+
 console.log('ok: arrow routing (bound anchors, boundary clipping, straight+curve)')
