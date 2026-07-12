@@ -98,15 +98,39 @@ export class Editor {
   }
 
   /** Immutable snapshot of the editor-local state (NOT the doc — read the
-   * doc via `editor.doc.listShapes()` etc). Safe to hold onto: a future
-   * apply() never mutates this object, it replaces the store's reference. */
-  get(): EditorState { return this.store.get() }
+   * doc via `editor.doc.listShapes()` etc). Immutability is RUNTIME, not
+   * just TypeScript: each call builds a FRESH snapshot detached from the
+   * canonical state — the snapshot object and its camera are Object.frozen
+   * (writes throw in strict mode, i.e. in every ES module), and `selection`
+   * is a per-call COPY of the canonical Set, because freeze does not stop
+   * Set.prototype.add — a frozen Set is still mutable, so handing out a
+   * shared reference would let one caller's .add() corrupt the editor for
+   * everyone. Selections are small (a hand-picked set of shapes), so a copy
+   * per get() is cheap. Consequence of "fresh per call": two get() calls
+   * never compare reference-equal, even with no state change in between —
+   * detect change via subscribe(), not by comparing snapshot identities.
+   * Safe to hold onto: no future apply() can ever mutate a snapshot you
+   * already have. Pinned by editor.test.ts's snapshot-corruption probe. */
+  get(): EditorState {
+    const s = this.store.get()
+    return Object.freeze({
+      camera: Object.freeze({ ...s.camera }),
+      selection: new Set(s.selection),
+      hover: s.hover,
+      editingId: s.editingId,
+    })
+  }
 
-  /** `fn` fires SYNCHRONOUSLY, once per apply()/applyAll() call that
-   * actually changed the editor-local state — never once per Intent inside
-   * a batch (see applyAll). A batch of only mutation intents (no view
-   * intents) fires zero times, since EditorState didn't change even though
-   * the doc did. Returns an unsubscribe function. */
+  /** `fn` fires SYNCHRONOUSLY, at most once per apply()/applyAll() call —
+   * never once per Intent inside a batch (see applyAll). The trigger is
+   * PER-INTENT-TYPE, not value-equality: any view intent in the batch
+   * (SetCamera/SetSelection/SetHover/BeginEdit/EndEdit) counts as "state
+   * changed" even when the new value happens to equal the old one — e.g. a
+   * SetSelection carrying the identical ids DOES notify. No value-equality
+   * dedup is performed; a caller that needs it keeps its last snapshot and
+   * compares against a fresh get(). A batch of only mutation intents (no
+   * view intents) fires zero times, since EditorState didn't change even
+   * though the doc did. Returns an unsubscribe function. */
   subscribe(fn: () => void): () => void { return this.store.subscribe(fn) }
 
   /** Apply a single intent. Equivalent to `applyAll([intent])` — defined in
@@ -211,6 +235,14 @@ export class Editor {
           // position orbits", the same composition rule
           // canvas-model/src/geometry.ts's composeTransform documents for a
           // parent-child pair, applied here to a transient rotation instead.
+          // SCOPE LIMIT (identical to ResizeSelection's above, documented
+          // in both places so C8's implementer finds it either way):
+          // `center` and shape.x/y are assumed to share a coordinate frame
+          // — correct for page-rooted, unrotated-ancestor shapes; a shape
+          // nested under a ROTATED parent is silently wrong here (x/y is in
+          // the parent's rotated local frame, center is world). Deferred to
+          // C8, which owns converting center into each shape's parent frame
+          // before emitting the intent.
           const dx = shape.x - intent.center.x, dy = shape.y - intent.center.y
           const x = intent.center.x + (dx * cos - dy * sin)
           const y = intent.center.y + (dx * sin + dy * cos)

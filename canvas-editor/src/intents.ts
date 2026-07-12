@@ -60,7 +60,15 @@ export interface ResizeSelection {
  * its own `rotation` field (spins it in place) — the same "rotations add,
  * position orbits" composition canvas-model/src/geometry.ts's
  * composeTransform documents for parent-child chains, applied here to a
- * transient rotation delta instead of a parent relationship. */
+ * transient rotation delta instead of a parent relationship. SCOPE LIMIT
+ * (the same one ResizeSelection documents above, for the same reason):
+ * `center` and each shape's x/y are assumed to share a coordinate frame —
+ * correct for page-rooted, unrotated-ancestor shapes; a shape nested under
+ * a ROTATED parent is silently wrong here (its x/y lives in the parent's
+ * rotated local frame while `center` is world — orbiting one around the
+ * other mixes frames). Nested-rotated-parent correctness is deferred to C8
+ * (the transform tool), which owns converting center/anchor into each
+ * shape's parent frame before emitting these intents. */
 export interface RotateSelection {
   readonly type: 'RotateSelection'
   readonly ids: readonly string[]

@@ -276,6 +276,56 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: now/random/pageId are stored verbatim from the constructor')
 }
 
+// ============================================================================
+// 10. Snapshot immutability is RUNTIME, not TypeScript-only: mutating every
+//     part of a returned snapshot (camera fields, hover/editingId
+//     reassignment, selection Set.add) must never corrupt internal editor
+//     state — verified both via a fresh get() after a subsequent state
+//     change AND via behavior (a translate driven by a fresh snapshot's
+//     selection). Frozen objects THROW on write in strict mode (all ES
+//     modules are strict), so each write attempt is wrapped: throwing is a
+//     legitimate way to "not corrupt", silent-ignore is too — what's
+//     asserted is only that the canonical state never moves.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { x: 0, y: 0 }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:evil', { x: 100, y: 100 }) })
+  editor.applyAll([
+    { type: 'SetCamera', x: 1, y: 2, z: 3 },
+    { type: 'SetSelection', ids: ['shape:a'] },
+    { type: 'SetHover', id: 'shape:a' },
+    { type: 'BeginEdit', id: 'shape:a' },
+  ])
+
+  const snap = editor.get()
+  const attempt = (fn: () => void) => { try { fn() } catch { /* frozen-object throw is fine */ } }
+  attempt(() => { (snap.camera as { x: number }).x = 999 })
+  attempt(() => { (snap as { hover: string | null }).hover = 'shape:evil' })
+  attempt(() => { (snap as { editingId: string | null }).editingId = 'shape:evil' })
+  attempt(() => { (snap.selection as Set<string>).add('shape:evil') })
+  attempt(() => { (snap.selection as Set<string>).delete('shape:a') })
+  attempt(() => { (snap as { camera: unknown }).camera = { x: 0, y: 0, z: 0 } })
+
+  // A subsequent UNRELATED state change, then a fresh get(): every field the
+  // probes attacked must still hold its canonical value.
+  editor.apply({ type: 'SetHover', id: null })
+  const fresh = editor.get()
+  assert.deepEqual(fresh.camera, { x: 1, y: 2, z: 3 }, 'camera survived snapshot mutation attempts')
+  assert.deepEqual([...fresh.selection], ['shape:a'], 'selection survived Set.add/.delete on a returned snapshot')
+  assert.equal(fresh.editingId, 'shape:a', 'editingId survived reassignment attempts')
+  assert.equal(fresh.hover, null, 'the legitimate SetHover still went through')
+
+  // Behavior check: drive a translate off a FRESH snapshot's selection — if
+  // Set.add('shape:evil') had leaked into canonical state, shape:evil would
+  // move here too.
+  editor.apply({ type: 'TranslateShapes', ids: [...editor.get().selection], dx: 7, dy: 7 })
+  assert.equal(editor.doc.getShape('shape:a')!.x, 7, 'selected shape moved')
+  assert.equal(editor.doc.getShape('shape:evil')!.x, 100, 'shape:evil did NOT move — the poisoned Set never reached canonical state')
+
+  console.log('ok: snapshot mutation (camera/hover/editingId/selection Set) can never corrupt internal state')
+}
+
 // A minimal typed-doc sanity check: an Editor constructed against the
 // abstract CanvasDoc interface (not the concrete LoroCanvasDoc class)
 // typechecks and runs identically — the engine-swappability rule holds at
