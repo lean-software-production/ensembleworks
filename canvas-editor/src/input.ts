@@ -38,6 +38,13 @@ export interface WheelInputEvent {
   readonly type: 'wheel'
   readonly x: number
   readonly y: number
+  /** SIGN CONVENTION (normative): dx/dy mirror DOM WheelEvent.deltaX/deltaY
+   * EXACTLY, no re-signing at this layer — positive dy = wheel scrolled
+   * down/away from the user, which a camera consumer conventionally
+   * interprets as zoom OUT (and positive dx = scroll right). Whatever the
+   * renderer receives from the browser it forwards verbatim; scripts
+   * (script.ts's .wheel()) inject the same DOM-convention values. Pinned by
+   * script.test.ts's wheel-sign assertion. */
   readonly dx: number
   readonly dy: number
   readonly modifiers: Modifiers
@@ -75,13 +82,66 @@ export function exceedsDragThreshold(a: { readonly x: number; readonly y: number
   return dx * dx + dy * dy > DRAG_THRESHOLD * DRAG_THRESHOLD
 }
 
+// ============================================================================
+// CAMERA CONVENTION (NORMATIVE — D2's CSS world transform and C5's
+// zoom-about-cursor must BOTH derive from these two helpers, never re-derive
+// the formula locally; a sign/order disagreement between the renderer's
+// transform and the editor's screen->world reads makes every click land on
+// the wrong shape):
+//
+//   screen = (world + camera.xy) · camera.z
+//   world  = screen / camera.z − camera.xy
+//
+// This is tldraw's own convention, read from source rather than assumed —
+// the installed @tldraw editor package, dist-cjs/lib/editor/Editor.js
+// (pageToScreen: `(point.x + cx) * cz + screenBounds.x`; screenToPage:
+// `(point.x - screenBounds.x) / cz - cx`), minus the screenBounds term:
+// tldraw's screen space is window-relative so it offsets by the editor
+// element's position, whereas OUR screen space (InputEvent x/y) is already
+// viewport-relative — the renderer subtracts the element offset when it
+// normalizes the DOM event, so these helpers never see it. camera.xy is
+// therefore "the world-space translation applied BEFORE zoom" (equal to the
+// world point visible at screen (0,0) negated), and camera.z is the zoom
+// factor (z > 1 zooms in). Equivalent CSS (D2):
+//   transform: scale(camera.z) translate(camera.x px, camera.y px)
+// ============================================================================
+
+/** The camera triple as EditorState holds it (structural — editor.ts's
+ * EditorState.camera satisfies it without importing this type). */
+export interface Camera { readonly x: number; readonly y: number; readonly z: number }
+
+export function worldToScreen(camera: Camera, point: { readonly x: number; readonly y: number }): { x: number; y: number } {
+  return { x: (point.x + camera.x) * camera.z, y: (point.y + camera.y) * camera.z }
+}
+
+export function screenToWorld(camera: Camera, point: { readonly x: number; readonly y: number }): { x: number; y: number } {
+  return { x: point.x / camera.z - camera.x, y: point.y / camera.z - camera.y }
+}
+
 /** Pure FSM contract every tool (select/hand/create/arrow/transform)
  * implements: given its own current state and one normalized InputEvent,
  * return the next state and zero or more Intents. `run()` (script.ts) is the
  * dispatch loop that drives this against a live Editor; nothing about the
  * interface itself touches a doc, a DOM, or a clock — that is exactly what
  * makes a tool replayable from a recorded InputEvent[] with no environment
- * at all. */
+ * at all.
+ *
+ * CONSTRUCTION PATTERN (normative for C4+): tools are built by a factory
+ * closing over the Editor — `const makeSelectTool = (editor: Editor):
+ * Tool<SelectState> => ({ ... })` — so onEvent can read the doc
+ * (editor.doc.getShape/listShapes), the editor-local state (editor.get()),
+ * and any spatial index the tool maintains, while the Tool interface itself
+ * stays a pure (state, event) -> (state', intents) function of what it
+ * closed over. One convention, three consumers (C4/C5/C6) — don't invent
+ * another.
+ *
+ * SPATIAL-INDEX CADENCE: a tool that hit-tests builds its index via
+ * buildSpatialIndex(dumpModel(editor.doc)) and refreshes it once per DOC
+ * COMMIT (subscribe via editor.doc.subscribe), NOT per pointermove — the
+ * STALENESS CONTRACT at the top of canvas-model/src/spatial-index.ts is
+ * normative here: mid-drag correctness comes from snapCandidates'
+ * excludedIds, and a stale index yields omissions, never false hits, for
+ * the quad-exact queries. */
 export interface Tool<S> {
   readonly initialState: S
   onEvent(state: S, event: InputEvent): { state: S; intents: import('./intents.js').Intent[] }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import { Editor } from './editor.js'
 import type { Intent } from './intents.js'
-import { DRAG_THRESHOLD, exceedsDragThreshold, type InputEvent, type Tool } from './input.js'
+import { DRAG_THRESHOLD, exceedsDragThreshold, screenToWorld, worldToScreen, type InputEvent, type Tool } from './input.js'
 import { run, script } from './script.js'
 
 const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
@@ -129,6 +129,44 @@ const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
   assert.equal(notifications, 3, 'one notification per event that produced an intent (pointerdown/move/up) — keydown/wheel produced none')
 
   console.log('ok: run() dispatches events in order, applies intents, advances editor state')
+}
+
+// ============================================================================
+// 6. Camera convention (NORMATIVE — see input.ts's CAMERA CONVENTION block):
+//    screen = (world + camera.xy) · z; world = screen/z − camera.xy. One
+//    hand-computed case at z ≠ 1 (derived on paper, not by calling the
+//    helpers) plus an exact round-trip both directions.
+// ============================================================================
+{
+  const camera = { x: 10, y: 20, z: 2 }
+  // Hand-computed: world (5, 5) -> screen ((5+10)*2, (5+20)*2) = (30, 50).
+  assert.deepEqual(worldToScreen(camera, { x: 5, y: 5 }), { x: 30, y: 50 })
+  // And back: screen (30, 50) -> world (30/2 - 10, 50/2 - 20) = (5, 5).
+  assert.deepEqual(screenToWorld(camera, { x: 30, y: 50 }), { x: 5, y: 5 })
+  // Round-trips are exact for these values (all arithmetic exact in floats).
+  const world = { x: -7.5, y: 123 }
+  assert.deepEqual(screenToWorld(camera, worldToScreen(camera, world)), world)
+  const screen = { x: 99, y: -3 }
+  assert.deepEqual(worldToScreen(camera, screenToWorld(camera, screen)), screen)
+  // Identity camera: screen space IS world space.
+  const identity = { x: 0, y: 0, z: 1 }
+  assert.deepEqual(worldToScreen(identity, { x: 42, y: 17 }), { x: 42, y: 17 })
+  console.log('ok: camera convention — screen = (world + camera.xy) * z, exact round-trip')
+}
+
+// ============================================================================
+// 7. Wheel sign convention pin: dx/dy mirror DOM WheelEvent.deltaX/deltaY
+//    verbatim — positive dy = scroll down/away = conventional zoom-OUT when
+//    a camera consumer interprets it. The DSL must never re-sign.
+// ============================================================================
+{
+  const [e] = script().wheel(3, 120).events()
+  assert.deepEqual(
+    { dx: (e as { dx: number }).dx, dy: (e as { dy: number }).dy },
+    { dx: 3, dy: 120 },
+    'wheel dx/dy pass through with DOM WheelEvent sign — positive dy is scroll-down/zoom-out, unre-signed',
+  )
+  console.log('ok: wheel dx/dy carry the DOM deltaX/deltaY sign convention verbatim')
 }
 
 console.log('ok: canvas-editor input + interaction-script DSL')
