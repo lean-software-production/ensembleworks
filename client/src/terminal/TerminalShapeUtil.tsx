@@ -36,6 +36,7 @@ import {
 } from 'tldraw'
 import { paperTerminalTheme, wm } from '../theme'
 import { type CellSize, gridFor, quantizeCell } from './grid'
+import { FONT_SIZE_DEFAULT, fontSizeActionForKey, nextFontSize, ptyInputForKey } from './keys'
 import { termWsUrl } from './wsUrl'
 
 export interface TerminalShapeProps {
@@ -48,6 +49,10 @@ export interface TerminalShapeProps {
 	// Remote gateway id (spike): undefined = same-origin gateway, zero
 	// migration for existing rooms. See /api/terminal/list.
 	gateway?: string
+	// Per-terminal base font size (px) — SHARED: one PTY grid per terminal, so
+	// font size belongs to the terminal, not the viewer; changing it re-grids
+	// for every client. Optional so existing rooms need no migration (= 16).
+	fontSize?: number
 }
 
 // Register the shape in tldraw's global shape union (tldraw v5 pattern), so
@@ -62,20 +67,36 @@ export type TerminalShape = TLBaseShape<'terminal', TerminalShapeProps>
 
 const MIN_W = 360
 const MIN_H = 220
-// Base font at 100% canvas zoom. The editing terminal scales this with zoom so
-// the derived grid stays constant (see the counter-scale effect below).
-const BASE_FONT = 16
 const RECONNECT_BASE_MS = 500
 const RECONNECT_MAX_MS = 10_000
 
 type TerminalConnection = 'connecting' | 'live' | 'reconnecting' | 'disconnected' | 'ended'
 
-// xterm exposes its rendered cell size only on the internal render service (the
-// same field FitAddon reads). Returns the cell dimensions in CSS px, or null if
-// the renderer hasn't measured yet. This is the one input to the deterministic
-// grid that must be *measured* rather than shared — quantised in ./grid so every
-// client agrees on it.
+// The grid cell, from xterm's renderer-INDEPENDENT char measurement
+// (_charSizeService: pure font metrics in CSS px). The render service's cell
+// must NOT be used here: it is quantised to device pixels by the ACTIVE
+// renderer — WebGL floors width (9.6px → 9.09 at DPR 1.1) while the DOM
+// renderer draws true fractional advances — so a grid derived from it packs
+// more columns than edit mode can fit (≈5% clipped at DPR 1.1). Width: charW
+// is a safe upper bound for both renderers (WebGL ≤ charW, DOM = charW).
+// Height: renderers round rows UP to at most charH + 1/DPR css px, so the
+// grid uses charH + 1 — the deterministic safe bound; no renderer ever clips
+// the last row, at the cost of ≤1px per row of bottom under-fill. This is the
+// one input to the deterministic grid that must be *measured* rather than
+// shared — quantised in ./grid so every client agrees on it (and, being pure
+// font metrics, it no longer varies by renderer or DPR at all).
 function xtermCell(term: Terminal): { width: number; height: number } | null {
+	const cs = (
+		term as unknown as {
+			_core?: { _charSizeService?: { width?: number; height?: number } }
+		}
+	)._core?._charSizeService
+	return cs?.width && cs?.height ? { width: cs.width, height: cs.height + 1 } : null
+}
+
+// The ACTIVE renderer's cell (CSS px) — used ONLY for the view-mode fill
+// compensation; the shared grid must never read this (see xtermCell above).
+function rendererCell(term: Terminal): { width: number; height: number } | null {
 	const cell = (
 		term as unknown as {
 			_core?: { _renderService?: { dimensions?: { css?: { cell?: { width?: number; height?: number } } } } }
@@ -157,11 +178,18 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		editor,
 		isEditing,
 	])
+	// Shared base font (px). A ref shadows it for closures created at mount
+	// (captureCell) — they must normalise against the CURRENT base font, not
+	// the mount-time value.
+	const baseFont = shape.props.fontSize ?? FONT_SIZE_DEFAULT
+	const baseFontRef = useRef(baseFont)
+	baseFontRef.current = baseFont
 
 	const containerRef = useRef<HTMLDivElement>(null)
 	const hostRef = useRef<HTMLDivElement>(null)
 	const termRef = useRef<Terminal | null>(null)
 	const wsRef = useRef<WebSocket | null>(null)
+	const webglRef = useRef<WebglAddon | null>(null)
 	// Base-font cell size (CSS px), measured once the web font is ready (null until
 	// then). The deterministic grid divides the shape box by this; see ./grid.
 	const [cellSize, setCellSize] = useState<CellSize | null>(null)
@@ -234,7 +262,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		if (!container || !host) return
 
 		const term = new Terminal({
-			fontSize: BASE_FONT,
+			fontSize: baseFontRef.current,
 			fontFamily: wm.mono,
 			// tmux owns scrollback (mouse on → wheel enters copy-mode, 50k line
 			// history). A local xterm buffer would fight it for wheel events.
@@ -262,24 +290,10 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		// xterm renders into an inner host so we can counter-scale it against the
 		// canvas zoom without disturbing the padded frame box (containerRef).
 		term.open(host)
-		// Hardware-accelerated renderer: draws every row into one GL bitmap, which
-		// removes the DOM renderer's per-row sub-pixel seams and is cheaper to paint
-		// while the tldraw camera pans/zooms. Must load AFTER term.open(). Browsers
-		// cap concurrent WebGL contexts (~16 in Chrome); if ours is dropped (many
-		// terminals open at once) we dispose the addon so this terminal falls back to
-		// the DOM renderer instead of freezing on a stale frame.
-		const webgl = new WebglAddon()
-		webgl.onContextLoss(() => {
-			// Degraded but functional: surface it so a silently DOM-rendered
-			// terminal isn't invisible to anyone watching the console.
-			console.warn('[terminal] WebGL context lost — falling back to DOM renderer')
-			webgl.dispose()
-		})
-		term.loadAddon(webgl)
 		// Bootstrap the spawn size synchronously (so the PTY starts ~right and the
 		// WS URL below carries it); the deterministic effect refines it to the exact
-		// grid once the web font's cell is measured. fontSize is BASE_FONT here, so
-		// the measured cell is already at base scale.
+		// grid once the web font's cell is measured. fontSize is the base font here,
+		// so the measured cell is already at base scale.
 		const bootCell = xtermCell(term)
 		if (bootCell) {
 			const { cols, rows } = gridFor(
@@ -365,7 +379,16 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			connect()
 		}
 		const reconnectWhenVisible = () => {
-			if (document.visibilityState === 'visible') reconnectNow()
+			if (document.visibilityState !== 'visible') return
+			// Returning to the tab is the cheap moment to discard a possibly-rotten
+			// WebGL glyph atlas (silent corruption never fires onContextLoss) —
+			// clearTextureAtlas re-rasterises every glyph on the next frame.
+			try {
+				term.clearTextureAtlas()
+			} catch {
+				/* renderer variance — a repaint miss is not worth crashing over */
+			}
+			reconnectNow()
 		}
 
 		window.addEventListener('online', reconnectNow)
@@ -386,9 +409,9 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			if (disposed) return
 			const cell = xtermCell(term)
 			if (!cell) return
-			// Normalise to BASE_FONT: the zoom effect may have scaled fontSize, but the
-			// grid must be zoom-invariant.
-			const scale = (term.options.fontSize ?? BASE_FONT) / BASE_FONT
+			// Normalise to the base font: the zoom effect may have scaled fontSize, but
+			// the grid must be zoom-invariant.
+			const scale = (term.options.fontSize ?? baseFontRef.current) / baseFontRef.current
 			setCellSize(quantizeCell(cell.width / scale, cell.height / scale))
 		}
 		document.fonts
@@ -400,6 +423,25 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 				captureCell()
 			})
 			.catch(captureCell)
+		// The symbols fallback needs the same treatment: canvas fillText neither
+		// waits for web fonts nor reliably triggers a unicode-range download, and
+		// the WebGL atlas caches whatever it first rasterised (tofu). Force the
+		// load, then discard the atlas so PUA glyphs re-rasterise from the real
+		// font. Grid untouched — the fallback never supplies the measured cell.
+		// The sample char must sit inside the face's unicode-range: fonts.load()
+		// filters faces against the sample text's code points, and the default
+		// " " sample is outside the PUA range, so it would skip the fetch.
+		document.fonts
+			.load('16px "Symbols Nerd Font Mono"', '\uE0B0')
+			.then(() => {
+				if (disposed) return
+				try {
+					term.clearTextureAtlas()
+				} catch {
+					/* renderer variance */
+				}
+			})
+			.catch(() => {})
 		// Safety net: capture from whatever font is active if the load stalls.
 		const cellFallbackTimer = setTimeout(captureCell, 1500)
 
@@ -413,6 +455,32 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 
 		// Double-Esc exits editing; a single Esc is the terminal's (vim!).
 		term.attachCustomKeyEventHandler((e) => {
+			// Shift/Alt+Enter → newline (ESC CR) instead of submit — see ./keys.
+			// preventDefault + return false so xterm doesn't also send \r.
+			const ptyInput = ptyInputForKey(e)
+			if (ptyInput) {
+				e.preventDefault()
+				const ws = wsRef.current
+				if (ws?.readyState === WebSocket.OPEN) {
+					const msg: TermClientMessage = { type: 'input', data: ptyInput }
+					ws.send(JSON.stringify(msg))
+				}
+				return false
+			}
+			// Ctrl/Cmd +/-/0: shared per-terminal font size (see ./keys). Owned
+			// here so the browser's page-zoom never fires while editing. Read the
+			// LIVE shape — this closure's `shape` is stale after prop changes.
+			const fontAction = fontSizeActionForKey(e)
+			if (fontAction) {
+				e.preventDefault()
+				const live = editor.getShape(shape.id) as TerminalShape | undefined
+				const current = live?.props.fontSize ?? FONT_SIZE_DEFAULT
+				const next = nextFontSize(current, fontAction)
+				if (live && next !== current) {
+					editor.updateShape({ id: shape.id, type: shape.type, props: { fontSize: next } })
+				}
+				return false
+			}
 			if (e.type === 'keydown' && (e.ctrlKey || e.metaKey)) {
 				const key = e.key.toLowerCase()
 				// Paste: Ctrl/Cmd+V and Ctrl+Shift+V → route the clipboard through the
@@ -469,16 +537,59 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			document.removeEventListener('visibilitychange', reconnectWhenVisible)
 			wsRef.current?.close()
 			term.dispose()
+			webglRef.current = null
 			termRef.current = null
 			wsRef.current = null
 		}
 	}, [shape.props.sessionId, editor, shape.id])
 
-	// Editing state drives keyboard focus.
+	// Editing state drives keyboard focus. (Renderer swap on edit lives in its
+	// own effect below.)
 	useEffect(() => {
 		if (isEditing) termRef.current?.focus()
 		else termRef.current?.blur()
 	}, [isEditing])
+
+	// Renderer strategy: WebGL while viewing, DOM while editing — everyone,
+	// always (no per-machine flag).
+	// - View mode can have many terminals compositing while the tldraw camera
+	//   pans/zooms; the WebGL renderer is cheap there and glyphs stay at the
+	//   base font, inside the atlas's comfort zone.
+	// - Edit mode renders at fontSize ≈ base × zoom. Feeding that to an atlas
+	//   renderer produced the blur (fractional sizes), drifting side margins
+	//   (device-px cell rounding × cols) and square-box glyphs at high
+	//   zoom × DPR (atlas overflow) — verified live at DPR 1.1/2.2. The DOM
+	//   renderer has no atlas; browser text is crisp at any fractional size.
+	// Disposing the addon drops xterm to its DOM renderer; going back needs a
+	// fresh instance (disposed addons cannot be reloaded).
+	useEffect(() => {
+		const term = termRef.current
+		if (!term) return
+		if (isEditing) {
+			webglRef.current?.dispose()
+			webglRef.current = null
+			return
+		}
+		const webgl = new WebglAddon()
+		webgl.onContextLoss(() => {
+			// Degraded but functional: surface it so a silently DOM-rendered
+			// terminal isn't invisible to anyone watching the console.
+			console.warn('[terminal] WebGL context lost — falling back to DOM renderer')
+			webgl.dispose()
+			if (webglRef.current === webgl) webglRef.current = null
+		})
+		term.loadAddon(webgl)
+		webglRef.current = webgl
+		return () => {
+			// Skip if context-loss already disposed it (ref was nulled).
+			if (webglRef.current === webgl) {
+				webgl.dispose()
+				webglRef.current = null
+			}
+		}
+	}, [isEditing, shape.props.sessionId])
+
+	const [viewFit, setViewFit] = useState<{ fx: number; fy: number } | null>(null)
 
 	// Counter-scale the font to the canvas zoom so text stays crisp and xterm's
 	// mouse→cell math is exact (the host's CSS transform, in JSX, keeps the net
@@ -491,12 +602,85 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 	// the edited terminal's editZoom changes — idle terminals stay at 1 — so this
 	// does not re-render every terminal when the board zooms. The grid (cols/rows)
 	// is gateway-authoritative and unaffected; only the rendered font size changes.
+	// Rendered font is the zoom-scaled base FLOORED TO WHOLE PIXELS: fractional
+	// font sizes make the DOM renderer quantise row heights per row — the
+	// source of the bottom-edge drift and row seams while editing — and blur
+	// atlas glyphs. Because the font is floored while the host is
+	// counter-scaled by the exact zoom, the rendered grid under-fills the box
+	// by up to one font-px worth (typically a few percent, measured up to
+	// ~7.5% of width at fractional zooms — see spec addendum findings; a
+	// small background strip at right/bottom) — deliberately traded for
+	// exact mouse→cell selection:
+	// xterm's getCoords assumes net on-screen scale 1 (it divides
+	// transform-inclusive screen px by transform-independent CSS cell size),
+	// so the counter-scale MUST invert the raw zoom, not the font's factor.
+	// Floor, not round: rounding up made the content LARGER than the box and
+	// clipped the right edge; flooring only ever under-fills. Grid unaffected:
+	// captureCell normalises by (fontSize / the base font), which remains the
+	// true factor.
+	// The lower clamp is 1, not a legibility floor: any larger clamp re-breaks
+	// net-scale-1 whenever it binds (right/bottom clipping + mouse→cell
+	// selection drift — see above). The floor's only job is fontSize >= 1;
+	// the user's own zoom choice governs legibility.
 	useEffect(() => {
 		const term = termRef.current
 		if (!term) return
-		const nextFont = BASE_FONT * editZoom
+		// Exact fractional font: only the DOM renderer ever sees a non-integer
+		// size (view mode is editZoom=1 → integer base font for WebGL), and it
+		// lays out fractional advances crisply. Flooring — an atlas-era remedy —
+		// made the rendered cell diverge from the shared grid cell by a
+		// zoom-dependent fraction, which live testing showed as wandering
+		// margins at every non-integer zoom.
+		const nextFont = Math.max(1, baseFont * editZoom)
 		if (term.options.fontSize !== nextFont) term.options.fontSize = nextFont
-	}, [editZoom])
+	}, [editZoom, baseFont])
+
+	// View-mode fill compensation. The shared grid cell is pure font metrics
+	// (9.6px at 16px JetBrains Mono), but WebGL physically renders cells at
+	// whole device pixels — floor(9.6 × DPR)/DPR, e.g. 9.09 CSS px at DPR 1.1
+	// — so view-mode content under-fills the grid box by up to half a device
+	// pixel per cell (~35px across a wide terminal on a fractional-DPR
+	// screen). Scale the host by the per-axis ratio grid-cell / rendered-cell
+	// so the box fills exactly. Local cosmetics only: each client compensates
+	// its own renderer; the shared grid is untouched, selection doesn't exist
+	// in view mode, and edit mode (DOM renderer, true fractional advances)
+	// never needs it. Declared AFTER the renderer-strategy and font effects so
+	// it measures the fresh WebGL renderer at the base font on edit-exit; the
+	// font normalisation and the clamp are belt-and-braces on top of that
+	// ordering (a bad measurement can never distort wildly).
+	useEffect(() => {
+		const term = termRef.current
+		if (isEditing || !cellSize || !term) {
+			setViewFit(null)
+			return
+		}
+		const rs = rendererCell(term)
+		if (!rs) return
+		// Normalise to the base font, mirroring captureCell — harmless when the
+		// font effect has already run (scale 1), correct if it somehow hasn't.
+		const scale = (term.options.fontSize ?? baseFont) / baseFont
+		const clamp = (v: number) => Math.min(1.15, Math.max(1, v))
+		setViewFit({
+			fx: clamp(cellSize.w / (rs.width / scale)),
+			fy: clamp(cellSize.h / (rs.height / scale)),
+		})
+	}, [isEditing, cellSize, baseFont, shape.props.sessionId])
+
+	// Shared font-size changes re-measure the cell; the deterministic grid
+	// effect then re-derives cols/rows from the same shared inputs everywhere.
+	// baseFont is a synced shape prop and the cell is quantised, which keeps
+	// clients on the SAME renderer+DPR in lockstep; clients on different DPRs
+	// can still measure cells a bucket apart because the WebGL renderer
+	// DPR-quantises its reported cell — a known residual (see spec addendum
+	// follow-ups), bounded by the gateway's authoritative dedup.
+	useEffect(() => {
+		const term = termRef.current
+		if (!term) return
+		const cell = xtermCell(term)
+		if (!cell) return
+		const scale = (term.options.fontSize ?? baseFont) / baseFont
+		setCellSize(quantizeCell(cell.width / scale, cell.height / scale))
+	}, [baseFont])
 
 	// Deterministic grid: cols/rows are a pure function of the shared box (shape
 	// w/h) and the quantised base-font cell size (see ./grid), so every client
@@ -623,10 +807,12 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 					borderRadius: 4,
 					overflow: 'hidden',
 					background: '#fff',
-					// Thin dark line to match the canvas frames' 1px stroke (was the
-					// fainter ruleStrong); seal-blue only while editing for selection.
-					border: isEditing ? `2px solid ${wm.sealBlue}` : `1px solid ${wm.ink}`,
-					boxShadow: wm.shadowPaper,
+					// Constant 1px border in BOTH modes: a border-width change would
+					// shrink the content box and visibly shift the terminal text on
+					// every edit toggle. The editing highlight is an outer box-shadow
+					// ring instead — zero layout impact.
+					border: `1px solid ${isEditing ? wm.sealBlue : wm.ink}`,
+					boxShadow: isEditing ? `0 0 0 1.5px ${wm.sealBlue}, ${wm.shadowPaper}` : wm.shadowPaper,
 				}}
 			>
 			{/* No in-frame header: tmux's own status bar (status-position top in
@@ -643,7 +829,8 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 				style={{
 					flex: 1,
 					minHeight: 0,
-					padding: '10px 20px 0 12px',
+					// KEEP IN SYNC with TERMINAL_PAD in ./grid.ts — one fact, recorded twice.
+					padding: '10px 20px 4px 12px',
 					opacity: connection === 'live' ? 1 : 0.28,
 					filter: connection === 'live' ? undefined : 'grayscale(0.8)',
 					transition: 'opacity 160ms ease, filter 160ms ease',
@@ -652,15 +839,28 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 				{/* xterm renders here. While editing at zoom ≠ 1 the host is sized
 				    up by the zoom and scaled back down by 1/zoom, giving the element
 				    a net on-screen scale of 1 (so xterm's mouse→cell math is exact)
-				    while still filling the frame. At zoom 1 this is the identity. */}
+				    while still filling the frame. At zoom 1 this is the identity.
+				    In view mode the host instead applies the fill compensation
+				    (viewFit): WebGL's device-pixel cells run slightly smaller than
+				    the shared grid cell on fractional-DPR screens, so the content
+				    is scaled up per-axis to fill the box (see the viewFit effect). */}
 				<div
 					ref={hostRef}
-					style={{
-						width: `calc(100% * ${editZoom})`,
-						height: `calc(100% * ${editZoom})`,
-						transform: `scale(${1 / editZoom})`,
-						transformOrigin: 'top left',
-					}}
+					style={
+						!isEditing && viewFit
+							? {
+									width: `calc(100% / ${viewFit.fx})`,
+									height: `calc(100% / ${viewFit.fy})`,
+									transform: `scale(${viewFit.fx}, ${viewFit.fy})`,
+									transformOrigin: 'top left',
+								}
+							: {
+									width: `calc(100% * ${editZoom})`,
+									height: `calc(100% * ${editZoom})`,
+									transform: `scale(${1 / editZoom})`,
+									transformOrigin: 'top left',
+								}
+					}
 				/>
 			</div>
 			{connection !== 'live' && (

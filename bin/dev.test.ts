@@ -8,9 +8,12 @@ import {
 	buildServices,
 	forwardArgv,
 	hold,
+	livekitDevConfigYaml,
 	parseDotEnv,
+	parsePortOffset,
 	parseToolVersions,
 	parsePublicOrigin,
+	portsFor,
 	resolveMode,
 	workspaceDirFor,
 } from './dev-lib.mjs'
@@ -30,6 +33,9 @@ function ctx(overrides: Record<string, unknown> = {}) {
 		tailscaleIp: null,
 		has: { caddy: true, livekit: true, whisper: true, docker: false },
 		env: {},
+		ports: portsFor(0),
+		portOffset: 0,
+		livekitGeneratedConf: '/home/u/.local/share/ensembleworks/livekit-dev.generated.yaml',
 		...overrides,
 	} as Parameters<typeof buildServices>[0]
 }
@@ -287,10 +293,135 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 // attach on the host prints instructions (the exec line + the nested-detach
 // caveat), never nests into the container tmux.
 {
-	const text = attachInstructions('lucid_hofstadter')
+	const text = attachInstructions('lucid_hofstadter', 'workspace')
 	assert.ok(text.includes('docker exec -it lucid_hofstadter tmux attach'), 'attach command')
 	assert.ok(text.includes('Ctrl-b Ctrl-b d'), 'nested-detach caveat')
 	console.log('ok: attachInstructions')
+}
+
+// portsFor: every port shifted by the offset; 0 = the documented defaults.
+{
+	const base = portsFor(0)
+	assert.equal(base.sync, 8788)
+	assert.equal(base.caddy, 8080)
+	assert.equal(base.livekit, 7880)
+	assert.equal(base.livekitTcp, 7881)
+	assert.equal(base.livekitUdp, 7882)
+	assert.equal(base.neko, 8090)
+	assert.equal(base.whisper, 8091)
+	const off = portsFor(100)
+	for (const [name, port] of Object.entries(base)) {
+		assert.equal((off as Record<string, number>)[name], port + 100, `${name} shifted by 100`)
+	}
+	assert.deepEqual(PORTS, base, 'PORTS stays the offset-0 map')
+	console.log('ok: portsFor')
+}
+
+// parsePortOffset: unset/empty -> 0; a non-negative int string -> the int;
+// anything else -> null (caller dies with the remedy).
+{
+	assert.equal(parsePortOffset(undefined), 0)
+	assert.equal(parsePortOffset(''), 0)
+	assert.equal(parsePortOffset('0'), 0)
+	assert.equal(parsePortOffset('100'), 100)
+	assert.equal(parsePortOffset('-1'), null)
+	assert.equal(parsePortOffset('1.5'), null)
+	assert.equal(parsePortOffset('abc'), null)
+	assert.equal(parsePortOffset('60000'), null, 'ports must stay < 65536')
+	assert.equal(parsePortOffset('56744'), 56744)
+	assert.equal(parsePortOffset('56745'), null)
+	console.log('ok: parsePortOffset')
+}
+
+// Offset ctx: every service cmd/health rides ctx.ports, and each service gets
+// its port via inline env (the services read PORT etc. — see server/src).
+{
+	const p = portsFor(100)
+	const s = buildServices(
+		ctx({
+			ports: p,
+			portOffset: 100,
+			livekitGeneratedConf: '/home/u/.local/share/ensembleworks-100/livekit-dev.generated.yaml',
+		}),
+	)
+	const sync = svc(s, 'sync')
+	assert.ok(sync.cmd.includes("PORT='8888'"), 'sync PORT shifted')
+	assert.ok(sync.cmd.includes("ENSEMBLEWORKS_FILES_PORT='8891'"), 'files feature port')
+	assert.ok(sync.cmd.includes("DISCORD_PORT='8890'"), 'discord feature port')
+	assert.ok(sync.cmd.includes("LIVEKIT_API_URL='http://localhost:7980'"), 'RoomService port')
+	assert.ok(sync.cmd.includes("LIVEKIT_URL='ws://localhost:8180/livekit'"), 'browser URL via shifted caddy')
+	assert.deepEqual(sync.health, { kind: 'http', url: 'http://localhost:8888/api/health' })
+	assert.ok(svc(s, 'term').cmd.includes("PORT='8889'"), 'term PORT shifted')
+	assert.deepEqual(svc(s, 'term').health, { kind: 'port', port: 8889 })
+	assert.ok(svc(s, 'files').cmd.includes("PORT='8891'"), 'files PORT shifted')
+	assert.ok(svc(s, 'client').cmd.includes("ENSEMBLEWORKS_PORT_OFFSET='100'"), 'vite gets the offset')
+	const caddy = svc(s, 'caddy')
+	assert.ok(caddy.cmd.includes("ENSEMBLEWORKS_CADDY_SITE=':8180'"), 'edge on shifted port')
+	assert.ok(caddy.cmd.includes("ENSEMBLEWORKS_PORT_SYNC='8888'"), 'caddy upstream: sync')
+	assert.ok(caddy.cmd.includes("ENSEMBLEWORKS_PORT_TERM='8889'"), 'caddy upstream: term')
+	assert.ok(caddy.cmd.includes("ENSEMBLEWORKS_PORT_CLIENT='5273'"), 'caddy upstream: client')
+	assert.ok(caddy.cmd.includes("ENSEMBLEWORKS_PORT_LIVEKIT='7980'"), 'caddy upstream: livekit')
+	assert.ok(caddy.cmd.includes("ENSEMBLEWORKS_PORT_NEKO='8190'"), 'caddy upstream: neko')
+	const lk = svc(s, 'livekit')
+	assert.ok(
+		lk.cmd.includes("--config '/home/u/.local/share/ensembleworks-100/livekit-dev.generated.yaml'"),
+		'offset livekit uses the generated config (dev mode has fixed ports)',
+	)
+	assert.ok(!lk.cmd.includes('--dev'), 'not dev mode when offset')
+	const discord = svc(s, 'discord')
+	assert.ok(discord.cmd.includes("PORT='8890'"), 'discord PORT shifted')
+	assert.ok(discord.cmd.includes("SYNC_BASE='http://127.0.0.1:8888'"), 'discord dials shifted sync')
+	assert.ok(svc(s, 'whisper').cmd.includes('--port 8191'), 'whisper port shifted')
+	const scribe = svc(s, 'scribe')
+	assert.ok(scribe.cmd.includes("export LIVEKIT_URL='ws://localhost:7980'"), 'scribe SFU port')
+	assert.ok(scribe.cmd.includes("export ENSEMBLEWORKS_URL='http://localhost:8888'"), 'scribe sync port')
+	assert.ok(scribe.cmd.includes('http://localhost:8888/api/health'), 'scribe waits on shifted sync')
+	assert.ok(scribe.cmd.includes('/dev/tcp/localhost/7980'), 'scribe waits on shifted SFU')
+	const neko = buildServices(
+		ctx({ ports: p, portOffset: 100, has: { caddy: true, livekit: true, whisper: true, docker: true } }),
+	)
+	assert.ok(svc(neko, 'shared-browser').cmd.includes('-p 127.0.0.1:8190:8080'), 'neko publish shifted')
+	console.log('ok: offset service table')
+}
+
+// Offset 0: livekit stays in --dev mode; a user livekit conf still wins over
+// the generated one at any offset.
+{
+	const zero = svc(buildServices(ctx()), 'livekit')
+	assert.ok(zero.cmd.includes('--dev'), 'offset 0 keeps dev mode')
+	const userConf = svc(
+		buildServices(
+			ctx({
+				ports: portsFor(100),
+				portOffset: 100,
+				livekitConf: '/home/u/.config/ensembleworks/livekit-dev.yaml',
+				env: { LIVEKIT_API_KEY: 'k', LIVEKIT_API_SECRET: 's' },
+			}),
+		),
+		'livekit',
+	)
+	assert.ok(userConf.cmd.includes("--config '/home/u/.config/ensembleworks/livekit-dev.yaml'"), 'user conf wins')
+	console.log('ok: livekit config precedence')
+}
+
+// attachInstructions names the offset session.
+{
+	assert.ok(attachInstructions('abc', 'workspace').includes('tmux attach -t workspace'))
+	assert.ok(attachInstructions('abc', 'workspace-100').includes('tmux attach -t workspace-100'))
+	console.log('ok: attachInstructions session')
+}
+
+// livekitDevConfigYaml: shifted ports + dev keys; node_ip only when known.
+{
+	const y = livekitDevConfigYaml(portsFor(100), '192.168.1.194')
+	assert.ok(y.includes('port: 7980'), 'signaling port')
+	assert.ok(y.includes('tcp_port: 7981'), 'ICE-TCP port')
+	assert.ok(y.includes('udp_port: 7982'), 'UDP mux — must match the published host port')
+	assert.ok(y.includes('node_ip: 192.168.1.194'), 'advertised media IP')
+	assert.ok(y.includes('devkey: secret'), 'dev keys inline (matches the sync env)')
+	const local = livekitDevConfigYaml(portsFor(100), null)
+	assert.ok(!local.includes('node_ip'), 'no node_ip line when unknown (localhost voice)')
+	console.log('ok: livekitDevConfigYaml')
 }
 
 console.log('all dev-lib tests passed')

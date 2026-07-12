@@ -81,4 +81,27 @@ delete process.env.CF_ACCESS_CLIENT_SECRET
 delete process.env.EW_BENIGN_MARKER
 console.log('ok: canvasTmuxSpawnSpec scrubs the service-token from the spawned terminal env')
 
+// UTF-8 locale guarantee: a tmux client with no LC_CTYPE-affecting var in its
+// env comes up non-UTF-8 and renders every non-Latin-1 glyph as "_" per cell
+// (bit us on staging: systemd units don't inherit the host locale). The spawn
+// spec must default LANG=C.UTF-8 when the parent env carries no locale — and
+// must NOT override a locale the parent did set.
+const savedLocale: Record<string, string | undefined> = {}
+for (const k of ['LANG', 'LC_ALL', 'LC_CTYPE']) {
+	savedLocale[k] = process.env[k]
+	delete process.env[k]
+}
+const bare = canvasTmuxSpawnSpec({ sessionId: 't2' })
+assert.equal(bare.env.LANG, 'C.UTF-8', 'locale-less parent env must default LANG=C.UTF-8')
+process.env.LANG = 'en_GB.UTF-8'
+const localed = canvasTmuxSpawnSpec({ sessionId: 't3' })
+assert.equal(localed.env.LANG, 'en_GB.UTF-8', 'a parent-set LANG must be preserved, not clobbered')
+delete process.env.LANG
+process.env.LC_ALL = 'en_US.UTF-8'
+const lcAllOnly = canvasTmuxSpawnSpec({ sessionId: 't4' })
+assert.equal('LANG' in lcAllOnly.env, false, 'LC_ALL alone counts as a locale — no LANG default injected')
+delete process.env.LC_ALL
+for (const [k, v] of Object.entries(savedLocale)) if (v !== undefined) process.env[k] = v
+console.log('ok: canvasTmuxSpawnSpec guarantees a UTF-8 locale for the tmux client')
+
 process.exit(0)

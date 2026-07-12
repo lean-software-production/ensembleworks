@@ -16,6 +16,10 @@ export const terminalShapeProps = {
 	status: T.string.optional(),
 	// Remote gateway id (spike); optional so existing rooms need no migration.
 	gateway: T.string.optional(),
+	// Per-terminal base font size (px) — SHARED: one PTY grid per terminal, so
+	// font size belongs to the terminal, not the viewer; changing it re-grids
+	// for every client. Optional so existing rooms need no migration (= 16).
+	fontSize: T.number.optional(),
 }
 
 export const iframeShapeProps = {

@@ -57,7 +57,10 @@ const execFileP = promisify(execFile)
 // readable. When dropping, sudo's env_reset strips the gateway's environment and
 // -H points HOME at the sandbox user; the launcher owns the conf + `cd`, so we
 // pass a deliberately bare env and a neutral cwd (the gateway user may not be able
-// to chdir into the sandbox user's home).
+// to chdir into the sandbox user's home). LANG must be in that bare env: without
+// a UTF-8 LC_CTYPE the tmux client mangles every non-Latin-1 glyph to "_" per
+// cell, and sudo's env_reset keeps LANG (built-in env_check list), so it reaches
+// the launcher's tmux.
 function tmuxSpawnSpec(id: string): {
 	file: string
 	args: string[]
@@ -70,7 +73,7 @@ function tmuxSpawnSpec(id: string): {
 			file: 'sudo',
 			args: ['-n', '-H', '-u', RUN_AS, '--', TERM_LAUNCHER, sessionName],
 			cwd: '/',
-			env: { TERM: 'xterm-256color' },
+			env: { TERM: 'xterm-256color', LANG: 'C.UTF-8' },
 		}
 	}
 	return canvasTmuxSpawnSpec({ sessionId: id, tmuxConf: TMUX_CONF, home: process.env.HOME })

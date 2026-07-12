@@ -1,12 +1,13 @@
 // EnsembleWorks devcontainer. The canvas is on port 8080 (Caddy), published to
 // the host so a teammate can reach it over the LAN at http://<host-ip>:8080 —
 // not just localhost. LiveKit voice needs UDP: TCP 7881 + UDP mux 7882 are
-// published too, and initializeCommand detects the host LAN IP so the SFU
-// advertises a browser-reachable media address (see .devcontainer/detect-lan-ip.sh
-// and ENSEMBLEWORKS_LIVEKIT_NODE_IP in bin/dev). Codespaces forwards TCP only,
-// so AV stays silent there — everything else works. State/keys live in the
-// git-ignored .local/ folder (symlinked to the home-dir paths by
-// post-create.bash) and survive rebuilds.
+// published too (+offset — see bin/dev's ENSEMBLEWORKS_PORT_OFFSET, which lets
+// multiple stacks share a host), and initializeCommand detects the host LAN IP
+// so the SFU advertises a browser-reachable media address (see
+// .devcontainer/detect-lan-ip.sh and ENSEMBLEWORKS_LIVEKIT_NODE_IP in bin/dev).
+// Codespaces forwards TCP only, so AV stays silent there — everything else
+// works. State/keys live in the git-ignored .local/ folder (symlinked to the
+// home-dir paths by post-create.bash) and survive rebuilds.
 {
 	"name": "EnsembleWorks",
 	"build": { "dockerfile": "Dockerfile", "context": ".." },
@@ -15,10 +16,24 @@
 	"portsAttributes": {
 		"8080": { "label": "EnsembleWorks (Caddy edge)", "onAutoForward": "openBrowserOnce" }
 	},
-	// Publish the Caddy edge (8080) and LiveKit dev-mode media (TCP 7881 + UDP
-	// mux 7882) to the host, so both the canvas and voice are reachable from
-	// another LAN machine. Ignored by Codespaces — harmless.
-	"runArgs": ["-p", "8080:8080", "-p", "7881:7881", "-p", "7882:7882/udp"],
+	// Publish the Caddy edge and LiveKit dev-mode media (ICE-TCP + UDP mux) to
+	// the host. The host ports come from bin/dev's controller via localEnv
+	// (ENSEMBLEWORKS_PORT_OFFSET support — multiple stacks per host); defaults
+	// keep `devcontainer up` / VS Code working without bin/dev. The container
+	// port EQUALS the host port (uniform offset) because LiveKit advertises its
+	// UDP port in ICE candidates — a remap would silently break voice.
+	// Ignored by Codespaces — harmless.
+	"runArgs": [
+		"-p", "${localEnv:ENSEMBLEWORKS_HOSTPORT_CADDY:8080}:${localEnv:ENSEMBLEWORKS_HOSTPORT_CADDY:8080}",
+		"-p", "${localEnv:ENSEMBLEWORKS_HOSTPORT_LIVEKIT_TCP:7881}:${localEnv:ENSEMBLEWORKS_HOSTPORT_LIVEKIT_TCP:7881}",
+		"-p", "${localEnv:ENSEMBLEWORKS_HOSTPORT_LIVEKIT_UDP:7882}:${localEnv:ENSEMBLEWORKS_HOSTPORT_LIVEKIT_UDP:7882}/udp"
+	],
+	// The engine's offset for the env-only path (explicit ENSEMBLEWORKS_PORT_OFFSET
+	// with no .local/port-offset file): postStartCommand runs inside the container
+	// where host env doesn't otherwise reach. Empty when unset -> engine falls back
+	// to .local/port-offset, then 0. Changing the offset requires a container
+	// recreate anyway (ports are published at create time).
+	"containerEnv": { "ENSEMBLEWORKS_PORT_OFFSET": "${localEnv:ENSEMBLEWORKS_PORT_OFFSET}" },
 	// Host-side: detect this host's LAN IP for LiveKit's node_ip (LAN voice).
 	"initializeCommand": "bash .devcontainer/detect-lan-ip.sh",
 	"postCreateCommand": "bash .devcontainer/post-create.bash",
