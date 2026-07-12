@@ -22,6 +22,57 @@ export type Op =
   | { kind: 'deleteBinding'; id: string }
 
 const KINDS = ['note', 'geo', 'frame', 'group'] as const
+const COLORS = ['red', 'blue', 'green', 'yellow'] as const
+
+// How often a generated shape / prop edit carries STRUCTURED content instead
+// of an empty record. With all-empty props/meta (the rig's original
+// fixtures), nested/multi-key data never flowed through winner election,
+// dedupe, per-op prop merges, or the invariant checks at all — this closes
+// that gap. Scope honesty (mutation-probed at 500 seeds): this does NOT make
+// the rig catch a de-sorted stableStringify, and structurally cannot — Loro's
+// value marshaling normalizes key order deterministically and IDENTICALLY on
+// every peer (probe: writer inserts z,a,m; writer and all importers read
+// back z,m,a), so every rig comparison sees byte-identical inputs either
+// way. The key sort is pinned by canvas-model's unit assertion; its
+// end-to-end justification is cross-REPRESENTATION comparison — a
+// Loro-marshaled object vs one built in original insertion order outside
+// Loro (the ShadowMirror tldraw-vs-mirror path that already cost one bug) —
+// which no single-engine rig exercises.
+const RICH_CONTENT_RATE = 0.3
+
+// Op-mix thresholds: one draw r = rng() per loop turn, matched against these
+// CUMULATIVE upper bounds in order (each band's probability is the gap to the
+// previous bound). Rationale per band:
+const RATE_CYCLE_PAIR = 0.05 //       5% — hostile reparent-into-each-other burst: rare enough not to dominate, frequent enough that ~every batch has one
+const RATE_DELETE_THEN_BIND = 0.1 //  5% — hostile delete-then-bind burst: seeds the dangling-binding repair path
+const RATE_CYCLE_SELF_DESC = 0.15 //  5% — hostile reparent-to-own-descendant burst: the single-shape phrasing of the cycle guard
+const RATE_PUT_SHAPE = 0.55 //       40% — putShape dominates: creation/overwrite churn is what makes the tiny shared id pool collide across peers
+const RATE_UPDATE_PROPS = 0.75 //    20% — concurrent same-shape prop edits (the LWW-per-key case) need real volume
+const RATE_REPARENT = 0.9 //         15% — plain reparents keep the tree topology moving between the hostile bursts
+const RATE_DELETE_SHAPE = 0.96 //     6% — deletes stay below creations so docs grow rather than empty out
+// remaining 4% — binding ops, split 50/50 put/delete by a second draw
+
+/** ~RICH_CONTENT_RATE of the time: multi-key props with a nested object and
+ * an array — the shapes of data stableStringify must serialize
+ * key-order-insensitively (objects) yet order-sensitively (arrays). All
+ * values PRNG-drawn, so determinism holds. Kind-agnostic on purpose: every
+ * KINDS entry's schema is a looseObject, extra keys pass through. */
+function randomProps(rng: Rng): Record<string, unknown> {
+  if (rng() >= RICH_CONTENT_RATE) return {}
+  const props: Record<string, unknown> = {
+    color: pick(rng, COLORS),
+    size: { w: int(rng, 800), h: int(rng, 600) },
+    tags: [`t${int(rng, 5)}`, `t${int(rng, 5)}`],
+  }
+  if (rng() < 0.5) props.z = int(rng, 10)
+  return props
+}
+
+/** Same idea for meta (carried verbatim by the model — z.record). */
+function randomMeta(rng: Rng): Record<string, unknown> {
+  if (rng() >= RICH_CONTENT_RATE) return {}
+  return { origin: pick(rng, ['agent', 'user', 'import'] as const), rev: int(rng, 100) }
+}
 
 function randomShape(rng: Rng, id: string, parentId: string): Shape {
   return {
@@ -34,8 +85,8 @@ function randomShape(rng: Rng, id: string, parentId: string): Shape {
     rotation: 0,
     isLocked: false,
     opacity: 1,
-    meta: {},
-    props: {},
+    meta: randomMeta(rng),
+    props: randomProps(rng),
   }
 }
 
@@ -136,7 +187,7 @@ export function randomOps(rng: Rng, count: number, idPool: IdPool): Op[] {
   const parentOf = new Map<string, string>(idPool.shapeIds.map((id) => [id, idPool.pageIds[0] ?? 'page:p']))
   while (ops.length < count) {
     const r = rng()
-    if (r < 0.05 && idPool.shapeIds.length >= 2) {
+    if (r < RATE_CYCLE_PAIR && idPool.shapeIds.length >= 2) {
       const a = creatableId(rng, idPool, deletedThisBatch)
       const b = otherCreatableId(rng, idPool, a, deletedThisBatch)
       const aPage = pick(rng, idPool.pageIds)
@@ -145,7 +196,7 @@ export function randomOps(rng: Rng, count: number, idPool: IdPool): Op[] {
       ops.push({ kind: 'reparent', id: a, parentId: b }) // attempt a under b: cycle, must be rejected
       deletedThisBatch.delete(a); deletedThisBatch.delete(b)
       parentOf.set(a, aPage); parentOf.set(b, a) // the rejected reparent(a, b) is deliberately NOT mirrored
-    } else if (r < 0.1) {
+    } else if (r < RATE_DELETE_THEN_BIND) {
       const deletedId = pick(rng, idPool.shapeIds)
       const fromId = otherId(rng, idPool, deletedId)
       ops.push({ kind: 'deleteShape', id: deletedId })
@@ -154,7 +205,7 @@ export function randomOps(rng: Rng, count: number, idPool: IdPool): Op[] {
         kind: 'putBinding',
         binding: { id: pick(rng, idPool.bindingIds) as Binding['id'], fromId: fromId as Binding['fromId'], toId: deletedId as Binding['toId'], props: {}, meta: {} },
       })
-    } else if (r < 0.15 && idPool.shapeIds.length >= 2) {
+    } else if (r < RATE_CYCLE_SELF_DESC && idPool.shapeIds.length >= 2) {
       const parent = creatableId(rng, idPool, deletedThisBatch)
       const child = otherCreatableId(rng, idPool, parent, deletedThisBatch)
       const parentPage = pick(rng, idPool.pageIds)
@@ -163,21 +214,24 @@ export function randomOps(rng: Rng, count: number, idPool: IdPool): Op[] {
       ops.push({ kind: 'reparent', id: parent, parentId: child }) // parent under its own child: cycle
       deletedThisBatch.delete(parent); deletedThisBatch.delete(child)
       parentOf.set(parent, parentPage); parentOf.set(child, parent) // rejected reparent NOT mirrored
-    } else if (r < 0.55) {
+    } else if (r < RATE_PUT_SHAPE) {
       const id = creatableId(rng, idPool, deletedThisBatch)
       const parentId = randomParentTarget(rng, idPool)
       ops.push({ kind: 'putShape', shape: randomShape(rng, id, parentId) })
       deletedThisBatch.delete(id)
       parentOf.set(id, parentId)
-    } else if (r < 0.75) {
+    } else if (r < RATE_UPDATE_PROPS) {
       const id = pick(rng, idPool.shapeIds)
-      ops.push({ kind: 'updateProps', id, props: { tag: int(rng, 1_000_000) } })
-    } else if (r < 0.9) {
+      // A distinguishing scalar always; structured nested content at the
+      // same RICH_CONTENT_RATE as randomShape (see randomProps' comment for
+      // why the nesting is load-bearing coverage, not decoration).
+      ops.push({ kind: 'updateProps', id, props: { tag: int(rng, 1_000_000), ...randomProps(rng) } })
+    } else if (r < RATE_REPARENT) {
       const id = pick(rng, idPool.shapeIds)
       const parentId = randomParentTarget(rng, idPool)
       ops.push({ kind: 'reparent', id, parentId })
       parentOf.set(id, parentId) // best-effort: some of these throw on a cycle at runtime (superset, safe)
-    } else if (r < 0.96) {
+    } else if (r < RATE_DELETE_SHAPE) {
       const id = pick(rng, idPool.shapeIds)
       ops.push({ kind: 'deleteShape', id })
       markDeletedWithCascade(id, deletedThisBatch, parentOf)

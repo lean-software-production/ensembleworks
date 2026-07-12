@@ -22,6 +22,18 @@
  * definition. (The engine layer additionally needs a consistent PHYSICAL
  * choice for ties; LoroCanvasDoc's dedupe breaks them by TreeID, which
  * converged peers share.)
+ *
+ * Contract edges (each probed against this implementation):
+ * - CYCLIC input throws RangeError (stack overflow). The real guarantee that
+ *   keeps this unreachable is DATA-PATH, not schema: shape props/meta are
+ *   z.unknown() records and zod does NOT guard against cycles — what does is
+ *   that every shape body arrives as JSON over the wire (or out of Loro's
+ *   WASM marshaling), and JSON parsing cannot produce a cyclic value.
+ * - Array HOLES render as invalid-JSON gaps ("[1,,3]"). Unreachable for the
+ *   same data-path reason (JSON.parse never yields holes); round-tripping
+ *   holey arrays is a non-goal, not a bug.
+ * - bigint throws TypeError, exactly like JSON.stringify — intentional
+ *   parity: a value JSON can't carry has no business in a winner key either.
  */
 export function stableStringify(v: unknown): string {
   if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null'

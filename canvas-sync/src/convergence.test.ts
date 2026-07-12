@@ -18,7 +18,11 @@ import { mulberry32, shuffle } from './rig/prng.js'
 import { applyOp, randomOps, type IdPool } from './rig/ops.js'
 import { normalize } from './test-helpers.js'
 
-const SEEDS = 50
+// Seed-count lever: `EW_RIG_SEEDS=500 bun src/convergence.test.ts` runs a
+// larger sweep without editing source — that's how the 500/2000-seed stress
+// runs in the execution reports are produced. Default 50 keeps the
+// per-commit run sub-second. (NaN/0/absent all fall through to 50.)
+const SEEDS = Number(process.env.EW_RIG_SEEDS) || 50
 const N = 3
 const MAX_OPS = 40
 const PEER_IDS = [1n, 2n, 3n] as const
@@ -42,8 +46,16 @@ interface TrialResult { ok: boolean; detail?: string; skipped: number }
 /**
  * One full trial, parameterized ONLY by (seed, opCount) so it's replayable:
  * same inputs ⇒ same outcome, forever (the shrink mechanism depends on this).
+ *
+ * EXPORTED so the shrink failure message's replay instruction actually works:
+ * `import { runTrial } from './convergence.test.ts'` then call it with the
+ * reported (seed, opCount). Caveat, stated rather than hidden: house test
+ * files are self-executing, so importing this module ALSO re-runs the full
+ * seed sweep below as a side effect — acceptable for a debugging session
+ * (it's the same sweep you're investigating), just don't import it from
+ * another suite.
  */
-function runTrial(seed: number, opCount: number): TrialResult {
+export function runTrial(seed: number, opCount: number): TrialResult {
   const rng = mulberry32(seed)
 
   // GENESIS fork, not N independent creates: putShape on a brand-new id
