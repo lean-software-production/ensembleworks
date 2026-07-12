@@ -1,15 +1,15 @@
 // Run: bun src/overlay.test.ts
 // Component tests use renderToStaticMarkup (no DOM emulator — see
 // viewport.test.ts's header) with React.createElement, hence `.test.ts` not
-// `.test.tsx` (see that same header for why). Covers D4: Selection outlines
-// (incl. multi-select combined bounds), Handles, and SnapGuides — the three
-// pieces Overlay.tsx composes into one screen-space SVG. D5 (Arrows) extends
-// this same file.
+// `.test.tsx` (see that same header for why). Covers D4 (Selection/Handles/
+// SnapGuides) and D5 (Arrows) — both land in the same screen-space overlay
+// SVG, so one file exercises the whole paint stack Overlay.tsx composes.
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { makeDocument, type CanvasDocument, type Shape, type SnapResult } from '@ensembleworks/canvas-model'
+import { makeDocument, type Binding, type CanvasDocument, type Shape, type SnapResult } from '@ensembleworks/canvas-model'
 import { selectionHandles, worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
+import { arrowheadPoints, Arrows } from './overlay/Arrows.js'
 import { combinedWorldBounds, Selection } from './overlay/Selection.js'
 import { Handles } from './overlay/Handles.js'
 import { SnapGuides } from './overlay/SnapGuides.js'
@@ -20,8 +20,23 @@ const geoShape = (id: string, x: number, y: number, w = 100, h = 100, rotation =
     isLocked: false, opacity: 1, meta: {}, props: { w, h },
   }) as Shape
 
-function docOf(shapes: Shape[]): CanvasDocument {
-  return makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes, bindings: [] })
+const arrowShape = (id: string, x: number, y: number, props: Record<string, unknown> = {}): Shape =>
+  ({
+    id, kind: 'arrow', parentId: 'page:p', index: 'a1', x, y, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props,
+  }) as Shape
+
+const endBinding = (arrowId: string, targetId: string, nx: number, ny: number): Binding => ({
+  id: `binding:${arrowId}-end` as any, fromId: arrowId as any, toId: targetId as any,
+  props: { terminal: 'end', anchor: { nx, ny } }, meta: {},
+})
+const startBinding = (arrowId: string, targetId: string, nx: number, ny: number): Binding => ({
+  id: `binding:${arrowId}-start` as any, fromId: arrowId as any, toId: targetId as any,
+  props: { terminal: 'start', anchor: { nx, ny } }, meta: {},
+})
+
+function docOf(shapes: Shape[], bindings: Binding[] = []): CanvasDocument {
+  return makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes, bindings })
 }
 
 // Direct arithmetic reimplementation of input.ts's NORMATIVE camera
@@ -166,4 +181,117 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
   console.log('ok: empty selection / absent snap result render nothing')
 }
 
-console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides)')
+// ============================================================================
+// 7. Arrows: unbound straight arrow — hand-computed screen path string.
+// ============================================================================
+{
+  const arrow = arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } })
+  const doc = docOf([arrow])
+  const camera: Camera = { x: 10, y: -5, z: 2 }
+  const startScreen = toScreen(camera, { x: 0, y: 0 })
+  const endScreen = toScreen(camera, { x: 100, y: 0 })
+  const expectedD = `M ${startScreen.x} ${startScreen.y} L ${endScreen.x} ${endScreen.y}`
+
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera }))
+  assert.ok(html.includes(`d="${expectedD}"`), `straight arrow path should be "${expectedD}": ${html}`)
+  console.log('ok: Arrows — straight path, hand-computed screen coordinates')
+}
+
+// ============================================================================
+// 8. Arrows: curved (bend != 0) — hand-computed control point (chord midpoint
+//    + bend along the chord's perpendicular, same convention arrow-route.
+//    test.ts pins) THEN converted to screen, composing a Q path.
+// ============================================================================
+{
+  const arrow = arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 }, bend: 10 })
+  const doc = docOf([arrow])
+  const camera: Camera = { x: 10, y: -5, z: 2 }
+  // Hand-derived per arrow-route.ts's curveMid: horizontal chord (0,0)->
+  // (100,0), unit dir (1,0), perpendicular (0,1) -> mid = (50,0) + 10*(0,1) = (50,10).
+  const expectedMidWorld = { x: 50, y: 10 }
+  const startScreen = toScreen(camera, { x: 0, y: 0 })
+  const endScreen = toScreen(camera, { x: 100, y: 0 })
+  const midScreen = toScreen(camera, expectedMidWorld)
+  const expectedD = `M ${startScreen.x} ${startScreen.y} Q ${midScreen.x} ${midScreen.y} ${endScreen.x} ${endScreen.y}`
+
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera }))
+  assert.ok(html.includes(`d="${expectedD}"`), `curved arrow path should be "${expectedD}": ${html}`)
+  console.log('ok: Arrows — curved path, hand-computed control point')
+}
+
+// ============================================================================
+// 9. Arrowhead tangent orientation: STRAIGHT arrow orients along
+//    (end - start); CURVED arrow orients along (end - mid), NOT (end -
+//    start) — both hand-computed via direct trig (not by calling
+//    arrowheadPoints), then cross-checked against arrowheadPoints itself.
+// ============================================================================
+{
+  const camera: Camera = { x: 10, y: -5, z: 2 }
+
+  function handArrowhead(tail: { x: number; y: number }, tip: { x: number; y: number }) {
+    const angle = Math.atan2(tip.y - tail.y, tip.x - tail.x)
+    const cos = Math.cos(angle), sin = Math.sin(angle)
+    const back = { x: tip.x - 10 * cos, y: tip.y - 10 * sin }
+    const left = { x: back.x + 4 * -sin, y: back.y + 4 * cos }
+    const right = { x: back.x - 4 * -sin, y: back.y - 4 * cos }
+    return [tip, left, right] as const
+  }
+
+  // Straight: tail = start, tip = end.
+  {
+    const startScreen = toScreen(camera, { x: 0, y: 0 })
+    const endScreen = toScreen(camera, { x: 100, y: 0 })
+    const expected = handArrowhead(startScreen, endScreen)
+    const viaLibrary = arrowheadPoints(startScreen, endScreen)
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(expected[i]!.x - viaLibrary[i]!.x) < 1e-9 && Math.abs(expected[i]!.y - viaLibrary[i]!.y) < 1e-9, `point ${i} should match`)
+    }
+    const doc = docOf([arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } })])
+    const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera }))
+    const pointsStr = expected.map((p) => `${p.x},${p.y}`).join(' ')
+    assert.ok(html.includes(`data-overlay="arrowhead" points="${pointsStr}"`), `straight arrowhead should point along (end-start): ${html}`)
+    console.log('ok: Arrows — straight arrowhead oriented along (end - start)')
+  }
+
+  // Curved: tail = mid (NOT start) — the whole point of this test.
+  {
+    const midScreen = toScreen(camera, { x: 50, y: 10 })
+    const endScreen = toScreen(camera, { x: 100, y: 0 })
+    const expected = handArrowhead(midScreen, endScreen)
+    const viaLibrary = arrowheadPoints(midScreen, endScreen)
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(expected[i]!.x - viaLibrary[i]!.x) < 1e-9 && Math.abs(expected[i]!.y - viaLibrary[i]!.y) < 1e-9, `point ${i} should match`)
+    }
+    const doc = docOf([arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 }, bend: 10 })])
+    const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera }))
+    const pointsStr = expected.map((p) => `${p.x},${p.y}`).join(' ')
+    assert.ok(html.includes(`data-overlay="arrowhead" points="${pointsStr}"`), `curved arrowhead should point along (end-mid), NOT (end-start): ${html}`)
+    console.log('ok: Arrows — curved arrowhead oriented along (end - mid), not (end - start)')
+  }
+}
+
+// ============================================================================
+// 10. A BOUND arrow re-routes when the snapshot moves the target: two
+//     renders, the target translated between them, the rendered path's
+//     start point moves accordingly — proving arrows read live snapshot
+//     state each render rather than a cached bind-time position.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 } // identity — screen == world, isolates the assertion to routing, not projection
+  const arrow = arrowShape('shape:arrow', 50, 50, { end: { x: 500, y: 0 } })
+  const bindings = [startBinding('shape:arrow', 'shape:a', 0.5, 0.5)]
+
+  const a0 = geoShape('shape:a', 0, 0, 100, 100)
+  const before = docOf([a0, arrow], bindings)
+  const htmlBefore = renderToStaticMarkup(createElement(Arrows, { snapshot: before, camera }))
+  assert.ok(htmlBefore.includes('d="M 100 50'), `before the move, bound start should clip to A's original right edge (100,50): ${htmlBefore}`)
+
+  const a1 = geoShape('shape:a', 200, 0, 100, 100) // translated +200 on x
+  const after = docOf([a1, arrow], bindings)
+  const htmlAfter = renderToStaticMarkup(createElement(Arrows, { snapshot: after, camera }))
+  assert.ok(htmlAfter.includes('d="M 300 50'), `after the move, bound start should clip to A's NEW right edge (300,50): ${htmlAfter}`)
+  assert.notEqual(htmlBefore, htmlAfter, 'the two renders must actually differ')
+  console.log('ok: Arrows — a bound arrow re-routes against the live snapshot when its target moves')
+}
+
+console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing)')

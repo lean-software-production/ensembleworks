@@ -29,6 +29,7 @@ import type { SnapResult } from '@ensembleworks/canvas-model'
 import { combinedWorldBounds, Selection } from './overlay/Selection.js'
 import { Handles } from './overlay/Handles.js'
 import { SnapGuides } from './overlay/SnapGuides.js'
+import { Arrows } from './overlay/Arrows.js'
 import type { ViewportSize } from './ShapeLayer.js'
 
 export interface OverlayProps {
@@ -40,13 +41,12 @@ export interface OverlayProps {
 }
 
 // PAINT ORDER (later = on top; no z-index — same house convention as
-// Viewport.tsx's Grid-before-WorldLayer): Selection outlines first, then
-// SnapGuides (a transient drag affordance that should stay visible over
-// static outlines), then Handles topmost (the actual interactive targets a
-// later unit wires — nothing should occlude them). D5 adds Arrows BELOW
-// Selection (arrows are document content, conceptually "under" any selection
-// chrome drawn on top of them) — noted here since D5 lands in this same
-// file. OURS: no tldraw-source citation for this exact order.
+// Viewport.tsx's Grid-before-WorldLayer): Arrows first (they're DOCUMENT
+// CONTENT, conceptually "under" any selection chrome drawn on top of them),
+// then Selection outlines, then SnapGuides (a transient drag affordance that
+// should stay visible over static outlines), then Handles topmost (the
+// actual interactive targets a later unit wires — nothing should occlude
+// them). OURS: no tldraw-source citation for this exact order.
 export function Overlay({ editorState, snapshot, camera, viewportSize, snapResult }: OverlayProps) {
   // combinedWorldBounds already returns null for an empty selection (zero
   // iterations never sets its internal `any` flag) — Handles' own `!bounds`
@@ -60,6 +60,7 @@ export function Overlay({ editorState, snapshot, camera, viewportSize, snapResul
       height={viewportSize.height}
       style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
     >
+      <Arrows snapshot={snapshot} camera={camera} />
       <Selection snapshot={snapshot} selection={editorState.selection} camera={camera} />
       <SnapGuides snapResult={snapResult} camera={camera} viewportSize={viewportSize} />
       <Handles bounds={combinedBounds} camera={camera} />
