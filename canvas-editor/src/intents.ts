@@ -76,12 +76,17 @@ export interface RotateSelection {
   readonly dRadians: number
 }
 
-/** Move every shape in `ids` under `parentId` (a shape or page id) — one
- * `doc.reparent()` call per id. Silent no-op per id if that id doesn't
- * resolve (CanvasDoc.reparent's own contract); throws if `parentId` is
- * unknown or the move would cycle (also CanvasDoc.reparent's contract) —
- * this intent does not soften that, a caller reparenting to a
- * not-yet-known id is a bug to surface, not swallow. */
+/** Move every shape in `ids` under `parentId` (a shape or page id).
+ * Tolerant PER ID, never throwing (the applyAll TOLERANCE CONTRACT in
+ * editor.ts — a throw mid-batch would leak earlier intents' uncommitted
+ * mutations into the next commit): an id is SKIPPED — the rest still
+ * apply — when the id itself doesn't resolve, when `parentId` names a
+ * shape that doesn't currently resolve (e.g. vanished under a concurrent
+ * remote delete), or when the move would create a cycle (self-parent
+ * included). The editor pre-validates all of this itself
+ * (Editor.canReparent) rather than leaning on CanvasDoc.reparent's
+ * throw-on-unknown-parent contract. A page-id target is always placeable
+ * (reparent's "move to root" semantics). */
 export interface ReparentShapes { readonly type: 'ReparentShapes'; readonly ids: readonly string[]; readonly parentId: string }
 
 /** Delete every shape in `ids` (cascades to each shape's subtree — see

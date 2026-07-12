@@ -339,4 +339,85 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: Editor works against the CanvasDoc interface, not just LoroCanvasDoc')
 }
 
+// ============================================================================
+// 11. ReparentShapes tolerant-skip: a vanished parent target must NOT throw
+//     mid-batch. The failure mode being pinned (reviewer-reproduced): Loro
+//     mutations apply BEFORE commit(), so a throw between an earlier
+//     intent's mutation and the batch's single commit() leaves that
+//     mutation uncommitted — it then leaks into the NEXT unrelated commit
+//     and ships to peers attributed to the wrong batch. So: no throw, the
+//     translate commits EXACTLY once, the reparent is skipped, and a second
+//     peer importing the update sees the translate only.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { x: 0, y: 0 }) })
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.applyAll([
+    { type: 'TranslateShapes', ids: ['shape:a'], dx: 5, dy: 5 },
+    { type: 'ReparentShapes', ids: ['shape:a'], parentId: 'shape:vanished' },
+  ]) // must not throw
+
+  assert.equal(commits, 1, 'the batch committed exactly once — the translate did not leak uncommitted')
+  assert.equal(editor.doc.getShape('shape:a')!.x, 5, 'translate applied')
+  assert.equal(editor.doc.getShape('shape:a')!.parentId, 'page:p', 'reparent to a vanished target skipped')
+
+  const doc2 = LoroCanvasDoc.create({ peerId: 2n })
+  doc2.import(doc.exportUpdate())
+  doc2.commit()
+  assert.equal(doc2.getShape('shape:a')!.x, 5, 'second peer sees the translate')
+  assert.equal(doc2.getShape('shape:a')!.parentId, 'page:p', 'second peer sees no reparent')
+
+  console.log('ok: ReparentShapes skips a vanished target — no throw, no uncommitted-mutation leak')
+}
+
+// ============================================================================
+// 12. ReparentShapes per-id atomicity: in one intent, an id whose move would
+//     CYCLE is skipped while the valid ids still apply — never "first id
+//     applied, then throw" partial application.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:parent') })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:child', { parentId: 'shape:parent' }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:free') })
+
+  // Reparent both a free shape and shape:child's own ANCESTOR under
+  // shape:child: the free shape must move; the ancestor move (a cycle) must
+  // be skipped, not thrown.
+  editor.apply({ type: 'ReparentShapes', ids: ['shape:free', 'shape:parent'], parentId: 'shape:child' })
+
+  assert.equal(editor.doc.getShape('shape:free')!.parentId, 'shape:child', 'valid id applied')
+  assert.equal(editor.doc.getShape('shape:parent')!.parentId, 'page:p', 'cycling id skipped, not thrown')
+  // Self-parenting is the degenerate cycle — also skipped.
+  editor.apply({ type: 'ReparentShapes', ids: ['shape:free'], parentId: 'shape:free' })
+  assert.equal(editor.doc.getShape('shape:free')!.parentId, 'shape:child', 'self-parent skipped')
+
+  console.log('ok: ReparentShapes skips per id — valid ids apply, cycling ids are dropped')
+}
+
+// ============================================================================
+// 13. CompleteArrow on a vanished arrow must not write a DANGLING binding:
+//     both the props update AND the putBinding are gated on the arrow shape
+//     still resolving.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:target', { kind: 'geo', props: { w: 50, h: 50 } }) })
+  editor.apply({ type: 'StartArrow', shape: shape('shape:arrow', { kind: 'arrow' }) })
+  editor.apply({ type: 'DeleteShapes', ids: ['shape:arrow'] }) // arrow vanishes (e.g. a remote delete)
+
+  editor.apply({
+    type: 'CompleteArrow',
+    id: 'shape:arrow',
+    end: { x: 10, y: 10 },
+    toBinding: { targetId: 'shape:target', anchor: { nx: 0.5, ny: 0.5 } },
+  }) // must not throw AND must not write the binding
+
+  assert.equal(editor.doc.listBindings().length, 0, 'no dangling binding for a vanished arrow')
+  console.log('ok: CompleteArrow on a vanished arrow writes neither props nor a dangling binding')
+}
+
 console.log('ok: canvas-editor editor + intents')

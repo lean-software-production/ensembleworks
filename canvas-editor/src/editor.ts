@@ -166,6 +166,19 @@ export class Editor {
    * than just reading the doc live. Reading live costs O(depth) per id for
    * the translate dedupe walk (see dedupeForTranslate) instead of O(1) off a
    * snapshot — a fine trade at editor-interaction scale.
+   *
+   * TOLERANCE CONTRACT: mutation intents NEVER throw on stale/vanished
+   * targets — they SKIP the unresolvable id and keep going. This is
+   * load-bearing, not politeness: Loro mutations apply to the doc the
+   * moment the mutator is called, BEFORE this method's single commit(), so
+   * an exception between an earlier intent's mutation and the batch commit
+   * would leave that mutation uncommitted — it would then leak into the
+   * NEXT unrelated apply()'s commit and ship to peers attributed to the
+   * wrong batch. Concretely: Translate/Resize/Rotate/CompleteArrow skip via
+   * getShape, SetText/DeleteShapes ride CanvasDoc's own silent-no-op
+   * contract, and ReparentShapes PRE-VALIDATES each id (see the case below)
+   * because doc.reparent is the one CanvasDoc mutator whose contract THROWS
+   * on an unknown parent/cycle.
    */
   applyAll(intents: readonly Intent[]): void {
     if (intents.length === 0) return
@@ -253,13 +266,40 @@ export class Editor {
       }
 
       case 'ReparentShapes': {
-        for (const id of intent.ids) this.doc.reparent(id, intent.parentId)
-        return { state, docMutated: intent.ids.length > 0, stateChanged: false }
+        // NEVER lean on doc.reparent's throw contract (unknown parent /
+        // cycle both throw — the ONE CanvasDoc mutator that does): a throw
+        // here is exactly the uncommitted-mutation leak the applyAll
+        // TOLERANCE CONTRACT forbids. Pre-validate per id and SKIP the ids
+        // that can't move, so valid ids in the same intent still apply
+        // (per-id atomicity: no "first id moved, then the second threw").
+        let mutated = false
+        for (const id of intent.ids) {
+          if (!this.canReparent(id, intent.parentId)) continue
+          // Belt-and-braces: canReparent walks the MODEL parent chain
+          // (data.parentId); in pathological split-brain states (duplicate
+          // ids under concurrent churn — see LoroCanvasDoc.nodesByShapeId)
+          // the PHYSICAL tree can disagree and Loro's native cycle guard
+          // could still throw where the model walk said fine. The contract
+          // is "never leak", so the engine's own guard is caught and
+          // treated as one more skip, not propagated.
+          try { this.doc.reparent(id, intent.parentId); mutated = true } catch { /* skip */ }
+        }
+        return { state, docMutated: mutated, stateChanged: false }
       }
 
       case 'DeleteShapes': {
-        for (const id of intent.ids) this.doc.deleteShape(id)
-        return { state, docMutated: intent.ids.length > 0, stateChanged: false }
+        // Real mutated flag: only true if an id actually resolved and was
+        // deleted. deleteShape on a missing id is a silent no-op, and
+        // committing a no-op batch HAPPENS to be harmless on Loro (an empty
+        // commit emits nothing) — but that's an engine detail, not a
+        // CanvasDoc contract, so the flag must not rely on it.
+        let mutated = false
+        for (const id of intent.ids) {
+          if (!this.doc.getShape(id)) continue
+          this.doc.deleteShape(id)
+          mutated = true
+        }
+        return { state, docMutated: mutated, stateChanged: false }
       }
 
       case 'SetText':
@@ -267,6 +307,12 @@ export class Editor {
         return { state, docMutated: true, stateChanged: false }
 
       case 'StartArrow': {
+        // Malformed intent (kind !== 'arrow') is SKIPPED, not asserted: a
+        // throw mid-batch would leak earlier intents' uncommitted mutations
+        // (the applyAll TOLERANCE CONTRACT), and there is no safe partial-
+        // commit alternative. A skipped StartArrow is loudly visible to its
+        // emitting tool (the arrow it expects never appears).
+        if (intent.shape.kind !== 'arrow') return { state, docMutated: false, stateChanged: false }
         this.doc.putShape(intent.shape)
         if (intent.fromBinding) {
           this.doc.putBinding({
@@ -281,10 +327,14 @@ export class Editor {
       }
 
       case 'CompleteArrow': {
+        // BOTH halves gate on the arrow still resolving: if the arrow
+        // vanished (remote delete racing the local gesture), writing the
+        // end binding anyway would create a DANGLING binding pointing at a
+        // dead fromId — repair() would eventually sweep it, but the editor
+        // must not manufacture garbage for repair to clean.
         const shape = this.doc.getShape(intent.id)
-        if (shape) {
-          this.doc.updateProps(intent.id, { end: { x: intent.end.x - shape.x, y: intent.end.y - shape.y } })
-        }
+        if (!shape) return { state, docMutated: false, stateChanged: false }
+        this.doc.updateProps(intent.id, { end: { x: intent.end.x - shape.x, y: intent.end.y - shape.y } })
         if (intent.toBinding) {
           this.doc.putBinding({
             id: `binding:${intent.id}-end` as any,
@@ -312,6 +362,42 @@ export class Editor {
       case 'EndEdit':
         return { state: { ...state, editingId: null }, docMutated: false, stateChanged: true }
     }
+  }
+
+  // Can `id` legally move under `parentId` RIGHT NOW? The ReparentShapes
+  // pre-validation (see that case): doc.reparent throws on an unknown
+  // parent or a cycle, and the applyAll TOLERANCE CONTRACT forbids letting
+  // either throw reach a batch. Rules, in order:
+  //   1. `id` must itself resolve (reparent of a missing id is a silent
+  //      no-op in CanvasDoc, but "applied" would be a lie for the mutated
+  //      flag — treat it as a skip).
+  //   2. A page target is always placeable (reparent's own semantics: any
+  //      'page:' prefix means "move to root"; it does not check the page
+  //      exists, and neither do we — same tolerance).
+  //   3. A shape target must resolve via getShape.
+  //   4. The move must not create a cycle: self-parenting is the degenerate
+  //      case, and otherwise the TARGET's parent chain must not pass
+  //      through `id` (if it does, id is the target's ancestor and moving
+  //      it under the target closes a loop). The walk is over MODEL
+  //      parentIds (getShape), visited-set-guarded so a pre-existing
+  //      malformed cycle in the chain terminates instead of hanging —
+  //      same discipline as geometry.ts's worldTransform.
+  private canReparent(id: string, parentId: string): boolean {
+    if (!this.doc.getShape(id)) return false
+    if (parentId.startsWith('page:')) return true
+    if (parentId === id) return false // self-parent: degenerate cycle
+    const target = this.doc.getShape(parentId)
+    if (!target) return false // vanished/unknown parent — skip, never throw
+    const visited = new Set<string>([parentId])
+    let current: typeof target | undefined = target
+    while (current) {
+      const nextId: string = current.parentId
+      if (nextId === id) return false // target sits under `id` — the move would cycle
+      if (visited.has(nextId)) break // malformed pre-existing cycle: stop climbing
+      visited.add(nextId)
+      current = this.doc.getShape(nextId) // undefined once the chain reaches a page
+    }
+    return true
   }
 }
 
