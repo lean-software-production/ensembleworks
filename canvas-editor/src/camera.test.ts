@@ -102,4 +102,29 @@ const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
   console.log('ok: applyWheel clamps the per-tick zoom delta magnitude')
 }
 
-console.log('ok: camera math (zoomAboutPoint invariance, applyWheel pan/zoom, z-clamp)')
+// ============================================================================
+// 6. Poison guard: non-finite wheel deltas must be a NO-OP, never a
+//    camera-corrupting write. Without the guard, a NaN dy on the zoom path
+//    produces camera {NaN,NaN,NaN} with NO recovery (clampZoom propagates
+//    NaN: Math.min/max with NaN is NaN, so every subsequent zoom stays NaN),
+//    and an Infinity dx on the pan path shoots x to Infinity.
+// ============================================================================
+{
+  const camera = { x: 1, y: 2, z: 2 }
+
+  const nanZoom = applyWheel(camera, { type: 'wheel', x: 10, y: 20, dx: 0, dy: NaN, modifiers: { ...NEUTRAL, ctrl: true }, t: 0 })
+  assert.deepEqual(nanZoom, camera, 'NaN dy on the ctrl (zoom) path is a no-op — camera unchanged')
+
+  const nanPan = applyWheel(camera, { type: 'wheel', x: 10, y: 20, dx: 0, dy: NaN, modifiers: NEUTRAL, t: 0 })
+  assert.deepEqual(nanPan, camera, 'NaN dy on the plain (pan) path is a no-op — camera unchanged')
+
+  const infPan = applyWheel(camera, { type: 'wheel', x: 10, y: 20, dx: Infinity, dy: 0, modifiers: NEUTRAL, t: 0 })
+  assert.deepEqual(infPan, camera, 'Infinity dx on the pan path is a no-op — camera unchanged')
+
+  const infZoom = applyWheel(camera, { type: 'wheel', x: 10, y: 20, dx: -Infinity, dy: 3, modifiers: { ...NEUTRAL, meta: true }, t: 0 })
+  assert.deepEqual(infZoom, camera, 'non-finite dx makes the whole event a no-op even when dy alone looks usable — uniform guard')
+
+  console.log('ok: applyWheel treats non-finite dx/dy as a no-op (camera can never be NaN/Infinity-poisoned)')
+}
+
+console.log('ok: camera math (zoomAboutPoint invariance, applyWheel pan/zoom, z-clamp, poison guard)')
