@@ -31,7 +31,7 @@ try {
 }
 const { dataDir: DATA_DIR, databaseDir: DATABASE_DIR, databaseBackupsDir: DATABASE_BACKUPS_DIR } = geometry
 
-const { server } = createSyncApp({ dataDir: DATA_DIR, databaseDir: DATABASE_DIR, clientDist: CLIENT_DIST })
+const { server, close } = createSyncApp({ dataDir: DATA_DIR, databaseDir: DATABASE_DIR, clientDist: CLIENT_DIST })
 
 server.listen(PORT, () => {
 	console.log(`ensembleworks sync server listening on :${PORT}`)
@@ -41,3 +41,31 @@ server.listen(PORT, () => {
 	console.log(`  client build: ${existsSync(CLIENT_DIST) ? CLIENT_DIST : '(not built — dev mode)'}`)
 	console.log(`  auth posture: ${accessVerificationEnabled() ? 'verified (CF Access JWT signatures checked)' : 'header-trust (no CF_ACCESS_TEAM_DOMAIN/AUD — trusting edge headers)'}`)
 })
+
+// F2 graceful shutdown: the FIRST SIGTERM/SIGINT runs the full teardown
+// (app.ts's close() — stops the shadow/idle-sweep intervals, force-closes
+// every ws client, persists + releases every canvas-v2 actor, then closes the
+// http server with its own bounded fallback) and exits 0 once it resolves. A
+// SECOND signal received while that's still in flight means the operator
+// wants OUT now (e.g. close() itself is hung on something its own bound
+// didn't anticipate) — exit(1) immediately, no more teardown attempted.
+let shuttingDown = false
+function shutdown(signal: NodeJS.Signals): void {
+	if (shuttingDown) {
+		console.warn(`ensembleworks sync server: received ${signal} again during shutdown — exiting immediately`)
+		process.exit(1)
+	}
+	shuttingDown = true
+	console.log(`ensembleworks sync server: received ${signal}, shutting down gracefully...`)
+	close()
+		.then(() => {
+			console.log('ensembleworks sync server: shutdown complete')
+			process.exit(0)
+		})
+		.catch((err) => {
+			console.error('ensembleworks sync server: shutdown hook threw — exiting anyway', err)
+			process.exit(1)
+		})
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT', () => shutdown('SIGINT'))
