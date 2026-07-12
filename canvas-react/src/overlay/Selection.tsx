@@ -13,6 +13,17 @@
 // tldraw's own selection treatment, not a byte-for-byte read of their
 // SelectionShapesGroup rendering — flagged here per this task's own
 // instruction to note it as ours if unverified.
+//
+// H3 WATCH-ITEM (perf, measured in review round 2): outlines cost
+// O(selection size) worldCorners+worldToScreen per render — select-all on a
+// 1k-shape doc measured ~8.7ms/render. Bounded by SELECTION size, not doc
+// size (an empty/small selection costs ~nothing regardless of doc scale),
+// so this is only reachable via large explicit selections. Whether
+// selection-outline culling (skip outlines for selected shapes outside the
+// viewport — the same queryViewport broad phase Arrows.tsx now uses) is
+// worth adding is H3's to measure — same profile-first posture as
+// WorldLayer's contain/will-change hints and the COMMIT CADENCE watch-items
+// in canvas-editor's drag tools.
 import type { ReactNode } from 'react'
 import type { CanvasDocument, Bounds } from '@ensembleworks/canvas-model'
 import { worldBounds, worldCorners } from '@ensembleworks/canvas-model'
