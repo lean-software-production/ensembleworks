@@ -7,12 +7,16 @@
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { makeDocument, type Binding, type CanvasDocument, type Shape, type SnapResult } from '@ensembleworks/canvas-model'
+import { buildSpatialIndex, makeDocument, routeArrow, type Binding, type CanvasDocument, type Shape, type SnapResult } from '@ensembleworks/canvas-model'
 import { selectionHandles, worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { arrowheadPoints, Arrows } from './overlay/Arrows.js'
 import { combinedWorldBounds, Selection } from './overlay/Selection.js'
 import { Handles } from './overlay/Handles.js'
 import { SnapGuides } from './overlay/SnapGuides.js'
+
+// Shared viewport for every Arrows test — Arrows needs one for culling (its
+// viewportWorldBounds derives the world-space cull rect from camera + size).
+const VP = { width: 800, height: 600 }
 
 const geoShape = (id: string, x: number, y: number, w = 100, h = 100, rotation = 0): Shape =>
   ({
@@ -192,7 +196,7 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
   const endScreen = toScreen(camera, { x: 100, y: 0 })
   const expectedD = `M ${startScreen.x} ${startScreen.y} L ${endScreen.x} ${endScreen.y}`
 
-  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera }))
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
   assert.ok(html.includes(`d="${expectedD}"`), `straight arrow path should be "${expectedD}": ${html}`)
   console.log('ok: Arrows — straight path, hand-computed screen coordinates')
 }
@@ -214,7 +218,7 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
   const midScreen = toScreen(camera, expectedMidWorld)
   const expectedD = `M ${startScreen.x} ${startScreen.y} Q ${midScreen.x} ${midScreen.y} ${endScreen.x} ${endScreen.y}`
 
-  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera }))
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
   assert.ok(html.includes(`d="${expectedD}"`), `curved arrow path should be "${expectedD}": ${html}`)
   console.log('ok: Arrows — curved path, hand-computed control point')
 }
@@ -247,7 +251,7 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
       assert.ok(Math.abs(expected[i]!.x - viaLibrary[i]!.x) < 1e-9 && Math.abs(expected[i]!.y - viaLibrary[i]!.y) < 1e-9, `point ${i} should match`)
     }
     const doc = docOf([arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } })])
-    const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera }))
+    const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
     const pointsStr = expected.map((p) => `${p.x},${p.y}`).join(' ')
     assert.ok(html.includes(`data-overlay="arrowhead" points="${pointsStr}"`), `straight arrowhead should point along (end-start): ${html}`)
     console.log('ok: Arrows — straight arrowhead oriented along (end - start)')
@@ -263,7 +267,7 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
       assert.ok(Math.abs(expected[i]!.x - viaLibrary[i]!.x) < 1e-9 && Math.abs(expected[i]!.y - viaLibrary[i]!.y) < 1e-9, `point ${i} should match`)
     }
     const doc = docOf([arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 }, bend: 10 })])
-    const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera }))
+    const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
     const pointsStr = expected.map((p) => `${p.x},${p.y}`).join(' ')
     assert.ok(html.includes(`data-overlay="arrowhead" points="${pointsStr}"`), `curved arrowhead should point along (end-mid), NOT (end-start): ${html}`)
     console.log('ok: Arrows — curved arrowhead oriented along (end - mid), not (end - start)')
@@ -283,15 +287,88 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
 
   const a0 = geoShape('shape:a', 0, 0, 100, 100)
   const before = docOf([a0, arrow], bindings)
-  const htmlBefore = renderToStaticMarkup(createElement(Arrows, { snapshot: before, camera }))
+  const htmlBefore = renderToStaticMarkup(createElement(Arrows, { snapshot: before, camera, viewportSize: VP, index: buildSpatialIndex(before) }))
   assert.ok(htmlBefore.includes('d="M 100 50'), `before the move, bound start should clip to A's original right edge (100,50): ${htmlBefore}`)
 
   const a1 = geoShape('shape:a', 200, 0, 100, 100) // translated +200 on x
   const after = docOf([a1, arrow], bindings)
-  const htmlAfter = renderToStaticMarkup(createElement(Arrows, { snapshot: after, camera }))
+  const htmlAfter = renderToStaticMarkup(createElement(Arrows, { snapshot: after, camera, viewportSize: VP, index: buildSpatialIndex(after) }))
   assert.ok(htmlAfter.includes('d="M 300 50'), `after the move, bound start should clip to A's NEW right edge (300,50): ${htmlAfter}`)
   assert.notEqual(htmlBefore, htmlAfter, 'the two renders must actually differ')
   console.log('ok: Arrows — a bound arrow re-routes against the live snapshot when its target moves')
 }
 
-console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing)')
+// ============================================================================
+// 11. Arrow CULLING: with the camera parked over one small region, only the
+//     near arrow renders — five arrows living ~10k world units away are
+//     culled (their own shape bbox is off-viewport, they have no bindings,
+//     and their approximate segment bbox doesn't touch the viewport either).
+//     RED-FIRST: written against the pre-culling Arrows (which routed and
+//     rendered every arrow in the doc unconditionally) — all five far ids
+//     appeared in the output and this block failed.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 } // viewport = world [0,800]x[0,600]
+  const near = arrowShape('shape:near', 100, 100, { end: { x: 100, y: 0 } })
+  const fars = [0, 1, 2, 3, 4].map((i) => arrowShape(`shape:far${i}`, 10_000 + i * 1_000, 10_000, { end: { x: 100, y: 0 } }))
+  const doc = docOf([near, ...fars])
+
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.ok(html.includes('data-shape-id="shape:near"'), `the near arrow must render: ${html}`)
+  for (let i = 0; i < 5; i++) {
+    assert.ok(!html.includes(`data-shape-id="shape:far${i}"`), `far arrow shape:far${i} must be culled: ${html}`)
+  }
+  console.log('ok: Arrows — culling: only the near arrow renders, five ~10k-units-away arrows culled')
+}
+
+// ============================================================================
+// 12. Culling MUST NOT drop a spanning arrow (the over-inclusion bound's
+//     non-negotiable half): both endpoints off-viewport — start at world
+//     (-1000, 300), end at (2000, 300) — but the segment crosses the whole
+//     viewport horizontally. The arrow's own shape bbox sits off-screen at
+//     x=-1000 and there are no bindings, so only the approximate-segment-
+//     bbox check (cull path (c)) can save it. ALSO: a bound arrow whose own
+//     stored position is far away but whose TARGET is on-screen must render
+//     (cull path (b)/(c) via the target).
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const spanning = arrowShape('shape:span', -1000, 300, { end: { x: 3000, y: 0 } }) // world end = (2000, 300)
+  const target = geoShape('shape:target', 300, 200, 100, 100) // on-screen
+  const boundFarArrow = arrowShape('shape:boundfar', 5000, 5000) // own bbox far off-screen
+  const bindings = [endBinding('shape:boundfar', 'shape:target', 0.5, 0.5)]
+  const doc = docOf([spanning, target, boundFarArrow], bindings)
+
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.ok(html.includes('data-shape-id="shape:span"'), `the spanning arrow (both endpoints off-viewport, segment crosses it) MUST render: ${html}`)
+  assert.ok(html.includes('data-shape-id="shape:boundfar"'), `the far-away arrow bound to an ON-SCREEN target MUST render: ${html}`)
+  console.log('ok: Arrows — spanning arrow and far-arrow-with-visible-target both survive culling')
+}
+
+// ============================================================================
+// 13. Culling actually SKIPS the routing work (the perf point, pinned via
+//     the injectable routeFn test seam): near + spanning + 5 far arrows —
+//     routeFn is called EXACTLY twice (the two renderable arrows), never
+//     for the culled five. RED-FIRST: the pre-culling Arrows had no routeFn
+//     seam and routed all 7 unconditionally — this block failed with
+//     calls=0 (prop ignored).
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const near = arrowShape('shape:near', 100, 100, { end: { x: 100, y: 0 } })
+  const spanning = arrowShape('shape:span', -1000, 300, { end: { x: 3000, y: 0 } })
+  const fars = [0, 1, 2, 3, 4].map((i) => arrowShape(`shape:far${i}`, 10_000 + i * 1_000, 10_000, { end: { x: 100, y: 0 } }))
+  const doc = docOf([near, spanning, ...fars])
+
+  const routed: string[] = []
+  const countingRoute: typeof routeArrow = (snapshot, arrow, bindings) => {
+    routed.push(arrow.id)
+    return routeArrow(snapshot, arrow, bindings)
+  }
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc), routeFn: countingRoute }))
+  assert.ok(html.includes('data-shape-id="shape:near"') && html.includes('data-shape-id="shape:span"'), `both renderable arrows present: ${html}`)
+  assert.deepEqual(routed.sort(), ['shape:near', 'shape:span'], `routeFn must be called EXACTLY for the two renderable arrows, never the culled five — got [${routed.join(', ')}]`)
+  console.log('ok: Arrows — routing cost bounded by visible+spanning (routeFn called 2x for 7 arrows)')
+}
+
+console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing + viewport culling)')

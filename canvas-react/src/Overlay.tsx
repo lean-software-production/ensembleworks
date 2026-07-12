@@ -8,22 +8,41 @@
 // zoom-invariant (a 1px stroke is 1px on screen at any camera.z), which a
 // world-space-transformed SVG could not give for free.
 //
-// POINTER EVENTS: the SVG root sets `pointer-events: none` — ALL pointer
-// interaction stays on the Viewport div underneath (per the stacking
-// contract; this overlay is purely a screen-space PAINT layer this unit, not
-// an input target). Individual handle elements (Handles.tsx) MAY opt back
-// in with their own `pointer-events: auto` in a LATER unit, once G3 wires
-// actual handle-dragging (pointerdown on a handle -> the transform tool) —
-// that hook is noted here, not wired: this unit draws, it does not listen.
+// POINTER EVENTS (PERMANENT-BY-DESIGN, not a temporary state): the SVG root
+// sets `pointer-events: none`, and nothing in this overlay will ever opt
+// back in — the overlay is a pure paint layer, forever. Handle-dragging
+// does NOT need DOM hit targets: the transform tool's own FSM already picks
+// handles by PURE GEOMETRY — transform.ts's onIdle runs `hitHandle(...)`
+// against the pointerdown's normalized SCREEN coordinates (the same
+// InputEvent x/y the Viewport div already captures and forwards via
+// onInput), resolving the nearest handle within HIT_TOLERANCE_PX with no
+// DOM element involved. Wiring handle-dragging is therefore G3 making the
+// transform tool active on the Viewport's EXISTING onInput stream — zero
+// changes here, zero `pointer-events: auto` anywhere. Keeping every pointer
+// event on the one Viewport div is also what keeps input handling
+// single-sourced (one capture path, one normalization — dom-events.ts)
+// instead of split across paint layers.
 //
-// PROPS CONTRACT (decided here, D4): the lean set every sub-component below
-// actually needs, no more — `editorState` for `.selection` (Selection/
-// Handles), `snapshot` for shape geometry (Selection/Handles/Arrows),
-// `camera`/`viewportSize` for the screen-space conversion + guide/line
-// extents, and an OPTIONAL `snapResult` (only present mid-drag, when a tool
-// is actively computing snap candidates — omitted the rest of the time, in
-// which case SnapGuides renders nothing).
-import type { CanvasDocument } from '@ensembleworks/canvas-model'
+// PROPS CONTRACT (decided here, D4; extended in review round 2): the lean
+// set every sub-component below actually needs, no more — `editorState` for
+// `.selection` (Selection/Handles), `snapshot` for shape geometry
+// (Selection/Handles/Arrows), `camera`/`viewportSize` for the screen-space
+// conversion + guide/line extents, `index` for Arrows' viewport culling
+// (G3 passes toolContext.index() — the same shared-index consumption
+// pattern as ShapeLayer, with tool-context.ts's coherence guarantee that
+// index() and snapshot() from one post-commit read cycle describe the same
+// doc state), and an OPTIONAL `snapResult`.
+//
+// snapResult — PRODUCER DOES NOT EXIST YET (status honest as of this unit):
+// no tool currently computes snapCandidates (grep-confirmed: select.ts's
+// drag-translate never calls it; the only canvas-editor mention is input.ts's
+// doc comment). Until a later unit (G3-adjacent) adds snap computation to
+// the drag-translate tool state and threads its SnapResult here, this prop
+// is ALWAYS undefined and SnapGuides always renders nothing. The rendering
+// side (SnapGuides.tsx + its tests) is complete and waiting; the producer
+// is unassigned work the plan's D4/B3 tasks imply but no C/G task
+// explicitly owns — flagged to the controller as an accumulator item.
+import type { CanvasDocument, SpatialIndex } from '@ensembleworks/canvas-model'
 import type { Camera, EditorState } from '@ensembleworks/canvas-editor'
 import type { SnapResult } from '@ensembleworks/canvas-model'
 import { combinedWorldBounds, Selection } from './overlay/Selection.js'
@@ -37,6 +56,11 @@ export interface OverlayProps {
   readonly snapshot: CanvasDocument
   readonly camera: Camera
   readonly viewportSize: ViewportSize
+  /** The shared spatial index (toolContext.index()) — consumed by Arrows'
+   * culling broad phase. See the PROPS CONTRACT note above. */
+  readonly index: SpatialIndex
+  /** Always undefined today — see the "PRODUCER DOES NOT EXIST YET" note in
+   * the module header. */
   readonly snapResult?: SnapResult
 }
 
@@ -45,9 +69,9 @@ export interface OverlayProps {
 // CONTENT, conceptually "under" any selection chrome drawn on top of them),
 // then Selection outlines, then SnapGuides (a transient drag affordance that
 // should stay visible over static outlines), then Handles topmost (the
-// actual interactive targets a later unit wires — nothing should occlude
-// them). OURS: no tldraw-source citation for this exact order.
-export function Overlay({ editorState, snapshot, camera, viewportSize, snapResult }: OverlayProps) {
+// transform tool's geometric targets — nothing should occlude them). OURS:
+// no tldraw-source citation for this exact order.
+export function Overlay({ editorState, snapshot, camera, viewportSize, index, snapResult }: OverlayProps) {
   // combinedWorldBounds already returns null for an empty selection (zero
   // iterations never sets its internal `any` flag) — Handles' own `!bounds`
   // guard then renders nothing, so no separate empty-selection branch is
@@ -60,7 +84,7 @@ export function Overlay({ editorState, snapshot, camera, viewportSize, snapResul
       height={viewportSize.height}
       style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
     >
-      <Arrows snapshot={snapshot} camera={camera} />
+      <Arrows snapshot={snapshot} camera={camera} viewportSize={viewportSize} index={index} />
       <Selection snapshot={snapshot} selection={editorState.selection} camera={camera} />
       <SnapGuides snapResult={snapResult} camera={camera} viewportSize={viewportSize} />
       <Handles bounds={combinedBounds} camera={camera} />
