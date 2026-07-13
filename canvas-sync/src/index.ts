@@ -13,3 +13,10 @@ export { makePair } from './memory-transport.js'
 export { SyncClientPeer, type SyncClientOpts } from './client-peer.js'
 export { SyncServerPeer, type SyncServerOpts } from './server-peer.js'
 export { PresenceStore, type Presence } from './presence.js'
+// The E4/H4 soak simulation, re-exported so a caller OUTSIDE this package
+// (server's Task H4 actor-backed variant) can drive the SAME chaos/ops/
+// reconnect/instrumentation machinery against its own `SoakServer`-shaped
+// adapter instead of duplicating any of it — see soak.ts's `SoakServer` doc
+// comment for the seam this exists for ("canvas-sync can't import server;
+// server CAN import canvas-sync").
+export { runSoak, BOUNDED_GROWTH_K, AVG_SHAPE_SIZE_BYTES, type RunSoakOpts, type SoakResult, type SoakServer } from './soak.js'
