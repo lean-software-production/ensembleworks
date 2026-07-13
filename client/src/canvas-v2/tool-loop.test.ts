@@ -8,6 +8,7 @@ import {
 	createInitialToolStates,
 	createSelectAndTransformTool,
 	createToolSet,
+	currentSnapResult,
 	dispatchToActiveTool,
 	type SelectAndTransformState,
 } from './tool-loop.js'
@@ -147,6 +148,36 @@ function setup() {
 	assert.deepEqual(cancelledHand.intents, [], 'hand has nothing to delete on cancel — reset to idle only')
 
 	console.log('ok: tool-loop — cancelActiveTool honestly emits zero intents for select/hand (nothing created)')
+}
+
+// ============================================================================
+// 5. currentSnapResult — the Overlay.snapResult accessor (Unit 13). undefined
+//    whenever there's nothing to show; the select tool's carried SnapResult
+//    once a drag near another shape is in flight.
+// ============================================================================
+{
+	const doc = LoroCanvasDoc.create({ peerId: 1n })
+	doc.putPage({ id: 'page:p', name: 'P' })
+	doc.putShape(geoShape('shape:a', 0, 0, 100, 100))
+	doc.putShape(geoShape('shape:b', 103, 0, 100, 100)) // 3-unit gap: within the 5-unit snap threshold
+	doc.commit()
+	const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+	const ctx: ToolContext = createToolContext(editor)
+	const tools = createToolSet(ctx)
+	let states = createInitialToolStates(tools)
+
+	assert.equal(currentSnapResult(states, 'select'), undefined, 'idle select tool: nothing to show')
+	assert.equal(currentSnapResult(states, 'hand'), undefined, 'a non-select active tool: nothing to show, regardless of select\'s own state')
+
+	// Drag shape:a (which sits 3 units from shape:b -- within the snap
+	// threshold) far enough to cross the drag threshold.
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 50, y: 50, buttons: 1, modifiers: MODS, t: 0 })
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 55, y: 50, buttons: 1, modifiers: MODS, t: 16 })
+	assert.equal((states.select as SelectAndTransformState).select.mode, 'dragging', 'precondition: select is mid-drag')
+	const snap = currentSnapResult(states, 'select')
+	assert.ok(snap, 'a SnapResult is surfaced once the select tool is mid-drag')
+	assert.ok(snap.guides.length > 0, 'the nearby shape produces at least one guide')
+	console.log('ok: tool-loop — currentSnapResult surfaces the select tool\'s carried SnapResult')
 }
 
 console.log('ok: tool-loop.test.ts — all cases passed')

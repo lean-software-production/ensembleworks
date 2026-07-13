@@ -91,6 +91,7 @@ import {
 	cancelActiveTool,
 	createInitialToolStates,
 	createToolSet,
+	currentSnapResult,
 	dispatchToActiveTool,
 	type ToolId,
 	type ToolSet,
@@ -401,7 +402,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 						camera={editorState.camera}
 						viewportSize={viewportSize}
 						index={toolContext.index()}
-						snapResult={undefined}
+						snapResult={currentSnapResult(toolStates, activeToolId)}
 					/>
 				</Viewport>
 			</div>

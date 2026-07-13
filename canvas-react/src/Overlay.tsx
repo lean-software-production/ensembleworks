@@ -33,15 +33,17 @@
 // index() and snapshot() from one post-commit read cycle describe the same
 // doc state), and an OPTIONAL `snapResult`.
 //
-// snapResult — PRODUCER DOES NOT EXIST YET (status honest as of this unit):
-// no tool currently computes snapCandidates (grep-confirmed: select.ts's
-// drag-translate never calls it; the only canvas-editor mention is input.ts's
-// doc comment). Until a later unit (G3-adjacent) adds snap computation to
-// the drag-translate tool state and threads its SnapResult here, this prop
-// is ALWAYS undefined and SnapGuides always renders nothing. The rendering
-// side (SnapGuides.tsx + its tests) is complete and waiting; the producer
-// is unassigned work the plan's D4/B3 tasks imply but no C/G task
-// explicitly owns — flagged to the controller as an accumulator item.
+// snapResult — PRODUCER LANDED (Unit 13, was previously unassigned): canvas-
+// editor's select tool (tools/select.ts) now computes snapCandidates on every
+// pointermove of a drag-translate gesture (excludedIds precomputed ONCE at
+// drag start — see that file's SNAP-DURING-DRAG section) and carries the
+// result on its own 'dragging' FSM state. The client (Unit 13, client/src/
+// canvas-v2/tool-loop.ts's `currentSnapResult`) reads it back out of the
+// select tool's current ToolStates and threads it into THIS prop
+// (CanvasV2App.tsx). Undefined whenever there's nothing to show (not
+// dragging, a different tool active, or the drag hasn't computed its first
+// snap yet) — SnapGuides.tsx's existing "renders nothing on undefined"
+// handling needed no change at all.
 import type { CanvasDocument, SpatialIndex } from '@ensembleworks/canvas-model'
 import type { Camera, EditorState } from '@ensembleworks/canvas-editor'
 import type { SnapResult } from '@ensembleworks/canvas-model'
@@ -59,8 +61,8 @@ export interface OverlayProps {
   /** The shared spatial index (toolContext.index()) — consumed by Arrows'
    * culling broad phase. See the PROPS CONTRACT note above. */
   readonly index: SpatialIndex
-  /** Always undefined today — see the "PRODUCER DOES NOT EXIST YET" note in
-   * the module header. */
+  /** undefined unless the select tool's own FSM is currently mid-drag with a
+   * computed snap — see the module header's "PRODUCER LANDED" note. */
   readonly snapResult?: SnapResult
 }
 

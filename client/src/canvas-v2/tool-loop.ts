@@ -49,6 +49,7 @@ import {
 	type SelectState,
 	type TransformState,
 } from '@ensembleworks/canvas-editor'
+import type { SnapResult } from '@ensembleworks/canvas-model'
 
 /** The toolbar's tool identifiers — see CanvasV2App.tsx's toolbar for the
  * button list. 'transform' is deliberately ABSENT (see module header). */
@@ -147,6 +148,28 @@ export function createInitialToolStates(tools: ToolSet): ToolStates {
  * via `editor.applyAll` (script.ts's `run()`-per-event granularity — one
  * commit/notify per event, never per gesture), and return the updated
  * per-tool state map (a fresh object; `states` itself is never mutated). */
+/**
+ * The select tool's current SnapResult, if any — the accessor that finally
+ * makes canvas-react's Overlay.tsx `snapResult` prop non-`undefined` (see
+ * that module's "PRODUCER DOES NOT EXIST YET" note, now stale — canvas-
+ * editor's select tool (tools/select.ts, Unit 13) computes and carries a
+ * SnapResult on its 'dragging' state; this is the one place that state gets
+ * read back out for the renderer). Returns undefined whenever there is
+ * nothing to show: the active tool isn't 'select', the select composite's
+ * active leg is 'transform' (not select's own FSM), or select's own FSM
+ * isn't currently in 'dragging' (no drag in flight, or a drag that hasn't
+ * computed its first snap yet — select.ts's Dragging.snapResult starts
+ * `null` until the first move commits one).
+ */
+export function currentSnapResult(toolStates: ToolStates, active: ToolId): SnapResult | undefined {
+	if (active !== 'select') return undefined
+	const composite = toolStates.select as SelectAndTransformState
+	if (composite.active !== 'select') return undefined
+	const selectState = composite.select as SelectState
+	if (selectState.mode !== 'dragging') return undefined
+	return selectState.snapResult ?? undefined
+}
+
 export function dispatchToActiveTool(
 	tools: ToolSet,
 	states: ToolStates,

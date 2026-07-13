@@ -90,8 +90,19 @@
 // SetText arriving mid-composition therefore doesn't repaint until the
 // composition ends — one more face of the same LWW honesty above.
 //
-// TRIGGER UNASSIGNED: nothing fires BeginEdit yet — double-click-to-edit
-// lands with the G-seam wiring (Unit 13).
+// TRIGGER LANDED (Unit 13, was previously unassigned): canvas-editor's select
+// tool (tools/select.ts) now fires BeginEdit itself — a completed click that
+// lands, within tldraw's own double-click time/distance window (input.ts's
+// DOUBLE_CLICK_MS/DOUBLE_CLICK_RADIUS_PX), on the SAME target as the
+// previous completed click emits `BeginEdit(target)` IFF the target's kind
+// is TEXT-CAPABLE (canvas-model's `isTextCapableKind`: note/text/geo —
+// select.ts's own EMBED GUARD note there is exactly why this component's
+// separate `isEmbedKind` check just above never actually races it: the two
+// checks describe DISJOINT kind sets by construction, not by luck — no
+// embed kind is ever text-capable). No wiring was needed in THIS file: the
+// intent already flows generically through client/src/canvas-v2/tool-
+// loop.ts's dispatchToActiveTool -> editor.applyAll, same as every other
+// Intent any tool emits.
 //
 // WATCH-ITEM (cost, same accumulator as EmbedLayer's H3 note): whole-string
 // SetText is O(len) per change through Loro's delete+insert — fine at
