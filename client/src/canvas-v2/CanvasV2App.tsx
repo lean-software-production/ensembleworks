@@ -36,8 +36,10 @@
  *   6. `createToolContext(editor)` + `registerCanvasV2Shapes()` (idempotent
  *      guard already inside that function) + `createToolSet(toolContext)`
  *      (tool-loop.ts).
- *   7. `window.__ew = { editor, doc: peer.doc }` — the design's E2E debug
- *      hook (mirrors the legacy app's `window.__ewEditor`, App.tsx).
+ *   7. `window.__ew = { editor, doc: peer.doc, presencePublisher }` — the
+ *      design's E2E debug hook (mirrors the legacy app's `window.__ewEditor`,
+ *      App.tsx). `presencePublisher` (Task G4) lets a test drive this
+ *      mount's own presence publishes without simulating real DOM events.
  * Disposal (effect cleanup): `toolContext.dispose()` then `peer.close()` —
  * see canvas-react's CALLER OBLIGATIONS note (index.ts) for why the
  * dispose() call is non-optional. A `cancelled` flag guards the async boot
@@ -67,11 +69,13 @@ import {
 	Editor,
 	applyWheel,
 	createToolContext,
+	screenToWorld,
 	type InputEvent,
 	type ToolContext,
 } from '@ensembleworks/canvas-editor'
-import { SyncClientPeer, type Transport } from '@ensembleworks/canvas-sync'
+import { PresenceStore, SyncClientPeer, type Transport } from '@ensembleworks/canvas-sync'
 import {
+	Cursors,
 	EmbedLayer,
 	Grid,
 	Overlay,
@@ -86,6 +90,7 @@ import {
 import { getIdentity, getRoomId } from '../identity.js'
 import { wsClientTransport, type WebSocketLike } from './ws-client-transport.js'
 import { resolvePageId } from './bootstrap-page.js'
+import { adaptPresence, createPresencePublisher, type PresencePublisher } from './presence.js'
 import { canvasV2EmbedLifecycles, registerCanvasV2Shapes } from './shapes/index.js'
 import {
 	cancelActiveTool,
@@ -172,6 +177,20 @@ interface Session {
 	readonly editor: Editor
 	readonly toolContext: ToolContext
 	readonly tools: ToolSet
+	/** This mount's OWN presence store — injected into `peer` at construction
+	 * (see CONSTRUCTION SEQUENCE step 2) so `peer` forwards local publishes
+	 * over the wire and applies inbound Presence frames into it. Owned here
+	 * (not by SyncClientPeer — see its own doc comment on the injected
+	 * option) so disposal calls `.destroy()` on it directly (the WASM expiry-
+	 * timer caveat — canvas-sync/src/presence.ts's own `destroy()` doc
+	 * comment: "Peers do NOT call this from their close()... callers that own
+	 * a PresenceStore's lifecycle... should call this to release it"). */
+	readonly presenceStore: PresenceStore
+	readonly presencePublisher: PresencePublisher
+	/** The presence map's own key for THIS peer (== the mount's userId) —
+	 * carried alongside presenceStore so CanvasV2Session can pass it to
+	 * Cursors' required `selfKey` prop without re-deriving identity. */
+	readonly selfKey: string
 }
 
 export interface CanvasV2AppProps {
@@ -203,9 +222,22 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 				transport.close()
 				return
 			}
-			const peer = new SyncClientPeer({ peerId: randomPeerId(), transport })
+			// PresenceStore (Task G4): `selfKey` = this mount's userId — the SAME
+			// identity value the wire URL's `?userId=` and `randomPeerId()`'s Loro
+			// peer id both derive from, but a DIFFERENT namespace than either (a
+			// plain string key into the presence map, not a Loro peer id) — see
+			// presence.ts's adaptPresence doc comment for what a caller reads back
+			// out of `PresenceStore.all()` keyed by this same string.
+			const presenceStore = new PresenceStore(userId)
+			if (cancelled) {
+				presenceStore.destroy()
+				transport.close()
+				return
+			}
+			const peer = new SyncClientPeer({ peerId: randomPeerId(), transport, presence: presenceStore })
 			await delay(props.settleMs ?? SETTLE_MS_DEFAULT)
 			if (cancelled) {
+				presenceStore.destroy()
 				peer.close()
 				return
 			}
@@ -214,11 +246,19 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 			const toolContext = createToolContext(editor)
 			registerCanvasV2Shapes()
 			const tools = createToolSet(toolContext)
-			const s: Session = { peer, editor, toolContext, tools }
+			const presencePublisher = createPresencePublisher(presenceStore)
+			const s: Session = { peer, editor, toolContext, tools, presenceStore, presencePublisher, selfKey: userId }
 			sessionRef.current = s
 			// The design's E2E debug hook (mirrors the legacy app's
-			// window.__ewEditor — App.tsx's handleMount).
-			;(window as unknown as { __ew?: { editor: Editor; doc: SyncClientPeer['doc'] } }).__ew = { editor, doc: peer.doc }
+			// window.__ewEditor — App.tsx's handleMount). `presencePublisher` rides
+			// along so an E2E/integration test can drive this mount's OWN presence
+			// publishes (cursor/viewport) without simulating real pointer/wheel DOM
+			// events — see CanvasV2App.test.ts's presence case.
+			;(window as unknown as { __ew?: { editor: Editor; doc: SyncClientPeer['doc']; presencePublisher: PresencePublisher } }).__ew = {
+				editor,
+				doc: peer.doc,
+				presencePublisher,
+			}
 			setSession(s)
 		}
 
@@ -234,6 +274,10 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 			if (s) {
 				s.toolContext.dispose()
 				s.peer.close()
+				// destroy() releases the PresenceStore's WASM expiry timer — see the
+				// Session interface's doc comment on why THIS mount (not
+				// SyncClientPeer) owns that call.
+				s.presenceStore.destroy()
 			}
 		}
 		// roomId/userId identify the WHOLE session — a change remounts it
@@ -266,10 +310,30 @@ const TOOL_BUTTONS: ReadonlyArray<{ readonly id: ToolId; readonly label: string 
 	{ id: 'arrow', label: 'Arrow' },
 ]
 
+/** Cursors.tsx has no push-based "a remote peer's presence changed" hook —
+ * canvas-sync's PresenceStore only exposes `onLocalUpdate` (fires for THIS
+ * peer's OWN publishes, not inbound ones applied via SyncClientPeer's
+ * `presence.apply()`). A cheap polling re-render, same shape as EmbedLayer's
+ * existing `tick` cadence just above (1s), is the pragmatic v1 choice here:
+ * fast enough that a remote cursor feels reasonably live, cheap enough
+ * (`presenceStore.all()` is an in-memory map read, not a wire round-trip)
+ * that polling every 150ms costs nothing measurable. A push-based
+ * subscription is a documented, deferred upgrade (would need a small
+ * canvas-sync addition — EphemeralStore has no generic "any change" hook
+ * exposed by the PresenceStore wrapper today). */
+const PRESENCE_POLL_MS = 150
+
 function CanvasV2Session({ session }: { readonly session: Session }) {
-	const { editor, toolContext, tools } = session
+	const { editor, toolContext, tools, presenceStore, presencePublisher, selfKey } = session
 	const editorState = useEditorState(editor)
 	const snapshot = useDocSnapshot(toolContext)
+
+	// See PRESENCE_POLL_MS's doc comment above.
+	const [, setPresenceTick] = useState(0)
+	useEffect(() => {
+		const id = setInterval(() => setPresenceTick((t) => t + 1), PRESENCE_POLL_MS)
+		return () => clearInterval(id)
+	}, [])
 
 	const [activeToolId, setActiveToolId] = useState<ToolId>('select')
 	const activeToolIdRef = useRef(activeToolId)
@@ -288,6 +352,9 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 		width: typeof window !== 'undefined' ? window.innerWidth : 1024,
 		height: typeof window !== 'undefined' ? window.innerHeight : 768,
 	}))
+	const viewportSizeRef = useRef(viewportSize)
+	viewportSizeRef.current = viewportSize
+
 	useEffect(() => {
 		const el = containerRef.current
 		if (!el) return
@@ -317,8 +384,31 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 		return () => clearInterval(id)
 	}, [])
 
+	// Presence: publish this peer's viewport on every camera (or other editor
+	// state) change — editor.subscribe() fires for ANY EditorState change
+	// (camera/selection/hover/editingId, see editor.ts's applyOne), not just
+	// SetCamera, so this republishes slightly more often than strictly
+	// necessary; presencePublisher's own throttle absorbs that (Task G4).
+	// viewportSizeRef (not the viewportSize closure value) so this effect
+	// subscribes ONCE per session rather than re-subscribing on every resize.
+	useEffect(() => {
+		const publish = () => {
+			const camera = editor.get().camera
+			const size = viewportSizeRef.current
+			presencePublisher.setViewport({ x: camera.x, y: camera.y, z: camera.z, w: size.width, h: size.height })
+		}
+		publish() // an initial viewport publish so peers see it before any camera change
+		return editor.subscribe(publish)
+	}, [editor, presencePublisher])
+
 	const handleInput = useCallback(
 		(event: InputEvent) => {
+			if (event.type === 'pointermove') {
+				// Presence: publish the WORLD-space cursor position (Task G4) —
+				// unconditional (not tool-gated), mirroring wheel's own
+				// "handled uniformly regardless of active tool" policy just below.
+				presencePublisher.setCursor(screenToWorld(editor.get().camera, event))
+			}
 			if (event.type === 'wheel') {
 				const next = applyWheel(editor.get().camera, event)
 				editor.apply({ type: 'SetCamera', ...next })
@@ -328,7 +418,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			toolStatesRef.current = next
 			setToolStates(next)
 		},
-		[editor, tools],
+		[editor, tools, presencePublisher],
 	)
 
 	const cancelAndReset = useCallback(() => {
@@ -404,6 +494,12 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 						index={toolContext.index()}
 						snapResult={currentSnapResult(toolStates, activeToolId)}
 					/>
+					{/* Collaborator cursors (Task G4) — a separate full-viewport SVG
+					    sibling, painted topmost (Viewport.tsx's STACKING CONTRACT: later
+					    DOM siblings paint over earlier ones). `presenceStore.all()` is
+					    re-read every PRESENCE_POLL_MS tick (see that constant's doc
+					    comment) via the `presenceTick` state dependency below. */}
+					<Cursors presence={adaptPresence(presenceStore.all())} selfKey={selfKey} camera={editorState.camera} viewportSize={viewportSize} />
 				</Viewport>
 			</div>
 		</div>

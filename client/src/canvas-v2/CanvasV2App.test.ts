@@ -36,7 +36,7 @@ const win = new Window()
 
 const { createElement, StrictMode, act } = await import('react')
 const { createRoot } = await import('react-dom/client')
-const { SyncServerPeer, makePair } = await import('@ensembleworks/canvas-sync')
+const { SyncServerPeer, SyncClientPeer, PresenceStore, makePair } = await import('@ensembleworks/canvas-sync')
 const { CanvasV2App } = await import('./CanvasV2App.js')
 type Transport = import('@ensembleworks/canvas-sync').Transport
 type Shape = import('@ensembleworks/canvas-model').Shape
@@ -140,7 +140,49 @@ async function main() {
 	console.log('ok: CanvasV2App — a server-side putShape after mount appears in the DOM')
 
 	// ==========================================================================
-	// (c) UNMOUNT DISPOSES CLEANLY: no more sync reaches the (now-torn-down)
+	// (c) PRESENCE (Task G4): a SECOND peer's published cursor renders in this
+	// mount's DOM, and this mount's OWN presence entry never renders itself
+	// (self-filtered — Cursors.tsx's documented contract, unit-tested
+	// directly in canvas-react/src/cursors.test.ts; this is the end-to-end
+	// proof over the real wire + a real SyncServerPeer).
+	// ==========================================================================
+	const [serverSideB, clientSideB]: [Transport, Transport] = makePair()
+	server.connect(serverSideB)
+	const presenceB = new PresenceStore('peer-b')
+	const peerB = new SyncClientPeer({ peerId: 2n, transport: clientSideB, presence: presenceB })
+
+	const ewPresence = (globalThis as any).window.__ew as { presencePublisher: { setCursor(c: { x: number; y: number } | null): void } }
+	assert.ok(ewPresence?.presencePublisher, 'window.__ew.presencePublisher must be set by the mount (Task G4)')
+
+	await act(async () => {
+		// Peer B publishes a cursor -- relayed over the wire (server + this
+		// mount's SyncClientPeer/PresenceStore) to the mount under test.
+		presenceB.publish({ cursor: { x: 50, y: 50 }, viewport: null, stamp: null, presenting: [] })
+		// This mount ALSO publishes its OWN cursor (via the test-only __ew hook,
+		// standing in for a real pointermove) -- proving self-exclusion is
+		// actually filtering a REAL entry, not merely "nothing to filter".
+		ewPresence.presencePublisher.setCursor({ x: 60, y: 60 })
+		// The wire relay is effectively synchronous (memory transport), but this
+		// mount's Cursors render is driven by CanvasV2App's PRESENCE_POLL_MS
+		// (150ms) polling tick, not a push -- wait past at least one tick.
+		await new Promise((r) => setTimeout(r, 250))
+	})
+
+	assert.ok(
+		container.querySelector('[data-presence-key="peer-b"]'),
+		`peer B's published cursor must render in this mount's DOM after the wire relay — DOM: ${container.innerHTML}`,
+	)
+	assert.ok(
+		!container.querySelector('[data-presence-key="test-user"]'), // 'test-user' is this mount's OWN userId/selfKey (CanvasV2App props above)
+		'this mount\'s OWN presence entry must never render itself, even though it has a real (non-null) cursor',
+	)
+	console.log("ok: CanvasV2App — a peer's published presence cursor renders in the DOM, this mount's own entry self-filtered")
+
+	peerB.close()
+	presenceB.destroy()
+
+	// ==========================================================================
+	// (d) UNMOUNT DISPOSES CLEANLY: no more sync reaches the (now-torn-down)
 	// client peer. `window.__ew.doc` was set once by CanvasV2App's boot
 	// sequence (the design's E2E hook) — capture that SAME doc reference
 	// before unmount, then prove a further server-side write never reaches it
