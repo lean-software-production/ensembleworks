@@ -51,26 +51,41 @@ console.log('ok: exposure-audit -- selectEngine (team hard-excluded)')
 
 // ============================================================================
 // 2. main.tsx/App.tsx source scan: CanvasV2App reachable ONLY through the
-//    selectEngine guard.
+//    selectEngine guard. Requires an actual CALL (`selectEngine...(`), not
+//    bare string co-occurrence (quality-review teeth fix): a file that
+//    merely imported/mentioned selectEngine — a comment, an unused import
+//    surviving a refactor — would satisfy a bare `/selectEngine/` while
+//    guarding nothing; a call site is a stronger (though still textual)
+//    signal that the branch actually consults the selector.
 // ============================================================================
 const clientSrc = new URL('../client/src/', import.meta.url)
 const mainTsx = readFileSync(new URL('main.tsx', clientSrc), 'utf8')
 const appTsx = readFileSync(new URL('App.tsx', clientSrc), 'utf8')
 const appEntry = mainTsx + appTsx
+// Matches selectEngine( AND selectEngineFromEnvironment( — either is a real
+// call into engine.ts's guard surface (the wrapper delegates to the pure
+// function unconditionally).
+const SELECT_ENGINE_CALL = /selectEngine\w*\s*\(/
 assert.ok(
-  !/CanvasV2App/.test(appEntry) || /selectEngine/.test(appEntry),
-  'CanvasV2App is referenced in main.tsx/App.tsx without a selectEngine guard anywhere in those files',
+  !/CanvasV2App/.test(appEntry) || SELECT_ENGINE_CALL.test(appEntry),
+  'CanvasV2App is referenced in main.tsx/App.tsx without a selectEngine(...) CALL anywhere in those files',
 )
-// Positive control: both identifiers really are present (a version of this
-// audit that silently stopped matching either regex --e.g. after a rename--
+// Positive controls: both patterns really are present (a version of this
+// audit that silently stopped matching either --e.g. after a rename--
 // would otherwise pass VACUOUSLY, proving nothing).
 assert.ok(/CanvasV2App/.test(appEntry), 'precondition: CanvasV2App is actually referenced in main.tsx/App.tsx (else check #2 is vacuous)')
-assert.ok(/selectEngine/.test(appEntry), 'precondition: selectEngine is actually referenced in main.tsx/App.tsx (else check #2 is vacuous)')
-console.log('ok: exposure-audit -- CanvasV2App reachable only through the selectEngine guard')
+assert.ok(SELECT_ENGINE_CALL.test(appEntry), 'precondition: a selectEngine(...) call actually appears in main.tsx/App.tsx (else check #2 is vacuous)')
+console.log('ok: exposure-audit -- CanvasV2App reachable only through a selectEngine(...) call')
 
 // ============================================================================
 // 3. No STATIC import of a canvas-v2 module anywhere outside
-//    client/src/canvas-v2/ itself (the lazy boundary).
+//    client/src/canvas-v2/ itself (the lazy boundary). THIS is the
+//    load-bearing bundling guard of the three checks: checks 1-2 police the
+//    RENDER decision (which component the entry branch mounts), but only
+//    this one polices what Vite BUNDLES — a single static import anywhere in
+//    the client graph would pull the entire v2 module tree (canvas-editor/
+//    canvas-react/canvas-doc/canvas-sync/loro WASM) into the default
+//    chunk regardless of how correct the selectEngine branch is.
 // ============================================================================
 // A static ES import ALWAYS contains a `from '...'`/`from "..."` clause
 // (`import X from 'Y'`, `import {X} from 'Y'`, `import type {X} from 'Y'`,
