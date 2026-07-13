@@ -11,6 +11,29 @@ export const SHAPE_KINDS = [
 ] as const
 export type ShapeKind = (typeof SHAPE_KINDS)[number]
 
+// The kinds eligible for the plain-text editing mount (canvas-react's
+// TextEditor.tsx) and its double-click-to-edit trigger (canvas-editor's
+// select tool, Unit 13) — deliberately a static, kind-name-only allowlist,
+// not a runtime registry lookup: canvas-editor may never import canvas-react
+// (its own boundary test forbids a react dependency at all), so it has no way
+// to consult canvas-react's `isEmbedKind` registry (canvas-react/src/
+// shapeRegistry.ts) even if it wanted to. Living here instead — a fixed,
+// pure fact about a ShapeKind literal, exactly like SHAPE_KINDS itself — is
+// the seam BOTH packages can share with no cross-import at all.
+// EXCLUDED, deliberately: 'frame' (a container, not text content), 'arrow'
+// (its optional label is real richText too, but arrow-label double-click
+// editing is a documented Phase-4 parity gap, not this unit's scope), every
+// structural kind (group/line/draw/highlight/image), and the six custom
+// HTML-embed kinds (terminal/iframe/neko/roadmap/screenshare/file-viewer) —
+// none of which carry a plain-text body a textarea could ever edit.
+export const TEXT_CAPABLE_KINDS = ['note', 'text', 'geo'] as const
+export type TextCapableKind = (typeof TEXT_CAPABLE_KINDS)[number]
+
+/** True iff `kind` is one of TEXT_CAPABLE_KINDS above. */
+export function isTextCapableKind(kind: ShapeKind): boolean {
+  return (TEXT_CAPABLE_KINDS as readonly string[]).includes(kind)
+}
+
 // Rich text is ProseMirror JSON; we keep it verbatim for lossless round-trip and
 // derive plain text for semantics. Structural (not exhaustively typed).
 const richText = z.object({ type: z.literal('doc'), content: z.array(z.any()) })

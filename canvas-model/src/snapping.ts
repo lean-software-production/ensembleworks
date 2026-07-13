@@ -58,7 +58,16 @@ function featuresOf(b: Bounds, axis: 'x' | 'y'): { value: number; kind: 'edge' |
 // movingIds ∪ every descendant of every movingId — a frame's children move
 // WITH it, so they must never be offered as an independent snap target even
 // if only the frame's id was passed in.
-function excludedIds(doc: CanvasDocument, movingIds: readonly string[]): Set<string> {
+//
+// EXPORTED (Unit 13): this is the EXACT computation `opts.excludedIds` exists
+// to let a caller precompute ONCE at drag start and pass on every subsequent
+// pointermove (see snapCandidates's own doc comment on `opts.excludedIds` for
+// the measured cost of re-deriving it per call: ~2.4ms derived vs ~0.02ms
+// precomputed at 1k shapes dragging a frame with 999 children). Exporting the
+// SAME function the zero-opts path falls back to (rather than duplicating its
+// logic in canvas-editor's select tool) is what guarantees the precomputed and
+// derived paths can never drift apart.
+export function computeExcludedIds(doc: CanvasDocument, movingIds: readonly string[]): Set<string> {
   const excluded = new Set(movingIds)
   for (const id of movingIds) for (const d of descendantsOf(doc, id)) excluded.add(d.id)
   return excluded
@@ -101,7 +110,7 @@ export function snapCandidates(
   bounds: Bounds,
   opts?: { excludedIds?: ReadonlySet<string> },
 ): SnapResult {
-  const excluded = opts?.excludedIds ?? excludedIds(doc, movingIds)
+  const excluded = opts?.excludedIds ?? computeExcludedIds(doc, movingIds)
   const unit = medianSize(doc.shapes)
   const threshold = unit * SNAP_THRESHOLD_K
   // Search area padded by SEARCH_RADIUS_K (not `threshold` — see its

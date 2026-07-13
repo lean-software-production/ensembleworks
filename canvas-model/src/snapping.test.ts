@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { makeDocument, type CanvasDocument } from './document.js'
 import { localBounds, medianSize, worldTransform } from './geometry.js'
 import { buildSpatialIndex } from './spatial-index.js'
-import { snapCandidates, resolveArrowAnchor, anchorToWorld } from './snapping.js'
+import { snapCandidates, computeExcludedIds, resolveArrowAnchor, anchorToWorld } from './snapping.js'
 
 const base = () => ({ index: 'a1', isLocked: false, opacity: 1, meta: {} })
 const geo = (id: string, parentId: string, x: number, y: number, rotation: number, w: number, h: number) =>
@@ -130,6 +130,33 @@ function twoBoxDoc(gap: number): CanvasDocument {
     !excludedResult.guides.some((g) => g.axis === 'x' && g.at === 10),
     'shape:child (a descendant of the moving frame) must never be offered as a snap target',
   )
+}
+
+// ---- computeExcludedIds is the EXACT function the zero-opts path uses ----
+// (exported for Unit 13's select tool to precompute once at drag start).
+{
+  const doc = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }],
+    shapes: [
+      geo('shape:frame', 'page:p', 0, 0, 0, 100, 100),
+      geo('shape:child', 'shape:frame', 10, 10, 0, 20, 20),
+      geo('shape:grandchild', 'shape:child', 1, 1, 0, 2, 2),
+      geo('shape:other', 'page:p', 500, 500, 0, 10, 10),
+    ],
+    bindings: [],
+  })
+  const excluded = computeExcludedIds(doc, ['shape:frame'])
+  assert.deepEqual([...excluded].sort(), ['shape:child', 'shape:frame', 'shape:grandchild'], 'movingIds + every descendant, transitively')
+  assert.ok(!excluded.has('shape:other'), 'a non-descendant sibling is never excluded')
+
+  // Equivalence: passing the precomputed set produces IDENTICAL results to
+  // the derived (opts-less) path, on the same doc/bounds this file's earlier
+  // "descendant exclusion" case already exercises.
+  const index = buildSpatialIndex(doc)
+  const bounds = { minX: 8, minY: 800, maxX: 108, maxY: 900 }
+  const derived = snapCandidates(index, doc, ['shape:frame'], bounds)
+  const viaPrecomputed = snapCandidates(index, doc, ['shape:frame'], bounds, { excludedIds: computeExcludedIds(doc, ['shape:frame']) })
+  assert.deepEqual(viaPrecomputed, derived, 'precomputed-once excludedIds produces identical results to the per-call derived path')
 }
 
 // ---- resolveArrowAnchor / anchorToWorld round-trip on a rotated, parented target ----

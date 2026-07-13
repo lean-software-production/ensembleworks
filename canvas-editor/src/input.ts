@@ -99,6 +99,45 @@ export function crossedThreshold(
   return exceedsDragThreshold(downScreen, event) ? { x: event.x, y: event.y } : null
 }
 
+// tldraw's own double-click TIME window, read from source rather than
+// assumed: the installed @tldraw's editor package, dist-cjs/lib/options.js:32 —
+//   doubleClickDurationMs: 450,
+// i.e. two clicks resolve as a double-click when the second lands within
+// 450ms of the first (tldraw's ClickManager schedules the "settle" dispatch
+// at exactly this timeout — dist-cjs/lib/editor/managers/ClickManager module).
+// Pinned here to match: the select tool (Unit 13) is the consumer, deciding a
+// completed click's double-click-ness off this exact value, using event.t
+// deltas only — never a wall clock (this module's own determinism rule).
+export const DOUBLE_CLICK_MS = 450
+
+// tldraw's own double-click DISTANCE tolerance, same source file:
+// dist-cjs/lib/editor/managers/ClickManager module, line 32 —
+//   const MAX_CLICK_DISTANCE = 40;
+// — compared as a SCREEN-pixel distance between the two clicks' points
+// (squared, matching exceedsDragThreshold's own squared comparison below, to
+// avoid a sqrt per call).
+export const DOUBLE_CLICK_RADIUS_PX = 40
+
+/**
+ * Do two completed clicks (each `{x, y, t}` in SCREEN space) count as one
+ * double-click, per DOUBLE_CLICK_MS/DOUBLE_CLICK_RADIUS_PX above? This module
+ * has no notion of a target shape id — the select tool layers the "same
+ * target" requirement on top (see select.ts). A negative `dt` (a caller
+ * passing events out of order) is treated as "not a double-click" rather than
+ * silently accepting it via an unsigned distance check on time — a real
+ * second click always has `next.t > prev.t`.
+ */
+export function isDoubleClick(
+  prev: { readonly x: number; readonly y: number; readonly t: number },
+  next: { readonly x: number; readonly y: number; readonly t: number },
+): boolean {
+  const dt = next.t - prev.t
+  if (dt < 0 || dt > DOUBLE_CLICK_MS) return false
+  const dx = next.x - prev.x
+  const dy = next.y - prev.y
+  return dx * dx + dy * dy <= DOUBLE_CLICK_RADIUS_PX * DOUBLE_CLICK_RADIUS_PX
+}
+
 // ============================================================================
 // CAMERA CONVENTION (NORMATIVE — D2's CSS world transform and C5's
 // zoom-about-cursor must BOTH derive from these two helpers, never re-derive

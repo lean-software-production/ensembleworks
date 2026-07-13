@@ -5,20 +5,88 @@
 // tool relies on for hitTestTopmost/queryMarquee.
 //
 // FSM PURITY: SelectState carries everything the FSM needs across events
-// (downScreen/targetId/shiftDown/lastScreen) — there is no mutable field on
-// the closure itself. The only closure-captured objects are the ToolContext
-// (read-only queries: hitTestTopmost/queryMarquee/snapshot) and the Editor
-// (read via editor.get() for the CURRENT selection/camera, exactly the "read-
-// only queries" input.ts's Tool<S> doc comment describes) — never written by
-// this file. Given the same (state, event) and the same doc/index snapshot
-// behind the ToolContext, onEvent always returns the same (state', intents),
-// so a recorded script replays deterministically.
+// (downScreen/targetId/shiftDown/lastScreen/lastClick/movingIds/excludedIds/
+// snapResult) — there is no mutable field on the closure itself. The only
+// closure-captured objects are the ToolContext (read-only queries:
+// hitTestTopmost/queryMarquee/snapshot/index) and the Editor (read via
+// editor.get() for the CURRENT selection/camera, exactly the "read-only
+// queries" input.ts's Tool<S> doc comment describes) — never written by this
+// file. Given the same (state, event) and the same doc/index snapshot behind
+// the ToolContext, onEvent always returns the same (state', intents), so a
+// recorded script replays deterministically.
+//
+// DOUBLE-CLICK-TO-EDIT (Unit 13): a completed click (pointerup resolving a
+// sub-threshold Pointing gesture, i.e. NOT a drag/marquee) is remembered on
+// the resulting Idle state as `lastClick`. The NEXT pointerdown, while still
+// idle, checks whether it lands on the SAME target, within
+// input.ts's DOUBLE_CLICK_MS/DOUBLE_CLICK_RADIUS_PX of that remembered click
+// (both derived from event.t/x/y deltas ONLY — never a wall clock, per the
+// package's determinism rule) — see `isDoubleClick`. If so, the Pointing
+// state carries `doubleClick: true`, and when THAT click also resolves
+// (pointerup, no drag), the select tool emits `BeginEdit(target)` in place of
+// (well, alongside) the ordinary `SetSelection` IFF the target's shape kind
+// is TEXT-CAPABLE (canvas-model's `isTextCapableKind`: note/text/geo — never
+// an embed kind, never a frame). A drag OR a marquee gesture always resets
+// `lastClick` to null on return to idle (neither is a click), and clicking
+// empty canvas does too (no target to remember).
+//
+// SNAP-DURING-DRAG (Unit 13): `computeSnappedDelta` is the ONE seam both the
+// Pointing->Dragging transition move AND every subsequent onDragging
+// pointermove funnel through — see that function's doc comment. `movingIds`
+// (the ids actually being translated) and `excludedIds` (movingIds ∪ every
+// descendant — canvas-model's `computeExcludedIds`) are both computed
+// EXACTLY ONCE, at the Pointing->Dragging transition (the "drag start" the
+// task spec means), and carried unchanged on the Dragging state for the rest
+// of the gesture — never recomputed per pointermove (see snapping.ts's own
+// documented cost rationale for `opts.excludedIds`: ~2.4ms derived vs
+// ~0.02ms precomputed at 1k shapes/999 descendants).
+//
+// REBUILD-CADENCE DISCIPLINE (load-bearing — reviewer-caught before this
+// comment existed): tool-context.ts's LAZY REBUILD contract, pinned by
+// tool-context.test.ts's "a 50-move drag triggers ZERO rebuilds" assertion,
+// means `ctx.snapshot()`/`ctx.index()` must be read AT MOST ONCE per drag
+// gesture, not once per pointermove — every commit this tool's OWN drag
+// makes marks the context dirty for the NEXT read, so calling either on
+// every move would force one full spatial-index rebuild per mouse event
+// (exactly the O(shapes)-per-pointermove cost the cadence rule forbids).
+// So: `ctx.snapshot()`/`ctx.index()` are read EXACTLY ONCE, at the
+// Pointing->Dragging transition (before any TranslateShapes of this gesture
+// has committed anything), and the resulting (frozen) doc/index pair is
+// carried on Dragging state for snapCandidates' TARGET lookups the whole
+// gesture through — correct because nothing about this tool's own local
+// drag changes any OTHER shape's position, size, or the document's overall
+// medianSize (matches spatial-index.ts's own STALENESS CONTRACT: a stale
+// index yields omissions, never false hits). The MOVING shape(s)' own
+// CURRENT position — which DOES change every move, via this same tool's
+// commits — is read LIVE instead, through `liveBoundsAdapter` below (the
+// same "read live, never snapshot mid-batch" discipline editor.ts's own
+// `liveDocAdapter` documents for exactly this reason).
+import {
+  computeExcludedIds,
+  isTextCapableKind,
+  snapCandidates,
+  worldBounds,
+  type Bounds,
+  type CanvasDocument,
+  type SnapResult,
+  type SpatialIndex,
+} from '@ensembleworks/canvas-model'
+import type { Editor } from '../editor.js'
 import type { Intent } from '../intents.js'
-import { crossedThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
+import { crossedThreshold, isDoubleClick, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
 
 interface Idle {
   readonly mode: 'idle'
+  /** The most recently COMPLETED click (a Pointing gesture that resolved at
+   * pointerup without crossing the drag threshold) — screen point + target +
+   * `event.t`, or null if the previous idle-exit wasn't a click at all (a
+   * drag, a marquee) or this is the tool's very first gesture. Consulted by
+   * the NEXT pointerdown to decide double-click-ness (see the module
+   * header). Only ever set when the click landed on an actual target — an
+   * empty-canvas click has nothing to double-click ONTO, so it resets this
+   * to null rather than remembering "the user clicked empty space twice". */
+  readonly lastClick: { readonly targetId: string; readonly x: number; readonly y: number; readonly t: number } | null
 }
 interface Pointing {
   readonly mode: 'pointing'
@@ -34,6 +102,16 @@ interface Pointing {
    * transition — node_modules/tldraw/src/lib/tools/SelectTool/childStates/
    * PointingShape.ts) — decides add-vs-toggle at click-select time. */
   readonly shiftDown: boolean
+  /** True iff THIS pointerdown was recognized, at idle-exit time, as the
+   * second half of a double-click on the same target as the previous
+   * completed click (see the module header). Decided once, at the
+   * idle->pointing transition, off `Idle.lastClick` — never re-derived
+   * later, so a click that STARTS as a double-click but then turns into a
+   * drag never accidentally becomes a double-click-driven edit (the
+   * pointerup branch below only ever inspects this flag from the Pointing
+   * state that is still active AT pointerup, i.e. one that never crossed the
+   * drag threshold). */
+  readonly doubleClick: boolean
 }
 interface Dragging {
   readonly mode: 'dragging'
@@ -43,6 +121,27 @@ interface Dragging {
    * incrementally, screen-delta-since-last-event / camera.z, so this is the
    * "last" anchor for that computation, not the drag's origin. */
   readonly lastScreen: { readonly x: number; readonly y: number }
+  /** The ids actually being translated — FIXED at the Pointing->Dragging
+   * transition (see the module header's SNAP-DURING-DRAG section), never
+   * recomputed off a possibly-drifted `editor.get().selection` mid-gesture. */
+  readonly movingIds: readonly string[]
+  /** `movingIds` ∪ every descendant — computed ONCE via canvas-model's
+   * `computeExcludedIds` at the SAME transition, reused verbatim by every
+   * subsequent pointermove's `snapCandidates` call (see the module header). */
+  readonly excludedIds: ReadonlySet<string>
+  /** The doc/index pair `ctx.snapshot()`/`ctx.index()` returned at the
+   * Pointing->Dragging transition — read ONCE and frozen for the rest of the
+   * gesture (see the module header's REBUILD-CADENCE DISCIPLINE section).
+   * Used ONLY for snapCandidates' target-shape lookups; the moving shape's
+   * own current position is read live instead (liveBoundsAdapter). */
+  readonly snapshot: CanvasDocument
+  readonly snapIndex: SpatialIndex
+  /** The most recent snapCandidates result (or null before the first move
+   * has computed one) — this is what canvas-react's Overlay ultimately
+   * renders as its `snapResult` prop (via the client's tool-loop wiring,
+   * Unit 13). Reset to null only by leaving 'dragging' (a fresh drag always
+   * starts from a clean slate). */
+  readonly snapResult: SnapResult | null
 }
 interface Marquee {
   readonly mode: 'marquee'
@@ -55,7 +154,82 @@ interface Marquee {
 
 export type SelectState = Idle | Pointing | Dragging | Marquee
 
-const IDLE: Idle = { mode: 'idle' }
+const IDLE: Idle = { mode: 'idle', lastClick: null }
+
+// ============================================================================
+// Snap-during-drag helper (shared by the Pointing->Dragging transition move
+// AND every subsequent onDragging pointermove — see the module header).
+// ============================================================================
+
+/** A minimal `.byId`-only CanvasDocument adapter over LIVE `editor.doc.
+ * getShape` reads — the SAME pattern editor.ts's own (private) liveDocAdapter
+ * documents: worldBounds/worldTransform (canvas-model/src/geometry.ts) touch
+ * NOTHING on their `doc` argument except `.byId.get`, so this shim is enough
+ * to compute a moving shape's CURRENT world bounds without going through the
+ * ToolContext's cached (and, mid-drag, increasingly stale) snapshot — see the
+ * module header's REBUILD-CADENCE DISCIPLINE section for why that distinction
+ * matters here. `pages`/`shapes`/`bindings` are never read by worldBounds, so
+ * empty stand-ins are fine (same as editor.ts's version). */
+function liveBoundsAdapter(editor: Editor): CanvasDocument {
+  return {
+    pages: [], shapes: [], bindings: [],
+    byId: { get: (id: string) => editor.doc.getShape(id) } as unknown as CanvasDocument['byId'],
+  }
+}
+
+/** The union of `movingIds`' CURRENT worldBounds (via `liveDoc`, see
+ * liveBoundsAdapter above), shifted by the raw (pre-snap) delta this move
+ * would apply — i.e. "where the dragged selection would land if dropped
+ * right now", matching snapCandidates' own `bounds` parameter contract
+ * (canvas-model/src/snapping.ts). Reimplemented here rather than imported:
+ * canvas-react's combinedWorldBounds (overlay/Selection.tsx) computes the
+ * exact same union, but canvas-editor may never import canvas-react
+ * (boundary.test.ts forbids a react dependency at all) — this is the same
+ * handful of lines, kept package-local. Returns null iff every id is
+ * vanished (mirrors combinedWorldBounds' own null-on-empty contract). */
+function candidateBoundsAfterDelta(liveDoc: CanvasDocument, ids: readonly string[], dx: number, dy: number): Bounds | null {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, any = false
+  for (const id of ids) {
+    const shape = liveDoc.byId.get(id)
+    if (!shape) continue
+    const b = worldBounds(liveDoc, shape)
+    minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY)
+    maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY)
+    any = true
+  }
+  return any ? { minX: minX + dx, minY: minY + dy, maxX: maxX + dx, maxY: maxY + dy } : null
+}
+
+const EMPTY_SNAP_RESULT: SnapResult = { dx: 0, dy: 0, guides: [] }
+
+/** Given the RAW (pre-snap) delta a move would apply, returns the TOTAL delta
+ * (raw + snap adjustment) to actually apply via TranslateShapes, plus the
+ * SnapResult to carry on the Dragging state for the renderer. `frozenSnap`/
+ * `frozenIndex` MUST be the pair read ONCE at the Pointing->Dragging
+ * transition (see the module header's REBUILD-CADENCE DISCIPLINE section) —
+ * used ONLY for target lookups (medianSize + candidate bounds), never for the
+ * moving shape's own position (read live via `editor`, see
+ * candidateBoundsAfterDelta/liveBoundsAdapter). `excluded` MUST likewise be
+ * the drag-start-computed set, passed straight through to snapCandidates'
+ * `opts.excludedIds` escape hatch so this never re-derives it per move. A
+ * vanished moving selection (every id deleted mid-drag — the same TOLERANCE
+ * this tool already extends elsewhere) degrades to "no snap", never a
+ * throw. */
+function computeSnappedDelta(
+  editor: Editor,
+  frozenSnap: CanvasDocument,
+  frozenIndex: SpatialIndex,
+  movingIds: readonly string[],
+  excluded: ReadonlySet<string>,
+  rawDx: number,
+  rawDy: number,
+): { dx: number; dy: number; snapResult: SnapResult } {
+  const liveDoc = liveBoundsAdapter(editor)
+  const bounds = candidateBoundsAfterDelta(liveDoc, movingIds, rawDx, rawDy)
+  if (!bounds) return { dx: rawDx, dy: rawDy, snapResult: EMPTY_SNAP_RESULT }
+  const snapResult = snapCandidates(frozenIndex, frozenSnap, movingIds, bounds, { excludedIds: excluded })
+  return { dx: rawDx + snapResult.dx, dy: rawDy + snapResult.dy, snapResult }
+}
 
 function toggleOrAdd(current: ReadonlySet<string>, id: string): string[] {
   // Shift-click TOGGLE (our documented choice to match tldraw parity):
@@ -101,8 +275,16 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
   function onIdle(state: Idle, event: InputEvent): { state: SelectState; intents: Intent[] } {
     if (event.type === 'pointerdown') {
       const hit = ctx.hitTestTopmost(worldOf(event))
+      // Double-click candidacy, decided ONCE here (see the module header):
+      // same target as the last completed click, within the shared
+      // isDoubleClick window/radius (event.t/x/y deltas only).
+      const doubleClick =
+        hit !== null &&
+        state.lastClick !== null &&
+        state.lastClick.targetId === hit &&
+        isDoubleClick(state.lastClick, event)
       return {
-        state: { mode: 'pointing', downScreen: { x: event.x, y: event.y }, targetId: hit, shiftDown: event.modifiers.shift },
+        state: { mode: 'pointing', downScreen: { x: event.x, y: event.y }, targetId: hit, shiftDown: event.modifiers.shift, doubleClick },
         intents: [],
       }
     }
@@ -130,12 +312,21 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // selection with just that shape before translating, rather than
         // dragging the old selection out from under the new target.
         if (!selection.has(targetId)) intents.push({ type: 'SetSelection', ids: [targetId] })
-        const ids = selection.has(targetId) ? [...selection] : [targetId]
+        const movingIds = selection.has(targetId) ? [...selection] : [targetId]
+        // DRAG START (Unit 13): the ToolContext's doc/index pair is read
+        // EXACTLY ONCE here and frozen for the whole gesture (see the module
+        // header's REBUILD-CADENCE DISCIPLINE section) — excludedIds is
+        // derived from this SAME read, never a separate one.
+        const snapshot = ctx.snapshot()
+        const snapIndex = ctx.index()
+        const excludedIds = computeExcludedIds(snapshot, movingIds)
         const camera = editor.get().camera
         const from = screenToWorld(camera, state.downScreen)
         const to = screenToWorld(camera, here)
-        intents.push({ type: 'TranslateShapes', ids, dx: to.x - from.x, dy: to.y - from.y })
-        return { state: { mode: 'dragging', targetId, lastScreen: here }, intents }
+        const rawDx = to.x - from.x, rawDy = to.y - from.y
+        const { dx, dy, snapResult } = computeSnappedDelta(editor, snapshot, snapIndex, movingIds, excludedIds, rawDx, rawDy)
+        intents.push({ type: 'TranslateShapes', ids: movingIds, dx, dy })
+        return { state: { mode: 'dragging', targetId, lastScreen: here, movingIds, excludedIds, snapshot, snapIndex, snapResult }, intents }
       }
 
       return { state: { mode: 'marquee', downScreen: state.downScreen }, intents: [] }
@@ -144,25 +335,39 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
     if (event.type === 'pointerup') {
       const intents: Intent[] = []
       if (state.targetId !== null) {
-        if (state.shiftDown) {
-          intents.push({ type: 'SetSelection', ids: toggleOrAdd(editor.get().selection, state.targetId) })
+        const targetId = state.targetId
+        // DOUBLE-CLICK-TO-EDIT (Unit 13): a recognized double-click (set at
+        // the idle->pointing transition — see the module header) on a
+        // TEXT-CAPABLE target begins editing, in place of the ordinary
+        // shift/toggle-or-replace selection logic below. A double-click on
+        // a non-text-capable kind (an embed, a frame, …) falls through to
+        // the normal single-click resolution unchanged — canvas-model's
+        // isTextCapableKind is the ENTIRE gate; there is no separate
+        // "did the shape actually resolve" check needed because a vanished
+        // target can't be hit-tested as `targetId` in the first place.
+        const shape = ctx.snapshot().byId.get(targetId)
+        if (state.doubleClick && shape && isTextCapableKind(shape.kind)) {
+          intents.push({ type: 'SetSelection', ids: [targetId] })
+          intents.push({ type: 'BeginEdit', id: targetId })
+        } else if (state.shiftDown) {
+          intents.push({ type: 'SetSelection', ids: toggleOrAdd(editor.get().selection, targetId) })
         } else {
-          intents.push({ type: 'SetSelection', ids: [state.targetId] })
+          intents.push({ type: 'SetSelection', ids: [targetId] })
         }
-      } else {
-        // Click on empty canvas deselects, REGARDLESS of shift — our
-        // simplification. tldraw instead skips clearing when the additive
-        // (shift/accel) key is held (node_modules/tldraw/src/lib/tools/
-        // SelectTool/childStates/PointingCanvas.ts's onEnter: `if
-        // (!additiveSelectionKey) { ... selectNone() }`), and does so
-        // immediately at pointerDOWN rather than waiting for pointerup. We
-        // decide uniformly at pointerup instead (both the hit and miss cases
-        // resolve at the same FSM edge, keeping the tool's mutation point
-        // singular and easy to reason about/test), and don't special-case
-        // shift for the miss case.
-        intents.push({ type: 'SetSelection', ids: [] })
+        return { state: { mode: 'idle', lastClick: { targetId, x: event.x, y: event.y, t: event.t } }, intents }
       }
-      return { state: IDLE, intents }
+      // Click on empty canvas deselects, REGARDLESS of shift — our
+      // simplification. tldraw instead skips clearing when the additive
+      // (shift/accel) key is held (node_modules/tldraw/src/lib/tools/
+      // SelectTool/childStates/PointingCanvas.ts's onEnter: `if
+      // (!additiveSelectionKey) { ... selectNone() }`), and does so
+      // immediately at pointerDOWN rather than waiting for pointerup. We
+      // decide uniformly at pointerup instead (both the hit and miss cases
+      // resolve at the same FSM edge, keeping the tool's mutation point
+      // singular and easy to reason about/test), and don't special-case
+      // shift for the miss case.
+      intents.push({ type: 'SetSelection', ids: [] })
+      return { state: IDLE, intents } // no target: nothing to remember for a future double-click
     }
 
     return { state, intents: [] }
@@ -174,14 +379,15 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       const camera = editor.get().camera
       const from = screenToWorld(camera, state.lastScreen)
       const to = screenToWorld(camera, here)
-      const dx = to.x - from.x, dy = to.y - from.y
+      const rawDx = to.x - from.x, rawDy = to.y - from.y
       const intents: Intent[] = []
-      // TOLERANCE: a mid-drag remote delete of the target (or any selected
+      // TOLERANCE: a mid-drag remote delete of the target (or any moving
       // id) is not this tool's problem to detect — TranslateShapes already
-      // skips unresolvable ids (editor.ts's TOLERANCE CONTRACT), so a
-      // vanished target just makes this event a no-op translate, never a
-      // throw. We still emit the intent unconditionally; the editor's own
-      // per-id skip is what makes that safe.
+      // skips unresolvable ids (editor.ts's TOLERANCE CONTRACT), and
+      // computeSnappedDelta degrades to "no snap" for a vanished moving
+      // selection (candidateBoundsAfterDelta returns null). We still emit
+      // the intent unconditionally; the editor's own per-id skip is what
+      // makes that safe.
       //
       // COMMIT CADENCE WATCH-ITEM (owned by the H3 perf rig): each of these
       // per-pointermove TranslateShapes intents becomes ONE doc.commit()
@@ -189,13 +395,18 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // mouse move during a drag. The ToolContext's lazy rebuild keeps the
       // LOCAL index cost off this path, but the wire/undo-granularity cost
       // of per-move commits is unmeasured until H3 profiles it.
-      if (dx !== 0 || dy !== 0) {
-        intents.push({ type: 'TranslateShapes', ids: [...editor.get().selection], dx, dy })
+      if (rawDx !== 0 || rawDy !== 0) {
+        // Reuses the FROZEN snapshot/index from drag start (state.snapshot/
+        // state.snapIndex) — never a fresh ctx.snapshot()/ctx.index() read
+        // here (see the module header's REBUILD-CADENCE DISCIPLINE section).
+        const { dx, dy, snapResult } = computeSnappedDelta(editor, state.snapshot, state.snapIndex, state.movingIds, state.excludedIds, rawDx, rawDy)
+        intents.push({ type: 'TranslateShapes', ids: state.movingIds, dx, dy })
+        return { state: { ...state, lastScreen: here, snapResult }, intents }
       }
       return { state: { ...state, lastScreen: here }, intents }
     }
     if (event.type === 'pointerup') {
-      return { state: IDLE, intents: [] }
+      return { state: IDLE, intents: [] } // a drag is never a click: nothing to remember for double-click
     }
     return { state, intents: [] }
   }
