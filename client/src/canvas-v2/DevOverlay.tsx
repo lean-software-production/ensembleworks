@@ -144,24 +144,47 @@ export function shouldShowDevOverlayFromEnvironment(): boolean {
 /** Polls GET /api/canvas/metrics every `intervalMs` (default 5000, per the
  * plan's "poll ~5s" spec) and returns the most recent successfully-parsed
  * payload (`null` before the first successful scrape). Cleans up its
- * interval on unmount. A fetch/parse failure is caught and logged, NEVER
- * thrown — this overlay reports on the system, it must never be a NEW way
- * for the system to break (same "never surface as a crash" posture the
- * six custom shapes' own error boundaries take). `fetchImpl`/`intervalMs`
- * are injectable test seams (production omits both). */
+ * interval on unmount. Any failure — a rejected fetch, a non-ok HTTP
+ * status, a JSON parse throw — is caught and warned, NEVER thrown: this
+ * overlay reports on the system, it must never be a NEW way for the system
+ * to break (same "never surface as a crash" posture the six custom shapes'
+ * own error boundaries take).
+ *
+ * WARN DEDUPE (once per failure-state CHANGE, not per poll — decided here,
+ * quality-review fix round): a persistently-down metrics endpoint polled
+ * every 5s would otherwise emit an identical console.warn 12x/minute for
+ * as long as the overlay is open — a console flood that buries the real
+ * signal (the STATE TRANSITION into failure). So each failure carries a
+ * signature ('http <status>' or 'fetch-rejected'), warned only when it
+ * DIFFERS from the previous scrape's outcome; a success resets the
+ * signature so a later relapse warns again. A 500->404 change warns (a
+ * different failure IS new information); 500->500 stays silent.
+ *
+ * `fetchImpl`/`intervalMs` are injectable test seams (production omits
+ * both — see DevOverlay.test.ts's hook cases). */
 export function useCanvasMetrics(enabled = true, intervalMs = 5000, fetchImpl: typeof fetch = fetch): CanvasMetricsPayload | null {
 	const [metrics, setMetrics] = useState<CanvasMetricsPayload | null>(null)
 	useEffect(() => {
 		if (!enabled) return // the overlay isn't shown (shouldShowDevOverlay false) — never scrape for nothing
 		let cancelled = false
+		let lastFailure: string | null = null // the WARN DEDUPE signature — see the doc comment
+		function warnOnce(signature: string, detail: unknown): void {
+			if (signature === lastFailure) return
+			lastFailure = signature
+			console.warn('[canvas-v2] dev overlay metrics scrape failed:', detail)
+		}
 		async function scrape() {
 			try {
 				const res = await fetchImpl('/api/canvas/metrics')
-				if (!res.ok) return
+				if (!res.ok) {
+					warnOnce(`http ${res.status}`, `HTTP ${res.status}`)
+					return
+				}
 				const payload = (await res.json()) as CanvasMetricsPayload
+				lastFailure = null // success: a later relapse into failure warns again
 				if (!cancelled) setMetrics(payload)
 			} catch (err) {
-				console.warn('[canvas-v2] dev overlay metrics scrape failed:', err)
+				warnOnce('fetch-rejected', err)
 			}
 		}
 		scrape()
