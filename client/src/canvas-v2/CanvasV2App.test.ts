@@ -178,6 +178,42 @@ async function main() {
 	)
 	console.log("ok: CanvasV2App — a peer's published presence cursor renders in the DOM, this mount's own entry self-filtered")
 
+	// ==========================================================================
+	// (c2) CAMERA-ONLY CHANGE REPUBLISHES THE CURSOR (quality-review fix
+	// round): record a screen cursor via setCursorFromScreen (standing in for
+	// a real pointermove), then apply a SetCamera with NO further pointer
+	// event — the mount's editor-subscribe effect must re-derive and
+	// republish the world cursor, observable from peer B's presence store
+	// over the real wire. Waits >60ms (PRESENCE_THROTTLE_MS) between the two
+	// publishes so the refresh isn't dropped by the shared cursor throttle.
+	// ==========================================================================
+	const ewFull = (globalThis as any).window.__ew as {
+		editor: { apply(intent: unknown): void }
+		presencePublisher: { setCursorFromScreen(s: { x: number; y: number }, c: { x: number; y: number; z: number }): void }
+	}
+	await act(async () => {
+		// Screen (100,100) at the identity camera -> world (100,100).
+		ewFull.presencePublisher.setCursorFromScreen({ x: 100, y: 100 }, { x: 0, y: 0, z: 1 })
+		await new Promise((r) => setTimeout(r, 100)) // clear the 60ms throttle window before the camera change
+	})
+	assert.deepEqual(
+		(presenceB.all()['test-user'] as { cursor: unknown }).cursor,
+		{ x: 100, y: 100 },
+		'precondition: peer B sees the pre-pan world cursor',
+	)
+	await act(async () => {
+		// Camera-only change, NO pointermove: the world point under the same
+		// screen point becomes (100/2 - (-50), 100/2 - 0) = (100, 50).
+		ewFull.editor.apply({ type: 'SetCamera', x: -50, y: 0, z: 2 })
+		await new Promise((r) => setTimeout(r, 100))
+	})
+	assert.deepEqual(
+		(presenceB.all()['test-user'] as { cursor: unknown }).cursor,
+		{ x: 100, y: 50 },
+		'a camera-only change republishes the cursor at the RECOMPUTED world position (peers no longer see it frozen at the pre-pan spot)',
+	)
+	console.log('ok: CanvasV2App — a camera-only change republishes the world cursor to peers')
+
 	peerB.close()
 	presenceB.destroy()
 

@@ -69,7 +69,6 @@ import {
 	Editor,
 	applyWheel,
 	createToolContext,
-	screenToWorld,
 	type InputEvent,
 	type ToolContext,
 } from '@ensembleworks/canvas-editor'
@@ -412,11 +411,23 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// necessary; presencePublisher's own throttle absorbs that (Task G4).
 	// viewportSizeRef (not the viewportSize closure value) so this effect
 	// subscribes ONCE per session rather than re-subscribing on every resize.
+	//
+	// CURSOR REFRESH ON CAMERA CHANGE (quality-review fix round): the SAME
+	// subscription re-derives the published WORLD cursor from the last
+	// recorded SCREEN point + the new camera — a wheel pan/zoom with a
+	// stationary mouse changes the world point under the (unmoved) screen
+	// cursor, and without this the published cursor stayed frozen at the
+	// pre-pan world spot while only the viewport publish updated: peers saw
+	// the cursor stuck. Viewport + refreshed cursor go out as ONE combined
+	// store write (setViewportAndRefreshCursor) — see that method's doc
+	// comment for the probe-established EphemeralStore same-millisecond LWW
+	// tie that makes two separate writes silently lose the second one on the
+	// remote side.
 	useEffect(() => {
 		const publish = () => {
 			const camera = editor.get().camera
 			const size = viewportSizeRef.current
-			presencePublisher.setViewport({ x: camera.x, y: camera.y, z: camera.z, w: size.width, h: size.height })
+			presencePublisher.setViewportAndRefreshCursor({ x: camera.x, y: camera.y, z: camera.z, w: size.width, h: size.height }, camera)
 		}
 		publish() // an initial viewport publish so peers see it before any camera change
 		return editor.subscribe(publish)
@@ -428,7 +439,11 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				// Presence: publish the WORLD-space cursor position (Task G4) —
 				// unconditional (not tool-gated), mirroring wheel's own
 				// "handled uniformly regardless of active tool" policy just below.
-				presencePublisher.setCursor(screenToWorld(editor.get().camera, event))
+				// setCursorFromScreen (NOT setCursor + a local screenToWorld):
+				// the publisher records the SCREEN point so a later camera-only
+				// change can re-derive the world cursor — see the CURSOR REFRESH
+				// note on the effect above.
+				presencePublisher.setCursorFromScreen({ x: event.x, y: event.y }, editor.get().camera)
 			}
 			if (event.type === 'wheel') {
 				const next = applyWheel(editor.get().camera, event)

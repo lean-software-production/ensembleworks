@@ -66,9 +66,14 @@ import { adaptPresence, createPresencePublisher, leadingEdgeThrottle, PRESENCE_T
 }
 
 // ============================================================================
-// 3. createPresencePublisher: setCursor/setViewport each publish the FULL
-//    current Presence object (not a partial patch) -- a setViewport call
-//    must NOT clobber a cursor set moments earlier, and vice versa.
+// 3. createPresencePublisher: ONE shared throttle channel, full-object
+//    publishes. A dropped call still UPDATES the pending `current` object,
+//    so the next fired publish carries it — nothing is lost forever, only
+//    deferred to the next fire (see presence.ts's ONE SHARED THROTTLE
+//    CHANNEL section for why a single channel is load-bearing, not a
+//    simplification: two channels could legally write the store twice in
+//    one millisecond, and a remote EphemeralStore DROPS the second same-ms
+//    same-key write on the LWW tie — probed against loro-crdt 1.13.6).
 // ============================================================================
 {
 	let clock = 0
@@ -78,20 +83,81 @@ import { adaptPresence, createPresencePublisher, leadingEdgeThrottle, PRESENCE_T
 	publisher.setCursor({ x: 1, y: 2 })
 	assert.deepEqual(store.all()['self-key'], { cursor: { x: 1, y: 2 }, viewport: null, stamp: null, presenting: [] })
 
-	// A DIFFERENT throttle instance (setViewport) — its own leading edge fires
-	// immediately regardless of setCursor's window, and carries the cursor
-	// value forward (full-object semantics, not a partial patch).
-	publisher.setViewport({ x: 5, y: 5, w: 800, h: 600, z: 1 })
-	assert.deepEqual(store.all()['self-key'], { cursor: { x: 1, y: 2 }, viewport: { x: 5, y: 5, w: 800, h: 600, z: 1 }, stamp: null, presenting: [] })
+	// A camera publish in the SAME instant shares the one channel: the WRITE
+	// is dropped (no second same-ms store write can ever leave this
+	// publisher) but the viewport update is RECORDED on `current`.
+	publisher.setViewportAndRefreshCursor({ x: 5, y: 5, w: 800, h: 600, z: 1 }, { x: 5, y: 5, z: 1 })
+	assert.equal(store.all()['self-key']!.viewport, null, 'a same-instant second write is dropped at the shared channel (never reaches the store)')
 
-	// A SECOND setCursor call still inside setCursor's own 60ms window is
-	// dropped (the wire value stays exactly what it was).
-	clock = 10
-	publisher.setCursor({ x: 999, y: 999 })
-	assert.deepEqual(store.all()['self-key']!.cursor, { x: 1, y: 2 }, 'a cursor update inside the throttle window never reaches the store')
+	// The NEXT fired publish (past the window) carries the recorded viewport
+	// — deferred, not lost.
+	clock = 100
+	publisher.setCursor({ x: 3, y: 4 })
+	assert.deepEqual(store.all()['self-key'], { cursor: { x: 3, y: 4 }, viewport: { x: 5, y: 5, w: 800, h: 600, z: 1 }, stamp: null, presenting: [] }, 'the next fire carries every update recorded during the dropped window (full-object publish)')
 
 	store.destroy()
-	console.log('ok: createPresencePublisher — full-object republish, cursor and viewport independently throttled')
+	console.log('ok: createPresencePublisher — one shared channel, dropped writes deferred to the next fire')
+}
+
+// ============================================================================
+// 4. Camera-only changes republish the cursor (quality-review fix round):
+//    setCursorFromScreen records the SCREEN point; setViewportAndRefreshCursor
+//    re-derives the world cursor from that recorded screen point + the NEW
+//    camera and publishes it (with the viewport) as ONE store write -- so a
+//    wheel pan/zoom with a stationary mouse doesn't leave peers seeing the
+//    cursor frozen at the pre-pan world spot.
+// ============================================================================
+{
+	let clock = 0
+	const store = new PresenceStore('self-key')
+	const publisher = createPresencePublisher(store, { intervalMs: 60, now: () => clock })
+
+	// Screen (100,100) at the identity camera -> world (100,100)
+	// (world = screen/z - camera.xy -- input.ts's screenToWorld convention).
+	publisher.setCursorFromScreen({ x: 100, y: 100 }, { x: 0, y: 0, z: 1 })
+	assert.deepEqual(store.all()['self-key']!.cursor, { x: 100, y: 100 }, 'setCursorFromScreen publishes the screen->world conversion')
+
+	// Camera pans/zooms with NO pointermove: same screen point, new camera ->
+	// world (100/2 - (-50), 100/2 - 0) = (100, 50), published together with
+	// the new viewport in ONE write.
+	clock = 100 // past the 60ms throttle window
+	publisher.setViewportAndRefreshCursor({ x: -50, y: 0, w: 800, h: 600, z: 2 }, { x: -50, y: 0, z: 2 })
+	assert.deepEqual(store.all()['self-key']!.cursor, { x: 100, y: 50 }, 'a camera-only change republishes the cursor at the RECOMPUTED world position')
+	assert.deepEqual(store.all()['self-key']!.viewport, { x: -50, y: 0, w: 800, h: 600, z: 2 }, 'the same single write carries the new viewport')
+
+	// Inside the shared window: the write is dropped (leading edge), exactly
+	// like a too-soon pointermove would be.
+	clock = 110
+	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 })
+	assert.deepEqual(store.all()['self-key']!.cursor, { x: 100, y: 50 }, 'a refresh inside the throttle window is dropped (shared channel)')
+
+	store.destroy()
+	console.log('ok: setViewportAndRefreshCursor — camera-only change republishes the recomputed world cursor in one write')
+}
+
+// ============================================================================
+// 5. setViewportAndRefreshCursor before ANY screen point is recorded: the
+//    viewport publishes, the cursor stays null (nothing to recompute from) —
+//    never a throw, never a fabricated cursor.
+// ============================================================================
+{
+	let clock = 0
+	const store = new PresenceStore('self-key')
+	const publisher = createPresencePublisher(store, { intervalMs: 60, now: () => clock })
+	publisher.setViewportAndRefreshCursor({ x: 10, y: 10, w: 800, h: 600, z: 2 }, { x: 10, y: 10, z: 2 })
+	assert.deepEqual(store.all()['self-key'], { cursor: null, viewport: { x: 10, y: 10, w: 800, h: 600, z: 2 }, stamp: null, presenting: [] }, 'no screen point recorded yet -> viewport publishes, cursor stays null')
+
+	// A raw setCursor SUPERSEDES the screen-point derivation: a later camera
+	// change must not resurrect a stale screen point over it.
+	clock = 100
+	publisher.setCursorFromScreen({ x: 50, y: 50 }, { x: 0, y: 0, z: 1 })
+	clock = 200
+	publisher.setCursor(null) // e.g. the pointer left the viewport
+	clock = 300
+	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 })
+	assert.equal(store.all()['self-key']!.cursor, null, 'a raw setCursor(null) forgets the recorded screen point — no stale-cursor resurrection on the next camera change')
+	store.destroy()
+	console.log('ok: setViewportAndRefreshCursor — null-cursor cases (no screen point; superseded screen point)')
 }
 
 console.log(`ok: presence (PRESENCE_THROTTLE_MS=${PRESENCE_THROTTLE_MS})`)

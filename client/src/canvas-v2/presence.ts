@@ -16,6 +16,7 @@
  * (pointermove events, `editor.subscribe()` for camera changes).
  */
 import type { Presence, PresenceStore } from '@ensembleworks/canvas-sync'
+import { screenToWorld, type Camera } from '@ensembleworks/canvas-editor'
 import type { RemotePresence } from '@ensembleworks/canvas-react'
 
 /**
@@ -94,22 +95,65 @@ export function adaptPresence(all: Readonly<Record<string, Presence>>): Record<s
 
 export interface PresencePublisher {
 	/** World-space cursor position (or `null` to publish "no cursor" — e.g. the
-	 * pointer left the viewport). Throttled per PRESENCE_THROTTLE_MS. */
+	 * pointer left the viewport). Throttled per PRESENCE_THROTTLE_MS.
+	 * FORGETS any screen point recorded by setCursorFromScreen (a caller
+	 * publishing a raw world cursor — or clearing it with null — is asserting
+	 * the screen-point derivation no longer applies, so a later camera
+	 * refresh must not resurrect a stale screen point over it). */
 	setCursor(cursor: { readonly x: number; readonly y: number } | null): void
-	/** The camera's current viewport rect (x/y/z from EditorState.camera, w/h
-	 * from the mount's measured ViewportSize). Throttled independently of
-	 * setCursor (its own leading-edge window), since a pan/zoom and a mouse
-	 * move are unrelated events that both want to feel live without
-	 * compounding into a single shared budget. */
-	setViewport(viewport: { readonly x: number; readonly y: number; readonly w: number; readonly h: number; readonly z: number } | null): void
+	/** The pointermove path (quality-review fix round): records `screen` (the
+	 * viewport-relative InputEvent x/y) so a LATER camera change can
+	 * re-derive the world cursor from it (setViewportAndRefreshCursor below),
+	 * then converts screen->world via `camera` and publishes. */
+	setCursorFromScreen(screen: { readonly x: number; readonly y: number }, camera: Camera): void
+	/** The camera-change path (quality-review fix round — the bug this
+	 * closes: a wheel pan/zoom with a stationary mouse changes the world
+	 * point under the unmoved screen cursor, and publishing only the viewport
+	 * left peers seeing the cursor frozen at the pre-pan world spot):
+	 * updates the viewport rect (x/y/z from EditorState.camera, w/h from the
+	 * mount's measured ViewportSize) AND re-derives the world cursor from
+	 * the LAST screen point setCursorFromScreen recorded (skipped when none
+	 * is recorded, or a raw setCursor has since superseded it), then
+	 * publishes BOTH in one store write.
+	 *
+	 * ONE WRITE, DELIBERATELY (probe-established, not style): loro-crdt's
+	 * EphemeralStore timestamps each `set()` at wall-clock MILLISECOND
+	 * granularity, and a REMOTE peer applying two same-key deltas from the
+	 * same millisecond keeps the FIRST on the LWW tie — probed directly
+	 * against loro-crdt 1.13.6 (two back-to-back `set('k', ...)` calls, both
+	 * deltas applied to a second store: the local store ends at the second
+	 * value, the remote store keeps the FIRST in 4 of 5 runs — losing only
+	 * when the two sets straddle a millisecond boundary). Publishing the
+	 * viewport and the refreshed cursor as two separate writes in one
+	 * synchronous handler therefore made the cursor refresh silently vanish
+	 * on the remote side most of the time (the exact flake the CanvasV2App
+	 * integration test caught). One combined write per triggering event is
+	 * the fix — and the same reasoning is why ALL of this publisher's
+	 * methods share ONE throttle channel (see createPresencePublisher). */
+	setViewportAndRefreshCursor(viewport: { readonly x: number; readonly y: number; readonly w: number; readonly h: number; readonly z: number } | null, camera: Camera): void
 }
 
 /**
  * Builds the stateful publisher CanvasV2App.tsx wires to pointermove (cursor)
- * and `editor.subscribe()` (viewport). Holds the FULL `Presence` object
- * (`PresenceStore.publish` replaces the whole value under `selfKey` per call
- * — there is no partial-field update on the wire) and republishes it,
- * throttled, every time either half changes.
+ * and `editor.subscribe()` (viewport + cursor refresh). Holds the FULL
+ * `Presence` object (`PresenceStore.publish` replaces the whole value under
+ * `selfKey` per call — there is no partial-field update on the wire) and
+ * republishes it, throttled, every time any half changes.
+ *
+ * ONE SHARED THROTTLE CHANNEL for every method (a deliberate revision of the
+ * original two-independent-channels design, forced by the EphemeralStore
+ * same-millisecond LWW tie documented on setViewportAndRefreshCursor above):
+ * two separate channels could each legally fire within the same millisecond
+ * (e.g. a pointermove and a wheel event in one frame), producing exactly the
+ * two-writes-one-ms pattern whose second write a remote peer DROPS. A single
+ * leading-edge channel makes "at most one store write per interval" true by
+ * construction — no same-ms pair can ever leave this publisher. Cost: cursor
+ * and viewport share the one 60ms budget, so e.g. a camera change landing
+ * <60ms after a cursor publish is dropped (not queued) — self-healing on the
+ * next event of ANY kind, since every publish carries the FULL object; the
+ * only unrecoverable case is the already-documented trailing-edge gap
+ * (leadingEdgeThrottle's own doc comment), which now covers the viewport
+ * too.
  *
  * `stamp`/`presenting` STAY THEIR INITIAL VALUES (`null`/`[]`) for the
  * lifetime of this mount — HONEST, not an oversight: this phase's tool set
@@ -123,18 +167,31 @@ export function createPresencePublisher(store: PresenceStore, opts: { readonly i
 	const now = opts.now ?? (() => performance.now())
 	const intervalMs = opts.intervalMs ?? PRESENCE_THROTTLE_MS
 	let current: Presence = { cursor: null, viewport: null, stamp: null, presenting: [] }
+	/** The last SCREEN point setCursorFromScreen saw — what
+	 * setViewportAndRefreshCursor re-derives the world cursor from on a
+	 * camera change. Null until the first setCursorFromScreen, and reset to
+	 * null by a raw setCursor (see the interface doc comments). */
+	let lastScreen: { readonly x: number; readonly y: number } | null = null
 
-	const publishCursor = leadingEdgeThrottle<void>(intervalMs, now, () => store.publish(current))
-	const publishViewport = leadingEdgeThrottle<void>(intervalMs, now, () => store.publish(current))
+	// The ONE throttle channel — see the factory doc comment's ONE SHARED
+	// THROTTLE CHANNEL section for why it must be singular.
+	const publish = leadingEdgeThrottle<void>(intervalMs, now, () => store.publish(current))
 
 	return {
 		setCursor(cursor) {
+			lastScreen = null // a raw world cursor supersedes any recorded screen point
 			current = { ...current, cursor }
-			publishCursor()
+			publish()
 		},
-		setViewport(viewport) {
-			current = { ...current, viewport }
-			publishViewport()
+		setCursorFromScreen(screen, camera) {
+			lastScreen = screen
+			current = { ...current, cursor: screenToWorld(camera, screen) }
+			publish()
+		},
+		setViewportAndRefreshCursor(viewport, camera) {
+			const cursor = lastScreen !== null ? screenToWorld(camera, lastScreen) : current.cursor
+			current = { ...current, viewport, cursor }
+			publish() // ONE store write for both halves — see the interface doc comment
 		},
 	}
 }
