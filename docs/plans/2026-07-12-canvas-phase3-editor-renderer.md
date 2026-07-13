@@ -1250,6 +1250,30 @@ Plus in `client/package.json`: new devDeps `"vite-plugin-top-level-await":
 `"@ensembleworks/canvas-doc": "*"` (needed once real callers import it — not
 part of the wasm fix itself).
 
+**CORRECTION (2026-07-12, Unit 12 fix round — the recorded diff above was
+SUFFICIENT but NOT MINIMAL; the shipped config differs):** the verdict above
+only ever tested the two plugins TOGETHER, never `wasm()` alone. Unit 12's
+implementation (which applied the recorded diff verbatim) surfaced the cost:
+`vite-plugin-top-level-await` wraps the entry chunk in an async IIFE (it
+statically contains the `React.lazy()` call site pointing at the async
+CanvasV2App chunk), which defeated the minifier's cross-module inlining and
+inflated the entry chunk from 212.80 kB raw / 62.23 kB gzip (pre-G3
+baseline) to 438.93 kB raw / 81.40 kB gzip (+106% raw / +30% gzip) with ZERO
+canvas-v2 code in it (verified by symbol greps + a baseline rebuild). The
+Unit 12 reviewer then probed the minimal config empirically: **dropping BOTH
+`vite-plugin-top-level-await` AND `build.target: 'esnext'` (keeping only
+`wasm()`)** → `vite build` passes, `dist/assets/loro_wasm_bg-*.wasm` emits
+unchanged, the dev server works — verified by an independent dev-mode
+headless-Chromium probe (`window.__loroProbe === 1` with the dependency
+optimizer still resolving `bundler/index.js`) — and typecheck + the full
+suite (185/185) stay green. The `build.target` bump had existed ONLY to fix
+the TLA plugin's own transform failure at the default target; without the
+plugin, neither is needed. **What ships (Unit 12, commit series):
+`plugins: [react(), wasm()]` at the DEFAULT build target, devDep
+`vite-plugin-wasm` only.** Entry chunk after the correction: 215.41 kB raw /
+63.14 kB gzip (~1% over the true pre-G3 baseline); the CanvasV2App lazy
+chunk, the wasm asset, and the four legacy manualChunks are unaffected.
+
 **Async boot gate: not required.** Neither `vite-plugin-wasm` nor the
 `browser/index.js` prod path needed an explicit `await init()` call before
 first use — `LoroCanvasDoc.create()` worked synchronously in both the

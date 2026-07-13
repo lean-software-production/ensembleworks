@@ -1,7 +1,6 @@
 import { execSync } from 'node:child_process'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type ServerOptions } from 'vite'
-import topLevelAwait from 'vite-plugin-top-level-await'
 import wasm from 'vite-plugin-wasm'
 
 // Stamp the build with the git-described version so the client can show it
@@ -88,15 +87,20 @@ const proxiedServer: Partial<ServerOptions> =
 			: {}
 
 export default defineConfig({
-	plugins: [react(), wasm(), topLevelAwait()],
+	// wasm() ALONE (no vite-plugin-top-level-await, default build target):
+	// the loro-crdt fix needs only the wasm plugin — it handles the dev
+	// server/optimizer's bundler/index.js raw-ESM `.wasm` import, and the
+	// production build's browser/index.js path never needed a plugin at all
+	// (Preflight P1, as amended during Unit 12 review: the recorded
+	// two-plugin diff was sufficient but not minimal — the TLA plugin only
+	// existed to fix its own transform failure at the default target, and
+	// wrapping every chunk in an async IIFE cost the entry chunk +106% raw /
+	// +30% gzip for nothing).
+	plugins: [react(), wasm()],
 	define: {
 		__APP_VERSION__: JSON.stringify(appVersion()),
 	},
 	build: {
-		// vite-plugin-top-level-await (required by vite-plugin-wasm for the
-		// loro-crdt wasm-bindgen bundle) needs a target that natively supports
-		// top-level await; the default modern-browser target list doesn't.
-		target: 'esnext',
 		// One 3 MB chunk means every release invalidates the whole bundle. The
 		// heavyweights (tldraw, LiveKit, xterm, React) change only on dependency
 		// bumps, so give each a stable chunk that stays browser-cached across
