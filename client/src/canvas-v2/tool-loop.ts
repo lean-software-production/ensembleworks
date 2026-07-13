@@ -85,7 +85,21 @@ export function createSelectAndTransformTool(ctx: ToolContext): Tool<SelectAndTr
 			if (event.type === 'pointerdown') {
 				const rt = transform.onEvent(state.transform, event)
 				if (rt.state.mode !== 'idle') {
-					return { state: { ...state, active: 'transform', transform: rt.state }, intents: rt.intents }
+					// HANDOFF RESETS THE SELECT LEG (quality-review fix — the
+					// reviewer reproduced the bug this prevents): select's Idle
+					// state carries `lastClick`, its double-click memory
+					// (select.ts's DOUBLE-CLICK-TO-EDIT section), and an entire
+					// resize/rotate gesture routes EXCLUSIVELY through the
+					// transform leg — select's FSM never sees any of it — so
+					// without this reset that memory would survive the whole
+					// gesture: click A, resize A via a handle, click A again
+					// within DOUBLE_CLICK_MS of the FIRST click -> spurious
+					// BeginEdit. A handle-grab is a NEW gesture, not the second
+					// half of a click pair, so the select leg goes back to its
+					// own initialState ({mode:'idle', lastClick:null}) at the
+					// handoff. Pinned by tool-loop.test.ts's click-resize-click
+					// probe (with its plain-double-click control case).
+					return { state: { active: 'transform', select: select.initialState, transform: rt.state }, intents: rt.intents }
 				}
 			}
 			const rs = select.onEvent(state.select, event)

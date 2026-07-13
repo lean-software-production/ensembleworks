@@ -151,7 +151,66 @@ function setup() {
 }
 
 // ============================================================================
-// 5. currentSnapResult — the Overlay.snapResult accessor (Unit 13). undefined
+// 5. NO stale double-click memory across a transform gesture (quality-review
+//    fix round): click A -> resize A via its SE handle (the whole gesture
+//    routes to the TRANSFORM leg, so select's own FSM never sees any of it)
+//    -> click A again, still within DOUBLE_CLICK_MS (450) of the FIRST
+//    click. Without the composite resetting the select leg on the transform
+//    handoff, select's Idle.lastClick survives the resize and the
+//    post-resize click reads as the "second" click of a double-click ->
+//    spurious BeginEdit. The fixture shape is a 'note' (text-capable, per
+//    canvas-model's isTextCapableKind) so the spurious edit REALLY fires if
+//    the bug is present -- not vacuously null.
+// ============================================================================
+{
+	const doc = LoroCanvasDoc.create({ peerId: 1n })
+	doc.putPage({ id: 'page:p', name: 'P' })
+	doc.putShape({ id: 'shape:n', kind: 'note', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: {} } as Shape)
+	doc.commit()
+	const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+	const ctx: ToolContext = createToolContext(editor)
+	const tool = createSelectAndTransformTool(ctx)
+	let state: SelectAndTransformState = tool.initialState
+
+	function send(event: Parameters<typeof tool.onEvent>[1]) {
+		const r = tool.onEvent(state, event)
+		state = r.state
+		if (r.intents.length > 0) editor.applyAll(r.intents)
+	}
+
+	// Click the note (a note's kind-default local box is 200x200 -- see
+	// canvas-model geometry.ts's size(): notes render 200*scale square).
+	send({ type: 'pointerdown', x: 100, y: 100, buttons: 1, modifiers: MODS, t: 0 })
+	send({ type: 'pointerup', x: 100, y: 100, buttons: 0, modifiers: MODS, t: 16 })
+	assert.deepEqual([...editor.get().selection], ['shape:n'], 'precondition: the note is selected')
+
+	// Resize via the SE handle at (200,200): the ENTIRE gesture routes to the
+	// transform leg -- select's FSM never sees these three events.
+	send({ type: 'pointerdown', x: 200, y: 200, buttons: 1, modifiers: MODS, t: 32 })
+	assert.equal(state.active, 'transform', 'precondition: the handle grab routed to the transform leg')
+	send({ type: 'pointermove', x: 220, y: 220, buttons: 1, modifiers: MODS, t: 48 })
+	send({ type: 'pointerup', x: 220, y: 220, buttons: 0, modifiers: MODS, t: 64 })
+	assert.equal(state.active, 'select', 'precondition: the resize ended, control returned to the select leg')
+
+	// The reviewer's probe: click the note again, still within DOUBLE_CLICK_MS
+	// (450) of the FIRST click (t=0/16).
+	send({ type: 'pointerdown', x: 100, y: 100, buttons: 1, modifiers: MODS, t: 80 })
+	send({ type: 'pointerup', x: 100, y: 100, buttons: 0, modifiers: MODS, t: 96 })
+	assert.equal(editor.get().editingId, null, 'click -> handle-resize -> click must NEVER read as a double-click (stale lastClick across the transform gesture)')
+
+	// Control case: a PLAIN double-click (no intervening transform gesture)
+	// still begins editing -- the reset must not have broken the feature.
+	send({ type: 'pointerdown', x: 100, y: 100, buttons: 1, modifiers: MODS, t: 600 })
+	send({ type: 'pointerup', x: 100, y: 100, buttons: 0, modifiers: MODS, t: 616 })
+	send({ type: 'pointerdown', x: 100, y: 100, buttons: 1, modifiers: MODS, t: 632 })
+	send({ type: 'pointerup', x: 100, y: 100, buttons: 0, modifiers: MODS, t: 648 })
+	assert.equal(editor.get().editingId, 'shape:n', 'control: a plain double-click still begins editing')
+
+	console.log('ok: tool-loop — no stale double-click memory across a transform gesture')
+}
+
+// ============================================================================
+// 6. currentSnapResult — the Overlay.snapResult accessor (Unit 13). undefined
 //    whenever there's nothing to show; the select tool's carried SnapResult
 //    once a drag near another shape is in flight.
 // ============================================================================
