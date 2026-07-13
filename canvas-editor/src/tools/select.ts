@@ -53,14 +53,25 @@
 // Pointing->Dragging transition (before any TranslateShapes of this gesture
 // has committed anything), and the resulting (frozen) doc/index pair is
 // carried on Dragging state for snapCandidates' TARGET lookups the whole
-// gesture through — correct because nothing about this tool's own local
-// drag changes any OTHER shape's position, size, or the document's overall
-// medianSize (matches spatial-index.ts's own STALENESS CONTRACT: a stale
-// index yields omissions, never false hits). The MOVING shape(s)' own
-// CURRENT position — which DOES change every move, via this same tool's
-// commits — is read LIVE instead, through `liveBoundsAdapter` below (the
-// same "read live, never snapshot mid-batch" discipline editor.ts's own
-// `liveDocAdapter` documents for exactly this reason).
+// gesture through. Correct with respect to this tool's OWN activity: a
+// local drag changes nothing about any OTHER shape's position, size, or
+// the document's overall medianSize. Staleness with respect to REMOTE
+// activity is exactly snapping.ts's own documented contract, quoted rather
+// than paraphrased ("targets are where they were at the last rebuild; the
+// moving selection's own correctness comes from the exclusion set, not
+// from the index") — snapCandidates reads the index's AABB-family data
+// (queryViewport + boundsById), NOT the quad-exact query path, so
+// spatial-index.ts's "omissions, never false hits" guarantee does NOT
+// apply here: a remote peer moving a target mid-drag CAN produce a snap
+// guide (and a snapped delta) at that target's OLD position until the
+// gesture ends and the next drag reads a fresh pair. Accepted: a
+// one-gesture-stale guide against a concurrently-moving remote target is
+// visually self-correcting and far cheaper than an O(shapes) rebuild per
+// pointermove. The MOVING shape(s)' own CURRENT position — which DOES
+// change every move, via this same tool's commits — is read LIVE instead,
+// through `liveBoundsAdapter` below (the same "read live, never snapshot
+// mid-batch" discipline editor.ts's own `liveDocAdapter` documents for
+// exactly this reason).
 import {
   computeExcludedIds,
   isTextCapableKind,
