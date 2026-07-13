@@ -37,7 +37,12 @@
  */
 import { statSync } from 'node:fs'
 import path from 'node:path'
-import { runSoak, type RunSoakOpts, type SoakResult, type SoakServer } from '@ensembleworks/canvas-sync'
+// Deliberately the `/soak` subpath, NOT the package's main entry — see
+// canvas-sync/src/index.ts's own NOTE for why the soak simulation isn't
+// re-exported from there (it would pull `node:assert/strict` into every
+// consumer's module graph, including the browser client, for a warning
+// with zero functional benefit to anyone but this file).
+import { runSoak, type RunSoakOpts, type SoakResult, type SoakServer } from '@ensembleworks/canvas-sync/soak'
 import { DocumentActor } from './actor.ts'
 
 /** How often (in PERSISTED updates, not sim ops — DocumentActor's own unit,
