@@ -66,6 +66,23 @@ export interface ShapeBodyProps {
   readonly shape: Shape
   readonly snapshot: CanvasDocument
   readonly editorState: EditorState
+  /** Reads a shape's live `LoroText` content by id (`editor.doc.getText` —
+   * the SAME accessor TextEditor.tsx uses for its editing textarea's
+   * `value`, and the SAME "reading editor.doc through its public surface is
+   * not an import" posture that file's module header establishes). Threaded
+   * from ShapeLayer down through ShapeBody so a text-capable kind's body
+   * (BoxShape's fallback, today) can render the doc's actual text content
+   * instead of only ever showing `props.richText`/`props.name` — see
+   * BoxShape.tsx's labelOf for the closed review gap this fixes: without
+   * this accessor, `SetText` (the plain-text editing mount's whole-string
+   * write) had NO rendering consumer anywhere — not for a remote peer, not
+   * even for the SAME client once its own edit ended, since `props.richText`
+   * is a completely different (and, this phase, unwritten-by-typing) field.
+   * Optional so a fixture/test that doesn't care about live text (goldens'
+   * static `richText`-only fixtures, most of shape-layer.test.ts) can omit
+   * it — BoxShape's labelOf falls back to its pre-existing richText/name/kind
+   * chain whenever this is absent OR returns an empty string. */
+  readonly getText?: (id: string) => string
 }
 
 export interface RegisterShapeOptions {

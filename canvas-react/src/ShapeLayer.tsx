@@ -89,7 +89,25 @@ export function ShapeLayer({ toolContext, camera, viewportSize }: ShapeLayerProp
         const shape = snapshot.byId.get(id)
         if (!shape) return null // vanished between index build and this render — omit, never throw (matches the STALENESS CONTRACT's "omissions only" posture)
         if (isEmbedKind(shape.kind)) return null // embed kinds are EmbedLayer's exclusive job — see module header
-        return <ShapeBody key={id} shape={shape} snapshot={snapshot} editorState={editorState} />
+        // getText: reads through toolContext.editor.doc (the SAME "not an
+        // import" posture TextEditor.tsx documents) so a text-capable
+        // kind's body can render live LoroText content — see
+        // shapeRegistry.ts's ShapeBodyProps.getText doc comment for the
+        // review gap this closes. Guarded with a typeof check (not a bare
+        // call) because several house tests (embed.test.ts,
+        // embed-reconciler.test.ts) construct a deliberately minimal fake
+        // `editor.doc` that implements only `subscribe` — exactly enough
+        // for the paths THEY exercise; a hard call here would break every
+        // one of those pre-existing fakes for a feature they don't test.
+        return (
+          <ShapeBody
+            key={id}
+            shape={shape}
+            snapshot={snapshot}
+            editorState={editorState}
+            getText={(sid) => (typeof toolContext.editor.doc.getText === 'function' ? toolContext.editor.doc.getText(sid) : '')}
+          />
+        )
       })}
     </>
   )

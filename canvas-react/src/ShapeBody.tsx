@@ -82,6 +82,10 @@ export interface ShapeBodyContainerProps {
   readonly shape: Shape
   readonly snapshot: CanvasDocument
   readonly editorState: EditorState
+  /** See shapeRegistry.ts's ShapeBodyProps.getText doc comment — forwarded
+   * verbatim to the looked-up Component, never read by this wrapper div
+   * itself. */
+  readonly getText?: (id: string) => string
 }
 
 /** Pure — exported so shape-layer.test.ts can pin the exact CSS transform
@@ -92,7 +96,7 @@ export function shapeBodyTransform(snapshot: CanvasDocument, shape: Shape): stri
   return `translate(${t.x}px, ${t.y}px) rotate(${t.rotation}rad)`
 }
 
-export function ShapeBody({ shape, snapshot, editorState }: ShapeBodyContainerProps) {
+export function ShapeBody({ shape, snapshot, editorState, getText }: ShapeBodyContainerProps) {
   const { maxX: w, maxY: h } = localBounds(shape) // localBounds is always {minX:0, minY:0, maxX:w, maxY:h} — geometry.ts's contract
   const Component = lookupShapeComponent(shape.kind)
   return (
@@ -109,7 +113,7 @@ export function ShapeBody({ shape, snapshot, editorState }: ShapeBodyContainerPr
         transform: shapeBodyTransform(snapshot, shape),
       }}
     >
-      <Component shape={shape} snapshot={snapshot} editorState={editorState} />
+      <Component shape={shape} snapshot={snapshot} editorState={editorState} getText={getText} />
     </div>
   )
 }

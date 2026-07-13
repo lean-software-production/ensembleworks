@@ -66,9 +66,9 @@ const editorState: EditorState = {
 // tool-context.test.ts's job); it only needs a real SpatialIndex over the
 // SAME snapshot so ShapeLayer's queryViewport culling produces correct
 // results.
-function fakeToolContext(snapshot: CanvasDocument): ToolContext {
+function fakeToolContext(snapshot: CanvasDocument, texts: ReadonlyMap<string, string> = new Map()): ToolContext {
   const editor = {
-    doc: { subscribe: (_listener: () => void) => () => {} },
+    doc: { subscribe: (_listener: () => void) => () => {}, getText: (id: string) => texts.get(id) ?? '' },
     get: (): EditorState => editorState,
     subscribe: (_listener: () => void) => () => {},
   } as unknown as Editor
@@ -166,4 +166,30 @@ function fakeToolContext(snapshot: CanvasDocument): ToolContext {
   console.log('ok: shapeRegistry — unregistered-kind fallback to BoxShape, then registerShape overrides it')
 }
 
-console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override)')
+// ============================================================================
+// 5. Live text rendering (the closed review gap — shapeRegistry.ts's
+//    ShapeBodyProps.getText / BoxShape.tsx's labelOf): a text-capable kind
+//    with LIVE doc text renders that text, NOT the kind-string fallback —
+//    proving ShapeLayer actually threads toolContext.editor.doc.getText down
+//    to the rendered body, end to end. A FRESH note-kind fixture (not
+//    `rootRotated`/geo — case 4 above already `registerShape('geo', …)`
+//    overrode geo's component for the rest of this file's module-level
+//    registry, so geo would no longer hit BoxShape's labelOf here; note is
+//    unregistered and also text-capable, per canvas-model's
+//    isTextCapableKind, so it's the honest choice for this case).
+// ============================================================================
+{
+  const noteShape: Shape = {
+    id: 'shape:note1', kind: 'note', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: {},
+  } as Shape
+  const noteDoc: CanvasDocument = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [noteShape], bindings: [] })
+  const texts = new Map([[noteShape.id, 'hello from the doc']])
+  const toolContext = fakeToolContext(noteDoc, texts)
+  const camera = { x: 0, y: 0, z: 1 }
+  const html = renderToStaticMarkup(createElement(ShapeLayer, { toolContext, camera, viewportSize: { width: 800, height: 600 } }))
+  assert.ok(html.includes('hello from the doc'), `ShapeLayer should render live doc text for a text-capable kind: ${html}`)
+  console.log('ok: ShapeLayer threads live doc text (getText) down to a text-capable shape body')
+}
+
+console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text)')
