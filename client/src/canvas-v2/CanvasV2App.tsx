@@ -507,7 +507,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					</button>
 				))}
 			</div>
-			<div ref={containerRef} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+			<div ref={containerRef} data-canvas-v2-viewport style={{ position: 'relative', flex: 1, minWidth: 0 }}>
 				<Viewport onInput={handleInput} onViewportBlur={handleViewportBlur} style={{ position: 'absolute', inset: 0 }}>
 					<Grid camera={editorState.camera} />
 					<WorldLayer camera={editorState.camera}>
