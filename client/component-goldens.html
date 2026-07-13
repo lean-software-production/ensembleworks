@@ -1,0 +1,36 @@
+<!doctype html>
+<!--
+  Component-golden harness page (Task G2) — a SEPARATE Vite HTML entry,
+  deliberately NOT wired into `build.rollupOptions.input` (which vite.config.ts
+  never customizes, so a production `vite build` only ever emits index.html's
+  graph): this page is servable by the Vite DEV server (which serves every
+  root-level .html file automatically, no config needed) but never ships in
+  the production bundle. That keeps it out of the `team`/every-real-room
+  bundle by construction, the same zero-exposure spirit Task G6's exposure
+  audit enforces for main.tsx's lazy CanvasV2App boundary -- this page simply
+  never exists in a production build at all, so there's no boundary to police
+  here in the first place.
+
+  e2e/tests/component-goldens.spec.ts drives this page directly via Playwright
+  against the e2e project's already-running Vite dev server (no new webServer
+  entry needed -- e2e/playwright.config.ts already boots
+  `bunx vite --host 127.0.0.1 --port 5273`).
+-->
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>canvas-v2 component goldens</title>
+		<style>
+			html, body, #root {
+				margin: 0;
+				height: 100%;
+				overscroll-behavior: none;
+				background: #fafaf7;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="root"></div>
+		<script type="module" src="/src/canvas-v2/goldens/main.tsx"></script>
+	</body>
+</html>
