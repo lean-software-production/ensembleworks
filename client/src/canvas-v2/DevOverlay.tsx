@@ -1,0 +1,175 @@
+/**
+ * canvas-v2 dogfood dev overlay (Task G5) — surfaces the Phase-2 anomalies
+ * that were deferred-again rather than fixed, so a REAL occurrence in a
+ * dogfood room is at least VISIBLE (Open Q8/Q9/Q11 in the phase-3 plan):
+ * pendingImports/malformedFrames/tainted + eviction taintCount/idleCount
+ * (scraped from the server's `/api/canvas/metrics`, filtered to THIS room),
+ * plus this client peer's OWN repairCount/lastBackfillBytes (canvas-sync's
+ * SyncClientPeer, Task G5's small accessor additions) and a best-effort
+ * connection-state label.
+ *
+ * GATING: v2-only by construction (only ever mounted from CanvasV2App.tsx,
+ * itself reachable only through the selectEngine guard — Task G6's exposure
+ * audit pins that). WITHIN that mount, still gated a second time —
+ * `import.meta.env.DEV` (a local/dev server build) OR an explicit
+ * `?devOverlay=1` URL param (so a real dogfood deployment, which builds in
+ * PRODUCTION mode, can still opt a specific session into the telemetry
+ * on demand — e.g. debugging a live report) — see `shouldShowDevOverlay`
+ * (pure, testable) / `shouldShowDevOverlayFromEnvironment` (the real-env
+ * wrapper), the SAME injectable-opts pattern engine.ts's `selectEngine`/
+ * `selectEngineFromEnvironment` establishes for exactly this reason.
+ *
+ * CONNECTION STATE, HONESTLY (v1 gap, not hidden): `SyncClientPeer`/
+ * `wsClientTransport` do not currently distinguish "the underlying socket
+ * dropped" from "still open" — `client-peer.ts`'s `wireTransport` wires
+ * `t.onClose(() => {})`, a genuine no-op. So this overlay's `connectionState`
+ * prop can only ever honestly report THIS MOUNT's own lifecycle
+ * ('connecting' before the boot sequence resolves a session, 'connected'
+ * once it has one) — never a real "the socket silently died and we haven't
+ * noticed yet" state. Surfacing that would need canvas-sync work (wiring a
+ * real onClose), out of this task's scope.
+ */
+import { useEffect, useState, type CSSProperties } from 'react'
+
+export interface CanvasMetricsSyncEntry {
+	readonly pendingImports: number
+	readonly malformedFrames: number
+	readonly tainted: string | null
+}
+export interface CanvasMetricsEviction {
+	readonly taintCount: number
+	readonly idleCount: number
+	readonly lastTaintReason: string | null
+	readonly lastIdleReason: string | null
+}
+/** The slice of GET /api/canvas/metrics' payload (server/src/features/
+ * canvas-metrics.ts) this overlay reads — `shadow`/`sweepErrors` exist on the
+ * real payload too but are Task D2/shadow-mirror concerns, out of scope here. */
+export interface CanvasMetricsPayload {
+	readonly ok: boolean
+	readonly sync: Readonly<Record<string, CanvasMetricsSyncEntry>>
+	readonly evictions: Readonly<Record<string, CanvasMetricsEviction>>
+}
+
+export interface ClientTelemetry {
+	readonly repairCount: number
+	readonly lastBackfillBytes: number
+}
+
+export type ConnectionState = 'connecting' | 'connected'
+
+export interface DevOverlayProps {
+	readonly roomId: string
+	readonly connectionState: ConnectionState
+	readonly client: ClientTelemetry
+	/** `null` while the first scrape hasn't resolved yet, or the fetch failed
+	 * (see useCanvasMetrics — a fetch error is swallowed, not thrown, so a
+	 * metrics-endpoint hiccup never breaks the canvas it's merely reporting
+	 * on). Every metrics field renders an explicit "—" placeholder in that
+	 * case rather than a misleading 0. */
+	readonly metrics: CanvasMetricsPayload | null
+}
+
+const fieldStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12 }
+
+function Field({ label, value }: { readonly label: string; readonly value: string | number }) {
+	return (
+		<div data-dev-overlay-field={label} style={fieldStyle}>
+			<span>{label}</span>
+			<span>{value}</span>
+		</div>
+	)
+}
+
+/** Pure render — fixture-testable via renderToStaticMarkup (this house's
+ * usual component-test rig, no DOM emulator required). */
+export function DevOverlay({ roomId, connectionState, client, metrics }: DevOverlayProps) {
+	const sync = metrics?.sync[roomId]
+	const eviction = metrics?.evictions[roomId]
+	return (
+		<div
+			data-canvas-v2-dev-overlay
+			style={{
+				position: 'fixed',
+				right: 8,
+				bottom: 8,
+				zIndex: 9999,
+				minWidth: 220,
+				padding: '8px 10px',
+				borderRadius: 6,
+				background: 'rgba(15,23,42,0.88)',
+				color: '#e2e8f0',
+				fontFamily: 'ui-monospace, monospace',
+				fontSize: 11,
+				lineHeight: 1.5,
+				pointerEvents: 'none',
+			}}
+		>
+			<div style={{ fontWeight: 600, marginBottom: 4 }}>canvas-v2 · {roomId}</div>
+			<Field label="connection" value={connectionState} />
+			<Field label="repairCount" value={client.repairCount} />
+			<Field label="lastBackfillBytes" value={client.lastBackfillBytes} />
+			<Field label="pendingImports" value={sync ? sync.pendingImports : '—'} />
+			<Field label="malformedFrames" value={sync ? sync.malformedFrames : '—'} />
+			<Field label="tainted" value={sync ? (sync.tainted ?? 'no') : '—'} />
+			<Field label="evictions.taintCount" value={eviction ? eviction.taintCount : '—'} />
+			<Field label="evictions.idleCount" value={eviction ? eviction.idleCount : '—'} />
+		</div>
+	)
+}
+
+export interface ShouldShowDevOverlayOpts {
+	/** `import.meta.env.DEV` in production; injected here so the decision is
+	 * a pure function of its inputs (same seam engine.ts's selectEngine
+	 * establishes). */
+	readonly dev: boolean
+	/** The `?devOverlay=` URL param's value, or `null` if absent/different.
+	 * Only the exact string `'1'` has any effect. */
+	readonly devOverlayParam: string | null
+}
+
+/** Pure. `true` iff this is a dev build OR the URL explicitly opted in — see
+ * the module header's GATING section. */
+export function shouldShowDevOverlay(opts: ShouldShowDevOverlayOpts): boolean {
+	return opts.dev || opts.devOverlayParam === '1'
+}
+
+/** Production wrapper: reads the real build-time env flag and the real URL's
+ * `?devOverlay=` param, then delegates to the pure `shouldShowDevOverlay`. */
+export function shouldShowDevOverlayFromEnvironment(): boolean {
+	const devOverlayParam = new URLSearchParams(location.search).get('devOverlay')
+	return shouldShowDevOverlay({ dev: Boolean(import.meta.env.DEV), devOverlayParam })
+}
+
+/** Polls GET /api/canvas/metrics every `intervalMs` (default 5000, per the
+ * plan's "poll ~5s" spec) and returns the most recent successfully-parsed
+ * payload (`null` before the first successful scrape). Cleans up its
+ * interval on unmount. A fetch/parse failure is caught and logged, NEVER
+ * thrown — this overlay reports on the system, it must never be a NEW way
+ * for the system to break (same "never surface as a crash" posture the
+ * six custom shapes' own error boundaries take). `fetchImpl`/`intervalMs`
+ * are injectable test seams (production omits both). */
+export function useCanvasMetrics(enabled = true, intervalMs = 5000, fetchImpl: typeof fetch = fetch): CanvasMetricsPayload | null {
+	const [metrics, setMetrics] = useState<CanvasMetricsPayload | null>(null)
+	useEffect(() => {
+		if (!enabled) return // the overlay isn't shown (shouldShowDevOverlay false) — never scrape for nothing
+		let cancelled = false
+		async function scrape() {
+			try {
+				const res = await fetchImpl('/api/canvas/metrics')
+				if (!res.ok) return
+				const payload = (await res.json()) as CanvasMetricsPayload
+				if (!cancelled) setMetrics(payload)
+			} catch (err) {
+				console.warn('[canvas-v2] dev overlay metrics scrape failed:', err)
+			}
+		}
+		scrape()
+		const id = setInterval(scrape, intervalMs)
+		return () => {
+			cancelled = true
+			clearInterval(id)
+		}
+	}, [enabled, intervalMs, fetchImpl])
+	return metrics
+}

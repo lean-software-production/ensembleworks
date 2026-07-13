@@ -301,4 +301,66 @@ import { normalize, shape } from './test-helpers.js'
   }
 }
 
+// --- (7) repairCount (Task G5): the peer's OWN counter climbs in lockstep
+// with its own doc.repair() calls -- exactly the fresh-vs-redundant-Update
+// distinction case (4) above already exercises, pinned as a PUBLIC accessor
+// this time instead of a test-local spy. ---
+{
+  const [fakeServerEnd, clientEnd] = makePair()
+  fakeServerEnd.onMessage(() => {}) // swallow the client's SyncRequest/Updates
+  const client = new SyncClientPeer({ peerId: 701n, transport: clientEnd })
+  assert.equal(client.repairCount, 0, 'a fresh peer has repaired zero times')
+
+  const writer = LoroCanvasDoc.create({ peerId: 702n })
+  writer.putPage({ id: 'page:p', name: 'P' })
+  writer.putShape(shape('shape:repair-count'))
+  writer.commit()
+  const delta = writer.exportUpdate()
+
+  fakeServerEnd.send(encode(Frame.Update, delta))
+  assert.equal(client.repairCount, 1, 'a fresh (changed) Update bumps repairCount')
+
+  fakeServerEnd.send(encode(Frame.Update, delta)) // exact same bytes again: changed=false
+  assert.equal(client.repairCount, 1, 'a redundant (no-op) Update does not bump repairCount')
+
+  writer.putShape(shape('shape:repair-count-2'))
+  writer.commit()
+  fakeServerEnd.send(encode(Frame.Update, writer.exportUpdate()))
+  assert.equal(client.repairCount, 2, 'a second genuinely-new Update bumps repairCount again')
+}
+
+// --- (8) lastBackfillBytes (Task G5): 0 before the first reconnect; equals
+// the EXACT byte length of the full-history Update reconnect() pushes (see
+// that method's own doc comment); updates to a NEW length on a LATER
+// reconnect (not cumulative -- "last", not "total"). ---
+{
+  const server = new SyncServerPeer({ peerId: 8n })
+  const [serverEnd1, clientEnd1] = makePair()
+  server.connect(serverEnd1)
+  const client = new SyncClientPeer({ peerId: 801n, transport: clientEnd1 })
+  assert.equal(client.lastBackfillBytes, 0, 'a peer that has never reconnected reports 0')
+
+  client.doc.putPage({ id: 'page:p', name: 'P' })
+  client.doc.commit()
+  client.putShape(shape('shape:before-reconnect'))
+  const expectedFirst = client.doc.exportUpdate().byteLength
+
+  const [serverEnd2, clientEnd2] = makePair()
+  server.connect(serverEnd2)
+  client.reconnect(clientEnd2)
+  assert.equal(client.lastBackfillBytes, expectedFirst, 'lastBackfillBytes equals the exact byte length of the pushed full-history Update')
+  assert.ok(client.lastBackfillBytes > 0, 'precondition: the doc has real content, so the backfill is non-empty')
+
+  // More content, then a SECOND reconnect: the number changes to reflect the
+  // NEW (larger) doc -- proving this is "last", not a running total.
+  client.putShape(shape('shape:before-reconnect-2'))
+  const expectedSecond = client.doc.exportUpdate().byteLength
+  assert.ok(expectedSecond > expectedFirst, 'precondition: the doc grew, so its full-history export is now larger')
+
+  const [serverEnd3, clientEnd3] = makePair()
+  server.connect(serverEnd3)
+  client.reconnect(clientEnd3)
+  assert.equal(client.lastBackfillBytes, expectedSecond, 'a later reconnect overwrites lastBackfillBytes with its own (larger) byte length, not a cumulative sum')
+}
+
 console.log('ok: client-peer')

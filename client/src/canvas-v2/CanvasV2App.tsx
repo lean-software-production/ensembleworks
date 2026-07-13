@@ -91,6 +91,7 @@ import { getIdentity, getRoomId } from '../identity.js'
 import { wsClientTransport, type WebSocketLike } from './ws-client-transport.js'
 import { resolvePageId } from './bootstrap-page.js'
 import { adaptPresence, createPresencePublisher, type PresencePublisher } from './presence.js'
+import { DevOverlay, shouldShowDevOverlayFromEnvironment, useCanvasMetrics } from './DevOverlay.js'
 import { canvasV2EmbedLifecycles, registerCanvasV2Shapes } from './shapes/index.js'
 import {
 	cancelActiveTool,
@@ -288,8 +289,28 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [roomId, userId])
 
-	if (!session) return <ConnectingPlaceholder />
-	return <CanvasV2Session session={session} />
+	// Dev overlay (Task G5) — computed once per mount (doesn't need to react
+	// to a mid-session URL edit); gated a SECOND time here beyond "this is
+	// canvas-v2 at all" per DevOverlay.tsx's own GATING note.
+	const [showDevOverlay] = useState(shouldShowDevOverlayFromEnvironment)
+	// Called UNCONDITIONALLY (rules of hooks) — `enabled: showDevOverlay`
+	// skips the actual fetch/interval entirely when the overlay is hidden
+	// (see useCanvasMetrics's own doc comment).
+	const metrics = useCanvasMetrics(showDevOverlay)
+
+	return (
+		<>
+			{!session ? <ConnectingPlaceholder /> : <CanvasV2Session session={session} />}
+			{showDevOverlay && (
+				<DevOverlay
+					roomId={roomId}
+					connectionState={session ? 'connected' : 'connecting'}
+					client={{ repairCount: session?.peer.repairCount ?? 0, lastBackfillBytes: session?.peer.lastBackfillBytes ?? 0 }}
+					metrics={metrics}
+				/>
+			)}
+		</>
+	)
 }
 
 function ConnectingPlaceholder() {
