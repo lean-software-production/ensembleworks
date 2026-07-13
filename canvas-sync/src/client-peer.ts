@@ -22,6 +22,9 @@ export class SyncClientPeer {
   private presence?: PresenceStore
   private unsubPresence?: () => void
   private closed = false
+  private repairCounter = 0
+  private lastBackfillBytesValue = 0
+
   /** Count of times THIS peer has called `this.doc.repair()` — i.e. how many
    * inbound Updates newly changed the doc (see handleFrame's `r.changed`
    * gate; a no-op/pending import never repairs). Intended for the Task G5
@@ -30,7 +33,7 @@ export class SyncClientPeer {
    * (dedupe drops a valid twin; reparent relocates the winner) — fix
    * deferred to Phase 4, but a real occurrence is now VISIBLE. */
   get repairCount(): number { return this.repairCounter }
-  private repairCounter = 0
+
   /** Byte length of the full-history Update this peer's MOST RECENT
    * `reconnect()` call pushed (see that method's own doc comment for why a
    * reconnect always resends everything rather than a since-acked-version
@@ -40,7 +43,6 @@ export class SyncClientPeer {
    * Phase-2 deferral this closes the observability half of) has a real
    * number to justify itself against. */
   get lastBackfillBytes(): number { return this.lastBackfillBytesValue }
-  private lastBackfillBytesValue = 0
 
   constructor(opts: SyncClientOpts) {
     this.doc = LoroCanvasDoc.create({ peerId: opts.peerId })
