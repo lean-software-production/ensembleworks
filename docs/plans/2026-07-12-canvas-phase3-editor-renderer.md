@@ -959,41 +959,86 @@ full-suite + typecheck + build green`.
 
 ## Done criteria (maps to Phase 3 scope)
 
-- [ ] **id→node index** replaces the O(n) `nodeByShapeId` scan; repair cost drops
+- [x] **id→node index** replaces the O(n) `nodeByShapeId` scan; repair cost drops
       below the 7.36ms floor; convergence + repair suites still green. [A1, A2]
-- [ ] **canvas-model geometry floor**: rotation-aware world bounds, point
+      — `canvas-doc/src/node-index.test.ts`, `canvas-doc/src/repair-cost.test.ts`,
+      green under `bun run test` (H5 gate: 190/190 suites).
+- [x] **canvas-model geometry floor**: rotation-aware world bounds, point
       hit-test, spatial index (cull/marquee/topmost), snap + arrow-anchor
-      resolution, geometry property test. [B1–B3]
-- [ ] **canvas-editor workspace** exists, clean-room (boundary test: no DOM/
+      resolution, geometry property test. [B1–B3] — `canvas-model/src/
+      hit-test.test.ts`, `spatial-index.test.ts` (incl. the property test),
+      `snapping.test.ts`, all green.
+- [x] **canvas-editor workspace** exists, clean-room (boundary test: no DOM/
       React/loro/`Date.now`/`Math.random`), registered. Camera, selection,
       hover, editing state; interaction-script DSL; tools select/hand/note/text/
       geo/frame/arrow(+binding)/resize/rotate as pure FSMs; session-replay
-      artifacts. [C1–C9]
-- [ ] **canvas-react workspace** exists, logic-free (boundary rule), registered.
+      artifacts. [C1–C9] — `canvas-editor/src/boundary.test.ts`,
+      `editor.test.ts`, `script.test.ts`, `tools/{select,hand,create,arrow,
+      transform,tool-context}.test.ts`, `replay.test.ts`, all green; registered
+      in root `package.json` workspaces + typecheck chain (H5 gate confirms).
+- [x] **canvas-react workspace** exists, logic-free (boundary rule), registered.
       Viewport + CSS-transform world + grid; shape-body host + culling; SVG
       overlay (selection/handles/snap/arrows); self-filtered cursors; text-edit
-      mount; embed-lifecycle contract. [D1–D8]
-- [ ] **Six custom shapes ported** into `canvas-react` (terminal/screenshare/
+      mount; embed-lifecycle contract. [D1–D8] — `canvas-react/src/
+      boundary.test.ts`, `viewport.test.ts`, `shape-layer.test.ts`,
+      `overlay.test.ts`, `cursors.test.ts`, `text-editor.test.ts`,
+      `embed/{embed,embed-reconciler}.test.ts`, all green.
+- [x] **Six custom shapes ported** into `canvas-react` (terminal/screenshare/
       iframe via embed lifecycle; neko/roadmap/file-viewer), with component
-      goldens. [E1–E2, G2]
-- [ ] **Per-room engine selector**: dogfood rooms mount the new engine over a
+      goldens. [E1–E2, G2] — `client/src/canvas-v2/shapes/{TerminalShape,
+      ScreenshareShape,IframeShape,NekoShape,RoadmapShape,FileViewerShape}.tsx`
+      all present; `e2e/tests/component-goldens.spec.ts` covers all six
+      (verified green this session, all 12 golden cases incl. all six shapes'
+      disconnected/empty states).
+- [x] **Per-room engine selector**: dogfood rooms mount the new engine over a
       real `SyncClientPeer` on `/sync/v2`; the `team` room and every
       non-allowlisted room stay on tldraw. **Exposure audit proves the default
-      path never reaches the new engine.** [G1, G3, G6]
-- [ ] **Presence wired**: throttled publish, self-filtered render, `destroy()` on
-      unmount — the Phase-2 presence deferrals closed. [G4, D6]
-- [ ] **loro-crdt runs in the Vite browser build** (Preflight P1 verdict
+      path never reaches the new engine.** [G1, G3, G6] — `client/src/
+      engine.ts`/`engine.test.ts`, `client/src/canvas-v2/CanvasV2App.tsx`,
+      `scripts/exposure-audit.test.ts` (ran green this session: team
+      hard-excluded, `CanvasV2App` reachable only via `selectEngine`, no
+      static `canvas-v2` import outside its own dir, default room path never
+      reaches v2).
+- [x] **Presence wired**: throttled publish, self-filtered render, `destroy()` on
+      unmount — the Phase-2 presence deferrals closed. [G4, D6] —
+      `client/src/canvas-v2/presence.ts` (throttle, `presence.test.ts`),
+      `canvas-react/src/overlay/Cursors.tsx` (self-filter, `cursors.test.ts`),
+      `CanvasV2App.tsx`'s unmount cleanup calls `presenceStore.destroy()`; H2's
+      multi-client E2E case additionally proves a real cursor renders
+      cross-client in a live browser.
+- [x] **loro-crdt runs in the Vite browser build** (Preflight P1 verdict
       implemented); client `bun run build` passes; the tldraw app still runs. [G1]
-- [ ] **Server dogfood readiness**: idle-actor eviction + app shutdown hook
-      wiring `canvasActors.close()`. [F1, F2]
-- [ ] **Dogfood observability**: dev overlay surfaces pending/malformed/repair/
-      reconnect telemetry (the deferred-again anomalies are visible). [G5]
-- [ ] **Test rigs**: interaction-script + session-replay (editor); geometry
+      — `bun run --filter '@ensembleworks/client' build` green this session
+      (entry chunk 215.40–215.41 kB raw / 63.12–63.14 kB gzip, matching the
+      recorded Unit 12 correction); `e2e/tests/smoke.spec.ts` (tldraw `team`
+      room loads, no onboarding prompt) green in the same full e2e run.
+- [x] **Server dogfood readiness**: idle-actor eviction + app shutdown hook
+      wiring `canvasActors.close()`. [F1, F2] — `server/src/canvas-v2/
+      actors.test.ts` (idle eviction), `server/src/canvas-v2/shutdown.test.ts`
+      (shutdown hook), both green.
+- [x] **Dogfood observability**: dev overlay surfaces pending/malformed/repair/
+      reconnect telemetry (the deferred-again anomalies are visible). [G5] —
+      `client/src/canvas-v2/DevOverlay.tsx`, `DevOverlay.test.ts`,
+      `dev-overlay-metrics.test.ts`, all green.
+- [x] **Test rigs**: interaction-script + session-replay (editor); geometry
       property test (model); component goldens + new-engine Playwright E2E with
       multi-client render convergence (UI); browser perf rig (60fps@1k);
-      actor-backed compacting soak. [C, B2, G2, H2, H3, H4]
-- [ ] `bun run typecheck`, `bun run test`, `bun run build` green (modulo the
-      Task-0 baseline); tool manifest still 27. [H5]
+      actor-backed compacting soak. [C, B2, G2, H2, H3, H4] — editor/model
+      rigs as listed above; `e2e/tests/canvas-v2.spec.ts`'s new-engine cases
+      (H2, this unit: single-client create, multi-client render convergence +
+      presence, the editing loop — all 4 cases green); `e2e/perf/
+      canvas-v2-perf.spec.ts` (H3, this unit: 1k/5k/10k pan-zoom, 50-shape
+      marquee+drag, rapid creation, cursor storm — all 6 cases green, 1k
+      gated at p95≤33.33ms/2x margin, measured p95 ~16.7–16.8ms); `server/src/
+      canvas-v2/soak-actor.test.ts` (H4, this unit, green) + `soak-actor-cli.ts`
+      (nightly, validated locally at 5 clients/15,000 ops/chaos 0.5).
+- [x] `bun run typecheck`, `bun run test`, `bun run build` green (modulo the
+      Task-0 baseline); tool manifest still 27. [H5] — all green this
+      session (see the Execution notes above for the exact commands/output);
+      manifest 27 confirmed at all four lock-step sites (`server/src/
+      tools-api.test.ts`, `cli/src/cli-api.test.ts`, `cli/src/render/
+      manifest.test.ts`, `contracts/src/tools/tools.test.ts`) — no agent tool
+      added this phase.
 
 ---
 
@@ -1358,3 +1403,193 @@ text in Phase 3**.
 All scratch reverted (`canvas-doc/package.json`, `bun.lock` restored via `git
 checkout`; confirmed clean `git status` and a post-revert `bun install` /
 `bun run typecheck` / `bun run test` all green).
+
+---
+
+## Execution notes (2026-07-12, Phase 3)
+
+From the controller's cross-unit accumulator, expanded tersely, plus this
+unit's (Unit 14, Seam H) own findings.
+
+**Carried forward from earlier units (C–G):**
+
+- **Drag-tool abandonment gap**: cancel-on-blur and cancel-on-tool-switch
+  (`client/src/canvas-v2/tool-loop.ts`'s `cancelActiveTool`, wired from
+  `CanvasV2App.tsx`'s `onViewportBlur` + the toolbar's tool-switch handler)
+  cover the arrow tool's in-flight preview and every create tool's
+  drag-to-size preview (`DeleteShapes` on the in-flight id — see
+  `cancelActiveTool`'s own per-tool coverage table). **Transform's
+  partial-resize/rotate is explicitly NOT reverted** — the v1 policy resets
+  to idle only, leaving the shape at whatever the last delivered pointermove
+  committed; full undo-to-gesture-start is a documented Phase-4 parity item
+  (canvas-editor has no undo stack yet at all). **Escape-cancel is
+  unwired**: `canvas-react/src/Viewport.tsx`'s ABANDONMENT-GAP HOOK section
+  names Escape as a candidate trigger alongside blur/unmount, but
+  `CanvasV2App.tsx`'s actual wiring only hooks `onViewportBlur` + the
+  toolbar — no keydown handler cancels an in-flight drag/arrow-draw on
+  Escape (Escape today only ever ends TEXT EDITING, via
+  `TextEditor.tsx`'s own `onKeyDown`). A real gap, not yet closed.
+- **Per-move commit cadence = an H3 watch-item**, confirmed present at
+  exactly the four tool sites the accumulator named: `canvas-editor/src/
+  tools/{create,transform,arrow,select}.ts` each carry a "COMMIT CADENCE
+  WATCH-ITEM (owned by the H3 perf rig)" comment — every pointermove during
+  an in-flight drag/resize/draw commits immediately (never batched), so a
+  fast/long drag is N commits, N doc-subscribe notifications, N renders.
+  H3's perf rig (this unit) measured the AGGREGATE effect at 1k/5k/10k
+  shapes and a 50-shape multi-select drag — all comfortably under budget
+  (see below) — but did not isolate per-commit cost in a single-shape
+  micro-benchmark; if a future dogfood report names drag jank specifically,
+  start here.
+- **`pointercancel` is unhandled** — `canvas-react/src/Viewport.tsx` wires
+  `onPointerDown`/`onPointerMove`/`onPointerUp` but no `onPointerCancel`
+  (grep-confirmed: no `pointercancel` handler anywhere in `canvas-react/src`
+  or `canvas-editor/src`). Combined with `dom-events.ts`'s own documented
+  SINGLE-POINTER V1 SCOPE (no pointer identity/type tracked — one pointer at
+  a time is the v1 model), an OS-level pointer cancellation (e.g. an
+  in-progress touch/pen gesture interrupted) would leave a tool FSM stranded
+  mid-gesture with no terminating event, the same failure shape as the
+  already-known abandonment gap above but via a different trigger. Phase 4
+  item, alongside real multi-pointer/pointer-kind support.
+- **Selection overlay select-all cost ~8.7ms/render @ 1k shapes** —
+  `canvas-react/src/overlay/Selection.tsx`'s own header measured this
+  (O(selection size) `worldCorners`+`worldToScreen` per render; bounded by
+  SELECTION size, not doc size). H3's perf rig exercised a 15-shape marquee
+  selection (not a full 1k select-all), which stayed comfortably under
+  budget — the 8.7ms number remains an H3 watch-item for a FUTURE run
+  scripting an actual select-all at 1k, which this unit did not add.
+- **`loro-prosemirror` rich text = a `canvas-doc` text-model redesign, not a
+  wiring task** — Preflight P3's verdict (recorded above): versions are
+  compatible (peer range satisfied, single `loro-crdt` dedupe), but
+  `loro-prosemirror` expects to own a `LoroMap` document tree per editor
+  instance, while `LoroCanvasDoc` stores per-shape text as a flat `LoroText`
+  (`doc.getText('text:<id>')`). Rich text ships in Phase 4, gated on that
+  redesign — confirmed still the shipped posture (`canvas-react/src/
+  TextEditor.tsx`'s plain-`contentEditable`/textarea mount, unchanged by
+  this unit).
+- **SHAPE-BODY WRITE PATH missing — dropped features, deferred to a Phase 4
+  dispatch-channel decision**: terminal title rename/drag, screenshare
+  stillUrl + aspect-relock, file-viewer rev-bump + peer-follow (grep-
+  confirmed present as named gaps in `client/src/canvas-v2/shapes/
+  {ScreenshareShape,FileViewerShape,presentStoreV2}.ts` and their tests) —
+  these all need a shape body to WRITE something (props/presence) back
+  through a dispatch channel the six ported shapes don't have yet (they're
+  currently read-mostly against `ShapeBodyProps`). Untouched by this unit.
+- **`EphemeralStore` same-millisecond LWW tie keeps the FIRST delta at
+  remote peers** (probe-established in `canvas-sync/src/presence.ts`/
+  `presence.test.ts`) — two presence writes landing in the same wall-clock
+  millisecond lose the SECOND one on the remote side. The mitigation is the
+  single-write-publisher pattern (`client/src/canvas-v2/presence.ts`'s
+  `setViewportAndRefreshCursor` combining viewport+cursor into ONE store
+  write, precisely to avoid tripping this tie) — a real hazard for any
+  FUTURE presence writer that publishes two fields separately without
+  realizing the tie exists. Documented, not fixed at the primitive level.
+- **`dumpModel` object-identity instability → a content-memo constraint for
+  embeds**: every `dumpModel()`/`listShapes()` call materializes ALL-NEW
+  `Shape` objects (canvas-doc's `readNode` per node, per call), so
+  reference-based `React.memo` never bails out across doc commits — heavy
+  embeds (terminal/iframe/screenshare) MUST memo on CONTENT
+  (`stableStringify` equality), not reference — see `canvas-react/src/
+  ShapeBody.tsx`'s MEMO STRATEGY block. Confirmed still the documented
+  constraint; unaffected by this unit's own `ShapeBody`/`BoxShape` changes
+  (below), which do not add embed-kind memoization.
+- **P1 verdict correction (Unit 12)**: the ORIGINAL recorded verdict
+  (`vite-plugin-wasm` + `vite-plugin-top-level-await` + `build.target:
+  'esnext'`) was sufficient but not minimal — Unit 12 found
+  `vite-plugin-top-level-await` alone inflated the entry chunk +106%
+  raw/+30% gzip (212.80→438.93 kB raw) by defeating the minifier's
+  cross-module inlining, with ZERO canvas-v2 code in it. The corrected,
+  shipped config is `plugins: [react(), wasm()]` at the DEFAULT build
+  target — entry chunk ~215.4 kB raw / ~63.1 kB gzip (~1% over the true
+  pre-G3 baseline). This unit's own H5 gate reran `bun run --filter
+  '@ensembleworks/client' build` twice (once mid-H4, once after the
+  canvas-sync export fix below) and both times reproduced that EXACT
+  215.40–215.41 kB / 63.12–63.14 kB entry-chunk range — the Unit 12
+  correction holds.
+- **The editing-loop E2E is now covered** — this unit's own Task H2 closes
+  the review gap the plan named: `e2e/tests/canvas-v2.spec.ts`'s new
+  "the editing loop" case double-clicks a note, types, Escapes, and asserts
+  `SetText` landed in the doc AND rendered in a second client.
+
+**New findings from this unit's own work (H1–H5):**
+
+- **`SetText` had NO rendering consumer anywhere, on ANY client** — while
+  building H2's editing-loop E2E, discovered that `BoxShape.tsx` (the
+  fallback body every core kind still uses — note/text/geo/frame have no
+  dedicated D7 bodies yet) only ever read `props.richText`/`props.name` for
+  its label, never `editor.doc.getText(id)` — the container the plain-text
+  `TextEditor` mount actually writes to. So a completed edit rendered
+  NOWHERE once the editing textarea unmounted, not even back on the SAME
+  client that typed it. Fixed (own commit, `fix(canvas-react): thread live
+  doc text into BoxShape`): `ShapeBodyProps` gained an optional `getText`
+  accessor, threaded `ShapeLayer` → `ShapeBody` → the looked-up component;
+  `BoxShape`'s `labelOf` prefers live text for text-capable kinds, falling
+  back to the pre-existing richText/name/kind chain otherwise (goldens
+  fixtures, which only ever set `props.richText`, are unaffected — verified
+  unchanged in the full e2e run). This is a REAL rendering gap that existed
+  before this unit and would have made H2's own "renders in client B"
+  assertion false without the fix.
+- **`canvas-v2.spec.ts` is a naming collision, not a stub the plan's text
+  quite matched**: the file's PRE-EXISTING content (Phase 1/2) tests the
+  unrelated Agent API v2 (`/api/v2/canvas/*`, a versioned tldraw-store read
+  API — `model: 2` in server/src/features/canvas-v2.ts), not the new
+  engine's `/sync/v2` protocol. Both are legitimately named "v2" for
+  different reasons. H2 extends the SAME file (per
+  `component-goldens.spec.ts`'s own pre-existing comment anticipating
+  exactly this: "the full-stack multiplayer E2E (canvas-v2.spec.ts / H2)")
+  rather than renaming/splitting it — worth knowing before anyone greps
+  this file expecting ONE consistent "v2."
+- **`EW_CANVAS_SYNC=1` is now the e2e rig's default** — `e2e/scripts/
+  start-server.ts` sets it unless a caller already set the env var, so the
+  shared e2e server always mounts `/sync/v2`. Verified additive: the full
+  25-spec `e2e` project and 8-spec `perf` project both still pass
+  unchanged.
+- **Viewport culling keeps pan/zoom frame time flat regardless of shape
+  count** — H3's perf rig measured p95 frame time at 1k/5k/10k shapes and
+  got the SAME ~16.7–16.8ms (vsync-locked) at every scale — `ShapeLayer`'s
+  `queryViewport` cull means a spread-out grid's render cost is bounded by
+  what's ON-SCREEN, not total shape count. A genuinely reassuring finding,
+  not a gap — but it also means this rig's pan/zoom scenario cannot
+  currently demonstrate degradation at ANY scale tested; a future rig
+  wanting to stress worst-case render cost would need a DENSE (not
+  spread-out) seed or a scenario that forces more shapes simultaneously
+  on-screen.
+- **`pointerdown`→first-paint is a PROXY (one rAF tick), not a true CDP
+  paint event** — H3 measured this via `requestAnimationFrame`, matching
+  the house's portable/Electron-ready measurement posture (no CDP
+  dependency, same as `lib/perf.ts`'s pre-existing `installSampler`), but an
+  rAF tick fires just BEFORE the browser's actual paint, not at it — a
+  documented approximation, not a precision claim. Measured ~25–26ms
+  locally; no budget is gated on it yet (the task named it as a metric to
+  measure, not to gate).
+- **SQLite compaction bounds LOGICAL row count, not FILE size** — H4's
+  actor-backed soak found `CanvasV2Store.compact()`'s `DELETE` frees rows
+  into SQLite's internal freelist but never shrinks the file on disk (no
+  `VACUUM`/`auto_vacuum` configured) — disk size is a HIGH-WATER MARK across
+  a run's compaction cycles, not a live "current logical size." Measured
+  disk-to-snapshot-bytes ratio bounced between 0.36x and 6.33x across
+  300/1,000/3,000/8,000-op calibration runs (see `server/src/canvas-v2/
+  soak-actor.ts`'s own CALIBRATION comment) — NOT a stable per-shape
+  constant, unlike canvas-sync's own in-memory K. A real, worth-a-look
+  Phase-4 candidate (`VACUUM` has real cost of its own, so isn't a
+  drop-in fix) — not addressed in this unit, only measured and bounded.
+- **Actor-soak RSS tolerance is honestly under-verified beyond 15k ops** —
+  the nightly scale (5 clients / 15,000 ops / chaos 0.5) was validated
+  locally (~17s wall, converged, quartile-mean RSS ratio ~2.11x), smaller
+  than canvas-sync's own bare-peer nightly (20,000 ops, ~9.97x ratio) whose
+  own doc comment describes a compounding/superlinear RSS trend. The actor
+  variant's `FLAT_RSS_TOLERANCE` (15x) was set with generous headroom
+  specifically BECAUSE this wasn't independently re-verified at 20k+ ops —
+  a real gap the CLI's own doc comment names, not a silent guess.
+- **Re-exporting `runSoak` from canvas-sync's main index warned the client
+  build, then was fixed** — H4's first cut re-exported the soak module from
+  `canvas-sync/src/index.ts` so `server` could reuse it; that pulled
+  `node:assert/strict` into the CLIENT's Vite module graph (a build-time
+  "externalized for browser compatibility" warning, though the final bundle
+  was byte-identical either way — tree-shaking dropped the dead code). Fixed
+  same-unit: the soak surface now lives behind its own package subpath
+  (`@ensembleworks/canvas-sync/soak`), leaving the main index — the one the
+  client actually resolves through — untouched.
+
+Done-criteria checkboxes below are ticked ONLY where independently verified
+this session (test files read/run, or the H5 gate commands executed above)
+— see each checked item's inline pointer for what was actually checked.
