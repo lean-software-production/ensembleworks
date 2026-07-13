@@ -14,6 +14,7 @@
 // events, real WS sync through a real DocumentActor.
 import { test, expect, API, identityState } from '../lib/fixtures'
 import { shape } from '../lib/seed'
+import { ANCHOR, createNoteAt, viewportBox, waitForBoot } from '../lib/canvas-v2'
 
 // ============================================================================
 // Failure artifact (design's C9 session-replay idea, HONEST v1 SCOPE): the
@@ -88,49 +89,9 @@ test('canvas-v2 read endpoints serve the new model', async () => {
 
 // ============================================================================
 // NEW-ENGINE DOGFOOD E2E (Task H2) — real browser, real WS sync, never `team`.
+// Shared boot/anchor/create helpers live in ../lib/canvas-v2.ts — the browser
+// perf rig (perf/canvas-v2-perf.spec.ts, Task H3) reuses the SAME helpers.
 // ============================================================================
-
-// Every note this file creates starts at this SCREEN point relative to
-// `[data-canvas-v2-viewport]`'s own bounding box — dom-events.ts's COORDINATES
-// note: canvas-react's screen space is VIEWPORT-relative (subtracts the
-// viewport element's own getBoundingClientRect()), and the Editor's camera
-// starts at the fixed default `{x:0, y:0, z:1}` (canvas-editor/src/editor.ts)
-// for a fresh session — an identity transform — so this screen point IS the
-// note's world position too, with no camera math needed to predict it.
-const ANCHOR = { x: 300, y: 220 } as const
-
-async function viewportBox(page: import('@playwright/test').Page) {
-	const box = await page.locator('[data-canvas-v2-viewport]').boundingBox()
-	if (!box) throw new Error('[data-canvas-v2-viewport] has no bounding box — did the v2 session fail to boot?')
-	return box
-}
-
-/** Waits for the v2 session to boot (toolbar visible == window.__ew is set —
- * CanvasV2Session, which renders the toolbar, only mounts once CanvasV2App's
- * boot() has already called `setSession`, and `window.__ew` is assigned
- * synchronously just before that same call — see CanvasV2App.tsx's
- * CONSTRUCTION SEQUENCE step 7). */
-async function waitForBoot(page: import('@playwright/test').Page) {
-	await expect(page.locator('[data-canvas-v2-tool="select"]')).toBeVisible({ timeout: 15_000 })
-}
-
-/** Click the `note` tool, then click ANCHOR (viewport-relative) to
- * click-create a note (canvas-editor/src/tools/create.ts: a sub-threshold
- * click, not a drag, centers a default-size shape ON the click point), then
- * switch back to the `select` tool (so a later drag/double-click in the same
- * test can pick it up — the note tool stays active after a click-create
- * otherwise, tool-loop.ts's TOOL-SWITCHING MODEL). Returns the created
- * shape's id (read off the rendered `data-shape-id`, not guessed). */
-async function createNoteAt(page: import('@playwright/test').Page, box: { x: number; y: number }): Promise<string> {
-	await page.locator('[data-canvas-v2-tool="note"]').click()
-	await page.mouse.click(box.x + ANCHOR.x, box.y + ANCHOR.y)
-	await page.locator('[data-canvas-v2-tool="select"]').click()
-	const shape = page.locator('[data-shape-kind="note"]')
-	await expect(shape).toBeVisible({ timeout: 10_000 })
-	const id = await shape.getAttribute('data-shape-id')
-	if (!id) throw new Error('created note has no data-shape-id')
-	return id
-}
 
 test('canvas-v2 new engine: single client creates a note via real pointer events — DOM and doc state agree', async ({ page }) => {
 	const room = 'v2-e2e-single'
