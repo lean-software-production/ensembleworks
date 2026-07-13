@@ -3,9 +3,13 @@
  *
  * House-style coverage lifted straight from the phase-3 plan's own Task G6
  * exposure-audit sketch (docs/plans/2026-07-12-canvas-phase3-editor-renderer.md)
- * — this file is the "engine.test.ts" half; scripts/exposure-audit.ts (Task
- * G6, not this unit) is the repo-level script that imports selectEngine and
- * re-runs the same assertions as a standalone gate.
+ * — this file is the "engine.test.ts" half; scripts/exposure-audit.test.ts
+ * (Task G6, Unit 13) is the repo-level gate that imports selectEngine and
+ * re-runs the same assertions as a standalone check, PLUS the main.tsx/
+ * App.tsx source scan and the "no static import of canvas-v2 outside
+ * client/src/canvas-v2/" scan — both repo-level concerns this package-local
+ * test has no business owning (this file only ever imports from `./engine`,
+ * never reads another file's source as text).
  */
 import assert from 'node:assert/strict'
 import { TEAM_ROOM_ID, parseAllowlist, selectEngine } from './engine'
