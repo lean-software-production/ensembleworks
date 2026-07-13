@@ -25,10 +25,13 @@
 //   - iframe: `url: 'about:blank'` — deterministic, no network.
 //   - neko: the header/mute chrome is fixturable directly; its INNER iframe
 //     has no dedicated empty state (unlike the other five), so its `base`
-//     points at a small static same-origin fixture page (client/public/
-//     canvas-v2-fixtures/neko-splash.html) rather than the real (offline)
-//     `/shared-browser/` target — documented, not faked: the chrome is the
-//     real component, the iframe's OWN content is a controlled stand-in.
+//     points at a small static same-origin fixture page (client/
+//     canvas-v2-fixtures/neko-splash.html — Vite project ROOT, dev-server-
+//     served only, deliberately NOT client/public/ which vite build copies
+//     into every production dist; see that file's LOCATION IS LOAD-BEARING
+//     note) rather than the real (offline) `/shared-browser/` target —
+//     documented, not faked: the chrome is the real component, the iframe's
+//     OWN content is a controlled stand-in.
 //   - roadmap: not an embed kind (client/src/canvas-v2/shapes/index.ts) —
 //     its own `/api/roadmap/doc` fetch 404s against the real (but
 //     roadmap-empty) sync server this project's webServer already runs,

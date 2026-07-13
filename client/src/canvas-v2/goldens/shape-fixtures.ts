@@ -26,12 +26,14 @@
  *     iframe's own content, but there is NO dedicated "no session" branch —
  *     unlike the other five. Its iframe src is built from `base` (default
  *     `/shared-browser/`, which resolves to nothing offline) — pointing
- *     `base` at `/canvas-v2-fixtures/neko-splash.html` (a static page under
- *     client/public/, so Vite's dev server serves it with zero network
- *     dependency) makes the WHOLE render deterministic, not just the chrome.
- *     Documented here rather than silently faked: this is the one shape
- *     whose golden needs an explicit same-origin fixture page, not just
- *     empty/default props.
+ *     `base` at `/canvas-v2-fixtures/neko-splash.html` (a static page at
+ *     client/canvas-v2-fixtures/ — the Vite project ROOT, served by the DEV
+ *     server only; deliberately NOT client/public/, which `vite build`
+ *     copies verbatim into every production dist — see that HTML file's own
+ *     LOCATION IS LOAD-BEARING note) makes the WHOLE render deterministic,
+ *     not just the chrome. Documented here rather than silently faked: this
+ *     is the one shape whose golden needs an explicit same-origin fixture
+ *     page, not just empty/default props.
  *   - roadmap (RoadmapShape.tsx): `props: {}` defaults everything; first
  *     paint (before its fetch effect settles) shows "loading…", and a
  *     same-origin `/api/roadmap/doc` 404 (no roadmap ever pushed in this
