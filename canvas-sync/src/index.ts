@@ -13,3 +13,16 @@ export { makePair } from './memory-transport.js'
 export { SyncClientPeer, type SyncClientOpts } from './client-peer.js'
 export { SyncServerPeer, type SyncServerOpts } from './server-peer.js'
 export { PresenceStore, type Presence } from './presence.js'
+// NOTE: the E4/H4 soak simulation (runSoak/SoakServer/etc., src/soak.ts) is
+// DELIBERATELY NOT re-exported from this main entry — it pulls in
+// `node:assert/strict` (soak.ts's own convergence assertions), which Vite
+// flags ("has been externalized for browser compatibility") the moment
+// ANYTHING importing this main index reaches it, even though the client
+// never calls it and tree-shaking drops the dead code from the final
+// bundle (verified: the client's entry-chunk size was unaffected either
+// way). Rather than ship that warning-noise to every consumer of this
+// index (the client included, since it already depends on this package for
+// SyncClientPeer), soak.ts is exposed via its OWN package subpath instead —
+// see package.json's `"./soak"` export. server's Task H4 actor-backed
+// variant imports `@ensembleworks/canvas-sync/soak` directly.
+

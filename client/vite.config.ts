@@ -1,6 +1,7 @@
 import { execSync } from 'node:child_process'
 import react from '@vitejs/plugin-react'
 import { defineConfig, type ServerOptions } from 'vite'
+import wasm from 'vite-plugin-wasm'
 
 // Stamp the build with the git-described version so the client can show it
 // (see the About dialog). Tolerant of non-git builds (e.g. tarball deploys).
@@ -19,7 +20,14 @@ function appVersion(): string {
 // LAN (ws/:8080). Behind either, Vite must (a) accept the public Host header
 // and (b) point its HMR client at a reachable ws endpoint — otherwise it 403s
 // the request and HMR can't connect.
-const CADDY_PORT = 8080
+// The dev stack can run at a port offset (multiple stacks per host): bin/dev
+// passes ENSEMBLEWORKS_PORT_OFFSET into this process. Mirror of portsFor() in
+// bin/dev-lib.mjs — keep in sync.
+const PORT_OFFSET = Number(process.env.ENSEMBLEWORKS_PORT_OFFSET || 0)
+const CADDY_PORT = 8080 + PORT_OFFSET
+const CLIENT_PORT = 5173 + PORT_OFFSET
+const SYNC_PORT = 8788 + PORT_OFFSET
+const TERM_PORT = 8789 + PORT_OFFSET
 
 // GitHub Codespaces injects the forwarded host; derive it automatically.
 const codespace = process.env.CODESPACE_NAME
@@ -79,29 +87,65 @@ const proxiedServer: Partial<ServerOptions> =
 			: {}
 
 export default defineConfig({
-	plugins: [react()],
+	// wasm() ALONE (no vite-plugin-top-level-await, default build target):
+	// the loro-crdt fix needs only the wasm plugin — it handles the dev
+	// server/optimizer's bundler/index.js raw-ESM `.wasm` import, and the
+	// production build's browser/index.js path never needed a plugin at all
+	// (Preflight P1, as amended during Unit 12 review: the recorded
+	// two-plugin diff was sufficient but not minimal — the TLA plugin only
+	// existed to fix its own transform failure at the default target, and
+	// wrapping every chunk in an async IIFE cost the entry chunk +106% raw /
+	// +30% gzip for nothing).
+	plugins: [react(), wasm()],
 	define: {
 		__APP_VERSION__: JSON.stringify(appVersion()),
 	},
+	build: {
+		// One 3 MB chunk means every release invalidates the whole bundle. The
+		// heavyweights (tldraw, LiveKit, xterm, React) change only on dependency
+		// bumps, so give each a stable chunk that stays browser-cached across
+		// deploys; the remaining app chunk is what actually churns. All of them
+		// load at boot regardless — this is cache granularity, not lazy loading.
+		rollupOptions: {
+			output: {
+				manualChunks(id: string) {
+					if (!id.includes('node_modules')) return undefined
+					if (id.includes('/node_modules/@tldraw/') || id.includes('/node_modules/tldraw/'))
+						return 'tldraw'
+					if (id.includes('/node_modules/livekit-client/')) return 'livekit'
+					if (id.includes('/node_modules/@xterm/')) return 'xterm'
+					if (id.includes('/node_modules/react')) return 'react'
+					return undefined
+				},
+			},
+		},
+		// tldraw alone is legitimately ~1.5 MB minified; keep the warning armed
+		// just above it so it still fires on real regressions.
+		chunkSizeWarningLimit: 1800,
+	},
 	server: {
 		// Bind the IPv4 loopback explicitly. The dev server sits behind Caddy,
-		// which dials 127.0.0.1:5173 (see deploy/Caddyfile). The container also
-		// sets NODE_OPTIONS=--dns-result-order=ipv4first so `localhost` resolves to
+		// which dials 127.0.0.1 on the client port (5173 + offset) (see
+		// deploy/Caddyfile). The container also sets
+		// NODE_OPTIONS=--dns-result-order=ipv4first so `localhost` resolves to
 		// 127.0.0.1, but pinning the host here removes any IPv4/IPv6 ambiguity.
 		host: '127.0.0.1',
-		// Caddy hard-targets 127.0.0.1:5173, so a busy port must fail loudly
-		// rather than let Vite silently bind 5174 and 502 through Caddy.
+		port: CLIENT_PORT,
+		// Caddy hard-targets the client port (5173 + offset) on 127.0.0.1, so a
+		// busy port must fail loudly rather than let Vite silently bind the next
+		// port and 502 through Caddy.
 		strictPort: true,
 		...proxiedServer,
 		proxy: {
-			'/sync': { target: 'ws://localhost:8788', ws: true },
-			'/uploads': 'http://localhost:8788',
-			'/files': 'http://localhost:8788',
-			// Terminal local plane (health/sessions/ws) is served by the :8789 gateway
-			// process; the relay plane (status/list/connect/relay) stays on :8788. Must
-			// precede the '/api' catch-all. The alternation also covers /sessions/:id.
-			'^/api/terminal/(health|sessions|ws)': { target: 'ws://localhost:8789', ws: true },
-			'/api': { target: 'http://localhost:8788', ws: true },
+			'/sync': { target: `ws://localhost:${SYNC_PORT}`, ws: true },
+			'/uploads': `http://localhost:${SYNC_PORT}`,
+			'/files': `http://localhost:${SYNC_PORT}`,
+			// Terminal local plane (health/sessions/ws) is served by the gateway
+			// process; the relay plane (status/list/connect/relay) stays on the sync
+			// server. Must precede the '/api' catch-all. The alternation also covers
+			// /sessions/:id.
+			'^/api/terminal/(health|sessions|ws)': { target: `ws://localhost:${TERM_PORT}`, ws: true },
+			'/api': { target: `http://localhost:${SYNC_PORT}`, ws: true },
 		},
 	},
 })

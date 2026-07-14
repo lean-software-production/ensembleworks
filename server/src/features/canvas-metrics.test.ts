@@ -232,17 +232,43 @@ async function main() {
 
 			const metrics = await getMetrics(base)
 			assert.ok(metrics.evictions[roomId], 'the metrics endpoint surfaces the eviction record')
-			assert.equal(metrics.evictions[roomId].count, 1, 'one eviction recorded')
+			assert.equal(metrics.evictions[roomId].taintCount, 1, 'one taint eviction recorded')
 			assert.match(
-				metrics.evictions[roomId].lastReason,
+				metrics.evictions[roomId].lastTaintReason,
 				/disk hiccup \(injected, metrics eviction test\)/,
-				'lastReason carries the taint message'
+				'lastTaintReason carries the taint message'
 			)
+			assert.equal(metrics.evictions[roomId].idleCount, 0, 'no idle eviction yet')
+			assert.equal(metrics.evictions[roomId].lastIdleReason, null, 'no idle reason yet')
 			// The replacement actor is healthy — sync.<room>.tainted must read null,
 			// which is exactly why the eviction record above is load-bearing.
 			assert.equal(metrics.sync[roomId].tainted, null, 'the fresh replacement actor reports healthy')
 
 			console.log('ok: canvas-metrics — evictions.<room> survives a tainted-actor replacement')
+
+			// The 3am-operator sequence, through the HTTP payload: the healthy
+			// replacement idle-evicts some time later (routine F1 housekeeping —
+			// zero connections; TTL 0 makes this very sweep evict it). The taint
+			// side of the record must survive UNCHANGED: an alarm keyed on
+			// taintCount > 0 / lastTaintReason must be immune to idle churn, or
+			// the durability-loss incident becomes indistinguishable from
+			// ordinary idle patterns the moment the replacement ages out.
+			canvasActors.sweepIdle(0)
+			const after = await getMetrics(base)
+			assert.equal(after.evictions[roomId].taintCount, 1, 'STICKY: the idle eviction did not touch taintCount')
+			assert.match(
+				after.evictions[roomId].lastTaintReason,
+				/disk hiccup \(injected, metrics eviction test\)/,
+				'STICKY: lastTaintReason still names the incident after the idle eviction'
+			)
+			assert.equal(after.evictions[roomId].idleCount, 1, 'the idle eviction counts on its own idleCount')
+			assert.match(after.evictions[roomId].lastIdleReason, /idle/, 'lastIdleReason describes the idle cause')
+			// The actor itself is gone from the live registry — its sync-section
+			// entry disappears with it, which is exactly why the eviction record
+			// must carry the history.
+			assert.equal(after.sync[roomId], undefined, 'the idle-evicted actor no longer appears in the sync section')
+
+			console.log('ok: canvas-metrics — taint history is sticky through a later idle eviction of the replacement')
 		} finally {
 			delete process.env.EW_CANVAS_SYNC
 			if (server!) await new Promise<void>((r) => server.close(() => r()))

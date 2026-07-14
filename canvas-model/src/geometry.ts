@@ -2,7 +2,84 @@ import { type CanvasDocument } from './document.js'
 import { isPageId, type PageId } from './ids.js'
 import { type Shape } from './shape.js'
 
+// ============================================================================
+// ROTATION CONVENTION (NORMATIVE — the renderer, the editor, and the Phase-5
+// tldraw converter all depend on this agreeing):
+//
+//   A shape's local→parent transform is  translate(x, y) · rotate(rotation).
+//   The pivot is the shape's LOCAL ORIGIN — the top-left of its unrotated box
+//   (0,0)..(w,h) — matching tldraw's shape transform (Mat.Translate then
+//   Mat.Rotate applied to that translation, i.e. rotation happens "in place"
+//   around the shape's own (x,y)). rotation is in radians. Coordinates are
+//   y-down screen space; rotation uses the ordinary math rotation matrix
+//     x' = x·cos(θ) − y·sin(θ)
+//     y' = x·sin(θ) + y·cos(θ)
+//   applied to a LOCAL point BEFORE the translate is added — i.e. world =
+//   rotate(local, rotation) + (x, y). (In y-down space this reads as a
+//   clockwise turn on screen for positive θ; that's a labeling detail, not
+//   a degree of freedom — this file, the editor, and the Phase-5 converter
+//   must all use the same matrix, and this is it.)
+//
+//   World transform COMPOSES the parent chain: a child's transform is
+//   relative to its parent's frame, so the world transform of a shape is
+//   parentWorld ∘ (translate(x,y) · rotate(rotation)). Composing two pure
+//   translate+rotate (rigid, no scale/skew) transforms yields another rigid
+//   transform, so the whole chain collapses to a single {x, y, rotation} —
+//   see `worldTransform` below. This is a deliberate scope limit: shapes have
+//   no scale/skew in the envelope (canvas-model, Phase 3), so a 3-number
+//   rigid transform is sufficient; a full affine matrix would be needed the
+//   moment scale/skew enters the model.
+//
+//   Worked example (also asserted in hit-test.test.ts): a 100×100 box at
+//   (0,0) rotated π/4 has corners (0,0), (70.71,70.71), (0,141.42),
+//   (−70.71,70.71) → world bounds {minX:−70.71, minY:0, maxX:70.71,
+//   maxY:141.42}.
+// ============================================================================
+
 export interface Bounds { minX: number; minY: number; maxX: number; maxY: number }
+export interface Point { x: number; y: number }
+/** A pure translate+rotate (no scale/skew) transform from a shape's local
+ * frame to world (page) space. See the ROTATION CONVENTION block above. */
+export interface RigidTransform { x: number; y: number; rotation: number }
+
+const IDENTITY_TRANSFORM: RigidTransform = { x: 0, y: 0, rotation: 0 }
+
+// Rotate a point by `theta` radians around the origin, per the NORMATIVE
+// convention above (ordinary math rotation matrix, y-down coordinates).
+function rotatePoint(p: Point, theta: number): Point {
+  const cos = Math.cos(theta), sin = Math.sin(theta)
+  return { x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos }
+}
+
+// The two edge-direction unit axes of a rectangle rotated by `theta` under
+// the NORMATIVE convention above: the images of the local x/y unit vectors,
+// i.e. the rotation matrix's columns [{cosθ, sinθ}, {−sinθ, cosθ}] (equal
+// to rotatePoint({1,0}) and rotatePoint({0,1})). Exported so consumers that
+// need the axes directly — e.g. spatial-index's SAT rectangle intersection
+// projects onto exactly these — derive them HERE, from the same matrix
+// rotatePoint applies, instead of re-deriving cos/sin locally and silently
+// depending on this file's sign convention with no compiler link
+// (drift-proofing: a convention change now breaks exactly one function, not
+// one function plus a stealth copy in another file).
+export function rotationAxes(theta: number): [Point, Point] {
+  const cos = Math.cos(theta), sin = Math.sin(theta)
+  return [{ x: cos, y: sin }, { x: -sin, y: cos }]
+}
+
+// Compose a parent's world rigid transform with a child's local (relative to
+// parent) rigid transform, yielding the child's world rigid transform.
+// Derivation: World(p) = parentWorld(rotate(p, local.rotation) + local.xy)
+//           = rotate(rotate(p, local.rotation), parent.rotation)
+//             + rotate(local.xy, parent.rotation) + parent.xy
+//           = rotate(p, parent.rotation + local.rotation)
+//             + [rotate(local.xy, parent.rotation) + parent.xy]
+// — i.e. rotations add, and the child's local offset is rotated BY THE
+// PARENT'S rotation before being added to the parent's translation. This is
+// exactly "the parent's rotation applied to the child's local offset".
+function composeTransform(parent: RigidTransform, local: RigidTransform): RigidTransform {
+  const rotated = rotatePoint({ x: local.x, y: local.y }, parent.rotation)
+  return { x: parent.x + rotated.x, y: parent.y + rotated.y, rotation: parent.rotation + local.rotation }
+}
 
 const DEFAULTS: Partial<Record<Shape['kind'], { w: number; h: number }>> = {
   geo: { w: 220, h: 120 }, frame: { w: 800, h: 600 },
@@ -29,6 +106,106 @@ function size(s: Shape): { w: number; h: number } {
     return { w: Math.max(0, w), h: Math.max(0, h + growY) }
   }
   return { w: Math.max(0, w * scale), h: Math.max(0, h * scale) }
+}
+
+// The shape's unrotated local box: (0,0)..(w,h), pivot at the local origin per
+// the NORMATIVE convention above. Reuses `size()` (the same per-kind/DEFAULTS
+// sizing pageBounds already uses) so kind defaults are defined in exactly one
+// place: note falls back to 200×200 (200 base × scale 1, +0 growY), text to
+// 200×40 (the existing DEFAULTS entry — chosen to match pageBounds/DEFAULTS
+// rather than inventing a second, inconsistent text default).
+export function localBounds(shape: Shape): Bounds {
+  const { w, h } = size(shape)
+  return { minX: 0, minY: 0, maxX: w, maxY: h }
+}
+
+// This shape's world (page-space) rigid transform, composing the parent
+// chain root-to-leaf (see composeTransform). Total by construction:
+//   - Missing parent (byId can hold orphans mid-merge; repair() fixes them
+//     later, but geometry must answer NOW): the walk simply stops climbing,
+//     so the shape's own frame is composed against the identity transform —
+//     equivalent to treating it as a page-root shape.
+//   - Cycle: a visited-set breaks the climb the first time an id repeats, so
+//     a cyclic parent chain still terminates (composed against whatever
+//     partial chain was collected up to the repeat) instead of looping.
+// Either way the result is always finite — never throws, never hangs.
+export function worldTransform(doc: CanvasDocument, shape: Shape): RigidTransform {
+  const chain: Shape[] = []
+  const visited = new Set<string>()
+  let cur: Shape | undefined = shape
+  while (cur && !visited.has(cur.id)) {
+    visited.add(cur.id)
+    chain.push(cur)
+    cur = doc.byId.get(cur.parentId)
+  }
+  // chain is leaf-first (shape, parent, grandparent, ...); compose root-first.
+  let transform = IDENTITY_TRANSFORM
+  for (let i = chain.length - 1; i >= 0; i--) {
+    const s = chain[i]!
+    transform = composeTransform(transform, { x: s.x, y: s.y, rotation: s.rotation })
+  }
+  return transform
+}
+
+// The shape's 4 corners in WORLD space, in local-box order (top-left,
+// top-right, bottom-right, bottom-left of the unrotated box — i.e. the same
+// corners worldBounds takes the AABB of). Exposed on its own because exact
+// (non-AABB) intersection tests — e.g. spatial-index's marquee 'intersect'
+// mode — need the true rotated rectangle, not just its bounding box.
+// `precomputedTransform` is an optional perf escape hatch: a caller that
+// already has this shape's worldTransform (e.g. because it also needs
+// `.rotation` for its own purposes, as queryMarquee's 'intersect' mode
+// does) can pass it in to avoid a second walk up the parent chain.
+export function worldCorners(doc: CanvasDocument, shape: Shape, precomputedTransform?: RigidTransform): Point[] {
+  const t = precomputedTransform ?? worldTransform(doc, shape)
+  const lb = localBounds(shape)
+  return [
+    { x: lb.minX, y: lb.minY }, { x: lb.maxX, y: lb.minY },
+    { x: lb.maxX, y: lb.maxY }, { x: lb.minX, y: lb.maxY },
+  ].map((p) => { const r = rotatePoint(p, t.rotation); return { x: r.x + t.x, y: r.y + t.y } })
+}
+
+// World-space AABB of a (possibly rotated, possibly nested) shape: the
+// min/max of its worldCorners. For an unrotated shape with unrotated
+// ancestors this degenerates to pageBounds' result (see the cross-check in
+// hit-test.test.ts).
+export function worldBounds(doc: CanvasDocument, shape: Shape): Bounds {
+  const corners = worldCorners(doc, shape)
+  return {
+    minX: Math.min(...corners.map((c) => c.x)), minY: Math.min(...corners.map((c) => c.y)),
+    maxX: Math.max(...corners.map((c) => c.x)), maxY: Math.max(...corners.map((c) => c.y)),
+  }
+}
+
+// Inverse-transform a WORLD point into `shape`'s LOCAL frame: undo the
+// translate, then undo the rotate (by rotating -rotation) — the exact
+// inverse of worldTransform + a forward rotate/translate. Used by
+// hitTestPoint (test against the local box) and by snapping.ts's
+// resolveArrowAnchor (Seam C7's normalized arrow anchors need this same
+// operation), so it's factored out once rather than duplicated.
+export function toLocalPoint(doc: CanvasDocument, shape: Shape, point: Point): Point {
+  const t = worldTransform(doc, shape)
+  return rotatePoint({ x: point.x - t.x, y: point.y - t.y }, -t.rotation)
+}
+
+// Forward-transform a LOCAL point (in `shape`'s own unrotated frame) into
+// WORLD space — the exact inverse of toLocalPoint. Used by snapping.ts's
+// anchorToWorld (the round-trip counterpart of resolveArrowAnchor).
+export function toWorldPoint(doc: CanvasDocument, shape: Shape, point: Point): Point {
+  const t = worldTransform(doc, shape)
+  const r = rotatePoint(point, t.rotation)
+  return { x: r.x + t.x, y: r.y + t.y }
+}
+
+// Is `point` (world/page space) inside this shape's rotated box? Inverse-
+// transforms the point into local space (toLocalPoint) and tests it against
+// the axis-aligned local box — cheaper and exactly equivalent to testing
+// the point against the rotated quad in world space. Inclusive of the
+// boundary (matches worldBounds treating min/max as part of the box).
+export function hitTestPoint(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+  const local = toLocalPoint(doc, shape, point)
+  const lb = localBounds(shape)
+  return local.x >= lb.minX && local.x <= lb.maxX && local.y >= lb.minY && local.y <= lb.maxY
 }
 
 // The page a shape ultimately lives on, walking parents with the same guard<50

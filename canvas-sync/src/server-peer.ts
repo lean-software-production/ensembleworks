@@ -63,6 +63,13 @@ export class SyncServerPeer {
   get malformedFrames(): number { return this.malformedCount }
   private malformedCount = 0
   private onUpdatePayload?: (payload: Uint8Array) => void
+  /** Count of currently-connected transports. Used by the C3 registry's
+   * idle-eviction sweep (server/src/canvas-v2/actors.ts): a room with a live
+   * socket must NEVER be evicted for idleness regardless of how stale its
+   * last activity timestamp is — this is the source of truth for "is anyone
+   * actually connected right now," read fresh at sweep time rather than
+   * cached, so a connect that lands between sweeps is never missed. */
+  get clientCount(): number { return this.clients.size }
 
   constructor(opts: SyncServerOpts) {
     this.onUpdatePayload = opts.onUpdatePayload
