@@ -2,6 +2,7 @@ name: release-cli
 on:
   push:
     tags: ['v*']
+  workflow_dispatch: {}
 permissions:
   contents: write
 jobs:
@@ -112,9 +113,16 @@ jobs:
           chmod +x "$dir"/ensembleworks-*
           # Guarded like every other call site: a bare call under set -e aborts
           # with the killed server's 143 from the function's own `wait`.
-          ew_boot_check "$dir" "" || { echo "boot-check FAILED" >&2; exit 1; }
+          ew_boot_check "$dir" "" || {
+            echo "boot-check FAILED" >&2
+            for f in /tmp/ew-bootcheck-*.log; do
+              echo "::group::$f"; cat "$f" 2>/dev/null; echo "::endgroup::"
+            done
+            exit 1
+          }
 
   publish:
+    if: github.ref_type == 'tag'
     needs: [lint, binaries, transcriber-x64, transcriber-arm64, client-dist, smoke]
     runs-on: ubuntu-latest
     steps:
