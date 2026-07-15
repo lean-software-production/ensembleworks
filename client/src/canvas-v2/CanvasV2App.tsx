@@ -63,19 +63,26 @@
  * handler, `onViewportBlur`'s sibling `onPointerCancel` (Task B3 — Viewport's
  * own POINTERCANCEL note: the browser hands the pointer away mid-gesture
  * with no pointerup, e.g. a touch scroll reinterpreted as a page gesture),
- * and an Escape keydown (Task B3 — `handleInput`'s own branch, gated on
- * `editingId === null` the same way Delete/Backspace is, so TextEditor's own
- * Escape-ends-editing keeps working). `document.visibilitychange` (tab
- * hidden while still focused) is NOT wired — canvas-react's Viewport module
- * header names it as "a documented, deferred extension of the same hook,"
- * and this unit inherits that deferral rather than closing it.
+ * and an Escape keydown (Task B3 — via the shared `handleGlobalShortcut`
+ * policy, gated on `editingId === null` the same way Delete/Backspace is, so
+ * TextEditor's own Escape-ends-editing keeps working).
+ * `document.visibilitychange` (tab hidden while still focused) is NOT wired —
+ * canvas-react's Viewport module header names it as "a documented, deferred
+ * extension of the same hook," and this unit inherits that deferral rather
+ * than closing it.
  *
- * GLOBAL KEYBOARD-DELIVERY FALLBACK (Task B3, carried from B2's review): a
- * SECOND, document-level keydown listener (below, near the toolbar JSX)
- * reaches Escape/Delete/Backspace even when a toolbar `<button>` — a DOM
- * SIBLING of Viewport, not a descendant — holds focus, since Viewport's own
- * onKeyDown then never fires at all (nothing bubbles from a sibling). See
- * that effect's own doc comment for the no-double-handling guard.
+ * GLOBAL KEYBOARD-DELIVERY FALLBACK (Task B3, carried from B2's review): the
+ * app-global shortcuts (Escape/Delete/Backspace) reach TWO keydown entry
+ * points — Viewport's onKeyDown -> `handleInput` (for viewport-focused
+ * keydowns) AND a SECOND, document-level keydown listener (below, near the
+ * toolbar JSX) that catches keydowns delivered to a focused toolbar
+ * `<button>` — a DOM SIBLING of Viewport, not a descendant — whose keydown
+ * never bubbles into Viewport's own listener. BOTH funnel through the single
+ * `handleGlobalShortcut` policy (defined next to `cancelAndReset` below), so
+ * the key->action mapping lives in exactly ONE place and a future shortcut
+ * (B4's Ctrl+Z) is a one-site addition; the document listener's own
+ * containment guard keeps the two paths mutually exclusive (no
+ * double-handling). See both functions' doc comments.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
@@ -83,6 +90,7 @@ import {
 	applyWheel,
 	createToolContext,
 	type InputEvent,
+	type KeyInputEvent,
 	type ToolContext,
 } from '@ensembleworks/canvas-editor'
 import { PresenceStore, SyncClientPeer, type Transport } from '@ensembleworks/canvas-sync'
@@ -464,7 +472,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	}, [editor, presencePublisher])
 
 	// Defined BEFORE handleInput (not just before its own first use further
-	// down) so handleInput's Escape branch below can call it directly instead
+	// down) so the shared shortcut policy below can call it directly instead
 	// of duplicating cancelActiveTool's own dispatch — see cancelAndReset's own
 	// doc comment for what it does.
 	const cancelAndReset = useCallback(() => {
@@ -473,6 +481,51 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 		toolStatesRef.current = states
 		setToolStates(states)
 	}, [editor, tools])
+
+	// THE single source of truth for "which keys are app-global shortcuts and
+	// what each does" (Task B3 refactor). BOTH keydown entry points call it —
+	// `handleInput` for keydowns whose DOM target is the viewport (or a
+	// descendant), and `handleGlobalKeydown` (the document-level fallback
+	// below) for keydowns delivered to a focused toolbar button, a DOM SIBLING
+	// of the viewport whose keydown never bubbles into Viewport's own listener.
+	// Having the policy HERE, once, is what keeps those two paths from
+	// diverging: a future shortcut (B4's Ctrl+Z) is added in THIS function
+	// alone and immediately works from both paths — add it to only one and it
+	// would silently no-op under the other's focus condition.
+	//
+	// Returns true IFF it CONSUMED the event; each caller must then NOT forward
+	// it onward (handleInput returns before dispatchToActiveTool; the document
+	// listener simply stops). The `editingId === null` gate lives HERE (not in
+	// either caller) so it, too, can never diverge: while a shape is being
+	// text-edited, TextEditor's own textarea owns Escape/Delete/Backspace
+	// (TextEditor.tsx's handleEditorKeyDown — Escape -> onEndEdit(); Delete/
+	// Backspace edit the CHARACTER), and neither stopPropagations, so the same
+	// event still reaches here; this policy must fully DEFER (return false =
+	// "not my key right now") rather than cancel a tool gesture or delete the
+	// shape being edited out from under the user. `editingId` is passed by the
+	// caller (both read `editor.get().editingId` once per event); all OTHER
+	// live state — the selection behind deleteSelectionIntents, the tool refs
+	// behind cancelAndReset — is read fresh inside the actions themselves, so
+	// there are no stale closures. Delete/Backspace count as CONSUMED even when
+	// the selection is empty (deleteSelectionIntents returns []): the key is
+	// still "an app shortcut, handled here, not forwarded to a tool" — matching
+	// the pre-refactor branch's own unconditional early return.
+	const handleGlobalShortcut = useCallback(
+		(event: KeyInputEvent, editingId: string | null): boolean => {
+			if (editingId !== null) return false // TextEditor owns the keyboard while editing
+			if (event.key === 'Escape') {
+				cancelAndReset()
+				return true
+			}
+			if (event.key === 'Delete' || event.key === 'Backspace') {
+				const intents = deleteSelectionIntents(editor)
+				if (intents.length > 0) editor.applyAll(intents)
+				return true
+			}
+			return false
+		},
+		[editor, cancelAndReset],
+	)
 
 	const handleInput = useCallback(
 		(event: InputEvent) => {
@@ -491,43 +544,20 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				editor.apply({ type: 'SetCamera', ...next })
 				return
 			}
-			// Delete/Backspace -> DeleteShapes (Task B2). Gated on `editingId ===
-			// null`: while a shape is being text-edited, TextEditor's own textarea
-			// owns Delete/Backspace (deleting a CHARACTER) — its keydown handler
-			// doesn't stop propagation (see TextEditor.tsx), so this same event
-			// still reaches here, and forwarding it to the active tool below would
-			// be harmless (no tool handles keydown) but applying
-			// deleteSelectionIntents here WOULD wrongly delete the shape being
-			// edited out from under the user. Returns before reaching
-			// dispatchToActiveTool below — this event is fully consumed here, not
-			// also forwarded to whatever tool is active.
-			if (event.type === 'keydown' && (event.key === 'Delete' || event.key === 'Backspace') && editor.get().editingId === null) {
-				const intents = deleteSelectionIntents(editor)
-				if (intents.length > 0) editor.applyAll(intents)
-				return
-			}
-			// Escape -> cancelAndReset (Task B3), the THIRD abandonment-cancel
-			// trigger alongside onViewportBlur and onPointerCancel below. Same
-			// editingId gate and same "consumed here, never forwarded" posture as
-			// the Delete/Backspace branch just above: TextEditor's own textarea
-			// owns Escape while a shape is being edited (TextEditor.tsx's
-			// handleEditorKeyDown — `key === 'Escape' -> onEndEdit()`), and — same
-			// reasoning as Delete/Backspace — that handler doesn't stopPropagation
-			// either, so this same event still reaches here; forwarding it to
-			// dispatchToActiveTool below would be harmless (no tool handles
-			// keydown) but calling cancelAndReset here while editingId !== null
-			// would be wrong (cancelling a tool gesture has nothing to do with the
-			// text edit in progress, and would reset every tool's state out from
-			// under a user who is just trying to stop editing text).
-			if (event.type === 'keydown' && event.key === 'Escape' && editor.get().editingId === null) {
-				cancelAndReset()
+			// App-global shortcuts (Delete/Backspace -> Task B2; Escape -> Task B3)
+			// go through the SHARED policy above so this viewport-focused path and
+			// the document-level fallback below never diverge. If it consumed the
+			// event, it's fully handled — do NOT also forward it to the active
+			// tool (no tool handles keydown, so this is belt-and-suspenders, but
+			// it keeps the "consumed here, never forwarded" contract explicit).
+			if (event.type === 'keydown' && handleGlobalShortcut(event, editor.get().editingId)) {
 				return
 			}
 			const next = dispatchToActiveTool(tools, toolStatesRef.current, activeToolIdRef.current, editor, event)
 			toolStatesRef.current = next
 			setToolStates(next)
 		},
-		[editor, tools, presencePublisher, cancelAndReset],
+		[editor, tools, presencePublisher, handleGlobalShortcut],
 	)
 
 	// Abandonment-gap cancel — see the module header's ABANDONMENT-CANCEL
@@ -578,9 +608,15 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// box) shouldn't silently break because this listener swallowed its
 	// Escape/Delete first.
 	//
-	// Reuses the SAME cancelAndReset / deleteSelectionIntents calls
-	// handleInput's own branches use above — no cancellation logic is
-	// duplicated, only the DOM trigger is widened.
+	// The two guards below (containment + isEditableTarget) are THIS listener's
+	// OWN concern — deciding whether a keydown is even eligible for the global
+	// path. The key->action POLICY itself is NOT here: once eligible, the event
+	// is handed to the SAME `handleGlobalShortcut` the viewport path uses, so
+	// the two paths can't diverge (see that function's own doc comment). The
+	// containment guard is exactly what keeps the two mutually exclusive: a
+	// keydown whose target is inside the viewport was already handled by
+	// Viewport's onKeyDown -> handleInput -> handleGlobalShortcut, so this
+	// listener bails before calling it a second time.
 	useEffect(() => {
 		function handleGlobalKeydown(e: KeyboardEvent): void {
 			const container = containerRef.current
@@ -588,18 +624,21 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			const target = e.target as Node | null
 			if (target && container.contains(target)) return // already handled by Viewport's own onKeyDown -> handleInput
 			if (isEditableTarget(target)) return
-			if (e.key === 'Escape' && editor.get().editingId === null) {
-				cancelAndReset()
-				return
+			// Rewrite the raw DOM event into the normalized KeyInputEvent the
+			// shared policy speaks — carrying modifiers verbatim so a future
+			// modifier-bearing shortcut (B4's Ctrl+Z) works from this path too,
+			// not just the viewport one.
+			const keyEvent: KeyInputEvent = {
+				type: 'keydown',
+				key: e.key,
+				modifiers: { shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey },
+				t: e.timeStamp,
 			}
-			if ((e.key === 'Delete' || e.key === 'Backspace') && editor.get().editingId === null) {
-				const intents = deleteSelectionIntents(editor)
-				if (intents.length > 0) editor.applyAll(intents)
-			}
+			handleGlobalShortcut(keyEvent, editor.get().editingId)
 		}
 		document.addEventListener('keydown', handleGlobalKeydown)
 		return () => document.removeEventListener('keydown', handleGlobalKeydown)
-	}, [editor, cancelAndReset])
+	}, [editor, handleGlobalShortcut])
 
 	return (
 		<div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif' }}>

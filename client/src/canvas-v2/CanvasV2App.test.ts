@@ -308,6 +308,66 @@ async function main() {
 	assert.equal(ewDel.doc.getShape('shape:del-c'), undefined, 'shape:del-c is deleted once editingId is cleared (cleanup, also re-proving the un-suppressed path)')
 
 	// ==========================================================================
+	// (d3e) ESCAPE, PRIMARY PATH (Task B3): a real `Escape` keydown dispatched
+	// on the FOCUSED VIEWPORT DIV (not a toolbar button — that's d4's fallback
+	// path) drives the WHOLE primary chain end to end: Viewport.onKeyDown ->
+	// keyEventToInput -> CanvasV2App.handleInput -> the shared
+	// handleGlobalShortcut policy -> cancelAndReset -> the in-flight preview's
+	// DeleteShapes. The other Escape integration case (d4) deliberately
+	// bypasses handleInput (it dispatches on a focused sibling button, so only
+	// the document-level listener sees it), so this is the ONLY test that
+	// exercises handleInput's own keydown branch for Escape — and, after the
+	// shared-gate refactor, the shared policy via that primary path. Nets zero
+	// shapes (the preview is created then cancelled) so (e)'s pre-unmount count
+	// precondition still holds.
+	// ==========================================================================
+	const geoBtnEsc = container.querySelector('[data-canvas-v2-tool="geo"]') as HTMLElement | null
+	const selectBtnEsc = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+	assert.ok(geoBtnEsc && selectBtnEsc, `the geo and select toolbar buttons must exist — DOM: ${container.innerHTML}`)
+
+	// Switch to the geo tool (real click) so a viewport drag creates a preview.
+	await act(async () => {
+		geoBtnEsc!.click()
+	})
+
+	const ewEsc = (globalThis as any).window.__ew as { doc: { listShapes(): Array<{ id: string }> } }
+	const idsBeforeEscDrag = new Set(ewEsc.doc.listShapes().map((s) => s.id))
+
+	// Focus the VIEWPORT DIV itself (not a toolbar button) — the primary path's
+	// precondition. Then a real pointerdown + pointermove ON the viewport start
+	// a geo create-drag crossing the threshold (mirrors tool-loop.test.ts's own
+	// create-drag deltas).
+	await act(async () => {
+		viewportEl!.focus()
+		viewportEl!.dispatchEvent(new (win as any).PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 21, clientX: 500, clientY: 500, buttons: 1 }))
+		viewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 21, clientX: 560, clientY: 560, buttons: 1 }))
+	})
+	const escPreview = ewEsc.doc.listShapes().find((s) => !idsBeforeEscDrag.has(s.id))
+	assert.ok(escPreview, `precondition: the geo drag created an in-flight preview shape — shapes: ${JSON.stringify(ewEsc.doc.listShapes())}`)
+	assert.equal(document.activeElement, viewportEl, 'precondition: the VIEWPORT div holds focus (this is the primary onKeyDown path, not the toolbar fallback)')
+
+	// The real primary-path Escape: dispatched ON the focused viewport div, so
+	// it flows through Viewport.onKeyDown -> handleInput -> handleGlobalShortcut
+	// (NOT the document-level fallback — the fallback's containment guard skips
+	// any target inside the viewport container, so this is unambiguously the
+	// primary path).
+	await act(async () => {
+		viewportEl!.dispatchEvent(new (win as any).KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+	})
+	assert.equal(
+		ewEsc.doc.listShapes().find((s) => s.id === escPreview!.id),
+		undefined,
+		'a real Escape keydown on the FOCUSED VIEWPORT cancels the in-flight create-drag preview (handleInput -> shared handleGlobalShortcut -> cancelAndReset)',
+	)
+	console.log('ok: CanvasV2App — a real Escape keydown on the focused viewport cancels an in-flight gesture (primary handleInput path)')
+
+	// Restore the select tool (cleanup) so d4 starts from the same state it did
+	// before this case was inserted.
+	await act(async () => {
+		selectBtnEsc!.click()
+	})
+
+	// ==========================================================================
 	// (d4) KEYBOARD DELIVERY SURVIVES A TOOLBAR CLICK (B3's CARRIED
 	// CODE-QUALITY FIX): the v2 keydown listener lived on Viewport's own div;
 	// the toolbar `<button>`s are DOM SIBLINGS of Viewport (see
