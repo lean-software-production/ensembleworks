@@ -1607,6 +1607,31 @@ constants (Seam H, with the empirical `BOUNDED_GROWTH_K`,
 commit-cadence scenario proved too noisy to gate — the explicit owner-recorded
 deviation from DoD #8 (never a silent ungated landing)._
 
+### Carried cross-unit findings (accumulate as units land)
+
+- **B1 (undo/redo):** shipped as the editor-level inverse-intent stack (A1
+  verdict). Quality review caught + fixed two bugs before B4/B5 built on it:
+  (1) `replay()` now try/catches per-op (a `ReparentShapes` inverse could hit
+  Loro's cycle guard and throw under concurrent remote reparent — broke the
+  tolerance contract); (2) multi-id cascade-delete undo now globally
+  depth-sorts the deduped subtree union (`orderParentBeforeChild`) so a child
+  listed before its ancestor is no longer detached to root on undo. Regression
+  tests verified with teeth. NOTE for anyone touching canvas-doc: raw-tree
+  mutation outside `LoroCanvasDoc`'s public mutators corrupts its private
+  id→node index (why UndoManager was rejected) — a latent hazard beyond undo.
+- **B2 (delete wiring):** DECISION — Delete/Backspace delete regardless of
+  modifiers (matches v1; B4 owns `Ctrl+Z`'s explicit modifier check). No
+  change made; recorded as a conscious sign-off, not an oversight.
+- **CARRIED TO B3 (must-fix) — keyboard delivery is focus-scoped:** the v2
+  keydown listener lives on `Viewport`'s own div, but the toolbar buttons are
+  DOM *siblings* of `Viewport`, so a keydown fired while a toolbar `<button>`
+  holds focus (e.g. select a shape, click a tool button, press Delete/Escape)
+  never bubbles to `handleInput` — the shortcut silently no-ops. Pre-existing,
+  but it undermines Delete (B2), Escape-cancel (B3), AND `Ctrl+Z` (B4). B3
+  fixes keyboard delivery once (so global shortcuts survive toolbar-button
+  focus) with a regression test that focuses a toolbar button, then asserts
+  Escape/Delete still reach the editor.
+
 ---
 
 ## Done criteria (bounds §4 — every line has a check)
