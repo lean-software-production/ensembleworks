@@ -1643,6 +1643,21 @@ deviation from DoD #8 (never a silent ungated landing)._
   entry. (Redo scoping fix landed in B4: `Ctrl+Y` requires `ctrl`
   specifically, never `meta` — `Cmd+Y` is Safari's native "Show All History"
   and nothing here calls preventDefault; Mac redo is `Cmd+Shift+Z`.)
+- **B5 (transform cancel-revert) — over-revert of non-geometry fields:**
+  transform cancel-revert (and B1's undo) restore shapes via a FULL-shape
+  `putShape` overwrite of the gesture-start/pre-mutation snapshot, not a
+  field-surgical inverse. Consequence: a concurrent remote edit to a
+  NON-geometry field (color/opacity/isLocked/meta/parentId/frame name) of a
+  shape being transformed-then-cancelled (or undone) is stomped back to the
+  snapshot value. Text is safe (separate Loro container). Judged non-blocking
+  by both B5 reviews: narrow window (same-shape concurrent cross-field edit
+  mid-gesture), and consistent with B1's established inverse convention —
+  fixing only cancel would make cancel/undo inconsistent. FIX RECIPE (its own
+  future unit, applies to BOTH B1's undo inverses and B5's cancel): compute a
+  per-intent surgical inverse that restores ONLY the fields each intent
+  changed (geometry x/y/rotation/w/h for resize/rotate; parentId for reparent;
+  etc.), merged onto the CURRENT live shape rather than overwriting the whole
+  shape. Tied to the undo-quality / gesture-atomic-undo family.
 
 ---
 

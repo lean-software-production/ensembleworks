@@ -242,6 +242,15 @@ export function dispatchToActiveTool(
  *    history behind (the revert doesn't retroactively erase those commits'
  *    own undo entries) — gesture-atomic undo (one undo step per whole drag)
  *    remains a documented Phase-4 parity item.
+ *    SECOND carried finding (over-revert): CreateShape restores the FULL
+ *    gesture-start shape (a whole-shape putShape overwrite), not a
+ *    geometry-only inverse — so a concurrent REMOTE edit to a NON-geometry
+ *    field (color/opacity/isLocked/meta/parentId/frame name) of a shape
+ *    being transformed-then-cancelled is stomped back to its gesture-start
+ *    value. This is the SAME whole-shape-overwrite convention B1's undo
+ *    inverses use (fixing only cancel would make cancel/undo inconsistent);
+ *    text is safe (a separate Loro container). Deferred to the undo-quality /
+ *    gesture-atomic-undo family — see the plan's carried-finding B5 bullet.
  *
  * Returns the full RESET `ToolStates` (every tool goes back to its own
  * `initialState` — not just the active one — since an abandonment trigger

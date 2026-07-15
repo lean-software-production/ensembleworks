@@ -307,6 +307,52 @@ function setup() {
 }
 
 // ============================================================================
+// 4e. cancelActiveTool COVERAGE — transform, REVERT tolerance (Task B5): a
+//    shape that VANISHES mid-gesture (a concurrent remote delete, mirroring
+//    select.test.ts's "mid-drag remote deletion of the target" pattern) must
+//    NOT be resurrected by the cancel-revert — cancelActiveTool checks each
+//    startShapes entry against the LIVE doc and skips a vanished id (see
+//    tool-loop.ts's `if (editor.doc.getShape(shape.id))` branch). A
+//    multi-select gesture proves the SURVIVING shape is still restored while
+//    the deleted one is skipped, not an all-or-nothing bail.
+// ============================================================================
+{
+	const doc = LoroCanvasDoc.create({ peerId: 1n })
+	doc.putPage({ id: 'page:p', name: 'P' })
+	doc.putShape(geoShape('shape:v1', 0, 0, 100, 100))
+	doc.putShape(geoShape('shape:v2', 200, 0, 100, 100))
+	doc.commit()
+	const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+	const ctx: ToolContext = createToolContext(editor)
+	const tools = createToolSet(ctx)
+	let states = createInitialToolStates(tools)
+	const before2 = editor.doc.getShape('shape:v2')!
+
+	editor.apply({ type: 'SetSelection', ids: ['shape:v1', 'shape:v2'] })
+	// Combined world bounds [0,0]x[300,100] -> SE handle at (300,100).
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 300, y: 100, buttons: 1, modifiers: MODS, t: 0 })
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 600, y: 200, buttons: 1, modifiers: MODS, t: 16 })
+	assert.equal((states.select as SelectAndTransformState).transform.mode, 'resizing', 'precondition: transform is mid-resize with a two-shape startShapes snapshot')
+
+	// A concurrent remote delete removes shape:v1 out from under the gesture,
+	// AFTER its gesture-start snapshot was already captured.
+	editor.apply({ type: 'DeleteShapes', ids: ['shape:v1'] })
+	assert.equal(editor.doc.getShape('shape:v1'), undefined, 'precondition: shape:v1 has vanished mid-gesture')
+
+	const cancelled = cancelActiveTool(tools, states, 'select', editor)
+	const revertedIds = cancelled.intents.map((i) => (i as { shape: Shape }).shape.id)
+	assert.deepEqual(revertedIds, ['shape:v2'], 'the vanished shape:v1 is skipped (not resurrected); only the surviving shape:v2 is reverted')
+
+	editor.applyAll(cancelled.intents)
+	assert.equal(editor.doc.getShape('shape:v1'), undefined, 'shape:v1 stays deleted after applying the cancel intents — never resurrected')
+	const reverted2 = editor.doc.getShape('shape:v2')!
+	assert.equal((reverted2.props as { w: number }).w, 100, 'the surviving shape:v2 is still restored to its gesture-start size')
+	assert.equal(reverted2.x, before2.x)
+
+	console.log('ok: tool-loop — cancelActiveTool skips a shape that vanished mid-gesture, still restoring the survivors (Task B5 tolerance)')
+}
+
+// ============================================================================
 // 5. NO stale double-click memory across a transform gesture (quality-review
 //    fix round): click A -> resize A via its SE handle (the whole gesture
 //    routes to the TRANSFORM leg, so select's own FSM never sees any of it)
