@@ -473,3 +473,41 @@ const shape = (id: string, over: Partial<Shape> = {}): Shape => ({
 
   console.log('ok: undo/redo CompleteArrow (end prop + end binding)')
 }
+
+// ============================================================================
+// 16. Inverse coverage (Task D1): UpdateProps undo/redo round-trip — undo
+//     restores the FULL pre-mutation props map (the shallow-merge is only
+//     forward; the inverse is the documented full-shape-inverse convention,
+//     same as Resize/Rotate/Reparent/CompleteArrow above — putShape(shape)
+//     restores everything, not just the touched keys), redo re-applies the
+//     merged result. A no-op UpdateProps (unknown id, docMutated:false) must
+//     NOT push an undo-stack entry — proven via canUndo()/stack-depth: if it
+//     pushed a no-op {undo:[],redo:[]} entry, undo() would silently consume
+//     a stack slot without restoring anything (the B1 corruption class this
+//     unit's plan calls out).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { props: { title: 'orig', kept: 'stays' } }) })
+  editor.apply({ type: 'UpdateProps', id: 'shape:a', props: { title: 'new' } })
+  assert.deepEqual(editor.doc.getShape('shape:a')!.props, { title: 'new', kept: 'stays' }, 'UpdateProps applied the shallow merge')
+
+  editor.undo()
+  assert.deepEqual(editor.doc.getShape('shape:a')!.props, { title: 'orig', kept: 'stays' }, 'undo of UpdateProps restores the full prior props map')
+
+  editor.redo()
+  assert.deepEqual(editor.doc.getShape('shape:a')!.props, { title: 'new', kept: 'stays' }, 'redo of UpdateProps re-applies the merge')
+
+  // A no-op UpdateProps (unknown id) must not occupy an undo-stack slot: the
+  // stack depth right after it must be UNCHANGED from right before it, and
+  // the next undo() must still unwind the LAST real mutation (the redo above),
+  // not silently consume a phantom {undo:[],redo:[]} entry.
+  const undoableBefore = editor.canUndo()
+  editor.apply({ type: 'UpdateProps', id: 'shape:missing', props: { title: 'z' } })
+  assert.equal(editor.canUndo(), undoableBefore, 'a no-op UpdateProps (unknown id) does not push an undo entry')
+
+  editor.undo() // must unwind the UpdateProps('new') above, not a phantom no-op entry
+  assert.deepEqual(editor.doc.getShape('shape:a')!.props, { title: 'orig', kept: 'stays' }, 'the next undo still unwinds the real UpdateProps, proving no phantom entry was pushed')
+
+  console.log('ok: undo/redo UpdateProps (full props map restored; no-op does not occupy an undo-stack slot)')
+}

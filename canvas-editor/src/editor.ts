@@ -86,10 +86,10 @@ export interface EditorOpts {
  * — gives local-peer-only undo scope for free (a remote peer's incoming
  * shapes are never captured, so undo can never touch them).
  *
- * `putShape` is deliberately doing double duty as the inverse for FOUR
- * different intents (Translate/Resize/RotateShapes, ReparentShapes, and
- * CompleteArrow's updateProps): `CanvasDoc.putShape` is a full-field
- * overwrite (it rewrites kind/parentId/index/x/y/rotation/isLocked/opacity/
+ * `putShape` is deliberately doing double duty as the inverse for FIVE
+ * different intents (Translate/Resize/RotateShapes, ReparentShapes,
+ * CompleteArrow's updateProps, and UpdateProps itself): `CanvasDoc.putShape`
+ * is a full-field overwrite (it rewrites kind/parentId/index/x/y/rotation/isLocked/opacity/
  * meta/props all at once — see LoroCanvasDoc.putShape) AND repositions the
  * physical tree node to match `shape.parentId` (via placeInTree) — so
  * "restore the exact Shape object read before the mutation" is already a
@@ -572,6 +572,26 @@ export class Editor {
           undo: [{ op: 'setText', id: intent.id, text: priorText }],
           redo: [{ op: 'setText', id: intent.id, text: intent.text }],
         }
+      }
+
+      case 'UpdateProps': {
+        // Consistent with SetText/DeleteShapes: a real mutated flag gated on
+        // the id actually resolving — silent no-op (no throw, docMutated:
+        // false) on an unknown id, never leaning on CanvasDoc.updateProps's
+        // own silent-no-op contract for the flag itself.
+        const shape = this.doc.getShape(intent.id)
+        if (!shape) return { state, docMutated: false, stateChanged: false }
+        this.doc.updateProps(intent.id, intent.props)
+        // Full-shape-inverse convention (same as CompleteArrow's updateProps
+        // call above, and Resize/Rotate/Reparent's putShape inverses):
+        // `shape` read BEFORE the mutation already holds the pre-image props
+        // map, so putShape(shape) is a correct, tolerant restore — no
+        // field-surgical "only undo the keys that changed" logic is needed.
+        // (A surgical inverse is a documented DEFERRED follow-up, not this
+        // unit's scope — see Task D1's plan notes.)
+        const undo: InverseOp[] = [{ op: 'putShape', shape }]
+        const redo: InverseOp[] = [{ op: 'putShape', shape: { ...shape, props: { ...shape.props, ...intent.props } } }]
+        return { state, docMutated: true, stateChanged: false, undo, redo }
       }
 
       case 'StartArrow': {
