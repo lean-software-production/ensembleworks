@@ -1669,6 +1669,18 @@ deviation from DoD #8 (never a silent ungated landing)._
   Phase 4 ships per-increment undo + whole-shape restore knowingly. B6's E2E
   encodes the current (per-increment) behavior honestly, so it will need
   updating when the follow-up lands.
+- **C1 (NoteShape) — handwriting-font webfont not loaded on the v2 client
+  (MUST fix within Seam C, before C7 goldens).** v1 stickies use font-family
+  `tldraw_draw`, but that webfont is registered at runtime only by tldraw's
+  `FontManager` inside a live `<Tldraw>` editor — which the v2 client
+  (`CanvasV2App`) never mounts, and `client/index.html` doesn't load it. So
+  today NoteShape/TextShape/TextEditor declare the right family but fall
+  through to `sans-serif` on the actual v2 client. This is a shared parity
+  prerequisite for C1/C3/C6 and MUST land BEFORE C7 captures component
+  goldens (else the goldens bake in the wrong, sans-serif rendering). Fix =
+  load the tldraw draw/handwriting webfont asset into the v2 client bundle
+  (client-workspace `@font-face`/index.html or a canvas-v2 font-load module) —
+  fold into C6 (or a small dedicated Seam-C task) ahead of C7.
 
 ---
 
