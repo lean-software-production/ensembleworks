@@ -49,6 +49,13 @@ assert.ok(BRIDGE_SCRIPT.includes('ew-file-viewer-ready'))
 assert.ok(BRIDGE_SCRIPT.includes('ew-scroll'))
 assert.ok(BRIDGE_SCRIPT.includes('ew-scroll-set'))
 
+// Pinch interception (spec: 2026-07-15-pinch-zoom-guard-design.md): the
+// bridge preventDefaults ctrl/meta wheel inside the iframe document and
+// forwards it to the parent as an ew-pinch message.
+assert.ok(BRIDGE_SCRIPT.includes("addEventListener('wheel'"), 'bridge has a wheel listener')
+assert.ok(BRIDGE_SCRIPT.includes('{ passive: false }'), 'wheel listener is non-passive')
+assert.ok(BRIDGE_SCRIPT.includes("type: 'ew-pinch'"), 'bridge posts ew-pinch')
+
 // error pages: styled, status text present
 assert.ok(errorPage('Not found', 'nope.html does not exist').includes('Not found'))
 
