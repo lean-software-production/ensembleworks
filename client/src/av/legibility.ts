@@ -44,7 +44,9 @@ export function cursorAlphaForGain(gain: number): number {
 /** Snap a gain to GAIN_QUANTUM steps, clamped to [0,1]. Non-finite → 1,
  * matching the loop's "peer with no cursor yet counts as full volume".
  * Rounds the quantized result to 2dp so results like 0.55 are exact,
- * avoiding binary floating-point artifacts (e.g. 0.55000000000000004). */
+ * avoiding binary floating-point artifacts (e.g. 0.55000000000000004).
+ * The 2dp correction assumes GAIN_QUANTUM has at most two decimals — if you
+ * ever tighten the quantum below 0.01, widen the rounding factor with it. */
 export function quantizeGain(gain: number): number {
 	if (!Number.isFinite(gain)) return 1
 	const stepped = Math.round(clamp01(gain) / GAIN_QUANTUM) * GAIN_QUANTUM
