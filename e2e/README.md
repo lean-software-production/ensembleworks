@@ -20,10 +20,23 @@ and the implementation plan,
 - `bunx playwright test --project=perf` — perf scenarios (sanity floor only, no budgets yet)
 - `EW_CAPTURE=1 bunx playwright test --project=e2e -g feel` — rewrite `goldens/feel.json`
 - `EW_CAPTURE=1 bunx playwright test --project=perf` — rewrite `baselines/tldraw-perf.json`
-- `bunx playwright test --project=e2e -g visual --update-snapshots` — rewrite visual goldens.
-  **Gotcha:** `--update-snapshots` silently *keeps* a PNG when the new capture is
-  within `maxDiffPixelRatio` of the old one, so a real recapture needs
-  `rm e2e/goldens/visual/*.png` first, then `--update-snapshots`.
+- `bunx playwright test --project=e2e -g visual --update-snapshots=all` — rewrite visual goldens.
+  **Gotcha:** always pass `--update-snapshots=all`, NOT the bare `--update-snapshots`
+  (whose default `"changed"` preset silently *keeps* a PNG when the new capture is
+  within `maxDiffPixelRatio` of the old one — so a genuinely-changed render can leave
+  a stale golden on disk reporting a false pass; `rm`-ing the PNGs first also works,
+  but `=all` is the reliable one-step form). This bit C7: registering the real
+  note/frame/text/geo bodies visibly changed those goldens, yet bare
+  `--update-snapshots` left 8 of them stale.
+  **Deeper gotcha (why pixel goldens alone under-guard):** the visual comparator is
+  pixelmatch with a **luminance-weighted** default per-pixel delta, so at
+  `maxDiffPixelRatio: 0.02` it is effectively **blind to hue-only changes** — a
+  same-lightness swap (e.g. a pastel-blue placeholder box vs a pastel-yellow sticky)
+  can pass the pixel gate outright. Pixel diff is therefore NOT a sufficient
+  regression guard on its own; pair it with structural/DOM assertions (see
+  `tests/component-goldens.spec.ts`'s `CORE_BODY_EXPECTATIONS` / `assertCoreBody`,
+  which assert each real body's `data-shape-body` marker and the absence of the
+  BoxShape `"box"` fallback — the actual teeth against a body→placeholder regression).
 - `bunx playwright show-trace test-results/**/trace.zip` — inspect a failure
   (traces are `retain-on-failure`)
 

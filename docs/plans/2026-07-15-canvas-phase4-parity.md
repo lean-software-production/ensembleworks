@@ -778,10 +778,29 @@ label), text, geo (each variant). Register them in the harness.
 **Step 2: Run to generate + verify.**
 ```bash
 export PATH="$HOME/.bun/bin:$PATH"
-cd e2e && bunx playwright test tests/component-goldens.spec.ts --update-snapshots
+cd e2e && bunx playwright test tests/component-goldens.spec.ts --update-snapshots=all
 bunx playwright test tests/component-goldens.spec.ts   # re-run: PASS against fresh goldens
 ```
 Expected: goldens created, second run PASS.
+
+> **Use `--update-snapshots=all`, NOT bare `--update-snapshots`.** The bare
+> form's default `"changed"` preset silently *keeps* an existing PNG when the
+> new capture is within `maxDiffPixelRatio` — so a genuinely-changed render
+> (e.g. wiring `registerCoreShapes()` so note/frame/text/geo stop rendering as
+> the BoxShape placeholder) can leave stale goldens on disk reporting a false
+> pass. `=all` forces a byte-level rewrite of every snapshot.
+>
+> **A pixel golden alone does NOT guard a body→placeholder regression.**
+> Playwright's comparator is pixelmatch with a **luminance-weighted** default
+> per-pixel delta; at `maxDiffPixelRatio: 0.02` it is effectively **blind to
+> hue-only changes** (a pastel-blue placeholder box vs a same-lightness pastel
+> sticky passes). Proven empirically in C7: with `registerCoreShapes()`
+> commented out, 17/18 screenshot tests still PASSED. The real guard is the
+> STRUCTURAL DOM assertion the spec now carries (`CORE_BODY_EXPECTATIONS` /
+> `assertCoreBody`): each core-kind fixture asserts its real body's
+> `data-shape-body` marker is present and no `data-shape-body="box"` fallback
+> slipped in. That guard fails deterministically (12/18) without the
+> registration, regardless of pixel tuning.
 
 **Step 3: Commit** (include the generated golden PNGs).
 ```bash
@@ -1722,6 +1741,27 @@ deviation from DoD #8 (never a silent ungated landing)._
   vertically centering a growing/shrinking text block. Documented inline in
   `TextEditor.tsx` (the `editorTextStyle` PARITY GAP comment). Seam F's harness
   / a design pass should close the note/geo case.
+- **C7 → Seam F (MUST-HEED for the cross-renderer parity harness) — pixel-diff
+  goldens are BLIND to hue-only change; do NOT rely on `maxDiffPixelRatio`
+  alone.** C7's component goldens are correct, but the C7 review proved the
+  screenshot assertion by itself does NOT catch the very regression the unit
+  exists to prevent: with `registerCoreShapes()` commented out (every rich body
+  → the BoxShape placeholder), **17/18 screenshot tests still PASSED**. Cause:
+  Playwright's comparator is pixelmatch with a **luminance-weighted** default
+  per-pixel delta, so at `maxDiffPixelRatio: 0.02` a same-lightness hue swap
+  (pastel-blue placeholder box vs pastel-yellow sticky) barely moves the diff
+  ratio. C7's fix = a STRUCTURAL DOM guard (`CORE_BODY_EXPECTATIONS` /
+  `assertCoreBody` in `component-goldens.spec.ts`): assert each real body's
+  `data-shape-body` marker is present and no `"box"` fallback slipped in — which
+  fails deterministically (12/18) without registration. Plus a moderately
+  tighter per-fixture ratio (0.008) for the small/precise core fixtures as
+  backup, and mandatory `--update-snapshots=all` for recapture (bare
+  `--update-snapshots`'s `"changed"` preset silently left 8 stale goldens).
+  **Seam F's parity harness is ALSO pixel-diff and inherits this blindness** —
+  it MUST NOT gate on pixel ratio alone. Pair it with structural/DOM assertions
+  (or a per-shape marker check like C7's) and a calibrated-lower threshold, or
+  it will silently tolerate real v1↔v2 visual divergence (exactly the
+  hue/fill/variant drift C4's deferred gaps above would produce).
 
 ---
 

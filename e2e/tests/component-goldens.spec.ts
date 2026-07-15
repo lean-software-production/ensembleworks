@@ -75,6 +75,70 @@ const SIMPLE_FIXTURES = [
 
 const SETTLE_MS = 300 // one paint cycle's worth of margin past the harness's synchronous mount
 
+// Task C7 (follow-up) — the STRUCTURAL regression guard, the real teeth of
+// this spec. A pixel screenshot ALONE does not catch a rich-body → BoxShape
+// placeholder regression: proven empirically, with registerCoreShapes()
+// commented out (so note/frame/text/geo all fall back to the generic blue
+// BoxShape), 17/18 of these screenshot tests STILL PASSED, because
+// `maxDiffPixelRatio: 0.02` (playwright.config.ts) combined with pixelmatch's
+// luminance-weighted default per-pixel delta is effectively BLIND to a
+// hue-only swap — a pastel-blue placeholder box and a pastel-yellow sticky
+// have similar LIGHTNESS, so few pixels cross the diff threshold. So each
+// core-kind fixture below asserts, deterministically and independent of any
+// pixel tuning, that the REAL body's own `data-shape-body` marker
+// (NoteShape/FrameShape/TextShape/GeoShape each emit their kind string;
+// BoxShape emits "box") is present — and, for fixtures whose shapes are ALL
+// core kinds, that NO `data-shape-body="box"` fallback slipped in.
+//
+// `box`-in-fixture EXCEPTION: the arrow fixtures legitimately contain a
+// BoxShape — `arrow` is not a registered kind (registerCoreShapes only
+// registers note/frame/text/geo; registerCanvasV2Shapes only the six
+// embeds), so an arrow shape's BODY falls back to BoxShape (the overlay
+// draws the arrow line separately). Those fixtures therefore assert the geo
+// anchors' real body is present but do NOT assert box-count-0. Embed
+// fixtures (screenshare/iframe/neko/file-viewer) render through EmbedLayer,
+// not ShapeBody, so they carry no `data-shape-body` at all and are absent
+// from this map.
+interface CoreBodyExpectation {
+	/** The real body marker that MUST be present (`data-shape-body="<body>"`). */
+	readonly body: 'note' | 'frame' | 'text' | 'geo'
+	/** Assert NO `data-shape-body="box"` fallback is present. False only for
+	 * fixtures that legitimately contain a non-core kind (the arrows). */
+	readonly noBox: boolean
+}
+const CORE_BODY_EXPECTATIONS: Readonly<Record<string, CoreBodyExpectation>> = {
+	'box-note': { body: 'note', noBox: true },
+	'box-text': { body: 'text', noBox: true },
+	'box-geo': { body: 'geo', noBox: true },
+	'box-frame': { body: 'frame', noBox: true },
+	'note-colors': { body: 'note', noBox: true },
+	'frame-labeled': { body: 'frame', noBox: true },
+	'text-styled': { body: 'text', noBox: true },
+	'geo-variants': { body: 'geo', noBox: true },
+	'selection-rotated': { body: 'geo', noBox: true },
+	cursors: { body: 'geo', noBox: true },
+	'arrow-straight': { body: 'geo', noBox: false }, // arrow kind → BoxShape (see above)
+	'arrow-curved': { body: 'geo', noBox: false },
+}
+
+async function assertCoreBody(page: import('@playwright/test').Page, name: string): Promise<void> {
+	const expected = CORE_BODY_EXPECTATIONS[name]
+	if (!expected) return // embed fixture — no ShapeBody marker to assert
+	await expect(page.locator(`[data-shape-body="${expected.body}"]`).first()).toBeVisible()
+	if (expected.noBox) await expect(page.locator('[data-shape-body="box"]')).toHaveCount(0)
+}
+
+// FIX 2 (defense-in-depth) — a MODERATELY tighter pixel gate for the
+// small/precise core-body fixtures than the project-wide 0.02
+// (playwright.config.ts). At 0.008 (0.8%, "well under 1%") a gross
+// within-body regression (a big fill/geometry change the luminance-blind 2%
+// gate would tolerate) trips the pixel diff too, while still leaving headroom
+// for font anti-aliasing variance across environments. NOT applied to the
+// embed/arrow fixtures (iframe/neko/screenshare render less predictable
+// content — their goldens keep the looser project default). The structural
+// assertion above is the REAL guard; this is backup, not a substitute.
+const CORE_MAX_DIFF_PIXEL_RATIO = 0.008
+
 // Task C7 — the 4 tldraw webfonts (client/src/canvas-v2/fonts.css, self-
 // hosted since Task C6b) load ASYNCHRONOUSLY; a screenshot taken before a
 // face finishes loading would nondeterministically bake in the sans-serif/
@@ -101,7 +165,9 @@ for (const name of SIMPLE_FIXTURES) {
 		await expect(page.locator(`[data-golden-fixture="${name}"]`)).toBeVisible()
 		await waitForGoldenFonts(page)
 		await page.waitForTimeout(SETTLE_MS)
-		await expect(page).toHaveScreenshot(`component-${name}.png`)
+		await assertCoreBody(page, name) // structural guard — see CORE_BODY_EXPECTATIONS
+		const options = CORE_BODY_EXPECTATIONS[name] ? { maxDiffPixelRatio: CORE_MAX_DIFF_PIXEL_RATIO } : undefined
+		await expect(page).toHaveScreenshot(`component-${name}.png`, options)
 	})
 }
 
