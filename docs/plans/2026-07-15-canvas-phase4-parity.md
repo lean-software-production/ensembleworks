@@ -1696,6 +1696,20 @@ deviation from DoD #8 (never a silent ungated landing)._
   special-cased with real geometry; cloud/pentagon/hexagon/octagon/star/
   rhombus/rhombus-2/oval/trapezoid/the four arrows/x-box/check-box/heart draw
   as a plain `<rect>` (documented fallback, never a crash).
+- **C6 (TextEditor) — edit-mode vertical-jump gap deferred to Seam F.**
+  C6 matched font-family/size/color/align between the editing textarea and the
+  rich bodies (no font/color jump), and fixed the `text` kind's small padding
+  gap (TextShape's body is `padding:0`, so the editor now is too — was a ~4px
+  shift). But the C6 "no jump" goal does NOT fully land for note/geo: the
+  NoteShape/GeoShape bodies VERTICALLY CENTER their label via flex, while a
+  `<textarea>` TOP-ANCHORS its text — so entering edit on a note/geo shifts the
+  text from vertically-centered to top-pinned, a real ~80–90px jump for a
+  default 200×200 note, ~40px for a default 100×100 geo. Genuinely Seam-F /
+  design-pass scope, NOT a one-liner: a full-box click-catching textarea (click
+  anywhere in the shape to place the caret) fundamentally conflicts with
+  vertically centering a growing/shrinking text block. Documented inline in
+  `TextEditor.tsx` (the `editorTextStyle` PARITY GAP comment). Seam F's harness
+  / a design pass should close the note/geo case.
 
 ---
 

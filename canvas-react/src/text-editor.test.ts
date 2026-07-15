@@ -255,7 +255,11 @@ function fontToken(fontFamily: string): string {
   assert.ok(html.includes(textExpected.color), `text editor should use props.color's solid hex: ${html}`)
   assert.ok(html.includes(`font-size:${textExpected.fontSize}px`), `text editor should use props.size's px value: ${html}`)
   assert.ok(html.includes(`text-align:${textExpected.textAlign}`), `text editor should use props.textAlign: ${html}`)
-  console.log('ok: editing a text shape matches TextShape\'s font-family/size/color/align')
+  // Task C6 follow-up (FIX 1): TextShape's body has padding:0, so the text-
+  // kind editor must too — a default padding:4 caused a ~4px enter-edit shift.
+  assert.ok(html.includes('padding:0'), `text editor should use padding:0 to match TextShape's body (no ~4px shift): ${html}`)
+  assert.ok(!html.includes('padding:4px'), `text editor must NOT carry the default padding:4 for a text kind: ${html}`)
+  console.log('ok: editing a text shape matches TextShape\'s font-family/size/color/align + padding:0 (no ~4px shift)')
 }
 {
   const geoExpected = geoStyle(editingGeoShape)

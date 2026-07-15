@@ -218,27 +218,52 @@ export function handleEditorKeyDown(key: string, onEndEdit: () => void): void {
  * Exported so text-editor.test.ts can assert it directly (Task C6's failing-
  * test-first requirement) without re-deriving the expected values by hand —
  * tests compare against the SAME noteStyle/textStyle/geoStyle helpers this
- * function calls, so this can't silently drift from the bodies it mirrors. */
+ * function calls, so this can't silently drift from the bodies it mirrors.
+ *
+ * PARITY GAP (Task C6 review's corrected finding — font/size/color/align are
+ * matched above, but the box model is NOT fully matched, and cannot be
+ * without a design pass):
+ *   - PADDING: the `text`-kind TextShape body renders with `padding:0`, so
+ *     the editing textarea matches it with `padding:0` too (the ~4px shift a
+ *     default `padding:4` caused on entering edit is fixed — see `padding`
+ *     below). note/geo keep the textarea's small `padding:4` — their real
+ *     jump is NOT padding (see next), so matching the bodies' larger 16px/8px
+ *     insets would only trade one mismatch for a worse one against the
+ *     vertical-centering issue.
+ *   - VERTICAL ALIGNMENT (the real, deferred gap): NoteShape/GeoShape bodies
+ *     VERTICALLY CENTER their label via flex (`alignItems`/`justifyContent:
+ *     center`), but a <textarea> TOP-ANCHORS its text. So entering edit on a
+ *     note/geo shape moves the text from vertically-centered to top-pinned —
+ *     a real jump of ~80–90px for a default 200×200 note, ~40px for a default
+ *     100×100 geo. This is genuinely Seam-F / design-pass scope, not a
+ *     one-liner: a full-box click-catching textarea (you must be able to
+ *     click anywhere in the shape to place the caret) fundamentally conflicts
+ *     with vertically centering a growing/shrinking text block. Deliberately
+ *     NOT fixed here — deferred to Seam F's harness / a design pass. */
 export interface EditorTextStyle {
   readonly fontFamily: string
   readonly fontSize: number
   readonly lineHeight: number
   readonly color: string
   readonly textAlign: 'left' | 'center' | 'right'
+  /** Textarea padding, per-kind — see the PARITY GAP note above. `text` is 0
+   * to match TextShape's own `padding:0` body (fixes a ~4px enter-edit
+   * shift); note/geo keep 4 (their jump is vertical-centering, not padding). */
+  readonly padding: number
 }
 export function editorTextStyle(shape: Shape): EditorTextStyle {
   switch (shape.kind) {
     case 'note': {
       const s = noteStyle(shape)
-      return { fontFamily: s.fontFamily, fontSize: NOTE_LABEL_FONT_SIZE, lineHeight: NOTE_LABEL_LINE_HEIGHT, color: s.color, textAlign: NOTE_TEXT_ALIGN }
+      return { fontFamily: s.fontFamily, fontSize: NOTE_LABEL_FONT_SIZE, lineHeight: NOTE_LABEL_LINE_HEIGHT, color: s.color, textAlign: NOTE_TEXT_ALIGN, padding: 4 }
     }
     case 'text': {
       const s = textStyle(shape)
-      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, color: s.color, textAlign: s.textAlign }
+      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, color: s.color, textAlign: s.textAlign, padding: 0 } // padding:0 matches TextShape's own padding:0 body
     }
     case 'geo': {
       const s = geoStyle(shape)
-      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, color: s.labelColor, textAlign: GEO_LABEL_TEXT_ALIGN }
+      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, color: s.labelColor, textAlign: GEO_LABEL_TEXT_ALIGN, padding: 4 }
     }
     default:
       // Defensive only, never actually hit: TextEditor only ever mounts for
@@ -246,7 +271,7 @@ export function editorTextStyle(shape: Shape): EditorTextStyle {
       // itself gated on isTextCapableKind (note/text/geo) — see the module
       // header's TRIGGER LANDED section. A sane, undramatic fallback rather
       // than a thrown error if that invariant ever changes underneath us.
-      return { fontFamily: 'sans-serif', fontSize: 16, lineHeight: 1.35, color: '#000000', textAlign: 'left' }
+      return { fontFamily: 'sans-serif', fontSize: 16, lineHeight: 1.35, color: '#000000', textAlign: 'left', padding: 4 }
   }
 }
 
@@ -304,7 +329,7 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorP
           border: 'none',
           outline: 'none',
           background: 'transparent',
-          padding: 4,
+          padding: style.padding, // per-kind — see editorTextStyle's PARITY GAP note (text:0 matches TextShape; note/geo:4)
           fontFamily: style.fontFamily,
           fontSize: style.fontSize,
           lineHeight: style.lineHeight,
