@@ -55,12 +55,24 @@
 // `getColorValue(colors, 'black', 'frameText')` (FrameShapeUtil.tsx:94) =
 // defaultThemes.ts:154, `'#000000'`.
 //
-// HEADER GEOMETRY: v1's CSS (`node_modules/tldraw/tldraw.css:1237-1264`,
-// `.tl-frame-heading`/`.tl-frame-heading-hit-area`) pins the header above
-// the frame's top-left corner (`bottom: 100%`), `height: 24px`,
-// `font-size: 12px`, `padding: 0 6px` (`--tl-frame-padding-x: 6px` on
-// `.tl-frame-label`, tldraw.css:1270), `border-radius: 4px`
-// (`--tl-radius-1`, tldraw.css:24).
+// HEADER GEOMETRY: v1's `<FrameHeading>` pins the header ABOVE the frame's
+// top-left corner via the INLINE style `bottom: '100%'` in its `component()`
+// (FrameHeading.tsx:68 — NOT a tldraw.css rule; the `.tl-frame-heading`
+// block carries only sizing/overflow). Sizing DOES come from tldraw.css:
+// `height: 24px` (tldraw.css:1239), `font-size: 12px` (tldraw.css:1250),
+// `padding: 0 6px` (`--tl-frame-padding-x: 6px` on `.tl-frame-label`,
+// tldraw.css:1270), `border-radius: 4px` (`--tl-radius-1`, tldraw.css:24).
+//
+// HEADER X-OFFSET (parity — real ~7px shift): with `showColors` off, v1
+// shifts the header LEFT of the frame's left edge by `translateX(offsetX)`
+// with `offsetX = -7` — the `offsetX` prop is `showFrameColors ? -1 : -7`
+// (FrameShapeUtil.tsx:284) and is applied as the final `translateX(${offsetX}
+// px)` term of the header's transform (FrameHeading.tsx:69). We reproduce
+// this as `left: -7` (a plain negative offset — v1's other transform terms,
+// `translation`/`scale`, are rotation/zoom compensation that ShapeBody.tsx's
+// world transform + our 1:1 CSS pixels already handle). Without this the
+// header would sit flush at `left: 0`, a 7px diff the Seam F screenshot
+// harness would flag.
 //
 // LABEL TEXT: v1's `getText(shape)` returns `shape.props.name` verbatim
 // (FrameShapeUtil.tsx:235-237) — matching canvas-model's own frame props
@@ -89,6 +101,7 @@ const HEADER_HEIGHT = 24 // --tl-frame-height, tldraw.css:1239
 const HEADER_RADIUS = 4 // --tl-radius-1, tldraw.css:24
 const HEADER_FONT_SIZE = 12 // .tl-frame-heading, tldraw.css:1250
 const HEADER_PADDING_X = 6 // --tl-frame-padding-x, tldraw.css:1238
+const HEADER_OFFSET_X = -7 // FrameShapeUtil.tsx:284 offsetX (colors off), applied FrameHeading.tsx:69
 const DEFAULT_LABEL = 'Frame' // frameHelpers.ts's defaultEmptyAs(name, 'Frame')
 
 /** `shape.props.name`, defaulted to the literal `"Frame"` for an
@@ -123,7 +136,7 @@ export function FrameShape({ shape }: ShapeBodyProps) {
         data-shape-frame-header=""
         style={{
           position: 'absolute',
-          left: 0,
+          left: HEADER_OFFSET_X,
           bottom: '100%',
           height: HEADER_HEIGHT,
           maxWidth: '100%',

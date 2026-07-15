@@ -91,4 +91,18 @@ function frameShape(overrides: Partial<Shape> = {}): Shape {
   console.log('ok: FrameShape — chrome colors actually reach the rendered DOM, not just the pure helper')
 }
 
+// ============================================================================
+// 5. Header x-offset: with showColors off (this app's mode), v1 shifts the
+//    header left of the frame's left edge by translateX(-7)
+//    (FrameShapeUtil.tsx:284 offsetX, applied FrameHeading.tsx:69) — we
+//    reproduce this as left:-7px. A flush left:0 would register as a ~7px
+//    diff in the Seam F screenshot parity harness.
+// ============================================================================
+{
+  const shape = frameShape({ props: { name: 'Offset check' } })
+  const html = renderToStaticMarkup(createElement(FrameShape, { shape, snapshot: undefined as any, editorState: undefined as any }))
+  assert.ok(html.includes('left:-7px'), 'rendered header is shifted left by v1s -7px offset (showColors off), not flush at 0')
+  console.log('ok: FrameShape — header carries v1s -7px left offset (parity)')
+}
+
 console.log('ok: frame-shape (label from props.name with v1s "Frame" fallback, chrome-only body, no DOM-nested children)')
