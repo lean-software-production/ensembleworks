@@ -26,6 +26,7 @@ import { presentStore } from './file-viewer/presentStore'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
 import { getFrameId, getIdentity, getRoomId } from './identity'
 import { collectIcons, collectShapeUtils } from './kernel/plugin'
+import { installPinchGuard } from './kernel/pinchGuard'
 import { attachRoomHooks } from './kernel/roomHooks'
 import { plugins } from './plugins'
 import { components, uiOverrides } from './ui'
@@ -119,6 +120,11 @@ export function App() {
 			}
 		},
 	})
+
+	// App-wide pinch guard (spec: docs/superpowers/specs/
+	// 2026-07-15-pinch-zoom-guard-design.md) — stops trackpad pinches over
+	// fixed chrome from page-zooming the whole app.
+	useEffect(() => installPinchGuard(window), [])
 
 	// Connection telemetry (spec §2): configure the beacon once, flush on the way
 	// out (the last events are usually the interesting ones), and log every tldraw

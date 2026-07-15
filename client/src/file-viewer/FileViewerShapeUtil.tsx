@@ -25,6 +25,7 @@ import {
 } from 'tldraw'
 import { wm } from '../theme'
 import { presenterFor, type PresenterInfo } from './followLogic'
+import { forwardPinchToCanvas, parsePinchMessage } from './pinchForward'
 import { presentStore } from './presentStore'
 
 export interface FileViewerShapeProps {
@@ -49,6 +50,10 @@ export type FileViewerShape = TLBaseShape<'file-viewer', FileViewerShapeProps>
 
 const HEADER_HEIGHT = 28
 
+// DO NOT override canScroll() to true: pinch-forward (pinchForward.ts) relies
+// on tldraw's onWheel NOT swallowing wheel events over this shape while it's
+// being edited, which holds only while canScroll stays at ShapeUtil's default
+// false. The iframe scrolls its own document; tldraw never needs to.
 export class FileViewerShapeUtil extends BaseBoxShapeUtil<FileViewerShape> {
 	static override type = 'file-viewer' as const
 	static override props = fileViewerShapeProps
@@ -158,6 +163,14 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 			if (e.source !== iframeRef.current?.contentWindow) return
 			const d = e.data as { type?: unknown; fraction?: unknown } | null
 			if (!d || typeof d !== 'object') return
+			const pinch = parsePinchMessage(d)
+			if (pinch) {
+				// Pinch over the interactive viewer zooms the CANVAS (spec:
+				// 2026-07-15-pinch-zoom-guard-design.md) — replay on the iframe
+				// element so it bubbles into tldraw's own wheel/zoom path.
+				if (iframeRef.current) forwardPinchToCanvas(iframeRef.current, pinch)
+				return
+			}
 			if (d.type === 'ew-file-viewer-ready') {
 				// Presenter's own refresh/rev reload → re-apply the last fraction so
 				// the reloaded document lands where the presenter left it (spec §5).
