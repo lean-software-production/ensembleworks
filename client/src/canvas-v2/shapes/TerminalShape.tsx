@@ -43,8 +43,25 @@
  * handler on the title bar (one incremental TranslateShapes per pointermove,
  * matching canvas-editor/src/tools/select.ts's onDragging cadence). Both are
  * no-ops when `props.dispatch` is absent (goldens/fakes that omit it),
- * exactly like `getText` elsewhere in this file's sibling shapes. KEPT: xterm mounted once per
- * `sessionId`, WS connect with backoff reconnect, the shared deterministic
+ * exactly like `getText` elsewhere in this file's sibling shapes.
+ *
+ * D6 FINDING (fixed alongside the two-client E2E that found it): the render
+ * function's root previously carried `overflow: 'hidden'` directly, which
+ * CLIPPED the title bar entirely — it's positioned via `bottom: '100%'`, i.e.
+ * OUTSIDE the root's own [0,h] box — making the whole rename/drag feature
+ * unclickable in every real browser (not a test-rig artifact: confirmed via
+ * `document.elementFromPoint` at the title bar's own reported center
+ * resolving to an ANCESTOR, not the title bar, in real Chromium). The D3 unit
+ * tests never caught this because they only exercise the PURE intent
+ * builders (no DOM — see the TEST-HARNESS LIMITATION note in
+ * TerminalShape.test.ts), and no test before this one ever actually clicked
+ * the rendered title bar. Fixed by moving the clip (`overflow: hidden` +
+ * matching `borderRadius`) onto a dedicated wrapper around just the xterm
+ * body/overlay/hint, sibling to the (now unclipped) title bar — see that
+ * wrapper's own comment below.
+ *
+ * KEPT: xterm mounted once per `sessionId`, WS connect with backoff
+ * reconnect, the shared deterministic
  * grid (measured once per mount — the legacy file's async web-font
  * remeasure is dropped for the same reason: it only refines an already-good
  * boot estimate), term.onData -> ws input forwarding, the Shift/Alt+Enter
@@ -531,7 +548,17 @@ export function TerminalShape({ shape, editorState, dispatch: dispatchIntents }:
         height: h,
         position: 'relative',
         borderRadius: 4,
-        overflow: 'hidden',
+        // NOT `overflow: 'hidden'` here (a Task D6 fix — see the module
+        // header's D6 FINDING): the title bar below is positioned via
+        // `bottom: 100%`, i.e. entirely ABOVE this box's own [0,h] range —
+        // an `overflow: hidden` on THIS element would clip it out of the
+        // paintable/hit-testable area ENTIRELY, in every real browser, not
+        // just this test rig (confirmed by a real-Chromium E2E run: the
+        // title bar reported "visible" by a bounding-box check yet was
+        // unclickable — `document.elementFromPoint` at its own center
+        // resolved to an ancestor, not the title bar). The rounded-corner
+        // clip that `overflow: hidden` existed for still applies — just to
+        // the terminal BODY's own wrapper below, not to this whole shape.
         background: '#fff',
         border: `1px solid ${mode === 'focused' ? wm.sealBlue : wm.ink}`,
         boxShadow: mode === 'focused' ? `0 0 0 1.5px ${wm.sealBlue}, ${wm.shadowPaper}` : wm.shadowPaper,
@@ -608,52 +635,60 @@ export function TerminalShape({ shape, editorState, dispatch: dispatchIntents }:
           </div>
         )}
       </div>
-      <div
-        ref={containerRef}
-        onPointerDown={swallow ? (e) => e.stopPropagation() : undefined}
-        onKeyDown={swallow ? (e) => e.stopPropagation() : undefined}
-        style={{
-          position: 'absolute',
-          inset: 0,
-          padding: '10px 20px 4px 12px', // KEEP IN SYNC with grid.ts's TERMINAL_PAD
-          opacity: conn.status === 'open' ? 1 : 0.28,
-          pointerEvents: swallow ? 'auto' : 'none',
-        }}
-      />
-      {conn.status !== 'open' && (
+      {/* The terminal BODY's own clip — carries the `overflow: hidden` +
+        * matching `borderRadius` the root used to have (see the root's own
+        * style comment above for why it moved here): this wrapper is sized
+        * exactly like the root (`inset: 0`), so xterm/the status overlay/the
+        * idle hint are clipped to the rounded box exactly as before, while
+        * the title bar (a SIBLING, outside this wrapper) is not. */}
+      <div style={{ position: 'absolute', inset: 0, borderRadius: 4, overflow: 'hidden' }}>
         <div
+          ref={containerRef}
+          onPointerDown={swallow ? (e) => e.stopPropagation() : undefined}
+          onKeyDown={swallow ? (e) => e.stopPropagation() : undefined}
           style={{
             position: 'absolute',
             inset: 0,
-            display: 'grid',
-            placeItems: 'center',
-            background: 'rgba(250,250,247,0.45)',
-            color: conn.status === 'ended' ? wm.crit : wm.inkMuted,
-            fontFamily: wm.mono,
-            fontSize: 11,
-            fontWeight: 700,
-            textTransform: 'uppercase',
-            letterSpacing: 1,
-            pointerEvents: 'none',
+            padding: '10px 20px 4px 12px', // KEEP IN SYNC with grid.ts's TERMINAL_PAD
+            opacity: conn.status === 'open' ? 1 : 0.28,
+            pointerEvents: swallow ? 'auto' : 'none',
           }}
-        >
-          {overlayText}
-        </div>
-      )}
-      {mode === 'idle' && (
-        <div
-          style={{
-            position: 'absolute',
-            bottom: 4,
-            right: 6,
-            fontSize: 10,
-            color: wm.inkSubtle,
-            pointerEvents: 'none',
-          }}
-        >
-          double-click to type
-        </div>
-      )}
+        />
+        {conn.status !== 'open' && (
+          <div
+            style={{
+              position: 'absolute',
+              inset: 0,
+              display: 'grid',
+              placeItems: 'center',
+              background: 'rgba(250,250,247,0.45)',
+              color: conn.status === 'ended' ? wm.crit : wm.inkMuted,
+              fontFamily: wm.mono,
+              fontSize: 11,
+              fontWeight: 700,
+              textTransform: 'uppercase',
+              letterSpacing: 1,
+              pointerEvents: 'none',
+            }}
+          >
+            {overlayText}
+          </div>
+        )}
+        {mode === 'idle' && (
+          <div
+            style={{
+              position: 'absolute',
+              bottom: 4,
+              right: 6,
+              fontSize: 10,
+              color: wm.inkSubtle,
+              pointerEvents: 'none',
+            }}
+          >
+            double-click to type
+          </div>
+        )}
+      </div>
     </div>
   )
 }

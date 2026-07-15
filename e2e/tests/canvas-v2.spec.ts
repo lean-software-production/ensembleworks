@@ -14,7 +14,8 @@
 // events, real WS sync through a real DocumentActor.
 import { test, expect, API, identityState } from '../lib/fixtures'
 import { shape } from '../lib/seed'
-import { ANCHOR, createNoteAt, viewportBox, waitForBoot } from '../lib/canvas-v2'
+import { ANCHOR, createNoteAt, seedFileViewer, seedTerminal, setCameraZoom, viewportBox, waitForBoot } from '../lib/canvas-v2'
+import type { Page } from '@playwright/test'
 
 // ============================================================================
 // Failure artifact (design's C9 session-replay idea, HONEST v1 SCOPE): the
@@ -690,4 +691,275 @@ test('canvas-v2 new engine: cancellation — Escape/blur/pointercancel abandon a
 	await page.mouse.up() // the real pointer is still physically down; release it for a clean end-of-test state
 	await expect(page.locator('[data-shape-kind="note"]')).toHaveCount(0)
 	await expect.poll(shapeCount).toBe(0)
+})
+
+// ============================================================================
+// TASK D6 — two-client embed write-path E2E through /sync/v2, the final
+// Seam D unit. Proves the D2 dispatch channel (ShapeBodyProps.dispatch ->
+// editor.applyAll) + the D3 terminal title-rename/title-drag features
+// end-to-end across two REAL browser clients, closing the carried finding
+// from D3's own completion notes ("proven only via a fake-dispatch-spy unit
+// test — never over a real two-client /sync/v2 session").
+//
+// SEEDING: a v2 room's shapes live in its Loro doc (window.__ew.doc), a
+// completely disjoint plane from the OLD tldraw store `/api/canvas/shape`
+// (lib/seed.ts's `shape()`) writes — see this file's own module header on
+// the two disjoint "v2" features. There is also no live terminal gateway in
+// this rig to drive a real click-to-create through a terminal tool. So
+// lib/canvas-v2.ts's `seedTerminal`/`seedFileViewer` seed directly through
+// the doc (the SAME `putShape`+`commit()` mechanism `seedGrid` already uses
+// for the H3 perf rig) — confirmed, before writing this spec, that a
+// doc-level seed on client A really does sync to a from-scratch client B
+// (not just render locally): a throwaway two-client smoke case proved this
+// class of seeding propagates over the real WS/actor path identically to a
+// pointer-driven CreateShape.
+//
+// GATEWAY-LESS RENDERING: also confirmed before writing this spec (a
+// one-off Playwright run, screenshotted) that TerminalShape mounts its FULL
+// title bar — including the rename input and drag handler — with NO live
+// terminal gateway present; the only visible effect of the missing gateway
+// is the "Connecting…"/"Connection lost — reconnecting" overlay over the
+// (blank) xterm body. `props.title` is a plain doc prop
+// (TerminalShape.tsx's `terminalContentFrom`), rendered/synced independent
+// of the terminal's own connection state — exactly what makes the title
+// bar drivable in this rig at all.
+// ============================================================================
+
+test('canvas-v2 new engine: terminal title-bar write-back through /sync/v2 (D6) — rename propagates to B, Escape discards without propagating, title-drag at non-1 zoom scales by the zoom, and a stationary double-click never moves the shape while Backspace/Delete in the rename input edit text only', async ({
+	page,
+	browser,
+}) => {
+	test.setTimeout(60_000)
+	const room = 'v2-e2e-terminal-writeback'
+	expect(room).not.toBe('team')
+
+	await page.goto(`/?room=${room}&engine=v2`)
+	await waitForBoot(page)
+
+	// World coordinates chosen so the title bar (rendered ABOVE the box via
+	// `bottom: 100%` — TerminalShape.tsx) and the whole drag path stay safely
+	// inside the 1280x720 viewport even after zooming to 2x below (screen =
+	// world * z at this fresh session's camera.xy = {0,0} — canvas-editor/src/
+	// input.ts's NORMATIVE camera convention).
+	const termId = await seedTerminal(page, { x: 200, y: 260, w: 360, h: 220, title: 'e2e-term' })
+	const titlebarA = page.locator(`[data-canvas-v2-terminal-titlebar="${termId}"]`)
+	await expect(titlebarA).toBeVisible({ timeout: 10_000 })
+
+	const ctxB = await browser.newContext({
+		storageState: identityState('E2E Two', 'e2e-user-0000-0000-0002'),
+		viewport: { width: 1280, height: 720 },
+	})
+	try {
+		const pageB = await ctxB.newPage()
+		pageB.on('dialog', (d) => {
+			throw new Error(`unexpected dialog (identity fixture broken?): ${d.message()}`)
+		})
+		await pageB.goto(`/?room=${room}&engine=v2`)
+		await waitForBoot(pageB)
+
+		const shapeB = pageB.locator(`[data-shape-id="${termId}"]`)
+		const titlebarB = pageB.locator(`[data-canvas-v2-terminal-titlebar="${termId}"]`)
+		await expect(shapeB).toBeVisible({ timeout: 10_000 })
+		await expect(titlebarB).toContainText('e2e-term')
+
+		const titleOf = (p: Page) => p.evaluate((id) => (window as any).__ew.doc.getShape(id)?.props?.title as string | undefined, termId)
+		const positionOf = (p: Page) =>
+			p.evaluate((id) => {
+				const s = (window as any).__ew.doc.getShape(id)
+				return s ? { x: s.x, y: s.y } : null
+			}, termId)
+
+		// ------------------------------------------------------------------
+		// 1) CORE PIPE (bounds DoD #6): double-click the title -> type -> Enter
+		// commits a REAL UpdateProps intent (dispatch -> editor.applyAll ->
+		// doc.commit -> /sync/v2 -> peer). A real native `dblclick` — unlike
+		// the canvas's own double-click-to-edit FSM, TerminalShape's title bar
+		// listens for a plain browser `onDoubleClick` (TerminalShape.tsx).
+		// ------------------------------------------------------------------
+		await titlebarA.dblclick()
+		const inputA1 = titlebarA.locator('input')
+		await expect(inputA1).toBeVisible({ timeout: 5_000 })
+		await inputA1.fill('renamed-by-a')
+		await inputA1.press('Enter') // onKeyDown -> e.currentTarget.blur() -> onBlur -> commitTitleRename (commits)
+		await expect(inputA1).toBeHidden({ timeout: 5_000 })
+
+		// A's OWN doc: the UpdateProps intent actually landed.
+		await expect.poll(() => titleOf(page), { timeout: 5_000 }).toBe('renamed-by-a')
+		await expect(titlebarA).toContainText('renamed-by-a')
+
+		// B converges — the doc's title equals the new value on BOTH clients,
+		// proving the FULL dispatch -> UpdateProps -> /sync/v2 -> peer pipe,
+		// not just that A's own local state changed.
+		await expect.poll(() => titleOf(pageB), { timeout: 10_000 }).toBe('renamed-by-a')
+		await expect(titlebarB).toContainText('renamed-by-a')
+
+		// ------------------------------------------------------------------
+		// 2) ESCAPE DISCARDS (the D3 correct-by-construction fix, now
+		// behaviorally confirmed): double-click -> type a change -> Escape ->
+		// title UNCHANGED on A, and (proven below, once phase 3's drag has
+		// shipped a message strictly AFTER this one) nothing ever reaches B.
+		// ------------------------------------------------------------------
+		await titlebarA.dblclick()
+		const inputA2 = titlebarA.locator('input')
+		await expect(inputA2).toBeVisible({ timeout: 5_000 })
+		await inputA2.fill('should-not-land')
+		await page.keyboard.press('Escape') // discardRef=true -> blur -> commitTitleRename discards, dispatches nothing
+		await expect(inputA2).toBeHidden({ timeout: 5_000 })
+		await expect(titlebarA).toContainText('renamed-by-a') // unchanged, not "should-not-land"
+		expect(await titleOf(page)).toBe('renamed-by-a')
+
+		// ------------------------------------------------------------------
+		// 3) TITLE-DRAG AT NON-1 ZOOM: world delta = screenDelta / z (D6's
+		// carried drag-at-zoom requirement). setCameraZoom dispatches a REAL
+		// SetCamera intent against A's own Editor — editor-local state, never
+		// synced to the CRDT/peer (editor.ts's EditorState doc comment), so
+		// B's own camera stays the default z=1 throughout.
+		// ------------------------------------------------------------------
+		const rectBeforeZoom = await titlebarA.boundingBox()
+		if (!rectBeforeZoom) throw new Error('title bar has no bounding box before zoom')
+		await setCameraZoom(page, 2)
+		// Wait for the re-render: camera.z=2 with camera.xy unchanged doubles
+		// every on-screen position measured from the world origin.
+		await expect
+			.poll(async () => {
+				const r = await titlebarA.boundingBox()
+				return r ? Math.round(r.x) : null
+			}, { timeout: 5_000 })
+			.not.toBe(Math.round(rectBeforeZoom.x))
+
+		const p0 = await positionOf(page)
+		if (!p0) throw new Error('terminal shape missing from A doc before drag')
+
+		const rectA = await titlebarA.boundingBox()
+		if (!rectA) throw new Error('title bar has no bounding box at z=2')
+		const start = { x: rectA.x + rectA.width / 2, y: rectA.y + rectA.height / 2 }
+		// A clean, evenly-halving screen delta so the expected WORLD delta
+		// (screenDelta / 2) is an exact integer, not a rounded approximation.
+		const screenDelta = { x: 200, y: 80 }
+		const end = { x: start.x + screenDelta.x, y: start.y + screenDelta.y }
+		await page.mouse.move(start.x, start.y)
+		await page.mouse.down()
+		await page.mouse.move(start.x + screenDelta.x / 2, start.y + screenDelta.y / 2, { steps: 4 }) // crosses TITLE_DRAG_THRESHOLD
+		await page.mouse.move(end.x, end.y, { steps: 4 })
+		await page.mouse.up()
+
+		const expectedWorldDelta = { x: screenDelta.x / 2, y: screenDelta.y / 2 } // z = 2 -> dx = screenDx / z
+
+		await expect
+			.poll(() => positionOf(page), { timeout: 5_000 })
+			.toMatchObject({
+				x: expect.closeTo(p0.x + expectedWorldDelta.x, 0),
+				y: expect.closeTo(p0.y + expectedWorldDelta.y, 0),
+			})
+		const pAfterDrag = await positionOf(page)
+		if (!pAfterDrag) throw new Error('terminal shape missing from A doc after drag')
+
+		// Proves the ZOOM-SCALING specifically, not merely "it moved": the raw
+		// screen delta (200px) is DOUBLE the actual world delta the doc holds.
+		expect(Math.round(pAfterDrag.x - p0.x)).toBe(screenDelta.x / 2)
+		expect(Math.round(pAfterDrag.x - p0.x)).not.toBe(screenDelta.x)
+
+		// B converges to the SAME world position — a plain TranslateShapes
+		// doc mutation ships over the wire like any other, regardless of the
+		// SENDING client's own (never-synced) camera zoom.
+		await expect
+			.poll(() => positionOf(pageB), { timeout: 10_000 })
+			.toMatchObject({ x: expect.closeTo(pAfterDrag.x, 0), y: expect.closeTo(pAfterDrag.y, 0) })
+
+		// This message shipped strictly AFTER phase 2's Escape-discard attempt
+		// (same WS connection, FIFO order) — so by the time B has converged to
+		// THIS drag, phase 2's discarded rename would certainly have arrived
+		// too, had it ever been dispatched. It never was: B's title is still
+		// the real committed value from phase 1, not "should-not-land".
+		expect(await titleOf(pageB)).toBe('renamed-by-a')
+		await expect(titlebarB).toContainText('renamed-by-a')
+
+		// ------------------------------------------------------------------
+		// 4) 4px THRESHOLD + stopPropagation: a STATIONARY double-click opens
+		// rename without moving the shape (both clicks land at the same point,
+		// same as every dblclick() above — this makes it explicit), and
+		// Backspace/Delete inside the rename input edit the title text, never
+		// reach CanvasV2App's global-shortcut handler that would otherwise
+		// delete the SHAPE (D3's stopPropagation guard — TerminalShape.tsx's
+		// input onKeyDown: "Swallow EVERY keydown").
+		// ------------------------------------------------------------------
+		const pBeforeStationary = await positionOf(page)
+		await titlebarA.dblclick()
+		const inputA3 = titlebarA.locator('input')
+		await expect(inputA3).toBeVisible({ timeout: 5_000 })
+		expect(await positionOf(page)).toEqual(pBeforeStationary) // the two clicks' own jitter never crossed TITLE_DRAG_THRESHOLD
+
+		const draftBefore = await inputA3.inputValue()
+		await inputA3.press('Backspace')
+		await expect(inputA3).toHaveValue(draftBefore.slice(0, -1)) // a real character was edited...
+		await inputA3.press('Delete') // ...and Delete is equally swallowed (no-op at end-of-text, but must not reach the shape)
+
+		// ...never the SHAPE: still exactly one terminal, unmoved. `[data-shape-kind]`
+		// (not a bare `[data-shape-id]`) — same pitfall as the delete/undo
+		// cases above: this note-equivalent selection outline would otherwise
+		// double-match if the terminal were ever selected (it isn't here, but
+		// the scoped selector costs nothing and matches house convention).
+		await expect(page.locator(`[data-shape-id="${termId}"][data-shape-kind]`)).toHaveCount(1)
+		expect(await positionOf(page)).toEqual(pBeforeStationary)
+
+		await page.keyboard.press('Escape') // discard this last edit too, tidy end state
+		await expect(inputA3).toBeHidden({ timeout: 5_000 })
+	} finally {
+		await ctxB.close()
+	}
+})
+
+// ----------------------------------------------------------------------------
+// D6 "if cheap" extra: the file-viewer's `rev` (D5) is the SAME
+// shape-agnostic UpdateProps wire path the terminal case above already
+// proves — this case exists only to confirm it's not terminal-specific, not
+// to re-prove the pipe from scratch.
+//
+// EXPLICITLY OUT OF SCOPE for this rig (LiveKit/iframe/capture-dependent,
+// not drivable without real media — see this unit's own task text): the
+// file-viewer's scroll-position peer-follow, the screenshare stillUrl
+// stamp-back, and the screenshare aspect relock. Those remain
+// dogfood-room/manual verification only.
+// ----------------------------------------------------------------------------
+
+test('canvas-v2 new engine: file-viewer refresh bumps the shared `rev` doc prop through /sync/v2 (D5, confirmed as a second UpdateProps consumer alongside D6\'s terminal case)', async ({
+	page,
+	browser,
+}) => {
+	test.setTimeout(30_000)
+	const room = 'v2-e2e-fileviewer-rev'
+	expect(room).not.toBe('team')
+
+	await page.goto(`/?room=${room}&engine=v2`)
+	await waitForBoot(page)
+
+	const fvId = await seedFileViewer(page, { x: 200, y: 260 })
+	const revOf = (p: Page) => p.evaluate((id) => (window as any).__ew.doc.getShape(id)?.props?.rev as number | undefined, fvId)
+	await expect.poll(() => revOf(page), { timeout: 5_000 }).toBe(0)
+
+	const ctxB = await browser.newContext({
+		storageState: identityState('E2E Two', 'e2e-user-0000-0000-0002'),
+		viewport: { width: 1280, height: 720 },
+	})
+	try {
+		const pageB = await ctxB.newPage()
+		pageB.on('dialog', (d) => {
+			throw new Error(`unexpected dialog (identity fixture broken?): ${d.message()}`)
+		})
+		await pageB.goto(`/?room=${room}&engine=v2`)
+		await waitForBoot(pageB)
+		await expect(pageB.locator(`[data-shape-id="${fvId}"]`)).toBeVisible({ timeout: 10_000 })
+		await expect.poll(() => revOf(pageB), { timeout: 10_000 }).toBe(0)
+
+		// The refresh button (HeaderButton, title="Refresh (reloads for
+		// everyone)") calls dispatch([fileViewerRefreshIntent(...)]) on click —
+		// a plain UpdateProps, exactly like the terminal rename above.
+		const refreshBtn = page.locator(`[data-shape-id="${fvId}"] button[title="Refresh (reloads for everyone)"]`)
+		await refreshBtn.click()
+
+		await expect.poll(() => revOf(page), { timeout: 5_000 }).toBe(1)
+		await expect.poll(() => revOf(pageB), { timeout: 10_000 }).toBe(1)
+	} finally {
+		await ctxB.close()
+	}
 })

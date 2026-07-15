@@ -63,6 +63,105 @@ export async function createNoteAt(page: Page, box: { x: number; y: number }): P
  * (a pointerdown that lands ON a shape starts a translate-drag instead of a
  * marquee — canvas-editor/src/tools/select.ts's FSM) should pass a
  * non-zero `offset` so the screen origin stays clear of every seeded shape. */
+/** Task D6: seeds ONE `terminal` shape directly through the live doc (the
+ * SAME `putShape` + `commit()` mechanism as `seedGrid` above), at a SCREEN
+ * point (identity-camera 1:1 with world — see `seedGrid`'s COORDINATES
+ * note). This is the ONLY way to get a terminal into a v2 room's doc for
+ * this rig: `/api/canvas/shape` (lib/seed.ts's `shape()`) writes the OLD
+ * tldraw store — a disjoint plane from this room's Loro doc (see
+ * tests/canvas-v2.spec.ts's own module header on the two disjoint "v2"
+ * features) — and there is no live terminal gateway in this rig to drive a
+ * real click-to-create through the terminal tool. `props.title` is a plain
+ * doc prop (TerminalShape.tsx's `terminalContentFrom`), rendered and synced
+ * with no live gateway/xterm connection required — the title bar, rename
+ * input, and drag handler all mount regardless of connection state (verified
+ * before this unit's spec was written: the terminal shape renders its title
+ * bar with no gateway present, just a "Connecting…"/"reconnecting" overlay
+ * over the xterm body). Requires the session to already be booted
+ * (waitForBoot). Returns the created shape's id. */
+export async function seedTerminal(
+	page: Page,
+	opts: { x: number; y: number; w?: number; h?: number; title?: string; sessionId?: string },
+): Promise<string> {
+	const id = `shape:e2e-terminal-${Math.random().toString(36).slice(2, 10)}`
+	await page.evaluate(
+		({ id, x, y, w, h, title, sessionId }) => {
+			const ew = (window as unknown as { __ew: { editor: { pageId: string }; doc: { putShape(s: unknown): void; commit(): void } } }).__ew
+			ew.doc.putShape({
+				id,
+				kind: 'terminal',
+				parentId: ew.editor.pageId,
+				index: 'a1',
+				x,
+				y,
+				rotation: 0,
+				isLocked: false,
+				opacity: 1,
+				meta: {},
+				props: { w, h, sessionId, title, fontSize: 16 },
+			})
+			ew.doc.commit()
+		},
+		{ id, x: opts.x, y: opts.y, w: opts.w ?? 480, h: opts.h ?? 320, title: opts.title ?? 'e2e-terminal', sessionId: opts.sessionId ?? 'e2e-term' },
+	)
+	return id
+}
+
+/** Task D6 (optional file-viewer rev-bump coverage): seeds ONE `file-viewer`
+ * shape the same doc-level way as `seedTerminal` above. `path` need not
+ * resolve to a real file — the `rev`-bump write-path (FileViewerShape.tsx's
+ * `fileViewerRefreshIntent`) is what this proves, not the iframe's actual
+ * content load. Returns the created shape's id. */
+export async function seedFileViewer(page: Page, opts: { x: number; y: number; w?: number; h?: number; path?: string; title?: string }): Promise<string> {
+	const id = `shape:e2e-fileviewer-${Math.random().toString(36).slice(2, 10)}`
+	await page.evaluate(
+		({ id, x, y, w, h, path, title }) => {
+			const ew = (window as unknown as { __ew: { editor: { pageId: string }; doc: { putShape(s: unknown): void; commit(): void } } }).__ew
+			ew.doc.putShape({
+				id,
+				kind: 'file-viewer',
+				parentId: ew.editor.pageId,
+				index: 'a1',
+				x,
+				y,
+				rotation: 0,
+				isLocked: false,
+				opacity: 1,
+				meta: {},
+				props: { w, h, path, title, rev: 0 },
+			})
+			ew.doc.commit()
+		},
+		{ id, x: opts.x, y: opts.y, w: opts.w ?? 720, h: opts.h ?? 540, path: opts.path ?? 'e2e-smoke.txt', title: opts.title ?? 'e2e-file-viewer' },
+	)
+	return id
+}
+
+/** Task D6 (the drag-at-zoom case): dispatches a `SetCamera` intent directly
+ * against THIS client's own Editor (bypassing the wheel-driven zoom gesture
+ * canvas-editor/src/camera.ts's `applyWheel` normally computes from) —
+ * `editor.applyAll` (the SAME call `ShapeBodyProps.dispatch` itself is —
+ * CanvasV2App.tsx's `dispatch = useCallback((intents) => editor.applyAll(intents), …)`)
+ * is exposed on `window.__ew.editor`, so this is a real, in-contract camera
+ * change, not a DOM/CSS hack. `camera` is editor-LOCAL state (never
+ * persisted to the CRDT — editor.ts's EditorState doc comment), so this ONLY
+ * affects the calling page's own rendering/hit-testing; a peer's camera is
+ * unaffected — exactly the per-client independence a real user's own
+ * scroll-zoom would have. */
+export async function setCameraZoom(page: Page, z: number): Promise<void> {
+	await page.evaluate((z) => {
+		const ew = (
+			window as unknown as {
+				__ew: { editor: { get(): { camera: { x: number; y: number; z: number } } }; doc: unknown } & {
+					editor: { applyAll(intents: readonly unknown[]): void }
+				}
+			}
+		).__ew
+		const cam = ew.editor.get().camera
+		ew.editor.applyAll([{ type: 'SetCamera', x: cam.x, y: cam.y, z }])
+	}, z)
+}
+
 export async function seedGrid(page: Page, n: number, offset = 0): Promise<void> {
 	await page.evaluate(
 		({ count, offset }) => {
