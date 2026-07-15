@@ -320,24 +320,35 @@ export class Editor {
 
   // Replay a pre-computed InverseOp batch through CanvasDoc's public
   // mutators ONLY (never a raw tree op, never UndoManager — see the
-  // InverseOp doc comment), then ONE commit for the whole batch. Every op
-  // variant here rides a CanvasDoc contract that is ALREADY tolerant of a
-  // vanished target (putShape upserts / repositions tolerantly,
-  // deleteShape/setText/deleteBinding are silent no-ops on an unknown id,
-  // putBinding is a plain upsert) — so, same as applyOne's mutation
-  // intents, this never throws mid-batch on a target that vanished between
-  // the original apply and this undo/redo (e.g. a remote peer independently
-  // deleted the same shape in the meantime).
+  // InverseOp doc comment), then ONE commit for the whole batch.
+  //
+  // TOLERANCE CONTRACT (mirrors applyAll's — a throw mid-replay would leak
+  // this batch's earlier, already-applied inverse ops into the NEXT
+  // unrelated commit, attributed to the wrong batch): each op is guarded
+  // and SKIPPED on failure. Most variants are already no-throw by contract
+  // (deleteShape/setText/deleteBinding silent-no-op on an unknown id;
+  // putBinding is a plain upsert) — but `putShape` is NOT: CanvasDoc.putShape
+  // THROWS on Loro's native cycle guard when `shape.parentId` names a
+  // CURRENT descendant of the node (loro-canvas-doc.ts putShape/placeInTree).
+  // A ReparentShapes inverse replays a parentId that differs from the
+  // shape's live parent, so a concurrent remote reparent can make that
+  // inverse un-appliable (e.g. local moved X A->B, a remote peer then moved
+  // A under X; undoing X back under A would close a cycle). The forward
+  // ReparentShapes path already tolerates exactly this (canReparent
+  // pre-check + try/catch around doc.reparent); the inverse gets the same
+  // treatment here — skip the un-appliable op, keep replaying the rest.
   private replay(ops: readonly InverseOp[]): void {
     if (ops.length === 0) return
     for (const op of ops) {
-      switch (op.op) {
-        case 'putShape': this.doc.putShape(op.shape); break
-        case 'deleteShape': this.doc.deleteShape(op.id); break
-        case 'setText': this.doc.setText(op.id, op.text); break
-        case 'putBinding': this.doc.putBinding(op.binding); break
-        case 'deleteBinding': this.doc.deleteBinding(op.id); break
-      }
+      try {
+        switch (op.op) {
+          case 'putShape': this.doc.putShape(op.shape); break
+          case 'deleteShape': this.doc.deleteShape(op.id); break
+          case 'setText': this.doc.setText(op.id, op.text); break
+          case 'putBinding': this.doc.putBinding(op.binding); break
+          case 'deleteBinding': this.doc.deleteBinding(op.id); break
+        }
+      } catch { /* un-appliable inverse (e.g. a cycle from concurrent remote churn) — skip, same as the forward path */ }
     }
     this.doc.commit()
   }
@@ -502,33 +513,46 @@ export class Editor {
         // CASCADE-AWARE INVERSE (Task B1's flagged correctness trap):
         // deleteShape cascades to the shape's ENTIRE subtree (see
         // CanvasDoc.deleteShape's contract — a frame's children die with
-        // it), so the inverse of ONE id is NOT "recreate one shape" — it's
-        // "recreate the whole subtree, parents before children". For each
-        // id, collectSubtreeParentFirst snapshots the id's full pre-image
-        // subtree (BFS from the root, so a parent always appears before its
-        // children) BEFORE this call's doc.deleteShape — undo replays those
-        // putShape ops in that SAME order, so by the time a child's
-        // putShape runs, its parent already exists in the tree again (no
-        // reliance on putShape's "parent not yet loaded" root-fallback
-        // tolerance). Processed sequentially per id (not batch-snapshotted
-        // up front) to mirror this loop's OWN pre-existing behavior exactly:
-        // if an earlier id in this same intent already cascaded away a
-        // later id (e.g. ids = [frame, child-of-frame]), that later id's
-        // getShape resolves to nothing and it's skipped here — same as
-        // before this change, and correctly so (no double-capture, no
-        // double-delete).
-        let mutated = false
-        const undo: InverseOp[] = []
-        const redo: InverseOp[] = []
+        // it), so the inverse of a delete is NOT "recreate one shape" — it's
+        // "recreate every deleted shape, PARENTS BEFORE CHILDREN". If a
+        // child's putShape ran before its parent existed, placeInTree would
+        // fall through to its detach-to-root branch (loro-canvas-doc.ts):
+        // the child would come back with the correct parentId DATA but
+        // PHYSICALLY at root — a split-brain where re-deleting the parent no
+        // longer cascades the child away.
+        //
+        // Two collapses make parent-before-child hold ACROSS ids, not just
+        // within one subtree (the cross-id ordering bug this rewrite fixes —
+        // `intent.ids` is user multi-select order, e.g. [child, frame], NOT
+        // depth-sorted):
+        //   1. SNAPSHOT ALL, THEN DELETE: every requested id's subtree is
+        //      captured BEFORE any deletion, so a cascade from one id can't
+        //      hide a shape from a later id's collect. The union is deduped
+        //      by shape id (a child named explicitly AND covered by its
+        //      frame's cascade is one entry).
+        //   2. GLOBAL DEPTH SORT: the deduped union is ordered by how many
+        //      of its ancestors are also in the set (orderParentBeforeChild),
+        //      so a parent always precedes every one of its descendants
+        //      regardless of the order they were requested in.
+        const toRestore = new Map<string, Shape>()
+        const resolvedIds: string[] = []
         for (const id of intent.ids) {
           if (!this.doc.getShape(id)) continue
-          const subtree = collectSubtreeParentFirst(this.doc, id)
-          this.doc.deleteShape(id)
-          mutated = true
-          for (const s of subtree) undo.push({ op: 'putShape', shape: s })
-          redo.push({ op: 'deleteShape', id })
+          resolvedIds.push(id)
+          for (const s of collectSubtreeParentFirst(this.doc, id)) {
+            if (!toRestore.has(s.id)) toRestore.set(s.id, s)
+          }
         }
-        return { state, docMutated: mutated, stateChanged: false, undo, redo }
+        if (resolvedIds.length === 0) return { state, docMutated: false, stateChanged: false }
+        for (const id of resolvedIds) this.doc.deleteShape(id)
+        const undo: InverseOp[] = orderParentBeforeChild([...toRestore.values()], toRestore)
+          .map((shape) => ({ op: 'putShape', shape }))
+        // redo re-deletes only the originally-requested (resolved) ids; each
+        // deleteShape cascades its subtree again, so descendants need no
+        // explicit redo op (and a redo op for an id an earlier cascade
+        // already removed is a harmless silent no-op).
+        const redo: InverseOp[] = resolvedIds.map((id) => ({ op: 'deleteShape', id }))
+        return { state, docMutated: true, stateChanged: false, undo, redo }
       }
 
       case 'SetText': {
@@ -715,6 +739,37 @@ function collectSubtreeParentFirst(doc: CanvasDoc, rootId: string): Shape[] {
     }
   }
   return result
+}
+
+// Order `shapes` PARENT-BEFORE-CHILD globally (DeleteShapes's undo helper —
+// the cross-id ordering fix): a shape is placed after every one of its
+// ancestors that is ALSO in the set. Keyed by depth = the number of a
+// shape's ancestors present in `byId` (its own parentId chain, counting only
+// hops that stay inside the set — an ancestor outside the set, e.g. the page
+// or an undeleted frame, is a "root" for ordering and stops the count). A
+// parent always has strictly smaller depth than any of its descendants, so a
+// stable ascending sort by depth guarantees parent-before-child; siblings
+// (equal depth) keep their relative order, which is irrelevant to
+// correctness. Cycle-safe: a `visited` set stops the climb if the parentId
+// chain ever repeats (a pre-existing malformed cycle), matching the
+// visited-guard discipline dedupeAncestorOverlap/geometry.ts use. O(n·depth),
+// same editor-interaction-scale trade-off as collectSubtreeParentFirst above.
+function orderParentBeforeChild(shapes: Shape[], byId: ReadonlyMap<string, Shape>): Shape[] {
+  const depthOf = (s: Shape): number => {
+    let depth = 0
+    const visited = new Set<string>([s.id])
+    let parent = byId.get(s.parentId)
+    while (parent && !visited.has(parent.id)) {
+      depth += 1
+      visited.add(parent.id)
+      parent = byId.get(parent.parentId)
+    }
+    return depth
+  }
+  // Array.prototype.sort is stable in every JS engine since ES2019, so
+  // equal-depth siblings keep insertion order (no correctness dependence on
+  // it — noted only so a reader isn't surprised by the deterministic result).
+  return shapes.map((s) => ({ s, d: depthOf(s) })).sort((a, b) => a.d - b.d).map((x) => x.s)
 }
 
 // Convert a WORLD point into the frame `shape.x`/`shape.y` ITSELF lives in —

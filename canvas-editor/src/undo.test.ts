@@ -274,3 +274,202 @@ const shape = (id: string, over: Partial<Shape> = {}): Shape => ({
 
   console.log('ok: view-only intents never occupy an undo-stack slot')
 }
+
+// ============================================================================
+// 10. REGRESSION (Critical 1): undo()'s replay must be TOLERANT — an inverse
+//     that has become un-appliable due to concurrent remote churn is SKIPPED,
+//     never thrown. Repro: local reparents X from A->B (its undo op is
+//     putShape(X, parentId:A)); a remote peer then reparents A UNDER X and
+//     ships it back; now replaying X-back-under-A would close a cycle
+//     (A under X, X under A), which Loro's native cycle guard throws on
+//     inside putShape. Pre-fix, that throw escaped undo() uncaught.
+// ============================================================================
+{
+  const { doc: localDoc, editor: local } = makeEditor(1n)
+  local.apply({ type: 'CreateShape', shape: shape('shape:A', { kind: 'frame' }) })
+  local.apply({ type: 'CreateShape', shape: shape('shape:B', { kind: 'frame' }) })
+  local.apply({ type: 'CreateShape', shape: shape('shape:X', { parentId: 'shape:A' }) })
+
+  // A second peer is synced to this exact initial state.
+  const remoteDoc = LoroCanvasDoc.create({ peerId: 2n })
+  remoteDoc.import(localDoc.exportSnapshot())
+
+  // Local reparents X from A to B (undo op captured = putShape(X, parentId:A)).
+  local.apply({ type: 'ReparentShapes', ids: ['shape:X'], parentId: 'shape:B' })
+  assert.equal(localDoc.getShape('shape:X')!.parentId, 'shape:B')
+
+  // Remote sees the local reparent (A now empty, X under B), THEN reparents A
+  // under X — legal in remote's converged view (A is not an ancestor of X
+  // there) — and ships it back to local.
+  remoteDoc.import(localDoc.exportUpdate())
+  remoteDoc.commit()
+  remoteDoc.reparent('shape:A', 'shape:X')
+  remoteDoc.commit()
+  const imported = localDoc.import(remoteDoc.exportUpdate())
+  localDoc.commit()
+  assert.ok(imported.changed, 'sanity: remote reparent applied to the local doc')
+  assert.equal(localDoc.getShape('shape:A')!.parentId, 'shape:X', 'sanity: A is now under X (the cycle-inducing setup)')
+
+  // Undoing the local reparent would set X.parentId=A, but A is now a
+  // descendant of X → un-appliable. Tolerant replay must skip it, not throw.
+  assert.doesNotThrow(() => local.undo(), 'undo() tolerates an un-appliable inverse (cycle from concurrent remote churn) instead of throwing')
+  // The un-appliable op was skipped: X stays where it was (under B), and A is
+  // untouched — no partial/corrupt application.
+  assert.equal(localDoc.getShape('shape:X')!.parentId, 'shape:B', 'the skipped inverse left X unchanged')
+  assert.equal(localDoc.getShape('shape:A')!.parentId, 'shape:X', 'A untouched by the skipped inverse')
+
+  console.log('ok: undo() replay is tolerant — an un-appliable inverse is skipped, never thrown (Critical 1)')
+}
+
+// ============================================================================
+// 11. REGRESSION (Critical 2): multi-id cascade-delete undo must recreate
+//     PARENTS BEFORE CHILDREN across ids, even when ids arrive child-first
+//     (user multi-select order is not depth-sorted). The teeth: after undo,
+//     re-deleting the frame must CASCADE the child away — proving the child
+//     came back PHYSICALLY parented to the frame, not merely data-parented
+//     but detached to root (the split-brain the bug produced).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:frame', { kind: 'frame', x: 0, y: 0 }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:child', { parentId: 'shape:frame', x: 5, y: 5 }) })
+
+  // Child listed BEFORE the frame — the exact ordering that broke pre-fix.
+  editor.apply({ type: 'DeleteShapes', ids: ['shape:child', 'shape:frame'] })
+  assert.equal(editor.doc.getShape('shape:frame'), undefined, 'frame deleted')
+  assert.equal(editor.doc.getShape('shape:child'), undefined, 'child cascaded away')
+
+  editor.undo()
+  const frame = editor.doc.getShape('shape:frame')
+  const child = editor.doc.getShape('shape:child')
+  assert.ok(frame, 'undo restores the frame')
+  assert.ok(child, 'undo restores the child')
+  assert.equal(child!.parentId, 'shape:frame', 'child parentId DATA restored')
+
+  // THE TEETH: delete the frame alone. If the child were physically detached
+  // to root (data-parented only), this cascade would NOT touch it. It must.
+  editor.apply({ type: 'DeleteShapes', ids: ['shape:frame'] })
+  assert.equal(editor.doc.getShape('shape:frame'), undefined, 're-delete removes the frame')
+  assert.equal(
+    editor.doc.getShape('shape:child'),
+    undefined,
+    'child CASCADES away on re-delete → it was PHYSICALLY parented to the frame, not orphaned to root',
+  )
+
+  console.log('ok: multi-id cascade-delete undo restores child PHYSICALLY under frame, child-before-frame order (Critical 2)')
+}
+
+// ============================================================================
+// 12. Inverse coverage: RotateShapes undo/redo round-trip (orbit + spin).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { x: 10, y: 0, rotation: 0 }) })
+  editor.apply({ type: 'RotateShapes', ids: ['shape:a'], center: { x: 0, y: 0 }, dRadians: Math.PI / 2 })
+  const rotated = editor.doc.getShape('shape:a')!
+  // Orbit (10,0) about the origin by +90° -> (0,10); rotation field spins to π/2.
+  assert.ok(Math.abs(rotated.x - 0) < 1e-9, 'rotate orbits x')
+  assert.ok(Math.abs(rotated.y - 10) < 1e-9, 'rotate orbits y')
+  assert.ok(Math.abs(rotated.rotation - Math.PI / 2) < 1e-9, 'rotate spins the rotation field')
+
+  editor.undo()
+  const u = editor.doc.getShape('shape:a')!
+  assert.ok(Math.abs(u.x - 10) < 1e-9, 'undo restores x')
+  assert.ok(Math.abs(u.y - 0) < 1e-9, 'undo restores y')
+  assert.equal(u.rotation, 0, 'undo restores the rotation field exactly')
+
+  editor.redo()
+  const r = editor.doc.getShape('shape:a')!
+  assert.ok(Math.abs(r.y - 10) < 1e-9, 'redo re-orbits')
+  assert.ok(Math.abs(r.rotation - Math.PI / 2) < 1e-9, 'redo re-spins')
+
+  console.log('ok: undo/redo RotateShapes')
+}
+
+// ============================================================================
+// 13. Inverse coverage: ReparentShapes undo/redo round-trip — and the undo
+//     restores the PHYSICAL parent (putShape's placeInTree), proven by cascade.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:f1', { kind: 'frame' }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:f2', { kind: 'frame' }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:x', { parentId: 'shape:f1' }) })
+
+  editor.apply({ type: 'ReparentShapes', ids: ['shape:x'], parentId: 'shape:f2' })
+  assert.equal(editor.doc.getShape('shape:x')!.parentId, 'shape:f2', 'reparent moved x under f2')
+
+  editor.undo()
+  assert.equal(editor.doc.getShape('shape:x')!.parentId, 'shape:f1', 'undo restores x under f1')
+
+  editor.redo()
+  assert.equal(editor.doc.getShape('shape:x')!.parentId, 'shape:f2', 'redo re-applies the reparent')
+
+  // Undo once more, then prove the restore is PHYSICAL: deleting f2 must NOT
+  // take x (x is under f1), but deleting f1 must cascade it away.
+  editor.undo()
+  assert.equal(editor.doc.getShape('shape:x')!.parentId, 'shape:f1')
+  editor.apply({ type: 'DeleteShapes', ids: ['shape:f2'] })
+  assert.ok(editor.doc.getShape('shape:x'), 'deleting f2 leaves x alone — x is physically under f1, not f2')
+  editor.apply({ type: 'DeleteShapes', ids: ['shape:f1'] })
+  assert.equal(editor.doc.getShape('shape:x'), undefined, 'deleting f1 cascades x away — undo restored the PHYSICAL parent')
+
+  console.log('ok: undo/redo ReparentShapes (physical parent restored)')
+}
+
+// ============================================================================
+// 14. Inverse coverage: StartArrow undo/redo round-trip — the arrow shape AND
+//     its start-endpoint binding are removed on undo, recreated on redo.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:target', { x: 100, y: 100, kind: 'geo', props: { w: 50, h: 50 } }) })
+  editor.apply({
+    type: 'StartArrow',
+    shape: shape('shape:arrow', { kind: 'arrow', x: 0, y: 0 }),
+    fromBinding: { targetId: 'shape:target', anchor: { nx: 0, ny: 0 } },
+  })
+  const hasStartBinding = () => editor.doc.listBindings().some((b) => b.id === 'binding:shape:arrow-start')
+  assert.ok(editor.doc.getShape('shape:arrow'), 'arrow created')
+  assert.ok(hasStartBinding(), 'start binding created')
+
+  editor.undo()
+  assert.equal(editor.doc.getShape('shape:arrow'), undefined, 'undo removes the arrow shape')
+  assert.equal(hasStartBinding(), false, 'undo removes the start binding')
+
+  editor.redo()
+  assert.ok(editor.doc.getShape('shape:arrow'), 'redo recreates the arrow shape')
+  assert.ok(hasStartBinding(), 'redo recreates the start binding')
+
+  console.log('ok: undo/redo StartArrow (arrow shape + start binding)')
+}
+
+// ============================================================================
+// 15. Inverse coverage: CompleteArrow undo/redo round-trip — the end prop AND
+//     the end-endpoint binding are reverted on undo, reapplied on redo.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:target', { x: 100, y: 100, kind: 'geo', props: { w: 50, h: 50 } }) })
+  editor.apply({ type: 'StartArrow', shape: shape('shape:arrow', { kind: 'arrow', x: 0, y: 0 }) })
+  editor.apply({
+    type: 'CompleteArrow',
+    id: 'shape:arrow',
+    end: { x: 10, y: 20 }, // world; arrow x/y=(0,0) so local end offset is (10,20)
+    toBinding: { targetId: 'shape:target', anchor: { nx: 1, ny: 1 } },
+  })
+  const hasEndBinding = () => editor.doc.listBindings().some((b) => b.id === 'binding:shape:arrow-end')
+  assert.deepEqual((editor.doc.getShape('shape:arrow')!.props as any).end, { x: 10, y: 20 }, 'end prop set')
+  assert.ok(hasEndBinding(), 'end binding created')
+
+  editor.undo()
+  assert.equal((editor.doc.getShape('shape:arrow')!.props as any).end, undefined, 'undo reverts the end prop (arrow was created with empty props)')
+  assert.equal(hasEndBinding(), false, 'undo removes the end binding')
+  assert.ok(editor.doc.getShape('shape:arrow'), 'the arrow shape itself survives — CompleteArrow only added end/binding, StartArrow made the shape')
+
+  editor.redo()
+  assert.deepEqual((editor.doc.getShape('shape:arrow')!.props as any).end, { x: 10, y: 20 }, 'redo re-applies the end prop')
+  assert.ok(hasEndBinding(), 'redo re-applies the end binding')
+
+  console.log('ok: undo/redo CompleteArrow (end prop + end binding)')
+}
