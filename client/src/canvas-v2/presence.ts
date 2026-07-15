@@ -18,6 +18,7 @@
 import type { Presence, PresenceStore } from '@ensembleworks/canvas-sync'
 import { screenToWorld, type Camera } from '@ensembleworks/canvas-editor'
 import type { RemotePresence } from '@ensembleworks/canvas-react'
+import type { PresentingV2 } from './shapes/presentStoreV2.js'
 
 /**
  * Leading-edge throttle over `intervalMs`, driven by an INJECTED clock
@@ -93,6 +94,64 @@ export function adaptPresence(all: Readonly<Record<string, Presence>>): Record<s
 	return out
 }
 
+/**
+ * Encodes THIS peer's own presenting state (`presentStoreV2`'s single-slot
+ * model — a client presents at most one shape at a time) onto canvas-sync's
+ * `Presence.presenting: string[]` wire field (canvas-sync/src/presence.ts —
+ * a bare array of strings, no richer shape). `null` (presenting nothing)
+ * encodes to the empty array, exactly the field's pre-Task-D5 default (see
+ * `createPresencePublisher`'s `current` seed below). Each entry is a JSON
+ * blob rather than a delimited string — robust against a `shapeId`
+ * containing whatever separator a delimited format would have picked.
+ */
+export function encodePresenting(p: PresentingV2 | null): string[] {
+	return p ? [JSON.stringify(p)] : []
+}
+
+/**
+ * Decodes a peer's wire `presenting` field back into `PresentingV2` entries.
+ * Any malformed entry is skipped, not thrown — a peer running different/
+ * older code (or some future non-file-viewer presenter) must never crash
+ * this peer's read.
+ */
+export function decodePresenting(presenting: readonly string[]): PresentingV2[] {
+	const out: PresentingV2[] = []
+	for (const raw of presenting) {
+		try {
+			const parsed = JSON.parse(raw) as { shapeId?: unknown; fraction?: unknown; ts?: unknown }
+			if (typeof parsed.shapeId === 'string' && typeof parsed.fraction === 'number' && typeof parsed.ts === 'number') {
+				out.push({ shapeId: parsed.shapeId, fraction: parsed.fraction, ts: parsed.ts })
+			}
+		} catch {
+			/* malformed entry — skip, don't throw */
+		}
+	}
+	return out
+}
+
+/**
+ * Resolves who (if anyone, other than `selfKey`) is presenting `shapeId` —
+ * the canvas-sync-wire port of the legacy `presenterFor` (git history:
+ * client/src/file-viewer/followLogic.ts). Several peers can each carry a
+ * presenting token for the same shape during a handoff race (presence
+ * tokens can't be cleared across users); the FRESHEST `ts` wins, true
+ * last-writer-wins, matching the legacy rule exactly. `selfKey` is always
+ * excluded — `all` includes the caller's own published entry (same
+ * `PresenceStore.all()` contract `adaptPresence` documents), and a peer
+ * never follows itself.
+ */
+export function presenterFor(all: Readonly<Record<string, Presence>>, selfKey: string, shapeId: string): { peerKey: string; fraction: number; ts: number } | null {
+	let best: { peerKey: string; fraction: number; ts: number } | null = null
+	for (const [peerKey, presence] of Object.entries(all)) {
+		if (peerKey === selfKey) continue
+		for (const entry of decodePresenting(presence.presenting)) {
+			if (entry.shapeId !== shapeId) continue
+			if (!best || entry.ts > best.ts) best = { peerKey, fraction: entry.fraction, ts: entry.ts }
+		}
+	}
+	return best
+}
+
 export interface PresencePublisher {
 	/** World-space cursor position (or `null` to publish "no cursor" — e.g. the
 	 * pointer left the viewport). Throttled per PRESENCE_THROTTLE_MS.
@@ -131,6 +190,20 @@ export interface PresencePublisher {
 	 * the fix — and the same reasoning is why ALL of this publisher's
 	 * methods share ONE throttle channel (see createPresencePublisher). */
 	setViewportAndRefreshCursor(viewport: { readonly x: number; readonly y: number; readonly w: number; readonly h: number; readonly z: number } | null, camera: Camera): void
+	/**
+	 * Task D5: publishes THIS peer's own file-viewer (or any future embed's)
+	 * presenting state — `null` to stop presenting. Folds into the SAME
+	 * `current` object and the SAME shared throttle channel as
+	 * setCursor/setCursorFromScreen/setViewportAndRefreshCursor above — NOT a
+	 * second independent `PresenceStore.publish()` call. That matters for the
+	 * exact reason setViewportAndRefreshCursor's doc comment gives: two
+	 * separate `set()` writes landing in the same wall-clock millisecond lose
+	 * the SECOND on a remote peer's LWW tie. A caller that ever adds its own
+	 * extra `store.publish()` for `presenting` — instead of routing through
+	 * this method — reintroduces exactly that flake for the file-viewer's
+	 * present/follow feature.
+	 */
+	setPresenting(presenting: PresentingV2 | null): void
 }
 
 /**
@@ -155,13 +228,17 @@ export interface PresencePublisher {
  * (leadingEdgeThrottle's own doc comment), which now covers the viewport
  * too.
  *
- * `stamp`/`presenting` STAY THEIR INITIAL VALUES (`null`/`[]`) for the
- * lifetime of this mount — HONEST, not an oversight: this phase's tool set
- * (select/hand/note/text/geo/frame/arrow, per the plan's ratified Q3) has no
- * spatial-stamp tool and no "presenting a shape" feature, so there is no
- * event source to wire either field to yet. They ride along in every publish
- * so a FUTURE tool that starts calling a `setStamp`/`setPresenting` (not
- * added here — nothing produces them) needs no change to this shape.
+ * `stamp` STAYS ITS INITIAL VALUE (`null`) for the lifetime of this mount —
+ * HONEST, not an oversight: this phase's tool set (select/hand/note/text/
+ * geo/frame/arrow, per the plan's ratified Q3) has no spatial-stamp tool, so
+ * there is no event source to wire it to yet. It rides along in every
+ * publish so a FUTURE tool that starts calling a `setStamp` (not added here
+ * — nothing produces it) needs no change to this shape.
+ *
+ * `presenting` (Task D5) is now wired: `setPresenting` below folds a
+ * FileViewerShape (or future embed) presenting toggle into this SAME
+ * `current` object, on this SAME shared throttle channel — see
+ * PresencePublisher.setPresenting's doc comment for why that matters.
  */
 export function createPresencePublisher(store: PresenceStore, opts: { readonly intervalMs?: number; readonly now?: () => number } = {}): PresencePublisher {
 	const now = opts.now ?? (() => performance.now())
@@ -192,6 +269,10 @@ export function createPresencePublisher(store: PresenceStore, opts: { readonly i
 			const cursor = lastScreen !== null ? screenToWorld(camera, lastScreen) : current.cursor
 			current = { ...current, viewport, cursor }
 			publish() // ONE store write for both halves — see the interface doc comment
+		},
+		setPresenting(presenting) {
+			current = { ...current, presenting: encodePresenting(presenting) }
+			publish() // same shared channel — see the interface doc comment's ONE WRITE section
 		},
 	}
 }

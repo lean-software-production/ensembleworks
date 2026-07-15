@@ -125,6 +125,7 @@ import { resolvePageId } from './bootstrap-page.js'
 import { adaptPresence, createPresencePublisher, type PresencePublisher } from './presence.js'
 import { DevOverlay, shouldShowDevOverlayFromEnvironment, useCanvasMetrics } from './DevOverlay.js'
 import { canvasV2EmbedLifecycles, registerCanvasV2Shapes } from './shapes/index.js'
+import { presentStoreV2 } from './shapes/presentStoreV2.js'
 import {
 	cancelActiveTool,
 	createInitialToolStates,
@@ -300,6 +301,11 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 			const presencePublisher = createPresencePublisher(presenceStore)
 			const s: Session = { peer, editor, toolContext, tools, presenceStore, presencePublisher, selfKey: userId }
 			sessionRef.current = s
+			// Task D5: hands this mount's live publisher to the shared
+			// presentStoreV2 singleton, so a shape body (FileViewerShape's own
+			// presenting toggle/scroll) can ride this SAME combined-write
+			// channel — see presentStoreV2.ts's PUBLISHER HANDLE doc comment.
+			presentStoreV2.setPublisher(presencePublisher)
 			// The design's E2E debug hook (mirrors the legacy app's
 			// window.__ewEditor — App.tsx's handleMount). `presencePublisher` rides
 			// along so an E2E/integration test can drive this mount's OWN presence
@@ -329,6 +335,11 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 				// Session interface's doc comment on why THIS mount (not
 				// SyncClientPeer) owns that call.
 				s.presenceStore.destroy()
+				// Task D5: this mount's publisher no longer exists — clear the
+				// shared handle so a FileViewerShape body rendered after teardown
+				// (or in the next mount's brief pre-boot window) finds `null`
+				// rather than a stale, destroyed-store publisher.
+				presentStoreV2.setPublisher(null)
 			}
 		}
 		// roomId/userId identify the WHOLE session — a change remounts it
@@ -402,9 +413,16 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// See PRESENCE_POLL_MS's doc comment above.
 	const [, setPresenceTick] = useState(0)
 	useEffect(() => {
-		const id = setInterval(() => setPresenceTick((t) => t + 1), PRESENCE_POLL_MS)
+		const id = setInterval(() => {
+			// Task D5: refresh the shared peers-cache singleton BEFORE bumping
+			// the tick, so a FileViewerShape body re-rendered by this same tick
+			// (see setPresenceTick below) reads a peers snapshot no staler than
+			// what Cursors itself renders from a few lines down.
+			presentStoreV2.setPeers(presenceStore.all(), selfKey)
+			setPresenceTick((t) => t + 1)
+		}, PRESENCE_POLL_MS)
 		return () => clearInterval(id)
-	}, [])
+	}, [presenceStore, selfKey])
 
 	const [activeToolId, setActiveToolId] = useState<ToolId>('select')
 	const activeToolIdRef = useRef(activeToolId)

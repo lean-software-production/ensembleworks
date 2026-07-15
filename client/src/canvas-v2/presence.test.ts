@@ -1,7 +1,15 @@
 // Run: bun src/canvas-v2/presence.test.ts
 import assert from 'node:assert/strict'
-import { PresenceStore } from '@ensembleworks/canvas-sync'
-import { adaptPresence, createPresencePublisher, leadingEdgeThrottle, PRESENCE_THROTTLE_MS } from './presence.js'
+import { PresenceStore, type Presence } from '@ensembleworks/canvas-sync'
+import {
+	adaptPresence,
+	createPresencePublisher,
+	decodePresenting,
+	encodePresenting,
+	leadingEdgeThrottle,
+	presenterFor,
+	PRESENCE_THROTTLE_MS,
+} from './presence.js'
 
 // ============================================================================
 // 1. leadingEdgeThrottle: a burst of N calls inside one interval collapses to
@@ -158,6 +166,81 @@ import { adaptPresence, createPresencePublisher, leadingEdgeThrottle, PRESENCE_T
 	assert.equal(store.all()['self-key']!.cursor, null, 'a raw setCursor(null) forgets the recorded screen point — no stale-cursor resurrection on the next camera change')
 	store.destroy()
 	console.log('ok: setViewportAndRefreshCursor — null-cursor cases (no screen point; superseded screen point)')
+}
+
+// ============================================================================
+// 6. Task D5: setPresenting folds into the SAME combined write as
+//    cursor/viewport — never a second independent store write. A caller
+//    that published presenting via its own separate PresenceStore.publish()
+//    would reopen the exact same-millisecond LWW hazard tests 3/4 guard
+//    against; this test proves setPresenting shares the one channel instead.
+// ============================================================================
+{
+	let clock = 0
+	const store = new PresenceStore('self-key')
+	let publishCalls = 0
+	const realPublish = store.publish.bind(store)
+	;(store as unknown as { publish: (p: Presence) => void }).publish = (p: Presence) => {
+		publishCalls++
+		realPublish(p)
+	}
+	const publisher = createPresencePublisher(store, { intervalMs: 60, now: () => clock })
+
+	publisher.setCursor({ x: 1, y: 2 })
+	assert.equal(publishCalls, 1, 'the leading cursor publish fires immediately')
+
+	// A presenting toggle in the SAME instant shares the one channel: dropped
+	// at the publisher (no second store write), but recorded on `current`.
+	publisher.setPresenting({ shapeId: 'shape:f1', fraction: 0.4, ts: 999 })
+	assert.equal(publishCalls, 1, 'a same-instant presenting publish is dropped at the shared channel (never a second store write)')
+	assert.deepEqual(store.all()['self-key']!.presenting, [], 'the dropped write never reached the store — presenting is still the pre-call value')
+
+	// Past the throttle window: ONE combined write carries BOTH the cursor
+	// (unchanged) and the presenting token together.
+	clock = 100
+	publisher.setCursor({ x: 3, y: 4 })
+	assert.equal(publishCalls, 2, 'exactly one more store write for the whole recorded window')
+	assert.deepEqual(
+		store.all()['self-key'],
+		{ cursor: { x: 3, y: 4 }, viewport: null, stamp: null, presenting: [JSON.stringify({ shapeId: 'shape:f1', fraction: 0.4, ts: 999 })] },
+		'ONE combined write carries cursor AND presenting together — never two separate set() calls',
+	)
+
+	// Stopping presenting (null) is also folded into the one channel.
+	clock = 200
+	publisher.setPresenting(null)
+	assert.equal(publishCalls, 3)
+	assert.deepEqual(store.all()['self-key']!.presenting, [], 'null clears presenting back to the empty-array default')
+
+	store.destroy()
+	console.log('ok: setPresenting — folds into the single combined presence write, never a second set()')
+}
+
+// ============================================================================
+// 7. encodePresenting/decodePresenting round-trip, and presenterFor resolves
+//    the FRESHEST ts among competing peers, excluding selfKey and other
+//    shapes — the canvas-sync-wire port of the legacy `presenterFor`
+//    (git history: client/src/file-viewer/followLogic.ts).
+// ============================================================================
+{
+	assert.deepEqual(encodePresenting(null), [], "not presenting -> empty array, the field's existing default")
+	const p = { shapeId: 'shape:f1', fraction: 0.25, ts: 111 }
+	assert.deepEqual(encodePresenting(p), [JSON.stringify(p)])
+	assert.deepEqual(decodePresenting(encodePresenting(p)), [p], 'round-trips exactly')
+	assert.deepEqual(decodePresenting(['not json', '{"shapeId":1}', '{}']), [], 'malformed/incomplete entries are skipped, never thrown')
+
+	const all: Record<string, Presence> = {
+		'self-key': { cursor: null, viewport: null, stamp: null, presenting: encodePresenting({ shapeId: 'shape:f1', fraction: 0.9, ts: 999_999 }) },
+		'peer-a': { cursor: null, viewport: null, stamp: null, presenting: encodePresenting({ shapeId: 'shape:f1', fraction: 0.1, ts: 100 }) },
+		'peer-b': { cursor: null, viewport: null, stamp: null, presenting: encodePresenting({ shapeId: 'shape:f1', fraction: 0.5, ts: 200 }) },
+		'peer-c': { cursor: null, viewport: null, stamp: null, presenting: encodePresenting({ shapeId: 'shape:other', fraction: 0.7, ts: 500 }) },
+		'peer-d': { cursor: null, viewport: null, stamp: null, presenting: [] },
+	}
+	const resolved = presenterFor(all, 'self-key', 'shape:f1')
+	assert.deepEqual(resolved, { peerKey: 'peer-b', fraction: 0.5, ts: 200 }, 'the FRESHEST peer wins — self and other-shape entries excluded')
+	assert.equal(presenterFor(all, 'self-key', 'shape:none'), null, 'no peer presenting this shape id -> null')
+	assert.equal(presenterFor({}, 'self-key', 'shape:f1'), null, 'no peers at all -> null, never a throw')
+	console.log('ok: encodePresenting/decodePresenting/presenterFor — wire round-trip + freshest-ts-wins resolution, self excluded')
 }
 
 console.log(`ok: presence (PRESENCE_THROTTLE_MS=${PRESENCE_THROTTLE_MS})`)
