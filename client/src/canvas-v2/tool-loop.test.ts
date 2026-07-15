@@ -92,7 +92,7 @@ function setup() {
 	const arrowId = (arrowState as { id: string }).id
 	assert.ok(editor.doc.getShape(arrowId), 'precondition: the in-flight arrow preview already exists in the doc')
 
-	const cancelled = cancelActiveTool(tools, states, 'arrow')
+	const cancelled = cancelActiveTool(tools, states, 'arrow', editor)
 	assert.deepEqual(cancelled.intents, [{ type: 'DeleteShapes', ids: [arrowId] }], 'cancelling a mid-draw arrow emits DeleteShapes for its preview id')
 	editor.applyAll(cancelled.intents)
 	assert.equal(editor.doc.getShape(arrowId), undefined, 'the preview arrow is actually gone after applying the cancel intents')
@@ -117,7 +117,7 @@ function setup() {
 	const previewId = (createState as { id: string }).id
 	assert.ok(editor.doc.getShape(previewId), 'precondition: the in-flight drag-to-size preview already exists in the doc')
 
-	const cancelled = cancelActiveTool(tools, states, 'geo')
+	const cancelled = cancelActiveTool(tools, states, 'geo', editor)
 	assert.deepEqual(cancelled.intents, [{ type: 'DeleteShapes', ids: [previewId] }], "cancelling a mid-drag create tool emits DeleteShapes for its preview id")
 	editor.applyAll(cancelled.intents)
 	assert.equal(editor.doc.getShape(previewId), undefined, 'the drag-to-size preview is actually gone after applying the cancel intents')
@@ -144,7 +144,7 @@ function setup() {
 	const notePreviewId = (noteState as { id: string }).id
 	assert.ok(editor.doc.getShape(notePreviewId), 'precondition: the in-flight note preview already exists in the doc')
 
-	const cancelledNote = cancelActiveTool(tools, states, 'note')
+	const cancelledNote = cancelActiveTool(tools, states, 'note', editor)
 	assert.deepEqual(cancelledNote.intents, [{ type: 'DeleteShapes', ids: [notePreviewId] }], 'cancelling a mid-drag note create emits DeleteShapes for its preview id')
 	editor.applyAll(cancelledNote.intents)
 	assert.equal(editor.doc.getShape(notePreviewId), undefined, 'the note preview is actually gone after applying the cancel intents')
@@ -166,52 +166,144 @@ function setup() {
 	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 50, y: 50, buttons: 1, modifiers: MODS, t: 0 })
 	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 60, y: 60, buttons: 1, modifiers: MODS, t: 16 })
 	assert.equal((states.select as SelectAndTransformState).select.mode, 'dragging', 'precondition: select is mid-drag')
-	const cancelledSelect = cancelActiveTool(tools, states, 'select')
+	const cancelledSelect = cancelActiveTool(tools, states, 'select', editor)
 	assert.deepEqual(cancelledSelect.intents, [], 'select has nothing to delete on cancel — reset to idle only')
 
 	// hand: mid-pan (no shape created).
 	states = dispatchToActiveTool(tools, createInitialToolStates(tools), 'hand', editor, { type: 'pointerdown', x: 0, y: 0, buttons: 1, modifiers: MODS, t: 0 })
 	states = dispatchToActiveTool(tools, states, 'hand', editor, { type: 'pointermove', x: 20, y: 20, buttons: 1, modifiers: MODS, t: 16 })
 	assert.equal((states.hand as { mode: string }).mode, 'panning', 'precondition: hand is mid-pan')
-	const cancelledHand = cancelActiveTool(tools, states, 'hand')
+	const cancelledHand = cancelActiveTool(tools, states, 'hand', editor)
 	assert.deepEqual(cancelledHand.intents, [], 'hand has nothing to delete on cancel — reset to idle only')
 
 	console.log('ok: tool-loop — cancelActiveTool honestly emits zero intents for select/hand (nothing created)')
 }
 
 // ============================================================================
-// 4b. cancelActiveTool COVERAGE, HONEST NEGATIVE CASE — transform: reached
-//    ONLY via the select composite (no dedicated toolbar button — see
-//    tool-loop.ts's module header), so the ACTIVE ToolId `cancelActiveTool`
-//    sees is still 'select' even mid-resize; the composite's OWN internal
-//    `active` leg is 'transform'. Resizing never creates a shape (it mutates
-//    shape:a IN PLACE, already committed incrementally — see
-//    cancelActiveTool's own coverage note on transform's COMMIT CADENCE), so
-//    cancelling mid-resize must ALSO emit zero intents, and must fully reset
-//    the composite (both legs) back to its pristine initialState — not merely
-//    "whatever transform.ts's own idle looks like" — since an abandonment
-//    trigger means the whole viewport lost its input context. A FRESH setup()
-//    (not the shared editor from case 4 above, which left shape:a mid-drag at
-//    an uncommitted pointerup-less position) so the handle sits at the
-//    expected (100,100) corner.
+// 4b. cancelActiveTool COVERAGE — transform, REVERT (Task B5, supersedes the
+//    old "reset to idle only" behavior): reached ONLY via the select
+//    composite (no dedicated toolbar button — see tool-loop.ts's module
+//    header), so the ACTIVE ToolId `cancelActiveTool` sees is still 'select'
+//    even mid-resize; the composite's OWN internal `active` leg is
+//    'transform'. Resizing never CREATES a shape, but it DOES mutate shape:a
+//    IN PLACE across MULTIPLE incremental commits (two pointermoves here, no
+//    pointerup — transform.ts's COMMIT CADENCE note) before cancel runs.
+//    cancelActiveTool must now emit a CreateShape reverting shape:a to its
+//    EXACT gesture-start geometry (transform.ts's startShapes snapshot),
+//    undoing BOTH incremental commits in one intent, and still fully reset
+//    the composite (both legs) back to its pristine initialState. A FRESH
+//    setup() (not the shared editor from case 4 above, which left shape:a
+//    mid-drag at an uncommitted pointerup-less position) so the handle sits
+//    at the expected (100,100) corner.
 // ============================================================================
 {
 	const { editor, ctx } = setup()
 	const tools = createToolSet(ctx)
 	let states = createInitialToolStates(tools)
+	const before = editor.doc.getShape('shape:a')!
+	assert.deepEqual({ x: before.x, y: before.y, w: (before.props as { w: number }).w, h: (before.props as { h: number }).h }, { x: 0, y: 0, w: 100, h: 100 }, 'precondition: shape:a starts at its geoShape defaults')
 
 	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 50, y: 50, buttons: 1, modifiers: MODS, t: 0 })
 	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerup', x: 50, y: 50, buttons: 0, modifiers: MODS, t: 16 })
 	assert.deepEqual([...editor.get().selection], ['shape:a'], 'precondition: shape:a is selected (transform only reacts to a handle on an existing selection)')
 	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 100, y: 100, buttons: 1, modifiers: MODS, t: 32 })
 	assert.equal((states.select as SelectAndTransformState).active, 'transform', 'precondition: the handle grab routed to the transform leg')
+	// TWO incremental moves (two separate ResizeShapes commits), no
+	// pointerup — proving the revert undoes BOTH, not just the last one.
 	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 150, y: 150, buttons: 1, modifiers: MODS, t: 48 })
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 400, y: 300, buttons: 1, modifiers: MODS, t: 64 })
 	assert.equal((states.select as SelectAndTransformState).transform.mode, 'resizing', 'precondition: transform is mid-resize')
-	const cancelledTransform = cancelActiveTool(tools, states, 'select')
-	assert.deepEqual(cancelledTransform.intents, [], 'transform has nothing to delete on cancel — reset to idle only (no revert of the partial resize; Phase-4 undo item, not this unit\'s scope)')
+	const midGesture = editor.doc.getShape('shape:a')!
+	assert.notEqual((midGesture.props as { w: number }).w, 100, 'precondition: the resize actually mutated shape:a mid-gesture (two commits deep)')
+
+	const cancelledTransform = cancelActiveTool(tools, states, 'select', editor)
+	assert.deepEqual(cancelledTransform.intents, [{ type: 'CreateShape', shape: before }], 'cancelling mid-resize emits ONE CreateShape restoring shape:a to its exact gesture-start snapshot')
 	assert.deepEqual(cancelledTransform.states, createInitialToolStates(tools), 'a transform-mid-resize cancel resets the WHOLE composite (both legs) back to its pristine initialState, not just transform\'s own idle')
 
-	console.log('ok: tool-loop — cancelActiveTool honestly emits zero intents for a mid-resize transform gesture (nothing created)')
+	editor.applyAll(cancelledTransform.intents)
+	const reverted = editor.doc.getShape('shape:a')!
+	assert.equal(reverted.x, 0)
+	assert.equal(reverted.y, 0)
+	assert.equal((reverted.props as { w: number }).w, 100, 'w reverted to its pre-gesture value despite two incremental resize commits')
+	assert.equal((reverted.props as { h: number }).h, 100)
+
+	console.log('ok: tool-loop — cancelActiveTool reverts a mid-resize transform gesture to its gesture-start geometry (Task B5)')
+}
+
+// ============================================================================
+// 4c. cancelActiveTool COVERAGE — transform, REVERT (rotate): same B5
+//    mechanism, driven via the rotate handle instead of a corner handle —
+//    proves the revert covers ROTATION (not just w/h/x/y from a resize).
+// ============================================================================
+{
+	const { editor, ctx } = setup()
+	const tools = createToolSet(ctx)
+	let states = createInitialToolStates(tools)
+	const before = editor.doc.getShape('shape:a')!
+	assert.equal(before.rotation, 0, 'precondition: shape:a starts unrotated')
+
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 50, y: 50, buttons: 1, modifiers: MODS, t: 0 })
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerup', x: 50, y: 50, buttons: 0, modifiers: MODS, t: 16 })
+	// Rotate handle sits 32 units above the top-edge midpoint (50, -32) for
+	// shape:a's [0,100]x[0,100] box (see selectionHandles/transform.test.ts).
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 50, y: -32, buttons: 1, modifiers: MODS, t: 32 })
+	assert.equal((states.select as SelectAndTransformState).active, 'transform', 'precondition: the rotate-handle grab routed to the transform leg')
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 150, y: 50, buttons: 1, modifiers: MODS, t: 48 })
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 50, y: 150, buttons: 1, modifiers: MODS, t: 64 })
+	assert.equal((states.select as SelectAndTransformState).transform.mode, 'rotating', 'precondition: transform is mid-rotate')
+	const midGesture = editor.doc.getShape('shape:a')!
+	assert.notEqual(midGesture.rotation, 0, 'precondition: the rotate actually mutated shape:a mid-gesture')
+
+	const cancelledTransform = cancelActiveTool(tools, states, 'select', editor)
+	assert.deepEqual(cancelledTransform.intents, [{ type: 'CreateShape', shape: before }], 'cancelling mid-rotate emits ONE CreateShape restoring shape:a to its exact gesture-start snapshot')
+	editor.applyAll(cancelledTransform.intents)
+	const reverted = editor.doc.getShape('shape:a')!
+	assert.equal(reverted.rotation, 0, 'rotation reverted to its pre-gesture value')
+	assert.equal(reverted.x, 0)
+	assert.equal(reverted.y, 0)
+
+	console.log('ok: tool-loop — cancelActiveTool reverts a mid-rotate transform gesture to its gesture-start rotation (Task B5)')
+}
+
+// ============================================================================
+// 4d. cancelActiveTool COVERAGE — transform, REVERT (multi-select): TWO
+//    shapes selected and resized together via one composite handle drag —
+//    cancel must restore BOTH affected shapes, not just the first.
+// ============================================================================
+{
+	const doc = LoroCanvasDoc.create({ peerId: 1n })
+	doc.putPage({ id: 'page:p', name: 'P' })
+	doc.putShape(geoShape('shape:m1', 0, 0, 100, 100))
+	doc.putShape(geoShape('shape:m2', 200, 0, 100, 100))
+	doc.commit()
+	const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+	const ctx: ToolContext = createToolContext(editor)
+	const tools = createToolSet(ctx)
+	let states = createInitialToolStates(tools)
+	const before1 = editor.doc.getShape('shape:m1')!
+	const before2 = editor.doc.getShape('shape:m2')!
+
+	editor.apply({ type: 'SetSelection', ids: ['shape:m1', 'shape:m2'] })
+	// Combined world bounds: [0,0]x[300,100] -> SE corner handle at (300,100),
+	// opposite (anchor) NW at (0,0).
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 300, y: 100, buttons: 1, modifiers: MODS, t: 0 })
+	assert.equal((states.select as SelectAndTransformState).active, 'transform', 'precondition: the handle grab routed to the transform leg for the multi-select')
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 600, y: 200, buttons: 1, modifiers: MODS, t: 16 })
+	assert.equal((states.select as SelectAndTransformState).transform.mode, 'resizing', 'precondition: transform is mid-resize')
+	assert.notEqual((editor.doc.getShape('shape:m1')!.props as { w: number }).w, 100, 'precondition: shape:m1 was mutated mid-gesture')
+	assert.notEqual((editor.doc.getShape('shape:m2')!.props as { w: number }).w, 100, 'precondition: shape:m2 was mutated mid-gesture')
+
+	const cancelled = cancelActiveTool(tools, states, 'select', editor)
+	assert.deepEqual(new Set(cancelled.intents.map((i) => (i as { shape: Shape }).shape.id)), new Set(['shape:m1', 'shape:m2']), 'the revert covers BOTH affected shapes')
+	editor.applyAll(cancelled.intents)
+	const reverted1 = editor.doc.getShape('shape:m1')!
+	const reverted2 = editor.doc.getShape('shape:m2')!
+	assert.equal((reverted1.props as { w: number }).w, 100)
+	assert.equal(reverted1.x, before1.x)
+	assert.equal((reverted2.props as { w: number }).w, 100)
+	assert.equal(reverted2.x, before2.x)
+
+	console.log('ok: tool-loop — cancelActiveTool reverts a mid-resize MULTI-SELECT transform gesture, restoring every affected shape (Task B5)')
 }
 
 // ============================================================================

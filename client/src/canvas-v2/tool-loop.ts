@@ -225,15 +225,23 @@ export function dispatchToActiveTool(
  *  - transform ('resizing'/'rotating' states, reached only via the select
  *    composite): never creates a shape (resizes/rotates EXISTING shapes IN
  *    PLACE, already committed incrementally by the time cancel runs — see
- *    transform.ts's COMMIT CADENCE note). Reset to idle only; the v1 policy
- *    does NOT revert a partially-completed resize/rotate back to its
- *    pre-gesture size/angle — the shape is simply left at whatever the last
- *    delivered pointermove committed. canvas-editor DOES have an undo stack
- *    now (Task B1), driven by Ctrl+Z (Task B4) — but because each pointermove
- *    commits its own batch, undo unwinds one increment at a time, not the
- *    whole gesture. Gesture-atomic undo (full undo-to-gesture-start, one
- *    undo step per drag) remains a documented Phase-4 parity item, not this
- *    unit's scope.
+ *    transform.ts's COMMIT CADENCE note) — but DOES emit a revert (Task B5).
+ *    transform.ts's Resizing/Rotating states carry `startShapes`: a verbatim
+ *    snapshot of every affected shape taken at GESTURE START (the first
+ *    threshold-crossing move, before its own first Resize/RotateShapes
+ *    intent — see transform.ts's captureStartShapes). Cancelling mid-gesture
+ *    replays each snapshot back via CreateShape ("upsert full shape
+ *    verbatim", editor.ts's applyOne) — one intent per shape, which restores
+ *    it exactly regardless of how many incremental Resize/RotateShapes
+ *    commits happened since gesture start; no need to count or unwind them
+ *    individually. TOLERANT: a shape that vanished mid-gesture (e.g. a
+ *    concurrent remote delete) is dropped from the revert, never
+ *    resurrected — checked against the LIVE doc at cancel time, not the
+ *    snapshot itself. NOTE (carried finding, not this unit's scope): the
+ *    incremental per-move commits PLUS this revert still leave a messy undo
+ *    history behind (the revert doesn't retroactively erase those commits'
+ *    own undo entries) — gesture-atomic undo (one undo step per whole drag)
+ *    remains a documented Phase-4 parity item.
  *
  * Returns the full RESET `ToolStates` (every tool goes back to its own
  * `initialState` — not just the active one — since an abandonment trigger
@@ -266,7 +274,7 @@ export function deleteSelectionIntents(editor: Editor): Intent[] {
 	]
 }
 
-export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: ToolId): { states: ToolStates; intents: Intent[] } {
+export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: ToolId, editor: Editor): { states: ToolStates; intents: Intent[] } {
 	const intents: Intent[] = []
 
 	if (active === 'arrow') {
@@ -275,9 +283,22 @@ export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: Too
 	} else if (active === 'note' || active === 'text' || active === 'geo' || active === 'frame') {
 		const s = states[active] as CreateState
 		if (s.mode === 'dragging') intents.push({ type: 'DeleteShapes', ids: [s.id] })
+	} else if (active === 'select') {
+		// The composite's TRANSFORM leg (reached only through 'select' — see
+		// the module header). B5: restore every affected shape to its
+		// gesture-start snapshot — see the coverage note above for why one
+		// CreateShape per shape suffices regardless of the incremental commit
+		// count. TOLERANT: skip an id the live doc no longer resolves rather
+		// than resurrecting it.
+		const transform = (states.select as SelectAndTransformState).transform
+		if (transform.mode === 'resizing' || transform.mode === 'rotating') {
+			for (const shape of transform.startShapes) {
+				if (editor.doc.getShape(shape.id)) intents.push({ type: 'CreateShape', shape })
+			}
+		}
 	}
-	// select/hand/transform (reached via the select composite): no created
-	// shape to delete — see the coverage note above.
+	// hand: never creates OR mutates a shape (pans the camera only) —
+	// nothing to revert.
 
 	return { states: createInitialToolStates(tools), intents }
 }

@@ -321,4 +321,105 @@ const EPS = 1e-6
   console.log('ok: through-anchor corner drag clamps stored w/h at the floor, never negative')
 }
 
+// ============================================================================
+// 11. Cancel-revert (Task B5) — RESIZE: transform.ts captures a verbatim
+//     gesture-start snapshot (`startShapes`) on its Resizing/Rotating state
+//     the moment the gesture begins mutating the doc (onPointing's first
+//     threshold-crossing move), so a caller who abandons the gesture
+//     (client/src/canvas-v2/tool-loop.ts's cancelActiveTool) can restore
+//     every affected shape verbatim regardless of how many incremental
+//     ResizeShapes commits happened. Drive TWO pointermoves (two separate
+//     incremental commits, no pointerup — still mid-gesture) and prove
+//     replaying `startShapes` back via CreateShape undoes BOTH at once.
+// ============================================================================
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(geoShape('shape:revert', 10, 20, 100, 100))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:revert'] })
+  const before = editor.doc.getShape('shape:revert')!
+
+  // SE corner at (110,120); two incremental moves, no pointerup.
+  const events = script().down(110, 120).move(200, 150).move(300, 500).events()
+  const finalState = run(editor, tool, events)
+  assert.equal(finalState.mode, 'resizing', 'precondition: still mid-resize (no pointerup)')
+
+  const midGesture = editor.doc.getShape('shape:revert')!
+  assert.notEqual((midGesture.props as { w: number }).w, (before.props as { w: number }).w, 'precondition: two incremental resize commits actually mutated the shape')
+
+  const startShapes = (finalState as { startShapes: readonly Shape[] }).startShapes
+  assert.deepEqual(startShapes, [before], 'startShapes carries the EXACT pre-gesture shape, captured before the first commit')
+  editor.applyAll(startShapes.map((shape) => ({ type: 'CreateShape' as const, shape })))
+
+  const reverted = editor.doc.getShape('shape:revert')!
+  assert.equal(reverted.x, before.x)
+  assert.equal(reverted.y, before.y)
+  assert.equal((reverted.props as { w: number }).w, (before.props as { w: number }).w)
+  assert.equal((reverted.props as { h: number }).h, (before.props as { h: number }).h)
+  console.log('ok: cancel-revert — resizing state carries a gesture-start snapshot that restores x/y/w/h verbatim across multiple incremental commits')
+}
+
+// ============================================================================
+// 12. Cancel-revert (Task B5) — ROTATE: same mechanism, driven via the
+//     rotate handle — proves the snapshot/restore covers `rotation` (and the
+//     orbited x/y), not just resize's w/h.
+// ============================================================================
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(geoShape('shape:rrevert', 0, 0, 100, 100))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:rrevert'] })
+  const before = editor.doc.getShape('shape:rrevert')!
+  assert.equal(before.rotation, 0)
+
+  // Rotate handle at (50, -32); two incremental moves, no pointerup.
+  const events = script().down(50, -32).move(150, 50).move(50, 150).events()
+  const finalState = run(editor, tool, events)
+  assert.equal(finalState.mode, 'rotating', 'precondition: still mid-rotate (no pointerup)')
+
+  const midGesture = editor.doc.getShape('shape:rrevert')!
+  assert.notEqual(midGesture.rotation, 0, 'precondition: the rotate actually mutated the shape mid-gesture')
+
+  const startShapes = (finalState as { startShapes: readonly Shape[] }).startShapes
+  assert.deepEqual(startShapes, [before], 'startShapes carries the EXACT pre-gesture shape')
+  editor.applyAll(startShapes.map((shape) => ({ type: 'CreateShape' as const, shape })))
+
+  const reverted = editor.doc.getShape('shape:rrevert')!
+  assert.equal(reverted.rotation, before.rotation)
+  assert.equal(reverted.x, before.x)
+  assert.equal(reverted.y, before.y)
+  console.log('ok: cancel-revert — rotating state carries a gesture-start snapshot that restores rotation (and orbited x/y) verbatim')
+}
+
+// ============================================================================
+// 13. Cancel-revert (Task B5) — MULTI-SELECT: startShapes covers EVERY
+//     affected shape, not just the one the handle happens to belong to.
+// ============================================================================
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(geoShape('shape:mm1', 0, 0, 100, 100))
+  doc.putShape(geoShape('shape:mm2', 200, 0, 100, 100))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:mm1', 'shape:mm2'] })
+  const before1 = editor.doc.getShape('shape:mm1')!
+  const before2 = editor.doc.getShape('shape:mm2')!
+
+  // Combined world bounds [0,0]x[300,100] -> SE handle at (300,100).
+  const events = script().down(300, 100).move(600, 200).events()
+  const finalState = run(editor, tool, events)
+  assert.equal(finalState.mode, 'resizing')
+
+  const startShapes = (finalState as { startShapes: readonly Shape[] }).startShapes
+  assert.deepEqual(new Set(startShapes.map((s) => s.id)), new Set(['shape:mm1', 'shape:mm2']), 'startShapes covers BOTH affected shapes')
+  editor.applyAll(startShapes.map((shape) => ({ type: 'CreateShape' as const, shape })))
+
+  const reverted1 = editor.doc.getShape('shape:mm1')!
+  const reverted2 = editor.doc.getShape('shape:mm2')!
+  assert.equal((reverted1.props as { w: number }).w, (before1.props as { w: number }).w)
+  assert.equal(reverted1.x, before1.x)
+  assert.equal((reverted2.props as { w: number }).w, (before2.props as { w: number }).w)
+  assert.equal(reverted2.x, before2.x)
+  console.log('ok: cancel-revert — a multi-select resize gesture\'s startShapes covers every affected shape')
+}
+
 console.log('ok: transform tool (resize/rotate handles) + world-correct frame conversion')

@@ -477,7 +477,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// of duplicating cancelActiveTool's own dispatch — see cancelAndReset's own
 	// doc comment for what it does.
 	const cancelAndReset = useCallback(() => {
-		const { states, intents } = cancelActiveTool(tools, toolStatesRef.current, activeToolIdRef.current)
+		const { states, intents } = cancelActiveTool(tools, toolStatesRef.current, activeToolIdRef.current, editor)
 		if (intents.length > 0) editor.applyAll(intents)
 		toolStatesRef.current = states
 		setToolStates(states)
