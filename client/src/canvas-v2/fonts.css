@@ -1,0 +1,94 @@
+/*
+ * Task C6b — the tldraw handwriting/text webfonts, self-hosted for canvas v2.
+ *
+ * WHY: NoteShape/TextShape/GeoShape/TextEditor (canvas-react) declare v1's
+ * font-family stacks verbatim (`'tldraw_draw', sans-serif` etc. --
+ * tlschema's `DefaultFontFamilies`), but those family NAMES are only ever
+ * backed by a real `@font-face` when v1's live `<Tldraw>` editor mounts --
+ * its `FontManager` registers the fonts at runtime from
+ * `defaultEditorAssetUrls` (tldraw/src/lib/utils/static-assets/assetUrls.ts),
+ * which itself just points at tldraw's own CDN
+ * (`https://cdn.tldraw.com/<version>/fonts/*.woff2` --
+ * `@tldraw/editor`'s `getDefaultCdnBaseUrl`). CanvasV2App/the component-
+ * golden harness never mount a `<Tldraw>` editor, so on v2 today those
+ * `font-family` declarations fall through silently to their `sans-serif`/
+ * `serif`/`monospace` generic fallback.
+ *
+ * These are the SAME four font families tldraw itself ships (see
+ * tldraw/src/lib/shapes/shared/defaultFonts.tsx's `DefaultFontFaces` and
+ * assetUrls.ts's `defaultEditorAssetUrls`), fetched from tldraw's own
+ * `assets/fonts/` (github.com/tldraw/tldraw) rather than re-hosted from
+ * tldraw's CDN, and vendored here as separate static files (NOT inlined --
+ * see LICENSE files below) so the v2 bundle doesn't depend on an external
+ * origin at runtime:
+ *   - tldraw_draw  -> Shantell Sans (Informal, Regular)
+ *   - tldraw_sans  -> IBM Plex Sans (Medium)
+ *   - tldraw_serif -> IBM Plex Serif (Medium)
+ *   - tldraw_mono  -> IBM Plex Mono (Medium)
+ *
+ * Only the "normal" weight/style face of each family is loaded: no
+ * canvas-model shape currently exposes bold/italic (TextShape.tsx hardcodes
+ * `fontStyle: 'normal'`; there is no `bold` prop anywhere in canvas-model's
+ * shape schema), so the other 12 faces tldraw ships (bold/italic variants)
+ * would be dead weight. Revisit if a future unit adds bold/italic text.
+ *
+ * LICENSING (Task C6b's decision gate): both families are SIL Open Font
+ * License 1.1 -- open, redistributable, bundleable, no attribution
+ * requirement beyond keeping the license text alongside the font (which is
+ * exactly what's in this directory):
+ *   - IBM Plex: copyright IBM Corp., OFL 1.1 -- see
+ *     client/public/fonts/tldraw/LICENSE-IBMPlex.txt (fetched verbatim from
+ *     github.com/IBM/plex's LICENSE.txt).
+ *   - Shantell Sans: copyright The Shantell Sans Project Authors, OFL 1.1,
+ *     also distributed via Google Fonts -- see
+ *     client/public/fonts/tldraw/LICENSE-ShantellSans.txt (fetched verbatim
+ *     from google/fonts' ofl/shantellsans/OFL.txt).
+ *
+ * ASSET PLACEMENT: files live under client/public/ (Vite's public dir --
+ * served verbatim at `/fonts/tldraw/*`, unhashed, un-inlined, same pattern
+ * as the existing Symbols Nerd Font Mono self-host --
+ * client/public/fonts/SymbolsNerdFontMono-Regular.ttf +
+ * LICENSE-SymbolsNerdFont.txt sitting right next to it). Keeping them out of
+ * `src/` means Vite never pulls them into a JS chunk -- they ship as their
+ * own woff2 files, which is what keeps Seam G/G4's entry-chunk bundle-size
+ * gate (~215.4kB/~63.1kB baseline) unaffected by this change.
+ *
+ * REACH: imported (side-effect only, same pattern as
+ * canvas-v2/shapes/RoadmapShape.tsx importing roadmap.css) from BOTH
+ * CanvasV2App.tsx (the real dogfood mount) and
+ * canvas-v2/goldens/GoldenHarness.tsx (Task C7's Playwright golden capture)
+ * so neither renders these font-family names against a browser generic
+ * fallback.
+ */
+
+@font-face {
+	font-family: 'tldraw_draw';
+	src: url('/fonts/tldraw/Shantell_Sans-Informal_Regular.woff2') format('woff2');
+	font-weight: normal;
+	font-style: normal;
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'tldraw_sans';
+	src: url('/fonts/tldraw/IBMPlexSans-Medium.woff2') format('woff2');
+	font-weight: normal;
+	font-style: normal;
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'tldraw_serif';
+	src: url('/fonts/tldraw/IBMPlexSerif-Medium.woff2') format('woff2');
+	font-weight: normal;
+	font-style: normal;
+	font-display: block;
+}
+
+@font-face {
+	font-family: 'tldraw_mono';
+	src: url('/fonts/tldraw/IBMPlexMono-Medium.woff2') format('woff2');
+	font-weight: normal;
+	font-style: normal;
+	font-display: block;
+}

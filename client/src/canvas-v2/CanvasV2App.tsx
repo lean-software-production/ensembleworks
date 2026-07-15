@@ -87,6 +87,14 @@
  * double-handling). See both functions' doc comments.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+// Task C6b — the tldraw handwriting/text webfonts (tldraw_draw/_sans/_serif/
+// _mono), self-hosted from client/public/fonts/tldraw/ (see fonts.css's own
+// header for the full why/licensing). Side-effect import, same pattern as
+// canvas-v2/shapes/RoadmapShape.tsx's `roadmap.css` import: v1's `<Tldraw>`
+// registers these fonts itself via its FontManager, but CanvasV2App never
+// mounts that editor, so this is the ONLY place v2's real dogfood mount
+// gets them from.
+import './fonts.css'
 import {
 	Editor,
 	applyWheel,
