@@ -44,7 +44,7 @@
 // because `index()` is itself already stable (===) between rebuilds, exactly
 // like `snapshot()`.
 import { queryViewport, type Bounds } from '@ensembleworks/canvas-model'
-import { screenToWorld, type Camera, type ToolContext } from '@ensembleworks/canvas-editor'
+import { screenToWorld, type Camera, type Intent, type ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { ShapeBody } from './ShapeBody.js'
 import { isEmbedKind } from './shapeRegistry.js'
@@ -58,6 +58,15 @@ export interface ShapeLayerProps {
   readonly toolContext: ToolContext
   readonly camera: Camera
   readonly viewportSize: ViewportSize
+  /** See shapeRegistry.ts's ShapeBodyProps.dispatch doc comment — forwarded
+   * verbatim to every ShapeBody this layer renders, exactly like `getText`
+   * (derived from `toolContext` just below) is. UNLIKE getText, this is not
+   * derived from toolContext at all: the caller (CanvasV2App) builds ONE
+   * stable `dispatch` wrapping `editor.applyAll` and passes it straight
+   * through as a prop — see that file's CONTENT-MEMO-safe construction.
+   * Optional so callers/tests with nothing to dispatch (most of
+   * shape-layer.test.ts) can omit it, exactly like getText. */
+  readonly dispatch?: (intents: Intent[]) => void
 }
 
 /** The visible WORLD-space rectangle for a viewport of `size` screen pixels
@@ -74,7 +83,7 @@ export function viewportWorldBounds(camera: Camera, size: ViewportSize): Bounds 
   return { minX: topLeft.x, minY: topLeft.y, maxX: bottomRight.x, maxY: bottomRight.y }
 }
 
-export function ShapeLayer({ toolContext, camera, viewportSize }: ShapeLayerProps) {
+export function ShapeLayer({ toolContext, camera, viewportSize, dispatch }: ShapeLayerProps) {
   const snapshot = useDocSnapshot(toolContext)
   const editorState = useEditorState(toolContext.editor)
   // See CONSUMPTION NOTE above: the shared index, coherent with `snapshot`
@@ -106,6 +115,7 @@ export function ShapeLayer({ toolContext, camera, viewportSize }: ShapeLayerProp
             snapshot={snapshot}
             editorState={editorState}
             getText={(sid) => (typeof toolContext.editor.doc.getText === 'function' ? toolContext.editor.doc.getText(sid) : '')}
+            dispatch={dispatch}
           />
         )
       })}

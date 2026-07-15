@@ -75,7 +75,7 @@
 //       which of its fields, if any, the embed cares about.)
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 import { localBounds, worldTransform } from '@ensembleworks/canvas-model'
-import type { EditorState } from '@ensembleworks/canvas-editor'
+import type { EditorState, Intent } from '@ensembleworks/canvas-editor'
 import { lookupShapeComponent } from './shapeRegistry.js'
 
 export interface ShapeBodyContainerProps {
@@ -86,6 +86,10 @@ export interface ShapeBodyContainerProps {
    * verbatim to the looked-up Component, never read by this wrapper div
    * itself. */
   readonly getText?: (id: string) => string
+  /** See shapeRegistry.ts's ShapeBodyProps.dispatch doc comment — forwarded
+   * verbatim to the looked-up Component, never called by this wrapper div
+   * itself. */
+  readonly dispatch?: (intents: Intent[]) => void
 }
 
 /** Pure — exported so shape-layer.test.ts can pin the exact CSS transform
@@ -96,7 +100,7 @@ export function shapeBodyTransform(snapshot: CanvasDocument, shape: Shape): stri
   return `translate(${t.x}px, ${t.y}px) rotate(${t.rotation}rad)`
 }
 
-export function ShapeBody({ shape, snapshot, editorState, getText }: ShapeBodyContainerProps) {
+export function ShapeBody({ shape, snapshot, editorState, getText, dispatch }: ShapeBodyContainerProps) {
   const { maxX: w, maxY: h } = localBounds(shape) // localBounds is always {minX:0, minY:0, maxX:w, maxY:h} — geometry.ts's contract
   const Component = lookupShapeComponent(shape.kind)
   return (
@@ -113,7 +117,7 @@ export function ShapeBody({ shape, snapshot, editorState, getText }: ShapeBodyCo
         transform: shapeBodyTransform(snapshot, shape),
       }}
     >
-      <Component shape={shape} snapshot={snapshot} editorState={editorState} getText={getText} />
+      <Component shape={shape} snapshot={snapshot} editorState={editorState} getText={getText} dispatch={dispatch} />
     </div>
   )
 }

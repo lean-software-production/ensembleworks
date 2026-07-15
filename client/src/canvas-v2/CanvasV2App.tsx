@@ -100,6 +100,7 @@ import {
 	applyWheel,
 	createToolContext,
 	type InputEvent,
+	type Intent,
 	type KeyInputEvent,
 	type ToolContext,
 } from '@ensembleworks/canvas-editor'
@@ -625,6 +626,22 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	const handleTextChange = useCallback((id: string, text: string) => editor.apply({ type: 'SetText', id, text }), [editor])
 	const handleEndEdit = useCallback(() => editor.apply({ type: 'EndEdit' }), [editor])
 
+	// Task D2 — the write handle threaded to shape bodies (canvas-react's
+	// ShapeBodyProps.dispatch) so D3-D5's embeds (roadmap/file-viewer/…) can
+	// persist their own changes the same way a tool does, without being
+	// handed the whole Editor. STABLE for the whole session — `editor`
+	// itself never changes identity across this component's lifetime (it's
+	// constructed once in the mount effect above and lives in `session`
+	// state) — built with `useCallback` rather than an inline arrow so
+	// EmbedHost's content-memo comparator (`embedBodyPropsEqual`,
+	// canvas-react's EmbedHost.tsx) never sees a spurious "prop changed"
+	// from dispatch's own identity churning every render; that comparator
+	// deliberately EXCLUDES dispatch from its comparison anyway (dispatch is
+	// a write handle, not content), but keeping this reference stable is
+	// still the documented contract, not an accident this happens to rely
+	// on either side alone to uphold.
+	const dispatch = useCallback((intents: Intent[]) => editor.applyAll(intents), [editor])
+
 	// GLOBAL KEYBOARD-DELIVERY FALLBACK (B3's carried code-quality fix — see
 	// this task's own notes): Viewport's onKeyDown only fires for a keydown
 	// whose DOM target is Viewport's own div OR ONE OF ITS DESCENDANTS. The
@@ -714,7 +731,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				<Viewport onInput={handleInput} onViewportBlur={handleViewportBlur} onPointerCancel={cancelAndReset} style={{ position: 'absolute', inset: 0 }}>
 					<Grid camera={editorState.camera} />
 					<WorldLayer camera={editorState.camera}>
-						<ShapeLayer toolContext={toolContext} camera={editorState.camera} viewportSize={viewportSize} />
+						<ShapeLayer toolContext={toolContext} camera={editorState.camera} viewportSize={viewportSize} dispatch={dispatch} />
 						<EmbedLayer
 							toolContext={toolContext}
 							camera={editorState.camera}
@@ -722,6 +739,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 							tick={tick}
 							suspendAfterTicks={SUSPEND_AFTER_TICKS}
 							lifecycleFor={canvasV2EmbedLifecycles.lifecycleFor}
+							dispatch={dispatch}
 						/>
 						<TextEditor toolContext={toolContext} onTextChange={handleTextChange} onEndEdit={handleEndEdit} />
 					</WorldLayer>

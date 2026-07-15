@@ -148,7 +148,7 @@
 // deferred pointer-capture coverage.
 import { memo, useEffect, useMemo, useRef, type ComponentType } from 'react'
 import { localBounds, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
-import type { EditorState } from '@ensembleworks/canvas-editor'
+import type { EditorState, Intent } from '@ensembleworks/canvas-editor'
 import { lookupShapeComponent, type ShapeBodyProps } from '../shapeRegistry.js'
 import { shapeBodyTransform } from '../ShapeBody.js'
 import { createEmbedController, sameEmbedContent, type EmbedController, type EmbedLifecycle, type EmbedState } from './embedLifecycle.js'
@@ -170,6 +170,15 @@ export interface EmbedHostProps {
    * "LIFECYCLE CALLBACKS VIA PROPS" note. Optional: a body with nothing to
    * pause/resume passes nothing. */
   readonly lifecycle?: EmbedLifecycle
+  /** See shapeRegistry.ts's ShapeBodyProps.dispatch doc comment — forwarded
+   * to the memoized embed component exactly like `shape`/`snapshot`/
+   * `editorState`. DELIBERATELY EXCLUDED from `embedBodyPropsEqual` below —
+   * see that function's own doc comment for why comparing (or hashing) it
+   * would defeat the whole content-memo contract this file exists to
+   * provide. A stable reference in practice (CanvasV2App builds it once via
+   * `useCallback`), but the comparator must not rely on that — it simply
+   * never looks at this field at all. */
+  readonly dispatch?: (intents: Intent[]) => void
 }
 
 /** Content-memo comparator for the `React.memo`-wrapped embed body — see
@@ -179,8 +188,20 @@ export interface EmbedHostProps {
  * `snapshot` (it is optional-by-convention), so no per-shape comparator can
  * prove the rest of the document irrelevant to it anyway — the CONTENT-MEMO
  * win only holds if the comparator ignores everything but this shape's own
- * serialized content. */
-function embedBodyPropsEqual(a: ShapeBodyProps, b: ShapeBodyProps): boolean {
+ * serialized content.
+ *
+ * `dispatch` gets the SAME treatment, for a different reason (Task D2): it
+ * is not content at all, it's a caller-owned WRITE HANDLE — comparing it
+ * (by reference or by folding it into some hash) would be simply wrong, not
+ * just a missed optimization. If `dispatch` ever became unstable (rebuilt
+ * every render instead of CanvasV2App's `useCallback`-once), the ONLY
+ * consequence would be `Component` closing over a slightly stale function
+ * reference from the memo's PREVIOUS bailout — never a spurious re-render —
+ * because this comparator never inspects `a.dispatch`/`b.dispatch` at all.
+ * Exported (unlike a purely internal helper would be) specifically so
+ * embed.test.ts can pin this exclusion directly, the same way
+ * embedLifecycle.ts's `sameEmbedContent` is pinned directly in Part A. */
+export function embedBodyPropsEqual(a: ShapeBodyProps, b: ShapeBodyProps): boolean {
   return sameEmbedContent(a.shape, b.shape)
 }
 
@@ -199,6 +220,9 @@ export interface EmbedBodyFrameProps {
   readonly snapshot: CanvasDocument
   readonly editorState: EditorState
   readonly state: EmbedState
+  /** See EmbedHostProps.dispatch doc comment — forwarded verbatim to the
+   * memoized embed component, never read by this frame itself. */
+  readonly dispatch?: (intents: Intent[]) => void
 }
 
 /** The PURE (no controller, no ticking, no effects) render of "this shape,
@@ -215,7 +239,7 @@ export interface EmbedBodyFrameProps {
  * wrapper that computes `state` via embedLifecycle.ts's controller and
  * delegates the actual markup to this function — there is exactly one
  * place that decides what a given state LOOKS like. */
-export function EmbedBodyFrame({ shape, snapshot, editorState, state }: EmbedBodyFrameProps) {
+export function EmbedBodyFrame({ shape, snapshot, editorState, state, dispatch }: EmbedBodyFrameProps) {
   const { maxX: w, maxY: h } = localBounds(shape) // localBounds is always {minX:0, minY:0, maxX:w, maxY:h} — geometry.ts's contract, same as ShapeBody.tsx
   const Component: ComponentType<ShapeBodyProps> = lookupShapeComponent(shape.kind)
   // Stable across renders as long as `Component` itself doesn't change
@@ -241,12 +265,12 @@ export function EmbedBodyFrame({ shape, snapshot, editorState, state }: EmbedBod
         ...embedWrapperStyle(state),
       }}
     >
-      <MemoizedComponent shape={shape} snapshot={snapshot} editorState={editorState} />
+      <MemoizedComponent shape={shape} snapshot={snapshot} editorState={editorState} dispatch={dispatch} />
     </div>
   )
 }
 
-export function EmbedHost({ shape, snapshot, editorState, visible, tick, suspendAfterTicks, lifecycle }: EmbedHostProps) {
+export function EmbedHost({ shape, snapshot, editorState, visible, tick, suspendAfterTicks, lifecycle, dispatch }: EmbedHostProps) {
   const controllerRef = useRef<EmbedController | null>(null)
   // Latest-value refs for the mount effect below (bound once per commit
   // lifetime, empty deps) — same latest-ref pattern as Viewport.tsx's
@@ -291,5 +315,5 @@ export function EmbedHost({ shape, snapshot, editorState, visible, tick, suspend
   // render, and any renderToStaticMarkup render — no effects there at all)
   // there is no controller yet; a brand-new embed is by definition active.
   const state = controllerRef.current?.getState() ?? 'active'
-  return <EmbedBodyFrame shape={shape} snapshot={snapshot} editorState={editorState} state={state} />
+  return <EmbedBodyFrame shape={shape} snapshot={snapshot} editorState={editorState} state={state} dispatch={dispatch} />
 }
