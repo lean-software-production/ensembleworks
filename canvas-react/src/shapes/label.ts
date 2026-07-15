@@ -39,7 +39,10 @@ export function labelOf(shape: ShapeBodyProps['shape'], getText?: (id: string) =
   return shape.kind
 }
 
-function flattenRichText(node: unknown): string {
+/** Exported (Task C3) so TextShape.tsx's own truncated resolver — live text,
+ * then richText, then '' — can reuse this exact flattening logic without
+ * duplicating it. Behavior/signature unchanged from labelOf's private use. */
+export function flattenRichText(node: unknown): string {
   if (!node || typeof node !== 'object') return ''
   const n = node as { text?: unknown; content?: unknown }
   if (typeof n.text === 'string') return n.text
