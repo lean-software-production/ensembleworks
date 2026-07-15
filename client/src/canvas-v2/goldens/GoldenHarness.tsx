@@ -31,6 +31,7 @@ import {
 	EmbedLayer,
 	Grid,
 	Overlay,
+	registerCoreShapes,
 	ShapeLayer,
 	Viewport,
 	WorldLayer,
@@ -58,6 +59,14 @@ export function GoldenHarness({ fixture }: GoldenHarnessProps) {
 	// for no benefit (this harness never mutates anything after setup).
 	const session = useMemo(() => {
 		registerCanvasV2Shapes()
+		// Task C7 CRITICAL FIX — without this, note/frame/text/geo fixtures
+		// render via ShapeLayer's BoxShape FALLBACK (shapeRegistry.ts's fallback
+		// policy: an unregistered kind draws the generic blue placeholder box),
+		// silently baking wireframe-placeholder screenshots into the goldens
+		// instead of the real dedicated bodies (NoteShape/FrameShape/TextShape/
+		// GeoShape, canvas-react/src/shapes/*). Mirrors CanvasV2App.tsx's own
+		// registerCanvasV2Shapes() + registerCoreShapes() pairing exactly.
+		registerCoreShapes()
 		const doc = LoroCanvasDoc.create({ peerId: 1n })
 		doc.putPage({ id: PAGE_ID, name: 'Goldens' })
 		for (const shape of fixture.shapes) doc.putShape(shape)

@@ -44,7 +44,8 @@
 import { test, expect } from '../lib/fixtures'
 
 // Fixtures whose render is deterministic on the first settled paint — no
-// masking, no special wait condition beyond the harness mounting.
+// masking, no special wait condition beyond the harness mounting (and, as of
+// Task C7, the webfonts settling — see waitForGoldenFonts below).
 const SIMPLE_FIXTURES = [
 	'box-note',
 	'box-text',
@@ -58,14 +59,47 @@ const SIMPLE_FIXTURES = [
 	'iframe-blank',
 	'neko-splash',
 	'file-viewer-empty',
+	// Task C7 — component goldens for the note/frame/text/geo RICH BODIES
+	// (registerCoreShapes(), wired into GoldenHarness.tsx by this task; see
+	// that file's own comment). Distinct from box-note/box-text/box-geo/
+	// box-frame above (fixtures.ts's G2-era fixtures, which — now that
+	// registerCoreShapes() is wired in — exercise the same real bodies at
+	// their DEFAULT prop values): these four exercise the representative
+	// non-default states bounds DoD #1 calls out (note colors + author
+	// badge, a labeled frame, styled text, and the geo SVG variants).
+	'note-colors',
+	'frame-labeled',
+	'text-styled',
+	'geo-variants',
 ] as const
 
 const SETTLE_MS = 300 // one paint cycle's worth of margin past the harness's synchronous mount
+
+// Task C7 — the 4 tldraw webfonts (client/src/canvas-v2/fonts.css, self-
+// hosted since Task C6b) load ASYNCHRONOUSLY; a screenshot taken before a
+// face finishes loading would nondeterministically bake in the sans-serif/
+// serif/monospace fallback instead of the real handwriting/IBM-Plex glyphs
+// (NoteShape.tsx/TextShape.tsx/GeoShape.tsx all declare these families).
+// `document.fonts.ready` resolves once every face the page has requested
+// (the harness's CSS `@font-face` rules, `font-display: block`) has either
+// loaded or failed — waiting on it, PLUS an explicit `document.fonts.load`
+// for each family (belt-and-suspenders: `.ready` alone can resolve before a
+// lazily-triggered face used only inside dynamically-rendered shape DOM has
+// actually been requested), makes every golden below deterministic across
+// runs/machines rather than a font-load race.
+async function waitForGoldenFonts(page: import('@playwright/test').Page): Promise<void> {
+	await page.evaluate(async () => {
+		const families = ["16px tldraw_draw", "16px tldraw_sans", "16px tldraw_serif", "16px tldraw_mono"]
+		await Promise.all(families.map((f) => document.fonts.load(f)))
+		await document.fonts.ready
+	})
+}
 
 for (const name of SIMPLE_FIXTURES) {
 	test(`component golden: ${name}`, async ({ page }) => {
 		await page.goto(`/component-goldens.html?fixture=${name}`)
 		await expect(page.locator(`[data-golden-fixture="${name}"]`)).toBeVisible()
+		await waitForGoldenFonts(page)
 		await page.waitForTimeout(SETTLE_MS)
 		await expect(page).toHaveScreenshot(`component-${name}.png`)
 	})
@@ -77,6 +111,7 @@ for (const name of SIMPLE_FIXTURES) {
 test('component golden: roadmap-empty', async ({ page }) => {
 	await page.goto('/component-goldens.html?fixture=roadmap-empty')
 	await expect(page.getByText('No roadmap data yet')).toBeVisible({ timeout: 15_000 })
+	await waitForGoldenFonts(page)
 	await page.waitForTimeout(SETTLE_MS)
 	await expect(page).toHaveScreenshot('component-roadmap-empty.png')
 })
@@ -97,6 +132,7 @@ test('component golden: roadmap-empty', async ({ page }) => {
 test('component golden: terminal-connecting', async ({ page }) => {
 	await page.goto('/component-goldens.html?fixture=terminal-connecting')
 	await expect(page.locator('[data-golden-fixture="terminal-connecting"]')).toBeVisible()
+	await waitForGoldenFonts(page)
 	await page.waitForTimeout(SETTLE_MS)
 	await expect(page).toHaveScreenshot('component-terminal-connecting.png', {
 		mask: [page.locator('[data-canvas-v2-shape="terminal"]')],

@@ -57,6 +57,103 @@ function embedShape(id: string, kind: string, w: number, h: number, props: Recor
 
 const CAMERA = { x: -20, y: -20, z: 1 }
 
+// --- Task C7: component goldens for the four core rich bodies -------------
+// note/frame/text/geo (canvas-react/src/shapes/{Note,Frame,Text,Geo}Shape.tsx,
+// registered by GoldenHarness.tsx's registerCoreShapes() call — see that
+// file's own Task C7 comment for why that call is load-bearing: without it
+// every one of these renders as the generic BoxShape fallback instead). A
+// general-purpose shape builder (unlike embedShape above, these need
+// per-shape `x`/`w`/`h` for multi-shape galleries, and some need `meta` for
+// the note author badge).
+function richText(text: string) {
+	return { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text }] }] }
+}
+
+function coreShape(
+	id: string,
+	kind: string,
+	x: number,
+	w: number,
+	h: number,
+	props: Record<string, unknown> = {},
+	meta: Record<string, unknown> = {},
+): Shape {
+	return {
+		id, kind, parentId: PAGE_ID, index: 'a1', x, y: 40, rotation: 0,
+		isLocked: false, opacity: 1, meta, props: { w, h, ...props },
+	} as Shape
+}
+
+// note: bounds DoD #1's representative states — a couple of colors (yellow/
+// blue/green), one WITH `meta.author` set (the corner author badge,
+// NoteShape.tsx's `authorOf`) and two without, all showing the handwriting
+// font (NoteShape.tsx's fixed `HANDWRITING_FONT`, no per-note override).
+function noteColorsFixture(): Fixture {
+	const yellow = coreShape('shape:note-yellow', 'note', 40, 180, 140, {
+		color: 'yellow',
+		richText: richText('Yellow sticky'),
+	})
+	const blue = coreShape('shape:note-blue', 'note', 260, 180, 140, {
+		color: 'blue',
+		richText: richText('Blue sticky (authored)'),
+	}, { author: 'Ada Lovelace' })
+	const green = coreShape('shape:note-green', 'note', 480, 180, 140, {
+		color: 'green',
+		richText: richText('Green sticky'),
+	})
+	return { name: 'note-colors', shapes: [yellow, blue, green], camera: CAMERA }
+}
+
+// frame: bounds DoD #1's "frame with a label" — non-empty `props.name`
+// rendered by FrameShape.tsx's header chrome (as opposed to fixtures.ts's
+// own `box-frame`, which also sets a name but predates this task and lives
+// in the OTHER fixture registry this task was told not to touch).
+function frameLabeledFixture(): Fixture {
+	const frame = coreShape('shape:frame-labeled', 'frame', 40, 260, 160, { name: 'Sprint Planning' })
+	return { name: 'frame-labeled', shapes: [frame], camera: CAMERA }
+}
+
+// text: a STYLED text shape (non-default font/size/color/align) to exercise
+// TextShape.tsx's full prop-resolution path, not just its defaults — default
+// font/size/color/align are already covered by fixtures.ts's `box-text`.
+function textStyledFixture(): Fixture {
+	const text = coreShape('shape:text-styled', 'text', 40, 320, 140, {
+		richText: richText('Styled text body'),
+		color: 'violet',
+		font: 'serif',
+		size: 'l',
+		textAlign: 'end',
+	})
+	return { name: 'text-styled', shapes: [text], camera: CAMERA }
+}
+
+// geo: the four SPECIAL_CASED_VARIANTS GeoShape.tsx draws with real geometry
+// (rectangle/ellipse/triangle/diamond), plus one variant NOT in that set
+// (hexagon) to lock in the documented rectangle-outline FALLBACK path too —
+// each filled/labeled so both the SVG geometry and the centered label render.
+function geoVariantsFixture(): Fixture {
+	const rectangle = coreShape('shape:geo-rectangle', 'geo', 40, 120, 100, {
+		geo: 'rectangle', color: 'blue', fill: 'solid', richText: richText('rectangle'),
+	})
+	const ellipse = coreShape('shape:geo-ellipse', 'geo', 200, 120, 100, {
+		geo: 'ellipse', color: 'orange', fill: 'solid', richText: richText('ellipse'),
+	})
+	const triangle = coreShape('shape:geo-triangle', 'geo', 360, 120, 100, {
+		geo: 'triangle', color: 'green', fill: 'solid', richText: richText('triangle'),
+	})
+	const diamond = coreShape('shape:geo-diamond', 'geo', 520, 120, 100, {
+		geo: 'diamond', color: 'violet', fill: 'solid', richText: richText('diamond'),
+	})
+	const fallback = coreShape('shape:geo-fallback', 'geo', 680, 120, 100, {
+		geo: 'hexagon', color: 'red', fill: 'solid', richText: richText('hexagon (fallback)'),
+	})
+	return {
+		name: 'geo-variants',
+		shapes: [rectangle, ellipse, triangle, diamond, fallback],
+		camera: CAMERA,
+	}
+}
+
 export const SHAPE_FIXTURES: Readonly<Record<string, Fixture>> = {
 	'terminal-connecting': {
 		name: 'terminal-connecting',
@@ -88,4 +185,8 @@ export const SHAPE_FIXTURES: Readonly<Record<string, Fixture>> = {
 		shapes: [embedShape('shape:file-viewer-1', 'file-viewer', 480, 320, { path: '' })],
 		camera: CAMERA,
 	},
+	'note-colors': noteColorsFixture(),
+	'frame-labeled': frameLabeledFixture(),
+	'text-styled': textStyledFixture(),
+	'geo-variants': geoVariantsFixture(),
 }
