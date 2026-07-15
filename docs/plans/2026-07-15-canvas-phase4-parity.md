@@ -1681,6 +1681,18 @@ deviation from DoD #8 (never a silent ungated landing)._
   load the tldraw draw/handwriting webfont asset into the v2 client bundle
   (client-workspace `@font-face`/index.html or a canvas-v2 font-load module) —
   fold into C6 (or a small dedicated Seam-C task) ahead of C7.
+  - **RESOLVED in C6b:** self-hosted the 4 tldraw families (Shantell Sans
+    `tldraw_draw`; IBM Plex Sans/Serif/Mono) as woff2 under
+    `client/public/fonts/tldraw/` + `@font-face` in `client/src/canvas-v2/
+    fonts.css`, imported by CanvasV2App AND `GoldenHarness.tsx`. Both SIL OFL
+    1.1 (verified from source), LICENSE files committed; entry chunk unchanged
+    (separate assets). NOTE for Seam F: v1 pulls these from external
+    `cdn.tldraw.com`, v2 self-hosts the same typefaces — parity should hold.
+  - **C7 PREREQUISITE (found in C6b):** `GoldenHarness.tsx` does NOT call
+    `registerCoreShapes()`, so its `box-note`/`box-text`/`box-geo` fixtures
+    still render via the BoxShape FALLBACK. C7 MUST call `registerCoreShapes()`
+    in the harness and use real note/frame/text/geo fixtures — else the "rich
+    body" goldens silently capture the placeholder wireframe boxes.
 - **C4 (GeoShape) — parity gaps deferred to Seam F.** GeoShape ships honestly-
   documented approximations (all noted in `GeoShape.tsx`'s GROUNDING header),
   for the Seam F masked-diff harness + C7 goldens to catch/tolerance; fix only
