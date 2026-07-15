@@ -33,9 +33,10 @@
  *      either directly inside the package (editor.ts's `EditorOpts` doc
  *      comment), but client app code is exactly the layer allowed to reach
  *      for a real clock/PRNG — this is that layer.
- *   6. `createToolContext(editor)` + `registerCanvasV2Shapes()` (idempotent
- *      guard already inside that function) + `createToolSet(toolContext)`
- *      (tool-loop.ts).
+ *   6. `createToolContext(editor)` + `registerCanvasV2Shapes()` + `registerCoreShapes()`
+ *      (both idempotently guarded inside their own function, order-independent —
+ *      they populate the same process-wide canvas-react shapeRegistry Map)
+ *      + `createToolSet(toolContext)` (tool-loop.ts).
  *   7. `window.__ew = { editor, doc: peer.doc, presencePublisher }` — the
  *      design's E2E debug hook (mirrors the legacy app's `window.__ewEditor`,
  *      App.tsx). `presencePublisher` (Task G4) lets a test drive this
@@ -100,6 +101,7 @@ import {
 	EmbedLayer,
 	Grid,
 	Overlay,
+	registerCoreShapes,
 	ShapeLayer,
 	TextEditor,
 	Viewport,
@@ -284,6 +286,7 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 			const editor = new Editor({ doc: peer.doc, now: () => performance.now(), random: cryptoRandom, pageId })
 			const toolContext = createToolContext(editor)
 			registerCanvasV2Shapes()
+			registerCoreShapes()
 			const tools = createToolSet(toolContext)
 			const presencePublisher = createPresencePublisher(presenceStore)
 			const s: Session = { peer, editor, toolContext, tools, presenceStore, presencePublisher, selfKey: userId }
