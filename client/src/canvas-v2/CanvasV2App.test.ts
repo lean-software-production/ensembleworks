@@ -308,6 +308,97 @@ async function main() {
 	assert.equal(ewDel.doc.getShape('shape:del-c'), undefined, 'shape:del-c is deleted once editingId is cleared (cleanup, also re-proving the un-suppressed path)')
 
 	// ==========================================================================
+	// (d4) KEYBOARD DELIVERY SURVIVES A TOOLBAR CLICK (B3's CARRIED
+	// CODE-QUALITY FIX): the v2 keydown listener lived on Viewport's own div;
+	// the toolbar `<button>`s are DOM SIBLINGS of Viewport (see
+	// CanvasV2App.tsx's JSX — the toolbar div and the viewport-wrapping div are
+	// siblings under the outermost flex container), so a keydown dispatched to
+	// a FOCUSED toolbar button never bubbles into Viewport's own onKeyDown at
+	// all — before this fix, Escape/Delete/Backspace would silently no-op the
+	// moment a toolbar button held focus (the real-browser default after a
+	// click). This proves the NEW document-level fallback listener
+	// (CanvasV2App.tsx's GLOBAL KEYBOARD-DELIVERY FALLBACK effect) closes that
+	// gap: focus is moved to a toolbar button PROGRAMMATICALLY (`.focus()`, not
+	// `.click()` — a click on a DIFFERENT tool button would itself trigger
+	// `selectTool`'s own cancelAndReset via the tool-switch path, which is a
+	// real but DIFFERENT trigger than the one under test here), then a real
+	// bubbling keydown is dispatched on that FOCUSED BUTTON (not the viewport)
+	// for both Escape (cancels an in-flight create-drag) and Delete (removes a
+	// selected shape).
+	// ==========================================================================
+	const geoBtn = container.querySelector('[data-canvas-v2-tool="geo"]') as HTMLElement | null
+	const selectBtn = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+	assert.ok(geoBtn && selectBtn, `both the geo and select toolbar buttons must exist in the DOM — DOM: ${container.innerHTML}`)
+
+	// Switch to the geo (Shape) tool via a REAL click on its own button (this
+	// is the ordinary tool-switch path, exercised here only to get an
+	// in-flight create-drag gesture going below — not itself part of the
+	// regression being proven).
+	await act(async () => {
+		geoBtn!.click()
+	})
+
+	const ewFocus = (globalThis as any).window.__ew as {
+		editor: { get(): { selection: ReadonlySet<string> }; apply(intent: unknown): void; applyAll(intents: unknown[]): void }
+		doc: { listShapes(): Array<{ id: string }> }
+	}
+	const shapeIdsBeforeDrag = new Set(ewFocus.doc.listShapes().map((s) => s.id))
+
+	// A real pointerdown + pointermove ON THE VIEWPORT (not the toolbar) starts
+	// a geo create-drag gesture crossing the drag threshold — mirrors
+	// tool-loop.test.ts's own create-drag fixture deltas (500,500 -> 560,560).
+	await act(async () => {
+		viewportEl!.dispatchEvent(new (win as any).PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 11, clientX: 500, clientY: 500, buttons: 1 }))
+		viewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 11, clientX: 560, clientY: 560, buttons: 1 }))
+	})
+	const previewShape = ewFocus.doc.listShapes().find((s) => !shapeIdsBeforeDrag.has(s.id))
+	assert.ok(previewShape, `precondition: the geo drag must have created an in-flight preview shape — shapes: ${JSON.stringify(ewFocus.doc.listShapes())}`)
+
+	// Move focus to a DIFFERENT toolbar button WITHOUT clicking it (no
+	// tool-switch side effect) — simulates the real-browser "a button holds
+	// focus after being clicked" default this fix targets.
+	await act(async () => {
+		selectBtn!.focus()
+	})
+	assert.equal(document.activeElement, selectBtn, 'precondition: the (different) select toolbar button holds focus, NOT the viewport')
+
+	// The real regression: dispatch Escape on the FOCUSED BUTTON (not the
+	// viewport) — before this fix, this event never reached CanvasV2App at all.
+	await act(async () => {
+		selectBtn!.dispatchEvent(new (win as any).KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+	})
+	assert.equal(
+		ewFocus.doc.listShapes().find((s) => s.id === previewShape!.id),
+		undefined,
+		'an Escape keydown dispatched on a FOCUSED TOOLBAR BUTTON (not the viewport) still cancels the in-flight create-drag preview',
+	)
+	console.log('ok: CanvasV2App — Escape reaches cancelAndReset even while a toolbar button (a DOM sibling of Viewport) holds focus')
+
+	// Same proof for Delete: select an existing shape, keep focus on the
+	// toolbar button, dispatch Delete there instead of on the viewport.
+	await act(async () => {
+		ewFocus.editor.apply({ type: 'CreateShape', shape: seedShape('shape:toolbar-focus-del', 460, 460) })
+		ewFocus.editor.apply({ type: 'SetSelection', ids: ['shape:toolbar-focus-del'] })
+	})
+	assert.ok(ewFocus.doc.listShapes().some((s) => s.id === 'shape:toolbar-focus-del'), 'precondition: shape:toolbar-focus-del exists and is selected')
+	assert.equal(document.activeElement, selectBtn, 'precondition: focus is still on the toolbar button, not the viewport')
+	await act(async () => {
+		selectBtn!.dispatchEvent(new (win as any).KeyboardEvent('keydown', { key: 'Delete', bubbles: true, cancelable: true }))
+	})
+	assert.equal(
+		ewFocus.doc.listShapes().find((s) => s.id === 'shape:toolbar-focus-del'),
+		undefined,
+		'a Delete keydown dispatched on a FOCUSED TOOLBAR BUTTON (not the viewport) still deletes the selected shape',
+	)
+	console.log('ok: CanvasV2App — Delete reaches deleteSelectionIntents even while a toolbar button holds focus')
+
+	// Restore the select tool as the active tool (cleanup — the geo tool
+	// switch above is otherwise left active for the rest of the file).
+	await act(async () => {
+		selectBtn!.click()
+	})
+
+	// ==========================================================================
 	// (e) UNMOUNT DISPOSES CLEANLY: no more sync reaches the (now-torn-down)
 	// client peer. `window.__ew.doc` was set once by CanvasV2App's boot
 	// sequence (the design's E2E hook) — capture that SAME doc reference
