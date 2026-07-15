@@ -97,6 +97,7 @@ import {
 	createInitialToolStates,
 	createToolSet,
 	currentSnapResult,
+	deleteSelectionIntents,
 	dispatchToActiveTool,
 	type ToolId,
 	type ToolSet,
@@ -448,6 +449,21 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			if (event.type === 'wheel') {
 				const next = applyWheel(editor.get().camera, event)
 				editor.apply({ type: 'SetCamera', ...next })
+				return
+			}
+			// Delete/Backspace -> DeleteShapes (Task B2). Gated on `editingId ===
+			// null`: while a shape is being text-edited, TextEditor's own textarea
+			// owns Delete/Backspace (deleting a CHARACTER) — its keydown handler
+			// doesn't stop propagation (see TextEditor.tsx), so this same event
+			// still reaches here, and forwarding it to the active tool below would
+			// be harmless (no tool handles keydown) but applying
+			// deleteSelectionIntents here WOULD wrongly delete the shape being
+			// edited out from under the user. Returns before reaching
+			// dispatchToActiveTool below — this event is fully consumed here, not
+			// also forwarded to whatever tool is active.
+			if (event.type === 'keydown' && (event.key === 'Delete' || event.key === 'Backspace') && editor.get().editingId === null) {
+				const intents = deleteSelectionIntents(editor)
+				if (intents.length > 0) editor.applyAll(intents)
 				return
 			}
 			const next = dispatchToActiveTool(tools, toolStatesRef.current, activeToolIdRef.current, editor, event)

@@ -9,6 +9,7 @@ import {
 	createSelectAndTransformTool,
 	createToolSet,
 	currentSnapResult,
+	deleteSelectionIntents,
 	dispatchToActiveTool,
 	type SelectAndTransformState,
 } from './tool-loop.js'
@@ -237,6 +238,39 @@ function setup() {
 	assert.ok(snap, 'a SnapResult is surfaced once the select tool is mid-drag')
 	assert.ok(snap.guides.length > 0, 'the nearby shape produces at least one guide')
 	console.log('ok: tool-loop — currentSnapResult surfaces the select tool\'s carried SnapResult')
+}
+
+// ============================================================================
+// 7. deleteSelectionIntents (Task B2) — the pure user-emitter for
+//    DeleteShapes. A two-shape selection yields DeleteShapes for both ids
+//    followed by SetSelection([]); an empty selection yields [] (no no-op
+//    DeleteShapes([]), no redundant SetSelection([])).
+// ============================================================================
+{
+	const { editor } = setup()
+	editor.doc.putShape(geoShape('shape:b', 200, 200))
+	editor.doc.commit()
+
+	assert.deepEqual(deleteSelectionIntents(editor), [], 'an empty selection yields no intents at all')
+
+	editor.apply({ type: 'SetSelection', ids: ['shape:a', 'shape:b'] })
+	assert.deepEqual(
+		deleteSelectionIntents(editor),
+		[
+			{ type: 'DeleteShapes', ids: ['shape:a', 'shape:b'] },
+			{ type: 'SetSelection', ids: [] },
+		],
+		'a two-shape selection yields DeleteShapes for both ids, then SetSelection([])',
+	)
+
+	// Applying those intents actually deletes both shapes and clears the
+	// selection — not just the right-shaped Intent[], the right EFFECT too.
+	editor.applyAll(deleteSelectionIntents(editor))
+	assert.equal(editor.doc.getShape('shape:a'), undefined, 'shape:a is actually gone after applying the intents')
+	assert.equal(editor.doc.getShape('shape:b'), undefined, 'shape:b is actually gone after applying the intents')
+	assert.deepEqual([...editor.get().selection], [], 'selection is cleared after applying the intents')
+
+	console.log('ok: tool-loop — deleteSelectionIntents (two-shape selection, and the empty-selection no-op)')
 }
 
 console.log('ok: tool-loop.test.ts — all cases passed')

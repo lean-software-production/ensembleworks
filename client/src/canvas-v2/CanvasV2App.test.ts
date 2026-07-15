@@ -218,7 +218,97 @@ async function main() {
 	presenceB.destroy()
 
 	// ==========================================================================
-	// (d) UNMOUNT DISPOSES CLEANLY: no more sync reaches the (now-torn-down)
+	// (d) DELETE/BACKSPACE -> DeleteShapes (Task B2), including the
+	// text-editing SUPPRESSION case: TextEditor owns Delete/Backspace while a
+	// shape is being edited (`editingId !== null`), so a real DOM keydown must
+	// reach handleInput (it bubbles all the way up through Viewport's own
+	// onKeyDown — TextEditor's own handler, handleEditorKeyDown, never calls
+	// stopPropagation, see TextEditor.tsx) WITHOUT deleting the shape being
+	// edited. Drives the FULL real path end to end: a genuine bubbling
+	// `KeyboardEvent` dispatched on the focusable viewport div (the tabIndex
+	// target Viewport.tsx documents as required for onKeyDown to ever fire at
+	// all) -> Viewport's keyEventToInput -> CanvasV2App.handleInput's new
+	// Delete/Backspace branch -> deleteSelectionIntents -> editor.applyAll.
+	// ==========================================================================
+	const ewDel = (globalThis as any).window.__ew as {
+		editor: {
+			get(): { selection: ReadonlySet<string>; editingId: string | null }
+			apply(intent: unknown): void
+			applyAll(intents: unknown[]): void
+		}
+		doc: { getShape(id: string): unknown }
+	}
+	// The tabIndex=0 div Viewport itself renders (see Viewport.tsx's
+	// ABANDONMENT-GAP / keyboard-focus header) — the ONLY element in this whole
+	// render tree carrying an explicit tabIndex, so a plain attribute selector
+	// finds it unambiguously.
+	const viewportEl = container.querySelector('[tabindex]') as HTMLElement | null
+	assert.ok(viewportEl, `the focusable viewport div (Viewport.tsx's tabIndex=0 root) must exist in the DOM — DOM: ${container.innerHTML}`)
+
+	function pressKey(key: 'Delete' | 'Backspace'): void {
+		viewportEl!.dispatchEvent(new (win as any).KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }))
+	}
+
+	// (d1) Delete, editingId === null: deletes the selection.
+	await act(async () => {
+		ewDel.editor.apply({ type: 'CreateShape', shape: seedShape('shape:del-a', 400, 400) })
+		ewDel.editor.apply({ type: 'SetSelection', ids: ['shape:del-a'] })
+	})
+	assert.ok(ewDel.doc.getShape('shape:del-a'), 'precondition: shape:del-a exists and is selected before the keypress')
+	await act(async () => {
+		pressKey('Delete')
+	})
+	assert.equal(ewDel.doc.getShape('shape:del-a'), undefined, 'Delete with a non-empty selection and editingId===null deletes the selected shape')
+	assert.deepEqual([...ewDel.editor.get().selection], [], 'the selection is cleared after the Delete-driven DeleteShapes')
+	console.log('ok: CanvasV2App — a real Delete keydown deletes the selected shape (editingId===null)')
+
+	// (d2) Backspace, editingId === null: same wiring, the other bound key.
+	await act(async () => {
+		ewDel.editor.apply({ type: 'CreateShape', shape: seedShape('shape:del-b', 420, 420) })
+		ewDel.editor.apply({ type: 'SetSelection', ids: ['shape:del-b'] })
+	})
+	assert.ok(ewDel.doc.getShape('shape:del-b'), 'precondition: shape:del-b exists and is selected before the keypress')
+	await act(async () => {
+		pressKey('Backspace')
+	})
+	assert.equal(ewDel.doc.getShape('shape:del-b'), undefined, 'Backspace with a non-empty selection and editingId===null deletes the selected shape')
+	console.log('ok: CanvasV2App — a real Backspace keydown deletes the selected shape (editingId===null)')
+
+	// (d3) SUPPRESSION: editingId !== null -- neither key deletes the shape
+	// being edited. BeginEdit stands in for the real double-click-to-edit
+	// gesture (already covered by tool-loop.test.ts's own transform/select
+	// probes) -- what matters here is CanvasV2App's own gate on editingId, not
+	// how editingId got set.
+	await act(async () => {
+		ewDel.editor.apply({ type: 'CreateShape', shape: seedShape('shape:del-c', 440, 440) })
+		ewDel.editor.apply({ type: 'SetSelection', ids: ['shape:del-c'] })
+		ewDel.editor.apply({ type: 'BeginEdit', id: 'shape:del-c' })
+	})
+	assert.equal(ewDel.editor.get().editingId, 'shape:del-c', 'precondition: shape:del-c is being edited')
+	await act(async () => {
+		pressKey('Delete')
+	})
+	assert.ok(ewDel.doc.getShape('shape:del-c'), 'Delete while editingId!==null must NOT delete the shape being edited (TextEditor owns the keyboard)')
+	assert.equal(ewDel.editor.get().editingId, 'shape:del-c', 'editingId is unchanged by the suppressed Delete')
+	await act(async () => {
+		pressKey('Backspace')
+	})
+	assert.ok(ewDel.doc.getShape('shape:del-c'), 'Backspace while editingId!==null must NOT delete the shape being edited either')
+	console.log('ok: CanvasV2App — Delete and Backspace are both suppressed while editingId!==null (TextEditor owns the keyboard)')
+
+	// Clean up: end the edit and delete shape:del-c through the same real
+	// keyboard path, so the doc is back to its pre-(d) shape count (2) for the
+	// unmount section's precondition below.
+	await act(async () => {
+		ewDel.editor.apply({ type: 'EndEdit' })
+	})
+	await act(async () => {
+		pressKey('Delete')
+	})
+	assert.equal(ewDel.doc.getShape('shape:del-c'), undefined, 'shape:del-c is deleted once editingId is cleared (cleanup, also re-proving the un-suppressed path)')
+
+	// ==========================================================================
+	// (e) UNMOUNT DISPOSES CLEANLY: no more sync reaches the (now-torn-down)
 	// client peer. `window.__ew.doc` was set once by CanvasV2App's boot
 	// sequence (the design's E2E hook) — capture that SAME doc reference
 	// before unmount, then prove a further server-side write never reaches it

@@ -237,6 +237,32 @@ export function dispatchToActiveTool(
  * means the whole viewport lost its input context, not just one tool) plus
  * whatever cleanup Intents the active tool's in-flight state demands.
  */
+/**
+ * The user emitter for `DeleteShapes` (Task B2) — until now the ONLY emitter
+ * was `cancelActiveTool`'s abandonment-gap cleanup above, and that always
+ * targets an in-flight PREVIEW shape a tool is mid-creating, never a user's
+ * standing selection. This is the "press Delete/Backspace" path: reads
+ * `editor.get().selection` directly (there is no tool gesture involved — a
+ * keyboard delete isn't a tool FSM's concern, so it doesn't route through
+ * `dispatchToActiveTool` at all) and, for a non-empty selection, emits
+ * `DeleteShapes` for every selected id followed by `SetSelection([])` so the
+ * selection doesn't keep referencing ids that no longer resolve (mirrors
+ * DeleteShapes's own doc comment: it does NOT implicitly clear selection —
+ * that's the emitting caller's job, and this is that caller). An EMPTY
+ * selection returns `[]` — no no-op DeleteShapes([]) and no redundant
+ * SetSelection([]) when the selection is already empty. Stays in this
+ * DOM-free module (CanvasV2App.tsx's keydown listener is the only DOM-facing
+ * half of this wiring) per the module boundary this file's header states.
+ */
+export function deleteSelectionIntents(editor: Editor): Intent[] {
+	const ids = [...editor.get().selection]
+	if (ids.length === 0) return []
+	return [
+		{ type: 'DeleteShapes', ids },
+		{ type: 'SetSelection', ids: [] },
+	]
+}
+
 export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: ToolId): { states: ToolStates; intents: Intent[] } {
 	const intents: Intent[] = []
 
