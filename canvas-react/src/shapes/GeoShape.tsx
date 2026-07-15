@@ -184,6 +184,13 @@ const FONT_FAMILY: Readonly<Record<string, string>> = Object.freeze({
 })
 const DEFAULT_FONT = 'draw' // GeoShapeUtil.tsx getDefaultProps
 
+// The geo label's fixed alignment (Task C6 EXPORT — not a table, the same
+// single constant the JSX used to inline directly): v1 always CENTERS a geo
+// label (module header's LABEL section) regardless of props. Exported so
+// TextEditor.tsx's editing overlay can reuse this exact value rather than
+// re-declaring 'center' independently — see TextEditor.tsx's `editorTextStyle`.
+export const GEO_LABEL_TEXT_ALIGN = 'center' as const
+
 const DEFAULT_GEO = 'rectangle' // GeoShapeGeoStyle defaultValue
 const DEFAULT_W = 100 // GeoShapeUtil.tsx getDefaultProps
 const DEFAULT_H = 100
@@ -321,7 +328,7 @@ export function GeoShape({ shape, getText }: ShapeBodyProps) {
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            textAlign: 'center',
+            textAlign: GEO_LABEL_TEXT_ALIGN,
             padding: 8,
             boxSizing: 'border-box',
             overflow: 'hidden',

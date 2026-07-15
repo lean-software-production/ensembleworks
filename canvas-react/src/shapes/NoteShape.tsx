@@ -94,6 +94,17 @@ const NOTE_BORDER = 'rgb(144, 144, 144)' // theme.colors.light.noteBorder
 const NOTE_TEXT = '#000000' // theme.colors.light.<every color>.noteText
 const HANDWRITING_FONT = "'tldraw_draw', sans-serif" // DefaultFontFamilies.draw
 
+// The note body's fixed label layout numbers below (Task C6 EXPORT — not a
+// per-color table, just the same three constants the JSX used to inline
+// directly): every note, regardless of `props.color`, centers its label at
+// 16px/1.35 line-height. Exported so TextEditor.tsx's editing overlay can
+// reuse the EXACT SAME numbers (not re-derive/duplicate them) when deriving
+// its own font/size/align for a note being edited — see TextEditor.tsx's
+// `editorTextStyle`.
+export const NOTE_LABEL_FONT_SIZE = 16
+export const NOTE_LABEL_LINE_HEIGHT = 1.35
+export const NOTE_TEXT_ALIGN = 'center' as const
+
 export interface NoteStyle {
   readonly background: string
   readonly borderColor: string
@@ -138,13 +149,13 @@ export function NoteShape({ shape, getText }: ShapeBodyProps) {
         justifyContent: 'center',
         overflow: 'hidden',
         padding: 16,
-        fontSize: 16,
-        lineHeight: 1.35,
+        fontSize: NOTE_LABEL_FONT_SIZE,
+        lineHeight: NOTE_LABEL_LINE_HEIGHT,
         borderBottom: `2px solid ${style.borderColor}`,
         background: style.background,
         color: style.color,
         fontFamily: style.fontFamily,
-        textAlign: 'center',
+        textAlign: NOTE_TEXT_ALIGN,
         overflowWrap: 'break-word',
       }}
     >
