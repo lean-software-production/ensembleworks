@@ -57,6 +57,13 @@ export interface ActorOpts {
 	peerId: bigint
 	/** Compact after this many persisted updates since the last compaction. Default 500. */
 	compactEvery?: number
+	/** F1 idle-eviction hook: fired whenever this actor observes activity — a
+	 * successful connect() and every successfully-persisted update (see
+	 * persist() and connect() below for exactly which events count and why).
+	 * The C3 registry (actors.ts) injects this to stamp its own per-room
+	 * last-activity clock; omitted by every other caller (actor.test.ts,
+	 * crash-recovery.test.ts), which don't exercise idle eviction. */
+	onActivity?: () => void
 }
 
 export class DocumentActor {
@@ -68,6 +75,7 @@ export class DocumentActor {
 	private closed = false
 	private _tainted: Error | null = null
 	private unsubPersist!: () => void
+	private onActivity?: () => void
 
 	/** Non-null once a persist failed: durability is lost, the peer has been
 	 * closed, and connect() refuses. Read by the C3 registry (evict/replace)
@@ -82,10 +90,19 @@ export class DocumentActor {
 		return this._tainted
 	}
 
+	/** Live transport count (F1 idle eviction's "never evict a connected
+	 * room" guard). Delegates to the peer's own clients set — read fresh at
+	 * sweep time rather than cached on this class, so a connect landing
+	 * between sweeps is always seen. */
+	get connectionCount(): number {
+		return this.peer.clientCount
+	}
+
 	constructor(opts: ActorOpts) {
 		this.store = new CanvasV2Store(opts.dir, opts.roomId)
 		this.roomId = opts.roomId
 		this.compactEvery = opts.compactEvery ?? 500
+		this.onActivity = opts.onActivity
 
 		// Everything below opens the SQLite handle already held by `this.store`
 		// (load/replay/repair can throw on a corrupt log; SyncServerPeer's own
@@ -167,6 +184,14 @@ export class DocumentActor {
 			this.peer.close()
 			return
 		}
+		// Activity, for F1 idle eviction: a persisted update — either an inbound
+		// client edit (onUpdatePayload) or a server-local repair/agent write
+		// (subscribeLocalUpdates) — is unambiguous proof the room is in active
+		// use. Fired only on the success path (past the taint-return above and
+		// the catch below): a failed append taints and disconnects the actor via
+		// its own path, which is not "the room is alive," it's "the room is
+		// dying."
+		this.onActivity?.()
 		if (++this.sinceCompaction >= this.compactEvery) this.compact()
 	}
 
@@ -177,6 +202,13 @@ export class DocumentActor {
 			)
 		}
 		this.peer.connect(t)
+		// Activity, for F1 idle eviction: a client attaching is activity even
+		// before it sends its first op (e.g. a long-lived idle-but-open
+		// terminal viewer) — connectionCount already vetoes eviction while ANY
+		// transport is live, but stamping activity here too means the room
+		// doesn't immediately qualify for eviction the instant the last socket
+		// happens to drop.
+		this.onActivity?.()
 	}
 
 	/**

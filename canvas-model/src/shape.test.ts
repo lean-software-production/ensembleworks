@@ -1,6 +1,6 @@
 // Run: bun src/shape.test.ts
 import assert from 'node:assert/strict'
-import { SHAPE_KINDS, shapeSchema, validateShape, plainText } from './shape.js'
+import { SHAPE_KINDS, TEXT_CAPABLE_KINDS, isTextCapableKind, shapeSchema, validateShape, plainText } from './shape.js'
 
 // Every kind the room can contain is enumerated (9 tldraw incl. group + image + 6 custom).
 assert.deepEqual(
@@ -30,4 +30,12 @@ assert.equal(bad.ok, false)
 // with the wrong type fails validation even though the envelope is fine.
 const badProps = validateShape({ ...note, props: { color: 123 } })
 assert.equal(badProps.ok, false)
+// isTextCapableKind: exactly note/text/geo -- not frame, not any embed kind,
+// not any structural kind.
+assert.deepEqual([...TEXT_CAPABLE_KINDS].sort(), ['geo', 'note', 'text'])
+for (const k of TEXT_CAPABLE_KINDS) assert.equal(isTextCapableKind(k), true, `${k} is text-capable`)
+for (const k of SHAPE_KINDS) {
+  if ((TEXT_CAPABLE_KINDS as readonly string[]).includes(k)) continue
+  assert.equal(isTextCapableKind(k), false, `${k} is NOT text-capable`)
+}
 console.log('ok: shape schema')

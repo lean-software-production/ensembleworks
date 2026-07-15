@@ -83,6 +83,19 @@ export interface SyncApp {
 	 * Exposed for tests and for the /api/canvas/metrics endpoint (same
 	 * null-when-flag-off pattern as canvasActors above). */
 	shadowMirrors: Map<string, { mirror: ShadowMirror; lastClock: number }> | null
+	/** F2 graceful-shutdown hook: stops the shadow driver and idle-sweep
+	 * intervals, force-closes every live ws client (legacy /sync AND
+	 * canvas-v2 /sync/v2 — they share one `wss`), THEN persists + releases
+	 * every canvas-v2 actor (canvasActors?.close(), which compacts on its way
+	 * out), THEN closes the http server — bounded by shutdownTimeoutMs so a
+	 * known race (see close()'s own doc comment) can never hang shutdown
+	 * forever. Resolves once teardown is complete (or the bound is hit).
+	 * Idempotent is NOT guaranteed by this method itself — callers (the
+	 * process entrypoint) are responsible for calling it at most once, or for
+	 * their own double-signal guard, same as every other lifecycle method in
+	 * this codebase (cf. DocumentActor.close()'s explicit idempotence vs. this
+	 * one's single-shot contract). */
+	close(): Promise<void>
 }
 
 export function createSyncApp(opts: {
@@ -94,6 +107,24 @@ export function createSyncApp(opts: {
 	 * they can observe several ticks without a multi-second sleep. Production
 	 * callers never set this. */
 	shadowIntervalMs?: number
+	/** F1/F2 test-only knob: how often the canvas-v2 idle-eviction sweep fires.
+	 * Defaults to a real ~5-minute cadence; tests shrink this so they can
+	 * observe a sweep without a multi-minute sleep. Production callers never
+	 * set this. Only relevant when EW_CANVAS_SYNC=1 (canvasActors non-null) —
+	 * flag-off deployments never construct this interval. */
+	idleSweepIntervalMs?: number
+	/** F1 knob: how long a canvas-v2 room may sit with zero connections and no
+	 * activity before sweepIdle() releases its DocumentActor (doc + SQLite
+	 * handle). Defaults to 30 minutes — long enough that a dogfooder tabbing
+	 * away and back doesn't pay a reload, short enough that an abandoned room
+	 * doesn't hold a SQLite handle for the rest of the process's life. Tests
+	 * shrink this to observe an eviction without a real wait. */
+	idleTtlMs?: number
+	/** F2 test-only knob: how long close() waits for http.Server's own close()
+	 * callback before force-destroying any sockets it's still tracking and
+	 * resolving anyway (see close()'s doc comment for the race this guards
+	 * against). Defaults to a real ~3s bound; tests shrink this. */
+	shutdownTimeoutMs?: number
 }): SyncApp {
 	const uploadsDir = path.join(opts.dataDir, 'uploads')
 	mkdirSync(uploadsDir, { recursive: true })
@@ -141,13 +172,13 @@ export function createSyncApp(opts: {
 	// registry itself (server/src/canvas-v2/actors.ts) is the only thing that
 	// knows the on-disk layout (databaseDir/canvas-v2/<roomId>.sqlite).
 	//
-	// Shutdown wiring: there is currently NO graceful-shutdown hook anywhere in
-	// this file or sync-server.ts (no process.on('SIGTERM'/'SIGINT'), and
-	// roomHost itself exposes no close()) — the process today relies entirely
-	// on SQLite's own crash-safe append/commit semantics and exits via signal
-	// with no teardown callback. So there is nothing to wire
-	// `canvasActors.close()` into yet; when a shutdown hook is added (for
-	// roomHost or otherwise), call `canvasActors?.close()` from it too.
+	// F2 shutdown wiring: `close()` (returned below, called from
+	// sync-server.ts's SIGTERM/SIGINT handler) calls `canvasActors?.close()` —
+	// see close()'s own doc comment for the full teardown order. roomHost
+	// (the LEGACY tldraw rooms) still exposes no close() of its own: it relies
+	// entirely on SQLite's own crash-safe append/commit semantics, same as
+	// before this task — only the canvas-v2 side (this file's F1/F2 scope)
+	// gained an explicit graceful-release path.
 	const canvasActors = process.env.EW_CANVAS_SYNC === '1' ? createCanvasActors(opts.databaseDir ?? opts.dataDir) : null
 
 	// Task D3: clock-polled shadow driver, gated on EW_CANVAS_SHADOW=1 and
@@ -176,8 +207,12 @@ export function createSyncApp(opts: {
 	// post-construction tick failures are ADDITIONALLY counted on that
 	// mirror's own tickErrors/lastError (shadow.ts).
 	let shadowSweepErrors = 0
+	// Hoisted out of the `if` below (rather than `const`-scoped inside it) so
+	// F2's close() can clearInterval() it on shutdown — see close()'s doc
+	// comment. Stays undefined (nothing to clear) when EW_CANVAS_SHADOW is off.
+	let shadowInterval: ReturnType<typeof setInterval> | undefined
 	if (shadowMirrors) {
-		const shadowInterval = setInterval(() => {
+		shadowInterval = setInterval(() => {
 			for (const roomId of roomHost.rooms.keys()) {
 				// Per-room isolation: this body runs inside a setInterval callback,
 				// where an uncaught throw is FATAL to the whole process (probe-proven:
@@ -220,6 +255,25 @@ export function createSyncApp(opts: {
 			}
 		}, opts.shadowIntervalMs ?? 1000)
 		shadowInterval.unref()
+	}
+
+	// F1: idle-actor eviction sweep, gated the SAME way canvasActors itself is
+	// (EW_CANVAS_SYNC=1) — there is nothing to sweep when the registry doesn't
+	// exist. Own interval rather than piggybacking on the shadow driver above:
+	// the two are independent concerns gated by independent flags (a deployment
+	// can run EW_CANVAS_SYNC without EW_CANVAS_SHADOW, or vice versa), and
+	// tying idle-sweep cadence to the shadow driver's would make its interval
+	// do double duty for an unrelated flag. unref()'d like every other
+	// interval in this file so it never keeps the process (or a test) alive.
+	// registry.sweepIdle() is itself per-actor exception-safe (actors.ts), so
+	// no additional try/catch is needed here.
+	let idleSweepInterval: ReturnType<typeof setInterval> | undefined
+	if (canvasActors) {
+		const idleTtlMs = opts.idleTtlMs ?? 30 * 60_000
+		idleSweepInterval = setInterval(() => {
+			canvasActors.sweepIdle(idleTtlMs)
+		}, opts.idleSweepIntervalMs ?? 5 * 60_000)
+		idleSweepInterval.unref()
 	}
 
 	const registry = createSessionRegistry()
@@ -327,6 +381,22 @@ export function createSyncApp(opts: {
 	// Per-socket context for the backpressure sampler's log lines (WeakMap so a
 	// closed socket's entry is collected with it).
 	const syncMeta = new WeakMap<WebSocket, { roomId: string; userId: string; sessionId: string }>()
+
+	// F2 shutdown-race tracking: node's http.Server exposes no "list every
+	// currently-open connection" API of its own, so close() (below) tracks raw
+	// sockets itself via the 'connection' event (http.Server IS a net.Server —
+	// this event fires for every TCP connection, ws upgrades included, before
+	// the upgrade handler even runs). Needed because http.Server.close()'s
+	// callback only fires once every tracked connection has ended — the
+	// documented Phase 2 caveat is that an abruptly-terminated ws's underlying
+	// socket can sit open past its 'close' event's other listeners running,
+	// so close() force-destroys whatever's left in this set after a bounded
+	// wait rather than trusting server.close() to always call back.
+	const openSockets = new Set<Socket>()
+	server.on('connection', (socket: Socket) => {
+		openSockets.add(socket)
+		socket.on('close', () => openSockets.delete(socket))
+	})
 
 	server.on('upgrade', (req, socket, head) => {
 		const url = new URL(req.url ?? '', 'http://internal')
@@ -458,5 +528,71 @@ export function createSyncApp(opts: {
 	}, 1000)
 	lagMonitor.unref()
 
-	return { server, getOrCreateRoom: roomHost.getOrCreateRoom, app, canvasActors, shadowMirrors }
+	/**
+	 * F2 graceful shutdown. Order matters and is NOT arbitrary:
+	 *
+	 * 1. Stop every interval first — nothing here should observe a sweep or a
+	 *    tick mid-teardown (an idle-sweep or shadow-tick racing step 2/3 below
+	 *    would at best be wasted work, at worst touch an actor mid-close).
+	 * 2. Force-close every live ws client — legacy /sync AND canvas-v2
+	 *    /sync/v2 both register on this ONE shared `wss` (see the upgrade
+	 *    handler above), so one loop covers both. `ws.terminate()`, not
+	 *    `ws.close()`: terminate() drops the underlying TCP socket immediately
+	 *    instead of waiting on the close handshake — this is the fix for the
+	 *    documented Phase 2 caveat (this file's canvasActors construction-site
+	 *    comment, historically): "http.Server.close() may never call back with
+	 *    abruptly-terminated sockets in flight." Doing this BEFORE
+	 *    canvasActors.close() also means every DocumentActor's final compact
+	 *    (step 3) runs with no client able to shove in one more edit mid-close.
+	 * 3. canvasActors?.close(): persists (close-path compact, per actor.ts)
+	 *    and releases every canvas-v2 SQLite handle. Safe to call unconditionally
+	 *    after step 2 — no transport can reach a peer's onFrame anymore.
+	 * 4. server.close(): now that every ws (and the sockets they rode in on)
+	 *    is gone, this SHOULD call back quickly. Bounded by shutdownTimeoutMs
+	 *    anyway, because "should" isn't "will" — a keep-alive HTTP connection
+	 *    with no ws on it is tracked in `openSockets` but not force-closed by
+	 *    step 2, so the fallback below destroys whatever's left and resolves
+	 *    regardless, so shutdown can never hang.
+	 */
+	async function close(): Promise<void> {
+		if (shadowInterval) clearInterval(shadowInterval)
+		if (idleSweepInterval) clearInterval(idleSweepInterval)
+		clearInterval(backpressure)
+		clearInterval(lagMonitor)
+
+		for (const ws of wss.clients) {
+			try {
+				ws.terminate()
+			} catch (err) {
+				console.error('[shutdown] ws.terminate() threw (ignored, shutdown proceeds):', err)
+			}
+		}
+
+		canvasActors?.close()
+
+		const shutdownTimeoutMs = opts.shutdownTimeoutMs ?? 3000
+		await new Promise<void>((resolve) => {
+			let settled = false
+			const finish = () => {
+				if (settled) return
+				settled = true
+				resolve()
+			}
+			server.close((err) => {
+				if (err) console.error('[shutdown] http server close() callback reported an error (ignored, shutdown proceeds):', err)
+				finish()
+			})
+			const fallback = setTimeout(() => {
+				console.warn(
+					`[shutdown] http server close() had not called back within ${shutdownTimeoutMs}ms — ` +
+						`force-destroying ${openSockets.size} remaining socket(s) and proceeding (known Phase 2 close() race)`,
+				)
+				for (const socket of openSockets) socket.destroy()
+				finish()
+			}, shutdownTimeoutMs)
+			fallback.unref()
+		})
+	}
+
+	return { server, getOrCreateRoom: roomHost.getOrCreateRoom, app, canvasActors, shadowMirrors, close }
 }

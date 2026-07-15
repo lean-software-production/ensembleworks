@@ -50,6 +50,26 @@ import { int, mulberry32, type Rng } from './rig/prng.js'
 import { applyOp, randomOps, type ApplyStats, type IdPool } from './rig/ops.js'
 import { normalize } from './test-helpers.js'
 
+/**
+ * The minimal server-side surface `runSoak` actually touches — satisfied
+ * structurally by a bare `SyncServerPeer` (the default, unchanged since this
+ * type was introduced) or by a caller-supplied adapter around something
+ * heavier, e.g. server/src/canvas-v2/'s `DocumentActor` (Task H4's
+ * actor-backed compacting variant — canvas-sync itself can never import
+ * `server`, so that adapter is built OUTSIDE this package and handed in via
+ * `RunSoakOpts.server`; this interface is the seam that makes that possible
+ * without this file knowing DocumentActor exists). Every method/getter here
+ * is something `SyncServerPeer` already has, so `new SyncServerPeer({peerId:
+ * 1n})` satisfies this type with zero adapter code — see `runSoak`'s default.
+ */
+export interface SoakServer {
+	readonly doc: LoroCanvasDoc
+	connect(t: Transport): void
+	snapshot(): Uint8Array
+	readonly malformedFrames: number
+	readonly pendingImports: number
+}
+
 export interface RunSoakOpts {
 	clients: number
 	ops: number
@@ -74,6 +94,31 @@ export interface RunSoakOpts {
 	 * Omitted entirely ⇒ `rssSamples` is absent from the result — this file
 	 * never calls process.memoryUsage() itself (determinism rule). */
 	sampleRss?: () => number
+	/** Injected EXTRA sampler, sampled at the exact same cadence/points as
+	 * `sampleRss` — an open channel for a caller-specific metric this file
+	 * has no business knowing about (Task H4's actor-backed variant uses it
+	 * for the actor's ON-DISK sqlite file size — a genuinely different axis
+	 * from `snapshotSamples` below, which is always the in-memory
+	 * `doc.exportSnapshot().byteLength`, unaffected by any disk-level
+	 * compaction). Omitted entirely ⇒ `extraSamples` is absent from the
+	 * result. */
+	sampleExtra?: () => number
+	/** The server-side peer to run against. Defaults to a bare, freshly
+	 * constructed `new SyncServerPeer({peerId: 1n})` — canvas-sync's own
+	 * clean-room soak, unchanged from before this option existed. A caller
+	 * outside this package (server's H4 variant) may inject an adapter
+	 * around something heavier that satisfies `SoakServer` structurally. */
+	server?: SoakServer
+	/** Bounded-growth tripwire overrides — default to the module's own
+	 * `BOUNDED_GROWTH_K`/`AVG_SHAPE_SIZE_BYTES`, calibrated for the bare
+	 * `SyncServerPeer` variant at the two shipped configurations (see those
+	 * constants' own doc comment). A caller running against a DIFFERENT
+	 * `server` (e.g. an actor-backed adapter with its own growth shape) may
+	 * need its own calibrated numbers — set both here rather than silently
+	 * inheriting a calibration that doesn't apply, per this module's own
+	 * CAVEAT on BOUNDED_GROWTH_K. */
+	growthK?: number
+	avgShapeSizeBytes?: number
 }
 
 export interface SoakResult {
@@ -110,6 +155,9 @@ export interface SoakResult {
 	pendingImports: number
 	/** Present iff `opts.sampleRss` was provided. */
 	rssSamples?: number[]
+	/** Present iff `opts.sampleExtra` was provided — see that option's doc
+	 * comment. */
+	extraSamples?: number[]
 }
 
 // Bounded-growth tripwire constants — a tripwire for tombstone bloat, NOT a
@@ -258,7 +306,7 @@ export function runSoak(opts: RunSoakOpts): SoakResult {
 		if (bytes.length > maxUpdateBytes) maxUpdateBytes = bytes.length
 	}
 
-	const server = new SyncServerPeer({ peerId: 1n })
+	const server: SoakServer = opts.server ?? new SyncServerPeer({ peerId: 1n })
 	instrument(server.doc, onRepair, onLocalUpdate)
 	// Genesis: one real page. Without it, EVERY shape (fixed-pool parentId
 	// 'page:p') would be a permanent noOrphans violation — repairPlan cannot
@@ -289,6 +337,7 @@ export function runSoak(opts: RunSoakOpts): SoakResult {
 
 	const snapshotSamples: number[] = []
 	const rssSamples: number[] = []
+	const extraSamples: number[] = []
 	let reconnectsForced = 0
 
 	// One big batch, up front — preserves ops.ts's own internal PRNG-
@@ -319,6 +368,7 @@ export function runSoak(opts: RunSoakOpts): SoakResult {
 		if (n % snapshotSampleEvery === 0) {
 			snapshotSamples.push(server.snapshot().byteLength)
 			if (opts.sampleRss) rssSamples.push(opts.sampleRss())
+			if (opts.sampleExtra) extraSamples.push(opts.sampleExtra())
 		}
 	}
 
@@ -344,10 +394,12 @@ export function runSoak(opts: RunSoakOpts): SoakResult {
 	const finalSnapshotBytes = server.snapshot().byteLength
 	snapshotSamples.push(finalSnapshotBytes)
 
-	const bound = BOUNDED_GROWTH_K * Math.max(1, finalShapeCount) * AVG_SHAPE_SIZE_BYTES
+	const growthK = opts.growthK ?? BOUNDED_GROWTH_K
+	const avgShapeSizeBytes = opts.avgShapeSizeBytes ?? AVG_SHAPE_SIZE_BYTES
+	const bound = growthK * Math.max(1, finalShapeCount) * avgShapeSizeBytes
 	assert.ok(
 		finalSnapshotBytes < bound,
-		`bounded-growth tripwire: snapshot ${finalSnapshotBytes}B >= K(${BOUNDED_GROWTH_K}) × liveShapes(${finalShapeCount}) × avgSize(${AVG_SHAPE_SIZE_BYTES}B) = ${bound}B — possible tombstone bloat`,
+		`bounded-growth tripwire: snapshot ${finalSnapshotBytes}B >= K(${growthK}) × liveShapes(${finalShapeCount}) × avgSize(${avgShapeSizeBytes}B) = ${bound}B — possible tombstone bloat`,
 	)
 
 	const result: SoakResult = {
@@ -362,6 +414,7 @@ export function runSoak(opts: RunSoakOpts): SoakResult {
 		pendingImports: server.pendingImports,
 	}
 	if (opts.sampleRss) result.rssSamples = rssSamples
+	if (opts.sampleExtra) result.extraSamples = extraSamples
 	void stats // skip-count is informational only (a guarded op that threw) — not asserted, mirrors E1's rig/ops.ts contract
 	return result
 }

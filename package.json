@@ -8,6 +8,8 @@
     "canvas-model",
     "canvas-doc",
     "canvas-sync",
+    "canvas-editor",
+    "canvas-react",
     "client",
     "server",
     "transcriber",
@@ -18,7 +20,7 @@
   "scripts": {
     "dev": "bun run --filter '@ensembleworks/server' dev & bun run --filter '@ensembleworks/server' dev:term & bun run --filter '@ensembleworks/client' dev & wait",
     "build": "bun run --filter '@ensembleworks/client' build && bun run --filter '@ensembleworks/server' build && bun run --filter '@ensembleworks/transcriber' build && bun run --filter '@ensembleworks/discord' build",
-    "typecheck": "bun run --filter '@ensembleworks/contracts' typecheck && bun run --filter '@ensembleworks/canvas-model' typecheck && bun run --filter '@ensembleworks/canvas-doc' typecheck && bun run --filter '@ensembleworks/canvas-sync' typecheck && bun run --filter '@ensembleworks/client' typecheck && bun run --filter '@ensembleworks/server' typecheck && bun run --filter '@ensembleworks/transcriber' typecheck && bun run --filter '@ensembleworks/cli' typecheck && bunx tsc -p bin/tsconfig.json && bun run --filter '@ensembleworks/discord' typecheck && bun run --filter '@ensembleworks/e2e' typecheck",
+    "typecheck": "bun run --filter '@ensembleworks/contracts' typecheck && bun run --filter '@ensembleworks/canvas-model' typecheck && bun run --filter '@ensembleworks/canvas-doc' typecheck && bun run --filter '@ensembleworks/canvas-sync' typecheck && bun run --filter '@ensembleworks/canvas-editor' typecheck && bun run --filter '@ensembleworks/canvas-react' typecheck && bun run --filter '@ensembleworks/client' typecheck && bun run --filter '@ensembleworks/server' typecheck && bun run --filter '@ensembleworks/transcriber' typecheck && bun run --filter '@ensembleworks/cli' typecheck && bunx tsc -p bin/tsconfig.json && bun run --filter '@ensembleworks/discord' typecheck && bun run --filter '@ensembleworks/e2e' typecheck",
     "test": "bun scripts/run-tests.ts"
   }
 }

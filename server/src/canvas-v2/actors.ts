@@ -15,16 +15,33 @@ import { DocumentActor } from './actor.ts'
 // isolated by directory/file (one CanvasV2Store per room), not by peerId.
 const SERVER_PEER_ID = 1n
 
-/** D3's metrics gap-fix: an eviction ends a tainted actor's life and starts a
- * fresh, healthy one in its place — the fresh actor's `.tainted` reads null,
- * so without a separate record the fact that THIS room ever lost durability
- * is invisible the instant getOrCreate replaces it. `count` accumulates across
- * every eviction this room has ever had; `lastReason` is the message of the
- * MOST RECENT tainted actor evicted (not cumulative — read it as "why did the
- * last replacement happen", pairing with `count` for "how often"). */
+/** D3's metrics gap-fix: an eviction ends an actor's life and starts a fresh
+ * one in its place (a tainted replacement, or — F1 — an idle actor's
+ * lazily-reconstructed successor) — the fresh actor's `.tainted` reads null
+ * either way, so without a separate record the fact that THIS room was ever
+ * evicted is invisible the instant getOrCreate replaces it.
+ *
+ * The two causes get SEPARATE counter/reason pairs, deliberately NOT a shared
+ * {count, lastReason, lastKind} triple: after a taint eviction, the healthy
+ * replacement will ROUTINELY idle-evict some time later (that is F1 working
+ * as designed), and a shared last-slot would let that routine churn OVERWRITE
+ * the durability-loss incident — re-introducing the exact visibility loss
+ * this record was built to prevent, and noise-tripping any count-based alarm
+ * with ordinary idle patterns. The taint fields are STICKY: only another
+ * taint eviction touches taintCount/lastTaintReason, so an alarm keyed on
+ * `taintCount > 0` is immune to idle churn. Per pair: the count accumulates
+ * across every eviction of that kind this room has ever had; the reason is
+ * the MOST RECENT of that kind only (null until the first). 'taint' means
+ * durability was actually lost (see DocumentActor's tainted doc comment —
+ * investigate the storage layer); 'idle' is routine housekeeping (an unused
+ * room's doc + SQLite handle was released — nothing was wrong, do not page
+ * anyone). */
 export interface EvictionRecord {
-	count: number
-	lastReason: string
+	taintCount: number
+	idleCount: number
+	/** STICKY — never overwritten by an idle eviction. */
+	lastTaintReason: string | null
+	lastIdleReason: string | null
 }
 
 export interface CanvasActors {
@@ -42,35 +59,76 @@ export interface CanvasActors {
 	/** Per-room eviction history — see EvictionRecord's doc comment. Exposed
 	 * for the D3 metrics endpoint. */
 	evictions(): ReadonlyMap<string, EvictionRecord>
+	/** F1: evict every registered actor that is BOTH idle past `idleTtlMs`
+	 * (no activity — see actor.ts's onActivity call sites for exactly what
+	 * counts) AND has zero connected transports right now (DocumentActor's
+	 * connectionCount, read fresh — a live socket is NEVER evicted regardless
+	 * of how stale its last-activity timestamp is). Eviction = actor.close()
+	 * (idempotent, close-path compact persists) + registry removal + an
+	 * idle-side EvictionRecord increment (idleCount/lastIdleReason — the taint
+	 * pair is sticky and untouched). Called externally on a timer (see
+	 * app.ts) — this registry has no clock of its own beyond the injected
+	 * `now`. Per-actor exception-safe: one actor's close() throwing is logged
+	 * and skipped, every other idle actor in the same sweep is still evicted
+	 * (mirrors app.ts's shadow-driver per-room try/catch). */
+	sweepIdle(idleTtlMs: number): void
 	/** Close every actor currently registered (server shutdown). */
 	close(): void
 }
 
-// Idle-actor eviction is DELIBERATELY deferred (same register as the
-// shutdown-gap note at app.ts's construction site): Phase 2 is rigs-only
-// behind EW_CANVAS_SYNC, so a handful of test rooms living for the process
-// lifetime costs nothing. Revisit before the Phase 3 cutover, when every
-// live room gets an actor and idle rooms should release their doc + SQLite
-// handle.
-
-export function createCanvasActors(databaseDir: string): CanvasActors {
+export function createCanvasActors(databaseDir: string, opts: { now?: () => number } = {}): CanvasActors {
 	const dir = path.join(databaseDir, 'canvas-v2')
+	const now = opts.now ?? Date.now
 	const actors = new Map<string, DocumentActor>()
 	const evictions = new Map<string, EvictionRecord>()
+	// F1: last-activity timestamp per room, keyed the same as `actors`. Bumped
+	// on (a) a getOrCreate cache hit below, (b) DocumentActor's own connect()
+	// and persist() success paths via the injected onActivity callback wired
+	// at construction time — see actor.ts's ActorOpts.onActivity doc comment
+	// for exactly which events count as activity and why. Entries are removed
+	// alongside their actor on every eviction (taint OR idle) so a replacement
+	// actor always starts its idle clock fresh rather than inheriting a stale
+	// timestamp from the room id it happens to share.
+	const lastActivity = new Map<string, number>()
+
+	// Two increment paths, one per kind — see EvictionRecord's doc comment for
+	// why the taint pair is sticky and never shares a slot with idle churn.
+	function recordEviction(roomId: string, reason: string, kind: 'taint' | 'idle'): void {
+		const prev = evictions.get(roomId) ?? { taintCount: 0, idleCount: 0, lastTaintReason: null, lastIdleReason: null }
+		evictions.set(
+			roomId,
+			kind === 'taint'
+				? { ...prev, taintCount: prev.taintCount + 1, lastTaintReason: reason }
+				: { ...prev, idleCount: prev.idleCount + 1, lastIdleReason: reason },
+		)
+	}
+
+	function construct(roomId: string): DocumentActor {
+		const actor = new DocumentActor({
+			dir,
+			roomId,
+			peerId: SERVER_PEER_ID,
+			onActivity: () => lastActivity.set(roomId, now()),
+		})
+		actors.set(roomId, actor)
+		lastActivity.set(roomId, now())
+		return actor
+	}
 
 	function getOrCreate(roomId: string): DocumentActor {
 		const existing = actors.get(roomId)
 		if (existing) {
-			if (!existing.tainted) return existing
+			if (!existing.tainted) {
+				lastActivity.set(roomId, now()) // a getOrCreate hit is itself activity (F1)
+				return existing
+			}
 			console.warn(`[canvas-v2 ${roomId}] evicting tainted actor and constructing a fresh one`)
-			const prev = evictions.get(roomId)
-			evictions.set(roomId, { count: (prev?.count ?? 0) + 1, lastReason: existing.tainted.message })
+			recordEviction(roomId, existing.tainted.message, 'taint')
 			existing.close() // idempotent/safe per DocumentActor.close()'s contract
 			actors.delete(roomId)
+			lastActivity.delete(roomId)
 		}
-		const actor = new DocumentActor({ dir, roomId, peerId: SERVER_PEER_ID })
-		actors.set(roomId, actor)
-		return actor
+		return construct(roomId)
 	}
 
 	function entries(): ReadonlyMap<string, DocumentActor> {
@@ -81,10 +139,36 @@ export function createCanvasActors(databaseDir: string): CanvasActors {
 		return evictions
 	}
 
+	function sweepIdle(idleTtlMs: number): void {
+		const nowMs = now()
+		// Snapshot the entries before iterating: construct()/getOrCreate() never
+		// runs concurrently with this synchronous sweep (single-threaded JS, and
+		// nothing here awaits), but copying is cheap and makes "the set we sweep
+		// is a stable read" a fact about the code, not an assumption.
+		for (const [roomId, actor] of [...actors]) {
+			try {
+				if (actor.connectionCount > 0) continue // a live socket is NEVER evicted for idleness
+				const last = lastActivity.get(roomId) ?? nowMs
+				if (nowMs - last < idleTtlMs) continue
+				actor.close() // idempotent; close-path compact persists (see actor.ts)
+				actors.delete(roomId)
+				lastActivity.delete(roomId)
+				recordEviction(roomId, `idle: no activity or connections for >= ${idleTtlMs}ms`, 'idle')
+				console.log(`[canvas-v2 ${roomId}] evicted for idleness (>= ${idleTtlMs}ms, no connections)`)
+			} catch (err) {
+				// Per-actor isolation, mirroring app.ts's shadow-driver sweep: one
+				// poisoned actor's close() throwing must not abort the sweep for
+				// every other idle room. The actor is left registered (not
+				// half-evicted) — it will be retried on the next sweep.
+				console.error(`[canvas-v2 ${roomId}] sweepIdle: actor.close() threw — left registered, will retry next sweep`, err)
+			}
+		}
+	}
+
 	function close(): void {
 		for (const actor of actors.values()) actor.close()
 		actors.clear()
 	}
 
-	return { getOrCreate, entries, evictions: getEvictions, close }
+	return { getOrCreate, entries, evictions: getEvictions, sweepIdle, close }
 }

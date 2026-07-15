@@ -1,0 +1,35 @@
+<!doctype html>
+<!--
+  Static fixture page for the NekoShape component golden (Task G2). NekoShape
+  builds its iframe src by appending `?usr=...&pwd=...&embed=1` (or `&...` if
+  the base already has a `?`) onto whatever `base` it's given — see
+  buildNekoSrc in client/src/canvas-v2/shapes/NekoShape.tsx. A real neko VM
+  target isn't available in an offline component-golden run, so this static
+  page stands in for it: a deterministic, network-free, same-origin page
+  NekoShape's iframe actually loads, instead of a browser-dependent
+  blank/error frame for an unreachable `/shared-browser/` target.
+
+  LOCATION IS LOAD-BEARING (dev-only by construction): this file lives at
+  client/canvas-v2-fixtures/ — the Vite project ROOT, deliberately NOT under
+  client/public/. Vite's DEV server serves root-level files at their root-
+  relative URL (`/canvas-v2-fixtures/neko-splash.html` — the same mechanism
+  that makes /component-goldens.html reachable in dev), but `vite build`
+  emits only the configured entry points' module graphs PLUS a verbatim,
+  unconditional copy of public/ — a root-level file no entry imports is
+  never copied to dist/. An earlier revision of this file DID sit under
+  public/ and therefore shipped into every production dist (spec-review
+  finding); this location is the fix. The Task G2 exit check verifies a
+  fresh production dist/ contains no canvas-v2 fixture artifacts.
+-->
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>neko fixture</title>
+		<style>
+			html, body { margin: 0; height: 100%; background: #0f172a; color: #e2e8f0; font-family: ui-monospace, monospace; display: grid; place-items: center; }
+		</style>
+	</head>
+	<body>
+		<div>neko fixture (offline component golden)</div>
+	</body>
+</html>

@@ -60,3 +60,45 @@ jobs:
           name: canvas-soak-metrics-${{ github.run_id }}
           path: canvas-soak-summary.json
           retention-days: 14
+
+  soak-actor:
+    # Task H4: the DocumentActor-backed compacting soak variant (real SQLite
+    # persistence + periodic compaction — server/src/canvas-v2/soak-actor.ts),
+    # exercising the "prod-faithful growth curve" the Phase-2 deferral asked
+    # for. Independent job (not a step in `soak` above): a different
+    # workspace (@ensembleworks/server, which can import canvas-sync;
+    # canvas-sync itself never imports server) and its own scale/timeout —
+    # schedule + manual only, same as `soak`; the per-commit smoke
+    # (server/src/canvas-v2/soak-actor.test.ts) is what gates every PR.
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.12.0 }
+      - run: bun install --frozen-lockfile
+      # SCALE NOTE (validated, not guessed — see soak-actor.ts's own
+      # CALIBRATION comment and the H4 execution report for the full
+      # transcript): --clients 5 --ops 15000 --chaos 0.5 measured ~17s wall
+      # time locally, converged, disk-growth ratio 2.96x (well inside the
+      # calibrated 12x bound) — smaller than the bare-peer `soak` job's
+      # 20,000 ops because this variant ALSO does real SQLite I/O (append +
+      # periodic compaction) on top of the same op-routing/chaos work, so it
+      # was validated at its OWN scale rather than assumed to inherit the
+      # bare-peer number. timeout-minutes: 30 leaves generous headroom
+      # (~100x the measured wall time) for a slower/busier CI runner.
+      - name: run actor soak (seed derived from the run number — replayable from the logged value)
+        run: |
+          bun server/src/canvas-v2/soak-actor-cli.ts \
+            --clients 5 \
+            --ops 15000 \
+            --seed "$GITHUB_RUN_NUMBER" \
+            --chaos 0.5
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canvas-soak-actor-metrics-${{ github.run_id }}
+          path: canvas-soak-actor-summary.json
+          retention-days: 14

@@ -1,0 +1,126 @@
+{
+  "pan-zoom-1000": {
+    "seedMs": 82,
+    "pan": {
+      "frames": 60,
+      "p50ms": 16.7,
+      "p95ms": 16.8,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "zoom": {
+      "frames": 39,
+      "p50ms": 16.7,
+      "p95ms": 16.8,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-13T02:20:08.642Z",
+      "host": "zeus-arch"
+    }
+  },
+  "pan-zoom-5000": {
+    "seedMs": 301,
+    "pan": {
+      "frames": 60,
+      "p50ms": 16.7,
+      "p95ms": 16.7,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "zoom": {
+      "frames": 39,
+      "p50ms": 16.7,
+      "p95ms": 16.8,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-13T02:20:12.240Z",
+      "host": "zeus-arch"
+    }
+  },
+  "pan-zoom-10000": {
+    "seedMs": 598,
+    "pan": {
+      "frames": 59,
+      "p50ms": 16.7,
+      "p95ms": 16.8,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "zoom": {
+      "frames": 39,
+      "p50ms": 16.7,
+      "p95ms": 16.7,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-13T02:20:16.124Z",
+      "host": "zeus-arch"
+    }
+  },
+  "marquee-drag-50": {
+    "selectedCount": 15,
+    "marquee": {
+      "frames": 8,
+      "p50ms": 16.7,
+      "p95ms": 16.7,
+      "maxms": 16.7,
+      "droppedOver25ms": 0
+    },
+    "drag": {
+      "frames": 7,
+      "p50ms": 16.7,
+      "p95ms": 16.7,
+      "maxms": 16.7,
+      "droppedOver25ms": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-13T02:20:18.058Z",
+      "host": "zeus-arch"
+    }
+  },
+  "rapid-create-20": {
+    "create": {
+      "frames": 55,
+      "p50ms": 16.7,
+      "p95ms": 16.8,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-13T02:20:20.647Z",
+      "host": "zeus-arch"
+    }
+  },
+  "pointer-to-paint": {
+    "latencyMs": 24.7,
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-13T02:20:20.711Z",
+      "host": "zeus-arch"
+    }
+  },
+  "cursor-storm": {
+    "storm": {
+      "frames": 119,
+      "p50ms": 16.7,
+      "p95ms": 16.7,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-13T02:20:25.968Z",
+      "host": "zeus-arch"
+    }
+  }
+}

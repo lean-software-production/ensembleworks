@@ -77,3 +77,22 @@ export function record(key: string, value: Record<string, unknown>) {
 	}
 	writeFileSync(FILE, JSON.stringify(all, null, 2) + '\n')
 }
+
+/** Generic sibling of `record` for a caller writing to its OWN baseline file
+ * (canvas-v2-perf.spec.ts, Task H3) with its OWN `_meta.engine` provenance
+ * string, rather than `record`'s hardcoded tldraw-version + `FILE` path.
+ * Same merge-by-key semantics: a partial recapture only restamps the keys
+ * it actually reran. */
+export function recordTo(file: string, key: string, value: Record<string, unknown>, engine: string) {
+	mkdirSync(path.dirname(file), { recursive: true })
+	const all = existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}
+	all[key] = {
+		...value,
+		_meta: {
+			engine,
+			capturedAt: new Date().toISOString(),
+			host: os.hostname(),
+		},
+	}
+	writeFileSync(file, JSON.stringify(all, null, 2) + '\n')
+}
