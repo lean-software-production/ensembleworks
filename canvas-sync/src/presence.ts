@@ -8,7 +8,7 @@ export interface Presence {
   cursor: { x: number; y: number } | null
   viewport: { x: number; y: number; w: number; h: number; z: number } | null
   stamp: { at: { x: number; y: number } } | null // the spatial stamp tool
-  presenting: string[] // shape ids this peer is presenting/holding
+  presenting: string[] // OPAQUE per-entry strings the client may encode richer data into (canvas-v2's file-viewer JSON-encodes {shapeId,fraction,ts}); do NOT assume an entry is a bare shape id or that `presenting.includes(shapeId)` is meaningful — decode client-side
 }
 
 // Thin wrapper: one EphemeralStore, this peer writes its own key, reads all.

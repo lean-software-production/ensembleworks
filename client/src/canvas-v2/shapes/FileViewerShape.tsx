@@ -60,7 +60,7 @@ import type { Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from '@ensembleworks/canvas-editor'
 import type { ShapeBodyProps } from '@ensembleworks/canvas-react'
 import { wm } from '../../theme.js'
-import { presentStoreV2 as presentStore } from './presentStoreV2.js'
+import { presentStoreV2 as presentStore, type PresentingV2 } from './presentStoreV2.js'
 import { canvasV2EmbedLifecycles } from './embedLifecycles.js'
 import { useInteractionMode } from './useInteractionMode.js'
 import { presenterFor } from '../presence.js'
@@ -122,13 +122,77 @@ export function followTargetFraction(params: {
   return params.peer ? params.peer.fraction : null
 }
 
+/**
+ * Pure: does THIS mount's shared present-store say WE are presenting this
+ * shape? DERIVED each render from the shared `presentStoreV2` singleton
+ * (not a standalone `useState` copy) so two file-viewers in one mount stay
+ * consistent — presenting B must flip A's `isPresentingThis` to false, or
+ * A's still-labeled "stop" control would clear B's LIVE presentation for
+ * every follower (the cross-instance stale-state bug this closes). The
+ * presence-poll re-render keeps the derivation fresh across instances;
+ * `togglePresent` also nudges a local re-render for immediate own-click
+ * feedback (see the component).
+ */
+export function isPresentingShape(current: PresentingV2 | null, shapeId: string): boolean {
+  return current?.shapeId === shapeId
+}
+
+/**
+ * Pure: which scroll fraction (if any) to re-apply when THIS viewer's
+ * iframe re-announces `ew-file-viewer-ready` — recovered legacy semantics
+ * (git history: `client/src/file-viewer/FileViewerShapeUtil.tsx` ~L161-170):
+ *   - if WE are the presenter of this shape, re-apply OUR own held fraction
+ *     (so our own refresh/rev reload lands where we left off);
+ *   - ELSE if a peer is actively presenting this shape (from `presenterFor`),
+ *     re-apply THEIR fraction — the FOLLOWER-resync branch a rev-bump reload
+ *     needs, since the follow effect only re-fires on a CHANGE to the
+ *     presenter's fraction/identity and a reload changes neither.
+ * Returns `null` when neither holds (nothing to re-apply). */
+export function readyScrollFraction(params: {
+  readonly mine: PresentingV2 | null
+  readonly shapeId: string
+  readonly activePeer: { readonly fraction: number } | null
+}): number | null {
+  if (params.mine && params.mine.shapeId === params.shapeId) return params.mine.fraction
+  if (params.activePeer) return params.activePeer.fraction
+  return null
+}
+
 export function FileViewerShape({ shape, dispatch }: ShapeBodyProps) {
   const { w, h, path, title, rev } = fileViewerContentFrom(shape)
   const { mode, swallow, rootRef, onDoubleClick } = useInteractionMode()
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const lastFractionRef = useRef(0)
   const [localNonce, setLocalNonce] = useState(0)
-  const [isPresentingThis, setIsPresentingThis] = useState(() => presentStore.get()?.shapeId === shape.id)
+  // Own-click feedback nudge — bumping this re-renders THIS instance
+  // immediately after its own togglePresent, without waiting for the 150ms
+  // presence poll. Deliberately NOT the source of truth for
+  // `isPresentingThis` (that is DERIVED from presentStore below — FIX 2); a
+  // separate stateful copy is exactly what went stale across instances.
+  const [, forcePresentTick] = useState(0)
+
+  // FIX 2: DERIVED each render from the shared present-store singleton, not
+  // a standalone useState copy — so presenting a SECOND file-viewer flips
+  // THIS one's control to "Present" and its stale "stop" can never clear the
+  // live presentation. See isPresentingShape's doc comment.
+  const isPresentingThis = isPresentingShape(presentStore.get(), shape.id)
+
+  // Peer-follow (Task D5 — see module header's RESTORED note): resolve
+  // whoever (other than this mount) is presenting THIS shape from the
+  // presence-map accessor. Deliberately does NOT call `presentStore.set`/
+  // `getPublisher()?.setPresenting` from this path — a follower's own
+  // re-render must never re-publish a "presenting" token (that would both
+  // misrepresent a follower as a presenter AND, with two followers of the
+  // same presenter, have each follower's re-render nudge the other's
+  // resolved peer, a feedback loop between them). Only the scroll-message
+  // handler below (gated on `mine.shapeId === shape.id`, i.e. only ever true
+  // for the ACTUAL presenter) ever publishes.
+  const peer = presenterFor(presentStore.getPeers(), presentStore.getSelfKey(), shape.id)
+  // Latest active-peer, read by the (stable, [shape.id]-keyed) message
+  // listener without re-subscribing — the FOLLOWER-resync-on-reload path
+  // (FIX 1) needs it fresh at `ew-file-viewer-ready` time.
+  const activePeerRef = useRef(peer)
+  activePeerRef.current = peer
 
   // Room-wide refresh (Task D5 — see module header's RESTORED note): bumps
   // the shared `rev` prop via the D2 `dispatch` channel so every peer's
@@ -152,8 +216,14 @@ export function FileViewerShape({ shape, dispatch }: ShapeBodyProps) {
       const d = e.data as { type?: unknown; fraction?: unknown } | null
       if (!d || typeof d !== 'object') return
       if (d.type === 'ew-file-viewer-ready') {
-        const mine = presentStore.get()
-        if (mine && mine.shapeId === shape.id) postScrollSet(mine.fraction)
+        // FIX 1: re-apply the presenter's OR (if we're a follower) the active
+        // peer's fraction on reload — a rev-bump reloads every peer's iframe,
+        // and the follow effect only re-fires on a fraction/identity CHANGE
+        // (a reload changes neither), so without this a follower loses their
+        // followed scroll until the presenter next scrolls. See
+        // readyScrollFraction's doc comment for the recovered legacy branch.
+        const f = readyScrollFraction({ mine: presentStore.get(), shapeId: shape.id, activePeer: activePeerRef.current })
+        if (f !== null) postScrollSet(f)
       } else if (d.type === 'ew-scroll' && typeof d.fraction === 'number') {
         lastFractionRef.current = d.fraction
         const mine = presentStore.get()
@@ -179,18 +249,9 @@ export function FileViewerShape({ shape, dispatch }: ShapeBodyProps) {
     return canvasV2EmbedLifecycles.register(shape.id, {})
   }, [shape.id])
 
-  // Peer-follow (Task D5 — see module header's RESTORED note): resolve
-  // whoever (other than this mount) is presenting THIS shape from the
-  // presence-map accessor, then drive this iframe to their scroll fraction
-  // whenever it (or their identity) changes. Deliberately does NOT call
-  // `presentStore.set`/`getPublisher()?.setPresenting` from this path — a
-  // follower's own re-render must never re-publish a "presenting" token
-  // (that would both misrepresent a follower as a presenter AND, with two
-  // followers of the same presenter, have each follower's re-render nudge
-  // the other's resolved peer, a feedback loop between them). Only the
-  // scroll-message handler above (gated on `mine.shapeId === shape.id`,
-  // i.e. only ever true for the ACTUAL presenter) ever publishes.
-  const peer = presenterFor(presentStore.getPeers(), presentStore.getSelfKey(), shape.id)
+  // Drive this iframe to the follow target whenever it (or the presenter's
+  // identity) changes. The reload-resync case is handled in the message
+  // listener above (FIX 1), since a reload is not a followFraction change.
   const followFraction = followTargetFraction({ isPresentingThis, peer })
   useEffect(() => {
     if (followFraction !== null) postScrollSet(followFraction)
@@ -201,13 +262,15 @@ export function FileViewerShape({ shape, dispatch }: ShapeBodyProps) {
     if (isPresentingThis) {
       presentStore.set(null)
       presentStore.getPublisher()?.setPresenting(null)
-      setIsPresentingThis(false)
     } else {
       const next = { shapeId: shape.id, fraction: lastFractionRef.current, ts: Date.now() }
       presentStore.set(next)
       presentStore.getPublisher()?.setPresenting(next)
-      setIsPresentingThis(true)
     }
+    // Own-click feedback only — `isPresentingThis` re-derives from
+    // presentStore on this forced re-render (FIX 2); we never store a
+    // separate boolean copy.
+    forcePresentTick((n) => n + 1)
   }
 
   return (

@@ -338,8 +338,12 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 				// Task D5: this mount's publisher no longer exists — clear the
 				// shared handle so a FileViewerShape body rendered after teardown
 				// (or in the next mount's brief pre-boot window) finds `null`
-				// rather than a stale, destroyed-store publisher.
+				// rather than a stale, destroyed-store publisher. Clear the peers
+				// cache too (FIX 3) so a next-session FileViewerShape in the
+				// pre-first-poll window can't resolve `presenterFor` against the
+				// previous session's stale peers.
 				presentStoreV2.setPublisher(null)
+				presentStoreV2.setPeers({}, '')
 			}
 		}
 		// roomId/userId identify the WHOLE session — a change remounts it
