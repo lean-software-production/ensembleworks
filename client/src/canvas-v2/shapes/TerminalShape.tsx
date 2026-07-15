@@ -26,12 +26,24 @@
  * REWRITTEN vs the legacy component (which is one big inline component, not
  * exported hooks): DROPPED for this v1 port — WebGL-vs-DOM renderer
  * switching on edit/view, the zoom-counterscaled edit host, view-mode
- * sub-pixel fill compensation, OSC-52 clipboard bridging, and the
- * title-rename / title-drag-to-move affordance (the last of these needs
- * `editor.updateShape`, which a shape body in this contract cannot call at
- * all — see ./index.ts's INTERACTIVE-CONTENT EVENT POLICY note). These are
+ * sub-pixel fill compensation, and OSC-52 clipboard bridging. These are
  * cosmetic/parity-polish, not the terminal's live-session substance; full
- * parity is G2-golden/Phase-4 territory. KEPT: xterm mounted once per
+ * parity is G2-golden/Phase-4 territory.
+ *
+ * TITLE RENAME / TITLE-DRAG-TO-MOVE (Task D3 — restored): this gap used to
+ * be permanent ("needs `editor.updateShape`, which a shape body in this
+ * contract cannot call at all") until Task D2 threaded `ShapeBodyProps.
+ * dispatch` through ShapeLayer/EmbedLayer — this is its first real consumer.
+ * `terminalRenameIntent`/`terminalTitleDragIntent` below are the PURE halves
+ * (unit-tested in TerminalShape.test.ts's fake-dispatch-spy cases); the
+ * render function wires them to a controlled title `<input>` (local draft
+ * state; committed via `props.dispatch` on blur/Enter ONLY, never per
+ * keystroke — a per-keystroke dispatch would be one doc.commit()/one sync
+ * frame/one undo-stack entry PER CHARACTER) and a pointer-capture drag
+ * handler on the title bar (one incremental TranslateShapes per pointermove,
+ * matching canvas-editor/src/tools/select.ts's onDragging cadence). Both are
+ * no-ops when `props.dispatch` is absent (goldens/fakes that omit it),
+ * exactly like `getText` elsewhere in this file's sibling shapes. KEPT: xterm mounted once per
  * `sessionId`, WS connect with backoff reconnect, the shared deterministic
  * grid (measured once per mount — the legacy file's async web-font
  * remeasure is dropped for the same reason: it only refines an already-good
@@ -64,6 +76,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import type { Shape } from '@ensembleworks/canvas-model'
+import type { Intent } from '@ensembleworks/canvas-editor'
 import type { ShapeBodyProps } from '@ensembleworks/canvas-react'
 import { CellSize, gridFor, quantizeCell } from '../../terminal/grid.js'
 import { FONT_SIZE_DEFAULT, ptyInputForKey } from '../../terminal/keys.js'
@@ -106,6 +119,30 @@ export function terminalContentFrom(shape: Shape): TerminalShapeContent {
   }
 }
 
+/** Pure: the (at most one) UpdateProps intent for a title-rename COMMIT
+ * (fired from blur/Enter, never per keystroke — see the module header's
+ * commit-once discipline). Returns null — a no-op guard, not a caller-side
+ * `if (newTitle !== title)` duplicated at every call site — when the
+ * committed title is unchanged from the shape's CURRENT title (e.g. the
+ * field was focused and blurred without an edit). */
+export function terminalRenameIntent(id: string, currentTitle: string, newTitle: string): Intent | null {
+  return newTitle === currentTitle ? null : { type: 'UpdateProps', id, props: { title: newTitle } }
+}
+
+/** Pure: converts a SCREEN-pixel pointer delta (a title-bar drag's
+ * clientX/clientY delta since the last pointermove) into the WORLD-unit
+ * TranslateShapes intent for `ids`. Per canvas-editor/src/input.ts's
+ * NORMATIVE camera convention (`screen = (world + camera.xy) * z`), a DELTA
+ * divides by `z` alone — camera.xy is a translation that cancels between any
+ * two points sampled at the same `z`, exactly how
+ * canvas-editor/src/tools/select.ts's onDragging computes its own
+ * `rawDx`/`rawDy` (there via two `screenToWorld` calls and a subtraction;
+ * here directly, since only the delta — never an absolute world point — is
+ * needed). */
+export function terminalTitleDragIntent(ids: readonly string[], screenDx: number, screenDy: number, cameraZ: number): Intent {
+  return { type: 'TranslateShapes', ids, dx: screenDx / cameraZ, dy: screenDy / cameraZ }
+}
+
 // Base-font cell measurement — the one input the deterministic grid divides
 // by; see grid.ts's module header for why it must be measured, not shared.
 // (fontSize is the SHARED shape prop, so measuring at the current fontSize
@@ -122,7 +159,11 @@ interface ConnDisplay {
   readonly attempt: number
 }
 
-export function TerminalShape({ shape }: ShapeBodyProps) {
+export function TerminalShape({ shape, editorState, dispatch: dispatchIntents }: ShapeBodyProps) {
+  // `dispatchIntents` is EXPLICITLY the D2 ShapeBodyProps.dispatch (renamed
+  // on destructure) — NOT to be confused with the mount effect's own local
+  // `dispatch` below, which drives the connection state machine
+  // (terminalConnection.ts) and never touches the doc.
   const { w, h, sessionId, title, gateway, fontSize } = terminalContentFrom(shape)
   const containerRef = useRef<HTMLDivElement>(null)
   const termRef = useRef<Terminal | null>(null)
@@ -349,6 +390,67 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
     })
   }, [shape.id])
 
+  // ---- title rename (Task D3) --------------------------------------------
+  // A THIRD local mode, independent of useInteractionMode's idle/focused
+  // (that machine governs the xterm body's own keyboard/pointer swallowing,
+  // not the title): 'renaming' toggles on double-click of the title bar,
+  // mirroring the double-click-to-focus idiom every one of this seam's six
+  // shape bodies already uses elsewhere (see ./index.ts's INTERACTIVE-CONTENT
+  // EVENT POLICY) — plain text is the drag surface (see below) when NOT
+  // renaming; double-clicking it swaps in a real, auto-focused `<input>`
+  // so a mouse-drag inside the field does normal native text selection
+  // instead of ALSO moving the shape (an input spanning the drag surface's
+  // full width would otherwise have to choose between the two on every
+  // pointerdown — this sidesteps that by making the two mutually exclusive
+  // in time, not in space).
+  const [renaming, setRenaming] = useState(false)
+  // Local draft while typing; only a COMMIT (blur/Enter) dispatches
+  // UpdateProps — see terminalRenameIntent's doc comment and this file's
+  // module header for why per-keystroke dispatch is wrong. Resynced from the
+  // shape's own `title` whenever it changes from OUTSIDE this input (a
+  // remote peer's rename, or this same rename's own round-trip) — never
+  // fires mid-typing, since a local, uncommitted draft doesn't change
+  // `title` at all.
+  const [titleDraft, setTitleDraft] = useState(title)
+  useEffect(() => setTitleDraft(title), [title])
+
+  const commitTitleRename = () => {
+    const intent = terminalRenameIntent(shape.id, title, titleDraft)
+    if (intent) dispatchIntents?.([intent])
+    setRenaming(false)
+  }
+
+  // ---- title-bar drag-to-move (Task D3) ----------------------------------
+  // Pointer-capture drag on the title bar (active only while NOT renaming —
+  // see above): each pointermove dispatches its OWN incremental world-delta
+  // TranslateShapes (the accepted per-move commit cadence — matches
+  // canvas-editor/src/tools/select.ts's onDragging), converting the raw
+  // screen delta by the CURRENT camera zoom (editorState.camera.z) via
+  // terminalTitleDragIntent. stopPropagation on pointerdown keeps the drag
+  // from also reaching the canvas's own select tool — the title bar renders
+  // OUTSIDE the shape's own hit-tested box (bottom: 100% of the container),
+  // so without this a press there could otherwise fall through to a
+  // marquee-select/deselect on the canvas below.
+  const titleDragRef = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null)
+
+  const onTitlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.stopPropagation()
+    e.currentTarget.setPointerCapture(e.pointerId)
+    titleDragRef.current = { pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY }
+  }
+  const onTitlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const drag = titleDragRef.current
+    if (!drag || drag.pointerId !== e.pointerId) return
+    const screenDx = e.clientX - drag.lastX
+    const screenDy = e.clientY - drag.lastY
+    titleDragRef.current = { pointerId: drag.pointerId, lastX: e.clientX, lastY: e.clientY }
+    if (screenDx === 0 && screenDy === 0) return
+    dispatchIntents?.([terminalTitleDragIntent([shape.id], screenDx, screenDy, editorState.camera.z)])
+  }
+  const onTitlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (titleDragRef.current?.pointerId === e.pointerId) titleDragRef.current = null
+  }
+
   const overlayText =
     conn.status === 'ended'
       ? 'Session ended'
@@ -376,19 +478,75 @@ export function TerminalShape({ shape }: ShapeBodyProps) {
       }}
     >
       <div
+        data-canvas-v2-terminal-titlebar={shape.id}
+        onPointerDown={renaming ? undefined : onTitlePointerDown}
+        onPointerMove={renaming ? undefined : onTitlePointerMove}
+        onPointerUp={renaming ? undefined : onTitlePointerUp}
+        onPointerCancel={renaming ? undefined : onTitlePointerUp}
+        onDoubleClick={(e) => {
+          e.stopPropagation() // don't ALSO trigger the xterm body's own focus-request (onDoubleClick above)
+          setRenaming(true)
+        }}
         style={{
           position: 'absolute',
           left: 0,
           bottom: '100%',
           paddingBottom: 4,
-          fontFamily: wm.mono,
-          fontSize: 12,
-          textTransform: 'uppercase',
-          letterSpacing: '0.14em',
-          color: wm.sealBlue,
+          cursor: renaming ? 'text' : 'grab',
+          touchAction: 'none',
         }}
       >
-        {title}
+        {renaming ? (
+          <input
+            autoFocus
+            value={titleDraft}
+            onChange={(e) => setTitleDraft(e.target.value)}
+            onBlur={commitTitleRename}
+            onKeyDown={(e) => {
+              // Swallow EVERY keydown — without this, e.g. Backspace/Delete
+              // while editing the title would bubble to CanvasV2App's
+              // document-level global-shortcut listener
+              // (handleGlobalShortcut, gated on editingId === null — which
+              // IS null here, since this input's local focus is not the
+              // editor's editingId concept) and delete the SHAPE instead of
+              // a character of the title.
+              e.stopPropagation()
+              if (e.key === 'Enter') {
+                e.preventDefault()
+                e.currentTarget.blur() // triggers onBlur -> commitTitleRename
+              } else if (e.key === 'Escape') {
+                setTitleDraft(title) // discard the in-progress edit
+                e.currentTarget.blur()
+              }
+            }}
+            onPointerDown={(e) => e.stopPropagation()}
+            style={{
+              display: 'block',
+              width: '100%',
+              border: 'none',
+              background: 'transparent',
+              padding: 0,
+              fontFamily: wm.mono,
+              fontSize: 12,
+              textTransform: 'uppercase',
+              letterSpacing: '0.14em',
+              color: wm.sealBlue,
+              outline: 'none',
+            }}
+          />
+        ) : (
+          <div
+            style={{
+              fontFamily: wm.mono,
+              fontSize: 12,
+              textTransform: 'uppercase',
+              letterSpacing: '0.14em',
+              color: wm.sealBlue,
+            }}
+          >
+            {title}
+          </div>
+        )}
       </div>
       <div
         ref={containerRef}
