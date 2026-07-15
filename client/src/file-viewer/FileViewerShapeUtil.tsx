@@ -50,6 +50,10 @@ export type FileViewerShape = TLBaseShape<'file-viewer', FileViewerShapeProps>
 
 const HEADER_HEIGHT = 28
 
+// DO NOT override canScroll() to true: pinch-forward (pinchForward.ts) relies
+// on tldraw's onWheel NOT swallowing wheel events over this shape while it's
+// being edited, which holds only while canScroll stays at ShapeUtil's default
+// false. The iframe scrolls its own document; tldraw never needs to.
 export class FileViewerShapeUtil extends BaseBoxShapeUtil<FileViewerShape> {
 	static override type = 'file-viewer' as const
 	static override props = fileViewerShapeProps
