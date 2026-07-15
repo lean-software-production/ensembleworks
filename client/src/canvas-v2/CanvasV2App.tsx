@@ -79,9 +79,10 @@
  * `<button>` — a DOM SIBLING of Viewport, not a descendant — whose keydown
  * never bubbles into Viewport's own listener. BOTH funnel through the single
  * `handleGlobalShortcut` policy (defined next to `cancelAndReset` below), so
- * the key->action mapping lives in exactly ONE place and a future shortcut
- * (B4's Ctrl+Z) is a one-site addition; the document listener's own
- * containment guard keeps the two paths mutually exclusive (no
+ * the key->action mapping lives in exactly ONE place — B4's
+ * Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y undo/redo branch was a one-site addition there
+ * and works from both paths for exactly that reason; the document listener's
+ * own containment guard keeps the two paths mutually exclusive (no
  * double-handling). See both functions' doc comments.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -489,9 +490,10 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// below) for keydowns delivered to a focused toolbar button, a DOM SIBLING
 	// of the viewport whose keydown never bubbles into Viewport's own listener.
 	// Having the policy HERE, once, is what keeps those two paths from
-	// diverging: a future shortcut (B4's Ctrl+Z) is added in THIS function
-	// alone and immediately works from both paths — add it to only one and it
-	// would silently no-op under the other's focus condition.
+	// diverging: B4's Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y undo/redo branch was added in
+	// THIS function alone and immediately works from both paths — had it gone
+	// into only one caller it would silently no-op under the other's focus
+	// condition.
 	//
 	// Returns true IFF it CONSUMED the event; each caller must then NOT forward
 	// it onward (handleInput returns before dispatchToActiveTool; the document
@@ -535,12 +537,23 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			// gate above already routes text-editing elsewhere), so there's no
 			// competing native undo to suppress — consistent with Escape/Delete/
 			// Backspace just above, which don't call it either.
+			//
+			// REDO KEY SCOPING (correctness): the z-branch (undo) and the
+			// shift-z alternative (redo) accept EITHER ctrl or meta — Ctrl+Z is
+			// the Windows/Linux undo and Cmd+Shift+Z the Mac-native redo. But
+			// the 'y' redo alternative requires `ctrl` SPECIFICALLY, never meta:
+			// Ctrl+Y is the Windows redo convention, whereas Cmd+Y on Safari is
+			// the native "Show All History" shortcut — and since nothing here
+			// calls preventDefault, binding meta+y would fire redo AND pop
+			// Safari's history window. Mac users get redo via Cmd+Shift+Z (the
+			// z-branch), so dropping meta+y costs them nothing.
 			const key = event.key.toLowerCase()
-			if ((event.modifiers.ctrl || event.modifiers.meta) && key === 'z' && !event.modifiers.shift) {
+			const withModifier = event.modifiers.ctrl || event.modifiers.meta
+			if (withModifier && key === 'z' && !event.modifiers.shift) {
 				editor.undo()
 				return true
 			}
-			if ((event.modifiers.ctrl || event.modifiers.meta) && ((key === 'z' && event.modifiers.shift) || key === 'y')) {
+			if ((withModifier && key === 'z' && event.modifiers.shift) || (event.modifiers.ctrl && key === 'y')) {
 				editor.redo()
 				return true
 			}
@@ -647,9 +660,9 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			if (target && container.contains(target)) return // already handled by Viewport's own onKeyDown -> handleInput
 			if (isEditableTarget(target)) return
 			// Rewrite the raw DOM event into the normalized KeyInputEvent the
-			// shared policy speaks — carrying modifiers verbatim so a future
-			// modifier-bearing shortcut (B4's Ctrl+Z) works from this path too,
-			// not just the viewport one.
+			// shared policy speaks — carrying modifiers verbatim so the
+			// modifier-bearing shortcuts (B4's Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y) work
+			// from this path too, not just the viewport one.
 			const keyEvent: KeyInputEvent = {
 				type: 'keydown',
 				key: e.key,

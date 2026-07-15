@@ -228,9 +228,12 @@ export function dispatchToActiveTool(
  *    transform.ts's COMMIT CADENCE note). Reset to idle only; the v1 policy
  *    does NOT revert a partially-completed resize/rotate back to its
  *    pre-gesture size/angle — the shape is simply left at whatever the last
- *    delivered pointermove committed. Full undo-to-gesture-start is a
- *    documented Phase-4 parity item, not this unit's scope (canvas-editor
- *    has no undo stack yet at all).
+ *    delivered pointermove committed. canvas-editor DOES have an undo stack
+ *    now (Task B1), driven by Ctrl+Z (Task B4) — but because each pointermove
+ *    commits its own batch, undo unwinds one increment at a time, not the
+ *    whole gesture. Gesture-atomic undo (full undo-to-gesture-start, one
+ *    undo step per drag) remains a documented Phase-4 parity item, not this
+ *    unit's scope.
  *
  * Returns the full RESET `ToolStates` (every tool goes back to its own
  * `initialState` — not just the active one — since an abandonment trigger

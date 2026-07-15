@@ -1631,6 +1631,18 @@ deviation from DoD #8 (never a silent ungated landing)._
   fixes keyboard delivery once (so global shortcuts survive toolbar-button
   focus) with a regression test that focuses a toolbar button, then asserts
   Escape/Delete still reach the editor.
+- **B4 (Ctrl+Z keybinding):** undo granularity is per-pointermove-commit — the
+  tool-loop create/arrow-draw path commits incrementally, one batch per
+  pointermove. So `Ctrl+Z` after DRAG-creating a shape undoes one size
+  increment, not the whole gesture; multiple `Ctrl+Z` are needed to remove a
+  drag-created shape. This is the pre-existing per-move commit cadence (an H3
+  watch-item), NOT introduced by B4 — but it is now reachable via the
+  keybinding. Gesture-atomic undo is the open "full undo-to-gesture-start"
+  parity item; B6's undo E2E should judge whether per-increment undo is
+  acceptable for dogfood, else a follow-up coalesces a gesture into one undo
+  entry. (Redo scoping fix landed in B4: `Ctrl+Y` requires `ctrl`
+  specifically, never `meta` — `Cmd+Y` is Safari's native "Show All History"
+  and nothing here calls preventDefault; Mac redo is `Cmd+Shift+Z`.)
 
 ---
 
