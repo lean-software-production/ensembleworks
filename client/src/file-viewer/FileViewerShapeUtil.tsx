@@ -25,6 +25,7 @@ import {
 } from 'tldraw'
 import { wm } from '../theme'
 import { presenterFor, type PresenterInfo } from './followLogic'
+import { forwardPinchToCanvas, parsePinchMessage } from './pinchForward'
 import { presentStore } from './presentStore'
 
 export interface FileViewerShapeProps {
@@ -158,6 +159,14 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 			if (e.source !== iframeRef.current?.contentWindow) return
 			const d = e.data as { type?: unknown; fraction?: unknown } | null
 			if (!d || typeof d !== 'object') return
+			const pinch = parsePinchMessage(d)
+			if (pinch) {
+				// Pinch over the interactive viewer zooms the CANVAS (spec:
+				// 2026-07-15-pinch-zoom-guard-design.md) — replay on the iframe
+				// element so it bubbles into tldraw's own wheel/zoom path.
+				if (iframeRef.current) forwardPinchToCanvas(iframeRef.current, pinch)
+				return
+			}
 			if (d.type === 'ew-file-viewer-ready') {
 				// Presenter's own refresh/rev reload → re-apply the last fraction so
 				// the reloaded document lands where the presenter left it (spec §5).
