@@ -4,7 +4,7 @@
 // mutators; everything upstream (tools, scripts, the renderer) only ever
 // produces or reads Intents/EditorState.
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'
-import { toLocalPoint, type CanvasDocument, type Point, type Shape } from '@ensembleworks/canvas-model'
+import { toLocalPoint, type Binding, type CanvasDocument, type Point, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from './intents.js'
 
 // ============================================================================
@@ -73,15 +73,63 @@ export interface EditorOpts {
   pageId: string
 }
 
+/**
+ * The undo/redo replay vocabulary (Task B1's inverse-intent stack): every
+ * variant maps 1:1 to a `CanvasDoc` PUBLIC mutator — the exact same
+ * putShape/deleteShape/setText/putBinding/deleteBinding calls applyOne
+ * itself makes — never a raw Loro tree op and never loro-crdt's
+ * UndoManager. This is the binding-mechanism decision from Task A1's probe:
+ * UndoManager mutates the tree directly and corrupts LoroCanvasDoc's private
+ * id→node index on shape create/delete undo/redo; replaying only through
+ * the public mutators keeps that index exactly as correct as a live intent
+ * would, and — since only THIS peer's own applyAll calls ever push an entry
+ * — gives local-peer-only undo scope for free (a remote peer's incoming
+ * shapes are never captured, so undo can never touch them).
+ *
+ * `putShape` is deliberately doing double duty as the inverse for FOUR
+ * different intents (Translate/Resize/RotateShapes, ReparentShapes, and
+ * CompleteArrow's updateProps): `CanvasDoc.putShape` is a full-field
+ * overwrite (it rewrites kind/parentId/index/x/y/rotation/isLocked/opacity/
+ * meta/props all at once — see LoroCanvasDoc.putShape) AND repositions the
+ * physical tree node to match `shape.parentId` (via placeInTree) — so
+ * "restore the exact Shape object read before the mutation" is already a
+ * correct, tolerant (never-throws) inverse for every one of those cases,
+ * including a reparent's prior parent. No separate 'reparent' op variant is
+ * needed as a result.
+ */
+type InverseOp =
+  | { readonly op: 'putShape'; readonly shape: Shape }
+  | { readonly op: 'deleteShape'; readonly id: string }
+  | { readonly op: 'setText'; readonly id: string; readonly text: string }
+  | { readonly op: 'putBinding'; readonly binding: Binding }
+  | { readonly op: 'deleteBinding'; readonly id: string }
+
+/** One undone/redoable unit — exactly one apply()/applyAll() batch's worth
+ * of doc mutation. `undo` restores doc state to just before the batch ran;
+ * `redo` restores it to just after. Both are pre-computed at apply time (not
+ * derived from replaying intents again), so undo/redo never re-run
+ * tool/intent logic — including a resize's anchor-clamp or an ancestor
+ * dedupe — that could recompute a DIFFERENT result the second time. */
+interface UndoEntry {
+  readonly undo: readonly InverseOp[]
+  readonly redo: readonly InverseOp[]
+}
+
 /** Per-call result of applying one intent: whether it touched the CanvasDoc
  * (rolls up into ONE doc.commit() for the whole apply()/applyAll() batch)
  * and whether it produced a new EditorState (rolls up into ONE store
  * notification for the whole batch) — see applyAll's doc comment for why
- * these two are tracked and committed/notified separately. */
+ * these two are tracked and committed/notified separately. `undo`/`redo`
+ * are the InverseOps this ONE intent contributes to the batch's UndoEntry
+ * (empty/omitted for a view intent or a mutation that resolved to nothing,
+ * e.g. every id in a Translate vanished) — see applyAll for how per-intent
+ * arrays combine into one batch-level entry. */
 interface ApplyResult {
   readonly state: EditorState
   readonly docMutated: boolean
   readonly stateChanged: boolean
+  readonly undo?: readonly InverseOp[]
+  readonly redo?: readonly InverseOp[]
 }
 
 export class Editor {
@@ -90,6 +138,13 @@ export class Editor {
   readonly random: () => number
   readonly pageId: string
   private readonly store = createStore<EditorState>(INITIAL_STATE)
+  // LOCAL-PEER-ONLY by construction: entries are pushed exclusively from
+  // THIS editor instance's own applyAll calls (never from doc.subscribe or
+  // an import() callback), so a remote peer's incoming shapes are never
+  // captured here and can never be undone by this peer — see the InverseOp
+  // doc comment above for the full binding-mechanism rationale.
+  private undoStack: UndoEntry[] = []
+  private redoStack: UndoEntry[] = []
 
   constructor(opts: EditorOpts) {
     this.doc = opts.doc
@@ -186,32 +241,132 @@ export class Editor {
     let state = this.store.get()
     let docMutated = false
     let stateChanged = false
+    // Per-intent InverseOp arrays, kept in APPLICATION order — combined into
+    // one batch-level UndoEntry below, once the loop (and therefore every
+    // intent's doc mutation) has finished.
+    const undoByIntent: (readonly InverseOp[])[] = []
+    const redoByIntent: (readonly InverseOp[])[] = []
     for (const intent of intents) {
       const result = this.applyOne(intent, state)
       state = result.state
       docMutated = docMutated || result.docMutated
       stateChanged = stateChanged || result.stateChanged
+      if (result.undo && result.undo.length > 0) undoByIntent.push(result.undo)
+      if (result.redo && result.redo.length > 0) redoByIntent.push(result.redo)
     }
-    if (docMutated) this.doc.commit()
+    if (docMutated) {
+      this.doc.commit()
+      // UNDO STACK (Task B1): one entry per batch, matching the commit
+      // granularity above — undoing a batch undoes the WHOLE batch as one
+      // step, never a single intent within it. Ordering: `undo` replays
+      // intents' inverses in REVERSE application order (a later intent in
+      // the same batch may depend on an earlier one's mutation — e.g.
+      // CreateShape then TranslateShapes on the shape it just created — so
+      // undoing must unwind the translate before the create); `redo`
+      // replays in forward order (reapplying the batch exactly as it first
+      // ran). Each intent's OWN InverseOp array keeps its own internal
+      // order as computed in applyOne (e.g. DeleteShapes's cascade-restore
+      // is already parent-before-child) — only the ORDER OF INTENTS is
+      // reversed for undo, not the ops within one intent.
+      this.undoStack.push({
+        undo: undoByIntent.slice().reverse().flat(),
+        redo: redoByIntent.flat(),
+      })
+      // Standard undo/redo semantics: any new doc-mutating batch from the
+      // user invalidates whatever was previously redoable. undo()/redo()
+      // themselves never reach this branch (they replay InverseOps
+      // directly against the doc — see below — not through applyAll), so
+      // this only fires for genuine forward intents, never as a side
+      // effect of undo/redo replay.
+      this.redoStack = []
+    }
     if (stateChanged) this.store.set(state)
+  }
+
+  /** Undo the most recent undoable batch (a no-op if the stack is empty —
+   * e.g. nothing has mutated the doc yet, or every prior batch has already
+   * been undone). Replays that batch's pre-computed InverseOps directly
+   * against `this.doc`'s public mutators (see the InverseOp doc comment for
+   * why that's both correct and index-safe) and commits once, matching the
+   * "one commit per undo/redo step" granularity applyAll establishes for
+   * forward intents. Does NOT touch EditorState (camera/selection/hover/
+   * editingId) — view state was never captured onto the stack in the first
+   * place (see applyOne: view intents return no undo/redo arrays), so there
+   * is nothing to restore there; a caller that wants "select the
+   * shapes an undo just restored" does so itself via a follow-up
+   * SetSelection. */
+  undo(): void {
+    const entry = this.undoStack.pop()
+    if (!entry) return
+    this.replay(entry.undo)
+    this.redoStack.push(entry)
+  }
+
+  /** Redo the most recently undone batch (a no-op if there's nothing to
+   * redo — the redo stack is empty, or a new mutation since the last undo
+   * already cleared it). See `undo()`'s doc comment for the replay/commit
+   * granularity and why EditorState is untouched. */
+  redo(): void {
+    const entry = this.redoStack.pop()
+    if (!entry) return
+    this.replay(entry.redo)
+    this.undoStack.push(entry)
+  }
+
+  /** True iff undo()/redo() would currently do something — for a caller
+   * that wants to enable/disable undo/redo UI without poking at internals. */
+  canUndo(): boolean { return this.undoStack.length > 0 }
+  canRedo(): boolean { return this.redoStack.length > 0 }
+
+  // Replay a pre-computed InverseOp batch through CanvasDoc's public
+  // mutators ONLY (never a raw tree op, never UndoManager — see the
+  // InverseOp doc comment), then ONE commit for the whole batch. Every op
+  // variant here rides a CanvasDoc contract that is ALREADY tolerant of a
+  // vanished target (putShape upserts / repositions tolerantly,
+  // deleteShape/setText/deleteBinding are silent no-ops on an unknown id,
+  // putBinding is a plain upsert) — so, same as applyOne's mutation
+  // intents, this never throws mid-batch on a target that vanished between
+  // the original apply and this undo/redo (e.g. a remote peer independently
+  // deleted the same shape in the meantime).
+  private replay(ops: readonly InverseOp[]): void {
+    if (ops.length === 0) return
+    for (const op of ops) {
+      switch (op.op) {
+        case 'putShape': this.doc.putShape(op.shape); break
+        case 'deleteShape': this.doc.deleteShape(op.id); break
+        case 'setText': this.doc.setText(op.id, op.text); break
+        case 'putBinding': this.doc.putBinding(op.binding); break
+        case 'deleteBinding': this.doc.deleteBinding(op.id); break
+      }
+    }
+    this.doc.commit()
   }
 
   private applyOne(intent: Intent, state: EditorState): ApplyResult {
     switch (intent.type) {
       case 'CreateShape':
         this.doc.putShape(intent.shape)
-        return { state, docMutated: true, stateChanged: false }
+        return {
+          state, docMutated: true, stateChanged: false,
+          undo: [{ op: 'deleteShape', id: intent.shape.id }],
+          redo: [{ op: 'putShape', shape: intent.shape }],
+        }
 
       case 'TranslateShapes': {
         const ids = dedupeAncestorOverlap(this.doc, intent.ids)
         let mutated = false
+        const undo: InverseOp[] = []
+        const redo: InverseOp[] = []
         for (const id of ids) {
           const shape = this.doc.getShape(id)
           if (!shape) continue
-          this.doc.putShape({ ...shape, x: shape.x + intent.dx, y: shape.y + intent.dy })
+          const next = { ...shape, x: shape.x + intent.dx, y: shape.y + intent.dy }
+          this.doc.putShape(next)
+          undo.push({ op: 'putShape', shape })
+          redo.push({ op: 'putShape', shape: next })
           mutated = true
         }
-        return { state, docMutated: mutated, stateChanged: false }
+        return { state, docMutated: mutated, stateChanged: false, undo, redo }
       }
 
       case 'ResizeShapes': {
@@ -233,6 +388,8 @@ export class Editor {
         // unrotated dimensions), unaffected by that conversion.
         const ids = dedupeAncestorOverlap(this.doc, intent.ids)
         let mutated = false
+        const undo: InverseOp[] = []
+        const redo: InverseOp[] = []
         for (const id of ids) {
           const shape = this.doc.getShape(id)
           if (!shape) continue
@@ -252,10 +409,13 @@ export class Editor {
           const y = anchor.y + (shape.y - anchor.y) * scaleY
           if (w !== undefined) props.w = w * scaleX
           if (h !== undefined) props.h = h * scaleY
-          this.doc.putShape({ ...shape, x, y, props })
+          const next = { ...shape, x, y, props }
+          this.doc.putShape(next)
+          undo.push({ op: 'putShape', shape })
+          redo.push({ op: 'putShape', shape: next })
           mutated = true
         }
-        return { state, docMutated: mutated, stateChanged: false }
+        return { state, docMutated: mutated, stateChanged: false, undo, redo }
       }
 
       case 'RotateShapes': {
@@ -277,6 +437,8 @@ export class Editor {
         // regardless of the parent's rotation.
         const ids = dedupeAncestorOverlap(this.doc, intent.ids)
         let mutated = false
+        const undo: InverseOp[] = []
+        const redo: InverseOp[] = []
         const cos = Math.cos(intent.dRadians), sin = Math.sin(intent.dRadians)
         for (const id of ids) {
           const shape = this.doc.getShape(id)
@@ -285,10 +447,13 @@ export class Editor {
           const dx = shape.x - center.x, dy = shape.y - center.y
           const x = center.x + (dx * cos - dy * sin)
           const y = center.y + (dx * sin + dy * cos)
-          this.doc.putShape({ ...shape, x, y, rotation: shape.rotation + intent.dRadians })
+          const next = { ...shape, x, y, rotation: shape.rotation + intent.dRadians }
+          this.doc.putShape(next)
+          undo.push({ op: 'putShape', shape })
+          redo.push({ op: 'putShape', shape: next })
           mutated = true
         }
-        return { state, docMutated: mutated, stateChanged: false }
+        return { state, docMutated: mutated, stateChanged: false, undo, redo }
       }
 
       case 'ReparentShapes': {
@@ -299,8 +464,17 @@ export class Editor {
         // that can't move, so valid ids in the same intent still apply
         // (per-id atomicity: no "first id moved, then the second threw").
         let mutated = false
+        const undo: InverseOp[] = []
+        const redo: InverseOp[] = []
         for (const id of intent.ids) {
           if (!this.canReparent(id, intent.parentId)) continue
+          // Captured BEFORE the reparent call: canReparent already proved
+          // `id` resolves, so this read is safe. The inverse is
+          // putShape(shape) — NOT a dedicated 'reparent' InverseOp — since
+          // putShape's placeInTree already restores the exact prior
+          // physical parent (and every other field) in one tolerant call;
+          // see the InverseOp doc comment.
+          const shape = this.doc.getShape(id)!
           // Belt-and-braces: canReparent walks the MODEL parent chain
           // (data.parentId); in pathological split-brain states (duplicate
           // ids under concurrent churn — see LoroCanvasDoc.nodesByShapeId)
@@ -308,9 +482,14 @@ export class Editor {
           // could still throw where the model walk said fine. The contract
           // is "never leak", so the engine's own guard is caught and
           // treated as one more skip, not propagated.
-          try { this.doc.reparent(id, intent.parentId); mutated = true } catch { /* skip */ }
+          try {
+            this.doc.reparent(id, intent.parentId)
+            mutated = true
+            undo.push({ op: 'putShape', shape })
+            redo.push({ op: 'putShape', shape: { ...shape, parentId: intent.parentId as Shape['parentId'] } })
+          } catch { /* skip */ }
         }
-        return { state, docMutated: mutated, stateChanged: false }
+        return { state, docMutated: mutated, stateChanged: false, undo, redo }
       }
 
       case 'DeleteShapes': {
@@ -319,13 +498,37 @@ export class Editor {
         // committing a no-op batch HAPPENS to be harmless on Loro (an empty
         // commit emits nothing) — but that's an engine detail, not a
         // CanvasDoc contract, so the flag must not rely on it.
+        //
+        // CASCADE-AWARE INVERSE (Task B1's flagged correctness trap):
+        // deleteShape cascades to the shape's ENTIRE subtree (see
+        // CanvasDoc.deleteShape's contract — a frame's children die with
+        // it), so the inverse of ONE id is NOT "recreate one shape" — it's
+        // "recreate the whole subtree, parents before children". For each
+        // id, collectSubtreeParentFirst snapshots the id's full pre-image
+        // subtree (BFS from the root, so a parent always appears before its
+        // children) BEFORE this call's doc.deleteShape — undo replays those
+        // putShape ops in that SAME order, so by the time a child's
+        // putShape runs, its parent already exists in the tree again (no
+        // reliance on putShape's "parent not yet loaded" root-fallback
+        // tolerance). Processed sequentially per id (not batch-snapshotted
+        // up front) to mirror this loop's OWN pre-existing behavior exactly:
+        // if an earlier id in this same intent already cascaded away a
+        // later id (e.g. ids = [frame, child-of-frame]), that later id's
+        // getShape resolves to nothing and it's skipped here — same as
+        // before this change, and correctly so (no double-capture, no
+        // double-delete).
         let mutated = false
+        const undo: InverseOp[] = []
+        const redo: InverseOp[] = []
         for (const id of intent.ids) {
           if (!this.doc.getShape(id)) continue
+          const subtree = collectSubtreeParentFirst(this.doc, id)
           this.doc.deleteShape(id)
           mutated = true
+          for (const s of subtree) undo.push({ op: 'putShape', shape: s })
+          redo.push({ op: 'deleteShape', id })
         }
-        return { state, docMutated: mutated, stateChanged: false }
+        return { state, docMutated: mutated, stateChanged: false, undo, redo }
       }
 
       case 'SetText': {
@@ -338,8 +541,13 @@ export class Editor {
         // docMutated: true unconditionally, unlike every other mutation
         // intent in this switch.
         if (!this.doc.getShape(intent.id)) return { state, docMutated: false, stateChanged: false }
+        const priorText = this.doc.getText(intent.id)
         this.doc.setText(intent.id, intent.text)
-        return { state, docMutated: true, stateChanged: false }
+        return {
+          state, docMutated: true, stateChanged: false,
+          undo: [{ op: 'setText', id: intent.id, text: priorText }],
+          redo: [{ op: 'setText', id: intent.id, text: intent.text }],
+        }
       }
 
       case 'StartArrow': {
@@ -350,16 +558,27 @@ export class Editor {
         // emitting tool (the arrow it expects never appears).
         if (intent.shape.kind !== 'arrow') return { state, docMutated: false, stateChanged: false }
         this.doc.putShape(intent.shape)
+        const undo: InverseOp[] = [{ op: 'deleteShape', id: intent.shape.id }]
+        const redo: InverseOp[] = [{ op: 'putShape', shape: intent.shape }]
         if (intent.fromBinding) {
-          this.doc.putBinding({
+          const binding: Binding = {
             id: `binding:${intent.shape.id}-start` as any,
             fromId: intent.shape.id,
             toId: intent.fromBinding.targetId as any,
             props: { terminal: 'start', anchor: intent.fromBinding.anchor },
             meta: {},
-          })
+          }
+          this.doc.putBinding(binding)
+          // Binding inverse ordered before the shape's own inverse: not
+          // load-bearing for CanvasDoc (bindings/shapes are independent
+          // maps — deleteShape does not touch the bindings map, so either
+          // order leaves the doc equally correct), but keeps "undo the
+          // thing that references X before X itself" as the READING
+          // convention for this array.
+          undo.unshift({ op: 'deleteBinding', id: binding.id })
+          redo.push({ op: 'putBinding', binding })
         }
-        return { state, docMutated: true, stateChanged: false }
+        return { state, docMutated: true, stateChanged: false, undo, redo }
       }
 
       case 'CompleteArrow': {
@@ -370,17 +589,29 @@ export class Editor {
         // must not manufacture garbage for repair to clean.
         const shape = this.doc.getShape(intent.id)
         if (!shape) return { state, docMutated: false, stateChanged: false }
-        this.doc.updateProps(intent.id, { end: { x: intent.end.x - shape.x, y: intent.end.y - shape.y } })
+        const end = { x: intent.end.x - shape.x, y: intent.end.y - shape.y }
+        this.doc.updateProps(intent.id, { end })
+        // updateProps MERGES ({...cur, ...props}), but `shape` (read before
+        // the call) already holds every OTHER field plus the OLD props
+        // untouched — putShape(shape) is a full overwrite, so replaying it
+        // exactly reverses this updateProps call (same "putShape as a
+        // universal restore-prior-state inverse" pattern as Resize/Rotate/
+        // Reparent above).
+        const undo: InverseOp[] = [{ op: 'putShape', shape }]
+        const redo: InverseOp[] = [{ op: 'putShape', shape: { ...shape, props: { ...shape.props, end } } }]
         if (intent.toBinding) {
-          this.doc.putBinding({
+          const binding: Binding = {
             id: `binding:${intent.id}-end` as any,
             fromId: intent.id as any,
             toId: intent.toBinding.targetId as any,
             props: { terminal: 'end', anchor: intent.toBinding.anchor },
             meta: {},
-          })
+          }
+          this.doc.putBinding(binding)
+          undo.unshift({ op: 'deleteBinding', id: binding.id })
+          redo.push({ op: 'putBinding', binding })
         }
-        return { state, docMutated: true, stateChanged: false }
+        return { state, docMutated: true, stateChanged: false, undo, redo }
       }
 
       case 'SetCamera':
@@ -451,6 +682,39 @@ function liveDocAdapter(doc: CanvasDoc): CanvasDocument {
     pages: [], shapes: [], bindings: [],
     byId: { get: (id: string) => doc.getShape(id) } as unknown as CanvasDocument['byId'],
   }
+}
+
+// DeleteShapes's undo helper (Task B1's flagged correctness trap): the full
+// pre-image of `rootId`'s subtree, PARENT-BEFORE-CHILD ordered (a
+// breadth-first walk starting at the root, so every parent is emitted before
+// any of its descendants) — the exact order undo must recreate the cascade
+// in, so a child's putShape never runs before its parent's. Returns [] if
+// `rootId` itself doesn't resolve (mirrors DeleteShapes's own "vanished id,
+// skip" tolerance — this is only ever called right after the caller's own
+// getShape check confirms the root exists, so that branch is defense-in-
+// depth, not a live path). Reads the WHOLE doc via listShapes() once per
+// call — O(shapes), same trade-off liveDocAdapter's neighbor comment above
+// already accepts for this package ("fine at editor-interaction scale") —
+// rather than trying to answer "does X have children" without a full scan,
+// since CanvasDoc exposes no children-of-id query of its own.
+function collectSubtreeParentFirst(doc: CanvasDoc, rootId: string): Shape[] {
+  const root = doc.getShape(rootId)
+  if (!root) return []
+  const childrenByParent = new Map<string, Shape[]>()
+  for (const s of doc.listShapes()) {
+    const arr = childrenByParent.get(s.parentId)
+    if (arr) arr.push(s); else childrenByParent.set(s.parentId, [s])
+  }
+  const result: Shape[] = [root]
+  const queue: string[] = [rootId]
+  while (queue.length > 0) {
+    const parentId = queue.shift()!
+    for (const child of childrenByParent.get(parentId) ?? []) {
+      result.push(child)
+      queue.push(child.id)
+    }
+  }
+  return result
 }
 
 // Convert a WORLD point into the frame `shape.x`/`shape.y` ITSELF lives in —
