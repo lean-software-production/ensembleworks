@@ -1658,6 +1658,17 @@ deviation from DoD #8 (never a silent ungated landing)._
   changed (geometry x/y/rotation/w/h for resize/rotate; parentId for reparent;
   etc.), merged onto the CURRENT live shape rather than overwriting the whole
   shape. Tied to the undo-quality / gesture-atomic-undo family.
+- **OWNER DECISION (2026-07-15) — undo-quality work DEFERRED to a separate
+  follow-up, NOT Phase 4.** B6 empirically confirmed per-increment undo (a
+  3-move drag → 3 undo entries; one `Ctrl+Z` steps back one move, not the whole
+  gesture) — owner acknowledged this "*is* very painful" but chose to do the
+  fix as separate work rather than expand Phase 4. So BOTH the gesture-atomic
+  undo (coalesce a gesture's per-move commits into one undo entry) AND the
+  field-surgical inverse (over-revert fix above) are OUT of Phase 4 scope,
+  tracked here as the first item of a dedicated "undo-quality" follow-up.
+  Phase 4 ships per-increment undo + whole-shape restore knowingly. B6's E2E
+  encodes the current (per-increment) behavior honestly, so it will need
+  updating when the follow-up lands.
 
 ---
 
