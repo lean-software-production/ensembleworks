@@ -1681,6 +1681,21 @@ deviation from DoD #8 (never a silent ungated landing)._
   load the tldraw draw/handwriting webfont asset into the v2 client bundle
   (client-workspace `@font-face`/index.html or a canvas-v2 font-load module) —
   fold into C6 (or a small dedicated Seam-C task) ahead of C7.
+- **C4 (GeoShape) — parity gaps deferred to Seam F.** GeoShape ships honestly-
+  documented approximations (all noted in `GeoShape.tsx`'s GROUNDING header),
+  for the Seam F masked-diff harness + C7 goldens to catch/tolerance; fix only
+  if F flags material drift: (1) stroke-width **inset/miter not replicated** —
+  plain SVG stroke, no half-width geometry compensation (most visible at
+  `l`/`xl` stroke widths); (2) **`pattern` fill renders flat** (a per-color
+  approximation), no diagonal-hatch SVG pattern; (3) **non-default `align`/
+  `verticalAlign` not implemented** — the label is ALWAYS centered (v1's
+  default), off-center alignments not honored; (4) **`dash` not rendered** —
+  v1's default `'draw'` hand-wobble and `'dashed'`/`'dotted'` patterns all
+  render as a clean solid stroke here; (5) **16 of 20 geo variants fall back
+  to a rectangle outline** — only rectangle/ellipse/triangle/diamond are
+  special-cased with real geometry; cloud/pentagon/hexagon/octagon/star/
+  rhombus/rhombus-2/oval/trapezoid/the four arrows/x-box/check-box/heart draw
+  as a plain `<rect>` (documented fallback, never a crash).
 
 ---
 

@@ -84,6 +84,17 @@
 // (client/src/App.tsx:198-203 force-seeds `colorScheme: 'light'`; no theme
 // toggle exists yet).
 //
+// DASH: `dash` is one of 'draw'/'solid'/'dashed'/'dotted' (default 'draw',
+// GeoShapeUtil.tsx getDefaultProps). v1 uses it to render a HAND-WOBBLED
+// stroke for the default 'draw' case (GeoShapeBody.tsx's `path.toDrawD(...)`
+// / `path.toSvg({ style: dash, ... })`, seeded per-shape) and real
+// dash-array patterns for 'dashed'/'dotted'. This body renders a CLEAN,
+// un-wobbled SOLID stroke regardless of `dash` — a deliberate
+// simplification, documented here to the file's existing honesty standard
+// (like the pattern-fill / align / stroke-inset gaps below). Reproducing
+// the draw-wobble RNG path and the dash/dot arrays is deferred to the Seam F
+// parity work, not implemented here.
+//
 // STROKE WIDTH / LABEL SIZE: `size` (default 'm', GeoShapeUtil.tsx
 // getDefaultProps) resolves strokeWidth via `theme.strokeWidth *
 // STROKE_SIZES[size]` and label font size via `theme.fontSize *
@@ -211,7 +222,11 @@ function colorEntry(color: unknown): GeoColorEntry {
 export function geoStyle(shape: ShapeBodyProps['shape']): GeoStyle {
   const props = shape.props as Record<string, unknown>
   const entry = colorEntry(props.color)
-  const labelEntry = colorEntry(props.labelColor ?? props.color)
+  // labelColor is an INDEPENDENT prop, defaulting to 'black' on its own
+  // (GeoShapeUtil.tsx getDefaultProps: `labelColor: 'black'`) — NOT to the
+  // shape's own `color`. So an un-labelColor'd blue geo gets a BLACK label,
+  // not a blue one. colorEntry's own black default handles `undefined`.
+  const labelEntry = colorEntry(props.labelColor)
   const fill = typeof props.fill === 'string' ? props.fill : DEFAULT_FILL
   const size = typeof props.size === 'string' && props.size in STROKE_WIDTH_PX ? props.size : DEFAULT_SIZE
   const font = typeof props.font === 'string' && props.font in FONT_FAMILY ? props.font : DEFAULT_FONT

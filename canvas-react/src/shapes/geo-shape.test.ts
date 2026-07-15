@@ -107,6 +107,22 @@ function render(shape: Shape, getText?: (id: string) => string) {
 }
 
 // ============================================================================
+// 4b. labelColor is an INDEPENDENT prop, defaulting to 'black' on its own
+//     (GeoShapeUtil.tsx getDefaultProps: `labelColor: 'black'`), NOT to the
+//     shape's own `color`. A blue geo with no labelColor renders a BLACK
+//     label, not a blue one — a latent correctness bug caught in review.
+// ============================================================================
+{
+  const blueNoLabelColor = geoStyle(geoShape({ props: { color: 'blue' } }))
+  assert.equal(blueNoLabelColor.strokeColor, '#4465e9', 'stroke still follows props.color (blue)')
+  assert.equal(blueNoLabelColor.labelColor, '#1d1d1d', 'label color defaults to black (#1d1d1d) INDEPENDENTLY of props.color — not blue')
+
+  const explicitLabelColor = geoStyle(geoShape({ props: { color: 'blue', labelColor: 'red' } }))
+  assert.equal(explicitLabelColor.labelColor, '#e03131', 'an explicit labelColor is honored (red -> #e03131)')
+  console.log('ok: geoStyle — labelColor defaults to black independently of color, honors an explicit labelColor')
+}
+
+// ============================================================================
 // 5. Fill behavior: fill:'none' -> no fill rendered at all; fill:'semi' ->
 //    the FIXED near-white theme.colors.light.solid ('#fcfffe',
 //    defaultThemes.ts:136) REGARDLESS of the shape's own color (a real
@@ -133,6 +149,26 @@ function render(shape: Shape, getText?: (id: string) => string) {
   const solidBlue = geoStyle(geoShape({ props: { fill: 'solid', color: 'blue' } }))
   assert.equal(solidBlue.fillColor, '#dce1f8', 'fill:solid resolves to the per-color pastel "semi" variant (#dce1f8 for blue), not the strong stroke hex #4465e9')
   console.log('ok: geoStyle — fill none/semi/solid match v1s exact (and non-obvious) getDefaultDisplayValues resolution')
+}
+
+// ============================================================================
+// 5b. Size scaling: strokeWidth and label fontSize both scale up with
+//     props.size (STROKE_SIZES/LABEL_FONT_SIZES * theme.strokeWidth/fontSize
+//     — GeoShapeUtil.tsx getDefaultDisplayValues). Guards against a typo'd
+//     multiplier silently regressing to a constant.
+// ============================================================================
+{
+  const small = geoStyle(geoShape({ props: { size: 's' } }))
+  const medium = geoStyle(geoShape({ props: { size: 'm' } }))
+  const extraLarge = geoStyle(geoShape({ props: { size: 'xl' } }))
+
+  assert.ok(small.strokeWidth < medium.strokeWidth && medium.strokeWidth < extraLarge.strokeWidth, 'strokeWidth increases s < m < xl with props.size')
+  assert.ok(small.fontSize < medium.fontSize && medium.fontSize < extraLarge.fontSize, 'label fontSize increases s < m < xl with props.size')
+
+  const missing = geoStyle(geoShape({ props: {} }))
+  assert.equal(missing.strokeWidth, medium.strokeWidth, 'a geo shape with no size prop defaults to v1s own default (m)')
+  assert.equal(missing.fontSize, medium.fontSize, 'default fontSize is the m-size value too')
+  console.log('ok: geoStyle — strokeWidth and label fontSize scale with props.size (s < m < xl), default m')
 }
 
 // ============================================================================
