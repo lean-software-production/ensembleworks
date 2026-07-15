@@ -115,15 +115,75 @@ Per bounds §6 and §3-S1, the undo mechanism is mechanism-risk and gets a
 Phase-3-style probe with its verdict committed into THIS file before the
 dependent seam (B) is built. Task A1 fills this in.
 
-### P1: `loro-crdt` 1.13.6 `UndoManager` vs `LoroCanvasDoc` — VERDICT: _TBD (Task A1 writes it here)_
+### P1: `loro-crdt` 1.13.6 `UndoManager` vs `LoroCanvasDoc` — VERDICT: **fall back to an editor-level inverse-intent stack**
 
-_Placeholder. Task A1 replaces this with: the exact `UndoManager` construction
-tried against a `LoroCanvasDoc`, whether undo/redo correctly inverts (a) the
-movable-tree create/move/reparent/delete and (b) per-shape `LoroText` edits,
-whether it honors the local-peer-only scope (never reverting a simulated
-remote peer's ops), and the VERDICT — either "integrate `UndoManager`" or
-"fall back to an editor-level inverse-intent stack". The verdict decides B1's
-mechanism; the FEATURE is in scope either way._
+**Probe (Task A1, `canvas-editor/src/__probe/undo-probe.ts`, scratch — reverted after this write-up):**
+
+```ts
+const canvasDoc = LoroCanvasDoc.create({ peerId: 1n })
+const loroDoc = (canvasDoc as any).doc as LoroDoc   // reach the private field; the whole probe question
+const undoManager = new UndoManager(loroDoc, {})
+undoManager.setMergeInterval(0)                     // one undo step per commit()
+```
+
+`UndoManager` constructs fine against the `LoroDoc` a `LoroCanvasDoc` wraps
+(reached via its private `doc` field — `canvas-doc` exposes no public getter
+for it today). Four checks were run; here is what actually happened:
+
+1. **create → undo → redo.** `undo()` correctly removes the shape (both
+   `listShapes()` and `getShape()` agree: gone). `redo()` restores it in the
+   raw Loro tree — `listShapes()` (a fresh `tree.nodes()` scan) sees it again
+   — **but `getShape('shape:a')` returns `undefined` after redo.** `setText`/
+   `updateProps`/`putShape` on that id would silently no-op too, since they
+   all resolve through the same lookup.
+2. **setText → undo.** Passed cleanly: `v1` → `v2` → undo → reads back `v1`.
+3. **move (`putShape` new x/y) → undo.** Passed cleanly: reverts to the prior
+   `x`/`y`, correct via both `getShape()` and `listShapes()`.
+4. **remote update imported between local ops → undo.** Passed cleanly: a
+   peer-2 `LoroCanvasDoc` created `shape:remote`, exported an update, and the
+   probe doc imported it *between* creating `shape:local` and calling
+   `undo()`. `undo()` reverted only `shape:local`; `shape:remote` survived
+   untouched under both read paths. **Loro's local-peer-only scope holds** —
+   this is not the failure.
+
+**Root cause of the (1) failure, confirmed with additional throwaway
+diagnostics (not committed):** `LoroCanvasDoc` keeps a private
+`id → LoroTreeNode` index (`nodeByShapeId`) that every read/mutate method
+(`getShape`, `setText`, `getText`, `putShape`, …) resolves through. That index
+is maintained *incrementally* by `LoroCanvasDoc`'s own mutators and rebuilt
+*wholesale* by `reindex()` — but `reindex()` only runs inside `import()` (when
+`ImportResult.changed`) and `repair()` (when the plan is non-empty). Undo/redo
+via `UndoManager` mutates the underlying tree directly (create/delete a
+physical node) **without going through either path**, so any undo/redo that
+recreates or re-deletes a tree node — i.e. undoing a *create*, redoing a
+*create*, or undoing a *delete* — leaves the index pointing at a stale/dead
+node while `listShapes()`'s raw scan is fine. Confirmed a symmetric case
+(delete → undo(delete)): `listShapes()` sees the shape restored,
+`getShape()` still reports `undefined`. Confirmed there is no public
+workaround: `canvasDoc.repair()` after an undo/redo returns an **empty**
+plan (the CRDT state has no real drift — only the JS-side cache is wrong) and
+therefore never triggers its own `reindex()`. Property-level undo (case 2:
+`LoroText` edits; case 3: field edits on an already-indexed, never
+recreated/deleted node) never touches node identity, so those two cases are
+unaffected and pass.
+
+**Verdict:** loro-crdt's `UndoManager` is real and its local-peer-only
+semantics are proven correct end-to-end against `LoroCanvasDoc` — but
+integrating it directly today would silently break `getShape`/`setText`/
+`getText`/`putShape` after undoing or redoing any shape **create or delete**,
+which is a core case any undo feature must support, not an edge case. Fixing
+it would require changing `canvas-doc` itself (e.g. unconditionally
+`reindex()` on its own `subscribe()` callback, or exposing a public
+invalidate/reindex hook the editor can call after every `undo()`/`redo()`) —
+out of scope for a preflight probe, and not attempted here. B1 therefore
+builds local undo/redo as an **editor-level inverse-intent stack**: record the
+inverse of each local `Intent` (create ↔ delete, prior x/y, prior text, …) and
+replay inverses through the existing `CanvasDoc` mutator methods (`putShape`/
+`deleteShape`/`setText`), which already keep `LoroCanvasDoc`'s index correct
+on every call — sidestepping the index-staleness gap entirely while
+preserving the same local-peer-only guarantee (the stack only ever records
+this peer's own intents, so a remote import in between is never touched,
+matching what `UndoManager` itself already proved holds at the CRDT layer).
 
 ---
 
