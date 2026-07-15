@@ -459,6 +459,145 @@ async function main() {
 	})
 
 	// ==========================================================================
+	// (f) CTRL+Z / CTRL+SHIFT+Z / CTRL+Y -> editor.undo()/redo() (Task B4),
+	// through the SAME shared `handleGlobalShortcut` policy Escape/Delete/
+	// Backspace use (see CanvasV2App.tsx's own doc comment on that function).
+	// Every case here asserts a REAL doc effect (a shape appearing/
+	// disappearing), never a mock of editor.undo()/redo() — proving the
+	// keydown actually drove the real undo/redo stack, not just that some
+	// function got called. Each case is designed to net ZERO shapes by its own
+	// end (create then undo, or create+undo+redo+undo), so the doc is back to
+	// its pre-(f) 2-shape state by the time (e)'s unmount precondition reads
+	// it below.
+	// ==========================================================================
+	const ewUndo = (globalThis as any).window.__ew as {
+		editor: {
+			get(): { editingId: string | null }
+			apply(intent: unknown): void
+		}
+		doc: { listShapes(): Array<{ id: string }>; getShape(id: string): unknown }
+	}
+
+	function dispatchKey(target: HTMLElement, opts: { key: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): void {
+		target.dispatchEvent(
+			new (win as any).KeyboardEvent('keydown', {
+				key: opts.key,
+				ctrlKey: opts.ctrlKey ?? false,
+				metaKey: opts.metaKey ?? false,
+				shiftKey: opts.shiftKey ?? false,
+				bubbles: true,
+				cancelable: true,
+			}),
+		)
+	}
+
+	// (f1) PRIMARY PATH (viewport focus): Ctrl+Z undoes a CreateShape.
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-a', 500, 500) })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-a'), 'precondition: shape:undo-a exists before Ctrl+Z')
+	await act(async () => {
+		viewportEl!.focus()
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true })
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-a'), undefined, 'Ctrl+Z on the focused VIEWPORT drives editor.undo(), removing the just-created shape')
+	console.log('ok: CanvasV2App — Ctrl+Z (viewport focus, primary handleInput path) drives editor.undo()')
+
+	// (f2) Cmd+Z (metaKey) undoes too, and Ctrl+Shift+Z redoes it back —
+	// ending with a second Ctrl+Z so this case nets zero shapes.
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-b', 520, 520) })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-b'), 'precondition: shape:undo-b exists before Cmd+Z')
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', metaKey: true })
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-b'), undefined, 'Cmd+Z (metaKey, no ctrlKey) also drives editor.undo()')
+	console.log('ok: CanvasV2App — Cmd+Z (metaKey) drives editor.undo()')
+	await act(async () => {
+		// key: 'Z' (uppercase) — a real browser reports the shifted letter this
+		// way on some platforms; this proves the shared policy's
+		// `key.toLowerCase()` comparison matches regardless of reported case.
+		dispatchKey(viewportEl!, { key: 'Z', ctrlKey: true, shiftKey: true })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-b'), 'Ctrl+Shift+Z drives editor.redo(), restoring shape:undo-b')
+	console.log('ok: CanvasV2App — Ctrl+Shift+Z drives editor.redo() (case-insensitive key match)')
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true }) // cleanup: undo the redo so this case nets zero shapes
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-b'), undefined, 'cleanup: shape:undo-b undone again')
+
+	// (f3) Ctrl+Y is the other bound redo key.
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-c', 540, 540) })
+	})
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true }) // undo the create
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-c'), undefined, 'precondition: shape:undo-c undone before testing Ctrl+Y')
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'y', ctrlKey: true })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-c'), 'Ctrl+Y drives editor.redo(), restoring shape:undo-c')
+	console.log('ok: CanvasV2App — Ctrl+Y drives editor.redo()')
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true }) // cleanup: nets this case to zero shapes
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-c'), undefined, 'cleanup: shape:undo-c undone again')
+
+	// (f4) SUPPRESSION while editingId !== null: TextEditor owns the keyboard
+	// (its own undo, per the textarea's native undo stack), so the shared
+	// policy's editingId gate must block Ctrl+Z here too, same as Escape/
+	// Delete/Backspace above — the just-created shape must survive the
+	// keypress. Ending the edit and re-issuing Ctrl+Z proves the SAME
+	// CreateShape is still sitting on top of the undo stack (untouched by the
+	// suppressed attempt), not merely that nothing visibly changed.
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-d', 560, 560) })
+		ewUndo.editor.apply({ type: 'SetSelection', ids: ['shape:undo-d'] })
+		ewUndo.editor.apply({ type: 'BeginEdit', id: 'shape:undo-d' })
+	})
+	assert.equal(ewUndo.editor.get().editingId, 'shape:undo-d', 'precondition: shape:undo-d is being edited')
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-d'), 'Ctrl+Z is a no-op while editingId!==null — the shape being edited must NOT be undone away')
+	assert.equal(ewUndo.editor.get().editingId, 'shape:undo-d', 'editingId is unchanged by the suppressed Ctrl+Z')
+	console.log('ok: CanvasV2App — Ctrl+Z is suppressed while editingId!==null (TextEditor owns the keyboard)')
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'EndEdit' })
+	})
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true }) // now un-suppressed: undoes the CreateShape, cleanup to net zero
+	})
+	assert.equal(ewUndo.doc.getShape('shape:undo-d'), undefined, "cleanup: shape:undo-d's CreateShape is undone once editingId is cleared")
+
+	// (f5) FROM THE TOOLBAR-FOCUSED PATH (the document-level listener, not
+	// handleInput): proves the shared gate delivers Ctrl+Z regardless of
+	// focus — the payoff of B3's handleGlobalShortcut extraction. Moves focus
+	// to a toolbar button WITHOUT clicking it (no tool-switch side effect),
+	// same technique (d4) uses above.
+	const selectBtnUndo = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+	assert.ok(selectBtnUndo, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
+	await act(async () => {
+		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-e', 580, 580) })
+	})
+	assert.ok(ewUndo.doc.getShape('shape:undo-e'), 'precondition: shape:undo-e exists before the toolbar-focused Ctrl+Z')
+	await act(async () => {
+		selectBtnUndo!.focus()
+	})
+	assert.equal(document.activeElement, selectBtnUndo, 'precondition: the toolbar button holds focus, NOT the viewport')
+	await act(async () => {
+		dispatchKey(selectBtnUndo!, { key: 'z', ctrlKey: true })
+	})
+	assert.equal(
+		ewUndo.doc.getShape('shape:undo-e'),
+		undefined,
+		'Ctrl+Z dispatched on a FOCUSED TOOLBAR BUTTON (the document-listener path) still drives editor.undo() — same shared gate as the viewport path',
+	)
+	console.log('ok: CanvasV2App — Ctrl+Z reaches editor.undo() even while a toolbar button holds focus (document-listener path)')
+
+	// ==========================================================================
 	// (e) UNMOUNT DISPOSES CLEANLY: no more sync reaches the (now-torn-down)
 	// client peer. `window.__ew.doc` was set once by CanvasV2App's boot
 	// sequence (the design's E2E hook) — capture that SAME doc reference

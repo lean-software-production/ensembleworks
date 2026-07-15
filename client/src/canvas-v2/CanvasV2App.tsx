@@ -522,6 +522,28 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				if (intents.length > 0) editor.applyAll(intents)
 				return true
 			}
+			// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (Task B4) — the ONE site both entry
+			// points funnel through (see this function's own doc comment above),
+			// so undo/redo work identically whether the viewport or a toolbar
+			// button holds focus. `key.toLowerCase()` because a real browser
+			// reports the shifted letter's case differently across platforms
+			// (observed: 'z' unshifted, 'Z' shifted) — comparing case-
+			// insensitively means Ctrl+Shift+Z matches regardless of which case
+			// the DOM handed back, rather than silently failing on one platform.
+			// No preventDefault: this mount never focuses a native
+			// input/textarea/contentEditable while these fire (the editingId
+			// gate above already routes text-editing elsewhere), so there's no
+			// competing native undo to suppress — consistent with Escape/Delete/
+			// Backspace just above, which don't call it either.
+			const key = event.key.toLowerCase()
+			if ((event.modifiers.ctrl || event.modifiers.meta) && key === 'z' && !event.modifiers.shift) {
+				editor.undo()
+				return true
+			}
+			if ((event.modifiers.ctrl || event.modifiers.meta) && ((key === 'z' && event.modifiers.shift) || key === 'y')) {
+				editor.redo()
+				return true
+			}
 			return false
 		},
 		[editor, cancelAndReset],
