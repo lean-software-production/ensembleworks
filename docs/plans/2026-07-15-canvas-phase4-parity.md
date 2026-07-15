@@ -1762,6 +1762,24 @@ deviation from DoD #8 (never a silent ungated landing)._
   (or a per-shape marker check like C7's) and a calibrated-lower threshold, or
   it will silently tolerate real v1↔v2 visual divergence (exactly the
   hue/fill/variant drift C4's deferred gaps above would produce).
+- **D3 → D6 (MUST-HEED for the two-client embed-write-path E2E) — TerminalShape
+  rename/drag DOM behavior is UNVERIFIABLE in the bun rig.** `TerminalShape.tsx`
+  imports `@xterm/xterm/css/xterm.css` at module scope, so the file can't mount
+  under plain `bun` (no DOM emulator — a PRE-EXISTING file limitation, stated in
+  its own test header). D3's unit tests therefore cover only the PURE halves
+  (`terminalRenameIntent`, `terminalTitleDragIntent`); the actual DOM behavior —
+  Escape-discard timing (made correct-by-construction via a `discardRef` guard,
+  NOT React-batch ordering, since a synchronous `blur()` fires `onBlur`→commit in
+  the same batch BEFORE a `setTitleDraft` reset would apply), single-commit-on-
+  blur, pointer-capture drag, and the drag-at-non-1-zoom world delta
+  (`screenDelta / camera.z`) — is unproven by any test in the repo. D6 (two-
+  client embed write-path E2E) MUST cover terminal rename end-to-end: (1) type +
+  Escape → title UNCHANGED, NO peer update propagates; (2) type + Enter/blur →
+  exactly ONE `UpdateProps` update propagates to the second client; (3) drag the
+  title bar at non-1 zoom → the shape moves the correct WORLD distance on BOTH
+  clients (proves the `/camera.z` conversion). Also worth an E2E assertion: a
+  4px screen-space drag threshold (matches the editor's `DRAG_THRESHOLD`) means a
+  stationary double-click opens rename without emitting a stray `TranslateShapes`.
 
 ---
 

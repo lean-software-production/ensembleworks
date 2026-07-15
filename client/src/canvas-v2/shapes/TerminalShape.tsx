@@ -121,12 +121,37 @@ export function terminalContentFrom(shape: Shape): TerminalShapeContent {
 
 /** Pure: the (at most one) UpdateProps intent for a title-rename COMMIT
  * (fired from blur/Enter, never per keystroke — see the module header's
- * commit-once discipline). Returns null — a no-op guard, not a caller-side
- * `if (newTitle !== title)` duplicated at every call site — when the
- * committed title is unchanged from the shape's CURRENT title (e.g. the
- * field was focused and blurred without an edit). */
+ * commit-once discipline). TRIMS the new title, then returns null — a no-op
+ * guard, not a caller-side check duplicated at every call site — when either
+ * (a) the trimmed result is EMPTY/whitespace-only (parity with the legacy
+ * commitRename, `git show main:client/src/terminal/TerminalShapeUtil.tsx`
+ * ~L211: `const next = draftTitle.trim(); if (next && next !== …)` — an
+ * all-whitespace rename keeps the old title rather than blanking the label),
+ * or (b) the trimmed result is unchanged from the shape's CURRENT title
+ * (e.g. the field was focused and blurred without a net edit). */
 export function terminalRenameIntent(id: string, currentTitle: string, newTitle: string): Intent | null {
-  return newTitle === currentTitle ? null : { type: 'UpdateProps', id, props: { title: newTitle } }
+  const next = newTitle.trim()
+  if (!next || next === currentTitle) return null
+  return { type: 'UpdateProps', id, props: { title: next } }
+}
+
+// A title-bar press must move ≥ this many SCREEN pixels before it counts as a
+// drag (rather than a click/double-click) — matches canvas-editor's
+// DRAG_THRESHOLD (4px / 16px² squared-distance), so a stationary double-click
+// to open the rename input never emits a stray TranslateShapes from the
+// incidental pointer jitter between its two clicks. Squared comparison avoids
+// a sqrt per pointermove (same rationale as input.ts's dragDistanceSquared).
+const TITLE_DRAG_THRESHOLD = 4
+
+/** Pure: has a title-bar pointer moved far enough from its pointerdown origin
+ * (SCREEN pixels) to count as a drag? Mirrors canvas-editor/src/input.ts's
+ * `crossedThreshold` (which takes a full InputEvent this file doesn't
+ * construct) — the same `dx² + dy² > 4²` test, factored out so the
+ * drag-start decision is unit-testable without a DOM. */
+export function titleDragCrossedThreshold(downX: number, downY: number, x: number, y: number): boolean {
+  const dx = x - downX
+  const dy = y - downY
+  return dx * dx + dy * dy > TITLE_DRAG_THRESHOLD * TITLE_DRAG_THRESHOLD
 }
 
 /** Pure: converts a SCREEN-pixel pointer delta (a title-bar drag's
@@ -414,7 +439,25 @@ export function TerminalShape({ shape, editorState, dispatch: dispatchIntents }:
   const [titleDraft, setTitleDraft] = useState(title)
   useEffect(() => setTitleDraft(title), [title])
 
+  // Escape-discard, correct-BY-CONSTRUCTION (not by React-batch ordering):
+  // pressing Escape must abandon the edit WITHOUT dispatching, but the way it
+  // ends the edit is `input.blur()`, and blur fires `onBlur`→commitTitleRename
+  // SYNCHRONOUSLY, in the same React batch, BEFORE any `setTitleDraft(title)`
+  // reset would apply — so a reset-then-blur would still commit the stale
+  // (typed) draft. Instead the Escape handler sets THIS ref before blurring;
+  // commitTitleRename reads it FIRST and short-circuits. A ref (not state) is
+  // essential: its write is visible to the same-tick synchronous onBlur, which
+  // a state update would not be.
+  const discardRef = useRef(false)
+
   const commitTitleRename = () => {
+    if (discardRef.current) {
+      // Escape path: abandon the edit, restore the field, dispatch NOTHING.
+      discardRef.current = false
+      setTitleDraft(title)
+      setRenaming(false)
+      return
+    }
     const intent = terminalRenameIntent(shape.id, title, titleDraft)
     if (intent) dispatchIntents?.([intent])
     setRenaming(false)
@@ -422,28 +465,45 @@ export function TerminalShape({ shape, editorState, dispatch: dispatchIntents }:
 
   // ---- title-bar drag-to-move (Task D3) ----------------------------------
   // Pointer-capture drag on the title bar (active only while NOT renaming —
-  // see above): each pointermove dispatches its OWN incremental world-delta
-  // TranslateShapes (the accepted per-move commit cadence — matches
-  // canvas-editor/src/tools/select.ts's onDragging), converting the raw
-  // screen delta by the CURRENT camera zoom (editorState.camera.z) via
-  // terminalTitleDragIntent. stopPropagation on pointerdown keeps the drag
-  // from also reaching the canvas's own select tool — the title bar renders
-  // OUTSIDE the shape's own hit-tested box (bottom: 100% of the container),
-  // so without this a press there could otherwise fall through to a
-  // marquee-select/deselect on the canvas below.
-  const titleDragRef = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null)
+  // see above). The press does NOT translate anything until it has moved past
+  // TITLE_DRAG_THRESHOLD (4px screen) from its pointerdown origin
+  // (titleDragCrossedThreshold) — so a stationary double-click that opens the
+  // rename input never emits a stray TranslateShapes from the jitter between
+  // its two clicks (legacy parity — see that helper's doc comment). Once the
+  // threshold is crossed, each subsequent pointermove dispatches its OWN
+  // incremental world-delta TranslateShapes (the accepted per-move commit
+  // cadence — matches canvas-editor/src/tools/select.ts's onDragging),
+  // converting the raw screen delta by the CURRENT camera zoom
+  // (editorState.camera.z) via terminalTitleDragIntent. stopPropagation on
+  // pointerdown keeps the drag from also reaching the canvas's own select
+  // tool — the title bar renders OUTSIDE the shape's own hit-tested box
+  // (bottom: 100% of the container), so without this a press there could
+  // otherwise fall through to a marquee-select/deselect on the canvas below.
+  const titleDragRef = useRef<{ pointerId: number; downX: number; downY: number; lastX: number; lastY: number; dragging: boolean } | null>(null)
 
   const onTitlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     e.stopPropagation()
     e.currentTarget.setPointerCapture(e.pointerId)
-    titleDragRef.current = { pointerId: e.pointerId, lastX: e.clientX, lastY: e.clientY }
+    titleDragRef.current = { pointerId: e.pointerId, downX: e.clientX, downY: e.clientY, lastX: e.clientX, lastY: e.clientY, dragging: false }
   }
   const onTitlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const drag = titleDragRef.current
     if (!drag || drag.pointerId !== e.pointerId) return
+    // Hold off until the press crosses the 4px threshold from its ORIGIN —
+    // then the delta is measured from the LAST move (incremental), never from
+    // the origin, so the first post-threshold move doesn't jump by the full
+    // threshold distance.
+    if (!drag.dragging) {
+      if (!titleDragCrossedThreshold(drag.downX, drag.downY, e.clientX, e.clientY)) return
+      drag.dragging = true
+      drag.lastX = e.clientX
+      drag.lastY = e.clientY
+      return
+    }
     const screenDx = e.clientX - drag.lastX
     const screenDy = e.clientY - drag.lastY
-    titleDragRef.current = { pointerId: drag.pointerId, lastX: e.clientX, lastY: e.clientY }
+    drag.lastX = e.clientX
+    drag.lastY = e.clientY
     if (screenDx === 0 && screenDy === 0) return
     dispatchIntents?.([terminalTitleDragIntent([shape.id], screenDx, screenDy, editorState.camera.z)])
   }
@@ -513,10 +573,10 @@ export function TerminalShape({ shape, editorState, dispatch: dispatchIntents }:
               e.stopPropagation()
               if (e.key === 'Enter') {
                 e.preventDefault()
-                e.currentTarget.blur() // triggers onBlur -> commitTitleRename
+                e.currentTarget.blur() // triggers onBlur -> commitTitleRename (commits the draft)
               } else if (e.key === 'Escape') {
-                setTitleDraft(title) // discard the in-progress edit
-                e.currentTarget.blur()
+                discardRef.current = true // read FIRST by the synchronous onBlur below — see discardRef's doc comment
+                e.currentTarget.blur() // triggers onBlur -> commitTitleRename (discards, dispatches nothing)
               }
             }}
             onPointerDown={(e) => e.stopPropagation()}

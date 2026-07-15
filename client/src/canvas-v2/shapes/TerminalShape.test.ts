@@ -16,7 +16,7 @@
 import assert from 'node:assert/strict'
 import type { Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from '@ensembleworks/canvas-editor'
-import { terminalContentFrom, terminalRenameIntent, terminalTitleDragIntent } from './TerminalShape.js'
+import { terminalContentFrom, terminalRenameIntent, terminalTitleDragIntent, titleDragCrossedThreshold } from './TerminalShape.js'
 
 function shapeWithProps(props: Record<string, unknown>): Shape {
   return { id: 'shape:t1', kind: 'terminal', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props } as Shape
@@ -91,6 +91,47 @@ console.log('ok: TerminalShape — terminalContentFrom adapter (pure half only; 
   assert.equal(dispatchCalls.length, 1, 'the no-op guard means no additional dispatch call')
 
   console.log('ok: terminalRenameIntent — commits once with the final title, no-ops when unchanged')
+}
+
+// terminalRenameIntent — trim + empty-title guard (legacy parity, FIX 2): the
+// committed title is trimmed, and an empty/whitespace-only result is a no-op
+// (keep the old title, never blank the label) — matching legacy commitRename's
+// `const next = draftTitle.trim(); if (next && next !== …)`.
+{
+  // Whitespace-only draft → null (no dispatch, old title kept).
+  assert.equal(terminalRenameIntent('shape:t1', 'terminal', '   '), null, 'a whitespace-only title is a no-op — never blanks the label')
+  assert.equal(terminalRenameIntent('shape:t1', 'terminal', ''), null, 'an empty title is a no-op')
+
+  // A padded but non-empty draft commits the TRIMMED value.
+  assert.deepEqual(
+    terminalRenameIntent('shape:t1', 'terminal', '  web-server  '),
+    { type: 'UpdateProps', id: 'shape:t1', props: { title: 'web-server' } },
+    'the committed title is trimmed'
+  )
+
+  // Trims to the SAME value as the current title → no-op (a rename that only
+  // adds/removes surrounding whitespace isn't a real change).
+  assert.equal(terminalRenameIntent('shape:t1', 'terminal', '  terminal  '), null, 'a whitespace-only change from the current title is a no-op')
+
+  console.log('ok: terminalRenameIntent — trims the title and no-ops on empty/whitespace-only (legacy parity)')
+}
+
+// titleDragCrossedThreshold — a title-bar press must move > 4px (screen) from
+// its pointerdown origin before it counts as a drag (FIX 3), so a stationary
+// double-click that opens the rename input never emits a stray TranslateShapes
+// from the incidental jitter between its two clicks. 4px / 16px² squared —
+// matches canvas-editor's DRAG_THRESHOLD.
+{
+  assert.equal(titleDragCrossedThreshold(100, 100, 100, 100), false, 'zero movement is not a drag')
+  assert.equal(titleDragCrossedThreshold(100, 100, 103, 0 + 100), false, '3px < 4px is not a drag')
+  assert.equal(titleDragCrossedThreshold(100, 100, 104, 100), false, 'exactly 4px is NOT past the threshold (strict >, matching dragDistanceSquared)')
+  assert.equal(titleDragCrossedThreshold(100, 100, 105, 100), true, '5px > 4px crosses the threshold')
+  // Diagonal: 3-4-5 triangle — 5px total from origin, > 4px.
+  assert.equal(titleDragCrossedThreshold(100, 100, 103, 104), true, 'a 3,4 diagonal (5px) crosses the threshold')
+  // Diagonal just under: (2,3) = √13 ≈ 3.6px < 4px.
+  assert.equal(titleDragCrossedThreshold(100, 100, 102, 103), false, 'a 2,3 diagonal (√13 ≈ 3.6px) does not cross')
+
+  console.log('ok: titleDragCrossedThreshold — 4px screen-space drag threshold (legacy parity, matches DRAG_THRESHOLD)')
 }
 
 // terminalTitleDragIntent — WORLD-unit conversion: a title-bar drag's
