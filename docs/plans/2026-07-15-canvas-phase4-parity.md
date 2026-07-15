@@ -1780,6 +1780,24 @@ deviation from DoD #8 (never a silent ungated landing)._
   clients (proves the `/camera.z` conversion). Also worth an E2E assertion: a
   4px screen-space drag threshold (matches the editor's `DRAG_THRESHOLD`) means a
   stationary double-click opens rename without emitting a stray `TranslateShapes`.
+- **D4 (screenshare) — relock trigger coupled to embed suspend/resume (Important,
+  self-healing; accepted, not reverted).** D4 modernized the aspect-relock trigger
+  from legacy's 1s `MediaStreamTrack.getSettings()` POLL to an event-driven
+  `<video>` `resize` listener registered inside `attach()`/`detach()` (the embed
+  suspend/resume lifecycle). Edge case: if the PRESENTER's own screenshare tile is
+  suspended (scrolled off their own canvas) at the moment they resize the shared
+  source window, no `<video>` is attached, no `resize` fires, and the relock is
+  deferred until the tile resumes/reattaches (re-attach fires an early `resize` as
+  intrinsic dims repopulate → self-heals). Legacy's poll ran on the raw track
+  independent of DOM/visibility, so it lacked this coupling. Reviewer + controller
+  call: ACCEPT (narrow, self-healing; poll's own downsides not worth reintroducing)
+  — logged as a dogfood/follow-up watch-item, not a Phase-4 fix.
+- **D4 flagged a pre-existing FLAKE → watch-item for H5 + I2.** `server/src/canvas-v2/
+  crash-recovery.test.ts` (a real `kill -9` timing test) failed transiently on one
+  full `bun run test` pass, then passed standalone twice + in the next full run.
+  NOT introduced by D4. H5 (crash recovery — extends this file) should HARDEN the
+  timing so it's deterministic; I2's final `bun run test` gate must account for it
+  (a flaky crash-recovery test would cause spurious final-gate/CI failures).
 
 ---
 
