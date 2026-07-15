@@ -10,7 +10,7 @@
 // in this same commit, red-first.
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
-import { decodeImportBlobMeta } from 'loro-crdt'
+import { decodeImportBlobMeta } from 'loro-crdt/base64'
 import { makePair } from './memory-transport.js'
 import { Frame, encode } from './protocol.js'
 import { SyncClientPeer } from './client-peer.js'

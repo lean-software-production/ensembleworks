@@ -1,4 +1,5 @@
-import { EphemeralStore } from 'loro-crdt'
+// loro-crdt/base64 inlines its wasm as a JS string — see canvas-doc/loro-canvas-doc.ts
+import { EphemeralStore } from 'loro-crdt/base64'
 
 // The presence payload one peer publishes about itself. No renderer yet
 // (Phase 3), so this is the wire contract, exercised headlessly. Values are

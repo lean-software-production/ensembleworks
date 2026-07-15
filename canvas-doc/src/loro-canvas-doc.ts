@@ -1,4 +1,7 @@
-import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt'
+// loro-crdt's default (nodejs) export reads its .wasm via fs at a build-time-baked
+// __dirname, which bun build --compile can't embed — breaks the standalone binary
+// wherever node_modules isn't present. /base64 inlines the wasm as a JS string.
+import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt/base64'
 import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
 import { dumpModel } from './bridge.js'
 import type { CanvasDoc, ImportResult } from './canvas-doc.js'
