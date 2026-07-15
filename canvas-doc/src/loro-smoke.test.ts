@@ -1,6 +1,6 @@
 // Run: bun src/loro-smoke.test.ts
 import assert from 'node:assert/strict'
-import { LoroDoc } from 'loro-crdt'
+import { LoroDoc } from 'loro-crdt/base64'
 
 const doc = new LoroDoc()
 doc.setPeerId(1n)
