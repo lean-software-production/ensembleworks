@@ -35,10 +35,15 @@ export interface GestureModifiers {
   readonly meta?: boolean
 }
 
-/** A screen-space anchor a gesture op resolves against. Phase A ships only the
- * absolute point form; Pilot 2 (Phase C) extends this union with a shape
+/** A screen-space anchor a gesture op resolves against. Phase A shipped only
+ * the absolute point form; Pilot 2 (Phase C) extends this union with a shape
  * anchor (the library grows per unit — design's bootstrap principle). */
-export type Anchor = { readonly ref: 'point'; readonly x: number; readonly y: number }
+export type Anchor =
+  | { readonly ref: 'point'; readonly x: number; readonly y: number }
+  /** A seeded shape's centre, plus an optional SCREEN-space offset. The FSM
+   * runner resolves this via worldToScreen(camera, centre); the browser runner
+   * via the element's bounding box. */
+  | { readonly ref: 'shape'; readonly id: string; readonly dx?: number; readonly dy?: number }
 
 /** One primitive gesture step. SCREEN space, exactly like input.ts's
  * InputEvent coordinates — the FSM runner turns these into InputEvents via
@@ -74,6 +79,15 @@ export interface Obs {
    * the baseline a "did this gesture move the view?" invariant compares
    * against. Runner-provided; both adapters snapshot it at start. */
   visibleWorldRectAtStart(): { minX: number; minY: number; maxX: number; maxY: number }
+  /** Total world-space displacement of a shape from the gesture's start. */
+  shapeDisplacement(id: string): { dx: number; dy: number }
+  /** Total world-space displacement of the cursor from the gesture's start
+   * (last pointer position, mapped through the CURRENT camera minus the
+   * grab-time world point). */
+  cursorWorldDisplacement(): { dx: number; dy: number }
+  /** The snap threshold radius in world units at the current scene's median
+   * shape size — the tolerance the snapped invariant compares against. */
+  snapRadius(): number
 }
 
 /** A contract declaration = data. */

@@ -6,13 +6,13 @@
 // seed reproduces exactly. Mirrors the design's "FSM runner beside the script()
 // rig". The browser runner (e2e) interprets the SAME GestureOp[].
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
-import { validateShape } from '@ensembleworks/canvas-model'
+import { centroid, medianSize, validateShape, worldBounds, type CanvasDocument } from '@ensembleworks/canvas-model'
 import type { Anchor, Contract, GestureOp, Obs, Rng } from '@ensembleworks/interaction-contracts'
 import { mulberry32 } from '@ensembleworks/interaction-contracts'
 import { applyWheel } from '../camera.js'
 import { Editor } from '../editor.js'
 import type { InputEvent, Modifiers } from '../input.js'
-import { screenToWorld } from '../input.js'
+import { screenToWorld, worldToScreen } from '../input.js'
 import { script } from '../script.js'
 import { createSelectTool } from '../tools/select.js'
 import { createToolContext } from '../tools/tool-context.js'
@@ -26,22 +26,43 @@ function mods(over?: { shift?: boolean; alt?: boolean; ctrl?: boolean; meta?: bo
   return { ...over }
 }
 
-function resolveAnchor(a: Anchor): { x: number; y: number } {
-  // Phase A: only the absolute point form exists. Pilot 2 (Phase C) extends
-  // this to resolve a shape anchor via worldToScreen(editor.get().camera, ...).
-  return { x: a.x, y: a.y }
+/** A minimal `.byId`-only CanvasDocument adapter over LIVE `editor.doc.
+ * getShape` reads — mirrors select.ts's own `liveBoundsAdapter` (same
+ * rationale: worldBounds/worldTransform touch nothing on `doc` except
+ * `.byId.get`, so this shim is enough without going through the ToolContext's
+ * cached snapshot). Kept package-local rather than imported from select.ts,
+ * which exports no such helper (and canvas-editor's own tools are not a
+ * dependency surface the contracts runner should reach into). */
+function liveDocAdapter(editor: Editor): CanvasDocument {
+  return {
+    pages: [], shapes: [], bindings: [],
+    byId: { get: (id: string) => editor.doc.getShape(id) } as unknown as CanvasDocument['byId'],
+  }
+}
+
+function resolveAnchor(a: Anchor, editor: Editor): { x: number; y: number } {
+  if (a.ref === 'point') return { x: a.x, y: a.y }
+  // Pilot 2 (Phase C): a seeded shape's centre, plus an optional SCREEN-space
+  // offset — resolved against the shape's CURRENT world position at the
+  // moment the gesture is turned into events (before any of it plays), via
+  // worldToScreen(camera, centre).
+  const shape = editor.doc.getShape(a.id)
+  if (!shape) throw new Error(`resolveAnchor: no seeded shape with id ${JSON.stringify(a.id)}`)
+  const centre = centroid(worldBounds(liveDocAdapter(editor), shape))
+  const screen = worldToScreen(editor.get().camera, centre)
+  return { x: screen.x + (a.dx ?? 0), y: screen.y + (a.dy ?? 0) }
 }
 
 /** Turn the abstract gesture ops into a concrete InputEvent[] via script.ts's
  * builder (which stamps deterministic timestamps). */
-function opsToEvents(ops: readonly GestureOp[]): InputEvent[] {
+function opsToEvents(ops: readonly GestureOp[], editor: Editor): InputEvent[] {
   const b = script()
   for (const op of ops) {
     switch (op.kind) {
-      case 'down': { const p = resolveAnchor(op.at); b.down(p.x, p.y, { modifiers: mods(op.modifiers) }); break }
-      case 'move': { const p = resolveAnchor(op.at); b.move(p.x, p.y, { steps: op.steps ?? 0, modifiers: mods(op.modifiers) }); break }
+      case 'down': { const p = resolveAnchor(op.at, editor); b.down(p.x, p.y, { modifiers: mods(op.modifiers) }); break }
+      case 'move': { const p = resolveAnchor(op.at, editor); b.move(p.x, p.y, { steps: op.steps ?? 0, modifiers: mods(op.modifiers) }); break }
       case 'up': { b.up({ modifiers: mods(op.modifiers) }); break }
-      case 'wheel': { const p = resolveAnchor(op.at); b.wheel(op.dx, op.dy, { at: [p.x, p.y], modifiers: mods(op.modifiers) }); break }
+      case 'wheel': { const p = resolveAnchor(op.at, editor); b.wheel(op.dx, op.dy, { at: [p.x, p.y], modifiers: mods(op.modifiers) }); break }
       case 'key': { b.key(op.key, { modifiers: mods(op.modifiers) }); break }
     }
   }
@@ -54,7 +75,13 @@ function visibleWorldRectOf(camera: { readonly x: number; readonly y: number; re
   return { minX: tl.x, minY: tl.y, maxX: br.x, maxY: br.y }
 }
 
-function makeObs(editor: Editor, startRect: { minX: number; minY: number; maxX: number; maxY: number }): Obs {
+function makeObs(
+  editor: Editor,
+  startRect: { minX: number; minY: number; maxX: number; maxY: number },
+  startPositions: ReadonlyMap<string, { x: number; y: number }>,
+  getGrabWorld: () => { x: number; y: number } | null,
+  getLastPointer: () => { x: number; y: number } | null,
+): Obs {
   return {
     visibleWorldRect() {
       return visibleWorldRectOf(editor.get().camera)
@@ -65,6 +92,32 @@ function makeObs(editor: Editor, startRect: { minX: number; minY: number; maxX: 
       // reference a caller could accidentally mutate out from under the
       // runner's own captured baseline.
       return { ...startRect }
+    },
+    shapeDisplacement(id: string) {
+      const start = startPositions.get(id)
+      if (!start) throw new Error(`shapeDisplacement: no seeded shape with id ${JSON.stringify(id)}`)
+      const shape = editor.doc.getShape(id)
+      // TOLERANCE: a vanished shape (mid-gesture remote delete) has moved
+      // nowhere FURTHER since it vanished — same "no throw, degrade" posture
+      // select.ts's own TOLERANCE CONTRACT documents.
+      if (!shape) return { dx: 0, dy: 0 }
+      return { dx: shape.x - start.x, dy: shape.y - start.y }
+    },
+    cursorWorldDisplacement() {
+      const grab = getGrabWorld()
+      const pointer = getLastPointer()
+      if (!grab || !pointer) return { dx: 0, dy: 0 } // no pointer gesture has started yet
+      const cursorWorld = screenToWorld(editor.get().camera, pointer)
+      return { dx: cursorWorld.x - grab.x, dy: cursorWorld.y - grab.y }
+    },
+    snapRadius() {
+      // Mirrors canvas-model/src/snapping.ts's ACTUAL (un-exported) threshold
+      // exactly: 5% of medianSize(doc.shapes) — that module's
+      // `SNAP_THRESHOLD_K = 0.05`. NOT medianSize/5 (which would read 20 at
+      // a 100-unit medianSize instead of the real 5) — verified against
+      // select.test.ts's own fixture comment ("100x100 ... within the
+      // 5-unit threshold": 100 * 0.05 = 5, not 100 / 5 = 20).
+      return medianSize(editor.doc.listShapes()) * 0.05
     },
   }
 }
@@ -111,9 +164,22 @@ export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
   const ctx = createToolContext(editor)
   const tool = createSelectTool(ctx)
   const startRect = visibleWorldRectOf(editor.get().camera)
-  const obs = makeObs(editor, startRect)
 
-  const events = opsToEvents(contract.gesture(rng))
+  // Drag-observation baseline (Pilot 2): each seeded shape's START world
+  // position, captured ONCE right after seeding (before the gesture plays);
+  // the cursor's GRAB world point, captured at the gesture's FIRST 'down'
+  // event; and the most recent pointer/wheel SCREEN position seen so far.
+  // Together these let shapeDisplacement/cursorWorldDisplacement report
+  // TOTAL displacement from gesture start — never a per-event increment
+  // (that accumulation is exactly the drift C2/C3 exist to catch).
+  const startPositions = new Map<string, { x: number; y: number }>()
+  for (const shape of doc.listShapes()) startPositions.set(shape.id, { x: shape.x, y: shape.y })
+  let grabWorld: { x: number; y: number } | null = null
+  let lastPointer: { x: number; y: number } | null = null
+
+  const obs = makeObs(editor, startRect, startPositions, () => grabWorld, () => lastPointer)
+
+  const events = opsToEvents(contract.gesture(rng), editor)
   let state = tool.initialState
   for (const event of events) {
     const result = tool.onEvent(state, event)
@@ -125,6 +191,12 @@ export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
     if (event.type === 'wheel') {
       const next = applyWheel(editor.get().camera, event)
       editor.apply({ type: 'SetCamera', ...next })
+    }
+    if (event.type === 'pointerdown' || event.type === 'pointermove' || event.type === 'pointerup' || event.type === 'wheel') {
+      if (event.type === 'pointerdown' && grabWorld === null) {
+        grabWorld = screenToWorld(editor.get().camera, { x: event.x, y: event.y })
+      }
+      lastPointer = { x: event.x, y: event.y }
     }
     if (contract.when === 'every-event') {
       const failure = contract.check(obs)
