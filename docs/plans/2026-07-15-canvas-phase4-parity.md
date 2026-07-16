@@ -1798,6 +1798,29 @@ deviation from DoD #8 (never a silent ungated landing)._
   NOT introduced by D4. H5 (crash recovery — extends this file) should HARDEN the
   timing so it's deterministic; I2's final `bun run test` gate must account for it
   (a flaky crash-recovery test would cause spurious final-gate/CI failures).
+- **E1 → follow-up: no auto-reconnect (banner surfaces, does not heal).** E1's
+  banner now SURFACES the `reconnecting` (closed-after-open) and `failed`
+  (pre-open error — the dead-dogfood case) states, closing the S7 silent-
+  dead-canvas goal. But there is NO auto-reconnect: a dropped room stays
+  disconnected until the user reloads (`SyncClientPeer.reconnect(freshTransport)`
+  exists but is manual-only — no backoff/retry loop wraps it in the client
+  today). The banner copy was deliberately worded to say "reload to reconnect"
+  rather than "reconnecting…" so it doesn't imply a retry that never fires.
+  Wiring real auto-reconnect (fresh transport + backoff + re-handshake, so the
+  banner can go `reconnecting`→`open` in production without a reload) is OUT of
+  E1/S7's banner scope — a recorded follow-up. "Team can live in v2" arguably
+  wants this eventually; owner may pull it into a later phase.
+- **E1 → follow-up: two `ConnectionState` types / DevOverlay still naive.**
+  `ws-client-transport.ts` now exports a rich `ConnectionState`
+  (`connecting|open|reconnecting|failed`, driving the banner) while
+  `DevOverlay.tsx` keeps its narrower one (`connecting|connected`), so the SAME
+  type name now denotes two different shapes across the two modules — and the
+  DevOverlay is STILL fed by the naive `session ? 'connected':'connecting'`
+  derivation (it cannot show `failed`/`reconnecting` at all). E1 left DevOverlay
+  untouched (out of its file scope; DevOverlay's own header already documents
+  this as an accepted gap). Harmonize in a follow-up — rename one type, and/or
+  wire the DevOverlay's connection field off the real transport signal so the
+  two connection notions stop diverging.
 
 ---
 

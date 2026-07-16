@@ -455,12 +455,20 @@ function ConnectingPlaceholder() {
  * this is unconditionally mounted rather than gated by `session`. */
 function ConnectionBanner({ state }: { readonly state: ConnectionState }) {
 	if (state === 'open') return null
+	// The internal state NAMES (`reconnecting`/`failed`) are honestly
+	// documented (ws-client-transport.ts's ConnectionState), but the
+	// USER-FACING copy must NOT imply an auto-retry that doesn't exist: there
+	// is no auto-reconnect loop (SyncClientPeer.reconnect is manual-only — see
+	// the plan's carried E1 follow-up), so a dropped/never-established
+	// connection stays down until the user reloads. Tell them that plainly
+	// rather than "reconnecting…", which would have them waiting for a retry
+	// that never comes.
 	const message =
 		state === 'connecting'
-			? 'Connecting to canvas…'
+			? 'Connecting to canvas…' // it IS actively dialing — honest
 			: state === 'reconnecting'
-				? 'Connection lost — reconnecting…'
-				: 'Unable to connect to the canvas sync server.'
+				? 'Connection lost — reload to reconnect.'
+				: 'Can’t connect to the canvas server — check the room or reload.'
 	return (
 		<div
 			data-canvas-v2-connection-banner
