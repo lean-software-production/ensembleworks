@@ -3,39 +3,32 @@
  * composition layer that finally closes the two Phase-2 `PresenceStore`
  * deferrals canvas-sync/src/presence.ts's own doc comments name:
  *   - `publish()` is NOT rate-limited (every `set()` goes to the wire
- *     uncoalesced) — THIS module's `leadingEdgeThrottle` + `createPresence
- *     Publisher` are the caller-side throttle that comment says Phase 3's
- *     renderer must supply.
+ *     uncoalesced) — THIS module's `createPresencePublisher` (its internal
+ *     `flushNow`/`throttledFlush` pair) is the caller-side throttle that
+ *     comment says Phase 3's renderer must supply.
  *   - `all()` INCLUDES the caller's own published entry under `selfKey` —
  *     filtering it is canvas-react's `Cursors` component's job (already
  *     built, Seam D6); this module just passes `selfKey` through unchanged.
  *
- * Kept a plain, DOM-free module (no React) so its two pure pieces
- * (`leadingEdgeThrottle`, `adaptPresence`) are house-testable without a
- * browser — CanvasV2App.tsx is the only caller that touches the DOM
- * (pointermove events, `editor.subscribe()` for camera changes).
- */
-import type { Presence, PresenceStore } from '@ensembleworks/canvas-sync'
-import { screenToWorld, type Camera } from '@ensembleworks/canvas-editor'
-import type { RemotePresence } from '@ensembleworks/canvas-react'
-import type { PresentingV2 } from './shapes/presentStoreV2.js'
-
-/**
- * Leading-edge throttle over `intervalMs`, driven by an INJECTED clock
- * (never a real `Date.now`/`performance.now` read inside this function
- * itself — real time is supplied by the caller, e.g. CanvasV2App.tsx's own
- * `now: () => performance.now()` at the composition edge; tests inject a
- * fake, monotonically-advanced clock for determinism, the same discipline
- * canvas-editor's own injected `now`/`random` establish one layer down).
+ * Kept a plain, DOM-free module (no React) so its pure pieces
+ * (`adaptPresence`, the presenting codec, `createPresencePublisher` with an
+ * injected clock) are house-testable without a browser — CanvasV2App.tsx is
+ * the only caller that touches the DOM (pointermove events,
+ * `editor.subscribe()` for camera changes).
  *
- * Fires the FIRST call immediately, then DROPS every subsequent call until
- * `intervalMs` has elapsed since the last fire; the next call after that
- * elapses fires immediately again. This is the "~60ms leading-edge throttle"
- * the phase-3 plan's G4 task names as one of the two acceptable shapes
- * (rAF-coalesced being the other) — chosen here because it needs no
+ * THROTTLE SHAPE (leading-edge, injected clock): the publisher fires the
+ * FIRST flush immediately, then DROPS every subsequent one until
+ * `intervalMs` has elapsed since the last flush; the next call after that
+ * fires immediately again. This is the "~60ms leading-edge throttle" the
+ * phase-3 plan's G4 task names as one of the two acceptable shapes
+ * (rAF-coalesced being the other) — chosen because it needs no
  * `requestAnimationFrame` (unavailable in this house's headless-DOM test
  * rig — happy-dom implements no real layout/paint loop) and is trivially
- * testable with an injected clock alone.
+ * testable with an injected clock alone. The clock is INJECTED (never a
+ * real `Date.now`/`performance.now` read inside this module — real time is
+ * supplied by the caller, e.g. CanvasV2App.tsx's `now: () =>
+ * performance.now()` at the composition edge), the same discipline
+ * canvas-editor's own injected `now`/`random` establish one layer down.
  *
  * TRAILING-EDGE GAP (documented, not hidden — OURS v1, deliberately left
  * open): a burst of calls that STOPS mid-interval never gets a final
@@ -46,18 +39,23 @@ import type { PresentingV2 } from './shapes/presentStoreV2.js'
  * point," not "a cursor position is ever silently lost forever." A
  * trailing-edge variant (schedule a timeout to flush the last dropped value)
  * is a documented, deferred upgrade if a real dogfood session finds this
- * lag noticeable.
+ * lag noticeable. (The `editing` field is the one EXCEPTION, by design: an
+ * editing TRANSITION bypasses the throttle entirely — see
+ * `setViewportAndRefreshCursor`'s doc comment — because it may have no
+ * later event to heal through.)
+ *
+ * (HISTORY: this throttle used to be a standalone exported
+ * `leadingEdgeThrottle<T>` helper; the pilot-5 editing-transition bypass
+ * needed to share the channel's timing state, which inlined it into
+ * `createPresencePublisher` as `flushNow`/`throttledFlush` — after which the
+ * standalone export had zero production callers and was deleted (pilot-5
+ * quality review). `flushNow`/`throttledFlush` are the single throttle
+ * implementation of record.)
  */
-export function leadingEdgeThrottle<T>(intervalMs: number, now: () => number, publish: (value: T) => void): (value: T) => void {
-	let last: number | null = null
-	return (value: T) => {
-		const t = now()
-		if (last === null || t - last >= intervalMs) {
-			last = t
-			publish(value)
-		}
-	}
-}
+import type { Presence, PresenceStore } from '@ensembleworks/canvas-sync'
+import { screenToWorld, type Camera } from '@ensembleworks/canvas-editor'
+import type { RemotePresence } from '@ensembleworks/canvas-react'
+import type { PresentingV2 } from './shapes/presentStoreV2.js'
 
 /** ~60ms leading-edge, per the phase-3 plan's G4 task text ("rAF-coalesced or
  * ~60ms leading-edge"). Roughly one publish every 3-4 real animation frames
@@ -256,8 +254,8 @@ export interface PresencePublisher {
  * <60ms after a cursor publish is dropped (not queued) — self-healing on the
  * next event of ANY kind, since every publish carries the FULL object; the
  * only unrecoverable case is the already-documented trailing-edge gap
- * (leadingEdgeThrottle's own doc comment), which now covers the viewport
- * too.
+ * (the module header's TRAILING-EDGE GAP section), which now covers the
+ * viewport too.
  *
  * `stamp` STAYS ITS INITIAL VALUE (`null`) for the lifetime of this mount —
  * HONEST, not an oversight: this phase's tool set (select/hand/note/text/
@@ -287,15 +285,17 @@ export function createPresencePublisher(store: PresenceStore, opts: { readonly i
 	let lastPublishedEditing: string | null = null
 
 	// The ONE throttle channel — see the factory doc comment's ONE SHARED
-	// THROTTLE CHANNEL section for why it must be singular. Inlined here
-	// (rather than built from the generic `leadingEdgeThrottle` helper, which
-	// every OTHER setter below still conceptually matches) so the F4 bypass
-	// path can share `lastFlushAt`: a bypassed flush still counts as "the
+	// THROTTLE CHANNEL section for why it must be singular, and the module
+	// header's THROTTLE SHAPE/HISTORY sections for its semantics (this pair
+	// IS the throttle implementation of record — the standalone
+	// leadingEdgeThrottle helper it replaced is deleted). flushNow and
+	// throttledFlush share `lastFlushAt` so the F4 bypass path stays
+	// coherent with the channel: a bypassed flush still counts as "the
 	// channel fired" for the purposes of the NEXT throttled call's window —
 	// without that, a same-millisecond call immediately following a bypass
 	// would wrongly see "no flush has ever happened" and fire a REDUNDANT
 	// second write (harmless payload-wise, since nothing mutated `current` in
-	// between, but pointless wire chatter this inlining avoids for free).
+	// between, but pointless wire chatter this sharing avoids for free).
 	let lastFlushAt: number | null = null
 	const flushNow = (): void => {
 		lastFlushAt = now()
@@ -335,8 +335,8 @@ export function createPresencePublisher(store: PresenceStore, opts: { readonly i
 				// FIRST of the burst actually reaches the store; the LAST one
 				// (carrying the editingId change the whole feature exists to
 				// show) is dropped. Unlike a dropped CURSOR/VIEWPORT update,
-				// which leadingEdgeThrottle's own TRAILING-EDGE GAP doc
-				// comment accepts as "self-heals on the next event of any
+				// which the module header's TRAILING-EDGE GAP section
+				// accepts as "self-heals on the next event of any
 				// kind," a dropped `editing` transition may have NO later
 				// event to piggyback on for the rest of the edit (typing
 				// itself never touches EditorState — SetText goes straight to

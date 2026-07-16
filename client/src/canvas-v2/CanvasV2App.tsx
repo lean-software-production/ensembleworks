@@ -888,15 +888,6 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 							dispatch={dispatch}
 						/>
 						<TextEditor toolContext={toolContext} onTextChange={handleTextChange} onEndEdit={handleEndEdit} />
-						{/* Pilot 5 (Task F4) — peer editing indicators. World-space,
-						    painted AFTER ShapeLayer/EmbedLayer (DOM order == paint
-						    order, WorldLayer's FLAT SIBLINGS design) so a badge is
-						    never occluded by the shape body it's attached to. Reads
-						    `presenceStore.all()` directly (not `adaptPresence`'s
-						    Cursors-shaped narrowing below) — see EditingIndicators.tsx's
-						    own module header for why it needs canvas-sync's raw
-						    `Presence.editing` field. */}
-						<EditingIndicators presence={presenceStore.all()} selfKey={selfKey} snapshot={snapshot} />
 					</WorldLayer>
 					<Overlay
 						editorState={editorState}
@@ -912,6 +903,16 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					    re-read every PRESENCE_POLL_MS tick (see that constant's doc
 					    comment) via the `presenceTick` state dependency below. */}
 					<Cursors presence={adaptPresence(presenceStore.all())} selfKey={selfKey} camera={editorState.camera} viewportSize={viewportSize} />
+					{/* Pilot 5 (Task F4) — peer editing indicators. SCREEN-space,
+					    the same Cursors idiom directly above (camera + viewportSize,
+					    worldToScreen inside), rendered OUTSIDE WorldLayer so the badge
+					    stays constant-size and legible at every zoom, and painted after
+					    everything else (same STACKING CONTRACT) so no shape body ever
+					    occludes it. Reads `presenceStore.all()` directly (not
+					    `adaptPresence`'s Cursors-shaped narrowing) — see
+					    EditingIndicators.tsx's own module header for why it needs
+					    canvas-sync's raw `Presence.editing` field. */}
+					<EditingIndicators presence={presenceStore.all()} selfKey={selfKey} snapshot={snapshot} camera={editorState.camera} viewportSize={viewportSize} />
 				</Viewport>
 			</div>
 		</div>

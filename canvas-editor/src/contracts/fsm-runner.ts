@@ -154,7 +154,7 @@ function makeObs(
       // filters CONTRACTS to level: 'fsm' before calling runContractFsm) —
       // this throw is a defensive backstop, matching textSelectionSpans'
       // established not-reachable-today posture.
-      throw new Error('not observable at fsm level')
+      throw new Error('multi-actor observation unavailable at fsm level')
     },
     peerEditingIndicator() {
       throw new Error('not observable at fsm level')

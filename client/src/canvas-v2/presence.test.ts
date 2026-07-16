@@ -6,52 +6,21 @@ import {
 	createPresencePublisher,
 	decodePresenting,
 	encodePresenting,
-	leadingEdgeThrottle,
 	presenterFor,
 	PRESENCE_THROTTLE_MS,
 } from './presence.js'
 
-// ============================================================================
-// 1. leadingEdgeThrottle: a burst of N calls inside one interval collapses to
-//    exactly 1 publish (the leading edge); a call AFTER the interval elapses
-//    fires again immediately.
-// ============================================================================
-{
-	let clock = 0
-	const now = () => clock
-	const published: number[] = []
-	const throttled = leadingEdgeThrottle<number>(60, now, (v) => published.push(v))
-
-	// A burst of 10 calls, all within the same 60ms window.
-	for (let i = 0; i < 10; i++) {
-		clock = i // 0..9ms, all < 60ms apart from the first
-		throttled(i)
-	}
-	assert.deepEqual(published, [0], 'a burst inside one interval collapses to exactly the FIRST (leading-edge) value')
-
-	// Still inside the window (t=59): dropped.
-	clock = 59
-	throttled(59)
-	assert.deepEqual(published, [0], 'a call still inside the interval is dropped')
-
-	// Exactly at the boundary (t=60, i.e. 60ms since the last publish at t=0): fires.
-	clock = 60
-	throttled(60)
-	assert.deepEqual(published, [0, 60], 'a call exactly at the interval boundary fires again')
-
-	// A big gap, then another burst: only the burst's leading value publishes.
-	clock = 500
-	throttled(500)
-	clock = 510
-	throttled(510)
-	clock = 520
-	throttled(520)
-	assert.deepEqual(published, [0, 60, 500], 'a burst after a long gap collapses to its own leading value')
-	console.log('ok: leadingEdgeThrottle — bounds a burst of N calls to <= a small K')
-}
+// NOTE: no standalone throttle-helper block here (there used to be one, first
+// in this file) — the exported `leadingEdgeThrottle<T>` it exercised was
+// inlined into `createPresencePublisher` (the pilot-5 editing-transition
+// bypass needed to share the channel's timing state) and then deleted once it
+// had zero production callers (pilot-5 quality review). The throttle's
+// semantics are pinned through the publisher itself: block 2 (same-instant
+// drop, deferred-not-lost, past-window refire), block 3 (mid-window drop),
+// block 8 (transition bypass counts as the channel firing).
 
 // ============================================================================
-// 2. adaptPresence: cursor passes through verbatim; name/color are NEVER
+// 1. adaptPresence: cursor passes through verbatim; name/color are NEVER
 //    populated (the documented wire-contract gap — canvas-sync's Presence
 //    carries no identity fields).
 // ============================================================================
@@ -74,7 +43,7 @@ import {
 }
 
 // ============================================================================
-// 3. createPresencePublisher: ONE shared throttle channel, full-object
+// 2. createPresencePublisher: ONE shared throttle channel, full-object
 //    publishes. A dropped call still UPDATES the pending `current` object,
 //    so the next fired publish carries it — nothing is lost forever, only
 //    deferred to the next fire (see presence.ts's ONE SHARED THROTTLE
@@ -108,7 +77,7 @@ import {
 }
 
 // ============================================================================
-// 4. Camera-only changes republish the cursor (quality-review fix round):
+// 3. Camera-only changes republish the cursor (quality-review fix round):
 //    setCursorFromScreen records the SCREEN point; setViewportAndRefreshCursor
 //    re-derives the world cursor from that recorded screen point + the NEW
 //    camera and publishes it (with the viewport) as ONE store write -- so a
@@ -144,7 +113,7 @@ import {
 }
 
 // ============================================================================
-// 5. setViewportAndRefreshCursor before ANY screen point is recorded: the
+// 4. setViewportAndRefreshCursor before ANY screen point is recorded: the
 //    viewport publishes, the cursor stays null (nothing to recompute from) —
 //    never a throw, never a fabricated cursor.
 // ============================================================================
@@ -169,10 +138,10 @@ import {
 }
 
 // ============================================================================
-// 6. Task D5: setPresenting folds into the SAME combined write as
+// 5. Task D5: setPresenting folds into the SAME combined write as
 //    cursor/viewport — never a second independent store write. A caller
 //    that published presenting via its own separate PresenceStore.publish()
-//    would reopen the exact same-millisecond LWW hazard tests 3/4 guard
+//    would reopen the exact same-millisecond LWW hazard tests 2/3 guard
 //    against; this test proves setPresenting shares the one channel instead.
 // ============================================================================
 {
@@ -217,24 +186,24 @@ import {
 }
 
 // ============================================================================
-// 7. Task H6: block 6 above proves the single-write guarantee for the
+// 6. Task H6: block 5 above proves the single-write guarantee for the
 //    presenting+cursor pairing, with presenting always the SECOND (dropped)
 //    call. This block completes the coverage the plan's D5-follow-up asks
 //    for — the SAME guarantee holds for presenting's OTHER co-published
 //    field (viewport, exactly the field setViewportAndRefreshCursor's own
 //    doc comment names as the original two-writes flake), and holds
 //    regardless of WHICH of the pair fires the shared channel's leading
-//    edge. A physical-write counter (like block 6's) is asserted at every
+//    edge. A physical-write counter (like block 5's) is asserted at every
 //    step so a regression that splits setPresenting into its own set() —
 //    whether a direct extra store.publish() or its own independent throttle
 //    channel — trips assert.equal(publishCalls, 1) immediately, before the
 //    payload assertions even run (verified directly: temporarily routing
 //    setPresenting through store.publish() directly, and separately through
-//    its own leadingEdgeThrottle channel, both make this block's first
+//    its own independent leading-edge channel, both make this block's first
 //    publishCalls-after-the-second-call assertion fail with 2 !== 1).
 // ============================================================================
 {
-	// 7a. Viewport leads the interval; presenting is the same-instant SECOND
+	// 6a. Viewport leads the interval; presenting is the same-instant SECOND
 	// call — dropped at the shared channel, then folded into the next fire.
 	let clock = 0
 	const store = new PresenceStore('self-key')
@@ -263,7 +232,7 @@ import {
 	)
 	store.destroy()
 
-	// 7b. Reverse order: presenting itself leads the interval; a viewport
+	// 6b. Reverse order: presenting itself leads the interval; a viewport
 	// change (and later, a cursor change) is the same-instant SECOND call —
 	// dropped, then folded into the next fire alongside presenting.
 	let clock2 = 0
@@ -297,12 +266,12 @@ import {
 }
 
 // ============================================================================
-// 9. Task F4 (pilot 5): `editingId` is the THIRD argument to
+// 7. Task F4 (pilot 5): `editingId` is the THIRD argument to
 //    setViewportAndRefreshCursor, not a separate setter — proves it folds
 //    into the SAME single write as viewport/cursor (never its own store
 //    write), and that a same-instant repeat call still records the latest
 //    editingId for the next fire (the exact "deferred, not lost" guarantee
-//    block 3 established for viewport, now covering editingId).
+//    block 2 established for viewport, now covering editingId).
 // ============================================================================
 {
 	let clock = 0
@@ -315,15 +284,15 @@ import {
 	}
 	const publisher = createPresencePublisher(store, { intervalMs: 60, now: () => clock })
 
-	// BeginEdit: editingId becomes 'shape:lock', published together with the
+	// BeginEdit: editingId becomes 'shape:note1', published together with the
 	// viewport/cursor in ONE write.
-	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 }, 'shape:lock')
+	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 }, 'shape:note1')
 	assert.equal(publishCalls, 1, 'the leading write fires immediately')
-	assert.equal(store.all()['self-key']!.editing, 'shape:lock', 'editingId is published as part of the ONE combined write, not a separate set()')
+	assert.equal(store.all()['self-key']!.editing, 'shape:note1', 'editingId is published as part of the ONE combined write, not a separate set()')
 
 	// A same-instant repeat (e.g. a stray extra EditorState notification) is
 	// dropped at the shared channel like everything else, but recorded.
-	publisher.setViewportAndRefreshCursor({ x: 1, y: 1, w: 800, h: 600, z: 1 }, { x: 1, y: 1, z: 1 }, 'shape:lock')
+	publisher.setViewportAndRefreshCursor({ x: 1, y: 1, w: 800, h: 600, z: 1 }, { x: 1, y: 1, z: 1 }, 'shape:note1')
 	assert.equal(publishCalls, 1, 'a same-instant repeat call is dropped at the shared channel')
 
 	// EndEdit past the throttle window: editingId goes back to null, in the
@@ -338,12 +307,12 @@ import {
 }
 
 // ============================================================================
-// 10. Task F4's ACTUAL regression pin (spec-review finding: block 9 above
-//     does NOT pin it — every one of its transitions lands either on the
-//     first-ever call, where the leading edge is free, or at clock=100, past
-//     the window, so neutralizing the flushNow bypass — routing an editing
-//     transition through throttledFlush like every other field, i.e. the
-//     pre-fix behavior — left block 9 green). This block constructs the real
+// 8. Task F4's ACTUAL regression pin (spec-review finding: block 7 above
+//    does NOT pin it — every one of its transitions lands either on the
+//    first-ever call, where the leading edge is free, or at clock=100, past
+//    the window, so neutralizing the flushNow bypass — routing an editing
+//    transition through throttledFlush like every other field, i.e. the
+//    pre-fix behavior — left block 7 green). This block constructs the real
 //     bug shape: the leading edge is ALREADY CONSUMED by a prior cursor
 //     flush, the editing transition arrives INSIDE the still-open throttle
 //     window, and NO further event ever follows (typing never touches
@@ -352,7 +321,7 @@ import {
 //     silently dropped for the WHOLE edit; the fix's transition bypass must
 //     flush it to the wire immediately. Teeth verified directly (2026-07-16):
 //     re-neutralizing the bypass exactly the way the reviewer did makes this
-//     block fail at its first assertion ('shape:lock' !== null — the editing
+//     block fail at its first assertion ('shape:note1' !== null — the editing
 //     value never published), and restoring the bypass turns it green again.
 // ============================================================================
 {
@@ -377,8 +346,8 @@ import {
 	// write is dropped — and (3) NO later event ever arrives to heal it.
 	// (4) The transition bypass must flush it immediately regardless.
 	clock = 30
-	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 }, 'shape:lock')
-	assert.equal(store.all()['self-key']!.editing, 'shape:lock', 'an editing TRANSITION mid-window flushes to the wire immediately — the throttle-drop regression this block pins (pre-fix: dropped, and never healed)')
+	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 }, 'shape:note1')
+	assert.equal(store.all()['self-key']!.editing, 'shape:note1', 'an editing TRANSITION mid-window flushes to the wire immediately — the throttle-drop regression this block pins (pre-fix: dropped, and never healed)')
 	assert.equal(publishCalls, 2, 'the transition bypass made exactly one immediate extra write')
 
 	// The bypass write updated the shared channel timing too (flushNow sets

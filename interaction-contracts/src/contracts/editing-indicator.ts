@@ -10,7 +10,10 @@
 // has any notion of — this contract has no `level: 'fsm'` counterpart.
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
-const ID = 'shape:lock'
+// 'shape:note1', NOT the plan snippet's literal 'shape:lock' (quality-review
+// rename): "lock" was rejected-Option-2 vocabulary — the F1 owner decision is
+// indicator-only, nothing here locks anything.
+const ID = 'shape:note1'
 
 export const editingIndicator: Contract = {
   name: 'peer-editing-is-visible',
