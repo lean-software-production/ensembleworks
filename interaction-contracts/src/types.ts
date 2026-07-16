@@ -107,6 +107,13 @@ export interface Contract {
   /** Optional: instantiate once per registered shape kind (design's per-kind
    * conformance-suite subsumption). Unused until a later unit needs it. */
   readonly scope?: 'per-kind'
+  /** Which tool FSM the runner drives this contract through. 'select' (the
+   * default — click/drag/marquee via tools/select.ts) or 'select+transform'
+   * (the client's shipped composite: select PLUS resize/rotate handles via
+   * tools/transform.ts). A contract that must exercise handle-dragging (e.g.
+   * no-transform-while-typing, Phase E extension) sets 'select+transform'.
+   * Pure string union — this module still imports NOTHING. */
+  readonly tool?: 'select' | 'select+transform'
   /** Shapes to seed before the gesture. Default: none. */
   scene?(): readonly SceneShape[]
   /** Build the gesture ops from a seeded RNG — deterministic per seed. */

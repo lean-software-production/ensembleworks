@@ -17,17 +17,9 @@
  * tldraw's product behavior a dogfood user expects from "the select tool" is
  * really the UNION of both: click/drag/marquee-select (select.ts) AND
  * drag a resize/rotate handle when something is already selected
- * (transform.ts). `createSelectAndTransformTool` below is the composite that
- * delivers that union with the SIMPLEST correct rule: on every pointerdown
- * while composite-idle, give transform.ts FIRST CRACK (it only reacts to a
- * pointerdown that lands on a handle — everything else is a no-op returning
- * its own unchanged idle state); if transform grabbed a handle (its
- * returned state left 'idle'), the composite's active leg becomes
- * 'transform' for every subsequent event until transform's own FSM returns
- * to idle (pointerup) — otherwise the event is forwarded to select.ts as
- * normal. This is exactly "transform handles work when a selection exists"
- * without either tool needing to know the other exists: composed at the
- * dispatch layer, not inside either FSM.
+ * (transform.ts). The select+transform composite now lives in canvas-editor
+ * (`tools/select-and-transform.ts`) and is re-exported below for the
+ * client's existing importers.
  *
  * No V1 SUPPORT for switching TO the transform tool explicitly via a toolbar
  * button (there is no such button — see CanvasV2App.tsx's toolbar) — it is
@@ -40,73 +32,21 @@ import {
 	createArrowTool,
 	createCreateTool,
 	createHandTool,
-	createSelectTool,
-	createTransformTool,
+	createSelectAndTransformTool,
 	type ArrowState,
 	type CreateKind,
 	type CreateState,
 	type HandState,
+	type SelectAndTransformState,
 	type SelectState,
-	type TransformState,
 } from '@ensembleworks/canvas-editor'
 import type { SnapResult } from '@ensembleworks/canvas-model'
+
+export { createSelectAndTransformTool, type SelectAndTransformState } from '@ensembleworks/canvas-editor'
 
 /** The toolbar's tool identifiers — see CanvasV2App.tsx's toolbar for the
  * button list. 'transform' is deliberately ABSENT (see module header). */
 export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'arrow'
-
-export interface SelectAndTransformState {
-	readonly active: 'select' | 'transform'
-	readonly select: SelectState
-	readonly transform: TransformState
-}
-
-/** The composite described in the module header. A `Tool<SelectAndTransformState>`
- * in its own right, so it slots into the exact same `Tool<S>` machinery every
- * other tool uses (script.ts's `run()` semantics, this file's `createToolSet`
- * below) with no special-casing at the call site. */
-export function createSelectAndTransformTool(ctx: ToolContext): Tool<SelectAndTransformState> {
-	const select = createSelectTool(ctx)
-	const transform = createTransformTool(ctx)
-	const initialState: SelectAndTransformState = { active: 'select', select: select.initialState, transform: transform.initialState }
-
-	return {
-		initialState,
-		onEvent(state, event): { state: SelectAndTransformState; intents: Intent[] } {
-			if (state.active === 'transform') {
-				const r = transform.onEvent(state.transform, event)
-				const active = r.state.mode === 'idle' ? 'select' : 'transform'
-				return { state: { ...state, active, transform: r.state }, intents: r.intents }
-			}
-			// active === 'select': give transform first crack at a pointerdown
-			// ONLY (its onIdle is a no-op for every other event type anyway, so
-			// trying it on every event would be wasted work, not wrong — but
-			// pointerdown is the only event where it can possibly transition).
-			if (event.type === 'pointerdown') {
-				const rt = transform.onEvent(state.transform, event)
-				if (rt.state.mode !== 'idle') {
-					// HANDOFF RESETS THE SELECT LEG (quality-review fix — the
-					// reviewer reproduced the bug this prevents): select's Idle
-					// state carries `lastClick`, its double-click memory
-					// (select.ts's DOUBLE-CLICK-TO-EDIT section), and an entire
-					// resize/rotate gesture routes EXCLUSIVELY through the
-					// transform leg — select's FSM never sees any of it — so
-					// without this reset that memory would survive the whole
-					// gesture: click A, resize A via a handle, click A again
-					// within DOUBLE_CLICK_MS of the FIRST click -> spurious
-					// BeginEdit. A handle-grab is a NEW gesture, not the second
-					// half of a click pair, so the select leg goes back to its
-					// own initialState ({mode:'idle', lastClick:null}) at the
-					// handoff. Pinned by tool-loop.test.ts's click-resize-click
-					// probe (with its plain-double-click control case).
-					return { state: { active: 'transform', select: select.initialState, transform: rt.state }, intents: rt.intents }
-				}
-			}
-			const rs = select.onEvent(state.select, event)
-			return { state: { ...state, select: rs.state }, intents: rs.intents }
-		},
-	}
-}
 
 /** One `Tool<unknown>` instance per `ToolId`, built ONCE per `ToolContext` —
  * mirrors every tool factory's own "call once per Editor/ToolContext"

@@ -11,9 +11,10 @@ import type { Anchor, Contract, GestureOp, Obs, Rng } from '@ensembleworks/inter
 import { mulberry32 } from '@ensembleworks/interaction-contracts'
 import { applyWheel } from '../camera.js'
 import { Editor } from '../editor.js'
-import type { InputEvent, Modifiers } from '../input.js'
+import type { InputEvent, Modifiers, Tool } from '../input.js'
 import { screenToWorld, worldToScreen } from '../input.js'
 import { script } from '../script.js'
+import { createSelectAndTransformTool } from '../tools/select-and-transform.js'
 import { createSelectTool } from '../tools/select.js'
 import { createToolContext } from '../tools/tool-context.js'
 
@@ -164,8 +165,9 @@ export interface FsmRunResult {
  * failure (with the seed for repro) or null.
  * NOTE: `contract.level` is ignored here — Phase G wires level filtering (which
  * runner runs which declarations); callers today pass fsm-level contracts.
- * NOTE: the select tool is hardwired — a tool seam on Contract is a known
- * later extension (first contract needing another tool adds it). */
+ * NOTE: the tool is chosen by contract.tool (Phase E extension's TOOL SEAM
+ * below) — 'select' by default, 'select+transform' for handle-drag
+ * contracts. The former "hardwired select tool" limitation is discharged. */
 export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
   const rng: Rng = mulberry32(seed)
   const doc = LoroCanvasDoc.create({ peerId: 1n })
@@ -176,7 +178,14 @@ export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
   const idRng = mulberry32(seed ^ 0x9e3779b9)
   const editor = new Editor({ doc, now: () => 0, random: () => idRng.next(), pageId: 'page:p' })
   const ctx = createToolContext(editor)
-  const tool = createSelectTool(ctx)
+  // TOOL SEAM (Phase E extension): build the FSM the contract asks for.
+  // Default 'select'; 'select+transform' drives the SAME composite the client
+  // ships (createSelectAndTransformTool) so a handle-drag contract exercises
+  // the real dispatch — transform.ts gets first crack at each pointerdown,
+  // exactly as in the browser.
+  const tool: Tool<unknown> = contract.tool === 'select+transform'
+    ? (createSelectAndTransformTool(ctx) as Tool<unknown>)
+    : (createSelectTool(ctx) as Tool<unknown>)
   const startRect = visibleWorldRectOf(editor.get().camera)
 
   // Drag-observation baseline (Pilot 2): each seeded shape's START world
@@ -194,7 +203,7 @@ export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
   const obs = makeObs(editor, startRect, startPositions, () => grabWorld, () => lastPointer)
 
   const events = opsToEvents(contract.gesture(rng), editor)
-  let state = tool.initialState
+  let state: unknown = tool.initialState
   for (const event of events) {
     const result = tool.onEvent(state, event)
     state = result.state
