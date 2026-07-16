@@ -35,6 +35,17 @@ export const BRIDGE_SCRIPT = `<script>(function () {
 		applying = true
 		window.scrollTo(0, d.fraction * max)
 	})
+	// Pinch guard + forward (spec: 2026-07-15-pinch-zoom-guard-design.md):
+	// a trackpad pinch is ctrl+wheel; unhandled it browser-zooms the WHOLE
+	// parent page (wheel never propagates out of an iframe). Swallow it here
+	// and forward to the parent, which replays it on the canvas so pinch
+	// over an interactive viewer zooms the canvas. Plain wheel (scrolling)
+	// is untouched.
+	window.addEventListener('wheel', function (e) {
+		if (!e.ctrlKey && !e.metaKey) return
+		e.preventDefault()
+		parent.postMessage({ type: 'ew-pinch', deltaX: e.deltaX, deltaY: e.deltaY, x: e.clientX, y: e.clientY }, '*')
+	}, { passive: false })
 	parent.postMessage({ type: 'ew-file-viewer-ready' }, '*')
 })()</script>`
 

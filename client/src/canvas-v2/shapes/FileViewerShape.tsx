@@ -60,6 +60,7 @@ import type { Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from '@ensembleworks/canvas-editor'
 import type { ShapeBodyProps } from '@ensembleworks/canvas-react'
 import { wm } from '../../theme.js'
+import { forwardPinchToCanvas, parsePinchMessage } from '../../file-viewer/pinchForward.js'
 import { presentStoreV2 as presentStore, type PresentingV2 } from './presentStoreV2.js'
 import { canvasV2EmbedLifecycles } from './embedLifecycles.js'
 import { useInteractionMode } from './useInteractionMode.js'
@@ -215,6 +216,14 @@ export function FileViewerShape({ shape, dispatch }: ShapeBodyProps) {
       if (e.source !== iframeRef.current?.contentWindow) return
       const d = e.data as { type?: unknown; fraction?: unknown } | null
       if (!d || typeof d !== 'object') return
+      const pinch = parsePinchMessage(d)
+      if (pinch) {
+        // Pinch over the interactive viewer zooms the CANVAS (spec:
+        // 2026-07-15-pinch-zoom-guard-design.md) — replay on the iframe
+        // element so it bubbles into the Viewport's wheel/zoom path.
+        if (iframeRef.current) forwardPinchToCanvas(iframeRef.current, pinch)
+        return
+      }
       if (d.type === 'ew-file-viewer-ready') {
         // FIX 1: re-apply the presenter's OR (if we're a follower) the active
         // peer's fraction on reload — a rev-bump reloads every peer's iframe,
