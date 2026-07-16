@@ -9,6 +9,7 @@
     "perf": "bunx playwright test --project=perf"
   },
   "devDependencies": {
+    "@ensembleworks/interaction-contracts": "*",
     "@playwright/test": "^1.53.0",
     "@types/node": "^22.0.0",
     "@types/pngjs": "^6.0.5",

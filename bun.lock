@@ -157,6 +157,7 @@
       "name": "@ensembleworks/e2e",
       "version": "0.1.0",
       "devDependencies": {
+        "@ensembleworks/interaction-contracts": "*",
         "@playwright/test": "^1.53.0",
         "@types/node": "^22.0.0",
         "@types/pngjs": "^6.0.5",
