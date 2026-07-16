@@ -428,6 +428,99 @@ test.describe('canvas-v2 browser perf', () => {
 		assertBudget('50-shape selection drag', drag)
 	})
 
+	// SINGLE-SHAPE DRAG COMMIT-CADENCE SCENARIO (Task G3): isolates the
+	// four-tool "COMMIT CADENCE WATCH-ITEM" the select/create/transform/arrow
+	// tools all share (canvas-editor/src/tools/select.ts's onDragging, ~line
+	// 403: "each of these per-pointermove TranslateShapes intents becomes ONE
+	// doc.commit()... one sync frame per mouse move during a drag"). Editor.
+	// applyAll's own doc comment (editor.ts) is the mechanism: "every
+	// apply()/applyAll() call is exactly one commit," and canvas-doc's
+	// commit()/subscribe() (loro-canvas-doc.ts) forward straight to Loro's own
+	// commit()/subscribe with no debounce/microtask/rAF layer anywhere in
+	// between — so an N-pointermove drag is genuinely N commits / N doc
+	// notifications / N React renders, not one commit at gesture end. A
+	// SINGLE seeded shape (not a grid, not a selection) keeps G1's
+	// (ShapeLayer per-shape render) and G2's (Selection.tsx per-selection
+	// overlay) costs negligible here — the only added per-move cost this
+	// scenario isolates is the commit -> notify -> render pipeline itself.
+	//
+	// DRIVING THE DRAG: real DOM pointer events (page.mouse.move/down/up)
+	// through Viewport -> the select tool's onDragging, exactly like the
+	// marquee-drag-50 case above — never the editor FSM called directly —
+	// so this exercises the true end-to-end per-move-commit path, including
+	// the tool-loop's DOM-event -> applyAll wiring (client/src/canvas-v2/
+	// tool-loop.ts), not just canvas-editor in isolation. DRAG_STEPS=100
+	// small (6px/4px) individual mouse.move() calls (not a single move with a
+	// `steps` option, which Playwright/CDP would interpolate as one virtual
+	// gesture) — matching G1's 60-wheel-tick sweep / the cursor-storm's
+	// 120-move sweep for a sample size large enough that p95 is a stable
+	// statistic, not a single-sample fluke.
+	const DRAG_STEPS = 100
+
+	test('canvas-v2 perf: single-shape drag commit-cadence (100 pointermoves)', async ({ page }) => {
+		test.setTimeout(60_000)
+		await installSampler(page) // before goto — see the pan/zoom scenario's ordering note
+		const room = 'v2-perf-drag-cadence'
+		await page.goto(`/?room=${room}&engine=v2`)
+		await waitForBoot(page)
+
+		const SHAPE_OFFSET = 40
+		await seedGrid(page, 1, SHAPE_OFFSET) // ONE note, top-left at (SHAPE_OFFSET, SHAPE_OFFSET) — center at +100,+100 (200x200 default note body)
+
+		// Ground-truth commit count, read off the LIVE doc's own subscribe hook
+		// (window.__ew.doc — the same LoroCanvasDoc a real React render observes
+		// via useDocSnapshot's useSyncExternalStore, canvas-react/src/
+		// use-editor-state.ts) — NOT inferred from frame count, which could move
+		// for unrelated rAF-scheduling reasons. This is the scenario's own
+		// honesty check that the watch-item it exists to isolate actually fired.
+		await page.evaluate(() => {
+			const ew = (window as any).__ew
+			;(window as any).__commitCount = 0
+			ew.doc.subscribe(() => {
+				;(window as any).__commitCount++
+			})
+		})
+
+		const box = await viewportBox(page)
+		const dragStart = { x: box.x + SHAPE_OFFSET + 100, y: box.y + SHAPE_OFFSET + 100 }
+		const drag = await measure(page, async () => {
+			await page.mouse.move(dragStart.x, dragStart.y)
+			await page.mouse.down()
+			for (let i = 1; i <= DRAG_STEPS; i++) await page.mouse.move(dragStart.x + i * 6, dragStart.y + i * 4)
+			await page.mouse.up()
+		})
+
+		const commitCount = await page.evaluate(() => (window as any).__commitCount)
+		console.log(`[canvas-v2-perf] single-shape drag-cadence: ${DRAG_STEPS} pointermoves -> ${commitCount} doc commits observed`)
+		// Exactly one commit per pointermove (see the module note above) — the
+		// FIRST move already crosses select.ts's DRAG_THRESHOLD (4px; ours are
+		// 6px/4px per step) and starts the drag AS ITS OWN commit (the
+		// Pointing->Dragging transition's own TranslateShapes, batched with a
+		// SetSelection in ONE applyAll call — still exactly one doc.commit()),
+		// so DRAG_STEPS moves -> DRAG_STEPS commits, no "+1" for entering drag
+		// mode and no coalescing across moves.
+		expect(commitCount, 'a single-shape drag should commit exactly once per pointermove (the watch-item this scenario isolates)').toBe(DRAG_STEPS)
+
+		// Capture writes a fresh baseline artifact; does NOT feed the gate below
+		// (see the dense scenario's own comment on this ordering + why).
+		maybeRecord('drag-cadence-single-shape', { dragSteps: DRAG_STEPS, commitCount, drag })
+
+		// ALWAYS-ON gate — G1's CORRECTED pattern (module's ALWAYS-ON GATE
+		// note), reused exactly: assertNoRegression runs unconditionally against
+		// recordedBaselines (loaded from the COMMITTED file at module scope,
+		// before any capture write), never inside an `if (!capturing)` or
+		// capture-guarded else branch. The only skip is a genuine first-ever
+		// bootstrap capture (no committed baseline key yet).
+		const committed = recordedBaselines['drag-cadence-single-shape']
+		if (capturing && committed === undefined) {
+			console.log(
+				`[canvas-v2-perf] drag-cadence-single-shape: BOOTSTRAP CAPTURE (no committed baseline yet) — drag p95=${drag.p95ms}ms/max=${drag.maxms}ms; commit the JSON, then future runs gate against it`,
+			)
+		} else {
+			assertNoRegression('single-shape drag commit-cadence', drag, committed?.drag)
+		}
+	})
+
 	test('canvas-v2 perf: rapid sticky creation (20)', async ({ page }) => {
 		test.setTimeout(60_000)
 		await installSampler(page) // before goto — see the pan/zoom scenario's ordering note

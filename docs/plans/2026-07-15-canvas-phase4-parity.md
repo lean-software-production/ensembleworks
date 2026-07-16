@@ -1872,6 +1872,26 @@ deviation from DoD #8 (never a silent ungated landing)._
   scope per the bounds ceiling. Worth a follow-up excluding `arrow` from
   ShapeLayer's generic body pass (it has no legitimate box body, only the
   overlay line) the same way embed kinds already are.
+- **G3 (single-shape drag commit-cadence scenario) — GATING DECISION: GATED,
+  per DoD #8's required default, NOT recorded-only.** A single note is
+  dragged through 100 real DOM pointermoves (`e2e/perf/canvas-v2-perf.spec.ts`'s
+  `single-shape drag commit-cadence` case); a `window.__ew.doc.subscribe`
+  counter confirmed exactly 100 `doc.commit()`s fired for the 100 moves (the
+  watch-item this scenario isolates — select.ts's onDragging: one
+  `TranslateShapes` intent, one `applyAll`, one commit, per pointermove — is
+  real, not theoretical). Before gating, the scenario was run 11 times
+  (1 EW_CAPTURE bootstrap + 10 repeats) on the same box G1/G2 used: p95
+  floored at 16.7–16.8ms and maxms at 16.8ms on EVERY run, `droppedOver25ms`
+  0 every time — no bimodal jank split like G1's dense-pan-zoom-1000 ever
+  appeared. That's the cleanest of the three new scenarios (matches G2's
+  select-all finding, not G1's noisier dense one): a single shape keeps
+  ShapeLayer/Selection.tsx cost negligible, so the only added per-move work
+  (commit → notify → render) never pushes a frame past the vsync floor on
+  this hardware. Baselined at `drag-cadence-single-shape` in
+  `e2e/baselines/canvas-v2-perf.json` (p95=16.8ms, maxms=16.8ms) and gated on
+  both metrics via the SAME always-on `assertNoRegression` pattern G1/G2
+  established (never a capture-guarded `else` — see that function's own
+  module comment). No deviation from DoD #8 needed.
 
 ---
 

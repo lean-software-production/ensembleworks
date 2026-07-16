@@ -170,5 +170,22 @@
       "host": "zeus-arch",
       "note": "12 EW_CAPTURE runs on this box (unlike G1's dense-pan-zoom-1000) NEVER observed a dropped/jank frame here — p95/maxms floor at the ~16.7-16.8ms vsync tick every run, no bimodal split. Recorded values are the worst OBSERVED across those 12 runs (16.8ms), not a cherry-picked minimum, so this baseline is already the honest typical-worst for this scenario/hardware — same discipline as the dense scenario's note, different (cleaner) observed reality: seedGrid spreads shapes off-screen so ShapeLayer's own per-shape render cost stays near-zero here, isolating Selection.tsx's O(selection-size) overlay cost as the only added work, and on this hardware that cost alone doesn't push a frame past the vsync floor. The +15%x2x gate (=38.64ms) still protects against a REAL regression in that overlay cost; it just means, unlike dense, this scenario's maxms isn't expected to be a noisy signal in practice."
     }
+  },
+  "drag-cadence-single-shape": {
+    "dragSteps": 100,
+    "commitCount": 100,
+    "drag": {
+      "frames": 100,
+      "p50ms": 16.7,
+      "p95ms": 16.8,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-16T02:31:42.526Z",
+      "host": "zeus-arch",
+      "note": "11 EW_CAPTURE runs on this box (1 bootstrap + 10 repeats), each with commitCount verified === dragSteps (100 doc.commit()s for 100 pointermoves, confirming the per-move commit cadence this scenario isolates actually fires): NEVER observed a dropped/jank frame (droppedOver25ms=0 every run, no bimodal split like G1's dense-pan-zoom-1000) — p95 floored at 16.7-16.8ms, maxms at 16.8ms, every single run. Recorded values are the worst OBSERVED across those 11 runs, not a cherry-picked minimum — same discipline as G1/G2's notes, and the same clean-floor reality G2's select-all-pan-zoom-1000 found: a SINGLE shape keeps ShapeLayer/Selection.tsx cost negligible, so the only added per-move cost (one doc.commit() + one subscriber notify + one React render per pointermove) doesn't push a frame past the vsync floor on this hardware. GATING DECISION (Task G3, per bounds DoD #8): GATED, not recorded-only — the observed variance above (zero jank across 11 runs) is the opposite of 'too noisy to gate reliably,' so the required default (baselined + <=15% gated) applies; see the plan's Execution notes for the full decision writeup."
+    }
   }
 }
