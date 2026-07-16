@@ -1148,16 +1148,66 @@ select behavior regressed beyond corrected intermediate-value pins.
 > `seedScene` already seeds selectable text on every shape, and the `check`
 > line is unchanged — only the `gesture`, the sampler body, and the fix change.
 
+> ### CHANGE NOTE — 2026-07-16, second entry (chrome-anchored sweep; pointer capture was masking the in-viewport RED)
+>
+> **What happened.** The marquee revision above was implemented (`09c2ca1`,
+> `7c18f17`) and RED was STILL unreachable in-viewport, for a reason neither
+> the first finding nor the first entry modeled: `Viewport.tsx`'s
+> `handlePointer` calls `setPointerCapture` on every pointerdown (the
+> drag-survival feature), and in Chromium an **active pointer capture
+> suppresses the native selection sweep entirely**. Implementer's controlled
+> A/B (only delta: an initScript no-op'ing `setPointerCapture`): capture
+> active → `isCollapsed: true` at every one of 12 sampled moves; capture
+> suppressed → spans `["shape:cw-a","shape:cw-b"]` — the QA bug exactly. So
+> the in-viewport marquee reasoning in the first entry was incomplete: the
+> tool-level "no intents on pointermove" analysis was correct, but the
+> Viewport's capture side effect shields that path anyway.
+>
+> **The genuine, user-reachable RED against unmodified code:** anchor the drag
+> OUTSIDE the viewport, on the chrome strip above it — page `(700, 20)`; the
+> viewport starts at `y=40` — and sweep into the canvas to viewport-relative
+> `(560, 200)`. The pointerdown never hits the `Viewport` element, so
+> `handlePointer` never runs and no capture is taken; nothing suppresses the
+> sweep, and the selection spans both bodies — verified verbatim through the
+> intersect sampler. The anchor must be **non-button** chrome: a toolbar
+> `<button>` anchor produces nothing because the UA stylesheet gives buttons
+> `user-select: none`.
+>
+> **This finding also explains QA's "sometimes."** Reachability depends on
+> (a) *where the drag anchors* relative to the viewport — in-viewport anchors
+> are shielded by pointer capture's side effect; anchors on surrounding chrome
+> are not — and (b) *capture actually succeeding*: `setPointerCapture` in
+> `handlePointer` is a best-effort `try/catch` that exists for drag survival,
+> not a selection guarantee. Neither condition is something users control or
+> we should lean on.
+>
+> **Fix unchanged, now verified sufficient alone:** the implementer confirmed
+> a runtime-injected `[data-shape-id][data-shape-kind] { user-select: none }`
+> turns the SAME chrome-anchored sweep into spans 0. D5's per-body rule stands
+> as the whole fix; its `WorldLayer` fallback paragraph is dropped.
+>
+> **What this second entry revises (below):** D1's gesture anchor
+> (empty-canvas point → `{ ref: 'point', x: 700, y: -20 }` — `resolveAnchor`'s
+> plain box-offset math makes a negative y land on the chrome strip above the
+> viewport) and the contract's header comment (which must state the honest
+> mechanism, including that in-viewport sweeps are today protected only by
+> capture's side effect); D4's RED evidence and diagnostics; a documented
+> sampler decision in D3 (kept structural — see there for why); D5's fallback
+> paragraph removed; D6/D8 wording aligned.
+
 The invariant — **native text selection must never span two shape bodies** — is
 only falsifiable in a real browser (`window.getSelection()`). This is the first
 `level: 'browser'` contract and it **forces the browser runner into existence**:
 a gesture interpreter over Playwright, a per-rAF sampler for `when:
-'every-event'`, and a page-backed `Obs` adapter. The repro is a **marquee**
-(pointerdown on empty canvas, sweep across two notes' text, up); because the
-marquee tool mutates nothing during the sweep, Chromium sweeps a native
-selection across both note bodies. Fix: `user-select: none` on the static shape
-bodies (matching how tldraw makes its whole canvas non-selectable), verified not
-to break the editing textarea's own caret/selection.
+'every-event'`, and a page-backed `Obs` adapter. The repro is a
+**chrome-anchored sweep** (pointerdown on the non-button chrome strip above the
+viewport, sweep down across the canvas into the second note's text, up): no
+pointer capture is taken (the pointerdown never hits the Viewport) and no
+editor re-render interferes, so Chromium sweeps one native selection whose
+range brackets both note bodies. Fix: `user-select: none` on the static shape
+bodies (matching how tldraw makes its whole canvas non-selectable) — verified
+to close exactly this repro, and verified not to break the editing textarea's
+own caret/selection.
 
 ### Task D1 — Add the browser-level Obs method + the cross-widget contract
 
@@ -1176,22 +1226,38 @@ to break the editing textarea's own caret/selection.
   textSelectionSpans(): number
 ```
 
-2. Write `cross-widget-selection.ts` — **the committed file (`850432c`) used a
-   translate gesture that cannot reach RED (see this phase's CHANGE NOTE). Edit
-   its header comment and `gesture` to the MARQUEE below; the `scene` (two
-   notes) and the `check` line are unchanged and are reused verbatim:**
+2. Write `cross-widget-selection.ts` — **the committed file (`09c2ca1`) used an
+   in-viewport marquee anchor that cannot reach RED because Viewport's pointer
+   capture suppresses the native sweep (see the CHANGE NOTE's second entry).
+   Edit its header comment and the `down` anchor to the CHROME-ANCHORED sweep
+   below; the `scene` (two notes), the sweep endpoint, and the `check` line
+   are unchanged and are reused verbatim:**
 
 ```ts
-// Pilot 3 — the first browser-tagged contract. A MARQUEE that starts on empty
-// canvas and sweeps across two shape bodies' text must NEVER produce a native
-// text selection spanning both (the sweep is a canvas gesture — it selects
-// SHAPES, not text). This is the falsifiable form of the QA bug "clicking to
-// select selects text across multiple widgets." A translate drag (down ON a
-// shape) canNOT reproduce it — the per-move TranslateShapes re-render mutates
-// the dragged body's DOM mid-cycle and Chromium drops the cross-element
-// selection; only the marquee, whose onMarquee emits NO intents on pointermove
-// (select.ts — "no live-preview intent exists yet"), leaves the DOM untouched
-// long enough for the native selection to sweep across both bodies.
+// Pilot 3 — the first browser-tagged contract. A pointer sweep across two
+// shape bodies' text must NEVER produce a native text selection spanning both
+// (a canvas drag selects SHAPES, not text). This is the falsifiable form of
+// the QA bug "clicking to select selects text across multiple widgets."
+//
+// REACHABILITY — all three verified in a real Chromium (see the plan's Phase D
+// CHANGE NOTE, both entries):
+//  - A TRANSLATE drag (down ON a shape) cannot reproduce it: the per-move
+//    TranslateShapes re-render mutates the dragged body's DOM mid-cycle and
+//    Chromium drops the cross-element selection.
+//  - An IN-VIEWPORT MARQUEE cannot either — but only by side effect:
+//    Viewport's handlePointer takes pointer capture on every pointerdown (a
+//    best-effort try/catch that exists for DRAG SURVIVAL, not as a selection
+//    guarantee), and in Chromium an active pointer capture suppresses the
+//    native selection sweep entirely. A/B-verified: no-op the capture and the
+//    same in-viewport marquee selects across both bodies.
+//  - The USER-REACHABLE RED: anchor the drag OUTSIDE the viewport on the
+//    chrome strip above it (non-button chrome — UA stylesheets give <button>
+//    user-select:none) and sweep down into the canvas. The pointerdown never
+//    hits Viewport, so no capture is taken; the selection's range runs from
+//    the chrome anchor to the focus inside the second body, bracketing the
+//    first body in document order — it spans both.
+// The fix (user-select:none on static shape bodies) protects BOTH sweep paths
+// on principle, instead of leaning on capture's accidental shield.
 // Falsifiable only in a real browser via window.getSelection().
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
@@ -1208,12 +1274,15 @@ export const crossWidgetSelection: Contract = {
     { id: A, kind: 'note', x: 100, y: 100, w: 200, h: 200 },
     { id: B, kind: 'note', x: 400, y: 100, w: 200, h: 200 },
   ],
-  // MARQUEE: down on EMPTY canvas (x=60, left of A — targetId===null routes
-  // select.ts to marquee mode), then sweep RIGHT at y=200 through A's centred
-  // text (~200,200) and into B's (~500,200), then up. steps:12 makes the sweep
-  // a continuous drag so the native selection extends the whole way.
+  // CHROME-ANCHORED SWEEP: down at viewport-relative (700, -20) — negative y
+  // resolves, via resolveAnchor's plain box-offset math, to the chrome strip
+  // ABOVE the viewport (page y≈20 for a viewport starting at y=40; verified
+  // non-button chrome there) — then sweep into the canvas to (560, 200),
+  // inside B's text row. Anchor-before-the-world-layer + focus-inside-B means
+  // the selection range brackets A in document order too. steps:12 makes the
+  // sweep a continuous drag so the native selection extends the whole way.
   gesture: (_rng: Rng): GestureOp[] => [
-    { kind: 'down', at: { ref: 'point', x: 60, y: 200 } },
+    { kind: 'down', at: { ref: 'point', x: 700, y: -20 } },
     { kind: 'move', at: { ref: 'point', x: 560, y: 200 }, steps: 12 },
     { kind: 'up' },
   ],
@@ -1227,9 +1296,9 @@ shape's text from a canvas drag?** The *checked* invariant stays
 `textSelectionSpans() <= 1` (unchanged from the committed file): the QA bug, and
 the safety property worth pinning, is "text spanning **multiple** widgets."
 tldraw goes further and suppresses **all** native text selection on its canvas
-(a marquee selects shapes, never text), and **the D5 fix here matches that** —
-after the fix a canvas marquee selects zero text, so `spans === 0`, which
-satisfies `<= 1`. We deliberately do NOT tighten the assertion to `=== 0`:
+(a canvas drag selects shapes, never text), and **the D5 fix here matches
+that** — after the fix a sweep across the canvas selects zero body text, so
+`spans === 0`, which satisfies `<= 1`. We deliberately do NOT tighten the assertion to `=== 0`:
 `<= 1` pins the actual bug without coupling the contract to the particular
 suppression mechanism, so a future "select a single note's text via a canvas
 affordance" design would not have to fight this contract. Recommend the
@@ -1327,16 +1396,16 @@ function pageObs(page: Page, startRect: { minX: number; minY: number; maxX: numb
    > pre-read values, and calls `check`. Keep the sampler minimal (YAGNI) —
    > Pilot 5 extends it with multi-actor `obs.on('B')`. The `textSelectionSpans`
    > sampler must count every shape body the selection **range intersects** —
-   > NOT just its two endpoints. **The committed sampler (`e8760ce`) walked only
-   > `startContainer`/`endContainer`; that is wrong for the marquee repro and
-   > must be replaced with the range-intersect version below (see the CHANGE
-   > NOTE).** Why the endpoint walk fails: the marquee starts on **empty
-   > canvas**, so the selection's start endpoint is not inside any shape body —
-   > an endpoint-only sampler would see only the end (inside B) and report `1`,
-   > masking the bug. A range from an empty-canvas anchor to a point in B
-   > *contains* body A (A lies between the boundaries in document order) even
-   > though neither endpoint is inside it; `Range.intersectsNode` catches exactly
-   > that, and it matches the `Obs` doc comment's word "**intersects**":
+   > NOT just its two endpoints. **This range-intersect version landed in
+   > `7c18f17`, replacing an endpoint-only walk that could never see the bug
+   > (see the CHANGE NOTE).** Why the endpoint walk fails: the sweep's anchor —
+   > chrome strip or empty canvas, either way **outside every shape body** —
+   > means the selection's start endpoint is in no body; an endpoint-only
+   > sampler would see only the end (inside B) and report `1`, masking the bug.
+   > A range from an outside-the-bodies anchor to a point in B *contains* body
+   > A (A lies between the boundaries in document order) even though neither
+   > endpoint is inside it; `Range.intersectsNode` catches exactly that, and it
+   > matches the `Obs` doc comment's word "**intersects**":
 
 ```ts
 async function sampleTextSelectionSpans(page: Page): Promise<number> {
@@ -1360,6 +1429,30 @@ async function sampleTextSelectionSpans(page: Page): Promise<number> {
   })
 }
 ```
+
+   > **Sampler decision (CHANGE NOTE second entry) — structural intersect is
+   > KEPT; do not tighten to "intersects AND contributes selected text."**
+   > The nuance: `Range.intersectsNode` is structural (document-order
+   > bracketing), so post-fix a chrome-anchored range could in principle
+   > bracket both bodies without visually selecting any of their text — a
+   > false RED. Decision and rationale for keeping it anyway:
+   > (a) every cheap "contributes text" refinement is EQUALLY structural —
+   > `Range.toString()` / `cloneContents()` include a `user-select:none`
+   > body's text regardless of what is visually selected, so the tightening
+   > would not actually close the theoretical hole; the only genuinely visual
+   > signal (Chromium's `Selection.toString()` excluding unselectable text) is
+   > engine-specific and per-body attribution through it is fragile
+   > (duplicate text across bodies).
+   > (b) The structural check errs toward FALSE RED — the safe direction for
+   > a bug-pinning contract. A false failure gets investigated; a false pass
+   > masks the bug (exactly what the endpoint-only sampler did).
+   > (c) Empirically it is clean: the implementer's post-fix GREEN read
+   > spans 0 — the fixed sweep leaves the selection collapsed, so the
+   > `isCollapsed` guard returns 0 before any structural check runs.
+   > **Tripwire:** if this contract ever goes RED after the fix with a
+   > non-collapsed selection that visually highlights neither body, that is
+   > the structural-bracketing case materializing — tighten THEN, with a
+   > visual-selection sampler, not before (YAGNI).
 
    The `runContractBrowser(page, contract)` driver: `await waitForBoot(page)`,
    `seedScene`, `viewportBox`, then for each `GestureOp` translate to
@@ -1406,30 +1499,38 @@ for (const contract of CONTRACTS.filter((c) => c.level === 'browser')) {
    `cd e2e && bunx playwright test --project=e2e -g "no-cross-widget-text-selection"`
    Expect: **FAIL** — the assertion prints `native selection spans 2 shape
    bodies (expected <= 1)`. This is the red proving the missing
-   `user-select: none`: the marquee (empty-canvas anchor → sweep across both
-   notes' text → up) leaves the DOM untouched during the sweep (`onMarquee`
-   emits no intents), so Chromium extends one native selection across both note
-   bodies.
+   `user-select: none`: the chrome-anchored sweep (down on the chrome strip at
+   page `(700, 20)` → sweep to viewport-relative `(560, 200)` inside B's text →
+   up) takes no pointer capture (the pointerdown never hits the Viewport
+   element, so `handlePointer`/`setPointerCapture` never run) and triggers no
+   editor re-render, so Chromium extends one native selection whose range
+   brackets both note bodies — verified verbatim through the intersect sampler
+   as `["shape:cw-a","shape:cw-b"]`.
 
-   > **Prerequisite — the range-intersect sampler.** RED is only observable with
-   > the range-intersect `sampleTextSelectionSpans` from D3 (as revised). If the
-   > committed endpoint-only sampler is still in place, the marquee's
-   > empty-canvas start endpoint is outside every body and the sampler reports
-   > `1` (only B's end endpoint), so the contract would PASS against unfixed code
-   > and mask the bug. Confirm the D3 sampler amendment landed before trusting
-   > this step.
+   > **Prerequisite — the range-intersect sampler.** RED is only observable
+   > with the range-intersect `sampleTextSelectionSpans` (landed in `7c18f17`;
+   > kept as-is per D3's sampler decision). An endpoint-only sampler would
+   > report `1` — the sweep's chrome-strip anchor is outside every body, so
+   > only B's end endpoint would be seen — and the contract would PASS against
+   > unfixed code, masking the bug.
    >
-   > **Two ways this can fail to reproduce, and the fix for each:**
-   > (a) *No selectable text.* Both notes must render real text. The committed
-   >     `seedScene` (`e8760ce`) already calls `ew.doc.setText(s.id, …)` for every
-   >     seeded shape, so this is already handled — do not re-add it. If a body
-   >     still shows no text, check `label.ts`'s live-text-wins order resolved the
-   >     seeded text.
-   > (b) *The sweep never crosses both bodies.* Confirm identity camera at boot
-   >     (world == screen offset by the viewport box) so the world-coord scene
-   >     (A at 100–300, B at 400–600, text centred at y≈200) actually sits under
-   >     the `y=200` sweep from x=60 to x=560. Verify the RED reproduces before
-   >     fixing.
+   > **Three ways this can fail to reproduce, and the fix for each:**
+   > (a) *No selectable text in the bodies.* The committed `seedScene`
+   >     (`7c18f17`) already calls `ew.doc.setText(s.id, …)` for every seeded
+   >     shape — do not re-add it. If a body still shows no text, check
+   >     `label.ts`'s live-text-wins order resolved the seeded text.
+   > (b) *The anchor landed on a `<button>` or inside the viewport.* A toolbar
+   >     `<button>` anchor produces NO selection at all (UA stylesheets give
+   >     buttons `user-select: none`), and an in-viewport anchor is shielded by
+   >     pointer capture (CHANGE NOTE, second entry). Confirm `(700, -20)`
+   >     resolves to non-button chrome ABOVE the viewport: `resolveAnchor`'s
+   >     box-offset math must yield page y≈20 for a viewport starting at y=40.
+   >     If the layout ever moves the toolbar, re-pick a text-bearing,
+   >     non-button chrome point.
+   > (c) *The sweep endpoint misses B.* Confirm identity camera at boot
+   >     (world == screen offset by the viewport box) so B (world 400–600,
+   >     text centred at ~(500,200)) sits under the viewport-relative endpoint
+   >     `(560, 200)`. Verify the RED reproduces before fixing.
 
 ### Task D5 — Fix: `user-select: none` on the static shape bodies (NOT a pointerdown `preventDefault`)
 
@@ -1453,11 +1554,18 @@ for (const contract of CONTRACTS.filter((c) => c.level === 'browser')) {
 1. In `ShapeBody.tsx`, add `userSelect: 'none'` (and `WebkitUserSelect: 'none'`
    for Safari) to the wrapper `div`'s inline `style`. This makes every static
    shape body's own text non-selectable. **What each part does:** a body's text
-   can no longer be added to a native selection, so the marquee sweep has
-   nothing selectable to extend into; Chromium keeps the selection focus pinned
-   at the (text-less) empty-canvas anchor, and the marquee produces a
-   **collapsed / empty** selection → `sampleTextSelectionSpans` returns 0 →
-   GREEN, and (matching tldraw) a canvas marquee selects **shapes, not text**.
+   can no longer join a native selection, so the chrome-anchored sweep finds
+   nothing selectable in the canvas to extend into and the selection stays
+   collapsed at (or confined to) the chrome anchor →
+   `sampleTextSelectionSpans` returns 0 → GREEN, and (matching tldraw) a
+   canvas drag selects **shapes, not text**. It equally protects the
+   in-viewport marquee path on principle, replacing today's accidental shield
+   (pointer capture's side effect — CHANGE NOTE, second entry) with a
+   declared one. **Verified sufficient alone:** the implementer confirmed a
+   runtime-injected `[data-shape-id][data-shape-kind] { user-select: none }`
+   turns the same chrome-anchored RED sweep into spans 0 — no additional
+   layer (WorldLayer rule, event suppression) is needed; the previously
+   documented WorldLayer fallback is withdrawn.
    **Do not** add it to the embed bodies or to the `TextEditor` textarea — the
    textarea must keep its own caret/selection (double-click-to-edit, word
    select, select-all), and inline embeds (terminal/xterm) keep their own text
@@ -1466,24 +1574,13 @@ for (const contract of CONTRACTS.filter((c) => c.level === 'browser')) {
    embeds render through `EmbedHost`, so scoping the rule to `ShapeBody` alone
    is the editable-target exemption — no per-event guard required.
 
-   > **Fallback, apply ONLY if GREEN does not reproduce (empty-canvas anchor
-   > still leaves a stray non-collapsed range):** move the suppression up to the
-   > `WorldLayer` container (`userSelect: 'none'` on its `style`) so the marquee
-   > anchor itself lands in non-selectable content and no selection can start,
-   > then RE-ENABLE selection on the two descendants that need it —
-   > `userSelect: 'text'` on the `TextEditor` `<textarea>` and on the
-   > `EmbedHost` wrapper (so an inline terminal keeps native selection). This is
-   > the same editable-target exemption expressed as CSS overrides. Prefer the
-   > per-body rule above; reach for this only if the browser leaves a stray
-   > range. (Do not put `user-select:none` on `WorldLayer` WITHOUT the embed
-   > override — it would inherit into and break inline terminal/xterm selection.)
-
 2. Run: `bun run --filter '@ensembleworks/canvas-react' typecheck` — expect clean.
 
 ### Task D6 — Run the cross-widget contract GREEN + verify editing still works
 
 1. Run: `cd e2e && bunx playwright test --project=e2e -g "no-cross-widget-text-selection"`
-   Expect: **PASS** (the marquee now selects zero text; `spans` is 0).
+   Expect: **PASS** (the chrome-anchored sweep now selects no body text;
+   `spans` is 0 — matching the implementer's injected-CSS verification).
 
 2. Run the existing editing-loop case to confirm the fix did not break
    double-click-to-edit / textarea focus / in-textarea text selection:
@@ -1497,10 +1594,7 @@ for (const contract of CONTRACTS.filter((c) => c.level === 'browser')) {
    > Note also that `window.getSelection()` (what the contract samples) does NOT
    > report a textarea's internal selection, so the contract can neither observe
    > nor forbid in-editor selection — which is why editing must be verified by
-   > this real editing test, not by the contract. (If the D5 *fallback*
-   > `WorldLayer` rule is ever applied, this test is where you confirm the
-   > `userSelect:'text'` textarea override actually re-enabled caret/word-select
-   > inside the editor.)
+   > this real editing test, not by the contract.
 
 3. Also run the terminal write-back case (its rename input relies on focus, and
    an inline terminal relies on native selection):
@@ -1524,9 +1618,13 @@ for (const contract of CONTRACTS.filter((c) => c.level === 'browser')) {
 2. Run: `bun run test` — expect `all N suites passed` (unit lane; the browser
    lane runs under Playwright separately).
 3. **Commit** (note the file list vs. the original plan: `Viewport.tsx` is NOT
-   touched — the pointerdown `preventDefault` was dropped — while the revised
-   contract gesture and the range-intersect sampler ARE part of this fix):
-   `git add canvas-react/src/ShapeBody.tsx interaction-contracts/src/contracts/cross-widget-selection.ts e2e/lib/contracts.ts e2e/tests/contracts.spec.ts && git commit -m "fix(canvas-react): no cross-widget native text selection (pilot 3, marquee repro); pin via browser contract"`
+   touched — the pointerdown `preventDefault` was dropped, and `handlePointer`'s
+   `setPointerCapture` stays exactly as it is (its selection-suppressing side
+   effect is documented in the contract header, not relied on) — while the
+   revised chrome-anchored contract gesture IS part of this fix; the
+   range-intersect sampler was already committed in `7c18f17` and is kept
+   unchanged per D3's sampler decision):
+   `git add canvas-react/src/ShapeBody.tsx interaction-contracts/src/contracts/cross-widget-selection.ts e2e/tests/contracts.spec.ts && git commit -m "fix(canvas-react): no cross-widget native text selection (pilot 3, chrome-anchored sweep repro); pin via browser contract"`
 
 **STOP — session owner runs a trustability assessment before Phase E begins.**
 Confirm: the browser runner exists and interprets the shared vocabulary, the
