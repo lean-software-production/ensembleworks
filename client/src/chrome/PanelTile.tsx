@@ -15,9 +15,16 @@
 import { Track, type LocalTrack, type RemoteTrack } from 'livekit-client'
 import { useEffect, useRef, useState } from 'react'
 import { DefaultColorStyle, type Editor } from 'tldraw'
-import { getHoveredFace, registerFaceEl, setHoveredFace, type AvPanelSnapshot } from '../av/bridge'
+import {
+	getHoveredFace,
+	registerFaceEl,
+	setHoveredFace,
+	usePeerGain,
+	type AvPanelSnapshot,
+} from '../av/bridge'
 import { LatencyPill } from '../av/gauges'
 import { AvIcon, AvIconButton } from '../av/icons'
+import { QUIET_GAIN_THRESHOLD, tileOpacityForGain } from '../av/legibility'
 import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
 import { setUserColor } from '../identity'
 import { retintLocalShares } from '../screenshare/share'
@@ -54,6 +61,14 @@ const TILE_MAX_WIDTH = 320
 // layout PanelPages switches to) so it doesn't look lost in the bigger tile.
 const INITIALS_FONT_DEFAULT = 26
 const INITIALS_FONT_TWO_UP = 40
+
+// Visual cues ease on roughly the audio ramp's time constant (the loop's
+// 0.08 s setTargetAtTime), so eyes and ears agree. Module-level read is fine:
+// a changed OS preference applies on next page load.
+const REDUCED_MOTION =
+	typeof window !== 'undefined' &&
+	window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+const DIM_TRANSITION = REDUCED_MOTION ? undefined : 'opacity 150ms linear'
 
 // Exported so the collapsed rail's avatar dots (SidePanel.tsx) can share the
 // same initial-derivation as the full tile.
@@ -95,6 +110,12 @@ export function PanelTile({
 	const latencyHistory = snap?.latencyHistory[rawId] ?? []
 	const kicking = snap?.kickingId === rawId
 	const avAvailable = snap != null && snap.status !== 'disabled' && snap.status !== 'error'
+
+	// Applied spatial gain for this peer (bridge store, published by the gain
+	// loop). Local tile: you always hear yourself at "full" — never dimmed.
+	const peerGain = usePeerGain(rawId)
+	const gain = isLocal ? 1 : peerGain
+	const quiet = !isLocal && gain <= QUIET_GAIN_THRESHOLD
 
 	const videoRef = useRef<HTMLDivElement>(null)
 	useEffect(() => {
@@ -169,6 +190,8 @@ export function PanelTile({
 					aspectRatio: MEDIA_ASPECT,
 					overflow: 'hidden',
 					background: `${color}22`,
+					opacity: tileOpacityForGain(gain),
+					transition: DIM_TRANSITION,
 				}}
 			>
 				{videoTrack ? (
@@ -232,6 +255,51 @@ export function PanelTile({
 						}}
 					>
 						<AvIcon kind="camera" crossedOut={!videoTrack} />
+					</span>
+				)}
+
+				{quiet && (
+					// Non-opacity "quiet" cue (a11y: legible without perceiving the
+					// dim): same glyph style as the cam-status badge, bottom-left.
+					<span
+						title={`Quiet — far from your view (${Math.round(gain * 100)}%)`}
+						data-testid={'ew-tile-quiet-' + rawId}
+						style={{
+							position: 'absolute',
+							bottom: 4,
+							left: 4,
+							width: 22,
+							height: 22,
+							display: 'grid',
+							placeItems: 'center',
+							pointerEvents: 'none',
+							borderRadius: 3,
+							background: 'rgba(15,23,42,0.45)',
+							color: wm.inkMuted,
+						}}
+					>
+						<AvIcon kind="spatial" crossedOut />
+					</span>
+				)}
+
+				{!isLocal && hovered && (
+					// On-demand exact volume readout (legibility cue #4).
+					<span
+						data-testid={'ew-tile-volume-' + rawId}
+						style={{
+							position: 'absolute',
+							bottom: 4,
+							right: 4,
+							pointerEvents: 'none',
+							borderRadius: 3,
+							padding: '1px 4px',
+							background: 'rgba(15,23,42,0.55)',
+							color: wm.cream,
+							fontFamily: wm.mono,
+							fontSize: 10,
+						}}
+					>
+						vol {Math.round(gain * 100)}%
 					</span>
 				)}
 			</div>
