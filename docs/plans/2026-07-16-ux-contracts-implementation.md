@@ -1107,13 +1107,57 @@ select behavior regressed beyond corrected intermediate-value pins.
 
 # Phase D — Pilot 3: cross-widget selection (builds the browser runner)
 
-The invariant — **native text selection must not span two shape bodies** — is
+> ### CHANGE NOTE — 2026-07-16 (marquee repro; translate gesture retired)
+>
+> **What happened.** An implementer took the original D1 contract to a real
+> browser and verified, across ~20 controlled variants, that its gesture —
+> `down` on shape A → `move` onto shape B → `up` — **cannot reach RED**. That
+> gesture is a *translate*: the select tool commits a `TranslateShapes` intent
+> on every pointermove (`select.ts` `onDragging`), and the synchronous
+> re-render *mutates the dragged body's DOM transform in the same event cycle*,
+> which is exactly what stops Chromium from extending a native text selection
+> into a second element. Verified specifics they reported: selection extends
+> fine WITHIN one continuously-dragged shape; two *static* non-editor DOM
+> elements in the same viewport DO cross-select; every failing-to-extend case
+> had a live editor gesture mutating the DOM mid-cycle. Current code carries NO
+> `user-select` suppression anywhere (`getComputedStyle` → `user-select:auto`)
+> and the viewport does not `preventDefault` pointerdown. So the contract, as
+> written, **PASSES against unfixed code** — RED is unreachable, and the
+> implementer correctly stopped.
+>
+> **The real repro is a MARQUEE, not a translate.** The QA bug was "clicking to
+> select selects text across multiple widgets." The gesture that produces it is
+> a marquee/brush: `pointerdown` on **empty canvas** → drag sweeping across two
+> shapes' text → `pointerup`. Verified against the code: `select.ts`'s
+> `onPointing` routes a threshold-crossing move whose press target was empty
+> (`targetId === null`) into `marquee` mode, and `onMarquee` emits **no intents
+> on pointermove** ("no live-preview intent exists yet") — no doc mutation, no
+> moved shape, not even a live brush rectangle. Nothing re-renders or mutates a
+> body's DOM during the sweep, so Chromium's native selection runs from the
+> empty-canvas anchor straight across both static note bodies. That is the RED.
+>
+> **What this note revises (below):** D1's gesture (translate → marquee, with a
+> scene of two *texted* notes and an empty-canvas start point); D3's
+> `textSelectionSpans` sampler (endpoint-walk → range-**intersect**, because a
+> marquee's start endpoint is on empty canvas and an endpoint-only sampler would
+> never see the first body — it would under-count to 1 and mask the bug); D4's
+> RED evidence; and D5's fix (the primary fix is `user-select:none` on static
+> shape bodies; the plan's original **pointerdown `preventDefault`** step is
+> DROPPED as incorrect — see D5 for why it is a no-op against this bug). The
+> already-committed D1-D3 work (`850432c`, `ba0d771`, `e8760ce`) is REUSED:
+> `seedScene` already seeds selectable text on every shape, and the `check`
+> line is unchanged — only the `gesture`, the sampler body, and the fix change.
+
+The invariant — **native text selection must never span two shape bodies** — is
 only falsifiable in a real browser (`window.getSelection()`). This is the first
 `level: 'browser'` contract and it **forces the browser runner into existence**:
 a gesture interpreter over Playwright, a per-rAF sampler for `when:
-'every-event'`, and a page-backed `Obs` adapter. Fix: `user-select: none` on
-static shape bodies + `preventDefault` on the viewport's pointerdown (verify it
-does not break textarea focus/editing).
+'every-event'`, and a page-backed `Obs` adapter. The repro is a **marquee**
+(pointerdown on empty canvas, sweep across two notes' text, up); because the
+marquee tool mutates nothing during the sweep, Chromium sweeps a native
+selection across both note bodies. Fix: `user-select: none` on the static shape
+bodies (matching how tldraw makes its whole canvas non-selectable), verified not
+to break the editing textarea's own caret/selection.
 
 ### Task D1 — Add the browser-level Obs method + the cross-widget contract
 
@@ -1132,13 +1176,23 @@ does not break textarea focus/editing).
   textSelectionSpans(): number
 ```
 
-2. Write `cross-widget-selection.ts`:
+2. Write `cross-widget-selection.ts` — **the committed file (`850432c`) used a
+   translate gesture that cannot reach RED (see this phase's CHANGE NOTE). Edit
+   its header comment and `gesture` to the MARQUEE below; the `scene` (two
+   notes) and the `check` line are unchanged and are reused verbatim:**
 
 ```ts
-// Pilot 3 — the first browser-tagged contract. A pointer drag that starts on
-// one shape body and ends on another must NEVER produce a native text
-// selection spanning both (the drag is a canvas gesture, not a text
-// selection). Falsifiable only in a real browser via window.getSelection().
+// Pilot 3 — the first browser-tagged contract. A MARQUEE that starts on empty
+// canvas and sweeps across two shape bodies' text must NEVER produce a native
+// text selection spanning both (the sweep is a canvas gesture — it selects
+// SHAPES, not text). This is the falsifiable form of the QA bug "clicking to
+// select selects text across multiple widgets." A translate drag (down ON a
+// shape) canNOT reproduce it — the per-move TranslateShapes re-render mutates
+// the dragged body's DOM mid-cycle and Chromium drops the cross-element
+// selection; only the marquee, whose onMarquee emits NO intents on pointermove
+// (select.ts — "no live-preview intent exists yet"), leaves the DOM untouched
+// long enough for the native selection to sweep across both bodies.
+// Falsifiable only in a real browser via window.getSelection().
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
 const A = 'shape:cw-a', B = 'shape:cw-b'
@@ -1147,13 +1201,20 @@ export const crossWidgetSelection: Contract = {
   name: 'no-cross-widget-text-selection',
   level: 'browser',
   when: 'every-event',
+  // Two notes side by side (world coords; identity camera == 1:1 screen). The
+  // browser runner's seedScene sets each shape's live text, so both bodies
+  // render selectable text centred at (200,200) and (500,200).
   scene: () => [
     { id: A, kind: 'note', x: 100, y: 100, w: 200, h: 200 },
     { id: B, kind: 'note', x: 400, y: 100, w: 200, h: 200 },
   ],
+  // MARQUEE: down on EMPTY canvas (x=60, left of A — targetId===null routes
+  // select.ts to marquee mode), then sweep RIGHT at y=200 through A's centred
+  // text (~200,200) and into B's (~500,200), then up. steps:12 makes the sweep
+  // a continuous drag so the native selection extends the whole way.
   gesture: (_rng: Rng): GestureOp[] => [
-    { kind: 'down', at: { ref: 'shape', id: A } },
-    { kind: 'move', at: { ref: 'shape', id: B }, steps: 6 }, // drag across the gap onto B
+    { kind: 'down', at: { ref: 'point', x: 60, y: 200 } },
+    { kind: 'move', at: { ref: 'point', x: 560, y: 200 }, steps: 12 },
     { kind: 'up' },
   ],
   check: (obs: Obs): string | null =>
@@ -1161,7 +1222,21 @@ export const crossWidgetSelection: Contract = {
 }
 ```
 
-3. Register it in `index.ts`.
+**Design decision — should the invariant also forbid selecting even ONE
+shape's text from a canvas drag?** The *checked* invariant stays
+`textSelectionSpans() <= 1` (unchanged from the committed file): the QA bug, and
+the safety property worth pinning, is "text spanning **multiple** widgets."
+tldraw goes further and suppresses **all** native text selection on its canvas
+(a marquee selects shapes, never text), and **the D5 fix here matches that** —
+after the fix a canvas marquee selects zero text, so `spans === 0`, which
+satisfies `<= 1`. We deliberately do NOT tighten the assertion to `=== 0`:
+`<= 1` pins the actual bug without coupling the contract to the particular
+suppression mechanism, so a future "select a single note's text via a canvas
+affordance" design would not have to fight this contract. Recommend the
+stronger fix (0 text from canvas drags); assert only the weaker, load-bearing
+invariant.
+
+3. Register it in `index.ts` (already done in `850432c` — no change).
 
 4. Run: `bun run --filter '@ensembleworks/interaction-contracts' typecheck` — expect clean.
 
@@ -1251,24 +1326,37 @@ function pageObs(page: Page, startRect: { minX: number; minY: number; maxX: numb
    > `check` will touch, builds a synchronous `Obs` whose methods return those
    > pre-read values, and calls `check`. Keep the sampler minimal (YAGNI) —
    > Pilot 5 extends it with multi-actor `obs.on('B')`. The `textSelectionSpans`
-   > sampler:
+   > sampler must count every shape body the selection **range intersects** —
+   > NOT just its two endpoints. **The committed sampler (`e8760ce`) walked only
+   > `startContainer`/`endContainer`; that is wrong for the marquee repro and
+   > must be replaced with the range-intersect version below (see the CHANGE
+   > NOTE).** Why the endpoint walk fails: the marquee starts on **empty
+   > canvas**, so the selection's start endpoint is not inside any shape body —
+   > an endpoint-only sampler would see only the end (inside B) and report `1`,
+   > masking the bug. A range from an empty-canvas anchor to a point in B
+   > *contains* body A (A lies between the boundaries in document order) even
+   > though neither endpoint is inside it; `Range.intersectsNode` catches exactly
+   > that, and it matches the `Obs` doc comment's word "**intersects**":
 
 ```ts
 async function sampleTextSelectionSpans(page: Page): Promise<number> {
   return page.evaluate(() => {
     const sel = window.getSelection()
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return 0
-    const bodies = new Set<string>()
+    const hit = new Set<string>()
+    const bodies = document.querySelectorAll('[data-shape-id][data-shape-kind]')
     for (let i = 0; i < sel.rangeCount; i++) {
       const range = sel.getRangeAt(i)
-      // Walk both endpoints up to their enclosing shape body.
-      for (const node of [range.startContainer, range.endContainer]) {
-        const el = (node.nodeType === 1 ? node : node.parentElement) as HTMLElement | null
-        const body = el?.closest('[data-shape-id][data-shape-kind]') as HTMLElement | null
-        if (body) bodies.add(body.getAttribute('data-shape-id')!)
-      }
+      // Count every shape body the selection RANGE intersects (fully-contained
+      // OR partially-overlapping — Range.intersectsNode returns true for both),
+      // not just the two endpoints: a marquee anchored on empty canvas never
+      // puts an endpoint inside the first body it sweeps over, so an
+      // endpoint-only walk would miss it.
+      bodies.forEach((body) => {
+        if (range.intersectsNode(body)) hit.add((body as HTMLElement).getAttribute('data-shape-id')!)
+      })
     }
-    return bodies.size
+    return hit.size
   })
 }
 ```
@@ -1318,65 +1406,104 @@ for (const contract of CONTRACTS.filter((c) => c.level === 'browser')) {
    `cd e2e && bunx playwright test --project=e2e -g "no-cross-widget-text-selection"`
    Expect: **FAIL** — the assertion prints `native selection spans 2 shape
    bodies (expected <= 1)`. This is the red proving the missing
-   `user-select: none` / `preventDefault`.
+   `user-select: none`: the marquee (empty-canvas anchor → sweep across both
+   notes' text → up) leaves the DOM untouched during the sweep (`onMarquee`
+   emits no intents), so Chromium extends one native selection across both note
+   bodies.
 
-   > If the drag does not produce a cross-body selection at all (e.g. the note
-   > body has no selectable text yet), seed the notes with text first (extend
-   > `seedScene` to set `props.text` or use the doc's `setText`), so there is
-   > something for the browser to select. Verify the RED reproduces before
-   > fixing.
+   > **Prerequisite — the range-intersect sampler.** RED is only observable with
+   > the range-intersect `sampleTextSelectionSpans` from D3 (as revised). If the
+   > committed endpoint-only sampler is still in place, the marquee's
+   > empty-canvas start endpoint is outside every body and the sampler reports
+   > `1` (only B's end endpoint), so the contract would PASS against unfixed code
+   > and mask the bug. Confirm the D3 sampler amendment landed before trusting
+   > this step.
+   >
+   > **Two ways this can fail to reproduce, and the fix for each:**
+   > (a) *No selectable text.* Both notes must render real text. The committed
+   >     `seedScene` (`e8760ce`) already calls `ew.doc.setText(s.id, …)` for every
+   >     seeded shape, so this is already handled — do not re-add it. If a body
+   >     still shows no text, check `label.ts`'s live-text-wins order resolved the
+   >     seeded text.
+   > (b) *The sweep never crosses both bodies.* Confirm identity camera at boot
+   >     (world == screen offset by the viewport box) so the world-coord scene
+   >     (A at 100–300, B at 400–600, text centred at y≈200) actually sits under
+   >     the `y=200` sweep from x=60 to x=560. Verify the RED reproduces before
+   >     fixing.
 
-### Task D5 — Fix: `user-select: none` on static bodies + pointerdown `preventDefault`
+### Task D5 — Fix: `user-select: none` on the static shape bodies (NOT a pointerdown `preventDefault`)
 
 **Files:**
 - Modify: `canvas-react/src/ShapeBody.tsx` (~line 108-118, the wrapper `div` style)
-- Modify: `canvas-react/src/Viewport.tsx` (`handlePointer`, ~line 152-164)
+
+> **Correction to the original plan (see the CHANGE NOTE).** The original D5
+> added a pointerdown `e.preventDefault()` on the viewport as a second layer.
+> **Drop it — it is a no-op against this bug.** In Chromium, starting a native
+> text selection by dragging is a default action of the compatibility
+> **`mousedown`** event. Calling `preventDefault()` on the **`pointerdown`**
+> event does NOT cancel that compatibility `mousedown` (Pointer Events spec: a
+> pointer event's `preventDefault` suppresses only a specific subset of
+> compatibility mouse behaviour, and the selection-starting `mousedown` default
+> is not in it). So the guard would run, feel principled, and change nothing.
+> The correct and sufficient mechanism is CSS `user-select: none` — which is
+> exactly how tldraw makes its own canvas non-selectable. If a JS suppressor
+> were ever genuinely needed on top of the CSS, the correct event to cancel is
+> `selectstart` (or `mousedown`), never `pointerdown`; it is not needed here.
 
 1. In `ShapeBody.tsx`, add `userSelect: 'none'` (and `WebkitUserSelect: 'none'`
-   for Safari) to the wrapper `div`'s inline `style`. This makes static shape
-   bodies non-selectable. **Do not** add it to the `TextEditor` textarea wrapper
-   — the textarea must stay selectable/editable.
+   for Safari) to the wrapper `div`'s inline `style`. This makes every static
+   shape body's own text non-selectable. **What each part does:** a body's text
+   can no longer be added to a native selection, so the marquee sweep has
+   nothing selectable to extend into; Chromium keeps the selection focus pinned
+   at the (text-less) empty-canvas anchor, and the marquee produces a
+   **collapsed / empty** selection → `sampleTextSelectionSpans` returns 0 →
+   GREEN, and (matching tldraw) a canvas marquee selects **shapes, not text**.
+   **Do not** add it to the embed bodies or to the `TextEditor` textarea — the
+   textarea must keep its own caret/selection (double-click-to-edit, word
+   select, select-all), and inline embeds (terminal/xterm) keep their own text
+   selection. `ShapeBody`'s wrapper is a static body only; the textarea lives in
+   `TextEditor` (a separate positioned overlay inside `WorldLayer`) and the
+   embeds render through `EmbedHost`, so scoping the rule to `ShapeBody` alone
+   is the editable-target exemption — no per-event guard required.
 
-2. In `Viewport.tsx`'s `handlePointer`, call `e.preventDefault()` on
-   `pointerdown` to suppress the browser's native text-selection drag —
-   **but** guard it so it does not steal focus/editing from the textarea:
-   only preventDefault when the pointerdown target is not inside an
-   editable element. Concretely:
+   > **Fallback, apply ONLY if GREEN does not reproduce (empty-canvas anchor
+   > still leaves a stray non-collapsed range):** move the suppression up to the
+   > `WorldLayer` container (`userSelect: 'none'` on its `style`) so the marquee
+   > anchor itself lands in non-selectable content and no selection can start,
+   > then RE-ENABLE selection on the two descendants that need it —
+   > `userSelect: 'text'` on the `TextEditor` `<textarea>` and on the
+   > `EmbedHost` wrapper (so an inline terminal keeps native selection). This is
+   > the same editable-target exemption expressed as CSS overrides. Prefer the
+   > per-body rule above; reach for this only if the browser leaves a stray
+   > range. (Do not put `user-select:none` on `WorldLayer` WITHOUT the embed
+   > override — it would inherit into and break inline terminal/xterm selection.)
 
-```ts
-  function handlePointer(e: PointerEvent<HTMLDivElement>): void {
-    const el = e.currentTarget
-    if (e.type === 'pointerdown') {
-      // Suppress native text-selection drags that would otherwise span shape
-      // bodies (pilot 3). Skip when the pointer lands inside the editing
-      // textarea, so double-click-to-edit and caret placement still work.
-      const target = e.target as HTMLElement | null
-      if (!target?.closest('[data-text-editor-input]')) e.preventDefault()
-    }
-    try {
-      if (e.type === 'pointerdown') el.setPointerCapture?.(e.pointerId)
-      else if (e.type === 'pointerup') el.releasePointerCapture?.(e.pointerId)
-    } catch { /* capture is best-effort — see header */ }
-    onInput(pointerEventToInput(e, el.getBoundingClientRect()))
-  }
-```
-
-   Update the module header's list of what `handlePointer` does to mention the
-   pointerdown `preventDefault` and its editable-target exemption.
-
-3. Run: `bun run --filter '@ensembleworks/canvas-react' typecheck` — expect clean.
+2. Run: `bun run --filter '@ensembleworks/canvas-react' typecheck` — expect clean.
 
 ### Task D6 — Run the cross-widget contract GREEN + verify editing still works
 
 1. Run: `cd e2e && bunx playwright test --project=e2e -g "no-cross-widget-text-selection"`
-   Expect: **PASS**.
+   Expect: **PASS** (the marquee now selects zero text; `spans` is 0).
 
-2. Run the existing editing-loop case to confirm the `preventDefault` did not
-   break double-click-to-edit / textarea focus:
+2. Run the existing editing-loop case to confirm the fix did not break
+   double-click-to-edit / textarea focus / in-textarea text selection:
    `cd e2e && bunx playwright test --project=e2e -g "the editing loop"`
    Expect: PASS (the D1/H2 editing case in `canvas-v2.spec.ts` still green).
 
-3. Also run the terminal write-back case (its rename input relies on focus):
+   > **Why in-textarea selection is structurally safe with the per-body fix.**
+   > The `user-select:none` rule is on `ShapeBody`'s static wrapper only; the
+   > editing `<textarea>` lives in `TextEditor`, a sibling overlay, so it never
+   > inherits the rule — its caret, word-select and select-all are untouched.
+   > Note also that `window.getSelection()` (what the contract samples) does NOT
+   > report a textarea's internal selection, so the contract can neither observe
+   > nor forbid in-editor selection — which is why editing must be verified by
+   > this real editing test, not by the contract. (If the D5 *fallback*
+   > `WorldLayer` rule is ever applied, this test is where you confirm the
+   > `userSelect:'text'` textarea override actually re-enabled caret/word-select
+   > inside the editor.)
+
+3. Also run the terminal write-back case (its rename input relies on focus, and
+   an inline terminal relies on native selection):
    `cd e2e && bunx playwright test --project=e2e -g "terminal title-bar write-back"`
    Expect: PASS.
 
@@ -1396,7 +1523,10 @@ for (const contract of CONTRACTS.filter((c) => c.level === 'browser')) {
 1. Run: `bun run typecheck` — expect clean.
 2. Run: `bun run test` — expect `all N suites passed` (unit lane; the browser
    lane runs under Playwright separately).
-3. **Commit:** `git add canvas-react/src/ShapeBody.tsx canvas-react/src/Viewport.tsx e2e/tests/contracts.spec.ts && git commit -m "fix(canvas-react): no cross-widget native text selection (pilot 3); pin via browser contract"`
+3. **Commit** (note the file list vs. the original plan: `Viewport.tsx` is NOT
+   touched — the pointerdown `preventDefault` was dropped — while the revised
+   contract gesture and the range-intersect sampler ARE part of this fix):
+   `git add canvas-react/src/ShapeBody.tsx interaction-contracts/src/contracts/cross-widget-selection.ts e2e/lib/contracts.ts e2e/tests/contracts.spec.ts && git commit -m "fix(canvas-react): no cross-widget native text selection (pilot 3, marquee repro); pin via browser contract"`
 
 **STOP — session owner runs a trustability assessment before Phase E begins.**
 Confirm: the browser runner exists and interprets the shared vocabulary, the
