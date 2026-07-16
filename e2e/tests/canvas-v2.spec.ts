@@ -963,3 +963,154 @@ test('canvas-v2 new engine: file-viewer refresh bumps the shared `rev` doc prop 
 		await ctxB.close()
 	}
 })
+
+// ============================================================================
+// TASK E2 — connection-banner E2E, Seam E's final unit. Proves E1's
+// `data-canvas-v2-connection-banner`/`data-connection-state` signal
+// (CanvasV2App.tsx's `ConnectionBanner`) surfaces for real in a real
+// browser, not just CanvasV2App.test.ts's DOM-only integration harness.
+//
+// MECHANISM CHOICE (read before changing this): this file's `webServer`
+// (playwright.config.ts) is ONE shared, long-lived sync server (fixed port
+// 8788) + ONE shared Vite dev server (fixed port 5273) that EVERY OTHER test
+// in this file also depends on for the whole run (`fullyParallel: false`,
+// `workers: 1` — that config's own "one shared server; room-per-spec gives
+// isolation" comment). Killing that process — or repointing Vite's fixed
+// `/sync` proxy target (client/vite.config.ts) at a dead port — would take
+// every sibling test down with it, and neither is achievable from inside a
+// spec file anyway: the proxy target is baked into the ALREADY-RUNNING dev
+// server's own config, not something a test can override per-room.
+//
+// A genuine second dead-port/route-absent SERVER process turned out to be a
+// dead end too, confirmed before writing this test (not merely assumed):
+// `CanvasV2App.tsx`'s `wsBase()` always dials `ws://${location.host}` — this
+// PAGE's own origin — and Playwright's `page.routeWebSocket`/`WebSocketRoute`
+// API (checked against the installed playwright-core@1.61 source,
+// `webSocketRouteDispatcher.ts`/the injected `WebSocketMock` class) has no
+// way to redirect `connectToServer()` to a DIFFERENT url than the one the
+// page actually requested, and its own from-the-route-side `close()` only
+// ever synthesizes a `close` event on the page, never an `error` — so a
+// route-intercepted socket can be severed, but never made to look like it
+// failed to open in the first place. Confirmed empirically with a throwaway
+// probe script against real Playwright/Chromium before settling on the
+// approach below.
+//
+// So this case fakes `window.WebSocket` itself, via `page.addInitScript`
+// (runs before ANY of the page's own scripts, on EVERY navigation/reload of
+// this page — Playwright's own contract for init scripts), gated on an
+// `e2eSyncMode=block` query marker THIS TEST adds to its own room's URL —
+// never consumed by the real app (`identity.ts`'s `getRoomId` only ever
+// reads `?room=`; `engine.ts`'s `selectEngine` only ever reads `?engine=`).
+// When the marker is present, any `WebSocket` construction whose url
+// contains `/sync/v2/` resolves to a fake socket that fires a genuine DOM
+// `error` Event then a `close` Event on the next microtask, WITHOUT ever
+// touching the network — reproducing, from `ws-client-transport.ts`'s own
+// point of view, exactly what a real dead-port/route-absent server looks
+// like: an `error` before `everOpened` is ever set, landing `fireClose` on
+// `'failed'` (see that file's CONNECTION-STATE SIGNAL doc comment) and, one
+// level up, `CanvasV2App.tsx`'s `boot()` catch block setting
+// `connectionState` to `'failed'` and never mounting a session. Every OTHER
+// WebSocket construction (any other room, any request without the marker —
+// including the recovery reload below) is completely untouched: the real,
+// shared server handles it exactly as it does for every sibling test in
+// this file. Nothing here disturbs that shared process.
+//
+// NO-AUTO-RECONNECT HONESTY (carried from Task E1): `SyncClientPeer`/
+// `wsClientTransport` run no automatic reconnect loop — a dropped or
+// never-established connection stays down until the page is reloaded (see
+// `ConnectionBanner`'s own doc comment: the user-facing copy deliberately
+// does NOT imply a retry that never comes). So "restoring the server clears
+// it" is proven here via an explicit RELOAD-equivalent (a second navigation
+// to the same room without the block marker), never an automatic
+// clear-without-reload — asserting the latter would be lying about behavior
+// that cannot happen.
+// ============================================================================
+
+test('canvas-v2 new engine: a v2 room whose sync socket never opens shows a visible connection banner within 10s (failed), and a fresh reload once the server is reachable connects with no banner (no auto-reconnect)', async ({
+	page,
+}) => {
+	const room = 'v2-e2e-connection-banner'
+	expect(room).not.toBe('team')
+
+	// Installed once; re-evaluated on every navigation/reload of THIS page
+	// (Playwright's addInitScript contract — see the module comment above).
+	// Only ever fakes `WebSocket` when the CURRENT document's own URL carries
+	// `e2eSyncMode=block`; the recovery navigation below omits it, so that
+	// load gets the real, unmodified `window.WebSocket` and talks to the
+	// real, shared, healthy server exactly like every other test in this file.
+	await page.addInitScript(() => {
+		const params = new URLSearchParams(location.search)
+		if (params.get('e2eSyncMode') !== 'block') return
+		const RealWebSocket = window.WebSocket
+		class FakeDeadSocket extends EventTarget {
+			readyState = 0 // CONNECTING — never advances past this
+			OPEN = 1
+			binaryType = 'blob'
+			onopen: ((ev: Event) => void) | null = null
+			onmessage: ((ev: Event) => void) | null = null
+			onclose: ((ev: Event) => void) | null = null
+			onerror: ((ev: Event) => void) | null = null
+			constructor(public readonly url: string) {
+				super()
+				// Async, matching a real dead-port/refused connection (never
+				// synchronous) — fires a real `error` Event then a real `close`
+				// CloseEvent on the next microtask, through BOTH delivery
+				// mechanisms this codebase's two WS consumers actually use:
+				// `ws-client-transport.ts`'s `wsClientTransport` assigns the
+				// on*-property slots directly (`ws.onerror = fireClose`, plain
+				// property assignment, no addEventListener); `CanvasV2App.tsx`'s
+				// `defaultConnect` separately calls `ws.addEventListener('error',
+				// onError)` on the SAME raw socket. A real browser WebSocket
+				// satisfies both for free; this fake must serve both explicitly.
+				queueMicrotask(() => {
+					this.readyState = 3 // CLOSED
+					const errorEvent = new Event('error')
+					this.onerror?.(errorEvent)
+					this.dispatchEvent(errorEvent)
+					const closeEvent = new CloseEvent('close', { code: 1006, reason: 'e2e-simulated-dead-route' })
+					this.onclose?.(closeEvent)
+					this.dispatchEvent(closeEvent)
+				})
+			}
+			send(): void {}
+			close(): void {}
+		}
+		// eslint-disable-next-line @typescript-eslint/no-explicit-any
+		;(window as any).WebSocket = function (url: string, protocols?: string | string[]) {
+			if (typeof url === 'string' && url.includes('/sync/v2/')) return new FakeDeadSocket(url)
+			return new RealWebSocket(url, protocols)
+		}
+	})
+
+	// ------------------------------------------------------------------
+	// 1) THE PRIMARY ASSERTION (the S7 goal): banner visible within the
+	// stated ≤10s bound, in the 'failed' state — a never-opened socket, not
+	// merely a slow one. No `waitForBoot` here: `session` never gets set
+	// for a connection that never opens (CanvasV2App.tsx's `boot()` only
+	// ever calls `setSession` after `doConnect()` resolves), so the toolbar
+	// this repo's OTHER helpers wait on never appears — the banner is the
+	// only signal a real user (or this test) has that anything is wrong,
+	// which is the entire bug this task's own S7 goal is about replacing
+	// (a silently dead canvas, pre-E1).
+	// ------------------------------------------------------------------
+	await page.goto(`/?room=${room}&engine=v2&e2eSyncMode=block`)
+	const banner = page.locator('[data-canvas-v2-connection-banner]')
+	await expect(banner).toBeVisible({ timeout: 10_000 })
+	await expect(banner).toHaveAttribute('data-connection-state', 'failed')
+
+	// ------------------------------------------------------------------
+	// 2) RECOVERY, HONESTLY: no auto-reconnect exists (see the module
+	// comment's NO-AUTO-RECONNECT HONESTY note), so recovery is proven via
+	// a fresh navigation to the SAME room with the block marker dropped —
+	// the closest in-page equivalent to "reload after the server comes
+	// back" this rig can produce without a second real process. The real,
+	// shared, already-healthy server picks up the connection normally:
+	// the banner disappears entirely (`ConnectionBanner` renders `null`
+	// once `connectionState === 'open'`) and the toolbar mounts, proving
+	// this was never a room-level or client-build problem — only ever the
+	// simulated dead socket above.
+	// ------------------------------------------------------------------
+	await page.goto(`/?room=${room}&engine=v2`)
+	await waitForBoot(page)
+	await expect(banner).toHaveCount(0)
+})
