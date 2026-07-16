@@ -289,6 +289,97 @@ test.describe('canvas-v2 browser perf', () => {
 		}
 	})
 
+	// SELECT-ALL @ 1k SCENARIO (Task G2): targets Selection.tsx's own
+	// documented H3 WATCH-ITEM (canvas-react/src/overlay/Selection.tsx's
+	// module header) — outlines cost O(selection size) worldCorners+
+	// worldToScreen per render, measured there at ~8.7ms/render for a
+	// 1k-shape select-all. The EXISTING marquee scenario below only ever
+	// selects 15 of a 50-shape grid (its own comment: "a meaningful
+	// SUBSET... not a claim of selecting all 50"), so that watch-item has
+	// never actually been exercised by this rig. This scenario closes that
+	// gap directly.
+	//
+	// DRIVING SELECT-ALL: Ctrl+A/Cmd+A is NOT wired anywhere in canvas-editor,
+	// canvas-react, or client (grepped for `SelectAll`/`selectAll`/a keydown
+	// case on `'a'` — none exist; client/src/canvas-v2/CanvasV2App.tsx's
+	// `handleGlobalShortcut` wires exactly Escape/Delete/undo-redo, no
+	// select-all case). So this dispatches the SAME real intent a future
+	// Ctrl+A handler would — `editor.applyAll([{type: 'SetSelection', ids}])`
+	// (canvas-editor/src/intents.ts's `SetSelection`) — with every id
+	// `seedGrid` deterministically produces (`shape:seed-<i>`,
+	// lib/canvas-v2.ts), not a DOM/CSS hack.
+	//
+	// MEASURING THE OVERLAY LIVE: a static selection with zero re-renders
+	// would never exercise Selection.tsx's PER-RENDER cost — the watch-item
+	// is specifically about work redone on every frame. So this reuses the
+	// SAME pan/zoom sweep the dense scenario (Task G1) drives, this time
+	// with the full 1k selection already set: camera changes
+	// (canvas-editor/src/editor.ts's SetCamera case) never touch
+	// `selection`, so the whole sweep redraws all 1000 selection outlines +
+	// the combined-bounds rect every tick, giving the sampler frames that
+	// actually pay the cost. A post-sweep selection-size check (below)
+	// confirms the selection really did stay live for the whole measured
+	// window, not just at t=0.
+	const SELECT_ALL_COUNT = 1000
+
+	test('canvas-v2 perf @ select-all-1000: pan/zoom sweep with full selection live', async ({ page }) => {
+		test.setTimeout(120_000)
+		await installSampler(page) // before goto — see the pan/zoom scenario's ordering note above
+		const room = 'v2-perf-select-all-1000'
+		await page.goto(`/?room=${room}&engine=v2`)
+		await waitForBoot(page)
+
+		const seedStart = Date.now()
+		await seedGrid(page, SELECT_ALL_COUNT)
+		const seedMs = Date.now() - seedStart
+
+		const selectedCount = await page.evaluate((count) => {
+			const ew = (window as any).__ew
+			const ids = Array.from({ length: count }, (_, i) => `shape:seed-${i}`)
+			ew.editor.applyAll([{ type: 'SetSelection', ids }])
+			return ew.editor.get().selection.size
+		}, SELECT_ALL_COUNT)
+		console.log(`[canvas-v2-perf] seeded ${SELECT_ALL_COUNT} shapes via window.__ew.doc.putShape in ${seedMs}ms; selected ${selectedCount} via SetSelection`)
+		expect(selectedCount, 'select-all should select every seeded shape, not a subset').toBe(SELECT_ALL_COUNT)
+
+		const pan = await measure(page, async () => {
+			for (let i = 0; i < 60; i++) await page.mouse.wheel(40, 40)
+		})
+		const zoom = await measure(page, async () => {
+			await page.keyboard.down('Control')
+			for (let i = 0; i < 20; i++) await page.mouse.wheel(0, -60)
+			for (let i = 0; i < 20; i++) await page.mouse.wheel(0, 60)
+			await page.keyboard.up('Control')
+		})
+
+		// Honesty check (mirrors the dense scenario's onScreen assertion): the
+		// selection must still be the full 1000 AFTER the sweep — proves the
+		// overlay was live for the whole measured window, not cleared partway
+		// through by some unrelated camera-intent side effect.
+		const selectedAfter = await page.evaluate(() => (window as any).__ew.editor.get().selection.size)
+		expect(selectedAfter, 'selection must remain the full select-all set through the whole pan/zoom sweep').toBe(SELECT_ALL_COUNT)
+
+		// Capture writes a fresh baseline artifact; does NOT feed the gate below
+		// (see the dense scenario's own comment on this ordering + why).
+		maybeRecord('select-all-pan-zoom-1000', { seedMs, selectedCount, pan, zoom })
+
+		// ALWAYS-ON gate — G1's CORRECTED pattern, reused exactly (module's
+		// ALWAYS-ON GATE note): assertNoRegression runs unconditionally against
+		// recordedBaselines (loaded from the COMMITTED file at module scope,
+		// before any capture write), never inside an `if (!capturing)` or
+		// capture-guarded else branch. The only skip is a genuine first-ever
+		// bootstrap capture (no committed baseline key yet).
+		const committed = recordedBaselines['select-all-pan-zoom-1000']
+		if (capturing && committed === undefined) {
+			console.log(
+				`[canvas-v2-perf] select-all-pan-zoom-1000: BOOTSTRAP CAPTURE (no committed baseline yet) — pan p95=${pan.p95ms}ms/max=${pan.maxms}ms, zoom p95=${zoom.p95ms}ms/max=${zoom.maxms}ms; commit the JSON, then future runs gate against it`,
+			)
+		} else {
+			assertNoRegression('select-all @ 1000 shapes (pan)', pan, committed?.pan)
+			assertNoRegression('select-all @ 1000 shapes (zoom)', zoom, committed?.zoom)
+		}
+	})
+
 	test('canvas-v2 perf: 50-shape marquee + drag', async ({ page }) => {
 		test.setTimeout(60_000)
 		await installSampler(page) // before goto — see the pan/zoom scenario's ordering note

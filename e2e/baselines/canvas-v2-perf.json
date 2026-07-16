@@ -146,5 +146,29 @@
       "host": "zeus-arch",
       "note": "maxms is the observed jank-inclusive typical-worst (~50ms both sweeps), NOT a cherry-picked clean run: a max over a short sweep is bimodal (clean ~16.8ms vs a single dropped frame ~50-66ms), so seeding the gate with a clean 16.8ms would flaky-fail whenever a run catches one jank frame. p95/p50 are from a real clean run; the +15%x2x gate on maxms (=115ms) sits above the observed ~66ms noise ceiling, below a real regression."
     }
+  },
+  "select-all-pan-zoom-1000": {
+    "seedMs": 97,
+    "selectedCount": 1000,
+    "pan": {
+      "frames": 66,
+      "p50ms": 16.7,
+      "p95ms": 16.8,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "zoom": {
+      "frames": 43,
+      "p50ms": 16.7,
+      "p95ms": 16.8,
+      "maxms": 16.8,
+      "droppedOver25ms": 0
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-16T02:07:00.717Z",
+      "host": "zeus-arch",
+      "note": "12 EW_CAPTURE runs on this box (unlike G1's dense-pan-zoom-1000) NEVER observed a dropped/jank frame here — p95/maxms floor at the ~16.7-16.8ms vsync tick every run, no bimodal split. Recorded values are the worst OBSERVED across those 12 runs (16.8ms), not a cherry-picked minimum, so this baseline is already the honest typical-worst for this scenario/hardware — same discipline as the dense scenario's note, different (cleaner) observed reality: seedGrid spreads shapes off-screen so ShapeLayer's own per-shape render cost stays near-zero here, isolating Selection.tsx's O(selection-size) overlay cost as the only added work, and on this hardware that cost alone doesn't push a frame past the vsync floor. The +15%x2x gate (=38.64ms) still protects against a REAL regression in that overlay cost; it just means, unlike dense, this scenario's maxms isn't expected to be a noisy signal in practice."
+    }
   }
 }
