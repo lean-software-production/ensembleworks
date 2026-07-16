@@ -4,9 +4,11 @@
 // the array is the registry). Pilots append their declarations here.
 export * from './types.js'
 import type { Contract } from './types.js'
+import { cursorLock } from './contracts/cursor-lock.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
 
 export const CONTRACTS: readonly Contract[] = [
   // Pilot declarations are added here, one per phase (B–F).
   scrollDirection,
+  cursorLock,
 ]
