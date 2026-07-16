@@ -468,8 +468,9 @@ function CrosstalkControl({
 	const [open, setOpen] = useState(false)
 	const rootRef = useRef<HTMLDivElement>(null)
 	const level = snap?.crosstalkLevel ?? DEFAULT_CROSSTALK_LEVEL
-	// "Active" = you've dialled focus in (the slider is shaping volumes);
-	// crossed out = strict focus (people outside your view are silent).
+	// "Active" (blue, waves showing) = the slider is below full, so crosstalk
+	// is actually shaping volumes. At full everything is 100% — nothing to
+	// shape — so the icon greys out and crosses through.
 	const active = level < 1
 	const pct = Math.round(level * 100)
 	const label = `Crosstalk ${pct}%`
@@ -512,7 +513,7 @@ function CrosstalkControl({
 					opacity: available ? 1 : 0.4,
 				}}
 			>
-				<AvIcon kind="spatial" crossedOut={level === 0} />
+				<AvIcon kind="spatial" crossedOut={!active} />
 			</button>
 			{open && snap && (
 				<div
