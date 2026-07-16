@@ -5,9 +5,10 @@
 // tool relies on for hitTestTopmost/queryMarquee.
 //
 // FSM PURITY: SelectState carries everything the FSM needs across events
-// (downScreen/targetId/shiftDown/lastScreen/lastClick/movingIds/excludedIds/
-// snapResult) — there is no mutable field on the closure itself. The only
-// closure-captured objects are the ToolContext (read-only queries:
+// (downScreen/targetId/shiftDown/lastClick/grabWorld/startBounds/applied/
+// movingIds/excludedIds/snapResult) — there is no mutable field on the
+// closure itself. The only closure-captured objects are the ToolContext
+// (read-only queries:
 // hitTestTopmost/queryMarquee/snapshot/index) and the Editor (read via
 // editor.get() for the CURRENT selection/camera, exactly the "read-only
 // queries" input.ts's Tool<S> doc comment describes) — never written by this
@@ -41,6 +42,31 @@
 // documented cost rationale for `opts.excludedIds`: ~2.4ms derived vs
 // ~0.02ms precomputed at 1k shapes/999 descendants).
 //
+// ABSOLUTE-ANCHOR MODEL (Pilot 2 — replaces an earlier incremental model
+// that drifted): every pointermove recomputes the drag's TOTAL intended
+// translation from the GRAB point (`cursorWorld - grabWorld`, both
+// world-space), never a per-move increment off the previous pointer
+// position. `computeSnappedDelta` snaps that absolute candidate —
+// `startBounds` (the moving selection's world bounds, frozen at the SAME
+// Pointing->Dragging transition as movingIds/excludedIds above) shifted by
+// the raw TOTAL delta — against the frozen snap snapshot/index, and returns
+// the TOTAL (raw + snap) delta from the grab point. The Dragging state's
+// `applied` field remembers the total delta actually committed via
+// TranslateShapes so far; each move's INTENT is the STEP between the
+// newly-computed total and `applied` (`{dx: totalDx - applied.dx, dy:
+// totalDy - applied.dy}`), so the shape's on-doc position always equals
+// `startBounds + (raw + snap)` for the CURRENT cursor position — never the
+// sum of every past move's OWN snap adjustment. That distinction is the fix:
+// the prior (incremental) model recomputed each move's snap against the
+// shape's ACTUAL current position, which already carried every earlier
+// move's snap nudge, so repeatedly crossing a snap band accumulated a drift
+// between the shape and the cursor that grew without bound (reproduced by
+// interaction-contracts' `drag-cursor-lock` fuzz contract, which is what
+// caught it). Under this model a snap adjustment is never carried forward as
+// a positional accumulator — it is recomputed FRESH against the
+// grab-anchored raw delta on every move, so the shape can never wander more
+// than one snap radius from the cursor at any point in the gesture.
+//
 // REBUILD-CADENCE DISCIPLINE (load-bearing — reviewer-caught before this
 // comment existed): tool-context.ts's LAZY REBUILD contract, pinned by
 // tool-context.test.ts's "a 50-move drag triggers ZERO rebuilds" assertion,
@@ -67,11 +93,14 @@
 // gesture ends and the next drag reads a fresh pair. Accepted: a
 // one-gesture-stale guide against a concurrently-moving remote target is
 // visually self-correcting and far cheaper than an O(shapes) rebuild per
-// pointermove. The MOVING shape(s)' own CURRENT position — which DOES
-// change every move, via this same tool's commits — is read LIVE instead,
-// through `liveBoundsAdapter` below (the same "read live, never snapshot
-// mid-batch" discipline editor.ts's own `liveDocAdapter` documents for
-// exactly this reason).
+// pointermove. The MOVING shape(s)' own candidate position is likewise
+// frozen-relative rather than live-read (see the ABSOLUTE-ANCHOR MODEL note
+// above): `startBounds` — captured ONCE at the same Pointing->Dragging
+// transition, from the very same frozen snapshot — shifted by the CURRENT
+// raw delta from the grab point is the candidate bounds `computeSnappedDelta`
+// snaps. There is no read of the moving shape's on-doc position at all after
+// drag start; the prior model's `liveBoundsAdapter`/`candidateBoundsAfterDelta`
+// live-read shim is gone with it.
 import {
   computeExcludedIds,
   isTextCapableKind,
@@ -82,7 +111,6 @@ import {
   type SnapResult,
   type SpatialIndex,
 } from '@ensembleworks/canvas-model'
-import type { Editor } from '../editor.js'
 import type { Intent } from '../intents.js'
 import { crossedThreshold, isDoubleClick, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
@@ -127,11 +155,25 @@ interface Pointing {
 interface Dragging {
   readonly mode: 'dragging'
   readonly targetId: string
-  /** SCREEN point of the previous event processed in this drag (pointerdown
-   * on entry, then each pointermove) — TranslateShapes deltas are computed
-   * incrementally, screen-delta-since-last-event / camera.z, so this is the
-   * "last" anchor for that computation, not the drag's origin. */
-  readonly lastScreen: { readonly x: number; readonly y: number }
+  /** WORLD point under the cursor at the pointerdown that started this drag
+   * (`screenToWorld(camera, downScreen)`) — the fixed anchor every
+   * subsequent move's translation is computed relative to (see the module
+   * header's ABSOLUTE-ANCHOR MODEL section). Never the drag's SCREEN point:
+   * a mid-drag camera change re-derives the current cursor's world point
+   * under the CURRENT camera, so the grabbed world point stays under the
+   * cursor. */
+  readonly grabWorld: { readonly x: number; readonly y: number }
+  /** The moving selection's UNION world bounds, captured ONCE at the
+   * Pointing->Dragging transition from the same frozen snapshot as
+   * `snapshot` below — the fixed base every move's candidate bounds
+   * (`startBounds` shifted by the raw total delta) is computed against. */
+  readonly startBounds: Bounds
+  /** The TOTAL (raw + snap) delta from `grabWorld` actually committed via
+   * TranslateShapes so far — compared against each move's newly-computed
+   * total to derive that move's STEP intent (see the module header's
+   * ABSOLUTE-ANCHOR MODEL section). This is what makes each move's snap
+   * adjustment ephemeral rather than a positional accumulator. */
+  readonly applied: { readonly dx: number; readonly dy: number }
   /** The ids actually being translated — FIXED at the Pointing->Dragging
    * transition (see the module header's SNAP-DURING-DRAG section), never
    * recomputed off a possibly-drifted `editor.get().selection` mid-gesture. */
@@ -143,8 +185,9 @@ interface Dragging {
   /** The doc/index pair `ctx.snapshot()`/`ctx.index()` returned at the
    * Pointing->Dragging transition — read ONCE and frozen for the rest of the
    * gesture (see the module header's REBUILD-CADENCE DISCIPLINE section).
-   * Used ONLY for snapCandidates' target-shape lookups; the moving shape's
-   * own current position is read live instead (liveBoundsAdapter). */
+   * Used for snapCandidates' target-shape lookups AND (once, via
+   * `startBounds` above) the moving selection's own start position — never
+   * re-read live mid-drag. */
   readonly snapshot: CanvasDocument
   readonly snapIndex: SpatialIndex
   /** The most recent snapCandidates result (or null before the first move
@@ -172,62 +215,47 @@ const IDLE: Idle = { mode: 'idle', lastClick: null }
 // AND every subsequent onDragging pointermove — see the module header).
 // ============================================================================
 
-/** A minimal `.byId`-only CanvasDocument adapter over LIVE `editor.doc.
- * getShape` reads — the SAME pattern editor.ts's own (private) liveDocAdapter
- * documents: worldBounds/worldTransform (canvas-model/src/geometry.ts) touch
- * NOTHING on their `doc` argument except `.byId.get`, so this shim is enough
- * to compute a moving shape's CURRENT world bounds without going through the
- * ToolContext's cached (and, mid-drag, increasingly stale) snapshot — see the
- * module header's REBUILD-CADENCE DISCIPLINE section for why that distinction
- * matters here. `pages`/`shapes`/`bindings` are never read by worldBounds, so
- * empty stand-ins are fine (same as editor.ts's version). */
-function liveBoundsAdapter(editor: Editor): CanvasDocument {
-  return {
-    pages: [], shapes: [], bindings: [],
-    byId: { get: (id: string) => editor.doc.getShape(id) } as unknown as CanvasDocument['byId'],
-  }
-}
-
-/** The union of `movingIds`' CURRENT worldBounds (via `liveDoc`, see
- * liveBoundsAdapter above), shifted by the raw (pre-snap) delta this move
- * would apply — i.e. "where the dragged selection would land if dropped
- * right now", matching snapCandidates' own `bounds` parameter contract
- * (canvas-model/src/snapping.ts). Reimplemented here rather than imported:
- * canvas-react's combinedWorldBounds (overlay/Selection.tsx) computes the
- * exact same union, but canvas-editor may never import canvas-react
- * (boundary.test.ts forbids a react dependency at all) — this is the same
- * handful of lines, kept package-local. Returns null iff every id is
- * vanished (mirrors combinedWorldBounds' own null-on-empty contract). */
-function candidateBoundsAfterDelta(liveDoc: CanvasDocument, ids: readonly string[], dx: number, dy: number): Bounds | null {
+/** The union of `ids`' worldBounds under `doc` — used ONCE, at the
+ * Pointing->Dragging transition, to capture the moving selection's
+ * `startBounds` from the frozen snapshot (see the module header's
+ * ABSOLUTE-ANCHOR MODEL section) — never re-read live mid-drag. Reimplemented
+ * here rather than imported: canvas-react's combinedWorldBounds
+ * (overlay/Selection.tsx) computes the exact same union, but canvas-editor
+ * may never import canvas-react (boundary.test.ts forbids a react dependency
+ * at all) — this is the same handful of lines, kept package-local. Returns
+ * null iff every id is vanished (mirrors combinedWorldBounds' own
+ * null-on-empty contract). */
+function unionWorldBounds(doc: CanvasDocument, ids: readonly string[]): Bounds | null {
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, any = false
   for (const id of ids) {
-    const shape = liveDoc.byId.get(id)
+    const shape = doc.byId.get(id)
     if (!shape) continue
-    const b = worldBounds(liveDoc, shape)
+    const b = worldBounds(doc, shape)
     minX = Math.min(minX, b.minX); minY = Math.min(minY, b.minY)
     maxX = Math.max(maxX, b.maxX); maxY = Math.max(maxY, b.maxY)
     any = true
   }
-  return any ? { minX: minX + dx, minY: minY + dy, maxX: maxX + dx, maxY: maxY + dy } : null
+  return any ? { minX, minY, maxX, maxY } : null
 }
 
-const EMPTY_SNAP_RESULT: SnapResult = { dx: 0, dy: 0, guides: [] }
-
-/** Given the RAW (pre-snap) delta a move would apply, returns the TOTAL delta
- * (raw + snap adjustment) to actually apply via TranslateShapes, plus the
- * SnapResult to carry on the Dragging state for the renderer. `frozenSnap`/
+/** Given the RAW (pre-snap) TOTAL delta from the drag's grab point (NOT a
+ * per-move increment — see the module header's ABSOLUTE-ANCHOR MODEL
+ * section), returns the TOTAL delta (raw + snap adjustment) to actually
+ * apply via TranslateShapes, plus the SnapResult to carry on the Dragging
+ * state for the renderer. `startBounds` is the moving selection's world
+ * bounds captured ONCE at drag start (unionWorldBounds, above) — this
+ * function shifts it by `rawDx/rawDy` and snaps THAT candidate; it never
+ * reads the moving shape's own on-doc position, so a snap adjustment from an
+ * earlier move can never leak into a later move's candidate (the fix for the
+ * cursor-lock drift the `drag-cursor-lock` contract catches). `frozenSnap`/
  * `frozenIndex` MUST be the pair read ONCE at the Pointing->Dragging
  * transition (see the module header's REBUILD-CADENCE DISCIPLINE section) —
- * used ONLY for target lookups (medianSize + candidate bounds), never for the
- * moving shape's own position (read live via `editor`, see
- * candidateBoundsAfterDelta/liveBoundsAdapter). `excluded` MUST likewise be
- * the drag-start-computed set, passed straight through to snapCandidates'
- * `opts.excludedIds` escape hatch so this never re-derives it per move. A
- * vanished moving selection (every id deleted mid-drag — the same TOLERANCE
- * this tool already extends elsewhere) degrades to "no snap", never a
- * throw. */
+ * used ONLY for target lookups (medianSize + candidate bounds). `excluded`
+ * MUST likewise be the drag-start-computed set, passed straight through to
+ * snapCandidates' `opts.excludedIds` escape hatch so this never re-derives it
+ * per move. */
 function computeSnappedDelta(
-  editor: Editor,
+  startBounds: Bounds,
   frozenSnap: CanvasDocument,
   frozenIndex: SpatialIndex,
   movingIds: readonly string[],
@@ -235,9 +263,10 @@ function computeSnappedDelta(
   rawDx: number,
   rawDy: number,
 ): { dx: number; dy: number; snapResult: SnapResult } {
-  const liveDoc = liveBoundsAdapter(editor)
-  const bounds = candidateBoundsAfterDelta(liveDoc, movingIds, rawDx, rawDy)
-  if (!bounds) return { dx: rawDx, dy: rawDy, snapResult: EMPTY_SNAP_RESULT }
+  const bounds: Bounds = {
+    minX: startBounds.minX + rawDx, minY: startBounds.minY + rawDy,
+    maxX: startBounds.maxX + rawDx, maxY: startBounds.maxY + rawDy,
+  }
   const snapResult = snapCandidates(frozenIndex, frozenSnap, movingIds, bounds, { excludedIds: excluded })
   return { dx: rawDx + snapResult.dx, dy: rawDy + snapResult.dy, snapResult }
 }
@@ -332,12 +361,23 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         const snapIndex = ctx.index()
         const excludedIds = computeExcludedIds(snapshot, movingIds)
         const camera = editor.get().camera
-        const from = screenToWorld(camera, state.downScreen)
+        // ABSOLUTE-ANCHOR MODEL (see the module header): grabWorld is the
+        // WORLD point under the cursor at pointerdown — the fixed anchor
+        // every move (this one and every later one) computes its TOTAL
+        // translation relative to. startBounds is the moving selection's
+        // world bounds, captured ONCE here from the frozen snapshot.
+        const grabWorld = screenToWorld(camera, state.downScreen)
+        const startBounds = unionWorldBounds(snapshot, movingIds) ?? {
+          minX: grabWorld.x, minY: grabWorld.y, maxX: grabWorld.x, maxY: grabWorld.y,
+        }
         const to = screenToWorld(camera, here)
-        const rawDx = to.x - from.x, rawDy = to.y - from.y
-        const { dx, dy, snapResult } = computeSnappedDelta(editor, snapshot, snapIndex, movingIds, excludedIds, rawDx, rawDy)
+        const rawDx = to.x - grabWorld.x, rawDy = to.y - grabWorld.y
+        const { dx, dy, snapResult } = computeSnappedDelta(startBounds, snapshot, snapIndex, movingIds, excludedIds, rawDx, rawDy)
         intents.push({ type: 'TranslateShapes', ids: movingIds, dx, dy })
-        return { state: { mode: 'dragging', targetId, lastScreen: here, movingIds, excludedIds, snapshot, snapIndex, snapResult }, intents }
+        return {
+          state: { mode: 'dragging', targetId, grabWorld, startBounds, applied: { dx, dy }, movingIds, excludedIds, snapshot, snapIndex, snapResult },
+          intents,
+        }
       }
 
       return { state: { mode: 'marquee', downScreen: state.downScreen }, intents: [] }
@@ -386,35 +426,48 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
 
   function onDragging(state: Dragging, event: InputEvent): { state: SelectState; intents: Intent[] } {
     if (event.type === 'pointermove') {
-      const here = { x: event.x, y: event.y }
       const camera = editor.get().camera
-      const from = screenToWorld(camera, state.lastScreen)
-      const to = screenToWorld(camera, here)
-      const rawDx = to.x - from.x, rawDy = to.y - from.y
+      const cursorWorld = screenToWorld(camera, { x: event.x, y: event.y })
+      // ABSOLUTE target translation from the grab point (world-anchored — a
+      // mid-drag camera change re-derives cursorWorld under the new camera, so
+      // the grabbed world point stays under the cursor; the drift-prone
+      // incremental screen anchor is gone). Mirrors transform.ts's
+      // recompute-from-gesture-start-anchors pattern.
+      const rawDx = cursorWorld.x - state.grabWorld.x
+      const rawDy = cursorWorld.y - state.grabWorld.y
+      // Reuses the FROZEN startBounds/snapshot/index from drag start
+      // (state.startBounds/state.snapshot/state.snapIndex) — never a fresh
+      // ctx.snapshot()/ctx.index() read here (see the module header's
+      // REBUILD-CADENCE DISCIPLINE section), and never the moving shape's
+      // own on-doc position either (see ABSOLUTE-ANCHOR MODEL). totalDx/
+      // totalDy is the TOTAL (raw + snap) delta from the grab point — NOT a
+      // per-move increment.
+      const { dx: totalDx, dy: totalDy, snapResult } = computeSnappedDelta(
+        state.startBounds, state.snapshot, state.snapIndex, state.movingIds, state.excludedIds, rawDx, rawDy,
+      )
+      // The STEP to commit this move is the difference between the newly
+      // computed TOTAL and what was already `applied` — this is what keeps a
+      // snap adjustment from becoming a positional accumulator (see the
+      // module header). TOLERANCE: a mid-drag remote delete of the target
+      // (or any moving id) is not this tool's problem to detect —
+      // TranslateShapes already skips unresolvable ids (editor.ts's
+      // TOLERANCE CONTRACT); computeSnappedDelta itself never depends on the
+      // moving shape still existing (startBounds was captured once, at drag
+      // start, while it did). We still emit the intent unconditionally; the
+      // editor's own per-id skip is what makes that safe.
+      const stepDx = totalDx - state.applied.dx
+      const stepDy = totalDy - state.applied.dy
       const intents: Intent[] = []
-      // TOLERANCE: a mid-drag remote delete of the target (or any moving
-      // id) is not this tool's problem to detect — TranslateShapes already
-      // skips unresolvable ids (editor.ts's TOLERANCE CONTRACT), and
-      // computeSnappedDelta degrades to "no snap" for a vanished moving
-      // selection (candidateBoundsAfterDelta returns null). We still emit
-      // the intent unconditionally; the editor's own per-id skip is what
-      // makes that safe.
-      //
       // COMMIT CADENCE WATCH-ITEM (owned by the H3 perf rig): each of these
       // per-pointermove TranslateShapes intents becomes ONE doc.commit()
       // (script.ts's run() applies per event), i.e. one sync frame per
       // mouse move during a drag. The ToolContext's lazy rebuild keeps the
       // LOCAL index cost off this path, but the wire/undo-granularity cost
       // of per-move commits is unmeasured until H3 profiles it.
-      if (rawDx !== 0 || rawDy !== 0) {
-        // Reuses the FROZEN snapshot/index from drag start (state.snapshot/
-        // state.snapIndex) — never a fresh ctx.snapshot()/ctx.index() read
-        // here (see the module header's REBUILD-CADENCE DISCIPLINE section).
-        const { dx, dy, snapResult } = computeSnappedDelta(editor, state.snapshot, state.snapIndex, state.movingIds, state.excludedIds, rawDx, rawDy)
-        intents.push({ type: 'TranslateShapes', ids: state.movingIds, dx, dy })
-        return { state: { ...state, lastScreen: here, snapResult }, intents }
+      if (stepDx !== 0 || stepDy !== 0) {
+        intents.push({ type: 'TranslateShapes', ids: state.movingIds, dx: stepDx, dy: stepDy })
       }
-      return { state: { ...state, lastScreen: here }, intents }
+      return { state: { ...state, applied: { dx: totalDx, dy: totalDy }, snapResult }, intents }
     }
     if (event.type === 'pointerup') {
       return { state: IDLE, intents: [] } // a drag is never a click: nothing to remember for double-click
