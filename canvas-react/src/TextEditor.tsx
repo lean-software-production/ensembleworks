@@ -321,6 +321,14 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorP
         onCompositionEnd={(e: CompositionEvent<HTMLTextAreaElement>) => handleCompositionEnd(composition.current, editingId, e.currentTarget.value, onTextChange)}
         onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => handleEditorKeyDown(e.key, onEndEdit)}
         onBlur={onEndEdit}
+        // BELT-AND-SUSPENDERS (pilot 4, modality exclusivity): the FSM guard
+        // in select.ts is what makes the invariant true and testable
+        // headlessly, but the textarea's own pointer events would otherwise
+        // still bubble up to the viewport's pointer handlers underneath it.
+        // stopPropagation (never preventDefault — that would break native
+        // caret placement) keeps the canvas from ever seeing them at all.
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
         style={{
           width: '100%',
           height: '100%',

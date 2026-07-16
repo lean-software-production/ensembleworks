@@ -70,6 +70,18 @@ async function resolveAnchor(page: Page, box: { x: number; y: number }, a: Ancho
   return { x: rect.x + rect.width / 2 + (a.dx ?? 0), y: rect.y + rect.height / 2 + (a.dy ?? 0) }
 }
 
+// Pilot 4's Obs.editingShape() doc comment (interaction-contracts/src/
+// types.ts) names this exact mechanism for the browser adapter: the shape id
+// is read off whichever [data-text-editor-input] element TextEditor.tsx
+// mounts (or null when none is mounted) — the DOM equivalent of the FSM
+// adapter's `editor.get().editingId`.
+async function sampleEditingShape(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const el = document.querySelector('[data-text-editor-input]')
+    return el ? el.getAttribute('data-text-editor-input') : null
+  })
+}
+
 async function sampleTextSelectionSpans(page: Page): Promise<number> {
   return page.evaluate(() => {
     const sel = window.getSelection()
@@ -99,7 +111,7 @@ async function sampleTextSelectionSpans(page: Page): Promise<number> {
  * the specific fields BEFORE calling `check` and returns a snapshot-backed
  * Obs. Keep the sampler minimal (YAGNI) — a later pilot's multi-actor
  * `obs.on('B')` extends this, not today's contracts. */
-function pageObs(startRect: { minX: number; minY: number; maxX: number; maxY: number }, textSelectionSpans: number): Obs {
+function pageObs(startRect: { minX: number; minY: number; maxX: number; maxY: number }, textSelectionSpans: number, editingShape: string | null): Obs {
   return {
     visibleWorldRectAtStart: () => startRect,
     visibleWorldRect: () => { throw new Error('sync obs unavailable in browser adapter — use the async sampler') },
@@ -107,6 +119,7 @@ function pageObs(startRect: { minX: number; minY: number; maxX: number; maxY: nu
     cursorWorldDisplacement: () => { throw new Error('use async sampler') },
     snapRadius: () => { throw new Error('use async sampler') },
     textSelectionSpans: () => textSelectionSpans,
+    editingShape: () => editingShape,
   }
 }
 
@@ -152,7 +165,8 @@ export async function runContractBrowser(page: Page, contract: Contract): Promis
 
   const check = async (): Promise<string | null> => {
     const spans = await sampleTextSelectionSpans(page)
-    const obs = pageObs(startRect, spans)
+    const editingShape = await sampleEditingShape(page)
+    const obs = pageObs(startRect, spans, editingShape)
     return contract.check(obs)
   }
 

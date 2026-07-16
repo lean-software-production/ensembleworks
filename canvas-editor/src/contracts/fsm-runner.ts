@@ -130,6 +130,9 @@ function makeObs(
       // defensive backstop, not a reachable path today.
       throw new Error('not observable at fsm level')
     },
+    editingShape() {
+      return editor.get().editingId
+    },
   }
 }
 

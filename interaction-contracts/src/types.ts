@@ -93,6 +93,10 @@ export interface Obs {
    * throw 'not observable at fsm level' — a browser-tagged contract never runs
    * on the FSM lane. */
   textSelectionSpans(): number
+  /** The shape currently being text-edited, or null. (editor.get().editingId
+   * at fsm level; the mounted [data-text-editor-input] element in the browser
+   * adapter.) */
+  editingShape(): string | null
 }
 
 /** A contract declaration = data. */

@@ -344,6 +344,17 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
 
       if (state.targetId !== null) {
         const targetId = state.targetId
+        // MODALITY: never drag the shape currently being text-edited (pilot
+        // 4 — interaction-contracts' 'no-drag-while-typing'). The editing
+        // textarea owns the pointer while editingId === targetId; treat this
+        // pointerdown-turned-drag as a no-op for translation rather than
+        // starting a Dragging gesture. Guarded here (the Pointing->Dragging
+        // transition), not at pointerdown/onIdle, so click-to-place-caret
+        // (handled by the DOM textarea itself, not this FSM) keeps working —
+        // only the DRAG is suppressed, and only for a drag that targets the
+        // shape actively being edited; a drag started on ANY OTHER shape
+        // while editing continues unaffected below.
+        if (editor.get().editingId === targetId) return { state, intents: [] }
         const selection = editor.get().selection
         const intents: Intent[] = []
         // "If the pressed target wasn't in the selection, selection becomes
