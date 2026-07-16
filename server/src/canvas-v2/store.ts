@@ -19,7 +19,7 @@
  * that aliases a reused frame buffer (as the DocumentActor's inbound
  * onUpdatePayload does per server-peer.ts's JSDoc) before calling.
  */
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from '../kernel/sqlite.ts'
 
@@ -30,14 +30,37 @@ export interface LoadedState {
 
 export class CanvasV2Store {
 	private db: DatabaseSync
+	private dbPath: string
 
 	constructor(dir: string, roomId: string) {
 		mkdirSync(dir, { recursive: true })
-		this.db = new DatabaseSync(path.join(dir, `${roomId}.sqlite`))
+		this.dbPath = path.join(dir, `${roomId}.sqlite`)
+		this.db = new DatabaseSync(this.dbPath)
 		this.db.exec('CREATE TABLE IF NOT EXISTS updates (seq INTEGER PRIMARY KEY AUTOINCREMENT, bytes BLOB NOT NULL)')
 		this.db.exec(
 			'CREATE TABLE IF NOT EXISTS snapshots (id INTEGER PRIMARY KEY CHECK (id = 0), bytes BLOB NOT NULL, upto_seq INTEGER NOT NULL)',
 		)
+	}
+
+	/**
+	 * Live on-disk file size (bytes) of this room's SQLite file — a
+	 * HIGH-WATER MARK, not a logical-size proxy: this store never VACUUMs
+	 * (see soak-actor.ts's disk-growth findings), so the file only grows or
+	 * holds steady across compactions. Task H4 (S6 dogfood visibility): the
+	 * D3 metrics endpoint (canvas-metrics.ts) reads this per room so the
+	 * disk÷snapshot ratio is visible on a LIVE dogfood room, the same signal
+	 * soak-actor.ts's DISK_SUSTAINED_HIGHWATER_MULTIPLIER judges in the soak.
+	 * Gracefully returns 0 rather than throwing if the file is momentarily
+	 * absent (shouldn't happen post-construction — the constructor above
+	 * opens/creates it immediately — but a scrape racing an external delete
+	 * or an as-yet-uncreated file must not crash the metrics endpoint).
+	 */
+	diskBytes(): number {
+		try {
+			return statSync(this.dbPath).size
+		} catch {
+			return 0
+		}
 	}
 
 	/** Append one update to the log. A single INSERT — atomic; never partially written. */

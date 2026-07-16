@@ -8,7 +8,8 @@
 //      room (the clock-gate). Uses createSyncApp's shadowIntervalMs test knob
 //      (see app.ts) instead of sleeping out a real ~1000ms cadence.
 //   C. EW_CANVAS_SYNC=1 — a real ws round trip populates sync.<room> counters;
-//      a poisoned frame bumps malformedFrames.
+//      a poisoned frame bumps malformedFrames; diskBytes/snapshotBytes (Task
+//      H4, S6 dogfood visibility) are numeric for the live room.
 //   D. an evicted, tainted canvas-v2 actor's history survives in
 //      evictions.<room> (reusing actors.test.ts's taint-injection pattern).
 //   E. sweep isolation — one room whose getCurrentDocumentClock() throws (a
@@ -157,11 +158,19 @@ async function main() {
 				const m = await getMetrics(base)
 				return m.sync[roomId] ? m : null
 			})
-			assert.deepEqual(
-				metrics.sync[roomId],
-				{ pendingImports: 0, malformedFrames: 0, tainted: null },
-				'a healthy v2 room reports zeroed counters and no taint'
-			)
+			assert.equal(metrics.sync[roomId].pendingImports, 0, 'a healthy v2 room reports zeroed pendingImports')
+			assert.equal(metrics.sync[roomId].malformedFrames, 0, 'a healthy v2 room reports zeroed malformedFrames')
+			assert.equal(metrics.sync[roomId].tainted, null, 'a healthy v2 room reports no taint')
+			// Task H4 (S6 dogfood visibility): diskBytes/snapshotBytes are numeric
+			// for a live room — diskBytes is the on-disk SQLite file's live
+			// high-water size (at least the one page SQLite allocates on
+			// creation), snapshotBytes the live in-memory doc export (non-zero
+			// even for a brand-new doc — Loro's snapshot format carries CRDT
+			// metadata even with zero shapes).
+			assert.equal(typeof metrics.sync[roomId].diskBytes, 'number', 'diskBytes is numeric')
+			assert.ok(metrics.sync[roomId].diskBytes > 0, 'diskBytes reflects the live sqlite file size')
+			assert.equal(typeof metrics.sync[roomId].snapshotBytes, 'number', 'snapshotBytes is numeric')
+			assert.ok(metrics.sync[roomId].snapshotBytes > 0, 'snapshotBytes reflects the live in-memory snapshot size')
 
 			ws.send(new Uint8Array(0)) // zero-byte binary frame: decode() throws 'empty frame'
 			metrics = await pollUntil(async () => {

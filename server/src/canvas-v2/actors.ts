@@ -54,7 +54,8 @@ export interface CanvasActors {
 	getOrCreate(roomId: string): DocumentActor
 	/** Every currently-registered (live) actor, keyed by room id — read-only
 	 * introspection for the D3 metrics endpoint (server/src/features/canvas-metrics.ts),
-	 * which reads each actor's peer.pendingImports/malformedFrames and .tainted. */
+	 * which reads each actor's peer.pendingImports/malformedFrames, .tainted,
+	 * and (Task H4, S6 dogfood visibility) .diskBytes/.snapshotBytes. */
 	entries(): ReadonlyMap<string, DocumentActor>
 	/** Per-room eviction history — see EvictionRecord's doc comment. Exposed
 	 * for the D3 metrics endpoint. */
