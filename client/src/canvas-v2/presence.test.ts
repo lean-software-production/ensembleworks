@@ -338,6 +338,69 @@ import {
 }
 
 // ============================================================================
+// 10. Task F4's ACTUAL regression pin (spec-review finding: block 9 above
+//     does NOT pin it — every one of its transitions lands either on the
+//     first-ever call, where the leading edge is free, or at clock=100, past
+//     the window, so neutralizing the flushNow bypass — routing an editing
+//     transition through throttledFlush like every other field, i.e. the
+//     pre-fix behavior — left block 9 green). This block constructs the real
+//     bug shape: the leading edge is ALREADY CONSUMED by a prior cursor
+//     flush, the editing transition arrives INSIDE the still-open throttle
+//     window, and NO further event ever follows (typing never touches
+//     EditorState — SetText goes straight to the CRDT doc — so there is
+//     nothing to piggyback a deferred flush on). Pre-fix, the transition was
+//     silently dropped for the WHOLE edit; the fix's transition bypass must
+//     flush it to the wire immediately. Teeth verified directly (2026-07-16):
+//     re-neutralizing the bypass exactly the way the reviewer did makes this
+//     block fail at its first assertion ('shape:lock' !== null — the editing
+//     value never published), and restoring the bypass turns it green again.
+// ============================================================================
+{
+	let clock = 0
+	const store = new PresenceStore('self-key')
+	let publishCalls = 0
+	const realPublish = store.publish.bind(store)
+	;(store as unknown as { publish: (p: Presence) => void }).publish = (p: Presence) => {
+		publishCalls++
+		realPublish(p)
+	}
+	const publisher = createPresencePublisher(store, { intervalMs: 60, now: () => clock })
+
+	// (1) t=0: an ordinary cursor publish CONSUMES the leading edge — the
+	// shared channel's next throttled fire can now only happen at t>=60.
+	publisher.setCursor({ x: 1, y: 2 })
+	assert.equal(publishCalls, 1, 'the cursor publish consumes the leading edge')
+	assert.equal(store.all()['self-key']!.editing, null, 'not editing yet')
+
+	// (2) t=30: BeginEdit lands INSIDE the still-open window. Pre-fix
+	// (editing routed through throttledFlush like every other field), this
+	// write is dropped — and (3) NO later event ever arrives to heal it.
+	// (4) The transition bypass must flush it immediately regardless.
+	clock = 30
+	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 }, 'shape:lock')
+	assert.equal(store.all()['self-key']!.editing, 'shape:lock', 'an editing TRANSITION mid-window flushes to the wire immediately — the throttle-drop regression this block pins (pre-fix: dropped, and never healed)')
+	assert.equal(publishCalls, 2, 'the transition bypass made exactly one immediate extra write')
+
+	// The bypass write updated the shared channel timing too (flushNow sets
+	// lastFlushAt): a NON-transition call in the same instant is still
+	// throttled — the bypass is scoped to transitions, not a general
+	// throttle escape hatch.
+	publisher.setCursor({ x: 5, y: 6 })
+	assert.equal(publishCalls, 2, 'a same-instant non-transition call right after the bypass is still throttled (bypass counts as the channel firing)')
+
+	// Symmetric coverage for the OTHER direction: EndEdit (editing -> null)
+	// also arriving mid-window (t=59 < 30+60), also with no event after it —
+	// a stuck 'peer is editing' badge would be the user-visible symptom.
+	clock = 59
+	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 }, null)
+	assert.equal(store.all()['self-key']!.editing, null, 'an EndEdit transition mid-window also flushes immediately — no stuck badge on the remote side')
+	assert.equal(publishCalls, 3)
+
+	store.destroy()
+	console.log('ok: editing-transition mid-window bypass — the F4 throttle-drop regression is pinned (teeth-proven)')
+}
+
+// ============================================================================
 // 8. encodePresenting/decodePresenting round-trip, and presenterFor resolves
 //    the FRESHEST ts among competing peers, excluding selfKey and other
 //    shapes — the canvas-sync-wire port of the legacy `presenterFor`
