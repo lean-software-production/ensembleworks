@@ -25,9 +25,9 @@ export function AvOverlay() {
 	const name = useValue('userName', () => editor.user.getName() ?? 'teammate', [editor])
 	const lk = useLiveKitRoom(getRoomId(), identity, name)
 	const pulse = useSessionPulse(getRoomId(), identity)
-	const [standupMode, setStandupMode] = useState(true)
-	// Cross-room "crosstalk" bleed: how loudly off-page teammates are heard.
-	// Defaults to silence, so behaviour is unchanged until you dial it up.
+	// The crosstalk level: the one dial for how loudly you hear people outside
+	// your viewport (av/crosstalk.ts). Defaults to full — hear everyone — so
+	// dialling down is an explicit act of focus.
 	const [crosstalkLevel, setCrosstalkLevel] = useState(DEFAULT_CROSSTALK_LEVEL)
 	const [kickError, setKickError] = useState<string | null>(null)
 	const [kickingId, setKickingId] = useState<string | null>(null)
@@ -55,8 +55,8 @@ export function AvOverlay() {
 	// needs deriving here). Recomputes on camera pans and cursor moves.
 	const leashes = useLeashes(editor, lk.peers, hoveredId, getFaceEl)
 
-	// Spatial audio loop (also carries the crosstalk bleed level for off-page peers).
-	useSpatialGainLoop(editor, lk, standupMode, crosstalkLevel)
+	// Spatial audio loop (the crosstalk level is the fade floor + off-page step).
+	useSpatialGainLoop(editor, lk, crosstalkLevel)
 
 	// Takes (id, name) rather than a full participant object: those are the
 	// only two fields it uses, and it doubles as the bridge's `actions.kick` —
@@ -102,7 +102,6 @@ export function AvOverlay() {
 			status: lk.status,
 			micEnabled: lk.micEnabled,
 			camEnabled: lk.camEnabled,
-			standupMode,
 			crosstalkLevel,
 			localVideoTrack: lk.localVideoTrack,
 			localSpeaking: lk.localSpeaking,
@@ -123,7 +122,6 @@ export function AvOverlay() {
 			actions: {
 				onMic: () => lk.setMicEnabled(!lk.micEnabled),
 				onCam: () => lk.setCamEnabled(!lk.camEnabled),
-				onStandup: () => setStandupMode((s) => !s),
 				setCrosstalk: (level: number) => setCrosstalkLevel(clampCrosstalk(level)),
 				kick: kickParticipant,
 			},

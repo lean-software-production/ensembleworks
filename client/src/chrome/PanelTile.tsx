@@ -24,6 +24,7 @@ import {
 } from '../av/bridge'
 import { LatencyPill } from '../av/gauges'
 import { AvIcon, AvIconButton } from '../av/icons'
+import { clampCrosstalk, DEFAULT_CROSSTALK_LEVEL, otherPageLevel } from '../av/crosstalk'
 import { QUIET_GAIN_THRESHOLD, tileOpacityForGain } from '../av/legibility'
 import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
 import { setUserColor } from '../identity'
@@ -381,16 +382,83 @@ export function PanelTile({
 	)
 }
 
-// The self-tile crosstalk control — this button used to be the spatial-audio
-// (standup) toggle. It now opens a slider governing how loudly you hear
-// teammates who are on OTHER pages / in other rooms: 0 = they go silent the
-// moment they navigate away (the old behaviour), full = as if they were on your
-// page. The bleed rides the same single per-participant gain as in-room voice
-// (av/crosstalk.ts + useSpatialGainLoop) — no echo, no doubled voice, and it
+// The self-tile crosstalk control: ONE slider for "how loud are people I
+// can't currently see?". People whose cursors are in your viewport are always
+// 100%; the slider is the level the on-page fade bottoms out at, and other
+// pages sit one step further (av/crosstalk.ts otherPageLevel). Full (the
+// default) = hear everyone on every page — the old standup mode; 0 = only who
+// you can see. The volume rides the same single per-participant gain as
+// in-room voice (useSpatialGainLoop) — no echo, no doubled voice, and it
 // survives page hops/reconnects because the gain node is per-participant, not
-// per-page. The popover keeps the proximity (standup) toggle this button used
-// to carry so that mode isn't lost. Reuses the concentric-waves "spatial" glyph
-// and mirrors AvIconButton's styling for a consistent control strip.
+// per-page. Reuses the concentric-waves "spatial" glyph and mirrors
+// AvIconButton's styling for a consistent control strip.
+
+// The fade diagram above the slider: three nested bands — your viewport
+// (always 100%), the rest of your page (the slider level), other pages (one
+// step softer). Each band is an opaque panel backing plus a level-mapped
+// tint, so the opacities read absolutely rather than stacking. Labels get a
+// panel-coloured stroke halo (paintOrder) to stay legible on any tint.
+function CrosstalkDiagram({ level }: { level: number }) {
+	const pageLevel = clampCrosstalk(level)
+	const otherLevel = otherPageLevel(level)
+	// Visual tint for a gain: keep even 0 faintly visible so the band reads.
+	const tint = (gain: number) => 0.08 + 0.82 * gain
+	const label = {
+		fontFamily: wm.mono,
+		fontSize: 8,
+		fill: wm.ink,
+		stroke: wm.panel,
+		strokeWidth: 2,
+		paintOrder: 'stroke' as const,
+	}
+	return (
+		<svg
+			viewBox="0 0 174 96"
+			data-testid="ew-crosstalk-diagram"
+			style={{ width: '100%', display: 'block', borderRadius: 3 }}
+			role="img"
+			aria-label={`Fade diagram: in view 100%, this page ${Math.round(pageLevel * 100)}%, other pages ${Math.round(otherLevel * 100)}%`}
+		>
+			{/* other pages */}
+			<rect x={0} y={0} width={174} height={96} fill={wm.panel} />
+			<rect x={0} y={0} width={174} height={96} fill={wm.sealBlue} opacity={tint(otherLevel)} />
+			{/* this page */}
+			<rect x={16} y={22} width={142} height={74} rx={3} fill={wm.panel} />
+			<rect
+				x={16}
+				y={22}
+				width={142}
+				height={74}
+				rx={3}
+				fill={wm.sealBlue}
+				opacity={tint(pageLevel)}
+			/>
+			{/* your viewport — always full volume */}
+			<rect x={54} y={48} width={66} height={36} rx={2} fill={wm.panel} />
+			<rect x={54} y={48} width={66} height={36} rx={2} fill={wm.sealBlue} opacity={tint(1)} />
+			<rect
+				x={54}
+				y={48}
+				width={66}
+				height={36}
+				rx={2}
+				fill="none"
+				stroke={wm.cream}
+				strokeWidth={1.2}
+			/>
+			<text x={6} y={13} {...label}>
+				other pages {Math.round(otherLevel * 100)}%
+			</text>
+			<text x={22} y={35} {...label}>
+				this page {Math.round(pageLevel * 100)}%
+			</text>
+			<text x={87} y={69} textAnchor="middle" {...label} fill={wm.cream}>
+				in view 100%
+			</text>
+		</svg>
+	)
+}
+
 function CrosstalkControl({
 	snap,
 	available,
@@ -400,10 +468,12 @@ function CrosstalkControl({
 }) {
 	const [open, setOpen] = useState(false)
 	const rootRef = useRef<HTMLDivElement>(null)
-	const level = snap?.crosstalkLevel ?? 0
-	const active = level > 0
+	const level = snap?.crosstalkLevel ?? DEFAULT_CROSSTALK_LEVEL
+	// "Active" = you've dialled focus in (the slider is shaping volumes);
+	// crossed out = strict focus (people outside your view are silent).
+	const active = level < 1
 	const pct = Math.round(level * 100)
-	const label = `Crosstalk ${active ? `${pct}%` : 'off'}`
+	const label = `Crosstalk ${pct}%`
 
 	// Close on an outside click (same pattern as ColorSwatch below).
 	useEffect(() => {
@@ -443,7 +513,7 @@ function CrosstalkControl({
 					opacity: available ? 1 : 0.4,
 				}}
 			>
-				<AvIcon kind="spatial" crossedOut={!active} />
+				<AvIcon kind="spatial" crossedOut={level === 0} />
 			</button>
 			{open && snap && (
 				<div
@@ -471,8 +541,10 @@ function CrosstalkControl({
 					<div
 						style={{ fontFamily: wm.sans, fontSize: 10, color: wm.inkMuted, lineHeight: 1.35 }}
 					>
-						How loudly you hear people on other pages. Off = they go silent when they leave your page.
+						How loudly you hear people outside your view. Full = hear everyone, everywhere; off =
+						only who you can see.
 					</div>
+					<CrosstalkDiagram level={level} />
 					<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
 						<input
 							type="range"
@@ -495,28 +567,9 @@ function CrosstalkControl({
 								color: wm.inkMuted,
 							}}
 						>
-							{active ? `${pct}%` : 'off'}
+							{level === 0 ? 'off' : `${pct}%`}
 						</span>
 					</div>
-					<label
-						style={{
-							display: 'flex',
-							alignItems: 'center',
-							gap: 6,
-							fontFamily: wm.sans,
-							fontSize: 10,
-							color: wm.inkMuted,
-							cursor: 'pointer',
-						}}
-					>
-						<input
-							type="checkbox"
-							checked={!snap.standupMode}
-							onChange={() => snap.actions.onStandup()}
-							style={{ accentColor: wm.sealBlue, cursor: 'pointer' }}
-						/>
-						Proximity audio on this page
-					</label>
 				</div>
 			)}
 		</div>

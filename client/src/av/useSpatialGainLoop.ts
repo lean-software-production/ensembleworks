@@ -1,16 +1,17 @@
 /**
  * The spatial audio loop: every 150 ms, set each peer's GainNode from where
- * they are relative to me. On my page, a peer whose cursor is anywhere INSIDE
- * my viewport rectangle is at full volume — if I can see their cursor, I can
- * hear them (this also keeps a teammate audible while their pointer is parked
- * at the canvas edge because they're using the side panel). Beyond the edge,
- * volume fades with the screen-pixel shortfall to the viewport (spatial.ts's
- * screenDistanceOutsideRect + gainForViewportDistance). Zoom is reach: zoom
- * into a corner and peers outside it fade; zoom all the way out and every
- * cursor is in view — and audible.
- * Standup mode still pins everyone on my page to full. A peer on ANOTHER page
- * is held at the crosstalk bleed level (av/crosstalk.ts) — 0 fades them to
- * silence as before. A peer absent from presence entirely fades to 0.
+ * they are relative to me. A peer whose cursor is anywhere INSIDE my viewport
+ * rectangle is at full volume — if I can see their cursor, I can hear them
+ * (this also keeps a teammate audible while their pointer is parked at the
+ * canvas edge because they're using the side panel). Beyond the edge, volume
+ * fades with the screen-pixel shortfall to the viewport (spatial.ts's
+ * screenDistanceOutsideRect + gainForViewportDistance) down to the crosstalk
+ * level — the ONE dial for "how loud are people I can't see?" (av/crosstalk.ts).
+ * A peer on ANOTHER page sits one step further: otherPageLevel(crosstalk).
+ * A peer absent from presence entirely fades to 0. Zoom is reach: zoom into a
+ * corner and peers outside it fade; zoom all the way out and every cursor is
+ * in view — and audible. Crosstalk at 1 (the default) means no fade anywhere:
+ * the old standup mode.
  *
  * Crucially this drives the SAME single GainNode per participant either way,
  * so cross-page bleed is the exact same audio path as in-room voice — one
@@ -25,7 +26,7 @@ import { rawUserId } from '@ensembleworks/contracts'
 import type { Editor } from 'tldraw'
 import { useEvery } from '../kernel/useEvery'
 import { publishPeerGains } from './bridge'
-import { gainTarget, type PeerLocation } from './crosstalk'
+import { clampCrosstalk, gainTarget, type PeerLocation } from './crosstalk'
 import { quantizeGain } from './legibility'
 import {
 	DEFAULT_VIEWPORT_SPATIAL_SETTINGS,
@@ -34,12 +35,7 @@ import {
 } from './spatial'
 import type { LiveKitState } from './useLiveKitRoom'
 
-export function useSpatialGainLoop(
-	editor: Editor,
-	lk: LiveKitState,
-	standupMode: boolean,
-	crosstalkLevel: number
-): void {
+export function useSpatialGainLoop(editor: Editor, lk: LiveKitState, crosstalkLevel: number): void {
 	useEvery(150, () => {
 		const ctx = lk.audioContext
 		if (!ctx) return
@@ -49,6 +45,12 @@ export function useSpatialGainLoop(
 		const zoom = editor.getZoomLevel()
 		const screen = editor.getViewportScreenBounds()
 		const halfDiagonalPx = Math.hypot(screen.w, screen.h) / 2
+		// The crosstalk level is the floor the on-page fade bottoms out at — the
+		// slider IS "the softest you can be on the current page".
+		const settings = {
+			falloffFraction: DEFAULT_VIEWPORT_SPATIAL_SETTINGS.falloffFraction,
+			floor: clampCrosstalk(crosstalkLevel),
+		}
 		// Scan collaborators on ALL pages, not just the current one: an off-page
 		// teammate must still be found so crosstalk can bleed them in, instead of
 		// the loop treating "off my page" as "gone" and hard-muting them.
@@ -70,10 +72,10 @@ export function useSpatialGainLoop(
 				? gainForViewportDistance(
 						screenDistanceOutsideRect(presence.cursor.x, presence.cursor.y, viewport, zoom),
 						halfDiagonalPx,
-						DEFAULT_VIEWPORT_SPATIAL_SETTINGS
+						settings
 					)
 				: 1
-			const target = gainTarget({ location, standupMode, pageGain, crosstalk: crosstalkLevel })
+			const target = gainTarget({ location, pageGain, crosstalk: crosstalkLevel })
 			peer.gain.gain.setTargetAtTime(target, ctx.currentTime, 0.08)
 			appliedGains[rawUserId(peer.identity)] = quantizeGain(target)
 		}

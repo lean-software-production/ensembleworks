@@ -35,7 +35,6 @@ const snapshot = (): AvPanelSnapshot => ({
 	status: 'connected',
 	micEnabled: false,
 	camEnabled: false,
-	standupMode: true,
 	crosstalkLevel: 0,
 	localVideoTrack: null,
 	localSpeaking: false,
@@ -49,7 +48,6 @@ const snapshot = (): AvPanelSnapshot => ({
 	actions: {
 		onMic: () => {},
 		onCam: () => {},
-		onStandup: () => {},
 		setCrosstalk: () => {},
 		kick: () => {},
 	},

@@ -191,3 +191,26 @@ Two changes from live testing:
 2. **The audible-zone ring (legibility cue #3) is removed** — it was visually
    irritating in practice. The remaining cues (tile dim + quiet glyph, cursor
    fade, hover % readout) carry the legibility load.
+
+## Amendment 2 (2026-07-16): one crosstalk dial
+
+The proximity checkbox (standup mode), the crosstalk slider, and the
+hard-coded 4% floor were three answers to one question — "how loud are people
+I can't currently see?" — so they collapsed into a single slider (name kept:
+**Crosstalk**), default **full**:
+
+- In your viewport → always 100%.
+- On your page, outside your view → fades from 100% at the viewport edge down
+  to the **slider level L** one falloff-distance out (the slider is the fade's
+  floor).
+- Other pages → one step further away: the same fade slope continued one more
+  falloff-distance, `otherPageLevel(L) = max(0, 2L − 1)`. Focusing cuts other
+  rooms first, then dims the far end of your own page.
+- Slider at 1 (default) = hear everyone everywhere — the old standup mode
+  (note: this changes the old default, where other pages were silent).
+- Slider at 0 = strict focus: only who you can see. The "never fully
+  disappear" 4% floor is gone; silence at 0 is an explicit choice.
+- Absent peers are always 0. `standupMode` is removed from the code entirely.
+
+The popover shows a live SVG fade diagram above the slider: three nested
+bands — viewport (100%), this page (L%), other pages (2L−1 %).

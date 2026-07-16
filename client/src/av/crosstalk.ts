@@ -1,20 +1,29 @@
 /**
- * Cross-room "crosstalk" bleed: how loudly you hear teammates who are on a
- * different page / in another room. Pure — no tldraw / livekit import — so the
- * per-peer gain decision is unit-tested under bun exactly like spatial.ts.
+ * Crosstalk: ONE dial for "how loud are people I can't currently see?".
+ * Pure — no tldraw / livekit import — so the per-peer gain decision is
+ * unit-tested under bun exactly like spatial.ts.
  *
- * The whole feature rides the SAME single per-participant GainNode the spatial
- * loop already drives (useSpatialGainLoop): this module only decides the TARGET
- * that one gain is steered to, per peer, per tick. Exactly one gain per
- * participant means cross-room bleed can never double a voice or echo — it is
- * the same audio path as in-room voice, just held open at a chosen level
- * instead of clamped to zero the moment a teammate leaves your page.
+ * The viewport-rect spatial model (spatial.ts) puts anyone whose cursor is
+ * inside my viewport at full volume. This module governs everyone else:
+ *
+ *   - On my page, outside my view: the fade bottoms out at the crosstalk
+ *     level (the loop passes it as the fade's floor), so the slider IS the
+ *     "softest you can be on the current page".
+ *   - On another page: one step further away — the same fade slope continued
+ *     one more falloff-distance past the floor (otherPageLevel: 2·L − 1,
+ *     clamped to 0).
+ *   - Slider at 1: everyone everywhere is full volume (the old standup mode).
+ *   - Slider at 0: only who you can see (strict focus).
+ *
+ * The whole feature rides the SAME single per-participant GainNode the
+ * spatial loop drives (useSpatialGainLoop): this module only decides the
+ * TARGET that one gain is steered to, per peer, per tick. Exactly one gain
+ * per participant means cross-room bleed can never double a voice or echo.
  */
 
-/** 0 = off-page teammates are silent (today's behavior); 1 = as loud as if
- * they were on my page. The slider default is silence, so nothing changes
- * until you deliberately dial some bleed in. */
-export const DEFAULT_CROSSTALK_LEVEL = 0
+/** Default: full — you hear everyone on every page until you dial focus in.
+ * (Slider max replaces the old standup-mode checkbox.) */
+export const DEFAULT_CROSSTALK_LEVEL = 1
 
 /**
  * Clamp a raw slider value into the crosstalk range [0,1]. Non-finite input
@@ -28,6 +37,19 @@ export function clampCrosstalk(level: number): number {
 	return level
 }
 
+/**
+ * The other-page volume for a crosstalk level: "one step further away than
+ * the softest you can be on the current page". The same-page fade drops
+ * (1 − L) over one falloff-distance to bottom out at L; continuing that
+ * slope one more falloff-distance gives L − (1 − L) = 2L − 1, clamped to 0.
+ * So focusing (dialling down) silences other pages first, then dims the far
+ * end of your own page. At 1 there is no fade, so other pages are full too.
+ */
+export function otherPageLevel(level: number): number {
+	const l = clampCrosstalk(level)
+	return Math.max(0, 2 * l - 1)
+}
+
 /** Where a peer sits relative to me this tick, for the gain decision. */
 export type PeerLocation = 'my-page' | 'other-page' | 'absent'
 
@@ -35,29 +57,26 @@ export interface GainTargetInput {
 	/** my-page: on the page I'm viewing; other-page: elsewhere in the room;
 	 * absent: not present in tldraw on any page (truly gone). */
 	location: PeerLocation
-	/** Standup mode pins everyone on MY page to full volume — unchanged. */
-	standupMode: boolean
-	/** The distance-based spatial gain for a peer on my page (0..1). */
+	/** The viewport-rect spatial gain for a peer on my page (0..1). The loop
+	 * computes it with the crosstalk level as the fade's floor, so it already
+	 * embodies the slider for on-page peers. */
 	pageGain: number
-	/** The crosstalk bleed level (0..1) for peers on another page. */
+	/** The crosstalk level (0..1): the volume of the softest on-page peer,
+	 * and (one step further) the volume of other-page peers. */
 	crosstalk: number
 }
 
 /**
- * The gain TARGET for one peer this tick — the single decision the spatial loop
- * makes, pulled out so it's testable without an AudioContext:
+ * The gain TARGET for one peer this tick — the single decision the spatial
+ * loop makes, pulled out so it's testable without an AudioContext:
  *
- *   absent      → 0   (not in presence anywhere: today's behavior, never bled)
- *   other-page  → crosstalk bleed level (0 = today's silence, 1 = full)
- *   my-page     → standup ? 1 : distance-based pageGain   (unchanged)
- *
- * Crosstalk owns the off-page regime alone: neither standup nor page distance
- * touches an off-page peer, and the crosstalk level never touches an on-page
- * one. That keeps in-room voice behaving exactly as before.
+ *   absent      → 0   (not in presence anywhere: truly gone, never bled in)
+ *   other-page  → otherPageLevel(crosstalk)   (one step past the floor)
+ *   my-page     → pageGain   (in view = 1; outside fades to the crosstalk floor)
  */
 export function gainTarget(input: GainTargetInput): number {
-	const { location, standupMode, pageGain, crosstalk } = input
+	const { location, pageGain, crosstalk } = input
 	if (location === 'absent') return 0
-	if (location === 'other-page') return clampCrosstalk(crosstalk)
-	return standupMode ? 1 : pageGain
+	if (location === 'other-page') return otherPageLevel(crosstalk)
+	return pageGain
 }
