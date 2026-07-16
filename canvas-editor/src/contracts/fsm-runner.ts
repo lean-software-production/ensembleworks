@@ -60,7 +60,11 @@ function makeObs(editor: Editor, startRect: { minX: number; minY: number; maxX: 
       return visibleWorldRectOf(editor.get().camera)
     },
     visibleWorldRectAtStart() {
-      return startRect
+      // Defensive copy — matches visibleWorldRect()'s fresh-object behavior,
+      // so this consume-only Obs property is structural, not a shared live
+      // reference a caller could accidentally mutate out from under the
+      // runner's own captured baseline.
+      return { ...startRect }
     },
   }
 }

@@ -11,7 +11,11 @@ export const scrollDirection: Contract = {
   when: 'every-event',
   gesture: (_rng: Rng) => [
     // A single wheel-DOWN tick at the viewport centre. (Seeding the magnitude
-    // is a Pilot-2 concern; direction is all pilot 1 needs.)
+    // is a Pilot-2 concern; direction is all pilot 1 needs.) The {x:640,y:360}
+    // anchor is IRRELEVANT to a plain-wheel pan — only zoomAboutPoint reads
+    // event.x/y, and this gesture never zooms — so it is a harmless stand-in
+    // here. A future point-SENSITIVE contract must NOT copy this literal; it
+    // has to resolve its centre against the runner's actual viewport instead.
     { kind: 'wheel', dx: 0, dy: 100, at: { ref: 'point', x: 640, y: 360 } },
   ],
   check: (obs: Obs): string | null => {
