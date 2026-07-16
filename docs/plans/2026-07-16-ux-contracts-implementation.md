@@ -2337,6 +2337,41 @@ and **STOP**. Then the first multi-actor browser contract, the presence-payload
    Option 2, revise F3's contract to assert BeginEdit-refusal-on-B and F4's fix
    to suppress BeginEdit while a peer's `editing` presence covers the shape.
 
+   **Decision recorded (2026-07-16, session owner): Option 1 — Indicator.**
+   The plan's own recommendation, ratified as-is — no revision to F3/F4
+   needed. Presence gains an `editing` field; a remote peer renders a
+   non-blocking "peer is editing" badge on the shape; a second user CAN still
+   enter the editor (no lock, no BeginEdit rejection); the concurrent
+   `setText` LWW stomp remains a documented, already-deferred gap (the eventual
+   real fix is the separate rich-text/per-character CRDT merge workstream —
+   see this doc's "Deferred" section at the end).
+
+   **Interaction Contract (pilot 5 — the concrete first use of the
+   CONTRIBUTING.md template section this phase's Task G3 generalizes):**
+   - **Name:** `peer-editing-is-visible` (`interaction-contracts/src/
+     contracts/editing-indicator.ts`).
+   - **Level:** `browser` — no `fsm` counterpart. A remote peer's rendered
+     editing indicator is a cross-client, presence-driven DOM concept the
+     single-Editor FSM runner has no way to observe (both `fsm-runner.ts`'s
+     and `e2e/lib/contracts.ts`'s `Obs.on`/`peerEditingIndicator`
+     implementations throw/are unreachable at the FSM level accordingly).
+   - **Scope:** default (not `per-kind`) — pinned against one `note` shape;
+     the indicator mechanism itself is shape-kind-agnostic (it keys off
+     `Presence.editing`, a shape id, not the shape's kind).
+   - **Gesture sketch (multi-actor — Pilot 5's vocabulary extension):** actor
+     `'A'` double-clicks a seeded note (`down`/`up` twice, the established
+     double-click-to-edit FSM window) then presses a key to make the edit
+     unambiguous; actor `'B'` performs no gesture ops at all — it is a pure
+     observer, joined to the same room, referenced only through
+     `obs.on('B')` inside `check`.
+   - **Invariant (prose):** once A begins text-editing a shape, B's own view
+     must show a "peer is editing" affordance for that shape — presence is
+     the only channel; nothing about A's local BeginEdit should be visible to
+     B except through what A actually publishes.
+   - **Invariant (`obs` expression):** `obs.on('B').peerEditingIndicator(ID)`
+     must be `true` at the gesture's end (`when: 'at-end'`); `check` returns
+     `null` (pass) when it is, else a failure string naming the shape.
+
 ### Task F2 — Add the `editing` field to the presence payload
 
 **Files:**
