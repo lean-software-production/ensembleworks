@@ -774,7 +774,16 @@ function collectSubtreeParentFirst(doc: CanvasDoc, rootId: string): Shape[] {
 // chain ever repeats (a pre-existing malformed cycle), matching the
 // visited-guard discipline dedupeAncestorOverlap/geometry.ts use. O(n·depth),
 // same editor-interaction-scale trade-off as collectSubtreeParentFirst above.
-function orderParentBeforeChild(shapes: Shape[], byId: ReadonlyMap<string, Shape>): Shape[] {
+// EXPORTED (Task F1, canvas-phase4): the parity harness's masked-diff
+// screenshot comparison surfaced a real ShapeLayer paint-order bug
+// (canvas-react/src/ShapeLayer.tsx maps `queryViewport`'s result directly,
+// which returns ids in spatial-index/hash-grid iteration order, NOT
+// document/z order — an opaque container (e.g. a frame body) can therefore
+// paint AFTER, and fully occlude, a child rendered earlier in that
+// arbitrary order). This exact depth-sort already solves that class of
+// problem for undo; canvas-react reuses it rather than re-deriving an
+// equivalent sort.
+export function orderParentBeforeChild(shapes: Shape[], byId: ReadonlyMap<string, Shape>): Shape[] {
   const depthOf = (s: Shape): number => {
     let depth = 0
     const visited = new Set<string>([s.id])
