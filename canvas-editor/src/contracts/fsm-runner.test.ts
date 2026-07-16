@@ -45,9 +45,9 @@ const alwaysFails: Contract = {
 // Short-circuit: an every-event contract over a THREE-event gesture whose
 // invariant passes on event 1 and fails from event 2 onward must return the
 // FIRST failing event's observation, not the final state's. Plain wheel pans
-// camera.y += dy/z, and minY of the visible rect is -camera.y, so three
-// dy=100 wheels observe minY = -100, -200, -300; the invariant (minY >= -150)
-// first fails at -200.
+// camera.y -= dy/z (wheel-down reveals content below), and minY of the
+// visible rect is -camera.y, so three dy=100 wheels observe minY = 100, 200,
+// 300; the invariant (minY <= 150) first fails at 200.
 const failsMidway: Contract = {
   name: 'smoke-first-failure-wins',
   level: 'fsm',
@@ -59,12 +59,12 @@ const failsMidway: Contract = {
   ],
   check: (obs) => {
     const minY = obs.visibleWorldRect().minY
-    return minY >= -150 ? null : `minY=${minY}`
+    return minY <= 150 ? null : `minY=${minY}`
   },
 }
 {
   const r = runContractFsm(failsMidway, 1)
-  assert.equal(r.failure, 'minY=-200', 'every-event returns the FIRST failing event (short-circuit), not the final state')
+  assert.equal(r.failure, 'minY=200', 'every-event returns the FIRST failing event (short-circuit), not the final state')
   console.log('ok: FSM runner short-circuits at the first failing event')
 }
 
@@ -82,13 +82,13 @@ const overshootsThenRecovers: Contract = {
   ],
   check: (obs) => {
     const minY = obs.visibleWorldRect().minY
-    return minY >= -150 ? null : `minY=${minY}`
+    return minY <= 150 ? null : `minY=${minY}`
   },
 }
 {
   const everyEvent = runContractFsm(overshootsThenRecovers, 1)
   const atEnd = runContractFsm({ ...overshootsThenRecovers, when: 'at-end' }, 1)
-  assert.equal(everyEvent.failure, 'minY=-200', 'every-event catches the mid-gesture violation')
+  assert.equal(everyEvent.failure, 'minY=200', 'every-event catches the mid-gesture violation')
   assert.equal(atEnd.failure, null, 'at-end judges ONLY the final state (mid-gesture violation invisible)')
   console.log('ok: FSM runner distinguishes every-event from at-end (discriminating pair)')
 }
@@ -109,7 +109,7 @@ const rngDriven: Contract = {
   const a = runContractFsm(rngDriven, 5)
   const b = runContractFsm(rngDriven, 5)
   assert.deepEqual(a, b, 'same seed -> identical result for an rng-consuming gesture')
-  assert.ok(a.failure !== null && /^minY=-\d/.test(a.failure), `reporter exposes an rng-derived pan (got ${a.failure})`)
+  assert.ok(a.failure !== null && /^minY=\d/.test(a.failure), `reporter exposes an rng-derived pan (got ${a.failure})`)
   const other = runContractFsm(rngDriven, 6)
   assert.notEqual(a.failure, other.failure, 'different seeds -> different resolved gesture coordinates')
   console.log('ok: FSM runner determinism is rng-sensitive (same seed identical, seeds diverge)')

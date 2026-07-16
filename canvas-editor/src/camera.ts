@@ -100,15 +100,20 @@ function wheelZoomFactor(dy: number): number {
  * The wheel policy shared by the hand tool (below) AND D2's renderer (which
  * wires wheel events globally, outside any tool) — defined ONCE here so
  * there is exactly one place a sign or curve disagreement could hide.
- * PLAIN wheel pans (dx/dy, screen-delta / z, matching the hand-drag pan
- * formula below); CTRL-OR-META+wheel zooms about the cursor via
- * zoomAboutPoint, with the factor curve documented on wheelZoomFactor/
- * ZOOM_DELTA_CLAMP above. ctrl OR meta (not just ctrl) triggers zoom — wider
- * than tldraw's literal `info.ctrlKey`-only check, which exists to catch a
- * browser quirk (trackpad pinch-zoom synthesizes ctrlKey:true wheel events)
- * we have no equivalent signal for; treating meta the same as ctrl is our
- * choice for a friendlier default across platforms (meta/Cmd+wheel zoom is a
- * common convention on macOS apps), not a claimed parity point.
+ * PLAIN wheel pans (dx/dy, screen-delta / z, SUBTRACTED — see the sign note
+ * below); CTRL-OR-META+wheel zooms about the cursor via zoomAboutPoint, with
+ * the factor curve documented on wheelZoomFactor/ZOOM_DELTA_CLAMP above. ctrl
+ * OR meta (not just ctrl) triggers zoom — wider than tldraw's literal
+ * `info.ctrlKey`-only check, which exists to catch a browser quirk (trackpad
+ * pinch-zoom synthesizes ctrlKey:true wheel events) we have no equivalent
+ * signal for; treating meta the same as ctrl is our choice for a friendlier
+ * default across platforms (meta/Cmd+wheel zoom is a common convention on
+ * macOS apps), not a claimed parity point.
+ *
+ * PAN SIGN: a plain wheel-down (positive DOM `dy`) DECREASES `camera.y`,
+ * which raises the visible world's top edge — i.e. reveals content BELOW,
+ * matching the OS scroll convention. Pinned by interaction-contracts'
+ * scroll-direction contract.
  *
  * POISON GUARD: non-finite dx/dy (NaN/±Infinity — a buggy event source, a
  * synthetic test event, a device quirk) make the WHOLE event a no-op (the
@@ -123,5 +128,5 @@ export function applyWheel(camera: Camera, event: WheelInputEvent): Camera {
   if (event.modifiers.ctrl || event.modifiers.meta) {
     return zoomAboutPoint(camera, { x: event.x, y: event.y }, wheelZoomFactor(event.dy))
   }
-  return { x: camera.x + (event.dx * PAN_SPEED) / camera.z, y: camera.y + (event.dy * PAN_SPEED) / camera.z, z: camera.z }
+  return { x: camera.x - (event.dx * PAN_SPEED) / camera.z, y: camera.y - (event.dy * PAN_SPEED) / camera.z, z: camera.z }
 }

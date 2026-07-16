@@ -73,7 +73,7 @@ const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
 {
   const camera = { x: 0, y: 0, z: 2 }
   const panned = applyWheel(camera, { type: 'wheel', x: 10, y: 20, dx: 6, dy: 4, modifiers: NEUTRAL, t: 0 })
-  assert.deepEqual(panned, { x: 3, y: 2, z: 2 }, 'plain wheel pans by dx/dy divided by z, z unchanged')
+  assert.deepEqual(panned, { x: -3, y: -2, z: 2 }, 'plain wheel pans by dx/dy divided by z (subtracted — wheel-down reveals content below), z unchanged')
 
   const zoomedByCtrl = applyWheel(camera, { type: 'wheel', x: 10, y: 20, dx: 0, dy: 50, modifiers: { ...NEUTRAL, ctrl: true }, t: 0 })
   assert.notEqual(zoomedByCtrl.z, camera.z, 'ctrl+wheel changes z instead of panning')
