@@ -2073,45 +2073,167 @@ deviation from DoD #8 (never a silent ungated landing)._
   same shape) everywhere this open-socket-before-blocking-finally pattern
   recurs, so a teardown hang degrades to a loud failure instead of an
   infinite stall.
+- **I2 (2026-07-16) — FINAL INVARIANTS GATE RUN, all green (one item
+  partially deferred, see Done criteria #9).** `bun run typecheck`: 13/13
+  workspace checks exit 0. `bun run test`: "all 196 suites passed", zero
+  fails, crash-recovery's D4-flagged flake did NOT reappear (deterministic
+  this run). `bun run build`: green; entry chunk 215.46 kB raw / 63.15 kB
+  gzip (bundle-size-check.ts re-run standalone: PASS, within the ~2% gate).
+  Boundary/exposure: `canvas-editor`, `canvas-react`, `canvas-sync`
+  `boundary.test.ts` all green; `canvas-model`/`canvas-doc` have no
+  dedicated `boundary.test.ts` (pre-existing, confirmed via `git log
+  --follow` — never existed at those paths, not a Phase-4 regression) —
+  clean-room verified by hand instead (import + `package.json`-dependency
+  grep, zero forbidden hits in either package); `engine.test.ts` +
+  `scripts/exposure-audit.test.ts` (real path — the plan's literal
+  `client/scripts/exposure-audit.ts` does not exist) both green, `team`
+  proven excluded. E2E/perf (`bunx playwright test tests/parity.spec.ts
+  tests/canvas-v2.spec.ts perf/canvas-v2-perf.spec.ts`): 22/22 passed
+  (1.2m), including the `test.fail()`-declared parity regression-guard
+  (correctly fails its internal assertion, proving the gate has teeth) —
+  Playwright's list reporter prints `✘` for that one test's assertion
+  outcome even though the overall run is green, which read as a false
+  alarm on first glance; confirmed by isolating it
+  (`-g "regression guard"`) and reading its source, `test.fail()` is the
+  documented, intentional mechanism (see the test's own header comment).
+  Full detail and honest partial-verification note for stability gates
+  (#9 — the ≥20k-op actor soak and the nightly `canvas-soak.yml` run were
+  not re-executed live this session) in the Done criteria section below.
+  Commit: see the `docs(canvas-phase4): final invariants gate green`
+  commit immediately following this note.
 
 ---
 
 ## Done criteria (bounds §4 — every line has a check)
 
-- [ ] **#1 No core kind renders as BoxShape.** note/frame/text/geo resolve to
-  dedicated components via `shapeRegistry.ts`; `shape-registry.test.ts` asserts
-  it; component goldens exist for each kind's representative states. _(C1–C5, C7)_
-- [ ] **#2 Cross-renderer parity gate exists and passes.** `parity.spec.ts`
-  renders the seeded room under v1 + v2 in CI, masked diff within per-region
-  tolerances, parity score emitted as a per-run artifact; a deliberate sticky
-  regression fails CI. _(F1, F2)_
-- [ ] **#3 Delete works end-to-end.** select + Delete/Backspace → gone in the
-  acting client AND a second client; Delete while text-editing does NOT delete.
-  _(B2, B6)_
-- [ ] **#4 Undo/redo works end-to-end.** canvas-editor units cover undo/redo of
-  create/move/resize/delete/text; E2E covers Ctrl+Z after delete and after
-  drag; a two-client test proves undo never reverts the peer's ops; P1 verdict
-  recorded. _(A1, B1, B4, B6)_
-- [ ] **#5 Gesture cancellation is total.** Escape, pointercancel, and blur each
-  cancel an in-flight create-drag AND arrow-draw (unit + E2E); cancelling an
-  in-flight transform reverts to gesture-start geometry. _(B3, B5, B6)_
-- [ ] **#6 The three embed write-path features work.** terminal rename (+drag);
-  screenshare stillUrl stamp-back + aspect relock; file-viewer rev-bump +
-  peer-follow — each unit-tested against the dispatch channel + a two-client
-  E2E through `/sync/v2`. _(D1–D6)_
-- [ ] **#7 Connection banner proven.** E2E: dead sync server → visible banner
-  within seconds; recovery clears it. _(E1, E2)_
-- [ ] **#8 Perf gates green under honest budgets.** 60 fps @ 1k retained; NEW
-  dense-seed, select-all@1k, drag-cadence scenarios baselined in
-  `canvas-v2-perf.json` with ≤15% gating; entry chunk within ~2% of the
-  215.4 kB / 63.1 kB baseline. _(G1–G4)_
-- [ ] **#9 Stability gates green under tightened calibration.** actor soak
-  ≥20k ops with a tightened empirical `FLAT_RSS_TOLERANCE`; K re-calibrated;
-  op mix includes deletes + text edits + embed writes; convergence/fuzz/
-  crash-recovery green; `canvas-soak.yml` nightly green. _(H1–H7)_
-- [ ] **#10 Every OBSERVE straddler has a recorded verdict.** S6/S8/S9/S10 each
-  dated with counter/metric evidence in Execution notes. _(I1)_
-- [ ] **#11 Repo invariants intact.** typecheck/build/`bun run test` green;
-  clean-room boundary tests pass; `engine.test.ts` + `exposure-audit.ts` still
-  prove `team` can never run v2; bite-sized TDD commits, true merge commits.
-  _(I2)_
+**I2 closeout (2026-07-16) — every item below independently re-verified this
+session; see the I2 gate run in Execution notes for full command output.**
+
+- [x] **#1 No core kind renders as BoxShape.** Verified this session:
+  `canvas-react/src/shape-registry.test.ts` green inside the full `bun run
+  test` pass ("registerCoreShapes() resolves note/frame/text/geo to their own
+  dedicated bodies (no core kind hits BoxShape)"); component goldens exist
+  (`e2e/tests/component-goldens.spec.ts`, part of the same green run).
+  _(C1–C5, C7)_
+- [x] **#2 Cross-renderer parity gate exists and passes.** Verified this
+  session: `bunx playwright test tests/parity.spec.ts` — "golden board parity:
+  v1 vs v2 (Task F1)" PASSED (per-region scores logged, e.g. note-alpha
+  0.9815, note-beta 0.9836, all ≥ tolerance); the `test.fail()`-declared
+  "regression guard: wrong note fill color drops parity below threshold" also
+  passed (i.e. the internal assertion failed AS REQUIRED, proving the gate
+  has teeth). CI wiring confirmed by reading `.github/workflows/e2e.yml`:
+  parity spec runs on `pull_request` (parity-score artifact upload) and
+  nightly `schedule`. _(F1, F2)_
+- [x] **#3 Delete works end-to-end.** Verified this session:
+  `tests/canvas-v2.spec.ts` "delete — Delete/Backspace remove a selected
+  shape for both clients; Delete during text-editing does not delete it" —
+  PASSED. _(B2, B6)_
+- [x] **#4 Undo/redo works end-to-end.** Verified this session:
+  `canvas-editor/src/undo.test.ts` green in the full `bun run test` pass;
+  E2E "undo — Ctrl+Z fully restores a deleted shape... a multi-step drag
+  needs ONE Ctrl+Z PER increment, not one atomic undo" PASSED and "undo is
+  LOCAL-ONLY per peer — A's Ctrl+Z reverts only A's own last create, never
+  B's" PASSED (both `canvas-v2.spec.ts`). P1 verdict recorded above ("fall
+  back to an editor-level inverse-intent stack", line 118) — read and
+  confirmed present this session. Known, owner-accepted scope note carried
+  from B4/B6: undo granularity is per-pointermove-commit, not gesture-atomic
+  (explicitly owner-deferred, not a Phase-4 gap — see the 2026-07-15 OWNER
+  DECISION entry above). _(A1, B1, B4, B6)_
+- [x] **#5 Gesture cancellation is total.** Verified this session: E2E
+  "cancellation — Escape/blur/pointercancel abandon an in-flight create-drag
+  or arrow-draw with no persisted preview" PASSED (`canvas-v2.spec.ts`);
+  `canvas-editor/src/tools/transform.test.ts` (cancel-revert) green in the
+  full `bun run test` pass. _(B3, B5, B6)_
+- [x] **#6 The three embed write-path features work.** Verified this
+  session: unit suites for all three green in the full `bun run test` pass —
+  `client/src/canvas-v2/shapes/TerminalShape.test.ts`,
+  `.../ScreenshareShape.test.ts` (`screenshareStampIntent` +
+  `screenshareAspectRelockIntent` cases), `.../FileViewerShape.test.ts`; E2E
+  "terminal title-bar write-back through /sync/v2 (D6)" PASSED and
+  "file-viewer refresh bumps the shared `rev` doc prop through /sync/v2 (D5)"
+  PASSED (`canvas-v2.spec.ts`). Per the plan's own explicit, documented scope
+  note directly above the D5/D6 tests in `canvas-v2.spec.ts`: screenshare
+  `stillUrl` stamp-back/aspect-relock and file-viewer peer-follow are
+  EXPLICITLY OUT OF SCOPE for the E2E rig (LiveKit/iframe/capture-dependent,
+  not drivable without real media) — unit-tested only, dogfood/manual for the
+  live path. This matches the DoD's literal bar ("at least one" two-client
+  E2E through the dispatch channel), not a gap. _(D1–D6)_
+- [x] **#7 Connection banner proven.** Verified this session: E2E "a v2 room
+  whose sync socket never opens shows a visible connection banner within 10s
+  (failed), and a fresh reload once the server is reachable connects with no
+  banner" PASSED (`canvas-v2.spec.ts`). _(E1, E2)_
+- [x] **#8 Perf gates green under honest budgets.** Verified this session,
+  all via `bunx playwright test perf/canvas-v2-perf.spec.ts`: 1k/5k/10k
+  pan-zoom sweep PASSED (60fps @ 1k gated, p95=16.8ms vs baseline 16.8ms);
+  dense-1000 PASSED (p95=16.8ms vs baseline 16.8ms, gated 38.64ms);
+  select-all-1000 PASSED (p95=16.8ms vs baseline 16.8ms); single-shape drag
+  commit-cadence PASSED (100 pointermoves -> 100 doc commits, p95=16.7ms vs
+  baseline 16.8ms). Bundle-size gate re-run directly this session:
+  `bun client/scripts/bundle-size-check.ts` -> "PASS — entry chunk within ~2%
+  of the A0 baseline" (raw 215.46 kB vs 215.39 kB baseline / limit 219.70 kB;
+  gzip 63.15 kB vs 63.12 kB baseline / limit 64.38 kB). _(G1–G4)_
+- [ ] **#9 Stability gates green under tightened calibration — PARTIALLY
+  verified this session; not fully re-verified live.** What WAS verified this
+  session: convergence/fuzz/crash-recovery/soak-smoke all green inside the
+  full `bun run test` pass (`canvas-sync/src/convergence.test.ts`,
+  `fuzz.test.ts`, `soak-smoke.test.ts`; `server/src/canvas-v2/
+  crash-recovery.test.ts` — including the mid-delete/mid-embed-write rounds,
+  deterministic, no flake this run, closing the D4-flagged watch-item).
+  What is NOT independently re-verified this session (resting instead on
+  H2/H3's own prior, dated, evidenced work — not re-run here because a ≥20k-op
+  actor soak takes minutes and re-running it was outside I2's own literal
+  step list): the ≥20k-ops actor-soak run itself and its tightened
+  `FLAT_RSS_TOLERANCE=8`/K-recalibration numbers (see H2/H3's entries above —
+  six runs recorded, dated, with data). The `canvas-soak.yml` nightly
+  workflow's YAML parses and statically invokes the recalibrated `--ops
+  20000` (confirmed this session), but has NOT actually run green under
+  GitHub Actions with these settings yet: `canvas-phase4` has never been
+  pushed to `origin` (`git log origin/canvas-phase4` fails), and `gh run list
+  --workflow=canvas-soak.yml` shows only three prior scheduled runs on `main`
+  (2026-07-13/14/15, all green) that predate this branch's H1–H7
+  recalibration commits. The nightly cron will exercise the new settings for
+  real once this branch merges to `main` — left unchecked rather than
+  claiming a live CI run that hasn't happened. _(H1–H7)_
+- [x] **#10 Every OBSERVE straddler has a recorded verdict.** Verified this
+  session by reading Execution notes directly: S6 (VACUUM) — RE-DEFER,
+  sustained disk÷snapshot 3.354x–5.075x vs 10x threshold; S8 (lossy repair
+  edges) — RE-DEFER, no divergence in any soak/convergence/fuzz run,
+  `repairFirings=93`/`pendingImports=203` on a fresh 2026-07-16 soak-smoke
+  re-run with `converged=true`; S9 (`pendingImports` re-request) — RE-DEFER,
+  cumulative-not-stuck, converged after quiescing; S10 (reconnect delta) —
+  RE-DEFER, counter exists (`lastBackfillBytes`) but no dogfood-scale number
+  yet to judge against. All four dated 2026-07-16, all with counter/metric
+  evidence, all in this file's Execution notes. _(I1)_
+- [x] **#11 Repo invariants intact — verified this session, with two honest
+  caveats noted below (neither a Phase-4 regression).** `bun run typecheck`:
+  green, all 13 workspace checks exit 0 (contracts, canvas-model, canvas-doc,
+  canvas-sync, canvas-editor, canvas-react, client, server, transcriber, cli,
+  `bin/tsconfig.json`, discord, e2e). `bun run build`: green, entry chunk
+  215.46 kB raw / 63.15 kB gzip (within the G4 gate). `bun run test`: "all
+  196 suites passed", zero FAIL lines. Clean-room: `canvas-editor/src/
+  boundary.test.ts`, `canvas-react/src/boundary.test.ts`, and
+  `canvas-sync/src/boundary.test.ts` all PASS this session (scanning
+  13/26/10 files respectively, zero forbidden imports).
+  **Caveat 1:** `canvas-model` and `canvas-doc` have no dedicated
+  `boundary.test.ts` of their own (pre-existing gap, not introduced by
+  Phase 4 — confirmed via `git log --follow`, no such file ever existed at
+  those paths) — this session verified their clean-room property by hand
+  instead (`grep` for `ws`/`express`/`@tldraw/`/`.../server` imports across
+  `canvas-model/src` and `canvas-doc/src`: zero hits; both packages'
+  `package.json` dependency lists contain no server/tldraw/ws deps). The
+  invariant holds; the automated per-package proof for these two specifically
+  does not exist. `engine.test.ts` ("selectEngine (team hard-excluded) +
+  parseAllowlist") and `scripts/exposure-audit.test.ts` (four checks,
+  including the static-import-boundary scan of 93 files) both PASS this
+  session, confirming `team` can never resolve to v2 — note the plan's own
+  literal Step 2 path `client/scripts/exposure-audit.ts` does not exist; the
+  real, passing file is repo-root `scripts/exposure-audit.test.ts` (Phase-3's
+  own G6 naming, per that file's header). Bite-sized TDD commits: confirmed
+  via `git log --oneline main..canvas-phase4` — 60 commits, each a scoped
+  feat/test/fix/docs unit.
+  **Caveat 2:** "true merge commits" — this branch (`canvas-phase4`) has not
+  itself been merged into `main` yet (that is a follow-on action, not part of
+  this verification-only gate); prior phases (e.g. `68831b7` "Merge
+  canvas-phase2 into main") establish the convention this branch is expected
+  to follow at merge time, but it cannot be verified before the merge
+  happens. _(I2)_

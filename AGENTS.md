@@ -34,6 +34,22 @@ of the legacy tldraw one, over the Phase-2 `/sync/v2` protocol:
   whole team lives in onto the new engine. See `client/src/engine.ts` and its
   `engine.test.ts` / `scripts/exposure-audit.ts` proofs.
 
+**Phase-4 status (2026-07-16): visible parity + stability, landed on
+`canvas-phase4`.** v2 rooms now render dedicated note/frame/text/geo bodies
+(no more `BoxShape` fallback), support Delete/Backspace, local-only
+undo/redo (Ctrl+Z / Ctrl+Shift+Z — an editor-level inverse-intent stack, not
+loro-crdt's `UndoManager`; see the plan's P1 preflight verdict), total
+gesture cancellation (Escape/`pointercancel`/blur), a dispatch channel
+restoring the three embed write-path features (terminal rename, screenshare
+`stillUrl` stamp-back, file-viewer rev-bump), and a connection-state banner.
+Known, owner-accepted gap carried past Phase 4: undo is per-pointermove-
+commit granularity, not gesture-atomic (a multi-step drag needs multiple
+Ctrl+Z) — tracked as a follow-up, not re-litigated here. Full detail,
+preflight verdicts, and the four OBSERVE-straddler dated verdicts (SQLite
+`VACUUM`, lossy-repair edges, `pendingImports` re-request, reconnect delta —
+all re-deferred, no threshold tripped) live in
+`docs/plans/2026-07-15-canvas-phase4-parity.md`'s Execution notes.
+
 ## Local dev — bin/dev
 
 Run `bin/dev` **from the host** (the repo root). There it's a *controller*: it
