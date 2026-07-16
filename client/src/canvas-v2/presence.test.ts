@@ -217,7 +217,87 @@ import {
 }
 
 // ============================================================================
-// 7. encodePresenting/decodePresenting round-trip, and presenterFor resolves
+// 7. Task H6: block 6 above proves the single-write guarantee for the
+//    presenting+cursor pairing, with presenting always the SECOND (dropped)
+//    call. This block completes the coverage the plan's D5-follow-up asks
+//    for — the SAME guarantee holds for presenting's OTHER co-published
+//    field (viewport, exactly the field setViewportAndRefreshCursor's own
+//    doc comment names as the original two-writes flake), and holds
+//    regardless of WHICH of the pair fires the shared channel's leading
+//    edge. A physical-write counter (like block 6's) is asserted at every
+//    step so a regression that splits setPresenting into its own set() —
+//    whether a direct extra store.publish() or its own independent throttle
+//    channel — trips assert.equal(publishCalls, 1) immediately, before the
+//    payload assertions even run (verified directly: temporarily routing
+//    setPresenting through store.publish() directly, and separately through
+//    its own leadingEdgeThrottle channel, both make this block's first
+//    publishCalls-after-the-second-call assertion fail with 2 !== 1).
+// ============================================================================
+{
+	// 7a. Viewport leads the interval; presenting is the same-instant SECOND
+	// call — dropped at the shared channel, then folded into the next fire.
+	let clock = 0
+	const store = new PresenceStore('self-key')
+	let publishCalls = 0
+	const realPublish = store.publish.bind(store)
+	;(store as unknown as { publish: (p: Presence) => void }).publish = (p: Presence) => {
+		publishCalls++
+		realPublish(p)
+	}
+	const publisher = createPresencePublisher(store, { intervalMs: 60, now: () => clock })
+
+	publisher.setViewportAndRefreshCursor({ x: 1, y: 1, w: 800, h: 600, z: 1 }, { x: 1, y: 1, z: 1 })
+	assert.equal(publishCalls, 1, 'the leading viewport publish fires immediately')
+
+	publisher.setPresenting({ shapeId: 'shape:f2', fraction: 0.1, ts: 1 })
+	assert.equal(publishCalls, 1, 'a same-instant presenting call after a VIEWPORT lead is dropped at the shared channel too (never a second store write)')
+	assert.deepEqual(store.all()['self-key']!.presenting, [], 'the dropped write never reached the store — presenting is still the pre-call value')
+
+	clock = 100
+	publisher.setPresenting({ shapeId: 'shape:f2', fraction: 0.2, ts: 2 })
+	assert.equal(publishCalls, 2, 'exactly one more physical write for the whole recorded window')
+	assert.deepEqual(
+		store.all()['self-key'],
+		{ cursor: null, viewport: { x: 1, y: 1, w: 800, h: 600, z: 1 }, stamp: null, presenting: [JSON.stringify({ shapeId: 'shape:f2', fraction: 0.2, ts: 2 })] },
+		'ONE combined write carries the viewport AND presenting together — never two separate set() calls',
+	)
+	store.destroy()
+
+	// 7b. Reverse order: presenting itself leads the interval; a viewport
+	// change (and later, a cursor change) is the same-instant SECOND call —
+	// dropped, then folded into the next fire alongside presenting.
+	let clock2 = 0
+	const store2 = new PresenceStore('self-key')
+	let publishCalls2 = 0
+	const realPublish2 = store2.publish.bind(store2)
+	;(store2 as unknown as { publish: (p: Presence) => void }).publish = (p: Presence) => {
+		publishCalls2++
+		realPublish2(p)
+	}
+	const publisher2 = createPresencePublisher(store2, { intervalMs: 60, now: () => clock2 })
+
+	publisher2.setPresenting({ shapeId: 'shape:f3', fraction: 0.5, ts: 10 })
+	assert.equal(publishCalls2, 1, 'the leading presenting publish fires immediately')
+
+	publisher2.setViewportAndRefreshCursor({ x: 9, y: 9, w: 800, h: 600, z: 1 }, { x: 9, y: 9, z: 1 })
+	assert.equal(publishCalls2, 1, 'a same-instant viewport call after a PRESENTING lead is dropped at the shared channel')
+	assert.equal(store2.all()['self-key']!.viewport, null, 'the dropped write never reached the store — viewport is still the pre-call value')
+
+	clock2 = 100
+	publisher2.setCursor({ x: 7, y: 7 })
+	assert.equal(publishCalls2, 2, 'exactly one more physical write for the whole recorded window')
+	assert.deepEqual(
+		store2.all()['self-key'],
+		{ cursor: { x: 7, y: 7 }, viewport: { x: 9, y: 9, w: 800, h: 600, z: 1 }, stamp: null, presenting: [JSON.stringify({ shapeId: 'shape:f3', fraction: 0.5, ts: 10 })] },
+		'ONE combined write carries presenting, viewport, AND cursor together when presenting leads the interval',
+	)
+	store2.destroy()
+
+	console.log('ok: setPresenting + setViewportAndRefreshCursor — single combined write holds for the viewport pairing too, either field leading')
+}
+
+// ============================================================================
+// 8. encodePresenting/decodePresenting round-trip, and presenterFor resolves
 //    the FRESHEST ts among competing peers, excluding selfKey and other
 //    shapes — the canvas-sync-wire port of the legacy `presenterFor`
 //    (git history: client/src/file-viewer/followLogic.ts).
