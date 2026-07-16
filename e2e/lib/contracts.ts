@@ -1,11 +1,23 @@
 // The BROWSER runner (design's "same vocabulary, two runners"). Interprets a
 // contract's GestureOp[] as real Playwright pointer/wheel/keyboard input
-// against a live ?engine=v2 room, samples the invariant per animation frame
-// (when: 'every-event'), and evaluates it against a PAGE-backed Obs adapter
-// (bounding boxes, window.getSelection(), focus). Only level:'browser'
-// contracts pay this cost. Mirrors lib/canvas-v2.ts's helpers — same
-// window.__ew.doc.putShape seeding, same viewport-relative screen math.
+// against a live ?engine=v2 room and evaluates the invariant against a
+// PAGE-backed Obs adapter (bounding boxes, window.getSelection(), focus).
+// Only level:'browser' contracts pay this cost. Mirrors lib/canvas-v2.ts's
+// helpers — same window.__ew.doc.putShape seeding, same viewport-relative
+// screen math.
+//
+// SAMPLING CADENCE — honest version: this runner samples per GESTURE OP, not
+// per interpolated input event. A `move` with `steps: 12` is one Playwright
+// call that emits 12 pointermoves, and the invariant is checked ONCE at its
+// endpoint (after a rAF settles the render) — coarser than the FSM runner,
+// which interprets every step as its own event and checks after each one.
+// That coarseness is fine for MONOTONIC invariants (Pilot 3's native
+// selection only grows during a sweep — if it ever spanned two bodies
+// mid-move it still does at the endpoint), but a TRANSIENT violation that
+// self-heals within a single multi-step op would be invisible here; pinning
+// those is the FSM lane's job (per-event checks at zero browser cost).
 import type { Page } from '@playwright/test'
+import { expect } from '@playwright/test'
 import type { Anchor, Contract, GestureOp, Obs } from '@ensembleworks/interaction-contracts'
 import { mulberry32 } from '@ensembleworks/interaction-contracts'
 import { viewportBox, waitForBoot } from './canvas-v2.js'
@@ -20,11 +32,11 @@ import { viewportBox, waitForBoot } from './canvas-v2.js'
 const BROWSER_SEED = 1
 
 // Seed the scene through the live doc (same mechanism as seedGrid). Each
-// seeded shape also gets its live text set to its own id (CanvasDoc.setText)
-// so a text-capable body (note/text/geo — label.ts's live-text-wins order)
-// always renders SOMETHING selectable, regardless of a fallback label
-// (shape.kind) being present or not — Task D4's RED step needs real
-// selectable text spanning both bodies to reproduce the bug.
+// seeded shape also gets its live text set to `text for <its id>`
+// (CanvasDoc.setText) so a text-capable body (note/text/geo — label.ts's
+// live-text-wins order) always renders SOMETHING selectable, regardless of a
+// fallback label (shape.kind) being present or not — Task D4's RED step needs
+// real selectable text spanning both bodies to reproduce the bug.
 async function seedScene(page: Page, contract: Contract): Promise<void> {
   const shapes = contract.scene?.() ?? []
   if (shapes.length === 0) return
@@ -40,6 +52,14 @@ async function seedScene(page: Page, contract: Contract): Promise<void> {
     }
     ew.doc.commit()
   }, shapes as any)
+  // RENDER GATE — do not return until every seeded body is actually visible.
+  // commit → doc subscription → React re-render is asynchronous; without this
+  // wait the gesture can race the pipeline and sweep over an EMPTY canvas, in
+  // which case a selection-shaped contract passes trivially (spans 0) — a
+  // false GREEN masking the very bug the contract pins, plus a latent flake.
+  for (const s of shapes) {
+    await expect(page.locator(`[data-shape-id="${s.id}"][data-shape-kind]`)).toBeVisible({ timeout: 10_000 })
+  }
 }
 
 // Resolve an anchor to a viewport-relative SCREEN point.
@@ -90,32 +110,38 @@ function pageObs(startRect: { minX: number; minY: number; maxX: number; maxY: nu
   }
 }
 
-async function resolveModifiers(page: Page, modifiers?: { readonly shift?: boolean; readonly alt?: boolean; readonly ctrl?: boolean; readonly meta?: boolean }): Promise<void> {
+// MODIFIER CONVENTION: modifiers are pressed just before, and released just
+// after, THE ONE OP that declares them — never held across ops. That matches
+// the FSM runner's semantics, where modifiers are per-event boolean flags on
+// the interpreted input (no key up/down events exist at that level), so a
+// contract that wants shift held across a whole drag must say so on every op.
+type OpModifiers = { readonly shift?: boolean; readonly alt?: boolean; readonly ctrl?: boolean; readonly meta?: boolean }
+async function setModifiers(page: Page, direction: 'down' | 'up', modifiers?: OpModifiers): Promise<void> {
   if (!modifiers) return
-  if (modifiers.shift) await page.keyboard.down('Shift')
-  if (modifiers.alt) await page.keyboard.down('Alt')
-  if (modifiers.ctrl) await page.keyboard.down('Control')
-  if (modifiers.meta) await page.keyboard.down('Meta')
+  if (modifiers.shift) await page.keyboard[direction]('Shift')
+  if (modifiers.alt) await page.keyboard[direction]('Alt')
+  if (modifiers.ctrl) await page.keyboard[direction]('Control')
+  if (modifiers.meta) await page.keyboard[direction]('Meta')
 }
 
-async function releaseModifiers(page: Page, modifiers?: { readonly shift?: boolean; readonly alt?: boolean; readonly ctrl?: boolean; readonly meta?: boolean }): Promise<void> {
-  if (!modifiers) return
-  if (modifiers.shift) await page.keyboard.up('Shift')
-  if (modifiers.alt) await page.keyboard.up('Alt')
-  if (modifiers.ctrl) await page.keyboard.up('Control')
-  if (modifiers.meta) await page.keyboard.up('Meta')
-}
-
-// Waits one animation frame — the per-rAF sample point for `when:
-// 'every-event'` contracts, mirroring the FSM runner's after-every-event
-// check() call at the browser layer's own natural cadence.
+// Waits one animation frame so React has painted the effects of the op just
+// dispatched before we sample. This is a RENDER-SETTLING gate, not a
+// per-event check cadence — see the module header's SAMPLING CADENCE note:
+// the browser lane checks once per GestureOp (at a multi-step move's
+// endpoint), coarser than the FSM runner's per-interpolated-event checks.
 async function nextFrame(page: Page): Promise<void> {
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))))
 }
 
 /** Run one browser-level contract against an already-booted, already-seeded
  * (this function seeds it) v2 page. Returns the first invariant failure
- * message, or null if the contract held for the whole gesture. */
+ * message, or null if the contract held for the whole gesture.
+ *
+ * `when: 'every-event'` here means per GESTURE OP (rAF-settled, then
+ * checked) — NOT per interpolated pointermove; a `steps: 12` move is checked
+ * once, at its endpoint. See the module header's SAMPLING CADENCE note for
+ * why that's sufficient for monotonic invariants and where transient
+ * violations must be pinned instead (the FSM lane). */
 export async function runContractBrowser(page: Page, contract: Contract): Promise<string | null> {
   await waitForBoot(page)
   await seedScene(page, contract)
@@ -134,37 +160,37 @@ export async function runContractBrowser(page: Page, contract: Contract): Promis
     switch (op.kind) {
       case 'down': {
         const p = await resolveAnchor(page, box, op.at)
-        await resolveModifiers(page, op.modifiers)
+        await setModifiers(page, 'down', op.modifiers)
         await page.mouse.move(p.x, p.y)
         await page.mouse.down()
-        await releaseModifiers(page, op.modifiers)
+        await setModifiers(page, 'up', op.modifiers)
         break
       }
       case 'move': {
         const p = await resolveAnchor(page, box, op.at)
-        await resolveModifiers(page, op.modifiers)
+        await setModifiers(page, 'down', op.modifiers)
         await page.mouse.move(p.x, p.y, { steps: op.steps ?? 1 })
-        await releaseModifiers(page, op.modifiers)
+        await setModifiers(page, 'up', op.modifiers)
         break
       }
       case 'up': {
-        await resolveModifiers(page, op.modifiers)
+        await setModifiers(page, 'down', op.modifiers)
         await page.mouse.up()
-        await releaseModifiers(page, op.modifiers)
+        await setModifiers(page, 'up', op.modifiers)
         break
       }
       case 'wheel': {
         const p = await resolveAnchor(page, box, op.at)
         await page.mouse.move(p.x, p.y)
-        await resolveModifiers(page, op.modifiers)
+        await setModifiers(page, 'down', op.modifiers)
         await page.mouse.wheel(op.dx, op.dy)
-        await releaseModifiers(page, op.modifiers)
+        await setModifiers(page, 'up', op.modifiers)
         break
       }
       case 'key': {
-        await resolveModifiers(page, op.modifiers)
+        await setModifiers(page, 'down', op.modifiers)
         await page.keyboard.press(op.key)
-        await releaseModifiers(page, op.modifiers)
+        await setModifiers(page, 'up', op.modifiers)
         break
       }
     }
