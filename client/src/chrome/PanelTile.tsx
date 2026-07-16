@@ -262,7 +262,7 @@ export function PanelTile({
 					// Non-opacity "quiet" cue (a11y: legible without perceiving the
 					// dim): same glyph style as the cam-status badge, bottom-left.
 					<span
-						title={`Quiet — far from your view (${Math.round(gain * 100)}%)`}
+						title={`Quiet — out of earshot (${Math.round(gain * 100)}%)`}
 						data-testid={'ew-tile-quiet-' + rawId}
 						style={{
 							position: 'absolute',
