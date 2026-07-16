@@ -18,7 +18,6 @@ import { LeashOverlay, useLeashes } from './leashes'
 import { useLiveKitRoom } from './useLiveKitRoom'
 import { useSessionPulse } from './useSessionPulse'
 import { useSpatialGainLoop } from './useSpatialGainLoop'
-import { AudibleZoneOverlay } from './zone'
 
 export function AvOverlay() {
 	const editor = useEditor()
@@ -144,15 +143,5 @@ export function AvOverlay() {
 		}
 	}, [])
 
-	// The zone ring only when proximity audio is shaping volumes: connected,
-	// not standup-pinned, and there's at least one human (non-scribe) peer.
-	const showZone =
-		lk.status === 'connected' && !standupMode && lk.peers.some((peer) => !peer.readOnly)
-
-	return (
-		<>
-			<AudibleZoneOverlay editor={editor} show={showZone} />
-			<LeashOverlay leashes={leashes} />
-		</>
-	)
+	return <LeashOverlay leashes={leashes} />
 }

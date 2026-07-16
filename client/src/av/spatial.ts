@@ -37,51 +37,66 @@ export function distance(ax: number, ay: number, bx: number, by: number): number
 }
 
 /**
- * Viewport-relative (screen-space) settings: the same falloff curve, but the
- * radii are FRACTIONS of the viewport's half-diagonal in screen pixels, so
- * the model is resolution-independent and zoom becomes reach — zooming in
- * stretches page distances in screen pixels (peers outside your focus fade);
- * zooming out shrinks them (at full zoom-out the whole page is a huddle).
+ * Viewport-relative settings: a teammate whose cursor is anywhere INSIDE my
+ * viewport rectangle is at full volume — if I can see their cursor, I can
+ * hear them. Outside it, volume fades with how far beyond the nearest
+ * viewport edge their cursor sits (in screen pixels), bottoming out at the
+ * floor once they're falloffFraction × my viewport half-diagonal past the
+ * edge. Zoom is reach: zooming out grows the rectangle in page space, so
+ * fully zoomed out the whole page is in view — and audible.
  */
-export interface ScreenSpatialSettings {
-	/** Fraction of the viewport half-diagonal within which a voice is full volume. */
-	huddleFraction: number
-	/** Fraction of the half-diagonal at which the falloff bottoms out. >1 so
-	 * drifting just off-screen makes a peer quieter, never a hard cliff. */
+export interface ViewportSpatialSettings {
+	/** Fraction of the viewport half-diagonal BEYOND the viewport edge at
+	 * which the falloff bottoms out at the floor. */
 	falloffFraction: number
 	/** Minimum gain — teammates never fully disappear. */
 	floor: number
 }
 
-export const DEFAULT_SCREEN_SPATIAL_SETTINGS: ScreenSpatialSettings = {
-	huddleFraction: 0.45,
-	falloffFraction: 1.6,
+export const DEFAULT_VIEWPORT_SPATIAL_SETTINGS: ViewportSpatialSettings = {
+	falloffFraction: 1,
 	floor: 0.04,
 }
 
 /**
- * The screen-space gain: convert a page-space distance to screen pixels
- * (× zoom), derive pixel radii from the viewport half-diagonal, and reuse the
- * existing curve. Non-finite inputs or a degenerate viewport → floor,
- * mirroring gainForDistance's own finite guard.
+ * Screen-pixel distance from a page-space point to a page-space rectangle —
+ * 0 inside or on the boundary, else the euclidean shortfall to the nearest
+ * edge/corner. The rect is my viewport in page space; multiplying the
+ * page-space shortfall by zoom yields screen pixels, so the fade rate is
+ * relative to what I SEE, independent of zoom level.
  */
-export function gainForScreenDistance(
-	pageDistance: number,
-	zoom: number,
-	viewportHalfDiagonalPx: number,
-	settings: ScreenSpatialSettings
+export function screenDistanceOutsideRect(
+	x: number,
+	y: number,
+	rect: { minX: number; minY: number; maxX: number; maxY: number },
+	zoom: number
 ): number {
-	const { huddleFraction, falloffFraction, floor } = settings
+	const dx = Math.max(rect.minX - x, 0, x - rect.maxX)
+	const dy = Math.max(rect.minY - y, 0, y - rect.maxY)
+	return Math.hypot(dx, dy) * zoom
+}
+
+/**
+ * The viewport-rect gain: full volume at outsidePx 0 (cursor in view — the
+ * rect IS the huddle), linear fade to the floor at falloffFraction × the
+ * half-diagonal past the edge. Non-finite input or a degenerate viewport →
+ * floor, mirroring gainForDistance's own finite guard.
+ */
+export function gainForViewportDistance(
+	outsidePx: number,
+	viewportHalfDiagonalPx: number,
+	settings: ViewportSpatialSettings
+): number {
+	const { falloffFraction, floor } = settings
 	if (
-		!Number.isFinite(pageDistance) ||
-		!Number.isFinite(zoom) ||
+		!Number.isFinite(outsidePx) ||
 		!Number.isFinite(viewportHalfDiagonalPx) ||
 		viewportHalfDiagonalPx <= 0
 	) {
 		return floor
 	}
-	return gainForDistance(pageDistance * zoom, {
-		huddleRadius: huddleFraction * viewportHalfDiagonalPx,
+	return gainForDistance(outsidePx, {
+		huddleRadius: 0,
 		falloffEnd: falloffFraction * viewportHalfDiagonalPx,
 		floor,
 	})

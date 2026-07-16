@@ -1,10 +1,13 @@
 /**
  * The spatial audio loop: every 150 ms, set each peer's GainNode from where
- * they are relative to me. On my page, volume falls off with SCREEN-SPACE
- * distance between my viewport centre and their cursor — page distance × my
- * zoom, against radii derived from my viewport's half-diagonal (spatial.ts's
- * gainForScreenDistance). Zoom is reach: zoom into a corner and peers outside
- * your focus fade; zoom all the way out and the whole page is a huddle.
+ * they are relative to me. On my page, a peer whose cursor is anywhere INSIDE
+ * my viewport rectangle is at full volume — if I can see their cursor, I can
+ * hear them (this also keeps a teammate audible while their pointer is parked
+ * at the canvas edge because they're using the side panel). Beyond the edge,
+ * volume fades with the screen-pixel shortfall to the viewport (spatial.ts's
+ * screenDistanceOutsideRect + gainForViewportDistance). Zoom is reach: zoom
+ * into a corner and peers outside it fade; zoom all the way out and every
+ * cursor is in view — and audible.
  * Standup mode still pins everyone on my page to full. A peer on ANOTHER page
  * is held at the crosstalk bleed level (av/crosstalk.ts) — 0 fades them to
  * silence as before. A peer absent from presence entirely fades to 0.
@@ -24,7 +27,11 @@ import { useEvery } from '../kernel/useEvery'
 import { publishPeerGains } from './bridge'
 import { gainTarget, type PeerLocation } from './crosstalk'
 import { quantizeGain } from './legibility'
-import { DEFAULT_SCREEN_SPATIAL_SETTINGS, distance, gainForScreenDistance } from './spatial'
+import {
+	DEFAULT_VIEWPORT_SPATIAL_SETTINGS,
+	gainForViewportDistance,
+	screenDistanceOutsideRect,
+} from './spatial'
 import type { LiveKitState } from './useLiveKitRoom'
 
 export function useSpatialGainLoop(
@@ -36,7 +43,7 @@ export function useSpatialGainLoop(
 	useEvery(150, () => {
 		const ctx = lk.audioContext
 		if (!ctx) return
-		const my = editor.getViewportPageBounds().center
+		const viewport = editor.getViewportPageBounds()
 		const myPageId = editor.getCurrentPageId()
 		// Read the camera once per tick, not per peer.
 		const zoom = editor.getZoomLevel()
@@ -57,14 +64,13 @@ export function useSpatialGainLoop(
 				: presence.currentPageId === myPageId
 					? 'my-page'
 					: 'other-page'
-			// In-page distance gain — the screen-space spatial model. A peer on my
-			// page with no cursor yet counts as full volume, exactly as before.
+			// In-page gain — the viewport-rect spatial model. A peer on my page
+			// with no cursor yet counts as full volume, exactly as before.
 			const pageGain = presence?.cursor
-				? gainForScreenDistance(
-						distance(my.x, my.y, presence.cursor.x, presence.cursor.y),
-						zoom,
+				? gainForViewportDistance(
+						screenDistanceOutsideRect(presence.cursor.x, presence.cursor.y, viewport, zoom),
 						halfDiagonalPx,
-						DEFAULT_SCREEN_SPATIAL_SETTINGS
+						DEFAULT_VIEWPORT_SPATIAL_SETTINGS
 					)
 				: 1
 			const target = gainTarget({ location, standupMode, pageGain, crosstalk: crosstalkLevel })

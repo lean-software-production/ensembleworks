@@ -171,3 +171,23 @@ RED → GREEN → WIRE, mirroring the crosstalk PR:
 - Huddle / falloff fractions: 0.45 / 1.6 of the half-diagonal.
 - Tile opacity floor: 0.35.
 - Gain quantisation step for snapshot publishing: 0.05.
+
+## Amendment (2026-07-16, after first two-device feel-test)
+
+Two changes from live testing:
+
+1. **Gain model switched from screen-space radial to viewport-rect.** A peer
+   whose cursor is anywhere INSIDE my viewport rectangle is at full volume —
+   "if I can see their cursor, I can hear them". Beyond the edge, linear fade
+   (of the screen-pixel shortfall to the nearest edge/corner, via
+   `screenDistanceOutsideRect`) down to the floor at `falloffFraction: 1` ×
+   half-diagonal past the edge. Continuous at the boundary — no cliff.
+   Motivation: with the radial model (full volume only within 0.45 ×
+   half-diagonal of centre), a cursor near the screen edge was already ~50%
+   faded. In particular, moving your pointer into the side panel parks your
+   tldraw cursor at the canvas edge, so panel use made you audibly "drift
+   away" for everyone. Under the rect model an in-view cursor — including one
+   parked at the edge — stays at 100%.
+2. **The audible-zone ring (legibility cue #3) is removed** — it was visually
+   irritating in practice. The remaining cues (tile dim + quiet glyph, cursor
+   fade, hover % readout) carry the legibility load.
