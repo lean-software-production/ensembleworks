@@ -34,6 +34,22 @@ jobs:
           path: |
             e2e/test-results/
             e2e/playwright-report/
+      # Task F2: `--project=e2e` above already walks the whole `tests/` dir,
+      # which includes tests/parity.spec.ts — no separate invocation needed
+      # here. This just publishes the score JSON that spec writes (lib/
+      # parity.ts's writeParityArtifact) as the CI-visible "dashboard number"
+      # for the cross-renderer gate. Runs on every PR, a superset of
+      # "renderer-touching PRs" (parity.spec.ts's whole subject is canvas-
+      # react/canvas-editor output, so any PR that could regress it is
+      # already covered by this unfiltered trigger). always(), not
+      # failure()-only: the score is exactly as interesting — often more —
+      # when the overall gate trips.
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-score-${{ github.run_id }}
+          path: e2e/.artifacts/parity/parity-score.json
+          retention-days: 14
 
   perf-nightly:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -59,4 +75,17 @@ jobs:
         with:
           name: perf-baseline-${{ github.run_id }}
           path: e2e/baselines/
+          retention-days: 14
+      # Task F2 (nightly leg): the `e2e` job above intentionally skips
+      # `schedule` events (its own condition, above), so the PR-side parity
+      # coverage never fires nightly on its own — this is the only
+      # schedule-triggered job in this workflow, so it's the nightly home.
+      # One explicit file, not the whole `e2e` project (that project's other
+      # specs aren't this job's concern and already run on every PR).
+      - run: cd e2e && bunx playwright test --project=e2e tests/parity.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: parity-score-nightly-${{ github.run_id }}
+          path: e2e/.artifacts/parity/parity-score.json
           retention-days: 14
