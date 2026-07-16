@@ -123,7 +123,7 @@ function makeObs(
     },
     textSelectionSpans() {
       // Pilot 3 is browser-only (types.ts's Obs.textSelectionSpans doc
-      // comment): native text selection is a DOM/window.getSelection()
+      // comment): native text selection is a DOM/global-Selection-API
       // concept the FSM has no notion of. A browser-tagged contract never
       // reaches this adapter (library.test.ts filters CONTRACTS to
       // level: 'fsm' before calling runContractFsm) — this throw is a
