@@ -1957,6 +1957,105 @@ deviation from DoD #8 (never a silent ungated landing)._
   `contracts/src/constants.ts` (imported by both `client/DevOverlay.tsx` and
   server `soak-actor.ts`, which re-exports it for its existing importers) so
   the two S6 surfaces Task I1 cites can never drift.
+- **I1 (2026-07-16) — S6 (SQLite VACUUM) VERDICT: RE-DEFER. Threshold not
+  tripped.** Combining H3's soak evidence with H4's live-visibility surface:
+  across all six ≥20k/25k-op actor-soak runs (H3's own three + its
+  reviewer's three corroborating runs), the sustained disk÷snapshot ratio
+  (last-quartile mean) ranged 3.354x-5.075x and the final-point ratio ranged
+  2.90x-6.52x — both comfortably under the `DISK_SUSTAINED_HIGHWATER_MULTIPLIER
+  = 10` decision threshold (now single-sourced in
+  `contracts/src/constants.ts`, imported by both `soak-actor.ts`'s
+  `assertDiskHighWater` and the client overlay). No run showed unbounded
+  growth or compaction failing to keep pace. **Live counter:**
+  `GET /api/canvas/metrics`'s per-room `sync[roomId].diskBytes`/
+  `snapshotBytes` (`server/src/features/canvas-metrics.ts`), rendered as the
+  `disk:snapshot` field in `client/src/canvas-v2/DevOverlay.tsx` (flags red
+  at ≥10x via the same shared constant). **Honesty caveat:** this is a fresh
+  Phase-4 build with no long-running production dogfood traffic yet, so the
+  live half of this verdict rests on the instrumentation being correctly
+  wired (confirmed: `DevOverlay.test.ts` + `canvas-metrics.test.ts` both
+  green), not on an actual observed dogfood ratio. **Flip condition:** either
+  the soak's `assertDiskHighWater` trips (sustained ratio ≥10x) on any future
+  run, OR the live `disk:snapshot` field is observed ≥10x on a real dogfood
+  room for a sustained period — either would trigger implementing
+  compaction+`VACUUM` as its own follow-up unit.
+- **I1 (2026-07-16) — S8 (lossy repair edges: dedupe drops valid twin;
+  reparent relocates winner) VERDICT: RE-DEFER. No divergence observed.**
+  Evidence: (1) H1's extended op mix (`setText` + weighted deletes +
+  embed-prop-writes, `canvas-sync/src/rig/ops.ts`) still converges
+  byte-identically (`dumpModel`/`checkInvariants`) AND text-identically
+  (per-shape `getText` cross-client check) in `convergence.test.ts` and in
+  `runSoak` (`canvas-sync/src/soak.ts`) — a lossy repair firing that actually
+  dropped/misrouted a shape would show up as exactly this kind of
+  divergence, and none did. (2) Re-ran `bun canvas-sync/src/soak-smoke.test.ts`
+  on 2026-07-16 (3 clients, 500 ops, seed 1, chaos 0.3):
+  `converged=true, repairFirings=93, pendingImports=203` — 93 non-empty
+  repair plans fired over the run and the doc still converged everywhere
+  after quiesce. No firing was ever correlated with a convergence failure in
+  any soak/convergence/fuzz run in this repo's history. **Live counter:**
+  per-client `repairCount` (`SyncClientPeer.repairCount`,
+  `canvas-sync/src/client-peer.ts:35` — increments on every non-empty
+  `doc.repair()` plan) is rendered in `DevOverlay.tsx`'s `repairCount` field.
+  Note this is a PER-MOUNT client-side counter only — `GET
+  /api/canvas/metrics` does not currently aggregate repair firings
+  server-side across all connected clients, only `pendingImports`/
+  `malformedFrames`/`tainted`/disk fields; a cross-client aggregate would be
+  a follow-up if S8 is ever revisited. The soak's own `repairFirings` is the
+  aggregate proxy today. **Honesty caveat:** no production dogfood traffic
+  yet on this fresh build — this verdict rests on soak/convergence rig
+  evidence (which now covers the full op mix including the new write
+  surfaces) plus the counter being in place for a live decision later, not
+  on an observed live-traffic firing. **Flip condition:** any soak/
+  convergence/fuzz run that converges=false with a non-zero `repairFirings`
+  (i.e., a firing provably caused the divergence), OR a dogfood session
+  whose `repairCount` climbs alongside a user-reported content-loss/
+  mis-parented-shape symptom.
+- **I1 (2026-07-16) — S9 (`pendingImports` re-request) VERDICT: RE-DEFER. No
+  threshold tripped.** The narrow edge (a client connecting during a pending
+  window can't receive the pended ops until its OWN next reconnect — no
+  re-request mechanism exists) has no evidence of causing a stuck/lost state
+  in any soak run: `SyncServerPeer.pendingImports`
+  (`canvas-sync/src/server-peer.ts:55`) is a CUMULATIVE count of imports
+  that reported a pending (not-yet-applicable) delta, not a "currently
+  stuck" gauge — the 2026-07-16 soak-smoke re-run recorded
+  `pendingImports=203` over 500 chaos-0.3 ops with 20 forced reconnects, yet
+  the run still converged after quiescing (`converged=true`): every pended
+  op eventually resolved via a later gap-filler frame or a reconnect's
+  full-history backfill, never permanently stranding a client. **Live
+  counter:** `GET /api/canvas/metrics`'s per-room `sync[roomId].pendingImports`
+  (`server/src/features/canvas-metrics.ts`), rendered as the
+  `pendingImports` field in `client/src/canvas-v2/DevOverlay.tsx`.
+  **Honesty caveat:** no production dogfood traffic yet — this is
+  soak-evidence-only (chaos-simulated reconnect/drop patterns, not real
+  network conditions); the dev-overlay counter is in place for a live
+  decision once real dogfood sessions accumulate. **Flip condition:** a live
+  room's `pendingImports` plateauing at a high value with no subsequent
+  convergence (a permanently stuck client), or a dogfood report of
+  transiently-missing content tied to a client connecting mid-update — either
+  would justify building the re-request mechanism.
+- **I1 (2026-07-16) — S10 (reconnect since-acked-version delta) VERDICT:
+  RE-DEFER. Counter exists; no live numbers yet to judge "materially
+  painful."** Correcting the plan's own uncertainty here: the
+  reconnect-backfill byte counter the plan asks to review DOES exist —
+  `SyncClientPeer.lastBackfillBytes` (`canvas-sync/src/client-peer.ts:45`,
+  set at `:102` to `backfill.byteLength` on every `reconnect()` call) is
+  wired into `DevOverlay.tsx`'s `lastBackfillBytes` field
+  (`client/src/canvas-v2/CanvasV2App.tsx:433` passes
+  `session?.peer.lastBackfillBytes`), so it is NOT a gap — it is in place
+  and live. What's genuinely missing is a real number to judge against: no
+  production dogfood session has run long enough yet to produce a
+  representative "routine reconnect" byte count (today's soak/convergence
+  fixtures are small synthetic docs, not a realistic dogfood-sized board).
+  **Honesty caveat:** re-deferring here is NOT "threshold checked and not
+  tripped" the way S6/S9 are — it is "no live data exists yet to check
+  against the threshold at all," since a fresh Phase-4 build has no
+  dogfood-scale document to reconnect against. **Flip condition (per the
+  task's own bar):** real dogfood reconnects on a nontrivial board show
+  `lastBackfillBytes` in the multi-MB range routinely (not just for a
+  first-ever join) — that would justify implementing a
+  since-last-known-server-version delta instead of the current
+  full-history resend on every `reconnect()` (see that method's own doc
+  comment in `client-peer.ts` for why it currently resends everything).
 - **CARRIED (pre-existing, teardown-hardening follow-up) — silent
   `server.close()`-hang shape recurs in canvas-v2-sync-mount.test.ts.** H4's
   review found the SAME latent CI-stall shape it fixed in
