@@ -452,7 +452,9 @@ function CrosstalkDiagram({ level }: { level: number }) {
 			<text x={22} y={35} {...label}>
 				this page {Math.round(pageLevel * 100)}%
 			</text>
-			<text x={87} y={69} textAnchor="middle" {...label} fill={wm.cream}>
+			{/* No halo here: the viewport band is always the solid dark tint, so a
+			    plain cream fill is crisp (the halo stroke read as doubled type). */}
+			<text x={87} y={69} textAnchor="middle" fontFamily={wm.mono} fontSize={8} fill={wm.cream}>
 				in view 100%
 			</text>
 		</svg>
@@ -536,13 +538,7 @@ function CrosstalkControl({
 					}}
 				>
 					<div style={{ fontFamily: wm.sans, fontSize: 11, fontWeight: 700, color: wm.ink }}>
-						Crosstalk
-					</div>
-					<div
-						style={{ fontFamily: wm.sans, fontSize: 10, color: wm.inkMuted, lineHeight: 1.35 }}
-					>
-						How loudly you hear people outside your view. Full = hear everyone, everywhere; off =
-						only who you can see.
+						Crosstalk volume
 					</div>
 					<CrosstalkDiagram level={level} />
 					<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
