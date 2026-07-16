@@ -15,9 +15,17 @@
 import { Track, type LocalTrack, type RemoteTrack } from 'livekit-client'
 import { useEffect, useRef, useState } from 'react'
 import { DefaultColorStyle, type Editor } from 'tldraw'
-import { getHoveredFace, registerFaceEl, setHoveredFace, type AvPanelSnapshot } from '../av/bridge'
+import {
+	getHoveredFace,
+	registerFaceEl,
+	setHoveredFace,
+	usePeerGain,
+	type AvPanelSnapshot,
+} from '../av/bridge'
 import { LatencyPill } from '../av/gauges'
 import { AvIcon, AvIconButton } from '../av/icons'
+import { clampCrosstalk, DEFAULT_CROSSTALK_LEVEL, otherPageLevel } from '../av/crosstalk'
+import { QUIET_GAIN_THRESHOLD, tileOpacityForGain } from '../av/legibility'
 import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
 import { setUserColor } from '../identity'
 import { retintLocalShares } from '../screenshare/share'
@@ -54,6 +62,14 @@ const TILE_MAX_WIDTH = 320
 // layout PanelPages switches to) so it doesn't look lost in the bigger tile.
 const INITIALS_FONT_DEFAULT = 26
 const INITIALS_FONT_TWO_UP = 40
+
+// Visual cues ease on roughly the audio ramp's time constant (the loop's
+// 0.08 s setTargetAtTime), so eyes and ears agree. Module-level read is fine:
+// a changed OS preference applies on next page load.
+const REDUCED_MOTION =
+	typeof window !== 'undefined' &&
+	window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+const DIM_TRANSITION = REDUCED_MOTION ? undefined : 'opacity 150ms linear'
 
 // Exported so the collapsed rail's avatar dots (SidePanel.tsx) can share the
 // same initial-derivation as the full tile.
@@ -95,6 +111,12 @@ export function PanelTile({
 	const latencyHistory = snap?.latencyHistory[rawId] ?? []
 	const kicking = snap?.kickingId === rawId
 	const avAvailable = snap != null && snap.status !== 'disabled' && snap.status !== 'error'
+
+	// Applied spatial gain for this peer (bridge store, published by the gain
+	// loop). Local tile: you always hear yourself at "full" — never dimmed.
+	const peerGain = usePeerGain(rawId)
+	const gain = isLocal ? 1 : peerGain
+	const quiet = !isLocal && gain <= QUIET_GAIN_THRESHOLD
 
 	const videoRef = useRef<HTMLDivElement>(null)
 	useEffect(() => {
@@ -169,6 +191,8 @@ export function PanelTile({
 					aspectRatio: MEDIA_ASPECT,
 					overflow: 'hidden',
 					background: `${color}22`,
+					opacity: tileOpacityForGain(gain),
+					transition: DIM_TRANSITION,
 				}}
 			>
 				{videoTrack ? (
@@ -234,6 +258,51 @@ export function PanelTile({
 						<AvIcon kind="camera" crossedOut={!videoTrack} />
 					</span>
 				)}
+
+				{quiet && (
+					// Non-opacity "quiet" cue (a11y: legible without perceiving the
+					// dim): same glyph style as the cam-status badge, bottom-left.
+					<span
+						title={`Quiet — out of earshot (${Math.round(gain * 100)}%)`}
+						data-testid={'ew-tile-quiet-' + rawId}
+						style={{
+							position: 'absolute',
+							bottom: 4,
+							left: 4,
+							width: 22,
+							height: 22,
+							display: 'grid',
+							placeItems: 'center',
+							pointerEvents: 'none',
+							borderRadius: 3,
+							background: 'rgba(15,23,42,0.45)',
+							color: wm.inkMuted,
+						}}
+					>
+						<AvIcon kind="spatial" crossedOut />
+					</span>
+				)}
+
+				{!isLocal && hovered && (
+					// On-demand exact volume readout (legibility cue #4).
+					<span
+						data-testid={'ew-tile-volume-' + rawId}
+						style={{
+							position: 'absolute',
+							bottom: 4,
+							right: 4,
+							pointerEvents: 'none',
+							borderRadius: 3,
+							padding: '1px 4px',
+							background: 'rgba(15,23,42,0.55)',
+							color: wm.cream,
+							fontFamily: wm.mono,
+							fontSize: 10,
+						}}
+					>
+						vol {Math.round(gain * 100)}%
+					</span>
+				)}
 			</div>
 
 			{/* Control strip — BELOW the media on a solid panel background, so the
@@ -280,12 +349,7 @@ export function PanelTile({
 							available={avAvailable}
 							onClick={() => snap?.actions.onCam()}
 						/>
-						<AvIconButton
-							kind="spatial"
-							enabled={!(snap?.standupMode ?? true)}
-							available={avAvailable}
-							onClick={() => snap?.actions.onStandup()}
-						/>
+						<CrosstalkControl snap={snap} available={avAvailable} />
 					</div>
 				)}
 				{!isLocal && hovered && snap && (
@@ -314,6 +378,194 @@ export function PanelTile({
 					</button>
 				)}
 			</div>
+		</div>
+	)
+}
+
+// The self-tile crosstalk control: ONE slider for "how loud are people I
+// can't currently see?". People whose cursors are in your viewport are always
+// 100%; the slider is the level the on-page fade bottoms out at, and other
+// pages sit one step further (av/crosstalk.ts otherPageLevel). Full (the
+// default) = hear everyone on every page — the old standup mode; 0 = only who
+// you can see. The volume rides the same single per-participant gain as
+// in-room voice (useSpatialGainLoop) — no echo, no doubled voice, and it
+// survives page hops/reconnects because the gain node is per-participant, not
+// per-page. Reuses the concentric-waves "spatial" glyph and mirrors
+// AvIconButton's styling for a consistent control strip.
+
+// The fade diagram above the slider: three nested bands — your viewport
+// (always 100%), the rest of your page (the slider level), other pages (one
+// step softer). Each band is an opaque panel backing plus a level-mapped
+// tint, so the opacities read absolutely rather than stacking.
+function CrosstalkDiagram({ level }: { level: number }) {
+	const pageLevel = clampCrosstalk(level)
+	const otherLevel = otherPageLevel(level)
+	// Visual tint for a gain: keep even 0 faintly visible so the band reads.
+	const tint = (gain: number) => 0.08 + 0.82 * gain
+	// Labels flip ink → cream once their band's tint gets dark enough that
+	// ink would lose contrast.
+	const label = (gain: number) => ({
+		fontFamily: wm.mono,
+		fontSize: 8,
+		fill: tint(gain) > 0.5 ? wm.cream : wm.ink,
+	})
+	return (
+		<svg
+			viewBox="0 0 174 96"
+			data-testid="ew-crosstalk-diagram"
+			style={{ width: '100%', display: 'block', borderRadius: 3 }}
+			role="img"
+			aria-label={`Fade diagram: in view 100%, this page ${Math.round(pageLevel * 100)}%, other pages ${Math.round(otherLevel * 100)}%`}
+		>
+			{/* other pages */}
+			<rect x={0} y={0} width={174} height={96} fill={wm.panel} />
+			<rect x={0} y={0} width={174} height={96} fill={wm.sealBlue} opacity={tint(otherLevel)} />
+			{/* this page */}
+			<rect x={16} y={22} width={142} height={74} rx={3} fill={wm.panel} />
+			<rect
+				x={16}
+				y={22}
+				width={142}
+				height={74}
+				rx={3}
+				fill={wm.sealBlue}
+				opacity={tint(pageLevel)}
+			/>
+			{/* your viewport — always full volume */}
+			<rect x={54} y={48} width={66} height={36} rx={2} fill={wm.panel} />
+			<rect x={54} y={48} width={66} height={36} rx={2} fill={wm.sealBlue} opacity={tint(1)} />
+			<rect
+				x={54}
+				y={48}
+				width={66}
+				height={36}
+				rx={2}
+				fill="none"
+				stroke={wm.cream}
+				strokeWidth={1.2}
+			/>
+			<text x={6} y={13} {...label(otherLevel)}>
+				other pages {Math.round(otherLevel * 100)}%
+			</text>
+			<text x={22} y={35} {...label(pageLevel)}>
+				this page {Math.round(pageLevel * 100)}%
+			</text>
+			{/* The viewport band is always the solid dark tint, so always cream. */}
+			<text x={87} y={69} textAnchor="middle" {...label(1)}>
+				in view 100%
+			</text>
+		</svg>
+	)
+}
+
+function CrosstalkControl({
+	snap,
+	available,
+}: {
+	snap: AvPanelSnapshot | null
+	available: boolean
+}) {
+	const [open, setOpen] = useState(false)
+	const rootRef = useRef<HTMLDivElement>(null)
+	const level = snap?.crosstalkLevel ?? DEFAULT_CROSSTALK_LEVEL
+	// "Active" (blue, waves showing) = the slider is below full, so crosstalk
+	// is actually shaping volumes. At full everything is 100% — nothing to
+	// shape — so the icon greys out and crosses through.
+	const active = level < 1
+	const pct = Math.round(level * 100)
+	const label = `Crosstalk ${pct}%`
+
+	// Close on an outside click (same pattern as ColorSwatch below).
+	useEffect(() => {
+		if (!open) return
+		function onPointerDown(e: PointerEvent) {
+			if (rootRef.current && e.target instanceof Node && !rootRef.current.contains(e.target)) {
+				setOpen(false)
+			}
+		}
+		window.addEventListener('pointerdown', onPointerDown)
+		return () => window.removeEventListener('pointerdown', onPointerDown)
+	}, [open])
+
+	return (
+		<div ref={rootRef} style={{ position: 'relative', flex: '0 0 auto', display: 'flex' }}>
+			<button
+				type="button"
+				data-testid="ew-tile-crosstalk"
+				disabled={!available}
+				onClick={(e) => {
+					e.stopPropagation()
+					setOpen((v) => !v)
+				}}
+				aria-label={label}
+				title={available ? label : 'Crosstalk unavailable'}
+				style={{
+					width: 25,
+					height: 25,
+					display: 'grid',
+					placeItems: 'center',
+					border: `1px solid ${active ? wm.sealBlue : wm.ruleStrong}`,
+					borderRadius: 2,
+					padding: 3,
+					background: active ? wm.sealBlue : 'transparent',
+					color: active ? wm.cream : wm.inkMuted,
+					cursor: available ? 'pointer' : 'not-allowed',
+					opacity: available ? 1 : 0.4,
+				}}
+			>
+				<AvIcon kind="spatial" crossedOut={!active} />
+			</button>
+			{open && snap && (
+				<div
+					onClick={(e) => e.stopPropagation()}
+					data-testid="ew-crosstalk-popover"
+					style={{
+						position: 'absolute',
+						bottom: 30,
+						right: 0,
+						zIndex: 10,
+						width: 194,
+						display: 'flex',
+						flexDirection: 'column',
+						gap: 8,
+						padding: 10,
+						background: wm.panel,
+						border: `1px solid ${wm.rule}`,
+						borderRadius: 4,
+						boxShadow: wm.shadowPaper,
+					}}
+				>
+					<div style={{ fontFamily: wm.sans, fontSize: 11, fontWeight: 700, color: wm.ink }}>
+						Crosstalk volume
+					</div>
+					<CrosstalkDiagram level={level} />
+					<div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+						<input
+							type="range"
+							min={0}
+							max={1}
+							step={0.05}
+							value={level}
+							data-testid="ew-crosstalk-slider"
+							aria-label="Crosstalk level"
+							onChange={(e) => snap.actions.setCrosstalk(Number(e.target.value))}
+							style={{ flex: 1, minWidth: 0, accentColor: wm.sealBlue, cursor: 'pointer' }}
+						/>
+						<span
+							style={{
+								flex: '0 0 auto',
+								width: 30,
+								textAlign: 'right',
+								fontFamily: wm.mono,
+								fontSize: 10,
+								color: wm.inkMuted,
+							}}
+						>
+							{level === 0 ? 'off' : `${pct}%`}
+						</span>
+					</div>
+				</div>
+			)}
 		</div>
 	)
 }
