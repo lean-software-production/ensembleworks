@@ -163,25 +163,42 @@ export interface SoakResult {
 // Bounded-growth tripwire constants — a tripwire for tombstone bloat, NOT a
 // tight budget (the design's own framing). AVG_SHAPE_SIZE_BYTES is a rough
 // RAW envelope-only estimate (independent of any CRDT overhead); K is the
-// "CRDT/history overhead multiplier on top of that" — calibrated from three
-// real runSoak() measurements (bytes-per-LIVE-shape, since without
-// compaction — canvas-sync has none; only the server-side DocumentActor
-// compacts, E3 — full history always survives in the snapshot):
-//   500 ops / 3 clients / chaos 0.3  -> 4 live shapes,   21,868 B -> 5,467 B/shape
-//   5,000 ops / 5 clients / chaos 0.5 -> 55 live shapes,  221,876 B -> 4,034 B/shape
-//   20,000 ops / 5 clients / chaos 0.5 -> 238 live shapes, 908,057 B -> 3,815 B/shape
+// "CRDT/history overhead multiplier on top of that" — calibrated from real
+// runSoak() measurements (bytes-per-LIVE-shape, since without compaction —
+// canvas-sync has none; only the server-side DocumentActor compacts, E3 —
+// full history always survives in the snapshot).
+//
+// RE-CALIBRATED 2026-07-15 for the setText-inclusive op mix (rig/ops.ts H1
+// shift: putShape 40→35%, updateProps 20→15%, reparent 15→10%, new setText
+// 15%; hostile bands unchanged). setText's payload lives in a separate,
+// compact per-shape LoroText container keyed `text:<id>` (loro-canvas-doc.ts's
+// textKey), so trading putShape/updateProps/reparent weight for setText did
+// NOT raise per-live-shape snapshot growth — if anything it eased slightly.
+// Representative single-run point measurements on the new mix (via
+// `bun canvas-sync/soak-cli.ts`):
+//   500 ops / 3 clients / chaos 0.3   seed=1  ->   7 live shapes,  19,726 B -> 2,818 B/shape
+//   5,000 ops / 5 clients / chaos 0.5  seed=42 ->  74 live shapes, 222,033 B -> 3,000 B/shape
+//   20,000 ops / 5 clients / chaos 0.5 seed=42 -> 348 live shapes, 926,373 B -> 2,662 B/shape
+// Seed sweeps at each config (worst-case bytes-per-LIVE-shape, ignoring the
+// degenerate 1–2-shape tail carved out by the CAVEAT below):
+//   500/3/0.3   (100 seeds): median 4,141 B/shape, worst ~4,600 at healthy shape counts
+//   5,000/5/0.5  (20 seeds): median 3,490 B/shape, worst 4,552 (seed=28)
+//   20,000/5/0.5 (20 seeds): median 3,481 B/shape, worst 3,828 (seed=65)
 // The ratio DECREASES as scale grows (fixed genesis/doc-structure overhead
-// amortizes), so the smallest-scale run is the worst case: 5,467 B/shape ÷
-// 300 B ≈ 18.2x. K=30 gives ~1.65x headroom over that worst case (and ~2.2–
-// 2.4x headroom at the two larger scales) — generous enough to absorb normal
-// run-to-run variance (different seeds/chaos/pool sizes) while still
-// catching a genuine multi-x regression (e.g. a repair/dedupe bug that stops
-// reclaiming tombstones at all).
+// amortizes), so a smaller-scale run is the worst case: 4,552 B/shape ÷ 300 B
+// ≈ 15.2x — LOWER than the old mix's 18.2x worst case, so the pre-existing
+// K=30 is KEPT (not lowered): it now gives ~2.0x headroom over the worst
+// shipped config (up from ~1.65x on the old mix), and ~2.5–2.6x at the two
+// larger scales — generous enough to absorb normal run-to-run variance
+// (different seeds/chaos/pool sizes) while still catching a genuine multi-x
+// regression (e.g. a repair/dedupe bug that stops reclaiming tombstones at
+// all, or a setText path that stops converging its LoroText containers).
 // CAVEAT: this K=30 calibration is scoped to the two shipped configurations
 // above (chaos 0.3 smoke, chaos 0.5 nightly). chaos=0 / low-shape-count
-// configs measured ~21.9KB over just 2 live shapes — far outside this
-// envelope — and WILL false-positive the tripwire; recalibrate before adding
-// any new runSoak() caller with different parameters.
+// configs — e.g. a run that quiesces to just 1 live shape measured ~18.9KB
+// over that single shape (63x) — fall far outside this envelope and WILL
+// false-positive the tripwire; recalibrate before adding any new runSoak()
+// caller with different parameters.
 export const BOUNDED_GROWTH_K = 30
 export const AVG_SHAPE_SIZE_BYTES = 300
 
@@ -388,6 +405,21 @@ export function runSoak(opts: RunSoakOpts): SoakResult {
 		const clientDoc = dumpModel(c.peer.doc)
 		if (checkInvariants(clientDoc).length > 0) converged = false
 		if (!statesEqual(normalize(clientDoc), serverModel)) converged = false
+	}
+
+	// TEXT convergence: dumpModel/CanvasDocument carries NO text field at all —
+	// setText writes to a separate per-shape LoroText container keyed
+	// `text:<id>` (loro-canvas-doc.ts's textKey), entirely outside the
+	// Shape/CanvasDocument schema. So the dumpModel-based checks above never
+	// exercise setText's convergence — they'd stay green under TOTAL
+	// cross-client text divergence. Mirrors convergence.test.ts's runTrial:
+	// check getText explicitly, per pool shape id, across the server and every
+	// client (the server stands in for that rig's "peer 0" reference point).
+	for (const id of idPool.shapeIds) {
+		const serverText = server.doc.getText(id)
+		for (const c of clients) {
+			if (c.peer.doc.getText(id) !== serverText) converged = false
+		}
 	}
 
 	const finalShapeCount = server.doc.listShapes().length
