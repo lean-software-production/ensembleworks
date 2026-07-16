@@ -35,6 +35,13 @@ export interface GestureModifiers {
   readonly meta?: boolean
 }
 
+/** Which client a gesture op drives, in a MULTI-actor contract (Pilot 5). A
+ * plain string (not an enum): the vocabulary stays data-shaped and open —
+ * 'A'/'B' are convention, not a closed set. Single-actor contracts never set
+ * this (every existing GestureOp omits `actor` and defaults to 'A'), so
+ * every pre-Pilot-5 declaration stays byte-compatible. */
+export type Actor = string
+
 /** A screen-space anchor a gesture op resolves against. Phase A shipped only
  * the absolute point form; Pilot 2 (Phase C) extends this union with a shape
  * anchor (the library grows per unit — design's bootstrap principle). */
@@ -48,12 +55,17 @@ export type Anchor =
 /** One primitive gesture step. SCREEN space, exactly like input.ts's
  * InputEvent coordinates — the FSM runner turns these into InputEvents via
  * script.ts, the browser runner into Playwright input. */
+// Every variant carries an optional `actor` (Pilot 5's MULTI-actor
+// extension — see the `Actor` doc comment above). Default 'A' when omitted:
+// single-actor contracts never set it, so every pre-Pilot-5 gesture array
+// (built without this field at all) keeps meaning exactly what it always
+// did — one implicit actor, routed to the runner's ONE existing page/FSM.
 export type GestureOp =
-  | { readonly kind: 'down'; readonly at: Anchor; readonly modifiers?: GestureModifiers }
-  | { readonly kind: 'move'; readonly at: Anchor; readonly steps?: number; readonly modifiers?: GestureModifiers }
-  | { readonly kind: 'up'; readonly modifiers?: GestureModifiers }
-  | { readonly kind: 'wheel'; readonly dx: number; readonly dy: number; readonly at: Anchor; readonly modifiers?: GestureModifiers }
-  | { readonly kind: 'key'; readonly key: string; readonly modifiers?: GestureModifiers }
+  | { readonly kind: 'down'; readonly at: Anchor; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
+  | { readonly kind: 'move'; readonly at: Anchor; readonly steps?: number; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
+  | { readonly kind: 'up'; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
+  | { readonly kind: 'wheel'; readonly dx: number; readonly dy: number; readonly at: Anchor; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
+  | { readonly kind: 'key'; readonly key: string; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
 
 /** The scene a contract wants seeded before its gesture runs. Phase A ships an
  * empty scene (pilot 1 needs no shapes); Pilot 2 adds shapes. Runner-agnostic:
@@ -107,6 +119,18 @@ export interface Obs {
    * at fsm level; the mounted [data-text-editor-input] element in the browser
    * adapter.) */
   editingShape(): string | null
+  /** Observe from a named actor's client (Pilot 5's MULTI-actor extension).
+   * Single-actor contracts never call this — every method above answers
+   * from actor 'A''s own view by default, exactly as before this method
+   * existed. Returns an `Obs` scoped to that actor's page/FSM instance; a
+   * runner that has provisioned no such actor throws. */
+  on(actor: Actor): Obs
+  /** Does THIS Obs's view show a "peer is editing" indicator for `shapeId`?
+   * Browser-only (Pilot 5): a remote peer's presence-driven editing badge is
+   * a rendered DOM element, not an FSM-observable concept — the FSM adapter
+   * throws 'not observable at fsm level', matching textSelectionSpans'
+   * established throw-stub pattern for a browser-only observation. */
+  peerEditingIndicator(shapeId: string): boolean
 }
 
 /** A contract declaration = data. */

@@ -4,12 +4,19 @@
 // `team` (the ratified hard exclusion — see client/src/engine.ts). FSM-level
 // contracts run in canvas-editor/src/contracts/library.test.ts instead — this
 // spec intentionally only picks up the browser-tagged ones.
+//
+// `browser` (Pilot 5): threaded through to `runContractBrowser` for every
+// contract, not just multi-actor ones — a single-actor declaration never
+// reads it (see that function's own MULTI-ACTOR doc comment), so this costs
+// nothing for the pre-Pilot-5 library and lets a MULTI-actor contract (e.g.
+// `peer-editing-is-visible`) provision its second actor's context without a
+// per-contract fixture branch here.
 import { test, expect } from '../lib/fixtures'
 import { CONTRACTS } from '@ensembleworks/interaction-contracts'
 import { runContractBrowser } from '../lib/contracts'
 
 for (const contract of CONTRACTS.filter((c) => c.level === 'browser')) {
-	test(`interaction contract [browser]: ${contract.name}`, async ({ page }) => {
+	test(`interaction contract [browser]: ${contract.name}`, async ({ page, browser }) => {
 		test.setTimeout(60_000)
 		const room = `contract-${contract.name}`
 		// Defense-in-depth over a structurally-safe name: `contract-${name}` can
@@ -19,7 +26,7 @@ for (const contract of CONTRACTS.filter((c) => c.level === 'browser')) {
 		// (client/src/engine.ts), which no room name or URL param can bypass.
 		expect(room).not.toBe('team')
 		await page.goto(`/?room=${room}&engine=v2`)
-		const failure = await runContractBrowser(page, contract)
+		const failure = await runContractBrowser(page, contract, browser)
 		expect(failure, failure ?? 'contract held').toBeNull()
 	})
 }

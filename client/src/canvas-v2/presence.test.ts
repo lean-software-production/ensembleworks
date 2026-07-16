@@ -89,19 +89,19 @@ import {
 
 	const publisher = createPresencePublisher(store, { intervalMs: 60, now: () => clock })
 	publisher.setCursor({ x: 1, y: 2 })
-	assert.deepEqual(store.all()['self-key'], { cursor: { x: 1, y: 2 }, viewport: null, stamp: null, presenting: [] })
+	assert.deepEqual(store.all()['self-key'], { cursor: { x: 1, y: 2 }, viewport: null, stamp: null, presenting: [], editing: null })
 
 	// A camera publish in the SAME instant shares the one channel: the WRITE
 	// is dropped (no second same-ms store write can ever leave this
 	// publisher) but the viewport update is RECORDED on `current`.
-	publisher.setViewportAndRefreshCursor({ x: 5, y: 5, w: 800, h: 600, z: 1 }, { x: 5, y: 5, z: 1 })
+	publisher.setViewportAndRefreshCursor({ x: 5, y: 5, w: 800, h: 600, z: 1 }, { x: 5, y: 5, z: 1 }, null)
 	assert.equal(store.all()['self-key']!.viewport, null, 'a same-instant second write is dropped at the shared channel (never reaches the store)')
 
 	// The NEXT fired publish (past the window) carries the recorded viewport
 	// — deferred, not lost.
 	clock = 100
 	publisher.setCursor({ x: 3, y: 4 })
-	assert.deepEqual(store.all()['self-key'], { cursor: { x: 3, y: 4 }, viewport: { x: 5, y: 5, w: 800, h: 600, z: 1 }, stamp: null, presenting: [] }, 'the next fire carries every update recorded during the dropped window (full-object publish)')
+	assert.deepEqual(store.all()['self-key'], { cursor: { x: 3, y: 4 }, viewport: { x: 5, y: 5, w: 800, h: 600, z: 1 }, stamp: null, presenting: [], editing: null }, 'the next fire carries every update recorded during the dropped window (full-object publish)')
 
 	store.destroy()
 	console.log('ok: createPresencePublisher — one shared channel, dropped writes deferred to the next fire')
@@ -129,14 +129,14 @@ import {
 	// world (100/2 - (-50), 100/2 - 0) = (100, 50), published together with
 	// the new viewport in ONE write.
 	clock = 100 // past the 60ms throttle window
-	publisher.setViewportAndRefreshCursor({ x: -50, y: 0, w: 800, h: 600, z: 2 }, { x: -50, y: 0, z: 2 })
+	publisher.setViewportAndRefreshCursor({ x: -50, y: 0, w: 800, h: 600, z: 2 }, { x: -50, y: 0, z: 2 }, null)
 	assert.deepEqual(store.all()['self-key']!.cursor, { x: 100, y: 50 }, 'a camera-only change republishes the cursor at the RECOMPUTED world position')
 	assert.deepEqual(store.all()['self-key']!.viewport, { x: -50, y: 0, w: 800, h: 600, z: 2 }, 'the same single write carries the new viewport')
 
 	// Inside the shared window: the write is dropped (leading edge), exactly
 	// like a too-soon pointermove would be.
 	clock = 110
-	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 })
+	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 }, null)
 	assert.deepEqual(store.all()['self-key']!.cursor, { x: 100, y: 50 }, 'a refresh inside the throttle window is dropped (shared channel)')
 
 	store.destroy()
@@ -152,8 +152,8 @@ import {
 	let clock = 0
 	const store = new PresenceStore('self-key')
 	const publisher = createPresencePublisher(store, { intervalMs: 60, now: () => clock })
-	publisher.setViewportAndRefreshCursor({ x: 10, y: 10, w: 800, h: 600, z: 2 }, { x: 10, y: 10, z: 2 })
-	assert.deepEqual(store.all()['self-key'], { cursor: null, viewport: { x: 10, y: 10, w: 800, h: 600, z: 2 }, stamp: null, presenting: [] }, 'no screen point recorded yet -> viewport publishes, cursor stays null')
+	publisher.setViewportAndRefreshCursor({ x: 10, y: 10, w: 800, h: 600, z: 2 }, { x: 10, y: 10, z: 2 }, null)
+	assert.deepEqual(store.all()['self-key'], { cursor: null, viewport: { x: 10, y: 10, w: 800, h: 600, z: 2 }, stamp: null, presenting: [], editing: null }, 'no screen point recorded yet -> viewport publishes, cursor stays null')
 
 	// A raw setCursor SUPERSEDES the screen-point derivation: a later camera
 	// change must not resurrect a stale screen point over it.
@@ -162,7 +162,7 @@ import {
 	clock = 200
 	publisher.setCursor(null) // e.g. the pointer left the viewport
 	clock = 300
-	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 })
+	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 }, null)
 	assert.equal(store.all()['self-key']!.cursor, null, 'a raw setCursor(null) forgets the recorded screen point — no stale-cursor resurrection on the next camera change')
 	store.destroy()
 	console.log('ok: setViewportAndRefreshCursor — null-cursor cases (no screen point; superseded screen point)')
@@ -202,7 +202,7 @@ import {
 	assert.equal(publishCalls, 2, 'exactly one more store write for the whole recorded window')
 	assert.deepEqual(
 		store.all()['self-key'],
-		{ cursor: { x: 3, y: 4 }, viewport: null, stamp: null, presenting: [JSON.stringify({ shapeId: 'shape:f1', fraction: 0.4, ts: 999 })] },
+		{ cursor: { x: 3, y: 4 }, viewport: null, stamp: null, presenting: [JSON.stringify({ shapeId: 'shape:f1', fraction: 0.4, ts: 999 })], editing: null },
 		'ONE combined write carries cursor AND presenting together — never two separate set() calls',
 	)
 
@@ -246,7 +246,7 @@ import {
 	}
 	const publisher = createPresencePublisher(store, { intervalMs: 60, now: () => clock })
 
-	publisher.setViewportAndRefreshCursor({ x: 1, y: 1, w: 800, h: 600, z: 1 }, { x: 1, y: 1, z: 1 })
+	publisher.setViewportAndRefreshCursor({ x: 1, y: 1, w: 800, h: 600, z: 1 }, { x: 1, y: 1, z: 1 }, null)
 	assert.equal(publishCalls, 1, 'the leading viewport publish fires immediately')
 
 	publisher.setPresenting({ shapeId: 'shape:f2', fraction: 0.1, ts: 1 })
@@ -258,7 +258,7 @@ import {
 	assert.equal(publishCalls, 2, 'exactly one more physical write for the whole recorded window')
 	assert.deepEqual(
 		store.all()['self-key'],
-		{ cursor: null, viewport: { x: 1, y: 1, w: 800, h: 600, z: 1 }, stamp: null, presenting: [JSON.stringify({ shapeId: 'shape:f2', fraction: 0.2, ts: 2 })] },
+		{ cursor: null, viewport: { x: 1, y: 1, w: 800, h: 600, z: 1 }, stamp: null, presenting: [JSON.stringify({ shapeId: 'shape:f2', fraction: 0.2, ts: 2 })], editing: null },
 		'ONE combined write carries the viewport AND presenting together — never two separate set() calls',
 	)
 	store.destroy()
@@ -279,7 +279,7 @@ import {
 	publisher2.setPresenting({ shapeId: 'shape:f3', fraction: 0.5, ts: 10 })
 	assert.equal(publishCalls2, 1, 'the leading presenting publish fires immediately')
 
-	publisher2.setViewportAndRefreshCursor({ x: 9, y: 9, w: 800, h: 600, z: 1 }, { x: 9, y: 9, z: 1 })
+	publisher2.setViewportAndRefreshCursor({ x: 9, y: 9, w: 800, h: 600, z: 1 }, { x: 9, y: 9, z: 1 }, null)
 	assert.equal(publishCalls2, 1, 'a same-instant viewport call after a PRESENTING lead is dropped at the shared channel')
 	assert.equal(store2.all()['self-key']!.viewport, null, 'the dropped write never reached the store — viewport is still the pre-call value')
 
@@ -288,12 +288,53 @@ import {
 	assert.equal(publishCalls2, 2, 'exactly one more physical write for the whole recorded window')
 	assert.deepEqual(
 		store2.all()['self-key'],
-		{ cursor: { x: 7, y: 7 }, viewport: { x: 9, y: 9, w: 800, h: 600, z: 1 }, stamp: null, presenting: [JSON.stringify({ shapeId: 'shape:f3', fraction: 0.5, ts: 10 })] },
+		{ cursor: { x: 7, y: 7 }, viewport: { x: 9, y: 9, w: 800, h: 600, z: 1 }, stamp: null, presenting: [JSON.stringify({ shapeId: 'shape:f3', fraction: 0.5, ts: 10 })], editing: null },
 		'ONE combined write carries presenting, viewport, AND cursor together when presenting leads the interval',
 	)
 	store2.destroy()
 
 	console.log('ok: setPresenting + setViewportAndRefreshCursor — single combined write holds for the viewport pairing too, either field leading')
+}
+
+// ============================================================================
+// 9. Task F4 (pilot 5): `editingId` is the THIRD argument to
+//    setViewportAndRefreshCursor, not a separate setter — proves it folds
+//    into the SAME single write as viewport/cursor (never its own store
+//    write), and that a same-instant repeat call still records the latest
+//    editingId for the next fire (the exact "deferred, not lost" guarantee
+//    block 3 established for viewport, now covering editingId).
+// ============================================================================
+{
+	let clock = 0
+	const store = new PresenceStore('self-key')
+	let publishCalls = 0
+	const realPublish = store.publish.bind(store)
+	;(store as unknown as { publish: (p: Presence) => void }).publish = (p: Presence) => {
+		publishCalls++
+		realPublish(p)
+	}
+	const publisher = createPresencePublisher(store, { intervalMs: 60, now: () => clock })
+
+	// BeginEdit: editingId becomes 'shape:lock', published together with the
+	// viewport/cursor in ONE write.
+	publisher.setViewportAndRefreshCursor({ x: 0, y: 0, w: 800, h: 600, z: 1 }, { x: 0, y: 0, z: 1 }, 'shape:lock')
+	assert.equal(publishCalls, 1, 'the leading write fires immediately')
+	assert.equal(store.all()['self-key']!.editing, 'shape:lock', 'editingId is published as part of the ONE combined write, not a separate set()')
+
+	// A same-instant repeat (e.g. a stray extra EditorState notification) is
+	// dropped at the shared channel like everything else, but recorded.
+	publisher.setViewportAndRefreshCursor({ x: 1, y: 1, w: 800, h: 600, z: 1 }, { x: 1, y: 1, z: 1 }, 'shape:lock')
+	assert.equal(publishCalls, 1, 'a same-instant repeat call is dropped at the shared channel')
+
+	// EndEdit past the throttle window: editingId goes back to null, in the
+	// SAME single write as the (unchanged) viewport/cursor.
+	clock = 100
+	publisher.setViewportAndRefreshCursor({ x: 1, y: 1, w: 800, h: 600, z: 1 }, { x: 1, y: 1, z: 1 }, null)
+	assert.equal(publishCalls, 2, 'exactly one more physical write for the EndEdit transition')
+	assert.equal(store.all()['self-key']!.editing, null, 'editingId round-trips back to null on EndEdit — never left stuck at the prior shape id')
+
+	store.destroy()
+	console.log('ok: setViewportAndRefreshCursor — editingId folds into the single combined write (Task F4)')
 }
 
 // ============================================================================

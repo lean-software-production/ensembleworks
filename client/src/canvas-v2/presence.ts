@@ -173,7 +173,7 @@ export interface PresencePublisher {
 	 * mount's measured ViewportSize) AND re-derives the world cursor from
 	 * the LAST screen point setCursorFromScreen recorded (skipped when none
 	 * is recorded, or a raw setCursor has since superseded it), then
-	 * publishes BOTH in one store write.
+	 * publishes viewport + cursor + (Task F4) `editing` in ONE store write.
 	 *
 	 * ONE WRITE, DELIBERATELY (probe-established, not style): loro-crdt's
 	 * EphemeralStore timestamps each `set()` at wall-clock MILLISECOND
@@ -188,8 +188,31 @@ export interface PresencePublisher {
 	 * on the remote side most of the time (the exact flake the CanvasV2App
 	 * integration test caught). One combined write per triggering event is
 	 * the fix — and the same reasoning is why ALL of this publisher's
-	 * methods share ONE throttle channel (see createPresencePublisher). */
-	setViewportAndRefreshCursor(viewport: { readonly x: number; readonly y: number; readonly w: number; readonly h: number; readonly z: number } | null, camera: Camera): void
+	 * methods share ONE throttle channel (see createPresencePublisher).
+	 *
+	 * `editingId` (Task F4, pilot 5 — F1 owner decision: Option 1, indicator
+	 * only) is threaded through THIS SAME parameter list rather than a
+	 * separate `setEditing` method, for exactly the reason just above: this
+	 * method is the ONE call CanvasV2App.tsx's `editor.subscribe()` effect
+	 * makes on EVERY EditorState change (camera/selection/hover/editingId
+	 * alike, see that effect's own doc comment) — a caller issuing a SECOND,
+	 * independent setter call in that SAME synchronous handler (which an
+	 * earlier revision of this fix did, via a standalone `setEditing`) hits
+	 * the identical same-millisecond drop this doc comment already warns
+	 * about, except GUARANTEED every single time rather than a rare
+	 * coincidence: the shared throttle fires the FIRST of the two calls (still
+	 * missing the second mutation) and silently drops the second, so a
+	 * `BeginEdit` landing in the same tick as its own viewport republish would
+	 * never actually reach the wire until some LATER, unrelated EditorState
+	 * change happened to flush it — probe-confirmed while building this fix
+	 * (a real two-context Playwright run: A's `editingId` set correctly, but
+	 * B's presence read never showed it, because the drop is deterministic,
+	 * not probabilistic, for two same-tick calls sharing one channel). */
+	setViewportAndRefreshCursor(
+		viewport: { readonly x: number; readonly y: number; readonly w: number; readonly h: number; readonly z: number } | null,
+		camera: Camera,
+		editingId: string | null,
+	): void
 	/**
 	 * Task D5: publishes THIS peer's own file-viewer (or any future embed's)
 	 * presenting state — `null` to stop presenting. Folds into the SAME
@@ -201,7 +224,15 @@ export interface PresencePublisher {
 	 * the SECOND on a remote peer's LWW tie. A caller that ever adds its own
 	 * extra `store.publish()` for `presenting` — instead of routing through
 	 * this method — reintroduces exactly that flake for the file-viewer's
-	 * present/follow feature.
+	 * present/follow feature. SAFE as a standalone method (unlike a
+	 * standalone `setEditing` would have been) because its ONLY caller
+	 * (FileViewerShape.tsx) never also calls setViewportAndRefreshCursor in
+	 * the SAME synchronous handler — the two triggers (an embed's
+	 * present-toggle vs. the editor's camera/selection subscription) are
+	 * genuinely independent event sources, so a same-millisecond collision is
+	 * the rare, self-healing case this doc comment's sibling one accepts, not
+	 * the guaranteed one setViewportAndRefreshCursor's `editingId` parameter
+	 * exists to avoid.
 	 */
 	setPresenting(presenting: PresentingV2 | null): void
 }
@@ -243,36 +274,94 @@ export interface PresencePublisher {
 export function createPresencePublisher(store: PresenceStore, opts: { readonly intervalMs?: number; readonly now?: () => number } = {}): PresencePublisher {
 	const now = opts.now ?? (() => performance.now())
 	const intervalMs = opts.intervalMs ?? PRESENCE_THROTTLE_MS
-	let current: Presence = { cursor: null, viewport: null, stamp: null, presenting: [] }
+	let current: Presence = { cursor: null, viewport: null, stamp: null, presenting: [], editing: null }
 	/** The last SCREEN point setCursorFromScreen saw — what
 	 * setViewportAndRefreshCursor re-derives the world cursor from on a
 	 * camera change. Null until the first setCursorFromScreen, and reset to
 	 * null by a raw setCursor (see the interface doc comments). */
 	let lastScreen: { readonly x: number; readonly y: number } | null = null
+	/** The `editing` value last actually FLUSHED to the store (not merely
+	 * recorded on `current`) — see setViewportAndRefreshCursor's own doc
+	 * comment for why an editingId TRANSITION bypasses the shared throttle
+	 * entirely instead of going through it like every other field. */
+	let lastPublishedEditing: string | null = null
 
 	// The ONE throttle channel — see the factory doc comment's ONE SHARED
-	// THROTTLE CHANNEL section for why it must be singular.
-	const publish = leadingEdgeThrottle<void>(intervalMs, now, () => store.publish(current))
+	// THROTTLE CHANNEL section for why it must be singular. Inlined here
+	// (rather than built from the generic `leadingEdgeThrottle` helper, which
+	// every OTHER setter below still conceptually matches) so the F4 bypass
+	// path can share `lastFlushAt`: a bypassed flush still counts as "the
+	// channel fired" for the purposes of the NEXT throttled call's window —
+	// without that, a same-millisecond call immediately following a bypass
+	// would wrongly see "no flush has ever happened" and fire a REDUNDANT
+	// second write (harmless payload-wise, since nothing mutated `current` in
+	// between, but pointless wire chatter this inlining avoids for free).
+	let lastFlushAt: number | null = null
+	const flushNow = (): void => {
+		lastFlushAt = now()
+		store.publish(current)
+	}
+	const throttledFlush = (): void => {
+		const t = now()
+		if (lastFlushAt === null || t - lastFlushAt >= intervalMs) flushNow()
+		// else: dropped — `current` already carries the update for whenever
+		// the NEXT flush (throttled or bypassed) actually happens.
+	}
 
 	return {
 		setCursor(cursor) {
 			lastScreen = null // a raw world cursor supersedes any recorded screen point
 			current = { ...current, cursor }
-			publish()
+			throttledFlush()
 		},
 		setCursorFromScreen(screen, camera) {
 			lastScreen = screen
 			current = { ...current, cursor: screenToWorld(camera, screen) }
-			publish()
+			throttledFlush()
 		},
-		setViewportAndRefreshCursor(viewport, camera) {
+		setViewportAndRefreshCursor(viewport, camera, editingId) {
 			const cursor = lastScreen !== null ? screenToWorld(camera, lastScreen) : current.cursor
-			current = { ...current, viewport, cursor }
-			publish() // ONE store write for both halves — see the interface doc comment
+			current = { ...current, viewport, cursor, editing: editingId }
+			if (editingId !== lastPublishedEditing) {
+				// BeginEdit/EndEdit (Task F4, pilot 5): flush IMMEDIATELY,
+				// bypassing the shared leading-edge throttle, rather than going
+				// through the normal `publish()` channel. Reason (probe-
+				// confirmed building this fix, a real two-context Playwright
+				// run): a double-click-to-edit is a BURST of near-simultaneous
+				// EditorState changes (down -> SetSelection, up, down, up ->
+				// BeginEdit, all within a handful of real milliseconds of each
+				// other) — every one of them calls this SAME method, so they
+				// all land inside ONE 60ms throttle window, and only the
+				// FIRST of the burst actually reaches the store; the LAST one
+				// (carrying the editingId change the whole feature exists to
+				// show) is dropped. Unlike a dropped CURSOR/VIEWPORT update,
+				// which leadingEdgeThrottle's own TRAILING-EDGE GAP doc
+				// comment accepts as "self-heals on the next event of any
+				// kind," a dropped `editing` transition may have NO later
+				// event to piggyback on for the rest of the edit (typing
+				// itself never touches EditorState — SetText goes straight to
+				// the CRDT doc) — so the peer-editing indicator could stay
+				// silently absent for the WHOLE edit. Bypassing the throttle
+				// only on an actual transition (not on every publish while
+				// mid-edit) keeps this rare and cheap: a same-millisecond
+				// double-flush (this bypass plus a throttled call that also
+				// happens to fire around the same instant) sends the
+				// identical `current` object twice — redundant wire traffic,
+				// never a correctness issue, since both calls carry the same
+				// payload. `flushNow` (not a raw `store.publish` call) so this
+				// bypass ALSO updates `lastFlushAt` — the next throttled call
+				// correctly sees "a flush just happened" instead of wrongly
+				// firing its own redundant write (see `lastFlushAt`'s own doc
+				// comment above).
+				lastPublishedEditing = editingId
+				flushNow()
+			} else {
+				throttledFlush() // no transition — the ordinary shared, throttled channel
+			}
 		},
 		setPresenting(presenting) {
 			current = { ...current, presenting: encodePresenting(presenting) }
-			publish() // same shared channel — see the interface doc comment's ONE WRITE section
+			throttledFlush() // same shared channel — see the interface doc comment's ONE WRITE section
 		},
 	}
 }

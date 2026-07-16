@@ -16,11 +16,23 @@
 // mid-move it still does at the endpoint), but a TRANSIENT violation that
 // self-heals within a single multi-step op would be invisible here; pinning
 // those is the FSM lane's job (per-event checks at zero browser cost).
-import type { Page } from '@playwright/test'
+//
+// MULTI-ACTOR (Pilot 5): a `GestureOp.actor` beyond the implicit default 'A'
+// gets its OWN Playwright browser context, joined to the SAME room as the
+// caller-supplied `page` (which is always actor 'A' — never re-provisioned).
+// Reuses `canvas-v2.spec.ts`'s two-context pattern exactly (`browser.
+// newContext({ storageState: identityState(...) })`, a distinct userId per
+// actor) — see `identityForActor` below. Single-actor contracts (the whole
+// pre-Pilot-5 library) never mention a second actor, so `actors` here is
+// always the singleton `{'A'}`, no extra context is ever provisioned, and
+// every sampled value is identical to what this runner produced before this
+// extension — BYTE-COMPATIBLE, not just behaviorally equivalent.
+import type { Browser, BrowserContext, Page } from '@playwright/test'
 import { expect } from '@playwright/test'
-import type { Anchor, Contract, GestureOp, Obs } from '@ensembleworks/interaction-contracts'
+import type { Actor, Anchor, Contract, GestureOp, Obs } from '@ensembleworks/interaction-contracts'
 import { mulberry32 } from '@ensembleworks/interaction-contracts'
 import { viewportBox, waitForBoot } from './canvas-v2.js'
+import { identityState } from './fixtures.js'
 
 // The browser lane runs the fixed CI smoke case only (seed 1 — the same
 // "fixed CI smoke case" convention types.ts's Rng doc comment describes and
@@ -30,6 +42,22 @@ import { viewportBox, waitForBoot } from './canvas-v2.js'
 // drag-cursor-lock campaign) — the browser lane's job is proving the SAME
 // gesture reproduces the bug in a real DOM, not re-fuzzing it.
 const BROWSER_SEED = 1
+
+// RENDER GATE — do not return until every one of `shapes` is actually
+// visible on `page`. commit -> doc subscription -> React re-render is
+// asynchronous; without this wait a gesture can race the pipeline and sweep
+// over an EMPTY canvas, in which case a selection-shaped contract passes
+// trivially (spans 0) — a false GREEN masking the very bug the contract
+// pins, plus a latent flake. Split out from `seedScene` below so a MULTI-
+// ACTOR peer (which never calls putShape itself — it receives the shapes
+// over the live WS sync from actor 'A''s room) can wait on the SAME gate
+// without re-seeding (re-seeding would double-`putShape` the same ids into
+// the shared CRDT doc).
+async function waitForShapesVisible(page: Page, shapes: readonly { readonly id: string }[]): Promise<void> {
+  for (const s of shapes) {
+    await expect(page.locator(`[data-shape-id="${s.id}"][data-shape-kind]`)).toBeVisible({ timeout: 10_000 })
+  }
+}
 
 // Seed the scene through the live doc (same mechanism as seedGrid). Each
 // seeded shape also gets its live text set to `text for <its id>`
@@ -52,14 +80,22 @@ async function seedScene(page: Page, contract: Contract): Promise<void> {
     }
     ew.doc.commit()
   }, shapes as any)
-  // RENDER GATE — do not return until every seeded body is actually visible.
-  // commit → doc subscription → React re-render is asynchronous; without this
-  // wait the gesture can race the pipeline and sweep over an EMPTY canvas, in
-  // which case a selection-shaped contract passes trivially (spans 0) — a
-  // false GREEN masking the very bug the contract pins, plus a latent flake.
-  for (const s of shapes) {
-    await expect(page.locator(`[data-shape-id="${s.id}"][data-shape-kind]`)).toBeVisible({ timeout: 10_000 })
-  }
+  await waitForShapesVisible(page, shapes)
+}
+
+// A fixed identity per non-'A' actor (mirrors canvas-v2.spec.ts's ctxB
+// precedent EXACTLY for 'B' — the only actor Pilot 5's contract uses — so
+// this shares the same well-known userId a reader of that spec already
+// recognizes). Any OTHER actor letter a future pilot introduces gets a
+// deterministic, never-colliding fallback identity generated from its own
+// name — never hand-picked ad hoc as new pilots are added.
+const KNOWN_ACTOR_IDENTITIES: Readonly<Record<string, { readonly name: string; readonly id: string }>> = {
+  B: { name: 'E2E Two', id: 'e2e-user-0000-0000-0002' },
+}
+function identityForActor(actor: Actor) {
+  const known = KNOWN_ACTOR_IDENTITIES[actor]
+  if (known) return identityState(known.name, known.id)
+  return identityState(`E2E ${actor}`, `e2e-actor-${actor.toLowerCase()}`)
 }
 
 // Resolve an anchor to a viewport-relative SCREEN point.
@@ -103,15 +139,72 @@ async function sampleTextSelectionSpans(page: Page): Promise<number> {
   })
 }
 
+// Pilot 5's Obs.peerEditingIndicator() doc comment (interaction-contracts/
+// src/types.ts) names this exact mechanism: F4's fix renders a
+// `data-overlay="editing" data-editing-shape-id="<id>"` element on any shape
+// a peer's presence.editing names. Batched over every scene shape id in ONE
+// page.evaluate (not one round-trip per id) — a contract's `check` calls
+// `peerEditingIndicator(shapeId)` SYNCHRONOUSLY (Obs methods are sync — see
+// pageObs's own doc comment), so every id it might ask about must already be
+// pre-sampled before `check` runs, exactly like `editingShape`/
+// `textSelectionSpans` are today.
+async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const out: Record<string, boolean> = {}
+    for (const id of ids) {
+      out[id] = document.querySelector(`[data-overlay="editing"][data-editing-shape-id="${id}"]`) !== null
+    }
+    return out
+  }, shapeIds)
+}
+
+/** One actor's pre-sampled observation values — see `pageObs`'s doc comment
+ * for why these must be sampled BEFORE `contract.check` runs rather than
+ * read lazily from inside an `Obs` method. */
+interface ActorSample {
+  readonly spans: number
+  readonly editingShape: string | null
+  readonly editingIndicators: Readonly<Record<string, boolean>>
+}
+
+/** Samples everything ANY browser contract's `check` might read off one
+ * actor's page: settles a render frame first (the same RENDER-SETTLING gate
+ * `nextFrame` always was, just now scoped per actor instead of the single
+ * caller-supplied `page`), then reads text selection spans, the locally-
+ * mounted text editor's shape id, and (Pilot 5) which of the scene's shapes
+ * show a peer-editing indicator on THIS actor's own screen. */
+async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promise<ActorSample> {
+  await nextFrame(page)
+  const spans = await sampleTextSelectionSpans(page)
+  const editingShape = await sampleEditingShape(page)
+  const editingIndicators = await samplePeerEditingIndicators(page, sceneShapeIds)
+  return { spans, editingShape, editingIndicators }
+}
+
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
  * browser contract's `check` reads. Design tension (module header of the
  * task that introduced this): `Obs` methods are synchronous, but page
  * observations are async — rather than making every `Obs` method async
  * (which would ripple into the FSM adapter for no benefit), the runner reads
  * the specific fields BEFORE calling `check` and returns a snapshot-backed
- * Obs. Keep the sampler minimal (YAGNI) — a later pilot's multi-actor
- * `obs.on('B')` extends this, not today's contracts. */
-function pageObs(startRect: { minX: number; minY: number; maxX: number; maxY: number }, textSelectionSpans: number, editingShape: string | null): Obs {
+ * Obs. Keep the sampler minimal (YAGNI).
+ *
+ * MULTI-ACTOR (Pilot 5): `samples` holds ONE `ActorSample` per provisioned
+ * actor (keyed by actor letter); `on(actor)` looks itself up in that SAME
+ * map via `obsFor`, so `obs.on('B').peerEditingIndicator(id)` reads B's own
+ * pre-sampled values, never A's. A single-actor contract's `samples` map has
+ * exactly one entry ('A') and never calls `on` at all — every field it DOES
+ * read (`textSelectionSpans`/`editingShape`/`visibleWorldRectAtStart`)
+ * resolves identically to the pre-Pilot-5 shape of this function. */
+function pageObs(
+  startRect: { minX: number; minY: number; maxX: number; maxY: number },
+  actor: Actor,
+  samples: ReadonlyMap<Actor, ActorSample>,
+  obsFor: (actor: Actor) => Obs,
+): Obs {
+  const sample = samples.get(actor)
+  if (!sample) throw new Error(`obs.on(${JSON.stringify(actor)}): no such actor was provisioned for this contract's gesture`)
   return {
     visibleWorldRectAtStart: () => startRect,
     visibleWorldRect: () => { throw new Error('sync obs unavailable in browser adapter — use the async sampler') },
@@ -119,8 +212,10 @@ function pageObs(startRect: { minX: number; minY: number; maxX: number; maxY: nu
     shapeSizeDelta: () => { throw new Error('use async sampler') },
     cursorWorldDisplacement: () => { throw new Error('use async sampler') },
     snapRadius: () => { throw new Error('use async sampler') },
-    textSelectionSpans: () => textSelectionSpans,
-    editingShape: () => editingShape,
+    textSelectionSpans: () => sample.spans,
+    editingShape: () => sample.editingShape,
+    on: (a: Actor) => obsFor(a),
+    peerEditingIndicator: (shapeId: string) => sample.editingIndicators[shapeId] ?? false,
   }
 }
 
@@ -147,6 +242,34 @@ async function nextFrame(page: Page): Promise<void> {
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))))
 }
 
+/** Retries `check` until it returns null (pass) or `timeoutMs` elapses,
+ * returning the LAST failure seen if it never passes. Pilot 5's reason this
+ * exists: an 'at-end' multi-actor check reads a REMOTE peer's presence,
+ * which must cross the network (WS relay) and then wait for that peer's own
+ * `PRESENCE_POLL_MS` (150ms) re-render poll — a single post-gesture sample,
+ * the pre-Pilot-5 behavior, would flake or permanently fail on convergence
+ * lag alone, independent of whether the feature actually works. Scoped to
+ * ONLY the 'at-end' branch (see `runContractBrowser` below) — the
+ * 'every-event' branch keeps its original immediate single-check semantics
+ * unconditionally, because `cross-widget-selection` (this library's one
+ * 'every-event' browser contract) needs to catch a TRANSIENT same-tick
+ * violation, which retrying would mask, not prove. No pre-Pilot-5 contract
+ * uses 'at-end' at the browser level, so this addition changes nothing for
+ * the existing library — a single-actor 'at-end' contract (were one ever
+ * added) just passes on its first attempt, at zero added latency. */
+async function pollUntilPass(check: () => Promise<string | null>, timeoutMs: number, intervalMs: number): Promise<string | null> {
+  const deadline = Date.now() + timeoutMs
+  let failure = await check()
+  while (failure !== null && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, intervalMs))
+    failure = await check()
+  }
+  return failure
+}
+
+const AT_END_POLL_TIMEOUT_MS = 10_000
+const AT_END_POLL_INTERVAL_MS = 100
+
 /** Run one browser-level contract against an already-booted, already-seeded
  * (this function seeds it) v2 page. Returns the first invariant failure
  * message, or null if the contract held for the whole gesture.
@@ -155,70 +278,134 @@ async function nextFrame(page: Page): Promise<void> {
  * checked) — NOT per interpolated pointermove; a `steps: 12` move is checked
  * once, at its endpoint. See the module header's SAMPLING CADENCE note for
  * why that's sufficient for monotonic invariants and where transient
- * violations must be pinned instead (the FSM lane). */
-export async function runContractBrowser(page: Page, contract: Contract): Promise<string | null> {
+ * violations must be pinned instead (the FSM lane).
+ *
+ * MULTI-ACTOR (Pilot 5): `browser` is REQUIRED only when the contract's
+ * gesture names an actor other than 'A' — every pre-Pilot-5 contract omits
+ * `actor` on every op, so `actors` below is always the singleton `{'A'}` and
+ * `browser` is never even read. A caller that always threads `browser`
+ * through (as `contracts.spec.ts` now does for every contract, not just
+ * multi-actor ones) pays nothing extra for a single-actor declaration. */
+export async function runContractBrowser(page: Page, contract: Contract, browser?: Browser): Promise<string | null> {
   await waitForBoot(page)
   await seedScene(page, contract)
-  const box = await viewportBox(page)
-  const startRect = { minX: box.x, minY: box.y, maxX: box.x + box.width, maxY: box.y + box.height }
+  const sceneShapes = contract.scene?.() ?? []
+  const sceneShapeIds = sceneShapes.map((s) => s.id)
 
   const ops: readonly GestureOp[] = contract.gesture(mulberry32(BROWSER_SEED))
+  const actors = new Set<Actor>(ops.map((op) => op.actor ?? 'A'))
+  actors.add('A')
+  // An OBSERVER-only actor (Pilot 5's 'B': it never performs a single
+  // gesture op, it only watches via `obs.on('B')` inside `check`) is
+  // invisible to the op-scan above by construction — there is no op to
+  // carry its actor tag. Statically scanning `check`'s own source text for
+  // `.on('X')` calls closes that gap without growing `Contract` a redundant
+  // `actors` field a declaration could forget to keep in sync with what
+  // `check` actually calls. Same "read the raw text, don't execute it"
+  // trick this house already uses elsewhere (boundary.test.ts's import-
+  // boundary scan) — safe here because `Function.prototype.toString()` on a
+  // contract's own plain function literal is just reading source, never
+  // evaluating anything.
+  for (const m of contract.check.toString().matchAll(/\.on\(\s*['"]([^'"]+)['"]\s*\)/g)) actors.add(m[1]!)
 
-  const check = async (): Promise<string | null> => {
-    const spans = await sampleTextSelectionSpans(page)
-    const editingShape = await sampleEditingShape(page)
-    const obs = pageObs(startRect, spans, editingShape)
-    return contract.check(obs)
-  }
+  const pages = new Map<Actor, Page>([['A', page]])
+  const boxes = new Map<Actor, { x: number; y: number; width: number; height: number }>([['A', await viewportBox(page)]])
+  const extraContexts: BrowserContext[] = []
 
-  for (const op of ops) {
-    switch (op.kind) {
-      case 'down': {
-        const p = await resolveAnchor(page, box, op.at)
-        await setModifiers(page, 'down', op.modifiers)
-        await page.mouse.move(p.x, p.y)
-        await page.mouse.down()
-        await setModifiers(page, 'up', op.modifiers)
-        break
+  try {
+    if (actors.size > 1) {
+      if (!browser) {
+        throw new Error(
+          `contract ${contract.name} names an actor beyond 'A' but runContractBrowser was not given a 'browser' fixture to provision extra contexts with`,
+        )
       }
-      case 'move': {
-        const p = await resolveAnchor(page, box, op.at)
-        await setModifiers(page, 'down', op.modifiers)
-        await page.mouse.move(p.x, p.y, { steps: op.steps ?? 1 })
-        await setModifiers(page, 'up', op.modifiers)
-        break
-      }
-      case 'up': {
-        await setModifiers(page, 'down', op.modifiers)
-        await page.mouse.up()
-        await setModifiers(page, 'up', op.modifiers)
-        break
-      }
-      case 'wheel': {
-        const p = await resolveAnchor(page, box, op.at)
-        await page.mouse.move(p.x, p.y)
-        await setModifiers(page, 'down', op.modifiers)
-        await page.mouse.wheel(op.dx, op.dy)
-        await setModifiers(page, 'up', op.modifiers)
-        break
-      }
-      case 'key': {
-        await setModifiers(page, 'down', op.modifiers)
-        await page.keyboard.press(op.key)
-        await setModifiers(page, 'up', op.modifiers)
-        break
+      const room = new URL(page.url()).searchParams.get('room')
+      if (!room) throw new Error(`runContractBrowser: page.url() ${JSON.stringify(page.url())} has no ?room= — cannot join actor B to the same room`)
+      for (const actor of actors) {
+        if (actor === 'A') continue
+        const ctx = await browser.newContext({ storageState: identityForActor(actor) })
+        extraContexts.push(ctx)
+        const actorPage = await ctx.newPage()
+        actorPage.on('dialog', (d) => {
+          throw new Error(`unexpected dialog on actor ${actor} (identity fixture broken?): ${d.message()}`)
+        })
+        await actorPage.goto(`/?room=${room}&engine=v2`)
+        await waitForBoot(actorPage)
+        // NOT seedScene: actor 'A' already created these shapes in the SHARED
+        // CRDT doc (same room) — this peer only needs to wait for them to
+        // arrive over the live sync and render, never re-`putShape` them
+        // (which would double-create under the same ids).
+        await waitForShapesVisible(actorPage, sceneShapes)
+        pages.set(actor, actorPage)
+        boxes.set(actor, await viewportBox(actorPage))
       }
     }
-    if (contract.when === 'every-event') {
-      await nextFrame(page)
-      const failure = await check()
+
+    const startBox = boxes.get('A')!
+    const startRect = { minX: startBox.x, minY: startBox.y, maxX: startBox.x + startBox.width, maxY: startBox.y + startBox.height }
+
+    const check = async (): Promise<string | null> => {
+      const samples = new Map<Actor, ActorSample>()
+      for (const [actor, actorPage] of pages) samples.set(actor, await sampleActor(actorPage, sceneShapeIds))
+      const obsFor = (a: Actor): Obs => pageObs(startRect, a, samples, obsFor)
+      return contract.check(obsFor('A'))
+    }
+
+    for (const op of ops) {
+      const actor = op.actor ?? 'A'
+      const actorPage = pages.get(actor)
+      if (!actorPage) throw new Error(`gesture op targets actor ${JSON.stringify(actor)}, which was never provisioned`)
+      const actorBox = boxes.get(actor)!
+      switch (op.kind) {
+        case 'down': {
+          const p = await resolveAnchor(actorPage, actorBox, op.at)
+          await setModifiers(actorPage, 'down', op.modifiers)
+          await actorPage.mouse.move(p.x, p.y)
+          await actorPage.mouse.down()
+          await setModifiers(actorPage, 'up', op.modifiers)
+          break
+        }
+        case 'move': {
+          const p = await resolveAnchor(actorPage, actorBox, op.at)
+          await setModifiers(actorPage, 'down', op.modifiers)
+          await actorPage.mouse.move(p.x, p.y, { steps: op.steps ?? 1 })
+          await setModifiers(actorPage, 'up', op.modifiers)
+          break
+        }
+        case 'up': {
+          await setModifiers(actorPage, 'down', op.modifiers)
+          await actorPage.mouse.up()
+          await setModifiers(actorPage, 'up', op.modifiers)
+          break
+        }
+        case 'wheel': {
+          const p = await resolveAnchor(actorPage, actorBox, op.at)
+          await actorPage.mouse.move(p.x, p.y)
+          await setModifiers(actorPage, 'down', op.modifiers)
+          await actorPage.mouse.wheel(op.dx, op.dy)
+          await setModifiers(actorPage, 'up', op.modifiers)
+          break
+        }
+        case 'key': {
+          await setModifiers(actorPage, 'down', op.modifiers)
+          await actorPage.keyboard.press(op.key)
+          await setModifiers(actorPage, 'up', op.modifiers)
+          break
+        }
+      }
+      if (contract.when === 'every-event') {
+        // Immediate, single check — see pollUntilPass's doc comment for why
+        // 'every-event' deliberately does NOT retry.
+        const failure = await check()
+        if (failure) return failure
+      }
+    }
+    if (contract.when === 'at-end') {
+      const failure = await pollUntilPass(check, AT_END_POLL_TIMEOUT_MS, AT_END_POLL_INTERVAL_MS)
       if (failure) return failure
     }
+    return null
+  } finally {
+    for (const ctx of extraContexts) await ctx.close()
   }
-  if (contract.when === 'at-end') {
-    await nextFrame(page)
-    const failure = await check()
-    if (failure) return failure
-  }
-  return null
 }

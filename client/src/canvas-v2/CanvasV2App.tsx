@@ -123,6 +123,7 @@ import { getIdentity, getRoomId } from '../identity.js'
 import { wsClientTransport, type ConnectionState, type WebSocketLike } from './ws-client-transport.js'
 import { resolvePageId } from './bootstrap-page.js'
 import { adaptPresence, createPresencePublisher, type PresencePublisher } from './presence.js'
+import { EditingIndicators } from './EditingIndicators.js'
 import { DevOverlay, shouldShowDevOverlayFromEnvironment, useCanvasMetrics } from './DevOverlay.js'
 import { canvasV2EmbedLifecycles, registerCanvasV2Shapes } from './shapes/index.js'
 import { presentStoreV2 } from './shapes/presentStoreV2.js'
@@ -602,11 +603,28 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// comment for the probe-established EphemeralStore same-millisecond LWW
 	// tie that makes two separate writes silently lose the second one on the
 	// remote side.
+	//
+	// EDITING (Task F4, pilot 5 — F1 owner decision: Option 1, indicator
+	// only): this SAME subscription already fires on an `editingId` change
+	// (BeginEdit/EndEdit apply through the ordinary EditorState-change path,
+	// same as selection/hover) — so `editor.get().editingId` rides the SAME
+	// combined write setViewportAndRefreshCursor already makes, as its third
+	// argument. NOT a second setter call: see that method's own doc comment
+	// for the deterministic same-tick drop a separate `setEditing()` call
+	// here would hit (probe-confirmed while building this fix) — the shared
+	// throttle channel flushes only ONE of two synchronous same-handler
+	// calls, so BeginEdit's `editing` value would silently never reach the
+	// wire until some unrelated LATER EditorState change happened to flush
+	// it. Folding it into this one write makes delivery unconditional.
 	useEffect(() => {
 		const publish = () => {
 			const camera = editor.get().camera
 			const size = viewportSizeRef.current
-			presencePublisher.setViewportAndRefreshCursor({ x: camera.x, y: camera.y, z: camera.z, w: size.width, h: size.height }, camera)
+			presencePublisher.setViewportAndRefreshCursor(
+				{ x: camera.x, y: camera.y, z: camera.z, w: size.width, h: size.height },
+				camera,
+				editor.get().editingId,
+			)
 		}
 		publish() // an initial viewport publish so peers see it before any camera change
 		return editor.subscribe(publish)
@@ -870,6 +888,15 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 							dispatch={dispatch}
 						/>
 						<TextEditor toolContext={toolContext} onTextChange={handleTextChange} onEndEdit={handleEndEdit} />
+						{/* Pilot 5 (Task F4) — peer editing indicators. World-space,
+						    painted AFTER ShapeLayer/EmbedLayer (DOM order == paint
+						    order, WorldLayer's FLAT SIBLINGS design) so a badge is
+						    never occluded by the shape body it's attached to. Reads
+						    `presenceStore.all()` directly (not `adaptPresence`'s
+						    Cursors-shaped narrowing below) — see EditingIndicators.tsx's
+						    own module header for why it needs canvas-sync's raw
+						    `Presence.editing` field. */}
+						<EditingIndicators presence={presenceStore.all()} selfKey={selfKey} snapshot={snapshot} />
 					</WorldLayer>
 					<Overlay
 						editorState={editorState}

@@ -145,6 +145,20 @@ function makeObs(
     editingShape() {
       return editor.get().editingId
     },
+    on() {
+      // Pilot 5 is browser-only (types.ts's Obs.on/peerEditingIndicator doc
+      // comments): a REMOTE peer's rendered editing indicator is a DOM
+      // concept the FSM has no notion of — there is no second FSM instance
+      // to observe from, and this runner drives exactly one Editor. A
+      // browser-tagged contract never reaches this adapter (library.test.ts
+      // filters CONTRACTS to level: 'fsm' before calling runContractFsm) —
+      // this throw is a defensive backstop, matching textSelectionSpans'
+      // established not-reachable-today posture.
+      throw new Error('not observable at fsm level')
+    },
+    peerEditingIndicator() {
+      throw new Error('not observable at fsm level')
+    },
   }
 }
 
