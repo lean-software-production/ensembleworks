@@ -122,5 +122,28 @@
       "capturedAt": "2026-07-13T02:20:25.968Z",
       "host": "zeus-arch"
     }
+  },
+  "dense-pan-zoom-1000": {
+    "seedMs": 259,
+    "onScreen": 989,
+    "pan": {
+      "frames": 85,
+      "p50ms": 16.7,
+      "p95ms": 16.8,
+      "maxms": 50,
+      "droppedOver25ms": 2
+    },
+    "zoom": {
+      "frames": 56,
+      "p50ms": 16.7,
+      "p95ms": 16.7,
+      "maxms": 50.1,
+      "droppedOver25ms": 1
+    },
+    "_meta": {
+      "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
+      "capturedAt": "2026-07-16T01:38:49.399Z",
+      "host": "zeus-arch"
+    }
   }
 }

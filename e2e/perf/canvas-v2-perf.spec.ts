@@ -36,11 +36,11 @@
 // PER-SCENARIO NOTE below for the actual number recorded alongside a given
 // run) — fast enough that it's a rounding error next to the scenario
 // durations themselves, so no further alternative was worth chasing.
-import { mkdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '../lib/fixtures'
 import { installSampler, measure, recordTo, capturing, type FrameStats } from '../lib/perf'
-import { ANCHOR, seedGrid, viewportBox, waitForBoot } from '../lib/canvas-v2'
+import { ANCHOR, seedDense, seedGrid, viewportBox, waitForBoot } from '../lib/canvas-v2'
 
 const FILE = path.join(import.meta.dirname, '../baselines/canvas-v2-perf.json')
 
@@ -73,6 +73,38 @@ function maybeRecord(key: string, value: Record<string, unknown>) {
 	if (!capturing) return
 	mkdirSync(path.dirname(FILE), { recursive: true })
 	recordTo(FILE, key, value, engineVersion())
+}
+
+// DENSE-SEED REGRESSION GATE (Task G1 — distinct from the FIXED 60fps@1k
+// gate above, deliberately): the dense scenario packs shapes ON-SCREEN
+// (lib/canvas-v2.ts's `seedDense`), so its honest p95 reflects real
+// on-screen render cost (rich note bodies + ShapeLayer's per-render
+// parent-before-child z-order sort, canvas-react/src/ShapeLayer.tsx — the
+// F1 WATCH-ITEM this scenario exists to surface) — NOT the near-zero cost
+// the spread-out seedGrid scenario measures once culling hides most
+// shapes. There's no principled ABSOLUTE 60fps budget to gate that on
+// (packing enough on-screen shapes to be meaningful may legitimately cost
+// more than one frame — that's the point, not a bug), so this gates on
+// REGRESSION from a recorded, honest baseline instead: no more than a 15%
+// p95 increase (the design doc's stated budget), with the SAME CI-noise
+// multiplier the fixed gate above uses and for the same reason (shared CI
+// runners are noisier than the box a baseline was captured on) — one
+// documented margin constant, not two competing fudge factors.
+const REGRESSION_BUDGET = 0.15 // <=15% p95 regression over the recorded baseline
+
+const recordedBaselines: Record<string, any> = existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')) : {}
+
+function assertNoRegression(label: string, stats: FrameStats, baselineP95: number | undefined) {
+	if (baselineP95 === undefined) {
+		throw new Error(
+			`${label}: no recorded baseline to gate against — capture one first ` +
+				`(EW_CAPTURE=1 bunx playwright test perf/canvas-v2-perf.spec.ts), then rerun to check the gate.`,
+		)
+	}
+	const gated = baselineP95 * (1 + REGRESSION_BUDGET) * CI_MARGIN_MULTIPLIER
+	const line = `[canvas-v2-perf] ${label}: p95=${stats.p95ms}ms baseline=${baselineP95}ms (+${(REGRESSION_BUDGET * 100).toFixed(0)}%=${(baselineP95 * (1 + REGRESSION_BUDGET)).toFixed(2)}ms, gated at ${gated.toFixed(2)}ms = +${(REGRESSION_BUDGET * 100).toFixed(0)}% x ${CI_MARGIN_MULTIPLIER}x CI margin)`
+	console.log(line)
+	expect(stats.p95ms, `${label}: p95 frame time should stay within ${(REGRESSION_BUDGET * 100).toFixed(0)}% (CI-margined) of the recorded baseline`).toBeLessThanOrEqual(gated)
 }
 
 /** pointerdown -> first-paint-PROXY latency, in ms — see module header's
@@ -133,6 +165,65 @@ test.describe('canvas-v2 browser perf', () => {
 			}
 		})
 	}
+
+	// DENSE-SEED SCENARIO (Task G1): the loop above spreads shapes ~260px
+	// apart (seedGrid), so at any n the default viewport only ever shows a
+	// handful — Phase-3 measured IDENTICAL p95 at 1k/5k/10k for exactly that
+	// reason (viewport culling, canvas-react/src/ShapeLayer.tsx's
+	// `queryViewport`, keeps render cost flat when almost everything is
+	// off-screen). `seedDense` instead packs shapes so the grid's own
+	// footprint tiles the 1280x720 default viewport — most of DENSE_COUNT
+	// really is on-screen, so this DOES exercise on-screen render cost
+	// (rich note bodies + ShapeLayer's per-render z-order sort — the F1
+	// WATCH-ITEM). Gated by REGRESSION, not the fixed 60fps budget — see
+	// assertNoRegression's own comment for why.
+	const DENSE_COUNT = 1000
+
+	test('canvas-v2 perf @ dense-1000: pan/zoom sweep (packed viewport)', async ({ page }) => {
+		test.setTimeout(120_000)
+		await installSampler(page) // before goto — see the pan/zoom scenario's ordering note above
+		const room = 'v2-perf-dense-1000'
+		await page.goto(`/?room=${room}&engine=v2`)
+		await waitForBoot(page)
+
+		const seedStart = Date.now()
+		await seedDense(page, DENSE_COUNT)
+		const seedMs = Date.now() - seedStart
+		// Real on-screen count, read from the DOM ShapeLayer actually rendered
+		// (culling is ShapeLayer's decision, not the seeder's) — this is the
+		// scenario's own honesty check: if a future change (bigger default
+		// viewport, different culling behavior) ever makes this go flat again,
+		// this assertion catches it directly rather than silently degrading
+		// into a repeat of the seedGrid problem.
+		const onScreen = await page.locator('[data-shape-id^="shape:dense-"]').count()
+		console.log(`[canvas-v2-perf] seeded ${DENSE_COUNT} dense shapes via window.__ew.doc.putShape in ${seedMs}ms; ${onScreen} on-screen at default zoom`)
+		expect(onScreen, 'dense seed should pack the large majority of shapes into the default viewport, not spread them off-screen').toBeGreaterThanOrEqual(Math.floor(DENSE_COUNT * 0.9))
+
+		const pan = await measure(page, async () => {
+			for (let i = 0; i < 60; i++) await page.mouse.wheel(40, 40)
+		})
+		const zoom = await measure(page, async () => {
+			await page.keyboard.down('Control')
+			for (let i = 0; i < 20; i++) await page.mouse.wheel(0, -60)
+			for (let i = 0; i < 20; i++) await page.mouse.wheel(0, 60)
+			await page.keyboard.up('Control')
+		})
+
+		maybeRecord('dense-pan-zoom-1000', { seedMs, onScreen, pan, zoom })
+
+		if (capturing) {
+			// Capture runs author the baseline this same call just wrote — there
+			// is nothing yet on disk (as loaded at module scope, before this
+			// test ran) to gate against. Log-only; a SEPARATE non-capturing run
+			// is how the gate actually gets checked (see the module's own
+			// EW_CAPTURE doc comment / this task's own step 2).
+			console.log(`[canvas-v2-perf] dense-pan-zoom-1000: CAPTURED (pan p95=${pan.p95ms}ms, zoom p95=${zoom.p95ms}ms) — rerun without EW_CAPTURE to check the ${(REGRESSION_BUDGET * 100).toFixed(0)}% regression gate`)
+		} else {
+			const baselineEntry = recordedBaselines['dense-pan-zoom-1000']
+			assertNoRegression('dense pan/zoom @ 1000 shapes (pan)', pan, baselineEntry?.pan?.p95ms)
+			assertNoRegression('dense pan/zoom @ 1000 shapes (zoom)', zoom, baselineEntry?.zoom?.p95ms)
+		}
+	})
 
 	test('canvas-v2 perf: 50-shape marquee + drag', async ({ page }) => {
 		test.setTimeout(60_000)

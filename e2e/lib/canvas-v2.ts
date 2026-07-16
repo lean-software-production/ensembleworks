@@ -188,3 +188,65 @@ export async function seedGrid(page: Page, n: number, offset = 0): Promise<void>
 		{ count: n, offset },
 	)
 }
+
+/** Task G1 (Seam G, dense-seed perf scenario): seeds `n` note shapes packed
+ * INTO the default 1280×720 viewport, unlike `seedGrid` above (whose fixed
+ * 260px spacing spreads shapes out — Phase-3 found that ShapeLayer's
+ * viewport culling (canvas-react/src/ShapeLayer.tsx's `queryViewport`) then
+ * keeps render cost FLAT at any n, because most shapes sit off-screen no
+ * matter the count — the exact reason the existing pan/zoom@n scenario
+ * can't show degradation). Density here comes from `props.scale` (a note's
+ * rendered box is `200*scale × (200+growY)*scale` — canvas-model/src/
+ * geometry.ts's `size()`), NOT from shrunk w/h props — a note has no w/h
+ * props at all, only the uniform `scale` multiplier — so this shrinks the
+ * SAME rich note body (Seam C's colored sticky, not a BoxShape placeholder)
+ * rather than swapping in a different, cheaper-to-render kind.
+ *
+ * The grid's column/row count is chosen so the packed shapes exactly tile
+ * the viewport's own aspect ratio (`cols/rows ≈ viewportW/viewportH`), and
+ * each cell's side is `min(cellW, cellH)` — so the whole n-shape grid's
+ * footprint is `cols·cellW × rows·cellH`, which by construction is
+ * `viewportW × viewportH`: at the session's default identity camera (no
+ * pan/zoom yet — see `ANCHOR`'s COORDINATES note), essentially every seeded
+ * shape lands ON-SCREEN, not just a handful. Requires the session to
+ * already be booted (`waitForBoot`). Returns the shape ids actually
+ * seeded — callers that want the ACTUAL on-screen count should query the
+ * DOM directly (culling is ShapeLayer's decision, not this seeder's), which
+ * is exactly what canvas-v2-perf.spec.ts's dense scenario does. */
+export async function seedDense(page: Page, n: number, viewport: { w: number; h: number } = { w: 1280, h: 720 }): Promise<string[]> {
+	return page.evaluate(
+		({ count, viewportW, viewportH }) => {
+			const ew = (window as unknown as { __ew: { editor: { pageId: string }; doc: { putShape(s: unknown): void; commit(): void } } }).__ew
+			const pageId = ew.editor.pageId
+			const aspect = viewportW / viewportH
+			const cols = Math.max(1, Math.ceil(Math.sqrt(count * aspect)))
+			const rows = Math.max(1, Math.ceil(count / cols))
+			const cellW = viewportW / cols
+			const cellH = viewportH / rows
+			// Slightly under min(cellW, cellH) so adjacent notes don't visually
+			// abut/overlap at rounding edges — still packed, not spread.
+			const scale = (Math.min(cellW, cellH) * 0.92) / 200
+			const ids: string[] = []
+			for (let i = 0; i < count; i++) {
+				const id = `shape:dense-${i}`
+				ids.push(id)
+				ew.doc.putShape({
+					id,
+					kind: 'note',
+					parentId: pageId,
+					index: 'a1',
+					x: (i % cols) * cellW,
+					y: Math.floor(i / cols) * cellH,
+					rotation: 0,
+					isLocked: false,
+					opacity: 1,
+					meta: {},
+					props: { scale },
+				})
+			}
+			ew.doc.commit()
+			return ids
+		},
+		{ count: n, viewportW: viewport.w, viewportH: viewport.h },
+	)
+}
