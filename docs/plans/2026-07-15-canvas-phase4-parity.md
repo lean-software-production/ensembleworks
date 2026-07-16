@@ -1821,6 +1821,57 @@ deviation from DoD #8 (never a silent ungated landing)._
   this as an accepted gap). Harmonize in a follow-up — rename one type, and/or
   wire the DevOverlay's connection field off the real transport signal so the
   two connection notions stop diverging.
+- **F1 (parity harness) — CRITICAL PROBLEM #1 resolved by reusing the
+  existing Agent-API-v2 read endpoint.** `GET /api/v2/canvas/document?room=`
+  (server/src/features/canvas-v2.ts) already converts the live tldraw store
+  into canvas-model Shape/Binding objects via `fromTldraw` — the SAME
+  converter the shadow mirror and every other Agent-API-v2 reader already
+  trust. The harness seeds v1 via the existing `seedGoldenBoard`, fetches
+  that endpoint for the same room, and feeds its output into the v2 doc via
+  `window.__ew.doc.putShape`/`putBinding` — no new tldraw->model conversion
+  logic. Two real gaps had to be bridged, not invented: (1) an arrow
+  binding's props needed a field-rename (tldraw's own
+  `normalizedAnchor:{x,y}` -> canvas-model's `anchor:{nx,ny}` — arrow-
+  route.ts's own doc comment confirms these are the SAME normalized-anchor
+  concept) — without it, `putBinding` crashes `Arrows.tsx` on the very next
+  render; (2) both engines share tldraw's own camera convention (`screen =
+  (world + camera.xy) * z`, per camera.ts's own citation), so v1's post-
+  zoomToFit camera can be read and applied to v2 verbatim via `SetCamera`.
+- **F1 — found AND FIXED (not masked): ShapeLayer paint order followed the
+  spatial index, not document/z order.** `queryViewport`'s return order is
+  spatial-hash-grid iteration order with no relationship to z-order; since
+  every rendered body is a flat, `position: absolute` DOM sibling, DOM order
+  IS paint order — a frame's real, v1-matched, fully-opaque body could
+  therefore render AFTER (and fully occlude) one of its own note children.
+  Latent since Seam C landed (component goldens are single-shape fixtures
+  that never exercised nested-shape paint order); F1's realistic
+  multi-shape fixture hit it on the first real run. Fixed by reusing
+  canvas-editor's existing `orderParentBeforeChild` (now exported —
+  DeleteShapes' undo path already depends on the identical guarantee) to
+  sort visible shapes parent-before-child before rendering; regression test
+  in `canvas-react/src/shape-layer.test.ts` (case 7), proven to fail without
+  the fix.
+- **F1 — SCORING SURFACE had to move off "whole screenshot minus masks."**
+  v1's plain page background and v2's always-on dotted grid (Grid.tsx's own
+  header: "no parity claim") PLUS a differing flat background color
+  underneath make a whole-canvas pixel diff ratio jump from ~3% to ~60% the
+  moment the comparator is tuned sensitive enough to catch a real color
+  regression — nowhere near a core-shape-parity concern. The harness scores
+  an EXPLICIT list of shape-footprint regions instead (title/notes tight,
+  geo+arrow and draw toleranced/deferred per the C4 and ink-tool-scope
+  findings above), so background pixels are never sampled either way. See
+  `e2e/lib/parity.ts`'s `computeParity` SCORING SURFACE doc comment.
+- **F1 — geo/arrow region also absorbs a SECOND documented gap beyond C4's
+  dash-wobble:** `arrow` (and `draw`) are not excluded from ShapeLayer's
+  generic per-shape body pass the way embed kinds are, so both render an
+  EXTRA generic BoxShape placeholder box in addition to their real
+  rendering (arrow: the correct SVG-overlay line; draw: no real ink body at
+  all this phase). Toleranced into the same `geo-arrow`/`draw` regions
+  rather than fixed — cosmetic, not a missing-content defect like the
+  z-order bug above, and `arrow`/`draw` ink-tool work is out of Phase-4
+  scope per the bounds ceiling. Worth a follow-up excluding `arrow` from
+  ShapeLayer's generic body pass (it has no legitimate box body, only the
+  overlay line) the same way embed kinds already are.
 
 ---
 
