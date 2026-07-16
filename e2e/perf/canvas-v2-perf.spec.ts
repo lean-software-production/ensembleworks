@@ -77,7 +77,7 @@ function maybeRecord(key: string, value: Record<string, unknown>) {
 
 // DENSE-SEED REGRESSION GATE (Task G1 — distinct from the FIXED 60fps@1k
 // gate above, deliberately): the dense scenario packs shapes ON-SCREEN
-// (lib/canvas-v2.ts's `seedDense`), so its honest p95 reflects real
+// (lib/canvas-v2.ts's `seedDense`), so its honest frame times reflect real
 // on-screen render cost (rich note bodies + ShapeLayer's per-render
 // parent-before-child z-order sort, canvas-react/src/ShapeLayer.tsx — the
 // F1 WATCH-ITEM this scenario exists to surface) — NOT the near-zero cost
@@ -86,25 +86,80 @@ function maybeRecord(key: string, value: Record<string, unknown>) {
 // (packing enough on-screen shapes to be meaningful may legitimately cost
 // more than one frame — that's the point, not a bug), so this gates on
 // REGRESSION from a recorded, honest baseline instead: no more than a 15%
-// p95 increase (the design doc's stated budget), with the SAME CI-noise
+// increase (the design doc's stated budget), with the SAME CI-noise
 // multiplier the fixed gate above uses and for the same reason (shared CI
 // runners are noisier than the box a baseline was captured on) — one
 // documented margin constant, not two competing fudge factors.
-const REGRESSION_BUDGET = 0.15 // <=15% p95 regression over the recorded baseline
+//
+// TWO METRICS, ON PURPOSE (G1 review FIX 2): p95 alone is a WEAK gate for a
+// dense scenario. The rAF sampler (lib/perf.ts) floors at the display's
+// vsync tick (~16.7ms), and p95 over ~60-85 samples won't move at all
+// unless >5% of frames actually blow past that floor — so a render-cost
+// regression (a worse z-order sort, a heavier body) that makes a HANDFUL
+// of frames janky shows up in `maxms`/`droppedOver25ms`, NOT in p95. Gating
+// on p95 only would defeat this scenario's whole reason to exist. So this
+// gates on BOTH p95 AND maxms (same relative +15%×CI-margin formula for
+// each — defense in depth), with `droppedOver25ms` recorded OBSERVED-ONLY,
+// NOT gated: it's a tiny integer (baseline 0-2 here), so a percentage gate
+// is meaningless and even additive slack (`baseline+5`) would mostly just
+// add a flaky failure mode when CI noise nudges one extra frame over 25ms —
+// and maxms already captures the same "some frames got slow" signal with a
+// continuous, less-noisy number. maxms IS noisier than p95 in absolute
+// terms (a single GC pause spikes it), which is exactly why it carries the
+// same 2x CI margin, not a tighter one.
+//
+// ALWAYS-ON GATE — THE CORRECTED PATTERN G2/G3 MUST REUSE (G1 review FIX 1):
+// `assertNoRegression` is called UNCONDITIONALLY below (like `assertBudget`
+// above), NEVER inside an `if (!capturing)` branch. The earlier version
+// gated only in the `else` of `if (capturing)`, which made the gate DEAD
+// CODE in CI: .github/workflows/canvas-v2-perf.yml runs this spec with
+// EW_CAPTURE=1 on EVERY PR and nightly, so `capturing` is ALWAYS true
+// there and the gate never ran. The fix relies on `recordedBaselines`
+// being loaded from the COMMITTED file at MODULE SCOPE (below), BEFORE any
+// per-test capture write — so the assert always compares the current run
+// against the COMMITTED baseline, never against the value the same run just
+// captured (which would be trivially green). In CI this means: assert
+// current-vs-committed (real regression detection) AND still write a fresh
+// baseline artifact (uploaded, not committed — a deliberate baseline update
+// is a human running capture locally and committing the JSON).
+const REGRESSION_BUDGET = 0.15 // <=15% regression over the recorded baseline, per metric
 
+// Loaded ONCE, at module scope, from the COMMITTED baseline file — BEFORE any
+// test runs or any `maybeRecord`/capture write touches the file. This is what
+// makes the always-on gate honest: the in-memory value stays the committed
+// baseline even after a capture run overwrites the file on disk, so the
+// assert can never accidentally compare a run against itself.
 const recordedBaselines: Record<string, any> = existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')) : {}
 
-function assertNoRegression(label: string, stats: FrameStats, baselineP95: number | undefined) {
-	if (baselineP95 === undefined) {
+interface RegressionBaseline {
+	readonly p95ms?: number
+	readonly maxms?: number
+}
+
+/** Gate `stats` against a COMMITTED per-scenario `baseline` on BOTH p95 and
+ * maxms (same relative +REGRESSION_BUDGET × CI margin per metric). `baseline`
+ * is `undefined` ONLY on a first-ever capture of a brand-new scenario key
+ * (nothing committed yet); the caller handles that bootstrap case explicitly
+ * (see the dense test) — this function's contract is "a committed baseline
+ * exists," so a missing one is a hard error here, never a silent skip. */
+function assertNoRegression(label: string, stats: FrameStats, baseline: RegressionBaseline | undefined) {
+	if (!baseline || typeof baseline.p95ms !== 'number' || typeof baseline.maxms !== 'number') {
 		throw new Error(
-			`${label}: no recorded baseline to gate against — capture one first ` +
-				`(EW_CAPTURE=1 bunx playwright test perf/canvas-v2-perf.spec.ts), then rerun to check the gate.`,
+			`${label}: no committed p95+maxms baseline to gate against — capture one first ` +
+				`(EW_CAPTURE=1 bunx playwright test perf/canvas-v2-perf.spec.ts) and COMMIT the baseline JSON, then reruns gate against it.`,
 		)
 	}
-	const gated = baselineP95 * (1 + REGRESSION_BUDGET) * CI_MARGIN_MULTIPLIER
-	const line = `[canvas-v2-perf] ${label}: p95=${stats.p95ms}ms baseline=${baselineP95}ms (+${(REGRESSION_BUDGET * 100).toFixed(0)}%=${(baselineP95 * (1 + REGRESSION_BUDGET)).toFixed(2)}ms, gated at ${gated.toFixed(2)}ms = +${(REGRESSION_BUDGET * 100).toFixed(0)}% x ${CI_MARGIN_MULTIPLIER}x CI margin)`
-	console.log(line)
-	expect(stats.p95ms, `${label}: p95 frame time should stay within ${(REGRESSION_BUDGET * 100).toFixed(0)}% (CI-margined) of the recorded baseline`).toBeLessThanOrEqual(gated)
+	const gate = (base: number) => base * (1 + REGRESSION_BUDGET) * CI_MARGIN_MULTIPLIER
+	const p95Gate = gate(baseline.p95ms)
+	const maxGate = gate(baseline.maxms)
+	const pct = (REGRESSION_BUDGET * 100).toFixed(0)
+	console.log(
+		`[canvas-v2-perf] ${label}: p95=${stats.p95ms}ms (baseline ${baseline.p95ms}ms, gated ${p95Gate.toFixed(2)}ms) ` +
+			`max=${stats.maxms}ms (baseline ${baseline.maxms}ms, gated ${maxGate.toFixed(2)}ms) ` +
+			`dropped(>25ms)=${stats.droppedOver25ms} [observed-only] — gate = +${pct}% x ${CI_MARGIN_MULTIPLIER}x CI margin`,
+	)
+	expect(stats.p95ms, `${label}: p95 frame time should stay within ${pct}% (CI-margined) of the committed baseline`).toBeLessThanOrEqual(p95Gate)
+	expect(stats.maxms, `${label}: max frame time should stay within ${pct}% (CI-margined) of the committed baseline`).toBeLessThanOrEqual(maxGate)
 }
 
 /** pointerdown -> first-paint-PROXY latency, in ms — see module header's
@@ -209,19 +264,28 @@ test.describe('canvas-v2 browser perf', () => {
 			await page.keyboard.up('Control')
 		})
 
+		// Capture writes a FRESH baseline file (uploaded as a CI artifact,
+		// committed only when a human runs capture locally + commits the JSON).
+		// It does NOT feed the gate below — that reads `recordedBaselines`,
+		// loaded from the COMMITTED file at module scope BEFORE this write — so
+		// the assert always compares this run vs the COMMITTED baseline, never
+		// vs the value it just wrote. Runs BEFORE the asserts so a failing gate
+		// still produces the fresh artifact.
 		maybeRecord('dense-pan-zoom-1000', { seedMs, onScreen, pan, zoom })
 
-		if (capturing) {
-			// Capture runs author the baseline this same call just wrote — there
-			// is nothing yet on disk (as loaded at module scope, before this
-			// test ran) to gate against. Log-only; a SEPARATE non-capturing run
-			// is how the gate actually gets checked (see the module's own
-			// EW_CAPTURE doc comment / this task's own step 2).
-			console.log(`[canvas-v2-perf] dense-pan-zoom-1000: CAPTURED (pan p95=${pan.p95ms}ms, zoom p95=${zoom.p95ms}ms) — rerun without EW_CAPTURE to check the ${(REGRESSION_BUDGET * 100).toFixed(0)}% regression gate`)
+		// ALWAYS-ON gate (see the module's ALWAYS-ON GATE note — the corrected
+		// G2/G3 template). The ONLY time the gate is skipped is a genuine
+		// first-ever bootstrap capture, when NO committed baseline exists yet
+		// for this key (`committed === undefined`) AND we're capturing one now
+		// — never merely "because EW_CAPTURE is set." In CI the committed
+		// baseline is always present (checked into the repo), so the gate runs
+		// there even under EW_CAPTURE=1 — which is the whole point of FIX 1.
+		const committed = recordedBaselines['dense-pan-zoom-1000']
+		if (capturing && committed === undefined) {
+			console.log(`[canvas-v2-perf] dense-pan-zoom-1000: BOOTSTRAP CAPTURE (no committed baseline yet) — pan p95=${pan.p95ms}ms/max=${pan.maxms}ms, zoom p95=${zoom.p95ms}ms/max=${zoom.maxms}ms; commit the JSON, then future runs gate against it`)
 		} else {
-			const baselineEntry = recordedBaselines['dense-pan-zoom-1000']
-			assertNoRegression('dense pan/zoom @ 1000 shapes (pan)', pan, baselineEntry?.pan?.p95ms)
-			assertNoRegression('dense pan/zoom @ 1000 shapes (zoom)', zoom, baselineEntry?.zoom?.p95ms)
+			assertNoRegression('dense pan/zoom @ 1000 shapes (pan)', pan, committed?.pan)
+			assertNoRegression('dense pan/zoom @ 1000 shapes (zoom)', zoom, committed?.zoom)
 		}
 	})
 

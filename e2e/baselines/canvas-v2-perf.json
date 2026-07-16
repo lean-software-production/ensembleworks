@@ -124,26 +124,27 @@
     }
   },
   "dense-pan-zoom-1000": {
-    "seedMs": 259,
+    "seedMs": 258,
     "onScreen": 989,
     "pan": {
-      "frames": 85,
+      "frames": 82,
       "p50ms": 16.7,
       "p95ms": 16.8,
-      "maxms": 50,
-      "droppedOver25ms": 2
+      "maxms": 50.1,
+      "droppedOver25ms": 3
     },
     "zoom": {
-      "frames": 56,
+      "frames": 48,
       "p50ms": 16.7,
       "p95ms": 16.7,
-      "maxms": 50.1,
-      "droppedOver25ms": 1
+      "maxms": 50,
+      "droppedOver25ms": 0
     },
     "_meta": {
       "engine": "canvas-editor@0.1.0+canvas-react@0.1.0",
-      "capturedAt": "2026-07-16T01:38:49.399Z",
-      "host": "zeus-arch"
+      "capturedAt": "2026-07-16T01:55:59.275Z",
+      "host": "zeus-arch",
+      "note": "maxms is the observed jank-inclusive typical-worst (~50ms both sweeps), NOT a cherry-picked clean run: a max over a short sweep is bimodal (clean ~16.8ms vs a single dropped frame ~50-66ms), so seeding the gate with a clean 16.8ms would flaky-fail whenever a run catches one jank frame. p95/p50 are from a real clean run; the +15%x2x gate on maxms (=115ms) sits above the observed ~66ms noise ceiling, below a real regression."
     }
   }
 }
