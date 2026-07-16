@@ -115,6 +115,17 @@ export function ShapeBody({ shape, snapshot, editorState, getText, dispatch }: S
         height: h,
         transformOrigin: '0 0',
         transform: shapeBodyTransform(snapshot, shape),
+        // Pilot 3 (interaction-contracts/cross-widget-selection.ts): a static
+        // body's text must never join a NATIVE browser text selection — a
+        // canvas drag selects shapes, not text (matching tldraw's own
+        // canvas-wide suppression). Scoped to this static wrapper ONLY: the
+        // editing textarea (TextEditor.tsx, a sibling overlay — never a
+        // descendant of this div) and the embed bodies (EmbedLayer/EmbedHost,
+        // disjoint by isEmbedKind) keep their own caret/selection untouched —
+        // that structural scoping IS the editable-target exemption, no
+        // per-event guard needed.
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
       }}
     >
       <Component shape={shape} snapshot={snapshot} editorState={editorState} getText={getText} dispatch={dispatch} />
