@@ -16,6 +16,7 @@ import { Frame, encode } from './protocol.js'
 import { SyncClientPeer } from './client-peer.js'
 import { SyncServerPeer } from './server-peer.js'
 import { int, mulberry32, pick, type Rng } from './rig/prng.js'
+import { applyOp, type ApplyStats } from './rig/ops.js'
 
 const SEED = 1
 const CORPUS_SIZE = 1000
@@ -167,3 +168,59 @@ assert.equal(
 assert.ok(server.malformedFrames > CORPUS_SIZE / 4, 'sanity floor: most garbage/truncated/bit-flipped inputs should be rejected, not silently accepted')
 
 console.log('ok: fuzz corpus — garbage/truncated/bit-flipped updates never crash the peer')
+
+// --- OP-LEVEL fuzz: setText on a garbage/vanished shape id ------------------
+// Separate concern from everything above: the corpus fuzz just pinned at
+// 999/1000 attacks the FRAME/byte-decoding layer (SyncServerPeer.onFrame).
+// This attacks the OP layer instead — rig/ops.ts's new 'setText' Op kind,
+// applied via applyOp straight against a LoroCanvasDoc, same as the E1
+// convergence rig does. canvas-doc.ts's contract is "silent no-op if no shape
+// with this id exists" (the same tolerance deleteShape already honors, and
+// text.test.ts already unit-covers); this proves that contract holds even
+// under adversarial/garbage/vanished ids, not just the one hand-picked
+// missing-id case. Uses its OWN PRNG instance (opRng) so it cannot perturb
+// the corpus-building `rng` above and, in turn, the pinned malformedFrames
+// count — the two fuzzes must stay fully independent.
+const opRng = mulberry32(4242)
+const opFuzzDoc = LoroCanvasDoc.create({ peerId: 7001n })
+opFuzzDoc.putPage({ id: 'page:opfuzz', name: 'OpFuzz' })
+opFuzzDoc.putShape({
+  id: 'shape:opfuzz-real', kind: 'note', parentId: 'page:opfuzz', index: 'a1',
+  x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: {},
+} as any)
+opFuzzDoc.commit()
+
+// Hand-picked edge-case ids: never-existed, empty string, a page id (not a
+// shape id at all), a binding id, unicode, and a very long string.
+const garbageIds = ['shape:never-existed', 'shape:', '', 'page:p', 'binding:1', 'shape:\u{1F600}-unicode', 'x'.repeat(500)]
+for (const id of garbageIds) {
+  assert.doesNotThrow(() => opFuzzDoc.setText(id, 'payload'), `setText on garbage id ${JSON.stringify(id)} must not throw`)
+}
+
+// Vanished id: a real shape that existed, then got deleted — setText on it
+// afterward must stay a no-op, with no text resurrection.
+opFuzzDoc.deleteShape('shape:opfuzz-real')
+opFuzzDoc.commit()
+assert.doesNotThrow(
+  () => opFuzzDoc.setText('shape:opfuzz-real', 'after delete'),
+  'setText on a just-deleted (vanished) id must not throw',
+)
+assert.equal(opFuzzDoc.getText('shape:opfuzz-real'), '', 'no text resurrection from setText on a vanished id')
+
+// PRNG-driven garbage ids/text (deterministic, no Math.random) through the
+// SAME applyOp path randomOps/convergence uses — proves the op mix's own
+// garbage/vanished-id draws (rig/ops.ts's RATE_SET_TEXT band) are tolerated
+// end-to-end, not just this hand-picked list.
+const opFuzzStats: ApplyStats = { skipped: 0 }
+for (let i = 0; i < 200; i++) {
+  const id = opRng() < 0.5 ? `shape:garbage-${int(opRng, 1_000_000)}` : pick(opRng, [...garbageIds, 'shape:opfuzz-real'])
+  const text = `t${int(opRng, 1_000_000)}`
+  assert.doesNotThrow(
+    () => applyOp(opFuzzDoc, { kind: 'setText', id, text }, opFuzzStats),
+    `applyOp(setText) on ${JSON.stringify(id)} must not throw`,
+  )
+}
+assert.doesNotThrow(() => opFuzzDoc.listShapes(), 'doc remains queryable after op-level setText fuzz')
+assert.doesNotThrow(() => opFuzzDoc.getText('shape:opfuzz-real'), 'doc text reads remain queryable after op-level setText fuzz')
+
+console.log('ok: fuzz op-level — setText on garbage/vanished shape ids never crashes the host')
