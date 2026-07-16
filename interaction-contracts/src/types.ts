@@ -85,7 +85,11 @@ export interface Obs {
    * the resize analogue of shapeDisplacement. A resize anchored at a corner
    * OTHER than the moving one keeps x/y fixed (only w/h change), so
    * translation alone cannot observe it; this is what lets a handle-drag
-   * contract catch a resize under the editing caret. */
+   * contract catch a resize under the editing caret. Rotation does NOT
+   * register here — localBounds is rotation-independent, so a pure rotate
+   * gesture leaves dw/dh at zero; rotate coverage needs a separate
+   * observable, and a "no-transform" contract built on this method alone
+   * must not be over-trusted as proof against rotation. */
   shapeSizeDelta(id: string): { dw: number; dh: number }
   /** Total world-space displacement of the cursor from the gesture's start
    * (last pointer position, mapped through the CURRENT camera minus the
