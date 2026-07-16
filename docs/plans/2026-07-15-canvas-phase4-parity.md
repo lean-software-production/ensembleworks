@@ -1950,6 +1950,30 @@ deviation from DoD #8 (never a silent ungated landing)._
   compaction failing to keep up at this scale; `VACUUM` does not look
   urgently needed from this evidence alone (Task I1 owns the final dated
   verdict, combining this with H4's live dogfood visibility).
+- **H4 (live disk-size in /api/canvas/metrics + dev overlay) — S6 threshold
+  now single-sourced in contracts.** The dogfood overlay's `disk:snapshot`
+  flag and the soak's `assertDiskHighWater` share ONE
+  `DISK_SUSTAINED_HIGHWATER_MULTIPLIER = 10`, moved to
+  `contracts/src/constants.ts` (imported by both `client/DevOverlay.tsx` and
+  server `soak-actor.ts`, which re-exports it for its existing importers) so
+  the two S6 surfaces Task I1 cites can never drift.
+- **CARRIED (pre-existing, teardown-hardening follow-up) — silent
+  `server.close()`-hang shape recurs in canvas-v2-sync-mount.test.ts.** H4's
+  review found the SAME latent CI-stall shape it fixed in
+  `canvas-metrics.test.ts` scenario C (an open real `ws` + an exact
+  `assert.deepEqual` BEFORE a blocking `server.close()` in a `try/finally`:
+  if the assertion throws, `ws.close()` is skipped and
+  `http.Server.close()` — which waits for every live socket to drain — hangs
+  FOREVER, silently stalling CI and even bypassing the file's
+  `main().catch(process.exit)`) ALSO pre-exists at
+  `server/src/canvas-v2/canvas-v2-sync-mount.test.ts:150` and `:204`. NOT
+  introduced by Phase 4, and lower-priority there (array-shape assertions
+  less likely to flip than the metrics payload's), but the same risk class.
+  Follow-up: adopt `shutdown.test.ts`'s bounded `withDeadline(server.close())`
+  (H4 added a local `closeServer` helper in `canvas-metrics.test.ts` with the
+  same shape) everywhere this open-socket-before-blocking-finally pattern
+  recurs, so a teardown hang degrades to a loud failure instead of an
+  infinite stall.
 
 ---
 

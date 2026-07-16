@@ -43,6 +43,10 @@ import path from 'node:path'
 // consumer's module graph, including the browser client, for a warning
 // with zero functional benefit to anyone but this file).
 import { runSoak, type RunSoakOpts, type SoakResult, type SoakServer } from '@ensembleworks/canvas-sync/soak'
+// S6 disk high-water threshold — single-sourced in contracts so this soak
+// verdict and the client dogfood dev overlay share ONE number (see the
+// re-export below and the constant's doc comment in contracts/src/constants.ts).
+import { DISK_SUSTAINED_HIGHWATER_MULTIPLIER } from '@ensembleworks/contracts'
 import { DocumentActor } from './actor.ts'
 
 /** How often (in PERSISTED updates, not sim ops — DocumentActor's own unit,
@@ -187,15 +191,17 @@ function actorSoakServer(actor: DocumentActor): SoakServer {
  * over the LAST QUARTILE of the aligned `diskSamples`/`snapshotSamples`
  * (same quartile-mean shape as the flat-RSS check in soak-actor-cli.ts, for
  * the same reason — a trend, not a single sample, is what's diagnostic).
- * 10x is the threshold suggested by the plan itself and sits comfortably
- * above every measured last-quartile ratio so far (all runs, including the
- * ≥20k ones, stayed under 12x on so much as their FINAL point, let alone a
- * sustained last-quartile mean) while still being tight enough to catch the
- * "VACUUM is needed" signal the S6 ruling is watching for.
+ * The 10x threshold is single-sourced from `@ensembleworks/contracts`
+ * (imported above and re-exported below) so this soak verdict and the
+ * client dogfood dev overlay's live disk:snapshot flag share ONE number
+ * across the server/client boundary — see the constant's doc comment in
+ * `contracts/src/constants.ts`.
  */
 export const DISK_GROWTH_MULTIPLIER = 12
 export const AVG_MIN_DISK_BYTES = 4096
-export const DISK_SUSTAINED_HIGHWATER_MULTIPLIER = 10
+// Re-exported (value imported from contracts above) so existing importers of
+// this symbol from soak-actor keep their path while the value lives in one place.
+export { DISK_SUSTAINED_HIGHWATER_MULTIPLIER }
 
 /**
  * Last-quartile MEAN disk÷snapshot ratio — the S6 sustained-high-water

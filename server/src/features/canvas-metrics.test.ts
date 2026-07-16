@@ -143,15 +143,22 @@ async function main() {
 	{
 		const dataDir = await mkdtemp(path.join(os.tmpdir(), 'canvas-metrics-sync-'))
 		process.env.EW_CANVAS_SYNC = '1'
-		let server: import('node:http').Server
+		let server: import('node:http').Server | undefined
+		// Declared out here (not `const` inside the try) so the finally can ALWAYS
+		// close it — an assertion throwing between open and the happy-path close
+		// below must not leave the socket open and hang server.close() (see
+		// closeServer's doc comment).
+		let ws: WebSocket | undefined
 		try {
-			;({ server } = createSyncApp({ dataDir }))
-			await new Promise<void>((r) => server.listen(0, r))
-			const port = (server.address() as any).port
+			const app = createSyncApp({ dataDir })
+			server = app.server // publish to the finally-visible binding
+			const srv = app.server // non-optional local for use within this try
+			await new Promise<void>((r) => srv.listen(0, r))
+			const port = (srv.address() as any).port
 			const base = `http://127.0.0.1:${port}`
 			const roomId = 'vroom'
 
-			const ws = await openWs(`ws://127.0.0.1:${port}/sync/v2/${roomId}`)
+			ws = await openWs(`ws://127.0.0.1:${port}/sync/v2/${roomId}`)
 			// Wait for the actor to actually register (connect is async over the
 			// upgrade callback) by polling metrics until sync.<room> appears.
 			let metrics = await pollUntil(async () => {
@@ -183,11 +190,11 @@ async function main() {
 			// shadow driver exists without EW_CANVAS_SHADOW.
 			assert.deepEqual(metrics.shadow, {}, 'SYNC-only: shadow section stays empty')
 
-			ws.close()
 			console.log('ok: canvas-metrics — sync section reports live v2-actor counters, incl. malformed frames')
 		} finally {
 			delete process.env.EW_CANVAS_SYNC
-			if (server!) await new Promise<void>((r) => server.close(() => r()))
+			ws?.close() // BEFORE closeServer — a live socket would otherwise block the drain
+			await closeServer(server)
 			await rm(dataDir, { recursive: true, force: true })
 		}
 	}
@@ -357,6 +364,23 @@ async function pollUntil<T>(fn: () => Promise<T | null>, timeoutMs = 3000): Prom
 		if (Date.now() - start > timeoutMs) throw new Error('pollUntil: timed out')
 		await new Promise((r) => setTimeout(r, 15))
 	}
+}
+
+/** Bounded server.close() (house withDeadline shape, cf. shutdown.test.ts):
+ * http.Server.close() only resolves once every live socket has drained, so if
+ * a finally block ever runs while a client ws is still open — e.g. an
+ * assertion threw BEFORE the test's own ws.close() — a bare
+ * `await new Promise(r => server.close(() => r()))` would block FOREVER,
+ * silently stalling CI and even bypassing main()'s catch/exit. Racing a
+ * deadline degrades that hang into a loud rejection instead. */
+function closeServer(server: import('node:http').Server | undefined, timeoutMs = 3000): Promise<void> {
+	if (!server) return Promise.resolve()
+	let timer: ReturnType<typeof setTimeout> | undefined
+	const closed = new Promise<void>((resolve) => server.close(() => resolve()))
+	const deadline = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`server.close() timed out after ${timeoutMs}ms (a socket never drained)`)), timeoutMs)
+	})
+	return Promise.race([closed, deadline]).finally(() => clearTimeout(timer)) as Promise<void>
 }
 
 main().catch((err) => {

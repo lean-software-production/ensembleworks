@@ -29,6 +29,7 @@
  * noticed yet" state. Surfacing that would need canvas-sync work (wiring a
  * real onClose), out of this task's scope.
  */
+import { DISK_SUSTAINED_HIGHWATER_MULTIPLIER } from '@ensembleworks/contracts'
 import { useEffect, useState, type CSSProperties } from 'react'
 
 export interface CanvasMetricsSyncEntry {
@@ -94,20 +95,6 @@ function Field({ label, value, warn }: { readonly label: string; readonly value:
 	)
 }
 
-/** S6 DECISION THRESHOLD — mirrors `DISK_SUSTAINED_HIGHWATER_MULTIPLIER` in
- * `server/src/canvas-v2/soak-actor.ts` (the soak's own S6 disk-high-water
- * verdict, task I1 cites both). The client can't import the server
- * workspace, so this is a deliberate DUPLICATE, not a re-export — keep this
- * number in sync with that one by hand if it ever changes; both sides are
- * cross-referenced in their doc comments for exactly that reason. Same 10x
- * value: comfortably above every measured soak run's last-quartile ratio
- * while still catching the "VACUUM is needed" signal the S6 ruling watches
- * for. A brand-new/near-empty room's ratio starts elevated too (SQLite
- * allocates a full page, ~4KB, before a snapshot's CRDT metadata reaches
- * that size) and settles down as real content accumulates — the same
- * floor-effect soak-actor.ts's AVG_MIN_DISK_BYTES documents, not a bug here. */
-export const DISK_SUSTAINED_HIGHWATER_MULTIPLIER = 10
-
 /** Human-readable byte size (B/KB/MB) for the diskBytes Field. */
 function formatBytes(n: number): string {
 	if (n < 1024) return `${n} B`
@@ -156,6 +143,13 @@ export function DevOverlay({ roomId, connectionState, client, metrics }: DevOver
 			<Field label="evictions.taintCount" value={eviction ? eviction.taintCount : '—'} />
 			<Field label="evictions.idleCount" value={eviction ? eviction.idleCount : '—'} />
 			<Field label="diskBytes" value={diskBytes !== undefined ? formatBytes(diskBytes) : '—'} />
+			{/* disk:snapshot high-water ratio, flagged at the S6 threshold that the
+			    server soak's assertDiskHighWater uses — single-sourced from contracts
+			    so both sides share ONE number (Task I1 cites both). A brand-new/
+			    near-empty room's ratio starts elevated (SQLite allocates a full ~4KB
+			    page before the snapshot's CRDT metadata reaches that size) and settles
+			    as content accumulates — the same floor-effect soak-actor.ts's
+			    AVG_MIN_DISK_BYTES documents, not a bug. */}
 			<Field
 				label="disk:snapshot"
 				value={diskRatio !== undefined ? `${diskRatio.toFixed(1)}x` : '—'}

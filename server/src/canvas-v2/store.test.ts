@@ -104,5 +104,28 @@ store.appendUpdate(new Uint8Array([4]))
 	reopenedClosable.close()
 }
 
+// --- diskBytes(): live on-disk SQLite file size (Task H4, S6 dogfood
+// visibility). A high-water mark read by the D3 metrics endpoint. Two
+// branches: (1) a real file reports a positive numeric size, non-decreasing
+// after a write; (2) the graceful ENOENT branch returns 0 without throwing,
+// so a scrape racing a missing/not-yet-created file never crashes the
+// metrics endpoint.
+{
+	const diskProbe = new CanvasV2Store(dir, 'disk-probe')
+	const empty = diskProbe.diskBytes()
+	assert.equal(typeof empty, 'number', 'diskBytes() is numeric')
+	assert.ok(empty > 0, 'a just-created store reports a positive size (SQLite allocates at least one page)')
+	diskProbe.appendUpdate(new Uint8Array(256))
+	const afterWrite = diskProbe.diskBytes()
+	assert.ok(afterWrite >= empty, 'diskBytes() is non-decreasing after a write (high-water mark)')
+
+	// Error branch: with the file removed out from under it, statSync throws
+	// ENOENT — diskBytes() must swallow it and return 0, never throw.
+	diskProbe.close()
+	rmSync(path.join(dir, 'disk-probe.sqlite'), { force: true })
+	assert.doesNotThrow(() => diskProbe.diskBytes(), 'diskBytes() never throws even when the file is gone')
+	assert.equal(diskProbe.diskBytes(), 0, 'diskBytes() returns 0 (not a throw) when the sqlite file is absent')
+}
+
 rmSync(dir, { recursive: true, force: true })
 console.log('ok: canvas-v2 store')

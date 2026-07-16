@@ -41,8 +41,8 @@ import { DevOverlay, shouldShowDevOverlay, type CanvasMetricsPayload } from './D
 
 // ============================================================================
 // 1b. Disk high-water: a disk:snapshot ratio at/above the S6 threshold
-//     (DISK_SUSTAINED_HIGHWATER_MULTIPLIER, mirroring soak-actor.ts's
-//     DISK_SUSTAINED_HIGHWATER_MULTIPLIER=10) is flagged, not rendered
+//     (contracts' DISK_SUSTAINED_HIGHWATER_MULTIPLIER = 10, the SAME number
+//     the server soak's assertDiskHighWater uses) is flagged, not rendered
 //     identically to a healthy ratio.
 // ============================================================================
 {
