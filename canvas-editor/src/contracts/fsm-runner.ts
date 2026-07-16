@@ -27,12 +27,12 @@ function mods(over?: { shift?: boolean; alt?: boolean; ctrl?: boolean; meta?: bo
 }
 
 /** A minimal `.byId`-only CanvasDocument adapter over LIVE `editor.doc.
- * getShape` reads — mirrors select.ts's own `liveBoundsAdapter` (same
+ * getShape` reads — mirrors editor.ts's own (private) `liveDocAdapter` (same
  * rationale: worldBounds/worldTransform touch nothing on `doc` except
  * `.byId.get`, so this shim is enough without going through the ToolContext's
- * cached snapshot). Kept package-local rather than imported from select.ts,
- * which exports no such helper (and canvas-editor's own tools are not a
- * dependency surface the contracts runner should reach into). */
+ * cached snapshot). Kept package-local rather than imported: editor.ts does
+ * not export its helper (and the editor's internals are not a dependency
+ * surface the contracts runner should reach into). */
 function liveDocAdapter(editor: Editor): CanvasDocument {
   return {
     pages: [], shapes: [], bindings: [],
@@ -94,6 +94,8 @@ function makeObs(
       return { ...startRect }
     },
     shapeDisplacement(id: string) {
+      // NOTE: compares raw shape.x/y (LOCAL coords) — local == world here only
+      // because seedScene parents every shape directly to page:p, unrotated.
       const start = startPositions.get(id)
       if (!start) throw new Error(`shapeDisplacement: no seeded shape with id ${JSON.stringify(id)}`)
       const shape = editor.doc.getShape(id)
@@ -194,6 +196,9 @@ export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
     }
     if (event.type === 'pointerdown' || event.type === 'pointermove' || event.type === 'pointerup' || event.type === 'wheel') {
       if (event.type === 'pointerdown' && grabWorld === null) {
+        // NOTE: the runner captures grabWorld at POINTERDOWN, while the select
+        // tool anchors at the threshold-crossing MOVE — a future contract that
+        // zooms between down and first move must align these two capture points.
         grabWorld = screenToWorld(editor.get().camera, { x: event.x, y: event.y })
       }
       lastPointer = { x: event.x, y: event.y }

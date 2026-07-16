@@ -281,18 +281,20 @@ function setup() {
 //    translate exactly onto that edge, and the SnapResult (with a guide) is
 //    carried in the FSM's Dragging state.
 //
-//    Hand-computed: pointerdown(50,50) [inside shape:a] -> move(60,60)
-//    crosses the drag threshold, transitioning pointing->dragging with the
-//    RAW delta (10,10) [no candidate close enough to snap yet -- shape:a
-//    lands at (10,10), 90 units from shape:b's edge at 200, past the 5-unit
-//    threshold]. A SECOND move to (147,50), while already 'dragging': raw
-//    screen delta from lastScreen(60,60) is (+87,-10) -> candidate world
-//    position (10+87, 10-10) = (97, 0) -> candidate bounds
-//    [97,197]x[0,100] -- shape:a's right edge (197) is 3 units short of
-//    shape:b's left edge (200), within the 5-unit threshold -> snap dx=+3
-//    (y already aligned at 0, snap dy=0). Total delta applied this move:
-//    raw(87,-10) + snap(3,0) = (90,-10) -> shape:a's final position:
-//    (10+90, 10-10) = (100, 0), landing EXACTLY on shape:b's left edge.
+//    Hand-computed (absolute-anchor model): pointerdown(50,50) [inside
+//    shape:a] sets grabWorld=(50,50); startBounds = shape:a's world bounds
+//    [0,100]x[0,100], frozen at drag start. move(60,60) crosses the drag
+//    threshold: raw TOTAL delta from the grab = (10,10) -> candidate bounds
+//    [10,110]x[10,110] -- right edge (110) is 90 units from shape:b's edge
+//    at 200, past the 5-unit threshold, no snap -> total (10,10) applied,
+//    shape:a lands at (10,10). A SECOND move to (147,50), while already
+//    'dragging': raw TOTAL delta from the grab = (97,0) -> candidate bounds
+//    startBounds+(97,0) = [97,197]x[0,100] -- shape:a's right edge (197) is
+//    3 units short of shape:b's left edge (200), within the 5-unit
+//    threshold -> snap dx=+3 (y already aligned at 0, snap dy=0). Snapped
+//    TOTAL = (100,0); the STEP committed this move is total - applied =
+//    (100-10, 0-10) = (90,-10) -> shape:a's final position: (10+90, 10-10)
+//    = (100, 0), landing EXACTLY on shape:b's left edge.
 // ============================================================================
 {
   const { editor, tool, doc } = setup()
@@ -355,10 +357,11 @@ function setup() {
   }
   const snapResult = (state as any).snapResult
   assert.deepEqual(snapResult, { dx: 0, dy: 0, guides: [] }, 'no candidates within range -> an empty SnapResult')
-  // move1 lands shape:a at (10,10) [raw, unsnapped]; move2's raw screen delta
-  // from lastScreen (60,60) to (-5000,-5000) is (-5060,-5060) (world == screen
-  // at z=1), landing shape:a at (10-5060, 10-5060) = (-5050,-5050), with zero
-  // snap adjustment on top.
+  // move1 lands shape:a at (10,10) [raw, unsnapped]. move2's raw TOTAL delta
+  // from the grab point (50,50) to (-5000,-5000) is (-5050,-5050) (world ==
+  // screen at z=1); no snap adjustment on top, so the committed STEP is
+  // total - applied = (-5050-10, -5050-10) = (-5060,-5060), landing shape:a
+  // at startBounds' origin + total = (0-5050, 0-5050) = (-5050,-5050).
   const a = doc.getShape('shape:a')!
   assert.equal(a.x, -5050, 'no snap applied: final position is exactly the raw (unsnapped) drag target')
   assert.equal(a.y, -5050)

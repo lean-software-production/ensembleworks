@@ -43,10 +43,18 @@ export const cursorLock: Contract = {
   check: (obs: Obs): string | null => {
     const s = obs.shapeDisplacement(SHAPE_ID)
     const c = obs.cursorWorldDisplacement()
-    const err = Math.hypot(s.dx - c.dx, s.dy - c.dy)
-    const tol = obs.snapRadius() + 1e-6 // snapped: within one snap radius
-    return err <= tol
-      ? null
-      : `shape drifted from cursor by ${err.toFixed(3)} world units (> snap radius ${obs.snapRadius()}): shapeΔ=${JSON.stringify(s)} cursorΔ=${JSON.stringify(c)}`
+    // PER-AXIS bound, not Euclidean: snapCandidates snaps X and Y
+    // INDEPENDENTLY, each up to one snap threshold — so under dual-axis
+    // snapping the Euclidean (hypot) distance can legitimately reach
+    // threshold·√2 and a hypot-vs-threshold check would false-positive.
+    // The sound invariant is per-axis: on each axis the shape may lag the
+    // cursor by at most one snap radius.
+    const errX = Math.abs(s.dx - c.dx)
+    const errY = Math.abs(s.dy - c.dy)
+    const tol = obs.snapRadius() + 1e-6 // snapped: within one snap radius per axis
+    if (errX <= tol && errY <= tol) return null
+    const axis = errX > tol ? 'x' : 'y'
+    const err = axis === 'x' ? errX : errY
+    return `shape drifted from cursor by ${err.toFixed(3)} world units on the ${axis} axis (> snap radius ${obs.snapRadius()}): shapeΔ=${JSON.stringify(s)} cursorΔ=${JSON.stringify(c)}`
   },
 }
