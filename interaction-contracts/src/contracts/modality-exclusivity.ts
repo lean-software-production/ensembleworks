@@ -13,6 +13,9 @@ export const modalityExclusivity: Contract = {
   when: 'every-event',
   scene: () => [{ id: ID, kind: 'note', x: 0, y: 0, w: 200, h: 200 }],
   gesture: (_rng: Rng): GestureOp[] => [
+    // seed-invariant by construction (ignores rng): a fixed click-click-drag
+    // sequence; running it across library.test.ts's seed set is redundant but
+    // harmless.
     // Two completed clicks on the shape within the double-click window ->
     // BeginEdit (select.ts). script.ts stamps t at dt=16ms/event, comfortably
     // inside DOUBLE_CLICK_MS (450). Then a drag attempt on the same shape.

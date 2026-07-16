@@ -272,6 +272,20 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
   function onIdle(state: Idle, event: InputEvent): { state: TransformState; intents: Intent[] } {
     if (event.type !== 'pointerdown') return { state, intents: [] }
     const ids = [...editor.get().selection]
+    // MODALITY (pilot 4 extension — interaction-contracts'
+    // 'no-transform-while-typing'): never grab a resize/rotate handle while
+    // the shape being text-edited is part of this selection. The handles
+    // represent the selection's combined bounds, so transforming would move/
+    // resize the edited shape out from under the caret — the same modality
+    // rule select.ts enforces for translate. FSM-level (not a render-only
+    // hide) so it holds at the cheapest, contract-observable level; returning
+    // idle lets the composite fall the pointerdown through to select.ts, whose
+    // own editing guard then refuses any translate too. LIVE read of editingId
+    // at this single grab pointerdown — one read at one event, so (unlike
+    // select.ts's Pointing->Dragging read) there is no mid-gesture window to
+    // reason about.
+    const editingId = editor.get().editingId
+    if (editingId !== null && ids.includes(editingId)) return { state, intents: [] }
     const bounds = selectionWorldBounds(ctx.snapshot(), ids)
     if (!bounds) return { state, intents: [] } // empty/all-vanished selection: nothing to grab a handle on
     const handlesAtStart = selectionHandles(bounds)

@@ -6,7 +6,7 @@
 // seed reproduces exactly. Mirrors the design's "FSM runner beside the script()
 // rig". The browser runner (e2e) interprets the SAME GestureOp[].
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
-import { centroid, medianSize, validateShape, worldBounds, type CanvasDocument } from '@ensembleworks/canvas-model'
+import { centroid, localBounds, medianSize, validateShape, worldBounds, type CanvasDocument } from '@ensembleworks/canvas-model'
 import type { Anchor, Contract, GestureOp, Obs, Rng } from '@ensembleworks/interaction-contracts'
 import { mulberry32 } from '@ensembleworks/interaction-contracts'
 import { applyWheel } from '../camera.js'
@@ -80,6 +80,7 @@ function makeObs(
   editor: Editor,
   startRect: { minX: number; minY: number; maxX: number; maxY: number },
   startPositions: ReadonlyMap<string, { x: number; y: number }>,
+  startSizes: ReadonlyMap<string, { w: number; h: number }>,
   getGrabWorld: () => { x: number; y: number } | null,
   getLastPointer: () => { x: number; y: number } | null,
 ): Obs {
@@ -105,6 +106,16 @@ function makeObs(
       // select.ts's own TOLERANCE CONTRACT documents.
       if (!shape) return { dx: 0, dy: 0 }
       return { dx: shape.x - start.x, dy: shape.y - start.y }
+    },
+    shapeSizeDelta(id: string) {
+      const start = startSizes.get(id)
+      if (!start) throw new Error(`shapeSizeDelta: no seeded shape with id ${JSON.stringify(id)}`)
+      const shape = editor.doc.getShape(id)
+      // TOLERANCE: a vanished shape (mid-gesture remote delete) — same
+      // degrade-not-throw posture as shapeDisplacement just above.
+      if (!shape) return { dw: 0, dh: 0 }
+      const lb = localBounds(shape)
+      return { dw: lb.maxX - start.w, dh: lb.maxY - start.h }
     },
     cursorWorldDisplacement() {
       const grab = getGrabWorld()
@@ -197,10 +208,15 @@ export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
   // (that accumulation is exactly the drift C2/C3 exist to catch).
   const startPositions = new Map<string, { x: number; y: number }>()
   for (const shape of doc.listShapes()) startPositions.set(shape.id, { x: shape.x, y: shape.y })
+  const startSizes = new Map<string, { w: number; h: number }>()
+  for (const shape of doc.listShapes()) {
+    const lb = localBounds(shape)
+    startSizes.set(shape.id, { w: lb.maxX, h: lb.maxY }) // localBounds is {0,0,w,h} — geometry.ts's contract
+  }
   let grabWorld: { x: number; y: number } | null = null
   let lastPointer: { x: number; y: number } | null = null
 
-  const obs = makeObs(editor, startRect, startPositions, () => grabWorld, () => lastPointer)
+  const obs = makeObs(editor, startRect, startPositions, startSizes, () => grabWorld, () => lastPointer)
 
   const events = opsToEvents(contract.gesture(rng), editor)
   let state: unknown = tool.initialState

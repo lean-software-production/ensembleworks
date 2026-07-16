@@ -81,6 +81,12 @@ export interface Obs {
   visibleWorldRectAtStart(): { minX: number; minY: number; maxX: number; maxY: number }
   /** Total world-space displacement of a shape from the gesture's start. */
   shapeDisplacement(id: string): { dx: number; dy: number }
+  /** Total change in a shape's LOCAL size (w/h) since the gesture's start —
+   * the resize analogue of shapeDisplacement. A resize anchored at a corner
+   * OTHER than the moving one keeps x/y fixed (only w/h change), so
+   * translation alone cannot observe it; this is what lets a handle-drag
+   * contract catch a resize under the editing caret. */
+  shapeSizeDelta(id: string): { dw: number; dh: number }
   /** Total world-space displacement of the cursor from the gesture's start
    * (last pointer position, mapped through the CURRENT camera minus the
    * grab-time world point). */

@@ -1845,6 +1845,12 @@ stopPropagation belt did not break caret/focus.
 > React-facing module. The rejected alternative — re-deriving a local composite
 > inside the runner — would prove something the client does not actually do the
 > moment the two composites diverge.
+>
+> 2026-07-16: E7 scene changed note→geo — note resize is a geometry no-op in
+> this engine (canvas-model size() computes notes from a fixed 200·scale
+> formula and ignores props.w/h, while ResizeShapes mutates only props.w/h),
+> so a note scene cannot go red; geo reads props.w/h directly. Verified both
+> ways by the implementer.
 
 ### Task E6 — The runner tool seam + relocate the select+transform composite
 
@@ -2027,7 +2033,7 @@ selection's 9 handles from its WORLD `selectionWorldBounds`
 (`selectionHandles`), then `hitHandle` projects each to screen via
 `worldToScreen(camera, ...)` and picks the closest within `HIT_TOLERANCE_PX`
 (8px). So a gesture addresses a handle purely by its **pointer screen
-coordinates**. For the seeded scene — one 200×200 `note` at world `(0,0)`, and
+coordinates**. For the seeded scene — one 200×200 `geo` at world `(0,0)`, and
 the runner's identity start camera `{x:0,y:0,z:1}` where `worldToScreen` is the
 identity — the shape's world centre `(100,100)` is screen `(100,100)` and its
 **SE corner handle** (world `(200,200)`) is screen `(200,200)`. A shape anchor
@@ -2093,7 +2099,7 @@ cannot observe a resize; `shapeSizeDelta` is the resize analogue, mirroring
 // SAME composite the client ships (createSelectAndTransformTool), which gives
 // transform.ts first crack at the handle-grab pointerdown. See the plan's
 // Phase E extension for the handle-addressing derivation (SE corner of a
-// 200x200 note at world (0,0) is screen (200,200) at the identity camera).
+// 200x200 geo at world (0,0) is screen (200,200) at the identity camera).
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
 const ID = 'shape:edit-transform'
@@ -2103,7 +2109,7 @@ export const noTransformWhileTyping: Contract = {
   level: 'fsm',
   tool: 'select+transform',
   when: 'every-event',
-  scene: () => [{ id: ID, kind: 'note', x: 0, y: 0, w: 200, h: 200 }],
+  scene: () => [{ id: ID, kind: 'geo', x: 0, y: 0, w: 200, h: 200 }],
   gesture: (_rng: Rng): GestureOp[] => [
     // seed-invariant by construction (ignores rng): a fixed double-click-then-
     // grab-SE-handle sequence; running it across library.test.ts's seed set is

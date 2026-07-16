@@ -7,6 +7,7 @@ import type { Contract } from './types.js'
 import { crossWidgetSelection } from './contracts/cross-widget-selection.js'
 import { cursorLock } from './contracts/cursor-lock.js'
 import { modalityExclusivity } from './contracts/modality-exclusivity.js'
+import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
 
 export const CONTRACTS: readonly Contract[] = [
@@ -15,4 +16,5 @@ export const CONTRACTS: readonly Contract[] = [
   cursorLock,
   crossWidgetSelection,
   modalityExclusivity,
+  noTransformWhileTyping,
 ]

@@ -116,6 +116,7 @@ function pageObs(startRect: { minX: number; minY: number; maxX: number; maxY: nu
     visibleWorldRectAtStart: () => startRect,
     visibleWorldRect: () => { throw new Error('sync obs unavailable in browser adapter — use the async sampler') },
     shapeDisplacement: () => { throw new Error('use async sampler') },
+    shapeSizeDelta: () => { throw new Error('use async sampler') },
     cursorWorldDisplacement: () => { throw new Error('use async sampler') },
     snapRadius: () => { throw new Error('use async sampler') },
     textSelectionSpans: () => textSelectionSpans,

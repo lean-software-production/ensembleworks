@@ -354,6 +354,18 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // only the DRAG is suppressed, and only for a drag that targets the
         // shape actively being edited; a drag started on ANY OTHER shape
         // while editing continues unaffected below.
+        // A click (pointerdown+up, no drag) on the shape being edited can
+        // re-fire `BeginEdit(target)` on pointerup; that is IDEMPOTENT
+        // (editingId is already `=== target`, so re-applying BeginEdit is a
+        // no-op), and in the browser the TextEditor textarea's
+        // stopPropagation belt (Task E4) means the canvas never even sees
+        // that pointer pair.
+        // This `editingId` read is LIVE at the threshold-crossing move, not
+        // captured at pointerdown; if editing happens to END mid-Pointing (an
+        // EndEdit lands between the pointerdown and this move), the live read
+        // returns `null` and the drag proceeds normally — benign, because
+        // editing is already over, so a translate is exactly what the user
+        // now wants.
         if (editor.get().editingId === targetId) return { state, intents: [] }
         const selection = editor.get().selection
         const intents: Intent[] = []
