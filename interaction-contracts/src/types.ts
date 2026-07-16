@@ -1,0 +1,92 @@
+// The pure contract vocabulary — imports NOTHING (the design's "one pure,
+// dependency-free module both runners import"). Everything a contract
+// declaration needs (PRNG, gesture ops, the observation interface) is defined
+// here structurally, so canvas-editor's FSM runner and e2e's browser runner
+// both compile against the SAME types without either package leaking into the
+// other.
+
+/** A deterministic uniform [0,1) source. Seeded so one declaration yields a
+ * fixed CI smoke case and a reproducible fuzz campaign. */
+export interface Rng {
+  next(): number
+}
+
+/** mulberry32 — a tiny, well-known, fully deterministic PRNG. Pure integer
+ * math; no wall clock, no Math.random (this module is imported by the
+ * clean-room FSM runner, whose boundary test forbids both). */
+export function mulberry32(seed: number): Rng {
+  let a = seed >>> 0
+  return {
+    next(): number {
+      a |= 0
+      a = (a + 0x6d2b79f5) | 0
+      let t = Math.imul(a ^ (a >>> 15), 1 | a)
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296
+    },
+  }
+}
+
+/** Structural modifiers (NOT imported from canvas-editor — purity). */
+export interface GestureModifiers {
+  readonly shift?: boolean
+  readonly alt?: boolean
+  readonly ctrl?: boolean
+  readonly meta?: boolean
+}
+
+/** A screen-space anchor a gesture op resolves against. Phase A ships only the
+ * absolute point form; Pilot 2 (Phase C) extends this union with a shape
+ * anchor (the library grows per unit — design's bootstrap principle). */
+export type Anchor = { readonly ref: 'point'; readonly x: number; readonly y: number }
+
+/** One primitive gesture step. SCREEN space, exactly like input.ts's
+ * InputEvent coordinates — the FSM runner turns these into InputEvents via
+ * script.ts, the browser runner into Playwright input. */
+export type GestureOp =
+  | { readonly kind: 'down'; readonly at: Anchor; readonly modifiers?: GestureModifiers }
+  | { readonly kind: 'move'; readonly at: Anchor; readonly steps?: number; readonly modifiers?: GestureModifiers }
+  | { readonly kind: 'up'; readonly modifiers?: GestureModifiers }
+  | { readonly kind: 'wheel'; readonly dx: number; readonly dy: number; readonly at: Anchor; readonly modifiers?: GestureModifiers }
+  | { readonly kind: 'key'; readonly key: string; readonly modifiers?: GestureModifiers }
+
+/** The scene a contract wants seeded before its gesture runs. Phase A ships an
+ * empty scene (pilot 1 needs no shapes); Pilot 2 adds shapes. Runner-agnostic:
+ * the FSM runner seeds the doc directly, the browser runner seeds via
+ * window.__ew.doc.putShape (lib/canvas-v2.ts's seedGrid pattern). */
+export interface SceneShape {
+  readonly id: string
+  readonly kind: string
+  readonly x: number
+  readonly y: number
+  readonly w: number
+  readonly h: number
+}
+
+/** The observation interface — the ONLY thing invariants may read. Grows one
+ * method per pilot; Phase A ships just what Pilot 1 needs. Never expose FSM
+ * internals or DOM nodes here — that is what lets one declaration run at either
+ * level. */
+export interface Obs {
+  /** The world-space rectangle currently visible in the viewport. Pilot 1. */
+  visibleWorldRect(): { minX: number; minY: number; maxX: number; maxY: number }
+}
+
+/** A contract declaration = data. */
+export interface Contract {
+  readonly name: string
+  readonly level: 'fsm' | 'browser'
+  readonly when: 'every-event' | 'at-end'
+  /** Optional: instantiate once per registered shape kind (design's per-kind
+   * conformance-suite subsumption). Unused until a later unit needs it. */
+  readonly scope?: 'per-kind'
+  /** Shapes to seed before the gesture. Default: none. */
+  scene?(): readonly SceneShape[]
+  /** Build the gesture ops from a seeded RNG — deterministic per seed. */
+  gesture(rng: Rng): readonly GestureOp[]
+  /** Return null if the observation satisfies the contract, or a human failure
+   * message. Evaluated after every event (when === 'every-event') or once
+   * after the last (at-end). Returning a message (not throwing) keeps the
+   * declaration data-shaped and lets the runner attach the seed for repro. */
+  check(obs: Obs): string | null
+}
