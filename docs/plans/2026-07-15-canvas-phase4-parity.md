@@ -1897,13 +1897,23 @@ deviation from DoD #8 (never a silent ungated landing)._
   foreground runs of `soak-actor-cli.ts` (each converged, `malformedFrames:
   0`), 5 clients / chaos 0.5:
 
-  | ops    | seed | wallMs | RSS quartile ratio | disk÷snapshot (final) | disk÷snapshot (sustained, last-quartile mean) |
-  |--------|------|--------|---------------------|------------------------|------------------------------------------------|
-  | 20,000 | 42   | 27,579 | 2.320x              | 6.52x                  | 4.797x (re-run at tightened settings) |
-  | 20,000 | 1    | 26,453 | 2.256x              | 2.90x                  | — |
-  | 25,000 | 7    | 37,473 | 2.850x              | 5.70x                  | — |
+  | ops    | seed | source              | RSS quartile ratio | disk÷snapshot (final) | disk÷snapshot (sustained, last-quartile mean) |
+  |--------|------|---------------------|---------------------|------------------------|------------------------------------------------|
+  | 20,000 | 42   | H3                  | 2.320x              | 6.52x                  | 4.797x (re-run at tightened settings) |
+  | 20,000 | 1    | H3                  | 2.256x              | 2.90x                  | — |
+  | 25,000 | 7    | H3                  | 2.850x              | 5.70x                  | — |
+  | 20,000 | 101  | independent review  | 2.458x              | —                      | 3.930x |
+  | 20,000 | 202  | independent review  | 2.320x              | —                      | 3.354x |
+  | 25,000 | 303  | independent review  | 2.839x              | —                      | 5.075x |
 
-  **Convergence under the H1/H2 text-check, confirmed:** all three runs
+  The three `independent review` rows were run by H3's reviewer to
+  corroborate (all converged, all comfortably under threshold) — so the S6
+  verdict for Task I1 rests on n≈6 data points, not n=1. Across ALL runs:
+  worst RSS quartile ratio ~2.85x (well under the new 8x tolerance — see
+  below); worst sustained disk÷snapshot ~5.1x (well under the 10x S6
+  threshold).
+
+  **Convergence under the H1/H2 text-check, confirmed:** all six runs
   report `converged: true`, which now (post-H1/H2) includes the per-shape
   `getText`/`text:<id>` LoroText cross-client check inside `runSoak`
   (canvas-sync's `src/soak.ts`) — the actor's DocumentActor + SQLite
@@ -1911,13 +1921,16 @@ deviation from DoD #8 (never a silent ungated landing)._
   through repeated compaction cycles at ≥20k ops. No divergence observed;
   nothing to report as a bug.
 
-  **FLAT_RSS_TOLERANCE tightened 15 → 6** (`soak-actor-cli.ts`): worst
+  **FLAT_RSS_TOLERANCE tightened 15 → 8** (`soak-actor-cli.ts`): worst
   observed ≥20k-ops quartile-mean ratio was 2.85x (25,000 ops, seed 7) — no
   new superlinear tail past 15,000 ops for this compacting variant (unlike
   canvas-sync's own bare-peer soak, whose no-compaction docs climb to
-  ~9.97x by 20,000 ops). 6 is ~2.1x headroom over the observed 2.85x worst
-  case — enough for run-to-run/host variance, without reverting to another
-  loose placeholder.
+  ~9.97x by 20,000 ops). Initially set to 6 (~2.1x over 2.85x); bumped to 8
+  (~2.8x over the observed worst) on review — this is a NIGHTLY-only job
+  (never gates a PR; the per-commit smoke does), CI runners have
+  noisier/tighter memory than a dev box, and a REAL memory-leak regression
+  blows FAR past either bound, so the extra margin removes false-alarm 5am
+  toil at ~zero cost to detection power.
 
   **New S6 disk-high-water metric + threshold, wired in `soak-actor.ts`:**
   added `assertDiskHighWater` (+ its `lastQuartileDiskToSnapshotRatio`
@@ -1929,14 +1942,14 @@ deviation from DoD #8 (never a silent ungated landing)._
   breaches it. Re-run at the tightened settings (seed 42, 20,000 ops)
   confirmed GREEN: sustained ratio 4.797x, well under the 10x threshold.
 
-  **S6 verdict evidence for Task I1:** across all ≥20k/25k runs, disk stayed
-  a bounded high-water mark at 2.9x-6.52x of live snapshot bytes (final
-  point) / 4.8x sustained (last-quartile mean) — comfortably under both the
-  12x regression tripwire and the new 10x S6 decision threshold. No sign of
-  unbounded growth or of compaction failing to keep up at this scale;
-  `VACUUM` does not look urgently needed from this evidence alone (Task I1
-  owns the final dated verdict, combining this with H4's live dogfood
-  visibility).
+  **S6 verdict evidence for Task I1:** across all six ≥20k/25k runs (H3 +
+  independent-review corroboration), disk stayed a bounded high-water mark at
+  2.9x-6.52x of live snapshot bytes (final point) / 3.35x-5.08x sustained
+  (last-quartile mean) — comfortably under both the 12x regression tripwire
+  and the new 10x S6 decision threshold. No sign of unbounded growth or of
+  compaction failing to keep up at this scale; `VACUUM` does not look
+  urgently needed from this evidence alone (Task I1 owns the final dated
+  verdict, combining this with H4's live dogfood visibility).
 
 ---
 

@@ -83,16 +83,21 @@ function parseArgs(argv: string[]): Args {
  * periodically folds the append-log, bounding retained in-process state in
  * a way the bare peer's never-compacted oplog cannot.
  *
- * FLAT_RSS_TOLERANCE is tightened from the old placeholder 15x down to 6x —
- * headroom of ~2.1x over the worst ≥20k-ops ratio measured (2.85x), enough
- * to absorb run-to-run variance and a slower/busier CI host without masking
- * a genuine multi-x regression (e.g. compaction silently stops firing). Not
- * set any looser: the whole point of running ≥20k was to stop guessing at a
- * generous placeholder and tie this number to actual observed behavior.
- * Revisit if a future run at meaningfully larger scale (or a different
- * `actorCompactEvery`) shows a materially different ratio.
+ * FLAT_RSS_TOLERANCE is tightened from the old placeholder 15x down to 8x —
+ * ~2.8x over the worst ≥20k-ops ratio measured (2.85x), with generous
+ * nightly-CI-noise headroom on top. This is a NIGHTLY-only job (it never
+ * gates a PR — the per-commit smoke, soak-actor.test.ts, does that), so a
+ * spurious 5am failure is pure toil, while CI runners have noisier/tighter
+ * memory than a dev box; a REAL memory-leak regression (compaction silently
+ * stops firing, etc.) blows FAR past either 6x or 8x, so the extra margin
+ * costs ~nothing in detection power while removing a real source of
+ * false-alarm toil. Not set any looser than that: the whole point of running
+ * ≥20k was to stop guessing at a generous placeholder and tie this number to
+ * actual observed behavior. Revisit if a future run at meaningfully larger
+ * scale (or a different `actorCompactEvery`) shows a materially different
+ * ratio.
  */
-const FLAT_RSS_TOLERANCE = 6
+const FLAT_RSS_TOLERANCE = 8
 
 function assertFlatRss(samples: readonly number[]): void {
 	if (samples.length < 8) {
