@@ -48,13 +48,19 @@ function opsToEvents(ops: readonly GestureOp[]): InputEvent[] {
   return b.events()
 }
 
-function makeObs(editor: Editor): Obs {
+function visibleWorldRectOf(camera: { readonly x: number; readonly y: number; readonly z: number }): { minX: number; minY: number; maxX: number; maxY: number } {
+  const tl = screenToWorld(camera, { x: 0, y: 0 })
+  const br = screenToWorld(camera, { x: FSM_VIEWPORT.w, y: FSM_VIEWPORT.h })
+  return { minX: tl.x, minY: tl.y, maxX: br.x, maxY: br.y }
+}
+
+function makeObs(editor: Editor, startRect: { minX: number; minY: number; maxX: number; maxY: number }): Obs {
   return {
     visibleWorldRect() {
-      const cam = editor.get().camera
-      const tl = screenToWorld(cam, { x: 0, y: 0 })
-      const br = screenToWorld(cam, { x: FSM_VIEWPORT.w, y: FSM_VIEWPORT.h })
-      return { minX: tl.x, minY: tl.y, maxX: br.x, maxY: br.y }
+      return visibleWorldRectOf(editor.get().camera)
+    },
+    visibleWorldRectAtStart() {
+      return startRect
     },
   }
 }
@@ -100,7 +106,8 @@ export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
   const editor = new Editor({ doc, now: () => 0, random: () => idRng.next(), pageId: 'page:p' })
   const ctx = createToolContext(editor)
   const tool = createSelectTool(ctx)
-  const obs = makeObs(editor)
+  const startRect = visibleWorldRectOf(editor.get().camera)
+  const obs = makeObs(editor, startRect)
 
   const events = opsToEvents(contract.gesture(rng))
   let state = tool.initialState

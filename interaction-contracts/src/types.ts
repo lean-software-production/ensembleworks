@@ -70,6 +70,10 @@ export interface SceneShape {
 export interface Obs {
   /** The world-space rectangle currently visible in the viewport. Pilot 1. */
   visibleWorldRect(): { minX: number; minY: number; maxX: number; maxY: number }
+  /** The visible world rect captured ONCE before the gesture's first event —
+   * the baseline a "did this gesture move the view?" invariant compares
+   * against. Runner-provided; both adapters snapshot it at start. */
+  visibleWorldRectAtStart(): { minX: number; minY: number; maxX: number; maxY: number }
 }
 
 /** A contract declaration = data. */
