@@ -402,11 +402,13 @@ function CrosstalkDiagram({ level }: { level: number }) {
 	const otherLevel = otherPageLevel(level)
 	// Visual tint for a gain: keep even 0 faintly visible so the band reads.
 	const tint = (gain: number) => 0.08 + 0.82 * gain
-	const label = {
+	// Labels flip ink → cream once their band's tint gets dark enough that
+	// ink would lose contrast.
+	const label = (gain: number) => ({
 		fontFamily: wm.mono,
 		fontSize: 8,
-		fill: wm.ink,
-	}
+		fill: tint(gain) > 0.5 ? wm.cream : wm.ink,
+	})
 	return (
 		<svg
 			viewBox="0 0 174 96"
@@ -442,14 +444,14 @@ function CrosstalkDiagram({ level }: { level: number }) {
 				stroke={wm.cream}
 				strokeWidth={1.2}
 			/>
-			<text x={6} y={13} {...label}>
+			<text x={6} y={13} {...label(otherLevel)}>
 				other pages {Math.round(otherLevel * 100)}%
 			</text>
-			<text x={22} y={35} {...label}>
+			<text x={22} y={35} {...label(pageLevel)}>
 				this page {Math.round(pageLevel * 100)}%
 			</text>
-			{/* Cream, not ink: the viewport band is always the solid dark tint. */}
-			<text x={87} y={69} textAnchor="middle" fontFamily={wm.mono} fontSize={8} fill={wm.cream}>
+			{/* The viewport band is always the solid dark tint, so always cream. */}
+			<text x={87} y={69} textAnchor="middle" {...label(1)}>
 				in view 100%
 			</text>
 		</svg>
