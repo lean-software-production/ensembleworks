@@ -54,17 +54,20 @@ async function sampleTextSelectionSpans(page: Page): Promise<number> {
   return page.evaluate(() => {
     const sel = window.getSelection()
     if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return 0
-    const bodies = new Set<string>()
+    const hit = new Set<string>()
+    const bodies = document.querySelectorAll('[data-shape-id][data-shape-kind]')
     for (let i = 0; i < sel.rangeCount; i++) {
       const range = sel.getRangeAt(i)
-      // Walk both endpoints up to their enclosing shape body.
-      for (const node of [range.startContainer, range.endContainer]) {
-        const el = (node.nodeType === 1 ? node : node.parentElement) as HTMLElement | null
-        const body = el?.closest('[data-shape-id][data-shape-kind]') as HTMLElement | null
-        if (body) bodies.add(body.getAttribute('data-shape-id')!)
-      }
+      // Count every shape body the selection RANGE intersects (fully-contained
+      // OR partially-overlapping — Range.intersectsNode returns true for both),
+      // not just the two endpoints: a marquee anchored on empty canvas never
+      // puts an endpoint inside the first body it sweeps over, so an
+      // endpoint-only walk would miss it.
+      bodies.forEach((body) => {
+        if (range.intersectsNode(body)) hit.add((body as HTMLElement).getAttribute('data-shape-id')!)
+      })
     }
-    return bodies.size
+    return hit.size
   })
 }
 
