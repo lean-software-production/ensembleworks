@@ -120,7 +120,7 @@ import {
 	type ViewportSize,
 } from '@ensembleworks/canvas-react'
 import { getIdentity, getRoomId } from '../identity.js'
-import { wsClientTransport, type WebSocketLike } from './ws-client-transport.js'
+import { wsClientTransport, type ConnectionState, type WebSocketLike } from './ws-client-transport.js'
 import { resolvePageId } from './bootstrap-page.js'
 import { adaptPresence, createPresencePublisher, type PresencePublisher } from './presence.js'
 import { DevOverlay, shouldShowDevOverlayFromEnvironment, useCanvasMetrics } from './DevOverlay.js'
@@ -199,6 +199,22 @@ function defaultConnect(roomId: string, userId: string): () => Promise<Transport
 		})
 }
 
+/** Feature-detects `wsClientTransport`'s additive connection-state accessors
+ * (Task E1 — `ws-client-transport.ts`'s `TransportWithConnectionState`) on a
+ * resolved `Transport`. Needed because `connect` is a test seam: production's
+ * `defaultConnect` always hands back a transport carrying these, but the
+ * integration test (CanvasV2App.test.ts) and any other injected `connect`
+ * hand back a PLAIN `Transport` (a canvas-sync memory-transport pair) with no
+ * such accessors — this mount must tolerate their absence rather than assume
+ * every transport reports live connection state, falling back to the
+ * boot-sequence-derived 'open' set at this function's one call site below. */
+function hasConnectionState(
+	t: Transport,
+): t is Transport & { getConnectionState(): ConnectionState; onConnectionStateChange(cb: (state: ConnectionState) => void): void } {
+	const maybe = t as { getConnectionState?: unknown; onConnectionStateChange?: unknown }
+	return typeof maybe.getConnectionState === 'function' && typeof maybe.onConnectionStateChange === 'function'
+}
+
 /** Crypto-seeded [0, 1) float — the `random` canvas-editor's create/arrow
  * tools use for id generation (see canvas-editor/src/tools/create.ts's
  * `makeId` COLLISION PRECONDITION doc: real entropy is half of what closes
@@ -262,16 +278,54 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 	const userId = props.userId ?? getIdentity().id
 	const [session, setSession] = useState<Session | null>(null)
 	const sessionRef = useRef<Session | null>(null)
+	// Task E1 — the REAL connection-state signal (see ws-client-transport.ts's
+	// ConnectionState), driving ConnectionBanner below. Starts 'connecting'
+	// (the initial dial, before `connect()` has settled either way) rather
+	// than the old naive `session ? 'connected' : 'connecting'` derivation,
+	// which could never observe a pre-session failure at all — the "dead
+	// dogfood" bug this task exists to fix.
+	const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
 
 	useEffect(() => {
 		let cancelled = false
 
 		async function boot(): Promise<void> {
 			const doConnect = props.connect ?? defaultConnect(roomId, userId)
-			const transport = await doConnect()
+			let transport: Transport
+			try {
+				transport = await doConnect()
+			} catch (err) {
+				// The "dead dogfood" case (EW_CANVAS_SYNC unset server-side, wrong
+				// port, route absent, …): `defaultConnect`'s promise REJECTS when the
+				// socket errors before ever opening, and — before this task — that
+				// rejection only ever reached the outer `boot().catch(...)` below,
+				// leaving `session` null forever and the mount stuck silently on
+				// "Connecting to canvas…" with no visible signal anything was wrong.
+				// Surface it here, then rethrow so the existing console.error logging
+				// (and any future caller of boot()'s own promise) is unchanged.
+				if (!cancelled) setConnectionState('failed')
+				throw err
+			}
 			if (cancelled) {
 				transport.close()
 				return
+			}
+			// Once connected, prefer the transport's OWN live connection-state
+			// signal (production's wsClientTransport — see hasConnectionState's own
+			// doc comment for why this is feature-detected rather than assumed):
+			// seed the current value immediately, then subscribe for LATER
+			// transitions (a post-open close/error lands on 'reconnecting', not
+			// tracked by anything else in this mount — see that state's own
+			// inferred-not-a-real-retry doc comment on ConnectionState). A test
+			// seam's plain Transport (no such accessors) falls back to a flat
+			// 'open' — the resolved promise already means "connected" for it.
+			if (hasConnectionState(transport)) {
+				setConnectionState(transport.getConnectionState())
+				transport.onConnectionStateChange((s) => {
+					if (!cancelled) setConnectionState(s)
+				})
+			} else {
+				setConnectionState('open')
 			}
 			// PresenceStore (Task G4): `selfKey` = this mount's userId — the SAME
 			// identity value the wire URL's `?userId=` and `randomPeerId()`'s Loro
@@ -365,6 +419,12 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 
 	return (
 		<>
+			{/* Task E1 — an OVERLAY, not a replacement: rendered unconditionally
+			    (it self-hides once `connectionState === 'open'`) so a room that
+			    lost its connection AFTER establishing a session keeps showing the
+			    last-known canvas underneath, per this task's own "don't block the
+			    canvas" requirement. */}
+			<ConnectionBanner state={connectionState} />
 			{!session ? <ConnectingPlaceholder /> : <CanvasV2Session session={session} />}
 			{showDevOverlay && (
 				<DevOverlay
@@ -382,6 +442,44 @@ function ConnectingPlaceholder() {
 	return (
 		<div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', fontFamily: 'system-ui, sans-serif', color: '#6b7280' }}>
 			Connecting to canvas…
+		</div>
+	)
+}
+
+/** Task E1 — a small fixed overlay strip surfacing `connectionState` whenever
+ * it is anything other than 'open', so a half-configured/dead dogfood room
+ * (EW_CANVAS_SYNC unset server-side, wrong port, route absent — the socket
+ * errors/closes before ever opening, landing on 'failed') is visibly
+ * signaled instead of rendering a silent dead canvas. Hides itself entirely
+ * once state recovers to 'open' — see the call site's own doc comment for why
+ * this is unconditionally mounted rather than gated by `session`. */
+function ConnectionBanner({ state }: { readonly state: ConnectionState }) {
+	if (state === 'open') return null
+	const message =
+		state === 'connecting'
+			? 'Connecting to canvas…'
+			: state === 'reconnecting'
+				? 'Connection lost — reconnecting…'
+				: 'Unable to connect to the canvas sync server.'
+	return (
+		<div
+			data-canvas-v2-connection-banner
+			data-connection-state={state}
+			style={{
+				position: 'fixed',
+				top: 0,
+				left: 0,
+				right: 0,
+				zIndex: 10000,
+				padding: '6px 12px',
+				textAlign: 'center',
+				fontFamily: 'system-ui, sans-serif',
+				fontSize: 13,
+				color: '#fff',
+				background: state === 'failed' ? '#b91c1c' : '#b45309',
+			}}
+		>
+			{message}
 		</div>
 	)
 }

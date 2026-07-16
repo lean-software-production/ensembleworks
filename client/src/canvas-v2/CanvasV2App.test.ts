@@ -633,6 +633,154 @@ async function main() {
 	)
 	console.log('ok: CanvasV2App — unmount disposes cleanly (no further sync reaches the torn-down client peer)')
 
+	// ==========================================================================
+	// (g) TASK E1 — THE "DEAD DOGFOOD" CASE: `connect()` REJECTS (mirrors
+	// production's `defaultConnect` when the socket errors/closes before ever
+	// opening — wrong port, route absent, EW_CANVAS_SYNC unset server-side).
+	// Before this task, that rejection reached only the internal
+	// `boot().catch(...)` console.error and left the mount stuck silently on
+	// "Connecting to canvas…" forever, with `session` never set and NOTHING
+	// visible telling a developer the room is dead. Now the ConnectionBanner
+	// must render the 'failed' message.
+	// ==========================================================================
+	{
+		function connectFailing(): Promise<Transport> {
+			return Promise.reject(new Error('simulated dead dogfood: route absent'))
+		}
+
+		const failContainer = document.createElement('div')
+		document.body.appendChild(failContainer)
+		const failRoot = createRoot(failContainer)
+
+		await act(async () => {
+			failRoot.render(
+				createElement(
+					StrictMode,
+					null,
+					createElement(CanvasV2App, { roomId: 'dogfood-fail', userId: 'test-user-fail', connect: connectFailing, settleMs: 0 }),
+				),
+			)
+			await new Promise((r) => setTimeout(r, 0))
+			await new Promise((r) => setTimeout(r, 0))
+		})
+
+		const banner = failContainer.querySelector('[data-canvas-v2-connection-banner]')
+		assert.ok(banner, `a ConnectionBanner must render when connect() rejects — DOM: ${failContainer.innerHTML}`)
+		assert.equal(
+			banner!.getAttribute('data-connection-state'),
+			'failed',
+			"a connect() rejection (socket errored/closed before ever opening) must land the banner on 'failed', not stay silently 'connecting'",
+		)
+		console.log("ok: CanvasV2App — a connect() rejection (dead dogfood) renders a visible ConnectionBanner in the 'failed' state")
+
+		await act(async () => {
+			failRoot.unmount()
+		})
+	}
+
+	// ==========================================================================
+	// (h) TASK E1 — BANNER SHOWS ON A POST-OPEN CLOSE, HIDES ON RECOVERY: a
+	// transport wrapping a REAL memory-transport pair (so the session actually
+	// mounts and syncs, same as case (a)) plus this task's additive
+	// getConnectionState/onConnectionStateChange accessors, driven manually
+	// here to simulate the wsClientTransport state machine's own transitions
+	// (ws-client-transport.test.ts proves those transitions in isolation;
+	// this proves CanvasV2App's OWN reaction to them: banner mounts/unmounts
+	// the DOM node as `connectionState` changes, never blocking the canvas
+	// underneath — the shape seeded below stays rendered throughout).
+	// ==========================================================================
+	{
+		const server2 = new SyncServerPeer({ peerId: 3n })
+		server2.doc.putPage({ id: 'page:p', name: 'Canvas' })
+		server2.doc.putShape(seedShape('shape:banner-seed', 5, 5))
+		server2.doc.commit()
+
+		let liveTransport: {
+			getConnectionState(): string
+			onConnectionStateChange(cb: (s: string) => void): void
+			simulateState(s: 'connecting' | 'open' | 'reconnecting' | 'failed'): void
+		} | null = null
+
+		function connectStateful(): Promise<Transport> {
+			const [serverSide, clientSide]: [Transport, Transport] = makePair()
+			server2.connect(serverSide)
+			let state: 'connecting' | 'open' | 'reconnecting' | 'failed' = 'open' // resolves post-"open", mirroring defaultConnect
+			let onStateCb: ((s: string) => void) | null = null
+			const wrapped = {
+				send: (bytes: Uint8Array) => clientSide.send(bytes),
+				onMessage: (cb: (bytes: Uint8Array) => void) => clientSide.onMessage(cb),
+				onClose: (cb: () => void) => clientSide.onClose(cb),
+				close: () => clientSide.close(),
+				getConnectionState: () => state,
+				onConnectionStateChange: (cb: (s: string) => void) => {
+					onStateCb = cb
+				},
+				simulateState: (s: 'connecting' | 'open' | 'reconnecting' | 'failed') => {
+					state = s
+					onStateCb?.(s)
+				},
+			}
+			liveTransport = wrapped
+			return Promise.resolve(wrapped as unknown as Transport)
+		}
+
+		const bannerContainer = document.createElement('div')
+		document.body.appendChild(bannerContainer)
+		const bannerRoot = createRoot(bannerContainer)
+
+		await act(async () => {
+			bannerRoot.render(
+				createElement(
+					StrictMode,
+					null,
+					createElement(CanvasV2App, { roomId: 'dogfood-banner', userId: 'test-user-banner', connect: connectStateful, settleMs: 0 }),
+				),
+			)
+			await new Promise((r) => setTimeout(r, 0))
+			await new Promise((r) => setTimeout(r, 0))
+		})
+
+		assert.ok(
+			bannerContainer.querySelector('[data-shape-id="shape:banner-seed"]'),
+			`precondition: the session mounted and rendered the seeded shape — DOM: ${bannerContainer.innerHTML}`,
+		)
+		assert.equal(
+			bannerContainer.querySelector('[data-canvas-v2-connection-banner]'),
+			null,
+			"the banner must NOT render while connectionState is 'open'",
+		)
+		console.log('ok: CanvasV2App — no ConnectionBanner renders while the transport reports open')
+
+		await act(async () => {
+			liveTransport!.simulateState('reconnecting')
+		})
+		const reconnectingBanner = bannerContainer.querySelector('[data-canvas-v2-connection-banner]')
+		assert.ok(
+			reconnectingBanner,
+			`a post-open transition to 'reconnecting' must render a visible ConnectionBanner — DOM: ${bannerContainer.innerHTML}`,
+		)
+		assert.equal(reconnectingBanner!.getAttribute('data-connection-state'), 'reconnecting')
+		assert.ok(
+			bannerContainer.querySelector('[data-shape-id="shape:banner-seed"]'),
+			"the canvas underneath must still render while 'reconnecting' — the banner is an overlay, not a replacement",
+		)
+		console.log("ok: CanvasV2App — a post-open transition to 'reconnecting' renders the banner without hiding the canvas underneath")
+
+		await act(async () => {
+			liveTransport!.simulateState('open')
+		})
+		assert.equal(
+			bannerContainer.querySelector('[data-canvas-v2-connection-banner]'),
+			null,
+			"the banner must disappear once connectionState recovers back to 'open'",
+		)
+		console.log('ok: CanvasV2App — the ConnectionBanner disappears once the connection recovers')
+
+		await act(async () => {
+			bannerRoot.unmount()
+		})
+	}
+
 	console.log('ok: CanvasV2App.test.ts — all cases passed')
 }
 
