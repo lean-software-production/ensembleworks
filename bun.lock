@@ -24,6 +24,7 @@
       "dependencies": {
         "@ensembleworks/canvas-doc": "*",
         "@ensembleworks/canvas-model": "*",
+        "@ensembleworks/interaction-contracts": "*",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
