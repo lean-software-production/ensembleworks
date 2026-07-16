@@ -1892,6 +1892,51 @@ deviation from DoD #8 (never a silent ungated landing)._
   both metrics via the SAME always-on `assertNoRegression` pattern G1/G2
   established (never a capture-guarded `else` — see that function's own
   module comment). No deviation from DoD #8 needed.
+- **H3 (actor soak ≥20k ops — S6 evidence) — RUN AT 20,000-25,000 ops (the
+  DoD #9/plan-required ≥20k, no under-run, no deviation to record).** Three
+  foreground runs of `soak-actor-cli.ts` (each converged, `malformedFrames:
+  0`), 5 clients / chaos 0.5:
+
+  | ops    | seed | wallMs | RSS quartile ratio | disk÷snapshot (final) | disk÷snapshot (sustained, last-quartile mean) |
+  |--------|------|--------|---------------------|------------------------|------------------------------------------------|
+  | 20,000 | 42   | 27,579 | 2.320x              | 6.52x                  | 4.797x (re-run at tightened settings) |
+  | 20,000 | 1    | 26,453 | 2.256x              | 2.90x                  | — |
+  | 25,000 | 7    | 37,473 | 2.850x              | 5.70x                  | — |
+
+  **Convergence under the H1/H2 text-check, confirmed:** all three runs
+  report `converged: true`, which now (post-H1/H2) includes the per-shape
+  `getText`/`text:<id>` LoroText cross-client check inside `runSoak`
+  (canvas-sync's `src/soak.ts`) — the actor's DocumentActor + SQLite
+  append-log/compaction path preserves per-shape text containers correctly
+  through repeated compaction cycles at ≥20k ops. No divergence observed;
+  nothing to report as a bug.
+
+  **FLAT_RSS_TOLERANCE tightened 15 → 6** (`soak-actor-cli.ts`): worst
+  observed ≥20k-ops quartile-mean ratio was 2.85x (25,000 ops, seed 7) — no
+  new superlinear tail past 15,000 ops for this compacting variant (unlike
+  canvas-sync's own bare-peer soak, whose no-compaction docs climb to
+  ~9.97x by 20,000 ops). 6 is ~2.1x headroom over the observed 2.85x worst
+  case — enough for run-to-run/host variance, without reverting to another
+  loose placeholder.
+
+  **New S6 disk-high-water metric + threshold, wired in `soak-actor.ts`:**
+  added `assertDiskHighWater` (+ its `lastQuartileDiskToSnapshotRatio`
+  helper, reused by the CLI's summary JSON as `diskSustainedHighwaterRatio`)
+  — a LAST-QUARTILE MEAN disk÷snapshot ratio check, distinct from the
+  pre-existing single-final-point `DISK_GROWTH_MULTIPLIER` (12x) regression
+  tripwire. New constant `DISK_SUSTAINED_HIGHWATER_MULTIPLIER = 10` (the
+  plan's own suggested threshold) — the soak throws if the sustained ratio
+  breaches it. Re-run at the tightened settings (seed 42, 20,000 ops)
+  confirmed GREEN: sustained ratio 4.797x, well under the 10x threshold.
+
+  **S6 verdict evidence for Task I1:** across all ≥20k/25k runs, disk stayed
+  a bounded high-water mark at 2.9x-6.52x of live snapshot bytes (final
+  point) / 4.8x sustained (last-quartile mean) — comfortably under both the
+  12x regression tripwire and the new 10x S6 decision threshold. No sign of
+  unbounded growth or of compaction failing to keep up at this scale;
+  `VACUUM` does not look urgently needed from this evidence alone (Task I1
+  owns the final dated verdict, combining this with H4's live dogfood
+  visibility).
 
 ---
 
