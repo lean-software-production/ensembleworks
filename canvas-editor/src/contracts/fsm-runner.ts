@@ -6,14 +6,14 @@
 // seed reproduces exactly. Mirrors the design's "FSM runner beside the script()
 // rig". The browser runner (e2e) interprets the SAME GestureOp[].
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
-import type { Shape } from '@ensembleworks/canvas-model'
+import { validateShape } from '@ensembleworks/canvas-model'
 import type { Anchor, Contract, GestureOp, Obs, Rng } from '@ensembleworks/interaction-contracts'
 import { mulberry32 } from '@ensembleworks/interaction-contracts'
 import { applyWheel } from '../camera.js'
 import { Editor } from '../editor.js'
 import type { InputEvent, Modifiers } from '../input.js'
 import { screenToWorld } from '../input.js'
-import { run, script } from '../script.js'
+import { script } from '../script.js'
 import { createSelectTool } from '../tools/select.js'
 import { createToolContext } from '../tools/tool-context.js'
 
@@ -22,7 +22,6 @@ import { createToolContext } from '../tools/tool-context.js'
 // (screenToWorld of the four corners), not the exact pixel size.
 const FSM_VIEWPORT = { w: 1280, h: 720 } as const
 
-const NEUTRAL: Modifiers = { shift: false, alt: false, ctrl: false, meta: false }
 function mods(over?: { shift?: boolean; alt?: boolean; ctrl?: boolean; meta?: boolean }): Partial<Modifiers> {
   return { ...over }
 }
@@ -63,11 +62,17 @@ function makeObs(editor: Editor): Obs {
 function seedScene(doc: LoroCanvasDoc, contract: Contract): void {
   doc.putPage({ id: 'page:p', name: 'P' })
   for (const s of contract.scene?.() ?? []) {
-    doc.putShape({
+    // SceneShape's id/kind are plain strings (the contracts module is pure and
+    // cannot import the model's branded types), so the seam validates here —
+    // a malformed id prefix or unknown kind must fail LOUDLY at seeding time,
+    // never reach the doc as a silently malformed shape.
+    const v = validateShape({
       id: s.id, kind: s.kind, parentId: 'page:p', index: 'a1',
       x: s.x, y: s.y, rotation: 0, isLocked: false, opacity: 1, meta: {},
       props: { w: s.w, h: s.h },
-    } as Shape)
+    })
+    if (!v.ok) throw new Error(`seedScene: invalid SceneShape ${JSON.stringify(s.id)} (kind ${JSON.stringify(s.kind)}): ${v.error}`)
+    doc.putShape(v.shape)
   }
   doc.commit()
 }
@@ -79,7 +84,11 @@ export interface FsmRunResult {
 }
 
 /** Run one contract at one seed through the FSM. Returns the first invariant
- * failure (with the seed for repro) or null. */
+ * failure (with the seed for repro) or null.
+ * NOTE: `contract.level` is ignored here — Phase G wires level filtering (which
+ * runner runs which declarations); callers today pass fsm-level contracts.
+ * NOTE: the select tool is hardwired — a tool seam on Contract is a known
+ * later extension (first contract needing another tool adds it). */
 export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
   const rng: Rng = mulberry32(seed)
   const doc = LoroCanvasDoc.create({ peerId: 1n })
