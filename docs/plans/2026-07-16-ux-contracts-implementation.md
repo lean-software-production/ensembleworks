@@ -121,8 +121,10 @@ lock) → G (process wiring). **After each pilot phase (B–F) there is an expli
 STOP checkpoint** — the orchestrating session runs a trustability assessment
 before the next phase begins. Implementers halt at those blocks.
 
-Task counts: Phase A = 6, B = 6, C = 7, D = 8, E = 5, F = 8, G = 6. Total = 46
-tasks across 7 phases, plus 5 checkpoint STOP blocks.
+Task counts: Phase A = 6, B = 6, C = 7, D = 8, E = 5 (+4 extension), F = 8,
+G = 6. Total = 50 tasks across 7 phases, plus 6 checkpoint STOP blocks. (The
+Phase E extension — Tasks E6–E9 — was added 2026-07-16 after the Phase E STOP
+review; see its own dated note below.)
 
 ---
 
@@ -1792,6 +1794,494 @@ drag when the pressed shape is the one being edited). Choose **the FSM**:
 Confirm: the modality contract ran RED at the FSM level, the FSM-seam fix
 (justified over the dispatch seam) turned it GREEN, and the textarea
 stopPropagation belt did not break caret/focus.
+
+---
+
+# Phase E extension — the editing guard has a hole: transform handles
+
+> **Review finding (2026-07-16, surfaced at the Phase E STOP above).** The
+> Phase E fix made the invariant `editingShape() ≠ null ⇒ the edited shape is
+> never *translated*` true, but the pilot's real invariant — *editing is
+> modal, the edited shape is never **transformed*** — is **not yet true
+> end-to-end**. The hole:
+>
+> - The E3 guard lives ONLY in `select.ts`'s Pointing→Dragging transition. But
+>   the client drives the select tool through the composite
+>   `createSelectAndTransformTool` (`client/src/canvas-v2/tool-loop.ts`), which
+>   gives `transform.ts` **first crack at every pointerdown** — and
+>   `transform.ts` has **no `editingId` awareness** (grep-confirmed:
+>   `transform.ts` never reads `editor.get().editingId`).
+> - An edited shape is also **selected** (`select.ts` emits `SetSelection`
+>   alongside `BeginEdit` on the double-click — see its `doubleClick` branch),
+>   so the screen-space overlay draws that selection's resize/rotate handles.
+>   Per `Viewport.tsx`'s STACKING CONTRACT the overlay SVG is a sibling placed
+>   AFTER `WorldLayer` in DOM order, so its handles **paint above** the
+>   `TextEditor` textarea (which lives inside `WorldLayer`). The textarea's
+>   `stopPropagation` belt (Task E4) covers only pointer events that land ON
+>   the textarea; the rotate handle sits 32 world units ABOVE the shape's top
+>   edge (outside the textarea entirely), and a corner-handle grab within
+>   `HIT_TOLERANCE_PX` need not land on the textarea either.
+> - Net effect: double-click a note to edit → grab a corner/rotate handle →
+>   **the shape resizes/rotates under the caret.**
+> - The existing FSM contract cannot catch this, because
+>   `fsm-runner.ts` hardwired `createSelectTool` (the Phase-A "hardwired select
+>   tool" flag note) — the **transform leg is never exercised**. And
+>   `createSelectAndTransformTool` lives in `tool-loop.ts`, which
+>   `canvas-editor` **cannot import** (clean-room: no client imports).
+>
+> **Composite-availability decision (E6 discharges it; justify in the E6
+> commit).** `createSelectAndTransformTool` is **pure, DOM-free FSM logic** —
+> it imports only `canvas-editor` FSM factories + `canvas-model` types, touches
+> no DOM/React, and its handoff rule (reset the select leg when transform grabs
+> a handle) is exactly the kind of clean-room dispatch logic that belongs
+> beside the two FSMs it unions. It was merely *placed* in the client. **So
+> E6 MOVES the composite into `canvas-editor` (`tools/select-and-transform.ts`)
+> and has `tool-loop.ts` RE-EXPORT it.** Two payoffs: (1) the FSM runner drives
+> the **real** composite the client ships — not a re-derivation that could
+> silently drift from the shipped handoff rule (which the plan's "runner drives
+> real FSMs, not a mock" principle demands); (2) the client keeps the identical
+> public surface (`createSelectAndTransformTool`/`SelectAndTransformState`
+> resolve through the re-export) while shedding logic that never belonged in a
+> React-facing module. The rejected alternative — re-deriving a local composite
+> inside the runner — would prove something the client does not actually do the
+> moment the two composites diverge.
+
+### Task E6 — The runner tool seam + relocate the select+transform composite
+
+**Files:**
+- Create: `canvas-editor/src/tools/select-and-transform.ts` (the composite,
+  moved from the client)
+- Modify: `canvas-editor/src/index.ts` — export it
+- Modify: `client/src/canvas-v2/tool-loop.ts` — delete the local composite,
+  re-export from `canvas-editor`, drop the now-unused imports
+- Modify: `interaction-contracts/src/types.ts` — add `tool?` to `Contract`
+- Modify: `canvas-editor/src/contracts/fsm-runner.ts` — build the FSM per
+  `contract.tool`; discharge the "hardwired select tool" NOTE
+
+1. Create `canvas-editor/src/tools/select-and-transform.ts` by moving
+   `SelectAndTransformState` + `createSelectAndTransformTool` **verbatim** out
+   of `tool-loop.ts` (module header prose included, adjusted to note the
+   relocation). Only the imports change — local `../`/`./` specifiers instead of
+   the `@ensembleworks/canvas-editor` barrel (a package cannot import its own
+   barrel):
+
+```ts
+// The select+transform COMPOSITE — the union tldraw users expect from "the
+// select tool": click/drag/marquee-select (select.ts) PLUS drag a resize/
+// rotate handle when something is already selected (transform.ts). On every
+// pointerdown while composite-idle, transform.ts gets FIRST CRACK (it reacts
+// only to a pointerdown that lands on a handle — every other event is a no-op
+// returning its own unchanged idle state); if it grabbed a handle, the
+// composite's active leg becomes 'transform' until transform's FSM returns to
+// idle (pointerup) — otherwise the event forwards to select.ts. Composed at
+// the dispatch layer, not inside either FSM.
+//
+// RELOCATED (Phase E extension, 2026-07-16): this composite previously lived
+// in client/src/canvas-v2/tool-loop.ts. It is pure, DOM-free FSM logic (no
+// client/React/DOM import), so it belongs in the clean-room editor beside the
+// two FSMs it unions — AND hosting it here lets the interaction-contracts FSM
+// runner drive the REAL composite the client ships (not a re-derivation that
+// could drift from the handoff rule below). tool-loop.ts now re-exports it, so
+// the client's public surface is unchanged. See git history for the full
+// original prose.
+import type { Intent } from '../intents.js'
+import type { Tool } from '../input.js'
+import { createSelectTool, type SelectState } from './select.js'
+import { createTransformTool, type TransformState } from './transform.js'
+import type { ToolContext } from './tool-context.js'
+
+export interface SelectAndTransformState {
+  readonly active: 'select' | 'transform'
+  readonly select: SelectState
+  readonly transform: TransformState
+}
+
+export function createSelectAndTransformTool(ctx: ToolContext): Tool<SelectAndTransformState> {
+  const select = createSelectTool(ctx)
+  const transform = createTransformTool(ctx)
+  const initialState: SelectAndTransformState = { active: 'select', select: select.initialState, transform: transform.initialState }
+
+  return {
+    initialState,
+    onEvent(state, event): { state: SelectAndTransformState; intents: Intent[] } {
+      if (state.active === 'transform') {
+        const r = transform.onEvent(state.transform, event)
+        const active = r.state.mode === 'idle' ? 'select' : 'transform'
+        return { state: { ...state, active, transform: r.state }, intents: r.intents }
+      }
+      if (event.type === 'pointerdown') {
+        const rt = transform.onEvent(state.transform, event)
+        if (rt.state.mode !== 'idle') {
+          // HANDOFF RESETS THE SELECT LEG (quality-review fix — verbatim from
+          // the original; pinned by tool-loop.test.ts's click-resize-click
+          // probe): an entire resize/rotate gesture routes EXCLUSIVELY through
+          // transform, so select's double-click memory (lastClick) must not
+          // survive it, or a click after the gesture spuriously BeginEdits.
+          return { state: { active: 'transform', select: select.initialState, transform: rt.state }, intents: rt.intents }
+        }
+      }
+      const rs = select.onEvent(state.select, event)
+      return { state: { ...state, select: rs.state }, intents: rs.intents }
+    },
+  }
+}
+```
+
+2. In `canvas-editor/src/index.ts`, add `export * from
+   './tools/select-and-transform.js'` immediately after the
+   `./tools/transform.js` export line.
+
+3. In `client/src/canvas-v2/tool-loop.ts`:
+   - **Delete** the `SelectAndTransformState` interface and the
+     `createSelectAndTransformTool` function (the two blocks now living in
+     canvas-editor).
+   - **Re-export** them so every existing client importer (e.g.
+     `tool-loop.test.ts`, `CanvasV2App.tsx`) resolves unchanged:
+     `export { createSelectAndTransformTool, type SelectAndTransformState } from '@ensembleworks/canvas-editor'`.
+   - Add `createSelectAndTransformTool` and `type SelectAndTransformState` to
+     the existing `import { ... } from '@ensembleworks/canvas-editor'` block
+     (`createToolSet` calls the fn; `ToolSet`/`currentSnapResult` name the type),
+     and **drop `createSelectTool`, `createTransformTool`, and `type
+     TransformState`** — they were used ONLY by the composite that just moved
+     (keep `type SelectState`: `currentSnapResult` still casts to it). Let
+     `noUnusedLocals` (tsc) be the arbiter — remove exactly what it flags.
+   - Trim the module header's now-duplicated composite prose to a one-line
+     pointer: "the select+transform composite now lives in canvas-editor
+     (`tools/select-and-transform.ts`) and is re-exported below for the
+     client's existing importers."
+
+4. In `interaction-contracts/src/types.ts`, add to the `Contract` interface
+   (right after `scope?`):
+
+```ts
+  /** Which tool FSM the runner drives this contract through. 'select' (the
+   * default — click/drag/marquee via tools/select.ts) or 'select+transform'
+   * (the client's shipped composite: select PLUS resize/rotate handles via
+   * tools/transform.ts). A contract that must exercise handle-dragging (e.g.
+   * no-transform-while-typing, Phase E extension) sets 'select+transform'.
+   * Pure string union — this module still imports NOTHING. */
+  readonly tool?: 'select' | 'select+transform'
+```
+
+5. In `canvas-editor/src/contracts/fsm-runner.ts`:
+   - Add imports: `import { createSelectAndTransformTool } from
+     '../tools/select-and-transform.js'` and add `type Tool` to the existing
+     `'../input.js'` import.
+   - Replace `const tool = createSelectTool(ctx)` with the seam:
+
+```ts
+  // TOOL SEAM (Phase E extension): build the FSM the contract asks for.
+  // Default 'select'; 'select+transform' drives the SAME composite the client
+  // ships (createSelectAndTransformTool) so a handle-drag contract exercises
+  // the real dispatch — transform.ts gets first crack at each pointerdown,
+  // exactly as in the browser.
+  const tool: Tool<unknown> = contract.tool === 'select+transform'
+    ? (createSelectAndTransformTool(ctx) as Tool<unknown>)
+    : (createSelectTool(ctx) as Tool<unknown>)
+```
+
+   - Change `let state = tool.initialState` to `let state: unknown =
+     tool.initialState` (the state type is now per-contract).
+   - **Discharge the flag note:** replace the existing
+     `NOTE: the select tool is hardwired — a tool seam on Contract is a known
+     later extension ...` lines with:
+     `NOTE: the tool is chosen by contract.tool (Phase E extension's TOOL SEAM
+     below) — 'select' by default, 'select+transform' for handle-drag
+     contracts. The former "hardwired select tool" limitation is discharged.`
+
+6. Run: `bun install >/dev/null 2>&1` (keeps symlinks fresh; no new dep edge),
+   then:
+   - `bun canvas-editor/src/boundary.test.ts` — expect `ok: boundary (scanned N
+     file(s): ...)` with N increased by 1 (the moved composite is scanned and
+     clean — it imports nothing forbidden).
+   - `bun run --filter '@ensembleworks/canvas-editor' typecheck` — clean.
+   - `bun run --filter '@ensembleworks/interaction-contracts' typecheck` — clean.
+   - `bun run --filter '@ensembleworks/client' typecheck` — clean (the
+     re-export resolves; no unused imports remain).
+   - `bun client/src/canvas-v2/tool-loop.test.ts` — expect all `ok:` lines
+     (composite behavior is byte-identical via the re-export; the
+     click-resize-click and handle-grab probes still pass).
+
+7. Run: `bun canvas-editor/src/contracts/library.test.ts`
+   Expect: **PASS** — existing contracts unchanged; no new contract yet, and
+   every existing one defaults to `tool: 'select'`.
+
+8. **Commit:**
+   `git add canvas-editor/src/tools/select-and-transform.ts canvas-editor/src/index.ts client/src/canvas-v2/tool-loop.ts interaction-contracts/src/types.ts canvas-editor/src/contracts/fsm-runner.ts`
+   then
+   `git commit -m "refactor(canvas-editor): host the select+transform composite; add runner tool seam" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"`
+
+### Task E7 — The `no-transform-while-typing` contract (RED)
+
+**Files:**
+- Modify: `interaction-contracts/src/types.ts` — add `shapeSizeDelta` to `Obs`
+- Modify: `canvas-editor/src/contracts/fsm-runner.ts` — capture start sizes +
+  implement `shapeSizeDelta`
+- Create: `interaction-contracts/src/contracts/no-transform-while-typing.ts`
+- Modify: `interaction-contracts/src/index.ts` — register it
+
+**Handle-addressing mechanism (specified — this is how a headless gesture
+"grabs a handle").** Handles are screen-space overlay geometry, but the
+transform FSM never touches the DOM: `transform.ts`'s `onIdle` lays out the
+selection's 9 handles from its WORLD `selectionWorldBounds`
+(`selectionHandles`), then `hitHandle` projects each to screen via
+`worldToScreen(camera, ...)` and picks the closest within `HIT_TOLERANCE_PX`
+(8px). So a gesture addresses a handle purely by its **pointer screen
+coordinates**. For the seeded scene — one 200×200 `note` at world `(0,0)`, and
+the runner's identity start camera `{x:0,y:0,z:1}` where `worldToScreen` is the
+identity — the shape's world centre `(100,100)` is screen `(100,100)` and its
+**SE corner handle** (world `(200,200)`) is screen `(200,200)`. A shape anchor
+`{ ref: 'shape', id, dx:100, dy:100 }` resolves to `centre + (100,100) =
+(200,200)` — dead on the SE handle (distance 0 < 8px). Dragging that anchor
+outward (`dx:160, dy:160` → `(260,260)`) crosses the drag threshold and
+resizes. (`resolveAnchor` resolves ALL anchors against the shape's position at
+event-BUILD time, before any of the gesture plays — so both the grab and the
+drag target the original 200×200 shape deterministically.)
+
+**Why a new `Obs` method (`shapeSizeDelta`).** An SE-corner resize holds the
+opposite (NW) corner fixed, so the shape's `x`/`y` (top-left origin) **do not
+move** — only `w`/`h` grow. `shapeDisplacement` (translation only) therefore
+cannot observe a resize; `shapeSizeDelta` is the resize analogue, mirroring
+`shapeDisplacement`'s start-capture-then-delta shape exactly.
+
+1. In `types.ts`, add to `Obs` (right after `shapeDisplacement`):
+
+```ts
+  /** Total change in a shape's LOCAL size (w/h) since the gesture's start —
+   * the resize analogue of shapeDisplacement. A resize anchored at a corner
+   * OTHER than the moving one keeps x/y fixed (only w/h change), so
+   * translation alone cannot observe it; this is what lets a handle-drag
+   * contract catch a resize under the editing caret. */
+  shapeSizeDelta(id: string): { dw: number; dh: number }
+```
+
+2. In `fsm-runner.ts`:
+   - Add `localBounds` to the existing `'@ensembleworks/canvas-model'` import.
+   - After the `startPositions` capture loop, add a start-size capture:
+
+```ts
+  const startSizes = new Map<string, { w: number; h: number }>()
+  for (const shape of doc.listShapes()) {
+    const lb = localBounds(shape)
+    startSizes.set(shape.id, { w: lb.maxX, h: lb.maxY }) // localBounds is {0,0,w,h} — geometry.ts's contract
+  }
+```
+
+   - Thread `startSizes` into `makeObs(...)` (new parameter, alongside
+     `startPositions`) and implement:
+
+```ts
+    shapeSizeDelta(id: string) {
+      const start = startSizes.get(id)
+      if (!start) throw new Error(`shapeSizeDelta: no seeded shape with id ${JSON.stringify(id)}`)
+      const shape = editor.doc.getShape(id)
+      // TOLERANCE: a vanished shape (mid-gesture remote delete) — same
+      // degrade-not-throw posture as shapeDisplacement just above.
+      if (!shape) return { dw: 0, dh: 0 }
+      const lb = localBounds(shape)
+      return { dw: lb.maxX - start.w, dh: lb.maxY - start.h }
+    },
+```
+
+3. Create `interaction-contracts/src/contracts/no-transform-while-typing.ts`:
+
+```ts
+// Pilot 4 extension — no TRANSFORM while typing. Sibling of no-drag-while-
+// typing: same modality invariant (editingShape() !== null => that shape is
+// never transformed), different gesture — double-click to edit, then grab a
+// resize HANDLE and drag it. tool: 'select+transform' so the runner builds the
+// SAME composite the client ships (createSelectAndTransformTool), which gives
+// transform.ts first crack at the handle-grab pointerdown. See the plan's
+// Phase E extension for the handle-addressing derivation (SE corner of a
+// 200x200 note at world (0,0) is screen (200,200) at the identity camera).
+import type { Contract, GestureOp, Obs, Rng } from '../types.js'
+
+const ID = 'shape:edit-transform'
+
+export const noTransformWhileTyping: Contract = {
+  name: 'no-transform-while-typing',
+  level: 'fsm',
+  tool: 'select+transform',
+  when: 'every-event',
+  scene: () => [{ id: ID, kind: 'note', x: 0, y: 0, w: 200, h: 200 }],
+  gesture: (_rng: Rng): GestureOp[] => [
+    // seed-invariant by construction (ignores rng): a fixed double-click-then-
+    // grab-SE-handle sequence; running it across library.test.ts's seed set is
+    // redundant but harmless. Two clicks at the shape centre -> BeginEdit (the
+    // shape is now selected AND editingId). Then grab the SE corner handle
+    // (centre + half-extent = screen (200,200), within HIT_TOLERANCE_PX) and
+    // drag it outward to resize.
+    { kind: 'down', at: { ref: 'shape', id: ID } }, { kind: 'up' },
+    { kind: 'down', at: { ref: 'shape', id: ID } }, { kind: 'up' },
+    { kind: 'down', at: { ref: 'shape', id: ID, dx: 100, dy: 100 } },
+    { kind: 'move', at: { ref: 'shape', id: ID, dx: 160, dy: 160 }, steps: 4 },
+    { kind: 'up' },
+  ],
+  check: (obs: Obs): string | null => {
+    if (obs.editingShape() !== ID) return null
+    const d = obs.shapeDisplacement(ID)
+    const s = obs.shapeSizeDelta(ID)
+    return d.dx === 0 && d.dy === 0 && s.dw === 0 && s.dh === 0
+      ? null
+      : `shape transformed while being edited (displacement ${JSON.stringify(d)}, size delta ${JSON.stringify(s)}); editing must be modal`
+  },
+}
+```
+
+4. Register `noTransformWhileTyping` in `interaction-contracts/src/index.ts`
+   (import + add to `CONTRACTS`).
+
+5. Run: `bun run --filter '@ensembleworks/interaction-contracts' typecheck &&
+   bun run --filter '@ensembleworks/canvas-editor' typecheck` — expect clean.
+
+6. Run: `bun canvas-editor/src/contracts/library.test.ts`
+   Expect: **FAIL** on `no-transform-while-typing` — the message shows a
+   non-zero `size delta` (the SE-corner resize) while `editingShape() === ID`,
+   e.g. `shape transformed while being edited (displacement {"dx":0,"dy":0},
+   size delta {"dw":60,"dh":60}); editing must be modal`. Capture the exact
+   output for the checkpoint. This is the RED that pins the hole. Do **not**
+   commit a failing test as green — proceed to the fix.
+
+### Task E8 — Fix: guard `transform.ts`'s handle-grab on editing (seam decision + minor-notes cleanup)
+
+**Files:**
+- Modify: `canvas-editor/src/tools/transform.ts` — `onIdle` editing guard
+- Modify: `canvas-editor/src/tools/select.ts` — notes (a)+(b) at the E3 guard
+- Modify: `interaction-contracts/src/contracts/modality-exclusivity.ts` —
+  note (c)
+- Modify (OPTIONAL, cosmetic): `canvas-react/src/Overlay.tsx` — hide handles
+  while editing
+
+**Seam decision (justify in the E9 commit).** Three candidate seams —
+(i) the **FSM guard** in `transform.ts`'s `onIdle` (suppress the handle-grab
+when the edited shape is in the selection), (ii) a **composite-level gate** in
+`tool-loop.ts` (refuse to hand pointerdowns to the transform leg while
+editing), (iii) **suppress handle RENDERING** in the overlay. Choose **(i) the
+FSM guard**, for exactly the reasons E3 chose the FSM over the dispatch seam:
+- It is the clean-room seam the contract observes; the runner drives the FSM
+  directly, so the fix is falsifiable and fixable at the cheapest level and
+  covered by fast unit runs, not only e2e.
+- `transform.ts` already reads `editor.get()` for selection/camera — reading
+  `editingId` is the same closure, no new dependency, and it composes with
+  select.ts's own E3 guard (a suppressed handle-grab falls through the
+  composite to select, whose editing guard then also refuses any translate).
+- Every consumer of the composite inherits it for free.
+- **(iii) alone is insufficient** by this plan's falsifiability standard: the
+  overlay is `pointer-events: none` and the FSM hit-tests handles by pure
+  geometry (Overlay.tsx's own POINTER EVENTS note), so hiding the glyph leaves
+  the FSM path fully open — a pointerdown at a handle's screen coordinates
+  still resizes, and the FSM-level contract would stay RED. **(ii)** splits the
+  modality rule across a second file and re-derives it — the same objection E3
+  raised against the dispatch seam. So the FSM guard; add (iii) too, but ONLY
+  as an optional cosmetic honesty step (don't paint an affordance that won't
+  respond).
+
+1. In `transform.ts`'s `onIdle`, right after `const ids = [...editor.get().
+   selection]` and **before** `selectionWorldBounds`/`hitHandle`:
+
+```ts
+    // MODALITY (pilot 4 extension — interaction-contracts'
+    // 'no-transform-while-typing'): never grab a resize/rotate handle while
+    // the shape being text-edited is part of this selection. The handles
+    // represent the selection's combined bounds, so transforming would move/
+    // resize the edited shape out from under the caret — the same modality
+    // rule select.ts enforces for translate. FSM-level (not a render-only
+    // hide) so it holds at the cheapest, contract-observable level; returning
+    // idle lets the composite fall the pointerdown through to select.ts, whose
+    // own editing guard then refuses any translate too. LIVE read of editingId
+    // at this single grab pointerdown — one read at one event, so (unlike
+    // select.ts's Pointing->Dragging read) there is no mid-gesture window to
+    // reason about.
+    const editingId = editor.get().editingId
+    if (editingId !== null && ids.includes(editingId)) return { state, intents: [] }
+```
+
+2. **Minor note (a) + (b)** — extend the existing `MODALITY` comment at
+   `select.ts`'s E3 guard (`onPointing`, the `editor.get().editingId ===
+   targetId` line) with two documented edges:
+   - **(a) idempotent re-BeginEdit:** "A click (pointerdown+up, no drag) on the
+     shape being edited can re-fire `BeginEdit(target)` on pointerup; that is
+     IDEMPOTENT (editingId is already `=== target`, so re-applying BeginEdit is
+     a no-op), and in the browser the TextEditor textarea's `stopPropagation`
+     belt (Task E4) means the canvas never even sees that pointer pair."
+   - **(b) live-read edge:** "This `editingId` read is LIVE at the
+     threshold-crossing move, not captured at pointerdown; if editing happens
+     to END mid-Pointing (an EndEdit lands between the pointerdown and this
+     move), the live read returns `null` and the drag proceeds normally —
+     benign, because editing is already over, so a translate is exactly what
+     the user now wants."
+
+3. **Minor note (c):** add a one-line `// seed-invariant by construction
+   (ignores rng): a fixed click-click-drag sequence; running it across
+   library.test.ts's seed set is redundant but harmless.` comment on
+   `modality-exclusivity.ts`'s `gesture` (the existing `no-drag-while-typing`
+   contract; the new `no-transform-while-typing` already carries the same
+   note).
+
+4. Run: `bun canvas-editor/src/boundary.test.ts` — expect `ok: boundary` (the
+   guard reads `editor.get()`, same as transform's existing camera reads; no
+   forbidden spelling introduced).
+   Run: `bun canvas-editor/src/contracts/library.test.ts` — expect **PASS**:
+   `no-transform-while-typing` now GREEN, `no-drag-while-typing` still GREEN.
+
+5. **OPTIONAL COSMETIC (UX honesty — a separate concern; skippable without
+   failing any contract).** In `Overlay.tsx`, stop PAINTING the transform
+   handles while the edited shape is selected, so the UI never shows an
+   affordance the FSM will refuse:
+
+```ts
+  const combinedBounds = combinedWorldBounds(snapshot, editorState.selection)
+  // UX honesty (pilot 4 ext): while a selected shape is being text-edited the
+  // transform FSM refuses to grab its handles (transform.ts's modality guard),
+  // so don't PAINT handles that won't respond. Purely cosmetic — the FSM
+  // guard, not this hide, is what makes the invariant TRUE (Handles is a
+  // pointer-events:none paint layer). Distinct step precisely because a
+  // render-only fix is insufficient on its own (see E8's seam decision).
+  const editingSelected =
+    editorState.editingId !== null && editorState.selection.has(editorState.editingId)
+```
+   and pass `bounds={editingSelected ? null : combinedBounds}` to `<Handles>`
+   (`Handles` already renders nothing on a `null` bounds).
+   Run: `bun run --filter '@ensembleworks/canvas-react' typecheck` — clean. If
+   you skip this step, record it as a carried cosmetic follow-up rather than
+   leaving it half-done.
+
+   (No commit in this task — the RED contract from E7 and this fix are committed
+   together in E9, mirroring the plan's RED→fix→commit rhythm in Phases B/C.)
+
+### Task E9 — Green + regression + commit the extension fix
+
+**Files:** none (verification + the pinning commit).
+
+1. Run: `bun canvas-editor/src/tools/transform.test.ts`
+   Expect: **PASS** — the new `onIdle` editing guard is additive; the existing
+   transform suite seeds no `editingId`, so the guard never fires. If any case
+   set `editingId` while grabbing a handle (unlikely — the suite predates
+   editing-aware transform), reconcile it.
+2. Run: `bun canvas-editor/src/tools/select.test.ts`
+   Expect: **PASS** — E3's guard logic is unchanged (only comments (a)/(b)
+   added).
+3. Run: `bun client/src/canvas-v2/tool-loop.test.ts`
+   Expect: **PASS** — the composite is re-exported byte-identically; its
+   handle-grab / click-resize-click probes seed no `editingId`, so the new
+   guard does not fire.
+4. Run: `bun canvas-editor/src/contracts/library.test.ts`
+   Expect: **PASS** — both modality contracts (`no-drag-while-typing`,
+   `no-transform-while-typing`) hold across the seed set.
+5. Run: `bun run typecheck` — expect clean across all workspaces.
+6. Run: `bun run test` — expect `all N suites passed` (repo-wide).
+7. **Commit:**
+   `git add interaction-contracts canvas-editor/src/contracts/fsm-runner.ts canvas-editor/src/tools/transform.ts canvas-editor/src/tools/select.ts canvas-react/src/Overlay.tsx`
+   then
+   `git commit -m "fix(canvas-editor): editing is modal for transform handles — no resize/rotate of the shape being typed (pilot 4 ext); pin via no-transform-while-typing contract" -m "Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>"`
+
+**STOP — session owner re-runs the Phase E trustability assessment, now
+end-to-end, before Phase F begins.** Confirm: the tool seam drives the REAL
+composite (E6), the `no-transform-while-typing` contract ran RED against the
+handle-grab hole then GREEN after the FSM guard (E7→E8), the guard composes
+with E3's translate guard, and the three minor review notes ((a) idempotent
+re-BeginEdit, (b) live editingId read, (c) seed-invariant gesture) are
+recorded. The optional overlay-handle hide is cosmetic and may be deferred.
 
 ---
 
