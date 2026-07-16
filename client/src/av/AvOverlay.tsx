@@ -12,12 +12,13 @@ import { rawUserId } from '@ensembleworks/contracts'
 import { useEffect, useState } from 'react'
 import { useEditor, useValue } from 'tldraw'
 import { getRoomId } from '../identity'
-import { avSnapshotsEqual, getAvSnapshot, getFaceEl, publishAvSnapshot, useHoveredFace, type AvPanelSnapshot } from './bridge'
+import { avSnapshotsEqual, getAvSnapshot, getFaceEl, publishAvSnapshot, publishPeerGains, useHoveredFace, type AvPanelSnapshot } from './bridge'
 import { clampCrosstalk, DEFAULT_CROSSTALK_LEVEL } from './crosstalk'
 import { LeashOverlay, useLeashes } from './leashes'
 import { useLiveKitRoom } from './useLiveKitRoom'
 import { useSessionPulse } from './useSessionPulse'
 import { useSpatialGainLoop } from './useSpatialGainLoop'
+import { AudibleZoneOverlay } from './zone'
 
 export function AvOverlay() {
 	const editor = useEditor()
@@ -137,8 +138,21 @@ export function AvOverlay() {
 	// (the effect above fires often) don't flash the panel back to null
 	// between an old snapshot and the next one.
 	useEffect(() => {
-		return () => publishAvSnapshot(null)
+		return () => {
+			publishAvSnapshot(null)
+			publishPeerGains({})
+		}
 	}, [])
 
-	return <LeashOverlay leashes={leashes} />
+	// The zone ring only when proximity audio is shaping volumes: connected,
+	// not standup-pinned, and there's at least one human (non-scribe) peer.
+	const showZone =
+		lk.status === 'connected' && !standupMode && lk.peers.some((peer) => !peer.readOnly)
+
+	return (
+		<>
+			<AudibleZoneOverlay editor={editor} show={showZone} />
+			<LeashOverlay leashes={leashes} />
+		</>
+	)
 }
