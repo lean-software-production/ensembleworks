@@ -396,8 +396,7 @@ export function PanelTile({
 // The fade diagram above the slider: three nested bands — your viewport
 // (always 100%), the rest of your page (the slider level), other pages (one
 // step softer). Each band is an opaque panel backing plus a level-mapped
-// tint, so the opacities read absolutely rather than stacking. Labels get a
-// panel-coloured stroke halo (paintOrder) to stay legible on any tint.
+// tint, so the opacities read absolutely rather than stacking.
 function CrosstalkDiagram({ level }: { level: number }) {
 	const pageLevel = clampCrosstalk(level)
 	const otherLevel = otherPageLevel(level)
@@ -407,9 +406,6 @@ function CrosstalkDiagram({ level }: { level: number }) {
 		fontFamily: wm.mono,
 		fontSize: 8,
 		fill: wm.ink,
-		stroke: wm.panel,
-		strokeWidth: 2,
-		paintOrder: 'stroke' as const,
 	}
 	return (
 		<svg
@@ -452,8 +448,7 @@ function CrosstalkDiagram({ level }: { level: number }) {
 			<text x={22} y={35} {...label}>
 				this page {Math.round(pageLevel * 100)}%
 			</text>
-			{/* No halo here: the viewport band is always the solid dark tint, so a
-			    plain cream fill is crisp (the halo stroke read as doubled type). */}
+			{/* Cream, not ink: the viewport band is always the solid dark tint. */}
 			<text x={87} y={69} textAnchor="middle" fontFamily={wm.mono} fontSize={8} fill={wm.cream}>
 				in view 100%
 			</text>
