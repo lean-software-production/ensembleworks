@@ -121,6 +121,15 @@ function makeObs(
       // 5-unit threshold": 100 * 0.05 = 5, not 100 / 5 = 20).
       return medianSize(editor.doc.listShapes()) * 0.05
     },
+    textSelectionSpans() {
+      // Pilot 3 is browser-only (types.ts's Obs.textSelectionSpans doc
+      // comment): native text selection is a DOM/window.getSelection()
+      // concept the FSM has no notion of. A browser-tagged contract never
+      // reaches this adapter (library.test.ts filters CONTRACTS to
+      // level: 'fsm' before calling runContractFsm) — this throw is a
+      // defensive backstop, not a reachable path today.
+      throw new Error('not observable at fsm level')
+    },
   }
 }
 

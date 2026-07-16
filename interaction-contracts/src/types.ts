@@ -88,6 +88,11 @@ export interface Obs {
   /** The snap threshold radius in world units at the current scene's median
    * shape size — the tolerance the snapped invariant compares against. */
   snapRadius(): number
+  /** How many distinct shape bodies the current native text selection
+   * intersects (0 when nothing is selected). Browser-only; the FSM adapter may
+   * throw 'not observable at fsm level' — a browser-tagged contract never runs
+   * on the FSM lane. */
+  textSelectionSpans(): number
 }
 
 /** A contract declaration = data. */
