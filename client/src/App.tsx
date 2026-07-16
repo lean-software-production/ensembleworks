@@ -24,6 +24,7 @@ import { hexForColor } from './colors'
 import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
 import { presentStore } from './file-viewer/presentStore'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
+import { avOverlayUtils } from './av/FadedCursorOverlay'
 import { getFrameId, getIdentity, getRoomId } from './identity'
 import { collectIcons, collectShapeUtils } from './kernel/plugin'
 import { installPinchGuard } from './kernel/pinchGuard'
@@ -237,6 +238,7 @@ export function App() {
 					deepLinks
 					assetUrls={assetUrls}
 					shapeUtils={customShapeUtils}
+					overlayUtils={avOverlayUtils}
 					overrides={uiOverrides}
 					components={components}
 				>
