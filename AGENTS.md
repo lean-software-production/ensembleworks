@@ -50,6 +50,24 @@ preflight verdicts, and the four OBSERVE-straddler dated verdicts (SQLite
 all re-deferred, no threshold tripped) live in
 `docs/plans/2026-07-15-canvas-phase4-parity.md`'s Execution notes.
 
+### Interaction contracts
+
+Every unit that touches an interaction-bearing surface —
+`canvas-editor/src/tools/`, `canvas-react/src/`, or `client/src/canvas-v2/`
+input/tool files — declares an interaction contract in
+`@ensembleworks/interaction-contracts`, or records `ux-contract: none —
+<reason>` in the PR body when the change genuinely has no interaction
+surface. A contract is a seeded gesture plus an invariant expressed against
+an `obs` interface; the FSM runner (`canvas-editor/src/contracts/
+fsm-runner.ts`) and the browser runner (`e2e/lib/contracts.ts`) play the same
+declaration through real tool FSMs and real Playwright input respectively, at
+two levels. `scripts/ux-contract-presence.test.ts` is the CI gate that
+enforces the declaration-or-opt-out is present (it does not judge quality —
+spec review does that; see CONTRIBUTING.md's Interaction Contract section).
+See `docs/plans/2026-07-16-ux-contracts-design.md` and
+`docs/plans/2026-07-16-ux-contracts-implementation.md` for the full design
+and the pilot-by-pilot implementation history.
+
 ## Local dev — bin/dev
 
 Run `bin/dev` **from the host** (the repo root). There it's a *controller*: it
