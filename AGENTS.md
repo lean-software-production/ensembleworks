@@ -68,6 +68,30 @@ See `docs/plans/2026-07-16-ux-contracts-design.md` and
 `docs/plans/2026-07-16-ux-contracts-implementation.md` for the full design
 and the pilot-by-pilot implementation history.
 
+**Pass this down to subagents.** Work in this repo is routinely executed by
+subagents (implementers, reviewers) driven from curated task briefs, and in
+practice a brief outweighs ambient context. Any orchestrator dispatching a
+subagent to modify or test interaction-bearing code MUST carry these
+obligations into the brief explicitly:
+
+1. Declare or extend a contract in `@ensembleworks/interaction-contracts`
+   (or justify the `ux-contract: none — <reason>` opt-out in the PR body).
+2. Run the contract RED against the unfixed code BEFORE landing the fix, and
+   record the verbatim failure. If RED is unreachable, STOP and report — do
+   not force redness or skip to the fix (every "unreachable RED" during the
+   pilot build-out turned out to be a wrong belief worth catching: see the
+   plan doc's dated CHANGE NOTEs).
+3. Any `Obs` addition must be implemented in BOTH adapters —
+   `canvas-editor/src/contracts/fsm-runner.ts` and `e2e/lib/contracts.ts`
+   (throw-stub only where the observation is genuinely unavailable at that
+   level; the interface is shared, so typecheck will force this anyway).
+4. Reviewers verify the red-then-green evidence independently (revert the
+   fix, observe the failure, restore) — never accept the implementer's
+   report of it.
+
+The CI presence gate backstops (1) mechanically; (2)–(4) exist only if the
+brief carries them.
+
 ## Local dev — bin/dev
 
 Run `bin/dev` **from the host** (the repo root). There it's a *controller*: it
