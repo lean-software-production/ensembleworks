@@ -22,7 +22,11 @@ export interface AvPanelSnapshot {
 	status: string
 	micEnabled: boolean
 	camEnabled: boolean
-	standupMode: boolean
+	/** The crosstalk level (0..1): the ONE dial for how loudly you hear people
+	 * outside your viewport — the on-page fade's floor, with other pages one
+	 * step further (av/crosstalk.ts). 1 = hear everyone (default); 0 = only
+	 * who you can see. */
+	crosstalkLevel: number
 	localVideoTrack: LocalTrack | null
 	localSpeaking: boolean
 	peers: AvPanelPeer[]
@@ -35,7 +39,8 @@ export interface AvPanelSnapshot {
 	actions: {
 		onMic: () => void
 		onCam: () => void
-		onStandup: () => void
+		/** Set the crosstalk bleed level (clamped to 0..1 by the publisher). */
+		setCrosstalk: (level: number) => void
 		kick: (id: string, name: string) => void
 	}
 }
@@ -55,7 +60,7 @@ export function avSnapshotsEqual(a: AvPanelSnapshot, b: AvPanelSnapshot): boolea
 		a.status !== b.status ||
 		a.micEnabled !== b.micEnabled ||
 		a.camEnabled !== b.camEnabled ||
-		a.standupMode !== b.standupMode ||
+		a.crosstalkLevel !== b.crosstalkLevel ||
 		a.localVideoTrack !== b.localVideoTrack ||
 		a.localSpeaking !== b.localSpeaking ||
 		a.vm !== b.vm ||
@@ -155,4 +160,49 @@ export function subscribeHoveredFace(listener: () => void): () => void {
 /** Reactive read of the currently hovered face's raw user id. */
 export function useHoveredFace(): string | null {
 	return useSyncExternalStore(subscribeHoveredFace, getHoveredFace)
+}
+
+// --- Per-peer applied gains ----------------------------------------------
+// Published by the spatial gain loop each tick (values pre-quantised via
+// legibility.ts's quantizeGain), keyed by RAW user id. This is the single
+// source of truth the legibility cues read (tile dim, cursor fade, % readout)
+// — the exact numbers the audio is applying, so seen and heard can't drift.
+// The PUBLISHER dedupes: identical content skips notify and keeps the map's
+// identity, so useSyncExternalStore consumers don't re-render on quiet ticks.
+
+let peerGains: Record<string, number> = {}
+const gainListeners = new Set<() => void>()
+
+function gainsEqual(a: Record<string, number>, b: Record<string, number>): boolean {
+	const aKeys = Object.keys(a)
+	if (aKeys.length !== Object.keys(b).length) return false
+	for (const key of aKeys) {
+		if (a[key] !== b[key]) return false
+	}
+	return true
+}
+
+/** Publish the tick's applied gains; no-op (identity-preserving) when unchanged. */
+export function publishPeerGains(gains: Record<string, number>): void {
+	if (gainsEqual(peerGains, gains)) return
+	peerGains = gains
+	for (const listener of gainListeners) listener()
+}
+
+/** The last published gain map, non-reactively (empty before first publish). */
+export function getPeerGains(): Record<string, number> {
+	return peerGains
+}
+
+/** Plain (non-React) subscribe seam — the base usePeerGain builds on. */
+export function subscribePeerGains(listener: () => void): () => void {
+	gainListeners.add(listener)
+	return () => gainListeners.delete(listener)
+}
+
+/** Reactive read of one peer's applied gain. Defaults to 1 (full volume /
+ * full brightness) until the loop's first publish, matching the loop's own
+ * "no cursor yet counts as full volume" default. */
+export function usePeerGain(id: string): number {
+	return useSyncExternalStore(subscribePeerGains, () => peerGains[id] ?? 1)
 }

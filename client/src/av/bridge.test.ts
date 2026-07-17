@@ -14,11 +14,14 @@ import {
 	getAvSnapshot,
 	getFaceEl,
 	getHoveredFace,
+	getPeerGains,
 	publishAvSnapshot,
+	publishPeerGains,
 	registerFaceEl,
 	setHoveredFace,
 	subscribeAvSnapshot,
 	subscribeHoveredFace,
+	subscribePeerGains,
 	type AvPanelSnapshot,
 } from './bridge'
 
@@ -32,7 +35,7 @@ const snapshot = (): AvPanelSnapshot => ({
 	status: 'connected',
 	micEnabled: false,
 	camEnabled: false,
-	standupMode: true,
+	crosstalkLevel: 0,
 	localVideoTrack: null,
 	localSpeaking: false,
 	peers: [],
@@ -45,7 +48,7 @@ const snapshot = (): AvPanelSnapshot => ({
 	actions: {
 		onMic: () => {},
 		onCam: () => {},
-		onStandup: () => {},
+		setCrosstalk: () => {},
 		kick: () => {},
 	},
 })
@@ -134,6 +137,8 @@ assert.equal(getAvSnapshot(), null)
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), micEnabled: true }), false)
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), status: 'retrying' }), false)
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), kickError: 'nope' }), false)
+	// A crosstalk-level change must republish so the slider (and gain loop) update.
+	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), crosstalkLevel: 0.5 }), false)
 
 	// Pulse sub-objects compare by reference (a fresh object means a new tick).
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), latencies: { u: { rtt: 1, t: 1 } } }), false)
@@ -187,6 +192,43 @@ assert.equal(getAvSnapshot(), null)
 		avSnapshotsEqual({ ...snapshot(), scribes: [{ id: 's1', name: 'scribe' }] }, snapshot()),
 		false
 	)
+}
+
+// --- per-peer gain store: publish/subscribe with change detection ---
+{
+	assert.deepEqual(getPeerGains(), {}, 'gain store starts empty')
+
+	let calls = 0
+	const unsubscribe = subscribePeerGains(() => {
+		calls += 1
+	})
+
+	publishPeerGains({ u1: 0.5, u2: 1 })
+	assert.equal(calls, 1, 'first publish notifies')
+	assert.deepEqual(getPeerGains(), { u1: 0.5, u2: 1 })
+
+	// Identical content (fresh object) → publisher dedupes, no notify.
+	publishPeerGains({ u1: 0.5, u2: 1 })
+	assert.equal(calls, 1, 'identical gains must not notify')
+	// The stored map keeps its identity when deduped, so useSyncExternalStore
+	// consumers don't re-render.
+	const before = getPeerGains()
+	publishPeerGains({ u2: 1, u1: 0.5 }) // key order must not matter
+	assert.equal(getPeerGains(), before, 'deduped publish keeps map identity')
+
+	publishPeerGains({ u1: 0.55, u2: 1 })
+	assert.equal(calls, 2, 'a changed value notifies')
+
+	publishPeerGains({ u1: 0.55 })
+	assert.equal(calls, 3, 'a removed peer notifies')
+
+	publishPeerGains({})
+	assert.equal(calls, 4, 'clearing notifies')
+
+	unsubscribe()
+	publishPeerGains({ u9: 1 })
+	assert.equal(calls, 4, 'unsubscribed listener is not notified')
+	publishPeerGains({}) // reset for any later blocks
 }
 
 console.log('bridge.test.ts: all assertions passed')
