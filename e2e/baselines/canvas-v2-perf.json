@@ -1,4 +1,9 @@
 {
+  "_provenance": {
+    "host": "zeus-arch",
+    "date": "2026-07-15",
+    "note": "dev-box capture; CI runners are more contended — max is advisory there"
+  },
   "pan-zoom-1000": {
     "seedMs": 82,
     "pan": {

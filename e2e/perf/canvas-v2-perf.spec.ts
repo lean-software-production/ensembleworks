@@ -36,6 +36,43 @@
 // PER-SCENARIO NOTE below for the actual number recorded alongside a given
 // run) — fast enough that it's a rounding error next to the scenario
 // durations themselves, so no further alternative was worth chasing.
+//
+// MAX-GATE POLICY (2026-07-16, vsync-quantization analysis): p95 is a HARD
+// gate everywhere it's checked (assertBudget, assertNoRegression) — it stays
+// blocking, unchanged. The `maxms` gate inside assertNoRegression (dense,
+// select-all, drag-cadence) is ADVISORY, not blocking: rAF sampling floors at
+// the display's vsync tick (~16.67ms), so ms deltas cluster in discrete
+// "refresh quanta" rather than a smooth continuum, and a single GC pause or
+// scheduler hiccup can push maxms across a gate that sits between two quanta
+// — a runner-contention artifact, not a real regression, and not reliably
+// distinguishable from one by the raw ms number alone (dense-pan-zoom-1000's
+// baseline note in e2e/baselines/canvas-v2-perf.json documents the original
+// bimodal-maxms observation this policy answers). So a maxms overage prints a
+// `::warning::` GitHub Actions annotation (parsed straight from job stdout —
+// no reporter config needed, see .github/workflows/canvas-v2-perf.yml) plus a
+// Playwright test annotation, and the test still PASSES as long as p95
+// (still hard) and every other assertion in the scenario pass. There is no
+// hard gate on `droppedOver25ms` anywhere in this file — it's recorded
+// OBSERVED-ONLY by design (see assertNoRegression's own doc comment below),
+// so nothing changes there; this policy only touches maxms.
+//
+// FIRST THREE QUESTIONS when a maxms `::warning::` fires:
+//   1. Merge preview or your branch? Check the provenance line this file
+//      prints at the start of the run (measured commit + whether
+//      GITHUB_EVENT_NAME=pull_request means this is base+PR merged, not your
+//      branch alone) — a base-branch regression is not yours to fix here.
+//   2. How many vsync refreshes over the gate, not just how many ms? One
+//      quantum (~16.67ms) over the boundary is well within shared-runner
+//      contention noise; several quanta over is a real signal worth digging
+//      into.
+//   3. Did p95 or droppedOver25ms move too? A maxms-only blip with p95 and
+//      the dropped-frame count both flat is exactly the single-jank-frame
+//      pattern this policy exists to tolerate; if either of those also
+//      moved, treat the whole scenario as suspect regardless of what maxms
+//      says.
+// See docs/plans/2026-07-15-canvas-phase4-parity.md's Execution notes for how
+// this decision fits the rest of Phase 4's perf-gate history.
+import { execSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '../lib/fixtures'
@@ -63,8 +100,35 @@ const FRAME_BUDGET_MS = 1000 / 60 // 16.666...
 const CI_MARGIN_MULTIPLIER = 2 // documented, not tuned — see module header
 const GATED_P95_MS = FRAME_BUDGET_MS * CI_MARGIN_MULTIPLIER
 
+// VSYNC QUANTA (legibility, see the MAX-GATE POLICY module-header note): the
+// rAF sampler floors at the display's vsync tick, so every ms figure this
+// file prints is also meaningful as a count of refresh intervals. These are
+// display helpers ONLY — no baseline/gate math anywhere in this file uses
+// them; raw ms stays the source of truth for every `expect()`.
+const VSYNC_MS = 1000 / 60 // 16.666... — same constant as FRAME_BUDGET_MS, named for its use here
+
+/** Nearest whole vsync-refresh count for a ms figure — e.g. 116.7ms -> 7. */
+function refreshes(ms: number): number {
+	return Math.round(ms / VSYNC_MS)
+}
+
+/** `ms` formatted with its nearest-refresh count alongside, e.g. "116.70ms (7 refreshes)". */
+function msQuanta(ms: number): string {
+	return `${ms.toFixed(2)}ms (${refreshes(ms)} refreshes)`
+}
+
+/** A GATE value (a computed threshold, not a raw sample) rarely lands on a
+ * whole refresh boundary — describe it as sitting between the two quanta it
+ * falls between (or "= N refreshes" on the rare exact hit), so a reader can
+ * tell at a glance how many whole frames of headroom a gate actually gives. */
+function gateQuanta(ms: number): string {
+	const lo = Math.floor(ms / VSYNC_MS)
+	const hi = Math.ceil(ms / VSYNC_MS)
+	return lo === hi ? `= ${lo} refreshes` : `sits between ${lo} and ${hi}`
+}
+
 function assertBudget(label: string, stats: FrameStats) {
-	const line = `[canvas-v2-perf] ${label}: p95=${stats.p95ms}ms p50=${stats.p50ms}ms max=${stats.maxms}ms dropped(>25ms)=${stats.droppedOver25ms} frames=${stats.frames} (raw budget ${FRAME_BUDGET_MS.toFixed(2)}ms, gated at ${GATED_P95_MS.toFixed(2)}ms = ${CI_MARGIN_MULTIPLIER}x)`
+	const line = `[canvas-v2-perf] ${label}: p95=${msQuanta(stats.p95ms)} p50=${stats.p50ms}ms max=${msQuanta(stats.maxms)} dropped(>25ms)=${stats.droppedOver25ms} frames=${stats.frames} (raw budget ${msQuanta(FRAME_BUDGET_MS)}, gated at ${GATED_P95_MS.toFixed(2)}ms ${gateQuanta(GATED_P95_MS)} = ${CI_MARGIN_MULTIPLIER}x)`
 	console.log(line)
 	expect(stats.p95ms, `${label}: p95 frame time should stay under the ${CI_MARGIN_MULTIPLIER}x-margined 60fps budget`).toBeLessThanOrEqual(GATED_P95_MS)
 }
@@ -136,9 +200,13 @@ interface RegressionBaseline {
 	readonly maxms?: number
 }
 
-/** Gate `stats` against a COMMITTED per-scenario `baseline` on BOTH p95 and
- * maxms (same relative +REGRESSION_BUDGET × CI margin per metric). `baseline`
- * is `undefined` ONLY on a first-ever capture of a brand-new scenario key
+/** Gate `stats` against a COMMITTED per-scenario `baseline`. p95 is a HARD
+ * gate (unchanged). maxms is ADVISORY ONLY as of the 2026-07-16 MAX-GATE
+ * POLICY (module header): an overage prints a `::warning::` GitHub Actions
+ * annotation + a Playwright test annotation and does NOT fail the test — see
+ * the module header for why (vsync quantization) and the "first three
+ * questions" checklist for triaging a warning when it fires. `baseline` is
+ * `undefined` ONLY on a first-ever capture of a brand-new scenario key
  * (nothing committed yet); the caller handles that bootstrap case explicitly
  * (see the dense test) — this function's contract is "a committed baseline
  * exists," so a missing one is a hard error here, never a silent skip. */
@@ -154,12 +222,22 @@ function assertNoRegression(label: string, stats: FrameStats, baseline: Regressi
 	const maxGate = gate(baseline.maxms)
 	const pct = (REGRESSION_BUDGET * 100).toFixed(0)
 	console.log(
-		`[canvas-v2-perf] ${label}: p95=${stats.p95ms}ms (baseline ${baseline.p95ms}ms, gated ${p95Gate.toFixed(2)}ms) ` +
-			`max=${stats.maxms}ms (baseline ${baseline.maxms}ms, gated ${maxGate.toFixed(2)}ms) ` +
+		`[canvas-v2-perf] ${label}: p95=${msQuanta(stats.p95ms)} (baseline ${msQuanta(baseline.p95ms)}, gated ${p95Gate.toFixed(2)}ms ${gateQuanta(p95Gate)}) [HARD] ` +
+			`max=${msQuanta(stats.maxms)} (baseline ${msQuanta(baseline.maxms)}, gated ${maxGate.toFixed(2)}ms ${gateQuanta(maxGate)}) [ADVISORY] ` +
 			`dropped(>25ms)=${stats.droppedOver25ms} [observed-only] — gate = +${pct}% x ${CI_MARGIN_MULTIPLIER}x CI margin`,
 	)
 	expect(stats.p95ms, `${label}: p95 frame time should stay within ${pct}% (CI-margined) of the committed baseline`).toBeLessThanOrEqual(p95Gate)
-	expect(stats.maxms, `${label}: max frame time should stay within ${pct}% (CI-margined) of the committed baseline`).toBeLessThanOrEqual(maxGate)
+
+	if (stats.maxms > maxGate) {
+		const warning =
+			`::warning title=canvas-v2-perf ${label}::max frame ${refreshes(stats.maxms)} refreshes (${stats.maxms}ms) exceeds gate ${maxGate.toFixed(2)}ms ` +
+			`(baseline ${refreshes(baseline.maxms)} refreshes); p95 passed — see spec header for the vsync-quantization note`
+		console.log(warning)
+		test.info().annotations.push({
+			type: 'warning',
+			description: `${label}: max frame time ${msQuanta(stats.maxms)} exceeds the advisory gate ${maxGate.toFixed(2)}ms ${gateQuanta(maxGate)} (baseline ${msQuanta(baseline.maxms)}); p95 passed and this gate is non-blocking as of the 2026-07-16 policy — see the spec's module header.`,
+		})
+	}
 }
 
 /** pointerdown -> first-paint-PROXY latency, in ms — see module header's
@@ -175,7 +253,44 @@ async function pointerToPaint(page: import('@playwright/test').Page, target: { x
 	return Number((t1 - t0).toFixed(2))
 }
 
+/** Commit under measurement — GITHUB_SHA when set (CI), else a live `git
+ * rev-parse HEAD` (local runs). Never hardcoded, so a stale value can't slip
+ * into a printed provenance line. */
+function measuredCommit(): string {
+	if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA
+	try {
+		return execSync('git rev-parse HEAD', { cwd: import.meta.dirname }).toString().trim()
+	} catch {
+		return '<unknown — git rev-parse failed and GITHUB_SHA is unset>'
+	}
+}
+
 test.describe('canvas-v2 browser perf', () => {
+	// PROVENANCE (legibility, MAX-GATE POLICY module-header note): printed
+	// once, before any scenario, so a `::warning::`/failure lower in the log
+	// always has this above it — which commit produced these numbers, and
+	// whether that's the PR branch alone or (on pull_request CI) the MERGE
+	// PREVIEW of the branch + base, plus where the committed baseline itself
+	// came from.
+	test.beforeAll(() => {
+		const commit = measuredCommit()
+		const isPR = process.env.GITHUB_EVENT_NAME === 'pull_request'
+		console.log(
+			`[canvas-v2-perf] provenance: measured commit ${commit}` +
+				(isPR
+					? ' — GITHUB_EVENT_NAME=pull_request: this is the MERGE PREVIEW of the PR branch merged into its base, NOT the PR branch alone'
+					: ''),
+		)
+		const baselineProvenance = recordedBaselines._provenance
+		if (baselineProvenance) {
+			console.log(
+				`[canvas-v2-perf] baseline provenance (${path.relative(process.cwd(), FILE)}): host=${baselineProvenance.host} date=${baselineProvenance.date} — ${baselineProvenance.note}`,
+			)
+		} else {
+			console.log(`[canvas-v2-perf] baseline provenance: ${path.relative(process.cwd(), FILE)} has no _provenance metadata`)
+		}
+	})
+
 	// PER-SCENARIO NOTE (seeding cost, measured): logged per-run below via
 	// console.log, not hardcoded here — CI/hardware speed varies too much for
 	// a single recorded number to stay honest across machines; the module
@@ -216,7 +331,7 @@ test.describe('canvas-v2 browser perf', () => {
 				assertBudget(`pan/zoom @ ${n} shapes (pan)`, pan)
 				assertBudget(`pan/zoom @ ${n} shapes (zoom)`, zoom)
 			} else {
-				console.log(`[canvas-v2-perf] pan/zoom @ ${n} shapes: DOCUMENTED, not gated — worst p95=${worst.p95ms}ms (raw budget ${FRAME_BUDGET_MS.toFixed(2)}ms)`)
+				console.log(`[canvas-v2-perf] pan/zoom @ ${n} shapes: DOCUMENTED, not gated — worst p95=${msQuanta(worst.p95ms)} (raw budget ${msQuanta(FRAME_BUDGET_MS)})`)
 			}
 		})
 	}
@@ -282,7 +397,7 @@ test.describe('canvas-v2 browser perf', () => {
 		// there even under EW_CAPTURE=1 — which is the whole point of FIX 1.
 		const committed = recordedBaselines['dense-pan-zoom-1000']
 		if (capturing && committed === undefined) {
-			console.log(`[canvas-v2-perf] dense-pan-zoom-1000: BOOTSTRAP CAPTURE (no committed baseline yet) — pan p95=${pan.p95ms}ms/max=${pan.maxms}ms, zoom p95=${zoom.p95ms}ms/max=${zoom.maxms}ms; commit the JSON, then future runs gate against it`)
+			console.log(`[canvas-v2-perf] dense-pan-zoom-1000: BOOTSTRAP CAPTURE (no committed baseline yet) — pan p95=${msQuanta(pan.p95ms)}/max=${msQuanta(pan.maxms)}, zoom p95=${msQuanta(zoom.p95ms)}/max=${msQuanta(zoom.maxms)}; commit the JSON, then future runs gate against it`)
 		} else {
 			assertNoRegression('dense pan/zoom @ 1000 shapes (pan)', pan, committed?.pan)
 			assertNoRegression('dense pan/zoom @ 1000 shapes (zoom)', zoom, committed?.zoom)
@@ -372,7 +487,7 @@ test.describe('canvas-v2 browser perf', () => {
 		const committed = recordedBaselines['select-all-pan-zoom-1000']
 		if (capturing && committed === undefined) {
 			console.log(
-				`[canvas-v2-perf] select-all-pan-zoom-1000: BOOTSTRAP CAPTURE (no committed baseline yet) — pan p95=${pan.p95ms}ms/max=${pan.maxms}ms, zoom p95=${zoom.p95ms}ms/max=${zoom.maxms}ms; commit the JSON, then future runs gate against it`,
+				`[canvas-v2-perf] select-all-pan-zoom-1000: BOOTSTRAP CAPTURE (no committed baseline yet) — pan p95=${msQuanta(pan.p95ms)}/max=${msQuanta(pan.maxms)}, zoom p95=${msQuanta(zoom.p95ms)}/max=${msQuanta(zoom.maxms)}; commit the JSON, then future runs gate against it`,
 			)
 		} else {
 			assertNoRegression('select-all @ 1000 shapes (pan)', pan, committed?.pan)
@@ -514,7 +629,7 @@ test.describe('canvas-v2 browser perf', () => {
 		const committed = recordedBaselines['drag-cadence-single-shape']
 		if (capturing && committed === undefined) {
 			console.log(
-				`[canvas-v2-perf] drag-cadence-single-shape: BOOTSTRAP CAPTURE (no committed baseline yet) — drag p95=${drag.p95ms}ms/max=${drag.maxms}ms; commit the JSON, then future runs gate against it`,
+				`[canvas-v2-perf] drag-cadence-single-shape: BOOTSTRAP CAPTURE (no committed baseline yet) — drag p95=${msQuanta(drag.p95ms)}/max=${msQuanta(drag.maxms)}; commit the JSON, then future runs gate against it`,
 			)
 		} else {
 			assertNoRegression('single-shape drag commit-cadence', drag, committed?.drag)
