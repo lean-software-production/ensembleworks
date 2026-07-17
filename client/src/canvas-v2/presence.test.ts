@@ -370,7 +370,7 @@ import {
 }
 
 // ============================================================================
-// 8. encodePresenting/decodePresenting round-trip, and presenterFor resolves
+// 9. encodePresenting/decodePresenting round-trip, and presenterFor resolves
 //    the FRESHEST ts among competing peers, excluding selfKey and other
 //    shapes — the canvas-sync-wire port of the legacy `presenterFor`
 //    (git history: client/src/file-viewer/followLogic.ts).
