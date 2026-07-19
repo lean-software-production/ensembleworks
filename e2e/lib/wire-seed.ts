@@ -12,7 +12,7 @@
 // text-scans for `ws` imports and fails the build). e2e/ may import freely, and
 // already imports from server/src (see scripts/start-server.ts).
 import { WebSocket } from 'ws'
-import { SyncClientPeer } from '@ensembleworks/canvas-sync'
+import { SyncClientPeer, type Transport } from '@ensembleworks/canvas-sync'
 import { wsTransport } from '../../server/src/canvas-v2/ws-transport.ts'
 
 export const PAGE_ID = 'page:p'
@@ -32,6 +32,16 @@ export interface SeedOpts {
 	readonly mode: SeedMode
 	/** Grid pitch in world units. 260 matches the existing perf specs' spacing. */
 	readonly pitch?: number
+	/** Test-only hook: wraps the transport of every peer THIS call opens (the
+	 * seeding peer, then the internal read-back verify peer) before it's
+	 * handed to SyncClientPeer. Exists so a test can inject network-like
+	 * delay or observation without a second, parallel transport-construction
+	 * path — see wire-seed.test.ts's FIX 1 (tallying real Frame.Update frames
+	 * on the wire instead of trusting SeedResult.commits' self-report) and
+	 * FIX 3 (proving the read-back barrier below survives an induced
+	 * bytes-in-flight delay) in the 2026-07-19 review. Not used in production
+	 * callers. */
+	readonly wrapTransport?: (t: Transport) => Transport
 }
 
 export interface SeedResult {
@@ -51,11 +61,15 @@ function openWs(url: string): Promise<WebSocket> {
 
 /** Opens a connected, sync-requested peer. The socket is opened FIRST and only
  * then handed to SyncClientPeer — the constructor sends its SyncRequest
- * synchronously, and a not-yet-open socket drops it silently. */
-export async function openPeer(base: string, room: string, peerId: bigint): Promise<SyncClientPeer> {
+ * synchronously, and a not-yet-open socket drops it silently.
+ *
+ * `wrapTransport`, if given, wraps the real ws transport before it's handed
+ * to SyncClientPeer — test-only (see SeedOpts.wrapTransport's doc comment). */
+export async function openPeer(base: string, room: string, peerId: bigint, wrapTransport?: (t: Transport) => Transport): Promise<SyncClientPeer> {
 	if (peerId === 0n || peerId === 1n) throw new Error(`peerId ${peerId} is reserved (1n is SERVER_PEER_ID)`)
 	const ws = await openWs(`${base}/sync/v2/${room}`)
-	return new SyncClientPeer({ peerId, transport: wsTransport(ws) })
+	const transport = wrapTransport ? wrapTransport(wsTransport(ws)) : wsTransport(ws)
+	return new SyncClientPeer({ peerId, transport })
 }
 
 let nextPeerId = 1000n
@@ -89,7 +103,7 @@ export async function seedRoomOverWire(opts: SeedOpts): Promise<SeedResult> {
 	const cols = Math.ceil(Math.sqrt(count))
 	const t0 = Date.now()
 
-	const peer = await openPeer(base, room, freshPeerId())
+	const peer = await openPeer(base, room, freshPeerId(), opts.wrapTransport)
 	await peer.ready()
 
 	peer.doc.putPage({ id: PAGE_ID, name: 'P' })
@@ -111,12 +125,34 @@ export async function seedRoomOverWire(opts: SeedOpts): Promise<SeedResult> {
 	// Read-back barrier: a SECOND peer proves the server actor has the shapes,
 	// not merely that we sent them. Without this the browser can arrive before
 	// the server has applied the last frame and measure a phantom-fast load.
-	const verify = await openPeer(base, room, freshPeerId())
+	//
+	// EXACT equality, not `< count`: rooms persist per `roomId` and shape ids
+	// are deterministic (`shape:wire-${i}`), so seeding a SMALLER count into an
+	// already-larger-seeded room would otherwise make the `< count` loop
+	// condition false on its very first check and return success immediately —
+	// while the room still holds the larger, stale set. That is reachable the
+	// moment a caller reuses a room id across scenarios or reps (this
+	// function does not itself mint unique room ids — see wrapTransport's
+	// doc comment on SeedOpts for why that responsibility stays with the
+	// caller), and it fails in the worst direction: a caller believes it
+	// measured `count` shapes when the room actually holds more. Fail loudly
+	// instead, naming both counts.
+	const verify = await openPeer(base, room, freshPeerId(), opts.wrapTransport)
 	await verify.ready()
 	const deadline = Date.now() + 30_000
-	while (verify.doc.listShapes().length < count) {
-		if (Date.now() > deadline) throw new Error(`wire-seed: server never reached ${count} shapes in ${room} (saw ${verify.doc.listShapes().length})`)
+	let observed = verify.doc.listShapes().length
+	while (observed < count) {
+		if (Date.now() > deadline) throw new Error(`wire-seed: server never reached ${count} shapes in ${room} (saw ${observed})`)
 		await new Promise((r) => setTimeout(r, 25))
+		observed = verify.doc.listShapes().length
+	}
+	if (observed !== count) {
+		throw new Error(
+			`wire-seed: room ${room} holds ${observed} shapes, expected exactly ${count}. ` +
+				`Shape ids are deterministic (shape:wire-\${i}) and rooms persist per roomId, so ` +
+				`seeding a SMALLER count into an already-larger-seeded room is not a valid re-seed — ` +
+				`use a fresh room id per scenario/rep instead.`,
+		)
 	}
 	verify.close()
 	peer.close()
