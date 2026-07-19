@@ -34,7 +34,15 @@ You have zero repo context. Read these, in this order, before Task 1:
 | **This harness** | `cd e2e && bunx playwright test -c playwright.load.config.ts` |
 | Capture baselines | prefix any of the above with `EW_CAPTURE=1` |
 
-Running `bun run test` locally will also run `scripts/ux-contract-presence.test.ts`, which reads `UX_CONTRACT_PR_BODY`. See "Interaction contract obligation" below — you must set that env var for a clean local run once you have touched anything under the interaction-bearing prefixes.
+Running `bun run test` locally will also run `scripts/ux-contract-presence.test.ts`, which reads `UX_CONTRACT_PR_BODY`. **Set it for every local full-suite run in this plan**, using exactly this value:
+
+```bash
+UX_CONTRACT_PR_BODY='ux-contract: none — pure measurement harness under e2e/ plus a flag-gated server test hook; no tool FSM, renderer, or input surface is touched.' bun run test
+```
+
+Note this requirement comes from the **branch point** (PR 48 touched `client/src/canvas-v2/`), not from anything this plan adds — so it applies from Task 1 onward, not just in the tasks that mention it.
+
+**Trap:** that opt-out reason is only truthful while the harness stays outside the interaction-bearing prefixes (`canvas-editor/src/tools/`, `canvas-react/src/`, `client/src/canvas-v2/` input/tool files). The tempting refinement of adding finer timing marks *inside* `client/src/canvas-v2/CanvasV2App.tsx` would both trip the presence gate and falsify this stated reason. Keep the probe in `addInitScript` (Task 4) where it belongs.
 
 ### Clean-room boundary — non-negotiable
 
