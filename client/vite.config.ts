@@ -86,12 +86,20 @@ const proxiedServer: Partial<ServerOptions> =
 				}
 			: {}
 
-// Shared by BOTH the dev server and `vite preview`. Vite does NOT inherit
-// server.proxy into preview, and the e2e load-perf harness
-// (e2e/playwright.load.config.ts) drives a PRODUCTION build through preview —
-// without this the preview server 404s /sync and /api and the v2 app can never
-// dial its WebSocket. One definition, two consumers: a drifted copy would make
-// the harness measure a different backend wiring than dev uses.
+// Shared by BOTH the dev server and `vite preview`. The e2e load-perf harness
+// (e2e/playwright.load.config.ts) drives a PRODUCTION build through preview,
+// which must proxy /sync and /api or the v2 app can never dial its WebSocket.
+//
+// Vite 7.3.6 in fact falls back to server.proxy when preview.proxy is unset
+// (resolvePreviewOptions: `proxy: preview?.proxy ?? server.proxy`), so the
+// explicit preview block below is not load-bearing *today* — verified by
+// deleting it and watching the harness still connect. It stays because that
+// fallback is undocumented and implementation-defined: without the explicit
+// block, the harness's transport depends silently on Vite internals, and a
+// future Vite could drop it with no signal beyond a confusing 404.
+//
+// One definition, two consumers: a drifted copy would make the harness
+// measure a different backend wiring than dev uses.
 const PROXY = {
 	'/sync': { target: `ws://localhost:${SYNC_PORT}`, ws: true },
 	'/uploads': `http://localhost:${SYNC_PORT}`,

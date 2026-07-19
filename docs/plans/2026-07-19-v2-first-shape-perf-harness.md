@@ -765,13 +765,27 @@ README says tldraw enforces a per-domain license on **a real production domain**
 
 **Step 1: Add the preview proxy to the client Vite config**
 
-`vite preview` does **not** inherit `server.proxy`. Without a `preview.proxy` block the preview server 404s `/sync` and `/api`, and the v2 app cannot dial its WebSocket at all.
+> **CORRECTION (2026-07-19, from Task 3 execution).** This step's original
+> justification — "`vite preview` does not inherit `server.proxy`" — is
+> **empirically false** for the pinned Vite (7.3.6). `resolvePreviewOptions`
+> does `proxy: preview?.proxy ?? server.proxy` (and likewise for `host`,
+> `allowedHosts`, `cors`, `headers`), so preview *does* fall back to the
+> server block. Verified by deleting the `preview` block and watching both
+> smoke cases still pass with real WS frames flowing.
+>
+> **Keep the explicit block anyway**, for a different and better reason: that
+> fallback is undocumented and implementation-defined, so relying on it makes
+> the harness's transport silently dependent on Vite internals. An explicit
+> block pins the behaviour. What changed is the *reason*, not the action —
+> recorded here so nobody later "simplifies" it away on the strength of a
+> justification that does not hold.
 
 In `client/vite.config.ts`, extract the proxy map so both servers share one definition. Replace the `proxy: { ... }` object inside `server:` with a reference to a hoisted constant, and add a `preview` block. Concretely, insert this **above** `export default defineConfig({`:
 
 ```ts
-// Shared by BOTH the dev server and `vite preview`. Vite does NOT inherit
-// server.proxy into preview, and the e2e load-perf harness
+// (COMMENT CORRECTED POST-EXECUTION — see the CORRECTION box above; the
+// as-landed comment in client/vite.config.ts is the accurate one.)
+// Shared by BOTH the dev server and `vite preview`. The e2e load-perf harness
 // (e2e/playwright.load.config.ts) drives a PRODUCTION build through preview —
 // without this the preview server 404s /sync and /api and the v2 app can never
 // dial its WebSocket. One definition, two consumers: a drifted copy would make
