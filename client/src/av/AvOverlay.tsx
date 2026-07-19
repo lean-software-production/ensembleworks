@@ -105,6 +105,8 @@ export function AvOverlay() {
 			crosstalkLevel,
 			localVideoTrack: lk.localVideoTrack,
 			localSpeaking: lk.localSpeaking,
+			micDeviceId: lk.activeDevices.audioinput,
+			camDeviceId: lk.activeDevices.videoinput,
 			peers: lk.peers
 				.filter((peer) => !peer.readOnly)
 				.map((peer) => ({
@@ -123,6 +125,7 @@ export function AvOverlay() {
 				onMic: () => lk.setMicEnabled(!lk.micEnabled),
 				onCam: () => lk.setCamEnabled(!lk.camEnabled),
 				setCrosstalk: (level: number) => setCrosstalkLevel(clampCrosstalk(level)),
+				setAvDevice: lk.setAvDevice,
 				kick: kickParticipant,
 			},
 		}
