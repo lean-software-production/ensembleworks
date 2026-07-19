@@ -30,6 +30,7 @@ import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
 import { setUserColor } from '../identity'
 import { retintLocalShares } from '../screenshare/share'
 import { wm } from '../theme'
+import { CHIP_SIZE, LABEL_MIN_WIDTH } from './mosaicLayout'
 import { useSettings } from './settings'
 
 export interface PanelTileParticipant {
@@ -58,10 +59,10 @@ const MEDIA_ASPECT = '4 / 3'
 const TILE_BASIS_WIDTH = 220
 const TILE_MAX_WIDTH = 320
 
-// Initials font grows a step alongside the tile (twoUp = the wider two-column
-// layout PanelPages switches to) so it doesn't look lost in the bigger tile.
+// Initials font for the legacy flex-flow sizing (unknown-page section, no
+// fixed tileWidth). When tileWidth IS set, the font scales with it instead
+// (see initialsFontSize below).
 const INITIALS_FONT_DEFAULT = 26
-const INITIALS_FONT_TWO_UP = 40
 
 // Visual cues ease on roughly the audio ramp's time constant (the loop's
 // 0.08 s setTargetAtTime), so eyes and ears agree. Module-level read is fine:
@@ -84,17 +85,30 @@ export function PanelTile({
 	editor,
 	participant,
 	snap,
-	twoUp = false,
+	tileWidth,
 }: {
 	editor: Editor
 	participant: PanelTileParticipant
 	snap: AvPanelSnapshot | null
-	// Set by PanelPages.tsx once the panel is wide enough for its two-up grid
-	// (spec §3 "wide = face-to-face"): grows the tile and its initials a step.
-	twoUp?: boolean
+	// Fixed tile width (px) computed by PanelPages' mosaic sizing. When set,
+	// the tile renders at exactly this width (grid cell); when undefined the
+	// legacy flex-basis flow sizing applies (unknown-page section only).
+	tileWidth?: number
 }) {
 	const { rawId, prefixedId, name, color, isLocal } = participant
-	const initialsFontSize = twoUp ? INITIALS_FONT_TWO_UP : INITIALS_FONT_DEFAULT
+
+	// Small mosaic tiles shed their chrome: below LABEL_MIN_WIDTH the name/
+	// control strip and the media overlays (latency pill, cam glyph, quiet
+	// badge, volume readout) don't fit legibly. The LOCAL tile keeps its strip
+	// at every size — mic/cam/crosstalk must stay reachable.
+	const compact = tileWidth !== undefined && tileWidth < LABEL_MIN_WIDTH
+	const showStrip = isLocal || !compact
+	const showOverlays = !compact
+
+	const initialsFontSize =
+		tileWidth !== undefined
+			? Math.max(12, Math.min(40, Math.round(tileWidth * 0.32)))
+			: INITIALS_FONT_DEFAULT
 
 	const peer = !isLocal ? (snap?.peers.find((p) => p.id === rawId) ?? null) : null
 	// When the LOCAL camera is toggled off, LiveKit keeps the camera track
@@ -168,13 +182,14 @@ export function PanelTile({
 				if (!isLocal) editor.zoomToUser(prefixedId)
 			}}
 			style={{
-				flex: `1 1 ${TILE_BASIS_WIDTH}px`,
-				maxWidth: TILE_MAX_WIDTH,
+				...(tileWidth !== undefined
+					? { width: tileWidth, flex: '0 0 auto' }
+					: { flex: `1 1 ${TILE_BASIS_WIDTH}px`, maxWidth: TILE_MAX_WIDTH }),
 				display: 'flex',
 				flexDirection: 'column',
 				overflow: 'hidden',
 				borderRadius: 4,
-				borderLeft: `4px solid ${color}`,
+				borderLeft: `${compact ? 2 : 4}px solid ${color}`,
 				background: wm.bgWarm,
 				outline: isSpeaking ? `2px solid ${wm.sealBlue}` : 'none',
 				outlineOffset: -2,
@@ -221,20 +236,22 @@ export function PanelTile({
 					</div>
 				)}
 
-				<div
-					style={{
-						position: 'absolute',
-						top: 4,
-						right: 4,
-						background: 'rgba(15,23,42,0.55)',
-						borderRadius: 3,
-						padding: '1px 3px',
-					}}
-				>
-					<LatencyPill latency={latency} history={latencyHistory} />
-				</div>
+				{showOverlays && (
+					<div
+						style={{
+							position: 'absolute',
+							top: 4,
+							right: 4,
+							background: 'rgba(15,23,42,0.55)',
+							borderRadius: 3,
+							padding: '1px 3px',
+						}}
+					>
+						<LatencyPill latency={latency} history={latencyHistory} />
+					</div>
+				)}
 
-				{!isLocal && (
+				{showOverlays && !isLocal && (
 					// Read-only cam-status glyph (NOT a button — a disabled
 					// AvIconButton would read "unavailable" and swallow the tile's
 					// click-to-zoom). Mic isn't tracked per-peer today, so it's
@@ -259,7 +276,7 @@ export function PanelTile({
 					</span>
 				)}
 
-				{quiet && (
+				{showOverlays && quiet && (
 					// Non-opacity "quiet" cue (a11y: legible without perceiving the
 					// dim): same glyph style as the cam-status badge, bottom-left.
 					<span
@@ -283,7 +300,7 @@ export function PanelTile({
 					</span>
 				)}
 
-				{!isLocal && hovered && (
+				{showOverlays && !isLocal && hovered && (
 					// On-demand exact volume readout (legibility cue #4).
 					<span
 						data-testid={'ew-tile-volume-' + rawId}
@@ -309,76 +326,132 @@ export function PanelTile({
 			    mic/cam/spatial buttons (and name / kick) are always legible rather
 			    than overlaid on a dark video. Colour swatch + name + own controls,
 			    or a hover-revealed kick for peers. */}
-			<div
-				style={{
-					display: 'flex',
-					alignItems: 'center',
-					gap: 6,
-					padding: '5px 6px',
-					background: wm.panel,
-				}}
-			>
-				{isLocal && <ColorSwatch editor={editor} color={color} />}
-				<span
+			{showStrip && (
+				<div
 					style={{
-						flex: 1,
-						minWidth: 0,
-						overflow: 'hidden',
-						textOverflow: 'ellipsis',
-						whiteSpace: 'nowrap',
-						fontFamily: wm.sans,
-						fontSize: 12,
-						fontWeight: 600,
-						color: wm.ink,
+						display: 'flex',
+						alignItems: 'center',
+						gap: 6,
+						padding: '5px 6px',
+						background: wm.panel,
 					}}
 				>
-					{name}
-					{isLocal ? ' (you)' : ''}
-				</span>
-				{isLocal && (
-					<div style={{ display: 'flex', gap: 3, flex: '0 0 auto' }}>
-						<AvIconButton
-							kind="mic"
-							enabled={snap?.micEnabled ?? false}
-							available={avAvailable}
-							onClick={() => snap?.actions.onMic()}
-						/>
-						<AvIconButton
-							kind="camera"
-							enabled={snap?.camEnabled ?? false}
-							available={avAvailable}
-							onClick={() => snap?.actions.onCam()}
-						/>
-						<CrosstalkControl snap={snap} available={avAvailable} />
-					</div>
-				)}
-				{!isLocal && hovered && snap && (
-					<button
-						type="button"
-						disabled={kicking}
-						onClick={(e) => {
-							e.stopPropagation()
-							snap.actions.kick(rawId, name)
-						}}
-						aria-label={`Kick ${name}`}
-						style={{
-							flex: '0 0 auto',
-							border: `1px solid ${wm.ruleStrong}`,
-							borderRadius: 2,
-							background: wm.bg,
-							color: wm.crit,
-							padding: '2px 5px',
-							fontFamily: wm.mono,
-							fontSize: 9,
-							textTransform: 'uppercase',
-							cursor: 'pointer',
-						}}
-					>
-						{kicking ? 'Kicking' : 'Kick'}
-					</button>
-				)}
-			</div>
+					{isLocal && <ColorSwatch editor={editor} color={color} />}
+					{!compact && (
+						<span
+							style={{
+								flex: 1,
+								minWidth: 0,
+								overflow: 'hidden',
+								textOverflow: 'ellipsis',
+								whiteSpace: 'nowrap',
+								fontFamily: wm.sans,
+								fontSize: 12,
+								fontWeight: 600,
+								color: wm.ink,
+							}}
+						>
+							{name}
+							{isLocal ? ' (you)' : ''}
+						</span>
+					)}
+					{isLocal && (
+						<div style={{ display: 'flex', gap: 3, flex: '0 0 auto' }}>
+							<AvIconButton
+								kind="mic"
+								enabled={snap?.micEnabled ?? false}
+								available={avAvailable}
+								onClick={() => snap?.actions.onMic()}
+							/>
+							<AvIconButton
+								kind="camera"
+								enabled={snap?.camEnabled ?? false}
+								available={avAvailable}
+								onClick={() => snap?.actions.onCam()}
+							/>
+							<CrosstalkControl snap={snap} available={avAvailable} />
+						</div>
+					)}
+					{!isLocal && hovered && snap && (
+						<button
+							type="button"
+							disabled={kicking}
+							onClick={(e) => {
+								e.stopPropagation()
+								snap.actions.kick(rawId, name)
+							}}
+							aria-label={`Kick ${name}`}
+							style={{
+								flex: '0 0 auto',
+								border: `1px solid ${wm.ruleStrong}`,
+								borderRadius: 2,
+								background: wm.bg,
+								color: wm.crit,
+								padding: '2px 5px',
+								fontFamily: wm.mono,
+								fontSize: 9,
+								textTransform: 'uppercase',
+								cursor: 'pointer',
+							}}
+						>
+							{kicking ? 'Kicking' : 'Kick'}
+						</button>
+					)}
+				</div>
+			)}
 		</div>
+	)
+}
+
+// Ambient chip for OTHER pages' participants (panel-video-mosaic spec
+// "Sizing rules"): a fixed CHIP_SIZE square — identity-tinted, speaking ring,
+// name tooltip, click-to-zoom — pinned at minimum regardless of panel width,
+// so widening the panel enlarges YOUR room's faces, not a wall of everyone.
+// No video element at this size: LiveKit's adaptiveStream would still deliver
+// frames for a 22px element, and a moving thumbnail this small is noise.
+export function MosaicChip({
+	editor,
+	participant,
+	snap,
+}: {
+	editor: Editor
+	participant: PanelTileParticipant
+	snap: AvPanelSnapshot | null
+}) {
+	const { rawId, prefixedId, name, color, isLocal } = participant
+	const peer = !isLocal ? (snap?.peers.find((p) => p.id === rawId) ?? null) : null
+	const isSpeaking = isLocal ? (snap?.localSpeaking ?? false) : (peer?.isSpeaking ?? false)
+	return (
+		<button
+			type="button"
+			data-testid={'ew-chip-' + rawId}
+			title={name + (isLocal ? ' (you)' : '')}
+			aria-label={`${name}${isSpeaking ? ' (speaking)' : ''} — jump to their view`}
+			onClick={() => {
+				if (!isLocal) editor.zoomToUser(prefixedId)
+			}}
+			style={{
+				width: CHIP_SIZE,
+				height: CHIP_SIZE,
+				flex: '0 0 auto',
+				padding: 0,
+				border: 0,
+				borderRadius: 3,
+				background: `${color}55`,
+				boxShadow: `inset 0 0 0 1.5px ${color}`,
+				outline: isSpeaking ? `2px solid ${wm.sealBlue}` : 'none',
+				outlineOffset: 1,
+				cursor: isLocal ? 'default' : 'pointer',
+				display: 'grid',
+				placeItems: 'center',
+				fontFamily: wm.sans,
+				fontSize: 9,
+				fontWeight: 700,
+				color: wm.ink,
+			}}
+		>
+			{initialsFor(name)}
+		</button>
 	)
 }
 
