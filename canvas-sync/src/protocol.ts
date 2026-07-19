@@ -1,7 +1,7 @@
 // Wire frames between a client peer and the room server peer. All payloads are
 // raw bytes (Loro updates / version vectors / ephemeral encodings). Framing is a
 // single tag byte + payload — no JSON, so Loro's binary rides intact.
-export const Frame = { Update: 1, Presence: 2, SyncRequest: 3 } as const
+export const Frame = { Update: 1, Presence: 2, SyncRequest: 3, SyncDone: 4 } as const
 export type Frame = (typeof Frame)[keyof typeof Frame]
 
 /**
