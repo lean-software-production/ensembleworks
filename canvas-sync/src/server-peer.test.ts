@@ -463,4 +463,21 @@ function wireFakeClient(t: Transport, peerId: bigint): LoroCanvasDoc {
   )
 }
 
+// --- (new) deploy-safety: a SyncDone frame delivered to a peer that does not
+// handle it (an OLD build — here stood in by the server, which never treats
+// SyncDone as inbound) is ignored: not counted malformed, no state change.
+// This is what makes adding Frame.SyncDone safe to roll out (old client + new
+// server, and vice versa, both degrade gracefully). ---
+{
+  const server = new SyncServerPeer({ peerId: 78n })
+  server.doc.putPage({ id: 'page:p', name: 'P' })
+  server.doc.commit()
+  const pagesBefore = server.doc.listPages().length
+  const [serverEnd, clientEnd] = makePair()
+  server.connect(serverEnd)
+  clientEnd.send(encode(Frame.SyncDone, new Uint8Array(0)))
+  assert.equal(server.malformedFrames, 0, 'an unrecognized SyncDone frame is ignored, not counted malformed')
+  assert.equal(server.doc.listPages().length, pagesBefore, 'an unrecognized SyncDone frame changes no state')
+}
+
 console.log('ok: server-peer')
