@@ -47,10 +47,11 @@ import { test, expect, identityState } from '../lib/fixtures'
 import { recordTo, capturing } from '../lib/perf'
 import { summarize, attribute, type LoadSample, type Summary } from '../lib/load-metrics'
 import { installLoadProbe, readLoadSample, V2_SHAPE_SELECTOR, V2_TOOLBAR_SELECTOR, V1_SHAPE_SELECTOR } from '../lib/load-probe'
-import { seedRoomOverWire, type SeedMode } from '../lib/wire-seed'
+import { seedRoomOverWire, evictRoomActor, type SeedMode } from '../lib/wire-seed'
 import { shape as httpShape } from '../lib/seed'
 
 const WS_BASE = 'ws://127.0.0.1:8788'
+const HTTP_BASE = 'http://127.0.0.1:8788'
 const FILE = path.join(import.meta.dirname, '../baselines/canvas-v2-load.json')
 const recordedBaselines: Record<string, any> = existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')) : {}
 
@@ -130,13 +131,18 @@ function maybeRecord(key: string, value: Record<string, unknown>) {
 async function runScenario(
 	browser: import('@playwright/test').Browser,
 	origin: string,
-	opts: { room: string; count: number; mode: SeedMode; engineParam: 'v2' | null },
+	opts: { room: string; count: number; mode: SeedMode; engineParam: 'v2' | null; cold?: boolean },
 ) {
 	const samples: LoadSample[] = []
 	for (let rep = 0; rep < REPS; rep++) {
 		const room = `${opts.room}-r${rep}`
 		const seeded = await seedRoomOverWire({ base: WS_BASE, room, count: opts.count, mode: opts.mode })
 		expect(seeded.count, 'seeder must have landed the requested shape count').toBe(opts.count)
+
+		// COLD: seedRoomOverWire has already closed both its peers, so no live
+		// socket vetoes the sweep. The very next connection — the browser's — pays
+		// the full snapshot-load + oplog-replay cost.
+		if (opts.cold) await evictRoomActor(HTTP_BASE, room)
 
 		const context = await browser.newContext({
 			storageState: identityState('E2E One', 'e2e-user-0000-0000-0001', origin),
@@ -266,6 +272,27 @@ test.describe('canvas-v2 time-to-first-shape', () => {
 		const out = report('v2 @1000 bulk warm', attrs)
 		maybeRecord('v2-1000-bulk-warm', out)
 		assertNoRegression('v2 @1000 bulk warm', out.firstShapeMs, 'v2-1000-bulk-warm')
+	})
+
+	/** Task 8 — the cold-actor axis. Same content and mode as the warm scenario
+	 * above, but the room actor is force-evicted (server/src/canvas-v2/
+	 * test-evict.test.ts's flag-gated hook) after seeding closes its peers and
+	 * before the browser connects, so the browser's connection is the one that
+	 * pays snapshot-load + oplog-replay from SQLite — candidate contributor
+	 * (d) in the Task 0 rationale. */
+	test('v2 load @ 1000 shapes, bulk commit, COLD actor', async ({ browser, baseURL }) => {
+		const attrs = await runScenario(browser, baseURL ?? 'http://127.0.0.1:5274', { room: 'v2load-1k-cold', count: 1000, mode: 'bulk', engineParam: 'v2', cold: true })
+		const out = report('v2 @1000 bulk COLD', attrs)
+		maybeRecord('v2-1000-bulk-cold', out)
+
+		const warm = recordedBaselines['v2-1000-bulk-warm']?.firstShapeMs
+		if (warm && typeof warm.p50ms === 'number') {
+			console.log(
+				`[v2-load] COLD-ACTOR AXIS @1000: cold p50=${out.firstShapeMs.p50ms}ms vs warm p50=${warm.p50ms}ms — ` +
+					`delta ${(out.firstShapeMs.p50ms - warm.p50ms).toFixed(2)}ms. That delta IS candidate contributor (d), server-side replay.`,
+			)
+		}
+		assertNoRegression('v2 @1000 bulk COLD', out.firstShapeMs, 'v2-1000-bulk-cold')
 	})
 
 	/** Task 7 — the oplog-volume axis. Same rendered content (1000 shapes) as

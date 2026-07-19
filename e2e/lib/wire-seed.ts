@@ -159,3 +159,15 @@ export async function seedRoomOverWire(opts: SeedOpts): Promise<SeedResult> {
 
 	return { count, commits, seedMs: Date.now() - t0 }
 }
+
+/** Forces the server to evict `room`'s in-memory actor, so the NEXT connection
+ * pays a genuinely cold load (snapshot + oplog replay from SQLite) — candidate
+ * contributor (d). Requires the server to run with EW_CANVAS_TEST_EVICT=1
+ * (e2e/scripts/start-server.ts defaults it on). `base` here is the HTTP origin,
+ * not the ws:// one. Every seeder peer must be CLOSED before calling: a live
+ * socket vetoes eviction by design, and this would then silently no-op and
+ * quietly measure a warm actor. */
+export async function evictRoomActor(httpBase: string, room: string): Promise<void> {
+	const res = await fetch(`${httpBase}/api/canvas-v2/test/evict/${room}`, { method: 'POST' })
+	if (!res.ok) throw new Error(`evictRoomActor(${room}) failed: ${res.status} ${await res.text()}`)
+}

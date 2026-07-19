@@ -306,6 +306,27 @@ export function createSyncApp(opts: {
 		res.json({ ok: true, rooms: [...roomHost.rooms.keys()] })
 	})
 
+	// TEST-ONLY cold-actor hook (2026-07-19, docs/plans/2026-07-19-v2-first-shape-perf-harness.md).
+	// Forces an immediate idle sweep so the load-perf harness can measure a
+	// genuinely COLD room actor — one that must reload its snapshot + replay its
+	// oplog from SQLite — instead of the warm actor the harness's own wire
+	// seeding just created. There is no other way to force this from outside the
+	// process: sweepIdle is driven by an internal interval with no env knob.
+	//
+	// DOUBLE-GATED: requires BOTH EW_CANVAS_SYNC=1 (canvasActors exists at all)
+	// AND EW_CANVAS_TEST_EVICT=1. Absent the second flag the route is never
+	// registered, so a production deployment cannot evict a live room over HTTP
+	// even if someone guesses the path.
+	if (canvasActors && process.env.EW_CANVAS_TEST_EVICT === '1') {
+		app.post('/api/canvas-v2/test/evict/:roomId', (_req, res) => {
+			// TTL 0 = "every actor is idle enough". A live socket still vetoes
+			// eviction (sweepIdle's own rule), which is correct: the harness closes
+			// its seeder peers before calling this.
+			canvasActors.sweepIdle(0)
+			res.json({ ok: true })
+		})
+	}
+
 	// Remote terminal gateways (spike): connect-equals-register + relay splicer.
 	// See docs/superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md
 	const gatewayPlane = createGatewayPlane()
