@@ -7,7 +7,10 @@
  * pre-cutover telemetry: the shadow-mirror divergence counters (Task D2) and
  * the canvas-v2 sync health counters (Task B4/C2), plus taint-eviction
  * history that would otherwise vanish the instant a fresh actor replaces a
- * tainted one.
+ * tainted one, plus (Task H4) each canvas-v2 room's live diskBytes/
+ * snapshotBytes — S6 dogfood visibility, so the same disk÷snapshot
+ * high-water signal soak-actor.ts's DISK_SUSTAINED_HIGHWATER_MULTIPLIER
+ * judges in the soak is decidable on real dogfood traffic too (Task I1).
  *
  * Mounted UNCONDITIONALLY in app.ts, regardless of EW_CANVAS_SHADOW or
  * EW_CANVAS_SYNC — readable even with both flags off, returning empty
@@ -44,7 +47,24 @@ export function createCanvasMetricsRouter(deps: CanvasMetricsDeps): express.Rout
 			for (const [roomId, entry] of deps.shadowMirrors) shadow[roomId] = entry.mirror.metrics()
 		}
 
-		const sync: Record<string, { pendingImports: number; malformedFrames: number; tainted: string | null }> = {}
+		const sync: Record<
+			string,
+			{
+				pendingImports: number
+				malformedFrames: number
+				tainted: string | null
+				/** Task H4 (S6 dogfood visibility): live on-disk SQLite file size for
+				 * this room — a high-water mark, see CanvasV2Store.diskBytes()'s doc
+				 * comment. Additive: existing pendingImports/malformedFrames/tainted
+				 * consumers are unaffected by these two new fields. */
+				diskBytes: number
+				/** Live in-memory snapshot size for this room, in bytes — the SAME
+				 * export DocumentActor.compact() persists, so diskBytes÷snapshotBytes
+				 * is the disk÷snapshot high-water ratio the DevOverlay renders,
+				 * mirroring soak-actor.ts's DISK_SUSTAINED_HIGHWATER_MULTIPLIER. */
+				snapshotBytes: number
+			}
+		> = {}
 		// Declared as the registry's own EvictionRecord type (not a hand-copied
 		// inline shape) so the payload's declared type can never silently drift
 		// from what the runtime spread below actually serves — the F1 spec
@@ -60,6 +80,8 @@ export function createCanvasMetricsRouter(deps: CanvasMetricsDeps): express.Rout
 					pendingImports: actor.peer.pendingImports,
 					malformedFrames: actor.peer.malformedFrames,
 					tainted: actor.tainted ? actor.tainted.message : null,
+					diskBytes: actor.diskBytes,
+					snapshotBytes: actor.snapshotBytes,
 				}
 			}
 			for (const [roomId, record] of deps.canvasActors.evictions()) {

@@ -29,12 +29,25 @@
  * noticed yet" state. Surfacing that would need canvas-sync work (wiring a
  * real onClose), out of this task's scope.
  */
+import { DISK_SUSTAINED_HIGHWATER_MULTIPLIER } from '@ensembleworks/contracts'
 import { useEffect, useState, type CSSProperties } from 'react'
 
 export interface CanvasMetricsSyncEntry {
 	readonly pendingImports: number
 	readonly malformedFrames: number
 	readonly tainted: string | null
+	/** Task H4 (S6 dogfood visibility): live on-disk SQLite file size for this
+	 * room, in bytes — a HIGH-WATER MARK (the store never VACUUMs). Optional:
+	 * absent on a payload served by a server build that predates Task H4 (a
+	 * rolling deploy can briefly mix client/server versions), in which case
+	 * the overlay falls back to the same '—' placeholder as a null `metrics`
+	 * prop. */
+	readonly diskBytes?: number
+	/** Live in-memory snapshot size for this room, in bytes — the same
+	 * `exportSnapshot()` byte length DocumentActor.compact() persists, so
+	 * diskBytes÷snapshotBytes is the disk÷snapshot high-water ratio. Same
+	 * optionality caveat as diskBytes above. */
+	readonly snapshotBytes?: number
 }
 export interface CanvasMetricsEviction {
 	readonly taintCount: number
@@ -71,14 +84,22 @@ export interface DevOverlayProps {
 }
 
 const fieldStyle: CSSProperties = { display: 'flex', justifyContent: 'space-between', gap: 12 }
+const fieldWarnStyle: CSSProperties = { ...fieldStyle, color: '#fca5a5', fontWeight: 700 }
 
-function Field({ label, value }: { readonly label: string; readonly value: string | number }) {
+function Field({ label, value, warn }: { readonly label: string; readonly value: string | number; readonly warn?: boolean }) {
 	return (
-		<div data-dev-overlay-field={label} style={fieldStyle}>
+		<div data-dev-overlay-field={label} data-dev-overlay-warn={warn ? 'true' : undefined} style={warn ? fieldWarnStyle : fieldStyle}>
 			<span>{label}</span>
 			<span>{value}</span>
 		</div>
 	)
+}
+
+/** Human-readable byte size (B/KB/MB) for the diskBytes Field. */
+function formatBytes(n: number): string {
+	if (n < 1024) return `${n} B`
+	if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+	return `${(n / (1024 * 1024)).toFixed(1)} MB`
 }
 
 /** Pure render — fixture-testable via renderToStaticMarkup (this house's
@@ -86,6 +107,13 @@ function Field({ label, value }: { readonly label: string; readonly value: strin
 export function DevOverlay({ roomId, connectionState, client, metrics }: DevOverlayProps) {
 	const sync = metrics?.sync[roomId]
 	const eviction = metrics?.evictions[roomId]
+	// Task H4 (S6 dogfood visibility): diskBytes/snapshotBytes are optional
+	// even on a live sync entry (see CanvasMetricsSyncEntry's doc comment), so
+	// this guards both "no sync entry at all" (metrics null / room absent)
+	// and "sync entry present but from an older server build."
+	const diskBytes = sync?.diskBytes
+	const snapshotBytes = sync?.snapshotBytes
+	const diskRatio = diskBytes !== undefined && snapshotBytes !== undefined && snapshotBytes > 0 ? diskBytes / snapshotBytes : undefined
 	return (
 		<div
 			data-canvas-v2-dev-overlay
@@ -114,6 +142,19 @@ export function DevOverlay({ roomId, connectionState, client, metrics }: DevOver
 			<Field label="tainted" value={sync ? (sync.tainted ?? 'no') : '—'} />
 			<Field label="evictions.taintCount" value={eviction ? eviction.taintCount : '—'} />
 			<Field label="evictions.idleCount" value={eviction ? eviction.idleCount : '—'} />
+			<Field label="diskBytes" value={diskBytes !== undefined ? formatBytes(diskBytes) : '—'} />
+			{/* disk:snapshot high-water ratio, flagged at the S6 threshold that the
+			    server soak's assertDiskHighWater uses — single-sourced from contracts
+			    so both sides share ONE number (Task I1 cites both). A brand-new/
+			    near-empty room's ratio starts elevated (SQLite allocates a full ~4KB
+			    page before the snapshot's CRDT metadata reaches that size) and settles
+			    as content accumulates — the same floor-effect soak-actor.ts's
+			    AVG_MIN_DISK_BYTES documents, not a bug. */}
+			<Field
+				label="disk:snapshot"
+				value={diskRatio !== undefined ? `${diskRatio.toFixed(1)}x` : '—'}
+				warn={diskRatio !== undefined && diskRatio >= DISK_SUSTAINED_HIGHWATER_MULTIPLIER}
+			/>
 		</div>
 	)
 }

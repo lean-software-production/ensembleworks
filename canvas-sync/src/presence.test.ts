@@ -109,6 +109,33 @@ function cursorAt(x: number, y: number): Presence {
   b.destroy()
 }
 
+// --- (5) pilot 5: `editing` round-trips through onLocalUpdate/apply AND
+// survives an encodeAll()/apply() bootstrap, exactly like the other fields
+// (mirrors case (4)'s live round-trip and case (3)'s bootstrap pattern) ---
+{
+  const a = new PresenceStore('peerA')
+  const b = new PresenceStore('peerB')
+  a.onLocalUpdate((bytes) => b.apply(bytes))
+
+  const editing: Presence = { cursor: null, viewport: null, stamp: null, presenting: [], editing: 'shape:note1' }
+  a.publish(editing)
+
+  assert.deepEqual(b.all()['peerA'], editing, "editing round-trips through onLocalUpdate/apply, live")
+
+  const c = new PresenceStore('peerC')
+  c.apply(a.encodeAll())
+  assert.equal(c.all()['peerA']?.editing, 'shape:note1', 'editing survives an encodeAll()/apply() bootstrap too')
+
+  // Ending the edit (editing: null) round-trips as null, not a missing key.
+  await Bun.sleep(2)
+  a.publish({ ...editing, editing: null })
+  assert.equal(b.all()['peerA']?.editing, null, 'editing: null round-trips (end-of-edit) — not left stuck at the prior shape id')
+
+  a.destroy()
+  b.destroy()
+  c.destroy()
+}
+
 // NOTE: no timeout-expiry assertions here (wall-clock, non-deterministic) —
 // EphemeralStore's internal timer is out of scope for this deterministic suite.
 

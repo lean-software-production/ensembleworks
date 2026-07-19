@@ -29,9 +29,9 @@ import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { buildSpatialIndex, makeDocument, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
-import type { Editor, EditorState, ToolContext } from '@ensembleworks/canvas-editor'
+import type { Editor, EditorState, Intent, ToolContext } from '@ensembleworks/canvas-editor'
 import { createEmbedController, createLifecycleRegistry, sameEmbedContent, type EmbedLifecycle } from './embedLifecycle.js'
-import { EmbedBodyFrame, EmbedHost, embedWrapperStyle } from './EmbedHost.js'
+import { EmbedBodyFrame, EmbedHost, embedBodyPropsEqual, embedWrapperStyle } from './EmbedHost.js'
 import { EmbedLayer, boundsIntersect } from './EmbedLayer.js'
 import { ShapeLayer } from '../ShapeLayer.js'
 import { registerShape, type ShapeBodyProps } from '../shapeRegistry.js'
@@ -317,4 +317,93 @@ function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolCo
   console.log('ok: EmbedHost/EmbedBodyFrame render — active via the real controller, suspended via the pure frame; DOM stays mounted, visibility:hidden not display:none')
 }
 
-console.log('ok: embed (lifecycle state machine + culling-exempt EmbedLayer + EmbedHost rendering)')
+// ============================================================================
+// 10. dispatch threading (Task D2): EmbedHost forwards `dispatch` to the
+//     embed component (mirroring case 9's shape/snapshot/editorState
+//     forwarding), EmbedLayer threads its own `dispatch` prop down to every
+//     EmbedHost it renders, and — THE CONTENT-MEMO CONSTRAINT this task is
+//     really about — `embedBodyPropsEqual` still returns true (i.e. still
+//     bails out of a re-render) when the shape's CONTENT is unchanged even
+//     though `dispatch` is a BRAND NEW reference on the second props object.
+//     If dispatch were compared (or included in a content hash), this
+//     assertion would flip to false and the Phase-3 memo win would be
+//     silently defeated the moment D2 landed.
+// ============================================================================
+{
+  const dispatchCalls: Intent[][] = []
+  const fakeEditor = { applyAll: (intents: readonly Intent[]) => dispatchCalls.push([...intents]) }
+  const dispatch = (intents: Intent[]) => fakeEditor.applyAll(intents)
+
+  function DispatchEmbed({ shape, dispatch: d }: ShapeBodyProps) {
+    d?.([{ type: 'UpdateProps', id: shape.id, props: { touched: true } }])
+    return createElement('div', { 'data-dispatch-embed': shape.id, 'data-has-dispatch': typeof d === 'function' })
+  }
+  // 'iframe' — a real ShapeKind (canvas-model/shape.ts's SHAPE_KINDS) that is
+  // an embed kind but otherwise unregistered/untouched by this file's
+  // earlier cases (only 'terminal' -> FakeEmbed is registered above).
+  registerShape('iframe', DispatchEmbed, { embed: true })
+
+  const dispatchEmbedShape: Shape = {
+    id: 'shape:dispatch-embed1', kind: 'iframe', parentId: 'page:p', index: 'a1', x: 10, y: 10, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 50, h: 50 },
+  }
+
+  const editorStateForDispatch: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null })
+
+  // 10a. EmbedHost forwards dispatch straight to the resolved embed component.
+  const hostHtml = renderToStaticMarkup(
+    createElement(EmbedHost, { shape: dispatchEmbedShape, snapshot: doc, editorState: editorStateForDispatch, visible: true, tick: 0, suspendAfterTicks: 1, dispatch }),
+  )
+  assert.match(hostHtml, /data-has-dispatch="true"/, 'EmbedHost forwards dispatch to the resolved embed component')
+  console.log('ok: EmbedHost forwards dispatch to the resolved embed component')
+
+  // 10b. EmbedLayer threads its own dispatch prop down to every EmbedHost it renders.
+  const dispatchEmbedDoc: CanvasDocument = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [dispatchEmbedShape], bindings: [] })
+  const camera = { x: 0, y: 0, z: 1 }
+  const viewportSize = { width: 800, height: 600 }
+  const embedLayerHtml = renderToStaticMarkup(
+    createElement(EmbedLayer, { toolContext: fakeToolContext(dispatchEmbedDoc, true), camera, viewportSize, tick: 0, suspendAfterTicks: 1, dispatch }),
+  )
+  assert.match(embedLayerHtml, /data-has-dispatch="true"/, 'EmbedLayer threads dispatch down to its EmbedHost children')
+  console.log('ok: EmbedLayer threads dispatch down to EmbedHost')
+
+  // 10c. Calling dispatch([...]) from within the rendered embed body reaches
+  //      editor.applyAll — same wiring shape as shape-layer.test.ts's case 6c.
+  assert.equal(dispatchCalls.length, 2, 'dispatch was invoked once per render above (EmbedHost direct render + EmbedLayer render)')
+  assert.deepEqual(
+    dispatchCalls[0],
+    [{ type: 'UpdateProps', id: dispatchEmbedShape.id, props: { touched: true } }],
+    'the exact intents passed to dispatch() reach editor.applyAll unchanged',
+  )
+  console.log('ok: dispatch([...intents]) called from an embed body reaches editor.applyAll')
+
+  // 10d. THE CONTENT-MEMO CONSTRAINT: embedBodyPropsEqual must still return
+  //      true when only dispatch differs (a brand new function reference
+  //      each time, exactly what an UNSTABLE dispatch would look like) and
+  //      the shape's serialized content is identical — proving dispatch is
+  //      excluded from the comparator entirely, not merely "usually stable
+  //      enough to pass". Two semantically-identical-but-distinct dispatch
+  //      references (mirroring dumpModel's "always new shape reference"
+  //      reality that sameEmbedContent already tolerates for `shape`).
+  const propsA: ShapeBodyProps = { shape: dispatchEmbedShape, snapshot: dispatchEmbedDoc, editorState: editorStateForDispatch, dispatch: (intents) => fakeEditor.applyAll(intents) }
+  const propsB: ShapeBodyProps = { shape: { ...dispatchEmbedShape, props: { ...dispatchEmbedShape.props } }, snapshot: dispatchEmbedDoc, editorState: editorStateForDispatch, dispatch: (intents) => fakeEditor.applyAll(intents) }
+  assert.notEqual(propsA.dispatch, propsB.dispatch, 'the two dispatch references must be genuinely distinct for this to prove anything')
+  assert.equal(
+    embedBodyPropsEqual(propsA, propsB),
+    true,
+    'embedBodyPropsEqual must still bail out (return true/"equal") when only dispatch identity differs and shape content is unchanged — dispatch must be EXCLUDED from the comparator',
+  )
+
+  // And the converse sanity check: a REAL content change still returns false
+  // regardless of dispatch being present/stable — the comparator did not
+  // silently stop comparing shape content either.
+  const propsC: ShapeBodyProps = { shape: { ...dispatchEmbedShape, x: 999 }, snapshot: dispatchEmbedDoc, editorState: editorStateForDispatch, dispatch: propsA.dispatch }
+  assert.equal(
+    embedBodyPropsEqual(propsA, propsC),
+    false,
+    'embedBodyPropsEqual must still return false for an actual content change, even with dispatch present on both sides',
+  )
+  console.log('ok: embedBodyPropsEqual excludes dispatch from the content-memo comparison (Phase-3 memo win survives D2)')
+}
+
+console.log('ok: embed (lifecycle state machine + culling-exempt EmbedLayer + EmbedHost rendering + dispatch threading with memo-safety)')

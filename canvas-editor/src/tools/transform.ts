@@ -22,7 +22,7 @@
 // a rotated PARENT still resizes/rotates world-correctly even though the
 // handles this tool shows for it are axis-aligned).
 import {
-  centroid, worldBounds, type Bounds, type CanvasDocument, type Point,
+  centroid, worldBounds, type Bounds, type CanvasDocument, type Point, type Shape,
 } from '@ensembleworks/canvas-model'
 import type { Intent } from '../intents.js'
 import { crossedThreshold, screenToWorld, worldToScreen, type Camera, type InputEvent, type Tool } from '../input.js'
@@ -138,6 +138,31 @@ function selectionWorldBounds(snapshot: CanvasDocument, ids: readonly string[]):
   return unionBounds(list)
 }
 
+// GESTURE-START SNAPSHOT (Task B5, cancel-revert): the verbatim Shape
+// objects for every id in `ids`, read from `snapshot` at the exact moment a
+// resize/rotate gesture BEGINS mutating the doc (onPointing's first
+// threshold-crossing move, called BEFORE that same move computes its own
+// first ResizeShapes/RotateShapes intent below). Carried on Resizing/
+// Rotating's own state as `startShapes` so a caller who later abandons the
+// gesture (tool-loop.ts's cancelActiveTool) can restore each shape exactly
+// as it was pre-gesture — via CreateShape's "upsert full shape verbatim"
+// contract (editor.ts's applyOne: CreateShape's putShape is a full-field
+// overwrite) — in ONE intent per shape, regardless of how many incremental
+// commits happened in between (this tool's own COMMIT CADENCE note explains
+// why a gesture accumulates more than one). TOLERANT, same "skip, never
+// throw" philosophy as selectionWorldBounds just above: an id with no
+// CURRENT shape (should not happen — `ids` comes from the live selection at
+// pointerdown — but guarded the same way regardless) is simply dropped, not
+// carried as undefined.
+function captureStartShapes(snapshot: CanvasDocument, ids: readonly string[]): Shape[] {
+  const shapes: Shape[] = []
+  for (const id of ids) {
+    const s = snapshot.byId.get(id)
+    if (s) shapes.push(s)
+  }
+  return shapes
+}
+
 function angleTo(center: Point, pt: Point): number {
   return Math.atan2(pt.y - center.y, pt.x - center.x)
 }
@@ -208,6 +233,8 @@ interface Resizing {
   readonly uniform: boolean
   readonly lastScaleX: number
   readonly lastScaleY: number
+  /** Gesture-start pre-images (Task B5) — see captureStartShapes above. */
+  readonly startShapes: readonly Shape[]
 }
 interface Rotating {
   readonly mode: 'rotating'
@@ -215,6 +242,8 @@ interface Rotating {
   readonly centerWorld: Point
   readonly angleAtDown: number
   readonly lastAngle: number
+  /** Gesture-start pre-images (Task B5) — see captureStartShapes above. */
+  readonly startShapes: readonly Shape[]
 }
 
 export type TransformState = Idle | Pointing | Resizing | Rotating
@@ -243,6 +272,20 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
   function onIdle(state: Idle, event: InputEvent): { state: TransformState; intents: Intent[] } {
     if (event.type !== 'pointerdown') return { state, intents: [] }
     const ids = [...editor.get().selection]
+    // MODALITY (pilot 4 extension — interaction-contracts'
+    // 'no-transform-while-typing'): never grab a resize/rotate handle while
+    // the shape being text-edited is part of this selection. The handles
+    // represent the selection's combined bounds, so transforming would move/
+    // resize the edited shape out from under the caret — the same modality
+    // rule select.ts enforces for translate. FSM-level (not a render-only
+    // hide) so it holds at the cheapest, contract-observable level; returning
+    // idle lets the composite fall the pointerdown through to select.ts, whose
+    // own editing guard then refuses any translate too. LIVE read of editingId
+    // at this single grab pointerdown — one read at one event, so (unlike
+    // select.ts's Pointing->Dragging read) there is no mid-gesture window to
+    // reason about.
+    const editingId = editor.get().editingId
+    if (editingId !== null && ids.includes(editingId)) return { state, intents: [] }
     const bounds = selectionWorldBounds(ctx.snapshot(), ids)
     if (!bounds) return { state, intents: [] } // empty/all-vanished selection: nothing to grab a handle on
     const handlesAtStart = selectionHandles(bounds)
@@ -260,12 +303,20 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
     const here = crossedThreshold(state.downScreen, event)
     if (!here) return { state, intents: [] }
 
+    // Gesture-start snapshot (Task B5): captured HERE, before this same
+    // move's own first Resize/RotateShapes intent below — that first intent
+    // is already the ABSOLUTE (from-gesture-start) scale/angle, not an
+    // incremental step from identity (see computeTargetScale/onRotating's
+    // angleAtDown), so the pre-mutation read must happen before it, not
+    // after. See captureStartShapes' doc comment above.
+    const startShapes = captureStartShapes(ctx.snapshot(), state.ids)
+
     if (state.handle.kind === 'rotate') {
       const centerWorld = centroid(unionBoundsOfHandles(state.handlesAtStart))
       const angleAtDown = angleTo(centerWorld, worldOf(state.downScreen))
       const totalNow = angleTo(centerWorld, worldOf(here)) - angleAtDown
       const intents: Intent[] = totalNow !== 0 ? [{ type: 'RotateShapes', ids: state.ids, center: centerWorld, dRadians: totalNow }] : []
-      return { state: { mode: 'rotating', ids: state.ids, centerWorld, angleAtDown, lastAngle: totalNow }, intents }
+      return { state: { mode: 'rotating', ids: state.ids, centerWorld, angleAtDown, lastAngle: totalNow, startShapes }, intents }
     }
 
     // Corner or edge handle: resolve the OPPOSITE handle (fixed anchor) from
@@ -283,7 +334,7 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
     const target = computeTargetScale(anchorWorld, originalHandleWorld, axisScaled, uniform, worldOf(here))
     const intents: Intent[] = [{ type: 'ResizeShapes', ids: state.ids, anchor: anchorWorld, scaleX: target.scaleX, scaleY: target.scaleY }]
     return {
-      state: { mode: 'resizing', ids: state.ids, anchorWorld, originalHandleWorld, axisScaled, uniform, lastScaleX: target.scaleX, lastScaleY: target.scaleY },
+      state: { mode: 'resizing', ids: state.ids, anchorWorld, originalHandleWorld, axisScaled, uniform, lastScaleX: target.scaleX, lastScaleY: target.scaleY, startShapes },
       intents,
     }
   }

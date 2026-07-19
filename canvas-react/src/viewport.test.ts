@@ -13,13 +13,17 @@
 // path (the addEventListener('wheel', ..., { passive: false }) branch and
 // its ctrl/meta preventDefault) is NOT exercised here — react-dom/server
 // never runs effects and static markup carries no event listeners at all,
-// so no house test can observe it. The same applies to the pointer-capture
-// calls in handlePointer (verified by code-reading; the guards are
-// documented in Viewport.tsx's POINTER CAPTURE header). Those paths get
-// their first real coverage when a browser-driven e2e exists for the
-// canvas rewrite. What static markup CAN show — the root div's focusability
-// (tabIndex), its clipping styles, and the layer composition order — is
-// pinned below.
+// so no house test can observe it. The same applies to the setPointerCapture
+// call in handlePointer (verified by code-reading; the guard is documented
+// in Viewport.tsx's POINTER CAPTURE header). Those paths get their first real
+// coverage when a browser-driven e2e exists for the canvas rewrite. What
+// static markup CAN show — the root div's focusability (tabIndex), its
+// clipping styles, and the layer composition order — is pinned below. ONE
+// case near the bottom (onPointerCancel, Task B3) is the exception: it
+// borrows canvas-react's OTHER precedent for real DOM-event wiring
+// (embed-reconciler.test.ts's happy-dom + react-dom/client rig, scoped there
+// too) because a real `pointercancel` dispatch needs an actual reconciler to
+// have anything to dispatch it AT — see that section's own comment.
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -168,4 +172,71 @@ import { keyEventToInput, pointerEventToInput, wheelEventToInput, type KeyEventL
   console.log('ok: Viewport composition smoke — focusable clipping root, Grid before WorldLayer in DOM order')
 }
 
-console.log('ok: viewport (transform string, worldToScreen agreement, WorldLayer/Grid rendering, dom-events mappers, composition smoke)')
+// ============================================================================
+// 7. onPointerCancel (Task B3) — a REAL `pointercancel` DOM event dispatched
+//    on the viewport div invokes the `onPointerCancel` prop exactly once.
+//    This needs a REAL reconciler: renderToStaticMarkup (every case above)
+//    attaches no event listeners at all, so a static-markup render has
+//    nothing for a dispatched DOM event to reach. This one block borrows
+//    embed-reconciler.test.ts's happy-dom + react-dom/client precedent (see
+//    that file's own SCOPE note) — scoped to ONLY this one wiring, not a
+//    wholesale migration of this package's test rig off renderToStaticMarkup.
+//    Dynamic imports (not static top-of-file ones) because happy-dom's
+//    window/document must land on globalThis BEFORE react-dom/client binds to
+//    `document` at createRoot time — same reasoning as that precedent file.
+// ============================================================================
+{
+  const { Window } = await import('happy-dom')
+  const win = new Window()
+  ;(globalThis as any).window = win
+  ;(globalThis as any).document = win.document
+  ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
+
+  const { createElement, act } = await import('react')
+  const { createRoot } = await import('react-dom/client')
+
+  let cancelCount = 0
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = createRoot(container)
+
+  await act(async () => {
+    root.render(
+      createElement(Viewport, {
+        onInput: () => {},
+        onPointerCancel: () => {
+          cancelCount += 1
+        },
+      }),
+    )
+  })
+
+  const viewportDiv = container.querySelector('[tabindex]') as HTMLElement | null
+  assert.ok(viewportDiv, `the focusable viewport div must exist in the DOM: ${container.innerHTML}`)
+
+  // A real pointerdown first (so capture is actually held, mirroring a real
+  // gesture), THEN pointercancel — proving the release-capture path runs
+  // without throwing (best-effort per the module header) before the prop is
+  // invoked.
+  await act(async () => {
+    viewportDiv!.dispatchEvent(new (win as any).PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 7, clientX: 10, clientY: 10, buttons: 1 }))
+  })
+  await act(async () => {
+    viewportDiv!.dispatchEvent(new (win as any).PointerEvent('pointercancel', { bubbles: true, cancelable: true, pointerId: 7 }))
+  })
+
+  assert.equal(cancelCount, 1, 'a pointercancel DOM event invokes onPointerCancel exactly once')
+
+  await act(async () => {
+    root.unmount()
+  })
+
+  console.log('ok: Viewport — a real pointercancel DOM event invokes onPointerCancel exactly once')
+}
+
+console.log('ok: viewport (transform string, worldToScreen agreement, WorldLayer/Grid rendering, dom-events mappers, composition smoke, pointercancel wiring)')
+
+// House rule for any test that boots a DOM/browser-ish environment (see
+// embed-reconciler.test.ts's precedent): happy-dom's window can hold timers
+// open past the last assertion above.
+process.exit(0)

@@ -18,7 +18,7 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { runActorSoak } from './soak-actor.ts'
+import { lastQuartileDiskToSnapshotRatio, runActorSoak } from './soak-actor.ts'
 
 interface Args {
 	clients: number
@@ -38,14 +38,19 @@ function parseArgs(argv: string[]): Args {
 	return {
 		clients: get('clients', 5),
 		// DEFAULT SCALE (validated, not guessed — see soak-actor.ts's own
-		// CALIBRATION section and the H4 execution report): 5 clients / 15,000
-		// ops / chaos 0.5 measured ~17s wall time locally, converged, disk-
-		// growth ratio 2.96x (well inside the calibrated 12x bound). Kept
-		// smaller than canvas-sync's own bare-peer nightly (5/20,000/0.5) —
-		// this variant ALSO does real SQLite I/O (appendUpdate per persisted
-		// update, periodic compaction), so it was validated at its own scale
-		// rather than assumed to inherit the bare-peer number.
-		ops: get('ops', 15_000),
+		// CALIBRATION section and the Task H3 execution notes in the Phase-4
+		// plan's Execution notes): H4 first validated 5 clients / 15,000 ops
+		// locally; Task H3 then ran THREE runs at ≥20k ops (5/20,000/seed 42,
+		// 5/20,000/seed 1, 5/25,000/seed 7, all chaos 0.5) — ~26-38s wall time
+		// each, all converged (including the H1/H2 per-shape text-convergence
+		// check), disk÷snapshot ratios 2.90x-6.52x (well inside the calibrated
+		// 12x bound; see soak-actor.ts's CALIBRATION). 20,000 is now the
+		// validated default here, still smaller than canvas-sync's own
+		// bare-peer nightly default (200,000, itself calibrated down to 20,000
+		// in the nightly workflow) — this variant ALSO does real SQLite I/O
+		// (appendUpdate per persisted update, periodic compaction) on top of
+		// the same op-routing/chaos work.
+		ops: get('ops', 20_000),
 		seed: get('seed', 1),
 		chaos: get('chaos', 0.5),
 	}
@@ -56,19 +61,43 @@ function parseArgs(argv: string[]): Args {
  * soak-cli.ts's assertFlatRss (see that file for the full derivation of WHY
  * quartiles, not first-vs-last sample).
  *
- * TOLERANCE CALIBRATION (measured directly, throwaway calibration harness
- * against runActorSoak, seed 7, `--clients 5 --ops 15000 --chaos 0.5` — the
- * exact default scale above): quartile-mean ratio ~2.11x (firstMean
- * ~233MB, lastMean ~491MB). Notably LOWER than canvas-sync's own bare-peer
- * measurement at a slightly larger scale (~9.97x at 5/20,000/0.5) — plausible
- * (this run is smaller, and the bare-peer number's own doc comment already
- * describes a compounding/superlinear trend whose tail this smaller run may
- * not reach yet), but NOT independently re-verified at 20,000+ ops for the
- * actor variant — that honesty gap is exactly why this tolerance is set with
- * generous headroom (≈7x over the measured 2.11x) rather than tight to it.
- * Revisit if this job ever moves to a larger validated scale.
+ * TOLERANCE CALIBRATION — Task H4 (measured directly, throwaway calibration
+ * harness against runActorSoak, seed 7, `--clients 5 --ops 15000 --chaos
+ * 0.5`): quartile-mean ratio ~2.11x (firstMean ~233MB, lastMean ~491MB).
+ *
+ * TASK H3 RE-CALIBRATION (≥20k ops, the scale that measurement above was
+ * honestly flagged as NOT covering — three runs via THIS cli, foreground,
+ * each printing its own `rss:` line):
+ *
+ *   clients ops    seed  chaos  firstMean     lastMean      ratio
+ *   5       20,000 42    0.5    ~256MB        ~595MB        2.320x
+ *   5       20,000 1     0.5    ~256MB        ~577MB        2.256x
+ *   5       25,000 7     0.5    ~245MB        ~697MB        2.850x
+ *
+ * The ratio does NOT blow up past 15,000 ops — it stays in the same ~2-3x
+ * band the smaller H4 run already showed (2.11x), i.e. no new superlinear
+ * tail appeared by 25,000 ops for this compacting variant (unlike
+ * canvas-sync's own bare-peer soak, whose no-compaction docs DO show a
+ * clearly superlinear climb to ~9.97x by 20,000 ops — see soak-cli.ts's own
+ * TOLERANCE CALIBRATION). That's the expected shape: SQLite compaction here
+ * periodically folds the append-log, bounding retained in-process state in
+ * a way the bare peer's never-compacted oplog cannot.
+ *
+ * FLAT_RSS_TOLERANCE is tightened from the old placeholder 15x down to 8x —
+ * ~2.8x over the worst ≥20k-ops ratio measured (2.85x), with generous
+ * nightly-CI-noise headroom on top. This is a NIGHTLY-only job (it never
+ * gates a PR — the per-commit smoke, soak-actor.test.ts, does that), so a
+ * spurious 5am failure is pure toil, while CI runners have noisier/tighter
+ * memory than a dev box; a REAL memory-leak regression (compaction silently
+ * stops firing, etc.) blows FAR past either 6x or 8x, so the extra margin
+ * costs ~nothing in detection power while removing a real source of
+ * false-alarm toil. Not set any looser than that: the whole point of running
+ * ≥20k was to stop guessing at a generous placeholder and tie this number to
+ * actual observed behavior. Revisit if a future run at meaningfully larger
+ * scale (or a different `actorCompactEvery`) shows a materially different
+ * ratio.
  */
-const FLAT_RSS_TOLERANCE = 15
+const FLAT_RSS_TOLERANCE = 8
 
 function assertFlatRss(samples: readonly number[]): void {
 	if (samples.length < 8) {
@@ -132,6 +161,12 @@ function main(): void {
 		finalSnapshotBytes: result.finalSnapshotBytes,
 		finalDiskBytes: result.finalDiskBytes,
 		diskToSnapshotRatio: result.finalDiskBytes / Math.max(1, result.finalSnapshotBytes),
+		// S6 sustained high-water metric (last-quartile MEAN, not the
+		// single final-point ratio above) — already asserted inside
+		// runActorSoak (assertDiskHighWater); recorded here too so the S6
+		// decision evidence (Task I1) is readable straight off this JSON
+		// summary without re-deriving it from diskSamples/snapshotSamples.
+		diskSustainedHighwaterRatio: lastQuartileDiskToSnapshotRatio(result.diskSamples, result.snapshotSamples) ?? null,
 		maxUpdateBytes: result.maxUpdateBytes,
 		repairFirings: result.repairFirings,
 		reconnectsForced: result.reconnectsForced,

@@ -87,6 +87,21 @@
 // (tab-hidden while still focused) is a documented, deferred extension of
 // the same hook — not wired yet; blur already covers the common
 // tool-switch/click-away case.
+//
+// POINTERCANCEL (Task B3 — the SECOND abandonment trigger, alongside
+// onViewportBlur above): the browser fires `pointercancel` instead of the
+// usual pointerup when it decides to take the pointer away from us mid-
+// gesture — a touch scroll the OS reinterprets as a page gesture, a pen
+// entering a palm-rejection zone, a stylus running out of range — cases
+// where our own pointerup never arrives at all, so the tool FSM would
+// otherwise be stranded mid-drag exactly like the blur case above. Same
+// "this component doesn't know what cancel means" posture: release
+// whatever pointer capture we're holding (best-effort, same try/catch
+// posture as handlePointer's own capture calls — a synthetic/fabricated
+// pointercancel can carry a pointerId we never captured) and hand the
+// decision to the caller via `onPointerCancel`, unconditionally — no
+// InputEvent mapping needed (the caller doesn't need coordinates to decide
+// "abandon whatever's in flight", the same as onViewportBlur).
 import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
 import type { InputEvent } from '@ensembleworks/canvas-editor'
 import { keyEventToInput, pointerEventToInput, wheelEventToInput } from './dom-events.js'
@@ -100,12 +115,15 @@ export interface ViewportProps {
    * no in-flight-gesture cancellation wired yet (e.g. this unit's own tests)
    * simply omits it. */
   readonly onViewportBlur?: () => void
+  /** The SECOND abandonment-gap trigger (Task B3) — see the module header's
+   * POINTERCANCEL note. Optional for the same reason `onViewportBlur` is. */
+  readonly onPointerCancel?: () => void
   readonly children?: ReactNode
   readonly className?: string
   readonly style?: CSSProperties
 }
 
-export function Viewport({ onInput, onViewportBlur, children, className, style }: ViewportProps): ReactNode {
+export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, className, style }: ViewportProps): ReactNode {
   const elRef = useRef<HTMLDivElement | null>(null)
   // Latest onInput, read by the native listener below. The listener is
   // bound ONCE (see the effect's empty deps) — its own closure would
@@ -145,6 +163,16 @@ export function Viewport({ onInput, onViewportBlur, children, className, style }
     onInput(pointerEventToInput(e, el.getBoundingClientRect()))
   }
 
+  function handlePointerCancel(e: PointerEvent<HTMLDivElement>): void {
+    const el = e.currentTarget
+    // Best-effort release, same guard posture as handlePointer's capture
+    // calls above — see the module header's POINTERCANCEL note.
+    try {
+      el.releasePointerCapture?.(e.pointerId)
+    } catch { /* capture is best-effort — see header */ }
+    onPointerCancel?.()
+  }
+
   function handleKey(e: KeyboardEvent<HTMLDivElement>): void {
     onInput(keyEventToInput({ type: e.type as 'keydown' | 'keyup', key: e.key, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, timeStamp: e.timeStamp }))
   }
@@ -161,6 +189,7 @@ export function Viewport({ onInput, onViewportBlur, children, className, style }
       onPointerDown={handlePointer}
       onPointerMove={handlePointer}
       onPointerUp={handlePointer}
+      onPointerCancel={handlePointerCancel}
       onKeyDown={handleKey}
       onKeyUp={handleKey}
       onBlur={onViewportBlur}

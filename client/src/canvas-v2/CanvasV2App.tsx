@@ -33,9 +33,10 @@
  *      either directly inside the package (editor.ts's `EditorOpts` doc
  *      comment), but client app code is exactly the layer allowed to reach
  *      for a real clock/PRNG — this is that layer.
- *   6. `createToolContext(editor)` + `registerCanvasV2Shapes()` (idempotent
- *      guard already inside that function) + `createToolSet(toolContext)`
- *      (tool-loop.ts).
+ *   6. `createToolContext(editor)` + `registerCanvasV2Shapes()` + `registerCoreShapes()`
+ *      (both idempotently guarded inside their own function, order-independent —
+ *      they populate the same process-wide canvas-react shapeRegistry Map)
+ *      + `createToolSet(toolContext)` (tool-loop.ts).
  *   7. `window.__ew = { editor, doc: peer.doc, presencePublisher }` — the
  *      design's E2E debug hook (mirrors the legacy app's `window.__ewEditor`,
  *      App.tsx). `presencePublisher` (Task G4) lets a test drive this
@@ -55,21 +56,52 @@
  * matter which tool button is pressed, not just while the hand tool is
  * active.
  *
- * ABANDONMENT-CANCEL WIRING: `onViewportBlur` (Viewport's designated hook —
- * see its own module header) AND the toolbar's tool-switch handler BOTH call
- * `tool-loop.ts`'s `cancelActiveTool` — see that function's doc comment for
- * exactly which tools' in-flight preview shapes get deleted vs. merely reset
- * to idle. `document.visibilitychange` (tab hidden while still focused) is
- * NOT wired — canvas-react's Viewport module header names it as "a
- * documented, deferred extension of the same hook," and this unit inherits
- * that deferral rather than closing it.
+ * ABANDONMENT-CANCEL WIRING: FOUR triggers all call `tool-loop.ts`'s
+ * `cancelActiveTool` (via this component's `cancelAndReset` — see that
+ * function's doc comment for exactly which tools' in-flight preview shapes
+ * get deleted vs. merely reset to idle): `onViewportBlur` (Viewport's
+ * designated hook — see its own module header), the toolbar's tool-switch
+ * handler, `onViewportBlur`'s sibling `onPointerCancel` (Task B3 — Viewport's
+ * own POINTERCANCEL note: the browser hands the pointer away mid-gesture
+ * with no pointerup, e.g. a touch scroll reinterpreted as a page gesture),
+ * and an Escape keydown (Task B3 — via the shared `handleGlobalShortcut`
+ * policy, gated on `editingId === null` the same way Delete/Backspace is, so
+ * TextEditor's own Escape-ends-editing keeps working).
+ * `document.visibilitychange` (tab hidden while still focused) is NOT wired —
+ * canvas-react's Viewport module header names it as "a documented, deferred
+ * extension of the same hook," and this unit inherits that deferral rather
+ * than closing it.
+ *
+ * GLOBAL KEYBOARD-DELIVERY FALLBACK (Task B3, carried from B2's review): the
+ * app-global shortcuts (Escape/Delete/Backspace) reach TWO keydown entry
+ * points — Viewport's onKeyDown -> `handleInput` (for viewport-focused
+ * keydowns) AND a SECOND, document-level keydown listener (below, near the
+ * toolbar JSX) that catches keydowns delivered to a focused toolbar
+ * `<button>` — a DOM SIBLING of Viewport, not a descendant — whose keydown
+ * never bubbles into Viewport's own listener. BOTH funnel through the single
+ * `handleGlobalShortcut` policy (defined next to `cancelAndReset` below), so
+ * the key->action mapping lives in exactly ONE place — B4's
+ * Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y undo/redo branch was a one-site addition there
+ * and works from both paths for exactly that reason; the document listener's
+ * own containment guard keeps the two paths mutually exclusive (no
+ * double-handling). See both functions' doc comments.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
+// Task C6b — the tldraw handwriting/text webfonts (tldraw_draw/_sans/_serif/
+// _mono), self-hosted from client/public/fonts/tldraw/ (see fonts.css's own
+// header for the full why/licensing). Side-effect import, same pattern as
+// canvas-v2/shapes/RoadmapShape.tsx's `roadmap.css` import: v1's `<Tldraw>`
+// registers these fonts itself via its FontManager, but CanvasV2App never
+// mounts that editor, so this is the ONLY place v2's real dogfood mount
+// gets them from.
+import './fonts.css'
 import {
 	Editor,
 	applyWheel,
 	createToolContext,
 	type InputEvent,
+	type Intent,
+	type KeyInputEvent,
 	type ToolContext,
 } from '@ensembleworks/canvas-editor'
 import { PresenceStore, SyncClientPeer, type Transport } from '@ensembleworks/canvas-sync'
@@ -78,6 +110,7 @@ import {
 	EmbedLayer,
 	Grid,
 	Overlay,
+	registerCoreShapes,
 	ShapeLayer,
 	TextEditor,
 	Viewport,
@@ -87,16 +120,19 @@ import {
 	type ViewportSize,
 } from '@ensembleworks/canvas-react'
 import { getIdentity, getRoomId } from '../identity.js'
-import { wsClientTransport, type WebSocketLike } from './ws-client-transport.js'
+import { wsClientTransport, type ConnectionState, type WebSocketLike } from './ws-client-transport.js'
 import { resolvePageId } from './bootstrap-page.js'
 import { adaptPresence, createPresencePublisher, type PresencePublisher } from './presence.js'
+import { EditingIndicators } from './EditingIndicators.js'
 import { DevOverlay, shouldShowDevOverlayFromEnvironment, useCanvasMetrics } from './DevOverlay.js'
 import { canvasV2EmbedLifecycles, registerCanvasV2Shapes } from './shapes/index.js'
+import { presentStoreV2 } from './shapes/presentStoreV2.js'
 import {
 	cancelActiveTool,
 	createInitialToolStates,
 	createToolSet,
 	currentSnapResult,
+	deleteSelectionIntents,
 	dispatchToActiveTool,
 	type ToolId,
 	type ToolSet,
@@ -112,6 +148,22 @@ const SUSPEND_AFTER_TICKS = 3
 
 /** See CONSTRUCTION SEQUENCE step 3 / bootstrap-page.ts's KNOWN RACE note. */
 const SETTLE_MS_DEFAULT = 400
+
+/** True for a real text input/textarea/contentEditable element — see the
+ * GLOBAL KEYBOARD-DELIVERY FALLBACK effect's own doc comment for why this
+ * mount's document-level shortcut listener defers to one rather than
+ * stealing its keydown. Duck-typed on `tagName` (NOT `node instanceof
+ * Element`) deliberately: this module has no ambient DOM lib global of its
+ * own (a real browser tab provides `Element` for free, but this house's
+ * happy-dom-based tests only ever install `window`/`document` onto
+ * `globalThis`, never `Element` itself — an `instanceof Element` check would
+ * throw `ReferenceError: Element is not defined` there, silently killing
+ * this whole listener). */
+function isEditableTarget(node: Node | null): boolean {
+	if (!node || typeof (node as { tagName?: unknown }).tagName !== 'string') return false
+	const el = node as HTMLElement
+	return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true
+}
 
 function wsBase(): string {
 	const proto = location.protocol === 'https:' ? 'wss' : 'ws'
@@ -146,6 +198,22 @@ function defaultConnect(roomId: string, userId: string): () => Promise<Transport
 			ws.addEventListener('open', onOpen)
 			ws.addEventListener('error', onError)
 		})
+}
+
+/** Feature-detects `wsClientTransport`'s additive connection-state accessors
+ * (Task E1 — `ws-client-transport.ts`'s `TransportWithConnectionState`) on a
+ * resolved `Transport`. Needed because `connect` is a test seam: production's
+ * `defaultConnect` always hands back a transport carrying these, but the
+ * integration test (CanvasV2App.test.ts) and any other injected `connect`
+ * hand back a PLAIN `Transport` (a canvas-sync memory-transport pair) with no
+ * such accessors — this mount must tolerate their absence rather than assume
+ * every transport reports live connection state, falling back to the
+ * boot-sequence-derived 'open' set at this function's one call site below. */
+function hasConnectionState(
+	t: Transport,
+): t is Transport & { getConnectionState(): ConnectionState; onConnectionStateChange(cb: (state: ConnectionState) => void): void } {
+	const maybe = t as { getConnectionState?: unknown; onConnectionStateChange?: unknown }
+	return typeof maybe.getConnectionState === 'function' && typeof maybe.onConnectionStateChange === 'function'
 }
 
 /** Crypto-seeded [0, 1) float — the `random` canvas-editor's create/arrow
@@ -211,16 +279,54 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 	const userId = props.userId ?? getIdentity().id
 	const [session, setSession] = useState<Session | null>(null)
 	const sessionRef = useRef<Session | null>(null)
+	// Task E1 — the REAL connection-state signal (see ws-client-transport.ts's
+	// ConnectionState), driving ConnectionBanner below. Starts 'connecting'
+	// (the initial dial, before `connect()` has settled either way) rather
+	// than the old naive `session ? 'connected' : 'connecting'` derivation,
+	// which could never observe a pre-session failure at all — the "dead
+	// dogfood" bug this task exists to fix.
+	const [connectionState, setConnectionState] = useState<ConnectionState>('connecting')
 
 	useEffect(() => {
 		let cancelled = false
 
 		async function boot(): Promise<void> {
 			const doConnect = props.connect ?? defaultConnect(roomId, userId)
-			const transport = await doConnect()
+			let transport: Transport
+			try {
+				transport = await doConnect()
+			} catch (err) {
+				// The "dead dogfood" case (EW_CANVAS_SYNC unset server-side, wrong
+				// port, route absent, …): `defaultConnect`'s promise REJECTS when the
+				// socket errors before ever opening, and — before this task — that
+				// rejection only ever reached the outer `boot().catch(...)` below,
+				// leaving `session` null forever and the mount stuck silently on
+				// "Connecting to canvas…" with no visible signal anything was wrong.
+				// Surface it here, then rethrow so the existing console.error logging
+				// (and any future caller of boot()'s own promise) is unchanged.
+				if (!cancelled) setConnectionState('failed')
+				throw err
+			}
 			if (cancelled) {
 				transport.close()
 				return
+			}
+			// Once connected, prefer the transport's OWN live connection-state
+			// signal (production's wsClientTransport — see hasConnectionState's own
+			// doc comment for why this is feature-detected rather than assumed):
+			// seed the current value immediately, then subscribe for LATER
+			// transitions (a post-open close/error lands on 'reconnecting', not
+			// tracked by anything else in this mount — see that state's own
+			// inferred-not-a-real-retry doc comment on ConnectionState). A test
+			// seam's plain Transport (no such accessors) falls back to a flat
+			// 'open' — the resolved promise already means "connected" for it.
+			if (hasConnectionState(transport)) {
+				setConnectionState(transport.getConnectionState())
+				transport.onConnectionStateChange((s) => {
+					if (!cancelled) setConnectionState(s)
+				})
+			} else {
+				setConnectionState('open')
 			}
 			// PresenceStore (Task G4): `selfKey` = this mount's userId — the SAME
 			// identity value the wire URL's `?userId=` and `randomPeerId()`'s Loro
@@ -245,10 +351,16 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 			const editor = new Editor({ doc: peer.doc, now: () => performance.now(), random: cryptoRandom, pageId })
 			const toolContext = createToolContext(editor)
 			registerCanvasV2Shapes()
+			registerCoreShapes()
 			const tools = createToolSet(toolContext)
 			const presencePublisher = createPresencePublisher(presenceStore)
 			const s: Session = { peer, editor, toolContext, tools, presenceStore, presencePublisher, selfKey: userId }
 			sessionRef.current = s
+			// Task D5: hands this mount's live publisher to the shared
+			// presentStoreV2 singleton, so a shape body (FileViewerShape's own
+			// presenting toggle/scroll) can ride this SAME combined-write
+			// channel — see presentStoreV2.ts's PUBLISHER HANDLE doc comment.
+			presentStoreV2.setPublisher(presencePublisher)
 			// The design's E2E debug hook (mirrors the legacy app's
 			// window.__ewEditor — App.tsx's handleMount). `presencePublisher` rides
 			// along so an E2E/integration test can drive this mount's OWN presence
@@ -278,6 +390,15 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 				// Session interface's doc comment on why THIS mount (not
 				// SyncClientPeer) owns that call.
 				s.presenceStore.destroy()
+				// Task D5: this mount's publisher no longer exists — clear the
+				// shared handle so a FileViewerShape body rendered after teardown
+				// (or in the next mount's brief pre-boot window) finds `null`
+				// rather than a stale, destroyed-store publisher. Clear the peers
+				// cache too (FIX 3) so a next-session FileViewerShape in the
+				// pre-first-poll window can't resolve `presenterFor` against the
+				// previous session's stale peers.
+				presentStoreV2.setPublisher(null)
+				presentStoreV2.setPeers({}, '')
 			}
 		}
 		// roomId/userId identify the WHOLE session — a change remounts it
@@ -299,6 +420,12 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 
 	return (
 		<>
+			{/* Task E1 — an OVERLAY, not a replacement: rendered unconditionally
+			    (it self-hides once `connectionState === 'open'`) so a room that
+			    lost its connection AFTER establishing a session keeps showing the
+			    last-known canvas underneath, per this task's own "don't block the
+			    canvas" requirement. */}
+			<ConnectionBanner state={connectionState} />
 			{!session ? <ConnectingPlaceholder /> : <CanvasV2Session session={session} />}
 			{showDevOverlay && (
 				<DevOverlay
@@ -316,6 +443,52 @@ function ConnectingPlaceholder() {
 	return (
 		<div style={{ position: 'fixed', inset: 0, display: 'grid', placeItems: 'center', fontFamily: 'system-ui, sans-serif', color: '#6b7280' }}>
 			Connecting to canvas…
+		</div>
+	)
+}
+
+/** Task E1 — a small fixed overlay strip surfacing `connectionState` whenever
+ * it is anything other than 'open', so a half-configured/dead dogfood room
+ * (EW_CANVAS_SYNC unset server-side, wrong port, route absent — the socket
+ * errors/closes before ever opening, landing on 'failed') is visibly
+ * signaled instead of rendering a silent dead canvas. Hides itself entirely
+ * once state recovers to 'open' — see the call site's own doc comment for why
+ * this is unconditionally mounted rather than gated by `session`. */
+function ConnectionBanner({ state }: { readonly state: ConnectionState }) {
+	if (state === 'open') return null
+	// The internal state NAMES (`reconnecting`/`failed`) are honestly
+	// documented (ws-client-transport.ts's ConnectionState), but the
+	// USER-FACING copy must NOT imply an auto-retry that doesn't exist: there
+	// is no auto-reconnect loop (SyncClientPeer.reconnect is manual-only — see
+	// the plan's carried E1 follow-up), so a dropped/never-established
+	// connection stays down until the user reloads. Tell them that plainly
+	// rather than "reconnecting…", which would have them waiting for a retry
+	// that never comes.
+	const message =
+		state === 'connecting'
+			? 'Connecting to canvas…' // it IS actively dialing — honest
+			: state === 'reconnecting'
+				? 'Connection lost — reload to reconnect.'
+				: 'Can’t connect to the canvas server — check the room or reload.'
+	return (
+		<div
+			data-canvas-v2-connection-banner
+			data-connection-state={state}
+			style={{
+				position: 'fixed',
+				top: 0,
+				left: 0,
+				right: 0,
+				zIndex: 10000,
+				padding: '6px 12px',
+				textAlign: 'center',
+				fontFamily: 'system-ui, sans-serif',
+				fontSize: 13,
+				color: '#fff',
+				background: state === 'failed' ? '#b91c1c' : '#b45309',
+			}}
+		>
+			{message}
 		</div>
 	)
 }
@@ -351,9 +524,16 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// See PRESENCE_POLL_MS's doc comment above.
 	const [, setPresenceTick] = useState(0)
 	useEffect(() => {
-		const id = setInterval(() => setPresenceTick((t) => t + 1), PRESENCE_POLL_MS)
+		const id = setInterval(() => {
+			// Task D5: refresh the shared peers-cache singleton BEFORE bumping
+			// the tick, so a FileViewerShape body re-rendered by this same tick
+			// (see setPresenceTick below) reads a peers snapshot no staler than
+			// what Cursors itself renders from a few lines down.
+			presentStoreV2.setPeers(presenceStore.all(), selfKey)
+			setPresenceTick((t) => t + 1)
+		}, PRESENCE_POLL_MS)
 		return () => clearInterval(id)
-	}, [])
+	}, [presenceStore, selfKey])
 
 	const [activeToolId, setActiveToolId] = useState<ToolId>('select')
 	const activeToolIdRef = useRef(activeToolId)
@@ -423,15 +603,122 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// comment for the probe-established EphemeralStore same-millisecond LWW
 	// tie that makes two separate writes silently lose the second one on the
 	// remote side.
+	//
+	// EDITING (Task F4, pilot 5 — F1 owner decision: Option 1, indicator
+	// only): this SAME subscription already fires on an `editingId` change
+	// (BeginEdit/EndEdit apply through the ordinary EditorState-change path,
+	// same as selection/hover) — so `editor.get().editingId` rides the SAME
+	// combined write setViewportAndRefreshCursor already makes, as its third
+	// argument. NOT a second setter call: see that method's own doc comment
+	// for the deterministic same-tick drop a separate `setEditing()` call
+	// here would hit (probe-confirmed while building this fix) — the shared
+	// throttle channel flushes only ONE of two synchronous same-handler
+	// calls, so BeginEdit's `editing` value would silently never reach the
+	// wire until some unrelated LATER EditorState change happened to flush
+	// it. Folding it into this one write makes delivery unconditional.
 	useEffect(() => {
 		const publish = () => {
 			const camera = editor.get().camera
 			const size = viewportSizeRef.current
-			presencePublisher.setViewportAndRefreshCursor({ x: camera.x, y: camera.y, z: camera.z, w: size.width, h: size.height }, camera)
+			presencePublisher.setViewportAndRefreshCursor(
+				{ x: camera.x, y: camera.y, z: camera.z, w: size.width, h: size.height },
+				camera,
+				editor.get().editingId,
+			)
 		}
 		publish() // an initial viewport publish so peers see it before any camera change
 		return editor.subscribe(publish)
 	}, [editor, presencePublisher])
+
+	// Defined BEFORE handleInput (not just before its own first use further
+	// down) so the shared shortcut policy below can call it directly instead
+	// of duplicating cancelActiveTool's own dispatch — see cancelAndReset's own
+	// doc comment for what it does.
+	const cancelAndReset = useCallback(() => {
+		const { states, intents } = cancelActiveTool(tools, toolStatesRef.current, activeToolIdRef.current, editor)
+		if (intents.length > 0) editor.applyAll(intents)
+		toolStatesRef.current = states
+		setToolStates(states)
+	}, [editor, tools])
+
+	// THE single source of truth for "which keys are app-global shortcuts and
+	// what each does" (Task B3 refactor). BOTH keydown entry points call it —
+	// `handleInput` for keydowns whose DOM target is the viewport (or a
+	// descendant), and `handleGlobalKeydown` (the document-level fallback
+	// below) for keydowns delivered to a focused toolbar button, a DOM SIBLING
+	// of the viewport whose keydown never bubbles into Viewport's own listener.
+	// Having the policy HERE, once, is what keeps those two paths from
+	// diverging: B4's Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y undo/redo branch was added in
+	// THIS function alone and immediately works from both paths — had it gone
+	// into only one caller it would silently no-op under the other's focus
+	// condition.
+	//
+	// Returns true IFF it CONSUMED the event; each caller must then NOT forward
+	// it onward (handleInput returns before dispatchToActiveTool; the document
+	// listener simply stops). The `editingId === null` gate lives HERE (not in
+	// either caller) so it, too, can never diverge: while a shape is being
+	// text-edited, TextEditor's own textarea owns Escape/Delete/Backspace
+	// (TextEditor.tsx's handleEditorKeyDown — Escape -> onEndEdit(); Delete/
+	// Backspace edit the CHARACTER), and neither stopPropagations, so the same
+	// event still reaches here; this policy must fully DEFER (return false =
+	// "not my key right now") rather than cancel a tool gesture or delete the
+	// shape being edited out from under the user. `editingId` is passed by the
+	// caller (both read `editor.get().editingId` once per event); all OTHER
+	// live state — the selection behind deleteSelectionIntents, the tool refs
+	// behind cancelAndReset — is read fresh inside the actions themselves, so
+	// there are no stale closures. Delete/Backspace count as CONSUMED even when
+	// the selection is empty (deleteSelectionIntents returns []): the key is
+	// still "an app shortcut, handled here, not forwarded to a tool" — matching
+	// the pre-refactor branch's own unconditional early return.
+	const handleGlobalShortcut = useCallback(
+		(event: KeyInputEvent, editingId: string | null): boolean => {
+			if (editingId !== null) return false // TextEditor owns the keyboard while editing
+			if (event.key === 'Escape') {
+				cancelAndReset()
+				return true
+			}
+			if (event.key === 'Delete' || event.key === 'Backspace') {
+				const intents = deleteSelectionIntents(editor)
+				if (intents.length > 0) editor.applyAll(intents)
+				return true
+			}
+			// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (Task B4) — the ONE site both entry
+			// points funnel through (see this function's own doc comment above),
+			// so undo/redo work identically whether the viewport or a toolbar
+			// button holds focus. `key.toLowerCase()` because a real browser
+			// reports the shifted letter's case differently across platforms
+			// (observed: 'z' unshifted, 'Z' shifted) — comparing case-
+			// insensitively means Ctrl+Shift+Z matches regardless of which case
+			// the DOM handed back, rather than silently failing on one platform.
+			// No preventDefault: this mount never focuses a native
+			// input/textarea/contentEditable while these fire (the editingId
+			// gate above already routes text-editing elsewhere), so there's no
+			// competing native undo to suppress — consistent with Escape/Delete/
+			// Backspace just above, which don't call it either.
+			//
+			// REDO KEY SCOPING (correctness): the z-branch (undo) and the
+			// shift-z alternative (redo) accept EITHER ctrl or meta — Ctrl+Z is
+			// the Windows/Linux undo and Cmd+Shift+Z the Mac-native redo. But
+			// the 'y' redo alternative requires `ctrl` SPECIFICALLY, never meta:
+			// Ctrl+Y is the Windows redo convention, whereas Cmd+Y on Safari is
+			// the native "Show All History" shortcut — and since nothing here
+			// calls preventDefault, binding meta+y would fire redo AND pop
+			// Safari's history window. Mac users get redo via Cmd+Shift+Z (the
+			// z-branch), so dropping meta+y costs them nothing.
+			const key = event.key.toLowerCase()
+			const withModifier = event.modifiers.ctrl || event.modifiers.meta
+			if (withModifier && key === 'z' && !event.modifiers.shift) {
+				editor.undo()
+				return true
+			}
+			if ((withModifier && key === 'z' && event.modifiers.shift) || (event.modifiers.ctrl && key === 'y')) {
+				editor.redo()
+				return true
+			}
+			return false
+		},
+		[editor, cancelAndReset],
+	)
 
 	const handleInput = useCallback(
 		(event: InputEvent) => {
@@ -450,19 +737,21 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				editor.apply({ type: 'SetCamera', ...next })
 				return
 			}
+			// App-global shortcuts (Delete/Backspace -> Task B2; Escape -> Task B3)
+			// go through the SHARED policy above so this viewport-focused path and
+			// the document-level fallback below never diverge. If it consumed the
+			// event, it's fully handled — do NOT also forward it to the active
+			// tool (no tool handles keydown, so this is belt-and-suspenders, but
+			// it keeps the "consumed here, never forwarded" contract explicit).
+			if (event.type === 'keydown' && handleGlobalShortcut(event, editor.get().editingId)) {
+				return
+			}
 			const next = dispatchToActiveTool(tools, toolStatesRef.current, activeToolIdRef.current, editor, event)
 			toolStatesRef.current = next
 			setToolStates(next)
 		},
-		[editor, tools, presencePublisher],
+		[editor, tools, presencePublisher, handleGlobalShortcut],
 	)
-
-	const cancelAndReset = useCallback(() => {
-		const { states, intents } = cancelActiveTool(tools, toolStatesRef.current, activeToolIdRef.current)
-		if (intents.length > 0) editor.applyAll(intents)
-		toolStatesRef.current = states
-		setToolStates(states)
-	}, [editor, tools])
 
 	// Abandonment-gap cancel — see the module header's ABANDONMENT-CANCEL
 	// WIRING note. Viewport's designated hook (canvas-react/src/Viewport.tsx).
@@ -482,6 +771,83 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 
 	const handleTextChange = useCallback((id: string, text: string) => editor.apply({ type: 'SetText', id, text }), [editor])
 	const handleEndEdit = useCallback(() => editor.apply({ type: 'EndEdit' }), [editor])
+
+	// Task D2 — the write handle threaded to shape bodies (canvas-react's
+	// ShapeBodyProps.dispatch) so D3-D5's embeds (roadmap/file-viewer/…) can
+	// persist their own changes the same way a tool does, without being
+	// handed the whole Editor. STABLE for the whole session — `editor`
+	// itself never changes identity across this component's lifetime (it's
+	// constructed once in the mount effect above and lives in `session`
+	// state) — built with `useCallback` rather than an inline arrow so
+	// EmbedHost's content-memo comparator (`embedBodyPropsEqual`,
+	// canvas-react's EmbedHost.tsx) never sees a spurious "prop changed"
+	// from dispatch's own identity churning every render; that comparator
+	// deliberately EXCLUDES dispatch from its comparison anyway (dispatch is
+	// a write handle, not content), but keeping this reference stable is
+	// still the documented contract, not an accident this happens to rely
+	// on either side alone to uphold.
+	const dispatch = useCallback((intents: Intent[]) => editor.applyAll(intents), [editor])
+
+	// GLOBAL KEYBOARD-DELIVERY FALLBACK (B3's carried code-quality fix — see
+	// this task's own notes): Viewport's onKeyDown only fires for a keydown
+	// whose DOM target is Viewport's own div OR ONE OF ITS DESCENDANTS. The
+	// toolbar buttons rendered just below are DOM SIBLINGS of the
+	// <Viewport>-wrapping container (not descendants of it), and a real
+	// browser focuses a <button> on click by default — so clicking a toolbar
+	// button and then pressing Escape (or Delete/Backspace) delivers that
+	// keydown to the FOCUSED BUTTON, which never bubbles into Viewport's own
+	// listener at all: the shortcut silently no-ops. A document-level listener
+	// is the fix — it sees every keydown in the document regardless of which
+	// element currently holds focus.
+	//
+	// NOT double-handling: this listener explicitly SKIPS any keydown whose
+	// target already lives inside the viewport container (`containerRef`) —
+	// that case is already handled by Viewport's own onKeyDown -> handleInput
+	// path above (including its own editingId gate for TextEditor, which
+	// mounts INSIDE the viewport container per Viewport.tsx's STACKING
+	// CONTRACT), so letting it through here too would fire cancelAndReset /
+	// deleteSelectionIntents a second time for the exact same keypress. This
+	// listener exists ONLY to reach the shortcuts when focus is OUTSIDE the
+	// viewport (a toolbar button, or nothing focused at all).
+	//
+	// isEditableTarget is a second, independent guard: even outside the
+	// viewport, never steal a key meant for a real text input/textarea/
+	// contentEditable element — none exist in this mount today (the toolbar
+	// is all buttons), but a future addition (a room-name field, a search
+	// box) shouldn't silently break because this listener swallowed its
+	// Escape/Delete first.
+	//
+	// The two guards below (containment + isEditableTarget) are THIS listener's
+	// OWN concern — deciding whether a keydown is even eligible for the global
+	// path. The key->action POLICY itself is NOT here: once eligible, the event
+	// is handed to the SAME `handleGlobalShortcut` the viewport path uses, so
+	// the two paths can't diverge (see that function's own doc comment). The
+	// containment guard is exactly what keeps the two mutually exclusive: a
+	// keydown whose target is inside the viewport was already handled by
+	// Viewport's onKeyDown -> handleInput -> handleGlobalShortcut, so this
+	// listener bails before calling it a second time.
+	useEffect(() => {
+		function handleGlobalKeydown(e: KeyboardEvent): void {
+			const container = containerRef.current
+			if (!container) return
+			const target = e.target as Node | null
+			if (target && container.contains(target)) return // already handled by Viewport's own onKeyDown -> handleInput
+			if (isEditableTarget(target)) return
+			// Rewrite the raw DOM event into the normalized KeyInputEvent the
+			// shared policy speaks — carrying modifiers verbatim so the
+			// modifier-bearing shortcuts (B4's Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y) work
+			// from this path too, not just the viewport one.
+			const keyEvent: KeyInputEvent = {
+				type: 'keydown',
+				key: e.key,
+				modifiers: { shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey },
+				t: e.timeStamp,
+			}
+			handleGlobalShortcut(keyEvent, editor.get().editingId)
+		}
+		document.addEventListener('keydown', handleGlobalKeydown)
+		return () => document.removeEventListener('keydown', handleGlobalKeydown)
+	}, [editor, handleGlobalShortcut])
 
 	return (
 		<div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif' }}>
@@ -508,10 +874,10 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				))}
 			</div>
 			<div ref={containerRef} data-canvas-v2-viewport style={{ position: 'relative', flex: 1, minWidth: 0 }}>
-				<Viewport onInput={handleInput} onViewportBlur={handleViewportBlur} style={{ position: 'absolute', inset: 0 }}>
+				<Viewport onInput={handleInput} onViewportBlur={handleViewportBlur} onPointerCancel={cancelAndReset} style={{ position: 'absolute', inset: 0 }}>
 					<Grid camera={editorState.camera} />
 					<WorldLayer camera={editorState.camera}>
-						<ShapeLayer toolContext={toolContext} camera={editorState.camera} viewportSize={viewportSize} />
+						<ShapeLayer toolContext={toolContext} camera={editorState.camera} viewportSize={viewportSize} dispatch={dispatch} />
 						<EmbedLayer
 							toolContext={toolContext}
 							camera={editorState.camera}
@@ -519,6 +885,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 							tick={tick}
 							suspendAfterTicks={SUSPEND_AFTER_TICKS}
 							lifecycleFor={canvasV2EmbedLifecycles.lifecycleFor}
+							dispatch={dispatch}
 						/>
 						<TextEditor toolContext={toolContext} onTextChange={handleTextChange} onEndEdit={handleEndEdit} />
 					</WorldLayer>
@@ -536,6 +903,16 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					    re-read every PRESENCE_POLL_MS tick (see that constant's doc
 					    comment) via the `presenceTick` state dependency below. */}
 					<Cursors presence={adaptPresence(presenceStore.all())} selfKey={selfKey} camera={editorState.camera} viewportSize={viewportSize} />
+					{/* Pilot 5 (Task F4) — peer editing indicators. SCREEN-space,
+					    the same Cursors idiom directly above (camera + viewportSize,
+					    worldToScreen inside), rendered OUTSIDE WorldLayer so the badge
+					    stays constant-size and legible at every zoom, and painted after
+					    everything else (same STACKING CONTRACT) so no shape body ever
+					    occludes it. Reads `presenceStore.all()` directly (not
+					    `adaptPresence`'s Cursors-shaped narrowing) — see
+					    EditingIndicators.tsx's own module header for why it needs
+					    canvas-sync's raw `Presence.editing` field. */}
+					<EditingIndicators presence={presenceStore.all()} selfKey={selfKey} snapshot={snapshot} camera={editorState.camera} viewportSize={viewportSize} />
 				</Viewport>
 			</div>
 		</div>

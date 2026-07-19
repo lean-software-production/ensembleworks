@@ -15,7 +15,7 @@ import { DevOverlay, shouldShowDevOverlay, type CanvasMetricsPayload } from './D
 {
 	const metrics: CanvasMetricsPayload = {
 		ok: true,
-		sync: { 'dogfood-1': { pendingImports: 0, malformedFrames: 0, tainted: null } },
+		sync: { 'dogfood-1': { pendingImports: 0, malformedFrames: 0, tainted: null, diskBytes: 8192, snapshotBytes: 4096 } },
 		evictions: { 'dogfood-1': { taintCount: 0, idleCount: 2, lastTaintReason: null, lastIdleReason: 'idle past TTL' } },
 	}
 	const html = renderToStaticMarkup(
@@ -33,7 +33,35 @@ import { DevOverlay, shouldShowDevOverlay, type CanvasMetricsPayload } from './D
 	assert.ok(html.includes('>0<'), 'pendingImports/malformedFrames/taintCount all read 0')
 	assert.ok(html.includes('>no<'), 'a null tainted reads as the literal "no", not "null"')
 	assert.ok(html.includes('>2<'), 'evictions.idleCount renders')
-	console.log('ok: DevOverlay — healthy room renders every real metric value')
+	assert.ok(html.includes('>8.0 KB<'), `diskBytes renders human-readable — html: ${html}`)
+	assert.ok(html.includes('>2.0x<'), `disk:snapshot ratio renders (8192/4096=2.0x) — html: ${html}`)
+	assert.ok(!html.includes('data-dev-overlay-warn="true"'), 'a 2.0x ratio is below the 10x S6 threshold — not flagged')
+	console.log('ok: DevOverlay — healthy room renders every real metric value, including diskBytes/disk:snapshot')
+}
+
+// ============================================================================
+// 1b. Disk high-water: a disk:snapshot ratio at/above the S6 threshold
+//     (contracts' DISK_SUSTAINED_HIGHWATER_MULTIPLIER = 10, the SAME number
+//     the server soak's assertDiskHighWater uses) is flagged, not rendered
+//     identically to a healthy ratio.
+// ============================================================================
+{
+	const metrics: CanvasMetricsPayload = {
+		ok: true,
+		sync: { 'dogfood-1': { pendingImports: 0, malformedFrames: 0, tainted: null, diskBytes: 409600, snapshotBytes: 4096 } },
+		evictions: {},
+	}
+	const html = renderToStaticMarkup(
+		createElement(DevOverlay, {
+			roomId: 'dogfood-1',
+			connectionState: 'connected',
+			client: { repairCount: 0, lastBackfillBytes: 0 },
+			metrics,
+		}),
+	)
+	assert.ok(html.includes('>100.0x<'), `disk:snapshot ratio renders (409600/4096=100x) — html: ${html}`)
+	assert.ok(html.includes('data-dev-overlay-warn="true"'), 'a ratio >= the 10x S6 threshold is flagged')
+	console.log('ok: DevOverlay — a disk:snapshot ratio over the S6 10x threshold is flagged')
 }
 
 // ============================================================================
@@ -79,6 +107,9 @@ import { DevOverlay, shouldShowDevOverlay, type CanvasMetricsPayload } from './D
 	assert.ok(html.includes('connecting'), 'connectionState still renders while metrics are unavailable')
 	assert.ok(html.includes('>—<'), `metrics fields fall back to the placeholder, not 0 — html: ${html}`)
 	assert.ok(!html.includes('dogfood-1</span><span>0'), 'pendingImports must not silently read 0 when metrics are unknown')
+	assert.ok(html.includes('<span>diskBytes</span><span>—</span>'), `diskBytes falls back to '—' — html: ${html}`)
+	assert.ok(html.includes('<span>disk:snapshot</span><span>—</span>'), `disk:snapshot falls back to '—' — html: ${html}`)
+	assert.ok(!html.includes('data-dev-overlay-warn="true"'), 'no metrics means nothing is flagged')
 	console.log('ok: DevOverlay — a room absent from the scrape (or a scrape that never resolved) shows placeholders, never a fake 0')
 }
 

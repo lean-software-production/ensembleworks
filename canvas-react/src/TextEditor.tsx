@@ -116,11 +116,14 @@
 // component only reads editor/doc state and forwards raw DOM change/key
 // events, exactly like Viewport.tsx forwards raw pointer/wheel/key events.
 import { useRef, type ChangeEvent, type CompositionEvent, type KeyboardEvent } from 'react'
-import { localBounds } from '@ensembleworks/canvas-model'
+import { localBounds, type Shape } from '@ensembleworks/canvas-model'
 import type { ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { shapeBodyTransform } from './ShapeBody.js'
 import { isEmbedKind } from './shapeRegistry.js'
+import { noteStyle, NOTE_LABEL_FONT_SIZE, NOTE_LABEL_LINE_HEIGHT, NOTE_TEXT_ALIGN } from './shapes/NoteShape.js'
+import { textStyle } from './shapes/TextShape.js'
+import { geoStyle, GEO_LABEL_TEXT_ALIGN } from './shapes/GeoShape.js'
 
 export interface TextEditorProps {
   readonly toolContext: ToolContext
@@ -186,6 +189,91 @@ export function handleCompositionEnd(composition: TextCompositionState, id: stri
 export function handleEditorKeyDown(key: string, onEndEdit: () => void): void {
   if (key === 'Escape') onEndEdit()
 }
+// Enter is deliberately NOT special-cased above: it falls through as a no-op
+// here, leaving the underlying <textarea>'s NATIVE newline-insertion behavior
+// unobstructed — Enter inserts a line break (multi-line note/text editing),
+// it does not end the edit (only Escape/blur do, per the module header's
+// NEVER CONSTRUCTS AN INTENT section). Using a <textarea> (not an <input>) is
+// load-bearing for this: an <input> would swallow Enter's newline entirely.
+
+/** The textarea's font-family/size/line-height/color/text-align, derived to
+ * MATCH whichever text-capable kind (note/text/geo — canvas-model's
+ * isTextCapableKind) is currently being edited (Task C6 — "the editing mount
+ * must not jump visually vs the rich bodies"). Reuses each body's own pure
+ * style resolver — NoteShape.tsx's `noteStyle`, TextShape.tsx's `textStyle`,
+ * GeoShape.tsx's `geoStyle` — rather than re-deriving the color/font/size
+ * tables those modules already own; NoteShape.tsx/GeoShape.tsx additionally
+ * export their fixed label-layout CONSTANTS (fontSize/lineHeight/textAlign —
+ * not tables, the same numbers every note/geo label uses regardless of
+ * props) for the identical single-source-of-truth reason. See those modules'
+ * GROUNDING headers for where every value ultimately traces back to v1.
+ *
+ * NOTE COLOR: `noteStyle(shape).color` is v1's fixed noteText (#000000,
+ * black in every theme color) — NOT the sticky's own fill color; matches
+ * NoteShape.tsx's label text exactly.
+ * GEO COLOR: `geoStyle(shape).labelColor` is the INDEPENDENT `labelColor`
+ * prop (defaults to black regardless of the shape's own stroke `color` — see
+ * GeoShape.tsx's geoStyle doc comment) — deliberately NOT `strokeColor`.
+ *
+ * Exported so text-editor.test.ts can assert it directly (Task C6's failing-
+ * test-first requirement) without re-deriving the expected values by hand —
+ * tests compare against the SAME noteStyle/textStyle/geoStyle helpers this
+ * function calls, so this can't silently drift from the bodies it mirrors.
+ *
+ * PARITY GAP (Task C6 review's corrected finding — font/size/color/align are
+ * matched above, but the box model is NOT fully matched, and cannot be
+ * without a design pass):
+ *   - PADDING: the `text`-kind TextShape body renders with `padding:0`, so
+ *     the editing textarea matches it with `padding:0` too (the ~4px shift a
+ *     default `padding:4` caused on entering edit is fixed — see `padding`
+ *     below). note/geo keep the textarea's small `padding:4` — their real
+ *     jump is NOT padding (see next), so matching the bodies' larger 16px/8px
+ *     insets would only trade one mismatch for a worse one against the
+ *     vertical-centering issue.
+ *   - VERTICAL ALIGNMENT (the real, deferred gap): NoteShape/GeoShape bodies
+ *     VERTICALLY CENTER their label via flex (`alignItems`/`justifyContent:
+ *     center`), but a <textarea> TOP-ANCHORS its text. So entering edit on a
+ *     note/geo shape moves the text from vertically-centered to top-pinned —
+ *     a real jump of ~80–90px for a default 200×200 note, ~40px for a default
+ *     100×100 geo. This is genuinely Seam-F / design-pass scope, not a
+ *     one-liner: a full-box click-catching textarea (you must be able to
+ *     click anywhere in the shape to place the caret) fundamentally conflicts
+ *     with vertically centering a growing/shrinking text block. Deliberately
+ *     NOT fixed here — deferred to Seam F's harness / a design pass. */
+export interface EditorTextStyle {
+  readonly fontFamily: string
+  readonly fontSize: number
+  readonly lineHeight: number
+  readonly color: string
+  readonly textAlign: 'left' | 'center' | 'right'
+  /** Textarea padding, per-kind — see the PARITY GAP note above. `text` is 0
+   * to match TextShape's own `padding:0` body (fixes a ~4px enter-edit
+   * shift); note/geo keep 4 (their jump is vertical-centering, not padding). */
+  readonly padding: number
+}
+export function editorTextStyle(shape: Shape): EditorTextStyle {
+  switch (shape.kind) {
+    case 'note': {
+      const s = noteStyle(shape)
+      return { fontFamily: s.fontFamily, fontSize: NOTE_LABEL_FONT_SIZE, lineHeight: NOTE_LABEL_LINE_HEIGHT, color: s.color, textAlign: NOTE_TEXT_ALIGN, padding: 4 }
+    }
+    case 'text': {
+      const s = textStyle(shape)
+      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, color: s.color, textAlign: s.textAlign, padding: 0 } // padding:0 matches TextShape's own padding:0 body
+    }
+    case 'geo': {
+      const s = geoStyle(shape)
+      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, color: s.labelColor, textAlign: GEO_LABEL_TEXT_ALIGN, padding: 4 }
+    }
+    default:
+      // Defensive only, never actually hit: TextEditor only ever mounts for
+      // an editingId canvas-editor's select tool set via BeginEdit, which is
+      // itself gated on isTextCapableKind (note/text/geo) — see the module
+      // header's TRIGGER LANDED section. A sane, undramatic fallback rather
+      // than a thrown error if that invariant ever changes underneath us.
+      return { fontFamily: 'sans-serif', fontSize: 16, lineHeight: 1.35, color: '#000000', textAlign: 'left', padding: 4 }
+  }
+}
 
 export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorProps) {
   const snapshot = useDocSnapshot(toolContext)
@@ -209,6 +297,7 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorP
 
   const { maxX: w, maxY: h } = localBounds(shape) // localBounds is always {minX:0, minY:0, maxX:w, maxY:h} — geometry.ts's contract, same as ShapeBody.tsx
   const text = toolContext.editor.doc.getText(editingId) // READ through editor.doc — see module header's "not an import" note
+  const style = editorTextStyle(shape) // Task C6 — matches whichever kind's body (NoteShape/TextShape/GeoShape) is being edited
 
   return (
     <div
@@ -232,6 +321,14 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorP
         onCompositionEnd={(e: CompositionEvent<HTMLTextAreaElement>) => handleCompositionEnd(composition.current, editingId, e.currentTarget.value, onTextChange)}
         onKeyDown={(e: KeyboardEvent<HTMLTextAreaElement>) => handleEditorKeyDown(e.key, onEndEdit)}
         onBlur={onEndEdit}
+        // BELT-AND-SUSPENDERS (pilot 4, modality exclusivity): the FSM guard
+        // in select.ts is what makes the invariant true and testable
+        // headlessly, but the textarea's own pointer events would otherwise
+        // still bubble up to the viewport's pointer handlers underneath it.
+        // stopPropagation (never preventDefault — that would break native
+        // caret placement) keeps the canvas from ever seeing them at all.
+        onPointerDown={(e) => e.stopPropagation()}
+        onPointerUp={(e) => e.stopPropagation()}
         style={{
           width: '100%',
           height: '100%',
@@ -239,9 +336,13 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorP
           resize: 'none',
           border: 'none',
           outline: 'none',
-          font: 'inherit',
           background: 'transparent',
-          padding: 4,
+          padding: style.padding, // per-kind — see editorTextStyle's PARITY GAP note (text:0 matches TextShape; note/geo:4)
+          fontFamily: style.fontFamily,
+          fontSize: style.fontSize,
+          lineHeight: style.lineHeight,
+          color: style.color,
+          textAlign: style.textAlign,
         }}
       />
     </div>

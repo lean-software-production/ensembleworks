@@ -11,7 +11,7 @@ import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { buildSpatialIndex, makeDocument, worldTransform, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
-import type { Editor, EditorState, ToolContext } from '@ensembleworks/canvas-editor'
+import type { Editor, EditorState, Intent, ToolContext } from '@ensembleworks/canvas-editor'
 import { ShapeBody, shapeBodyTransform } from './ShapeBody.js'
 import { ShapeLayer } from './ShapeLayer.js'
 import { registerShape, type ShapeBodyProps } from './shapeRegistry.js'
@@ -192,4 +192,104 @@ function fakeToolContext(snapshot: CanvasDocument, texts: ReadonlyMap<string, st
   console.log('ok: ShapeLayer threads live doc text (getText) down to a text-capable shape body')
 }
 
-console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text)')
+// ============================================================================
+// 6. dispatch threading (Task D2 — mirrors case 5's getText proof): ShapeBody
+//    forwards a `dispatch` prop straight to the resolved component
+//    unchanged, ShapeLayer forwards its own `dispatch` prop down to every
+//    ShapeBody it renders, and a component that CALLS `dispatch([...])`
+//    reaches all the way to `editor.applyAll` — proving the wiring a D3-D5
+//    embed will actually rely on to persist a change, not just that a prop
+//    of the right shape was passed around.
+// ============================================================================
+{
+  const dispatchCalls: Intent[][] = []
+  const fakeEditor = { applyAll: (intents: readonly Intent[]) => dispatchCalls.push([...intents]) }
+  const dispatch = (intents: Intent[]) => fakeEditor.applyAll(intents)
+
+  function DispatchProbe({ shape, dispatch: d }: ShapeBodyProps) {
+    d?.([{ type: 'UpdateProps', id: shape.id, props: { touched: true } }])
+    return createElement('div', { 'data-dispatch-probe': shape.id, 'data-has-dispatch': typeof d === 'function' })
+  }
+  // 'draw' — a real ShapeKind (canvas-model/shape.ts's SHAPE_KINDS) that is
+  // otherwise unregistered/untouched by this file's earlier cases, so
+  // registering it here can't collide with case 4's 'geo' override.
+  registerShape('draw', DispatchProbe)
+
+  const probeShape: Shape = {
+    id: 'shape:probe1', kind: 'draw', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: {},
+  }
+
+  // 6a. ShapeBody forwards dispatch straight to the resolved component.
+  const bodyHtml = renderToStaticMarkup(createElement(ShapeBody, { shape: probeShape, snapshot: doc, editorState, dispatch }))
+  assert.match(bodyHtml, /data-has-dispatch="true"/, 'ShapeBody forwards its dispatch prop to the resolved component')
+  console.log('ok: ShapeBody forwards dispatch to the resolved component')
+
+  // 6b. ShapeLayer threads its own dispatch prop down to every ShapeBody it renders.
+  const probeDoc: CanvasDocument = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [probeShape], bindings: [] })
+  const toolContext = fakeToolContext(probeDoc)
+  const camera = { x: 0, y: 0, z: 1 }
+  const layerHtml = renderToStaticMarkup(
+    createElement(ShapeLayer, { toolContext, camera, viewportSize: { width: 800, height: 600 }, dispatch }),
+  )
+  assert.match(layerHtml, /data-has-dispatch="true"/, 'ShapeLayer threads dispatch down to its ShapeBody children')
+  console.log('ok: ShapeLayer threads dispatch down to ShapeBody')
+
+  // 6c. Calling dispatch([...]) from within the rendered component reaches
+  //     editor.applyAll — the exact same wiring shape CanvasV2App builds
+  //     (`useCallback((intents) => editor.applyAll(intents), [editor])`).
+  assert.equal(dispatchCalls.length, 2, 'dispatch was invoked once per render above (ShapeBody direct render + ShapeLayer render)')
+  assert.deepEqual(
+    dispatchCalls[0],
+    [{ type: 'UpdateProps', id: probeShape.id, props: { touched: true } }],
+    'the exact intents passed to dispatch() reach editor.applyAll unchanged',
+  )
+  console.log('ok: dispatch([...intents]) called from a shape body reaches editor.applyAll')
+}
+
+// ============================================================================
+// 7. PAINT ORDER (Task F1 finding): a shape's DOM position among its
+//    `position: absolute` siblings IS its paint order (ShapeBody.tsx's FLAT
+//    SIBLINGS design — later DOM nodes paint on top). ShapeLayer renders
+//    `queryViewport`'s result directly, and queryViewport answers from a
+//    spatial hash grid whose iteration order has NO relationship to
+//    document/z order — it can (and, discovered via the Seam-F parity
+//    harness's real multi-shape fixture, DOES) return a frame's own id
+//    AFTER one of its children's, which — since a frame body is a real,
+//    fully-opaque `#ffffff` rect (FrameShape.tsx's v1-matched GROUNDING, not
+//    a bug in itself) — visually erases that child. Constructing the doc
+//    with the CHILD listed before its PARENT in `shapes` (so a
+//    naive/unsorted render would very likely emit the child first) and
+//    asserting the render output nonetheless places the parent's
+//    `data-shape-id` EARLIER in the HTML than the child's proves
+//    `orderParentBeforeChild` (canvas-editor, reused here) is actually
+//    wired in, not just imported.
+// ============================================================================
+{
+  const paintFrame: Shape = {
+    id: 'shape:paint-frame', kind: 'frame', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 400, h: 400, name: 'Paint' },
+  } as Shape
+  const paintChild: Shape = {
+    id: 'shape:paint-child', kind: 'note', parentId: paintFrame.id, index: 'a1', x: 10, y: 10, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: {},
+  } as Shape
+  // Child FIRST in the shapes array/spatial index build order — the
+  // arrangement most likely to reproduce the pre-fix bug if the sort were
+  // ever removed.
+  const paintDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }],
+    shapes: [paintChild, paintFrame],
+    bindings: [],
+  })
+  const toolContext = fakeToolContext(paintDoc)
+  const camera = { x: 0, y: 0, z: 1 }
+  const html = renderToStaticMarkup(createElement(ShapeLayer, { toolContext, camera, viewportSize: { width: 800, height: 600 } }))
+  const frameAt = html.indexOf(`data-shape-id="${paintFrame.id}"`)
+  const childAt = html.indexOf(`data-shape-id="${paintChild.id}"`)
+  assert.ok(frameAt >= 0 && childAt >= 0, 'both the frame and its child should render')
+  assert.ok(frameAt < childAt, `the frame must render (and thus paint) BEFORE its child regardless of queryViewport's return order: frameAt=${frameAt} childAt=${childAt}`)
+  console.log('ok: ShapeLayer paints parent-before-child (orderParentBeforeChild) even when the spatial index returns the child first')
+}
+
+console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text, dispatch threading, paint order)')

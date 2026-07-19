@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@ensembleworks/canvas-model": "*",
-    "@ensembleworks/canvas-doc": "*"
+    "@ensembleworks/canvas-doc": "*",
+    "@ensembleworks/interaction-contracts": "*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

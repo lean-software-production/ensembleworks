@@ -79,6 +79,14 @@ export function Overlay({ editorState, snapshot, camera, viewportSize, index, sn
   // guard then renders nothing, so no separate empty-selection branch is
   // needed here.
   const combinedBounds = combinedWorldBounds(snapshot, editorState.selection)
+  // UX honesty (pilot 4 ext): while a selected shape is being text-edited the
+  // transform FSM refuses to grab its handles (transform.ts's modality guard),
+  // so don't PAINT handles that won't respond. Purely cosmetic — the FSM
+  // guard, not this hide, is what makes the invariant TRUE (Handles is a
+  // pointer-events:none paint layer). Distinct step precisely because a
+  // render-only fix is insufficient on its own (see E8's seam decision).
+  const editingSelected =
+    editorState.editingId !== null && editorState.selection.has(editorState.editingId)
   return (
     <svg
       data-canvas-layer="overlay"
@@ -89,7 +97,7 @@ export function Overlay({ editorState, snapshot, camera, viewportSize, index, sn
       <Arrows snapshot={snapshot} camera={camera} viewportSize={viewportSize} index={index} />
       <Selection snapshot={snapshot} selection={editorState.selection} camera={camera} />
       <SnapGuides snapResult={snapResult} camera={camera} viewportSize={viewportSize} />
-      <Handles bounds={combinedBounds} camera={camera} />
+      <Handles bounds={editingSelected ? null : combinedBounds} camera={camera} />
     </svg>
   )
 }

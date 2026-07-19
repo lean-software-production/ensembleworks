@@ -36,11 +36,48 @@
 // PER-SCENARIO NOTE below for the actual number recorded alongside a given
 // run) — fast enough that it's a rounding error next to the scenario
 // durations themselves, so no further alternative was worth chasing.
-import { mkdirSync, readFileSync } from 'node:fs'
+//
+// MAX-GATE POLICY (2026-07-16, vsync-quantization analysis): p95 is a HARD
+// gate everywhere it's checked (assertBudget, assertNoRegression) — it stays
+// blocking, unchanged. The `maxms` gate inside assertNoRegression (dense,
+// select-all, drag-cadence) is ADVISORY, not blocking: rAF sampling floors at
+// the display's vsync tick (~16.67ms), so ms deltas cluster in discrete
+// "refresh quanta" rather than a smooth continuum, and a single GC pause or
+// scheduler hiccup can push maxms across a gate that sits between two quanta
+// — a runner-contention artifact, not a real regression, and not reliably
+// distinguishable from one by the raw ms number alone (dense-pan-zoom-1000's
+// baseline note in e2e/baselines/canvas-v2-perf.json documents the original
+// bimodal-maxms observation this policy answers). So a maxms overage prints a
+// `::warning::` GitHub Actions annotation (parsed straight from job stdout —
+// no reporter config needed, see .github/workflows/canvas-v2-perf.yml) plus a
+// Playwright test annotation, and the test still PASSES as long as p95
+// (still hard) and every other assertion in the scenario pass. There is no
+// hard gate on `droppedOver25ms` anywhere in this file — it's recorded
+// OBSERVED-ONLY by design (see assertNoRegression's own doc comment below),
+// so nothing changes there; this policy only touches maxms.
+//
+// FIRST THREE QUESTIONS when a maxms `::warning::` fires:
+//   1. Merge preview or your branch? Check the provenance line this file
+//      prints at the start of the run (measured commit + whether
+//      GITHUB_EVENT_NAME=pull_request means this is base+PR merged, not your
+//      branch alone) — a base-branch regression is not yours to fix here.
+//   2. How many vsync refreshes over the gate, not just how many ms? One
+//      quantum (~16.67ms) over the boundary is well within shared-runner
+//      contention noise; several quanta over is a real signal worth digging
+//      into.
+//   3. Did p95 or droppedOver25ms move too? A maxms-only blip with p95 and
+//      the dropped-frame count both flat is exactly the single-jank-frame
+//      pattern this policy exists to tolerate; if either of those also
+//      moved, treat the whole scenario as suspect regardless of what maxms
+//      says.
+// See docs/plans/2026-07-15-canvas-phase4-parity.md's Execution notes for how
+// this decision fits the rest of Phase 4's perf-gate history.
+import { execSync } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '../lib/fixtures'
 import { installSampler, measure, recordTo, capturing, type FrameStats } from '../lib/perf'
-import { ANCHOR, seedGrid, viewportBox, waitForBoot } from '../lib/canvas-v2'
+import { ANCHOR, seedDense, seedGrid, viewportBox, waitForBoot } from '../lib/canvas-v2'
 
 const FILE = path.join(import.meta.dirname, '../baselines/canvas-v2-perf.json')
 
@@ -63,8 +100,35 @@ const FRAME_BUDGET_MS = 1000 / 60 // 16.666...
 const CI_MARGIN_MULTIPLIER = 2 // documented, not tuned — see module header
 const GATED_P95_MS = FRAME_BUDGET_MS * CI_MARGIN_MULTIPLIER
 
+// VSYNC QUANTA (legibility, see the MAX-GATE POLICY module-header note): the
+// rAF sampler floors at the display's vsync tick, so every ms figure this
+// file prints is also meaningful as a count of refresh intervals. These are
+// display helpers ONLY — no baseline/gate math anywhere in this file uses
+// them; raw ms stays the source of truth for every `expect()`.
+const VSYNC_MS = 1000 / 60 // 16.666... — same constant as FRAME_BUDGET_MS, named for its use here
+
+/** Nearest whole vsync-refresh count for a ms figure — e.g. 116.7ms -> 7. */
+function refreshes(ms: number): number {
+	return Math.round(ms / VSYNC_MS)
+}
+
+/** `ms` formatted with its nearest-refresh count alongside, e.g. "116.70ms (7 refreshes)". */
+function msQuanta(ms: number): string {
+	return `${ms.toFixed(2)}ms (${refreshes(ms)} refreshes)`
+}
+
+/** A GATE value (a computed threshold, not a raw sample) rarely lands on a
+ * whole refresh boundary — describe it as sitting between the two quanta it
+ * falls between (or "= N refreshes" on the rare exact hit), so a reader can
+ * tell at a glance how many whole frames of headroom a gate actually gives. */
+function gateQuanta(ms: number): string {
+	const lo = Math.floor(ms / VSYNC_MS)
+	const hi = Math.ceil(ms / VSYNC_MS)
+	return lo === hi ? `= ${lo} refreshes` : `sits between ${lo} and ${hi}`
+}
+
 function assertBudget(label: string, stats: FrameStats) {
-	const line = `[canvas-v2-perf] ${label}: p95=${stats.p95ms}ms p50=${stats.p50ms}ms max=${stats.maxms}ms dropped(>25ms)=${stats.droppedOver25ms} frames=${stats.frames} (raw budget ${FRAME_BUDGET_MS.toFixed(2)}ms, gated at ${GATED_P95_MS.toFixed(2)}ms = ${CI_MARGIN_MULTIPLIER}x)`
+	const line = `[canvas-v2-perf] ${label}: p95=${msQuanta(stats.p95ms)} p50=${stats.p50ms}ms max=${msQuanta(stats.maxms)} dropped(>25ms)=${stats.droppedOver25ms} frames=${stats.frames} (raw budget ${msQuanta(FRAME_BUDGET_MS)}, gated at ${GATED_P95_MS.toFixed(2)}ms ${gateQuanta(GATED_P95_MS)} = ${CI_MARGIN_MULTIPLIER}x)`
 	console.log(line)
 	expect(stats.p95ms, `${label}: p95 frame time should stay under the ${CI_MARGIN_MULTIPLIER}x-margined 60fps budget`).toBeLessThanOrEqual(GATED_P95_MS)
 }
@@ -73,6 +137,107 @@ function maybeRecord(key: string, value: Record<string, unknown>) {
 	if (!capturing) return
 	mkdirSync(path.dirname(FILE), { recursive: true })
 	recordTo(FILE, key, value, engineVersion())
+}
+
+// DENSE-SEED REGRESSION GATE (Task G1 — distinct from the FIXED 60fps@1k
+// gate above, deliberately): the dense scenario packs shapes ON-SCREEN
+// (lib/canvas-v2.ts's `seedDense`), so its honest frame times reflect real
+// on-screen render cost (rich note bodies + ShapeLayer's per-render
+// parent-before-child z-order sort, canvas-react/src/ShapeLayer.tsx — the
+// F1 WATCH-ITEM this scenario exists to surface) — NOT the near-zero cost
+// the spread-out seedGrid scenario measures once culling hides most
+// shapes. There's no principled ABSOLUTE 60fps budget to gate that on
+// (packing enough on-screen shapes to be meaningful may legitimately cost
+// more than one frame — that's the point, not a bug), so this gates on
+// REGRESSION from a recorded, honest baseline instead: no more than a 15%
+// increase (the design doc's stated budget), with the SAME CI-noise
+// multiplier the fixed gate above uses and for the same reason (shared CI
+// runners are noisier than the box a baseline was captured on) — one
+// documented margin constant, not two competing fudge factors.
+//
+// TWO METRICS, ON PURPOSE (G1 review FIX 2): p95 alone is a WEAK gate for a
+// dense scenario. The rAF sampler (lib/perf.ts) floors at the display's
+// vsync tick (~16.7ms), and p95 over ~60-85 samples won't move at all
+// unless >5% of frames actually blow past that floor — so a render-cost
+// regression (a worse z-order sort, a heavier body) that makes a HANDFUL
+// of frames janky shows up in `maxms`/`droppedOver25ms`, NOT in p95. Gating
+// on p95 only would defeat this scenario's whole reason to exist. So this
+// gates on BOTH p95 AND maxms (same relative +15%×CI-margin formula for
+// each — defense in depth), with `droppedOver25ms` recorded OBSERVED-ONLY,
+// NOT gated: it's a tiny integer (baseline 0-2 here), so a percentage gate
+// is meaningless and even additive slack (`baseline+5`) would mostly just
+// add a flaky failure mode when CI noise nudges one extra frame over 25ms —
+// and maxms already captures the same "some frames got slow" signal with a
+// continuous, less-noisy number. maxms IS noisier than p95 in absolute
+// terms (a single GC pause spikes it), which is exactly why it carries the
+// same 2x CI margin, not a tighter one.
+//
+// ALWAYS-ON GATE — THE CORRECTED PATTERN G2/G3 MUST REUSE (G1 review FIX 1):
+// `assertNoRegression` is called UNCONDITIONALLY below (like `assertBudget`
+// above), NEVER inside an `if (!capturing)` branch. The earlier version
+// gated only in the `else` of `if (capturing)`, which made the gate DEAD
+// CODE in CI: .github/workflows/canvas-v2-perf.yml runs this spec with
+// EW_CAPTURE=1 on EVERY PR and nightly, so `capturing` is ALWAYS true
+// there and the gate never ran. The fix relies on `recordedBaselines`
+// being loaded from the COMMITTED file at MODULE SCOPE (below), BEFORE any
+// per-test capture write — so the assert always compares the current run
+// against the COMMITTED baseline, never against the value the same run just
+// captured (which would be trivially green). In CI this means: assert
+// current-vs-committed (real regression detection) AND still write a fresh
+// baseline artifact (uploaded, not committed — a deliberate baseline update
+// is a human running capture locally and committing the JSON).
+const REGRESSION_BUDGET = 0.15 // <=15% regression over the recorded baseline, per metric
+
+// Loaded ONCE, at module scope, from the COMMITTED baseline file — BEFORE any
+// test runs or any `maybeRecord`/capture write touches the file. This is what
+// makes the always-on gate honest: the in-memory value stays the committed
+// baseline even after a capture run overwrites the file on disk, so the
+// assert can never accidentally compare a run against itself.
+const recordedBaselines: Record<string, any> = existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')) : {}
+
+interface RegressionBaseline {
+	readonly p95ms?: number
+	readonly maxms?: number
+}
+
+/** Gate `stats` against a COMMITTED per-scenario `baseline`. p95 is a HARD
+ * gate (unchanged). maxms is ADVISORY ONLY as of the 2026-07-16 MAX-GATE
+ * POLICY (module header): an overage prints a `::warning::` GitHub Actions
+ * annotation + a Playwright test annotation and does NOT fail the test — see
+ * the module header for why (vsync quantization) and the "first three
+ * questions" checklist for triaging a warning when it fires. `baseline` is
+ * `undefined` ONLY on a first-ever capture of a brand-new scenario key
+ * (nothing committed yet); the caller handles that bootstrap case explicitly
+ * (see the dense test) — this function's contract is "a committed baseline
+ * exists," so a missing one is a hard error here, never a silent skip. */
+function assertNoRegression(label: string, stats: FrameStats, baseline: RegressionBaseline | undefined) {
+	if (!baseline || typeof baseline.p95ms !== 'number' || typeof baseline.maxms !== 'number') {
+		throw new Error(
+			`${label}: no committed p95+maxms baseline to gate against — capture one first ` +
+				`(EW_CAPTURE=1 bunx playwright test perf/canvas-v2-perf.spec.ts) and COMMIT the baseline JSON, then reruns gate against it.`,
+		)
+	}
+	const gate = (base: number) => base * (1 + REGRESSION_BUDGET) * CI_MARGIN_MULTIPLIER
+	const p95Gate = gate(baseline.p95ms)
+	const maxGate = gate(baseline.maxms)
+	const pct = (REGRESSION_BUDGET * 100).toFixed(0)
+	console.log(
+		`[canvas-v2-perf] ${label}: p95=${msQuanta(stats.p95ms)} (baseline ${msQuanta(baseline.p95ms)}, gated ${p95Gate.toFixed(2)}ms ${gateQuanta(p95Gate)}) [HARD] ` +
+			`max=${msQuanta(stats.maxms)} (baseline ${msQuanta(baseline.maxms)}, gated ${maxGate.toFixed(2)}ms ${gateQuanta(maxGate)}) [ADVISORY] ` +
+			`dropped(>25ms)=${stats.droppedOver25ms} [observed-only] — gate = +${pct}% x ${CI_MARGIN_MULTIPLIER}x CI margin`,
+	)
+	expect(stats.p95ms, `${label}: p95 frame time should stay within ${pct}% (CI-margined) of the committed baseline`).toBeLessThanOrEqual(p95Gate)
+
+	if (stats.maxms > maxGate) {
+		const warning =
+			`::warning title=canvas-v2-perf ${label}::max frame ${refreshes(stats.maxms)} refreshes (${stats.maxms}ms) exceeds gate ${maxGate.toFixed(2)}ms ` +
+			`(baseline ${refreshes(baseline.maxms)} refreshes); p95 passed — see spec header for the vsync-quantization note`
+		console.log(warning)
+		test.info().annotations.push({
+			type: 'warning',
+			description: `${label}: max frame time ${msQuanta(stats.maxms)} exceeds the advisory gate ${maxGate.toFixed(2)}ms ${gateQuanta(maxGate)} (baseline ${msQuanta(baseline.maxms)}); p95 passed and this gate is non-blocking as of the 2026-07-16 policy — see the spec's module header.`,
+		})
+	}
 }
 
 /** pointerdown -> first-paint-PROXY latency, in ms — see module header's
@@ -88,7 +253,44 @@ async function pointerToPaint(page: import('@playwright/test').Page, target: { x
 	return Number((t1 - t0).toFixed(2))
 }
 
+/** Commit under measurement — GITHUB_SHA when set (CI), else a live `git
+ * rev-parse HEAD` (local runs). Never hardcoded, so a stale value can't slip
+ * into a printed provenance line. */
+function measuredCommit(): string {
+	if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA
+	try {
+		return execSync('git rev-parse HEAD', { cwd: import.meta.dirname }).toString().trim()
+	} catch {
+		return '<unknown — git rev-parse failed and GITHUB_SHA is unset>'
+	}
+}
+
 test.describe('canvas-v2 browser perf', () => {
+	// PROVENANCE (legibility, MAX-GATE POLICY module-header note): printed
+	// once, before any scenario, so a `::warning::`/failure lower in the log
+	// always has this above it — which commit produced these numbers, and
+	// whether that's the PR branch alone or (on pull_request CI) the MERGE
+	// PREVIEW of the branch + base, plus where the committed baseline itself
+	// came from.
+	test.beforeAll(() => {
+		const commit = measuredCommit()
+		const isPR = process.env.GITHUB_EVENT_NAME === 'pull_request'
+		console.log(
+			`[canvas-v2-perf] provenance: measured commit ${commit}` +
+				(isPR
+					? ' — GITHUB_EVENT_NAME=pull_request: this is the MERGE PREVIEW of the PR branch merged into its base, NOT the PR branch alone'
+					: ''),
+		)
+		const baselineProvenance = recordedBaselines._provenance
+		if (baselineProvenance) {
+			console.log(
+				`[canvas-v2-perf] baseline provenance (${path.relative(process.cwd(), FILE)}): host=${baselineProvenance.host} date=${baselineProvenance.date} — ${baselineProvenance.note}`,
+			)
+		} else {
+			console.log(`[canvas-v2-perf] baseline provenance: ${path.relative(process.cwd(), FILE)} has no _provenance metadata`)
+		}
+	})
+
 	// PER-SCENARIO NOTE (seeding cost, measured): logged per-run below via
 	// console.log, not hardcoded here — CI/hardware speed varies too much for
 	// a single recorded number to stay honest across machines; the module
@@ -129,10 +331,169 @@ test.describe('canvas-v2 browser perf', () => {
 				assertBudget(`pan/zoom @ ${n} shapes (pan)`, pan)
 				assertBudget(`pan/zoom @ ${n} shapes (zoom)`, zoom)
 			} else {
-				console.log(`[canvas-v2-perf] pan/zoom @ ${n} shapes: DOCUMENTED, not gated — worst p95=${worst.p95ms}ms (raw budget ${FRAME_BUDGET_MS.toFixed(2)}ms)`)
+				console.log(`[canvas-v2-perf] pan/zoom @ ${n} shapes: DOCUMENTED, not gated — worst p95=${msQuanta(worst.p95ms)} (raw budget ${msQuanta(FRAME_BUDGET_MS)})`)
 			}
 		})
 	}
+
+	// DENSE-SEED SCENARIO (Task G1): the loop above spreads shapes ~260px
+	// apart (seedGrid), so at any n the default viewport only ever shows a
+	// handful — Phase-3 measured IDENTICAL p95 at 1k/5k/10k for exactly that
+	// reason (viewport culling, canvas-react/src/ShapeLayer.tsx's
+	// `queryViewport`, keeps render cost flat when almost everything is
+	// off-screen). `seedDense` instead packs shapes so the grid's own
+	// footprint tiles the 1280x720 default viewport — most of DENSE_COUNT
+	// really is on-screen, so this DOES exercise on-screen render cost
+	// (rich note bodies + ShapeLayer's per-render z-order sort — the F1
+	// WATCH-ITEM). Gated by REGRESSION, not the fixed 60fps budget — see
+	// assertNoRegression's own comment for why.
+	const DENSE_COUNT = 1000
+
+	test('canvas-v2 perf @ dense-1000: pan/zoom sweep (packed viewport)', async ({ page }) => {
+		test.setTimeout(120_000)
+		await installSampler(page) // before goto — see the pan/zoom scenario's ordering note above
+		const room = 'v2-perf-dense-1000'
+		await page.goto(`/?room=${room}&engine=v2`)
+		await waitForBoot(page)
+
+		const seedStart = Date.now()
+		await seedDense(page, DENSE_COUNT)
+		const seedMs = Date.now() - seedStart
+		// Real on-screen count, read from the DOM ShapeLayer actually rendered
+		// (culling is ShapeLayer's decision, not the seeder's) — this is the
+		// scenario's own honesty check: if a future change (bigger default
+		// viewport, different culling behavior) ever makes this go flat again,
+		// this assertion catches it directly rather than silently degrading
+		// into a repeat of the seedGrid problem.
+		const onScreen = await page.locator('[data-shape-id^="shape:dense-"]').count()
+		console.log(`[canvas-v2-perf] seeded ${DENSE_COUNT} dense shapes via window.__ew.doc.putShape in ${seedMs}ms; ${onScreen} on-screen at default zoom`)
+		expect(onScreen, 'dense seed should pack the large majority of shapes into the default viewport, not spread them off-screen').toBeGreaterThanOrEqual(Math.floor(DENSE_COUNT * 0.9))
+
+		const pan = await measure(page, async () => {
+			for (let i = 0; i < 60; i++) await page.mouse.wheel(40, 40)
+		})
+		const zoom = await measure(page, async () => {
+			await page.keyboard.down('Control')
+			for (let i = 0; i < 20; i++) await page.mouse.wheel(0, -60)
+			for (let i = 0; i < 20; i++) await page.mouse.wheel(0, 60)
+			await page.keyboard.up('Control')
+		})
+
+		// Capture writes a FRESH baseline file (uploaded as a CI artifact,
+		// committed only when a human runs capture locally + commits the JSON).
+		// It does NOT feed the gate below — that reads `recordedBaselines`,
+		// loaded from the COMMITTED file at module scope BEFORE this write — so
+		// the assert always compares this run vs the COMMITTED baseline, never
+		// vs the value it just wrote. Runs BEFORE the asserts so a failing gate
+		// still produces the fresh artifact.
+		maybeRecord('dense-pan-zoom-1000', { seedMs, onScreen, pan, zoom })
+
+		// ALWAYS-ON gate (see the module's ALWAYS-ON GATE note — the corrected
+		// G2/G3 template). The ONLY time the gate is skipped is a genuine
+		// first-ever bootstrap capture, when NO committed baseline exists yet
+		// for this key (`committed === undefined`) AND we're capturing one now
+		// — never merely "because EW_CAPTURE is set." In CI the committed
+		// baseline is always present (checked into the repo), so the gate runs
+		// there even under EW_CAPTURE=1 — which is the whole point of FIX 1.
+		const committed = recordedBaselines['dense-pan-zoom-1000']
+		if (capturing && committed === undefined) {
+			console.log(`[canvas-v2-perf] dense-pan-zoom-1000: BOOTSTRAP CAPTURE (no committed baseline yet) — pan p95=${msQuanta(pan.p95ms)}/max=${msQuanta(pan.maxms)}, zoom p95=${msQuanta(zoom.p95ms)}/max=${msQuanta(zoom.maxms)}; commit the JSON, then future runs gate against it`)
+		} else {
+			assertNoRegression('dense pan/zoom @ 1000 shapes (pan)', pan, committed?.pan)
+			assertNoRegression('dense pan/zoom @ 1000 shapes (zoom)', zoom, committed?.zoom)
+		}
+	})
+
+	// SELECT-ALL @ 1k SCENARIO (Task G2): targets Selection.tsx's own
+	// documented H3 WATCH-ITEM (canvas-react/src/overlay/Selection.tsx's
+	// module header) — outlines cost O(selection size) worldCorners+
+	// worldToScreen per render, measured there at ~8.7ms/render for a
+	// 1k-shape select-all. The EXISTING marquee scenario below only ever
+	// selects 15 of a 50-shape grid (its own comment: "a meaningful
+	// SUBSET... not a claim of selecting all 50"), so that watch-item has
+	// never actually been exercised by this rig. This scenario closes that
+	// gap directly.
+	//
+	// DRIVING SELECT-ALL: Ctrl+A/Cmd+A is NOT wired anywhere in canvas-editor,
+	// canvas-react, or client (grepped for `SelectAll`/`selectAll`/a keydown
+	// case on `'a'` — none exist; client/src/canvas-v2/CanvasV2App.tsx's
+	// `handleGlobalShortcut` wires exactly Escape/Delete/undo-redo, no
+	// select-all case). So this dispatches the SAME real intent a future
+	// Ctrl+A handler would — `editor.applyAll([{type: 'SetSelection', ids}])`
+	// (canvas-editor/src/intents.ts's `SetSelection`) — with every id
+	// `seedGrid` deterministically produces (`shape:seed-<i>`,
+	// lib/canvas-v2.ts), not a DOM/CSS hack.
+	//
+	// MEASURING THE OVERLAY LIVE: a static selection with zero re-renders
+	// would never exercise Selection.tsx's PER-RENDER cost — the watch-item
+	// is specifically about work redone on every frame. So this reuses the
+	// SAME pan/zoom sweep the dense scenario (Task G1) drives, this time
+	// with the full 1k selection already set: camera changes
+	// (canvas-editor/src/editor.ts's SetCamera case) never touch
+	// `selection`, so the whole sweep redraws all 1000 selection outlines +
+	// the combined-bounds rect every tick, giving the sampler frames that
+	// actually pay the cost. A post-sweep selection-size check (below)
+	// confirms the selection really did stay live for the whole measured
+	// window, not just at t=0.
+	const SELECT_ALL_COUNT = 1000
+
+	test('canvas-v2 perf @ select-all-1000: pan/zoom sweep with full selection live', async ({ page }) => {
+		test.setTimeout(120_000)
+		await installSampler(page) // before goto — see the pan/zoom scenario's ordering note above
+		const room = 'v2-perf-select-all-1000'
+		await page.goto(`/?room=${room}&engine=v2`)
+		await waitForBoot(page)
+
+		const seedStart = Date.now()
+		await seedGrid(page, SELECT_ALL_COUNT)
+		const seedMs = Date.now() - seedStart
+
+		const selectedCount = await page.evaluate((count) => {
+			const ew = (window as any).__ew
+			const ids = Array.from({ length: count }, (_, i) => `shape:seed-${i}`)
+			ew.editor.applyAll([{ type: 'SetSelection', ids }])
+			return ew.editor.get().selection.size
+		}, SELECT_ALL_COUNT)
+		console.log(`[canvas-v2-perf] seeded ${SELECT_ALL_COUNT} shapes via window.__ew.doc.putShape in ${seedMs}ms; selected ${selectedCount} via SetSelection`)
+		expect(selectedCount, 'select-all should select every seeded shape, not a subset').toBe(SELECT_ALL_COUNT)
+
+		const pan = await measure(page, async () => {
+			for (let i = 0; i < 60; i++) await page.mouse.wheel(40, 40)
+		})
+		const zoom = await measure(page, async () => {
+			await page.keyboard.down('Control')
+			for (let i = 0; i < 20; i++) await page.mouse.wheel(0, -60)
+			for (let i = 0; i < 20; i++) await page.mouse.wheel(0, 60)
+			await page.keyboard.up('Control')
+		})
+
+		// Honesty check (mirrors the dense scenario's onScreen assertion): the
+		// selection must still be the full 1000 AFTER the sweep — proves the
+		// overlay was live for the whole measured window, not cleared partway
+		// through by some unrelated camera-intent side effect.
+		const selectedAfter = await page.evaluate(() => (window as any).__ew.editor.get().selection.size)
+		expect(selectedAfter, 'selection must remain the full select-all set through the whole pan/zoom sweep').toBe(SELECT_ALL_COUNT)
+
+		// Capture writes a fresh baseline artifact; does NOT feed the gate below
+		// (see the dense scenario's own comment on this ordering + why).
+		maybeRecord('select-all-pan-zoom-1000', { seedMs, selectedCount, pan, zoom })
+
+		// ALWAYS-ON gate — G1's CORRECTED pattern, reused exactly (module's
+		// ALWAYS-ON GATE note): assertNoRegression runs unconditionally against
+		// recordedBaselines (loaded from the COMMITTED file at module scope,
+		// before any capture write), never inside an `if (!capturing)` or
+		// capture-guarded else branch. The only skip is a genuine first-ever
+		// bootstrap capture (no committed baseline key yet).
+		const committed = recordedBaselines['select-all-pan-zoom-1000']
+		if (capturing && committed === undefined) {
+			console.log(
+				`[canvas-v2-perf] select-all-pan-zoom-1000: BOOTSTRAP CAPTURE (no committed baseline yet) — pan p95=${msQuanta(pan.p95ms)}/max=${msQuanta(pan.maxms)}, zoom p95=${msQuanta(zoom.p95ms)}/max=${msQuanta(zoom.maxms)}; commit the JSON, then future runs gate against it`,
+			)
+		} else {
+			assertNoRegression('select-all @ 1000 shapes (pan)', pan, committed?.pan)
+			assertNoRegression('select-all @ 1000 shapes (zoom)', zoom, committed?.zoom)
+		}
+	})
 
 	test('canvas-v2 perf: 50-shape marquee + drag', async ({ page }) => {
 		test.setTimeout(60_000)
@@ -180,6 +541,99 @@ test.describe('canvas-v2 browser perf', () => {
 		maybeRecord('marquee-drag-50', { selectedCount, marquee, drag })
 		assertBudget('50-shape marquee', marquee)
 		assertBudget('50-shape selection drag', drag)
+	})
+
+	// SINGLE-SHAPE DRAG COMMIT-CADENCE SCENARIO (Task G3): isolates the
+	// four-tool "COMMIT CADENCE WATCH-ITEM" the select/create/transform/arrow
+	// tools all share (canvas-editor/src/tools/select.ts's onDragging, ~line
+	// 403: "each of these per-pointermove TranslateShapes intents becomes ONE
+	// doc.commit()... one sync frame per mouse move during a drag"). Editor.
+	// applyAll's own doc comment (editor.ts) is the mechanism: "every
+	// apply()/applyAll() call is exactly one commit," and canvas-doc's
+	// commit()/subscribe() (loro-canvas-doc.ts) forward straight to Loro's own
+	// commit()/subscribe with no debounce/microtask/rAF layer anywhere in
+	// between — so an N-pointermove drag is genuinely N commits / N doc
+	// notifications / N React renders, not one commit at gesture end. A
+	// SINGLE seeded shape (not a grid, not a selection) keeps G1's
+	// (ShapeLayer per-shape render) and G2's (Selection.tsx per-selection
+	// overlay) costs negligible here — the only added per-move cost this
+	// scenario isolates is the commit -> notify -> render pipeline itself.
+	//
+	// DRIVING THE DRAG: real DOM pointer events (page.mouse.move/down/up)
+	// through Viewport -> the select tool's onDragging, exactly like the
+	// marquee-drag-50 case above — never the editor FSM called directly —
+	// so this exercises the true end-to-end per-move-commit path, including
+	// the tool-loop's DOM-event -> applyAll wiring (client/src/canvas-v2/
+	// tool-loop.ts), not just canvas-editor in isolation. DRAG_STEPS=100
+	// small (6px/4px) individual mouse.move() calls (not a single move with a
+	// `steps` option, which Playwright/CDP would interpolate as one virtual
+	// gesture) — matching G1's 60-wheel-tick sweep / the cursor-storm's
+	// 120-move sweep for a sample size large enough that p95 is a stable
+	// statistic, not a single-sample fluke.
+	const DRAG_STEPS = 100
+
+	test('canvas-v2 perf: single-shape drag commit-cadence (100 pointermoves)', async ({ page }) => {
+		test.setTimeout(60_000)
+		await installSampler(page) // before goto — see the pan/zoom scenario's ordering note
+		const room = 'v2-perf-drag-cadence'
+		await page.goto(`/?room=${room}&engine=v2`)
+		await waitForBoot(page)
+
+		const SHAPE_OFFSET = 40
+		await seedGrid(page, 1, SHAPE_OFFSET) // ONE note, top-left at (SHAPE_OFFSET, SHAPE_OFFSET) — center at +100,+100 (200x200 default note body)
+
+		// Ground-truth commit count, read off the LIVE doc's own subscribe hook
+		// (window.__ew.doc — the same LoroCanvasDoc a real React render observes
+		// via useDocSnapshot's useSyncExternalStore, canvas-react/src/
+		// use-editor-state.ts) — NOT inferred from frame count, which could move
+		// for unrelated rAF-scheduling reasons. This is the scenario's own
+		// honesty check that the watch-item it exists to isolate actually fired.
+		await page.evaluate(() => {
+			const ew = (window as any).__ew
+			;(window as any).__commitCount = 0
+			ew.doc.subscribe(() => {
+				;(window as any).__commitCount++
+			})
+		})
+
+		const box = await viewportBox(page)
+		const dragStart = { x: box.x + SHAPE_OFFSET + 100, y: box.y + SHAPE_OFFSET + 100 }
+		const drag = await measure(page, async () => {
+			await page.mouse.move(dragStart.x, dragStart.y)
+			await page.mouse.down()
+			for (let i = 1; i <= DRAG_STEPS; i++) await page.mouse.move(dragStart.x + i * 6, dragStart.y + i * 4)
+			await page.mouse.up()
+		})
+
+		const commitCount = await page.evaluate(() => (window as any).__commitCount)
+		console.log(`[canvas-v2-perf] single-shape drag-cadence: ${DRAG_STEPS} pointermoves -> ${commitCount} doc commits observed`)
+		// Exactly one commit per pointermove (see the module note above) — the
+		// FIRST move already crosses select.ts's DRAG_THRESHOLD (4px; ours are
+		// 6px/4px per step) and starts the drag AS ITS OWN commit (the
+		// Pointing->Dragging transition's own TranslateShapes, batched with a
+		// SetSelection in ONE applyAll call — still exactly one doc.commit()),
+		// so DRAG_STEPS moves -> DRAG_STEPS commits, no "+1" for entering drag
+		// mode and no coalescing across moves.
+		expect(commitCount, 'a single-shape drag should commit exactly once per pointermove (the watch-item this scenario isolates)').toBe(DRAG_STEPS)
+
+		// Capture writes a fresh baseline artifact; does NOT feed the gate below
+		// (see the dense scenario's own comment on this ordering + why).
+		maybeRecord('drag-cadence-single-shape', { dragSteps: DRAG_STEPS, commitCount, drag })
+
+		// ALWAYS-ON gate — G1's CORRECTED pattern (module's ALWAYS-ON GATE
+		// note), reused exactly: assertNoRegression runs unconditionally against
+		// recordedBaselines (loaded from the COMMITTED file at module scope,
+		// before any capture write), never inside an `if (!capturing)` or
+		// capture-guarded else branch. The only skip is a genuine first-ever
+		// bootstrap capture (no committed baseline key yet).
+		const committed = recordedBaselines['drag-cadence-single-shape']
+		if (capturing && committed === undefined) {
+			console.log(
+				`[canvas-v2-perf] drag-cadence-single-shape: BOOTSTRAP CAPTURE (no committed baseline yet) — drag p95=${msQuanta(drag.p95ms)}/max=${msQuanta(drag.maxms)}; commit the JSON, then future runs gate against it`,
+			)
+		} else {
+			assertNoRegression('single-shape drag commit-cadence', drag, committed?.drag)
+		}
 	})
 
 	test('canvas-v2 perf: rapid sticky creation (20)', async ({ page }) => {

@@ -20,9 +20,11 @@ export type Op =
   | { kind: 'deleteShape'; id: string }
   | { kind: 'putBinding'; binding: Binding }
   | { kind: 'deleteBinding'; id: string }
+  | { kind: 'setText'; id: string; text: string }
 
 const KINDS = ['note', 'geo', 'frame', 'group'] as const
 const COLORS = ['red', 'blue', 'green', 'yellow'] as const
+const TEXT_WORDS = ['hello', 'world', 'lorem', 'ipsum', 'canvas', 'sync', 'loro', 'agent', 'note', 'frame'] as const
 
 // How often a generated shape / prop edit carries STRUCTURED content instead
 // of an empty record. With all-empty props/meta (the rig's original
@@ -46,9 +48,10 @@ const RICH_CONTENT_RATE = 0.3
 const RATE_CYCLE_PAIR = 0.05 //       5% — hostile reparent-into-each-other burst: rare enough not to dominate, frequent enough that ~every batch has one
 const RATE_DELETE_THEN_BIND = 0.1 //  5% — hostile delete-then-bind burst: seeds the dangling-binding repair path
 const RATE_CYCLE_SELF_DESC = 0.15 //  5% — hostile reparent-to-own-descendant burst: the single-shape phrasing of the cycle guard
-const RATE_PUT_SHAPE = 0.55 //       40% — putShape dominates: creation/overwrite churn is what makes the tiny shared id pool collide across peers
-const RATE_UPDATE_PROPS = 0.75 //    20% — concurrent same-shape prop edits (the LWW-per-key case) need real volume
-const RATE_REPARENT = 0.9 //         15% — plain reparents keep the tree topology moving between the hostile bursts
+const RATE_PUT_SHAPE = 0.5 //        35% — putShape dominates: creation/overwrite churn is what makes the tiny shared id pool collide across peers
+const RATE_SET_TEXT = 0.65 //        15% — setText: a MEANINGFUL slice (not a token 1%) so the LoroText write surface (concurrent same-shape text edits, garbage/vanished-id tolerance) gets real volume, same as updateProps does for props
+const RATE_UPDATE_PROPS = 0.8 //     15% — concurrent same-shape prop edits (the LWW-per-key case) need real volume
+const RATE_REPARENT = 0.9 //         10% — plain reparents keep the tree topology moving between the hostile bursts
 const RATE_DELETE_SHAPE = 0.96 //     6% — deletes stay below creations so docs grow rather than empty out
 // remaining 4% — binding ops, split 50/50 put/delete by a second draw
 
@@ -72,6 +75,17 @@ function randomProps(rng: Rng): Record<string, unknown> {
 function randomMeta(rng: Rng): Record<string, unknown> {
   if (rng() >= RICH_CONTENT_RATE) return {}
   return { origin: pick(rng, ['agent', 'user', 'import'] as const), rev: int(rng, 100) }
+}
+
+/** A short, deterministic (PRNG-drawn, no Math.random), variable-length body
+ * for setText — 1-4 words plus a distinguishing numeric suffix so two draws
+ * are very unlikely to collide, which matters for the text-convergence check
+ * (a real edit, not a fixed placeholder). */
+function randomText(rng: Rng): string {
+  const n = 1 + int(rng, 4)
+  const words: string[] = []
+  for (let i = 0; i < n; i++) words.push(pick(rng, TEXT_WORDS))
+  return `${words.join(' ')} #${int(rng, 1_000_000)}`
 }
 
 function randomShape(rng: Rng, id: string, parentId: string): Shape {
@@ -158,7 +172,7 @@ function markDeletedWithCascade(id: string, deletedThisBatch: Set<string>, paren
  * Generates `count`-ish ops (hostile bursts push 2-3 ops per iteration, so the
  * result is trimmed to exactly `count`). Mix, over the small shared idPool:
  *
- * - putShape / updateProps / reparent / deleteShape / putBinding / deleteBinding
+ * - putShape / updateProps / reparent / deleteShape / putBinding / deleteBinding / setText
  * - HOSTILE reparent-into-each-other: put A (root) and B (child of A), then
  *   attempt to reparent A under B — Loro's native cycle guard must reject it;
  *   applyOp() catches and continues. Because idPool is tiny and SHARED across
@@ -220,6 +234,21 @@ export function randomOps(rng: Rng, count: number, idPool: IdPool): Op[] {
       ops.push({ kind: 'putShape', shape: randomShape(rng, id, parentId) })
       deletedThisBatch.delete(id)
       parentOf.set(id, parentId)
+    } else if (r < RATE_SET_TEXT) {
+      // Mostly an existing pool id, so this is a real text edit (the case the
+      // convergence check below needs volume on); sometimes an id THIS batch
+      // has already deleted (vanished — Loro tombstoned its text container,
+      // see loro-canvas-doc.ts's deleteNode); occasionally a pure-garbage id
+      // that was never in the pool at all. Both non-pool cases exercise
+      // setText's silent-no-op contract (canvas-doc.ts: "Silent no-op if no
+      // shape with this id exists"), same tolerance deleteShape already
+      // honors — see the fuzz test for the crash-safety half of that claim.
+      const roll = rng()
+      const id =
+        roll < 0.85 ? pick(rng, idPool.shapeIds)
+        : roll < 0.93 && deletedThisBatch.size > 0 ? pick(rng, [...deletedThisBatch])
+        : `shape:garbage-${int(rng, 1_000_000)}`
+      ops.push({ kind: 'setText', id, text: randomText(rng) })
     } else if (r < RATE_UPDATE_PROPS) {
       const id = pick(rng, idPool.shapeIds)
       // A distinguishing scalar always; structured nested content at the
@@ -272,6 +301,7 @@ export function applyOp(doc: CanvasDoc, op: Op, stats: ApplyStats): void {
       case 'deleteShape': doc.deleteShape(op.id); break
       case 'putBinding': doc.putBinding(op.binding); break
       case 'deleteBinding': doc.deleteBinding(op.id); break
+      case 'setText': doc.setText(op.id, op.text); break
     }
   } catch {
     stats.skipped++

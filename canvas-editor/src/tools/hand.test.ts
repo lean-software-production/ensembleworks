@@ -79,7 +79,7 @@ function setup() {
   const { editor, tool } = setup()
   const planeWheel = script().wheel(10, 20, { at: [0, 0] }).events()
   run(editor, tool, planeWheel)
-  assert.deepEqual(editor.get().camera, { x: 10, y: 20, z: 1 }, 'plain wheel pans while idle')
+  assert.deepEqual(editor.get().camera, { x: -10, y: -20, z: 1 }, 'plain wheel pans while idle (subtracted — wheel-down reveals content below)')
 
   const { editor: editor2, tool: tool2 } = setup()
   const events = script().down(500, 500).wheel(0, 50, { at: [500, 500], modifiers: { ctrl: true } }).events()

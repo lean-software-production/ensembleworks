@@ -79,21 +79,30 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22.12.0 }
       - run: bun install --frozen-lockfile
-      # SCALE NOTE (validated, not guessed — see soak-actor.ts's own
-      # CALIBRATION comment and the H4 execution report for the full
-      # transcript): --clients 5 --ops 15000 --chaos 0.5 measured ~17s wall
-      # time locally, converged, disk-growth ratio 2.96x (well inside the
-      # calibrated 12x bound) — smaller than the bare-peer `soak` job's
-      # 20,000 ops because this variant ALSO does real SQLite I/O (append +
-      # periodic compaction) on top of the same op-routing/chaos work, so it
-      # was validated at its OWN scale rather than assumed to inherit the
-      # bare-peer number. timeout-minutes: 30 leaves generous headroom
-      # (~100x the measured wall time) for a slower/busier CI runner.
+      # SCALE NOTE (validated, not guessed — see soak-actor-cli.ts's own
+      # DEFAULT SCALE comment, soak-actor.ts's CALIBRATION section, and the
+      # Task H3 execution notes for the full transcript): H4 first validated
+      # 5 clients / 15,000 ops locally (~17s wall time, disk-growth ratio
+      # 2.96x). Task H3 then RE-CALIBRATED at >=20k ops — three runs (5/
+      # 20,000/seed 42, 5/20,000/seed 1, 5/25,000/seed 7, all chaos 0.5),
+      # ~26-38s wall time each, all converged, disk-sustained-highwater
+      # ratios 2.90x-6.52x (well inside DISK_SUSTAINED_HIGHWATER_MULTIPLIER's
+      # calibrated 10x bound) and quartile-mean RSS ratios 2.26x-2.85x (well
+      # inside soak-actor-cli.ts's tightened FLAT_RSS_TOLERANCE = 8x). 20,000
+      # is now the validated default in soak-actor-cli.ts itself — this
+      # nightly step is bumped to match explicitly so an override here can
+      # never silently supersede that calibration. Still smaller than the
+      # bare-peer `soak` job's 20,000-op run's wall time per-op cost because
+      # this variant ALSO does real SQLite I/O (append + periodic
+      # compaction) on top of the same op-routing/chaos work, so it was
+      # validated at its OWN scale rather than assumed to inherit the
+      # bare-peer number. timeout-minutes: 30 leaves generous headroom for a
+      # slower/busier CI runner.
       - name: run actor soak (seed derived from the run number — replayable from the logged value)
         run: |
           bun server/src/canvas-v2/soak-actor-cli.ts \
             --clients 5 \
-            --ops 15000 \
+            --ops 20000 \
             --seed "$GITHUB_RUN_NUMBER" \
             --chaos 0.5
       - uses: actions/upload-artifact@v4

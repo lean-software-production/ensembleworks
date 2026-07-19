@@ -48,7 +48,7 @@
 // unit's to pre-build.
 import type { Bounds, CanvasDocument } from '@ensembleworks/canvas-model'
 import { worldBounds } from '@ensembleworks/canvas-model'
-import type { Camera, ToolContext } from '@ensembleworks/canvas-editor'
+import type { Camera, Intent, ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from '../use-editor-state.js'
 import { viewportWorldBounds, type ViewportSize } from '../ShapeLayer.js'
 import { isEmbedKind } from '../shapeRegistry.js'
@@ -70,6 +70,14 @@ export interface EmbedLayerProps {
    * caller with no embed bodies that need pause/resume wiring yet (e.g.
    * this unit's own tests, or before Seam E ports real embed bodies). */
   readonly lifecycleFor?: (shapeId: string) => EmbedLifecycle | undefined
+  /** See shapeRegistry.ts's ShapeBodyProps.dispatch doc comment — forwarded
+   * verbatim to every EmbedHost this layer renders, exactly like
+   * ShapeLayer.tsx's own `dispatch` prop is forwarded to ShapeBody. A stable
+   * reference the caller (CanvasV2App) builds ONCE — see EmbedHost.tsx's
+   * CONTENT-MEMO note for why it must be excluded from
+   * `embedBodyPropsEqual`. Optional so callers/tests with nothing to
+   * dispatch (most of embed.test.ts) can omit it. */
+  readonly dispatch?: (intents: Intent[]) => void
 }
 
 /** Pure — exported so embed.test.ts can pin visibility decisions
@@ -79,7 +87,7 @@ export function boundsIntersect(a: Bounds, b: Bounds): boolean {
   return a.minX <= b.maxX && a.maxX >= b.minX && a.minY <= b.maxY && a.maxY >= b.minY
 }
 
-export function EmbedLayer({ toolContext, camera, viewportSize, tick, suspendAfterTicks, lifecycleFor }: EmbedLayerProps) {
+export function EmbedLayer({ toolContext, camera, viewportSize, tick, suspendAfterTicks, lifecycleFor, dispatch }: EmbedLayerProps) {
   const snapshot: CanvasDocument = useDocSnapshot(toolContext)
   const editorState = useEditorState(toolContext.editor)
   const viewport = viewportWorldBounds(camera, viewportSize)
@@ -100,6 +108,7 @@ export function EmbedLayer({ toolContext, camera, viewportSize, tick, suspendAft
               tick={tick}
               suspendAfterTicks={suspendAfterTicks}
               lifecycle={lifecycleFor?.(shape.id)}
+              dispatch={dispatch}
             />
           )
         })}

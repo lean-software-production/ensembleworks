@@ -121,6 +121,16 @@ export interface DeleteShapes { readonly type: 'DeleteShapes'; readonly ids: rea
  * concern (Seam D); this intent only carries the plain string. */
 export interface SetText { readonly type: 'SetText'; readonly id: string; readonly text: string }
 
+/** Generic shape-prop write: SHALLOW-merges `props` into the shape's current
+ * props map — `{...current, ...props}`, exactly CanvasDoc.updateProps's own
+ * merge contract (loro-canvas-doc.ts's `updateProps`), never a full
+ * overwrite. This is the write-path the ported embeds (Seam D) use for their
+ * own prop fields (e.g. an iframe embed's `url`, a poll's `votes`) — it does
+ * NOT know or care what's inside `props`; that's each embed's own schema.
+ * Silent no-op on an unknown id (mirrors SetText/DeleteShapes's tolerance —
+ * see editor.ts's applyOne TOLERANCE CONTRACT): no throw, docMutated:false. */
+export interface UpdateProps { readonly type: 'UpdateProps'; readonly id: string; readonly props: Record<string, unknown> }
+
 /** Begin drawing an arrow: puts `shape` (kind 'arrow') verbatim, exactly
  * like CreateShape, then — if `fromBinding` is present — puts a binding
  * pinning the arrow's START endpoint to `fromBinding.targetId` at
@@ -170,6 +180,7 @@ export type Intent =
   | ReparentShapes
   | DeleteShapes
   | SetText
+  | UpdateProps
   | StartArrow
   | CompleteArrow
   | SetCamera

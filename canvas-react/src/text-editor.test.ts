@@ -18,6 +18,9 @@ import { makeDocument, worldTransform, type CanvasDocument, type Shape } from '@
 import type { Editor, EditorState, ToolContext } from '@ensembleworks/canvas-editor'
 import { TextEditor, createCompositionState, handleCompositionStart, handleCompositionEnd, handleTextChange, handleEditorKeyDown } from './TextEditor.js'
 import { registerShape, type ShapeBodyProps } from './shapeRegistry.js'
+import { noteStyle } from './shapes/NoteShape.js'
+import { textStyle } from './shapes/TextShape.js'
+import { geoStyle } from './shapes/GeoShape.js'
 
 // 'geo' (not 'note') is deliberate: geometry.ts's size() hard-codes note to
 // a fixed 200x200 (scale-adjusted) regardless of props.w/h, so a note
@@ -34,13 +37,43 @@ const editingShape = geoShape('shape:editing', 30, 40, Math.PI / 8)
 const otherShape = geoShape('shape:other', 500, 500)
 const embedShape = { ...geoShape('shape:embed', 100, 100), kind: 'terminal' } as Shape
 
+// ============================================================================
+// Task C6 fixtures: one shape per text-capable kind (canvas-model's
+// isTextCapableKind: note/text/geo), each with NON-DEFAULT styling props so
+// a test asserting "the editor matches the body" can't pass by coincidentally
+// matching a shared default (props.color/font/size/textAlign all set to
+// something other than the DEFAULT_* constants each shape module falls back
+// to — see NoteShape.tsx/TextShape.tsx/GeoShape.tsx's own DEFAULT_COLOR/
+// DEFAULT_FONT/DEFAULT_SIZE/DEFAULT_ALIGN).
+// ============================================================================
+function noteShapeFixture(id: string, x: number, y: number): Shape {
+  return {
+    id, kind: 'note', parentId: 'page:p', index: 'a1', x, y, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { color: 'blue' },
+  } as Shape
+}
+function textShapeFixture(id: string, x: number, y: number): Shape {
+  return {
+    id, kind: 'text', parentId: 'page:p', index: 'a1', x, y, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { font: 'sans', size: 'xl', color: 'red', textAlign: 'end' },
+  } as Shape
+}
+const editingNoteShape = noteShapeFixture('shape:editing-note', 10, 10)
+const editingTextShape = textShapeFixture('shape:editing-text', 20, 20)
+const editingGeoShape = geoShape('shape:editing-geo', 30, 30, 0, 150, 90)
+
 const doc: CanvasDocument = makeDocument({
   pages: [{ id: 'page:p', name: 'P' }],
-  shapes: [editingShape, otherShape, embedShape],
+  shapes: [editingShape, otherShape, embedShape, editingNoteShape, editingTextShape, editingGeoShape],
   bindings: [],
 })
 
-const texts = new Map<string, string>([['shape:editing', 'hello world']])
+const texts = new Map<string, string>([
+  ['shape:editing', 'hello world'],
+  ['shape:editing-note', 'note text'],
+  ['shape:editing-text', 'text shape text'],
+  ['shape:editing-geo', 'geo label text'],
+])
 
 // ============================================================================
 // FAKE TOOLCONTEXT: same rationale as shape-layer.test.ts's — TextEditor's
@@ -184,4 +217,96 @@ function fakeToolContext(editingId: string | null): ToolContext {
   console.log('ok: no mount for an embed-kind editingId')
 }
 
-console.log('ok: text-editor (mount gating, controlled value, world-space positioning, callback props, IME composition, embed guard)')
+// react-dom/server HTML-escapes attribute values, so a `font-family` string
+// like "'tldraw_draw', sans-serif" lands in the markup with its quotes
+// entity-escaped (`&#x27;`) rather than literal `'` characters — pull out
+// just the bare family NAME token for substring checks below so assertions
+// aren't sensitive to that escaping.
+function fontToken(fontFamily: string): string {
+  return fontFamily.match(/'([^']+)'/)?.[1] ?? fontFamily
+}
+
+// ============================================================================
+// 7. STYLING PARITY (Task C6): editing a note/text/geo shows the SAME font-
+//    family/size/color/align its rendered body (NoteShape/TextShape/
+//    GeoShape) uses — the editing mount must not "jump" visually vs the rich
+//    bodies. Each fixture above uses NON-DEFAULT props so this can't pass by
+//    coincidence. Asserted against the body's OWN pure style helper (not
+//    hand-copied hex/px values) so this test can't drift from the body it's
+//    supposed to match.
+// ============================================================================
+{
+  const noteExpected = noteStyle(editingNoteShape)
+  const html = renderToStaticMarkup(
+    createElement(TextEditor, { toolContext: fakeToolContext('shape:editing-note'), onTextChange: () => {}, onEndEdit: () => {} }),
+  )
+  assert.ok(html.includes(fontToken(noteExpected.fontFamily)), `note editor should use the sticky's handwriting font-family: ${html}`)
+  assert.ok(html.includes(noteExpected.color), `note editor should use the sticky's label color: ${html}`)
+  assert.ok(html.includes('font-size:16px'), 'note editor should match NoteShape\'s fixed 16px label size')
+  assert.ok(html.includes('text-align:center'), 'note editor should center like NoteShape\'s label')
+  console.log('ok: editing a note matches NoteShape\'s font-family/size/color/align')
+}
+{
+  const textExpected = textStyle(editingTextShape)
+  const html = renderToStaticMarkup(
+    createElement(TextEditor, { toolContext: fakeToolContext('shape:editing-text'), onTextChange: () => {}, onEndEdit: () => {} }),
+  )
+  assert.ok(html.includes(fontToken(textExpected.fontFamily)), `text editor should use props.font's family: ${html}`)
+  assert.ok(html.includes(textExpected.color), `text editor should use props.color's solid hex: ${html}`)
+  assert.ok(html.includes(`font-size:${textExpected.fontSize}px`), `text editor should use props.size's px value: ${html}`)
+  assert.ok(html.includes(`text-align:${textExpected.textAlign}`), `text editor should use props.textAlign: ${html}`)
+  // Task C6 follow-up (FIX 1): TextShape's body has padding:0, so the text-
+  // kind editor must too — a default padding:4 caused a ~4px enter-edit shift.
+  assert.ok(html.includes('padding:0'), `text editor should use padding:0 to match TextShape's body (no ~4px shift): ${html}`)
+  assert.ok(!html.includes('padding:4px'), `text editor must NOT carry the default padding:4 for a text kind: ${html}`)
+  console.log('ok: editing a text shape matches TextShape\'s font-family/size/color/align + padding:0 (no ~4px shift)')
+}
+{
+  const geoExpected = geoStyle(editingGeoShape)
+  const html = renderToStaticMarkup(
+    createElement(TextEditor, { toolContext: fakeToolContext('shape:editing-geo'), onTextChange: () => {}, onEndEdit: () => {} }),
+  )
+  assert.ok(html.includes(fontToken(geoExpected.fontFamily)), `geo editor should use the label's font-family: ${html}`)
+  assert.ok(html.includes(geoExpected.labelColor), `geo editor should use the label's color (independent labelColor, not stroke color): ${html}`)
+  assert.ok(html.includes(`font-size:${geoExpected.fontSize}px`), `geo editor should use the label's size scale: ${html}`)
+  assert.ok(html.includes('text-align:center'), 'geo editor should center like GeoShape\'s label')
+  console.log('ok: editing a geo shape matches GeoShape\'s label font-family/size/color/align')
+}
+
+// ============================================================================
+// 8. ENTER INSERTS A NEWLINE, NOT A COMMIT (note/text multi-line editing):
+//    handleEditorKeyDown only special-cases Escape — Enter must NOT fire
+//    onEndEdit, leaving the browser's native <textarea> newline-insertion
+//    behavior to happen unobstructed. A regression here (treating Enter like
+//    Escape, or swapping to an <input>) would end editing on every line
+//    break instead of inserting one.
+// ============================================================================
+{
+  let ended = false
+  handleEditorKeyDown('Enter', () => { ended = true })
+  assert.equal(ended, false, 'Enter must NOT fire onEndEdit — it inserts a newline in the underlying <textarea> instead')
+  console.log('ok: Enter does not end editing (newline, not commit)')
+}
+
+// ============================================================================
+// 9. DOUBLE-CLICK-TO-EDIT COVERS ALL THREE TEXT-CAPABLE KINDS: the actual
+//    double-click -> BeginEdit trigger lives in canvas-editor's select tool
+//    (tools/select.ts), gated generically on canvas-model's isTextCapableKind
+//    with NO per-kind branching (proven there, and by its own
+//    select.test.ts). What THIS file can prove is the renderer's half of that
+//    contract: once editingId names a note/text/geo shape (exactly what a
+//    completed BeginEdit produces for any of the three), TextEditor mounts a
+//    real editing surface for EVERY one of them, not just the geo kind the
+//    rest of this file's fixtures use.
+// ============================================================================
+{
+  for (const id of ['shape:editing-note', 'shape:editing-text', 'shape:editing-geo']) {
+    const html = renderToStaticMarkup(
+      createElement(TextEditor, { toolContext: fakeToolContext(id), onTextChange: () => {}, onEndEdit: () => {} }),
+    )
+    assert.ok(html.includes(`data-text-editor-input="${id}"`), `TextEditor should mount an editing surface for ${id}`)
+  }
+  console.log('ok: TextEditor mounts an editing surface for note/text/geo alike (double-click-to-edit\'s isTextCapableKind gate covers all three)')
+}
+
+console.log('ok: text-editor (mount gating, controlled value, world-space positioning, callback props, IME composition, embed guard, per-kind styling parity, Enter-newline, note/text/geo coverage)')

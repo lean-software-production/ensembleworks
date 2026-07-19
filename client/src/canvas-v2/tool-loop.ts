@@ -17,17 +17,9 @@
  * tldraw's product behavior a dogfood user expects from "the select tool" is
  * really the UNION of both: click/drag/marquee-select (select.ts) AND
  * drag a resize/rotate handle when something is already selected
- * (transform.ts). `createSelectAndTransformTool` below is the composite that
- * delivers that union with the SIMPLEST correct rule: on every pointerdown
- * while composite-idle, give transform.ts FIRST CRACK (it only reacts to a
- * pointerdown that lands on a handle — everything else is a no-op returning
- * its own unchanged idle state); if transform grabbed a handle (its
- * returned state left 'idle'), the composite's active leg becomes
- * 'transform' for every subsequent event until transform's own FSM returns
- * to idle (pointerup) — otherwise the event is forwarded to select.ts as
- * normal. This is exactly "transform handles work when a selection exists"
- * without either tool needing to know the other exists: composed at the
- * dispatch layer, not inside either FSM.
+ * (transform.ts). The select+transform composite now lives in canvas-editor
+ * (`tools/select-and-transform.ts`) and is re-exported below for the
+ * client's existing importers.
  *
  * No V1 SUPPORT for switching TO the transform tool explicitly via a toolbar
  * button (there is no such button — see CanvasV2App.tsx's toolbar) — it is
@@ -40,73 +32,21 @@ import {
 	createArrowTool,
 	createCreateTool,
 	createHandTool,
-	createSelectTool,
-	createTransformTool,
+	createSelectAndTransformTool,
 	type ArrowState,
 	type CreateKind,
 	type CreateState,
 	type HandState,
+	type SelectAndTransformState,
 	type SelectState,
-	type TransformState,
 } from '@ensembleworks/canvas-editor'
 import type { SnapResult } from '@ensembleworks/canvas-model'
+
+export { createSelectAndTransformTool, type SelectAndTransformState } from '@ensembleworks/canvas-editor'
 
 /** The toolbar's tool identifiers — see CanvasV2App.tsx's toolbar for the
  * button list. 'transform' is deliberately ABSENT (see module header). */
 export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'arrow'
-
-export interface SelectAndTransformState {
-	readonly active: 'select' | 'transform'
-	readonly select: SelectState
-	readonly transform: TransformState
-}
-
-/** The composite described in the module header. A `Tool<SelectAndTransformState>`
- * in its own right, so it slots into the exact same `Tool<S>` machinery every
- * other tool uses (script.ts's `run()` semantics, this file's `createToolSet`
- * below) with no special-casing at the call site. */
-export function createSelectAndTransformTool(ctx: ToolContext): Tool<SelectAndTransformState> {
-	const select = createSelectTool(ctx)
-	const transform = createTransformTool(ctx)
-	const initialState: SelectAndTransformState = { active: 'select', select: select.initialState, transform: transform.initialState }
-
-	return {
-		initialState,
-		onEvent(state, event): { state: SelectAndTransformState; intents: Intent[] } {
-			if (state.active === 'transform') {
-				const r = transform.onEvent(state.transform, event)
-				const active = r.state.mode === 'idle' ? 'select' : 'transform'
-				return { state: { ...state, active, transform: r.state }, intents: r.intents }
-			}
-			// active === 'select': give transform first crack at a pointerdown
-			// ONLY (its onIdle is a no-op for every other event type anyway, so
-			// trying it on every event would be wasted work, not wrong — but
-			// pointerdown is the only event where it can possibly transition).
-			if (event.type === 'pointerdown') {
-				const rt = transform.onEvent(state.transform, event)
-				if (rt.state.mode !== 'idle') {
-					// HANDOFF RESETS THE SELECT LEG (quality-review fix — the
-					// reviewer reproduced the bug this prevents): select's Idle
-					// state carries `lastClick`, its double-click memory
-					// (select.ts's DOUBLE-CLICK-TO-EDIT section), and an entire
-					// resize/rotate gesture routes EXCLUSIVELY through the
-					// transform leg — select's FSM never sees any of it — so
-					// without this reset that memory would survive the whole
-					// gesture: click A, resize A via a handle, click A again
-					// within DOUBLE_CLICK_MS of the FIRST click -> spurious
-					// BeginEdit. A handle-grab is a NEW gesture, not the second
-					// half of a click pair, so the select leg goes back to its
-					// own initialState ({mode:'idle', lastClick:null}) at the
-					// handoff. Pinned by tool-loop.test.ts's click-resize-click
-					// probe (with its plain-double-click control case).
-					return { state: { active: 'transform', select: select.initialState, transform: rt.state }, intents: rt.intents }
-				}
-			}
-			const rs = select.onEvent(state.select, event)
-			return { state: { ...state, select: rs.state }, intents: rs.intents }
-		},
-	}
-}
 
 /** One `Tool<unknown>` instance per `ToolId`, built ONCE per `ToolContext` —
  * mirrors every tool factory's own "call once per Editor/ToolContext"
@@ -225,19 +165,65 @@ export function dispatchToActiveTool(
  *  - transform ('resizing'/'rotating' states, reached only via the select
  *    composite): never creates a shape (resizes/rotates EXISTING shapes IN
  *    PLACE, already committed incrementally by the time cancel runs — see
- *    transform.ts's COMMIT CADENCE note). Reset to idle only; the v1 policy
- *    does NOT revert a partially-completed resize/rotate back to its
- *    pre-gesture size/angle — the shape is simply left at whatever the last
- *    delivered pointermove committed. Full undo-to-gesture-start is a
- *    documented Phase-4 parity item, not this unit's scope (canvas-editor
- *    has no undo stack yet at all).
+ *    transform.ts's COMMIT CADENCE note) — but DOES emit a revert (Task B5).
+ *    transform.ts's Resizing/Rotating states carry `startShapes`: a verbatim
+ *    snapshot of every affected shape taken at GESTURE START (the first
+ *    threshold-crossing move, before its own first Resize/RotateShapes
+ *    intent — see transform.ts's captureStartShapes). Cancelling mid-gesture
+ *    replays each snapshot back via CreateShape ("upsert full shape
+ *    verbatim", editor.ts's applyOne) — one intent per shape, which restores
+ *    it exactly regardless of how many incremental Resize/RotateShapes
+ *    commits happened since gesture start; no need to count or unwind them
+ *    individually. TOLERANT: a shape that vanished mid-gesture (e.g. a
+ *    concurrent remote delete) is dropped from the revert, never
+ *    resurrected — checked against the LIVE doc at cancel time, not the
+ *    snapshot itself. NOTE (carried finding, not this unit's scope): the
+ *    incremental per-move commits PLUS this revert still leave a messy undo
+ *    history behind (the revert doesn't retroactively erase those commits'
+ *    own undo entries) — gesture-atomic undo (one undo step per whole drag)
+ *    remains a documented Phase-4 parity item.
+ *    SECOND carried finding (over-revert): CreateShape restores the FULL
+ *    gesture-start shape (a whole-shape putShape overwrite), not a
+ *    geometry-only inverse — so a concurrent REMOTE edit to a NON-geometry
+ *    field (color/opacity/isLocked/meta/parentId/frame name) of a shape
+ *    being transformed-then-cancelled is stomped back to its gesture-start
+ *    value. This is the SAME whole-shape-overwrite convention B1's undo
+ *    inverses use (fixing only cancel would make cancel/undo inconsistent);
+ *    text is safe (a separate Loro container). Deferred to the undo-quality /
+ *    gesture-atomic-undo family — see the plan's carried-finding B5 bullet.
  *
  * Returns the full RESET `ToolStates` (every tool goes back to its own
  * `initialState` — not just the active one — since an abandonment trigger
  * means the whole viewport lost its input context, not just one tool) plus
  * whatever cleanup Intents the active tool's in-flight state demands.
  */
-export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: ToolId): { states: ToolStates; intents: Intent[] } {
+/**
+ * The user emitter for `DeleteShapes` (Task B2) — until now the ONLY emitter
+ * was `cancelActiveTool`'s abandonment-gap cleanup above, and that always
+ * targets an in-flight PREVIEW shape a tool is mid-creating, never a user's
+ * standing selection. This is the "press Delete/Backspace" path: reads
+ * `editor.get().selection` directly (there is no tool gesture involved — a
+ * keyboard delete isn't a tool FSM's concern, so it doesn't route through
+ * `dispatchToActiveTool` at all) and, for a non-empty selection, emits
+ * `DeleteShapes` for every selected id followed by `SetSelection([])` so the
+ * selection doesn't keep referencing ids that no longer resolve (mirrors
+ * DeleteShapes's own doc comment: it does NOT implicitly clear selection —
+ * that's the emitting caller's job, and this is that caller). An EMPTY
+ * selection returns `[]` — no no-op DeleteShapes([]) and no redundant
+ * SetSelection([]) when the selection is already empty. Stays in this
+ * DOM-free module (CanvasV2App.tsx's keydown listener is the only DOM-facing
+ * half of this wiring) per the module boundary this file's header states.
+ */
+export function deleteSelectionIntents(editor: Editor): Intent[] {
+	const ids = [...editor.get().selection]
+	if (ids.length === 0) return []
+	return [
+		{ type: 'DeleteShapes', ids },
+		{ type: 'SetSelection', ids: [] },
+	]
+}
+
+export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: ToolId, editor: Editor): { states: ToolStates; intents: Intent[] } {
 	const intents: Intent[] = []
 
 	if (active === 'arrow') {
@@ -246,9 +232,22 @@ export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: Too
 	} else if (active === 'note' || active === 'text' || active === 'geo' || active === 'frame') {
 		const s = states[active] as CreateState
 		if (s.mode === 'dragging') intents.push({ type: 'DeleteShapes', ids: [s.id] })
+	} else if (active === 'select') {
+		// The composite's TRANSFORM leg (reached only through 'select' — see
+		// the module header). B5: restore every affected shape to its
+		// gesture-start snapshot — see the coverage note above for why one
+		// CreateShape per shape suffices regardless of the incremental commit
+		// count. TOLERANT: skip an id the live doc no longer resolves rather
+		// than resurrecting it.
+		const transform = (states.select as SelectAndTransformState).transform
+		if (transform.mode === 'resizing' || transform.mode === 'rotating') {
+			for (const shape of transform.startShapes) {
+				if (editor.doc.getShape(shape.id)) intents.push({ type: 'CreateShape', shape })
+			}
+		}
 	}
-	// select/hand/transform (reached via the select composite): no created
-	// shape to delete — see the coverage note above.
+	// hand: never creates OR mutates a shape (pans the camera only) —
+	// nothing to revert.
 
 	return { states: createInitialToolStates(tools), intents }
 }

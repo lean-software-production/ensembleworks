@@ -8,7 +8,21 @@ export interface Presence {
   cursor: { x: number; y: number } | null
   viewport: { x: number; y: number; w: number; h: number; z: number } | null
   stamp: { at: { x: number; y: number } } | null // the spatial stamp tool
-  presenting: string[] // shape ids this peer is presenting/holding
+  presenting: string[] // OPAQUE per-entry strings the client may encode richer data into (canvas-v2's file-viewer JSON-encodes {shapeId,fraction,ts}); do NOT assume an entry is a bare shape id or that `presenting.includes(shapeId)` is meaningful — decode client-side
+  /** The shape id this peer is currently text-editing, or null. Drives the
+   * "someone is editing" indicator (pilot 5 — F1 owner decision: Option 1,
+   * indicator-only; no lock, concurrent setText remains a documented LWW
+   * stomp). Plain JSON (EphemeralStore requires Loro Values). OPTIONAL,
+   * deliberately: making this required would mean migrating every
+   * `Presence` construction site (there is exactly one full-object literal
+   * in production code today, client/src/canvas-v2/presence.ts's
+   * `createPresencePublisher`, plus this file's own test fixtures) —
+   * optional keeps the change surgical. Consumers must treat an ABSENT
+   * field the same as `null` ("not editing"), which is also what makes this
+   * change compatible with an older publisher that predates pilot 5: it
+   * simply never sets the key, and readers see "not editing" rather than a
+   * decode error. */
+  editing?: string | null
 }
 
 // Thin wrapper: one EphemeralStore, this peer writes its own key, reads all.

@@ -43,8 +43,8 @@
 // newer/older doc read than the other. No local memoization is needed
 // because `index()` is itself already stable (===) between rebuilds, exactly
 // like `snapshot()`.
-import { queryViewport, type Bounds } from '@ensembleworks/canvas-model'
-import { screenToWorld, type Camera, type ToolContext } from '@ensembleworks/canvas-editor'
+import { queryViewport, type Bounds, type Shape } from '@ensembleworks/canvas-model'
+import { orderParentBeforeChild, screenToWorld, type Camera, type Intent, type ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { ShapeBody } from './ShapeBody.js'
 import { isEmbedKind } from './shapeRegistry.js'
@@ -58,6 +58,15 @@ export interface ShapeLayerProps {
   readonly toolContext: ToolContext
   readonly camera: Camera
   readonly viewportSize: ViewportSize
+  /** See shapeRegistry.ts's ShapeBodyProps.dispatch doc comment — forwarded
+   * verbatim to every ShapeBody this layer renders, exactly like `getText`
+   * (derived from `toolContext` just below) is. UNLIKE getText, this is not
+   * derived from toolContext at all: the caller (CanvasV2App) builds ONE
+   * stable `dispatch` wrapping `editor.applyAll` and passes it straight
+   * through as a prop — see that file's CONTENT-MEMO-safe construction.
+   * Optional so callers/tests with nothing to dispatch (most of
+   * shape-layer.test.ts) can omit it, exactly like getText. */
+  readonly dispatch?: (intents: Intent[]) => void
 }
 
 /** The visible WORLD-space rectangle for a viewport of `size` screen pixels
@@ -74,7 +83,7 @@ export function viewportWorldBounds(camera: Camera, size: ViewportSize): Bounds 
   return { minX: topLeft.x, minY: topLeft.y, maxX: bottomRight.x, maxY: bottomRight.y }
 }
 
-export function ShapeLayer({ toolContext, camera, viewportSize }: ShapeLayerProps) {
+export function ShapeLayer({ toolContext, camera, viewportSize, dispatch }: ShapeLayerProps) {
   const snapshot = useDocSnapshot(toolContext)
   const editorState = useEditorState(toolContext.editor)
   // See CONSUMPTION NOTE above: the shared index, coherent with `snapshot`
@@ -82,12 +91,29 @@ export function ShapeLayer({ toolContext, camera, viewportSize }: ShapeLayerProp
   const index = toolContext.index()
   const bounds = viewportWorldBounds(camera, viewportSize)
   const visibleIds = queryViewport(index, bounds)
+  // PAINT ORDER (Task F1 finding): queryViewport answers from a spatial
+  // hash grid — its return order is cell-iteration order, NOT document/z
+  // order. Every rendered body is a `position: absolute` DOM sibling
+  // (ShapeBody.tsx's FLAT SIBLINGS design), so DOM order IS paint order:
+  // left as spatial-index order, an opaque container (e.g. FrameShape's
+  // fully-opaque `#ffffff` body — real v1 parity, not a bug in itself) can
+  // render AFTER, and fully occlude, one of its own children whenever the
+  // grid happens to iterate the child's cell before the frame's. Sorting
+  // parent-before-child (the SAME depth-sort DeleteShapes's undo already
+  // uses) fixes this globally and cheaply: a parent always has smaller
+  // depth than any descendant, and unrelated shapes keep queryViewport's
+  // relative order (stable sort), which carries no correctness meaning here
+  // anyway (culling order is arbitrary by design).
+  const visibleShapes = orderParentBeforeChild(
+    visibleIds
+      .map((id) => snapshot.byId.get(id))
+      .filter((s): s is Shape => s !== undefined), // vanished between index build and this render — omit, never throw (matches the STALENESS CONTRACT's "omissions only" posture)
+    snapshot.byId
+  )
 
   return (
     <>
-      {visibleIds.map((id) => {
-        const shape = snapshot.byId.get(id)
-        if (!shape) return null // vanished between index build and this render — omit, never throw (matches the STALENESS CONTRACT's "omissions only" posture)
+      {visibleShapes.map((shape) => {
         if (isEmbedKind(shape.kind)) return null // embed kinds are EmbedLayer's exclusive job — see module header
         // getText: reads through toolContext.editor.doc (the SAME "not an
         // import" posture TextEditor.tsx documents) so a text-capable
@@ -101,11 +127,12 @@ export function ShapeLayer({ toolContext, camera, viewportSize }: ShapeLayerProp
         // one of those pre-existing fakes for a feature they don't test.
         return (
           <ShapeBody
-            key={id}
+            key={shape.id}
             shape={shape}
             snapshot={snapshot}
             editorState={editorState}
             getText={(sid) => (typeof toolContext.editor.doc.getText === 'function' ? toolContext.editor.doc.getText(sid) : '')}
+            dispatch={dispatch}
           />
         )
       })}

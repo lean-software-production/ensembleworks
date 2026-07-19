@@ -17,6 +17,13 @@
  * checks for `window.__ew`).
  */
 import { useMemo, useState } from 'react'
+// Task C6b — same tldraw_draw/_sans/_serif/_mono self-hosted webfonts
+// CanvasV2App.tsx loads (see fonts.css's own header). This harness is a
+// SEPARATE Vite HTML entry (component-goldens.html) that never shares
+// CanvasV2App's module graph, so it needs its own import — otherwise a C7
+// golden of NoteShape/TextShape/GeoShape would bake in the sans-serif
+// fallback instead of the real handwriting/text font.
+import '../fonts.css'
 import { Editor, createToolContext } from '@ensembleworks/canvas-editor'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import {
@@ -24,6 +31,7 @@ import {
 	EmbedLayer,
 	Grid,
 	Overlay,
+	registerCoreShapes,
 	ShapeLayer,
 	Viewport,
 	WorldLayer,
@@ -51,6 +59,14 @@ export function GoldenHarness({ fixture }: GoldenHarnessProps) {
 	// for no benefit (this harness never mutates anything after setup).
 	const session = useMemo(() => {
 		registerCanvasV2Shapes()
+		// Task C7 CRITICAL FIX — without this, note/frame/text/geo fixtures
+		// render via ShapeLayer's BoxShape FALLBACK (shapeRegistry.ts's fallback
+		// policy: an unregistered kind draws the generic blue placeholder box),
+		// silently baking wireframe-placeholder screenshots into the goldens
+		// instead of the real dedicated bodies (NoteShape/FrameShape/TextShape/
+		// GeoShape, canvas-react/src/shapes/*). Mirrors CanvasV2App.tsx's own
+		// registerCanvasV2Shapes() + registerCoreShapes() pairing exactly.
+		registerCoreShapes()
 		const doc = LoroCanvasDoc.create({ peerId: 1n })
 		doc.putPage({ id: PAGE_ID, name: 'Goldens' })
 		for (const shape of fixture.shapes) doc.putShape(shape)

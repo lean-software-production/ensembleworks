@@ -43,6 +43,10 @@ import path from 'node:path'
 // consumer's module graph, including the browser client, for a warning
 // with zero functional benefit to anyone but this file).
 import { runSoak, type RunSoakOpts, type SoakResult, type SoakServer } from '@ensembleworks/canvas-sync/soak'
+// S6 disk high-water threshold — single-sourced in contracts so this soak
+// verdict and the client dogfood dev overlay share ONE number (see the
+// re-export below and the constant's doc comment in contracts/src/constants.ts).
+import { DISK_SUSTAINED_HIGHWATER_MULTIPLIER } from '@ensembleworks/contracts'
 import { DocumentActor } from './actor.ts'
 
 /** How often (in PERSISTED updates, not sim ops — DocumentActor's own unit,
@@ -71,6 +75,10 @@ export interface RunActorSoakOpts extends Omit<RunSoakOpts, 'server' | 'sampleEx
 	 * header / soak-actor.test.ts for the measured numbers this defaults
 	 * from. */
 	diskGrowthMultiplier?: number
+	/** S6 sustained-disk-high-water threshold override — see
+	 * `DISK_SUSTAINED_HIGHWATER_MULTIPLIER`'s doc comment. Defaults to that
+	 * constant. */
+	diskSustainedHighwaterMultiplier?: number
 }
 
 export interface ActorSoakResult extends SoakResult {
@@ -121,6 +129,21 @@ function actorSoakServer(actor: DocumentActor): SoakServer {
  *   3       3,000 0.5    25           119,698              339,968        2.84x
  *   5       8,000 0.5    91           352,836              2,232,320      6.33x
  *
+ * TASK H3 EXTENSION (≥20k-ops calibration, run directly via
+ * `soak-actor-cli.ts`, three runs — see that file's own doc comment for the
+ * RSS side of the same runs):
+ *
+ *   clients ops    seed  chaos  finalShapes  finalSnapshotBytes  finalDiskBytes  disk÷snapshot
+ *   5       20,000 42    0.5    348          926,375             6,041,600       6.52x
+ *   5       20,000 1     0.5    282          928,212             2,695,168       2.90x
+ *   5       25,000 7     0.5    364          1,177,932           6,717,440       5.70x
+ *
+ * The ≥20k ratios (2.90x–6.52x) land inside the same band as the smaller
+ * H4 runs above (0.36x–6.33x) — no new upward trend appears as ops scale
+ * past 20k, consistent with disk size being anchored to
+ * `finalSnapshotBytes` (see KEY FINDING below) rather than to op count
+ * directly.
+ *
  * KEY FINDING (why this bounds against `finalSnapshotBytes`, NOT
  * `finalShapeCount × avgSize` the way soak.ts's in-memory tripwire does):
  * `DocumentActor.compact()` persists `store.compact(peer.snapshot())` —
@@ -129,8 +152,9 @@ function actorSoakServer(actor: DocumentActor): SoakServer {
  * So disk size is fundamentally ANCHORED to that same in-memory-history
  * axis, plus whatever the uncompacted log tail and SQLite's own page
  * overhead add on top — a per-shape estimate has no mechanical reason to
- * predict it, which is exactly why the ratio above bounces around (0.36x
- * to 6.33x) rather than settling like soak.ts's own K did.
+ * predict it, which is exactly why the ratio bounces around (0.36x to
+ * 6.52x across every run measured so far, small and ≥20k alike) rather
+ * than settling like soak.ts's own K did.
  *
  * A SECOND finding, equally load-bearing: `CanvasV2Store.compact()`'s
  * `DELETE` frees SQLite rows into the file's internal freelist, but does
@@ -144,16 +168,89 @@ function actorSoakServer(actor: DocumentActor): SoakServer {
  * behavior included).
  *
  * `DISK_GROWTH_MULTIPLIER` bounds `finalDiskBytes < DISK_GROWTH_MULTIPLIER ×
- * max(AVG_MIN_DISK_BYTES, finalSnapshotBytes)` — headroom of ~1.9x over the
- * worst measured ratio (6.33x), generous for run-to-run variance while
- * still catching a genuine multi-x regression (e.g. `actorCompactEvery`
- * silently stops firing, or a `store.compact()` regression that stops
- * pruning the log at all). `AVG_MIN_DISK_BYTES` (one SQLite page) floors
- * the bound so a tiny/near-empty run's naturally-small snapshot doesn't
- * make the bound tighter than a single page ever allows.
+ * max(AVG_MIN_DISK_BYTES, finalSnapshotBytes)` — headroom of ~1.8x over the
+ * worst measured ratio (6.52x, now including the ≥20k runs), generous for
+ * run-to-run variance while still catching a genuine multi-x regression
+ * (e.g. `actorCompactEvery` silently stops firing, or a `store.compact()`
+ * regression that stops pruning the log at all). `AVG_MIN_DISK_BYTES` (one
+ * SQLite page) floors the bound so a tiny/near-empty run's naturally-small
+ * snapshot doesn't make the bound tighter than a single page ever allows.
+ * This is a per-RUN, FINAL-point tripwire — it fires (or not) exactly once,
+ * against the final samples.
+ *
+ * S6 DECISION THRESHOLD — `DISK_SUSTAINED_HIGHWATER_MULTIPLIER`: separate
+ * from the regression tripwire above, this is the OBSERVE-verdict signal
+ * the Phase-4 bounds doc asks for (task I1 cites this number for the S6
+ * SQLite-VACUUM dated verdict). Because disk size is a HIGH-WATER MARK
+ * (per the SECOND finding above) while the in-memory snapshot naturally
+ * fluctuates, a single sampled point running high isn't itself meaningful
+ * — what matters is whether the ratio stays elevated ACROSS the tail of a
+ * run (i.e. compaction genuinely isn't keeping the file anywhere near the
+ * live logical size any more, not just a momentary blip right after a
+ * fold). `assertDiskHighWater` below checks the mean disk÷snapshot ratio
+ * over the LAST QUARTILE of the aligned `diskSamples`/`snapshotSamples`
+ * (same quartile-mean shape as the flat-RSS check in soak-actor-cli.ts, for
+ * the same reason — a trend, not a single sample, is what's diagnostic).
+ * The 10x threshold is single-sourced from `@ensembleworks/contracts`
+ * (imported above and re-exported below) so this soak verdict and the
+ * client dogfood dev overlay's live disk:snapshot flag share ONE number
+ * across the server/client boundary — see the constant's doc comment in
+ * `contracts/src/constants.ts`.
  */
 export const DISK_GROWTH_MULTIPLIER = 12
 export const AVG_MIN_DISK_BYTES = 4096
+// Re-exported (value imported from contracts above) so existing importers of
+// this symbol from soak-actor keep their path while the value lives in one place.
+export { DISK_SUSTAINED_HIGHWATER_MULTIPLIER }
+
+/**
+ * Last-quartile MEAN disk÷snapshot ratio — the S6 sustained-high-water
+ * metric itself, factored out so both `assertDiskHighWater` below and a
+ * caller's own summary reporting (e.g. `soak-actor-cli.ts`'s JSON output)
+ * compute the SAME number rather than two hand-rolled copies. `diskSamples`
+ * and `snapshotSamples` are sampled in lockstep (soak.ts's own sampling loop
+ * pushes both together, when `sampleExtra` is provided — see
+ * `runActorSoak` below), so they're aligned by index; this only trusts the
+ * overlapping prefix, defensively, in case a caller ever passes mismatched
+ * arrays. Returns `undefined` when there are too few aligned samples to
+ * judge a trend (mirrors soak-actor-cli.ts's own flat-RSS "too few samples"
+ * skip).
+ */
+export function lastQuartileDiskToSnapshotRatio(diskSamples: readonly number[], snapshotSamples: readonly number[]): number | undefined {
+	const n = Math.min(diskSamples.length, snapshotSamples.length)
+	if (n < 4) return undefined
+	const quarter = Math.max(1, Math.floor(n / 4))
+	const lastDisk = diskSamples.slice(n - quarter)
+	const lastSnapshot = snapshotSamples.slice(n - quarter)
+	const ratios = lastDisk.map((d, i) => d / Math.max(1, lastSnapshot[i] as number))
+	return ratios.reduce((a, b) => a + b, 0) / ratios.length
+}
+
+/**
+ * S6 disk high-water assertion — see `DISK_SUSTAINED_HIGHWATER_MULTIPLIER`'s
+ * doc comment above for why this looks at a last-quartile MEAN ratio (via
+ * `lastQuartileDiskToSnapshotRatio`) rather than any single sample.
+ */
+export function assertDiskHighWater(
+	diskSamples: readonly number[],
+	snapshotSamples: readonly number[],
+	multiplier: number = DISK_SUSTAINED_HIGHWATER_MULTIPLIER,
+): void {
+	const meanRatio = lastQuartileDiskToSnapshotRatio(diskSamples, snapshotSamples)
+	if (meanRatio === undefined) {
+		console.log(
+			`disk high-water: only ${Math.min(diskSamples.length, snapshotSamples.length)} aligned sample(s) — too few to judge a sustained trend, skipping`,
+		)
+		return
+	}
+	console.log(`disk high-water: last-quartile mean disk÷snapshot ratio=${meanRatio.toFixed(3)} (S6 threshold ${multiplier}x)`)
+	if (meanRatio >= multiplier) {
+		throw new Error(
+			`S6 disk high-water threshold breached: last-quartile mean disk÷snapshot ratio (${meanRatio.toFixed(2)}x) >= ${multiplier}x — ` +
+				`sustained, not a one-off sample; signals compaction isn't keeping the on-disk file near the live logical size any more (VACUUM likely needed)`,
+		)
+	}
+}
 
 export function runActorSoak(opts: RunActorSoakOpts): ActorSoakResult {
 	const roomId = opts.roomId ?? 'soak'
@@ -200,6 +297,12 @@ export function runActorSoak(opts: RunActorSoakOpts): ActorSoakResult {
 			`bounded-DISK-growth tripwire: actor sqlite file ${finalDiskBytes}B >= multiplier(${diskGrowthMultiplier}) × max(${AVG_MIN_DISK_BYTES}B, finalSnapshotBytes=${result.finalSnapshotBytes}B) = ${bound}B — possible append-log compaction regression`,
 		)
 	}
+
+	// S6 decision threshold — see DISK_SUSTAINED_HIGHWATER_MULTIPLIER's doc
+	// comment: a SUSTAINED (last-quartile mean, not single-sample) disk÷
+	// snapshot ratio breach, distinct from the final-point regression
+	// tripwire just above.
+	assertDiskHighWater(diskSamples, result.snapshotSamples, opts.diskSustainedHighwaterMultiplier)
 
 	return { ...result, finalDiskBytes, diskSamples }
 }

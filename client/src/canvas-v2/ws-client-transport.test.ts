@@ -25,6 +25,7 @@ class FakeWs implements WebSocketLike {
 	binaryType = 'blob' // deliberately the DOM default — the adapter must override it
 	sent: Uint8Array[] = []
 	closeCalls = 0
+	onopen: (() => void) | null = null
 	onmessage: ((ev: { readonly data: unknown }) => void) | null = null
 	onclose: (() => void) | null = null
 	onerror: (() => void) | null = null
@@ -179,6 +180,85 @@ async function main() {
 		ws.onclose?.()
 		assert.equal(fired, 1, 'a close callback following an error does not fire onClose again')
 		console.log('ok: ws-client-transport — error callback is treated as close, at most once')
+	}
+
+	// Test 11 — Task E1: initial state is 'connecting', and transitions to
+	// 'open' once the underlying socket's onopen fires.
+	{
+		const ws = new FakeWs()
+		const t = wsClientTransport(ws)
+		assert.equal(t.getConnectionState(), 'connecting', "initial state is 'connecting' before the socket opens")
+		const seen: string[] = []
+		t.onConnectionStateChange((s) => seen.push(s))
+		ws.onopen?.()
+		assert.equal(t.getConnectionState(), 'open', "getConnectionState() reports 'open' once onopen fires")
+		assert.deepEqual(seen, ['open'], 'onConnectionStateChange fired exactly once, with the new state')
+		console.log("ok: ws-client-transport — connection state starts 'connecting', transitions to 'open' on onopen")
+	}
+
+	// Test 12 — Task E1: the "dead dogfood" case. The socket errors/closes
+	// BEFORE ever opening (e.g. wrong port, route absent, EW_CANVAS_SYNC unset
+	// server-side) — state lands on 'failed', not 'reconnecting'.
+	{
+		const ws = new FakeWs()
+		const t = wsClientTransport(ws)
+		const seen: string[] = []
+		t.onConnectionStateChange((s) => seen.push(s))
+		ws.onerror?.() // never opened first
+		assert.equal(t.getConnectionState(), 'failed', 'an error before ever opening lands on failed, not reconnecting')
+		assert.deepEqual(seen, ['failed'], 'onConnectionStateChange fired with failed')
+		console.log("ok: ws-client-transport — errors/closes before ever opening report 'failed' (the dead-dogfood case)")
+	}
+
+	// Test 13 — Task E1: closing AFTER having been open lands on
+	// 'reconnecting' (inferred from close-after-open — see the module
+	// header's note on why this is not a real retry-in-progress signal).
+	{
+		const ws = new FakeWs()
+		const t = wsClientTransport(ws)
+		ws.onopen?.()
+		assert.equal(t.getConnectionState(), 'open', 'precondition: the socket opened')
+		const seen: string[] = []
+		t.onConnectionStateChange((s) => seen.push(s))
+		ws.onclose?.()
+		assert.equal(t.getConnectionState(), 'reconnecting', 'a close after having been open lands on reconnecting, not failed')
+		assert.deepEqual(seen, ['reconnecting'], 'onConnectionStateChange fired with reconnecting')
+		console.log("ok: ws-client-transport — a close after having been open reports 'reconnecting' (inferred from close-after-open)")
+	}
+
+	// Test 14 — Task E1: onConnectionStateChange is single-listener,
+	// last-writer-wins, mirroring onMessage/onClose's own contract.
+	{
+		const ws = new FakeWs()
+		const t = wsClientTransport(ws)
+		const first: string[] = []
+		const second: string[] = []
+		t.onConnectionStateChange((s) => first.push(s))
+		t.onConnectionStateChange((s) => second.push(s))
+		ws.onopen?.()
+		assert.equal(first.length, 0, 'the first onConnectionStateChange callback was replaced, not additionally invoked')
+		assert.deepEqual(second, ['open'], 'the second (current) callback fired exactly once, with the new state')
+		console.log('ok: ws-client-transport — onConnectionStateChange is single-listener, last-writer-wins')
+	}
+
+	// Test 15 — Task E1 (additive, re-proving the existing contract): the
+	// connection-state signal layers on top of the SAME fireClose funnel —
+	// close()/onClose's at-most-once and idempotent guarantees are unchanged.
+	// A double local close() still invokes ws.close() once and onClose once,
+	// and the state settles to a single terminal value.
+	{
+		const ws = new FakeWs()
+		const t = wsClientTransport(ws)
+		let closeFired = 0
+		t.onClose(() => closeFired++)
+		const states: string[] = []
+		t.onConnectionStateChange((s) => states.push(s))
+		t.close()
+		t.close()
+		assert.equal(closeFired, 1, 'onClose still fires exactly once (additive change did not alter the at-most-once contract)')
+		assert.equal(ws.closeCalls, 1, 'ws.close() is still only invoked once (close() is still idempotent)')
+		assert.deepEqual(states, ['failed'], 'the connection state settled once, to failed (never having opened)')
+		console.log('ok: ws-client-transport — connection-state signal is additive: close()/onClose contracts unchanged')
 	}
 
 	console.log('ws-client-transport.test.ts: all tests passed')

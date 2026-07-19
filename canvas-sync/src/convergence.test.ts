@@ -128,6 +128,29 @@ export function runTrial(seed: number, opCount: number): TrialResult {
     }
   }
 
+  // TEXT convergence: dumpModel/CanvasDocument carries NO text field at all —
+  // setText writes to a separate per-shape LoroText container keyed
+  // `text:<id>` (see loro-canvas-doc.ts's textKey), entirely outside the
+  // Shape/CanvasDocument schema. So the byte-identical normalizedStates check
+  // above does not exercise setText's convergence in any way — it would pass
+  // even if every peer's text diverged. Check it explicitly, per pool shape
+  // id, across all peers. repair() never touches text containers, so this
+  // holds identically whether checked pre- or post-repair; checked here
+  // (post-repair) purely to keep one converged snapshot for every assertion
+  // in this trial.
+  for (const id of ID_POOL.shapeIds) {
+    const texts = peers.map((doc) => doc.getText(id))
+    for (let i = 1; i < texts.length; i++) {
+      if (texts[i] !== texts[0]) {
+        return {
+          ok: false,
+          skipped: stats.skipped,
+          detail: `peer 0 and peer ${i} disagree on text for ${id}: ${JSON.stringify(texts[0])} vs ${JSON.stringify(texts[i])}`,
+        }
+      }
+    }
+  }
+
   for (let i = 0; i < peers.length; i++) {
     const violations = checkInvariants(dumpModel(peers[i]!))
     if (violations.length > 0) {

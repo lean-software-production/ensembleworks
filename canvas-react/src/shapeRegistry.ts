@@ -59,7 +59,7 @@
 // `registerShape(kind, Component)` call site keeps working unchanged.
 import type { ComponentType } from 'react'
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
-import type { EditorState } from '@ensembleworks/canvas-editor'
+import type { EditorState, Intent } from '@ensembleworks/canvas-editor'
 import { BoxShape } from './shapes/BoxShape.js'
 
 export interface ShapeBodyProps {
@@ -83,6 +83,25 @@ export interface ShapeBodyProps {
    * it — BoxShape's labelOf falls back to its pre-existing richText/name/kind
    * chain whenever this is absent OR returns an empty string. */
   readonly getText?: (id: string) => string
+  /** Applies a batch of doc-mutating Intents (`editor.applyAll(intents)` —
+   * the SAME batching entry point tool-loop.ts's tools use, one commit per
+   * call, never one per intent — see editor.ts's applyAll doc comment).
+   * Threaded from CanvasV2App down through ShapeLayer/EmbedLayer/ShapeBody
+   * (and EmbedHost, for embed kinds) exactly like `getText` above, so a
+   * shape body (D3-D5's roadmap/file-viewer/etc embeds) can PERSIST a
+   * change — e.g. a roadmap card edit, a file-viewer annotation — the same
+   * way a tool does, without each embed reaching for its own ad hoc write
+   * path or being handed the whole Editor (which would let a body read/
+   * mutate camera/selection/undo history well beyond "write my own props").
+   * `Intent` is a TYPE-only import from `@ensembleworks/canvas-editor` — an
+   * allowed dependency (see boundary.test.ts), not a boundary breach: this
+   * package still never CONSTRUCTS or APPLIES an Intent itself, it only
+   * forwards the one caller-owned function through. Optional, exactly like
+   * `getText`, so a fixture/test/golden that doesn't need to write anything
+   * (most of shape-layer.test.ts, the static-fixture goldens) can omit it —
+   * a component that calls `dispatch?.(...)` unconditionally is then simply
+   * a no-op wherever it's absent. */
+  readonly dispatch?: (intents: Intent[]) => void
 }
 
 export interface RegisterShapeOptions {

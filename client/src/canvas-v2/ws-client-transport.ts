@@ -32,6 +32,24 @@
  *    currently there, exactly like the server adapter's `onMessageCb`/
  *    `onCloseCb` pattern.
  *
+ * CONNECTION-STATE SIGNAL (Task E1, additive — does NOT change any of the
+ * above): this adapter also tracks and exposes a best-effort `ConnectionState`
+ * (`connecting` / `open` / `reconnecting` / `failed`) via `getConnectionState`/
+ * `onConnectionStateChange`, layered on the SAME `onopen`/`onclose`/`onerror`
+ * funnel rather than a separate one — `close()` stays idempotent and
+ * `onClose` still fires at most once; the state transition happens inside the
+ * existing `fireClose` guard, not a new trigger path. `everOpened` is what
+ * distinguishes `failed` (errored/closed BEFORE ever opening — the "dead
+ * dogfood" case: wrong port, route absent, `EW_CANVAS_SYNC` unset
+ * server-side) from `reconnecting` (closed AFTER having been open at least
+ * once). `reconnecting` here is INFERRED purely from "closed after open,"
+ * not a real retry-in-progress signal: neither this adapter nor
+ * `SyncClientPeer` above it runs an automatic reconnect loop today (the only
+ * recovery path is an explicit, caller-driven `peer.reconnect(freshTransport)`
+ * over a brand-new transport instance) — a future task wiring that up can
+ * make `reconnecting` mean "actively retrying" for real without touching this
+ * adapter's own state machine.
+ *
  * BINARY MODE (load-bearing, not a default left alone): this adapter sets
  * `ws.binaryType = 'arraybuffer'` itself, synchronously, before wiring any
  * handler — canvas-sync's frames are raw Loro bytes (protocol.ts's `encode`/
@@ -89,9 +107,27 @@ export interface WebSocketLike {
 	binaryType: string
 	send(data: Uint8Array): void
 	close(): void
+	onopen: (() => void) | null
 	onmessage: ((ev: { readonly data: unknown }) => void) | null
 	onclose: (() => void) | null
 	onerror: (() => void) | null
+}
+
+/** This adapter's own best-effort connection-state signal — see the module
+ * header's CONNECTION-STATE SIGNAL note for exactly what each value means
+ * and where it comes from. NOT part of the canvas-sync `Transport` contract
+ * itself (canvas-sync only ever sees `send`/`onMessage`/`onClose`/`close`);
+ * this is a client-app-only concern (CanvasV2App's connection banner). */
+export type ConnectionState = 'connecting' | 'open' | 'reconnecting' | 'failed'
+
+/** `Transport` plus this adapter's additive connection-state accessors — a
+ * strict superset, so anything typed against plain `Transport` (canvas-sync,
+ * the existing contract tests) keeps working unchanged. */
+export interface TransportWithConnectionState extends Transport {
+	getConnectionState(): ConnectionState
+	/** Single-listener, last-writer-wins — same pattern as `onMessage`/
+	 * `onClose` above, not ordinary multi-listener EventEmitter semantics. */
+	onConnectionStateChange(cb: (state: ConnectionState) => void): void
 }
 
 /** Normalize a `MessageEvent.data` value to `Uint8Array`. Under
@@ -111,14 +147,32 @@ function toBytes(data: unknown): Uint8Array | null {
 	return null
 }
 
-export function wsClientTransport(ws: WebSocketLike): Transport {
+export function wsClientTransport(ws: WebSocketLike): TransportWithConnectionState {
 	let closed = false
 	let onCloseCb: (() => void) | null = null
 	let onMessageCb: ((bytes: Uint8Array) => void) | null = null
 
+	// CONNECTION-STATE SIGNAL (Task E1, additive) — see the module header's
+	// own note. `everOpened` is the sole extra bit of memory this needs;
+	// `state`/`onStateCb` are otherwise the exact same "plain variable +
+	// single callback" shape as `onCloseCb`/`onMessageCb` above.
+	let state: ConnectionState = 'connecting'
+	let everOpened = false
+	let onStateCb: ((s: ConnectionState) => void) | null = null
+	const setConnectionState = (next: ConnectionState): void => {
+		if (state === next) return
+		state = next
+		onStateCb?.(next)
+	}
+
 	const fireClose = (): void => {
 		if (closed) return
 		closed = true
+		// Runs BEFORE onCloseCb, same "flip the guard/derived state first"
+		// ordering as `closed` itself — a listener that reads
+		// `getConnectionState()` from inside its `onClose` callback sees the
+		// already-settled value, not the pre-transition one.
+		setConnectionState(everOpened ? 'reconnecting' : 'failed')
 		onCloseCb?.()
 	}
 
@@ -126,6 +180,14 @@ export function wsClientTransport(ws: WebSocketLike): Transport {
 	// note. Synchronous: no message can arrive before this line runs (the
 	// caller hands us an already-constructed-but-maybe-not-yet-open socket).
 	ws.binaryType = 'arraybuffer'
+	ws.onopen = () => {
+		// Defensive only: a real browser socket does not fire `open` after a
+		// local `close()` mid-CONNECTING, but nothing here depends on that
+		// guarantee holding across every environment.
+		if (closed) return
+		everOpened = true
+		setConnectionState('open')
+	}
 	ws.onmessage = (ev) => {
 		const bytes = toBytes(ev.data)
 		if (bytes) onMessageCb?.(bytes)
@@ -159,6 +221,12 @@ export function wsClientTransport(ws: WebSocketLike): Transport {
 			// throw.
 			fireClose()
 			ws.close()
+		},
+		getConnectionState() {
+			return state
+		},
+		onConnectionStateChange(cb) {
+			onStateCb = cb
 		},
 	}
 }

@@ -98,6 +98,26 @@ export class DocumentActor {
 		return this.peer.clientCount
 	}
 
+	/** Live on-disk SQLite file size for this room (Task H4, S6 dogfood
+	 * visibility) — delegates to the store's diskBytes() accessor (a
+	 * high-water mark; see its doc comment). Read by the D3 metrics endpoint
+	 * alongside snapshotBytes below to render the disk÷snapshot ratio the
+	 * DevOverlay surfaces, mirroring soak-actor.ts's
+	 * DISK_SUSTAINED_HIGHWATER_MULTIPLIER threshold on the soak side. */
+	get diskBytes(): number {
+		return this.store.diskBytes()
+	}
+
+	/** Live in-memory snapshot size for this room, in bytes — the SAME
+	 * export compact() persists (this.peer.snapshot() === peer.doc.
+	 * exportSnapshot()), so diskBytes/snapshotBytes are directly comparable.
+	 * Computed live per read rather than cached: exportSnapshot() is
+	 * O(doc size), same cost profile compact() already pays, and dogfood
+	 * room sizes make a live read on the ~5s metrics-poll cadence cheap. */
+	get snapshotBytes(): number {
+		return this.peer.snapshot().byteLength
+	}
+
 	constructor(opts: ActorOpts) {
 		this.store = new CanvasV2Store(opts.dir, opts.roomId)
 		this.roomId = opts.roomId

@@ -670,4 +670,32 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: ResizeShapes clamps stored w/h at a 1-world-unit floor — never negative')
 }
 
+// ============================================================================
+// 21. UpdateProps (Task D1): SHALLOW-merges `props` into the shape's current
+//     props map — a pre-existing key not named in this call survives
+//     untouched, and a named key is overwritten — matching
+//     CanvasDoc.updateProps's own `{...current, ...props}` contract exactly
+//     (loro-canvas-doc.ts). An unknown id is a silent no-op: no throw, and
+//     docMutated:false — proven via commit-counting, the same technique test
+//     14 uses for SetText's identical tolerance contract.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { props: { title: 'orig', kept: 'stays' } }) })
+
+  editor.apply({ type: 'UpdateProps', id: 'shape:a', props: { title: 'x' } })
+  assert.deepEqual(
+    editor.doc.getShape('shape:a')!.props,
+    { title: 'x', kept: 'stays' },
+    'UpdateProps shallow-merges — an unnamed pre-existing key survives, a named key is overwritten',
+  )
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+  editor.apply({ type: 'UpdateProps', id: 'shape:missing', props: { title: 'y' } })
+  assert.equal(commits, 0, 'UpdateProps on an unknown id must not commit — docMutated must be false')
+
+  console.log('ok: UpdateProps shallow-merges props and silently no-ops on an unknown id')
+}
+
 console.log('ok: canvas-editor editor + intents')
