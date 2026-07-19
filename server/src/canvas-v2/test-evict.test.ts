@@ -32,6 +32,19 @@ async function boot(env: Record<string, string | undefined>) {
 	console.log('ok: evict hook is absent without EW_CANVAS_TEST_EVICT')
 }
 {
+	// The OTHER flag alone must also not open the route. EW_CANVAS_TEST_EVICT is
+	// the flag someone might plausibly set on a box where canvas-v2 sync is off,
+	// and `canvasActors` is null there — so the route is unreachable structurally,
+	// not just by the env check. Both halves of `canvasActors && EW_CANVAS_TEST_EVICT`
+	// are load-bearing; this pins the half the other two cases never exercise.
+	const { server, dataDir, url } = await boot({ EW_CANVAS_SYNC: undefined, EW_CANVAS_TEST_EVICT: '1' })
+	const res = await fetch(`${url}/api/canvas-v2/test/evict/some-room`, { method: 'POST' })
+	assert.equal(res.status, 404, 'the evict hook must 404 when EW_CANVAS_SYNC is unset, even with EW_CANVAS_TEST_EVICT=1')
+	server.close()
+	rmSync(dataDir, { recursive: true, force: true })
+	console.log('ok: evict hook is absent without EW_CANVAS_SYNC, even with the test flag on')
+}
+{
 	// Flag ON: the route exists and reports the sweep.
 	const { server, dataDir, url } = await boot({ EW_CANVAS_SYNC: '1', EW_CANVAS_TEST_EVICT: '1' })
 	const res = await fetch(`${url}/api/canvas-v2/test/evict/some-room`, { method: 'POST' })
