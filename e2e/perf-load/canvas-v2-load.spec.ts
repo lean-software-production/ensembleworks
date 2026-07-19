@@ -268,6 +268,34 @@ test.describe('canvas-v2 time-to-first-shape', () => {
 		assertNoRegression('v2 @1000 bulk warm', out.firstShapeMs, 'v2-1000-bulk-warm')
 	})
 
+	/** Task 7 — the oplog-volume axis. Same rendered content (1000 shapes) as
+	 * the bulk scenario above, but committed as 1000 SEPARATE Frame.Update
+	 * frames instead of one. Distinguishes "the backfill ships too much data"
+	 * from "the backfill ships too many ops" (candidate contributor (b) in the
+	 * Task 0 rationale). The axis itself — that bulk really is commits:1 and
+	 * per-shape really is commits:1000 on the wire, not merely self-reported —
+	 * is pinned independently by wire-seed.test.ts's FIX-1 Frame.Update tally,
+	 * not re-proven here; this test only spends that guarantee on a load
+	 * measurement. */
+	test('v2 load @ 1000 shapes, PER-SHAPE commits — the oplog-volume axis', async ({ browser, baseURL }) => {
+		const attrs = await runScenario(browser, baseURL ?? 'http://127.0.0.1:5274', { room: 'v2load-1k-percommit', count: 1000, mode: 'per-shape', engineParam: 'v2' })
+		const out = report('v2 @1000 per-shape warm', attrs)
+		maybeRecord('v2-1000-percommit-warm', out)
+
+		// The comparison this scenario EXISTS for: identical rendered content,
+		// 1000x the oplog entries. Printed against the bulk baseline so a reader
+		// can see immediately whether ops-count or bytes dominates.
+		const bulk = recordedBaselines['v2-1000-bulk-warm']?.firstShapeMs
+		if (bulk && typeof bulk.p50ms === 'number') {
+			console.log(
+				`[v2-load] OPLOG AXIS @1000: per-shape p50=${out.firstShapeMs.p50ms}ms vs bulk p50=${bulk.p50ms}ms — ` +
+					`ratio ${(out.firstShapeMs.p50ms / bulk.p50ms).toFixed(2)}x. A ratio near 1.0 means op COUNT is not the bottleneck ` +
+					`(look at bytes/WASM/chunk instead); a large ratio means it is.`,
+			)
+		}
+		assertNoRegression('v2 @1000 per-shape warm', out.firstShapeMs, 'v2-1000-percommit-warm')
+	})
+
 	/** The v1 (tldraw) arm. Seeds over the legacy HTTP agent API rather than the
 	 * /sync/v2 wire, because the two engines have genuinely different backends
 	 * — v1 has no Loro actor and /api/canvas/shape has no v2 equivalent (see
