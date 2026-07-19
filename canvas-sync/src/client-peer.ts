@@ -24,6 +24,8 @@ export class SyncClientPeer {
   private closed = false
   private repairCounter = 0
   private lastBackfillBytesValue = 0
+  private syncDone!: Promise<void>
+  private resolveSyncDone!: () => void
 
   /** Count of times THIS peer has called `this.doc.repair()` — i.e. how many
    * inbound Updates newly changed the doc (see handleFrame's `r.changed`
@@ -57,6 +59,10 @@ export class SyncClientPeer {
     // `this.transport` at fire time — a reconnect() swap is honored without
     // re-subscribing here either. Only wired if a PresenceStore was injected.
     this.unsubPresence = this.presence?.onLocalUpdate((bytes) => this.transport.send(encode(Frame.Presence, bytes)))
+    // Arm the readiness promise BEFORE wiring the transport / sending the
+    // SyncRequest: over a synchronous transport the server's SyncDone reply
+    // lands inside requestSync(), so resolveSyncDone must already exist.
+    this.armReady()
     this.wireTransport(this.transport)
     // Ask the server for anything we're missing.
     this.requestSync()
@@ -69,6 +75,25 @@ export class SyncClientPeer {
 
   /** (Re)connect handshake: tell the server our version so it sends only the delta. */
   requestSync(): void { this.transport.send(encode(Frame.SyncRequest, this.doc.versionBytes())) }
+
+  /** (Re)arm the readiness promise. Called from the constructor and from every
+   * reconnect(), each of which sends a fresh Frame.SyncRequest — so ready()
+   * always reflects the MOST RECENT handshake, never a stale one-shot resolve
+   * left over from a prior connection. */
+  private armReady(): void {
+    this.syncDone = new Promise<void>((resolve) => { this.resolveSyncDone = resolve })
+  }
+
+  /** Resolves once the server has answered THIS peer's current SyncRequest with
+   * its backfill Update and the closing Frame.SyncDone — i.e. this peer is
+   * caught up to everything the server held at handshake time. Frames dispatch
+   * synchronously and in order (the memory transport and a real WebSocket both
+   * deliver in order; handleFrame is synchronous per frame), so by the time
+   * SyncDone is handled the preceding backfill Update has already been
+   * imported. The dogfood mount (CanvasV2App.boot) races this against a bounded
+   * cap so it proceeds the instant sync completes instead of paying a fixed
+   * settle delay. Re-armed on reconnect(), so it is never a one-shot lie. */
+  ready(): Promise<void> { return this.syncDone }
 
   /**
    * Swap to a fresh transport after a disconnect, keeping the doc (and any ops
@@ -143,6 +168,12 @@ export class SyncClientPeer {
       // encoded state to the store (LWW/merge is Loro's job). A no-op if
       // this peer wasn't constructed with a presence store.
       this.presence?.apply(payload)
+    } else if (tag === Frame.SyncDone) {
+      // The server has finished answering our SyncRequest (its backfill Update
+      // was sent just before this) — release anyone awaiting ready(). Resolving
+      // an already-resolved promise is a harmless no-op, so a stray/duplicate
+      // SyncDone is safe.
+      this.resolveSyncDone()
     }
     // Unknown tags: deliberately ignored.
   }
