@@ -335,14 +335,16 @@ export function PanelTile({
 					style={{
 						display: 'flex',
 						alignItems: 'center',
-						// Compact local tile: the swatch + three 25px icon buttons don't
-						// fit the strip's width, and the root's overflow:hidden would
-						// clip them. Wrap to extra rows instead of clipping — mic/cam/
-						// crosstalk must stay reachable at every size.
+						// Compact local tile: wrap at BOTH levels (this strip and the
+						// button group below) so the mic/cam/crosstalk row doesn't stay a
+						// fixed 81px block that the root's overflow:hidden would clip —
+						// and shrink the padding so a single 25px button fits the
+						// narrowest tile. See the button-group div below for the other
+						// half of this fix.
 						flexWrap: compact ? 'wrap' : undefined,
 						justifyContent: compact ? 'center' : undefined,
 						gap: 6,
-						padding: '5px 6px',
+						padding: compact ? '4px 2px' : '5px 6px',
 						background: wm.panel,
 					}}
 				>
@@ -366,7 +368,18 @@ export function PanelTile({
 						</span>
 					)}
 					{isLocal && (
-						<div style={{ display: 'flex', gap: 3, flex: '0 0 auto' }}>
+						<div
+							style={{
+								display: 'flex',
+								gap: 3,
+								// Compact: let the group shrink and wrap onto its own row(s)
+								// instead of holding a fixed 81px basis that would overflow
+								// the tile and get clipped by the root's overflow:hidden.
+								flex: compact ? '1 1 auto' : '0 0 auto',
+								flexWrap: compact ? 'wrap' : undefined,
+								justifyContent: compact ? 'center' : undefined,
+							}}
+						>
 							<AvIconButton
 								kind="mic"
 								enabled={snap?.micEnabled ?? false}
