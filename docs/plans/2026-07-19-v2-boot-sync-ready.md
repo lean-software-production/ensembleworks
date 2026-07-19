@@ -246,6 +246,53 @@ This task also carries the **required deterministic race demonstration**: with
 the backfill held, resolving the page id early bootstraps a redundant page;
 gating on `ready()` first adopts the server's real page.
 
+> ### CHANGE NOTE — 2026-07-19 (Task 3a: isolate per-demo servers — cross-demo contamination via pass-through sends)
+>
+> **What happened.** An implementer executing Task 3a hit a real defect in the
+> plan's own test code (not in the `ready()` design, which is correct as
+> written). The original 3a race block declared a SINGLE
+> `const server = new SyncServerPeer({ peerId: 91n })` seeded with `page:xyz`
+> and reused it for BOTH the unguarded and the guarded sub-demonstrations. The
+> guarded assertion `existing === 'page:xyz'` failed:
+>
+> ```
+> AssertionError: after ready(), the server page is visible and adopted
+>   actual: "page:p", expected: "page:xyz"
+> ```
+>
+> **The mechanism.** `gatedClientTransport` holds only server→client frames;
+> **client→server sends pass straight through** (`send: (b) => raw.send(b)`).
+> In the unguarded sub-demo, `clientA.doc.putPage({id:'page:p',...})` +
+> `commit()` fires `subscribeLocalUpdates` synchronously, so that write reaches
+> the SHARED server immediately — contaminating its doc with `page:p` BEFORE
+> `clientB`'s handshake even runs. `clientB`'s backfill therefore carries BOTH
+> pages, and `canonicalPageId` (lexicographically smallest) returns `page:p` <
+> `page:xyz`, so the guarded demo adopts the wrong page. The implementer
+> verified (scratch, uncommitted) that giving the guarded sub-demo its OWN
+> server makes everything pass: `readyResolved` false while held, adopts
+> `page:xyz`, no redundant page.
+>
+> **What changed (below).** 3a's sub-demo (b) is split into two sibling blocks,
+> each with its OWN `SyncServerPeer` seeded identically with `page:xyz`:
+> unguarded keeps `peerId: 91n`; guarded uses a fresh `peerId: 93n` (92n is
+> Task 4's; 90/91 already used — 93n is collision-free). A comment makes the
+> isolation's reason explicit (it is load-bearing, not incidental): local
+> writes pass through the gate to the server synchronously, so a shared server
+> would let one demo's bootstrap leak into the other's backfill. The unguarded
+> assertion is unchanged (`['page:p','page:xyz']` after release stays correct
+> with its own server). The initial RED is unchanged:
+> `TypeError: client.ready is not a function` (sub-demo (a) reaches `ready()`
+> first, before it exists); no other expected RED/GREEN text in Task 3 moves.
+>
+> **Other tasks re-checked for the same hazard — NOT exposed.** Task 4
+> (reconnect, own server 92n): a single client + single server, one demo, and
+> the client performs NO local writes before its handshakes, so the empty
+> reconnect backfill it pushes carries nothing — no second demo to pollute.
+> Task 6 (client-layer, own server 1n): a single client + single server, one
+> demo, no local writes before `ready()`, and `resolvePageId` writes nothing
+> because `page:xyz` is already visible after `ready()`. Neither shares a
+> server across demos, so the contamination mechanism cannot arise.
+
 ### 3a — RED: the readiness signal + the race
 
 First, edit the imports at the top of `canvas-sync/src/client-peer.test.ts`:
@@ -300,16 +347,25 @@ Then add this case just before the final `console.log('ok: client-peer')`:
     assert.ok(resolved, 'ready() resolves for an empty room (server always sends a backfill reply + SyncDone)')
   }
 
-  // (b) THE RACE. Server has a real page 'page:xyz'. The page-bootstrap logic
-  // client/src/canvas-v2/bootstrap-page.ts runs is replicated inline here
-  // (canonicalPageId → bootstrap 'page:p' iff no page is visible) because
-  // canvas-sync must never import client code (clean-room boundary).
+  // (b) THE RACE. Each sub-demo gets its OWN server, seeded identically with a
+  // real page 'page:xyz'. They MUST NOT share a server: gatedClientTransport
+  // holds only server→client frames — a client's own writes (putPage + commit)
+  // fire subscribeLocalUpdates synchronously and pass STRAIGHT THROUGH the gate
+  // to the server. A shared server would therefore let the unguarded demo's
+  // bootstrapped 'page:p' land on the server before the guarded demo's
+  // handshake, contaminating its backfill so canonicalPageId (smallest id)
+  // wrongly resolves to 'page:p'. The isolation is load-bearing, not
+  // incidental. The page-bootstrap logic client/src/canvas-v2/bootstrap-page.ts
+  // runs is replicated inline here (canonicalPageId → bootstrap 'page:p' iff no
+  // page is visible) because canvas-sync must never import client code
+  // (clean-room boundary).
+
+  // Unguarded (the race): resolve BEFORE the backfill drains -> redundant page.
   {
     const server = new SyncServerPeer({ peerId: 91n })
     server.doc.putPage({ id: 'page:xyz', name: 'Real' })
     server.doc.commit()
 
-    // Unguarded (the race): resolve BEFORE the backfill drains -> redundant page.
     const [serverEndA, clientEndRawA] = makePair()
     server.connect(serverEndA)
     const gateA = gatedClientTransport(clientEndRawA)
@@ -322,8 +378,16 @@ Then add this case just before the final `console.log('ok: client-peer')`:
       ['page:p', 'page:xyz'],
       'resolving the page id BEFORE the backfill drains bootstraps a redundant page:p — the race the fixed settle sleep only guessed at',
     )
+  }
 
-    // Guarded (the fix): await ready() first, then resolve -> adopts page:xyz.
+  // Guarded (the fix): await ready() first, then resolve -> adopts page:xyz.
+  // Its OWN server (peerId 93n) so the unguarded demo's stray 'page:p' write
+  // can never leak in (see the block comment above on pass-through sends).
+  {
+    const server = new SyncServerPeer({ peerId: 93n })
+    server.doc.putPage({ id: 'page:xyz', name: 'Real' })
+    server.doc.commit()
+
     const [serverEndB, clientEndRawB] = makePair()
     server.connect(serverEndB)
     const gateB = gatedClientTransport(clientEndRawB)
