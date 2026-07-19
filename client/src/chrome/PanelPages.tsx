@@ -260,14 +260,17 @@ function CurrentPageMosaic({
 
 	// FLIP bookkeeping: previous rects by rawId. Guarded by an order key so
 	// tiles aren't re-measured on unrelated renders (AV snapshot ticks) — only
-	// an actual order/roster change can move tiles.
+	// an order/roster change or a tileWidth change can move tiles. tileWidth
+	// is folded into the key so a panel resize re-measures (otherwise the next
+	// genuine reorder would animate from stale pre-resize positions) — and the
+	// resize reflow itself gets the animation.
 	const gridRef = useRef<HTMLDivElement>(null)
 	const prevRects = useRef<Map<string, DOMRect>>(new Map())
 	const prevOrderKey = useRef('')
 	useLayoutEffect(() => {
 		const grid = gridRef.current
 		if (!grid) return
-		const orderKey = ordered.map((p) => p.rawId).join('|')
+		const orderKey = tileWidth + '|' + ordered.map((p) => p.rawId).join('|')
 		if (orderKey === prevOrderKey.current && grid.children.length === prevRects.current.size) {
 			return
 		}
