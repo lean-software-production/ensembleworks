@@ -41,9 +41,11 @@ For the group of the page you are on:
 
 For every **other** page's group:
 
-- Tiles are pinned at a fixed ambient minimum (~22px chips) regardless of
-  panel width. Speaking rings still render at chip size. Widening the panel
-  enlarges *your room's* faces only.
+- Tiles are pinned at a fixed ambient minimum (~40px chips) regardless of
+  panel width, carrying live micro-video when the camera is on (initials
+  otherwise). Speaking rings still render at chip size. Widening the panel
+  enlarges *your room's* faces only. (Amended 2026-07-19: originally 22px
+  initials-only; live video at 40px preferred after using it.)
 
 Persistence: nothing new. Panel width already persists via `panelLayout.ts`
 localStorage state. Collapsed-rail behaviour is unchanged.

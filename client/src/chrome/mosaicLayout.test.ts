@@ -43,7 +43,7 @@ assert.equal(mosaicTileWidth(256, 0), TILE_WIDTH_MAX)
 // --- constants sanity (spec values) ---
 assert.equal(TILE_WIDTH_MIN, 36)
 assert.equal(LABEL_MIN_WIDTH, 64)
-assert.equal(CHIP_SIZE, 22)
+assert.equal(CHIP_SIZE, 40)
 assert.equal(MOSAIC_GAP, 6)
 assert.ok(TILE_WIDTH_MAX >= 320)
 

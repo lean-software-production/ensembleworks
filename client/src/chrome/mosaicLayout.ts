@@ -25,8 +25,11 @@ export const TILE_WIDTH_MAX = 320
 /** Width at/above which a tile shows its name/control strip and overlays. */
 export const LABEL_MIN_WIDTH = 64
 
-/** Fixed size of an other-page ambient chip, px (spec: ~22px chips). */
-export const CHIP_SIZE = 22
+/** Fixed size of an other-page ambient chip, px. 40 is the floor of face
+ * recognisability for the live micro-video the chips carry — big enough to
+ * see who it is at a glance, still clearly subordinate to the current page's
+ * tiles. */
+export const CHIP_SIZE = 40
 
 /** Square-ish grid: columns = ceil(√N), min 1. */
 export function mosaicColumns(count: number): number {

@@ -412,11 +412,12 @@ export function PanelTile({
 }
 
 // Ambient chip for OTHER pages' participants (panel-video-mosaic spec
-// "Sizing rules"): a fixed CHIP_SIZE square — identity-tinted, speaking ring,
-// name tooltip, click-to-zoom — pinned at minimum regardless of panel width,
-// so widening the panel enlarges YOUR room's faces, not a wall of everyone.
-// No video element at this size: LiveKit's adaptiveStream would still deliver
-// frames for a 22px element, and a moving thumbnail this small is noise.
+// "Sizing rules"): a fixed CHIP_SIZE square — live micro-video (camera on)
+// or identity-tinted initials, speaking ring, name tooltip, click-to-zoom —
+// pinned at minimum regardless of panel width, so widening the panel enlarges
+// YOUR room's faces, not a wall of everyone. The video element is deliberate:
+// LiveKit's adaptiveStream keys delivered quality off the attached element's
+// size, so a CHIP_SIZE element pulls only the lowest simulcast layer.
 export function MosaicChip({
 	editor,
 	participant,
@@ -429,6 +430,26 @@ export function MosaicChip({
 	const { rawId, prefixedId, name, color, isLocal } = participant
 	const peer = !isLocal ? (snap?.peers.find((p) => p.id === rawId) ?? null) : null
 	const isSpeaking = isLocal ? (snap?.localSpeaking ?? false) : (peer?.isSpeaking ?? false)
+
+	// Same attach dance as PanelTile's media area (audio stays in the spatial
+	// WebAudio pipeline; the element is video-only). Chips are always remote —
+	// the local user is by definition on their own current page — so only the
+	// peer track is considered.
+	const videoTrack = peer?.videoTrack ?? null
+	const videoRef = useRef<HTMLDivElement>(null)
+	useEffect(() => {
+		const el = videoRef.current
+		if (!el || !videoTrack || videoTrack.kind !== Track.Kind.Video) return
+		const video = videoTrack.attach()
+		video.muted = true
+		Object.assign(video.style, { width: '100%', height: '100%', objectFit: 'cover' })
+		el.appendChild(video)
+		return () => {
+			videoTrack.detach(video)
+			video.remove()
+		}
+	}, [videoTrack])
+
 	return (
 		<button
 			type="button"
@@ -457,13 +478,18 @@ export function MosaicChip({
 				cursor: isLocal ? 'default' : 'pointer',
 				display: 'grid',
 				placeItems: 'center',
+				overflow: 'hidden',
 				fontFamily: wm.sans,
-				fontSize: 9,
+				fontSize: 11,
 				fontWeight: 700,
 				color: wm.ink,
 			}}
 		>
-			{initialsFor(name)}
+			{videoTrack ? (
+				<div ref={videoRef} style={{ width: '100%', height: '100%' }} />
+			) : (
+				initialsFor(name)
+			)}
 		</button>
 	)
 }
