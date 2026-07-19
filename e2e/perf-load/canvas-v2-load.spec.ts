@@ -46,8 +46,9 @@ import path from 'node:path'
 import { test, expect, identityState } from '../lib/fixtures'
 import { recordTo, capturing } from '../lib/perf'
 import { summarize, attribute, type LoadSample, type Summary } from '../lib/load-metrics'
-import { installLoadProbe, readLoadSample, V2_SHAPE_SELECTOR, V2_TOOLBAR_SELECTOR } from '../lib/load-probe'
+import { installLoadProbe, readLoadSample, V2_SHAPE_SELECTOR, V2_TOOLBAR_SELECTOR, V1_SHAPE_SELECTOR } from '../lib/load-probe'
 import { seedRoomOverWire, type SeedMode } from '../lib/wire-seed'
+import { shape as httpShape } from '../lib/seed'
 
 const WS_BASE = 'ws://127.0.0.1:8788'
 const FILE = path.join(import.meta.dirname, '../baselines/canvas-v2-load.json')
@@ -265,5 +266,79 @@ test.describe('canvas-v2 time-to-first-shape', () => {
 		const out = report('v2 @1000 bulk warm', attrs)
 		maybeRecord('v2-1000-bulk-warm', out)
 		assertNoRegression('v2 @1000 bulk warm', out.firstShapeMs, 'v2-1000-bulk-warm')
+	})
+
+	/** The v1 (tldraw) arm. Seeds over the legacy HTTP agent API rather than the
+	 * /sync/v2 wire, because the two engines have genuinely different backends
+	 * — v1 has no Loro actor and /api/canvas/shape has no v2 equivalent (see
+	 * canvas-v2-perf.spec.ts's module header, which records the same finding).
+	 * The comparison stays honest because both arms measure the SAME
+	 * user-visible quantity — navigation -> first shape painted — at the same
+	 * shape count. */
+	// `origin` is threaded through for the same reason runScenario above takes
+	// it explicitly: identityState's default origin is 'http://127.0.0.1:5273'
+	// (the SHARED e2e rig's port), but this harness serves the client on 5274
+	// (playwright.load.config.ts). These contexts are created directly from
+	// `browser`, bypassing fixtures.ts's `page` fixture dialog guard — so a
+	// wrong-origin identity doesn't throw, it makes onboarding's
+	// window.prompt fire and Playwright auto-dismiss it silently, which reads
+	// as a bare page.goto timeout with no indication of the real cause. (Hit
+	// this empirically on the first run of this test: `Protocol error
+	// (Page.handleJavaScriptDialog): Internal server error, session closed`
+	// followed by a 300s test timeout on page.goto — see plan-defect note in
+	// the task report.)
+	async function runV1(browser: import('@playwright/test').Browser, origin: string, room: string, count: number) {
+		const samples: LoadSample[] = []
+		for (let rep = 0; rep < REPS; rep++) {
+			const r = `${room}-r${rep}`
+			const cols = Math.ceil(Math.sqrt(count))
+			// Sequential batches: Promise.all over 1k HTTP posts saturates the
+			// server and distorts nothing measured here, but does make failures
+			// unreadable. Batched-parallel is the compromise.
+			for (let i = 0; i < count; i += 50) {
+				await Promise.all(
+					Array.from({ length: Math.min(50, count - i) }, (_, k) => {
+						const j = i + k
+						return httpShape(r, { type: 'note', x: (j % cols) * 260, y: Math.floor(j / cols) * 260, text: `n${j}`, color: 'yellow' })
+					}),
+				)
+			}
+			const context = await browser.newContext({
+				storageState: identityState('E2E One', 'e2e-user-0000-0000-0001', origin),
+				viewport: { width: 1280, height: 720 },
+			})
+			const page = await context.newPage()
+			await installLoadProbe(page, { shapeSelector: V1_SHAPE_SELECTOR, toolbarSelector: null, chunkPattern: null })
+			await page.goto(`/?room=${r}`)
+			const sample = await readLoadSample(page, 120_000)
+			console.log(`[v2-load][RAW][v1load-small][rep=${rep}] ${JSON.stringify(sample)}`)
+			samples.push(sample)
+			await context.close()
+		}
+		return samples.map(attribute)
+	}
+
+	test('v1 (tldraw) load @ 100 shapes — the parity reference', async ({ browser, baseURL }) => {
+		const attrs = await runV1(browser, baseURL ?? 'http://127.0.0.1:5274', 'v1load-small', 100)
+		const out = report('v1 @100', attrs)
+		maybeRecord('v1-100', out)
+
+		// Side-by-side, printed unconditionally: the acceptance bar the owner set
+		// is a RATIO against v1, so the harness must always state it, not leave a
+		// reader to diff two log lines from two different jobs.
+		const v2 = recordedBaselines['v2-100-bulk-warm']?.firstShapeMs
+		// Medians, matching the gated statistic. Comparing two engines on their
+		// worst-of-five would compare two runner hiccups, not two engines.
+		if (v2 && typeof v2.p50ms === 'number') {
+			const ratio = out.firstShapeMs.p50ms === 0 ? Infinity : v2.p50ms / out.firstShapeMs.p50ms
+			console.log(`[v2-load] PARITY @100: v2 p50=${v2.p50ms}ms vs v1 p50=${out.firstShapeMs.p50ms}ms — v2 is ${ratio.toFixed(2)}x v1 (<=1.00 means at or better than parity)`)
+		} else {
+			console.log('[v2-load] PARITY @100: no committed v2-100-bulk-warm baseline yet — capture one to get the ratio')
+		}
+
+		// OBSERVED-ONLY, deliberately NOT gated: v1 is the reference this work is
+		// measured against, not a surface this branch changes. Gating it here
+		// would make an unrelated tldraw-side regression fail the v2 harness.
+		expect(out.firstShapeMs.n).toBe(REPS)
 	})
 })

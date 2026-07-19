@@ -52,6 +52,19 @@ export async function installLoadProbe(page: Page, opts: ProbeOpts): Promise<voi
 			return sock
 		} as unknown as typeof WebSocket
 		Patched.prototype = NativeWS.prototype
+		// Static constants (OPEN/CONNECTING/CLOSING/CLOSED), NOT just the
+		// prototype. Without this, code that reads `WebSocket.OPEN` off the
+		// (now-patched) global constructor — e.g. @tldraw/sync-core's
+		// ClientWebSocketAdapter, which compares readyState against these
+		// exact statics to guard against reconnecting while already open —
+		// sees `undefined`, so every comparison is false, its "no connection
+		// attempts while already connected" invariant trips, and it throws
+		// and kills the connection. Discovered empirically: the v1 (tldraw)
+		// arm hung on tldraw's "Loading…" screen forever, with a `pageerror`
+		// of exactly that assertion, until this line was added.
+		// setPrototypeOf (not a manual copy) so it stays correct if the
+		// native class ever adds more statics.
+		Object.setPrototypeOf(Patched, NativeWS)
 		;(window as { WebSocket: typeof WebSocket }).WebSocket = Patched
 
 		// --- Lazy-chunk responseEnd, via PerformanceObserver so the entry cannot
