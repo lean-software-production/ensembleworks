@@ -1587,27 +1587,148 @@ Expected: all 5 tests pass. Every scenario prints its full sub-split block.
 
 **If any scenario fails on its second consecutive run against its own just-captured baseline, the metric is too noisy to gate.** Do not widen `REGRESSION_BUDGET` to make it pass. Raise `REPS`, re-capture, and if it is still unstable, **report** — a flaky baseline is a broken baseline (`playwright.config.ts`: "a flaky baseline is a broken baseline — fix, don't retry").
 
-**Step 5: Record the attribution finding**
+**Step 5: Write the results document**
 
-This is the deliverable that justifies the whole harness. Read the printed sub-splits and write a short **Findings** section at the bottom of this plan document, stating for the 1k warm scenario:
+This is the deliverable that justifies the whole harness. It does **not** go in this plan document — see "The `docs/performance/` results convention" immediately below for the directory, the naming rule, the required structure, and the never-edit-in-place rule. Create `docs/performance/` and write `docs/performance/2026-07-19-v2-load-baseline.md` using the template given there, filling every field from the run you just captured.
 
-- `firstShapeMs` p50/p95
-- how much of it is `chunkResponseEndMs` (contributor (a): lazy chunk)
-- how much is `chunkToToolbarMs` (contributors (c) WASM decode + module eval)
-- how much is `toolbarToFirstShapeMs` (contributors (b) oplog replay + (e) WS round-trip)
-- `wsOpenMs` (contributor (e), isolated)
-- the cold-vs-warm delta (contributor (d))
-- the per-shape-vs-bulk ratio (contributor (b), ops vs bytes)
-- the v2-vs-v1 parity ratio
-
-**Do not speculate beyond what the numbers show.** If a split is ambiguous, say so and name the follow-up measurement that would disambiguate it.
+**Do not speculate beyond what the numbers show.** If a split is ambiguous, say so in the "What this tells us" section and name the follow-up measurement that would disambiguate it.
 
 **Step 6: Commit**
 
 ```bash
 cd /home/stag/src/projects/ensembleworks
-git add e2e/baselines/canvas-v2-load.json e2e/perf-load/canvas-v2-load.spec.ts docs/plans/2026-07-19-v2-first-shape-perf-harness.md
-git commit -m "perf(e2e): capture v2 first-shape baselines and set the small/warm hard budget"
+git add e2e/baselines/canvas-v2-load.json e2e/perf-load/canvas-v2-load.spec.ts docs/performance/2026-07-19-v2-load-baseline.md
+git commit -m "perf(e2e): capture v2 first-shape baselines and record the load-baseline results doc"
+```
+
+---
+
+## The `docs/performance/` results convention
+
+*(Introduced by this plan. Task 9 Step 5 produces the first document in the series; every future load/perf measurement campaign adds another.)*
+
+### Why results do not live in plan documents
+
+A plan is a record of **intent**. It goes stale the moment it is executed, and it is never revisited except as history. These numbers are the opposite: a **longitudinal artifact** that the coming optimisation work will compare against repeatedly. Burying them inside a merged plan doc means that six months of load measurements can only be read as archaeology across a scatter of unrelated plan files. Given their own dated directory they read as a series — which is the only way a trend is visible at all.
+
+### Naming
+
+```
+docs/performance/YYYY-MM-DD-<type>.md
+```
+
+`<type>` names the **measurement family**, not the individual run, so successors sort and read naturally beside their predecessors. This plan produces:
+
+```
+docs/performance/2026-07-19-v2-load-baseline.md
+```
+
+A later campaign measuring the same family after a snapshot-mode first sync lands would be `docs/performance/2026-08-14-v2-load-postsnapshot.md`. Same family, same shape, directly diffable against the baseline. Do not invent a new `<type>` for what is really a re-measurement of an existing family — that is what defeats the series.
+
+### Relationship to the machine-readable baselines — they must not drift
+
+Two artifacts, two jobs, one rule binding them:
+
+| Artifact | Role |
+|---|---|
+| `e2e/baselines/canvas-v2-load.json` | **Source of truth for the CI gate.** Machine-read. Rewritten by `EW_CAPTURE=1`. |
+| `docs/performance/YYYY-MM-DD-<type>.md` | **Human-facing interpretation** of one specific capture. Never machine-read. |
+
+The rule: **every results document records the commit SHA of the baseline capture it describes**, in its front-matter block. That SHA is what lets a reader confirm whether a given document still describes the currently-committed baseline JSON, or whether it has been superseded.
+
+**Old documents are never edited after the fact.** Re-capturing baselines means writing a **new** dated document, not amending the old one. A document that gets quietly corrected months later is a document nobody can trust to mean what it said at the time — and the whole value of the series is that each entry is a fixed point. If an earlier document turns out to be wrong, the new document says so and cites it; the old file stays as written.
+
+### Required structure — fill this in, do not invent a format
+
+Every document in this series carries these headings, in this order. Copy the template verbatim and fill it.
+
+```markdown
+# v2 Load Baseline — 2026-07-19
+
+## Provenance
+
+| Field | Value |
+|---|---|
+| Measured commit | `<full SHA of HEAD at capture>` |
+| Branch | `perf/v2-first-shape-harness` |
+| Branch point | `fix/v2-boot-sync-ready` (`1ad72388d7de182251f913d8025e876abf852d92`) — post-settle-sleep-removal |
+| Baseline capture SHA | `<SHA of the commit that added/updated e2e/baselines/canvas-v2-load.json>` |
+| Environment | `local` or `CI` — say which, explicitly |
+| Machine | `<hostname>`, `<CPU>`, `<RAM>`, `<OS>` |
+| Machine state | e.g. "idle dev box, no other load" / "GitHub-hosted ubuntu-latest runner, shared/contended" |
+| Client build | production `vite build` served by `vite preview` |
+| Cache state | cold HTTP cache per repetition (fresh browser context) |
+| Reps per scenario | `<REPS>` |
+| Harness | `e2e/perf-load/canvas-v2-load.spec.ts` via `e2e/playwright.load.config.ts` |
+
+> Numbers from a loaded laptop are not comparable to CI-runner numbers. State the
+> environment plainly — a reader six months out will not remember which this was,
+> and comparing across environments silently is the main way a series like this
+> goes wrong.
+
+## Scenario matrix
+
+All figures in ms. `n/a` where a sub-split does not apply to that arm (the v1 arm
+has no v2 chunk and no v2 toolbar). Report **every sub-split, not just totals** —
+the totals are what prompted the work, but the sub-splits are what direct it.
+
+| Scenario | Engine | Shapes | Commits | Actor | firstShapeMs p50 | firstShapeMs p95 | firstShapeMs max | wsOpenMs p50 | chunkResponseEndMs p50 | toolbarMs p50 | chunkToToolbarMs p50 | toolbarToFirstShapeMs p50 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| v2 @100 bulk warm | v2 | 100 | 1 | warm | | | | | | | | |
+| v2 @1000 bulk warm | v2 | 1000 | 1 | warm | | | | | | | | |
+| v2 @1000 per-shape warm | v2 | 1000 | 1000 | warm | | | | | | | | |
+| v2 @1000 bulk COLD | v2 | 1000 | 1 | cold | | | | | | | | |
+| v1 @100 | v1 (tldraw) | 100 | n/a | n/a | | | | n/a | n/a | n/a | n/a | n/a |
+
+## Derived comparisons
+
+| Comparison | Value | What it isolates |
+|---|---|---|
+| v2 @100 p95 ÷ v1 @100 p95 | `<ratio>x` | **Parity ratio.** ≤ 1.00 means at or better than v1 — the owner's acceptance bar. |
+| v2 @1000 per-shape p95 ÷ bulk p95 | `<ratio>x` | Contributor (b): op **count** vs bytes. Near 1.0 ⇒ op count is not the bottleneck. |
+| v2 @1000 cold p95 − warm p95 | `<delta>ms` | Contributor (d): server-side snapshot load + oplog replay. |
+| chunkResponseEndMs p50 (1k warm) | `<ms>` | Contributor (a): the ~4.3 MB lazy chunk. |
+| chunkToToolbarMs p50 (1k warm) | `<ms>` | Contributors (c) WASM decode + module eval + boot. |
+| toolbarToFirstShapeMs p50 (1k warm) | `<ms>` | Contributors (b) oplog replay + (e) WS round-trip — **the gap the harness was built to expose.** |
+| wsOpenMs p50 (1k warm) | `<ms>` | Contributor (e), isolated. |
+
+## Gates in force at capture
+
+| Scenario | Gate | Threshold |
+|---|---|---|
+| v2 @100 bulk warm | absolute, p95 hard | `SMALL_WARM_BUDGET_MS = <X>` × 2 CI margin |
+| all others | regression vs committed baseline, p95 hard | +15% × 2 CI margin |
+| all | max frame | advisory only (`::warning::`) |
+
+## What this tells us
+
+Two to five paragraphs of prose. Name **which of the candidate contributors the
+data actually implicates**, and in what proportion — that is the entire point of
+the document. The six candidates, for reference:
+
+- (a) the ~4.3 MB `React.lazy` chunk behind `Suspense fallback={null}`
+- (b) full-oplog replay vs a snapshot-mode first sync
+- (c) base64 WASM decode for `loro-crdt`
+- (d) cold-actor blocking replay on the server
+- (e) the WS connect + `SyncRequest` round-trip
+- (f) the fixed 400 ms boot settle sleep — **already removed** at this branch point;
+  it is not present in these numbers and is listed only so the set reads complete.
+
+Rules for this section:
+
+- **Do not speculate beyond the numbers.** If two contributors are confounded in a
+  single sub-split, say so and name the follow-up measurement that would separate
+  them. An honest "this data cannot distinguish (b) from (e)" is worth more than a
+  confident guess.
+- **State what was ruled OUT**, not only what was implicated. A contributor the
+  data exonerates is a contributor nobody needs to spend a week optimising.
+- **Do not propose the fix here.** This document reports what is; the decision
+  about what to do belongs in the plan that follows it.
+
+## Follow-ups
+
+Bulleted, each naming a concrete next measurement or a concrete optimisation
+candidate with the number that motivates it. No unmotivated items.
 ```
 
 ---
@@ -1772,6 +1893,11 @@ Cut from `fix/v2-boot-sync-ready`, not `main`, deliberately. `main` still has th
 ### Gating
 Follows the established `canvas-v2-perf.spec.ts` policy: p95 hard, max advisory (`::warning::`), min/p50 observed-only. Small/warm gates against an absolute budget; larger scenarios against the committed baseline (+15% × 2× CI margin). `EW_CAPTURE=1` rewrites baselines.
 
+### Results
+**📊 [docs/performance/2026-07-19-v2-load-baseline.md](../blob/perf/v2-first-shape-harness/docs/performance/2026-07-19-v2-load-baseline.md)** — the measured numbers, the full scenario matrix with all sub-splits, the v1 parity ratio, and which of the candidate contributors the data actually implicates. Read this rather than digging the figures out of the CI log.
+
+`e2e/baselines/canvas-v2-load.json` remains the machine-readable source of truth for the gate; the document above is its human-facing interpretation and records the SHA of the capture it describes. Future re-captures add a new dated document under `docs/performance/` rather than editing this one.
+
 ux-contract: none — pure measurement harness under e2e/ plus a flag-gated server test hook; no tool FSM, renderer, or input surface is touched.
 ```
 
@@ -1784,6 +1910,8 @@ gh pr create --title "perf(e2e): canvas-v2 time-to-first-shape measurement harne
 
 ---
 
-## Findings
+## Results — where they live
 
-*(Filled in during Task 9 Step 5. Leave this section header in place; it is the deliverable the harness exists to produce.)*
+**Not in this document.** Task 9 Step 5 writes `docs/performance/2026-07-19-v2-load-baseline.md`; see "The `docs/performance/` results convention" above for the naming rule, the required structure, its relationship to the machine-readable baseline JSON, and the rule that old results documents are never edited in place.
+
+This plan records intent and goes stale on execution. The results are a longitudinal artifact and outlive it.
