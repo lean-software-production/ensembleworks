@@ -53,5 +53,26 @@ import { summarize, attribute, type LoadSample } from './load-metrics.ts'
 	assert.equal(a.toolbarToFirstShapeMs, 600)
 	console.log('ok: attribute propagates a missing chunk timing as null, never 0')
 }
+{
+	// toolbarMs feeds BOTH derived splits, including toolbarToFirstShapeMs —
+	// the metric this harness exists to produce. If the null guard ever
+	// regresses to only checking the `earlier` operand, round2(null - 300)
+	// yields -300: a plausible-looking negative that would be believed.
+	const a = attribute({ wsOpenMs: 50, chunkResponseEndMs: 800, toolbarMs: null, firstShapeMs: 900 })
+	assert.equal(a.toolbarMs, null)
+	assert.equal(a.chunkToToolbarMs, null)
+	assert.equal(a.toolbarToFirstShapeMs, null)
+	assert.equal(a.firstShapeMs, 900)
+	console.log('ok: attribute propagates a missing toolbar mark to both derived gaps')
+}
+{
+	// wsOpenMs is passed through, not derived — a missing one must stay null
+	// rather than becoming a 0 that reads as "connected instantly".
+	const a = attribute({ wsOpenMs: null, chunkResponseEndMs: 800, toolbarMs: 900, firstShapeMs: 2400 })
+	assert.equal(a.wsOpenMs, null)
+	assert.equal(a.chunkToToolbarMs, 100)
+	assert.equal(a.toolbarToFirstShapeMs, 1500)
+	console.log('ok: attribute passes a missing ws-open mark through as null')
+}
 
 console.log('ok: load-metrics — all cases')
