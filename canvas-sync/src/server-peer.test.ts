@@ -441,4 +441,26 @@ function wireFakeClient(t: Transport, peerId: bigint): LoroCanvasDoc {
   )
 }
 
+// --- (new) a SyncRequest is answered with the backfill Update THEN a SyncDone
+// signal — so a client can proceed the instant it's caught up (ready()) rather
+// than guessing with a fixed settle timer. ---
+{
+  const server = new SyncServerPeer({ peerId: 77n })
+  server.doc.putPage({ id: 'page:p', name: 'P' })
+  server.doc.putShape(shape('shape:seed'))
+  server.doc.commit()
+
+  const [serverEnd, clientEnd] = makePair()
+  server.connect(serverEnd)
+  const tags: number[] = []
+  clientEnd.onMessage((frame) => tags.push(decode(frame).tag))
+  clientEnd.send(encode(Frame.SyncRequest, LoroCanvasDoc.create({ peerId: 771n }).versionBytes()))
+
+  assert.deepEqual(
+    tags,
+    [Frame.Update, Frame.SyncDone],
+    'a SyncRequest is answered with the backfill Update followed by a SyncDone signal',
+  )
+}
+
 console.log('ok: server-peer')
