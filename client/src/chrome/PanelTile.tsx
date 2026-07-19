@@ -176,6 +176,10 @@ export function PanelTile({
 		<div
 			ref={(el) => registerFaceEl(rawId, el)}
 			data-testid={'ew-tile-' + rawId}
+			// Compact tiles drop the visible name label (see the strip below), so
+			// restore identity on hover via a native tooltip — parity with
+			// MosaicChip's title.
+			title={compact ? name + (isLocal ? ' (you)' : '') : undefined}
 			onPointerEnter={onEnter}
 			onPointerLeave={onLeave}
 			onClick={() => {
@@ -331,6 +335,12 @@ export function PanelTile({
 					style={{
 						display: 'flex',
 						alignItems: 'center',
+						// Compact local tile: the swatch + three 25px icon buttons don't
+						// fit the strip's width, and the root's overflow:hidden would
+						// clip them. Wrap to extra rows instead of clipping — mic/cam/
+						// crosstalk must stay reachable at every size.
+						flexWrap: compact ? 'wrap' : undefined,
+						justifyContent: compact ? 'center' : undefined,
 						gap: 6,
 						padding: '5px 6px',
 						background: wm.panel,
@@ -426,7 +436,12 @@ export function MosaicChip({
 			type="button"
 			data-testid={'ew-chip-' + rawId}
 			title={name + (isLocal ? ' (you)' : '')}
-			aria-label={`${name}${isSpeaking ? ' (speaking)' : ''} — jump to their view`}
+			aria-label={
+				isLocal
+					? `${name} (you)${isSpeaking ? ' (speaking)' : ''}`
+					: `${name}${isSpeaking ? ' (speaking)' : ''} — jump to their view`
+			}
+			aria-disabled={isLocal || undefined}
 			onClick={() => {
 				if (!isLocal) editor.zoomToUser(prefixedId)
 			}}
