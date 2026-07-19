@@ -182,7 +182,11 @@ export function PanelTile({
 				borderLeft: `${compact ? 2 : 4}px solid ${color}`,
 				background: wm.bgWarm,
 				outline: isSpeaking ? `2px solid ${wm.sealBlue}` : 'none',
-				outlineOffset: -2,
+				// Ring draws OUTSIDE the tile (like MosaicChip's): the old -2 inset
+				// put it under the media area, which fills to the tile's top/right
+				// edges and painted over those segments. MOSAIC_GAP (6px) leaves
+				// room for 2px ring + 1px offset between neighbours.
+				outlineOffset: 1,
 				cursor: isLocal ? 'default' : 'pointer',
 			}}
 		>
