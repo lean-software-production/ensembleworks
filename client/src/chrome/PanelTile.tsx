@@ -49,7 +49,7 @@ export interface PanelTileParticipant {
 // two-up/wide "video chat" tile — the aspect never changes, only the size.
 const MEDIA_ASPECT = '4 / 3'
 
-// Tiles flow in a centered wrap row (PanelPages' tileListStyle). Each grows to
+// Legacy flow sizing (no fixed tileWidth): tiles in a wrap row each grow to
 // fill the row up to TILE_MAX_WIDTH and shrinks to share it; the flex BASIS (not
 // a hard min) sets the wrap point — a second tile wraps below ~2×basis. There's
 // deliberately no minWidth, so a lone tile in a narrow panel shrinks to fit
