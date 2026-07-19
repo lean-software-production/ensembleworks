@@ -545,6 +545,11 @@ export function CrosstalkControl({
 	available: boolean
 }) {
 	const [open, setOpen] = useState(false)
+	// Viewport-anchored popover position captured at open time — same fix as
+	// SidePanel's DevicePicker: the panel root's overflowY:auto computes
+	// overflow-x to auto too, so an absolutely-positioned popover wider than
+	// the space left of the button gets cropped at the panel's left edge.
+	const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(null)
 	const rootRef = useRef<HTMLDivElement>(null)
 	const level = snap?.crosstalkLevel ?? DEFAULT_CROSSTALK_LEVEL
 	// "Active" (blue, waves showing) = the slider is below full, so crosstalk
@@ -574,6 +579,13 @@ export function CrosstalkControl({
 				disabled={!available}
 				onClick={(e) => {
 					e.stopPropagation()
+					const rect = rootRef.current?.getBoundingClientRect()
+					if (rect) {
+						setAnchor({
+							right: window.innerWidth - rect.right,
+							bottom: window.innerHeight - rect.top + 5,
+						})
+					}
 					setOpen((v) => !v)
 				}}
 				aria-label={label}
@@ -594,14 +606,14 @@ export function CrosstalkControl({
 			>
 				<AvIcon kind="spatial" crossedOut={!active} />
 			</button>
-			{open && snap && (
+			{open && snap && anchor && (
 				<div
 					onClick={(e) => e.stopPropagation()}
 					data-testid="ew-crosstalk-popover"
 					style={{
-						position: 'absolute',
-						bottom: 30,
-						right: 0,
+						position: 'fixed',
+						bottom: anchor.bottom,
+						right: anchor.right,
 						zIndex: 10,
 						width: 194,
 						display: 'flex',
