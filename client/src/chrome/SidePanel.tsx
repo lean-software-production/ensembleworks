@@ -23,6 +23,7 @@ import { rawUserId } from '@ensembleworks/contracts'
 import { type Editor, useValue } from 'tldraw'
 import { useAvSnapshot, type AvPanelSnapshot } from '../av/bridge'
 import { VmStrip } from '../av/gauges'
+import { AvIconButton } from '../av/icons'
 import { TranscriptModal } from '../av/TranscriptModal'
 import { getRoomId } from '../identity'
 import { wm } from '../theme'
@@ -37,8 +38,66 @@ import {
 } from './panelLayout'
 import { PanelFooter } from './PanelFooter'
 import { PanelPages } from './PanelPages'
-import { initialsFor, type PanelTileParticipant } from './PanelTile'
+import { ColorSwatch, CrosstalkControl, initialsFor, type PanelTileParticipant } from './PanelTile'
 import { useIsPresenting, usePresenter } from './present'
+
+// The local user's identity + A/V controls, docked at the panel bottom just
+// above the settings footer: colour swatch, name "(you)", mic, camera, and
+// the crosstalk slider. Moved here from the self tile — mosaic tiles can get
+// too small to host controls, and this spot gives the crosstalk popover the
+// full panel height to open upward into. marginTop:auto pins the bar to the
+// bottom when the roster is short (the footer follows it).
+function YouBar({ editor, snap }: { editor: Editor; snap: AvPanelSnapshot | null }) {
+	const name = useValue('youbar-name', () => editor.user.getName() ?? 'teammate', [editor])
+	const color = useValue('youbar-color', () => editor.user.getColor(), [editor])
+	const avAvailable = snap != null && snap.status !== 'disabled' && snap.status !== 'error'
+	return (
+		<div
+			data-testid="ew-you-bar"
+			style={{
+				marginTop: 'auto',
+				display: 'flex',
+				alignItems: 'center',
+				gap: 6,
+				padding: '8px 12px',
+				borderTop: `1px solid ${wm.rule}`,
+				background: wm.panel,
+			}}
+		>
+			<ColorSwatch editor={editor} color={color} />
+			<span
+				style={{
+					flex: 1,
+					minWidth: 0,
+					overflow: 'hidden',
+					textOverflow: 'ellipsis',
+					whiteSpace: 'nowrap',
+					fontFamily: wm.sans,
+					fontSize: 12,
+					fontWeight: 600,
+					color: wm.ink,
+				}}
+			>
+				{name} (you)
+			</span>
+			<div style={{ display: 'flex', gap: 3, flex: '0 0 auto' }}>
+				<AvIconButton
+					kind="mic"
+					enabled={snap?.micEnabled ?? false}
+					available={avAvailable}
+					onClick={() => snap?.actions.onMic()}
+				/>
+				<AvIconButton
+					kind="camera"
+					enabled={snap?.camEnabled ?? false}
+					available={avAvailable}
+					onClick={() => snap?.actions.onCam()}
+				/>
+				<CrosstalkControl snap={snap} available={avAvailable} />
+			</div>
+		</div>
+	)
+}
 
 // Blink animation for the recording dot, ported from the old floating
 // session-panel roster's ScribeRow (deleted at Task 5 cutover) — kept as a
@@ -262,6 +321,8 @@ export function SidePanel({ editor }: { editor: Editor }) {
 					</div>
 				</div>
 			)}
+
+			<YouBar editor={editor} snap={snap} />
 
 			<PanelFooter />
 

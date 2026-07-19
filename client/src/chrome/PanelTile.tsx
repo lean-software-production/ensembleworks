@@ -2,9 +2,11 @@
  * A single roster tile (canvas-controls spec §3 item 3): video when the
  * camera is on, else a GitHub avatar (local user only — from ./settings'
  * useSettings(), since remote handles aren't synced), else big initials
- * tinted in the participant's colour. Own tile gets
- * the mic/cam/spatial controls and the identity-colour swatch; other tiles
- * get a cam-status icon and a hover-revealed kick button.
+ * tinted in the participant's colour. The local user's mic/cam/crosstalk
+ * controls and colour swatch live in the panel's YouBar (SidePanel.tsx),
+ * not on the tile; remote tiles get a cam-status icon and a hover-revealed
+ * kick button. ColorSwatch and CrosstalkControl are defined here (they're
+ * tile-history ports) and exported for the YouBar to compose.
  *
  * The video-attach effect is copied from the old faces rail's RailFace
  * (79-90, deleted at Task 5 cutover); the colour swatch ports the old
@@ -23,7 +25,7 @@ import {
 	type AvPanelSnapshot,
 } from '../av/bridge'
 import { LatencyPill } from '../av/gauges'
-import { AvIcon, AvIconButton } from '../av/icons'
+import { AvIcon } from '../av/icons'
 import { clampCrosstalk, DEFAULT_CROSSTALK_LEVEL, otherPageLevel } from '../av/crosstalk'
 import { QUIET_GAIN_THRESHOLD, tileOpacityForGain } from '../av/legibility'
 import { IDENTITY_COLORS, hexForColor, type IdentityColor } from '../colors'
@@ -82,12 +84,12 @@ export function PanelTile({
 }) {
 	const { rawId, prefixedId, name, color, isLocal } = participant
 
-	// Small mosaic tiles shed their chrome: below LABEL_MIN_WIDTH the name/
-	// control strip and the media overlays (latency pill, cam glyph, quiet
-	// badge, volume readout) don't fit legibly. The LOCAL tile keeps its strip
-	// at every size — mic/cam/crosstalk must stay reachable.
+	// Small mosaic tiles shed their chrome: below LABEL_MIN_WIDTH the name
+	// strip and the media overlays (latency pill, cam glyph, quiet badge,
+	// volume readout) don't fit legibly. The local user's controls are NOT
+	// affected — they live in the panel's always-visible YouBar (SidePanel).
 	const compact = tileWidth < LABEL_MIN_WIDTH
-	const showStrip = isLocal || !compact
+	const showStrip = !compact
 	const showOverlays = !compact
 
 	const initialsFontSize = Math.max(12, Math.min(40, Math.round(tileWidth * 0.32)))
@@ -106,7 +108,6 @@ export function PanelTile({
 	const latency = snap?.latencies[rawId] ?? null
 	const latencyHistory = snap?.latencyHistory[rawId] ?? []
 	const kicking = snap?.kickingId === rawId
-	const avAvailable = snap != null && snap.status !== 'disabled' && snap.status !== 'error'
 
 	// Applied spatial gain for this peer (bridge store, published by the gain
 	// loop). Local tile: you always hear yourself at "full" — never dimmed.
@@ -312,74 +313,36 @@ export function PanelTile({
 			</div>
 
 			{/* Control strip — BELOW the media on a solid panel background, so the
-			    mic/cam/spatial buttons (and name / kick) are always legible rather
-			    than overlaid on a dark video. Colour swatch + name + own controls,
-			    or a hover-revealed kick for peers. */}
+			    name (and hover-revealed kick for peers) is always legible rather
+			    than overlaid on a dark video. The local user's colour swatch and
+			    mic/cam/crosstalk controls live in the panel's YouBar (SidePanel),
+			    NOT here — the self tile is just another face. */}
 			{showStrip && (
 				<div
 					style={{
 						display: 'flex',
 						alignItems: 'center',
-						// Compact local tile: wrap at BOTH levels (this strip and the
-						// button group below) so the mic/cam/crosstalk row doesn't stay a
-						// fixed 81px block that the root's overflow:hidden would clip —
-						// and shrink the padding so a single 25px button fits the
-						// narrowest tile. See the button-group div below for the other
-						// half of this fix.
-						flexWrap: compact ? 'wrap' : undefined,
-						justifyContent: compact ? 'center' : undefined,
 						gap: 6,
-						padding: compact ? '4px 2px' : '5px 6px',
+						padding: '5px 6px',
 						background: wm.panel,
 					}}
 				>
-					{isLocal && <ColorSwatch editor={editor} color={color} />}
-					{!compact && (
-						<span
-							style={{
-								flex: 1,
-								minWidth: 0,
-								overflow: 'hidden',
-								textOverflow: 'ellipsis',
-								whiteSpace: 'nowrap',
-								fontFamily: wm.sans,
-								fontSize: 12,
-								fontWeight: 600,
-								color: wm.ink,
-							}}
-						>
-							{name}
-							{isLocal ? ' (you)' : ''}
-						</span>
-					)}
-					{isLocal && (
-						<div
-							style={{
-								display: 'flex',
-								gap: 3,
-								// Compact: let the group shrink and wrap onto its own row(s)
-								// instead of holding a fixed 81px basis that would overflow
-								// the tile and get clipped by the root's overflow:hidden.
-								flex: compact ? '1 1 auto' : '0 0 auto',
-								flexWrap: compact ? 'wrap' : undefined,
-								justifyContent: compact ? 'center' : undefined,
-							}}
-						>
-							<AvIconButton
-								kind="mic"
-								enabled={snap?.micEnabled ?? false}
-								available={avAvailable}
-								onClick={() => snap?.actions.onMic()}
-							/>
-							<AvIconButton
-								kind="camera"
-								enabled={snap?.camEnabled ?? false}
-								available={avAvailable}
-								onClick={() => snap?.actions.onCam()}
-							/>
-							<CrosstalkControl snap={snap} available={avAvailable} />
-						</div>
-					)}
+					<span
+						style={{
+							flex: 1,
+							minWidth: 0,
+							overflow: 'hidden',
+							textOverflow: 'ellipsis',
+							whiteSpace: 'nowrap',
+							fontFamily: wm.sans,
+							fontSize: 12,
+							fontWeight: 600,
+							color: wm.ink,
+						}}
+					>
+						{name}
+						{isLocal ? ' (you)' : ''}
+					</span>
 					{!isLocal && hovered && snap && (
 						<button
 							type="button"
@@ -570,7 +533,7 @@ function CrosstalkDiagram({ level }: { level: number }) {
 	)
 }
 
-function CrosstalkControl({
+export function CrosstalkControl({
 	snap,
 	available,
 }: {
@@ -687,7 +650,7 @@ function CrosstalkControl({
 // at Task 5 cutover): one control that governs the user's whole colour
 // identity (cursor, ring, roster dot, new stickies,
 // next-drawn shapes, screenshare borders).
-function ColorSwatch({ editor, color }: { editor: Editor; color: string }) {
+export function ColorSwatch({ editor, color }: { editor: Editor; color: string }) {
 	const [open, setOpen] = useState(false)
 	const rootRef = useRef<HTMLDivElement>(null)
 

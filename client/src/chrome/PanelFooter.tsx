@@ -43,7 +43,10 @@ export function PanelFooter() {
 	const toggle = (section: OpenSection) => setOpen((current) => (current === section ? null : section))
 
 	return (
-		<div style={{ marginTop: 'auto', borderTop: `1px solid ${wm.ruleStrong}` }}>
+		// No marginTop:auto here — the YouBar above (SidePanel.tsx) carries it,
+		// so bar+footer sit together pinned to the panel bottom. A second auto
+		// margin would split the free space and strand the bar mid-panel.
+		<div style={{ borderTop: `1px solid ${wm.ruleStrong}` }}>
 			<div style={{ display: 'flex' }}>
 				<button
 					type="button"
