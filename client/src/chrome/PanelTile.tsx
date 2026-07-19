@@ -49,21 +49,6 @@ export interface PanelTileParticipant {
 // two-up/wide "video chat" tile — the aspect never changes, only the size.
 const MEDIA_ASPECT = '4 / 3'
 
-// Legacy flow sizing (no fixed tileWidth): tiles in a wrap row each grow to
-// fill the row up to TILE_MAX_WIDTH and shrinks to share it; the flex BASIS (not
-// a hard min) sets the wrap point — a second tile wraps below ~2×basis. There's
-// deliberately no minWidth, so a lone tile in a narrow panel shrinks to fit
-// rather than overflowing. Capping the max is what smooths the resize: a single
-// tile tops out at TILE_MAX_WIDTH instead of ballooning full-width and then
-// snapping to half-width when a column boundary is crossed.
-const TILE_BASIS_WIDTH = 220
-const TILE_MAX_WIDTH = 320
-
-// Initials font for the legacy flex-flow sizing (unknown-page section, no
-// fixed tileWidth). When tileWidth IS set, the font scales with it instead
-// (see initialsFontSize below).
-const INITIALS_FONT_DEFAULT = 26
-
 // Visual cues ease on roughly the audio ramp's time constant (the loop's
 // 0.08 s setTargetAtTime), so eyes and ears agree. Module-level read is fine:
 // a changed OS preference applies on next page load.
@@ -90,10 +75,10 @@ export function PanelTile({
 	editor: Editor
 	participant: PanelTileParticipant
 	snap: AvPanelSnapshot | null
-	// Fixed tile width (px) computed by PanelPages' mosaic sizing. When set,
-	// the tile renders at exactly this width (grid cell); when undefined the
-	// legacy flex-basis flow sizing applies (unknown-page section only).
-	tileWidth?: number
+	// Fixed tile width (px) computed by PanelPages' mosaic sizing — the tile
+	// renders at exactly this width (border-box, so the identity borderLeft is
+	// included and tileWidth is the true rendered width in the grid row).
+	tileWidth: number
 }) {
 	const { rawId, prefixedId, name, color, isLocal } = participant
 
@@ -101,14 +86,11 @@ export function PanelTile({
 	// control strip and the media overlays (latency pill, cam glyph, quiet
 	// badge, volume readout) don't fit legibly. The LOCAL tile keeps its strip
 	// at every size — mic/cam/crosstalk must stay reachable.
-	const compact = tileWidth !== undefined && tileWidth < LABEL_MIN_WIDTH
+	const compact = tileWidth < LABEL_MIN_WIDTH
 	const showStrip = isLocal || !compact
 	const showOverlays = !compact
 
-	const initialsFontSize =
-		tileWidth !== undefined
-			? Math.max(12, Math.min(40, Math.round(tileWidth * 0.32)))
-			: INITIALS_FONT_DEFAULT
+	const initialsFontSize = Math.max(12, Math.min(40, Math.round(tileWidth * 0.32)))
 
 	const peer = !isLocal ? (snap?.peers.find((p) => p.id === rawId) ?? null) : null
 	// When the LOCAL camera is toggled off, LiveKit keeps the camera track
@@ -186,9 +168,12 @@ export function PanelTile({
 				if (!isLocal) editor.zoomToUser(prefixedId)
 			}}
 			style={{
-				...(tileWidth !== undefined
-					? { width: tileWidth, flex: '0 0 auto' }
-					: { flex: `1 1 ${TILE_BASIS_WIDTH}px`, maxWidth: TILE_MAX_WIDTH }),
+				width: tileWidth,
+				flex: '0 0 auto',
+				// border-box: the panel renders outside tldraw's border-box reset,
+				// so without this the identity borderLeft would ADD to the width and
+				// overflow the mosaic row by 4px per column.
+				boxSizing: 'border-box',
 				display: 'flex',
 				flexDirection: 'column',
 				overflow: 'hidden',

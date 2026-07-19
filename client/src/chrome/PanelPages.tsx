@@ -11,7 +11,7 @@
  * latency) is merged in per-tile from the av/bridge snapshot by raw user id.
  */
 import { rawUserId } from '@ensembleworks/contracts'
-import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import {
 	getIndexBetween,
 	react,
@@ -47,35 +47,10 @@ interface PageSectionData {
 
 // Horizontal space the mosaic grid can't use, subtracted from the panel width
 // SidePanel hands down before deriving tile width: SidePanel wraps PanelPages
-// in `padding: '0 12px 12px'` (12px each side = 24), plus 4 for PanelTile's
-// one-sided 4px identity borderLeft — the tile root is content-box (the panel
-// renders outside tldraw's border-box reset), so a tile occupies
-// tileWidth + borderLeft on the row.
-const PANEL_CONTENT_INSET = 28
-
-// The proximity sort keys off a SETTLED viewport centre (spec "settle-after-
-// pause"): re-sorting live while panning would shuffle faces mid-gesture —
-// the very confusion the mosaic exists to avoid. tldraw's `react` tracks the
-// camera signal; the settler (mosaicOrder.ts) holds the value until the
-// viewport has been still for VIEWPORT_SETTLE_MS.
-function useSettledViewportCentre(editor: Editor): MosaicPoint {
-	const [centre, setCentre] = useState<MosaicPoint>(() => {
-		const c = editor.getViewportPageBounds().center
-		return { x: c.x, y: c.y }
-	})
-	useEffect(() => {
-		const settler = createSettler<MosaicPoint>(VIEWPORT_SETTLE_MS, setCentre)
-		const stop = react('mosaic-viewport-settle', () => {
-			const c = editor.getViewportPageBounds().center
-			settler.feed({ x: c.x, y: c.y })
-		})
-		return () => {
-			stop()
-			settler.dispose()
-		}
-	}, [editor])
-	return centre
-}
+// in `padding: '0 12px 12px'` — 12px each side = 24. Tiles are border-box
+// (PanelTile sets boxSizing explicitly), so tileWidth is the true rendered
+// width — the identity borderLeft is inside it, no per-column extra to budget.
+const PANEL_CONTENT_INSET = 24
 
 // lastSpokeAt per raw user id, folded from the AV snapshot's speaking flags.
 // Drives other-page chip order (spec: "most-recently-spoke, then join order").
@@ -84,14 +59,15 @@ function useSpokeRecency(snap: ReturnType<typeof useAvSnapshot>): Record<string,
 	useEffect(() => {
 		if (!snap) return
 		const speaking = snap.peers.filter((p) => p.isSpeaking).map((p) => p.id)
-		setRecency((prev) => updateSpokeRecency(prev, speaking, Date.now()))
+		// Quantised to whole seconds: bounds record churn to 1/s while someone
+		// speaks (the AV snapshot republishes often; ordering only needs coarse recency).
+		setRecency((prev) => updateSpokeRecency(prev, speaking, Math.floor(Date.now() / 1000) * 1000))
 	}, [snap])
 	return recency
 }
 
 export function PanelPages({ editor, width }: { editor: Editor; width: number }) {
 	const snap = useAvSnapshot()
-	const settledCentre = useSettledViewportCentre(editor)
 	const recency = useSpokeRecency(snap)
 
 	const { currentPageId, sections, unknownParticipants } = useValue(
@@ -180,7 +156,6 @@ export function PanelPages({ editor, width }: { editor: Editor; width: number })
 					}
 					snap={snap}
 					width={width}
-					settledCentre={settledCentre}
 					recency={recency}
 				/>
 			))}
@@ -214,46 +189,89 @@ function orderParticipants(
 const REDUCED_MOTION =
 	typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
+// One settled proximity ordering, read entirely OUTSIDE React's reactive
+// tracking: distance of everyone's cursor from the local viewport centre,
+// closest first (mosaicOrder.ts). Called at mount and on viewport settle only
+// — never per cursor move, so nothing here may be a tracked signal read.
+function computeOrder(editor: Editor): string[] {
+	const centreVec = editor.getViewportPageBounds().center
+	const centre: MosaicPoint = { x: centreVec.x, y: centreVec.y }
+	const cursors: Record<string, MosaicPoint | undefined> = {}
+	const selfId = rawUserId(editor.user.getId())
+	const selfPoint = editor.inputs.currentPagePoint
+	cursors[selfId] = { x: selfPoint.x, y: selfPoint.y }
+	const ids = [selfId]
+	for (const presence of editor.getCollaborators()) {
+		const id = rawUserId(presence.userId)
+		ids.push(id)
+		if (presence.cursor) {
+			cursors[id] = { x: presence.cursor.x, y: presence.cursor.y }
+		}
+	}
+	return orderByViewportDistance(ids, cursors, centre)
+}
+
 function CurrentPageMosaic({
 	editor,
 	participants,
 	snap,
 	width,
-	settledCentre,
 }: {
 	editor: Editor
 	participants: PanelTileParticipant[]
 	snap: ReturnType<typeof useAvSnapshot>
 	width: number
-	settledCentre: MosaicPoint
 }) {
-	const cursors = useValue(
-		'mosaic-cursors',
-		() => {
-			const map: Record<string, MosaicPoint | undefined> = {}
-			const selfPoint = editor.inputs.currentPagePoint
-			map[rawUserId(editor.user.getId())] = { x: selfPoint.x, y: selfPoint.y }
-			for (const presence of editor.getCollaborators()) {
-				if (presence.cursor) {
-					map[rawUserId(presence.userId)] = { x: presence.cursor.x, y: presence.cursor.y }
-				}
-			}
-			return map
-		},
-		[editor]
-	)
+	// Ordering design (spec "settle-after-pause"): cursor moves alone NEVER
+	// re-sort — live reshuffling mid-gesture is the very confusion the mosaic
+	// exists to avoid, and it would restart FLIP animations mid-flight. The
+	// tldraw react() below tracks ONLY the camera signal (getCamera() is read
+	// so the subscription attaches to it); on each camera change it feeds the
+	// settler, and only after VIEWPORT_SETTLE_MS of stillness does computeOrder
+	// re-read cursors — plain, non-reactive reads. Order therefore refreshes on
+	// mount, on viewport settle, and on roster changes (the memo below).
+	const [orderedIds, setOrderedIds] = useState<string[]>([])
+	useEffect(() => {
+		const settler = createSettler<null>(VIEWPORT_SETTLE_MS, () =>
+			setOrderedIds(computeOrder(editor))
+		)
+		const stop = react('mosaic-order-settle', () => {
+			editor.getCamera() // read so the signal is tracked — value unused
+			settler.feed(null)
+		})
+		setOrderedIds(computeOrder(editor))
+		return () => {
+			stop()
+			settler.dispose()
+		}
+	}, [editor])
 
 	const tileWidth = mosaicTileWidth(width - PANEL_CONTENT_INSET, participants.length)
-	const ordered = orderParticipants(participants, (ids) =>
-		orderByViewportDistance(ids, cursors, settledCentre)
-	)
 
-	// FLIP bookkeeping: previous rects by rawId, measured after every render.
+	// Join/leave bypasses the settle debounce (spec): joiners append at the end
+	// immediately, leavers drop immediately via the filter — no extra ordering
+	// pass, the settled order is simply reconciled against the live roster.
+	const ordered = useMemo(() => {
+		const byId = new Map(participants.map((p) => [p.rawId, p]))
+		const known = orderedIds.filter((id) => byId.has(id))
+		const newcomers = participants.map((p) => p.rawId).filter((id) => !known.includes(id))
+		return [...known, ...newcomers].map((id) => byId.get(id)!)
+	}, [orderedIds, participants])
+
+	// FLIP bookkeeping: previous rects by rawId. Guarded by an order key so
+	// tiles aren't re-measured on unrelated renders (AV snapshot ticks) — only
+	// an actual order/roster change can move tiles.
 	const gridRef = useRef<HTMLDivElement>(null)
 	const prevRects = useRef<Map<string, DOMRect>>(new Map())
+	const prevOrderKey = useRef('')
 	useLayoutEffect(() => {
 		const grid = gridRef.current
 		if (!grid) return
+		const orderKey = ordered.map((p) => p.rawId).join('|')
+		if (orderKey === prevOrderKey.current && grid.children.length === prevRects.current.size) {
+			return
+		}
+		prevOrderKey.current = orderKey
 		const next = new Map<string, DOMRect>()
 		for (const el of Array.from(grid.children)) {
 			if (!(el instanceof HTMLElement) || !el.dataset.mosaicId) continue
@@ -342,7 +360,6 @@ function PageSectionView({
 	onMoveDown,
 	snap,
 	width,
-	settledCentre,
 	recency,
 }: {
 	editor: Editor
@@ -353,7 +370,6 @@ function PageSectionView({
 	onMoveDown?: () => void
 	snap: ReturnType<typeof useAvSnapshot>
 	width: number
-	settledCentre: MosaicPoint
 	recency: Record<string, number>
 }) {
 	return (
@@ -376,7 +392,6 @@ function PageSectionView({
 						participants={section.participants}
 						snap={snap}
 						width={width}
-						settledCentre={settledCentre}
 					/>
 				) : (
 					// Other rooms: fixed-size ambient chips, most-recently-spoke first
