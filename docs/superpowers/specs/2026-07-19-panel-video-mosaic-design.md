@@ -107,7 +107,8 @@ Other pages' groups:
 
 ## Testing
 
-Unit tests (Vitest, colocated as elsewhere in `client/src`):
+Unit tests (bare-bun test scripts with `node:assert`, colocated as elsewhere
+in `client/src`; auto-discovered by `scripts/run-tests.ts`):
 
 - Sizing math: columns/tile-edge from (N, panelWidth), 36px floor, label
   threshold.
