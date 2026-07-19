@@ -132,6 +132,12 @@ function DevicePicker({
 }) {
 	const [open, setOpen] = useState(false)
 	const [devices, setDevices] = useState<MediaDeviceInfo[] | null>(null)
+	// Viewport-anchored popover position, captured from the chevron's rect at
+	// open time. position:fixed escapes the panel root's overflow clipping —
+	// an absolutely-positioned list wide enough for real device labels would
+	// otherwise get cropped at the panel's left edge (overflowY:auto on the
+	// panel computes overflow-x to auto as well, which clips).
+	const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(null)
 	const rootRef = useRef<HTMLDivElement>(null)
 	const noun = kind === 'audioinput' ? 'microphone' : 'camera'
 
@@ -175,6 +181,13 @@ function DevicePicker({
 				disabled={!available}
 				onClick={(e) => {
 					e.stopPropagation()
+					const rect = rootRef.current?.getBoundingClientRect()
+					if (rect) {
+						setAnchor({
+							right: window.innerWidth - rect.right,
+							bottom: window.innerHeight - rect.top + 5,
+						})
+					}
 					setOpen((v) => !v)
 				}}
 				aria-label={`Choose ${noun}`}
@@ -197,17 +210,17 @@ function DevicePicker({
 			>
 				▾
 			</button>
-			{open && (
+			{open && anchor && (
 				<div
 					onClick={(e) => e.stopPropagation()}
 					data-testid={`ew-device-list-${kind}`}
 					style={{
-						position: 'absolute',
-						bottom: 30,
-						right: 0,
+						position: 'fixed',
+						bottom: anchor.bottom,
+						right: anchor.right,
 						zIndex: 10,
 						minWidth: 190,
-						maxWidth: 260,
+						maxWidth: 'min(300px, 90vw)',
 						display: 'flex',
 						flexDirection: 'column',
 						padding: 4,
