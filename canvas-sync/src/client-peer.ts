@@ -92,7 +92,11 @@ export class SyncClientPeer {
    * SyncDone is handled the preceding backfill Update has already been
    * imported. The dogfood mount (CanvasV2App.boot) races this against a bounded
    * cap so it proceeds the instant sync completes instead of paying a fixed
-   * settle delay. Re-armed on reconnect(), so it is never a one-shot lie. */
+   * settle delay. Re-armed on reconnect(), so it is never a one-shot lie.
+   * Edge case: if the backfill Update was dropped as malformed (onFrame's
+   * try/catch), ready() can still resolve on the following SyncDone with the
+   * doc not yet caught up — correctness-neutral (the page-bootstrap fallback
+   * handles it) and self-healing on the next handshake. */
   ready(): Promise<void> { return this.syncDone }
 
   /**

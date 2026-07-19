@@ -451,7 +451,13 @@ function gatedClientTransport(raw: Transport): { transport: Transport; release: 
     await Promise.resolve()
     assert.equal(readyResolved, false, 'ready() does NOT resolve while the backfill is held')
     gateB.release()
-    await ready
+    // Bounded, deterministic wait: if a resolveSyncDone regression left ready()
+    // unresolved after release, this asserts (readyResolved still false) rather
+    // than hanging on an unbounded `await ready` below. No wall-clock timer —
+    // one microtask flush is enough since release() delivers synchronously.
+    await Promise.resolve()
+    assert.ok(readyResolved, 'ready() resolves once the held backfill + SyncDone are released')
+    await ready // now known-resolved
     const existing = canonicalPageId(clientB.doc.listPages())
     if (!existing) { clientB.doc.putPage({ id: 'page:p', name: 'Canvas' }); clientB.doc.commit() }
     assert.equal(existing, 'page:xyz', 'after ready(), the server page is visible and adopted')
