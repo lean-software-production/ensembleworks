@@ -122,6 +122,7 @@ export class SyncClientPeer {
     this.transport.close() // idempotent if already dead; evicts a zombie from the server's client set
     this.transport = transport
     this.wireTransport(this.transport)
+    this.armReady() // fresh SyncRequest ⇒ a fresh SyncDone to await; ready() must not lie about the new handshake
     this.requestSync()
     const backfill = this.doc.exportUpdate()
     this.lastBackfillBytesValue = backfill.byteLength

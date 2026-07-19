@@ -459,4 +459,28 @@ function gatedClientTransport(raw: Transport): { transport: Transport; release: 
   }
 }
 
+// --- (new) reconnect() re-arms ready(): a fresh handshake means ready() awaits
+// the NEW SyncDone, never a stale resolve from the prior connection. ---
+{
+  const server = new SyncServerPeer({ peerId: 92n })
+  const [serverEnd1, clientEnd1] = makePair()
+  server.connect(serverEnd1)
+  const client = new SyncClientPeer({ peerId: 921n, transport: clientEnd1 })
+  await client.ready() // initial handshake resolves (synchronous memory transport)
+
+  // Reconnect onto a GATED transport so the new backfill is held.
+  const [serverEnd2, clientEnd2Raw] = makePair()
+  server.connect(serverEnd2)
+  const gate = gatedClientTransport(clientEnd2Raw)
+  client.reconnect(gate.transport)
+
+  let reReady = false
+  client.ready().then(() => { reReady = true })
+  await Promise.resolve()
+  assert.equal(reReady, false, 'ready() re-arms on reconnect: not resolved until the NEW backfill (SyncDone) arrives')
+  gate.release()
+  await Promise.resolve()
+  assert.equal(reReady, true, 'ready() resolves once the reconnect handshake completes')
+}
+
 console.log('ok: client-peer')
