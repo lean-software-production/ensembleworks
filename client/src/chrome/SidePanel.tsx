@@ -85,6 +85,7 @@ function YouBar({ editor, snap }: { editor: Editor; snap: AvPanelSnapshot | null
 					kind="mic"
 					enabled={snap?.micEnabled ?? false}
 					available={avAvailable}
+					speaking={snap?.localSpeaking ?? false}
 					onClick={() => snap?.actions.onMic()}
 				/>
 				<AvIconButton
