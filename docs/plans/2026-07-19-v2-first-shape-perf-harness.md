@@ -4,9 +4,50 @@
 
 **Goal:** Build a measurement harness that makes canvas-v2 room load time observable, attributable across its contributing causes, comparable against the v1 (tldraw) engine, and regression-gated in CI.
 
-**Architecture:** A new Playwright project (`perf-load`) with its own config, serving a **production client build** via `vite preview` (not the dev server the existing rig uses), so module-fetch costs are production-representative. Rooms are pre-seeded **over the real WebSocket wire** by a headless `SyncClientPeer` before the browser navigates, so the browser's first paint of shapes travels the genuine backfill path. An in-page probe installed via `addInitScript` records page-time marks (WS-open, lazy-chunk `responseEnd`, toolbar-visible, first-shape-visible) with no Playwright IPC in the measurement loop. Each scenario runs N iterations in fresh browser contexts, and the resulting p50/p95/max are gated using this repo's existing convention (p95 hard, max advisory, `EW_CAPTURE=1` rewrites baselines).
+**Architecture:** A new Playwright project (`perf-load`) with its own config, serving a **production client build** via `vite preview` (not the dev server the existing rig uses), so module-fetch costs are production-representative. Rooms are pre-seeded **over the real WebSocket wire** by a headless `SyncClientPeer` before the browser navigates, so the browser's first paint of shapes travels the genuine backfill path. An in-page probe installed via `addInitScript` records page-time marks (WS-open, lazy-chunk `responseEnd`, toolbar-visible, first-shape-visible) with no Playwright IPC in the measurement loop. Each scenario runs N iterations in fresh browser contexts, and the resulting **p50 is the hard gate**, with max and spread reported as advisory signals — a deliberate departure from the sibling frame-rate spec's p95-hard convention, for reasons given in the CHANGE NOTE below. `EW_CAPTURE=1` rewrites baselines as usual.
 
 **Tech Stack:** Bun workspaces, Playwright, Vite (preview server), `@ensembleworks/canvas-sync` (`SyncClientPeer`), `ws`, existing `e2e/lib/perf.ts` recording helpers.
+
+---
+
+> ### CHANGE NOTE — 2026-07-19 (gating redesign: p50 hard, not p95 — the house percentile is degenerate at small n)
+>
+> **What happened.** A mutation review of the landed Task 1 (`7cf687c`, `c098adb`) found the gating design in the original plan to be arithmetically degenerate. The defect is the **plan's**, not the implementer's — they built exactly what was specified.
+>
+> `e2e/lib/load-metrics.ts` reuses the house percentile formula from `e2e/lib/perf.ts`: `sorted[floor(q * len)]`, clamped to the last index. Reusing it was and remains the right call — two percentile definitions in one repo's perf numbers would be a silent, permanent apples-to-oranges bug. But:
+>
+> ```
+> floor(0.95 · n) === n − 1   for every n ≤ 20
+> ```
+>
+> The plan set `REPS = 5`. So **p95 was not "nearly the max" — it was identically the max**, on every scenario, always. Three consequences, all of which the plan stated or implied incorrectly:
+>
+> 1. The stated "p95 HARD / max ADVISORY" convention was degenerate: both statistics are the same number, so the hard gate bound on **the single worst of five samples** — the noisiest statistic available, and the one most likely to fail flakily on a shared runner.
+> 2. The advisory `::warning::` branch was **unreachable**: it could only fire in cases where the hard assert had already thrown.
+> 3. The Task 1 unit test *blessed* the degeneracy rather than catching it. `assert.equal(s.p95ms, 100)` beside `assert.equal(s.maxms, 100)`, commented "p95 index = floor(0.95*10) = 9 -> the max", reads as confirmation the formula works. It was a correct assertion about an unfit-for-purpose statistic — which is exactly how this class of defect survives review.
+>
+> **Why the convention did not transfer.** It was inherited from `e2e/perf/canvas-v2-perf.spec.ts`, where it is sound: there, one run yields **hundreds of frame samples**, p95 is a genuine percentile, and the tail *is* the subject — a dropped frame is a thing a user feels. A load measurement yields **one data point per navigation**. There is no "tail of a page load" within a rep; each rep is one whole user experience, and the population of interest is what a user *typically* gets. The tail of five CI reps is a property of the runner, not of the product.
+>
+> **Why not simply raise REPS.** To make p95 differ from max under the house formula you need `n ≥ 21`. The matrix is 5 scenarios (v2@100 warm, v2@1000 warm, v2@1000 per-shape, v2@1000 cold, v1@100) × REPS full production-build navigations, each in a fresh context with its own wire seeding. At REPS=5 that is 25 navigations; at REPS=21 it is 105 — **roughly 4.2× the measurement wall-clock** (order of 5 min → 21 min inside a 45-minute job, before install and build overhead). What that buys is a hard gate on the **second-worst of 21** instead of the worst of 5: still a tail order statistic, still noise-dominated. A p95 with a genuinely stable estimate needs n in the hundreds, i.e. an hour of measurement per CI run. The trade is not close.
+>
+> **The decision.** For a small-n load metric the right hard gate is the **median**:
+>
+> - **`p50ms` is the HARD gate**, everywhere the plan previously gated on `p95ms`. At n=5 the median is the 3rd sample: it tolerates up to two anomalous reps without moving, which is exactly the shared-runner failure mode. A max gate fails on one. A real code regression shifts the whole distribution and therefore moves the median, so detection power against the thing actually being gated is not meaningfully reduced.
+> - **`p95ms` is REMOVED from `Summary`**, not merely un-gated. At every n this harness will plausibly run, it is identical to `maxms`, and a report field that always equals another field is worse than absent — it implies information it does not carry, and a reader diffing two baseline JSONs would see the two move in lockstep and infer something real. If REPS is ever raised above 20, re-add it *and* justify n in the same commit.
+> - **`maxms` stays, as an advisory signal** (`::warning::`, test still passes) — and is now genuinely reachable, because it is no longer the same number as the hard gate.
+> - **Spread becomes its own advisory signal**: `spreadMs` (max − min; absolute, human-readable) and `cvPct` (coefficient of variation; scale-free, so it is comparable across the 100- and 1000-shape scenarios and across months). On a contended runner a widening spread is usually the *earliest and most honest* indicator that a measurement has stopped being trustworthy, and it tells a reader something no single percentile can.
+> - **`REPS` stays 5, and must stay ODD.** The house formula's `pick(0.5)` returns the exact middle sample when n is odd (`floor(0.5·5) = 2`, the 3rd of 5); at even n it returns the upper-middle, a defensible convention but not a symmetric one. Any future raise goes 5 → 7 → 9, never to an even number.
+>
+> **Known limitation, accepted deliberately.** A median gate is blind to a *bimodal* regression — one that makes, say, 40% of loads slow while the rest stay fast. At n=5 that is ~2 slow reps and the median does not move. This is precisely the job the max and CV advisories do: such a regression blows the spread, the `::warning::` fires, a human looks. That is the honest division of labour between a **gate** (must not flake) and a **signal** (must not be silent). It is not an argument for gating on the tail.
+>
+> **On the CI margin.** `CI_MARGIN_MULTIPLIER = 2` is retained, but its justification narrows: it now covers *systematic* host-speed difference (a shared runner is genuinely slower hardware than the dev box a baseline was captured on — a whole-distribution shift no choice of statistic can absorb). *Episodic* contention, which the 2× margin was previously over-stretched to also cover, is now handled by the choice of statistic instead. The two are no longer double-counting the same noise. Once CI-native baselines exist (captured on the runner itself), the margin should shrink toward 1.0 — recorded as a follow-up, not done here.
+>
+> **⚠ DELIBERATE DEPARTURE FROM THE REPO CONVENTION — do not "fix" this back.** The perf/bundle gate memo and `canvas-v2-perf.spec.ts` both say "p95 hard, max advisory." This harness does not follow that, on purpose: that convention is correct for many-samples-per-run *frame* statistics and arithmetically meaningless for one-sample-per-run *load* statistics. Both this plan and the spec's module header must say so in prose, so a future reader who notices the mismatch reads a decision rather than an oversight.
+>
+> **Two smaller items folded in from the same review:**
+>
+> - **NaN guard, in two places.** `summarize([10, NaN, 30])` returned `p50ms: NaN`, and because a NaN comparator return makes sort order arbitrary, it corrupted `minms`/`maxms` too. `summarize()` now rejects any non-finite sample — the same spirit as the empty-input guard, and it is the last common chokepoint before a number becomes a gate. Separately, `readLoadSample` (Task 4) drops its `raw.firstShapeMs!` non-null assertion in favour of an explicit finite check that throws with the partial marks attached: `firstShapeMs` is typed non-nullable `number`, so that unchecked assertion is the type-level hole through which a null or NaN would enter the pipeline in the first place. Guarding only one of the two leaves either a corrupt gate or a mystery error message.
+> - **`scripts/run-tests.ts` glob (pre-existing, out of scope).** Its first glob is `**/src/**/*.test.ts`, which under bare `bun` would spawn anything under a hypothetical `e2e/**/src/` directory. Not introduced by this plan and not fixed by it — recorded as a future ticket because Task 1 Step 5 edits the adjacent line and a reader will wonder whether it was considered. It was.
 
 ---
 
@@ -16,7 +57,7 @@ You have zero repo context. Read these, in this order, before Task 1:
 
 1. `CLAUDE.md` (repo root) — "Dogfood rooms (canvas v2)" and "Interaction contracts" sections.
 2. `e2e/lib/perf.ts` — the house baseline-recording helpers (`record`, `recordTo`, `capturing`, `installSampler`, `measure`). **Reuse these. Do not invent parallel machinery.**
-3. `e2e/perf/canvas-v2-perf.spec.ts` — read the whole module header. It documents the gating conventions this plan follows (p95 hard / max advisory / `droppedOver25ms` observed-only, the CI-margin multiplier, the merge-preview provenance gotcha).
+3. `e2e/perf/canvas-v2-perf.spec.ts` — read the whole module header. It documents the house gating conventions (p95 hard / max advisory / `droppedOver25ms` observed-only, the CI-margin multiplier, the merge-preview provenance gotcha). **This plan follows its recording, provenance and CI-margin machinery but deliberately DEPARTS from its p95-hard statistic** — see the CHANGE NOTE above before you write any assertion. In one sentence: that spec summarises hundreds of frame samples per run, this one summarises five whole page loads, and `floor(0.95·5)` is the max.
 4. `e2e/playwright.config.ts` and `e2e/scripts/start-server.ts` — the existing server spin-up you will reuse.
 5. `e2e/lib/canvas-v2.ts` — existing v2 browser helpers (`waitForBoot`, `viewportBox`, `seedGrid`).
 
@@ -96,7 +137,16 @@ Expected: `SETTLE_MS_DEFAULT` present as a **cap raced against** `peer.ready()`,
 
 ## Task 1: Pure load-metric helpers
 
-The harness needs percentile summarisation over repeated load samples, and a stable record shape. These are pure functions, unit-testable without a browser — build them first.
+> **⚠ ALREADY LANDED, THEN REVISED.** Task 1 shipped as `7cf687c` + `c098adb`
+> against the **pre-revision** gating design, and a mutation review then found
+> that design degenerate (CHANGE NOTE, 2026-07-19). The code blocks below are
+> the **corrected** target state — `p95ms` gone, `spreadMs`/`cvPct` added, a
+> non-finite guard in `summarize()`. If you are executing this plan from
+> scratch, just build what is written here. **If you are picking up the branch
+> mid-flight, Task 1 is not done: skip to Task 1a**, which lists the diff from
+> what actually landed.
+
+The harness needs summarisation over repeated load samples, and a stable record shape. These are pure functions, unit-testable without a browser — build them first.
 
 **Files:**
 - Create: `e2e/lib/load-metrics.ts`
@@ -118,19 +168,39 @@ import assert from 'node:assert/strict'
 import { summarize, attribute, type LoadSample } from './load-metrics.ts'
 
 {
-	// p50/p95/max over a known set. 10 samples -> p95 index = floor(0.95*10) = 9 -> the max.
+	// n/p50/max/min/spread over a known set. NOTE the deliberate absence of p95:
+	// under the house formula floor(0.95*n) === n-1 for every n <= 20, so at any
+	// rep count this harness runs, p95 would be identically maxms. See the plan's
+	// CHANGE NOTE — p50 is the hard gate here, not p95.
 	const s = summarize([10, 20, 30, 40, 50, 60, 70, 80, 90, 100])
 	assert.equal(s.n, 10)
 	assert.equal(s.p50ms, 60)
-	assert.equal(s.p95ms, 100)
 	assert.equal(s.maxms, 100)
 	assert.equal(s.minms, 10)
-	console.log('ok: summarize computes n/p50/p95/max/min over a known set')
+	assert.equal(s.spreadMs, 90)
+	console.log('ok: summarize computes n/p50/max/min/spread over a known set')
 }
 {
-	// Single sample: every percentile collapses to it (no NaN, no undefined).
+	// Odd n: p50 is the EXACT middle sample. This is the property the gate relies
+	// on, and the reason REPS must stay odd (floor(0.5*5) = 2 -> the 3rd of 5).
+	const s = summarize([10, 20, 30, 40, 1000])
+	assert.equal(s.p50ms, 30)
+	// ...and the single wild outlier that a max gate would have failed on shows
+	// up loudly in the ADVISORY statistics instead. That division of labour is
+	// the whole point of the redesign.
+	assert.equal(s.maxms, 1000)
+	assert.equal(s.spreadMs, 990)
+	assert.ok(s.cvPct > 100, 'a 100x outlier must blow the coefficient of variation')
+	console.log('ok: p50 ignores a single wild outlier that max and cvPct both flag')
+}
+{
+	// Single sample: everything collapses to it, spread is 0, cv is 0 — no NaN
+	// (cvPct must not divide by a zero mean or produce 0/0).
 	const s = summarize([42])
-	assert.deepEqual({ n: s.n, p50ms: s.p50ms, p95ms: s.p95ms, maxms: s.maxms, minms: s.minms }, { n: 1, p50ms: 42, p95ms: 42, maxms: 42, minms: 42 })
+	assert.deepEqual(
+		{ n: s.n, p50ms: s.p50ms, maxms: s.maxms, minms: s.minms, spreadMs: s.spreadMs, cvPct: s.cvPct },
+		{ n: 1, p50ms: 42, maxms: 42, minms: 42, spreadMs: 0, cvPct: 0 },
+	)
 	console.log('ok: summarize collapses cleanly on a single sample')
 }
 {
@@ -138,6 +208,15 @@ import { summarize, attribute, type LoadSample } from './load-metrics.ts'
 	// that looks like a pass is the worst possible failure mode here.
 	assert.throws(() => summarize([]), /at least one sample/)
 	console.log('ok: summarize refuses an empty sample set')
+}
+{
+	// NON-FINITE input must throw, for the same reason as the empty guard and one
+	// worse: a NaN comparator return makes Array#sort's order ARBITRARY, so a
+	// single NaN corrupts minms/maxms too, not just the stat it landed in. This
+	// is the last common chokepoint before a number becomes a CI gate.
+	assert.throws(() => summarize([10, NaN, 30]), /finite/)
+	assert.throws(() => summarize([10, Infinity]), /finite/)
+	console.log('ok: summarize refuses non-finite samples rather than propagating NaN')
 }
 {
 	// Rounding: two decimal places, matching lib/perf.ts's FrameStats convention.
@@ -194,6 +273,18 @@ Create `e2e/lib/load-metrics.ts`:
 // sorted[floor(q * len)], clamped to the last index. Reusing the house
 // formula on purpose: two different percentile definitions in one repo's perf
 // numbers would be a silent, permanent apples-to-oranges bug.
+//
+// WHY THERE IS NO p95 HERE — deliberate, do not "restore" it. Under that same
+// house formula, floor(0.95 * n) === n - 1 for EVERY n <= 20, so at this
+// harness's rep counts p95 is not a percentile at all: it is identically
+// maxms. A report field that always equals another field is worse than absent,
+// because it implies information it does not carry. The sibling frame-rate
+// spec (perf/canvas-v2-perf.spec.ts) gates on p95 legitimately because one of
+// its runs yields HUNDREDS of frame samples; one of these runs yields FIVE
+// whole page loads. p50 is the hard gate here and maxms/spreadMs/cvPct are the
+// advisory signals. Full reasoning: docs/plans/2026-07-19-v2-first-shape-perf-
+// harness.md, CHANGE NOTE 2026-07-19. If REPS is ever raised above 20, p95
+// becomes meaningful again — re-add it AND justify the n in the same commit.
 
 /** One browser navigation's raw page-time marks, in ms since navigation start.
  * `chunkResponseEndMs` is null when no single lazy chunk exists to time (the
@@ -222,23 +313,46 @@ export interface Attribution {
 export interface Summary {
 	readonly n: number
 	readonly minms: number
+	/** THE HARD GATE. At odd n this is the exact middle sample — robust to the
+	 * one-contended-rep failure mode a shared CI runner actually produces. */
 	readonly p50ms: number
-	readonly p95ms: number
+	/** ADVISORY only. Worst single rep. */
 	readonly maxms: number
+	/** ADVISORY only. max - min, in ms. Absolute and directly readable. */
+	readonly spreadMs: number
+	/** ADVISORY only. Coefficient of variation (population stddev / mean), as a
+	 * percentage. Scale-free, so it is comparable across the 100-shape and
+	 * 1000-shape scenarios and across months — which raw spread is not. A rising
+	 * cvPct is usually the earliest honest sign that a measurement has stopped
+	 * being trustworthy, well before any gate trips. */
+	readonly cvPct: number
 }
 
 const round2 = (n: number) => Number(n.toFixed(2))
 
 export function summarize(samples: readonly number[]): Summary {
 	if (samples.length === 0) throw new Error('summarize: needs at least one sample')
+	// Non-finite guard, BEFORE the sort. A NaN comparator return makes Array#sort
+	// order arbitrary, so one NaN corrupts min and max as well as the stat it
+	// landed in — and every one of these numbers feeds a CI gate. Refuse loudly.
+	for (const v of samples) {
+		if (!Number.isFinite(v)) throw new Error(`summarize: every sample must be finite, got ${String(v)}`)
+	}
 	const sorted = [...samples].sort((a, b) => a - b)
 	const pick = (q: number) => sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!
+	const min = sorted[0]!
+	const max = sorted[sorted.length - 1]!
+	const mean = sorted.reduce((a, b) => a + b, 0) / sorted.length
+	const variance = sorted.reduce((acc, v) => acc + (v - mean) ** 2, 0) / sorted.length
 	return {
 		n: sorted.length,
-		minms: round2(sorted[0]!),
+		minms: round2(min),
 		p50ms: round2(pick(0.5)),
-		p95ms: round2(pick(0.95)),
-		maxms: round2(sorted[sorted.length - 1]!),
+		maxms: round2(max),
+		spreadMs: round2(max - min),
+		// mean === 0 only if every sample is 0, in which case the spread is 0 too
+		// and 0 is the honest answer — never NaN from a 0/0.
+		cvPct: mean === 0 ? 0 : round2((Math.sqrt(variance) / mean) * 100),
 	}
 }
 
@@ -263,7 +377,7 @@ export function attribute(s: LoadSample): Attribution {
 ```bash
 cd /home/stag/src/projects/ensembleworks && bun e2e/lib/load-metrics.test.ts
 ```
-Expected: seven `ok:` lines, exit 0.
+Expected: nine `ok:` lines, exit 0.
 
 **Step 5: Widen the unit-suite glob**
 
@@ -303,6 +417,60 @@ Expected: no output, exit 0.
 ```bash
 git add e2e/lib/load-metrics.ts e2e/lib/load-metrics.test.ts scripts/run-tests.ts
 git commit -m "test(e2e): pure load-metric summarisation + attribution helpers"
+```
+
+---
+
+## Task 1a: Amend the landed helpers to the revised gating design
+
+**Skip this task entirely if you built Task 1 from the corrected blocks above** — there is nothing to amend. This exists only for the branch as it actually stands at `c098adb`, where the pre-revision shape is already committed.
+
+**Files:**
+- Modify: `e2e/lib/load-metrics.ts`
+- Modify: `e2e/lib/load-metrics.test.ts`
+
+**The diff from what landed**, all of it justified in the CHANGE NOTE:
+
+1. **Remove `p95ms` from `Summary`** and from the returned object. At n ≤ 20 it is identically `maxms`; it is a field that implies information it does not carry.
+2. **Add `spreadMs`** (`max - min`) and **`cvPct`** (population stddev ÷ mean × 100, `0` when mean is 0).
+3. **Add the non-finite guard** to `summarize()`, *before* the sort — a NaN comparator return makes sort order arbitrary, so one NaN corrupts `minms`/`maxms` too.
+4. **Replace the `p95` header comment** with the WHY-THERE-IS-NO-p95 block above. This is the load-bearing part: the next person to read this file will otherwise notice the missing p95 and restore it.
+
+**Step 1: RED first — extend the test before touching the implementation**
+
+Add the three new cases from the Task 1 test block (odd-n outlier, non-finite rejection, the `spreadMs`/`cvPct` assertions in the known-set and single-sample cases) and delete the two `p95ms` assertions.
+
+```bash
+cd /home/stag/src/projects/ensembleworks && bun e2e/lib/load-metrics.test.ts
+```
+
+Expected: **FAIL** — the `spreadMs`/`cvPct` assertions fail against a `Summary` that has no such fields, and `summarize([10, NaN, 30])` does not throw. **Record the verbatim failure.** If it does not fail, STOP and report: it would mean the landed code already differs from what review found, and one of the two beliefs is wrong.
+
+**Step 2: Apply the implementation diff**, then re-run — nine `ok:` lines, exit 0.
+
+**Step 3: Confirm the NaN case genuinely was broken before the guard**
+
+Do not take the guard on faith; this is the repo's independent-verification rule (CLAUDE.md, obligation 4) applied to your own work. Temporarily comment out the guard and run **both** of these:
+
+```bash
+cd /home/stag/src/projects/ensembleworks && bun -e 'import("./e2e/lib/load-metrics.ts").then(m => { console.log(m.summarize([10, NaN, 30])); console.log(m.summarize([50, 10, NaN, 30, 20])) })'
+```
+
+Expected without the guard (verified 2026-07-19 on Bun 1.3.14 — the exact fields that go bad depend on where the NaN lands in an arbitrary sort order, which is itself the point):
+
+```
+{ n: 3, minms: 10, p50ms: NaN, maxms: 30, spreadMs: 20, cvPct: NaN }
+{ n: 5, minms: 10, p50ms: 30,  maxms: NaN, spreadMs: NaN, cvPct: NaN }
+```
+
+Note the second line especially: **the NaN corrupted `maxms`, a statistic it was never part of**, while `p50ms` came out clean and plausible — a silently wrong number that would have been reported as a real measurement. One NaN does not stay in its lane. Restore the guard.
+
+**Step 4: Typecheck and commit**
+
+```bash
+cd /home/stag/src/projects/ensembleworks && bun run --filter '@ensembleworks/e2e' typecheck
+git add e2e/lib/load-metrics.ts e2e/lib/load-metrics.test.ts
+git commit -m "test(e2e): drop degenerate p95, add spread/cv and a non-finite guard to summarize"
 ```
 
 ---
@@ -910,11 +1078,20 @@ export async function readLoadSample(page: Page, timeoutMs: number): Promise<Loa
 		throw new Error(`load probe never saw a first shape within ${timeoutMs}ms. Partial marks: ${JSON.stringify(partial)}`)
 	}
 	const raw = await page.evaluate(() => (window as unknown as { __ewLoad: Record<string, number | null> }).__ewLoad)
+	// `firstShapeMs` is typed non-nullable on LoadSample, so THIS is the only
+	// place a null or a NaN could enter the pipeline — a `!` here would be the
+	// type-level hole. It must be a real check, not an assertion: summarize()
+	// rejects non-finite input downstream, but by then the sample has lost all
+	// context about which stage of which rep produced it. Fail here, with the
+	// partial marks, where the message can still say something useful.
+	if (!Number.isFinite(raw.firstShapeMs)) {
+		throw new Error(`load probe returned a non-finite firstShapeMs (${String(raw.firstShapeMs)}). Partial marks: ${JSON.stringify(raw)}`)
+	}
 	return {
 		wsOpenMs: raw.wsOpenMs,
 		chunkResponseEndMs: raw.chunkResponseEndMs,
 		toolbarMs: raw.toolbarMs,
-		firstShapeMs: raw.firstShapeMs!,
+		firstShapeMs: raw.firstShapeMs as number,
 	}
 }
 ```
@@ -946,7 +1123,8 @@ git commit -m "test(e2e): in-page load probe for ws-open/chunk/toolbar/first-sha
 
 ### Design decisions baked in here
 
-- **Repetitions.** Each scenario runs `REPS = 5` navigations, each in a **fresh browser context** — so every iteration is a cold HTTP cache, which is the first-visit experience users actually complained about. Repeating is what makes the house p95-hard/max-advisory convention applicable to a load metric at all; a single sample has no percentiles.
+- **Repetitions.** Each scenario runs `REPS = 5` navigations, each in a **fresh browser context** — so every iteration is a cold HTTP cache, which is the first-visit experience users actually complained about. Five is chosen to make a **median** meaningful, not a p95: see the CHANGE NOTE for why p95 is unreachable at any rep count this harness can afford, and why the median is the better hard gate anyway. **REPS must stay odd** so `pick(0.5)` lands on an exact middle sample.
+- **The hard gate is p50; max and spread are advisory.** This is a deliberate, documented departure from the sibling `canvas-v2-perf.spec.ts` convention — one that summarises hundreds of frame samples per run, where p95 is a real percentile. Do not "restore" p95 here without first raising REPS above 20 and justifying the CI cost.
 - **Fresh context, not fresh page.** `page.reload()` or a second page in the same context would reuse the HTTP cache and the compiled-WASM cache, producing a warm-cache number mislabelled as a load number.
 - **Room per scenario per rep.** Reusing a room across reps warms the server actor, which is the axis Task 8 measures deliberately — it must not leak into the warm-baseline scenarios by accident.
 
@@ -974,10 +1152,24 @@ Create `e2e/perf-load/canvas-v2-load.spec.ts`:
 // webServer serves a real `vite build` via `vite preview`. See that file's
 // header for why the dev server would mis-attribute the budget.
 //
-// GATING (follows e2e/perf/canvas-v2-perf.spec.ts's established policy —
-// re-read its module header before changing anything here):
-//   - p95 is a HARD gate. max is ADVISORY (a ::warning:: annotation, test
-//     still passes). min/p50 are observed-only.
+// GATING — READ THIS BEFORE CHANGING AN ASSERTION. This spec DEPARTS, on
+// purpose, from the "p95 hard / max advisory" convention documented in
+// e2e/perf/canvas-v2-perf.spec.ts and in the repo's perf-gate memo:
+//   - p50 (the MEDIAN) is the HARD gate.
+//   - max and cvPct are ADVISORY (::warning:: annotations; the test still
+//     passes). min/spread are observed-only.
+//   - There is deliberately NO p95. The house percentile formula is
+//     sorted[floor(q*len)], and floor(0.95*n) === n-1 for every n <= 20, so at
+//     REPS=5 a "p95" would be identically the max — the single worst of five
+//     samples, i.e. the noisiest statistic available and the one most likely
+//     to flake on a shared runner. That convention is sound in the frame-rate
+//     spec because one run there yields HUNDREDS of frame samples and the tail
+//     is the subject; one run HERE yields FIVE whole page loads, where the
+//     subject is what a user typically gets. See the plan's CHANGE NOTE
+//     (docs/plans/2026-07-19-v2-first-shape-perf-harness.md, 2026-07-19).
+//   - Accepted blind spot: a median gate will not catch a BIMODAL regression
+//     (e.g. 40% of loads slow). That is what the max and cvPct advisories are
+//     for — such a regression blows the spread and warns loudly.
 //   - The SMALL/WARM scenario is gated against an ABSOLUTE budget.
 //   - Every LARGER scenario is gated against its COMMITTED baseline (+15%,
 //     times the CI-noise margin).
@@ -996,21 +1188,37 @@ const WS_BASE = 'ws://127.0.0.1:8788'
 const FILE = path.join(import.meta.dirname, '../baselines/canvas-v2-load.json')
 const recordedBaselines: Record<string, any> = existsSync(FILE) ? JSON.parse(readFileSync(FILE, 'utf8')) : {}
 
-/** Repetitions per scenario. 5 is the minimum that makes a p95 mean anything
- * at all (floor(0.95*5)=4, i.e. the max of five) while keeping a full harness
- * run inside CI's timeout. Raise it only together with the CI timeout. */
+/** Repetitions per scenario. MUST STAY ODD: the house pick(0.5) returns the
+ * exact middle sample at odd n (floor(0.5*5)=2, the 3rd of 5) and the
+ * upper-middle at even n. 5 buys a median robust to two anomalous reps — the
+ * shared-runner failure mode — at 25 full production-build navigations across
+ * the whole matrix. Raising it to the 21 a real p95 would need is ~4.2x the
+ * measurement wall-clock to buy the second-worst of 21 instead of the worst of
+ * 5: still a noise-dominated tail statistic. Not worth it. If you do raise it,
+ * go 5 -> 7 -> 9, and raise the CI timeout with it. */
 const REPS = 5
 
-/** Same documented CI-noise multiplier as canvas-v2-perf.spec.ts, for the same
- * reason: shared runners are more contended than the box a baseline was
- * captured on. One margin constant across both perf specs, not two competing
- * fudge factors. */
+/** Same documented CI-noise multiplier as canvas-v2-perf.spec.ts, but note the
+ * narrower justification here: it covers SYSTEMATIC host-speed difference (a
+ * shared runner is genuinely slower hardware than the box a baseline was
+ * captured on — a whole-distribution shift no statistic can absorb). EPISODIC
+ * contention is handled by gating on the median instead, so the two are not
+ * double-counting the same noise. One margin constant across both perf specs,
+ * not two competing fudge factors. Shrink toward 1.0 once baselines are
+ * captured on the runner itself. */
 const CI_MARGIN_MULTIPLIER = 2
 const REGRESSION_BUDGET = 0.15
 
+/** ADVISORY threshold for the coefficient of variation. Above this, the reps
+ * disagree enough that the run's numbers should be read with suspicion even
+ * though the median gate passed — the earliest honest signal that a
+ * measurement is degrading. Provisional: Task 9 records the CVs actually
+ * observed at capture and tunes this from that evidence. Never a hard gate. */
+const SPREAD_ADVISORY_CV_PCT = 25
+
 /** ABSOLUTE budget for the small/warm scenario — the one hard gate that does
  * not depend on a recorded baseline. SET THIS FROM YOUR FIRST REAL CAPTURE
- * (plan Task 9, Step 3): round the observed p95 UP to the next 250ms. It is
+ * (plan Task 9, Step 3): round the observed p50 UP to the next 250ms. It is
  * multiplied by CI_MARGIN_MULTIPLIER at the gate, and both the raw and the
  * margined figure are printed, so retuning is a one-constant change with the
  * evidence beside it. */
@@ -1082,7 +1290,9 @@ function report(label: string, attrs: ReturnType<typeof attribute>[]) {
 		chunkToToolbarMs: pick((a) => a.chunkToToolbarMs),
 		toolbarToFirstShapeMs: pick((a) => a.toolbarToFirstShapeMs),
 	}
-	const f = (s: Summary | null) => (s === null ? 'n/a' : `p50=${s.p50ms} p95=${s.p95ms} max=${s.maxms}`)
+	// p50 first because it is the gated statistic; spread/cv alongside because a
+	// median with no dispersion beside it is a number a reader cannot judge.
+	const f = (s: Summary | null) => (s === null ? 'n/a' : `p50=${s.p50ms} min=${s.minms} max=${s.maxms} spread=${s.spreadMs} cv=${s.cvPct}%`)
 	console.log(
 		`[v2-load] ${label} (n=${out.firstShapeMs.n})\n` +
 			`  firstShapeMs         ${f(out.firstShapeMs)}   <- PRIMARY\n` +
@@ -1095,39 +1305,61 @@ function report(label: string, attrs: ReturnType<typeof attribute>[]) {
 	return out
 }
 
-/** p95 HARD against an absolute budget; max ADVISORY. Mirrors
- * canvas-v2-perf.spec.ts's assertBudget. */
-function assertBudget(label: string, s: Summary, budgetMs: number) {
-	const gate = budgetMs * CI_MARGIN_MULTIPLIER
-	console.log(`[v2-load] ${label}: p95=${s.p95ms}ms vs raw budget ${budgetMs}ms, gated at ${gate}ms (${CI_MARGIN_MULTIPLIER}x CI margin) [HARD]`)
-	expect(budgetMs, 'SMALL_WARM_BUDGET_MS is unset — capture a baseline and set it (plan Task 9 Step 3)').toBeGreaterThan(0)
-	expect(s.p95ms, `${label}: p95 first-shape time must stay within the margined budget`).toBeLessThanOrEqual(gate)
-	if (s.maxms > gate) {
-		const warn = `::warning title=v2-load ${label}::max first-shape ${s.maxms}ms exceeds gate ${gate}ms; p95 passed — advisory only`
-		console.log(warn)
-		test.info().annotations.push({ type: 'warning', description: warn })
+function warn(label: string, message: string) {
+	const line = `::warning title=v2-load ${label}::${message}`
+	console.log(line)
+	test.info().annotations.push({ type: 'warning', description: line })
+}
+
+/** The dispersion advisory, shared by both gates. Independent of whether the
+ * hard gate passed — which is the whole point: on a shared runner a widening
+ * spread is the earliest sign that a measurement is going bad, and it must be
+ * able to speak up in a run that is otherwise green. (In the pre-revision
+ * design the advisory branch was UNREACHABLE, because it tested the same
+ * number the hard assert had already thrown on. See the CHANGE NOTE.) */
+function reportDispersion(label: string, s: Summary) {
+	console.log(`[v2-load] ${label}: dispersion min=${s.minms}ms max=${s.maxms}ms spread=${s.spreadMs}ms cv=${s.cvPct}% over n=${s.n} [ADVISORY]`)
+	if (s.cvPct > SPREAD_ADVISORY_CV_PCT) {
+		warn(label, `first-shape reps disagree by cv=${s.cvPct}% (spread ${s.spreadMs}ms over n=${s.n}), above the ${SPREAD_ADVISORY_CV_PCT}% advisory threshold — read this run's numbers with suspicion even though the median gate passed`)
 	}
 }
 
-/** p95 HARD against the COMMITTED baseline; max ADVISORY. Mirrors
- * canvas-v2-perf.spec.ts's assertNoRegression, including its refusal to
- * silently skip when no baseline exists. */
+/** p50 HARD against an absolute budget; max and dispersion ADVISORY. Follows
+ * canvas-v2-perf.spec.ts's assertBudget in shape and in its refusal to pass
+ * with an unset budget — but gates on the MEDIAN, not p95. See the module
+ * header's GATING block for why. */
+function assertBudget(label: string, s: Summary, budgetMs: number) {
+	const gate = budgetMs * CI_MARGIN_MULTIPLIER
+	console.log(`[v2-load] ${label}: p50=${s.p50ms}ms vs raw budget ${budgetMs}ms, gated at ${gate}ms (${CI_MARGIN_MULTIPLIER}x CI margin) [HARD]`)
+	expect(budgetMs, 'SMALL_WARM_BUDGET_MS is unset — capture a baseline and set it (plan Task 9 Step 3)').toBeGreaterThan(0)
+	expect(s.p50ms, `${label}: median first-shape time must stay within the margined budget`).toBeLessThanOrEqual(gate)
+	// Reachable precisely because the hard gate is a DIFFERENT statistic: the
+	// median can pass while the worst rep blew the budget. That is the
+	// one-bad-rep case — worth a human's attention, never a CI failure.
+	if (s.maxms > gate) {
+		warn(label, `worst rep ${s.maxms}ms exceeds gate ${gate}ms while the median (${s.p50ms}ms) passed — one slow load out of ${s.n}, advisory only`)
+	}
+	reportDispersion(label, s)
+}
+
+/** p50 HARD against the COMMITTED baseline; max and dispersion ADVISORY.
+ * Follows canvas-v2-perf.spec.ts's assertNoRegression, including its refusal
+ * to silently skip when no baseline exists — but gates on the MEDIAN. */
 function assertNoRegression(label: string, s: Summary, key: string) {
 	const baseline = recordedBaselines[key]?.firstShapeMs
-	if (!baseline || typeof baseline.p95ms !== 'number') {
+	if (!baseline || typeof baseline.p50ms !== 'number') {
 		throw new Error(
-			`${label}: no committed firstShapeMs.p95ms baseline to gate against — capture one first ` +
+			`${label}: no committed firstShapeMs.p50ms baseline to gate against — capture one first ` +
 				`(EW_CAPTURE=1 bun run perf:load) and COMMIT e2e/baselines/canvas-v2-load.json, then reruns gate against it.`,
 		)
 	}
-	const gate = baseline.p95ms * (1 + REGRESSION_BUDGET) * CI_MARGIN_MULTIPLIER
-	console.log(`[v2-load] ${label}: p95=${s.p95ms}ms (baseline ${baseline.p95ms}ms, gated ${gate.toFixed(2)}ms = +15% x ${CI_MARGIN_MULTIPLIER}x) [HARD]`)
-	expect(s.p95ms, `${label}: p95 first-shape time should stay within 15% (CI-margined) of the committed baseline`).toBeLessThanOrEqual(gate)
+	const gate = baseline.p50ms * (1 + REGRESSION_BUDGET) * CI_MARGIN_MULTIPLIER
+	console.log(`[v2-load] ${label}: p50=${s.p50ms}ms (baseline ${baseline.p50ms}ms, gated ${gate.toFixed(2)}ms = +15% x ${CI_MARGIN_MULTIPLIER}x) [HARD]`)
+	expect(s.p50ms, `${label}: median first-shape time should stay within 15% (CI-margined) of the committed baseline`).toBeLessThanOrEqual(gate)
 	if (typeof baseline.maxms === 'number' && s.maxms > baseline.maxms * (1 + REGRESSION_BUDGET) * CI_MARGIN_MULTIPLIER) {
-		const warn = `::warning title=v2-load ${label}::max first-shape ${s.maxms}ms exceeds advisory gate; p95 passed`
-		console.log(warn)
-		test.info().annotations.push({ type: 'warning', description: warn })
+		warn(label, `worst rep ${s.maxms}ms exceeds the advisory max gate (baseline max ${baseline.maxms}ms) while the median passed`)
 	}
+	reportDispersion(label, s)
 }
 
 test.describe('canvas-v2 time-to-first-shape', () => {
@@ -1165,7 +1397,7 @@ cd /home/stag/src/projects/ensembleworks/e2e && bun run perf:load
 
 Expected: BOTH tests FAIL, for two *different* and both-correct reasons:
 - `v2 @100` fails on `expect(budgetMs).toBeGreaterThan(0)` — `SMALL_WARM_BUDGET_MS` is still the placeholder `0`.
-- `v2 @1000` fails with `no committed firstShapeMs.p95ms baseline to gate against`.
+- `v2 @1000` fails with `no committed firstShapeMs.p50ms baseline to gate against`.
 
 **Record both verbatim failures.** These are the intended RED. They are resolved in Task 9, not now. **If either test PASSES at this step, STOP and report** — a passing gate with no baseline and a zero budget would mean the gates are dead code, which is exactly the failure mode `canvas-v2-perf.spec.ts`'s module header records having been caught once before.
 
@@ -1253,9 +1485,11 @@ Then a v1 runner and the test, inside the `test.describe`:
 		// is a RATIO against v1, so the harness must always state it, not leave a
 		// reader to diff two log lines from two different jobs.
 		const v2 = recordedBaselines['v2-100-bulk-warm']?.firstShapeMs
-		if (v2 && typeof v2.p95ms === 'number') {
-			const ratio = out.firstShapeMs.p95ms === 0 ? Infinity : v2.p95ms / out.firstShapeMs.p95ms
-			console.log(`[v2-load] PARITY @100: v2 p95=${v2.p95ms}ms vs v1 p95=${out.firstShapeMs.p95ms}ms — v2 is ${ratio.toFixed(2)}x v1 (<=1.00 means at or better than parity)`)
+		// Medians, matching the gated statistic. Comparing two engines on their
+		// worst-of-five would compare two runner hiccups, not two engines.
+		if (v2 && typeof v2.p50ms === 'number') {
+			const ratio = out.firstShapeMs.p50ms === 0 ? Infinity : v2.p50ms / out.firstShapeMs.p50ms
+			console.log(`[v2-load] PARITY @100: v2 p50=${v2.p50ms}ms vs v1 p50=${out.firstShapeMs.p50ms}ms — v2 is ${ratio.toFixed(2)}x v1 (<=1.00 means at or better than parity)`)
 		} else {
 			console.log('[v2-load] PARITY @100: no committed v2-100-bulk-warm baseline yet — capture one to get the ratio')
 		}
@@ -1272,7 +1506,7 @@ Then a v1 runner and the test, inside the `test.describe`:
 ```bash
 cd /home/stag/src/projects/ensembleworks/e2e && bun run perf:load -g "v1 \(tldraw\)"
 ```
-Expected: PASS, and a `[v2-load] v1 @100 ...` block in stdout with a real `firstShapeMs` p50/p95/max. The `PARITY @100` line will report "no committed baseline yet" until Task 9.
+Expected: PASS, and a `[v2-load] v1 @100 ...` block in stdout with a real `firstShapeMs` p50/min/max/spread/cv. The `PARITY @100` line will report "no committed baseline yet" until Task 9.
 
 **If the v1 test fails with a blank canvas / no `.tl-shape` ever appearing**, the tldraw license exemption does not cover the preview server — apply the Task 3 Step 6 fallback (run the v1 arm under the dev-server config) and **report the deviation**.
 
@@ -1309,10 +1543,10 @@ Add inside the `test.describe`:
 		// 1000x the oplog entries. Printed against the bulk baseline so a reader
 		// can see immediately whether ops-count or bytes dominates.
 		const bulk = recordedBaselines['v2-1000-bulk-warm']?.firstShapeMs
-		if (bulk && typeof bulk.p95ms === 'number') {
+		if (bulk && typeof bulk.p50ms === 'number') {
 			console.log(
-				`[v2-load] OPLOG AXIS @1000: per-shape p95=${out.firstShapeMs.p95ms}ms vs bulk p95=${bulk.p95ms}ms — ` +
-					`ratio ${(out.firstShapeMs.p95ms / bulk.p95ms).toFixed(2)}x. A ratio near 1.0 means op COUNT is not the bottleneck ` +
+				`[v2-load] OPLOG AXIS @1000: per-shape p50=${out.firstShapeMs.p50ms}ms vs bulk p50=${bulk.p50ms}ms — ` +
+					`ratio ${(out.firstShapeMs.p50ms / bulk.p50ms).toFixed(2)}x. A ratio near 1.0 means op COUNT is not the bottleneck ` +
 					`(look at bytes/WASM/chunk instead); a large ratio means it is.`,
 			)
 		}
@@ -1325,7 +1559,7 @@ Add inside the `test.describe`:
 ```bash
 cd /home/stag/src/projects/ensembleworks/e2e && bun run perf:load -g "PER-SHAPE"
 ```
-Expected: FAIL — `no committed firstShapeMs.p95ms baseline to gate against`, from `assertNoRegression`. **Record it verbatim.** Resolved in Task 9.
+Expected: FAIL — `no committed firstShapeMs.p50ms baseline to gate against`, from `assertNoRegression`. **Record it verbatim.** Resolved in Task 9.
 
 **Step 3: Sanity-check the axis is real, before trusting it**
 
@@ -1516,10 +1750,10 @@ Then add the test:
 		maybeRecord('v2-1000-bulk-cold', out)
 
 		const warm = recordedBaselines['v2-1000-bulk-warm']?.firstShapeMs
-		if (warm && typeof warm.p95ms === 'number') {
+		if (warm && typeof warm.p50ms === 'number') {
 			console.log(
-				`[v2-load] COLD-ACTOR AXIS @1000: cold p95=${out.firstShapeMs.p95ms}ms vs warm p95=${warm.p95ms}ms — ` +
-					`delta ${(out.firstShapeMs.p95ms - warm.p95ms).toFixed(2)}ms. That delta IS candidate contributor (d), server-side replay.`,
+				`[v2-load] COLD-ACTOR AXIS @1000: cold p50=${out.firstShapeMs.p50ms}ms vs warm p50=${warm.p50ms}ms — ` +
+					`delta ${(out.firstShapeMs.p50ms - warm.p50ms).toFixed(2)}ms. That delta IS candidate contributor (d), server-side replay.`,
 			)
 		}
 		assertNoRegression('v2 @1000 bulk COLD', out.firstShapeMs, 'v2-1000-bulk-cold')
@@ -1569,17 +1803,17 @@ Hand-edit `e2e/baselines/canvas-v2-load.json` to add a top-level `_provenance` k
   "_provenance": {
     "host": "<your hostname>",
     "date": "2026-07-19",
-    "note": "dev-box capture, production client build via vite preview, cold HTTP cache per rep; CI runners are more contended — max is advisory there. Branch point: fix/v2-boot-sync-ready (no fixed boot settle sleep)."
+    "note": "dev-box capture, production client build via vite preview, cold HTTP cache per rep. Gated statistic is the MEDIAN (p50) of REPS=5; max and cv% are advisory, because at n=5 the house p95 formula returns the max. CI runners are more contended, hence the 2x margin. Branch point: fix/v2-boot-sync-ready (no fixed boot settle sleep)."
   },
 ```
 
 **Step 3: Set the absolute budget**
 
-Read the captured `v2-100-bulk-warm.firstShapeMs.p95ms`. Round **up** to the next 250 ms. Set `SMALL_WARM_BUDGET_MS` in `canvas-v2-load.spec.ts` to that value, and replace the placeholder comment with the actual evidence:
+Read the captured `v2-100-bulk-warm.firstShapeMs.p50ms`. Round **up** to the next 250 ms. Set `SMALL_WARM_BUDGET_MS` in `canvas-v2-load.spec.ts` to that value, and replace the placeholder comment with the actual evidence:
 
 ```ts
 /** ABSOLUTE budget for the small/warm scenario. Set from the 2026-07-19
- * capture: observed p95 = <X>ms on <host>, rounded up to the next 250ms.
+ * capture: observed p50 = <X>ms on <host>, rounded up to the next 250ms.
  * Multiplied by CI_MARGIN_MULTIPLIER at the gate; both the raw and margined
  * figures are printed, so retuning is a one-constant change with its evidence
  * beside it. */
@@ -1593,7 +1827,15 @@ cd /home/stag/src/projects/ensembleworks/e2e && bun run perf:load
 ```
 Expected: all 5 tests pass. Every scenario prints its full sub-split block.
 
-**If any scenario fails on its second consecutive run against its own just-captured baseline, the metric is too noisy to gate.** Do not widen `REGRESSION_BUDGET` to make it pass. Raise `REPS`, re-capture, and if it is still unstable, **report** — a flaky baseline is a broken baseline (`playwright.config.ts`: "a flaky baseline is a broken baseline — fix, don't retry").
+**If any scenario fails on its second consecutive run against its own just-captured baseline, the metric is too noisy to gate.** Do not widen `REGRESSION_BUDGET` to make it pass. Raise `REPS` — **to the next ODD value (5 → 7 → 9)**, since `pick(0.5)` only lands on an exact middle sample at odd n — re-capture, and if it is still unstable, **report**. A flaky baseline is a broken baseline (`playwright.config.ts`: "a flaky baseline is a broken baseline — fix, don't retry").
+
+Note that with a **median** gate this failure mode should now be rare: it takes three of five reps moving together to shift p50, which is a real signal, not a hiccup. If a median gate is flaking, suspect the measurement rather than the runner — and the `cv%` line printed beside every scenario is the first place to look.
+
+**Step 4a: Tune the dispersion advisory from the evidence you just gathered**
+
+`SPREAD_ADVISORY_CV_PCT` shipped at a provisional `25`. Read the `cv=` figure printed by every scenario across both runs and set it so it sits **above the normal spread of a healthy run but below an obviously degraded one** — roughly 1.5–2× the worst cv you saw on a clean dev-box capture. Record the observed cvs in the results document's provenance section so the next person can re-tune against evidence rather than re-guessing.
+
+If a scenario's cv is already above 25% on an idle dev box, **do not simply raise the threshold** — that is the harness telling you the scenario is not measuring a stable thing, and it is worth understanding before any of its numbers are trusted. Report it.
 
 **Step 5: Write the results document**
 
@@ -1680,21 +1922,27 @@ All figures in ms. `n/a` where a sub-split does not apply to that arm (the v1 ar
 has no v2 chunk and no v2 toolbar). Report **every sub-split, not just totals** —
 the totals are what prompted the work, but the sub-splits are what direct it.
 
-| Scenario | Engine | Shapes | Commits | Actor | firstShapeMs p50 | firstShapeMs p95 | firstShapeMs max | wsOpenMs p50 | chunkResponseEndMs p50 | toolbarMs p50 | chunkToToolbarMs p50 | toolbarToFirstShapeMs p50 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| v2 @100 bulk warm | v2 | 100 | 1 | warm | | | | | | | | |
-| v2 @1000 bulk warm | v2 | 1000 | 1 | warm | | | | | | | | |
-| v2 @1000 per-shape warm | v2 | 1000 | 1000 | warm | | | | | | | | |
-| v2 @1000 bulk COLD | v2 | 1000 | 1 | cold | | | | | | | | |
-| v1 @100 | v1 (tldraw) | 100 | n/a | n/a | | | | n/a | n/a | n/a | n/a | n/a |
+| Scenario | Engine | Shapes | Commits | Actor | firstShapeMs p50 (GATED) | firstShapeMs max | firstShapeMs spread | firstShapeMs cv% | wsOpenMs p50 | chunkResponseEndMs p50 | toolbarMs p50 | chunkToToolbarMs p50 | toolbarToFirstShapeMs p50 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| v2 @100 bulk warm | v2 | 100 | 1 | warm | | | | | | | | | |
+| v2 @1000 bulk warm | v2 | 1000 | 1 | warm | | | | | | | | | |
+| v2 @1000 per-shape warm | v2 | 1000 | 1000 | warm | | | | | | | | | |
+| v2 @1000 bulk COLD | v2 | 1000 | 1 | cold | | | | | | | | | |
+| v1 @100 | v1 (tldraw) | 100 | n/a | n/a | | | | | n/a | n/a | n/a | n/a | n/a |
+
+> **Report `cv%` for every row, even the good ones.** It is the column that tells
+> a future reader whether the run these numbers came from was trustworthy at all.
+> A scenario whose median looks fine at cv=45% has not really been measured; a
+> median at cv=6% can be leaned on. There is deliberately no p95 column — at
+> REPS=5 it would be identically the max (see the CHANGE NOTE).
 
 ## Derived comparisons
 
 | Comparison | Value | What it isolates |
 |---|---|---|
-| v2 @100 p95 ÷ v1 @100 p95 | `<ratio>x` | **Parity ratio.** ≤ 1.00 means at or better than v1 — the owner's acceptance bar. |
-| v2 @1000 per-shape p95 ÷ bulk p95 | `<ratio>x` | Contributor (b): op **count** vs bytes. Near 1.0 ⇒ op count is not the bottleneck. |
-| v2 @1000 cold p95 − warm p95 | `<delta>ms` | Contributor (d): server-side snapshot load + oplog replay. |
+| v2 @100 p50 ÷ v1 @100 p50 | `<ratio>x` | **Parity ratio.** ≤ 1.00 means at or better than v1 — the owner's acceptance bar. |
+| v2 @1000 per-shape p50 ÷ bulk p50 | `<ratio>x` | Contributor (b): op **count** vs bytes. Near 1.0 ⇒ op count is not the bottleneck. |
+| v2 @1000 cold p50 − warm p50 | `<delta>ms` | Contributor (d): server-side snapshot load + oplog replay. |
 | chunkResponseEndMs p50 (1k warm) | `<ms>` | Contributor (a): the ~4.3 MB lazy chunk. |
 | chunkToToolbarMs p50 (1k warm) | `<ms>` | Contributors (c) WASM decode + module eval + boot. |
 | toolbarToFirstShapeMs p50 (1k warm) | `<ms>` | Contributors (b) oplog replay + (e) WS round-trip — **the gap the harness was built to expose.** |
@@ -1704,9 +1952,9 @@ the totals are what prompted the work, but the sub-splits are what direct it.
 
 | Scenario | Gate | Threshold |
 |---|---|---|
-| v2 @100 bulk warm | absolute, p95 hard | `SMALL_WARM_BUDGET_MS = <X>` × 2 CI margin |
-| all others | regression vs committed baseline, p95 hard | +15% × 2 CI margin |
-| all | max frame | advisory only (`::warning::`) |
+| v2 @100 bulk warm | absolute, **p50 (median) hard** | `SMALL_WARM_BUDGET_MS = <X>` × 2 CI margin |
+| all others | regression vs committed baseline, **p50 (median) hard** | +15% × 2 CI margin |
+| all | max rep, and cv% above `SPREAD_ADVISORY_CV_PCT` | advisory only (`::warning::`) |
 
 ## What this tells us
 
@@ -1737,6 +1985,18 @@ Rules for this section:
 
 Bulleted, each naming a concrete next measurement or a concrete optimisation
 candidate with the number that motivates it. No unmotivated items.
+
+Two carried in from the harness's own design, to be restated here with the
+numbers this capture produced:
+
+- **Shrink `CI_MARGIN_MULTIPLIER` toward 1.0** once a baseline has been captured
+  on the CI runner itself. The 2× exists to absorb the systematic dev-box→runner
+  hardware difference; a runner-native baseline removes the need for most of it.
+  Quote the dev-box and CI medians side by side to say how much is actually
+  needed.
+- **Revisit `SPREAD_ADVISORY_CV_PCT`** against the cvs recorded above, and note
+  whether any scenario is dispersed enough that its median should not be trusted
+  as a gate at all.
 ```
 
 ---
@@ -1791,6 +2051,10 @@ concurrency:
 jobs:
   canvas-v2-load:
     runs-on: ubuntu-latest
+    # Sized for REPS=5 across 5 scenarios = 25 full production-build navigations,
+    # plus install + playwright + vite build. RAISE THIS IF REPS IS EVER RAISED:
+    # the measurement time scales linearly with it (REPS=7 is ~1.4x, REPS=21 is
+    # ~4.2x and would not fit). See the spec's REPS comment.
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -1899,7 +2163,7 @@ Makes v2 room load performance observable, attributable, comparable to v1, and r
 Cut from `fix/v2-boot-sync-ready`, not `main`, deliberately. `main` still has the unconditional 400 ms boot settle sleep; that removal is unconditional and will never ship again, so a baseline containing it would describe a configuration we never run. All baselines here are post-sleep-removal.
 
 ### Gating
-Follows the established `canvas-v2-perf.spec.ts` policy: p95 hard, max advisory (`::warning::`), min/p50 observed-only. Small/warm gates against an absolute budget; larger scenarios against the committed baseline (+15% × 2× CI margin). `EW_CAPTURE=1` rewrites baselines.
+**p50 (median) is the hard gate; max and coefficient-of-variation are advisory (`::warning::`); min/spread observed-only.** This is a deliberate departure from `canvas-v2-perf.spec.ts`'s "p95 hard" policy, and the spec header says so at length: the house percentile is `sorted[floor(q*len)]`, and `floor(0.95*n) === n-1` for all n ≤ 20, so at 5 reps per scenario a "p95" is identically the max — gating a load metric on the single worst of five samples is the most flake-prone choice available. That convention is correct in the frame-rate spec, where one run yields hundreds of frame samples; it does not transfer to one-sample-per-navigation load measurements. Small/warm gates against an absolute budget; larger scenarios against the committed baseline (+15% × 2× CI margin). `EW_CAPTURE=1` rewrites baselines.
 
 ### Results
 **📊 [docs/performance/2026-07-19-v2-load-baseline.md](../blob/perf/v2-first-shape-harness/docs/performance/2026-07-19-v2-load-baseline.md)** — the measured numbers, the full scenario matrix with all sub-splits, the v1 parity ratio, and which of the candidate contributors the data actually implicates. Read this rather than digging the figures out of the CI log.
