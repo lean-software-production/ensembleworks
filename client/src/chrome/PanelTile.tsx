@@ -398,6 +398,13 @@ export function MosaicChip({
 	const peer = !isLocal ? (snap?.peers.find((p) => p.id === rawId) ?? null) : null
 	const isSpeaking = isLocal ? (snap?.localSpeaking ?? false) : (peer?.isSpeaking ?? false)
 
+	// Ears↔eyes agreement, same as PanelTile's media area: the chip dims with
+	// the applied spatial gain, so a crosstalk-quietened other room LOOKS as
+	// faded as it sounds. Opacity goes on the chip's CONTENT, not the button —
+	// the speaking ring and identity inset must stay full-strength.
+	const peerGain = usePeerGain(rawId)
+	const gain = isLocal ? 1 : peerGain
+
 	// Same attach dance as PanelTile's media area (audio stays in the spatial
 	// WebAudio pipeline; the element is video-only). Chips are always remote —
 	// the local user is by definition on their own current page — so only the
@@ -452,11 +459,22 @@ export function MosaicChip({
 				color: wm.ink,
 			}}
 		>
-			{videoTrack ? (
-				<div ref={videoRef} style={{ width: '100%', height: '100%' }} />
-			) : (
-				initialsFor(name)
-			)}
+			<span
+				style={{
+					width: '100%',
+					height: '100%',
+					display: 'grid',
+					placeItems: 'center',
+					opacity: tileOpacityForGain(gain),
+					transition: DIM_TRANSITION,
+				}}
+			>
+				{videoTrack ? (
+					<div ref={videoRef} style={{ width: '100%', height: '100%' }} />
+				) : (
+					initialsFor(name)
+				)}
+			</span>
 		</button>
 	)
 }
