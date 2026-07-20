@@ -17,7 +17,7 @@ import { useAvSnapshot } from '../av/bridge'
 import { wm } from '../theme'
 import { exitFocus } from './focus'
 import { peekCloseSoon, peekOpen, togglePinned, useFramesDrawer } from './framesDrawerLayout'
-import { MOSAIC_GAP, mosaicTileWidth, scaleTileWidth } from './mosaicLayout'
+import { MOSAIC_GAP, mosaicTileWidth, scaleTileWidth, tileWidthCeiling } from './mosaicLayout'
 import { MAX_TILE_SCALE, MIN_TILE_SCALE, setTileScale, usePanelLayout } from './panelLayout'
 import {
 	orderByRecency,
@@ -230,9 +230,13 @@ function CurrentPageMosaic({
 	// Tile size: the width-derived "everyone fits" size times the user's
 	// persisted multiplier, re-clamped so the scaled result still respects the
 	// legibility floor and the sane maximum.
+	// The scaled size may exceed the derived cap — the slider is an explicit
+	// ask — but stops where a single tile fills the panel row.
+	const contentWidth = width - PANEL_CONTENT_INSET
 	const tileWidth = scaleTileWidth(
-		mosaicTileWidth(width - PANEL_CONTENT_INSET, participants.length),
-		tileScale
+		mosaicTileWidth(contentWidth, participants.length),
+		tileScale,
+		tileWidthCeiling(contentWidth)
 	)
 
 	// Join/leave bypasses the settle debounce (spec): joiners append at the end

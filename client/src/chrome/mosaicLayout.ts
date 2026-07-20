@@ -31,15 +31,36 @@ export const LABEL_MIN_WIDTH = 64
  * tiles. */
 export const CHIP_SIZE = 40
 
+/** Breathing room kept to the right of a full-width tile so a maxed-out
+ * mosaic doesn't look jammed against the panel edge. */
+export const TILE_EDGE_MARGIN = 6
+
+/**
+ * The ceiling an explicitly SCALED tile may reach: the panel's own content
+ * width, less a margin — so the slider can grow a tile until one fills the
+ * row and then stops, rather than stopping at a fixed number with plenty of
+ * panel left (which read as the control silently doing nothing).
+ *
+ * TILE_WIDTH_MAX still caps the DERIVED size, so the no-slider default keeps
+ * its old behaviour: a lone participant in a dragged-wide panel doesn't
+ * balloon unless the user asks for it.
+ */
+export function tileWidthCeiling(contentWidth: number): number {
+	if (!Number.isFinite(contentWidth)) return TILE_WIDTH_MAX
+	return Math.max(TILE_WIDTH_MIN, Math.floor(contentWidth - TILE_EDGE_MARGIN))
+}
+
 /**
  * Apply the user's tile-size multiplier to a derived tile width, re-clamping
  * so a scaled-down tile still clears the legibility floor and a scaled-up one
- * still tops out at the sane maximum. Kept beside the derivation so both ends
- * of the sizing story (fit, then taste) share one clamp.
+ * stops where a single tile fills the panel row (tileWidthCeiling). Kept
+ * beside the derivation so both ends of the sizing story (fit, then taste)
+ * share one clamp.
  */
-export function scaleTileWidth(tileWidth: number, scale: number): number {
+export function scaleTileWidth(tileWidth: number, scale: number, ceiling: number): number {
 	if (!Number.isFinite(scale)) return tileWidth
-	return Math.min(TILE_WIDTH_MAX, Math.max(TILE_WIDTH_MIN, Math.round(tileWidth * scale)))
+	const max = Math.max(TILE_WIDTH_MIN, ceiling)
+	return Math.min(max, Math.max(TILE_WIDTH_MIN, Math.round(tileWidth * scale)))
 }
 
 /** Square-ish grid: columns = ceil(√N), min 1. */

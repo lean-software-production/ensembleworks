@@ -50,7 +50,11 @@ For every **other** page's group:
 
 The mosaic's controls row (under the current page's tiles) also carries a
 **tile-size multiplier** (0.5×–3×, amended 2026-07-20) applied on top of the
-width-derived size and re-clamped to the same floor/cap. Panel width remains
+width-derived size. It re-clamps to the same 36px floor, but its ceiling is
+**dynamic** (amended 2026-07-20): the panel's content width less a 6px margin,
+so scaling up grows a tile until one fills the row and then stops. The static
+320px cap still bounds the *derived* size only — a lone participant in a wide
+panel doesn't balloon unless asked. Panel width remains
 the baseline control; the multiplier is taste on top.
 
 Persistence: the multiplier persists alongside panel width in `panelLayout.ts`
