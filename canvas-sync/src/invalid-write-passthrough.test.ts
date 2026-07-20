@@ -4,6 +4,19 @@
 // UNREACHABLE in the browser — where essentially every rejection originates
 // (Editor.applyAll -> applyOne -> doc.putShape). Without this passthrough the
 // bounded console.warn is not a fallback, it is the only production behaviour.
+//
+// Spec-review finding (2026-07-20): the first version of this test routed
+// every write through `peer.putShape`, which a PEER-LEVEL wrapper can
+// intercept exactly as easily as a real construction-time forward — a mutant
+// that has `SyncClientPeer.putShape` watch `doc.invalidWriteCount` and call
+// the sink itself, WITHOUT ever passing `onInvalidWrite` into
+// `LoroCanvasDoc.create`, passed this file unchanged. Assertions A and B
+// below close that: A writes through `peer.doc` directly, a path a
+// peer-level wrapper never sees; B proves the injected sink REPLACES the
+// doc's own console.warn fallback (canvas-doc.ts:41-43: "When none is
+// supplied the doc warns on the console instead") rather than merely
+// running alongside it — a peer-level relay leaves the doc's own handler
+// unset, so both fire.
 import assert from 'node:assert/strict'
 import type { InvalidWrite } from '@ensembleworks/canvas-doc'
 import { SyncClientPeer } from './client-peer.js'
@@ -30,12 +43,51 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
   // SyncClientPeer.doc is already `readonly` and public, so a dashboard can
   // pull the count without any further surface change.
   assert.equal(peer.doc.invalidWriteCount, 1, 'the count is readable through the public doc')
+
+  // --- A: bypass the peer wrapper entirely --------------------------------
+  // A peer-level `putShape` interceptor (the mutant described above) never
+  // observes a write made straight through `peer.doc` — only a real forward
+  // (onInvalidWrite reaching LoroCanvasDoc.create) puts the sink in the
+  // doc's own rejection path, which `peer.doc.putShape` hits directly.
+  const seenBeforeDocWrite = seen.length
+  peer.doc.putShape({ id: 'shape:bad2', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
+  peer.doc.commit()
+  assert.equal(seen.length - seenBeforeDocWrite, 1, 'A: doc-level write reached the injected sink')
+
   peer.close()
 }
 
+// --- B: the injected sink REPLACES the console.warn fallback -------------
+// canvas-doc.ts:41-43 documents the fallback as an ELSE branch ("When none
+// is supplied the doc warns on the console instead"). A real forward must
+// therefore produce a sink call with NO warning; the mutant — which relays
+// through the peer while leaving the doc's own onInvalidWrite unset —
+// produces both, because the doc still thinks no handler was supplied.
+{
+  const seen: InvalidWrite[] = []
+  const warned: unknown[][] = []
+  const realWarn = console.warn
+  console.warn = (...args: unknown[]) => { warned.push(args) }
+  try {
+    const [, clientEnd] = makePair()
+    const peer = new SyncClientPeer({
+      peerId: 3n,
+      transport: clientEnd,
+      onInvalidWrite: (w) => seen.push(w),
+    })
+    peer.doc.putPage({ id: 'page:p', name: 'P' })
+    peer.putShape({ id: 'shape:bad3', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
+    assert.equal(seen.length, 1, 'the sink fired')
+    peer.close()
+  } finally {
+    console.warn = realWarn // restore even if an assertion throws
+  }
+  assert.equal(warned.length, 0, 'B: the doc used the injected sink INSTEAD of its console.warn fallback')
+}
+
 // Omitting the sink stays legal, and this is the assertion that keeps it so:
-// every one of the ~50 existing `new SyncClientPeer` call sites in the repo
-// passes only peerId/transport/presence, and none of them should have to change.
+// every existing `new SyncClientPeer` call site in the repo passes only
+// peerId/transport/presence, and none of them should have to change.
 {
   const [, clientEnd] = makePair()
   const peer = new SyncClientPeer({ peerId: 2n, transport: clientEnd })
