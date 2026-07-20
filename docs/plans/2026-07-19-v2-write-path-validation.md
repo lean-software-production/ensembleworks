@@ -226,9 +226,18 @@ One honest caveat to carry into the PR body: a child rescued out of a frame to
 the page root keeps its parent-relative `x`/`y`, so it will appear at a
 different on-screen position. That is inherited from `reparentToRoot`'s existing
 behaviour for orphan/cycle repair, and it is unambiguously better than the shape
-being deleted. Coordinate-preserving rescue is **out of scope** — it would
-require `repair()` to do geometry, and `repair()` must stay a cheap pure
-function.
+being deleted. **Owner-accepted 2026-07-20 (see Decisions, ruling 1).**
+Coordinate-preserving rescue is **out of scope and recorded as a follow-up**,
+not an open question — it would require `repair()` to do geometry, and
+`repair()` must stay a cheap pure function.
+
+### Deferred follow-ups (do NOT do these here)
+
+- **Coordinate-preserving rescue.** Adjusting a rescued child's `x`/`y` so its
+  world position is unchanged when it is rehomed from a frame to the page root.
+  Deferred by owner ruling 1: it puts geometry into `repair()`. It would apply
+  equally to today's `reparentToRoot` orphan/cycle path, so it is a single
+  follow-up covering both, not something this branch should special-case.
 
 ### D6. Perf.
 
@@ -253,12 +262,64 @@ must not be started. Nothing in this plan touches `canvas-editor/src/tools/`,
 
 ---
 
-## Task order and off-ramp
+---
+
+## Decisions (settled 2026-07-20 — owner ruling; NOT open questions)
+
+Four questions were escalated when this plan was written. All four are now
+ruled. A fresh implementer or reviewer must **not** reopen any of them.
+
+### Ruling 1 — Coordinate jump on rescue: **ACCEPTED.**
+
+Rescued children keep their parent-relative `x`/`y` and may therefore appear at
+a different on-screen position after being rehomed from a frame to the page
+root. Recorded rationale:
+
+- It matches `reparentToRoot`'s existing orphan/cycle behaviour, so `repair()`
+  stays internally consistent — one rehoming rule, not two.
+- A misplaced shape is strictly better than an unrecoverably deleted one.
+- Coordinate-preserving rescue would put geometry into `repair()`, which must
+  stay a cheap pure function.
+
+Coordinate-preserving rescue is **out of scope** and is recorded as a follow-up
+under "Deferred follow-ups" above. It is not an open question.
+
+### Ruling 2 — Removing `cascadeDropSet` from `@ensembleworks/canvas-model`'s exports: **APPROVED.**
+
+`canvas-model` is an internal workspace package with no external consumers.
+Proceed with the deletion in Task 5. The repo-wide grep in Task 5 Step 5 remains
+required — it proves the *internal* consumer list is what this plan assumes, not
+that an external one exists.
+
+### Ruling 3 — Zero-page policy: **the plan's choice stands.**
+
+`repairPlan` suppresses `dropShape` in a zero-page doc and leaves the invalid
+shape standing, mirroring the policy it already applies to `reparentToRoot`
+(`canvas-model/src/repair.ts:56-60`). See decision D4.
+
+### Ruling 4 — Scope: **land BOTH halves. Tasks 1–9, all of them.**
+
+Half (B) is in scope, not conditional. Recorded rationale: after half (A) alone,
+`doc.import` still bypasses validation entirely, so a remote peer running older
+or buggy code can still ship invalid props and still trigger the subtree cascade
+on **every** peer. **Most of the actual risk reduction lives in half (B).**
+
+The Task-4 off-ramp below stays documented as a *fallback* — to be used only if
+half (B) turns out worse than expected during execution — but the intent is to
+land all nine tasks. Taking the off-ramp is an escalation, not a judgement call:
+STOP and report rather than quietly shipping half the fix.
+
+---
+
+## Task order
 
 Tasks 1–4 are half (A), origination. Tasks 5–8 are half (B), proportionality.
-They are independent: (A) is strictly additive and independently landable, so if
-the owner halts after Task 4 the branch is still worth merging. Task 9 is
-integration for whatever landed.
+Task 9 is integration. **All nine are in scope** (ruling 4).
+
+The two halves are technically independent — (A) is strictly additive and
+independently landable — which is what makes the fallback possible. If half (B)
+proves worse than expected mid-execution, STOP after Task 4, report, and let the
+owner decide; do not silently narrow the branch to half (A).
 
 ---
 
@@ -753,12 +814,24 @@ git commit -m "fix(canvas-doc): validate the merged result on updateProps"
 
 ---
 
-**Half (A) is complete here.** If the owner has halted the branch, skip to
-Task 9.
+**Half (A) is complete here — but the work is not.** Continue to Task 5; half
+(B) is in scope by owner ruling 4, and it carries most of the risk reduction
+(half (A) does nothing about invalid props arriving through `doc.import`). Only
+skip to Task 9 if half (B) has proved worse than expected AND you have stopped
+and reported first.
 
 ---
 
 ## Task 5: Make `dropShape` proportionate in the pure model
+
+> **This task deliberately rewrites tests that currently pin the cascade as
+> correct** (`canvas-model/src/repair.test.ts:37-58`). That is an **intended
+> behaviour change with owner sign-off** (ruling 4, 2026-07-20) — not a
+> regression, and not a failing test being papered over. The old assertions
+> encoded the defect this branch exists to fix. Reviewers: the correct check is
+> that the *new* assertions describe proportionate repair and that
+> `applyRepairToModel` still agrees with `LoroCanvasDoc.repair()`, **not** that
+> the old assertions survived.
 
 **Files:**
 - Modify: `canvas-model/src/repair.ts` (`opFor` comment, `repairPlan`,
@@ -976,6 +1049,13 @@ git commit -m "fix(canvas-model): dropShape rescues children instead of cascadin
 
 `applyRepairToModel` and `LoroCanvasDoc.repair()` must never drift. Task 5
 changed the reference; this task changes the Loro application to match.
+
+> **As in Task 5, this rewrites cascade-pinning assertions on purpose**
+> (`canvas-doc/src/repair.test.ts:89-92`). Intended behaviour change, owner
+> sign-off 2026-07-20 (ruling 4). The assertions that must NOT be weakened are
+> the model-agreement one (`repair.test.ts:187`) and the order-independence
+> structure — those are the drift guards, and they must keep passing on their
+> own merits.
 
 **Files:**
 - Modify: `canvas-doc/src/loro-canvas-doc.ts` (`repair()`, import line)
@@ -1349,13 +1429,18 @@ Plus:
 
 - The verbatim RED output recorded for Tasks 1, 2, 4, 5 and 6, and the
   revert-and-observe note from Task 7.
-- The behaviour change owners must know about (decision D5): a shape rescued out
-  of a dropped frame keeps its parent-relative `x`/`y` and will therefore appear
-  at a different on-screen position. It is still strictly better than being
-  deleted, and it matches `reparentToRoot`'s existing behaviour for orphan and
-  cycle repair.
+- The behaviour change owners must know about (decision D5, accepted by ruling
+  1): a shape rescued out of a dropped frame keeps its parent-relative `x`/`y`
+  and will therefore appear at a different on-screen position. It is still
+  strictly better than being deleted, and it matches `reparentToRoot`'s existing
+  behaviour for orphan and cycle repair. Coordinate-preserving rescue is a
+  recorded follow-up.
 - A note that `cascadeDropSet` was removed from `@ensembleworks/canvas-model`'s
-  public exports.
+  public exports (approved by ruling 2 — internal workspace package, no external
+  consumers).
+- A note that Tasks 5 and 6 intentionally rewrote tests which previously pinned
+  the subtree cascade as correct, under owner ruling 4 — those assertions
+  encoded the defect, and their replacement is the point of the branch.
 
 ## Reviewer obligations
 
