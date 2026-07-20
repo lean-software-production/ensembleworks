@@ -342,9 +342,20 @@ debugged from scratch.**
 `Editor.replay()` — the undo/redo path — replays `InverseOp`s by calling
 `CanvasDoc`'s public mutators, and its `putShape` inverses carry **whole shapes
 read back out of the doc** (see `editor.ts`'s "full-shape-inverse convention").
-A shape that arrived from a **remote** peer via `import()` while invalid can
-therefore land on the undo stack. Replaying it now hits the write boundary and
-is **silently dropped** rather than restored.
+An already-invalid shape can therefore land on the undo stack by **two** routes:
+
+1. it arrived from a **remote peer** via `import()`, or
+2. it was loaded by **`fromSnapshot`** from a room whose stored SQLite predates
+   the write boundary.
+
+Replaying it now hits the write boundary and is **silently dropped** rather than
+restored.
+
+> **Route 2 is the likelier one and matters more.** Pre-existing corrupt rooms
+> already sitting on disk are a far more common source than a live remote peer
+> running old code — and it means those shapes can *never* be restored by undo,
+> not merely during one session's race. Any user-facing note must name the
+> snapshot path, not just the remote one.
 
 The user-visible symptom is *"my undo/redo did nothing"* for that shape.
 
@@ -531,6 +542,21 @@ precedent. It is not — `canvas-sync/src/server-peer.ts:76` is a getter over
 `this.clients.size` with no backing counter. The sole precedent is
 `repairCounter` / `repairCount`.
 
+### Ruling 8 — Task 2 code-review findings (2026-07-20): **all five accepted.**
+
+| # | Finding | Where |
+|---|---|---|
+| 1 | **CRITICAL** — a throwing `onInvalidWrite` escapes `putShape`, reopening the exact hole D1 exists to close | **Task 3A** |
+| 2 | `reconcile()` cannot distinguish a refusal from a put, so it never converges on legacy rooms | **Task 4B** |
+| 3 | `replay()`'s TOLERANCE CONTRACT comment omits `putShape`'s new silent-skip mode | **Task 3A** step 5 + D3a |
+| 4 | `id` coercion belongs in `rejectWrite`, not duplicated per call site (and must catch `''`) | **Task 3A** |
+| 5 | `putShapeUnchecked`'s JSDoc falsely implies production cannot reach it | JSDoc in **Task 3A**, CI gate in **Task 8A** |
+
+Finding 5 explicitly **rejects** runtime machinery (symbol key, token argument,
+separate `unsafe` module): all cost more than the bug they prevent, and the
+clean-room constraint rules out the usual tricks. A presence-style CI gate is
+the conventional answer here — the repo already has two.
+
 ### Ruling 6 — The optional third constructor parameter: **settled, leave it alone.**
 
 Review explicitly confirmed that `LoroCanvasDoc`'s optional third positional
@@ -555,9 +581,9 @@ STOP and report rather than quietly shipping half the fix.
 
 ## Task order
 
-Tasks 1, 1A, 1B, 2, 3, 4 and 4A are half (A), origination. Tasks 5–8 are half
-(B), proportionality. Task 9 is integration. **All of them are in scope**
-(rulings 4, 5 and 7).
+Tasks 1, 1A, 1B, 2, 3, 3A, 4, 4A and 4B are half (A), origination. Tasks 5–8
+are half (B), proportionality. Tasks 8A and 9 are integration. **All of them are
+in scope** (rulings 4, 5, 7 and 8).
 
 Lettered tasks were added after the plan was first written, so the many
 "Tasks 2–9" references throughout this document stay valid:
@@ -566,10 +592,16 @@ Lettered tasks were added after the plan was first written, so the many
 |---|---|---|---|
 | 1 | original | — | ✅ landed `527c2a3` |
 | 1A | 2026-07-20 | Task 1 **quality** review (ruling 5) | ✅ landed `0a3ddd6`, 2 test sections deferred |
-| 1B | 2026-07-20 | Task 1A **quality** review (ruling 7) | ⬅ **start here** |
+| 1B | 2026-07-20 | Task 1A **quality** review (ruling 7) | ✅ landed |
+| 2 | original | — | ✅ landed `81fcc94` + `5060832` |
+| 3 | original | — | ✅ landed `f93192f` |
+| 3A | 2026-07-20 | Task 2 **quality** review (ruling 8) — findings 1, 3, 4, 5 | ⬅ **start here** |
 | 4A | 2026-07-20 | Task 1 quality review, finding 1 (ruling 5) | pending |
+| 4B | 2026-07-20 | Task 2 quality review, finding 2 (ruling 8) | pending |
+| 8A | 2026-07-20 | Task 2 quality review, finding 5 (ruling 8) — the CI gate | pending |
 
-**Start at Task 1B.**
+**Start at Task 3A.** It carries a blocking correctness bug and must land before
+Task 4 writes the second `rejectWrite` call site.
 
 The two halves are technically independent — (A) is strictly additive and
 independently landable — which is what makes the fallback possible. If half (B)
@@ -1752,6 +1784,293 @@ git commit -m "test(canvas-doc): seed deliberately-invalid repair fixtures via p
 
 ---
 
+## Task 3A: Close the throwing-sink hole and correct three false comments
+
+Task 2's quality review returned ❌ CHANGES NEEDED. This task carries its
+**blocking correctness bug** (finding 1) plus the two coercion/documentation
+corrections that must land before Task 4 writes the second `rejectWrite` call
+site.
+
+### Why before Task 4
+
+Finding 4 moves `id` coercion **into** `rejectWrite`. If Task 4 lands first it
+writes its own local `id` guard, and the duplication finding 4 exists to prevent
+is exactly what ships. Finding 1 is independent but blocking, and Task 4A is
+about to inject the **first production handler** — closing the hole before a
+real sink exists is the whole argument for doing it now.
+
+**Files:**
+- Modify: `canvas-doc/src/loro-canvas-doc.ts` (guard the handler, coerce `id`, JSDoc)
+- Modify: `canvas-doc/src/canvas-doc.ts` (`putShape` JSDoc one-liner)
+- Modify: `canvas-editor/src/editor.ts` (TOLERANCE CONTRACT comment — comment only)
+- Modify: `canvas-doc/src/write-validation.test.ts`
+
+### Finding 1 (CRITICAL, blocking) — a throwing handler escapes `putShape`
+
+`loro-canvas-doc.ts` calls the injected sink unguarded:
+
+```ts
+if (this.onInvalidWrite) this.onInvalidWrite(write)
+```
+
+Verified empirically: a doc built with a throwing handler propagates straight
+out of `putShape` — `HANDLER-THROW: ESCAPES putShape -> Error: handler blew up`.
+
+**This reintroduces precisely what decision D1 exists to prevent.**
+`Editor.applyAll` (`editor.ts:249`) has no `try`/`catch` around its intent loop
+and commits only afterward, so a throwing sink strands that batch's earlier
+mutations uncommitted. The reporting path — the thing that exists *because* we
+refuse to throw — is itself the hole. (`replay()` is incidentally protected by
+its own per-op guard; `applyAll` is not, which is the case that matters.)
+
+**Latent, not live:** no production handler is injected yet, only tests. That is
+the argument for closing it **now**, before Task 4A lands the dev-overlay
+handler and someone later writes a sink that can throw — a `JSON.stringify` over
+a value with a throwing getter, a React `setState` after unmount, a full ring
+buffer.
+
+### Finding 4 — coerce `id` inside `rejectWrite`, don't duplicate the guard
+
+The signature is structurally right and **must not change shape**: Task 4's
+`updateProps(id, props)` receives `id` as a separate argument, not as a field of
+the offending value, so it genuinely cannot be derived centrally the way `kind`
+can. That asymmetry is inherent, not an oversight.
+
+But the *guard* must not be duplicated across two call sites. Widen the
+parameter and coerce once. This also closes a case the current guard misses: an
+empty-string `id` passes `typeof === 'string'` and produces the line
+`rejected invalid putShape (frame)  [#1]: …` — a blank where the id should be,
+which reads as a formatting bug rather than as missing data.
+
+**Also fix the justifying comment, which is shaky.** `kind` is not centralised
+because it has a closed vocabulary; it is centralised because `InvalidWrite.kind`
+is a **narrowed declared type** that runtime garbage would violate. `id` is
+declared plain `string`, so its rule is only "must be a non-empty string" —
+checkable, just weaker. Say that.
+
+### Finding 5 (JSDoc half) — `putShapeUnchecked`'s comment makes a false claim
+
+It says "Deliberately NOT on the `CanvasDoc` interface," which implies production
+cannot reach it. **Production reaches the concrete class routinely** — verified:
+
+| Location | Exposure |
+|---|---|
+| `canvas-sync/src/server-peer.ts:48` | `readonly doc: LoroCanvasDoc` |
+| `canvas-sync/src/client-peer.ts:19` | `readonly doc: LoroCanvasDoc` |
+| `server/src/canvas-v2/shadow.ts:79` | `readonly doc: LoroCanvasDoc` |
+| `server/src/canvas-v2/actor.ts` | constructs and holds it concretely |
+| `server/src/canvas-v2/reconcile.ts:49` | takes `doc: LoroCanvasDoc` as a parameter |
+
+Anyone typing `peer.doc.` gets `putShapeUnchecked` in autocomplete with no
+interface boundary in the way — and `reconcile.ts` is *precisely* where a
+developer chasing finding 2 would reach for it as the fix.
+
+> **Do NOT add runtime machinery** — a symbol key, a token argument, a separate
+> `unsafe` module. All cost more than the bug they prevent, and the clean-room
+> constraint rules out the usual tricks. The JSDoc is corrected here; the
+> enforcement is a CI presence gate in **Task 8A**, matching the repo's existing
+> pattern (`scripts/ux-contract-presence.test.ts`, `scripts/exposure-audit.ts`).
+
+### Finding 3 — `replay()`'s TOLERANCE CONTRACT is now factually incomplete
+
+D3a records the undo/redo semantics *in this plan*, but the comment developers
+actually read is `canvas-editor/src/editor.ts:324-338`. It carefully enumerates
+which mutators are no-throw and which ops get skipped, and names `putShape`'s
+cycle-guard throw as **the** reason `putShape` needs guarding. `putShape` now has
+a second, quieter skip mode that the `try`/`catch` never observes at all.
+
+**Step 1: Write the failing test**
+
+Append to `canvas-doc/src/write-validation.test.ts`, before the final
+`console.log`:
+
+```ts
+// --- Task 3A finding 1: a THROWING sink must not escape putShape ---
+// The reporting path exists BECAUSE we refuse to throw (decision D1). If the
+// sink itself can throw, the hole is back: Editor.applyAll has no try/catch
+// around its intent loop and commits only afterward, so an escaping throw
+// strands that batch's earlier mutations uncommitted.
+{
+  const doc = LoroCanvasDoc.create({
+    peerId: 16n,
+    onInvalidWrite: () => { throw new Error('handler blew up') },
+  })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape({ id: 'shape:keep', kind: 'note', parentId: 'page:p', props: {}, ...base() } as never)
+
+  assert.doesNotThrow(
+    () => doc.putShape({ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '1' }, ...base() } as never),
+    'a throwing sink must not escape putShape',
+  )
+  // Still a total no-op, and still counted.
+  assert.equal(doc.getShape('shape:bad'), undefined, 'the rejected write did not land')
+  assert.deepEqual(doc.listShapes().map((s) => s.id), ['shape:keep'], 'nothing else moved')
+  assert.equal(doc.invalidWriteCount, 1, 'the counter increments BEFORE the sink is called, so a throw cannot skew it')
+
+  // And the throw must not fall through to the console path either.
+  const realWarn = console.warn
+  let warnings = 0
+  console.warn = () => { warnings++ }
+  try {
+    doc.putShape({ id: 'shape:bad2', kind: 'frame', parentId: 'page:p', props: { w: '1' }, ...base() } as never)
+  } finally {
+    console.warn = realWarn
+  }
+  assert.equal(warnings, 0, 'a supplied-but-throwing sink still suppresses the console fallback')
+}
+
+// --- Task 3A finding 4: `id` is coerced centrally, including empty string ---
+{
+  const seen: InvalidWrite[] = []
+  const doc = LoroCanvasDoc.create({ peerId: 17n, onInvalidWrite: (w) => seen.push(w) })
+  doc.putPage({ id: 'page:p', name: 'P' })
+
+  doc.putShape({ kind: 'frame', parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(seen[0]!.id, '<no id>', 'a missing id is reported as <no id>')
+
+  // The case the old guard missed: '' is a string, so it passed through and
+  // rendered as a BLANK in the log line — reads as a formatting bug, not as
+  // missing data.
+  doc.putShape({ id: '', kind: 'frame', parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(seen[1]!.id, '<no id>', 'an EMPTY-STRING id is coerced too, not passed through blank')
+
+  doc.putShape({ id: 42, kind: 'frame', parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(seen[2]!.id, '<no id>', 'a non-string id never escapes as a non-string')
+
+  doc.putShape({ id: 'shape:real', kind: 'frame', parentId: 'page:p', props: { w: '1' }, ...base() } as never)
+  assert.equal(seen[3]!.id, 'shape:real', 'a genuine id is preserved')
+}
+```
+
+> **TRAP if you extend these into a full "the no-op is total" test.** The
+> reviewer verified totality across 9 rejected inputs by comparing Loro tree
+> JSON, the private index map by TreeID, `listShapes`/`listBindings`/`listPages`,
+> `versionBytes()`, and raw `exportSnapshot()` bytes — all identical, nothing
+> threw. But **calling `listPages()` or `listBindings()` between two
+> `exportSnapshot()` calls changes the snapshot bytes by itself.** That is
+> pre-existing Loro lazy-container behaviour, entirely unrelated to this branch
+> — confirmed by probe: back-to-back snapshots compare equal; snapshots with an
+> intervening `listPages()`/`listBindings()` do not. Take both snapshots with no
+> intervening reads, or you will chase a phantom diff for an hour.
+
+**Step 2: Run it to verify it fails**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/write-validation.test.ts
+```
+
+Expected: FAIL in the finding-1 section — `a throwing sink must not escape
+putShape`, reported as the handler's own `Error: handler blew up` propagating
+out. **Record the verbatim output.**
+
+**Step 3: Guard the sink and coerce `id` in `canvas-doc/src/loro-canvas-doc.ts`**
+
+Change `rejectWrite`'s signature and body:
+
+```ts
+  private rejectWrite(op: InvalidWrite['op'], value: unknown, rawId: unknown, error: string): void {
+    const rawKind = (value as { kind?: unknown } | null | undefined)?.kind
+    // `kind` is coerced here because InvalidWrite.kind is a NARROWED declared
+    // type (ShapeKind | '<unknown>') that runtime garbage would violate — not
+    // merely because kinds happen to have a closed vocabulary. `id` is
+    // declared plain `string`, so its rule is weaker but still checkable:
+    // must be a NON-EMPTY string. Empty is coerced too — it passes
+    // `typeof === 'string'` and would render as a blank in the log line,
+    // reading as a formatting bug rather than as missing data.
+    const kind: ShapeKind | '<unknown>' =
+      typeof rawKind === 'string' && (SHAPE_KINDS as readonly string[]).includes(rawKind)
+        ? (rawKind as ShapeKind)
+        : '<unknown>'
+    const id = typeof rawId === 'string' && rawId.length > 0 ? rawId : '<no id>'
+    const n = ++this.invalidWriteCounter
+    const write: InvalidWrite = { op, kind, id, error }
+    if (this.onInvalidWrite) {
+      try { this.onInvalidWrite(write) }
+      catch { /* A reporting sink must NEVER convert a no-op rejection into a
+                 throw that escapes Editor.applyAll's un-try/caught intent loop
+                 and strands that batch's earlier mutations uncommitted
+                 (decision D1). The counter is incremented above, before this
+                 call, so a throwing sink cannot skew it either. */ }
+    } else if ((n & (n - 1)) === 0) {
+      console.warn(`[canvas-doc] rejected invalid ${op} (${kind}) ${id} [#${n}]: ${error}`)
+    }
+  }
+```
+
+and simplify `putShape`'s call site — it no longer derives `id` itself:
+
+```ts
+      this.rejectWrite('putShape', s, (s as { id?: unknown })?.id, v.error)
+```
+
+**Step 4: Correct `putShapeUnchecked`'s JSDoc**
+
+Replace the "Deliberately NOT on the CanvasDoc interface" claim with something
+true:
+
+```ts
+  /**
+   * putShape WITHOUT the write-boundary validation above. It exists so tests
+   * and hostile-state rigs can construct exactly the docs a REMOTE peer's
+   * bytes can still deliver (import() applies remote ops straight to the tree
+   * and never passes through putShape, so local validation cannot close that
+   * door).
+   *
+   * Kept off the CanvasDoc interface as a SIGNAL, not a barrier — production
+   * reaches this concrete class routinely (SyncServerPeer.doc,
+   * SyncClientPeer.doc, ShadowMirror.doc and reconcile()'s parameter are all
+   * typed LoroCanvasDoc), so anyone typing `peer.doc.` gets this method in
+   * autocomplete with no interface boundary in the way. The actual enforcement
+   * is the CI presence gate in scripts/ — see it for the allowlist and how to
+   * extend it. Do not call this from production code.
+   */
+```
+
+**Step 5: Correct `replay()`'s TOLERANCE CONTRACT in `canvas-editor/src/editor.ts`**
+
+Comment only — no behaviour change, no RED step. Append to the block at
+`editor.ts:324-338`:
+
+```
+  // SECOND SKIP MODE (added with the write boundary): `putShape` now also
+  // silently REJECTS a shape that fails validateShape — a rejection this
+  // try/catch never observes, because it does not throw. A shape can reach the
+  // undo stack already invalid: it arrived from a remote peer through
+  // import(), or was loaded by fromSnapshot from a room whose stored SQLite
+  // predates the write boundary. Replaying such a shape is now a no-op rather
+  // than a restore. Deliberate — restoring it would only re-manufacture state
+  // repair() is obliged to cascade-delete. User-visible effect: an undo step
+  // that appears to do nothing for that shape.
+```
+
+Then extend the one-line note on `CanvasDoc.putShape`'s JSDoc from "Remote ops
+arriving through `import()` bypass this entirely" to "Remote ops arriving
+through `import()`, **or shapes loaded from a pre-boundary snapshot**, bypass
+this entirely".
+
+> `canvas-editor/src/editor.ts` is **not** under `canvas-editor/src/tools/`, so
+> this does not trip the ux-contract presence gate.
+
+**Step 6: Run the tests**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/write-validation.test.ts
+cd /home/stag/src/projects/ensembleworks/canvas-doc && ~/.bun/bin/bun test.ts
+cd /home/stag/src/projects/ensembleworks/canvas-editor && ~/.bun/bin/bun test.ts
+```
+
+Expected: all pass.
+
+**Step 7: Commit**
+
+```
+cd /home/stag/src/projects/ensembleworks
+git add canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/canvas-doc.ts canvas-editor/src/editor.ts canvas-doc/src/write-validation.test.ts
+git commit -m "fix(canvas-doc): guard the invalid-write sink against throwing handlers"
+```
+
+---
+
 ## Task 4: Validate `updateProps` against the merged result
 
 **Files:**
@@ -1834,6 +2153,10 @@ Replace `updateProps` (currently `loro-canvas-doc.ts:143-148`) with:
     // own, and rejectWrite coerces `kind` off whatever it is given (Task 1B
     // finding 1), so a node whose stored kind is itself garbage still reports
     // '<unknown>' rather than leaking it.
+    //
+    // `id` goes through as-is: rejectWrite coerces it too (Task 3A finding 4),
+    // so do NOT add a local non-empty/string guard here — duplicating that
+    // check across the two call sites is exactly what finding 4 removed.
     if (!v.ok) { this.rejectWrite('updateProps', shape, id, v.error); return }
     n.data.set(LoroCanvasDoc.PROP_KEY, merged as any)
   }
@@ -2069,6 +2392,141 @@ unaffected — the field is optional.
 cd /home/stag/src/projects/ensembleworks
 git add canvas-sync/src/client-peer.ts canvas-sync/src/invalid-write-passthrough.test.ts client/src/canvas-v2/DevOverlay.tsx client/src/canvas-v2/CanvasV2App.tsx
 git commit -m "feat(canvas-sync,client): forward the invalid-write sink and surface the count"
+```
+
+---
+
+## Task 4B: Make `reconcile()`'s refusals visible (review finding 2)
+
+### Why here
+
+This is the server-side twin of Task 4A: 4A makes rejections visible to a
+developer in the browser, 4B makes them visible to the shadow dashboard. Both
+consume `invalidWriteCount`, both leave `canvas-doc` for a consuming package,
+and both are pure observability with no effect on the write path — so they
+belong adjacent and commit separately. It must come **after** Task 4 because a
+`refused` count that omits `updateProps` rejections would be misleading from the
+day it shipped, even though `reconcile` itself only calls `putShape`.
+
+**Files:**
+- Modify: `server/src/canvas-v2/reconcile.ts`
+- Modify: `server/src/canvas-v2/reconcile.test.ts`
+
+### The problem
+
+`server/src/canvas-v2/reconcile.ts:77`:
+
+```ts
+if (!prev || !shallowEqualShape(prev, s)) { doc.putShape(s); puts++ }
+```
+
+`puts++` is unconditional and **cannot tell a refusal from a write.** The shapes
+come from `fromTldraw` via `server/src/canvas-v2/convert.ts`, which passes
+`props: r.props ?? {}` **verbatim** from live tldraw records with no validation
+— and notably *unlike* `opacity: r.opacity ?? 1` and `isLocked: !!r.isLocked` on
+the adjacent lines, which **are** coerced. Verified in source.
+
+So a live room carrying a malformed prop — the exact scenario motivating this
+whole branch — now yields:
+
+```
+shape absent → !prev → putShape → refused → still absent
+            → next shadow tick → repeat, forever
+```
+
+**`reconcile` never converges.** `puts` reports a nonzero delta every tick and
+the shadow divergence signal never clears.
+
+This is *better* than the old behaviour — it no longer feeds the cascade-delete
+— but it changes what the shadow dashboard **means**, and a permanently-nonzero
+divergence with no explanation is exactly how a genuine regression six months
+later gets waved away as "oh, that number's always been nonzero." Existing suites
+miss it because their fixtures are well-formed.
+
+**Step 1: Write the failing test**
+
+Add to `server/src/canvas-v2/reconcile.test.ts` — follow the file's existing
+fixture-construction style rather than the sketch below:
+
+```ts
+// A target carrying a shape whose props fail validateShape (the legacy-room
+// scenario: convert.ts passes tldraw props through verbatim). reconcile must
+// REPORT the refusal rather than counting it as a put — otherwise the shadow
+// dashboard shows a permanent nonzero divergence with no way to tell a
+// refusal from a genuine pending write.
+const r = reconcile(doc, targetWithOneInvalidShape)
+assert.equal(r.refused, 1, 'the refused write is reported, not counted as a put')
+assert.equal(r.puts, 0, 'a refused write is NOT a put')
+// And it is stable: a second pass reports the same thing, so a reader can tell
+// "converged, minus a known-bad shape" from "still making progress".
+const r2 = reconcile(doc, targetWithOneInvalidShape)
+assert.deepEqual({ puts: r2.puts, refused: r2.refused }, { puts: 0, refused: 1 })
+```
+
+**Step 2: Run it to verify it fails**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun server/src/canvas-v2/reconcile.test.ts
+```
+
+Expected: FAIL — `refused` is not a property of the return type, so the
+assertion reads `undefined !== 1`. **Record the verbatim output.**
+
+**Step 3: Implement**
+
+Take an `invalidWriteCount` delta across the put loop and widen the return type:
+
+```ts
+export function reconcile(doc: LoroCanvasDoc, target: CanvasDocument): { puts: number; deletes: number; refused: number } {
+```
+
+```ts
+	// Bracket the put loop with the doc's rejection counter so a REFUSED write
+	// is distinguishable from a completed one. Without this, `puts` counts both
+	// and a room carrying a shape the write boundary refuses reports a nonzero
+	// delta on every tick forever — reconcile cannot converge on it, and the
+	// shadow divergence signal never clears. That is not a regression (the old
+	// behaviour wrote it and let repair() cascade-delete the subtree), but it
+	// changes what the dashboard MEANS, so it must be legible rather than
+	// silently folded into `puts`.
+	const refusedBefore = doc.invalidWriteCount
+	for (const s of ordered) {
+		const prev = curShapesAfter.get(s.id)
+		if (!prev || !shallowEqualShape(prev, s)) {
+			doc.putShape(s)
+			puts++
+		}
+	}
+	const refused = doc.invalidWriteCount - refusedBefore
+	puts -= refused // a refusal is not a put
+```
+
+Then update `reconcile`'s doc comment (the `puts`/`deletes` note around line 36)
+to document `refused` and the non-convergence it makes visible.
+
+> **Do NOT "fix" this by calling `putShapeUnchecked` in `reconcile`.** That
+> would restore the exact data-loss path this branch exists to close — the shape
+> would be written and then cascade-deleted by `repair()` on every peer. The
+> non-convergence is the *correct* observable consequence of refusing to write
+> invalid data; the fix is to make it legible, which is what this task does.
+> Task 8A's CI gate will reject that call outright.
+
+**Step 4: Run the tests**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun server/src/canvas-v2/reconcile.test.ts
+cd /home/stag/src/projects/ensembleworks && bun run --filter '@ensembleworks/server' typecheck
+```
+
+Expected: pass, and every existing `reconcile` caller still typechecks — the
+return type only gained a field.
+
+**Step 5: Commit**
+
+```
+cd /home/stag/src/projects/ensembleworks
+git add server/src/canvas-v2/reconcile.ts server/src/canvas-v2/reconcile.test.ts
+git commit -m "feat(server): report refused writes from reconcile so divergence stays legible"
 ```
 
 ---
@@ -2616,6 +3074,103 @@ git commit -m "docs(canvas-doc): correct the repair/delete cascade contracts"
 
 ---
 
+## Task 8A: CI presence gate for `putShapeUnchecked` (review finding 5)
+
+Task 3A corrected `putShapeUnchecked`'s JSDoc to admit the interface omission is
+a **signal, not a barrier**. This task supplies the barrier.
+
+### Why here, second-to-last
+
+The gate needs the **complete** allowlist, and that is only knowable once every
+task that legitimately calls `putShapeUnchecked` has landed — Task 3 repointed
+the repair fixtures, and Tasks 5–7 may add more. Writing it earlier means
+editing the allowlist repeatedly and, worse, risks someone widening it
+reflexively to make a red gate go green. It goes **before** Task 9 so the full
+suite run there exercises it.
+
+**Files:**
+- Create: `scripts/put-shape-unchecked-audit.test.ts`
+
+> **Follow the existing pattern, do not invent one.** The repo already does this
+> twice — `scripts/ux-contract-presence.test.ts` and `scripts/exposure-audit.ts`.
+> Read `ux-contract-presence.test.ts` first: note the `.test.ts` suffix (so
+> `scripts/run-tests.ts` picks it up via its `scripts/*.test.ts` glob), the
+> exported **pure decision function** unit-tested with synthetic inputs, and the
+> real-repo check that skips rather than false-fails when its inputs are
+> unavailable. Mirror all three.
+
+**Step 1: Write the failing test**
+
+The gate: grep the repo for `putShapeUnchecked` and fail on any hit outside the
+allowlist.
+
+```ts
+// Run: bun scripts/put-shape-unchecked-audit.test.ts
+//
+// LoroCanvasDoc.putShapeUnchecked bypasses the write boundary — it writes a
+// shape that validateShape rejects, which is precisely the state repair() is
+// obliged to destroy (cascading to the subtree before Task 5, and dropping the
+// shape after it). It exists ONLY so tests and hostile-state rigs can
+// construct what a remote peer's bytes can deliver.
+//
+// Keeping it off the CanvasDoc interface is a signal, not a barrier:
+// SyncServerPeer.doc, SyncClientPeer.doc, ShadowMirror.doc and reconcile()'s
+// parameter are all typed as the CONCRETE LoroCanvasDoc, so anyone typing
+// `peer.doc.` gets it in autocomplete. reconcile.ts in particular is where a
+// developer chasing a non-converging shadow tick would reach for it as the
+// "fix" — which would restore the exact data-loss path this branch closed.
+//
+// This gate is that barrier. Adding an entry to ALLOWED is a deliberate,
+// reviewable act; it must never be done to turn a red gate green.
+const ALLOWED = [
+  'canvas-doc/src/repair.test.ts',
+  'canvas-doc/src/repair-cost.test.ts',
+  'canvas-doc/src/write-validation.test.ts',
+  'canvas-doc/src/loro-canvas-doc.ts',   // the declaration itself
+  'scripts/put-shape-unchecked-audit.test.ts', // this file
+] as const
+```
+
+Write `checkUsages(hits: readonly string[]): string[]` returning the
+disallowed paths, unit-test it with synthetic inputs (an allowed path, a
+disallowed one, an empty list), then run the real check over
+`git grep -l putShapeUnchecked` (or a `Glob` scan — match whatever
+`exposure-audit.ts` does).
+
+Add the allowlist entries for whichever files Tasks 5–7 actually ended up
+using it in; do not pre-populate speculatively.
+
+**Step 2: Run it to verify it fails**
+
+Temporarily add a `putShapeUnchecked` call to a non-allowlisted file — a scratch
+line in `server/src/canvas-v2/reconcile.ts` is the realistic case — and run:
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun scripts/put-shape-unchecked-audit.test.ts
+```
+
+Expected: FAIL naming `server/src/canvas-v2/reconcile.ts`. **Record the verbatim
+output, then remove the scratch line.** This is the one RED in this task that
+matters — a gate that has never been observed failing is not known to work.
+
+**Step 3: Confirm it passes on the real tree**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun scripts/put-shape-unchecked-audit.test.ts
+```
+
+Expected: pass, listing the allowed call sites it found.
+
+**Step 4: Commit**
+
+```
+cd /home/stag/src/projects/ensembleworks
+git add scripts/put-shape-unchecked-audit.test.ts
+git commit -m "ci: gate putShapeUnchecked usage to tests and hostile-state rigs"
+```
+
+---
+
 ## Task 9: Full verification
 
 **Step 1: Typecheck all 13 workspaces**
@@ -2741,11 +3296,15 @@ Plus:
 - **The undo/redo behaviour change (decision D3a).** State it plainly, because
   it is user-visible and will otherwise be debugged from scratch months later:
 
-  > Undo/redo of a shape that arrived from a remote peer **while invalid** is
-  > now a silent no-op — the symptom is "my undo/redo did nothing" for that one
-  > shape. `Editor.replay()`'s `putShape` inverses carry whole shapes read back
-  > out of the doc, so such a shape can reach the undo stack; replaying it now
-  > hits the write boundary and is dropped rather than restored. This is
+  > Undo/redo of an **already-invalid** shape is now a silent no-op — the
+  > symptom is "my undo/redo did nothing" for that one shape. Such a shape
+  > reaches the undo stack either by arriving from a remote peer through
+  > `import()`, or — more likely — by being loaded via `fromSnapshot` from a
+  > room whose stored SQLite predates the write boundary, in which case it can
+  > never be restored by undo at all. `Editor.replay()`'s `putShape` inverses
+  > carry whole shapes read back out of the doc, so such a shape can reach the
+  > undo stack; replaying it now hits the write boundary and is dropped rather
+  > than restored. This is
   > deliberate: restoring it would re-manufacture exactly the state `repair()`
   > is obliged to destroy. It is safe because `Editor.replay` already has a
   > per-op `try`/`catch` and a documented tolerance contract for inverses that
