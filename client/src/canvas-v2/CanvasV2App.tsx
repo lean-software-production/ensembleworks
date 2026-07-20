@@ -445,7 +445,7 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 				<DevOverlay
 					roomId={roomId}
 					connectionState={session ? 'connected' : 'connecting'}
-					client={{ repairCount: session?.peer.repairCount ?? 0, lastBackfillBytes: session?.peer.lastBackfillBytes ?? 0 }}
+					client={{ repairCount: session?.peer.repairCount ?? 0, lastBackfillBytes: session?.peer.lastBackfillBytes ?? 0, invalidWriteCount: session?.peer.doc.invalidWriteCount ?? 0 }}
 					metrics={metrics}
 				/>
 			)}
