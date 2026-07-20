@@ -3290,12 +3290,20 @@ cases miss it because their fixtures are all well-formed.
 > `doc5` and a fixture with **one valid shape alongside the invalid one**, so
 > `puts` is a discriminating nonzero.
 
+> **AMENDED 2026-07-20 (post-landing gap, mutant M8).** One valid shape
+> alongside a single invalid one is enough to discriminate `puts` from
+> `refused`, but not enough to discriminate `refused` as a **count** from
+> `refused` as a **flag** — see the M8 row in the mutant table below. The
+> block now carries a SECOND invalid shape (`shape:bad2`), failing for a
+> different reason, so `refused` must read `2`, not `1`.
+
 Insert as case 8 in `server/src/canvas-v2/reconcile.test.ts`, **before** the
 final `console.log('ok: reconcile')` line — appending after it makes the suite
 print its success line and *then* fail, which reads as a passing suite in a
 scrollback. The file is **tab**-indented; match it. This block was executed at
-`6d55bc7` to record the RED below, so **land it byte-identical** or re-record
-the RED yourself.
+`6d55bc7` (original, single-invalid-shape form) and re-executed 2026-07-20
+after the `shape:bad2` amendment above — so **land it byte-identical** to the
+current fence or re-record the RED yourself.
 
 ```ts
 // --- 8) A target carrying a shape the write boundary REFUSES. convert.ts
@@ -3304,32 +3312,43 @@ the RED yourself.
 // and the next tick tries again — forever. reconcile must therefore report
 // the refusal separately: folded into `puts` it is indistinguishable from a
 // genuine pending write, and the shadow divergence signal reads as permanent
-// unexplained churn. ---
+// unexplained churn.
+//
+// TWO distinct invalid shapes, failing for TWO distinct reasons, so `refused`
+// is provably a COUNT and not merely a "did any refusal happen" flag:
+// shape:bad fails the per-kind PROPS refinement (w is a string, frame wants a
+// number); shape:bad2 fails the shared ENVELOPE check instead (index must be
+// a non-empty string; verified against canvas-model/src/shape.ts's `envelope`
+// schema, which validates index BEFORE the superRefine that runs propsByKind).
+// A single-invalid-shape fixture cannot distinguish `refused` from
+// `invalidWriteCount > before ? 1 : 0` — both read back as 1 either way. ---
 const doc5 = LoroCanvasDoc.create({ peerId: 5n })
 const withInvalid = makeDocument({
 	pages: [{ id: 'page:p', name: 'Page' }],
 	shapes: [
 		{ id: 'shape:ok', kind: 'note', parentId: 'page:p', props: { color: 'yellow' }, ...base() } as any,
 		{ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as any,
+		{ id: 'shape:bad2', kind: 'note', parentId: 'page:p', props: {}, ...base(), index: '' } as any,
 	],
 	bindings: [],
 })
-// A: one valid shape ALONGSIDE the invalid one, so `puts` is a discriminating
-// nonzero — an implementation that reports `refused` but forgets to subtract
-// it from `puts` returns {puts:2} here.
+// A: one valid shape ALONGSIDE the two invalid ones, so `puts` is a
+// discriminating nonzero — an implementation that reports `refused` but
+// forgets to subtract it from `puts` returns {puts:3} here.
 const r8a = reconcile(doc5, withInvalid)
-assert.deepEqual(r8a, { puts: 1, deletes: 0, refused: 1 }, 'the refused write is reported as refused, NOT counted as a put')
-// The counts are not accounting fiction: the valid shape really landed and the
-// refused one really did not. This is also what kills a "make it converge" fix
-// that swaps in putShapeUnchecked — that writes both ids and refuses nothing.
-assert.deepEqual(sortedIds(dumpModel(doc5).shapes), ['shape:ok'], 'the valid shape landed; the refused one did not')
+assert.deepEqual(r8a, { puts: 1, deletes: 0, refused: 2 }, 'both refused writes are reported as refused, NOT counted as puts')
+// The counts are not accounting fiction: the valid shape really landed and
+// neither refused one did. This is also what kills a "make it converge" fix
+// that swaps in putShapeUnchecked — that writes all three ids and refuses
+// nothing.
+assert.deepEqual(sortedIds(dumpModel(doc5).shapes), ['shape:ok'], 'the valid shape landed; neither refused one did')
 // B: `refused` must be a PER-TICK delta, not doc.invalidWriteCount itself.
 // That counter is a monotonic lifetime total (loro-canvas-doc.ts:141-144,
-// "Never reset") and grows by one on every tick this target is reconciled —
-// measured 1, 2, 3 over three ticks. An implementation that returns it raw
-// passes A and then reports refused:2 here.
+// "Never reset") and grows by two on every tick this target is reconciled —
+// measured 2, 4 over two ticks. An implementation that returns it raw passes
+// A and then reports refused:4 here.
 const r8b = reconcile(doc5, withInvalid)
-assert.deepEqual(r8b, { puts: 0, deletes: 0, refused: 1 }, 'stable across ticks: refused is a per-tick delta, not the doc lifetime total')
+assert.deepEqual(r8b, { puts: 0, deletes: 0, refused: 2 }, 'stable across ticks: refused is a per-tick delta, not the doc lifetime total')
 ```
 
 No new imports are needed: `LoroCanvasDoc`, `dumpModel`, `makeDocument`,
@@ -3345,9 +3364,10 @@ question entirely.
 
 | Mutant | Caught by |
 |---|---|
-| **M1** — computes `refused` correctly, forgets `puts -= refused` | A: returns `{puts:2}` |
-| **M2** — returns `doc.invalidWriteCount` raw instead of a delta | B: returns `refused:2` on the second tick. **A alone does not catch this** — this is the 4A lesson repeating, an assertion that is already true of the wrong implementation |
+| **M1** — computes `refused` correctly, forgets `puts -= refused` | A: returns `{puts:3}` |
+| **M2** — returns `doc.invalidWriteCount` raw instead of a delta | B: returns `refused:4` on the second tick. **A alone does not catch this** — this is the 4A lesson repeating, an assertion that is already true of the wrong implementation |
 | **M3** — "fixes" non-convergence by calling `putShapeUnchecked` | A (`refused:0`) *and* the `dumpModel` assertion (both ids present) |
+| **M8** — `const refused = doc.invalidWriteCount > refusedBefore ? 1 : 0` (a boolean coerced to a number, not a count) | A: returns `{puts:2, refused:1}` — **survived spec review with the original single-invalid-shape fixture**, because with only one invalid shape in play every "did a refusal happen" boolean equals the true count. Closed 2026-07-20 (post-landing gap, `69d82cd`/`eaed6a1`) by adding `shape:bad2`, a SECOND invalid shape failing for a different reason (an envelope violation — empty `index` — rather than `shape:bad`'s props-refinement failure). **Verified independently at the `shadow.ts` boundary too**: rebuilding M8 and running `shadow.test.ts` case 6 unchanged (still a single-invalid-shape fixture) leaves it green — `ShadowMirror.tick()` only ever does `this.m.refused += refused` on whatever `reconcile()` returns (`shadow.ts:119`), so it has no arithmetic of its own that could independently reintroduce M8, and killing M8 at the `reconcile` boundary is therefore sufficient. `shadow.test.ts` case 6 was deliberately left unchanged. |
 
 **Step 2: Run it to verify it fails**
 
@@ -3355,29 +3375,40 @@ question entirely.
 cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun server/src/canvas-v2/reconcile.test.ts
 ```
 
-Expected: FAIL on assertion A. **This was executed at `6d55bc7`**; the verbatim
-tail is:
+Expected: FAIL on assertion A. **This was executed at `6d55bc7`** against the
+*original* single-invalid-shape fixture; that verbatim tail is superseded below.
+
+> **CORRECTED 2026-07-20 (post-landing gap, mutant M8).** The RED below was
+> re-recorded after the case 8 fixture was strengthened to two invalid shapes
+> (see the M8 row above) — the numbers changed (`puts:3` not `puts:2`, no
+> `refused` key at all vs. the old run's `puts:2`) because this is genuinely a
+> different fixture. It was reconstructed faithfully: pre-Task-4B
+> `reconcile.ts` (commit `69d82cd^`, before `refused` existed at all) run
+> against the strengthened case 8, with cases 1–7 in their pre-Step-3b
+> two-key form (exactly as the file looked at `6d55bc7`, before Step 3b
+> widened them) — so this is a correct RED for the state Step 2 actually
+> runs against, not a paraphrase.
 
 ```
-AssertionError: the refused write is reported as refused, NOT counted as a put
+AssertionError: both refused writes are reported as refused, NOT counted as puts
 + actual - expected
 
   {
     deletes: 0,
-+   puts: 2
++   puts: 3
 -   puts: 1,
--   refused: 1
+-   refused: 2
   }
 
  generatedMessage: false,
      actual: {
-  puts: 2,
+  puts: 3,
   deletes: 0,
 },
    expected: {
   puts: 1,
   deletes: 0,
-  refused: 1,
+  refused: 2,
 },
    operator: "deepStrictEqual",
        code: "ERR_ASSERTION"

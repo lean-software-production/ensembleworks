@@ -200,31 +200,42 @@ assert.equal(byId(dumpModel(doc4), 'shape:m').kind, 'note')
 // and the next tick tries again — forever. reconcile must therefore report
 // the refusal separately: folded into `puts` it is indistinguishable from a
 // genuine pending write, and the shadow divergence signal reads as permanent
-// unexplained churn. ---
+// unexplained churn.
+//
+// TWO distinct invalid shapes, failing for TWO distinct reasons, so `refused`
+// is provably a COUNT and not merely a "did any refusal happen" flag:
+// shape:bad fails the per-kind PROPS refinement (w is a string, frame wants a
+// number); shape:bad2 fails the shared ENVELOPE check instead (index must be
+// a non-empty string; verified against canvas-model/src/shape.ts's `envelope`
+// schema, which validates index BEFORE the superRefine that runs propsByKind).
+// A single-invalid-shape fixture cannot distinguish `refused` from
+// `invalidWriteCount > before ? 1 : 0` — both read back as 1 either way. ---
 const doc5 = LoroCanvasDoc.create({ peerId: 5n })
 const withInvalid = makeDocument({
 	pages: [{ id: 'page:p', name: 'Page' }],
 	shapes: [
 		{ id: 'shape:ok', kind: 'note', parentId: 'page:p', props: { color: 'yellow' }, ...base() } as any,
 		{ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as any,
+		{ id: 'shape:bad2', kind: 'note', parentId: 'page:p', props: {}, ...base(), index: '' } as any,
 	],
 	bindings: [],
 })
-// A: one valid shape ALONGSIDE the invalid one, so `puts` is a discriminating
-// nonzero — an implementation that reports `refused` but forgets to subtract
-// it from `puts` returns {puts:2} here.
+// A: one valid shape ALONGSIDE the two invalid ones, so `puts` is a
+// discriminating nonzero — an implementation that reports `refused` but
+// forgets to subtract it from `puts` returns {puts:3} here.
 const r8a = reconcile(doc5, withInvalid)
-assert.deepEqual(r8a, { puts: 1, deletes: 0, refused: 1 }, 'the refused write is reported as refused, NOT counted as a put')
-// The counts are not accounting fiction: the valid shape really landed and the
-// refused one really did not. This is also what kills a "make it converge" fix
-// that swaps in putShapeUnchecked — that writes both ids and refuses nothing.
-assert.deepEqual(sortedIds(dumpModel(doc5).shapes), ['shape:ok'], 'the valid shape landed; the refused one did not')
+assert.deepEqual(r8a, { puts: 1, deletes: 0, refused: 2 }, 'both refused writes are reported as refused, NOT counted as puts')
+// The counts are not accounting fiction: the valid shape really landed and
+// neither refused one did. This is also what kills a "make it converge" fix
+// that swaps in putShapeUnchecked — that writes all three ids and refuses
+// nothing.
+assert.deepEqual(sortedIds(dumpModel(doc5).shapes), ['shape:ok'], 'the valid shape landed; neither refused one did')
 // B: `refused` must be a PER-TICK delta, not doc.invalidWriteCount itself.
 // That counter is a monotonic lifetime total (loro-canvas-doc.ts:141-144,
-// "Never reset") and grows by one on every tick this target is reconciled —
-// measured 1, 2, 3 over three ticks. An implementation that returns it raw
-// passes A and then reports refused:2 here.
+// "Never reset") and grows by two on every tick this target is reconciled —
+// measured 2, 4 over two ticks. An implementation that returns it raw passes
+// A and then reports refused:4 here.
 const r8b = reconcile(doc5, withInvalid)
-assert.deepEqual(r8b, { puts: 0, deletes: 0, refused: 1 }, 'stable across ticks: refused is a per-tick delta, not the doc lifetime total')
+assert.deepEqual(r8b, { puts: 0, deletes: 0, refused: 2 }, 'stable across ticks: refused is a per-tick delta, not the doc lifetime total')
 
 console.log('ok: reconcile')
