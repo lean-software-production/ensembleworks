@@ -6,7 +6,8 @@
   "scripts": {
     "typecheck": "bunx tsc --noEmit",
     "test": "bunx playwright test --project=e2e",
-    "perf": "bunx playwright test --project=perf"
+    "perf": "bunx playwright test --project=perf",
+    "perf:load": "bunx playwright test -c playwright.load.config.ts"
   },
   "devDependencies": {
     "@ensembleworks/interaction-contracts": "*",

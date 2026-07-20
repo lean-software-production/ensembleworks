@@ -11,7 +11,12 @@
 // nests today); widen if that changes.
 import { Glob } from 'bun'
 
-const globs = ['**/src/**/*.test.ts', 'scripts/*.test.ts']
+// e2e/lib/*.test.ts (added 2026-07-19): the load harness's PURE helpers
+// (load-metrics.ts) are unit-testable without a browser, but e2e/ has no
+// src/ dir so they match neither glob above. Only the flat e2e/lib level is
+// globbed — e2e/tests/ and e2e/perf/ are Playwright specs and must NOT be
+// spawned under bare `bun`.
+const globs = ['**/src/**/*.test.ts', 'scripts/*.test.ts', 'e2e/lib/*.test.ts']
 const files: string[] = []
 for (const pattern of globs) {
   const glob = new Glob(pattern)
