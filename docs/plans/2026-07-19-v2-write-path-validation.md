@@ -82,6 +82,39 @@ Every task below writes the failing test **first**, **runs it**, and records the
   *is* failing on the assertion the task names, that is a correct RED: proceed.
   Only a **passing** test is grounds to stop.
 
+### Cross-referencing comments must be verified — this branch has a track record
+
+**Rule.** Any comment that asserts a fact about code **elsewhere in the repo** —
+a call site, a file path, a line number, a count, a "the only X" claim, a
+quantitative figure — **must be verified against the source before it is
+written**, and the verification named in the task report ("grepped X, found N",
+"ran a probe, got Y"). Prose that merely explains the *local* code needs no such
+check.
+
+**This is a defect class here, not a nicety.** This branch has produced **four**
+false comments:
+
+| Claim | Reality | Origin |
+|---|---|---|
+| "the only non-test console call in [four packages]" | there are three | a review, relayed through the plan |
+| the powers-of-two log-volume figures | wrong arithmetic | the plan |
+| "reaches the undo stack via import() **or** fromSnapshot" | one route, not two; the second is impossible client-side | an instruction, recorded into the plan |
+| a fourth, caught in review before landing | — | — |
+
+Every one was a **confident factual assertion that nobody executed**, and three
+of the four originated in *this plan or in the instructions driving it* — not in
+an implementer's own work. So:
+
+- **Implementers:** a plan sentence asserting a cross-file fact is not
+  authority. Verify it, and say so. If it is wrong, report it rather than
+  transcribing it faithfully — faithful transcription is how three of these
+  shipped.
+- **Reviewers:** treat a cross-referencing comment as something to check, at the
+  same level as a test assertion. "The comment reads plausibly" is not review.
+
+The cheapest version of this is usually one `grep`. Two of the four above would
+have died to a single command.
+
 ### House test style
 
 Tests are **plain self-executing scripts** using `node:assert/strict`, with a
@@ -342,20 +375,41 @@ debugged from scratch.**
 `Editor.replay()` — the undo/redo path — replays `InverseOp`s by calling
 `CanvasDoc`'s public mutators, and its `putShape` inverses carry **whole shapes
 read back out of the doc** (see `editor.ts`'s "full-shape-inverse convention").
-An already-invalid shape can therefore land on the undo stack by **two** routes:
+An already-invalid shape can therefore land on the undo stack. Replaying it now
+hits the write boundary and is **silently dropped** rather than restored.
 
-1. it arrived from a **remote peer** via `import()`, or
-2. it was loaded by **`fromSnapshot`** from a room whose stored SQLite predates
-   the write boundary.
+**There is exactly ONE route in: `import()`** — the only path into this peer's
+doc that bypasses the write boundary. That single route covers both cases a
+reader will think of:
 
-Replaying it now hits the write boundary and is **silently dropped** rather than
-restored.
+- a **live remote peer** running older or buggy code, and
+- a room whose **stored SQLite predates the write boundary** — the *server*
+  loads such a room via `fromSnapshot` and relays it here as an ordinary
+  `import()`.
 
-> **Route 2 is the likelier one and matters more.** Pre-existing corrupt rooms
-> already sitting on disk are a far more common source than a live remote peer
-> running old code — and it means those shapes can *never* be restored by undo,
-> not merely during one session's race. Any user-facing note must name the
-> snapshot path, not just the remote one.
+> **Disambiguation, stated so nobody re-derives it.** This peer's own doc is
+> **never** built by `fromSnapshot`. `canvas-sync/src/client-peer.ts` has exactly
+> one `this.doc` assignment — line 50, an unconditional `LoroCanvasDoc.create`
+> with no snapshot parameter — and exactly one ingestion path,
+> `this.doc.import(payload)` at line 169. Both non-test `fromSnapshot` call sites
+> (`server/src/canvas-v2/actor.ts:139`, `canvas-sync/src/server-peer.ts:82`) are
+> server-side, and the server has no undo stack. The only production `Editor` is
+> `client/src/canvas-v2/CanvasV2App.tsx:365`, built with `doc: peer.doc` from
+> `SyncClientPeer`. *(All four facts verified against source, 2026-07-20.)*
+>
+> **CORRECTED 2026-07-20.** An earlier revision of this decision claimed two
+> routes, naming `fromSnapshot` as a second, distinct one. That was false — one
+> mechanism presented as two, with the second misnamed. It drove a false comment
+> into `canvas-editor/src/editor.ts`, corrected at `792be65`. The pre-boundary
+> *risk* is real; only the second mechanism was imaginary.
+>
+> **Do NOT propagate this correction to `canvas-doc/src/canvas-doc.ts`'s
+> `putShape` JSDoc.** Its near-identical "or loaded from a pre-boundary
+> snapshot" wording **is correct there**, because that sentence is scoped to
+> `CanvasDoc.putShape` in general — not to the undo stack — and the server
+> genuinely does load via `fromSnapshot`. Two similar sentences, one true and
+> one false, and the difference is entirely one of scope. Check which one you
+> are reading before editing it.
 
 The user-visible symptom is *"my undo/redo did nothing"* for that shape.
 
@@ -595,13 +649,14 @@ Lettered tasks were added after the plan was first written, so the many
 | 1B | 2026-07-20 | Task 1A **quality** review (ruling 7) | ✅ landed |
 | 2 | original | — | ✅ landed `81fcc94` + `5060832` |
 | 3 | original | — | ✅ landed `f93192f` |
-| 3A | 2026-07-20 | Task 2 **quality** review (ruling 8) — findings 1, 3, 4, 5 | ⬅ **start here** |
+| 3A | 2026-07-20 | Task 2 **quality** review (ruling 8) — findings 1, 3, 4, 5 | ✅ landed `d0e408c` + `792be65` |
 | 4A | 2026-07-20 | Task 1 quality review, finding 1 (ruling 5) | pending |
 | 4B | 2026-07-20 | Task 2 quality review, finding 2 (ruling 8) | pending |
 | 8A | 2026-07-20 | Task 2 quality review, finding 5 (ruling 8) — the CI gate | pending |
 
-**Start at Task 3A.** It carries a blocking correctness bug and must land before
-Task 4 writes the second `rejectWrite` call site.
+**Start at Task 4.** Tasks 1 through 3A are landed; Task 3A's blocking
+correctness fix is in, so Task 4 can now write the second `rejectWrite` call
+site against the corrected signature.
 
 The two halves are technically independent — (A) is strictly additive and
 independently landable — which is what makes the fallback possible. If half (B)
@@ -1853,13 +1908,19 @@ checkable, just weaker. Say that.
 It says "Deliberately NOT on the `CanvasDoc` interface," which implies production
 cannot reach it. **Production reaches the concrete class routinely** — verified:
 
+There are **four** — verified 2026-07-20:
+
 | Location | Exposure |
 |---|---|
 | `canvas-sync/src/server-peer.ts:48` | `readonly doc: LoroCanvasDoc` |
 | `canvas-sync/src/client-peer.ts:19` | `readonly doc: LoroCanvasDoc` |
 | `server/src/canvas-v2/shadow.ts:79` | `readonly doc: LoroCanvasDoc` |
-| `server/src/canvas-v2/actor.ts` | constructs and holds it concretely |
 | `server/src/canvas-v2/reconcile.ts:49` | takes `doc: LoroCanvasDoc` as a parameter |
+
+> **Four, not five.** An earlier revision listed `server/src/canvas-v2/actor.ts`
+> as a fifth. It is not an independent exposure point: it has no public `doc`
+> field and reaches the doc *through* `SyncServerPeer.doc`, which is already
+> row 1. The JSDoc that shipped names four and is correct.
 
 Anyone typing `peer.doc.` gets `putShapeUnchecked` in autocomplete with no
 interface boundary in the way — and `reconcile.ts` is *precisely* where a
@@ -2035,18 +2096,36 @@ Comment only — no behaviour change, no RED step. Append to the block at
   // SECOND SKIP MODE (added with the write boundary): `putShape` now also
   // silently REJECTS a shape that fails validateShape — a rejection this
   // try/catch never observes, because it does not throw. A shape can reach the
-  // undo stack already invalid: it arrived from a remote peer through
-  // import(), or was loaded by fromSnapshot from a room whose stored SQLite
-  // predates the write boundary. Replaying such a shape is now a no-op rather
-  // than a restore. Deliberate — restoring it would only re-manufacture state
-  // repair() is obliged to cascade-delete. User-visible effect: an undo step
-  // that appears to do nothing for that shape.
+  // undo stack already invalid — it arrives through import(), the one path
+  // into this peer's doc that bypasses the write boundary. That covers both a
+  // live remote peer and a room whose stored SQLite predates the boundary:
+  // the server loads such a room via fromSnapshot and relays it here as an
+  // ordinary import, so there is ONE route in, not two. (This peer's own doc
+  // is never built by fromSnapshot — see client-peer.ts, where it is an
+  // unconditional LoroCanvasDoc.create.) Replaying such a shape is a no-op
+  // rather than a restore. Deliberate — restoring it would only re-manufacture
+  // state repair() is obliged to cascade-delete. User-visible effect: an undo
+  // step that appears to do nothing for that shape.
 ```
+
+> **This is the corrected wording, matching what landed at `792be65`.** An
+> earlier revision of this plan prescribed a two-route version naming
+> `fromSnapshot` as the second. It was false and shipped before being caught —
+> see D3a's CORRECTED note for the verification. Do not reintroduce it.
 
 Then extend the one-line note on `CanvasDoc.putShape`'s JSDoc from "Remote ops
 arriving through `import()` bypass this entirely" to "Remote ops arriving
 through `import()`, **or shapes loaded from a pre-boundary snapshot**, bypass
 this entirely".
+
+> **This sentence is CORRECT and must not be "fixed" to match the `editor.ts`
+> correction above.** It reads almost identically, but its scope is different:
+> it describes `CanvasDoc.putShape` in general, and the **server** genuinely
+> does load via `fromSnapshot` (`actor.ts:139`, `server-peer.ts:82`). The
+> `editor.ts` comment was false only because it was scoped to the **undo
+> stack**, which exists solely on the client, whose doc is never built by
+> `fromSnapshot`. Same words, different subject — check which one you are
+> looking at before touching either.
 
 > `canvas-editor/src/editor.ts` is **not** under `canvas-editor/src/tools/`, so
 > this does not trip the ux-contract presence gate.
@@ -2068,6 +2147,20 @@ cd /home/stag/src/projects/ensembleworks
 git add canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/canvas-doc.ts canvas-editor/src/editor.ts canvas-doc/src/write-validation.test.ts
 git commit -m "fix(canvas-doc): guard the invalid-write sink against throwing handlers"
 ```
+
+### ✅ Task 3A LANDED at `d0e408c` (+ `792be65`, a comment correction)
+
+Review found **one defect**: the `replay()` comment prescribed in Step 5 was
+factually false — the `fromSnapshot` "second route" does not exist client-side.
+The false wording came from this plan, not from the implementer, who transcribed
+it faithfully. Corrected at `792be65`; Step 5's text above now matches what
+landed, and D3a carries the verification.
+
+**Accepted addition, recorded so a plan-to-code diff does not read as drift:**
+the implementation added a ~7-line comment inside `rejectWrite` explaining the
+`kind`/`id` coercion asymmetry, beyond what Step 3 prescribed. It is accurate
+and it justifies the `.length > 0` clause, which would otherwise look arbitrary.
+Keep it.
 
 ---
 
@@ -3297,14 +3390,15 @@ Plus:
   it is user-visible and will otherwise be debugged from scratch months later:
 
   > Undo/redo of an **already-invalid** shape is now a silent no-op — the
-  > symptom is "my undo/redo did nothing" for that one shape. Such a shape
-  > reaches the undo stack either by arriving from a remote peer through
-  > `import()`, or — more likely — by being loaded via `fromSnapshot` from a
-  > room whose stored SQLite predates the write boundary, in which case it can
-  > never be restored by undo at all. `Editor.replay()`'s `putShape` inverses
-  > carry whole shapes read back out of the doc, so such a shape can reach the
-  > undo stack; replaying it now hits the write boundary and is dropped rather
-  > than restored. This is
+  > symptom is "my undo/redo did nothing" for that one shape.
+  > `Editor.replay()`'s `putShape` inverses carry whole shapes read back out of
+  > the doc, so such a shape can reach the undo stack; replaying it now hits the
+  > write boundary and is dropped rather than restored. It gets there by exactly
+  > one route — `import()`, the only path into the client's doc that bypasses
+  > the write boundary — which covers both a live remote peer running older code
+  > and a room whose stored SQLite predates the boundary (the server loads that
+  > via `fromSnapshot` and relays it as an ordinary import; the client's own doc
+  > is never built by `fromSnapshot`). This is
   > deliberate: restoring it would re-manufacture exactly the state `repair()`
   > is obliged to destroy. It is safe because `Editor.replay` already has a
   > per-op `try`/`catch` and a documented tolerance contract for inverses that
