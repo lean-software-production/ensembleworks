@@ -33,5 +33,11 @@ if (!external) {
 // changes nothing about them.
 if (process.env.EW_CANVAS_SYNC === undefined) process.env.EW_CANVAS_SYNC = '1'
 
+// EW_CANVAS_TEST_EVICT=1 (default ON for the e2e rig, unless a caller sets it):
+// registers the test-only cold-actor eviction hook the load-perf harness needs
+// (perf-load/canvas-v2-load.spec.ts's cold scenario). Purely ADDITIVE — it only
+// ever ADDS one route, gated on this flag, which no other spec calls.
+if (process.env.EW_CANVAS_TEST_EVICT === undefined) process.env.EW_CANVAS_TEST_EVICT = '1'
+
 const { server } = createSyncApp({ dataDir })
 server.listen(8788, () => console.log(`[e2e] server on :8788, data in ${dataDir}, EW_CANVAS_SYNC=${process.env.EW_CANVAS_SYNC}`))
