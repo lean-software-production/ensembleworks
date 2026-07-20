@@ -3994,8 +3994,9 @@ distinct sets of files, and the text must be honest about both:
    `aa6a115`, before any task here ran, because PR 48 (in this branch's stack)
    touches `client/src/canvas-v2/` — `CanvasV2App.tsx`,
    `boot-sync-ready.test.ts`, `bootstrap-page.ts`.
-2. **This branch's own.** Task 4A edits `DevOverlay.tsx` and `CanvasV2App.tsx`
-   under the same prefix, to surface `invalidWriteCount`. Owner-approved
+2. **This branch's own.** Task 4A edits `DevOverlay.tsx`, `CanvasV2App.tsx`
+   and `DevOverlay.test.ts` under the same prefix, to surface
+   `invalidWriteCount`. Owner-approved
    2026-07-20 on the grounds that the marker was needed anyway — but it is our
    change and the marker says so.
 
@@ -4009,9 +4010,10 @@ ux-contract: none — <two reasons, both stated deliberately>
    invalid-write sink). None is an interaction surface: no tool FSM, no
    renderer, no input handling.
 
-2. This branch DOES touch client/src/canvas-v2/ in two places of its own —
-   DevOverlay.tsx and CanvasV2App.tsx — to render the invalidWriteCount
-   telemetry field added by Task 4A. That is a read-only diagnostic readout
+2. This branch DOES touch client/src/canvas-v2/ in three places of its own —
+   DevOverlay.tsx, CanvasV2App.tsx and DevOverlay.test.ts — to render the
+   invalidWriteCount telemetry field added by Task 4A, and to update the
+   fixtures that must account for it. That is a read-only diagnostic readout
    with pointerEvents: none; it adds no gesture, no tool, and no state a user
    can drive, so there is no interaction to seed or invariant to observe.
 
