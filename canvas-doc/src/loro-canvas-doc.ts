@@ -250,9 +250,13 @@ export class LoroCanvasDoc implements CanvasDoc {
    * reaches this concrete class routinely (SyncServerPeer.doc,
    * SyncClientPeer.doc, ShadowMirror.doc and reconcile()'s parameter are all
    * typed LoroCanvasDoc), so anyone typing `peer.doc.` gets this method in
-   * autocomplete with no interface boundary in the way. The actual enforcement
-   * is the CI presence gate in scripts/ — see it for the allowlist and how to
-   * extend it. Do not call this from production code.
+   * autocomplete with no interface boundary in the way. Do not call this from
+   * production code.
+   *
+   * There is NO mechanical enforcement of that today — the signal is all there
+   * is. A CI presence gate carrying the allowlist is planned (see Task 8A of
+   * docs/plans/2026-07-19-v2-write-path-validation.md); until it lands, only
+   * review catches a new caller.
    */
   putShapeUnchecked(s: Shape): void {
     // Placement FIRST, data second (same discipline as reparent): for an
