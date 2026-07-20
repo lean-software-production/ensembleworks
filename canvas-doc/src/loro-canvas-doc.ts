@@ -4,7 +4,7 @@
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt/base64'
 import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
 import { dumpModel } from './bridge.js'
-import type { CanvasDoc, ImportResult } from './canvas-doc.js'
+import type { CanvasDoc, ImportResult, InvalidWrite, InvalidWriteHandler } from './canvas-doc.js'
 
 // Node.data layout: we store the whole model shape envelope as flat keys on the
 // Loro tree node's data map. The tldraw/model shape id lives under 'shapeId'
@@ -28,20 +28,24 @@ export class LoroCanvasDoc implements CanvasDoc {
   // import/repair — the incremental mutators alone keep the index precise.
   private index = new Map<string, LoroTreeNode[]>()
 
-  private constructor(private doc: LoroDoc, private tree: LoroTree) {
+  private constructor(
+    private doc: LoroDoc,
+    private tree: LoroTree,
+    private onInvalidWrite?: InvalidWriteHandler,
+  ) {
     this.reindex()
   }
 
-  static create(opts: { peerId: bigint }): LoroCanvasDoc {
+  static create(opts: { peerId: bigint; onInvalidWrite?: InvalidWriteHandler }): LoroCanvasDoc {
     const doc = new LoroDoc()
     doc.setPeerId(opts.peerId)
-    return new LoroCanvasDoc(doc, doc.getTree('shapes'))
+    return new LoroCanvasDoc(doc, doc.getTree('shapes'), opts.onInvalidWrite)
   }
-  static fromSnapshot(bytes: Uint8Array, opts: { peerId: bigint }): LoroCanvasDoc {
+  static fromSnapshot(bytes: Uint8Array, opts: { peerId: bigint; onInvalidWrite?: InvalidWriteHandler }): LoroCanvasDoc {
     const doc = new LoroDoc()
     doc.setPeerId(opts.peerId)
     doc.import(bytes)
-    return new LoroCanvasDoc(doc, doc.getTree('shapes'))
+    return new LoroCanvasDoc(doc, doc.getTree('shapes'), opts.onInvalidWrite)
   }
 
   // Rebuild the id→node index from a full tree scan. Called on construction
@@ -94,6 +98,23 @@ export class LoroCanvasDoc implements CanvasDoc {
     const parent = this.nodeByShapeId(parentId)
     if (!parent) { if (current) this.tree.move(n.id, undefined); return }
     if (!current || current.id !== parent.id) this.tree.move(n.id, parent.id)
+  }
+
+  // Monotonic count of locally-originated writes this doc refused (see
+  // InvalidWrite). Never reset. The assertable counterpart to the console
+  // warning below — modelled on SyncServerPeer's malformedFrames, which
+  // plays the same role for undecodable inbound frames.
+  private invalidWriteCount = 0
+  get invalidWrites(): number { return this.invalidWriteCount }
+
+  // Count, then report. A rejection is a NO-OP at the call site, so this is
+  // the only trace it leaves: silence at the boundary is only acceptable
+  // because both the counter and the hook are unconditional.
+  private rejectWrite(op: InvalidWrite['op'], id: string, error: string): void {
+    this.invalidWriteCount++
+    const write: InvalidWrite = { op, id, error }
+    if (this.onInvalidWrite) this.onInvalidWrite(write)
+    else console.warn(`[canvas-doc] rejected invalid ${op} for ${id}: ${error}`)
   }
 
   private static PROP_KEY = '__props'

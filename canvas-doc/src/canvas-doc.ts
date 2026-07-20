@@ -9,6 +9,24 @@ import type { Binding, Page, RepairOp, Shape } from '@ensembleworks/canvas-model
  * when state actually moved. */
 export interface ImportResult { pending: boolean; changed: boolean }
 
+/** A locally-originated write this doc REFUSED to apply because the resulting
+ * shape would fail canvas-model's `validateShape` — i.e. exactly what
+ * `repair()` would later judge a `validProps` violation and act on. Reported
+ * rather than thrown: a throw from a write escapes `Editor.applyAll`'s
+ * un-try/caught intent loop and strands that batch's earlier mutations
+ * uncommitted (see the plan's decision D1). `error` is the verbatim zod
+ * message. */
+export interface InvalidWrite {
+  op: 'putShape' | 'updateProps'
+  id: string
+  error: string
+}
+
+/** Sink for InvalidWrite reports, injected at doc construction. When none is
+ * supplied the doc warns on the console instead — a rejection is never
+ * silent. */
+export type InvalidWriteHandler = (write: InvalidWrite) => void
+
 // The engine-agnostic contract. LoroCanvasDoc implements it today; a Yjs-backed
 // impl could replace it without touching callers (design's swappability rule).
 export interface CanvasDoc {
