@@ -2,7 +2,7 @@
 // __dirname, which bun build --compile can't embed — breaks the standalone binary
 // wherever node_modules isn't present. /base64 inlines the wasm as a JS string.
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt/base64'
-import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
+import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, SHAPE_KINDS, type Binding, type Page, type RepairOp, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
 import { dumpModel } from './bridge.js'
 import type { CanvasDoc, ImportResult, InvalidWrite, InvalidWriteHandler } from './canvas-doc.js'
 
@@ -101,32 +101,38 @@ export class LoroCanvasDoc implements CanvasDoc {
   }
 
   // Monotonic count of locally-originated writes this doc refused (see
-  // InvalidWrite). Never reset, and NEVER capped — unlike the console
-  // fallback below, which is. Named `invalidWriteCount`, not `invalidWrites`:
-  // a number-valued member one letter from the InvalidWrite TYPE in the same
-  // module is a reliable misreading (house precedent: repairCount,
-  // clientCount).
-  private writeRejections = 0
-  get invalidWriteCount(): number { return this.writeRejections }
+  // InvalidWrite). Never reset.
+  private invalidWriteCounter = 0
+  get invalidWriteCount(): number { return this.invalidWriteCounter }
 
   // Count, then report. A rejection is a NO-OP at the call site, so this is
   // the only trace it leaves.
   //
-  // The console fallback is BOUNDED to the first 5. v2 commits at
+  // Takes the offending VALUE, not a caller-derived kind: every call site is
+  // reaching into something that just failed validation, so a caller-supplied
+  // kind is exactly where a number, an object, or undefined would enter and
+  // quietly violate InvalidWrite's declared type. Coercing here means no call
+  // site can get it wrong.
+  //
+  // Logs on POWERS OF TWO (#1, #2, #4, …) rather than capping. v2 commits at
   // per-pointermove granularity, so a tool emitting an invalid write during a
   // drag would otherwise produce ~60 warnings per second for as long as the
   // drag lasts — enough to hang DevTools, and it buries the FIRST warning,
-  // which is the diagnostically useful one. The counter above stays exact, so
-  // capping the log loses no information that anything actually reads.
-  //
-  // This is the only non-test console call in canvas-doc, canvas-model,
-  // canvas-sync and canvas-editor combined. Bounded it is defensible;
-  // unbounded it would not be. Do not lift the cap.
-  private rejectWrite(op: InvalidWrite['op'], kind: string, id: string, error: string): void {
-    this.writeRejections++
+  // which is the diagnostically useful one. A lifetime cap would fix the flood
+  // but make silence indistinguishable from health, and would go permanently
+  // quiet so an unrelated bug an hour later never surfaced. This never closes
+  // the channel: ~9 lines for a ten-second bad drag, ~18 for an hour. The
+  // [#n] marker tells the reader they are seeing a sample, not a census.
+  private rejectWrite(op: InvalidWrite['op'], value: unknown, id: string, error: string): void {
+    const raw = (value as { kind?: unknown } | null | undefined)?.kind
+    const kind: ShapeKind | '<unknown>' =
+      typeof raw === 'string' && (SHAPE_KINDS as readonly string[]).includes(raw)
+        ? (raw as ShapeKind)
+        : '<unknown>'
+    const n = ++this.invalidWriteCounter
     const write: InvalidWrite = { op, kind, id, error }
     if (this.onInvalidWrite) this.onInvalidWrite(write)
-    else if (this.writeRejections <= 5) console.warn(`[canvas-doc] rejected invalid ${op} ${kind} ${id}: ${error}`)
+    else if ((n & (n - 1)) === 0) console.warn(`[canvas-doc] rejected invalid ${op} (${kind}) ${id} [#${n}]: ${error}`)
   }
 
   private static PROP_KEY = '__props'

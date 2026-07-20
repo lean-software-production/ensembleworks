@@ -31,4 +31,17 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
   )
 }
 
+// --- Task 1B finding 3: the backing field follows the repairCounter pattern ---
+// Field <noun>Counter / getter <noun>Count, matching client-peer.ts's
+// repairCounter/repairCount. Pinned so the pair cannot drift apart again.
+{
+  const doc = LoroCanvasDoc.create({ peerId: 15n })
+  assert.equal(doc.invalidWriteCount, 0, 'the getter is invalidWriteCount')
+  assert.equal(
+    (doc as unknown as Record<string, unknown>).writeRejections,
+    undefined,
+    'the interim `writeRejections` field name is gone',
+  )
+}
+
 console.log('ok: write-validation')

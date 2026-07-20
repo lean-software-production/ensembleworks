@@ -1,4 +1,4 @@
-import type { Binding, Page, RepairOp, Shape } from '@ensembleworks/canvas-model'
+import type { Binding, Page, RepairOp, Shape, ShapeKind } from '@ensembleworks/canvas-model'
 
 /** Result of applying a remote update. `pending` is true when some received
  * ops depend on history this doc hasn't seen yet — the caller should follow
@@ -23,8 +23,17 @@ export interface InvalidWrite {
    * names the kind on the props-refinement path. An ENVELOPE failure (bad
    * `index`, missing `x`) produces a zod message that never mentions it, which
    * is exactly when you most want to know which tool was emitting what.
-   * `'<unknown>'` when the rejected value is too malformed to have one. */
-  kind: string
+   *
+   * Narrowed rather than `string` so a consumer's `switch` gets exhaustiveness,
+   * with `'<unknown>'` as an explicit arm instead of a `default` that silently
+   * absorbs both "malformed" and "a kind we forgot to handle" — different
+   * situations a dashboard should distinguish.
+   *
+   * The narrowing is only honest because `rejectWrite` COERCES this centrally
+   * (it takes the offending value, not a caller-derived kind): every call site
+   * is reaching into an already-invalid value, so a caller-supplied kind would
+   * be exactly where garbage — a number, an object — would enter. */
+  kind: ShapeKind | '<unknown>'
   id: string
   error: string
 }
