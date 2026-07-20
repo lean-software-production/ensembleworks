@@ -1,0 +1,68 @@
+name: canvas-v2-load
+on:
+  pull_request:
+    # Same renderer-PR gating philosophy as canvas-v2-perf.yml: only PRs that
+    # touch the load path pay for this job. The server paths are here (unlike
+    # in canvas-v2-perf.yml) because THIS harness's subject includes server-side
+    # backfill and cold-actor replay.
+    paths:
+      - 'canvas-react/**'
+      - 'canvas-editor/**'
+      - 'canvas-doc/**'
+      - 'canvas-sync/**'
+      - 'client/src/canvas-v2/**'
+      - 'client/src/main.tsx'
+      - 'client/vite.config.ts'
+      - 'server/src/canvas-v2/**'
+      - 'e2e/perf-load/**'
+      - 'e2e/lib/wire-seed.ts'
+      - 'e2e/lib/load-probe.ts'
+      - 'e2e/lib/load-metrics.ts'
+      - 'e2e/playwright.load.config.ts'
+      - '.github/workflows/canvas-v2-load.yml'
+  schedule:
+    - cron: '53 5 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  canvas-v2-load:
+    runs-on: ubuntu-latest
+    # Sized for REPS=5 across 5 scenarios = 25 full production-build navigations,
+    # plus install + playwright + vite build. RAISE THIS IF REPS IS EVER RAISED:
+    # the measurement time scales linearly with it (REPS=7 is ~1.4x, REPS=21 is
+    # ~4.2x and would not fit). See the spec's REPS comment.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: 1.3.14 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.12.0 }
+      - run: bun install --frozen-lockfile
+      - run: cd e2e && bunx playwright install --with-deps chromium
+      # EW_CAPTURE=1 matches canvas-v2-perf.yml: every run is worth recording,
+      # and the gates still compare against the COMMITTED baseline because the
+      # spec loads it at module scope BEFORE any capture write. The uploaded
+      # JSON is an artifact for a reviewer, never a repo commit — a deliberate
+      # baseline update is a human running capture locally and committing it.
+      - run: cd e2e && EW_CAPTURE=1 bunx playwright test -c playwright.load.config.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: canvas-v2-load-failures-${{ github.run_id }}
+          path: |
+            e2e/test-results/
+            e2e/playwright-report/
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: canvas-v2-load-baseline-${{ github.run_id }}
+          path: e2e/baselines/canvas-v2-load.json
+          retention-days: 14
