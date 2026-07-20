@@ -18,9 +18,14 @@
  * gain, no echo, no doubled voice. The 0.08 s setTargetAtTime constant is the
  * smoothing that keeps pans (and crossing a page boundary) from clicking.
  *
- * Each tick also publishes the APPLIED per-peer gains (quantised) through
+ * Each tick also publishes the per-participant gains (quantised) through
  * av/bridge.ts — the single source of truth the legibility cues read (tile
  * dim, cursor fade, hover % readout), so what you see matches what you hear.
+ * Those gains cover EVERYONE in presence, not just the peers with an audio
+ * pipeline: the visual answer is "how loud would they be if their mic were
+ * on", so distance and page-membership stay legible for muted teammates too
+ * (who would otherwise sit at full brightness). Audio is still only applied
+ * where a GainNode exists.
  */
 import { rawUserId } from '@ensembleworks/contracts'
 import type { Editor } from 'tldraw'
@@ -57,16 +62,24 @@ export function useSpatialGainLoop(editor: Editor, lk: LiveKitState, crosstalkLe
 		// (getCollaboratorsOnCurrentPage() is exactly this list filtered to
 		// currentPageId, so on-page peers behave identically to before.)
 		const collaborators = editor.getCollaborators()
-		const appliedGains: Record<string, number> = {}
-		for (const peer of lk.peers) {
-			if (!peer.gain) continue
-			const presence = collaborators.find((c) => rawUserId(c.userId) === rawUserId(peer.identity))
+
+		// One pass over presence, keyed by raw id — the loop used to `.find()`
+		// through this list once per peer (O(peers x collaborators) every tick).
+		const presenceById = new Map(collaborators.map((c) => [rawUserId(c.userId), c]))
+
+		// The gain someone WOULD have, from presence alone. Deliberately does
+		// not care whether they publish audio: the visual cues want "how loud
+		// would this person be if their mic were on", so a muted teammate still
+		// reads as near/far and on/off my page. Only the AUDIO application
+		// below is gated on there being a real pipeline.
+		const targetFor = (rawId: string): number => {
+			const presence = presenceById.get(rawId)
 			const location: PeerLocation = !presence
 				? 'absent'
 				: presence.currentPageId === myPageId
 					? 'my-page'
 					: 'other-page'
-			// In-page gain — the viewport-rect spatial model. A peer on my page
+			// In-page gain — the viewport-rect spatial model. Someone on my page
 			// with no cursor yet counts as full volume, exactly as before.
 			const pageGain = presence?.cursor
 				? gainForViewportDistance(
@@ -75,9 +88,27 @@ export function useSpatialGainLoop(editor: Editor, lk: LiveKitState, crosstalkLe
 						settings
 					)
 				: 1
-			const target = gainTarget({ location, pageGain, crosstalk: crosstalkLevel })
+			return gainTarget({ location, pageGain, crosstalk: crosstalkLevel })
+		}
+
+		const appliedGains: Record<string, number> = {}
+
+		// Audio: only participants with a live pipeline (mic on) have a
+		// GainNode to steer. Unchanged behaviour.
+		for (const peer of lk.peers) {
+			if (!peer.gain) continue
+			const rawId = rawUserId(peer.identity)
+			const target = targetFor(rawId)
 			peer.gain.gain.setTargetAtTime(target, ctx.currentTime, 0.08)
-			appliedGains[rawUserId(peer.identity)] = quantizeGain(target)
+			appliedGains[rawId] = quantizeGain(target)
+		}
+
+		// Visuals: everyone else in presence gets the same computed gain so the
+		// tile dim / cursor fade covers muted teammates too. Pure arithmetic —
+		// no WebAudio, no DOM.
+		for (const rawId of presenceById.keys()) {
+			if (rawId in appliedGains) continue
+			appliedGains[rawId] = quantizeGain(targetFor(rawId))
 		}
 		// publishPeerGains dedupes internally, so quiet ticks cost one map compare.
 		publishPeerGains(appliedGains)

@@ -273,8 +273,11 @@ export function PanelTile({
 				{showOverlays && quiet && (
 					// Non-opacity "quiet" cue (a11y: legible without perceiving the
 					// dim): same glyph style as the cam-status badge, bottom-left.
+					// Worded conditionally because the gain now covers muted
+					// teammates too — it's the volume they WOULD have, so "would
+					// be" is true whether or not their mic is currently on.
 					<span
-						title={`Quiet — out of earshot (${Math.round(gain * 100)}%)`}
+						title={`Out of earshot — would be ${Math.round(gain * 100)}% volume`}
 						data-testid={'ew-tile-quiet-' + rawId}
 						style={{
 							position: 'absolute',
