@@ -776,7 +776,7 @@ owner decide; do not silently narrow the branch to half (A).
 > | Shown below | Task 1A changes it to | Why |
 > |---|---|---|
 > | `get invalidWrites(): number` | `get invalidWriteCount(): number` | name collided with the `InvalidWrite` type (finding 4) |
-> | `private invalidWriteCount = 0` | `private writeRejections = 0` | frees the good name for the getter |
+> | `private invalidWriteCount = 0` | `private invalidWriteCounter = 0` | frees the good name for the getter |
 > | `InvalidWrite { op, id, error }` | `InvalidWrite { op, kind, id, error }` | `id` is a non-greppable nanoid (finding 3) |
 > | unbounded `console.warn` | bounded to the first 5 | per-pointermove flood (finding 2) |
 >
@@ -2766,24 +2766,46 @@ task that leaves `canvas-doc`, so keeping it here holds the clean-room package
 edits contiguous in Tasks 1–4.
 
 **Files:**
-- Modify: `canvas-sync/src/client-peer.ts` (`SyncClientOpts` + the doc construction at line 50)
-- Modify: `client/src/canvas-v2/DevOverlay.tsx` (`ClientTelemetry` + one `Field`)
-- Modify: `client/src/canvas-v2/CanvasV2App.tsx` (pass the new telemetry field)
+- Modify: `canvas-sync/src/client-peer.ts` (`SyncClientOpts` at line 6 + the doc
+  construction at line 50 — both line numbers **re-verified at `e7ced0f`**)
+- Modify: `client/src/canvas-v2/DevOverlay.tsx` (`ClientTelemetry` at line 67 +
+  one `Field` next to line 138)
+- Modify: `client/src/canvas-v2/DevOverlay.test.ts` (**four** `client:` fixture
+  literals — lines 25, 58, 82, 103; see Step 6)
+- Modify: `client/src/canvas-v2/CanvasV2App.tsx` (the `client={{ … }}` prop at
+  line 448)
 - Create: `canvas-sync/src/invalid-write-passthrough.test.ts`
 
 > **CLEAN-ROOM REMINDER.** `canvas-sync/src/client-peer.ts` is scanned by
 > `canvas-sync/src/boundary.test.ts`, which text-matches **inside comments**.
 > Do not write the literals `Date.now(` or `Math.random(` anywhere in that file,
-> not even in prose.
+> not even in prose — including the new `onInvalidWrite` doc comment.
+>
+> Scope, verified at `e7ced0f`: the scanner globs `**/*.ts` relative to
+> `canvas-sync/src` and **skips anything ending in `.test.ts`**
+> (`boundary.test.ts:34`, "tests may inject/measure freely"). So
+> `invalid-write-passthrough.test.ts` is *not* scanned — but write it as if it
+> were; there is no reason for it to need those literals.
 
 > **This task trips the ux-contract presence gate** — `client/src/canvas-v2/`
-> is an interaction-bearing prefix and `DevOverlay.tsx` lives under it. Owner
+> is one of the three `INTERACTION_BEARING_PREFIXES`
+> (`scripts/ux-contract-presence.test.ts:36`, verified at `e7ced0f`), and
+> **three** files this task edits live under it: `DevOverlay.tsx`,
+> `DevOverlay.test.ts` and `CanvasV2App.tsx`. `checkPresence` matches on
+> `startsWith`, with no test-file exemption, so the `.test.ts` counts too. Owner
 > ruling (2026-07-20): **acceptable.** The branch already requires a
 > `ux-contract: none — <reason>` marker for the inherited PR-48 files, so this
 > is absorbed into an existing cost rather than creating a new one. The marker
 > text in "PR body — required content" has been updated to cover this change
 > honestly, as this branch's own work — not to hide it among the inherited
 > files.
+>
+> **One correction to carry there when you write the PR body:** that section's
+> reason 2 names two files (`DevOverlay.tsx`, `CanvasV2App.tsx`). Step 6 adds a
+> third, `DevOverlay.test.ts`. Name all three. The reason itself is unchanged —
+> a read-only diagnostic readout with `pointerEvents: 'none'` (verified,
+> `DevOverlay.tsx:133`), plus its fixture update; no gesture, no tool, no
+> user-drivable state.
 
 **Step 1: Write the failing test**
 
@@ -2794,20 +2816,23 @@ Create `canvas-sync/src/invalid-write-passthrough.test.ts`:
 // Review finding 1: SyncClientPeer builds its own LoroCanvasDoc internally, so
 // unless SyncClientOpts forwards onInvalidWrite the injected sink is
 // UNREACHABLE in the browser — where essentially every rejection originates
-// (Editor.applyAll -> putShape). Without this passthrough the bounded
-// console.warn is not a fallback, it is the only production behaviour.
+// (Editor.applyAll -> applyOne -> doc.putShape). Without this passthrough the
+// bounded console.warn is not a fallback, it is the only production behaviour.
 import assert from 'node:assert/strict'
 import type { InvalidWrite } from '@ensembleworks/canvas-doc'
 import { SyncClientPeer } from './client-peer.js'
-import { MemoryTransport } from './memory-transport.js'
+import { makePair } from './memory-transport.js'
 
 const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {} });
 
 {
   const seen: InvalidWrite[] = []
+  // makePair() returns [serverEnd, clientEnd]; this test never drives the
+  // server end, so it is discarded. Same construction as client-peer.test.ts.
+  const [, clientEnd] = makePair()
   const peer = new SyncClientPeer({
     peerId: 1n,
-    transport: new MemoryTransport(),
+    transport: clientEnd,
     onInvalidWrite: (w) => seen.push(w),
   })
   peer.doc.putPage({ id: 'page:p', name: 'P' })
@@ -2822,10 +2847,12 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
   peer.close()
 }
 
-// Omitting the sink stays legal — every existing rig constructs a peer without
-// one, and none of them should have to change.
+// Omitting the sink stays legal, and this is the assertion that keeps it so:
+// every one of the ~50 existing `new SyncClientPeer` call sites in the repo
+// passes only peerId/transport/presence, and none of them should have to change.
 {
-  const peer = new SyncClientPeer({ peerId: 2n, transport: new MemoryTransport() })
+  const [, clientEnd] = makePair()
+  const peer = new SyncClientPeer({ peerId: 2n, transport: clientEnd })
   assert.equal(peer.doc.invalidWriteCount, 0)
   peer.close()
 }
@@ -2833,10 +2860,17 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
 console.log('ok: invalid-write-passthrough')
 ```
 
-Check `MemoryTransport`'s actual constructor signature in
-`canvas-sync/src/memory-transport.ts` before running — if it needs arguments or
-is created via a paired-transport factory, follow how
-`canvas-sync/src/client-peer.test.ts` builds one rather than guessing.
+> **CORRECTED 2026-07-20 — there is no `MemoryTransport`.** An earlier draft of
+> this task imported `{ MemoryTransport }` and called `new MemoryTransport()`.
+> `canvas-sync/src/memory-transport.ts` exports exactly one symbol,
+> `makePair(): [Transport, Transport]` — a paired-transport factory, not a
+> class. Verified two ways: `grep -rn "MemoryTransport" --include="*.ts"` over
+> the repo (excluding `node_modules`/`.worktrees`) returns **zero** hits, and
+> every one of `client-peer.test.ts`'s peers is built from `makePair()` (lines
+> 34, 54, 95, 135). This was not a cosmetic error: the bad import would have
+> thrown at module load, so the RED would have landed on a **missing export**
+> rather than on the named assertion — precisely the failure mode the working
+> rules forbid ("Every RED in this plan lands on a runtime assertion").
 
 **Step 2: Run it to verify it fails**
 
@@ -2844,14 +2878,44 @@ is created via a paired-transport factory, follow how
 cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-sync/src/invalid-write-passthrough.test.ts
 ```
 
-Expected: FAIL at
-`AssertionError: the sink injected into the PEER reached the doc it built internally`
-(`0 !== 1`) — `SyncClientOpts` has no such field, so the object property is
-simply ignored at runtime. **Record the verbatim output.**
+Expected: FAIL on the first assertion. **This was executed against `e7ced0f`**;
+the verbatim tail is:
+
+```
+AssertionError: the sink injected into the PEER reached the doc it built internally
+
+0 !== 1
+
+ generatedMessage: false,
+     actual: 0,
+   expected: 1,
+   operator: "strictEqual",
+       code: "ERR_ASSERTION"
+```
+
+`SyncClientOpts` has no `onInvalidWrite` field, so the object property is simply
+ignored at runtime. **Record your own verbatim output anyway** — a run that
+differs in text but still lands on this assertion is a correct RED; only a
+*passing* test is grounds to stop.
+
+Two things the real run also shows, both expected — do not treat either as a
+problem:
+
+- **The doc's fallback `console.warn` fires first**, printing
+  `[canvas-doc] rejected invalid putShape (frame) shape:bad [#1]: …`. That is
+  the point of the task made visible: the write *is* already being rejected and
+  counted; only the injected sink is unreachable, leaving the bounded
+  `console.warn` as the sole production signal.
+- **Do not run `bun run typecheck` between Steps 2 and 3.** Passing
+  `onInvalidWrite` to a `SyncClientOpts` that lacks it is an excess-property
+  error on an object literal, so tsc fails for a reason unrelated to the RED.
+  bun erases types, so the single-file run above is unaffected. Step 3 removes
+  the error; typecheck runs at Step 7.
 
 **Step 3: Forward the sink in `canvas-sync/src/client-peer.ts`**
 
-Add to `SyncClientOpts`:
+`SyncClientOpts` (line 6) currently declares exactly three members — `peerId`,
+`transport` and an optional `presence`. Add a fourth:
 
 ```ts
   /** Optional: forwarded to the LoroCanvasDoc this peer builds internally, so
@@ -2861,11 +2925,25 @@ Add to `SyncClientOpts`:
   onInvalidWrite?: InvalidWriteHandler
 ```
 
-with the type imported from `@ensembleworks/canvas-doc`, and change line 50:
+with `InvalidWriteHandler` imported as a **type-only** import from
+`@ensembleworks/canvas-doc` (exported from `canvas-doc/src/canvas-doc.ts:44`,
+alongside `InvalidWrite`).
+
+Then change line 50 — verified at `e7ced0f` as the file's only
+`LoroCanvasDoc.create` call:
 
 ```ts
+    // before
+    this.doc = LoroCanvasDoc.create({ peerId: opts.peerId })
+    // after
     this.doc = LoroCanvasDoc.create({ peerId: opts.peerId, onInvalidWrite: opts.onInvalidWrite })
 ```
+
+`LoroCanvasDoc.create` **already accepts** `onInvalidWrite` — its signature is
+`static create(opts: { peerId: bigint; onInvalidWrite?: InvalidWriteHandler })`
+(`canvas-doc/src/loro-canvas-doc.ts:77`), landed by Task 1/1A, and it passes the
+handler straight to the private constructor. So **no `canvas-doc` change is
+needed here**: the entire gap is that `canvas-sync` never forwards it.
 
 **Step 4: Run the test to verify it passes**
 
@@ -2878,8 +2956,10 @@ Expected: `ok: invalid-write-passthrough`, then `ok: boundary`.
 
 **Step 5: Surface the count in the dev overlay**
 
-`client/src/canvas-v2/DevOverlay.tsx` already renders `repairCount` and
-`lastBackfillBytes` from a `ClientTelemetry` prop. Add one field:
+`client/src/canvas-v2/DevOverlay.tsx` declares `ClientTelemetry` at line 67 with
+exactly two members, and renders each through a shared `Field` component
+(defined at line 89) — `repairCount` at line 138, `lastBackfillBytes` at line
+139. Both verified at `e7ced0f`. Add one member:
 
 ```ts
 export interface ClientTelemetry {
@@ -2893,44 +2973,85 @@ export interface ClientTelemetry {
 }
 ```
 
-and, next to the existing `repairCount` line in the rendered list:
+(`DevOverlay.tsx` is **tab**-indented — match it.)
+
+and, immediately after the existing `repairCount` line (138) in the rendered
+list:
 
 ```tsx
 			<Field label="invalidWrites" value={client.invalidWriteCount} />
 ```
 
-Note the label reads `invalidWrites` (a human-facing count of events) while the
-API member is `invalidWriteCount` — that is deliberate and is exactly the
-collision finding 4 removed from the *code*; a display label has no type to
-collide with.
+(The label/member mismatch is deliberate — see the note under Step 6.)
 
-Then update the `<DevOverlay … client={…} />` call in
-`client/src/canvas-v2/CanvasV2App.tsx` (around line 445) to include
-`invalidWriteCount: peer.doc.invalidWriteCount` alongside the existing
-`repairCount` / `lastBackfillBytes`. Follow whatever shape that call site
-already uses — do not restructure it.
+Then update the `client={{ … }}` prop on the `<DevOverlay>` element in
+`client/src/canvas-v2/CanvasV2App.tsx`. It is at **line 448** (the element opens
+at 445) and reads, verbatim at `e7ced0f`:
+
+```tsx
+					client={{ repairCount: session?.peer.repairCount ?? 0, lastBackfillBytes: session?.peer.lastBackfillBytes ?? 0 }}
+```
+
+Note the shape: every field is read off `session?.peer` with a `?? 0` fallback,
+because `session` is nullable before boot resolves. The new field must follow
+that convention — and it reaches one level deeper, through the peer's public
+`readonly doc`:
+
+```tsx
+					client={{ repairCount: session?.peer.repairCount ?? 0, lastBackfillBytes: session?.peer.lastBackfillBytes ?? 0, invalidWriteCount: session?.peer.doc.invalidWriteCount ?? 0 }}
+```
+
+(`session?.peer.doc.invalidWriteCount`, **not** `peer.doc.invalidWriteCount` —
+there is no bare `peer` binding in scope at that call site.) Do not restructure
+the call site otherwise.
 
 > `DevOverlay` renders from a plain prop, refreshed on the same cadence as the
 > existing fields. Do **not** add a subscription, a poll, or state for this
 > value; it must cost nothing when the overlay is hidden, exactly like
 > `repairCount`.
 
-**Step 6: Typecheck and run the affected suites**
+**Step 6: Update the four `DevOverlay.test.ts` fixtures**
+
+`invalidWriteCount` is a **required** member of `ClientTelemetry`, so every
+existing literal that builds a `client` prop stops compiling the moment Step 5
+lands. There are exactly **four**, all in
+`client/src/canvas-v2/DevOverlay.test.ts` — lines 25, 58, 82 and 103 (counted by
+`grep -n "client:" client/src/canvas-v2/DevOverlay.test.ts` at `e7ced0f`; no
+other file in the repo constructs a `ClientTelemetry`). Add
+`invalidWriteCount: 0` to each.
+
+This is a mechanical compile fix, not new behaviour, so it has no RED of its
+own. Optionally extend the existing repairCount-renders assertion (line 31) with
+a matching one for the new field — a rendered-value check is cheap and is the
+only place the `invalidWrites` label is pinned.
+
+> Why the label and the member disagree: the `Field` label reads
+> `invalidWrites` (a human-facing count of events) while the API member is
+> `invalidWriteCount`. Deliberate — that is exactly the collision Task 1A's
+> finding 4 removed from the *code*; a display string has no type to collide
+> with.
+
+**Step 7: Typecheck and run the affected suites**
 
 ```
 cd /home/stag/src/projects/ensembleworks && bun run --filter '@ensembleworks/canvas-sync' typecheck
 cd /home/stag/src/projects/ensembleworks && bun run --filter '@ensembleworks/client' typecheck
-cd /home/stag/src/projects/ensembleworks/canvas-sync && ~/.bun/bin/bun test.ts
+cd /home/stag/src/projects/ensembleworks && export PATH="$HOME/.bun/bin:$PATH" && cd canvas-sync && bun test.ts
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-sync/src/boundary.test.ts
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun client/src/canvas-v2/DevOverlay.test.ts
 ```
 
 Expected: all pass. Existing peers constructed without `onInvalidWrite` are
-unaffected — the field is optional.
+unaffected — the field is optional, and `client-peer.test.ts` needs no edit.
 
-**Step 7: Commit**
+(The `export PATH=…` on the package-level line is required: `canvas-sync/test.ts`
+spawns `bun` as a subprocess, and `bun` is usually off `PATH` here.)
+
+**Step 8: Commit**
 
 ```
 cd /home/stag/src/projects/ensembleworks
-git add canvas-sync/src/client-peer.ts canvas-sync/src/invalid-write-passthrough.test.ts client/src/canvas-v2/DevOverlay.tsx client/src/canvas-v2/CanvasV2App.tsx
+git add canvas-sync/src/client-peer.ts canvas-sync/src/invalid-write-passthrough.test.ts client/src/canvas-v2/DevOverlay.tsx client/src/canvas-v2/DevOverlay.test.ts client/src/canvas-v2/CanvasV2App.tsx
 git commit -m "feat(canvas-sync,client): forward the invalid-write sink and surface the count"
 ```
 
@@ -3740,14 +3861,19 @@ cd /home/stag/src/projects/ensembleworks && UX_CONTRACT_PR_BODY='ux-contract: no
 > interaction-bearing surface.
 >
 > **Task 4A adds a second, genuinely-ours reason.** It edits
-> `client/src/canvas-v2/DevOverlay.tsx` and `CanvasV2App.tsx`, both under an
-> interaction-bearing prefix. Owner ruling 2026-07-20: acceptable, because the
-> marker is required for the inherited files anyway, so this is absorbed rather
-> than new cost. The marker text must say so **honestly** — it no longer reads
-> as covering only inherited files.
+> `client/src/canvas-v2/DevOverlay.tsx`, `CanvasV2App.tsx` and
+> `DevOverlay.test.ts` — **three** files, all under an interaction-bearing
+> prefix. The `.test.ts` counts because `checkPresence` matches on
+> `startsWith` with no test-file exemption
+> (`scripts/ux-contract-presence.test.ts:36,72`); it is edited because
+> `invalidWriteCount` lands as a *required* `ClientTelemetry` member, so four
+> fixture literals stop compiling until they account for it. Owner ruling
+> 2026-07-20: acceptable, because the marker is required for the inherited
+> files anyway, so this is absorbed rather than new cost. The marker text must
+> say so **honestly** — it no longer reads as covering only inherited files.
 >
 > So by Task 9 the gate is tripped by **two** sets of files: the inherited PR-48
-> ones and Task 4A's two client files. Both are covered by the single marker
+> ones and Task 4A's three client files. Both are covered by the single marker
 > below. Do **not** "fix" it by editing `scripts/ux-contract-presence.test.ts`,
 > by reverting PR-48 files, or by declaring an interaction contract for
 > `canvas-doc`. If the gate flags any file outside those two sets, STOP and
