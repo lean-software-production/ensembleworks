@@ -34,12 +34,11 @@ const repaired = applyRepairToModel(doc, plan)
 assert.deepEqual(checkInvariants(repaired), [])
 assert.deepEqual(repairPlan(repaired), [], 'repair is idempotent — a repaired doc needs no repair')
 
-// Cascade fixpoint (3 levels): dropping the invalid root removes the WHOLE
-// descendant chain, and a binding touching a cascaded shape (not the dropped
-// shape itself) goes too. Descendants are listed BEFORE ancestors on purpose:
-// a single in-order pass over the array cannot reach the grandchild (its
-// parent isn't in the set yet when it's visited), so only a true fixpoint
-// passes — a single-pass mutation of cascadeDropSet must fail here.
+// Chain under a dropped shape (3 levels): dropping the invalid root rescues
+// its direct child to the canonical page; the grandchild keeps its surviving
+// parent; a binding whose endpoints (ar2, grandchild) both still exist
+// survives. Descendants are listed BEFORE ancestors on purpose — a useful
+// order-independence property for the rescue map regardless of input order.
 const chain = makeDocument({
   pages: [{ id: 'page:p', name: 'P' }],
   shapes: [
@@ -53,9 +52,106 @@ const chain = makeDocument({
 const chainPlan = repairPlan(chain)
 assert.deepEqual(chainPlan, [{ op: 'dropShape', id: 'shape:bad2' }], 'only the invalid root is in the plan — descendants cascade')
 const chainRepaired = applyRepairToModel(chain, chainPlan)
-assert.deepEqual(chainRepaired.shapes.map((s) => s.id), ['shape:ar2'], 'bad2, child AND grandchild all dropped')
-assert.deepEqual(chainRepaired.bindings, [], 'binding touching the cascaded grandchild dropped too')
+// CHANGED 2026-07-20 (proportionality, owner ruling 4): dropping bad2 no
+// longer cascades. `child` is rescued to the canonical page, `grandchild`
+// keeps `child` as its parent, and binding:g — whose endpoints (ar2,
+// grandchild) BOTH still exist — survives with them.
+assert.deepEqual(
+  chainRepaired.shapes.map((s) => s.id).sort(),
+  ['shape:ar2', 'shape:child', 'shape:grandchild'],
+  'only bad2 is dropped; child and grandchild are rescued',
+)
+assert.equal(chainRepaired.byId.get('shape:child')!.parentId, 'page:p', 'child rescued to the canonical page')
+assert.deepEqual(chainRepaired.bindings.map((b) => b.id), ['binding:g'], 'a binding whose endpoints both survive is kept')
 assert.deepEqual(checkInvariants(chainRepaired), [], 'invariant-clean after ONE pass')
+
+// ---- PROPORTIONALITY (2026-07-20, owner ruling 4) ----
+// The reported defect, in the pure model: a frame with ONE bad numeric prop
+// must not execute its innocent contents. `props: { w: 'wide' }` fails the
+// frame's per-kind props schema (w is z.number().optional()), so validProps
+// fires on the frame and on nothing else.
+//
+// Pages are listed z-FIRST on purpose: the rescue target must be
+// canonicalPageId (lexicographically smallest, page:a) on every peer, never
+// pages[0]. Three bindings pin the binding rule from both sides: the one
+// pointing AT the dropped shape must be swept (it is not dangling before the
+// repair, so the plan carries no deleteBinding op for it — only a same-pass
+// sweep converges in ONE call), while the two pointing at RESCUED shapes must
+// survive.
+const rescueDoc = makeDocument({
+  pages: [{ id: 'page:z', name: 'Z' }, { id: 'page:a', name: 'A' }],
+  shapes: [
+    { id: 'shape:arw', kind: 'arrow', parentId: 'page:z', props: {}, ...base() } as any,
+    { id: 'shape:badf', kind: 'frame', parentId: 'page:z', props: { w: 'wide' }, ...base() } as any,
+    { id: 'shape:kid', kind: 'note', parentId: 'shape:badf', props: {}, ...base() } as any,
+    { id: 'shape:gkid', kind: 'note', parentId: 'shape:kid', props: {}, ...base() } as any,
+  ],
+  bindings: [
+    { id: 'binding:toBad', fromId: 'shape:arw', toId: 'shape:badf', props: {}, meta: {} },
+    { id: 'binding:toKid', fromId: 'shape:arw', toId: 'shape:kid', props: {}, meta: {} },
+    { id: 'binding:toGkid', fromId: 'shape:arw', toId: 'shape:gkid', props: {}, meta: {} },
+  ],
+})
+const rescuePlan = repairPlan(rescueDoc)
+assert.deepEqual(rescuePlan, [{ op: 'dropShape', id: 'shape:badf' }], 'precondition: the frame is the only flagged shape')
+const rescued = applyRepairToModel(rescueDoc, rescuePlan)
+assert.deepEqual(
+  rescued.shapes.map((s) => s.id).sort(),
+  ['shape:arw', 'shape:gkid', 'shape:kid'],
+  'only the invalid shape is removed',
+)
+assert.equal(
+  rescued.byId.get('shape:kid')!.parentId,
+  'page:a',
+  'the direct child is rescued to the canonical page (smallest id, not pages[0])',
+)
+assert.equal(
+  rescued.byId.get('shape:gkid')!.parentId,
+  'shape:kid',
+  'a grandchild keeps its surviving parent — only DIRECT children are rehomed',
+)
+assert.deepEqual(
+  rescued.bindings.map((b) => b.id).sort(),
+  ['binding:toGkid', 'binding:toKid'],
+  'bindings to rescued children survive; the binding to the dropped shape is swept',
+)
+assert.deepEqual(checkInvariants(rescued), [], 'invariant-clean after ONE pass')
+
+// Removal outranks rescue: a child that is ITSELF invalid is dropped, not
+// resurrected by the rescue map. Its own valid child is then rescued to the
+// page — proving the rescue target is resolved against the plan, not against
+// whatever the parent chain happened to become.
+const bothBad = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [
+    { id: 'shape:badp', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' as any } as any,
+    { id: 'shape:badc', kind: 'note', parentId: 'shape:badp', props: {}, ...base(), opacity: 'no' as any } as any,
+    { id: 'shape:okg', kind: 'note', parentId: 'shape:badc', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const bothBadPlan = repairPlan(bothBad)
+assert.deepEqual(
+  bothBadPlan,
+  [{ op: 'dropShape', id: 'shape:badc' }, { op: 'dropShape', id: 'shape:badp' }],
+  'precondition: both invalid shapes are named, id-ascending',
+)
+const bothBadRepaired = applyRepairToModel(bothBad, bothBadPlan)
+assert.deepEqual(bothBadRepaired.shapes.map((s) => s.id), ['shape:okg'], 'both invalid shapes go; only the valid grandchild survives')
+assert.equal(bothBadRepaired.byId.get('shape:okg')!.parentId, 'page:p', 'the survivor is rescued to the canonical page')
+assert.deepEqual(checkInvariants(bothBadRepaired), [], 'invariant-clean after ONE pass')
+
+// Zero-page doc: no rescue target exists, so dropShape is SUPPRESSED and the
+// violation is left standing — the same policy repairPlan already applies to
+// reparentToRoot (ruling 3, decision D4). Emitting a drop we could only apply
+// by deleting the children would be disproportionate deletion by another route.
+const noPageBad = makeDocument({
+  pages: [],
+  shapes: [{ id: 'shape:badnp', kind: 'note', parentId: 'shape:badnp', props: {}, ...base(), opacity: 'no' as any } as any],
+  bindings: [],
+})
+assert.deepEqual(repairPlan(noPageBad), [], 'a zero-page doc emits no dropShape — there is no rescue target')
+assert.ok(checkInvariants(noPageBad).some((v) => v.rule === 'validProps'), 'the validProps violation stands — honestly unrepairable')
 
 // Dedup collision: a shape BOTH orphaned (parent names nothing) and invalid
 // (validProps) gets exactly ONE op — dropShape wins over reparentToRoot.
