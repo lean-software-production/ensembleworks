@@ -121,9 +121,8 @@ export class LoroCanvasDoc implements CanvasDoc {
   // which is the diagnostically useful one. A lifetime cap would fix the flood
   // but make silence indistinguishable from health, and would go permanently
   // quiet so an unrelated bug an hour later never surfaced. This never closes
-  // the channel: 10 lines for a ten-second bad drag, 18 for an hour (the
-  // count is floor(log2(writes)) + 1 — both figures computed, not estimated).
-  // The
+  // the channel: 10 lines for a ten-second bad drag, 18 for an hour (the count
+  // is floor(log2(writes)) + 1 — both figures computed, not estimated). The
   // [#n] marker tells the reader they are seeing a sample, not a census.
   private rejectWrite(op: InvalidWrite['op'], value: unknown, id: string, error: string): void {
     const raw = (value as { kind?: unknown } | null | undefined)?.kind
