@@ -49,7 +49,7 @@ For every **other** page's group:
   initials-only; live video at 40px preferred after using it.)
 
 The mosaic's controls row (under the current page's tiles) also carries a
-**tile-size multiplier** (0.5×–3×, amended 2026-07-20) applied on top of the
+**tile-size multiplier** (0.1×–2×, centred on the 1× default; amended 2026-07-20) applied on top of the
 width-derived size. It re-clamps to the same 36px floor, but its ceiling is
 **dynamic** (amended 2026-07-20): the panel's content width less a 6px margin,
 so scaling up grows a tile until one fills the row and then stops. The static

@@ -49,13 +49,16 @@ export const RAIL_WIDTH = 32
 // "Panel states": "drag below ~140px (snaps)").
 const COLLAPSE_THRESHOLD = 140
 
-// Mosaic tile-size multiplier range. Below 1 packs more faces into the panel
-// than the "everyone fits" default; above it trades fit for legibility (the
-// grid wraps to more rows, which is why the ceiling is generous).
-export const MIN_TILE_SCALE = 0.5
-export const MAX_TILE_SCALE = 3
+// Mosaic tile-size multiplier range, centred on the 1x default: 2x doubles
+// the derived size (up to what fits the panel row), and the low end packs
+// more faces in. 0.1 rather than 0 keeps the value a real multiplier while
+// sitting close enough to the low end that 1x reads as the slider's middle.
+// (Tile width still clamps to TILE_WIDTH_MIN, so the very bottom of the
+// range bottoms out at the 36px floor.)
+export const MIN_TILE_SCALE = 0.1
+export const MAX_TILE_SCALE = 2
 
-/** Clamp a raw tile-scale to [0.5, 3]; non-finite falls back to 1. */
+/** Clamp a raw tile-scale to [0.1, 2]; non-finite falls back to 1. */
 export function clampTileScale(scale: number): number {
 	if (!Number.isFinite(scale)) return 1
 	return Math.min(MAX_TILE_SCALE, Math.max(MIN_TILE_SCALE, scale))

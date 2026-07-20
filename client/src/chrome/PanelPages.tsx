@@ -360,7 +360,7 @@ function MosaicControls({ tileScale, onReorder }: { tileScale: number; onReorder
 				type="range"
 				min={MIN_TILE_SCALE}
 				max={MAX_TILE_SCALE}
-				step={0.1}
+				step={0.05}
 				value={tileScale}
 				data-testid="ew-mosaic-scale"
 				aria-label="Tile size"

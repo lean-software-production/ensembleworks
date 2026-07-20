@@ -60,8 +60,9 @@ assert.deepEqual(
 
 // --- clampTileScale + the stored multiplier ---
 assert.equal(clampTileScale(1), 1)
-assert.equal(clampTileScale(0.1), 0.5, 'below the floor clamps up')
-assert.equal(clampTileScale(9), 3, 'above the ceiling clamps down')
+assert.equal(clampTileScale(0.5), 0.5, 'mid-low values pass through')
+assert.equal(clampTileScale(0.01), 0.1, 'below the floor clamps up')
+assert.equal(clampTileScale(9), 2, 'above the ceiling clamps down')
 assert.equal(clampTileScale(NaN), 1, 'non-finite falls back to the default')
 // A stored scale round-trips; a malformed one falls back rather than throwing.
 assert.equal(parsePanelLayout('{"width":280,"collapsed":false,"tileScale":1.5}').tileScale, 1.5)
@@ -74,7 +75,7 @@ assert.equal(
 setTileScale(2)
 assert.equal(getPanelLayout().tileScale, 2)
 setTileScale(99)
-assert.equal(getPanelLayout().tileScale, 3, 'setter clamps')
+assert.equal(getPanelLayout().tileScale, 2, 'setter clamps')
 setTileScale(1)
 
 // --- clampPanelWidth: pure clamp math, no window/localStorage access ---
