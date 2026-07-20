@@ -502,6 +502,13 @@ than a throw. One decision, two consequences.
 
 ### D4. Repair stays a pure, deterministic function of converged state.
 
+> **AMENDED by ruling 11 / Task 5A (2026-07-20).** The rescue target below —
+> `canonicalPageId` — is what Task 5 landed and is **no longer the rule**: a
+> rescued child now stays on the page it was already on, and `canonicalPageId`
+> survives as `reparentToRoot`'s target and as the rescue *fallback*. The
+> purity requirement this decision exists to state is unchanged; only the
+> target moved from doc-wide to per-shape. See Task 5A.
+
 The new `dropShape` semantics: remove the named shape; reparent every shape
 whose `parentId` is a dropped id to `canonicalPageId(pages)` — the
 lexicographically smallest page id, which is **already** the deterministic
@@ -704,6 +711,27 @@ lenient. A one-line guard would make it structural. Out of scope here; it is a
 `canvas-model` schema change with its own blast radius, and nothing on this
 branch makes it more likely to fire.
 
+### Ruling 11 — Rescue target (2026-07-20, tightening ruling 1): **SAME PAGE.**
+
+**Recorded after Task 5 landed**, which is why it arrives as its own task (5A)
+rather than as an edit to Task 5's text.
+
+Task 5 rescues a dropped shape's direct children to `canonicalPageId` — the
+lexicographically smallest page id, reused from `reparentToRoot`. **The owner
+has ruled that a rescued child must instead stay on the page it was already
+on.** Moving a shape to a different page is not acceptable.
+
+**Ruling 1 is unchanged and NOT re-opened.** A rescued child still keeps its
+parent-relative `x`/`y` and may appear at a different on-screen position.
+*Position may shift; page membership may not.* Coordinate-preserving rescue
+remains a deferred follow-up.
+
+Scope of the change, stated so it cannot be over-applied: **only the rescue
+path.** `reparentToRoot` (orphan/cycle repair) keeps targeting
+`canonicalPageId` — an orphan has no page to stay on, which is the entire
+reason that op exists. Task 5A works out the edges (chained drops, cycles,
+missing page ancestors, zero-page docs, purity) and specifies each.
+
 ### Ruling 6 — The optional third constructor parameter: **settled, leave it alone.**
 
 Review explicitly confirmed that `LoroCanvasDoc`'s optional third positional
@@ -747,18 +775,30 @@ Lettered tasks were added after the plan was first written, so the many
 | **4N** | 2026-07-20 | Task 4 review (ruling 9) — the serialization seam | ✅ landed `b5031d0` |
 | 4A | 2026-07-20 | Task 1 quality review, finding 1 (ruling 5) | ✅ landed `8939f32` + `6d55bc7` |
 | 4B | 2026-07-20 | Task 2 quality review, finding 2 (ruling 8) | ✅ landed `a443b9d` |
+| 5 | original | — | ✅ landed `764bdd3` + `cad6bfc` + `5c67923` |
+| **5A** | 2026-07-20 | Owner tightened the rescue-target ruling AFTER Task 5 landed (ruling 11) | pending |
 | 8A | 2026-07-20 | Task 2 quality review, finding 5 (ruling 8) — the CI gate | pending |
 
 **Execution order is the table's order, not alphabetical:**
-1 → 1A → 1B → 2 → 3 → 3A → 4 → **4N** → 4A → 4B → 5 → 6 → 7 → 8 → 8A → 9.
+1 → 1A → 1B → 2 → 3 → 3A → 4 → **4N** → 4A → 4B → 5 → **5A** → 6 → 7 → 8 → 8A → 9.
 `4N` is lettered out of sequence deliberately: renaming the existing `4A`/`4B`
 would break this document's many cross-references to them.
 
-**Start at Task 5.** Half (A) is complete: the write boundary, its central
+**Start at Task 5A.** Half (A) is complete: the write boundary, its central
 safety claim (Task 4N, `b5031d0`), and its observability (4A, 4B) have all
-landed. What remains is half (B) — proportionality, where the *unrecoverable*
-side of the defect lives. Half (A) stops new bad writes from originating; it
-does nothing about the cascade already reachable by data written before it.
+landed. Task 5 landed the pure-model half of proportionality. What remains is
+the rest of half (B) — the corrected rescue target (5A), then the Loro
+application (6) — where the *unrecoverable* side of the defect lives. Half (A)
+stops new bad writes from originating; it does nothing about the cascade
+already reachable by data written before it.
+
+> **Note for anyone running `canvas-doc`'s suite from here on.**
+> `canvas-doc/src/repair.test.ts` is **expected to fail** at
+> `'Loro and model application agree (order-independent)'` until Task 6 lands.
+> That is Task 5's deliberate hand-off, not a regression. `canvas-doc/test.ts`
+> exits on the FIRST failing suite, so it stops there and silently leaves later
+> suites **unrun** — run the files directly instead of reading its early exit as
+> "everything after passed".
 
 The two halves are technically independent — (A) is strictly additive and
 independently landable — which is what makes the fallback possible. If half (B)
@@ -4214,7 +4254,734 @@ discharging ruling 2.
 
 ---
 
+## Task 5A: A rescued child stays on its own page, not the canonical page
+
+> **WHY THIS TASK EXISTS (2026-07-20).** Task 5 landed proportionate repair
+> (`764bdd3`, `cad6bfc`, `5c67923`): a shape failing `validProps` is dropped and
+> its DIRECT children are rescued by reparenting rather than cascade-deleted.
+> Task 5 rescued them to `canonicalPageId` — the lexicographically smallest page
+> id — reusing `reparentToRoot`'s doc-wide target.
+>
+> **The owner has since ruled that a rescued child must stay on the SAME PAGE it
+> was already on.** Moving it to a different page is not acceptable. This is a
+> *tightening* of the rescue-target ruling after Task 5 landed, which is why it
+> is a separate task rather than an edit to Task 5's section.
+>
+> **Ruling 1 is NOT re-opened.** A rescued child still keeps its parent-relative
+> `x`/`y` and may visually jump *in position*. Position may shift; page
+> membership may not. Do not add coordinate rebasing and do not propose it.
+
+**Files:**
+- Modify: `canvas-model/src/repair.ts` (new `pageAncestorId` helper;
+  `applyRepairToModel`'s rehome branch; three stale comments)
+- Modify: `canvas-model/src/repair.test.ts` (two existing fixtures re-seeded,
+  one existing assertion rewritten, five new cases)
+
+### The rule, precisely — seven questions, seven answers
+
+Every answer below was worked out against the source at `5c67923` and then
+**executed**; the commands are named in "How each claim here was checked".
+
+**Q1 — What is "the same page"?** The page ancestor of the dropped parent:
+walk `parentId` upward from the dropped shape until an id that names a page.
+
+An id names a page iff it is **a member of `doc.pages`**, *not* iff it starts
+with `page:`. The two are different, and the difference is reachable:
+`canvas-model/src/invariants.ts`'s `noOrphans` rule tests
+`ids.has(p) || pageIds.has(p)` — membership — precisely because a `parentId`
+like `page:ghost` carries the prefix and names nothing. (`noCycles` does use
+`cur.startsWith('shape:')`, but only to decide when to *stop walking*, which is
+a different question; `canvas-model/src/document.ts`'s `rootShapes` uses
+`startsWith('page:')` and is a display helper, not a repair target.) A
+prefix-only test would stamp `page:ghost` onto a rescued child and emit a
+**fresh** `noOrphans` violation out of a pass that is required to converge in
+one call. Mutant **M6** pins this.
+
+**Q2 — Chained drops.** The walk stops **only** at a page. It passes straight
+through shapes, whether or not they are themselves being dropped, so a chain of
+drops needs no special handling: `okg → badc(dropped) → badp(dropped) → page:b`
+resolves to `page:b`. Stopping at the first shape, or at the first *surviving*
+shape, are both wrong and both have mutants (**M3**, **M4**). Stopping at a
+surviving ancestor is the more tempting error and deserves its reason stated:
+it would put the rescued child **inside a frame it was never in**, inventing a
+containment relationship. Repair has no mandate to do that. Rescue always
+targets a page root — the same shape of outcome ruling 1 already accepted, just
+on the right page.
+
+**Q3 — Cycles.** `noCycles` is a real invariant with real repair ops, so a
+parent chain can cycle and an unbounded walk would hang. The guard is a `seen`
+set; when it trips the walk returns `undefined` and the caller falls back to
+`canonicalPageId`.
+
+There is a theorem worth recording, because it explains why this guard is
+dead-code safety rather than a live path: **a plan produced by `repairPlan` can
+never rescue a shape whose parent chain cycles.** If the chain from `s.parentId`
+cycles then the chain from `s` cycles too, so `checkInvariants` gives `s` a
+`noCycles` violation, so `repairPlan` emits `reparentToRoot(s)` (or the stronger
+`dropShape(s)`) — either way `s` is not on the rescue path. The guard exists for
+hand-built plans, exactly like the `'page:orphans'` fallback `applyRepairToModel`
+already carries. **M5** is killed by *non-termination*: an unguarded walk makes
+the test **hang** rather than fail an assertion. Say so in the task report, so
+nobody reads a hang as an environment problem.
+
+**Q4 — No page ancestor at all.** Reachable, and not via a cycle: a shape that
+is *both* invalid and an orphan gets `dropShape` (drop outranks reparent in
+`repairPlan`'s dedup), and its child has no violation of its own, so the child
+**is** rescued while the walk dead-ends immediately.
+
+**Decision: fall back to `canonicalPageId`.** Reasoning, in order of weight:
+
+1. **Convergence forces it.** The child must land somewhere that resolves, or
+   the repaired doc carries a fresh `noOrphans` violation and the "invariant-
+   clean after ONE pass" property — asserted in `canvas-model/src/repair.test.ts`
+   and relied on by `canvas-sync/src/convergence.test.ts` — breaks.
+2. Suppressing the drop instead (the zero-page policy) would leave a
+   `validProps` violation standing **permanently** for a shape whose ancestor
+   happens to be orphaned, and would make suppression depend on per-shape
+   structure rather than on a doc-wide fact. That is strictly worse than a
+   position shift on one page.
+3. The fallback is exactly the pre-5A behaviour, which the owner already
+   accepted in general — the new ruling makes it *not preferable*, not
+   *forbidden*, and there is no same-page answer to prefer here.
+
+I judge this **not** a genuine judgement call, so it is specified rather than
+escalated. It is a cheap thing to confirm, though: if the owner would rather see
+such a child left in place with the drop suppressed, say so before Task 5A
+lands — it is a two-line change to `repairPlan` plus one fixture.
+
+**Q5 — Zero-page docs.** Unchanged. `repairPlan` still suppresses `dropShape`
+(and `reparentToRoot`) when `doc.pages.length === 0`, and the same-page rule
+makes that policy *more* obviously right, not less: with no pages there is
+neither a page ancestor to find nor a fallback to fall back to. The existing
+`noPageBad` assertion stays exactly as it is. Do not build anything further for
+this case — it is not reachable in production (every production page writer —
+`client/src/canvas-v2/bootstrap-page.ts`, `server/src/canvas-v2/crash-writer.ts`,
+`server/src/canvas-v2/reconcile.ts` — guarantees a page, and reconcile commits
+shapes and pages together).
+
+**Q6 — Purity.** The target must stay a pure function of converged state.
+Two rules keep it so, and both are pinned:
+
+- The walk resolves each ancestor id through **`doc.byId`**, never through a
+  scan of `doc.shapes`. Under duplicate ids `byId` holds the *content winner*
+  (`canvas-model/src/document.ts`'s `makeDocument` — see its comment on why
+  last-entry-wins would track Loro's traversal order and diverge across peers),
+  whereas a `find()` would return whichever entry happens to come first in the
+  array. **M8** pins this, and the same fixture re-runs with the input arrays
+  reversed and asserts an identical result.
+- The walk reads the **untransformed** `doc`, never the partially rehomed
+  output — the same discipline the ORDER PIN case already enforces for dedupe.
+
+**Q7 — `reparentToRoot` is NOT in scope.** Orphan and cycle repair keep
+targeting `canonicalPageId`, and must. An orphan has no page to stay on — that
+is the entire point of the op. Only the **rescue** path changes. **M7** pins it
+with a hand-built plan, because (by the Q3 theorem, plus the fact that a
+`noOrphans` shape's parent names nothing and therefore cannot be dropped) a
+`repairPlan`-produced plan can never pair `reparentToRoot` with a resolvable
+page ancestor — so only a hand-built plan can tell the two targets apart at all.
+
+That last fact also settles the precedence question the new rule creates: when a
+shape is in `toRoot` *and* its parent is dropped, `toRoot` wins. On real plans
+the two choices always coincide (a `toRoot` shape has no page ancestor, so
+same-page falls back to the canonical page anyway); the ordering is stated so
+hand-built plans are defined and so the rule stays statable as **removal, then
+flag, then rescue**.
+
+### Mutants this task's test must kill
+
+Every row was **produced and executed** against the step-1 test with the step-3/4
+implementation in place; the "killed by" column is the assertion that actually
+fired, verbatim from the run. `node:assert` aborts at the first failure, so each
+mutant is named by the first assertion it trips.
+
+| # | Plausible wrong implementation | Killed by |
+|---|---|---|
+| M1 | Rescue to `canonicalPageId` — **the behaviour Task 5 landed**, which must now FAIL | `'the rescued child stays on its own page (page:z) — not pages[0] (page:m), not the canonical page (page:a)'` |
+| M2 | Rescue to `doc.pages[0].id` — the input-order-dependent target Task 5's test existed to kill | the same assertion (the fixture makes `pages[0]`, `canonicalPageId` and the right answer three DIFFERENT pages) |
+| M3 | Walk up exactly one level instead of to a page | `'the walk passes THROUGH a dropped ancestor to the page (page:b), never stopping on shape:badp'` |
+| M4 | Walk up to the first ancestor that is not itself dropped (lands on a surviving shape) | `'the walk continues past a SURVIVING ancestor shape to its page — rescue targets a page root, never shape:outer'` |
+| M5 | No cycle guard | **the test HANGS** (`timeout` fires). There is no assertion — that is the symptom. |
+| M6 | Stop on the `page:` prefix instead of membership in `doc.pages` | `'no page ancestor ⇒ fall back to the canonical page, never to the prefix-shaped non-page page:ghost'` |
+| M7 | Apply the same-page rule to `reparentToRoot` as well | `'reparentToRoot still targets the canonical page — the same-page rule applies to the RESCUE path only'` |
+| M8 | Resolve ancestors with `doc.shapes.find(...)` (first array match) instead of `doc.byId` | `'the walk resolves an ancestor id through byId (content winner, page:m) — not the first array match (page:z)'` |
+
+M1 and M2 share one assertion **on purpose**: the re-seeded fixture gives three
+distinct pages — `pages[0] = page:m`, `canonicalPageId = page:a`, the correct
+answer `page:z` — so a single equality is a three-way discriminator. That is
+strictly stronger than Task 5's two-page fixture, which could only separate
+`pages[0]` from the canonical page.
+
+No assertion is added that kills nothing. In particular, no idempotence
+assertion is added (implied by the `checkInvariants(...) === []` assertions
+already present, exactly as Task 5 recorded), and no hand-built assertion is
+added for the `toRoot`-beats-rescue precedence — on every reachable plan the two
+branches agree, so such an assertion could not fail.
+
+### What this ruling invalidates — the full inventory
+
+Measured, not guessed: the change was applied at `5c67923`, every suite run, and
+the failures recorded (commands under "measured blast radius").
+
+**`canvas-model/src/repair.test.ts` — exactly ONE assertion changes value:**
+
+- `'the direct child is rescued to the canonical page (smallest id, not pages[0])'`
+  (the `rescueDoc` block). It asserts `page:a`; the same-page rule yields
+  `page:z`. **Rewrite it, do not delete it** — it was the discriminator for M2
+  (rescue to `pages[0]`), and step 1(a) both rewrites it and *strengthens* it
+  into the three-way discriminator described above.
+
+Three further assertions are **still correct by value** but carry wording that
+becomes misleading, and are updated for that reason only:
+
+- `'child rescued to the canonical page'` (the `chain` block) — the fixture has
+  one page, so same-page and canonical coincide. Reword; do not re-seed. This
+  block's job is the chain/binding rule, not the target rule.
+- `'the survivor is rescued to the canonical page'` (the `bothBad` block) — same
+  coincidence. Step 1(b) re-seeds this fixture onto two pages so it becomes the
+  **chained-drop** discriminator (M3) instead of a duplicate of the chain block.
+- `'exactly ONE surviving physical copy of shape:dup3, rescued to the canonical
+  page — not annihilated'` (the ORDER PIN block) — one page, value unchanged,
+  and its subject is dedupe ordering rather than the rescue target. **Leave it
+  alone.** Listed here so a reviewer who greps `canonical` does not think it was
+  missed.
+
+**`canvas-doc/src/repair.test.ts` — nothing invalidated.** Every fixture in that
+file has exactly one page (`page:p`), so same-page and canonical coincide
+throughout; `doc3`'s `shape:s2` reaches the page via `reparentToRoot`, which
+this task does not touch.
+
+> **Known expected failure, and it is NOT yours.**
+> `canvas-doc/src/repair.test.ts`'s `'Loro and model application agree
+> (order-independent)'` (the `doc3` block) **already fails at `5c67923`** — it is
+> Task 6's RED, produced by Task 5, and it is correct. Verified before and after
+> this change: same file, same single assertion, same message. Do not fix it
+> here. If it starts failing at a *different* assertion after your change, STOP
+> and report.
+
+**`canvas-sync/src/convergence.test.ts` — nothing invalidated.** Its rig seeds
+`page:p` plus (30% of trials) `page:q`, and parents every shape at `page:p`, so
+the same-page target and `canonicalPageId` are both `page:p`. Independently, the
+rig's `randomShape` only emits valid shapes and every write path it drives now
+validates, so no trial can produce a `validProps` violation at all. Confirmed
+green by running it.
+
+### Measured blast radius
+
+Applied at `5c67923`, all four commands run, then reverted with
+`git checkout --`. These are observations, not predictions:
+
+| Command | Result |
+|---|---|
+| `cd canvas-model && ~/.bun/bin/bun test.ts` | **all 14 suites pass** (with step 1's test edits in place) |
+| each `canvas-doc/src/*.test.ts` run directly | **13 of 14 pass**; `src/repair.test.ts` fails at `'Loro and model application agree (order-independent)'` — byte-identical to its failure *before* this change |
+| `~/.bun/bin/bun canvas-sync/src/convergence.test.ts` | **passes** — `ok: convergence — 50 seeds × N=3 peers × ≤40 ops/peer` |
+| `bun run typecheck` | **green in all 13 workspaces** |
+
+> **Run `canvas-doc`'s files DIRECTLY, not through `canvas-doc/test.ts`.** That
+> runner exits on the FIRST failing suite. Since `src/repair.test.ts` is
+> expected to fail until Task 6, the runner stops there and silently leaves
+> every later suite unrun — do not read its early exit as "everything after
+> passed". Use:
+> ```
+> cd /home/stag/src/projects/ensembleworks && for f in canvas-doc/src/*.test.ts; do printf '%-55s ' "$f"; ~/.bun/bin/bun "$f" >/tmp/o 2>&1 && tail -1 /tmp/o || echo FAIL; done
+> ```
+
+### Step 1: Write the failing test
+
+Five edits to `canvas-model/src/repair.test.ts`.
+
+**(1a) Re-seed `rescueDoc` onto three pages and rewrite the invalidated
+assertion.** Replace this pages line:
+
+```ts
+  pages: [{ id: 'page:z', name: 'Z' }, { id: 'page:a', name: 'A' }],
+```
+
+with:
+
+```ts
+  pages: [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }, { id: 'page:z', name: 'Z' }],
+```
+
+and replace this assertion:
+
+```ts
+assert.equal(
+  rescued.byId.get('shape:kid')!.parentId,
+  'page:a',
+  'the direct child is rescued to the canonical page (smallest id, not pages[0])',
+)
+```
+
+with:
+
+```ts
+assert.equal(
+  rescued.byId.get('shape:kid')!.parentId,
+  'page:z',
+  'the rescued child stays on its own page (page:z) — not pages[0] (page:m), not the canonical page (page:a)',
+)
+```
+
+Then update that block's leading comment: the paragraph beginning "Pages are
+listed z-FIRST on purpose" now describes the wrong thing. Replace that sentence
+with a statement of what the three pages now separate — `pages[0]` is `page:m`,
+`canonicalPageId` is `page:a`, and the answer must be `page:z`, the page
+`shape:badf` was on — so one equality kills both wrong targets. Leave the
+paragraph about the three bindings alone; it is still accurate.
+
+**(1b) Re-seed `bothBad` onto two pages so it discriminates the chained-drop
+walk.** Replace:
+
+```ts
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [
+    { id: 'shape:badp', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' as any } as any,
+```
+
+with:
+
+```ts
+  pages: [{ id: 'page:a', name: 'A' }, { id: 'page:b', name: 'B' }],
+  shapes: [
+    { id: 'shape:badp', kind: 'note', parentId: 'page:b', props: {}, ...base(), opacity: 'no' as any } as any,
+```
+
+and replace:
+
+```ts
+assert.equal(bothBadRepaired.byId.get('shape:okg')!.parentId, 'page:p', 'the survivor is rescued to the canonical page')
+```
+
+with:
+
+```ts
+assert.equal(
+  bothBadRepaired.byId.get('shape:okg')!.parentId,
+  'page:b',
+  'the walk passes THROUGH a dropped ancestor to the page (page:b), never stopping on shape:badp',
+)
+```
+
+**(1c) Reword the `chain` block's target assertion** (value unchanged — that
+fixture has one page):
+
+```ts
+assert.equal(chainRepaired.byId.get('shape:child')!.parentId, 'page:p', 'child rescued to bad2\'s page')
+```
+
+**(1d) Add the five new cases.** Insert them immediately **before** the
+`// Zero-page doc:` comment that introduces the `noPageBad` fixture:
+
+```ts
+// The rescue target is always a PAGE, never a surviving shape. shape:innerbad
+// is dropped from inside a perfectly healthy frame; its child does NOT get
+// re-nested into that frame (repair has no mandate to invent a containment
+// relationship — it rehomes to the page root, on the page the shape was
+// already on).
+const nested = makeDocument({
+  pages: [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }, { id: 'page:z', name: 'Z' }],
+  shapes: [
+    { id: 'shape:outer', kind: 'frame', parentId: 'page:z', props: {}, ...base() } as any,
+    { id: 'shape:innerbad', kind: 'frame', parentId: 'shape:outer', props: { w: 'wide' }, ...base() } as any,
+    { id: 'shape:kid2', kind: 'note', parentId: 'shape:innerbad', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const nestedPlan = repairPlan(nested)
+assert.deepEqual(nestedPlan, [{ op: 'dropShape', id: 'shape:innerbad' }], 'precondition: only the inner frame is flagged')
+const nestedRepaired = applyRepairToModel(nested, nestedPlan)
+assert.equal(
+  nestedRepaired.byId.get('shape:kid2')!.parentId,
+  'page:z',
+  'the walk continues past a SURVIVING ancestor shape to its page — rescue targets a page root, never shape:outer',
+)
+assert.deepEqual(checkInvariants(nestedRepaired), [], 'invariant-clean after ONE pass')
+
+// No page ancestor at all: the dropped shape is itself an orphan, so walking
+// up dead-ends. There is no "same page" to stay on, so the rescue falls back
+// to canonicalPageId — the pre-5A doc-wide target. Falling back is forced, not
+// chosen: leaving the child on a nonexistent parent would emit a FRESH
+// noOrphans violation out of a pass that is required to converge in one call.
+// This also pins that a page ancestor is decided by MEMBERSHIP in doc.pages,
+// not by the `page:` prefix — 'page:ghost' has the prefix and names no page.
+const deadEnd = makeDocument({
+  pages: [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }],
+  shapes: [
+    { id: 'shape:lost', kind: 'note', parentId: 'page:ghost', props: {}, ...base(), opacity: 'no' as any } as any,
+    { id: 'shape:kept', kind: 'note', parentId: 'shape:lost', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const deadEndPlan = repairPlan(deadEnd)
+assert.deepEqual(deadEndPlan, [{ op: 'dropShape', id: 'shape:lost' }], 'precondition: drop subsumes the orphan reparent for shape:lost')
+const deadEndRepaired = applyRepairToModel(deadEnd, deadEndPlan)
+assert.equal(
+  deadEndRepaired.byId.get('shape:kept')!.parentId,
+  'page:a',
+  'no page ancestor ⇒ fall back to the canonical page, never to the prefix-shaped non-page page:ghost',
+)
+assert.deepEqual(checkInvariants(deadEndRepaired), [], 'invariant-clean after ONE pass')
+
+// Cycle guard. repairPlan can never produce this pairing (a shape whose parent
+// chain cycles is itself flagged noCycles, so it is reparented rather than
+// rescued), so the plan here is HAND-BUILT — the same dead-code-safety
+// contract applyRepairToModel already honours for zero-page plans. Without a
+// visited set the walk never terminates: a wrong implementation HANGS here
+// rather than failing an assertion.
+const cyc = makeDocument({
+  pages: [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }],
+  shapes: [
+    { id: 'shape:cycA', kind: 'note', parentId: 'shape:cycB', props: {}, ...base() } as any,
+    { id: 'shape:cycB', kind: 'note', parentId: 'shape:cycA', props: {}, ...base() } as any,
+    { id: 'shape:kid3', kind: 'note', parentId: 'shape:cycB', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const cycRepaired = applyRepairToModel(cyc, [{ op: 'dropShape', id: 'shape:cycB' }])
+assert.equal(
+  cycRepaired.byId.get('shape:kid3')!.parentId,
+  'page:a',
+  'a cycling parent chain terminates and falls back to the canonical page',
+)
+
+// reparentToRoot is NOT touched by the same-page rule: an orphan/cycle member
+// has no page to stay on, which is the entire reason that op exists. Hand-built
+// again, because repairPlan cannot pair reparentToRoot with a resolvable page
+// ancestor (see the cycle note above), so only a hand-built plan can tell the
+// two targets apart.
+const reroot = makeDocument({
+  pages: [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }, { id: 'page:z', name: 'Z' }],
+  shapes: [
+    { id: 'shape:host', kind: 'frame', parentId: 'page:z', props: {}, ...base() } as any,
+    { id: 'shape:orph2', kind: 'note', parentId: 'shape:host', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const rerooted = applyRepairToModel(reroot, [{ op: 'reparentToRoot', id: 'shape:orph2' }])
+assert.equal(
+  rerooted.byId.get('shape:orph2')!.parentId,
+  'page:a',
+  'reparentToRoot still targets the canonical page — the same-page rule applies to the RESCUE path only',
+)
+
+// Purity: the target is resolved through doc.byId (the content winner), never
+// through a first-match scan of doc.shapes, and never through the partially
+// rehomed output. shape:dupp has two entries on DIFFERENT pages; the geo entry
+// wins the content election (see the dedupe block below), so the walk must
+// land on page:m even though the note entry (page:z) comes first in the array.
+// The reversed construction below asserts the same result under a permuted
+// input, which is the property canonicalPageId exists to protect.
+const dupChainShapes = [
+  { id: 'shape:dupp', kind: 'note', parentId: 'page:z', props: {}, ...base() } as any,
+  { id: 'shape:dupp', kind: 'geo', parentId: 'page:m', props: {}, ...base() } as any,
+  { id: 'shape:baddd', kind: 'note', parentId: 'shape:dupp', props: {}, ...base(), opacity: 'no' as any } as any,
+  { id: 'shape:kiddd', kind: 'note', parentId: 'shape:baddd', props: {}, ...base() } as any,
+]
+const dupPages = [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }, { id: 'page:z', name: 'Z' }] as const
+const projectIds = (d: ReturnType<typeof applyRepairToModel>) =>
+  d.shapes.map((s) => `${s.id}<-${s.parentId}`).sort()
+const dupChain = makeDocument({ pages: dupPages, shapes: dupChainShapes, bindings: [] })
+const dupChainRepaired = applyRepairToModel(dupChain, repairPlan(dupChain))
+assert.equal(
+  dupChainRepaired.byId.get('shape:kiddd')!.parentId,
+  'page:m',
+  'the walk resolves an ancestor id through byId (content winner, page:m) — not the first array match (page:z)',
+)
+const dupChainRev = makeDocument({ pages: [...dupPages].reverse(), shapes: [...dupChainShapes].reverse(), bindings: [] })
+assert.deepEqual(
+  projectIds(applyRepairToModel(dupChainRev, repairPlan(dupChainRev))),
+  projectIds(dupChainRepaired),
+  'identical converged state ⇒ identical rescue targets, whatever order the arrays arrive in',
+)
+assert.deepEqual(checkInvariants(dupChainRepaired), [], 'invariant-clean after ONE pass')
+```
+
+> **The `as const` on `dupPages` is load-bearing** and was found by running
+> `bun run typecheck`, not by reading. Without it the array widens to
+> `{ id: string; name: string }[]`, which is not assignable to `readonly Page[]`
+> — `Page['id']` is the template-literal type `` `page:${string}` ``. bun runs
+> the file happily either way, so the error surfaces only at typecheck, detached
+> from the edit. (Same detachment mechanism as the "tsc parse trap" in the
+> working rules, different cause.)
+
+> **Style note.** These are top-level `const`s with unique names, matching the
+> rest of the file. Do **not** wrap them in bare `{ … }` section blocks — re-read
+> the "`tsc` parse trap" rule if you are tempted.
+
+**(1e) Nothing else.** Do not touch the `noPageBad`, `dual`, `rev`, `twoPage`,
+`noPages`, dedupe, `dupBad` or ORDER PIN blocks. Their values are unchanged
+(verified by running the suite).
+
+### Step 2: Run it and record the verbatim failure
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-model/src/repair.test.ts
+```
+
+Expected (this is the actual output, captured at `5c67923` with only step 1
+applied):
+
+```
+AssertionError: the direct child is rescued to the canonical page (smallest id, not pages[0])
+
+'page:z' !== 'page:a'
+
+ generatedMessage: false,
+     actual: "page:z",
+   expected: "page:a",
+   operator: "strictEqual",
+       code: "ERR_ASSERTION"
+```
+
+Note what that message shows: the *old* assertion text, because the re-seeded
+three-page fixture already moves `shape:badf` to `page:z` while the landed code
+still rescues to `page:a`. Once you have applied edit (1a)'s assertion rewrite
+as well, the same run fails with the **new** message and the operands swapped:
+
+```
+AssertionError: the rescued child stays on its own page (page:z) — not pages[0] (page:m), not the canonical page (page:a)
+
+'page:a' !== 'page:z'
+```
+
+Either is a correct RED — it is the `rescueDoc` block failing on the rescue
+target. **If the file passes, STOP and report.** Do not weaken the test and do
+not skip to the implementation.
+
+### Step 3: Implement — the `pageAncestorId` helper
+
+In `canvas-model/src/repair.ts`, immediately after `canonicalPageId`, add:
+
+```ts
+// The page a RESCUED child must stay on: walk `parentId` up from `startId`
+// (the dropped parent) until an id that names a page. Owner ruling 11: a
+// rescued child may shift in POSITION but must not change PAGE, so this
+// per-shape target replaces the doc-wide canonicalPageId on the rescue path
+// ONLY — reparentToRoot still uses canonicalPageId, because an orphan or a
+// cycle member has no page to stay on, which is the whole point of that op.
+//
+// Three properties, each pinned by a case in repair.test.ts:
+// - It stops at a page by MEMBERSHIP in doc.pages, never by the 'page:'
+//   prefix. A parentId like 'page:ghost' carries the prefix and names no page
+//   (that is what invariants.ts's noOrphans rule tests for); stamping it onto
+//   a rescued child would emit a fresh noOrphans violation out of a pass that
+//   has to converge in ONE call.
+// - It walks THROUGH shapes — dropped or surviving — and stops only at a page.
+//   Stopping on a dropped ancestor would leave the child pointing at something
+//   being removed. Stopping on a SURVIVING ancestor would put the child inside
+//   a frame it was never in, inventing a containment relationship repair has
+//   no mandate to create.
+// - It terminates. noCycles is a real invariant, so a parent chain can cycle;
+//   `seen` bounds the walk and the caller falls back to canonicalPageId.
+//   Unreachable from a repairPlan-produced plan (a shape whose chain cycles is
+//   itself flagged noCycles, so it is reparented rather than rescued) — this is
+//   dead-code safety for hand-built plans, like the 'page:orphans' fallback.
+// Ancestors resolve through doc.byId — the CONTENT winner under duplicate ids
+// (see makeDocument) — never a scan of doc.shapes, so the target is a pure
+// function of converged state and cannot depend on array order.
+export function pageAncestorId(doc: CanvasDocument, startId: string): Page['id'] | undefined {
+  const pageIds = new Set<string>(doc.pages.map((p) => p.id))
+  const seen = new Set<string>()
+  let cur: string | undefined = startId
+  while (cur !== undefined && !seen.has(cur)) {
+    if (pageIds.has(cur)) return cur as Page['id']
+    seen.add(cur)
+    cur = doc.byId.get(cur)?.parentId
+  }
+  return undefined
+}
+```
+
+`CanvasDocument` and `Page` are both already imported by this module's first
+line (`import { type CanvasDocument, type Page, makeDocument } from './document.js'`)
+— **verified, no import change is needed.**
+
+### Step 4: Implement — the rehome branch in `applyRepairToModel`
+
+Replace this comment and return:
+
+```ts
+    // A shape is rehomed to the canonical page either because it was flagged
+    // (orphan/cycle) or because its parent was just dropped. Same target,
+    // same determinism — the rescue must not invent a second rehoming rule.
+    return [toRoot.has(s.id) || drop.has(s.parentId) ? { ...s, parentId: pageId } : s]
+```
+
+with:
+
+```ts
+    // TWO rehoming rules, and the precedence between them is deliberate.
+    // reparentToRoot (orphan/cycle) goes to the canonical page: such a shape
+    // has no page to stay on. A shape rescued because its PARENT was dropped
+    // stays on its own page (owner ruling 11) — the page ancestor of that
+    // dropped parent, falling back to the canonical page when the chain
+    // dead-ends or cycles.
+    // The two branches never disagree on a plan repairPlan produced: a shape
+    // whose chain cycles is itself flagged noCycles (so it is in toRoot), and
+    // a shape flagged noOrphans has a parent that names nothing (so its parent
+    // cannot be dropped). Every toRoot shape therefore has no page ancestor
+    // anyway and falls back to the same target. The ordering below defines
+    // hand-built plans and keeps the rule statable: removal, then flag, then
+    // rescue.
+    if (toRoot.has(s.id)) return [{ ...s, parentId: pageId }]
+    if (drop.has(s.parentId)) return [{ ...s, parentId: pageAncestorId(doc, s.parentId) ?? pageId }]
+    return [s]
+```
+
+### Step 5: Refresh the two comments this invalidates
+
+(a) `RepairOp`'s `dropShape` comment says the children go to the canonical page.
+Replace:
+
+```ts
+  // Invalid envelope/props. Removes ONLY this shape; any shape whose parentId
+  // is a dropped id is rehomed to the canonical page root (see
+  // applyRepairToModel). Deliberately NOT a subtree cascade: a container with
+```
+
+with:
+
+```ts
+  // Invalid envelope/props. Removes ONLY this shape; any shape whose parentId
+  // is a dropped id is rehomed to the root of the page it was ALREADY on (see
+  // pageAncestorId). Deliberately NOT a subtree cascade: a container with
+```
+
+Leave the rest of that comment — including the ruling-1 sentence about
+parent-relative `x`/`y` — exactly as it is. Ruling 1 still stands.
+
+(b) `canonicalPageId`'s comment opens "The canonical root page every
+`reparentToRoot` targets". That is still true, but it is now also the rescue
+*fallback* rather than the rescue target. Append one sentence to that comment
+saying so and pointing at `pageAncestorId`. Do not otherwise edit it — its
+paragraph about why the target cannot depend on container iteration order is
+the load-bearing part and is unchanged.
+
+(c) **No change needed** to `repairPlan`'s zero-page `canReparent` comment.
+Verified by reading: it already justifies suppressing `dropShape` on the grounds
+that there is no rescue target, which the same-page rule strengthens rather than
+contradicts (with no pages there is neither a page ancestor nor a fallback).
+
+### Step 6: Run the test and see it pass
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-model/src/repair.test.ts
+```
+
+Expected: `ok: repair (model)`
+
+### Step 7: Blast radius
+
+```
+cd /home/stag/src/projects/ensembleworks/canvas-model && ~/.bun/bin/bun test.ts
+cd /home/stag/src/projects/ensembleworks && for f in canvas-doc/src/*.test.ts; do printf '%-55s ' "$f"; ~/.bun/bin/bun "$f" >/tmp/o 2>&1 && tail -1 /tmp/o || echo FAIL; done
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-sync/src/convergence.test.ts
+cd /home/stag/src/projects/ensembleworks && bun run typecheck
+```
+
+Expected, all four **measured** at `5c67923` with this change applied:
+
+- `canvas-model`: **all 14 suites pass.**
+- `canvas-doc`: **13 of 14 files pass**; `src/repair.test.ts` fails at exactly
+  `'Loro and model application agree (order-independent)'` — the same single
+  assertion, with the same message, as it fails at *before* this change. That
+  is Task 6's pre-existing RED. **Do not fix it here.**
+- `canvas-sync/src/convergence.test.ts`: **passes.**
+- `bun run typecheck`: **green in all 13 workspaces.**
+
+**If `canvas-doc` fails anywhere else, or `convergence.test.ts` fails at all,
+STOP and report** — do not adjust the rig and do not start Task 6 on top of an
+unexplained failure.
+
+Also confirm you introduced none of the clean-room forbidden literals (they are
+banned inside comments too, and as substrings of longer words):
+
+```
+cd /home/stag/src/projects/ensembleworks && grep -nE "from 'ws'|express|@tldraw/|\.\./server|Date\.now\(|Math\.random\(" canvas-model/src/repair.ts canvas-model/src/repair.test.ts
+```
+
+Expected: no output.
+
+### Step 8: Commit
+
+```
+cd /home/stag/src/projects/ensembleworks
+git add canvas-model/src/repair.ts canvas-model/src/repair.test.ts
+git commit -m "fix(canvas-model): a rescued child stays on its own page, not the canonical one"
+```
+
+Paste the verbatim step-2 RED output into the commit body.
+
+### Handoff to Task 6 — READ THIS BEFORE EXECUTING TASK 6
+
+**Task 6's section was written against the canonical-page rule and is now stale
+in one specific way.** Its step 4(b) instructs:
+
+```ts
+    const rootPageId = canonicalPageId(model.pages) ?? 'page:orphans'
+```
+
+and its step 4(c) stamps that single `rootPageId` onto every rescued child. That
+mirrors Task 5, **not** Task 5A. Task 6 must instead mirror the same-page rule:
+
+- Keep `rootPageId = canonicalPageId(model.pages) ?? 'page:orphans'` — it is
+  still `reparentToRoot`'s target **and** the rescue fallback.
+- In the `dropShape` branch, the child stamp becomes
+  `pageAncestorId(model, o.id) ?? rootPageId`, computed **once per dropped
+  shape** (`o.id` is the dropped parent, so every child of that node shares the
+  target). Add `pageAncestorId` to the `@ensembleworks/canvas-model` import
+  alongside `canonicalPageId`.
+- The `reparentToRoot` branch keeps `rootPageId` unchanged. Do not over-apply.
+- `this.tree.move(c.id, undefined)` still moves the node to the Loro **tree
+  root** regardless of which page id is stamped into `data.parentId` — the tree
+  has no page nodes, so the page is carried in `data` only. Nothing about the
+  move changes; only the stamped value does.
+
+The two defects Task 5's handoff already recorded in Task 6's text still stand
+(the import line must retain `SHAPE_KINDS` / `type ShapeKind`; Task 6's
+line-number references `repair.test.ts:89-92` and `:187` are rotted). Task 6's
+RED is unchanged by 5A and was re-verified at `5c67923` both before and after
+this change: `canvas-doc/src/repair.test.ts`, `'Loro and model application agree
+(order-independent)'`, the `doc3` block.
+
+Task 6 needs **no new fixture** for the same-page rule if its own fixtures stay
+single-page — but a Loro-side same-page case is cheap and worth adding, since
+`repair()` is where the two applications are most likely to drift. The minimal
+one: two pages, a bad frame on the non-canonical page, one child; assert the
+child's `parentId` after `repair()` equals the frame's page, and assert
+`normalize(dumpModel(doc)) === normalize(applyRepairToModel(before, plan))`.
+
+### How each claim in this section was checked
+
+| Claim | How |
+|---|---|
+| page ancestry is decided by membership, not prefix | read `canvas-model/src/invariants.ts` (`noOrphans`: `ids.has(p) \|\| pageIds.has(p)`), `canvas-model/src/ids.ts` (`isPageId`), `canvas-model/src/document.ts` (`rootShapes`) |
+| `CanvasDocument` and `Page` are already imported by `repair.ts` | read line 1 of `canvas-model/src/repair.ts` |
+| exactly one `canvas-model` assertion changes value | applied the change, ran `~/.bun/bin/bun canvas-model/src/repair.test.ts`, read the single failure |
+| every mutant M1–M8 is killed by the named assertion | applied each mutant to `repair.ts` in turn and ran the suite; recorded the first failure verbatim (M5: `timeout 20` fired) |
+| `canvas-doc` fixtures are all single-page | read `canvas-doc/src/repair.test.ts` end to end |
+| the `doc3` failure pre-dates this change | ran `~/.bun/bin/bun canvas-doc/src/repair.test.ts` at `5c67923` before applying anything |
+| `canvas-sync`'s rig cannot reach this path | read the page/shape seeding in `canvas-sync/src/convergence.test.ts`, then ran it |
+| `as const` on `dupPages` is required | `bun run typecheck` failed with `TS2322 … Type 'string' is not assignable to type '\`page:${string}\`'` without it |
+| the blast-radius table | ran all four commands, then `git checkout --` to restore |
+
+---
+
 ## Task 6: Mirror proportionate drop in `LoroCanvasDoc.repair()`
+
+> ### ⚠️ STALE IN ONE SPECIFIC WAY — refresh before executing (2026-07-20)
+>
+> This section was written against Task 5's **canonical-page** rescue target.
+> **Ruling 11 replaced that with the same-page rule (Task 5A).** Step 4(b)/4(c)
+> below stamp a single `rootPageId` onto every rescued child, which mirrors
+> Task 5 rather than Task 5A. Read **Task 5A's "Handoff to Task 6"** for the
+> exact corrections before touching this section — it names the import to add,
+> the one expression to change, and the branches that must *not* change.
+>
+> The two defects Task 5's handoff recorded here still stand as well (the
+> import line must retain `SHAPE_KINDS` / `type ShapeKind`; the `:89-92` and
+> `:187` line references are rotted).
 
 `applyRepairToModel` and `LoroCanvasDoc.repair()` must never drift. Task 5
 changed the reference; this task changes the Loro application to match.
