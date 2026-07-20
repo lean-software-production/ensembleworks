@@ -37,8 +37,10 @@ assert.deepEqual(repairPlan(repaired), [], 'repair is idempotent — a repaired 
 // Chain under a dropped shape (3 levels): dropping the invalid root rescues
 // its direct child to the canonical page; the grandchild keeps its surviving
 // parent; a binding whose endpoints (ar2, grandchild) both still exist
-// survives. Descendants are listed BEFORE ancestors on purpose — a useful
-// order-independence property for the rescue map regardless of input order.
+// survives. Descendants are listed BEFORE ancestors below — a holdover from
+// the cascade era, when that ordering pinned a real fixpoint requirement. The
+// rescue is now a single pass keyed on the plan's `drop` set, so it cannot be
+// order-sensitive by construction; this ordering is no longer load-bearing.
 const chain = makeDocument({
   pages: [{ id: 'page:p', name: 'P' }],
   shapes: [
@@ -50,7 +52,7 @@ const chain = makeDocument({
   bindings: [{ id: 'binding:g', fromId: 'shape:ar2', toId: 'shape:grandchild', props: {}, meta: {} }],
 })
 const chainPlan = repairPlan(chain)
-assert.deepEqual(chainPlan, [{ op: 'dropShape', id: 'shape:bad2' }], 'only the invalid root is in the plan — descendants cascade')
+assert.deepEqual(chainPlan, [{ op: 'dropShape', id: 'shape:bad2' }], 'only the invalid root is in the plan — descendants are rescued, not cascaded')
 const chainRepaired = applyRepairToModel(chain, chainPlan)
 // CHANGED 2026-07-20 (proportionality, owner ruling 4): dropping bad2 no
 // longer cascades. `child` is rescued to the canonical page, `grandchild`
@@ -257,7 +259,7 @@ assert.notEqual(stableStringify({ c: [1, 2] }), stableStringify({ c: [2, 1] }), 
 
 // dropShape ∩ uniqueIds collision: one duplicate entry is ALSO invalid →
 // dropShape(x) subsumes dedupeShape(x): dropping every physical copy of the
-// id (cascade included) is strictly stronger than collapsing them.
+// id is strictly stronger than collapsing them down to one.
 const dupBad = makeDocument({
   pages: [{ id: 'page:p', name: 'P' }],
   shapes: [
@@ -271,5 +273,44 @@ assert.deepEqual(dupBadPlan, [{ op: 'dropShape', id: 'shape:x' }], 'dropShape ou
 const dupBadRepaired = applyRepairToModel(dupBad, dupBadPlan)
 assert.deepEqual(dupBadRepaired.shapes, [], 'ALL physical copies of a dropped id go — the valid twin too')
 assert.deepEqual(checkInvariants(dupBadRepaired), [])
+
+// ---- ORDER PIN: dedupe's winnerKey must be captured from doc.shapes BEFORE
+// the rescue map touches parentId (2026-07-20, quality-review finding 1) ----
+// shape:bad3 is invalid (dropped). shape:dup3 has TWO physical entries: one
+// parented under shape:bad3 (rescue-eligible once bad3 drops), the other
+// parented under a nonexistent shape:ghost3 (noOrphans -> reparentToRoot).
+// Both conditions independently route shape:dup3's survivor to page:p, so
+// dedupeShape(dup3) COEXISTS with reparentToRoot(dup3) in the plan (see the
+// coexistence comment above repairPlan's dedup step). If the rescue .map ever
+// ran BEFORE the dedupe filter, both physical entries would already carry
+// parentId: page:p by the time the dedupe filter re-derives stableStringify,
+// which no longer matches the winnerKey captured from the ORIGINAL (pre-map)
+// entries — so NEITHER entry matches and the id is silently annihilated.
+const orderDoc = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [
+    { id: 'shape:bad3', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' as any } as any,
+    { id: 'shape:dup3', kind: 'note', parentId: 'shape:bad3', props: {}, ...base() } as any,
+    { id: 'shape:dup3', kind: 'geo', parentId: 'shape:ghost3', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const orderPlan = repairPlan(orderDoc)
+assert.deepEqual(
+  orderPlan,
+  [
+    { op: 'dropShape', id: 'shape:bad3' },
+    { op: 'dedupeShape', id: 'shape:dup3' },
+    { op: 'reparentToRoot', id: 'shape:dup3' },
+  ],
+  'precondition: drop + coexisting dedupe/reparent ops for shape:dup3',
+)
+const orderRepaired = applyRepairToModel(orderDoc, orderPlan)
+assert.deepEqual(
+  orderRepaired.shapes.map((s) => `${s.id}<-${s.parentId}`),
+  ['shape:dup3<-page:p'],
+  'exactly ONE surviving physical copy of shape:dup3, rescued to the canonical page — not annihilated',
+)
+assert.deepEqual(checkInvariants(orderRepaired), [])
 
 console.log('ok: repair (model)')

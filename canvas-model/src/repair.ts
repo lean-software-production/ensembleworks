@@ -56,17 +56,21 @@ export function canonicalPageId(pages: readonly Page[]): Page['id'] | undefined 
 // order is stable regardless of input order or which peer computes it.
 export function repairPlan(doc: CanvasDocument): RepairOp[] {
   const ops: RepairOp[] = []
-  // Zero-page docs: orphans AND dropped shapes' rescued children are
-  // unrepairable (no target); the violation is left standing rather than
-  // emitting a non-converging op (reparenting to a made-up page id would
-  // leave the shape just as orphaned, forever).
+  // Zero-page docs: orphans are unrepairable (no reparent target), so
+  // reparentToRoot is suppressed and the violation is left standing rather
+  // than emitting a non-converging op. dropShape is suppressed by the SAME
+  // uniform rule, deliberately coarse: it fires whether or not the dropped
+  // shape actually has children to rescue. Consequence, honestly stated: a
+  // zero-page doc with a CHILDLESS invalid shape used to get it quarantined
+  // (dropShape has no rescue-target dependency pre-Task-5); now repairPlan
+  // returns [] for it too, and checkInvariants keeps reporting validProps —
+  // permanently invalid, with repair reporting nothing to do, until a page
+  // exists. Accepted for uniformity rather than special-casing "does this
+  // dropped shape have children right now" (itself iteration work, and a
+  // property that can change from one repair pass to the next).
   const canReparent = doc.pages.length > 0
   for (const v of checkInvariants(doc)) {
     const o = opFor(v.rule, v.id)
-    // Both ops need a rescue target: reparentToRoot by definition, and
-    // dropShape because it rehomes the dropped shape's children to the same
-    // canonical page. With no page, leave the violation standing rather than
-    // emit an op that could only be applied by deleting the children too.
     if ((o.op === 'reparentToRoot' || o.op === 'dropShape') && !canReparent) continue
     ops.push(o)
   }
@@ -118,10 +122,10 @@ export function applyRepairToModel(doc: CanvasDocument, plan: RepairOp[]): Canva
   const toRoot = new Set(plan.filter((o) => o.op === 'reparentToRoot').map((o) => o.id))
   const delBind = new Set(plan.filter((o) => o.op === 'deleteBinding').map((o) => o.id))
   const dedupeIds = new Set(plan.filter((o) => o.op === 'dedupeShape').map((o) => o.id))
-  // Drop ONLY the shapes the plan names. Their children are rescued by the same
-  // map that serves reparentToRoot, below. The filter runs BEFORE that map, so a
-  // shape that is both dropped and rescue-eligible is DROPPED: removal outranks
-  // rescue, and LoroCanvasDoc.repair() must make the same choice.
+  // Drop ONLY the shapes the plan names. Their children are rescued below by
+  // the same rehoming rule that serves reparentToRoot. Removal outranks
+  // rescue unconditionally: a dropped id is filtered out of the result no
+  // matter what else is true of it — there is no code path back in.
   // dedupeShape: keep exactly the content winner among the entries sharing
   // the id — smallest stableStringify (see its comment for why content, never
   // order). Children survive untouched: their parentId is the ID, which the
@@ -138,18 +142,27 @@ export function applyRepairToModel(doc: CanvasDocument, plan: RepairOp[]): Canva
   // repairPlan (it emits no reparentToRoot ops for a zero-page doc); kept as
   // dead-code safety for hand-built plans.
   const pageId = canonicalPageId(doc.pages) ?? 'page:orphans'
-  const shapes = doc.shapes
-    .filter((s) => !drop.has(s.id))
-    .filter((s) => {
-      if (!dedupeIds.has(s.id)) return true
-      if (keptDupe.has(s.id) || stableStringify(s) !== winnerKey.get(s.id)) return false
+  // Drop, dedupe, and rehome are ONE fused pass over the untransformed
+  // doc.shapes, not a filter/filter/map chain: `winnerKey` was captured from
+  // the pre-repair shapes above, and the dedupe comparison below re-derives
+  // stableStringify(s) against that key from the SAME untransformed `s` this
+  // callback receives — never from a copy some earlier stage already
+  // rehomed. Fusing the three decisions into one step makes that ordering
+  // structural rather than a chain a later edit could quietly reorder: there
+  // is no separate rehoming stage for a reordering to move earlier than the
+  // dedupe check (a real bug this fusion replaces — see repair.test.ts's
+  // ORDER PIN case for the reproduction).
+  const shapes = doc.shapes.flatMap((s) => {
+    if (drop.has(s.id)) return []
+    if (dedupeIds.has(s.id)) {
+      if (keptDupe.has(s.id) || stableStringify(s) !== winnerKey.get(s.id)) return []
       keptDupe.add(s.id)
-      return true
-    })
+    }
     // A shape is rehomed to the canonical page either because it was flagged
-    // (orphan/cycle) or because its parent was just dropped. Same target, same
-    // determinism — the rescue must not invent a second rehoming rule.
-    .map((s) => (toRoot.has(s.id) || drop.has(s.parentId) ? { ...s, parentId: pageId } : s))
+    // (orphan/cycle) or because its parent was just dropped. Same target,
+    // same determinism — the rescue must not invent a second rehoming rule.
+    return [toRoot.has(s.id) || drop.has(s.parentId) ? { ...s, parentId: pageId } : s]
+  })
   // A binding dies iff the plan names it, or an ENDPOINT was dropped (that
   // binding is not dangling when the plan is computed, so no deleteBinding op
   // exists for it — sweeping it here is what makes ONE pass converge). A
