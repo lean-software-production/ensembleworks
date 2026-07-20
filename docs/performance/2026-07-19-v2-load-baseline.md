@@ -7,7 +7,7 @@
 | Measured commit | `f0b3288511754b8b3de682bb9a1a7975499a1c04` |
 | Branch | `perf/v2-first-shape-harness` |
 | Branch point | `fix/v2-boot-sync-ready` (`1ad72388d7de182251f913d8025e876abf852d92`) — post-settle-sleep-removal |
-| Baseline capture SHA | `a1fd093a68b64924d6351a8865d56321c93ca398`[^self-sha] |
+| Baseline capture SHA | `98ff779ad9c06b61badb4e4bd190d6822f8214b0`[^self-sha] |
 | Environment | `local` |
 | Machine | `zeus-arch`, AMD Ryzen 7 7700X (8-core/16-thread), 125Gi RAM, Linux 7.0.12-arch1-1 |
 | Machine state | idle dev box — no other load except an unrelated, idle `vite preview` process for the `.worktrees/canvas-phase4` checkout on port 4321, which does not share a port, process, or resource with this harness |
@@ -21,14 +21,17 @@
 > and comparing across environments silently is the main way a series like this
 > goes wrong.
 
-[^self-sha]: A commit's SHA is a hash of its own content, so a commit cannot
-    embed its own final SHA without an infinite regress (writing the SHA
-    changes the content, which changes the SHA). The value above is accurate
-    as of the amend that produced it, but the very act of adding this footnote
-    is itself one more content change, so treat the number as
-    reviewer-verifiable rather than byte-exact: `git log -1 --format=%H --
-    e2e/baselines/canvas-v2-load.json` is the authoritative source if this
-    field is ever in doubt.
+[^self-sha]: This is the commit that introduced `e2e/baselines/canvas-v2-load.json`,
+    which is the value `git log -1 --format=%H -- e2e/baselines/canvas-v2-load.json`
+    reports — the authoritative source if this field is ever in doubt. It could
+    not be filled in by the commit that first wrote this document, because a
+    commit's SHA is a hash of its own content and so cannot embed its own final
+    SHA without an infinite regress; it was corrected in a later commit on the
+    same branch, once the capture commit was fixed and nameable. An earlier
+    draft of this row named a pre-amend SHA that no ref reaches, and which
+    therefore does not resolve in a fresh clone at all — if you are reading a
+    provenance SHA anywhere in this series and `git cat-file -t` reports it is
+    unreachable, prefer the `git log` command above.
 
 ### `SPREAD_ADVISORY_CV_PCT` tuning evidence
 
@@ -98,8 +101,9 @@ the totals are what prompted the work, but the sub-splits are what direct it.
 
 **Ruled out first, because it is the more valuable half.** The toolbar-to-first-shape
 gap — the very symptom this harness was built to hunt — measured **0ms on every
-single rep of every v2 scenario**, across all 15 reps in this capture run and all
-60 reps counting the two immediate re-verify runs used for the cv tuning above.
+single rep of every v2 scenario**, across all 20 reps in this capture run (four
+v2 scenarios x REPS=5) and all 60 reps counting the two immediate re-verify runs
+used for the cv tuning above.
 Once the toolbar mounts, the pre-seeded shapes are already there; nothing lags
 visibly behind it. Oplog **volume** is also ruled out as a contributor: the
 per-shape scenario (1000 separate `Frame.Update` commits) posted a p50 of
