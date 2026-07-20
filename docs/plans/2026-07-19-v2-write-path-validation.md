@@ -160,6 +160,58 @@ shape's whole subtree on every peer, durably.
 
 ---
 
+---
+
+## Why write validation cannot lose data — the structural argument
+
+**This is the core safety argument for the whole branch.** It is more durable
+than any test list, so read it before worrying about whether the new validation
+is too aggressive.
+
+The predicate that **rejects** a write and the predicate that **destroys** a
+shape are *the same function*:
+
+```
+canvas-model/src/invariants.ts:16   const v = validateShape(s)
+                                    if (!v.ok) push({ rule: 'validProps', … })
+                                              │
+canvas-model/src/repair.ts:24                 ▼
+                                    case 'validProps': return { op: 'dropShape', id }
+```
+
+`putShape` and `updateProps` now reject on `validateShape` — the identical call.
+So **anything the write boundary rejects is exactly something `repair()` would
+have destroyed anyway**, on every peer, durably, taking the subtree with it
+(pre-Task-5) and leaving Loro tombstones behind.
+
+The consequence is worth stating as a standalone claim:
+
+> **Over-eagerness cannot lose data the pre-fix code preserved.** The worst case
+> for a false positive is converting *"write it, then cascade-delete the subtree
+> everywhere, permanently"* into *"never write it."* There is no input for which
+> the old behaviour retained something the new behaviour discards.
+
+That is why this branch does not need an exhaustive proof that validation never
+fires on legitimate shapes: the failure mode of being wrong is strictly bounded
+by the failure mode it replaces.
+
+### Empirical confirmation (spec review, 2026-07-20, executed not reasoned)
+
+Driving the **real tool FSMs** produced **zero rejections**:
+
+- click-create and drag-create for all four `CreateKind`s
+- the arrow tool's `StartArrow`
+- the transform path
+- the undo/redo `replay()` path
+- 29 golden fixtures — 0 invalid
+
+Full suites green: `canvas-editor` 15/15, `canvas-sync` 11/11 (including the
+fuzz rig's `randomShape` corpus), `server/src/canvas-v2` 7/7 — which covers the
+`fromTldraw` → `reconcile.ts:77` `doc.putShape(s)` path. `bridge.ts loadModel`
+has no production callers.
+
+---
+
 ## Design decisions (settled — do not re-open during implementation)
 
 ### D1. "Reject" means a counted, logged **no-op** — never a throw.
@@ -281,6 +333,39 @@ concrete-class-only escape hatch (deliberately **not** on the `CanvasDoc`
 interface) that bypasses write validation. Its purpose is precisely to stand in
 for "what a remote peer's bytes can still deliver", and the existing repair
 tests that seed invalid shapes will use it.
+
+### D3a. Undo/redo of a remotely-invalid shape is now a silent no-op
+
+**A user-visible behaviour change, accepted, recorded here so it is never
+debugged from scratch.**
+
+`Editor.replay()` — the undo/redo path — replays `InverseOp`s by calling
+`CanvasDoc`'s public mutators, and its `putShape` inverses carry **whole shapes
+read back out of the doc** (see `editor.ts`'s "full-shape-inverse convention").
+A shape that arrived from a **remote** peer via `import()` while invalid can
+therefore land on the undo stack. Replaying it now hits the write boundary and
+is **silently dropped** rather than restored.
+
+The user-visible symptom is *"my undo/redo did nothing"* for that shape.
+
+**This is correct and deliberate.** Restoring it would re-manufacture exactly
+the state `repair()` is obliged to destroy — the write boundary would be
+laundering invalid data back into the doc through the one path that bypasses
+the writer's own intent. Dropping it is the same judgement `replay()` already
+makes for an inverse that cannot apply.
+
+**The asymmetry that makes this safe** is worth spelling out, because it is the
+mirror image of the reasoning behind D1's no-throw decision:
+
+| Path | Guard | Consequence |
+|---|---|---|
+| `Editor.applyAll` (`editor.ts:249-256`) | **no** `try`/`catch` | a throw strands the batch's earlier mutations uncommitted — which is *why D1 forbids throwing* |
+| `Editor.replay` (`editor.ts:343`) | per-op `try`/`catch`, documented TOLERANCE CONTRACT | an un-appliable op is skipped and the rest of the batch continues |
+
+So `replay()` was **already** built to tolerate individual ops that cannot
+apply; a rejected `putShape` is simply a new member of a category it already
+handles. `applyAll` was not, which is precisely why rejection is a no-op rather
+than a throw. One decision, two consequences.
 
 ### D4. Repair stays a pure, deterministic function of converged state.
 
@@ -1432,8 +1517,9 @@ Append to `canvas-doc/src/write-validation.test.ts`, **before** the final
 // HOLE 4: with NO handler injected, the doc must fall back to console.warn.
 // The InvalidWriteHandler doc comment claims a rejection is "never silent" and
 // nothing has proven it. Capture console.warn rather than trusting the claim.
-// (Task 1A already proved the fallback is CAPPED at 5; this proves it fires at
-// all, and that the line carries op, kind and id.)
+// (The powers-of-two throttle is proven in the restored section above; this
+// proves the fallback fires AT ALL, and that the line names op, kind, id and
+// ordinal. n=1 is a power of two, so exactly one line is expected here.)
 {
   const warned: unknown[][] = []
   const realWarn = console.warn
@@ -1580,6 +1666,26 @@ cd /home/stag/src/projects/ensembleworks
 git add canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/canvas-doc.ts canvas-doc/src/write-validation.test.ts
 git commit -m "fix(canvas-doc): validate shapes at the putShape write boundary"
 ```
+
+---
+
+### ✅ Task 2 LANDED at `81fcc94` (+ `5060832`, a comment reflow)
+
+Spec-reviewed and passed, including an explicit over-eagerness review whose
+findings are recorded in "Why write validation cannot lose data" near the top of
+this document.
+
+**Known plan-vs-code prose drift — not worth a commit, recorded so a future
+reader diffing the two is not confused:**
+
+- Two restored sections dropped a few explanatory comment lines relative to the
+  verbatim text above: the *"would pass against the capped implementation"*
+  clause, and the *"ordinal marker tells the reader they are seeing a SAMPLE,
+  not a census"* line. **All assertions are identical** — only prose was lost.
+- HOLE 4's comment in the shipped file legitimately diverges from an earlier
+  draft of this plan, which described the fallback as "CAPPED at 5". Task 1B
+  made that false. The plan text above has been corrected to match what actually
+  shipped, so the implementer did **not** go off-script here.
 
 ---
 
@@ -2632,6 +2738,26 @@ Plus:
 
 - The verbatim RED output recorded for Tasks 1, 2, 4, 5 and 6, and the
   revert-and-observe note from Task 7.
+- **The undo/redo behaviour change (decision D3a).** State it plainly, because
+  it is user-visible and will otherwise be debugged from scratch months later:
+
+  > Undo/redo of a shape that arrived from a remote peer **while invalid** is
+  > now a silent no-op — the symptom is "my undo/redo did nothing" for that one
+  > shape. `Editor.replay()`'s `putShape` inverses carry whole shapes read back
+  > out of the doc, so such a shape can reach the undo stack; replaying it now
+  > hits the write boundary and is dropped rather than restored. This is
+  > deliberate: restoring it would re-manufacture exactly the state `repair()`
+  > is obliged to destroy. It is safe because `Editor.replay` already has a
+  > per-op `try`/`catch` and a documented tolerance contract for inverses that
+  > cannot apply — unlike `Editor.applyAll`, which is why rejection is a no-op
+  > rather than a throw.
+
+- **The structural safety argument**, in one line: the predicate that rejects a
+  write (`validateShape`) is the same function `repair()` uses to decide what to
+  destroy (`invariants.ts:16` → `repair.ts:24`), so over-eager validation cannot
+  lose data the pre-fix code preserved — it can only convert "write, then
+  cascade-delete everywhere, durably" into "never write."
+
 - The behaviour change owners must know about (decision D5, accepted by ruling
   1): a shape rescued out of a dropped frame keeps its parent-relative `x`/`y`
   and will therefore appear at a different on-screen position. It is still
