@@ -79,17 +79,23 @@ const REGRESSION_BUDGET = 0.15
 /** ADVISORY threshold for the coefficient of variation. Above this, the reps
  * disagree enough that the run's numbers should be read with suspicion even
  * though the median gate passed — the earliest honest signal that a
- * measurement is degrading. Provisional: Task 9 records the CVs actually
- * observed at capture and tunes this from that evidence. Never a hard gate. */
-const SPREAD_ADVISORY_CV_PCT = 25
+ * measurement is degrading. Tuned from the 2026-07-19 capture: across the
+ * capture run and the immediate re-verify run (10 scenario-observations
+ * total, all five arms twice), the worst observed cv was 3.87% (v1@100,
+ * capture run) — every v2 scenario stayed under 3%. ~2x that worst-observed
+ * figure is ~8%, comfortably above the normal spread of a healthy idle-box
+ * run (mostly 0.7-3%) and still well below the degenerate territory the
+ * provisional 25% was guarding against. See
+ * docs/performance/2026-07-19-v2-load-baseline.md's provenance section for
+ * the full per-scenario cv table this was tuned from. */
+const SPREAD_ADVISORY_CV_PCT = 8
 
-/** ABSOLUTE budget for the small/warm scenario — the one hard gate that does
- * not depend on a recorded baseline. SET THIS FROM YOUR FIRST REAL CAPTURE
- * (plan Task 9, Step 3): round the observed p50 UP to the next 250ms. It is
- * multiplied by CI_MARGIN_MULTIPLIER at the gate, and both the raw and the
- * margined figure are printed, so retuning is a one-constant change with the
- * evidence beside it. */
-const SMALL_WARM_BUDGET_MS = 0 // TASK 9 STEP 3 SETS THIS — 0 fails loudly until then
+/** ABSOLUTE budget for the small/warm scenario. Set from the 2026-07-19
+ * capture: observed p50 = 506.8ms on zeus-arch, rounded up to the next 250ms.
+ * Multiplied by CI_MARGIN_MULTIPLIER at the gate; both the raw and margined
+ * figures are printed, so retuning is a one-constant change with its evidence
+ * beside it. */
+const SMALL_WARM_BUDGET_MS = 750
 
 function engineVersion(): string {
 	const editorPkg = JSON.parse(readFileSync(path.join(import.meta.dirname, '../../canvas-editor/package.json'), 'utf8'))
