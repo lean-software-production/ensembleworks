@@ -14,9 +14,14 @@ import type { CanvasDoc, ImportResult, InvalidWrite, InvalidWriteHandler } from 
 // the next read — handing repair() a dropShape for a shape the boundary had
 // just approved, taking its whole subtree with it.
 //
-// `undefined` is the ONLY divergence that matters to validation (probe-
-// verified: NaN, Infinity, Date, Map and bigint are each already rejected
-// pre-serialization; explicit null round-trips faithfully). Loro ALSO
+// `undefined` is the ONLY divergence that matters to validation — probe-
+// verified by scanning value types across typed, loose and meta positions for
+// "raw passes, read-back fails". Note the qualifier: NaN, Infinity, Date and
+// Map are rejected pre-serialization only in TYPED fields. In loose
+// passthrough keys and in meta they are accepted — harmlessly, because those
+// positions accept null too, which is what Loro coerces NaN and Infinity to
+// there. bigint, functions and symbols throw at the Loro layer instead.
+// Explicit null round-trips faithfully. Loro ALSO
 // normalizes -0 to +0 in tree node data (independently probe-verified against
 // this same loro-crdt/base64 import — contradicts an earlier, wrong "-0
 // round-trips" note), but that is validation-irrelevant: z.number() accepts
