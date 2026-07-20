@@ -194,7 +194,7 @@ function DevicePicker({
 				aria-expanded={open}
 				title={available ? `Choose ${noun}` : `${noun} unavailable`}
 				style={{
-					width: 13,
+					width: 16,
 					height: 25,
 					display: 'grid',
 					placeItems: 'center',
@@ -202,13 +202,27 @@ function DevicePicker({
 					borderRadius: 2,
 					padding: 0,
 					background: open ? wm.bgWarm : 'transparent',
-					color: wm.inkMuted,
-					fontSize: 7,
+					color: open ? wm.ink : wm.inkMuted,
 					cursor: available ? 'pointer' : 'not-allowed',
 					opacity: available ? 1 : 0.4,
 				}}
 			>
-				▾
+				{/* Solid caret rather than the ▾ glyph: at this size the character
+				    rendered as a hairline that read as decoration, not a control.
+				    An SVG triangle keeps the familiar select-box affordance crisp
+				    at any DPI, and flips up while the list is open. */}
+				<svg
+					width="9"
+					height="6"
+					viewBox="0 0 9 6"
+					aria-hidden="true"
+					style={{
+						transform: open ? 'rotate(180deg)' : undefined,
+						transition: 'transform 120ms ease-out',
+					}}
+				>
+					<path d="M0.5 1h8L4.5 5.5z" fill="currentColor" />
+				</svg>
 			</button>
 			{open && anchor && (
 				<div
