@@ -2,7 +2,7 @@
 // __dirname, which bun build --compile can't embed — breaks the standalone binary
 // wherever node_modules isn't present. /base64 inlines the wasm as a JS string.
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt/base64'
-import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, SHAPE_KINDS, type Binding, type Page, type RepairOp, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
+import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, validateShape, SHAPE_KINDS, type Binding, type Page, type RepairOp, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
 import { dumpModel } from './bridge.js'
 import type { CanvasDoc, ImportResult, InvalidWrite, InvalidWriteHandler } from './canvas-doc.js'
 
@@ -163,6 +163,35 @@ export class LoroCanvasDoc implements CanvasDoc {
     return n ? this.readNode(n) : undefined
   }
   putShape(s: Shape): void {
+    // WRITE BOUNDARY. `validateShape` is the SAME predicate checkInvariants
+    // uses for the validProps rule, so anything accepted here is something
+    // repair() will not later act on — a locally-originated write can no
+    // longer manufacture the state repair() is obliged to destroy.
+    // Rejection is a total no-op (not a partial write, not a throw): a throw
+    // escapes Editor.applyAll's un-try/caught intent loop and strands that
+    // batch's earlier mutations uncommitted. Observability lives in
+    // rejectWrite.
+    const v = validateShape(s)
+    if (!v.ok) {
+      // Pass the whole rejected VALUE, not a locally-derived kind: rejectWrite
+      // coerces `kind` centrally so no call site can leak a non-ShapeKind into
+      // InvalidWrite. `id` is still read here because it has no equivalent
+      // closed vocabulary to validate against.
+      const id = typeof (s as { id?: unknown })?.id === 'string' ? (s as { id: string }).id : '<no id>'
+      this.rejectWrite('putShape', s, id, v.error)
+      return
+    }
+    this.putShapeUnchecked(s)
+  }
+  /**
+   * putShape WITHOUT the write-boundary validation above. Deliberately NOT on
+   * the CanvasDoc interface: it exists so tests and hostile-state rigs can
+   * construct exactly the docs a REMOTE peer's bytes can still deliver
+   * (import() applies remote ops straight to the tree and never passes
+   * through putShape, so local validation cannot close that door). Do not
+   * call it from production code.
+   */
+  putShapeUnchecked(s: Shape): void {
     // Placement FIRST, data second (same discipline as reparent): for an
     // existing node Loro's cycle guard throws if s.parentId names a real
     // descendant of it, and no data field may be modified in that case.

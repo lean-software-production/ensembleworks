@@ -56,6 +56,13 @@ export interface CanvasDoc {
    * not-yet-loaded shape (the node falls back to root; the parentId field is
    * retained for a later reparent pass), whereas reparent THROWS on an unknown
    * parent.
+   *
+   * REJECTS (total no-op, no throw) a shape that fails canvas-model's
+   * validateShape — the same predicate repair() judges by — reporting it via
+   * the implementation's invalid-write hook. A local writer can therefore no
+   * longer originate the state repair() is obliged to destroy. Remote ops
+   * arriving through import() bypass this entirely; repair() remains the
+   * defence there.
    */
   putShape(shape: Shape): void
   /** Silent no-op if no shape with this id exists. */
