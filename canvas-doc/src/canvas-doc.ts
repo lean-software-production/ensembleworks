@@ -71,9 +71,12 @@ export interface CanvasDoc {
    *
    * REJECTS (total no-op, no throw) a patch whose MERGED result would fail
    * canvas-model's validateShape, reporting it via the implementation's
-   * invalid-write hook. Validation runs on the merge, not the patch — so a
-   * patch that heals an already-invalid shape is accepted, and a patch that
-   * leaves it invalid is not.
+   * invalid-write hook. Validation runs on the merge, not the patch — so
+   * a patch that heals an already-invalid shape is accepted — but only if the
+   * shape's invalidity is in its PROPS. validateShape checks the whole
+   * envelope, so a shape whose envelope is invalid (e.g. opacity: 'opaque',
+   * reachable only via import()) can never be prop-updated again: every patch
+   * is refused. Defensible, since such a shape is dropShape-doomed anyway.
    */
   updateProps(id: string, props: Record<string, unknown>): void
   /**

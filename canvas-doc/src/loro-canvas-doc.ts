@@ -6,6 +6,39 @@ import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, validateS
 import { dumpModel } from './bridge.js'
 import type { CanvasDoc, ImportResult, InvalidWrite, InvalidWriteHandler } from './canvas-doc.js'
 
+// Loro stores `undefined` as `null` — verified by probe across props, nested
+// objects, array elements, meta and envelope fields alike. Validating the
+// pre-serialization object therefore judges a DIFFERENT value than the one
+// read back: z.number().optional() accepts `undefined` but rejects `null`, so
+// `{ w: undefined }` passed the write boundary and then failed validation on
+// the next read — handing repair() a dropShape for a shape the boundary had
+// just approved, taking its whole subtree with it.
+//
+// `undefined` is the ONLY divergence that matters to validation (probe-
+// verified: NaN, Infinity, Date, Map and bigint are each already rejected
+// pre-serialization; explicit null round-trips faithfully). Loro ALSO
+// normalizes -0 to +0 in tree node data (independently probe-verified against
+// this same loro-crdt/base64 import — contradicts an earlier, wrong "-0
+// round-trips" note), but that is validation-irrelevant: z.number() accepts
+// -0 and +0 identically, so it cannot reopen the write boundary and is
+// deliberately left out of asStored's scope. So this remains one rule, not a
+// model of Loro's full value marshaling. serialization-seam.test.ts pins the
+// undefined->null rule against a real write/read-back so it cannot drift
+// silently.
+//
+// Exported for the drift guard specifically (serialization-seam.test.ts's
+// asStored(probes) vs a real write/read-back) — not part of the public API.
+export function asStored<T>(value: T): T {
+  if (value === undefined) return null as unknown as T
+  if (Array.isArray(value)) return value.map(asStored) as unknown as T
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = asStored(v)
+    return out as unknown as T
+  }
+  return value
+}
+
 // Node.data layout: we store the whole model shape envelope as flat keys on the
 // Loro tree node's data map. The tldraw/model shape id lives under 'shapeId'
 // (the Loro TreeID is separate). Loro's movable tree owns parent/child/z-order.
@@ -186,7 +219,12 @@ export class LoroCanvasDoc implements CanvasDoc {
     // escapes Editor.applyAll's un-try/caught intent loop and strands that
     // batch's earlier mutations uncommitted. Observability lives in
     // rejectWrite.
-    const v = validateShape(s)
+    //
+    // Validation runs on asStored(s), NOT on `s`: repair() judges what Loro
+    // STORED, and Loro turns `undefined` into `null`. Validating the raw
+    // object would approve `{ w: undefined }` and then let repair() drop the
+    // shape — and its whole subtree — on the next pass.
+    const v = validateShape(asStored(s))
     if (!v.ok) {
       // Pass the whole rejected VALUE, not a locally-derived kind or id:
       // rejectWrite coerces both centrally so no call site can leak garbage
@@ -231,6 +269,7 @@ export class LoroCanvasDoc implements CanvasDoc {
     }
   }
   updateProps(id: string, props: Record<string, unknown>): void {
+    if (Object.keys(props).length === 0) return // empty patch: a no-op by definition, not a rejection
     const n = this.nodeByShapeId(id)
     if (!n) return // unknown id: the pre-existing silent-no-op contract, NOT a rejection
     const cur = (n.data.get(LoroCanvasDoc.PROP_KEY) as Record<string, unknown>) ?? {}
@@ -243,8 +282,12 @@ export class LoroCanvasDoc implements CanvasDoc {
     // (2) a patch that is individually harmless but leaves the shape still
     // invalid is rejected, so a two-field breakage cannot be healed one
     // field at a time here (use putShape with a whole valid shape).
+    //
+    // Validated via asStored, same reason as putShape: Loro turns `undefined`
+    // into `null`, and validation must judge what gets STORED, not the
+    // pre-serialization patch.
     const shape = this.readNode(n)
-    const v = validateShape({ ...shape, props: merged })
+    const v = validateShape(asStored({ ...shape, props: merged }))
     // Pass the EXISTING shape as the value — a props patch has no kind of its
     // own, and rejectWrite coerces `kind` off whatever it is given, so a node
     // whose stored kind is itself garbage still reports '<unknown>' rather

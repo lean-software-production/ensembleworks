@@ -279,6 +279,26 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
   // Unknown id keeps its pre-existing silent-no-op contract — NOT a rejection.
   doc.updateProps('shape:nope', { w: 1 })
   assert.equal(doc.invalidWriteCount, 1, 'an unknown id is a no-op, not an invalid write')
+
+  // An EMPTY patch is a no-op by definition — even against an already-invalid
+  // shape, where a non-empty patch could legitimately be rejected. `{}` writes
+  // nothing, so it must never increment the counter.
+  doc.updateProps('shape:g', {})
+  assert.equal(doc.invalidWriteCount, 1, 'an empty patch is a no-op, not a rejection, even on a still-invalid shape')
+}
+
+// --- Task 4N (step 6b): empty patch against a shape whose ENVELOPE is
+// invalid (not just props) — confirms the empty-patch short-circuit happens
+// before validation even runs, for any kind of pre-existing invalidity ---
+{
+  const doc = LoroCanvasDoc.create({ peerId: 18n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  // opacity: 'opaque' is an ENVELOPE violation, reachable only via the
+  // unchecked escape hatch (validateShape checks the whole envelope, not
+  // just props) — putShape would refuse this outright.
+  doc.putShapeUnchecked({ id: 'shape:bad', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'opaque' } as never)
+  doc.updateProps('shape:bad', {})
+  assert.equal(doc.invalidWriteCount, 0, 'an empty patch on an envelope-invalid shape is still a no-op, not a rejection')
 }
 
 console.log('ok: write-validation')
