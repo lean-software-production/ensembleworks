@@ -18,6 +18,13 @@ export interface ImportResult { pending: boolean; changed: boolean }
  * message. */
 export interface InvalidWrite {
   op: 'putShape' | 'updateProps'
+  /** The shape's `kind`. Carried as its own field because `id` is a nanoid —
+   * meaningless across sessions and not greppable — and because `error` only
+   * names the kind on the props-refinement path. An ENVELOPE failure (bad
+   * `index`, missing `x`) produces a zod message that never mentions it, which
+   * is exactly when you most want to know which tool was emitting what.
+   * `'<unknown>'` when the rejected value is too malformed to have one. */
+  kind: string
   id: string
   error: string
 }

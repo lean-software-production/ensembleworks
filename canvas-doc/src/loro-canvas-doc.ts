@@ -101,20 +101,32 @@ export class LoroCanvasDoc implements CanvasDoc {
   }
 
   // Monotonic count of locally-originated writes this doc refused (see
-  // InvalidWrite). Never reset. The assertable counterpart to the console
-  // warning below — modelled on SyncServerPeer's malformedFrames, which
-  // plays the same role for undecodable inbound frames.
-  private invalidWriteCount = 0
-  get invalidWrites(): number { return this.invalidWriteCount }
+  // InvalidWrite). Never reset, and NEVER capped — unlike the console
+  // fallback below, which is. Named `invalidWriteCount`, not `invalidWrites`:
+  // a number-valued member one letter from the InvalidWrite TYPE in the same
+  // module is a reliable misreading (house precedent: repairCount,
+  // clientCount).
+  private writeRejections = 0
+  get invalidWriteCount(): number { return this.writeRejections }
 
   // Count, then report. A rejection is a NO-OP at the call site, so this is
-  // the only trace it leaves: silence at the boundary is only acceptable
-  // because both the counter and the hook are unconditional.
-  private rejectWrite(op: InvalidWrite['op'], id: string, error: string): void {
-    this.invalidWriteCount++
-    const write: InvalidWrite = { op, id, error }
+  // the only trace it leaves.
+  //
+  // The console fallback is BOUNDED to the first 5. v2 commits at
+  // per-pointermove granularity, so a tool emitting an invalid write during a
+  // drag would otherwise produce ~60 warnings per second for as long as the
+  // drag lasts — enough to hang DevTools, and it buries the FIRST warning,
+  // which is the diagnostically useful one. The counter above stays exact, so
+  // capping the log loses no information that anything actually reads.
+  //
+  // This is the only non-test console call in canvas-doc, canvas-model,
+  // canvas-sync and canvas-editor combined. Bounded it is defensible;
+  // unbounded it would not be. Do not lift the cap.
+  private rejectWrite(op: InvalidWrite['op'], kind: string, id: string, error: string): void {
+    this.writeRejections++
+    const write: InvalidWrite = { op, kind, id, error }
     if (this.onInvalidWrite) this.onInvalidWrite(write)
-    else console.warn(`[canvas-doc] rejected invalid ${op} for ${id}: ${error}`)
+    else if (this.writeRejections <= 5) console.warn(`[canvas-doc] rejected invalid ${op} ${kind} ${id}: ${error}`)
   }
 
   private static PROP_KEY = '__props'

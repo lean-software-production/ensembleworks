@@ -10,15 +10,25 @@ import type { InvalidWrite } from './canvas-doc.js'
 
 const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {} });
 
-// --- Task 1: the reporting surface exists and starts empty ---
+// --- Task 1/1A: the reporting surface exists, is named unambiguously, starts empty ---
 {
   const seen: InvalidWrite[] = []
   const doc = LoroCanvasDoc.create({ peerId: 1n, onInvalidWrite: (w) => seen.push(w) })
-  assert.equal(doc.invalidWrites, 0, 'a fresh doc has rejected nothing')
+  assert.equal(doc.invalidWriteCount, 0, 'a fresh doc has rejected nothing')
   doc.putPage({ id: 'page:p', name: 'P' })
   doc.putShape({ id: 'shape:ok', kind: 'note', parentId: 'page:p', props: {}, ...base() } as never)
-  assert.equal(doc.invalidWrites, 0, 'a valid write is not counted as a rejection')
+  assert.equal(doc.invalidWriteCount, 0, 'a valid write is not counted as a rejection')
   assert.deepEqual(seen, [], 'a valid write does not fire the hook')
+}
+
+// --- Task 1A finding 4: the OLD getter name is gone, not merely aliased ---
+{
+  const doc = LoroCanvasDoc.create({ peerId: 11n })
+  assert.equal(
+    (doc as unknown as Record<string, unknown>).invalidWrites,
+    undefined,
+    'the old `invalidWrites` name is removed — it collided with the InvalidWrite type',
+  )
 }
 
 console.log('ok: write-validation')
