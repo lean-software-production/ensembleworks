@@ -2858,13 +2858,15 @@ Create `canvas-sync/src/invalid-write-passthrough.test.ts`:
 // intercept exactly as easily as a real construction-time forward — a mutant
 // that has `SyncClientPeer.putShape` watch `doc.invalidWriteCount` and call
 // the sink itself, WITHOUT ever passing `onInvalidWrite` into
-// `LoroCanvasDoc.create`, passed this file unchanged. Assertions A and B
+// `LoroCanvasDoc.create`, passed this file unchanged. Assertions A, B and C
 // below close that: A writes through `peer.doc` directly, a path a
 // peer-level wrapper never sees; B proves the injected sink REPLACES the
 // doc's own console.warn fallback (canvas-doc.ts:41-43: "When none is
 // supplied the doc warns on the console instead") rather than merely
 // running alongside it — a peer-level relay leaves the doc's own handler
-// unset, so both fire.
+// unset, so both fire; C proves the sink-absent arm of that same contract,
+// which a `?? (() => {})` default would silently break for every
+// sink-less call site.
 import assert from 'node:assert/strict'
 import type { InvalidWrite } from '@ensembleworks/canvas-doc'
 import { SyncClientPeer } from './client-peer.js'
@@ -2933,6 +2935,7 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
   assert.equal(warned.length, 0, 'B: the doc used the injected sink INSTEAD of its console.warn fallback')
 }
 
+// --- C: omitting the sink leaves the console.warn fallback intact --------
 // Omitting the sink stays legal, and this is the assertion that keeps it so:
 // every existing `new SyncClientPeer` call site in the repo passes only
 // peerId/transport/presence, and none of them should have to change. Mirrors
@@ -2952,7 +2955,7 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
   try {
     const [, clientEnd] = makePair()
     const peer = new SyncClientPeer({ peerId: 2n, transport: clientEnd })
-    assert.equal(peer.doc.invalidWriteCount, 0)
+    assert.equal(peer.doc.invalidWriteCount, 0, 'no invalid writes have happened yet')
     peer.doc.putPage({ id: 'page:p', name: 'P' })
     peer.putShape({ id: 'shape:bad4', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
     assert.equal(peer.doc.invalidWriteCount, 1, 'the rejection was still counted')
@@ -4044,7 +4047,7 @@ distinct sets of files, and the text must be honest about both:
 The PR must include, verbatim:
 
 ```
-ux-contract: none — <two reasons, both stated deliberately>
+ux-contract: none — <three reasons: 1-2 this branch's own, 3 inherited from PR 48>
 
 1. This branch's core change is confined to canvas-model (repair/invariants),
    canvas-doc (the CRDT write boundary) and canvas-sync (forwarding the
