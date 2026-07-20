@@ -31,6 +31,17 @@ export const LABEL_MIN_WIDTH = 64
  * tiles. */
 export const CHIP_SIZE = 40
 
+/**
+ * Apply the user's tile-size multiplier to a derived tile width, re-clamping
+ * so a scaled-down tile still clears the legibility floor and a scaled-up one
+ * still tops out at the sane maximum. Kept beside the derivation so both ends
+ * of the sizing story (fit, then taste) share one clamp.
+ */
+export function scaleTileWidth(tileWidth: number, scale: number): number {
+	if (!Number.isFinite(scale)) return tileWidth
+	return Math.min(TILE_WIDTH_MAX, Math.max(TILE_WIDTH_MIN, Math.round(tileWidth * scale)))
+}
+
 /** Square-ish grid: columns = ceil(√N), min 1. */
 export function mosaicColumns(count: number): number {
 	if (!Number.isFinite(count) || count < 1) return 1

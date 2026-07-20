@@ -42,6 +42,8 @@ const {
 	panelDragAction,
 	getPanelLayout,
 	setPanelWidth,
+	setTileScale,
+	clampTileScale,
 	setPanelCollapsed,
 	togglePanelCollapsed,
 	subscribePanelLayout,
@@ -49,12 +51,31 @@ const {
 
 // --- defaults ---
 
-assert.deepEqual(parsePanelLayout(null), { width: 280, collapsed: false })
+assert.deepEqual(parsePanelLayout(null), { width: 280, collapsed: false, tileScale: 1 })
 assert.deepEqual(
 	getPanelLayout(),
-	{ width: 280, collapsed: false },
+	{ width: 280, collapsed: false, tileScale: 1 },
 	'module starts from defaults against the shimmed empty store'
 )
+
+// --- clampTileScale + the stored multiplier ---
+assert.equal(clampTileScale(1), 1)
+assert.equal(clampTileScale(0.1), 0.5, 'below the floor clamps up')
+assert.equal(clampTileScale(9), 3, 'above the ceiling clamps down')
+assert.equal(clampTileScale(NaN), 1, 'non-finite falls back to the default')
+// A stored scale round-trips; a malformed one falls back rather than throwing.
+assert.equal(parsePanelLayout('{"width":280,"collapsed":false,"tileScale":1.5}').tileScale, 1.5)
+assert.equal(parsePanelLayout('{"width":280,"collapsed":false,"tileScale":"big"}').tileScale, 1)
+assert.equal(
+	parsePanelLayout('{"width":280,"collapsed":false}').tileScale,
+	1,
+	'layouts stored before tileScale existed still parse'
+)
+setTileScale(2)
+assert.equal(getPanelLayout().tileScale, 2)
+setTileScale(99)
+assert.equal(getPanelLayout().tileScale, 3, 'setter clamps')
+setTileScale(1)
 
 // --- clampPanelWidth: pure clamp math, no window/localStorage access ---
 
@@ -83,22 +104,22 @@ assert.equal(panelDragAction(400), 'resize', 'ordinary widths resize')
 
 assert.deepEqual(
 	parsePanelLayout('{not json'),
-	{ width: 280, collapsed: false },
+	{ width: 280, collapsed: false, tileScale: 1 },
 	'malformed JSON falls back to defaults'
 )
 assert.deepEqual(
 	parsePanelLayout(JSON.stringify({ width: 'wide', collapsed: 'yes' })),
-	{ width: 280, collapsed: false },
+	{ width: 280, collapsed: false, tileScale: 1 },
 	'wrong-typed fields fall back to their defaults'
 )
 assert.deepEqual(
-	parsePanelLayout(JSON.stringify({ width: 2000, collapsed: true })),
-	{ width: 1600, collapsed: true },
+	parsePanelLayout(JSON.stringify({ width: 2000, collapsed: true, tileScale: 1 })),
+	{ width: 1600, collapsed: true, tileScale: 1 },
 	'a valid shape round-trips, with width clamped to the hard cap'
 )
 assert.deepEqual(
 	parsePanelLayout(JSON.stringify({ somethingElse: true })),
-	{ width: 280, collapsed: false },
+	{ width: 280, collapsed: false, tileScale: 1 },
 	'an unrelated JSON shape falls back to defaults rather than crashing'
 )
 
@@ -118,7 +139,7 @@ assert.deepEqual(
 	// so this assertion exercises the real round-trip, not just a string match.
 	const raw = localStorage.getItem(STORAGE_KEY)
 	assert.ok(raw, 'setPanelWidth should persist to localStorage')
-	assert.deepEqual(parsePanelLayout(raw), { width: 400, collapsed: false })
+	assert.deepEqual(parsePanelLayout(raw), { width: 400, collapsed: false, tileScale: 1 })
 
 	setPanelWidth(2000, 500)
 	assert.equal(calls, 2, 'a second update should notify again, exactly once')

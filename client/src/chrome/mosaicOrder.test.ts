@@ -1,16 +1,11 @@
 /**
- * Mosaic ordering: viewport-distance sort (missing cursors last, stable),
- * spoke-recency tracking + sort, and the viewport settle debounce.
+ * Mosaic ordering: viewport-distance sort (missing cursors last, stable) and
+ * spoke-recency tracking + sort. Ordering is applied manually (the mosaic's
+ * Reorder button), so there is no debounce to test.
  * Run: bun client/src/chrome/mosaicOrder.test.ts
  */
 import assert from 'node:assert/strict'
-import {
-	VIEWPORT_SETTLE_MS,
-	createSettler,
-	orderByRecency,
-	orderByViewportDistance,
-	updateSpokeRecency,
-} from './mosaicOrder'
+import { orderByRecency, orderByViewportDistance, updateSpokeRecency } from './mosaicOrder'
 
 // --- orderByViewportDistance ---
 {
@@ -56,35 +51,6 @@ import {
 	assert.deepEqual(orderByRecency(['a', 'b', 'c'], recency), ['c', 'a', 'b'])
 	// Nobody spoke: input (join) order.
 	assert.deepEqual(orderByRecency(['a', 'b'], {}), ['a', 'b'])
-}
-
-// --- createSettler: debounce with injectable scheduler ---
-{
-	assert.equal(VIEWPORT_SETTLE_MS, 1000)
-	let pending: { fn: () => void; ms: number } | null = null
-	let cancelled = 0
-	const schedule = (fn: () => void, ms: number) => {
-		pending = { fn, ms }
-		return 7 as unknown as ReturnType<typeof setTimeout>
-	}
-	const cancel = () => {
-		cancelled++
-		pending = null
-	}
-	const settled: number[] = []
-	const settler = createSettler<number>(1000, (v) => settled.push(v), schedule, cancel)
-
-	settler.feed(1)
-	assert.equal(pending!.ms, 1000)
-	settler.feed(2) // re-feed before fire: cancels + reschedules, latest wins
-	assert.equal(cancelled, 1)
-	pending!.fn() // timer fires
-	assert.deepEqual(settled, [2])
-
-	settler.feed(3)
-	settler.dispose() // dispose cancels the pending timer
-	assert.equal(cancelled, 2)
-	assert.deepEqual(settled, [2]) // nothing more fires
 }
 
 console.log('mosaicOrder tests passed')

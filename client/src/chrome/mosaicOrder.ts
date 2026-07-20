@@ -6,9 +6,9 @@
  *   stable by input (join) order.
  * - Other pages: proximity is meaningless cross-page, so chips sort by
  *   most-recently-spoke, then join order.
- * - Re-sorts happen only after the viewport has been still for
- *   VIEWPORT_SETTLE_MS (settle-after-pause) — createSettler is the debounce,
- *   with an injectable scheduler so bare-bun tests need no fake timers.
+ * - Re-sorts are MANUAL: PanelPages recomputes the current page's order only
+ *   at mount and when the user presses the mosaic's Reorder button, so faces
+ *   never rearrange themselves under a working cursor.
  *
  * MUST NOT import 'tldraw' — bare-bun test scripts import this module.
  */
@@ -17,9 +17,6 @@ export interface MosaicPoint {
 	x: number
 	y: number
 }
-
-/** How long the viewport must hold still before a proximity re-sort. */
-export const VIEWPORT_SETTLE_MS = 1000
 
 /**
  * Sort ids by their cursor's distance from `centre`, closest first. Ids with
@@ -72,39 +69,4 @@ export function orderByRecency(
 ): string[] {
 	const at = (id: string): number => recency[id] ?? -Infinity
 	return [...ids].sort((a, b) => at(b) - at(a))
-}
-
-export interface Settler<T> {
-	/** Feed the latest value; (re)starts the settle countdown. */
-	feed(value: T): void
-	/** Cancel any pending settle. */
-	dispose(): void
-}
-
-/**
- * Debounce: `onSettle(latest)` fires once the feed has been quiet for
- * `delayMs`. Scheduler injectable for tests; defaults to real timers.
- */
-export function createSettler<T>(
-	delayMs: number,
-	onSettle: (value: T) => void,
-	schedule: (fn: () => void, ms: number) => ReturnType<typeof setTimeout> = setTimeout,
-	cancel: (t: ReturnType<typeof setTimeout>) => void = clearTimeout
-): Settler<T> {
-	let timer: ReturnType<typeof setTimeout> | null = null
-	let latest!: T
-	return {
-		feed(value: T) {
-			latest = value
-			if (timer !== null) cancel(timer)
-			timer = schedule(() => {
-				timer = null
-				onSettle(latest)
-			}, delayMs)
-		},
-		dispose() {
-			if (timer !== null) cancel(timer)
-			timer = null
-		},
-	}
 }

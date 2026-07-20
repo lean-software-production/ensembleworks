@@ -12,25 +12,17 @@
  */
 import { rawUserId } from '@ensembleworks/contracts'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
-import {
-	getIndexBetween,
-	react,
-	type Editor,
-	type IndexKey,
-	type TLPageId,
-	useValue,
-} from 'tldraw'
+import { getIndexBetween, type Editor, type IndexKey, type TLPageId, useValue } from 'tldraw'
 import { useAvSnapshot } from '../av/bridge'
 import { wm } from '../theme'
 import { exitFocus } from './focus'
 import { peekCloseSoon, peekOpen, togglePinned, useFramesDrawer } from './framesDrawerLayout'
-import { MOSAIC_GAP, mosaicTileWidth } from './mosaicLayout'
+import { MOSAIC_GAP, mosaicTileWidth, scaleTileWidth } from './mosaicLayout'
+import { MAX_TILE_SCALE, MIN_TILE_SCALE, setTileScale, usePanelLayout } from './panelLayout'
 import {
-	createSettler,
 	orderByRecency,
 	orderByViewportDistance,
 	updateSpokeRecency,
-	VIEWPORT_SETTLE_MS,
 	type MosaicPoint,
 } from './mosaicOrder'
 import { MosaicChip, PanelTile, type PanelTileParticipant } from './PanelTile'
@@ -69,6 +61,7 @@ function useSpokeRecency(snap: ReturnType<typeof useAvSnapshot>): Record<string,
 export function PanelPages({ editor, width }: { editor: Editor; width: number }) {
 	const snap = useAvSnapshot()
 	const recency = useSpokeRecency(snap)
+	const { tileScale } = usePanelLayout()
 
 	const { currentPageId, sections, unknownParticipants } = useValue(
 		'panel-page-sections',
@@ -156,6 +149,7 @@ export function PanelPages({ editor, width }: { editor: Editor; width: number })
 					}
 					snap={snap}
 					width={width}
+					tileScale={tileScale}
 					recency={recency}
 				/>
 			))}
@@ -189,10 +183,10 @@ function orderParticipants(
 const REDUCED_MOTION =
 	typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
-// One settled proximity ordering, read entirely OUTSIDE React's reactive
-// tracking: distance of everyone's cursor from the local viewport centre,
-// closest first (mosaicOrder.ts). Called at mount and on viewport settle only
-// — never per cursor move, so nothing here may be a tracked signal read.
+// One proximity ordering, read entirely OUTSIDE React's reactive tracking:
+// distance of everyone's cursor from the local viewport centre, closest first
+// (mosaicOrder.ts). Called at mount and when the user presses Reorder — never
+// per cursor move, so nothing here may be a tracked signal read.
 function computeOrder(editor: Editor): string[] {
 	const centreVec = editor.getViewportPageBounds().center
 	const centre: MosaicPoint = { x: centreVec.x, y: centreVec.y }
@@ -216,37 +210,30 @@ function CurrentPageMosaic({
 	participants,
 	snap,
 	width,
+	tileScale,
 }: {
 	editor: Editor
 	participants: PanelTileParticipant[]
 	snap: ReturnType<typeof useAvSnapshot>
 	width: number
+	tileScale: number
 }) {
-	// Ordering design (spec "settle-after-pause"): cursor moves alone NEVER
-	// re-sort — live reshuffling mid-gesture is the very confusion the mosaic
-	// exists to avoid, and it would restart FLIP animations mid-flight. The
-	// tldraw react() below tracks ONLY the camera signal (getCamera() is read
-	// so the subscription attaches to it); on each camera change it feeds the
-	// settler, and only after VIEWPORT_SETTLE_MS of stillness does computeOrder
-	// re-read cursors — plain, non-reactive reads. Order therefore refreshes on
-	// mount, on viewport settle, and on roster changes (the memo below).
-	const [orderedIds, setOrderedIds] = useState<string[]>([])
-	useEffect(() => {
-		const settler = createSettler<null>(VIEWPORT_SETTLE_MS, () =>
-			setOrderedIds(computeOrder(editor))
-		)
-		const stop = react('mosaic-order-settle', () => {
-			editor.getCamera() // read so the signal is tracked — value unused
-			settler.feed(null)
-		})
-		setOrderedIds(computeOrder(editor))
-		return () => {
-			stop()
-			settler.dispose()
-		}
-	}, [editor])
+	// Ordering is MANUAL (the controls row below): faces only ever move when
+	// the user asks them to. Panning, zooming and cursor movement never
+	// re-sort — a grid that rearranges itself while you work is the confusion
+	// the mosaic exists to avoid, and it would restart FLIP mid-flight. Order
+	// is computed once at mount, on demand from the Reorder button, and
+	// reconciled (not re-sorted) as people join and leave.
+	const [orderedIds, setOrderedIds] = useState<string[]>(() => computeOrder(editor))
+	const reorder = () => setOrderedIds(computeOrder(editor))
 
-	const tileWidth = mosaicTileWidth(width - PANEL_CONTENT_INSET, participants.length)
+	// Tile size: the width-derived "everyone fits" size times the user's
+	// persisted multiplier, re-clamped so the scaled result still respects the
+	// legibility floor and the sane maximum.
+	const tileWidth = scaleTileWidth(
+		mosaicTileWidth(width - PANEL_CONTENT_INSET, participants.length),
+		tileScale
+	)
 
 	// Join/leave bypasses the settle debounce (spec): joiners append at the end
 	// immediately, leavers drop immediately via the filter — no extra ordering
@@ -296,16 +283,100 @@ function CurrentPageMosaic({
 	})
 
 	return (
+		<>
+			<div
+				ref={gridRef}
+				data-testid="ew-mosaic-grid"
+				style={{ display: 'flex', flexWrap: 'wrap', gap: MOSAIC_GAP, marginTop: 6 }}
+			>
+				{ordered.map((participant) => (
+					<div key={participant.rawId} data-mosaic-id={participant.rawId} style={{ display: 'flex' }}>
+						<PanelTile editor={editor} participant={participant} snap={snap} tileWidth={tileWidth} />
+					</div>
+				))}
+			</div>
+			<MosaicControls tileScale={tileScale} onReorder={reorder} />
+		</>
+	)
+}
+
+// The current page's manual controls, tucked under its tiles: reorder on
+// demand (nearest-my-viewport first) and a tile-size multiplier. Both are
+// deliberately explicit — the grid never rearranges or resizes itself behind
+// your back; the panel edge still sets the baseline size this scales.
+function MosaicControls({ tileScale, onReorder }: { tileScale: number; onReorder: () => void }) {
+	return (
 		<div
-			ref={gridRef}
-			data-testid="ew-mosaic-grid"
-			style={{ display: 'flex', flexWrap: 'wrap', gap: MOSAIC_GAP, marginTop: 6 }}
+			data-testid="ew-mosaic-controls"
+			style={{
+				display: 'flex',
+				alignItems: 'center',
+				gap: 8,
+				marginTop: 6,
+				padding: '5px 6px',
+				border: `1px solid ${wm.rule}`,
+				borderRadius: 4,
+				background: wm.bgWarm,
+			}}
 		>
-			{ordered.map((participant) => (
-				<div key={participant.rawId} data-mosaic-id={participant.rawId} style={{ display: 'flex' }}>
-					<PanelTile editor={editor} participant={participant} snap={snap} tileWidth={tileWidth} />
-				</div>
-			))}
+			<button
+				type="button"
+				data-testid="ew-mosaic-reorder"
+				onClick={onReorder}
+				title="Order faces by how close they are to the centre of your view"
+				style={{
+					flex: '0 0 auto',
+					display: 'flex',
+					alignItems: 'center',
+					gap: 4,
+					border: `1px solid ${wm.ruleStrong}`,
+					borderRadius: 2,
+					background: 'transparent',
+					color: wm.inkMuted,
+					padding: '3px 6px',
+					fontFamily: wm.mono,
+					fontSize: 9,
+					textTransform: 'uppercase',
+					letterSpacing: 0.9,
+					cursor: 'pointer',
+				}}
+			>
+				<svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+					<path
+						d="M4 8h11M4 8l3-3M4 8l3 3M20 16H9m11 0-3-3m3 3-3 3"
+						stroke="currentColor"
+						strokeWidth="2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+					/>
+				</svg>
+				reorder
+			</button>
+			<input
+				type="range"
+				min={MIN_TILE_SCALE}
+				max={MAX_TILE_SCALE}
+				step={0.1}
+				value={tileScale}
+				data-testid="ew-mosaic-scale"
+				aria-label="Tile size"
+				title={`Tile size ${tileScale.toFixed(1)}×`}
+				onChange={(e) => setTileScale(Number(e.target.value))}
+				onDoubleClick={() => setTileScale(1)}
+				style={{ flex: 1, minWidth: 0, accentColor: wm.sealBlue, cursor: 'pointer' }}
+			/>
+			<span
+				style={{
+					flex: '0 0 auto',
+					width: 26,
+					textAlign: 'right',
+					fontFamily: wm.mono,
+					fontSize: 9,
+					color: wm.inkMuted,
+				}}
+			>
+				{tileScale.toFixed(1)}×
+			</span>
 		</div>
 	)
 }
@@ -363,6 +434,7 @@ function PageSectionView({
 	onMoveDown,
 	snap,
 	width,
+	tileScale,
 	recency,
 }: {
 	editor: Editor
@@ -373,6 +445,7 @@ function PageSectionView({
 	onMoveDown?: () => void
 	snap: ReturnType<typeof useAvSnapshot>
 	width: number
+	tileScale: number
 	recency: Record<string, number>
 }) {
 	return (
@@ -395,6 +468,7 @@ function PageSectionView({
 						participants={section.participants}
 						snap={snap}
 						width={width}
+						tileScale={tileScale}
 					/>
 				) : (
 					// Other rooms: fixed-size ambient chips, most-recently-spoke first

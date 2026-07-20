@@ -11,6 +11,7 @@ import {
 	TILE_WIDTH_MAX,
 	mosaicColumns,
 	mosaicTileWidth,
+	scaleTileWidth,
 } from './mosaicLayout'
 
 // --- mosaicColumns: ceil(sqrt(N)), square-ish grid ---
@@ -39,6 +40,14 @@ assert.equal(mosaicTileWidth(156, 25), TILE_WIDTH_MIN)
 assert.equal(mosaicTileWidth(1200, 1), TILE_WIDTH_MAX)
 // Zero participants: still a finite, floored value (callers skip render at 0).
 assert.equal(mosaicTileWidth(256, 0), TILE_WIDTH_MAX)
+
+// --- scaleTileWidth: the user's multiplier, re-clamped ---
+assert.equal(scaleTileWidth(100, 1), 100, 'x1 is a no-op')
+assert.equal(scaleTileWidth(100, 1.5), 150)
+assert.equal(scaleTileWidth(100, 0.5), 50)
+assert.equal(scaleTileWidth(59, 0.5), TILE_WIDTH_MIN, 'scaled-down still clears the floor')
+assert.equal(scaleTileWidth(200, 3), TILE_WIDTH_MAX, 'scaled-up still respects the cap')
+assert.equal(scaleTileWidth(100, NaN), 100, 'non-finite scale leaves the width alone')
 
 // --- constants sanity (spec values) ---
 assert.equal(TILE_WIDTH_MIN, 36)

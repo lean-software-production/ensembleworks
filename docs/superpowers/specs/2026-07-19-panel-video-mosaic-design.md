@@ -47,7 +47,12 @@ For every **other** page's group:
   enlarges *your room's* faces only. (Amended 2026-07-19: originally 22px
   initials-only; live video at 40px preferred after using it.)
 
-Persistence: nothing new. Panel width already persists via `panelLayout.ts`
+The mosaic's controls row (under the current page's tiles) also carries a
+**tile-size multiplier** (0.5×–3×, amended 2026-07-20) applied on top of the
+width-derived size and re-clamped to the same floor/cap. Panel width remains
+the baseline control; the multiplier is taste on top.
+
+Persistence: the multiplier persists alongside panel width in `panelLayout.ts`
 localStorage state. Collapsed-rail behaviour is unchanged.
 
 ## Ordering rules
@@ -58,9 +63,10 @@ Within your page's group:
   centre**, closest first, reading top-left → bottom-right. (Cursor positions
   and camera state are already available via `editor.getCollaborators()` and
   the editor camera.)
-- **Settle-after-pause re-sort:** the order recomputes only after your
-  viewport has been still for ~1s, and tiles animate to their new positions
-  (FLIP-style) so moves are trackable. No re-sorting while panning/zooming.
+- **Manual re-sort** (amended 2026-07-20, was settle-after-pause): the order
+  recomputes at mount and when the user presses the **Reorder** button in the
+  mosaic's controls row; tiles animate to their new positions (FLIP-style) so
+  moves are trackable. Panning, zooming and cursor movement never re-sort.
 - Your own tile participates in the order (it will naturally be first when
   your cursor is near your viewport centre); it keeps its existing "you"
   affordances.
