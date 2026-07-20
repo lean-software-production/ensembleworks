@@ -74,6 +74,13 @@ Every task below writes the failing test **first**, **runs it**, and records the
   report.** Do not force redness by weakening the test. Do not skip ahead to the
   implementation. Every "unreachable RED" in this repo's history turned out to
   be a wrong belief worth catching.
+- **Every RED in this plan lands on a runtime assertion, never on a missing
+  export.** These tests import types with `import type`, which bun **erases**
+  before execution — so referencing a type that does not exist yet cannot fail
+  at runtime. A wrong type-only import surfaces at `bun run typecheck` instead.
+  If a task's predicted failure text does not match what you see but the test
+  *is* failing on the assertion the task names, that is a correct RED: proceed.
+  Only a **passing** test is grounds to stop.
 
 ### House test style
 
@@ -81,6 +88,41 @@ Tests are **plain self-executing scripts** using `node:assert/strict`, with a
 `// Run: bun src/<name>.test.ts` header comment. They are NOT `bun:test`. They
 print an `ok: …` line at the end. Copy the shape of an existing neighbour (e.g.
 `canvas-doc/src/repair.test.ts`) rather than inventing a new one.
+
+Sections of a test are separated by bare `{ … }` blocks, so each section gets
+its own scope and can reuse names like `doc` and `seen`.
+
+#### A `tsc` parse trap this style walks straight into
+
+**Rule: any statement ending in a parenthesized object literal `({ … })` MUST
+carry a trailing semicolon** when a bare `{` block follows it.
+
+```ts
+const base = () => ({ x: 0 })   // ← no semicolon
+
+{                               // ← bare section block
+  …
+}
+```
+
+`tsc` rejects the above with a bogus `TS1003: Identifier expected` /
+`TS1005`. Mechanism (verified against a matrix of minimal repros): tsc's
+speculative "is this an arrow parameter list?" lookahead sees `( … )` followed
+by `{`, commits to parsing the parens as a **binding pattern**, then demands
+`=>` at the block. As a destructuring pattern, `x: 0` means "bind property `x`
+to target `0`" — and `0` is not a valid binding target, hence TS1003.
+
+Two things that make it worse than it looks:
+
+- It is **not arrow-specific.** A plain `const v = ({ a: 1 })` followed by a
+  bare block errors identically. It is also **not** about string values — an
+  all-numeric object triggers it too.
+- **bun's parser accepts it.** So the test goes RED and then GREEN exactly as
+  the plan predicts, and the error only surfaces at `bun run typecheck`,
+  detached from the change that caused it.
+
+An intervening comment line does **not** save you — comments are erased before
+this lookahead runs. Add the `;`.
 
 ---
 
@@ -350,7 +392,9 @@ import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from './loro-canvas-doc.js'
 import type { InvalidWrite } from './canvas-doc.js'
 
-const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {} })
+// The trailing semicolon is LOAD-BEARING — a bare `{` section block follows.
+// See "House test style" above for why tsc (but not bun) rejects it without.
+const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {} });
 
 // --- Task 1: the reporting surface exists and starts empty ---
 {
@@ -372,10 +416,19 @@ console.log('ok: write-validation')
 cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/write-validation.test.ts
 ```
 
-Expected: FAIL. A TypeScript/runtime error along the lines of
-`Export named 'InvalidWrite' not found in module .../canvas-doc.ts`, or
-`doc.invalidWrites` being `undefined` and the `assert.equal(..., 0)` failing.
-**Record the verbatim output.**
+Expected: FAIL with **`AssertionError: a fresh doc has rejected nothing`**
+(`undefined !== 0`) — `doc.invalidWrites` does not exist yet, so it reads as
+`undefined`.
+
+> Do **not** expect a missing-export error for `InvalidWrite`. The import is
+> `import type`, which bun **erases** before execution, so a type-only import of
+> a not-yet-existing type can never fail at runtime. Every RED in this plan
+> therefore lands on a runtime **assertion**, not a module-resolution error. A
+> type-only import that is genuinely wrong surfaces at `bun run typecheck`, not
+> here.
+
+**Record the verbatim output.** (Observed on the real Task 1 implementation:
+`AssertionError: a fresh doc has rejected nothing / undefined !== 0`.)
 
 **Step 3: Add the types**
 
@@ -494,6 +547,18 @@ git commit -m "feat(canvas-doc): invalid-write reporting surface (counter + inje
 
 **Step 1: Write the failing test**
 
+> **What Task 1's test did and did not prove.** Task 1's assertions are
+> deliberately weak — they check the *default* zero state. Spec review confirmed
+> their one real contribution is a **false-positive guard**: they fail
+> immediately if this task's validation turns out to be over-eager and rejects a
+> valid shape. (Review also confirmed the Task 1 fixture is genuinely
+> schema-valid — `validateShape` returns `ok` on it — so there is no landmine
+> tempting you to "fix" the test instead of the code.)
+>
+> But Task 1 leaves five real holes, and this test must close all five. Each is
+> flagged inline below so you can see why it exists rather than treating it as
+> assertion padding.
+
 Append to `canvas-doc/src/write-validation.test.ts`, **before** the final
 `console.log`:
 
@@ -503,24 +568,61 @@ Append to `canvas-doc/src/write-validation.test.ts`, **before** the final
   const seen: InvalidWrite[] = []
   const doc = LoroCanvasDoc.create({ peerId: 2n, onInvalidWrite: (w) => seen.push(w) })
   doc.putPage({ id: 'page:p', name: 'P' })
+  // A neighbour that must survive untouched — see the no-op assertion below.
+  doc.putShape({ id: 'shape:keep', kind: 'note', parentId: 'page:p', props: {}, ...base() } as never)
 
   // props.w must be a number for a frame (canvas-model shape.ts `box`).
   assert.doesNotThrow(() =>
-    doc.putShape({ id: 'shape:f', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never),
+    doc.putShape({ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never),
   )
-  assert.equal(doc.getShape('shape:f'), undefined, 'the invalid shape was not written at all')
-  assert.deepEqual(doc.listShapes(), [], 'no partial node was left behind')
-  assert.equal(doc.invalidWrites, 1, 'the rejection was counted')
-  assert.equal(seen.length, 1, 'the hook fired exactly once')
+
+  // HOLE 1 (the biggest): Task 1 never CALLS onInvalidWrite. A doc that stores
+  // the handler and never invokes it passes Task 1 completely. Prove it fires.
+  assert.equal(seen.length, 1, 'the hook actually fired — storing the handler is not enough')
   assert.equal(seen[0]!.op, 'putShape')
-  assert.equal(seen[0]!.id, 'shape:f')
+  assert.equal(seen[0]!.id, 'shape:bad')
+
+  // HOLE 5: the InvalidWrite doc comment promises the VERBATIM zod message.
   assert.match(seen[0]!.error, /expected number, received string/, 'the verbatim zod message is carried through')
+
+  // HOLE 3 (the actual defect): the write is a TRUE no-op. The counter is only
+  // a proxy for this — what matters is that nothing landed and nothing else
+  // moved.
+  assert.equal(doc.getShape('shape:bad'), undefined, 'the invalid shape was not written at all')
+  assert.deepEqual(doc.listShapes().map((s) => s.id), ['shape:keep'], 'no partial node, and the neighbour is untouched')
+
+  // HOLE 2: prove invalidWrites is a COUNTER, not a constant. Task 1 only ever
+  // observed it at 0, which a hardcoded `get invalidWrites() { return 0 }`
+  // would satisfy. Walk it 0 -> 1 -> 2.
+  assert.equal(doc.invalidWrites, 1, 'the first rejection was counted')
+  doc.putShape({ id: 'shape:bad2', kind: 'frame', parentId: 'page:p', props: { h: 'nope' }, ...base() } as never)
+  assert.equal(doc.invalidWrites, 2, 'the counter increments per rejection')
+  assert.equal(seen.length, 2, 'and the hook fires per rejection')
 
   // The escape hatch still writes, unvalidated — this is how tests and rigs
   // reproduce what a remote peer's bytes can deliver (decision D3).
-  doc.putShapeUnchecked({ id: 'shape:f', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
-  assert.ok(doc.getShape('shape:f'), 'putShapeUnchecked bypasses validation')
-  assert.equal(doc.invalidWrites, 1, 'the escape hatch does not touch the counter')
+  doc.putShapeUnchecked({ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
+  assert.ok(doc.getShape('shape:bad'), 'putShapeUnchecked bypasses validation')
+  assert.equal(doc.invalidWrites, 2, 'the escape hatch does not touch the counter')
+}
+
+// HOLE 4: with NO handler injected, the doc must fall back to console.warn.
+// The InvalidWriteHandler doc comment claims a rejection is "never silent" and
+// nothing has proven it. Capture console.warn rather than trusting the claim.
+{
+  const warned: unknown[][] = []
+  const realWarn = console.warn
+  console.warn = (...args: unknown[]) => { warned.push(args) }
+  try {
+    const doc = LoroCanvasDoc.create({ peerId: 4n }) // no onInvalidWrite
+    doc.putPage({ id: 'page:p', name: 'P' })
+    doc.putShape({ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
+    assert.equal(doc.invalidWrites, 1, 'still counted without a handler')
+  } finally {
+    console.warn = realWarn // restore even if an assertion throws
+  }
+  assert.equal(warned.length, 1, 'the console.warn fallback fired — a rejection is never silent')
+  assert.match(String(warned[0]![0]), /rejected invalid putShape for shape:bad/, 'the warning names the op and the id')
 }
 ```
 
@@ -530,9 +632,19 @@ Append to `canvas-doc/src/write-validation.test.ts`, **before** the final
 cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/write-validation.test.ts
 ```
 
-Expected: FAIL — the first new assertion fires,
-`the invalid shape was not written at all` (`getShape` returns the shape).
-**Record the verbatim output.**
+Expected: FAIL at the **first** new assertion —
+`AssertionError: the hook actually fired — storing the handler is not enough`
+(`0 !== 1`). With no validation in place `putShape` simply writes the bad shape,
+so the hook never fires. (`putShapeUnchecked` also does not exist yet, but
+execution never reaches it.) **Record the verbatim output.**
+
+> **Placement note.** All five holes are closed here in Task 2 rather than
+> split with Task 4. Holes 1, 2, 4 and 5 are properties of the shared
+> `rejectWrite` helper, so proving them once through `putShape` covers
+> `updateProps` too — re-asserting them in Task 4 would be duplication, not
+> coverage. Hole 3 (true no-op) is op-specific and *is* asserted again in Task 4
+> in its `updateProps` form, because "no partial merge landed" is a genuinely
+> different claim from "no node was created".
 
 **Step 3: Implement**
 
@@ -1373,7 +1485,27 @@ Expected: exit 0, no errors.
 cd /home/stag/src/projects/ensembleworks && UX_CONTRACT_PR_BODY='ux-contract: none — confined to canvas-model/canvas-doc' bun run test
 ```
 
-Expected: every suite passes. Pay particular attention to:
+> **Known inherited failure — `scripts/ux-contract-presence.test.ts`.** This
+> gate **already fails at commit `aa6a115`**, before any task in this plan was
+> implemented. The cause is inherited from PR 48, which is in this branch's
+> stack: its changes to `client/src/canvas-v2/` (`CanvasV2App.tsx`,
+> `boot-sync-ready.test.ts`, `bootstrap-page.ts`) touch an interaction-bearing
+> path, and the gate requires a `ux-contract: none — <reason>` marker in the PR
+> body to cover them.
+>
+> This is **not** caused by any task here — this plan's own files
+> (`canvas-doc/`, `canvas-model/`) are correctly *not* interaction-bearing
+> surfaces, and Task 1's three files were verified to pass the gate cleanly.
+>
+> Handle it deliberately: the marker in the PR body (see below) covers the
+> inherited PR-48 files. Do **not** "fix" it by editing
+> `scripts/ux-contract-presence.test.ts`, by reverting PR-48 files, or by
+> declaring a contract for `canvas-doc`. If the gate fails for any file
+> *outside* that inherited set, STOP and report — that would be a real
+> violation, not this known one.
+
+Expected: every suite passes **except** the known inherited
+`ux-contract-presence` failure described above. Pay particular attention to:
 
 - `canvas-sync/src/convergence.test.ts` — cross-peer repair determinism.
 - `canvas-sync/src/fuzz.test.ts` — its `malformedFrames` count is **pinned to
@@ -1415,14 +1547,27 @@ nothing was committed to `perf/v2-first-shape-harness`.
 
 ## PR body — required content
 
+**The `ux-contract` marker is REQUIRED for CI to pass** — and specifically to
+clear a failure this branch **inherits**, not one it causes.
+`scripts/ux-contract-presence.test.ts` already fails at `aa6a115` because PR 48
+(in this branch's stack) touches `client/src/canvas-v2/` —
+`CanvasV2App.tsx`, `boot-sync-ready.test.ts`, `bootstrap-page.ts`. The marker
+below covers **those inherited files**. This plan's own work is confined to
+`canvas-doc` and `canvas-model`, which are correctly not interaction-bearing
+surfaces and would need no marker on their own.
+
 The PR must include, verbatim:
 
 ```
-ux-contract: none — this change is confined to canvas-model (repair/invariants)
-and canvas-doc (the CRDT write boundary). It touches no tool FSM, no renderer,
-and no client input surface (canvas-editor/src/tools/, canvas-react/src/,
-client/src/canvas-v2/ are all untouched), so there is no gesture to seed and no
-interaction invariant to observe.
+ux-contract: none — this branch's own change is confined to canvas-model
+(repair/invariants) and canvas-doc (the CRDT write boundary). It touches no tool
+FSM, no renderer, and no client input surface, so there is no gesture to seed
+and no interaction invariant to observe.
+
+This marker additionally covers the client/src/canvas-v2/ files inherited from
+PR 48 in this stack (CanvasV2App.tsx, boot-sync-ready.test.ts,
+bootstrap-page.ts), which the presence gate flags on this branch's diff. Those
+changes belong to PR 48, not to this work.
 ```
 
 Plus:
