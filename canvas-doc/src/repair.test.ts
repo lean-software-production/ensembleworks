@@ -36,7 +36,10 @@ const doc2 = LoroCanvasDoc.create({ peerId: 2n })
 doc2.putPage({ id: 'page:p', name: 'P' })
 doc2.putShape({ id: 'shape:ok', kind: 'note', parentId: 'page:p', props: { color: 'yellow' }, ...base() } as any)
 // opacity AFTER the spread so it genuinely trips validProps (base() sets opacity: 1).
-doc2.putShape({ id: 'shape:bad', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' } as any)
+// putShapeUnchecked, not putShape: this seed is DELIBERATELY invalid — it
+// stands in for what a remote peer's bytes can still deliver, which is the
+// only way this state reaches a doc now that the write boundary validates.
+doc2.putShapeUnchecked({ id: 'shape:bad', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' } as any)
 doc2.putBinding({ id: 'binding:x', fromId: 'shape:bad', toId: 'shape:ok', props: {}, meta: {} })
 doc2.commit()
 assert.ok(
@@ -61,7 +64,7 @@ assert.deepEqual(checkInvariants(dumpModel(doc2)), [], 'ONE repair() call conver
 // drop cascade claims.
 const doc3 = LoroCanvasDoc.create({ peerId: 3n })
 doc3.putPage({ id: 'page:p', name: 'P' })
-doc3.putShape({ id: 'shape:s1', kind: 'note', parentId: 'shape:s2', props: {}, ...base(), opacity: 'no' } as any)
+doc3.putShapeUnchecked({ id: 'shape:s1', kind: 'note', parentId: 'shape:s2', props: {}, ...base(), opacity: 'no' } as any)
 doc3.putShape({ id: 'shape:s2', kind: 'note', parentId: 'shape:s1', props: {}, ...base() } as any)
 doc3.commit()
 const before3 = dumpModel(doc3)
@@ -89,7 +92,7 @@ doc4.putPage({ id: 'page:p', name: 'P' })
 doc4.putShape({ id: 'shape:ar4', kind: 'arrow', parentId: 'page:p', props: {}, ...base() } as any)
 doc4.putShape({ id: 'shape:grandchild4', kind: 'note', parentId: 'shape:child4', props: {}, ...base() } as any)
 doc4.putShape({ id: 'shape:child4', kind: 'note', parentId: 'shape:bad4', props: {}, ...base() } as any)
-doc4.putShape({ id: 'shape:bad4', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' } as any)
+doc4.putShapeUnchecked({ id: 'shape:bad4', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' } as any)
 doc4.reparent('shape:child4', 'shape:bad4')
 doc4.reparent('shape:grandchild4', 'shape:child4')
 doc4.putBinding({ id: 'binding:g4', fromId: 'shape:ar4', toId: 'shape:grandchild4', props: {}, meta: {} })
