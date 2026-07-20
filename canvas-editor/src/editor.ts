@@ -341,9 +341,13 @@ export class Editor {
   // SECOND SKIP MODE (added with the write boundary): `putShape` now also
   // silently REJECTS a shape that fails validateShape — a rejection this
   // try/catch never observes, because it does not throw. A shape can reach the
-  // undo stack already invalid: it arrived from a remote peer through
-  // import(), or was loaded by fromSnapshot from a room whose stored SQLite
-  // predates the write boundary. Replaying such a shape is now a no-op rather
+  // undo stack already invalid — it arrives through import(), the one path
+  // into this peer's doc that bypasses the write boundary. That covers both a
+  // live remote peer and a room whose stored SQLite predates the boundary:
+  // the server loads such a room via fromSnapshot and relays it here as an
+  // ordinary import, so there is ONE route in, not two. (This peer's own doc
+  // is never built by fromSnapshot — see client-peer.ts, where it is an
+  // unconditional LoroCanvasDoc.create.) Replaying such a shape is a no-op rather
   // than a restore. Deliberate — restoring it would only re-manufacture state
   // repair() is obliged to cascade-delete. User-visible effect: an undo step
   // that appears to do nothing for that shape.
