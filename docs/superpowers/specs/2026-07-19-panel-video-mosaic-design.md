@@ -19,8 +19,9 @@ Replace the per-page vertical tile stack with a **page-grouped video mosaic**:
 
 - Every page section in the side panel shows its participants as a grid of
   uniform square-ish tiles. No hero/speaker tile. Empty pages render as today.
-- **Tile size is derived, not chosen.** There is no slider or new control.
-  Dragging the existing panel edge is the one gesture that changes face size.
+- **Tile size is derived from panel width**, then adjusted by an explicit
+  multiplier (amended 2026-07-20): dragging the panel edge sets the baseline
+  "everyone fits" size, and the controls row's slider scales it to taste.
 - **Everyone on your current page is always visible** — no scrolling within a
   group, ever.
 
@@ -100,8 +101,9 @@ Other pages' groups:
   tile edge from panel width) lives beside the existing width-clamp logic.
 - `client/src/av/` — speaking state and per-peer subscription quality
   (existing bridge/snapshot machinery).
-- New pure module for ordering: viewport-distance comparator,
-  recently-spoke comparator, and the 1s settle debounce.
+- New pure module for ordering: viewport-distance comparator and
+  recently-spoke comparator (the settle debounce was removed when ordering
+  became manual, 2026-07-20).
 
 ## Error handling / edge cases
 
@@ -110,8 +112,9 @@ Other pages' groups:
 - Camera/cursor unavailable for a collaborator (e.g. never moved): sort
   those last within the group, stable by join order.
 - Panel at collapsed rail: unchanged (existing dot rail).
-- Participant joins/leaves mid-session: grid re-flows immediately (join/leave
-  is not subject to the 1s settle debounce; only viewport-driven re-sorts are).
+- Participant joins/leaves mid-session: grid re-flows immediately — joiners
+  append at the end and leavers drop out, reconciled against the last
+  computed order rather than triggering a re-sort.
 
 ## Testing
 
@@ -122,8 +125,7 @@ in `client/src`; auto-discovered by `scripts/run-tests.ts`):
   threshold.
 - Viewport-distance comparator incl. missing-cursor fallback.
 - Recently-spoke comparator.
-- Settle-debounce: no reorder while moving; single reorder ~1s after stop;
-  join/leave bypasses debounce.
+- Tile-size multiplier: clamping at both ends, malformed/absent stored values.
 
 Manual/e2e: 25-participant session smoke via existing e2e harness — verify no
 group scroll at default width and correct speaker rings.
@@ -132,4 +134,5 @@ group scroll at default width and correct speaker rings.
 
 - On-canvas / cursor-attached video (tried previously; confusing across pages).
 - Bottom filmstrip overlay (rejected in brainstorm).
-- Click-to-promote hero tiles, per-group size controls, spatial-audio changes.
+- Click-to-promote hero tiles, per-group size controls (the multiplier is
+  global to your current page), spatial-audio changes.
