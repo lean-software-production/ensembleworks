@@ -228,9 +228,26 @@ with D1a (console is the only client path today), a tool emitting an invalid
 indefinitely** — DevTools-hang grade, and it buries the first warning, which is
 the diagnostically valuable one.
 
-So the default sink is capped at the first 5 rejections. The **counter stays
-exact** regardless of the cap, which is precisely why the counter and the log
-are separate mechanisms rather than one.
+So the default sink logs on **powers of two only** — #1, #2, #4, #8, #16, … —
+with the rejection's ordinal stamped into the line as `[#n]`. The **counter
+stays exact** regardless, which is precisely why the counter and the log are
+separate mechanisms rather than one.
+
+> **Superseded (2026-07-20, Task 1A review finding 4).** This originally
+> prescribed a lifetime cap of 5. That was wrong in a way worth recording,
+> because the reasoning generalises: **a cap makes silence indistinguishable
+> from health.** A developer who sees five warnings, undoes, and keeps working
+> cannot tell whether that was five rejections or fifty thousand — the cap
+> suppresses the flood *and the evidence that it was a flood*. It is also
+> permanently silent afterwards, so a *different* bug an hour later never
+> surfaces at all.
+>
+> Powers of two fix both: a ten-second 60/sec drag yields ~9 lines instead of
+> 600, an hour of sustained garbage ~18, and the channel never closes. It
+> preserves the first-warning-is-the-useful-one property better than the cap
+> did, and needs no timer, no reset, and no extra state. The `[#n]` marker is
+> independently load-bearing: it tells the reader they are seeing a **sample,
+> not a census**. Keep it regardless of what mechanism ever replaces this one.
 
 Precedent note, to be stated honestly in review: this `console.warn` is the
 **only non-test `console.*` call across `canvas-doc`, `canvas-model`,
@@ -409,6 +426,26 @@ be applied by editing Task 1's text. Task 1A applies them as a RED-first delta;
 Task 1's own section carries a forward pointer so the two never read as
 contradictory.
 
+### Ruling 7 — Task 1A code-review findings (2026-07-20): **six accepted, one moot.**
+
+Task 1A's implementation returned ❌ CHANGES NEEDED from quality review. All
+applied in **Task 1B**:
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | The `'<unknown>'` promise is unenforced; `rejectWrite` takes any `string` | **blocking** — coerce centrally from the offending value |
+| 2 | Narrow `kind` to `ShapeKind \| '<unknown>'` | accepted, **only** paired with 1 |
+| 3 | `writeRejections` → `invalidWriteCounter` (`repairCounter`/`repairCount` pattern) | accepted |
+| 4 | Lifetime cap of 5 → powers-of-two logging with an `[#n]` ordinal | **blocking** |
+| 5 | Cut the naming-rationale comment and "Do not lift the cap" | accepted |
+| 6 | Extract a `WARN_CAP` constant | **moot** under 4 — do not add one |
+| 7 | Log line reads as three bare tokens → `${op} (${kind}) ${id}` | accepted |
+
+Also corrected here: an earlier claim that `clientCount` was a field-naming
+precedent. It is not — `canvas-sync/src/server-peer.ts:76` is a getter over
+`this.clients.size` with no backing counter. The sole precedent is
+`repairCounter` / `repairCount`.
+
 ### Ruling 6 — The optional third constructor parameter: **settled, leave it alone.**
 
 Review explicitly confirmed that `LoroCanvasDoc`'s optional third positional
@@ -433,14 +470,21 @@ STOP and report rather than quietly shipping half the fix.
 
 ## Task order
 
-Tasks 1, 1A, 2, 3, 4 and 4A are half (A), origination. Tasks 5–8 are half (B),
-proportionality. Task 9 is integration. **All of them are in scope** (rulings 4
-and 5).
+Tasks 1, 1A, 1B, 2, 3, 4 and 4A are half (A), origination. Tasks 5–8 are half
+(B), proportionality. Task 9 is integration. **All of them are in scope**
+(rulings 4, 5 and 7).
 
-Tasks **1A** and **4A** were added on 2026-07-20 from Task 1's code review
-(ruling 5). They are lettered rather than numbered so the Tasks 2–9 references
-throughout this document stay valid. Task 1 itself is **already landed** at
-`527c2a3`; start at Task 1A.
+Lettered tasks were added after the plan was first written, so the many
+"Tasks 2–9" references throughout this document stay valid:
+
+| Task | Added | Source | Status |
+|---|---|---|---|
+| 1 | original | — | ✅ landed `527c2a3` |
+| 1A | 2026-07-20 | Task 1 **quality** review (ruling 5) | ✅ landed `0a3ddd6`, 2 test sections deferred |
+| 1B | 2026-07-20 | Task 1A **quality** review (ruling 7) | ⬅ **start here** |
+| 4A | 2026-07-20 | Task 1 quality review, finding 1 (ruling 5) | pending |
+
+**Start at Task 1B.**
 
 The two halves are technically independent — (A) is strictly additive and
 independently landable — which is what makes the fallback possible. If half (B)
@@ -657,11 +701,19 @@ type named `InvalidWrite` lives in the same module. Task 1's own test writes
 `const seen: InvalidWrite[] = []` two lines above `doc.invalidWrites`, which is
 genuinely confusable. House style splits both ways — `malformedFrames` and
 `pendingImports` are plural-noun counters, but **neither has a co-existing
-singular type**, whereas `repairCount` / `clientCount` use the unambiguous form.
+singular type**, whereas `repairCount` uses the unambiguous form.
 The private field is already called `invalidWriteCount`, so promote that name to
 the getter and rename the backing field to `writeRejections`. Exactly one test
 line consumes the getter today — this is as cheap as it will ever be.
 `rejectWrite` and `InvalidWrite` are both fine and do **not** change.
+
+> **Correction (2026-07-20).** An earlier draft cited `clientCount` as a second
+> precedent here. That was wrong: `canvas-sync/src/server-peer.ts:76` is
+> `get clientCount(): number { return this.clients.size }` — a getter over a
+> collection, with **no backing counter at all**, so it says nothing about
+> field-naming. The only real precedent is `repairCount`, and it is a
+> *paired* one — see Task 1B finding 3, which is why `writeRejections` above is
+> itself superseded.
 
 **Finding 3 — add `kind`.** `id` is a nanoid: meaningless across sessions and
 not greppable. `error` embeds the shape kind **only** on the props-refinement
@@ -728,11 +780,12 @@ changes in that it uses the new getter name.)
   assert.doesNotMatch(seen[1]!.error, /note/, 'precondition: the envelope error genuinely does not name the kind')
 }
 
-// --- Task 1A finding 2: the default console.warn is BOUNDED, the counter is not ---
+// --- Task 1A finding 2 (as revised by Task 1B): the default console.warn logs
+// on POWERS OF TWO, and the counter is unaffected ---
 {
-  const warned: unknown[][] = []
+  const warned: string[] = []
   const realWarn = console.warn
-  console.warn = (...args: unknown[]) => { warned.push(args) }
+  console.warn = (...args: unknown[]) => { warned.push(String(args[0])) }
   try {
     const doc = LoroCanvasDoc.create({ peerId: 13n }) // no handler -> console path
     doc.putPage({ id: 'page:p', name: 'P' })
@@ -741,11 +794,19 @@ changes in that it uses the new getter name.)
     for (let i = 0; i < 20; i++) {
       doc.putShape({ id: `shape:bad${i}`, kind: 'frame', parentId: 'page:p', props: { w: 'x' }, ...base() } as never)
     }
-    assert.equal(doc.invalidWriteCount, 20, 'the counter stays EXACT regardless of the log cap')
+    assert.equal(doc.invalidWriteCount, 20, 'the counter stays EXACT regardless of how little is logged')
   } finally {
     console.warn = realWarn
   }
-  assert.equal(warned.length, 5, 'the console fallback is capped at the first 5 — a drag must not flood DevTools')
+  // Assert WHICH rejections logged, not merely how many. A lifetime cap of 5
+  // and powers-of-two BOTH yield 5 lines at n=20 (1,2,4,8,16), so a
+  // count-only assertion cannot tell them apart — it would pass against the
+  // capped implementation this replaces.
+  const ordinals = warned.map((line) => Number(/\[#(\d+)\]/.exec(line)?.[1]))
+  assert.deepEqual(ordinals, [1, 2, 4, 8, 16], 'logs on powers of two only — never 3, 5, 6, 7')
+  assert.ok(!ordinals.includes(3) && !ordinals.includes(7), 'explicitly: non-powers-of-two are silent')
+  // The ordinal marker tells the reader they are seeing a SAMPLE, not a census.
+  assert.match(warned[0]!, /\[#1\]/, 'each line carries its ordinal')
 }
 ```
 
@@ -793,6 +854,12 @@ export interface InvalidWrite {
 ```
 
 In `canvas-doc/src/loro-canvas-doc.ts`, replace the counter block:
+
+> **⚠️ The block below is what LANDED at `0a3ddd6` and is SUPERSEDED by Task 1B**
+> (quality review returned ❌ CHANGES NEEDED). Four of its details change:
+> `writeRejections` → `invalidWriteCounter`, `kind: string` param → the offending
+> `value: unknown`, the cap-of-5 → powers-of-two with an `[#n]` marker, and the
+> comment block is cut down. Read it as history; implement Task 1B.
 
 ```ts
   // Monotonic count of locally-originated writes this doc refused (see
@@ -869,7 +936,291 @@ was taken.** Only two of Step 1's four test sections are committed at `0a3ddd6`:
 Both deferred sections need `putShape` to actually reject, which does not happen
 until Task 2. **Task 2 Step 1 restores them verbatim and they are part of Task
 2's RED.** If they are not restored, findings 2 and 3 ship with no proof at all
-— see the two explicit warnings in Task 2 Step 1.
+— see the explicit warnings in Task 2 Step 1.
+
+**Quality review then returned ❌ CHANGES NEEDED — see Task 1B**, which revises
+four details of what landed here. The finding-2 test section above has already
+been rewritten in place for Task 1B's powers-of-two behaviour, so the copy
+Task 2 restores is the correct one.
+
+---
+
+## Task 1B: Apply the Task 1A quality-review findings
+
+Task 1A landed at `0a3ddd6` and passed **spec** review, but **quality** review
+returned ❌ CHANGES NEEDED. Six findings were accepted (one was moot). This task
+applies them as one RED-first delta.
+
+### Why here rather than folded into Task 2
+
+Finding 1 is cheap now and expensive later: Task 2 and Task 4 add the only two
+`rejectWrite` call sites, so fixing the signature **before** they exist means
+fixing it in one place instead of three. Finding 2 depends on finding 1. And
+Task 2's RED is already carrying the two restored Task 1A sections — adding a
+third concern to it would make an already-subtle RED unreadable.
+
+**Files:**
+- Modify: `canvas-doc/src/canvas-doc.ts` (`InvalidWrite.kind` type)
+- Modify: `canvas-doc/src/loro-canvas-doc.ts` (`rejectWrite`, counter field, comments)
+- Modify: `canvas-doc/src/write-validation.test.ts`
+
+### Verified before prescribing
+
+- **`SHAPE_KINDS` exists as a real runtime export.** `canvas-model/src/shape.ts:8`
+  declares `export const SHAPE_KINDS = [...] as const` (16 entries), re-exported
+  from the package index via `export * from './shape.js'`. Confirmed by running
+  `import { SHAPE_KINDS } from '@ensembleworks/canvas-model'` — it is an actual
+  array at runtime, not a type-only union. So the membership check below is
+  implementable exactly as written.
+- **`ShapeKind` exists too** (`shape.ts:12`, `(typeof SHAPE_KINDS)[number]`) and
+  is exported from the same index, so finding 2's narrowed type costs no new
+  export.
+- **The naming precedent is `repairCounter` / `repairCount`**
+  (`canvas-sync/src/client-peer.ts:25` and `:37`) — a *paired* field/getter,
+  which is the whole point of finding 3.
+
+### Finding 1 (blocking) — the `'<unknown>'` promise is unenforced
+
+`canvas-doc.ts:19-27` promises `kind` is `'<unknown>'` when the rejected value
+is too malformed to have one. **Nothing produces that string**, and `rejectWrite`
+accepts any `string`. Task 2's call sites reach into an already-known-invalid
+value, so the natural implementation is `(value as any).kind` — which yields
+`'wibble'`, `undefined`, `42`, or an object. The first two silently violate the
+doc comment; the last two violate the **declared type at runtime**, and an
+object-valued `kind` reaching Task 4A's overlay through `JSON.stringify` is a
+real hazard.
+
+Fix **centrally**, so no call site can get it wrong: `rejectWrite` takes the
+offending value and derives `kind` itself.
+
+### Finding 2 — narrow the type, now that finding 1 makes it honest
+
+`kind: ShapeKind | '<unknown>'` instead of `kind: string`. This is only correct
+**paired with finding 1** — without central coercion it would be a lie the
+compiler cannot catch, which is strictly worse than `string`. With it, consumers
+get `switch` exhaustiveness where `'<unknown>'` is an explicit arm rather than a
+`default` silently absorbing both "malformed" and "a kind we forgot to handle" —
+different situations a dashboard should be able to distinguish.
+
+### Finding 3 — `writeRejections` → `invalidWriteCounter`
+
+House precedent is `private repairCounter` backing `get repairCount()`: field is
+`<noun>Counter`, getter is `<noun>Count`, same root, suffix carries the
+distinction. Task 1A's comment cites `repairCount` as authority for the getter
+name — correctly — and then picks a backing field that abandons the pattern. The
+original problem (`invalidWrites` reading as the `InvalidWrite` type) was real
+and the fix landed on the *getter*; renaming the field to a third unrelated word
+solved nothing further and cost the family resemblance.
+
+### Finding 4 (blocking) — powers of two, not a lifetime cap
+
+See decision D1b, rewritten. Short version: a cap makes silence
+indistinguishable from health, and goes permanently quiet so a *different* bug
+an hour later never surfaces. Powers of two never close the channel.
+
+### Finding 5 — cut the naming-rationale comment
+
+The five-line naming rationale at `loro-canvas-doc.ts:104-109` documents *why the
+name isn't what it used to be* — a fact about repo history, not about the code.
+Git holds it, the commit message says it, and the test pins it mechanically:
+three copies. Once the field is `invalidWriteCounter` the collision it describes
+is self-evidently absent.
+
+Also drop **"Do not lift the cap"** — an unenforceable prose imperative, and
+after finding 4 it argues against a mechanism that no longer exists. The test is
+the durable version.
+
+**Keep** the per-pointermove flood rationale. That is the half of the block
+genuinely earning its keep: non-obvious, and derived from a fact that lives in
+another package.
+
+This also removes the false "only non-test console call" sentence — so **Task 2's
+Step 0 is now redundant and has been deleted.** Do not look for it.
+
+### Finding 7 — log-line legibility
+
+`rejected invalid ${op} ${kind} ${id}` renders as three bare juxtaposed tokens.
+Use `${op} (${kind}) ${id}` plus the `[#n]` ordinal.
+
+### Finding 6 — moot, do not do it
+
+Extracting a `WARN_CAP` constant is moot under finding 4: there is no longer a
+threshold to name. Do **not** add one.
+
+**Step 1: Write the failing test**
+
+Replace the finding-2 section of `canvas-doc/src/write-validation.test.ts` — if
+you deferred it at `0a3ddd6`, it is not in the file and there is nothing to
+replace; it stays deferred to Task 2 either way — and add the two new sections
+below. Only the finding-3 section here is runnable now; see Step 2.
+
+```ts
+// --- Task 1B finding 1/2: `kind` is COERCED centrally, never passed through ---
+// The doc comment promises '<unknown>' for a value too malformed to have a
+// kind. Task 2's call sites hand rejectWrite an already-invalid value, so
+// without central coercion `kind` would carry whatever garbage was in there —
+// including a number or an object, which violates the DECLARED TYPE at runtime
+// and would reach the dev overlay through JSON.stringify.
+{
+  const seen: InvalidWrite[] = []
+  const doc = LoroCanvasDoc.create({ peerId: 14n, onInvalidWrite: (w) => seen.push(w) })
+  doc.putPage({ id: 'page:p', name: 'P' })
+
+  // A kind that is a plausible-looking string but not a real ShapeKind.
+  doc.putShape({ id: 'shape:a', kind: 'wibble', parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(seen[0]!.kind, '<unknown>', 'an unrecognised kind string is coerced, not echoed')
+
+  // A kind of the wrong TYPE entirely — the runtime-type-violation case.
+  doc.putShape({ id: 'shape:b', kind: 42, parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(seen[1]!.kind, '<unknown>', 'a non-string kind never escapes as a non-string')
+
+  doc.putShape({ id: 'shape:c', kind: { nested: true }, parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(seen[2]!.kind, '<unknown>', 'an object kind never reaches a JSON.stringify consumer')
+
+  // Missing entirely.
+  doc.putShape({ id: 'shape:d', parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(seen[3]!.kind, '<unknown>', 'an absent kind is reported as unknown')
+
+  // And a REAL kind still passes through untouched.
+  doc.putShape({ id: 'shape:e', kind: 'note', parentId: 'page:p', props: {}, ...base(), index: '' } as never)
+  assert.equal(seen[4]!.kind, 'note', 'a genuine ShapeKind is preserved')
+
+  for (const w of seen) {
+    assert.equal(typeof w.kind, 'string', 'kind is ALWAYS a string, whatever was thrown at it')
+  }
+}
+
+// --- Task 1B finding 3: the backing field follows the repairCounter pattern ---
+// Field <noun>Counter / getter <noun>Count, matching client-peer.ts's
+// repairCounter/repairCount. Pinned so the pair cannot drift apart again.
+{
+  const doc = LoroCanvasDoc.create({ peerId: 15n })
+  assert.equal(doc.invalidWriteCount, 0, 'the getter is invalidWriteCount')
+  assert.equal(
+    (doc as unknown as Record<string, unknown>).writeRejections,
+    undefined,
+    'the interim `writeRejections` field name is gone',
+  )
+}
+```
+
+**Step 2: Run it to verify it fails**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/write-validation.test.ts
+```
+
+Expected: FAIL in the **finding-3 section** —
+`AssertionError: the interim 'writeRejections' field name is gone`
+(`0 !== undefined`), since that field currently exists.
+
+The finding-1/2 section cannot go green until Task 2 makes `putShape` reject; it
+will fail earlier, on `seen[0]!.kind` being a property of `undefined`. **That is
+expected and is the same deferral Task 1A already took** — see Task 1A Step 2's
+note. Record both failures verbatim.
+
+> **Carry the finding-1/2 section into Task 2's restore list.** Task 2 Step 1
+> already restores two deferred sections; this makes three. Add it there
+> alongside them, or you will ship central `kind` coercion with no test proving
+> it — the exact failure mode finding 1 is about.
+
+**Step 3: Narrow the type in `canvas-doc/src/canvas-doc.ts`**
+
+```ts
+import type { ShapeKind } from '@ensembleworks/canvas-model'
+```
+
+and in `InvalidWrite`:
+
+```ts
+  /** The shape's `kind`, or `'<unknown>'` when the rejected value did not carry
+   * a recognisable one. Narrowed rather than `string` so a consumer's `switch`
+   * gets exhaustiveness, with `'<unknown>'` as an explicit arm instead of a
+   * `default` that silently absorbs both "malformed" and "a kind we forgot to
+   * handle" — different situations a dashboard should distinguish.
+   *
+   * The narrowing is only honest because `rejectWrite` COERCES this centrally
+   * (it takes the offending value, not a caller-derived kind): every call site
+   * is reaching into an already-invalid value, so a caller-supplied kind would
+   * be exactly where garbage — a number, an object — would enter. */
+  kind: ShapeKind | '<unknown>'
+```
+
+Carry over the existing rationale for *why* `kind` exists at all (the nanoid /
+envelope-path argument) — it is still correct and still needed.
+
+**Step 4: Rewrite the counter and `rejectWrite` in `canvas-doc/src/loro-canvas-doc.ts`**
+
+Add `SHAPE_KINDS` and `ShapeKind` to the existing `@ensembleworks/canvas-model`
+import, then replace the whole block:
+
+```ts
+  // Monotonic count of locally-originated writes this doc refused (see
+  // InvalidWrite). Never reset.
+  private invalidWriteCounter = 0
+  get invalidWriteCount(): number { return this.invalidWriteCounter }
+
+  // Count, then report. A rejection is a NO-OP at the call site, so this is
+  // the only trace it leaves.
+  //
+  // Takes the offending VALUE, not a caller-derived kind: every call site is
+  // reaching into something that just failed validation, so a caller-supplied
+  // kind is exactly where a number, an object, or undefined would enter and
+  // quietly violate InvalidWrite's declared type. Coercing here means no call
+  // site can get it wrong.
+  //
+  // Logs on POWERS OF TWO (#1, #2, #4, …) rather than capping. v2 commits at
+  // per-pointermove granularity, so a tool emitting an invalid write during a
+  // drag would otherwise produce ~60 warnings per second for as long as the
+  // drag lasts — enough to hang DevTools, and it buries the FIRST warning,
+  // which is the diagnostically useful one. A lifetime cap would fix the flood
+  // but make silence indistinguishable from health, and would go permanently
+  // quiet so an unrelated bug an hour later never surfaced. This never closes
+  // the channel: ~9 lines for a ten-second bad drag, ~18 for an hour. The
+  // [#n] marker tells the reader they are seeing a sample, not a census.
+  private rejectWrite(op: InvalidWrite['op'], value: unknown, id: string, error: string): void {
+    const raw = (value as { kind?: unknown } | null | undefined)?.kind
+    const kind: ShapeKind | '<unknown>' =
+      typeof raw === 'string' && (SHAPE_KINDS as readonly string[]).includes(raw)
+        ? (raw as ShapeKind)
+        : '<unknown>'
+    const n = ++this.invalidWriteCounter
+    const write: InvalidWrite = { op, kind, id, error }
+    if (this.onInvalidWrite) this.onInvalidWrite(write)
+    else if ((n & (n - 1)) === 0) console.warn(`[canvas-doc] rejected invalid ${op} (${kind}) ${id} [#${n}]: ${error}`)
+  }
+```
+
+Note `(value as … | null | undefined)?.kind` — the optional chain must survive a
+`null` value, not only `undefined`. `typeof null === 'object'`, so a bare
+property read on `null` would throw inside the very path meant to be
+total.
+
+**Step 5: Run the tests**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/write-validation.test.ts
+```
+
+Expected: the finding-3 section now passes. The finding-1/2 section still fails
+until Task 2 — see Step 2.
+
+**Step 6: Typecheck**
+
+```
+cd /home/stag/src/projects/ensembleworks && bun run --filter '@ensembleworks/canvas-doc' typecheck
+```
+
+Expected: exit 0. `rejectWrite` still has no callers, so the changed signature
+breaks nothing yet.
+
+**Step 7: Commit**
+
+```
+cd /home/stag/src/projects/ensembleworks
+git add canvas-doc/src/canvas-doc.ts canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/write-validation.test.ts
+git commit -m "refactor(canvas-doc): coerce kind centrally, log on powers of two, align counter naming"
+```
 
 ---
 
@@ -877,48 +1228,16 @@ until Task 2. **Task 2 Step 1 restores them verbatim and they are part of Task
 
 > ### ⚠️ Task 2 carries inherited obligations. Read Step 0 and Step 1 before writing anything.
 >
-> Task 2 is not only "add validation". It must also (a) correct a false comment
-> the plan itself put into `loro-canvas-doc.ts` (Step 0), and (b) restore two
-> test sections Task 1A legitimately deferred (Step 1). Neither is optional and
-> neither is scope creep.
+> Task 2 is not only "add validation". It must also restore **three** test
+> sections that Tasks 1A and 1B legitimately deferred, because none of them can
+> run until `putShape` actually rejects (Step 1). That is not optional and not
+> scope creep — without it, review findings 1, 2 and 3 all ship unproven.
 
-**Step 0: Correct the false comment Task 1A shipped**
+**Step 0: (removed — absorbed into Task 1B)**
 
-Task 1A's prescribed comment block contained a factual error that the
-implementer transcribed faithfully into
-`canvas-doc/src/loro-canvas-doc.ts:120-122`. It claims:
-
-```
-  // This is the only non-test console call in canvas-doc, canvas-model,
-  // canvas-sync and canvas-editor combined.
-```
-
-**That is false.** There are three, verified by
-`grep -rn "console\." --include='*.ts' canvas-{doc,model,sync,editor}/src | grep -v '\.test\.ts'`:
-
-- `canvas-doc/src/loro-canvas-doc.ts:129` — this one
-- `canvas-sync/src/client-peer.ts:151` — `'[canvas-sync] client peer dropped a malformed inbound frame:'`
-- `canvas-sync/src/server-peer.ts:128` — `'[canvas-sync] server peer dropped a malformed inbound frame:'`
-
-The error originated in a quality review, was passed into Task 1A's brief, and
-was correctly transcribed. **Fixing it here is repairing an inaccuracy this plan
-introduced — not scope creep**, and it must be fixed because a confidently wrong
-comment is worse than no comment: the next person to add a `console.*` to these
-packages will read it as a rule they are breaking.
-
-Replace those three comment lines with:
-
-```
-  // This is one of only three non-test console calls across canvas-doc,
-  // canvas-model, canvas-sync and canvas-editor. The other two are
-  // canvas-sync's malformed-frame warnings (client-peer.ts, server-peer.ts),
-  // which are bounded in a different way: they fire per inbound FRAME, not per
-  // pointermove, so they cannot reach this one's unbounded rate. Bounded it is
-  // defensible; unbounded it would not be. Do not lift the cap.
-```
-
-Verify the count yourself with the grep above before committing — do not take
-this plan's word for it a second time.
+An earlier revision put a comment correction here. **Task 1B now rewrites that
+entire comment block**, which removes the false "only non-test console call"
+sentence as a side effect. Nothing to do — go straight to Step 1.
 
 **Files:**
 - Modify: `canvas-doc/src/loro-canvas-doc.ts` (`putShape`, add `putShapeUnchecked`)
@@ -927,15 +1246,22 @@ this plan's word for it a second time.
 
 **Step 1: Write the failing test**
 
-> ## ⛔ FIRST: restore the two sections Task 1A deferred. Do not skip this.
+> ## ⛔ FIRST: restore the THREE deferred sections. Do not skip this.
 >
-> Task 1A committed only two of its four test sections at `0a3ddd6`. The other
-> two could not run until `putShape` rejects — which is this task. **Paste them
-> in verbatim, after the existing finding-4 section and before Task 2's own
-> sections.** They are currently red and go green with this task's fix, so
-> **they are part of Task 2's RED and must both be observed failing in Step 2.**
+> Task 1A committed only two of its four test sections at `0a3ddd6`, and Task 1B
+> added a third deferred section. None can run until `putShape` rejects — which
+> is this task. **Paste all three in verbatim, after the existing finding-4
+> section and before Task 2's own sections.** They are currently red and go
+> green with this task's fix, so **they are part of Task 2's RED and must all be
+> observed failing in Step 2.**
 >
-> Two traps, stated plainly because both are easy to walk into:
+> | Section | Proves | Deferred by |
+> |---|---|---|
+> | finding 3 — `kind` on props **and envelope** paths | why `kind` exists at all | Task 1A |
+> | finding 2 — powers-of-two logging | the flood throttle | Task 1A |
+> | finding 1/2 — central `kind` coercion to `'<unknown>'` | no garbage escapes the declared type | Task 1B |
+>
+> Three traps, stated plainly because all three are easy to walk into:
 >
 > 1. **Do NOT treat Task 2's `assert.equal(seen[0]!.kind, 'frame')` as covering
 >    finding 3.** That is the *props* path, where the kind is embedded in the
@@ -945,10 +1271,14 @@ this plan's word for it a second time.
 >    for finding 3. Without it, `kind` is proven exactly where it was least
 >    needed and finding 3's rationale is permanently unverified.
 > 2. **Do NOT treat Task 2's `assert.equal(warned.length, 1)` as covering
->    finding 2.** A single rejection produces one warning whether or not a cap
->    exists — that assertion passes identically against an *uncapped* warn. Only
->    the 20-iteration loop asserting `invalidWriteCount === 20` **and**
->    `warned.length === 5` pins the cap.
+>    finding 2.** A single rejection produces one warning whether or not any
+>    throttle exists — that assertion passes identically against an
+>    *unthrottled* warn. Only the 20-iteration loop pins the behaviour.
+> 3. **And do NOT reduce that loop to a count.** At n=20 a lifetime cap of 5 and
+>    powers-of-two **both** produce exactly 5 lines (1, 2, 4, 8, 16). The
+>    section below therefore asserts the parsed `[#n]` **ordinals**, not
+>    `warned.length`. A count-only version would pass against the very
+>    implementation Task 1B replaced.
 >
 > The two sections, verbatim (reproduced here so you never have to scroll back
 > to Task 1A):
@@ -974,11 +1304,12 @@ this plan's word for it a second time.
 >   assert.doesNotMatch(seen[1]!.error, /note/, 'precondition: the envelope error genuinely does not name the kind')
 > }
 >
-> // --- Task 1A finding 2: the default console.warn is BOUNDED, the counter is not ---
+> // --- Task 1A finding 2 (as revised by Task 1B): the default console.warn logs
+> // on POWERS OF TWO, and the counter is unaffected ---
 > {
->   const warned: unknown[][] = []
+>   const warned: string[] = []
 >   const realWarn = console.warn
->   console.warn = (...args: unknown[]) => { warned.push(args) }
+>   console.warn = (...args: unknown[]) => { warned.push(String(args[0])) }
 >   try {
 >     const doc = LoroCanvasDoc.create({ peerId: 13n }) // no handler -> console path
 >     doc.putPage({ id: 'page:p', name: 'P' })
@@ -987,11 +1318,54 @@ this plan's word for it a second time.
 >     for (let i = 0; i < 20; i++) {
 >       doc.putShape({ id: `shape:bad${i}`, kind: 'frame', parentId: 'page:p', props: { w: 'x' }, ...base() } as never)
 >     }
->     assert.equal(doc.invalidWriteCount, 20, 'the counter stays EXACT regardless of the log cap')
+>     assert.equal(doc.invalidWriteCount, 20, 'the counter stays EXACT regardless of how little is logged')
 >   } finally {
 >     console.warn = realWarn
 >   }
->   assert.equal(warned.length, 5, 'the console fallback is capped at the first 5 — a drag must not flood DevTools')
+>   // Assert WHICH rejections logged, not merely how many. A lifetime cap of 5
+>   // and powers-of-two BOTH yield 5 lines at n=20 (1,2,4,8,16), so a
+>   // count-only assertion cannot tell them apart — it would pass against the
+>   // capped implementation this replaces.
+>   const ordinals = warned.map((line) => Number(/\[#(\d+)\]/.exec(line)?.[1]))
+>   assert.deepEqual(ordinals, [1, 2, 4, 8, 16], 'logs on powers of two only — never 3, 5, 6, 7')
+>   assert.ok(!ordinals.includes(3) && !ordinals.includes(7), 'explicitly: non-powers-of-two are silent')
+>   // The ordinal marker tells the reader they are seeing a SAMPLE, not a census.
+>   assert.match(warned[0]!, /\[#1\]/, 'each line carries its ordinal')
+> }
+>
+> // --- Task 1B finding 1/2: `kind` is COERCED centrally, never passed through ---
+> // The doc comment promises '<unknown>' for a value too malformed to have a
+> // kind. The call sites below hand rejectWrite an already-invalid value, so
+> // without central coercion `kind` would carry whatever garbage was in there —
+> // including a number or an object, which violates the DECLARED TYPE at runtime
+> // and would reach the dev overlay through JSON.stringify.
+> {
+>   const seen: InvalidWrite[] = []
+>   const doc = LoroCanvasDoc.create({ peerId: 14n, onInvalidWrite: (w) => seen.push(w) })
+>   doc.putPage({ id: 'page:p', name: 'P' })
+>
+>   // A kind that is a plausible-looking string but not a real ShapeKind.
+>   doc.putShape({ id: 'shape:a', kind: 'wibble', parentId: 'page:p', props: {}, ...base() } as never)
+>   assert.equal(seen[0]!.kind, '<unknown>', 'an unrecognised kind string is coerced, not echoed')
+>
+>   // A kind of the wrong TYPE entirely — the runtime-type-violation case.
+>   doc.putShape({ id: 'shape:b', kind: 42, parentId: 'page:p', props: {}, ...base() } as never)
+>   assert.equal(seen[1]!.kind, '<unknown>', 'a non-string kind never escapes as a non-string')
+>
+>   doc.putShape({ id: 'shape:c', kind: { nested: true }, parentId: 'page:p', props: {}, ...base() } as never)
+>   assert.equal(seen[2]!.kind, '<unknown>', 'an object kind never reaches a JSON.stringify consumer')
+>
+>   // Missing entirely.
+>   doc.putShape({ id: 'shape:d', parentId: 'page:p', props: {}, ...base() } as never)
+>   assert.equal(seen[3]!.kind, '<unknown>', 'an absent kind is reported as unknown')
+>
+>   // And a REAL kind still passes through untouched.
+>   doc.putShape({ id: 'shape:e', kind: 'note', parentId: 'page:p', props: {}, ...base(), index: '' } as never)
+>   assert.equal(seen[4]!.kind, 'note', 'a genuine ShapeKind is preserved')
+>
+>   for (const w of seen) {
+>     assert.equal(typeof w.kind, 'string', 'kind is ALWAYS a string, whatever was thrown at it')
+>   }
 > }
 > ```
 
@@ -1073,7 +1447,7 @@ Append to `canvas-doc/src/write-validation.test.ts`, **before** the final
     console.warn = realWarn // restore even if an assertion throws
   }
   assert.equal(warned.length, 1, 'the console.warn fallback fired — a rejection is never silent')
-  assert.match(String(warned[0]![0]), /rejected invalid putShape frame shape:bad/, 'the warning names the op, the kind and the id')
+  assert.match(String(warned[0]![0]), /rejected invalid putShape \(frame\) shape:bad \[#1\]/, 'the warning names the op, the kind, the id and the ordinal')
 }
 ```
 
@@ -1136,12 +1510,12 @@ with:
     // rejectWrite.
     const v = validateShape(s)
     if (!v.ok) {
-      // Read id/kind defensively off the REJECTED value: it failed validation,
-      // so neither field is guaranteed to be there or to be a string.
-      const raw = s as { id?: unknown; kind?: unknown }
-      const id = typeof raw?.id === 'string' ? raw.id : '<no id>'
-      const kind = typeof raw?.kind === 'string' ? raw.kind : '<unknown>'
-      this.rejectWrite('putShape', kind, id, v.error)
+      // Pass the whole rejected VALUE, not a locally-derived kind: rejectWrite
+      // coerces `kind` centrally so no call site can leak a non-ShapeKind into
+      // InvalidWrite (Task 1B finding 1). `id` is still read here because it
+      // has no equivalent closed vocabulary to validate against.
+      const id = typeof (s as { id?: unknown })?.id === 'string' ? (s as { id: string }).id : '<no id>'
+      this.rejectWrite('putShape', s, id, v.error)
       return
     }
     this.putShapeUnchecked(s)
@@ -1350,9 +1724,11 @@ Replace `updateProps` (currently `loro-canvas-doc.ts:143-148`) with:
     // field at a time here (use putShape with a whole valid shape).
     const shape = this.readNode(n)
     const v = validateShape({ ...shape, props: merged })
-    // `kind` for the report comes off the EXISTING node — a props patch has no
-    // kind of its own to read (review finding 3).
-    if (!v.ok) { this.rejectWrite('updateProps', String(shape.kind ?? '<unknown>'), id, v.error); return }
+    // Pass the EXISTING shape as the value — a props patch has no kind of its
+    // own, and rejectWrite coerces `kind` off whatever it is given (Task 1B
+    // finding 1), so a node whose stored kind is itself garbage still reports
+    // '<unknown>' rather than leaking it.
+    if (!v.ok) { this.rejectWrite('updateProps', shape, id, v.error); return }
     n.data.set(LoroCanvasDoc.PROP_KEY, merged as any)
   }
 ```
