@@ -246,4 +246,39 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
   assert.equal(seen[3]!.id, 'shape:real', 'a genuine id is preserved')
 }
 
+// --- Task 4: updateProps validates the MERGED shape, not the patch ---
+{
+  const seen: InvalidWrite[] = []
+  const doc = LoroCanvasDoc.create({ peerId: 3n, onInvalidWrite: (w) => seen.push(w) })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape({ id: 'shape:f', kind: 'frame', parentId: 'page:p', props: { w: 100, h: 100 }, ...base() } as never)
+
+  // The exact reported defect: a string where a number belongs.
+  assert.doesNotThrow(() => doc.updateProps('shape:f', { w: '100' }))
+  assert.deepEqual(doc.getShape('shape:f')!.props, { w: 100, h: 100 }, 'props are untouched — no partial merge landed')
+  assert.equal(doc.invalidWriteCount, 1, 'the rejection was counted')
+  assert.equal(seen[0]!.op, 'updateProps')
+  assert.equal(seen[0]!.id, 'shape:f')
+  // `kind` comes from the EXISTING node here, not from the patch — the patch
+  // has no kind to read.
+  assert.equal(seen[0]!.kind, 'frame', 'kind is read off the existing shape')
+
+  // A VALID patch still merges (regression guard on the happy path).
+  doc.updateProps('shape:f', { w: 250 })
+  assert.deepEqual(doc.getShape('shape:f')!.props, { w: 250, h: 100 }, 'a valid patch merges as before')
+  assert.equal(doc.invalidWriteCount, 1, 'a valid patch is not counted')
+
+  // Merged-not-patch, the direction that MATTERS: a patch that HEALS an
+  // already-invalid shape (one a remote peer delivered) must be accepted,
+  // even though the pre-image is invalid.
+  doc.putShapeUnchecked({ id: 'shape:g', kind: 'frame', parentId: 'page:p', props: { w: 'bad', h: 10 }, ...base() } as never)
+  doc.updateProps('shape:g', { w: 42 })
+  assert.deepEqual(doc.getShape('shape:g')!.props, { w: 42, h: 10 }, 'a patch that makes the merged shape valid is accepted')
+  assert.equal(doc.invalidWriteCount, 1, 'healing a remote-delivered invalid shape is not a rejection')
+
+  // Unknown id keeps its pre-existing silent-no-op contract — NOT a rejection.
+  doc.updateProps('shape:nope', { w: 1 })
+  assert.equal(doc.invalidWriteCount, 1, 'an unknown id is a no-op, not an invalid write')
+}
+
 console.log('ok: write-validation')

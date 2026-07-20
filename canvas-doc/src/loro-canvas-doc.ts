@@ -232,9 +232,29 @@ export class LoroCanvasDoc implements CanvasDoc {
   }
   updateProps(id: string, props: Record<string, unknown>): void {
     const n = this.nodeByShapeId(id)
-    if (!n) return
+    if (!n) return // unknown id: the pre-existing silent-no-op contract, NOT a rejection
     const cur = (n.data.get(LoroCanvasDoc.PROP_KEY) as Record<string, unknown>) ?? {}
-    n.data.set(LoroCanvasDoc.PROP_KEY, { ...cur, ...props } as any)
+    const merged = { ...cur, ...props }
+    // Validate the MERGED result, never the patch alone: this is a partial
+    // merge, so a patch only means something against what it lands on. Two
+    // intended consequences: (1) a patch that HEALS an already-invalid shape
+    // — one a remote peer delivered through import(), which bypasses this
+    // boundary entirely — is accepted, because the merged shape validates;
+    // (2) a patch that is individually harmless but leaves the shape still
+    // invalid is rejected, so a two-field breakage cannot be healed one
+    // field at a time here (use putShape with a whole valid shape).
+    const shape = this.readNode(n)
+    const v = validateShape({ ...shape, props: merged })
+    // Pass the EXISTING shape as the value — a props patch has no kind of its
+    // own, and rejectWrite coerces `kind` off whatever it is given, so a node
+    // whose stored kind is itself garbage still reports '<unknown>' rather
+    // than leaking it.
+    //
+    // `id` goes through as-is: rejectWrite coerces it too, so do NOT add a
+    // local non-empty/string guard here — duplicating that check across the
+    // two call sites is exactly what the previous task removed.
+    if (!v.ok) { this.rejectWrite('updateProps', shape, id, v.error); return }
+    n.data.set(LoroCanvasDoc.PROP_KEY, merged as any)
   }
   // Node-level core of deleteShape, factored out so repair() can apply it to
   // EVERY physical node sharing an id (see nodesByShapeId) while the public

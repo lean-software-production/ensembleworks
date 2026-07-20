@@ -65,7 +65,16 @@ export interface CanvasDoc {
    * bypass this entirely; repair() remains the defence there.
    */
   putShape(shape: Shape): void
-  /** Silent no-op if no shape with this id exists. */
+  /**
+   * Merges `props` into the shape's existing props. Silent no-op if no shape
+   * with this id exists.
+   *
+   * REJECTS (total no-op, no throw) a patch whose MERGED result would fail
+   * canvas-model's validateShape, reporting it via the implementation's
+   * invalid-write hook. Validation runs on the merge, not the patch — so a
+   * patch that heals an already-invalid shape is accepted, and a patch that
+   * leaves it invalid is not.
+   */
   updateProps(id: string, props: Record<string, unknown>): void
   /**
    * Silent no-op if no shape with this id exists. Cascades: deletes the shape's
