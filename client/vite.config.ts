@@ -86,6 +86,28 @@ const proxiedServer: Partial<ServerOptions> =
 				}
 			: {}
 
+// Shared by BOTH the dev server and `vite preview`. The e2e load-perf harness
+// (e2e/playwright.load.config.ts) drives a PRODUCTION build through preview,
+// which must proxy /sync and /api or the v2 app can never dial its WebSocket.
+//
+// Vite 7.3.6 in fact falls back to server.proxy when preview.proxy is unset
+// (resolvePreviewOptions: `proxy: preview?.proxy ?? server.proxy`), so the
+// explicit preview block below is not load-bearing *today* — verified by
+// deleting it and watching the harness still connect. It stays because that
+// fallback is undocumented and implementation-defined: without the explicit
+// block, the harness's transport depends silently on Vite internals, and a
+// future Vite could drop it with no signal beyond a confusing 404.
+//
+// One definition, two consumers: a drifted copy would make the harness
+// measure a different backend wiring than dev uses.
+const PROXY = {
+	'/sync': { target: `ws://localhost:${SYNC_PORT}`, ws: true },
+	'/uploads': `http://localhost:${SYNC_PORT}`,
+	'/files': `http://localhost:${SYNC_PORT}`,
+	'^/api/terminal/(health|sessions|ws)': { target: `ws://localhost:${TERM_PORT}`, ws: true },
+	'/api': { target: `http://localhost:${SYNC_PORT}`, ws: true },
+} as const
+
 export default defineConfig({
 	// wasm() ALONE (no vite-plugin-top-level-await, default build target):
 	// the loro-crdt fix needs only the wasm plugin — it handles the dev
@@ -136,16 +158,11 @@ export default defineConfig({
 		// port and 502 through Caddy.
 		strictPort: true,
 		...proxiedServer,
-		proxy: {
-			'/sync': { target: `ws://localhost:${SYNC_PORT}`, ws: true },
-			'/uploads': `http://localhost:${SYNC_PORT}`,
-			'/files': `http://localhost:${SYNC_PORT}`,
-			// Terminal local plane (health/sessions/ws) is served by the gateway
-			// process; the relay plane (status/list/connect/relay) stays on the sync
-			// server. Must precede the '/api' catch-all. The alternation also covers
-			// /sessions/:id.
-			'^/api/terminal/(health|sessions|ws)': { target: `ws://localhost:${TERM_PORT}`, ws: true },
-			'/api': { target: `http://localhost:${SYNC_PORT}`, ws: true },
-		},
+		proxy: PROXY,
+	},
+	preview: {
+		host: '127.0.0.1',
+		strictPort: true,
+		proxy: PROXY,
 	},
 })

@@ -21,21 +21,21 @@
  * room this codebase creates, test-fixture or real dogfood, converges on
  * the identical single-page id when starting from empty.
  *
- * KNOWN RACE (documented, not hidden — v1 tradeoff): CanvasV2App calls this
- * ONCE, after a bounded "settle" window post-handshake (see its own module
- * header), not after a protocol-guaranteed "you are now fully caught up"
- * signal — canvas-sync's SyncRequest/Update handshake has no such ack.
- * Over a REAL (async) WebSocket, a client reconnecting to an existing
- * non-empty dogfood room during unusually high latency could observe ZERO
- * pages before the server's reply has arrived, and bootstrap a REDUNDANT
- * `page:p` alongside the room's real page. This is CORRECTNESS-NEUTRAL for
- * rendering (canvas-react's ShapeLayer/EmbedLayer never filter by page —
- * "rooms are single-page today" per client/src/App.tsx's own comment — so
- * both pages' shapes render identically regardless of which page owns
- * them) and only matters to `repair()`'s orphan-reparenting target (which
+ * SYNC-READINESS (was a KNOWN RACE): CanvasV2App calls this ONCE, after
+ * awaiting sync readiness — it races `SyncClientPeer.ready()` (which resolves
+ * on the server's Frame.SyncDone, sent right after the backfill Update) against
+ * a bounded safety cap. In the common case the backfill has already been
+ * imported, so an existing room's real page is visible here and adopted. The
+ * redundant-`page:p` bootstrap described below is now only reachable in the
+ * pathological tail where readiness never arrives within the cap; it remains
+ * CORRECTNESS-NEUTRAL for rendering (canvas-react's ShapeLayer/EmbedLayer never
+ * filter by page — "rooms are single-page today" per client/src/App.tsx's own
+ * comment — so both pages' shapes render identically regardless of which page
+ * owns them) and only matters to `repair()`'s orphan-reparenting target (which
  * never touches a shape that already has a valid page, i.e. never touches
- * pre-existing real content). A protocol-level fix (an explicit
- * server "caught up" ack) is a Phase 4 item, out of this unit's scope.
+ * pre-existing real content). A protocol-level fix isn't needed for the common
+ * case anymore (Frame.SyncDone IS that ack); the cap-bounded tail is accepted
+ * as the remaining tradeoff.
  */
 import { canonicalPageId } from '@ensembleworks/canvas-model'
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'

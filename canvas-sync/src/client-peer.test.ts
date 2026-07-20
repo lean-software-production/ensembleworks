@@ -1,12 +1,32 @@
 // Run: bun src/client-peer.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc, dumpModel } from '@ensembleworks/canvas-doc'
-import { checkInvariants } from '@ensembleworks/canvas-model'
+import { canonicalPageId, checkInvariants } from '@ensembleworks/canvas-model'
 import { SyncClientPeer } from './client-peer.js'
 import { makePair } from './memory-transport.js'
-import { Frame, encode } from './protocol.js'
+import { Frame, encode, type Transport } from './protocol.js'
 import { SyncServerPeer } from './server-peer.js'
 import { normalize, shape } from './test-helpers.js'
+
+/** A transport wrapper that HOLDS every server→client frame until release() —
+ * client→server sends pass straight through. Lets a test freeze the backfill
+ * mid-handshake deterministically (no timers), the same "defer a delivery"
+ * idea soak.ts's deferred queue uses, scoped to one direction. */
+function gatedClientTransport(raw: Transport): { transport: Transport; release: () => void } {
+  let deliver: ((b: Uint8Array) => void) | null = null
+  const held: Uint8Array[] = []
+  let released = false
+  raw.onMessage((b) => { if (released) deliver?.(b); else held.push(b) })
+  return {
+    transport: {
+      send: (b) => raw.send(b),
+      onMessage: (cb) => { deliver = cb },
+      onClose: (cb) => raw.onClose(cb),
+      close: () => raw.close(),
+    },
+    release: () => { released = true; for (const b of held.splice(0)) deliver?.(b) },
+  }
+}
 
 // --- (1) two clients + one server: A's write converges to the server AND B ---
 {
@@ -361,6 +381,112 @@ import { normalize, shape } from './test-helpers.js'
   server.connect(serverEnd3)
   client.reconnect(clientEnd3)
   assert.equal(client.lastBackfillBytes, expectedSecond, 'a later reconnect overwrites lastBackfillBytes with its own (larger) byte length, not a cumulative sum')
+}
+
+// --- (new) ready(): resolves on the server's backfill + SyncDone; empty room
+// resolves promptly; and gating page-resolution on it avoids the redundant-page
+// race the dogfood settle timer used to paper over. ---
+{
+  // (a) EMPTY brand-new room still resolves ready() promptly — the server
+  // always answers a SyncRequest (even with an empty backfill) + SyncDone.
+  {
+    const server = new SyncServerPeer({ peerId: 90n })
+    const [serverEnd, clientEnd] = makePair()
+    server.connect(serverEnd)
+    const client = new SyncClientPeer({ peerId: 901n, transport: clientEnd })
+    let resolved = false
+    client.ready().then(() => { resolved = true })
+    await Promise.resolve() // flush microtasks
+    assert.ok(resolved, 'ready() resolves for an empty room (server always sends a backfill reply + SyncDone)')
+  }
+
+  // (b) THE RACE. Each sub-demo gets its OWN server, seeded identically with a
+  // real page 'page:xyz'. They MUST NOT share a server: gatedClientTransport
+  // holds only server→client frames — a client's own writes (putPage + commit)
+  // fire subscribeLocalUpdates synchronously and pass STRAIGHT THROUGH the gate
+  // to the server. A shared server would therefore let the unguarded demo's
+  // bootstrapped 'page:p' land on the server before the guarded demo's
+  // handshake, contaminating its backfill so canonicalPageId (smallest id)
+  // wrongly resolves to 'page:p'. The isolation is load-bearing, not
+  // incidental. The page-bootstrap logic client/src/canvas-v2/bootstrap-page.ts
+  // runs is replicated inline here (canonicalPageId → bootstrap 'page:p' iff no
+  // page is visible) because canvas-sync must never import client code
+  // (clean-room boundary).
+
+  // Unguarded (the race): resolve BEFORE the backfill drains -> redundant page.
+  {
+    const server = new SyncServerPeer({ peerId: 91n })
+    server.doc.putPage({ id: 'page:xyz', name: 'Real' })
+    server.doc.commit()
+
+    const [serverEndA, clientEndRawA] = makePair()
+    server.connect(serverEndA)
+    const gateA = gatedClientTransport(clientEndRawA)
+    const clientA = new SyncClientPeer({ peerId: 911n, transport: gateA.transport })
+    assert.equal(clientA.doc.listPages().length, 0, 'precondition: backfill held, client doc has no pages yet')
+    if (!canonicalPageId(clientA.doc.listPages())) { clientA.doc.putPage({ id: 'page:p', name: 'Canvas' }); clientA.doc.commit() }
+    gateA.release()
+    assert.deepEqual(
+      clientA.doc.listPages().map((p) => p.id).sort(),
+      ['page:p', 'page:xyz'],
+      'resolving the page id BEFORE the backfill drains bootstraps a redundant page:p — the race the fixed settle sleep only guessed at',
+    )
+  }
+
+  // Guarded (the fix): await ready() first, then resolve -> adopts page:xyz.
+  // Its OWN server (peerId 93n) so the unguarded demo's stray 'page:p' write
+  // can never leak in (see the block comment above on pass-through sends).
+  {
+    const server = new SyncServerPeer({ peerId: 93n })
+    server.doc.putPage({ id: 'page:xyz', name: 'Real' })
+    server.doc.commit()
+
+    const [serverEndB, clientEndRawB] = makePair()
+    server.connect(serverEndB)
+    const gateB = gatedClientTransport(clientEndRawB)
+    const clientB = new SyncClientPeer({ peerId: 912n, transport: gateB.transport })
+    const ready = clientB.ready()
+    let readyResolved = false
+    ready.then(() => { readyResolved = true })
+    await Promise.resolve()
+    assert.equal(readyResolved, false, 'ready() does NOT resolve while the backfill is held')
+    gateB.release()
+    // Bounded, deterministic wait: if a resolveSyncDone regression left ready()
+    // unresolved after release, this asserts (readyResolved still false) rather
+    // than hanging on an unbounded `await ready` below. No wall-clock timer —
+    // one microtask flush is enough since release() delivers synchronously.
+    await Promise.resolve()
+    assert.ok(readyResolved, 'ready() resolves once the held backfill + SyncDone are released')
+    await ready // now known-resolved
+    const existing = canonicalPageId(clientB.doc.listPages())
+    if (!existing) { clientB.doc.putPage({ id: 'page:p', name: 'Canvas' }); clientB.doc.commit() }
+    assert.equal(existing, 'page:xyz', 'after ready(), the server page is visible and adopted')
+    assert.deepEqual(clientB.doc.listPages().map((p) => p.id), ['page:xyz'], 'no redundant page:p when page-resolution is gated on ready()')
+  }
+}
+
+// --- (new) reconnect() re-arms ready(): a fresh handshake means ready() awaits
+// the NEW SyncDone, never a stale resolve from the prior connection. ---
+{
+  const server = new SyncServerPeer({ peerId: 92n })
+  const [serverEnd1, clientEnd1] = makePair()
+  server.connect(serverEnd1)
+  const client = new SyncClientPeer({ peerId: 921n, transport: clientEnd1 })
+  await client.ready() // initial handshake resolves (synchronous memory transport)
+
+  // Reconnect onto a GATED transport so the new backfill is held.
+  const [serverEnd2, clientEnd2Raw] = makePair()
+  server.connect(serverEnd2)
+  const gate = gatedClientTransport(clientEnd2Raw)
+  client.reconnect(gate.transport)
+
+  let reReady = false
+  client.ready().then(() => { reReady = true })
+  await Promise.resolve()
+  assert.equal(reReady, false, 'ready() re-arms on reconnect: not resolved until the NEW backfill (SyncDone) arrives')
+  gate.release()
+  await Promise.resolve()
+  assert.equal(reReady, true, 'ready() resolves once the reconnect handshake completes')
 }
 
 console.log('ok: client-peer')

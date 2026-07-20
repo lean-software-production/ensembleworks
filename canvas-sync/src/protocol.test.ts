@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { Frame, decode, encode } from './protocol.js'
 
 // Round-trip each Frame tag through encode/decode: tag and payload both survive.
-for (const tag of [Frame.Update, Frame.Presence, Frame.SyncRequest]) {
+for (const tag of [Frame.Update, Frame.Presence, Frame.SyncRequest, Frame.SyncDone]) {
   const payload = new Uint8Array([1, 2, 3, 4, 5])
   const frame = encode(tag, payload)
   const out = decode(frame)

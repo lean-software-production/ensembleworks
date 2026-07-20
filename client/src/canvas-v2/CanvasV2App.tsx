@@ -20,11 +20,13 @@
  *   2. `new SyncClientPeer({ peerId: randomPeerId(), transport })` — a
  *      fresh, crypto-seeded 64-bit peer id per browser tab (never the
  *      server's fixed `1n`, see server/src/canvas-v2/actors.ts).
- *   3. A bounded SETTLE window (`settleMs`, prop-injectable, default
- *      `SETTLE_MS_DEFAULT`) before deciding the room's page id — see
- *      bootstrap-page.ts's KNOWN RACE note for exactly what this trades off
- *      and why. Tests pass `settleMs: 0` since an injected memory-transport
- *      handshake is already synchronous by the time `connect()` resolves.
+ *   3. Wait for sync readiness: race `peer.ready()` (resolves on the server's
+ *      Frame.SyncDone, sent right after the backfill Update) against a bounded
+ *      safety cap (`settleMs`, prop-injectable, default `SETTLE_MS_DEFAULT`),
+ *      so boot proceeds the instant the room is caught up and the cap only
+ *      bites if readiness never arrives. Tests pass `settleMs: 0`; over a
+ *      synchronous memory transport ready() is already resolved by the time
+ *      `connect()` resolves, so both settle instantly.
  *   4. `resolvePageId(peer.doc)` (bootstrap-page.ts) — adopts the room's
  *      existing page if any, else bootstraps the `page:p` convention.
  *   5. `new Editor({ doc: peer.doc, now, random, pageId })` — `now`/`random`
@@ -146,7 +148,11 @@ import {
  * one policy, not a per-caller-tunable one. */
 const SUSPEND_AFTER_TICKS = 3
 
-/** See CONSTRUCTION SEQUENCE step 3 / bootstrap-page.ts's KNOWN RACE note. */
+/** SAFETY CAP for the boot handshake: boot() races SyncClientPeer.ready()
+ * (resolves the instant the server sends Frame.SyncDone after its backfill)
+ * against this timer, so a healthy room proceeds as soon as sync completes and
+ * only a transport that never signals readiness waits the full cap. See
+ * CONSTRUCTION SEQUENCE step 3 / bootstrap-page.ts's note. */
 const SETTLE_MS_DEFAULT = 400
 
 /** True for a real text input/textarea/contentEditable element — see the
@@ -269,7 +275,7 @@ export interface CanvasV2AppProps {
 	 * test injects a memory-transport pair wired to an in-process
 	 * `SyncServerPeer` instead of a real socket. */
 	readonly connect?: () => Promise<Transport>
-	/** Test seam — see step 3 / bootstrap-page.ts's KNOWN RACE note.
+	/** Test seam — the boot readiness safety cap (see step 3 / SETTLE_MS_DEFAULT).
 	 * Production omits it (defaults to `SETTLE_MS_DEFAULT`); tests pass 0. */
 	readonly settleMs?: number
 }
@@ -341,7 +347,15 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 				return
 			}
 			const peer = new SyncClientPeer({ peerId: randomPeerId(), transport, presence: presenceStore })
-			await delay(props.settleMs ?? SETTLE_MS_DEFAULT)
+			// Proceed the instant the server signals sync-complete: peer.ready()
+			// resolves on Frame.SyncDone (sent right after the backfill Update), so
+			// existing shapes are already imported by the time we resolve the page
+			// id and build the Editor. The settle timer is now only a SAFETY CAP for
+			// a pathological transport that never signals readiness — not a fixed
+			// tax on every boot. Over a synchronous memory transport (tests) ready()
+			// is already resolved here and delay(0) is an immediate Promise.resolve,
+			// so both settle instantly; settleMs:0 semantics are unchanged.
+			await Promise.race([peer.ready(), delay(props.settleMs ?? SETTLE_MS_DEFAULT)])
 			if (cancelled) {
 				presenceStore.destroy()
 				peer.close()

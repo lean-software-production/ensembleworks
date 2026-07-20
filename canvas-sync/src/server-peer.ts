@@ -2,6 +2,10 @@ import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import { Frame, type Transport, decode, encode } from './protocol.js'
 import type { PresenceStore } from './presence.js'
 
+/** Zero-length payload for signal-only frames (Frame.SyncDone carries no
+ * bytes — its arrival IS the signal). */
+const EMPTY_PAYLOAD = new Uint8Array(0)
+
 export interface SyncServerOpts {
   peerId: bigint
   initialSnapshot?: Uint8Array
@@ -128,8 +132,15 @@ export class SyncServerPeer {
   private handleFrame(from: Transport, frame: Uint8Array): void {
     const { tag, payload } = decode(frame)
     if (tag === Frame.SyncRequest) {
-      // Reply with exactly the delta this client is missing.
+      // Reply with exactly the delta this client is missing, then signal that
+      // the backfill is complete (Frame.SyncDone). Ordering is load-bearing:
+      // the Update is sent first, so a client awaiting readiness on the
+      // following SyncDone has already imported the backfill by the time it
+      // resolves (frames dispatch in order; handleFrame is synchronous per
+      // frame). This is what lets SyncClientPeer.ready() replace the dogfood
+      // mount's fixed settle timer.
       from.send(encode(Frame.Update, this.doc.exportUpdate(payload)))
+      from.send(encode(Frame.SyncDone, EMPTY_PAYLOAD))
     } else if (tag === Frame.Update) {
       const r = this.doc.import(payload)
       if (r.pending) this.pendingCount++
