@@ -64,11 +64,11 @@ export interface ShadowMetrics {
 	 * Cumulative writes reconcile REFUSED, across all ticks — see reconcile()'s
 	 * `refused`. Unlike puts/deletes this does not settle at steady state: a
 	 * refused shape is never written, so every tick retries it and this climbs
-	 * by one per tick for as long as the room carries it. A steadily-climbing
-	 * `refused` therefore means "N shapes in this room fail the model schema",
-	 * not "N new problems occurred" — read the RATE against `ticks`, not the
-	 * total. It is the counterpart that lets `puts` go back to meaning churn:
-	 * before this field those retries were counted as puts.
+	 * by one per bad shape per tick for as long as the room carries it. A
+	 * steadily-climbing `refused` therefore means "N shapes in this room fail
+	 * the model schema", not "N new problems occurred" — read the RATE against
+	 * `ticks`, not the total. It is the counterpart that lets `puts` go back to
+	 * meaning churn: before this field those retries were counted as puts.
 	 */
 	refused: number
 	divergences: number

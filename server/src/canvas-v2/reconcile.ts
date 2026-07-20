@@ -38,9 +38,10 @@ import { dumpModel, type LoroCanvasDoc } from '@ensembleworks/canvas-doc'
  * semantics note) — this is the plan's chosen definition, kept as-is.
  * `refused` counts shape puts the write boundary rejected as a no-op (see
  * `putShape`'s validation) — a PER-CALL delta, not the doc's lifetime
- * `invalidWriteCount`. A refused shape is never written, so it stays absent
- * from `doc` and every later call retries it: `reconcile` cannot converge on
- * a target that carries a shape the model schema rejects. That is a correct,
+ * `invalidWriteCount`. A refused shape is never written: it stays absent from
+ * `doc` if it never landed, or keeps its stale mirrored value if it did, and
+ * every later call retries it: `reconcile` cannot converge on a target that
+ * carries a shape the model schema rejects. That is a correct,
  * visible consequence of refusing to write invalid data, not a bug — folding
  * it into `puts` would hide it as indistinguishable ordinary churn.
  * One commit() at the end.

@@ -231,8 +231,8 @@ assert.deepEqual(r8a, { puts: 1, deletes: 0, refused: 2 }, 'both refused writes 
 // nothing.
 assert.deepEqual(sortedIds(dumpModel(doc5).shapes), ['shape:ok'], 'the valid shape landed; neither refused one did')
 // B: `refused` must be a PER-TICK delta, not doc.invalidWriteCount itself.
-// That counter is a monotonic lifetime total (loro-canvas-doc.ts:141-144,
-// "Never reset") and grows by two on every tick this target is reconciled —
+// That counter is a monotonic lifetime total (loro-canvas-doc.ts, "Never
+// reset") and grows by two on every tick this target is reconciled —
 // measured 2, 4 over two ticks. An implementation that returns it raw passes
 // A and then reports refused:4 here.
 const r8b = reconcile(doc5, withInvalid)
