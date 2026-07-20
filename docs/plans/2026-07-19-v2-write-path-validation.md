@@ -94,15 +94,16 @@ check.
 **This is a defect class here, not a nicety.** This branch has produced **four**
 false comments:
 
-| Claim | Reality | Origin |
-|---|---|---|
-| "the only non-test console call in [four packages]" | there are three | a review, relayed through the plan |
-| the powers-of-two log-volume figures | wrong arithmetic | the plan |
-| "reaches the undo stack via import() **or** fromSnapshot" | one route, not two; the second is impossible client-side | an instruction, recorded into the plan |
-| a fourth, caught in review before landing | — | — |
+| Claim | Reality | Origin | Caught |
+|---|---|---|---|
+| "the only non-test console call in [four packages]" | there are three | a review, relayed through the plan | after landing |
+| the powers-of-two log-volume figures | wrong arithmetic | the plan | after landing |
+| "reaches the undo stack via import() **or** fromSnapshot" | one route, not two; the second is impossible client-side | an instruction, recorded into the plan | after landing |
+| a fourth | — | — | in review, before landing |
+| "`-0` round-trips faithfully through Loro" | Loro normalizes `-0` → `+0` | **the plan's own measurement table** | **before landing** |
 
-Every one was a **confident factual assertion that nobody executed**, and three
-of the four originated in *this plan or in the instructions driving it* — not in
+Every one was a **confident factual assertion that nobody executed**, and four
+of the five originated in *this plan or in the instructions driving it* — not in
 an implementer's own work. So:
 
 - **Implementers:** a plan sentence asserting a cross-file fact is not
@@ -112,8 +113,26 @@ an implementer's own work. So:
 - **Reviewers:** treat a cross-referencing comment as something to check, at the
   same level as a test assertion. "The comment reads plausibly" is not review.
 
-The cheapest version of this is usually one `grep`. Two of the four above would
+The cheapest version of this is usually one `grep`. Two of the five above would
 have died to a single command.
+
+#### The rule works — first outing, 2026-07-20
+
+Entry 5 was caught **before landing**, by a Task 4N implementer who re-verified a
+claim their brief handed them as established fact. Two things make it the best
+argument for the rule as written:
+
+- **It came from the plan's own measurement table** — a section whose entire
+  purpose was to be the verified evidence. Measured claims are not exempt; a
+  probe can be run correctly and still measure the wrong thing.
+- **It was wrong because the measurement instrument was lossy**, not because
+  nobody measured. So "I ran a probe" is not sufficient in a task report:
+  say *how* you compared, because that is where this one failed.
+
+This is also why the rule points at **plan text** as much as at implementer work.
+Four of the five entries originated upstream of the implementer. An implementer
+who transcribes faithfully is doing exactly what the fourth entry's implementer
+did — and that is how three of these shipped.
 
 ### House test style
 
@@ -224,7 +243,12 @@ The consequence is worth stating as a standalone claim:
 > everywhere, permanently"* into *"never write it."* There is no input for which
 > the old behaviour retained something the new behaviour discards.
 
-### The argument holds only MODULO SERIALIZATION — corrected 2026-07-20
+### The argument depends on a test, not on the predicate alone — read this
+
+**Status: the argument above is sound, unqualified — as of Task 4N (`b5031d0`).**
+It was *not* sound before that, and the reason is worth keeping visible rather
+than quietly deleting, because it identifies what the guarantee actually rests
+on.
 
 The two predicates are the same *function*, but until Task 4N they were applied
 to **different values**: `putShape`/`updateProps` validated the *pre*-
@@ -245,18 +269,28 @@ safe. `putShape` had the identical hole (pre-existing from Task 2, not
 introduced by Task 4), and it extends to **envelope fields** as well as props:
 `x: undefined` stores `x: null` and fails read-back the same way.
 
-**Task 4N closes it** by validating the post-serialization form. Once that has
-landed the structural argument is sound without qualification, because both
-predicates then see the same value. Until then, read every "anything accepted
-here is something `repair()` will not later act on" claim in this document —
-including the comment on `putShape` — as true *modulo the `undefined`→`null`
-seam*.
+**Task 4N closed it** (`b5031d0`) by validating the post-serialization form via
+`asStored`, so both predicates now see the same value and the structural
+argument holds without qualification.
+
+> **What the guarantee now rests on.** "Same predicate" is only true while
+> `asStored` matches Loro's actual coercion. Nothing in the type system enforces
+> that — **`canvas-doc/src/serialization-seam.test.ts`'s drift guard does**, by
+> asserting `deepEqual(asStored(probes), stored)` against a real write and
+> read-back. If Loro's coercion changes, that test fails; if someone weakens the
+> test, the boundary silently reopens and this whole section becomes false
+> again without anything else changing.
+>
+> So: **treat that drift guard as load-bearing infrastructure, not as a unit
+> test.** It is the reason the argument above can be stated flatly.
 
 Not reachable from production as written: the reviewer tried and failed to build
 a live path (the screenshare relock write is guarded by
 `if (!(videoWidth > 0) || !(videoHeight > 0)) return null`, and the other embed
 writes pass concrete values). A completeness gap, not a live defect — but the
-same failure mode the branch exists to close.
+same failure mode the branch exists to close, and it reached a *freshly hardened*
+call site, which is worse than an unhardened one because the code claimed to be
+safe.
 
 That is why this branch does not need an exhaustive proof that validation never
 fires on legitimate shapes: the failure mode of being wrong is strictly bounded
@@ -710,8 +744,8 @@ Lettered tasks were added after the plan was first written, so the many
 | 3 | original | — | ✅ landed `f93192f` |
 | 3A | 2026-07-20 | Task 2 **quality** review (ruling 8) — findings 1, 3, 4, 5 | ✅ landed `d0e408c` + `792be65` |
 | 4 | original | — | ✅ landed `d5a9237` |
-| **4N** | 2026-07-20 | Task 4 review (ruling 9) — the serialization seam | ⬅ **start here** |
-| 4A | 2026-07-20 | Task 1 quality review, finding 1 (ruling 5) | pending |
+| **4N** | 2026-07-20 | Task 4 review (ruling 9) — the serialization seam | ✅ landed `b5031d0` |
+| 4A | 2026-07-20 | Task 1 quality review, finding 1 (ruling 5) | ⬅ **start here** |
 | 4B | 2026-07-20 | Task 2 quality review, finding 2 (ruling 8) | pending |
 | 8A | 2026-07-20 | Task 2 quality review, finding 5 (ruling 8) — the CI gate | pending |
 
@@ -720,10 +754,9 @@ Lettered tasks were added after the plan was first written, so the many
 `4N` is lettered out of sequence deliberately: renaming the existing `4A`/`4B`
 would break this document's many cross-references to them.
 
-**Start at Task 4N.** Tasks 1 through 4 are landed. Task 4N closes a
-completeness gap that reproduces the original defect through the freshly
-hardened call site, and it restores the branch's central safety claim — see
-"The argument holds only MODULO SERIALIZATION" above.
+**Start at Task 4A.** Half (A)'s write boundary is complete and its central
+safety claim is restored (Task 4N, `b5031d0`). What remains in half (A) is
+observability: making rejections reachable and visible (4A, 4B).
 
 The two halves are technically independent — (A) is strictly additive and
 independently landable — which is what makes the fallback possible. If half (B)
@@ -2377,8 +2410,8 @@ this document's cross-references; the table is authoritative for order.)
 
 Task 4's spec review found a completeness gap that **reproduces the original
 defect through the hardened call site**, and it invalidates the branch's central
-claim until fixed. See "The argument holds only MODULO SERIALIZATION" above for
-the reproduction. Both `putShape` and `updateProps` are affected; the hole is
+claim until fixed. See "The argument depends on a test, not on the predicate
+alone" above for the reproduction. Both `putShape` and `updateProps` are affected; the hole is
 pre-existing from Task 2, not introduced by Task 4.
 
 **Files:**
@@ -2408,11 +2441,28 @@ typed field, "leaks" means pre-serialization valid but post-read-back invalid:
 | `undefined` | `null` | ✅ | ❌ | **← the only leak** |
 | `NaN` | `null` | ❌ | ❌ | already rejected |
 | `Infinity` | `null` | ❌ | ❌ | already rejected |
-| `-0` | `0` | ✅ | ✅ | faithful |
+| `-0` | **`+0`** | ✅ | ✅ | **normalized, NOT faithful** — see below |
 | `Date` | `{}` | ❌ | ❌ | already rejected |
 | `Map` | `{"a":1}` | ❌ | ❌ | already rejected |
 | `bigint` | *write throws* | ❌ | — | already rejected |
 | explicit `null` | `null` | ❌ | ❌ | already rejected (`.optional()` ≠ `.nullable()`) |
+
+> **CORRECTED 2026-07-20 — the `-0` row.** An earlier revision of this table
+> claimed `-0` round-trips "faithfully". It does not: Loro normalizes `-0` to
+> `+0` in the tree-node data path, confirmed against `loro-crdt/base64` (the
+> import production uses) with `Object.is(readback, -0) === false`, for both a
+> props key and an envelope field.
+>
+> **This is not a leak of the kind this table enumerates**, and the table's
+> conclusion is unaffected: `z.number()` accepts both signed zeros identically,
+> so `-0` can never produce a pre-valid/post-invalid divergence. It is correctly
+> outside `asStored`'s scope — normalizing it would be pure ceremony.
+>
+> **Why the original probe missed it, which is the instructive part:** it
+> compared values with `JSON.stringify`, and `JSON.stringify(-0) === "0"`. The
+> instrument was lossy for exactly the property being asserted. When a probe's
+> whole purpose is to establish that a value survives a round-trip, compare with
+> `Object.is` — not `JSON.stringify`, not `===` (which also reports `-0 === 0`).
 
 **This is decisive for the design**: the seam is exactly **one rule**, not a
 model of Loro's value marshaling.
@@ -2658,6 +2708,41 @@ cd /home/stag/src/projects/ensembleworks
 git add canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/canvas-doc.ts canvas-doc/src/serialization-seam.test.ts canvas-doc/src/write-validation.test.ts
 git commit -m "fix(canvas-doc): validate the post-serialization form so undefined cannot smuggle null past the boundary"
 ```
+
+### ✅ Task 4N LANDED at `b5031d0` — three deliberate deviations from the text above
+
+All three are **accepted**. Recorded so a plan-to-code diff does not read as
+drift, and so nobody "simplifies" them back.
+
+**1. `asStored` is exported.** Not prescribed above. It is exported
+*specifically so the drift guard can compare against it* — see deviation 2 —
+and its doc comment says so. It is **not** general public API: nothing outside
+`canvas-doc` should call it, and a future reader should not treat the export as
+an invitation.
+
+**2. The drift guard was STRENGTHENED, and this is the version that matters.**
+Step 1's sketch asserted hand-written expectations about Loro's output
+(`assert.deepEqual(stored.nested, { a: null, b: 1 })`). That pins *Loro*, but it
+never compares `asStored` against Loro — so it is not a drift guard at all, and
+Step 1's own comment warned against exactly that mistake ("the comparison must
+be against a REAL write/read-back, never a hand-written expectation, or the
+guard proves nothing"). The plan then made the mistake it warned about. The
+landed version asserts:
+
+```ts
+assert.deepEqual(asStored(probes), stored)
+```
+
+against a real write and read-back. **That is the intended form.** It is what
+"Why write validation cannot lose data" now rests on. Do not replace it with
+literal expectations, however much more readable they look — readable and
+vacuous.
+
+**3. A second empty-patch case was added**, beyond the props-invalid one Step
+6(b) specified: an **envelope-invalid** pre-image (`opacity: 'opaque'`, seeded
+via `putShapeUnchecked`). Accepted — it covers the case Step 6(a)'s JSDoc
+correction is about, where *no* patch can ever heal the shape, and confirms an
+empty patch is still a no-op there rather than a counted rejection.
 
 ---
 
