@@ -3168,36 +3168,87 @@ git commit -m "feat(canvas-sync,client): forward the invalid-write sink and surf
 
 ## Task 4B: Make `reconcile()`'s refusals visible (review finding 2)
 
+> **Refreshed 2026-07-20 against `6d55bc7`** (after 1A/1B/3A/4/4N/4A landed).
+> Four factual corrections and one RED-strength correction are marked inline.
+>
+> **SCOPE EXTENDED 2026-07-20 (owner ruling).** The refresh found that
+> `refused` as originally scoped stopped at `reconcile`'s return value and
+> reached nothing a human ever looks at — a task called "make refusals
+> visible" that left the number unobservable in production. Ruling: extend it,
+> **minimally** — one field on `ShadowMetrics`, one accumulate in `tick()`
+> (Steps 5–8). Explicitly **not** in scope: alerting, thresholds, or any
+> dashboard rendering. Surfacing the number where the existing metrics already
+> surface is the whole ask.
+
 ### Why here
 
 This is the server-side twin of Task 4A: 4A makes rejections visible to a
-developer in the browser, 4B makes them visible to the shadow dashboard. Both
-consume `invalidWriteCount`, both leave `canvas-doc` for a consuming package,
-and both are pure observability with no effect on the write path — so they
-belong adjacent and commit separately. It must come **after** Task 4 because a
-`refused` count that omits `updateProps` rejections would be misleading from the
-day it shipped, even though `reconcile` itself only calls `putShape`.
+developer in the browser, 4B makes them visible on the shadow metrics
+endpoint. Both consume `invalidWriteCount`, both leave `canvas-doc` for a
+consuming package, and both are pure observability with no effect on the write
+path — so they belong adjacent and commit separately. It must come **after**
+Task 4 because a `refused` count that omitted `updateProps` rejections would be
+misleading from the day it shipped.
+
+The task has **two RED-first halves**, committed separately: Steps 1–4 make
+`reconcile` *report* the refusal, Steps 5–8 make `ShadowMirror` *expose* it.
+The second half is what closes the loop to a human — `createCanvasMetricsRouter`
+serves `entry.mirror.metrics()` whole (`server/src/features/canvas-metrics.ts:47`,
+typed `ReturnType<ShadowMirror['metrics']>`), so a field added to
+`ShadowMetrics` reaches `GET /api/canvas/metrics` with **no change to that
+router** — verified by reading it, and the reason one field plus one accumulate
+is genuinely sufficient.
+
+> **CORRECTED — `reconcile` calls more than `putShape`.** The ratified text
+> said "`reconcile` itself only calls `putShape`". It also calls
+> `deleteShape`, `putPage`/`deletePage` and `putBinding`/`deleteBinding`
+> (`reconcile.ts:60, 86-92`). The delta bracket below is still exact, but for
+> a different reason than "putShape is the only write": **`rejectWrite` has
+> exactly two call sites in the whole repo** — `putShape`
+> (`loro-canvas-doc.ts:237`) and `updateProps` (`:304`) — verified by
+> `grep -n "rejectWrite(" canvas-doc/src/loro-canvas-doc.ts`, which returns
+> the definition at `:165` and those two. `putPage` and `putBinding` are
+> unvalidated one-liners (`:446`, `:455`). So no write outside the put loop
+> can move the counter today, and bracketing the loop rather than the whole
+> function is a *forward* guard: it stays correct if page/binding validation
+> is ever added.
 
 **Files:**
-- Modify: `server/src/canvas-v2/reconcile.ts`
-- Modify: `server/src/canvas-v2/reconcile.test.ts`
+- Modify: `server/src/canvas-v2/reconcile.ts` (Steps 3a)
+- Modify: `server/src/canvas-v2/reconcile.test.ts` (Steps 1, 3b)
+- Modify: `server/src/canvas-v2/shadow.ts` (Step 7)
+- Modify: `server/src/canvas-v2/shadow.test.ts` (Step 5)
+
+`server/src/features/canvas-metrics.ts` needs **no** edit — see "Why here".
+
+`server/` is **not** one of the ux-contract gate's `INTERACTION_BEARING_PREFIXES`
+(`scripts/ux-contract-presence.test.ts:36` lists `canvas-editor/src/tools/`,
+`canvas-react/src/`, `client/src/canvas-v2/` — verified at `6d55bc7`), so unlike
+Task 4A this task adds nothing to the PR-body marker's burden.
 
 ### The problem
 
-`server/src/canvas-v2/reconcile.ts:77`:
+`server/src/canvas-v2/reconcile.ts:74-80` (tab-indented; the ratified text
+quoted this as a single line, which it is not):
 
 ```ts
-if (!prev || !shallowEqualShape(prev, s)) { doc.putShape(s); puts++ }
+	for (const s of ordered) {
+		const prev = curShapesAfter.get(s.id)
+		if (!prev || !shallowEqualShape(prev, s)) {
+			doc.putShape(s)
+			puts++
+		}
+	}
 ```
 
 `puts++` is unconditional and **cannot tell a refusal from a write.** The shapes
 come from `fromTldraw` via `server/src/canvas-v2/convert.ts`, which passes
-`props: r.props ?? {}` **verbatim** from live tldraw records with no validation
-— and notably *unlike* `opacity: r.opacity ?? 1` and `isLocked: !!r.isLocked` on
-the adjacent lines, which **are** coerced. Verified in source.
+`props: r.props ?? {}` verbatim from live tldraw records with no validation
+(`convert.ts:28`) — and notably *unlike* `isLocked: !!r.isLocked` (`:25`) and
+`opacity: r.opacity ?? 1` (`:26`) two lines above, which **are** coerced.
 
 So a live room carrying a malformed prop — the exact scenario motivating this
-whole branch — now yields:
+whole branch — yields:
 
 ```
 shape absent → !prev → putShape → refused → still absent
@@ -3207,31 +3258,96 @@ shape absent → !prev → putShape → refused → still absent
 **`reconcile` never converges.** `puts` reports a nonzero delta every tick and
 the shadow divergence signal never clears.
 
+**Measured, not reasoned (probe run at `6d55bc7`, then deleted).** A two-shape
+target — one valid `note`, one `frame` with `props: { w: '100' }` — reconciled
+three times into one fresh doc:
+
+```
+r1 {"puts":2,"deletes":0} invalidWriteCount 1   shapes after 1: [ "shape:ok" ]
+r2 {"puts":1,"deletes":0} invalidWriteCount 2
+r3 {"puts":1,"deletes":0} invalidWriteCount 3
+```
+
+Both halves of the claim hold: the refusal is counted as a put, and the doc
+never converges. Note `invalidWriteCount` is a **lifetime** total that grows one
+per tick — that is what makes assertion B below discriminating.
+
 This is *better* than the old behaviour — it no longer feeds the cascade-delete
 — but it changes what the shadow dashboard **means**, and a permanently-nonzero
 divergence with no explanation is exactly how a genuine regression six months
-later gets waved away as "oh, that number's always been nonzero." Existing suites
-miss it because their fixtures are well-formed.
+later gets waved away as "oh, that number's always been nonzero." Existing
+cases miss it because their fixtures are all well-formed.
 
 **Step 1: Write the failing test**
 
-Add to `server/src/canvas-v2/reconcile.test.ts` — follow the file's existing
-fixture-construction style rather than the sketch below:
+> **CORRECTED — the ratified sketch was not runnable and its RED was weak.**
+> It named `doc` and `targetWithOneInvalidShape`. `doc` is already bound at
+> `reconcile.test.ts:34` to case 1's doc, which by then carries `model2`'s
+> four shapes — reusing it would have reconciled against dirty state and
+> produced deletes nobody predicted. And its fixture held *only* an invalid
+> shape, so `assert.equal(r.puts, 0)` could not distinguish "the refused put
+> was subtracted" from "nothing was ever put". The block below uses a fresh
+> `doc5` and a fixture with **one valid shape alongside the invalid one**, so
+> `puts` is a discriminating nonzero.
+
+Insert as case 8 in `server/src/canvas-v2/reconcile.test.ts`, **before** the
+final `console.log('ok: reconcile')` line — appending after it makes the suite
+print its success line and *then* fail, which reads as a passing suite in a
+scrollback. The file is **tab**-indented; match it. This block was executed at
+`6d55bc7` to record the RED below, so **land it byte-identical** or re-record
+the RED yourself.
 
 ```ts
-// A target carrying a shape whose props fail validateShape (the legacy-room
-// scenario: convert.ts passes tldraw props through verbatim). reconcile must
-// REPORT the refusal rather than counting it as a put — otherwise the shadow
-// dashboard shows a permanent nonzero divergence with no way to tell a
-// refusal from a genuine pending write.
-const r = reconcile(doc, targetWithOneInvalidShape)
-assert.equal(r.refused, 1, 'the refused write is reported, not counted as a put')
-assert.equal(r.puts, 0, 'a refused write is NOT a put')
-// And it is stable: a second pass reports the same thing, so a reader can tell
-// "converged, minus a known-bad shape" from "still making progress".
-const r2 = reconcile(doc, targetWithOneInvalidShape)
-assert.deepEqual({ puts: r2.puts, refused: r2.refused }, { puts: 0, refused: 1 })
+// --- 8) A target carrying a shape the write boundary REFUSES. convert.ts
+// passes tldraw props through verbatim, so a legacy room can hand reconcile a
+// shape validateShape rejects. The put is a NO-OP, so the shape stays absent
+// and the next tick tries again — forever. reconcile must therefore report
+// the refusal separately: folded into `puts` it is indistinguishable from a
+// genuine pending write, and the shadow divergence signal reads as permanent
+// unexplained churn. ---
+const doc5 = LoroCanvasDoc.create({ peerId: 5n })
+const withInvalid = makeDocument({
+	pages: [{ id: 'page:p', name: 'Page' }],
+	shapes: [
+		{ id: 'shape:ok', kind: 'note', parentId: 'page:p', props: { color: 'yellow' }, ...base() } as any,
+		{ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as any,
+	],
+	bindings: [],
+})
+// A: one valid shape ALONGSIDE the invalid one, so `puts` is a discriminating
+// nonzero — an implementation that reports `refused` but forgets to subtract
+// it from `puts` returns {puts:2} here.
+const r8a = reconcile(doc5, withInvalid)
+assert.deepEqual(r8a, { puts: 1, deletes: 0, refused: 1 }, 'the refused write is reported as refused, NOT counted as a put')
+// The counts are not accounting fiction: the valid shape really landed and the
+// refused one really did not. This is also what kills a "make it converge" fix
+// that swaps in putShapeUnchecked — that writes both ids and refuses nothing.
+assert.deepEqual(sortedIds(dumpModel(doc5).shapes), ['shape:ok'], 'the valid shape landed; the refused one did not')
+// B: `refused` must be a PER-TICK delta, not doc.invalidWriteCount itself.
+// That counter is a monotonic lifetime total (loro-canvas-doc.ts:141-144,
+// "Never reset") and grows by one on every tick this target is reconciled —
+// measured 1, 2, 3 over three ticks. An implementation that returns it raw
+// passes A and then reports refused:2 here.
+const r8b = reconcile(doc5, withInvalid)
+assert.deepEqual(r8b, { puts: 0, deletes: 0, refused: 1 }, 'stable across ticks: refused is a per-tick delta, not the doc lifetime total')
 ```
+
+No new imports are needed: `LoroCanvasDoc`, `dumpModel`, `makeDocument`,
+`reconcile`, `base` and `sortedIds` are all already in scope
+(`reconcile.test.ts:14-21`).
+
+Do **not** wrap this in a bare `{ … }` section block. Cases 1, 4 and 5 use them,
+but a bare block after a statement ending in `)` walks straight into the `tsc`
+parse trap documented in the working rules; the unique names above avoid the
+question entirely.
+
+**Which wrong implementations does this kill?**
+
+| Mutant | Caught by |
+|---|---|
+| **M1** — computes `refused` correctly, forgets `puts -= refused` | A: returns `{puts:2}` |
+| **M2** — returns `doc.invalidWriteCount` raw instead of a delta | B: returns `refused:2` on the second tick. **A alone does not catch this** — this is the 4A lesson repeating, an assertion that is already true of the wrong implementation |
+| **M3** — "fixes" non-convergence by calling `putShapeUnchecked` | A (`refused:0`) *and* the `dumpModel` assertion (both ids present) |
 
 **Step 2: Run it to verify it fails**
 
@@ -3239,12 +3355,54 @@ assert.deepEqual({ puts: r2.puts, refused: r2.refused }, { puts: 0, refused: 1 }
 cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun server/src/canvas-v2/reconcile.test.ts
 ```
 
-Expected: FAIL — `refused` is not a property of the return type, so the
-assertion reads `undefined !== 1`. **Record the verbatim output.**
+Expected: FAIL on assertion A. **This was executed at `6d55bc7`**; the verbatim
+tail is:
 
-**Step 3: Implement**
+```
+AssertionError: the refused write is reported as refused, NOT counted as a put
++ actual - expected
 
-Take an `invalidWriteCount` delta across the put loop and widen the return type:
+  {
+    deletes: 0,
++   puts: 2
+-   puts: 1,
+-   refused: 1
+  }
+
+ generatedMessage: false,
+     actual: {
+  puts: 2,
+  deletes: 0,
+},
+   expected: {
+  puts: 1,
+  deletes: 0,
+  refused: 1,
+},
+   operator: "deepStrictEqual",
+       code: "ERR_ASSERTION"
+```
+
+Two things the real run also prints, both expected:
+
+- **The doc's fallback `console.warn` fires first** —
+  `[canvas-doc] rejected invalid putShape (frame) shape:bad [#1]: …` followed by
+  the Zod detail (`invalid props for kind frame: … expected number, received
+  string`). The write *is* already being refused and counted; only `reconcile`'s
+  report is blind to it. `reconcile`'s doc is a `ShadowMirror` doc constructed
+  without an `onInvalidWrite` sink (`shadow.ts:97`), so the console fallback is
+  the live behaviour here, exactly as Task 4A's assertion C pins.
+- Cases 1–7 all still pass at this point — `refused` does not exist yet, so
+  their `deepEqual`s are unaffected. Step 3 changes that; see Step 3b.
+
+**Record your own verbatim output anyway** — a run that differs in text but
+still lands on assertion A is a correct RED; only a *passing* test is grounds to
+stop.
+
+**Step 3a: Implement**
+
+Take an `invalidWriteCount` delta across the put loop and widen the return type
+(`reconcile.ts:49`):
 
 ```ts
 export function reconcile(doc: LoroCanvasDoc, target: CanvasDocument): { puts: number; deletes: number; refused: number } {
@@ -3259,6 +3417,12 @@ export function reconcile(doc: LoroCanvasDoc, target: CanvasDocument): { puts: n
 	// behaviour wrote it and let repair() cascade-delete the subtree), but it
 	// changes what the dashboard MEANS, so it must be legible rather than
 	// silently folded into `puts`.
+	//
+	// invalidWriteCount is a monotonic LIFETIME total, so `refused` must be a
+	// delta: the shadow mirror reconciles the same doc every tick, and the raw
+	// counter would grow without bound while the per-tick truth stayed 1.
+	// Bracketing the loop rather than the whole function is deliberate — no
+	// write outside it can reject today, and this stays correct if one ever can.
 	const refusedBefore = doc.invalidWriteCount
 	for (const s of ordered) {
 		const prev = curShapesAfter.get(s.id)
@@ -3271,32 +3435,245 @@ export function reconcile(doc: LoroCanvasDoc, target: CanvasDocument): { puts: n
 	puts -= refused // a refusal is not a put
 ```
 
-Then update `reconcile`'s doc comment (the `puts`/`deletes` note around line 36)
-to document `refused` and the non-convergence it makes visible.
+and return `{ puts, deletes, refused }` at `reconcile.ts:95`.
+
+Then extend the exported function's JSDoc (`reconcile.ts:33-48`, the block whose
+second sentence explains what `puts`/`deletes` count) to document `refused` and
+the non-convergence it makes visible. Leave the module-level comment above it
+alone.
 
 > **Do NOT "fix" this by calling `putShapeUnchecked` in `reconcile`.** That
 > would restore the exact data-loss path this branch exists to close — the shape
 > would be written and then cascade-deleted by `repair()` on every peer. The
 > non-convergence is the *correct* observable consequence of refusing to write
 > invalid data; the fix is to make it legible, which is what this task does.
-> Task 8A's CI gate will reject that call outright.
+> Case 8's `dumpModel` assertion fails on that mutant (M3), and Task 8A's CI
+> gate — **not yet written; `scripts/` holds only `run-tests.ts`,
+> `exposure-audit.test.ts` and `ux-contract-presence.test.ts` at `6d55bc7`** —
+> will reject the call outright once it lands.
+
+**Step 3b: Widen the eight existing `deepEqual`s — this is not optional**
+
+> **CORRECTED — the ratified text missed this entirely**, and claimed Step 4
+> would simply pass. It will not. `reconcile.test.ts` imports
+> `node:assert/strict`, where `assert.deepEqual` **is** `deepStrictEqual`: an
+> extra own enumerable key fails the comparison. Every existing assertion that
+> deep-compares a `reconcile` return against a two-key literal breaks the
+> moment `refused` is added — the return type "only gained a field" is true of
+> `tsc` and false of the suite.
+
+Find them:
+
+```
+cd /home/stag/src/projects/ensembleworks && grep -n "deepEqual(r[0-9a-z]*, { puts\|deepEqual(reconcile(" server/src/canvas-v2/reconcile.test.ts
+```
+
+At `6d55bc7` that returns **eight** sites (cases 1, 2, 3, 4, 5, 6 ×2, 7). Add
+`refused: 0` to each expected literal — do **not** weaken them to compare only
+`puts`/`deletes`. Every one of those cases uses a well-formed fixture, so
+`refused: 0` is a real assertion: it pins that valid data never trips the
+counter, which is the other half of the contract case 8 pins.
+
+`server/src/canvas-v2/shadow.ts:104` destructures `const { puts, deletes } =
+reconcile(...)` and needs **no** change — it names the fields it wants and
+ignores the new one. That is the only non-test caller in the repo (verified:
+`grep -rn "reconcile(" --include="*.ts" --include="*.tsx"`, excluding
+`node_modules`, returns `shadow.ts`, `reconcile.ts` itself, `reconcile.test.ts`,
+and one prose mention in `loro-canvas-doc.ts:251`).
 
 **Step 4: Run the tests**
 
 ```
 cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun server/src/canvas-v2/reconcile.test.ts
-cd /home/stag/src/projects/ensembleworks && bun run --filter '@ensembleworks/server' typecheck
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun server/src/canvas-v2/shadow.test.ts
+cd /home/stag/src/projects/ensembleworks && export PATH="$HOME/.bun/bin:$PATH" && bun run --filter '@ensembleworks/server' typecheck
 ```
 
-Expected: pass, and every existing `reconcile` caller still typechecks — the
-return type only gained a field.
+Expected: `ok: reconcile`, `ok: shadow`, and a clean typecheck.
 
-**Step 5: Commit**
+(The `export PATH=…` is required on the typecheck line and is **not** optional
+noise: `server/package.json`'s `typecheck` script is `bunx tsc --noEmit`, and
+`bunx` is not on `PATH` here — without it the run dies with
+`bunx: command not found` / `Exited with code 127`, which reads like a
+typecheck failure. Verified both ways at `6d55bc7`.)
+
+**Step 4b: Commit the first half**
 
 ```
 cd /home/stag/src/projects/ensembleworks
 git add server/src/canvas-v2/reconcile.ts server/src/canvas-v2/reconcile.test.ts
 git commit -m "feat(server): report refused writes from reconcile so divergence stays legible"
+```
+
+---
+
+### Second half — expose the count where someone will see it
+
+`reconcile` now reports `refused`, and `shadow.ts:104` still destructures only
+`{ puts, deletes }`, so the number is discarded one line after it is computed.
+These steps carry it to `GET /api/canvas/metrics`. **One field, one accumulate**
+— nothing else.
+
+**Is `ShadowMetrics.refused` per-tick or cumulative? CUMULATIVE, matching its
+neighbours.** `tick()` does `this.m.puts += puts` / `this.m.deletes += deletes`
+(`shadow.ts:105-106`), and `puts`'s own JSDoc opens "Cumulative shape puts
+across all ticks" (`shadow.ts:53`). `refused` must accumulate the same way, and
+the mismatch is worth naming explicitly because it is a live trap: `reconcile`
+returns a **per-tick delta**, and `ShadowMirror` accumulates it into a
+**lifetime total**. Same word, two scopes, one line apart. A counter that reset
+while `puts`/`deletes` climbed would make the endpoint unreadable — "refused: 1"
+next to "puts: 40000" would look like one historical blip rather than one
+refusal per tick forever. Step 5's second assertion is what pins this, and it is
+the only assertion that does.
+
+**Step 5: Write the failing test**
+
+Insert as case 6 in `server/src/canvas-v2/shadow.test.ts`, **before** the final
+`console.log('ok: shadow')` (`:167`) — same reason as case 8 in Step 1. Executed
+at `6d55bc7` to record the RED below; land it byte-identical or re-record.
+
+```ts
+// --- 6) REFUSED WRITES ARE COUNTED AND EXPOSED. convert.ts passes tldraw
+// props through verbatim, so a legacy room can hand the mirror a shape the
+// write boundary refuses (here: a frame whose `w` is the string '400'). The
+// put is a no-op, so the shape never lands and every later tick retries it —
+// reconcile cannot converge. Before `refused` existed those retries were
+// counted as `puts`, so /api/canvas/metrics showed a forever-climbing puts
+// rate with no way to tell real churn from one known-bad shape. checkEvery is
+// 100 so no divergence check fires inside this case — this fixture WOULD trip
+// one, legitimately, and that is case 3's subject, not this one. ---
+const badFrame = { ...frame(), id: 'shape:bad', props: { name: 'Legacy', w: '400', h: 300, color: 'black' } }
+const legacyRecords: any[] = [page, frame(), note(), badFrame]
+const mirror4 = new ShadowMirror('room4', 4n, () => legacyRecords, 100)
+
+mirror4.tick()
+{
+	const m = mirror4.metrics()
+	// puts and refused are DIFFERENT numbers here (2 vs 1) deliberately: an
+	// implementation that accumulates reconcile's `refused` into `puts`, or
+	// vice versa, survives any assertion where the two happen to be equal.
+	assert.equal(m.refused, 1, 'the refused write is counted')
+	assert.equal(m.puts, 2, 'the two valid shapes are puts; the refused one is not')
+	assert.equal(m.shapeCount, 2, 'the refused shape never landed in the mirror')
+}
+
+mirror4.tick()
+{
+	const m = mirror4.metrics()
+	// refused is CUMULATIVE, like puts and deletes: it climbs by one per tick
+	// for as long as the room carries the bad shape. Two mutants die here that
+	// the first tick cannot catch — assigning per-tick (`this.m.refused =
+	// refused`) leaves it at 1, and accumulating doc.invalidWriteCount raw
+	// rather than reconcile's per-tick delta reaches 3.
+	assert.equal(m.refused, 2, 'refused accumulates across ticks, like puts/deletes')
+	// The point of the whole task: the retry is no longer disguised as a put,
+	// so a steady-state puts rate of ~0 is a readable signal again.
+	assert.equal(m.puts, 2, 'the retried refusal did NOT inflate puts')
+}
+```
+
+No new imports: `ShadowMirror`, `page`, `frame`, `note` are all in scope
+(`shadow.test.ts:8-39`).
+
+**Which wrong implementations does this kill?**
+
+| Mutant | Caught by |
+|---|---|
+| **M4** — adds `refused` to the interface and the initializer, never accumulates in `tick()` | tick 1: `refused` is `0`. This is why the fixture must carry an actual invalid shape — `refused: 0` on a well-formed fixture is not a discriminator |
+| **M5** — accumulates into the wrong metric (`this.m.puts += refused` / `this.m.refused += puts`) | tick 1, `2 !== 1` — **verified by running case 6 in isolation under exactly this mutant**. (In the full file an earlier case trips first, so do not rely on the failure line to identify it) |
+| **M6** — `this.m.refused = refused` instead of `+=` | tick 2, `1 !== 2` — **verified by running this mutant**. Tick 1 alone passes it |
+| **M7** — accumulates `doc.invalidWriteCount` raw instead of reconcile's delta | tick 2: reaches 3, not 2 |
+
+**Step 6: Run it to verify it fails**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun server/src/canvas-v2/shadow.test.ts
+```
+
+Expected: FAIL on the first new assertion. Executed at `6d55bc7` (with Steps
+1–3b applied); verbatim:
+
+```
+AssertionError: the refused write is counted
+
+undefined !== 1
+
+ generatedMessage: false,
+     actual: undefined,
+   expected: 1,
+   operator: "strictEqual",
+       code: "ERR_ASSERTION"
+```
+
+`undefined`, not a wrong number: `ShadowMetrics` has no `refused` yet, and
+`metrics()` returns `{ ...this.m }`, so the read is a plain missing property at
+runtime. This is a runtime assertion failure, not a missing export — correct RED
+per the working rules. The `error: boom: simulated getCurrentSnapshot failure`
+line above it is case 4's deliberate fault injection and is present on healthy
+runs too; ignore it.
+
+**Step 7: Implement**
+
+Three edits in `server/src/canvas-v2/shadow.ts`, and nothing else:
+
+1. `ShadowMetrics` (`:51`) — add after `deletes` (`:62`):
+
+```ts
+	/**
+	 * Cumulative writes reconcile REFUSED, across all ticks — see reconcile()'s
+	 * `refused`. Unlike puts/deletes this does not settle at steady state: a
+	 * refused shape is never written, so every tick retries it and this climbs
+	 * by one per tick for as long as the room carries it. A steadily-climbing
+	 * `refused` therefore means "N shapes in this room fail the model schema",
+	 * not "N new problems occurred" — read the RATE against `ticks`, not the
+	 * total. It is the counterpart that lets `puts` go back to meaning churn:
+	 * before this field those retries were counted as puts.
+	 */
+	refused: number
+```
+
+2. the `m` initializer (`:80`) — `refused: 0,` alongside `puts: 0, deletes: 0,`.
+
+3. `tick()` (`:104-106`) — widen the destructure and accumulate:
+
+```ts
+			const { puts, deletes, refused } = reconcile(this.doc, target)
+			this.m.puts += puts
+			this.m.deletes += deletes
+			this.m.refused += refused
+```
+
+`+=`, not `=` — see the per-tick-vs-cumulative note above; that is mutant M6.
+
+Do **not** touch `checkDivergence`, `metrics()`, or
+`server/src/features/canvas-metrics.ts`.
+
+**Step 8: Run the tests**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun server/src/canvas-v2/shadow.test.ts
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun server/src/canvas-v2/reconcile.test.ts
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun server/src/features/canvas-metrics.test.ts
+cd /home/stag/src/projects/ensembleworks && export PATH="$HOME/.bun/bin:$PATH" && bun run --filter '@ensembleworks/server' typecheck
+```
+
+Expected: all pass. **No existing fixture needs updating for this half** — this
+is the opposite of Step 3b, and it was checked the same way rather than assumed:
+`grep -rn "\.metrics()" --include="*.test.ts" server/src` returns sites in
+`shadow.test.ts` only, **every one** of which reads individual fields
+(`assert.equal(m.puts, …)`) rather than deep-comparing the metrics object; and
+`canvas-metrics.test.ts` never calls `metrics()` at all — it goes through the
+HTTP payload, whose two
+`deepEqual`s over the payload (`:68`, `:191`) both assert `shadow: {}` — the
+empty-map case, where no `ShadowMetrics` is serialized at all. If a future
+reader adds a whole-object `deepEqual`, that changes.
+
+**Step 9: Commit the second half**
+
+```
+cd /home/stag/src/projects/ensembleworks
+git add server/src/canvas-v2/shadow.ts server/src/canvas-v2/shadow.test.ts
+git commit -m "feat(server): expose reconcile's refused count in ShadowMetrics"
 ```
 
 ---
