@@ -337,6 +337,16 @@ export class Editor {
   // ReparentShapes path already tolerates exactly this (canReparent
   // pre-check + try/catch around doc.reparent); the inverse gets the same
   // treatment here — skip the un-appliable op, keep replaying the rest.
+  //
+  // SECOND SKIP MODE (added with the write boundary): `putShape` now also
+  // silently REJECTS a shape that fails validateShape — a rejection this
+  // try/catch never observes, because it does not throw. A shape can reach the
+  // undo stack already invalid: it arrived from a remote peer through
+  // import(), or was loaded by fromSnapshot from a room whose stored SQLite
+  // predates the write boundary. Replaying such a shape is now a no-op rather
+  // than a restore. Deliberate — restoring it would only re-manufacture state
+  // repair() is obliged to cascade-delete. User-visible effect: an undo step
+  // that appears to do nothing for that shape.
   private replay(ops: readonly InverseOp[]): void {
     if (ops.length === 0) return
     for (const op of ops) {

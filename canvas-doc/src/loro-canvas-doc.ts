@@ -124,16 +124,32 @@ export class LoroCanvasDoc implements CanvasDoc {
   // the channel: 10 lines for a ten-second bad drag, 18 for an hour (the count
   // is floor(log2(writes)) + 1 — both figures computed, not estimated). The
   // [#n] marker tells the reader they are seeing a sample, not a census.
-  private rejectWrite(op: InvalidWrite['op'], value: unknown, id: string, error: string): void {
-    const raw = (value as { kind?: unknown } | null | undefined)?.kind
+  private rejectWrite(op: InvalidWrite['op'], value: unknown, rawId: unknown, error: string): void {
+    const rawKind = (value as { kind?: unknown } | null | undefined)?.kind
+    // `kind` is coerced here because InvalidWrite.kind is a NARROWED declared
+    // type (ShapeKind | '<unknown>') that runtime garbage would violate — not
+    // merely because kinds happen to have a closed vocabulary. `id` is
+    // declared plain `string`, so its rule is weaker but still checkable:
+    // must be a NON-EMPTY string. Empty is coerced too — it passes
+    // `typeof === 'string'` and would render as a blank in the log line,
+    // reading as a formatting bug rather than as missing data.
     const kind: ShapeKind | '<unknown>' =
-      typeof raw === 'string' && (SHAPE_KINDS as readonly string[]).includes(raw)
-        ? (raw as ShapeKind)
+      typeof rawKind === 'string' && (SHAPE_KINDS as readonly string[]).includes(rawKind)
+        ? (rawKind as ShapeKind)
         : '<unknown>'
+    const id = typeof rawId === 'string' && rawId.length > 0 ? rawId : '<no id>'
     const n = ++this.invalidWriteCounter
     const write: InvalidWrite = { op, kind, id, error }
-    if (this.onInvalidWrite) this.onInvalidWrite(write)
-    else if ((n & (n - 1)) === 0) console.warn(`[canvas-doc] rejected invalid ${op} (${kind}) ${id} [#${n}]: ${error}`)
+    if (this.onInvalidWrite) {
+      try { this.onInvalidWrite(write) }
+      catch { /* A reporting sink must NEVER convert a no-op rejection into a
+                 throw that escapes Editor.applyAll's un-try/caught intent loop
+                 and strands that batch's earlier mutations uncommitted
+                 (decision D1). The counter is incremented above, before this
+                 call, so a throwing sink cannot skew it either. */ }
+    } else if ((n & (n - 1)) === 0) {
+      console.warn(`[canvas-doc] rejected invalid ${op} (${kind}) ${id} [#${n}]: ${error}`)
+    }
   }
 
   private static PROP_KEY = '__props'
@@ -172,23 +188,28 @@ export class LoroCanvasDoc implements CanvasDoc {
     // rejectWrite.
     const v = validateShape(s)
     if (!v.ok) {
-      // Pass the whole rejected VALUE, not a locally-derived kind: rejectWrite
-      // coerces `kind` centrally so no call site can leak a non-ShapeKind into
-      // InvalidWrite. `id` is still read here because it has no equivalent
-      // closed vocabulary to validate against.
-      const id = typeof (s as { id?: unknown })?.id === 'string' ? (s as { id: string }).id : '<no id>'
-      this.rejectWrite('putShape', s, id, v.error)
+      // Pass the whole rejected VALUE, not a locally-derived kind or id:
+      // rejectWrite coerces both centrally so no call site can leak garbage
+      // into InvalidWrite.
+      this.rejectWrite('putShape', s, (s as { id?: unknown })?.id, v.error)
       return
     }
     this.putShapeUnchecked(s)
   }
   /**
-   * putShape WITHOUT the write-boundary validation above. Deliberately NOT on
-   * the CanvasDoc interface: it exists so tests and hostile-state rigs can
-   * construct exactly the docs a REMOTE peer's bytes can still deliver
-   * (import() applies remote ops straight to the tree and never passes
-   * through putShape, so local validation cannot close that door). Do not
-   * call it from production code.
+   * putShape WITHOUT the write-boundary validation above. It exists so tests
+   * and hostile-state rigs can construct exactly the docs a REMOTE peer's
+   * bytes can still deliver (import() applies remote ops straight to the tree
+   * and never passes through putShape, so local validation cannot close that
+   * door).
+   *
+   * Kept off the CanvasDoc interface as a SIGNAL, not a barrier — production
+   * reaches this concrete class routinely (SyncServerPeer.doc,
+   * SyncClientPeer.doc, ShadowMirror.doc and reconcile()'s parameter are all
+   * typed LoroCanvasDoc), so anyone typing `peer.doc.` gets this method in
+   * autocomplete with no interface boundary in the way. The actual enforcement
+   * is the CI presence gate in scripts/ — see it for the allowlist and how to
+   * extend it. Do not call this from production code.
    */
   putShapeUnchecked(s: Shape): void {
     // Placement FIRST, data second (same discipline as reparent): for an

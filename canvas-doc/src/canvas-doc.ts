@@ -61,8 +61,8 @@ export interface CanvasDoc {
    * validateShape — the same predicate repair() judges by — reporting it via
    * the implementation's invalid-write hook. A local writer can therefore no
    * longer originate the state repair() is obliged to destroy. Remote ops
-   * arriving through import() bypass this entirely; repair() remains the
-   * defence there.
+   * arriving through import(), or shapes loaded from a pre-boundary snapshot,
+   * bypass this entirely; repair() remains the defence there.
    */
   putShape(shape: Shape): void
   /** Silent no-op if no shape with this id exists. */

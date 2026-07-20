@@ -190,4 +190,60 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
   assert.match(String(warned[0]![0]), /rejected invalid putShape \(frame\) shape:bad \[#1\]/, 'the warning names the op, the kind, the id and the ordinal')
 }
 
+// --- Task 3A finding 1: a THROWING sink must not escape putShape ---
+// The reporting path exists BECAUSE we refuse to throw (decision D1). If the
+// sink itself can throw, the hole is back: Editor.applyAll has no try/catch
+// around its intent loop and commits only afterward, so an escaping throw
+// strands that batch's earlier mutations uncommitted.
+{
+  const doc = LoroCanvasDoc.create({
+    peerId: 16n,
+    onInvalidWrite: () => { throw new Error('handler blew up') },
+  })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape({ id: 'shape:keep', kind: 'note', parentId: 'page:p', props: {}, ...base() } as never)
+
+  assert.doesNotThrow(
+    () => doc.putShape({ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '1' }, ...base() } as never),
+    'a throwing sink must not escape putShape',
+  )
+  // Still a total no-op, and still counted.
+  assert.equal(doc.getShape('shape:bad'), undefined, 'the rejected write did not land')
+  assert.deepEqual(doc.listShapes().map((s) => s.id), ['shape:keep'], 'nothing else moved')
+  assert.equal(doc.invalidWriteCount, 1, 'the counter increments BEFORE the sink is called, so a throw cannot skew it')
+
+  // And the throw must not fall through to the console path either.
+  const realWarn = console.warn
+  let warnings = 0
+  console.warn = () => { warnings++ }
+  try {
+    doc.putShape({ id: 'shape:bad2', kind: 'frame', parentId: 'page:p', props: { w: '1' }, ...base() } as never)
+  } finally {
+    console.warn = realWarn
+  }
+  assert.equal(warnings, 0, 'a supplied-but-throwing sink still suppresses the console fallback')
+}
+
+// --- Task 3A finding 4: `id` is coerced centrally, including empty string ---
+{
+  const seen: InvalidWrite[] = []
+  const doc = LoroCanvasDoc.create({ peerId: 17n, onInvalidWrite: (w) => seen.push(w) })
+  doc.putPage({ id: 'page:p', name: 'P' })
+
+  doc.putShape({ kind: 'frame', parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(seen[0]!.id, '<no id>', 'a missing id is reported as <no id>')
+
+  // The case the old guard missed: '' is a string, so it passed through and
+  // rendered as a BLANK in the log line — reads as a formatting bug, not as
+  // missing data.
+  doc.putShape({ id: '', kind: 'frame', parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(seen[1]!.id, '<no id>', 'an EMPTY-STRING id is coerced too, not passed through blank')
+
+  doc.putShape({ id: 42, kind: 'frame', parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(seen[2]!.id, '<no id>', 'a non-string id never escapes as a non-string')
+
+  doc.putShape({ id: 'shape:real', kind: 'frame', parentId: 'page:p', props: { w: '1' }, ...base() } as never)
+  assert.equal(seen[3]!.id, 'shape:real', 'a genuine id is preserved')
+}
+
 console.log('ok: write-validation')
