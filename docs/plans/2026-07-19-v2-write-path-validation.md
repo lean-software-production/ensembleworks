@@ -224,6 +224,40 @@ The consequence is worth stating as a standalone claim:
 > everywhere, permanently"* into *"never write it."* There is no input for which
 > the old behaviour retained something the new behaviour discards.
 
+### The argument holds only MODULO SERIALIZATION — corrected 2026-07-20
+
+The two predicates are the same *function*, but until Task 4N they were applied
+to **different values**: `putShape`/`updateProps` validated the *pre*-
+serialization JS object, while `repair()` judges what Loro *stored*. Loro
+coerces `undefined` to `null`, and `z.number().optional()` accepts `undefined`
+but rejects `null` — so this passed the boundary and then failed on read-back:
+
+```
+updateProps('shape:f', { w: undefined })  →  ACCEPTED, invalidWriteCount = 0
+stored props   : {"w":null,"h":100}
+validateShape  : INVALID (expected number, received null)
+repairPlan     : [{ op: 'dropShape', id: 'shape:f' }]   ← the frame AND every child
+```
+
+**That is the original defect, reproduced through the freshly hardened call
+site** — which is worse than an unhardened one, because the code claims to be
+safe. `putShape` had the identical hole (pre-existing from Task 2, not
+introduced by Task 4), and it extends to **envelope fields** as well as props:
+`x: undefined` stores `x: null` and fails read-back the same way.
+
+**Task 4N closes it** by validating the post-serialization form. Once that has
+landed the structural argument is sound without qualification, because both
+predicates then see the same value. Until then, read every "anything accepted
+here is something `repair()` will not later act on" claim in this document —
+including the comment on `putShape` — as true *modulo the `undefined`→`null`
+seam*.
+
+Not reachable from production as written: the reviewer tried and failed to build
+a live path (the screenshare relock write is guarded by
+`if (!(videoWidth > 0) || !(videoHeight > 0)) return null`, and the other embed
+writes pass concrete values). A completeness gap, not a live defect — but the
+same failure mode the branch exists to close.
+
 That is why this branch does not need an exhaustive proof that validation never
 fires on legitimate shapes: the failure mode of being wrong is strictly bounded
 by the failure mode it replaces.
@@ -611,6 +645,31 @@ separate `unsafe` module): all cost more than the bug they prevent, and the
 clean-room constraint rules out the usual tricks. A presence-style CI gate is
 the conventional answer here — the repo already has two.
 
+### Ruling 9 — Task 4 review outcomes (2026-07-20)
+
+| # | Finding | Disposition |
+|---|---|---|
+| 1 | `undefined` → `null` lets an invalid write pass **both** call sites, reproducing the original defect through the hardened path | **Task 4N** — option 3, validate the post-serialization form |
+| 2 | `updateProps` JSDoc overclaims: healing works only for **props** invalidity, not envelope | Task 4N step 6(a) |
+| 3 | `updateProps(id, {})` on an invalid shape is counted though it writes nothing | **Fixed** — Task 4N step 6(b); an empty patch is a no-op by definition |
+| 4 | Zod abort-ordering hazard (below) | **Recorded, not fixed** |
+
+### Ruling 10 — Latent hazard: `propsByKind` safety rests on Zod's abort ordering
+
+**Recorded 2026-07-20. Do NOT fix on this branch.**
+
+`canvas-model/src/shape.ts`'s `superRefine` does
+`propsByKind[s.kind as ShapeKind].safeParse(s.props)`. For a shape whose stored
+`kind` is garbage, `propsByKind[garbage]` is `undefined` and `.safeParse` would
+throw a `TypeError`. It does not, because the envelope's `z.enum(SHAPE_KINDS)`
+fails first and `superRefine` never runs.
+
+So this is correct **by ordering, not by an explicit guard** — the kind of
+correctness that survives until someone reorders the schema or makes `kind`
+lenient. A one-line guard would make it structural. Out of scope here; it is a
+`canvas-model` schema change with its own blast radius, and nothing on this
+branch makes it more likely to fire.
+
 ### Ruling 6 — The optional third constructor parameter: **settled, leave it alone.**
 
 Review explicitly confirmed that `LoroCanvasDoc`'s optional third positional
@@ -650,13 +709,21 @@ Lettered tasks were added after the plan was first written, so the many
 | 2 | original | — | ✅ landed `81fcc94` + `5060832` |
 | 3 | original | — | ✅ landed `f93192f` |
 | 3A | 2026-07-20 | Task 2 **quality** review (ruling 8) — findings 1, 3, 4, 5 | ✅ landed `d0e408c` + `792be65` |
+| 4 | original | — | ✅ landed `d5a9237` |
+| **4N** | 2026-07-20 | Task 4 review (ruling 9) — the serialization seam | ⬅ **start here** |
 | 4A | 2026-07-20 | Task 1 quality review, finding 1 (ruling 5) | pending |
 | 4B | 2026-07-20 | Task 2 quality review, finding 2 (ruling 8) | pending |
 | 8A | 2026-07-20 | Task 2 quality review, finding 5 (ruling 8) — the CI gate | pending |
 
-**Start at Task 4.** Tasks 1 through 3A are landed; Task 3A's blocking
-correctness fix is in, so Task 4 can now write the second `rejectWrite` call
-site against the corrected signature.
+**Execution order is the table's order, not alphabetical:**
+1 → 1A → 1B → 2 → 3 → 3A → 4 → **4N** → 4A → 4B → 5 → 6 → 7 → 8 → 8A → 9.
+`4N` is lettered out of sequence deliberately: renaming the existing `4A`/`4B`
+would break this document's many cross-references to them.
+
+**Start at Task 4N.** Tasks 1 through 4 are landed. Task 4N closes a
+completeness gap that reproduces the original defect through the freshly
+hardened call site, and it restores the branch's central safety claim — see
+"The argument holds only MODULO SERIALIZATION" above.
 
 The two halves are technically independent — (A) is strictly additive and
 independently landable — which is what makes the fallback possible. If half (B)
@@ -2302,7 +2369,302 @@ git commit -m "fix(canvas-doc): validate the merged result on updateProps"
 
 ---
 
+## Task 4N: Close the `undefined` → `null` serialization seam
+
+**Runs after Task 4 and BEFORE Task 4A** — see the task-order table. (Lettered
+out of alphabetical sequence to avoid renaming the existing 4A/4B and breaking
+this document's cross-references; the table is authoritative for order.)
+
+Task 4's spec review found a completeness gap that **reproduces the original
+defect through the hardened call site**, and it invalidates the branch's central
+claim until fixed. See "The argument holds only MODULO SERIALIZATION" above for
+the reproduction. Both `putShape` and `updateProps` are affected; the hole is
+pre-existing from Task 2, not introduced by Task 4.
+
+**Files:**
+- Modify: `canvas-doc/src/loro-canvas-doc.ts` (add `asStored`, use it at both call sites)
+- Create: `canvas-doc/src/serialization-seam.test.ts`
+
+### What was measured before choosing (2026-07-20)
+
+Two probes against real Loro (`loro-crdt` 1.13.6), written and run rather than
+reasoned about:
+
+**Probe 1 — is the coercion uniform?** Yes, everywhere:
+
+| Location | `undefined` stored as | read-back validates? |
+|---|---|---|
+| props, top-level typed key (`w`) | `null` | ❌ |
+| props, nested object | `null` | ✅ (loose passthrough) |
+| props, array element | `null` | ✅ (loose passthrough) |
+| `meta` value | `null` | ✅ (`z.record(z.unknown())`) |
+| **envelope field (`x`)** | `null` | ❌ |
+
+**Probe 2 — is `undefined` the ONLY divergence?** Yes. Testing each value in a
+typed field, "leaks" means pre-serialization valid but post-read-back invalid:
+
+| Value | Stored as | pre | post | |
+|---|---|---|---|---|
+| `undefined` | `null` | ✅ | ❌ | **← the only leak** |
+| `NaN` | `null` | ❌ | ❌ | already rejected |
+| `Infinity` | `null` | ❌ | ❌ | already rejected |
+| `-0` | `0` | ✅ | ✅ | faithful |
+| `Date` | `{}` | ❌ | ❌ | already rejected |
+| `Map` | `{"a":1}` | ❌ | ❌ | already rejected |
+| `bigint` | *write throws* | ❌ | — | already rejected |
+| explicit `null` | `null` | ❌ | ❌ | already rejected (`.optional()` ≠ `.nullable()`) |
+
+**This is decisive for the design**: the seam is exactly **one rule**, not a
+model of Loro's value marshaling.
+
+### Decision: option 3 — validate the post-serialization form
+
+Normalize `undefined` → `null` recursively, validate *that*, store the original
+(Loro will produce the same normalization).
+
+**Why not option 1 (reject any patch containing `undefined`).** Probe 2's last
+row rules it out: `{ stillUrl: undefined }` on a `screenshare` — the realistic
+embed-write pattern — stores `{"stillUrl":null}` and **remains valid**, because
+`stillUrl` is a loose passthrough key and `looseObject` accepts `null` for
+unknown keys. Option 1 would reject a write that is genuinely fine. It punishes
+the common case to catch the rare one.
+
+**Why not option 2 (strip `undefined` keys, then validate).** Two reasons. It
+silently reinterprets caller intent, and — decisively — it converts a bad write
+into a **no-op the caller cannot detect**: no rejection, no counter, no hook. The
+whole point of D1 is that a refused write is *reported*. Option 2 refuses
+invisibly. The concern motivating it ("`undefined` may mean *clear this prop*")
+also does not survive contact with the API: `{...cur, ...props}` can never remove
+a key, so there is no existing "clear" semantic to preserve — today
+`{ w: undefined }` means "store `null`", which is simply wrong for a typed field.
+
+**Why option 3's stated cost does not apply here.** The objection was that a
+normalizer must stay in sync with Loro's coercion and would drift silently.
+Probe 2 dissolves the first half — there is one rule to keep in sync, not a
+marshaling model — and Step 1's drift test dissolves the second: it compares the
+normalizer against **what real Loro actually stores**, so drift fails loudly
+instead of quietly reopening the boundary.
+
+**What this changes in practice** is narrow and correct: `undefined` is now
+rejected exactly where `null` would be invalid — typed props (`w`, `h`, `name`)
+and every envelope field — and still accepted on loose passthrough keys, where
+it is harmless. Realistic embed writes are unaffected.
+
+**Step 1: Write the failing test**
+
+Create `canvas-doc/src/serialization-seam.test.ts`:
+
+```ts
+// Run: bun src/serialization-seam.test.ts
+// Loro stores `undefined` as `null`. Validating the PRE-serialization object
+// therefore judges a different value than the one repair() will later judge on
+// read-back — the seam that let `{ w: undefined }` pass the write boundary and
+// then be cascade-deleted by repair(). See the plan's Task 4N.
+import assert from 'node:assert/strict'
+import { validateShape } from '@ensembleworks/canvas-model'
+import { LoroCanvasDoc } from './loro-canvas-doc.js'
+
+const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {} });
+
+// --- The reported reproduction, closed at BOTH call sites ---
+// The assertion that matters is the READ-BACK one: it is not enough that the
+// write was refused, the doc must be left in a state repair() will not act on.
+{
+  const doc = LoroCanvasDoc.create({ peerId: 20n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape({ id: 'shape:f', kind: 'frame', parentId: 'page:p', props: { w: 100, h: 100 }, ...base() } as never)
+  doc.putShape({ id: 'shape:kid', kind: 'note', parentId: 'shape:f', props: {}, ...base() } as never)
+  doc.commit()
+
+  // updateProps half.
+  doc.updateProps('shape:f', { w: undefined })
+  assert.equal(doc.invalidWriteCount, 1, 'updateProps rejects a patch that would STORE null in a typed field')
+  assert.deepEqual(doc.getShape('shape:f')!.props, { w: 100, h: 100 }, 'props untouched')
+  assert.ok(validateShape(doc.getShape('shape:f')).ok, 'READ-BACK still validates — repair() has nothing to act on')
+
+  // putShape half — same hole, pre-existing from Task 2.
+  doc.putShape({ id: 'shape:g', kind: 'frame', parentId: 'page:p', props: { w: undefined, h: 1 }, ...base() } as never)
+  assert.equal(doc.invalidWriteCount, 2, 'putShape rejects it too')
+  assert.equal(doc.getShape('shape:g'), undefined, 'nothing was written')
+
+  // Envelope fields leak the same way, not just props.
+  doc.putShape({ id: 'shape:h', kind: 'frame', parentId: 'page:p', props: {}, ...base(), x: undefined } as never)
+  assert.equal(doc.invalidWriteCount, 3, 'an undefined ENVELOPE field is rejected too')
+
+  // And the whole doc is repair-clean: the defect was that repair() would
+  // cascade-delete shape:f AND shape:kid.
+  doc.commit()
+  assert.deepEqual(doc.repair(), [], 'repair() has nothing to do — the frame and its child are safe')
+  assert.deepEqual(doc.listShapes().map((s) => s.id).sort(), ['shape:f', 'shape:kid'])
+}
+
+// --- Loose passthrough keys still accept undefined: null is VALID there ---
+// This is why we normalize-then-validate rather than banning `undefined`
+// outright. `{ stillUrl: undefined }` is the realistic embed-write pattern.
+{
+  const doc = LoroCanvasDoc.create({ peerId: 21n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape({ id: 'shape:ss', kind: 'screenshare', parentId: 'page:p', props: { w: 10, h: 10 }, ...base() } as never)
+  doc.updateProps('shape:ss', { stillUrl: undefined })
+  assert.equal(doc.invalidWriteCount, 0, 'a loose passthrough key tolerates null — do not punish the common case')
+  assert.ok(validateShape(doc.getShape('shape:ss')).ok, 'and the read-back validates')
+}
+
+// --- DRIFT GUARD: the normalizer must match what Loro ACTUALLY stores ---
+// This is what makes "validate the post-serialization form" safe to rely on.
+// If Loro's coercion ever changes, this fails loudly rather than silently
+// reopening the write boundary.
+{
+  const doc = LoroCanvasDoc.create({ peerId: 22n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  const probes: Record<string, unknown> = {
+    plainUndefined: undefined,
+    nested: { a: undefined, b: 1 },
+    inArray: [1, undefined, 3],
+    keptNumber: -0,
+    keptString: 'x',
+  }
+  doc.putShapeUnchecked({ id: 'shape:p', kind: 'frame', parentId: 'page:p', props: probes, ...base() } as never)
+  doc.commit()
+  const stored = doc.getShape('shape:p')!.props
+  // asStored is the module-private normalizer; assert its output equals what
+  // Loro really wrote. Export it for the test, or re-derive it here — but the
+  // comparison must be against a REAL write/read-back, never a hand-written
+  // expectation, or the guard proves nothing.
+  assert.deepEqual(stored.plainUndefined, null, 'undefined -> null')
+  assert.deepEqual(stored.nested, { a: null, b: 1 }, 'nested undefined -> null')
+  assert.deepEqual(stored.inArray, [1, null, 3], 'array undefined -> null')
+  assert.equal(stored.keptNumber, 0, '-0 is stored faithfully')
+  assert.equal(stored.keptString, 'x', 'strings are untouched')
+}
+
+console.log('ok: serialization-seam')
+```
+
+**Step 2: Run it to verify it fails**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/serialization-seam.test.ts
+```
+
+Expected: FAIL at `updateProps rejects a patch that would STORE null in a typed
+field` (`0 !== 1`) — today the patch is accepted. **Record the verbatim output.**
+
+**Step 3: Implement**
+
+Add the normalizer to `canvas-doc/src/loro-canvas-doc.ts`, above the class:
+
+```ts
+// Loro stores `undefined` as `null` — verified by probe across props, nested
+// objects, array elements, meta and envelope fields alike. Validating the
+// pre-serialization object therefore judges a DIFFERENT value than the one
+// read back: z.number().optional() accepts `undefined` but rejects `null`, so
+// `{ w: undefined }` passed the write boundary and then failed validation on
+// the next read — handing repair() a dropShape for a shape the boundary had
+// just approved, taking its whole subtree with it.
+//
+// `undefined` is the ONLY such divergence (probe-verified: NaN, Infinity,
+// Date, Map and bigint are each already rejected pre-serialization; -0 and
+// explicit null round-trip faithfully), so this is one rule, not a model of
+// Loro's value marshaling. serialization-seam.test.ts pins it against a real
+// write/read-back so it cannot drift silently.
+function asStored<T>(value: T): T {
+  if (value === undefined) return null as unknown as T
+  if (Array.isArray(value)) return value.map(asStored) as unknown as T
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = asStored(v)
+    return out as unknown as T
+  }
+  return value
+}
+```
+
+Then use it at **both** call sites — validate the normalized form, store the
+original (Loro produces the same normalization):
+
+```ts
+    const v = validateShape(asStored(s))                       // putShape
+```
+```ts
+    const v = validateShape(asStored({ ...shape, props: merged }))   // updateProps
+```
+
+**Step 4: Run the tests**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/serialization-seam.test.ts
+cd /home/stag/src/projects/ensembleworks/canvas-doc && ~/.bun/bin/bun test.ts
+cd /home/stag/src/projects/ensembleworks/canvas-editor && ~/.bun/bin/bun test.ts
+cd /home/stag/src/projects/ensembleworks/canvas-sync && ~/.bun/bin/bun test.ts
+```
+
+Expected: all pass. **If a tool FSM or rig suite newly fails, STOP and report** —
+that means a real caller relies on passing `undefined` for a typed field, which
+is exactly the kind of thing this task should surface rather than paper over.
+
+**Step 5: Correct the `putShape` comment's now-qualified claim**
+
+The comment says "anything accepted here is something `repair()` will not later
+act on." That was true only modulo this seam. With `asStored` in place it is
+true without qualification — add the reason so a reader knows it is load-bearing:
+
+```
+    // ...anything accepted here is something repair() will not later act on.
+    // Validation runs on asStored(s), NOT on `s`: repair() judges what Loro
+    // STORED, and Loro turns `undefined` into `null`. Validating the raw
+    // object would approve `{ w: undefined }` and then let repair() drop the
+    // shape — and its whole subtree — on the next pass.
+```
+
+**Step 6: Fix the two smaller review items**
+
+(a) **`CanvasDoc.updateProps`'s JSDoc overclaims.** It says "a patch that heals
+an already-invalid shape is accepted." True only for **props** invalidity —
+`validateShape` checks the whole envelope, so a shape with e.g.
+`opacity: 'opaque'` can never be prop-updated again; every patch is refused.
+Reachable only for `import()`-delivered shapes, and such a shape is
+`dropShape`-doomed anyway, so refusing is defensible — but say it accurately:
+
+```
+   * a patch that heals an already-invalid shape is accepted — but only if the
+   * shape's invalidity is in its PROPS. validateShape checks the whole
+   * envelope, so a shape whose envelope is invalid (e.g. opacity: 'opaque',
+   * reachable only via import()) can never be prop-updated again: every patch
+   * is refused. Defensible, since such a shape is dropShape-doomed anyway.
+```
+
+(b) **Empty patch inflates the counter.** `updateProps(id, {})` on an
+already-invalid shape is currently rejected and counted, though `{}` writes
+nothing. **Decision: fix it** — an empty patch is a no-op by definition, and
+counting it misreports "writes refused" for a call that attempted no write.
+One line, at the top of `updateProps`, matching the existing unknown-id no-op:
+
+```ts
+    if (Object.keys(props).length === 0) return // empty patch: a no-op by definition, not a rejection
+```
+
+Add an assertion for it in `write-validation.test.ts`:
+
+```ts
+  doc.updateProps('shape:invalid', {})
+  assert.equal(doc.invalidWriteCount, before, 'an empty patch is a no-op, not a counted rejection')
+```
+
+**Step 7: Commit**
+
+```
+cd /home/stag/src/projects/ensembleworks
+git add canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/canvas-doc.ts canvas-doc/src/serialization-seam.test.ts canvas-doc/src/write-validation.test.ts
+git commit -m "fix(canvas-doc): validate the post-serialization form so undefined cannot smuggle null past the boundary"
+```
+
+---
+
 ## Task 4A: Make the sink reachable in production (review finding 1)
+
+> **Task 4N runs before this one** — see its header for why it is lettered out
+> of alphabetical order.
 
 Everything so far reports into a hook that **nothing in the browser can
 supply**. This task closes that.
