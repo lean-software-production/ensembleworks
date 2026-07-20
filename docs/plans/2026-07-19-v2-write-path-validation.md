@@ -745,8 +745,8 @@ Lettered tasks were added after the plan was first written, so the many
 | 3A | 2026-07-20 | Task 2 **quality** review (ruling 8) — findings 1, 3, 4, 5 | ✅ landed `d0e408c` + `792be65` |
 | 4 | original | — | ✅ landed `d5a9237` |
 | **4N** | 2026-07-20 | Task 4 review (ruling 9) — the serialization seam | ✅ landed `b5031d0` |
-| 4A | 2026-07-20 | Task 1 quality review, finding 1 (ruling 5) | ⬅ **start here** |
-| 4B | 2026-07-20 | Task 2 quality review, finding 2 (ruling 8) | pending |
+| 4A | 2026-07-20 | Task 1 quality review, finding 1 (ruling 5) | ✅ landed `8939f32` + `6d55bc7` |
+| 4B | 2026-07-20 | Task 2 quality review, finding 2 (ruling 8) | ✅ landed `a443b9d` |
 | 8A | 2026-07-20 | Task 2 quality review, finding 5 (ruling 8) — the CI gate | pending |
 
 **Execution order is the table's order, not alphabetical:**
@@ -754,9 +754,11 @@ Lettered tasks were added after the plan was first written, so the many
 `4N` is lettered out of sequence deliberately: renaming the existing `4A`/`4B`
 would break this document's many cross-references to them.
 
-**Start at Task 4A.** Half (A)'s write boundary is complete and its central
-safety claim is restored (Task 4N, `b5031d0`). What remains in half (A) is
-observability: making rejections reachable and visible (4A, 4B).
+**Start at Task 5.** Half (A) is complete: the write boundary, its central
+safety claim (Task 4N, `b5031d0`), and its observability (4A, 4B) have all
+landed. What remains is half (B) — proportionality, where the *unrecoverable*
+side of the defect lives. Half (A) stops new bad writes from originating; it
+does nothing about the cascade already reachable by data written before it.
 
 The two halves are technically independent — (A) is strictly additive and
 independently landable — which is what makes the fallback possible. If half (B)
