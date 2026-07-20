@@ -2821,6 +2821,27 @@ edits contiguous in Tasks 1–4.
 > is already true before the fix exists. Spec review caught this; the test
 > below adds two discriminators (A and B) that a peer-level relay cannot
 > fake, verified independently against the mutant described above.
+>
+> **SECOND CORRECTION 2026-07-20 — assertion B pinned only one arm of the
+> else-branch contract.** B proves the sink-present direction: when a sink
+> IS injected, the doc's own `console.warn` fallback must NOT also fire. But
+> the third block (the no-sink case) asserted only
+> `peer.doc.invalidWriteCount === 0` and never performed an invalid write at
+> all, so it could not observe whether `console.warn` fires in that case —
+> the other arm of the same else-branch contract
+> (`canvas-doc.ts:41-43`: "When none is supplied the doc warns on the console
+> instead — a rejection is never silent"). A mutant that defaults a missing
+> sink to a no-op before forwarding it —
+> `onInvalidWrite: opts.onInvalidWrite ?? (() => {})` — is a natural-looking
+> line that silently kills that documented fallback for all sink-less call
+> sites (53 measured at `ddf0a52` via `grep -rn "new SyncClientPeer"
+> --include="*.ts" --include="*.tsx"`, minus this file's 4 minus
+> `CanvasV2App.tsx`'s 1 doc-comment mention), yet passed both A and B
+> unchanged: the doc DOES receive a (no-op) handler, so it never falls back
+> to `console.warn`, and neither existing assertion performs a write in the
+> no-sink case to notice. Closed by turning the third block into the exact
+> mirror of B: perform one invalid write under a `console.warn` spy and
+> assert the warning fired.
 
 Create `canvas-sync/src/invalid-write-passthrough.test.ts`:
 
@@ -2914,12 +2935,32 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
 
 // Omitting the sink stays legal, and this is the assertion that keeps it so:
 // every existing `new SyncClientPeer` call site in the repo passes only
-// peerId/transport/presence, and none of them should have to change.
+// peerId/transport/presence, and none of them should have to change. Mirrors
+// B in the other direction: canvas-doc.ts:41-43's fallback ("When none is
+// supplied the doc warns on the console instead") only holds if the peer's
+// forward is the ACTUAL `onInvalidWrite` value, undefined included — a
+// mutant that defaults a missing sink to a no-op function before forwarding
+// it (`opts.onInvalidWrite ?? (() => {})`) still satisfies `invalidWriteCount
+// === 0` below (that counter increments regardless of a handler), but it
+// silently kills the console.warn fallback for every sink-less call site,
+// because the doc now believes a handler WAS supplied. Only performing an
+// invalid write and checking the warning actually fired can catch that.
 {
-  const [, clientEnd] = makePair()
-  const peer = new SyncClientPeer({ peerId: 2n, transport: clientEnd })
-  assert.equal(peer.doc.invalidWriteCount, 0)
-  peer.close()
+  const warned: unknown[][] = []
+  const realWarn = console.warn
+  console.warn = (...args: unknown[]) => { warned.push(args) }
+  try {
+    const [, clientEnd] = makePair()
+    const peer = new SyncClientPeer({ peerId: 2n, transport: clientEnd })
+    assert.equal(peer.doc.invalidWriteCount, 0)
+    peer.doc.putPage({ id: 'page:p', name: 'P' })
+    peer.putShape({ id: 'shape:bad4', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
+    assert.equal(peer.doc.invalidWriteCount, 1, 'the rejection was still counted')
+    peer.close()
+  } finally {
+    console.warn = realWarn // restore even if an assertion throws
+  }
+  assert.equal(warned.length, 1, 'C: no sink supplied ⇒ the doc used its console.warn fallback')
 }
 
 console.log('ok: invalid-write-passthrough')

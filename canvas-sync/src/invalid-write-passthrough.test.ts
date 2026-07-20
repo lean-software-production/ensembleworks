@@ -87,12 +87,32 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
 
 // Omitting the sink stays legal, and this is the assertion that keeps it so:
 // every existing `new SyncClientPeer` call site in the repo passes only
-// peerId/transport/presence, and none of them should have to change.
+// peerId/transport/presence, and none of them should have to change. Mirrors
+// B in the other direction: canvas-doc.ts:41-43's fallback ("When none is
+// supplied the doc warns on the console instead") only holds if the peer's
+// forward is the ACTUAL `onInvalidWrite` value, undefined included — a
+// mutant that defaults a missing sink to a no-op function before forwarding
+// it (`opts.onInvalidWrite ?? (() => {})`) still satisfies `invalidWriteCount
+// === 0` below (that counter increments regardless of a handler), but it
+// silently kills the console.warn fallback for every sink-less call site,
+// because the doc now believes a handler WAS supplied. Only performing an
+// invalid write and checking the warning actually fired can catch that.
 {
-  const [, clientEnd] = makePair()
-  const peer = new SyncClientPeer({ peerId: 2n, transport: clientEnd })
-  assert.equal(peer.doc.invalidWriteCount, 0)
-  peer.close()
+  const warned: unknown[][] = []
+  const realWarn = console.warn
+  console.warn = (...args: unknown[]) => { warned.push(args) }
+  try {
+    const [, clientEnd] = makePair()
+    const peer = new SyncClientPeer({ peerId: 2n, transport: clientEnd })
+    assert.equal(peer.doc.invalidWriteCount, 0)
+    peer.doc.putPage({ id: 'page:p', name: 'P' })
+    peer.putShape({ id: 'shape:bad4', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
+    assert.equal(peer.doc.invalidWriteCount, 1, 'the rejection was still counted')
+    peer.close()
+  } finally {
+    console.warn = realWarn // restore even if an assertion throws
+  }
+  assert.equal(warned.length, 1, 'C: no sink supplied ⇒ the doc used its console.warn fallback')
 }
 
 console.log('ok: invalid-write-passthrough')
