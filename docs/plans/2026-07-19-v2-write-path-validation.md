@@ -36,6 +36,27 @@ React, no tools.
   - Full suite: `bun run test` (runs `scripts/run-tests.ts`).
   - One package: `cd <pkg> && ~/.bun/bin/bun test.ts`.
   - One file: `~/.bun/bin/bun canvas-doc/src/repair.test.ts`.
+- **BOTH runners are FAIL-FAST, and this WILL mislead you mid-branch.**
+  `scripts/run-tests.ts` calls `process.exit(1)` on the first failing file;
+  each package's `test.ts` does the same across its own files. Neither
+  reports "N passed, 1 failed" — the run simply STOPS, and everything
+  alphabetically after the failure never executes and is never mentioned.
+  - This matters here specifically. Tasks 5 and 5A deliberately leave
+    `canvas-doc/src/repair.test.ts` RED until Task 6 lands. `canvas-doc`
+    sorts early, so while that RED stands **a full-suite run tells you
+    nothing about `canvas-editor`, `canvas-react`, `canvas-sync`, `client`,
+    `server`, `scripts/` or `e2e/lib/`** — they were not run.
+  - Do NOT read an early stop as "everything after it passed", and do NOT
+    report a suite as green on the strength of a run that halted early.
+  - While an expected RED is outstanding, verify the remainder by running
+    the files directly rather than through either runner. The known-RED file
+    must be excluded deliberately and named in your report, so the exclusion
+    is visible rather than implied.
+  - Check the EXIT CODE, not just the tail of the output. If you wrap the run
+    in a compound shell command, `$?` is the last command's status, not the
+    suite's — capture the suite's own code explicitly. (This bit me on
+    2026-07-20: a compound command ending in `tail` reported success while
+    the suite underneath had exited 1.)
 - Typecheck (13 workspaces): `bun run typecheck`.
 - A local full-suite run needs `UX_CONTRACT_PR_BODY` set, or
   `scripts/ux-contract-presence.test.ts` may fail on the real-diff check. Use:
@@ -4173,10 +4194,30 @@ Any **other** consumer means this plan's premise is wrong: **STOP and report.**
 
 ```
 cd /home/stag/src/projects/ensembleworks/canvas-model && ~/.bun/bin/bun test.ts
-cd /home/stag/src/projects/ensembleworks/canvas-doc && ~/.bun/bin/bun test.ts
 cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-sync/src/convergence.test.ts
 cd /home/stag/src/projects/ensembleworks && bun run typecheck
 ```
+
+**`canvas-doc` needs the fail-fast workaround, NOT `bun test.ts`.** This task
+leaves `canvas-doc/src/repair.test.ts` RED on purpose (it is Task 6's RED),
+and `test.ts` exits at the first failure — `repair.test.ts` sorts partway
+through, so running the package runner here leaves the files after it unrun
+while looking like it "stopped at the expected failure". Run them all and
+exclude the known-RED file by name:
+
+```
+cd /home/stag/src/projects/ensembleworks/canvas-doc
+for f in src/*.test.ts; do
+  [ "$f" = "src/repair.test.ts" ] && continue   # expected RED until Task 6
+  ~/.bun/bin/bun "$f" || echo "UNEXPECTED FAIL: $f"
+done
+```
+
+Expected: every file reports `ok:` and no `UNEXPECTED FAIL` line. Then confirm
+the excluded file fails for the RIGHT reason — `~/.bun/bin/bun
+src/repair.test.ts` must fail at `'Loro and model application agree
+(order-independent)'` in the `doc3` block. A failure anywhere else in that
+file is NOT the expected RED: **STOP and report.**
 
 Measured at `e1e2a0b` with this change applied — these are observations, not
 predictions:
