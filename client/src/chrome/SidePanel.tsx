@@ -18,11 +18,12 @@
  * the resize grip locks (no store writes) so the user's actual width/collapsed
  * preference is untouched and simply resumes once presenting ends.
  */
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { rawUserId } from '@ensembleworks/contracts'
 import { type Editor, useValue } from 'tldraw'
 import { useAvSnapshot, type AvPanelSnapshot } from '../av/bridge'
 import { VmStrip } from '../av/gauges'
+import { AvIconButton } from '../av/icons'
 import { TranscriptModal } from '../av/TranscriptModal'
 import { getRoomId } from '../identity'
 import { wm } from '../theme'
@@ -37,8 +38,265 @@ import {
 } from './panelLayout'
 import { PanelFooter } from './PanelFooter'
 import { PanelPages } from './PanelPages'
-import { initialsFor, type PanelTileParticipant } from './PanelTile'
+import { ColorSwatch, CrosstalkControl, initialsFor, type PanelTileParticipant } from './PanelTile'
 import { useIsPresenting, usePresenter } from './present'
+
+// The local user's identity + A/V controls, docked at the panel bottom just
+// above the settings footer: colour swatch, name "(you)", mic, camera, and
+// the crosstalk slider. Moved here from the self tile — mosaic tiles can get
+// too small to host controls, and this spot gives the crosstalk popover the
+// full panel height to open upward into. marginTop:auto pins the bar to the
+// bottom when the roster is short (the footer follows it).
+function YouBar({ editor, snap }: { editor: Editor; snap: AvPanelSnapshot | null }) {
+	const name = useValue('youbar-name', () => editor.user.getName() ?? 'teammate', [editor])
+	const color = useValue('youbar-color', () => editor.user.getColor(), [editor])
+	const avAvailable = snap != null && snap.status !== 'disabled' && snap.status !== 'error'
+	return (
+		<div
+			data-testid="ew-you-bar"
+			style={{
+				marginTop: 'auto',
+				display: 'flex',
+				alignItems: 'center',
+				gap: 6,
+				padding: '8px 12px',
+				borderTop: `1px solid ${wm.rule}`,
+				background: wm.panel,
+			}}
+		>
+			<ColorSwatch editor={editor} color={color} />
+			<span
+				style={{
+					flex: 1,
+					minWidth: 0,
+					overflow: 'hidden',
+					textOverflow: 'ellipsis',
+					whiteSpace: 'nowrap',
+					fontFamily: wm.sans,
+					fontSize: 12,
+					fontWeight: 600,
+					color: wm.ink,
+				}}
+			>
+				{name} (you)
+			</span>
+			<div style={{ display: 'flex', gap: 3, flex: '0 0 auto', alignItems: 'center' }}>
+				<AvIconButton
+					kind="mic"
+					enabled={snap?.micEnabled ?? false}
+					available={avAvailable}
+					speaking={snap?.localSpeaking ?? false}
+					onClick={() => snap?.actions.onMic()}
+				/>
+				<DevicePicker
+					kind="audioinput"
+					activeId={snap?.micDeviceId ?? null}
+					available={avAvailable}
+					onPick={(id) => snap?.actions.setAvDevice('audioinput', id)}
+				/>
+				<AvIconButton
+					kind="camera"
+					enabled={snap?.camEnabled ?? false}
+					available={avAvailable}
+					onClick={() => snap?.actions.onCam()}
+				/>
+				<DevicePicker
+					kind="videoinput"
+					activeId={snap?.camDeviceId ?? null}
+					available={avAvailable}
+					onPick={(id) => snap?.actions.setAvDevice('videoinput', id)}
+				/>
+				<CrosstalkControl snap={snap} available={avAvailable} />
+			</div>
+		</div>
+	)
+}
+
+// Chevron beside the mic/camera buttons: opens an upward popover listing the
+// browser's input devices of that kind (enumerated fresh on every open, so
+// plugging in a headset shows up on the next click). Picking one calls
+// LiveKit's switchActiveDevice via the bridge — the live track hops devices
+// without a mute/unmute cycle. Device labels are only populated once the
+// user has granted media permission, which holding a mic/cam session implies;
+// unlabeled devices fall back to "microphone 2"-style names.
+function DevicePicker({
+	kind,
+	activeId,
+	available,
+	onPick,
+}: {
+	kind: 'audioinput' | 'videoinput'
+	activeId: string | null
+	available: boolean
+	onPick: (deviceId: string) => void
+}) {
+	const [open, setOpen] = useState(false)
+	const [devices, setDevices] = useState<MediaDeviceInfo[] | null>(null)
+	// Viewport-anchored popover position, captured from the chevron's rect at
+	// open time. position:fixed escapes the panel root's overflow clipping —
+	// an absolutely-positioned list wide enough for real device labels would
+	// otherwise get cropped at the panel's left edge (overflowY:auto on the
+	// panel computes overflow-x to auto as well, which clips).
+	const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(null)
+	const rootRef = useRef<HTMLDivElement>(null)
+	const noun = kind === 'audioinput' ? 'microphone' : 'camera'
+
+	// Close on outside click, same pattern as CrosstalkControl/ColorSwatch.
+	useEffect(() => {
+		if (!open) return
+		function onPointerDown(e: PointerEvent) {
+			if (rootRef.current && e.target instanceof Node && !rootRef.current.contains(e.target)) {
+				setOpen(false)
+			}
+		}
+		window.addEventListener('pointerdown', onPointerDown)
+		return () => window.removeEventListener('pointerdown', onPointerDown)
+	}, [open])
+
+	useEffect(() => {
+		if (!open) return
+		let cancelled = false
+		navigator.mediaDevices
+			.enumerateDevices()
+			.then((all) => {
+				if (!cancelled) setDevices(all.filter((d) => d.kind === kind))
+			})
+			.catch(() => {
+				if (!cancelled) setDevices([])
+			})
+		return () => {
+			cancelled = true
+		}
+	}, [open, kind])
+
+	// null activeId = never explicitly switched → the browser default device.
+	const isActive = (d: MediaDeviceInfo, i: number) =>
+		activeId === null ? d.deviceId === 'default' || (i === 0 && !devices?.some((x) => x.deviceId === 'default')) : d.deviceId === activeId
+
+	return (
+		<div ref={rootRef} style={{ position: 'relative', flex: '0 0 auto', display: 'flex' }}>
+			<button
+				type="button"
+				data-testid={`ew-device-picker-${kind}`}
+				disabled={!available}
+				onClick={(e) => {
+					e.stopPropagation()
+					const rect = rootRef.current?.getBoundingClientRect()
+					if (rect) {
+						setAnchor({
+							right: window.innerWidth - rect.right,
+							bottom: window.innerHeight - rect.top + 5,
+						})
+					}
+					setOpen((v) => !v)
+				}}
+				aria-label={`Choose ${noun}`}
+				aria-expanded={open}
+				title={available ? `Choose ${noun}` : `${noun} unavailable`}
+				style={{
+					width: 16,
+					height: 25,
+					display: 'grid',
+					placeItems: 'center',
+					border: `1px solid ${wm.ruleStrong}`,
+					borderRadius: 2,
+					padding: 0,
+					background: open ? wm.bgWarm : 'transparent',
+					color: open ? wm.ink : wm.inkMuted,
+					cursor: available ? 'pointer' : 'not-allowed',
+					opacity: available ? 1 : 0.4,
+				}}
+			>
+				{/* Solid caret rather than the ▾ glyph: at this size the character
+				    rendered as a hairline that read as decoration, not a control.
+				    An SVG triangle keeps the familiar select-box affordance crisp
+				    at any DPI, and flips up while the list is open. */}
+				<svg
+					width="9"
+					height="6"
+					viewBox="0 0 9 6"
+					aria-hidden="true"
+					style={{
+						transform: open ? 'rotate(180deg)' : undefined,
+						transition: 'transform 120ms ease-out',
+					}}
+				>
+					<path d="M0.5 1h8L4.5 5.5z" fill="currentColor" />
+				</svg>
+			</button>
+			{open && anchor && (
+				<div
+					onClick={(e) => e.stopPropagation()}
+					data-testid={`ew-device-list-${kind}`}
+					style={{
+						position: 'fixed',
+						bottom: anchor.bottom,
+						right: anchor.right,
+						zIndex: 10,
+						minWidth: 190,
+						maxWidth: 'min(300px, 90vw)',
+						display: 'flex',
+						flexDirection: 'column',
+						padding: 4,
+						background: wm.panel,
+						border: `1px solid ${wm.rule}`,
+						borderRadius: 4,
+						boxShadow: wm.shadowPaper,
+					}}
+				>
+					<div
+						style={{
+							fontFamily: wm.mono,
+							fontSize: 9,
+							fontWeight: 700,
+							textTransform: 'uppercase',
+							letterSpacing: 0.9,
+							color: wm.inkMuted,
+							padding: '4px 6px',
+						}}
+					>
+						{noun}
+					</div>
+					{devices === null && (
+						<span style={{ padding: '4px 6px', fontSize: 11, color: wm.inkSubtle }}>looking…</span>
+					)}
+					{devices?.length === 0 && (
+						<span style={{ padding: '4px 6px', fontSize: 11, color: wm.inkSubtle }}>
+							no {noun}s found
+						</span>
+					)}
+					{devices?.map((d, i) => (
+						<button
+							key={d.deviceId || i}
+							type="button"
+							onClick={() => {
+								onPick(d.deviceId)
+								setOpen(false)
+							}}
+							style={{
+								border: 0,
+								background: 'transparent',
+								color: wm.ink,
+								padding: '5px 6px',
+								fontFamily: wm.sans,
+								fontSize: 11,
+								fontWeight: isActive(d, i) ? 700 : 400,
+								textAlign: 'left',
+								cursor: 'pointer',
+								overflow: 'hidden',
+								textOverflow: 'ellipsis',
+								whiteSpace: 'nowrap',
+							}}
+						>
+							{isActive(d, i) ? '✓ ' : ' '}
+							{d.label || `${noun} ${i + 1}`}
+						</button>
+					))}
+				</div>
+			)}
+		</div>
+	)
+}
 
 // Blink animation for the recording dot, ported from the old floating
 // session-panel roster's ScribeRow (deleted at Task 5 cutover) — kept as a
@@ -262,6 +520,8 @@ export function SidePanel({ editor }: { editor: Editor }) {
 					</div>
 				</div>
 			)}
+
+			<YouBar editor={editor} snap={snap} />
 
 			<PanelFooter />
 

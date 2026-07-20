@@ -47,11 +47,11 @@ function Probe({ fetchImpl, intervalMs }: { fetchImpl: typeof fetch; intervalMs:
 const INTERVAL_MS = 20
 const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-function mount(fetchImpl: typeof fetch) {
+function mount(fetchImpl: typeof fetch, intervalMs = INTERVAL_MS) {
 	const container = document.createElement('div')
 	document.body.appendChild(container)
 	const root = createRoot(container)
-	return { container, root, render: () => act(async () => { root.render(createElement(Probe, { fetchImpl, intervalMs: INTERVAL_MS })) }) }
+	return { container, root, render: () => act(async () => { root.render(createElement(Probe, { fetchImpl, intervalMs })) }) }
 }
 
 /** console.warn spy — counts calls, restores on dispose. */
@@ -64,6 +64,26 @@ function spyWarn() {
 
 async function main() {
 	// ==========================================================================
+	// (a0) EXACTLY ONE IMMEDIATE SCRAPE ON MOUNT: asserted with an interval far
+	// too long to ever fire during the test, so the exact count is
+	// deterministic. (It used to be asserted on the 20ms-interval mount below,
+	// which raced real mount/act wall-clock time against the first interval
+	// tick and flaked ~30% on a loaded machine.)
+	// ==========================================================================
+	{
+		let calls = 0
+		const fetchImpl = (async () => { calls++; return fakeResponse(true, 200, PAYLOAD) }) as unknown as typeof fetch
+		const { container, root, render } = mount(fetchImpl, 60_000)
+		await render()
+		await act(async () => { await wait(5) }) // flush the immediate first scrape's microtasks
+		assert.equal(container.querySelector('div')!.getAttribute('data-metrics'), JSON.stringify(PAYLOAD), 'a successful scrape sets the payload')
+		assert.equal(calls, 1, 'exactly one immediate scrape on mount (interval too long to have fired)')
+		await act(async () => { root.unmount() })
+		container.remove()
+		console.log('ok: useCanvasMetrics — exactly one immediate scrape on mount')
+	}
+
+	// ==========================================================================
 	// (a) HAPPY PATH + INTERVAL CLEANUP ON UNMOUNT: an ok response sets the
 	// payload; polling continues on the interval; unmount clears the interval
 	// (the fetch count STOPS growing).
@@ -75,7 +95,7 @@ async function main() {
 		await render()
 		await act(async () => { await wait(5) }) // flush the immediate first scrape's microtasks
 		assert.equal(container.querySelector('div')!.getAttribute('data-metrics'), JSON.stringify(PAYLOAD), 'a successful scrape sets the payload')
-		assert.equal(calls, 1, 'exactly one immediate scrape so far')
+		assert.ok(calls >= 1, 'the immediate scrape ran (exact count is (a0)\'s job — a real 20ms interval may already have ticked here)')
 
 		await act(async () => { await wait(INTERVAL_MS * 3) })
 		const callsWhileMounted = calls

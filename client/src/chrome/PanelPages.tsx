@@ -11,13 +11,26 @@
  * latency) is merged in per-tile from the av/bridge snapshot by raw user id.
  */
 import { rawUserId } from '@ensembleworks/contracts'
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { getIndexBetween, type Editor, type IndexKey, type TLPageId, useValue } from 'tldraw'
 import { useAvSnapshot } from '../av/bridge'
 import { wm } from '../theme'
 import { exitFocus } from './focus'
 import { peekCloseSoon, peekOpen, togglePinned, useFramesDrawer } from './framesDrawerLayout'
-import { PanelTile, type PanelTileParticipant } from './PanelTile'
+import { MOSAIC_GAP, mosaicTileWidth, scaleTileWidth, tileWidthCeiling } from './mosaicLayout'
+import {
+	scaleForSliderPosition,
+	setTileScale,
+	sliderPositionForScale,
+	usePanelLayout,
+} from './panelLayout'
+import {
+	orderByRecency,
+	orderByViewportDistance,
+	updateSpokeRecency,
+	type MosaicPoint,
+} from './mosaicOrder'
+import { MosaicChip, PanelTile, type PanelTileParticipant } from './PanelTile'
 
 interface PageSectionData {
 	id: TLPageId
@@ -29,17 +42,31 @@ interface PageSectionData {
 	participants: PanelTileParticipant[]
 }
 
-// Spec §3 "Panel states": "Wide = face-to-face: past ~40% of window, tiles
-// reflow two-up per section and grow." The panel itself doesn't know the
-// window width fraction — SidePanel.tsx already resolves that against the
-// resize-grip clamp (MAX_WIDTH_FRACTION) — so this is a plain pixel
-// threshold on the width SidePanel hands down as a prop (kept a prop rather
-// than a second store read, per the plan, so the reflow stays obvious/testable).
-export const TWO_UP_MIN_WIDTH = 480
+// Horizontal space the mosaic grid can't use, subtracted from the panel width
+// SidePanel hands down before deriving tile width: SidePanel wraps PanelPages
+// in `padding: '0 12px 12px'` — 12px each side = 24. Tiles are border-box
+// (PanelTile sets boxSizing explicitly), so tileWidth is the true rendered
+// width — the identity borderLeft is inside it, no per-column extra to budget.
+const PANEL_CONTENT_INSET = 24
+
+// lastSpokeAt per raw user id, folded from the AV snapshot's speaking flags.
+// Drives other-page chip order (spec: "most-recently-spoke, then join order").
+function useSpokeRecency(snap: ReturnType<typeof useAvSnapshot>): Record<string, number> {
+	const [recency, setRecency] = useState<Record<string, number>>({})
+	useEffect(() => {
+		if (!snap) return
+		const speaking = snap.peers.filter((p) => p.isSpeaking).map((p) => p.id)
+		// Quantised to whole seconds: bounds record churn to 1/s while someone
+		// speaks (the AV snapshot republishes often; ordering only needs coarse recency).
+		setRecency((prev) => updateSpokeRecency(prev, speaking, Math.floor(Date.now() / 1000) * 1000))
+	}, [snap])
+	return recency
+}
 
 export function PanelPages({ editor, width }: { editor: Editor; width: number }) {
 	const snap = useAvSnapshot()
-	const twoUp = width >= TWO_UP_MIN_WIDTH
+	const recency = useSpokeRecency(snap)
+	const { tileScale } = usePanelLayout()
 
 	const { currentPageId, sections, unknownParticipants } = useValue(
 		'panel-page-sections',
@@ -126,41 +153,260 @@ export function PanelPages({ editor, width }: { editor: Editor; width: number })
 							: undefined
 					}
 					snap={snap}
-					twoUp={twoUp}
+					width={width}
+					tileScale={tileScale}
+					recency={recency}
 				/>
 			))}
 			{unknownParticipants.length > 0 && (
-				<UnknownPageSection editor={editor} participants={unknownParticipants} snap={snap} twoUp={twoUp} />
+				<UnknownPageSection editor={editor} participants={unknownParticipants} snap={snap} recency={recency} />
 			)}
 			<NewPageButton editor={editor} />
 		</div>
 	)
 }
 
-// The tile-list container: a centered wrap row (spec §3 "tiles reflow … and
-// grow"). Each tile grows to fill up to its max width and shrinks to share the
-// row, wrapping to more-per-row only when there's genuine room (PanelTile owns
-// the flex basis/max). This replaced a hard single↔two-column grid breakpoint
-// whose lone tile snapped from full-width to half-width mid-resize — the wrap
-// flow grows tiles continuously instead. Shared by every section (including the
-// unknown-page catch-all) so the reflow is identical everywhere tiles render.
-function tileListStyle(): CSSProperties {
-	return { display: 'flex', flexWrap: 'wrap', justifyContent: 'center', gap: 6, marginTop: 6 }
+// Other pages' participants render as a wrap row of fixed-size ambient chips
+// — pinned at minimum regardless of panel width (spec "Sizing rules").
+function chipRowStyle(): CSSProperties {
+	return { display: 'flex', flexWrap: 'wrap', gap: MOSAIC_GAP, marginTop: 6 }
 }
 
-// Catch-all for participants whose presence points at a page we can't find:
-// a static header (nothing to navigate to, nothing to rename or delete) over
-// the usual tiles, so nobody silently vanishes from the roster.
-function UnknownPageSection({
+// Apply an id-order function to a participant list (comparators in
+// mosaicOrder.ts work on raw ids so they stay tldraw-free and bun-testable).
+function orderParticipants(
+	participants: PanelTileParticipant[],
+	orderIds: (ids: string[]) => string[]
+): PanelTileParticipant[] {
+	const byId = new Map(participants.map((p) => [p.rawId, p]))
+	return orderIds(participants.map((p) => p.rawId)).map((id) => byId.get(id)!)
+}
+
+// Cheap FLIP: after a re-order, each moved tile animates from its previous
+// screen position to its new one, so eyes can track who went where (spec
+// "animated tile position transitions"). Skipped under reduced motion.
+const REDUCED_MOTION =
+	typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+
+// One proximity ordering, read entirely OUTSIDE React's reactive tracking:
+// distance of everyone's cursor from the local viewport centre, closest first
+// (mosaicOrder.ts). Called at mount and when the user presses Reorder — never
+// per cursor move, so nothing here may be a tracked signal read.
+function computeOrder(editor: Editor): string[] {
+	const centreVec = editor.getViewportPageBounds().center
+	const centre: MosaicPoint = { x: centreVec.x, y: centreVec.y }
+	const cursors: Record<string, MosaicPoint | undefined> = {}
+	const selfId = rawUserId(editor.user.getId())
+	const selfPoint = editor.inputs.currentPagePoint
+	cursors[selfId] = { x: selfPoint.x, y: selfPoint.y }
+	const ids = [selfId]
+	for (const presence of editor.getCollaborators()) {
+		const id = rawUserId(presence.userId)
+		ids.push(id)
+		if (presence.cursor) {
+			cursors[id] = { x: presence.cursor.x, y: presence.cursor.y }
+		}
+	}
+	return orderByViewportDistance(ids, cursors, centre)
+}
+
+function CurrentPageMosaic({
 	editor,
 	participants,
 	snap,
-	twoUp,
+	width,
+	tileScale,
 }: {
 	editor: Editor
 	participants: PanelTileParticipant[]
 	snap: ReturnType<typeof useAvSnapshot>
-	twoUp: boolean
+	width: number
+	tileScale: number
+}) {
+	// Ordering is MANUAL (the controls row below): faces only ever move when
+	// the user asks them to. Panning, zooming and cursor movement never
+	// re-sort — a grid that rearranges itself while you work is the confusion
+	// the mosaic exists to avoid, and it would restart FLIP mid-flight. Order
+	// is computed once at mount, on demand from the Reorder button, and
+	// reconciled (not re-sorted) as people join and leave.
+	const [orderedIds, setOrderedIds] = useState<string[]>(() => computeOrder(editor))
+	const reorder = () => setOrderedIds(computeOrder(editor))
+
+	// Tile size: the width-derived "everyone fits" size times the user's
+	// persisted multiplier, re-clamped so the scaled result still respects the
+	// legibility floor and the sane maximum.
+	// The scaled size may exceed the derived cap — the slider is an explicit
+	// ask — but stops where a single tile fills the panel row.
+	const contentWidth = width - PANEL_CONTENT_INSET
+	const tileWidth = scaleTileWidth(
+		mosaicTileWidth(contentWidth, participants.length),
+		tileScale,
+		tileWidthCeiling(contentWidth)
+	)
+
+	// Join/leave bypasses the settle debounce (spec): joiners append at the end
+	// immediately, leavers drop immediately via the filter — no extra ordering
+	// pass, the settled order is simply reconciled against the live roster.
+	const ordered = useMemo(() => {
+		const byId = new Map(participants.map((p) => [p.rawId, p]))
+		const known = orderedIds.filter((id) => byId.has(id))
+		const newcomers = participants.map((p) => p.rawId).filter((id) => !known.includes(id))
+		return [...known, ...newcomers].map((id) => byId.get(id)!)
+	}, [orderedIds, participants])
+
+	// FLIP bookkeeping: previous rects by rawId. Guarded by an order key so
+	// tiles aren't re-measured on unrelated renders (AV snapshot ticks) — only
+	// an order/roster change or a tileWidth change can move tiles. tileWidth
+	// is folded into the key so a panel resize re-measures (otherwise the next
+	// genuine reorder would animate from stale pre-resize positions) — and the
+	// resize reflow itself gets the animation.
+	const gridRef = useRef<HTMLDivElement>(null)
+	const prevRects = useRef<Map<string, DOMRect>>(new Map())
+	const prevOrderKey = useRef('')
+	useLayoutEffect(() => {
+		const grid = gridRef.current
+		if (!grid) return
+		const orderKey = tileWidth + '|' + ordered.map((p) => p.rawId).join('|')
+		if (orderKey === prevOrderKey.current && grid.children.length === prevRects.current.size) {
+			return
+		}
+		prevOrderKey.current = orderKey
+		const next = new Map<string, DOMRect>()
+		for (const el of Array.from(grid.children)) {
+			if (!(el instanceof HTMLElement) || !el.dataset.mosaicId) continue
+			const rect = el.getBoundingClientRect()
+			next.set(el.dataset.mosaicId, rect)
+			const prev = prevRects.current.get(el.dataset.mosaicId)
+			if (prev && !REDUCED_MOTION) {
+				const dx = prev.left - rect.left
+				const dy = prev.top - rect.top
+				if (dx !== 0 || dy !== 0) {
+					el.animate(
+						[{ transform: `translate(${dx}px, ${dy}px)` }, { transform: 'translate(0, 0)' }],
+						{ duration: 250, easing: 'ease-out' }
+					)
+				}
+			}
+		}
+		prevRects.current = next
+	})
+
+	return (
+		<>
+			<div
+				ref={gridRef}
+				data-testid="ew-mosaic-grid"
+				style={{ display: 'flex', flexWrap: 'wrap', gap: MOSAIC_GAP, marginTop: 6 }}
+			>
+				{ordered.map((participant) => (
+					<div key={participant.rawId} data-mosaic-id={participant.rawId} style={{ display: 'flex' }}>
+						<PanelTile editor={editor} participant={participant} snap={snap} tileWidth={tileWidth} />
+					</div>
+				))}
+			</div>
+			<MosaicControls tileScale={tileScale} onReorder={reorder} />
+		</>
+	)
+}
+
+// The current page's manual controls, tucked under its tiles: reorder on
+// demand (nearest-my-viewport first) and a tile-size multiplier. Both are
+// deliberately explicit — the grid never rearranges or resizes itself behind
+// your back; the panel edge still sets the baseline size this scales.
+function MosaicControls({ tileScale, onReorder }: { tileScale: number; onReorder: () => void }) {
+	return (
+		<div
+			data-testid="ew-mosaic-controls"
+			style={{
+				display: 'flex',
+				alignItems: 'center',
+				gap: 8,
+				marginTop: 6,
+				padding: '5px 6px',
+				border: `1px solid ${wm.rule}`,
+				borderRadius: 4,
+				background: wm.bgWarm,
+			}}
+		>
+			<button
+				type="button"
+				data-testid="ew-mosaic-reorder"
+				onClick={onReorder}
+				title="Order faces by how close they are to the centre of your view"
+				style={{
+					flex: '0 0 auto',
+					display: 'flex',
+					alignItems: 'center',
+					gap: 4,
+					border: `1px solid ${wm.ruleStrong}`,
+					borderRadius: 2,
+					background: 'transparent',
+					color: wm.inkMuted,
+					padding: '3px 6px',
+					fontFamily: wm.mono,
+					fontSize: 9,
+					textTransform: 'uppercase',
+					letterSpacing: 0.9,
+					cursor: 'pointer',
+				}}
+			>
+				<svg width="11" height="11" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+					<path
+						d="M4 8h11M4 8l3-3M4 8l3 3M20 16H9m11 0-3-3m3 3-3 3"
+						stroke="currentColor"
+						strokeWidth="2"
+						strokeLinecap="round"
+						strokeLinejoin="round"
+					/>
+				</svg>
+				reorder
+			</button>
+			{/* The slider travels in POSITION space (0..1) and converts through
+			    the store's geometric mapping, so 1x sits dead centre and equal
+			    drags either side halve/double by the same factor. */}
+			<input
+				type="range"
+				min={0}
+				max={1}
+				step={0.01}
+				value={sliderPositionForScale(tileScale)}
+				data-testid="ew-mosaic-scale"
+				aria-label="Tile size"
+				aria-valuetext={`${tileScale.toFixed(2)}×`}
+				title={`Tile size ${tileScale.toFixed(2)}× — double-click to reset`}
+				onChange={(e) => setTileScale(scaleForSliderPosition(Number(e.target.value)))}
+				onDoubleClick={() => setTileScale(1)}
+				style={{ flex: 1, minWidth: 0, accentColor: wm.sealBlue, cursor: 'pointer' }}
+			/>
+			<span
+				style={{
+					flex: '0 0 auto',
+					width: 32,
+					textAlign: 'right',
+					fontFamily: wm.mono,
+					fontSize: 9,
+					color: wm.inkMuted,
+				}}
+			>
+				{tileScale.toFixed(2)}×
+			</span>
+		</div>
+	)
+}
+
+// Catch-all for participants whose presence points at a page we can't find:
+// a static header (nothing to navigate to, nothing to rename or delete) over
+// ambient chips, so nobody silently vanishes from the roster.
+function UnknownPageSection({
+	editor,
+	participants,
+	snap,
+	recency,
+}: {
+	editor: Editor
+	participants: PanelTileParticipant[]
+	snap: ReturnType<typeof useAvSnapshot>
+	recency: Record<string, number>
 }) {
 	return (
 		<div data-roster-page="Unknown page">
@@ -181,10 +427,12 @@ function UnknownPageSection({
 					{participants.length}
 				</span>
 			</div>
-			<div style={tileListStyle()}>
-				{participants.map((participant) => (
-					<PanelTile key={participant.rawId} editor={editor} participant={participant} snap={snap} twoUp={twoUp} />
-				))}
+			<div style={chipRowStyle()}>
+				{orderParticipants(participants, (ids) => orderByRecency(ids, recency)).map(
+					(participant) => (
+						<MosaicChip key={participant.rawId} editor={editor} participant={participant} snap={snap} />
+					)
+				)}
 			</div>
 		</div>
 	)
@@ -198,7 +446,9 @@ function PageSectionView({
 	onMoveUp,
 	onMoveDown,
 	snap,
-	twoUp,
+	width,
+	tileScale,
+	recency,
 }: {
 	editor: Editor
 	section: PageSectionData
@@ -207,7 +457,9 @@ function PageSectionView({
 	onMoveUp?: () => void
 	onMoveDown?: () => void
 	snap: ReturnType<typeof useAvSnapshot>
-	twoUp: boolean
+	width: number
+	tileScale: number
+	recency: Record<string, number>
 }) {
 	return (
 		<div>
@@ -219,19 +471,34 @@ function PageSectionView({
 				onMoveUp={onMoveUp}
 				onMoveDown={onMoveDown}
 			/>
-			{section.participants.length > 0 && (
-				<div style={tileListStyle()}>
-					{section.participants.map((participant) => (
-						<PanelTile
-							key={participant.rawId}
-							editor={editor}
-							participant={participant}
-							snap={snap}
-							twoUp={twoUp}
-						/>
-					))}
-				</div>
-			)}
+			{section.participants.length > 0 &&
+				(isCurrent ? (
+					// Your room: the width-linked proximity mosaic (spec "Sizing rules"
+					// / "Ordering rules") — tiles grow with the panel, sort by cursor
+					// distance from your settled viewport centre.
+					<CurrentPageMosaic
+						editor={editor}
+						participants={section.participants}
+						snap={snap}
+						width={width}
+						tileScale={tileScale}
+					/>
+				) : (
+					// Other rooms: fixed-size ambient chips, most-recently-spoke first
+					// (proximity is meaningless cross-page).
+					<div style={chipRowStyle()}>
+						{orderParticipants(section.participants, (ids) => orderByRecency(ids, recency)).map(
+							(participant) => (
+								<MosaicChip
+									key={participant.rawId}
+									editor={editor}
+									participant={participant}
+									snap={snap}
+								/>
+							)
+						)}
+					</div>
+				))}
 		</div>
 	)
 }

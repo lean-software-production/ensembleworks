@@ -43,8 +43,22 @@ const INDEX_HTML = path.join(DIST_DIR, 'index.html')
 // measured at +0.07 kB, well inside noise. Re-run this script against a
 // fresh `main` build any time the baseline is suspected stale rather than
 // hand-editing these numbers again.
-const RAW_BASELINE_KB = 221.87
-const GZIP_BASELINE_KB = 65.05
+//
+// Re-based 2026-07-20: baseline moved to 231.70 kB raw / 67.82 kB gzip for
+// the panel video mosaic (feature/panel-video-mosaic, PR #49). Evidence the
+// growth is the feature's own eager UI and not accidental bloat:
+//   - `origin/main` built alone measures 221.87 kB / 65.05 kB — EXACTLY the
+//     previous baseline, so none of the +9.83 kB comes from the base.
+//   - The vendor chunks (livekit-D2wCOT7B, react-wmnUV8LS, tldraw-CovzIC80,
+//     xterm-JdC4aVSX) are byte-identical between main and the branch — same
+//     content hashes — so no dependency became newly eager.
+//   - The delta tracks ~1,000 net new lines of eager panel chrome (mosaic
+//     grid + sizing/ordering modules, other-page video chips, the YouBar with
+//     device pickers, the manual reorder/size controls) at ~10 B/line minified.
+// Same instruction as above: re-measure against a fresh `main` build rather
+// than hand-editing these numbers.
+const RAW_BASELINE_KB = 231.7
+const GZIP_BASELINE_KB = 67.82
 const TOLERANCE = 1.02 // ~2% headroom — a real bloat should fail, not scrape by
 
 const KB = 1000 // vite's own build report uses decimal kB (bytes / 1000), not KiB — see below

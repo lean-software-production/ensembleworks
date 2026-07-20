@@ -37,17 +37,31 @@ export function clampCrosstalk(level: number): number {
 	return level
 }
 
+/** Slider level where the other-page mapping switches from the linear
+ * "one step further" slope to the gentle tail (2·0.55 − 1 = the tail's 10%
+ * starting volume — the two pieces meet exactly at the knee). */
+export const OTHER_PAGE_TAIL_KNEE = 0.55
+
+// The other-page volume at the knee: below 10% the old linear slope snapped
+// to hard zero within one 5% slider step; the tail replaces that cliff.
+const TAIL_TOP = 0.1
+
 /**
  * The other-page volume for a crosstalk level: "one step further away than
  * the softest you can be on the current page". The same-page fade drops
  * (1 − L) over one falloff-distance to bottom out at L; continuing that
- * slope one more falloff-distance gives L − (1 − L) = 2L − 1, clamped to 0.
- * So focusing (dialling down) silences other pages first, then dims the far
- * end of your own page. At 1 there is no fade, so other pages are full too.
+ * slope one more falloff-distance gives L − (1 − L) = 2L − 1 … down to the
+ * 10% knee (L = 0.55). Below the knee the mapping hands over to a quadratic
+ * tail — TAIL_TOP · (L/knee)² — so the last stretch of the dial sweeps very
+ * gradually through ~8%, 4%, 2%, 1% instead of snapping to silence: quiet
+ * ambient murmur from other rooms stays dialable. Exactly 0 at L = 0
+ * (strict focus) and full at 1 (standup mode), as before.
  */
 export function otherPageLevel(level: number): number {
 	const l = clampCrosstalk(level)
-	return Math.max(0, 2 * l - 1)
+	if (l >= OTHER_PAGE_TAIL_KNEE) return 2 * l - 1
+	const t = l / OTHER_PAGE_TAIL_KNEE
+	return TAIL_TOP * t * t
 }
 
 /** Where a peer sits relative to me this tick, for the gain decision. */

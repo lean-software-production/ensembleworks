@@ -29,6 +29,9 @@ export interface AvPanelSnapshot {
 	crosstalkLevel: number
 	localVideoTrack: LocalTrack | null
 	localSpeaking: boolean
+	/** Active input devices (null = browser default) for the YouBar pickers. */
+	micDeviceId: string | null
+	camDeviceId: string | null
 	peers: AvPanelPeer[]
 	scribes: { id: string; name: string }[]
 	vm: VmStats | null
@@ -41,6 +44,8 @@ export interface AvPanelSnapshot {
 		onCam: () => void
 		/** Set the crosstalk bleed level (clamped to 0..1 by the publisher). */
 		setCrosstalk: (level: number) => void
+		/** Switch the live mic/camera to another physical device. */
+		setAvDevice: (kind: 'audioinput' | 'videoinput', deviceId: string) => void
 		kick: (id: string, name: string) => void
 	}
 }
@@ -63,6 +68,8 @@ export function avSnapshotsEqual(a: AvPanelSnapshot, b: AvPanelSnapshot): boolea
 		a.crosstalkLevel !== b.crosstalkLevel ||
 		a.localVideoTrack !== b.localVideoTrack ||
 		a.localSpeaking !== b.localSpeaking ||
+		a.micDeviceId !== b.micDeviceId ||
+		a.camDeviceId !== b.camDeviceId ||
 		a.vm !== b.vm ||
 		a.latencies !== b.latencies ||
 		a.latencyHistory !== b.latencyHistory ||

@@ -38,6 +38,8 @@ const snapshot = (): AvPanelSnapshot => ({
 	crosstalkLevel: 0,
 	localVideoTrack: null,
 	localSpeaking: false,
+	micDeviceId: null,
+	camDeviceId: null,
 	peers: [],
 	scribes: [],
 	vm: null,
@@ -49,6 +51,7 @@ const snapshot = (): AvPanelSnapshot => ({
 		onMic: () => {},
 		onCam: () => {},
 		setCrosstalk: () => {},
+		setAvDevice: () => {},
 		kick: () => {},
 	},
 })
@@ -137,6 +140,8 @@ assert.equal(getAvSnapshot(), null)
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), micEnabled: true }), false)
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), status: 'retrying' }), false)
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), kickError: 'nope' }), false)
+	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), micDeviceId: 'usb-mic' }), false)
+	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), camDeviceId: 'usb-cam' }), false)
 	// A crosstalk-level change must republish so the slider (and gain loop) update.
 	assert.equal(avSnapshotsEqual(snapshot(), { ...snapshot(), crosstalkLevel: 0.5 }), false)
 

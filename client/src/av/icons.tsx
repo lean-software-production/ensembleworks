@@ -7,13 +7,19 @@ export function AvIconButton(props: {
 	enabled: boolean
 	available: boolean
 	onClick: () => void
+	// Live voice-activity cue (the YouBar's mic button): while true the button
+	// grows the same seal-blue speaking ring the roster tiles use, so "your
+	// mic hears you" and "this person is speaking" share one visual language.
+	// Only meaningful when enabled; ignored otherwise.
+	speaking?: boolean
 }) {
 	const names: Record<AvIconKind, string> = {
 		mic: 'microphone',
 		camera: 'camera',
 		spatial: 'spatial audio',
 	}
-	const label = `${names[props.kind]} ${props.enabled ? 'on' : 'off'}`
+	const speaking = (props.speaking ?? false) && props.enabled
+	const label = `${names[props.kind]} ${props.enabled ? 'on' : 'off'}${speaking ? ' — sound detected' : ''}`
 	return (
 		<button
 			type="button"
@@ -33,6 +39,8 @@ export function AvIconButton(props: {
 				color: props.enabled ? wm.cream : wm.inkMuted,
 				cursor: props.available ? 'pointer' : 'not-allowed',
 				opacity: props.available ? 1 : 0.4,
+				outline: speaking ? `2px solid ${wm.sealBlue}` : 'none',
+				outlineOffset: 1,
 			}}
 		>
 			<AvIcon kind={props.kind} crossedOut={!props.enabled} />
