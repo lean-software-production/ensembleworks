@@ -60,6 +60,17 @@ export interface ShadowMetrics {
 	 */
 	puts: number
 	deletes: number
+	/**
+	 * Cumulative writes reconcile REFUSED, across all ticks — see reconcile()'s
+	 * `refused`. Unlike puts/deletes this does not settle at steady state: a
+	 * refused shape is never written, so every tick retries it and this climbs
+	 * by one per tick for as long as the room carries it. A steadily-climbing
+	 * `refused` therefore means "N shapes in this room fail the model schema",
+	 * not "N new problems occurred" — read the RATE against `ticks`, not the
+	 * total. It is the counterpart that lets `puts` go back to meaning churn:
+	 * before this field those retries were counted as puts.
+	 */
+	refused: number
 	divergences: number
 	lastDivergence: string | null
 	shapeCount: number
@@ -81,6 +92,7 @@ export class ShadowMirror {
 		ticks: 0,
 		puts: 0,
 		deletes: 0,
+		refused: 0,
 		divergences: 0,
 		lastDivergence: null,
 		shapeCount: 0,
@@ -101,9 +113,10 @@ export class ShadowMirror {
 		this.m.ticks++
 		try {
 			const target = fromTldraw(this.getRecords())
-			const { puts, deletes } = reconcile(this.doc, target)
+			const { puts, deletes, refused } = reconcile(this.doc, target)
 			this.m.puts += puts
 			this.m.deletes += deletes
+			this.m.refused += refused
 			this.m.shapeCount = this.doc.listShapes().length
 			if (this.m.ticks % this.checkEvery === 0) {
 				this.checkDivergence(target)
