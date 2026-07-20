@@ -3719,73 +3719,140 @@ and reported first.
 
 ## Task 5: Make `dropShape` proportionate in the pure model
 
+> **CHANGE NOTE (2026-07-20) — this section was rewritten against HEAD `e1e2a0b`.**
+> The previous text was drafted before Tasks 1–4B landed. What was stale, and
+> what changed:
+>
+> | # | Stale claim in the old text | Reality at `e1e2a0b` | Correction |
+> |---|---|---|---|
+> | 1 | Step 3(d): "Delete `cascadeDropSet` entirely (lines 84-100 as of `0388900`)" | `canvas-doc/src/loro-canvas-doc.ts` still **imports and calls** it (`repair()`'s `dropAll`). Deleting the export here makes canvas-doc fail at ESM **link time** — a missing-export module error, not an assertion. | **Task 5 stops using it; Task 6 deletes it.** See "Ruling on `cascadeDropSet`" below — this obeys ruling 2, just one task later, and is *required* by this plan's own RED rule ("every RED lands on a runtime assertion, never on a missing export"). |
+> | 2 | Step 5: "Expected: only hits in `canvas-doc/src/loro-canvas-doc.ts` (its import on line 5 and its use around line 357 plus two comment mentions)" | The call is at line 519 and the surrounding comment block has grown; the raw line numbers rotted. | The grep survives; the **expected line numbers are gone**. The step now asserts the *shape* of the result (which files, not which lines). |
+> | 3 | Step 3(a): quotes `RepairOp`'s `dropShape` line as "line 8" | Still line 8 today, but the surrounding `rank`/`opFor` comments were edited by the dedupe work. | Anchored by exact text, not by line number. |
+> | 4 | Step 6: "`canvas-doc` will be red until Task 6" — unqualified, and no claim about anything else | **Measured**, not reasoned: after this change `canvas-doc/src/repair.test.ts` fails at **exactly one** assertion (`'Loro and model application agree (order-independent)'`, the `doc3` block), the rest of the canvas-doc suite passes, and `canvas-sync/src/convergence.test.ts` stays **green**. The old text left the blast radius unstated, which is how an implementer talks themself into "the rig was already flaky". | Step 7 now names the exact expected failure and the exact things that must **stay** green, with a STOP condition if either is wrong. |
+> | 5 | The RED test's only discriminating case was one frame + two descendants | That test cannot distinguish a correct fix from five plausible wrong ones (wrong page target, flatten-the-subtree, over/under-swept bindings, no zero-page suppression). | Step 1's test is rebuilt around an explicit **mutant list (M1–M9)**; every mutant was actually run against the specified test and its killing assertion recorded below. |
+> | 6 | Said nothing about what Task 6 must match | The two applications are drift-prone by construction. | New "Handoff to Task 6" subsection, including **two defects found in Task 6's current text** while writing this. |
+>
+> Everything asserted in this section about the code was read at `e1e2a0b`;
+> everything asserted about test outcomes was **executed**, not predicted.
+
 > **This task deliberately rewrites tests that currently pin the cascade as
-> correct** (`canvas-model/src/repair.test.ts:37-58`). That is an **intended
-> behaviour change with owner sign-off** (ruling 4, 2026-07-20) — not a
-> regression, and not a failing test being papered over. The old assertions
-> encoded the defect this branch exists to fix. Reviewers: the correct check is
-> that the *new* assertions describe proportionate repair and that
-> `applyRepairToModel` still agrees with `LoroCanvasDoc.repair()`, **not** that
-> the old assertions survived.
+> correct** — the "Cascade fixpoint (3 levels)" block in
+> `canvas-model/src/repair.test.ts`. That is an **intended behaviour change with
+> owner sign-off** (ruling 4, 2026-07-20) — not a regression, and not a failing
+> test being papered over. The old assertions encoded the defect this branch
+> exists to fix. Reviewers: the correct check is that the *new* assertions
+> describe proportionate repair, **not** that the old assertions survived.
+
+### What is true at `e1e2a0b` (read, not assumed)
+
+`canvas-model/src/repair.ts` has three moving parts this task touches:
+
+- `repairPlan(doc)` — turns `checkInvariants` violations into ops. It already
+  suppresses `reparentToRoot` in a zero-page doc via a `canReparent` guard
+  (`if (o.op === 'reparentToRoot' && !canReparent) continue`), because there is
+  no target page to reparent to.
+- `cascadeDropSet(shapes, seed)` — a fixpoint over `parentId` edges returning
+  the seed plus every transitive descendant.
+- `applyRepairToModel(doc, plan)` — the pure reference application. It computes
+  `dropAll = cascadeDropSet(doc.shapes, drop)` and then uses `dropAll` in **two**
+  places: the shape filter, and the binding filter
+  (`!dropAll.has(b.fromId) && !dropAll.has(b.toId)`).
+
+`dropAll` is exactly the defect. One shape fails `validateShape`; every
+descendant dies with it, on every peer, durably, behind Loro tombstones.
+
+### What proportionate means, precisely
+
+Three rules, and nothing else changes:
+
+1. **Shapes.** Remove *only* the ids the plan names. A shape whose `parentId` is
+   a dropped id is **rescued**: its `parentId` is rewritten to
+   `canonicalPageId(doc.pages)` — the *same* target `reparentToRoot` already
+   uses, which is why repair stays a pure function of converged state. A shape
+   that is *itself* dropped is dropped even if its parent was also dropped
+   (removal outranks rescue).
+2. **Bindings.** A binding is deleted iff the plan names it (`deleteBinding`)
+   **or one of its endpoints is a dropped id**. It is **not** deleted merely
+   because an endpoint was rescued. This is the edge a wrong implementation gets
+   backwards in either direction, so it has a mutant on each side (M6, M7).
+   - *Why deleting on a dropped endpoint is still required:* such a binding is
+     **not** dangling when the plan is computed, so the plan carries no
+     `deleteBinding` op for it. Sweeping it here is what makes a **single**
+     repair pass converge instead of needing a second one.
+3. **Zero-page docs.** `repairPlan` suppresses `dropShape` too, exactly as it
+   already suppresses `reparentToRoot`. With no page there is no rescue target,
+   so the only way to apply the drop would be to delete the children as well —
+   the very thing this task removes. The violation is left standing instead
+   (ruling 3; decision D4).
+
+Not in scope, by owner ruling 1: rescued children keep their parent-relative
+`x`/`y` and may visually jump. **Do not add a coordinate-rebasing step and do
+not propose one.** A misplaced shape beats an unrecoverably deleted one.
+
+### Ruling on `cascadeDropSet`'s fate: it dies — but in Task 6, not here
+
+Verified consumer list (command in step 6):
+
+- `canvas-model/src/repair.ts` — the `dropAll` line this task removes.
+- `canvas-doc/src/loro-canvas-doc.ts` — imported on line 5, called in
+  `repair()`, plus comment mentions.
+
+That is all of them. Ruling 2 approved deleting it from the package's exports,
+and it should be deleted — but **the last consumer is removed by Task 6, so
+Task 6 deletes the function.** Task 5 leaves it exported and simply stops
+calling it.
+
+The reason is this plan's own RED rule. If Task 5 deleted the export, canvas-doc
+would fail at ESM link time with a missing-export error before a single
+assertion ran — and Task 6's "Step 1: observe the failure" would be observing a
+broken import, not a behavioural disagreement. Keeping the function for one more
+task means **Task 5's landing produces Task 6's RED**, and that RED is a real
+runtime assertion about repair semantics (measured: see step 7). An unused
+exported function typechecks cleanly — verified, `bun run typecheck` is green
+across all 13 workspaces with the change applied and `cascadeDropSet` retained.
+
+### Mutants this task's test must kill
+
+Each row below was **produced and executed** against the step-1 test at
+`e1e2a0b`; the "killed by" column is the assertion that actually fired, verbatim
+from the run. (`node:assert` aborts the script at the first failure, so a mutant
+that also violates an earlier block dies there; where that happens the
+proportionality-block assertion that would independently catch it is named in
+parentheses.)
+
+| # | Plausible wrong implementation | Killed by |
+|---|---|---|
+| M1 | Rescue the *shape itself* — reparent the invalid shape to the page instead of removing it | `checkInvariants(repaired)` in the opening block (the shape is still invalid). (Also: `'only the invalid shape is removed'`.) |
+| M2 | Rescue only **direct** children; keep cascading deeper descendants | `'only bad2 is dropped; child and grandchild are rescued'` (chain block). (Also: `'only the invalid shape is removed'`.) |
+| M3 | Rescue to `doc.pages[0].id` instead of `canonicalPageId` — an unstable, input-order-dependent target | `'the direct child is rescued to the canonical page (smallest id, not pages[0])'` |
+| M4 | Drop the cascade helper and **orphan** the children (no reparent at all) | `'child rescued to the canonical page'` (chain block). (Also: `'invariant-clean after ONE pass'`.) |
+| M5 | Flatten the **whole** subtree to the page, not just direct children | `'a grandchild keeps its surviving parent — only DIRECT children are rehomed'` |
+| M6 | Keep the binding sweep on the **cascade** set (delete bindings to rescued children too) | `'a binding whose endpoints both survive is kept'` (chain block). (Also: `'bindings to rescued children survive…'`.) |
+| M7 | Drop the binding sweep entirely (bindings to the dropped shape survive → dangling) | `'bindings to rescued children survive; the binding to the dropped shape is swept'` |
+| M8 | Keep the cascade removal but forget the zero-page suppression in `repairPlan` | `'a zero-page doc emits no dropShape — there is no rescue target'` |
+| M9 | Let rescue win over removal, so a child that is *itself* invalid gets resurrected | `'both invalid shapes go; only the valid grandchild survives'` |
+
+Assertions in the step-1 test that kill nothing were **removed** while writing
+this. In particular an idempotence assertion (`repairPlan(rescued) === []`) was
+cut: `repairPlan` is a pure function of `checkInvariants`' output, so for a
+non-zero-page doc it is strictly implied by the `checkInvariants(rescued) === []`
+assertion already present, and no mutant could fail one without failing the
+other.
 
 **Files:**
-- Modify: `canvas-model/src/repair.ts` (`opFor` comment, `repairPlan`,
-  `applyRepairToModel`, delete `cascadeDropSet`)
+- Modify: `canvas-model/src/repair.ts` (the `RepairOp.dropShape` comment,
+  `repairPlan`'s `canReparent` guard, `applyRepairToModel`'s drop half)
 - Modify: `canvas-model/src/repair.test.ts` (the cascade assertions this
-  deliberately changes)
+  deliberately changes, plus a new proportionality block)
+
+Do **not** touch `cascadeDropSet` in this task (see the ruling above).
 
 **Step 1: Write the failing test**
 
-Add to `canvas-model/src/repair.test.ts`, immediately **after** the existing
-"Cascade fixpoint (3 levels)" block (which ends around line 58 with
-`'invariant-clean after ONE pass'`):
+Two edits to `canvas-model/src/repair.test.ts`.
 
-```ts
-// PROPORTIONALITY (2026-07-19). A `validProps` violation removes ONLY the
-// offending shape; its children are rescued to the canonical page root rather
-// than executed alongside it. Rationale: a frame with one bad numeric prop
-// must not take its innocent contents with it, and Loro tombstones make the
-// loss unrecoverable. The rescue target is canonicalPageId — the same
-// deterministic target reparentToRoot uses — so repair stays a pure function
-// of converged state.
-const rescue = makeDocument({
-  pages: [{ id: 'page:p', name: 'P' }],
-  shapes: [
-    { id: 'shape:badf', kind: 'frame', parentId: 'page:p', props: {}, ...base(), opacity: 'no' as any } as any,
-    { id: 'shape:kid', kind: 'note', parentId: 'shape:badf', props: {}, ...base() } as any,
-    { id: 'shape:grandkid', kind: 'note', parentId: 'shape:kid', props: {}, ...base() } as any,
-  ],
-  bindings: [],
-})
-const rescuePlan = repairPlan(rescue)
-assert.deepEqual(rescuePlan, [{ op: 'dropShape', id: 'shape:badf' }], 'only the invalid shape is in the plan')
-const rescued = applyRepairToModel(rescue, rescuePlan)
-assert.deepEqual(
-  rescued.shapes.map((s) => s.id).sort(),
-  ['shape:grandkid', 'shape:kid'],
-  'the children survive — only the invalid shape is removed',
-)
-assert.equal(rescued.byId.get('shape:kid')!.parentId, 'page:p', 'the direct child is rescued to the canonical page')
-assert.equal(rescued.byId.get('shape:grandkid')!.parentId, 'shape:kid', 'a grandchild keeps its (surviving) parent')
-assert.deepEqual(checkInvariants(rescued), [], 'invariant-clean after ONE pass')
-
-// Zero-page doc: there is no rescue target, so the drop is SUPPRESSED and the
-// violation is left standing — exactly the policy repairPlan already applies
-// to reparentToRoot. Emitting a drop we cannot apply proportionately would be
-// the same disproportionate deletion by another route.
-const noPage = makeDocument({
-  pages: [],
-  shapes: [
-    { id: 'shape:badnp', kind: 'note', parentId: 'shape:badnp', props: {}, ...base(), opacity: 'no' as any } as any,
-  ],
-  bindings: [],
-})
-assert.deepEqual(repairPlan(noPage), [], 'a zero-page doc emits no dropShape (no rescue target)')
-```
-
-Then **change** the existing cascade block above it — this is the deliberate
-behaviour change, not a regression. Replace its two `assert`s that pin the
-cascade:
+**(1a)** In the existing "Cascade fixpoint (3 levels)" block, replace these two
+assertions:
 
 ```ts
 assert.deepEqual(chainRepaired.shapes.map((s) => s.id), ['shape:ar2'], 'bad2, child AND grandchild all dropped')
@@ -3795,10 +3862,10 @@ assert.deepEqual(chainRepaired.bindings, [], 'binding touching the cascaded gran
 with:
 
 ```ts
-// CHANGED 2026-07-19 (proportionality): dropping bad2 no longer cascades.
-// `child` is rescued to the canonical page, `grandchild` keeps `child` as its
-// parent, and binding:g — whose endpoints (ar2, grandchild) BOTH still exist —
-// survives with them.
+// CHANGED 2026-07-20 (proportionality, owner ruling 4): dropping bad2 no
+// longer cascades. `child` is rescued to the canonical page, `grandchild`
+// keeps `child` as its parent, and binding:g — whose endpoints (ar2,
+// grandchild) BOTH still exist — survives with them.
 assert.deepEqual(
   chainRepaired.shapes.map((s) => s.id).sort(),
   ['shape:ar2', 'shape:child', 'shape:grandchild'],
@@ -3808,42 +3875,165 @@ assert.equal(chainRepaired.byId.get('shape:child')!.parentId, 'page:p', 'child r
 assert.deepEqual(chainRepaired.bindings.map((b) => b.id), ['binding:g'], 'a binding whose endpoints both survive is kept')
 ```
 
-Also rename the block's leading comment from "Cascade fixpoint (3 levels)" to
-"Chain under a dropped shape (3 levels)" and delete its sentence about
-`cascadeDropSet` needing to be a true fixpoint — that function is about to be
-removed.
+Also retitle that block's leading comment from `// Cascade fixpoint (3 levels):
+dropping the invalid root removes the WHOLE descendant chain, …` to describe
+what it now pins — a chain **under** a dropped shape — and delete its sentence
+about `cascadeDropSet` needing to be a true fixpoint, which no longer describes
+this code path. Keep the "descendants listed BEFORE ancestors" seeding: it is
+still a useful order-independence property for the rescue map.
 
-**Step 2: Run it to verify it fails**
+**(1b)** Insert the proportionality block immediately **after** that chain block
+(i.e. after its `'invariant-clean after ONE pass'` assertion) and **before** the
+"Dedup collision" block:
+
+```ts
+// ---- PROPORTIONALITY (2026-07-20, owner ruling 4) ----
+// The reported defect, in the pure model: a frame with ONE bad numeric prop
+// must not execute its innocent contents. `props: { w: 'wide' }` fails the
+// frame's per-kind props schema (w is z.number().optional()), so validProps
+// fires on the frame and on nothing else.
+//
+// Pages are listed z-FIRST on purpose: the rescue target must be
+// canonicalPageId (lexicographically smallest, page:a) on every peer, never
+// pages[0]. Three bindings pin the binding rule from both sides: the one
+// pointing AT the dropped shape must be swept (it is not dangling before the
+// repair, so the plan carries no deleteBinding op for it — only a same-pass
+// sweep converges in ONE call), while the two pointing at RESCUED shapes must
+// survive.
+const rescueDoc = makeDocument({
+  pages: [{ id: 'page:z', name: 'Z' }, { id: 'page:a', name: 'A' }],
+  shapes: [
+    { id: 'shape:arw', kind: 'arrow', parentId: 'page:z', props: {}, ...base() } as any,
+    { id: 'shape:badf', kind: 'frame', parentId: 'page:z', props: { w: 'wide' }, ...base() } as any,
+    { id: 'shape:kid', kind: 'note', parentId: 'shape:badf', props: {}, ...base() } as any,
+    { id: 'shape:gkid', kind: 'note', parentId: 'shape:kid', props: {}, ...base() } as any,
+  ],
+  bindings: [
+    { id: 'binding:toBad', fromId: 'shape:arw', toId: 'shape:badf', props: {}, meta: {} },
+    { id: 'binding:toKid', fromId: 'shape:arw', toId: 'shape:kid', props: {}, meta: {} },
+    { id: 'binding:toGkid', fromId: 'shape:arw', toId: 'shape:gkid', props: {}, meta: {} },
+  ],
+})
+const rescuePlan = repairPlan(rescueDoc)
+assert.deepEqual(rescuePlan, [{ op: 'dropShape', id: 'shape:badf' }], 'precondition: the frame is the only flagged shape')
+const rescued = applyRepairToModel(rescueDoc, rescuePlan)
+assert.deepEqual(
+  rescued.shapes.map((s) => s.id).sort(),
+  ['shape:arw', 'shape:gkid', 'shape:kid'],
+  'only the invalid shape is removed',
+)
+assert.equal(
+  rescued.byId.get('shape:kid')!.parentId,
+  'page:a',
+  'the direct child is rescued to the canonical page (smallest id, not pages[0])',
+)
+assert.equal(
+  rescued.byId.get('shape:gkid')!.parentId,
+  'shape:kid',
+  'a grandchild keeps its surviving parent — only DIRECT children are rehomed',
+)
+assert.deepEqual(
+  rescued.bindings.map((b) => b.id).sort(),
+  ['binding:toGkid', 'binding:toKid'],
+  'bindings to rescued children survive; the binding to the dropped shape is swept',
+)
+assert.deepEqual(checkInvariants(rescued), [], 'invariant-clean after ONE pass')
+
+// Removal outranks rescue: a child that is ITSELF invalid is dropped, not
+// resurrected by the rescue map. Its own valid child is then rescued to the
+// page — proving the rescue target is resolved against the plan, not against
+// whatever the parent chain happened to become.
+const bothBad = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [
+    { id: 'shape:badp', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' as any } as any,
+    { id: 'shape:badc', kind: 'note', parentId: 'shape:badp', props: {}, ...base(), opacity: 'no' as any } as any,
+    { id: 'shape:okg', kind: 'note', parentId: 'shape:badc', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const bothBadPlan = repairPlan(bothBad)
+assert.deepEqual(
+  bothBadPlan,
+  [{ op: 'dropShape', id: 'shape:badc' }, { op: 'dropShape', id: 'shape:badp' }],
+  'precondition: both invalid shapes are named, id-ascending',
+)
+const bothBadRepaired = applyRepairToModel(bothBad, bothBadPlan)
+assert.deepEqual(bothBadRepaired.shapes.map((s) => s.id), ['shape:okg'], 'both invalid shapes go; only the valid grandchild survives')
+assert.equal(bothBadRepaired.byId.get('shape:okg')!.parentId, 'page:p', 'the survivor is rescued to the canonical page')
+assert.deepEqual(checkInvariants(bothBadRepaired), [], 'invariant-clean after ONE pass')
+
+// Zero-page doc: no rescue target exists, so dropShape is SUPPRESSED and the
+// violation is left standing — the same policy repairPlan already applies to
+// reparentToRoot (ruling 3, decision D4). Emitting a drop we could only apply
+// by deleting the children would be disproportionate deletion by another route.
+const noPageBad = makeDocument({
+  pages: [],
+  shapes: [{ id: 'shape:badnp', kind: 'note', parentId: 'shape:badnp', props: {}, ...base(), opacity: 'no' as any } as any],
+  bindings: [],
+})
+assert.deepEqual(repairPlan(noPageBad), [], 'a zero-page doc emits no dropShape — there is no rescue target')
+assert.ok(checkInvariants(noPageBad).some((v) => v.rule === 'validProps'), 'the validProps violation stands — honestly unrepairable')
+```
+
+> **Style note.** These are top-level `const`s with unique names, matching the
+> rest of this file — do **not** wrap them in bare `{ … }` section blocks here.
+> If you do, re-read the "`tsc` parse trap" rule in the working rules: the
+> file's `const base = () => ({ … })` already ends in a parenthesized object
+> literal, and bun would accept what `tsc` rejects.
+
+**Step 2: Run it and record the verbatim failure**
 
 ```
 cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-model/src/repair.test.ts
 ```
 
-Expected: FAIL at `only bad2 is dropped; child and grandchild are rescued` —
-actual will be `[ 'shape:ar2' ]`. **Record the verbatim output.**
+Expected (this is the actual output, captured at `e1e2a0b`):
 
-**Step 3: Implement in `canvas-model/src/repair.ts`**
+```
+AssertionError: only bad2 is dropped; child and grandchild are rescued
++ actual - expected
 
-(a) Update `opFor`'s `validProps` case comment. Change the `RepairOp` union's
-`dropShape` line (line 8) from:
+  [
+    'shape:ar2',
+-   'shape:child',
+-   'shape:grandchild'
+  ]
+
+ generatedMessage: false,
+     actual: [ "shape:ar2" ],
+   expected: [ "shape:ar2", "shape:child", "shape:grandchild" ],
+   operator: "deepStrictEqual",
+       code: "ERR_ASSERTION"
+```
+
+The chain block sits earlier in the file than the new proportionality block, so
+it aborts first — that is correct and expected. **If the file passes, STOP and
+report.** Do not weaken the test and do not skip to the implementation.
+
+**Step 3: Implement — `RepairOp`'s `dropShape` comment**
+
+In `canvas-model/src/repair.ts`, replace:
 
 ```ts
   | { op: 'dropShape'; id: string } // invalid envelope/props (quarantine)
 ```
 
-to:
+with:
 
 ```ts
-  // Invalid envelope/props. Removes ONLY this shape; every shape whose
-  // parentId is a dropped id is reparented to the canonical page root (see
+  // Invalid envelope/props. Removes ONLY this shape; any shape whose parentId
+  // is a dropped id is rehomed to the canonical page root (see
   // applyRepairToModel). Deliberately NOT a subtree cascade: a container with
   // one bad prop must not execute its innocent contents, and Loro tombstones
-  // make that loss unrecoverable.
+  // make that loss unrecoverable. Rescued children keep their parent-relative
+  // x/y and may visually jump — accepted, owner ruling 1.
   | { op: 'dropShape'; id: string }
 ```
 
-(b) In `repairPlan`, suppress `dropShape` alongside `reparentToRoot` when there
-is no page. Replace:
+**Step 4: Implement — `repairPlan`'s zero-page guard**
+
+Replace:
 
 ```ts
     if (o.op === 'reparentToRoot' && !canReparent) continue
@@ -3859,12 +4049,14 @@ with:
     if ((o.op === 'reparentToRoot' || o.op === 'dropShape') && !canReparent) continue
 ```
 
-(c) Update the `canReparent` comment two lines above to say it gates drops too.
+Also amend the `canReparent` comment three lines above so it stops reading as
+orphans-only — it now gates drops as well.
 
-(d) Delete `cascadeDropSet` entirely (lines 84-100 as of `0388900`, comment
-included).
+**Step 5: Implement — `applyRepairToModel`'s drop half**
 
-(e) Rewrite the drop half of `applyRepairToModel`. Replace:
+Three edits inside `applyRepairToModel`.
+
+(a) Delete the `dropAll` line and replace its comment block. Replace:
 
 ```ts
   // Drop invalid shapes AND their descendants (cascade). The filter below runs
@@ -3876,67 +4068,147 @@ included).
 with:
 
 ```ts
-  // Drop ONLY the named shapes. Their children are rescued below by the same
-  // map that serves reparentToRoot — see the dropShape variant's comment for
-  // why a cascade is the wrong response to one bad prop.
+  // Drop ONLY the shapes the plan names. Their children are rescued by the same
+  // map that serves reparentToRoot, below. The filter runs BEFORE that map, so a
+  // shape that is both dropped and rescue-eligible is DROPPED: removal outranks
+  // rescue, and LoroCanvasDoc.repair() must make the same choice.
 ```
 
-and change the `shapes` pipeline's `.filter((s) => !dropAll.has(s.id))` to
-`.filter((s) => !drop.has(s.id))`, and its `.map(...)` from:
+(b) In the `shapes` pipeline, change the drop filter and the rehome map:
 
 ```ts
-    .map((s) => (toRoot.has(s.id) ? { ...s, parentId: pageId } : s))
+    .filter((s) => !drop.has(s.id))
 ```
 
-to:
+and
 
 ```ts
     // A shape is rehomed to the canonical page either because it was flagged
-    // (orphan/cycle) or because its parent was just dropped. Same target,
-    // same determinism.
+    // (orphan/cycle) or because its parent was just dropped. Same target, same
+    // determinism — the rescue must not invent a second rehoming rule.
     .map((s) => (toRoot.has(s.id) || drop.has(s.parentId) ? { ...s, parentId: pageId } : s))
 ```
 
-and the `bindings` line from `dropAll` to `drop`:
+(c) The bindings filter loses its cascade:
 
 ```ts
+  // A binding dies iff the plan names it, or an ENDPOINT was dropped (that
+  // binding is not dangling when the plan is computed, so no deleteBinding op
+  // exists for it — sweeping it here is what makes ONE pass converge). A
+  // binding to a merely RESCUED shape survives: the shape still exists.
   const bindings = doc.bindings.filter((b) => !delBind.has(b.id) && !drop.has(b.fromId) && !drop.has(b.toId))
 ```
 
-**Step 4: Run the test to verify it passes**
+`cascadeDropSet` is now unreferenced within this module. **Leave it exported and
+in place** — Task 6 deletes it with its last consumer.
+
+**Step 6: Run the test, then confirm the consumer list**
 
 ```
 cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-model/src/repair.test.ts
 ```
 
-Expected: the file's final `ok:` line.
+Expected: `ok: repair (model)`.
 
-**Step 5: Prove `cascadeDropSet` has no remaining consumers except canvas-doc**
+Then:
 
 ```
 cd /home/stag/src/projects/ensembleworks && grep -rn "cascadeDropSet" --include='*.ts' --include='*.tsx' . | grep -v node_modules
 ```
 
-Expected: **only** hits in `canvas-doc/src/loro-canvas-doc.ts` (its import on
-line 5 and its use around line 357 plus two comment mentions). Task 6 removes
-those. If you see any other consumer, STOP and report.
+Expected shape of the result — assert the **files**, not the line numbers:
 
-**Step 6: Run the canvas-model suite**
+- `canvas-model/src/repair.ts` — the definition and its comment only; **no call
+  site left in this file**.
+- `canvas-doc/src/loro-canvas-doc.ts` — its import, its one call in `repair()`,
+  and comment mentions. Task 6 removes all of these and then the definition.
+- `canvas-model/src/repair.test.ts` — a comment mention only, if you did not
+  already delete it in step 1a.
+
+Any **other** consumer means this plan's premise is wrong: **STOP and report.**
+
+**Step 7: Run the wider suites and check the blast radius**
 
 ```
 cd /home/stag/src/projects/ensembleworks/canvas-model && ~/.bun/bin/bun test.ts
+cd /home/stag/src/projects/ensembleworks/canvas-doc && ~/.bun/bin/bun test.ts
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-sync/src/convergence.test.ts
+cd /home/stag/src/projects/ensembleworks && bun run typecheck
 ```
 
-Expected: all suites pass. (`canvas-doc` will be red until Task 6 — that is
-expected and is why these are separate commits.)
+Measured at `e1e2a0b` with this change applied — these are observations, not
+predictions:
 
-**Step 7: Commit**
+- `canvas-model`: **all 14 suites pass.**
+- `canvas-doc`: every suite passes **except** `src/repair.test.ts`, which fails
+  at exactly one assertion:
+  ```
+  AssertionError: Loro and model application agree (order-independent)
+  ```
+  That is the `doc3` order-independence block, **not** the `doc4` cascade block
+  (`doc4` asserts Loro behaviour directly and does not consult the model, so it
+  stays green until Task 6 changes Loro). This failure is **intended**: it *is*
+  Task 6's RED, and it is a behavioural assertion rather than a module-load
+  error, which is the whole reason `cascadeDropSet` survives this task.
+- `canvas-sync/src/convergence.test.ts`: **passes.** Reasoned and confirmed: the
+  rig's `randomShape` (`canvas-sync/src/rig/ops.ts`) only ever emits valid
+  shapes, and every write path it drives now validates, so no trial can produce
+  a `validProps` violation — therefore no `dropShape` op, therefore nothing for
+  this change to disagree about.
+- `bun run typecheck`: **green in all workspaces** (an exported-but-unused
+  function is not an error).
+
+**If `canvas-doc` fails anywhere other than that one assertion, or if
+`convergence.test.ts` fails at all, STOP and report** — do not adjust the rig
+and do not start Task 6 on top of an unexplained failure.
+
+**Step 8: Commit**
 
 ```
 cd /home/stag/src/projects/ensembleworks
 git add canvas-model/src/repair.ts canvas-model/src/repair.test.ts
 git commit -m "fix(canvas-model): dropShape rescues children instead of cascading"
 ```
+
+Paste the verbatim step-2 RED output into the commit body.
+
+### Handoff to Task 6 — what must match, so the two cannot drift
+
+`applyRepairToModel` is the reference; `LoroCanvasDoc.repair()` must agree
+byte-for-byte after normalization. Task 6 must therefore reproduce **all four**
+of the rules this task established:
+
+1. **Rescue before delete.** Loro's `deleteNode` cascades over the *real* tree
+   and clears descendants' text containers, so every physical child must be
+   moved out of the doomed subtree **first**. This is the one place the Loro
+   side is harder than the model side.
+2. **Same target.** Children are stamped with `canonicalPageId(model.pages)` —
+   not `pages[0]`, not a traversal-order pick.
+3. **Removal outranks rescue.** A child that is itself dropped is rescued out
+   and then removed by its own turn in the plan loop; that ordering is what
+   makes the result independent of the order `dropShape` ops are visited in.
+4. **Bindings sweep on the drop set only**, never on a descendant closure.
+
+And Task 6 additionally **inherits the deletion of `cascadeDropSet`**: after it
+removes the import and call from `canvas-doc/src/loro-canvas-doc.ts`, it must
+also delete the function and its comment from `canvas-model/src/repair.ts` (and
+the stale mention in `canvas-model/src/repair.test.ts` if step 1a left one),
+discharging ruling 2.
+
+> **Two defects in Task 6's current text, found while refreshing this section
+> (2026-07-20). Fix them before executing Task 6, or it will fail on contact:**
+>
+> - Task 6 step 4(a)'s replacement import line **omits `SHAPE_KINDS` and
+>   `type ShapeKind`**, which `canvas-doc/src/loro-canvas-doc.ts` uses in its
+>   `kind` coercion (added by Task 1B, after Task 6's text was written).
+>   Dropping them breaks `bun run typecheck`. Remove only `cascadeDropSet` from
+>   that import.
+> - Task 6 step 1 predicts the RED "most likely at the model-agreement
+>   assertion … and/or the order-independence block". Measured: it is
+>   **specifically** the order-independence block's
+>   `'Loro and model application agree (order-independent)'`. Task 6's other
+>   line-number references (`repair.test.ts:89-92`, `:187`) were not re-verified
+>   here and should be treated as rotted until checked.
 
 ---
 
