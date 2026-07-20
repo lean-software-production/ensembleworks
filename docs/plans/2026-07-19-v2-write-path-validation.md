@@ -319,6 +319,20 @@ not an open question — it would require `repair()` to do geometry, and
   equally to today's `reparentToRoot` orphan/cycle path, so it is a single
   follow-up covering both, not something this branch should special-case.
 
+- **The clean-room boundary test only guards one of the four packages.**
+  (Noted 2026-07-20 during Task 1A spec review. **Pre-dates this branch — do NOT
+  fix it here.**) `canvas-sync/src/boundary.test.ts` globs
+  `**/*.ts` relative to `import.meta.dirname`, which is `canvas-sync/src`. So it
+  would **not** catch a `from 'ws'`, `@tldraw/`, `Date.now(` or `Math.random(`
+  violation in `canvas-doc`, `canvas-model`, or `canvas-editor` — even though
+  CLAUDE.md describes all four packages as protected by this rule.
+  `canvas-editor` and `canvas-react` do have their own boundary tests;
+  `canvas-doc` and `canvas-model` have none at all. The enforcement gap is
+  repo-wide and belongs in its own change, not smuggled into a data-loss fix.
+  Until it is closed, the rule is upheld by convention in those two packages —
+  which is exactly why this plan states the forbidden literals explicitly rather
+  than relying on CI to catch them.
+
 ### D6. Perf.
 
 Measured on this machine at `0388900`, 5000 iterations:
@@ -800,9 +814,12 @@ In `canvas-doc/src/loro-canvas-doc.ts`, replace the counter block:
   // which is the diagnostically useful one. The counter above stays exact, so
   // capping the log loses no information that anything actually reads.
   //
-  // This is the only non-test console call in canvas-doc, canvas-model,
-  // canvas-sync and canvas-editor combined. Bounded it is defensible;
-  // unbounded it would not be. Do not lift the cap.
+  // This is one of only three non-test console calls across canvas-doc,
+  // canvas-model, canvas-sync and canvas-editor. The other two are
+  // canvas-sync's malformed-frame warnings (client-peer.ts, server-peer.ts),
+  // which are bounded in a different way: they fire per inbound FRAME, not per
+  // pointermove, so they cannot reach this one's unbounded rate. Bounded it is
+  // defensible; unbounded it would not be. Do not lift the cap.
   private rejectWrite(op: InvalidWrite['op'], kind: string, id: string, error: string): void {
     this.writeRejections++
     const write: InvalidWrite = { op, kind, id, error }
@@ -837,9 +854,71 @@ git add canvas-doc/src/canvas-doc.ts canvas-doc/src/loro-canvas-doc.ts canvas-do
 git commit -m "refactor(canvas-doc): add kind to InvalidWrite, bound the default sink, rename the counter"
 ```
 
+### ✅ LANDED at `0a3ddd6` — with TWO OF FOUR test sections DEFERRED TO TASK 2
+
+Task 1A is implemented and spec-reviewed. **The deferral sanctioned in Step 2
+was taken.** Only two of Step 1's four test sections are committed at `0a3ddd6`:
+
+| Section | Status at `0a3ddd6` |
+|---|---|
+| Task 1/1A — surface exists, starts empty | ✅ committed, green |
+| Finding 4 — the old `invalidWrites` name is gone | ✅ committed, green |
+| **Finding 3 — `kind` on the props AND envelope paths** | ⛔ **deferred — Task 2 owns it** |
+| **Finding 2 — the warn cap (20 rejections → 5 warnings)** | ⛔ **deferred — Task 2 owns it** |
+
+Both deferred sections need `putShape` to actually reject, which does not happen
+until Task 2. **Task 2 Step 1 restores them verbatim and they are part of Task
+2's RED.** If they are not restored, findings 2 and 3 ship with no proof at all
+— see the two explicit warnings in Task 2 Step 1.
+
 ---
 
 ## Task 2: Validate `putShape` at the write boundary
+
+> ### ⚠️ Task 2 carries inherited obligations. Read Step 0 and Step 1 before writing anything.
+>
+> Task 2 is not only "add validation". It must also (a) correct a false comment
+> the plan itself put into `loro-canvas-doc.ts` (Step 0), and (b) restore two
+> test sections Task 1A legitimately deferred (Step 1). Neither is optional and
+> neither is scope creep.
+
+**Step 0: Correct the false comment Task 1A shipped**
+
+Task 1A's prescribed comment block contained a factual error that the
+implementer transcribed faithfully into
+`canvas-doc/src/loro-canvas-doc.ts:120-122`. It claims:
+
+```
+  // This is the only non-test console call in canvas-doc, canvas-model,
+  // canvas-sync and canvas-editor combined.
+```
+
+**That is false.** There are three, verified by
+`grep -rn "console\." --include='*.ts' canvas-{doc,model,sync,editor}/src | grep -v '\.test\.ts'`:
+
+- `canvas-doc/src/loro-canvas-doc.ts:129` — this one
+- `canvas-sync/src/client-peer.ts:151` — `'[canvas-sync] client peer dropped a malformed inbound frame:'`
+- `canvas-sync/src/server-peer.ts:128` — `'[canvas-sync] server peer dropped a malformed inbound frame:'`
+
+The error originated in a quality review, was passed into Task 1A's brief, and
+was correctly transcribed. **Fixing it here is repairing an inaccuracy this plan
+introduced — not scope creep**, and it must be fixed because a confidently wrong
+comment is worse than no comment: the next person to add a `console.*` to these
+packages will read it as a rule they are breaking.
+
+Replace those three comment lines with:
+
+```
+  // This is one of only three non-test console calls across canvas-doc,
+  // canvas-model, canvas-sync and canvas-editor. The other two are
+  // canvas-sync's malformed-frame warnings (client-peer.ts, server-peer.ts),
+  // which are bounded in a different way: they fire per inbound FRAME, not per
+  // pointermove, so they cannot reach this one's unbounded rate. Bounded it is
+  // defensible; unbounded it would not be. Do not lift the cap.
+```
+
+Verify the count yourself with the grep above before committing — do not take
+this plan's word for it a second time.
 
 **Files:**
 - Modify: `canvas-doc/src/loro-canvas-doc.ts` (`putShape`, add `putShapeUnchecked`)
@@ -847,6 +926,74 @@ git commit -m "refactor(canvas-doc): add kind to InvalidWrite, bound the default
 - Modify: `canvas-doc/src/write-validation.test.ts`
 
 **Step 1: Write the failing test**
+
+> ## ⛔ FIRST: restore the two sections Task 1A deferred. Do not skip this.
+>
+> Task 1A committed only two of its four test sections at `0a3ddd6`. The other
+> two could not run until `putShape` rejects — which is this task. **Paste them
+> in verbatim, after the existing finding-4 section and before Task 2's own
+> sections.** They are currently red and go green with this task's fix, so
+> **they are part of Task 2's RED and must both be observed failing in Step 2.**
+>
+> Two traps, stated plainly because both are easy to walk into:
+>
+> 1. **Do NOT treat Task 2's `assert.equal(seen[0]!.kind, 'frame')` as covering
+>    finding 3.** That is the *props* path, where the kind is embedded in the
+>    zod message anyway. The **envelope** path — `index: ''` on a `note`,
+>    asserting `seen[1]!.kind === 'note'` **and** the precondition
+>    `assert.doesNotMatch(seen[1]!.error, /note/)` — is the entire justification
+>    for finding 3. Without it, `kind` is proven exactly where it was least
+>    needed and finding 3's rationale is permanently unverified.
+> 2. **Do NOT treat Task 2's `assert.equal(warned.length, 1)` as covering
+>    finding 2.** A single rejection produces one warning whether or not a cap
+>    exists — that assertion passes identically against an *uncapped* warn. Only
+>    the 20-iteration loop asserting `invalidWriteCount === 20` **and**
+>    `warned.length === 5` pins the cap.
+>
+> The two sections, verbatim (reproduced here so you never have to scroll back
+> to Task 1A):
+>
+> ```ts
+> // --- Task 1A finding 3: InvalidWrite carries `kind` ---
+> // Two cases, because they fail on DIFFERENT zod paths. The props case embeds
+> // the kind in the message anyway; the ENVELOPE case does not, and that is the
+> // case `kind` exists for.
+> {
+>   const seen: InvalidWrite[] = []
+>   const doc = LoroCanvasDoc.create({ peerId: 12n, onInvalidWrite: (w) => seen.push(w) })
+>   doc.putPage({ id: 'page:p', name: 'P' })
+>
+>   // Props-refinement failure: kind IS in the message, and must also be a field.
+>   doc.putShape({ id: 'shape:a', kind: 'frame', parentId: 'page:p', props: { w: '1' }, ...base() } as never)
+>   assert.equal(seen[0]!.kind, 'frame', 'kind is reported on a props failure')
+>
+>   // Envelope failure (index must be a non-empty string): the zod message never
+>   // names the kind, so the field is the ONLY way to know what was being built.
+>   doc.putShape({ id: 'shape:b', kind: 'note', parentId: 'page:p', props: {}, ...base(), index: '' } as never)
+>   assert.equal(seen[1]!.kind, 'note', 'kind is reported on an envelope failure too')
+>   assert.doesNotMatch(seen[1]!.error, /note/, 'precondition: the envelope error genuinely does not name the kind')
+> }
+>
+> // --- Task 1A finding 2: the default console.warn is BOUNDED, the counter is not ---
+> {
+>   const warned: unknown[][] = []
+>   const realWarn = console.warn
+>   console.warn = (...args: unknown[]) => { warned.push(args) }
+>   try {
+>     const doc = LoroCanvasDoc.create({ peerId: 13n }) // no handler -> console path
+>     doc.putPage({ id: 'page:p', name: 'P' })
+>     // v2 commits at per-pointermove granularity, so a bad drag emits ~60/s
+>     // indefinitely. 20 stands in for "a drag that lasted a third of a second".
+>     for (let i = 0; i < 20; i++) {
+>       doc.putShape({ id: `shape:bad${i}`, kind: 'frame', parentId: 'page:p', props: { w: 'x' }, ...base() } as never)
+>     }
+>     assert.equal(doc.invalidWriteCount, 20, 'the counter stays EXACT regardless of the log cap')
+>   } finally {
+>     console.warn = realWarn
+>   }
+>   assert.equal(warned.length, 5, 'the console fallback is capped at the first 5 — a drag must not flood DevTools')
+> }
+> ```
 
 > **What Task 1's test did and did not prove.** Task 1's assertions are
 > deliberately weak — they check the *default* zero state. Spec review confirmed
@@ -936,11 +1083,24 @@ Append to `canvas-doc/src/write-validation.test.ts`, **before** the final
 cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/write-validation.test.ts
 ```
 
-Expected: FAIL at the **first** new assertion —
-`AssertionError: the hook actually fired — storing the handler is not enough`
-(`0 !== 1`). With no validation in place `putShape` simply writes the bad shape,
-so the hook never fires. (`putShapeUnchecked` also does not exist yet, but
-execution never reaches it.) **Record the verbatim output.**
+Expected: FAIL in the **restored finding-3 section**, which now runs first — a
+`TypeError` on `seen[0]!.kind` (reading a property of `undefined`), because with
+no validation in place `putShape` writes the bad shape and `seen` stays empty.
+
+Then, after the fix, **verify all three of these go green** — this is the point
+of the restore, so check them individually rather than trusting a single
+`ok:` line:
+
+| Assertion | Proves |
+|---|---|
+| `seen[1]!.kind === 'note'` + `doesNotMatch(seen[1]!.error, /note/)` | finding 3 on the **envelope** path |
+| `invalidWriteCount === 20` + `warned.length === 5` | finding 2's **cap** |
+| `the hook actually fired — storing the handler is not enough` | Task 2's own hole 1 |
+
+If you comment out the restored sections to "get a cleaner RED", you have
+defeated the purpose of Step 1 — findings 2 and 3 would then ship unproven.
+(`putShapeUnchecked` also does not exist yet, but execution never reaches it.)
+**Record the verbatim output.**
 
 > **Placement note.** All five holes are closed here in Task 2 rather than
 > split with Task 4. Holes 1, 2, 4 and 5 are properties of the shared
@@ -1036,6 +1196,10 @@ cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/write-
 Expected: `ok: write-validation`
 
 **Step 5: Commit**
+
+Before committing, confirm all three of Task 2's obligations are in the diff:
+the Step 0 comment correction, the two restored Task 1A sections, and Task 2's
+own validation + `putShapeUnchecked`.
 
 ```
 cd /home/stag/src/projects/ensembleworks
