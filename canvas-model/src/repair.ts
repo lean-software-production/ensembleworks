@@ -98,9 +98,15 @@ export function repairPlan(doc: CanvasDocument): RepairOp[] {
 
 // Transitive closure of shapes to drop: the seed ids plus every shape whose
 // ancestry passes through a seed — a fixpoint over parentId edges, so chains
-// of any depth are caught regardless of input order. Shared by
-// applyRepairToModel AND LoroCanvasDoc.repair() (its reparent skip-set and
-// binding sweep): one implementation, zero drift.
+// of any depth are caught regardless of input order.
+//
+// applyRepairToModel NO LONGER USES THIS: repair became proportionate (drop
+// the named shape, rescue its children) and stopped cascading. The only
+// remaining caller is LoroCanvasDoc.repair(), whose reparent skip-set and
+// binding sweep still cascade — which is exactly the model/Loro divergence
+// the next task closes by deleting this function and its last caller
+// together. Until then the two are KNOWN to disagree; do not read this
+// helper as evidence that they are kept in step.
 export function cascadeDropSet(
   shapes: readonly { id: string; parentId: string }[],
   seed: ReadonlySet<string>,
@@ -147,11 +153,15 @@ export function applyRepairToModel(doc: CanvasDocument, plan: RepairOp[]): Canva
   // the pre-repair shapes above, and the dedupe comparison below re-derives
   // stableStringify(s) against that key from the SAME untransformed `s` this
   // callback receives — never from a copy some earlier stage already
-  // rehomed. Fusing the three decisions into one step makes that ordering
-  // structural rather than a chain a later edit could quietly reorder: there
-  // is no separate rehoming stage for a reordering to move earlier than the
-  // dedupe check (a real bug this fusion replaces — see repair.test.ts's
-  // ORDER PIN case for the reproduction).
+  // rehomed. Fusing the three decisions into one step removes the separate
+  // rehoming stage that a later edit could quietly move ahead of the dedupe
+  // check. That forecloses the mistake mechanically; it does NOT put the bug
+  // out of reach — hoisting the rehome into a local above the dedupe
+  // compare, a three-line edit inside this callback, still annihilates every
+  // copy of a deduped-and-rescued shape. Hence the ORDER PIN case in
+  // repair.test.ts: it pins the constraint the shape of this code only
+  // discourages. The chain form never shipped the bug, so that case is a
+  // pin, not a regression test.
   const shapes = doc.shapes.flatMap((s) => {
     if (drop.has(s.id)) return []
     if (dedupeIds.has(s.id)) {
