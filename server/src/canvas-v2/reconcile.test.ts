@@ -33,7 +33,7 @@ const model1 = makeDocument({
 
 const doc = LoroCanvasDoc.create({ peerId: 1n })
 const r1 = reconcile(doc, model1)
-assert.deepEqual(r1, { puts: 3, deletes: 0 })
+assert.deepEqual(r1, { puts: 3, deletes: 0, refused: 0 })
 {
 	const out = dumpModel(doc)
 	assert.deepEqual(sortedIds(out.shapes), sortedIds(model1.shapes))
@@ -44,7 +44,7 @@ assert.deepEqual(r1, { puts: 3, deletes: 0 })
 
 // --- 2) reconcile the same model again → idempotent {0,0} ---
 const r2 = reconcile(doc, model1)
-assert.deepEqual(r2, { puts: 0, deletes: 0 }, 'steady state: nothing to do')
+assert.deepEqual(r2, { puts: 0, deletes: 0, refused: 0 }, 'steady state: nothing to do')
 
 // --- 3) move one shape + add one new shape → {puts:2, deletes:0} ---
 const model2 = makeDocument({
@@ -58,7 +58,7 @@ const model2 = makeDocument({
 	bindings: [{ id: 'binding:1', fromId: 'shape:c', toId: 'shape:a', props: {}, meta: {} }],
 })
 const r3 = reconcile(doc, model2)
-assert.deepEqual(r3, { puts: 2, deletes: 0 })
+assert.deepEqual(r3, { puts: 2, deletes: 0, refused: 0 })
 assert.deepEqual(sortedIds(dumpModel(doc).shapes), sortedIds(model2.shapes))
 
 // --- 4) THE SUSPECTED-BUG SCENARIO: delete a parent while keeping a
@@ -100,7 +100,7 @@ assert.equal(r4.puts, 2, 'both shape:mid (parent changed) AND shape:child (casca
 	assert.equal((byId(out, 'shape:child').props as any).color, 'blue', 'child envelope intact after resurrection')
 }
 // Idempotent on the very next tick.
-assert.deepEqual(reconcile(doc2, after), { puts: 0, deletes: 0 }, 'converged state needs no further touch')
+assert.deepEqual(reconcile(doc2, after), { puts: 0, deletes: 0, refused: 0 }, 'converged state needs no further touch')
 
 // --- 5) text: richText lives in props, not a separate LoroText channel —
 // reconcile's props JSON-diff (shallowEqualShape) is what carries it. ---
@@ -143,7 +143,7 @@ const withTextEdited = makeDocument({
 	bindings: [],
 })
 const r5 = reconcile(doc3, withTextEdited)
-assert.deepEqual(r5, { puts: 1, deletes: 0 })
+assert.deepEqual(r5, { puts: 1, deletes: 0, refused: 0 })
 assert.equal(plainText(byId(dumpModel(doc3), 'shape:note')), 'updated')
 
 // --- 6) ORDER-INDEPENDENT COMPARISON: Loro's tree-node data map does NOT
@@ -169,9 +169,9 @@ const multiKey = makeDocument({
 	bindings: [],
 })
 const r6a = reconcile(doc4, multiKey)
-assert.deepEqual(r6a, { puts: 1, deletes: 0 })
+assert.deepEqual(r6a, { puts: 1, deletes: 0, refused: 0 })
 const r6b = reconcile(doc4, multiKey)
-assert.deepEqual(r6b, { puts: 0, deletes: 0 }, 'multi-key props: steady state must be {0,0}, not key-order churn')
+assert.deepEqual(r6b, { puts: 0, deletes: 0, refused: 0 }, 'multi-key props: steady state must be {0,0}, not key-order churn')
 
 // --- 7) kind joins the comparator (ratified ruling: reconcile's contract is
 // bring-in-line, no principled carve-out for kind): a kind-only change on an
@@ -191,7 +191,40 @@ const kindChanged = makeDocument({
 	bindings: [],
 })
 const r7 = reconcile(doc4, kindChanged)
-assert.deepEqual(r7, { puts: 1, deletes: 0 }, 'kind-only change is a real change')
+assert.deepEqual(r7, { puts: 1, deletes: 0, refused: 0 }, 'kind-only change is a real change')
 assert.equal(byId(dumpModel(doc4), 'shape:m').kind, 'note')
+
+// --- 8) A target carrying a shape the write boundary REFUSES. convert.ts
+// passes tldraw props through verbatim, so a legacy room can hand reconcile a
+// shape validateShape rejects. The put is a NO-OP, so the shape stays absent
+// and the next tick tries again — forever. reconcile must therefore report
+// the refusal separately: folded into `puts` it is indistinguishable from a
+// genuine pending write, and the shadow divergence signal reads as permanent
+// unexplained churn. ---
+const doc5 = LoroCanvasDoc.create({ peerId: 5n })
+const withInvalid = makeDocument({
+	pages: [{ id: 'page:p', name: 'Page' }],
+	shapes: [
+		{ id: 'shape:ok', kind: 'note', parentId: 'page:p', props: { color: 'yellow' }, ...base() } as any,
+		{ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as any,
+	],
+	bindings: [],
+})
+// A: one valid shape ALONGSIDE the invalid one, so `puts` is a discriminating
+// nonzero — an implementation that reports `refused` but forgets to subtract
+// it from `puts` returns {puts:2} here.
+const r8a = reconcile(doc5, withInvalid)
+assert.deepEqual(r8a, { puts: 1, deletes: 0, refused: 1 }, 'the refused write is reported as refused, NOT counted as a put')
+// The counts are not accounting fiction: the valid shape really landed and the
+// refused one really did not. This is also what kills a "make it converge" fix
+// that swaps in putShapeUnchecked — that writes both ids and refuses nothing.
+assert.deepEqual(sortedIds(dumpModel(doc5).shapes), ['shape:ok'], 'the valid shape landed; the refused one did not')
+// B: `refused` must be a PER-TICK delta, not doc.invalidWriteCount itself.
+// That counter is a monotonic lifetime total (loro-canvas-doc.ts:141-144,
+// "Never reset") and grows by one on every tick this target is reconciled —
+// measured 1, 2, 3 over three ticks. An implementation that returns it raw
+// passes A and then reports refused:2 here.
+const r8b = reconcile(doc5, withInvalid)
+assert.deepEqual(r8b, { puts: 0, deletes: 0, refused: 1 }, 'stable across ticks: refused is a per-tick delta, not the doc lifetime total')
 
 console.log('ok: reconcile')

@@ -36,6 +36,13 @@ import { dumpModel, type LoroCanvasDoc } from '@ensembleworks/canvas-doc'
  * `puts`/`deletes` count SHAPES only (pages/bindings are small whole-record
  * sets, unconditionally upserted/deleted every call — see the plan's Task D1
  * semantics note) — this is the plan's chosen definition, kept as-is.
+ * `refused` counts shape puts the write boundary rejected as a no-op (see
+ * `putShape`'s validation) — a PER-CALL delta, not the doc's lifetime
+ * `invalidWriteCount`. A refused shape is never written, so it stays absent
+ * from `doc` and every later call retries it: `reconcile` cannot converge on
+ * a target that carries a shape the model schema rejects. That is a correct,
+ * visible consequence of refusing to write invalid data, not a bug — folding
+ * it into `puts` would hide it as indistinguishable ordinary churn.
  * One commit() at the end.
  *
  * Absent-parent tolerance: a target shape whose parentId names a shape absent
@@ -46,7 +53,7 @@ import { dumpModel, type LoroCanvasDoc } from '@ensembleworks/canvas-doc'
  * reachable here: shadow consumes arbitrary live-room data, and fromTldraw
  * drops unknown shape types, which can orphan a surviving child's parentId.
  */
-export function reconcile(doc: LoroCanvasDoc, target: CanvasDocument): { puts: number; deletes: number } {
+export function reconcile(doc: LoroCanvasDoc, target: CanvasDocument): { puts: number; deletes: number; refused: number } {
 	const current = dumpModel(doc)
 	const curShapesBefore = new Map(current.shapes.map((s) => [s.id, s]))
 	const tgtShapes = new Map(target.shapes.map((s) => [s.id, s]))
@@ -71,6 +78,21 @@ export function reconcile(doc: LoroCanvasDoc, target: CanvasDocument): { puts: n
 	// Puts in depth order (parents before children) so a freshly-recreated
 	// parent's node exists by the time a resurrected child is placed under it.
 	const ordered = [...tgtShapes.values()].sort((a, b) => depth(target, a.id) - depth(target, b.id))
+	// Bracket the put loop with the doc's rejection counter so a REFUSED write
+	// is distinguishable from a completed one. Without this, `puts` counts both
+	// and a room carrying a shape the write boundary refuses reports a nonzero
+	// delta on every tick forever — reconcile cannot converge on it, and the
+	// shadow divergence signal never clears. That is not a regression (the old
+	// behaviour wrote it and let repair() cascade-delete the subtree), but it
+	// changes what the dashboard MEANS, so it must be legible rather than
+	// silently folded into `puts`.
+	//
+	// invalidWriteCount is a monotonic LIFETIME total, so `refused` must be a
+	// delta: the shadow mirror reconciles the same doc every tick, and the raw
+	// counter would grow without bound while the per-tick truth stayed 1.
+	// Bracketing the loop rather than the whole function is deliberate — no
+	// write outside it can reject today, and this stays correct if one ever can.
+	const refusedBefore = doc.invalidWriteCount
 	for (const s of ordered) {
 		const prev = curShapesAfter.get(s.id)
 		if (!prev || !shallowEqualShape(prev, s)) {
@@ -78,6 +100,8 @@ export function reconcile(doc: LoroCanvasDoc, target: CanvasDocument): { puts: n
 			puts++
 		}
 	}
+	const refused = doc.invalidWriteCount - refusedBefore
+	puts -= refused // a refusal is not a put
 
 	// Pages + bindings: whole-record upsert/delete, unconditionally (small
 	// sets; no diffing needed, and — unlike shapes — nothing cascades them).
@@ -92,7 +116,7 @@ export function reconcile(doc: LoroCanvasDoc, target: CanvasDocument): { puts: n
 	for (const b of tgtB.values()) doc.putBinding(b)
 
 	doc.commit()
-	return { puts, deletes }
+	return { puts, deletes, refused }
 }
 
 function depth(doc: CanvasDocument, id: string, guard = 0): number {
