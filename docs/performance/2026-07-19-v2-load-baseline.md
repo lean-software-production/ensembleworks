@@ -81,13 +81,56 @@ the totals are what prompted the work, but the sub-splits are what direct it.
 
 | Comparison | Value | What it isolates |
 |---|---|---|
-| v2 @100 p50 ÷ v1 @100 p50 | `1.18x` | **Parity ratio.** ≤ 1.00 means at or better than v1 — the owner's acceptance bar. Not yet met. |
+| v2 @100 p50 ÷ v1 @100 p50 | `1.18x` | **Parity ratio.** ≤ 1.00 means at or better than v1 — the owner's acceptance bar. Not yet met. **Read "How comparable are the two arms?" below before citing this.** |
 | v2 @1000 per-shape p50 ÷ bulk p50 | `1.00x` | Contributor (b): op **count** vs bytes. Near 1.0 ⇒ op count is not the bottleneck. |
 | v2 @1000 cold p50 − warm p50 | `28.7ms` | Contributor (d): server-side snapshot load + oplog replay. |
 | chunkResponseEndMs p50 (1k warm) | `191.6ms` | Contributor (a): the ~4.3 MB lazy chunk. |
 | chunkToToolbarMs p50 (1k warm) | `360.2ms` | Contributors (c) WASM decode + module eval + boot. |
 | toolbarToFirstShapeMs p50 (1k warm) | `0ms` | Contributors (b) oplog replay + (e) WS round-trip — **the gap the harness was built to expose.** |
 | wsOpenMs p50 (1k warm) | `494.1ms` | Contributor (e), isolated. |
+
+## How comparable are the two arms?
+
+The parity ratio above is a sound measure of **user-perceived time to first shape
+under these conditions**. It is *not* an isolated engine-vs-engine benchmark, and
+the difference matters for anyone deciding what to optimise.
+
+Shared by both arms, and sufficient to make the metric meaningful: same app,
+origin, viewport, identity fixture, rep count and gated statistic; the same
+measurement definition (navigation start → first *pre-seeded* shape present in
+the DOM); the same `note` shape kind; and seeding that completes **before**
+navigation, so both measure paint-of-already-present-content rather than live
+incremental sync.
+
+Five ways they differ, with the direction of bias where it is known:
+
+1. **The ~300ms client bootstrap is not known to be v2-unique.** The v1 arm has
+   no sub-splits (`toolbarSelector: null`, `chunkPattern: null`) — only its total
+   was captured. v1 ships a **1.7 MB** `tldraw` chunk against v2's **4.2 MB**
+   `CanvasV2App` chunk and pays its own download-and-evaluate cost that this
+   capture never measured. **The measured delta between engines is ~78ms, not
+   ~300ms.** Wherever this document implicates client startup, read it as *the
+   difference between two bootstraps*, not as pure v2 overhead.
+2. **v2's seeded shapes render less content.** The wire seeder creates notes with
+   `props: {}` — no text, no colour — while the v1 HTTP seeder sends `text` and
+   `color`. **This biases in v2's favour**, so `1.18x` more likely understates
+   the deficit than overstates it.
+3. **Different first-shape selectors, equivalence unverified.** v1 matches
+   `.tl-shape`, v2 matches `[data-shape-id]`. Different renderers, different DOM
+   structure and virtualisation; whether the two become present at equivalent
+   points in their render lifecycles has **not** been checked. Bias direction
+   unknown.
+4. **Different seeding transports.** v1 over the legacy HTTP agent API, v2 over
+   the real `/sync/v2` WebSocket. No shared mechanism exists. Both complete
+   pre-navigation, so this should not enter the measured window.
+5. **Scale and conditions.** v1 was measured at 100 shapes only, so the parity
+   claim is a 100-shape claim. All figures are warm, localhost, developer laptop
+   — and **loopback effectively removes bandwidth as a cost**, which is exactly
+   the dimension on which these two bundles differ most.
+
+As an attribution of *why* v2 is slower, this capture supports "v2 ships ~2.5×
+the bytes on the critical path" considerably better than it supports any claim
+about a v2-specific bootstrap defect.
 
 ## Gates in force at capture
 
