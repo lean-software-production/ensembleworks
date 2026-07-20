@@ -49,16 +49,15 @@ export const RAIL_WIDTH = 32
 // "Panel states": "drag below ~140px (snaps)").
 const COLLAPSE_THRESHOLD = 140
 
-// Mosaic tile-size multiplier range, centred on the 1x default: 2x doubles
-// the derived size (up to what fits the panel row), and the low end packs
-// more faces in. 0.1 rather than 0 keeps the value a real multiplier while
-// sitting close enough to the low end that 1x reads as the slider's middle.
-// (Tile width still clamps to TILE_WIDTH_MIN, so the very bottom of the
-// range bottoms out at the 36px floor.)
-export const MIN_TILE_SCALE = 0.1
+// Mosaic tile-size multiplier range: halve at one end, double at the other.
+// The slider maps GEOMETRICALLY over it (see sliderPositionForScale), so 1x
+// — the derived "everyone fits" size — sits exactly mid-track and halving is
+// the mirror gesture of doubling. A linear mapping put 1x off-centre and
+// wasted the bottom third of the track below the 36px tile floor.
+export const MIN_TILE_SCALE = 0.5
 export const MAX_TILE_SCALE = 2
 
-/** Clamp a raw tile-scale to [0.1, 2]; non-finite falls back to 1. */
+/** Clamp a raw tile-scale to [0.5, 2]; non-finite falls back to 1. */
 export function clampTileScale(scale: number): number {
 	if (!Number.isFinite(scale)) return 1
 	return Math.min(MAX_TILE_SCALE, Math.max(MIN_TILE_SCALE, scale))
@@ -157,7 +156,26 @@ export function setPanelWidth(width: number, maxWidth?: number): void {
 	update({ width: clampPanelWidth(width, maxWidth) })
 }
 
-/** Set the mosaic tile-size multiplier, clamped to [0.5, 3]. */
+/**
+ * Slider position (0..1) → tile-size multiplier, geometric: each equal step
+ * along the track multiplies the size by the same factor, so 1x lands dead
+ * centre and 0.5x/2x sit symmetrically at the ends. Rounded to 2dp so the
+ * persisted value and its "1.25x" readout stay tidy.
+ */
+export function scaleForSliderPosition(position: number): number {
+	if (!Number.isFinite(position)) return 1
+	const p = Math.min(1, Math.max(0, position))
+	const raw = MIN_TILE_SCALE * (MAX_TILE_SCALE / MIN_TILE_SCALE) ** p
+	return clampTileScale(Math.round(raw * 100) / 100)
+}
+
+/** The inverse: multiplier → slider position (0..1). */
+export function sliderPositionForScale(scale: number): number {
+	const s = clampTileScale(scale)
+	return Math.log(s / MIN_TILE_SCALE) / Math.log(MAX_TILE_SCALE / MIN_TILE_SCALE)
+}
+
+/** Set the mosaic tile-size multiplier, clamped to [0.5, 2]. */
 export function setTileScale(scale: number): void {
 	update({ tileScale: clampTileScale(scale) })
 }

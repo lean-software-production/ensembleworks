@@ -18,7 +18,12 @@ import { wm } from '../theme'
 import { exitFocus } from './focus'
 import { peekCloseSoon, peekOpen, togglePinned, useFramesDrawer } from './framesDrawerLayout'
 import { MOSAIC_GAP, mosaicTileWidth, scaleTileWidth, tileWidthCeiling } from './mosaicLayout'
-import { MAX_TILE_SCALE, MIN_TILE_SCALE, setTileScale, usePanelLayout } from './panelLayout'
+import {
+	scaleForSliderPosition,
+	setTileScale,
+	sliderPositionForScale,
+	usePanelLayout,
+} from './panelLayout'
 import {
 	orderByRecency,
 	orderByViewportDistance,
@@ -356,30 +361,34 @@ function MosaicControls({ tileScale, onReorder }: { tileScale: number; onReorder
 				</svg>
 				reorder
 			</button>
+			{/* The slider travels in POSITION space (0..1) and converts through
+			    the store's geometric mapping, so 1x sits dead centre and equal
+			    drags either side halve/double by the same factor. */}
 			<input
 				type="range"
-				min={MIN_TILE_SCALE}
-				max={MAX_TILE_SCALE}
-				step={0.05}
-				value={tileScale}
+				min={0}
+				max={1}
+				step={0.01}
+				value={sliderPositionForScale(tileScale)}
 				data-testid="ew-mosaic-scale"
 				aria-label="Tile size"
-				title={`Tile size ${tileScale.toFixed(1)}×`}
-				onChange={(e) => setTileScale(Number(e.target.value))}
+				aria-valuetext={`${tileScale.toFixed(2)}×`}
+				title={`Tile size ${tileScale.toFixed(2)}× — double-click to reset`}
+				onChange={(e) => setTileScale(scaleForSliderPosition(Number(e.target.value)))}
 				onDoubleClick={() => setTileScale(1)}
 				style={{ flex: 1, minWidth: 0, accentColor: wm.sealBlue, cursor: 'pointer' }}
 			/>
 			<span
 				style={{
 					flex: '0 0 auto',
-					width: 26,
+					width: 32,
 					textAlign: 'right',
 					fontFamily: wm.mono,
 					fontSize: 9,
 					color: wm.inkMuted,
 				}}
 			>
-				{tileScale.toFixed(1)}×
+				{tileScale.toFixed(2)}×
 			</span>
 		</div>
 	)
