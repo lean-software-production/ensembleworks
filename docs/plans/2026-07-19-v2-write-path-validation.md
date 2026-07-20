@@ -165,9 +165,9 @@ shape's whole subtree on every peer, durably.
 ### D1. "Reject" means a counted, logged **no-op** — never a throw.
 
 **Decision.** An invalid `putShape` or `updateProps` writes nothing at all,
-increments `LoroCanvasDoc.invalidWrites`, and reports through an injected
-`onInvalidWrite` callback (defaulting to a `console.warn`). It does not throw
-and does not partially write.
+increments `LoroCanvasDoc.invalidWriteCount`, and reports through an injected
+`onInvalidWrite` callback (defaulting to a **bounded** `console.warn`). It does
+not throw and does not partially write.
 
 **Why not throw.** `Editor.applyAll` (`canvas-editor/src/editor.ts:249-256`)
 loops `applyOne` over a batch of intents with **no `try`/`catch`**, and only
@@ -186,18 +186,56 @@ arrive via `doc.import(bytes)`, which never routes through `putShape` or
 is the binding one.
 
 **Why a no-op is nevertheless acceptable.** Silence is only bought by
-observability, and both halves are mandatory:
+observability, and **all three** halves are mandatory:
 
-1. `LoroCanvasDoc.invalidWrites` — a monotonic, test-assertable counter,
+1. `LoroCanvasDoc.invalidWriteCount` — a monotonic, test-assertable counter,
    modelled on the existing `SyncServerPeer.malformedFrames`
    (`canvas-sync/src/server-peer.ts:67`).
 2. `onInvalidWrite(w: InvalidWrite)` — an optional injected callback. When it is
-   absent the doc emits a `console.warn` carrying the op, the shape id, and the
-   verbatim zod error.
+   absent the doc emits a **bounded** `console.warn` (first 5 rejections only)
+   carrying the op, the shape kind, the shape id, and the verbatim zod error.
+3. **A pull path that actually reaches a human** — the client peer forwards the
+   sink, and the v2 `DevOverlay` renders the count. Task 4A.
 
 `updateProps` already has a documented silent-no-op contract for an unknown id
 (`canvas-doc/src/canvas-doc.ts:28`), so "no-op on invalid" is contract-
 consistent rather than novel.
+
+#### D1a. A counter is not observability — the pull path is (code review, 2026-07-20)
+
+The `malformedFrames` precedent cited above was originally cited too loosely,
+and the correction matters. `SyncServerPeer.malformedFrames` is a **pure**
+counter with no console output at all. It is observable because
+`server/src/features/canvas-metrics.ts:81` pulls it into `/canvas/metrics` and
+DevOverlay renders it. **The counter was never the observability mechanism
+there — the pull path was.** Task 1 as landed copied the counter and substituted
+a console line for the pull path, which is not the same thing.
+
+Worse, the injected sink is currently **unreachable in the browser**:
+`SyncClientPeer` builds its own doc internally
+(`canvas-sync/src/client-peer.ts:50`, `LoroCanvasDoc.create({ peerId: opts.peerId })`),
+`SyncClientOpts` has no `onInvalidWrite` field, and
+`client/src/canvas-v2/CanvasV2App.tsx:349` constructs the *peer*, not the doc.
+Since essentially every client-side rejection originates via `Editor.applyAll` →
+`putShape`, `console.warn` is not a fallback on the client — it is the *only*
+production behaviour. **Task 4A closes this.**
+
+#### D1b. The default sink must be bounded
+
+CLAUDE.md records that v2 commits at **per-pointermove granularity**. Combined
+with D1a (console is the only client path today), a tool emitting an invalid
+`updateProps` during a drag yields roughly **60 `console.warn`s per second,
+indefinitely** — DevTools-hang grade, and it buries the first warning, which is
+the diagnostically valuable one.
+
+So the default sink is capped at the first 5 rejections. The **counter stays
+exact** regardless of the cap, which is precisely why the counter and the log
+are separate mechanisms rather than one.
+
+Precedent note, to be stated honestly in review: this `console.warn` is the
+**only non-test `console.*` call across `canvas-doc`, `canvas-model`,
+`canvas-sync` and `canvas-editor` combined.** It sets a precedent for those four
+clean-room packages. Bounded, it is defensible; unbounded, it would not be.
 
 ### D2. `updateProps` validates the **merged** result, not the patch.
 
@@ -339,6 +377,32 @@ that an external one exists.
 shape standing, mirroring the policy it already applies to `reparentToRoot`
 (`canvas-model/src/repair.ts:56-60`). See decision D4.
 
+### Ruling 5 — Task 1 code-review findings (2026-07-20): **all four accepted.**
+
+Task 1's implementation was reviewed ✅ APPROVED with four findings, two of
+which the reviewer judged to be gaps in **this plan** rather than in Task 1's
+execution. All four are accepted and folded in:
+
+| # | Finding | Where it now lives |
+|---|---|---|
+| 1 | The injected sink is unreachable in the browser; a counter is not a pull path | D1a + **Task 4A** |
+| 2 | The default `console.warn` is unbounded on a per-pointermove path | D1b + **Task 1A** |
+| 3 | `InvalidWrite` needs `kind` — `id` is a non-greppable nanoid and envelope failures never name the kind | **Task 1A** |
+| 4 | `invalidWrites: number` collides confusingly with the `InvalidWrite` type | **Task 1A** |
+
+Because **Task 1's code is already committed** (`527c2a3`), findings 2–4 cannot
+be applied by editing Task 1's text. Task 1A applies them as a RED-first delta;
+Task 1's own section carries a forward pointer so the two never read as
+contradictory.
+
+### Ruling 6 — The optional third constructor parameter: **settled, leave it alone.**
+
+Review explicitly confirmed that `LoroCanvasDoc`'s optional third positional
+`private constructor` parameter is fine as-is: there are exactly two call sites,
+both factories in the same file, so it cannot rot from outside the module. Do
+**not** refactor it into an options object. Recorded here so it is not
+re-opened.
+
 ### Ruling 4 — Scope: **land BOTH halves. Tasks 1–9, all of them.**
 
 Half (B) is in scope, not conditional. Recorded rationale: after half (A) alone,
@@ -355,8 +419,14 @@ STOP and report rather than quietly shipping half the fix.
 
 ## Task order
 
-Tasks 1–4 are half (A), origination. Tasks 5–8 are half (B), proportionality.
-Task 9 is integration. **All nine are in scope** (ruling 4).
+Tasks 1, 1A, 2, 3, 4 and 4A are half (A), origination. Tasks 5–8 are half (B),
+proportionality. Task 9 is integration. **All of them are in scope** (rulings 4
+and 5).
+
+Tasks **1A** and **4A** were added on 2026-07-20 from Task 1's code review
+(ruling 5). They are lettered rather than numbered so the Tasks 2–9 references
+throughout this document stay valid. Task 1 itself is **already landed** at
+`527c2a3`; start at Task 1A.
 
 The two halves are technically independent — (A) is strictly additive and
 independently landable — which is what makes the fallback possible. If half (B)
@@ -366,6 +436,22 @@ owner decide; do not silently narrow the branch to half (A).
 ---
 
 ## Task 1: Add the invalid-write reporting surface (counter + hook)
+
+> ### ✅ LANDED at `527c2a3` — AMENDED BY TASK 1A. Read this section as a record, not as instructions.
+>
+> Task 1 is implemented, spec-reviewed and quality-reviewed (✅ APPROVED, four
+> findings — see ruling 5). **The code below is what actually landed, and three
+> details of it are deliberately superseded by Task 1A:**
+>
+> | Shown below | Task 1A changes it to | Why |
+> |---|---|---|
+> | `get invalidWrites(): number` | `get invalidWriteCount(): number` | name collided with the `InvalidWrite` type (finding 4) |
+> | `private invalidWriteCount = 0` | `private writeRejections = 0` | frees the good name for the getter |
+> | `InvalidWrite { op, id, error }` | `InvalidWrite { op, kind, id, error }` | `id` is a non-greppable nanoid (finding 3) |
+> | unbounded `console.warn` | bounded to the first 5 | per-pointermove flood (finding 2) |
+>
+> Do **not** edit this section's code blocks to match. Do **not** re-do Task 1.
+> Go to Task 1A.
 
 Types and plumbing only. No validation is wired up yet, so this task's test
 asserts the *default* (zero) state — which is genuinely red today because the
@@ -538,6 +624,221 @@ git commit -m "feat(canvas-doc): invalid-write reporting surface (counter + inje
 
 ---
 
+## Task 1A: Amend the landed reporting surface (review findings 2, 3, 4)
+
+Task 1 landed at `527c2a3` and was approved with findings. This task applies
+three of them as a single RED-first delta **before** Task 2, so Task 2's test is
+written once against the final API instead of being written and then rewritten.
+
+**Files:**
+- Modify: `canvas-doc/src/canvas-doc.ts` (`InvalidWrite` gains `kind`)
+- Modify: `canvas-doc/src/loro-canvas-doc.ts` (getter rename, backing-field
+  rename, bounded warn, populate `kind`)
+- Modify: `canvas-doc/src/write-validation.test.ts`
+
+### What changes and why
+
+**Finding 4 — the name collision.** `invalidWrites` returns a `number` while a
+type named `InvalidWrite` lives in the same module. Task 1's own test writes
+`const seen: InvalidWrite[] = []` two lines above `doc.invalidWrites`, which is
+genuinely confusable. House style splits both ways — `malformedFrames` and
+`pendingImports` are plural-noun counters, but **neither has a co-existing
+singular type**, whereas `repairCount` / `clientCount` use the unambiguous form.
+The private field is already called `invalidWriteCount`, so promote that name to
+the getter and rename the backing field to `writeRejections`. Exactly one test
+line consumes the getter today — this is as cheap as it will ever be.
+`rejectWrite` and `InvalidWrite` are both fine and do **not** change.
+
+**Finding 3 — add `kind`.** `id` is a nanoid: meaningless across sessions and
+not greppable. `error` embeds the shape kind **only** on the props-refinement
+path (`invalid props for kind ${s.kind}: …`, `canvas-model/src/shape.ts:91`).
+An **envelope** failure — a bad `index`, a missing `x` — produces a zod message
+that never names the kind. So for exactly the class of failure where you most
+want to know which shape type the buggy tool was emitting, the payload cannot
+tell you. `putShape` has the shape in hand and `updateProps` can read the
+existing node, so it is free at both call sites today — and a breaking interface
+change once Tasks 2–4 and any dashboard consume it.
+
+> **Do NOT** add structured zod issue paths while you are here. That would mean
+> changing `ShapeValidation` in `canvas-model` too, and the flattened message is
+> what the rest of the repo already consumes. `kind` only.
+
+**Finding 2 — bound the default warn.** See decision D1b. The cap is 5; the
+counter stays exact.
+
+**Step 1: Write the failing test**
+
+Replace the Task 1 section of `canvas-doc/src/write-validation.test.ts` with the
+version below, and add the two new sections after it. (The Task 1 section only
+changes in that it uses the new getter name.)
+
+```ts
+// --- Task 1/1A: the reporting surface exists, is named unambiguously, starts empty ---
+{
+  const seen: InvalidWrite[] = []
+  const doc = LoroCanvasDoc.create({ peerId: 1n, onInvalidWrite: (w) => seen.push(w) })
+  assert.equal(doc.invalidWriteCount, 0, 'a fresh doc has rejected nothing')
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape({ id: 'shape:ok', kind: 'note', parentId: 'page:p', props: {}, ...base() } as never)
+  assert.equal(doc.invalidWriteCount, 0, 'a valid write is not counted as a rejection')
+  assert.deepEqual(seen, [], 'a valid write does not fire the hook')
+}
+
+// --- Task 1A finding 4: the OLD getter name is gone, not merely aliased ---
+{
+  const doc = LoroCanvasDoc.create({ peerId: 11n })
+  assert.equal(
+    (doc as unknown as Record<string, unknown>).invalidWrites,
+    undefined,
+    'the old `invalidWrites` name is removed — it collided with the InvalidWrite type',
+  )
+}
+
+// --- Task 1A finding 3: InvalidWrite carries `kind` ---
+// Two cases, because they fail on DIFFERENT zod paths. The props case embeds
+// the kind in the message anyway; the ENVELOPE case does not, and that is the
+// case `kind` exists for.
+{
+  const seen: InvalidWrite[] = []
+  const doc = LoroCanvasDoc.create({ peerId: 12n, onInvalidWrite: (w) => seen.push(w) })
+  doc.putPage({ id: 'page:p', name: 'P' })
+
+  // Props-refinement failure: kind IS in the message, and must also be a field.
+  doc.putShape({ id: 'shape:a', kind: 'frame', parentId: 'page:p', props: { w: '1' }, ...base() } as never)
+  assert.equal(seen[0]!.kind, 'frame', 'kind is reported on a props failure')
+
+  // Envelope failure (index must be a non-empty string): the zod message never
+  // names the kind, so the field is the ONLY way to know what was being built.
+  doc.putShape({ id: 'shape:b', kind: 'note', parentId: 'page:p', props: {}, ...base(), index: '' } as never)
+  assert.equal(seen[1]!.kind, 'note', 'kind is reported on an envelope failure too')
+  assert.doesNotMatch(seen[1]!.error, /note/, 'precondition: the envelope error genuinely does not name the kind')
+}
+
+// --- Task 1A finding 2: the default console.warn is BOUNDED, the counter is not ---
+{
+  const warned: unknown[][] = []
+  const realWarn = console.warn
+  console.warn = (...args: unknown[]) => { warned.push(args) }
+  try {
+    const doc = LoroCanvasDoc.create({ peerId: 13n }) // no handler -> console path
+    doc.putPage({ id: 'page:p', name: 'P' })
+    // v2 commits at per-pointermove granularity, so a bad drag emits ~60/s
+    // indefinitely. 20 stands in for "a drag that lasted a third of a second".
+    for (let i = 0; i < 20; i++) {
+      doc.putShape({ id: `shape:bad${i}`, kind: 'frame', parentId: 'page:p', props: { w: 'x' }, ...base() } as never)
+    }
+    assert.equal(doc.invalidWriteCount, 20, 'the counter stays EXACT regardless of the log cap')
+  } finally {
+    console.warn = realWarn
+  }
+  assert.equal(warned.length, 5, 'the console fallback is capped at the first 5 — a drag must not flood DevTools')
+}
+```
+
+**Step 2: Run it to verify it fails**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/write-validation.test.ts
+```
+
+Expected: FAIL at the **first** assertion —
+`AssertionError: a fresh doc has rejected nothing` (`undefined !== 0`), because
+`invalidWriteCount` is currently the *private field*, not a getter, so reading it
+from outside yields `undefined`.
+
+Note that the later sections cannot even be reached yet: `putShape` does not
+validate until Task 2, so nothing is rejected. That is expected — this task's
+RED is the first assertion, and the finding-3 / finding-2 sections go green only
+once Task 2 lands. **Record the verbatim output.**
+
+> **This is the one place in the plan where a test's later sections stay red
+> across a task boundary.** Do not treat that as "unreachable RED" and do not
+> stop. After Step 3 the *first* section must pass. Sections asserting
+> rejections go green in Task 2. If you would rather not carry a red file across
+> two commits, run only the first section now and paste the rest in during
+> Task 2 — but keep the assertions verbatim.
+
+**Step 3: Implement**
+
+In `canvas-doc/src/canvas-doc.ts`, add `kind` to `InvalidWrite` and update its
+doc comment:
+
+```ts
+export interface InvalidWrite {
+  op: 'putShape' | 'updateProps'
+  /** The shape's `kind`. Carried as its own field because `id` is a nanoid —
+   * meaningless across sessions and not greppable — and because `error` only
+   * names the kind on the props-refinement path. An ENVELOPE failure (bad
+   * `index`, missing `x`) produces a zod message that never mentions it, which
+   * is exactly when you most want to know which tool was emitting what.
+   * `'<unknown>'` when the rejected value is too malformed to have one. */
+  kind: string
+  id: string
+  error: string
+}
+```
+
+In `canvas-doc/src/loro-canvas-doc.ts`, replace the counter block:
+
+```ts
+  // Monotonic count of locally-originated writes this doc refused (see
+  // InvalidWrite). Never reset, and NEVER capped — unlike the console
+  // fallback below, which is. Named `invalidWriteCount`, not `invalidWrites`:
+  // a number-valued member one letter from the InvalidWrite TYPE in the same
+  // module is a reliable misreading (house precedent: repairCount,
+  // clientCount).
+  private writeRejections = 0
+  get invalidWriteCount(): number { return this.writeRejections }
+
+  // Count, then report. A rejection is a NO-OP at the call site, so this is
+  // the only trace it leaves.
+  //
+  // The console fallback is BOUNDED to the first 5. v2 commits at
+  // per-pointermove granularity, so a tool emitting an invalid write during a
+  // drag would otherwise produce ~60 warnings per second for as long as the
+  // drag lasts — enough to hang DevTools, and it buries the FIRST warning,
+  // which is the diagnostically useful one. The counter above stays exact, so
+  // capping the log loses no information that anything actually reads.
+  //
+  // This is the only non-test console call in canvas-doc, canvas-model,
+  // canvas-sync and canvas-editor combined. Bounded it is defensible;
+  // unbounded it would not be. Do not lift the cap.
+  private rejectWrite(op: InvalidWrite['op'], kind: string, id: string, error: string): void {
+    this.writeRejections++
+    const write: InvalidWrite = { op, kind, id, error }
+    if (this.onInvalidWrite) this.onInvalidWrite(write)
+    else if (this.writeRejections <= 5) console.warn(`[canvas-doc] rejected invalid ${op} ${kind} ${id}: ${error}`)
+  }
+```
+
+**Step 4: Run the test to verify the first section passes**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/write-validation.test.ts
+```
+
+Expected: the first section passes. Later sections still fail until Task 2 adds
+validation — see the note in Step 2.
+
+**Step 5: Typecheck**
+
+```
+cd /home/stag/src/projects/ensembleworks && bun run --filter '@ensembleworks/canvas-doc' typecheck
+```
+
+Expected: exit 0. `rejectWrite` has no callers yet (Tasks 2 and 4 add them), so
+its new `kind` parameter breaks nothing.
+
+**Step 6: Commit**
+
+```
+cd /home/stag/src/projects/ensembleworks
+git add canvas-doc/src/canvas-doc.ts canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/write-validation.test.ts
+git commit -m "refactor(canvas-doc): add kind to InvalidWrite, bound the default sink, rename the counter"
+```
+
+---
+
 ## Task 2: Validate `putShape` at the write boundary
 
 **Files:**
@@ -580,6 +881,7 @@ Append to `canvas-doc/src/write-validation.test.ts`, **before** the final
   // the handler and never invokes it passes Task 1 completely. Prove it fires.
   assert.equal(seen.length, 1, 'the hook actually fired — storing the handler is not enough')
   assert.equal(seen[0]!.op, 'putShape')
+  assert.equal(seen[0]!.kind, 'frame')
   assert.equal(seen[0]!.id, 'shape:bad')
 
   // HOLE 5: the InvalidWrite doc comment promises the VERBATIM zod message.
@@ -591,38 +893,40 @@ Append to `canvas-doc/src/write-validation.test.ts`, **before** the final
   assert.equal(doc.getShape('shape:bad'), undefined, 'the invalid shape was not written at all')
   assert.deepEqual(doc.listShapes().map((s) => s.id), ['shape:keep'], 'no partial node, and the neighbour is untouched')
 
-  // HOLE 2: prove invalidWrites is a COUNTER, not a constant. Task 1 only ever
-  // observed it at 0, which a hardcoded `get invalidWrites() { return 0 }`
-  // would satisfy. Walk it 0 -> 1 -> 2.
-  assert.equal(doc.invalidWrites, 1, 'the first rejection was counted')
+  // HOLE 2: prove invalidWriteCount is a COUNTER, not a constant. Task 1 only
+  // ever observed it at 0, which a hardcoded `get invalidWriteCount() { return
+  // 0 }` would satisfy. Walk it 0 -> 1 -> 2.
+  assert.equal(doc.invalidWriteCount, 1, 'the first rejection was counted')
   doc.putShape({ id: 'shape:bad2', kind: 'frame', parentId: 'page:p', props: { h: 'nope' }, ...base() } as never)
-  assert.equal(doc.invalidWrites, 2, 'the counter increments per rejection')
+  assert.equal(doc.invalidWriteCount, 2, 'the counter increments per rejection')
   assert.equal(seen.length, 2, 'and the hook fires per rejection')
 
   // The escape hatch still writes, unvalidated — this is how tests and rigs
   // reproduce what a remote peer's bytes can deliver (decision D3).
   doc.putShapeUnchecked({ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
   assert.ok(doc.getShape('shape:bad'), 'putShapeUnchecked bypasses validation')
-  assert.equal(doc.invalidWrites, 2, 'the escape hatch does not touch the counter')
+  assert.equal(doc.invalidWriteCount, 2, 'the escape hatch does not touch the counter')
 }
 
 // HOLE 4: with NO handler injected, the doc must fall back to console.warn.
 // The InvalidWriteHandler doc comment claims a rejection is "never silent" and
 // nothing has proven it. Capture console.warn rather than trusting the claim.
+// (Task 1A already proved the fallback is CAPPED at 5; this proves it fires at
+// all, and that the line carries op, kind and id.)
 {
   const warned: unknown[][] = []
   const realWarn = console.warn
   console.warn = (...args: unknown[]) => { warned.push(args) }
   try {
-    const doc = LoroCanvasDoc.create({ peerId: 4n }) // no onInvalidWrite
+    const doc = LoroCanvasDoc.create({ peerId: 5n }) // no onInvalidWrite
     doc.putPage({ id: 'page:p', name: 'P' })
     doc.putShape({ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
-    assert.equal(doc.invalidWrites, 1, 'still counted without a handler')
+    assert.equal(doc.invalidWriteCount, 1, 'still counted without a handler')
   } finally {
     console.warn = realWarn // restore even if an assertion throws
   }
   assert.equal(warned.length, 1, 'the console.warn fallback fired — a rejection is never silent')
-  assert.match(String(warned[0]![0]), /rejected invalid putShape for shape:bad/, 'the warning names the op and the id')
+  assert.match(String(warned[0]![0]), /rejected invalid putShape frame shape:bad/, 'the warning names the op, the kind and the id')
 }
 ```
 
@@ -672,8 +976,12 @@ with:
     // rejectWrite.
     const v = validateShape(s)
     if (!v.ok) {
-      const id = typeof (s as { id?: unknown })?.id === 'string' ? (s as { id: string }).id : '<no id>'
-      this.rejectWrite('putShape', id, v.error)
+      // Read id/kind defensively off the REJECTED value: it failed validation,
+      // so neither field is guaranteed to be there or to be a string.
+      const raw = s as { id?: unknown; kind?: unknown }
+      const id = typeof raw?.id === 'string' ? raw.id : '<no id>'
+      const kind = typeof raw?.kind === 'string' ? raw.kind : '<unknown>'
+      this.rejectWrite('putShape', kind, id, v.error)
       return
     }
     this.putShapeUnchecked(s)
@@ -823,14 +1131,17 @@ Append to `canvas-doc/src/write-validation.test.ts`, before the final
   // The exact reported defect: a string where a number belongs.
   assert.doesNotThrow(() => doc.updateProps('shape:f', { w: '100' }))
   assert.deepEqual(doc.getShape('shape:f')!.props, { w: 100, h: 100 }, 'props are untouched — no partial merge landed')
-  assert.equal(doc.invalidWrites, 1, 'the rejection was counted')
+  assert.equal(doc.invalidWriteCount, 1, 'the rejection was counted')
   assert.equal(seen[0]!.op, 'updateProps')
   assert.equal(seen[0]!.id, 'shape:f')
+  // `kind` comes from the EXISTING node here, not from the patch — the patch
+  // has no kind to read (finding 3).
+  assert.equal(seen[0]!.kind, 'frame', 'kind is read off the existing shape')
 
   // A VALID patch still merges (regression guard on the happy path).
   doc.updateProps('shape:f', { w: 250 })
   assert.deepEqual(doc.getShape('shape:f')!.props, { w: 250, h: 100 }, 'a valid patch merges as before')
-  assert.equal(doc.invalidWrites, 1, 'a valid patch is not counted')
+  assert.equal(doc.invalidWriteCount, 1, 'a valid patch is not counted')
 
   // Merged-not-patch, the direction that MATTERS: a patch that HEALS an
   // already-invalid shape (one a remote peer delivered) must be accepted,
@@ -838,11 +1149,11 @@ Append to `canvas-doc/src/write-validation.test.ts`, before the final
   doc.putShapeUnchecked({ id: 'shape:g', kind: 'frame', parentId: 'page:p', props: { w: 'bad', h: 10 }, ...base() } as never)
   doc.updateProps('shape:g', { w: 42 })
   assert.deepEqual(doc.getShape('shape:g')!.props, { w: 42, h: 10 }, 'a patch that makes the merged shape valid is accepted')
-  assert.equal(doc.invalidWrites, 1, 'healing a remote-delivered invalid shape is not a rejection')
+  assert.equal(doc.invalidWriteCount, 1, 'healing a remote-delivered invalid shape is not a rejection')
 
   // Unknown id keeps its pre-existing silent-no-op contract — NOT a rejection.
   doc.updateProps('shape:nope', { w: 1 })
-  assert.equal(doc.invalidWrites, 1, 'an unknown id is a no-op, not an invalid write')
+  assert.equal(doc.invalidWriteCount, 1, 'an unknown id is a no-op, not an invalid write')
 }
 ```
 
@@ -873,8 +1184,11 @@ Replace `updateProps` (currently `loro-canvas-doc.ts:143-148`) with:
     // (2) a patch that is individually harmless but leaves the shape still
     // invalid is rejected, so a two-field breakage cannot be healed one
     // field at a time here (use putShape with a whole valid shape).
-    const v = validateShape({ ...this.readNode(n), props: merged })
-    if (!v.ok) { this.rejectWrite('updateProps', id, v.error); return }
+    const shape = this.readNode(n)
+    const v = validateShape({ ...shape, props: merged })
+    // `kind` for the report comes off the EXISTING node — a props patch has no
+    // kind of its own to read (review finding 3).
+    if (!v.ok) { this.rejectWrite('updateProps', String(shape.kind ?? '<unknown>'), id, v.error); return }
     n.data.set(LoroCanvasDoc.PROP_KEY, merged as any)
   }
 ```
@@ -922,6 +1236,193 @@ unaffected. **If a rig fails, STOP and report — do not loosen the schema.**
 cd /home/stag/src/projects/ensembleworks
 git add canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/canvas-doc.ts canvas-doc/src/write-validation.test.ts
 git commit -m "fix(canvas-doc): validate the merged result on updateProps"
+```
+
+---
+
+## Task 4A: Make the sink reachable in production (review finding 1)
+
+Everything so far reports into a hook that **nothing in the browser can
+supply**. This task closes that.
+
+### Why here, and not earlier or later
+
+Placed **after Task 4** because both write paths must actually validate before
+anything is wired to report on them — a sink attached to a half-built boundary
+reports on an incomplete surface and invites a green dashboard that means
+nothing. Placed **before Task 5** because it completes half (A): half (A)'s
+claim is "local writers can no longer originate invalid state, observably", and
+without this task the "observably" is false on the client. It is also the first
+task that leaves `canvas-doc`, so keeping it here holds the clean-room package
+edits contiguous in Tasks 1–4.
+
+**Files:**
+- Modify: `canvas-sync/src/client-peer.ts` (`SyncClientOpts` + the doc construction at line 50)
+- Modify: `client/src/canvas-v2/DevOverlay.tsx` (`ClientTelemetry` + one `Field`)
+- Modify: `client/src/canvas-v2/CanvasV2App.tsx` (pass the new telemetry field)
+- Create: `canvas-sync/src/invalid-write-passthrough.test.ts`
+
+> **CLEAN-ROOM REMINDER.** `canvas-sync/src/client-peer.ts` is scanned by
+> `canvas-sync/src/boundary.test.ts`, which text-matches **inside comments**.
+> Do not write the literals `Date.now(` or `Math.random(` anywhere in that file,
+> not even in prose.
+
+> **This task trips the ux-contract presence gate** — `client/src/canvas-v2/`
+> is an interaction-bearing prefix and `DevOverlay.tsx` lives under it. Owner
+> ruling (2026-07-20): **acceptable.** The branch already requires a
+> `ux-contract: none — <reason>` marker for the inherited PR-48 files, so this
+> is absorbed into an existing cost rather than creating a new one. The marker
+> text in "PR body — required content" has been updated to cover this change
+> honestly, as this branch's own work — not to hide it among the inherited
+> files.
+
+**Step 1: Write the failing test**
+
+Create `canvas-sync/src/invalid-write-passthrough.test.ts`:
+
+```ts
+// Run: bun src/invalid-write-passthrough.test.ts
+// Review finding 1: SyncClientPeer builds its own LoroCanvasDoc internally, so
+// unless SyncClientOpts forwards onInvalidWrite the injected sink is
+// UNREACHABLE in the browser — where essentially every rejection originates
+// (Editor.applyAll -> putShape). Without this passthrough the bounded
+// console.warn is not a fallback, it is the only production behaviour.
+import assert from 'node:assert/strict'
+import type { InvalidWrite } from '@ensembleworks/canvas-doc'
+import { SyncClientPeer } from './client-peer.js'
+import { MemoryTransport } from './memory-transport.js'
+
+const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {} });
+
+{
+  const seen: InvalidWrite[] = []
+  const peer = new SyncClientPeer({
+    peerId: 1n,
+    transport: new MemoryTransport(),
+    onInvalidWrite: (w) => seen.push(w),
+  })
+  peer.doc.putPage({ id: 'page:p', name: 'P' })
+  peer.putShape({ id: 'shape:bad', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as never)
+
+  assert.equal(seen.length, 1, 'the sink injected into the PEER reached the doc it built internally')
+  assert.equal(seen[0]!.op, 'putShape')
+  assert.equal(seen[0]!.kind, 'frame')
+  // SyncClientPeer.doc is already `readonly` and public, so a dashboard can
+  // pull the count without any further surface change.
+  assert.equal(peer.doc.invalidWriteCount, 1, 'the count is readable through the public doc')
+  peer.close()
+}
+
+// Omitting the sink stays legal — every existing rig constructs a peer without
+// one, and none of them should have to change.
+{
+  const peer = new SyncClientPeer({ peerId: 2n, transport: new MemoryTransport() })
+  assert.equal(peer.doc.invalidWriteCount, 0)
+  peer.close()
+}
+
+console.log('ok: invalid-write-passthrough')
+```
+
+Check `MemoryTransport`'s actual constructor signature in
+`canvas-sync/src/memory-transport.ts` before running — if it needs arguments or
+is created via a paired-transport factory, follow how
+`canvas-sync/src/client-peer.test.ts` builds one rather than guessing.
+
+**Step 2: Run it to verify it fails**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-sync/src/invalid-write-passthrough.test.ts
+```
+
+Expected: FAIL at
+`AssertionError: the sink injected into the PEER reached the doc it built internally`
+(`0 !== 1`) — `SyncClientOpts` has no such field, so the object property is
+simply ignored at runtime. **Record the verbatim output.**
+
+**Step 3: Forward the sink in `canvas-sync/src/client-peer.ts`**
+
+Add to `SyncClientOpts`:
+
+```ts
+  /** Optional: forwarded to the LoroCanvasDoc this peer builds internally, so
+   * a host can observe writes the doc REFUSED. Without this passthrough the
+   * sink is unreachable from the browser — this peer owns its doc's
+   * construction, and the client constructs the PEER, never the doc. */
+  onInvalidWrite?: InvalidWriteHandler
+```
+
+with the type imported from `@ensembleworks/canvas-doc`, and change line 50:
+
+```ts
+    this.doc = LoroCanvasDoc.create({ peerId: opts.peerId, onInvalidWrite: opts.onInvalidWrite })
+```
+
+**Step 4: Run the test to verify it passes**
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-sync/src/invalid-write-passthrough.test.ts
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-sync/src/boundary.test.ts
+```
+
+Expected: `ok: invalid-write-passthrough`, then `ok: boundary`.
+
+**Step 5: Surface the count in the dev overlay**
+
+`client/src/canvas-v2/DevOverlay.tsx` already renders `repairCount` and
+`lastBackfillBytes` from a `ClientTelemetry` prop. Add one field:
+
+```ts
+export interface ClientTelemetry {
+	readonly repairCount: number
+	readonly lastBackfillBytes: number
+	/** Writes this client's doc REFUSED (canvas-doc's invalidWriteCount). A
+	 * non-zero value means a local tool is emitting shapes that fail the
+	 * model schema — the write was dropped, so nothing is corrupted, but the
+	 * gesture that produced it silently did nothing. */
+	readonly invalidWriteCount: number
+}
+```
+
+and, next to the existing `repairCount` line in the rendered list:
+
+```tsx
+			<Field label="invalidWrites" value={client.invalidWriteCount} />
+```
+
+Note the label reads `invalidWrites` (a human-facing count of events) while the
+API member is `invalidWriteCount` — that is deliberate and is exactly the
+collision finding 4 removed from the *code*; a display label has no type to
+collide with.
+
+Then update the `<DevOverlay … client={…} />` call in
+`client/src/canvas-v2/CanvasV2App.tsx` (around line 445) to include
+`invalidWriteCount: peer.doc.invalidWriteCount` alongside the existing
+`repairCount` / `lastBackfillBytes`. Follow whatever shape that call site
+already uses — do not restructure it.
+
+> `DevOverlay` renders from a plain prop, refreshed on the same cadence as the
+> existing fields. Do **not** add a subscription, a poll, or state for this
+> value; it must cost nothing when the overlay is hidden, exactly like
+> `repairCount`.
+
+**Step 6: Typecheck and run the affected suites**
+
+```
+cd /home/stag/src/projects/ensembleworks && bun run --filter '@ensembleworks/canvas-sync' typecheck
+cd /home/stag/src/projects/ensembleworks && bun run --filter '@ensembleworks/client' typecheck
+cd /home/stag/src/projects/ensembleworks/canvas-sync && ~/.bun/bin/bun test.ts
+```
+
+Expected: all pass. Existing peers constructed without `onInvalidWrite` are
+unaffected — the field is optional.
+
+**Step 7: Commit**
+
+```
+cd /home/stag/src/projects/ensembleworks
+git add canvas-sync/src/client-peer.ts canvas-sync/src/invalid-write-passthrough.test.ts client/src/canvas-v2/DevOverlay.tsx client/src/canvas-v2/CanvasV2App.tsx
+git commit -m "feat(canvas-sync,client): forward the invalid-write sink and surface the count"
 ```
 
 ---
@@ -1493,16 +1994,23 @@ cd /home/stag/src/projects/ensembleworks && UX_CONTRACT_PR_BODY='ux-contract: no
 > path, and the gate requires a `ux-contract: none — <reason>` marker in the PR
 > body to cover them.
 >
-> This is **not** caused by any task here — this plan's own files
-> (`canvas-doc/`, `canvas-model/`) are correctly *not* interaction-bearing
-> surfaces, and Task 1's three files were verified to pass the gate cleanly.
+> Task 1's three files were verified to pass the gate cleanly, and this plan's
+> `canvas-doc/` and `canvas-model/` work is correctly *not* an
+> interaction-bearing surface.
 >
-> Handle it deliberately: the marker in the PR body (see below) covers the
-> inherited PR-48 files. Do **not** "fix" it by editing
-> `scripts/ux-contract-presence.test.ts`, by reverting PR-48 files, or by
-> declaring a contract for `canvas-doc`. If the gate fails for any file
-> *outside* that inherited set, STOP and report — that would be a real
-> violation, not this known one.
+> **Task 4A adds a second, genuinely-ours reason.** It edits
+> `client/src/canvas-v2/DevOverlay.tsx` and `CanvasV2App.tsx`, both under an
+> interaction-bearing prefix. Owner ruling 2026-07-20: acceptable, because the
+> marker is required for the inherited files anyway, so this is absorbed rather
+> than new cost. The marker text must say so **honestly** — it no longer reads
+> as covering only inherited files.
+>
+> So by Task 9 the gate is tripped by **two** sets of files: the inherited PR-48
+> ones and Task 4A's two client files. Both are covered by the single marker
+> below. Do **not** "fix" it by editing `scripts/ux-contract-presence.test.ts`,
+> by reverting PR-48 files, or by declaring an interaction contract for
+> `canvas-doc`. If the gate flags any file outside those two sets, STOP and
+> report — that would be a real violation, not this known one.
 
 Expected: every suite passes **except** the known inherited
 `ux-contract-presence` failure described above. Pay particular attention to:
@@ -1547,27 +2055,37 @@ nothing was committed to `perf/v2-first-shape-harness`.
 
 ## PR body — required content
 
-**The `ux-contract` marker is REQUIRED for CI to pass** — and specifically to
-clear a failure this branch **inherits**, not one it causes.
-`scripts/ux-contract-presence.test.ts` already fails at `aa6a115` because PR 48
-(in this branch's stack) touches `client/src/canvas-v2/` —
-`CanvasV2App.tsx`, `boot-sync-ready.test.ts`, `bootstrap-page.ts`. The marker
-below covers **those inherited files**. This plan's own work is confined to
-`canvas-doc` and `canvas-model`, which are correctly not interaction-bearing
-surfaces and would need no marker on their own.
+**The `ux-contract` marker is REQUIRED for CI to pass.** It covers **two**
+distinct sets of files, and the text must be honest about both:
+
+1. **Inherited.** `scripts/ux-contract-presence.test.ts` already fails at
+   `aa6a115`, before any task here ran, because PR 48 (in this branch's stack)
+   touches `client/src/canvas-v2/` — `CanvasV2App.tsx`,
+   `boot-sync-ready.test.ts`, `bootstrap-page.ts`.
+2. **This branch's own.** Task 4A edits `DevOverlay.tsx` and `CanvasV2App.tsx`
+   under the same prefix, to surface `invalidWriteCount`. Owner-approved
+   2026-07-20 on the grounds that the marker was needed anyway — but it is our
+   change and the marker says so.
 
 The PR must include, verbatim:
 
 ```
-ux-contract: none — this branch's own change is confined to canvas-model
-(repair/invariants) and canvas-doc (the CRDT write boundary). It touches no tool
-FSM, no renderer, and no client input surface, so there is no gesture to seed
-and no interaction invariant to observe.
+ux-contract: none — <two reasons, both stated deliberately>
 
-This marker additionally covers the client/src/canvas-v2/ files inherited from
-PR 48 in this stack (CanvasV2App.tsx, boot-sync-ready.test.ts,
-bootstrap-page.ts), which the presence gate flags on this branch's diff. Those
-changes belong to PR 48, not to this work.
+1. This branch's core change is confined to canvas-model (repair/invariants),
+   canvas-doc (the CRDT write boundary) and canvas-sync (forwarding the
+   invalid-write sink). None is an interaction surface: no tool FSM, no
+   renderer, no input handling.
+
+2. This branch DOES touch client/src/canvas-v2/ in two places of its own —
+   DevOverlay.tsx and CanvasV2App.tsx — to render the invalidWriteCount
+   telemetry field added by Task 4A. That is a read-only diagnostic readout
+   with pointerEvents: none; it adds no gesture, no tool, and no state a user
+   can drive, so there is no interaction to seed or invariant to observe.
+
+3. The gate additionally flags client/src/canvas-v2/ files inherited from
+   PR 48 in this stack (CanvasV2App.tsx, boot-sync-ready.test.ts,
+   bootstrap-page.ts). Those changes belong to PR 48, not to this work.
 ```
 
 Plus:
