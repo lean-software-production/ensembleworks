@@ -1916,7 +1916,7 @@ Every document in this series carries these headings, in this order. Copy the te
 | Measured commit | `<full SHA of HEAD at capture>` |
 | Branch | `perf/v2-first-shape-harness` |
 | Branch point | `fix/v2-boot-sync-ready` (`1ad72388d7de182251f913d8025e876abf852d92`) — post-settle-sleep-removal |
-| Baseline capture SHA | `<SHA of the commit that added/updated e2e/baselines/canvas-v2-load.json>` |
+| Baseline capture | `this commit` — or, when the document is written separately from the capture, the SHA of the commit that last touched `e2e/baselines/canvas-v2-load.json`. Authoritative lookup: `git log -1 --format=%H -- e2e/baselines/canvas-v2-load.json` |
 | Environment | `local` or `CI` — say which, explicitly |
 | Machine | `<hostname>`, `<CPU>`, `<RAM>`, `<OS>` |
 | Machine state | e.g. "idle dev box, no other load" / "GitHub-hosted ubuntu-latest runner, shared/contended" |
