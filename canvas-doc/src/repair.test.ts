@@ -211,9 +211,9 @@ assert.deepEqual(normalize(dumpModel(doc4)), normalize(applyRepairToModel(before
   assert.equal(docA.getShape('shape:y'), undefined, 'the rescued child cascades with the winner — physical rescue proven')
 }
 
-// ---- (6) The reported defect, straight through Loro: one bad prop on a frame
-// must not execute the frame's contents, and must not wipe their TEXT
-// containers. Text is the part only the Loro side can lose — deleteNode
+// ---- (6) ORDER PIN: the reported defect, straight through Loro: one bad prop
+// on a frame must not execute the frame's contents, and must not wipe their
+// TEXT containers. Text is the part only the Loro side can lose — deleteNode
 // cascades over the real tree and clears every descendant's text container, so
 // this asserts the rescue happens BEFORE the delete, not merely that the shape
 // row survives. ----
