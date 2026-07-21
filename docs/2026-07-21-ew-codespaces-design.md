@@ -149,6 +149,58 @@ Decisions baked in here:
 - Under the §7 decision there is no `tmux` in the mount — the connector is the
   PTY owner, so the injection mount ships only the connector binary.
 
+### 2.2 Host prerequisites — one `ew` binary + Docker
+
+The runtime-injection path assumes an **EW host process** (§2). Naively that's a
+dependency chain — `ew` **plus** `@devcontainers/cli` **plus** a container
+runtime **plus** the connector binary — which is a lot to install on a laptop.
+We collapse it to **one `ew` binary + Docker** by embedding the rest.
+
+**Embed the reference devcontainer CLI; do not reimplement it.**
+`@devcontainers/cli` (Microsoft, MIT) *is* the reference implementation of the
+spec, and §1's compatibility promise is defined by its behaviour — `features`
+resolution (OCI feature tarball download, install-order, the generated layered
+Dockerfile), image-metadata merge, variable substitution, lifecycle-hook
+ordering, workspace-mount / `remoteUser` semantics. Reimplementing that subset
+in `ew` would let us *diverge from the thing we promised to match*, on a spec
+that keeps moving. So reimplementation is ruled out.
+
+**How it's embedded (approach B).** `ew` is Bun-compiled, so `bun build
+--compile` embeds JS and arbitrary assets into the single executable. Rather
+than `import`ing the package as a library (its programmatic surface is
+internal/unstable — built to be a CLI, not a library), `ew` carries the
+upstream CLI **bundle as a data asset**, extracts it to `~/.ew/` on first run,
+and runs it **under Bun's node-compat** as a subprocess. This invokes the
+supported, stable CLI interface and runs the reference implementation verbatim
+— which is exactly what protects the compatibility promise — while still
+shipping as one binary.
+
+**The unification.** The **connector** (§2.1) is carried the same way: an
+embedded asset `ew` extracts on first run, instead of a separately-downloaded
+binary staged in `~/.ew/runtime/`. So the entire host toolchain becomes one
+self-contained `ew` binary that extracts what it needs, drives Docker via the
+embedded CLI, and injects the connector. This also closes the §2.1 bootstrap
+question ("how do `ew` and the connector reach the laptop") — they don't;
+`ew` *is* both.
+
+**Honest boundaries:**
+
+- **Docker is still required and is the heavyweight.** "Only Docker" is the
+  *floor*, not zero — the spec is defined in terms of containers, so the
+  runtime can't be dropped. (Podman/rootless is a separate decision; the CLI
+  takes `--docker-path`.)
+- **Network is still needed at build time** — pulling base images and OCI
+  features. Embedding removes the *install* dependency, not the *runtime fetch*.
+- **Bun must actually run the CLI.** The one real technical risk is a
+  node-compat gap in `@devcontainers/cli` under Bun (`child_process`,
+  `worker_threads`, any native-ish dep). This needs a **spike before
+  committing** (tracked in Open decisions). Fallback if it hits a wall: also
+  embed a minimal Node runtime (heavier), or keep "shell out to an installed
+  `devcontainer`" as an escape hatch.
+- **Pin and gate the embedded version.** Version-pin the embedded CLI and treat
+  bumping it as a deliberate act gated by §1's conformance smoke test — because
+  that CLI's behaviour *is* the promise.
+
 ## 3. Isolation tiers = host type
 
 The isolation story is not a separate concept; it is **which runtime backs the
@@ -337,3 +389,9 @@ PTY substrate.
    agent-terminal threat model.
 4. Reconciler packaging on the laptop (§5.5) — systemd user service vs. login
    item vs. an `ew` background daemon.
+5. **Bun-compat spike for the embedded devcontainer CLI (§2.2)** — verify
+   `@devcontainers/cli` runs correctly under Bun's node-compat when embedded and
+   run as approach B (`child_process`, `worker_threads`, native-ish deps are the
+   suspect surfaces). Must pass before committing to the one-binary embedding;
+   fallbacks are embedding a minimal Node runtime or shelling out to an
+   installed `devcontainer`.
