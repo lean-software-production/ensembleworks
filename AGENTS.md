@@ -107,8 +107,11 @@ drives the devcontainer and forwards commands into it — you never need
 - `bin/dev logs <svc> --tail 500` / `bin/dev restart <svc>` — forwarded.
 - `bin/dev doctor` — host prerequisites (docker, the `@devcontainers/cli`),
   then the container's own doctor.
-- `bin/dev attach` — **prints** how to attach (`docker exec -it … tmux attach`)
-  plus the nested-tmux detach caveat; it never nests tmux for you.
+- `bin/dev attach` — **prints** how to attach (`docker exec -it … tmux -L
+  <session> attach`) plus the nested-tmux detach caveat; it never nests tmux
+  for you. The `-L` is required: the dev stack runs on its own tmux server so
+  its config (`deploy/tmux-dev.conf`) can't collide with the canvas terminals'
+  (`deploy/tmux-ensembleworks.conf`) — tmux's `set -g` is server-global.
 - `bin/dev down` — stops the whole devcontainer (`docker stop`).
 - `bin/dev --help` / `-h` — usage.
 - Multiple stacks per host: every dev port shifts by `ENSEMBLEWORKS_PORT_OFFSET`

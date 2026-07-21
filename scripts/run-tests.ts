@@ -16,7 +16,13 @@ import { Glob } from 'bun'
 // src/ dir so they match neither glob above. Only the flat e2e/lib level is
 // globbed — e2e/tests/ and e2e/perf/ are Playwright specs and must NOT be
 // spawned under bare `bun`.
-const globs = ['**/src/**/*.test.ts', 'scripts/*.test.ts', 'e2e/lib/*.test.ts']
+// bin/*.test.ts (added 2026-07-21): bin/dev's pure logic (dev-lib.mjs — the
+// service table, port-offset parsing, attachPlan) lives outside any src/ dir,
+// so it matched no glob above and its tests had never run in CI. bin/dev is
+// the entry point every contributor uses; leaving it ungated meant a change
+// like the tmux-socket split shipped on local test runs alone. Flat level
+// only, same as e2e/lib — nothing nests under bin/ today.
+const globs = ['**/src/**/*.test.ts', 'scripts/*.test.ts', 'e2e/lib/*.test.ts', 'bin/*.test.ts']
 const files: string[] = []
 for (const pattern of globs) {
   const glob = new Glob(pattern)

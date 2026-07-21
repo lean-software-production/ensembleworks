@@ -18,6 +18,7 @@ import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import {
 	atLeast,
+	attachPlan,
 	buildServices,
 	hold,
 	livekitDevConfigYaml,
@@ -80,14 +81,23 @@ export const portOffset = parsedOffset
 process.env.ENSEMBLEWORKS_PORT_OFFSET = String(portOffset)
 export const ports = portsFor(portOffset)
 const session = process.env.WORKSPACE_TMUX_SESSION ?? (portOffset ? `workspace-${portOffset}` : 'workspace')
-const tmuxConf = path.join(repoDir, 'deploy', 'tmux-ensembleworks.conf')
+// The dev stack gets its OWN tmux server, on a socket named after the session.
+// Not cosmetic: the terminal gateway spawns its canvas-<id> sessions on the
+// DEFAULT socket, and tmux's `set -g` options are server-global with no
+// per-session layer. Sharing a socket means deploy/tmux-dev.conf and
+// deploy/tmux-ensembleworks.conf fight — whichever sourced last decides
+// whether every session on the box has a status bar and a prefix. Per-socket
+// also keeps offset stacks from colliding with each other. Every tmux call
+// below MUST carry this, hence the wrappers rather than bare execFileSync.
+const socket = session
+const tmuxConf = path.join(repoDir, 'deploy', 'tmux-dev.conf')
 
 /** @param {string} bin */
 export const onPath = (bin) => spawnSync('which', [bin], { stdio: 'ignore' }).status === 0
 /** @param {...string} args */
-const tmux = (...args) => execFileSync('tmux', args, { encoding: 'utf8' })
+const tmux = (...args) => execFileSync('tmux', ['-L', socket, ...args], { encoding: 'utf8' })
 /** @param {...string} args */
-const tmuxOk = (...args) => spawnSync('tmux', args, { stdio: 'ignore' }).status === 0
+const tmuxOk = (...args) => spawnSync('tmux', ['-L', socket, ...args], { stdio: 'ignore' }).status === 0
 export const sessionRunning = () => tmuxOk('has-session', '-t', session)
 
 /** @param {string} msg @returns {never} */
@@ -398,8 +408,15 @@ function reapStrayCaddy() {
 
 function attach() {
 	if (!sessionRunning()) die(`session '${session}' is not running — use bin/dev up`)
-	const args = process.env.TMUX ? ['switch-client', '-t', session] : ['attach', '-t', session]
-	const r = spawnSync('tmux', args, { stdio: 'inherit' })
+	const plan = attachPlan({ tmuxEnv: process.env.TMUX, socket, session })
+	if (plan.mode === 'nested') {
+		console.error(
+			`bin/dev: you are inside a different tmux server — nesting into '${session}'.\n` +
+				'  detach with:  Ctrl-b Ctrl-b d   (double-tap sends the prefix to the inner tmux)',
+		)
+	}
+	const env = plan.unsetTmux ? { ...process.env, TMUX: undefined } : process.env
+	const r = spawnSync('tmux', plan.args, { stdio: 'inherit', env })
 	process.exit(r.status ?? 0)
 }
 
