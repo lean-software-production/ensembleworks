@@ -26,11 +26,13 @@ export interface ConnectConfig {
 	label: string
 	authMethod: 'service-token' | 'none'
 	backend: 'tmux' | 'pty'
+	repo?: string
+	branch?: string
 }
 
 export function resolveConnectConfig(
 	conn: Conn,
-	flags: { label?: string; gatewayId?: string; backend?: 'tmux' | 'pty' },
+	flags: { label?: string; gatewayId?: string; backend?: 'tmux' | 'pty'; repo?: string; branch?: string },
 	env: NodeJS.ProcessEnv,
 ): ConnectConfig {
 	const label = flags.label ?? hostname()
@@ -40,7 +42,21 @@ export function resolveConnectConfig(
 	const ws = new URL('/api/terminal/connect', wsBase.endsWith('/') ? wsBase : `${wsBase}/`)
 	ws.searchParams.set('gatewayId', gatewayId)
 	ws.searchParams.set('label', label)
-	return { url: conn.url, wsUrl: ws.toString(), room: conn.room, gatewayId, label, authMethod: conn.auth.method, backend }
+	// Registration metadata (coexistence spec §4 / decision #3): carried on the
+	// connect URL for SP3's server-side registration to consume; ignored today.
+	if (flags.repo) ws.searchParams.set('repo', flags.repo)
+	if (flags.branch) ws.searchParams.set('branch', flags.branch)
+	return {
+		url: conn.url,
+		wsUrl: ws.toString(),
+		room: conn.room,
+		gatewayId,
+		label,
+		authMethod: conn.auth.method,
+		backend,
+		repo: flags.repo,
+		branch: flags.branch,
+	}
 }
 
 export async function connectSlot(args: string[], globals: Globals, env: NodeJS.ProcessEnv): Promise<number> {
@@ -54,8 +70,14 @@ export async function connectSlot(args: string[], globals: Globals, env: NodeJS.
 	return runConnector(cfg, authHeaders(conn.auth), env) // conn + env already in scope
 }
 
-function parseConnectFlags(args: string[]): { label?: string; gatewayId?: string; backend?: 'tmux' | 'pty' } {
-	const flags: { label?: string; gatewayId?: string; backend?: 'tmux' | 'pty' } = {}
+function parseConnectFlags(args: string[]): {
+	label?: string
+	gatewayId?: string
+	backend?: 'tmux' | 'pty'
+	repo?: string
+	branch?: string
+} {
+	const flags: { label?: string; gatewayId?: string; backend?: 'tmux' | 'pty'; repo?: string; branch?: string } = {}
 	for (let i = 0; i < args.length; i++) {
 		switch (args[i]) {
 			case '--label':
@@ -70,6 +92,12 @@ function parseConnectFlags(args: string[]): { label?: string; gatewayId?: string
 				flags.backend = v
 				break
 			}
+			case '--repo':
+				flags.repo = args[++i]
+				break
+			case '--branch':
+				flags.branch = args[++i]
+				break
 			default:
 				throw new CliError(`unknown terminal connect flag: ${args[i]}`, 2)
 		}
