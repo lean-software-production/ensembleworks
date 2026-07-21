@@ -8,7 +8,7 @@ import type { Globals } from '../dispatch.ts'
 import { CliError } from '../errors.ts'
 import { emitJson, narrate } from '../output.ts'
 import { detectRepoInfo } from './repo-info.ts'
-import { codespacesPath, loadCodespaces } from './store.ts'
+import { codespacesPath, loadCodespaces, setDesired } from './store.ts'
 
 export function buildStopArgv(containerId: string): string[] {
 	return ['docker', 'stop', containerId]
@@ -27,6 +27,9 @@ export async function codespaceStop(args: string[], globals: Globals, env: NodeJ
 		return 0
 	}
 	narrate(`ensembleworks: stopping container ${rec.containerId.slice(0, 12)} (${rec.gatewayId})`)
+	// desired flips BEFORE docker runs: an interrupted stop must never leave a
+	// codespace the owner asked to stop marked desired-up for the reconciler.
+	setDesired(codespacesPath(env), info.toplevel, 'stopped')
 	const res = Bun.spawnSync(stopArgv, { stdout: 'inherit', stderr: 'inherit' })
 	if (res.exitCode !== 0) throw new CliError(`docker stop exited ${res.exitCode}`, 1)
 	return 0

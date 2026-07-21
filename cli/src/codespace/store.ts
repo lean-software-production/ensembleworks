@@ -17,6 +17,9 @@ export interface CodespaceRecord {
 	repo: string
 	branch: string
 	canvasUrl: string
+	/** SP4 desired-state (decision #1): what the reconciler drives toward.
+	 *  Absent = not reconciler-managed (pre-SP4 record; next live `up` claims it). */
+	desired?: 'up' | 'stopped'
 }
 
 export interface CodespacesFile {
@@ -69,4 +72,13 @@ export function updateContainerId(file: string, realpathOfCheckout: string, cont
 	const rec = store.codespaces[realpathOfCheckout]
 	if (!rec) return
 	saveCodespaces(file, { codespaces: { ...store.codespaces, [realpathOfCheckout]: { ...rec, containerId } } })
+}
+
+/** Flip the reconciler's desired-state for a checkout. Set ONLY by the live
+ *  `up`/`stop` engines — dry-run and plan paths never mutate desired. */
+export function setDesired(file: string, realpathOfCheckout: string, desired: 'up' | 'stopped'): void {
+	const store = loadCodespaces(file)
+	const rec = store.codespaces[realpathOfCheckout]
+	if (!rec) return
+	saveCodespaces(file, { codespaces: { ...store.codespaces, [realpathOfCheckout]: { ...rec, desired } } })
 }

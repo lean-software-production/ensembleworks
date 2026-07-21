@@ -12,6 +12,7 @@ import {
 	loadCodespaces,
 	mintGatewayId,
 	saveCodespaces,
+	setDesired,
 	updateContainerId,
 } from './store.ts'
 
@@ -58,4 +59,27 @@ assert.equal(second.branch, 'feature/x', 'branch metadata refreshed')
 const reloaded = loadCodespaces(file)
 assert.deepEqual(reloaded.codespaces['/home/u/work/ensembleworks'], second, 'round-trips losslessly')
 
-console.log('ok: codespaces store — XDG path, mint format/stability, ensure/update round-trip')
+// SP4 desired-state (decision #1): optional field, round-trips, setDesired
+// flips it in place, missing records are a silent no-op, and ensure PRESERVES
+// an existing desired (a re-up's metadata refresh must not undo a 'stopped').
+{
+	setDesired(file, '/home/u/work/ensembleworks', 'up')
+	let rec = loadCodespaces(file).codespaces['/home/u/work/ensembleworks']!
+	assert.equal(rec.desired, 'up')
+	assert.equal(rec.containerId, 'deadbeef'.repeat(8), 'setDesired touches only desired')
+
+	setDesired(file, '/home/u/work/ensembleworks', 'stopped')
+	assert.equal(loadCodespaces(file).codespaces['/home/u/work/ensembleworks']!.desired, 'stopped')
+
+	setDesired(file, '/no/such/checkout', 'up') // no record → no-op, no throw
+	assert.equal(loadCodespaces(file).codespaces['/no/such/checkout'], undefined)
+
+	const after = ensureCodespaceRecord(file, '/home/u/work/ensembleworks', {
+		repo: 'ensembleworks',
+		branch: 'main',
+		canvasUrl: 'http://localhost:8788',
+	})
+	assert.equal(after.desired, 'stopped', 'ensure (dry-run path) preserves desired — only the live engine flips it')
+}
+
+console.log('ok: codespaces store — XDG path, mint format/stability, ensure/update round-trip, desired-state')

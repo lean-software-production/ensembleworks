@@ -14,7 +14,7 @@ import { emitJson, narrate } from '../output.ts'
 import { type Conn, readEnv, resolveConn } from '../resolve.ts'
 import { type DevcontainersCliRunner, ensureDevcontainersCli, runningCompiled } from './devcontainers-cli.ts'
 import { detectRepoInfo } from './repo-info.ts'
-import { codespacesPath, ensureCodespaceRecord, updateContainerId } from './store.ts'
+import { codespacesPath, ensureCodespaceRecord, setDesired, updateContainerId } from './store.ts'
 import { resolveConnectorBin, runtimeDir, stageRuntimeDir } from './runtime-dir.ts'
 import { supervise } from './supervise.ts'
 
@@ -152,6 +152,7 @@ async function runCodespace(plan: UpPlan, conn: Conn, env: NodeJS.ProcessEnv): P
 	if (up.exitCode !== 0) throw new CliError(`devcontainer up exited ${up.exitCode}`, 1)
 	const result = parseUpResult(up.stdout.toString())
 	updateContainerId(codespacesPath(env), plan.workspaceFolder, result.containerId)
+	setDesired(codespacesPath(env), plan.workspaceFolder, 'up') // decision #1: live up claims reconciler management
 	narrate(`ensembleworks: container ${result.containerId.slice(0, 12)} up; starting connector (gateway ${plan.gatewayId})`)
 
 	// 3+4. Exec the connector inside the container (creds as exec-time env —
