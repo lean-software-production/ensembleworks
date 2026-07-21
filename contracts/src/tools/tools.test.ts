@@ -13,8 +13,8 @@ import {
 const METHODS: HttpMethod[] = ['GET', 'POST', 'PUT', 'DELETE']
 const PLUGINS = ['kernel', 'av', 'canvas', 'canvas-v2', 'scribe', 'roadmap', 'terminal', 'file', 'discord']
 
-// 1. Exactly 27 declared verbs (17 base + 5 canvas-v2 + 5 discord).
-assert.equal(allTools.length, 27, 'expected 27 tool defs (17 base + 5 canvas-v2 + 5 discord)')
+// 1. Exactly 28 declared verbs (18 base + 5 canvas-v2 + 5 discord).
+assert.equal(allTools.length, 28, 'expected 28 tool defs (18 base + 5 canvas-v2 + 5 discord)')
 
 // 2. Every def is well-formed.
 for (const t of allTools) {
@@ -54,6 +54,6 @@ for (const t of allTools) {
 // 5. buildManifest wraps them in the envelope.
 const manifest = buildManifest(allTools, '0.0.0')
 assert.equal(manifest.version, MANIFEST_VERSION, 'manifest.version')
-assert.equal(manifest.tools.length, 27, 'manifest.tools length')
+assert.equal(manifest.tools.length, 28, 'manifest.tools length')
 
-console.log('ok: tool registry — 27 defs, unique ids/paths, all schemas serialise')
+console.log('ok: tool registry — 28 defs, unique ids/paths, all schemas serialise')

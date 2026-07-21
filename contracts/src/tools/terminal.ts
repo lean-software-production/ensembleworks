@@ -38,4 +38,20 @@ export const terminalList: ToolDef = {
 	}),
 }
 
-export const terminalTools: ToolDef[] = [terminalStatus, terminalList]
+export const terminalInputPolicy: ToolDef = {
+	plugin: 'terminal',
+	id: 'input-policy',
+	http: { method: 'POST', path: '/api/terminal/input-policy' },
+	help: 'Set a gateway input policy (owner only): locked (viewers read-only) or shared.',
+	zodInput: z.object({
+		gatewayId: z.string().min(1).describe('registered gateway id (required)'),
+		policy: z.enum(['locked', 'shared']),
+	}),
+	zodOutput: z.object({
+		ok: z.literal(true),
+		gatewayId: z.string(),
+		policy: z.enum(['locked', 'shared']),
+	}),
+}
+
+export const terminalTools: ToolDef[] = [terminalStatus, terminalList, terminalInputPolicy]
