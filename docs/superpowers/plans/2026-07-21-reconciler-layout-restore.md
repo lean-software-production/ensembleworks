@@ -1629,6 +1629,28 @@ Done. Hand off per superpowers:finishing-a-development-branch — PR body must i
 
 *(filled during execution — paste the Task 10 manual-rehearsal observations here, dated)*
 
+**2026-07-21 — Task 10, steps 1–3 (automated verification):**
+
+- Step 1 (`bun run typecheck`): exit 0 across all 13 workspaces (contracts,
+  interaction-contracts, canvas-model, canvas-doc, canvas-sync, canvas-editor,
+  canvas-react, client, server, transcriber, cli, discord, e2e).
+- Step 2 (`bun run test`): `all 230 suites passed`, including
+  `cli/src/connector/layout.test.ts`, `cli/src/codespace/reconcile.test.ts`,
+  `cli/src/codespace/boot-install.test.ts`, and
+  `server/src/connector-layout-loopback.test.ts` picked up by the glob as
+  expected — no docker, no external network.
+- Step 3 (`git status --short`): clean modulo the pre-existing untracked
+  `.superpowers/` directory (present before this task began; unrelated to
+  this plan).
+- Step 4 (the manual rehearsal — real docker + systemd, a real reboot) was
+  **not** performed in this session: the executing environment's standing
+  instructions forbid `systemctl`/`loginctl` mutations here (boot-install
+  live steps are reserved for the owner's manual rehearsal; only `--dry-run`
+  and pure unit-text tests run in this environment). This step remains
+  outstanding — the owner should run the four numbered scenarios above on a
+  real Linux host and paste the results here before treating SP4 as fully
+  accepted.
+
 ---
 
 ## Out of scope for this plan (later work / deliberate v1 boundaries)

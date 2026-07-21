@@ -234,6 +234,15 @@ One dated entry per decision; newest last.
   shape render, drag-with-child, lock-toggle round-trip, cross-identity
   read-only chip) — cannot be meaningfully run in dev mode since every
   viewer resolves to `dev` = owner; needs the Access-fronted deployment.
+- **2026-07-21 — SP4 gate: PASS.** Workflow: 10/10 tasks approved, 0 fix
+  rounds, 20 agents (one pause/resume across the token refresh). Orchestrator
+  independently re-ran layout/reconcile/boot-install/session suites plus the
+  booted layout loopback (history + cwd restored through the real relay,
+  SIGTERM rewrites the snapshot), and exercised `reconcile --dry-run`
+  (clean no-op) and `boot-install --dry-run` (correct unit text/path).
+  **Owner to-do:** the plan's manual rehearsal (real docker/systemd
+  boot-install + reboot round-trip) — systemctl mutations were forbidden to
+  agents by design.
 - **2026-07-21 — Unattributed commit observed on the branch:** `e5bb4ef
   docs(netguard): egress-proxy spec` appeared mid-run — not produced by this
   orchestration (workflow commit list is complete without it; planners are
