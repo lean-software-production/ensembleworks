@@ -1,7 +1,7 @@
 {
   "name": "ensembleworks",
   "private": true,
-  "version": "0.22.1",
+  "version": "0.23.0",
   "description": "Multiplayer infinite-canvas team room: tldraw + tmux terminals + LiveKit spatial audio",
   "workspaces": [
     "contracts",
