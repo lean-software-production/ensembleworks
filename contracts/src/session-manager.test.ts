@@ -3,7 +3,9 @@
 // round-trip (spawn a shell, read output, resize, kill, observe exit). No tmux
 // needed here — the tmux path stays covered by server/src/relay-loopback.test.ts.
 import assert from 'node:assert/strict'
+import { mkdtempSync, readlinkSync, realpathSync } from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
 import { canvasShellSpawnSpec, canvasTmuxSpawnSpec, openTmuxSession } from './session-manager.js'
 
 const env = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>
@@ -185,6 +187,27 @@ console.log('ok: canvasTmuxSpawnSpec guarantees a UTF-8 locale for the tmux clie
     new Promise<void>((_, reject) => setTimeout(() => reject(new Error('shell did not exit in 5s')), 5000)),
   ])
   console.log('ok: raw shell round-trip through canvasShellSpawnSpec (no tmux)')
+}
+
+// pid exposure (EW Codespaces SP4): openTmuxSession surfaces the child pid so
+// the connector's layout snapshot can read /proc/<pid>/cwd at SIGTERM time.
+// Spawn a real shell in a known cwd, assert the pid is live and (on Linux)
+// that /proc/<pid>/cwd readlinks to that cwd, then kill and await exit.
+{
+  const dir = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'ew-pid-')))
+  const spec = canvasShellSpawnSpec({ shell: 'bash', home: dir })
+  const sh = openTmuxSession(spec, 80, 24)
+  assert.ok(Number.isInteger(sh.pid) && (sh.pid as number) > 0, `pid is a live positive integer (got ${sh.pid})`)
+  if (process.platform === 'linux') {
+    assert.equal(readlinkSync(`/proc/${sh.pid}/cwd`), dir, '/proc/<pid>/cwd resolves to the spawn cwd')
+  }
+  const gone = new Promise<void>((resolve) => sh.onExit(() => resolve()))
+  sh.kill()
+  await Promise.race([
+    gone,
+    new Promise<void>((_, reject) => setTimeout(() => reject(new Error('killed shell did not exit in 5s')), 5000)),
+  ])
+  console.log('ok: openTmuxSession exposes the child pid (and /proc cwd resolves on linux)')
 }
 
 process.exit(0)

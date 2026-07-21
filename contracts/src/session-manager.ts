@@ -30,6 +30,9 @@ export interface TmuxSession {
   kill(): void
   readonly cols: number
   readonly rows: number
+  /** OS pid of the underlying child, when known (real sessions always know it;
+   *  test fakes may omit). Used by the SP4 layout snapshot to read /proc cwd. */
+  readonly pid?: number
 }
 
 const COLS_MIN = 20
@@ -69,6 +72,9 @@ export function openTmuxSession(spec: SpawnSpec, cols: number, rows: number): Tm
     },
     get rows() {
       return curRows
+    },
+    get pid() {
+      return pty.pid
     },
   }
 }
