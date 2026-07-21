@@ -224,6 +224,16 @@ One dated entry per decision; newest last.
   have silently untracked the vendored 1.7MB bundle. Task 12's
   paste-into-Execution-notes step was missed by the implementer (flagged
   important by review); orchestrator filled it post-hoc from the journal.
+- **2026-07-21 — SP3 gate: PASS.** Workflow: 10/10 tasks approved, 0 fix
+  rounds, 20 agents. Orchestrator independently re-ran the ACL matrix,
+  booted gateway-acl + input-policy integration suites, and both legacy
+  loopbacks (tmux + pty) — all green; legacy behavior byte-identical. Landed
+  deviations (reviewer-verified): tsc annotation on a test helper; two
+  out-of-file-map tool-count assertions (cli-api, manifest) bumped 27→28 by
+  Task 10. **Open owner to-do:** Task 10's manual browser smoke (codespace
+  shape render, drag-with-child, lock-toggle round-trip, cross-identity
+  read-only chip) — cannot be meaningfully run in dev mode since every
+  viewer resolves to `dev` = owner; needs the Access-fronted deployment.
 - **2026-07-21 — Unattributed commit observed on the branch:** `e5bb4ef
   docs(netguard): egress-proxy spec` appeared mid-run — not produced by this
   orchestration (workflow commit list is complete without it; planners are
