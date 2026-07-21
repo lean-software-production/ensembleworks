@@ -160,4 +160,31 @@ console.log('ok: canvasTmuxSpawnSpec guarantees a UTF-8 locale for the tmux clie
   console.log('ok: canvasShellSpawnSpec — shell resolution, env hygiene, locale guarantee')
 }
 
+// Round-trip a REAL shell through canvasShellSpawnSpec — no tmux involved:
+// spawn, echo a marker, then `exit` and observe onExit. Shell is forced to
+// bash for determinism (CI boxes may not set $SHELL).
+{
+  const spec = canvasShellSpawnSpec({ shell: 'bash', home: os.tmpdir() })
+  const sh = openTmuxSession(spec, 80, 24)
+  let acc = ''
+  const ready = new Promise<void>((resolve) => {
+    sh.onData((d) => {
+      acc += d
+      if (acc.includes('PTY_OK')) resolve()
+    })
+  })
+  const gone = new Promise<void>((resolve) => sh.onExit(() => resolve()))
+  sh.write('printf PTY_OK\r')
+  await Promise.race([
+    ready,
+    new Promise<void>((_, reject) => setTimeout(() => reject(new Error(`no PTY_OK in 5s; got: ${acc.slice(-300)}`)), 5000)),
+  ])
+  sh.write('exit\r')
+  await Promise.race([
+    gone,
+    new Promise<void>((_, reject) => setTimeout(() => reject(new Error('shell did not exit in 5s')), 5000)),
+  ])
+  console.log('ok: raw shell round-trip through canvasShellSpawnSpec (no tmux)')
+}
+
 process.exit(0)
