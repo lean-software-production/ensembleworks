@@ -14,7 +14,7 @@ import type { ConnectConfig } from '../native/connect.ts'
 import { runTransport, type Timers } from './relay-client.ts'
 import { ConnectorSessionManager } from './session.ts'
 
-const realTimers: Timers = {
+export const realTimers: Timers = {
 	now: () => Date.now(),
 	setTimeout: (fn, ms) => setTimeout(fn, ms),
 	clearTimeout: (h) => clearTimeout(h),

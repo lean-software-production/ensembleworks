@@ -7,14 +7,16 @@
  * thin (decision #5 — the conformance smoke, not unit tests, covers it).
  */
 import type { Globals } from '../dispatch.ts'
+import { realTimers } from '../connector/index.ts'
 import { CliError } from '../errors.ts'
 import { hostsPath, loadHosts } from '../hosts.ts'
-import { emitJson } from '../output.ts'
+import { emitJson, narrate } from '../output.ts'
 import { type Conn, readEnv, resolveConn } from '../resolve.ts'
 import { type DevcontainersCliRunner, ensureDevcontainersCli, runningCompiled } from './devcontainers-cli.ts'
 import { detectRepoInfo } from './repo-info.ts'
-import { codespacesPath, ensureCodespaceRecord } from './store.ts'
-import { resolveConnectorBin, runtimeDir } from './runtime-dir.ts'
+import { codespacesPath, ensureCodespaceRecord, updateContainerId } from './store.ts'
+import { resolveConnectorBin, runtimeDir, stageRuntimeDir } from './runtime-dir.ts'
+import { supervise } from './supervise.ts'
 
 export interface UpPlan {
 	workspaceFolder: string
@@ -134,6 +136,45 @@ export async function codespaceUp(args: string[], globals: Globals, env: NodeJS.
 	return runCodespace(plan, conn, env) // Task 9
 }
 
-async function runCodespace(_plan: UpPlan, _conn: Conn, _env: NodeJS.ProcessEnv): Promise<number> {
-	throw new CliError('codespace up live engine lands in Task 9 — use --dry-run', 1)
+/** The live engine (design §2.1 steps 1–4, decision #5): thin by design —
+ *  every decision it strings together is a unit-tested pure part; the
+ *  end-to-end proof is scripts/codespace-conformance.ts, not a unit test. */
+async function runCodespace(plan: UpPlan, conn: Conn, env: NodeJS.ProcessEnv): Promise<number> {
+	const runner = await ensureDevcontainersCli(env)
+	const childEnv = { ...env, ...plan.runnerEnv } as Record<string, string>
+
+	// 1+2. Build/start the unmodified repo, with the /ew injection mount added
+	// at up time (repo-pristine). stderr streams through; stdout carries the
+	// outcome JSON.
+	narrate(`ensembleworks: devcontainer up — ${plan.branch ? `${plan.repo}@${plan.branch}` : plan.repo} (${plan.workspaceFolder})`)
+	stageRuntimeDir(plan.runtimeDir, plan.connectorBin)
+	const up = Bun.spawnSync(plan.upArgv, { env: childEnv, stdout: 'pipe', stderr: 'inherit' })
+	if (up.exitCode !== 0) throw new CliError(`devcontainer up exited ${up.exitCode}`, 1)
+	const result = parseUpResult(up.stdout.toString())
+	updateContainerId(codespacesPath(env), plan.workspaceFolder, result.containerId)
+	narrate(`ensembleworks: container ${result.containerId.slice(0, 12)} up; starting connector (gateway ${plan.gatewayId})`)
+
+	// 3+4. Exec the connector inside the container (creds as exec-time env —
+	// rebuilt UNredacted here; plan.execArgv stays the printable form) and
+	// supervise it in the foreground until SIGINT/SIGTERM.
+	const execArgv = buildExecArgv(runner, plan.workspaceFolder, conn, plan, { redact: false })
+	const ac = new AbortController()
+	const onSignal = () => ac.abort()
+	process.once('SIGINT', onSignal)
+	process.once('SIGTERM', onSignal)
+	let child: ReturnType<typeof Bun.spawn> | null = null
+	ac.signal.addEventListener('abort', () => child?.kill())
+	try {
+		await supervise(async () => {
+			child = Bun.spawn(execArgv, { env: childEnv, stdout: 'inherit', stderr: 'inherit' })
+			const code = await child.exited
+			child = null
+			if (!ac.signal.aborted) narrate(`ensembleworks: connector exec exited ${code}; restarting with backoff`)
+		}, { timers: realTimers, rng: Math.random }, ac.signal)
+	} finally {
+		process.off('SIGINT', onSignal)
+		process.off('SIGTERM', onSignal)
+	}
+	narrate('ensembleworks: codespace connector stopped (container left running — `ew codespace stop` to stop it)')
+	return 0
 }
