@@ -35,14 +35,18 @@ assert.deepEqual(checkInvariants(repaired), [])
 assert.deepEqual(repairPlan(repaired), [], 'repair is idempotent — a repaired doc needs no repair')
 
 // Chain under a dropped shape (3 levels): dropping the invalid root rescues
-// its direct child to the canonical page; the grandchild keeps its surviving
-// parent; a binding whose endpoints (ar2, grandchild) both still exist
-// survives. Descendants are listed BEFORE ancestors below — a holdover from
-// the cascade era, when that ordering pinned a real fixpoint requirement. The
-// rescue is now a single pass keyed on the plan's `drop` set, so it cannot be
-// order-sensitive by construction; this ordering is no longer load-bearing.
+// its direct child to the page bad2 was already on; the grandchild keeps its
+// surviving parent; a binding whose endpoints (ar2, grandchild) both still
+// exist survives. Two pages (page:a, page:p) so this discriminates: bad2's
+// page is page:p, canonicalPageId is page:a (lexicographically smallest) —
+// the assertion below can only pass if the same-page rule, not the doc-wide
+// fallback, picked the target. Descendants are listed BEFORE ancestors below
+// — a holdover from the cascade era, when that ordering pinned a real
+// fixpoint requirement. The rescue is now a single pass keyed on the plan's
+// `drop` set, so it cannot be order-sensitive by construction; this ordering
+// is no longer load-bearing.
 const chain = makeDocument({
-  pages: [{ id: 'page:p', name: 'P' }],
+  pages: [{ id: 'page:a', name: 'A' }, { id: 'page:p', name: 'P' }],
   shapes: [
     { id: 'shape:ar2', kind: 'arrow', parentId: 'page:p', props: {}, ...base() } as any,
     { id: 'shape:grandchild', kind: 'note', parentId: 'shape:child', props: {}, ...base() } as any,
@@ -55,9 +59,9 @@ const chainPlan = repairPlan(chain)
 assert.deepEqual(chainPlan, [{ op: 'dropShape', id: 'shape:bad2' }], 'only the invalid root is in the plan — descendants are rescued, not cascaded')
 const chainRepaired = applyRepairToModel(chain, chainPlan)
 // CHANGED 2026-07-20 (proportionality, owner ruling 4): dropping bad2 no
-// longer cascades. `child` is rescued to the canonical page, `grandchild`
-// keeps `child` as its parent, and binding:g — whose endpoints (ar2,
-// grandchild) BOTH still exist — survives with them.
+// longer cascades. `child` is rescued to the page bad2 was already on,
+// `grandchild` keeps `child` as its parent, and binding:g — whose endpoints
+// (ar2, grandchild) BOTH still exist — survives with them.
 assert.deepEqual(
   chainRepaired.shapes.map((s) => s.id).sort(),
   ['shape:ar2', 'shape:child', 'shape:grandchild'],
@@ -218,6 +222,7 @@ assert.equal(
   'page:a',
   'a cycling parent chain terminates and falls back to the canonical page',
 )
+assert.deepEqual(checkInvariants(cycRepaired), [], 'invariant-clean after ONE pass')
 
 // reparentToRoot is NOT touched by the same-page rule: an orphan/cycle member
 // has no page to stay on, which is the entire reason that op exists. Hand-built
@@ -238,6 +243,7 @@ assert.equal(
   'page:a',
   'reparentToRoot still targets the canonical page — the same-page rule applies to the RESCUE path only',
 )
+assert.deepEqual(checkInvariants(rerooted), [], 'invariant-clean after ONE pass')
 
 // Purity: the target is resolved through doc.byId (the content winner), never
 // through a first-match scan of doc.shapes, and never through the partially

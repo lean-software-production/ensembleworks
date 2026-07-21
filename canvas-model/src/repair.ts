@@ -47,9 +47,12 @@ export { stableStringify } from './stable-stringify.js'
 // converged state, so the target can't depend on container iteration order
 // (e.g. LoroMap.keys() happens to converge sorted today, but that's an
 // undocumented Loro internal — nothing pins it). Both applyRepairToModel and
-// LoroCanvasDoc.repair() use this helper so the two can't drift. It is also
-// the fallback target for a RESCUED child whose page ancestor can't be
-// resolved (dead-end or cycle) — see pageAncestorId below.
+// LoroCanvasDoc.repair() use this helper so the two can't drift. In
+// applyRepairToModel it is ALSO the fallback target for a RESCUED child whose
+// page ancestor can't be resolved (dead-end or cycle) — see pageAncestorId
+// below. LoroCanvasDoc.repair() has no rescue path yet (it still cascades,
+// via cascadeDropSet); that fallback use is applyRepairToModel-only pending
+// Task 6.
 export function canonicalPageId(pages: readonly Page[]): Page['id'] | undefined {
   return pages.map((p) => p.id).sort((a, b) => a.localeCompare(b))[0]
 }
@@ -61,7 +64,26 @@ export function canonicalPageId(pages: readonly Page[]): Page['id'] | undefined 
 // ONLY — reparentToRoot still uses canonicalPageId, because an orphan or a
 // cycle member has no page to stay on, which is the whole point of that op.
 //
-// Three properties, each pinned by a case in repair.test.ts:
+// NOT geometry.ts's pageIdOf, despite the similar walk — that one is read-
+// path tolerance (stops on the 'page:' PREFIX, caps at 50 hops), both wrong
+// for a repair write target. The two are NOT YET UNIFIED. Two of the three
+// apparent distinctions aren't real permanent contracts: the signature (id vs
+// Shape) is cosmetic — pageIdOf(doc, s) is pageAncestorId(doc, s.parentId)
+// modulo the walk semantics below — and the guard discipline isn't two
+// contracts either, it's one correct implementation (this one, unbounded
+// seen-set) and one loose one (pageIdOf's 50-hop cap silently returns
+// undefined on a legitimately deeper chain). The one distinction that IS
+// load-bearing, and demonstrated by a case below: MEMBERSHIP in doc.pages
+// vs. the 'page:' PREFIX. 'page:ghost' carries the prefix and names no page;
+// unifying onto prefix semantics would change neighbors.ts's behavior
+// (neighbors.ts:12,18 currently groups shapes under a ghost page together
+// because pageIdOf returns 'page:ghost' for all of them — switching to
+// membership would return [] instead), which is a real behavior change
+// needing its own test and is out of scope here. (By contrast,
+// server/src/features/canvas-v2.ts:177 compares pageIdOf's result against a
+// real doc.pages[0].id, never a ghost value, so it is unaffected either way.)
+//
+// Properties, each pinned by a case in repair.test.ts:
 // - It stops at a page by MEMBERSHIP in doc.pages, never by the 'page:'
 //   prefix. A parentId like 'page:ghost' carries the prefix and names no page
 //   (that is what invariants.ts's noOrphans rule tests for); stamping it onto
@@ -80,8 +102,12 @@ export function canonicalPageId(pages: readonly Page[]): Page['id'] | undefined 
 // Ancestors resolve through doc.byId — the CONTENT winner under duplicate ids
 // (see makeDocument) — never a scan of doc.shapes, so the target is a pure
 // function of converged state and cannot depend on array order.
-export function pageAncestorId(doc: CanvasDocument, startId: string): Page['id'] | undefined {
-  const pageIds = new Set<string>(doc.pages.map((p) => p.id))
+//
+// `pageIds` is caller-supplied rather than derived here: applyRepairToModel
+// calls this once per rescued child, and doc.pages doesn't change mid-pass,
+// so deriving the Set inside this function would rebuild an invariant value
+// O(pages × rescued) times per repair.
+export function pageAncestorId(doc: CanvasDocument, startId: string, pageIds: ReadonlySet<string>): Page['id'] | undefined {
   const seen = new Set<string>()
   let cur: string | undefined = startId
   while (cur !== undefined && !seen.has(cur)) {
@@ -188,6 +214,10 @@ export function applyRepairToModel(doc: CanvasDocument, plan: RepairOp[]): Canva
   // repairPlan (it emits no reparentToRoot ops for a zero-page doc); kept as
   // dead-code safety for hand-built plans.
   const pageId = canonicalPageId(doc.pages) ?? 'page:orphans'
+  // Hoisted out of the flatMap below: doc.pages doesn't change mid-pass, so
+  // this is loop-invariant across every rescued child pageAncestorId is
+  // called for.
+  const pageIds = new Set<string>(doc.pages.map((p) => p.id))
   // Drop, dedupe, and rehome are ONE fused pass over the untransformed
   // doc.shapes, not a filter/filter/map chain: `winnerKey` was captured from
   // the pre-repair shapes above, and the dedupe comparison below re-derives
@@ -222,7 +252,7 @@ export function applyRepairToModel(doc: CanvasDocument, plan: RepairOp[]): Canva
     // hand-built plans and keeps the rule statable: removal, then flag, then
     // rescue.
     if (toRoot.has(s.id)) return [{ ...s, parentId: pageId }]
-    if (drop.has(s.parentId)) return [{ ...s, parentId: pageAncestorId(doc, s.parentId) ?? pageId }]
+    if (drop.has(s.parentId)) return [{ ...s, parentId: pageAncestorId(doc, s.parentId, pageIds) ?? pageId }]
     return [s]
   })
   // A binding dies iff the plan names it, or an ENDPOINT was dropped (that
