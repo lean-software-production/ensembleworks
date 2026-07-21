@@ -132,7 +132,12 @@ one added line is portable by construction.
    `GATEWAY_SECRET` **as exec-time env vars**. Creds never land in an image layer
    and never get written into the **workspace** (which *is the git repo* and
    could otherwise get committed). The connector dials outbound WSS to the
-   canvas; terminals appear on the room.
+   canvas; terminals appear on the room. How the host obtains and refreshes
+   these credentials is the subject of
+   [`2026-07-21-ew-auth-design.md`](./2026-07-21-ew-auth-design.md) — a
+   gh-style `ew auth login` browser flow against Cloudflare Access, with the
+   host as token refresher (app tokens expire daily; connectors run for
+   weeks).
 4. **Host owns the lifecycle.** Because the host owns the Codespace
    (`up` / `stop` / `rebuild`), it also supervises the connector — restart on
    crash, re-exec after a container restart, tear down on stop. No
