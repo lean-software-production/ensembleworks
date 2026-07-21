@@ -117,6 +117,30 @@ One dated entry per decision; newest last.
   `connector-pty-loopback.test.ts` — all green; diff (95b0bec..f1ad02e)
   matches the plan's file map exactly. `--backend pty` is live behind the
   unchanged `tmux` default.
+- **2026-07-21 — SP3 plan accepted with four planner deviations** (all
+  approved): (1) input-policy endpoint is `POST /api/terminal/input-policy`
+  with gatewayId in the body — the repo's tool-contract tests forbid
+  `:param` API paths and require every mounted route be a declared tool;
+  (2) the client's read-only derivation uses a server-stamped
+  `viewerIsOwner` in `GET /api/terminal/list` instead of a client-side
+  whoami comparison — whoami returns display identity while owners are
+  `sso:<email>`/`token:<cn>`, so a client compare would misidentify anyone
+  with a display name; (3) the local keyboard gate only engages on
+  `status === 'connected'` — never lock on a guess; the relay stays the
+  authority; (4) SP3's plan builds on SP1's landed `--backend` work rather
+  than assuming it absent. Plan file:
+  `docs/superpowers/plans/2026-07-21-codespace-shape-input-acl.md`.
+- **2026-07-21 — SP2 plan accepted with five planner deviations** (all
+  approved): (a) upstream `--mount` has no read-only knob (spike-verified) —
+  the `/ew` mount is by-role read-only, commented in code; (b) staging path
+  is XDG-honoring `~/.local/share/ensembleworks/ew-runtime` over the design
+  doc's `~/.ew/runtime`; (c) `list` liveness is an opt-in `--live` flag;
+  (d) the computed UpPlan stores only the REDACTED exec argv — real argv is
+  rebuilt only inside the live engine, so no dry-run/log path can ever print
+  secrets; (e) `--dry-run` persists the minted gatewayId (stable from first
+  look). Also: `--repo`/`--branch` on `terminal connect` is written
+  add-if-absent in both SP2 and SP3 plans — whichever executes first adds
+  it. Plan file: `docs/superpowers/plans/2026-07-21-ew-codespace-up.md`.
 - **2026-07-21 — Unattributed commit observed on the branch:** `e5bb4ef
   docs(netguard): egress-proxy spec` appeared mid-run — not produced by this
   orchestration (workflow commit list is complete without it; planners are
