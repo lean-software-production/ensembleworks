@@ -77,3 +77,17 @@ export const screenshareShapeProps = {
 	// migration (border falls back to the neutral rule colour).
 	ownerColor: T.string.optional(),
 }
+
+export const codespaceShapeProps = {
+	w: T.number,
+	h: T.number,
+	// The relay gateway id this codespace's connector registered under —
+	// child terminal shapes are created with props.gateway = this.
+	gatewayId: T.string,
+	// Repo/branch identity stamped at creation (from GET /api/terminal/list).
+	// Live state (status/owner/inputPolicy) is DELIBERATELY not a synced prop:
+	// the gateway registry is the single source of truth and clients poll the
+	// list endpoint (~5s while mounted). Decision log 2026-07-21, SP3 item 2.
+	repo: T.string,
+	branch: T.string,
+}
