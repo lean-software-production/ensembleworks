@@ -6509,54 +6509,155 @@ git commit -m "test(canvas-doc): pin the frame-cascade data-loss defect end to e
 
 ## Task 8: Refresh the stale comments the change invalidated
 
-Several comments in these files now describe behaviour that no longer exists.
-Leaving them is worse than having no comment.
+Two clauses in `repair()`'s JSDoc still describe the pre-Task-5 `dropShape`
+subtree cascade, which no longer exists. Leaving them is worse than no comment.
+This task is **comment-only** — no test, no RED. Its teeth (Step 4) are: after
+the edits, the `cascade` grep must find ZERO surviving hit that describes a
+`dropShape` cascade, and every replacement sentence must be verified true
+against `canvas-model/src/repair.ts`.
+
+> **Re-anchor by QUOTING, never by line number.** This file has moved twice
+> since this task was drafted; the line numbers the original draft cited
+> (`~74-89`, `~35`) were already wrong at audit time and are wrong again now.
+> Find each block by its quoted text with `grep -n`, edit that.
 
 **Files:**
-- Modify: `canvas-doc/src/canvas-doc.ts` (`repair()` JSDoc, `deleteShape` JSDoc)
-- Modify: `canvas-doc/src/loro-canvas-doc.ts` (`deleteNode` comment if it
-  overclaims)
+- Modify: `canvas-doc/src/canvas-doc.ts` — `repair()` JSDoc (TWO clauses) and
+  `deleteShape()` JSDoc (one added sentence).
+- Do **NOT** touch `canvas-doc/src/loro-canvas-doc.ts`. The original draft
+  listed it ("`deleteNode` comment if it overclaims"). Verified 2026-07-21: it
+  does not overclaim — every `cascade` mention in it describes `deleteShape`'s
+  genuine real-tree cascade (`:58,59,320,502`), the rescue lifting children
+  *clear* of that cascade (`:532,562`), the dedupe loser's own delete
+  (`:374,385,400`), the stale-parent split-brain note (`:128`), or explicitly
+  affirms that drops **no longer** cascade (`:658`). All correct — leave them.
 
-**Step 1: Update `repair()`'s JSDoc**
-
-In `canvas-doc/src/canvas-doc.ts` (lines ~74-89), the phrase
-"drop shapes with invalid props (cascades to their subtree AND to bindings whose
-endpoint drops in the same pass)" is now wrong. Replace that clause with:
-
-```
-   * drop shapes with invalid props — removing ONLY the offending shape and
-   * rehoming its children to the canonical page root, never cascading over
-   * its subtree (one bad prop must not execute a container's contents) — and
-   * delete bindings whose endpoint drops in the same pass.
-```
-
-**Step 2: Check `deleteShape`'s JSDoc is still accurate**
-
-`deleteShape` (line ~35) documents a cascade. That is **still true and must
-remain true** — a user deleting a frame does mean to delete its contents. Do not
-change it. Add one clarifying sentence so the asymmetry is not read as a bug:
+**Step 1: Verify the premise still holds, then locate the first stale clause**
 
 ```
-   * (Unchanged by the repair-proportionality work: an EXPLICIT delete cascades
-   * on purpose — deleting a frame means deleting what's in it. Only repair()'s
-   * automatic response to invalid props stopped cascading.)
+cd /home/stag/src/projects/ensembleworks && grep -n "cascades to their subtree" canvas-doc/src/canvas-doc.ts
 ```
 
-**Step 3: Verify no stale "cascade" claim survives**
+Expected: one hit inside `repair()`'s JSDoc reading (verbatim on disk today):
 
 ```
-cd /home/stag/src/projects/ensembleworks && grep -rn "cascade" --include='*.ts' canvas-model/src canvas-doc/src | grep -v '\.test\.ts'
+   * canonicalPageId), delete dangling bindings, drop shapes with invalid
+   * props (cascades to their subtree AND to bindings whose endpoint drops in
+   * the same pass). Pure function of the converged model, so every peer that
 ```
 
-Read each remaining hit and confirm it describes either `deleteShape`'s
-intentional cascade or `dedupeShapeNodes`'s child-rescue — not `dropShape`.
-Fix any that still describe a `dropShape` cascade.
+If this text is already gone, a prior task fixed it — STOP and report which,
+then narrow this task to whatever remains.
 
-**Step 4: Commit**
+**Step 2: Replace the WHOLE `repair()` JSDoc body with the accurate version**
+
+The correct behaviour (verified against `canvas-model/src/repair.ts:8-14`,
+`60-118`, `211-243` on 2026-07-21) is: drop **only** the named shape, never its
+subtree; rescue each LOGICAL child (stored `parentId` names the dropped shape)
+to the root of the page the dropped shape was already on — its `pageAncestorId`
+(owner ruling 11: a rescued child may shift position but must not change page),
+falling back to the canonical page **only** when that ancestor chain dead-ends
+or cycles; ALSO lift each merely-PHYSICAL tree child clear of Loro's delete
+cascade (Task 6A — the reference is a flat-array filter so this half is
+invisible there, but `loro-canvas-doc.ts`'s `dropShapeRescuingChildren` does
+both); and sweep any binding whose endpoint was dropped in the same pass (still
+true — `repair.ts:238-242`). The second stale clause ("removed only via
+cascade … not itemized") is also wrong: nothing is removed via a `dropShape`
+cascade anymore. Replace the block bounded by `/**` … `*/` immediately above
+`repair(): RepairOp[]` with EXACTLY:
+
+```
+  /**
+   * Compute the deterministic repairPlan (canvas-model) from this doc's own
+   * converged state and apply it: reparent orphans/cycle members to the
+   * canonical page root (lexicographically smallest page id — see
+   * canonicalPageId), delete dangling bindings, and drop shapes with invalid
+   * props — removing ONLY the offending shape, never its subtree (one bad prop
+   * must not execute a container's innocent contents, and Loro tombstones make
+   * that loss unrecoverable). Each child of a dropped shape is rescued, not
+   * deleted: a LOGICAL child (its stored parentId names the dropped shape) is
+   * rehomed to the root of the page the dropped shape was already on — its
+   * pageAncestorId, falling back to the canonical page ONLY when that chain
+   * dead-ends or cycles (owner ruling 11: a rescued child may shift position
+   * but must not change page) — and a merely-PHYSICAL tree child is lifted
+   * clear of Loro's delete cascade the same way. A binding whose endpoint is a
+   * dropped shape dies in the same pass (it is not dangling when the plan is
+   * computed, so no deleteBinding op names it — sweeping it here is what lets
+   * ONE pass converge). Pure function of the converged model, so every peer
+   * that calls repair() on the same state computes and applies the identical
+   * plan — no coordination needed. Idempotent: calling repair() again on an
+   * already-clean doc returns []. Zero-page docs: orphans are unrepairable (no
+   * target page) — the violation is left standing rather than looping on a
+   * non-converging op; dropShape is suppressed by the same rule, so a childless
+   * invalid shape stays invalid until a page exists. The returned array is the
+   * plan as computed, not a full change log — the bindings swept because an
+   * endpoint dropped, and the children rehomed off a dropped parent, are side
+   * effects of the dropShape ops and are not themselves itemized. Caller must
+   * commit() after to persist.
+   */
+```
+
+**Step 3: Add the clarifying sentence to `deleteShape()`'s JSDoc**
+
+```
+cd /home/stag/src/projects/ensembleworks && grep -n "entire subtree in the real Loro tree" canvas-doc/src/canvas-doc.ts
+```
+
+`deleteShape`'s cascade is **still true and must remain true** — a user deleting
+a frame does mean to delete its contents. Do NOT change the existing text; add
+one paragraph inside the same JSDoc so the asymmetry with `repair()` is not read
+as a bug. Replace the block bounded by `/**` … `*/` immediately above
+`deleteShape(id: string): void` with EXACTLY:
+
+```
+  /**
+   * Silent no-op if no shape with this id exists. Cascades: deletes the shape's
+   * entire subtree in the real Loro tree — any shape whose ancestry passes
+   * through `id` (e.g. a frame's children) is deleted too, and every deleted
+   * shape's text container is cleared (no resurrection if the id is reused).
+   *
+   * This cascade is intentional and unchanged: an EXPLICIT delete means to take
+   * the contents — deleting a frame deletes what is in it. It is NOT the
+   * behaviour repair() dropped; repair()'s automatic response to an invalid
+   * prop removes only the offending shape and rescues its children. The
+   * asymmetry between the two is deliberate, not a bug.
+   */
+```
+
+**Step 4: Teeth — verify no stale `dropShape`-cascade claim survives**
+
+Run the brief's exact grep (this one INCLUDES test files, on purpose):
+
+```
+cd /home/stag/src/projects/ensembleworks && grep -rn cascade canvas-doc/src canvas-model/src --include="*.ts"
+```
+
+Every remaining hit MUST describe one of: `deleteShape`'s genuine cascade; the
+rescue lifting children *clear* of that cascade; the dedupe loser's own delete;
+or an explicit statement that drops **no longer** cascade. The full expected
+keep-list on the current tree (verified 2026-07-21) is
+`canvas-doc/src/canvas-doc.ts` — **zero** hits after this task (both stale
+clauses gone); `loro-canvas-doc.ts:58,59,128,320,374,385,400,502,532,562,658`
+(all KEEP — deleteShape/rescue/dedupe/affirmation); `canvas-model/src/repair.ts:10`
+("Deliberately NOT a subtree cascade" — KEEP, correct) and `:233`
+("physical tree child clear of Loro's delete cascade" — KEEP); and the test
+files (`repair.test.ts`, `crud.test.ts`, `text.test.ts`, `node-index.test.ts`,
+`serialization-seam.test.ts`, `canvas-model/src/repair.test.ts`) which all
+describe the delete cascade or the rescue, never a live `dropShape` cascade —
+KEEP. If ANY hit still asserts a `dropShape`/`repair()` subtree cascade as
+current behaviour, fix it. Also confirm zero hits for the removed symbol:
+
+```
+cd /home/stag/src/projects/ensembleworks && grep -rn cascadeDropSet --include="*.ts" .
+```
+
+Expected: no output (it was deleted in Task 6).
+
+**Step 5: Commit**
 
 ```
 cd /home/stag/src/projects/ensembleworks
-git add canvas-doc/src/canvas-doc.ts canvas-doc/src/loro-canvas-doc.ts
+git add canvas-doc/src/canvas-doc.ts
 git commit -m "docs(canvas-doc): correct the repair/delete cascade contracts"
 ```
 
@@ -6580,74 +6681,199 @@ suite run there exercises it.
 - Create: `scripts/put-shape-unchecked-audit.test.ts`
 
 > **Follow the existing pattern, do not invent one.** The repo already does this
-> twice — `scripts/ux-contract-presence.test.ts` and `scripts/exposure-audit.ts`.
+> twice — `scripts/ux-contract-presence.test.ts` and
+> `scripts/exposure-audit.test.ts` (note the `.test.ts` — there is NO
+> `scripts/exposure-audit.ts`; that file's own header even records it was named
+> `.test.ts` "not the plan's literal `.ts` sketch name". This plan repeated the
+> same slip; the correct sibling to read is `scripts/exposure-audit.test.ts`).
 > Read `ux-contract-presence.test.ts` first: note the `.test.ts` suffix (so
 > `scripts/run-tests.ts` picks it up via its `scripts/*.test.ts` glob), the
 > exported **pure decision function** unit-tested with synthetic inputs, and the
-> real-repo check that skips rather than false-fails when its inputs are
-> unavailable. Mirror all three.
+> real-repo scan (`exposure-audit.test.ts` uses `Glob` + `readFileSync`, not
+> `git grep` — mirror that). The new file MUST itself be named `.test.ts`, not a
+> bare `.ts`, for the same glob reason.
 
-**Step 1: Write the failing test**
+> **The runner glob, quoted from the current tree** (`scripts/run-tests.ts:25`,
+> verified 2026-07-21):
+> ```ts
+> const globs = ['**/src/**/*.test.ts', 'scripts/*.test.ts', 'e2e/lib/*.test.ts', 'bin/*.test.ts']
+> ```
+> `scripts/put-shape-unchecked-audit.test.ts` matches `scripts/*.test.ts`, so it
+> runs under `bun run test` in CI. A bare `.ts` would match NONE of these and
+> silently never run.
 
-The gate: grep the repo for `putShapeUnchecked` and fail on any hit outside the
-allowlist.
+**Step 1: Write the gate**
+
+The complete ALLOWED list, enumerated from `git grep -l putShapeUnchecked` on
+the current tree (verified 2026-07-21 — this is the CRITICAL fix: the original
+draft's list omitted `serialization-seam.test.ts` and `reconcile.test.ts`,
+which would make Step 3 fail on the real tree). Today's referencing files:
+`canvas-doc/src/loro-canvas-doc.ts` (the declaration — ALLOWED),
+`canvas-doc/src/repair.test.ts` (ALLOWED), `canvas-doc/src/repair-cost.test.ts`
+(ALLOWED), `canvas-doc/src/write-validation.test.ts` (ALLOWED),
+`canvas-doc/src/serialization-seam.test.ts` (ALLOWED — hostile-state
+construction, added since the draft), `server/src/canvas-v2/reconcile.test.ts`
+(ALLOWED — a comment in a test, added since the draft), and
+`docs/plans/2026-07-19-v2-write-path-validation.md` (this very plan — **NOT**
+allowlisted; excluded structurally, see below). Re-run `git grep -l
+putShapeUnchecked` yourself before writing the list; if Task 5/6/7 rework since
+2026-07-21 added or removed a referencing CODE file, adjust ALLOWED to match —
+the list must equal the real tree or Step 3's "pass" is a lie.
+
+> **Markdown exclusion (finding 3).** `git grep -l` returns this plan `.md`
+> because it names the token dozens of times. The gate MUST NOT match it. The
+> mechanism: the real scan globs `**/*.{ts,tsx}` only — the `.md` extension
+> never matches — and additionally skips any path under `docs/` and
+> `node_modules`/`dist` belt-and-suspenders. The exported pure function operates
+> only on paths the scan already collected, so its contract never sees markdown.
+
+Complete file (paste verbatim; `scripts/` is NOT clean-room, so `from 'bun'`,
+relative URLs, etc. are all fine here):
 
 ```ts
 // Run: bun scripts/put-shape-unchecked-audit.test.ts
 //
-// LoroCanvasDoc.putShapeUnchecked bypasses the write boundary — it writes a
-// shape that validateShape rejects, which is precisely the state repair() is
-// obliged to destroy (cascading to the subtree before Task 5, and dropping the
-// shape after it). It exists ONLY so tests and hostile-state rigs can
-// construct what a remote peer's bytes can deliver.
-//
+// CI gate (review finding 5). LoroCanvasDoc.putShapeUnchecked bypasses the
+// write boundary: it writes a shape validateShape rejects — precisely the
+// state repair() is obliged to destroy. It exists ONLY so tests and
+// hostile-state rigs can construct what a remote peer's bytes can deliver.
 // Keeping it off the CanvasDoc interface is a signal, not a barrier:
-// SyncServerPeer.doc, SyncClientPeer.doc, ShadowMirror.doc and reconcile()'s
+// SyncServerPeer.doc / SyncClientPeer.doc / ShadowMirror.doc and reconcile()'s
 // parameter are all typed as the CONCRETE LoroCanvasDoc, so anyone typing
-// `peer.doc.` gets it in autocomplete. reconcile.ts in particular is where a
-// developer chasing a non-converging shadow tick would reach for it as the
-// "fix" — which would restore the exact data-loss path this branch closed.
+// `peer.doc.` gets it in autocomplete. reconcile.ts is exactly where a
+// developer chasing a non-converging shadow tick would reach for it — which
+// would restore the data-loss path this branch closed. This gate is that
+// barrier. Adding an entry to ALLOWED is a deliberate, reviewable act; it must
+// never be done to turn a red gate green.
 //
-// This gate is that barrier. Adding an entry to ALLOWED is a deliberate,
-// reviewable act; it must never be done to turn a red gate green.
-const ALLOWED = [
+// Named `.test.ts` (not a bare `.ts`) so scripts/run-tests.ts globs it via
+// `scripts/*.test.ts` — same trick as exposure-audit.test.ts and
+// ux-contract-presence.test.ts (see their headers). Structure mirrors
+// ux-contract-presence.test.ts: a PURE decision function unit-tested with
+// synthetic inputs, then a real-tree scan that reads files off disk.
+import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { Glob } from 'bun'
+
+// The ONLY files allowed to name putShapeUnchecked, repo-relative with forward
+// slashes — the EXACT form Glob.scan yields below. A path-form mismatch would
+// silently make an allowed file look disallowed. Every entry is a test or the
+// declaration itself. Verified against `git grep -l putShapeUnchecked`,
+// 2026-07-21.
+const ALLOWED: readonly string[] = [
+  'canvas-doc/src/loro-canvas-doc.ts',          // the declaration itself
   'canvas-doc/src/repair.test.ts',
   'canvas-doc/src/repair-cost.test.ts',
   'canvas-doc/src/write-validation.test.ts',
-  'canvas-doc/src/loro-canvas-doc.ts',   // the declaration itself
-  'scripts/put-shape-unchecked-audit.test.ts', // this file
-] as const
+  'canvas-doc/src/serialization-seam.test.ts',
+  'server/src/canvas-v2/reconcile.test.ts',
+  'scripts/put-shape-unchecked-audit.test.ts',  // this gate
+]
+
+/** Pure: given the repo-relative paths that CONTAIN the token, return the ones
+ * NOT on the allowlist (the violations), sorted. Operates only on paths the
+ * caller already collected; the caller globs *.{ts,tsx} and skips docs/, so
+ * this plan's own .md — which names the token dozens of times — never reaches
+ * this function. */
+export function disallowedUsages(hits: readonly string[]): string[] {
+  const allow = new Set(ALLOWED)
+  return hits.filter((f) => !allow.has(f)).sort((a, b) => a.localeCompare(b))
+}
+
+// ---- Synthetic self-tests: the teeth that bite even when the real tree is
+// all-green. A gate that has only ever seen a green tree is untested; these
+// prove disallowedUsages actually distinguishes allowed from disallowed. ----
+assert.deepEqual(disallowedUsages([]), [], 'empty hit list -> no violations')
+assert.deepEqual(
+  disallowedUsages(['canvas-doc/src/repair.test.ts', 'canvas-doc/src/loro-canvas-doc.ts']),
+  [],
+  'allowlisted paths only -> no violations',
+)
+assert.deepEqual(
+  disallowedUsages(['server/src/canvas-v2/reconcile.ts']),
+  ['server/src/canvas-v2/reconcile.ts'],
+  'a non-allowlisted code file is a violation',
+)
+assert.deepEqual(
+  disallowedUsages(['canvas-doc/src/repair.test.ts', 'server/src/canvas-v2/reconcile.ts', 'client/src/foo.ts']),
+  ['client/src/foo.ts', 'server/src/canvas-v2/reconcile.ts'],
+  'mixed input returns only the disallowed paths, sorted',
+)
+console.log('ok: put-shape-unchecked-audit -- disallowedUsages self-tests')
+
+// ---- Real-tree scan. Globs CODE files only (*.{ts,tsx}); markdown — incl.
+// this plan — is excluded structurally by the extension, and docs/,
+// node_modules, dist are skipped belt-and-suspenders. ----
+const repoRoot = new URL('../', import.meta.url)
+const glob = new Glob('**/*.{ts,tsx}')
+const hits: string[] = []
+let scanned = 0
+for await (const f of glob.scan({ cwd: repoRoot.pathname, onlyFiles: true })) {
+  if (f.includes('node_modules') || f.includes('/dist/') || f.startsWith('dist/') || f.startsWith('docs/')) continue
+  scanned++
+  if (readFileSync(new URL(f, repoRoot), 'utf8').includes('putShapeUnchecked')) hits.push(f)
+}
+// Positive controls: if the scan finds nothing or misses the declaration site,
+// it is BROKEN (glob/cwd/token wrong), not genuinely green — fail loudly
+// rather than pass vacuously.
+assert.ok(scanned > 100, `sanity: scanned suspiciously few .ts/.tsx files (${scanned}) -- glob/cwd likely broken`)
+assert.ok(
+  hits.includes('canvas-doc/src/loro-canvas-doc.ts'),
+  'positive control: the declaration site must appear in the scan, else it is not actually finding the token',
+)
+
+const violations = disallowedUsages(hits)
+assert.deepEqual(
+  violations,
+  [],
+  `putShapeUnchecked is referenced outside the allowlist: ${violations.join(', ')}. ` +
+    `It bypasses the write boundary repair() enforces; it belongs only in tests and the ` +
+    `declaration. If a new use is genuinely legitimate, add it to ALLOWED as a deliberate, ` +
+    `reviewed act -- never to silence this gate.`,
+)
+console.log(`ok: put-shape-unchecked-audit -- ${hits.length} referencing file(s), all allowlisted (scanned ${scanned})`)
 ```
 
-Write `checkUsages(hits: readonly string[]): string[]` returning the
-disallowed paths, unit-test it with synthetic inputs (an allowed path, a
-disallowed one, an empty list), then run the real check over
-`git grep -l putShapeUnchecked` (or a `Glob` scan — match whatever
-`exposure-audit.ts` does).
+**Step 2: Run it to verify it FAILS (the real RED)**
 
-Add the allowlist entries for whichever files Tasks 5–7 actually ended up
-using it in; do not pre-populate speculatively.
-
-**Step 2: Run it to verify it fails**
-
-Temporarily add a `putShapeUnchecked` call to a non-allowlisted file — a scratch
-line in `server/src/canvas-v2/reconcile.ts` is the realistic case — and run:
+The gate is green-by-construction on a correct tree, so the RED must be
+manufactured: temporarily add a `putShapeUnchecked` mention to a non-allowlisted
+CODE file. Use `server/src/canvas-v2/reconcile.ts` (the non-test module — its
+`.test.ts` sibling is allowlisted, so the mention must go in the module, not the
+test). A single scratch **comment line** is enough (the gate is a text scan, not
+a compile) and won't perturb the server build:
 
 ```
-cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun scripts/put-shape-unchecked-audit.test.ts
+cd /home/stag/src/projects/ensembleworks
+# add, as a scratch line anywhere in server/src/canvas-v2/reconcile.ts:
+#   // putShapeUnchecked  <- scratch RED, delete me
+~/.bun/bin/bun scripts/put-shape-unchecked-audit.test.ts; echo "exit=$?"
 ```
 
-Expected: FAIL naming `server/src/canvas-v2/reconcile.ts`. **Record the verbatim
-output, then remove the scratch line.** This is the one RED in this task that
-matters — a gate that has never been observed failing is not known to work.
+Expected: the final `assert.deepEqual(violations, [], …)` fails, its message
+naming `server/src/canvas-v2/reconcile.ts`, and `exit=1`.
+
+> **This must be a REAL red, not a FAKE one.** A fake red here is a module-load
+> error: if you mistype the `import` of `Glob`/`readFileSync`, or rename
+> `disallowedUsages`, the file throws at load and you get a stack trace, NOT the
+> `violations` assertion naming reconcile.ts. That has been mistaken for a
+> passing gate three times on this branch. The RED is only valid if the failure
+> is the `deepEqual` message listing the scratch file. Also confirm the
+> synthetic self-tests still printed their `ok:` line before the real-scan
+> failure — that proves the pure function loaded and ran.
+
+**Record the verbatim output, then DELETE the scratch line.**
 
 **Step 3: Confirm it passes on the real tree**
 
 ```
-cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun scripts/put-shape-unchecked-audit.test.ts
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun scripts/put-shape-unchecked-audit.test.ts; echo "exit=$?"
 ```
 
-Expected: pass, listing the allowed call sites it found.
+Expected: `exit=0`; the `ok:` lines print, the final one reporting the referencing
+file count (7 today) all allowlisted. If it names a violation, the ALLOWED list
+does not match the current tree — reconcile the list against `git grep -l
+putShapeUnchecked`, do NOT widen it reflexively.
 
 **Step 4: Commit**
 
