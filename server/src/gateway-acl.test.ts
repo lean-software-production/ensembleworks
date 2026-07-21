@@ -37,7 +37,7 @@ process.env.EW_SERVICE_TOKENS_FILE = mapFile
 
 const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString('base64url')
 const jwt = (payload: Record<string, unknown>) => `${b64({ alg: 'none' })}.${b64(payload)}.`
-const authHeaders = (token?: string) =>
+const authHeaders = (token?: string): Record<string, string> =>
 	token ? { 'cf-access-jwt-assertion': jwt({ common_name: token }) } : {}
 
 const openWs = (url: string, token?: string) =>
