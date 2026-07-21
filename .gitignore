@@ -25,3 +25,7 @@ spikes/phase0/dist/
 bossman-*.png
 .worktrees/
 .worktrees/
+
+# Vendored @devcontainers/cli bundle is committed on purpose (decision #1) —
+# exempt it from the blanket dist/ ignore above.
+!cli/vendor/devcontainers-cli/dist/
