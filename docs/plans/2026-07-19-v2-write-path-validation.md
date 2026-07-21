@@ -798,8 +798,12 @@ Lettered tasks were added after the plan was first written, so the many
 | 4B | 2026-07-20 | Task 2 quality review, finding 2 (ruling 8) | ✅ landed `a443b9d` |
 | 5 | original | — | ✅ landed `764bdd3` + `cad6bfc` + `5c67923` |
 | **5A** | 2026-07-20 | Owner tightened the rescue-target ruling AFTER Task 5 landed (ruling 11) | ✅ landed `7880853` + `5685c18` |
-| **6A** | 2026-07-21 | Task 6's model-agreement claim exposed a pre-existing physical/logical rescue divergence (see its section) | pending |
-| 8A | 2026-07-20 | Task 2 quality review, finding 5 (ruling 8) — the CI gate | pending |
+| 6 | original | — | ✅ landed `414375a` + `933314e` |
+| **6A** | 2026-07-21 | Task 6's model-agreement claim exposed a pre-existing physical/logical rescue divergence (see its section) | ✅ landed `ea89581` + `4a0b77c` |
+| 7 | original | — | ✅ landed `beed7e4` |
+| 8 | original | — | ✅ landed `d7735ac` |
+| 8A | 2026-07-20 | Task 2 quality review, finding 5 (ruling 8) — the CI gate | ✅ landed `e969359` |
+| 9 | original | — | ✅ landed (this bookkeeping commit) |
 
 **Execution order is the table's order, not alphabetical:**
 1 → 1A → 1B → 2 → 3 → 3A → 4 → **4N** → 4A → 4B → 5 → **5A** → 6 → **6A** → 7 → 8 → 8A → 9.
@@ -809,13 +813,16 @@ section), and renaming later tasks would break this document's cross-references.
 `4N` is lettered out of sequence deliberately: renaming the existing `4A`/`4B`
 would break this document's many cross-references to them.
 
-**Start at Task 6A.** Half (A) is complete: the write boundary, its central
-safety claim (Task 4N, `b5031d0`), and its observability (4A, 4B) have all
-landed. Half (B) has landed the pure-model proportionality (5), the corrected
-same-page rescue target (5A, `7880853` + `5685c18`) and the Loro application
-(6, `414375a`). What remains is 6A — closing the physical/logical rescue
-divergence that Task 6's model-agreement claim made load-bearing — then 7, 8,
-8A and 9.
+**All tasks have landed — 1 through 9, both halves plus 6A.** Half (A) closed
+with the write boundary, its central safety claim (Task 4N, `b5031d0`), and its
+observability (4A, 4B). Half (B) closed with the pure-model proportionality
+(5), the corrected same-page rescue target (5A, `7880853` + `5685c18`), the
+Loro application (6, `414375a` + `933314e`), and 6A — closing the
+physical/logical rescue divergence that Task 6's model-agreement claim made
+load-bearing (`ea89581` + `4a0b77c`). 7 pinned the end-to-end regression
+(`beed7e4`), 8 refreshed the stale comments (`d7735ac`), and 8A landed the CI
+presence gate for `putShapeUnchecked` (`e969359`). Task 9 (this section) is the
+full verification pass and PR-body writeup.
 
 > **Note for anyone running `canvas-doc`'s suite from here on — this note
 > CHANGED on 2026-07-21.**
