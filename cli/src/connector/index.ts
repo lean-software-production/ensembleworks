@@ -9,7 +9,7 @@
  * All imports are static (compile-safe).
  */
 import WebSocket from 'ws'
-import { canvasTmuxSpawnSpec, openTmuxSession } from '@ensembleworks/contracts/session-manager'
+import { canvasShellSpawnSpec, canvasTmuxSpawnSpec, openTmuxSession, type SpawnSpec } from '@ensembleworks/contracts/session-manager'
 import type { ConnectConfig } from '../native/connect.ts'
 import { runTransport, type Timers } from './relay-client.ts'
 import { ConnectorSessionManager } from './session.ts'
@@ -29,14 +29,22 @@ function tmuxConfPath(env: NodeJS.ProcessEnv): string | undefined {
 	return env.ENSEMBLEWORKS_TMUX_CONF ?? env.TMUX_CONF
 }
 
+/** Per-session spawn policy behind the --backend flag: 'tmux' is the legacy
+ *  default (sessions survive connector restarts via the tmux server); 'pty' is
+ *  the connector-owned raw login shell (EW Codespaces coexistence spec §6.1 —
+ *  accepted trade: shells die with the connector; host supervision mitigates). */
+export function spawnSpecFor(backend: 'tmux' | 'pty', sessionId: string, env: NodeJS.ProcessEnv): SpawnSpec {
+	if (backend === 'pty') return canvasShellSpawnSpec({ shell: env.SHELL, home: env.HOME })
+	return canvasTmuxSpawnSpec({ sessionId, tmuxConf: tmuxConfPath(env), home: env.HOME })
+}
+
 export async function runConnector(
 	cfg: ConnectConfig,
 	headers: Record<string, string>,
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
-	const conf = tmuxConfPath(env)
 	const mgr = new ConnectorSessionManager((id, cols, rows) =>
-		openTmuxSession(canvasTmuxSpawnSpec({ sessionId: id, tmuxConf: conf, home: env.HOME }), cols, rows),
+		openTmuxSession(spawnSpecFor(cfg.backend, id, env), cols, rows),
 	)
 	const ac = new AbortController()
 	const onSignal = () => ac.abort()
