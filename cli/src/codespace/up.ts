@@ -136,16 +136,15 @@ export async function codespaceUp(args: string[], globals: Globals, env: NodeJS.
 	return runCodespace(plan, conn, env) // Task 9
 }
 
-/** The live engine (design §2.1 steps 1–4, decision #5): thin by design —
- *  every decision it strings together is a unit-tested pure part; the
- *  end-to-end proof is scripts/codespace-conformance.ts, not a unit test. */
-async function runCodespace(plan: UpPlan, conn: Conn, env: NodeJS.ProcessEnv): Promise<number> {
+/** One full engine cycle against an injected signal (SP4 decision #2): up →
+ *  record containerId + desired → exec the connector → await it. Re-running
+ *  `devcontainer up` each cycle is deliberate — idempotent when the container
+ *  is live (design §5.4) and it heals one that stopped under the supervisor.
+ *  Installs NO signal handlers: the caller owns the AbortController. */
+export async function runCodespaceOnce(plan: UpPlan, conn: Conn, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
 	const runner = await ensureDevcontainersCli(env)
 	const childEnv = { ...env, ...plan.runnerEnv } as Record<string, string>
 
-	// 1+2. Build/start the unmodified repo, with the /ew injection mount added
-	// at up time (repo-pristine). stderr streams through; stdout carries the
-	// outcome JSON.
 	narrate(`ensembleworks: devcontainer up — ${plan.branch ? `${plan.repo}@${plan.branch}` : plan.repo} (${plan.workspaceFolder})`)
 	stageRuntimeDir(plan.runtimeDir, plan.connectorBin)
 	const up = Bun.spawnSync(plan.upArgv, { env: childEnv, stdout: 'pipe', stderr: 'inherit' })
@@ -155,23 +154,31 @@ async function runCodespace(plan: UpPlan, conn: Conn, env: NodeJS.ProcessEnv): P
 	setDesired(codespacesPath(env), plan.workspaceFolder, 'up') // decision #1: live up claims reconciler management
 	narrate(`ensembleworks: container ${result.containerId.slice(0, 12)} up; starting connector (gateway ${plan.gatewayId})`)
 
-	// 3+4. Exec the connector inside the container (creds as exec-time env —
-	// rebuilt UNredacted here; plan.execArgv stays the printable form) and
-	// supervise it in the foreground until SIGINT/SIGTERM.
 	const execArgv = buildExecArgv(runner, plan.workspaceFolder, conn, plan, { redact: false })
+	const child = Bun.spawn(execArgv, { env: childEnv, stdout: 'inherit', stderr: 'inherit' })
+	const onAbort = () => child.kill() // SIGTERM → the connector snapshots its layout, then exits
+	signal.addEventListener('abort', onAbort)
+	try {
+		const code = await child.exited
+		if (!signal.aborted) narrate(`ensembleworks: connector exec for ${plan.gatewayId} exited ${code}; restarting with backoff`)
+	} finally {
+		signal.removeEventListener('abort', onAbort)
+	}
+}
+
+/** The cycle under the restart loop, until the caller's signal aborts. */
+export async function superviseCodespace(plan: UpPlan, conn: Conn, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
+	await supervise(() => runCodespaceOnce(plan, conn, env, signal), { timers: realTimers, rng: Math.random }, signal)
+}
+
+/** The `codespace up` verb's live engine: own the signals, run one codespace. */
+async function runCodespace(plan: UpPlan, conn: Conn, env: NodeJS.ProcessEnv): Promise<number> {
 	const ac = new AbortController()
 	const onSignal = () => ac.abort()
 	process.once('SIGINT', onSignal)
 	process.once('SIGTERM', onSignal)
-	let child: ReturnType<typeof Bun.spawn> | null = null
-	ac.signal.addEventListener('abort', () => child?.kill())
 	try {
-		await supervise(async () => {
-			child = Bun.spawn(execArgv, { env: childEnv, stdout: 'inherit', stderr: 'inherit' })
-			const code = await child.exited
-			child = null
-			if (!ac.signal.aborted) narrate(`ensembleworks: connector exec exited ${code}; restarting with backoff`)
-		}, { timers: realTimers, rng: Math.random }, ac.signal)
+		await superviseCodespace(plan, conn, env, ac.signal)
 	} finally {
 		process.off('SIGINT', onSignal)
 		process.off('SIGTERM', onSignal)
