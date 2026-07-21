@@ -63,7 +63,7 @@ assert.deepEqual(
   ['shape:ar2', 'shape:child', 'shape:grandchild'],
   'only bad2 is dropped; child and grandchild are rescued',
 )
-assert.equal(chainRepaired.byId.get('shape:child')!.parentId, 'page:p', 'child rescued to the canonical page')
+assert.equal(chainRepaired.byId.get('shape:child')!.parentId, 'page:p', 'child rescued to bad2\'s page')
 assert.deepEqual(chainRepaired.bindings.map((b) => b.id), ['binding:g'], 'a binding whose endpoints both survive is kept')
 assert.deepEqual(checkInvariants(chainRepaired), [], 'invariant-clean after ONE pass')
 
@@ -73,15 +73,16 @@ assert.deepEqual(checkInvariants(chainRepaired), [], 'invariant-clean after ONE 
 // frame's per-kind props schema (w is z.number().optional()), so validProps
 // fires on the frame and on nothing else.
 //
-// Pages are listed z-FIRST on purpose: the rescue target must be
-// canonicalPageId (lexicographically smallest, page:a) on every peer, never
-// pages[0]. Three bindings pin the binding rule from both sides: the one
-// pointing AT the dropped shape must be swept (it is not dangling before the
-// repair, so the plan carries no deleteBinding op for it — only a same-pass
-// sweep converges in ONE call), while the two pointing at RESCUED shapes must
-// survive.
+// Three pages separate three possible rescue targets: pages[0] is page:m,
+// canonicalPageId is page:a, and the same-page rule's answer is page:z — the
+// page shape:badf was already on. A single equality on the rescued child's
+// parentId is a three-way discriminator between all of them. Three bindings
+// pin the binding rule from both sides: the one pointing AT the dropped shape
+// must be swept (it is not dangling before the repair, so the plan carries no
+// deleteBinding op for it — only a same-pass sweep converges in ONE call),
+// while the two pointing at RESCUED shapes must survive.
 const rescueDoc = makeDocument({
-  pages: [{ id: 'page:z', name: 'Z' }, { id: 'page:a', name: 'A' }],
+  pages: [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }, { id: 'page:z', name: 'Z' }],
   shapes: [
     { id: 'shape:arw', kind: 'arrow', parentId: 'page:z', props: {}, ...base() } as any,
     { id: 'shape:badf', kind: 'frame', parentId: 'page:z', props: { w: 'wide' }, ...base() } as any,
@@ -104,8 +105,8 @@ assert.deepEqual(
 )
 assert.equal(
   rescued.byId.get('shape:kid')!.parentId,
-  'page:a',
-  'the direct child is rescued to the canonical page (smallest id, not pages[0])',
+  'page:z',
+  'the rescued child stays on its own page (page:z) — not pages[0] (page:m), not the canonical page (page:a)',
 )
 assert.equal(
   rescued.byId.get('shape:gkid')!.parentId,
@@ -124,9 +125,9 @@ assert.deepEqual(checkInvariants(rescued), [], 'invariant-clean after ONE pass')
 // page — proving the rescue target is resolved against the plan, not against
 // whatever the parent chain happened to become.
 const bothBad = makeDocument({
-  pages: [{ id: 'page:p', name: 'P' }],
+  pages: [{ id: 'page:a', name: 'A' }, { id: 'page:b', name: 'B' }],
   shapes: [
-    { id: 'shape:badp', kind: 'note', parentId: 'page:p', props: {}, ...base(), opacity: 'no' as any } as any,
+    { id: 'shape:badp', kind: 'note', parentId: 'page:b', props: {}, ...base(), opacity: 'no' as any } as any,
     { id: 'shape:badc', kind: 'note', parentId: 'shape:badp', props: {}, ...base(), opacity: 'no' as any } as any,
     { id: 'shape:okg', kind: 'note', parentId: 'shape:badc', props: {}, ...base() } as any,
   ],
@@ -140,8 +141,134 @@ assert.deepEqual(
 )
 const bothBadRepaired = applyRepairToModel(bothBad, bothBadPlan)
 assert.deepEqual(bothBadRepaired.shapes.map((s) => s.id), ['shape:okg'], 'both invalid shapes go; only the valid grandchild survives')
-assert.equal(bothBadRepaired.byId.get('shape:okg')!.parentId, 'page:p', 'the survivor is rescued to the canonical page')
+assert.equal(
+  bothBadRepaired.byId.get('shape:okg')!.parentId,
+  'page:b',
+  'the walk passes THROUGH a dropped ancestor to the page (page:b), never stopping on shape:badp',
+)
 assert.deepEqual(checkInvariants(bothBadRepaired), [], 'invariant-clean after ONE pass')
+
+// The rescue target is always a PAGE, never a surviving shape. shape:innerbad
+// is dropped from inside a perfectly healthy frame; its child does NOT get
+// re-nested into that frame (repair has no mandate to invent a containment
+// relationship — it rehomes to the page root, on the page the shape was
+// already on).
+const nested = makeDocument({
+  pages: [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }, { id: 'page:z', name: 'Z' }],
+  shapes: [
+    { id: 'shape:outer', kind: 'frame', parentId: 'page:z', props: {}, ...base() } as any,
+    { id: 'shape:innerbad', kind: 'frame', parentId: 'shape:outer', props: { w: 'wide' }, ...base() } as any,
+    { id: 'shape:kid2', kind: 'note', parentId: 'shape:innerbad', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const nestedPlan = repairPlan(nested)
+assert.deepEqual(nestedPlan, [{ op: 'dropShape', id: 'shape:innerbad' }], 'precondition: only the inner frame is flagged')
+const nestedRepaired = applyRepairToModel(nested, nestedPlan)
+assert.equal(
+  nestedRepaired.byId.get('shape:kid2')!.parentId,
+  'page:z',
+  'the walk continues past a SURVIVING ancestor shape to its page — rescue targets a page root, never shape:outer',
+)
+assert.deepEqual(checkInvariants(nestedRepaired), [], 'invariant-clean after ONE pass')
+
+// No page ancestor at all: the dropped shape is itself an orphan, so walking
+// up dead-ends. There is no "same page" to stay on, so the rescue falls back
+// to canonicalPageId — the pre-5A doc-wide target. Falling back is forced, not
+// chosen: leaving the child on a nonexistent parent would emit a FRESH
+// noOrphans violation out of a pass that is required to converge in one call.
+// This also pins that a page ancestor is decided by MEMBERSHIP in doc.pages,
+// not by the `page:` prefix — 'page:ghost' has the prefix and names no page.
+const deadEnd = makeDocument({
+  pages: [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }],
+  shapes: [
+    { id: 'shape:lost', kind: 'note', parentId: 'page:ghost', props: {}, ...base(), opacity: 'no' as any } as any,
+    { id: 'shape:kept', kind: 'note', parentId: 'shape:lost', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const deadEndPlan = repairPlan(deadEnd)
+assert.deepEqual(deadEndPlan, [{ op: 'dropShape', id: 'shape:lost' }], 'precondition: drop subsumes the orphan reparent for shape:lost')
+const deadEndRepaired = applyRepairToModel(deadEnd, deadEndPlan)
+assert.equal(
+  deadEndRepaired.byId.get('shape:kept')!.parentId,
+  'page:a',
+  'no page ancestor ⇒ fall back to the canonical page, never to the prefix-shaped non-page page:ghost',
+)
+assert.deepEqual(checkInvariants(deadEndRepaired), [], 'invariant-clean after ONE pass')
+
+// Cycle guard. repairPlan can never produce this pairing (a shape whose parent
+// chain cycles is itself flagged noCycles, so it is reparented rather than
+// rescued), so the plan here is HAND-BUILT — the same dead-code-safety
+// contract applyRepairToModel already honours for zero-page plans. Without a
+// visited set the walk never terminates: a wrong implementation HANGS here
+// rather than failing an assertion.
+const cyc = makeDocument({
+  pages: [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }],
+  shapes: [
+    { id: 'shape:cycA', kind: 'note', parentId: 'shape:cycB', props: {}, ...base() } as any,
+    { id: 'shape:cycB', kind: 'note', parentId: 'shape:cycA', props: {}, ...base() } as any,
+    { id: 'shape:kid3', kind: 'note', parentId: 'shape:cycB', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const cycRepaired = applyRepairToModel(cyc, [{ op: 'dropShape', id: 'shape:cycB' }])
+assert.equal(
+  cycRepaired.byId.get('shape:kid3')!.parentId,
+  'page:a',
+  'a cycling parent chain terminates and falls back to the canonical page',
+)
+
+// reparentToRoot is NOT touched by the same-page rule: an orphan/cycle member
+// has no page to stay on, which is the entire reason that op exists. Hand-built
+// again, because repairPlan cannot pair reparentToRoot with a resolvable page
+// ancestor (see the cycle note above), so only a hand-built plan can tell the
+// two targets apart.
+const reroot = makeDocument({
+  pages: [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }, { id: 'page:z', name: 'Z' }],
+  shapes: [
+    { id: 'shape:host', kind: 'frame', parentId: 'page:z', props: {}, ...base() } as any,
+    { id: 'shape:orph2', kind: 'note', parentId: 'shape:host', props: {}, ...base() } as any,
+  ],
+  bindings: [],
+})
+const rerooted = applyRepairToModel(reroot, [{ op: 'reparentToRoot', id: 'shape:orph2' }])
+assert.equal(
+  rerooted.byId.get('shape:orph2')!.parentId,
+  'page:a',
+  'reparentToRoot still targets the canonical page — the same-page rule applies to the RESCUE path only',
+)
+
+// Purity: the target is resolved through doc.byId (the content winner), never
+// through a first-match scan of doc.shapes, and never through the partially
+// rehomed output. shape:dupp has two entries on DIFFERENT pages; the geo entry
+// wins the content election (see the dedupe block below), so the walk must
+// land on page:m even though the note entry (page:z) comes first in the array.
+// The reversed construction below asserts the same result under a permuted
+// input, which is the property canonicalPageId exists to protect.
+const dupChainShapes = [
+  { id: 'shape:dupp', kind: 'note', parentId: 'page:z', props: {}, ...base() } as any,
+  { id: 'shape:dupp', kind: 'geo', parentId: 'page:m', props: {}, ...base() } as any,
+  { id: 'shape:baddd', kind: 'note', parentId: 'shape:dupp', props: {}, ...base(), opacity: 'no' as any } as any,
+  { id: 'shape:kiddd', kind: 'note', parentId: 'shape:baddd', props: {}, ...base() } as any,
+]
+const dupPages = [{ id: 'page:m', name: 'M' }, { id: 'page:a', name: 'A' }, { id: 'page:z', name: 'Z' }] as const
+const projectIds = (d: ReturnType<typeof applyRepairToModel>) =>
+  d.shapes.map((s) => `${s.id}<-${s.parentId}`).sort()
+const dupChain = makeDocument({ pages: dupPages, shapes: dupChainShapes, bindings: [] })
+const dupChainRepaired = applyRepairToModel(dupChain, repairPlan(dupChain))
+assert.equal(
+  dupChainRepaired.byId.get('shape:kiddd')!.parentId,
+  'page:m',
+  'the walk resolves an ancestor id through byId (content winner, page:m) — not the first array match (page:z)',
+)
+const dupChainRev = makeDocument({ pages: [...dupPages].reverse(), shapes: [...dupChainShapes].reverse(), bindings: [] })
+assert.deepEqual(
+  projectIds(applyRepairToModel(dupChainRev, repairPlan(dupChainRev))),
+  projectIds(dupChainRepaired),
+  'identical converged state ⇒ identical rescue targets, whatever order the arrays arrive in',
+)
+assert.deepEqual(checkInvariants(dupChainRepaired), [], 'invariant-clean after ONE pass')
 
 // Zero-page doc: no rescue target exists, so dropShape is SUPPRESSED and the
 // violation is left standing — the same policy repairPlan already applies to

@@ -6,8 +6,8 @@ export type RepairOp =
   | { op: 'reparentToRoot'; id: string } // orphan or cycle member → page root
   | { op: 'deleteBinding'; id: string } // dangling binding
   // Invalid envelope/props. Removes ONLY this shape; any shape whose parentId
-  // is a dropped id is rehomed to the canonical page root (see
-  // applyRepairToModel). Deliberately NOT a subtree cascade: a container with
+  // is a dropped id is rehomed to the root of the page it was ALREADY on (see
+  // pageAncestorId). Deliberately NOT a subtree cascade: a container with
   // one bad prop must not execute its innocent contents, and Loro tombstones
   // make that loss unrecoverable. Rescued children keep their parent-relative
   // x/y and may visually jump — accepted, owner ruling 1.
@@ -47,9 +47,49 @@ export { stableStringify } from './stable-stringify.js'
 // converged state, so the target can't depend on container iteration order
 // (e.g. LoroMap.keys() happens to converge sorted today, but that's an
 // undocumented Loro internal — nothing pins it). Both applyRepairToModel and
-// LoroCanvasDoc.repair() use this helper so the two can't drift.
+// LoroCanvasDoc.repair() use this helper so the two can't drift. It is also
+// the fallback target for a RESCUED child whose page ancestor can't be
+// resolved (dead-end or cycle) — see pageAncestorId below.
 export function canonicalPageId(pages: readonly Page[]): Page['id'] | undefined {
   return pages.map((p) => p.id).sort((a, b) => a.localeCompare(b))[0]
+}
+
+// The page a RESCUED child must stay on: walk `parentId` up from `startId`
+// (the dropped parent) until an id that names a page. Owner ruling 11: a
+// rescued child may shift in POSITION but must not change PAGE, so this
+// per-shape target replaces the doc-wide canonicalPageId on the rescue path
+// ONLY — reparentToRoot still uses canonicalPageId, because an orphan or a
+// cycle member has no page to stay on, which is the whole point of that op.
+//
+// Three properties, each pinned by a case in repair.test.ts:
+// - It stops at a page by MEMBERSHIP in doc.pages, never by the 'page:'
+//   prefix. A parentId like 'page:ghost' carries the prefix and names no page
+//   (that is what invariants.ts's noOrphans rule tests for); stamping it onto
+//   a rescued child would emit a fresh noOrphans violation out of a pass that
+//   has to converge in ONE call.
+// - It walks THROUGH shapes — dropped or surviving — and stops only at a page.
+//   Stopping on a dropped ancestor would leave the child pointing at something
+//   being removed. Stopping on a SURVIVING ancestor would put the child inside
+//   a frame it was never in, inventing a containment relationship repair has
+//   no mandate to create.
+// - It terminates. noCycles is a real invariant, so a parent chain can cycle;
+//   `seen` bounds the walk and the caller falls back to canonicalPageId.
+//   Unreachable from a repairPlan-produced plan (a shape whose chain cycles is
+//   itself flagged noCycles, so it is reparented rather than rescued) — this is
+//   dead-code safety for hand-built plans, like the 'page:orphans' fallback.
+// Ancestors resolve through doc.byId — the CONTENT winner under duplicate ids
+// (see makeDocument) — never a scan of doc.shapes, so the target is a pure
+// function of converged state and cannot depend on array order.
+export function pageAncestorId(doc: CanvasDocument, startId: string): Page['id'] | undefined {
+  const pageIds = new Set<string>(doc.pages.map((p) => p.id))
+  const seen = new Set<string>()
+  let cur: string | undefined = startId
+  while (cur !== undefined && !seen.has(cur)) {
+    if (pageIds.has(cur)) return cur as Page['id']
+    seen.add(cur)
+    cur = doc.byId.get(cur)?.parentId
+  }
+  return undefined
 }
 
 // Pure: identical input ⇒ identical plan on every peer. Sorted by (op,id) so the
@@ -168,10 +208,22 @@ export function applyRepairToModel(doc: CanvasDocument, plan: RepairOp[]): Canva
       if (keptDupe.has(s.id) || stableStringify(s) !== winnerKey.get(s.id)) return []
       keptDupe.add(s.id)
     }
-    // A shape is rehomed to the canonical page either because it was flagged
-    // (orphan/cycle) or because its parent was just dropped. Same target,
-    // same determinism — the rescue must not invent a second rehoming rule.
-    return [toRoot.has(s.id) || drop.has(s.parentId) ? { ...s, parentId: pageId } : s]
+    // TWO rehoming rules, and the precedence between them is deliberate.
+    // reparentToRoot (orphan/cycle) goes to the canonical page: such a shape
+    // has no page to stay on. A shape rescued because its PARENT was dropped
+    // stays on its own page (owner ruling 11) — the page ancestor of that
+    // dropped parent, falling back to the canonical page when the chain
+    // dead-ends or cycles.
+    // The two branches never disagree on a plan repairPlan produced: a shape
+    // whose chain cycles is itself flagged noCycles (so it is in toRoot), and
+    // a shape flagged noOrphans has a parent that names nothing (so its parent
+    // cannot be dropped). Every toRoot shape therefore has no page ancestor
+    // anyway and falls back to the same target. The ordering below defines
+    // hand-built plans and keeps the rule statable: removal, then flag, then
+    // rescue.
+    if (toRoot.has(s.id)) return [{ ...s, parentId: pageId }]
+    if (drop.has(s.parentId)) return [{ ...s, parentId: pageAncestorId(doc, s.parentId) ?? pageId }]
+    return [s]
   })
   // A binding dies iff the plan names it, or an ENDPOINT was dropped (that
   // binding is not dangling when the plan is computed, so no deleteBinding op
