@@ -4278,8 +4278,9 @@ also delete the function and its comment from `canvas-model/src/repair.ts` (and
 the stale mention in `canvas-model/src/repair.test.ts` if step 1a left one),
 discharging ruling 2.
 
-> **Two defects in Task 6's current text, found while refreshing this section
-> (2026-07-20). Fix them before executing Task 6, or it will fail on contact:**
+> **Two defects in Task 6's text, found while refreshing this section
+> (2026-07-20). BOTH FIXED in Task 6's 2026-07-21 refresh — recorded here as
+> history, not as a pending action:**
 >
 > - Task 6 step 4(a)'s replacement import line **omits `SHAPE_KINDS` and
 >   `type ShapeKind`**, which `canvas-doc/src/loro-canvas-doc.ts` uses in its
@@ -4954,10 +4955,16 @@ git commit -m "fix(canvas-model): a rescued child stays on its own page, not the
 
 Paste the verbatim step-2 RED output into the commit body.
 
-### Handoff to Task 6 — READ THIS BEFORE EXECUTING TASK 6
+### Handoff to Task 6 — RESOLVED 2026-07-21, kept as history
 
-**Task 6's section was written against the canonical-page rule and is now stale
-in one specific way.** Its step 4(b) instructs:
+> **These corrections have been FOLDED INTO Task 6's own text** (full refresh at
+> `7880853`: step 4 now prescribes the same-page rule directly, the import line
+> is verbatim-correct, every anchor is a quote rather than a line number, the
+> `cascadeDropSet` deletion is in scope as step 5, and the mutant table is
+> measured). **Execute Task 6 from Task 6.** This subsection is retained only as
+> the record of what was wrong and why — do not treat it as a pending checklist.
+
+The stale instruction was Task 6's step 4(b):
 
 ```ts
     const rootPageId = canonicalPageId(model.pages) ?? 'page:orphans'
@@ -5011,60 +5018,267 @@ child's `parentId` after `repair()` equals the frame's page, and assert
 
 ## Task 6: Mirror proportionate drop in `LoroCanvasDoc.repair()`
 
-> ### ⚠️ STALE IN ONE SPECIFIC WAY — refresh before executing (2026-07-20)
->
-> This section was written against Task 5's **canonical-page** rescue target.
-> **Ruling 11 replaced that with the same-page rule (Task 5A).** Step 4(b)/4(c)
-> below stamp a single `rootPageId` onto every rescued child, which mirrors
-> Task 5 rather than Task 5A. Read **Task 5A's "Handoff to Task 6"** for the
-> exact corrections before touching this section — it names the import to add,
-> the one expression to change, and the branches that must *not* change.
->
-> The two defects Task 5's handoff recorded here still stand as well (the
-> import line must retain `SHAPE_KINDS` / `type ShapeKind`; the `:89-92` and
-> `:187` line references are rotted).
+`applyRepairToModel` is the reference; `LoroCanvasDoc.repair()` must agree with
+it byte-for-byte after normalization. Tasks 5 and 5A changed the reference. This
+task changes the Loro application to match, and discharges ruling 2 by deleting
+`cascadeDropSet` — whose last caller this task removes.
 
-`applyRepairToModel` and `LoroCanvasDoc.repair()` must never drift. Task 5
-changed the reference; this task changes the Loro application to match.
+**This section was fully re-verified against the tree at `7880853` on
+2026-07-21.** Every code block below was pasted into the real files, every
+command was run, every mutant was produced and executed. Line numbers appear
+only as orientation; every anchor is a **verbatim quote of current code**,
+because quotes survive the next refactor and line numbers do not. (The previous
+draft's anchors had rotted by ~160 lines.)
 
-> **As in Task 5, this rewrites cascade-pinning assertions on purpose**
-> (`canvas-doc/src/repair.test.ts:89-92`). Intended behaviour change, owner
-> sign-off 2026-07-20 (ruling 4). The assertions that must NOT be weakened are
-> the model-agreement one (`repair.test.ts:187`) and the order-independence
-> structure — those are the drift guards, and they must keep passing on their
-> own merits.
+### What this task must reproduce, and what it must not
+
+Four rules from Tasks 5/5A, plus one deletion:
+
+1. **Rescue before delete.** Loro's `deleteNode` collects the whole real subtree
+   and **clears every descendant's text container** *before* the cascade delete.
+   So every physical child must be moved out of the doomed subtree **first**.
+   This is the one place the Loro side is genuinely harder than the model side,
+   where dropping is a filter over a flat array.
+2. **Same-page target (ruling 11, Task 5A).** A rescued child is stamped with
+   `pageAncestorId(model, <the dropped parent's id>) ?? rootPageId` — **not** the
+   canonical page. Task 5's canonical-page rule is the exact bug 5A removed; do
+   not re-land it.
+3. **`reparentToRoot` keeps the canonical page.** Do **not** over-apply the
+   same-page rule there. An orphan or cycle member has no page to stay on.
+4. **Bindings sweep on the named drop set only**, never a descendant closure. A
+   binding to a merely *rescued* shape survives — that shape still exists.
+5. **Delete `cascadeDropSet`** from `canvas-model/src/repair.ts` (function *and*
+   its docblock). Task 5's "Ruling on `cascadeDropSet`'s fate" deferred the
+   deletion to this task precisely because `LoroCanvasDoc.repair()` was its last
+   caller; step 5 below removes that caller, so the function dies here.
 
 **Files:**
-- Modify: `canvas-doc/src/loro-canvas-doc.ts` (`repair()`, import line)
-- Modify: `canvas-doc/src/repair.test.ts` (the cascade assertions)
+- Modify: `canvas-doc/src/loro-canvas-doc.ts` — the import line and `repair()`
+- Modify: `canvas-doc/src/repair.test.ts` — one comment + block rewritten, two
+  new blocks added
+- Modify: `canvas-model/src/repair.ts` — **delete** `cascadeDropSet` and its
+  docblock (the comment above it is itself stale: it says "the next task closes
+  by deleting this function and its last caller together" — that task is this
+  one, and the whole comment goes with the function)
 
-**Step 1: Observe the failure**
+### The single-page discriminability problem — read this before writing tests
+
+Every pre-existing fixture in `canvas-doc/src/repair.test.ts` has **exactly one
+page** (`page:p`). Read end to end and confirmed: `doc`, `doc2`, `doc3`, `doc4`
+and the dedupe block all seed only `page:p`.
+
+On a single-page doc the same-page target and `canonicalPageId` are **the same
+value**. A `parentId === 'page:p'` assertion on any of those fixtures therefore
+passes under the correct implementation *and* under Task 5's canonical-page
+implementation. **It proves nothing about rule 2.** Measured, not argued:
+applying mutant **M3** (rescue to `rootPageId`) leaves every single-page
+assertion in the file green.
+
+**So the fixture change is mandatory, not optional.** Step 3 adds `doc7`: two
+pages, with the bad shapes on the **non-canonical** one —
+`canonicalPageId = page:a`, correct answer `page:z`. That is the minimum that
+discriminates, and it is what actually kills M3 and M4.
+
+> **One thing `doc7` deliberately does NOT pin: the "rescue to `pages[0]`"
+> mutant.** Task 5A's canvas-model fixture separates `pages[0]` from
+> `canonicalPageId` with a three-page seed. That is **not reproducible at the
+> canvas-doc level**, and the reason is worth knowing: `dumpModel` →
+> `listPages()` → `LoroMap.keys()`, which converges **sorted**, not in creation
+> order. Measured — seeding `page:m`, `page:a`, `page:z` in that order and
+> asserting `dumpModel(doc).pages[0].id === 'page:m'` fails with:
+>
+> ```
+> AssertionError: precondition: pages[0] (page:m) is neither the canonical page nor the answer
+> 'page:a' !== 'page:m'
+> ```
+>
+> At the Loro level `pages[0]` **is** the canonical page, so the two are
+> inseparable there. Do not waste a third page trying. That mutant is killed in
+> `canvas-model/src/repair.test.ts` (Task 5A's M2), where the page array order
+> is the fixture's own.
+
+### Step 1: Observe the RED — and confirm it is the RIGHT red
 
 ```
-cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/repair.test.ts
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/repair.test.ts; echo "EXIT=$?"
 ```
 
-Expected: FAIL. Task 5 already made this red — most likely at the
-model-agreement assertion (`'model-agreement: Loro repair == applyRepairToModel'`,
-line 187) and/or the order-independence block. **Record the verbatim output.**
+**Measured at `7880853`.** It fails — `EXIT=1` — at **line 80**, the `doc3`
+block, assertion:
 
-**Step 2: Write the direct proportionality test**
+```
+AssertionError: Loro and model application agree (order-independent)
+```
 
-Add to `canvas-doc/src/repair.test.ts`, after the existing "Same-pass binding
-cascade" block:
+with the diff showing `+ actual shapes: []` against `- expected` holding
+`shape:s2`: Loro's cascade deleted `shape:s2`, the model's proportionate drop
+rescued it. That is the divergence this task closes.
+
+**Confirm THAT specific failure before touching anything.** Not "a failure" —
+that assertion, at that line, in the `doc3` block. If it fails somewhere else,
+STOP and report: the tree is not where this plan thinks it is.
+
+> **⚠️ A missing or renamed import throws at module load and manufactures a
+> FAKE red.** It exits non-zero and prints a stack, so at a glance it looks like
+> a passing RED — but no assertion ran, and you have proven nothing. **This has
+> been caught three times on this branch.** The output above is what a genuine
+> RED looks like: an `AssertionError`, a named assertion message, a value diff,
+> and a frame pointing at `repair.test.ts`. A `ModuleNotFound`,
+> `SyntaxError`, or `... is not a function` is **not** a RED — fix the import
+> and re-run before you believe anything.
+>
+> Corollary for step ordering: **do the source edits (steps 4–5) only after you
+> have banked the step-1 RED output verbatim.** Deleting `cascadeDropSet` first
+> would break the import and destroy your ability to observe it.
+
+Also note the runner is **fail-fast** (`process.exit(1)` on the first failure).
+**Read the exit code, never the output tail.** In a compound command `$?` is the
+*last* command's status, not the suite's — hence the explicit `; echo "EXIT=$?"`
+on every command in this section.
+
+### Step 2: Rewrite the `doc4` cascade block — it pins the OLD behaviour
+
+`doc4` currently asserts the cascade. Replace its header comment. Find:
 
 ```ts
-// PROPORTIONALITY through Loro (2026-07-19), the exact reported defect: one
-// bad prop on a frame must not execute the frame's contents, and must not wipe
-// their text containers.
+// Cascade fixpoint (3 levels) on the Loro doc: dropping the invalid root
+// removes child AND grandchild (the real-tree subtree), and the binding
+// touching the grandchild is swept too. ONE call. Shapes are PUT descendants-
+// first (loadModel's bulk-load pattern: fall to root, then a reparent pass
+// fixes placement), so listShapes() — node-creation order — yields the
+// grandchild before its ancestors and a single in-order pass over it cannot
+// reach the grandchild: only a true fixpoint sweeps binding:g4.
+```
+
+Replace with:
+
+```ts
+// PROPORTIONATE drop, 3 levels deep, on the Loro doc: dropping the invalid
+// root removes ONLY that root. Its direct child is rescued onto the dropped
+// root's page, the grandchild rides along under the rescued child (untouched),
+// and the binding touching the grandchild SURVIVES — the grandchild is still
+// there, so the binding is not dangling. Shapes are PUT descendants-first
+// (loadModel's bulk-load pattern: fall to root, then a reparent pass fixes
+// placement), so listShapes() — node-creation order — yields the grandchild
+// before its ancestors; the assertions below sort, so they do not depend on it.
+```
+
+Then replace the assertions. Find (everything from the `order.indexOf` message
+through the last `checkInvariants` line):
+
+```ts
+    `precondition: dump lists the grandchild before its parent (fixpoint required); got ${order.join(', ')}`,
+  )
+}
+
+const applied4 = doc4.repair()
+doc4.commit()
+assert.deepEqual(applied4, [{ op: 'dropShape', id: 'shape:bad4' }], 'plan names only the invalid root — descendants cascade')
+assert.deepEqual(doc4.listShapes().map((s) => s.id), ['shape:ar4'], 'bad4, child4 AND grandchild4 all gone')
+assert.deepEqual(doc4.listBindings(), [], 'binding touching the cascaded grandchild swept in the same pass')
+assert.deepEqual(checkInvariants(dumpModel(doc4)), [], 'invariant-clean after ONE repair()')
+```
+
+Replace with:
+
+```ts
+    `precondition: dump lists the grandchild before its parent (adversarial order); got ${order.join(', ')}`,
+  )
+}
+
+const before4 = dumpModel(doc4)
+const applied4 = doc4.repair()
+doc4.commit()
+assert.deepEqual(applied4, [{ op: 'dropShape', id: 'shape:bad4' }], 'plan names only the invalid root')
+assert.deepEqual(
+  doc4.listShapes().map((s) => s.id).sort(),
+  ['shape:ar4', 'shape:child4', 'shape:grandchild4'],
+  'ONLY bad4 is gone — child4 and grandchild4 survive',
+)
+assert.equal(doc4.getShape('shape:child4')!.parentId, 'page:p', 'the direct child is rescued to its own page')
+assert.equal(doc4.getShape('shape:grandchild4')!.parentId, 'shape:child4', 'the grandchild is untouched, still under the rescued child')
+assert.deepEqual(doc4.listBindings().map((b) => b.id), ['binding:g4'], 'the binding survives — its endpoint was rescued, not dropped')
+assert.deepEqual(checkInvariants(dumpModel(doc4)), [], 'invariant-clean after ONE repair()')
+assert.deepEqual(normalize(dumpModel(doc4)), normalize(applyRepairToModel(before4, repairPlan(before4))), 'model-agreement on the 3-level rescue')
+```
+
+Note `'the direct child is rescued to its own page'` — the value `page:p` is
+unchanged from the canonical-page era (single-page fixture), but the **wording**
+must state the same-page rule, not the canonical-page one.
+
+Also reword `doc3`'s header comment and precondition message, which still say
+"cascade". Find:
+
+```ts
+// Order-independence (adversarial): a plan holding BOTH dropShape(s1) and
+// reparentToRoot(s2) where s2 is inside s1's cascade. Built via putShape's
+```
+
+…through…
+
+```ts
+// order the ops are applied in — reparent must never resurrect a shape the
+// drop cascade claims.
+```
+
+Replace the whole comment with:
+
+```ts
+// Order-independence (adversarial): a plan holding BOTH dropShape(s1) and
+// reparentToRoot(s2), where s2 is ALSO a rescue candidate (its parentId names
+// the dropped s1). Built via putShape's bulk-load tolerance: s1's parentId
+// names s2 before s2 exists (s1 falls to real-tree root, data.parentId kept),
+// then s2 lands under s1 — so the DUMPED model holds the 2-cycle s1↔s2 the
+// real Loro tree cannot. s1 also fails validProps, so dedup gives
+// dropShape(s1) while s2 keeps reparentToRoot (noCycles). This is the one
+// fixture where the two rehoming rules compete for the same shape, and both
+// engines must resolve it the same way: reparentToRoot wins, and its target is
+// the canonical page. Loro-after-repair must equal applyRepairToModel no
+// matter what order the ops are applied in.
+```
+
+and change that block's precondition message from
+`'precondition: the plan pairs a drop with a reparent of a shape inside its cascade'`
+to
+`'precondition: the plan pairs a drop with a reparent of the dropped shape’s own child'`.
+
+### Step 3: Add the two new blocks
+
+Both go immediately **above** the final `console.log('ok: repair (doc)')`, so
+`normalize` / `base` / `dumpModel` are all already declared.
+
+First extend the import at the top of `canvas-doc/src/repair.test.ts` — the file
+now needs `canonicalPageId`. Replace:
+
+```ts
+import { applyRepairToModel, checkInvariants, repairPlan, type CanvasDocument } from '@ensembleworks/canvas-model'
+```
+
+with:
+
+```ts
+import { applyRepairToModel, canonicalPageId, checkInvariants, repairPlan, type CanvasDocument } from '@ensembleworks/canvas-model'
+```
+
+Then insert:
+
+```ts
+// ---- (6) The reported defect, straight through Loro: one bad prop on a frame
+// must not execute the frame's contents, and must not wipe their TEXT
+// containers. Text is the part only the Loro side can lose — deleteNode
+// cascades over the real tree and clears every descendant's text container, so
+// this asserts the rescue happens BEFORE the delete, not merely that the shape
+// row survives. ----
 const doc6 = LoroCanvasDoc.create({ peerId: 6n })
 doc6.putPage({ id: 'page:p', name: 'P' })
-doc6.putShapeUnchecked({ id: 'shape:f6', kind: 'frame', parentId: 'page:p', props: { w: '100' }, ...base() } as any)
+doc6.putShapeUnchecked({ id: 'shape:f6', kind: 'frame', parentId: 'page:p', props: {}, ...base(), opacity: 'no' } as any)
 doc6.putShape({ id: 'shape:k6', kind: 'note', parentId: 'shape:f6', props: {}, ...base() } as any)
 doc6.putShape({ id: 'shape:gk6', kind: 'note', parentId: 'shape:k6', props: {}, ...base() } as any)
 doc6.setText('shape:k6', 'precious content')
+doc6.setText('shape:gk6', 'also precious')
 doc6.commit()
 
+const before6 = dumpModel(doc6)
 const plan6 = doc6.repair()
 doc6.commit()
 assert.deepEqual(plan6, [{ op: 'dropShape', id: 'shape:f6' }])
@@ -5073,137 +5287,415 @@ assert.deepEqual(
   ['shape:gk6', 'shape:k6'],
   'the frame is gone; its contents survive',
 )
-assert.equal(doc6.getShape('shape:k6')!.parentId, 'page:p', 'the direct child is rescued to the canonical page')
 assert.equal(doc6.getText('shape:k6'), 'precious content', 'the rescued child keeps its text container')
+assert.equal(doc6.getText('shape:gk6'), 'also precious', 'the rescued grandchild keeps its text container')
 assert.deepEqual(checkInvariants(dumpModel(doc6)), [], 'ONE repair() call converges')
 assert.deepEqual(doc6.repair(), [], 'still idempotent')
-// The drift guard that matters: Loro's application equals the pure reference.
-const before6 = dumpModel(doc6)
-assert.deepEqual(normalize(before6), normalize(applyRepairToModel(before6, repairPlan(before6))))
+assert.deepEqual(normalize(dumpModel(doc6)), normalize(applyRepairToModel(before6, repairPlan(before6))), 'model-agreement on the proportionality case')
+
+// ---- (7) SAME-PAGE rescue (owner ruling 11) on a MULTI-PAGE doc. Every other
+// fixture in this file has exactly one page (page:p), where the same-page
+// target and canonicalPageId are the same value and the rule is therefore
+// UNTESTABLE — a same-page assertion on those fixtures passes vacuously. Two
+// pages, with the bad shapes on the NON-canonical one, is the minimum that
+// discriminates: canonicalPageId = page:a, the correct answer = page:z.
+//
+// Note what this fixture deliberately does NOT try to pin: the "rescue to
+// pages[0]" mutant. dumpModel's page order comes from LoroMap.keys(), which
+// converges sorted, so at the canvas-doc level pages[0] IS the canonical page
+// and the two are inseparable. That mutant is killed in canvas-model's
+// repair.test.ts, where the page array order is the fixture's own.
+//
+// The chained drop (shape:mid7's own parent is dropped too) additionally pins
+// that the walk passes THROUGH a dropped ancestor to the page rather than
+// stopping on it — the case where a naive "use the dropped parent's parentId"
+// stamps a tombstoned id onto the survivor.
+const doc7 = LoroCanvasDoc.create({ peerId: 7n })
+doc7.putPage({ id: 'page:a', name: 'A' })
+doc7.putPage({ id: 'page:z', name: 'Z' })
+doc7.putShapeUnchecked({ id: 'shape:bad7', kind: 'frame', parentId: 'page:z', props: {}, ...base(), opacity: 'no' } as any)
+doc7.putShapeUnchecked({ id: 'shape:mid7', kind: 'frame', parentId: 'shape:bad7', props: {}, ...base(), opacity: 'no' } as any)
+doc7.putShape({ id: 'shape:kid7', kind: 'note', parentId: 'shape:mid7', props: {}, ...base() } as any)
+doc7.commit()
+{
+  const before7 = dumpModel(doc7)
+  assert.equal(canonicalPageId(before7.pages), 'page:a', 'precondition: the canonical page is NOT the page the bad frames live on')
+  const plan7 = repairPlan(before7)
+  assert.deepEqual(plan7, [
+    { op: 'dropShape', id: 'shape:bad7' },
+    { op: 'dropShape', id: 'shape:mid7' },
+  ], 'precondition: BOTH frames are dropped, so the rescue walk must pass through a dropped ancestor')
+  const expected7 = applyRepairToModel(before7, plan7)
+  assert.deepEqual(doc7.repair(), plan7)
+  doc7.commit()
+  assert.deepEqual(doc7.listShapes().map((s) => s.id), ['shape:kid7'], 'both bad frames gone, the innocent note survives')
+  assert.equal(
+    doc7.getShape('shape:kid7')!.parentId,
+    'page:z',
+    'the rescued child stays on its own page (page:z) — not the canonical page (page:a)',
+  )
+  assert.deepEqual(checkInvariants(dumpModel(doc7)), [], 'invariant-clean after ONE repair()')
+  assert.deepEqual(normalize(dumpModel(doc7)), normalize(expected7), 'model-agreement: Loro and model pick the SAME page')
+  assert.deepEqual(doc7.repair(), [], 'idempotent')
+}
 ```
 
-If `normalize` / `base` / `dumpModel` are declared later in the file than your
-insertion point, move your block below their declarations rather than
-duplicating them.
+### Step 4: Implement in `canvas-doc/src/loro-canvas-doc.ts`
 
-**Step 3: Update the existing cascade assertions in the same file**
-
-The block seeded at lines 89-92 (`shape:ar4` / `shape:grandchild4` /
-`shape:child4` / `shape:bad4`) pins the old cascade. Update its expectations the
-same way Task 5 updated `canvas-model/src/repair.test.ts`: `child4` and
-`grandchild4` now survive, `child4`'s `parentId` becomes `page:p`. Leave the
-model-agreement assertion (line 187) and the order-independence structure
-**untouched** — they must keep passing on their own merits.
-
-**Step 4: Implement in `canvas-doc/src/loro-canvas-doc.ts`**
-
-(a) Drop `cascadeDropSet` from the import on line 5:
+**(4a) The import line.** The **current** line 5 is, verbatim:
 
 ```ts
-import { canonicalPageId, repairPlan, stableStringify, validateShape, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
+import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, validateShape, SHAPE_KINDS, type Binding, type Page, type RepairOp, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
 ```
 
-(b) In `repair()`, replace the `dropAll` computation and its comment block
-(lines ~344-357) with:
+Remove `cascadeDropSet`, add `pageAncestorId`, **keep everything else** —
+`SHAPE_KINDS` and `type ShapeKind` are used by the `kind` coercion Task 1B
+added, and dropping them breaks `bun run typecheck`:
 
 ```ts
-    // The ids the plan drops. NOT a descendant closure any more: a dropShape
-    // removes only the named shape and rehomes its children to the canonical
-    // page (see canvas-model's applyRepairToModel — the pure reference this
-    // must agree with byte-for-byte). Two uses:
-    // 1. Skip-set: a reparentToRoot op whose id is also dropped is SKIPPED, so
-    //    plan-application order can never matter.
+import { canonicalPageId, pageAncestorId, repairPlan, stableStringify, validateShape, SHAPE_KINDS, type Binding, type Page, type RepairOp, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
+```
+
+**(4b) The `dropAll` computation.** Inside `repair()`, find this comment block
+and the line that follows it (currently ~507–519, but match on the text):
+
+```ts
+    // dropAll = the plan's dropShape ids plus their transitive descendants in
+    // the MODEL (shared cascadeDropSet — same fixpoint applyRepairToModel
+    // runs, so the two applications cannot drift). It serves two purposes:
+    // 1. Skip-set: a reparentToRoot op whose id is in dropAll is SKIPPED, so
+    //    plan-application order can never matter — without the skip, applying
+    //    reparent(descendant) before dropShape(ancestor) would move the
+    //    descendant out of the doomed subtree and silently resurrect it,
+    //    diverging from applyRepairToModel (which always drops it).
+    // 2. Binding sweep: a binding whose endpoint is in dropAll becomes
+    //    dangling MID-pass (it wasn't when the plan was computed, so the plan
+    //    has no deleteBinding op for it); delete it here so a SINGLE repair()
+    //    call converges — not only the second.
+    const dropAll = cascadeDropSet(model.shapes, new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id)))
+```
+
+Replace with:
+
+```ts
+    // The ids the plan drops — exactly those, NOT a descendant closure any
+    // more. A dropShape removes only the shape it names and rescues that
+    // shape's children (see applyRepairToModel, the pure reference this must
+    // agree with byte-for-byte after normalization). Two uses:
+    // 1. Skip-set: a reparentToRoot op whose id is ALSO dropped is skipped.
+    //    Unreachable from repairPlan — its per-id dedup keeps exactly one op
+    //    per id and dropShape outranks reparentToRoot — so this is dead-code
+    //    safety for hand-built plans, like the 'page:orphans' fallback below.
+    //    Under the old CASCADE set it was genuinely reachable (a descendant
+    //    could carry its own reparent op); proportionate drop removed that
+    //    route. Verified unkillable by mutation: deleting the guard leaves
+    //    every suite green.
     // 2. Binding sweep: a binding whose endpoint is dropped becomes dangling
     //    MID-pass (it wasn't when the plan was computed, so the plan has no
     //    deleteBinding op for it); delete it here so a SINGLE repair() call
-    //    converges — not only the second.
+    //    converges — not only the second. A binding to a merely RESCUED shape
+    //    survives, because that shape still exists.
     const dropped = new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id))
-    // repairPlan emits no dropShape or reparentToRoot for a zero-page doc, so
-    // this is defined whenever either branch below runs; the fallback is
-    // dead-code safety only.
+    // reparentToRoot's target, and the FALLBACK target for a rescued child
+    // whose page ancestor cannot be resolved. repairPlan emits neither
+    // dropShape nor reparentToRoot for a zero-page doc, so 'page:orphans' is
+    // unreachable from a repairPlan-produced plan — dead-code safety only.
     const rootPageId = canonicalPageId(model.pages) ?? 'page:orphans'
 ```
 
-(c) Replace the `dropShape` branch (line ~367) with:
+**(4c) The `dropShape` branch.** It is currently a **single line** (~529):
+
+```ts
+      else if (o.op === 'dropShape') for (const n of this.nodesByShapeId(o.id)) this.deleteNode(n) // cascade + text cleanup
+```
+
+Replace with:
 
 ```ts
       else if (o.op === 'dropShape') {
+        // The page every child of THIS dropped shape is rescued onto: the
+        // page ancestor of the dropped parent (owner ruling 11 — a rescued
+        // child may shift in position but must not change page), falling back
+        // to the canonical page when that chain dead-ends or cycles. Computed
+        // ONCE per dropped shape: o.id is the parent every child below shares,
+        // so every child of this node has the same target.
+        const rescueTo = pageAncestorId(model, o.id) ?? rootPageId
         for (const n of this.nodesByShapeId(o.id)) {
           // RESCUE FIRST, DELETE SECOND. deleteNode cascades over the REAL
-          // subtree and clears every descendant's text container, so every
-          // physical child must be out of that subtree before it runs. Each
-          // child is moved to the Loro root and stamped with the canonical
-          // page id — exactly what applyRepairToModel does to any shape whose
-          // parentId is a dropped id.
-          // Children that are THEMSELVES dropped are rescued here too and then
-          // removed by their own turn in this loop; that makes the result
-          // independent of the order the plan's dropShape ops are visited in.
+          // tree and clears every descendant's text container, so every
+          // physical child must be moved out of the doomed subtree BEFORE it
+          // runs. This is the one place the Loro side is harder than the
+          // model side, where dropping is a filter over a flat array.
+          // Children that are THEMSELVES dropped are rescued here too and
+          // then removed by their own turn in this loop; that ordering is
+          // what makes the result independent of the order the plan's
+          // dropShape ops are visited in.
+          // The [...] copy is defensive only — probed, n.children() hands back
+          // a fresh array of freshly-constructed wrappers, so moving during
+          // iteration does not disturb it. Kept because that is an
+          // undocumented Loro internal, not a contract.
           for (const c of [...(n.children() ?? [])]) {
-            this.tree.move(c.id, undefined)
-            c.data.set('parentId', rootPageId)
+            this.tree.move(c.id, undefined) // a page-parented shape lives at the Loro tree root
+            c.data.set('parentId', rescueTo)
           }
           this.deleteNode(n)
         }
       }
 ```
 
-(d) In the `dedupeShape` branch, the `dropAll.has(o.id)` guard becomes
-`dropped.has(o.id)`. Replace its comment with:
+> **Both lines inside that inner loop are load-bearing, and each has its own
+> mutant.** Dropping the `tree.move` leaves the child physically inside the
+> doomed subtree (M9 — the whole rescue silently fails). Dropping the
+> `data.set` leaves it pointing at a tombstoned parent (M10 — a fresh
+> `noOrphans` violation out of a pass that must converge in one call).
+
+**(4d) The `dedupeShape` branch.** Find:
+
+```ts
+        if (dropAll.has(o.id)) {
+          // The id is claimed by a drop CASCADE (an ancestor of one of its
+          // copies is being dropped): cascadeDropSet is keyed by id, so the
+          // model drops EVERY entry of this id — mirror that here by
+          // deleting all physical copies (deleteNode's text cleanup is
+          // correct in this branch: the id is model-dead) instead of
+          // collapsing them to a winner the model would not keep.
+```
+
+Replace with:
 
 ```ts
         if (dropped.has(o.id)) {
-          // Unreachable from repairPlan (dropShape SUBSUMES dedupeShape for the
-          // same id, so the two never coexist in a plan) and, since drops no
-          // longer cascade, no longer reachable via a cascade either. Kept as
-          // dead-code safety for hand-built plans: if the id is model-dead,
-          // remove every physical copy rather than electing a winner the model
-          // would not keep.
-          for (const n of this.nodesByShapeId(o.id)) this.deleteNode(n)
-        } else {
+          // Unreachable from repairPlan — dropShape SUBSUMES dedupeShape for
+          // the same id, so the two never coexist in a plan, and now that
+          // drops no longer cascade there is no cascade route in either.
+          // Kept as dead-code safety for hand-built plans: if the id is
+          // model-dead, remove every physical copy (deleteNode's text cleanup
+          // is correct here) rather than electing a winner the model would
+          // not keep.
 ```
 
-(e) In the `reparentToRoot` branch, change `dropAll.has(o.id)` to
-`dropped.has(o.id)`, and replace its two local lines computing `pageId` with a
-use of `rootPageId`:
+**(4e) The `reparentToRoot` branch.** Find:
 
 ```ts
-      else if (o.op === 'reparentToRoot') {
-        if (dropped.has(o.id)) continue // this id is being dropped outright — see above
+        if (dropAll.has(o.id)) continue // claimed by a drop cascade — see above
+        // 'page:orphans' is unreachable: repairPlan emits no reparentToRoot
+        // ops for a zero-page doc (dead-code safety only).
+        const pageId = canonicalPageId(model.pages) ?? 'page:orphans'
+        for (const n of this.nodesByShapeId(o.id)) {
+          this.tree.move(n.id, undefined) // page id ⇒ Loro root
+          n.data.set('parentId', pageId)
+        }
+```
+
+Replace with:
+
+```ts
+        if (dropped.has(o.id)) continue // unreachable from repairPlan — see the skip-set note above
+        // The CANONICAL page, deliberately not the same-page rule: an orphan
+        // or a cycle member has no page to stay on, which is the whole point
+        // of this op. Do not over-apply pageAncestorId here. (No test can
+        // catch that over-application through repair(): an orphan's chain
+        // dead-ends and a cycle member's chain cycles, so pageAncestorId
+        // returns undefined and falls back to this same value. canvas-model's
+        // repair.test.ts pins it with a HAND-BUILT plan, which repair() —
+        // which computes its own plan — cannot construct.)
         for (const n of this.nodesByShapeId(o.id)) {
           this.tree.move(n.id, undefined) // page id ⇒ Loro root
           n.data.set('parentId', rootPageId)
         }
-      }
 ```
 
-(f) In the binding sweep, change both `dropAll.has(...)` to `dropped.has(...)`.
+**(4f) The binding sweep.** Find:
 
-**Step 5: Run the tests**
-
-```
-cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/repair.test.ts
-cd /home/stag/src/projects/ensembleworks/canvas-doc && ~/.bun/bin/bun test.ts
+```ts
+      if (dropAll.has(b.fromId) || dropAll.has(b.toId)) this.deleteBinding(b.id)
 ```
 
-Expected: all pass, including the model-agreement assertion.
+Replace with:
 
-**Step 6: Run the convergence rig — the cross-peer determinism proof**
-
-```
-cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-sync/src/convergence.test.ts
+```ts
+      if (dropped.has(b.fromId) || dropped.has(b.toId)) this.deleteBinding(b.id)
 ```
 
-Expected: pass. This is the assertion that would catch a repair that is no
-longer a pure function of converged state. **If it fails, STOP and report — do
-not adjust the rig.**
+After 4a–4f, `grep -c dropAll canvas-doc/src/loro-canvas-doc.ts` must print `0`.
 
-**Step 7: Commit**
+### Step 5: Delete `cascadeDropSet` (discharging ruling 2)
+
+In `canvas-model/src/repair.ts`, delete the docblock **and** the function — the
+whole run from `// Transitive closure of shapes to drop:` down to the closing
+`}` immediately before `// Reference application on the pure model`. The
+docblock goes with it; it is itself stale, claiming "the next task closes [this]
+by deleting this function and its last caller together" — this *is* that task.
+
+Do not attempt this before step 4 lands: `canvas-doc` still imports the symbol
+until 4a, and a missing export fails at ESM link time — a fake red (see step 1).
+
+Verify:
+
+```
+cd /home/stag/src/projects/ensembleworks && grep -rn "cascadeDropSet" --include="*.ts" . | grep -v node_modules; echo "EXIT=$?"
+```
+
+Expected: **no output**, `EXIT=1` (grep found nothing). `canvas-model/src/index.ts`
+re-exports the whole module via `export * from './repair.js'`, so no export list
+needs editing.
+
+### Mutants this task's test must kill
+
+Every row below was **produced and executed** against the step-2/3 test with the
+step-4 implementation in place. The "killed by" column is the assertion that
+actually fired, verbatim from the run, with the `repair.test.ts` line it fired
+at. `node:assert` aborts at the first failure, so each mutant is named by the
+first assertion it trips.
+
+| # | Plausible wrong implementation | Killed by |
+|---|---|---|
+| M1 | Delete without rescuing — **the behaviour at `7880853`**, i.e. this task's own RED | line 82: `'Loro and model application agree (order-independent)'` |
+| M2 | Rescue AFTER `deleteNode` instead of before | line 238: `'the rescued child keeps its text container'` |
+| M3 | Stamp `rootPageId` on rescued children — **Task 5's canonical-page rule, the bug 5A removed** | line 280: `'the rescued child stays on its own page (page:z) — not the canonical page (page:a)'` |
+| M4 | Stamp the dropped shape's own `parentId` (walk up exactly one level) instead of to a page | line 280: the same assertion — `doc7`'s chained drop makes the one-level answer a tombstoned id |
+| M5 | Apply the same-page rule to `reparentToRoot` as well | **NOT KILLABLE at this level — see below.** |
+| M6 | Remove the `dropped.has(o.id) continue` guard in `reparentToRoot` | **NOT KILLABLE — the guard is unreachable. See below.** |
+| M7 | Binding sweep over a descendant closure again (inline fixpoint) instead of the named drop set | line 122: `'the binding survives — its endpoint was rescued, not dropped'` |
+| M8 | Iterate `n.children()` without the `[...]` copy | **NOT KILLABLE — the copy is defensive only. See below.** |
+| M9 | Stamp `parentId` but omit `this.tree.move(c.id, undefined)` | line 82: `'Loro and model application agree (order-independent)'` |
+| M10 | Move the node but omit `c.data.set('parentId', rescueTo)` | line 120: `'the direct child is rescued to its own page'` |
+
+**M2 is the most instructive row, and it justifies the text assertions.** Under
+M2 the shape *rows* all survive — `doc4`'s membership assertion, its parentId
+assertions, and even its `normalize(...)` model-agreement assertion all pass,
+because `dumpModel` does not carry text. `deleteNode` clears the subtree's text
+containers *before* the cascade delete, so rescuing afterwards recovers the
+structure and loses the content. **Without `doc6`'s two `getText` assertions,
+rescue-before-delete — rule 1, the hardest rule on the Loro side — would be
+completely unpinned.** Do not trim them.
+
+**Three mutants are honestly unkillable, and each is recorded rather than
+faked:**
+
+- **M5** (same-page rule over-applied to `reparentToRoot`). `repair()` computes
+  its own plan; no `repairPlan` output can separate the two targets, because a
+  `reparentToRoot` shape is either an orphan (chain dead-ends) or a cycle member
+  (chain cycles) — `pageAncestorId` returns `undefined` in both cases and falls
+  back to `rootPageId`, the same value. Killing this requires a **hand-built
+  plan**, which only `applyRepairToModel` accepts. It is killed at the
+  canvas-model level by Task 5A's M7. Do not invent a canvas-doc assertion for
+  it; the comment in step 4(e) records the reasoning instead.
+- **M6** (drop the reparent skip guard). Unreachable by construction:
+  `repairPlan`'s per-id dedup keeps exactly one op per id and `dropShape`
+  outranks `reparentToRoot`, so no plan holds both for one id. It *was* reachable
+  under the old cascade set. Kept as dead-code safety, same status as the
+  `'page:orphans'` fallback.
+- **M8** (no `[...]` copy). Probed: `n.children()` returns a fresh array of
+  freshly-constructed wrappers, so moving during iteration does not disturb it.
+  The copy is retained because that is an undocumented Loro internal, not a
+  contract — but no assertion can pin it.
+
+No assertion is added that kills nothing.
+
+### Measured blast radius
+
+All four commands run at `7880853` with steps 2–5 applied, then reverted. These
+are observations, not predictions:
+
+| Command | Result |
+|---|---|
+| each `canvas-doc/src/*.test.ts` run directly | **all 14 pass**, `src/repair.test.ts` included — the Task-5 RED is closed |
+| `cd canvas-model && ~/.bun/bin/bun test.ts` | **all 14 suites pass** (the `cascadeDropSet` deletion breaks nothing) |
+| `~/.bun/bin/bun canvas-sync/src/convergence.test.ts` | **passes** — `ok: convergence — 50 seeds × N=3 peers × ≤40 ops/peer, 854 guarded cycle-op(s) skipped` |
+| `bun run typecheck` | **exit 0, 13 workspaces** |
+
+**Assertions that change value when this task lands — the complete list**, all
+in `canvas-doc/src/repair.test.ts`, all in the `doc4` block, all rewritten by
+step 2:
+
+- `'plan names only the invalid root — descendants cascade'` — message only, the
+  plan is unchanged.
+- `'bad4, child4 AND grandchild4 all gone'` — was `['shape:ar4']`, now
+  `['shape:ar4', 'shape:child4', 'shape:grandchild4']`.
+- `'binding touching the cascaded grandchild swept in the same pass'` — was
+  `[]`, now `['binding:g4']`. The endpoint is rescued, not dropped, so the
+  binding is not dangling and must survive.
+
+Nothing outside `canvas-doc/src/repair.test.ts` changes value. `doc`, `doc2`,
+`doc3` and the dedupe block are untouched by the behaviour change (`doc3`'s
+model-agreement assertion goes from failing to passing, which is the point).
+
+### Step 6: Run the tests
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/repair.test.ts; echo "EXIT=$?"
+```
+
+Expected: `ok: repair (doc)`, `EXIT=0`.
+
+Then the whole package — **run the files directly, not through
+`canvas-doc/test.ts`**, which exits on the first failing suite and silently
+leaves later ones unrun:
+
+```
+cd /home/stag/src/projects/ensembleworks && for f in canvas-doc/src/*.test.ts; do printf '%-52s ' "$f"; ~/.bun/bin/bun "$f" >/tmp/o 2>&1 && tail -1 /tmp/o || echo FAIL; done
+```
+
+Expected: 14 lines, every one an `ok:`.
+
+```
+cd /home/stag/src/projects/ensembleworks/canvas-model && ~/.bun/bin/bun test.ts; echo "EXIT=$?"
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun run typecheck >/dev/null 2>&1; echo "EXIT=$?"
+```
+
+Expected: `all 14 suites passed` / `EXIT=0`, and `EXIT=0`.
+
+### Step 7: Run the convergence rig — the cross-peer determinism proof
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-sync/src/convergence.test.ts; echo "EXIT=$?"
+```
+
+Expected: `ok: convergence — 50 seeds × N=3 peers × ≤40 ops/peer …`, `EXIT=0`.
+This is the assertion that would catch a repair that is no longer a pure
+function of converged state. **If it fails, STOP and report — do not adjust the
+rig.**
+
+### Step 8: Clean-room check
+
+`canvas-model` and `canvas-doc` are clean-room packages. The banned literals are
+banned **inside comments too, and as substrings of longer words** — "unexpressible"
+contains `express`, and that has been committed on this branch once already.
+This refresh caught itself doing exactly that: a step-4(e) comment originally
+read "cannot express", which the grep flagged; it now reads "cannot construct".
+
+```
+cd /home/stag/src/projects/ensembleworks && grep -nE "from 'ws'|express|@tldraw/|\.\./server|Date\.now\(|Math\.random\(" canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/repair.test.ts canvas-model/src/repair.ts; echo "EXIT=$?"
+```
+
+Expected: no output, `EXIT=1`.
+
+### Step 9: Commit
 
 ```
 cd /home/stag/src/projects/ensembleworks
-git add canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/repair.test.ts
-git commit -m "fix(canvas-doc): repair() rescues a dropped shape's children instead of cascading"
+git add canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/repair.test.ts canvas-model/src/repair.ts
+git commit -m "fix(canvas-doc): repair() rescues a dropped shape's children onto their own page"
 ```
+
+Paste the verbatim step-1 RED output into the commit body.
+
+### How each claim in this section was checked
+
+| Claim | How |
+|---|---|
+| the RED is line 80, `doc3`, `'Loro and model application agree (order-independent)'` | ran `~/.bun/bin/bun canvas-doc/src/repair.test.ts` at `7880853`, read the `AssertionError` and the frame |
+| the import line retains `SHAPE_KINDS` / `type ShapeKind` | read line 5 of `canvas-doc/src/loro-canvas-doc.ts`; the previous draft's replacement omitted both |
+| the `dropAll` anchors (~507/~529, not ~344/~367) | `grep -n` for the two constructs; the old citations were ~160 lines off, so every anchor here is a quote |
+| every mutant M1–M10 is killed (or is not) by the named assertion | applied each to `loro-canvas-doc.ts` in turn, ran the suite, recorded the first failure and its line verbatim; M5/M6/M8 exited 0 and are recorded as unkillable |
+| `canvas-doc` fixtures are all single-page | read `canvas-doc/src/repair.test.ts` end to end — only `page:p` before `doc7` |
+| the same-page rule is vacuous on single-page fixtures | applied M3; every pre-existing assertion stayed green |
+| `pages[0]` is inseparable from the canonical page at this level | seeded `page:m`/`page:a`/`page:z` in that order; `dumpModel(doc).pages[0].id` came back `'page:a'`. Read `listPages()` — it is `LoroMap.keys()` |
+| M2 passes every structural assertion and is caught only by text | read the M2 failure frame: `repair.test.ts:238`, the `getText` assertion; read `deleteNode`, which clears the subtree's text before the cascade delete |
+| `LoroCanvasDoc.repair()` is `cascadeDropSet`'s last caller | `grep -rn cascadeDropSet --include="*.ts"` — only `canvas-model/src/repair.ts` (the definition) and `canvas-doc/src/loro-canvas-doc.ts` |
+| deleting `cascadeDropSet` breaks nothing | deleted it, ran `bun run typecheck` (exit 0, 13 workspaces) and both package suites |
+| the blast-radius table | ran all four commands, then `git checkout --` to restore |
 
 ---
 
