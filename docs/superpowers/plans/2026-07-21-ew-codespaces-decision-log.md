@@ -141,6 +141,41 @@ One dated entry per decision; newest last.
   look). Also: `--repo`/`--branch` on `terminal connect` is written
   add-if-absent in both SP2 and SP3 plans — whichever executes first adds
   it. Plan file: `docs/superpowers/plans/2026-07-21-ew-codespace-up.md`.
+- **2026-07-21 — SP4 design decisions:**
+  1. *Desired-state lives in the SP2 store*: `codespaces.json` entries gain
+     `desired: 'up' | 'stopped'` (set by `up`/`stop`); no second store.
+  2. *Reconciler = `ew codespace reconcile`*: idempotent verb that walks the
+     store and, for every `desired: 'up'` entry, runs the SP2 engine
+     (`devcontainer up` is idempotent → stage → exec → supervise); all
+     desired-up codespaces supervised in one foreground process.
+  3. *Boot packaging = systemd user service, Linux-only v1* (design doc open
+     decision 4 resolved): `ew codespace boot-install` writes
+     `~/.config/systemd/user/ensembleworks-codespaces.service` running
+     `reconcile`, enables it. macOS login item deferred.
+  4. *Layout restore scope (design §5.6, scoped)*: on SIGTERM the connector
+     snapshots `{sessions: [{id, cwd, scrollbackTail}]}` to
+     `$HOME/.ensembleworks-layout.json` INSIDE the container (container disk
+     = state B: survives stop/start, dies on rebuild — honest per §5.3). On
+     start it pre-seeds the session manager: known sessions respawn in their
+     last cwd and late attaches replay the persisted scrollback tail as
+     history. cwd read from `/proc/<child>/cwd` at snapshot time.
+- **2026-07-21 — SP5 design decisions:**
+  1. *Native Access CLI-login implementation, no cloudflared dependency*
+     (auth doc open decision 2 resolved: native immediately). The plan opens
+     with a discovery task pinning the real Access endpoint shapes (from
+     cloudflared's open source + docs) before implementation tasks.
+  2. *All unit tests run against a FAKE Access server* (loopback listener +
+     fake 302/token endpoints); the real-deployment e2e is a documented
+     manual step for the owner (needs a live browser + Access org).
+  3. *Token refresh channel = re-exec with fresh env* (auth doc open
+     decision 1 resolved): SP2's supervisor already restarts the connector;
+     every (re)spawn gets a freshly minted app token. No socket, no push.
+  4. *Storage stays plaintext-0600 in hosts.toml* (gh posture; auth doc open
+     decision 3 resolved) — new method `access-browser` alongside the
+     existing `service-token`/`none`.
+  5. *Planner reuse*: SP4's plan is authored by the SP2 planner
+     (continuation — it owns the store/engine context); SP5 gets a fresh
+     auth-focused planner.
 - **2026-07-21 — Unattributed commit observed on the branch:** `e5bb4ef
   docs(netguard): egress-proxy spec` appeared mid-run — not produced by this
   orchestration (workflow commit list is complete without it; planners are
