@@ -81,8 +81,11 @@ disciplines the whole design:
   GitHub Codespace" is now a claim we can be *wrong* about.
 - **Conformance smoke test.** CI boots a handful of real public
   `devcontainer.json`s (a plain Node one, a compiled-language one, a
-  `features`-heavy one) on an EW host and asserts they come up. This is the
-  mechanical backstop for the promise.
+  `features`-heavy one) on an EW host and asserts not just that the container
+  comes up but that **a terminal appears on a canvas** — the interesting
+  failure surface is repo → container → *connector* (a `remoteUser` that can't
+  read `/ew/`, a conflicting mount, a read-only root fs), not repo → container
+  alone. This is the mechanical backstop for the promise.
 - **The EW-specific piece stays additive** (§2), so the same repo runs on
   GitHub with no EW awareness and on EW with no GitHub awareness. Canvas
   attachment is a property of *where you launched it*, not of the repo.
@@ -138,9 +141,12 @@ one added line is portable by construction.
 Decisions baked in here:
 
 - **Stable `gatewayId`** persisted host-side (an id file in `~/.ew/`, keyed by
-  repo path), **not** in the repo, so reboot/reconnect reattaches to the same
-  shape instead of spawning a duplicate.
-- With **option A** (§7) there is no `tmux` in the mount — the connector is the
+  **checkout path** — not repo name, so two clones/branches of the same repo
+  get distinct ids and never collide), **not** in the repo, so
+  reboot/reconnect reattaches to the same shape instead of spawning a
+  duplicate. One Codespace surfaced onto multiple canvases (§4) reattaches
+  per-(gatewayId, canvas).
+- Under the §7 decision there is no `tmux` in the mount — the connector is the
   PTY owner, so the injection mount ships only the connector binary.
 
 ## 3. Isolation tiers = host type
@@ -177,8 +183,11 @@ whole game.
 ### 5.1 The five restart events
 
 1. **Terminal reopened** (browser refresh / shape reopened) — host unchanged.
-2. **Connector restart** (crash / re-exec) — container + PTY still alive *(only
-   relevant under option B; see §7)*.
+2. **Connector restart** (crash / re-exec) — under option A (§7) the connector
+   *owns* the PTYs, so a connector crash **kills every shell in the Codespace**;
+   the host supervisor restarts the connector and terminals come back at a
+   fresh prompt. (Under rejected option B the PTYs would have survived
+   independently.)
 3. **Container stop → start** (Codespace stopped, then resumed) — processes die,
    disk persists.
 4. **Host reboot** (laptop restarts) — Docker daemon and all under it go down.
@@ -191,7 +200,8 @@ whole game.
 |---|---|---|---|
 | A. Working tree (uncommitted edits) | `/workspaces` (laptop: bind mount of the real repo dir) | ✅ | ✅ |
 | B. Home / tool state (`~/.config`, history, post-create installs) | container disk (or a named volume) | ✅ | ❌ unless on a volume |
-| C/D. Running processes + terminal layout | container process table | ❌ | ❌ |
+| C. Running processes | container process table | ❌ | ❌ |
+| D. Terminal layout (which sessions, names, cwds) | container process table (recoverable as intent — §5.6) | ❌ | ❌ |
 | E. Canvas shapes (which terminals existed, placement) | canvas server | ✅ (independent) | ✅ |
 | F. Orchestrator desired-state (which Codespaces should exist) | host-side durable store | ✅ | ✅ |
 
@@ -230,8 +240,10 @@ re-inject the connector (the connector isn't in the image and isn't the
 entrypoint). So reboot survival needs a host-side thing that runs at login (a
 systemd user service / login item) and calls the reconciler. The feature path
 *could* lean on Docker's restart policy alone (the connector is baked in) — this
-is the price of keeping the repo pristine, and the reconciler is needed anyway
-for the worker-VM and multi-Codespace cases.
+is the price of keeping the repo pristine. (The reconciler also serves the
+multi-Codespace case — restart policy alone can't express "these Codespaces
+should exist"; on a single worker VM with a baked-in connector, restart policy
+alone could genuinely suffice.)
 
 ### 5.6 Optional — layout restore (recover intent, not processes)
 
@@ -240,7 +252,8 @@ terminal sessions existed, their names, cwds, optionally last command line +
 scrollback. On restart it replays the *layout* — recreates sessions with the
 same names/cwd, re-surfaces the same shapes, optionally shows persisted
 scrollback as read-only history — then drops you at a prompt in the right
-directory. This is the quil pattern scoped to what is actually recoverable.
+directory. This is the [quil.cc](https://quil.cc) pattern scoped to what is
+actually recoverable.
 Because the connector owns its own scrollback ring (§7), persisting it to the
 volume is a natural extension.
 
@@ -250,29 +263,41 @@ Everything above needs one component that doesn't exist today: an
 **orchestrator** holding **desired-state** — "these Codespaces should exist, at
 repo@branch, on this host, at this isolation tier" — and a **boot-time
 reconciler** that drives reality toward it (`clone-if-absent → up → connect`).
-This is the quil *pattern* (daemon persists desired-state and reconciles on
-boot) implemented over the connector, **not** an adoption of quil as a tmux
-replacement.
+This is the [quil.cc](https://quil.cc) *pattern* (daemon persists
+desired-state and reconciles on boot) implemented over the connector, **not**
+an adoption of quil.cc as a tmux replacement.
+
+Where desired-state lives: a host-side durable store (e.g.
+`~/.ew/codespaces.json`) owned by the `ew` daemon — not the canvas server
+(compute placement shouldn't depend on the room being reachable) and not the
+repo (the repo stays EW-pristine, §2).
 
 ## 7. Terminal substrate — connector owns the PTY (option A)
 
-The only tmux behaviours we actually use are: **(a) a session that survives
-browser reconnects** and **(b) many browsers attached to the same terminal
-seeing identical bytes.** Both are already provided by the connector's
+The tmux behaviours we actually use are: **(a) a session that survives
+browser reconnects**, **(b) many browsers attached to the same terminal
+seeing identical bytes**, and **(c) shells that survive a gateway/connector
+crash or restart.** (a) and (b) are already provided by the connector's
 WebSocket layer, *not* by tmux — the connector holds one PTY per session, fans
 output to every attached socket, keeps a scrollback ring, and replays it on
 reconnect. tmux's windows/panes/prefix-key UI actively gets in the way of
 non-tmux users.
 
+(c) we **explicitly trade away**: with the connector owning the PTYs, a
+connector crash kills every shell in the Codespace (§5.1 event #2) — a real
+regression from tmux, mitigated by host supervision making crashes rare and
+restarts fast, not defined away.
+
 **Decision: the connector owns the PTY directly; tmux is dropped.**
 
 - The connector spawns the shell on a PTY, keeps the scrollback ring, broadcasts
-  output to N relay clients, accepts input from any of them, and treats resize
-  as last-writer-wins broadcast. `Bun.Terminal` / node-pty handles PTY mechanics.
-- **Session lifetime = container lifetime.** The shell lives exactly as long as
-  the container; connector upgrades ride container restarts (which kill the shell
-  anyway). This is why restart event #2 (§5.1) is not a persistence concern under
-  option A.
+  output to N relay clients, accepts input from any of them, and implements the
+  inherited authoritative shared resize (any client proposes a size, the
+  connector resizes the PTY and broadcasts the authoritative grid to all
+  viewers). `Bun.Terminal` / node-pty handles PTY mechanics.
+- **Session lifetime ≤ container lifetime.** The shell never outlives the
+  container, and (per the (c) trade-off above) also dies with the connector;
+  planned connector upgrades ride container restarts.
 - The injection mount ships only the connector — no static tmux.
 - **Power users keep multiplexing** by running `tmux` themselves inside the
   shell; we simply don't impose it.
@@ -281,7 +306,10 @@ non-tmux users.
 old scrollback when the grid changes. For modern repainting apps
 (`SIGWINCH` → redraw) this is cosmetic. Also owned by us now, previously free
 from tmux: winsize/signal edge cases and UTF-8 / `LANG` handling (see the
-existing `LC_CTYPE` foot-gun in `terminal-gateway.ts`).
+existing `LC_CTYPE` foot-gun in `terminal-gateway.ts`). Note both losses match
+what a GitHub Codespaces terminal already gives users — no reflow, plain PTY —
+so the accepted baseline is the same one the compatibility promise (§1) anchors
+to.
 
 *(Rejected — option B: a `dtach`/`abduco`-style session-host daemon owning the
 PTY so the shell survives a connector crash/hot-upgrade independent of the
