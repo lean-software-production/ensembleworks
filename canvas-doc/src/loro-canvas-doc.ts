@@ -560,6 +560,9 @@ export class LoroCanvasDoc implements CanvasDoc {
       // Whatever is STILL a physical child is split-brain residue — the
       // logical children were lifted out above — so lift it clear of the
       // cascade WITHOUT touching data.parentId (case 2 above).
+      // Unlike the logical loop this one needs no sort despite the purity
+      // mandate: every move is to root with no data write, so sibling order
+      // at root is model-invisible and the converged result is order-invariant.
       // The [...] copy is defensive only: probed, n.children() hands back a
       // fresh array of freshly-constructed wrappers, so moving during
       // iteration does not disturb it. Kept because that is an undocumented
