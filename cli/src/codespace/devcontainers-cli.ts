@@ -14,7 +14,7 @@ import { existsSync, mkdirSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { DEVCONTAINERS_CLI_VERSION } from './devcontainers-cli-version.ts'
-import { devcontainerEntry, specCliBundle } from './vendor-assets.js'
+import { devcontainerEntry, specCliBundle, updateUidDockerfile } from './vendor-assets.js'
 
 export interface DevcontainersCliRunner {
 	/** argv prefix; append the subcommand, e.g. [...argvPrefix, 'up', …]. */
@@ -41,17 +41,23 @@ export function runningCompiled(): boolean {
 	return !existsSync(devcontainerEntry)
 }
 
-/** Detect mode; in compiled mode extract the two-file bundle (preserving the
- *  shim's ./dist/spec-node relative layout) to the per-version cache dir. */
+/** Detect mode; in compiled mode extract the bundle (preserving the shim's
+ *  ./dist/spec-node and ./scripts relative layout) to the per-version cache
+ *  dir. scripts/updateUID.Dockerfile added by the Task 12 conformance run
+ *  (2026-07-21): the default --update-remote-user-uid-default=on path reads
+ *  it relative to devcontainer.js. */
 export async function ensureDevcontainersCli(env: NodeJS.ProcessEnv): Promise<DevcontainersCliRunner> {
 	if (!runningCompiled()) return runnerFor('dev', devcontainerEntry, process.execPath)
 	const dir = extractionDir(env)
 	const entry = path.join(dir, 'devcontainer.js')
 	const bundle = path.join(dir, 'dist', 'spec-node', 'devContainersSpecCLI.js')
-	if (!existsSync(entry) || !existsSync(bundle)) {
+	const uidDockerfile = path.join(dir, 'scripts', 'updateUID.Dockerfile')
+	if (!existsSync(entry) || !existsSync(bundle) || !existsSync(uidDockerfile)) {
 		mkdirSync(path.join(dir, 'dist', 'spec-node'), { recursive: true })
+		mkdirSync(path.join(dir, 'scripts'), { recursive: true })
 		await Bun.write(entry, Bun.file(devcontainerEntry))
 		await Bun.write(bundle, Bun.file(specCliBundle))
+		await Bun.write(uidDockerfile, Bun.file(updateUidDockerfile))
 	}
 	return runnerFor('compiled', entry, process.execPath)
 }

@@ -23,14 +23,21 @@ try {
 	const untar = Bun.spawnSync(['tar', '-xzf', tarball, '-C', tmp], { stdout: 'inherit', stderr: 'inherit' })
 	if (untar.exitCode !== 0) throw new Error(`tar -xzf failed (exit ${untar.exitCode})`)
 
-	// The runtime surface is exactly two files (spike-verified): the 423B
-	// require shim and the 1.7MB esbuild bundle it loads at ./dist/spec-node/.
-	// Zero runtime node_modules — proven by the spike's isolated-copy run.
+	// The runtime surface is three files (amended by the Task 12 conformance
+	// run 2026-07-21: the two-file claim missed scripts/updateUID.Dockerfile,
+	// which `devcontainer up`'s default --update-remote-user-uid-default=on
+	// path reads relative to devcontainer.js). Zero runtime node_modules —
+	// proven by the spike's isolated-copy run.
 	mkdirSync(path.join(vendorDir, 'dist', 'spec-node'), { recursive: true })
+	mkdirSync(path.join(vendorDir, 'scripts'), { recursive: true })
 	copyFileSync(path.join(tmp, 'package', 'devcontainer.js'), path.join(vendorDir, 'devcontainer.js'))
 	copyFileSync(
 		path.join(tmp, 'package', 'dist', 'spec-node', 'devContainersSpecCLI.js'),
 		path.join(vendorDir, 'dist', 'spec-node', 'devContainersSpecCLI.js'),
+	)
+	copyFileSync(
+		path.join(tmp, 'package', 'scripts', 'updateUID.Dockerfile'),
+		path.join(vendorDir, 'scripts', 'updateUID.Dockerfile'),
 	)
 	writeFileSync(path.join(vendorDir, 'VERSION'), `${DEVCONTAINERS_CLI_VERSION}\n`)
 	console.error(`vendored @devcontainers/cli@${DEVCONTAINERS_CLI_VERSION} → ${vendorDir}`)
