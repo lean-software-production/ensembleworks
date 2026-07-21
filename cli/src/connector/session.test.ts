@@ -7,6 +7,7 @@
 // Run with: bun src/connector/session.test.ts
 import assert from 'node:assert/strict'
 import type { TmuxSession } from '@ensembleworks/contracts/session-manager'
+import { LAYOUT_TAIL_CAP, type LayoutSnapshot } from './layout.ts'
 import { ConnectorSessionManager, type ChannelSink } from './session.ts'
 
 // A fake TmuxSession mirroring openTmuxSession's clamp/dedup resize contract.
@@ -17,6 +18,7 @@ interface Fake extends TmuxSession {
 	emitData(s: string): void
 	emitExit(): void
 	killed: boolean
+	pid: number
 }
 function makeFake(cols: number, rows: number): Fake {
 	let dataCb: ((d: string) => void) | null = null
@@ -26,6 +28,7 @@ function makeFake(cols: number, rows: number): Fake {
 	const f: Fake = {
 		writes: [],
 		killed: false,
+		pid: 4242,
 		onData: (cb) => { dataCb = cb },
 		onExit: (cb) => { exitCb = cb },
 		write: (d) => { f.writes.push(d) },
@@ -165,3 +168,82 @@ function makeMgr() {
 }
 
 console.log('ok: session — one pty/two attaches, session-size attached, scrollback replay, fan-out, resize dedup, input gating, 10x3→20x5 clamp, exit broadcast+delete, detachAll keeps the pty')
+
+// --- SP4: snapshotLayout / preseedLayout ---------------------------------
+
+// snapshotLayout: live sessions only, cwd via the injected reader, tail capped
+// and base64'd; gone sessions excluded.
+{
+	const fakes = new Map<string, Fake>()
+	const mgr = new ConnectorSessionManager((id, cols, rows) => {
+		const f = makeFake(cols, rows)
+		fakes.set(id, f)
+		return f
+	})
+	const a = makeSink()
+	const b = makeSink()
+	mgr.attach('alpha', 1, 80, 24, a.sink)
+	mgr.attach('beta', 2, 80, 24, b.sink)
+	fakes.get('alpha')!.emitData('alpha-history\r\n')
+	fakes.get('beta')!.emitData('x'.repeat(LAYOUT_TAIL_CAP + 500)) // overflow the cap
+	fakes.get('beta')!.emitData('BETA-TAIL')
+
+	const snap = mgr.snapshotLayout((pid) => (pid === 4242 ? '/workspaces/repo' : undefined))
+	assert.equal(snap.version, 1)
+	assert.equal(snap.sessions.length, 2)
+	const alpha = snap.sessions.find((s) => s.id === 'alpha')!
+	assert.equal(alpha.cwd, '/workspaces/repo', 'cwd comes from the injected reader (fake pid 4242)')
+	assert.equal(Buffer.from(alpha.scrollbackTail, 'base64').toString('utf8'), 'alpha-history\r\n')
+	const beta = snap.sessions.find((s) => s.id === 'beta')!
+	const betaTail = Buffer.from(beta.scrollbackTail, 'base64')
+	assert.ok(betaTail.byteLength <= LAYOUT_TAIL_CAP, 'persisted tail respects the cap')
+	assert.ok(betaTail.toString('utf8').endsWith('BETA-TAIL'), 'the TAIL survives, the head is dropped')
+
+	// A session whose shell exited is not part of the layout.
+	fakes.get('alpha')!.emitExit()
+	const snap2 = mgr.snapshotLayout(() => undefined)
+	assert.deepEqual(snap2.sessions.map((s) => s.id), ['beta'], 'gone sessions excluded from the snapshot')
+	assert.equal(snap2.sessions[0]!.cwd, undefined, 'unreadable cwd omitted, not empty-string')
+	console.log('ok: snapshotLayout — live-only, injected cwd, capped base64 tail')
+}
+
+// preseedLayout: eager respawn in the seeded cwd at 80x24; a later attach
+// replays the seeded history BEFORE live output; unknown sessions unaffected;
+// a seed whose spawn throws is skipped without killing the rest.
+{
+	const spawns: Array<{ id: string; cols: number; rows: number; cwd?: string }> = []
+	const fakes = new Map<string, Fake>()
+	const mgr = new ConnectorSessionManager((id, cols, rows, cwd) => {
+		if (id === 'badseed') throw new Error('cwd vanished')
+		spawns.push({ id, cols, rows, cwd })
+		const f = makeFake(cols, rows)
+		fakes.set(id, f)
+		return f
+	})
+	const layout: LayoutSnapshot = {
+		version: 1,
+		sessions: [
+			{ id: 'restored', cwd: '/workspaces/repo/sub', scrollbackTail: Buffer.from('OLD-HISTORY\r\n').toString('base64') },
+			{ id: 'badseed', cwd: '/gone', scrollbackTail: '' },
+		],
+	}
+	mgr.preseedLayout(layout)
+
+	// Eager respawn: 'restored' exists already, in its seeded cwd, at 80x24;
+	// 'badseed' was skipped (its factory threw), the rest survived.
+	assert.deepEqual(spawns, [{ id: 'restored', cols: 80, rows: 24, cwd: '/workspaces/repo/sub' }])
+
+	// Live output after the respawn appends AFTER the seeded history.
+	fakes.get('restored')!.emitData('fresh-prompt$ ')
+	const v = makeSink()
+	assert.equal(mgr.attach('restored', 7, 100, 30, v.sink), true)
+	assert.equal(Buffer.concat(v.out).toString('utf8'), 'OLD-HISTORY\r\nfresh-prompt$ ', 'replay = seeded history, then live output')
+
+	// A session NOT in the layout spawns fresh with no cwd override.
+	const w = makeSink()
+	mgr.attach('brandnew', 8, 90, 25, w.sink)
+	const brandnew = spawns.find((s) => s.id === 'brandnew')!
+	assert.equal(brandnew.cwd, undefined, 'unseeded sessions get no cwd override')
+	assert.equal(w.out.length, 0, 'no phantom history on a fresh session')
+	console.log('ok: preseedLayout — eager respawn in seeded cwd, history-then-live replay, bad seed skipped')
+}
