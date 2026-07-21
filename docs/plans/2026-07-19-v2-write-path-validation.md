@@ -797,29 +797,36 @@ Lettered tasks were added after the plan was first written, so the many
 | 4A | 2026-07-20 | Task 1 quality review, finding 1 (ruling 5) | ✅ landed `8939f32` + `6d55bc7` |
 | 4B | 2026-07-20 | Task 2 quality review, finding 2 (ruling 8) | ✅ landed `a443b9d` |
 | 5 | original | — | ✅ landed `764bdd3` + `cad6bfc` + `5c67923` |
-| **5A** | 2026-07-20 | Owner tightened the rescue-target ruling AFTER Task 5 landed (ruling 11) | pending |
+| **5A** | 2026-07-20 | Owner tightened the rescue-target ruling AFTER Task 5 landed (ruling 11) | ✅ landed `7880853` + `5685c18` |
+| **6A** | 2026-07-21 | Task 6's model-agreement claim exposed a pre-existing physical/logical rescue divergence (see its section) | pending |
 | 8A | 2026-07-20 | Task 2 quality review, finding 5 (ruling 8) — the CI gate | pending |
 
 **Execution order is the table's order, not alphabetical:**
-1 → 1A → 1B → 2 → 3 → 3A → 4 → **4N** → 4A → 4B → 5 → **5A** → 6 → 7 → 8 → 8A → 9.
+1 → 1A → 1B → 2 → 3 → 3A → 4 → **4N** → 4A → 4B → 5 → **5A** → 6 → **6A** → 7 → 8 → 8A → 9.
+`6A` is lettered like the others: it closes a divergence Task 6 made
+load-bearing but did not itself introduce (it is pre-existing — see the Task 6A
+section), and renaming later tasks would break this document's cross-references.
 `4N` is lettered out of sequence deliberately: renaming the existing `4A`/`4B`
 would break this document's many cross-references to them.
 
-**Start at Task 5A.** Half (A) is complete: the write boundary, its central
+**Start at Task 6A.** Half (A) is complete: the write boundary, its central
 safety claim (Task 4N, `b5031d0`), and its observability (4A, 4B) have all
-landed. Task 5 landed the pure-model half of proportionality. What remains is
-the rest of half (B) — the corrected rescue target (5A), then the Loro
-application (6) — where the *unrecoverable* side of the defect lives. Half (A)
-stops new bad writes from originating; it does nothing about the cascade
-already reachable by data written before it.
+landed. Half (B) has landed the pure-model proportionality (5), the corrected
+same-page rescue target (5A, `7880853` + `5685c18`) and the Loro application
+(6, `414375a`). What remains is 6A — closing the physical/logical rescue
+divergence that Task 6's model-agreement claim made load-bearing — then 7, 8,
+8A and 9.
 
-> **Note for anyone running `canvas-doc`'s suite from here on.**
-> `canvas-doc/src/repair.test.ts` is **expected to fail** at
-> `'Loro and model application agree (order-independent)'` until Task 6 lands.
-> That is Task 5's deliberate hand-off, not a regression. `canvas-doc/test.ts`
-> exits on the FIRST failing suite, so it stops there and silently leaves later
-> suites **unrun** — run the files directly instead of reading its early exit as
-> "everything after passed".
+> **Note for anyone running `canvas-doc`'s suite from here on — this note
+> CHANGED on 2026-07-21.**
+> There is **NO expected RED** any more. Task 5's deliberate hand-off (the
+> `doc3` block's `'Loro and model application agree (order-independent)'`)
+> was discharged when Task 6 landed at `414375a`; every file in `canvas-doc`,
+> `canvas-model` and `canvas-sync` now passes on a clean tree at `933314e`
+> (measured, all files run directly). **Anything failing is a real finding.**
+> Separately, `canvas-doc/test.ts` exits on the FIRST failing suite and
+> silently leaves later suites **unrun** — always run the files directly
+> rather than reading its early exit as "everything after passed".
 
 The two halves are technically independent — (A) is strictly additive and
 independently landable — which is what makes the fallback possible. If half (B)
@@ -5696,6 +5703,735 @@ Paste the verbatim step-1 RED output into the commit body.
 | `LoroCanvasDoc.repair()` is `cascadeDropSet`'s last caller | `grep -rn cascadeDropSet --include="*.ts"` — only `canvas-model/src/repair.ts` (the definition) and `canvas-doc/src/loro-canvas-doc.ts` |
 | deleting `cascadeDropSet` breaks nothing | deleted it, ran `bun run typecheck` (exit 0, 13 workspaces) and both package suites |
 | the blast-radius table | ran all four commands, then `git checkout --` to restore |
+
+---
+
+## Task 6A: `repair()` must rescue LOGICAL children, not just physical ones
+
+> **WHY THIS TASK EXISTS (2026-07-21).** Task 6 (`414375a`) made
+> `LoroCanvasDoc.repair()` rescue a dropped shape's children instead of
+> cascade-deleting them, and made *"the two implementations agree"* a
+> load-bearing, asserted property. It rescues them **physically** — it walks
+> `n.children()`, the real Loro tree children. The reference,
+> `applyRepairToModel`, rescues them **logically** — `drop.has(s.parentId)`,
+> keyed on the stored `parentId` field.
+>
+> Those two sets are equal only while tree-parent tracks `data.parentId`.
+> `placeInTree` deliberately breaks that: a shape put before its logical
+> parent's node exists **parks at the tree root while `data.parentId` retains
+> the still-missing target**. Such a shape is logically the dropped shape's
+> child and physically invisible to `n.children()`, so it is never rescued.
+>
+> **This is PRE-EXISTING, not a Task 6 regression** — measured, see below.
+> Task 6 did not introduce it; Task 6 made the agreement claim load-bearing,
+> which is why it must now be closed.
+
+**Files:**
+- Modify: `canvas-doc/src/loro-canvas-doc.ts` — `repair()` (one new index),
+  `dropNodeRescuingChildren` → `dropShapeRescuingChildren`, and one stale
+  comment in `placeInTree`
+- Modify: `canvas-doc/src/repair.test.ts` — two new blocks (`doc8`, `doc9`);
+  **no existing block changes**
+- Modify: `canvas-model/src/repair.ts` — one comment that asserts the
+  divergence still exists, which this task makes false
+
+### The reproduced divergence — run this before you plan against it
+
+Verbatim, at `933314e`:
+
+```
+putShape c2 with parentId 'shape:b2'     // b2 does not exist yet -> c2 parks at the tree root
+putShapeUnchecked b2 (opacity: 'no')     // b2 now exists and is invalid
+plan: [{ op: 'dropShape', id: 'shape:b2' }]
+
+  model expects c2.parentId = page:p     (logical child, rescued)
+  loro   gives  c2.parentId = shape:b2   (not a physical child, never rescued -> dangling)
+  physical children of b2's node: []
+  checkInvariants after ONE repair: [{"rule":"noOrphans","id":"shape:c2","detail":"missing parent shape:b2"}]
+  second pass plan: [{"op":"reparentToRoot","id":"shape:c2"}] -> c2.parentId = page:p
+```
+
+Two asserted properties break: **model-agreement** and **one-pass
+convergence**. Note also *where* the second pass lands it: `canonicalPageId`,
+**not** the same-page target ruling 11 requires — so ruling 11 is silently
+violated on this path too.
+
+**Pre-existing, measured not argued.** The same seed was run in a throwaway
+worktree at `5685c18` (Task 6's parent, when the Loro side still cascaded):
+byte-identical output — `c2.parentId = shape:b2`, text intact, the same single
+`noOrphans` violation, the same second-pass plan. The reason is visible in that
+commit's `repair()`: `dropAll` (the *logical* `cascadeDropSet` closure) was used
+only for the binding sweep and the reparent skip-set, while the actual removal
+was `deleteNode(n)` — a **physical** cascade. A root-parked logical child was
+outside it then, exactly as it is outside `n.children()` now.
+
+> **One correction to carry forward.** The framing that "the old cascade
+> diverged here too, **in the other direction**" does not survive measurement.
+> At `5685c18` the outcome for this seed was identical to today's, and the
+> divergence from the model ran in the **same** direction (model keeps `c2` on
+> its page; Loro leaves `c2` dangling at `shape:b2`). What `dropAll` did differ
+> on was the **binding sweep**, a separate axis. Do not repeat the
+> other-direction claim in the PR body.
+
+### Why this is production-reachable — not theoretical
+
+**`loadModel` is NOT a production path.** `grep -rn loadModel --include="*.ts"`
+returns exactly: its definition (`canvas-doc/src/bridge.ts:20`), two test
+callers (`bridge.test.ts`, `bindings-pages.test.ts`), and three comment
+mentions. Nothing in `server/`, `client/`, `canvas-sync/` or `cli/` calls it.
+Any comment implying `loadModel` closes this window is false — one such comment
+is corrected in step 5.
+
+**The real production writer is `reconcile()`** (`server/src/canvas-v2/
+reconcile.ts`, driven by `ShadowMirror` in `server/src/canvas-v2/shadow.ts`).
+Its own docblock documents this exact window as **open**, verbatim from the
+file:
+
+```
+ * Absent-parent tolerance: a target shape whose parentId names a shape absent
+ * from `target` inherits putShape's bulk-load tolerance — its real Loro node
+ * parks at the tree root while data.parentId retains the missing id ...
+ * This is deterministic and idempotent, and it IS
+ * reachable here: shadow consumes arbitrary live-room data, and fromTldraw
+ * drops unknown shape types, which can orphan a surviving child's parentId.
+```
+
+`reconcile()` has **no second reparent pass** — read it end to end and confirm.
+
+**And sync produces the same state without `reconcile()` at all.** Probed
+across two peers: A calls `reparent(c, p1)` while B concurrently calls
+`reparent(p1, c)`. Loro's tree CRDT breaks the resulting cycle by parking the
+loser at the **tree root**, while its `data.parentId` register keeps the other
+answer. Measured, and identical on both peers:
+
+```
+cycle A shape:c: tree=shape:p1 data=shape:p1 | shape:p1: tree=<root> data=shape:c
+cycle B shape:c: tree=shape:p1 data=shape:p1 | shape:p1: tree=<root> data=shape:c
+```
+
+`shape:p1` is now a logical child of `shape:c` sitting at the tree root — the
+defect's precondition, reached through `/sync/v2` with no shadow mirror
+involved. So this is not gated on the near-term intent to point the v1→v2
+mirror at a **live, user-visible** v2 document; that intent raises the stakes,
+it does not create the reachability.
+
+### The design questions, settled — with the evidence
+
+**Q1 — Key the rescue on stored `parentId`, physical children, or the union?**
+**The union, with DIFFERENT treatment per set.** The pure model is the
+reference and canvas-doc must agree with it, so a *logical* rescue is what
+makes `parentId` values match. But switching to logical-only would be a data
+loss: `deleteNode` cascades over the **real** tree and clears every
+descendant's text container, so a physical child the model KEEPS would be
+destroyed. Both sets therefore matter, for different reasons:
+
+| set | why it must be handled | what happens to it |
+|---|---|---|
+| LOGICAL — `data.parentId === <dropped id>` | model-visible: `applyRepairToModel` rewrites its `parentId` | lift to the Loro root **and** stamp `rescueTo` |
+| PHYSICAL-only — a real tree child whose `data.parentId` names something else | invisible to the model, but `deleteNode` would cascade it away | lift to the Loro root, **leave `data.parentId` alone** |
+
+The mirror-image case in the second row is the one the brief asks about
+directly: *does it exist, is it reachable, what should happen to it?* Answers,
+in order.
+
+- **What should happen:** nothing model-visible. `applyRepairToModel` does not
+  match it (`drop.has(s.parentId)` is false), so it keeps its stored
+  `parentId`. Stamping `rescueTo` on it — which is what the code does
+  **today**, unconditionally — is a divergence. Mutant **M4** pins it.
+- **Is it reachable?** **No known public-API route, and I could not construct
+  one.** Every mutator that moves a node also writes `data.parentId`
+  (`placeInTree`, `reparent`, `putShapeUnchecked`, `repair()`'s
+  `reparentToRoot`); `dedupeShapeNodes`' two raw moves both land on states
+  where `data.parentId` still resolves correctly; and the merge probes above
+  show Loro resolves a concurrent move conflict to the **tree root**, which is
+  the *first* row's shape, not this one. Probed three ways (concurrent
+  reparent-to-different-parents, reparent-vs-putShape, delete-vs-move) — none
+  produced it.
+- **So why handle it at all?** Because the physical evacuation is what stops
+  `deleteNode` eating survivors, and it must not lie about `parentId` while
+  doing so. It is **dead-code safety**, in the idiom this plan already uses for
+  the `'page:orphans'` fallback and the `dropped`-set reparent skip. It is
+  pinned by a **white-box** fixture (`doc9`, using `tree.move` directly),
+  exactly as the plan's other unreachable guards are pinned by **hand-built
+  plans**. Say so in the PR body; do not claim it is reachable.
+
+**Q2 — How do you enumerate logical children efficiently?** There is **no
+existing index** — `this.index` is `shapeId → nodes`, not `parentId → children`
+— so it is a scan. Build it **ONCE per `repair()` call** from `model.shapes`
+(the pre-repair dump `repair()` already computes), not per plan op.
+
+**Cost, measured, `repair-cost.test.ts`'s own fixtures:**
+
+| | clean 1k-doc (0-op plan) | dirty 1k-doc (500-op plan) | `tree.nodes()` calls clean/dirty |
+|---|---|---|---|
+| before | 7.727 ms | 15.87 ms | 1 / 2 |
+| after | 7.583 ms | 15.43 ms | 1 / 2 |
+
+Unchanged within noise. **Complexity class is unchanged:** `repair()` was
+already `O(shapes)` via `dumpModel`, and this adds one more `O(shapes)` pass
+plus `O(1)` bucket lookups.
+
+**Yes, `repair-cost.test.ts` constrains you, and hard.** It is not only a
+wall-clock pin — it carries a **structural gate**, `dirtyCalls === cleanCalls +
+1`, asserting `tree.nodes()` is not called per plan op. The obvious lazy
+implementation (`this.listShapes().filter(s => s.parentId === o.id)` inside the
+loop) trips it. Measured as mutant **M6**:
+
+```
+AssertionError: dirty-doc repair() mean 3097.59ms exceeds the 100ms ceiling
+```
+
+**Q3 — Does this interact with `deleteNode`'s text-clearing cascade?**
+Confirmed by measurement, not assumed. A logical child parked at the tree root
+is **not** in the dropped node's physical subtree, so `deleteNode`'s `collect()`
+never reaches it and its text container is never cleared — in the repro above,
+`c2`'s text read back `"precious"` both at `933314e` and at `5685c18`. So the
+missing rescue costs the shape's *placement*, not its text.
+
+**The RESCUE-FIRST / DELETE-SECOND ordering constraint still holds, and gets
+stronger.** Both rescues stay inside one named unit,
+`dropShapeRescuingChildren`, which ends with `deleteNode`. Worth recording
+because it is not obvious: the physical safety property is now **self-contained
+in the physical loop** — that loop lifts *every* remaining tree child clear
+regardless of what the logical pass did — so the two rescues are genuinely
+order-independent with respect to each other. Only their joint position before
+`deleteNode` is load-bearing. Keeping them in one method is what makes that
+impossible to separate by a later edit, which is the reason the unit was
+extracted in Task 6.
+
+**Q4 — Must `repair()` remain a pure function of converged state?** Yes; this
+is the standing mandate `canonicalPageId` exists for. Three rules preserve it,
+and they are the same three Task 5A used:
+
+1. The index is built from **`model`**, the untransformed pre-repair dump —
+   never from live state that earlier ops in the same pass have already
+   rehomed. Same discipline as `applyRepairToModel`'s fused pass.
+2. Every rescued child gets the **identical** treatment (lift to root, stamp
+   the one `rescueTo` computed once for this dropped id), so no child's outcome
+   depends on any other child's.
+3. The child ids are **sorted** before iteration, so the *sequence of Loro ops*
+   emitted is a function of converged data (ids) rather than of `listShapes()`
+   traversal order, which is an undocumented Loro internal.
+
+Rule 3 is belt-and-braces: mutant **M8** (omit the sort) is **unkillable** —
+see the mutant table for why. Keep the sort anyway; the mandate is on the code,
+not on the tests' ability to see it.
+
+**Q5 — Does ONE pass now converge for the reproduced case?** Yes. Measured on
+the multi-page form of the repro, after the fix:
+
+```
+model expects c2.parentId = page:z
+loro   gives  c2.parentId = page:z
+text: "precious"
+invariants after ONE repair: []
+```
+
+and `doc.repair()` returns `[]` on the second call. The `doc8` fixture below
+asserts exactly this.
+
+### Mutants this task's test must kill
+
+Every row was **produced and executed** against the step-1 tests with the
+step-3/4 implementation in place; the "killed by" column is the assertion that
+actually fired, verbatim from the run. `node:assert` aborts at the first
+failure, so each mutant is named by the first assertion it trips.
+
+| # | Plausible wrong implementation | Killed by |
+|---|---|---|
+| M1 | **Ship as-is** — rescue only `n.children()`, no logical index | `'the rescued LOGICAL child is on the dropped parent’s own page (page:z) — not left dangling at shape:bad8, not sent to the canonical page:a'` — `actual: "shape:bad8", expected: "page:z"` |
+| M2 | Logical rescue stamps `rootPageId` instead of `rescueTo` | Task 6's own `doc7` assertion: `'the rescued child stays on its own page (page:z) — not the canonical page (page:a)'` — `actual: "page:a", expected: "page:z"` |
+| M3 | Logical rescue restamps `parentId` but omits `this.tree.move(c.id, undefined)` | `'the rescued logical child was physically lifted off its old host — proven by the host’s cascade'` — `actual: undefined, expected: true` |
+| M4 | Physical evacuation **also** stamps `rescueTo` (today's unconditional set) | `'a PHYSICAL-only child keeps its stored parentId — the model does not rehome it, so neither may Loro'` — `actual: "page:z", expected: "page:a"` |
+| M5 | Delete the physical evacuation loop, trust the logical rescue alone | `'only bad9 is gone — the physical squatter is NOT swept up by the cascade'` — `actual` is missing `shape:squat9` |
+| M6 | Rebuild the logical index **per op** from `this.listShapes()` | `repair-cost.test.ts`: `AssertionError: dirty-doc repair() mean 3097.59ms exceeds the 100ms ceiling` |
+| M7 | Index keyed on `s.id` instead of `s.parentId` (the transposition) | Task 6's own `doc4` assertion: `'the direct child is rescued to its own page'` — `actual: "shape:bad4", expected: "page:p"` |
+| M8 | Omit `.sort()` on the logical child ids | **UNKILLABLE.** Recorded honestly, not papered over. |
+
+**M8's structural reason.** The sort only reorders the `tree.move` calls within
+one dropped id. Every child receives the identical treatment and the identical
+`rescueTo`, so the converged *model* state is the same for any order; the only
+thing that varies is sibling ordering at the Loro tree root, which is
+model-invisible (z-order comes from `data.index`) and which every comparison in
+the suite normalizes by sorting on `id`. Run with the sort removed:
+`canvas-doc/src/repair.test.ts` exits 0 and
+`canvas-sync/src/convergence.test.ts` reports `ok: convergence — 50 seeds × N=3
+peers × ≤40 ops/peer`. **Do not invent an assertion to manufacture a kill.**
+
+Note that **M2 and M7 are killed by Task 6's existing fixtures, not by new
+ones.** That is the intended shape: Task 6 already discriminates the *target*
+and the *direct-child* rule; this task adds only what those fixtures structurally
+cannot see.
+
+### The fixtures genuinely discriminate — here is why
+
+Task 6's planner established that canvas-doc's pre-`doc7` fixtures are all
+single-page, so a same-page assertion on them passes vacuously. The same trap
+applies here in a different dimension, and both new fixtures are built to avoid
+it:
+
+- **`doc8` exercises the bulk-load window for real.** `shape:kid8` is `putShape`d
+  **before** `shape:bad8` exists, so `placeInTree` parks it at the tree root.
+  The fixture asserts that precondition directly —
+  `(badNode.children() ?? []).map(...)` must be `[]` — so if a future edit
+  reorders the seed and `kid8` becomes an ordinary physical child, the fixture
+  fails as a **precondition**, loudly, instead of passing for the wrong reason.
+- **`doc8` is two-page** (`page:a` canonical, `page:z` the answer), so the same
+  assertion is a simultaneous discriminator for the rescue *target*. A
+  single-page version would have been green under M2.
+- **`doc9` separates the two child sets by construction:** `shape:squat9` is
+  physical-only, `shape:far9` is logical-only-and-not-at-the-root,
+  `shape:kid9` is both. A fix that handles only one set fails `doc9`.
+
+### Measured blast radius
+
+The fix was applied to the tree at `933314e`, every command below was run, and
+the tree was then restored with `git checkout --`. These are observations, not
+predictions.
+
+| Command | Result |
+|---|---|
+| each `canvas-doc/src/*.test.ts` run directly | **all 14 pass** |
+| `cd canvas-model && ~/.bun/bin/bun test.ts` | **all 14 suites pass** |
+| each `canvas-sync/src/*.test.ts` run directly | **all 12 pass**, including `convergence` and `fuzz` |
+| each `server/src/canvas-v2/*.test.ts` run directly | **all 13 pass**, including `reconcile`, `shadow`, `soak-actor`, `crash-recovery` |
+| `bun run typecheck` | **exit 0**, 13 workspaces |
+| `bun run test` (full) | one failure — see the note below |
+
+**Exactly ZERO existing assertions change value.** The change is additive in
+effect: it only touches shapes the old code never reached (logical-only
+children) and only removes a `parentId` write on shapes no fixture had
+(physical-only children). Do not "expect" a blast radius here; there isn't one.
+
+> **The one full-suite failure is PRE-EXISTING and is NOT yours.**
+> `scripts/ux-contract-presence.test.ts` fails on the **clean** tree at
+> `933314e` — verified by running it with nothing modified:
+> ```
+> AssertionError: diff touches interaction-bearing path(s)
+> [client/src/canvas-v2/CanvasV2App.tsx, client/src/canvas-v2/DevOverlay.test.ts,
+>  client/src/canvas-v2/DevOverlay.tsx] without touching the interaction-contracts
+>  module ... and without a 'ux-contract: none — <reason>' marker in the PR body.
+> ```
+> It judges the **whole branch diff against `origin/main`**, not your working
+> tree, and it is satisfied by the PR body, not by code. This task's own change
+> touches no interaction-bearing path. See "PR body — required content".
+
+### Step 1: Write the failing tests
+
+Two new blocks appended to `canvas-doc/src/repair.test.ts`, immediately
+**before** its final `console.log('ok: repair (doc)')` line. Nothing else in
+that file changes. Both use helpers the file already has in scope (`base`,
+`normalize`, `byIdAsc`) and imports it already carries (`canonicalPageId`,
+`repairPlan`, `applyRepairToModel`, `checkInvariants`, `dumpModel`) — **add no
+imports**, which is also why no module-load failure can masquerade as the RED
+here (see step 2).
+
+```ts
+// ---- (8) LOGICAL child rescue: a shape whose STORED parentId names the
+// dropped shape while its real tree node is NOT a child of it. placeInTree
+// parks a shape at the Loro tree ROOT when its parentId names a node that
+// does not exist yet, retaining data.parentId — so n.children() cannot see
+// it, but applyRepairToModel's drop.has(s.parentId) test can. This is the
+// state reconcile() reaches in production (its "Absent-parent tolerance"
+// note) and that Loro's own cycle resolution reaches over /sync/v2. Two
+// pages, bad shape on the NON-canonical one, so the same assertion also
+// discriminates the rescue TARGET. ----
+const doc8 = LoroCanvasDoc.create({ peerId: 8n })
+doc8.putPage({ id: 'page:a', name: 'A' })
+doc8.putPage({ id: 'page:z', name: 'Z' })
+doc8.putShape({ id: 'shape:kid8', kind: 'note', parentId: 'shape:bad8', props: {}, ...base() } as any)
+doc8.putShapeUnchecked({ id: 'shape:bad8', kind: 'frame', parentId: 'page:z', props: {}, ...base(), opacity: 'no' } as any)
+doc8.setText('shape:kid8', 'precious content')
+doc8.commit()
+{
+  const badNode = (doc8 as any).nodeByShapeId('shape:bad8')
+  assert.deepEqual(
+    (badNode.children() ?? []).map((n: any) => n.data.get('shapeId')),
+    [],
+    'precondition: kid8 is a LOGICAL child of bad8 only — the real tree node has no children at all',
+  )
+  assert.equal(doc8.getShape('shape:kid8')!.parentId, 'shape:bad8', 'precondition: kid8 stored parentId still names bad8')
+  const before8 = dumpModel(doc8)
+  assert.equal(canonicalPageId(before8.pages), 'page:a', 'precondition: the canonical page is NOT the page bad8 lives on')
+  const plan8 = repairPlan(before8)
+  assert.deepEqual(plan8, [{ op: 'dropShape', id: 'shape:bad8' }], 'precondition: the plan drops only bad8')
+  const expected8 = applyRepairToModel(before8, plan8)
+  assert.deepEqual(doc8.repair(), plan8)
+  doc8.commit()
+  assert.deepEqual(doc8.listShapes().map((s) => s.id).sort(), ['shape:kid8'], 'the logical child survives the drop')
+  assert.equal(
+    doc8.getShape('shape:kid8')!.parentId,
+    'page:z',
+    'the rescued LOGICAL child is on the dropped parent’s own page (page:z) — not left dangling at shape:bad8, not sent to the canonical page:a',
+  )
+  assert.equal(doc8.getText('shape:kid8'), 'precious content', 'the rescued logical child keeps its text container')
+  assert.deepEqual(checkInvariants(dumpModel(doc8)), [], 'invariant-clean after ONE repair() — no second pass')
+  assert.deepEqual(normalize(dumpModel(doc8)), normalize(expected8), 'model-agreement on the logical rescue')
+  assert.deepEqual(doc8.repair(), [], 'idempotent')
+}
+
+// ---- (9) The two child sets are DIFFERENT, and each needs its own
+// treatment. White-box tree.move calls build the split-brain states directly:
+// no public-API sequence is known to produce a PHYSICAL child whose stored
+// parentId names something else (every mutator that moves a node also writes
+// data.parentId, and Loro resolves a concurrent move cycle to the tree ROOT,
+// which is doc8's shape, not this one). This pins the intended contract the
+// same way hand-built plans pin repair()'s other unreachable guards. ----
+const doc9 = LoroCanvasDoc.create({ peerId: 19n })
+doc9.putPage({ id: 'page:a', name: 'A' })
+doc9.putPage({ id: 'page:z', name: 'Z' })
+doc9.putShapeUnchecked({ id: 'shape:bad9', kind: 'frame', parentId: 'page:z', props: {}, ...base(), opacity: 'no' } as any)
+doc9.putShape({ id: 'shape:host9', kind: 'frame', parentId: 'page:a', props: {}, ...base() } as any)
+doc9.putShape({ id: 'shape:squat9', kind: 'note', parentId: 'page:a', props: {}, ...base() } as any)
+doc9.putShape({ id: 'shape:kid9', kind: 'note', parentId: 'shape:bad9', props: {}, ...base() } as any)
+doc9.putShape({ id: 'shape:far9', kind: 'note', parentId: 'shape:bad9', props: {}, ...base() } as any)
+doc9.setText('shape:squat9', 'squatter text')
+{
+  const tree9 = (doc9 as any).tree
+  const node9 = (id: string) => (doc9 as any).nodeByShapeId(id)
+  // squat9: a PHYSICAL child of bad9 whose stored parentId still says page:a.
+  tree9.move(node9('shape:squat9').id, node9('shape:bad9').id)
+  // far9: a LOGICAL child of bad9 parked under an unrelated SURVIVOR — so the
+  // rescue cannot be a no-op that merely happens to leave it at the root.
+  tree9.move(node9('shape:far9').id, node9('shape:host9').id)
+  doc9.commit()
+  assert.equal(doc9.getShape('shape:squat9')!.parentId, 'page:a', 'precondition: squat9 is physically under bad9 but logically on page:a')
+  assert.equal(doc9.getShape('shape:far9')!.parentId, 'shape:bad9', 'precondition: far9 is logically bad9’s child but physically under host9')
+
+  const before9 = dumpModel(doc9)
+  const plan9 = repairPlan(before9)
+  assert.deepEqual(plan9, [{ op: 'dropShape', id: 'shape:bad9' }], 'precondition: the plan drops only bad9')
+  const expected9 = applyRepairToModel(before9, plan9)
+  assert.deepEqual(doc9.repair(), plan9)
+  doc9.commit()
+  assert.deepEqual(
+    doc9.listShapes().map((s) => s.id).sort(),
+    ['shape:far9', 'shape:host9', 'shape:kid9', 'shape:squat9'],
+    'only bad9 is gone — the physical squatter is NOT swept up by the cascade',
+  )
+  assert.equal(
+    doc9.getShape('shape:squat9')!.parentId,
+    'page:a',
+    'a PHYSICAL-only child keeps its stored parentId — the model does not rehome it, so neither may Loro',
+  )
+  assert.equal(doc9.getText('shape:squat9'), 'squatter text', 'the physical-only child keeps its text container')
+  assert.equal(doc9.getShape('shape:far9')!.parentId, 'page:z', 'the LOGICAL child is rescued to bad9’s own page')
+  assert.equal(doc9.getShape('shape:kid9')!.parentId, 'page:z', 'the ordinary logical+physical child is rescued the same way')
+  assert.deepEqual(checkInvariants(dumpModel(doc9)), [], 'invariant-clean after ONE repair()')
+  assert.deepEqual(normalize(dumpModel(doc9)), normalize(expected9), 'model-agreement on the mixed physical/logical case')
+  assert.deepEqual(doc9.repair(), [], 'idempotent')
+  // far9 was lifted PHYSICALLY, not merely restamped: deleting its former
+  // physical host must not take it along. Same proof shape as the dedupe
+  // block's 'physical rescue proven' assertion.
+  doc9.deleteShape('shape:host9')
+  doc9.commit()
+  assert.ok(doc9.getShape('shape:far9'), 'the rescued logical child was physically lifted off its old host — proven by the host’s cascade')
+}
+```
+
+### Step 2: Run them and confirm the RED is GENUINE
+
+```
+~/.bun/bin/bun canvas-doc/src/repair.test.ts; echo "EXIT=$?"
+```
+
+**Measured at `933314e`.** `EXIT=1`, failing in the `doc8` block at:
+
+```
+AssertionError: the rescued LOGICAL child is on the dropped parent’s own page (page:z) — not left dangling at shape:bad8, not sent to the canonical page:a
+     actual: "shape:bad8",
+   expected: "page:z",
+   operator: "strictEqual",
+       code: "ERR_ASSERTION"
+      at .../canvas-doc/src/repair.test.ts
+```
+
+**Confirm THAT assertion, in THAT block.** Not "a failure". If it fails
+anywhere else, STOP and report — the tree is not where this plan thinks it is.
+
+> **⚠️ A missing or renamed import throws at module load and manufactures a
+> FAKE green-looking RED.** It exits non-zero and prints a stack, so at a
+> glance it reads as a passing RED — but **no assertion ran and you have proven
+> nothing**. **This has been caught three times on this branch.** A genuine RED
+> has all four of: an `AssertionError`, the named assertion message, an
+> `actual`/`expected` value diff, and a frame pointing into `repair.test.ts`. A
+> `ModuleNotFound`, `SyntaxError`, `Export named 'X' not found`, or
+> `... is not a function` is **NOT** a RED — fix it and re-run before you
+> believe anything. Step 1 adds no imports specifically so this failure mode
+> has no way in; if you see one anyway, something else is wrong.
+
+**Then bank `doc9`'s own RED, so it is not merely riding on `doc8`.**
+`node:assert` aborts at the first failure, so `doc9` never runs while `doc8` is
+red. Temporarily comment out the `doc8` block, re-run, and record:
+
+```
+AssertionError: a PHYSICAL-only child keeps its stored parentId — the model does not rehome it, so neither may Loro
+
+'page:z' !== 'page:a'
+     actual: "page:z",
+   expected: "page:a",
+```
+
+Then **uncomment `doc8`**. Both verbatim outputs go in the commit message.
+
+Note the runner is **fail-fast** (`process.exit(1)` on the first failure).
+**Read the exit code, never the output tail.** In a compound command `$?` is
+the *last* command's status, not the suite's — hence the explicit
+`; echo "EXIT=$?"` on every command in this section.
+
+### Step 3: Build the logical-children index in `repair()`
+
+In `canvas-doc/src/loro-canvas-doc.ts`, find this line inside `repair()`
+(verbatim anchor):
+
+```ts
+    const pageIds = new Set<string>(model.pages.map((p) => p.id))
+```
+
+Insert immediately **after** it:
+
+```ts
+    // LOGICAL children, indexed ONCE: stored parentId → the ids that name it.
+    // This is what lets the dropShape branch below find the same children
+    // applyRepairToModel finds (drop.has(s.parentId)) rather than only the
+    // ones the real tree happens to hold under the doomed node — see
+    // dropShapeRescuingChildren. There is no existing index for this: `index`
+    // is shapeId → nodes, a different question.
+    //
+    // Built here rather than per op deliberately. One O(shapes) pass, so a
+    // plan with N drops does not reintroduce the O(shapes × N) rescan the
+    // node index removed. repair-cost.test.ts enforces that both ways — its
+    // wall-clock ceiling AND its structural gate (tree.nodes() call count must
+    // not scale with plan size). Rebuilding this per op from listShapes()
+    // measured 3097.59ms against the 100ms ceiling on the 500-drop fixture,
+    // versus 15.43ms as written.
+    //
+    // Read from `model` — the UNTRANSFORMED pre-repair dump — never from live
+    // state that earlier ops in this same pass have already rehomed. That is
+    // the same discipline applyRepairToModel's fused pass keeps, and it is
+    // what makes the result a pure function of converged state.
+    const logicalChildren = new Map<string, string[]>()
+    for (const s of model.shapes) {
+      const arr = logicalChildren.get(s.parentId)
+      if (arr) arr.push(s.id); else logicalChildren.set(s.parentId, [s.id])
+    }
+```
+
+### Step 4: Repoint the `dropShape` branch
+
+Still in `repair()`, replace this line (verbatim anchor):
+
+```ts
+        for (const n of this.nodesByShapeId(o.id)) this.dropNodeRescuingChildren(n, rescueTo)
+```
+
+with:
+
+```ts
+        this.dropShapeRescuingChildren(o.id, rescueTo, logicalChildren.get(o.id) ?? [])
+```
+
+The per-node loop moves **into** the new method, because the logical rescue
+must run exactly ONCE per dropped id even when several physical nodes share it
+(see `nodesByShapeId`), while the physical evacuation runs once per node.
+
+### Step 5: Replace `dropNodeRescuingChildren`
+
+Delete the whole existing method **and its docblock** — from the line
+
+```ts
+  // RESCUE FIRST, DELETE SECOND — pulled into its own named unit so the
+```
+
+through the closing `}` of `dropNodeRescuingChildren`, ending just before
+
+```ts
+  // PERF (measured, Phase 2 review): ~7.36ms/call at 1k shapes on a CLEAN doc
+```
+
+Replace it with:
+
+```ts
+  // RESCUE FIRST, DELETE SECOND — the whole of one dropShape op, in ONE named
+  // unit so no later edit can reorder the rescue after the delete. deleteNode
+  // cascades over the REAL tree and clears every descendant's text container,
+  // so everything the model KEEPS must be out of the doomed subtree before it
+  // runs. This is the one place the Loro side is genuinely harder than the
+  // model side, where dropping is a filter over a flat array.
+  //
+  // TWO rescues, because "child" means two different things here, and
+  // applyRepairToModel — the reference this must agree with byte-for-byte
+  // after normalization — matches only ONE of them:
+  //
+  // 1. LOGICAL children: every shape whose STORED parentId names `id`. This is
+  //    exactly the reference's drop.has(s.parentId) test, and it is the only
+  //    rescue that is MODEL-VISIBLE — these are the shapes whose parentId the
+  //    reference rewrites to `rescueTo`. A logical child need not be a
+  //    physical child: placeInTree parks a shape at the tree ROOT when its
+  //    parentId names a node that does not exist yet, keeping data.parentId
+  //    on the missing target, and Loro's own cycle resolution parks the loser
+  //    of a concurrent move race the same way. Such a shape is invisible to
+  //    n.children(). Before this branch existed it was silently missed,
+  //    leaving it a dangling orphan that only a SECOND repair() pass cleaned
+  //    up — and to canonicalPageId, not to `rescueTo`, so ruling 11 was
+  //    violated on that path too. That broke model-agreement AND one-pass
+  //    convergence. Production reaches this state: reconcile()
+  //    (server/src/canvas-v2/reconcile.ts) documents the window as open in its
+  //    own "Absent-parent tolerance" note and has no second pass, and the
+  //    concurrent-move case needs no mirror at all. NOT closed by bridge.ts's
+  //    loadModel — that has only test callers.
+  //
+  // 2. PHYSICAL children that are NOT logical children: a real tree child of
+  //    `n` whose data.parentId names something else. The reference does NOT
+  //    rewrite their parentId, so this must not stamp `rescueTo` on them; it
+  //    only lifts them clear of the cascade, the same way placeInTree parks a
+  //    shape it cannot place. Dead-code safety — no public-API sequence is
+  //    known to produce this state (every mutator that moves a node also
+  //    writes data.parentId, and Loro resolves a concurrent move cycle to the
+  //    tree ROOT, which is case 1's shape, not this one). Pinned white-box in
+  //    repair.test.ts, like the hand-built plans that pin repair()'s other
+  //    unreachable guards.
+  //
+  // The two are order-independent with respect to EACH OTHER — the physical
+  // loop lifts every remaining tree child clear whatever the logical pass did
+  // — so only their joint position BEFORE deleteNode is load-bearing. Keeping
+  // both in this one method is what makes that impossible to separate.
+  private dropShapeRescuingChildren(id: string, rescueTo: string, logicalChildIds: readonly string[]): void {
+    // Sorted so the SEQUENCE of Loro ops emitted is a function of converged
+    // data (ids) rather than of listShapes() traversal order, an undocumented
+    // Loro internal — the standing purity mandate canonicalPageId exists for.
+    // No test can observe this (every child gets identical treatment and the
+    // comparisons all sort by id); it is kept because the mandate is on the
+    // code. `id` itself may appear here if the shape self-parents: harmless,
+    // it is restamped and then removed by the loop below, and the reference
+    // drops it too.
+    for (const childId of [...logicalChildIds].sort()) {
+      for (const c of this.nodesByShapeId(childId)) {
+        this.tree.move(c.id, undefined) // rescueTo is a page ⇒ the Loro tree root
+        c.data.set('parentId', rescueTo)
+      }
+    }
+    for (const n of this.nodesByShapeId(id)) {
+      // Whatever is STILL a physical child is split-brain residue — the
+      // logical children were lifted out above — so lift it clear of the
+      // cascade WITHOUT touching data.parentId (case 2 above).
+      // The [...] copy is defensive only: probed, n.children() hands back a
+      // fresh array of freshly-constructed wrappers, so moving during
+      // iteration does not disturb it. Kept because that is an undocumented
+      // Loro internal, not a contract.
+      for (const c of [...(n.children() ?? [])]) this.tree.move(c.id, undefined)
+      this.deleteNode(n)
+    }
+  }
+```
+
+### Step 6: Correct the two comments this makes false
+
+**(6a) `canvas-doc/src/loro-canvas-doc.ts`, in `placeInTree`.** This line makes
+a claim that is false in production — `loadModel` has only test callers
+(`grep -rn loadModel --include="*.ts"` to confirm before and after):
+
+```ts
+  // retained and a later reparent pass (see bridge.ts loadModel) fixes placement.
+```
+
+Replace with:
+
+```ts
+  // retained, and the shape stays logically parented: repair() rescues by
+  // STORED parentId (see dropShapeRescuingChildren), so a shape sitting in
+  // this window is still found when its logical parent is dropped, and
+  // reparentToRoot still finds it if that parent never arrives. NOT via
+  // bridge.ts's loadModel, which has only test callers.
+```
+
+**(6b) `canvas-model/src/repair.ts`.** This comment inside
+`applyRepairToModel` asserts the divergence still exists, which is exactly what
+this task removes:
+
+```ts
+    // LOGICAL rescue (drop.has(s.parentId)) vs loro-canvas-doc.ts's PHYSICAL
+    // rescue (n.children()) — they diverge when a shape sits in placeInTree's
+    // bulk-load window; see dropNodeRescuingChildren's docblock there.
+```
+
+Replace with:
+
+```ts
+    // LOGICAL rescue, keyed on the STORED parentId. loro-canvas-doc.ts's
+    // dropShapeRescuingChildren mirrors this exactly; it ALSO lifts any
+    // merely-physical tree child clear of Loro's delete cascade, which is
+    // invisible here because dropping is a filter over a flat array.
+```
+
+### Step 7: Run everything
+
+```
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/repair.test.ts; echo "EXIT=$?"
+cd /home/stag/src/projects/ensembleworks && ~/.bun/bin/bun canvas-doc/src/repair-cost.test.ts; echo "EXIT=$?"
+```
+
+Expected: `ok: repair (doc)` / `EXIT=0`, and `ok: repair-cost` / `EXIT=0` with
+the `tree.nodes()` line reading `clean(0-op plan)=1, dirty(500-op plan)=2` —
+**unchanged from before your edit**. If the dirty count moved, you built the
+index in the loop; go back to step 3.
+
+Then the full sweep. `canvas-doc/test.ts` exits on the FIRST failing suite and
+silently leaves later suites **unrun**, so run the files directly:
+
+```
+cd /home/stag/src/projects/ensembleworks && for f in canvas-doc/src/*.test.ts canvas-sync/src/*.test.ts server/src/canvas-v2/*.test.ts; do printf '%-52s ' "$f"; ~/.bun/bin/bun "$f" >/tmp/o 2>&1 && tail -1 /tmp/o || echo FAIL; done
+cd /home/stag/src/projects/ensembleworks/canvas-model && ~/.bun/bin/bun test.ts; echo "EXIT=$?"
+cd /home/stag/src/projects/ensembleworks && bun run typecheck; echo "EXIT=$?"
+```
+
+All green — **zero existing assertions change value**. The only full-suite
+failure is the pre-existing `scripts/ux-contract-presence.test.ts` gate
+described under "Measured blast radius"; confirm it fails identically on a
+stashed tree before attributing it to yourself.
+
+### Step 8: Clean-room check
+
+`canvas-model` and `canvas-doc` are clean-room. Grep your diff — **including
+comments, and as substrings of longer words** (`unexpressible` contains
+`express`; a planner caught itself writing "cannot express" while drafting this
+very section):
+
+```
+cd /home/stag/src/projects/ensembleworks && git diff -- canvas-doc canvas-model | grep -nE "from 'ws'|express|@tldraw/|\.\./server|Date\.now\(|Math\.random\("
+```
+
+Expected: **no output**. (The docblock in step 5 names
+`server/src/canvas-v2/reconcile.ts` as a cross-reference; that is a path
+mention, not an import, and matches the precedent already in this file at
+`933314e`. It does not match any pattern above.)
+
+### Step 9: Commit
+
+```bash
+git add canvas-doc/src/loro-canvas-doc.ts canvas-doc/src/repair.test.ts canvas-model/src/repair.ts
+git commit -m "fix(canvas-doc): repair() rescues LOGICAL children, not just physical ones"
+```
+
+The commit message body must carry **both** verbatim REDs from step 2 and the
+`repair-cost` before/after numbers.
+
+### How each claim in this section was checked
+
+| Claim | How |
+|---|---|
+| the divergence reproduces exactly as stated | wrote a throwaway probe against `933314e`, ran it, pasted its stdout verbatim; probe deleted afterwards |
+| it is pre-existing, byte-identical at `5685c18` | `git worktree add` at `5685c18`, `bun install`, ran the same probe — identical stdout; then read that commit's `repair()` and confirmed `dropAll` fed only the skip-set and binding sweep while removal was a physical `deleteNode` cascade |
+| "the old cascade diverged in the other direction" is wrong | same run — the outcome was identical, so the divergence ran in the same direction |
+| `loadModel` has no production caller | `grep -rn loadModel --include="*.ts"` — definition, two test files, three comments |
+| `reconcile()`'s window is open and unclosed | read `server/src/canvas-v2/reconcile.ts` end to end; quoted its docblock; confirmed no second reparent pass in the body |
+| sync reaches the state without `reconcile()` | two-peer probe: concurrent `reparent(c,p1)` / `reparent(p1,c)`, printed tree-parent vs `data.parentId` on both peers |
+| the mirror-image (physical-only) case is not publicly reachable | three two-peer probes (reparent/reparent, reparent/putShape, delete/move); none produced it, and Loro parked the cycle loser at the ROOT |
+| every mutant M1–M8 is killed (or is not) by the named assertion | applied each to the source in turn, ran `repair.test.ts` and `repair-cost.test.ts`, recorded the first failure verbatim; M8 exited 0 on both plus `convergence.test.ts`, and is recorded unkillable |
+| the cost table and the `tree.nodes()` counts | ran `repair-cost.test.ts` with the fix, then `git stash push` on the one source file and ran it again |
+| zero existing assertions change value | ran every file in `canvas-doc`, `canvas-model`, `canvas-sync` and `server/src/canvas-v2` directly with the fix applied — all green |
+| `scripts/ux-contract-presence.test.ts` fails pre-existing | ran it on a fully restored, `git status`-clean tree at `933314e` |
+| the tree was restored | `git checkout --` on both source files, probe files deleted, temp worktree removed, `git status --porcelain` empty |
 
 ---
 
