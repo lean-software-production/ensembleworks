@@ -25,16 +25,22 @@ export interface ConnectConfig {
 	gatewayId: string
 	label: string
 	authMethod: 'service-token' | 'none'
+	backend: 'tmux' | 'pty'
 }
 
-export function resolveConnectConfig(conn: Conn, flags: { label?: string; gatewayId?: string }, env: NodeJS.ProcessEnv): ConnectConfig {
+export function resolveConnectConfig(
+	conn: Conn,
+	flags: { label?: string; gatewayId?: string; backend?: 'tmux' | 'pty' },
+	env: NodeJS.ProcessEnv,
+): ConnectConfig {
 	const label = flags.label ?? hostname()
 	const gatewayId = flags.gatewayId ?? stableGatewayId(env)
+	const backend = flags.backend ?? 'tmux' // legacy default — coexistence spec §3: tmux path unchanged
 	const wsBase = conn.url.replace(/^http/, 'ws') // http→ws, https→wss
 	const ws = new URL('/api/terminal/connect', wsBase.endsWith('/') ? wsBase : `${wsBase}/`)
 	ws.searchParams.set('gatewayId', gatewayId)
 	ws.searchParams.set('label', label)
-	return { url: conn.url, wsUrl: ws.toString(), room: conn.room, gatewayId, label, authMethod: conn.auth.method }
+	return { url: conn.url, wsUrl: ws.toString(), room: conn.room, gatewayId, label, authMethod: conn.auth.method, backend }
 }
 
 export async function connectSlot(args: string[], globals: Globals, env: NodeJS.ProcessEnv): Promise<number> {
@@ -48,8 +54,8 @@ export async function connectSlot(args: string[], globals: Globals, env: NodeJS.
 	return runConnector(cfg, authHeaders(conn.auth), env) // conn + env already in scope
 }
 
-function parseConnectFlags(args: string[]): { label?: string; gatewayId?: string } {
-	const flags: { label?: string; gatewayId?: string } = {}
+function parseConnectFlags(args: string[]): { label?: string; gatewayId?: string; backend?: 'tmux' | 'pty' } {
+	const flags: { label?: string; gatewayId?: string; backend?: 'tmux' | 'pty' } = {}
 	for (let i = 0; i < args.length; i++) {
 		switch (args[i]) {
 			case '--label':
@@ -58,6 +64,12 @@ function parseConnectFlags(args: string[]): { label?: string; gatewayId?: string
 			case '--gateway-id':
 				flags.gatewayId = args[++i]
 				break
+			case '--backend': {
+				const v = args[++i]
+				if (v !== 'tmux' && v !== 'pty') throw new CliError(`--backend must be tmux or pty, got: ${v}`, 2)
+				flags.backend = v
+				break
+			}
 			default:
 				throw new CliError(`unknown terminal connect flag: ${args[i]}`, 2)
 		}

@@ -27,13 +27,15 @@ const conn: Conn = {
 	assert.ok(cfg.wsUrl.startsWith('wss://canvas.example.com/api/terminal/connect?'), 'wss ws url on the connect route')
 	assert.ok(cfg.wsUrl.includes(`gatewayId=${encodeURIComponent(cfg.gatewayId)}`))
 	assert.ok(cfg.wsUrl.includes(`label=${encodeURIComponent(cfg.label)}`))
+	assert.equal(cfg.backend, 'tmux', 'backend defaults to tmux (legacy path unchanged)')
 }
 
 // Explicit flags win.
 {
-	const cfg = resolveConnectConfig(conn, { label: 'my-box', gatewayId: 'fixed-id' }, process.env)
+	const cfg = resolveConnectConfig(conn, { label: 'my-box', gatewayId: 'fixed-id', backend: 'pty' }, process.env)
 	assert.equal(cfg.label, 'my-box')
 	assert.equal(cfg.gatewayId, 'fixed-id')
+	assert.equal(cfg.backend, 'pty', 'explicit --backend pty wins')
 }
 
 // http url → ws (not wss) for a none/localhost instance.
@@ -63,4 +65,25 @@ const conn: Conn = {
 	assert.ok(printed.wsUrl.startsWith('ws://localhost:8788/api/terminal/connect?'))
 }
 
-console.log('ok: connect — ws url + stable-gateway-id/hostname defaults, flags win, --dry-run config')
+// --backend parsing: valid values pass through --dry-run; invalid rejects (exit-2 CliError).
+{
+	const env = { ...process.env, ENSEMBLEWORKS_URL: 'http://localhost:8788' } as NodeJS.ProcessEnv
+	const outChunks: string[] = []
+	const realOut = process.stdout.write.bind(process.stdout)
+	;(process.stdout as any).write = (s: string) => { outChunks.push(String(s)); return true }
+	try {
+		const code = await connectSlot(['--backend', 'pty'], { refresh: false, json: false, dryRun: true, help: false }, env)
+		assert.equal(code, 0)
+	} finally {
+		;(process.stdout as any).write = realOut
+	}
+	assert.equal(JSON.parse(outChunks.join('')).backend, 'pty', '--dry-run config carries the backend')
+
+	await assert.rejects(
+		() => connectSlot(['--backend', 'screen'], { refresh: false, json: false, dryRun: true, help: false }, env),
+		/--backend must be tmux or pty/,
+		'invalid backend value rejected',
+	)
+}
+
+console.log('ok: connect — ws url + stable-gateway-id/hostname defaults, flags win, --backend default/validation, --dry-run config')
