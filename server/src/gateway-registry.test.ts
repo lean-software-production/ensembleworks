@@ -156,6 +156,58 @@ async function main() {
 		console.log('ok: gateway owner binding')
 	}
 
+	// --- codespace metadata + input-policy defaults/persistence (SP3) ---
+	{
+		const reg3 = new GatewayRegistry()
+		// A registration carrying repo metadata is a codespace → defaults locked.
+		const cs = reg3.connect('cs1', 'CS', fakeSocket(), 'token:a', {
+			repo: 'github.com/acme/app',
+			branch: 'main',
+		})
+		assert.ok(cs, 'codespace registers')
+		assert.equal(cs.repo, 'github.com/acme/app')
+		assert.equal(cs.branch, 'main')
+		assert.equal(cs.inputPolicy, 'locked', 'repo metadata → default locked')
+		// A plain gateway (no repo) defaults shared — today's behavior exactly.
+		const plain = reg3.connect('plain1', 'Box', fakeSocket(), 'token:a')
+		assert.ok(plain)
+		assert.equal(plain.repo, undefined)
+		assert.equal(plain.inputPolicy, 'shared', 'plain gateway → default shared')
+
+		// list() exposes the metadata + the owner identity.
+		const listed = Object.fromEntries(reg3.list().map((g) => [g.gatewayId, g]))
+		assert.equal(listed.cs1!.repo, 'github.com/acme/app')
+		assert.equal(listed.cs1!.branch, 'main')
+		assert.equal(listed.cs1!.inputPolicy, 'locked')
+		assert.equal(listed.cs1!.owner, 'token:a')
+		assert.equal(listed.plain1!.inputPolicy, 'shared')
+		assert.equal(listed.plain1!.repo, undefined)
+
+		// setInputPolicy flips a live gateway; unknown id → false.
+		assert.equal(reg3.setInputPolicy('cs1', 'shared'), true)
+		assert.equal(reg3.get('cs1')!.inputPolicy, 'shared')
+		assert.equal(reg3.setInputPolicy('nope', 'locked'), false)
+
+		// Policy survives a same-owner reconnect within the server lifetime —
+		// the remembered value beats the repo-derived default (decision log 3).
+		const csWs2 = fakeSocket()
+		const cs2 = reg3.connect('cs1', 'CS', csWs2, 'token:a', {
+			repo: 'github.com/acme/app',
+			branch: 'main',
+		})
+		assert.ok(cs2)
+		assert.equal(cs2.inputPolicy, 'shared', 'remembered policy survives reconnect')
+		// …and survives a full disconnect + fresh connect too (keyed by gatewayId,
+		// not by the live entry).
+		reg3.disconnect('cs1', csWs2)
+		const cs3 = reg3.connect('cs1', 'CS', fakeSocket(), 'token:a', {
+			repo: 'github.com/acme/app',
+		})
+		assert.ok(cs3)
+		assert.equal(cs3.inputPolicy, 'shared', 'policy keyed by gatewayId outlives the entry')
+		console.log('ok: codespace metadata + input-policy defaults/persistence')
+	}
+
 	console.log('gateway-registry.test.ts: all assertions passed')
 }
 

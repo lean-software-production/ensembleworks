@@ -36,12 +36,26 @@ export interface RelaySocket {
 	close(): void
 }
 
+export type GatewayInputPolicy = 'locked' | 'shared'
+
+/** Codespace metadata riding the registration (EW Codespaces spec §4). */
+export interface GatewayMeta {
+	repo?: string
+	branch?: string
+}
+
 export interface GatewayEntry {
 	gatewayId: string
 	label: string
 	ws: RelaySocket
 	ownerIdentity: string
 	connectedAt: number
+	// Codespace metadata (spec §4): present iff the registration carried it.
+	repo?: string
+	branch?: string
+	// Owner-controlled input ACL. Default: locked for codespaces (repo present),
+	// shared for plain gateways — preserving pre-SP3 behavior exactly.
+	inputPolicy: GatewayInputPolicy
 	channels: Map<number, RelaySocket>
 	nextChannelId: number
 }
@@ -60,11 +74,22 @@ export function decodeBinaryFrame(frame: Buffer): { channelId: number; payload: 
 export class GatewayRegistry {
 	private gateways = new Map<string, GatewayEntry>()
 
+	// Input policy keyed by gatewayId — survives reconnects AND disconnects
+	// within a server lifetime; resets to the repo-derived default on restart
+	// (safe direction: a codespace resets to locked). Decision log, SP3 item 3.
+	private policies = new Map<string, GatewayInputPolicy>()
+
 	/** Connect-equals-register, bound to the caller's identity. A reconnect by the
 	 * SAME owner replaces the live id (old socket + riding browsers closed; their
 	 * client-side backoff re-establishes channels). A connect by a DIFFERENT owner
 	 * is rejected (returns null) and leaves the existing gateway untouched. */
-	connect(gatewayId: string, label: string, ws: RelaySocket, ownerIdentity: string): GatewayEntry | null {
+	connect(
+		gatewayId: string,
+		label: string,
+		ws: RelaySocket,
+		ownerIdentity: string,
+		meta: GatewayMeta = {}
+	): GatewayEntry | null {
 		const existing = this.gateways.get(gatewayId)
 		if (existing && existing.ownerIdentity !== ownerIdentity) return null
 		if (existing) {
@@ -78,6 +103,9 @@ export class GatewayRegistry {
 			ws,
 			ownerIdentity,
 			connectedAt: Date.now(),
+			repo: meta.repo,
+			branch: meta.branch,
+			inputPolicy: this.policies.get(gatewayId) ?? (meta.repo ? 'locked' : 'shared'),
 			channels: new Map(),
 			nextChannelId: 1,
 		}
@@ -99,14 +127,39 @@ export class GatewayRegistry {
 		return this.gateways.get(gatewayId)
 	}
 
+	/** Owner-authorised policy flip (the HTTP endpoint enforces WHO may call
+	 * this; the registry just records it). False when the gateway is offline. */
+	setInputPolicy(gatewayId: string, policy: GatewayInputPolicy): boolean {
+		const entry = this.gateways.get(gatewayId)
+		if (!entry) return false
+		entry.inputPolicy = policy
+		this.policies.set(gatewayId, policy)
+		return true
+	}
+
 	// Field names match distributed-terminals-design.md's envelope so the
-	// dropdown survives the upgrade to the full design.
-	list(): Array<{ gatewayId: string; label: string; relayOnly: true; connectedAt: number }> {
+	// dropdown survives the upgrade to the full design. repo/branch/inputPolicy/
+	// owner are the SP3 codespace fields — live state deliberately lives HERE,
+	// not in synced shape props (decision log, SP3 item 2).
+	list(): Array<{
+		gatewayId: string
+		label: string
+		relayOnly: true
+		connectedAt: number
+		repo?: string
+		branch?: string
+		inputPolicy: GatewayInputPolicy
+		owner: string
+	}> {
 		return [...this.gateways.values()].map((e) => ({
 			gatewayId: e.gatewayId,
 			label: e.label,
 			relayOnly: true,
 			connectedAt: e.connectedAt,
+			repo: e.repo,
+			branch: e.branch,
+			inputPolicy: e.inputPolicy,
+			owner: e.ownerIdentity,
 		}))
 	}
 }
