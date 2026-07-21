@@ -176,6 +176,54 @@ One dated entry per decision; newest last.
   5. *Planner reuse*: SP4's plan is authored by the SP2 planner
      (continuation — it owns the store/engine context); SP5 gets a fresh
      auth-focused planner.
+- **2026-07-21 — SP4 plan accepted with six planner deviations** (all
+  approved): (a) layout snapshot on SIGINT as well as SIGTERM; (b) every
+  supervise restart cycle re-runs the idempotent `devcontainer up` — heals a
+  stopped container, which is the reconcile case; (c) preseeded sessions
+  respawn eagerly at 80x24, per-seed failures skipped; (d) `stop` flips
+  `desired` BEFORE `docker stop` so an interrupted stop can't leave a
+  codespace desired-up; (e) `boot-install` enables but never `--now`-starts
+  the unit (avoids racing a live foreground supervisor), narrates the start
+  command + enable-linger; (f) `clone-if-absent` explicitly out of v1 scope
+  (store holds no remote URL) — missing checkouts skip with narration. Plan:
+  `docs/superpowers/plans/2026-07-21-reconciler-layout-restore.md`.
+- **2026-07-21 — Session-limit outage (~06:12–09:50):** the provider session
+  limit killed the SP2 workflow mid-Task-3-review and both planners. On
+  reset: workflow resumed from its run cache (fresh Opus review re-covered
+  Task 3, whose implementer had run without the safety classifier), SP4
+  planner completed its truncated file, SP5 planner restarted. No repo
+  state was lost; Tasks 1–3 commits were already on the branch.
+- **2026-07-21 — SP5 plan accepted with seven planner deviations** (all
+  approved). Standouts: (1) discovery PINNED the real cloudflared mechanics
+  against its source — the auth design doc's §1 "loopback listener" is
+  factually wrong; token delivery is a NaCl-box transfer store polled by
+  the CLI's pubkey at login.cloudflareaccess.org, which also makes the
+  design's §3 headless-human relay free (the printed URL works from any
+  machine); the design doc should get a correction note when the program
+  lands. (2) New Task 11: the connector raises fatal AuthRejectedError on
+  auth-rejected dials — without it the refresh-by-re-exec design never
+  triggers (today's connector would back off forever on a dead token).
+  (3) New cli dependency `tweetnacl` for the transfer decrypt; the fake
+  Access server seals with the same lib. (4) `auth status --json`
+  `reachable` → `state` (adds distinct `credential expired`). (5) Login's
+  interactive method prompt removed — the probe decides (design §1: the URL
+  is the only thing the user types); explicit `--method` still wins. Every
+  unverifiable live-service fact is an explicit VERIFY-ASSUMPTION step in
+  the owner's manual e2e runbook. Plan:
+  `docs/superpowers/plans/2026-07-21-ew-auth-browser-login.md`.
+- **2026-07-21 — SP2 gate: PASS.** Workflow: 13/13 tasks approved, 0 fix
+  rounds, 26 agents (one resume across the session-limit outage).
+  Conformance smoke ran for real — both fixtures (basic + features) PASS
+  through real `devcontainer up` → staged `/ew` connector → relay echo →
+  exact-id stop. Orchestrator independently re-ran the store/up/group
+  suites, exercised a live `--dry-run` (correct plan JSON, stable
+  `cs-ensembleworks-8099da85` id), and confirmed zero secret leakage in
+  dry-run output with a planted `ENSEMBLEWORKS_TOKEN_SECRET`. Notable landed
+  deviation (reviewer-verified): a `.gitignore` negation for
+  `cli/vendor/devcontainers-cli/dist/` — the root blanket `dist/` rule would
+  have silently untracked the vendored 1.7MB bundle. Task 12's
+  paste-into-Execution-notes step was missed by the implementer (flagged
+  important by review); orchestrator filled it post-hoc from the journal.
 - **2026-07-21 — Unattributed commit observed on the branch:** `e5bb4ef
   docs(netguard): egress-proxy spec` appeared mid-run — not produced by this
   orchestration (workflow commit list is complete without it; planners are

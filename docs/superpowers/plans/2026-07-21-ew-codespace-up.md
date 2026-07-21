@@ -2102,7 +2102,29 @@ Done. Hand off per superpowers:finishing-a-development-branch — PR body must i
 
 ## Execution notes
 
-*(filled during execution — paste the Task 12 conformance output tail here, dated)*
+**2026-07-21 — Task 12 conformance run (Sonnet implementer, verified by Opus
+review + orchestrator): PASS, both fixtures.** Verbatim tail of the passing
+run:
+
+```
+[gateway cs-codespace-features-d4251d23] connected (codespace-features@conformance) as dev
+fixture codespace-features: echo round-trip OK
+ensembleworks: codespace connector stopped (container left running — `ew codespace stop` to stop it)
+
+$ bun /home/mrdavidlaing/Work/ensembleworks/cli/src/main.ts codespace stop
+ensembleworks: stopping container ed80fb7d1e24 (cs-codespace-features-d4251d23)
+
+$ docker inspect -f {{.State.Running}} ed80fb7d1e24ef5d28ac4743d81e21d9bb4210bff8ec2cc1a850d24c5c736746
+fixture codespace-features: PASS
+
+$ docker rm -f 1083e8d67db42fe7c0aea10d5c72a85d98ad398a8074a062a44e04712eb6c66d
+
+$ docker rm -f ed80fb7d1e24ef5d28ac4743d81e21d9bb4210bff8ec2cc1a850d24c5c736746
+codespace-conformance: all 2 fixtures passed (vendored @devcontainers/cli 0.87.0)
+```
+
+(`codespace-basic` passed identically earlier in the same run. All docker
+stop/rm/inspect calls targeted exact container ids created by the run.)
 
 ---
 
