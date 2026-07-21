@@ -127,3 +127,33 @@ export function canvasTmuxSpawnSpec(opts: CanvasTmuxSpawnOptions): SpawnSpec {
 		env,
 	}
 }
+
+export interface CanvasShellSpawnOptions {
+	/** shell binary; defaults to $SHELL then /bin/bash. */
+	shell?: string
+	/** cwd for the shell; defaults to $HOME then process.cwd(). */
+	home?: string
+}
+
+/** The raw-shell spawn policy for connector-owned PTYs (EW Codespaces
+ *  coexistence spec §6.1 / design doc §7): the user's login shell directly on
+ *  the PTY — no tmux anywhere. Env hygiene is identical to canvasTmuxSpawnSpec:
+ *  credential scrub, xterm-256color, light-bg hint, and the C.UTF-8 locale
+ *  guarantee (same LC_CTYPE foot-gun, same non-override rule). Trade-off owned
+ *  by the caller: sessions spawned this way die with the spawning process. */
+export function canvasShellSpawnSpec(opts: CanvasShellSpawnOptions = {}): SpawnSpec {
+	const parentEnv = { ...(process.env as Record<string, string>) }
+	for (const k of SPAWN_ENV_SCRUB) delete parentEnv[k]
+	const env: Record<string, string> = {
+		...parentEnv,
+		TERM: 'xterm-256color',
+		COLORFGBG: '0;15', // light-bg hint (same rationale as canvasTmuxSpawnSpec)
+	}
+	if (!env.LANG && !env.LC_ALL && !env.LC_CTYPE) env.LANG = 'C.UTF-8'
+	return {
+		file: opts.shell ?? process.env.SHELL ?? '/bin/bash',
+		args: ['-l'], // login shell (bash/zsh/fish all accept -l) — profile loads, like a Codespaces terminal
+		cwd: opts.home ?? process.env.HOME ?? process.cwd(),
+		env,
+	}
+}

@@ -4,7 +4,7 @@
 // needed here — the tmux path stays covered by server/src/relay-loopback.test.ts.
 import assert from 'node:assert/strict'
 import os from 'node:os'
-import { canvasTmuxSpawnSpec, openTmuxSession } from './session-manager.js'
+import { canvasShellSpawnSpec, canvasTmuxSpawnSpec, openTmuxSession } from './session-manager.js'
 
 const env = { ...process.env, TERM: 'xterm-256color' } as Record<string, string>
 
@@ -103,5 +103,61 @@ assert.equal('LANG' in lcAllOnly.env, false, 'LC_ALL alone counts as a locale �
 delete process.env.LC_ALL
 for (const [k, v] of Object.entries(savedLocale)) if (v !== undefined) process.env[k] = v
 console.log('ok: canvasTmuxSpawnSpec guarantees a UTF-8 locale for the tmux client')
+
+// canvasShellSpawnSpec (EW Codespaces §6.1): the raw-login-shell spawn policy.
+// Same env hygiene as canvasTmuxSpawnSpec (credential scrub, xterm-256color,
+// C.UTF-8 guarantee), but the file is the user's shell and there is no tmux.
+{
+  const prev = {
+    tokenId: process.env.ENSEMBLEWORKS_TOKEN_ID,
+    tokenSecret: process.env.ENSEMBLEWORKS_TOKEN_SECRET,
+    shell: process.env.SHELL,
+    lang: process.env.LANG,
+    lcAll: process.env.LC_ALL,
+    lcCtype: process.env.LC_CTYPE,
+  }
+  try {
+    process.env.ENSEMBLEWORKS_TOKEN_ID = 'tid'
+    process.env.ENSEMBLEWORKS_TOKEN_SECRET = 'tsec'
+
+    // Explicit opts win.
+    const spec = canvasShellSpawnSpec({ shell: '/bin/bash', home: '/tmp' })
+    assert.equal(spec.file, '/bin/bash', 'explicit shell wins')
+    assert.deepEqual(spec.args, ['-l'], 'login shell, no tmux args')
+    assert.equal(spec.cwd, '/tmp', 'explicit home wins')
+    assert.equal(spec.env.TERM, 'xterm-256color')
+    assert.equal(spec.env.COLORFGBG, '0;15')
+    assert.ok(!('ENSEMBLEWORKS_TOKEN_ID' in spec.env), 'token id scrubbed')
+    assert.ok(!('ENSEMBLEWORKS_TOKEN_SECRET' in spec.env), 'token secret scrubbed')
+
+    // Shell default chain: $SHELL, then /bin/bash.
+    process.env.SHELL = '/usr/bin/fish'
+    assert.equal(canvasShellSpawnSpec().file, '/usr/bin/fish', 'defaults to $SHELL')
+    delete process.env.SHELL
+    assert.equal(canvasShellSpawnSpec().file, '/bin/bash', 'falls back to /bin/bash')
+
+    // Locale guarantee (the LC_CTYPE foot-gun): no locale var → LANG=C.UTF-8;
+    // an operator's own locale is never overridden.
+    delete process.env.LANG
+    delete process.env.LC_ALL
+    delete process.env.LC_CTYPE
+    assert.equal(canvasShellSpawnSpec().env.LANG, 'C.UTF-8', 'LANG guaranteed when no locale var set')
+    process.env.LC_ALL = 'en_GB.UTF-8'
+    assert.ok(!('LANG' in canvasShellSpawnSpec().env) || canvasShellSpawnSpec().env.LANG !== 'C.UTF-8', 'operator locale not overridden')
+  } finally {
+    for (const [k, v] of [
+      ['ENSEMBLEWORKS_TOKEN_ID', prev.tokenId],
+      ['ENSEMBLEWORKS_TOKEN_SECRET', prev.tokenSecret],
+      ['SHELL', prev.shell],
+      ['LANG', prev.lang],
+      ['LC_ALL', prev.lcAll],
+      ['LC_CTYPE', prev.lcCtype],
+    ] as const) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  }
+  console.log('ok: canvasShellSpawnSpec — shell resolution, env hygiene, locale guarantee')
+}
 
 process.exit(0)
