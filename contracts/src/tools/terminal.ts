@@ -21,7 +21,7 @@ export const terminalList: ToolDef = {
 	plugin: 'terminal',
 	id: 'list',
 	http: { method: 'GET', path: '/api/terminal/list' },
-	help: 'List registered remote terminal gateways.',
+	help: 'List registered remote terminal gateways (codespaces carry repo/branch/inputPolicy).',
 	zodInput: z.object({}),
 	zodOutput: z.object({
 		gateways: z.array(z.object({
@@ -29,6 +29,11 @@ export const terminalList: ToolDef = {
 			label: z.string(),
 			relayOnly: z.literal(true),
 			connectedAt: z.number(),
+			repo: z.string().optional(),
+			branch: z.string().optional(),
+			inputPolicy: z.enum(['locked', 'shared']),
+			owner: z.string(),
+			viewerIsOwner: z.boolean(),
 		})),
 	}),
 }

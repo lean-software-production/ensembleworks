@@ -17,7 +17,7 @@
  *   binary     connector→canvas: 4-byte BE uint32 channelId prefix + raw pty bytes
  */
 
-import type { IncomingMessage } from 'node:http'
+import type { IncomingHttpHeaders, IncomingMessage } from 'node:http'
 import type { Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from 'ws'
@@ -287,8 +287,14 @@ export function createGatewayPlane() {
 	return {
 		registry,
 
-		listHandler(_req: unknown, res: { json(body: unknown): void }) {
-			res.json({ gateways: registry.list() })
+		async listHandler(req: { headers: IncomingHttpHeaders }, res: { json(body: unknown): void }) {
+			const viewer = await resolveGatewayOwner(req.headers).catch(() => null)
+			res.json({
+				gateways: registry.list().map((g) => ({
+					...g,
+					viewerIsOwner: viewer !== null && viewer === g.owner,
+				})),
+			})
 		},
 
 		/** Returns true when it owned the upgrade (matched path), else false. */
@@ -300,6 +306,10 @@ export function createGatewayPlane() {
 					return true
 				}
 				const label = (url.searchParams.get('label') || gatewayId).slice(0, 64)
+				// Codespace metadata (SP3): free-text, capped; absence keeps the
+				// gateway on the plain/shared path (decision log item 3).
+				const repo = (url.searchParams.get('repo') || '').slice(0, 128) || undefined
+				const branch = (url.searchParams.get('branch') || '').slice(0, 128) || undefined
 				void (async () => {
 					try {
 						const owner = await resolveGatewayOwner(req.headers)
@@ -311,7 +321,7 @@ export function createGatewayPlane() {
 							return
 						}
 						const ws = await accept(req, socket, head)
-						const entry = registry.connect(gatewayId, label, ws, owner)
+						const entry = registry.connect(gatewayId, label, ws, owner, { repo, branch })
 						if (!entry) {
 							console.warn(`[gateway ${gatewayId}] rejected: id owned by another identity`)
 							ws.close(1008, 'gateway id owned by another identity')
@@ -342,14 +352,29 @@ export function createGatewayPlane() {
 					socket.destroy() // offline gateway → immediate destroy (client backoff handles it)
 					return true
 				}
-				void accept(req, socket, head).then((ws) => {
-					const channelId = openChannel(entry, ws, sessionId, cols, rows, null)
-					ws.on('message', (raw, isBinary) => {
-						if (isBinary) return // browsers never send binary (matches terminal-gateway.ts)
-						onBrowserMessage(entry, channelId, raw.toString())
-					})
-					ws.on('close', () => closeChannel(entry, channelId))
-				})
+				void (async () => {
+					try {
+						// Viewer identity for the input ACL (spec §4). null is NOT a
+						// rejection here — an unidentified viewer attaches read-only on
+						// locked gateways; output always flows.
+						const viewer = await resolveGatewayOwner(req.headers).catch(() => null)
+						const ws = await accept(req, socket, head)
+						if (entry.ws.readyState !== WS_OPEN) {
+							// Gateway dropped while we resolved identity.
+							ws.close()
+							return
+						}
+						const channelId = openChannel(entry, ws, sessionId, cols, rows, viewer)
+						ws.on('message', (raw, isBinary) => {
+							if (isBinary) return // browsers never send binary (matches terminal-gateway.ts)
+							onBrowserMessage(entry, channelId, raw.toString())
+						})
+						ws.on('close', () => closeChannel(entry, channelId))
+					} catch (err) {
+						console.warn(`[relay ${gatewayId}] attach failed:`, err)
+						socket.destroy()
+					}
+				})()
 				return true
 			}
 
