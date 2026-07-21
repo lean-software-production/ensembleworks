@@ -301,4 +301,37 @@ const base = () => ({ index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opa
   assert.equal(doc.invalidWriteCount, 0, 'an empty patch on an envelope-invalid shape is still a no-op, not a rejection')
 }
 
+// --- REGRESSION: the reported defect, end to end ---
+// updateProps(frameId, { w: '100' }) used to silently delete the frame AND
+// every shape inside it, on every peer, durably (Loro tombstones make it
+// unrecoverable). Two independent guards now stand in the way: the write is
+// rejected at the boundary (Tasks 2/4), and even if it arrives from a remote
+// peer that skipped that boundary, repair() removes only the frame (Task 6).
+{
+  const doc = LoroCanvasDoc.create({ peerId: 9n, onInvalidWrite: () => {} })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape({ id: 'shape:f', kind: 'frame', parentId: 'page:p', props: { w: 100, h: 100 }, ...base() } as never)
+  doc.putShape({ id: 'shape:c1', kind: 'note', parentId: 'shape:f', props: {}, ...base() } as never)
+  doc.putShape({ id: 'shape:c2', kind: 'note', parentId: 'shape:c1', props: {}, ...base() } as never)
+  doc.setText('shape:c1', 'precious content')
+  doc.commit()
+
+  // GUARD 1 — origination.
+  doc.updateProps('shape:f', { w: '100' })
+  doc.commit()
+  assert.deepEqual(doc.repair(), [], 'the bad write never landed, so repair has nothing to do')
+  assert.deepEqual(doc.listShapes().map((s) => s.id).sort(), ['shape:c1', 'shape:c2', 'shape:f'])
+  assert.equal(doc.getText('shape:c1'), 'precious content')
+
+  // GUARD 2 — proportionality, given the write DID land (a remote peer's bytes).
+  const stillValid = doc.getShape('shape:f')!
+  doc.putShapeUnchecked({ ...stillValid, props: { w: '100', h: 100 } } as never)
+  doc.commit()
+  const plan = doc.repair()
+  doc.commit()
+  assert.deepEqual(plan, [{ op: 'dropShape', id: 'shape:f' }])
+  assert.deepEqual(doc.listShapes().map((s) => s.id).sort(), ['shape:c1', 'shape:c2'], 'the contents survive the frame')
+  assert.equal(doc.getText('shape:c1'), 'precious content', 'and keep their text')
+}
+
 console.log('ok: write-validation')
