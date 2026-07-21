@@ -84,6 +84,12 @@ export interface CanvasDoc {
    * entire subtree in the real Loro tree — any shape whose ancestry passes
    * through `id` (e.g. a frame's children) is deleted too, and every deleted
    * shape's text container is cleared (no resurrection if the id is reused).
+   *
+   * This cascade is intentional and unchanged: an EXPLICIT delete means to take
+   * the contents — deleting a frame deletes what is in it. It is NOT the
+   * behaviour repair() dropped; repair()'s automatic response to an invalid
+   * prop removes only the offending shape and rescues its children. The
+   * asymmetry between the two is deliberate, not a bug.
    */
   deleteShape(id: string): void
   /**
@@ -128,16 +134,29 @@ export interface CanvasDoc {
    * Compute the deterministic repairPlan (canvas-model) from this doc's own
    * converged state and apply it: reparent orphans/cycle members to the
    * canonical page root (lexicographically smallest page id — see
-   * canonicalPageId), delete dangling bindings, drop shapes with invalid
-   * props (cascades to their subtree AND to bindings whose endpoint drops in
-   * the same pass). Pure function of the converged model, so every peer that
-   * calls repair() on the same state computes and applies the identical plan
-   * — no coordination needed. Idempotent: calling repair() again on an
-   * already-clean doc returns []. Zero-page docs: orphans are unrepairable
-   * (no target page) — the violation is left standing rather than looping on
-   * a non-converging op. The returned array is the plan as computed, not a
-   * full change log — shapes and bindings removed only via cascade (not named
-   * in the plan) are not itemized. Caller must commit() after to persist.
+   * canonicalPageId), delete dangling bindings, and drop shapes with invalid
+   * props — removing ONLY the offending shape, never its subtree (one bad prop
+   * must not execute a container's innocent contents, and Loro tombstones make
+   * that loss unrecoverable). Each child of a dropped shape is rescued, not
+   * deleted: a LOGICAL child (its stored parentId names the dropped shape) is
+   * rehomed to the root of the page the dropped shape was already on — its
+   * pageAncestorId, falling back to the canonical page ONLY when that chain
+   * dead-ends or cycles (owner ruling 11: a rescued child may shift position
+   * but must not change page) — and a merely-PHYSICAL tree child is lifted
+   * clear of Loro's delete cascade the same way. A binding whose endpoint is a
+   * dropped shape dies in the same pass (it is not dangling when the plan is
+   * computed, so no deleteBinding op names it — sweeping it here is what lets
+   * ONE pass converge). Pure function of the converged model, so every peer
+   * that calls repair() on the same state computes and applies the identical
+   * plan — no coordination needed. Idempotent: calling repair() again on an
+   * already-clean doc returns []. Zero-page docs: orphans are unrepairable (no
+   * target page) — the violation is left standing rather than looping on a
+   * non-converging op; dropShape is suppressed by the same rule, so a childless
+   * invalid shape stays invalid until a page exists. The returned array is the
+   * plan as computed, not a full change log — the bindings swept because an
+   * endpoint dropped, and the children rehomed off a dropped parent, are side
+   * effects of the dropShape ops and are not themselves itemized. Caller must
+   * commit() after to persist.
    */
   repair(): RepairOp[]
   subscribe(listener: () => void): () => void
