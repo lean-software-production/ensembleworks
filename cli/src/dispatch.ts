@@ -16,6 +16,7 @@ import { spawnSync } from 'node:child_process'
 import { login } from './auth/login.ts'
 import { logout } from './auth/logout.ts'
 import { status } from './auth/status.ts'
+import { codespaceGroup } from './codespace/index.ts'
 import { CliError } from './errors.ts'
 import { hostsPath, loadHosts } from './hosts.ts'
 import { connectSlot } from './native/connect.ts'
@@ -76,6 +77,7 @@ export async function dispatch(rest: string[], globals: Globals, env: NodeJS.Pro
 	if (group === undefined || group === 'help') return printTopHelp()
 	if (group === 'version') return version({ url: globals.url, room: globals.room, json: globals.json }, env)
 	if (group === 'auth') return authGroup(rest.slice(1), globals, env)
+	if (group === 'codespace') return codespaceGroup(rest.slice(1), globals, env)
 	if (group === 'tools') return tools(rest.slice(1), { url: globals.url, room: globals.room, json: globals.json }, env)
 
 	// 2. Native (group, verb) pairs — win over the manifest.
@@ -190,7 +192,7 @@ function unknownError(group: string, verb: string | undefined, all: { plugin: st
 function printTopHelp(): number {
 	emitLine('ensembleworks <group> <verb> [args] — a generic renderer of GET /api/tools')
 	emitLine('')
-	emitLine('native: auth login|status|logout · tools [refresh] · version · terminal connect · canvas pull-images · file open|refresh <path>')
+	emitLine('native: auth login|status|logout · codespace up|stop|rebuild|list · tools [refresh] · version · terminal connect · canvas pull-images · file open|refresh <path>')
 	emitLine('rendered: any verb from `ensembleworks tools` (canvas/roadmap/scribe/terminal/av/kernel)')
 	emitLine('global flags: --url --room --refresh --json --dry-run -h/--help')
 	return 0
