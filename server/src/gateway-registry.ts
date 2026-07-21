@@ -44,6 +44,13 @@ export interface GatewayMeta {
 	branch?: string
 }
 
+/** A spliced browser channel: the socket plus the viewer identity resolved at
+ * relay attach (null = no resolvable identity → treated as non-owner). */
+export interface RelayChannel {
+	socket: RelaySocket
+	viewer: string | null
+}
+
 export interface GatewayEntry {
 	gatewayId: string
 	label: string
@@ -56,7 +63,7 @@ export interface GatewayEntry {
 	// Owner-controlled input ACL. Default: locked for codespaces (repo present),
 	// shared for plain gateways — preserving pre-SP3 behavior exactly.
 	inputPolicy: GatewayInputPolicy
-	channels: Map<number, RelaySocket>
+	channels: Map<number, RelayChannel>
 	nextChannelId: number
 }
 
@@ -93,7 +100,7 @@ export class GatewayRegistry {
 		const existing = this.gateways.get(gatewayId)
 		if (existing && existing.ownerIdentity !== ownerIdentity) return null
 		if (existing) {
-			for (const browser of existing.channels.values()) browser.close()
+			for (const ch of existing.channels.values()) ch.socket.close()
 			existing.channels.clear()
 			existing.ws.close()
 		}
@@ -119,7 +126,7 @@ export class GatewayRegistry {
 	disconnect(gatewayId: string, ws: RelaySocket): void {
 		const entry = this.gateways.get(gatewayId)
 		if (!entry || entry.ws !== ws) return
-		for (const browser of entry.channels.values()) browser.close()
+		for (const ch of entry.channels.values()) ch.socket.close()
 		this.gateways.delete(gatewayId)
 	}
 
@@ -169,10 +176,11 @@ export function openChannel(
 	browser: RelaySocket,
 	sessionId: string,
 	cols: number,
-	rows: number
+	rows: number,
+	viewer: string | null
 ): number {
 	const channelId = entry.nextChannelId++
-	entry.channels.set(channelId, browser)
+	entry.channels.set(channelId, { socket: browser, viewer })
 	entry.ws.send(JSON.stringify({ type: 'relay-open', channelId, sessionId, cols, rows }))
 	return channelId
 }
@@ -184,13 +192,22 @@ export function closeChannel(entry: GatewayEntry, channelId: number): void {
 	}
 }
 
-/** Browser → gateway: wrap the inner text message (input/resize) as relay-msg. */
+/** Browser → gateway: wrap the inner text message (input/resize) as relay-msg.
+ * THE input-ACL enforcement point (spec §4): when the gateway is locked and the
+ * channel's viewer is not the owner, `input` frames are dropped HERE — output
+ * and resize still flow, and client-side read-only badges are decoration only. */
 export function onBrowserMessage(entry: GatewayEntry, channelId: number, raw: string): void {
 	let msg: unknown
 	try {
 		msg = JSON.parse(raw)
 	} catch {
 		return
+	}
+	const channel = entry.channels.get(channelId)
+	if (!channel) return
+	if ((msg as { type?: unknown }).type === 'input' && entry.inputPolicy === 'locked') {
+		const isOwner = channel.viewer !== null && channel.viewer === entry.ownerIdentity
+		if (!isOwner) return // dropped at the relay — the server is the authority
 	}
 	if (entry.ws.readyState === WS_OPEN) {
 		entry.ws.send(JSON.stringify({ type: 'relay-msg', channelId, msg }))
@@ -203,14 +220,14 @@ export function onGatewayFrame(entry: GatewayEntry, data: Buffer, isBinary: bool
 	if (isBinary) {
 		const decoded = decodeBinaryFrame(data)
 		if (!decoded) return
-		const browser = entry.channels.get(decoded.channelId)
-		if (!browser || browser.readyState !== WS_OPEN) return
-		if (browser.bufferedAmount > BROWSER_BUFFER_LIMIT) {
+		const channel = entry.channels.get(decoded.channelId)
+		if (!channel || channel.socket.readyState !== WS_OPEN) return
+		if (channel.socket.bufferedAmount > BROWSER_BUFFER_LIMIT) {
 			entry.channels.delete(decoded.channelId)
-			browser.close()
+			channel.socket.close()
 			return
 		}
-		browser.send(decoded.payload, { binary: true })
+		channel.socket.send(decoded.payload, { binary: true })
 		return
 	}
 	let msg: { type?: string; channelId?: number; msg?: unknown }
@@ -220,12 +237,12 @@ export function onGatewayFrame(entry: GatewayEntry, data: Buffer, isBinary: bool
 		return
 	}
 	if (typeof msg.channelId !== 'number') return
-	const browser = entry.channels.get(msg.channelId)
+	const channel = entry.channels.get(msg.channelId)
 	if (msg.type === 'relay-msg') {
-		if (browser && browser.readyState === WS_OPEN) browser.send(JSON.stringify(msg.msg))
+		if (channel && channel.socket.readyState === WS_OPEN) channel.socket.send(JSON.stringify(msg.msg))
 	} else if (msg.type === 'relay-closed') {
 		entry.channels.delete(msg.channelId)
-		browser?.close()
+		channel?.socket.close()
 	}
 }
 
@@ -326,7 +343,7 @@ export function createGatewayPlane() {
 					return true
 				}
 				void accept(req, socket, head).then((ws) => {
-					const channelId = openChannel(entry, ws, sessionId, cols, rows)
+					const channelId = openChannel(entry, ws, sessionId, cols, rows, null)
 					ws.on('message', (raw, isBinary) => {
 						if (isBinary) return // browsers never send binary (matches terminal-gateway.ts)
 						onBrowserMessage(entry, channelId, raw.toString())

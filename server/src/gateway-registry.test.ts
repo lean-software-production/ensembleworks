@@ -56,7 +56,7 @@ async function main() {
 
 	// --- openChannel sends relay-open with monotonic uint32 ids ---
 	const browser1 = fakeSocket()
-	const ch1 = openChannel(entry1, browser1, 'sess1', 80, 24)
+	const ch1 = openChannel(entry1, browser1, 'sess1', 80, 24, 'token:a')
 	assert.equal(ch1, 1)
 	assert.deepEqual(lastJson(gw1), {
 		type: 'relay-open',
@@ -65,7 +65,7 @@ async function main() {
 		cols: 80,
 		rows: 24,
 	})
-	const ch2 = openChannel(entry1, fakeSocket(), 'sess1', 80, 24)
+	const ch2 = openChannel(entry1, fakeSocket(), 'sess1', 80, 24, 'token:a')
 	assert.equal(ch2, 2)
 
 	// --- browser → gateway wraps as relay-msg ---
@@ -101,7 +101,7 @@ async function main() {
 
 	// --- backpressure: over-limit browser is closed, not written ---
 	const slow = fakeSocket()
-	const ch3 = openChannel(entry1, slow, 'sess1', 80, 24)
+	const ch3 = openChannel(entry1, slow, 'sess1', 80, 24, 'token:a')
 	slow.bufferedAmount = BROWSER_BUFFER_LIMIT + 1
 	const sentBefore = slow.sent.length
 	onGatewayFrame(entry1, encodeBinaryFrame(ch3, Buffer.from('x')), true)
@@ -110,14 +110,14 @@ async function main() {
 
 	// --- closeChannel notifies the gateway ---
 	const browser4 = fakeSocket()
-	const ch4 = openChannel(entry1, browser4, 'sess1', 80, 24)
+	const ch4 = openChannel(entry1, browser4, 'sess1', 80, 24, 'token:a')
 	closeChannel(entry1, ch4)
 	assert.deepEqual(lastJson(gw1), { type: 'relay-close', channelId: ch4 })
 	assert.equal(entry1.channels.has(ch4), false)
 
 	// --- replace-on-reconnect: old ws closed, riding browsers closed ---
 	const browser5 = fakeSocket()
-	openChannel(entry1, browser5, 'sess1', 80, 24)
+	openChannel(entry1, browser5, 'sess1', 80, 24, 'token:a')
 	const gw2 = fakeSocket()
 	const entry2 = reg.connect('gw-a', 'Box A again', gw2, 'token:a')
 	assert.ok(entry2, 'same-owner reconnect replaces')
@@ -139,7 +139,7 @@ async function main() {
 		const a = reg2.connect('g', 'A', wsA, 'token:a')
 		assert.ok(a, 'first connect registers')
 		const browser = fakeSocket()
-		openChannel(a, browser, 's1', 80, 24)
+		openChannel(a, browser, 's1', 80, 24, 'token:a')
 		// A different identity is rejected; A + its browser survive.
 		const wsB = fakeSocket()
 		assert.equal(reg2.connect('g', 'B', wsB, 'token:b'), null, 'different owner → rejected')
@@ -206,6 +206,66 @@ async function main() {
 		assert.ok(cs3)
 		assert.equal(cs3.inputPolicy, 'shared', 'policy keyed by gatewayId outlives the entry')
 		console.log('ok: codespace metadata + input-policy defaults/persistence')
+	}
+
+	// --- input ACL matrix at the relay (SP3, decision log item 4) ---
+	// owner / non-owner / anonymous(null) × locked / shared × input / resize,
+	// plus: output always flows. Enforcement is HERE, server-side — client
+	// badges are decoration.
+	{
+		const reg4 = new GatewayRegistry()
+		const gwSock = fakeSocket()
+		const entry = reg4.connect('cs1', 'CS', gwSock, 'sso:owner@acme.dev', {
+			repo: 'github.com/acme/app',
+		})!
+		assert.equal(entry.inputPolicy, 'locked')
+
+		const owner = fakeSocket()
+		const guest = fakeSocket()
+		const anon = fakeSocket()
+		const chOwner = openChannel(entry, owner, 's1', 80, 24, 'sso:owner@acme.dev')
+		const chGuest = openChannel(entry, guest, 's1', 80, 24, 'sso:guest@acme.dev')
+		const chAnon = openChannel(entry, anon, 's1', 80, 24, null)
+
+		const input = JSON.stringify({ type: 'input', data: 'x' })
+		const resize = JSON.stringify({ type: 'resize', cols: 100, rows: 30 })
+		const framesTo = (ch: number) =>
+			gwSock.sent
+				.map((s) => JSON.parse(String(s.data)))
+				.filter((m) => m.type === 'relay-msg' && m.channelId === ch)
+				.map((m) => m.msg.type)
+
+		// locked: owner input forwarded; non-owner + anonymous input DROPPED;
+		// resize forwarded for everyone (grid stays deterministic for viewers).
+		onBrowserMessage(entry, chOwner, input)
+		onBrowserMessage(entry, chGuest, input)
+		onBrowserMessage(entry, chAnon, input)
+		onBrowserMessage(entry, chOwner, resize)
+		onBrowserMessage(entry, chGuest, resize)
+		onBrowserMessage(entry, chAnon, resize)
+		assert.deepEqual(framesTo(chOwner), ['input', 'resize'], 'locked: owner input + resize forwarded')
+		assert.deepEqual(framesTo(chGuest), ['resize'], 'locked: non-owner input dropped, resize forwarded')
+		assert.deepEqual(framesTo(chAnon), ['resize'], 'locked: anonymous input dropped, resize forwarded')
+
+		// Output always flows, policy-independent — non-owner still SEES the pty.
+		onGatewayFrame(entry, encodeBinaryFrame(chGuest, Buffer.from('out')), true)
+		const guestBin = guest.sent.at(-1)!
+		assert.equal(guestBin.binary, true)
+		assert.equal(guestBin.data.toString(), 'out', 'locked: output still reaches the non-owner')
+
+		// shared: everyone's input forwarded (legacy behavior — and the ensemble
+		// "hand over the keyboard" state).
+		reg4.setInputPolicy('cs1', 'shared')
+		onBrowserMessage(entry, chGuest, input)
+		onBrowserMessage(entry, chAnon, input)
+		assert.deepEqual(framesTo(chGuest), ['resize', 'input'], 'shared: non-owner input forwarded')
+		assert.deepEqual(framesTo(chAnon), ['resize', 'input'], 'shared: anonymous input forwarded')
+
+		// Unknown channel: dropped silently (no throw, nothing forwarded).
+		const before = gwSock.sent.length
+		onBrowserMessage(entry, 999, input)
+		assert.equal(gwSock.sent.length, before, 'unknown channel is dropped')
+		console.log('ok: relay input ACL matrix')
 	}
 
 	console.log('gateway-registry.test.ts: all assertions passed')
