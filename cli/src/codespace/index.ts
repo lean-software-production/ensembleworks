@@ -3,7 +3,9 @@
  *  with --remove-existing-container (decision #7). */
 import type { Globals } from '../dispatch.ts'
 import { CliError } from '../errors.ts'
+import { codespaceBootInstall } from './boot-install.ts'
 import { codespaceList } from './list.ts'
+import { codespaceReconcile } from './reconcile.ts'
 import { codespaceStop } from './stop.ts'
 import { codespaceUp } from './up.ts'
 
@@ -18,7 +20,11 @@ export async function codespaceGroup(args: string[], globals: Globals, env: Node
 			return codespaceStop(args.slice(1), globals, env)
 		case 'list':
 			return codespaceList(args.slice(1), globals, env)
+		case 'reconcile':
+			return codespaceReconcile(args.slice(1), globals, env)
+		case 'boot-install':
+			return codespaceBootInstall(args.slice(1), globals, env)
 		default:
-			throw new CliError(`unknown codespace command: ${verb ?? '(none)'} (expected up | stop | rebuild | list)`, 2)
+			throw new CliError(`unknown codespace command: ${verb ?? '(none)'} (expected up | stop | rebuild | list | reconcile | boot-install)`, 2)
 	}
 }

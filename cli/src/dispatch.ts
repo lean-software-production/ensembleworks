@@ -192,7 +192,7 @@ function unknownError(group: string, verb: string | undefined, all: { plugin: st
 function printTopHelp(): number {
 	emitLine('ensembleworks <group> <verb> [args] — a generic renderer of GET /api/tools')
 	emitLine('')
-	emitLine('native: auth login|status|logout · codespace up|stop|rebuild|list · tools [refresh] · version · terminal connect · canvas pull-images · file open|refresh <path>')
+	emitLine('native: auth login|status|logout · codespace up|stop|rebuild|list|reconcile|boot-install · tools [refresh] · version · terminal connect · canvas pull-images · file open|refresh <path>')
 	emitLine('rendered: any verb from `ensembleworks tools` (canvas/roadmap/scribe/terminal/av/kernel)')
 	emitLine('global flags: --url --room --refresh --json --dry-run -h/--help')
 	return 0

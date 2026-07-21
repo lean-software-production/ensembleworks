@@ -32,13 +32,13 @@ const captureStd = async (fn: () => Promise<number>) => {
 {
 	const r = await captureStd(() => main(['codespace', 'frobnicate'], env))
 	assert.equal(r.code, 2)
-	assert.match(r.err, /unknown codespace command: frobnicate .*up \| stop \| rebuild \| list/)
+	assert.match(r.err, /unknown codespace command: frobnicate .*up \| stop \| rebuild \| list \| reconcile \| boot-install/)
 }
 // No verb at all → same shape.
 {
 	const r = await captureStd(() => main(['codespace'], env))
 	assert.equal(r.code, 2)
-	assert.match(r.err, /unknown codespace command: \(none\)/)
+	assert.match(r.err, /unknown codespace command: \(none\) .*reconcile \| boot-install/)
 }
 // list --json against the empty isolated store: exit 0, `{}` on stdout.
 {
@@ -53,4 +53,18 @@ const captureStd = async (fn: () => Promise<number>) => {
 	assert.match(r.out, /codespace up\|stop\|rebuild\|list/)
 }
 
-console.log('ok: codespace group — verb menu, list --json end-to-end, top help')
+// reconcile dispatches: --dry-run against the empty store prints the empty plan.
+{
+	const r = await captureStd(() => main(['codespace', 'reconcile', '--dry-run'], env))
+	assert.equal(r.code, 0)
+	assert.deepEqual(JSON.parse(r.out), { targets: [], skipped: [] }, 'reconcile wired through dispatch')
+}
+// boot-install dispatches: --dry-run emits the unit plan (linux CI; the verb
+// guard is platform-injected and covered in boot-install.test.ts).
+if (process.platform === 'linux') {
+	const r = await captureStd(() => main(['codespace', 'boot-install', '--dry-run'], env))
+	assert.equal(r.code, 0)
+	assert.ok(JSON.parse(r.out).unitText.includes('codespace reconcile'), 'boot-install wired through dispatch')
+}
+
+console.log('ok: codespace group — verb menu, list --json end-to-end, reconcile/boot-install dispatch, top help')
