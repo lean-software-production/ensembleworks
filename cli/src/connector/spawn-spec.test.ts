@@ -25,4 +25,14 @@ const env = { HOME: '/home/u', SHELL: '/bin/zsh' } as NodeJS.ProcessEnv
 	assert.ok(!spec.args.includes('abc'), 'raw shell has no session-name arg')
 }
 
-console.log('ok: spawnSpecFor — tmux vs pty spawn policy selection')
+// SP4 cwd passthrough: a seeded cwd overrides HOME for the spawned shell/tmux;
+// no cwd → the existing HOME default.
+{
+	const spec = spawnSpecFor('pty', 'abc', env, '/workspaces/repo/sub')
+	assert.equal(spec.cwd, '/workspaces/repo/sub', 'seeded cwd wins for the pty backend')
+	const tmuxSpec = spawnSpecFor('tmux', 'abc', env, '/workspaces/repo/sub')
+	assert.equal(tmuxSpec.cwd, '/workspaces/repo/sub', 'seeded cwd wins for tmux too')
+	assert.equal(spawnSpecFor('pty', 'abc', env).cwd, '/home/u', 'no seed → HOME default unchanged')
+}
+
+console.log('ok: spawnSpecFor — tmux vs pty spawn policy selection, seeded-cwd override')
