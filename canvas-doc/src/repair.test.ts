@@ -1,7 +1,7 @@
 // Run: bun src/repair.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from './loro-canvas-doc.js'
-import { applyRepairToModel, checkInvariants, repairPlan, type CanvasDocument } from '@ensembleworks/canvas-model'
+import { applyRepairToModel, canonicalPageId, checkInvariants, repairPlan, type CanvasDocument } from '@ensembleworks/canvas-model'
 import { dumpModel } from './bridge.js'
 
 // Normalize for cross-engine comparison: Loro list order (tree traversal /
@@ -54,14 +54,16 @@ assert.deepEqual(doc2.listBindings(), [], 'binding orphaned by the same-pass dro
 assert.deepEqual(checkInvariants(dumpModel(doc2)), [], 'ONE repair() call converges — no second pass needed')
 
 // Order-independence (adversarial): a plan holding BOTH dropShape(s1) and
-// reparentToRoot(s2) where s2 is inside s1's cascade. Built via putShape's
-// bulk-load tolerance: s1's parentId names s2 before s2 exists (s1 falls to
-// real-tree root, data.parentId kept), then s2 lands under s1 — so the DUMPED
-// model holds the 2-cycle s1↔s2 the real Loro tree cannot. s1 also fails
-// validProps, so dedup gives dropShape(s1) while s2 keeps reparentToRoot
-// (noCycles). Loro-after-repair must equal applyRepairToModel no matter what
-// order the ops are applied in — reparent must never resurrect a shape the
-// drop cascade claims.
+// reparentToRoot(s2), where s2 is ALSO a rescue candidate (its parentId names
+// the dropped s1). Built via putShape's bulk-load tolerance: s1's parentId
+// names s2 before s2 exists (s1 falls to real-tree root, data.parentId kept),
+// then s2 lands under s1 — so the DUMPED model holds the 2-cycle s1↔s2 the
+// real Loro tree cannot. s1 also fails validProps, so dedup gives
+// dropShape(s1) while s2 keeps reparentToRoot (noCycles). This is the one
+// fixture where the two rehoming rules compete for the same shape, and both
+// engines must resolve it the same way: reparentToRoot wins, and its target is
+// the canonical page. Loro-after-repair must equal applyRepairToModel no
+// matter what order the ops are applied in.
 const doc3 = LoroCanvasDoc.create({ peerId: 3n })
 doc3.putPage({ id: 'page:p', name: 'P' })
 doc3.putShapeUnchecked({ id: 'shape:s1', kind: 'note', parentId: 'shape:s2', props: {}, ...base(), opacity: 'no' } as any)
@@ -72,7 +74,7 @@ const plan3 = repairPlan(before3)
 assert.deepEqual(plan3, [
   { op: 'dropShape', id: 'shape:s1' },
   { op: 'reparentToRoot', id: 'shape:s2' },
-], 'precondition: the plan pairs a drop with a reparent of a shape inside its cascade')
+], 'precondition: the plan pairs a drop with a reparent of the dropped shape’s own child')
 const expected3 = applyRepairToModel(before3, plan3)
 const applied3 = doc3.repair()
 doc3.commit()
@@ -80,13 +82,14 @@ assert.deepEqual(applied3, plan3)
 assert.deepEqual(normalize(dumpModel(doc3)), normalize(expected3), 'Loro and model application agree (order-independent)')
 assert.deepEqual(checkInvariants(dumpModel(doc3)), [], 'invariant-clean after ONE repair()')
 
-// Cascade fixpoint (3 levels) on the Loro doc: dropping the invalid root
-// removes child AND grandchild (the real-tree subtree), and the binding
-// touching the grandchild is swept too. ONE call. Shapes are PUT descendants-
-// first (loadModel's bulk-load pattern: fall to root, then a reparent pass
-// fixes placement), so listShapes() — node-creation order — yields the
-// grandchild before its ancestors and a single in-order pass over it cannot
-// reach the grandchild: only a true fixpoint sweeps binding:g4.
+// PROPORTIONATE drop, 3 levels deep, on the Loro doc: dropping the invalid
+// root removes ONLY that root. Its direct child is rescued onto the dropped
+// root's page, the grandchild rides along under the rescued child (untouched),
+// and the binding touching the grandchild SURVIVES — the grandchild is still
+// there, so the binding is not dangling. Shapes are PUT descendants-first
+// (loadModel's bulk-load pattern: fall to root, then a reparent pass fixes
+// placement), so listShapes() — node-creation order — yields the grandchild
+// before its ancestors; the assertions below sort, so they do not depend on it.
 const doc4 = LoroCanvasDoc.create({ peerId: 4n })
 doc4.putPage({ id: 'page:p', name: 'P' })
 doc4.putShape({ id: 'shape:ar4', kind: 'arrow', parentId: 'page:p', props: {}, ...base() } as any)
@@ -101,16 +104,24 @@ doc4.commit()
   const order = dumpModel(doc4).shapes.map((s) => s.id)
   assert.ok(
     order.indexOf('shape:grandchild4') < order.indexOf('shape:child4'),
-    `precondition: dump lists the grandchild before its parent (fixpoint required); got ${order.join(', ')}`,
+    `precondition: dump lists the grandchild before its parent (adversarial order); got ${order.join(', ')}`,
   )
 }
 
+const before4 = dumpModel(doc4)
 const applied4 = doc4.repair()
 doc4.commit()
-assert.deepEqual(applied4, [{ op: 'dropShape', id: 'shape:bad4' }], 'plan names only the invalid root — descendants cascade')
-assert.deepEqual(doc4.listShapes().map((s) => s.id), ['shape:ar4'], 'bad4, child4 AND grandchild4 all gone')
-assert.deepEqual(doc4.listBindings(), [], 'binding touching the cascaded grandchild swept in the same pass')
+assert.deepEqual(applied4, [{ op: 'dropShape', id: 'shape:bad4' }], 'plan names only the invalid root')
+assert.deepEqual(
+  doc4.listShapes().map((s) => s.id).sort(),
+  ['shape:ar4', 'shape:child4', 'shape:grandchild4'],
+  'ONLY bad4 is gone — child4 and grandchild4 survive',
+)
+assert.equal(doc4.getShape('shape:child4')!.parentId, 'page:p', 'the direct child is rescued to its own page')
+assert.equal(doc4.getShape('shape:grandchild4')!.parentId, 'shape:child4', 'the grandchild is untouched, still under the rescued child')
+assert.deepEqual(doc4.listBindings().map((b) => b.id), ['binding:g4'], 'the binding survives — its endpoint was rescued, not dropped')
 assert.deepEqual(checkInvariants(dumpModel(doc4)), [], 'invariant-clean after ONE repair()')
+assert.deepEqual(normalize(dumpModel(doc4)), normalize(applyRepairToModel(before4, repairPlan(before4))), 'model-agreement on the 3-level rescue')
 
 // ---- (5) dedupe: duplicate physical nodes for ONE shape id (the reviewer's
 // raw-doc repro of the offline delete+recreate race). Two docs fork from a
@@ -198,6 +209,82 @@ assert.deepEqual(checkInvariants(dumpModel(doc4)), [], 'invariant-clean after ON
   docA.commit()
   assert.equal(docA.getShape('shape:x'), undefined, 'post-repair, deleteShape actually deletes the id')
   assert.equal(docA.getShape('shape:y'), undefined, 'the rescued child cascades with the winner — physical rescue proven')
+}
+
+// ---- (6) The reported defect, straight through Loro: one bad prop on a frame
+// must not execute the frame's contents, and must not wipe their TEXT
+// containers. Text is the part only the Loro side can lose — deleteNode
+// cascades over the real tree and clears every descendant's text container, so
+// this asserts the rescue happens BEFORE the delete, not merely that the shape
+// row survives. ----
+const doc6 = LoroCanvasDoc.create({ peerId: 6n })
+doc6.putPage({ id: 'page:p', name: 'P' })
+doc6.putShapeUnchecked({ id: 'shape:f6', kind: 'frame', parentId: 'page:p', props: {}, ...base(), opacity: 'no' } as any)
+doc6.putShape({ id: 'shape:k6', kind: 'note', parentId: 'shape:f6', props: {}, ...base() } as any)
+doc6.putShape({ id: 'shape:gk6', kind: 'note', parentId: 'shape:k6', props: {}, ...base() } as any)
+doc6.setText('shape:k6', 'precious content')
+doc6.setText('shape:gk6', 'also precious')
+doc6.commit()
+
+const before6 = dumpModel(doc6)
+const plan6 = doc6.repair()
+doc6.commit()
+assert.deepEqual(plan6, [{ op: 'dropShape', id: 'shape:f6' }])
+assert.deepEqual(
+  doc6.listShapes().map((s) => s.id).sort(),
+  ['shape:gk6', 'shape:k6'],
+  'the frame is gone; its contents survive',
+)
+assert.equal(doc6.getText('shape:k6'), 'precious content', 'the rescued child keeps its text container')
+assert.equal(doc6.getText('shape:gk6'), 'also precious', 'the rescued grandchild keeps its text container')
+assert.deepEqual(checkInvariants(dumpModel(doc6)), [], 'ONE repair() call converges')
+assert.deepEqual(doc6.repair(), [], 'still idempotent')
+assert.deepEqual(normalize(dumpModel(doc6)), normalize(applyRepairToModel(before6, repairPlan(before6))), 'model-agreement on the proportionality case')
+
+// ---- (7) SAME-PAGE rescue (owner ruling 11) on a MULTI-PAGE doc. Every other
+// fixture in this file has exactly one page (page:p), where the same-page
+// target and canonicalPageId are the same value and the rule is therefore
+// UNTESTABLE — a same-page assertion on those fixtures passes vacuously. Two
+// pages, with the bad shapes on the NON-canonical one, is the minimum that
+// discriminates: canonicalPageId = page:a, the correct answer = page:z.
+//
+// Note what this fixture deliberately does NOT try to pin: the "rescue to
+// pages[0]" mutant. dumpModel's page order comes from LoroMap.keys(), which
+// converges sorted, so at the canvas-doc level pages[0] IS the canonical page
+// and the two are inseparable. That mutant is killed in canvas-model's
+// repair.test.ts, where the page array order is the fixture's own.
+//
+// The chained drop (shape:mid7's own parent is dropped too) additionally pins
+// that the walk passes THROUGH a dropped ancestor to the page rather than
+// stopping on it — the case where a naive "use the dropped parent's parentId"
+// stamps a tombstoned id onto the survivor.
+const doc7 = LoroCanvasDoc.create({ peerId: 7n })
+doc7.putPage({ id: 'page:a', name: 'A' })
+doc7.putPage({ id: 'page:z', name: 'Z' })
+doc7.putShapeUnchecked({ id: 'shape:bad7', kind: 'frame', parentId: 'page:z', props: {}, ...base(), opacity: 'no' } as any)
+doc7.putShapeUnchecked({ id: 'shape:mid7', kind: 'frame', parentId: 'shape:bad7', props: {}, ...base(), opacity: 'no' } as any)
+doc7.putShape({ id: 'shape:kid7', kind: 'note', parentId: 'shape:mid7', props: {}, ...base() } as any)
+doc7.commit()
+{
+  const before7 = dumpModel(doc7)
+  assert.equal(canonicalPageId(before7.pages), 'page:a', 'precondition: the canonical page is NOT the page the bad frames live on')
+  const plan7 = repairPlan(before7)
+  assert.deepEqual(plan7, [
+    { op: 'dropShape', id: 'shape:bad7' },
+    { op: 'dropShape', id: 'shape:mid7' },
+  ], 'precondition: BOTH frames are dropped, so the rescue walk must pass through a dropped ancestor')
+  const expected7 = applyRepairToModel(before7, plan7)
+  assert.deepEqual(doc7.repair(), plan7)
+  doc7.commit()
+  assert.deepEqual(doc7.listShapes().map((s) => s.id), ['shape:kid7'], 'both bad frames gone, the innocent note survives')
+  assert.equal(
+    doc7.getShape('shape:kid7')!.parentId,
+    'page:z',
+    'the rescued child stays on its own page (page:z) — not the canonical page (page:a)',
+  )
+  assert.deepEqual(checkInvariants(dumpModel(doc7)), [], 'invariant-clean after ONE repair()')
+  assert.deepEqual(normalize(dumpModel(doc7)), normalize(expected7), 'model-agreement: Loro and model pick the SAME page')
+  assert.deepEqual(doc7.repair(), [], 'idempotent')
 }
 
 console.log('ok: repair (doc)')

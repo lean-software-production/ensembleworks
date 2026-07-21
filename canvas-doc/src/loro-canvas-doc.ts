@@ -2,7 +2,7 @@
 // __dirname, which bun build --compile can't embed — breaks the standalone binary
 // wherever node_modules isn't present. /base64 inlines the wasm as a JS string.
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt/base64'
-import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, validateShape, SHAPE_KINDS, type Binding, type Page, type RepairOp, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
+import { canonicalPageId, pageAncestorId, repairPlan, stableStringify, validateShape, SHAPE_KINDS, type Binding, type Page, type RepairOp, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
 import { dumpModel } from './bridge.js'
 import type { CanvasDoc, ImportResult, InvalidWrite, InvalidWriteHandler } from './canvas-doc.js'
 
@@ -504,19 +504,33 @@ export class LoroCanvasDoc implements CanvasDoc {
   repair(): RepairOp[] {
     const model = dumpModel(this)
     const plan = repairPlan(model)
-    // dropAll = the plan's dropShape ids plus their transitive descendants in
-    // the MODEL (shared cascadeDropSet — same fixpoint applyRepairToModel
-    // runs, so the two applications cannot drift). It serves two purposes:
-    // 1. Skip-set: a reparentToRoot op whose id is in dropAll is SKIPPED, so
-    //    plan-application order can never matter — without the skip, applying
-    //    reparent(descendant) before dropShape(ancestor) would move the
-    //    descendant out of the doomed subtree and silently resurrect it,
-    //    diverging from applyRepairToModel (which always drops it).
-    // 2. Binding sweep: a binding whose endpoint is in dropAll becomes
-    //    dangling MID-pass (it wasn't when the plan was computed, so the plan
-    //    has no deleteBinding op for it); delete it here so a SINGLE repair()
-    //    call converges — not only the second.
-    const dropAll = cascadeDropSet(model.shapes, new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id)))
+    // The ids the plan drops — exactly those, NOT a descendant closure any
+    // more. A dropShape removes only the shape it names and rescues that
+    // shape's children (see applyRepairToModel, the pure reference this must
+    // agree with byte-for-byte after normalization). Two uses:
+    // 1. Skip-set: a reparentToRoot op whose id is ALSO dropped is skipped.
+    //    Unreachable from repairPlan — its per-id dedup keeps exactly one op
+    //    per id and dropShape outranks reparentToRoot — so this is dead-code
+    //    safety for hand-built plans, like the 'page:orphans' fallback below.
+    //    Under the old CASCADE set it was genuinely reachable (a descendant
+    //    could carry its own reparent op); proportionate drop removed that
+    //    route. Verified unkillable by mutation: deleting the guard leaves
+    //    every suite green.
+    // 2. Binding sweep: a binding whose endpoint is dropped becomes dangling
+    //    MID-pass (it wasn't when the plan was computed, so the plan has no
+    //    deleteBinding op for it); delete it here so a SINGLE repair() call
+    //    converges — not only the second. A binding to a merely RESCUED shape
+    //    survives, because that shape still exists.
+    const dropped = new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id))
+    // reparentToRoot's target, and the FALLBACK target for a rescued child
+    // whose page ancestor cannot be resolved. repairPlan emits neither
+    // dropShape nor reparentToRoot for a zero-page doc, so 'page:orphans' is
+    // unreachable from a repairPlan-produced plan — dead-code safety only.
+    const rootPageId = canonicalPageId(model.pages) ?? 'page:orphans'
+    // Hoisted out of the dropShape branch below: model.pages doesn't change
+    // mid-pass, so this is loop-invariant across every rescued child
+    // pageAncestorId is called for (mirrors applyRepairToModel's own hoist).
+    const pageIds = new Set<string>(model.pages.map((p) => p.id))
     for (const o of plan) {
       if (o.op === 'deleteBinding') this.deleteBinding(o.id)
       // dropShape/reparentToRoot are applied to EVERY physical node sharing
@@ -526,33 +540,67 @@ export class LoroCanvasDoc implements CanvasDoc {
       // operates over the full shapes array, so it never misses a duplicate
       // either. Normal (non-duplicated) docs see exactly one node here, so
       // this is behavior-preserving for every existing single-node case.
-      else if (o.op === 'dropShape') for (const n of this.nodesByShapeId(o.id)) this.deleteNode(n) // cascade + text cleanup
+      else if (o.op === 'dropShape') {
+        // The page every child of THIS dropped shape is rescued onto: the
+        // page ancestor of the dropped parent (owner ruling 11 — a rescued
+        // child may shift in position but must not change page), falling back
+        // to the canonical page when that chain dead-ends or cycles. Computed
+        // ONCE per dropped shape: o.id is the parent every child below shares,
+        // so every child of this node has the same target.
+        const rescueTo = pageAncestorId(model, o.id, pageIds) ?? rootPageId
+        for (const n of this.nodesByShapeId(o.id)) {
+          // RESCUE FIRST, DELETE SECOND. deleteNode cascades over the REAL
+          // tree and clears every descendant's text container, so every
+          // physical child must be moved out of the doomed subtree BEFORE it
+          // runs. This is the one place the Loro side is harder than the
+          // model side, where dropping is a filter over a flat array.
+          // Children that are THEMSELVES dropped are rescued here too and
+          // then removed by their own turn in this loop; that ordering is
+          // what makes the result independent of the order the plan's
+          // dropShape ops are visited in.
+          // The [...] copy is defensive only — probed, n.children() hands back
+          // a fresh array of freshly-constructed wrappers, so moving during
+          // iteration does not disturb it. Kept because that is an
+          // undocumented Loro internal, not a contract.
+          for (const c of [...(n.children() ?? [])]) {
+            this.tree.move(c.id, undefined) // a page-parented shape lives at the Loro tree root
+            c.data.set('parentId', rescueTo)
+          }
+          this.deleteNode(n)
+        }
+      }
       else if (o.op === 'dedupeShape') {
-        if (dropAll.has(o.id)) {
-          // The id is claimed by a drop CASCADE (an ancestor of one of its
-          // copies is being dropped): cascadeDropSet is keyed by id, so the
-          // model drops EVERY entry of this id — mirror that here by
-          // deleting all physical copies (deleteNode's text cleanup is
-          // correct in this branch: the id is model-dead) instead of
-          // collapsing them to a winner the model would not keep.
+        if (dropped.has(o.id)) {
+          // Unreachable from repairPlan — dropShape SUBSUMES dedupeShape for
+          // the same id, so the two never coexist in a plan, and now that
+          // drops no longer cascade there is no cascade route in either.
+          // Kept as dead-code safety for hand-built plans: if the id is
+          // model-dead, remove every physical copy (deleteNode's text cleanup
+          // is correct here) rather than electing a winner the model would
+          // not keep.
           for (const n of this.nodesByShapeId(o.id)) this.deleteNode(n)
         } else {
           this.dedupeShapeNodes(o.id)
         }
       }
       else if (o.op === 'reparentToRoot') {
-        if (dropAll.has(o.id)) continue // claimed by a drop cascade — see above
-        // 'page:orphans' is unreachable: repairPlan emits no reparentToRoot
-        // ops for a zero-page doc (dead-code safety only).
-        const pageId = canonicalPageId(model.pages) ?? 'page:orphans'
+        if (dropped.has(o.id)) continue // unreachable from repairPlan — see the skip-set note above
+        // The CANONICAL page, deliberately not the same-page rule: an orphan
+        // or a cycle member has no page to stay on, which is the whole point
+        // of this op. Do not over-apply pageAncestorId here. (No test can
+        // catch that over-application through repair(): an orphan's chain
+        // dead-ends and a cycle member's chain cycles, so pageAncestorId
+        // returns undefined and falls back to this same value. canvas-model's
+        // repair.test.ts pins it with a HAND-BUILT plan, which repair() —
+        // which computes its own plan — cannot construct.)
         for (const n of this.nodesByShapeId(o.id)) {
           this.tree.move(n.id, undefined) // page id ⇒ Loro root
-          n.data.set('parentId', pageId)
+          n.data.set('parentId', rootPageId)
         }
       }
     }
     for (const b of model.bindings) {
-      if (dropAll.has(b.fromId) || dropAll.has(b.toId)) this.deleteBinding(b.id)
+      if (dropped.has(b.fromId) || dropped.has(b.toId)) this.deleteBinding(b.id)
     }
     // repair() above already keeps the index coherent incrementally (deleteNode
     // and dedupeShapeNodes both maintain it, and reparentToRoot's raw move
@@ -561,9 +609,9 @@ export class LoroCanvasDoc implements CanvasDoc {
     // relative to the list*() scans above, and correctness must not depend on
     // this method's internals staying in perfect lockstep with the index.
     // Skipped when the plan was empty: an empty plan (and therefore an empty
-    // dropAll) touches nothing above, so the index is provably still exact —
-    // this keeps the common idempotent repair() call (already-clean doc) from
-    // paying for a rebuild it doesn't need.
+    // dropped set) touches nothing above, so the index is provably still
+    // exact — this keeps the common idempotent repair() call (already-clean
+    // doc) from paying for a rebuild it doesn't need.
     if (plan.length > 0) this.reindex()
     return plan
   }

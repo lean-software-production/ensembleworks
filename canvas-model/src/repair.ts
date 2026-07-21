@@ -50,9 +50,9 @@ export { stableStringify } from './stable-stringify.js'
 // LoroCanvasDoc.repair() use this helper so the two can't drift. In
 // applyRepairToModel it is ALSO the fallback target for a RESCUED child whose
 // page ancestor can't be resolved (dead-end or cycle) — see pageAncestorId
-// below. LoroCanvasDoc.repair() has no rescue path yet (it still cascades,
-// via cascadeDropSet); that fallback use is applyRepairToModel-only pending
-// Task 6.
+// below. LoroCanvasDoc.repair() mirrors this: it rescues children the same
+// proportionate way and falls back to this same value when a rescued child's
+// page ancestor can't be resolved.
 export function canonicalPageId(pages: readonly Page[]): Page['id'] | undefined {
   return pages.map((p) => p.id).sort((a, b) => a.localeCompare(b))[0]
 }
@@ -160,30 +160,6 @@ export function repairPlan(doc: CanvasDocument): RepairOp[] {
     kept.push(o)
   }
   return kept.sort((a, b) => rank[a.op] - rank[b.op] || a.id.localeCompare(b.id))
-}
-
-// Transitive closure of shapes to drop: the seed ids plus every shape whose
-// ancestry passes through a seed — a fixpoint over parentId edges, so chains
-// of any depth are caught regardless of input order.
-//
-// applyRepairToModel NO LONGER USES THIS: repair became proportionate (drop
-// the named shape, rescue its children) and stopped cascading. The only
-// remaining caller is LoroCanvasDoc.repair(), whose reparent skip-set and
-// binding sweep still cascade — which is exactly the model/Loro divergence
-// the next task closes by deleting this function and its last caller
-// together. Until then the two are KNOWN to disagree; do not read this
-// helper as evidence that they are kept in step.
-export function cascadeDropSet(
-  shapes: readonly { id: string; parentId: string }[],
-  seed: ReadonlySet<string>,
-): Set<string> {
-  const out = new Set(seed)
-  let grew = true
-  while (grew) {
-    grew = false
-    for (const s of shapes) if (!out.has(s.id) && out.has(s.parentId)) { out.add(s.id); grew = true }
-  }
-  return out
 }
 
 // Reference application on the pure model (used by tests and the convergence rig
