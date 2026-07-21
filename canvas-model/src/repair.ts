@@ -228,9 +228,10 @@ export function applyRepairToModel(doc: CanvasDocument, plan: RepairOp[]): Canva
     // hand-built plans and keeps the rule statable: removal, then flag, then
     // rescue.
     if (toRoot.has(s.id)) return [{ ...s, parentId: pageId }]
-    // LOGICAL rescue (drop.has(s.parentId)) vs loro-canvas-doc.ts's PHYSICAL
-    // rescue (n.children()) — they diverge when a shape sits in placeInTree's
-    // bulk-load window; see dropNodeRescuingChildren's docblock there.
+    // LOGICAL rescue, keyed on the STORED parentId. loro-canvas-doc.ts's
+    // dropShapeRescuingChildren mirrors this exactly; it ALSO lifts any
+    // merely-physical tree child clear of Loro's delete cascade, which is
+    // invisible here because dropping is a filter over a flat array.
     if (drop.has(s.parentId)) return [{ ...s, parentId: pageAncestorId(doc, s.parentId, pageIds) ?? pageId }]
     return [s]
   })

@@ -126,7 +126,11 @@ export class LoroCanvasDoc implements CanvasDoc {
   // parents), detach `n` to a root — never leave it under a STALE real parent
   // (split-brain: data.parentId says X, tree says Y, and deleting Y would
   // cascade-delete a shape that logically moved away). data.parentId is
-  // retained and a later reparent pass (see bridge.ts loadModel) fixes placement.
+  // retained, and the shape stays logically parented: repair() rescues by
+  // STORED parentId (see dropShapeRescuingChildren), so a shape sitting in
+  // this window is still found when its logical parent is dropped, and
+  // reparentToRoot still finds it if that parent never arrives. NOT via
+  // bridge.ts's loadModel, which has only test callers.
   private placeInTree(n: LoroTreeNode, parentId: string): void {
     const current = n.parent()
     if (parentId.startsWith('page:')) {
@@ -493,52 +497,76 @@ export class LoroCanvasDoc implements CanvasDoc {
       changed,
     }
   }
-  // RESCUE FIRST, DELETE SECOND — pulled into its own named unit so the
-  // ordering constraint cannot be separated by a later edit reordering
-  // statements inline in repair()'s loop body. deleteNode cascades over the
-  // REAL tree and clears every descendant's text container, so every
-  // physical child of `n` must be moved out of the doomed subtree BEFORE it
-  // runs. This is the one place the Loro side is harder than the model side,
-  // where dropping is a filter over a flat array. Children that are
-  // THEMSELVES dropped are rescued here too and then removed by their own
-  // turn in repair()'s loop; that ordering is what makes the result
-  // independent of the order the plan's dropShape ops are visited in.
+  // RESCUE FIRST, DELETE SECOND — the whole of one dropShape op, in ONE named
+  // unit so no later edit can reorder the rescue after the delete. deleteNode
+  // cascades over the REAL tree and clears every descendant's text container,
+  // so everything the model KEEPS must be out of the doomed subtree before it
+  // runs. This is the one place the Loro side is genuinely harder than the
+  // model side, where dropping is a filter over a flat array.
   //
-  // PHYSICAL vs LOGICAL rescue — a pre-existing divergence from
-  // applyRepairToModel, not introduced here (confirmed present identically at
-  // parent commit 5685c18). This walks n.children(): the REAL Loro tree
-  // children of `n`. applyRepairToModel's reference rescue instead walks
-  // drop.has(s.parentId): every shape whose LOGICAL parentId names the
-  // dropped shape. The two agree exactly when tree parent == data.parentId,
-  // which placeInTree maintains EXCEPT during its own documented bulk-load
-  // window: a shape put before its parentId's node exists parks at the tree
-  // ROOT while data.parentId keeps the (still-missing) target (see
-  // placeInTree above). A shape sitting in that window is logically this
-  // dropped shape's child but is physically NOT among n.children() — this
-  // method misses it, leaving its data.parentId pointing at a shape this call
-  // is about to delete. After this repair() call that shape is a dangling
-  // orphan (noOrphans), not a rescued child on the right page, until a SECOND
-  // repair() pass reparents it to canonicalPageId — not to `rescueTo`. No
-  // fixture covers this gap.
+  // TWO rescues, because "child" means two different things here, and
+  // applyRepairToModel — the reference this must agree with byte-for-byte
+  // after normalization — matches only ONE of them:
   //
-  // NOT closed by bridge.ts's loadModel: loadModel is exercised only by
-  // tests (bridge.test.ts, bindings-pages.test.ts) — nothing in production
-  // calls it. The actual production writer that loads externally-converted
-  // data into a doc, reconcile() (server/src/canvas-v2/reconcile.ts),
-  // documents this identical window as REACHABLE in its own "Absent-parent
-  // tolerance" comment (shadow mode: arbitrary live-room data, and
-  // fromTldraw dropping unknown shape types, can orphan a surviving child's
-  // parentId) — and has no closing pass of its own.
-  private dropNodeRescuingChildren(n: LoroTreeNode, rescueTo: string): void {
-    // The [...] copy is defensive only — probed, n.children() hands back
-    // a fresh array of freshly-constructed wrappers, so moving during
-    // iteration does not disturb it. Kept because that is an undocumented
-    // Loro internal, not a contract.
-    for (const c of [...(n.children() ?? [])]) {
-      this.tree.move(c.id, undefined) // a page-parented shape lives at the Loro tree root
-      c.data.set('parentId', rescueTo)
+  // 1. LOGICAL children: every shape whose STORED parentId names `id`. This is
+  //    exactly the reference's drop.has(s.parentId) test, and it is the only
+  //    rescue that is MODEL-VISIBLE — these are the shapes whose parentId the
+  //    reference rewrites to `rescueTo`. A logical child need not be a
+  //    physical child: placeInTree parks a shape at the tree ROOT when its
+  //    parentId names a node that does not exist yet, keeping data.parentId
+  //    on the missing target, and Loro's own cycle resolution parks the loser
+  //    of a concurrent move race the same way. Such a shape is invisible to
+  //    n.children(). Before this branch existed it was silently missed,
+  //    leaving it a dangling orphan that only a SECOND repair() pass cleaned
+  //    up — and to canonicalPageId, not to `rescueTo`, so ruling 11 was
+  //    violated on that path too. That broke model-agreement AND one-pass
+  //    convergence. Production reaches this state: reconcile()
+  //    (server/src/canvas-v2/reconcile.ts) documents the window as open in its
+  //    own "Absent-parent tolerance" note and has no second pass, and the
+  //    concurrent-move case needs no mirror at all. NOT closed by bridge.ts's
+  //    loadModel — that has only test callers.
+  //
+  // 2. PHYSICAL children that are NOT logical children: a real tree child of
+  //    `n` whose data.parentId names something else. The reference does NOT
+  //    rewrite their parentId, so this must not stamp `rescueTo` on them; it
+  //    only lifts them clear of the cascade, the same way placeInTree parks a
+  //    shape it cannot place. Dead-code safety — no public-API sequence is
+  //    known to produce this state (every mutator that moves a node also
+  //    writes data.parentId, and Loro resolves a concurrent move cycle to the
+  //    tree ROOT, which is case 1's shape, not this one). Pinned white-box in
+  //    repair.test.ts, like the hand-built plans that pin repair()'s other
+  //    unreachable guards.
+  //
+  // The two are order-independent with respect to EACH OTHER — the physical
+  // loop lifts every remaining tree child clear whatever the logical pass did
+  // — so only their joint position BEFORE deleteNode is load-bearing. Keeping
+  // both in this one method is what makes that impossible to separate.
+  private dropShapeRescuingChildren(id: string, rescueTo: string, logicalChildIds: readonly string[]): void {
+    // Sorted so the SEQUENCE of Loro ops emitted is a function of converged
+    // data (ids) rather than of listShapes() traversal order, an undocumented
+    // Loro internal — the standing purity mandate canonicalPageId exists for.
+    // No test can observe this (every child gets identical treatment and the
+    // comparisons all sort by id); it is kept because the mandate is on the
+    // code. `id` itself may appear here if the shape self-parents: harmless,
+    // it is restamped and then removed by the loop below, and the reference
+    // drops it too.
+    for (const childId of [...logicalChildIds].sort()) {
+      for (const c of this.nodesByShapeId(childId)) {
+        this.tree.move(c.id, undefined) // rescueTo is a page ⇒ the Loro tree root
+        c.data.set('parentId', rescueTo)
+      }
     }
-    this.deleteNode(n)
+    for (const n of this.nodesByShapeId(id)) {
+      // Whatever is STILL a physical child is split-brain residue — the
+      // logical children were lifted out above — so lift it clear of the
+      // cascade WITHOUT touching data.parentId (case 2 above).
+      // The [...] copy is defensive only: probed, n.children() hands back a
+      // fresh array of freshly-constructed wrappers, so moving during
+      // iteration does not disturb it. Kept because that is an undocumented
+      // Loro internal, not a contract.
+      for (const c of [...(n.children() ?? [])]) this.tree.move(c.id, undefined)
+      this.deleteNode(n)
+    }
   }
   // PERF (measured, Phase 2 review): ~7.36ms/call at 1k shapes on a CLEAN doc
   // — i.e. that's the floor even when the plan is empty — with ~70% of it in
@@ -577,6 +605,30 @@ export class LoroCanvasDoc implements CanvasDoc {
     // Loop-invariant across every rescued child — see pageAncestorId's
     // docblock for why it's caller-supplied.
     const pageIds = new Set<string>(model.pages.map((p) => p.id))
+    // LOGICAL children, indexed ONCE: stored parentId → the ids that name it.
+    // This is what lets the dropShape branch below find the same children
+    // applyRepairToModel finds (drop.has(s.parentId)) rather than only the
+    // ones the real tree happens to hold under the doomed node — see
+    // dropShapeRescuingChildren. There is no existing index for this: `index`
+    // is shapeId → nodes, a different question.
+    //
+    // Built here rather than per op deliberately. One O(shapes) pass, so a
+    // plan with N drops does not reintroduce the O(shapes × N) rescan the
+    // node index removed. repair-cost.test.ts enforces that both ways — its
+    // wall-clock ceiling AND its structural gate (tree.nodes() call count must
+    // not scale with plan size). Rebuilding this per op from listShapes()
+    // measured 3097.59ms against the 100ms ceiling on the 500-drop fixture,
+    // versus 15.43ms as written.
+    //
+    // Read from `model` — the UNTRANSFORMED pre-repair dump — never from live
+    // state that earlier ops in this same pass have already rehomed. That is
+    // the same discipline applyRepairToModel's fused pass keeps, and it is
+    // what makes the result a pure function of converged state.
+    const logicalChildren = new Map<string, string[]>()
+    for (const s of model.shapes) {
+      const arr = logicalChildren.get(s.parentId)
+      if (arr) arr.push(s.id); else logicalChildren.set(s.parentId, [s.id])
+    }
     for (const o of plan) {
       if (o.op === 'deleteBinding') this.deleteBinding(o.id)
       // dropShape/reparentToRoot are applied to EVERY physical node sharing
@@ -594,7 +646,7 @@ export class LoroCanvasDoc implements CanvasDoc {
         // ONCE per dropped shape: o.id is the parent every child below shares,
         // so every child of this node has the same target.
         const rescueTo = pageAncestorId(model, o.id, pageIds) ?? rootPageId
-        for (const n of this.nodesByShapeId(o.id)) this.dropNodeRescuingChildren(n, rescueTo)
+        this.dropShapeRescuingChildren(o.id, rescueTo, logicalChildren.get(o.id) ?? [])
       }
       else if (o.op === 'dedupeShape') {
         if (dropped.has(o.id)) {

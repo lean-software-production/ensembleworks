@@ -287,4 +287,104 @@ doc7.commit()
   assert.deepEqual(doc7.repair(), [], 'idempotent')
 }
 
+// ---- (8) LOGICAL child rescue: a shape whose STORED parentId names the
+// dropped shape while its real tree node is NOT a child of it. placeInTree
+// parks a shape at the Loro tree ROOT when its parentId names a node that
+// does not exist yet, retaining data.parentId — so n.children() cannot see
+// it, but applyRepairToModel's drop.has(s.parentId) test can. This is the
+// state reconcile() reaches in production (its "Absent-parent tolerance"
+// note) and that Loro's own cycle resolution reaches over /sync/v2. Two
+// pages, bad shape on the NON-canonical one, so the same assertion also
+// discriminates the rescue TARGET. ----
+const doc8 = LoroCanvasDoc.create({ peerId: 8n })
+doc8.putPage({ id: 'page:a', name: 'A' })
+doc8.putPage({ id: 'page:z', name: 'Z' })
+doc8.putShape({ id: 'shape:kid8', kind: 'note', parentId: 'shape:bad8', props: {}, ...base() } as any)
+doc8.putShapeUnchecked({ id: 'shape:bad8', kind: 'frame', parentId: 'page:z', props: {}, ...base(), opacity: 'no' } as any)
+doc8.setText('shape:kid8', 'precious content')
+doc8.commit()
+{
+  const badNode = (doc8 as any).nodeByShapeId('shape:bad8')
+  assert.deepEqual(
+    (badNode.children() ?? []).map((n: any) => n.data.get('shapeId')),
+    [],
+    'precondition: kid8 is a LOGICAL child of bad8 only — the real tree node has no children at all',
+  )
+  assert.equal(doc8.getShape('shape:kid8')!.parentId, 'shape:bad8', 'precondition: kid8 stored parentId still names bad8')
+  const before8 = dumpModel(doc8)
+  assert.equal(canonicalPageId(before8.pages), 'page:a', 'precondition: the canonical page is NOT the page bad8 lives on')
+  const plan8 = repairPlan(before8)
+  assert.deepEqual(plan8, [{ op: 'dropShape', id: 'shape:bad8' }], 'precondition: the plan drops only bad8')
+  const expected8 = applyRepairToModel(before8, plan8)
+  assert.deepEqual(doc8.repair(), plan8)
+  doc8.commit()
+  assert.deepEqual(doc8.listShapes().map((s) => s.id).sort(), ['shape:kid8'], 'the logical child survives the drop')
+  assert.equal(
+    doc8.getShape('shape:kid8')!.parentId,
+    'page:z',
+    'the rescued LOGICAL child is on the dropped parent’s own page (page:z) — not left dangling at shape:bad8, not sent to the canonical page:a',
+  )
+  assert.equal(doc8.getText('shape:kid8'), 'precious content', 'the rescued logical child keeps its text container')
+  assert.deepEqual(checkInvariants(dumpModel(doc8)), [], 'invariant-clean after ONE repair() — no second pass')
+  assert.deepEqual(normalize(dumpModel(doc8)), normalize(expected8), 'model-agreement on the logical rescue')
+  assert.deepEqual(doc8.repair(), [], 'idempotent')
+}
+
+// ---- (9) The two child sets are DIFFERENT, and each needs its own
+// treatment. White-box tree.move calls build the split-brain states directly:
+// no public-API sequence is known to produce a PHYSICAL child whose stored
+// parentId names something else (every mutator that moves a node also writes
+// data.parentId, and Loro resolves a concurrent move cycle to the tree ROOT,
+// which is doc8's shape, not this one). This pins the intended contract the
+// same way hand-built plans pin repair()'s other unreachable guards. ----
+const doc9 = LoroCanvasDoc.create({ peerId: 19n })
+doc9.putPage({ id: 'page:a', name: 'A' })
+doc9.putPage({ id: 'page:z', name: 'Z' })
+doc9.putShapeUnchecked({ id: 'shape:bad9', kind: 'frame', parentId: 'page:z', props: {}, ...base(), opacity: 'no' } as any)
+doc9.putShape({ id: 'shape:host9', kind: 'frame', parentId: 'page:a', props: {}, ...base() } as any)
+doc9.putShape({ id: 'shape:squat9', kind: 'note', parentId: 'page:a', props: {}, ...base() } as any)
+doc9.putShape({ id: 'shape:kid9', kind: 'note', parentId: 'shape:bad9', props: {}, ...base() } as any)
+doc9.putShape({ id: 'shape:far9', kind: 'note', parentId: 'shape:bad9', props: {}, ...base() } as any)
+doc9.setText('shape:squat9', 'squatter text')
+{
+  const tree9 = (doc9 as any).tree
+  const node9 = (id: string) => (doc9 as any).nodeByShapeId(id)
+  // squat9: a PHYSICAL child of bad9 whose stored parentId still says page:a.
+  tree9.move(node9('shape:squat9').id, node9('shape:bad9').id)
+  // far9: a LOGICAL child of bad9 parked under an unrelated SURVIVOR — so the
+  // rescue cannot be a no-op that merely happens to leave it at the root.
+  tree9.move(node9('shape:far9').id, node9('shape:host9').id)
+  doc9.commit()
+  assert.equal(doc9.getShape('shape:squat9')!.parentId, 'page:a', 'precondition: squat9 is physically under bad9 but logically on page:a')
+  assert.equal(doc9.getShape('shape:far9')!.parentId, 'shape:bad9', 'precondition: far9 is logically bad9’s child but physically under host9')
+  const before9 = dumpModel(doc9)
+  const plan9 = repairPlan(before9)
+  assert.deepEqual(plan9, [{ op: 'dropShape', id: 'shape:bad9' }], 'precondition: the plan drops only bad9')
+  const expected9 = applyRepairToModel(before9, plan9)
+  assert.deepEqual(doc9.repair(), plan9)
+  doc9.commit()
+  assert.deepEqual(
+    doc9.listShapes().map((s) => s.id).sort(),
+    ['shape:far9', 'shape:host9', 'shape:kid9', 'shape:squat9'],
+    'only bad9 is gone — the physical squatter is NOT swept up by the cascade',
+  )
+  assert.equal(
+    doc9.getShape('shape:squat9')!.parentId,
+    'page:a',
+    'a PHYSICAL-only child keeps its stored parentId — the model does not rehome it, so neither may Loro',
+  )
+  assert.equal(doc9.getText('shape:squat9'), 'squatter text', 'the physical-only child keeps its text container')
+  assert.equal(doc9.getShape('shape:far9')!.parentId, 'page:z', 'the LOGICAL child is rescued to bad9’s own page')
+  assert.equal(doc9.getShape('shape:kid9')!.parentId, 'page:z', 'the ordinary logical+physical child is rescued the same way')
+  assert.deepEqual(checkInvariants(dumpModel(doc9)), [], 'invariant-clean after ONE repair()')
+  assert.deepEqual(normalize(dumpModel(doc9)), normalize(expected9), 'model-agreement on the mixed physical/logical case')
+  assert.deepEqual(doc9.repair(), [], 'idempotent')
+  // far9 was lifted PHYSICALLY, not merely restamped: deleting its former
+  // physical host must not take it along. Same proof shape as the dedupe
+  // block's 'physical rescue proven' assertion.
+  doc9.deleteShape('shape:host9')
+  doc9.commit()
+  assert.ok(doc9.getShape('shape:far9'), 'the rescued logical child was physically lifted off its old host — proven by the host’s cascade')
+}
+
 console.log('ok: repair (doc)')
