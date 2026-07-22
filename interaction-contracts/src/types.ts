@@ -208,6 +208,15 @@ export interface Obs {
    * throw-stub: the FSM adapter reads `editor.doc.getShape`/`getAsset`
    * directly, the browser adapter pre-samples via `window.__ew.doc`. */
   assetSrc(id: string): string | null
+  /** Total count of PAGES currently in the doc. Task H1 (pages sub-cycle,
+   * docs/plans/2026-07-22-canvas-v2-pages.md) — Z1's switching-page contract
+   * needs a model-level "a page was created" read that doesn't depend on the
+   * render filter it's also proving, so a failure of the COUNT assertion can
+   * never be confused with a failure of the paint-order assertion. Available
+   * at BOTH levels (reads doc state, not the DOM) — no throw-stub: the FSM
+   * adapter reads `editor.doc.listPages().length` directly, the browser
+   * adapter samples `window.__ew.doc.listPages().length`. */
+  pageCount(): number
 }
 
 /** A contract declaration = data. */

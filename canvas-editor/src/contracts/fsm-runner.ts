@@ -222,6 +222,11 @@ function makeObs(
       const src = (asset?.props as Record<string, unknown> | undefined)?.src
       return typeof src === 'string' ? src : null
     },
+    pageCount() {
+      // Task H1 (pages sub-cycle) — a doc read, like shapeCount: no
+      // throw-stub, both adapters are REAL.
+      return editor.doc.listPages().length
+    },
   }
 }
 

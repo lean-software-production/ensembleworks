@@ -19,6 +19,7 @@ import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js
 import { pastePlacesAndSelects } from './contracts/paste-places-and-selects.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
 import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
+import { switchingPageChangesRenderedShapes } from './contracts/switching-page-changes-rendered-shapes.js'
 
 export const CONTRACTS: readonly Contract[] = [
   // Pilot declarations are added here, one per phase (B–F).
@@ -37,4 +38,5 @@ export const CONTRACTS: readonly Contract[] = [
   drawCreatesADrawShape,
   lineCreatesALineShape,
   droppingAnImageCreatesAnImageShape,
+  switchingPageChangesRenderedShapes,
 ]

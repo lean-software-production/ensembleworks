@@ -242,6 +242,19 @@ async function sampleAssetSrcs(page: Page, shapeIds: readonly string[]): Promise
   }, shapeIds)
 }
 
+// Task H1's Obs.pageCount() doc comment (interaction-contracts/src/types.ts)
+// names this exact mechanism for the browser adapter: read
+// `window.__ew.doc.listPages().length` — the browser-side twin of the FSM
+// adapter's `editor.doc.listPages().length`. Needed so Z1's switching-page
+// contract can assert "a page was created" at the model level, independent
+// of the paintOrder() assertion that proves the render FILTER.
+async function samplePageCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const ew = (window as any).__ew
+    return ew.doc.listPages().length
+  })
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -292,6 +305,7 @@ interface ActorSample {
   readonly paintOrder: readonly string[]
   readonly kinds: Readonly<Record<string, string | null>>
   readonly assetSrcs: Readonly<Record<string, string | null>>
+  readonly pageCount: number
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -328,7 +342,8 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // image shape's id is only discoverable via `selection`, never present in
   // the seeded `sceneShapeIds`.
   const assetSrcs = await sampleAssetSrcs(page, styleIds)
-  return { spans, editingShape, editingIndicators, styles, selection, shapeCount, paintOrder, kinds, assetSrcs }
+  const pageCount = await samplePageCount(page)
+  return { spans, editingShape, editingIndicators, styles, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -377,6 +392,7 @@ function pageObs(
     paintOrder: () => sample.paintOrder,
     shapeKind: (id: string) => sample.kinds[id] ?? null,
     assetSrc: (id: string) => sample.assetSrcs[id] ?? null,
+    pageCount: () => sample.pageCount,
   }
 }
 
