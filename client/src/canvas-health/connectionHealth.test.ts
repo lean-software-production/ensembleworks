@@ -12,6 +12,7 @@ import {
 	BLOCKING_TRANSPORTS,
 	countdownSeconds,
 	initialHealth,
+	needsFastClock,
 	stepHealth,
 	syncStoreHealthy,
 	transportChip,
@@ -158,5 +159,22 @@ assert.equal(countdownSeconds(1000, 3000), 2)
 assert.equal(countdownSeconds(2500, 3000), 1)
 assert.equal(countdownSeconds(3000, 3000), 1, 'at the tick boundary, show 1 not 0')
 assert.equal(countdownSeconds(4000, 3000), 1, 'a late tick never shows a negative')
+
+// ---------------------------------------------------------------- fast clock
+// 20. All healthy + lock held ⇒ no fast clock needed (the common case this
+//     gate exists to keep quiet).
+assert.equal(needsFastClock(h4, true), false, 'fully healthy + lock held: no fast clock')
+
+// 21. A tripped BLOCKING transport ⇒ fast clock needed (the countdown/chip
+//     move).
+assert.equal(needsFastClock(b1, true), true, 'blocking transport unhealthy: fast clock')
+
+// 22. LiveKit-only unhealthy ⇒ still needed — its row keeps a live
+//     "degrading (Ns)" count even though it never blocks.
+assert.equal(needsFastClock(lk, true), true, 'livekit-only unhealthy: fast clock')
+
+// 23. No lock ⇒ fast clock needed even with everything healthy — the
+//     duplicate-tab modal is up regardless of transport health.
+assert.equal(needsFastClock(h4, false), true, 'no lock: fast clock')
 
 console.log('connectionHealth.test.ts: all assertions passed')

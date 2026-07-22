@@ -148,3 +148,18 @@ export function chipThreshold(id: TransportId, t: Thresholds): number | null {
 export function countdownSeconds(now: number, nextProbeAt: number): number {
 	return Math.max(1, Math.ceil((nextProbeAt - now) / 1000))
 }
+
+/**
+ * Does the UI need the sub-second clock right now?
+ *
+ * The countdown and the "degrading (Ns)" chips are the only readouts that
+ * move between probe ticks, and both only exist once something is wrong. A
+ * healthy session therefore needs no fast clock at all — running one would
+ * re-render the component wrapping the whole canvas 4x/second forever to
+ * animate nothing. Transitions INTO unhealth arrive on the 2s probe tick,
+ * which re-renders anyway, so nothing is missed by staying slow until then.
+ */
+export function needsFastClock(health: HealthState, hasLock: boolean): boolean {
+	if (!hasLock) return true
+	return TRANSPORTS.some((id) => health[id].unhealthySince != null)
+}

@@ -10,7 +10,7 @@
 import { useEffect, useState } from 'react'
 import { scheduler } from '../kernel/scheduler'
 import type { Availability, HealthState } from './connectionHealth'
-import { availability } from './connectionHealth'
+import { availability, needsFastClock } from './connectionHealth'
 import type { Thresholds } from './constants'
 import { useCanvasLock } from './useCanvasLock'
 import { useConnectionHealth, type StoreStatus } from './useConnectionHealth'
@@ -44,7 +44,29 @@ export function useCanvasAvailability(input: {
 	// probe interval would only trip on the next probe, and the countdown/
 	// "degrading (Ns)" readouts would freeze.
 	const [now, setNow] = useState(() => Date.now())
-	useEffect(() => scheduler.every(CLOCK_TICK_MS, () => setNow(Date.now())), [])
+
+	// Keep `now` fresh at least once per probe tick even while the fast clock
+	// below is off, so the first render after something goes unhealthy never
+	// uses a `now` left over from minutes ago — that could sit BEFORE the
+	// fresh `unhealthySince` stamp and mask a real trip (or render a negative/
+	// nonsense "degrading" age). `health` gets a new object identity on every
+	// probe tick (see stepHealth), so this fires on the same cadence as the
+	// probe regardless of the fast clock's state.
+	useEffect(() => {
+		setNow(Date.now())
+	}, [health])
+
+	// The fast clock only needs to run while a readout it drives is actually
+	// moving — the countdown and the "degrading (Ns)" chips — both of which
+	// only exist once something is wrong (see needsFastClock's doc comment).
+	// Gating this off in the common fully-healthy case avoids re-rendering the
+	// component wrapping the whole canvas 4x/second to animate nothing. Do
+	// not "simplify" this back to an unconditional interval.
+	const fastClock = needsFastClock(health, hasLock)
+	useEffect(() => {
+		if (!fastClock) return
+		return scheduler.every(CLOCK_TICK_MS, () => setNow(Date.now()))
+	}, [fastClock])
 
 	return {
 		...availability({ health, now, thresholds, hasLock }),
