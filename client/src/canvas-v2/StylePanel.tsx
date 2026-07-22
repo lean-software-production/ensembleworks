@@ -169,7 +169,29 @@ const PANEL_STYLE: CSSProperties = {
 	fontFamily: 'system-ui, sans-serif',
 	fontSize: 11,
 	color: '#0f172a',
-	pointerEvents: 'all',
+	// REGRESSION FIX (client/src/canvas-v2 v2-write-validation branch): this
+	// USED to be 'all', which made the panel's entire bounding box — not just
+	// its buttons — a pointer target. Because the panel is anchored ON TOP of
+	// the selection it describes (`computePosition` above), that container
+	// silently ate every drag/double-click/delete gesture aimed at a selected
+	// shape wherever the panel happened to overlap it (proven by e2e:
+	// "render convergence", "the editing loop — double-click to edit", and
+	// "delete — Delete/Backspace" all failing at the panel's introduction).
+	// 'none' here removes the CONTAINER (and the plain <div>/<span> wrapper
+	// rows inside it — AxisRow's ROW_STYLE/ROW_LABEL_STYLE/ROW_VALUES_STYLE
+	// never opt back in) from hit-testing, so a pointer over empty panel
+	// space — or over a label, a row gap, anything that isn't a control —
+	// passes straight through to whatever is underneath (Viewport's own
+	// root div, i.e. the canvas). Only the actual controls
+	// (`swatchButtonStyle`/`segButtonStyle` below) set `pointerEvents:
+	// 'auto'`, which re-enables hit-testing for just that element. A pointer
+	// event landing on a control still bubbles up through this
+	// pointer-events:none container in the ordinary DOM way (CSS
+	// `pointer-events` governs hit-testing/targeting only, never event
+	// propagation), so the container's `onPointerDown`/`onPointerUp`
+	// stopPropagation below still fires for control clicks and still stops
+	// them from reaching Viewport — see that handler's own doc comment.
+	pointerEvents: 'none',
 	zIndex: 500,
 	minWidth: 160,
 	maxWidth: PANEL_MAX_WIDTH,
@@ -192,6 +214,11 @@ const ROW_VALUES_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap
 // carries the same five, so this reads that instead of re-typing them.
 const OPACITY_VALUES = STYLE_VALUE_SETS.opacity
 
+// Every actual control (swatch/segmented button) opts BACK IN to hit-testing
+// with `pointerEvents: 'auto'` — see PANEL_STYLE's own doc comment for why
+// the container above sets 'none'. Without this, a click aimed at a swatch
+// would fall through the panel to the canvas underneath instead of hitting
+// the button.
 function swatchButtonStyle(current: boolean): CSSProperties {
 	return {
 		width: 20,
@@ -201,6 +228,7 @@ function swatchButtonStyle(current: boolean): CSSProperties {
 		boxShadow: current ? '0 0 0 1px #fafaf7 inset' : undefined,
 		cursor: 'pointer',
 		padding: 0,
+		pointerEvents: 'auto',
 	}
 }
 
@@ -213,6 +241,7 @@ function segButtonStyle(current: boolean): CSSProperties {
 		color: current ? '#fafaf7' : '#0f172a',
 		fontSize: 10,
 		cursor: 'pointer',
+		pointerEvents: 'auto',
 	}
 }
 
@@ -375,6 +404,76 @@ export function clampPanelPosition(
 	return { left: midX, top: bottom, transform: 'translate(-50%, -100%)' }
 }
 
+/**
+ * REGRESSION FIX (second half — the pointer-events fix on PANEL_STYLE/
+ * swatchButtonStyle/segButtonStyle above is necessary but NOT sufficient on
+ * its own): `clampPanelPosition`'s on-screen guarantee (pinned verbatim by
+ * StylePanel.position.test.ts, untouched by this fix) clamps the panel's
+ * `top` ASSUMING it may render at the full worst-case PANEL_MAX_HEIGHT (see
+ * that constant's own doc comment — 480px, "comfortably covers the tallest
+ * OBSERVED case", far more than a typical panel actually needs: a one-shape
+ * note selection measures ~194px). In any viewport too short to fit that
+ * 480px worst case entirely past the selection's own edge — which is most
+ * normal browser windows for a selection anchored anywhere but the very top
+ * — the clamp pulls the panel's position back TOWARD the selection so a
+ * hypothetical full-height box would still land on-screen. For an actually
+ * short panel, that squeeze is pure waste: it drags the panel's REAL,
+ * rendered controls on top of the selection's own screen bounds. That's
+ * what let a color swatch silently eat a click meant for the shape
+ * underneath it — proven by e2e (the double-click-to-edit / delete /
+ * drag-a-selected-shape regression this whole file's REGRESSION FIX
+ * comments are about): the clamped top can land literally inside the
+ * shape's own [minY, maxY] span, and the panel's first row (color swatches)
+ * renders right at that position.
+ *
+ * This is a POST-PROCESSING step on `clampPanelPosition`'s result, not a
+ * change to that function or its contract — `clampPanelPosition` still
+ * always returns an on-screen position for a worst-case-height panel, full
+ * stop, and every one of its own pinned unit tests keeps passing unmodified.
+ * When the clamp's `top` already stops short of the ideal non-overlapping
+ * edge (`maxY + margin` below the selection, `minY - margin` above it), this
+ * repositions the panel back to that ideal edge — so it is NEVER on top of
+ * the selection it describes — and instead hands back a dynamic `maxHeight`
+ * (spread into the JSX style object over PANEL_STYLE's constant 480,
+ * identical to how `left`/`top`/`transform` already override PANEL_STYLE
+ * today) capped to whatever room is actually left in that direction.
+ * `overflowY: 'auto'` on PANEL_STYLE remains the safety net for real content
+ * that still doesn't fit even that dynamic budget — same role it always
+ * had, just against a tighter (correct, non-overlapping) cap instead of the
+ * flat 480. The last-resort failure mode in a viewport too short for
+ * anything is a small-but-present, non-overlapping panel — never one
+ * silently sitting on top of, and eating clicks for, the shape it's
+ * attached to.
+ */
+export function avoidAnchorOverlap(
+	position: PanelPosition,
+	c1: { readonly x: number; readonly y: number },
+	c2: { readonly x: number; readonly y: number },
+	viewportSize: { readonly width: number; readonly height: number },
+	margin: number,
+): PanelPosition & { readonly maxHeight?: number } {
+	const minY = Math.min(c1.y, c2.y)
+	const maxY = Math.max(c1.y, c2.y)
+	if (position.transform === 'translateX(-50%)') {
+		// "below" placement (also the no-bounds top-center fallback, which
+		// trivially satisfies `top >= idealTop` since idealTop is world-bounds
+		// derived and MARGIN is tiny — never triggers an override for it): `top`
+		// is the panel's literal TOP edge. A squeeze already happened iff the
+		// clamp pulled it above (numerically less than) the ideal top-of-panel
+		// position right after the selection's bottom edge.
+		const idealTop = maxY + margin
+		if (position.top >= idealTop) return position
+		return { ...position, top: idealTop, maxHeight: Math.max(0, viewportSize.height - idealTop - margin) }
+	}
+	// "above" placement: `top` is the panel's literal BOTTOM edge (the CSS
+	// `translate(-50%, -100%)` transform makes it so). A squeeze already
+	// happened iff the clamp pushed that bottom edge below (numerically past)
+	// the ideal bottom-of-panel position right above the selection's top edge.
+	const idealBottom = minY - margin
+	if (position.top <= idealBottom) return position
+	return { ...position, top: idealBottom, maxHeight: Math.max(0, idealBottom - margin) }
+}
+
 function computePosition(
 	snapshot: CanvasDocument,
 	selection: ReadonlySet<string>,
@@ -390,7 +489,8 @@ function computePosition(
 	}
 	const c1 = worldToScreen(camera, { x: bounds.minX, y: bounds.minY })
 	const c2 = worldToScreen(camera, { x: bounds.maxX, y: bounds.maxY })
-	return clampPanelPosition(c1, c2, viewportSize, { width: PANEL_MAX_WIDTH, height: PANEL_MAX_HEIGHT }, MARGIN, PANEL_FLIP_HEADROOM)
+	const position = clampPanelPosition(c1, c2, viewportSize, { width: PANEL_MAX_WIDTH, height: PANEL_MAX_HEIGHT }, MARGIN, PANEL_FLIP_HEADROOM)
+	return avoidAnchorOverlap(position, c1, c2, viewportSize, MARGIN)
 }
 
 function stopPropagation(e: { stopPropagation(): void }): void {
@@ -432,7 +532,16 @@ function armedValue(nextShapeStyle: Record<string, unknown>, axis: StyleAxis): S
  * never reaches Viewport's own pointer handling (canvas-react/src/
  * Viewport.tsx) and gets misread as the start of a canvas gesture —
  * mirrors v1 ContextualStylePanel's `stopEventPropagation` wrapping, using a
- * local helper since this package may not import tldraw.
+ * local helper since this package may not import tldraw. REGRESSION FIX: the
+ * container itself is `pointerEvents: 'none'` (PANEL_STYLE) — only the
+ * controls (`swatchButtonStyle`/`segButtonStyle`) opt back in with
+ * `pointerEvents: 'auto'` — so this stopPropagation only ever fires for a
+ * control click (which still bubbles up through the pointer-events:none
+ * container in the ordinary DOM way; CSS `pointer-events` governs
+ * hit-testing, not event propagation). A pointer over empty panel space now
+ * passes straight through to the canvas instead of being eaten by the
+ * container, which used to block every drag/double-click/delete gesture
+ * aimed at a selected shape wherever the panel overlapped it.
  */
 export function StylePanel({
 	selection,

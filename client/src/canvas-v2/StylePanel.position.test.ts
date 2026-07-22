@@ -22,7 +22,7 @@
 // (160-90)=70px past the viewport boundary — invisible to the browser
 // contract (centered scene) but real for any edge-anchored selection.
 import assert from 'node:assert/strict'
-import { clampPanelPosition } from './StylePanel.js'
+import { avoidAnchorOverlap, clampPanelPosition } from './StylePanel.js'
 
 const VIEWPORT = { width: 1280, height: 720 }
 const PANEL_SIZE = { width: 320, height: 200 } // mirrors PANEL_MAX_WIDTH/height-under-cap
@@ -112,6 +112,61 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 		`above-placed panel with barely enough headroom must not push its TOP edge negative — got top=${topEdge}, bottom=${bottomEdge}`,
 	)
 	console.log(`ok: clampPanelPosition — above-placement with minimal headroom keeps the panel's top edge on-screen (top=${topEdge}, bottom=${bottomEdge})`)
+}
+
+// ============================================================================
+// 5. REGRESSION PIN — `avoidAnchorOverlap`'s whole reason to exist: a
+//    below-placement selection in a viewport too short to fit PANEL_MAX_HEIGHT
+//    (480) fully past the selection's bottom edge. `clampPanelPosition`
+//    alone (still correctly, on its own on-screen contract — case 3 above)
+//    squeezes `top` back UP to keep a worst-case-height box on-screen, which
+//    for an actually-short real panel drags its rendered controls on top of
+//    the selection itself — this is EXACTLY the double-click-to-edit /
+//    delete / drag-a-selected-shape regression (a color swatch silently ate
+//    the click meant for the shape underneath it; reproduced empirically
+//    with a 1280x680 viewport, a 200x200 note anchored at screen (300,220),
+//    numbers pulled directly from the failing e2e case). `avoidAnchorOverlap`
+//    must reposition the panel back to the selection's own edge (no overlap,
+//    ever) and shrink it (via the returned `maxHeight`) to fit, while STILL
+//    keeping the panel's real (dynamically-sized) box fully on-screen.
+// ============================================================================
+{
+	const viewport = { width: 1280, height: 680 } // matches the e2e case's real viewport (720 minus the 40px toolbar)
+	const panelSize = { width: PANEL_SIZE.width, height: 480 } // PANEL_MAX_HEIGHT's real value
+	const c1 = { x: 200, y: 120 } // note top-left, screen-space (ANCHOR (300,220) minus half a 200x200 note)
+	const c2 = { x: 400, y: 320 } // note bottom-right
+	const clamped = clampPanelPosition(c1, c2, viewport, panelSize, MARGIN, FLIP_HEADROOM)
+	assert.equal(clamped.transform, 'translateX(-50%)', 'precondition: minY(120) < FLIP_HEADROOM(220) selects the below-placement branch')
+	assert.ok(clamped.top < c2.y + MARGIN, `precondition: clampPanelPosition alone squeezes top (${clamped.top}) above the selection's bottom edge + margin (${c2.y + MARGIN}) — this is the bug avoidAnchorOverlap fixes`)
+
+	const fixed = avoidAnchorOverlap(clamped, c1, c2, viewport, MARGIN)
+	assert.equal(fixed.top, c2.y + MARGIN, `panel repositioned to sit right after the selection's bottom edge, not squeezed into it — got top=${fixed.top}`)
+	assert.ok(fixed.maxHeight !== undefined && fixed.maxHeight > 0, `a positive dynamic maxHeight is returned — got ${fixed.maxHeight}`)
+	// NO OVERLAP: the panel's real top edge must be at or below the
+	// selection's own bottom edge — never inside [minY, maxY].
+	assert.ok(fixed.top >= c2.y, `panel's top edge (${fixed.top}) does not land inside the selection's own bounds (bottom=${c2.y})`)
+	// STILL ON-SCREEN: bottom edge (top + the dynamic height budget) must not
+	// exceed the viewport, same guarantee clampPanelPosition itself pins in
+	// case 3 above — just computed against the REAL (dynamic) height, not a
+	// hardcoded worst-case one.
+	const bottomEdge = fixed.top + fixed.maxHeight!
+	assert.ok(bottomEdge <= viewport.height, `panel's dynamically-sized bottom edge (${bottomEdge}) stays within the viewport (${viewport.height})`)
+	console.log(`ok: avoidAnchorOverlap — a below-placement squeeze is repositioned off the selection (top=${fixed.top}, maxHeight=${fixed.maxHeight}) and stays fully on-screen`)
+}
+
+// ============================================================================
+// 6. avoidAnchorOverlap is a no-op when clampPanelPosition never needed to
+//    squeeze (plenty of room below the selection) — it must not perturb an
+//    already-correct, already-non-overlapping position.
+// ============================================================================
+{
+	const viewport = VIEWPORT // the roomy 1280x720 default used throughout this file
+	const c1 = { x: 636, y: 50 }
+	const c2 = { x: 644, y: 90 } // tiny selection, tons of room below in a tall viewport
+	const clamped = clampPanelPosition(c1, c2, viewport, PANEL_SIZE, MARGIN, FLIP_HEADROOM)
+	const fixed = avoidAnchorOverlap(clamped, c1, c2, viewport, MARGIN)
+	assert.deepEqual(fixed, clamped, `no squeeze needed — avoidAnchorOverlap returns clampPanelPosition's result unchanged (no maxHeight override) — clamped: ${JSON.stringify(clamped)}, fixed: ${JSON.stringify(fixed)}`)
+	console.log('ok: avoidAnchorOverlap — a no-op when clampPanelPosition never squeezed (plenty of room)')
 }
 
 console.log('ok: StylePanel.position.test.ts — all cases passed')

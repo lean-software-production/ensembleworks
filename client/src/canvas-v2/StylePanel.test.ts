@@ -69,6 +69,30 @@ const noop = () => {}
 		`blue swatch marked current — html: ${html}`,
 	)
 	console.log('ok: single blue note — color row renders with blue marked current')
+
+	// REGRESSION GUARD (structural): the panel CONTAINER must be
+	// `pointer-events: none` and an actual CONTROL (a swatch button) must be
+	// `pointer-events: auto` — see StylePanel.tsx's PANEL_STYLE/
+	// swatchButtonStyle doc comments. Without this, the container's own
+	// `onPointerDown`/`onPointerUp` stopPropagation swallows every canvas
+	// gesture (drag/double-click/delete) that lands anywhere over the panel's
+	// bounding box, not just its buttons — the exact regression this pins so
+	// it can never silently come back (a future edit reverting PANEL_STYLE's
+	// `pointerEvents` to `'all'`, or dropping it from a button style, fails
+	// HERE at the unit level, not just in a slower e2e run).
+	const containerMatch = html.match(/<div data-testid="ew-style-panel"[^>]*style="([^"]*)"/)
+	assert.ok(containerMatch, `panel container's style attribute is present — html: ${html}`)
+	assert.ok(
+		/pointer-events:\s*none/.test(containerMatch![1]!),
+		`panel container is pointer-events:none (lets non-control panel area pass clicks through to the canvas) — style: ${containerMatch![1]}`,
+	)
+	const blueSwatchMatch = html.match(/<button[^>]*data-style-value="blue"[^>]*style="([^"]*)"/)
+	assert.ok(blueSwatchMatch, `blue swatch's style attribute is present — html: ${html}`)
+	assert.ok(
+		/pointer-events:\s*auto/.test(blueSwatchMatch![1]!),
+		`a control (blue swatch) is pointer-events:auto (still clickable despite the container above) — style: ${blueSwatchMatch![1]}`,
+	)
+	console.log('ok: REGRESSION GUARD — panel container is pointer-events:none, a control is pointer-events:auto')
 }
 
 // ============================================================================
