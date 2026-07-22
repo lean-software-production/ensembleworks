@@ -7,9 +7,12 @@ import type { Contract } from './types.js'
 import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies-to-created-shape.js'
 import { crossWidgetSelection } from './contracts/cross-widget-selection.js'
 import { cursorLock } from './contracts/cursor-lock.js'
+import { duplicateReidsAndOffsets } from './contracts/duplicate-reids-and-offsets.js'
 import { editingIndicator } from './contracts/editing-indicator.js'
+import { malformedClipboardRejected } from './contracts/malformed-clipboard-rejected.js'
 import { modalityExclusivity } from './contracts/modality-exclusivity.js'
 import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js'
+import { pastePlacesAndSelects } from './contracts/paste-places-and-selects.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
 import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
 
@@ -23,4 +26,7 @@ export const CONTRACTS: readonly Contract[] = [
   editingIndicator,
   styleAppliesToSelection,
   armedStyleAppliesToCreatedShape,
+  duplicateReidsAndOffsets,
+  pastePlacesAndSelects,
+  malformedClipboardRejected,
 ]
