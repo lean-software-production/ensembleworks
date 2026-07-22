@@ -88,7 +88,7 @@
  * own containment guard keeps the two paths mutually exclusive (no
  * double-handling). See both functions' doc comments.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 // Task C6b — the tldraw handwriting/text webfonts (tldraw_draw/_sans/_serif/
 // _mono), self-hosted from client/public/fonts/tldraw/ (see fonts.css's own
 // header for the full why/licensing). Side-effect import, same pattern as
@@ -104,6 +104,7 @@ import {
 	duplicateSelectionIntents,
 	pasteIntents,
 	reorderSelectionIntents,
+	screenToWorld,
 	type InputEvent,
 	type Intent,
 	type KeyInputEvent,
@@ -150,6 +151,9 @@ import {
 } from './tool-loop.js'
 import { clipboardShortcut, readClipboardText, writeClipboardText } from './clipboard-dom.js'
 import { reorderShortcut } from './reorder-dom.js'
+import { extractImageFiles } from './image-drop.js'
+import { extractImageBlobs } from './image-paste.js'
+import { createImageFromBlob } from './image-create.js'
 
 /** How long an embed (terminal/iframe/…) may sit off-screen before
  * EmbedLayer suspends it — see embedLifecycle.ts's `suspendAfterTicks` doc.
@@ -1076,6 +1080,95 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 		return () => document.removeEventListener('keydown', handleGlobalKeydown)
 	}, [editor, handleGlobalShortcut])
 
+	// Task W1 (docs/plans/2026-07-22-canvas-v2-assets-image.md, D-7) — the
+	// drop surface. onDragOver MUST call preventDefault: a browser div is
+	// NOT a drop target by default, so with no listener (or one that never
+	// preventDefaults) the browser refuses to fire `drop` at all and instead
+	// runs its own "navigate to/open the file" default — the wheel
+	// listener's own non-passive-preventDefault note (Viewport.tsx's module
+	// header) is the same shape of problem for a different native default.
+	const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+		e.preventDefault()
+	}, [])
+
+	// onDrop: preventDefault (stop the browser's own file-open navigation),
+	// extract image Files (image-drop.ts's extractImageFiles — DOM-free,
+	// unit-tested; non-image files in a mixed drop are silently ignored),
+	// convert the drop's CLIENT point to WORLD via the SAME
+	// `clientX/clientY - rect.left/top` -> `screenToWorld` recipe every
+	// other pointer event uses (canvas-react's dom-events.ts
+	// `pointerEventToInput`, fed by Viewport.tsx's own
+	// `getBoundingClientRect()` call) — `e.currentTarget` here is this same
+	// `data-canvas-v2-viewport` container, so the math is identical. Fires
+	// one `createImageFromBlob` per file (D-7: MVP stacks multiple files at
+	// the same world point — acceptable per plan); each call is
+	// independently async/fire-and-forget (`createImageFromBlob` itself
+	// swallows a failed upload — see image-create.ts).
+	const handleDrop = useCallback(
+		(e: DragEvent<HTMLDivElement>) => {
+			e.preventDefault()
+			const files = extractImageFiles(e.dataTransfer.files)
+			if (files.length === 0) return
+			const rect = e.currentTarget.getBoundingClientRect()
+			const local = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+			const world = screenToWorld(editor.get().camera, local)
+			for (const file of files) {
+				void createImageFromBlob(editor, file, world, editor.pageId)
+			}
+		},
+		[editor],
+	)
+
+	// Task W2 (docs/plans/2026-07-22-canvas-v2-assets-image.md, D-7) — the
+	// paste-image surface. A SEPARATE document-level `paste` listener, NOT
+	// an extension of the Ctrl+V -> readClipboardText path above (which is
+	// TEXT-only and stays untouched — see handleGlobalShortcut's 'paste'
+	// branch). extractImageBlobs (image-paste.ts, DOM-free/unit-tested)
+	// finds nothing on a text-only clipboard (an EW shape-copy's clipboard
+	// TEXT, or an ordinary text copy), so this listener no-ops and the
+	// existing Ctrl+V keydown path (already gated behind its own handler)
+	// is what fires; conversely an externally-copied/dragged-in IMAGE puts
+	// no EW-clipboard text on the clipboard, so `pasteIntents` — were it to
+	// run — would see an undecodable payload and no-op. The two paths
+	// handle disjoint clipboard content, so a single paste event never
+	// double-fires both (D-7's no-double-handling reasoning).
+	//
+	// preventDefault ONLY when an image was actually found: an
+	// unconditional preventDefault here would swallow every ordinary text
+	// paste's native/Ctrl+V-path behavior even on a clipboard this listener
+	// has nothing to do with — the mirror image of Task D1's clipboard
+	// keydown fallback, which likewise only preventDefaults the four keys
+	// `clipboardShortcut` actually recognizes.
+	//
+	// isEditableTarget guard: skip when the paste's target is a real text
+	// input/textarea/contentEditable (TextEditor's own textarea while
+	// editing shape text) — same guard `handleGlobalKeydown` above already
+	// applies to keydowns, so an image paste while mid text-edit never
+	// hijacks the native (text-only) paste TextEditor's textarea handles
+	// itself.
+	useEffect(() => {
+		function handlePaste(e: ClipboardEvent): void {
+			if (isEditableTarget(e.target as Node | null)) return
+			const clipboardData = e.clipboardData
+			if (!clipboardData) return
+			const blobs = extractImageBlobs(clipboardData)
+			if (blobs.length === 0) return
+			e.preventDefault()
+			// No pointer position on a paste — drop at the viewport's CURRENT
+			// center in world space (plan D-7), same
+			// `screenToWorld(camera, {x,y})` convention as the drop handler
+			// above, just fed the viewport's midpoint instead of a client
+			// event's coordinates.
+			const size = viewportSizeRef.current
+			const center = screenToWorld(editor.get().camera, { x: size.width / 2, y: size.height / 2 })
+			for (const blob of blobs) {
+				void createImageFromBlob(editor, blob, center, editor.pageId)
+			}
+		}
+		document.addEventListener('paste', handlePaste)
+		return () => document.removeEventListener('paste', handlePaste)
+	}, [editor])
+
 	return (
 		<div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif' }}>
 			<div style={{ display: 'flex', gap: 4, padding: 6, borderBottom: '1px solid rgba(15,23,42,0.12)', background: '#fafaf7' }}>
@@ -1100,7 +1193,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					</button>
 				))}
 			</div>
-			<div ref={containerRef} data-canvas-v2-viewport style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+			<div ref={containerRef} data-canvas-v2-viewport onDragOver={handleDragOver} onDrop={handleDrop} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
 				<Viewport onInput={handleInput} onViewportBlur={handleViewportBlur} onPointerCancel={cancelAndReset} style={{ position: 'absolute', inset: 0 }}>
 					<Grid camera={editorState.camera} />
 					<WorldLayer camera={editorState.camera}>
