@@ -767,6 +767,68 @@ async function main() {
 	assert.deepEqual([...ewClip.editor.get().selection], [], 'Ctrl+X clears the selection the same way Delete does')
 	console.log('ok: CanvasV2App — Ctrl+X copies then deletes the selection (D-7 ordering)')
 
+	// (f6d-toctou) CUT ATOMIC CAPTURE (coordinator-flagged TOCTOU): the
+	// clipboard write is async (a real microtask window, however brief), and
+	// `deleteSelectionIntents` reads the LIVE selection — so if the delete
+	// set were computed freshly AFTER the write resolves (instead of
+	// captured from the SAME selection that was serialized), a selection
+	// change DURING that window could make cut delete a different set than
+	// it copied. The dangerous direction: selection GROWS mid-write -> cut
+	// deletes a shape that was never placed on the clipboard -> data lost
+	// with no clipboard copy of it. This proves cut deletes EXACTLY what it
+	// copied, regardless of a selection change before the write resolves.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:cut-a', 950, 950) })
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:cut-b', 970, 970) })
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:cut-a'] })
+	})
+	// Monkey-patch writeText to return a promise that stays pending until
+	// THIS test explicitly resolves it (via the captured `resolveWrite`),
+	// carving out an observable window between "the write started" and "the
+	// write resolved" to change the selection inside.
+	const realWriteText3 = clip.writeText.bind(clip)
+	let resolveWrite: (() => void) | undefined
+	;(clip as { writeText(t: string): Promise<void> }).writeText = (t: string) =>
+		new Promise<void>((resolve) => {
+			resolveWrite = () => {
+				void realWriteText3(t).then(resolve)
+			}
+		})
+	await act(async () => {
+		// The keydown dispatch runs handleGlobalShortcut's cut branch
+		// SYNCHRONOUSLY, all the way through starting the (now-pending)
+		// clipboard write — so whatever it captures (or doesn't) for the
+		// eventual delete is already decided by the time dispatchEvent
+		// returns, before the line below ever runs.
+		dispatchKey(viewportEl!, { key: 'x', ctrlKey: true })
+		assert.ok(resolveWrite, 'precondition: the clipboard write must have started (and be pending) synchronously within the keydown dispatch')
+		// CHANGE THE SELECTION mid-write-window, BEFORE letting the write
+		// resolve — shape:cut-b was never selected/copied.
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:cut-a', 'shape:cut-b'] })
+		resolveWrite!()
+		await new Promise((r) => setTimeout(r, 0)) // let the .then() callback (and its applyAll) run
+	})
+	;(clip as { writeText(t: string): Promise<void> }).writeText = realWriteText3
+	const toctouPayload = JSON.parse(await clip.readText())
+	assert.deepEqual(
+		toctouPayload.shapes.map((s: { id: string }) => s.id),
+		['shape:cut-a'],
+		'the clipboard payload holds exactly the ORIGINALLY-selected shape (shape:cut-a), never the mid-write selection change',
+	)
+	assert.equal(ewClip.doc.getShape('shape:cut-a'), undefined, 'cut deletes shape:cut-a — the shape that was actually copied')
+	assert.ok(
+		ewClip.doc.getShape('shape:cut-b'),
+		'cut must NOT delete shape:cut-b — it was added to the selection AFTER the copy, so it was never on the clipboard',
+	)
+	console.log('ok: CanvasV2App — Ctrl+X deletes EXACTLY the shapes it copied, immune to a selection change during the async clipboard write')
+
+	// Cleanup: shape:cut-b legitimately survived (that's the point of the
+	// test above) — remove it directly to restore the pre-(f6) baseline.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'DeleteShapes', ids: ['shape:cut-b'] })
+		ewClip.editor.apply({ type: 'SetSelection', ids: [] })
+	})
+
 	// (f6e) Ctrl+V pastes the just-cut clipboard content back as a brand-new
 	// shape (fresh id — decodeClipboard/cloneWithNewIds never reuse the
 	// original's — offset position, selected).

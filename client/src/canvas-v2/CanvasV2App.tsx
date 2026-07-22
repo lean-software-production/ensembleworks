@@ -811,12 +811,27 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					const selection = [...editor.get().selection]
 					if (selection.length > 0) {
 						const payload = serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection)
+						// ATOMIC CAPTURE (fixes a cut TOCTOU a review caught):
+						// deleteSelectionIntents reads the LIVE selection
+						// (tool-loop.ts), so if it were called fresh INSIDE the
+						// .then() below — after the async writeClipboardText
+						// resolves — a selection change during that (real, if
+						// brief) microtask window could make cut delete a
+						// DIFFERENT set than the one just serialized above. The
+						// dangerous direction: selection GROWS during the write
+						// -> cut deletes a shape that was never placed on the
+						// clipboard -> data lost with no clipboard copy of it.
+						// Capturing the delete intents HERE, synchronously, from
+						// the SAME selection just serialized, guarantees cut
+						// deletes EXACTLY what it copied, regardless of any
+						// selection change before the write resolves.
+						const deleteIntents = deleteSelectionIntents(editor)
 						void writeClipboardText(encodeClipboard(payload))
 							.then(() => {
-								// D-7: only delete AFTER the write resolves — never
-								// before, so a failed write can't lose shapes.
-								const intents = deleteSelectionIntents(editor)
-								if (intents.length > 0) editor.applyAll(intents)
+								// D-7: only APPLY the captured delete AFTER the
+								// write resolves — never before, so a failed
+								// write can't lose shapes.
+								if (deleteIntents.length > 0) editor.applyAll(deleteIntents)
 							})
 							.catch(() => {
 								// The write itself failed/was denied: intentionally
