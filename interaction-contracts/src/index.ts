@@ -8,6 +8,7 @@ import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies
 import { bringToFrontPaintsOnTop } from './contracts/bring-to-front-paints-on-top.js'
 import { crossWidgetSelection } from './contracts/cross-widget-selection.js'
 import { cursorLock } from './contracts/cursor-lock.js'
+import { drawCreatesADrawShape } from './contracts/draw-creates-a-draw-shape.js'
 import { duplicateReidsAndOffsets } from './contracts/duplicate-reids-and-offsets.js'
 import { editingIndicator } from './contracts/editing-indicator.js'
 import { malformedClipboardRejected } from './contracts/malformed-clipboard-rejected.js'
@@ -31,4 +32,5 @@ export const CONTRACTS: readonly Contract[] = [
   pastePlacesAndSelects,
   malformedClipboardRejected,
   bringToFrontPaintsOnTop,
+  drawCreatesADrawShape,
 ]

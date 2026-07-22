@@ -197,6 +197,27 @@ async function samplePaintOrder(page: Page): Promise<readonly string[]> {
   })
 }
 
+// Task H's Obs.shapeKind(id) doc comment (interaction-contracts/src/types.ts)
+// names this exact mechanism for the browser adapter: pre-sample each
+// candidate shape's `kind` off the live doc (window.__ew.doc.getShape),
+// mirroring sampleShapeStyles' pre-sample-then-read-synchronously shape
+// exactly. Sampled for the UNION of seeded scene ids and the current
+// selection (see sampleActor below) — same reason shapeStyle unions
+// selection into styleIds: a gesture-created shape's id is minted from
+// crypto-random and only discoverable via `selectedShapeIds()`.
+async function sampleShapeKinds(page: Page, shapeIds: readonly string[]): Promise<Readonly<Record<string, string | null>>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const ew = (window as any).__ew
+    const out: Record<string, string | null> = {}
+    for (const id of ids) {
+      const shape = ew.doc.getShape(id)
+      out[id] = shape ? shape.kind : null
+    }
+    return out
+  }, shapeIds)
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -245,6 +266,7 @@ interface ActorSample {
   readonly selection: readonly string[]
   readonly shapeCount: number
   readonly paintOrder: readonly string[]
+  readonly kinds: Readonly<Record<string, string | null>>
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -273,7 +295,11 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   const styles = await sampleShapeStyles(page, styleIds)
   const shapeCount = await sampleShapeCount(page)
   const paintOrder = await samplePaintOrder(page)
-  return { spans, editingShape, editingIndicators, styles, selection, shapeCount, paintOrder }
+  // Task H: same union rationale as styleIds above — a gesture-created
+  // shape's id (e.g. the pen tool's freshly-drawn stroke) is only
+  // discoverable via `selection`, never present in the seeded `sceneShapeIds`.
+  const kinds = await sampleShapeKinds(page, styleIds)
+  return { spans, editingShape, editingIndicators, styles, selection, shapeCount, paintOrder, kinds }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -320,6 +346,7 @@ function pageObs(
     selectedShapeIds: () => sample.selection,
     shapeCount: () => sample.shapeCount,
     paintOrder: () => sample.paintOrder,
+    shapeKind: (id: string) => sample.kinds[id] ?? null,
   }
 }
 

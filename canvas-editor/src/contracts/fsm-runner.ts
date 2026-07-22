@@ -194,6 +194,9 @@ function makeObs(
       // not-reachable-today posture.
       throw new Error('not observable at fsm level')
     },
+    shapeKind(id: string) {
+      return editor.doc.getShape(id)?.kind ?? null
+    },
   }
 }
 

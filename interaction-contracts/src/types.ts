@@ -174,6 +174,17 @@ export interface Obs {
    * paint order, since ShapeBody paints flat absolutely-positioned siblings
    * in DOM order), the FSM adapter throws 'not observable at fsm level'. */
   paintOrder(): readonly string[]
+  /** A shape's `kind` (the envelope discriminant — 'geo', 'draw', 'note', …),
+   * or null when the shape is absent. Task H — `shapeStyle` cannot answer
+   * this: kind lives on the envelope, not `props`, and isn't a
+   * string/number prop value. Available at BOTH levels (reads doc state,
+   * not the DOM) — no throw-stub: the FSM adapter reads
+   * `editor.doc.getShape(id)?.kind ?? null` directly, the browser adapter
+   * pre-samples kinds for the union of scene ids + selection (same reason
+   * `shapeStyle`/`sampleActor` union selection into `styleIds` — a
+   * gesture-created shape's id is minted from crypto-random and only
+   * discoverable via `selectedShapeIds()`). */
+  shapeKind(id: string): string | null
 }
 
 /** A contract declaration = data. */
