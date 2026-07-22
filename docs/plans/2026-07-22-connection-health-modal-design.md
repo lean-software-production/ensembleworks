@@ -210,3 +210,64 @@ marker in `CanvasV2App.tsx`.
   needs a repro).
 - Server-side `/api/health` / `/api/terminal/health` are assumed sufficient; no new
   endpoints.
+
+## 10. As-built deviations (2026-07-22)
+
+Implemented on `feature/connection-health-modal` (`4fbfd26`..`53633f8`). Where the
+build diverged from §1–§9 above, this section is authoritative — each item was
+found during review, not decided casually.
+
+- **§5 lock name.** The documented `ew-canvas-${room}-${user}` is **buggy** and was
+  not shipped. `encodeURIComponent` does not escape `-`, so room `a-b`/user `c` and
+  room `a`/user `b-c` both produce `ew-canvas-a-b-c` — a forgeable collision between
+  two different (room, user) pairs. The separator is `/`, which *is* escaped inside a
+  component. `lockNames.test.ts` pins this.
+- **§5 `ifAvailable`.** Not used. The duplicate tab issues a plain **queued**
+  `request()` and derives its status from `!hasLock`. This is load-bearing, not a
+  shortcut: the live queued request is what lets the browser hand the lock to a
+  waiting tab when the holder dies, which is what §5's crash-safety promise depends on.
+- **§5 post-takeover recovery.** §5 as written stranded a tab: after handing over,
+  it never re-queued, so if the *new* holder then closed, the original tab stayed
+  blocked forever with reload as the only escape. It now re-queues after releasing.
+- **Tech stack "No server changes".** One two-line exception: the telemetry `plane`
+  union (`server/src/telemetry-store.ts`, `server/src/features/telemetry.ts`) gained
+  a `'lock'` member. Without it the client's lock events passed validation-by-
+  rejection and were silently dropped, so the durable trail would have shown nothing
+  during exactly the lockout it exists to explain. No new endpoint, no protocol
+  change, unknown planes still rejected.
+- **§3 LiveKit health.** `status === 'disabled'` counts as healthy, not degraded — a
+  room with A/V switched off is not a fault, and would otherwise sit permanently amber.
+- **§4 sub-second clock.** The UI clock runs **only while something is wrong**
+  (`needsFastClock`, gated on `BLOCKING_TRANSPORTS` + lock state). Unconditionally
+  re-rendering the component that wraps the whole tldraw editor 4×/second for an
+  entire session, to animate readouts that only exist while blocked, was not worth it.
+- **§4 input swallow.** Swallows everything outside the modal panel except an
+  explicit allowlist (Ctrl/Cmd+C, bare Tab). An earlier attempt exempted the whole
+  modifier class and thereby let tldraw's `Ctrl+Z`/`Ctrl+Shift+Z`/`Ctrl+A` mutate a
+  canvas that could not sync — tldraw binds these on `document.body`, so neither the
+  modal's DOM position nor focus prevents it. Browser-chrome shortcuts (reload,
+  close, devtools) are unaffected either way: `preventDefault` cannot cancel them.
+- **§4 vs. the kick notice.** The blocker is suppressed entirely when `wasKicked` is
+  true. Being removed is terminal; a "Retrying in 3…" countdown over it would promise
+  a recovery that cannot happen.
+
+### Known limitations carried, not fixed
+
+- **No focus trap** in the modal. A keyboard user can Tab out into dimmed background
+  content. Adding one would require re-swallowing Tab, which conflicts with the
+  allowlist above; the connection variant has no focusable children anyway.
+- **3+ tabs:** the Web Locks FIFO queue, not the broadcast, decides who wins a
+  takeover. If C clicks "Use it here" while B has been queued longer, B becomes the
+  holder and neither tab is told. Queue position is not exposed by the API.
+- **A bfcache-frozen holder** cannot hand over: message delivery is deferred until it
+  resumes. Full discard *does* recover, via ordinary crash-safety.
+- **One-frame stale `now`** at the healthy→unhealthy transition when the fast clock
+  was off. Harmless only because `transportChip`/`countdownSeconds` clamp — those
+  clamps are load-bearing, not defensive decoration.
+
+### Not yet verified
+
+**The manual smoke in §8 has NOT been run** — no dev stack was available. Every
+automated check passes (typecheck, 218 suites, build), but the lock lifecycle, the
+React shells and the modal's rendering have no automated coverage at all. §8's three
+scenarios remain outstanding before this can be trusted in a real room.
