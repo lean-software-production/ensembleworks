@@ -38,12 +38,17 @@ function createStore<T>(initial: T) {
  * container's CSS transform); `selection`/`hover`/`editingId` are per-client
  * UI state that has no business syncing to peers (each collaborator has
  * their own). `selection` is a ReadonlySet so a caller can't mutate it out
- * from under a snapshot that's already been handed out. */
+ * from under a snapshot that's already been handed out. `nextShapeStyle` is
+ * the ARMED style (Task AS1) — a style patch a create tool reads into a
+ * newly-created shape's props/opacity (Task AS2), the same way it already
+ * reads live `camera`; it is set only via `SetNextStyle` and, like the rest
+ * of this interface, never persisted to the doc. */
 export interface EditorState {
   readonly camera: { readonly x: number; readonly y: number; readonly z: number }
   readonly selection: ReadonlySet<string>
   readonly hover: string | null
   readonly editingId: string | null
+  readonly nextShapeStyle: Record<string, unknown>
 }
 
 const INITIAL_STATE: EditorState = {
@@ -51,6 +56,7 @@ const INITIAL_STATE: EditorState = {
   selection: new Set(),
   hover: null,
   editingId: null,
+  nextShapeStyle: {},
 }
 
 export interface EditorOpts {
@@ -174,13 +180,14 @@ export class Editor {
       selection: new Set(s.selection),
       hover: s.hover,
       editingId: s.editingId,
+      nextShapeStyle: Object.freeze({ ...s.nextShapeStyle }),
     })
   }
 
   /** `fn` fires SYNCHRONOUSLY, at most once per apply()/applyAll() call —
    * never once per Intent inside a batch (see applyAll). The trigger is
    * PER-INTENT-TYPE, not value-equality: any view intent in the batch
-   * (SetCamera/SetSelection/SetHover/BeginEdit/EndEdit) counts as "state
+   * (SetCamera/SetSelection/SetHover/BeginEdit/EndEdit/SetNextStyle) counts as "state
    * changed" even when the new value happens to equal the old one — e.g. a
    * SetSelection carrying the identical ids DOES notify. No value-equality
    * dedup is performed; a caller that needs it keeps its last snapshot and
@@ -714,6 +721,18 @@ export class Editor {
 
       case 'EndEdit':
         return { state: { ...state, editingId: null }, docMutated: false, stateChanged: true }
+
+      case 'SetNextStyle':
+        // View intent (Task AS1): shallow-merges `props` into the existing
+        // nextShapeStyle — arming color then arming size accumulates both,
+        // it does not replace. No doc.putShape/updateProps, no undo/redo
+        // arrays — mirrors SetCamera/SetSelection/SetHover/BeginEdit/EndEdit
+        // above exactly.
+        return {
+          state: { ...state, nextShapeStyle: { ...state.nextShapeStyle, ...intent.props } },
+          docMutated: false,
+          stateChanged: true,
+        }
     }
   }
 

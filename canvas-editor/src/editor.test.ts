@@ -296,6 +296,7 @@ const normalize = (m: CanvasDocument) => ({
     { type: 'SetSelection', ids: ['shape:a'] },
     { type: 'SetHover', id: 'shape:a' },
     { type: 'BeginEdit', id: 'shape:a' },
+    { type: 'SetNextStyle', props: { color: 'blue' } },
   ])
 
   const snap = editor.get()
@@ -306,6 +307,7 @@ const normalize = (m: CanvasDocument) => ({
   attempt(() => { (snap.selection as Set<string>).add('shape:evil') })
   attempt(() => { (snap.selection as Set<string>).delete('shape:a') })
   attempt(() => { (snap as { camera: unknown }).camera = { x: 0, y: 0, z: 0 } })
+  attempt(() => { (snap.nextShapeStyle as Record<string, unknown>).color = 'evil' })
 
   // A subsequent UNRELATED state change, then a fresh get(): every field the
   // probes attacked must still hold its canonical value.
@@ -315,6 +317,7 @@ const normalize = (m: CanvasDocument) => ({
   assert.deepEqual([...fresh.selection], ['shape:a'], 'selection survived Set.add/.delete on a returned snapshot')
   assert.equal(fresh.editingId, 'shape:a', 'editingId survived reassignment attempts')
   assert.equal(fresh.hover, null, 'the legitimate SetHover still went through')
+  assert.equal(fresh.nextShapeStyle.color, 'blue', 'nextShapeStyle survived a mutation attempt on a returned snapshot — kills the "return the live object, not a copy" mutant')
 
   // Behavior check: drive a translate off a FRESH snapshot's selection — if
   // Set.add('shape:evil') had leaked into canonical state, shape:evil would
@@ -753,6 +756,43 @@ const normalize = (m: CanvasDocument) => ({
   assert.equal(doc.getShape('shape:b')!.opacity, 0.5)
 
   console.log('ok: SetStyle batch-patches props + envelope opacity across a selection, with tolerant unresolved ids and full-batch undo/redo')
+}
+
+// ============================================================================
+// 23. SetNextStyle (Task AS1): editor-LOCAL "armed" style a newly-created
+//     shape will inherit — parity with tldraw arming a color on the tool
+//     before drawing. A VIEW intent (like SetCamera/SetSelection/SetHover):
+//     touches ONLY nextShapeStyle in EditorState, never the doc, never the
+//     undo stack. Shallow-MERGES `props` into the existing nextShapeStyle
+//     (arming color then arming size accumulates both), it does not replace.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+
+  // View-intent purity baselines captured BEFORE any SetNextStyle call — a
+  // mutant that treats SetNextStyle as a mutation would already corrupt
+  // these on the FIRST call below, so the baseline must predate all of them,
+  // not just the last.
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+  const canUndoBefore = editor.canUndo()
+
+  assert.deepEqual(editor.get().nextShapeStyle, {}, 'nextShapeStyle starts empty')
+
+  editor.apply({ type: 'SetNextStyle', props: { color: 'blue' } })
+  assert.equal(editor.get().nextShapeStyle.color, 'blue', 'SetNextStyle sets the given key')
+
+  // Shallow-merge, not replace: arming a second axis must not drop the first.
+  editor.apply({ type: 'SetNextStyle', props: { size: 'l' } })
+  assert.equal(editor.get().nextShapeStyle.color, 'blue', 'a later SetNextStyle for a DIFFERENT key does not drop an earlier one — kills the replace-instead-of-merge mutant')
+  assert.equal(editor.get().nextShapeStyle.size, 'l')
+
+  editor.apply({ type: 'SetNextStyle', props: { color: 'red' } })
+  assert.equal(commits, 0, 'SetNextStyle never calls doc.commit(), across all three calls above — kills a mutant that routes it through the doc')
+  assert.equal(editor.canUndo(), canUndoBefore, 'SetNextStyle never pushes an undo entry, across all three calls above — kills a mutant that treats it as a mutation')
+  assert.equal(editor.get().nextShapeStyle.color, 'red', 'the merge did take effect')
+
+  console.log('ok: SetNextStyle shallow-merges the armed style, view-only (no commit, no undo)')
 }
 
 console.log('ok: canvas-editor editor + intents')

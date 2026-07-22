@@ -38,7 +38,7 @@ function shapeWithProps(props: Record<string, unknown>): Shape {
 // renders) ---
 const shape = shapeWithProps({ w: 1280, h: 720, roadmapId: 'q3-plan' })
 const doc: CanvasDocument = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [shape], bindings: [] })
-const editorState: EditorState = { camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null }
+const editorState: EditorState = { camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {} }
 
 const html = renderToStaticMarkup(createElement(RoadmapShape, { shape, snapshot: doc, editorState }))
 assert.ok(html.includes('data-canvas-v2-shape="roadmap"'), 'renders the canvas-v2 shape marker')

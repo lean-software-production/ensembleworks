@@ -85,7 +85,7 @@ assert.deepEqual([...NEKO_NUDGE_DELAYS_MS], [0, 250, 750, 1500, 3000], 'nudge sc
 // --- static-render smoke ---
 const shape = shapeWithProps({ w: 900, h: 600, base: '/shared-browser/', title: 'shared browser' })
 const doc: CanvasDocument = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [shape], bindings: [] })
-const editorState: EditorState = { camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null }
+const editorState: EditorState = { camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {} }
 
 const html = renderToStaticMarkup(createElement(NekoShape, { shape, snapshot: doc, editorState }))
 assert.ok(html.includes('data-canvas-v2-shape="neko"'), 'renders the canvas-v2 shape marker')

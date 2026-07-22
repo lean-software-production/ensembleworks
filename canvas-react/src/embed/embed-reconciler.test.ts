@@ -72,6 +72,7 @@ const editorState: EditorState = Object.freeze({
   selection: new Set<string>(),
   hover: null,
   editingId: null,
+  nextShapeStyle: {},
 })
 
 const calls: string[] = []

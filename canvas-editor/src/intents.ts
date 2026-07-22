@@ -191,6 +191,14 @@ export interface SetHover { readonly type: 'SetHover'; readonly id: string | nul
 export interface BeginEdit { readonly type: 'BeginEdit'; readonly id: string }
 export interface EndEdit { readonly type: 'EndEdit' }
 
+/** Arm the style a NEWLY-CREATED shape will inherit (Task AS1/AS2) — parity
+ * with tldraw arming a color on the tool before you draw. Editor-local, like
+ * every other view intent here: shallow-MERGES `props` into the existing
+ * `EditorState.nextShapeStyle` (arming color, then arming size, accumulates
+ * both — it does NOT replace), never touches the doc, never pushes an undo
+ * entry. See editor.ts's applyOne. */
+export interface SetNextStyle { readonly type: 'SetNextStyle'; readonly props: Record<string, unknown> }
+
 export type Intent =
   | CreateShape
   | TranslateShapes
@@ -208,3 +216,4 @@ export type Intent =
   | SetHover
   | BeginEdit
   | EndEdit
+  | SetNextStyle

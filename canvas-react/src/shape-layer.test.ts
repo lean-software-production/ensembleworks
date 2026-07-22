@@ -45,6 +45,7 @@ const editorState: EditorState = {
   selection: new Set<string>(),
   hover: null,
   editingId: null,
+  nextShapeStyle: {},
 }
 
 // ============================================================================
