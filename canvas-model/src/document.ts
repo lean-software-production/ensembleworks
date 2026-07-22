@@ -17,8 +17,31 @@ export const bindingSchema = z.looseObject({
 })
 export type Binding = z.infer<typeof bindingSchema>
 
-export const pageSchema = z.looseObject({ id: pageIdField, name: z.string() })
+// `index` is OPTIONAL (permissive — every pre-existing page in the D-2
+// legacy corpus carries no index; no migration performed) so parse stays
+// backward-compatible. orderedPages below treats a missing index as the
+// empty string, which sorts before any non-empty index lexically.
+export const pageSchema = z.looseObject({ id: pageIdField, name: z.string(), index: z.string().optional() })
 export type Page = z.infer<typeof pageSchema>
+
+// The doc's pages, sorted by (index ASC lexical, id ASC lexical) — the SAME
+// (index, id) tie-break paint-order.ts's orderForPaint uses for shape
+// siblings, for the same reason: convergence. Two peers holding the
+// identical converged CRDT state must compute the SAME page order
+// regardless of input/iteration order, so this is a pure function of
+// (index, id) only, never input array order. A page with no `index` sorts
+// as if its index were '' (before every non-empty index).
+export function orderedPages(pages: readonly Page[]): Page[] {
+  return pages.slice().sort((a, b) => {
+    const ai = a.index ?? ''
+    const bi = b.index ?? ''
+    if (ai < bi) return -1
+    if (ai > bi) return 1
+    if (a.id < b.id) return -1
+    if (a.id > b.id) return 1
+    return 0
+  })
+}
 
 // A canvas asset (tldraw parity: dropped/pasted images live as a SEPARATE
 // record referenced by the image shape's assetId, not inline on the shape —
