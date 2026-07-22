@@ -43,9 +43,19 @@ assert.equal(outside({ key: 'Delete' }), true, 'Delete must be swallowed')
 assert.equal(outside({ key: 'Backspace' }), true, 'Backspace must be swallowed')
 assert.equal(outside({ key: 'Escape' }), true, 'Escape must be swallowed')
 
-// Anything targeting inside the modal's own panel always passes through —
-// the "Use it here" button must remain clickable/focusable.
-assert.equal(outside({ key: 'z', ctrlKey: true, insidePanel: true }), false, 'insidePanel always passes through')
-assert.equal(outside({ key: 'Enter', insidePanel: true }), false, 'insidePanel always passes through')
+// insidePanel is true in the common case (focus-on-mount lands there), so it
+// must NOT be a blanket bypass — only Enter/Space (operating a focused
+// button) get exempted by it. Modifier chords stay swallowed regardless of
+// focus location, and so do bare tool-shortcut keys.
+assert.equal(outside({ key: 'z', ctrlKey: true, insidePanel: true }), true, 'insidePanel must not bypass ctrl+z')
+assert.equal(outside({ key: 'z', metaKey: true, insidePanel: true }), true, 'insidePanel must not bypass cmd+z')
+assert.equal(outside({ key: 'a', ctrlKey: true, insidePanel: true }), true, 'insidePanel must not bypass ctrl+a')
+assert.equal(outside({ key: 'a', metaKey: true, insidePanel: true }), true, 'insidePanel must not bypass cmd+a')
+assert.equal(outside({ key: 'c', ctrlKey: true, insidePanel: true }), false, 'ctrl+c passes through inside the panel too')
+assert.equal(outside({ key: 'c', metaKey: true, insidePanel: true }), false, 'cmd+c passes through inside the panel too')
+assert.equal(outside({ key: 'Enter', insidePanel: true }), false, 'Enter must operate the focused button')
+assert.equal(outside({ key: ' ', insidePanel: true }), false, 'Space must operate the focused button')
+assert.equal(outside({ key: 'd', insidePanel: true }), true, 'bare letters inside the panel must still be swallowed (tldraw tool shortcuts)')
+assert.equal(outside({ key: 'Tab', insidePanel: true }), false, 'bare Tab must pass through inside the panel too')
 
 console.log('inputSwallow.test.ts: all assertions passed')

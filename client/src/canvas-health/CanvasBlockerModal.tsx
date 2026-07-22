@@ -75,6 +75,21 @@ export function blockedSummary(tripped: readonly TransportId[]): string {
  * (cut), Ctrl/Cmd+V (paste), Ctrl/Cmd+Z/Shift+Z, Ctrl/Cmd+A, all of which
  * mutate — is swallowed, same as unmodified keys.
  *
+ * `insidePanel` is NOT a blanket bypass, on purpose, even though it looks
+ * like the obvious way to exempt "the modal's own button." The modal moves
+ * focus into itself on mount for accessibility (the takeover button when
+ * present, otherwise the panel div, which has `tabIndex={-1}`) — so
+ * `insidePanel` is true in the *common* case, for as long as the user hasn't
+ * clicked or tabbed elsewhere. Treating it as "don't swallow" would silently
+ * disable the swallow for the entire time the modal is up, which is exactly
+ * the bug this predicate exists to prevent. So `insidePanel` only widens the
+ * allowlist to the two keys that operate a focused button — `Enter` and
+ * `' '` (Space) — and only when unmodified. Every modifier chord is swallowed
+ * regardless of focus location (except Ctrl/Cmd+C, per above), and every
+ * other bare key (letters, Delete, Backspace, Escape, …) is swallowed
+ * regardless of focus location too, because those are exactly the keys
+ * tldraw's `document.body`-level handler treats as tool shortcuts.
+ *
  * Reload/close/devtools (Ctrl/Cmd+R, Ctrl/Cmd+W, Cmd+Tab, F12) are swallowed
  * too, and that's fine: those are non-cancelable browser-chrome shortcuts in
  * every major browser, so `preventDefault` on them is already a no-op, and
@@ -90,10 +105,13 @@ export function shouldSwallowKey(input: {
 	shiftKey: boolean
 	insidePanel: boolean
 }): boolean {
-	if (input.insidePanel) return false
-	const mod = input.ctrlKey || input.metaKey
-	if (input.key === 'Tab' && !mod) return false
-	if (input.key.toLowerCase() === 'c' && mod) return false
+	const chorded = input.ctrlKey || input.metaKey || input.altKey
+	if (input.key === 'Tab' && !chorded) return false
+	if (chorded) {
+		const isCopy = (input.ctrlKey || input.metaKey) && !input.altKey && input.key.toLowerCase() === 'c'
+		return !isCopy
+	}
+	if (input.insidePanel && (input.key === 'Enter' || input.key === ' ')) return false
 	return true
 }
 
