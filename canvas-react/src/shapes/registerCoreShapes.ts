@@ -1,6 +1,7 @@
 // REGISTRATION for the core tldraw-parity shape bodies (C1-C4:
 // NoteShape/FrameShape/TextShape/GeoShape; R1 added DrawShape, then the
-// line sub-cycle's R1 added LineShape) into
+// line sub-cycle's R1 added LineShape, then the assets/image sub-cycle's R1
+// added ImageShape) into
 // canvas-react's own shapeRegistry. UNLIKE registerCanvasV2Shapes()
 // (client/src/canvas-v2/shapes/index.ts) — which lives OUT-OF-PACKAGE
 // because its six bodies hold real client-owned session state (xterm,
@@ -32,10 +33,11 @@ import { TextShape } from './TextShape.js'
 import { GeoShape } from './GeoShape.js'
 import { DrawShape } from './DrawShape.js'
 import { LineShape } from './LineShape.js'
+import { ImageShape } from './ImageShape.js'
 
 let registered = false
 
-/** Register the core shape bodies (note/frame/text/geo/draw/line) into
+/** Register the core shape bodies (note/frame/text/geo/draw/line/image) into
  * canvas-react's shapeRegistry. Idempotent — a second call is a no-op. */
 export function registerCoreShapes(): void {
   if (registered) return
@@ -46,4 +48,5 @@ export function registerCoreShapes(): void {
   registerShape('geo', GeoShape)
   registerShape('draw', DrawShape)
   registerShape('line', LineShape)
+  registerShape('image', ImageShape)
 }
