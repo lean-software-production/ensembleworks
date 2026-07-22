@@ -41,7 +41,7 @@
 // wrong binding from a shape the arrow no longer visually touches. Resolving
 // once, at the end, means there is only ever one binding-writing moment to
 // reason about. Pinned by arrow.test.ts's no-bindings-mid-draw test.
-import { resolveArrowAnchor, type Shape } from '@ensembleworks/canvas-model'
+import { indexBetween, resolveArrowAnchor, type Shape } from '@ensembleworks/canvas-model'
 import type { ArrowBinding, Intent } from '../intents.js'
 import { crossedThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
@@ -77,6 +77,24 @@ const IDLE: ArrowState = { mode: 'idle' }
 function makeId(event: { readonly t: number; readonly x: number; readonly y: number }, random: () => number): string {
   const salt = Math.floor(random() * 1e9).toString(36)
   return `shape:${event.t}-${Math.round(event.x)}-${Math.round(event.y)}-${salt}`
+}
+
+// Task C1 (D-5) — top-of-stack index at creation, mirrors create.ts's
+// topIndex exactly (same rationale as makeId above for NOT importing it:
+// module-private there, and coupling two independent tool FSMs over a
+// five-line helper isn't worth it). No threading/state-storage concern here
+// unlike create.ts's drag-to-size: StartArrow (below) is the ONLY intent
+// that ever sets this arrow's index -- every later pointermove in 'drawing'
+// emits CompleteArrow, which is a props-only `end` update (see the module
+// header's LIVE PREVIEW note) and never touches index, so a single inline
+// call at the pointing->drawing transition is inherently "compute once."
+function topIndex(ctx: ToolContext, parentId: string): string {
+  const siblings = ctx.snapshot().shapes.filter((s) => s.parentId === parentId)
+  let max: string | null = null
+  for (const s of siblings) {
+    if (max === null || s.index > max) max = s.index
+  }
+  return indexBetween(max, null)
 }
 
 export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
@@ -121,8 +139,9 @@ export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
             // here or in routeArrow (canvas-model/src/arrow-route.ts), which
             // resolves each terminal's binding independently regardless of
             // whether they happen to name the same toId.
+            const index = topIndex(ctx, pageId)
             const shape: Shape = {
-              id, kind: 'arrow', parentId: pageId, index: 'a1', x: startWorld.x, y: startWorld.y, rotation: 0,
+              id, kind: 'arrow', parentId: pageId, index, x: startWorld.x, y: startWorld.y, rotation: 0,
               isLocked: false, opacity: 1, meta: {}, props: { end: { x: 0, y: 0 } },
             } as Shape
             const fromBinding = bindingAt(startWorld, id)

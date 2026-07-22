@@ -1,7 +1,7 @@
 // Run: bun src/tools/create.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
-import type { Shape } from '@ensembleworks/canvas-model'
+import { indexBetween, type Shape } from '@ensembleworks/canvas-model'
 import { Editor } from '../editor.js'
 import { run, script } from '../script.js'
 import { createCreateTool, type CreateKind } from './create.js'
@@ -178,13 +178,21 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   // the gesture -- proves a LIVE read of editor.get().nextShapeStyle (like
   // worldOf's live camera read), not a value captured at tool-construction
   // time (mutant: "read a stale/captured style instead of live editor.get()").
-  const { editor, ctx } = setup()
+  const { doc, editor, ctx } = setup()
+  // Task C1 (D-5): seed ONE existing root sibling at index 'a1' so the
+  // index assertion below exercises the real "sorts after the max sibling"
+  // behavior, not just the degenerate empty-page case.
+  doc.putShape({
+    id: 'shape:existing', kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+  } as Shape)
+  doc.commit()
   const tool = createCreateTool(ctx, 'geo')
   editor.apply({ type: 'SetNextStyle', props: { color: 'blue', size: 'l' } })
   const events = script().down(300, 300).up().events()
   run(editor, tool, events)
 
-  const created = editor.doc.listShapes().find((s) => s.kind === 'geo')!
+  const created = editor.doc.listShapes().find((s) => s.kind === 'geo' && s.id !== 'shape:existing')!
   assert.equal(created.props.color, 'blue', 'armed color lands on the created shape')
   assert.equal(created.props.size, 'l', 'armed size lands on the created shape')
   // Geometry survives the armed-style merge (mutant: "armed props overwrite
@@ -194,7 +202,11 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   assert.equal((created.props as { h: number }).h, h, 'armed style never clobbers the tool-computed h')
   // Envelope fields untouched by the armed style patch.
   assert.equal(created.parentId, 'page:p', 'armed style never touches parentId')
-  assert.equal(created.index, 'a1', 'armed style never touches index')
+  // Task C1 (D-5): the armed style must never influence the index (it isn't
+  // a style axis at all -- see whitelistStyleProps), and the tool-computed
+  // index must sort strictly ABOVE the seeded 'a1' sibling (top-of-stack).
+  assert.ok('a1' < created.index, `armed style never touches index; created index (${created.index}) must sort after the existing 'a1' sibling`)
+  assert.equal(created.index, indexBetween('a1', null), 'created index is exactly indexBetween(maxSibling, null)')
   assert.equal(created.rotation, 0, 'armed style never touches rotation')
   assert.equal(created.isLocked, false, 'armed style never touches isLocked')
   assert.equal(created.opacity, 1, 'no opacity armed -> default envelope opacity of 1')
@@ -258,7 +270,16 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   // envelope-shaped key (should never happen through the real panel, whose
   // armed axes are a fixed set -- see style-axes.ts), it must never corrupt
   // the shape's envelope. Confined strictly to props (and opacity).
-  const { editor, ctx } = setup()
+  const { doc, editor, ctx } = setup()
+  // Task C1 (D-5): seed a sibling so "the computed index" has a real,
+  // checkable target distinct from both the legacy 'a1' and the smuggled
+  // 'zzzz' -- proving the envelope index comes from topIndex, not from
+  // props, and not left untouched at some other stale value either.
+  doc.putShape({
+    id: 'shape:existing', kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+  } as Shape)
+  doc.commit()
   const tool = createCreateTool(ctx, 'geo')
   editor.apply({
     type: 'SetNextStyle',
@@ -270,10 +291,11 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   const events = script().down(300, 300).up().events()
   run(editor, tool, events)
 
-  const created = editor.doc.listShapes().find((s) => s.kind === 'geo')!
+  const created = editor.doc.listShapes().find((s) => s.kind === 'geo' && s.id !== 'shape:existing')!
   assert.equal(created.parentId, 'page:p', 'a stray parentId in nextShapeStyle can never corrupt the envelope parentId')
   assert.notEqual(created.id, 'shape:evil', 'a stray id in nextShapeStyle can never corrupt the envelope id')
-  assert.equal(created.index, 'a1', 'a stray index in nextShapeStyle can never corrupt the envelope index')
+  assert.notEqual(created.index, 'zzzz', 'a stray index in nextShapeStyle can never corrupt the envelope index')
+  assert.equal(created.index, indexBetween('a1', null), 'the envelope index is the tool-computed top-of-stack key, not the smuggled prop')
   assert.equal(created.rotation, 0, 'a stray rotation in nextShapeStyle can never corrupt the envelope rotation')
   assert.equal(created.isLocked, false, 'a stray isLocked in nextShapeStyle can never corrupt the envelope isLocked')
   assert.equal(created.props.color, 'blue', 'the real armed style key still lands')
@@ -288,6 +310,113 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   assert.ok(!propsKeys.includes('isLocked'), 'a stray isLocked must be dropped from props entirely, not just inert')
   assert.ok(!propsKeys.includes('bogusKey'), 'an arbitrary unknown key (on no style-axis whitelist) must be dropped from props entirely')
   console.log('ok: a non-style key smuggled into nextShapeStyle never corrupts the envelope, and is whitelisted out of props entirely')
+}
+
+// ============================================================================
+// 6. Task C1 (D-5) — top-of-stack index at creation.
+// ============================================================================
+
+// 6a. First shape on an empty page: no siblings -> indexBetween(null, null),
+//     a valid starting key. Mutant killed: "crashes/throws on an empty page."
+{
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, 'geo')
+  const events = script().down(300, 300).up().events()
+  assert.doesNotThrow(() => run(editor, tool, events), 'creating the first shape on an empty page must not throw')
+  const created = editor.doc.listShapes()[0]!
+  assert.equal(created.index, indexBetween(null, null), 'first shape on an empty page gets indexBetween(null, null)')
+  assert.equal(created.index, 'a0', "indexBetween(null, null) is the algorithm's published starting key")
+  console.log('ok: first shape on an empty page gets a valid starting index, no crash')
+}
+
+// 6b. "Reads wrong parent's siblings" mutant: a sibling exists under a
+//     DIFFERENT parent (a frame) with an index that lexically sorts ABOVE
+//     any key indexBetween('a1', null) could produce, and a page:p sibling
+//     sits at 'a1'. The correct implementation filters siblings by parentId
+//     BEFORE taking the max, so the new (page:p) shape's index must be
+//     EXACTLY indexBetween('a1', null) -- not influenced by the frame
+//     child's higher, wrong-parent index. A mutant that takes the max
+//     across ALL shapes regardless of parentId would instead compute
+//     indexBetween(<the frame child's index>, null), a DIFFERENT string,
+//     which this exact-value assertion catches.
+{
+  const { doc, editor, ctx } = setup()
+  // A genuinely valid key (via indexBetween, not a hand-picked string --
+  // A1's key format encodes length in the header char, so an arbitrary
+  // single letter like 'z' is NOT a valid key on its own) that lexically
+  // sorts ABOVE indexBetween('a1', null), the value the CORRECT
+  // implementation must produce for the page:p create below.
+  const HIGH_WRONG_PARENT_KEY = indexBetween(indexBetween('a1', null), null)
+  doc.putShape({
+    id: 'shape:frame1', kind: 'frame', parentId: 'page:p', index: 'a1', x: 1000, y: 1000, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+  } as Shape)
+  doc.putShape({
+    id: 'shape:frame-child', kind: 'geo', parentId: 'shape:frame1', index: HIGH_WRONG_PARENT_KEY, x: 1001, y: 1001, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 5, h: 5 },
+  } as Shape)
+  doc.putShape({
+    id: 'shape:page-sibling', kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+  } as Shape)
+  doc.commit()
+
+  const tool = createCreateTool(ctx, 'geo')
+  const events = script().down(300, 300).up().events()
+  run(editor, tool, events)
+  const created = editor.doc.listShapes().find((s) => s.id !== 'shape:frame1' && s.id !== 'shape:frame-child' && s.id !== 'shape:page-sibling')!
+  assert.equal(created.index, indexBetween('a1', null), "top-of-stack index reads ONLY the target parent's (page:p) siblings, ignoring the frame child's unrelated, higher index")
+  console.log("ok: topIndex reads only the target parent's siblings, not a shape parented elsewhere")
+}
+
+// 6c. "Lands on top": two shapes created in sequence (same tool, two
+//     separate click-creates) -- the second's index sorts strictly AFTER
+//     the first's, so A2's orderForPaint paints it on top.
+{
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, 'geo')
+  run(editor, tool, script().down(100, 100).up().events())
+  const first = editor.doc.listShapes()[0]!
+  run(editor, tool, script().down(200, 200).up().events())
+  const shapesAfter = editor.doc.listShapes()
+  assert.equal(shapesAfter.length, 2, 'two shapes now exist')
+  const second = shapesAfter.find((s) => s.id !== first.id)!
+  assert.ok(first.index < second.index, `second-created shape's index (${second.index}) must sort after the first's (${first.index}) -- lands on top`)
+  console.log('ok: the second of two sequentially-created shapes sorts strictly after the first (lands on top)')
+}
+
+// 6d. Replay determinism: a multi-move drag-create threads ONE computed
+//     index through every per-pointermove re-emission of the SAME shape.
+//     Mutant killed: "recomputes topIndex each pointermove including self"
+//     -- once the first move's CreateShape has committed, that mutant would
+//     see the shape's OWN prior index as the new max sibling and mint a
+//     strictly-increasing index on every subsequent move; this test asserts
+//     the index observed after move 1 equals the index observed after
+//     move 2.
+{
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, 'geo')
+  let state = tool.initialState
+  const dispatch = (events: readonly import('../input.js').InputEvent[]) => {
+    for (const event of events) {
+      const result = tool.onEvent(state, event)
+      state = result.state
+      if (result.intents.length > 0) editor.applyAll(result.intents)
+    }
+  }
+
+  dispatch(script().down(0, 0).move(50, 50).events()) // crosses threshold -> dragging, first commit
+  const afterMove1 = editor.doc.listShapes()[0]!
+  const indexAfterMove1 = afterMove1.index
+
+  dispatch([{ type: 'pointermove', x: 80, y: 80, buttons: 1, modifiers: { shift: false, alt: false, ctrl: false, meta: false }, t: 200 }]) // second move, re-emits CreateShape for the same id
+  const afterMove2 = editor.doc.listShapes().find((s) => s.id === afterMove1.id)!
+  assert.equal(afterMove2.index, indexAfterMove1, 'the SAME index is threaded through every pointermove re-emission during one drag-create gesture -- not recomputed per move')
+
+  dispatch([{ type: 'pointerup', x: 80, y: 80, buttons: 0, modifiers: { shift: false, alt: false, ctrl: false, meta: false }, t: 210 }])
+  const final = editor.doc.listShapes().find((s) => s.id === afterMove1.id)!
+  assert.equal(final.index, indexAfterMove1, 'the threaded index also survives to the final pointerup emission')
+  console.log('ok: drag-create threads ONE computed index across every pointermove + pointerup re-emission (replay-deterministic)')
 }
 
 console.log('ok: create tools (note/text/geo/frame) + frame capture')

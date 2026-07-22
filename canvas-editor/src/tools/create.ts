@@ -12,7 +12,7 @@
 // measures. That is exactly the computation pageBounds/worldBounds already
 // trust, so a future change to a kind's default size (or the note special
 // case) is picked up here for free, with zero duplicated numbers.
-import { localBounds, STYLE_VALUE_SETS, type Bounds, type Shape } from '@ensembleworks/canvas-model'
+import { indexBetween, localBounds, STYLE_VALUE_SETS, type Bounds, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from '../intents.js'
 import { crossedThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
@@ -30,6 +30,16 @@ interface Dragging {
   readonly mode: 'dragging'
   readonly id: string
   readonly downWorld: { readonly x: number; readonly y: number }
+  /** The top-of-stack index computed ONCE at the pointing->dragging
+   * transition (see topIndex below) and threaded through every subsequent
+   * per-pointermove re-emission of this same shape. NOT recomputed per
+   * move: by the second move, THIS SAME shape's first-move commit is
+   * already sitting in ctx.snapshot() as a sibling of itself (create.ts's
+   * frame-capture SELF-EXCLUSION note documents the same per-move-commit
+   * cadence), so a naive per-event topIndex(ctx, pageId) call would read
+   * its own prior index as the max and keep minting a strictly-increasing
+   * index every move -- replay-nondeterministic and pointless churn. D-5. */
+  readonly index: string
 }
 
 export type CreateState = Idle | Pointing | Dragging
@@ -62,6 +72,28 @@ function defaultSize(kind: CreateKind, pageId: string): { w: number; h: number }
 // passthrough fields.
 function propsFor(kind: CreateKind, w: number, h: number): Record<string, unknown> {
   return kind === 'note' ? {} : { w, h }
+}
+
+// Task C1 (D-5) — top-of-stack index at creation, tldraw parity: a new shape
+// lands ABOVE every existing sibling (same parentId), never at the fixed
+// legacy 'a1'. Reads the CURRENT doc (ctx.snapshot(), the same lazily-rebuilt
+// pair every other query in this file already reads -- see tool-context.ts's
+// COHERENCE GUARANTEE) filtered to `parentId`'s children, takes the lexical
+// max `index` among them (or `null` on an empty/first-shape page), and asks
+// A1's deterministic `indexBetween` for a key strictly above it.
+// `indexBetween(null, null)` on an empty page returns a valid starting key
+// ('a0') -- no special-casing needed for the empty case.
+// CALLER DISCIPLINE (see the Dragging state's doc comment): call this ONCE
+// per gesture, at click-time or at the pointing->dragging transition, and
+// thread the result through -- never call it again mid-drag against a doc
+// that may already contain this same shape's own prior commit.
+function topIndex(ctx: ToolContext, parentId: string): string {
+  const siblings = ctx.snapshot().shapes.filter((s) => s.parentId === parentId)
+  let max: string | null = null
+  for (const s of siblings) {
+    if (max === null || s.index > max) max = s.index
+  }
+  return indexBetween(max, null)
 }
 
 // Post-review hardening: the WHITELIST of style-axis keys `nextShapeStyle`
@@ -122,12 +154,12 @@ function whitelistStyleProps(style: Record<string, unknown>): Record<string, unk
 // spread from `style`.
 function makeShape(
   kind: CreateKind, id: string, pageId: string, x: number, y: number, w: number, h: number,
-  style: Record<string, unknown>,
+  style: Record<string, unknown>, index: string,
 ): Shape {
   const { opacity, ...rest } = style
   const styleProps = whitelistStyleProps(rest)
   return {
-    id, kind, parentId: pageId, index: 'a1', x, y, rotation: 0,
+    id, kind, parentId: pageId, index, x, y, rotation: 0,
     isLocked: false, opacity: typeof opacity === 'number' ? opacity : 1, meta: {},
     props: { ...styleProps, ...propsFor(kind, w, h) },
   } as Shape
@@ -224,9 +256,9 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
   // it as a corner. We apply the same centering uniformly to text too (our
   // choice — tldraw's real TextShapeUtil auto-sizes from typed content,
   // which this clean-room model has no rendering/measurement to emulate).
-  function clickShape(id: string, worldPt: { readonly x: number; readonly y: number }): Shape {
+  function clickShape(id: string, worldPt: { readonly x: number; readonly y: number }, index: string): Shape {
     const { w, h } = defaultSize(kind, pageId)
-    return makeShape(kind, id, pageId, worldPt.x - w / 2, worldPt.y - h / 2, w, h, editor.get().nextShapeStyle)
+    return makeShape(kind, id, pageId, worldPt.x - w / 2, worldPt.y - h / 2, w, h, editor.get().nextShapeStyle, index)
   }
 
   // DRAG-TO-SIZE placement: top-left at the drag rect's min corner (NOT
@@ -241,10 +273,10 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
   // rather than resizing it). We use the shared drag-rect FSM for note too;
   // it's harmless (see propsFor's note comment) since note's geometry
   // ignores props.w/h regardless of what the drag rect computed.
-  function dragShape(id: string, a: { readonly x: number; readonly y: number }, b: { readonly x: number; readonly y: number }): Shape {
+  function dragShape(id: string, a: { readonly x: number; readonly y: number }, b: { readonly x: number; readonly y: number }, index: string): Shape {
     const minX = Math.min(a.x, b.x), minY = Math.min(a.y, b.y)
     const w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y)
-    return makeShape(kind, id, pageId, minX, minY, w, h, editor.get().nextShapeStyle)
+    return makeShape(kind, id, pageId, minX, minY, w, h, editor.get().nextShapeStyle, index)
   }
 
   return {
@@ -271,16 +303,27 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
             // doc round-trip for information this tool already has.
             const id = makeId(event, editor.random)
             const downWorld = screenToWorld(editor.get().camera, state.downScreen)
-            const shape = dragShape(id, downWorld, worldOf(here))
+            // Computed ONCE here, at the pointing->dragging transition --
+            // BEFORE this shape's first CreateShape intent below has been
+            // applied/committed by the caller, so ctx.snapshot() here still
+            // reflects only PRE-EXISTING siblings (see topIndex's and
+            // Dragging's doc comments for why every later pointermove in
+            // 'dragging' below reuses this same value instead of
+            // recomputing it).
+            const index = topIndex(ctx, pageId)
+            const shape = dragShape(id, downWorld, worldOf(here), index)
             return {
-              state: { mode: 'dragging', id, downWorld },
+              state: { mode: 'dragging', id, downWorld, index },
               intents: [{ type: 'CreateShape', shape }, { type: 'SetSelection', ids: [id] }],
             }
           }
           if (event.type === 'pointerup') {
             const worldPt = worldOf({ x: event.x, y: event.y })
             const id = makeId(event, editor.random)
-            const shape = clickShape(id, worldPt)
+            // CLICK-create: a single emission, no prior commit of this shape
+            // exists yet -- compute inline, same as the drag transition above.
+            const index = topIndex(ctx, pageId)
+            const shape = clickShape(id, worldPt, index)
             return { state: IDLE, intents: finalizeIntents(ctx, shape) }
           }
           return { state, intents: [] }
@@ -296,11 +339,11 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
             // path; the wire/undo-granularity cost of per-move commits is
             // unmeasured until H3 profiles it. Same note in select.ts's
             // onDragging.
-            const shape = dragShape(state.id, state.downWorld, worldOf({ x: event.x, y: event.y }))
+            const shape = dragShape(state.id, state.downWorld, worldOf({ x: event.x, y: event.y }), state.index)
             return { state, intents: [{ type: 'CreateShape', shape }] }
           }
           if (event.type === 'pointerup') {
-            const shape = dragShape(state.id, state.downWorld, worldOf({ x: event.x, y: event.y }))
+            const shape = dragShape(state.id, state.downWorld, worldOf({ x: event.x, y: event.y }), state.index)
             return { state: IDLE, intents: finalizeIntents(ctx, shape) }
           }
           return { state, intents: [] }
