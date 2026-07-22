@@ -73,6 +73,7 @@ const editorState: EditorState = Object.freeze({
   hover: null,
   editingId: null,
   nextShapeStyle: {},
+  currentPageId: 'page:p',
 })
 
 const calls: string[] = []

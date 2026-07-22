@@ -46,6 +46,7 @@ const editorState: EditorState = {
   hover: null,
   editingId: null,
   nextShapeStyle: {},
+  currentPageId: 'page:p',
 }
 
 // ============================================================================

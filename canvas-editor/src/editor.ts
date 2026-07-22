@@ -42,21 +42,34 @@ function createStore<T>(initial: T) {
  * the ARMED style (Task AS1) — a style patch a create tool reads into a
  * newly-created shape's props/opacity (Task AS2), the same way it already
  * reads live `camera`; it is set only via `SetNextStyle` and, like the rest
- * of this interface, never persisted to the doc. */
+ * of this interface, never persisted to the doc. `currentPageId` (Task E1,
+ * docs/plans/2026-07-22-canvas-v2-pages.md, D-1) is which page THIS peer is
+ * currently looking at — reactive, per-peer, NEVER written to the CRDT (the
+ * doc's `pages` set is shared; which one each collaborator is looking at is
+ * not). Seeded from `EditorOpts.pageId` at construction and switched only via
+ * `SetCurrentPage`; every parenting site that used to read the constructor's
+ * frozen `editor.pageId` reads `editor.get().currentPageId` live instead. */
 export interface EditorState {
   readonly camera: { readonly x: number; readonly y: number; readonly z: number }
   readonly selection: ReadonlySet<string>
   readonly hover: string | null
   readonly editingId: string | null
   readonly nextShapeStyle: Record<string, unknown>
+  readonly currentPageId: string
 }
 
+// `currentPageId: ''` here is a documented PLACEHOLDER, never a live value —
+// INITIAL_STATE can't reference `opts.pageId` (it's built before the
+// constructor runs), so the constructor always overwrites it with
+// `opts.pageId` before `this.store` is readable by anything (see below). No
+// subscriber ever observes the `''` placeholder.
 const INITIAL_STATE: EditorState = {
   camera: { x: 0, y: 0, z: 1 },
   selection: new Set(),
   hover: null,
   editingId: null,
   nextShapeStyle: {},
+  currentPageId: '',
 }
 
 export interface EditorOpts {
@@ -143,7 +156,7 @@ export class Editor {
   readonly now: () => number
   readonly random: () => number
   readonly pageId: string
-  private readonly store = createStore<EditorState>(INITIAL_STATE)
+  private readonly store: ReturnType<typeof createStore<EditorState>>
   // LOCAL-PEER-ONLY by construction: entries are pushed exclusively from
   // THIS editor instance's own applyAll calls (never from doc.subscribe or
   // an import() callback), so a remote peer's incoming shapes are never
@@ -157,6 +170,10 @@ export class Editor {
     this.now = opts.now
     this.random = opts.random
     this.pageId = opts.pageId
+    // currentPageId (Task E1, D-1) seeded from opts.pageId HERE, not in
+    // INITIAL_STATE — INITIAL_STATE is a module-level const built before any
+    // Editor exists, so it cannot see this instance's opts.
+    this.store = createStore<EditorState>({ ...INITIAL_STATE, currentPageId: opts.pageId })
   }
 
   /** Immutable snapshot of the editor-local state (NOT the doc — read the
@@ -181,6 +198,7 @@ export class Editor {
       hover: s.hover,
       editingId: s.editingId,
       nextShapeStyle: Object.freeze({ ...s.nextShapeStyle }),
+      currentPageId: s.currentPageId,
     })
   }
 
@@ -794,6 +812,13 @@ export class Editor {
           docMutated: false,
           stateChanged: true,
         }
+
+      case 'SetCurrentPage':
+        // View intent (Task E1, D-2): switches EditorState.currentPageId
+        // ONLY — no doc write, no undo/redo arrays, mirroring
+        // SetCamera/SetSelection/SetHover/BeginEdit/EndEdit/SetNextStyle
+        // above exactly. Switching pages is a view change, not undoable.
+        return { state: { ...state, currentPageId: intent.pageId }, docMutated: false, stateChanged: true }
     }
   }
 

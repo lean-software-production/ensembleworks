@@ -91,6 +91,7 @@ function fakeToolContext(editingId: string | null): ToolContext {
     hover: null,
     editingId,
     nextShapeStyle: {},
+    currentPageId: 'page:p',
   })
   const editorDoc = {
     subscribe: (_listener: () => void) => () => {},

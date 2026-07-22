@@ -1012,4 +1012,39 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: PutAsset batches atomically with CreateShape — one commit, undo removes only the shape, asset orphaned')
 }
 
+// ============================================================================
+// 28. currentPageId + SetCurrentPage (Task E1, docs/plans/2026-07-22-canvas-
+//     v2-pages.md, D-1/D-2): editor-LOCAL, per-peer "which page am I looking
+//     at" state, seeded from the constructor's opts.pageId and switched via a
+//     VIEW intent (like SetCamera/SetNextStyle) — no doc write, no undo entry,
+//     but subscribers DO fire (it's a real EditorState change).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  assert.equal(editor.get().currentPageId, 'page:p', 'currentPageId is seeded from the constructor opts.pageId')
+
+  console.log('ok: currentPageId initializes from opts.pageId')
+}
+
+{
+  const { doc, editor } = makeEditor(1n)
+
+  // View-intent purity baselines captured BEFORE any SetCurrentPage call —
+  // same discipline as the SetNextStyle test above.
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+  const canUndoBefore = editor.canUndo()
+
+  let notifications = 0
+  editor.subscribe(() => { notifications += 1 })
+
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:x' })
+  assert.equal(editor.get().currentPageId, 'page:x', 'SetCurrentPage sets currentPageId')
+  assert.equal(commits, 0, 'SetCurrentPage never calls doc.commit() — kills a mutant that routes it through the doc')
+  assert.equal(editor.canUndo(), canUndoBefore, 'SetCurrentPage never pushes an undo entry — kills a mutant that treats it as a mutation')
+  assert.equal(notifications, 1, 'SetCurrentPage DOES notify subscribers exactly once — it is a real EditorState change, unlike a doc-only intent')
+
+  console.log('ok: SetCurrentPage switches currentPageId, view-only (no commit, no undo), notifies subscribers')
+}
+
 console.log('ok: canvas-editor editor + intents')

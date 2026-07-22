@@ -241,6 +241,15 @@ export interface EndEdit { readonly type: 'EndEdit' }
  * entry. See editor.ts's applyOne. */
 export interface SetNextStyle { readonly type: 'SetNextStyle'; readonly props: Record<string, unknown> }
 
+/** Switch which page THIS peer is currently looking at (Task E1,
+ * docs/plans/2026-07-22-canvas-v2-pages.md, D-2) — editor-LOCAL, like every
+ * other view intent here: touches only `EditorState.currentPageId`, never the
+ * doc, never pushes an undo entry. Switching pages is a VIEW change, not an
+ * undoable one — undoing a switch would silently jump the user's viewport
+ * back, a surprising side effect view intents don't have machinery for
+ * anyway. See editor.ts's applyOne. */
+export interface SetCurrentPage { readonly type: 'SetCurrentPage'; readonly pageId: string }
+
 /** Index-only whole-shape write: overwrites a shape's ENVELOPE `index` field
  * (the fractional-index z-order key — canvas-model's `fractional-index.ts`,
  * Task A1) to `index` verbatim. Single-id, not batch — like UpdateProps, not
@@ -280,3 +289,4 @@ export type Intent =
   | EndEdit
   | SetNextStyle
   | SetIndex
+  | SetCurrentPage

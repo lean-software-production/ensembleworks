@@ -65,7 +65,7 @@ function shapeWithProps(props: Record<string, unknown>): Shape {
   // comment): render with no `dispatch` prop at all must not throw.
   const shape = shapeWithProps({ path: 'x.html', rev: 1 })
   const doc = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [shape], bindings: [] })
-  const editorState: EditorState = { camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {} }
+  const editorState: EditorState = { camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p' }
   assert.doesNotThrow(() => renderToStaticMarkup(createElement(FileViewerShape, { shape, snapshot: doc, editorState })), 'renders (and would refresh) fine with dispatch absent — a no-op, not a crash')
   console.log('ok: FileViewerShape — fileViewerRefreshIntent bumps rev via UpdateProps; dispatch-absent is a safe no-op')
 }
@@ -154,7 +154,7 @@ function shapeWithProps(props: Record<string, unknown>): Shape {
 // --- static-render smoke ---
 const shape = shapeWithProps({ w: 720, h: 540, path: 'report.html', title: 'Report', rev: 2 })
 const doc: CanvasDocument = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [shape], bindings: [] })
-const editorState: EditorState = { camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {} }
+const editorState: EditorState = { camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p' }
 
 const html = renderToStaticMarkup(createElement(FileViewerShape, { shape, snapshot: doc, editorState }))
 assert.ok(html.includes('data-canvas-v2-shape="file-viewer"'), 'renders the canvas-v2 shape marker')
