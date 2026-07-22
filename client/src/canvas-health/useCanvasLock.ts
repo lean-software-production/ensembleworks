@@ -29,9 +29,25 @@
  * holder — to hand the lock to. The always-queued request is what makes both
  * takeover and crash auto-recovery work at all.
  *
+ * Known limitation: with 3+ tabs (A holds; B queued, then C queued), if C
+ * clicks "Use it here", A releases and the Web Locks FIFO queue grants to B
+ * — not C, since B has been queued longer. C clicked and gets nothing; B
+ * silently becomes the holder with no UI cue that it wasn't the one who
+ * asked. The broadcast can't override the browser's queue order, and a real
+ * fix would need each tab to know its queue position, which the API doesn't
+ * expose. Not fixed — recorded so the next person hitting it recognises it
+ * instead of re-deriving it.
+ *
+ * Known limitation: a bfcache-frozen holder still holds the lock, and
+ * BroadcastChannel delivery to a frozen page is deferred until it resumes —
+ * so a newcomer's takeover click does nothing until the frozen tab wakes or
+ * is discarded. Unfixable from the takeover side. Full discard (not just
+ * freeze) DOES recover: that releases the lock via ordinary crash-safety.
+ *
  * Design: docs/plans/2026-07-22-connection-health-modal-design.md §5.
  */
 import { useEffect, useRef, useState } from 'react'
+import { logConnectionEvent } from '../av/connectionLog'
 
 /**
  * Scope is (room, user); components are encoded so ids can't forge a pair.
@@ -51,7 +67,11 @@ export interface CanvasLock {
 }
 
 interface LockManagerLike {
-	request(name: string, options: { mode: 'exclusive' }, cb: (lock: unknown) => Promise<void>): Promise<void>
+	request(
+		name: string,
+		options: { mode: 'exclusive'; signal?: AbortSignal },
+		cb: (lock: unknown) => Promise<void>
+	): Promise<void>
 }
 
 function getLockManager(): LockManagerLike | null {
@@ -76,6 +96,12 @@ export function useCanvasLock(roomId: string, userId: string): CanvasLock {
 		const channel = new BroadcastChannel(name)
 		channelRef.current = channel
 		let disposed = false
+		// Aborted on unmount so a request still sitting in the browser's queue
+		// (never granted) is cancelled instead of lingering. Per spec, aborting
+		// a request that has ALREADY been granted is a no-op — it only cancels
+		// the wait — so this can't fight the `release?.()` below over a lock we
+		// currently hold.
+		const abort = new AbortController()
 		// Resolving this is the only way to release the lock: it's the return
 		// value of the promise the request() callback below is holding open.
 		// Set only while we actually hold the lock (i.e. after the callback has
@@ -86,25 +112,29 @@ export function useCanvasLock(roomId: string, userId: string): CanvasLock {
 		const acquire = () => {
 			if (disposed) return
 			void locks
-				.request(name, { mode: 'exclusive' }, () => {
+				.request(name, { mode: 'exclusive', signal: abort.signal }, () => {
 					// A request queued before unmount can still be granted after
 					// disposal (StrictMode's mount/cleanup/remount races this); bail
 					// out without ever holding the lock so the remount's request can
 					// take it immediately.
 					if (disposed) return Promise.resolve()
 					setHasLock(true)
+					logConnectionEvent('lock', 'granted')
 					// Hold until explicitly released (unmount, or a takeover).
 					return new Promise<void>((resolve) => {
 						release = () => {
 							release = null
 							setHasLock(false)
+							logConnectionEvent('lock', 'released')
 							resolve()
 						}
 					})
 				})
 				.catch(() => {
-					// A rejected request (e.g. the page is being torn down) simply
-					// leaves this tab blocked; the modal explains why.
+					// AbortError from the unmount-time abort() below is expected and
+					// not a failure — everything else (e.g. the page tearing down
+					// mid-request) simply leaves this tab blocked; the modal explains
+					// why, so neither case needs a log line here.
 				})
 		}
 
@@ -112,6 +142,7 @@ export function useCanvasLock(roomId: string, userId: string): CanvasLock {
 			const data = ev.data as { type?: string } | null
 			if (data?.type !== 'takeover') return
 			if (!release) return // we don't hold it; nothing to give up
+			logConnectionEvent('lock', 'takeover-received')
 			// Hand over: release, then immediately re-queue. We're still
 			// mounted and still contending for this canvas, so we sit blocked
 			// behind the newcomer (whose request() has been queued since ITS
@@ -128,6 +159,7 @@ export function useCanvasLock(roomId: string, userId: string): CanvasLock {
 
 		return () => {
 			disposed = true
+			abort.abort()
 			release?.()
 			channel.close()
 			channelRef.current = null
@@ -136,6 +168,7 @@ export function useCanvasLock(roomId: string, userId: string): CanvasLock {
 
 	const requestTakeover = () => {
 		if (hasLock) return
+		logConnectionEvent('lock', 'takeover-requested')
 		channelRef.current?.postMessage({ type: 'takeover' })
 		// The holder's release frees the lock; our still-queued request then
 		// resolves and flips hasLock. Nothing else to do here.
