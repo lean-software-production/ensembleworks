@@ -181,6 +181,25 @@ function styleProps<A extends readonly StyleAxis[]>(...axes: A) {
 const withText = z.looseObject({ richText: richText.optional() })
 const box = z.looseObject({ w: z.number().optional(), h: z.number().optional() })
 
+// Task M1 (2026-07-22 draw sub-cycle) -- a stroke point: v1 VecModel
+// {x, y, z} where z = pressure 0..1. LOOSE so a point carrying extra keys
+// still passes; x/y REQUIRED numbers so a malformed point (missing/non-number
+// coord) is caught; z OPTIONAL (v1 pen points always have it, simulated-
+// pressure points may not).
+const drawPoint = z.looseObject({ x: z.number(), y: z.number(), z: z.number().optional() })
+// A segment: v1 {type:'free'|'straight', points:[...]}. `type` a loose
+// string (NOT a closed enum -- future/unknown segment types must ride
+// through), `points` optional (a degenerate empty segment still validates).
+// NOTE: the installed tldraw tlschema dependency (5.1.0) has since migrated
+// segments to carry a delta-encoded base64 `path: string` instead of
+// `points` (shapes/TLDrawShape.ts's DrawShapeSegment; this repo's own legacy write path,
+// server/src/canvas/drawShapes.ts, already emits that format via
+// compressLegacySegments) -- `path` isn't typed here but rides through as an
+// ordinary passthrough key on this loose object, so that current real v1
+// format validates too, not just the older points-based shape this schema
+// types explicitly.
+const drawSegment = z.looseObject({ type: z.string().optional(), points: z.array(drawPoint).optional() })
+
 const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   note: withText.extend(styleProps('color', 'size', 'font', 'align', 'verticalAlign').shape),
   text: withText.extend(styleProps('color', 'size', 'font', 'textAlign').shape),
@@ -191,7 +210,9 @@ const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   frame: box.extend({ name: z.string().optional() }),
   group: z.looseObject({}), // tldraw groups carry no props; container only
   line: z.looseObject({}),
-  draw: z.looseObject({}),
+  draw: z.looseObject({ segments: z.array(drawSegment).optional(), isPen: z.boolean().optional(), isClosed: z.boolean().optional() })
+    .extend(box.shape)
+    .extend(styleProps('color', 'fill', 'dash', 'size').shape),
   highlight: z.looseObject({}),
   image: box,
   terminal: box, iframe: box, neko: box, roadmap: box, screenshare: box, 'file-viewer': box,

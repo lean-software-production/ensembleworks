@@ -203,3 +203,88 @@ assert.deepEqual(
   'STYLE_VALUE_SETS has exactly one key per style axis STYLE_ENUMS validates',
 )
 console.log('ok: STYLE_VALUE_SETS matches STYLE_ENUMS exactly, per axis (M3 drift guard)')
+
+// Task M1 (2026-07-22 draw sub-cycle) -- `draw`'s props schema: segments of
+// stroke points + the four style axes (color/fill/dash/size) + isPen/isClosed
+// + w/h, typed PERMISSIVELY so both our own strokes and synced v1 draw shapes
+// validate. Was `z.looseObject({})` (accepts everything); M1 adds real
+// validation on the typed fields while keeping everything else optional/loose.
+function drawWith(props: Record<string, unknown>) {
+  return { ...note, kind: 'draw', props: { ...props } }
+}
+
+// GUARD -- a full v1-shaped draw shape (real segments/points + valid style
+// values) validates. This is the permissiveness guard, not the RED (an empty
+// looseObject already accepted this before M1).
+const v1DrawProps = {
+  segments: [{ type: 'free', points: [{ x: 0, y: 0, z: 0.5 }, { x: 10, y: 8, z: 0.7 }] }],
+  color: 'blue', fill: 'none', dash: 'draw', size: 'm',
+  isPen: true, isComplete: true, isClosed: false, scale: 1,
+}
+assert.ok(validateShape(drawWith(v1DrawProps)).ok, 'a v1-shaped draw shape (real segments/points) validates')
+
+// RED 1 -- a bad color enum value on a draw shape is now rejected (the color
+// axis is typed). Before M1 (empty looseObject) this wrongly validated.
+assert.ok(
+  !validateShape(drawWith({ ...v1DrawProps, color: 'chartreuse' })).ok,
+  'a draw shape with a bad color enum value is rejected',
+)
+
+// RED 2 -- a malformed point (missing y / non-number coord) is rejected
+// (points are typed). Before M1 this wrongly validated.
+assert.ok(
+  !validateShape(drawWith({ segments: [{ type: 'free', points: [{ x: 0 }] }] })).ok,
+  'a draw shape with a malformed point (missing y) is rejected',
+)
+assert.ok(
+  !validateShape(drawWith({ segments: [{ type: 'free', points: [{ x: 0, y: 'nope' }] }] })).ok,
+  'a draw shape with a malformed point (non-number y) is rejected',
+)
+assert.ok(
+  !validateShape(drawWith({ segments: 'not-an-array' })).ok,
+  'a draw shape with non-array segments is rejected',
+)
+
+// Mutant guard -- making `segments` REQUIRED would wrongly drop a v1 draw
+// shape that has no segments key at all (a degenerate/legacy record). It must
+// still validate: segments stays optional.
+assert.ok(
+  validateShape(drawWith({ color: 'red' })).ok,
+  'a draw shape with no segments key at all still validates (segments is optional)',
+)
+
+// Mutant guard -- typing segment `type` as a closed 'free'|'straight' enum
+// would drop a future/unknown segment type. It must still validate: `type`
+// stays a loose string.
+assert.ok(
+  validateShape(drawWith({ segments: [{ type: 'some-future-segment-type', points: [{ x: 0, y: 0 }] }] })).ok,
+  'a segment with an unrecognized future type string still validates (type is not a closed enum)',
+)
+
+// Unknown extra props still ride through (looseObject forward-compat) -- an
+// unknown key on a draw shape survives even alongside a valid typed field.
+const drawMixed = drawWith({ color: 'blue', totallyUnknownDrawProp: 42 })
+assert.ok(validateShape(drawMixed).ok, 'unknown draw prop key survives alongside a valid typed field')
+const parsedDraw = shapeSchema.parse(drawMixed)
+assert.equal((parsedDraw.props as any).totallyUnknownDrawProp, 42, 'unknown draw key value preserved verbatim')
+
+// The REAL v1 shape this codebase's own write path produces: segments carry
+// `path` (base64 delta-encoded), not `points` -- verified against the
+// installed tldraw tlschema dependency (5.1.0, shapes/TLDrawShape.ts's DrawShapeSegment) and
+// server/src/canvas/drawShapes.ts's compressLegacySegments call, which is
+// what this repo's legacy v1 draw-shape write path actually emits (the
+// plan's `points`-based JSDoc example predates that migration). `path` isn't
+// a typed field but rides through as a passthrough key on the loose
+// `drawSegment`, so this format validates too -- confirming M1 doesn't drop
+// the CURRENT real v1 shape, not just the older points-based one.
+const v1PathEncodedDraw = drawWith({
+  segments: [{ type: 'free', path: 'AAAAAAAAAAAAAAAAAAA=' }],
+  color: 'black', fill: 'none', dash: 'solid', size: 'm',
+  isPen: false, isComplete: true, isClosed: false, scale: 1, scaleX: 1, scaleY: 1,
+})
+assert.ok(validateShape(v1PathEncodedDraw).ok, 'the current path-encoded v1 draw segment format also validates')
+
+// draw is NOT text-capable (unchanged by M1 -- structural kind, no text body).
+assert.equal(isTextCapableKind('draw' as any), false, 'draw remains non-text-capable')
+
+console.log('ok: draw props schema (M1, draw sub-cycle)')
