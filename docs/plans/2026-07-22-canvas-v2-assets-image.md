@@ -1036,3 +1036,27 @@ plan)`.
   `data-canvas-v2-viewport`; `shapeKind`/`shapeCount`/`selectedShapeIds` exist
   in both contract adapters.
 ```
+
+## Execution status — LANDED (2026-07-22)
+
+All 10 tasks landed and reviewed. Security/data-loss crux independently
+certified (hostile asset refused + no prototype pollution; shape.assetId ===
+asset.id linkage; assets survive snapshot reload; PutAsset gates untrusted
+dropped/pasted data). Sign-off: typecheck green, 237 unit suites green, full
+e2e 49/49 (exit 0), drop-image browser contract teeth-verified (upload
+resolves to a real /uploads/ src).
+
+| Task | Commit |
+|---|---|
+| M1 Asset schema + AssetId | `9c38b98` |
+| M2 image assetId prop | `641d39b` |
+| A1 assets Loro map + round-trip | `730e314` |
+| E1 PutAsset intent | `563753f` |
+| R1 ImageShape renderer | `99157bf` |
+| U1 upload + C1 create flow | `2873a00` |
+| W1 drop + W2 paste-image | `0be408b` |
+| K contract + dropFile + assetSrc | `0e110a2` |
+
+Upload-then-create flow (no loading placeholder); orphan-asset-on-undo (no
+deleteAsset/GC this cycle, tldraw parity); assetsAND image validate v1
+converted records. Image is drop+paste; no file-picker button this cycle.
