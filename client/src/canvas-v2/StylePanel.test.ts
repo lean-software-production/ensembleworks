@@ -56,7 +56,10 @@ const noop = () => {}
 			camera: CAMERA,
 			viewportSize: VIEWPORT,
 			isGesturing: false,
+			activeToolId: 'note',
+			nextShapeStyle: {},
 			onStyleChange: noop,
+			onArmStyle: noop,
 		}),
 	)
 	assert.ok(html.includes('data-testid="ew-style-panel"'), `panel test hook renders — html: ${html}`)
@@ -69,7 +72,10 @@ const noop = () => {}
 }
 
 // ============================================================================
-// 2. Empty selection: the panel renders nothing (returns null).
+// 2. Empty selection AND no armed style-bearing tool (the 'select' tool is
+//    active): the panel renders nothing (returns null). This is now the
+//    CONJUNCTION of two conditions (Task AS3 added the second) — see case 11
+//    below for "empty selection but a style tool IS armed", which renders.
 // ============================================================================
 {
 	const html = renderToStaticMarkup(
@@ -79,11 +85,14 @@ const noop = () => {}
 			camera: CAMERA,
 			viewportSize: VIEWPORT,
 			isGesturing: false,
+			activeToolId: 'select',
+			nextShapeStyle: {},
 			onStyleChange: noop,
+			onArmStyle: noop,
 		}),
 	)
-	assert.equal(html, '', `empty selection renders nothing — html: ${html}`)
-	console.log('ok: empty selection — panel renders nothing')
+	assert.equal(html, '', `empty selection, no armed style tool — renders nothing — html: ${html}`)
+	console.log('ok: empty selection, select tool active — panel renders nothing')
 }
 
 // ============================================================================
@@ -99,7 +108,10 @@ const noop = () => {}
 			camera: CAMERA,
 			viewportSize: VIEWPORT,
 			isGesturing: false,
+			activeToolId: 'note',
+			nextShapeStyle: {},
 			onStyleChange: noop,
+			onArmStyle: noop,
 		}),
 	)
 	assert.ok(html.includes('data-style-control="fill"'), `fill control renders for geo — html: ${html}`)
@@ -122,7 +134,10 @@ const noop = () => {}
 			camera: CAMERA,
 			viewportSize: VIEWPORT,
 			isGesturing: false,
+			activeToolId: 'note',
+			nextShapeStyle: {},
 			onStyleChange: noop,
+			onArmStyle: noop,
 		}),
 	)
 	assert.ok(!html.includes('data-style-control="geo"'), `note selection has NO geo-variant control — html: ${html}`)
@@ -147,7 +162,10 @@ const noop = () => {}
 			camera: CAMERA,
 			viewportSize: VIEWPORT,
 			isGesturing: false,
+			activeToolId: 'note',
+			nextShapeStyle: {},
 			onStyleChange: noop,
+			onArmStyle: noop,
 		}),
 	)
 	const colorControlMatch = html.match(/<div[^>]*data-style-control="color"[\s\S]*?<\/div>\s*<\/div>/)
@@ -171,7 +189,10 @@ const noop = () => {}
 			camera: CAMERA,
 			viewportSize: VIEWPORT,
 			isGesturing: false,
+			activeToolId: 'note',
+			nextShapeStyle: {},
 			onStyleChange: noop,
+			onArmStyle: noop,
 		}),
 	)
 	for (const axis of ['color', 'size', 'font', 'align', 'opacity']) {
@@ -192,11 +213,211 @@ const noop = () => {}
 			camera: CAMERA,
 			viewportSize: VIEWPORT,
 			isGesturing: true,
+			activeToolId: 'note',
+			nextShapeStyle: {},
 			onStyleChange: noop,
+			onArmStyle: noop,
 		}),
 	)
 	assert.equal(html, '', `mid-gesture panel renders nothing — html: ${html}`)
 	console.log('ok: isGesturing — panel hidden mid-gesture')
 }
 
-console.log('ok: StylePanel (P2) — renders per-selection styles from a props-injected snapshot/selection (component-level, `onStyleChange` stubbed here; the real dispatch wiring is CanvasV2App.test.ts case (i), Task P4)')
+// ============================================================================
+// Task AS3 — armed mode (empty selection, a style-bearing tool armed).
+//
+// `renderToStaticMarkup` drops event handlers entirely (server rendering has
+// no interactivity), so it's enough for the RENDER-shape cases (8, 11, 12)
+// below, same as cases 1-7 above — but NOT for "clicking X calls Y, not Z"
+// (cases 9, 10). For those, `findStyleValueOnClick` walks StylePanel's
+// RETURNED REACT ELEMENT TREE directly (StylePanel/AxisRow are both plain
+// functions with no hooks, so calling them and walking the result is
+// equivalent to what a renderer would do — no DOM/jsdom/happy-dom needed),
+// expanding nested function components (AxisRow) along the way until it
+// finds the `<button data-style-value="...">` and returns its real
+// `onClick`.
+// ============================================================================
+
+interface ElementLike {
+	readonly type?: unknown
+	readonly props?: Record<string, unknown>
+}
+
+function isElementLike(x: unknown): x is ElementLike {
+	return x !== null && typeof x === 'object'
+}
+
+/** Expand a React element down to a host element (`type` is a string, e.g.
+ * `'button'`/`'div'`) by repeatedly calling any function-component `type` —
+ * StylePanel/AxisRow never use hooks, so calling them directly outside a
+ * renderer is safe and deterministic. */
+function expand(node: unknown): unknown {
+	if (!isElementLike(node)) return node
+	if (typeof node.type === 'function') {
+		const render = node.type as (props: Record<string, unknown>) => unknown
+		return expand(render(node.props ?? {}))
+	}
+	return node
+}
+
+function findStyleValueOnClick(node: unknown, styleValue: string): (() => void) | undefined {
+	const el = expand(node)
+	if (!isElementLike(el)) return undefined
+	if (el.type === 'button' && el.props?.['data-style-value'] === styleValue) {
+		return el.props['onClick'] as (() => void) | undefined
+	}
+	const children = el.props?.['children']
+	if (Array.isArray(children)) {
+		for (const child of children) {
+			const found = findStyleValueOnClick(child, styleValue)
+			if (found) return found
+		}
+		return undefined
+	}
+	return findStyleValueOnClick(children, styleValue)
+}
+
+// ============================================================================
+// 8. Armed geo tool, empty selection: the panel RENDERS in armed mode
+//    (`data-style-panel-mode="armed"`), showing geo-relevant axes
+//    (color/fill/dash/size/font/align/geo — same relevance table as a real
+//    geo shape). Mutant: armed mode never renders / renders the wrong axes.
+// ============================================================================
+{
+	const html = renderToStaticMarkup(
+		createElement(StylePanel, {
+			selection: new Set<string>(),
+			snapshot: docOf(),
+			camera: CAMERA,
+			viewportSize: VIEWPORT,
+			isGesturing: false,
+			activeToolId: 'geo',
+			nextShapeStyle: {},
+			onStyleChange: noop,
+			onArmStyle: noop,
+		}),
+	)
+	assert.ok(html.includes('data-style-panel-mode="armed"'), `armed geo tool — panel renders in armed mode — html: ${html}`)
+	assert.ok(html.includes('data-style-control="color"'), `armed geo — color control renders — html: ${html}`)
+	assert.ok(html.includes('data-style-control="fill"'), `armed geo — fill control renders — html: ${html}`)
+	assert.ok(html.includes('data-style-control="dash"'), `armed geo — dash control renders — html: ${html}`)
+	assert.ok(html.includes('data-style-control="geo"'), `armed geo — geo-variant control renders — html: ${html}`)
+	console.log('ok: armed geo tool, empty selection — armed panel renders geo-relevant axes')
+}
+
+// ============================================================================
+// 9. Armed mode's blue color swatch click calls `onArmStyle('color', 'blue')`
+//    — NOT `onStyleChange` (mutant: armed mode wired to dispatch `SetStyle`,
+//    which would be a no-op over the empty selection this mode requires).
+// ============================================================================
+{
+	const armCalls: Array<{ axis: string; value: unknown }> = []
+	const styleChangeCalls: Array<{ axis: string; value: unknown }> = []
+	const tree = StylePanel({
+		selection: new Set<string>(),
+		snapshot: docOf(),
+		camera: CAMERA,
+		viewportSize: VIEWPORT,
+		isGesturing: false,
+		activeToolId: 'geo',
+		nextShapeStyle: {},
+		onStyleChange: (axis, value) => styleChangeCalls.push({ axis, value }),
+		onArmStyle: (axis, value) => armCalls.push({ axis, value }),
+	})
+	const onClick = findStyleValueOnClick(tree, 'blue')
+	assert.ok(onClick, `armed panel's blue color swatch has an onClick handler`)
+	onClick!()
+	assert.deepEqual(armCalls, [{ axis: 'color', value: 'blue' }], `armed click calls onArmStyle with the color/blue pair — armCalls: ${JSON.stringify(armCalls)}`)
+	assert.equal(styleChangeCalls.length, 0, `armed click never calls onStyleChange (SetStyle) — styleChangeCalls: ${JSON.stringify(styleChangeCalls)}`)
+	console.log('ok: armed mode click calls onArmStyle (SetNextStyle), never onStyleChange (SetStyle)')
+}
+
+// ============================================================================
+// 10. A LIVE SELECTION plus an armed tool: selection wins. The panel renders
+//     in selection mode (not armed), and clicking a swatch calls
+//     `onStyleChange` — arming never overrides styling what's actually
+//     selected (mutant: a mode check that arms whenever a style tool is
+//     active, ignoring a non-empty selection).
+// ============================================================================
+{
+	const s = shape({ id: 'shape:n7', kind: 'note', props: { color: 'blue' } })
+	const armCalls: Array<{ axis: string; value: unknown }> = []
+	const styleChangeCalls: Array<{ axis: string; value: unknown }> = []
+	const props = {
+		selection: new Set([s.id]),
+		snapshot: docOf(s),
+		camera: CAMERA,
+		viewportSize: VIEWPORT,
+		isGesturing: false,
+		activeToolId: 'geo' as const, // armed, but a selection exists — selection must win
+		nextShapeStyle: { color: 'red' },
+		onStyleChange: (axis: string, value: unknown) => styleChangeCalls.push({ axis, value }),
+		onArmStyle: (axis: string, value: unknown) => armCalls.push({ axis, value }),
+	}
+	const html = renderToStaticMarkup(createElement(StylePanel, props))
+	assert.ok(html.includes('data-style-panel-mode="selection"'), `selection wins over an armed tool — html: ${html}`)
+	assert.ok(!html.includes('data-style-panel-mode="armed"'), `armed mode does NOT render when a selection exists — html: ${html}`)
+	const tree = StylePanel(props)
+	const onClick = findStyleValueOnClick(tree, 'red')
+	assert.ok(onClick, `selection panel's red color swatch has an onClick handler`)
+	onClick!()
+	assert.deepEqual(styleChangeCalls, [{ axis: 'color', value: 'red' }], `selection-mode click calls onStyleChange — styleChangeCalls: ${JSON.stringify(styleChangeCalls)}`)
+	assert.equal(armCalls.length, 0, `an armed tool never overrides an existing selection — onArmStyle must not be called — armCalls: ${JSON.stringify(armCalls)}`)
+	console.log('ok: selection + armed tool — selection wins (SetStyle); arming does not override')
+}
+
+// ============================================================================
+// 11. Empty selection AND a non-style tool ('select') armed: the panel
+//     renders nothing, same as before AS3 (case 2 above pins this too — this
+//     case is the explicit "AS3 didn't relax that" regression pin).
+// ============================================================================
+{
+	const html = renderToStaticMarkup(
+		createElement(StylePanel, {
+			selection: new Set<string>(),
+			snapshot: docOf(),
+			camera: CAMERA,
+			viewportSize: VIEWPORT,
+			isGesturing: false,
+			activeToolId: 'hand',
+			nextShapeStyle: {},
+			onStyleChange: noop,
+			onArmStyle: noop,
+		}),
+	)
+	assert.equal(html, '', `empty selection, hand tool active — renders nothing — html: ${html}`)
+	console.log('ok: empty selection, hand tool active — panel renders nothing')
+}
+
+// ============================================================================
+// 12. The armed panel reflects `nextShapeStyle`'s CURRENT values, not always
+//     the defaults (mutant: armed mode ignores `nextShapeStyle` and shows
+//     nothing as current, or always shows the first value as current
+//     regardless of what's actually armed).
+// ============================================================================
+{
+	const html = renderToStaticMarkup(
+		createElement(StylePanel, {
+			selection: new Set<string>(),
+			snapshot: docOf(),
+			camera: CAMERA,
+			viewportSize: VIEWPORT,
+			isGesturing: false,
+			activeToolId: 'geo',
+			nextShapeStyle: { color: 'red' },
+			onStyleChange: noop,
+			onArmStyle: noop,
+		}),
+	)
+	assert.ok(
+		/data-style-value="red"[^>]*data-current="true"|data-current="true"[^>]*data-style-value="red"/.test(html),
+		`armed nextShapeStyle.color:'red' is marked current — html: ${html}`,
+	)
+	assert.ok(
+		!/data-style-value="blue"[^>]*data-current="true"|data-current="true"[^>]*data-style-value="blue"/.test(html),
+		`armed panel does not ALSO mark blue current — html: ${html}`,
+	)
+	console.log('ok: armed panel — nextShapeStyle.color:red is marked current, not a default')
+}
+
+console.log('ok: StylePanel (P2/AS3) — renders per-selection styles from a props-injected snapshot/selection, and armed-tool next-shape styles when nothing is selected (component-level, `onStyleChange`/`onArmStyle` stubbed here; the real dispatch wiring is CanvasV2App.test.ts case (i)/AS3\'s onArmStyle, Task P4/AS3)')

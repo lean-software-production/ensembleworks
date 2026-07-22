@@ -6,8 +6,10 @@
 //
 // PURE by design (no DOM, no React, no editor import) so it's unit-testable
 // directly and reusable by both the live selection panel (P2) and the armed/
-// next-shape-style panel (AS3, via a `relevantAxesForTool` sibling added
-// there — not this task).
+// next-shape-style panel (AS3's `relevantAxesForTool` below — a type-only
+// import of `ToolId` from `./tool-loop.js` is the only new coupling; it
+// erases at compile time, so this module still carries no runtime DOM/editor
+// dependency).
 //
 // VALUE-SET SOURCE OF TRUTH — Task M3. All per-axis value lists below (other
 // than `opacity`, an envelope number, not an enum) are imported verbatim from
@@ -19,6 +21,7 @@
 // carry them), but this panel only ever offers the three primary values as
 // choosable options — see `ALIGN_PRIMARY` below.
 import { STYLE_VALUE_SETS as MODEL_STYLE_VALUE_SETS, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
+import type { ToolId } from './tool-loop.js'
 
 // The five discrete opacity steps tldraw's own opacity control offers
 // (Decisions § Parity value-sets, "opacity"). Opacity is an ENVELOPE field
@@ -96,6 +99,42 @@ export function relevantAxes(shapes: readonly Shape[]): StyleAxis[] {
     if (!axes) continue
     for (const axis of axes) relevant.add(axis)
   }
+  return AXIS_ORDER.filter((axis) => relevant.has(axis))
+}
+
+// Task AS3 — armed-tool -> shape-kind map. 1:1 with the tool ids that create
+// a shape carrying a `props` bag (mirrors v1's ContextualStylePanel
+// STYLE_TOOLS set, narrowed to the kinds v2 actually has creation tools for:
+// no draw/highlight/line tools exist here — Decisions § "Arrow/line visual
+// styling"). 'select'/'hand' are deliberately absent — they arm nothing, so
+// `relevantAxesForTool` returns `[]` for them, same as an unrecognized id.
+const TOOL_TO_KIND: Partial<Record<ToolId, ShapeKind>> = {
+  note: 'note',
+  text: 'text',
+  geo: 'geo',
+  arrow: 'arrow',
+  frame: 'frame',
+}
+
+/**
+ * Armed-tool counterpart to `relevantAxes` (AS3): which axes a shape of
+ * `toolId`'s kind WOULD support, when nothing is selected but a style-
+ * bearing tool is armed. `select`/`hand` (and any other non-style tool) ->
+ * `[]`, matching the panel's empty-selection-and-no-armed-tool -> null case.
+ * `frame` has no row in `STYLE_AXES_BY_KIND` (it carries no `props` style
+ * axes) so it still reaches here with exactly `['opacity']` — same as an
+ * armed frame tool offering only the opacity control, matching v1's parity
+ * inclusion of 'frame' in STYLE_TOOLS. There is no shape yet, so — unlike
+ * `relevantAxes` — this can't fold in a stored VALUE; the panel reads the
+ * armed value separately, from `EditorState.nextShapeStyle`
+ * (StylePanel.tsx).
+ */
+export function relevantAxesForTool(toolId: ToolId): StyleAxis[] {
+  const kind = TOOL_TO_KIND[toolId]
+  if (!kind) return []
+  const relevant = new Set<StyleAxis>(['opacity'])
+  const axes = STYLE_AXES_BY_KIND[kind]
+  if (axes) for (const axis of axes) relevant.add(axis)
   return AXIS_ORDER.filter((axis) => relevant.has(axis))
 }
 

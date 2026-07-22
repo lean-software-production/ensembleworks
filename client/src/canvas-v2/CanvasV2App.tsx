@@ -860,6 +860,22 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 		[editor, dispatch],
 	)
 
+	// Task AS3 — StylePanel's ARMED-mode counterpart to `onStyleChange` above:
+	// dispatches `SetNextStyle` (a view intent — no doc mutation, no undo
+	// entry, AS1's `applyOne` case) instead of `SetStyle`. Kept as a
+	// SEPARATE callback (not a branch inside `onStyleChange`) so StylePanel
+	// itself picks which one to call by MODE — see StylePanel.tsx's
+	// `onArmStyle` prop doc comment for why that's deliberate, not
+	// incidental. `SetNextStyle.props` shallow-merges (editor.ts's
+	// `applyOne`), so arming color then arming size accumulates both rather
+	// than clobbering — same semantics `nextShapeStyle` already documents.
+	const onArmStyle = useCallback(
+		(axis: StyleAxis, value: StyleValue) => {
+			dispatch([{ type: 'SetNextStyle', props: { [axis]: value } }])
+		},
+		[dispatch],
+	)
+
 	// GLOBAL KEYBOARD-DELIVERY FALLBACK (B3's carried code-quality fix — see
 	// this task's own notes): Viewport's onKeyDown only fires for a keydown
 	// whose DOM target is Viewport's own div OR ONE OF ITS DESCENDANTS. The
@@ -990,14 +1006,19 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					    paint over earlier ones). WIRED (Task P4): `onStyleChange` above
 					    dispatches a `SetStyle` intent over the whole selection — see its
 					    own doc comment and StylePanel.tsx's module header for the
-					    RED-then-GREEN history. */}
+					    RED-then-GREEN history. Task AS3 adds `activeToolId`/
+					    `nextShapeStyle`/`onArmStyle` for the armed (empty-selection)
+					    mode — see StylePanel.tsx's own module header. */}
 					<StylePanel
 						selection={editorState.selection}
 						snapshot={snapshot}
 						camera={editorState.camera}
 						viewportSize={viewportSize}
 						isGesturing={isGesturing}
+						activeToolId={activeToolId}
+						nextShapeStyle={editorState.nextShapeStyle}
 						onStyleChange={onStyleChange}
+						onArmStyle={onArmStyle}
 					/>
 				</Viewport>
 			</div>

@@ -17,14 +17,27 @@
 // landed. This component still does not import the editor's apply/SetStyle
 // machinery itself — it only ever calls the injected prop.
 //
-// Armed-tool / next-shape-style mode (nothing selected, a style-bearing tool
-// armed) is Task AS3 — out of scope here; this component only ever reads a
-// live SELECTION and renders nothing when it's empty.
+// Armed-tool / next-shape-style mode (Task AS3): when `selection` is empty
+// AND `activeToolId` is one of the style-bearing tools (`relevantAxesForTool`
+// in style-axes.ts — note/text/geo/arrow/frame), the panel switches to a
+// SECOND render path that shows `nextShapeStyle`'s current values instead of
+// a selection's, and calls `onArmStyle` (dispatching `SetNextStyle` at the
+// CanvasV2Session mount site) instead of `onStyleChange` (`SetStyle`) on
+// click. `select`/`hand` armed with an empty selection still renders null —
+// same as before AS3. The two modes are mutually exclusive and selection
+// always wins (a non-empty selection short-circuits before `activeToolId` is
+// even consulted): arming a tool never overrides styling an existing
+// selection. The armed panel carries `data-style-panel-mode="armed"` (the
+// selection panel now carries `data-style-panel-mode="selection"`) as a
+// stable hook — AS4's browser contract anchors onto
+// `[data-style-panel-mode="armed"] [data-style-control="color"]
+// [data-style-value="blue"]`.
 import { type CSSProperties } from 'react'
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { combinedWorldBounds } from '@ensembleworks/canvas-react'
-import { currentValue, relevantAxes, STYLE_VALUE_SETS, type StyleAxis, type StyleValue } from './style-axes.js'
+import { currentValue, relevantAxes, relevantAxesForTool, STYLE_VALUE_SETS, type StyleAxis, type StyleValue } from './style-axes.js'
+import type { ToolId } from './tool-loop.js'
 
 export interface StylePanelProps {
 	readonly selection: ReadonlySet<string>
@@ -34,9 +47,23 @@ export interface StylePanelProps {
 	/** Set on pointerdown, cleared on pointerup/cancel (CanvasV2Session) — the
 	 * panel disappears entirely rather than trailing a live drag. */
 	readonly isGesturing: boolean
-	/** UNWIRED prop — see module header. The panel emits only kind-relevant
-	 * props per axis; relevance lives here, the eventual intent stays dumb. */
+	/** Task AS3 — the toolbar's currently-armed tool. Only consulted when
+	 * `selection` is empty (selection mode never reads this). */
+	readonly activeToolId: ToolId
+	/** Task AS3 — `EditorState.nextShapeStyle`, the armed-mode "current value"
+	 * source (selection mode never reads this; it reads live shape props via
+	 * `currentValue` instead). */
+	readonly nextShapeStyle: Record<string, unknown>
+	/** Dispatches `SetStyle` over the current selection. Called only in
+	 * selection mode (`selection.size > 0`) — see module header. */
 	readonly onStyleChange: (axis: StyleAxis, value: StyleValue) => void
+	/** Task AS3 — dispatches `SetNextStyle` (arms the tool). Called only in
+	 * armed mode (`selection.size === 0` and `activeToolId` is style-bearing)
+	 * — see module header. Kept as a SEPARATE prop from `onStyleChange`
+	 * (rather than one callback the panel disambiguates internally) so a
+	 * wrong-mode wiring bug shows up as "the wrong prop got called", directly
+	 * observable in a component test without booting a session. */
+	readonly onArmStyle: (axis: StyleAxis, value: StyleValue) => void
 }
 
 // Visual grouping (plan: "color row, fill/dash, size/font, align"), extended
@@ -191,15 +218,20 @@ function segButtonStyle(current: boolean): CSSProperties {
 
 interface AxisRowProps {
 	readonly axis: StyleAxis
-	readonly shapes: readonly Shape[]
+	/** Precomputed by the caller: `currentValue(shapes, axis)` in selection
+	 * mode, or `armedValue(nextShapeStyle, axis)` in armed mode (AS3) — this
+	 * row never knows which mode it's rendering for, only the resolved value
+	 * and where to send a change. There is no 'mixed' concept in armed mode
+	 * (there's no multi-shape selection to disagree), so armed callers only
+	 * ever pass a definite value or `undefined`, never `'mixed'`. */
+	readonly value: StyleValue | 'mixed' | undefined
 	readonly onStyleChange: (axis: StyleAxis, value: StyleValue) => void
 }
 
 /** One labeled row: the axis's value-set rendered as swatches (color) or
  * segmented buttons (everything else), current value marked, 'mixed' shown
  * distinctly rather than defaulting to (wrongly) marking one value current. */
-function AxisRow({ axis, shapes, onStyleChange }: AxisRowProps) {
-	const value = currentValue(shapes, axis)
+function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
 	const mixed = value === 'mixed'
 
 	if (axis === 'opacity') {
@@ -365,41 +397,107 @@ function stopPropagation(e: { stopPropagation(): void }): void {
 	e.stopPropagation()
 }
 
+// Task AS3 — armed mode has no selection bounds to anchor against
+// (`computePosition` above needs a live selection's world bounds via
+// `combinedWorldBounds`). Floated top-center under the toolbar instead —
+// the same top-center anchor `computePosition`'s own defensive "selection
+// resolved to no live shape's bounds" fallback already uses above, reused
+// here because it's the identical situation (no bounds to anchor to), not a
+// coincidence of matching numbers.
+const ARMED_PANEL_POSITION: CSSProperties = { left: '50%', top: MARGIN, transform: 'translateX(-50%)' }
+
+/** Armed-mode counterpart to `currentValue` (AS3): `nextShapeStyle[axis]`
+ * verbatim if it's a string/number, else `undefined` — never `'mixed'`
+ * (there's no shape selection to disagree; `nextShapeStyle` is a single flat
+ * record, see EditorState.nextShapeStyle's own doc comment in editor.ts). */
+function armedValue(nextShapeStyle: Record<string, unknown>, axis: StyleAxis): StyleValue | undefined {
+	const raw = nextShapeStyle[axis]
+	return typeof raw === 'string' || typeof raw === 'number' ? raw : undefined
+}
+
 /**
- * Contextual selection style panel (Task P2). Renders nothing when there's
- * no live selection with at least one style-relevant axis, or mid-gesture.
+ * Contextual style panel (Task P2 selection mode; Task AS3 armed mode).
+ * SELECTION MODE (`selection.size > 0`, unchanged from P2/P4): renders
+ * nothing when the live selection has no style-relevant axis, or mid-
+ * gesture; on change, calls `onStyleChange` (-> `SetStyle` over the
+ * selection). ARMED MODE (`selection.size === 0` and `activeToolId` is a
+ * style-bearing tool): renders `nextShapeStyle`'s current values instead of
+ * a selection's; on change, calls `onArmStyle` (-> `SetNextStyle`) instead.
+ * Selection is checked FIRST and unconditionally short-circuits into
+ * selection mode — armed mode is only ever reached with an EMPTY selection,
+ * so arming a tool can never override styling shapes that are actually
+ * selected. Renders null when neither mode applies (empty selection, no
+ * style-bearing tool armed — e.g. `select`/`hand`).
  * `onPointerDown`/`onPointerUp` stop propagation so a click on a control
  * never reaches Viewport's own pointer handling (canvas-react/src/
  * Viewport.tsx) and gets misread as the start of a canvas gesture —
  * mirrors v1 ContextualStylePanel's `stopEventPropagation` wrapping, using a
  * local helper since this package may not import tldraw.
  */
-export function StylePanel({ selection, snapshot, camera, viewportSize, isGesturing, onStyleChange }: StylePanelProps) {
+export function StylePanel({
+	selection,
+	snapshot,
+	camera,
+	viewportSize,
+	isGesturing,
+	activeToolId,
+	nextShapeStyle,
+	onStyleChange,
+	onArmStyle,
+}: StylePanelProps) {
 	if (isGesturing) return null
 
-	const shapes: Shape[] = []
-	for (const id of selection) {
-		const shape = snapshot.byId.get(id)
-		if (shape) shapes.push(shape)
-	}
-	const axes = new Set(relevantAxes(shapes))
-	if (axes.size === 0) return null
+	if (selection.size > 0) {
+		const shapes: Shape[] = []
+		for (const id of selection) {
+			const shape = snapshot.byId.get(id)
+			if (shape) shapes.push(shape)
+		}
+		const axes = new Set(relevantAxes(shapes))
+		if (axes.size === 0) return null
 
-	const position = computePosition(snapshot, selection, camera, viewportSize)
-	const groups = AXIS_GROUPS.map((group) => group.filter((axis) => axes.has(axis))).filter((group) => group.length > 0)
+		const position = computePosition(snapshot, selection, camera, viewportSize)
+		const groups = AXIS_GROUPS.map((group) => group.filter((axis) => axes.has(axis))).filter((group) => group.length > 0)
+
+		return (
+			<div
+				data-testid="ew-style-panel"
+				data-canvas-v2-style-panel
+				data-style-panel-mode="selection"
+				onPointerDown={stopPropagation}
+				onPointerUp={stopPropagation}
+				style={{ ...PANEL_STYLE, ...position }}
+			>
+				{groups.map((group) => (
+					<div key={group.join('-')} style={ROW_GROUP_STYLE}>
+						{group.map((axis) => (
+							<AxisRow key={axis} axis={axis} value={currentValue(shapes, axis)} onStyleChange={onStyleChange} />
+						))}
+					</div>
+				))}
+			</div>
+		)
+	}
+
+	// AS3: nothing selected — arm the tool instead, if it's style-bearing.
+	const armedAxes = new Set(relevantAxesForTool(activeToolId))
+	if (armedAxes.size === 0) return null
+
+	const armedGroups = AXIS_GROUPS.map((group) => group.filter((axis) => armedAxes.has(axis))).filter((group) => group.length > 0)
 
 	return (
 		<div
 			data-testid="ew-style-panel"
 			data-canvas-v2-style-panel
+			data-style-panel-mode="armed"
 			onPointerDown={stopPropagation}
 			onPointerUp={stopPropagation}
-			style={{ ...PANEL_STYLE, ...position }}
+			style={{ ...PANEL_STYLE, ...ARMED_PANEL_POSITION }}
 		>
-			{groups.map((group) => (
+			{armedGroups.map((group) => (
 				<div key={group.join('-')} style={ROW_GROUP_STYLE}>
 					{group.map((axis) => (
-						<AxisRow key={axis} axis={axis} shapes={shapes} onStyleChange={onStyleChange} />
+						<AxisRow key={axis} axis={axis} value={armedValue(nextShapeStyle, axis)} onStyleChange={onArmStyle} />
 					))}
 				</div>
 			))}
