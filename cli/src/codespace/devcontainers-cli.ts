@@ -35,10 +35,28 @@ export function extractionDir(env: NodeJS.ProcessEnv): string {
 	return path.join(cacheHome, 'ensembleworks', `devcontainers-cli-${DEVCONTAINERS_CLI_VERSION}`)
 }
 
-/** Compiled ⇔ the asset path is NOT on the real FS (it's /$bunfs/… inside the
- *  binary) — decision #2's detection rule. */
+/** Roots Bun resolves embedded assets under in a --compile'd binary. */
+const EMBEDDED_ASSET_ROOTS = ['/$bunfs/', 'B:\\~BUN\\']
+
+/**
+ * Compiled ⇔ the asset resolves to Bun's embedded-asset root.
+ *
+ * Decision #2 originally phrased this as "the asset path is NOT on the real
+ * FS", implemented as `!existsSync(entry)`. That is WRONG under Bun 1.3.14:
+ * inside a compiled binary `existsSync('/$bunfs/root/devcontainer-*.js')`
+ * returns true (bunfs is a real, stat-able VFS to its own process), so the
+ * rule reported dev mode and handed out the argv
+ * ['bun', '/$bunfs/root/devcontainer-*.js'] — which needs bun on PATH and
+ * still cannot read another binary's bunfs. Detect the path SHAPE instead;
+ * existsSync is kept only as a fallback for a vanished vendor dir.
+ */
+export function compiledFromEntry(entry: string, exists: (p: string) => boolean): boolean {
+	if (EMBEDDED_ASSET_ROOTS.some((root) => entry.startsWith(root))) return true
+	return !exists(entry)
+}
+
 export function runningCompiled(): boolean {
-	return !existsSync(devcontainerEntry)
+	return compiledFromEntry(devcontainerEntry, existsSync)
 }
 
 /** Detect mode; in compiled mode extract the bundle (preserving the shim's

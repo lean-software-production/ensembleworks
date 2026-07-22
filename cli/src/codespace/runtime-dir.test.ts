@@ -49,8 +49,20 @@ assert.ok(runtimeDir({} as NodeJS.ProcessEnv).endsWith(path.join('.local', 'shar
 	assert.equal(readFileSync(dest, 'utf8'), 'BINARY-BYTES-v1')
 	assert.equal(statSync(dest).mode & 0o111, 0o111, 'exec bits set')
 	writeFileSync(src, 'BINARY-BYTES-v2')
+	const before = statSync(dest).ino
 	stageRuntimeDir(dir, src) // upgrade = one-file swap (design §2.1)
 	assert.equal(readFileSync(dest, 'utf8'), 'BINARY-BYTES-v2', 're-staging overwrites')
+
+	// Re-staging must REPLACE the inode, not write through it. A connector
+	// started by an earlier `codespace up` is still executing this exact file
+	// inside the container (the in-container process outlives the host-side
+	// `devcontainer exec`), so copying onto it raises ETXTBSY and the codespace
+	// restart-loops forever. Observed 2026-07-22 on a real run:
+	//   ETXTBSY: text file is busy, copyfile '…/cli/dist/ensembleworks'
+	//     -> '…/ensembleworks/ew-runtime/ensembleworks'
+	// write-to-temp + rename leaves the running process on its old inode and
+	// publishes a fresh one for the next exec.
+	assert.notEqual(statSync(dest).ino, before, 're-staging replaces the inode (ETXTBSY-safe)')
 }
 
 console.log('ok: runtime-dir — resolution chain, XDG dir, staged ensembleworks binary')

@@ -8,7 +8,7 @@
  * staged binary is the bun-compiled glibc x64 build; a musl or arm64 container
  * will fail to exec /ew/ensembleworks — documented, not detected.
  */
-import { chmodSync, copyFileSync, existsSync, mkdirSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, renameSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { CliError } from '../errors.ts'
@@ -31,11 +31,27 @@ export function resolveConnectorBin(env: NodeJS.ProcessEnv, compiled: boolean): 
 	)
 }
 
-/** Copy the connector into the runtime dir as `ensembleworks`, exec bit set. */
+/**
+ * Copy the connector into the runtime dir as `ensembleworks`, exec bit set.
+ *
+ * Staged via temp-file + rename rather than a direct copy: a connector from an
+ * earlier `codespace up` may still be executing this very path inside the
+ * container (the in-container process outlives the host-side `devcontainer
+ * exec`), and copying onto a live executable raises ETXTBSY — which the
+ * supervisor then retries forever. rename() is atomic within the dir: the
+ * running process keeps its old inode, the next exec picks up the new one.
+ */
 export function stageRuntimeDir(dir: string, connectorBin: string): string {
 	mkdirSync(dir, { recursive: true })
 	const dest = path.join(dir, 'ensembleworks')
-	copyFileSync(connectorBin, dest)
-	chmodSync(dest, 0o755)
+	const staging = path.join(dir, `.ensembleworks.staging.${process.pid}`)
+	try {
+		copyFileSync(connectorBin, staging)
+		chmodSync(staging, 0o755) // chmod BEFORE publishing — no window where /ew/ensembleworks is non-exec
+		renameSync(staging, dest)
+	} catch (err) {
+		rmSync(staging, { force: true })
+		throw err
+	}
 	return dest
 }

@@ -175,9 +175,20 @@ export async function runCodespaceOnce(plan: UpPlan, conn: Conn, env: NodeJS.Pro
 	}
 }
 
-/** The cycle under the restart loop, until the caller's signal aborts. */
+/** The cycle under the restart loop, until the caller's signal aborts.
+ *  supervise() swallows the cycle's throw by design ("the caller narrates") —
+ *  so narrating it here is that contract's other half. Without it a failing
+ *  `devcontainer up` restart-loops in total silence (observed 2026-07-22). */
 export async function superviseCodespace(plan: UpPlan, conn: Conn, env: NodeJS.ProcessEnv, signal: AbortSignal): Promise<void> {
-	await supervise(() => runCodespaceOnce(plan, conn, env, signal), { timers: realTimers, rng: Math.random }, signal)
+	const cycle = async () => {
+		try {
+			await runCodespaceOnce(plan, conn, env, signal)
+		} catch (err) {
+			if (!signal.aborted) narrate(`ensembleworks: codespace cycle failed: ${err instanceof Error ? err.message : String(err)}`)
+			throw err // supervise owns the backoff
+		}
+	}
+	await supervise(cycle, { timers: realTimers, rng: Math.random }, signal)
 }
 
 /** The `codespace up` verb's live engine: own the signals, run one codespace. */

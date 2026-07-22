@@ -7,7 +7,37 @@ import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { DEVCONTAINERS_CLI_VERSION } from './devcontainers-cli-version.ts'
-import { ensureDevcontainersCli, extractionDir, runnerFor, runningCompiled } from './devcontainers-cli.ts'
+import { compiledFromEntry, ensureDevcontainersCli, extractionDir, runnerFor, runningCompiled } from './devcontainers-cli.ts'
+
+// Mode detection must key off the embedded-asset path SHAPE, not existsSync:
+// under Bun 1.3.14 existsSync('/$bunfs/root/…') returns TRUE inside a compiled
+// binary, so an existsSync-only rule reports dev mode in a compiled ew and
+// produces the unrunnable argv ['bun', '/$bunfs/root/devcontainer-*.js'].
+// Found by local acceptance testing 2026-07-22 — the dev-only assertion below
+// passed throughout, and the conformance smoke runs ew in dev mode.
+{
+	const alwaysExists = () => true
+	assert.equal(
+		compiledFromEntry('/$bunfs/root/devcontainer-870gsft4.js', alwaysExists),
+		true,
+		'a /$bunfs entry is compiled mode even when existsSync says it is present',
+	)
+	assert.equal(
+		compiledFromEntry('B:\\~BUN\\root\\devcontainer-870gsft4.js', alwaysExists),
+		true,
+		'the Windows embedded-asset root is compiled mode too',
+	)
+	assert.equal(
+		compiledFromEntry('/repo/cli/vendor/devcontainers-cli/devcontainer.js', alwaysExists),
+		false,
+		'a real vendor path that exists is dev mode',
+	)
+	assert.equal(
+		compiledFromEntry('/repo/cli/vendor/devcontainers-cli/devcontainer.js', () => false),
+		true,
+		'a vendor path that is absent still falls back to compiled (original rule retained)',
+	)
+}
 
 // Pure argv/env computation.
 {
