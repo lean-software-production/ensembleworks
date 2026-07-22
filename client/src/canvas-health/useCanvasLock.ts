@@ -59,6 +59,29 @@ export function canvasLockName(roomId: string, userId: string): string {
 	return `ew-canvas-${encodeURIComponent(roomId)}/${encodeURIComponent(userId)}`
 }
 
+export type LockPhase = 'pending' | 'held' | 'blocked'
+
+/**
+ * The gate's decision, pure so it is testable without a browser.
+ *
+ * `granted` is checked FIRST and unconditionally. After this change there is
+ * no teardown path — a tab that has been granted the lock keeps it until it
+ * dies — so no later-arriving signal may demote a held tab. Both `query()`
+ * (async, can resolve after our own grant) and the grace timer (can fire just
+ * before a slow grant) are exactly such signals.
+ */
+export function lockPhase(input: {
+	supported: boolean
+	granted: boolean
+	otherHolderSeen: boolean
+	graceElapsed: boolean
+}): LockPhase {
+	if (!input.supported) return 'held'
+	if (input.granted) return 'held'
+	if (input.otherHolderSeen || input.graceElapsed) return 'blocked'
+	return 'pending'
+}
+
 export interface CanvasLock {
 	/** True when this tab owns the canvas (or when locks are unsupported). */
 	hasLock: boolean
