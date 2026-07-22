@@ -12,7 +12,7 @@
 // measures. That is exactly the computation pageBounds/worldBounds already
 // trust, so a future change to a kind's default size (or the note special
 // case) is picked up here for free, with zero duplicated numbers.
-import { localBounds, type Bounds, type Shape } from '@ensembleworks/canvas-model'
+import { localBounds, STYLE_VALUE_SETS, type Bounds, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from '../intents.js'
 import { crossedThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
@@ -64,6 +64,37 @@ function propsFor(kind: CreateKind, w: number, h: number): Record<string, unknow
   return kind === 'note' ? {} : { w, h }
 }
 
+// Post-review hardening: the WHITELIST of style-axis keys `nextShapeStyle`
+// is allowed to carry into a created shape's props. Derived from
+// canvas-model's `STYLE_VALUE_SETS` (Task M3, canvas-model/src/shape.ts) —
+// the exact same axis set the write boundary validates prop values against
+// — so this can never drift from what the model actually recognizes as a
+// style axis. VERIFIED (2026-07-22): `STYLE_VALUE_SETS`'s keys are
+// `color/fill/dash/size/font/align/verticalAlign/textAlign/geo/
+// arrowheadStart/arrowheadEnd` — 11 keys. It does NOT include `opacity`;
+// that's an envelope field handled separately below, never a props-level
+// style axis (the client's OWN wider `STYLE_VALUE_SETS`, in
+// client/src/canvas-v2/style-axes.ts, adds an `opacity` entry for its own
+// panel-facing purposes, but canvas-editor is clean-room and never imports
+// client — this whitelist reads only the model's narrower set, which is
+// exactly right: opacity must NOT pass through the props whitelist, it has
+// its own destructure-and-route path just below).
+//
+// Without this, `SetNextStyle` — a PUBLIC view intent, not a panel-only
+// channel — could carry arbitrary keys (a future caller, or a malformed
+// replayed script) that would silently ride into props as inert junk. The
+// panel itself only ever arms known axes, so this is unreachable through
+// today's UI, but closing it structurally costs nothing.
+const STYLE_AXIS_KEYS: ReadonlySet<string> = new Set(Object.keys(STYLE_VALUE_SETS))
+
+function whitelistStyleProps(style: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of Object.keys(style)) {
+    if (STYLE_AXIS_KEYS.has(key)) out[key] = style[key]
+  }
+  return out
+}
+
 // Task AS2 — stamp the ARMED style (Task AS1's `EditorState.nextShapeStyle`)
 // onto a newly-minted shape. `style` is read LIVE from `editor.get()` by the
 // caller (see `clickShape`/`dragShape` below) at the moment of creation, the
@@ -78,8 +109,12 @@ function propsFor(kind: CreateKind, w: number, h: number): Record<string, unknow
 // style-axes.ts's `currentValue` reads `shape.opacity` directly and treats a
 // stray `props.opacity` key as a decoy to ignore, so leaving it in props
 // would silently produce a shape that never renders at its armed opacity.
+// The REMAINING keys are whitelisted (`whitelistStyleProps` above) before
+// merging — a key that is neither `opacity` nor a recognized style axis
+// (e.g. a stray `parentId`, or any future-unknown key) is dropped entirely,
+// not merely rendered inert.
 //
-// Merge order for the remaining style keys is (armed style, THEN geometry
+// Merge order for the whitelisted style keys is (armed style, THEN geometry
 // props): `{ ...styleProps, ...propsFor(kind, w, h) }` — so `w`/`h` (and any
 // other geometry key `propsFor` ever grows) always win over a same-named
 // armed key. Style keys never touch anything outside `props`/`opacity` —
@@ -89,7 +124,8 @@ function makeShape(
   kind: CreateKind, id: string, pageId: string, x: number, y: number, w: number, h: number,
   style: Record<string, unknown>,
 ): Shape {
-  const { opacity, ...styleProps } = style
+  const { opacity, ...rest } = style
+  const styleProps = whitelistStyleProps(rest)
   return {
     id, kind, parentId: pageId, index: 'a1', x, y, rotation: 0,
     isLocked: false, opacity: typeof opacity === 'number' ? opacity : 1, meta: {},

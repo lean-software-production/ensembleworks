@@ -262,7 +262,10 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   const tool = createCreateTool(ctx, 'geo')
   editor.apply({
     type: 'SetNextStyle',
-    props: { parentId: 'shape:evil', id: 'shape:evil', index: 'zzzz', rotation: 99, isLocked: true, color: 'blue' },
+    props: {
+      parentId: 'shape:evil', id: 'shape:evil', index: 'zzzz', rotation: 99, isLocked: true,
+      bogusKey: 'x', color: 'blue',
+    },
   })
   const events = script().down(300, 300).up().events()
   run(editor, tool, events)
@@ -274,7 +277,17 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   assert.equal(created.rotation, 0, 'a stray rotation in nextShapeStyle can never corrupt the envelope rotation')
   assert.equal(created.isLocked, false, 'a stray isLocked in nextShapeStyle can never corrupt the envelope isLocked')
   assert.equal(created.props.color, 'blue', 'the real armed style key still lands')
-  console.log('ok: a non-style key smuggled into nextShapeStyle never corrupts the envelope')
+  // Hardening (post-review): non-style keys must be DROPPED, not merely
+  // inert -- they must never land in props at all, since nextShapeStyle is
+  // reachable from a public view intent (SetNextStyle), not just the panel.
+  const propsKeys = Object.keys(created.props)
+  assert.ok(!propsKeys.includes('parentId'), 'a stray parentId must be dropped from props entirely, not just inert')
+  assert.ok(!propsKeys.includes('id'), 'a stray id must be dropped from props entirely, not just inert')
+  assert.ok(!propsKeys.includes('index'), 'a stray index must be dropped from props entirely, not just inert')
+  assert.ok(!propsKeys.includes('rotation'), 'a stray rotation must be dropped from props entirely, not just inert')
+  assert.ok(!propsKeys.includes('isLocked'), 'a stray isLocked must be dropped from props entirely, not just inert')
+  assert.ok(!propsKeys.includes('bogusKey'), 'an arbitrary unknown key (on no style-axis whitelist) must be dropped from props entirely')
+  console.log('ok: a non-style key smuggled into nextShapeStyle never corrupts the envelope, and is whitelisted out of props entirely')
 }
 
 console.log('ok: create tools (note/text/geo/frame) + frame capture')
