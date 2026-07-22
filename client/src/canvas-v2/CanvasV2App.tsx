@@ -104,6 +104,7 @@ import {
 	type InputEvent,
 	type Intent,
 	type KeyInputEvent,
+	type SetStyle,
 	type ToolContext,
 } from '@ensembleworks/canvas-editor'
 import { PresenceStore, SyncClientPeer, type Transport } from '@ensembleworks/canvas-sync'
@@ -130,6 +131,7 @@ import { DevOverlay, shouldShowDevOverlayFromEnvironment, useCanvasMetrics } fro
 import { canvasV2EmbedLifecycles, registerCanvasV2Shapes } from './shapes/index.js'
 import { presentStoreV2 } from './shapes/presentStoreV2.js'
 import { StylePanel } from './StylePanel.js'
+import type { StyleAxis, StyleValue } from './style-axes.js'
 import {
 	cancelActiveTool,
 	createInitialToolStates,
@@ -245,6 +247,21 @@ function randomPeerId(): bigint {
 
 function delay(ms: number): Promise<void> {
 	return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve()
+}
+
+/** Task P4 — pure mapping from a StylePanel axis change to the `SetStyle`
+ * intent E1 defines: `opacity` is an ENVELOPE field (`shape.opacity`, per
+ * SetStyle's own interface — canvas-editor/src/intents.ts), so that axis
+ * routes through `opacity`, NEVER `props.opacity` (E1's applyOne only ever
+ * writes the envelope field from THIS key, and canvas-react's ShapeBody
+ * only ever reads `shape.opacity` — a value parked in `props.opacity`
+ * would silently never render). Every other axis is a `props` key patch.
+ * Exported so this mapping is unit-testable in isolation, without booting a
+ * session (see CanvasV2App.test.ts's style-panel wiring cases) — `ids` is
+ * an explicit parameter (not read from `editor` here) so the test can pass
+ * a plain array and assert the exact intent shape. */
+export function buildSetStyleIntent(ids: readonly string[], axis: StyleAxis, value: StyleValue): SetStyle {
+	return axis === 'opacity' ? { type: 'SetStyle', ids, opacity: Number(value) } : { type: 'SetStyle', ids, props: { [axis]: value } }
 }
 
 interface Session {
@@ -824,6 +841,25 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// on either side alone to uphold.
 	const dispatch = useCallback((intents: Intent[]) => editor.applyAll(intents), [editor])
 
+	// Task P4 — wires StylePanel's onStyleChange to SetStyle over the WHOLE
+	// current selection (E1 is batch — one intent, one commit, one undo entry
+	// for however many shapes are selected; see buildSetStyleIntent's own doc
+	// comment for the opacity-vs-props split). Reads `editor.get().selection`
+	// FRESH on every call (not a stale closure over `editorState`) so a
+	// selection change between renders can never leave this dispatching
+	// against a stale set of ids. An empty selection is a defensive no-op —
+	// StylePanel renders nothing (and so never fires this) once its own
+	// `relevantAxes` sees an empty selection, but this guards the callback
+	// itself against ever dispatching a body-less SetStyle.
+	const onStyleChange = useCallback(
+		(axis: StyleAxis, value: StyleValue) => {
+			const ids = Array.from(editor.get().selection)
+			if (ids.length === 0) return
+			dispatch([buildSetStyleIntent(ids, axis, value)])
+		},
+		[editor, dispatch],
+	)
+
 	// GLOBAL KEYBOARD-DELIVERY FALLBACK (B3's carried code-quality fix — see
 	// this task's own notes): Viewport's onKeyDown only fires for a keydown
 	// whose DOM target is Viewport's own div OR ONE OF ITS DESCENDANTS. The
@@ -951,17 +987,17 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					<EditingIndicators presence={presenceStore.all()} selfKey={selfKey} snapshot={snapshot} camera={editorState.camera} viewportSize={viewportSize} />
 					{/* Task P2 — contextual style panel, painted topmost (same STACKING
 					    CONTRACT as Cursors/EditingIndicators above: later DOM siblings
-					    paint over earlier ones). DELIBERATELY UNWIRED: `onStyleChange`
-					    is a no-op here — clicking a control does not yet dispatch
-					    `SetStyle` (see StylePanel.tsx's own module header; wiring is
-					    Task P4, sequenced after Task P3's browser contract). */}
+					    paint over earlier ones). WIRED (Task P4): `onStyleChange` above
+					    dispatches a `SetStyle` intent over the whole selection — see its
+					    own doc comment and StylePanel.tsx's module header for the
+					    RED-then-GREEN history. */}
 					<StylePanel
 						selection={editorState.selection}
 						snapshot={snapshot}
 						camera={editorState.camera}
 						viewportSize={viewportSize}
 						isGesturing={isGesturing}
-						onStyleChange={() => {}}
+						onStyleChange={onStyleChange}
 					/>
 				</Viewport>
 			</div>

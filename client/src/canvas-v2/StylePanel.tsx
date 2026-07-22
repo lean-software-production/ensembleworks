@@ -7,13 +7,15 @@
 // (style-axes.ts, itself sourced from the model via Task M3 — never a
 // second hand-typed copy of tldraw's palette).
 //
-// DELIBERATELY UNWIRED (plan's own Step 3 instruction): every control's
-// onClick calls the `onStyleChange` PROP, but CanvasV2Session (below) mounts
-// this with a no-op for that prop — clicking a swatch does NOT dispatch
-// `SetStyle` yet. That wiring is Task P4, sequenced after Task P3's browser
-// contract so the contract has a clean RED (swatch renders, click does
-// nothing -> the shape's stored style is unchanged) BEFORE the fix lands.
-// Do not import the editor's apply/SetStyle machinery here.
+// WIRED as of Task P4: every control's onClick calls the `onStyleChange`
+// PROP, and CanvasV2Session (CanvasV2App.tsx) now mounts this with a real
+// handler that dispatches `SetStyle` over the current selection — see that
+// module's `buildSetStyleIntent`/`onStyleChange`. Task P2 landed this
+// component with the prop deliberately unwired (a no-op at the mount site)
+// so Task P3's browser contract had a clean RED (swatch renders, click did
+// nothing -> the shape's stored style stayed unchanged) BEFORE P4's fix
+// landed. This component still does not import the editor's apply/SetStyle
+// machinery itself — it only ever calls the injected prop.
 //
 // Armed-tool / next-shape-style mode (nothing selected, a style-bearing tool
 // armed) is Task AS3 — out of scope here; this component only ever reads a
@@ -94,6 +96,23 @@ function humanize(value: string): string {
 		.join(' ')
 }
 
+// Bounded so `computePosition`'s EDGE_CLAMP math (below) stays valid: that
+// clamp keeps the panel's ANCHOR point at least EDGE_CLAMP px from either
+// viewport edge, which only keeps the whole panel on-screen if its width is
+// itself bounded — a selection whose relevant axes span most of the groups
+// (e.g. two geo shapes: color/fill/dash/size/font/align/verticalAlign/geo)
+// has enough buttons to lay out past 1000px wide with NO cap, pushing the
+// anchored-and-centered panel (`transform: translateX(-50%)`) well past the
+// LEFT edge into negative screen space — not just a cosmetic clip: Task P3's
+// browser contract clicks a specific swatch by DOM selector via a raw
+// mouse-move-to-coordinate (no Playwright visibility check), so a
+// bounding-box that lands off-screen makes the click miss the button
+// entirely and silently land on nothing (empirically reproduced: an
+// unbounded panel for this exact two-geo-shape selection measured 1030px
+// wide, left edge at x:-265). `flexWrap` on ROW_GROUP_STYLE below is what
+// lets a group's columns actually wrap once this cap makes them not fit.
+const PANEL_MAX_WIDTH = 320
+
 const PANEL_STYLE: CSSProperties = {
 	position: 'absolute',
 	display: 'flex',
@@ -110,9 +129,15 @@ const PANEL_STYLE: CSSProperties = {
 	pointerEvents: 'all',
 	zIndex: 500,
 	minWidth: 160,
+	maxWidth: PANEL_MAX_WIDTH,
 }
 
-const ROW_GROUP_STYLE: CSSProperties = { display: 'flex', gap: 14 }
+// `flexWrap: 'wrap'` (not the previous no-wrap default) — see PANEL_MAX_WIDTH's
+// doc comment: this is what lets a group's own axis-columns drop onto a new
+// line once PANEL_STYLE's cap makes them not fit on one, instead of forcing
+// the panel wider than its cap (which `maxWidth` alone cannot prevent for a
+// non-wrapping flex row of intrinsically-sized children).
+const ROW_GROUP_STYLE: CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
 const ROW_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4 }
 const ROW_LABEL_STYLE: CSSProperties = { fontSize: 10, color: '#475569', fontWeight: 600, letterSpacing: 0.2 }
 const ROW_VALUES_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 4 }

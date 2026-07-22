@@ -1,10 +1,17 @@
 // Run: bun src/canvas-v2/StylePanel.test.ts
 // Task P2 (docs/plans/2026-07-21-canvas-v2-styling.md) — component test for
-// the (still UNWIRED — P4 wires clicks to SetStyle) contextual style panel.
-// renderToStaticMarkup (this house's usual rig for a pure-render component,
-// no DOM emulator needed — see DevOverlay.test.ts's own header) with
-// props-injected selection + snapshot, per the plan's Step 1: don't boot the
-// whole CanvasV2App.
+// the contextual style panel's RENDERING (which controls show, which value is
+// marked current/mixed). renderToStaticMarkup (this house's usual rig for a
+// pure-render component, no DOM emulator needed — see DevOverlay.test.ts's
+// own header) with props-injected selection + snapshot + a stubbed
+// `onStyleChange`, per the plan's Step 1: don't boot the whole CanvasV2App.
+// StylePanel itself only ever calls the injected `onStyleChange` prop — it
+// still never imports the editor's apply/SetStyle machinery (see
+// StylePanel.tsx's own module header). The actual DISPATCH wiring (Task P4:
+// CanvasV2App.tsx's `onStyleChange`/`buildSetStyleIntent`, mounted at
+// CanvasV2Session's `<StylePanel>` call) is proven end-to-end by
+// CanvasV2App.test.ts's case (i), which boots a real session and clicks
+// real DOM swatches.
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -192,4 +199,4 @@ const noop = () => {}
 	console.log('ok: isGesturing — panel hidden mid-gesture')
 }
 
-console.log('ok: StylePanel (P2) — renders per-selection styles, unwired (no SetStyle dispatch)')
+console.log('ok: StylePanel (P2) — renders per-selection styles from a props-injected snapshot/selection (component-level, `onStyleChange` stubbed here; the real dispatch wiring is CanvasV2App.test.ts case (i), Task P4)')

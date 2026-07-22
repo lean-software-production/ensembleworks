@@ -37,7 +37,7 @@ const win = new Window()
 const { createElement, StrictMode, act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { SyncServerPeer, SyncClientPeer, PresenceStore, makePair } = await import('@ensembleworks/canvas-sync')
-const { CanvasV2App } = await import('./CanvasV2App.js')
+const { CanvasV2App, buildSetStyleIntent } = await import('./CanvasV2App.js')
 type Transport = import('@ensembleworks/canvas-sync').Transport
 type Shape = import('@ensembleworks/canvas-model').Shape
 
@@ -49,6 +49,31 @@ function seedShape(id: string, x: number, y: number): Shape {
 }
 
 async function main() {
+	// ==========================================================================
+	// (0) TASK P4 — buildSetStyleIntent PURE MAPPING (isolated unit coverage,
+	// no session/DOM/click needed): the exact axis -> SetStyle intent shape
+	// the wiring in case (i) below dispatches at runtime — a PROP axis (e.g.
+	// color) patches `props`; the OPACITY axis sets the envelope `opacity`
+	// field and carries NO `props` key at all (Task P4 mutant table: "put
+	// opacity in props" / "wrong ids"). `ids` passes through unchanged.
+	// ==========================================================================
+	{
+		const ids = ['shape:a', 'shape:b']
+		assert.deepEqual(
+			buildSetStyleIntent(ids, 'color', 'blue'),
+			{ type: 'SetStyle', ids, props: { color: 'blue' } },
+			'a PROP axis (color) must build a SetStyle with a `props` patch, ids passed through unchanged',
+		)
+		const opacityIntent = buildSetStyleIntent(ids, 'opacity', 0.5) as { props?: unknown }
+		assert.deepEqual(
+			opacityIntent,
+			{ type: 'SetStyle', ids, opacity: 0.5 },
+			'the OPACITY axis must build a SetStyle with the envelope `opacity` field, NEVER `props.opacity`',
+		)
+		assert.equal(opacityIntent.props, undefined, 'the opacity axis intent must carry no `props` key at all')
+		console.log('ok: CanvasV2App — buildSetStyleIntent maps prop axes to `props` and the opacity axis to the envelope field')
+	}
+
 	// ==========================================================================
 	// Server-side fixture: a REAL SyncServerPeer/LoroCanvasDoc, pre-seeded with
 	// a page + one shape BEFORE the client ever connects — this is the "the
@@ -778,6 +803,118 @@ async function main() {
 
 		await act(async () => {
 			bannerRoot.unmount()
+		})
+	}
+
+	// ==========================================================================
+	// (i) TASK P4 — StylePanel's onStyleChange DISPATCHES SetStyle OVER THE
+	// WHOLE SELECTION, not just one id, and the OPACITY axis routes through
+	// the envelope `shape.opacity` field, never `props.opacity` (mutant table,
+	// docs/plans/2026-07-21-canvas-v2-styling.md Task P4). A real click on the
+	// panel's blue swatch/50%-opacity button (happy-dom's `HTMLElement.click()`
+	// dispatches a real bubbling MouseEvent — same idiom the toolbar-button
+	// cases above already use), against a THREE-shape scene where only TWO are
+	// selected, so a "wrote ids=whole doc" mutant is caught by the third shape
+	// staying untouched. One Ctrl+Z reverting BOTH selected shapes' color in a
+	// single undo step proves E1's batch/one-commit guarantee reaches this
+	// wiring, not just the editor-level SetStyle test.
+	// ==========================================================================
+	{
+		const server3 = new SyncServerPeer({ peerId: 4n })
+		server3.doc.putPage({ id: 'page:p', name: 'Canvas' })
+		server3.doc.commit()
+
+		function connectStyle(): Promise<Transport> {
+			const [serverSide, clientSide]: [Transport, Transport] = makePair()
+			server3.connect(serverSide)
+			return Promise.resolve(clientSide)
+		}
+
+		const styleContainer = document.createElement('div')
+		document.body.appendChild(styleContainer)
+		const styleRoot = createRoot(styleContainer)
+
+		await act(async () => {
+			styleRoot.render(
+				createElement(
+					StrictMode,
+					null,
+					createElement(CanvasV2App, { roomId: 'dogfood-style', userId: 'test-user-style', connect: connectStyle, settleMs: 0 }),
+				),
+			)
+			await new Promise((r) => setTimeout(r, 0))
+			await new Promise((r) => setTimeout(r, 0))
+		})
+
+		const ewStyle = (globalThis as any).window.__ew as {
+			editor: { get(): { selection: Set<string> }; apply(intent: unknown): void; undo(): void }
+			doc: { getShape(id: string): { opacity: number; props: Record<string, unknown> } | undefined }
+		}
+
+		await act(async () => {
+			ewStyle.editor.apply({ type: 'CreateShape', shape: seedShape('shape:style-x', 100, 100) })
+			ewStyle.editor.apply({ type: 'CreateShape', shape: seedShape('shape:style-y', 300, 100) })
+			ewStyle.editor.apply({ type: 'CreateShape', shape: seedShape('shape:style-untouched', 500, 100) })
+			ewStyle.editor.apply({ type: 'SetSelection', ids: ['shape:style-x', 'shape:style-y'] })
+		})
+
+		const blueSwatch = styleContainer.querySelector(
+			'[data-style-control="color"] [data-style-value="blue"]',
+		) as HTMLElement | null
+		assert.ok(blueSwatch, `the panel's blue color swatch must render for a 2-shape geo selection — DOM: ${styleContainer.innerHTML}`)
+		await act(async () => {
+			blueSwatch!.click()
+		})
+
+		assert.equal(ewStyle.doc.getShape('shape:style-x')?.props.color, 'blue', 'clicking the blue swatch must set BOTH selected shapes color — shape:style-x')
+		assert.equal(ewStyle.doc.getShape('shape:style-y')?.props.color, 'blue', 'clicking the blue swatch must set BOTH selected shapes color — shape:style-y')
+		assert.equal(
+			ewStyle.doc.getShape('shape:style-untouched')?.props.color,
+			undefined,
+			'a shape OUTSIDE the selection must be untouched — proves the wiring dispatches ids=selection, not ids=whole doc',
+		)
+		console.log('ok: CanvasV2App — clicking the StylePanel color swatch dispatches SetStyle across the WHOLE selection, sparing an unselected shape')
+
+		const opacityBtn = styleContainer.querySelector('[data-style-control="opacity"] [data-style-value="0.5"]') as HTMLElement | null
+		assert.ok(opacityBtn, `the panel's 50% opacity button must render — DOM: ${styleContainer.innerHTML}`)
+		await act(async () => {
+			opacityBtn!.click()
+		})
+		const xAfterOpacity = ewStyle.doc.getShape('shape:style-x')!
+		assert.equal(xAfterOpacity.opacity, 0.5, 'the opacity axis must set the ENVELOPE opacity field')
+		assert.equal(xAfterOpacity.props.opacity, undefined, 'the opacity axis must NEVER write into props.opacity')
+		assert.equal(ewStyle.doc.getShape('shape:style-y')!.opacity, 0.5, 'the opacity click must apply to the whole selection, not just one shape')
+		console.log('ok: CanvasV2App — the StylePanel opacity control writes the envelope `opacity` field, never `props.opacity`')
+
+		const viewportElStyle = styleContainer.querySelector('[tabindex]') as HTMLElement | null
+		assert.ok(viewportElStyle, `the viewport element must exist — DOM: ${styleContainer.innerHTML}`)
+		await act(async () => {
+			viewportElStyle!.focus()
+		})
+		await act(async () => {
+			viewportElStyle!.dispatchEvent(
+				new (win as any).KeyboardEvent('keydown', { key: 'z', ctrlKey: true, bubbles: true, cancelable: true }),
+			)
+		})
+		assert.equal(
+			ewStyle.doc.getShape('shape:style-x')?.opacity,
+			1,
+			'a SINGLE Ctrl+Z must revert the opacity batch for shape:style-x in one step (E1 one-commit guarantee)',
+		)
+		assert.equal(
+			ewStyle.doc.getShape('shape:style-y')?.opacity,
+			1,
+			'a SINGLE Ctrl+Z must revert the opacity batch for shape:style-y in one step (E1 one-commit guarantee)',
+		)
+		assert.equal(
+			ewStyle.doc.getShape('shape:style-x')?.props.color,
+			'blue',
+			'the SAME single Ctrl+Z must not also revert the EARLIER, separately-committed color change',
+		)
+		console.log('ok: CanvasV2App — a single Ctrl+Z reverts the whole StylePanel opacity batch in one step, without touching the earlier color commit')
+
+		await act(async () => {
+			styleRoot.unmount()
 		})
 	}
 
