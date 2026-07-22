@@ -265,9 +265,39 @@ found during review, not decided casually.
   was off. Harmless only because `transportChip`/`countdownSeconds` clamp — those
   clamps are load-bearing, not defensive decoration.
 
-### Not yet verified
+### Smoke results (2026-07-22, Chrome against `bin/dev up`, port offset +100)
 
-**The manual smoke in §8 has NOT been run** — no dev stack was available. Every
-automated check passes (typecheck, 218 suites, build), but the lock lifecycle, the
-React shells and the modal's rendering have no automated coverage at all. §8's three
-scenarios remain outstanding before this can be trusted in a real room.
+§8's scenarios were run live. **It found two defects that the 218 automated suites
+could not.** Both are recorded here because they are the argument for never treating
+this feature's green test run as sufficient on its own.
+
+Passed:
+- **Connection loss** — modal inside the threshold, naming both tripped transports,
+  Video still ✓ (LiveKit confirmed non-blocking in practice, not just in the reducer).
+- **Recovery** — auto-dismissed with no interaction.
+- **Duplicate tab** — the *newcomer* blocks (oldest-wins confirmed live), "Use it
+  here" hands over, and the original tab flips to blocked symmetrically.
+- **Lock telemetry** — `granted` → `takeover-received` → `released` observed in the
+  console, so §10's telemetry widening works end to end.
+
+**Defect 1 — the input swallow was inert (fixed, `2df74d9`).** The a11y focus-on-mount
+puts `document.activeElement` inside the panel, so `insidePanel` was permanently true,
+so the blanket exemption swallowed nothing. Verified both directions: with natural
+focus, `Ctrl+Z` reached `document.body` (where tldraw binds); after blurring, it was
+swallowed. Two individually-correct changes — the accessibility focus move and the
+modifier allowlist — composed into a defect that every unit test missed, because the
+tests only ever exercised `insidePanel: false`, a state that never occurs in practice.
+`insidePanel` is now narrow: it admits only `Enter`/`Space` for the dialog's own button.
+
+**Defect 2 — §5's issue-#55 claim is NOT delivered (open).** §5 asserts that one
+active tab per identity means "no A/V `DUPLICATE_IDENTITY` kill, no doubled
+cursors/presence". The smoke shows otherwise: the roster showed two entries for the
+same user, the panel read "Audio/video: error", and the first tab's console logged
+`livekit connected → disconnected` the moment the second tab joined. The lock gates
+**canvas interaction only** — a blocked tab still mounts `AvOverlay` and still joins
+LiveKit and sync presence. Closing this for real requires the blocked tab to also not
+join those, which is a scope increase beyond this branch. **Until that lands, treat
+§5's issue-#55 bullet as aspirational, not as shipped.**
+
+Still uncovered by any automated test: the lock lifecycle, the React shells, and the
+modal's rendering.
