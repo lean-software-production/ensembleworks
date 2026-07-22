@@ -157,6 +157,21 @@ async function sampleTextSelectionSpans(page: Page): Promise<number> {
 // pageObs's own doc comment), so every id it might ask about must already be
 // pre-sampled before `check` runs, exactly like `editingShape`/
 // `textSelectionSpans` are today.
+// Task AS4's Obs.selectedShapeIds() doc comment (interaction-contracts/src/
+// types.ts) names this exact mechanism for the browser adapter: read
+// `window.__ew.editor.get().selection` (a Set<string> at fsm level, per
+// editor.ts) and spread it into a plain array — same pre-sample-then-read-
+// synchronously shape as every other Obs field here. Needed because a
+// created shape's id is minted from crypto-random (create.ts's `makeId`) and
+// this runner cannot predict it; the contract discovers it via the create
+// tool's auto-selection instead.
+async function sampleSelection(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() => {
+    const ew = (window as any).__ew
+    return [...ew.editor.get().selection]
+  })
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -202,21 +217,34 @@ interface ActorSample {
   readonly editingShape: string | null
   readonly editingIndicators: Readonly<Record<string, boolean>>
   readonly styles: Readonly<Record<string, { readonly opacity: number; readonly props: Readonly<Record<string, unknown>> } | null>>
+  readonly selection: readonly string[]
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
  * actor's page: settles a render frame first (the same RENDER-SETTLING gate
  * `nextFrame` always was, just now scoped per actor instead of the single
  * caller-supplied `page`), then reads text selection spans, the locally-
- * mounted text editor's shape id, and (Pilot 5) which of the scene's shapes
- * show a peer-editing indicator on THIS actor's own screen. */
+ * mounted text editor's shape id, (Pilot 5) which of the scene's shapes show
+ * a peer-editing indicator on THIS actor's own screen, each scene shape's
+ * stored style, and (Task AS4) the current editor selection. */
 async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promise<ActorSample> {
   await nextFrame(page)
   const spans = await sampleTextSelectionSpans(page)
   const editingShape = await sampleEditingShape(page)
   const editingIndicators = await samplePeerEditingIndicators(page, sceneShapeIds)
-  const styles = await sampleShapeStyles(page, sceneShapeIds)
-  return { spans, editingShape, editingIndicators, styles }
+  const selection = await sampleSelection(page)
+  // Task AS4: `shapeStyle` must also answer for a shape `check` discovers
+  // via `selectedShapeIds()` — e.g. armed-style-applies-to-created-shape's
+  // newly-created shape, which was never in `contract.scene()` (seeded
+  // scene shapes have known ids up front; a GESTURE-created shape's id is
+  // minted from crypto-random and only exists once the gesture runs, so it
+  // can only be discovered through the selection it auto-lands in). Sample
+  // styles for the UNION of seeded scene ids and the current selection, not
+  // just the former, or `shapeStyle(createdId, ...)` would silently read as
+  // "shape absent" (null) regardless of the shape's real stored props.
+  const styleIds = [...new Set([...sceneShapeIds, ...selection])]
+  const styles = await sampleShapeStyles(page, styleIds)
+  return { spans, editingShape, editingIndicators, styles, selection }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -260,6 +288,7 @@ function pageObs(
       const raw = shape.props[key]
       return typeof raw === 'string' || typeof raw === 'number' ? raw : null
     },
+    selectedShapeIds: () => sample.selection,
   }
 }
 

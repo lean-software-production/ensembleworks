@@ -4,6 +4,7 @@
 // the array is the registry). Pilots append their declarations here.
 export * from './types.js'
 import type { Contract } from './types.js'
+import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies-to-created-shape.js'
 import { crossWidgetSelection } from './contracts/cross-widget-selection.js'
 import { cursorLock } from './contracts/cursor-lock.js'
 import { editingIndicator } from './contracts/editing-indicator.js'
@@ -21,4 +22,5 @@ export const CONTRACTS: readonly Contract[] = [
   noTransformWhileTyping,
   editingIndicator,
   styleAppliesToSelection,
+  armedStyleAppliesToCreatedShape,
 ]

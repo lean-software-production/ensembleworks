@@ -177,6 +177,9 @@ function makeObs(
       const raw = (shape.props as Record<string, unknown>)[key]
       return typeof raw === 'string' || typeof raw === 'number' ? raw : null
     },
+    selectedShapeIds() {
+      return [...editor.get().selection]
+    },
   }
 }
 

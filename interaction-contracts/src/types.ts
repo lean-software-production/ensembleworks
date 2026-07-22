@@ -145,6 +145,16 @@ export interface Obs {
    * throw-stub: the FSM adapter reads `editor.doc.getShape`, the browser
    * adapter pre-samples `window.__ew.doc.getShape` per scene shape. */
   shapeStyle(id: string, key: string): string | number | null
+  /** The current editor selection, as a plain array. Task AS4. Available at
+   * BOTH levels (reads editor state, not the DOM) — no throw-stub: the FSM
+   * adapter reads `[...editor.get().selection]` directly, the browser
+   * adapter pre-samples `window.__ew.editor.get().selection`. General and
+   * reusable (not a styling-specific probe) — AS4's armed-style contract
+   * uses this to discover a just-created shape's id (minted from
+   * crypto-random, so the runner cannot predict it up front) via the create
+   * tool's auto-selection (create.ts's `finalizeIntents`), then reuses
+   * `shapeStyle` above for the value assertion. */
+  selectedShapeIds(): readonly string[]
 }
 
 /** A contract declaration = data. */
