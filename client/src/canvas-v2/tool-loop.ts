@@ -33,12 +33,14 @@ import {
 	createCreateTool,
 	createDrawTool,
 	createHandTool,
+	createLineTool,
 	createSelectAndTransformTool,
 	type ArrowState,
 	type CreateKind,
 	type CreateState,
 	type DrawState,
 	type HandState,
+	type LineState,
 	type SelectAndTransformState,
 	type SelectState,
 } from '@ensembleworks/canvas-editor'
@@ -48,7 +50,7 @@ export { createSelectAndTransformTool, type SelectAndTransformState } from '@ens
 
 /** The toolbar's tool identifiers — see CanvasV2App.tsx's toolbar for the
  * button list. 'transform' is deliberately ABSENT (see module header). */
-export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'arrow' | 'draw'
+export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'arrow' | 'draw' | 'line'
 
 /** One `Tool<unknown>` instance per `ToolId`, built ONCE per `ToolContext` —
  * mirrors every tool factory's own "call once per Editor/ToolContext"
@@ -66,6 +68,7 @@ export interface ToolSet {
 	readonly frame: Tool<CreateState>
 	readonly arrow: Tool<ArrowState>
 	readonly draw: Tool<DrawState>
+	readonly line: Tool<LineState>
 }
 
 export function createToolSet(ctx: ToolContext): ToolSet {
@@ -79,6 +82,7 @@ export function createToolSet(ctx: ToolContext): ToolSet {
 		frame: createKindTool('frame'),
 		arrow: createArrowTool(ctx),
 		draw: createDrawTool(ctx),
+		line: createLineTool(ctx),
 	}
 }
 
@@ -100,6 +104,7 @@ export function createInitialToolStates(tools: ToolSet): ToolStates {
 		frame: tools.frame.initialState,
 		arrow: tools.arrow.initialState,
 		draw: tools.draw.initialState,
+		line: tools.line.initialState,
 	}
 }
 
@@ -282,6 +287,14 @@ export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: Too
 		// threshold gate), so an abandoned mid-stroke shape must be deleted the
 		// same way (Task W1, D-5).
 		const s = states.draw as DrawState
+		if (s.mode === 'drawing') intents.push({ type: 'DeleteShapes', ids: [s.id] })
+	} else if (active === 'line') {
+		// The line tool's in-flight 'drawing' state carries `id` — like
+		// arrow, the preview line is already committed to the doc once the
+		// drag crosses its threshold (line.ts has the same threshold gate as
+		// arrow.ts, unlike draw.ts's bare-pointerdown commit), so an abandoned
+		// mid-drag line must be deleted the same way (Task W1, D-5).
+		const s = states.line as LineState
 		if (s.mode === 'drawing') intents.push({ type: 'DeleteShapes', ids: [s.id] })
 	} else if (active === 'note' || active === 'text' || active === 'geo' || active === 'frame') {
 		const s = states[active] as CreateState

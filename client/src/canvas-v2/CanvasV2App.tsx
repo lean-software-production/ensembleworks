@@ -541,6 +541,7 @@ const TOOL_BUTTONS: ReadonlyArray<{ readonly id: ToolId; readonly label: string 
 	{ id: 'frame', label: 'Frame' },
 	{ id: 'arrow', label: 'Arrow' },
 	{ id: 'draw', label: 'Draw' },
+	{ id: 'line', label: 'Line' },
 ]
 
 /** Cursors.tsx has no push-based "a remote peer's presence changed" hook —

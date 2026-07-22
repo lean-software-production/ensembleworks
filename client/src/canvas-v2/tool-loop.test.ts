@@ -573,4 +573,43 @@ function setup() {
 	console.log('ok: tool-loop — the draw tool is wired into createToolSet/createInitialToolStates/dispatchToActiveTool/cancelActiveTool (Task W1)')
 }
 
+// ============================================================================
+// 9. Task W1 (line sub-cycle) — the 'line' tool is wired into the
+//    ToolSet/ToolStates/dispatch machinery exactly like arrow: createToolSet
+//    builds it, createInitialToolStates seeds its idle state,
+//    dispatchToActiveTool routes a down->move(threshold-crossing) to it and
+//    applies the resulting line-kind CreateShape (line.ts has a threshold
+//    gate like arrow — a bare pointerdown writes nothing), and
+//    cancelActiveTool covers its in-flight 'drawing' state (which carries
+//    `id`, like arrow/draw) so an abandoned mid-drag line doesn't leak.
+// ============================================================================
+{
+	const { editor, ctx } = setup()
+	const tools = createToolSet(ctx)
+
+	assert.ok(tools.line, 'createToolSet must build a `line` tool (Task W1 — createLineTool wired in)')
+
+	const states = createInitialToolStates(tools)
+	assert.equal(states.line, tools.line.initialState, 'createInitialToolStates must seed a `line` entry at the line tool\'s own initialState')
+
+	const before = new Set<string>(editor.doc.listShapes().map((s) => s.id))
+	let s = dispatchToActiveTool(tools, states, 'line', editor, { type: 'pointerdown', x: 500, y: 500, buttons: 1, modifiers: MODS, t: 0 })
+	s = dispatchToActiveTool(tools, s, 'line', editor, { type: 'pointermove', x: 520, y: 520, buttons: 1, modifiers: MODS, t: 16 })
+	const createdId = editor.doc.listShapes().map((sh) => sh.id).find((id) => !before.has(id))
+	assert.ok(createdId, `dispatching a threshold-crossing drag to the 'line' active tool must create a shape — shapes: ${JSON.stringify(editor.doc.listShapes())}`)
+	assert.equal(editor.doc.getShape(createdId!)?.kind, 'line', 'the created shape must be a `line`-kind shape')
+
+	// Mid-drag (threshold crossed, no pointerup yet): cancelActiveTool must
+	// delete the in-flight preview, same DeleteShapes coverage as arrow/draw.
+	const lineState = s.line as { mode: string; id: string }
+	assert.equal(lineState.mode, 'drawing', 'precondition: the line gesture crossed the threshold and is mid-draw')
+	const cancelled = cancelActiveTool(tools, s, 'line', editor)
+	assert.deepEqual(cancelled.intents, [{ type: 'DeleteShapes', ids: [lineState.id] }], 'cancelling a mid-draw line emits DeleteShapes for its in-flight id')
+	editor.applyAll(cancelled.intents)
+	assert.equal(editor.doc.getShape(lineState.id), undefined, 'the in-flight line preview is actually gone after applying the cancel intent')
+	assert.equal((cancelled.states.line as { mode: string }).mode, 'idle', 'the line tool itself resets to idle')
+
+	console.log('ok: tool-loop — the line tool is wired into createToolSet/createInitialToolStates/dispatchToActiveTool/cancelActiveTool (Task W1)')
+}
+
 console.log('ok: tool-loop.test.ts — all cases passed')
