@@ -212,4 +212,54 @@ function render(shape: Shape, getText?: (id: string) => string) {
   console.log('ok: GeoShape — resolved stroke/fill colors actually reach the rendered DOM, not just the pure helper')
 }
 
-console.log('ok: geo-shape (variant discriminator + real SVG geometry, v1-grounded stroke/fill, live label, DOM wiring)')
+// ============================================================================
+// 8. Task R2 — GeoShape honors props.dash: 'dashed'/'dotted' render a real
+//    stroke-dasharray (DIFFERENT arrays from each other); 'solid'/'draw'
+//    (the default) stay a clean, un-dashed solid stroke; 'none' renders NO
+//    stroke at all (v1's PathBuilder.toSvg returns no <path> element when
+//    style==='none' — node_modules/tldraw/src/lib/shapes/shared/
+//    PathBuilder.tsx's `toSvg`: `if (opts.style === 'none') return null` —
+//    confirmed by reading source, not assumed). Arrays scale with
+//    strokeWidth (module header's DASH section cites
+//    getPerfectDashProps.ts's per-unit constants), checked here by
+//    comparing size 'm' vs 'xl'.
+// ============================================================================
+{
+  const dashedHtml = render(geoShape({ props: { dash: 'dashed', color: 'blue' } }))
+  const dashedMatch = dashedHtml.match(/<rect[^>]*stroke-dasharray="([^"]*)"/)
+  assert.ok(dashedMatch, `dash:'dashed' should render a stroke-dasharray on the stroke element: ${dashedHtml}`)
+
+  const dottedHtml = render(geoShape({ props: { dash: 'dotted', color: 'blue' } }))
+  const dottedMatch = dottedHtml.match(/<rect[^>]*stroke-dasharray="([^"]*)"/)
+  assert.ok(dottedMatch, `dash:'dotted' should render a stroke-dasharray on the stroke element: ${dottedHtml}`)
+
+  assert.notEqual(dottedMatch![1], dashedMatch![1], `dashed and dotted must produce DIFFERENT dasharray patterns, got the same: ${dashedMatch![1]}`)
+
+  const solidHtml = render(geoShape({ props: { dash: 'solid', color: 'blue' } }))
+  assert.ok(!solidHtml.includes('stroke-dasharray'), `dash:'solid' should render a clean solid stroke (no stroke-dasharray): ${solidHtml}`)
+
+  const drawHtml = render(geoShape({ props: { dash: 'draw', color: 'blue' } }))
+  assert.ok(!drawHtml.includes('stroke-dasharray'), `dash:'draw' (default) should render a clean solid stroke (no stroke-dasharray): ${drawHtml}`)
+
+  const noDashPropHtml = render(geoShape({ props: { color: 'blue' } }))
+  assert.ok(!noDashPropHtml.includes('stroke-dasharray'), `an absent dash prop defaults to v1's own default (draw) — no stroke-dasharray: ${noDashPropHtml}`)
+
+  const noneHtml = render(geoShape({ props: { dash: 'none', color: 'blue' } }))
+  assert.ok(!noneHtml.includes('stroke="#4465e9"'), `dash:'none' should render NO stroke at all (not just no dasharray): ${noneHtml}`)
+  assert.ok(!noneHtml.includes('stroke-dasharray'), `dash:'none' should carry no stroke-dasharray either (there is no stroke element): ${noneHtml}`)
+
+  // Scaling: the dashed/dotted arrays must scale with strokeWidth (props.size),
+  // not be a fixed magic-number array that ignores it.
+  const dashedSmall = geoStyle(geoShape({ props: { dash: 'dashed', size: 'm' } }))
+  const dashedLarge = geoStyle(geoShape({ props: { dash: 'dashed', size: 'xl' } }))
+  assert.ok(dashedSmall.strokeDasharray, 'geoStyle exposes a strokeDasharray for dash:dashed')
+  assert.notEqual(dashedSmall.strokeDasharray, dashedLarge.strokeDasharray, `dashed's dasharray must scale with strokeWidth (size m vs xl differed not at all: ${dashedSmall.strokeDasharray})`)
+
+  const dottedSmall = geoStyle(geoShape({ props: { dash: 'dotted', size: 'm' } }))
+  const dottedLarge = geoStyle(geoShape({ props: { dash: 'dotted', size: 'xl' } }))
+  assert.notEqual(dottedSmall.strokeDasharray, dottedLarge.strokeDasharray, `dotted's dasharray must scale with strokeWidth (size m vs xl differed not at all: ${dottedSmall.strokeDasharray})`)
+
+  console.log('ok: GeoShape — dashed/dotted render distinct stroke-dasharray patterns scaling with strokeWidth, solid/draw stay clean, none renders no stroke at all')
+}
+
+console.log('ok: geo-shape (variant discriminator + real SVG geometry, v1-grounded stroke/fill, live label, DOM wiring, dash)')

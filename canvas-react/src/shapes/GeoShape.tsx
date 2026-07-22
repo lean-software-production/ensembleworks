@@ -84,16 +84,38 @@
 // (client/src/App.tsx:198-203 force-seeds `colorScheme: 'light'`; no theme
 // toggle exists yet).
 //
-// DASH: `dash` is one of 'draw'/'solid'/'dashed'/'dotted' (default 'draw',
-// GeoShapeUtil.tsx getDefaultProps). v1 uses it to render a HAND-WOBBLED
-// stroke for the default 'draw' case (GeoShapeBody.tsx's `path.toDrawD(...)`
-// / `path.toSvg({ style: dash, ... })`, seeded per-shape) and real
-// dash-array patterns for 'dashed'/'dotted'. This body renders a CLEAN,
-// un-wobbled SOLID stroke regardless of `dash` — a deliberate
-// simplification, documented here to the file's existing honesty standard
-// (like the pattern-fill / align / stroke-inset gaps below). Reproducing
-// the draw-wobble RNG path and the dash/dot arrays is deferred to the Seam F
-// parity work, not implemented here.
+// DASH: `dash` is one of 'draw'/'solid'/'dashed'/'dotted'/'none' (default
+// 'draw', GeoShapeUtil.tsx getDefaultProps; DefaultDashStyle's `values:`
+// array — tlschema's styles/TLDashStyle.ts:38 — has FIVE entries even
+// though its own doc-comment prose only lists four; canvas-model's DASH enum,
+// shape.ts, correctly types all five, and this body must too). v1 renders:
+// draw -> a HAND-WOBBLED stroke (GeoShapeBody.tsx's `path.toDrawD(...)`,
+// seeded per-shape); solid -> a clean solid stroke; dashed/dotted -> real
+// dash-array patterns; none -> NO stroke element at all (PathBuilder.tsx's
+// `toSvg`: `if (opts.style === 'none') return null` — the shape's fill, if
+// any, still renders, just with no outline). This body reproduces dashed/
+// dotted (via `dashArray` below) and none (`geoStyle` resolves `strokeColor`
+// to `null`), but NOT the draw hand-wobble — draw still renders as a clean
+// solid stroke, a deliberate, documented simplification (like the
+// pattern-fill / align / stroke-inset gaps below). Reproducing the
+// draw-wobble RNG path is deferred to the Seam F parity work, not
+// implemented here.
+//
+// DASH ARRAYS: v1's real dash/dot arrays are PERIMETER-FITTING — computed
+// against each path's total length so dashes divide evenly around a closed
+// outline (getPerfectDashProps.ts's `dashLength`/`gapLength` math, driven by
+// `totalLength`). This body has no such path-length machinery (see GEOMETRY
+// above — plain SVG primitives, not a v1 `PathBuilder`), so `dashArray`
+// below borrows only getPerfectDashProps.ts's two PER-STROKE-WIDTH unit
+// constants rather than the full perimeter fit: dashed's dash segment is
+// `strokeWidth * lengthRatio` (default `lengthRatio` there is 2) and
+// dotted's dot segment is `strokeWidth / 100` (its `ratio: 100` branch) — a
+// near-zero-length dash that reads as a round dot under the `strokeLinecap:
+// 'round'` this body also applies (matching v1's own
+// `.tl-svg-container { stroke-linecap: round }`, editor.css). The GAP
+// lengths (1:1 for dashed, 2.5x strokeWidth for dotted) are NOT from v1 —
+// v1 solves its gap from total path length, which this body doesn't track —
+// a documented approximation, not a bug.
 //
 // STROKE WIDTH / LABEL SIZE: `size` (default 'm', GeoShapeUtil.tsx
 // getDefaultProps) resolves strokeWidth via `theme.strokeWidth *
@@ -184,6 +206,36 @@ const FONT_FAMILY: Readonly<Record<string, string>> = Object.freeze({
 })
 const DEFAULT_FONT = 'draw' // GeoShapeUtil.tsx getDefaultProps
 
+// DefaultDashStyle's five real values (tlschema's TLDashStyle.ts:38 —
+// module header's DASH section). 'draw'/'solid' resolve to no dasharray
+// (see `dashArray` below); 'none' resolves `strokeColor` to `null` in
+// `geoStyle` instead (no stroke element at all).
+const DASH_VALUES = new Set(['draw', 'solid', 'dashed', 'dotted', 'none'])
+const DEFAULT_DASH = 'draw' // GeoShapeUtil.tsx getDefaultProps
+const DASH_LENGTH_RATIO = 2 // getPerfectDashProps.ts's default `lengthRatio`
+const DOT_RATIO = 100 // getPerfectDashProps.ts's dotted-case `ratio`
+const DOT_GAP_MULTIPLIER = 2.5 // NOT from v1 — see module header DASH ARRAYS
+
+/** dashed/dotted -> a `strokeWidth`-scaled `stroke-dasharray` string;
+ * draw/solid/none -> `undefined` (no dasharray attribute at all — see
+ * module header DASH ARRAYS for exactly which constants are v1-grounded
+ * vs. this body's own approximation). */
+function dashArray(dash: string, strokeWidth: number): string | undefined {
+  switch (dash) {
+    case 'dashed': {
+      const segment = strokeWidth * DASH_LENGTH_RATIO
+      return `${segment} ${segment}`
+    }
+    case 'dotted': {
+      const dot = strokeWidth / DOT_RATIO
+      const gap = strokeWidth * DOT_GAP_MULTIPLIER
+      return `${dot} ${gap}`
+    }
+    default:
+      return undefined
+  }
+}
+
 // The geo label's fixed alignment (Task C6 EXPORT — not a table, the same
 // single constant the JSX used to inline directly): v1 always CENTERS a geo
 // label (module header's LABEL section) regardless of props. Exported so
@@ -201,8 +253,13 @@ const DEFAULT_H = 100
 const SPECIAL_CASED_VARIANTS = new Set(['rectangle', 'ellipse', 'triangle', 'diamond'])
 
 export interface GeoStyle {
-  readonly strokeColor: string
+  /** null => dash:'none', render no stroke element at all (v1's
+   * PathBuilder.toSvg returns no <path> — see module header DASH). */
+  readonly strokeColor: string | null
   readonly strokeWidth: number
+  /** dashed/dotted's stroke-dasharray, scaled to strokeWidth; undefined for
+   * draw/solid/none (a clean, un-dashed stroke — or no stroke at all). */
+  readonly strokeDasharray: string | undefined
   /** null => fill:'none', render no fill at all (not even 'transparent' —
    * simplest to just omit the fill element entirely). */
   readonly fillColor: string | null
@@ -237,12 +294,15 @@ export function geoStyle(shape: ShapeBodyProps['shape']): GeoStyle {
   const fill = typeof props.fill === 'string' ? props.fill : DEFAULT_FILL
   const size = typeof props.size === 'string' && props.size in STROKE_WIDTH_PX ? props.size : DEFAULT_SIZE
   const font = typeof props.font === 'string' && props.font in FONT_FAMILY ? props.font : DEFAULT_FONT
+  const dash = typeof props.dash === 'string' && DASH_VALUES.has(props.dash) ? props.dash : DEFAULT_DASH
+  const strokeWidth = STROKE_WIDTH_PX[size]
 
   const fillColor = fill === 'none' ? null : fill === 'semi' ? THEME_SOLID_LIGHT : entry[FILL_VARIANT[fill] ?? 'semi']
 
   return {
-    strokeColor: entry.solid,
-    strokeWidth: STROKE_WIDTH_PX[size],
+    strokeColor: dash === 'none' ? null : entry.solid,
+    strokeWidth,
+    strokeDasharray: dashArray(dash, strokeWidth),
     fillColor,
     labelColor: labelEntry.solid,
     fontFamily: FONT_FAMILY[font],
@@ -277,7 +337,18 @@ export function geoLabel(shape: ShapeBodyProps['shape'], getText?: (id: string) 
  * variants; anything else falls back to the same <rect> as 'rectangle'. */
 function geoPath(variant: string, w: number, h: number, style: GeoStyle): ReactElement {
   const fill = style.fillColor ?? 'none'
-  const common = { fill, stroke: style.strokeColor, strokeWidth: style.strokeWidth }
+  // dash:'none' -> strokeColor is null -> render stroke:'none' (no visible
+  // outline; the fill, if any, still renders) — see GeoStyle's strokeColor doc.
+  const strokeProps =
+    style.strokeColor === null
+      ? { stroke: 'none' }
+      : {
+          stroke: style.strokeColor,
+          strokeWidth: style.strokeWidth,
+          strokeLinecap: 'round' as const, // matches v1's .tl-svg-container { stroke-linecap: round } (editor.css) — load-bearing for dotted to read as round dots, not invisible slivers
+          ...(style.strokeDasharray !== undefined ? { strokeDasharray: style.strokeDasharray } : {}),
+        }
+  const common = { fill, ...strokeProps }
   switch (SPECIAL_CASED_VARIANTS.has(variant) ? variant : 'rectangle') {
     case 'ellipse':
       return <ellipse cx={w / 2} cy={h / 2} rx={w / 2} ry={h / 2} {...common} />
