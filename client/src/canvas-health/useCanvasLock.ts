@@ -11,10 +11,23 @@
  * 'takeover'}; the holder resolves its callback's promise to release the
  * lock and blocks itself; the freed lock then goes to whoever is next in the
  * request queue — which is the newcomer, since its request() call has been
- * sitting queued (unresolved) since mount.
+ * sitting queued (unresolved) since mount. The former holder then re-queues
+ * (see the `acquire()` call in the takeover branch below) so it inherits the
+ * lock back if the newcomer ever leaves without a live waiter of its own —
+ * without that, a former holder that gave up the lock would have no queued
+ * request left and could never recover crash-safety for itself.
  *
  * Crash-safety is the lock's job — a dead tab's lock is auto-released by the
- * browser, so there is no stale-lock cleanup here.
+ * browser, so there is no stale-lock cleanup here, other than the re-queue
+ * above.
+ *
+ * Deviation from design §5: the doc says a duplicate tab learns its status
+ * "via `ifAvailable`" (a non-blocking probe). This implementation instead
+ * always issues a genuinely queued `request()` and derives duplicate-status
+ * from `!hasLock`. That's strictly better here: an `ifAvailable` probe
+ * wouldn't stay queued, so there'd be nothing for a takeover — or a crashed
+ * holder — to hand the lock to. The always-queued request is what makes both
+ * takeover and crash auto-recovery work at all.
  *
  * Design: docs/plans/2026-07-22-connection-health-modal-design.md §5.
  */
@@ -99,9 +112,16 @@ export function useCanvasLock(roomId: string, userId: string): CanvasLock {
 			const data = ev.data as { type?: string } | null
 			if (data?.type !== 'takeover') return
 			if (!release) return // we don't hold it; nothing to give up
-			// Hand over: release, block ourselves, and DON'T re-queue — oldest
-			// wins means the tab that just took over keeps it until it asks.
+			// Hand over: release, then immediately re-queue. We're still
+			// mounted and still contending for this canvas, so we sit blocked
+			// behind the newcomer (whose request() has been queued since ITS
+			// mount, strictly before this re-request — FIFO grant order still
+			// gives them the lock, preserving oldest-wins). Re-queueing is what
+			// lets us inherit the lock back automatically if the newcomer's tab
+			// dies without a live waiter behind it; skipping this would strand
+			// us blocked forever after a takeover.
 			release()
+			acquire()
 		}
 
 		acquire()
