@@ -72,10 +72,14 @@ function reindexRootsToTop(
 ): { shapes: Shape[]; bindings: Binding[]; rootIds: string[] } {
   if (clone.rootIds.length === 0) return clone
 
+  // pageId (Task E2b, D-1): read LIVE from editor.get().currentPageId -- the
+  // max-sibling scan must target the page the clone is landing on, never the
+  // constructor's frozen `editor.pageId`.
+  const pageId = editor.get().currentPageId
   const rootIdSet = new Set(clone.rootIds)
   let maxSibling: string | null = null
   for (const s of editor.doc.listShapes()) {
-    if (s.parentId !== editor.pageId) continue
+    if (s.parentId !== pageId) continue
     if (maxSibling === null || s.index > maxSibling) maxSibling = s.index
   }
 
@@ -111,7 +115,7 @@ export function duplicateSelectionIntents(editor: Editor): Intent[] {
     { shapes: [...payload.shapes], bindings: [...payload.bindings] },
     (i) => mintShapeId(editor, i),
     (j) => mintBindingId(editor, j),
-    editor.pageId,
+    editor.get().currentPageId,
     { x: DUP_OFFSET, y: DUP_OFFSET },
   )
   return assembleIntents(reindexRootsToTop(clone, editor))
@@ -133,7 +137,7 @@ export function pasteIntents(editor: Editor, text: string, _opts?: { at?: { x: n
     decoded,
     (i) => mintShapeId(editor, i),
     (j) => mintBindingId(editor, j),
-    editor.pageId,
+    editor.get().currentPageId,
     { x: DUP_OFFSET, y: DUP_OFFSET },
   )
   return assembleIntents(reindexRootsToTop(clone, editor))

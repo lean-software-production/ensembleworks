@@ -264,4 +264,80 @@ const binding = (id: string, fromId: string, toId: string): Binding =>
   console.log('ok: duplicateSelectionIntents — E3: deterministic top-of-stack index')
 }
 
+// ============================================================================
+// 11. E2b — duplicateSelectionIntents targets the CURRENT page. With a
+//     selection on page:p and currentPageId switched to page:q, the
+//     duplicated root's parentId is page:q, not editor.pageId ('page:p').
+//     Mutant killed: "clones onto editor.pageId" -- that mutant would
+//     re-root the duplicate onto 'page:p' regardless of the switch.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor()
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.putShape(shape('shape:source', { x: 10, y: 10 }))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:source'] })
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+
+  const intents = duplicateSelectionIntents(editor)
+  const created = (intents.find((i) => i.type === 'CreateShape') as { shape: Shape }).shape
+  assert.equal(created.parentId, 'page:q', 'duplicated root lands on the CURRENT page, not editor.pageId')
+  console.log('ok: E2b — duplicateSelectionIntents targets the current page after SetCurrentPage')
+}
+
+// ============================================================================
+// 12. E2b — pasteIntents targets the CURRENT page, same guard as duplicate.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor()
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.putShape(shape('shape:a', { x: 100, y: 200 }))
+  doc.commit()
+  const payload = serializeSelection(doc.listShapes(), doc.listBindings(), ['shape:a'])
+  const text = encodeClipboard(payload)
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+
+  const intents = pasteIntents(editor, text)
+  const pasted = (intents.find((i) => i.type === 'CreateShape') as { shape: Shape }).shape
+  assert.equal(pasted.parentId, 'page:q', 'pasted root lands on the CURRENT page, not editor.pageId')
+  console.log('ok: E2b — pasteIntents targets the current page after SetCurrentPage')
+}
+
+// ============================================================================
+// 13. E2b — migration safety: with currentPageId at its boot default
+//     ('page:p', never switched), duplicate/paste are UNCHANGED.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor()
+  doc.putShape(shape('shape:source', { x: 10, y: 10 }))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:source'] })
+  const intents = duplicateSelectionIntents(editor)
+  const created = (intents.find((i) => i.type === 'CreateShape') as { shape: Shape }).shape
+  assert.equal(created.parentId, 'page:p', 'with currentPageId at its boot default, duplicate still parents to page:p')
+  console.log('ok: E2b — single-page default (no SetCurrentPage) still parents a duplicate to page:p')
+}
+
+// ============================================================================
+// 14. E2b — the max-sibling scan (reindexRootsToTop) reads the CURRENT
+//     page's siblings, not editor.pageId's. A high-indexed sibling that
+//     lives on page:p must NOT push the duplicate's (page:q) top-of-stack
+//     index above where it belongs among page:q's own (empty) siblings.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor()
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.putShape(shape('shape:page-p-high', { index: generateKeyBetween('a5', null) })) // on page:p, high index
+  doc.putShape(shape('shape:source', { index: 'a1' }))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:source'] })
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+
+  const intents = duplicateSelectionIntents(editor)
+  const created = (intents.find((i) => i.type === 'CreateShape') as { shape: Shape }).shape
+  assert.equal(created.parentId, 'page:q', 'duplicate lands on page:q')
+  assert.ok(created.index < 'a5', `top-of-stack index (${created.index}) is computed against page:q's (empty) siblings, not page:p's unrelated high index`)
+  console.log('ok: E2b — max-sibling scan reads the CURRENT page, not editor.pageId')
+}
+
 console.log('\nall clipboard-intents assertions passed')
