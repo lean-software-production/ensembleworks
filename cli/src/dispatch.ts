@@ -18,14 +18,15 @@ import { logout } from './auth/logout.ts'
 import { status } from './auth/status.ts'
 import { codespaceGroup } from './codespace/index.ts'
 import { CliError } from './errors.ts'
-import { hostsPath, loadHosts } from './hosts.ts'
+import { hostsPath } from './hosts.ts'
 import { connectSlot } from './native/connect.ts'
 import { fileOpen, fileRefresh } from './native/file.ts'
 import { pullImages } from './native/pull-images.ts'
 import { tools } from './native/tools.ts'
 import { version } from './native/version.ts'
 import { emitLine, narrate } from './output.ts'
-import { type Conn, readEnv, resolveConn } from './resolve.ts'
+import type { Conn } from './resolve.ts'
+import { resolveConnFresh } from './auth/fresh.ts'
 import { embeddedManifest, loadManifest } from './render/manifest.ts'
 import { renderVerbHelp, runVerb } from './render/run.ts'
 
@@ -97,7 +98,9 @@ export async function dispatch(rest: string[], globals: Globals, env: NodeJS.Pro
 	}
 
 	// 3. Manifest-rendered — needs a resolved connection (url/room/auth).
-	const conn = resolveConn({ url: globals.url, room: globals.room }, readEnv(env), loadHosts(hostsPath(env)))
+	// SP5: async resolution — an access-browser instance silently mints a fresh
+	// app token here (cache-first); everything else is byte-identical.
+	const conn = await resolveConnFresh({ url: globals.url, room: globals.room }, env)
 	const { envelope, cacheFile } = await loadManifest(conn, { refresh: globals.refresh, env })
 	const entry = envelope.tools.find((t) => t.plugin === group && t.id === verb)
 	if (entry) return runVerb(entry, rest.slice(2), conn, cacheFile)
@@ -174,6 +177,9 @@ function tryExtension(group: string, args: string[], conn: Conn, env: NodeJS.Pro
 	if (conn.auth.method === 'service-token') {
 		childEnv.ENSEMBLEWORKS_TOKEN_ID = conn.auth.tokenId
 		childEnv.ENSEMBLEWORKS_TOKEN_SECRET = conn.auth.tokenSecret
+	}
+	if (conn.auth.method === 'access') {
+		childEnv.ENSEMBLEWORKS_ACCESS_TOKEN = conn.auth.appToken
 	}
 	const res = spawnSync(bin, args, { stdio: 'inherit', env: childEnv })
 	return res.status ?? 1

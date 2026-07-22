@@ -13,9 +13,10 @@ import { hostname } from 'node:os'
 import path from 'node:path'
 import type { Globals } from '../dispatch.ts'
 import { CliError } from '../errors.ts'
-import { hostsPath, loadHosts } from '../hosts.ts'
+import { hostsPath } from '../hosts.ts'
 import { emitJson } from '../output.ts'
-import { authHeaders, type Conn, readEnv, resolveConn } from '../resolve.ts'
+import { authHeaders, type Conn } from '../resolve.ts'
+import { resolveConnFresh } from '../auth/fresh.ts'
 import { runConnector } from '../connector/index.ts'
 
 export interface ConnectConfig {
@@ -61,7 +62,7 @@ export function resolveConnectConfig(
 
 export async function connectSlot(args: string[], globals: Globals, env: NodeJS.ProcessEnv): Promise<number> {
 	const flags = parseConnectFlags(args)
-	const conn = resolveConn({ url: globals.url, room: globals.room }, readEnv(env), loadHosts(hostsPath(env)))
+	const conn = await resolveConnFresh({ url: globals.url, room: globals.room }, env)
 	const cfg = resolveConnectConfig(conn, flags, env)
 	if (globals.dryRun) {
 		emitJson(cfg)
