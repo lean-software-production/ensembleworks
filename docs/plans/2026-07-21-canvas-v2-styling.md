@@ -363,7 +363,7 @@ original table (added mid-execution and recorded here for honesty):
 | AS3 | `c90d181` |
 | AS4 | `5b5f39d` |
 | AS2 | `09cc352` |
-| **armed-style whitelist** (unplanned) — `makeShape` filters `nextShapeStyle` to known style axes so junk keys can't reach `props` | (landing) |
+| **armed-style whitelist** (unplanned) — `makeShape` filters `nextShapeStyle` to the model's 11 known style axes so junk keys can't reach `props` | `3aa7dde` |
 
 The plan's Decisions §`### Parity value-sets` dash/align lists were corrected
 (`11141a2`) after M2 proved the plan's prose omitted `dash:'none'` and the
