@@ -96,22 +96,38 @@ function humanize(value: string): string {
 		.join(' ')
 }
 
-// Bounded so `computePosition`'s EDGE_CLAMP math (below) stays valid: that
-// clamp keeps the panel's ANCHOR point at least EDGE_CLAMP px from either
-// viewport edge, which only keeps the whole panel on-screen if its width is
-// itself bounded — a selection whose relevant axes span most of the groups
-// (e.g. two geo shapes: color/fill/dash/size/font/align/verticalAlign/geo)
-// has enough buttons to lay out past 1000px wide with NO cap, pushing the
-// anchored-and-centered panel (`transform: translateX(-50%)`) well past the
-// LEFT edge into negative screen space — not just a cosmetic clip: Task P3's
-// browser contract clicks a specific swatch by DOM selector via a raw
-// mouse-move-to-coordinate (no Playwright visibility check), so a
-// bounding-box that lands off-screen makes the click miss the button
-// entirely and silently land on nothing (empirically reproduced: an
-// unbounded panel for this exact two-geo-shape selection measured 1030px
-// wide, left edge at x:-265). `flexWrap` on ROW_GROUP_STYLE below is what
-// lets a group's columns actually wrap once this cap makes them not fit.
+// Bounded so `clampPanelPosition`'s edge-clamp math (below) has a GUARANTEED
+// upper bound to clamp against — the real DOM node's rendered width can never
+// exceed this CSS `maxWidth`, regardless of content, so clamping the panel's
+// CENTER to keep a PANEL_MAX_WIDTH-wide box on-screen is always sufficient
+// for the (possibly narrower) real box too. A selection whose relevant axes
+// span most of the groups (e.g. two geo shapes: color/fill/dash/size/font/
+// align/verticalAlign/geo) has enough buttons to lay out past 1000px wide
+// with NO cap at all — not just a cosmetic clip: Task P3's browser contract
+// clicks a specific swatch by DOM selector via a raw mouse-move-to-
+// coordinate (no Playwright visibility check), so a bounding-box that lands
+// off-screen makes the click miss the button entirely and silently land on
+// nothing (empirically reproduced: an unbounded panel for this exact
+// two-geo-shape selection measured 1030px wide, left edge at x:-265).
+// `flexWrap` on ROW_GROUP_STYLE below is what lets a group's columns
+// actually wrap once this cap makes them not fit.
+//
+// REVIEW FIX: capping the WIDTH alone is not sufficient on its own — see
+// `clampPanelPosition`'s doc comment (and the comment just above its
+// definition, near PANEL_FLIP_HEADROOM) for the anchor-vs-edge clamp bug
+// this cap used to be paired with (a P4 first pass clamped only the anchor
+// point, which still let a wide-but-bounded panel spill off-screen).
 const PANEL_MAX_WIDTH = 320
+// Bounds panel HEIGHT the same way PANEL_MAX_WIDTH bounds width — see that
+// constant's doc comment. `overflowY: 'auto'` on PANEL_STYLE below is the
+// safety net for a selection with an unusually large union of relevant axis
+// groups (e.g. a MIXED geo+arrow+text selection could show nearly every
+// group at once) that would otherwise need more room than this cap allows —
+// it scrolls internally rather than silently exceeding the bound
+// `clampPanelPosition` relies on. 480 comfortably covers the tallest
+// observed case today (a 2-geo-shape selection — 8 relevant groups —
+// measured 434px after the width fix above).
+const PANEL_MAX_HEIGHT = 480
 
 const PANEL_STYLE: CSSProperties = {
 	position: 'absolute',
@@ -130,6 +146,8 @@ const PANEL_STYLE: CSSProperties = {
 	zIndex: 500,
 	minWidth: 160,
 	maxWidth: PANEL_MAX_WIDTH,
+	maxHeight: PANEL_MAX_HEIGHT,
+	overflowY: 'auto',
 }
 
 // `flexWrap: 'wrap'` (not the previous no-wrap default) — see PANEL_MAX_WIDTH's
@@ -252,7 +270,78 @@ function AxisRow({ axis, shapes, onStyleChange }: AxisRowProps) {
 // instead of clipping off the top of the viewport.
 const PANEL_FLIP_HEADROOM = 220
 const MARGIN = 8
-const EDGE_CLAMP = 90
+// REVIEW FIX (post-P4): P4's first pass clamped only the panel's ANCHOR
+// point to a fixed [90, W-90] range before centering it with
+// `translateX(-50%)`. That's insufficient once the panel's own half-width
+// exceeds that 90px margin — PANEL_MAX_WIDTH/2 is 160 > 90, so an anchor
+// 90px from the edge still centered a panel whose real edge landed up to
+// 70px past the viewport boundary (empirically reproduced: left=90 ->
+// rendered edges [-70, 250] for a 320px panel in a 1280px viewport — pinned
+// by StylePanel.position.test.ts). `clampPanelPosition` below replaces that
+// fixed-margin anchor clamp with a proper EDGE clamp (bounds the panel's
+// actual left/right/top/bottom against `panelSize`, not just its center
+// point) — see that function's own doc comment for the corrected,
+// actually-true on-screen guarantee.
+
+export interface PanelPosition {
+	readonly left: number
+	readonly top: number
+	readonly transform: string
+}
+
+function clampRange(value: number, min: number, max: number): number {
+	// Degenerate case: the available span (max - min) is narrower than the
+	// panel itself — e.g. a viewport thinner than PANEL_MAX_WIDTH. There is no
+	// on-screen placement that satisfies both bounds; centering in the
+	// available range is the least-bad fallback (matches this file's other
+	// "defensive, not the expected path" fallbacks).
+	if (min > max) return (min + max) / 2
+	return Math.min(Math.max(value, min), max)
+}
+
+/**
+ * Pure positioning math (no DOM/model access — `computePosition` below
+ * resolves the selection's SCREEN-space corners and delegates here). Given
+ * those corners, the viewport size, and the panel's MAXIMUM rendered size
+ * (`panelSize` — PANEL_MAX_WIDTH/PANEL_MAX_HEIGHT below, the actual CSS caps
+ * on `PANEL_STYLE`, so the real DOM node is GUARANTEED never to exceed this,
+ * regardless of content), returns a `{left, top, transform}` CSS position
+ * whose real on-screen box — after the `transform` is applied — stays within
+ * `[margin, viewportSize.{width,height} - margin]` on BOTH axes.
+ *
+ * This clamps the panel's ACTUAL EDGES, not just its anchor point (the bug
+ * this replaces — see the comment just above this function's definition): a
+ * `translateX(-50%)`-centered panel's real left/right edges are
+ * `center ∓ panelSize.width/2`, so keeping the CENTER within
+ * `[panelSize.width/2 + margin, viewportWidth - panelSize.width/2 - margin]`
+ * is what actually keeps those edges on-screen — a plain anchor clamp with a
+ * fixed margin smaller than half the panel's width cannot, no matter what
+ * that margin is set to. Same reasoning vertically: the "below" placement's
+ * `top` is a literal top edge (clamped against `[margin, viewportHeight -
+ * panelSize.height - margin]`); the "above" placement's `top` is the panel's
+ * BOTTOM edge under `translate(-50%, -100%)` (clamped against
+ * `[panelSize.height + margin, viewportHeight - margin]` so the resulting
+ * TOP edge, `bottom - panelSize.height`, stays >= margin).
+ */
+export function clampPanelPosition(
+	c1: { readonly x: number; readonly y: number },
+	c2: { readonly x: number; readonly y: number },
+	viewportSize: { readonly width: number; readonly height: number },
+	panelSize: { readonly width: number; readonly height: number },
+	margin: number,
+	flipHeadroom: number,
+): PanelPosition {
+	const halfW = panelSize.width / 2
+	const midX = clampRange((c1.x + c2.x) / 2, halfW + margin, viewportSize.width - halfW - margin)
+	const minY = Math.min(c1.y, c2.y)
+	const maxY = Math.max(c1.y, c2.y)
+	if (minY < flipHeadroom) {
+		const top = clampRange(maxY + margin, margin, viewportSize.height - panelSize.height - margin)
+		return { left: midX, top, transform: 'translateX(-50%)' }
+	}
+	const bottom = clampRange(minY - margin, panelSize.height + margin, viewportSize.height - margin)
+	return { left: midX, top: bottom, transform: 'translate(-50%, -100%)' }
+}
 
 function computePosition(
 	snapshot: CanvasDocument,
@@ -269,13 +358,7 @@ function computePosition(
 	}
 	const c1 = worldToScreen(camera, { x: bounds.minX, y: bounds.minY })
 	const c2 = worldToScreen(camera, { x: bounds.maxX, y: bounds.maxY })
-	const midX = Math.min(Math.max((c1.x + c2.x) / 2, EDGE_CLAMP), viewportSize.width - EDGE_CLAMP)
-	const minY = Math.min(c1.y, c2.y)
-	const maxY = Math.max(c1.y, c2.y)
-	if (minY < PANEL_FLIP_HEADROOM) {
-		return { left: midX, top: maxY + MARGIN, transform: 'translateX(-50%)' }
-	}
-	return { left: midX, top: minY - MARGIN, transform: 'translate(-50%, -100%)' }
+	return clampPanelPosition(c1, c2, viewportSize, { width: PANEL_MAX_WIDTH, height: PANEL_MAX_HEIGHT }, MARGIN, PANEL_FLIP_HEADROOM)
 }
 
 function stopPropagation(e: { stopPropagation(): void }): void {
