@@ -6,7 +6,7 @@
 // how each becomes doc ops. This indirection is what makes a tool testable
 // as pure (state, InputEvent) -> (state', Intent[]) with no doc at all — see
 // script.ts's `run()`.
-import type { Binding, Shape } from '@ensembleworks/canvas-model'
+import type { Asset, Binding, Shape } from '@ensembleworks/canvas-model'
 
 export interface Point { readonly x: number; readonly y: number }
 
@@ -53,6 +53,26 @@ export interface CreateShape { readonly type: 'CreateShape'; readonly shape: Sha
  * intent — PutBinding's job is schema validation, not referential
  * integrity. */
 export interface PutBinding { readonly type: 'PutBinding'; readonly binding: Binding }
+
+/** Upsert `asset` verbatim, IF it passes `assetSchema` — the same
+ * validated-write shape as PutBinding above (`applyOne`, editor.ts, runs
+ * `assetSchema.safeParse(intent.asset)` before ever calling `doc.putAsset`;
+ * a failing asset is a TOTAL no-op: no doc write, no undo entry, no throw).
+ * `doc.putAsset` itself is a plain `.set()` with no validation (mirrors
+ * `putBinding`/`putPage`) — this intent's `safeParse` IS the write-boundary
+ * gate for the untrusted client drop/paste entry point (D-4 in
+ * docs/plans/2026-07-22-canvas-v2-assets-image.md).
+ *
+ * DELIBERATELY CARRIES NO UNDO/REDO INVERSE (unlike PutBinding's
+ * deleteBinding/putBinding pair) — there is no `deleteAsset` to invert with
+ * (YAGNI'd this cycle), and an undone image is meant to leave its asset
+ * behind as harmless orphan garbage, exactly tldraw's own behavior (tldraw
+ * never GCs assets on undo). The create flow (client, Task C1) batches
+ * PutAsset with a CreateShape in ONE applyAll so the batch still gets a
+ * real undo entry — CreateShape's own deleteShape/putShape inverses remove
+ * and restore the image shape; the asset just rides along, untouched by
+ * either direction. */
+export interface PutAsset { readonly type: 'PutAsset'; readonly asset: Asset }
 
 /** Move every shape in `ids` by (dx, dy) in its own parent's local frame.
  * `ids` is DEDUPED against ancestor/descendant overlap before mutation — see
@@ -242,6 +262,7 @@ export interface SetIndex { readonly type: 'SetIndex'; readonly id: string; read
 export type Intent =
   | CreateShape
   | PutBinding
+  | PutAsset
   | TranslateShapes
   | ResizeShapes
   | RotateShapes

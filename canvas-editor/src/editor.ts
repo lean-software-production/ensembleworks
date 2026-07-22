@@ -4,7 +4,7 @@
 // mutators; everything upstream (tools, scripts, the renderer) only ever
 // produces or reads Intents/EditorState.
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'
-import { bindingSchema, toLocalPoint, type Binding, type CanvasDocument, type Point, type Shape } from '@ensembleworks/canvas-model'
+import { assetSchema, bindingSchema, toLocalPoint, type Binding, type CanvasDocument, type Point, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from './intents.js'
 
 // ============================================================================
@@ -400,6 +400,25 @@ export class Editor {
           undo: [{ op: 'deleteBinding', id: binding.id }],
           redo: [{ op: 'putBinding', binding }],
         }
+      }
+
+      // Validated asset write (Task E1, D-4): same reject-invalid shape as
+      // PutBinding above — assetSchema.safeParse gates entry; a failing
+      // asset is a TOTAL no-op (no doc.putAsset call, no undo entry, no
+      // throw). UNLIKE PutBinding, a successful write carries NO undo/redo
+      // InverseOps: there is no `deleteAsset` to invert with (YAGNI'd this
+      // cycle — see canvas-doc's CanvasDoc.putAsset doc comment), and an
+      // undone image is meant to leave its asset behind as harmless orphan
+      // garbage, exactly tldraw's own behavior. The create flow (client)
+      // batches this with a CreateShape in the SAME applyAll so the batch
+      // still gets a real undo entry, contributed entirely by CreateShape's
+      // own deleteShape/putShape inverses — see intents.ts's PutAsset doc
+      // comment.
+      case 'PutAsset': {
+        const parsed = assetSchema.safeParse(intent.asset)
+        if (!parsed.success) return { state, docMutated: false, stateChanged: false }
+        this.doc.putAsset(parsed.data)
+        return { state, docMutated: true, stateChanged: false }
       }
 
       case 'TranslateShapes': {

@@ -1,7 +1,7 @@
 // Run: bun src/editor.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc, dumpModel, type CanvasDoc } from '@ensembleworks/canvas-doc'
-import { worldTransform, type Binding, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
+import { worldTransform, type Asset, type Binding, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import { Editor } from './editor.js'
 
 // Injected clock/PRNG — fixed, non-advancing: proves the editor never
@@ -923,6 +923,93 @@ const normalize = (m: CanvasDocument) => ({
   assert.equal(doc.getShape('shape:b')!.index, 'a4')
 
   console.log('ok: SetIndex batches across multiple intents in one applyAll -- one commit, one undo step')
+}
+
+// ============================================================================
+// 27. PutAsset (Task E1): a validated asset-write intent, modeled on
+//     PutBinding — assetSchema.safeParse gates entry (a failing asset is a
+//     TOTAL no-op: no doc.putAsset call, no undo entry, no throw) — but,
+//     UNLIKE PutBinding, a successful write carries NO undo/redo InverseOps
+//     (D-4: no deleteAsset exists to invert with; an undone image leaves its
+//     asset behind as harmless orphan garbage, tldraw parity). The image
+//     create flow (client, out of scope here) batches PutAsset with a
+//     CreateShape in ONE applyAll so the BATCH still gets a real undo entry
+//     — contributed entirely by CreateShape's own inverses.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  const asset: Asset = {
+    id: 'asset:img1' as any,
+    type: 'image',
+    props: { src: '/uploads/img1.png', w: 100, h: 80 },
+    meta: {},
+  }
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.apply({ type: 'PutAsset', asset })
+  assert.deepEqual(doc.listAssets(), [asset], 'PutAsset with a valid asset lands in the doc')
+  // A valid PutAsset still sets docMutated:true (it wrote to the doc), so
+  // applyAll still commits and still pushes a batch-level UndoEntry — but
+  // that entry's own undo/redo arrays are EMPTY (PutAsset contributes no
+  // InverseOp, per D-4), so undo() on it is a real no-op (replay([]) does
+  // nothing): canUndo() reports true, but nothing is actually restorable
+  // from this batch alone.
+  assert.equal(commits, 1, 'a valid PutAsset still commits (docMutated:true)')
+  assert.equal(editor.canUndo(), true, 'applyAll still pushes a batch entry (docMutated:true) even though PutAsset contributed no InverseOp')
+  editor.undo()
+  assert.deepEqual(doc.listAssets(), [asset], 'undoing a solo PutAsset batch is a no-op — the asset was never covered by an InverseOp, so it survives')
+
+  console.log('ok: PutAsset with a valid asset lands in the doc, commits, but contributes no InverseOp of its own')
+}
+
+{
+  const { doc, editor } = makeEditor(1n)
+  const junk = { id: 'asset:bad', type: 'image', props: { src: 123 }, meta: {} }
+
+  assert.doesNotThrow(() => editor.apply({ type: 'PutAsset', asset: junk as any }), 'a junk asset is refused, never thrown')
+  assert.deepEqual(doc.listAssets(), [], 'a junk asset (props.src: 123, fails assetSchema) never reaches doc.putAsset')
+  assert.equal(editor.canUndo(), false, 'a refused PutAsset pushes no undo entry')
+
+  console.log('ok: PutAsset refuses an asset that fails assetSchema, no-op, no throw')
+}
+
+// ---- atomic batch: PutAsset + CreateShape + SetSelection in ONE applyAll ----
+{
+  const { doc, editor } = makeEditor(1n)
+  const asset: Asset = {
+    id: 'asset:img2' as any,
+    type: 'image',
+    props: { src: '/uploads/img2.png', w: 50, h: 40 },
+    meta: {},
+  }
+  const imageShape = shape('shape:img', { kind: 'image', props: { w: 50, h: 40, assetId: asset.id } })
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.applyAll([
+    { type: 'PutAsset', asset },
+    { type: 'CreateShape', shape: imageShape },
+    { type: 'SetSelection', ids: ['shape:img'] },
+  ])
+
+  assert.equal(commits, 1, 'PutAsset + CreateShape + SetSelection in one applyAll is ONE doc.commit(), not per-intent')
+  assert.deepEqual(doc.listAssets(), [asset], 'the asset landed')
+  assert.ok(doc.getShape('shape:img'), 'the image shape landed')
+  assert.deepEqual([...editor.get().selection], ['shape:img'], 'the image shape is selected')
+
+  // ---- undo the batch: the shape goes, the asset is orphaned (stays) ----
+  editor.undo()
+  assert.equal(doc.getShape('shape:img'), undefined, 'undo of the batch removes the image shape')
+  assert.deepEqual(doc.listAssets(), [asset], 'undo does NOT remove the asset — it is left as an orphan (D-4, no deleteAsset inverse)')
+
+  editor.redo()
+  assert.ok(doc.getShape('shape:img'), 'redo re-creates the image shape')
+  assert.deepEqual(doc.listAssets(), [asset], 'the asset is still present after redo (it was never touched by either direction)')
+
+  console.log('ok: PutAsset batches atomically with CreateShape — one commit, undo removes only the shape, asset orphaned')
 }
 
 console.log('ok: canvas-editor editor + intents')
