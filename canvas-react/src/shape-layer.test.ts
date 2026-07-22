@@ -331,4 +331,71 @@ function fakeToolContext(snapshot: CanvasDocument, texts: ReadonlyMap<string, st
   console.log('ok: ShapeBody wrapper carries opacity:0 — NOT collapsed to 1 by a truthiness bug')
 }
 
+// ============================================================================
+// 9. Task R1 — ShapeLayer paints siblings via orderForPaint's (index, id)
+//    order, NOT cull/insertion order. Two overlapping ROOT shapes: shape:top
+//    carries the HIGHER index ('a2') but is listed FIRST in the shapes
+//    array (so both insertion order and queryViewport's Map-iteration cull
+//    order — see spatial-index.ts's buildSpatialIndex, which inserts cells
+//    by iterating doc.shapes in array order — would put it first); shape:bot
+//    carries the LOWER index ('a1') and is listed SECOND. Ascending index
+//    paints LATER (on top — paint-order.ts's module header), so the correct
+//    DOM order is [shape:bot, shape:top]: the OPPOSITE of both insertion and
+//    (pre-fix) cull order.
+// ============================================================================
+{
+  function indexedShape(id: string, index: string): Shape {
+    return {
+      id, kind: 'geo', parentId: 'page:p', index, x: 0, y: 0, rotation: 0,
+      isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+    } as Shape
+  }
+  const shapeTop = indexedShape('shape:top', 'a2')
+  const shapeBot = indexedShape('shape:bot', 'a1')
+  const orderDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }],
+    shapes: [shapeTop, shapeBot], // higher-index shape listed FIRST
+    bindings: [],
+  })
+  const toolContext = fakeToolContext(orderDoc)
+  const camera = { x: 0, y: 0, z: 1 }
+  const html = renderToStaticMarkup(createElement(ShapeLayer, { toolContext, camera, viewportSize: { width: 800, height: 600 } }))
+  const topAt = html.indexOf(`data-shape-id="${shapeTop.id}"`)
+  const botAt = html.indexOf(`data-shape-id="${shapeBot.id}"`)
+  assert.ok(topAt >= 0 && botAt >= 0, 'both shapes should render (both visible)')
+  assert.ok(botAt < topAt, `shape:bot (index 'a1') must render BEFORE shape:top (index 'a2') in DOM order — lower index paints first/underneath, higher index paints last/on top: botAt=${botAt} topAt=${topAt}, html=${html}`)
+  console.log("ok: ShapeLayer paints siblings in (index, id) order — higher index paints on top, opposite of insertion/cull order")
+}
+
+// ============================================================================
+// 10. Task R1 — equal-index tie-break on id: two root shapes sharing the
+//    SAME index (the all-'a1' legacy corpus — plan Decision D-2) render in
+//    id-ASCENDING order regardless of array/insertion order, so paint order
+//    is deterministic across peers rather than an accident of iteration
+//    order.
+// ============================================================================
+{
+  function tiedShape(id: string): Shape {
+    return {
+      id, kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+      isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+    } as Shape
+  }
+  const shapeB = tiedShape('shape:tie-b')
+  const shapeA = tiedShape('shape:tie-a')
+  const tieDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }],
+    shapes: [shapeB, shapeA], // 'shape:tie-b' listed FIRST — id tie-break must still order 'shape:tie-a' first
+    bindings: [],
+  })
+  const toolContext = fakeToolContext(tieDoc)
+  const camera = { x: 0, y: 0, z: 1 }
+  const html = renderToStaticMarkup(createElement(ShapeLayer, { toolContext, camera, viewportSize: { width: 800, height: 600 } }))
+  const aAt = html.indexOf(`data-shape-id="${shapeA.id}"`)
+  const bAt = html.indexOf(`data-shape-id="${shapeB.id}"`)
+  assert.ok(aAt >= 0 && bAt >= 0, 'both tied-index shapes should render')
+  assert.ok(aAt < bAt, `equal-index siblings must tie-break on id ASC (shape:tie-a before shape:tie-b) regardless of array order: aAt=${aAt} bAt=${bAt}, html=${html}`)
+  console.log('ok: ShapeLayer tie-breaks equal-index siblings on id ASC')
+}
+
 console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text, dispatch threading, paint order, opacity)')
