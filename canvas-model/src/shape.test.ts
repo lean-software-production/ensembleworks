@@ -288,3 +288,89 @@ assert.ok(validateShape(v1PathEncodedDraw).ok, 'the current path-encoded v1 draw
 assert.equal(isTextCapableKind('draw' as any), false, 'draw remains non-text-capable')
 
 console.log('ok: draw props schema (M1, draw sub-cycle)')
+
+// Task M1 (2026-07-22 line sub-cycle) -- `line`'s props schema: a KEYED-MAP
+// `points` ({[id]: {id, index, x, y}}, matching the installed tldraw
+// dependency's line shape exactly -- verified against the installed schema
+// package's line-shape module (its `points` field is a keyed dict, NOT an
+// array) + `spline` ('line'|'cubic', a line-local closed enum, not a
+// STYLE_ENUMS axis) + the three style axes tldraw line carries
+// (color/dash/size) + w/h, typed PERMISSIVELY so both our own lines and
+// synced v1 line shapes validate. Was `z.looseObject({})` (accepts
+// everything); M1 adds real validation on the typed fields while keeping
+// everything else optional/loose.
+function lineWith(props: Record<string, unknown>) {
+  return { ...note, kind: 'line', props: { ...props } }
+}
+
+// GUARD -- a full v1-shaped line (real KEYED-MAP points + valid style values)
+// validates. This is the permissiveness guard AND the data-loss guard: it is
+// what the "type points as array" mutant breaks (a keyed map fails
+// z.array(linePoint)'s type check), which is the exact failure mode this task
+// exists to avoid -- an over-typed `points` would silently drop every real
+// synced v1 line at the write boundary.
+const v1LineProps = {
+  points: {
+    a1: { id: 'a1', index: 'a1', x: 0, y: 0 },
+    a2: { id: 'a2', index: 'a2', x: 100, y: 50 },
+  },
+  color: 'blue', dash: 'solid', size: 'm', spline: 'line', scale: 1,
+}
+assert.ok(validateShape(lineWith(v1LineProps)).ok, 'a v1-shaped line (real keyed-map points) validates')
+
+// RED 1 -- a bad color enum value on a line is now rejected (the color axis
+// is typed). Before M1 (empty looseObject) this wrongly validated.
+assert.ok(
+  !validateShape(lineWith({ ...v1LineProps, color: 'chartreuse' })).ok,
+  'a line shape with a bad color enum value is rejected',
+)
+
+// RED 2 -- a bad spline enum value is rejected (spline is a closed line-local
+// enum). Before M1 this wrongly validated.
+assert.ok(
+  !validateShape(lineWith({ ...v1LineProps, spline: 'wiggly' })).ok,
+  'a line shape with a bad spline value is rejected',
+)
+
+// RED 3 -- a malformed point (missing y / non-number coord) is rejected
+// (linePoint's x/y are required numbers). Before M1 this wrongly validated.
+assert.ok(
+  !validateShape(lineWith({ points: { a1: { id: 'a1', index: 'a1', x: 0 } } })).ok,
+  'a line shape with a malformed point (missing y) is rejected',
+)
+assert.ok(
+  !validateShape(lineWith({ points: { a1: { id: 'a1', index: 'a1', x: 0, y: 'nope' } } })).ok,
+  'a line shape with a malformed point (non-number y) is rejected',
+)
+
+// RED 4 -- points as an ARRAY (the wrong shape -- v1 is always a keyed map,
+// so this is never a real v1 case) is rejected: z.record's own type check
+// refuses a non-record (array) value. This is the flip side of the data-loss
+// guard above: the schema must accept the keyed map AND refuse the array,
+// not silently coerce one into the other.
+assert.ok(
+  !validateShape(lineWith({
+    points: [
+      { id: 'a1', index: 'a1', x: 0, y: 0 },
+      { id: 'a2', index: 'a2', x: 100, y: 50 },
+    ],
+  })).ok,
+  'a line shape with array-shaped points (not the real v1 keyed-map shape) is rejected',
+)
+
+// Mutant guard -- making `points` or `spline` REQUIRED would wrongly drop a
+// v1 line lacking one key at all (a degenerate/legacy record). Both stay
+// optional.
+assert.ok(validateShape(lineWith({ color: 'red' })).ok, 'a line shape with no points/spline key at all still validates')
+
+// Unknown extra props still ride through (looseObject forward-compat) -- an
+// unknown key on a line survives even alongside a valid typed field.
+const lineMixed = lineWith({ color: 'blue', totallyUnknownLineProp: 42 })
+assert.ok(validateShape(lineMixed).ok, 'unknown line prop key survives alongside a valid typed field')
+const parsedLine = shapeSchema.parse(lineMixed)
+assert.equal((parsedLine.props as any).totallyUnknownLineProp, 42, 'unknown line key value preserved verbatim')
+
+// line is NOT text-capable (unchanged by M1 -- structural kind, no text body).
+assert.equal(isTextCapableKind('line' as any), false, 'line remains non-text-capable')
+
+console.log('ok: line props schema (M1, line sub-cycle)')

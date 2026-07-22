@@ -200,6 +200,23 @@ const drawPoint = z.looseObject({ x: z.number(), y: z.number(), z: z.number().op
 // types explicitly.
 const drawSegment = z.looseObject({ type: z.string().optional(), points: z.array(drawPoint).optional() })
 
+// Task M1 (2026-07-22 line sub-cycle) -- a line handle/point: v1 stores
+// `props.points` as a KEYED MAP { [id]: { id, index, x, y } } (verified
+// against the installed dependency's line-shape module, `points: T.dict(...)`
+// -- read only, never imported; this package stays clean-room). LOOSE so
+// extra keys ride through; x/y REQUIRED numbers so a malformed point
+// (missing/non-number coord) is caught; id/index OPTIONAL strings (present on
+// real v1, our own tool writes them, the renderer tolerates their absence).
+const linePoint = z.looseObject({
+  x: z.number(), y: z.number(),
+  id: z.string().optional(), index: z.string().optional(),
+})
+// line's `spline` axis: closed enum, kept LOCAL to the line kind rather than
+// added to STYLE_ENUMS (that would ripple a new key into STYLE_VALUE_SETS,
+// which the client style panel consumes -- an unplanned panel change; see the
+// plan's judgment call). Still a closed set, so a bad value is rejected.
+const LINE_SPLINE = z.enum(['line', 'cubic'])
+
 const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   note: withText.extend(styleProps('color', 'size', 'font', 'align', 'verticalAlign').shape),
   text: withText.extend(styleProps('color', 'size', 'font', 'textAlign').shape),
@@ -209,7 +226,18 @@ const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   arrow: withText.extend(styleProps('color', 'fill', 'dash', 'size', 'font', 'arrowheadStart', 'arrowheadEnd').shape),
   frame: box.extend({ name: z.string().optional() }),
   group: z.looseObject({}), // tldraw groups carry no props; container only
-  line: z.looseObject({}),
+  // `points` a KEYED MAP (z.record), NOT z.array -- v1's line shape always
+  // carries the dict form (points: T.dict(...)); typing it as an array would
+  // silently DROP every real synced v1 line at the write boundary. `spline`
+  // is the line-local closed enum above. `w/h` (box.shape) are OUR OWN
+  // passthrough (v1 line carries none) for tight localBounds on our own
+  // normalized lines.
+  line: z.looseObject({
+    points: z.record(z.string(), linePoint).optional(),
+    spline: LINE_SPLINE.optional(),
+  })
+    .extend(box.shape)
+    .extend(styleProps('color', 'dash', 'size').shape),
   draw: z.looseObject({ segments: z.array(drawSegment).optional(), isPen: z.boolean().optional(), isClosed: z.boolean().optional() })
     .extend(box.shape)
     .extend(styleProps('color', 'fill', 'dash', 'size').shape),
