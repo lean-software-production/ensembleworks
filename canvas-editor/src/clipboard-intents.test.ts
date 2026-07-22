@@ -1,7 +1,7 @@
 // Run: bun src/clipboard-intents.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
-import { encodeClipboard, serializeSelection, type Binding, type Shape } from '@ensembleworks/canvas-model'
+import { encodeClipboard, generateKeyBetween, serializeSelection, type Binding, type Shape } from '@ensembleworks/canvas-model'
 import { Editor } from './editor.js'
 import { DUP_OFFSET, duplicateSelectionIntents, pasteIntents } from './clipboard-intents.js'
 
@@ -148,6 +148,120 @@ const binding = (id: string, fromId: string, toId: string): Binding =>
   }
   assert.deepEqual(run(), run(), 'identical seeded random -> identical minted ids across independent runs')
   console.log('ok: duplicateSelectionIntents — deterministic under a fixed random')
+}
+
+// ============================================================================
+// 6. E3 — duplicate: a duplicated ROOT's index lands STRICTLY ABOVE an
+//    existing higher-indexed sibling, not merely tied with the source.
+//    `cloneWithNewIds` PRESERVES the source index verbatim (Correction 1 in
+//    the plan) — left alone, the duplicate would tie with its source ('a1')
+//    and sort BELOW 'shape:existing' entirely, only ever winning a tie via
+//    the (index,id) id tie-break, never reliably on top.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor()
+  doc.putShape(shape('shape:existing', { index: generateKeyBetween('a1', null) }))
+  doc.putShape(shape('shape:source', { index: 'a1' }))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:source'] })
+
+  const intents = duplicateSelectionIntents(editor)
+  const created = (intents.find((i) => i.type === 'CreateShape') as { shape: Shape }).shape
+
+  const existingIndex = doc.getShape('shape:existing')!.index
+  assert.ok(created.index > existingIndex, `duplicated root (${created.index}) lands strictly above the existing higher sibling (${existingIndex}), not tied with the source`)
+  console.log('ok: duplicateSelectionIntents — E3: duplicated root lands on top of existing content')
+}
+
+// ============================================================================
+// 7. E3 — multi-root duplicate preserves relative order: the topmost
+//    original stays topmost among the copies, regardless of the order the
+//    shapes were SELECTED in (mirrors E2's scrambled-selection precedent —
+//    D-4: movers are ordered by sorted doc order, never selection order).
+// ============================================================================
+{
+  const { doc, editor } = makeEditor()
+  doc.putShape(shape('shape:low', { index: 'a1', x: 0, y: 0 }))
+  doc.putShape(shape('shape:high', { index: 'a2', x: 100, y: 100 }))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:high', 'shape:low'] }) // reversed order on purpose
+
+  const intents = duplicateSelectionIntents(editor)
+  const creates = intents.filter((i) => i.type === 'CreateShape').map((i) => (i as { shape: Shape }).shape)
+  const dupLow = creates.find((s) => s.x === 0 + DUP_OFFSET)!
+  const dupHigh = creates.find((s) => s.x === 100 + DUP_OFFSET)!
+  assert.ok(dupLow, 'the low original was duplicated')
+  assert.ok(dupHigh, 'the high original was duplicated')
+  assert.ok(dupLow.index < dupHigh.index, `the topmost original (shape:high, dup index ${dupHigh.index}) stays topmost among the duplicates over the bottom one (shape:low, dup index ${dupLow.index}), regardless of selection-array order`)
+  console.log('ok: duplicateSelectionIntents — E3: multi-root relative order preserved (selection-order-independent)')
+}
+
+// ============================================================================
+// 8. E3 — children keep their cloned (unchanged) relative indices; only the
+//    ROOT (the frame) is reindexed to top-of-stack. A duplicated frame's
+//    internal child z-order must not be scrambled by the root reindex.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor()
+  doc.putShape(shape('shape:frame', { kind: 'frame', index: 'a1' }))
+  doc.putShape(shape('shape:child1', { parentId: 'shape:frame', index: 'a1' }))
+  doc.putShape(shape('shape:child2', { parentId: 'shape:frame', index: 'a2' }))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:frame'] })
+
+  const intents = duplicateSelectionIntents(editor)
+  const creates = intents.filter((i) => i.type === 'CreateShape').map((i) => (i as { shape: Shape }).shape)
+  const newFrame = creates.find((s) => s.parentId === 'page:p')!
+  assert.ok(newFrame, 'the cloned frame is re-rooted to the page')
+  assert.notEqual(newFrame.index, 'a1', 'the frame (root) got a NEW top-of-stack index, not its cloned-verbatim source index')
+
+  const kids = creates.filter((s) => s.parentId === newFrame.id)
+  assert.equal(kids.length, 2, 'both children were cloned')
+  const kid1 = kids.find((s) => s.index === 'a1')
+  const kid2 = kids.find((s) => s.index === 'a2')
+  assert.ok(kid1, 'child1 keeps its cloned index a1 unchanged — only roots are reindexed')
+  assert.ok(kid2, 'child2 keeps its cloned index a2 unchanged — only roots are reindexed')
+  console.log('ok: duplicateSelectionIntents — E3: children keep subtree order, only the root is reindexed')
+}
+
+// ============================================================================
+// 9. E3 — paste gets the same on-top treatment as duplicate.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor()
+  doc.putShape(shape('shape:existing', { index: generateKeyBetween('a1', null) }))
+  doc.putShape(shape('shape:a', { index: 'a1', x: 100, y: 200 }))
+  doc.commit()
+
+  const payload = serializeSelection(doc.listShapes(), doc.listBindings(), ['shape:a'])
+  const text = encodeClipboard(payload)
+
+  const intents = pasteIntents(editor, text)
+  const pasted = (intents.find((i) => i.type === 'CreateShape') as { shape: Shape }).shape
+
+  const existingIndex = doc.getShape('shape:existing')!.index
+  assert.ok(pasted.index > existingIndex, `pasted root (${pasted.index}) lands strictly above the existing higher sibling (${existingIndex})`)
+  console.log('ok: pasteIntents — E3: pasted root lands on top of existing content')
+}
+
+// ============================================================================
+// 10. E3 — determinism: A1's generateNKeysBetween is deterministic, so
+//     duplicating the same doc/selection twice (independent editors, same
+//     fixed random) assigns identical top-of-stack indices, not just
+//     identical ids.
+// ============================================================================
+{
+  const run = () => {
+    const { doc, editor } = makeEditor()
+    doc.putShape(shape('shape:existing', { index: generateKeyBetween('a1', null) }))
+    doc.putShape(shape('shape:source', { index: 'a1' }))
+    doc.commit()
+    editor.apply({ type: 'SetSelection', ids: ['shape:source'] })
+    const created = (duplicateSelectionIntents(editor).find((i) => i.type === 'CreateShape') as { shape: Shape }).shape
+    return created.index
+  }
+  assert.equal(run(), run(), 'identical seeded doc/selection -> identical top-of-stack index across independent runs')
+  console.log('ok: duplicateSelectionIntents — E3: deterministic top-of-stack index')
 }
 
 console.log('\nall clipboard-intents assertions passed')

@@ -19,7 +19,7 @@
 // stream would be wrong). Cross-session uniqueness under colliding entropy
 // is UNGUARANTEED — the same documented precondition create.ts's makeId
 // carries, deferred to the same real-entropy follow-up (G3).
-import { cloneWithNewIds, decodeClipboard, serializeSelection, type Binding, type Shape } from '@ensembleworks/canvas-model'
+import { cloneWithNewIds, decodeClipboard, generateNKeysBetween, serializeSelection, type Binding, type Shape } from '@ensembleworks/canvas-model'
 import type { Editor } from './editor.js'
 import type { Intent } from './intents.js'
 
@@ -47,6 +47,53 @@ function assembleIntents(clone: { shapes: Shape[]; bindings: Binding[]; rootIds:
   ]
 }
 
+// E3 (JC#2): pasted/duplicated shapes land ON TOP of existing content
+// (tldraw parity), not tied with the source. `cloneWithNewIds` PRESERVES
+// the source `index` verbatim (canvas-model/src/clipboard.ts's `...s`
+// spread — Correction 1 in the plan) — left alone, a duplicate only
+// outranks its source via the (index,id) id tie-break in paint order, never
+// reliably. This reassigns each cloned ROOT's index to a top-of-stack run
+// via A1's `generateNKeysBetween`; CHILDREN are left untouched — a child's
+// index is only meaningful among its own siblings under its (possibly new)
+// parent, which `cloneWithNewIds` already carried through unchanged, and
+// A2's DFS paint order handles subtree ordering regardless. `cloneWithNewIds`
+// itself stays PURE (no doc access) — this reindex lives here in the
+// editor-level emitter, which already reads `editor.doc` for the max
+// existing sibling.
+//
+// Root relative order is preserved the same way D-4/E2's movers are: sort
+// the roots by (index ASC, id ASC) — their OWN doc-consistent order coming
+// out of the clone — never emission/selection order, before handing the run
+// to `generateNKeysBetween`. The topmost original stays topmost among the
+// copies.
+function reindexRootsToTop(
+  clone: { shapes: Shape[]; bindings: Binding[]; rootIds: string[] },
+  editor: Editor,
+): { shapes: Shape[]; bindings: Binding[]; rootIds: string[] } {
+  if (clone.rootIds.length === 0) return clone
+
+  const rootIdSet = new Set(clone.rootIds)
+  let maxSibling: string | null = null
+  for (const s of editor.doc.listShapes()) {
+    if (s.parentId !== editor.pageId) continue
+    if (maxSibling === null || s.index > maxSibling) maxSibling = s.index
+  }
+
+  const roots = clone.shapes
+    .filter((s) => rootIdSet.has(s.id))
+    .sort((a, b) => (a.index < b.index ? -1 : a.index > b.index ? 1 : a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+  const newKeys = generateNKeysBetween(maxSibling, null, roots.length)
+  const newIndexById = new Map(roots.map((s, i) => [s.id, newKeys[i]!]))
+
+  return {
+    ...clone,
+    shapes: clone.shapes.map((s) => {
+      const newIndex = newIndexById.get(s.id)
+      return newIndex === undefined ? s : { ...s, index: newIndex }
+    }),
+  }
+}
+
 /** Duplicate (Ctrl+D) the current selection: read editor.get().selection,
  * serialize its full subtree (C1) + internal bindings, clone with fresh ids
  * offset by +DUP_OFFSET (D-5), emit the resulting CreateShape/PutBinding
@@ -67,7 +114,7 @@ export function duplicateSelectionIntents(editor: Editor): Intent[] {
     editor.pageId,
     { x: DUP_OFFSET, y: DUP_OFFSET },
   )
-  return assembleIntents(clone)
+  return assembleIntents(reindexRootsToTop(clone, editor))
 }
 
 /** Paste (Ctrl+V) clipboard `text` (untrusted — decodeClipboard, C2, is the
@@ -89,5 +136,5 @@ export function pasteIntents(editor: Editor, text: string, _opts?: { at?: { x: n
     editor.pageId,
     { x: DUP_OFFSET, y: DUP_OFFSET },
   )
-  return assembleIntents(clone)
+  return assembleIntents(reindexRootsToTop(clone, editor))
 }
