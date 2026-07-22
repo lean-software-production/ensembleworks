@@ -6,6 +6,7 @@
  * Pure argv builders + parseUpResult are exported for tests; the engine stays
  * thin (decision #5 — the conformance smoke, not unit tests, covers it).
  */
+import { refreshConnAuth } from '../auth/fresh.ts'
 import type { Globals } from '../dispatch.ts'
 import { realTimers } from '../connector/index.ts'
 import { CliError } from '../errors.ts'
@@ -66,6 +67,11 @@ export function buildExecArgv(
 	if (conn.auth.method === 'service-token') {
 		argv.push('--remote-env', `ENSEMBLEWORKS_TOKEN_ID=${secret(conn.auth.tokenId)}`)
 		argv.push('--remote-env', `ENSEMBLEWORKS_TOKEN_SECRET=${secret(conn.auth.tokenSecret)}`)
+	}
+	if (conn.auth.method === 'access') {
+		// access-browser instance (SP5): the app token minted for THIS spawn —
+		// refreshed per supervise cycle via refreshConnAuth (auth design §2).
+		argv.push('--remote-env', `ENSEMBLEWORKS_ACCESS_TOKEN=${secret(conn.auth.appToken)}`)
 	}
 	argv.push(
 		'--', '/ew/ensembleworks', 'terminal', 'connect',
@@ -154,7 +160,10 @@ export async function runCodespaceOnce(plan: UpPlan, conn: Conn, env: NodeJS.Pro
 	setDesired(codespacesPath(env), plan.workspaceFolder, 'up') // decision #1: live up claims reconciler management
 	narrate(`ensembleworks: container ${result.containerId.slice(0, 12)} up; starting connector (gateway ${plan.gatewayId})`)
 
-	const execArgv = buildExecArgv(runner, plan.workspaceFolder, conn, plan, { redact: false })
+	// Re-mint per (re)spawn (SP5 decision 3: token refresh = re-exec with fresh
+	// env). Non-access instances pass through untouched.
+	const freshConn = await refreshConnAuth(conn, env)
+	const execArgv = buildExecArgv(runner, plan.workspaceFolder, freshConn, plan, { redact: false })
 	const child = Bun.spawn(execArgv, { env: childEnv, stdout: 'inherit', stderr: 'inherit' })
 	const onAbort = () => child.kill() // SIGTERM → the connector snapshots its layout, then exits
 	signal.addEventListener('abort', onAbort)

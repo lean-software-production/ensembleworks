@@ -60,6 +60,20 @@ const runner = runnerFor('dev', '/v/devcontainer.js', '/usr/bin/ew')
 	assert.ok(!none.includes('--branch'), 'no empty --branch flag')
 }
 
+// access-browser conn (SP5): the minted app token rides ENSEMBLEWORKS_ACCESS_TOKEN
+// as exec-time env — REDACTED in the printable form, real when rebuilt live.
+{
+	const rec = { gatewayId: 'cs-myrepo-0a1b2c3d', repo: 'myrepo', branch: 'main' }
+	const conn = { url: 'http://localhost:8788', room: 'team', auth: { method: 'access', appToken: 'minted.app.jwt' } } as const
+	const real = buildExecArgv(runner, '/work/myrepo', conn, rec, { redact: false })
+	assert.ok(real.includes('ENSEMBLEWORKS_ACCESS_TOKEN=minted.app.jwt'), 'access token as --remote-env')
+	assert.ok(!real.some((a) => a.includes('ENSEMBLEWORKS_TOKEN_ID')), 'no service pair for an access conn')
+	const redacted = buildExecArgv(runner, '/work/myrepo', conn, rec, { redact: true })
+	assert.ok(redacted.includes('ENSEMBLEWORKS_ACCESS_TOKEN=REDACTED'), 'dry-run never prints the token')
+	assert.ok(!redacted.some((a) => a.includes('minted.app.jwt')), 'token value absent from redacted argv')
+	console.log('ok: buildExecArgv — access token remote-env + redaction')
+}
+
 // parseUpResult: the spike-verified shape, with progress noise above it.
 {
 	const ok = parseUpResult('pulling image…\nsome log line\n{"outcome":"success","containerId":"eff5bf192158","remoteUser":"root","remoteWorkspaceFolder":"/workspaces/testrepo"}\n')
