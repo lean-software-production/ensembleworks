@@ -155,6 +155,14 @@ export interface Obs {
    * tool's auto-selection (create.ts's `finalizeIntents`), then reuses
    * `shapeStyle` above for the value assertion. */
   selectedShapeIds(): readonly string[]
+  /** Total count of shapes currently in the doc (all pages/kinds). Task H1 —
+   * the copy/paste contracts (K1-K3) need a total-count read to prove "N
+   * shapes created" (duplicate/paste) or "0 created" (a rejected malformed
+   * paste); the existing Obs set has no such probe. Available at BOTH levels
+   * (reads doc state, not the DOM) — no throw-stub: the FSM adapter reads
+   * `editor.doc.listShapes().length` directly, the browser adapter samples
+   * `window.__ew.doc.listShapes().length`. */
+  shapeCount(): number
 }
 
 /** A contract declaration = data. */
@@ -174,6 +182,16 @@ export interface Contract {
   readonly tool?: 'select' | 'select+transform'
   /** Shapes to seed before the gesture. Default: none. */
   scene?(): readonly SceneShape[]
+  /** Task H1 — a payload to pre-seed the OS clipboard with, BEFORE the
+   * gesture runs. Browser-only by construction: only `e2e/lib/contracts.ts`
+   * reads this field (`level:'browser'` contracts write it via
+   * `navigator.clipboard.writeText` ahead of the gesture); the FSM runner
+   * never runs a `level:'browser'` contract (library.test.ts filters
+   * CONTRACTS to `level === 'fsm'`), so it never reads `clipboard` at all —
+   * no throw-stub needed, unlike an `Obs` method. Seeded from the same `rng`
+   * the gesture itself gets, for a reproducible-per-seed hostile payload
+   * (K3's malformed-clipboard contract). */
+  clipboard?(rng: Rng): string
   /** Build the gesture ops from a seeded RNG — deterministic per seed. */
   gesture(rng: Rng): readonly GestureOp[]
   /** Return null if the observation satisfies the contract, or a human failure

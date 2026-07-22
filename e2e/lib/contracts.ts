@@ -172,6 +172,19 @@ async function sampleSelection(page: Page): Promise<readonly string[]> {
   })
 }
 
+// Task H1's Obs.shapeCount() doc comment (interaction-contracts/src/types.ts)
+// names this exact mechanism for the browser adapter: read
+// `window.__ew.doc.listShapes().length` — the browser-side twin of the FSM
+// adapter's `editor.doc.listShapes().length`. Needed so K1-K3's copy/paste
+// contracts can assert "N shapes now exist" (duplicate/paste) or "still N"
+// (a rejected malformed paste never mutates the doc).
+async function sampleShapeCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const ew = (window as any).__ew
+    return ew.doc.listShapes().length
+  })
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -218,6 +231,7 @@ interface ActorSample {
   readonly editingIndicators: Readonly<Record<string, boolean>>
   readonly styles: Readonly<Record<string, { readonly opacity: number; readonly props: Readonly<Record<string, unknown>> } | null>>
   readonly selection: readonly string[]
+  readonly shapeCount: number
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -244,7 +258,8 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // "shape absent" (null) regardless of the shape's real stored props.
   const styleIds = [...new Set([...sceneShapeIds, ...selection])]
   const styles = await sampleShapeStyles(page, styleIds)
-  return { spans, editingShape, editingIndicators, styles, selection }
+  const shapeCount = await sampleShapeCount(page)
+  return { spans, editingShape, editingIndicators, styles, selection, shapeCount }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -289,6 +304,7 @@ function pageObs(
       return typeof raw === 'string' || typeof raw === 'number' ? raw : null
     },
     selectedShapeIds: () => sample.selection,
+    shapeCount: () => sample.shapeCount,
   }
 }
 
@@ -365,7 +381,18 @@ export async function runContractBrowser(page: Page, contract: Contract, browser
   const sceneShapes = contract.scene?.() ?? []
   const sceneShapeIds = sceneShapes.map((s) => s.id)
 
-  const ops: readonly GestureOp[] = contract.gesture(mulberry32(BROWSER_SEED))
+  // Task H1: a single seeded rng stream feeds BOTH `contract.clipboard` (if
+  // present) and `contract.gesture` below — same "deterministic per seed"
+  // contract every other declaration gets, just shared across the two calls
+  // instead of each minting its own mulberry32(BROWSER_SEED). Clipboard is
+  // seeded BEFORE the gesture runs (K3's malformed-clipboard contract needs
+  // the hostile payload sitting in the clipboard before Ctrl+V fires).
+  const rng = mulberry32(BROWSER_SEED)
+  if (contract.clipboard) {
+    const payload = contract.clipboard(rng)
+    await page.evaluate((text) => navigator.clipboard.writeText(text), payload)
+  }
+  const ops: readonly GestureOp[] = contract.gesture(rng)
   const actors = new Set<Actor>(ops.map((op) => op.actor ?? 'A'))
   actors.add('A')
   // An OBSERVER-only actor (Pilot 5's 'B': it never performs a single

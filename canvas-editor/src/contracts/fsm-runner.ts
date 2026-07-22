@@ -180,6 +180,9 @@ function makeObs(
     selectedShapeIds() {
       return [...editor.get().selection]
     },
+    shapeCount() {
+      return editor.doc.listShapes().length
+    },
   }
 }
 
