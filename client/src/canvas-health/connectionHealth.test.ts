@@ -169,9 +169,11 @@ assert.equal(needsFastClock(h4, true), false, 'fully healthy + lock held: no fas
 //     move).
 assert.equal(needsFastClock(b1, true), true, 'blocking transport unhealthy: fast clock')
 
-// 22. LiveKit-only unhealthy ⇒ still needed — its row keeps a live
-//     "degrading (Ns)" count even though it never blocks.
-assert.equal(needsFastClock(lk, true), true, 'livekit-only unhealthy: fast clock')
+// 22. LiveKit-only unhealthy ⇒ NOT needed. LiveKit never blocks, so the modal
+//     never mounts and no chip is on screen to animate; when livekit's chip
+//     IS visible, a blocking transport is already tripped and this is
+//     already true for that reason.
+assert.equal(needsFastClock(lk, true), false, 'livekit-only unhealthy: no fast clock')
 
 // 23. No lock ⇒ fast clock needed even with everything healthy — the
 //     duplicate-tab modal is up regardless of transport health.

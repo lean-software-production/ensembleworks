@@ -158,8 +158,15 @@ export function countdownSeconds(now: number, nextProbeAt: number): number {
  * re-render the component wrapping the whole canvas 4x/second forever to
  * animate nothing. Transitions INTO unhealth arrive on the 2s probe tick,
  * which re-renders anyway, so nothing is missed by staying slow until then.
+ *
+ * Gates on BLOCKING_TRANSPORTS only, not all TRANSPORTS. LiveKit is
+ * display-only and can never open the modal (design §3), so a livekit-only
+ * fault has no visible sub-second readout to animate — its chip is only ever
+ * on screen when a blocking transport is ALSO tripped, and this already
+ * returns true for that. Widening this to all TRANSPORTS would spin the fast
+ * clock up for a livekit-only fault that nothing on screen is reading.
  */
 export function needsFastClock(health: HealthState, hasLock: boolean): boolean {
 	if (!hasLock) return true
-	return TRANSPORTS.some((id) => health[id].unhealthySince != null)
+	return BLOCKING_TRANSPORTS.some((id) => health[id].unhealthySince != null)
 }
