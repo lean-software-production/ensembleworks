@@ -9,6 +9,7 @@ import { bringToFrontPaintsOnTop } from './contracts/bring-to-front-paints-on-to
 import { crossWidgetSelection } from './contracts/cross-widget-selection.js'
 import { cursorLock } from './contracts/cursor-lock.js'
 import { drawCreatesADrawShape } from './contracts/draw-creates-a-draw-shape.js'
+import { droppingAnImageCreatesAnImageShape } from './contracts/dropping-an-image-creates-an-image-shape.js'
 import { duplicateReidsAndOffsets } from './contracts/duplicate-reids-and-offsets.js'
 import { editingIndicator } from './contracts/editing-indicator.js'
 import { lineCreatesALineShape } from './contracts/line-creates-a-line-shape.js'
@@ -35,4 +36,5 @@ export const CONTRACTS: readonly Contract[] = [
   bringToFrontPaintsOnTop,
   drawCreatesADrawShape,
   lineCreatesALineShape,
+  droppingAnImageCreatesAnImageShape,
 ]

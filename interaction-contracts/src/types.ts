@@ -74,6 +74,18 @@ export type GestureOp =
   | { readonly kind: 'up'; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
   | { readonly kind: 'wheel'; readonly dx: number; readonly dy: number; readonly at: Anchor; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
   | { readonly kind: 'key'; readonly key: string; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
+  /** Task K (assets/image sub-cycle) — a real HTML5 file drop at a screen
+   * anchor, carrying a data-URL payload (so a contract embeds its fixture
+   * inline rather than reading a file off disk). Browser-only by
+   * construction: there is no DOM/File/DataTransfer at the FSM level (the
+   * FSM runner throws — see fsm-runner.ts's opsToEvents), matching the
+   * established throw-stub pattern for a browser-only primitive
+   * (textSelectionSpans/peerEditingIndicator/the 'element' anchor). The
+   * browser runner (e2e/lib/contracts.ts) builds a real `File` from
+   * `dataUrl` + `mimeType`/`name`, wraps it in a `DataTransfer`, and
+   * dispatches `dragenter`/`dragover`/`drop` DragEvents at the resolved
+   * anchor point — Playwright's `mouse` API cannot carry a file payload. */
+  | { readonly kind: 'dropFile'; readonly at: Anchor; readonly dataUrl: string; readonly name?: string; readonly mimeType?: string; readonly actor?: Actor }
 
 /** The scene a contract wants seeded before its gesture runs. Phase A ships an
  * empty scene (pilot 1 needs no shapes); Pilot 2 adds shapes. Runner-agnostic:
@@ -185,6 +197,17 @@ export interface Obs {
    * gesture-created shape's id is minted from crypto-random and only
    * discoverable via `selectedShapeIds()`). */
   shapeKind(id: string): string | null
+  /** A SHAPE's resolved image-asset source: `props.assetId` on the shape
+   * looked up against the doc's asset map, returning that asset's
+   * `props.src` — or null when the shape is absent, carries no
+   * (string) `assetId`, or the resolved asset has no `src`. Task K
+   * (assets/image sub-cycle) — proves an image shape's `assetId`
+   * genuinely resolves to a STORED asset (e.g. an `/uploads/...` src from
+   * a real upload), not merely that a shape of kind 'image' exists.
+   * Available at BOTH levels (reads doc state, not the DOM) — no
+   * throw-stub: the FSM adapter reads `editor.doc.getShape`/`getAsset`
+   * directly, the browser adapter pre-samples via `window.__ew.doc`. */
+  assetSrc(id: string): string | null
 }
 
 /** A contract declaration = data. */

@@ -218,6 +218,30 @@ async function sampleShapeKinds(page: Page, shapeIds: readonly string[]): Promis
   }, shapeIds)
 }
 
+// Task K's Obs.assetSrc(id) doc comment (interaction-contracts/src/types.ts)
+// names this exact mechanism for the browser adapter: pre-sample each
+// candidate shape's resolved `assetId -> asset.props.src` off the live doc
+// (window.__ew.doc.getShape/getAsset), mirroring sampleShapeKinds' pre-
+// sample-then-read-synchronously shape exactly (same union-of-scene-ids-
+// and-selection call site — a drop-created image shape's id is minted from
+// crypto-random and only discoverable via `selectedShapeIds()`).
+async function sampleAssetSrcs(page: Page, shapeIds: readonly string[]): Promise<Readonly<Record<string, string | null>>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const ew = (window as any).__ew
+    const out: Record<string, string | null> = {}
+    for (const id of ids) {
+      const shape = ew.doc.getShape(id)
+      const assetId = shape ? shape.props?.assetId : undefined
+      if (typeof assetId !== 'string') { out[id] = null; continue }
+      const asset = ew.doc.getAsset(assetId)
+      const src = asset ? asset.props?.src : undefined
+      out[id] = typeof src === 'string' ? src : null
+    }
+    return out
+  }, shapeIds)
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -267,6 +291,7 @@ interface ActorSample {
   readonly shapeCount: number
   readonly paintOrder: readonly string[]
   readonly kinds: Readonly<Record<string, string | null>>
+  readonly assetSrcs: Readonly<Record<string, string | null>>
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -299,7 +324,11 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // shape's id (e.g. the pen tool's freshly-drawn stroke) is only
   // discoverable via `selection`, never present in the seeded `sceneShapeIds`.
   const kinds = await sampleShapeKinds(page, styleIds)
-  return { spans, editingShape, editingIndicators, styles, selection, shapeCount, paintOrder, kinds }
+  // Task K: same union rationale as kinds/styleIds above — a drop-created
+  // image shape's id is only discoverable via `selection`, never present in
+  // the seeded `sceneShapeIds`.
+  const assetSrcs = await sampleAssetSrcs(page, styleIds)
+  return { spans, editingShape, editingIndicators, styles, selection, shapeCount, paintOrder, kinds, assetSrcs }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -347,6 +376,7 @@ function pageObs(
     shapeCount: () => sample.shapeCount,
     paintOrder: () => sample.paintOrder,
     shapeKind: (id: string) => sample.kinds[id] ?? null,
+    assetSrc: (id: string) => sample.assetSrcs[id] ?? null,
   }
 }
 
@@ -532,6 +562,34 @@ export async function runContractBrowser(page: Page, contract: Contract, browser
           await setModifiers(actorPage, 'down', op.modifiers)
           await actorPage.keyboard.press(op.key)
           await setModifiers(actorPage, 'up', op.modifiers)
+          break
+        }
+        case 'dropFile': {
+          // Task K — Playwright's `mouse` API cannot carry a file payload,
+          // so a real drop is synthesized entirely IN-PAGE: fetch() the
+          // data-URL fixture into a Blob (Chromium supports fetching
+          // `data:` URLs), wrap it in a File + DataTransfer, then dispatch
+          // the real dragenter/dragover/drop sequence CanvasV2App.tsx's
+          // onDragOver/onDrop listeners are wired for (W1) at the resolved
+          // anchor point — the same `[data-canvas-v2-viewport]` container
+          // every other op's anchor resolves against.
+          const p = await resolveAnchor(actorPage, actorBox, op.at)
+          await actorPage.evaluate(
+            async ({ x, y, dataUrl, mimeType, name }) => {
+              const target = document.querySelector('[data-canvas-v2-viewport]')
+              if (!target) throw new Error('dropFile: [data-canvas-v2-viewport] not found')
+              const res = await fetch(dataUrl)
+              const blob = await res.blob()
+              const file = new File([blob], name ?? 'fixture.png', { type: mimeType ?? blob.type })
+              const dt = new DataTransfer()
+              dt.items.add(file)
+              const opts: DragEventInit = { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt }
+              target.dispatchEvent(new DragEvent('dragenter', opts))
+              target.dispatchEvent(new DragEvent('dragover', opts))
+              target.dispatchEvent(new DragEvent('drop', opts))
+            },
+            { x: p.x, y: p.y, dataUrl: op.dataUrl, mimeType: op.mimeType, name: op.name },
+          )
           break
         }
       }

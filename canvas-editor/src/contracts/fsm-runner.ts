@@ -77,6 +77,17 @@ function opsToEvents(ops: readonly GestureOp[], editor: Editor): InputEvent[] {
       case 'up': { b.up({ modifiers: mods(op.modifiers) }); break }
       case 'wheel': { const p = resolveAnchor(op.at, editor); b.wheel(op.dx, op.dy, { at: [p.x, p.y], modifiers: mods(op.modifiers) }); break }
       case 'key': { b.key(op.key, { modifiers: mods(op.modifiers) }); break }
+      case 'dropFile': {
+        // Task K (assets/image sub-cycle) — a real file drop has no
+        // DOM/File/DataTransfer at this level; the FSM runner drives a
+        // headless Editor with no drop surface at all. Every contract that
+        // uses `dropFile` is level:'browser' (K's own
+        // dropping-an-image-creates-an-image-shape), and library.test.ts
+        // filters CONTRACTS to level:'fsm' before calling runContractFsm —
+        // this throw is a defensive backstop, matching the 'element'
+        // anchor's established not-reachable-today posture above.
+        throw new Error('dropFile is browser-level; not available to the FSM runner')
+      }
     }
   }
   return b.events()
@@ -197,6 +208,19 @@ function makeObs(
     },
     shapeKind(id: string) {
       return editor.doc.getShape(id)?.kind ?? null
+    },
+    assetSrc(id: string) {
+      // Task K (assets/image sub-cycle): resolve the shape's assetId prop
+      // against the doc's asset map. `assetId` on a non-image shape (or an
+      // image shape with no asset) is absent/null — `typeof … === 'string'`
+      // guards both, and `props` is a `Record<string, unknown>` per
+      // shapeStyle's own established cast above.
+      const shape = editor.doc.getShape(id)
+      const assetId = (shape?.props as Record<string, unknown> | undefined)?.assetId
+      if (typeof assetId !== 'string') return null
+      const asset = editor.doc.getAsset(assetId)
+      const src = (asset?.props as Record<string, unknown> | undefined)?.src
+      return typeof src === 'string' ? src : null
     },
   }
 }
