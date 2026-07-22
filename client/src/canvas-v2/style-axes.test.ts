@@ -3,8 +3,8 @@
 // style-axes.ts's relevance (`relevantAxes`) and current-value (`currentValue`)
 // helpers. No DOM/React: shapes are plain `Shape` object literals.
 import assert from 'node:assert/strict'
-import type { Shape } from '@ensembleworks/canvas-model'
-import { currentValue, relevantAxes } from './style-axes.js'
+import { STYLE_VALUE_SETS as MODEL_STYLE_VALUE_SETS, type Shape } from '@ensembleworks/canvas-model'
+import { currentValue, relevantAxes, STYLE_VALUE_SETS } from './style-axes.js'
 
 function shape(overrides: Partial<Shape> & Pick<Shape, 'kind'>): Shape {
   return {
@@ -131,6 +131,37 @@ const geo = (props: Record<string, unknown> = {}, extra: Partial<Shape> = {}) =>
     'a -legacy value and its base agree after normalization, not "mixed"'
   )
   console.log('ok: currentValue -- legacy + base align agree after normalization')
+}
+
+// ============================================================================
+// 4. Task M3 -- style-axes.ts's value LISTS are sourced from
+//    @ensembleworks/canvas-model's STYLE_VALUE_SETS, not re-typed local
+//    literals. Every axis except `align` (deliberately narrowed to the three
+//    primary, non-legacy options -- see ALIGN_PRIMARY in style-axes.ts) and
+//    `opacity` (an envelope number, not a model enum) must be reference-equal
+//    (same array object) or at minimum value-equal to the model's export --
+//    proof that a future model enum edit reaches this file automatically.
+// ============================================================================
+{
+  for (const axis of ['color', 'fill', 'dash', 'size', 'font', 'verticalAlign', 'textAlign', 'geo', 'arrowheadStart', 'arrowheadEnd'] as const) {
+    assert.deepEqual(
+      [...STYLE_VALUE_SETS[axis]],
+      [...MODEL_STYLE_VALUE_SETS[axis]],
+      `style-axes.ts's ${axis} value set matches canvas-model's STYLE_VALUE_SETS.${axis} exactly`,
+    )
+  }
+  console.log('ok: style-axes STYLE_VALUE_SETS values match canvas-model STYLE_VALUE_SETS (single-sourced, no hand-copy)')
+}
+{
+  // align is the one deliberate exception: the model accepts 6 (incl. 3
+  // -legacy round-trip variants), the panel only offers the 3 primary ones,
+  // but that 3 must be a subset of -- and derived from -- the model's 6, not
+  // an independently hand-typed literal that happens to match today.
+  assert.deepEqual([...STYLE_VALUE_SETS.align], ['start', 'middle', 'end'])
+  for (const v of STYLE_VALUE_SETS.align) {
+    assert.ok(MODEL_STYLE_VALUE_SETS.align.includes(v), `panel align option '${v}' must be a real model-accepted value`)
+  }
+  console.log('ok: style-axes align options are the non-legacy subset of canvas-model align values')
 }
 
 console.log('ok: style-axes -- all assertions passed')
