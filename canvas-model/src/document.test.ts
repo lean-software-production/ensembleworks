@@ -1,6 +1,6 @@
 // Run: bun src/document.test.ts
 import assert from 'node:assert/strict'
-import { makeDocument, childrenOf, descendantsOf, rootShapes, shapeById } from './document.js'
+import { makeDocument, childrenOf, descendantsOf, rootShapes, shapeById, validateAsset } from './document.js'
 
 const doc = makeDocument({
   pages: [{ id: 'page:p', name: 'Page' }],
@@ -34,4 +34,54 @@ const cyclic = makeDocument({
   bindings: [],
 } as any)
 assert.deepEqual(descendantsOf(cyclic, 'shape:a').map((s) => s.id), ['shape:b'])
+
+// --- Task M1 (2026-07-22 assets/image sub-cycle): validateAsset ---
+
+// A real created asset (D-1 permissiveness guard): must validate.
+{
+  const r = validateAsset({ id: 'asset:a', type: 'image', props: { src: '/uploads/x', w: 10, h: 10 } })
+  assert.equal(r.ok, true, 'a real created asset must validate')
+}
+
+// A converted v1 image-asset with extra props: loose passthrough guard.
+{
+  const r = validateAsset({
+    id: 'asset:v1',
+    type: 'image',
+    props: { src: '/uploads/y', w: 100, h: 80, mimeType: 'image/png', name: 'photo.png', fileSize: 123, isAnimated: false },
+    meta: {},
+  })
+  assert.equal(r.ok, true, 'a converted v1 image-asset with extra props must validate (loose passthrough)')
+}
+
+// A bookmark-style asset with no src at all: src is optional, must still validate.
+{
+  const r = validateAsset({ id: 'asset:b', type: 'bookmark', props: {} })
+  assert.equal(r.ok, true, 'a src-less bookmark-style asset must validate (src is optional)')
+}
+
+// A foreign asset type (not 'image'): type is a plain string, must ride through.
+{
+  const r = validateAsset({ id: 'asset:v', type: 'video', props: { src: '/uploads/v.mp4' } })
+  assert.equal(r.ok, true, 'a foreign asset type (video) must ride through permissively')
+}
+
+// A non-string src must be rejected — the one field with teeth.
+{
+  const r = validateAsset({ id: 'asset:a', type: 'image', props: { src: 123 } })
+  assert.equal(r.ok, false, 'a non-string src must be rejected')
+}
+
+// A bad id prefix must be rejected.
+{
+  const r = validateAsset({ id: 'binding:a', type: 'image', props: {} })
+  assert.equal(r.ok, false, 'a binding:-prefixed id must be rejected for an asset')
+}
+
+// A missing id must be rejected.
+{
+  const r = validateAsset({ type: 'image', props: {} })
+  assert.equal(r.ok, false, 'a missing id must be rejected')
+}
+
 console.log('ok: document')

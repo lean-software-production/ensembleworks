@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import type { Shape } from './shape.js'
-import { bindingIdField, shapeIdField, pageIdField, type BindingId, type PageId, type ShapeId } from './ids.js'
+import { bindingIdField, shapeIdField, pageIdField, assetIdField, type BindingId, type PageId, type ShapeId, type AssetId } from './ids.js'
 import { stableStringify } from './stable-stringify.js'
 
 // NOTE: checkInvariants' validProps rule covers shapes only; bindingSchema and
@@ -20,17 +20,50 @@ export type Binding = z.infer<typeof bindingSchema>
 export const pageSchema = z.looseObject({ id: pageIdField, name: z.string() })
 export type Page = z.infer<typeof pageSchema>
 
+// A canvas asset (tldraw parity: dropped/pasted images live as a SEPARATE
+// record referenced by the image shape's assetId, not inline on the shape —
+// canvas-editor's Task E1 wires the PutAsset intent, canvas-doc's Task A1
+// wires the assets map). LOOSE envelope + LOOSE props so a synced/foreign v1
+// asset (video/bookmark, extra props like fileSize/isAnimated) rides through
+// untouched. `type` is a plain string (NOT a closed enum) so a foreign kind
+// is not dropped — our own tool only ever writes 'image'. `src` is a string
+// WHEN PRESENT (rejects a non-string src — the one field the renderer
+// resolves), OPTIONAL because a bookmark-style asset legitimately carries
+// none.
+const assetProps = z.looseObject({
+  src: z.string().optional(),
+  w: z.number().optional(),
+  h: z.number().optional(),
+  mimeType: z.string().optional(),
+  name: z.string().optional(),
+})
+export const assetSchema = z.looseObject({
+  id: assetIdField,
+  type: z.string(),
+  props: assetProps,
+  meta: z.record(z.string(), z.unknown()).default({}),
+})
+export type Asset = z.infer<typeof assetSchema>
+
+export type AssetValidation = { ok: true; asset: Asset } | { ok: false; error: string }
+export function validateAsset(input: unknown): AssetValidation {
+  const res = assetSchema.safeParse(input)
+  return res.success ? { ok: true, asset: res.data } : { ok: false, error: res.error.message }
+}
+
 // Compile-time drift guards (see shape.ts for the pattern): the schema's
 // inferred id types must stay assignable to ids.ts's branded types.
 type _BindingIdMatches = [Binding['id'] extends BindingId ? true : never, BindingId extends Binding['id'] ? true : never]
 type _PageIdMatches = [Page['id'] extends PageId ? true : never, PageId extends Page['id'] ? true : never]
 type _FromIdMatches = [Binding['fromId'] extends ShapeId ? true : never, ShapeId extends Binding['fromId'] ? true : never]
 type _ToIdMatches = [Binding['toId'] extends ShapeId ? true : never, ShapeId extends Binding['toId'] ? true : never]
+type _AssetIdMatches = [Asset['id'] extends AssetId ? true : never, AssetId extends Asset['id'] ? true : never]
 const _bindingIdCheck: _BindingIdMatches = [true, true]
 const _pageIdCheck: _PageIdMatches = [true, true]
 const _fromIdCheck: _FromIdMatches = [true, true]
 const _toIdCheck: _ToIdMatches = [true, true]
-void _bindingIdCheck, void _pageIdCheck, void _fromIdCheck, void _toIdCheck
+const _assetIdCheck: _AssetIdMatches = [true, true]
+void _bindingIdCheck, void _pageIdCheck, void _fromIdCheck, void _toIdCheck, void _assetIdCheck
 
 // Deeply read-only container: the arrays are ReadonlyArray so mutation (e.g.
 // doc.shapes.push) is a compile error and byId can't silently go stale.
