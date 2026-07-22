@@ -67,16 +67,113 @@ const COLOR = z.enum([
   'white',
 ])
 
+// Task M2 — the rest of tldraw's closed style value-sets, each hand-verified
+// against the installed tlschema dependency's `src/` tree (clean-room: this
+// package may never import that dependency itself, so these are copied values,
+// not imported types). One enum per `Default*Style`/`*ArrowheadStyle` export;
+// see each constant's comment for the exact source file and export read.
+
+// styles/TLFillStyle.ts, DefaultFillStyle. Renderer support for all six is
+// already in canvas-react's GeoShape.tsx (see its FILL comment block).
+const FILL = z.enum(['none', 'semi', 'solid', 'pattern', 'fill', 'lined-fill'])
+
+// styles/TLDashStyle.ts, DefaultDashStyle. NOTE: the plan's Decisions section
+// lists only draw/solid/dashed/dotted (4) — the installed tlschema (5.1.0)
+// actually defines a 5th value, 'none', matching canvas-react's GeoShape.tsx
+// dash comment which is *also* stale on this point. Included here because
+// omitting a real tldraw value would drop any shape that carries it at the
+// write boundary (the risk this task exists to avoid) — flagged as a plan
+// discrepancy, not silently "corrected" without a paper trail.
+const DASH = z.enum(['draw', 'solid', 'dashed', 'dotted', 'none'])
+
+// styles/TLSizeStyle.ts, DefaultSizeStyle.
+const SIZE = z.enum(['s', 'm', 'l', 'xl'])
+
+// styles/TLFontStyle.ts, DefaultFontStyle. tldraw can grow this set at
+// runtime via theme font registration (registerFontsFromThemes) exactly like
+// COLOR's theme caveat above; nothing in this codebase calls that API, so the
+// resolved set is exactly these 4 defaults.
+const FONT = z.enum(['draw', 'sans', 'serif', 'mono'])
+
+// styles/TLHorizontalAlignStyle.ts, DefaultHorizontalAlignStyle. This is the
+// `align` prop on note/geo (and arrow labels) — NOT the same enum as `text`'s
+// `textAlign` below. Includes the three `-legacy` variants: older documents
+// carry them and they must round-trip, even though no current tool writes
+// them. The plan's Decisions section names only start/middle/end; the three
+// `-legacy` members are real tlschema values omitted there (see plan's own
+// "CRITICAL RISK" callout, which explicitly says to get these exact names).
+const ALIGN = z.enum(['start', 'middle', 'end', 'start-legacy', 'end-legacy', 'middle-legacy'])
+
+// styles/TLVerticalAlignStyle.ts, DefaultVerticalAlignStyle.
+const VERTICAL_ALIGN = z.enum(['start', 'middle', 'end'])
+
+// styles/TLTextAlignStyle.ts, DefaultTextAlignStyle. The `text` kind's own
+// alignment prop (`props.textAlign`) — a distinct StyleProp from ALIGN above
+// even though the value sets happen to overlap; text shapes use this one,
+// note/geo use ALIGN. Confirmed against TLTextShapeProps vs TLNoteShapeProps/
+// TLGeoShapeProps, which use different prop names for exactly this reason.
+const TEXT_ALIGN = z.enum(['start', 'middle', 'end'])
+
+// shapes/TLGeoShape.ts, GeoShapeGeoStyle. Cross-checked against the repo's
+// own `GEO_TYPES` in contracts/src/constants.ts — identical, 20 values, same
+// order; no discrepancy.
+const GEO = z.enum([
+  'cloud', 'rectangle', 'ellipse', 'triangle', 'diamond', 'pentagon',
+  'hexagon', 'octagon', 'star', 'rhombus', 'rhombus-2', 'oval', 'trapezoid',
+  'arrow-right', 'arrow-left', 'arrow-up', 'arrow-down', 'x-box', 'check-box',
+  'heart',
+])
+
+// shapes/TLArrowShape.ts, `arrowheadTypes` (shared by both
+// ArrowShapeArrowheadStartStyle and ArrowShapeArrowheadEndStyle — one value
+// set, two independent props, default 'none' for start and 'arrow' for end).
+const ARROWHEAD = z.enum(['arrow', 'triangle', 'square', 'dot', 'pipe', 'diamond', 'inverted', 'bar', 'none'])
+
+// The style axes typed so far, keyed by the prop name they live under. One
+// map so `styleProps(...)` below and any future caller share a single
+// source of truth instead of re-listing enums per kind.
+const STYLE_ENUMS = {
+  color: COLOR,
+  fill: FILL,
+  dash: DASH,
+  size: SIZE,
+  font: FONT,
+  align: ALIGN,
+  verticalAlign: VERTICAL_ALIGN,
+  textAlign: TEXT_ALIGN,
+  geo: GEO,
+  arrowheadStart: ARROWHEAD,
+  arrowheadEnd: ARROWHEAD,
+} as const
+type StyleAxis = keyof typeof STYLE_ENUMS
+
+// Shared fragment builder: given a list of style axes, returns a loose
+// object exposing exactly those keys as optional tldraw-parity enums.
+// Loose (not strict) so composing it onto a per-kind schema via `.extend()`
+// never seals that schema — unknown, non-style tldraw props must keep
+// passing through losslessly (CRDT forward-compat), only the named axes gain
+// closed-set validation. Kind schemas below request only the axes real
+// tldraw gives that shape kind (the Decisions "kind→axis map"); an axis not
+// requested for a kind is simply never type-checked there and rides through
+// as an ordinary passthrough key (e.g. `geo` on a `text` shape).
+function styleProps<A extends readonly StyleAxis[]>(...axes: A) {
+  const shape = {} as Record<StyleAxis, z.ZodOptional<(typeof STYLE_ENUMS)[StyleAxis]>>
+  for (const axis of axes) shape[axis] = STYLE_ENUMS[axis].optional()
+  return z.looseObject(shape)
+}
+
 // Per-kind props: type the fields semantics reads; passthrough the rest so no
 // tldraw prop is lost. All keys optional except where a field is load-bearing.
-const withText = z.looseObject({ richText: richText.optional(), color: COLOR.optional() })
+const withText = z.looseObject({ richText: richText.optional() })
 const box = z.looseObject({ w: z.number().optional(), h: z.number().optional() })
 
 const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
-  note: withText,
-  text: withText,
-  geo: withText.extend(box.shape),
-  arrow: withText,
+  note: withText.extend(styleProps('color', 'size', 'font', 'align', 'verticalAlign').shape),
+  text: withText.extend(styleProps('color', 'size', 'font', 'textAlign').shape),
+  geo: withText.extend(box.shape).extend(
+    styleProps('color', 'fill', 'dash', 'size', 'font', 'align', 'verticalAlign', 'geo').shape,
+  ),
+  arrow: withText.extend(styleProps('color', 'fill', 'dash', 'size', 'font', 'arrowheadStart', 'arrowheadEnd').shape),
   frame: box.extend({ name: z.string().optional() }),
   group: z.looseObject({}), // tldraw groups carry no props; container only
   line: z.looseObject({}),

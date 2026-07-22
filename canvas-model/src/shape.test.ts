@@ -60,3 +60,68 @@ for (const c of [
   assert.ok(validateShape(noteWith({ color: c })).ok, `tldraw color '${c}' validates`)
 }
 console.log('ok: color enum (M1)')
+
+// Task M2 -- the remaining style enums (fill/dash/size/font/align/
+// verticalAlign/textAlign/geo/arrowheadStart/arrowheadEnd) + the shared
+// styleProps(...) fragment builder.
+function geoWith(props: Record<string, unknown>) {
+  return { ...note, kind: 'geo', props: { ...props } }
+}
+function arrowWith(props: Record<string, unknown>) {
+  return { ...note, kind: 'arrow', props: { ...props } }
+}
+function textWith(props: Record<string, unknown>) {
+  return { ...note, kind: 'text', props: { ...props } }
+}
+
+// accept a real value, reject junk -- one representative pair per axis.
+assert.ok(validateShape(geoWith({ fill: 'solid' })).ok, 'real fill validates')
+assert.ok(!validateShape(geoWith({ fill: 'plaid' })).ok, 'junk fill is rejected')
+assert.ok(validateShape(geoWith({ dash: 'dotted' })).ok, 'real dash validates')
+assert.ok(!validateShape(geoWith({ dash: 'wiggly' })).ok, 'junk dash is rejected')
+assert.ok(
+  validateShape(geoWith({ size: 'xl', font: 'mono', align: 'end', geo: 'ellipse' })).ok,
+  'real size/font/align/geo combo validates',
+)
+assert.ok(!validateShape(geoWith({ size: 'enormous' })).ok, 'junk size is rejected')
+assert.ok(!validateShape(geoWith({ font: 'comic-sans' })).ok, 'junk font is rejected')
+assert.ok(!validateShape(geoWith({ align: 'sideways' })).ok, 'junk align is rejected')
+assert.ok(!validateShape(geoWith({ geo: 'blob' })).ok, 'junk geo variant is rejected')
+assert.ok(validateShape(geoWith({ verticalAlign: 'start' })).ok, 'real verticalAlign validates')
+assert.ok(!validateShape(geoWith({ verticalAlign: 'top' })).ok, 'junk verticalAlign is rejected')
+assert.ok(validateShape(textWith({ textAlign: 'end' })).ok, 'real textAlign validates')
+assert.ok(!validateShape(textWith({ textAlign: 'justify' })).ok, 'junk textAlign is rejected')
+assert.ok(
+  validateShape(arrowWith({ arrowheadStart: 'triangle', arrowheadEnd: 'none' })).ok,
+  'real arrowhead pair validates',
+)
+assert.ok(!validateShape(arrowWith({ arrowheadEnd: 'grappling-hook' })).ok, 'junk arrowheadEnd is rejected')
+assert.ok(!validateShape(arrowWith({ arrowheadStart: 'grappling-hook' })).ok, 'junk arrowheadStart is rejected')
+
+// a kind that does NOT support an axis ignores it as a passthrough key
+// (text has no `geo` axis -- must NOT reject, still loose passthrough).
+assert.ok(validateShape(textWith({ geo: 'ellipse' })).ok, 'text has no geo axis; passes through loose')
+
+// GUARD rows -- every tldraw value for a sampled axis validates (catches a
+// missing-value mutant even though z.string() would also pass these).
+for (const f of ['none', 'semi', 'solid', 'pattern', 'fill', 'lined-fill']) {
+  assert.ok(validateShape(geoWith({ fill: f })).ok, `tldraw fill '${f}' validates`)
+}
+for (const d of ['draw', 'solid', 'dashed', 'dotted', 'none']) {
+  assert.ok(validateShape(geoWith({ dash: d })).ok, `tldraw dash '${d}' validates`)
+}
+for (const a of ['start', 'middle', 'end', 'start-legacy', 'end-legacy', 'middle-legacy']) {
+  assert.ok(validateShape(geoWith({ align: a })).ok, `tldraw align '${a}' validates`)
+}
+for (const h of ['arrow', 'triangle', 'square', 'dot', 'pipe', 'diamond', 'inverted', 'bar', 'none']) {
+  assert.ok(validateShape(arrowWith({ arrowheadStart: h })).ok, `tldraw arrowhead '${h}' validates`)
+}
+
+// The looseObject tension: a KNOWN style key with a BAD value rejects, but
+// UNKNOWN keys on the SAME shape still pass through losslessly.
+const mixed = geoWith({ fill: 'solid', totallyUnknownProp: 42 })
+assert.ok(validateShape(mixed).ok, 'unknown non-style key survives alongside a valid style key')
+const parsed = shapeSchema.parse(mixed)
+assert.equal((parsed.props as any).totallyUnknownProp, 42, 'unknown key value is preserved verbatim')
+
+console.log('ok: remaining style enums (M2)')
