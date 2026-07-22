@@ -16,6 +16,13 @@ const DEFAULT_MODIFIERS: Modifiers = { shift: false, alt: false, ctrl: false, me
 
 export interface StepOptions {
   readonly modifiers?: Partial<Modifiers>
+  /** Injected pressure (0..1) for a pointer step, mirroring
+   * `PointerInputEvent.pressure` (Task T1, D-3) — lets an FSM test drive
+   * deterministic pen-vs-mouse pressure without a real DOM/device. Omitted
+   * (`undefined`) reproduces "no pen signal," exactly like a real mouse
+   * event. Threaded onto `down`/`move`/`up` only — `key`/`wheel` events have
+   * no pointer-pressure concept. */
+  readonly pressure?: number
 }
 export interface MoveOptions extends StepOptions {
   /** Number of INTERMEDIATE points to interpolate between the previous
@@ -56,10 +63,23 @@ class ScriptBuilder {
   // intermediate point plus once more for the landing point.
   private tick(): number { const cur = this.t; this.t += this.dt; return cur }
 
+  // Pressure is spread in ONLY when actually injected (`opts.pressure !==
+  // undefined`) rather than always writing `pressure: opts.pressure` onto
+  // the event object — an explicit `pressure: undefined` key is NOT the
+  // same thing as an absent key to `assert.deepEqual`/a JSON round-trip
+  // (`JSON.stringify` drops undefined-valued keys entirely), and
+  // replay.test.ts's serialization-round-trip test pins exactly that
+  // losslessness. An absent key here also matches PointerInputEvent's own
+  // `pressure?: number` — "no real pen signal" is the field's ABSENCE, not
+  // a present-but-undefined value.
+  private pressureField(pressure: number | undefined): { pressure: number } | Record<string, never> {
+    return pressure !== undefined ? { pressure } : {}
+  }
+
   down(x: number, y: number, opts: StepOptions & { readonly buttons?: number } = {}): this {
     this.buttons = opts.buttons ?? 1
     this.x = x; this.y = y
-    this.built.push({ type: 'pointerdown', x, y, buttons: this.buttons, modifiers: this.modifiers(opts.modifiers), t: this.tick() })
+    this.built.push({ type: 'pointerdown', x, y, buttons: this.buttons, modifiers: this.modifiers(opts.modifiers), t: this.tick(), ...this.pressureField(opts.pressure) })
     return this
   }
 
@@ -75,16 +95,16 @@ class ScriptBuilder {
       const frac = i / (steps + 1)
       const ix = x0 + (x - x0) * frac
       const iy = y0 + (y - y0) * frac
-      this.built.push({ type: 'pointermove', x: ix, y: iy, buttons: this.buttons, modifiers, t: this.tick() })
+      this.built.push({ type: 'pointermove', x: ix, y: iy, buttons: this.buttons, modifiers, t: this.tick(), ...this.pressureField(opts.pressure) })
     }
     this.x = x; this.y = y
-    this.built.push({ type: 'pointermove', x, y, buttons: this.buttons, modifiers, t: this.tick() })
+    this.built.push({ type: 'pointermove', x, y, buttons: this.buttons, modifiers, t: this.tick(), ...this.pressureField(opts.pressure) })
     return this
   }
 
   up(opts: StepOptions & { readonly buttons?: number } = {}): this {
     const buttons = opts.buttons ?? 0
-    this.built.push({ type: 'pointerup', x: this.x, y: this.y, buttons, modifiers: this.modifiers(opts.modifiers), t: this.tick() })
+    this.built.push({ type: 'pointerup', x: this.x, y: this.y, buttons, modifiers: this.modifiers(opts.modifiers), t: this.tick(), ...this.pressureField(opts.pressure) })
     this.buttons = buttons
     return this
   }
