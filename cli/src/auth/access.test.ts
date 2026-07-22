@@ -25,10 +25,10 @@ import { makeJwt } from './fake-access.ts'
 // -- probeAccess: the three §1 outcomes ---------------------------------------
 {
 	// One fake origin that answers per-path so all outcomes share a server.
-	const srv = Bun.serve({
+	const srv: import('bun').Server<undefined> = Bun.serve({
 		port: 0,
 		hostname: '127.0.0.1',
-		fetch(req) {
+		fetch(req): Response {
 			const u = new URL(req.url)
 			if (u.pathname === '/open') return new Response('canvas', { status: 200 })
 			if (u.pathname === '/broken') return new Response('boom', { status: 500 })

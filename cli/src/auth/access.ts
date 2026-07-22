@@ -27,7 +27,7 @@ export const ACCESS_AUTHORIZED_PATH = '/cdn-cgi/access/authorized'
 export const DEFAULT_TRANSFER_STORE = 'https://login.cloudflareaccess.org/'
 
 export interface AccessDeps {
-	fetch: typeof fetch
+	fetch: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
 	/** open a URL in the user's browser; false ⇒ print-URL fallback */
 	openBrowser: (url: string) => Promise<boolean>
 	/** transfer-store base URL; tests point it at the fake */
