@@ -6,7 +6,7 @@
 // how each becomes doc ops. This indirection is what makes a tool testable
 // as pure (state, InputEvent) -> (state', Intent[]) with no doc at all — see
 // script.ts's `run()`.
-import type { Asset, Binding, Shape } from '@ensembleworks/canvas-model'
+import type { Asset, Binding, Page, Shape } from '@ensembleworks/canvas-model'
 
 export interface Point { readonly x: number; readonly y: number }
 
@@ -222,6 +222,48 @@ export interface CompleteArrow {
   readonly toBinding?: ArrowBinding
 }
 
+/** Create a page (Task E3, docs/plans/2026-07-22-canvas-v2-pages.md, D-3):
+ * `doc.putPage(intent.page)` verbatim — the caller (the switcher UI, Task
+ * U1) mints the full `Page` record (id via `random`, `name`, and a
+ * top-of-stack fractional `index` via A1's `generateKeyBetween`) and carries
+ * it fully-formed, the same "caller builds the record" posture as
+ * CreateShape/StartArrow. Does NOT itself change `EditorState.currentPageId`
+ * — a doc mutation and a view change stay separate intents; a caller that
+ * wants "create AND switch to it" batches this with SetCurrentPage in ONE
+ * applyAll (one commit, one undo entry — SetCurrentPage itself contributes
+ * no undo/redo ops, since view intents never do). */
+export interface CreatePage { readonly type: 'CreatePage'; readonly page: Page }
+
+/** Delete a page AND its whole shape subtree (Task E3, D-3) — unlike
+ * `CanvasDoc.deletePage`, which removes ONLY the page record with no
+ * cascade (verified: loro-canvas-doc.ts's deletePage), this intent also
+ * cascade-deletes every shape rooted on the page, reusing the DeleteShapes
+ * subtree machinery (`collectSubtreeParentFirst`/`orderParentBeforeChild`,
+ * editor.ts). REFUSES to delete the LAST page (a doc must always have ≥1
+ * page) — a total no-op, no doc write, no undo entry. Silent no-op on an
+ * unknown id too. Does NOT touch `currentPageId` — a caller deleting the
+ * page they're currently on batches a follow-up SetCurrentPage(adjacent) in
+ * the same applyAll (D-6), the same "doc mutation and view change stay
+ * separate" posture CreatePage above documents. */
+export interface DeletePage { readonly type: 'DeletePage'; readonly id: string }
+
+/** Rename a page: `doc.putPage({ ...page, name: intent.name })` — the
+ * `{...page}` spread preserves `index` and any passthrough (looseObject)
+ * field, mirroring SetText's pre-image-inverse convention (editor.ts).
+ * Silent no-op on an unknown id. */
+export interface RenamePage { readonly type: 'RenamePage'; readonly id: string; readonly name: string }
+
+/** Reorder a page: overwrite its fractional `index` field (canvas-model's
+ * `fractional-index.ts`/A1's `orderedPages`) to `index` verbatim — the
+ * caller (the switcher UI) computes the new index via `generateKeyBetween`
+ * between the two neighbor pages' indices, the same "emitter computes one
+ * literal index at emission time" posture SetIndex uses for shapes
+ * (editor.ts). Silent no-op on an unknown id, and a no-op (no doc write, no
+ * undo entry) when `index` already equals the page's current index — avoids
+ * manufacturing an empty undo step, mirroring SetIndex's own no-change
+ * guard. */
+export interface ReorderPage { readonly type: 'ReorderPage'; readonly id: string; readonly index: string }
+
 // ============================================================================
 // View intents — touch ONLY the editor-local store (camera/selection/hover/
 // editing). Never call doc.commit(); see editor.ts's applyOne.
@@ -282,6 +324,10 @@ export type Intent =
   | SetStyle
   | StartArrow
   | CompleteArrow
+  | CreatePage
+  | DeletePage
+  | RenamePage
+  | ReorderPage
   | SetCamera
   | SetSelection
   | SetHover

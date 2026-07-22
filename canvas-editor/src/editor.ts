@@ -4,7 +4,7 @@
 // mutators; everything upstream (tools, scripts, the renderer) only ever
 // produces or reads Intents/EditorState.
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'
-import { assetSchema, bindingSchema, toLocalPoint, type Binding, type CanvasDocument, type Point, type Shape } from '@ensembleworks/canvas-model'
+import { assetSchema, bindingSchema, toLocalPoint, type Binding, type CanvasDocument, type Page, type Point, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from './intents.js'
 
 // ============================================================================
@@ -115,6 +115,13 @@ export interface EditorOpts {
  * correct, tolerant (never-throws) inverse for every one of those cases,
  * including a reparent's prior parent. No separate 'reparent' op variant is
  * needed as a result.
+ *
+ * `putPage`/`deletePage` (Task E3, docs/plans/2026-07-22-canvas-v2-pages.md,
+ * D-3) mirror `putShape`/`deleteShape`'s doing-double-duty posture: each
+ * maps to the ONE matching `CanvasDoc` public mutator
+ * (`putPage`/`deletePage`, both already no-throw by CanvasDoc contract — see
+ * loro-canvas-doc.ts), so they ride the same try/catch tolerance in
+ * `replay()` below without needing one of their own.
  */
 type InverseOp =
   | { readonly op: 'putShape'; readonly shape: Shape }
@@ -122,6 +129,8 @@ type InverseOp =
   | { readonly op: 'setText'; readonly id: string; readonly text: string }
   | { readonly op: 'putBinding'; readonly binding: Binding }
   | { readonly op: 'deleteBinding'; readonly id: string }
+  | { readonly op: 'putPage'; readonly page: Page }
+  | { readonly op: 'deletePage'; readonly id: string }
 
 /** One undone/redoable unit — exactly one apply()/applyAll() batch's worth
  * of doc mutation. `undo` restores doc state to just before the batch ran;
@@ -386,6 +395,8 @@ export class Editor {
           case 'setText': this.doc.setText(op.id, op.text); break
           case 'putBinding': this.doc.putBinding(op.binding); break
           case 'deleteBinding': this.doc.deleteBinding(op.id); break
+          case 'putPage': this.doc.putPage(op.page); break
+          case 'deletePage': this.doc.deletePage(op.id); break
         }
       } catch { /* un-appliable inverse (e.g. a cycle from concurrent remote churn) — skip, same as the forward path */ }
     }
@@ -759,6 +770,106 @@ export class Editor {
           undo.unshift({ op: 'deleteBinding', id: binding.id })
           redo.push({ op: 'putBinding', binding })
         }
+        return { state, docMutated: true, stateChanged: false, undo, redo }
+      }
+
+      // Create a page (Task E3, D-3): the caller (the switcher UI) mints the
+      // full Page record and carries it verbatim, the same posture as
+      // CreateShape above. Does NOT touch currentPageId — a caller that
+      // wants "create AND switch" batches a follow-up SetCurrentPage in the
+      // same applyAll (see intents.ts's CreatePage doc comment).
+      case 'CreatePage': {
+        this.doc.putPage(intent.page)
+        return {
+          state, docMutated: true, stateChanged: false,
+          undo: [{ op: 'deletePage', id: intent.page.id }],
+          redo: [{ op: 'putPage', page: intent.page }],
+        }
+      }
+
+      // Delete a page AND its whole shape subtree (Task E3, D-3 — the crux
+      // case of this task). CanvasDoc.deletePage removes ONLY the page
+      // record with no cascade (verified: loro-canvas-doc.ts's deletePage),
+      // so this intent must ALSO cascade-delete every shape rooted on the
+      // page, reusing DeleteShapes's own subtree machinery
+      // (collectSubtreeParentFirst/orderParentBeforeChild) so the SAME
+      // parent-before-child ordering guarantee that machinery gives shape
+      // deletes also covers a page delete.
+      case 'DeletePage': {
+        // REFUSE THE LAST PAGE: a doc must always have >=1 page. Total
+        // no-op — no doc write, no undo entry — same tolerant-no-op posture
+        // as an unknown id below, just gated on page COUNT instead of id
+        // resolution.
+        if (this.doc.listPages().length <= 1) return { state, docMutated: false, stateChanged: false }
+        // Pre-image captured BEFORE any mutation — this IS the undo's
+        // putPage payload. An id that doesn't resolve to a live page is a
+        // silent no-op (the applyAll TOLERANCE CONTRACT, same as every
+        // other per-id mutation intent in this switch).
+        const page = this.doc.listPages().find((p) => p.id === intent.id)
+        if (!page) return { state, docMutated: false, stateChanged: false }
+        // Roots = shapes parented DIRECTLY to the page (canvas-model's
+        // rootShapes page:-prefix convention); each root's own
+        // collectSubtreeParentFirst walk covers everything beneath it, so
+        // the union of all roots' subtrees is the page's ENTIRE shape
+        // content, deduped by id (same collapse DeleteShapes's own
+        // cross-id union uses, for the same reason: two roots can never
+        // share a descendant since a shape has exactly one parent, but the
+        // Map dedupe keeps this correct even if that ever changed).
+        const roots = this.doc.listShapes().filter((s) => s.parentId === intent.id)
+        const toRestore = new Map<string, Shape>()
+        for (const root of roots) {
+          for (const s of collectSubtreeParentFirst(this.doc, root.id)) {
+            if (!toRestore.has(s.id)) toRestore.set(s.id, s)
+          }
+        }
+        for (const root of roots) this.doc.deleteShape(root.id)
+        this.doc.deletePage(intent.id)
+        // UNDO — putPage FIRST, then the shapes PARENT-BEFORE-CHILD: the
+        // page record must exist again before any shape tries to
+        // placeInTree onto it, exactly the reasoning DeleteShapes's own
+        // undo comment gives for why a child's putShape must never run
+        // before its parent's. Putting the page after a root shape would
+        // rehome that shape onto a still-missing page (placeInTree's
+        // detach-to-root fallback) — a split-brain identical to the one
+        // DeleteShapes's cascade-aware inverse exists to prevent.
+        const undo: InverseOp[] = [
+          { op: 'putPage', page },
+          ...orderParentBeforeChild([...toRestore.values()], toRestore).map((shape) => ({ op: 'putShape' as const, shape })),
+        ]
+        // REDO re-deletes only the roots (each deleteShape cascades its own
+        // subtree again — same "descendants need no explicit redo op"
+        // reasoning as DeleteShapes), then the page record.
+        const redo: InverseOp[] = [
+          ...roots.map((r) => ({ op: 'deleteShape' as const, id: r.id })),
+          { op: 'deletePage', id: intent.id },
+        ]
+        return { state, docMutated: true, stateChanged: false, undo, redo }
+      }
+
+      case 'RenamePage': {
+        const page = this.doc.listPages().find((p) => p.id === intent.id)
+        if (!page) return { state, docMutated: false, stateChanged: false }
+        const next = { ...page, name: intent.name }
+        this.doc.putPage(next)
+        // Pre-image-inverse convention (same as SetText/UpdateProps): the
+        // `{...page}` spread already preserved above carries `index` and
+        // any passthrough field forward untouched, so putPage(page) is a
+        // correct, tolerant full restore.
+        const undo: InverseOp[] = [{ op: 'putPage', page }]
+        const redo: InverseOp[] = [{ op: 'putPage', page: next }]
+        return { state, docMutated: true, stateChanged: false, undo, redo }
+      }
+
+      case 'ReorderPage': {
+        const page = this.doc.listPages().find((p) => p.id === intent.id)
+        // Silent no-op on an unknown id AND on a no-change write (avoids
+        // manufacturing an empty undo entry) — the exact same two guards
+        // SetIndex uses for shapes above.
+        if (!page || page.index === intent.index) return { state, docMutated: false, stateChanged: false }
+        const next = { ...page, index: intent.index }
+        this.doc.putPage(next)
+        const undo: InverseOp[] = [{ op: 'putPage', page }]
+        const redo: InverseOp[] = [{ op: 'putPage', page: next }]
         return { state, docMutated: true, stateChanged: false, undo, redo }
       }
 
