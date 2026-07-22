@@ -10,6 +10,7 @@ import { editingIndicator } from './contracts/editing-indicator.js'
 import { modalityExclusivity } from './contracts/modality-exclusivity.js'
 import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
+import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
 
 export const CONTRACTS: readonly Contract[] = [
   // Pilot declarations are added here, one per phase (B–F).
@@ -19,4 +20,5 @@ export const CONTRACTS: readonly Contract[] = [
   modalityExclusivity,
   noTransformWhileTyping,
   editingIndicator,
+  styleAppliesToSelection,
 ]

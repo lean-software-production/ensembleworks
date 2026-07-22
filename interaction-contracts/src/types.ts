@@ -51,6 +51,14 @@ export type Anchor =
    * runner resolves this via worldToScreen(camera, centre); the browser runner
    * via the element's bounding box. */
   | { readonly ref: 'shape'; readonly id: string; readonly dx?: number; readonly dy?: number }
+  /** Pilot P3 extension — a CSS selector resolved to an element's bounding-
+   * box centre, plus an optional SCREEN-space offset. For addressing a
+   * rendered CONTROL that has no seeded shape id (e.g. a style-panel
+   * swatch) — mirrors the 'shape' anchor's shape but resolved via
+   * `page.locator(selector).boundingBox()` instead of a shape id. Browser-
+   * only: the FSM runner has no DOM to query, so it throws there (matching
+   * the established throw-stub pattern for browser-only observations). */
+  | { readonly ref: 'element'; readonly selector: string; readonly dx?: number; readonly dy?: number }
 
 /** One primitive gesture step. SCREEN space, exactly like input.ts's
  * InputEvent coordinates — the FSM runner turns these into InputEvents via
@@ -131,6 +139,12 @@ export interface Obs {
    * throws 'not observable at fsm level', matching textSelectionSpans'
    * established throw-stub pattern for a browser-only observation. */
   peerEditingIndicator(shapeId: string): boolean
+  /** A shape's stored style value: props[key], or the envelope opacity when
+   * key === 'opacity', or null when the shape/prop is absent. Task P3.
+   * Available at BOTH levels (reads doc state, not the DOM) — no
+   * throw-stub: the FSM adapter reads `editor.doc.getShape`, the browser
+   * adapter pre-samples `window.__ew.doc.getShape` per scene shape. */
+  shapeStyle(id: string, key: string): string | number | null
 }
 
 /** A contract declaration = data. */

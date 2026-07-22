@@ -101,6 +101,15 @@ function identityForActor(actor: Actor) {
 // Resolve an anchor to a viewport-relative SCREEN point.
 async function resolveAnchor(page: Page, box: { x: number; y: number }, a: Anchor): Promise<{ x: number; y: number }> {
   if (a.ref === 'point') return { x: box.x + a.x, y: box.y + a.y }
+  if (a.ref === 'element') {
+    // Task P3's 'element' anchor — a rendered CONTROL (e.g. a style-panel
+    // swatch) that has no seeded shape id. Mirrors the 'shape' anchor's
+    // centre + SCREEN-space-offset resolution below, just via a CSS
+    // selector's bounding box instead of a `[data-shape-id]` lookup.
+    const rect = await page.locator(a.selector).boundingBox()
+    if (!rect) throw new Error(`element anchor ${JSON.stringify(a.selector)} has no bounding box`)
+    return { x: rect.x + rect.width / 2 + (a.dx ?? 0), y: rect.y + rect.height / 2 + (a.dy ?? 0) }
+  }
   const rect = await page.locator(`[data-shape-id="${a.id}"][data-shape-kind]`).boundingBox()
   if (!rect) throw new Error(`shape anchor ${a.id} has no bounding box`)
   return { x: rect.x + rect.width / 2 + (a.dx ?? 0), y: rect.y + rect.height / 2 + (a.dy ?? 0) }
@@ -159,6 +168,32 @@ async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string
   }, shapeIds)
 }
 
+// Task P3's Obs.shapeStyle(id, key) doc comment (interaction-contracts/src/
+// types.ts) names this exact mechanism for the browser adapter: pre-sample
+// each scene shape's FULL props object + envelope opacity off the live doc
+// (window.__ew.doc.getShape, same read `seedScene` above uses to write),
+// then answer `shapeStyle(id, key)` synchronously from that snapshot —
+// mirrors editingIndicators' pre-sample-then-read-synchronously shape
+// exactly. Sampling the whole props object (not just a fixed axis list)
+// means this adapter never needs to know the style-axis vocabulary itself —
+// it stays generic over whatever key a contract's `check` asks for, exactly
+// like the FSM adapter's `shape.props[key]` read.
+async function sampleShapeStyles(
+  page: Page,
+  shapeIds: readonly string[],
+): Promise<Readonly<Record<string, { readonly opacity: number; readonly props: Readonly<Record<string, unknown>> } | null>>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const ew = (window as any).__ew
+    const out: Record<string, { opacity: number; props: Record<string, unknown> } | null> = {}
+    for (const id of ids) {
+      const shape = ew.doc.getShape(id)
+      out[id] = shape ? { opacity: shape.opacity, props: shape.props } : null
+    }
+    return out
+  }, shapeIds)
+}
+
 /** One actor's pre-sampled observation values — see `pageObs`'s doc comment
  * for why these must be sampled BEFORE `contract.check` runs rather than
  * read lazily from inside an `Obs` method. */
@@ -166,6 +201,7 @@ interface ActorSample {
   readonly spans: number
   readonly editingShape: string | null
   readonly editingIndicators: Readonly<Record<string, boolean>>
+  readonly styles: Readonly<Record<string, { readonly opacity: number; readonly props: Readonly<Record<string, unknown>> } | null>>
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -179,7 +215,8 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   const spans = await sampleTextSelectionSpans(page)
   const editingShape = await sampleEditingShape(page)
   const editingIndicators = await samplePeerEditingIndicators(page, sceneShapeIds)
-  return { spans, editingShape, editingIndicators }
+  const styles = await sampleShapeStyles(page, sceneShapeIds)
+  return { spans, editingShape, editingIndicators, styles }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -216,6 +253,13 @@ function pageObs(
     editingShape: () => sample.editingShape,
     on: (a: Actor) => obsFor(a),
     peerEditingIndicator: (shapeId: string) => sample.editingIndicators[shapeId] ?? false,
+    shapeStyle: (id: string, key: string) => {
+      const shape = sample.styles[id]
+      if (!shape) return null
+      if (key === 'opacity') return shape.opacity
+      const raw = shape.props[key]
+      return typeof raw === 'string' || typeof raw === 'number' ? raw : null
+    },
   }
 }
 
