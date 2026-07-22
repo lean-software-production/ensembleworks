@@ -7,8 +7,8 @@
  *
  * The overlay both DIMS the canvas and SWALLOWS input: a capture-phase
  * keydown/pointerdown stop, so a stray key cannot fire a tldraw shortcut into
- * a canvas that can't sync it. The swallow deliberately lets modifier
- * combinations and Tab through — see the listener below for why.
+ * a canvas that can't sync it. See `shouldSwallowKey` for exactly what is and
+ * isn't let through, and why the swallow is not optional polish here.
  *
  * Design: docs/plans/2026-07-22-connection-health-modal-design.md §4.
  */
@@ -54,6 +54,47 @@ export function blockedSummary(tripped: readonly TransportId[]): string {
 	// of what each one takes alone.
 	const names = [firstCopy.name, ...rest.map((id) => BLOCKED_TRANSPORT_COPY[id].lower)]
 	return `${names.join(' and ')} are not reaching the server.`
+}
+
+/**
+ * The overlay's swallow decision, extracted so it's independently testable.
+ *
+ * This is NOT a cosmetic nicety. tldraw's keyboard-shortcut handler is
+ * attached to `document.body` itself, not to its own container
+ * (`tldraw/dist-esm/lib/ui/context/useKeyboardShortcuts.mjs`), and its own
+ * `shouldSkipEvent` only exempts inputs/textarea/contenteditable — nothing
+ * about where this modal sits in the tree, or where focus is, keeps a
+ * keydown from also reaching tldraw. So this predicate is the ONLY thing
+ * standing between a blocked, unsynced canvas and Ctrl/Cmd+Z (undo),
+ * Ctrl/Cmd+Shift+Z (redo), and Ctrl/Cmd+A (select-all) reaching tldraw and
+ * mutating local canvas state while the modal is up.
+ *
+ * Allowlist, not a blanket modifier exemption: only Ctrl/Cmd+C (copy — does
+ * not mutate) and bare Tab (focus movement into the modal's own button) pass
+ * through. Everything else chorded with a modifier — including Ctrl/Cmd+X
+ * (cut), Ctrl/Cmd+V (paste), Ctrl/Cmd+Z/Shift+Z, Ctrl/Cmd+A, all of which
+ * mutate — is swallowed, same as unmodified keys.
+ *
+ * Reload/close/devtools (Ctrl/Cmd+R, Ctrl/Cmd+W, Cmd+Tab, F12) are swallowed
+ * too, and that's fine: those are non-cancelable browser-chrome shortcuts in
+ * every major browser, so `preventDefault` on them is already a no-op, and
+ * `stopPropagation` only ever stops *page*-level handlers (i.e. tldraw) from
+ * seeing them, never the browser itself. A blocked user can still reload and
+ * still close the tab.
+ */
+export function shouldSwallowKey(input: {
+	key: string
+	ctrlKey: boolean
+	metaKey: boolean
+	altKey: boolean
+	shiftKey: boolean
+	insidePanel: boolean
+}): boolean {
+	if (input.insidePanel) return false
+	const mod = input.ctrlKey || input.metaKey
+	if (input.key === 'Tab' && !mod) return false
+	if (input.key.toLowerCase() === 'c' && mod) return false
+	return true
 }
 
 const CHIP_STYLE: Record<'connected' | 'degrading' | 'down', { text: string; color: string }> = {
@@ -113,19 +154,7 @@ export function CanvasBlockerModal(props: {
 	// Swallow input at the window's capture phase for as long as we are
 	// mounted. Listening on the overlay element alone is not enough: keyboard
 	// events go to document.activeElement, which may still be a tldraw node.
-	//
-	// Modifier combos and Tab are deliberately let through:
-	//  - Tab must reach the modal's own "Use it here" button, or a keyboard
-	//    user could never focus it.
-	//  - Ctrl/Cmd+R, Ctrl/Cmd+W, Cmd+Tab and F12 are non-cancelable browser
-	//    chrome shortcuts in every major browser — preventDefault on them is a
-	//    no-op — but stopPropagation still runs first and would otherwise stop
-	//    the *page* from ever seeing them, which matters for things like
-	//    Ctrl/Cmd+C (copy), which IS a normal, cancelable DOM event. A user
-	//    locked behind this modal who can't copy an error to paste into a bug
-	//    report, or reload with Ctrl/Cmd+R, would be badly stuck — so any key
-	//    chorded with Ctrl/Cmd/Alt is exempted rather than relying on browsers
-	//    ignoring preventDefault for the reload/close cases specifically.
+	// See `shouldSwallowKey` above for exactly what passes through and why.
 	useEffect(() => {
 		const swallowPointer = (ev: PointerEvent) => {
 			if (panelRef.current?.contains(ev.target as Node)) return
@@ -133,8 +162,18 @@ export function CanvasBlockerModal(props: {
 			ev.preventDefault()
 		}
 		const swallowKey = (ev: KeyboardEvent) => {
-			if (panelRef.current?.contains(ev.target as Node)) return
-			if (ev.ctrlKey || ev.metaKey || ev.altKey || ev.key === 'Tab') return
+			const insidePanel = !!panelRef.current?.contains(ev.target as Node)
+			if (
+				!shouldSwallowKey({
+					key: ev.key,
+					ctrlKey: ev.ctrlKey,
+					metaKey: ev.metaKey,
+					altKey: ev.altKey,
+					shiftKey: ev.shiftKey,
+					insidePanel,
+				})
+			)
+				return
 			ev.stopPropagation()
 			ev.preventDefault()
 		}
