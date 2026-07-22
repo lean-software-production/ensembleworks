@@ -891,3 +891,27 @@ contracts `cd e2e && bunx playwright test --project=e2e` green.
   sorts first and created pages append after (D-4). No migration, matching the
   all-`'a1'` z-order corpus posture.
 - **No other rot found** in the ground-truth claims.
+
+## Execution status — LANDED (2026-07-22)
+
+All 9 tasks landed and reviewed. Crux independently certified (render filter
++ migration safety; the 8-site currentPageId ripple with zero fixed-pageId
+parenting reads left; DeletePage cascade-undo restores page+shapes
+parent-before-child; Z1 teeth reproduced). Sign-off: typecheck green, 240
+unit suites green, full e2e 50/50 (exit 0, convergence specs green), page
+switch browser contract teeth-verified.
+
+| Task | Commit |
+|---|---|
+| A1 Page.index + orderedPages | `97e12cb` |
+| E1 currentPageId + SetCurrentPage | `757a521` |
+| E3 four page mutation intents | `86fd496` |
+| E2 tools + E2b clipboard -> current page | `9717e9c` + `86eecb0` |
+| R1 render filter (ShapeLayer+EmbedLayer) | `9ffe422` |
+| U1 PageSwitcher UI + image sites + undo-clamp | `8b5c8ff` |
+| H1 pageCount Obs + Z1 contract | `dff56ab` |
+
+Deferrals: per-page presence (which peer is on which page) deferred; the
+switcher is a tab bar; rename via prompt, reorder via arrows.
+
+**Step 4 (assets+image, pages) COMPLETE. All four steps done.**
