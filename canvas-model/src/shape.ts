@@ -38,13 +38,19 @@ export function isTextCapableKind(kind: ShapeKind): boolean {
 // derive plain text for semantics. Structural (not exhaustively typed).
 const richText = z.object({ type: z.literal('doc'), content: z.array(z.any()) })
 
-// tldraw's default color palette (shared by note/text/geo/arrow). Copied
-// verbatim from tldraw's own color-style definition and must track it: if
-// tldraw ever adds or renames a palette entry, a real synced shape using the
-// new name will fail this enum and get dropped/repaired at the write
-// boundary. This package is clean-room and may never import the tldraw
-// package itself, so this list is hand-verified against the installed
-// dependency rather than imported from it.
+// tldraw's default color palette (shared by note/text/geo/arrow), copied
+// verbatim from tldraw's DefaultColorStyle value set. This package is
+// clean-room and may never import the tldraw package itself, so the list is
+// hand-verified against the installed dependency rather than imported from
+// it. tldraw CAN register additional palette colors at runtime from custom
+// themes (a theme's color keys get synced onto the style's accepted values),
+// but this deployment's sync client passes no custom themes and nothing in
+// this codebase calls the theme/color registration API, so the resolved
+// palette is exactly these 13 defaults with nothing added or removed. If a
+// custom theme ever gets wired into the sync client, any palette colors it
+// adds would be silently dropped at this write boundary until this enum
+// grows to match — this list must track whatever the sync client actually
+// resolves, not just tldraw's out-of-the-box default.
 const COLOR = z.enum([
   'black',
   'grey',
