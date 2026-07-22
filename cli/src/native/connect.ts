@@ -24,7 +24,7 @@ export interface ConnectConfig {
 	room: string
 	gatewayId: string
 	label: string
-	authMethod: 'service-token' | 'none'
+	authMethod: 'service-token' | 'none' | 'access'
 	backend: 'tmux' | 'pty'
 	repo?: string
 	branch?: string
