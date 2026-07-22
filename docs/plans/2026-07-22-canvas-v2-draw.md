@@ -866,3 +866,25 @@ draw-creates-a-draw-shape lands with this sub-cycle (see plan)`.
   `worldTransform`; the browser runner's `element` anchor resolves a CSS selector
   to a bounding box; `shapeCount`/`selectedShapeIds` exist in both adapters.
 ```
+
+## Execution status — LANDED (2026-07-22)
+
+All 9 tasks landed and reviewed. Geometry crux independently certified
+(determinism, no-NaN across 16 degenerate cases + 500-trial fuzz,
+pressure-widens). Sign-off: typecheck green, 229 unit suites green, full
+e2e 47/47 (exit 0), draw browser contract teeth-verified.
+
+| Task | Commit |
+|---|---|
+| M1 schema | `8092b9f` |
+| G1/G2/G3 geometry | `78b9d4c` |
+| T1 pen tool + pressure | `b9573f3` |
+| R1 DrawShape renderer | `1c5b71e` |
+| W1 toolbar/routing/DOM-pressure | `5bed568` |
+| H shapeKind Obs + K contract | `560a156` |
+
+Known deferrals (per plan judgment calls): synced v1 draw shapes carry a
+base64 `path` (not `points`) and render empty (documented, no crash) until
+a decoder lands; loose 100x100 selection bounds for synced v1 strokes;
+dash/fill visually no-op on freehand ink; the armed-style panel does not
+yet show for the draw tool (`TOOL_TO_KIND` omits draw — no crash).
