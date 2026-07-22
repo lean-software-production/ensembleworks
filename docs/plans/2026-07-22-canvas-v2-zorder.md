@@ -400,6 +400,38 @@ Land **A1/A2** first (pure, everything depends on them). **R1** needs A2;
 **D1** is the only pre-contract gated task besides R1/C1 — run those tasks'
 suites with the `UX_CONTRACT_PR_BODY` opt-out until H1/Z1 are in the tree.
 
+### Execution status — LANDED (2026-07-22)
+
+All tasks landed and reviewed. Convergence crux independently certified
+(A1: determinism + strict-between + 500-step stress; A2: shuffle-invariance
+across all permutations + DFS grouping + id tie-break). Sign-off: typecheck
+green, 226 unit suites green, full e2e 46/46 green, all 6 browser contracts
+green.
+
+| Task | Commit |
+|---|---|
+| A1 | `1b6a9ea` |
+| A2 | `5069cf0` |
+| R1 | `f230467` |
+| E1 | `da5493e` |
+| E2 | `5834d72` |
+| C1 | `0e45b84` |
+| D1 | `733013e` |
+| H1+Z1 | `08b1124` |
+| E3 | `183cc05` |
+
+**Regression caught at the 2c full-suite sign-off (fixed `b383069`):** the
+2a StylePanel had been swallowing canvas gestures over a selected shape —
+`pointer-events:'all'` on the container plus a short-viewport clamp that
+squeezed a real swatch onto the shape's click target. It broke multi-client
+drag/edit/delete (`canvas-v2.spec.ts` 132/220/308), passing on `origin/main`
+but failing from the panel's mount onward. It slipped the 2a/2b sign-offs
+because those ran only the *filtered* interaction contracts, not the full
+e2e suite. LESSON: sign off each sub-cycle with the FULL e2e suite
+(`bunx playwright test --project=e2e`), not a grep-filtered subset. Fixed
+with a `pointer-events:none`/`auto` split plus `avoidAnchorOverlap` (never
+overlap the selection), with unit + position-test regression guards.
+
 ---
 
 ## Task A1 — `fractional-index.ts` (canvas-model, pure, deterministic)
