@@ -817,3 +817,26 @@ line-creates-a-line-shape lands with this sub-cycle (see plan)`.
   each reimplement them); `shapeCount`/`selectedShapeIds` exist in both
   adapters.
 ```
+## Execution status — LANDED (2026-07-22)
+
+All 6 tasks landed and reviewed. Convergence + data-loss crux independently
+certified (flattenLinePoints orders by (index,id) not key order; keyed-map
+schema so synced v1 lines validate; linePathData deterministic + no-NaN).
+Sign-off: typecheck green, 232 unit suites green, full e2e 48/48 (exit 0),
+line browser contract teeth-verified.
+
+| Task | Commit |
+|---|---|
+| M1 schema | `c0d4f96` |
+| G1 linePathData | `4d6d532` |
+| R1 LineShape + flattenLinePoints | `2e81d88` |
+| T1 line tool FSM | `9676ef0` |
+| W1 toolbar/wiring | `1744d6e` |
+| K browser contract | `f2c2204` |
+
+MVP = 2-point straight line; renderer supports cubic spline (reachable via
+synced/authored v1 lines); multi-point creation + post-creation handle
+editing + arming cubic from the panel are documented deferrals.
+
+**Step 3 (draw + line + arrow-styling) COMPLETE.** Image moved to step 4
+(with the asset store it depends on).
