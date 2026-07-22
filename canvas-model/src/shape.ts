@@ -242,7 +242,14 @@ const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
     .extend(box.shape)
     .extend(styleProps('color', 'fill', 'dash', 'size').shape),
   highlight: z.looseObject({}),
-  image: box,
+  // Task M2 (2026-07-22 assets/image sub-cycle) -- tldraw's TLImageShape
+  // stores `assetId: TLAssetId | null` plus w/h/crop/playing/url/flipX/
+  // flipY/altText. Type ONLY assetId (nullable+optional so a v1 image with
+  // an unset asset -- assetId:null -- and one with no assetId key both still
+  // validate); crop/flip/etc keep riding through box's looseObject as
+  // ordinary passthrough keys. `image: box` (pre-M2) rode assetId through
+  // UNTYPED, so a non-string/non-null assetId wrongly validated.
+  image: box.extend({ assetId: z.string().nullable().optional() }),
   terminal: box, iframe: box, neko: box, roadmap: box, screenshare: box, 'file-viewer': box,
 }
 

@@ -9,6 +9,7 @@ import {
   plainText,
   STYLE_VALUE_SETS,
 } from './shape.js'
+import { validateAsset } from './document.js'
 
 // Every kind the room can contain is enumerated (9 tldraw incl. group + image + 6 custom).
 assert.deepEqual(
@@ -374,3 +375,57 @@ assert.equal((parsedLine.props as any).totallyUnknownLineProp, 42, 'unknown line
 assert.equal(isTextCapableKind('line' as any), false, 'line remains non-text-capable')
 
 console.log('ok: line props schema (M1, line sub-cycle)')
+
+// --- Task M2 (2026-07-22 assets/image sub-cycle) -- image shape assetId prop ---
+function imageWith(props: Record<string, unknown>) {
+  return {
+    id: 'shape:img1', kind: 'image', parentId: 'page:p', index: 'a1',
+    x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {},
+    props: { w: 10, h: 10, ...props },
+  }
+}
+
+// A real created image (guard): assetId referencing an asset validates.
+assert.ok(validateShape(imageWith({ assetId: 'asset:x' })).ok, 'an image with a real assetId validates')
+
+// A v1 image with assetId:null (unset asset) plus other v1 fields still
+// validates -- kills a "required, non-null" mutant.
+assert.ok(
+  validateShape(imageWith({ assetId: null, crop: null, playing: true })).ok,
+  'a v1 image with assetId:null validates',
+)
+
+// An image with no assetId key at all still validates -- kills a "required"
+// mutant (both nullable-required and non-nullable-required variants).
+assert.ok(validateShape(imageWith({})).ok, 'an image with no assetId key at all validates')
+
+// A bad assetId (non-string, non-null) is now REJECTED -- the M2 RED: today
+// `image: box` rides assetId through UNTYPED, so this wrongly validates
+// before M2's fix.
+assert.ok(!validateShape(imageWith({ assetId: 123 })).ok, 'a non-string, non-null assetId is rejected')
+
+// Unknown keys (crop/flipX/flipY/playing/url/altText -- tldraw's other
+// TLImageShape props) still ride through untyped (only assetId gains teeth).
+assert.ok(
+  validateShape(imageWith({ assetId: 'asset:x', crop: { x: 0 }, flipX: true, url: 'https://x' })).ok,
+  'unknown image props (crop/flipX/url/etc) still ride through',
+)
+
+// Data-loss guard: a realistic converted v1 image + its asset BOTH validate
+// together (not just each in isolation) -- the pairing a v1→v2 converter
+// actually produces.
+{
+  const v1Asset = validateAsset({
+    id: 'asset:v1img',
+    type: 'image',
+    props: { src: '/uploads/abc123-photo.png', w: 640, h: 480, mimeType: 'image/png', name: 'photo.png' },
+    meta: {},
+  })
+  assert.ok(v1Asset.ok, 'a realistic v1-shaped image asset validates')
+  const v1Image = validateShape(
+    imageWith({ assetId: v1Asset.ok ? v1Asset.asset.id : undefined, w: 640, h: 480, crop: null, flipX: false, flipY: false }),
+  )
+  assert.ok(v1Image.ok, 'a realistic v1-shaped image shape referencing that asset validates')
+}
+
+console.log('ok: image props schema (M2, assets/image sub-cycle)')
