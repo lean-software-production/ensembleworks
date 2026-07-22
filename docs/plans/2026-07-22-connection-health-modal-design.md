@@ -9,12 +9,13 @@ the server, and is this the tab that owns the canvas?" state, and when it isn't,
 today's confusing split where A/V shows "reconnecting" while the canvas looks
 interactive but silently can't type/sync.
 
-**Architecture:** One `useCanvasAvailability` hook combines two inputs into a
-single `blocked` state with a `reason`:
+**Architecture:** Two independent mechanisms, deliberately not combined:
 1. **`useConnectionHealth`** — a probe that independently measures each transport
    (canvas-sync, terminals, LiveKit) and trips per-transport staleness thresholds.
+   `useCanvasAvailability` turns it into a single `blocked` state with a `reason`.
 2. **`useCanvasLock`** — a `navigator.locks` exclusive lock per (room, user) that
-   enforces one active tab per canvas (oldest wins).
+   enforces one active tab per canvas (oldest wins). It gates **mounting**, above
+   the app, rather than feeding the availability state (§5).
 
 When `blocked`, a shared **`CanvasBlockerModal` + gray-out/input-block overlay**
 renders; it auto-dismisses the instant the blocking condition clears. LiveKit is
@@ -25,7 +26,8 @@ tldraw sync `store.status`/`connectionStatus`, `LiveKitState.status`, the
 `useSessionPulse` latency trail, and the `/api/health` + `/api/terminal/health`
 endpoints. New browser API: `navigator.locks`. No server changes.
 
-**Scope:** Wire into the **live tldraw-v1 engine (`client/src/App.tsx`)**.
+**Scope:** The connection modal wires into the **live tldraw-v1 engine
+(`client/src/App.tsx`)**; the single-tab gate is engine-agnostic and sits above both.
 canvas-v2 shares the A/V hook but has its own sync layer (`SyncClientPeer`) and
 must wire the probe separately — tracked as a parity follow-up (see §7).
 
@@ -50,21 +52,25 @@ truth, maximum confusion.
 
 This feature makes the truth explicit and gates interaction on it, and folds in
 single-tab enforcement (issue #55) because a second tab is the *same* class of
-"you can't safely interact right now" problem and reuses the same modal.
+"you can't safely interact right now" problem — though it turned out to want a
+different remedy: a gate before mount rather than a modal after it (§5).
 
 ## 2. The unified availability state
 
 ```
-interactive  ⇔  (every BLOCKING transport is healthy)  ∧  (this tab holds the canvas lock)
+interactive  ⇔  (every BLOCKING transport is healthy)
 ```
+
+The lock is not a term in this expression — it is a precondition of the app
+existing at all. A tab that does not hold the lock never mounts (§5), so every
+tab that evaluates availability is by construction the holder.
 
 `useCanvasAvailability(): { blocked: boolean; reason: BlockReason | null; health: ConnectionHealth }`
 
-`type BlockReason = 'duplicate-tab' | 'connection'`
+`type BlockReason = 'connection'`
 
-Precedence when both apply: **`duplicate-tab` wins** — there is no point counting
-down a reconnect in a tab that should not be active. A duplicate tab shows the
-takeover modal; only the lock-holding tab ever shows the connection modal.
+There is no duplicate-tab reason to arbitrate against: a duplicate tab is never
+mounted at all (§5), so only a lock-holding tab ever reaches this state.
 
 ## 3. `useConnectionHealth` — the probe
 
@@ -112,7 +118,7 @@ LiveKit has **no** threshold (display-only) by decision.
 
 ## 4. The modal + overlay
 
-One component, two reasons; renders only when `blocked`.
+One component, one reason (`'connection'`); renders only when `blocked`.
 
 **Shared chrome:** a full-canvas overlay that (a) dims the canvas (~`opacity: 0.4`,
 non-interactive backdrop) and (b) blocks pointer + keyboard from reaching the
@@ -129,34 +135,50 @@ keys can't hit tldraw shortcuts while blocked).
 - **Countdown:** "Retrying in N…" where N counts down to the next probe tick (each
   tick *is* a retry). Auto-closes the moment all blocking transports recover.
 
-**`reason === 'duplicate-tab'`:**
-- Headline: "This canvas is open in another tab".
-- Body: brief explanation + a **"Use it here"** button (§5).
+## 5. `useCanvasLock` — single active tab (oldest wins, no takeover)
 
-## 5. `useCanvasLock` — single active tab (oldest wins)
+Single-tab enforcement is a **mount gate**, not a modal. A duplicate tab is not
+a degraded participant that gets blocked after the fact — it never becomes a
+participant at all.
 
-- On mount, request an **exclusive** `navigator.locks` lock named
-  `ew-canvas-${roomId}-${userId}` and hold it for the tab's lifetime. Holding the
-  lock ⇒ this tab is the active one. Locks auto-release on tab close/crash, so no
-  stale-lock cleanup is needed.
-- A second tab's `request` cannot acquire (held) ⇒ it learns it's the duplicate
-  (via `ifAvailable`), sets `reason: 'duplicate-tab'`, and shows the takeover modal.
-- **Oldest wins:** the newcomer is passive/blocked and does nothing to the holder
-  on its own. Coordination rides a `BroadcastChannel('ew-canvas-${roomId}-${userId}')`
-  (Web Locks does not notify a holder when it loses a lock, so the channel is the
-  signal). Clicking **"Use it here"** posts `{type:'takeover'}`; the current holder
-  receives it, **releases its lock** and flips itself to `blocked: 'duplicate-tab'`;
-  the freed lock is then acquired by the newcomer, which clears its modal and
-  becomes active. Crash-safety is the lock's job: if the holder tab dies without
-  releasing, the OS auto-releases and a blocked tab can acquire. This deliberately
-  **reverses** today's A/V "newest steals the slot" behaviour, which is the bug.
+- On mount, request an **exclusive** `navigator.locks` lock per (room, user) and
+  hold it for the tab's lifetime. Holding the lock ⇒ this tab is the active one.
+  Locks auto-release on tab close/crash, so no stale-lock cleanup is needed.
+- `useCanvasLock(roomId, userId)` returns a tri-state
+  `LockPhase = 'pending' | 'held' | 'blocked'`, decided by a pure
+  `lockPhase({supported, granted, otherHolderSeen, graceElapsed})`. `granted` is
+  checked **first and unconditionally**: there is no teardown path in this
+  design, so a tab that has been granted the lock must never be demoted by a
+  late-arriving signal.
+- `pending → blocked` resolves via two independent signals, **either sufficient**:
+  `navigator.locks.query()` reporting an existing holder for our lock name (the
+  normal path), or a **3000ms grace timeout** — a pure backstop so a tab can never
+  sit on a blank splash forever if `query()` is absent, slow, or rejecting.
+- **`SingleTabGate`** (`client/src/canvas-health/SingleTabGate.tsx`) wraps the
+  **whole** render in `client/src/main.tsx`, *above* the engine choice, so it
+  covers canvas-v2 as well as tldraw-v1. `pending` renders `null`; `blocked`
+  renders `DuplicateTabNotice`; `held` renders children. Because the gate sits
+  above `<App/>`, a blocked tab mounts nothing that connects: `useSync` is called
+  inside the `App` component and LiveKit's `room.connect()` inside
+  `useLiveKitRoom`'s effect — `App.tsx` module scope opens no sockets.
+- **Oldest wins, and that is final while the holder lives.** There is no takeover
+  button, no `BroadcastChannel`, no release-and-hand-over. The blocked tab's
+  request stays **queued**, which is also the recovery path: when the holder
+  closes or crashes the browser releases the lock, the queued request is granted,
+  and the blocked tab mounts and connects on its own with no reload.
+- Notice copy (pinned by `gateCopy.test.ts`): heading "This canvas is open in
+  another tab"; body "You can only open the canvas in one tab at a time. This tab
+  is currently disabled."; recovery "Close the other tab and this one will connect
+  automatically."
 - Scope is (room, user): real collaborators (different `userId`) never contend;
-  only *same person, same canvas, second tab* is blocked.
-- **Fixes issue #55's user-facing harm:** one active tab per identity ⇒ no A/V
+  only *same person, same canvas, second tab* is gated.
+- **Fixes issue #55:** one connected tab per identity ⇒ no A/V
   `DUPLICATE_IDENTITY` kill, no doubled cursors/presence, none of the associated
-  flicker.
-- **Fallback:** if `navigator.locks` is unavailable, the hook no-ops (never
-  blocks) — single-tab enforcement is best-effort, never a hard dependency.
+  flicker. The gate delivers this because the duplicate tab never joins LiveKit
+  or sync presence in the first place.
+- **Fail-open:** if `navigator.locks` is unavailable the phase is `held` and the
+  app mounts exactly as it did before — single-tab enforcement is best-effort,
+  never a hard dependency.
 
 ## 6. Files
 
@@ -165,12 +187,14 @@ keys can't hit tldraw shortcuts while blocked).
   `now` + thresholds, compute `{ perTransport: {...}, blocked, reason }`. **Unit
   tested** (threshold/debounce/recovery/precedence).
 - `useConnectionHealth.ts` — the probe timer + fetch wiring around the reducer.
-- `useCanvasLock.ts` — the `navigator.locks` lifecycle + takeover.
-- `useCanvasAvailability.ts` — combines the two.
-- `CanvasBlockerModal.tsx` — the modal + overlay (both reasons).
+- `useCanvasLock.ts` — the `navigator.locks` lifecycle + the pure `lockPhase`.
+- `useCanvasAvailability.ts` — the connection-health facade.
+- `CanvasBlockerModal.tsx` — the modal + overlay (connection only).
+- `SingleTabGate.tsx` — the mount gate + `DuplicateTabNotice`.
 - `constants.ts` — thresholds/env with the "these are guesses" doc comment.
 
 **Modified:**
+- `client/src/main.tsx` — wrap the whole render in `SingleTabGate`.
 - `client/src/App.tsx` — mount `useCanvasAvailability`; render `CanvasBlockerModal`
   over the canvas.
 - `client/src/canvas-v2/CanvasV2App.tsx` — a `// TODO(canvas-v2 connection-health)`
@@ -195,13 +219,16 @@ marker in `CanvasV2App.tsx`.
   with injected `now`/observations (repo `bun` + `node:assert` style): a transport
   trips only after `>= threshold` of continuous unhealth; recovery un-trips
   immediately; a sub-threshold flap never trips; LiveKit never sets `blocked`;
-  `duplicate-tab` precedence over `connection`; the countdown value derives
-  correctly from the tick clock.
-- **Lock / probe wiring** — thin; validated by the reducer tests + a manual smoke.
+  the countdown value derives correctly from the tick clock.
+- **Pure `lockPhase`** — unit-tested over the `{supported, granted,
+  otherHolderSeen, graceElapsed}` cube, including that `granted` wins over every
+  other input.
+- **Lock / probe wiring** — thin; validated by the pure tests + a manual smoke.
 - **Manual smoke (Mac/Chrome):** kill the network mid-session (canvas modal within
-  ~3s, correct transport highlighted, auto-recovers); open a 2nd tab (duplicate
-  modal, "Use it here" hands over, old tab blocks); video-only drop (row shows
-  degraded, canvas stays interactive).
+  ~3s, correct transport highlighted, auto-recovers); open a 2nd tab (it shows the
+  duplicate-tab notice and connects nothing; closing the first tab lets it take
+  over automatically); video-only drop (row shows degraded, canvas stays
+  interactive).
 
 ## 9. Non-goals / follow-ups
 
@@ -222,13 +249,6 @@ found during review, not decided casually.
   room `a`/user `b-c` both produce `ew-canvas-a-b-c` — a forgeable collision between
   two different (room, user) pairs. The separator is `/`, which *is* escaped inside a
   component. `lockNames.test.ts` pins this.
-- **§5 `ifAvailable`.** Not used. The duplicate tab issues a plain **queued**
-  `request()` and derives its status from `!hasLock`. This is load-bearing, not a
-  shortcut: the live queued request is what lets the browser hand the lock to a
-  waiting tab when the holder dies, which is what §5's crash-safety promise depends on.
-- **§5 post-takeover recovery.** §5 as written stranded a tab: after handing over,
-  it never re-queued, so if the *new* holder then closed, the original tab stayed
-  blocked forever with reload as the only escape. It now re-queues after releasing.
 - **Tech stack "No server changes".** One two-line exception: the telemetry `plane`
   union (`server/src/telemetry-store.ts`, `server/src/features/telemetry.ts`) gained
   a `'lock'` member. Without it the client's lock events passed validation-by-
@@ -238,7 +258,8 @@ found during review, not decided casually.
 - **§3 LiveKit health.** `status === 'disabled'` counts as healthy, not degraded — a
   room with A/V switched off is not a fault, and would otherwise sit permanently amber.
 - **§4 sub-second clock.** The UI clock runs **only while something is wrong**
-  (`needsFastClock`, gated on `BLOCKING_TRANSPORTS` + lock state). Unconditionally
+  (`needsFastClock`, gated on `BLOCKING_TRANSPORTS`; it no longer takes a
+  `hasLock` argument, since a mounted tab always holds the lock). Unconditionally
   re-rendering the component that wraps the whole tldraw editor 4×/second for an
   entire session, to animate readouts that only exist while blocked, was not worth it.
 - **§4 input swallow.** Swallows everything outside the modal panel except an
@@ -256,11 +277,15 @@ found during review, not decided casually.
 - **No focus trap** in the modal. A keyboard user can Tab out into dimmed background
   content. Adding one would require re-swallowing Tab, which conflicts with the
   allowlist above; the connection variant has no focusable children anyway.
-- **3+ tabs:** the Web Locks FIFO queue, not the broadcast, decides who wins a
-  takeover. If C clicks "Use it here" while B has been queued longer, B becomes the
-  holder and neither tab is told. Queue position is not exposed by the API.
-- **A bfcache-frozen holder** cannot hand over: message delivery is deferred until it
-  resumes. Full discard *does* recover, via ordinary crash-safety.
+- **No escape hatch against a live holder.** This is the regression the redesign
+  introduces, and it is deliberate. With no takeover, the *only* recovery from a
+  blocked tab is "close the other tab" — a user who has lost track of which window
+  holds the canvas has to go find it. A holder that crashes or is closed still
+  auto-recovers with no action: the browser releases the lock and the blocked tab's
+  still-queued request is granted. A **bfcache-frozen holder** still squats the
+  lock and the blocked tab waits — but takeover never fixed that case either (its
+  `BroadcastChannel` message was simply deferred until the holder resumed), so
+  nothing was lost there.
 - **One-frame stale `now`** at the healthy→unhealthy transition when the fast clock
   was off. Harmless only because `transportChip`/`countdownSeconds` clamp — those
   clamps are load-bearing, not defensive decoration.
@@ -276,7 +301,9 @@ Passed:
   Video still ✓ (LiveKit confirmed non-blocking in practice, not just in the reducer).
 - **Recovery** — auto-dismissed with no interaction.
 - **Duplicate tab** — the *newcomer* blocks (oldest-wins confirmed live), "Use it
-  here" hands over, and the original tab flips to blocked symmetrically.
+  here" hands over, and the original tab flips to blocked symmetrically. *(This
+  scenario was run against the superseded takeover build; the gate that replaced
+  it has its own smoke still to run — see the CHANGE NOTE below.)*
 - **Lock telemetry** — `granted` → `takeover-received` → `released` observed in the
   console, so §10's telemetry widening works end to end.
 
@@ -296,8 +323,34 @@ same user, the panel read "Audio/video: error", and the first tab's console logg
 `livekit connected → disconnected` the moment the second tab joined. The lock gates
 **canvas interaction only** — a blocked tab still mounts `AvOverlay` and still joins
 LiveKit and sync presence. Closing this for real requires the blocked tab to also not
-join those, which is a scope increase beyond this branch. **Until that lands, treat
-§5's issue-#55 bullet as aspirational, not as shipped.**
+join those, which is a scope increase beyond this branch.
+
+**Defect 2 — RESOLVED (2026-07-22, by the gate).** The scope increase was taken.
+`SingleTabGate` sits above `<App/>` in `main.tsx`, so a duplicate tab mounts
+neither `AvOverlay` nor `useSync`: it does not join LiveKit and does not join sync
+presence, and therefore cannot trigger `DUPLICATE_IDENTITY` or double the roster.
+§5's issue-#55 bullet is delivered, not aspirational.
 
 Still uncovered by any automated test: the lock lifecycle, the React shells, and the
 modal's rendering.
+
+### CHANGE NOTE (2026-07-22) — takeover replaced by a gate
+
+The duplicate-tab **takeover** described in the original §5 (§10's smoke ran
+against it) has been removed and replaced by the hard mount gate now documented
+in §5. Commits `4a2c978`, `dcdb905`, `365aa4b`, `801885e`, `4e8b722`, `898faff`,
+`27ecbed`.
+
+**Why.** Takeover only works if losing the lock is survivable, and it isn't
+cheaply: every transport would have had to grow a teardown-and-rejoin path —
+disconnect LiveKit, close the sync socket, drop presence, tear down every terminal
+socket — and each teardown races the newcomer's join for the same identity, which
+is precisely the `DUPLICATE_IDENTITY` failure the feature exists to remove. Worse,
+it puts the released tab into a state no other code path produces: mounted, alive,
+and required not to touch anything. A gate has no such path. Lock ownership becomes
+**monotonic for the lifetime of a live tab** — `granted` is checked first and never
+revoked — and the tab that doesn't own it never connects anything, so there is
+nothing to tear down. The cost is the lost escape hatch against a live holder,
+recorded under "Known limitations carried, not fixed".
+
+A live smoke of the gate is outstanding; nothing in this note reports one.
