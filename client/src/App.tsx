@@ -173,16 +173,16 @@ export function App() {
 		logConnectionEvent('sync', String(syncStatus))
 	}, [syncStatus])
 
-	// The unified availability state: is this browser actually connected, and
-	// is this the tab that owns the canvas? Blocks interaction behind a modal
-	// when not (docs/plans/2026-07-22-connection-health-modal-design.md).
+	// The unified availability state: is this browser actually connected?
+	// Blocks interaction behind a modal when not
+	// (docs/plans/2026-07-22-connection-health-modal-design.md). Tab ownership
+	// is not this hook's question — SingleTabGate settles that above us, and
+	// never mounts this component at all without the canvas lock.
 	// LiveKit status comes through the A/V bridge because useLiveKitRoom lives
 	// inside tldraw context (AvOverlay), not here.
 	const avSnap = useAvSnapshot()
 	const rawId = rawUserId(identity.id)
 	const availability = useCanvasAvailability({
-		roomId,
-		userId: identity.id,
 		store: {
 			status: store.status,
 			connectionStatus: store.status === 'synced-remote' ? store.connectionStatus : null,
@@ -274,15 +274,14 @@ export function App() {
 			{editor && <FramesDrawer editor={editor} />}
 			{/* Being kicked is terminal — the only recovery is a reload — so it
 			    outranks the connection blocker below: a "Retrying in 3…" countdown
-			    or a "Use it here" button over "you were removed" would tell the
-			    user to wait on something that will never resolve. Suppressing the
+			    over "you were removed" would tell the user to wait on something
+			    that will never resolve. Suppressing the
 			    render (rather than just stacking wasKicked's z-index on top) also
 			    unmounts the blocker's window-capture-phase input swallow, so it
 			    stops intercepting keys behind a message whose only instruction is
 			    to reload. */}
 			{!wasKicked && availability.blocked && availability.reason && (
 				<CanvasBlockerModal
-					reason={availability.reason}
 					tripped={availability.tripped}
 					health={availability.health}
 					thresholds={availability.thresholds}
@@ -290,7 +289,6 @@ export function App() {
 					nextProbeAt={availability.nextProbeAt}
 					latency={avSnap?.latencies[rawId] ?? null}
 					latencyHistory={avSnap?.latencyHistory[rawId] ?? []}
-					onTakeover={availability.requestTakeover}
 				/>
 			)}
 			{wasKicked && (

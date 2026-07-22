@@ -1,8 +1,9 @@
 import React, { Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
-import { getRoomId } from './identity'
+import { getIdentity, getRoomId } from './identity'
 import { selectEngineFromEnvironment } from './engine'
+import { SingleTabGate } from './canvas-health/SingleTabGate'
 
 /**
  * ZERO EXPOSURE (the paramount Phase-3 constraint — see engine.ts's module
@@ -24,19 +25,27 @@ import { selectEngineFromEnvironment } from './engine'
  * scripts/exposure-audit.ts sketch (docs/plans/2026-07-12-canvas-phase3-
  * editor-renderer.md) — so keep both identifiers literally present here,
  * not aliased away.
+ *
+ * `SingleTabGate` wraps BOTH branches as a common parent rather than sitting
+ * inside either one, so it adds no second path into the v2 module graph and
+ * does not change whether the v2 chunk is ever requested: zero exposure is
+ * untouched.
  */
 const CanvasV2App = lazy(() => import('./canvas-v2/CanvasV2App').then((m) => ({ default: m.CanvasV2App })))
 
 const engine = selectEngineFromEnvironment(getRoomId())
+const identity = getIdentity()
 
 createRoot(document.getElementById('root')!).render(
 	<React.StrictMode>
-		{engine === 'v2' ? (
-			<Suspense fallback={null}>
-				<CanvasV2App />
-			</Suspense>
-		) : (
-			<App />
-		)}
+		<SingleTabGate roomId={getRoomId()} userId={identity.id}>
+			{engine === 'v2' ? (
+				<Suspense fallback={null}>
+					<CanvasV2App />
+				</Suspense>
+			) : (
+				<App />
+			)}
+		</SingleTabGate>
 	</React.StrictMode>
 )
