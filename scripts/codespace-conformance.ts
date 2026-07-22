@@ -86,7 +86,14 @@ async function main() {
 		})
 		assert.equal(build.exitCode, 0, 'connector build:binary failed')
 	}
+	// The COMPILED binary is the ew under test — not `bun cli/src/main.ts`.
+	// Running the smoke in dev mode let three compiled-only defects ship green
+	// (2026-07-22): runningCompiled() misdetecting bunfs, stageRuntimeDir's
+	// ETXTBSY, and the silent supervisor. Dev mode cannot see any of them.
+	// EW_CONNECTOR_BIN is deliberately NOT set, so resolveConnectorBin must
+	// fall back to process.execPath — the real deployed path.
 	const connectorBin = path.join(repoRoot, 'cli', 'dist', 'ensembleworks')
+	const ew = [connectorBin]
 
 	// 1. Boot the sync app (the splice plane) on an ephemeral port.
 	const dataDir = mkdtempSync(path.join(os.tmpdir(), 'codespace-conformance-server-'))
@@ -94,8 +101,7 @@ async function main() {
 	await new Promise<void>((resolve) => server.listen(0, resolve))
 	const port = (server.address() as { port: number }).port
 	const httpBase = `http://127.0.0.1:${port}`
-	const cliMain = path.join(repoRoot, 'cli', 'src', 'main.ts')
-
+	
 	const cleanupContainerIds: string[] = []
 	let failed = false
 	try {
@@ -113,18 +119,32 @@ async function main() {
 				XDG_CONFIG_HOME: path.join(workRoot, 'config'),
 				XDG_DATA_HOME: path.join(workRoot, 'data'),
 				XDG_CACHE_HOME: path.join(workRoot, 'cache'),
-				EW_CONNECTOR_BIN: connectorBin,
 				ENSEMBLEWORKS_URL: httpBase,
 			}
 
 			// 3. Read the plan (also proves --dry-run on a real repo) → gatewayId.
-			const dry = run(['bun', cliMain, 'codespace', 'up', '--dry-run'], { cwd: workspace, env })
+			const dry = run([...ew, 'codespace', 'up', '--dry-run'], { cwd: workspace, env })
 			assert.equal(dry.exitCode, 0, 'codespace up --dry-run failed')
-			const plan = JSON.parse(dry.stdout.toString()) as { gatewayId: string; workspaceFolder: string }
+			const plan = JSON.parse(dry.stdout.toString()) as {
+				gatewayId: string
+				workspaceFolder: string
+				connectorBin: string
+				upArgv: string[]
+				runnerEnv: Record<string, string>
+			}
 			console.error(`gatewayId: ${plan.gatewayId}`)
 
+			// Compiled-mode guard (regression: runningCompiled() misreported dev
+			// inside the binary, 2026-07-22). The plan must self-exec the ew binary
+			// as the bun runtime against an EXTRACTED entry — never ['bun', …] and
+			// never a '/$bunfs/…' path, which no child process can read.
+			assert.equal(plan.upArgv[0], connectorBin, 'compiled mode: ew re-execs itself as the devcontainer-cli runtime')
+			assert.equal(plan.runnerEnv.BUN_BE_BUN, '1', 'compiled mode: BUN_BE_BUN=1 passed to the runner')
+			assert.ok(!plan.upArgv[1]?.startsWith('/$bunfs/'), `runner entry must be extracted, got ${plan.upArgv[1]}`)
+			assert.equal(plan.connectorBin, connectorBin, 'connector resolves to the running ew binary (no EW_CONNECTOR_BIN)')
+
 			// 4. The real thing, in the background: up → inject → exec → supervise.
-			const upProc = Bun.spawn(['bun', cliMain, 'codespace', 'up'], {
+			const upProc = Bun.spawn([...ew, 'codespace', 'up'], {
 				cwd: workspace,
 				env,
 				stdout: 'inherit',
@@ -157,7 +177,7 @@ async function main() {
 			}
 
 			// 7. Stop by exact id and verify not running.
-			const stop = run(['bun', cliMain, 'codespace', 'stop'], { cwd: workspace, env })
+			const stop = run([...ew, 'codespace', 'stop'], { cwd: workspace, env })
 			assert.equal(stop.exitCode, 0, 'codespace stop failed')
 			const inspect = run(['docker', 'inspect', '-f', '{{.State.Running}}', cleanupContainerIds.at(-1) as string])
 			assert.equal(inspect.stdout.toString().trim(), 'false', 'container stopped (exact-id inspect)')
