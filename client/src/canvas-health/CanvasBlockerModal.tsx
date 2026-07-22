@@ -255,8 +255,7 @@ export function CanvasBlockerModal(props: {
 							This canvas is open in another tab
 						</strong>
 						<div id={bodyId} style={{ marginTop: 8 }}>
-							Only one tab per person can drive the canvas — a second one would double your
-							cursor and knock your microphone off the call. That other tab is active right now.
+							You can only open the canvas in one tab at a time. This tab is currently disabled.
 						</div>
 						<button
 							ref={takeoverButtonRef}
