@@ -1,9 +1,8 @@
 /**
- * The blocker: one overlay, two reasons. Renders only when blocked, and
- * auto-dismisses the instant the blocking condition clears (it is a pure
- * function of useCanvasAvailability — there is no dismiss button by design
- * for the `connection` reason; `duplicate-tab` gets exactly one action,
- * "Use it here").
+ * The blocker: one overlay, one reason — lost connection. Renders only when
+ * blocked, and auto-dismisses the instant the blocking condition clears (it is
+ * a pure function of useCanvasAvailability — there is no dismiss button and no
+ * action to take by design; the only way out is the connection coming back).
  *
  * The overlay both DIMS the canvas and SWALLOWS input: a capture-phase
  * keydown/pointerdown stop, so a stray key cannot fire a tldraw shortcut into
@@ -21,7 +20,6 @@ import {
 	countdownSeconds,
 	transportChip,
 	TRANSPORTS,
-	type BlockReason,
 	type HealthState,
 	type TransportId,
 } from './connectionHealth'
@@ -77,8 +75,8 @@ export function blockedSummary(tripped: readonly TransportId[]): string {
  *
  * `insidePanel` is NOT a blanket bypass, on purpose, even though it looks
  * like the obvious way to exempt "the modal's own button." The modal moves
- * focus into itself on mount for accessibility (the takeover button when
- * present, otherwise the panel div, which has `tabIndex={-1}`) — so
+ * focus into itself on mount for accessibility (the panel div, which has
+ * `tabIndex={-1}`) — so
  * `insidePanel` is true in the *common* case, for as long as the user hasn't
  * clicked or tabbed elsewhere. Treating it as "don't swallow" would silently
  * disable the swallow for the entire time the modal is up, which is exactly
@@ -154,7 +152,6 @@ function TransportRow(props: {
 }
 
 export function CanvasBlockerModal(props: {
-	reason: BlockReason
 	tripped: readonly TransportId[]
 	health: HealthState
 	thresholds: Thresholds
@@ -162,10 +159,8 @@ export function CanvasBlockerModal(props: {
 	nextProbeAt: number
 	latency: LatencySample | null
 	latencyHistory: number[]
-	onTakeover: () => void
 }) {
 	const panelRef = useRef<HTMLDivElement>(null)
-	const takeoverButtonRef = useRef<HTMLButtonElement>(null)
 	const headingId = 'canvas-blocker-heading'
 	const bodyId = 'canvas-blocker-body'
 
@@ -204,19 +199,17 @@ export function CanvasBlockerModal(props: {
 		}
 	}, [])
 
-	// Move focus into the dialog on mount (the button when there is one to act
-	// on, the panel itself otherwise so a screen reader announces it via
-	// role="dialog" + aria-labelledby), and give it back on unmount — this
-	// modal has no close button, so unmount only ever happens because the
-	// blocking condition cleared on its own.
+	// Move focus into the dialog on mount so a screen reader announces it via
+	// role="dialog" + aria-labelledby, and give it back on unmount — this modal
+	// has no close button, so unmount only ever happens because the blocking
+	// condition cleared on its own.
 	useEffect(() => {
 		const previouslyFocused = document.activeElement as HTMLElement | null
-		const target = props.reason === 'duplicate-tab' ? takeoverButtonRef.current : panelRef.current
-		target?.focus()
+		panelRef.current?.focus()
 		return () => {
 			previouslyFocused?.focus?.()
 		}
-	}, [props.reason])
+	}, [])
 
 	return (
 		<div
@@ -249,52 +242,31 @@ export function CanvasBlockerModal(props: {
 					color: wm.ink,
 				}}
 			>
-				{props.reason === 'duplicate-tab' ? (
-					<>
-						<strong id={headingId} style={{ fontSize: 15 }}>
-							This canvas is open in another tab
-						</strong>
-						<div id={bodyId} style={{ marginTop: 8 }}>
-							You can only open the canvas in one tab at a time. This tab is currently disabled.
-						</div>
-						<button
-							ref={takeoverButtonRef}
-							type="button"
-							onClick={props.onTakeover}
-							style={{ marginTop: 16, padding: '6px 12px', borderRadius: 3, cursor: 'pointer' }}
-						>
-							Use it here
-						</button>
-					</>
-				) : (
-					<>
-						<strong id={headingId} style={{ fontSize: 15 }}>
-							Lost connection to the server
-						</strong>
-						<div id={bodyId} style={{ marginTop: 8 }}>
-							{blockedSummary(props.tripped)}
-						</div>
-						<div style={{ marginTop: 16, display: 'grid', gap: 2 }}>
-							{TRANSPORTS.map((id) => (
-								<TransportRow
-									key={id}
-									id={id}
-									health={props.health}
-									now={props.now}
-									thresholds={props.thresholds}
-									tripped={props.tripped}
-								/>
-							))}
-						</div>
-						<div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
-							<span>Latency</span>
-							<LatencyPill latency={props.latency} history={props.latencyHistory} />
-						</div>
-						<div style={{ marginTop: 12, color: wm.inkMuted }}>
-							Retrying in {countdownSeconds(props.now, props.nextProbeAt)}…
-						</div>
-					</>
-				)}
+				<strong id={headingId} style={{ fontSize: 15 }}>
+					Lost connection to the server
+				</strong>
+				<div id={bodyId} style={{ marginTop: 8 }}>
+					{blockedSummary(props.tripped)}
+				</div>
+				<div style={{ marginTop: 16, display: 'grid', gap: 2 }}>
+					{TRANSPORTS.map((id) => (
+						<TransportRow
+							key={id}
+							id={id}
+							health={props.health}
+							now={props.now}
+							thresholds={props.thresholds}
+							tripped={props.tripped}
+						/>
+					))}
+				</div>
+				<div style={{ marginTop: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+					<span>Latency</span>
+					<LatencyPill latency={props.latency} history={props.latencyHistory} />
+				</div>
+				<div style={{ marginTop: 12, color: wm.inkMuted }}>
+					Retrying in {countdownSeconds(props.now, props.nextProbeAt)}…
+				</div>
 			</div>
 		</div>
 	)
