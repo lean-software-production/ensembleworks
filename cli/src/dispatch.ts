@@ -134,9 +134,13 @@ function parseLoginFlags(args: string[], globals: Globals): import('./auth/login
 	const flags: import('./auth/login.ts').LoginFlags = { url: globals.url, room: globals.room }
 	for (let i = 0; i < args.length; i++) {
 		switch (args[i]) {
-			case '--method':
-				flags.method = args[++i] as 'service-token' | 'none'
+			case '--method': {
+				const v = args[++i]
+				if (v !== 'service-token' && v !== 'none' && v !== 'access-browser')
+					throw new CliError(`--method must be service-token, none, or access-browser, got: ${v}`, 2)
+				flags.method = v
 				break
+			}
 			case '--token-id':
 				flags.tokenId = args[++i]
 				break
