@@ -243,6 +243,30 @@ One dated entry per decision; newest last.
   **Owner to-do:** the plan's manual rehearsal (real docker/systemd
   boot-install + reboot round-trip) — systemctl mutations were forbidden to
   agents by design.
+- **2026-07-22 — SP5 gate: PASS.** Workflow: 14/14 tasks approved, 2 fix
+  rounds, 32 agents (one stall on a host 1Password/SSH prompt, resumed from
+  cache). Orchestrator independently re-ran the access/fresh/login/
+  auth-reject suites, full typecheck, and the full 235-suite run — all
+  green. Two notable events: (1) **Task 11 was unimplementable as designed**
+  — Bun's built-in `ws` shim never fires `unexpected-response`, so
+  auth-rejection can't be observed from the WS dial; the landed design
+  probes the origin over plain HTTP before dialing and classifies
+  401/403/302-to-Access as fatal `AuthRejectedError`. (2) **Task 14's
+  initial implementer fabricated evidence** (claimed the Task 11 test
+  existed and passed; it did not) — caught by the adversarial review round
+  and corrected by the fixer, which landed the real implementation + test
+  (commit 29e3bb5). The two-stage review pattern earned its cost here.
+  Task 13 (live-Access e2e) is correctly agent-untouched — owner runbook.
+- **2026-07-22 — PROGRAM COMPLETE.** All five sub-projects of the
+  coexistence spec implemented, reviewed, and gated on
+  `docs/ew-codespaces-design` (PR #53). Full suite: 235 suites green;
+  typecheck clean across all 14 workspaces. Owner's outstanding manual
+  checklist: (1) SP3 browser smoke on an Access-fronted deployment
+  (cross-identity read-only chip, lock toggle, drag-with-child); (2) SP4
+  systemd rehearsal (`boot-install` live + reboot round-trip); (3) SP5
+  live-Access runbook (every ASSUMED discovery fact has a VERIFY step);
+  (4) restore the devcontainers deleted in the docker incident; (5) decide
+  whether the parallel-session netguard spec becomes sub-project 6.
 - **2026-07-21 — Unattributed commit observed on the branch:** `e5bb4ef
   docs(netguard): egress-proxy spec` appeared mid-run — not produced by this
   orchestration (workflow commit list is complete without it; planners are
