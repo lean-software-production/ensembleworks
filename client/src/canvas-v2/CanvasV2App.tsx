@@ -346,6 +346,13 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 				transport.close()
 				return
 			}
+			// TODO(canvas-v2 connection-health): v2 does not use tldraw's useSync, so
+			// the connection-health probe cannot read store.status here. Before v2
+			// becomes the live engine, expose this peer's connection state (open /
+			// closed / reconnecting) in the shape useConnectionHealth expects for the
+			// canvas transport, then mount useCanvasAvailability + CanvasBlockerModal
+			// the way App.tsx does.
+			// See docs/plans/2026-07-22-connection-health-modal-design.md §7.
 			const peer = new SyncClientPeer({ peerId: randomPeerId(), transport, presence: presenceStore })
 			// Proceed the instant the server signals sync-complete: peer.ready()
 			// resolves on Frame.SyncDone (sent right after the backfill Update), so
