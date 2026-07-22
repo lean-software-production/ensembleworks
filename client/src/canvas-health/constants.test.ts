@@ -31,4 +31,18 @@ for (const bad of ['', 'abc', '-1', '0', 'NaN', 'Infinity', '3s']) {
 // 4. Fractional input is floored to whole ms (timers take integers).
 assert.equal(readThresholds({ VITE_CONN_HEALTH_PROBE_MS: '1500.7' }).probeIntervalMs, 1500)
 
+// 5. A boolean env value (import.meta.env carries DEV/PROD as booleans) is not a
+//    parseable number and must fall back, same as a missing var.
+assert.equal(readThresholds({ VITE_CONN_HEALTH_CANVAS_MS: true }).canvasMs, 3000)
+assert.equal(readThresholds({ VITE_CONN_HEALTH_CANVAS_MS: false }).canvasMs, 3000)
+
+// 6. Several overrides set together all land in their own field, independently.
+const multi = readThresholds({
+	VITE_CONN_HEALTH_CANVAS_MS: '111',
+	VITE_CONN_HEALTH_TERMINAL_MS: '222',
+	VITE_CONN_HEALTH_PROBE_MS: '333',
+	VITE_CONN_HEALTH_TIMEOUT_MS: '444',
+})
+assert.deepEqual(multi, { canvasMs: 111, terminalMs: 222, probeIntervalMs: 333, probeTimeoutMs: 444 })
+
 console.log('constants.test.ts: all assertions passed')

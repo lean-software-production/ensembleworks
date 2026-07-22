@@ -9,6 +9,7 @@ import assert from 'node:assert/strict'
 import { DEFAULT_THRESHOLDS } from './constants'
 import {
 	availability,
+	BLOCKING_TRANSPORTS,
 	countdownSeconds,
 	initialHealth,
 	stepHealth,
@@ -89,6 +90,13 @@ assert.deepEqual(trippedTransports(b1, 10_000, T), ['canvas', 'terminals'])
 // 11. LiveKit NEVER trips, however long it is down.
 const lk = stepHealth(initialHealth(), obs({ livekit: { healthy: false, rtt: null } }), 0)
 assert.deepEqual(trippedTransports(lk, 10 * 60_000, T), [], 'livekit is display-only')
+
+// 11b. The non-blocking decision is pinned at the SOURCE, not just via the
+//      null-threshold guard: livekit must never be in BLOCKING_TRANSPORTS.
+//      Without this, adding it there breaks nothing and the design decision
+//      silently erodes (found by mutation testing, 2026-07-22).
+assert.equal(BLOCKING_TRANSPORTS.includes('livekit'), false, 'livekit must never be a blocking transport')
+assert.deepEqual([...BLOCKING_TRANSPORTS], ['canvas', 'terminals'])
 
 // --------------------------------------------------------------- availability
 // 12. Healthy + lock held ⇒ not blocked.

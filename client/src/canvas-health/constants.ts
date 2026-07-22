@@ -48,6 +48,11 @@ function positiveMs(raw: string | boolean | undefined, fallback: number): number
 	return Math.floor(n)
 }
 
+// Accepted gap: fields are parsed independently, so nothing here validates
+// probeTimeoutMs against probeIntervalMs — a build that sets the timeout
+// below the interval would have every probe time out before the next one
+// fires. Deliberate for now (per-field parsing keeps this simple and
+// testable); revisit if a misconfigured build ever hits it.
 export function readThresholds(env: EnvRecord): Thresholds {
 	return {
 		canvasMs: positiveMs(env.VITE_CONN_HEALTH_CANVAS_MS, DEFAULT_THRESHOLDS.canvasMs),
