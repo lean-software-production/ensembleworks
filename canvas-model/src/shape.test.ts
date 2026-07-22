@@ -1,6 +1,14 @@
 // Run: bun src/shape.test.ts
 import assert from 'node:assert/strict'
-import { SHAPE_KINDS, TEXT_CAPABLE_KINDS, isTextCapableKind, shapeSchema, validateShape, plainText } from './shape.js'
+import {
+  SHAPE_KINDS,
+  TEXT_CAPABLE_KINDS,
+  isTextCapableKind,
+  shapeSchema,
+  validateShape,
+  plainText,
+  STYLE_VALUE_SETS,
+} from './shape.js'
 
 // Every kind the room can contain is enumerated (9 tldraw incl. group + image + 6 custom).
 assert.deepEqual(
@@ -125,3 +133,73 @@ const parsed = shapeSchema.parse(mixed)
 assert.equal((parsed.props as any).totallyUnknownProp, 42, 'unknown key value is preserved verbatim')
 
 console.log('ok: remaining style enums (M2)')
+
+// Task M3 -- STYLE_VALUE_SETS is a UI-consumable export of the SAME accepted
+// values STYLE_ENUMS validates against, derived (not hand-copied) so it
+// cannot drift from the write boundary above. One representative full-set
+// assertion per axis, values in the enum's own declared order.
+assert.deepEqual(
+  [...STYLE_VALUE_SETS.color],
+  ['black', 'grey', 'light-violet', 'violet', 'blue', 'light-blue', 'yellow', 'orange', 'green', 'light-green', 'light-red', 'red', 'white'],
+  'STYLE_VALUE_SETS.color matches the COLOR enum exactly',
+)
+assert.deepEqual(
+  [...STYLE_VALUE_SETS.fill],
+  ['none', 'semi', 'solid', 'pattern', 'fill', 'lined-fill'],
+  'STYLE_VALUE_SETS.fill matches the FILL enum exactly',
+)
+assert.deepEqual(
+  [...STYLE_VALUE_SETS.dash],
+  ['draw', 'solid', 'dashed', 'dotted', 'none'],
+  'STYLE_VALUE_SETS.dash matches the DASH enum exactly, including the 5th "none" value',
+)
+assert.deepEqual([...STYLE_VALUE_SETS.size], ['s', 'm', 'l', 'xl'], 'STYLE_VALUE_SETS.size matches the SIZE enum exactly')
+assert.deepEqual(
+  [...STYLE_VALUE_SETS.font],
+  ['draw', 'sans', 'serif', 'mono'],
+  'STYLE_VALUE_SETS.font matches the FONT enum exactly',
+)
+assert.deepEqual(
+  [...STYLE_VALUE_SETS.align],
+  ['start', 'middle', 'end', 'start-legacy', 'end-legacy', 'middle-legacy'],
+  'STYLE_VALUE_SETS.align matches the ALIGN enum exactly, including all three -legacy variants',
+)
+assert.deepEqual(
+  [...STYLE_VALUE_SETS.verticalAlign],
+  ['start', 'middle', 'end'],
+  'STYLE_VALUE_SETS.verticalAlign matches the VERTICAL_ALIGN enum exactly',
+)
+assert.deepEqual(
+  [...STYLE_VALUE_SETS.textAlign],
+  ['start', 'middle', 'end'],
+  'STYLE_VALUE_SETS.textAlign matches the TEXT_ALIGN enum exactly',
+)
+assert.deepEqual(
+  [...STYLE_VALUE_SETS.geo],
+  [
+    'cloud', 'rectangle', 'ellipse', 'triangle', 'diamond', 'pentagon',
+    'hexagon', 'octagon', 'star', 'rhombus', 'rhombus-2', 'oval', 'trapezoid',
+    'arrow-right', 'arrow-left', 'arrow-up', 'arrow-down', 'x-box', 'check-box',
+    'heart',
+  ],
+  'STYLE_VALUE_SETS.geo matches the GEO enum exactly',
+)
+assert.deepEqual(
+  [...STYLE_VALUE_SETS.arrowheadStart],
+  ['arrow', 'triangle', 'square', 'dot', 'pipe', 'diamond', 'inverted', 'bar', 'none'],
+  'STYLE_VALUE_SETS.arrowheadStart matches the ARROWHEAD enum exactly',
+)
+assert.deepEqual(
+  [...STYLE_VALUE_SETS.arrowheadEnd],
+  ['arrow', 'triangle', 'square', 'dot', 'pipe', 'diamond', 'inverted', 'bar', 'none'],
+  'STYLE_VALUE_SETS.arrowheadEnd matches the ARROWHEAD enum exactly (same set as arrowheadStart)',
+)
+// Structural drift guard: the exported keys must be exactly STYLE_ENUMS's
+// keys -- if a future axis is added to STYLE_ENUMS but the derivation isn't
+// updated to walk it, this catches the gap.
+assert.deepEqual(
+  Object.keys(STYLE_VALUE_SETS).sort(),
+  ['align', 'arrowheadEnd', 'arrowheadStart', 'color', 'dash', 'fill', 'font', 'geo', 'size', 'textAlign', 'verticalAlign'].sort(),
+  'STYLE_VALUE_SETS has exactly one key per style axis STYLE_ENUMS validates',
+)
+console.log('ok: STYLE_VALUE_SETS matches STYLE_ENUMS exactly, per axis (M3 drift guard)')

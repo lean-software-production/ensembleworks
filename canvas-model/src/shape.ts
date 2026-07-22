@@ -147,6 +147,20 @@ const STYLE_ENUMS = {
 } as const
 type StyleAxis = keyof typeof STYLE_ENUMS
 
+// Task M3 — a UI-consumable value list per style axis, derived FROM
+// STYLE_ENUMS's Zod enums via `.options` (zod v4's array-of-accepted-values
+// accessor, in declaration order) rather than a second hand-maintained copy.
+// This is what makes drift structurally impossible: STYLE_ENUMS is what
+// `styleProps`/`propsByKind` above validate writes against, and this export
+// reads the SAME enum objects, so editing an axis here (e.g. adding a new
+// DASH value) changes both validation and this export in the same edit —
+// there is no second list to forget. Consumers (e.g. client/src/canvas-v2/
+// style-axes.ts's styling panel) import this instead of hand-copying
+// tldraw's palette.
+export const STYLE_VALUE_SETS: { [K in StyleAxis]: readonly string[] } = Object.fromEntries(
+  (Object.keys(STYLE_ENUMS) as StyleAxis[]).map((axis) => [axis, STYLE_ENUMS[axis].options]),
+) as unknown as { [K in StyleAxis]: readonly string[] }
+
 // Shared fragment builder: given a list of style axes, returns a loose
 // object exposing exactly those keys as optional tldraw-parity enums.
 // Loose (not strict) so composing it onto a per-kind schema via `.extend()`
