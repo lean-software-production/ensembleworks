@@ -6,7 +6,7 @@
 // how each becomes doc ops. This indirection is what makes a tool testable
 // as pure (state, InputEvent) -> (state', Intent[]) with no doc at all — see
 // script.ts's `run()`.
-import type { Shape } from '@ensembleworks/canvas-model'
+import type { Binding, Shape } from '@ensembleworks/canvas-model'
 
 export interface Point { readonly x: number; readonly y: number }
 
@@ -31,6 +31,28 @@ export interface ArrowBinding {
  * `random`/an id factory and z-order via a fractional index; this intent is
  * just "put this fully-formed shape"). */
 export interface CreateShape { readonly type: 'CreateShape'; readonly shape: Shape }
+
+/** Upsert `binding` verbatim, IF it passes `bindingSchema` — a validated
+ * write, unlike raw `CanvasDoc.putBinding` (a plain `.set()` with no
+ * validation at all; see loro-canvas-doc.ts's `putBinding`). `applyOne`
+ * (editor.ts) runs `bindingSchema.safeParse(intent.binding)` before ever
+ * calling `doc.putBinding`; on failure the WHOLE intent is a silent no-op —
+ * no doc write, no undo entry, no throw — mirroring `putShape`'s own
+ * reject-invalid write boundary (`validateShape` in loro-canvas-doc.ts).
+ * This is the write path paste (Task E1) uses to create cloned bindings from
+ * foreign clipboard data, so an invalid binding can never reach the doc even
+ * if a bug upstream (decodeClipboard/cloneWithNewIds) let one through.
+ *
+ * Does NOT itself check that `fromId`/`toId` resolve to shapes that exist —
+ * only that the binding is STRUCTURALLY well-formed. A structurally-valid
+ * but dangling binding (endpoint doesn't resolve) is accepted and written;
+ * CanvasDoc.repair() is what sweeps dangling bindings, the same contract
+ * StartArrow/CompleteArrow's own `doc.putBinding` calls above already rely
+ * on. Callers that must never create a dangling binding (paste, via
+ * cloneWithNewIds/D-4) filter endpoints themselves before emitting this
+ * intent — PutBinding's job is schema validation, not referential
+ * integrity. */
+export interface PutBinding { readonly type: 'PutBinding'; readonly binding: Binding }
 
 /** Move every shape in `ids` by (dx, dy) in its own parent's local frame.
  * `ids` is DEDUPED against ancestor/descendant overlap before mutation — see
@@ -201,6 +223,7 @@ export interface SetNextStyle { readonly type: 'SetNextStyle'; readonly props: R
 
 export type Intent =
   | CreateShape
+  | PutBinding
   | TranslateShapes
   | ResizeShapes
   | RotateShapes

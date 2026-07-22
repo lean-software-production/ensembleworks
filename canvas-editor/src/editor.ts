@@ -4,7 +4,7 @@
 // mutators; everything upstream (tools, scripts, the renderer) only ever
 // produces or reads Intents/EditorState.
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'
-import { toLocalPoint, type Binding, type CanvasDocument, type Point, type Shape } from '@ensembleworks/canvas-model'
+import { bindingSchema, toLocalPoint, type Binding, type CanvasDocument, type Point, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from './intents.js'
 
 // ============================================================================
@@ -383,6 +383,24 @@ export class Editor {
           undo: [{ op: 'deleteShape', id: intent.shape.id }],
           redo: [{ op: 'putShape', shape: intent.shape }],
         }
+
+      // Validated binding write (Task E2): closes the gap that raw
+      // CanvasDoc.putBinding performs NO validation at all (unlike
+      // putShape's validateShape gate above) — see intents.ts's PutBinding
+      // doc comment. A binding that fails bindingSchema is a TOTAL no-op:
+      // no doc.putBinding call, no undo/redo entry, no throw — the same
+      // reject-invalid contract putShape already has for shapes.
+      case 'PutBinding': {
+        const parsed = bindingSchema.safeParse(intent.binding)
+        if (!parsed.success) return { state, docMutated: false, stateChanged: false }
+        const binding = parsed.data
+        this.doc.putBinding(binding)
+        return {
+          state, docMutated: true, stateChanged: false,
+          undo: [{ op: 'deleteBinding', id: binding.id }],
+          redo: [{ op: 'putBinding', binding }],
+        }
+      }
 
       case 'TranslateShapes': {
         const ids = dedupeAncestorOverlap(this.doc, intent.ids)

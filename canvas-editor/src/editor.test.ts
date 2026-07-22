@@ -1,7 +1,7 @@
 // Run: bun src/editor.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc, dumpModel, type CanvasDoc } from '@ensembleworks/canvas-doc'
-import { worldTransform, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
+import { worldTransform, type Binding, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import { Editor } from './editor.js'
 
 // Injected clock/PRNG — fixed, non-advancing: proves the editor never
@@ -793,6 +793,52 @@ const normalize = (m: CanvasDocument) => ({
   assert.equal(editor.get().nextShapeStyle.color, 'red', 'the merge did take effect')
 
   console.log('ok: SetNextStyle shallow-merges the armed style, view-only (no commit, no undo)')
+}
+
+// ============================================================================
+// 24. PutBinding (Task E2): a binding write intent, validated via
+//     bindingSchema before it ever reaches doc.putBinding — closing the gap
+//     that raw CanvasDoc.putBinding performs NO validation (D-2 correction
+//     2). Valid binding lands and undoes/redoes like any other doc mutation;
+//     a junk binding (fails bindingSchema) is a silent no-op — never reaches
+//     the doc, never throws, never pushes an undo entry.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a') })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b') })
+
+  const binding: Binding = {
+    id: 'binding:x' as any,
+    fromId: 'shape:a' as any,
+    toId: 'shape:b' as any,
+    props: {},
+    meta: {},
+  }
+  editor.apply({ type: 'PutBinding', binding })
+  assert.deepEqual(doc.listBindings().map((b) => b.id), ['binding:x'], 'PutBinding with a valid binding lands in the doc')
+
+  editor.undo()
+  assert.deepEqual(doc.listBindings(), [], 'undo of PutBinding removes the binding')
+
+  editor.redo()
+  assert.deepEqual(doc.listBindings().map((b) => b.id), ['binding:x'], 'redo of PutBinding re-adds the binding')
+
+  console.log('ok: undo/redo PutBinding')
+}
+
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a') })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b') })
+  const canUndoBefore = editor.canUndo()
+
+  const junk = { id: 'binding:y', fromId: 42, toId: 'shape:b', props: {}, meta: {} }
+  assert.doesNotThrow(() => editor.apply({ type: 'PutBinding', binding: junk as any }), 'a junk binding is refused, never thrown')
+  assert.deepEqual(doc.listBindings(), [], 'a junk binding (fromId: 42, fails bindingSchema) never reaches doc.putBinding')
+  assert.equal(editor.canUndo(), canUndoBefore, 'a refused PutBinding pushes no undo entry')
+
+  console.log('ok: PutBinding refuses a binding that fails bindingSchema, no-op, no throw')
 }
 
 console.log('ok: canvas-editor editor + intents')
