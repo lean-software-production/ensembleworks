@@ -43,8 +43,8 @@
 // newer/older doc read than the other. No local memoization is needed
 // because `index()` is itself already stable (===) between rebuilds, exactly
 // like `snapshot()`.
-import { queryViewport, type Bounds, type Shape } from '@ensembleworks/canvas-model'
-import { orderParentBeforeChild, screenToWorld, type Camera, type Intent, type ToolContext } from '@ensembleworks/canvas-editor'
+import { orderForPaint, pageIdOf, queryViewport, type Bounds, type Shape } from '@ensembleworks/canvas-model'
+import { screenToWorld, type Camera, type Intent, type ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { ShapeBody } from './ShapeBody.js'
 import { isEmbedKind } from './shapeRegistry.js'
@@ -91,25 +91,44 @@ export function ShapeLayer({ toolContext, camera, viewportSize, dispatch }: Shap
   const index = toolContext.index()
   const bounds = viewportWorldBounds(camera, viewportSize)
   const visibleIds = queryViewport(index, bounds)
-  // PAINT ORDER (Task F1 finding): queryViewport answers from a spatial
-  // hash grid — its return order is cell-iteration order, NOT document/z
-  // order. Every rendered body is a `position: absolute` DOM sibling
-  // (ShapeBody.tsx's FLAT SIBLINGS design), so DOM order IS paint order:
-  // left as spatial-index order, an opaque container (e.g. FrameShape's
-  // fully-opaque `#ffffff` body — real v1 parity, not a bug in itself) can
-  // render AFTER, and fully occlude, one of its own children whenever the
-  // grid happens to iterate the child's cell before the frame's. Sorting
-  // parent-before-child (the SAME depth-sort DeleteShapes's undo already
-  // uses) fixes this globally and cheaply: a parent always has smaller
-  // depth than any descendant, and unrelated shapes keep queryViewport's
-  // relative order (stable sort), which carries no correctness meaning here
-  // anyway (culling order is arbitrary by design).
-  const visibleShapes = orderParentBeforeChild(
-    visibleIds
-      .map((id) => snapshot.byId.get(id))
-      .filter((s): s is Shape => s !== undefined), // vanished between index build and this render — omit, never throw (matches the STALENESS CONTRACT's "omissions only" posture)
-    snapshot.byId
-  )
+  // PAGE FILTER (Task R1): keep only shapes whose PAGE ancestor is the
+  // current page. `pageIdOf` (canvas-model/geometry.ts) walks a shape's
+  // parent chain to its `page:` ancestor, so this is correct for a NESTED
+  // shape too (a child of a frame on page:q resolves to page:q, not to its
+  // direct parentId, which is the frame's id — never a page id). Applied to
+  // the culled (visible) set BEFORE `orderForPaint`: dropping a cross-page
+  // shape from the input never orphans an in-page child's ordering, because
+  // orderForPaint already treats a shape whose parent is absent from its
+  // input as a forest root (see that function's own header). Migration-safe
+  // by construction: in a single-page room every shape's `pageIdOf` equals
+  // that one page's id, which always equals `currentPageId` (E1 seeds it
+  // from `opts.pageId`), so nothing is ever filtered out there.
+  const currentPageId = editorState.currentPageId
+  const onCurrentPage = visibleIds
+    .map((id) => snapshot.byId.get(id))
+    .filter((s): s is Shape => s !== undefined) // vanished between index build and this render — omit, never throw (matches the STALENESS CONTRACT's "omissions only" posture)
+    .filter((s) => pageIdOf(snapshot, s) === currentPageId)
+  // PAINT ORDER (Task R1 — supersedes the Task F1 depth-only fix):
+  // queryViewport answers from a spatial hash grid — its return order is
+  // cell-iteration order, NOT document/z order. Every rendered body is a
+  // `position: absolute` DOM sibling (ShapeBody.tsx's FLAT SIBLINGS
+  // design), so DOM order IS paint order. `orderForPaint` (canvas-model,
+  // pure) replaces the old depth-only `orderParentBeforeChild` sort with a
+  // DFS pre-order over this CULLED-AND-PAGE-FILTERED (visible, current-page)
+  // set: each level's siblings — starting with this set's own forest roots
+  // (a shape whose parent fell outside the set is treated as a root, never
+  // dropped) — sorted by `(index ASC, id ASC)`, then recursively each
+  // shape's in-set children. This subsumes the old parent-before-child
+  // guarantee (a parent always precedes its descendants in DFS pre-order,
+  // so an opaque container like FrameShape's fully-opaque body can never
+  // occlude its own children) AND additionally makes the doc's `index`
+  // field the visible z-order: a higher-index shape paints later (on top)
+  // among its siblings, and the `(index, id)` tie-break gives every peer
+  // the SAME deterministic order for the all-'a1' legacy corpus (no data
+  // migration performed — see the z-order plan's Decision D-2) regardless
+  // of queryViewport's iteration order, which still carries no correctness
+  // meaning here.
+  const visibleShapes = orderForPaint(onCurrentPage, snapshot.byId)
 
   return (
     <>

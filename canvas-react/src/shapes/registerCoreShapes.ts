@@ -1,19 +1,22 @@
-// REGISTRATION for the four core tldraw-parity shape bodies (C1-C4:
-// NoteShape/FrameShape/TextShape/GeoShape) into canvas-react's own
-// shapeRegistry. UNLIKE registerCanvasV2Shapes() (client/src/canvas-v2/
-// shapes/index.ts) — which lives OUT-OF-PACKAGE because its six bodies hold
-// real client-owned session state (xterm, LiveKit, the gateway WS, this
-// app's identity/presence plumbing) — these four bodies are plain,
-// self-contained React components with no dependency beyond canvas-react's
-// own ShapeBodyProps contract (shape/snapshot/editorState/getText), so they
-// belong IN canvas-react, registered by canvas-react itself. See
-// shapeRegistry.ts's FALLBACK POLICY header: before this function is called,
-// note/frame/text/geo are unregistered and render as the generic labeled
-// BoxShape; calling it gives each its own dedicated body instead.
+// REGISTRATION for the core tldraw-parity shape bodies (C1-C4:
+// NoteShape/FrameShape/TextShape/GeoShape; R1 added DrawShape, then the
+// line sub-cycle's R1 added LineShape, then the assets/image sub-cycle's R1
+// added ImageShape) into
+// canvas-react's own shapeRegistry. UNLIKE registerCanvasV2Shapes()
+// (client/src/canvas-v2/shapes/index.ts) — which lives OUT-OF-PACKAGE
+// because its six bodies hold real client-owned session state (xterm,
+// LiveKit, the gateway WS, this app's identity/presence plumbing) — these
+// bodies are plain, self-contained React components with no dependency
+// beyond canvas-react's own ShapeBodyProps contract (shape/snapshot/
+// editorState/getText), so they belong IN canvas-react, registered by
+// canvas-react itself. See shapeRegistry.ts's FALLBACK POLICY header:
+// before this function is called, note/frame/text/geo/draw are
+// unregistered and render as the generic labeled BoxShape; calling it gives
+// each its own dedicated body instead.
 //
-// NON-EMBED: all four use the two-argument `registerShape(kind, Component)`
+// NON-EMBED: all five use the two-argument `registerShape(kind, Component)`
 // form, which defaults `{ embed: false }` (RegisterShapeOptions.embed) —
-// none of these four holds a live session/connection that needs the
+// none of these holds a live session/connection that needs the
 // culling-safe EmbedHost/EmbedLayer lifecycle; ShapeLayer's plain
 // cull-and-unmount treatment is exactly right for them, same as the
 // legacy tldraw shape utils they port.
@@ -28,10 +31,13 @@ import { NoteShape } from './NoteShape.js'
 import { FrameShape } from './FrameShape.js'
 import { TextShape } from './TextShape.js'
 import { GeoShape } from './GeoShape.js'
+import { DrawShape } from './DrawShape.js'
+import { LineShape } from './LineShape.js'
+import { ImageShape } from './ImageShape.js'
 
 let registered = false
 
-/** Register the four core shape bodies (note/frame/text/geo) into
+/** Register the core shape bodies (note/frame/text/geo/draw/line/image) into
  * canvas-react's shapeRegistry. Idempotent — a second call is a no-op. */
 export function registerCoreShapes(): void {
   if (registered) return
@@ -40,4 +46,7 @@ export function registerCoreShapes(): void {
   registerShape('frame', FrameShape)
   registerShape('text', TextShape)
   registerShape('geo', GeoShape)
+  registerShape('draw', DrawShape)
+  registerShape('line', LineShape)
+  registerShape('image', ImageShape)
 }

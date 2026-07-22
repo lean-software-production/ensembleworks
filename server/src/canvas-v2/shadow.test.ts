@@ -164,4 +164,42 @@ for (let i = 0; i < 5; i++) mirror3.tick()
 	assert.equal(m.puts, 2, 'initial load puts only (frame+note) — no steady-state churn from key reordering')
 }
 
+// --- 6) REFUSED WRITES ARE COUNTED AND EXPOSED. convert.ts passes tldraw
+// props through verbatim, so a legacy room can hand the mirror a shape the
+// write boundary refuses (here: a frame whose `w` is the string '400'). The
+// put is a no-op, so the shape never lands and every later tick retries it —
+// reconcile cannot converge. Before `refused` existed those retries were
+// counted as `puts`, so /api/canvas/metrics showed a forever-climbing puts
+// rate with no way to tell real churn from one known-bad shape. checkEvery is
+// 100 so no divergence check fires inside this case — this fixture WOULD trip
+// one, legitimately, and that is case 3's subject, not this one. ---
+const badFrame = { ...frame(), id: 'shape:bad', props: { name: 'Legacy', w: '400', h: 300, color: 'black' } }
+const legacyRecords: any[] = [page, frame(), note(), badFrame]
+const mirror4 = new ShadowMirror('room4', 4n, () => legacyRecords, 100)
+
+mirror4.tick()
+{
+	const m = mirror4.metrics()
+	// puts and refused are DIFFERENT numbers here (2 vs 1) deliberately: an
+	// implementation that accumulates reconcile's `refused` into `puts`, or
+	// vice versa, survives any assertion where the two happen to be equal.
+	assert.equal(m.refused, 1, 'the refused write is counted')
+	assert.equal(m.puts, 2, 'the two valid shapes are puts; the refused one is not')
+	assert.equal(m.shapeCount, 2, 'the refused shape never landed in the mirror')
+}
+
+mirror4.tick()
+{
+	const m = mirror4.metrics()
+	// refused is CUMULATIVE, like puts and deletes: it climbs by one per tick
+	// for as long as the room carries the bad shape. Two mutants die here that
+	// the first tick cannot catch — assigning per-tick (`this.m.refused =
+	// refused`) leaves it at 1, and accumulating doc.invalidWriteCount raw
+	// rather than reconcile's per-tick delta reaches 3.
+	assert.equal(m.refused, 2, 'refused accumulates across ticks, like puts/deletes')
+	// The point of the whole task: the retry is no longer disguised as a put,
+	// so a steady-state puts rate of ~0 is a readable signal again.
+	assert.equal(m.puts, 2, 'the retried refusal did NOT inflate puts')
+}
+
 console.log('ok: shadow')

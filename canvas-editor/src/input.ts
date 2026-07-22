@@ -25,6 +25,15 @@ export interface PointerInputEvent {
   readonly buttons: number
   readonly modifiers: Modifiers
   readonly t: number
+  /** Stylus pressure, 0..1 — RECORDED on the event, never sampled inside a
+   * tool FSM (same replay-safety posture as `t`: input.ts's header
+   * mandates every timestamp be caller-injected, never read from a wall
+   * clock; this field extends that rule to pressure). `undefined` means "no
+   * real pen signal" — canvas-react's DOM normalization (Task W1) sets this
+   * ONLY for `pointerType === 'pen'`, leaving it `undefined` for mouse/touch,
+   * so `event.pressure !== undefined` is the pen tool's own pen-vs-mouse
+   * test (Task T1, Decision D-3). */
+  readonly pressure?: number
 }
 
 export interface KeyInputEvent {

@@ -122,4 +122,92 @@ function noteShape(overrides: Partial<Shape> = {}): Shape {
   console.log('ok: NoteShape — color/font actually reach the rendered DOM, not just the pure helper')
 }
 
-console.log('ok: note-shape (color -> v1 fill mapping, author badge from meta.author, handwriting font, shared label resolver)')
+// ============================================================================
+// 6. Task R3 — NoteShape honors props.align (DefaultHorizontalAlignStyle's
+//    six values: start/middle/end + the three -legacy variants, default
+//    'middle'). start -> left/flex-start; end -> right/flex-end; middle
+//    (and absent) -> center/center — the pre-R3 always-centered default.
+//    The -legacy variants MUST render identically to their base value — a
+//    switch that only handles the 3 primary values and defaults -legacy
+//    ones to center would mis-render a legacy note.
+// ============================================================================
+{
+  const noteDiv = (html: string) => {
+    const m = html.match(/<div data-shape-body="note" style="([^"]*)"/)
+    return m ? m[1] : null
+  }
+  const render = (align: string | undefined) =>
+    renderToStaticMarkup(
+      createElement(NoteShape, {
+        shape: noteShape({ props: align === undefined ? {} : { align } }),
+        snapshot: undefined as any,
+        editorState: undefined as any,
+        getText: () => 'hi',
+      }),
+    )
+
+  const start = noteDiv(render('start'))
+  assert.ok(start, `expected a note body div in: ${render('start')}`)
+  assert.match(start!, /text-align:left/, `align:'start' should render text-align:left, got: ${start}`)
+  assert.match(start!, /justify-content:flex-start/, `align:'start' should render justify-content:flex-start, got: ${start}`)
+
+  const end = noteDiv(render('end'))
+  assert.match(end!, /text-align:right/, `align:'end' should render text-align:right, got: ${end}`)
+  assert.match(end!, /justify-content:flex-end/, `align:'end' should render justify-content:flex-end, got: ${end}`)
+
+  const middle = noteDiv(render('middle'))
+  assert.match(middle!, /text-align:center/, `align:'middle' should render text-align:center, got: ${middle}`)
+  assert.match(middle!, /justify-content:center/, `align:'middle' should render justify-content:center, got: ${middle}`)
+
+  const absent = noteDiv(render(undefined))
+  assert.match(absent!, /text-align:center/, `an absent align prop defaults to v1's own default (middle) -> center, got: ${absent}`)
+  assert.match(absent!, /justify-content:center/, `an absent align prop defaults to center, got: ${absent}`)
+
+  const startLegacy = noteDiv(render('start-legacy'))
+  assert.match(startLegacy!, /text-align:left/, `align:'start-legacy' must render IDENTICALLY to 'start' (left), got: ${startLegacy}`)
+  assert.match(startLegacy!, /justify-content:flex-start/, `align:'start-legacy' must render IDENTICALLY to 'start' (flex-start), got: ${startLegacy}`)
+
+  const endLegacy = noteDiv(render('end-legacy'))
+  assert.match(endLegacy!, /text-align:right/, `align:'end-legacy' must render IDENTICALLY to 'end' (right), got: ${endLegacy}`)
+  assert.match(endLegacy!, /justify-content:flex-end/, `align:'end-legacy' must render IDENTICALLY to 'end' (flex-end), got: ${endLegacy}`)
+
+  const middleLegacy = noteDiv(render('middle-legacy'))
+  assert.match(middleLegacy!, /text-align:center/, `align:'middle-legacy' must render IDENTICALLY to 'middle' (center), got: ${middleLegacy}`)
+  assert.match(middleLegacy!, /justify-content:center/, `align:'middle-legacy' must render IDENTICALLY to 'middle' (center), got: ${middleLegacy}`)
+
+  console.log('ok: NoteShape — props.align honored (start/middle/end + -legacy variants rendering identically to their base), default middle/center')
+}
+
+// ============================================================================
+// 7. Task R3 — NoteShape honors props.verticalAlign (start/middle/end,
+//    default 'middle'). start -> align-items:flex-start; end ->
+//    align-items:flex-end; middle/absent -> align-items:center.
+// ============================================================================
+{
+  const noteDiv = (html: string) => {
+    const m = html.match(/<div data-shape-body="note" style="([^"]*)"/)
+    return m ? m[1] : null
+  }
+  const render = (verticalAlign: string | undefined) =>
+    renderToStaticMarkup(
+      createElement(NoteShape, {
+        shape: noteShape({ props: verticalAlign === undefined ? {} : { verticalAlign } }),
+        snapshot: undefined as any,
+        editorState: undefined as any,
+        getText: () => 'hi',
+      }),
+    )
+
+  const start = noteDiv(render('start'))
+  assert.match(start!, /align-items:flex-start/, `verticalAlign:'start' should render align-items:flex-start, got: ${start}`)
+
+  const end = noteDiv(render('end'))
+  assert.match(end!, /align-items:flex-end/, `verticalAlign:'end' should render align-items:flex-end, got: ${end}`)
+
+  const absent = noteDiv(render(undefined))
+  assert.match(absent!, /align-items:center/, `an absent verticalAlign prop defaults to v1's own default (middle) -> center, got: ${absent}`)
+
+  console.log('ok: NoteShape — props.verticalAlign honored (start/middle/end), default middle/center')
+}
+
+console.log('ok: note-shape (color -> v1 fill mapping, author badge from meta.author, handwriting font, shared label resolver, align)')

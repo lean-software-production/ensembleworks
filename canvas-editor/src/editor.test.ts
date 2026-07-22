@@ -1,7 +1,7 @@
 // Run: bun src/editor.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc, dumpModel, type CanvasDoc } from '@ensembleworks/canvas-doc'
-import { worldTransform, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
+import { worldTransform, type Asset, type Binding, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import { Editor } from './editor.js'
 
 // Injected clock/PRNG — fixed, non-advancing: proves the editor never
@@ -296,6 +296,7 @@ const normalize = (m: CanvasDocument) => ({
     { type: 'SetSelection', ids: ['shape:a'] },
     { type: 'SetHover', id: 'shape:a' },
     { type: 'BeginEdit', id: 'shape:a' },
+    { type: 'SetNextStyle', props: { color: 'blue' } },
   ])
 
   const snap = editor.get()
@@ -306,6 +307,7 @@ const normalize = (m: CanvasDocument) => ({
   attempt(() => { (snap.selection as Set<string>).add('shape:evil') })
   attempt(() => { (snap.selection as Set<string>).delete('shape:a') })
   attempt(() => { (snap as { camera: unknown }).camera = { x: 0, y: 0, z: 0 } })
+  attempt(() => { (snap.nextShapeStyle as Record<string, unknown>).color = 'evil' })
 
   // A subsequent UNRELATED state change, then a fresh get(): every field the
   // probes attacked must still hold its canonical value.
@@ -315,6 +317,7 @@ const normalize = (m: CanvasDocument) => ({
   assert.deepEqual([...fresh.selection], ['shape:a'], 'selection survived Set.add/.delete on a returned snapshot')
   assert.equal(fresh.editingId, 'shape:a', 'editingId survived reassignment attempts')
   assert.equal(fresh.hover, null, 'the legitimate SetHover still went through')
+  assert.equal(fresh.nextShapeStyle.color, 'blue', 'nextShapeStyle survived a mutation attempt on a returned snapshot — kills the "return the live object, not a copy" mutant')
 
   // Behavior check: drive a translate off a FRESH snapshot's selection — if
   // Set.add('shape:evil') had leaked into canonical state, shape:evil would
@@ -696,6 +699,352 @@ const normalize = (m: CanvasDocument) => ({
   assert.equal(commits, 0, 'UpdateProps on an unknown id must not commit — docMutated must be false')
 
   console.log('ok: UpdateProps shallow-merges props and silently no-ops on an unknown id')
+}
+
+// ============================================================================
+// 22. SetStyle (Task E1): batch style-patch across the WHOLE selection —
+//     shallow-merges `props` into EACH id's props map (like UpdateProps, but
+//     multi-id) AND sets each id's ENVELOPE `opacity` (which UpdateProps
+//     cannot reach — canvas-doc's updateProps only ever merges the props
+//     map, see canvas-doc/src/canvas-doc.ts's updateProps contract comment).
+//     Full-shape-inverse convention (same as UpdateProps): undo restores the
+//     COMPLETE pre-mutation shape (props AND opacity) for every id, in ONE
+//     UndoEntry per batch (one doc.commit()). An unresolved id is SKIPPED,
+//     never thrown (applyAll TOLERANCE CONTRACT).
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { props: { color: 'red', kept: 'a-stays' }, opacity: 1 }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b', { props: { color: 'red', kept: 'b-stays' }, opacity: 1 }) })
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.applyAll([{ type: 'SetStyle', ids: ['shape:a', 'shape:b'], props: { color: 'blue' }, opacity: 0.5 }])
+
+  assert.equal(commits, 1, 'SetStyle over a two-id batch is ONE doc.commit(), not one per id')
+  assert.equal(doc.getShape('shape:a')!.props.color, 'blue', 'shape a got the prop patch')
+  assert.equal(doc.getShape('shape:b')!.props.color, 'blue', 'shape b got the SAME prop patch — batch, not single-id (kills the ids[0]-only mutant)')
+  assert.equal((doc.getShape('shape:a')!.props as any).kept, 'a-stays', 'shallow merge: an unnamed pre-existing prop key survives (not an overwrite)')
+  assert.equal((doc.getShape('shape:b')!.props as any).kept, 'b-stays')
+  assert.equal(doc.getShape('shape:a')!.opacity, 0.5, 'shape a got the ENVELOPE opacity write — UpdateProps cannot reach this field')
+  assert.equal(doc.getShape('shape:b')!.opacity, 0.5, 'shape b got the envelope opacity write too')
+
+  // Unresolved id: skipped, never thrown -- and since nothing resolved,
+  // docMutated is false, so it must not occupy a commit either.
+  const commitsBeforeGhost = commits
+  assert.doesNotThrow(
+    () => editor.applyAll([{ type: 'SetStyle', ids: ['shape:ghost'], props: { color: 'red' } }]),
+    'SetStyle over an unresolved id does not throw',
+  )
+  assert.equal(commits, commitsBeforeGhost, 'an all-unresolved SetStyle batch does not commit')
+
+  // Undo/redo round trip: ONE undo step restores BOTH shapes' full
+  // pre-image (props AND opacity) -- kills a no-undo mutant (handler
+  // returns undo:[]) and an opacity-dropped mutant (handler merges props
+  // but never captures/restores the envelope field).
+  editor.undo()
+  assert.equal(doc.getShape('shape:a')!.props.color, 'red', "undo restores shape a's prior color")
+  assert.equal(doc.getShape('shape:a')!.opacity, 1, "undo restores shape a's prior opacity")
+  assert.equal(doc.getShape('shape:b')!.props.color, 'red', "undo restores shape b's prior color in the SAME step")
+  assert.equal(doc.getShape('shape:b')!.opacity, 1, "undo restores shape b's prior opacity in the same step")
+
+  editor.redo()
+  assert.equal(doc.getShape('shape:a')!.props.color, 'blue', 're-applies the prop patch')
+  assert.equal(doc.getShape('shape:a')!.opacity, 0.5, 're-applies the opacity write')
+  assert.equal(doc.getShape('shape:b')!.props.color, 'blue')
+  assert.equal(doc.getShape('shape:b')!.opacity, 0.5)
+
+  console.log('ok: SetStyle batch-patches props + envelope opacity across a selection, with tolerant unresolved ids and full-batch undo/redo')
+}
+
+// ============================================================================
+// 23. SetNextStyle (Task AS1): editor-LOCAL "armed" style a newly-created
+//     shape will inherit — parity with tldraw arming a color on the tool
+//     before drawing. A VIEW intent (like SetCamera/SetSelection/SetHover):
+//     touches ONLY nextShapeStyle in EditorState, never the doc, never the
+//     undo stack. Shallow-MERGES `props` into the existing nextShapeStyle
+//     (arming color then arming size accumulates both), it does not replace.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+
+  // View-intent purity baselines captured BEFORE any SetNextStyle call — a
+  // mutant that treats SetNextStyle as a mutation would already corrupt
+  // these on the FIRST call below, so the baseline must predate all of them,
+  // not just the last.
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+  const canUndoBefore = editor.canUndo()
+
+  assert.deepEqual(editor.get().nextShapeStyle, {}, 'nextShapeStyle starts empty')
+
+  editor.apply({ type: 'SetNextStyle', props: { color: 'blue' } })
+  assert.equal(editor.get().nextShapeStyle.color, 'blue', 'SetNextStyle sets the given key')
+
+  // Shallow-merge, not replace: arming a second axis must not drop the first.
+  editor.apply({ type: 'SetNextStyle', props: { size: 'l' } })
+  assert.equal(editor.get().nextShapeStyle.color, 'blue', 'a later SetNextStyle for a DIFFERENT key does not drop an earlier one — kills the replace-instead-of-merge mutant')
+  assert.equal(editor.get().nextShapeStyle.size, 'l')
+
+  editor.apply({ type: 'SetNextStyle', props: { color: 'red' } })
+  assert.equal(commits, 0, 'SetNextStyle never calls doc.commit(), across all three calls above — kills a mutant that routes it through the doc')
+  assert.equal(editor.canUndo(), canUndoBefore, 'SetNextStyle never pushes an undo entry, across all three calls above — kills a mutant that treats it as a mutation')
+  assert.equal(editor.get().nextShapeStyle.color, 'red', 'the merge did take effect')
+
+  console.log('ok: SetNextStyle shallow-merges the armed style, view-only (no commit, no undo)')
+}
+
+// ============================================================================
+// 24. PutBinding (Task E2): a binding write intent, validated via
+//     bindingSchema before it ever reaches doc.putBinding — closing the gap
+//     that raw CanvasDoc.putBinding performs NO validation (D-2 correction
+//     2). Valid binding lands and undoes/redoes like any other doc mutation;
+//     a junk binding (fails bindingSchema) is a silent no-op — never reaches
+//     the doc, never throws, never pushes an undo entry.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a') })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b') })
+
+  const binding: Binding = {
+    id: 'binding:x' as any,
+    fromId: 'shape:a' as any,
+    toId: 'shape:b' as any,
+    props: {},
+    meta: {},
+  }
+  editor.apply({ type: 'PutBinding', binding })
+  assert.deepEqual(doc.listBindings().map((b) => b.id), ['binding:x'], 'PutBinding with a valid binding lands in the doc')
+
+  editor.undo()
+  assert.deepEqual(doc.listBindings(), [], 'undo of PutBinding removes the binding')
+
+  editor.redo()
+  assert.deepEqual(doc.listBindings().map((b) => b.id), ['binding:x'], 'redo of PutBinding re-adds the binding')
+
+  console.log('ok: undo/redo PutBinding')
+}
+
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a') })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b') })
+  const canUndoBefore = editor.canUndo()
+
+  const junk = { id: 'binding:y', fromId: 42, toId: 'shape:b', props: {}, meta: {} }
+  assert.doesNotThrow(() => editor.apply({ type: 'PutBinding', binding: junk as any }), 'a junk binding is refused, never thrown')
+  assert.deepEqual(doc.listBindings(), [], 'a junk binding (fromId: 42, fails bindingSchema) never reaches doc.putBinding')
+  assert.equal(editor.canUndo(), canUndoBefore, 'a refused PutBinding pushes no undo entry')
+
+  console.log('ok: PutBinding refuses a binding that fails bindingSchema, no-op, no throw')
+}
+
+// ============================================================================
+// 25. SetIndex (Task E1): index-only whole-shape write -- overwrites a
+//     shape's ENVELOPE `index` field (fractional z-order key), which
+//     UpdateProps can never reach (props-only merge). Full-shape-inverse
+//     convention (same as UpdateProps/SetStyle): undo restores the COMPLETE
+//     pre-mutation shape (not just index), redo re-applies. A same-index
+//     call and an unresolved id are both silent no-ops: no commit, no undo
+//     entry, never a throw.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { index: 'a1', x: 7, y: 9, props: { title: 'keep' } }) })
+  const before = doc.getShape('shape:a')!
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.apply({ type: 'SetIndex', id: 'shape:a', index: 'a2' })
+  assert.equal(commits, 1, 'SetIndex commits once')
+  const after = doc.getShape('shape:a')!
+  assert.equal(after.index, 'a2', 'SetIndex overwrote the envelope index field')
+  assert.deepEqual(
+    { ...after, index: before.index },
+    before,
+    'ONLY index changed -- id/parentId/x/y/props/opacity/etc are identical to the pre-image (kills a wrong/partial-shape mutant)',
+  )
+
+  // Same-index call: a no-op, not an empty undo entry.
+  const commitsBeforeSameIndex = commits
+  editor.apply({ type: 'SetIndex', id: 'shape:a', index: 'a2' })
+  assert.equal(commits, commitsBeforeSameIndex, 'SetIndex to the CURRENT index does not commit')
+
+  // Unknown id: silent no-op, never throws.
+  const commitsBeforeGhost = commits
+  assert.doesNotThrow(
+    () => editor.apply({ type: 'SetIndex', id: 'shape:ghost', index: 'a3' }),
+    'SetIndex on an unknown id does not throw',
+  )
+  assert.equal(commits, commitsBeforeGhost, 'SetIndex on an unknown id does not commit')
+
+  // Undo/redo round trip.
+  editor.undo()
+  assert.equal(doc.getShape('shape:a')!.index, 'a1', 'undo restores the OLD index exactly')
+  assert.deepEqual(doc.getShape('shape:a'), before, 'undo restores the full pre-image, not just index')
+
+  editor.redo()
+  assert.equal(doc.getShape('shape:a')!.index, 'a2', 'redo re-applies the new index')
+
+  console.log('ok: SetIndex overwrites the envelope index field only, no-ops on same-index/unknown id, undo/redo round-trips')
+}
+
+// ============================================================================
+// 26. SetIndex batched across MULTIPLE intents in one applyAll call -- the
+//     shape reorderSelectionIntents (Task E2, per D-4) will actually submit:
+//     N SetIndex intents in one applyAll is ONE commit and ONE undo step
+//     that restores every shape's OLD index together, not one-at-a-time.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { index: 'a1' }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b', { index: 'a2' }) })
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.applyAll([
+    { type: 'SetIndex', id: 'shape:a', index: 'a3' },
+    { type: 'SetIndex', id: 'shape:b', index: 'a4' },
+  ])
+  assert.equal(commits, 1, 'two SetIndex intents in one applyAll is ONE commit, not one per shape')
+  assert.equal(doc.getShape('shape:a')!.index, 'a3')
+  assert.equal(doc.getShape('shape:b')!.index, 'a4', "shape b's index changed too -- kills a single-id-only mutant")
+
+  editor.undo()
+  assert.equal(doc.getShape('shape:a')!.index, 'a1', 'one undo restores BOTH shapes in the same step')
+  assert.equal(doc.getShape('shape:b')!.index, 'a2')
+
+  editor.redo()
+  assert.equal(doc.getShape('shape:a')!.index, 'a3')
+  assert.equal(doc.getShape('shape:b')!.index, 'a4')
+
+  console.log('ok: SetIndex batches across multiple intents in one applyAll -- one commit, one undo step')
+}
+
+// ============================================================================
+// 27. PutAsset (Task E1): a validated asset-write intent, modeled on
+//     PutBinding — assetSchema.safeParse gates entry (a failing asset is a
+//     TOTAL no-op: no doc.putAsset call, no undo entry, no throw) — but,
+//     UNLIKE PutBinding, a successful write carries NO undo/redo InverseOps
+//     (D-4: no deleteAsset exists to invert with; an undone image leaves its
+//     asset behind as harmless orphan garbage, tldraw parity). The image
+//     create flow (client, out of scope here) batches PutAsset with a
+//     CreateShape in ONE applyAll so the BATCH still gets a real undo entry
+//     — contributed entirely by CreateShape's own inverses.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  const asset: Asset = {
+    id: 'asset:img1' as any,
+    type: 'image',
+    props: { src: '/uploads/img1.png', w: 100, h: 80 },
+    meta: {},
+  }
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.apply({ type: 'PutAsset', asset })
+  assert.deepEqual(doc.listAssets(), [asset], 'PutAsset with a valid asset lands in the doc')
+  // A valid PutAsset still sets docMutated:true (it wrote to the doc), so
+  // applyAll still commits and still pushes a batch-level UndoEntry — but
+  // that entry's own undo/redo arrays are EMPTY (PutAsset contributes no
+  // InverseOp, per D-4), so undo() on it is a real no-op (replay([]) does
+  // nothing): canUndo() reports true, but nothing is actually restorable
+  // from this batch alone.
+  assert.equal(commits, 1, 'a valid PutAsset still commits (docMutated:true)')
+  assert.equal(editor.canUndo(), true, 'applyAll still pushes a batch entry (docMutated:true) even though PutAsset contributed no InverseOp')
+  editor.undo()
+  assert.deepEqual(doc.listAssets(), [asset], 'undoing a solo PutAsset batch is a no-op — the asset was never covered by an InverseOp, so it survives')
+
+  console.log('ok: PutAsset with a valid asset lands in the doc, commits, but contributes no InverseOp of its own')
+}
+
+{
+  const { doc, editor } = makeEditor(1n)
+  const junk = { id: 'asset:bad', type: 'image', props: { src: 123 }, meta: {} }
+
+  assert.doesNotThrow(() => editor.apply({ type: 'PutAsset', asset: junk as any }), 'a junk asset is refused, never thrown')
+  assert.deepEqual(doc.listAssets(), [], 'a junk asset (props.src: 123, fails assetSchema) never reaches doc.putAsset')
+  assert.equal(editor.canUndo(), false, 'a refused PutAsset pushes no undo entry')
+
+  console.log('ok: PutAsset refuses an asset that fails assetSchema, no-op, no throw')
+}
+
+// ---- atomic batch: PutAsset + CreateShape + SetSelection in ONE applyAll ----
+{
+  const { doc, editor } = makeEditor(1n)
+  const asset: Asset = {
+    id: 'asset:img2' as any,
+    type: 'image',
+    props: { src: '/uploads/img2.png', w: 50, h: 40 },
+    meta: {},
+  }
+  const imageShape = shape('shape:img', { kind: 'image', props: { w: 50, h: 40, assetId: asset.id } })
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.applyAll([
+    { type: 'PutAsset', asset },
+    { type: 'CreateShape', shape: imageShape },
+    { type: 'SetSelection', ids: ['shape:img'] },
+  ])
+
+  assert.equal(commits, 1, 'PutAsset + CreateShape + SetSelection in one applyAll is ONE doc.commit(), not per-intent')
+  assert.deepEqual(doc.listAssets(), [asset], 'the asset landed')
+  assert.ok(doc.getShape('shape:img'), 'the image shape landed')
+  assert.deepEqual([...editor.get().selection], ['shape:img'], 'the image shape is selected')
+
+  // ---- undo the batch: the shape goes, the asset is orphaned (stays) ----
+  editor.undo()
+  assert.equal(doc.getShape('shape:img'), undefined, 'undo of the batch removes the image shape')
+  assert.deepEqual(doc.listAssets(), [asset], 'undo does NOT remove the asset — it is left as an orphan (D-4, no deleteAsset inverse)')
+
+  editor.redo()
+  assert.ok(doc.getShape('shape:img'), 'redo re-creates the image shape')
+  assert.deepEqual(doc.listAssets(), [asset], 'the asset is still present after redo (it was never touched by either direction)')
+
+  console.log('ok: PutAsset batches atomically with CreateShape — one commit, undo removes only the shape, asset orphaned')
+}
+
+// ============================================================================
+// 28. currentPageId + SetCurrentPage (Task E1, docs/plans/2026-07-22-canvas-
+//     v2-pages.md, D-1/D-2): editor-LOCAL, per-peer "which page am I looking
+//     at" state, seeded from the constructor's opts.pageId and switched via a
+//     VIEW intent (like SetCamera/SetNextStyle) — no doc write, no undo entry,
+//     but subscribers DO fire (it's a real EditorState change).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  assert.equal(editor.get().currentPageId, 'page:p', 'currentPageId is seeded from the constructor opts.pageId')
+
+  console.log('ok: currentPageId initializes from opts.pageId')
+}
+
+{
+  const { doc, editor } = makeEditor(1n)
+
+  // View-intent purity baselines captured BEFORE any SetCurrentPage call —
+  // same discipline as the SetNextStyle test above.
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+  const canUndoBefore = editor.canUndo()
+
+  let notifications = 0
+  editor.subscribe(() => { notifications += 1 })
+
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:x' })
+  assert.equal(editor.get().currentPageId, 'page:x', 'SetCurrentPage sets currentPageId')
+  assert.equal(commits, 0, 'SetCurrentPage never calls doc.commit() — kills a mutant that routes it through the doc')
+  assert.equal(editor.canUndo(), canUndoBefore, 'SetCurrentPage never pushes an undo entry — kills a mutant that treats it as a mutation')
+  assert.equal(notifications, 1, 'SetCurrentPage DOES notify subscribers exactly once — it is a real EditorState change, unlike a doc-only intent')
+
+  console.log('ok: SetCurrentPage switches currentPageId, view-only (no commit, no undo), notifies subscribers')
 }
 
 console.log('ok: canvas-editor editor + intents')

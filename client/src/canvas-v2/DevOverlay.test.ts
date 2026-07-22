@@ -22,13 +22,14 @@ import { DevOverlay, shouldShowDevOverlay, type CanvasMetricsPayload } from './D
 		createElement(DevOverlay, {
 			roomId: 'dogfood-1',
 			connectionState: 'connected',
-			client: { repairCount: 3, lastBackfillBytes: 4096 },
+			client: { repairCount: 3, lastBackfillBytes: 4096, invalidWriteCount: 0 },
 			metrics,
 		}),
 	)
 	assert.ok(html.includes('dogfood-1'), 'room id is shown')
 	assert.ok(html.includes('connected'), 'connection state is shown')
 	assert.ok(html.includes('>3<'), `repairCount value renders — html: ${html}`)
+	assert.ok(html.includes('<span>invalidWrites</span><span>0</span>'), `invalidWrites label/value renders — html: ${html}`)
 	assert.ok(html.includes('>4096<'), `lastBackfillBytes value renders — html: ${html}`)
 	assert.ok(html.includes('>0<'), 'pendingImports/malformedFrames/taintCount all read 0')
 	assert.ok(html.includes('>no<'), 'a null tainted reads as the literal "no", not "null"')
@@ -55,7 +56,7 @@ import { DevOverlay, shouldShowDevOverlay, type CanvasMetricsPayload } from './D
 		createElement(DevOverlay, {
 			roomId: 'dogfood-1',
 			connectionState: 'connected',
-			client: { repairCount: 0, lastBackfillBytes: 0 },
+			client: { repairCount: 0, lastBackfillBytes: 0, invalidWriteCount: 0 },
 			metrics,
 		}),
 	)
@@ -79,7 +80,7 @@ import { DevOverlay, shouldShowDevOverlay, type CanvasMetricsPayload } from './D
 		createElement(DevOverlay, {
 			roomId: 'dogfood-1',
 			connectionState: 'connected',
-			client: { repairCount: 12, lastBackfillBytes: 0 },
+			client: { repairCount: 12, lastBackfillBytes: 0, invalidWriteCount: 0 },
 			metrics,
 		}),
 	)
@@ -100,7 +101,7 @@ import { DevOverlay, shouldShowDevOverlay, type CanvasMetricsPayload } from './D
 		createElement(DevOverlay, {
 			roomId: 'dogfood-1',
 			connectionState: 'connecting',
-			client: { repairCount: 0, lastBackfillBytes: 0 },
+			client: { repairCount: 0, lastBackfillBytes: 0, invalidWriteCount: 0 },
 			metrics: null,
 		}),
 	)

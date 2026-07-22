@@ -31,12 +31,16 @@ import type { Editor, Intent, Tool, ToolContext } from '@ensembleworks/canvas-ed
 import {
 	createArrowTool,
 	createCreateTool,
+	createDrawTool,
 	createHandTool,
+	createLineTool,
 	createSelectAndTransformTool,
 	type ArrowState,
 	type CreateKind,
 	type CreateState,
+	type DrawState,
 	type HandState,
+	type LineState,
 	type SelectAndTransformState,
 	type SelectState,
 } from '@ensembleworks/canvas-editor'
@@ -46,7 +50,7 @@ export { createSelectAndTransformTool, type SelectAndTransformState } from '@ens
 
 /** The toolbar's tool identifiers — see CanvasV2App.tsx's toolbar for the
  * button list. 'transform' is deliberately ABSENT (see module header). */
-export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'arrow'
+export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'arrow' | 'draw' | 'line'
 
 /** One `Tool<unknown>` instance per `ToolId`, built ONCE per `ToolContext` —
  * mirrors every tool factory's own "call once per Editor/ToolContext"
@@ -63,6 +67,8 @@ export interface ToolSet {
 	readonly geo: Tool<CreateState>
 	readonly frame: Tool<CreateState>
 	readonly arrow: Tool<ArrowState>
+	readonly draw: Tool<DrawState>
+	readonly line: Tool<LineState>
 }
 
 export function createToolSet(ctx: ToolContext): ToolSet {
@@ -75,6 +81,8 @@ export function createToolSet(ctx: ToolContext): ToolSet {
 		geo: createKindTool('geo'),
 		frame: createKindTool('frame'),
 		arrow: createArrowTool(ctx),
+		draw: createDrawTool(ctx),
+		line: createLineTool(ctx),
 	}
 }
 
@@ -95,6 +103,8 @@ export function createInitialToolStates(tools: ToolSet): ToolStates {
 		geo: tools.geo.initialState,
 		frame: tools.frame.initialState,
 		arrow: tools.arrow.initialState,
+		draw: tools.draw.initialState,
+		line: tools.line.initialState,
 	}
 }
 
@@ -223,11 +233,68 @@ export function deleteSelectionIntents(editor: Editor): Intent[] {
 	]
 }
 
+/**
+ * D1's carry-forward from the clipboard-intents (E1) review: `SetSelection`
+ * is a view intent with no inverse (editor.ts's `undo()`/`redo()` doc
+ * comment says so explicitly — "Does NOT touch EditorState ... a caller that
+ * wants 'select the shapes an undo just restored' does so itself via a
+ * follow-up SetSelection"), so undoing a `duplicateSelectionIntents`/
+ * `pasteIntents` batch (CreateShape x N + PutBinding x M + SetSelection over
+ * the new root ids) removes the shapes those root ids named but leaves
+ * `editor.get().selection` still holding them — dangling references to ids
+ * that no longer resolve in the doc.
+ *
+ * Delete's own path (`deleteSelectionIntents` above) never hits this: its
+ * forward SetSelection always lands on `[]`, and `[]` stays valid no matter
+ * what an undo/redo does to the doc afterward. Duplicate/paste's forward
+ * SetSelection lands on the NEW ids instead, which an undo of that same
+ * batch invalidates — so, unlike Delete, they need an ACTIVE fix.
+ *
+ * Rather than special-case "was the last undone/redone batch a
+ * paste/duplicate" (the undo/redo call sites don't know what kind of batch
+ * they just replayed, only that they replayed one), this is a general
+ * hygiene pass: read the CURRENT selection, keep only ids that still
+ * resolve via `editor.doc.getShape` (a live read — see editor.ts's own
+ * "read live, not off a snapshot" convention), and emit a `SetSelection`
+ * ONLY when that actually drops something (mirrors deleteSelectionIntents's
+ * own "no redundant SetSelection" discipline — calling this after every
+ * undo/redo when nothing dangled would otherwise emit a same-value
+ * SetSelection every time, and editor.ts's own state-change note says
+ * SetSelection notifies even when the ids are identical). Call this right
+ * after `editor.undo()`/`editor.redo()` in CanvasV2App's shared shortcut
+ * policy — applying the result (if non-empty) is a pure state-only intent
+ * (`docMutated` stays false), so it never pushes a new undo entry or clears
+ * the redo stack (editor.ts's applyAll: the undo/redo stacks only move on
+ * `docMutated`).
+ */
+export function pruneDanglingSelectionIntents(editor: Editor): Intent[] {
+	const current = [...editor.get().selection]
+	const pruned = current.filter((id) => editor.doc.getShape(id) !== undefined)
+	if (pruned.length === current.length) return []
+	return [{ type: 'SetSelection', ids: pruned }]
+}
+
 export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: ToolId, editor: Editor): { states: ToolStates; intents: Intent[] } {
 	const intents: Intent[] = []
 
 	if (active === 'arrow') {
 		const s = states.arrow as ArrowState
+		if (s.mode === 'drawing') intents.push({ type: 'DeleteShapes', ids: [s.id] })
+	} else if (active === 'draw') {
+		// The pen tool's in-flight 'drawing' state carries `id` — like
+		// arrow/create, the preview stroke is already committed to the doc on
+		// every pointermove (and even on the bare pointerdown — draw.ts has no
+		// threshold gate), so an abandoned mid-stroke shape must be deleted the
+		// same way (Task W1, D-5).
+		const s = states.draw as DrawState
+		if (s.mode === 'drawing') intents.push({ type: 'DeleteShapes', ids: [s.id] })
+	} else if (active === 'line') {
+		// The line tool's in-flight 'drawing' state carries `id` — like
+		// arrow, the preview line is already committed to the doc once the
+		// drag crosses its threshold (line.ts has the same threshold gate as
+		// arrow.ts, unlike draw.ts's bare-pointerdown commit), so an abandoned
+		// mid-drag line must be deleted the same way (Task W1, D-5).
+		const s = states.line as LineState
 		if (s.mode === 'drawing') intents.push({ type: 'DeleteShapes', ids: [s.id] })
 	} else if (active === 'note' || active === 'text' || active === 'geo' || active === 'frame') {
 		const s = states[active] as CreateState

@@ -4,7 +4,7 @@
 // mutators; everything upstream (tools, scripts, the renderer) only ever
 // produces or reads Intents/EditorState.
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'
-import { toLocalPoint, type Binding, type CanvasDocument, type Point, type Shape } from '@ensembleworks/canvas-model'
+import { assetSchema, bindingSchema, toLocalPoint, type Binding, type CanvasDocument, type Page, type Point, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from './intents.js'
 
 // ============================================================================
@@ -38,19 +38,38 @@ function createStore<T>(initial: T) {
  * container's CSS transform); `selection`/`hover`/`editingId` are per-client
  * UI state that has no business syncing to peers (each collaborator has
  * their own). `selection` is a ReadonlySet so a caller can't mutate it out
- * from under a snapshot that's already been handed out. */
+ * from under a snapshot that's already been handed out. `nextShapeStyle` is
+ * the ARMED style (Task AS1) — a style patch a create tool reads into a
+ * newly-created shape's props/opacity (Task AS2), the same way it already
+ * reads live `camera`; it is set only via `SetNextStyle` and, like the rest
+ * of this interface, never persisted to the doc. `currentPageId` (Task E1,
+ * docs/plans/2026-07-22-canvas-v2-pages.md, D-1) is which page THIS peer is
+ * currently looking at — reactive, per-peer, NEVER written to the CRDT (the
+ * doc's `pages` set is shared; which one each collaborator is looking at is
+ * not). Seeded from `EditorOpts.pageId` at construction and switched only via
+ * `SetCurrentPage`; every parenting site that used to read the constructor's
+ * frozen `editor.pageId` reads `editor.get().currentPageId` live instead. */
 export interface EditorState {
   readonly camera: { readonly x: number; readonly y: number; readonly z: number }
   readonly selection: ReadonlySet<string>
   readonly hover: string | null
   readonly editingId: string | null
+  readonly nextShapeStyle: Record<string, unknown>
+  readonly currentPageId: string
 }
 
+// `currentPageId: ''` here is a documented PLACEHOLDER, never a live value —
+// INITIAL_STATE can't reference `opts.pageId` (it's built before the
+// constructor runs), so the constructor always overwrites it with
+// `opts.pageId` before `this.store` is readable by anything (see below). No
+// subscriber ever observes the `''` placeholder.
 const INITIAL_STATE: EditorState = {
   camera: { x: 0, y: 0, z: 1 },
   selection: new Set(),
   hover: null,
   editingId: null,
+  nextShapeStyle: {},
+  currentPageId: '',
 }
 
 export interface EditorOpts {
@@ -96,6 +115,13 @@ export interface EditorOpts {
  * correct, tolerant (never-throws) inverse for every one of those cases,
  * including a reparent's prior parent. No separate 'reparent' op variant is
  * needed as a result.
+ *
+ * `putPage`/`deletePage` (Task E3, docs/plans/2026-07-22-canvas-v2-pages.md,
+ * D-3) mirror `putShape`/`deleteShape`'s doing-double-duty posture: each
+ * maps to the ONE matching `CanvasDoc` public mutator
+ * (`putPage`/`deletePage`, both already no-throw by CanvasDoc contract — see
+ * loro-canvas-doc.ts), so they ride the same try/catch tolerance in
+ * `replay()` below without needing one of their own.
  */
 type InverseOp =
   | { readonly op: 'putShape'; readonly shape: Shape }
@@ -103,6 +129,8 @@ type InverseOp =
   | { readonly op: 'setText'; readonly id: string; readonly text: string }
   | { readonly op: 'putBinding'; readonly binding: Binding }
   | { readonly op: 'deleteBinding'; readonly id: string }
+  | { readonly op: 'putPage'; readonly page: Page }
+  | { readonly op: 'deletePage'; readonly id: string }
 
 /** One undone/redoable unit — exactly one apply()/applyAll() batch's worth
  * of doc mutation. `undo` restores doc state to just before the batch ran;
@@ -137,7 +165,7 @@ export class Editor {
   readonly now: () => number
   readonly random: () => number
   readonly pageId: string
-  private readonly store = createStore<EditorState>(INITIAL_STATE)
+  private readonly store: ReturnType<typeof createStore<EditorState>>
   // LOCAL-PEER-ONLY by construction: entries are pushed exclusively from
   // THIS editor instance's own applyAll calls (never from doc.subscribe or
   // an import() callback), so a remote peer's incoming shapes are never
@@ -151,6 +179,10 @@ export class Editor {
     this.now = opts.now
     this.random = opts.random
     this.pageId = opts.pageId
+    // currentPageId (Task E1, D-1) seeded from opts.pageId HERE, not in
+    // INITIAL_STATE — INITIAL_STATE is a module-level const built before any
+    // Editor exists, so it cannot see this instance's opts.
+    this.store = createStore<EditorState>({ ...INITIAL_STATE, currentPageId: opts.pageId })
   }
 
   /** Immutable snapshot of the editor-local state (NOT the doc — read the
@@ -174,13 +206,15 @@ export class Editor {
       selection: new Set(s.selection),
       hover: s.hover,
       editingId: s.editingId,
+      nextShapeStyle: Object.freeze({ ...s.nextShapeStyle }),
+      currentPageId: s.currentPageId,
     })
   }
 
   /** `fn` fires SYNCHRONOUSLY, at most once per apply()/applyAll() call —
    * never once per Intent inside a batch (see applyAll). The trigger is
    * PER-INTENT-TYPE, not value-equality: any view intent in the batch
-   * (SetCamera/SetSelection/SetHover/BeginEdit/EndEdit) counts as "state
+   * (SetCamera/SetSelection/SetHover/BeginEdit/EndEdit/SetNextStyle) counts as "state
    * changed" even when the new value happens to equal the old one — e.g. a
    * SetSelection carrying the identical ids DOES notify. No value-equality
    * dedup is performed; a caller that needs it keeps its last snapshot and
@@ -337,6 +371,20 @@ export class Editor {
   // ReparentShapes path already tolerates exactly this (canReparent
   // pre-check + try/catch around doc.reparent); the inverse gets the same
   // treatment here — skip the un-appliable op, keep replaying the rest.
+  //
+  // SECOND SKIP MODE (added with the write boundary): `putShape` now also
+  // silently REJECTS a shape that fails validateShape — a rejection this
+  // try/catch never observes, because it does not throw. A shape can reach the
+  // undo stack already invalid — it arrives through import(), the one path
+  // into this peer's doc that bypasses the write boundary. That covers both a
+  // live remote peer and a room whose stored SQLite predates the boundary:
+  // the server loads such a room via fromSnapshot and relays it here as an
+  // ordinary import, so there is ONE route in, not two. (This peer's own doc
+  // is never built by fromSnapshot — see client-peer.ts, where it is an
+  // unconditional LoroCanvasDoc.create.) Replaying such a shape is a no-op rather
+  // than a restore. Deliberate — restoring it would only re-manufacture state
+  // repair() is obliged to cascade-delete. User-visible effect: an undo step
+  // that appears to do nothing for that shape.
   private replay(ops: readonly InverseOp[]): void {
     if (ops.length === 0) return
     for (const op of ops) {
@@ -347,6 +395,8 @@ export class Editor {
           case 'setText': this.doc.setText(op.id, op.text); break
           case 'putBinding': this.doc.putBinding(op.binding); break
           case 'deleteBinding': this.doc.deleteBinding(op.id); break
+          case 'putPage': this.doc.putPage(op.page); break
+          case 'deletePage': this.doc.deletePage(op.id); break
         }
       } catch { /* un-appliable inverse (e.g. a cycle from concurrent remote churn) — skip, same as the forward path */ }
     }
@@ -362,6 +412,43 @@ export class Editor {
           undo: [{ op: 'deleteShape', id: intent.shape.id }],
           redo: [{ op: 'putShape', shape: intent.shape }],
         }
+
+      // Validated binding write (Task E2): closes the gap that raw
+      // CanvasDoc.putBinding performs NO validation at all (unlike
+      // putShape's validateShape gate above) — see intents.ts's PutBinding
+      // doc comment. A binding that fails bindingSchema is a TOTAL no-op:
+      // no doc.putBinding call, no undo/redo entry, no throw — the same
+      // reject-invalid contract putShape already has for shapes.
+      case 'PutBinding': {
+        const parsed = bindingSchema.safeParse(intent.binding)
+        if (!parsed.success) return { state, docMutated: false, stateChanged: false }
+        const binding = parsed.data
+        this.doc.putBinding(binding)
+        return {
+          state, docMutated: true, stateChanged: false,
+          undo: [{ op: 'deleteBinding', id: binding.id }],
+          redo: [{ op: 'putBinding', binding }],
+        }
+      }
+
+      // Validated asset write (Task E1, D-4): same reject-invalid shape as
+      // PutBinding above — assetSchema.safeParse gates entry; a failing
+      // asset is a TOTAL no-op (no doc.putAsset call, no undo entry, no
+      // throw). UNLIKE PutBinding, a successful write carries NO undo/redo
+      // InverseOps: there is no `deleteAsset` to invert with (YAGNI'd this
+      // cycle — see canvas-doc's CanvasDoc.putAsset doc comment), and an
+      // undone image is meant to leave its asset behind as harmless orphan
+      // garbage, exactly tldraw's own behavior. The create flow (client)
+      // batches this with a CreateShape in the SAME applyAll so the batch
+      // still gets a real undo entry, contributed entirely by CreateShape's
+      // own deleteShape/putShape inverses — see intents.ts's PutAsset doc
+      // comment.
+      case 'PutAsset': {
+        const parsed = assetSchema.safeParse(intent.asset)
+        if (!parsed.success) return { state, docMutated: false, stateChanged: false }
+        this.doc.putAsset(parsed.data)
+        return { state, docMutated: true, stateChanged: false }
+      }
 
       case 'TranslateShapes': {
         const ids = dedupeAncestorOverlap(this.doc, intent.ids)
@@ -594,6 +681,34 @@ export class Editor {
         return { state, docMutated: true, stateChanged: false, undo, redo }
       }
 
+      case 'SetStyle': {
+        // Batch version of UpdateProps's full-shape-inverse convention (see
+        // that case above): for EACH id, read the pre-image, shallow-merge
+        // `props` and overwrite `opacity` when given, then putShape the
+        // whole next shape — a full putShape (not doc.updateProps) is what
+        // lets this intent reach the ENVELOPE opacity field, which
+        // updateProps's contract can never touch. Same tolerant per-id skip
+        // as Translate/Resize/Rotate (applyAll TOLERANCE CONTRACT): an
+        // unresolved id is dropped, never thrown.
+        let mutated = false
+        const undo: InverseOp[] = []
+        const redo: InverseOp[] = []
+        for (const id of intent.ids) {
+          const shape = this.doc.getShape(id)
+          if (!shape) continue
+          const next = {
+            ...shape,
+            props: intent.props ? { ...shape.props, ...intent.props } : shape.props,
+            opacity: intent.opacity ?? shape.opacity,
+          }
+          this.doc.putShape(next)
+          undo.push({ op: 'putShape', shape })
+          redo.push({ op: 'putShape', shape: next })
+          mutated = true
+        }
+        return { state, docMutated: mutated, stateChanged: false, undo, redo }
+      }
+
       case 'StartArrow': {
         // Malformed intent (kind !== 'arrow') is SKIPPED, not asserted: a
         // throw mid-batch would leak earlier intents' uncommitted mutations
@@ -658,6 +773,106 @@ export class Editor {
         return { state, docMutated: true, stateChanged: false, undo, redo }
       }
 
+      // Create a page (Task E3, D-3): the caller (the switcher UI) mints the
+      // full Page record and carries it verbatim, the same posture as
+      // CreateShape above. Does NOT touch currentPageId — a caller that
+      // wants "create AND switch" batches a follow-up SetCurrentPage in the
+      // same applyAll (see intents.ts's CreatePage doc comment).
+      case 'CreatePage': {
+        this.doc.putPage(intent.page)
+        return {
+          state, docMutated: true, stateChanged: false,
+          undo: [{ op: 'deletePage', id: intent.page.id }],
+          redo: [{ op: 'putPage', page: intent.page }],
+        }
+      }
+
+      // Delete a page AND its whole shape subtree (Task E3, D-3 — the crux
+      // case of this task). CanvasDoc.deletePage removes ONLY the page
+      // record with no cascade (verified: loro-canvas-doc.ts's deletePage),
+      // so this intent must ALSO cascade-delete every shape rooted on the
+      // page, reusing DeleteShapes's own subtree machinery
+      // (collectSubtreeParentFirst/orderParentBeforeChild) so the SAME
+      // parent-before-child ordering guarantee that machinery gives shape
+      // deletes also covers a page delete.
+      case 'DeletePage': {
+        // REFUSE THE LAST PAGE: a doc must always have >=1 page. Total
+        // no-op — no doc write, no undo entry — same tolerant-no-op posture
+        // as an unknown id below, just gated on page COUNT instead of id
+        // resolution.
+        if (this.doc.listPages().length <= 1) return { state, docMutated: false, stateChanged: false }
+        // Pre-image captured BEFORE any mutation — this IS the undo's
+        // putPage payload. An id that doesn't resolve to a live page is a
+        // silent no-op (the applyAll TOLERANCE CONTRACT, same as every
+        // other per-id mutation intent in this switch).
+        const page = this.doc.listPages().find((p) => p.id === intent.id)
+        if (!page) return { state, docMutated: false, stateChanged: false }
+        // Roots = shapes parented DIRECTLY to the page (canvas-model's
+        // rootShapes page:-prefix convention); each root's own
+        // collectSubtreeParentFirst walk covers everything beneath it, so
+        // the union of all roots' subtrees is the page's ENTIRE shape
+        // content, deduped by id (same collapse DeleteShapes's own
+        // cross-id union uses, for the same reason: two roots can never
+        // share a descendant since a shape has exactly one parent, but the
+        // Map dedupe keeps this correct even if that ever changed).
+        const roots = this.doc.listShapes().filter((s) => s.parentId === intent.id)
+        const toRestore = new Map<string, Shape>()
+        for (const root of roots) {
+          for (const s of collectSubtreeParentFirst(this.doc, root.id)) {
+            if (!toRestore.has(s.id)) toRestore.set(s.id, s)
+          }
+        }
+        for (const root of roots) this.doc.deleteShape(root.id)
+        this.doc.deletePage(intent.id)
+        // UNDO — putPage FIRST, then the shapes PARENT-BEFORE-CHILD: the
+        // page record must exist again before any shape tries to
+        // placeInTree onto it, exactly the reasoning DeleteShapes's own
+        // undo comment gives for why a child's putShape must never run
+        // before its parent's. Putting the page after a root shape would
+        // rehome that shape onto a still-missing page (placeInTree's
+        // detach-to-root fallback) — a split-brain identical to the one
+        // DeleteShapes's cascade-aware inverse exists to prevent.
+        const undo: InverseOp[] = [
+          { op: 'putPage', page },
+          ...orderParentBeforeChild([...toRestore.values()], toRestore).map((shape) => ({ op: 'putShape' as const, shape })),
+        ]
+        // REDO re-deletes only the roots (each deleteShape cascades its own
+        // subtree again — same "descendants need no explicit redo op"
+        // reasoning as DeleteShapes), then the page record.
+        const redo: InverseOp[] = [
+          ...roots.map((r) => ({ op: 'deleteShape' as const, id: r.id })),
+          { op: 'deletePage', id: intent.id },
+        ]
+        return { state, docMutated: true, stateChanged: false, undo, redo }
+      }
+
+      case 'RenamePage': {
+        const page = this.doc.listPages().find((p) => p.id === intent.id)
+        if (!page) return { state, docMutated: false, stateChanged: false }
+        const next = { ...page, name: intent.name }
+        this.doc.putPage(next)
+        // Pre-image-inverse convention (same as SetText/UpdateProps): the
+        // `{...page}` spread already preserved above carries `index` and
+        // any passthrough field forward untouched, so putPage(page) is a
+        // correct, tolerant full restore.
+        const undo: InverseOp[] = [{ op: 'putPage', page }]
+        const redo: InverseOp[] = [{ op: 'putPage', page: next }]
+        return { state, docMutated: true, stateChanged: false, undo, redo }
+      }
+
+      case 'ReorderPage': {
+        const page = this.doc.listPages().find((p) => p.id === intent.id)
+        // Silent no-op on an unknown id AND on a no-change write (avoids
+        // manufacturing an empty undo entry) — the exact same two guards
+        // SetIndex uses for shapes above.
+        if (!page || page.index === intent.index) return { state, docMutated: false, stateChanged: false }
+        const next = { ...page, index: intent.index }
+        this.doc.putPage(next)
+        const undo: InverseOp[] = [{ op: 'putPage', page }]
+        const redo: InverseOp[] = [{ op: 'putPage', page: next }]
+        return { state, docMutated: true, stateChanged: false, undo, redo }
+      }
+
       case 'SetCamera':
         return { state: { ...state, camera: { x: intent.x, y: intent.y, z: intent.z } }, docMutated: false, stateChanged: true }
 
@@ -672,6 +887,49 @@ export class Editor {
 
       case 'EndEdit':
         return { state: { ...state, editingId: null }, docMutated: false, stateChanged: true }
+
+      case 'SetIndex': {
+        // Index-only whole-shape write (Task E1, D-4): `index` is an
+        // ENVELOPE field, so — exactly like SetStyle's opacity handling
+        // above — UpdateProps's props-only merge can never reach it; a full
+        // putShape is required. Silent no-op on an unknown id (TOLERANCE
+        // CONTRACT, same as UpdateProps/SetText) and on a no-change write
+        // (avoids manufacturing an empty undo entry — the reorder emitter,
+        // Task E2, only emits SetIndex for shapes whose computed index
+        // actually differs, but this guard makes the intent itself safe
+        // regardless of caller discipline).
+        const shape = this.doc.getShape(intent.id)
+        if (!shape) return { state, docMutated: false, stateChanged: false }
+        if (shape.index === intent.index) return { state, docMutated: false, stateChanged: false }
+        const next = { ...shape, index: intent.index }
+        this.doc.putShape(next)
+        // Full-shape-inverse convention (same as UpdateProps/SetStyle/
+        // Resize/Rotate/Reparent): `shape` read BEFORE the mutation already
+        // holds the complete pre-image, so putShape(shape) is a correct,
+        // tolerant restore of EVERY field, not just index.
+        const undo: InverseOp[] = [{ op: 'putShape', shape }]
+        const redo: InverseOp[] = [{ op: 'putShape', shape: next }]
+        return { state, docMutated: true, stateChanged: false, undo, redo }
+      }
+
+      case 'SetNextStyle':
+        // View intent (Task AS1): shallow-merges `props` into the existing
+        // nextShapeStyle — arming color then arming size accumulates both,
+        // it does not replace. No doc.putShape/updateProps, no undo/redo
+        // arrays — mirrors SetCamera/SetSelection/SetHover/BeginEdit/EndEdit
+        // above exactly.
+        return {
+          state: { ...state, nextShapeStyle: { ...state.nextShapeStyle, ...intent.props } },
+          docMutated: false,
+          stateChanged: true,
+        }
+
+      case 'SetCurrentPage':
+        // View intent (Task E1, D-2): switches EditorState.currentPageId
+        // ONLY — no doc write, no undo/redo arrays, mirroring
+        // SetCamera/SetSelection/SetHover/BeginEdit/EndEdit/SetNextStyle
+        // above exactly. Switching pages is a view change, not undoable.
+        return { state: { ...state, currentPageId: intent.pageId }, docMutated: false, stateChanged: true }
     }
   }
 
@@ -723,8 +981,9 @@ export class Editor {
 // O(shapes) dumpModel call on every Resize/Rotate intent.
 function liveDocAdapter(doc: CanvasDoc): CanvasDocument {
   return {
-    pages: [], shapes: [], bindings: [],
+    pages: [], shapes: [], bindings: [], assets: [],
     byId: { get: (id: string) => doc.getShape(id) } as unknown as CanvasDocument['byId'],
+    assetById: new Map(),
   }
 }
 

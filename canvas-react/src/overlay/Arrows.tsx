@@ -98,9 +98,10 @@
 // this file renders arrow-kind shapes ONLY; a hypothetical Ink.tsx is
 // deferred, not stubbed.
 import type { Binding, Bounds, CanvasDocument, Point, Shape, SpatialIndex } from '@ensembleworks/canvas-model'
-import { queryViewport, routeArrow, toWorldPoint, worldBounds } from '@ensembleworks/canvas-model'
+import { queryViewport, routeArrow, STYLE_VALUE_SETS, toWorldPoint, worldBounds } from '@ensembleworks/canvas-model'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { viewportWorldBounds, type ViewportSize } from '../ShapeLayer.js'
+import { DASH_VALUES, dashArray, GEO_COLORS, STROKE_WIDTH_PX } from '../shapes/GeoShape.js'
 
 export interface ArrowsProps {
   readonly snapshot: CanvasDocument
@@ -121,6 +122,86 @@ export interface ArrowsProps {
 const ARROW_STROKE = 'var(--canvas-arrow, #1a1a1a)'
 const ARROWHEAD_LENGTH_PX = 10
 const ARROWHEAD_HALF_WIDTH_PX = 4
+
+// ============================================================================
+// ARROW STYLE PROPS: `color`/`dash`/`size`/`arrowheadStart`/`arrowheadEnd`
+// are typed on the arrow kind (canvas-model's shape.ts:
+// `arrow: withText.extend(styleProps('color','fill','dash','size','font',
+// 'arrowheadStart','arrowheadEnd').shape)`) but were, before this change,
+// entirely ignored by this overlay — every arrow rendered with the
+// hardcoded ARROW_STROKE/1.5px/single-fixed-arrowhead above regardless of
+// what its props actually said.
+//
+// REUSE, NOT A SECOND TABLE: `color` and `size` are shared style axes, not
+// geo-specific ones — GeoShape.tsx typed GEO_COLORS/STROKE_WIDTH_PX/
+// dashArray/DASH_VALUES first (for the geo body), but they are exported
+// from there specifically so this file can reuse them rather than hand-copy
+// a parallel color/size/dash table (see GeoShape.tsx's export comment on
+// GEO_COLORS). Values are therefore IDENTICAL to what a geo/note/text shape
+// of the same color/size/dash renders.
+//
+// ABSENT-PROP FALLBACK: every resolution below is a `typeof x === 'string'
+// && x in TABLE` guard, never a bare `x || default` (0/''-unsafe) or an
+// unguarded lookup — and, per this task's explicit ground truth, an
+// absent/invalid prop falls back to THIS FILE's own pre-existing defaults
+// (ARROW_STROKE / DEFAULT_STROKE_WIDTH_PX / no dasharray / end-only
+// arrowhead), NOT GeoShape's own defaults (e.g. GEO's default color is
+// 'black' -> '#1d1d1d', a different hex than ARROW_STROKE's '#1a1a1a') — so
+// an older/unstyled arrow predating the styling work keeps rendering
+// EXACTLY as it did before this change.
+const DEFAULT_STROKE_WIDTH_PX = 1.5 // the old hardcoded constant, kept as the absent-size fallback
+// shape.ts's ARROWHEAD enum documents tldraw's real per-prop defaults:
+// arrowheadStart default 'none', arrowheadEnd default 'arrow' — which is
+// exactly the OLD hardcoded behavior here (one triangle, at the end only),
+// so using them as the absent-prop fallback is a no-op for existing arrows.
+const DEFAULT_ARROWHEAD_START = 'none'
+const DEFAULT_ARROWHEAD_END = 'arrow'
+// STYLE_VALUE_SETS.arrowheadStart/arrowheadEnd are the SAME zod-enum-derived
+// value list (canvas-model shape.ts's ARROWHEAD, one set shared by both
+// props) — read once here rather than importing the raw zod enum, mirroring
+// how client/src/canvas-v2's styling panel already consumes this export.
+const ARROWHEAD_VALUES = new Set(STYLE_VALUE_SETS.arrowheadStart)
+
+interface ArrowStyle {
+  /** 'none' -> no stroke element for the connecting line at all (mirrors
+   * GeoShape's dash:'none' -> strokeColor:null posture); otherwise the
+   * resolved hex. */
+  readonly stroke: string | 'none'
+  readonly strokeWidth: number
+  readonly strokeDasharray: string | undefined
+  readonly headStart: string
+  readonly headEnd: string
+}
+
+/** Resolves an arrow shape's props into concrete visual values, reusing
+ * GeoShape.tsx's color/size/dash tables. Absent/unrecognized props fall
+ * back to this file's OWN pre-existing defaults (see module comment above),
+ * not GeoShape's. */
+function arrowStyle(shape: Shape): ArrowStyle {
+  const props = shape.props as Record<string, unknown>
+
+  const stroke = typeof props.color === 'string' && props.color in GEO_COLORS
+    ? GEO_COLORS[props.color].solid
+    : ARROW_STROKE
+
+  const size = typeof props.size === 'string' && props.size in STROKE_WIDTH_PX ? props.size : undefined
+  const strokeWidth = size ? STROKE_WIDTH_PX[size] : DEFAULT_STROKE_WIDTH_PX
+
+  const dash = typeof props.dash === 'string' && DASH_VALUES.has(props.dash) ? props.dash : undefined
+  // dash:'none' -> no stroke element (see ArrowStyle.stroke doc); otherwise
+  // reuse dashArray() for dashed/dotted, undefined (a plain solid line) for
+  // draw/solid/absent — the exact old rendering when dash is unset.
+  const strokeDasharray = dash ? dashArray(dash, strokeWidth) : undefined
+
+  const headStart = typeof props.arrowheadStart === 'string' && ARROWHEAD_VALUES.has(props.arrowheadStart)
+    ? props.arrowheadStart
+    : DEFAULT_ARROWHEAD_START
+  const headEnd = typeof props.arrowheadEnd === 'string' && ARROWHEAD_VALUES.has(props.arrowheadEnd)
+    ? props.arrowheadEnd
+    : DEFAULT_ARROWHEAD_END
+
+  return { stroke: dash === 'none' ? 'none' : stroke, strokeWidth, strokeDasharray, headStart, headEnd }
+}
 
 function pathString(start: Point, end: Point, mid?: Point): string {
   if (!mid) return `M ${start.x} ${start.y} L ${end.x} ${end.y}`
@@ -229,21 +310,50 @@ export function Arrows({ snapshot, camera, viewportSize, index, routeFn }: Arrow
         const startScreen = worldToScreen(camera, routed.start)
         const endScreen = worldToScreen(camera, routed.end)
         const midScreen = routed.mid ? worldToScreen(camera, routed.mid) : undefined
-        const tail = midScreen ?? startScreen // the tangent's "from" point at t=1 — see module header
-        const [tip, left, right] = arrowheadPoints(tail, endScreen)
+        const style = arrowStyle(arrow)
+        // End arrowhead: tail is the tangent's "from" point at t=1 (mid for
+        // a curve, start for a straight segment — see module header
+        // ARROWHEAD ORIENTATION), tip is the visible end point.
+        const endTail = midScreen ?? startScreen
+        const [endTip, endLeft, endRight] = arrowheadPoints(endTail, endScreen)
+        // Start arrowhead: the SAME arrowheadPoints(tail, tip) composition,
+        // mirrored — tip is now the visible START point, and tail is the
+        // point one step further along the path FROM start (mid for a
+        // curve, end for a straight segment), so the triangle points
+        // outward at the start end exactly symmetrically to the end one.
+        const startTail = midScreen ?? endScreen
+        const [startTip, startLeft, startRight] = arrowheadPoints(startTail, startScreen)
         return (
           <g key={arrow.id} data-overlay="arrow" data-shape-id={arrow.id}>
-            <path
-              d={pathString(startScreen, endScreen, midScreen)}
-              fill="none"
-              stroke={ARROW_STROKE}
-              strokeWidth={1.5}
-            />
-            <polygon
-              data-overlay="arrowhead"
-              points={`${tip.x},${tip.y} ${left.x},${left.y} ${right.x},${right.y}`}
-              fill={ARROW_STROKE}
-            />
+            {style.stroke !== 'none' && (
+              <path
+                d={pathString(startScreen, endScreen, midScreen)}
+                fill="none"
+                stroke={style.stroke}
+                strokeWidth={style.strokeWidth}
+                {...(style.strokeDasharray !== undefined ? { strokeDasharray: style.strokeDasharray } : {})}
+              />
+            )}
+            {/* Per-type arrowhead GLYPH fidelity (square/dot/pipe/diamond/
+                inverted/bar all drawing their own real shape, not this
+                triangle) is a documented simplification, same posture as
+                GeoShape.tsx's rectangle-fallback for un-special-cased geo
+                variants — only 'none' vs "some arrowhead present" is this
+                task's required behavior. */}
+            {style.headEnd !== 'none' && (
+              <polygon
+                data-overlay="arrowhead"
+                points={`${endTip.x},${endTip.y} ${endLeft.x},${endLeft.y} ${endRight.x},${endRight.y}`}
+                fill={style.stroke !== 'none' ? style.stroke : ARROW_STROKE}
+              />
+            )}
+            {style.headStart !== 'none' && (
+              <polygon
+                data-overlay="arrowhead"
+                points={`${startTip.x},${startTip.y} ${startLeft.x},${startLeft.y} ${startRight.x},${startRight.y}`}
+                fill={style.stroke !== 'none' ? style.stroke : ARROW_STROKE}
+              />
+            )}
           </g>
         )
       })}

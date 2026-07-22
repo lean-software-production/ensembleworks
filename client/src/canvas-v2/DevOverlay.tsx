@@ -67,6 +67,11 @@ export interface CanvasMetricsPayload {
 export interface ClientTelemetry {
 	readonly repairCount: number
 	readonly lastBackfillBytes: number
+	/** Writes this client's doc REFUSED (canvas-doc's invalidWriteCount). A
+	 * non-zero value means a local tool is emitting shapes that fail the
+	 * model schema — the write was dropped, so nothing is corrupted, but the
+	 * gesture that produced it silently did nothing. */
+	readonly invalidWriteCount: number
 }
 
 export type ConnectionState = 'connecting' | 'connected'
@@ -136,6 +141,7 @@ export function DevOverlay({ roomId, connectionState, client, metrics }: DevOver
 			<div style={{ fontWeight: 600, marginBottom: 4 }}>canvas-v2 · {roomId}</div>
 			<Field label="connection" value={connectionState} />
 			<Field label="repairCount" value={client.repairCount} />
+			<Field label="invalidWrites" value={client.invalidWriteCount} />
 			<Field label="lastBackfillBytes" value={client.lastBackfillBytes} />
 			<Field label="pendingImports" value={sync ? sync.pendingImports : '—'} />
 			<Field label="malformedFrames" value={sync ? sync.malformedFrames : '—'} />

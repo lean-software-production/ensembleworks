@@ -2,9 +2,47 @@
 // __dirname, which bun build --compile can't embed — breaks the standalone binary
 // wherever node_modules isn't present. /base64 inlines the wasm as a JS string.
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt/base64'
-import { canonicalPageId, cascadeDropSet, repairPlan, stableStringify, type Binding, type Page, type RepairOp, type Shape } from '@ensembleworks/canvas-model'
+import { canonicalPageId, pageAncestorId, repairPlan, stableStringify, validateShape, SHAPE_KINDS, type Asset, type Binding, type Page, type RepairOp, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
 import { dumpModel } from './bridge.js'
-import type { CanvasDoc, ImportResult } from './canvas-doc.js'
+import type { CanvasDoc, ImportResult, InvalidWrite, InvalidWriteHandler } from './canvas-doc.js'
+
+// Loro stores `undefined` as `null` — verified by probe across props, nested
+// objects, array elements, meta and envelope fields alike. Validating the
+// pre-serialization object therefore judges a DIFFERENT value than the one
+// read back: z.number().optional() accepts `undefined` but rejects `null`, so
+// `{ w: undefined }` passed the write boundary and then failed validation on
+// the next read — handing repair() a dropShape for a shape the boundary had
+// just approved, taking its whole subtree with it.
+//
+// `undefined` is the ONLY divergence that matters to validation — probe-
+// verified by scanning value types across typed, loose and meta positions for
+// "raw passes, read-back fails". Note the qualifier: NaN, Infinity, Date and
+// Map are rejected pre-serialization only in TYPED fields. In loose
+// passthrough keys and in meta they are accepted — harmlessly, because those
+// positions accept null too, which is what Loro coerces NaN and Infinity to
+// there. bigint, functions and symbols throw at the Loro layer instead.
+// Explicit null round-trips faithfully. Loro ALSO
+// normalizes -0 to +0 in tree node data (independently probe-verified against
+// this same loro-crdt/base64 import — contradicts an earlier, wrong "-0
+// round-trips" note), but that is validation-irrelevant: z.number() accepts
+// -0 and +0 identically, so it cannot reopen the write boundary and is
+// deliberately left out of asStored's scope. So this remains one rule, not a
+// model of Loro's full value marshaling. serialization-seam.test.ts pins the
+// undefined->null rule against a real write/read-back so it cannot drift
+// silently.
+//
+// Exported for the drift guard specifically (serialization-seam.test.ts's
+// asStored(probes) vs a real write/read-back) — not part of the public API.
+export function asStored<T>(value: T): T {
+  if (value === undefined) return null as unknown as T
+  if (Array.isArray(value)) return value.map(asStored) as unknown as T
+  if (value !== null && typeof value === 'object') {
+    const out: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = asStored(v)
+    return out as unknown as T
+  }
+  return value
+}
 
 // Node.data layout: we store the whole model shape envelope as flat keys on the
 // Loro tree node's data map. The tldraw/model shape id lives under 'shapeId'
@@ -28,20 +66,24 @@ export class LoroCanvasDoc implements CanvasDoc {
   // import/repair — the incremental mutators alone keep the index precise.
   private index = new Map<string, LoroTreeNode[]>()
 
-  private constructor(private doc: LoroDoc, private tree: LoroTree) {
+  private constructor(
+    private doc: LoroDoc,
+    private tree: LoroTree,
+    private onInvalidWrite?: InvalidWriteHandler,
+  ) {
     this.reindex()
   }
 
-  static create(opts: { peerId: bigint }): LoroCanvasDoc {
+  static create(opts: { peerId: bigint; onInvalidWrite?: InvalidWriteHandler }): LoroCanvasDoc {
     const doc = new LoroDoc()
     doc.setPeerId(opts.peerId)
-    return new LoroCanvasDoc(doc, doc.getTree('shapes'))
+    return new LoroCanvasDoc(doc, doc.getTree('shapes'), opts.onInvalidWrite)
   }
-  static fromSnapshot(bytes: Uint8Array, opts: { peerId: bigint }): LoroCanvasDoc {
+  static fromSnapshot(bytes: Uint8Array, opts: { peerId: bigint; onInvalidWrite?: InvalidWriteHandler }): LoroCanvasDoc {
     const doc = new LoroDoc()
     doc.setPeerId(opts.peerId)
     doc.import(bytes)
-    return new LoroCanvasDoc(doc, doc.getTree('shapes'))
+    return new LoroCanvasDoc(doc, doc.getTree('shapes'), opts.onInvalidWrite)
   }
 
   // Rebuild the id→node index from a full tree scan. Called on construction
@@ -84,7 +126,11 @@ export class LoroCanvasDoc implements CanvasDoc {
   // parents), detach `n` to a root — never leave it under a STALE real parent
   // (split-brain: data.parentId says X, tree says Y, and deleting Y would
   // cascade-delete a shape that logically moved away). data.parentId is
-  // retained and a later reparent pass (see bridge.ts loadModel) fixes placement.
+  // retained, and the shape stays logically parented: repair() rescues by
+  // STORED parentId (see dropShapeRescuingChildren), so a shape sitting in
+  // this window is still found when its logical parent is dropped, and
+  // reparentToRoot still finds it if that parent never arrives. NOT via
+  // bridge.ts's loadModel, which has only test callers.
   private placeInTree(n: LoroTreeNode, parentId: string): void {
     const current = n.parent()
     if (parentId.startsWith('page:')) {
@@ -94,6 +140,58 @@ export class LoroCanvasDoc implements CanvasDoc {
     const parent = this.nodeByShapeId(parentId)
     if (!parent) { if (current) this.tree.move(n.id, undefined); return }
     if (!current || current.id !== parent.id) this.tree.move(n.id, parent.id)
+  }
+
+  // Monotonic count of locally-originated writes this doc refused (see
+  // InvalidWrite). Never reset.
+  private invalidWriteCounter = 0
+  get invalidWriteCount(): number { return this.invalidWriteCounter }
+
+  // Count, then report. A rejection is a NO-OP at the call site, so this is
+  // the only trace it leaves.
+  //
+  // Takes the offending VALUE, not a caller-derived kind: every call site is
+  // reaching into something that just failed validation, so a caller-supplied
+  // kind is exactly where a number, an object, or undefined would enter and
+  // quietly violate InvalidWrite's declared type. Coercing here means no call
+  // site can get it wrong.
+  //
+  // Logs on POWERS OF TWO (#1, #2, #4, …) rather than capping. v2 commits at
+  // per-pointermove granularity, so a tool emitting an invalid write during a
+  // drag would otherwise produce ~60 warnings per second for as long as the
+  // drag lasts — enough to hang DevTools, and it buries the FIRST warning,
+  // which is the diagnostically useful one. A lifetime cap would fix the flood
+  // but make silence indistinguishable from health, and would go permanently
+  // quiet so an unrelated bug an hour later never surfaced. This never closes
+  // the channel: 10 lines for a ten-second bad drag, 18 for an hour (the count
+  // is floor(log2(writes)) + 1 — both figures computed, not estimated). The
+  // [#n] marker tells the reader they are seeing a sample, not a census.
+  private rejectWrite(op: InvalidWrite['op'], value: unknown, rawId: unknown, error: string): void {
+    const rawKind = (value as { kind?: unknown } | null | undefined)?.kind
+    // `kind` is coerced here because InvalidWrite.kind is a NARROWED declared
+    // type (ShapeKind | '<unknown>') that runtime garbage would violate — not
+    // merely because kinds happen to have a closed vocabulary. `id` is
+    // declared plain `string`, so its rule is weaker but still checkable:
+    // must be a NON-EMPTY string. Empty is coerced too — it passes
+    // `typeof === 'string'` and would render as a blank in the log line,
+    // reading as a formatting bug rather than as missing data.
+    const kind: ShapeKind | '<unknown>' =
+      typeof rawKind === 'string' && (SHAPE_KINDS as readonly string[]).includes(rawKind)
+        ? (rawKind as ShapeKind)
+        : '<unknown>'
+    const id = typeof rawId === 'string' && rawId.length > 0 ? rawId : '<no id>'
+    const n = ++this.invalidWriteCounter
+    const write: InvalidWrite = { op, kind, id, error }
+    if (this.onInvalidWrite) {
+      try { this.onInvalidWrite(write) }
+      catch { /* A reporting sink must NEVER convert a no-op rejection into a
+                 throw that escapes Editor.applyAll's un-try/caught intent loop
+                 and strands that batch's earlier mutations uncommitted
+                 (decision D1). The counter is incremented above, before this
+                 call, so a throwing sink cannot skew it either. */ }
+    } else if ((n & (n - 1)) === 0) {
+      console.warn(`[canvas-doc] rejected invalid ${op} (${kind}) ${id} [#${n}]: ${error}`)
+    }
   }
 
   private static PROP_KEY = '__props'
@@ -122,6 +220,49 @@ export class LoroCanvasDoc implements CanvasDoc {
     return n ? this.readNode(n) : undefined
   }
   putShape(s: Shape): void {
+    // WRITE BOUNDARY. `validateShape` is the SAME predicate checkInvariants
+    // uses for the validProps rule, so anything accepted here is something
+    // repair() will not later act on — a locally-originated write can no
+    // longer manufacture the state repair() is obliged to destroy.
+    // Rejection is a total no-op (not a partial write, not a throw): a throw
+    // escapes Editor.applyAll's un-try/caught intent loop and strands that
+    // batch's earlier mutations uncommitted. Observability lives in
+    // rejectWrite.
+    //
+    // Validation runs on asStored(s), NOT on `s`: repair() judges what Loro
+    // STORED, and Loro turns `undefined` into `null`. Validating the raw
+    // object would approve `{ w: undefined }` and then let repair() drop the
+    // shape — and its whole subtree — on the next pass.
+    const v = validateShape(asStored(s))
+    if (!v.ok) {
+      // Pass the whole rejected VALUE, not a locally-derived kind or id:
+      // rejectWrite coerces both centrally so no call site can leak garbage
+      // into InvalidWrite.
+      this.rejectWrite('putShape', s, (s as { id?: unknown })?.id, v.error)
+      return
+    }
+    this.putShapeUnchecked(s)
+  }
+  /**
+   * putShape WITHOUT the write-boundary validation above. It exists so tests
+   * and hostile-state rigs can construct exactly the docs a REMOTE peer's
+   * bytes can still deliver (import() applies remote ops straight to the tree
+   * and never passes through putShape, so local validation cannot close that
+   * door).
+   *
+   * Kept off the CanvasDoc interface as a SIGNAL, not a barrier — production
+   * reaches this concrete class routinely (SyncServerPeer.doc,
+   * SyncClientPeer.doc, ShadowMirror.doc and reconcile()'s parameter are all
+   * typed LoroCanvasDoc), so anyone typing `peer.doc.` gets this method in
+   * autocomplete with no interface boundary in the way. Do not call this from
+   * production code.
+   *
+   * There is NO mechanical enforcement of that today — the signal is all there
+   * is. A CI presence gate carrying the allowlist is planned (see Task 8A of
+   * docs/plans/2026-07-19-v2-write-path-validation.md); until it lands, only
+   * review catches a new caller.
+   */
+  putShapeUnchecked(s: Shape): void {
     // Placement FIRST, data second (same discipline as reparent): for an
     // existing node Loro's cycle guard throws if s.parentId names a real
     // descendant of it, and no data field may be modified in that case.
@@ -141,10 +282,35 @@ export class LoroCanvasDoc implements CanvasDoc {
     }
   }
   updateProps(id: string, props: Record<string, unknown>): void {
+    if (Object.keys(props).length === 0) return // empty patch: a no-op by definition, not a rejection
     const n = this.nodeByShapeId(id)
-    if (!n) return
+    if (!n) return // unknown id: the pre-existing silent-no-op contract, NOT a rejection
     const cur = (n.data.get(LoroCanvasDoc.PROP_KEY) as Record<string, unknown>) ?? {}
-    n.data.set(LoroCanvasDoc.PROP_KEY, { ...cur, ...props } as any)
+    const merged = { ...cur, ...props }
+    // Validate the MERGED result, never the patch alone: this is a partial
+    // merge, so a patch only means something against what it lands on. Two
+    // intended consequences: (1) a patch that HEALS an already-invalid shape
+    // — one a remote peer delivered through import(), which bypasses this
+    // boundary entirely — is accepted, because the merged shape validates;
+    // (2) a patch that is individually harmless but leaves the shape still
+    // invalid is rejected, so a two-field breakage cannot be healed one
+    // field at a time here (use putShape with a whole valid shape).
+    //
+    // Validated via asStored, same reason as putShape: Loro turns `undefined`
+    // into `null`, and validation must judge what gets STORED, not the
+    // pre-serialization patch.
+    const shape = this.readNode(n)
+    const v = validateShape(asStored({ ...shape, props: merged }))
+    // Pass the EXISTING shape as the value — a props patch has no kind of its
+    // own, and rejectWrite coerces `kind` off whatever it is given, so a node
+    // whose stored kind is itself garbage still reports '<unknown>' rather
+    // than leaking it.
+    //
+    // `id` goes through as-is: rejectWrite coerces it too, so do NOT add a
+    // local non-empty/string guard here — duplicating that check across the
+    // two call sites is exactly what the previous task removed.
+    if (!v.ok) { this.rejectWrite('updateProps', shape, id, v.error); return }
+    n.data.set(LoroCanvasDoc.PROP_KEY, merged as any)
   }
   // Node-level core of deleteShape, factored out so repair() can apply it to
   // EVERY physical node sharing an id (see nodesByShapeId) while the public
@@ -280,10 +446,12 @@ export class LoroCanvasDoc implements CanvasDoc {
     t.insert(0, text)
   }
 
-  // Top-level LoroMaps keyed by id (bindings/pages are not tree-shaped, so a
-  // flat map is the natural container — see A1 in the phase-2 plan).
+  // Top-level LoroMaps keyed by id (bindings/pages/assets are not tree-shaped,
+  // so a flat map is the natural container — see A1 in the phase-2 plan, and
+  // the 2026-07-22 assets/image sub-cycle's A1 for the assets map itself).
   private bindings(): LoroMap { return this.doc.getMap('bindings') }
   private pages(): LoroMap { return this.doc.getMap('pages') }
+  private assets(): LoroMap { return this.doc.getMap('assets') }
 
   putBinding(b: Binding): void { this.bindings().set(b.id, b as any) }
   deleteBinding(id: string): void {
@@ -302,6 +470,22 @@ export class LoroCanvasDoc implements CanvasDoc {
   listPages(): Page[] {
     const m = this.pages()
     return m.keys().map((k) => m.get(k) as Page).filter(Boolean)
+  }
+
+  // No doc-boundary validation gate here — plain upsert, exactly like
+  // putBinding/putPage (which do not gate either). The untrusted-data
+  // validation gate lives in canvas-editor's PutAsset intent
+  // (assetSchema.safeParse), not at this boundary. NO deleteAsset: an undone
+  // image leaves its asset as harmless orphan garbage (tldraw parity, D-3).
+  putAsset(a: Asset): void { this.assets().set(a.id, a as any) }
+  getAsset(id: string): Asset | undefined { return (this.assets().get(id) as Asset | undefined) ?? undefined }
+  // Order comes from LoroMap.keys(), which converges SORTED (same rule
+  // listPages/listBindings rely on — see repair.test.ts's note on
+  // dumpModel's page order) — deterministic across peers/reloads without an
+  // explicit sort.
+  listAssets(): Asset[] {
+    const m = this.assets()
+    return m.keys().map((k) => m.get(k) as Asset).filter(Boolean)
   }
 
   exportSnapshot(): Uint8Array { return this.doc.export({ mode: 'snapshot' }) }
@@ -331,6 +515,80 @@ export class LoroCanvasDoc implements CanvasDoc {
       changed,
     }
   }
+  // RESCUE FIRST, DELETE SECOND — the whole of one dropShape op, in ONE named
+  // unit so no later edit can reorder the rescue after the delete. deleteNode
+  // cascades over the REAL tree and clears every descendant's text container,
+  // so everything the model KEEPS must be out of the doomed subtree before it
+  // runs. This is the one place the Loro side is genuinely harder than the
+  // model side, where dropping is a filter over a flat array.
+  //
+  // TWO rescues, because "child" means two different things here, and
+  // applyRepairToModel — the reference this must agree with byte-for-byte
+  // after normalization — matches only ONE of them:
+  //
+  // 1. LOGICAL children: every shape whose STORED parentId names `id`. This is
+  //    exactly the reference's drop.has(s.parentId) test, and it is the only
+  //    rescue that is MODEL-VISIBLE — these are the shapes whose parentId the
+  //    reference rewrites to `rescueTo`. A logical child need not be a
+  //    physical child: placeInTree parks a shape at the tree ROOT when its
+  //    parentId names a node that does not exist yet, keeping data.parentId
+  //    on the missing target, and Loro's own cycle resolution parks the loser
+  //    of a concurrent move race the same way. Such a shape is invisible to
+  //    n.children(). Before this branch existed it was silently missed,
+  //    leaving it a dangling orphan that only a SECOND repair() pass cleaned
+  //    up — and to canonicalPageId, not to `rescueTo`, so ruling 11 was
+  //    violated on that path too. That broke model-agreement AND one-pass
+  //    convergence. Production reaches this state: reconcile()
+  //    (server/src/canvas-v2/reconcile.ts) documents the window as open in its
+  //    own "Absent-parent tolerance" note and has no second pass, and the
+  //    concurrent-move case needs no mirror at all. NOT closed by bridge.ts's
+  //    loadModel — that has only test callers.
+  //
+  // 2. PHYSICAL children that are NOT logical children: a real tree child of
+  //    `n` whose data.parentId names something else. The reference does NOT
+  //    rewrite their parentId, so this must not stamp `rescueTo` on them; it
+  //    only lifts them clear of the cascade, the same way placeInTree parks a
+  //    shape it cannot place. Dead-code safety — no public-API sequence is
+  //    known to produce this state (every mutator that moves a node also
+  //    writes data.parentId, and Loro resolves a concurrent move cycle to the
+  //    tree ROOT, which is case 1's shape, not this one). Pinned white-box in
+  //    repair.test.ts, like the hand-built plans that pin repair()'s other
+  //    unreachable guards.
+  //
+  // The two are order-independent with respect to EACH OTHER — the physical
+  // loop lifts every remaining tree child clear whatever the logical pass did
+  // — so only their joint position BEFORE deleteNode is load-bearing. Keeping
+  // both in this one method is what makes that impossible to separate.
+  private dropShapeRescuingChildren(id: string, rescueTo: string, logicalChildIds: readonly string[]): void {
+    // Sorted so the SEQUENCE of Loro ops emitted is a function of converged
+    // data (ids) rather than of listShapes() traversal order, an undocumented
+    // Loro internal — the standing purity mandate canonicalPageId exists for.
+    // No test can observe this (every child gets identical treatment and the
+    // comparisons all sort by id); it is kept because the mandate is on the
+    // code. `id` itself may appear here if the shape self-parents: harmless,
+    // it is restamped and then removed by the loop below, and the reference
+    // drops it too.
+    for (const childId of [...logicalChildIds].sort()) {
+      for (const c of this.nodesByShapeId(childId)) {
+        this.tree.move(c.id, undefined) // rescueTo is a page ⇒ the Loro tree root
+        c.data.set('parentId', rescueTo)
+      }
+    }
+    for (const n of this.nodesByShapeId(id)) {
+      // Whatever is STILL a physical child is split-brain residue — the
+      // logical children were lifted out above — so lift it clear of the
+      // cascade WITHOUT touching data.parentId (case 2 above).
+      // Unlike the logical loop this one needs no sort despite the purity
+      // mandate: every move is to root with no data write, so sibling order
+      // at root is model-invisible and the converged result is order-invariant.
+      // The [...] copy is defensive only: probed, n.children() hands back a
+      // fresh array of freshly-constructed wrappers, so moving during
+      // iteration does not disturb it. Kept because that is an undocumented
+      // Loro internal, not a contract.
+      for (const c of [...(n.children() ?? [])]) this.tree.move(c.id, undefined)
+      this.deleteNode(n)
+    }
+  }
   // PERF (measured, Phase 2 review): ~7.36ms/call at 1k shapes on a CLEAN doc
   // — i.e. that's the floor even when the plan is empty — with ~70% of it in
   // the three list*() WASM marshals inside dumpModel; cost is linear in doc
@@ -342,19 +600,56 @@ export class LoroCanvasDoc implements CanvasDoc {
   repair(): RepairOp[] {
     const model = dumpModel(this)
     const plan = repairPlan(model)
-    // dropAll = the plan's dropShape ids plus their transitive descendants in
-    // the MODEL (shared cascadeDropSet — same fixpoint applyRepairToModel
-    // runs, so the two applications cannot drift). It serves two purposes:
-    // 1. Skip-set: a reparentToRoot op whose id is in dropAll is SKIPPED, so
-    //    plan-application order can never matter — without the skip, applying
-    //    reparent(descendant) before dropShape(ancestor) would move the
-    //    descendant out of the doomed subtree and silently resurrect it,
-    //    diverging from applyRepairToModel (which always drops it).
-    // 2. Binding sweep: a binding whose endpoint is in dropAll becomes
-    //    dangling MID-pass (it wasn't when the plan was computed, so the plan
-    //    has no deleteBinding op for it); delete it here so a SINGLE repair()
-    //    call converges — not only the second.
-    const dropAll = cascadeDropSet(model.shapes, new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id)))
+    // The ids the plan drops — exactly those, NOT a descendant closure any
+    // more. A dropShape removes only the shape it names and rescues that
+    // shape's children (see applyRepairToModel, the pure reference this must
+    // agree with byte-for-byte after normalization). Two uses:
+    // 1. Binding sweep: a binding whose endpoint is dropped becomes dangling
+    //    MID-pass (it wasn't when the plan was computed, so the plan has no
+    //    deleteBinding op for it); delete it here so a SINGLE repair() call
+    //    converges — not only the second. A binding to a merely RESCUED shape
+    //    survives, because that shape still exists.
+    // 2. Skip-set: a reparentToRoot op whose id is ALSO dropped is skipped.
+    //    Unreachable from repairPlan — its per-id dedup keeps exactly one op
+    //    per id and dropShape outranks reparentToRoot — so this is dead-code
+    //    safety for hand-built plans, like the 'page:orphans' fallback below.
+    //    Under the old CASCADE set it was genuinely reachable (a descendant
+    //    could carry its own reparent op); proportionate drop removed that
+    //    route. Verified unkillable by mutation: deleting the guard leaves
+    //    every suite green.
+    const dropped = new Set(plan.filter((o) => o.op === 'dropShape').map((o) => o.id))
+    // reparentToRoot's target, and the FALLBACK target for a rescued child
+    // whose page ancestor cannot be resolved. repairPlan emits neither
+    // dropShape nor reparentToRoot for a zero-page doc, so 'page:orphans' is
+    // unreachable from a repairPlan-produced plan — dead-code safety only.
+    const rootPageId = canonicalPageId(model.pages) ?? 'page:orphans'
+    // Loop-invariant across every rescued child — see pageAncestorId's
+    // docblock for why it's caller-supplied.
+    const pageIds = new Set<string>(model.pages.map((p) => p.id))
+    // LOGICAL children, indexed ONCE: stored parentId → the ids that name it.
+    // This is what lets the dropShape branch below find the same children
+    // applyRepairToModel finds (drop.has(s.parentId)) rather than only the
+    // ones the real tree happens to hold under the doomed node — see
+    // dropShapeRescuingChildren. There is no existing index for this: `index`
+    // is shapeId → nodes, a different question.
+    //
+    // Built here rather than per op deliberately. One O(shapes) pass, so a
+    // plan with N drops does not reintroduce the O(shapes × N) rescan the
+    // node index removed. repair-cost.test.ts enforces that both ways — its
+    // wall-clock ceiling AND its structural gate (tree.nodes() call count must
+    // not scale with plan size). Rebuilding this per op from listShapes()
+    // measured 3097.59ms against the 100ms ceiling on the 500-drop fixture,
+    // versus 15.43ms as written.
+    //
+    // Read from `model` — the UNTRANSFORMED pre-repair dump — never from live
+    // state that earlier ops in this same pass have already rehomed. That is
+    // the same discipline applyRepairToModel's fused pass keeps, and it is
+    // what makes the result a pure function of converged state.
+    const logicalChildren = new Map<string, string[]>()
+    for (const s of model.shapes) {
+      const arr = logicalChildren.get(s.parentId)
+      if (arr) arr.push(s.id); else logicalChildren.set(s.parentId, [s.id])
+    }
     for (const o of plan) {
       if (o.op === 'deleteBinding') this.deleteBinding(o.id)
       // dropShape/reparentToRoot are applied to EVERY physical node sharing
@@ -364,33 +659,48 @@ export class LoroCanvasDoc implements CanvasDoc {
       // operates over the full shapes array, so it never misses a duplicate
       // either. Normal (non-duplicated) docs see exactly one node here, so
       // this is behavior-preserving for every existing single-node case.
-      else if (o.op === 'dropShape') for (const n of this.nodesByShapeId(o.id)) this.deleteNode(n) // cascade + text cleanup
+      else if (o.op === 'dropShape') {
+        // The page every child of THIS dropped shape is rescued onto: the
+        // page ancestor of the dropped parent (owner ruling 11 — a rescued
+        // child may shift in position but must not change page), falling back
+        // to the canonical page when that chain dead-ends or cycles. Computed
+        // ONCE per dropped shape: o.id is the parent every child below shares,
+        // so every child of this node has the same target.
+        const rescueTo = pageAncestorId(model, o.id, pageIds) ?? rootPageId
+        this.dropShapeRescuingChildren(o.id, rescueTo, logicalChildren.get(o.id) ?? [])
+      }
       else if (o.op === 'dedupeShape') {
-        if (dropAll.has(o.id)) {
-          // The id is claimed by a drop CASCADE (an ancestor of one of its
-          // copies is being dropped): cascadeDropSet is keyed by id, so the
-          // model drops EVERY entry of this id — mirror that here by
-          // deleting all physical copies (deleteNode's text cleanup is
-          // correct in this branch: the id is model-dead) instead of
-          // collapsing them to a winner the model would not keep.
+        if (dropped.has(o.id)) {
+          // Unreachable from repairPlan — dropShape SUBSUMES dedupeShape for
+          // the same id, so the two never coexist in a plan, and now that
+          // drops no longer cascade there is no cascade route in either.
+          // Kept as dead-code safety for hand-built plans: if the id is
+          // model-dead, remove every physical copy (deleteNode's text cleanup
+          // is correct here) rather than electing a winner the model would
+          // not keep.
           for (const n of this.nodesByShapeId(o.id)) this.deleteNode(n)
         } else {
           this.dedupeShapeNodes(o.id)
         }
       }
       else if (o.op === 'reparentToRoot') {
-        if (dropAll.has(o.id)) continue // claimed by a drop cascade — see above
-        // 'page:orphans' is unreachable: repairPlan emits no reparentToRoot
-        // ops for a zero-page doc (dead-code safety only).
-        const pageId = canonicalPageId(model.pages) ?? 'page:orphans'
+        if (dropped.has(o.id)) continue // unreachable from repairPlan — see the skip-set note above
+        // The CANONICAL page, deliberately not the same-page rule: an orphan
+        // or a cycle member has no page to stay on, which is the whole point
+        // of this op. Do not over-apply pageAncestorId here. (No test can
+        // catch that over-application through repair(): an orphan's chain
+        // dead-ends and a cycle member's chain cycles, so pageAncestorId
+        // returns undefined and falls back to this same value. canvas-model's
+        // repair.test.ts pins it with a HAND-BUILT plan, which repair() —
+        // which computes its own plan — cannot construct.)
         for (const n of this.nodesByShapeId(o.id)) {
           this.tree.move(n.id, undefined) // page id ⇒ Loro root
-          n.data.set('parentId', pageId)
+          n.data.set('parentId', rootPageId)
         }
       }
     }
     for (const b of model.bindings) {
-      if (dropAll.has(b.fromId) || dropAll.has(b.toId)) this.deleteBinding(b.id)
+      if (dropped.has(b.fromId) || dropped.has(b.toId)) this.deleteBinding(b.id)
     }
     // repair() above already keeps the index coherent incrementally (deleteNode
     // and dedupeShapeNodes both maintain it, and reparentToRoot's raw move
@@ -399,9 +709,9 @@ export class LoroCanvasDoc implements CanvasDoc {
     // relative to the list*() scans above, and correctness must not depend on
     // this method's internals staying in perfect lockstep with the index.
     // Skipped when the plan was empty: an empty plan (and therefore an empty
-    // dropAll) touches nothing above, so the index is provably still exact —
-    // this keeps the common idempotent repair() call (already-clean doc) from
-    // paying for a rebuild it doesn't need.
+    // dropped set) touches nothing above, so the index is provably still
+    // exact — this keeps the common idempotent repair() call (already-clean
+    // doc) from paying for a rebuild it doesn't need.
     if (plan.length > 0) this.reindex()
     return plan
   }

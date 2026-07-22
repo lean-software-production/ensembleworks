@@ -51,6 +51,14 @@ export type Anchor =
    * runner resolves this via worldToScreen(camera, centre); the browser runner
    * via the element's bounding box. */
   | { readonly ref: 'shape'; readonly id: string; readonly dx?: number; readonly dy?: number }
+  /** Pilot P3 extension — a CSS selector resolved to an element's bounding-
+   * box centre, plus an optional SCREEN-space offset. For addressing a
+   * rendered CONTROL that has no seeded shape id (e.g. a style-panel
+   * swatch) — mirrors the 'shape' anchor's shape but resolved via
+   * `page.locator(selector).boundingBox()` instead of a shape id. Browser-
+   * only: the FSM runner has no DOM to query, so it throws there (matching
+   * the established throw-stub pattern for browser-only observations). */
+  | { readonly ref: 'element'; readonly selector: string; readonly dx?: number; readonly dy?: number }
 
 /** One primitive gesture step. SCREEN space, exactly like input.ts's
  * InputEvent coordinates — the FSM runner turns these into InputEvents via
@@ -66,6 +74,18 @@ export type GestureOp =
   | { readonly kind: 'up'; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
   | { readonly kind: 'wheel'; readonly dx: number; readonly dy: number; readonly at: Anchor; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
   | { readonly kind: 'key'; readonly key: string; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
+  /** Task K (assets/image sub-cycle) — a real HTML5 file drop at a screen
+   * anchor, carrying a data-URL payload (so a contract embeds its fixture
+   * inline rather than reading a file off disk). Browser-only by
+   * construction: there is no DOM/File/DataTransfer at the FSM level (the
+   * FSM runner throws — see fsm-runner.ts's opsToEvents), matching the
+   * established throw-stub pattern for a browser-only primitive
+   * (textSelectionSpans/peerEditingIndicator/the 'element' anchor). The
+   * browser runner (e2e/lib/contracts.ts) builds a real `File` from
+   * `dataUrl` + `mimeType`/`name`, wraps it in a `DataTransfer`, and
+   * dispatches `dragenter`/`dragover`/`drop` DragEvents at the resolved
+   * anchor point — Playwright's `mouse` API cannot carry a file payload. */
+  | { readonly kind: 'dropFile'; readonly at: Anchor; readonly dataUrl: string; readonly name?: string; readonly mimeType?: string; readonly actor?: Actor }
 
 /** The scene a contract wants seeded before its gesture runs. Phase A ships an
  * empty scene (pilot 1 needs no shapes); Pilot 2 adds shapes. Runner-agnostic:
@@ -131,6 +151,72 @@ export interface Obs {
    * throws 'not observable at fsm level', matching textSelectionSpans'
    * established throw-stub pattern for a browser-only observation. */
   peerEditingIndicator(shapeId: string): boolean
+  /** A shape's stored style value: props[key], or the envelope opacity when
+   * key === 'opacity', or null when the shape/prop is absent. Task P3.
+   * Available at BOTH levels (reads doc state, not the DOM) — no
+   * throw-stub: the FSM adapter reads `editor.doc.getShape`, the browser
+   * adapter pre-samples `window.__ew.doc.getShape` per scene shape. */
+  shapeStyle(id: string, key: string): string | number | null
+  /** The current editor selection, as a plain array. Task AS4. Available at
+   * BOTH levels (reads editor state, not the DOM) — no throw-stub: the FSM
+   * adapter reads `[...editor.get().selection]` directly, the browser
+   * adapter pre-samples `window.__ew.editor.get().selection`. General and
+   * reusable (not a styling-specific probe) — AS4's armed-style contract
+   * uses this to discover a just-created shape's id (minted from
+   * crypto-random, so the runner cannot predict it up front) via the create
+   * tool's auto-selection (create.ts's `finalizeIntents`), then reuses
+   * `shapeStyle` above for the value assertion. */
+  selectedShapeIds(): readonly string[]
+  /** Total count of shapes currently in the doc (all pages/kinds). Task H1 —
+   * the copy/paste contracts (K1-K3) need a total-count read to prove "N
+   * shapes created" (duplicate/paste) or "0 created" (a rejected malformed
+   * paste); the existing Obs set has no such probe. Available at BOTH levels
+   * (reads doc state, not the DOM) — no throw-stub: the FSM adapter reads
+   * `editor.doc.listShapes().length` directly, the browser adapter samples
+   * `window.__ew.doc.listShapes().length`. */
+  shapeCount(): number
+  /** Shape ids in PAINT order — first painted (bottommost) to last painted
+   * (topmost, "on top"). Task H1 — the z-order sub-cycle's bring-to-front
+   * contract (Z1) needs to observe the RENDERER's actual paint order, not
+   * doc/model state, to prove "bring-to-front moves a shape to the top".
+   * Browser-only by construction: paint order is a rendering concept the
+   * headless FSM has no notion of (same precedent as textSelectionSpans /
+   * peerEditingIndicator / the 'element' anchor) — the browser adapter reads
+   * DOM document order of `[data-shape-id][data-shape-kind]` elements (IS
+   * paint order, since ShapeBody paints flat absolutely-positioned siblings
+   * in DOM order), the FSM adapter throws 'not observable at fsm level'. */
+  paintOrder(): readonly string[]
+  /** A shape's `kind` (the envelope discriminant — 'geo', 'draw', 'note', …),
+   * or null when the shape is absent. Task H — `shapeStyle` cannot answer
+   * this: kind lives on the envelope, not `props`, and isn't a
+   * string/number prop value. Available at BOTH levels (reads doc state,
+   * not the DOM) — no throw-stub: the FSM adapter reads
+   * `editor.doc.getShape(id)?.kind ?? null` directly, the browser adapter
+   * pre-samples kinds for the union of scene ids + selection (same reason
+   * `shapeStyle`/`sampleActor` union selection into `styleIds` — a
+   * gesture-created shape's id is minted from crypto-random and only
+   * discoverable via `selectedShapeIds()`). */
+  shapeKind(id: string): string | null
+  /** A SHAPE's resolved image-asset source: `props.assetId` on the shape
+   * looked up against the doc's asset map, returning that asset's
+   * `props.src` — or null when the shape is absent, carries no
+   * (string) `assetId`, or the resolved asset has no `src`. Task K
+   * (assets/image sub-cycle) — proves an image shape's `assetId`
+   * genuinely resolves to a STORED asset (e.g. an `/uploads/...` src from
+   * a real upload), not merely that a shape of kind 'image' exists.
+   * Available at BOTH levels (reads doc state, not the DOM) — no
+   * throw-stub: the FSM adapter reads `editor.doc.getShape`/`getAsset`
+   * directly, the browser adapter pre-samples via `window.__ew.doc`. */
+  assetSrc(id: string): string | null
+  /** Total count of PAGES currently in the doc. Task H1 (pages sub-cycle,
+   * docs/plans/2026-07-22-canvas-v2-pages.md) — Z1's switching-page contract
+   * needs a model-level "a page was created" read that doesn't depend on the
+   * render filter it's also proving, so a failure of the COUNT assertion can
+   * never be confused with a failure of the paint-order assertion. Available
+   * at BOTH levels (reads doc state, not the DOM) — no throw-stub: the FSM
+   * adapter reads `editor.doc.listPages().length` directly, the browser
+   * adapter samples `window.__ew.doc.listPages().length`. */
+  pageCount(): number
 }
 
 /** A contract declaration = data. */
@@ -150,6 +236,16 @@ export interface Contract {
   readonly tool?: 'select' | 'select+transform'
   /** Shapes to seed before the gesture. Default: none. */
   scene?(): readonly SceneShape[]
+  /** Task H1 — a payload to pre-seed the OS clipboard with, BEFORE the
+   * gesture runs. Browser-only by construction: only `e2e/lib/contracts.ts`
+   * reads this field (`level:'browser'` contracts write it via
+   * `navigator.clipboard.writeText` ahead of the gesture); the FSM runner
+   * never runs a `level:'browser'` contract (library.test.ts filters
+   * CONTRACTS to `level === 'fsm'`), so it never reads `clipboard` at all —
+   * no throw-stub needed, unlike an `Obs` method. Seeded from the same `rng`
+   * the gesture itself gets, for a reproducible-per-seed hostile payload
+   * (K3's malformed-clipboard contract). */
+  clipboard?(rng: Rng): string
   /** Build the gesture ops from a seeded RNG — deterministic per seed. */
   gesture(rng: Rng): readonly GestureOp[]
   /** Return null if the observation satisfies the contract, or a human failure

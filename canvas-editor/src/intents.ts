@@ -6,7 +6,7 @@
 // how each becomes doc ops. This indirection is what makes a tool testable
 // as pure (state, InputEvent) -> (state', Intent[]) with no doc at all — see
 // script.ts's `run()`.
-import type { Shape } from '@ensembleworks/canvas-model'
+import type { Asset, Binding, Page, Shape } from '@ensembleworks/canvas-model'
 
 export interface Point { readonly x: number; readonly y: number }
 
@@ -31,6 +31,48 @@ export interface ArrowBinding {
  * `random`/an id factory and z-order via a fractional index; this intent is
  * just "put this fully-formed shape"). */
 export interface CreateShape { readonly type: 'CreateShape'; readonly shape: Shape }
+
+/** Upsert `binding` verbatim, IF it passes `bindingSchema` — a validated
+ * write, unlike raw `CanvasDoc.putBinding` (a plain `.set()` with no
+ * validation at all; see loro-canvas-doc.ts's `putBinding`). `applyOne`
+ * (editor.ts) runs `bindingSchema.safeParse(intent.binding)` before ever
+ * calling `doc.putBinding`; on failure the WHOLE intent is a silent no-op —
+ * no doc write, no undo entry, no throw — mirroring `putShape`'s own
+ * reject-invalid write boundary (`validateShape` in loro-canvas-doc.ts).
+ * This is the write path paste (Task E1) uses to create cloned bindings from
+ * foreign clipboard data, so an invalid binding can never reach the doc even
+ * if a bug upstream (decodeClipboard/cloneWithNewIds) let one through.
+ *
+ * Does NOT itself check that `fromId`/`toId` resolve to shapes that exist —
+ * only that the binding is STRUCTURALLY well-formed. A structurally-valid
+ * but dangling binding (endpoint doesn't resolve) is accepted and written;
+ * CanvasDoc.repair() is what sweeps dangling bindings, the same contract
+ * StartArrow/CompleteArrow's own `doc.putBinding` calls above already rely
+ * on. Callers that must never create a dangling binding (paste, via
+ * cloneWithNewIds/D-4) filter endpoints themselves before emitting this
+ * intent — PutBinding's job is schema validation, not referential
+ * integrity. */
+export interface PutBinding { readonly type: 'PutBinding'; readonly binding: Binding }
+
+/** Upsert `asset` verbatim, IF it passes `assetSchema` — the same
+ * validated-write shape as PutBinding above (`applyOne`, editor.ts, runs
+ * `assetSchema.safeParse(intent.asset)` before ever calling `doc.putAsset`;
+ * a failing asset is a TOTAL no-op: no doc write, no undo entry, no throw).
+ * `doc.putAsset` itself is a plain `.set()` with no validation (mirrors
+ * `putBinding`/`putPage`) — this intent's `safeParse` IS the write-boundary
+ * gate for the untrusted client drop/paste entry point (D-4 in
+ * docs/plans/2026-07-22-canvas-v2-assets-image.md).
+ *
+ * DELIBERATELY CARRIES NO UNDO/REDO INVERSE (unlike PutBinding's
+ * deleteBinding/putBinding pair) — there is no `deleteAsset` to invert with
+ * (YAGNI'd this cycle), and an undone image is meant to leave its asset
+ * behind as harmless orphan garbage, exactly tldraw's own behavior (tldraw
+ * never GCs assets on undo). The create flow (client, Task C1) batches
+ * PutAsset with a CreateShape in ONE applyAll so the batch still gets a
+ * real undo entry — CreateShape's own deleteShape/putShape inverses remove
+ * and restore the image shape; the asset just rides along, untouched by
+ * either direction. */
+export interface PutAsset { readonly type: 'PutAsset'; readonly asset: Asset }
 
 /** Move every shape in `ids` by (dx, dy) in its own parent's local frame.
  * `ids` is DEDUPED against ancestor/descendant overlap before mutation — see
@@ -131,6 +173,25 @@ export interface SetText { readonly type: 'SetText'; readonly id: string; readon
  * see editor.ts's applyOne TOLERANCE CONTRACT): no throw, docMutated:false. */
 export interface UpdateProps { readonly type: 'UpdateProps'; readonly id: string; readonly props: Record<string, unknown> }
 
+/** Batch style write across a whole selection. Shallow-merges `props` into
+ * EACH id's props map (like UpdateProps, but multi-id) AND, when `opacity`
+ * is present, sets each id's ENVELOPE `opacity` — a field UpdateProps cannot
+ * reach because CanvasDoc.updateProps only ever merges the props map (see
+ * canvas-doc/src/canvas-doc.ts's updateProps contract comment). Per-id
+ * tolerant: an unresolved id is SKIPPED (the applyAll TOLERANCE CONTRACT),
+ * never thrown. The intent is DUMB about relevance — it applies the given
+ * patch to every id in `ids` regardless of shape kind; the PANEL (Task P4)
+ * decides which props a kind actually supports before emitting one of
+ * these. This is why SetStyle exists instead of extending UpdateProps:
+ * UpdateProps stays single-id and props-only, reserved for the ported
+ * embeds' own prop writes (Seam D). */
+export interface SetStyle {
+  readonly type: 'SetStyle'
+  readonly ids: readonly string[]
+  readonly props?: Record<string, unknown>
+  readonly opacity?: number
+}
+
 /** Begin drawing an arrow: puts `shape` (kind 'arrow') verbatim, exactly
  * like CreateShape, then — if `fromBinding` is present — puts a binding
  * pinning the arrow's START endpoint to `fromBinding.targetId` at
@@ -161,6 +222,48 @@ export interface CompleteArrow {
   readonly toBinding?: ArrowBinding
 }
 
+/** Create a page (Task E3, docs/plans/2026-07-22-canvas-v2-pages.md, D-3):
+ * `doc.putPage(intent.page)` verbatim — the caller (the switcher UI, Task
+ * U1) mints the full `Page` record (id via `random`, `name`, and a
+ * top-of-stack fractional `index` via A1's `generateKeyBetween`) and carries
+ * it fully-formed, the same "caller builds the record" posture as
+ * CreateShape/StartArrow. Does NOT itself change `EditorState.currentPageId`
+ * — a doc mutation and a view change stay separate intents; a caller that
+ * wants "create AND switch to it" batches this with SetCurrentPage in ONE
+ * applyAll (one commit, one undo entry — SetCurrentPage itself contributes
+ * no undo/redo ops, since view intents never do). */
+export interface CreatePage { readonly type: 'CreatePage'; readonly page: Page }
+
+/** Delete a page AND its whole shape subtree (Task E3, D-3) — unlike
+ * `CanvasDoc.deletePage`, which removes ONLY the page record with no
+ * cascade (verified: loro-canvas-doc.ts's deletePage), this intent also
+ * cascade-deletes every shape rooted on the page, reusing the DeleteShapes
+ * subtree machinery (`collectSubtreeParentFirst`/`orderParentBeforeChild`,
+ * editor.ts). REFUSES to delete the LAST page (a doc must always have ≥1
+ * page) — a total no-op, no doc write, no undo entry. Silent no-op on an
+ * unknown id too. Does NOT touch `currentPageId` — a caller deleting the
+ * page they're currently on batches a follow-up SetCurrentPage(adjacent) in
+ * the same applyAll (D-6), the same "doc mutation and view change stay
+ * separate" posture CreatePage above documents. */
+export interface DeletePage { readonly type: 'DeletePage'; readonly id: string }
+
+/** Rename a page: `doc.putPage({ ...page, name: intent.name })` — the
+ * `{...page}` spread preserves `index` and any passthrough (looseObject)
+ * field, mirroring SetText's pre-image-inverse convention (editor.ts).
+ * Silent no-op on an unknown id. */
+export interface RenamePage { readonly type: 'RenamePage'; readonly id: string; readonly name: string }
+
+/** Reorder a page: overwrite its fractional `index` field (canvas-model's
+ * `fractional-index.ts`/A1's `orderedPages`) to `index` verbatim — the
+ * caller (the switcher UI) computes the new index via `generateKeyBetween`
+ * between the two neighbor pages' indices, the same "emitter computes one
+ * literal index at emission time" posture SetIndex uses for shapes
+ * (editor.ts). Silent no-op on an unknown id, and a no-op (no doc write, no
+ * undo entry) when `index` already equals the page's current index — avoids
+ * manufacturing an empty undo step, mirroring SetIndex's own no-change
+ * guard. */
+export interface ReorderPage { readonly type: 'ReorderPage'; readonly id: string; readonly index: string }
+
 // ============================================================================
 // View intents — touch ONLY the editor-local store (camera/selection/hover/
 // editing). Never call doc.commit(); see editor.ts's applyOne.
@@ -172,8 +275,45 @@ export interface SetHover { readonly type: 'SetHover'; readonly id: string | nul
 export interface BeginEdit { readonly type: 'BeginEdit'; readonly id: string }
 export interface EndEdit { readonly type: 'EndEdit' }
 
+/** Arm the style a NEWLY-CREATED shape will inherit (Task AS1/AS2) — parity
+ * with tldraw arming a color on the tool before you draw. Editor-local, like
+ * every other view intent here: shallow-MERGES `props` into the existing
+ * `EditorState.nextShapeStyle` (arming color, then arming size, accumulates
+ * both — it does NOT replace), never touches the doc, never pushes an undo
+ * entry. See editor.ts's applyOne. */
+export interface SetNextStyle { readonly type: 'SetNextStyle'; readonly props: Record<string, unknown> }
+
+/** Switch which page THIS peer is currently looking at (Task E1,
+ * docs/plans/2026-07-22-canvas-v2-pages.md, D-2) — editor-LOCAL, like every
+ * other view intent here: touches only `EditorState.currentPageId`, never the
+ * doc, never pushes an undo entry. Switching pages is a VIEW change, not an
+ * undoable one — undoing a switch would silently jump the user's viewport
+ * back, a surprising side effect view intents don't have machinery for
+ * anyway. See editor.ts's applyOne. */
+export interface SetCurrentPage { readonly type: 'SetCurrentPage'; readonly pageId: string }
+
+/** Index-only whole-shape write: overwrites a shape's ENVELOPE `index` field
+ * (the fractional-index z-order key — canvas-model's `fractional-index.ts`,
+ * Task A1) to `index` verbatim. Single-id, not batch — like UpdateProps, not
+ * SetStyle: the reorder emitter (Task E2, `reorderSelectionIntents`)
+ * computes one literal index PER shape at emission time and freezes each
+ * into its own SetIndex intent, then submits all of them together via one
+ * `editor.applyAll(...)` call — batching lives at the applyAll layer (one
+ * commit/one undo step for N SetIndex intents), not inside this intent.
+ * `index` is an ENVELOPE field, so — exactly like SetStyle's `opacity`
+ * handling above — UpdateProps's props-only merge can never reach it; this
+ * intent's `applyOne` case writes it via a whole-shape `doc.putShape`
+ * mirroring UpdateProps/SetStyle's full-shape-inverse convention (undo/redo
+ * replay `putShape` of the pre-image / next-image respectively). Silent
+ * no-op on an unknown id (the applyAll TOLERANCE CONTRACT) and a no-op (no
+ * commit, no undo entry) when `index` already equals the shape's current
+ * index, to avoid manufacturing an empty undo step. */
+export interface SetIndex { readonly type: 'SetIndex'; readonly id: string; readonly index: string }
+
 export type Intent =
   | CreateShape
+  | PutBinding
+  | PutAsset
   | TranslateShapes
   | ResizeShapes
   | RotateShapes
@@ -181,10 +321,18 @@ export type Intent =
   | DeleteShapes
   | SetText
   | UpdateProps
+  | SetStyle
   | StartArrow
   | CompleteArrow
+  | CreatePage
+  | DeletePage
+  | RenamePage
+  | ReorderPage
   | SetCamera
   | SetSelection
   | SetHover
   | BeginEdit
   | EndEdit
+  | SetNextStyle
+  | SetIndex
+  | SetCurrentPage
