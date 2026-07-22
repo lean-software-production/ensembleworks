@@ -163,6 +163,17 @@ export interface Obs {
    * `editor.doc.listShapes().length` directly, the browser adapter samples
    * `window.__ew.doc.listShapes().length`. */
   shapeCount(): number
+  /** Shape ids in PAINT order — first painted (bottommost) to last painted
+   * (topmost, "on top"). Task H1 — the z-order sub-cycle's bring-to-front
+   * contract (Z1) needs to observe the RENDERER's actual paint order, not
+   * doc/model state, to prove "bring-to-front moves a shape to the top".
+   * Browser-only by construction: paint order is a rendering concept the
+   * headless FSM has no notion of (same precedent as textSelectionSpans /
+   * peerEditingIndicator / the 'element' anchor) — the browser adapter reads
+   * DOM document order of `[data-shape-id][data-shape-kind]` elements (IS
+   * paint order, since ShapeBody paints flat absolutely-positioned siblings
+   * in DOM order), the FSM adapter throws 'not observable at fsm level'. */
+  paintOrder(): readonly string[]
 }
 
 /** A contract declaration = data. */

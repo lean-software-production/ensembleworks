@@ -185,6 +185,18 @@ async function sampleShapeCount(page: Page): Promise<number> {
   })
 }
 
+// Task H1's Obs.paintOrder() doc comment (interaction-contracts/src/types.ts)
+// names this exact mechanism for the browser adapter: read DOM document
+// order of `[data-shape-id][data-shape-kind]` elements — that IS paint
+// order, since ShapeBody paints flat, absolutely-positioned siblings in DOM
+// order (the `[data-shape-kind]` qualifier excludes the arrow overlay `<g>`,
+// which carries `data-shape-id` but no `data-shape-kind`).
+async function samplePaintOrder(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() => {
+    return [...document.querySelectorAll('[data-shape-id][data-shape-kind]')].map((el) => el.getAttribute('data-shape-id')!)
+  })
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -232,6 +244,7 @@ interface ActorSample {
   readonly styles: Readonly<Record<string, { readonly opacity: number; readonly props: Readonly<Record<string, unknown>> } | null>>
   readonly selection: readonly string[]
   readonly shapeCount: number
+  readonly paintOrder: readonly string[]
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -259,7 +272,8 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   const styleIds = [...new Set([...sceneShapeIds, ...selection])]
   const styles = await sampleShapeStyles(page, styleIds)
   const shapeCount = await sampleShapeCount(page)
-  return { spans, editingShape, editingIndicators, styles, selection, shapeCount }
+  const paintOrder = await samplePaintOrder(page)
+  return { spans, editingShape, editingIndicators, styles, selection, shapeCount, paintOrder }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -305,6 +319,7 @@ function pageObs(
     },
     selectedShapeIds: () => sample.selection,
     shapeCount: () => sample.shapeCount,
+    paintOrder: () => sample.paintOrder,
   }
 }
 

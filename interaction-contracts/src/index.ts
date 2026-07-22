@@ -5,6 +5,7 @@
 export * from './types.js'
 import type { Contract } from './types.js'
 import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies-to-created-shape.js'
+import { bringToFrontPaintsOnTop } from './contracts/bring-to-front-paints-on-top.js'
 import { crossWidgetSelection } from './contracts/cross-widget-selection.js'
 import { cursorLock } from './contracts/cursor-lock.js'
 import { duplicateReidsAndOffsets } from './contracts/duplicate-reids-and-offsets.js'
@@ -29,4 +30,5 @@ export const CONTRACTS: readonly Contract[] = [
   duplicateReidsAndOffsets,
   pastePlacesAndSelects,
   malformedClipboardRejected,
+  bringToFrontPaintsOnTop,
 ]

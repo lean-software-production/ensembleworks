@@ -183,6 +183,17 @@ function makeObs(
     shapeCount() {
       return editor.doc.listShapes().length
     },
+    paintOrder() {
+      // Task H1 (types.ts's Obs.paintOrder doc comment): paint order is a
+      // RENDER concept — this runner drives a headless Editor with no
+      // renderer/DOM at all, so there is genuinely nothing to observe here.
+      // Every contract that calls this is level:'browser' (Z1), and
+      // library.test.ts filters CONTRACTS to level:'fsm' before calling
+      // runContractFsm — this throw is a defensive backstop, matching
+      // textSelectionSpans'/peerEditingIndicator's established
+      // not-reachable-today posture.
+      throw new Error('not observable at fsm level')
+    },
   }
 }
 
