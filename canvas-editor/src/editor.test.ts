@@ -841,4 +841,88 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: PutBinding refuses a binding that fails bindingSchema, no-op, no throw')
 }
 
+// ============================================================================
+// 25. SetIndex (Task E1): index-only whole-shape write -- overwrites a
+//     shape's ENVELOPE `index` field (fractional z-order key), which
+//     UpdateProps can never reach (props-only merge). Full-shape-inverse
+//     convention (same as UpdateProps/SetStyle): undo restores the COMPLETE
+//     pre-mutation shape (not just index), redo re-applies. A same-index
+//     call and an unresolved id are both silent no-ops: no commit, no undo
+//     entry, never a throw.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { index: 'a1', x: 7, y: 9, props: { title: 'keep' } }) })
+  const before = doc.getShape('shape:a')!
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.apply({ type: 'SetIndex', id: 'shape:a', index: 'a2' })
+  assert.equal(commits, 1, 'SetIndex commits once')
+  const after = doc.getShape('shape:a')!
+  assert.equal(after.index, 'a2', 'SetIndex overwrote the envelope index field')
+  assert.deepEqual(
+    { ...after, index: before.index },
+    before,
+    'ONLY index changed -- id/parentId/x/y/props/opacity/etc are identical to the pre-image (kills a wrong/partial-shape mutant)',
+  )
+
+  // Same-index call: a no-op, not an empty undo entry.
+  const commitsBeforeSameIndex = commits
+  editor.apply({ type: 'SetIndex', id: 'shape:a', index: 'a2' })
+  assert.equal(commits, commitsBeforeSameIndex, 'SetIndex to the CURRENT index does not commit')
+
+  // Unknown id: silent no-op, never throws.
+  const commitsBeforeGhost = commits
+  assert.doesNotThrow(
+    () => editor.apply({ type: 'SetIndex', id: 'shape:ghost', index: 'a3' }),
+    'SetIndex on an unknown id does not throw',
+  )
+  assert.equal(commits, commitsBeforeGhost, 'SetIndex on an unknown id does not commit')
+
+  // Undo/redo round trip.
+  editor.undo()
+  assert.equal(doc.getShape('shape:a')!.index, 'a1', 'undo restores the OLD index exactly')
+  assert.deepEqual(doc.getShape('shape:a'), before, 'undo restores the full pre-image, not just index')
+
+  editor.redo()
+  assert.equal(doc.getShape('shape:a')!.index, 'a2', 'redo re-applies the new index')
+
+  console.log('ok: SetIndex overwrites the envelope index field only, no-ops on same-index/unknown id, undo/redo round-trips')
+}
+
+// ============================================================================
+// 26. SetIndex batched across MULTIPLE intents in one applyAll call -- the
+//     shape reorderSelectionIntents (Task E2, per D-4) will actually submit:
+//     N SetIndex intents in one applyAll is ONE commit and ONE undo step
+//     that restores every shape's OLD index together, not one-at-a-time.
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { index: 'a1' }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b', { index: 'a2' }) })
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.applyAll([
+    { type: 'SetIndex', id: 'shape:a', index: 'a3' },
+    { type: 'SetIndex', id: 'shape:b', index: 'a4' },
+  ])
+  assert.equal(commits, 1, 'two SetIndex intents in one applyAll is ONE commit, not one per shape')
+  assert.equal(doc.getShape('shape:a')!.index, 'a3')
+  assert.equal(doc.getShape('shape:b')!.index, 'a4', "shape b's index changed too -- kills a single-id-only mutant")
+
+  editor.undo()
+  assert.equal(doc.getShape('shape:a')!.index, 'a1', 'one undo restores BOTH shapes in the same step')
+  assert.equal(doc.getShape('shape:b')!.index, 'a2')
+
+  editor.redo()
+  assert.equal(doc.getShape('shape:a')!.index, 'a3')
+  assert.equal(doc.getShape('shape:b')!.index, 'a4')
+
+  console.log('ok: SetIndex batches across multiple intents in one applyAll -- one commit, one undo step')
+}
+
 console.log('ok: canvas-editor editor + intents')

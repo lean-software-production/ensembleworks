@@ -221,6 +221,24 @@ export interface EndEdit { readonly type: 'EndEdit' }
  * entry. See editor.ts's applyOne. */
 export interface SetNextStyle { readonly type: 'SetNextStyle'; readonly props: Record<string, unknown> }
 
+/** Index-only whole-shape write: overwrites a shape's ENVELOPE `index` field
+ * (the fractional-index z-order key — canvas-model's `fractional-index.ts`,
+ * Task A1) to `index` verbatim. Single-id, not batch — like UpdateProps, not
+ * SetStyle: the reorder emitter (Task E2, `reorderSelectionIntents`)
+ * computes one literal index PER shape at emission time and freezes each
+ * into its own SetIndex intent, then submits all of them together via one
+ * `editor.applyAll(...)` call — batching lives at the applyAll layer (one
+ * commit/one undo step for N SetIndex intents), not inside this intent.
+ * `index` is an ENVELOPE field, so — exactly like SetStyle's `opacity`
+ * handling above — UpdateProps's props-only merge can never reach it; this
+ * intent's `applyOne` case writes it via a whole-shape `doc.putShape`
+ * mirroring UpdateProps/SetStyle's full-shape-inverse convention (undo/redo
+ * replay `putShape` of the pre-image / next-image respectively). Silent
+ * no-op on an unknown id (the applyAll TOLERANCE CONTRACT) and a no-op (no
+ * commit, no undo entry) when `index` already equals the shape's current
+ * index, to avoid manufacturing an empty undo step. */
+export interface SetIndex { readonly type: 'SetIndex'; readonly id: string; readonly index: string }
+
 export type Intent =
   | CreateShape
   | PutBinding
@@ -240,3 +258,4 @@ export type Intent =
   | BeginEdit
   | EndEdit
   | SetNextStyle
+  | SetIndex

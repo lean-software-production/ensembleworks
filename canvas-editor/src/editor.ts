@@ -740,6 +740,30 @@ export class Editor {
       case 'EndEdit':
         return { state: { ...state, editingId: null }, docMutated: false, stateChanged: true }
 
+      case 'SetIndex': {
+        // Index-only whole-shape write (Task E1, D-4): `index` is an
+        // ENVELOPE field, so — exactly like SetStyle's opacity handling
+        // above — UpdateProps's props-only merge can never reach it; a full
+        // putShape is required. Silent no-op on an unknown id (TOLERANCE
+        // CONTRACT, same as UpdateProps/SetText) and on a no-change write
+        // (avoids manufacturing an empty undo entry — the reorder emitter,
+        // Task E2, only emits SetIndex for shapes whose computed index
+        // actually differs, but this guard makes the intent itself safe
+        // regardless of caller discipline).
+        const shape = this.doc.getShape(intent.id)
+        if (!shape) return { state, docMutated: false, stateChanged: false }
+        if (shape.index === intent.index) return { state, docMutated: false, stateChanged: false }
+        const next = { ...shape, index: intent.index }
+        this.doc.putShape(next)
+        // Full-shape-inverse convention (same as UpdateProps/SetStyle/
+        // Resize/Rotate/Reparent): `shape` read BEFORE the mutation already
+        // holds the complete pre-image, so putShape(shape) is a correct,
+        // tolerant restore of EVERY field, not just index.
+        const undo: InverseOp[] = [{ op: 'putShape', shape }]
+        const redo: InverseOp[] = [{ op: 'putShape', shape: next }]
+        return { state, docMutated: true, stateChanged: false, undo, redo }
+      }
+
       case 'SetNextStyle':
         // View intent (Task AS1): shallow-merges `props` into the existing
         // nextShapeStyle — arming color then arming size accumulates both,
