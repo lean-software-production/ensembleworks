@@ -138,12 +138,18 @@
 // So `geoLabel` below is a TRUNCATED resolver mirroring TextShape.tsx's
 // `textContent` exactly (same live-then-richText order, final fallback ''
 // — deliberately NOT label.ts's `labelOf`, whose fallback chain would fall
-// through an empty/absent name straight to the raw kind string). v1 always
+// through an empty/absent name straight to the raw kind string). v1
 // CENTERS a geo label by default (`align`/`verticalAlign` both default
-// 'middle', GeoShapeUtil.tsx getDefaultProps) — this body always centers
-// too; the non-default align/verticalAlign values are a documented parity
-// gap, out of this task's scope (the task explicitly asks only for a
-// centered label).
+// 'middle', GeoShapeUtil.tsx getDefaultProps) but honors non-default values
+// (Task R3): `props.align` drives horizontal `text-align`/`justify-content`
+// and `props.verticalAlign` drives `align-items` — see ALIGN_CSS/
+// VERTICAL_ALIGN_CSS below. `align` is `DefaultHorizontalAlignStyle`, a
+// SIX-value enum (start/middle/end plus start-legacy/end-legacy/
+// middle-legacy — tlschema's styles/TLAlignStyle.ts): the three `-legacy`
+// variants are real values legacy documents carry and MUST render
+// identically to their base (start-legacy -> left, same as start), never
+// fall through to the center default — `normalizeAlign` strips the
+// `-legacy` suffix before the lookup so both cases share one code path.
 import type { ReactElement } from 'react'
 import type { ShapeBodyProps } from '../shapeRegistry.js'
 import { flattenRichText } from './label.js'
@@ -236,12 +242,48 @@ function dashArray(dash: string, strokeWidth: number): string | undefined {
   }
 }
 
-// The geo label's fixed alignment (Task C6 EXPORT — not a table, the same
-// single constant the JSX used to inline directly): v1 always CENTERS a geo
-// label (module header's LABEL section) regardless of props. Exported so
-// TextEditor.tsx's editing overlay can reuse this exact value rather than
-// re-declaring 'center' independently — see TextEditor.tsx's `editorTextStyle`.
-export const GEO_LABEL_TEXT_ALIGN = 'center' as const
+// props.align (DefaultHorizontalAlignStyle, module header's LABEL section) ->
+// the label div's CSS. start/middle/end map to left/center/right for
+// text-align and flex-start/center/flex-end for justify-content (the label
+// div is a flex container so it can also vertically center — see
+// VERTICAL_ALIGN_CSS below). Keyed only by the three PRIMARY values —
+// `normalizeAlign` strips a `-legacy` suffix before indexing here, so the
+// three legacy variants share these same rows rather than duplicating them.
+const ALIGN_CSS: Readonly<Record<string, { textAlign: 'left' | 'center' | 'right'; justifyContent: 'flex-start' | 'center' | 'flex-end' }>> =
+  Object.freeze({
+    start: { textAlign: 'left', justifyContent: 'flex-start' },
+    middle: { textAlign: 'center', justifyContent: 'center' },
+    end: { textAlign: 'right', justifyContent: 'flex-end' },
+  })
+const DEFAULT_ALIGN = 'middle' // DefaultHorizontalAlignStyle defaultValue, GeoShapeUtil.tsx getDefaultProps
+
+// props.verticalAlign (DefaultVerticalAlignStyle — start/middle/end only, no
+// -legacy variants) -> the label div's align-items.
+const VERTICAL_ALIGN_CSS: Readonly<Record<string, 'flex-start' | 'center' | 'flex-end'>> = Object.freeze({
+  start: 'flex-start',
+  middle: 'center',
+  end: 'flex-end',
+})
+const DEFAULT_VERTICAL_ALIGN = 'middle' // DefaultVerticalAlignStyle defaultValue, GeoShapeUtil.tsx getDefaultProps
+
+/** `props.align`, stripped of a trailing `-legacy` (the three legacy values
+ * are real accepted values a synced document may carry — module header's
+ * LABEL section — and must render identically to their base, not fall
+ * through to the default). Unrecognized/absent -> v1's own default
+ * ('middle'). */
+function normalizeAlign(align: unknown): keyof typeof ALIGN_CSS {
+  if (typeof align !== 'string') return DEFAULT_ALIGN
+  const base = align.endsWith('-legacy') ? align.slice(0, -'-legacy'.length) : align
+  return base in ALIGN_CSS ? (base as keyof typeof ALIGN_CSS) : DEFAULT_ALIGN
+}
+
+/** `props.verticalAlign`, defaulted to v1's own 'middle' — no `-legacy`
+ * variants exist for this axis (DefaultVerticalAlignStyle). */
+function normalizeVerticalAlign(verticalAlign: unknown): keyof typeof VERTICAL_ALIGN_CSS {
+  return typeof verticalAlign === 'string' && verticalAlign in VERTICAL_ALIGN_CSS
+    ? (verticalAlign as keyof typeof VERTICAL_ALIGN_CSS)
+    : DEFAULT_VERTICAL_ALIGN
+}
 
 const DEFAULT_GEO = 'rectangle' // GeoShapeGeoStyle defaultValue
 const DEFAULT_W = 100 // GeoShapeUtil.tsx getDefaultProps
@@ -267,6 +309,12 @@ export interface GeoStyle {
   readonly fontFamily: string
   readonly fontSize: number
   readonly lineHeight: number
+  /** Resolved from `props.align` (Task R3 — see module header LABEL /
+   * ALIGN_CSS above); 'center' when absent or unrecognized (v1 default). */
+  readonly textAlign: 'left' | 'center' | 'right'
+  readonly justifyContent: 'flex-start' | 'center' | 'flex-end'
+  /** Resolved from `props.verticalAlign`; 'center' when absent (v1 default). */
+  readonly alignItems: 'flex-start' | 'center' | 'flex-end'
 }
 
 /** `props.geo`, defaulted to v1's own 'rectangle' (see module header
@@ -298,6 +346,8 @@ export function geoStyle(shape: ShapeBodyProps['shape']): GeoStyle {
   const strokeWidth = STROKE_WIDTH_PX[size]
 
   const fillColor = fill === 'none' ? null : fill === 'semi' ? THEME_SOLID_LIGHT : entry[FILL_VARIANT[fill] ?? 'semi']
+  const align = ALIGN_CSS[normalizeAlign(props.align)]
+  const alignItems = VERTICAL_ALIGN_CSS[normalizeVerticalAlign(props.verticalAlign)]
 
   return {
     strokeColor: dash === 'none' ? null : entry.solid,
@@ -308,6 +358,9 @@ export function geoStyle(shape: ShapeBodyProps['shape']): GeoStyle {
     fontFamily: FONT_FAMILY[font],
     fontSize: LABEL_FONT_SIZE_PX[size],
     lineHeight: LINE_HEIGHT,
+    textAlign: align.textAlign,
+    justifyContent: align.justifyContent,
+    alignItems,
   }
 }
 
@@ -397,9 +450,9 @@ export function GeoShape({ shape, getText }: ShapeBodyProps) {
             position: 'absolute',
             inset: 0,
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            textAlign: GEO_LABEL_TEXT_ALIGN,
+            alignItems: style.alignItems,
+            justifyContent: style.justifyContent,
+            textAlign: style.textAlign,
             padding: 8,
             boxSizing: 'border-box',
             overflow: 'hidden',

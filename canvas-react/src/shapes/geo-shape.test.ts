@@ -262,4 +262,84 @@ function render(shape: Shape, getText?: (id: string) => string) {
   console.log('ok: GeoShape — dashed/dotted render distinct stroke-dasharray patterns scaling with strokeWidth, solid/draw stay clean, none renders no stroke at all')
 }
 
-console.log('ok: geo-shape (variant discriminator + real SVG geometry, v1-grounded stroke/fill, live label, DOM wiring, dash)')
+// ============================================================================
+// 9. Task R3 — GeoShape honors props.align (DefaultHorizontalAlignStyle's
+//    six values: start/middle/end + the three -legacy variants, default
+//    'middle'). start -> left/flex-start; end -> right/flex-end; middle
+//    (and absent) -> center/center — the pre-R3 always-centered default.
+//    The three -legacy variants MUST render identically to their base value
+//    (legacy documents carry them and must round-trip visually, not fall
+//    through to a default center) — this is the subtle mutant: a switch
+//    that only handles the 3 primary values and defaults -legacy ones would
+//    mis-render a legacy shape as centered instead of start/end-aligned.
+// ============================================================================
+{
+  const labelDiv = (html: string) => {
+    const m = html.match(/<div data-shape-geo-label="" style="([^"]*)"/)
+    return m ? m[1] : null
+  }
+
+  const start = render(geoShape({ props: { align: 'start' } }), () => 'hi')
+  const startStyle = labelDiv(start)
+  assert.ok(startStyle, `expected a label div in: ${start}`)
+  assert.match(startStyle!, /text-align:left/, `align:'start' should render text-align:left, got: ${startStyle}`)
+  assert.match(startStyle!, /justify-content:flex-start/, `align:'start' should render justify-content:flex-start, got: ${startStyle}`)
+
+  const end = render(geoShape({ props: { align: 'end' } }), () => 'hi')
+  const endStyle = labelDiv(end)
+  assert.match(endStyle!, /text-align:right/, `align:'end' should render text-align:right, got: ${endStyle}`)
+  assert.match(endStyle!, /justify-content:flex-end/, `align:'end' should render justify-content:flex-end, got: ${endStyle}`)
+
+  const middle = render(geoShape({ props: { align: 'middle' } }), () => 'hi')
+  const middleStyle = labelDiv(middle)
+  assert.match(middleStyle!, /text-align:center/, `align:'middle' should render text-align:center, got: ${middleStyle}`)
+  assert.match(middleStyle!, /justify-content:center/, `align:'middle' should render justify-content:center, got: ${middleStyle}`)
+
+  const absent = render(geoShape({ props: {} }), () => 'hi')
+  const absentStyle = labelDiv(absent)
+  assert.match(absentStyle!, /text-align:center/, `an absent align prop defaults to v1's own default (middle) -> center, got: ${absentStyle}`)
+  assert.match(absentStyle!, /justify-content:center/, `an absent align prop defaults to center, got: ${absentStyle}`)
+
+  const startLegacy = render(geoShape({ props: { align: 'start-legacy' } }), () => 'hi')
+  const startLegacyStyle = labelDiv(startLegacy)
+  assert.match(startLegacyStyle!, /text-align:left/, `align:'start-legacy' must render IDENTICALLY to 'start' (left), got: ${startLegacyStyle}`)
+  assert.match(startLegacyStyle!, /justify-content:flex-start/, `align:'start-legacy' must render IDENTICALLY to 'start' (flex-start), got: ${startLegacyStyle}`)
+
+  const endLegacy = render(geoShape({ props: { align: 'end-legacy' } }), () => 'hi')
+  const endLegacyStyle = labelDiv(endLegacy)
+  assert.match(endLegacyStyle!, /text-align:right/, `align:'end-legacy' must render IDENTICALLY to 'end' (right), got: ${endLegacyStyle}`)
+  assert.match(endLegacyStyle!, /justify-content:flex-end/, `align:'end-legacy' must render IDENTICALLY to 'end' (flex-end), got: ${endLegacyStyle}`)
+
+  const middleLegacy = render(geoShape({ props: { align: 'middle-legacy' } }), () => 'hi')
+  const middleLegacyStyle = labelDiv(middleLegacy)
+  assert.match(middleLegacyStyle!, /text-align:center/, `align:'middle-legacy' must render IDENTICALLY to 'middle' (center), got: ${middleLegacyStyle}`)
+  assert.match(middleLegacyStyle!, /justify-content:center/, `align:'middle-legacy' must render IDENTICALLY to 'middle' (center), got: ${middleLegacyStyle}`)
+
+  console.log('ok: GeoShape — props.align honored (start/middle/end + -legacy variants rendering identically to their base), default middle/center')
+}
+
+// ============================================================================
+// 10. Task R3 — GeoShape honors props.verticalAlign (start/middle/end,
+//     default 'middle'). start -> align-items:flex-start; end ->
+//     align-items:flex-end; middle/absent -> align-items:center (the pre-R3
+//     always-centered default).
+// ============================================================================
+{
+  const labelDiv = (html: string) => {
+    const m = html.match(/<div data-shape-geo-label="" style="([^"]*)"/)
+    return m ? m[1] : null
+  }
+
+  const start = render(geoShape({ props: { verticalAlign: 'start' } }), () => 'hi')
+  assert.match(labelDiv(start)!, /align-items:flex-start/, `verticalAlign:'start' should render align-items:flex-start, got: ${labelDiv(start)}`)
+
+  const end = render(geoShape({ props: { verticalAlign: 'end' } }), () => 'hi')
+  assert.match(labelDiv(end)!, /align-items:flex-end/, `verticalAlign:'end' should render align-items:flex-end, got: ${labelDiv(end)}`)
+
+  const absent = render(geoShape({ props: {} }), () => 'hi')
+  assert.match(labelDiv(absent)!, /align-items:center/, `an absent verticalAlign prop defaults to v1's own default (middle) -> center, got: ${labelDiv(absent)}`)
+
+  console.log('ok: GeoShape — props.verticalAlign honored (start/middle/end), default middle/center')
+}
+
+console.log('ok: geo-shape (variant discriminator + real SVG geometry, v1-grounded stroke/fill, live label, DOM wiring, dash, align)')
