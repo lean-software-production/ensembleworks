@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { serializeSelection, encodeClipboard, decodeClipboard, cloneWithNewIds } from './clipboard.js'
 import type { Shape } from './shape.js'
-import type { Binding } from './document.js'
+import { bindingSchema, type Binding } from './document.js'
 
 // Scene: a frame with two children (childA a note, childB a note). One of
 // the children (childA) doubles as the "arrow" endpoint for test purposes —
@@ -298,39 +298,40 @@ const cBinding: Binding = {
 const cShapes = [cFrame, cChildA, cChildB]
 const cBindings = [cBinding]
 const stableMint = (i: number) => 'new:' + i
+const stableMintBinding = (j: number) => 'binding:new' + j
 
 test('new shape ids are mint(i) in stable input order, all unique, none reuse an old id', () => {
-  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, stableMintBinding, 'page:p', { x: 20, y: 20 })
   assert.deepEqual(cloned.shapes.map((s) => s.id), ['new:0', 'new:1', 'new:2'])
   const oldIds = new Set(cShapes.map((s) => s.id))
   for (const s of cloned.shapes) assert.equal(oldIds.has(s.id), false, `${s.id} must not reuse an old id`)
 })
 
 test("a child's new parentId points at the parent's NEW id, not the old one", () => {
-  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, stableMintBinding, 'page:p', { x: 20, y: 20 })
   const [newFrame, newChildA, newChildB] = cloned.shapes
   assert.equal(newChildA.parentId, newFrame.id)
   assert.equal(newChildB.parentId, newFrame.id)
 })
 
 test('the frame (parent = page, outside the set) is re-rooted to rootParentId', () => {
-  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, stableMintBinding, 'page:p', { x: 20, y: 20 })
   assert.equal(cloned.shapes[0].parentId, 'page:p')
 })
 
 test("rootIds contains exactly the frame's new id, nothing else", () => {
-  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, stableMintBinding, 'page:p', { x: 20, y: 20 })
   assert.deepEqual(cloned.rootIds, [cloned.shapes[0].id])
 })
 
 test('root shape x/y shifted by the offset', () => {
-  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, stableMintBinding, 'page:p', { x: 20, y: 20 })
   assert.equal(cloned.shapes[0].x, cFrame.x + 20)
   assert.equal(cloned.shapes[0].y, cFrame.y + 20)
 })
 
 test('child x/y unchanged — offset applies to roots only, children ride the parent', () => {
-  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, stableMintBinding, 'page:p', { x: 20, y: 20 })
   assert.equal(cloned.shapes[1].x, cChildA.x)
   assert.equal(cloned.shapes[1].y, cChildA.y)
   assert.equal(cloned.shapes[2].x, cChildB.x)
@@ -338,22 +339,22 @@ test('child x/y unchanged — offset applies to roots only, children ride the pa
 })
 
 test("binding fromId/toId rewritten to the children's NEW ids", () => {
-  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, stableMintBinding, 'page:p', { x: 20, y: 20 })
   assert.equal(cloned.bindings.length, 1)
   assert.equal(cloned.bindings[0].fromId, cloned.shapes[1].id)
   assert.equal(cloned.bindings[0].toId, cloned.shapes[2].id)
 })
 
 test('the binding itself gets a fresh minted id, distinct from every shape id', () => {
-  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, stableMintBinding, 'page:p', { x: 20, y: 20 })
   assert.notEqual(cloned.bindings[0].id, cBinding.id)
   const shapeIds = new Set<string>(cloned.shapes.map((s) => s.id))
   assert.equal(shapeIds.has(cloned.bindings[0].id), false)
 })
 
 test('same input + same mint stream => identical output (replay-deterministic)', () => {
-  const first = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, (i) => 'det:' + i, 'page:p', { x: 20, y: 20 })
-  const second = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, (i) => 'det:' + i, 'page:p', { x: 20, y: 20 })
+  const first = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, (i) => 'det:' + i, (j) => 'binding:det' + j, 'page:p', { x: 20, y: 20 })
+  const second = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, (i) => 'det:' + i, (j) => 'binding:det' + j, 'page:p', { x: 20, y: 20 })
   assert.deepEqual(first, second)
 })
 
@@ -363,7 +364,8 @@ test('same input + same mint stream => identical output (replay-deterministic)',
 // rather than, say, calling mint() with a fixed index or ignoring it.
 test('a mint constant except for the index salt still yields N distinct shape ids', () => {
   const constantSaltedMint = (i: number) => 'const-9000-' + i
-  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, constantSaltedMint, 'page:p', { x: 20, y: 20 })
+  const constantSaltedMintBinding = (j: number) => 'binding:const-9000-' + j
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, constantSaltedMint, constantSaltedMintBinding, 'page:p', { x: 20, y: 20 })
   const ids = cloned.shapes.map((s) => s.id)
   assert.equal(new Set(ids).size, ids.length)
   assert.equal(ids.length, 3)
@@ -375,7 +377,7 @@ const orphanRef: Shape = {
   props: { color: 'green' },
 }
 test('a shape whose parent is a SHAPE outside the input set is re-rooted, not left dangling', () => {
-  const cloned = cloneWithNewIds({ shapes: [orphanRef], bindings: [] }, stableMint, 'page:p', { x: 20, y: 20 })
+  const cloned = cloneWithNewIds({ shapes: [orphanRef], bindings: [] }, stableMint, stableMintBinding, 'page:p', { x: 20, y: 20 })
   assert.equal(cloned.shapes[0].parentId, 'page:p')
   assert.deepEqual(cloned.rootIds, [cloned.shapes[0].id])
   assert.equal(cloned.shapes[0].x, orphanRef.x + 20, 're-rooted (via out-of-set parent) shapes are roots and get the offset too')
@@ -397,11 +399,27 @@ const cycleB: Shape = {
   props: { color: 'blue' },
 }
 test('a mutual (2-node) parentId cycle among the payload is broken: both members are re-rooted', () => {
-  const cloned = cloneWithNewIds({ shapes: [cycleA, cycleB], bindings: [] }, stableMint, 'page:p', { x: 20, y: 20 })
+  const cloned = cloneWithNewIds({ shapes: [cycleA, cycleB], bindings: [] }, stableMint, stableMintBinding, 'page:p', { x: 20, y: 20 })
   for (const s of cloned.shapes) {
     assert.equal(s.parentId, 'page:p', `${s.id} must be re-rooted directly, not left pointing at the other cycle member`)
   }
   assert.deepEqual(cloned.rootIds.slice().sort(), cloned.shapes.map((s) => s.id).slice().sort())
+})
+
+// Fidelity guard (post-review): a cloned binding's id must itself satisfy
+// bindingSchema — which requires a 'binding:' prefix (ids.ts's
+// bindingIdField). E1's real shape mint is 'shape:'-prefixed (D-3); if
+// cloneWithNewIds mints binding ids off the SAME stream, every cloned
+// binding gets a 'shape:'-prefixed id, bindingSchema.safeParse fails, and
+// the E2 PutBinding gate silently drops it — bindings vanish on paste.
+test("a cloned binding's id satisfies bindingSchema (binding: prefix) under a realistic shape: mint, and its endpoints are the new shape ids", () => {
+  const realisticShapeMint = (i: number) => 'shape:s' + i
+  const realisticBindingMint = (j: number) => 'binding:b' + j
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, realisticShapeMint, realisticBindingMint, 'page:p', { x: 20, y: 20 })
+  const result = bindingSchema.safeParse(cloned.bindings[0])
+  assert.equal(result.success, true, `cloned binding must satisfy bindingSchema; got id=${cloned.bindings[0]?.id}`)
+  assert.equal(cloned.bindings[0].fromId, cloned.shapes[1].id)
+  assert.equal(cloned.bindings[0].toId, cloned.shapes[2].id)
 })
 
 if (failures > 0) {

@@ -10,12 +10,20 @@ import type { ShapeId, BindingId, ParentId } from './ids.js'
 // old->new map, and the position offset applied only to shapes that come out
 // as ROOTS.
 //
-// `mint(i)` is called once per node, in STABLE order (shapes first in their
-// input-array order, then bindings, continuing the same index) — the index
-// argument is the uniqueness salt D-3 documents: production injects one
-// `editor.random()` draw folded with this index, so N nodes get N distinct
-// ids even under a CONSTANT random stream (paste has no pointer event to
-// salt from). `mint` is the ONLY source of ids here — this file never reads
+// `mint(i)` mints SHAPE ids, `mintBinding(j)` mints BINDING ids — two
+// separate injected factories, not one shared stream. Binding ids must carry
+// the 'binding:' prefix (ids.ts's bindingIdField) while shape ids carry
+// 'shape:' (shapeIdField); E1's real shape mint is 'shape:'-prefixed (D-3),
+// so reusing it for bindings would hand every cloned binding a
+// 'shape:'-prefixed id, failing bindingSchema and getting silently dropped
+// at the E2 PutBinding gate — bindings would vanish on every paste/duplicate.
+// Each factory is called once per node, in STABLE order — shapes via `mint`
+// over their input-array order, bindings via `mintBinding` over their own
+// (separate, 0-based) input-array order. The index argument is the
+// uniqueness salt D-3 documents: production injects one `editor.random()`
+// draw folded with this index, so N nodes get N distinct ids even under a
+// CONSTANT random stream (paste has no pointer event to salt from). `mint`/
+// `mintBinding` are the ONLY source of ids here — this file never reads
 // Math.random or any clock, keeping the clean-room boundary.
 //
 // Cycle-breaking (D-2: "cyclic parentId among the payload is broken in the
@@ -35,6 +43,7 @@ import type { ShapeId, BindingId, ParentId } from './ids.js'
 export function cloneWithNewIds(
   input: { shapes: Shape[]; bindings: Binding[] },
   mint: (i: number) => string,
+  mintBinding: (j: number) => string,
   rootParentId: string,
   offset: { x: number; y: number },
 ): { shapes: Shape[]; bindings: Binding[]; rootIds: string[] } {
@@ -75,7 +84,14 @@ export function cloneWithNewIds(
     const fromId = idMap.get(b.fromId)
     const toId = idMap.get(b.toId)
     if (fromId === undefined || toId === undefined) return []
-    return [{ ...b, id: mint(input.shapes.length + j) as BindingId, fromId: fromId as ShapeId, toId: toId as ShapeId }]
+    const newBindingId = mintBinding(j)
+    // Fail fast on a misconfigured mintBinding rather than silently handing
+    // the write boundary an id that will fail bindingSchema later, far from
+    // this call site — this is exactly the failure mode the fidelity bug had.
+    if (!newBindingId.startsWith('binding:')) {
+      throw new Error(`cloneWithNewIds: mintBinding(${j}) returned "${newBindingId}", which is not 'binding:'-prefixed`)
+    }
+    return [{ ...b, id: newBindingId as BindingId, fromId: fromId as ShapeId, toId: toId as ShapeId }]
   })
 
   return { shapes, bindings, rootIds }
