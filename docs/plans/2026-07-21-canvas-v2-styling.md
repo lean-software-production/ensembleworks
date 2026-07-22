@@ -22,13 +22,13 @@ pins the end-to-end invariant.
 `@ensembleworks/interaction-contracts`.
 
 **Scope boundary (decided — see Decisions):** This sub-cycle ships
-**selection styling** for the four rendered body kinds (note/text/geo/frame)
-plus stored-prop styling for arrows. It does **not** ship *armed / next-shape*
-styling (planned as an optional appendix — pull in only if the owner scopes it
-into 2a) and does **not** ship arrow/line *visual* re-rendering of
-arrow-specific styles (arrows render through the SVG overlay, not a shape
-body — flagged as a follow-up; the panel still *stores* those props
-losslessly).
+**selection styling** for the four rendered body kinds (note/text/geo/frame),
+stored-prop styling for arrows, **and armed / next-shape styling** (owner
+decision 2026-07-21 — full parity, so the tool arms the next-created shape's
+style when nothing is selected, exactly as tldraw does). It does **not** ship
+arrow/line *visual* re-rendering of arrow-specific styles (arrows render
+through the SVG overlay, not a shape body — flagged as a follow-up; the panel
+still *stores* those props losslessly).
 
 ---
 
@@ -207,12 +207,12 @@ interface SetStyle {
 - **align** — `GeoShape` + `NoteShape` honor `props.align` for label
   horizontal alignment (center stays the default).
 
-### Panel (P1/P2/P4)
+### Panel (P1/P2/P4; armed mode AS3)
 - New component `client/src/canvas-v2/StylePanel.tsx`, mounted in
   `CanvasV2Session`. **Contextual**, mirroring v1's `ContextualStylePanel`:
-  anchored above the selection bounds when a selection exists (armed-tool
-  mode is the appendix). Hidden mid-gesture (a simple `isGesturing` flag set
-  on pointerdown / cleared on pointerup/cancel).
+  anchored above the selection bounds when a selection exists (the armed-tool,
+  nothing-selected mode is added in AS3). Hidden mid-gesture (a simple
+  `isGesturing` flag set on pointerdown / cleared on pointerup/cancel).
 - Pure, DOM-free helper module `style-axes.ts` computes *which* axes are
   relevant (union of selected kinds' supported axes — parity: show a control
   iff ≥1 selected shape supports it) and the *current* value per axis
@@ -221,36 +221,79 @@ interface SetStyle {
   only kind-relevant props per axis (relevance lives in the panel; the intent
   stays dumb).
 
-### The interaction contract (P3)
-- **One browser-level contract**, `style-applies-to-selection`: seed shapes,
+### The interaction contracts (P3 + AS4)
+Two browser-level contracts. **P3** (`style-applies-to-selection`) pins
+selection styling; **AS4** (`armed-style-applies-to-created-shape`) pins armed
+styling. P3 adds the `shapeStyle` Obs; AS4 adds a `selectedShapeIds` Obs and
+reuses `shapeStyle`.
+- **P3 — `style-applies-to-selection`**: seed shapes,
   select them, click the panel's blue color swatch, assert every selected
   shape's `props.color === 'blue'` (and, as a second leg, that undo restores
   the prior color). Browser-level because the panel is DOM — there is no
   "style tool" FSM a gesture could drive at fsm level (same reason
   `cross-widget-selection` / `editing-indicator` are browser-level).
-- **New Obs: `shapeStyle(id, key): string | number | null`** — reads
+- **New Obs (P3): `shapeStyle(id, key): string | number | null`** — reads
   `props[key]`, or the envelope `opacity` when `key === 'opacity'`, or `null`
   when the shape/prop is absent. This is the observation the existing Obs
   vocabulary can't express (displacement/size/editing/spans say nothing about
   stored style). One method covers all axes uniformly.
+- **AS4 — `armed-style-applies-to-created-shape`**: with nothing selected,
+  arm a style tool (e.g. geo), click the panel's blue swatch (armed mode →
+  `SetNextStyle`), then click empty canvas to create a shape; assert the new
+  shape is blue. Because the new id is minted from crypto-random and cannot be
+  predicted, the contract discovers it via the create tool's auto-selection
+  (create.ts:137) and the new Obs below, then reuses `shapeStyle` for the
+  value.
+- **New Obs (AS4): `selectedShapeIds(): readonly string[]`** — the current
+  editor selection (fsm: `[...editor.get().selection]`; browser: read
+  `window.__ew.editor.get().selection`). General and reusable, not a
+  styling-specific probe. AS4 reuses `shapeStyle` for the value assertion —
+  the armed contract needs NO style-specific new observation beyond this
+  selection reader.
 
-### Armed / next-shape style — DEFERRED (owner judgment call, see below)
-Recommendation: ship selection-styling as 2a; treat armed-style as sub-cycle
-2b. It needs a new editor-local `nextShapeStyle` store (new `EditorState`
-field + `SetNextStyle` intent), `create.ts` wiring to stamp it into new
-shapes' props, and a nothing-selected panel mode — a coherent but roughly
-size-doubling addition. Fully sketched in the **Appendix** so it can be pulled
-into 2a without re-planning.
+### Armed / next-shape style — CORE (owner decision 2026-07-21: full parity)
+Tasks AS1–AS4. Design, verified against disk:
+- **Representation:** a new editor-local field
+  `EditorState.nextShapeStyle: Record<string, unknown>` (editor.ts:42-47 is
+  where `EditorState` is declared — camera/selection/hover/editingId, all
+  `readonly`, never persisted to the CRDT; `nextShapeStyle` belongs exactly
+  here, alongside them, INITIAL_STATE at editor.ts:49). **NOT** in the create
+  tool's `CreateState` (create.ts:35 — `Idle | Pointing | Dragging`): putting
+  style in per-tool FSM state would (a) not be shared across tools and (b)
+  risk replay purity. tldraw likewise keeps `stylesForNextShape` in
+  instance-global state, not per-tool.
+- **Set it:** a `SetNextStyle` **view** intent (touches only the editor-local
+  store — no doc mutation, no `commit()`, no undo entry, exactly like
+  `SetCamera`/`SetSelection`) that shallow-merges its patch into
+  `nextShapeStyle`.
+- **Read it:** the create tool reads `editor.get().nextShapeStyle` live inside
+  `onEvent` and merges it into a new shape's props in `makeShape`/`propsFor`
+  (create.ts:63-72). This is the SAME live-editor-read the tool already does
+  for the camera (`worldOf` → `screenToWorld(editor.get().camera, …)`), so it
+  needs no `CreateState` change and keeps the FSM a pure function of
+  `(state, event)` reading the injected editor — armed style rides the camera
+  precedent, not the recorded-script state.
+- **Panel:** when `editorState.selection.size === 0` AND a style-bearing tool
+  is armed (`activeToolId` ∈ note/text/geo/arrow/frame — CanvasV2Session's
+  `activeToolId` state), the panel shows the armed `nextShapeStyle` and writes
+  `SetNextStyle` instead of `SetStyle`. Parity with tldraw: style the
+  selection if there is one, else arm the tool.
+- **Discovering the created shape (contract):** the create tool auto-selects
+  the shape it mints (`finalizeIntents` pushes `SetSelection([shape.id])`,
+  create.ts:137). The browser runner cannot predict the new id (it's minted
+  from crypto-random `random()`), so AS4's contract reads the newly-selected
+  id via a **new `selectedShapeIds()` Obs** and then reuses **`shapeStyle`**
+  (from P3) for the value assertion. See AS4.
 
 ---
 
 ## Judgment calls surfaced to the owner
 
-1. **Armed / next-shape styling in 2a or 2b?** The owner chose *full parity*,
-   and tldraw does arm the tool. This plan **defers** it (Appendix) to keep 2a
-   bite-sized and shippable, delivering full value-set parity for existing
-   shapes first. Pull the Appendix into 2a if "full parity" must include
-   next-shape arming now.
+1. **Armed / next-shape styling in 2a or 2b? — RESOLVED (owner, 2026-07-21):
+   IN SCOPE for 2a.** Full parity means the tool arms the next-created shape's
+   style when nothing is selected. Promoted from an appendix into core tasks
+   **AS1–AS4** (see the task table and their sections). Design settled in the
+   Decisions "Armed / next-shape style — CORE" block.
 2. **Arrow/line visual styling.** Arrows render through the SVG **overlay**,
    not a shape body (there is no `ArrowShape` — verified;
    `registerCoreShapes` registers only note/frame/text/geo). Line has **no
@@ -283,10 +326,26 @@ into 2a without re-planning.
 | P2 | `StylePanel.tsx` renders + mounts (UNWIRED) | client/canvas-v2 (YES) | P1 | panel/swatch absent from DOM |
 | P3 | browser contract `style-applies-to-selection` + `shapeStyle` Obs (both adapters) | interaction-contracts + e2e + fsm-runner (YES/satisfies gate) | E1,P2 | swatch click leaves shape color unchanged |
 | P4 | wire panel → `SetStyle` (+ opacity steps) | client/canvas-v2 (YES) | P3 | turns P3 GREEN |
+| AS1 | `EditorState.nextShapeStyle` + `SetNextStyle` view intent | canvas-editor/src (no) | E1 | field/intent absent |
+| AS3 | `StylePanel` armed mode (empty selection + armed tool → renders + writes `SetNextStyle`) | client/canvas-v2 (YES) | AS1,P4 | armed panel renders nothing / click sets nothing |
+| AS4 | browser contract `armed-style-applies-to-created-shape` + `selectedShapeIds` Obs | interaction-contracts + e2e + fsm-runner (YES/satisfies gate) | AS3 (and RED against un-landed AS2) | armed → created shape stays default color |
+| AS2 | create tool reads `nextShapeStyle` into new-shape props | canvas-editor/src/tools/ (YES) | AS1 | created shape ignores armed style |
 
-Ten core tasks. Land in table order (M→E→R→P). R\* are independent of E\*
-(they only read props) and may interleave, but keep the numbering for review
-sanity. Appendix A1–A4 optional.
+Fourteen core tasks. Land in table order (M→E→R→P→AS). R\* are independent of
+E\* (they only read props) and may interleave, but keep the numbering for
+review sanity.
+
+**Armed-style ordering subtlety (read before touching AS\*):** AS2 (the
+create-path read) depends only on AS1, yet is sequenced **last** — after
+AS3/AS4 — on purpose. AS4's browser contract must have a *reachable RED*, and
+the only way the "arm tool → create inherits" invariant fails cleanly is:
+arming WORKS (AS3 landed, so `nextShapeStyle` is set) but the create path
+IGNORES it (AS2 not yet landed) → the created shape renders its default color
+→ a clean "expected blue, got black" assertion failure. If AS2 landed first,
+AS4 would be born GREEN with no RED. So AS3 → AS4(RED) → AS2(GREEN). AS2 still
+carries its OWN fsm-level unit RED inside its task (the one-line read is the
+fix for that unit test too), so the create-path change is independently
+red-then-green, not merely proven by the browser contract.
 
 ---
 
@@ -564,7 +623,7 @@ git commit -am "feat(canvas-react): geo/note labels honor props.align"
 relevantAxes([note]) // -> ['color','size','font','align','opacity', ...]
 relevantAxes([geo]) includes 'fill','dash','geo'
 relevantAxes([note, geo]) === union of both
-relevantAxes([]) === []           // nothing selected -> no axes (armed mode is the appendix)
+relevantAxes([]) === []           // nothing selected -> no axes (armed mode uses relevantAxesForTool, added in AS3)
 // current value: agreeing selection -> the value; disagreeing -> 'mixed'; unset -> undefined
 currentValue([blueNote, blueNote], 'color') === 'blue'
 currentValue([blueNote, redNote], 'color') === 'mixed'
@@ -742,28 +801,251 @@ git commit -am "feat(client): wire StylePanel to SetStyle over the selection (co
 
 ---
 
+## Task AS1 — `EditorState.nextShapeStyle` + `SetNextStyle` view intent
+
+**Files:**
+- Modify: `canvas-editor/src/editor.ts` (`EditorState` interface :42-47,
+  `INITIAL_STATE` :49, `applyOne`)
+- Modify: `canvas-editor/src/intents.ts` (interface + `Intent` union — the
+  view-intents group next to `SetCamera`/`SetSelection`)
+- Test: `canvas-editor/src/editor.test.ts` (extend, near the `SetSelection`
+  view-intent cases)
+
+> Not gated (`canvas-editor/src`, outside `tools/`).
+
+**Step 1 — Failing test.**
+```ts
+// starts empty
+assert.deepEqual([...Object.keys(editor.get().nextShapeStyle)], [])
+editor.apply({ type: 'SetNextStyle', props: { color: 'blue' } })
+assert.equal(editor.get().nextShapeStyle.color, 'blue')
+// shallow-merges, does not replace
+editor.apply({ type: 'SetNextStyle', props: { size: 'l' } })
+assert.equal(editor.get().nextShapeStyle.color, 'blue')
+assert.equal(editor.get().nextShapeStyle.size, 'l')
+// it's a VIEW intent — no doc mutation, no undo entry
+const before = editor.canUndo()
+editor.apply({ type: 'SetNextStyle', props: { color: 'red' } })
+assert.equal(editor.canUndo(), before) // unchanged — nothing pushed to the undo stack
+```
+`get()` must also return `nextShapeStyle` as a fresh, frozen/detached copy per
+the snapshot-immutability contract already documented on `get()` (editor.ts —
+the same defensive-copy posture as `selection`).
+
+**Step 2 — RED.** `cd /home/stag/src/projects/ensembleworks && export
+PATH="$HOME/.bun/bin:$PATH" && cd canvas-editor && bun test.ts; echo
+"exit=$?"`. Expected: `nextShapeStyle` absent / `SetNextStyle` unhandled. **If
+the file won't compile because `SetNextStyle` isn't in the union, that is a
+fake RED** — add the interface + union member first so the switch genuinely
+lacks the case and `nextShapeStyle` is genuinely absent from state, then the
+RED is the runtime assertion. Capture verbatim.
+
+**Mutant table:**
+| Wrong impl | Caught by |
+|---|---|
+| replace instead of shallow-merge | second `SetNextStyle` drops `color` |
+| push an undo entry (treat as mutation) | `canUndo()` changed |
+| return the live `nextShapeStyle` from `get()` (not a copy) | add a "mutating the snapshot doesn't corrupt the editor" row, mirroring the `selection` probe |
+
+**Step 3 — Implement.** Add `readonly nextShapeStyle: Record<string, unknown>`
+to `EditorState`, `{}` in `INITIAL_STATE`, a fresh copy in `get()`. Add
+`SetNextStyle` to `intents.ts` (view-intents group + union) and an `applyOne`
+`case 'SetNextStyle'` that returns `{ state: { ...state, nextShapeStyle: {
+...state.nextShapeStyle, ...intent.props } }, docMutated: false, stateChanged:
+true }` — no `undo`/`redo` arrays.
+
+**Step 4 — GREEN + `bun run typecheck`. Step 5 — Commit.**
+```bash
+git commit -am "feat(canvas-editor): editor-local nextShapeStyle + SetNextStyle view intent"
+```
+
+---
+
+## Task AS3 — `StylePanel` armed mode
+
+**Files:**
+- Modify: `client/src/canvas-v2/StylePanel.tsx` (armed-mode render + write)
+- Modify: `client/src/canvas-v2/CanvasV2App.tsx` (pass `activeToolId` +
+  `nextShapeStyle` into the panel; an armed-mode `onStyleChange` →
+  `SetNextStyle`)
+- Modify: `client/src/canvas-v2/style-axes.ts` (P1) — an armed-relevance
+  overload `relevantAxesForTool(toolId)` (which axes a to-be-created shape of
+  that tool's kind supports)
+- Test: `client/src/canvas-v2/StylePanel.test.ts`
+
+> Gated path. Run with the `UX_CONTRACT_PR_BODY` opt-out env until AS4 lands.
+
+**Step 1 — Failing test.** With `selection` empty and `activeToolId: 'geo'`:
+- the panel RENDERS armed swatches (a `[data-style-panel-mode="armed"]`
+  container; the color/fill/dash/size/font/geo controls for geo), reflecting
+  `nextShapeStyle` as current;
+- `onStyleChange('color','blue')` in this mode dispatches
+  `SetNextStyle{ props: { color: 'blue' } }` (NOT `SetStyle`).
+- With empty selection AND a non-style tool (`activeToolId: 'select'`), the
+  panel renders null.
+
+**Step 2 — RED.** Run the file. Expected: armed mode not rendered / click
+dispatches nothing (or `SetStyle`). Confirm assertion failure, not
+absent-symbol. Capture verbatim.
+
+**Mutant table:**
+| Wrong impl | Caught by |
+|---|---|
+| armed mode dispatches `SetStyle` (over empty selection → no-op) | assert intent type is `SetNextStyle` |
+| render armed panel for `select`/`hand` too | the `activeToolId: 'select'` → null row |
+| ignore `nextShapeStyle` (always show defaults as current) | seed `nextShapeStyle: {color:'red'}`, assert red is marked current |
+
+**Step 3 — Implement.** In `StylePanel`, branch: `selection.size > 0` →
+selection mode (P2/P4, dispatch `SetStyle`); else if `activeToolId` is a style
+tool → armed mode (dispatch `SetNextStyle`, read current from
+`nextShapeStyle`); else null. Thread `activeToolId` + `nextShapeStyle` from
+`CanvasV2Session`.
+
+**Step 4 — GREEN** (opt-out env) **+ `bun run typecheck`. Step 5 — Commit.**
+```bash
+git commit -am "feat(client): StylePanel armed mode — arm next-shape style when nothing is selected"
+```
+
+---
+
+## Task AS4 — browser contract `armed-style-applies-to-created-shape` + `selectedShapeIds` Obs
+
+**Files:**
+- Modify: `interaction-contracts/src/types.ts` (add `selectedShapeIds` to
+  `Obs`)
+- Create:
+  `interaction-contracts/src/contracts/armed-style-applies-to-created-shape.ts`
+- Modify: `interaction-contracts/src/index.ts` (register in `CONTRACTS`)
+- Modify: `canvas-editor/src/contracts/fsm-runner.ts` (implement
+  `selectedShapeIds` — `[...editor.get().selection]`)
+- Modify: `e2e/lib/contracts.ts` (pre-sample the selection; implement
+  `selectedShapeIds`)
+
+> Touches `interaction-contracts/` + adapters — **satisfies the presence gate**
+> for the armed-style task cluster (AS2/AS3).
+
+**Step 1 — Extend `Obs`.** Add `selectedShapeIds(): readonly string[]`. Doc
+comment: available at both levels (reads editor selection); no throw-stub.
+Implement in `fsm-runner.ts`'s `makeObs` (`[...editor.get().selection]`) and in
+`e2e/lib/contracts.ts` by pre-sampling `window.__ew.editor.get().selection`
+into the per-actor `ActorSample` (synchronous read in `pageObs`, like the
+other pre-sampled fields).
+
+**Step 2 — Write the contract.** `level: 'browser'`, `when: 'at-end'`. **Empty
+scene** (no seeded shapes — the created shape must be the only one carrying the
+armed color, so the assertion is unambiguous). Gesture: click the geo tool
+button (`[data-canvas-v2-tool="geo"]`), click the panel's armed blue swatch
+(`[data-style-panel-mode="armed"] [data-style-control="color"]
+[data-style-value="blue"]`), then click empty canvas to create a geo (a
+`down`/`up` at a `point` anchor on empty canvas). `check`: `const ids =
+obs.selectedShapeIds()` (the create tool auto-selects the new shape) →
+`ids.length === 1` else fail → `obs.shapeStyle(ids[0], 'color') === 'blue'`
+else fail. (Anchoring onto the tool button / swatch: same selector-anchor
+approach P3 settles — reuse whatever P3 established; do not invent a second
+mechanism.)
+
+**Step 3 — RUN IT RED against un-landed AS2.** AS3 is in the tree (arming
+sets `nextShapeStyle` to blue), but AS2 (create reads it) is NOT — so the new
+geo is created with its **default** color and `shapeStyle(id,'color')` is
+tldraw's default `'black'`, not `'blue'` → a **clean** "expected blue, got
+black" assertion failure. **If instead the failure is a locator-not-found (no
+armed swatch, no created shape, empty `selectedShapeIds`), the RED is fake** —
+that means AS3's armed panel or the create gesture isn't wired; fix until the
+swatch is really clicked and a shape is really created, so the *value*
+assertion is what fails. Capture the verbatim RED.
+
+**Step 4 — Do NOT implement AS2's fix here.** AS4 lands the contract + both
+Obs adapters RED. `bun run typecheck` passes (both adapters implement
+`selectedShapeIds`, so the shared `Obs` interface typechecks).
+
+**Step 5 — Commit** (RED contract + working `selectedShapeIds` Obs):
+```bash
+git commit -am "test(contracts): armed-style-applies-to-created-shape + selectedShapeIds Obs (RED)"
+```
+
+---
+
+## Task AS2 — create tool reads `nextShapeStyle` into new-shape props
+
+**Files:**
+- Modify: `canvas-editor/src/tools/create.ts` (`propsFor` / `makeShape`,
+  :63-72)
+- Test: `canvas-editor/src/tools/create.test.ts` (extend)
+
+> Gated path (`canvas-editor/src/tools/`). AS4's contract is already in the
+> tree, so the presence gate passes on the diff.
+
+**Step 1 — Failing test (fsm-level unit).** Arm a style, run a click-create
+gesture through the real create tool + editor, assert the minted shape carries
+the armed props:
+```ts
+editor.apply({ type: 'SetNextStyle', props: { color: 'blue', size: 'l' } })
+// run a click-create of a geo through createCreateTool(ctx, 'geo') + script.ts
+const created = doc.listShapes().find(s => s.kind === 'geo')!
+assert.equal(created.props.color, 'blue')
+assert.equal(created.props.size, 'l')
+// armed style does NOT clobber the tool's own geometry props
+assert.equal(typeof created.props.w, 'number')
+```
+
+**Step 2 — RED.** `cd canvas-editor && bun test.ts; echo "exit=$?"`. Expected:
+`created.props.color` is `undefined` (create ignores `nextShapeStyle`). Confirm
+it's the assertion, not a load error. Capture verbatim.
+
+**Mutant table:**
+| Wrong impl | Caught by |
+|---|---|
+| armed props overwrite the whole props map | `props.w` assertion (geometry survives) |
+| geometry overwrites armed props (wrong merge order) | `color` assertion |
+| read a stale/captured style instead of live `editor.get()` | arm AFTER tool construction, before the gesture; live read must see it |
+
+**Step 3 — Implement.** In `makeShape`/`propsFor`, merge
+`editor.get().nextShapeStyle` UNDER the kind's geometry props (armed style
+first, geometry second so `w`/`h` always win): `props: { ...nextShapeStyle,
+...geometryProps }`. Read `editor.get()` live inside the factory (the tool
+already reads the camera this way via `worldOf` — same pattern, same purity
+posture; do NOT add style to `CreateState`).
+
+**Step 4 — GREEN.** The unit passes; **re-run AS4's browser contract — now
+GREEN** (arm → create inherits). `bun run test` (gate satisfied by AS4's
+contracts touch) with `echo $?` on its own line; `bun run typecheck`.
+
+**Step 5 — Commit.**
+```bash
+git commit -am "feat(canvas-editor): create tool stamps armed nextShapeStyle onto new shapes (contract GREEN)"
+```
+
+---
+
 ## PR body — required content
 
-The whole sub-cycle is interaction-bearing (`canvas-react/src/`,
-`client/src/canvas-v2/`). The PR body MUST contain, verbatim, an interaction-
-contract accounting. Because P3 adds a real contract, the honest form is a
-*contract reference*, not an opt-out:
+The whole sub-cycle is interaction-bearing (`canvas-editor/src/tools/`,
+`canvas-react/src/`, `client/src/canvas-v2/`). The PR body MUST contain,
+verbatim, an interaction-contract accounting. Because P3 and AS4 add real
+contracts, the honest form is a *contract reference*, not an opt-out:
 
 ```
 ## Interaction contracts
-Adds browser contract `style-applies-to-selection`
-(interaction-contracts/src/contracts/style-applies-to-selection.ts) + a new
-`Obs.shapeStyle` observation implemented in BOTH adapters
-(canvas-editor/src/contracts/fsm-runner.ts, e2e/lib/contracts.ts).
-RED (verbatim, against P2's unwired panel): <paste>
-GREEN (after P4 wiring): <paste>
-Reviewer reproduced red→green by reverting P4. 
+1. browser contract `style-applies-to-selection`
+   (interaction-contracts/src/contracts/style-applies-to-selection.ts) + new
+   `Obs.shapeStyle`, implemented in BOTH adapters
+   (canvas-editor/src/contracts/fsm-runner.ts, e2e/lib/contracts.ts).
+   RED (verbatim, against P2's unwired panel): <paste>
+   GREEN (after P4 wiring): <paste>
+   Reviewer reproduced red→green by reverting P4.
+2. browser contract `armed-style-applies-to-created-shape`
+   (interaction-contracts/src/contracts/armed-style-applies-to-created-shape.ts)
+   + new `Obs.selectedShapeIds` (both adapters); reuses `Obs.shapeStyle`.
+   RED (verbatim, against un-landed AS2 — armed but create ignores): <paste>
+   GREEN (after AS2's create-path read): <paste>
+   Reviewer reproduced red→green by reverting AS2.
 ```
 
-If, and only if, the reviewer splits P1/P2 into their own PR *ahead* of P3,
-that earlier PR carries `ux-contract: none — panel scaffolding only; the
-governing contract lands with the wiring in a follow-up PR (see plan P3)` —
-but the intended shape is one PR for the whole sub-cycle, contract included.
+If the reviewer splits scaffolding tasks (P1/P2, or AS3) into a PR *ahead* of
+their governing contract (P3 / AS4), that earlier PR carries `ux-contract:
+none — panel scaffolding only; the governing contract lands with the wiring in
+a follow-up PR (see plan P3/AS4)` — but the intended shape is one PR for the
+whole sub-cycle, both contracts included.
 
 ---
 
@@ -791,6 +1073,15 @@ but the intended shape is one PR for the whole sub-cycle, contract included.
    `worldBounds`/`worldTransform` (canvas-model) itself. Straightforward but
    net-new; keep P2's positioning simple (a bounding box from the selected
    shapes' world bounds → screen) and don't gold-plate the flip logic.
+5. **Armed-style purity (AS2).** The create tool is a pure `(state, event) →
+   intents` FSM; AS2 reads `editor.get().nextShapeStyle` live inside the
+   factory. That is fine *because it mirrors the tool's existing live camera
+   read* (`worldOf`), but it means armed style — like the camera — is NOT
+   part of the recorded `CreateState`, so a replayed script depends on the
+   editor's live `nextShapeStyle` at replay time. Do NOT "fix" this by moving
+   style into `CreateState` (that was considered and rejected — see the
+   Decisions armed-style block); a recorded script that must pin an armed
+   value should `SetNextStyle` as its first op.
 
 ---
 
@@ -815,26 +1106,11 @@ The brief's ground truth was accurate except:
   `ShapeBody` never applying `opacity`, `TOOL_BUTTONS` and the
   Escape/Delete/Undo/Redo-only shortcuts, and v1's `StylePanel: null` +
   `ContextualStylePanel` — verified accurate.
-
----
-
-## Appendix (OPTIONAL) — armed / next-shape styling (sub-cycle 2b, or pull into 2a)
-
-Only if the owner scopes arming into 2a. Sketch, same TDD bar as the core:
-
-- **A1 (canvas-editor):** add `nextShapeStyle: Record<string, unknown>` to
-  `EditorState` (editor-local view state, like camera/selection) + a
-  `SetNextStyle` view intent that merges into it. No doc mutation, no undo
-  entry (it's view state). RED: field/intent absent.
-- **A2 (canvas-editor/src/tools/create.ts — GATED):** `propsFor` stamps
-  `editor.get().nextShapeStyle` into a newly-created shape's props. RED: a
-  new shape ignores the armed style. **Touches `tools/` → needs a contract**
-  (A4).
-- **A3 (client/canvas-v2 — GATED):** `StylePanel` gains a nothing-selected
-  mode — when a `STYLE_TOOLS` tool is armed with an empty selection, show the
-  armed `nextShapeStyle` and write `SetNextStyle` instead of `SetStyle`.
-  `relevantAxes([])` gains a "for this armed tool" overload.
-- **A4 (contract):** browser contract `armed-style-applies-to-created-shape` —
-  arm a style with nothing selected, create a shape, assert its
-  `shapeStyle(newId,'color')` matches the armed value (reuses P3's
-  `shapeStyle` Obs). RED reachable against A3-before-A2 wiring.
+- **Armed-style touch points re-verified for AS1–AS4 (2026-07-21):**
+  `EditorState` at editor.ts:42-47 / `INITIAL_STATE` :49 (home for
+  `nextShapeStyle`); `CreateState = Idle|Pointing|Dragging` at create.ts:35
+  (deliberately NOT extended); `makeShape`/`propsFor` at create.ts:63-72 (the
+  stamp point); the create tool's existing live editor read (`worldOf` →
+  `screenToWorld(editor.get().camera, …)`); and the auto-select on create
+  (`finalizeIntents` → `SetSelection([shape.id])`, create.ts:137). All
+  confirmed against disk.
