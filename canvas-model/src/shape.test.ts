@@ -39,3 +39,24 @@ for (const k of SHAPE_KINDS) {
   assert.equal(isTextCapableKind(k), false, `${k} is NOT text-capable`)
 }
 console.log('ok: shape schema')
+
+// Task M1 — `color` tightens from `z.string()` to a tldraw-parity enum.
+function noteWith(props: Record<string, unknown>) {
+  return { ...note, props: { ...note.props, ...props } }
+}
+
+// a real palette color validates on a note
+assert.ok(validateShape(noteWith({ color: 'blue' })).ok, 'a real tldraw color validates')
+// a junk color is now REJECTED (this is the behavior change M1 introduces)
+assert.ok(!validateShape(noteWith({ color: 'chartreuse' })).ok, 'a non-tldraw color is rejected')
+// unknown NON-style keys still pass through (looseObject preserved)
+assert.ok(validateShape(noteWith({ color: 'blue', wobble: 7 })).ok, 'unknown passthrough keys still pass')
+// every tldraw color name validates (GUARD, not the killing RED -- z.string()
+// would also pass this before M1; kept to catch a missing-value mutant)
+for (const c of [
+  'black', 'grey', 'light-violet', 'violet', 'blue', 'light-blue', 'yellow',
+  'orange', 'green', 'light-green', 'light-red', 'red', 'white',
+]) {
+  assert.ok(validateShape(noteWith({ color: c })).ok, `tldraw color '${c}' validates`)
+}
+console.log('ok: color enum (M1)')

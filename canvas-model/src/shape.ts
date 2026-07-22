@@ -38,9 +38,32 @@ export function isTextCapableKind(kind: ShapeKind): boolean {
 // derive plain text for semantics. Structural (not exhaustively typed).
 const richText = z.object({ type: z.literal('doc'), content: z.array(z.any()) })
 
+// tldraw's default color palette (shared by note/text/geo/arrow). Copied
+// verbatim from tldraw's own color-style definition and must track it: if
+// tldraw ever adds or renames a palette entry, a real synced shape using the
+// new name will fail this enum and get dropped/repaired at the write
+// boundary. This package is clean-room and may never import the tldraw
+// package itself, so this list is hand-verified against the installed
+// dependency rather than imported from it.
+const COLOR = z.enum([
+  'black',
+  'grey',
+  'light-violet',
+  'violet',
+  'blue',
+  'light-blue',
+  'yellow',
+  'orange',
+  'green',
+  'light-green',
+  'light-red',
+  'red',
+  'white',
+])
+
 // Per-kind props: type the fields semantics reads; passthrough the rest so no
 // tldraw prop is lost. All keys optional except where a field is load-bearing.
-const withText = z.looseObject({ richText: richText.optional(), color: z.string().optional() })
+const withText = z.looseObject({ richText: richText.optional(), color: COLOR.optional() })
 const box = z.looseObject({ w: z.number().optional(), h: z.number().optional() })
 
 const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
