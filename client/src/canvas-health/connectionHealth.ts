@@ -77,17 +77,11 @@ export function stepHealth(prev: HealthState, obs: Observations, now: number): H
 	return next
 }
 
-function thresholdFor(id: TransportId, t: Thresholds): number | null {
-	if (id === 'canvas') return t.canvasMs
-	if (id === 'terminals') return t.terminalMs
-	return null // livekit: display-only, no threshold, never trips
-}
-
 /** Blocking transports that have been unhealthy for >= their threshold. */
 export function trippedTransports(health: HealthState, now: number, t: Thresholds): TransportId[] {
 	const tripped: TransportId[] = []
 	for (const id of BLOCKING_TRANSPORTS) {
-		const ms = thresholdFor(id, t)
+		const ms = chipThreshold(id, t)
 		const since = health[id].unhealthySince
 		if (ms == null || since == null) continue
 		if (now - since >= ms) tripped.push(id)
@@ -135,9 +129,15 @@ export function transportChip(health: TransportHealth, now: number, thresholdMs:
 	return { kind: 'degrading', unhealthyMs }
 }
 
-/** The chip threshold for a transport, for callers rendering the row list. */
+/**
+ * The threshold for a transport: what `trippedTransports` compares against,
+ * and what callers rendering the row list use for the chip. LiveKit has none
+ * — display-only, it never trips (design §3).
+ */
 export function chipThreshold(id: TransportId, t: Thresholds): number | null {
-	return thresholdFor(id, t)
+	if (id === 'canvas') return t.canvasMs
+	if (id === 'terminals') return t.terminalMs
+	return null
 }
 
 /**

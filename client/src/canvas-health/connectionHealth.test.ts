@@ -124,6 +124,15 @@ assert.equal(
 	'duplicate-tab'
 )
 
+// 15b. A duplicate tab reports NO tripped transports even when they really are
+//      tripped: it must not render a connection countdown it isn't the tab to
+//      act on. Asserting the whole object, because asserting only `.reason`
+//      leaves the emptied `tripped` unverified (found by mutation testing).
+assert.deepEqual(
+	availability({ health: b1, now: 10_000, thresholds: T, hasLock: false }),
+	{ blocked: true, reason: 'duplicate-tab', tripped: [] }
+)
+
 // 16. LiveKit down alone never blocks.
 assert.equal(availability({ health: lk, now: 10 * 60_000, thresholds: T, hasLock: true }).blocked, false)
 
@@ -137,6 +146,10 @@ const chipDown = transportChip(b1.canvas, 5000, T.canvasMs)
 assert.deepEqual(chipDown, { kind: 'down', unhealthyMs: 5000 })
 // 18. A transport with no threshold (livekit) degrades but never goes down.
 assert.deepEqual(transportChip(lk.livekit, 10 * 60_000, null), { kind: 'degrading', unhealthyMs: 600_000 })
+// 18b. A backwards clock jump (NTP correction, laptop resume) must not produce
+//      a negative age — it would render as "degrading (-3s)". The Math.max
+//      floor is what prevents that, so pin it.
+assert.deepEqual(transportChip(b1.canvas, -3000, T.canvasMs), { kind: 'degrading', unhealthyMs: 0 })
 
 // ------------------------------------------------------------------ countdown
 // 19. "Retrying in N…" counts whole seconds to the next probe tick, floor 1
