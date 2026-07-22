@@ -301,6 +301,30 @@ contract runs. C1–C3, E1, E2 are pure and un-gated (run the suite with the
 `UX_CONTRACT_PR_BODY` opt-out until K1 lands). D1 is the only pre-contract gated
 task.
 
+### Execution status — LANDED (2026-07-22)
+
+All tasks landed and reviewed. Sign-off: typecheck green, 222 unit suites
+green, all 5 browser contracts green (2 styling + 3 copy/paste).
+
+| Task | Commit(s) |
+|---|---|
+| C1 | `c6bce7a` |
+| C2 | `5764544` |
+| C3 | `e46825f` + `dd917b3` (binding-id `mintBinding` fix, review finding) |
+| E2 | `36365f7` |
+| E1 | `4fff94c` |
+| D1 | `ee7b612` + `366a152` (cut TOCTOU capture fix, review finding) |
+| H1 | `323d9c0` |
+| K1/K2/K3 | `8154402` |
+
+The clipboard security boundary was independently certified: no clipboard
+string can produce a doc-corrupting or write-boundary-refused shape (C2 is a
+total function; `putShape` re-validation backstops it — verified by disabling
+each gate). K3 is honestly a wiring/characterization contract (both gates
+reject junk, so it can't go RED on a single-gate revert); the adversarial
+security coverage lives in C2/C3's pure unit tests. Arrow bindings are
+preserved on paste via the validated `PutBinding` intent.
+
 ---
 
 ## Task C1 — `serializeSelection` (canvas-model, pure)
