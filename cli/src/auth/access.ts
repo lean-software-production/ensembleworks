@@ -229,3 +229,57 @@ export async function browserLogin(
 	const tokens = await pollTransferStore(keys, deps)
 	return { appToken: tokens.app_token, orgToken: tokens.org_token, teamDomain: probe.teamDomain, aud: probe.aud }
 }
+
+/** Exit code for "stored credential is expired/revoked — re-login" so callers
+ *  (auth status, the SP2 supervisor) can distinguish it from generic failures
+ *  (design §2: a distinct state, not a generic disconnect). */
+export const CREDENTIAL_EXPIRED_EXIT = 4
+
+/** Org token → fresh app token with zero browser (cloudflared
+ *  exchangeOrgToken/handleRedirects): walk the app's redirect chain manually;
+ *  attach CF_Authorization=<org> at the login hop and the observed
+ *  CF_AppSession at the authorized hop; the authorized response's
+ *  CF_Authorization Set-Cookie is the app token. */
+export async function exchangeOrgToken(
+	originUrl: string,
+	orgToken: string,
+	deps: Pick<AccessDeps, 'fetch' | 'now'>,
+): Promise<string> {
+	if (jwtExpired(orgToken, deps.now())) {
+		throw new CliError('Access session expired — run `ew auth login` again', CREDENTIAL_EXPIRED_EXIT)
+	}
+	let target = originUrl
+	let appSession: string | undefined
+	for (let hop = 0; hop < 10; hop++) {
+		const pathNow = new URL(target).pathname
+		const cookies: string[] = []
+		if (pathNow.includes(ACCESS_LOGIN_PATH)) cookies.push(`CF_Authorization=${orgToken}`)
+		if (pathNow.includes(ACCESS_AUTHORIZED_PATH) && appSession) cookies.push(`CF_AppSession=${appSession}`)
+		let res: Response
+		try {
+			res = await deps.fetch(target, {
+				method: 'HEAD',
+				redirect: 'manual',
+				headers: cookies.length ? { cookie: cookies.join('; ') } : {},
+			})
+		} catch (err) {
+			throw new CliError(`token refresh: could not reach ${new URL(target).origin}: ${(err as Error).message}`)
+		}
+		for (const sc of res.headers.getSetCookie()) {
+			const pair = sc.split(';', 1)[0]!
+			const eq = pair.indexOf('=')
+			if (eq < 0) continue
+			const name = pair.slice(0, eq).trim()
+			const value = pair.slice(eq + 1)
+			if (name === 'CF_AppSession') appSession = value
+			if (name === 'CF_Authorization' && pathNow.includes(ACCESS_AUTHORIZED_PATH)) return value
+		}
+		const loc = res.status >= 300 && res.status < 400 ? res.headers.get('location') : null
+		if (!loc) break // dead end (e.g. the interactive login page) — the org session is no longer honored
+		target = new URL(loc, target).toString()
+	}
+	throw new CliError(
+		'could not mint an app token from the stored Access session — it may be expired or revoked; run `ew auth login` again',
+		CREDENTIAL_EXPIRED_EXIT,
+	)
+}

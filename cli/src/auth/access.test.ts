@@ -9,6 +9,7 @@ import {
 	buildCliLoginUrl,
 	decodeJwtPayload,
 	decryptTransfer,
+	exchangeOrgToken,
 	generateTransferKeys,
 	jwtEmail,
 	jwtExpired,
@@ -169,4 +170,29 @@ import { makeJwt, startFakeAccess } from './fake-access.ts'
 		fake.stop()
 	}
 	console.log('ok: access — no-browser fallback polls and times out cleanly')
+}
+
+// -- exchangeOrgToken: org → app, browser-free (Discovery #3) -----------------
+{
+	const fake = startFakeAccess()
+	const deps = { fetch: (i: string | URL | Request, init?: RequestInit) => fetch(i, init), now: () => Date.now() }
+	try {
+		const appToken = await exchangeOrgToken(fake.origin, fake.orgToken, deps)
+		assert.equal(appToken, fake.appToken, 'app token minted via the login/authorized cookie dance')
+
+		// A WRONG org token dead-ends at the interactive login page (no
+		// redirect) → distinct credential error, not a hang or a bogus token.
+		const wrong = makeJwt({ email: 'x@y', exp: Math.floor(Date.now() / 1000) + 3600 })
+		await assert.rejects(() => exchangeOrgToken(fake.origin, wrong, deps), /ew auth login/,
+			'rejected exchange tells the user to log in again')
+
+		// An EXPIRED org token short-circuits locally — zero network traffic.
+		const before = fake.requests.length
+		const expired = makeJwt({ email: 'x@y', exp: Math.floor(Date.now() / 1000) - 10 })
+		await assert.rejects(() => exchangeOrgToken(fake.origin, expired, deps), /expired/i)
+		assert.equal(fake.requests.length, before, 'expired org token never leaves the machine')
+	} finally {
+		fake.stop()
+	}
+	console.log('ok: access — exchangeOrgToken mints, rejects, and short-circuits expiry')
 }
