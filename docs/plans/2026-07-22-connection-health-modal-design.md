@@ -353,4 +353,53 @@ revoked — and the tab that doesn't own it never connects anything, so there is
 nothing to tear down. The cost is the lost escape hatch against a live holder,
 recorded under "Known limitations carried, not fixed".
 
-A live smoke of the gate is outstanding; nothing in this note reports one.
+### Gate smoke results (2026-07-22, Chrome against `bin/dev up`, port offset +100)
+
+All six scenarios run live against the gate build. Tabs were isolated by writing a
+distinct `ensembleworks.userId` into `localStorage`, since the lock is scoped per
+(room, user) and the room always resolved to `team`.
+
+- **1. Lone tab connects — PASS.** App mounted, canvas present, `__ewEditor` live,
+  lock held as `ew-canvas-team/<id>`.
+- **2. Second tab refused — PASS.** Notice shown, no canvas, no `__ewEditor`, and
+  **zero `/api/` requests across a full reload with network capture active** — no
+  `/api/av/token`, not even the health probe (the probe lives inside the app, which
+  never mounts). Positive control: a holding tab issues `/api/av/token` twice
+  (StrictMode's dev double-effect).
+- **3. Holder undisturbed — PASS.** This is the issue-#55 check and the one that
+  failed before. With the duplicate open and refused, the holder's console showed
+  `[conn] livekit connected` followed by quality pings, no `DUPLICATE_IDENTITY`, no
+  disconnect, no removal banner, roster count 1.
+- **4. Automatic recovery — PASS.** Closing the holder promoted the blocked tab with
+  `performance.getEntriesByType('navigation').length === 1` — proving it mounted
+  **without a reload** and without a click.
+- **5. Fail-open — PASS.** `navigator.locks` cannot be removed post-load (the gate
+  reads it at mount), so `getLockManager()` was temporarily patched to return `null`
+  and the change pushed through Vite HMR. The tab mounted the full app **while another
+  tab genuinely held that lock** — the fail-open branch, exercised end to end. Patch
+  reverted; working tree verified clean afterwards.
+- **6. Connection blocker still works — PASS both directions.** `bin/dev restart sync`
+  was too brief to trip the 3s threshold (an inconclusive run, not a pass); suspending
+  the sync process with `SIGSTOP` produced the modal with a live "Retrying in N…"
+  countdown, and correctly as the `connection` reason rather than the duplicate one.
+  `SIGCONT` cleared it automatically with no interaction.
+
+**Measured, not assumed:** lock grant latency was 0.2–1.7 ms and `query()` 0.2 ms —
+three orders of magnitude below the 3000 ms grace, so the backstop can never win the
+race for a lone tab, and the `pending` window is sub-2 ms.
+
+**Not directly observed:** the *absence of a first-frame flash* of the refusal screen
+on a lone tab. The earliest in-page sample landed 5.4 s after navigation start, far too
+late to catch a sub-100 ms flash. The claim rests on the latency measurement above plus
+the reducer (`pending` renders `null`, and `blocked` requires `otherHolderSeen` or
+`graceElapsed`, neither reachable for a lone tab). Stated here as reasoned, not seen.
+
+**Incidental finding — live evidence for the stale-holder limitation.** A tab whose
+renderer froze kept holding its lock, and a fresh tab correctly refused to mount. This
+is exactly the "no escape hatch against a live holder" case recorded under known
+limitations, observed rather than theorised.
+
+**Incidental observation.** In dev, `navigator.locks.query()` showed *two* pending
+entries per tab, from StrictMode's mount/cleanup/remount. Both belong to the same tab
+and it is dev-only (StrictMode double-invokes effects only in development builds), so
+it is harmless — recorded so it isn't mistaken for a leak later.
