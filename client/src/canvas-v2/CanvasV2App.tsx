@@ -129,6 +129,7 @@ import { EditingIndicators } from './EditingIndicators.js'
 import { DevOverlay, shouldShowDevOverlayFromEnvironment, useCanvasMetrics } from './DevOverlay.js'
 import { canvasV2EmbedLifecycles, registerCanvasV2Shapes } from './shapes/index.js'
 import { presentStoreV2 } from './shapes/presentStoreV2.js'
+import { StylePanel } from './StylePanel.js'
 import {
 	cancelActiveTool,
 	createInitialToolStates,
@@ -553,6 +554,16 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	const activeToolIdRef = useRef(activeToolId)
 	activeToolIdRef.current = activeToolId
 
+	// Task P2 — StylePanel's `isGesturing` flag: true from pointerdown until
+	// pointerup/cancel, so the panel disappears mid-drag instead of trailing
+	// it (mirrors v1 ContextualStylePanel's own `useMidGesture`). Set/cleared
+	// in `handleInput` below on the raw pointerdown/pointerup events (not
+	// derived from tool state — a flag this simple doesn't need per-tool
+	// FSM plumbing) and force-cleared by `cancelAndReset` for every
+	// abandonment path (Escape, blur, pointercancel, tool switch) that never
+	// delivers a pointerup at all.
+	const [isGesturing, setIsGesturing] = useState(false)
+
 	const [toolStates, setToolStates] = useState<ToolStates>(() => createInitialToolStates(tools))
 	const toolStatesRef = useRef(toolStates)
 	toolStatesRef.current = toolStates
@@ -653,6 +664,12 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 		if (intents.length > 0) editor.applyAll(intents)
 		toolStatesRef.current = states
 		setToolStates(states)
+		// Every abandonment path this function covers (Escape, blur,
+		// pointercancel, tool switch) is a case where a plain pointerup may
+		// never arrive — clear the StylePanel gesture flag here too, not just
+		// on pointerup in handleInput below, so the panel doesn't stay hidden
+		// forever after an abandoned gesture.
+		setIsGesturing(false)
 	}, [editor, tools])
 
 	// THE single source of truth for "which keys are app-global shortcuts and
@@ -736,6 +753,11 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 
 	const handleInput = useCallback(
 		(event: InputEvent) => {
+			// StylePanel gesture flag (Task P2) — raw pointerdown/pointerup,
+			// independent of which tool is active or what it does with the
+			// event; the panel just needs to know a drag is in flight.
+			if (event.type === 'pointerdown') setIsGesturing(true)
+			if (event.type === 'pointerup') setIsGesturing(false)
 			if (event.type === 'pointermove') {
 				// Presence: publish the WORLD-space cursor position (Task G4) —
 				// unconditional (not tool-gated), mirroring wheel's own
@@ -927,6 +949,20 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					    EditingIndicators.tsx's own module header for why it needs
 					    canvas-sync's raw `Presence.editing` field. */}
 					<EditingIndicators presence={presenceStore.all()} selfKey={selfKey} snapshot={snapshot} camera={editorState.camera} viewportSize={viewportSize} />
+					{/* Task P2 — contextual style panel, painted topmost (same STACKING
+					    CONTRACT as Cursors/EditingIndicators above: later DOM siblings
+					    paint over earlier ones). DELIBERATELY UNWIRED: `onStyleChange`
+					    is a no-op here — clicking a control does not yet dispatch
+					    `SetStyle` (see StylePanel.tsx's own module header; wiring is
+					    Task P4, sequenced after Task P3's browser contract). */}
+					<StylePanel
+						selection={editorState.selection}
+						snapshot={snapshot}
+						camera={editorState.camera}
+						viewportSize={viewportSize}
+						isGesturing={isGesturing}
+						onStyleChange={() => {}}
+					/>
 				</Viewport>
 			</div>
 		</div>
