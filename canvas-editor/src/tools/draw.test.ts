@@ -1,7 +1,7 @@
 // Run: bun src/tools/draw.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
-import type { Shape } from '@ensembleworks/canvas-model'
+import { indexBetween, type Shape } from '@ensembleworks/canvas-model'
 import { Editor } from '../editor.js'
 import { run, script } from '../script.js'
 import { createDrawTool } from './draw.js'
@@ -255,4 +255,101 @@ type DrawProps = {
   const created = editor.doc.listShapes()[0]!
   assert.deepEqual([...editor.get().selection], [created.id], 'the finalized stroke becomes the selection')
   console.log('ok: finalized stroke becomes the selection')
+}
+
+// ============================================================================
+// 7. E2 — current-page parenting. The tool is CONSTRUCTED FIRST (like a real
+//    tool-selection instance that outlives a page switch), THEN
+//    SetCurrentPage fires, THEN the gesture runs -- this is what actually
+//    distinguishes a LIVE per-event read from a read captured ONCE at
+//    factory-construction time (both would pass if the switch happened
+//    before construction). Mutant killed: "reads editor.pageId (factory
+//    const)" AND "reads currentPageId but only ONCE at factory scope" --
+//    both would keep parenting to 'page:p' here.
+// ============================================================================
+{
+  const { doc, editor, ctx } = setup()
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+
+  const tool = createDrawTool(ctx) // constructed BEFORE the switch
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+  run(editor, tool, script().down(0, 0).move(10, 0).up().events())
+  const created = editor.doc.listShapes()[0]!
+  assert.equal(created.parentId, 'page:q', 'stroke drawn after SetCurrentPage parents onto the CURRENT page, not editor.pageId')
+  console.log('ok: E2 — draw parents onto the current page after SetCurrentPage')
+}
+
+// ============================================================================
+// 7b. E2 — topIndex must scan the CURRENT page's siblings, not
+//     editor.pageId's. Escaping-mutant catch: a mutant that fixes parentId
+//     to read currentPageId live but leaves `topIndex(ctx, pageId)` reading
+//     `editor.pageId` PASSES the parentId-only assertion above (both pages
+//     are empty there, so the starting index ties either way) -- it only
+//     shows up when the BOOTSTRAP page has a high-indexed sibling and the
+//     CURRENT (new) page does not.
+// ============================================================================
+{
+  const { doc, editor, ctx } = setup()
+  doc.putShape({
+    id: 'shape:page-p-high', kind: 'geo', parentId: 'page:p', index: indexBetween('a5', null), x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+  } as Shape)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+
+  const tool = createDrawTool(ctx) // constructed BEFORE the switch
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+  run(editor, tool, script().down(0, 0).move(10, 0).up().events())
+  const created = editor.doc.listShapes().find((s) => s.kind === 'draw')!
+  assert.equal(created.parentId, 'page:q', 'sanity: still parents onto page:q')
+  assert.equal(created.index, indexBetween(null, null), "topIndex reads page:q's (empty) siblings, not page:p's unrelated high-indexed shape")
+  console.log("ok: E2 — draw topIndex scans the CURRENT page's siblings, not editor.pageId's")
+}
+
+// ============================================================================
+// 8. E2 — migration safety: with currentPageId at its boot default
+//    ('page:p', never switched), draw creation is UNCHANGED.
+// ============================================================================
+{
+  const { editor, ctx } = setup()
+  const tool = createDrawTool(ctx)
+  run(editor, tool, script().down(0, 0).move(10, 0).up().events())
+  const created = editor.doc.listShapes()[0]!
+  assert.equal(created.parentId, 'page:p', 'with currentPageId at its boot default, draw creation still parents to page:p')
+  console.log('ok: E2 — single-page default (no SetCurrentPage) still parents a stroke to page:p')
+}
+
+// ============================================================================
+// 9. E2 — a multi-move stroke threads the CURRENT page consistently across
+//    every pointermove re-emission of the same shape (not just at
+//    pointerdown).
+// ============================================================================
+{
+  const { doc, editor, ctx } = setup()
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+
+  const tool = createDrawTool(ctx) // constructed BEFORE the switch
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+  let state = tool.initialState
+  const dispatch = (events: readonly import('../input.js').InputEvent[]) => {
+    for (const event of events) {
+      const result = tool.onEvent(state, event)
+      state = result.state
+      if (result.intents.length > 0) editor.applyAll(result.intents)
+    }
+  }
+  dispatch([{ type: 'pointerdown', x: 0, y: 0, buttons: 1, modifiers: { shift: false, alt: false, ctrl: false, meta: false }, t: 0 }])
+  const afterDown = editor.doc.listShapes()[0]!
+  assert.equal(afterDown.parentId, 'page:q', 'pointerdown commit parents onto the current page')
+
+  dispatch([{ type: 'pointermove', x: 10, y: 10, buttons: 1, modifiers: { shift: false, alt: false, ctrl: false, meta: false }, t: 16 }])
+  const afterMove = editor.doc.listShapes().find((s) => s.id === afterDown.id)!
+  assert.equal(afterMove.parentId, 'page:q', 'the re-emitted stroke keeps parentId on the current page across pointermoves')
+
+  dispatch([{ type: 'pointerup', x: 20, y: 20, buttons: 0, modifiers: { shift: false, alt: false, ctrl: false, meta: false }, t: 32 }])
+  const final = editor.doc.listShapes().find((s) => s.id === afterDown.id)!
+  assert.equal(final.parentId, 'page:q', 'the final pointerup emission also lands on the current page')
+  console.log('ok: E2 — draw threads the current page consistently across every pointermove + pointerup')
 }

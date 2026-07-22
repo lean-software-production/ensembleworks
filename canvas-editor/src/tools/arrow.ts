@@ -99,7 +99,6 @@ function topIndex(ctx: ToolContext, parentId: string): string {
 
 export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
   const editor = ctx.editor
-  const pageId = editor.pageId
 
   function worldOf(screen: { readonly x: number; readonly y: number }) {
     return screenToWorld(editor.get().camera, screen)
@@ -134,6 +133,13 @@ export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
             if (!here) return { state, intents: [] }
             const startWorld = worldOf(state.downScreen)
             const id = makeId({ t: state.downT, x: state.downScreen.x, y: state.downScreen.y }, editor.random)
+            // pageId (Task E2, D-1): read LIVE from editor.get().currentPageId
+            // at the moment of creation, the same purity posture as the
+            // `camera` read via worldOf above -- never the constructor's
+            // frozen `editor.pageId`. StartArrow is the ONLY intent that ever
+            // sets this arrow's parentId (topIndex doc comment above), so one
+            // live read here suffices for the whole gesture.
+            const pageId = editor.get().currentPageId
             // SELF-BINDING (OURS, matching tldraw parity): allowed. Start
             // and end may bind to the SAME target shape — no special-casing
             // here or in routeArrow (canvas-model/src/arrow-route.ts), which

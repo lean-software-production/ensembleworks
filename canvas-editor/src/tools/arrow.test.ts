@@ -329,4 +329,60 @@ function setup() {
   console.log('ok: the second of two sequentially-drawn arrows sorts strictly after the first (lands on top)')
 }
 
+// ============================================================================
+// 10. E2 — current-page parenting. StartArrow AFTER SetCurrentPage lands on
+//     the NEW current page, not the bootstrap editor.pageId. Mutant killed:
+//     "reads editor.pageId (factory const)" -- that mutant would keep
+//     parenting to 'page:p' regardless of the switch.
+// ============================================================================
+{
+  const { doc, editor, tool } = setup()
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+
+  run(editor, tool, script().down(500, 500).move(600, 520).up().events())
+  const arrow = editor.doc.listShapes().find((s) => s.kind === 'arrow')!
+  assert.equal(arrow.parentId, 'page:q', 'arrow drawn after SetCurrentPage parents onto the CURRENT page, not editor.pageId')
+  console.log('ok: E2 — arrow parents onto the current page after SetCurrentPage')
+}
+
+// ============================================================================
+// 10b. E2 — topIndex must scan the CURRENT page's siblings, not
+//      editor.pageId's. Escaping-mutant catch: a mutant that fixes parentId
+//      to read currentPageId live but leaves `topIndex(ctx, pageId)` reading
+//      `editor.pageId` PASSES the parentId-only assertion above (both pages
+//      are empty there, so the starting index ties either way) -- it only
+//      shows up when the BOOTSTRAP page has a high-indexed sibling and the
+//      CURRENT (new) page does not.
+// ============================================================================
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape({
+    id: 'shape:page-p-high', kind: 'geo', parentId: 'page:p', index: indexBetween('a5', null), x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+  } as Shape)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+
+  run(editor, tool, script().down(500, 500).move(600, 520).up().events())
+  const arrow = editor.doc.listShapes().find((s) => s.kind === 'arrow')!
+  assert.equal(arrow.parentId, 'page:q', 'sanity: still parents onto page:q')
+  assert.equal(arrow.index, indexBetween(null, null), "topIndex reads page:q's (empty) siblings, not page:p's unrelated high-indexed shape")
+  console.log("ok: E2 — arrow topIndex scans the CURRENT page's siblings, not editor.pageId's")
+}
+
+// ============================================================================
+// 11. E2 — migration safety: with currentPageId at its boot default
+//     ('page:p', never switched), arrow creation is UNCHANGED.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  run(editor, tool, script().down(500, 500).move(600, 520).up().events())
+  const arrow = editor.doc.listShapes().find((s) => s.kind === 'arrow')!
+  assert.equal(arrow.parentId, 'page:p', 'with currentPageId at its boot default, arrow creation still parents to page:p')
+  console.log('ok: E2 — single-page default (no SetCurrentPage) still parents an arrow to page:p')
+}
+
 console.log('ok: arrow tool FSM + bindings')

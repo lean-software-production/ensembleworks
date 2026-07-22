@@ -152,7 +152,6 @@ function finalizeIntents(shape: Shape): Intent[] {
 
 export function createLineTool(ctx: ToolContext): Tool<LineState> {
   const editor = ctx.editor
-  const pageId = editor.pageId
 
   function worldOf(screen: { readonly x: number; readonly y: number }) {
     return screenToWorld(editor.get().camera, screen)
@@ -174,6 +173,10 @@ export function createLineTool(ctx: ToolContext): Tool<LineState> {
             if (!here) return { state, intents: [] }
             const downWorld = worldOf(state.downScreen)
             const id = makeId({ t: state.downT, x: state.downScreen.x, y: state.downScreen.y }, editor.random)
+            // pageId (Task E2, D-1): read LIVE from editor.get().currentPageId,
+            // the same purity posture as the `camera` read via worldOf above --
+            // never the constructor's frozen `editor.pageId`.
+            const pageId = editor.get().currentPageId
             const index = topIndex(ctx, pageId)
             const shape = buildShape(id, pageId, index, downWorld, worldOf(here), editor.get().nextShapeStyle)
             return {
@@ -190,6 +193,7 @@ export function createLineTool(ctx: ToolContext): Tool<LineState> {
         case 'drawing': {
           if (event.type === 'pointermove') {
             const worldPt = worldOf(event)
+            const pageId = editor.get().currentPageId
             const shape = buildShape(state.id, pageId, state.index, state.downWorld, worldPt, editor.get().nextShapeStyle)
             // Live preview only — one upserted CreateShape per move (create.ts's
             // drag-to-size pattern), NOT a SetSelection re-emission every move
@@ -200,6 +204,7 @@ export function createLineTool(ctx: ToolContext): Tool<LineState> {
           }
           if (event.type === 'pointerup') {
             const worldPt = worldOf(event)
+            const pageId = editor.get().currentPageId
             const shape = buildShape(state.id, pageId, state.index, state.downWorld, worldPt, editor.get().nextShapeStyle)
             return { state: IDLE, intents: finalizeIntents(shape) }
           }

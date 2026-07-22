@@ -419,4 +419,103 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   console.log('ok: drag-create threads ONE computed index across every pointermove + pointerup re-emission (replay-deterministic)')
 }
 
+// ============================================================================
+// 7. E2 — current-page parenting (the currentPageId ripple). The tool is
+//    CONSTRUCTED FIRST (like a real tool-selection instance that outlives a
+//    page switch), THEN SetCurrentPage fires, THEN the gesture runs — this
+//    is what actually distinguishes a LIVE per-event read from a read
+//    captured ONCE at factory-construction time (both would pass if the
+//    switch happened before construction). Mutant killed: "reads
+//    editor.pageId (factory const)" AND "reads currentPageId but only ONCE
+//    at factory scope" — both would keep parenting to 'page:p' here.
+// ============================================================================
+{
+  const { doc, editor, ctx } = setup()
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+
+  const tool = createCreateTool(ctx, 'geo') // constructed BEFORE the switch
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+  run(editor, tool, script().down(50, 50).up().events())
+
+  const created = editor.doc.listShapes()[0]!
+  assert.equal(created.parentId, 'page:q', 'click-create after SetCurrentPage parents onto the CURRENT page, not editor.pageId or a factory-scope snapshot of it')
+  console.log('ok: E2 — click-create (constructed before the switch) parents onto the current page after SetCurrentPage')
+}
+
+// ============================================================================
+// 7b. E2 — topIndex must scan the CURRENT page's siblings, not
+//     editor.pageId's. Escaping-mutant catch: a mutant that fixes parentId
+//     to read currentPageId live but leaves `topIndex(ctx, pageId)` reading
+//     `editor.pageId` PASSES every parentId-only assertion above (both pages
+//     are empty in those tests, so the starting index is the same either
+//     way) -- it only shows up when the BOOTSTRAP page has a high-indexed
+//     sibling and the CURRENT (new) page does not.
+// ============================================================================
+{
+  const { doc, editor, ctx } = setup()
+  doc.putShape({
+    id: 'shape:page-p-high', kind: 'geo', parentId: 'page:p', index: indexBetween('a5', null), x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+  } as Shape)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+
+  const tool = createCreateTool(ctx, 'geo') // constructed BEFORE the switch
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+  run(editor, tool, script().down(50, 50).up().events())
+
+  const created = editor.doc.listShapes().find((s) => s.id !== 'shape:page-p-high')!
+  assert.equal(created.parentId, 'page:q', 'sanity: still parents onto page:q')
+  assert.equal(created.index, indexBetween(null, null), "topIndex reads page:q's (empty) siblings, not page:p's unrelated high-indexed shape")
+  console.log("ok: E2 — topIndex scans the CURRENT page's siblings, not editor.pageId's")
+}
+
+// ============================================================================
+// 8. E2 — migration safety: with currentPageId at its boot default
+//    ('page:p', never switched), creation is UNCHANGED — parents to page:p
+//    exactly as before the ripple.
+// ============================================================================
+{
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, 'geo')
+  run(editor, tool, script().down(50, 50).up().events())
+  const created = editor.doc.listShapes()[0]!
+  assert.equal(created.parentId, 'page:p', 'with currentPageId at its boot default, creation still parents to page:p (single-page/migration safety)')
+  console.log('ok: E2 — single-page default (no SetCurrentPage) still parents to page:p')
+}
+
+// ============================================================================
+// 9. E2 — drag-create threads the CURRENT page consistently across every
+//    pointermove re-emission of the same shape (not just at the transition).
+// ============================================================================
+{
+  const { doc, editor, ctx } = setup()
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+
+  const tool = createCreateTool(ctx, 'geo') // constructed BEFORE the switch
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+  let state = tool.initialState
+  const dispatch = (events: readonly import('../input.js').InputEvent[]) => {
+    for (const event of events) {
+      const result = tool.onEvent(state, event)
+      state = result.state
+      if (result.intents.length > 0) editor.applyAll(result.intents)
+    }
+  }
+  dispatch(script().down(0, 0).move(50, 50).events()) // crosses threshold -> dragging, first commit
+  const afterMove1 = editor.doc.listShapes()[0]!
+  assert.equal(afterMove1.parentId, 'page:q', 'drag-create first commit parents onto the current page')
+
+  dispatch([{ type: 'pointermove', x: 80, y: 80, buttons: 1, modifiers: { shift: false, alt: false, ctrl: false, meta: false }, t: 200 }])
+  const afterMove2 = editor.doc.listShapes().find((s) => s.id === afterMove1.id)!
+  assert.equal(afterMove2.parentId, 'page:q', 'the re-emitted shape keeps parentId on the current page across pointermoves')
+
+  dispatch([{ type: 'pointerup', x: 80, y: 80, buttons: 0, modifiers: { shift: false, alt: false, ctrl: false, meta: false }, t: 210 }])
+  const final = editor.doc.listShapes().find((s) => s.id === afterMove1.id)!
+  assert.equal(final.parentId, 'page:q', 'the final pointerup emission also lands on the current page')
+  console.log('ok: E2 — drag-create threads the current page consistently across every pointermove + pointerup')
+}
+
 console.log('ok: create tools (note/text/geo/frame) + frame capture')

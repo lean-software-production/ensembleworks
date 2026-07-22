@@ -167,7 +167,6 @@ function finalizeIntents(shape: Shape): Intent[] {
 
 export function createDrawTool(ctx: ToolContext): Tool<DrawState> {
   const editor = ctx.editor
-  const pageId = editor.pageId
 
   function worldOf(screen: { readonly x: number; readonly y: number }) {
     return screenToWorld(editor.get().camera, screen)
@@ -180,6 +179,10 @@ export function createDrawTool(ctx: ToolContext): Tool<DrawState> {
         case 'idle': {
           if (event.type !== 'pointerdown') return { state, intents: [] }
           const id = makeId(event, editor.random)
+          // pageId (Task E2, D-1): read LIVE from editor.get().currentPageId,
+          // the same purity posture as the `camera` read via worldOf below --
+          // never the constructor's frozen `editor.pageId`.
+          const pageId = editor.get().currentPageId
           const index = topIndex(ctx, pageId)
           const isPen = event.pressure !== undefined
           const pt: StrokePoint = { ...worldOf(event), z: event.pressure ?? 0.5 }
@@ -198,12 +201,14 @@ export function createDrawTool(ctx: ToolContext): Tool<DrawState> {
             // the previous state's array (see the Drawing interface's doc
             // comment: replay determinism depends on this).
             const worldPoints = [...state.worldPoints, pt]
+            const pageId = editor.get().currentPageId
             const shape = buildShape(state.id, pageId, state.index, worldPoints, state.isPen, editor.get().nextShapeStyle)
             return { state: { ...state, worldPoints }, intents: [{ type: 'CreateShape', shape }] }
           }
           if (event.type === 'pointerup') {
             const pt: StrokePoint = { ...worldOf(event), z: event.pressure ?? 0.5 }
             const worldPoints = [...state.worldPoints, pt]
+            const pageId = editor.get().currentPageId
             const shape = buildShape(state.id, pageId, state.index, worldPoints, state.isPen, editor.get().nextShapeStyle)
             return { state: IDLE, intents: finalizeIntents(shape) }
           }

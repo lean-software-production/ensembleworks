@@ -238,7 +238,6 @@ function finalizeIntents(ctx: ToolContext, shape: Shape): Intent[] {
  * reuses. */
 export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<CreateState> {
   const editor = ctx.editor
-  const pageId = editor.pageId
 
   function worldOf(screen: { readonly x: number; readonly y: number }) {
     return screenToWorld(editor.get().camera, screen)
@@ -256,7 +255,7 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
   // it as a corner. We apply the same centering uniformly to text too (our
   // choice — tldraw's real TextShapeUtil auto-sizes from typed content,
   // which this clean-room model has no rendering/measurement to emulate).
-  function clickShape(id: string, worldPt: { readonly x: number; readonly y: number }, index: string): Shape {
+  function clickShape(id: string, worldPt: { readonly x: number; readonly y: number }, index: string, pageId: string): Shape {
     const { w, h } = defaultSize(kind, pageId)
     return makeShape(kind, id, pageId, worldPt.x - w / 2, worldPt.y - h / 2, w, h, editor.get().nextShapeStyle, index)
   }
@@ -273,7 +272,7 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
   // rather than resizing it). We use the shared drag-rect FSM for note too;
   // it's harmless (see propsFor's note comment) since note's geometry
   // ignores props.w/h regardless of what the drag rect computed.
-  function dragShape(id: string, a: { readonly x: number; readonly y: number }, b: { readonly x: number; readonly y: number }, index: string): Shape {
+  function dragShape(id: string, a: { readonly x: number; readonly y: number }, b: { readonly x: number; readonly y: number }, index: string, pageId: string): Shape {
     const minX = Math.min(a.x, b.x), minY = Math.min(a.y, b.y)
     const w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y)
     return makeShape(kind, id, pageId, minX, minY, w, h, editor.get().nextShapeStyle, index)
@@ -303,6 +302,11 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
             // doc round-trip for information this tool already has.
             const id = makeId(event, editor.random)
             const downWorld = screenToWorld(editor.get().camera, state.downScreen)
+            // pageId (Task E2, D-1): read LIVE from editor.get().currentPageId
+            // at the moment of creation, the same purity posture as the
+            // `camera` read via worldOf just above -- never the constructor's
+            // frozen `editor.pageId`.
+            const pageId = editor.get().currentPageId
             // Computed ONCE here, at the pointing->dragging transition --
             // BEFORE this shape's first CreateShape intent below has been
             // applied/committed by the caller, so ctx.snapshot() here still
@@ -311,7 +315,7 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
             // 'dragging' below reuses this same value instead of
             // recomputing it).
             const index = topIndex(ctx, pageId)
-            const shape = dragShape(id, downWorld, worldOf(here), index)
+            const shape = dragShape(id, downWorld, worldOf(here), index, pageId)
             return {
               state: { mode: 'dragging', id, downWorld, index },
               intents: [{ type: 'CreateShape', shape }, { type: 'SetSelection', ids: [id] }],
@@ -320,10 +324,12 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
           if (event.type === 'pointerup') {
             const worldPt = worldOf({ x: event.x, y: event.y })
             const id = makeId(event, editor.random)
+            // pageId (Task E2, D-1): live read, same rationale as above.
+            const pageId = editor.get().currentPageId
             // CLICK-create: a single emission, no prior commit of this shape
             // exists yet -- compute inline, same as the drag transition above.
             const index = topIndex(ctx, pageId)
-            const shape = clickShape(id, worldPt, index)
+            const shape = clickShape(id, worldPt, index, pageId)
             return { state: IDLE, intents: finalizeIntents(ctx, shape) }
           }
           return { state, intents: [] }
@@ -339,11 +345,13 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
             // path; the wire/undo-granularity cost of per-move commits is
             // unmeasured until H3 profiles it. Same note in select.ts's
             // onDragging.
-            const shape = dragShape(state.id, state.downWorld, worldOf({ x: event.x, y: event.y }), state.index)
+            const pageId = editor.get().currentPageId
+            const shape = dragShape(state.id, state.downWorld, worldOf({ x: event.x, y: event.y }), state.index, pageId)
             return { state, intents: [{ type: 'CreateShape', shape }] }
           }
           if (event.type === 'pointerup') {
-            const shape = dragShape(state.id, state.downWorld, worldOf({ x: event.x, y: event.y }), state.index)
+            const pageId = editor.get().currentPageId
+            const shape = dragShape(state.id, state.downWorld, worldOf({ x: event.x, y: event.y }), state.index, pageId)
             return { state: IDLE, intents: finalizeIntents(ctx, shape) }
           }
           return { state, intents: [] }
