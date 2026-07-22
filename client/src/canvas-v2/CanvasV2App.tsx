@@ -154,6 +154,8 @@ import { reorderShortcut } from './reorder-dom.js'
 import { extractImageFiles } from './image-drop.js'
 import { extractImageBlobs } from './image-paste.js'
 import { createImageFromBlob } from './image-create.js'
+import { clampCurrentPageIntents } from './page-switcher-dom.js'
+import { PageSwitcher } from './PageSwitcher.js'
 
 /** How long an embed (terminal/iframe/…) may sit off-screen before
  * EmbedLayer suspends it — see embedLifecycle.ts's `suspendAfterTicks` doc.
@@ -783,12 +785,26 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				editor.undo()
 				const prune = pruneDanglingSelectionIntents(editor)
 				if (prune.length > 0) editor.applyAll(prune)
+				// Undo-clamp (Task U1, D-6, D-3): SetCurrentPage is a view
+				// intent with no undo inverse, so undoing a CreatePage +
+				// SetCurrentPage batch (the switcher's "+ new page") removes
+				// the page but leaves currentPageId still naming it — R1's
+				// render filter would then paint nothing. Same shape of fix
+				// as pruneDanglingSelectionIntents just above: check AFTER
+				// undo(), apply only when non-empty.
+				const clamp = clampCurrentPageIntents(editor)
+				if (clamp.length > 0) editor.applyAll(clamp)
 				return true
 			}
 			if ((withModifier && key === 'z' && event.modifiers.shift) || (event.modifiers.ctrl && key === 'y')) {
 				editor.redo()
 				const prune = pruneDanglingSelectionIntents(editor)
 				if (prune.length > 0) editor.applyAll(prune)
+				// Undo-clamp (Task U1, D-6) — the redo direction: a redo can
+				// equally reintroduce a DeletePage (if a delete had been
+				// undone, then redone), stranding currentPageId the same way.
+				const clamp = clampCurrentPageIntents(editor)
+				if (clamp.length > 0) editor.applyAll(clamp)
 				return true
 			}
 			// Ctrl/Cmd+C/X/V/D (Task D1) — copy/cut/paste/duplicate. The
@@ -1113,7 +1129,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			const local = { x: e.clientX - rect.left, y: e.clientY - rect.top }
 			const world = screenToWorld(editor.get().camera, local)
 			for (const file of files) {
-				void createImageFromBlob(editor, file, world, editor.pageId)
+				void createImageFromBlob(editor, file, world, editor.get().currentPageId)
 			}
 		},
 		[editor],
@@ -1162,7 +1178,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			const size = viewportSizeRef.current
 			const center = screenToWorld(editor.get().camera, { x: size.width / 2, y: size.height / 2 })
 			for (const blob of blobs) {
-				void createImageFromBlob(editor, blob, center, editor.pageId)
+				void createImageFromBlob(editor, blob, center, editor.get().currentPageId)
 			}
 		}
 		document.addEventListener('paste', handlePaste)
@@ -1193,6 +1209,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					</button>
 				))}
 			</div>
+			<PageSwitcher editor={editor} snapshot={snapshot} currentPageId={editorState.currentPageId} />
 			<div ref={containerRef} data-canvas-v2-viewport onDragOver={handleDragOver} onDrop={handleDrop} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
 				<Viewport onInput={handleInput} onViewportBlur={handleViewportBlur} onPointerCancel={cancelAndReset} style={{ position: 'absolute', inset: 0 }}>
 					<Grid camera={editorState.camera} />
