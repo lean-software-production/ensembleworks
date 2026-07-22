@@ -2,7 +2,7 @@
  * Run: bun client/src/canvas-health/connectionHealth.test.ts
  *
  * The reducer is the whole feature's logic: threshold tripping, debounce,
- * recovery, block precedence, chip rendering state, countdown. All pure, all
+ * recovery, blocking, chip rendering state, countdown. All pure, all
  * driven by an injected `now` — no timers, no fetch, no DOM.
  */
 import assert from 'node:assert/strict'
@@ -100,42 +100,29 @@ assert.equal(BLOCKING_TRANSPORTS.includes('livekit'), false, 'livekit must never
 assert.deepEqual([...BLOCKING_TRANSPORTS], ['canvas', 'terminals'])
 
 // --------------------------------------------------------------- availability
-// 12. Healthy + lock held ⇒ not blocked.
+// 12. Healthy ⇒ not blocked. (A tab without the lock never reaches this code:
+//     SingleTabGate refuses to mount the app at all, design §5.)
 assert.deepEqual(
-	availability({ health: h4, now: 6000, thresholds: T, hasLock: true }),
+	availability({ health: h4, now: 6000, thresholds: T }),
 	{ blocked: false, reason: null, tripped: [] }
 )
 
-// 13. Tripped blocking transport + lock held ⇒ blocked on 'connection'.
+// 13. Tripped blocking transports ⇒ blocked on 'connection', both named.
 assert.deepEqual(
-	availability({ health: b1, now: 10_000, thresholds: T, hasLock: true }),
+	availability({ health: b1, now: 10_000, thresholds: T }),
 	{ blocked: true, reason: 'connection', tripped: ['canvas', 'terminals'] }
 )
 
-// 14. No lock ⇒ 'duplicate-tab', even when everything is healthy.
-assert.deepEqual(
-	availability({ health: h4, now: 6000, thresholds: T, hasLock: false }),
-	{ blocked: true, reason: 'duplicate-tab', tripped: [] }
-)
-
-// 15. PRECEDENCE: duplicate-tab wins over connection — no point counting down
-//     a reconnect in a tab that should not be active (design §2).
-assert.equal(
-	availability({ health: b1, now: 10_000, thresholds: T, hasLock: false }).reason,
-	'duplicate-tab'
-)
-
-// 15b. A duplicate tab reports NO tripped transports even when they really are
-//      tripped: it must not render a connection countdown it isn't the tab to
-//      act on. Asserting the whole object, because asserting only `.reason`
-//      leaves the emptied `tripped` unverified (found by mutation testing).
-assert.deepEqual(
-	availability({ health: b1, now: 10_000, thresholds: T, hasLock: false }),
-	{ blocked: true, reason: 'duplicate-tab', tripped: [] }
-)
+// 13b. A tripped blocking transport is now the ONLY way to be blocked. One
+//      tripped transport is enough — `h2` is canvas-only unhealthy.
+assert.deepEqual(availability({ health: h2, now: 10_000, thresholds: T }), {
+	blocked: true,
+	reason: 'connection',
+	tripped: ['canvas'],
+})
 
 // 16. LiveKit down alone never blocks.
-assert.equal(availability({ health: lk, now: 10 * 60_000, thresholds: T, hasLock: true }).blocked, false)
+assert.equal(availability({ health: lk, now: 10 * 60_000, thresholds: T }).blocked, false)
 
 // ---------------------------------------------------------------------- chips
 // 17. Chip states: connected / degrading (with elapsed) / down.
@@ -161,22 +148,18 @@ assert.equal(countdownSeconds(3000, 3000), 1, 'at the tick boundary, show 1 not 
 assert.equal(countdownSeconds(4000, 3000), 1, 'a late tick never shows a negative')
 
 // ---------------------------------------------------------------- fast clock
-// 20. All healthy + lock held ⇒ no fast clock needed (the common case this
-//     gate exists to keep quiet).
-assert.equal(needsFastClock(h4, true), false, 'fully healthy + lock held: no fast clock')
+// 20. All healthy ⇒ no fast clock needed (the common case this gate exists to
+//     keep quiet).
+assert.equal(needsFastClock(h4), false, 'fully healthy: no fast clock')
 
 // 21. A tripped BLOCKING transport ⇒ fast clock needed (the countdown/chip
 //     move).
-assert.equal(needsFastClock(b1, true), true, 'blocking transport unhealthy: fast clock')
+assert.equal(needsFastClock(b1), true, 'blocking transport unhealthy: fast clock')
 
 // 22. LiveKit-only unhealthy ⇒ NOT needed. LiveKit never blocks, so the modal
 //     never mounts and no chip is on screen to animate; when livekit's chip
 //     IS visible, a blocking transport is already tripped and this is
 //     already true for that reason.
-assert.equal(needsFastClock(lk, true), false, 'livekit-only unhealthy: no fast clock')
-
-// 23. No lock ⇒ fast clock needed even with everything healthy — the
-//     duplicate-tab modal is up regardless of transport health.
-assert.equal(needsFastClock(h4, false), true, 'no lock: fast clock')
+assert.equal(needsFastClock(lk), false, 'livekit-only unhealthy: no fast clock')
 
 console.log('connectionHealth.test.ts: all assertions passed')

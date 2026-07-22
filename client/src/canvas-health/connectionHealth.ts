@@ -3,8 +3,8 @@
  *
  * Given per-transport observations and an injected `now`, it maintains an
  * `unhealthySince` stamp per transport, decides which transports have been
- * unhealthy long enough to trip their threshold, and folds that together with
- * the canvas lock into the single `blocked` + `reason` state the UI renders.
+ * unhealthy long enough to trip their threshold, and folds that into the single
+ * `blocked` + `reason` state the UI renders.
  *
  * Design: docs/plans/2026-07-22-connection-health-modal-design.md §2–§4.
  * Everything downstream (useConnectionHealth, useCanvasLock, the modal) is
@@ -41,7 +41,7 @@ export interface Observation {
 
 export type Observations = Record<TransportId, Observation>
 
-export type BlockReason = 'duplicate-tab' | 'connection'
+export type BlockReason = 'connection'
 
 export function initialHealth(): HealthState {
 	const blank = (): TransportHealth => ({ healthy: true, unhealthySince: null, rtt: null })
@@ -96,18 +96,16 @@ export interface Availability {
 }
 
 /**
- * The single availability state. Precedence: duplicate-tab beats connection —
- * there is no point counting down a reconnect in a tab that should not be
- * active, so a duplicate tab never shows the connection modal (design §2).
+ * The single availability state. A duplicate tab never reaches this code:
+ * SingleTabGate refuses to mount the app at all without the lock (design §5),
+ * so connection health is the only thing that can block here.
  */
 export function availability(input: {
 	health: HealthState
 	now: number
 	thresholds: Thresholds
-	hasLock: boolean
 }): Availability {
 	const tripped = trippedTransports(input.health, input.now, input.thresholds)
-	if (!input.hasLock) return { blocked: true, reason: 'duplicate-tab', tripped: [] }
 	if (tripped.length > 0) return { blocked: true, reason: 'connection', tripped }
 	return { blocked: false, reason: null, tripped: [] }
 }
@@ -166,7 +164,6 @@ export function countdownSeconds(now: number, nextProbeAt: number): number {
  * returns true for that. Widening this to all TRANSPORTS would spin the fast
  * clock up for a livekit-only fault that nothing on screen is reading.
  */
-export function needsFastClock(health: HealthState, hasLock: boolean): boolean {
-	if (!hasLock) return true
+export function needsFastClock(health: HealthState): boolean {
 	return BLOCKING_TRANSPORTS.some((id) => health[id].unhealthySince != null)
 }
