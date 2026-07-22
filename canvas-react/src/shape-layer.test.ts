@@ -292,4 +292,42 @@ function fakeToolContext(snapshot: CanvasDocument, texts: ReadonlyMap<string, st
   console.log('ok: ShapeLayer paints parent-before-child (orderParentBeforeChild) even when the spatial index returns the child first')
 }
 
-console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text, dispatch threading, paint order)')
+// ============================================================================
+// 8. Task R1 — ShapeBody honors shape.opacity: the WRAPPER div's inline
+//    style carries `opacity` verbatim from the shape's envelope field, for
+//    every kind, kind-agnostically (one place, not per-kind). Three rows:
+//    a fractional value (0.3), the default (1), and the bug-magnet edge case
+//    (0 — nullish handling, not truthiness: `shape.opacity || 1` would wrongly
+//    force an opacity-0 shape to render fully opaque).
+// ============================================================================
+{
+  function opacityShape(id: string, opacity: number): Shape {
+    return {
+      id, kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+      isLocked: false, opacity, meta: {}, props: { w: 10, h: 10 },
+    } as Shape
+  }
+
+  const html03 = renderToStaticMarkup(createElement(ShapeBody, { shape: opacityShape('shape:op03', 0.3), snapshot: doc, editorState }))
+  const wrapper03 = html03.match(/<div data-shape-id="shape:op03"[^>]*style="([^"]*)"/)
+  assert.ok(wrapper03, `wrapper div for opacity:0.3 shape should be found in: ${html03}`)
+  assert.match(wrapper03![1], /opacity:0\.3/, `wrapper style should include opacity:0.3, got: ${wrapper03![1]}`)
+  console.log('ok: ShapeBody wrapper carries opacity:0.3')
+
+  const html1 = renderToStaticMarkup(createElement(ShapeBody, { shape: opacityShape('shape:op1', 1), snapshot: doc, editorState }))
+  const wrapper1 = html1.match(/<div data-shape-id="shape:op1"[^>]*style="([^"]*)"/)
+  assert.ok(wrapper1, `wrapper div for opacity:1 shape should be found in: ${html1}`)
+  assert.match(wrapper1![1], /opacity:1/, `wrapper style should include opacity:1, got: ${wrapper1![1]}`)
+  console.log('ok: ShapeBody wrapper carries opacity:1')
+
+  // The bug-magnet: opacity 0 must render as opacity:0, NOT be collapsed to
+  // 1 by a truthiness check (`shape.opacity || 1`) or dropped entirely by a
+  // conditional that treats 0 as "falsy/absent".
+  const html0 = renderToStaticMarkup(createElement(ShapeBody, { shape: opacityShape('shape:op0', 0), snapshot: doc, editorState }))
+  const wrapper0 = html0.match(/<div data-shape-id="shape:op0"[^>]*style="([^"]*)"/)
+  assert.ok(wrapper0, `wrapper div for opacity:0 shape should be found in: ${html0}`)
+  assert.match(wrapper0![1], /opacity:0(?!\.)/, `wrapper style should include opacity:0 (not collapsed to 1), got: ${wrapper0![1]}`)
+  console.log('ok: ShapeBody wrapper carries opacity:0 — NOT collapsed to 1 by a truthiness bug')
+}
+
+console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text, dispatch threading, paint order, opacity)')
