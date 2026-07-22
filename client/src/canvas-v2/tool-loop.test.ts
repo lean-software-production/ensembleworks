@@ -536,4 +536,41 @@ function setup() {
 	console.log('ok: tool-loop — pruneDanglingSelectionIntents (no-op when nothing dangles, drops dangling ids after an undo)')
 }
 
+// ============================================================================
+// 8. Task W1 — the 'draw' tool is wired into the ToolSet/ToolStates/dispatch
+//    machinery exactly like arrow/create: createToolSet builds it,
+//    createInitialToolStates seeds its idle state, dispatchToActiveTool
+//    routes a pointerdown to it and applies the resulting CreateShape (the
+//    pen tool commits a one-point "dot" draw shape on pointerdown alone — no
+//    drag threshold, per draw.ts's own doc comment), and cancelActiveTool
+//    covers its in-flight 'drawing' state (which carries `id`, like
+//    arrow/create) so an abandoned mid-stroke shape doesn't leak.
+// ============================================================================
+{
+	const { editor, ctx } = setup()
+	const tools = createToolSet(ctx)
+
+	assert.ok(tools.draw, 'createToolSet must build a `draw` tool (Task W1 — createDrawTool wired in)')
+
+	const states = createInitialToolStates(tools)
+	assert.equal(states.draw, tools.draw.initialState, 'createInitialToolStates must seed a `draw` entry at the draw tool\'s own initialState')
+
+	const before = new Set<string>(editor.doc.listShapes().map((s) => s.id))
+	const afterDown = dispatchToActiveTool(tools, states, 'draw', editor, { type: 'pointerdown', x: 700, y: 700, buttons: 1, modifiers: MODS, t: 0 })
+	const createdId = editor.doc.listShapes().map((s) => s.id).find((id) => !before.has(id))
+	assert.ok(createdId, `dispatching a pointerdown to the 'draw' active tool must create a shape — shapes: ${JSON.stringify(editor.doc.listShapes())}`)
+	assert.equal(editor.doc.getShape(createdId!)?.kind, 'draw', 'the created shape must be a `draw`-kind shape')
+
+	// Mid-stroke (pointerdown landed, no pointerup yet): cancelActiveTool must
+	// delete the in-flight preview, same DeleteShapes coverage as arrow/create.
+	const drawState = afterDown.draw as { mode: string; id: string }
+	assert.equal(drawState.mode, 'drawing', 'precondition: the draw tool is mid-stroke after a bare pointerdown (no threshold gate)')
+	const cancelled = cancelActiveTool(tools, afterDown, 'draw', editor)
+	assert.deepEqual(cancelled.intents, [{ type: 'DeleteShapes', ids: [drawState.id] }], 'cancelling a mid-stroke draw gesture emits DeleteShapes for its in-flight id')
+	editor.applyAll(cancelled.intents)
+	assert.equal(editor.doc.getShape(drawState.id), undefined, 'the in-flight draw preview is actually gone after applying the cancel intent')
+
+	console.log('ok: tool-loop — the draw tool is wired into createToolSet/createInitialToolStates/dispatchToActiveTool/cancelActiveTool (Task W1)')
+}
+
 console.log('ok: tool-loop.test.ts — all cases passed')

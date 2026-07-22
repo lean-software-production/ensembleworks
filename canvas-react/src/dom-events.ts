@@ -82,6 +82,35 @@ export interface PointerEventLike extends ModifierFields {
    * about what Viewport.tsx's pointer-capture path consumes off the same
    * event object, and so fabricated test events remain valid without it. */
   readonly pointerId?: number
+  /** DOM PointerEvent.pointerType ('mouse' | 'pen' | 'touch'). OPTIONAL:
+   * absent on fabricated test events that predate this field, and on any
+   * environment that never sets it. Read ONLY to gate `pressure` below (Task
+   * W1, D-3) — never itself forwarded onto the mapped InputEvent (input.ts's
+   * PointerInputEvent has no pointerType field; see the module header's
+   * SINGLE-POINTER V1 SCOPE note on why device-kind discrimination stays out
+   * of the event union). */
+  readonly pointerType?: string
+  /** DOM PointerEvent.pressure, 0..1. Read ONLY when `pointerType==='pen'`
+   * (see `pressureField` below) — a mouse's pressure is a meaningless
+   * 0-or-0.5 constant, not a real signal (D-3), so it is deliberately
+   * dropped rather than forwarded. */
+  readonly pressure?: number
+}
+
+/** D-3's device-gate, mirrored from canvas-editor/script.ts's own
+ * `pressureField` helper (same not-imported rationale as this file's other
+ * mini-helpers: that one lives in a different package and is private there):
+ * `pressure` is spread onto the mapped event ONLY for a real stylus
+ * (`pointerType==='pen'`) — mouse/touch, and anything with no `pointerType`
+ * at all, get NO `pressure` key whatsoever, not an explicit `pressure:
+ * undefined`. That distinction matters: `event.pressure !== undefined` is
+ * the pen tool's own pen-vs-mouse switch (draw.ts), and downstream code
+ * (canvas-editor's replay/serialization) treats an explicit `undefined` key
+ * differently from the key's outright absence — see script.ts's own
+ * `pressureField` doc comment for the identical discipline on the FSM-test
+ * injection side. */
+function pressureField(e: PointerEventLike): { pressure: number } | Record<string, never> {
+  return e.pointerType === 'pen' && e.pressure !== undefined ? { pressure: e.pressure } : {}
 }
 
 export function pointerEventToInput(e: PointerEventLike, viewportRect: RectLike): PointerInputEvent {
@@ -92,6 +121,7 @@ export function pointerEventToInput(e: PointerEventLike, viewportRect: RectLike)
     buttons: e.buttons,
     modifiers: modifiersOf(e),
     t: e.timeStamp,
+    ...pressureField(e),
   }
 }
 

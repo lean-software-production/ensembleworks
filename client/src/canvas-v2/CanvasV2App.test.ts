@@ -1146,6 +1146,80 @@ async function main() {
 		})
 	}
 
+	// ==========================================================================
+	// (j) TASK W1 — the Draw toolbar button exists, and clicking it makes the
+	// draw tool active (aria-pressed flips on the clicked button, clears on the
+	// previously-active one — same mechanism CanvasV2App.tsx already uses for
+	// every other tool button). A subsequent pointerdown+pointerup on the
+	// viewport (a bare click — the pen tool's own "click creates a dot" design,
+	// draw.ts's header: no drag threshold) must create a new `draw`-kind shape
+	// in the doc, proving CanvasV2App actually routes 'draw' pointer input to
+	// the pen tool's FSM end to end — not just the DOM-free unit coverage in
+	// tool-loop.test.ts.
+	// ==========================================================================
+	{
+		const server5 = new SyncServerPeer({ peerId: 5n })
+		server5.doc.putPage({ id: 'page:p', name: 'Canvas' })
+		server5.doc.commit()
+
+		function connectDraw(): Promise<Transport> {
+			const [serverSide, clientSide]: [Transport, Transport] = makePair()
+			server5.connect(serverSide)
+			return Promise.resolve(clientSide)
+		}
+
+		const drawContainer = document.createElement('div')
+		document.body.appendChild(drawContainer)
+		const drawRoot = createRoot(drawContainer)
+
+		await act(async () => {
+			drawRoot.render(
+				createElement(
+					StrictMode,
+					null,
+					createElement(CanvasV2App, { roomId: 'dogfood-draw', userId: 'test-user-draw', connect: connectDraw, settleMs: 0 }),
+				),
+			)
+			await new Promise((r) => setTimeout(r, 0))
+			await new Promise((r) => setTimeout(r, 0))
+		})
+
+		const drawBtn = drawContainer.querySelector('[data-canvas-v2-tool="draw"]') as HTMLElement | null
+		const selectBtnDraw = drawContainer.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+		assert.ok(drawBtn, `the Draw toolbar button must render — DOM: ${drawContainer.innerHTML}`)
+		assert.ok(selectBtnDraw, 'precondition: the select button renders')
+		assert.equal(selectBtnDraw!.getAttribute('aria-pressed'), 'true', 'precondition: select is the default active tool')
+
+		await act(async () => {
+			drawBtn!.click()
+		})
+		assert.equal(drawBtn!.getAttribute('aria-pressed'), 'true', 'clicking the Draw button must make it the active tool')
+		assert.equal(selectBtnDraw!.getAttribute('aria-pressed'), 'false', 'switching to Draw must deactivate the previously-active select button')
+
+		const ewDraw = (globalThis as any).window.__ew as {
+			doc: { listShapes(): Array<{ id: string; kind: string }> }
+		}
+		const shapesBeforeDraw = new Set(ewDraw.doc.listShapes().map((s) => s.id))
+
+		const viewportElDraw = drawContainer.querySelector('[tabindex]') as HTMLElement | null
+		assert.ok(viewportElDraw, `the viewport element must exist — DOM: ${drawContainer.innerHTML}`)
+
+		await act(async () => {
+			viewportElDraw!.dispatchEvent(new (win as any).PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerId: 41, clientX: 300, clientY: 300, buttons: 1 }))
+			viewportElDraw!.dispatchEvent(new (win as any).PointerEvent('pointerup', { bubbles: true, cancelable: true, pointerId: 41, clientX: 300, clientY: 300, buttons: 0 }))
+		})
+
+		const createdDraw = ewDraw.doc.listShapes().find((s) => !shapesBeforeDraw.has(s.id))
+		assert.ok(createdDraw, `a pointerdown+pointerup with the Draw tool active must create a shape — shapes: ${JSON.stringify(ewDraw.doc.listShapes())}`)
+		assert.equal(createdDraw!.kind, 'draw', 'the shape created by the Draw tool must be kind "draw"')
+
+		console.log('ok: CanvasV2App — the Draw toolbar button renders, activates on click, and routes real pointer input to the pen tool FSM (Task W1)')
+
+		await act(async () => {
+			drawRoot.unmount()
+		})
+	}
+
 	console.log('ok: CanvasV2App.test.ts — all cases passed')
 }
 

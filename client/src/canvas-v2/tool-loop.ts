@@ -31,11 +31,13 @@ import type { Editor, Intent, Tool, ToolContext } from '@ensembleworks/canvas-ed
 import {
 	createArrowTool,
 	createCreateTool,
+	createDrawTool,
 	createHandTool,
 	createSelectAndTransformTool,
 	type ArrowState,
 	type CreateKind,
 	type CreateState,
+	type DrawState,
 	type HandState,
 	type SelectAndTransformState,
 	type SelectState,
@@ -46,7 +48,7 @@ export { createSelectAndTransformTool, type SelectAndTransformState } from '@ens
 
 /** The toolbar's tool identifiers — see CanvasV2App.tsx's toolbar for the
  * button list. 'transform' is deliberately ABSENT (see module header). */
-export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'arrow'
+export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'arrow' | 'draw'
 
 /** One `Tool<unknown>` instance per `ToolId`, built ONCE per `ToolContext` —
  * mirrors every tool factory's own "call once per Editor/ToolContext"
@@ -63,6 +65,7 @@ export interface ToolSet {
 	readonly geo: Tool<CreateState>
 	readonly frame: Tool<CreateState>
 	readonly arrow: Tool<ArrowState>
+	readonly draw: Tool<DrawState>
 }
 
 export function createToolSet(ctx: ToolContext): ToolSet {
@@ -75,6 +78,7 @@ export function createToolSet(ctx: ToolContext): ToolSet {
 		geo: createKindTool('geo'),
 		frame: createKindTool('frame'),
 		arrow: createArrowTool(ctx),
+		draw: createDrawTool(ctx),
 	}
 }
 
@@ -95,6 +99,7 @@ export function createInitialToolStates(tools: ToolSet): ToolStates {
 		geo: tools.geo.initialState,
 		frame: tools.frame.initialState,
 		arrow: tools.arrow.initialState,
+		draw: tools.draw.initialState,
 	}
 }
 
@@ -269,6 +274,14 @@ export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: Too
 
 	if (active === 'arrow') {
 		const s = states.arrow as ArrowState
+		if (s.mode === 'drawing') intents.push({ type: 'DeleteShapes', ids: [s.id] })
+	} else if (active === 'draw') {
+		// The pen tool's in-flight 'drawing' state carries `id` — like
+		// arrow/create, the preview stroke is already committed to the doc on
+		// every pointermove (and even on the bare pointerdown — draw.ts has no
+		// threshold gate), so an abandoned mid-stroke shape must be deleted the
+		// same way (Task W1, D-5).
+		const s = states.draw as DrawState
 		if (s.mode === 'drawing') intents.push({ type: 'DeleteShapes', ids: [s.id] })
 	} else if (active === 'note' || active === 'text' || active === 'geo' || active === 'frame') {
 		const s = states[active] as CreateState
