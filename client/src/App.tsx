@@ -272,7 +272,15 @@ export function App() {
 			{/* Frames drawer flies out to the LEFT of the side panel; an App-level
 			    sibling so it can anchor to the panel's live width (see FramesDrawer). */}
 			{editor && <FramesDrawer editor={editor} />}
-			{availability.blocked && availability.reason && (
+			{/* Being kicked is terminal — the only recovery is a reload — so it
+			    outranks the connection blocker below: a "Retrying in 3…" countdown
+			    or a "Use it here" button over "you were removed" would tell the
+			    user to wait on something that will never resolve. Suppressing the
+			    render (rather than just stacking wasKicked's z-index on top) also
+			    unmounts the blocker's window-capture-phase input swallow, so it
+			    stops intercepting keys behind a message whose only instruction is
+			    to reload. */}
+			{!wasKicked && availability.blocked && availability.reason && (
 				<CanvasBlockerModal
 					reason={availability.reason}
 					tripped={availability.tripped}
