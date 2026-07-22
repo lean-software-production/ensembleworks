@@ -826,8 +826,9 @@ export class Editor {
 // O(shapes) dumpModel call on every Resize/Rotate intent.
 function liveDocAdapter(doc: CanvasDoc): CanvasDocument {
   return {
-    pages: [], shapes: [], bindings: [],
+    pages: [], shapes: [], bindings: [], assets: [],
     byId: { get: (id: string) => doc.getShape(id) } as unknown as CanvasDocument['byId'],
+    assetById: new Map(),
   }
 }
 

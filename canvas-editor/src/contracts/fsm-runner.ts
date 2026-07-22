@@ -36,8 +36,9 @@ function mods(over?: { shift?: boolean; alt?: boolean; ctrl?: boolean; meta?: bo
  * surface the contracts runner should reach into). */
 function liveDocAdapter(editor: Editor): CanvasDocument {
   return {
-    pages: [], shapes: [], bindings: [],
+    pages: [], shapes: [], bindings: [], assets: [],
     byId: { get: (id: string) => editor.doc.getShape(id) } as unknown as CanvasDocument['byId'],
+    assetById: new Map(),
   }
 }
 

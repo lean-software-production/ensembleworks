@@ -23,14 +23,21 @@ export function loadModel(doc: CanvasDoc, model: CanvasDocument): void {
   for (const s of ordered) doc.reparent(s.id, s.parentId)
   for (const p of model.pages) doc.putPage(p)
   for (const b of model.bindings) doc.putBinding(b)
+  for (const a of model.assets) doc.putAsset(a)
 }
 
-// Dump the CanvasDoc back to a pure model document, including pages and
-// bindings (A1). The output is only invariant-clean once all putShape+reparent
+// Dump the CanvasDoc back to a pure model document, including pages, bindings
+// and assets (A1). The output is only invariant-clean once all putShape+reparent
 // pairs of a batch have completed: dumped mid-batch, transitional states may
 // contain parentIds naming shapes not yet present.
+//
+// Wiring assets through here is load-bearing beyond this module:
+// toolContext.snapshot() IS dumpModel(editor.doc), so every ShapeBody's
+// snapshot prop carries assets/assetById once this line does — the
+// ImageShape renderer (Task R1) resolves assetId -> src off it with no new
+// prop-threading.
 export function dumpModel(doc: CanvasDoc): CanvasDocument {
-  return makeDocument({ pages: doc.listPages(), shapes: doc.listShapes(), bindings: doc.listBindings() })
+  return makeDocument({ pages: doc.listPages(), shapes: doc.listShapes(), bindings: doc.listBindings(), assets: doc.listAssets() })
 }
 
 // Shallowest-first so a child is never inserted before its parent. JS's Array

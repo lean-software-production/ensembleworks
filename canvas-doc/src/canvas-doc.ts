@@ -1,4 +1,4 @@
-import type { Binding, Page, RepairOp, Shape, ShapeKind } from '@ensembleworks/canvas-model'
+import type { Asset, Binding, Page, RepairOp, Shape, ShapeKind } from '@ensembleworks/canvas-model'
 
 /** Result of applying a remote update. `pending` is true when some received
  * ops depend on history this doc hasn't seen yet — the caller should follow
@@ -113,6 +113,18 @@ export interface CanvasDoc {
   /** Silent no-op if the page id is absent. */
   deletePage(id: string): void
   listPages(): Page[]
+  /**
+   * Upsert an asset by id into the top-level assets map. Plain upsert, like
+   * putBinding/putPage — NO doc-boundary validation gate here (unlike
+   * putShape/updateProps): the validation lives in the PutAsset intent
+   * (canvas-editor), not at this boundary. NO deleteAsset (deliberate, this
+   * cycle): an undone image leaves its asset as harmless orphan garbage,
+   * matching tldraw's own behavior of never GC-ing assets on undo.
+   */
+  putAsset(asset: Asset): void
+  getAsset(id: string): Asset | undefined
+  /** Deterministic order: a pure function of converged state (sorted by id). */
+  listAssets(): Asset[]
   exportSnapshot(): Uint8Array
   /**
    * Without sinceVersion: exports the whole history (as before). With

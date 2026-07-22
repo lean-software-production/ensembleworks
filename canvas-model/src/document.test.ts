@@ -84,4 +84,22 @@ assert.deepEqual(descendantsOf(cyclic, 'shape:a').map((s) => s.id), ['shape:b'])
   assert.equal(r.ok, false, 'a missing id must be rejected')
 }
 
+// --- Task A1 (2026-07-22 assets/image sub-cycle): makeDocument carries assets ---
+
+// makeDocument accepts an `assets` array and builds `.assets`/`.assetById` off it.
+{
+  const a: any = { id: 'asset:a', type: 'image', props: { src: '/uploads/x' }, meta: {} }
+  const withAssets = makeDocument({ pages: [], shapes: [], bindings: [], assets: [a] } as any)
+  assert.deepEqual((withAssets as any).assets, [a], 'CanvasDocument.assets carries the input array')
+  assert.equal((withAssets as any).assetById.get('asset:a'), a, 'assetById resolves the same asset by id')
+}
+
+// makeDocument with NO `assets` argument still compiles/works (default []) —
+// every existing caller (repair.ts, fixtures) must keep working unchanged.
+{
+  const noAssets = makeDocument({ pages: [], shapes: [], bindings: [] })
+  assert.deepEqual((noAssets as any).assets, [], 'assets defaults to [] when omitted')
+  assert.equal((noAssets as any).assetById.size, 0, 'assetById is empty when assets is omitted')
+}
+
 console.log('ok: document')

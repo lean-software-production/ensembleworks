@@ -71,14 +71,20 @@ export interface CanvasDocument {
   readonly pages: readonly Page[]
   readonly shapes: readonly Shape[]
   readonly bindings: readonly Binding[]
+  readonly assets: readonly Asset[]
   /** id → shape, built once at construction. */
   readonly byId: ReadonlyMap<string, Shape>
+  /** id → asset, built once at construction (mirror byId). */
+  readonly assetById: ReadonlyMap<string, Asset>
 }
 
 export function makeDocument(input: {
   pages: readonly Page[]
   shapes: readonly Shape[]
   bindings: readonly Binding[]
+  // Defaults to [] so every pre-existing caller (repair.ts,
+  // applyRepairToModel, fixtures) keeps compiling unchanged — see A1.
+  assets?: readonly Asset[]
 }): CanvasDocument {
   // byId under DUPLICATE ids (reachable via the offline delete+recreate
   // reconnect race — see invariants.ts's uniqueIds rule): keep the CONTENT
@@ -101,7 +107,19 @@ export function makeDocument(input: {
     if (!prev) byId.set(s.id, s)
     else if (stableStringify(s) < stableStringify(prev)) byId.set(s.id, s)
   }
-  return { pages: input.pages, shapes: input.shapes, bindings: input.bindings, byId }
+  // Same dedupe rule as byId, for consistency — dups are not expected for
+  // assets (the assets map is keyed by id, so listAssets() output already
+  // carries one entry per id), but a caller-built `assets` array is not
+  // guaranteed unique, so this stays a content-stable tie-break rather than
+  // a traversal-order-dependent last-wins.
+  const assets = input.assets ?? []
+  const assetById = new Map<string, Asset>()
+  for (const a of assets) {
+    const prev = assetById.get(a.id)
+    if (!prev) assetById.set(a.id, a)
+    else if (stableStringify(a) < stableStringify(prev)) assetById.set(a.id, a)
+  }
+  return { pages: input.pages, shapes: input.shapes, bindings: input.bindings, assets, byId, assetById }
 }
 
 // Accessors return fresh (mutable) arrays built via filter.

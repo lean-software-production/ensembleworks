@@ -2,7 +2,7 @@
 // __dirname, which bun build --compile can't embed — breaks the standalone binary
 // wherever node_modules isn't present. /base64 inlines the wasm as a JS string.
 import { LoroDoc, VersionVector, type LoroMap, type LoroTree, type LoroTreeNode } from 'loro-crdt/base64'
-import { canonicalPageId, pageAncestorId, repairPlan, stableStringify, validateShape, SHAPE_KINDS, type Binding, type Page, type RepairOp, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
+import { canonicalPageId, pageAncestorId, repairPlan, stableStringify, validateShape, SHAPE_KINDS, type Asset, type Binding, type Page, type RepairOp, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
 import { dumpModel } from './bridge.js'
 import type { CanvasDoc, ImportResult, InvalidWrite, InvalidWriteHandler } from './canvas-doc.js'
 
@@ -446,10 +446,12 @@ export class LoroCanvasDoc implements CanvasDoc {
     t.insert(0, text)
   }
 
-  // Top-level LoroMaps keyed by id (bindings/pages are not tree-shaped, so a
-  // flat map is the natural container — see A1 in the phase-2 plan).
+  // Top-level LoroMaps keyed by id (bindings/pages/assets are not tree-shaped,
+  // so a flat map is the natural container — see A1 in the phase-2 plan, and
+  // the 2026-07-22 assets/image sub-cycle's A1 for the assets map itself).
   private bindings(): LoroMap { return this.doc.getMap('bindings') }
   private pages(): LoroMap { return this.doc.getMap('pages') }
+  private assets(): LoroMap { return this.doc.getMap('assets') }
 
   putBinding(b: Binding): void { this.bindings().set(b.id, b as any) }
   deleteBinding(id: string): void {
@@ -468,6 +470,22 @@ export class LoroCanvasDoc implements CanvasDoc {
   listPages(): Page[] {
     const m = this.pages()
     return m.keys().map((k) => m.get(k) as Page).filter(Boolean)
+  }
+
+  // No doc-boundary validation gate here — plain upsert, exactly like
+  // putBinding/putPage (which do not gate either). The untrusted-data
+  // validation gate lives in canvas-editor's PutAsset intent
+  // (assetSchema.safeParse), not at this boundary. NO deleteAsset: an undone
+  // image leaves its asset as harmless orphan garbage (tldraw parity, D-3).
+  putAsset(a: Asset): void { this.assets().set(a.id, a as any) }
+  getAsset(id: string): Asset | undefined { return (this.assets().get(id) as Asset | undefined) ?? undefined }
+  // Order comes from LoroMap.keys(), which converges SORTED (same rule
+  // listPages/listBindings rely on — see repair.test.ts's note on
+  // dumpModel's page order) — deterministic across peers/reloads without an
+  // explicit sort.
+  listAssets(): Asset[] {
+    const m = this.assets()
+    return m.keys().map((k) => m.get(k) as Asset).filter(Boolean)
   }
 
   exportSnapshot(): Uint8Array { return this.doc.export({ mode: 'snapshot' }) }
