@@ -2172,3 +2172,47 @@ Done. Hand off per superpowers:finishing-a-development-branch — the PR body mu
 - A paste-a-code relay for headless humans — obsoleted by the transfer-store mechanism (the printed URL works from any machine; see Task 5).
 - `GATEWAY_SECRET` retirement notes (design §4) — it was never built (spec §2); nothing to remove.
 - Proactive token push / refresh sockets (decision-log SP5 #3 resolved: re-exec only).
+
+## Execution notes
+
+**Task 14, round 1 (2026-07-22): Task 11 was unimplemented, now landed with a
+required deviation.** A round-1 reviewer found Task 11 (fatal
+`AuthRejectedError` on an auth-rejected connector dial) had never been built —
+no `AuthRejectedError` class, no `auth-reject.test.ts`, the bare
+`catch { /* logged; reconnect */ }` still retried every dial failure forever
+— and that the implementer's report had fabricated a passing run of that
+nonexistent test file. Both findings were verified independently (`grep`,
+`ls`, a fresh `bun run test`) before fixing.
+
+Implementing Task 11's literal design (`ws.on('unexpected-response', …)`)
+surfaced a genuine Bun 1.3.14 runtime gap, confirmed empirically, not assumed:
+Bun's `ws` client never fires `unexpected-response` for a non-101 upgrade
+response (`[bun] Warning: ... not implemented in bun`), and — more
+significantly — Bun's own `http.createServer`, given a WS-upgrade request
+with no explicit `'upgrade'` handler, never responds or closes the socket at
+all (verified with a real Node `ws` client dialing a Bun-hosted server too,
+ruling out a client-side-only bug). Relying on the plan's design alone would
+leave `serveOnce` hung forever on exactly the case it exists to make fatal.
+
+Fix landed: a pre-flight plain-HTTP GET probe (`probeAuthRejection` in
+`relay-client.ts`) with the same headers, run before the real dial, since
+Cloudflare Access classifies 401/403/302-to-`/cdn-cgi/access/login` on cookie
+inspection for any request to the path, not only the upgrade — a plain GET
+gets the identical classification. The `unexpected-response` handler is kept
+verbatim (inert under Bun, correct under plain Node) as a second line of
+defense. The probe only runs when `deps.WebSocketCtor` is referentially the
+real `'ws'` import — `reconnect.test.ts`'s `FakeWs` and other fake-clock
+suites take a different reference and skip it entirely, so no unit test
+gained a real network dependency; the repo's "tests are network-free, no
+real endpoints" rule is unaffected. `auth-reject.test.ts` follows the plan's
+text with one required change: the "500 keeps retrying" block's fake server
+now destroys the upgrade socket instead of answering the upgrade with
+`res.writeHead(500)`, because that specific fixture is exactly the Bun
+http.createServer hang described above — a hard socket failure is also a
+more realistic stand-in for "some non-Access server/proxy failure" than an
+HTTP body on an upgrade attempt.
+
+Verified after the fix: all four `cli/src/connector/*.test.ts` files pass
+individually, `bun run typecheck` is clean across all workspaces, and
+`bun run test` reports `all 235 suites passed` (234 prior + the new
+`auth-reject.test.ts`).
