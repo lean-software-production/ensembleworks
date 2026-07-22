@@ -16,6 +16,7 @@ export const CANVAS_EDITOR_VERSION = 1 as const
 
 export * from './intents.js'
 export * from './editor.js'
+export * from './clipboard-intents.js'
 export * from './input.js'
 export * from './script.js'
 export * from './camera.js'
