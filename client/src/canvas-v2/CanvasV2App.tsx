@@ -103,6 +103,7 @@ import {
 	createToolContext,
 	duplicateSelectionIntents,
 	pasteIntents,
+	reorderSelectionIntents,
 	type InputEvent,
 	type Intent,
 	type KeyInputEvent,
@@ -148,6 +149,7 @@ import {
 	type ToolStates,
 } from './tool-loop.js'
 import { clipboardShortcut, readClipboardText, writeClipboardText } from './clipboard-dom.js'
+import { reorderShortcut } from './reorder-dom.js'
 
 /** How long an embed (terminal/iframe/…) may sit off-screen before
  * EmbedLayer suspends it — see embedLifecycle.ts's `suspendAfterTicks` doc.
@@ -854,6 +856,23 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					const intents = duplicateSelectionIntents(editor)
 					if (intents.length > 0) editor.applyAll(intents)
 				}
+				return true
+			}
+			// Bracket-key Arrange shortcuts (Task D1, D-6) — bring-forward/
+			// send-backward/bring-to-front/send-to-back. The editingId===null
+			// gate already happened above, so `reorderShortcut` here is the pure
+			// key->op mapping only (also independently unit-tested DOM-free in
+			// reorder-dom.test.ts). `reorderSelectionIntents` (canvas-editor's
+			// E2) computes the whole batch; applying it via a single
+			// `editor.applyAll` is what makes one reorder ONE commit / ONE undo
+			// entry (E1/E2's own doc comments). No `preventDefault`: bare
+			// brackets have no competing native canvas action when
+			// editingId===null, consistent with Delete/Escape/undo/clipboard
+			// just above.
+			const reorder = reorderShortcut(event, editingId)
+			if (reorder) {
+				const intents = reorderSelectionIntents(editor, reorder.op)
+				if (intents.length > 0) editor.applyAll(intents)
 				return true
 			}
 			return false
