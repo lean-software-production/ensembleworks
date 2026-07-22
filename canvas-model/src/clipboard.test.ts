@@ -1,6 +1,6 @@
 // Run: bun src/clipboard.test.ts
 import assert from 'node:assert/strict'
-import { serializeSelection, encodeClipboard, decodeClipboard } from './clipboard.js'
+import { serializeSelection, encodeClipboard, decodeClipboard, cloneWithNewIds } from './clipboard.js'
 import type { Shape } from './shape.js'
 import type { Binding } from './document.js'
 
@@ -263,8 +263,149 @@ test('deeply nested junk props on an otherwise-invalid shape does not throw', ()
   assert.deepEqual(result.shapes, [])
 })
 
+console.log('ok: clipboard (decodeClipboard / encodeClipboard security gate)')
+
+// ============================================================================
+// Task C3 — cloneWithNewIds (pure id/parent/binding remap + offset + cycle-break)
+// ============================================================================
+// cloneWithNewIds takes VALIDATED shapes+bindings (C2's output — every shape
+// already passed validateShape, every binding already resolves both endpoints
+// within the set) plus an injected mint(i) and turns them into a brand-new,
+// self-consistent set: fresh ids throughout, parentId/binding endpoints
+// rewritten through the old->new map, a shape whose parent is outside the set
+// (or whose parent chain cycles without ever escaping the set) re-rooted to
+// rootParentId, and the position offset applied ONLY to re-rooted (root)
+// shapes — a child rides its parent's move via parentId, so offsetting the
+// child's own x/y too would double-move it.
+const cFrame: Shape = {
+  id: 'shape:cf', kind: 'frame', parentId: 'page:p', index: 'a1',
+  x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {},
+  props: { name: 'Frame', w: 400, h: 300 },
+}
+const cChildA: Shape = {
+  id: 'shape:ca', kind: 'note', parentId: 'shape:cf', index: 'a1',
+  x: 10, y: 10, rotation: 0, isLocked: false, opacity: 1, meta: {},
+  props: { color: 'yellow' },
+}
+const cChildB: Shape = {
+  id: 'shape:cb', kind: 'note', parentId: 'shape:cf', index: 'a2',
+  x: 20, y: 20, rotation: 0, isLocked: false, opacity: 1, meta: {},
+  props: { color: 'blue' },
+}
+const cBinding: Binding = {
+  id: 'binding:cint', fromId: 'shape:ca', toId: 'shape:cb', props: {}, meta: {},
+}
+const cShapes = [cFrame, cChildA, cChildB]
+const cBindings = [cBinding]
+const stableMint = (i: number) => 'new:' + i
+
+test('new shape ids are mint(i) in stable input order, all unique, none reuse an old id', () => {
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  assert.deepEqual(cloned.shapes.map((s) => s.id), ['new:0', 'new:1', 'new:2'])
+  const oldIds = new Set(cShapes.map((s) => s.id))
+  for (const s of cloned.shapes) assert.equal(oldIds.has(s.id), false, `${s.id} must not reuse an old id`)
+})
+
+test("a child's new parentId points at the parent's NEW id, not the old one", () => {
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  const [newFrame, newChildA, newChildB] = cloned.shapes
+  assert.equal(newChildA.parentId, newFrame.id)
+  assert.equal(newChildB.parentId, newFrame.id)
+})
+
+test('the frame (parent = page, outside the set) is re-rooted to rootParentId', () => {
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  assert.equal(cloned.shapes[0].parentId, 'page:p')
+})
+
+test("rootIds contains exactly the frame's new id, nothing else", () => {
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  assert.deepEqual(cloned.rootIds, [cloned.shapes[0].id])
+})
+
+test('root shape x/y shifted by the offset', () => {
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  assert.equal(cloned.shapes[0].x, cFrame.x + 20)
+  assert.equal(cloned.shapes[0].y, cFrame.y + 20)
+})
+
+test('child x/y unchanged — offset applies to roots only, children ride the parent', () => {
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  assert.equal(cloned.shapes[1].x, cChildA.x)
+  assert.equal(cloned.shapes[1].y, cChildA.y)
+  assert.equal(cloned.shapes[2].x, cChildB.x)
+  assert.equal(cloned.shapes[2].y, cChildB.y)
+})
+
+test("binding fromId/toId rewritten to the children's NEW ids", () => {
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  assert.equal(cloned.bindings.length, 1)
+  assert.equal(cloned.bindings[0].fromId, cloned.shapes[1].id)
+  assert.equal(cloned.bindings[0].toId, cloned.shapes[2].id)
+})
+
+test('the binding itself gets a fresh minted id, distinct from every shape id', () => {
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, stableMint, 'page:p', { x: 20, y: 20 })
+  assert.notEqual(cloned.bindings[0].id, cBinding.id)
+  const shapeIds = new Set<string>(cloned.shapes.map((s) => s.id))
+  assert.equal(shapeIds.has(cloned.bindings[0].id), false)
+})
+
+test('same input + same mint stream => identical output (replay-deterministic)', () => {
+  const first = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, (i) => 'det:' + i, 'page:p', { x: 20, y: 20 })
+  const second = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, (i) => 'det:' + i, 'page:p', { x: 20, y: 20 })
+  assert.deepEqual(first, second)
+})
+
+// The E1 mint scheme folds ONE random() draw + a per-node batch index; under a
+// CONSTANT random (production tests inject FIXED_RANDOM), only the index
+// separates nodes. This proves cloneWithNewIds threads mint's `i` argument
+// rather than, say, calling mint() with a fixed index or ignoring it.
+test('a mint constant except for the index salt still yields N distinct shape ids', () => {
+  const constantSaltedMint = (i: number) => 'const-9000-' + i
+  const cloned = cloneWithNewIds({ shapes: cShapes, bindings: cBindings }, constantSaltedMint, 'page:p', { x: 20, y: 20 })
+  const ids = cloned.shapes.map((s) => s.id)
+  assert.equal(new Set(ids).size, ids.length)
+  assert.equal(ids.length, 3)
+})
+
+const orphanRef: Shape = {
+  id: 'shape:orphanref', kind: 'note', parentId: 'shape:not-in-the-set', index: 'a1',
+  x: 5, y: 5, rotation: 0, isLocked: false, opacity: 1, meta: {},
+  props: { color: 'green' },
+}
+test('a shape whose parent is a SHAPE outside the input set is re-rooted, not left dangling', () => {
+  const cloned = cloneWithNewIds({ shapes: [orphanRef], bindings: [] }, stableMint, 'page:p', { x: 20, y: 20 })
+  assert.equal(cloned.shapes[0].parentId, 'page:p')
+  assert.deepEqual(cloned.rootIds, [cloned.shapes[0].id])
+  assert.equal(cloned.shapes[0].x, orphanRef.x + 20, 're-rooted (via out-of-set parent) shapes are roots and get the offset too')
+})
+
+// D-2's promise: "cyclic parentId among the payload is broken in the clone
+// step by re-rooting a shape whose ancestor chain doesn't terminate at a
+// payload root." A naive single-hop "is parentId in the id map" check does
+// NOT catch this — both cycleA and cycleB's parents ARE in the map (each
+// other) — so this pins the deeper ancestor-chain walk.
+const cycleA: Shape = {
+  id: 'shape:cyca', kind: 'note', parentId: 'shape:cycb', index: 'a1',
+  x: 1, y: 1, rotation: 0, isLocked: false, opacity: 1, meta: {},
+  props: { color: 'red' },
+}
+const cycleB: Shape = {
+  id: 'shape:cycb', kind: 'note', parentId: 'shape:cyca', index: 'a1',
+  x: 2, y: 2, rotation: 0, isLocked: false, opacity: 1, meta: {},
+  props: { color: 'blue' },
+}
+test('a mutual (2-node) parentId cycle among the payload is broken: both members are re-rooted', () => {
+  const cloned = cloneWithNewIds({ shapes: [cycleA, cycleB], bindings: [] }, stableMint, 'page:p', { x: 20, y: 20 })
+  for (const s of cloned.shapes) {
+    assert.equal(s.parentId, 'page:p', `${s.id} must be re-rooted directly, not left pointing at the other cycle member`)
+  }
+  assert.deepEqual(cloned.rootIds.slice().sort(), cloned.shapes.map((s) => s.id).slice().sort())
+})
+
 if (failures > 0) {
-  console.error(`\n${failures} clipboard security test(s) FAILED`)
+  console.error(`\n${failures} clipboard test(s) FAILED`)
   process.exit(1)
 }
-console.log('ok: clipboard (decodeClipboard / encodeClipboard security gate)')
+console.log('ok: clipboard (cloneWithNewIds)')

@@ -1,5 +1,85 @@
 import { validateShape, type Shape } from './shape.js'
-import { bindingSchema, type Binding } from './document.js'
+import { bindingSchema, type Binding, makeDocument } from './document.js'
+import { checkInvariants } from './invariants.js'
+import type { ShapeId, BindingId, ParentId } from './ids.js'
+
+// Turns VALIDATED shapes+bindings (C2's output: every shape already passed
+// validateShape; every binding already resolves both endpoints within the
+// set) into a brand-new, self-consistent set ready for the write boundary:
+// fresh ids throughout, every parentId/binding-endpoint rewritten through the
+// old->new map, and the position offset applied only to shapes that come out
+// as ROOTS.
+//
+// `mint(i)` is called once per node, in STABLE order (shapes first in their
+// input-array order, then bindings, continuing the same index) — the index
+// argument is the uniqueness salt D-3 documents: production injects one
+// `editor.random()` draw folded with this index, so N nodes get N distinct
+// ids even under a CONSTANT random stream (paste has no pointer event to
+// salt from). `mint` is the ONLY source of ids here — this file never reads
+// Math.random or any clock, keeping the clean-room boundary.
+//
+// Cycle-breaking (D-2: "cyclic parentId among the payload is broken in the
+// clone step by re-rooting a shape whose ancestor chain doesn't terminate at
+// a payload root") needs more than a single-hop "is parentId in the map?"
+// check: two shapes that point at EACH OTHER both have a parent that IS in
+// the map, so a naive per-shape lookup would remap them straight back into
+// the same cycle with new ids. Instead of hand-rolling a second cycle
+// detector, this reuses invariants.ts's `checkInvariants` — the same
+// memoized parent-chain walk canvas-doc's repair pass already trusts — over
+// a throwaway CanvasDocument built from ONLY the input shapes (no pages, no
+// bindings: we want its noCycles rule and nothing else). Any shape it flags
+// noCycles for (a cycle member, or a shape descending from one — the walk
+// can't tell those apart mid-cycle, and repair.ts already treats both the
+// same way in production) is forced to re-root here regardless of what its
+// old parentId was.
+export function cloneWithNewIds(
+  input: { shapes: Shape[]; bindings: Binding[] },
+  mint: (i: number) => string,
+  rootParentId: string,
+  offset: { x: number; y: number },
+): { shapes: Shape[]; bindings: Binding[]; rootIds: string[] } {
+  const idMap = new Map<string, string>()
+  input.shapes.forEach((s, i) => idMap.set(s.id, mint(i)))
+
+  const cycleDoc = makeDocument({ pages: [], shapes: input.shapes, bindings: [] })
+  const cyclicIds = new Set<string>(
+    checkInvariants(cycleDoc)
+      .filter((v) => v.rule === 'noCycles')
+      .map((v) => v.id),
+  )
+
+  const rootIds: string[] = []
+  const shapes: Shape[] = input.shapes.map((s) => {
+    const newId = idMap.get(s.id) as ShapeId
+    // A cyclic (or cycle-descending) shape is force-rooted regardless of
+    // whether its old parentId happens to resolve through idMap — that
+    // resolution is exactly what would put it right back in the cycle.
+    const mappedParentId = cyclicIds.has(s.id) ? undefined : idMap.get(s.parentId)
+    const isRoot = mappedParentId === undefined
+    if (isRoot) rootIds.push(newId)
+    return {
+      ...s,
+      id: newId,
+      parentId: (isRoot ? rootParentId : mappedParentId) as ParentId,
+      x: isRoot ? s.x + offset.x : s.x,
+      y: isRoot ? s.y + offset.y : s.y,
+    }
+  })
+
+  // Both endpoints are guaranteed present (C1/C2 already dropped bindings
+  // pointing outside the copied set) — the undefined check is assert-and-skip
+  // defense-in-depth, not an expected path: a binding that somehow slipped
+  // through with an endpoint outside `input.shapes` is dropped here rather
+  // than emitted half-dangling with a stale endpoint id.
+  const bindings: Binding[] = input.bindings.flatMap((b, j) => {
+    const fromId = idMap.get(b.fromId)
+    const toId = idMap.get(b.toId)
+    if (fromId === undefined || toId === undefined) return []
+    return [{ ...b, id: mint(input.shapes.length + j) as BindingId, fromId: fromId as ShapeId, toId: toId as ShapeId }]
+  })
+
+  return { shapes, bindings, rootIds }
+}
 
 export function encodeClipboard(payload: ClipboardPayload): string {
   return JSON.stringify(payload)
