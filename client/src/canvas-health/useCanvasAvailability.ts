@@ -1,10 +1,13 @@
 /**
  * The single "can I interact with this canvas right now?" state.
  *
- *   interactive ⇔ (every BLOCKING transport is healthy) ∧ (this tab holds the lock)
+ *   interactive ⇔ every BLOCKING transport is healthy
  *
- * Combines the probe and the lock through the pure `availability` reducer —
- * this file adds no decisions of its own.
+ * Single-tab enforcement is NOT here: it happens above this hook, in
+ * SingleTabGate, which does not mount the app at all without the lock.
+ *
+ * Reads the probe through the pure `availability` reducer — this file adds no
+ * decisions of its own.
  * Design: docs/plans/2026-07-22-connection-health-modal-design.md §2.
  */
 import { useEffect, useState } from 'react'
@@ -12,7 +15,6 @@ import { scheduler } from '../kernel/scheduler'
 import type { Availability, HealthState } from './connectionHealth'
 import { availability, needsFastClock } from './connectionHealth'
 import type { Thresholds } from './constants'
-import { useCanvasLock } from './useCanvasLock'
 import { useConnectionHealth, type StoreStatus } from './useConnectionHealth'
 
 /** How often the "degrading (Ns)" / "Retrying in N…" readouts re-render. */
@@ -24,12 +26,9 @@ export interface CanvasAvailability extends Availability {
 	nextProbeAt: number
 	/** `Date.now()` as of the last UI clock tick — pass to the pure renderers. */
 	now: number
-	requestTakeover: () => void
 }
 
 export function useCanvasAvailability(input: {
-	roomId: string
-	userId: string
 	store: StoreStatus
 	livekitStatus: string
 }): CanvasAvailability {
@@ -37,7 +36,6 @@ export function useCanvasAvailability(input: {
 		store: input.store,
 		livekitStatus: input.livekitStatus,
 	})
-	const { hasLock, requestTakeover } = useCanvasLock(input.roomId, input.userId)
 
 	// A transport trips on ELAPSED time, not on an event, so the state must be
 	// re-evaluated between probe ticks — otherwise a threshold longer than the
@@ -62,18 +60,17 @@ export function useCanvasAvailability(input: {
 	// Gating this off in the common fully-healthy case avoids re-rendering the
 	// component wrapping the whole canvas 4x/second to animate nothing. Do
 	// not "simplify" this back to an unconditional interval.
-	const fastClock = needsFastClock(health, hasLock)
+	const fastClock = needsFastClock(health)
 	useEffect(() => {
 		if (!fastClock) return
 		return scheduler.every(CLOCK_TICK_MS, () => setNow(Date.now()))
 	}, [fastClock])
 
 	return {
-		...availability({ health, now, thresholds, hasLock }),
+		...availability({ health, now, thresholds }),
 		health,
 		thresholds,
 		nextProbeAt,
 		now,
-		requestTakeover,
 	}
 }

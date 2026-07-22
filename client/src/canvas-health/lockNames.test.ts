@@ -1,7 +1,7 @@
 /**
  * Run: bun client/src/canvas-health/lockNames.test.ts
  *
- * The lock hook is browser-API lifecycle (navigator.locks + BroadcastChannel)
+ * The lock hook is browser-API lifecycle (navigator.locks)
  * and is validated by the manual smoke (design §8). What IS worth pinning is
  * the channel/lock NAMING: the scope is (room, user), so two real
  * collaborators must never contend, and a room id containing a separator must
