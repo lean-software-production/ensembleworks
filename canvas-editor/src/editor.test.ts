@@ -698,4 +698,61 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: UpdateProps shallow-merges props and silently no-ops on an unknown id')
 }
 
+// ============================================================================
+// 22. SetStyle (Task E1): batch style-patch across the WHOLE selection —
+//     shallow-merges `props` into EACH id's props map (like UpdateProps, but
+//     multi-id) AND sets each id's ENVELOPE `opacity` (which UpdateProps
+//     cannot reach — canvas-doc's updateProps only ever merges the props
+//     map, see canvas-doc/src/canvas-doc.ts's updateProps contract comment).
+//     Full-shape-inverse convention (same as UpdateProps): undo restores the
+//     COMPLETE pre-mutation shape (props AND opacity) for every id, in ONE
+//     UndoEntry per batch (one doc.commit()). An unresolved id is SKIPPED,
+//     never thrown (applyAll TOLERANCE CONTRACT).
+// ============================================================================
+{
+  const { doc, editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { props: { color: 'red', kept: 'a-stays' }, opacity: 1 }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b', { props: { color: 'red', kept: 'b-stays' }, opacity: 1 }) })
+
+  let commits = 0
+  doc.subscribeLocalUpdates(() => { commits += 1 })
+
+  editor.applyAll([{ type: 'SetStyle', ids: ['shape:a', 'shape:b'], props: { color: 'blue' }, opacity: 0.5 }])
+
+  assert.equal(commits, 1, 'SetStyle over a two-id batch is ONE doc.commit(), not one per id')
+  assert.equal(doc.getShape('shape:a')!.props.color, 'blue', 'shape a got the prop patch')
+  assert.equal(doc.getShape('shape:b')!.props.color, 'blue', 'shape b got the SAME prop patch — batch, not single-id (kills the ids[0]-only mutant)')
+  assert.equal((doc.getShape('shape:a')!.props as any).kept, 'a-stays', 'shallow merge: an unnamed pre-existing prop key survives (not an overwrite)')
+  assert.equal((doc.getShape('shape:b')!.props as any).kept, 'b-stays')
+  assert.equal(doc.getShape('shape:a')!.opacity, 0.5, 'shape a got the ENVELOPE opacity write — UpdateProps cannot reach this field')
+  assert.equal(doc.getShape('shape:b')!.opacity, 0.5, 'shape b got the envelope opacity write too')
+
+  // Unresolved id: skipped, never thrown -- and since nothing resolved,
+  // docMutated is false, so it must not occupy a commit either.
+  const commitsBeforeGhost = commits
+  assert.doesNotThrow(
+    () => editor.applyAll([{ type: 'SetStyle', ids: ['shape:ghost'], props: { color: 'red' } }]),
+    'SetStyle over an unresolved id does not throw',
+  )
+  assert.equal(commits, commitsBeforeGhost, 'an all-unresolved SetStyle batch does not commit')
+
+  // Undo/redo round trip: ONE undo step restores BOTH shapes' full
+  // pre-image (props AND opacity) -- kills a no-undo mutant (handler
+  // returns undo:[]) and an opacity-dropped mutant (handler merges props
+  // but never captures/restores the envelope field).
+  editor.undo()
+  assert.equal(doc.getShape('shape:a')!.props.color, 'red', "undo restores shape a's prior color")
+  assert.equal(doc.getShape('shape:a')!.opacity, 1, "undo restores shape a's prior opacity")
+  assert.equal(doc.getShape('shape:b')!.props.color, 'red', "undo restores shape b's prior color in the SAME step")
+  assert.equal(doc.getShape('shape:b')!.opacity, 1, "undo restores shape b's prior opacity in the same step")
+
+  editor.redo()
+  assert.equal(doc.getShape('shape:a')!.props.color, 'blue', 're-applies the prop patch')
+  assert.equal(doc.getShape('shape:a')!.opacity, 0.5, 're-applies the opacity write')
+  assert.equal(doc.getShape('shape:b')!.props.color, 'blue')
+  assert.equal(doc.getShape('shape:b')!.opacity, 0.5)
+
+  console.log('ok: SetStyle batch-patches props + envelope opacity across a selection, with tolerant unresolved ids and full-batch undo/redo')
+}
+
 console.log('ok: canvas-editor editor + intents')

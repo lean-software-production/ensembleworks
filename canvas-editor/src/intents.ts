@@ -131,6 +131,25 @@ export interface SetText { readonly type: 'SetText'; readonly id: string; readon
  * see editor.ts's applyOne TOLERANCE CONTRACT): no throw, docMutated:false. */
 export interface UpdateProps { readonly type: 'UpdateProps'; readonly id: string; readonly props: Record<string, unknown> }
 
+/** Batch style write across a whole selection. Shallow-merges `props` into
+ * EACH id's props map (like UpdateProps, but multi-id) AND, when `opacity`
+ * is present, sets each id's ENVELOPE `opacity` — a field UpdateProps cannot
+ * reach because CanvasDoc.updateProps only ever merges the props map (see
+ * canvas-doc/src/canvas-doc.ts's updateProps contract comment). Per-id
+ * tolerant: an unresolved id is SKIPPED (the applyAll TOLERANCE CONTRACT),
+ * never thrown. The intent is DUMB about relevance — it applies the given
+ * patch to every id in `ids` regardless of shape kind; the PANEL (Task P4)
+ * decides which props a kind actually supports before emitting one of
+ * these. This is why SetStyle exists instead of extending UpdateProps:
+ * UpdateProps stays single-id and props-only, reserved for the ported
+ * embeds' own prop writes (Seam D). */
+export interface SetStyle {
+  readonly type: 'SetStyle'
+  readonly ids: readonly string[]
+  readonly props?: Record<string, unknown>
+  readonly opacity?: number
+}
+
 /** Begin drawing an arrow: puts `shape` (kind 'arrow') verbatim, exactly
  * like CreateShape, then — if `fromBinding` is present — puts a binding
  * pinning the arrow's START endpoint to `fromBinding.targetId` at
@@ -181,6 +200,7 @@ export type Intent =
   | DeleteShapes
   | SetText
   | UpdateProps
+  | SetStyle
   | StartArrow
   | CompleteArrow
   | SetCamera

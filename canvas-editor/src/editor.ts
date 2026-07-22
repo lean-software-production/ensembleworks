@@ -608,6 +608,34 @@ export class Editor {
         return { state, docMutated: true, stateChanged: false, undo, redo }
       }
 
+      case 'SetStyle': {
+        // Batch version of UpdateProps's full-shape-inverse convention (see
+        // that case above): for EACH id, read the pre-image, shallow-merge
+        // `props` and overwrite `opacity` when given, then putShape the
+        // whole next shape — a full putShape (not doc.updateProps) is what
+        // lets this intent reach the ENVELOPE opacity field, which
+        // updateProps's contract can never touch. Same tolerant per-id skip
+        // as Translate/Resize/Rotate (applyAll TOLERANCE CONTRACT): an
+        // unresolved id is dropped, never thrown.
+        let mutated = false
+        const undo: InverseOp[] = []
+        const redo: InverseOp[] = []
+        for (const id of intent.ids) {
+          const shape = this.doc.getShape(id)
+          if (!shape) continue
+          const next = {
+            ...shape,
+            props: intent.props ? { ...shape.props, ...intent.props } : shape.props,
+            opacity: intent.opacity ?? shape.opacity,
+          }
+          this.doc.putShape(next)
+          undo.push({ op: 'putShape', shape })
+          redo.push({ op: 'putShape', shape: next })
+          mutated = true
+        }
+        return { state, docMutated: mutated, stateChanged: false, undo, redo }
+      }
+
       case 'StartArrow': {
         // Malformed intent (kind !== 'arrow') is SKIPPED, not asserted: a
         // throw mid-batch would leak earlier intents' uncommitted mutations
