@@ -167,4 +167,114 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   console.log('ok: frame capture reparents only fully-contained root-level shapes')
 }
 
+// ============================================================================
+// 5. Task AS2 — armed `nextShapeStyle` (Task AS1's `SetNextStyle`) is read
+//    LIVE by the create tool and stamped onto the newly-created shape's
+//    props (and envelope opacity, when armed). Must never clobber the
+//    tool's own geometry (w/h) or envelope fields (id/parentId/index).
+// ============================================================================
+{
+  // Click-create path. Arm AFTER the tool is constructed, immediately before
+  // the gesture -- proves a LIVE read of editor.get().nextShapeStyle (like
+  // worldOf's live camera read), not a value captured at tool-construction
+  // time (mutant: "read a stale/captured style instead of live editor.get()").
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, 'geo')
+  editor.apply({ type: 'SetNextStyle', props: { color: 'blue', size: 'l' } })
+  const events = script().down(300, 300).up().events()
+  run(editor, tool, events)
+
+  const created = editor.doc.listShapes().find((s) => s.kind === 'geo')!
+  assert.equal(created.props.color, 'blue', 'armed color lands on the created shape')
+  assert.equal(created.props.size, 'l', 'armed size lands on the created shape')
+  // Geometry survives the armed-style merge (mutant: "armed props overwrite
+  // the whole props map").
+  const { w, h } = DEFAULT_SIZE.geo
+  assert.equal((created.props as { w: number }).w, w, 'armed style never clobbers the tool-computed w')
+  assert.equal((created.props as { h: number }).h, h, 'armed style never clobbers the tool-computed h')
+  // Envelope fields untouched by the armed style patch.
+  assert.equal(created.parentId, 'page:p', 'armed style never touches parentId')
+  assert.equal(created.index, 'a1', 'armed style never touches index')
+  assert.equal(created.rotation, 0, 'armed style never touches rotation')
+  assert.equal(created.isLocked, false, 'armed style never touches isLocked')
+  assert.equal(created.opacity, 1, 'no opacity armed -> default envelope opacity of 1')
+  console.log('ok: armed nextShapeStyle stamps color/size onto a click-created geo; geometry+envelope untouched')
+}
+
+{
+  // `opacity` is special: StylePanel arms it under the SAME flat
+  // `nextShapeStyle` record (Task AS1's SetNextStyle has no separate
+  // opacity field), but it is an ENVELOPE field on Shape, never a props key
+  // (style-axes.ts's `currentValue` reads shape.opacity directly and
+  // explicitly treats a props.opacity key as a decoy to ignore). The merge
+  // must split it out onto shape.opacity, not leave it sitting in props.
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, 'geo')
+  editor.apply({ type: 'SetNextStyle', props: { opacity: 0.5 } })
+  const events = script().down(300, 300).up().events()
+  run(editor, tool, events)
+
+  const created = editor.doc.listShapes().find((s) => s.kind === 'geo')!
+  assert.equal(created.opacity, 0.5, 'armed opacity lands on the envelope opacity field')
+  assert.equal((created.props as Record<string, unknown>).opacity, undefined, 'opacity must never leak into props -- it is envelope-only')
+  console.log('ok: armed opacity maps to the envelope opacity field, never props.opacity')
+}
+
+{
+  // Drag-create path reads the same live nextShapeStyle as click-create.
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, 'geo')
+  editor.apply({ type: 'SetNextStyle', props: { color: 'green' } })
+  const events = script().down(0, 0).move(100, 50).up().events()
+  run(editor, tool, events)
+
+  const s = editor.doc.listShapes()[0]!
+  assert.equal(s.props.color, 'green', 'drag-create also reads armed nextShapeStyle')
+  assert.equal((s.props as { w: number }).w, 100, 'drag-create geometry still wins over any armed props for the same key')
+  console.log('ok: drag-create also stamps armed nextShapeStyle onto the created shape')
+}
+
+{
+  // A stray geometry-shaped key smuggled into nextShapeStyle (should never
+  // happen from the real panel, but the merge order must be defensive) can
+  // never override the tool-computed w/h (mutant: "geometry overwrites
+  // armed props in the wrong order").
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, 'geo')
+  editor.apply({ type: 'SetNextStyle', props: { w: 999, h: 999, color: 'red' } })
+  const events = script().down(300, 300).up().events()
+  run(editor, tool, events)
+
+  const created = editor.doc.listShapes().find((s) => s.kind === 'geo')!
+  const { w, h } = DEFAULT_SIZE.geo
+  assert.equal((created.props as { w: number }).w, w, 'a stray w key in nextShapeStyle can never override tool-computed geometry')
+  assert.equal((created.props as { h: number }).h, h, 'a stray h key in nextShapeStyle can never override tool-computed geometry')
+  assert.equal(created.props.color, 'red', 'the real armed style key still lands')
+  console.log('ok: tool-computed geometry always wins over any armed props for the same key')
+}
+
+{
+  // Defensive: even if nextShapeStyle somehow carried a non-style,
+  // envelope-shaped key (should never happen through the real panel, whose
+  // armed axes are a fixed set -- see style-axes.ts), it must never corrupt
+  // the shape's envelope. Confined strictly to props (and opacity).
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, 'geo')
+  editor.apply({
+    type: 'SetNextStyle',
+    props: { parentId: 'shape:evil', id: 'shape:evil', index: 'zzzz', rotation: 99, isLocked: true, color: 'blue' },
+  })
+  const events = script().down(300, 300).up().events()
+  run(editor, tool, events)
+
+  const created = editor.doc.listShapes().find((s) => s.kind === 'geo')!
+  assert.equal(created.parentId, 'page:p', 'a stray parentId in nextShapeStyle can never corrupt the envelope parentId')
+  assert.notEqual(created.id, 'shape:evil', 'a stray id in nextShapeStyle can never corrupt the envelope id')
+  assert.equal(created.index, 'a1', 'a stray index in nextShapeStyle can never corrupt the envelope index')
+  assert.equal(created.rotation, 0, 'a stray rotation in nextShapeStyle can never corrupt the envelope rotation')
+  assert.equal(created.isLocked, false, 'a stray isLocked in nextShapeStyle can never corrupt the envelope isLocked')
+  assert.equal(created.props.color, 'blue', 'the real armed style key still lands')
+  console.log('ok: a non-style key smuggled into nextShapeStyle never corrupts the envelope')
+}
+
 console.log('ok: create tools (note/text/geo/frame) + frame capture')

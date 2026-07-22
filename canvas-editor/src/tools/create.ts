@@ -64,10 +64,36 @@ function propsFor(kind: CreateKind, w: number, h: number): Record<string, unknow
   return kind === 'note' ? {} : { w, h }
 }
 
-function makeShape(kind: CreateKind, id: string, pageId: string, x: number, y: number, w: number, h: number): Shape {
+// Task AS2 — stamp the ARMED style (Task AS1's `EditorState.nextShapeStyle`)
+// onto a newly-minted shape. `style` is read LIVE from `editor.get()` by the
+// caller (see `clickShape`/`dragShape` below) at the moment of creation, the
+// same purity posture as this tool's existing live `camera` read via
+// `worldOf` — it is never captured into `CreateState` (see the plan's
+// Decisions armed-style block: that was considered and rejected).
+//
+// `opacity` is special-cased out of `style` and onto the shape's ENVELOPE
+// `opacity` field, never `props.opacity`: `nextShapeStyle` is a single flat
+// record (`SetNextStyle` has no separate opacity field, unlike `SetStyle`),
+// but `opacity` itself is an envelope field on `Shape`, not a style axis —
+// style-axes.ts's `currentValue` reads `shape.opacity` directly and treats a
+// stray `props.opacity` key as a decoy to ignore, so leaving it in props
+// would silently produce a shape that never renders at its armed opacity.
+//
+// Merge order for the remaining style keys is (armed style, THEN geometry
+// props): `{ ...styleProps, ...propsFor(kind, w, h) }` — so `w`/`h` (and any
+// other geometry key `propsFor` ever grows) always win over a same-named
+// armed key. Style keys never touch anything outside `props`/`opacity` —
+// `id`/`parentId`/`index`/`rotation`/`isLocked` are computed here, not
+// spread from `style`.
+function makeShape(
+  kind: CreateKind, id: string, pageId: string, x: number, y: number, w: number, h: number,
+  style: Record<string, unknown>,
+): Shape {
+  const { opacity, ...styleProps } = style
   return {
     id, kind, parentId: pageId, index: 'a1', x, y, rotation: 0,
-    isLocked: false, opacity: 1, meta: {}, props: propsFor(kind, w, h),
+    isLocked: false, opacity: typeof opacity === 'number' ? opacity : 1, meta: {},
+    props: { ...styleProps, ...propsFor(kind, w, h) },
   } as Shape
 }
 
@@ -164,7 +190,7 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
   // which this clean-room model has no rendering/measurement to emulate).
   function clickShape(id: string, worldPt: { readonly x: number; readonly y: number }): Shape {
     const { w, h } = defaultSize(kind, pageId)
-    return makeShape(kind, id, pageId, worldPt.x - w / 2, worldPt.y - h / 2, w, h)
+    return makeShape(kind, id, pageId, worldPt.x - w / 2, worldPt.y - h / 2, w, h, editor.get().nextShapeStyle)
   }
 
   // DRAG-TO-SIZE placement: top-left at the drag rect's min corner (NOT
@@ -182,7 +208,7 @@ export function createCreateTool(ctx: ToolContext, kind: CreateKind): Tool<Creat
   function dragShape(id: string, a: { readonly x: number; readonly y: number }, b: { readonly x: number; readonly y: number }): Shape {
     const minX = Math.min(a.x, b.x), minY = Math.min(a.y, b.y)
     const w = Math.abs(b.x - a.x), h = Math.abs(b.y - a.y)
-    return makeShape(kind, id, pageId, minX, minY, w, h)
+    return makeShape(kind, id, pageId, minX, minY, w, h, editor.get().nextShapeStyle)
   }
 
   return {
