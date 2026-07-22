@@ -340,6 +340,37 @@ Tasks AS1–AS4. Design, verified against disk:
 | AS4 | browser contract `armed-style-applies-to-created-shape` + `selectedShapeIds` Obs | interaction-contracts + e2e + fsm-runner (YES/satisfies gate) | AS3 (and RED against un-landed AS2) | armed → created shape stays default color |
 | AS2 | create tool reads `nextShapeStyle` into new-shape props | canvas-editor/src/tools/ (YES) | AS1 | created shape ignores armed style |
 
+### Execution status — LANDED (2026-07-21/22)
+
+All fourteen core tasks landed and reviewed, plus three tasks not in the
+original table (added mid-execution and recorded here for honesty):
+
+| Task | Commit(s) |
+|---|---|
+| M1 | `4587cc7` + `552b01c` (provenance-comment fix) |
+| M2 | `d5f5a3d` |
+| E1 | `b13be4a` |
+| R1 | `c7daabe` |
+| R2 | `1e02f61` |
+| R3 | `acaf9f3` |
+| P1 | `0e28975` |
+| **M3** (unplanned) — single-source `STYLE_VALUE_SETS` from the model's Zod enums so the panel can't drift from what validates | `a2cf796` + `937d32a` |
+| P2 | `0607987` |
+| P3 | `eafbc81` |
+| P4 | `42743b7` |
+| **panel edge-clip fix** (unplanned) — `clampPanelPosition` clamps the panel's edges, not its anchor; also capped height | `e2f41d6` |
+| AS1 | `b618f40` |
+| AS3 | `c90d181` |
+| AS4 | `5b5f39d` |
+| AS2 | `09cc352` |
+| **armed-style whitelist** (unplanned) — `makeShape` filters `nextShapeStyle` to known style axes so junk keys can't reach `props` | (landing) |
+
+The plan's Decisions §`### Parity value-sets` dash/align lists were corrected
+(`11141a2`) after M2 proved the plan's prose omitted `dash:'none'` and the
+`align` `-legacy` variants. Both interaction contracts
+(`style-applies-to-selection`, `armed-style-applies-to-created-shape`) are
+GREEN and were red→green-verified independently by review.
+
 Fourteen core tasks. Land in table order (M→E→R→P→AS). R\* are independent of
 E\* (they only read props) and may interleave, but keep the numbering for
 review sanity.
