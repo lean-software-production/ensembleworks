@@ -118,3 +118,65 @@ export async function probeAccess(originUrl: string, deps: Pick<AccessDeps, 'fet
 	}
 	throw new CliError(`probe: ${originUrl} answered ${res.status} — neither an open canvas nor behind Access`)
 }
+
+// -- Token transfer (design §1 step 2 / cloudflared transfer.go + encrypt.go) --
+
+export interface TransferKeys {
+	/** Go base64.URLEncoding of the 32-byte Curve25519 public key (padded,
+	 *  URL-safe) — the transfer-store key AND the browser URL's token param. */
+	publicKeyB64: string
+	secretKey: Uint8Array
+}
+
+function b64urlPadded(bytes: Uint8Array): string {
+	return Buffer.from(bytes).toString('base64').replace(/\+/g, '-').replace(/\//g, '_')
+}
+
+/** Tolerant base64 (accepts std and URL-safe alphabets, padded or not). */
+function b64decode(s: string): Uint8Array {
+	return new Uint8Array(Buffer.from(s.replace(/-/g, '+').replace(/_/g, '/'), 'base64'))
+}
+
+export function generateTransferKeys(): TransferKeys {
+	const kp = nacl.box.keyPair()
+	return { publicKeyB64: b64urlPadded(kp.publicKey), secretKey: kp.secretKey }
+}
+
+/** The browser-leg URL — on the APP origin (cloudflared buildRequestURL):
+ *  /cdn-cgi/access/cli?token=<pubkey>&aud=…&redirect_url=<origin>&
+ *  send_org_token=true&edge_token_transfer=true */
+export function buildCliLoginUrl(originUrl: string, aud: string, publicKeyB64: string): string {
+	const u = new URL('/cdn-cgi/access/cli', originUrl)
+	u.searchParams.set('token', publicKeyB64)
+	u.searchParams.set('aud', aud)
+	u.searchParams.set('redirect_url', new URL(originUrl).origin)
+	u.searchParams.set('send_org_token', 'true')
+	u.searchParams.set('edge_token_transfer', 'true')
+	return u.toString()
+}
+
+export interface TransferTokens {
+	app_token: string
+	org_token: string
+}
+
+/** Body = std-base64(nonce(24) ‖ nacl.box ciphertext); sender key rides the
+ *  service-public-key header (encrypt.go). Throws CliError on any mismatch. */
+export function decryptTransfer(bodyB64: string, servicePublicKeyB64: string, secretKey: Uint8Array): TransferTokens {
+	const data = b64decode(bodyB64)
+	if (data.length <= 24) throw new CliError('transfer response too short to decrypt')
+	const nonce = data.slice(0, 24)
+	const opened = nacl.box.open(data.slice(24), nonce, b64decode(servicePublicKeyB64), secretKey)
+	if (!opened) throw new CliError('failed to decrypt transfer response (key mismatch or corrupt payload)')
+	let parsed: { app_token?: unknown; org_token?: unknown }
+	try {
+		parsed = JSON.parse(new TextDecoder().decode(opened))
+	} catch {
+		throw new CliError('decrypted transfer response is not JSON')
+	}
+	if (typeof parsed.app_token !== 'string' || parsed.app_token === '')
+		throw new CliError('transfer response carries no app_token')
+	if (typeof parsed.org_token !== 'string' || parsed.org_token === '')
+		throw new CliError('transfer response carries no org_token — cannot refresh silently; is send_org_token honored for this org? (see manual-e2e item 2c)')
+	return { app_token: parsed.app_token, org_token: parsed.org_token }
+}
