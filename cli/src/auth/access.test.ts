@@ -3,8 +3,19 @@
 // server is a loopback Bun.serve. Run with: bun src/auth/access.test.ts
 import assert from 'node:assert/strict'
 import nacl from 'tweetnacl'
-import { buildCliLoginUrl, decodeJwtPayload, decryptTransfer, generateTransferKeys, jwtEmail, jwtExpired, probeAccess } from './access.ts'
-import { makeJwt } from './fake-access.ts'
+import {
+	type AccessDeps,
+	browserLogin,
+	buildCliLoginUrl,
+	decodeJwtPayload,
+	decryptTransfer,
+	generateTransferKeys,
+	jwtEmail,
+	jwtExpired,
+	pollTransferStore,
+	probeAccess,
+} from './access.ts'
+import { makeJwt, startFakeAccess } from './fake-access.ts'
 
 // -- JWT helpers: decode-only (the edge verifies signatures, we never do) -----
 {
@@ -100,4 +111,62 @@ import { makeJwt } from './fake-access.ts'
 	bad[bad.length - 1] = (bad[bad.length - 1] ?? 0) ^ 0xff
 	assert.throws(() => decryptTransfer(bad.toString('base64'), servicePubB64, keys.secretKey), /decrypt/i)
 	console.log('ok: access — transfer keys, cli login url, nacl-box decrypt')
+}
+
+// -- browserLogin end-to-end against the fake ---------------------------------
+{
+	const fake = startFakeAccess()
+	const opened: string[] = []
+	const deps: AccessDeps = {
+		fetch: (i, init) => fetch(i, init),
+		// The "browser": records the URL and completes SSO for the pubkey it
+		// carries — exactly what a human's zero-click Access bounce does.
+		openBrowser: async (u) => {
+			opened.push(u)
+			fake.completeLogin(new URL(u).searchParams.get('token')!)
+			return true
+		},
+		storeBaseUrl: fake.storeBaseUrl,
+		now: () => Date.now(),
+		pollIntervalMs: 5,
+		pollTimeoutMs: 2_000,
+	}
+	try {
+		const res = await browserLogin(fake.origin, { teamDomain: 'team.example', aud: fake.aud }, deps)
+		assert.equal(res.appToken, fake.appToken)
+		assert.equal(res.orgToken, fake.orgToken, 'org token delivered alongside (send_org_token)')
+		assert.equal(res.teamDomain, 'team.example')
+		assert.equal(res.aud, fake.aud)
+		assert.equal(opened.length, 1)
+		const u = new URL(opened[0]!)
+		assert.equal(u.origin, fake.origin, 'browser sent to the APP origin cli endpoint')
+		assert.equal(u.pathname, '/cdn-cgi/access/cli')
+	} finally {
+		fake.stop()
+	}
+	console.log('ok: access — browserLogin round-trip through the fake transfer store')
+}
+
+// -- print-URL fallback + poll timeout ----------------------------------------
+{
+	const fake = startFakeAccess()
+	// No browser AND the user never completes SSO → poll times out cleanly.
+	const deps: AccessDeps = {
+		fetch: (i, init) => fetch(i, init),
+		openBrowser: async () => false,
+		storeBaseUrl: fake.storeBaseUrl,
+		now: () => Date.now(),
+		pollIntervalMs: 5,
+		pollTimeoutMs: 60,
+	}
+	try {
+		await assert.rejects(
+			() => browserLogin(fake.origin, { teamDomain: 'team.example', aud: fake.aud }, deps),
+			/timed out/i,
+			'no completion within pollTimeoutMs → clear timeout error',
+		)
+	} finally {
+		fake.stop()
+	}
+	console.log('ok: access — no-browser fallback polls and times out cleanly')
 }

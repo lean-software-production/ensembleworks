@@ -180,3 +180,52 @@ export function decryptTransfer(bodyB64: string, servicePublicKeyB64: string, se
 		throw new CliError('transfer response carries no org_token — cannot refresh silently; is send_org_token honored for this org? (see manual-e2e item 2c)')
 	return { app_token: parsed.app_token, org_token: parsed.org_token }
 }
+
+/** Long-poll the transfer store for our pubkey until SSO completes (non-200 =
+ *  "still waiting", cloudflared transferRequest) — then decrypt. */
+export async function pollTransferStore(keys: TransferKeys, deps: AccessDeps): Promise<TransferTokens> {
+	const url = new URL(`transfer/${keys.publicKeyB64}`, deps.storeBaseUrl)
+	const deadline = deps.now() + deps.pollTimeoutMs
+	for (;;) {
+		try {
+			const res = await deps.fetch(url, { redirect: 'manual' })
+			if (res.status === 200) {
+				const servicePub = res.headers.get('service-public-key')
+				if (!servicePub) throw new CliError('transfer store answered 200 without a service-public-key header')
+				return decryptTransfer(await res.text(), servicePub, keys.secretKey)
+			}
+		} catch (err) {
+			if (err instanceof CliError) throw err // decrypt/shape errors are fatal, not retriable
+			// transient network error → keep polling
+		}
+		if (deps.now() >= deadline) {
+			throw new CliError('timed out waiting for the browser login to complete — re-run `ew auth login` and finish the SSO page')
+		}
+		await new Promise((r) => setTimeout(r, deps.pollIntervalMs))
+	}
+}
+
+export interface BrowserLoginResult {
+	appToken: string
+	orgToken: string
+	teamDomain: string
+	aud: string
+}
+
+/** The browser leg (design §1 step 2): keypair → open (or print) the
+ *  cli-login URL → poll the store → decrypt. The URL is ALWAYS printed —
+ *  delivery is keyed by our pubkey at the store, so it works opened from any
+ *  machine (the design-§3 headless-human relay needs nothing more). */
+export async function browserLogin(
+	originUrl: string,
+	probe: { teamDomain: string; aud: string },
+	deps: AccessDeps,
+): Promise<BrowserLoginResult> {
+	const keys = generateTransferKeys()
+	const loginUrl = buildCliLoginUrl(originUrl, probe.aud, keys.publicKeyB64)
+	const opened = await deps.openBrowser(loginUrl)
+	narrate(opened ? 'Opening browser to authenticate…' : 'No browser available — open this URL on any machine:')
+	narrate(loginUrl)
+	const tokens = await pollTransferStore(keys, deps)
+	return { appToken: tokens.app_token, orgToken: tokens.org_token, teamDomain: probe.teamDomain, aud: probe.aud }
+}
