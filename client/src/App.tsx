@@ -14,7 +14,7 @@ import {
 } from 'tldraw'
 import 'tldraw/tldraw.css'
 import './theme.css'
-import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
+import { computeStamp, rawUserId, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
 import { FramesDrawer } from './chrome/FramesDrawer'
 import { presentingAtom } from './chrome/present'
@@ -24,7 +24,10 @@ import { hexForColor } from './colors'
 import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
 import { presentStore } from './file-viewer/presentStore'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
+import { useAvSnapshot } from './av/bridge'
 import { avOverlayUtils } from './av/FadedCursorOverlay'
+import { CanvasBlockerModal } from './canvas-health/CanvasBlockerModal'
+import { useCanvasAvailability } from './canvas-health/useCanvasAvailability'
 import { getFrameId, getIdentity, getRoomId } from './identity'
 import { collectIcons, collectShapeUtils } from './kernel/plugin'
 import { installPinchGuard } from './kernel/pinchGuard'
@@ -170,6 +173,23 @@ export function App() {
 		logConnectionEvent('sync', String(syncStatus))
 	}, [syncStatus])
 
+	// The unified availability state: is this browser actually connected, and
+	// is this the tab that owns the canvas? Blocks interaction behind a modal
+	// when not (docs/plans/2026-07-22-connection-health-modal-design.md).
+	// LiveKit status comes through the A/V bridge because useLiveKitRoom lives
+	// inside tldraw context (AvOverlay), not here.
+	const avSnap = useAvSnapshot()
+	const rawId = rawUserId(identity.id)
+	const availability = useCanvasAvailability({
+		roomId,
+		userId: identity.id,
+		store: {
+			status: store.status,
+			connectionStatus: store.status === 'synced-remote' ? store.connectionStatus : null,
+		},
+		livekitStatus: avSnap?.status ?? 'disabled',
+	})
+
 	// Deep-link (frameLink spec): with `?frame=<shapeId>` in the URL, zoom the
 	// camera to that frame exactly once. The shape may not have synced in yet, so
 	// watch reactively — getShapePageBounds returns undefined until it hydrates,
@@ -252,6 +272,19 @@ export function App() {
 			{/* Frames drawer flies out to the LEFT of the side panel; an App-level
 			    sibling so it can anchor to the panel's live width (see FramesDrawer). */}
 			{editor && <FramesDrawer editor={editor} />}
+			{availability.blocked && availability.reason && (
+				<CanvasBlockerModal
+					reason={availability.reason}
+					tripped={availability.tripped}
+					health={availability.health}
+					thresholds={availability.thresholds}
+					now={availability.now}
+					nextProbeAt={availability.nextProbeAt}
+					latency={avSnap?.latencies[rawId] ?? null}
+					latencyHistory={avSnap?.latencyHistory[rawId] ?? []}
+					onTakeover={availability.requestTakeover}
+				/>
+			)}
 			{wasKicked && (
 				<div
 					style={{
