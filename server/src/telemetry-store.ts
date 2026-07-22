@@ -13,7 +13,7 @@ export interface ConnectionEvent {
 	t: number // ms epoch, server-stamped on append
 	roomId: string
 	userId: string
-	plane: 'livekit' | 'sync'
+	plane: 'livekit' | 'sync' | 'lock'
 	event: string
 	detail?: unknown
 }
