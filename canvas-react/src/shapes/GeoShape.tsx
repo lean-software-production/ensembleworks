@@ -160,14 +160,20 @@ import { flattenRichText } from './label.js'
 // NAMES target for fill:'fill' would use 'fill' below, not 'solid' — kept
 // as separate keys since they're independently-named fields in v1 even
 // where the hex values happen to coincide.
-interface GeoColorEntry {
+// Exported (GEO_COLORS/colorEntry/STROKE_WIDTH_PX/DASH_VALUES/dashArray
+// below) so Arrows.tsx (canvas-react/src/overlay/Arrows.tsx, the arrow
+// style-props wiring task) can reuse the SAME color/size/dash tables
+// instead of hand-copying a second one — `color`/`dash`/`size` are shared
+// style axes (canvas-model's STYLE_ENUMS), not geo-specific, even though
+// this module happened to type them first.
+export interface GeoColorEntry {
   readonly solid: string
   readonly semi: string
   readonly fill: string
   readonly linedFill: string
   readonly pattern: string
 }
-const GEO_COLORS: Readonly<Record<string, GeoColorEntry>> = Object.freeze({
+export const GEO_COLORS: Readonly<Record<string, GeoColorEntry>> = Object.freeze({
   black: { solid: '#1d1d1d', fill: '#1d1d1d', linedFill: '#363636', semi: '#e8e8e8', pattern: '#494949' },
   grey: { solid: '#9fa8b2', fill: '#9fa8b2', linedFill: '#bbc1c9', semi: '#eceef0', pattern: '#bcc3c9' },
   'light-violet': { solid: '#e085f4', fill: '#e085f4', linedFill: '#e9abf7', semi: '#f5eafa', pattern: '#e9acf8' },
@@ -182,7 +188,7 @@ const GEO_COLORS: Readonly<Record<string, GeoColorEntry>> = Object.freeze({
   red: { solid: '#e03131', fill: '#e03131', linedFill: '#e75f5f', semi: '#f4dadb', pattern: '#e55959' },
   white: { solid: '#FFFFFF', fill: '#FFFFFF', linedFill: '#ffffff', semi: '#f5f5f5', pattern: '#f9f9f9' },
 })
-const DEFAULT_COLOR = 'black' // GeoShapeUtil.tsx getDefaultProps
+export const DEFAULT_COLOR = 'black' // GeoShapeUtil.tsx getDefaultProps
 const THEME_SOLID_LIGHT = '#fcfffe' // theme.colors.light.solid (defaultThemes.ts:136) — used for fill:'semi'
 
 // defaultFills.ts's DEFAULT_FILL_COLOR_NAMES — which per-color variant a
@@ -197,9 +203,9 @@ const FILL_VARIANT: Readonly<Record<string, keyof GeoColorEntry>> = Object.freez
 const DEFAULT_FILL = 'none' // GeoShapeUtil.tsx getDefaultProps
 
 // default-shape-constants.ts's STROKE_SIZES/LABEL_FONT_SIZES * theme.strokeWidth(2)/fontSize(16).
-const STROKE_WIDTH_PX: Readonly<Record<string, number>> = Object.freeze({ s: 2, m: 3.5, l: 5, xl: 10 })
+export const STROKE_WIDTH_PX: Readonly<Record<string, number>> = Object.freeze({ s: 2, m: 3.5, l: 5, xl: 10 })
 const LABEL_FONT_SIZE_PX: Readonly<Record<string, number>> = Object.freeze({ s: 18, m: 22, l: 26, xl: 32 })
-const DEFAULT_SIZE = 'm' // GeoShapeUtil.tsx getDefaultProps
+export const DEFAULT_SIZE = 'm' // GeoShapeUtil.tsx getDefaultProps
 const LINE_HEIGHT = 1.35 // theme.lineHeight, defaultThemes.ts — same value every other body cites
 
 // tlschema's DefaultFontFamilies (styles/TLFontStyle.ts:83-88) — same table
@@ -216,8 +222,8 @@ const DEFAULT_FONT = 'draw' // GeoShapeUtil.tsx getDefaultProps
 // module header's DASH section). 'draw'/'solid' resolve to no dasharray
 // (see `dashArray` below); 'none' resolves `strokeColor` to `null` in
 // `geoStyle` instead (no stroke element at all).
-const DASH_VALUES = new Set(['draw', 'solid', 'dashed', 'dotted', 'none'])
-const DEFAULT_DASH = 'draw' // GeoShapeUtil.tsx getDefaultProps
+export const DASH_VALUES = new Set(['draw', 'solid', 'dashed', 'dotted', 'none'])
+export const DEFAULT_DASH = 'draw' // GeoShapeUtil.tsx getDefaultProps
 const DASH_LENGTH_RATIO = 2 // getPerfectDashProps.ts's default `lengthRatio`
 const DOT_RATIO = 100 // getPerfectDashProps.ts's dotted-case `ratio`
 const DOT_GAP_MULTIPLIER = 2.5 // NOT from v1 — see module header DASH ARRAYS
@@ -226,7 +232,7 @@ const DOT_GAP_MULTIPLIER = 2.5 // NOT from v1 — see module header DASH ARRAYS
  * draw/solid/none -> `undefined` (no dasharray attribute at all — see
  * module header DASH ARRAYS for exactly which constants are v1-grounded
  * vs. this body's own approximation). */
-function dashArray(dash: string, strokeWidth: number): string | undefined {
+export function dashArray(dash: string, strokeWidth: number): string | undefined {
   switch (dash) {
     case 'dashed': {
       const segment = strokeWidth * DASH_LENGTH_RATIO
@@ -324,7 +330,7 @@ export function geoVariant(shape: ShapeBodyProps['shape']): string {
   return typeof props.geo === 'string' && props.geo.length > 0 ? props.geo : DEFAULT_GEO
 }
 
-function colorEntry(color: unknown): GeoColorEntry {
+export function colorEntry(color: unknown): GeoColorEntry {
   return typeof color === 'string' && color in GEO_COLORS ? GEO_COLORS[color] : GEO_COLORS[DEFAULT_COLOR]
 }
 
