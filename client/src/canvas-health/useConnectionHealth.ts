@@ -45,12 +45,30 @@ export function toObservations(input: {
 			// 'disabled' is a room with A/V off, not a fault — treating it as
 			// degraded would leave that row permanently amber for no reason.
 			healthy: input.livekitStatus === 'connected' || input.livekitStatus === 'disabled',
+			// The A/V bridge only exposes a status string, no round-trip figure.
 			rtt: null,
 		},
 	}
 }
 
-/** GET a health endpoint with a hard timeout, measuring the round-trip. */
+/**
+ * GET a health endpoint with a hard timeout, measuring the round-trip.
+ *
+ * Every failure mode — non-2xx, non-JSON body, `{ok:false}`, timeout, network
+ * error — collapses to the same `{ok:false, rtt:null}`. That's correct today
+ * because `/api/health` (server/src/app.ts) has no error branch: it either
+ * answers `{ok:true,...}` or the request doesn't complete at all, so `ok:false`
+ * here really does mean "unreachable", matching the modal's "Lost connection
+ * to the server" wording. If `/api/health` ever grows a partial/degraded
+ * response, this flattening would silently swallow that distinction and the
+ * modal's wording would become a lie — revisit this function then.
+ *
+ * The `rtt` this returns is NOT comparable to `useSessionPulse`'s rtt
+ * (client/src/av/useSessionPulse.ts): different endpoint, method (GET vs
+ * POST), measurement point (client wall-clock around fetch+json here, vs.
+ * server-echoed there), and cadence (this probe's interval vs. its 30s pulse).
+ * Do not render the two side by side as if they measured the same thing.
+ */
 async function probe(url: string, timeoutMs: number): Promise<ProbeResult> {
 	const started = Date.now()
 	const abort = new AbortController()
