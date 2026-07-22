@@ -101,12 +101,15 @@ import {
 	Editor,
 	applyWheel,
 	createToolContext,
+	duplicateSelectionIntents,
+	pasteIntents,
 	type InputEvent,
 	type Intent,
 	type KeyInputEvent,
 	type SetStyle,
 	type ToolContext,
 } from '@ensembleworks/canvas-editor'
+import { encodeClipboard, serializeSelection } from '@ensembleworks/canvas-model'
 import { PresenceStore, SyncClientPeer, type Transport } from '@ensembleworks/canvas-sync'
 import {
 	Cursors,
@@ -139,10 +142,12 @@ import {
 	currentSnapResult,
 	deleteSelectionIntents,
 	dispatchToActiveTool,
+	pruneDanglingSelectionIntents,
 	type ToolId,
 	type ToolSet,
 	type ToolStates,
 } from './tool-loop.js'
+import { clipboardShortcut, readClipboardText, writeClipboardText } from './clipboard-dom.js'
 
 /** How long an embed (terminal/iframe/…) may sit off-screen before
  * EmbedLayer suspends it — see embedLifecycle.ts's `suspendAfterTicks` doc.
@@ -755,12 +760,85 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			// z-branch), so dropping meta+y costs them nothing.
 			const key = event.key.toLowerCase()
 			const withModifier = event.modifiers.ctrl || event.modifiers.meta
+			// pruneDanglingSelectionIntents (Task D1's undo-selection-cleanup
+			// carry-forward, tool-loop.ts's own doc comment on that function):
+			// `SetSelection` is a view intent with no inverse (editor.ts's
+			// undo()/redo() never touch EditorState), so undoing a
+			// duplicateSelectionIntents/pasteIntents batch removes the newly
+			// minted shapes but leaves `selection` still naming them — a
+			// dangling reference. Applying the pruned result (when non-empty) is
+			// itself a pure state-only intent, so it never pushes a new undo
+			// entry or clears the redo stack (editor.ts's applyAll only moves
+			// those on `docMutated`), and it's a no-op whenever undo/redo didn't
+			// touch anything selection cared about (e.g. undoing a translate).
 			if (withModifier && key === 'z' && !event.modifiers.shift) {
 				editor.undo()
+				const prune = pruneDanglingSelectionIntents(editor)
+				if (prune.length > 0) editor.applyAll(prune)
 				return true
 			}
 			if ((withModifier && key === 'z' && event.modifiers.shift) || (event.modifiers.ctrl && key === 'y')) {
 				editor.redo()
+				const prune = pruneDanglingSelectionIntents(editor)
+				if (prune.length > 0) editor.applyAll(prune)
+				return true
+			}
+			// Ctrl/Cmd+C/X/V/D (Task D1) — copy/cut/paste/duplicate. The
+			// editingId===null gate already happened above (this function's
+			// first line), so `clipboardShortcut` here is the pure key->action
+			// mapping only (also independently unit-tested DOM-free in
+			// clipboard-dom.test.ts). D-7's cut ordering (write the clipboard
+			// FIRST, delete only once that write resolves — a failed write must
+			// never lose shapes) and D-6's "selection after paste/duplicate =
+			// the new root ids" are already baked into pasteIntents/
+			// duplicateSelectionIntents (canvas-editor's clipboard-intents.ts);
+			// this branch only decides WHEN to call them and where the
+			// `navigator.clipboard` I/O (async, isolated in clipboard-dom.ts)
+			// sits relative to it.
+			const clip = clipboardShortcut(event, editingId)
+			if (clip) {
+				if (clip.action === 'copy') {
+					const selection = [...editor.get().selection]
+					if (selection.length > 0) {
+						const payload = serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection)
+						void writeClipboardText(encodeClipboard(payload)).catch(() => {
+							// A failed/denied clipboard write is a no-op copy — the
+							// selection/doc are untouched either way, so there is
+							// nothing to roll back.
+						})
+					}
+				} else if (clip.action === 'cut') {
+					const selection = [...editor.get().selection]
+					if (selection.length > 0) {
+						const payload = serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection)
+						void writeClipboardText(encodeClipboard(payload))
+							.then(() => {
+								// D-7: only delete AFTER the write resolves — never
+								// before, so a failed write can't lose shapes.
+								const intents = deleteSelectionIntents(editor)
+								if (intents.length > 0) editor.applyAll(intents)
+							})
+							.catch(() => {
+								// The write itself failed/was denied: intentionally
+								// do NOT delete. The selection survives untouched.
+							})
+					}
+				} else if (clip.action === 'paste') {
+					void readClipboardText()
+						.then((text) => {
+							const intents = pasteIntents(editor, text)
+							if (intents.length > 0) editor.applyAll(intents)
+						})
+						.catch(() => {
+							// A failed/denied clipboard read is a no-op paste, never
+							// a crash — mirrors decodeClipboard's own total-function,
+							// never-throws contract for hostile/malformed text.
+						})
+				} else {
+					// 'duplicate' — no clipboard I/O at all, purely synchronous.
+					const intents = duplicateSelectionIntents(editor)
+					if (intents.length > 0) editor.applyAll(intents)
+				}
 				return true
 			}
 			return false
@@ -931,7 +1009,32 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				modifiers: { shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey },
 				t: e.timeStamp,
 			}
-			handleGlobalShortcut(keyEvent, editor.get().editingId)
+			const editingId = editor.get().editingId
+			handleGlobalShortcut(keyEvent, editingId)
+			// Task D1: Ctrl/Cmd+C/X/V/D DO have competing native browser behavior
+			// (Ctrl+D bookmarks the page, Ctrl+P — N/A here, but Ctrl+V may paste
+			// into a focused field, Ctrl+C may copy a text selection) that
+			// Escape/Delete/undo never had to guard against, so this path calls
+			// preventDefault when — and only when — `clipboardShortcut` itself
+			// says this keydown IS one of the four (same pure decision
+			// `handleGlobalShortcut` just consumed above; re-deriving it here,
+			// rather than having `handleGlobalShortcut` return WHICH action it
+			// took, keeps its return type the plain `boolean` every other branch
+			// already relies on). Deliberately NOT called for editingId!==null —
+			// TextEditor's native copy/cut/paste must keep working untouched.
+			// KNOWN GAP (ground-truth correction to the plan): this `e` is only
+			// reachable from THIS document-level fallback listener. The PRIMARY
+			// path — Viewport's own onKeyDown -> canvas-react's `keyEventToInput`
+			// -> `handleInput` above — normalizes the raw KeyboardEvent into a
+			// DOM-free `KeyInputEvent` (Viewport.tsx's `handleKey`) and never
+			// retains or forwards the original event, so there is no hook to call
+			// preventDefault from there without changing canvas-react's
+			// logic-free Viewport component (out of this task's file list). In
+			// practice the viewport is a plain non-input `<div>`, so the browser
+			// has no default "paste into this element" action to suppress there,
+			// and Ctrl+D/Ctrl+P are OS/browser-reserved shortcuts most browsers
+			// ignore preventDefault for regardless of where it's called from.
+			if (clipboardShortcut(keyEvent, editingId)) e.preventDefault()
 		}
 		document.addEventListener('keydown', handleGlobalKeydown)
 		return () => document.removeEventListener('keydown', handleGlobalKeydown)

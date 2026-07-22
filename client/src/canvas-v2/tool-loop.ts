@@ -223,6 +223,47 @@ export function deleteSelectionIntents(editor: Editor): Intent[] {
 	]
 }
 
+/**
+ * D1's carry-forward from the clipboard-intents (E1) review: `SetSelection`
+ * is a view intent with no inverse (editor.ts's `undo()`/`redo()` doc
+ * comment says so explicitly — "Does NOT touch EditorState ... a caller that
+ * wants 'select the shapes an undo just restored' does so itself via a
+ * follow-up SetSelection"), so undoing a `duplicateSelectionIntents`/
+ * `pasteIntents` batch (CreateShape x N + PutBinding x M + SetSelection over
+ * the new root ids) removes the shapes those root ids named but leaves
+ * `editor.get().selection` still holding them — dangling references to ids
+ * that no longer resolve in the doc.
+ *
+ * Delete's own path (`deleteSelectionIntents` above) never hits this: its
+ * forward SetSelection always lands on `[]`, and `[]` stays valid no matter
+ * what an undo/redo does to the doc afterward. Duplicate/paste's forward
+ * SetSelection lands on the NEW ids instead, which an undo of that same
+ * batch invalidates — so, unlike Delete, they need an ACTIVE fix.
+ *
+ * Rather than special-case "was the last undone/redone batch a
+ * paste/duplicate" (the undo/redo call sites don't know what kind of batch
+ * they just replayed, only that they replayed one), this is a general
+ * hygiene pass: read the CURRENT selection, keep only ids that still
+ * resolve via `editor.doc.getShape` (a live read — see editor.ts's own
+ * "read live, not off a snapshot" convention), and emit a `SetSelection`
+ * ONLY when that actually drops something (mirrors deleteSelectionIntents's
+ * own "no redundant SetSelection" discipline — calling this after every
+ * undo/redo when nothing dangled would otherwise emit a same-value
+ * SetSelection every time, and editor.ts's own state-change note says
+ * SetSelection notifies even when the ids are identical). Call this right
+ * after `editor.undo()`/`editor.redo()` in CanvasV2App's shared shortcut
+ * policy — applying the result (if non-empty) is a pure state-only intent
+ * (`docMutated` stays false), so it never pushes a new undo entry or clears
+ * the redo stack (editor.ts's applyAll: the undo/redo stacks only move on
+ * `docMutated`).
+ */
+export function pruneDanglingSelectionIntents(editor: Editor): Intent[] {
+	const current = [...editor.get().selection]
+	const pruned = current.filter((id) => editor.doc.getShape(id) !== undefined)
+	if (pruned.length === current.length) return []
+	return [{ type: 'SetSelection', ids: pruned }]
+}
+
 export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: ToolId, editor: Editor): { states: ToolStates; intents: Intent[] } {
 	const intents: Intent[] = []
 

@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import type { Shape } from '@ensembleworks/canvas-model'
-import { Editor, createToolContext, type ArrowState, type CreateState, type ToolContext } from '@ensembleworks/canvas-editor'
+import { Editor, createToolContext, duplicateSelectionIntents, type ArrowState, type CreateState, type ToolContext } from '@ensembleworks/canvas-editor'
 import {
 	cancelActiveTool,
 	createInitialToolStates,
@@ -11,6 +11,7 @@ import {
 	currentSnapResult,
 	deleteSelectionIntents,
 	dispatchToActiveTool,
+	pruneDanglingSelectionIntents,
 	type SelectAndTransformState,
 } from './tool-loop.js'
 
@@ -472,6 +473,67 @@ function setup() {
 	assert.deepEqual([...editor.get().selection], [], 'selection is cleared after applying the intents')
 
 	console.log('ok: tool-loop — deleteSelectionIntents (two-shape selection, and the empty-selection no-op)')
+}
+
+// ============================================================================
+// 8. pruneDanglingSelectionIntents (Task D1's undo-selection-cleanup carry-
+//    forward) — SetSelection has no inverse (editor.ts's undo() doc comment),
+//    so undoing a duplicate/paste batch removes the newly-created shapes but
+//    leaves `editor.get().selection` pointing at their now-gone ids. This is
+//    the general fix: prune the CURRENT selection down to ids that still
+//    resolve, emitting SetSelection only when something was actually
+//    dropped.
+// ============================================================================
+{
+	const { editor } = setup()
+	editor.doc.putShape(geoShape('shape:b', 200, 200))
+	editor.doc.commit()
+
+	// A selection with nothing dangling -> no intents at all (no redundant
+	// same-value SetSelection).
+	editor.apply({ type: 'SetSelection', ids: ['shape:a', 'shape:b'] })
+	assert.deepEqual(pruneDanglingSelectionIntents(editor), [], 'a fully-resolving selection yields no intents')
+
+	// An empty selection -> also no intents (nothing to prune).
+	editor.apply({ type: 'SetSelection', ids: [] })
+	assert.deepEqual(pruneDanglingSelectionIntents(editor), [], 'an empty selection yields no intents')
+
+	// The duplicate/undo scenario itself: duplicate shape:a (selection moves
+	// to the clone's root id), then undo the duplicate's CreateShape — the
+	// clone is gone but selection still names it.
+	const before = new Set<string>(editor.doc.listShapes().map((s) => s.id))
+	editor.apply({ type: 'SetSelection', ids: ['shape:a'] })
+	editor.applyAll(duplicateSelectionIntents(editor))
+	const cloneId = [...editor.get().selection][0]!
+	assert.ok(!before.has(cloneId), 'precondition: the duplicate minted a brand-new id')
+	assert.ok(editor.doc.getShape(cloneId), 'precondition: the clone exists in the doc before undo')
+
+	editor.undo()
+	assert.equal(editor.doc.getShape(cloneId), undefined, 'precondition: undo actually removed the clone')
+	assert.deepEqual([...editor.get().selection], [cloneId], 'precondition: editor.undo() does NOT touch selection on its own — it still names the deleted clone')
+
+	assert.deepEqual(
+		pruneDanglingSelectionIntents(editor),
+		[{ type: 'SetSelection', ids: [] }],
+		'pruneDanglingSelectionIntents drops the dangling clone id, leaving the (now-empty) valid remainder',
+	)
+	editor.applyAll(pruneDanglingSelectionIntents(editor))
+	assert.deepEqual([...editor.get().selection], [], 'applying the pruned SetSelection actually clears the dangling reference')
+
+	// A MIXED selection (one live id, one dangling) prunes down to just the
+	// live one, order preserved.
+	editor.apply({ type: 'SetSelection', ids: ['shape:a'] })
+	editor.applyAll(duplicateSelectionIntents(editor))
+	const cloneId2 = [...editor.get().selection][0]!
+	editor.apply({ type: 'SetSelection', ids: ['shape:b', cloneId2] })
+	editor.undo() // removes the clone; selection still names ['shape:b', cloneId2]
+	assert.deepEqual(
+		pruneDanglingSelectionIntents(editor),
+		[{ type: 'SetSelection', ids: ['shape:b'] }],
+		'a mixed live+dangling selection prunes down to just the surviving live id',
+	)
+
+	console.log('ok: tool-loop — pruneDanglingSelectionIntents (no-op when nothing dangles, drops dangling ids after an undo)')
 }
 
 console.log('ok: tool-loop.test.ts — all cases passed')

@@ -623,6 +623,172 @@ async function main() {
 	console.log('ok: CanvasV2App — Ctrl+Z reaches editor.undo() even while a toolbar button holds focus (document-listener path)')
 
 	// ==========================================================================
+	// (f6) TASK D1 — CTRL/CMD+D / C / X / V: duplicate/copy/cut/paste, driven
+	// through the SAME shared `handleGlobalShortcut` policy as Escape/Delete/
+	// undo above. Ctrl+D never touches `navigator.clipboard` at all (pure
+	// `editor.applyAll(duplicateSelectionIntents(...))`); C/X/V go through the
+	// REAL `navigator.clipboard` — happy-dom implements a genuine in-memory
+	// Clipboard (verified directly: writeText then readText round-trips), not
+	// a stub of one — so this exercises the actual async write/read, not a
+	// mock of it. The DEFINITIVE end-to-end proof (a real browser, real OS
+	// clipboard permissions) is K1/K2's job (browser contracts, next); this
+	// is the happy-dom-level wiring proof available without one. Every case
+	// cleans up after itself so the doc is back to its pre-(f6) 2-shape state
+	// by the time (e)'s unmount precondition reads it below.
+	// ==========================================================================
+	const ewClip = (globalThis as any).window.__ew as {
+		editor: {
+			get(): { selection: ReadonlySet<string>; editingId: string | null }
+			apply(intent: unknown): void
+			applyAll(intents: unknown[]): void
+		}
+		doc: { listShapes(): Array<{ id: string }>; getShape(id: string): unknown }
+	}
+	const clip = (globalThis as any).navigator.clipboard as { writeText(t: string): Promise<void>; readText(): Promise<string> }
+
+	// (f6a) Ctrl+D duplicates the selection: a fresh id, offset by
+	// clipboard-intents.ts's DUP_OFFSET (20,20), and a NEW SetSelection over
+	// just the clone's root id.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:dup-src', 700, 700) })
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:dup-src'] })
+	})
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'd', ctrlKey: true })
+	})
+	const afterDup = ewClip.editor.get().selection
+	assert.equal(afterDup.size, 1, 'Ctrl+D selects exactly the new duplicate (one root id)')
+	const dupId = [...afterDup][0]!
+	assert.notEqual(dupId, 'shape:dup-src', 'the duplicate has a fresh id, not the original')
+	assert.ok(ewClip.doc.getShape('shape:dup-src'), 'the ORIGINAL shape is untouched by duplicate')
+	const dupShape = ewClip.doc.getShape(dupId) as { x: number; y: number } | undefined
+	assert.ok(dupShape, 'the DUPLICATE shape now exists in the doc')
+	assert.equal(dupShape!.x, 720, 'the duplicate is offset +20 on x (DUP_OFFSET) from the 700 original')
+	assert.equal(dupShape!.y, 720, 'the duplicate is offset +20 on y (DUP_OFFSET) from the 700 original')
+	console.log('ok: CanvasV2App — Ctrl+D duplicates the selection (fresh id, +20/+20 offset, new SetSelection)')
+
+	// Undo the duplicate — proves the Task D1 carry-forward:
+	// pruneDanglingSelectionIntents must clear the now-dangling selection,
+	// not just that editor.undo() removes the shape itself.
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'z', ctrlKey: true })
+	})
+	assert.equal(ewClip.doc.getShape(dupId), undefined, 'undo removed the duplicate shape')
+	assert.deepEqual([...ewClip.editor.get().selection], [], 'undoing the duplicate also prunes the now-dangling selection (Task D1 carry-forward)')
+	console.log('ok: CanvasV2App — Ctrl+Z after Ctrl+D removes the duplicate AND prunes the dangling selection')
+
+	// Cleanup: remove the temp original directly (test bookkeeping, not part
+	// of what is under test here).
+	await act(async () => {
+		ewClip.editor.apply({ type: 'DeleteShapes', ids: ['shape:dup-src'] })
+		ewClip.editor.apply({ type: 'SetSelection', ids: [] })
+	})
+
+	// (f6b) Ctrl+D suppressed while editingId !== null — TextEditor owns the
+	// keyboard (Ctrl+D has no meaning inside a text field), same gate as
+	// Escape/Delete/undo above.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:dup-edit', 700, 700) })
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:dup-edit'] })
+		ewClip.editor.apply({ type: 'BeginEdit', id: 'shape:dup-edit' })
+	})
+	const shapeCountBeforeSuppressedDup = ewClip.doc.listShapes().length
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'd', ctrlKey: true })
+	})
+	assert.equal(ewClip.doc.listShapes().length, shapeCountBeforeSuppressedDup, 'Ctrl+D while editingId!==null must NOT duplicate anything')
+	console.log('ok: CanvasV2App — Ctrl+D is suppressed while editingId!==null (TextEditor owns the keyboard)')
+	await act(async () => {
+		ewClip.editor.apply({ type: 'EndEdit' })
+		ewClip.editor.apply({ type: 'DeleteShapes', ids: ['shape:dup-edit'] })
+		ewClip.editor.apply({ type: 'SetSelection', ids: [] })
+	})
+
+	// (f6c) Ctrl+C serializes the selection to navigator.clipboard — copy
+	// never mutates the doc or the selection.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:clip-src', 720, 720) })
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:clip-src'] })
+	})
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'c', ctrlKey: true })
+		await new Promise((r) => setTimeout(r, 0)) // let the async navigator.clipboard.writeText settle
+	})
+	const copiedPayload = JSON.parse(await clip.readText())
+	assert.equal(copiedPayload['ensembleworks/clipboard'], 1, 'Ctrl+C writes the versioned clipboard envelope')
+	assert.equal(copiedPayload.shapes.length, 1, 'Ctrl+C serializes exactly the one selected shape')
+	assert.equal(copiedPayload.shapes[0].id, 'shape:clip-src', 'the copied shape keeps its ORIGINAL id — copy never reids')
+	assert.ok(ewClip.doc.getShape('shape:clip-src'), 'Ctrl+C never deletes the source shape')
+	assert.deepEqual([...ewClip.editor.get().selection], ['shape:clip-src'], 'Ctrl+C never changes the selection')
+	console.log('ok: CanvasV2App — Ctrl+C serializes the selection to navigator.clipboard, doc/selection untouched')
+
+	// (f6d-pre) D-7's ordering, the FAILURE-PATH proof: "a failed write must
+	// not lose shapes" is only actually tested by making the write fail —
+	// asserting the end state after a SUCCESSFUL write can't tell
+	// write-then-delete apart from delete-then-write (both land on the same
+	// final doc/clipboard state), so this monkey-patches
+	// `navigator.clipboard.writeText` to reject once and proves the source
+	// shape SURVIVES a Ctrl+X whose clipboard write failed.
+	const realWriteText = clip.writeText.bind(clip)
+	await act(async () => {
+		ewClip.editor.apply({ type: 'CreateShape', shape: seedShape('shape:clip-failcut', 900, 900) })
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:clip-failcut'] })
+	})
+	;(clip as { writeText(t: string): Promise<void> }).writeText = () => Promise.reject(new Error('simulated clipboard write failure'))
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'x', ctrlKey: true })
+		await new Promise((r) => setTimeout(r, 0))
+	})
+	;(clip as { writeText(t: string): Promise<void> }).writeText = realWriteText
+	assert.ok(ewClip.doc.getShape('shape:clip-failcut'), 'D-7: a Ctrl+X whose clipboard write FAILS must NOT delete the source shape')
+	assert.deepEqual(
+		[...ewClip.editor.get().selection],
+		['shape:clip-failcut'],
+		'D-7: the selection is untouched too — the delete branch never ran at all',
+	)
+	console.log('ok: CanvasV2App — Ctrl+X never deletes when the clipboard write fails (D-7: write-then-delete, not delete-then-write)')
+	await act(async () => {
+		ewClip.editor.apply({ type: 'DeleteShapes', ids: ['shape:clip-failcut'] })
+		// Restore the selection to shape:clip-src (f6c left it selected) —
+		// the very next case, (f6d), depends on that still being the case.
+		ewClip.editor.apply({ type: 'SetSelection', ids: ['shape:clip-src'] })
+	})
+
+	// (f6d) Ctrl+X writes the SAME payload, then — only once that write
+	// resolves (D-7's ordering) — deletes the source, same as Delete/
+	// Backspace's own DeleteShapes + SetSelection([]) pair.
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'x', ctrlKey: true })
+		await new Promise((r) => setTimeout(r, 0))
+	})
+	const cutPayload = JSON.parse(await clip.readText())
+	assert.equal(cutPayload.shapes[0].id, 'shape:clip-src', 'Ctrl+X writes the same shape to the clipboard before deleting it')
+	assert.equal(ewClip.doc.getShape('shape:clip-src'), undefined, 'Ctrl+X deletes the source AFTER the clipboard write resolves (D-7 ordering)')
+	assert.deepEqual([...ewClip.editor.get().selection], [], 'Ctrl+X clears the selection the same way Delete does')
+	console.log('ok: CanvasV2App — Ctrl+X copies then deletes the selection (D-7 ordering)')
+
+	// (f6e) Ctrl+V pastes the just-cut clipboard content back as a brand-new
+	// shape (fresh id — decodeClipboard/cloneWithNewIds never reuse the
+	// original's — offset position, selected).
+	await act(async () => {
+		dispatchKey(viewportEl!, { key: 'v', ctrlKey: true })
+		await new Promise((r) => setTimeout(r, 0))
+	})
+	const afterPaste = ewClip.editor.get().selection
+	assert.equal(afterPaste.size, 1, 'Ctrl+V selects exactly the pasted root shape')
+	const pastedId = [...afterPaste][0]!
+	assert.notEqual(pastedId, 'shape:clip-src', "the pasted shape has a fresh id (the original was cut/deleted, so it couldn't be reused anyway)")
+	assert.ok(ewClip.doc.getShape(pastedId), 'the pasted shape now exists in the doc')
+	console.log('ok: CanvasV2App — Ctrl+V pastes the clipboard content back as a new shape, selecting it')
+
+	// Cleanup: remove the pasted shape directly, restoring the pre-(f6)
+	// 2-shape baseline the (e) unmount precondition below depends on.
+	await act(async () => {
+		ewClip.editor.apply({ type: 'DeleteShapes', ids: [pastedId] })
+		ewClip.editor.apply({ type: 'SetSelection', ids: [] })
+	})
+
+	// ==========================================================================
 	// (e) UNMOUNT DISPOSES CLEANLY: no more sync reaches the (now-torn-down)
 	// client peer. `window.__ew.doc` was set once by CanvasV2App's boot
 	// sequence (the design's E2E hook) — capture that SAME doc reference
