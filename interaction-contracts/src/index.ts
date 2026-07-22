@@ -11,6 +11,7 @@ import { cursorLock } from './contracts/cursor-lock.js'
 import { drawCreatesADrawShape } from './contracts/draw-creates-a-draw-shape.js'
 import { duplicateReidsAndOffsets } from './contracts/duplicate-reids-and-offsets.js'
 import { editingIndicator } from './contracts/editing-indicator.js'
+import { lineCreatesALineShape } from './contracts/line-creates-a-line-shape.js'
 import { malformedClipboardRejected } from './contracts/malformed-clipboard-rejected.js'
 import { modalityExclusivity } from './contracts/modality-exclusivity.js'
 import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js'
@@ -33,4 +34,5 @@ export const CONTRACTS: readonly Contract[] = [
   malformedClipboardRejected,
   bringToFrontPaintsOnTop,
   drawCreatesADrawShape,
+  lineCreatesALineShape,
 ]
