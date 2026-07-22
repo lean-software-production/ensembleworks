@@ -140,8 +140,11 @@ Single-source the names we already own where they exist:
 - **fill** — `DefaultFillStyle`. Renderer already honors
   `none`/`semi`/`solid`/`pattern`/`fill`/`lined-fill` (GeoShape). Confirm the
   enum against tlschema; type exactly its values.
-- **dash** — `draw`, `solid`, `dashed`, `dotted` (`DefaultDashStyle`, default
-  `draw`).
+- **dash** — `draw`, `solid`, `dashed`, `dotted`, `none` (`DefaultDashStyle`,
+  default `draw`). NOTE: tlschema 5.1.0's `values:` array has FIVE entries — its
+  doc-comment prose omits `none`, but the real accepted set includes it, and M2
+  correctly typed all five. A shape synced with `dash: 'none'` would be dropped
+  at the write boundary if the enum omitted it.
 - **size** — `s`, `m`, `l`, `xl` (`DefaultSizeStyle`, default `m`).
 - **font** — `draw`, `sans`, `serif`, `mono` (`DefaultFontStyle`, default
   `draw`). (The webfonts ARE loaded in v2 now — `client/src/canvas-v2/
@@ -149,9 +152,15 @@ Single-source the names we already own where they exist:
   Ground-truth corrections.)
 - **text-align (text kind)** — `props.textAlign`: `start`/`middle`/`end`
   (`DefaultTextAlignStyle`, default `start`). Renderer already honors this.
-- **horizontal align (geo/note/arrow labels)** — `props.align`:
-  `start`/`middle`/`end` (`DefaultHorizontalAlignStyle`, default `middle`).
-  Renderer currently hard-centers; R3 makes it honor `align`.
+- **horizontal align (geo/note)** — `props.align`:
+  `start`/`middle`/`end`/`start-legacy`/`end-legacy`/`middle-legacy`
+  (`DefaultHorizontalAlignStyle`, default `middle`). The three `-legacy`
+  variants are real accepted values — legacy documents carry them and must
+  round-trip, so M2 typed all six. NOTE: arrow does NOT take `align` in tldraw
+  (`arrowShapeProps` has no `align`); M2 correctly gave arrow no align axis. The
+  panel (P1/P2) must offer the three primary variants as controls but must not
+  reject a shape already carrying a `-legacy` value. Renderer currently
+  hard-centers; R3 makes it honor `align`.
 - **vertical align** — `props.verticalAlign` (`DefaultVerticalAlignStyle`).
   Typed in the model; renderer-honor is a small extension folded into R3 only
   if cheap, else explicitly deferred in R3's note.
