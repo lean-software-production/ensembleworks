@@ -47,7 +47,7 @@
 // next lever) — whether any of that is needed is H3's to MEASURE, not this
 // unit's to pre-build.
 import type { Bounds, CanvasDocument } from '@ensembleworks/canvas-model'
-import { worldBounds } from '@ensembleworks/canvas-model'
+import { pageIdOf, worldBounds } from '@ensembleworks/canvas-model'
 import type { Camera, Intent, ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from '../use-editor-state.js'
 import { viewportWorldBounds, type ViewportSize } from '../ShapeLayer.js'
@@ -92,10 +92,18 @@ export function EmbedLayer({ toolContext, camera, viewportSize, tick, suspendAft
   const editorState = useEditorState(toolContext.editor)
   const viewport = viewportWorldBounds(camera, viewportSize)
 
+  // PAGE FILTER (Task R1, plan Correction 2): same predicate as
+  // ShapeLayer.tsx's — a culling-EXEMPT sibling that also renders shapes,
+  // so without this it would paint another page's terminals/iframes onto
+  // the current screen regardless of viewport. `pageIdOf` walks to the
+  // `page:` ancestor, so a nested embed resolves correctly too. Composed
+  // with the existing `isEmbedKind` + worldBounds-intersect filter — order
+  // between the two predicates doesn't matter, both are pure boolean
+  // filters over the same snapshot.
   return (
     <>
       {snapshot.shapes
-        .filter((shape) => isEmbedKind(shape.kind))
+        .filter((shape) => isEmbedKind(shape.kind) && pageIdOf(snapshot, shape) === editorState.currentPageId)
         .map((shape) => {
           const visible = boundsIntersect(worldBounds(snapshot, shape), viewport)
           return (

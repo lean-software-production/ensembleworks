@@ -399,4 +399,88 @@ function fakeToolContext(snapshot: CanvasDocument, texts: ReadonlyMap<string, st
   console.log('ok: ShapeLayer tie-breaks equal-index siblings on id ASC')
 }
 
-console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text, dispatch threading, paint order, opacity)')
+// ============================================================================
+// 11. Task R1 — the PAGE render filter: ShapeLayer paints ONLY the shapes
+//    whose page ancestor (canvas-model's `pageIdOf`) equals
+//    `editorState.currentPageId`, composed with the existing culling/paint
+//    order. A fresh fakeToolContext parameterized by `currentPageId` (unlike
+//    the module-level one above, which is pinned to 'page:p') so this case
+//    can exercise both pages without disturbing every earlier case in this
+//    file.
+// ============================================================================
+function fakeToolContextForPage(snapshot: CanvasDocument, currentPageId: string): ToolContext {
+  const state: EditorState = Object.freeze({
+    camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null,
+    editingId: null, nextShapeStyle: {}, currentPageId,
+  })
+  const editor = {
+    doc: { subscribe: (_l: () => void) => () => {}, getText: (_id: string) => '' },
+    get: (): EditorState => state,
+    subscribe: (_l: () => void) => () => {},
+  } as unknown as Editor
+  return {
+    editor,
+    snapshot: () => snapshot,
+    index: () => buildSpatialIndex(snapshot),
+    hitTestTopmost: () => null,
+    queryMarquee: () => [],
+    dispose: () => {},
+  }
+}
+
+{
+  const shapeOnP: Shape = { id: 'shape:onP', kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 } } as Shape
+  const shapeOnQ: Shape = { id: 'shape:onQ', kind: 'geo', parentId: 'page:q', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 } } as Shape
+  const twoPageDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }, { id: 'page:q', name: 'Q' }],
+    shapes: [shapeOnP, shapeOnQ],
+    bindings: [],
+  })
+  const camera = { x: 0, y: 0, z: 1 }
+  const viewportSize = { width: 800, height: 600 }
+
+  // 11a. currentPageId = 'page:p' -> only shape:onP renders, shape:onQ absent.
+  const htmlP = renderToStaticMarkup(createElement(ShapeLayer, { toolContext: fakeToolContextForPage(twoPageDoc, 'page:p'), camera, viewportSize }))
+  assert.ok(htmlP.includes('data-shape-id="shape:onP"'), `shape:onP should render when currentPageId='page:p': ${htmlP}`)
+  assert.ok(!htmlP.includes('data-shape-id="shape:onQ"'), `shape:onQ (on page:q) must NOT render when currentPageId='page:p': ${htmlP}`)
+  console.log('ok: ShapeLayer paints only the current page (page:p) — the other page is absent')
+
+  // 11b. Switch currentPageId to 'page:q' -> only shape:onQ renders now.
+  const htmlQ = renderToStaticMarkup(createElement(ShapeLayer, { toolContext: fakeToolContextForPage(twoPageDoc, 'page:q'), camera, viewportSize }))
+  assert.ok(!htmlQ.includes('data-shape-id="shape:onP"'), `shape:onP (on page:p) must NOT render when currentPageId='page:q': ${htmlQ}`)
+  assert.ok(htmlQ.includes('data-shape-id="shape:onQ"'), `shape:onQ should render when currentPageId='page:q': ${htmlQ}`)
+  console.log('ok: switching currentPageId to page:q flips which page paints')
+
+  // 11c. NESTED: a child shape whose FRAME is on page:q renders only when
+  //    the current page is page:q — pageIdOf must walk to the page
+  //    ancestor, not stop at the shape's direct parentId (a mutant that
+  //    checks `shape.parentId === currentPageId` directly would wrongly
+  //    hide this child under EVERY currentPageId, since its own parentId is
+  //    the frame's id, never a page id).
+  const frameOnQ: Shape = { id: 'shape:frameQ', kind: 'frame', parentId: 'page:q', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 400, h: 400, name: 'F' } } as Shape
+  const childOfFrameOnQ: Shape = { id: 'shape:childOfFrameQ', kind: 'geo', parentId: 'shape:frameQ', index: 'a1', x: 10, y: 10, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 } } as Shape
+  const nestedDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }, { id: 'page:q', name: 'Q' }],
+    shapes: [frameOnQ, childOfFrameOnQ],
+    bindings: [],
+  })
+  const nestedHtmlP = renderToStaticMarkup(createElement(ShapeLayer, { toolContext: fakeToolContextForPage(nestedDoc, 'page:p'), camera, viewportSize }))
+  assert.ok(!nestedHtmlP.includes('data-shape-id="shape:childOfFrameQ"'), `a child of a frame on page:q must NOT render when currentPageId='page:p': ${nestedHtmlP}`)
+  const nestedHtmlQ = renderToStaticMarkup(createElement(ShapeLayer, { toolContext: fakeToolContextForPage(nestedDoc, 'page:q'), camera, viewportSize }))
+  assert.ok(nestedHtmlQ.includes('data-shape-id="shape:frameQ"'), `the frame on page:q should render when currentPageId='page:q': ${nestedHtmlQ}`)
+  assert.ok(nestedHtmlQ.includes('data-shape-id="shape:childOfFrameQ"'), `a child of a frame on page:q SHOULD render when currentPageId='page:q' (pageIdOf walks to the page ancestor): ${nestedHtmlQ}`)
+  console.log('ok: ShapeLayer resolves a nested child to its PAGE ancestor (pageIdOf), not its direct parentId')
+
+  // 11d. MIGRATION SAFETY: a single-page room (every shape's page ancestor
+  //    is page:p, currentPageId='page:p') renders ALL of them — the filter
+  //    hides NOTHING. Reuses this file's module-level `doc` fixture (four
+  //    shapes, all parented to page:p directly or transitively) with the
+  //    module-level `editorState`-pinned fakeToolContext from above.
+  const migrationHtml = renderToStaticMarkup(createElement(ShapeLayer, { toolContext: fakeToolContext(doc), camera, viewportSize }))
+  assert.ok(migrationHtml.includes('data-shape-id="shape:rot"'), `single-page migration: shape:rot must still render: ${migrationHtml}`)
+  assert.ok(migrationHtml.includes('data-shape-id="shape:parent"'), `single-page migration: shape:parent must still render: ${migrationHtml}`)
+  assert.ok(migrationHtml.includes('data-shape-id="shape:child"'), `single-page migration: nested shape:child must still render: ${migrationHtml}`)
+  console.log('ok: MIGRATION SAFETY — a single-page room renders every shape unchanged, the filter hides nothing')
+}
+
+console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text, dispatch threading, paint order, opacity, page filter)')
