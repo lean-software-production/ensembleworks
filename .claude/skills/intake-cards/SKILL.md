@@ -24,7 +24,7 @@ You need the `ensembleworks` CLI on PATH (`ENSEMBLEWORKS_URL`,
 Four lines, exactly:
 
 ```
-ID: JS<n>, User: <who asked>
+ID: EW<n>, User: <who asked>
 As a <role>
 I want to <capability>
 So that <benefit>
@@ -70,7 +70,7 @@ done
 
 Two things you need from this:
 
-1. **The highest `JS<n>` in use anywhere** → your next id is `n+1`.
+1. **The highest `EW<n>` in use anywhere** → your next id is `n+1`.
 2. **Whether the want is already carded.** Duplicates are worse than a missed
    card — a near-match means you should say so, not add a second card.
 
@@ -100,7 +100,7 @@ style, matching the existing ones:
 ensembleworks canvas shape --op create --type geo --frame INTAKE \
   --geo rectangle --color yellow --fill solid \
   --w 384 --h 202 --x <next-x> --y 229 \
-  --text 'ID: JS7, User: David
+  --text 'ID: EW7, User: David
 As a product owner
 I want the ROADMAP frame organised into now / next / later
 So that I can see what is coming up when'
@@ -119,7 +119,7 @@ from a remembered x**.
 After writing, say what you added in the room:
 
 ```bash
-ensembleworks canvas sticky "added JS7 + JS8 to INTAKE from the roadmap-organising discussion" \
+ensembleworks canvas sticky "added EW7 + EW8 to INTAKE from the roadmap-organising discussion" \
   --frame advice --author intake
 ensembleworks terminal status "$SESSION" done
 ```
@@ -141,12 +141,12 @@ Note what the analysis has to do: the speaker names **two different roles**
 with **two different benefits** from one capability. That's two cards, not one.
 
 ```
-ID: JS7, User: David
+ID: EW7, User: David
 As a product owner
 I want the ROADMAP frame organised into now / next / later
 So that I can see what is coming up when
 
-ID: JS8, User: David
+ID: EW8, User: David
 As an EnsembleWorks user
 I want to see where my feature request has been prioritised
 So that I know whether and when it will be picked up
