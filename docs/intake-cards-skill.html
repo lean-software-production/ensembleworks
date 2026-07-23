@@ -190,7 +190,7 @@
 
 <h2>The card format</h2>
 <p>Four lines, exactly:</p>
-<pre><code>ID: JS&lt;n&gt;, User: &lt;who asked&gt;
+<pre><code>ID: EW&lt;n&gt;, User: &lt;who asked&gt;
 As a &lt;role&gt;
 I want to &lt;capability&gt;
 So that &lt;benefit&gt;</code></pre>
@@ -200,7 +200,7 @@ So that &lt;benefit&gt;</code></pre>
   <tr><th>Rule</th><th>Why</th></tr>
   <tr>
     <td>Ids are unique across <em>all four</em> frames</td>
-    <td>Cards keep their id as they migrate rightwards, so the highest <code>JS&lt;n&gt;</code> may well be sitting in ROADMAP, not INTAKE.</td>
+    <td>Cards keep their id as they migrate rightwards, so the highest <code>EW&lt;n&gt;</code> may well be sitting in ROADMAP, not INTAKE.</td>
   </tr>
   <tr>
     <td><code>User:</code> is the person who asked</td>
@@ -217,6 +217,10 @@ So that &lt;benefit&gt;</code></pre>
   <tr>
     <td>Roles are concrete</td>
     <td>"product owner", "canvas A/V user", "terminal user" — drawn from how the speaker described themselves, never a generic "user".</td>
+  </tr>
+  <tr>
+    <td>Link the PR once one exists</td>
+    <td>When a card's want ships, append <code>, PR: #&lt;n&gt;</code> to the ID line as a real link (see <em>Linking the implementation PR</em>). The id stays put — the PR is the implementation, not a new id.</td>
   </tr>
 </table>
 </div>
@@ -258,6 +262,32 @@ As a product owner
   <p><b>One wrinkle worth knowing.</b> Card geometry is read through <code>/api/v2/canvas/frame</code>, because the v1 frame reader deliberately returns only <code>{id, type, text}</code> for each shape — no coordinates, so there's no way to work out where the next card goes.</p>
   <p>That endpoint is <em>not</em> the v2 canvas engine. It's a read-only view that converts the same legacy tldraw store on every request. The actual engine swap is <code>/sync/v2/:roomId</code> behind <code>EW_CANVAS_SYNC</code>, which this room does not run. All <b>writes</b> go through the ordinary v1 <code>canvas shape</code> endpoint.</p>
 </div>
+
+<h2>Linking the implementation PR</h2>
+<p>Once a card's want ships as a pull request, link it from the ID line — append <code>, PR: #&lt;n&gt;</code> and make <code>#&lt;n&gt;</code> a real, clickable link. The id itself never changes; the PR is the implementation, not a new id.</p>
+
+<div class="callout">
+  <p><b>Two traps.</b> Markdown doesn't render — <code>[#60](url)</code> shows as literal text, because geo text is a tldraw (5.1.0) ProseMirror/TipTap <code>richText</code> document, not markdown.</p>
+  <p>And <code>--text</code> strips the link: that path runs through <code>toRichText()</code>, which flattens to plain paragraphs and drops every mark. The link must be written through <code>--props</code> as a raw <code>richText</code> doc whose <code>#&lt;n&gt;</code> text node carries a <code>link</code> mark.</p>
+</div>
+
+<p>Copy the exact mark from an already-linked card — capturing to a file, because the document can exceed a 64k pipe buffer — then write it back with <code>props.url</code> set too, which adds the clickable link chip in the corner:</p>
+<pre><code>ensembleworks canvas-v2 document &gt; /tmp/doc.json
+jq -c '.. | objects | select(.id?=="&lt;shape-id&gt;") | .props.richText' /tmp/doc.json
+
+HREF=https://github.com/lean-software-production/ensembleworks/pull/60
+PROPS=$(jq -nc --arg href "$HREF" '{
+  url: $href,
+  richText: {type:"doc",attrs:{dir:"auto"},content:[
+    {type:"paragraph",attrs:{dir:"auto"},content:[
+      {type:"text",text:"ID: EW2, User: David, PR: "},
+      {type:"text",marks:[{type:"link",attrs:{href:$href,target:"_blank",rel:"noopener noreferrer nofollow",class:null,title:null}}],text:"#60"}
+    ]},
+    {type:"paragraph",attrs:{dir:"auto"},content:[{type:"text",text:"As a canvas A/V user"}]}
+  ]}
+}')
+ensembleworks canvas shape --op update --id &lt;shape-id&gt; --props "$PROPS"</code></pre>
+<p>The <code>link</code> mark on the <code>#60</code> node is the whole trick — it's exactly what the WYSIWYG editor writes when you hand-make a link, and it round-trips through the store the same way.</p>
 
 <h2>Worked example</h2>
 <p>The conversation this skill was built from — David, cursor in the INTAKE frame, thinking aloud:</p>
