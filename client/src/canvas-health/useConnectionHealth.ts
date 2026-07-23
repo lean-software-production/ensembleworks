@@ -13,7 +13,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { scheduler } from '../kernel/scheduler'
 import { getThresholds, type Thresholds } from './constants'
-import { initialHealth, stepHealth, syncStoreHealthy, type HealthState, type Observations } from './connectionHealth'
+import {
+	initialHealth,
+	markUnhealthy,
+	stepHealth,
+	syncStoreHealthy,
+	type HealthState,
+	type Observations,
+} from './connectionHealth'
 
 export interface ProbeResult {
 	ok: boolean
@@ -105,23 +112,52 @@ export function useConnectionHealth(input: { store: StoreStatus; livekitStatus: 
 	const latest = useRef(input)
 	latest.current = input
 
+	// FAST PATH — the store status is an event, the probe is a poll.
+	//
+	// A tick cannot produce an observation until BOTH probes resolve, which
+	// takes up to probeTimeoutMs (4000ms) against a server that black-holes
+	// packets — longer than the canvas threshold (3000ms) itself. Routing the
+	// store's instant close signal through that poll therefore made the
+	// threshold unreachable in practice: the modal could not appear until
+	// ~7s after a drop, not the ~3s the threshold implies.
+	//
+	// So a store flip stamps the canvas transport immediately. The dependency
+	// is the derived BOOLEAN, not the store object, so this fires on genuine
+	// health transitions rather than on every status string change.
+	const storeHealthy = syncStoreHealthy(input.store)
+	useEffect(() => {
+		if (storeHealthy) return // recovery belongs to the probe — see markUnhealthy
+		setHealth((prev) => markUnhealthy(prev, 'canvas', Date.now()))
+	}, [storeHealthy])
+
 	useEffect(() => {
 		let cancelled = false
+		// A probe may outlive its own interval (probeTimeoutMs 4000 > interval
+		// 2000), so ticks would otherwise overlap and a stale failure could land
+		// AFTER a fresher success and mask it. One tick at a time; a skipped
+		// tick costs nothing because the next one re-reads everything anyway.
+		let inFlight = false
 		const tick = async () => {
-			const [canvasProbe, terminalProbe] = await Promise.all([
-				probe('/api/health', thresholds.probeTimeoutMs),
-				probe('/api/terminal/health', thresholds.probeTimeoutMs),
-			])
-			if (cancelled) return
-			const obs = toObservations({
-				store: latest.current.store,
-				canvasProbe,
-				terminalProbe,
-				livekitStatus: latest.current.livekitStatus,
-			})
-			const now = Date.now()
-			setHealth((prev) => stepHealth(prev, obs, now))
-			setNextProbeAt(now + thresholds.probeIntervalMs)
+			if (inFlight) return
+			inFlight = true
+			try {
+				const [canvasProbe, terminalProbe] = await Promise.all([
+					probe('/api/health', thresholds.probeTimeoutMs),
+					probe('/api/terminal/health', thresholds.probeTimeoutMs),
+				])
+				if (cancelled) return
+				const obs = toObservations({
+					store: latest.current.store,
+					canvasProbe,
+					terminalProbe,
+					livekitStatus: latest.current.livekitStatus,
+				})
+				const now = Date.now()
+				setHealth((prev) => stepHealth(prev, obs, now))
+				setNextProbeAt(now + thresholds.probeIntervalMs)
+			} finally {
+				inFlight = false
+			}
 		}
 		void tick() // probe immediately; don't wait a full interval for the first reading
 		const cancel = scheduler.every(thresholds.probeIntervalMs, () => void tick())

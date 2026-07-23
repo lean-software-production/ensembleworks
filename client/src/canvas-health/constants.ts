@@ -48,11 +48,14 @@ function positiveMs(raw: string | boolean | undefined, fallback: number): number
 	return Math.floor(n)
 }
 
-// Accepted gap: fields are parsed independently, so nothing here validates
-// probeTimeoutMs against probeIntervalMs — a build that sets the timeout
-// below the interval would have every probe time out before the next one
-// fires. Deliberate for now (per-field parsing keeps this simple and
-// testable); revisit if a misconfigured build ever hits it.
+// Fields are parsed independently, so nothing here validates probeTimeoutMs
+// against probeIntervalMs — and with the defaults the timeout (4000) is in
+// fact LONGER than the interval (2000). That no longer causes ticks to pile
+// up: useConnectionHealth runs one tick at a time and skips any that would
+// overlap. What it does mean is that against a server which black-holes
+// packets, the first observation cannot exist until probeTimeoutMs has
+// elapsed — which is why the store's close event has its own fast path there
+// (see markUnhealthy) rather than waiting for this poll.
 export function readThresholds(env: EnvRecord): Thresholds {
 	return {
 		canvasMs: positiveMs(env.VITE_CONN_HEALTH_CANVAS_MS, DEFAULT_THRESHOLDS.canvasMs),

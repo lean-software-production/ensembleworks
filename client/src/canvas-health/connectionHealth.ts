@@ -89,6 +89,37 @@ export function trippedTransports(health: HealthState, now: number, t: Threshold
 	return tripped
 }
 
+/**
+ * Stamp one transport unhealthy NOW, without waiting for a probe tick.
+ *
+ * The probe is a poll, but the tldraw store status is an EVENT: it flips the
+ * instant the sync socket closes cleanly. Folding that event into the next
+ * poll would throw away its one advantage — `useConnectionHealth`'s tick
+ * cannot produce an observation until BOTH probes have resolved, so a store
+ * flip would otherwise sit unreported for up to `probeTimeoutMs`, which is
+ * longer than the canvas threshold itself.
+ *
+ * Returns `prev` UNCHANGED when the transport is already unhealthy — both to
+ * preserve the sticky `unhealthySince` (the whole debounce depends on it) and
+ * to avoid handing React a new object identity on every store notification,
+ * which would re-render the component wrapping the entire canvas for nothing.
+ *
+ * Deliberately one-directional: this only ever marks unhealthy, never healthy.
+ * Recovery stays with the probe, because "the socket reopened" is not the same
+ * claim as "the server is actually answering" — and being slow to clear the
+ * modal is safe, while being quick to clear it on a half-open socket is not.
+ */
+export function markUnhealthy(prev: HealthState, id: TransportId, now: number): HealthState {
+	const was = prev[id]
+	if (!was.healthy) return prev
+	// Reachable only from a healthy transport, and healthy always implies
+	// `unhealthySince === null` (stepHealth clears it on recovery, initialHealth
+	// starts there), so this IS the first stamp — no `?? was.unhealthySince`
+	// fallback, which would only pretend to handle a state that cannot occur.
+	// Stickiness is enforced by the guard above, not here.
+	return { ...prev, [id]: { healthy: false, unhealthySince: now, rtt: was.rtt } }
+}
+
 export interface Availability {
 	blocked: boolean
 	reason: BlockReason | null

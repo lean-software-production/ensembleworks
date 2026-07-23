@@ -82,8 +82,27 @@ Health per transport per tick:
 - **canvas-sync** — healthy iff `store.status !== 'error'` **and**
   (`store.status !== 'synced-remote'` *or* `store.connectionStatus === 'online'`),
   AND a `GET /api/health` probe returned `ok` within `PROBE_TIMEOUT_MS`. The store
-  status flips **instantly** on a clean WS close (fast detection); the ping catches
-  a wedged-but-"open" socket and supplies the RTT.
+  status flips **instantly** on a clean WS close; the ping catches a
+  wedged-but-"open" socket and supplies the RTT.
+
+  The store signal has its own **fast path** (`markUnhealthy`) rather than being
+  folded into the poll. A tick cannot produce an observation until both probes
+  resolve — up to `PROBE_TIMEOUT_MS` (4000ms), which is longer than the canvas
+  threshold (3000ms) — so routing the instant signal through the poll made that
+  threshold unreachable in practice. The fast path only ever marks *unhealthy*;
+  recovery stays with the probe, because "the socket reopened" is a weaker claim
+  than "the server is answering", and being slow to clear the modal is safe while
+  being quick to clear it on a half-open socket is not.
+
+  **Detection latency is therefore not uniform, and the threshold is a debounce,
+  not a promise:**
+  - *clean WS close* — detected instantly, modal at ≈ `CANVAS_SYNC_THRESHOLD_MS` (~3s).
+  - *server refuses connections* — probe fails fast, modal at ≈ one tick + threshold (~5s).
+  - *server black-holes packets* (hung process, dropped wifi, laptop wake) — no
+    observation can exist before `PROBE_TIMEOUT_MS`, so the modal appears at
+    ≈ `PROBE_TIMEOUT_MS + CANVAS_SYNC_THRESHOLD_MS` (~7s). This is irreducible for
+    a polling design: you cannot distinguish "slow" from "gone" faster than you are
+    willing to wait for slow.
 - **terminals** — healthy iff `GET /api/terminal/health` returned `ok` within
   timeout. (Endpoint-based, so it works even with zero terminal shapes open —
   simpler and more complete than aggregating per-shape state.)
@@ -225,7 +244,8 @@ marker in `CanvasV2App.tsx`.
   other input.
 - **Lock / probe wiring** — thin; validated by the pure tests + a manual smoke.
 - **Manual smoke (Mac/Chrome):** kill the network mid-session (canvas modal within
-  ~3s, correct transport highlighted, auto-recovers); open a 2nd tab (it shows the
+  ~3s of a clean close, ~7s if the server black-holes packets — see §3's latency
+  table; correct transport highlighted, auto-recovers); open a 2nd tab (it shows the
   duplicate-tab notice and connects nothing; closing the first tab lets it take
   over automatically); video-only drop (row shows degraded, canvas stays
   interactive).

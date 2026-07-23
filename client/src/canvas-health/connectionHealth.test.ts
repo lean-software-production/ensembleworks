@@ -13,6 +13,7 @@ import {
 	chipThreshold,
 	countdownSeconds,
 	initialHealth,
+	markUnhealthy,
 	needsFastClock,
 	stepHealth,
 	syncStoreHealthy,
@@ -152,6 +153,29 @@ assert.equal(countdownSeconds(4000, 3000), 1, 'a late tick never shows a negativ
 // partial second must round UP — with floor, 1500ms left would read "Retrying
 // in 1" and then sit there for a further 1.5s, appearing stuck.
 assert.equal(countdownSeconds(1000, 2500), 2, 'a partial second rounds up, not down')
+
+// ----------------------------------------------------------- markUnhealthy
+// The store status is an event, not a poll, so it must be able to stamp a
+// transport unhealthy between probe ticks. Without this the canvas threshold
+// (3000ms) was unreachable in practice: no observation could exist until both
+// probes resolved, up to probeTimeoutMs (4000ms) later.
+{
+	const healthy = initialHealth()
+	const marked = markUnhealthy(healthy, 'canvas', 5000)
+	assert.equal(marked.canvas.healthy, false)
+	assert.equal(marked.canvas.unhealthySince, 5000, 'stamps at the moment of the event')
+	assert.equal(marked.terminals.unhealthySince, null, 'other transports untouched')
+
+	// Sticky: a second mark must NOT restamp, or the debounce would never
+	// accumulate and the modal would never appear.
+	const again = markUnhealthy(marked, 'canvas', 9000)
+	assert.equal(again.canvas.unhealthySince, 5000, 'an already-unhealthy transport keeps its first stamp')
+	assert.equal(again, marked, 'and returns the SAME object — no identity churn, no wasted re-render')
+
+	// The last known rtt survives being marked unhealthy, same as stepHealth.
+	const withRtt = stepHealth(initialHealth(), obs({ canvas: { healthy: true, rtt: 42 } }), 1000)
+	assert.equal(markUnhealthy(withRtt, 'canvas', 2000).canvas.rtt, 42, 'last known rtt survives')
+}
 
 // ------------------------------------------------------------ chipThreshold
 // chipThreshold had NO direct test, yet it is what trippedTransports compares
