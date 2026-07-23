@@ -1,0 +1,205 @@
+/**
+ * Run: bun client/src/canvas-health/connectionHealth.test.ts
+ *
+ * The reducer is the whole feature's logic: threshold tripping, debounce,
+ * recovery, blocking, chip rendering state, countdown. All pure, all
+ * driven by an injected `now` — no timers, no fetch, no DOM.
+ */
+import assert from 'node:assert/strict'
+import { DEFAULT_THRESHOLDS } from './constants'
+import {
+	availability,
+	BLOCKING_TRANSPORTS,
+	chipThreshold,
+	countdownSeconds,
+	initialHealth,
+	markUnhealthy,
+	needsFastClock,
+	stepHealth,
+	syncStoreHealthy,
+	transportChip,
+	trippedTransports,
+	type HealthState,
+	type Observations,
+} from './connectionHealth'
+
+const T = DEFAULT_THRESHOLDS // canvas 3000, terminals 8000
+
+const ok: Observations = {
+	canvas: { healthy: true, rtt: 20 },
+	terminals: { healthy: true, rtt: 15 },
+	livekit: { healthy: true, rtt: null },
+}
+function obs(over: Partial<Observations>): Observations {
+	return { ...ok, ...over }
+}
+
+// ---------------------------------------------------------------- store status
+// 1. syncStoreHealthy encodes design §3's canvas-sync store rule.
+assert.equal(syncStoreHealthy({ status: 'loading', connectionStatus: null }), true, 'loading is not yet unhealthy')
+assert.equal(syncStoreHealthy({ status: 'synced-remote', connectionStatus: 'online' }), true)
+assert.equal(syncStoreHealthy({ status: 'synced-remote', connectionStatus: 'offline' }), false)
+assert.equal(syncStoreHealthy({ status: 'error', connectionStatus: 'online' }), false, 'error is unhealthy regardless')
+
+// ------------------------------------------------------------------- stamping
+// 2. A healthy tick leaves unhealthySince null and records the rtt.
+const h1 = stepHealth(initialHealth(), ok, 1000)
+assert.equal(h1.canvas.unhealthySince, null)
+assert.equal(h1.canvas.rtt, 20)
+
+// 3. Going unhealthy stamps `now` once and does NOT re-stamp on later ticks —
+//    otherwise a continuously-broken transport would never reach its threshold.
+const h2 = stepHealth(h1, obs({ canvas: { healthy: false, rtt: null } }), 2000)
+assert.equal(h2.canvas.unhealthySince, 2000)
+const h3 = stepHealth(h2, obs({ canvas: { healthy: false, rtt: null } }), 4000)
+assert.equal(h3.canvas.unhealthySince, 2000, 'stamp is sticky while unhealthy')
+
+// 4. A failed probe keeps the LAST KNOWN rtt rather than blanking it — the
+//    pill should show the last real measurement, not jump to "—".
+assert.equal(h3.canvas.rtt, 20, 'last known rtt survives a failed probe')
+
+// ------------------------------------------------------------------- tripping
+// 5. Unhealthy for < threshold is NOT tripped (the debounce: a sub-second flap
+//    must never flash the modal).
+assert.deepEqual(trippedTransports(h2, 4999, T), [], '2999ms < 3000ms threshold: not tripped')
+// 6. >= threshold IS tripped.
+assert.deepEqual(trippedTransports(h2, 5000, T), ['canvas'], 'exactly at threshold trips')
+assert.deepEqual(trippedTransports(h2, 9000, T), ['canvas'])
+
+// 7. Recovery clears the stamp immediately — one healthy tick un-trips.
+const h4 = stepHealth(h3, ok, 6000)
+assert.equal(h4.canvas.unhealthySince, null)
+assert.deepEqual(trippedTransports(h4, 60_000, T), [], 'recovery un-trips instantly')
+
+// 8. A flap (unhealthy → healthy → unhealthy) restarts the clock.
+const f1 = stepHealth(initialHealth(), obs({ canvas: { healthy: false, rtt: null } }), 1000)
+const f2 = stepHealth(f1, ok, 2000)
+const f3 = stepHealth(f2, obs({ canvas: { healthy: false, rtt: null } }), 2500)
+assert.equal(f3.canvas.unhealthySince, 2500, 'clock restarts after recovery')
+assert.deepEqual(trippedTransports(f3, 4000, T), [], 'flap does not accumulate toward the threshold')
+
+// 9. Terminals use their own, longer threshold.
+const t1 = stepHealth(initialHealth(), obs({ terminals: { healthy: false, rtt: null } }), 0)
+assert.deepEqual(trippedTransports(t1, 7999, T), [], 'terminals not tripped before 8000ms')
+assert.deepEqual(trippedTransports(t1, 8000, T), ['terminals'])
+
+// 10. Both tripped ⇒ both named, canvas first (stable order for the UI).
+const b1 = stepHealth(initialHealth(), obs({
+	canvas: { healthy: false, rtt: null },
+	terminals: { healthy: false, rtt: null },
+}), 0)
+assert.deepEqual(trippedTransports(b1, 10_000, T), ['canvas', 'terminals'])
+
+// 11. LiveKit NEVER trips, however long it is down.
+const lk = stepHealth(initialHealth(), obs({ livekit: { healthy: false, rtt: null } }), 0)
+assert.deepEqual(trippedTransports(lk, 10 * 60_000, T), [], 'livekit is display-only')
+
+// 11b. The non-blocking decision is pinned at the SOURCE, not just via the
+//      null-threshold guard: livekit must never be in BLOCKING_TRANSPORTS.
+//      Without this, adding it there breaks nothing and the design decision
+//      silently erodes (found by mutation testing, 2026-07-22).
+assert.equal(BLOCKING_TRANSPORTS.includes('livekit'), false, 'livekit must never be a blocking transport')
+assert.deepEqual([...BLOCKING_TRANSPORTS], ['canvas', 'terminals'])
+
+// --------------------------------------------------------------- availability
+// 12. Healthy ⇒ not blocked. (A tab without the lock never reaches this code:
+//     SingleTabGate refuses to mount the app at all, design §5.)
+assert.deepEqual(
+	availability({ health: h4, now: 6000, thresholds: T }),
+	{ blocked: false, reason: null, tripped: [] }
+)
+
+// 13. Tripped blocking transports ⇒ blocked on 'connection', both named.
+assert.deepEqual(
+	availability({ health: b1, now: 10_000, thresholds: T }),
+	{ blocked: true, reason: 'connection', tripped: ['canvas', 'terminals'] }
+)
+
+// 13b. A tripped blocking transport is now the ONLY way to be blocked. One
+//      tripped transport is enough — `h2` is canvas-only unhealthy.
+assert.deepEqual(availability({ health: h2, now: 10_000, thresholds: T }), {
+	blocked: true,
+	reason: 'connection',
+	tripped: ['canvas'],
+})
+
+// 16. LiveKit down alone never blocks.
+assert.equal(availability({ health: lk, now: 10 * 60_000, thresholds: T }).blocked, false)
+
+// ---------------------------------------------------------------------- chips
+// 17. Chip states: connected / degrading (with elapsed) / down.
+const chipHealthy = transportChip(h4.canvas, 6000, T.canvasMs)
+assert.deepEqual(chipHealthy, { kind: 'connected', unhealthyMs: 0 })
+const chipDegrading = transportChip(b1.canvas, 1000, T.canvasMs)
+assert.deepEqual(chipDegrading, { kind: 'degrading', unhealthyMs: 1000 })
+const chipDown = transportChip(b1.canvas, 5000, T.canvasMs)
+assert.deepEqual(chipDown, { kind: 'down', unhealthyMs: 5000 })
+// 18. A transport with no threshold (livekit) degrades but never goes down.
+assert.deepEqual(transportChip(lk.livekit, 10 * 60_000, null), { kind: 'degrading', unhealthyMs: 600_000 })
+// 18b. A backwards clock jump (NTP correction, laptop resume) must not produce
+//      a negative age — it would render as "degrading (-3s)". The Math.max
+//      floor is what prevents that, so pin it.
+assert.deepEqual(transportChip(b1.canvas, -3000, T.canvasMs), { kind: 'degrading', unhealthyMs: 0 })
+
+// ------------------------------------------------------------------ countdown
+// 19. "Retrying in N…" counts whole seconds to the next probe tick, floor 1
+//     (never show "Retrying in 0"), and never negative if a tick runs late.
+assert.equal(countdownSeconds(1000, 3000), 2)
+assert.equal(countdownSeconds(2500, 3000), 1)
+assert.equal(countdownSeconds(3000, 3000), 1, 'at the tick boundary, show 1 not 0')
+assert.equal(countdownSeconds(4000, 3000), 1, 'a late tick never shows a negative')
+// ROUNDING DIRECTION: every case above is either an exact multiple of 1000 or
+// inside the floor-1 clamp, so none of them distinguishes ceil from floor. A
+// partial second must round UP — with floor, 1500ms left would read "Retrying
+// in 1" and then sit there for a further 1.5s, appearing stuck.
+assert.equal(countdownSeconds(1000, 2500), 2, 'a partial second rounds up, not down')
+
+// ----------------------------------------------------------- markUnhealthy
+// The store status is an event, not a poll, so it must be able to stamp a
+// transport unhealthy between probe ticks. Without this the canvas threshold
+// (3000ms) was unreachable in practice: no observation could exist until both
+// probes resolved, up to probeTimeoutMs (4000ms) later.
+{
+	const healthy = initialHealth()
+	const marked = markUnhealthy(healthy, 'canvas', 5000)
+	assert.equal(marked.canvas.healthy, false)
+	assert.equal(marked.canvas.unhealthySince, 5000, 'stamps at the moment of the event')
+	assert.equal(marked.terminals.unhealthySince, null, 'other transports untouched')
+
+	// Sticky: a second mark must NOT restamp, or the debounce would never
+	// accumulate and the modal would never appear.
+	const again = markUnhealthy(marked, 'canvas', 9000)
+	assert.equal(again.canvas.unhealthySince, 5000, 'an already-unhealthy transport keeps its first stamp')
+	assert.equal(again, marked, 'and returns the SAME object — no identity churn, no wasted re-render')
+
+	// The last known rtt survives being marked unhealthy, same as stepHealth.
+	const withRtt = stepHealth(initialHealth(), obs({ canvas: { healthy: true, rtt: 42 } }), 1000)
+	assert.equal(markUnhealthy(withRtt, 'canvas', 2000).canvas.rtt, 42, 'last known rtt survives')
+}
+
+// ------------------------------------------------------------ chipThreshold
+// chipThreshold had NO direct test, yet it is what trippedTransports compares
+// against AND what decides whether a row can render "✗ down". LiveKit's null
+// is the load-bearing part: it is measured and displayed but must never read
+// as down, because it is never blocking (design §3). Giving it a number would
+// tell users a transport is down that cannot, by design, stop them working.
+assert.equal(chipThreshold('livekit', T), null, 'LiveKit has no threshold and can never read "down"')
+assert.equal(chipThreshold('canvas', T), T.canvasMs)
+assert.equal(chipThreshold('terminals', T), T.terminalMs)
+
+// ---------------------------------------------------------------- fast clock
+// 20. All healthy ⇒ no fast clock needed (the common case this gate exists to
+//     keep quiet).
+assert.equal(needsFastClock(h4), false, 'fully healthy: no fast clock')
+
+// 21. A tripped BLOCKING transport ⇒ fast clock needed (the countdown/chip
+//     move).
+assert.equal(needsFastClock(b1), true, 'blocking transport unhealthy: fast clock')
+
+// 22. LiveKit-only unhealthy ⇒ NOT needed. LiveKit never blocks, so the modal
+//     never mounts and no chip is on screen to animate; when livekit's chip
+//     IS visible, a blocking transport is already tripped and this is
+//     already true for that reason.
+assert.equal(needsFastClock(lk), false, 'livekit-only unhealthy: no fast clock')
+
+console.log('connectionHealth.test.ts: all assertions passed')
