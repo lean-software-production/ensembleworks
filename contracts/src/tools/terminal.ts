@@ -21,7 +21,7 @@ export const terminalList: ToolDef = {
 	plugin: 'terminal',
 	id: 'list',
 	http: { method: 'GET', path: '/api/terminal/list' },
-	help: 'List registered remote terminal gateways.',
+	help: 'List registered remote terminal gateways (codespaces carry repo/branch/inputPolicy).',
 	zodInput: z.object({}),
 	zodOutput: z.object({
 		gateways: z.array(z.object({
@@ -29,8 +29,29 @@ export const terminalList: ToolDef = {
 			label: z.string(),
 			relayOnly: z.literal(true),
 			connectedAt: z.number(),
+			repo: z.string().optional(),
+			branch: z.string().optional(),
+			inputPolicy: z.enum(['locked', 'shared']),
+			owner: z.string(),
+			viewerIsOwner: z.boolean(),
 		})),
 	}),
 }
 
-export const terminalTools: ToolDef[] = [terminalStatus, terminalList]
+export const terminalInputPolicy: ToolDef = {
+	plugin: 'terminal',
+	id: 'input-policy',
+	http: { method: 'POST', path: '/api/terminal/input-policy' },
+	help: 'Set a gateway input policy (owner only): locked (viewers read-only) or shared.',
+	zodInput: z.object({
+		gatewayId: z.string().min(1).describe('registered gateway id (required)'),
+		policy: z.enum(['locked', 'shared']),
+	}),
+	zodOutput: z.object({
+		ok: z.literal(true),
+		gatewayId: z.string(),
+		policy: z.enum(['locked', 'shared']),
+	}),
+}
+
+export const terminalTools: ToolDef[] = [terminalStatus, terminalList, terminalInputPolicy]

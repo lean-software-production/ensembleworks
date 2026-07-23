@@ -34,6 +34,7 @@ import { createDiscordRouter } from './features/discord.ts'
 import { createFileViewerRouter } from './features/file-viewer.ts'
 import { createFilesRouter } from './features/files.ts'
 import { createFramesRouter } from './features/frames.ts'
+import { createGatewayInputPolicyRouter } from './features/gateway-input-policy.ts'
 import { createParticipantsRouter } from './features/participants.ts'
 import { createRoadmapRouter } from './features/roadmap.ts'
 import { createShapeRouter } from './features/shape.ts'
@@ -331,6 +332,9 @@ export function createSyncApp(opts: {
 	// See docs/superpowers/specs/2026-07-03-remote-devcontainer-terminal-spike-design.md
 	const gatewayPlane = createGatewayPlane()
 	app.get(terminalList.http.path, gatewayPlane.listHandler)   // path from the tool def
+	// Owner-controlled input ACL toggle (SP3): closes over the gateway plane's
+	// registry — the policy's single source of truth.
+	app.use(createGatewayInputPolicyRouter(gatewayPlane.registry))
 
 	// Auth-plane foundation: caller identity envelope (human|bot|anonymous).
 	app.use(createWhoamiRouter())

@@ -21,6 +21,7 @@
  */
 import type { TermServerMessage } from '@ensembleworks/contracts'
 import { clampTmuxGrid, type TmuxSession } from '@ensembleworks/contracts/session-manager'
+import { capTail, type LayoutSnapshot } from './layout.ts'
 
 const SCROLLBACK_LIMIT = 256 * 1024 // bytes replayed to a newly attached channel (session.go)
 
@@ -32,7 +33,7 @@ export interface ChannelSink {
 	close(): void
 }
 
-export type SpawnFactory = (sessionId: string, cols: number, rows: number) => TmuxSession
+export type SpawnFactory = (sessionId: string, cols: number, rows: number, cwd?: string) => TmuxSession
 
 interface SessionState {
 	pty: TmuxSession
@@ -44,14 +45,25 @@ interface SessionState {
 
 export class ConnectorSessionManager {
 	private sessions = new Map<string, SessionState>()
+	/** SP4 layout seeds, consumed by getOrCreate: last cwd + history to preload
+	 *  into the ring. Entries are deleted once used. */
+	private seeded = new Map<string, { cwd?: string; history: Buffer }>()
 	constructor(private readonly spawn: SpawnFactory) {}
 
 	private getOrCreate(id: string, cols: number, rows: number): SessionState {
 		const existing = this.sessions.get(id)
 		if (existing) return existing
 		const grid = clampTmuxGrid(cols, rows) // session.go getOrCreate clamps BEFORE spawn; attached reports the clamped grid
-		const pty = this.spawn(id, grid.cols, grid.rows) // canvasTmuxSpawnSpec inside; -A reattaches
-		const s: SessionState = { pty, ring: [], ringBytes: 0, channels: new Map(), gone: false }
+		const seed = this.seeded.get(id)
+		this.seeded.delete(id)
+		const pty = this.spawn(id, grid.cols, grid.rows, seed?.cwd) // canvasTmuxSpawnSpec inside; -A reattaches
+		const s: SessionState = {
+			pty,
+			ring: seed && seed.history.byteLength > 0 ? [seed.history] : [],
+			ringBytes: seed?.history.byteLength ?? 0,
+			channels: new Map(),
+			gone: false,
+		}
 		pty.onData((data) => {
 			const buf = Buffer.from(data, 'utf8')
 			s.ring.push(buf)
@@ -109,6 +121,36 @@ export class ConnectorSessionManager {
 		for (const s of this.sessions.values()) {
 			for (const sink of s.channels.values()) sink.close()
 			s.channels.clear()
+		}
+	}
+
+	/** SP4 snapshot (decision #4): every LIVE session's id, cwd (via the
+	 *  injected /proc reader — impure, so injected) and capped scrollback tail,
+	 *  base64'd for JSON. Called from the connector's SIGTERM handler. */
+	snapshotLayout(readCwd: (pid: number | undefined) => string | undefined): LayoutSnapshot {
+		const sessions = [...this.sessions.entries()]
+			.filter(([, s]) => !s.gone)
+			.map(([id, s]) => {
+				const cwd = readCwd(s.pty.pid)
+				const scrollbackTail = capTail(s.ring).toString('base64')
+				return cwd === undefined ? { id, scrollbackTail } : { id, cwd, scrollbackTail }
+			})
+		return { version: 1, sessions }
+	}
+
+	/** SP4 restore (decision #4): record each entry's cwd + history seed, then
+	 *  eagerly respawn it at the default 80x24 grid so the session exists (in
+	 *  its last cwd, ring pre-seeded) before any viewer attaches. A seed whose
+	 *  spawn fails (e.g. its cwd was deleted) is dropped — the next attach
+	 *  spawns it fresh with no override; the remaining seeds still restore. */
+	preseedLayout(layout: LayoutSnapshot): void {
+		for (const entry of layout.sessions) {
+			this.seeded.set(entry.id, { cwd: entry.cwd, history: Buffer.from(entry.scrollbackTail, 'base64') })
+			try {
+				this.getOrCreate(entry.id, 80, 24)
+			} catch {
+				this.seeded.delete(entry.id) // consumed-or-dropped either way; never fatal
+			}
 		}
 	}
 }

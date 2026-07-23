@@ -10,9 +10,17 @@ import path from 'node:path'
 import { parse, stringify } from 'smol-toml'
 
 export interface InstanceRecord {
-	method: 'service-token' | 'none'
+	method: 'service-token' | 'none' | 'access-browser'
 	token_id?: string
 	token_secret?: string
+	/** access-browser (SP5): the long-lived Access org token — THE stored credential */
+	org_token?: string
+	/** access-browser: cached short-lived app token; re-minted from org_token when stale */
+	app_token?: string
+	/** access-browser: <team>.cloudflareaccess.com host, discovered from the probe redirect */
+	team_domain?: string
+	/** access-browser: the Access application AUD tag (the login redirect's kid param) */
+	aud?: string
 	default_room?: string
 	identity?: string
 }

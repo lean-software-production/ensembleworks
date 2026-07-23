@@ -3,7 +3,8 @@
  * default_instance), look up THAT url's file record, then overlay each env var
  * individually (the GH_TOKEN per-variable pattern — a lone ENSEMBLEWORKS_URL
  * keeps the file's creds/room). authHeaders emits the CF Access service-token
- * pair (exactly what gateway-go sends) only for a service-token instance.
+ * pair (exactly what gateway-go sends) only for a service-token instance;
+ * authHeaders additionally emits cf-access-token for a minted Access app token (SP5).
  */
 import { CliError } from './errors.ts'
 import type { HostsFile } from './hosts.ts'
@@ -18,10 +19,12 @@ export interface Env {
 	ENSEMBLEWORKS_ROOM?: string
 	ENSEMBLEWORKS_TOKEN_ID?: string
 	ENSEMBLEWORKS_TOKEN_SECRET?: string
+	ENSEMBLEWORKS_ACCESS_TOKEN?: string
 }
 
 export type Auth =
 	| { method: 'service-token'; tokenId: string; tokenSecret: string }
+	| { method: 'access'; appToken: string } // a minted CF Access app token (SP5)
 	| { method: 'none' }
 
 export interface Conn {
@@ -36,6 +39,7 @@ export function readEnv(env: NodeJS.ProcessEnv): Env {
 		ENSEMBLEWORKS_ROOM: env.ENSEMBLEWORKS_ROOM,
 		ENSEMBLEWORKS_TOKEN_ID: env.ENSEMBLEWORKS_TOKEN_ID,
 		ENSEMBLEWORKS_TOKEN_SECRET: env.ENSEMBLEWORKS_TOKEN_SECRET,
+		ENSEMBLEWORKS_ACCESS_TOKEN: env.ENSEMBLEWORKS_ACCESS_TOKEN,
 	}
 }
 
@@ -57,8 +61,14 @@ export function resolveConn(flags: Flags, env: Env, hosts: HostsFile): Conn {
 	const tokenId = env.ENSEMBLEWORKS_TOKEN_ID ?? rec?.token_id
 	const tokenSecret = env.ENSEMBLEWORKS_TOKEN_SECRET ?? rec?.token_secret
 
-	const auth: Auth =
-		tokenId && tokenSecret
+	// Most-specific first: an explicit app token (the in-container connector —
+	// SP2 injects ENSEMBLEWORKS_ACCESS_TOKEN per (re)spawn) beats the service
+	// pair; the pair beats none. An access-browser FILE record stays 'none'
+	// here — minting is async; resolveConnFresh (auth/fresh.ts) upgrades it.
+	const accessToken = env.ENSEMBLEWORKS_ACCESS_TOKEN
+	const auth: Auth = accessToken
+		? { method: 'access', appToken: accessToken }
+		: tokenId && tokenSecret
 			? { method: 'service-token', tokenId, tokenSecret }
 			: { method: 'none' }
 
@@ -71,6 +81,12 @@ export function authHeaders(auth: Auth): Record<string, string> {
 			'CF-Access-Client-Id': auth.tokenId,
 			'CF-Access-Client-Secret': auth.tokenSecret,
 		}
+	}
+	if (auth.method === 'access') {
+		// Discovery #4: Access evaluates cf-access-token on every request; the
+		// edge validates it and forwards Cf-Access-Jwt-Assertion to the origin
+		// (which server/src/access-identity.ts already verifies — no server change).
+		return { 'cf-access-token': auth.appToken }
 	}
 	return {}
 }
