@@ -158,48 +158,6 @@ function SettingsSection() {
 					</button>
 				))}
 			</div>
-
-			<span
-				style={{
-					fontFamily: wm.mono,
-					fontSize: 9,
-					fontWeight: 700,
-					textTransform: 'uppercase',
-					letterSpacing: 0.9,
-					color: wm.inkMuted,
-					marginTop: 4,
-				}}
-			>
-				Microphone
-			</span>
-			{/* SPIKE: RNNoise runs client-side on your mic before publishing
-			    (av/noiseFilter.ts). Takes effect on the next talk, or live if the
-			    mic is already on. */}
-			<button
-				type="button"
-				data-testid="ew-settings-noise-filter"
-				aria-pressed={settings.noiseFilter}
-				onClick={() => updateSettings({ noiseFilter: !settings.noiseFilter })}
-				style={{
-					display: 'flex',
-					justifyContent: 'space-between',
-					alignItems: 'center',
-					gap: 8,
-					border: settings.noiseFilter ? `1px solid ${wm.sealBlue}` : `1px solid ${wm.rule}`,
-					borderRadius: 3,
-					background: settings.noiseFilter ? wm.accentSoft : wm.bg,
-					color: wm.ink,
-					padding: '6px 8px',
-					fontFamily: wm.sans,
-					fontSize: 11,
-					cursor: 'pointer',
-				}}
-			>
-				<span>Noise filter (RNNoise)</span>
-				<span style={{ fontFamily: wm.mono, color: settings.noiseFilter ? wm.sealBlue : wm.inkSubtle }}>
-					{settings.noiseFilter ? 'ON' : 'OFF'}
-				</span>
-			</button>
 		</div>
 	)
 }
