@@ -18,7 +18,6 @@ const outside = (over: Partial<Parameters<typeof shouldSwallowKey>[0]>) =>
 		metaKey: false,
 		altKey: false,
 		shiftKey: false,
-		insidePanel: false,
 		...over,
 	})
 
@@ -43,19 +42,29 @@ assert.equal(outside({ key: 'Delete' }), true, 'Delete must be swallowed')
 assert.equal(outside({ key: 'Backspace' }), true, 'Backspace must be swallowed')
 assert.equal(outside({ key: 'Escape' }), true, 'Escape must be swallowed')
 
-// insidePanel is true in the common case (focus-on-mount lands there), so it
-// must NOT be a blanket bypass — only Enter/Space (operating a focused
-// button) get exempted by it. Modifier chords stay swallowed regardless of
-// focus location, and so do bare tool-shortcut keys.
-assert.equal(outside({ key: 'z', ctrlKey: true, insidePanel: true }), true, 'insidePanel must not bypass ctrl+z')
-assert.equal(outside({ key: 'z', metaKey: true, insidePanel: true }), true, 'insidePanel must not bypass cmd+z')
-assert.equal(outside({ key: 'a', ctrlKey: true, insidePanel: true }), true, 'insidePanel must not bypass ctrl+a')
-assert.equal(outside({ key: 'a', metaKey: true, insidePanel: true }), true, 'insidePanel must not bypass cmd+a')
-assert.equal(outside({ key: 'c', ctrlKey: true, insidePanel: true }), false, 'ctrl+c passes through inside the panel too')
-assert.equal(outside({ key: 'c', metaKey: true, insidePanel: true }), false, 'cmd+c passes through inside the panel too')
-assert.equal(outside({ key: 'Enter', insidePanel: true }), false, 'Enter must operate the focused button')
-assert.equal(outside({ key: ' ', insidePanel: true }), false, 'Space must operate the focused button')
-assert.equal(outside({ key: 'd', insidePanel: true }), true, 'bare letters inside the panel must still be swallowed (tldraw tool shortcuts)')
-assert.equal(outside({ key: 'Tab', insidePanel: true }), false, 'bare Tab must pass through inside the panel too')
+// REGRESSION (2026-07-23): Enter and Space must be swallowed.
+//
+// They used to pass through whenever focus was inside the panel, so the
+// takeover button could be operated by keyboard. That button was deleted when
+// the duplicate-tab takeover became a mount gate, but the exemption stayed —
+// and because the modal focuses itself on mount, it applied essentially all
+// the time. The result was a standing leak of two keys to tldraw's
+// document.body handler with nothing left to benefit from it: Space is
+// hold-to-pan, and Enter enters shape-edit mode, which is exactly "mutate a
+// canvas that cannot sync" — the thing this predicate exists to prevent.
+//
+// The panel contains nothing focusable now (a tabIndex={-1} div of text,
+// chips and a latency pill), so no key needs to reach it. shouldSwallowKey
+// therefore takes no focus-location input at all: there is no state in which
+// the swallow relaxes. If an interactive control is ever added back, add a
+// narrow exemption AND a test saying why.
+assert.equal(outside({ key: 'Enter' }), true, 'Enter must be swallowed (no focusable control to operate)')
+assert.equal(outside({ key: ' ' }), true, 'Space must be swallowed (tldraw hold-to-pan)')
+
+// The allowlist is unconditional — these hold no matter where focus sits,
+// which is the property that replaced the old insidePanel branching.
+assert.equal(outside({ key: 'z', ctrlKey: true }), true, 'ctrl+z stays swallowed unconditionally')
+assert.equal(outside({ key: 'c', ctrlKey: true }), false, 'ctrl+c passes through unconditionally')
+assert.equal(outside({ key: 'd' }), true, 'bare letters stay swallowed (tldraw tool shortcuts)')
 
 console.log('inputSwallow.test.ts: all assertions passed')

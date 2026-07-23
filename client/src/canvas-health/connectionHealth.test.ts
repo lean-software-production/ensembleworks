@@ -10,6 +10,7 @@ import { DEFAULT_THRESHOLDS } from './constants'
 import {
 	availability,
 	BLOCKING_TRANSPORTS,
+	chipThreshold,
 	countdownSeconds,
 	initialHealth,
 	needsFastClock,
@@ -146,6 +147,21 @@ assert.equal(countdownSeconds(1000, 3000), 2)
 assert.equal(countdownSeconds(2500, 3000), 1)
 assert.equal(countdownSeconds(3000, 3000), 1, 'at the tick boundary, show 1 not 0')
 assert.equal(countdownSeconds(4000, 3000), 1, 'a late tick never shows a negative')
+// ROUNDING DIRECTION: every case above is either an exact multiple of 1000 or
+// inside the floor-1 clamp, so none of them distinguishes ceil from floor. A
+// partial second must round UP — with floor, 1500ms left would read "Retrying
+// in 1" and then sit there for a further 1.5s, appearing stuck.
+assert.equal(countdownSeconds(1000, 2500), 2, 'a partial second rounds up, not down')
+
+// ------------------------------------------------------------ chipThreshold
+// chipThreshold had NO direct test, yet it is what trippedTransports compares
+// against AND what decides whether a row can render "✗ down". LiveKit's null
+// is the load-bearing part: it is measured and displayed but must never read
+// as down, because it is never blocking (design §3). Giving it a number would
+// tell users a transport is down that cannot, by design, stop them working.
+assert.equal(chipThreshold('livekit', T), null, 'LiveKit has no threshold and can never read "down"')
+assert.equal(chipThreshold('canvas', T), T.canvasMs)
+assert.equal(chipThreshold('terminals', T), T.terminalMs)
 
 // ---------------------------------------------------------------- fast clock
 // 20. All healthy ⇒ no fast clock needed (the common case this gate exists to

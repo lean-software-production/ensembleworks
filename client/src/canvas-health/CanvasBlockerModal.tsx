@@ -68,25 +68,29 @@ export function blockedSummary(tripped: readonly TransportId[]): string {
  * mutating local canvas state while the modal is up.
  *
  * Allowlist, not a blanket modifier exemption: only Ctrl/Cmd+C (copy — does
- * not mutate) and bare Tab (focus movement into the modal's own button) pass
- * through. Everything else chorded with a modifier — including Ctrl/Cmd+X
- * (cut), Ctrl/Cmd+V (paste), Ctrl/Cmd+Z/Shift+Z, Ctrl/Cmd+A, all of which
- * mutate — is swallowed, same as unmodified keys.
+ * not mutate) and bare Tab (focus movement) pass through. Everything else
+ * chorded with a modifier — including Ctrl/Cmd+X (cut), Ctrl/Cmd+V (paste),
+ * Ctrl/Cmd+Z/Shift+Z, Ctrl/Cmd+A, all of which mutate — is swallowed, same as
+ * unmodified keys. Every bare key (letters, Delete, Backspace, Escape, Enter,
+ * Space, …) is swallowed too, because those are exactly the keys tldraw's
+ * `document.body`-level handler treats as tool shortcuts.
  *
- * `insidePanel` is NOT a blanket bypass, on purpose, even though it looks
- * like the obvious way to exempt "the modal's own button." The modal moves
- * focus into itself on mount for accessibility (the panel div, which has
- * `tabIndex={-1}`) — so
- * `insidePanel` is true in the *common* case, for as long as the user hasn't
- * clicked or tabbed elsewhere. Treating it as "don't swallow" would silently
- * disable the swallow for the entire time the modal is up, which is exactly
- * the bug this predicate exists to prevent. So `insidePanel` only widens the
- * allowlist to the two keys that operate a focused button — `Enter` and
- * `' '` (Space) — and only when unmodified. Every modifier chord is swallowed
- * regardless of focus location (except Ctrl/Cmd+C, per above), and every
- * other bare key (letters, Delete, Backspace, Escape, …) is swallowed
- * regardless of focus location too, because those are exactly the keys
- * tldraw's `document.body`-level handler treats as tool shortcuts.
+ * THE DECISION DELIBERATELY DOES NOT DEPEND ON WHERE FOCUS IS. It used to:
+ * an `insidePanel` flag widened the allowlist to `Enter`/`' '` so the
+ * takeover button could be operated by keyboard. That flag was the vector for
+ * two separate defects — once as a blanket bypass that made the swallow
+ * entirely inert (the modal focuses itself on mount, so `insidePanel` was
+ * permanently true), and once by outliving its own justification when the
+ * takeover button was deleted, quietly leaking `Enter` (enter shape-edit
+ * mode) and `Space` to tldraw for no beneficiary.
+ *
+ * The panel now contains nothing focusable at all — it is a `tabIndex={-1}`
+ * div holding text, chips and a latency pill — so no key needs to reach it,
+ * and the safe behaviour is also the simple one. Keeping focus out of the
+ * signature makes that structural rather than a rule someone has to remember:
+ * there is no longer any state in which the swallow relaxes. If an
+ * interactive control is ever added back to this panel, reintroduce a
+ * narrowly-scoped exemption WITH a test that pins why it exists.
  *
  * Reload/close/devtools (Ctrl/Cmd+R, Ctrl/Cmd+W, Cmd+Tab, F12) are swallowed
  * too, and that's fine: those are non-cancelable browser-chrome shortcuts in
@@ -101,7 +105,6 @@ export function shouldSwallowKey(input: {
 	metaKey: boolean
 	altKey: boolean
 	shiftKey: boolean
-	insidePanel: boolean
 }): boolean {
 	const chorded = input.ctrlKey || input.metaKey || input.altKey
 	if (input.key === 'Tab' && !chorded) return false
@@ -109,7 +112,6 @@ export function shouldSwallowKey(input: {
 		const isCopy = (input.ctrlKey || input.metaKey) && !input.altKey && input.key.toLowerCase() === 'c'
 		return !isCopy
 	}
-	if (input.insidePanel && (input.key === 'Enter' || input.key === ' ')) return false
 	return true
 }
 
@@ -175,7 +177,7 @@ export function CanvasBlockerModal(props: {
 			ev.preventDefault()
 		}
 		const swallowKey = (ev: KeyboardEvent) => {
-			const insidePanel = !!panelRef.current?.contains(ev.target as Node)
+			// Deliberately not passing focus location — see shouldSwallowKey.
 			if (
 				!shouldSwallowKey({
 					key: ev.key,
@@ -183,7 +185,6 @@ export function CanvasBlockerModal(props: {
 					metaKey: ev.metaKey,
 					altKey: ev.altKey,
 					shiftKey: ev.shiftKey,
-					insidePanel,
 				})
 			)
 				return
