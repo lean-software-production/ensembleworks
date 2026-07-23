@@ -146,19 +146,26 @@ client/src/App.tsx                       (add options={{ selectLockedShapes: tru
    `client/src/av/leashes.tsx:49`.
 4. Render the chip at the top-right of those bounds.
 
-**Selection cap.** Selection can be large (select-all). Define
-`MAX_LOCK_BADGES = 3` as an exported constant. Render at most that many badges and
-drop the remainder — never one badge per selected shape. A select-all that lights
-up 27 padlocks is the wallpaper problem rejected in §3.
+**No cap — badge every locked shape in the hovered/selected set.**
 
-Ordering rule, in priority order:
-1. The **hovered** shape always takes a slot, if it is locked.
-2. Remaining slots go to locked selected shapes in `getSelectedShapeIds()` order.
-3. Everything beyond the cap renders nothing (no "+N more" indicator — out of scope).
+An earlier draft capped the badge count to avoid a select-all lighting up dozens of
+padlocks. That was wrong, for two reasons:
 
-`3` is a starting value chosen to cover the realistic cases (one hovered shape, or
-a small deliberate multi-select) without approaching wallpaper. It has no field
-data behind it and should be revisited if it proves wrong in a live session.
+1. **A cap lies.** Showing 3 badges across 10 locked selected shapes reads as
+   "3 of these are locked". Partial information about a set is worse than none.
+2. **The wallpaper objection doesn't transfer.** It applies to always-on decoration
+   of a canvas *at rest* (§3) — unrequested noise. Selection is transient and
+   user-initiated: the badges are answering a question the user just asked by
+   selecting. Rendering a few dozen small DOM nodes is not a performance concern.
+
+So: every locked shape in the hovered/selected set gets a badge, with no ordering
+rule or truncation needed.
+
+**Possible follow-up, deliberately not specified here:** when zoomed far out, badges
+may become illegible or overlap. If that proves ugly in practice, the fix is to
+suppress badges whose shape bounds fall below a legibility threshold — a rule
+grounded in "this badge is too small to read" rather than an arbitrary count. Not
+built until observed; YAGNI.
 
 ## 6. Not a control
 
@@ -195,14 +202,18 @@ problem.
 ## 9. Testing
 
 - **Pure unit test** — the decision function: given hovered id, selected ids, and a
-  lock-state lookup, return the shapes that should show a badge (respecting the
-  §5 cap and hovered-shape priority). Plain `.test.ts` with `node:assert/strict`,
-  auto-discovered by `bun scripts/run-tests.ts`.
+  lock-state lookup, return the set of shapes that should show a badge. Cases:
+  hovered-and-locked; hovered-and-unlocked (none); selected-and-locked; a mix of
+  locked and unlocked in one selection (only the locked ones); a shape whose
+  *ancestor frame* is locked (included); hovered shape also selected (no duplicate
+  badge). Plain `.test.ts` with `node:assert/strict`, auto-discovered by
+  `bun scripts/run-tests.ts`.
 - **Positioning** is thin glue over existing tldraw APIs; covered by manual smoke.
 - **Manual smoke:** lock a terminal → it looks unchanged at rest; hover → badge;
   move away → gone; click → selects, badge persists; lock a *frame* → hovering a
-  child shows the badge; verify on an arrow and a draw stroke; select-all → badge
-  count is capped, not one per shape.
+  child shows the badge; verify on an arrow and a draw stroke; select-all → every
+  locked shape badges, and judge whether that is actually unpleasant when zoomed
+  out (this is what would motivate the §5 legibility follow-up).
 - **Regression:** confirm `selectLockedShapes: true` has not made locked shapes
   editable, movable or deletable.
 
