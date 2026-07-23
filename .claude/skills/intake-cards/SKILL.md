@@ -43,6 +43,10 @@ Rules that matter:
   reading the transcript.
 - Keep the role concrete and drawn from how they described themselves
   ("product owner", "canvas A/V user", "terminal user"), not a generic "user".
+- **Link the PR once one exists.** When a card's want has been implemented,
+  append `, PR: #<n>` to the ID line and make `#<n>` a real link (see
+  [Linking the implementation PR](#linking-the-implementation-pr)). The id
+  stays put — the PR is the implementation, not a new id.
 
 ## Reading the room
 
@@ -113,6 +117,49 @@ The current row sits at frame-local `y: 229`, `w: 384`, pitch **~427px** in x
 
 Humans rearrange these constantly — **always recompute from live bounds, never
 from a remembered x**.
+
+## Linking the implementation PR
+
+Once a card's want ships as a PR, link it from the ID line. Two traps:
+
+- **Markdown doesn't render.** `[#60](url)` shows as literal text — geo text is
+  a tldraw (5.1.0) ProseMirror/TipTap `richText` doc, not markdown.
+- **`--text` strips the link.** The `canvas shape --text` path runs through
+  `toRichText()`, which flattens to plain paragraphs and drops every mark. You
+  MUST write `--props` with a raw `richText` doc where the `#<n>` text node
+  carries a `link` mark.
+
+Copy the exact mark shape from an already-linked card (capture to a file — the
+document can exceed a 64k pipe buffer):
+
+```bash
+ensembleworks canvas-v2 document > /tmp/doc.json
+jq -c '.. | objects | select(.id?=="<shape-id>") | .props.richText' /tmp/doc.json
+```
+
+Then write it back — PR link on the ID line, one paragraph per card line — and
+set `props.url` too (that adds the clickable link chip in the corner):
+
+```bash
+HREF=https://github.com/lean-software-production/ensembleworks/pull/60
+PROPS=$(jq -nc --arg href "$HREF" '{
+  url: $href,
+  richText: {type:"doc",attrs:{dir:"auto"},content:[
+    {type:"paragraph",attrs:{dir:"auto"},content:[
+      {type:"text",text:"ID: EW2, User: David, PR: "},
+      {type:"text",marks:[{type:"link",attrs:{href:$href,target:"_blank",rel:"noopener noreferrer nofollow",class:null,title:null}}],text:"#60"}
+    ]},
+    {type:"paragraph",attrs:{dir:"auto"},content:[{type:"text",text:"As a canvas A/V user"}]},
+    {type:"paragraph",attrs:{dir:"auto"},content:[{type:"text",text:"I want to have noise canceling"}]},
+    {type:"paragraph",attrs:{dir:"auto"},content:[{type:"text",text:"So that noisy backgrounds do not ruin the meeting"}]}
+  ]}
+}')
+ensembleworks canvas shape --op update --id <shape-id> --props "$PROPS"
+```
+
+The `link` mark on the `#60` node is the whole trick — that is what the
+WYSIWYG editor writes when you hand-make a link, and it round-trips through the
+store the same way.
 
 ## Closing the loop
 
