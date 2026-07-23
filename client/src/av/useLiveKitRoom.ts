@@ -21,7 +21,9 @@ import { computeBackoff, RELAY_HEALTHY_RESET_MS } from '@ensembleworks/contracts
 import { useEffect, useRef, useState } from 'react'
 import { logConnectionEvent } from './connectionLog'
 import { classifyDisconnect } from './reconnect'
+import { syncMicNoiseFilter } from './noiseFilter'
 import { setScreenShareRoom } from '../screenshare/store'
+import { useSettings } from '../chrome/settings'
 
 export interface RemotePeer {
 	identity: string
@@ -88,6 +90,12 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 	// starts with nothing published) can restore what the user had live.
 	const micEnabledRef = useRef(false)
 	const camEnabledRef = useRef(false)
+	// SPIKE: whether to run the RNNoise filter on our published mic. Read
+	// reactively so the footer toggle takes effect on a live mic, and mirrored
+	// into a ref so the connect effect's event handlers see the latest value
+	// without re-subscribing.
+	const { noiseFilter } = useSettings()
+	const noiseFilterRef = useRef(noiseFilter)
 
 	useEffect(() => {
 		let cancelled = false
@@ -208,6 +216,9 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 				})
 				room.on(RoomEvent.LocalTrackPublished, (pub: LocalTrackPublication) => {
 					if (pub.source === Track.Source.Camera) setLocalVideoTrack(pub.track ?? null)
+					// The mic track only exists once it's published (also on every
+					// reconnect restore), so this is where the filter first attaches.
+					if (pub.source === Track.Source.Microphone) syncMicNoiseFilter(room, noiseFilterRef.current)
 				})
 				room.on(RoomEvent.LocalTrackUnpublished, (pub: LocalTrackPublication) => {
 					if (pub.source === Track.Source.Camera) setLocalVideoTrack(null)
@@ -303,6 +314,15 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 			audioCtxRef.current = null
 		}
 	}, [roomId, identity, name])
+
+	// Reconcile the RNNoise filter whenever the setting toggles (or a mic goes
+	// live): attach it to an already-running mic without a re-publish, or strip
+	// it back off. New-mic attach is handled in LocalTrackPublished above; this
+	// covers flipping the toggle mid-call. Ref keeps the connect handlers current.
+	useEffect(() => {
+		noiseFilterRef.current = noiseFilter
+		if (room && micEnabled) void syncMicNoiseFilter(room, noiseFilter)
+	}, [room, micEnabled, noiseFilter])
 
 	const setMicEnabled = (on: boolean) => {
 		micEnabledRef.current = on

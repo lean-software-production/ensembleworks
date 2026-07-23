@@ -31,11 +31,16 @@ export const DOCK_EDGE_OPTIONS: readonly DockEdge[] = ['bottom', 'left', 'top']
 export interface EnsembleSettings {
 	githubHandle: string
 	dockEdge: DockEdge
+	// SPIKE: run RNNoise on the local mic before publishing (av/noiseFilter.ts).
+	// Off by default — opt-in while we evaluate it against browser-native
+	// suppression in a dogfood room.
+	noiseFilter: boolean
 }
 
 const DEFAULT_SETTINGS: EnsembleSettings = {
 	githubHandle: '',
 	dockEdge: 'bottom',
+	noiseFilter: false,
 }
 
 /**
@@ -48,13 +53,18 @@ const DEFAULT_SETTINGS: EnsembleSettings = {
 export function parseSettings(raw: string | null): EnsembleSettings {
 	if (!raw) return { ...DEFAULT_SETTINGS }
 	try {
-		const parsed = JSON.parse(raw) as { githubHandle?: unknown; dockEdge?: unknown }
+		const parsed = JSON.parse(raw) as {
+			githubHandle?: unknown
+			dockEdge?: unknown
+			noiseFilter?: unknown
+		}
 		const githubHandle = typeof parsed.githubHandle === 'string' ? parsed.githubHandle.trim() : ''
 		const dockEdge =
 			typeof parsed.dockEdge === 'string' && (DOCK_EDGES as readonly string[]).includes(parsed.dockEdge)
 				? (parsed.dockEdge as DockEdge)
 				: DEFAULT_SETTINGS.dockEdge
-		return { githubHandle, dockEdge }
+		const noiseFilter = typeof parsed.noiseFilter === 'boolean' ? parsed.noiseFilter : DEFAULT_SETTINGS.noiseFilter
+		return { githubHandle, dockEdge, noiseFilter }
 	} catch {
 		return { ...DEFAULT_SETTINGS }
 	}

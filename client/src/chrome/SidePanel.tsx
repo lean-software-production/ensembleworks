@@ -39,6 +39,7 @@ import {
 import { PanelFooter } from './PanelFooter'
 import { PanelPages } from './PanelPages'
 import { ColorSwatch, CrosstalkControl, initialsFor, type PanelTileParticipant } from './PanelTile'
+import { updateSettings, useSettings } from './settings'
 import { useIsPresenting, usePresenter } from './present'
 
 // The local user's identity + A/V controls, docked at the panel bottom just
@@ -140,6 +141,10 @@ function DevicePicker({
 	const [anchor, setAnchor] = useState<{ right: number; bottom: number } | null>(null)
 	const rootRef = useRef<HTMLDivElement>(null)
 	const noun = kind === 'audioinput' ? 'microphone' : 'camera'
+	// SPIKE: the RNNoise toggle lives in the mic picker — it's a mic-input choice
+	// (like which device), so it belongs beside the device list, not off in
+	// settings. Audio-only; see av/noiseFilter.ts.
+	const { noiseFilter } = useSettings()
 
 	// Close on outside click, same pattern as CrosstalkControl/ColorSwatch.
 	useEffect(() => {
@@ -292,6 +297,38 @@ function DevicePicker({
 							{d.label || `${noun} ${i + 1}`}
 						</button>
 					))}
+					{kind === 'audioinput' && (
+						<>
+							<div style={{ height: 1, background: wm.rule, margin: '4px 6px' }} />
+							{/* SPIKE: RNNoise runs client-side on your mic before publishing
+							    (av/noiseFilter.ts). Takes effect live if the mic is already on,
+							    else on the next talk. */}
+							<button
+								type="button"
+								data-testid="ew-settings-noise-filter"
+								aria-pressed={noiseFilter}
+								onClick={() => updateSettings({ noiseFilter: !noiseFilter })}
+								style={{
+									display: 'flex',
+									justifyContent: 'space-between',
+									alignItems: 'center',
+									gap: 8,
+									border: 0,
+									background: 'transparent',
+									color: wm.ink,
+									padding: '5px 6px',
+									fontFamily: wm.sans,
+									fontSize: 11,
+									cursor: 'pointer',
+								}}
+							>
+								<span>Noise filter (RNNoise)</span>
+								<span style={{ fontFamily: wm.mono, fontWeight: 700, color: noiseFilter ? wm.sealBlue : wm.inkSubtle }}>
+									{noiseFilter ? 'ON' : 'OFF'}
+								</span>
+							</button>
+						</>
+					)}
 				</div>
 			)}
 		</div>
