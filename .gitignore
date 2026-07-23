@@ -25,3 +25,6 @@ spikes/phase0/dist/
 bossman-*.png
 .worktrees/
 .worktrees/
+
+# superpowers brainstorming session artifacts
+.superpowers/
