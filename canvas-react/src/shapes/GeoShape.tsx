@@ -84,16 +84,38 @@
 // (client/src/App.tsx:198-203 force-seeds `colorScheme: 'light'`; no theme
 // toggle exists yet).
 //
-// DASH: `dash` is one of 'draw'/'solid'/'dashed'/'dotted' (default 'draw',
-// GeoShapeUtil.tsx getDefaultProps). v1 uses it to render a HAND-WOBBLED
-// stroke for the default 'draw' case (GeoShapeBody.tsx's `path.toDrawD(...)`
-// / `path.toSvg({ style: dash, ... })`, seeded per-shape) and real
-// dash-array patterns for 'dashed'/'dotted'. This body renders a CLEAN,
-// un-wobbled SOLID stroke regardless of `dash` — a deliberate
-// simplification, documented here to the file's existing honesty standard
-// (like the pattern-fill / align / stroke-inset gaps below). Reproducing
-// the draw-wobble RNG path and the dash/dot arrays is deferred to the Seam F
-// parity work, not implemented here.
+// DASH: `dash` is one of 'draw'/'solid'/'dashed'/'dotted'/'none' (default
+// 'draw', GeoShapeUtil.tsx getDefaultProps; DefaultDashStyle's `values:`
+// array — tlschema's styles/TLDashStyle.ts:38 — has FIVE entries even
+// though its own doc-comment prose only lists four; canvas-model's DASH enum,
+// shape.ts, correctly types all five, and this body must too). v1 renders:
+// draw -> a HAND-WOBBLED stroke (GeoShapeBody.tsx's `path.toDrawD(...)`,
+// seeded per-shape); solid -> a clean solid stroke; dashed/dotted -> real
+// dash-array patterns; none -> NO stroke element at all (PathBuilder.tsx's
+// `toSvg`: `if (opts.style === 'none') return null` — the shape's fill, if
+// any, still renders, just with no outline). This body reproduces dashed/
+// dotted (via `dashArray` below) and none (`geoStyle` resolves `strokeColor`
+// to `null`), but NOT the draw hand-wobble — draw still renders as a clean
+// solid stroke, a deliberate, documented simplification (like the
+// pattern-fill / align / stroke-inset gaps below). Reproducing the
+// draw-wobble RNG path is deferred to the Seam F parity work, not
+// implemented here.
+//
+// DASH ARRAYS: v1's real dash/dot arrays are PERIMETER-FITTING — computed
+// against each path's total length so dashes divide evenly around a closed
+// outline (getPerfectDashProps.ts's `dashLength`/`gapLength` math, driven by
+// `totalLength`). This body has no such path-length machinery (see GEOMETRY
+// above — plain SVG primitives, not a v1 `PathBuilder`), so `dashArray`
+// below borrows only getPerfectDashProps.ts's two PER-STROKE-WIDTH unit
+// constants rather than the full perimeter fit: dashed's dash segment is
+// `strokeWidth * lengthRatio` (default `lengthRatio` there is 2) and
+// dotted's dot segment is `strokeWidth / 100` (its `ratio: 100` branch) — a
+// near-zero-length dash that reads as a round dot under the `strokeLinecap:
+// 'round'` this body also applies (matching v1's own
+// `.tl-svg-container { stroke-linecap: round }`, editor.css). The GAP
+// lengths (1:1 for dashed, 2.5x strokeWidth for dotted) are NOT from v1 —
+// v1 solves its gap from total path length, which this body doesn't track —
+// a documented approximation, not a bug.
 //
 // STROKE WIDTH / LABEL SIZE: `size` (default 'm', GeoShapeUtil.tsx
 // getDefaultProps) resolves strokeWidth via `theme.strokeWidth *
@@ -116,12 +138,18 @@
 // So `geoLabel` below is a TRUNCATED resolver mirroring TextShape.tsx's
 // `textContent` exactly (same live-then-richText order, final fallback ''
 // — deliberately NOT label.ts's `labelOf`, whose fallback chain would fall
-// through an empty/absent name straight to the raw kind string). v1 always
+// through an empty/absent name straight to the raw kind string). v1
 // CENTERS a geo label by default (`align`/`verticalAlign` both default
-// 'middle', GeoShapeUtil.tsx getDefaultProps) — this body always centers
-// too; the non-default align/verticalAlign values are a documented parity
-// gap, out of this task's scope (the task explicitly asks only for a
-// centered label).
+// 'middle', GeoShapeUtil.tsx getDefaultProps) but honors non-default values
+// (Task R3): `props.align` drives horizontal `text-align`/`justify-content`
+// and `props.verticalAlign` drives `align-items` — see ALIGN_CSS/
+// VERTICAL_ALIGN_CSS below. `align` is `DefaultHorizontalAlignStyle`, a
+// SIX-value enum (start/middle/end plus start-legacy/end-legacy/
+// middle-legacy — tlschema's styles/TLAlignStyle.ts): the three `-legacy`
+// variants are real values legacy documents carry and MUST render
+// identically to their base (start-legacy -> left, same as start), never
+// fall through to the center default — `normalizeAlign` strips the
+// `-legacy` suffix before the lookup so both cases share one code path.
 import type { ReactElement } from 'react'
 import type { ShapeBodyProps } from '../shapeRegistry.js'
 import { flattenRichText } from './label.js'
@@ -132,14 +160,20 @@ import { flattenRichText } from './label.js'
 // NAMES target for fill:'fill' would use 'fill' below, not 'solid' — kept
 // as separate keys since they're independently-named fields in v1 even
 // where the hex values happen to coincide.
-interface GeoColorEntry {
+// Exported (GEO_COLORS/colorEntry/STROKE_WIDTH_PX/DASH_VALUES/dashArray
+// below) so Arrows.tsx (canvas-react/src/overlay/Arrows.tsx, the arrow
+// style-props wiring task) can reuse the SAME color/size/dash tables
+// instead of hand-copying a second one — `color`/`dash`/`size` are shared
+// style axes (canvas-model's STYLE_ENUMS), not geo-specific, even though
+// this module happened to type them first.
+export interface GeoColorEntry {
   readonly solid: string
   readonly semi: string
   readonly fill: string
   readonly linedFill: string
   readonly pattern: string
 }
-const GEO_COLORS: Readonly<Record<string, GeoColorEntry>> = Object.freeze({
+export const GEO_COLORS: Readonly<Record<string, GeoColorEntry>> = Object.freeze({
   black: { solid: '#1d1d1d', fill: '#1d1d1d', linedFill: '#363636', semi: '#e8e8e8', pattern: '#494949' },
   grey: { solid: '#9fa8b2', fill: '#9fa8b2', linedFill: '#bbc1c9', semi: '#eceef0', pattern: '#bcc3c9' },
   'light-violet': { solid: '#e085f4', fill: '#e085f4', linedFill: '#e9abf7', semi: '#f5eafa', pattern: '#e9acf8' },
@@ -154,7 +188,7 @@ const GEO_COLORS: Readonly<Record<string, GeoColorEntry>> = Object.freeze({
   red: { solid: '#e03131', fill: '#e03131', linedFill: '#e75f5f', semi: '#f4dadb', pattern: '#e55959' },
   white: { solid: '#FFFFFF', fill: '#FFFFFF', linedFill: '#ffffff', semi: '#f5f5f5', pattern: '#f9f9f9' },
 })
-const DEFAULT_COLOR = 'black' // GeoShapeUtil.tsx getDefaultProps
+export const DEFAULT_COLOR = 'black' // GeoShapeUtil.tsx getDefaultProps
 const THEME_SOLID_LIGHT = '#fcfffe' // theme.colors.light.solid (defaultThemes.ts:136) — used for fill:'semi'
 
 // defaultFills.ts's DEFAULT_FILL_COLOR_NAMES — which per-color variant a
@@ -169,9 +203,9 @@ const FILL_VARIANT: Readonly<Record<string, keyof GeoColorEntry>> = Object.freez
 const DEFAULT_FILL = 'none' // GeoShapeUtil.tsx getDefaultProps
 
 // default-shape-constants.ts's STROKE_SIZES/LABEL_FONT_SIZES * theme.strokeWidth(2)/fontSize(16).
-const STROKE_WIDTH_PX: Readonly<Record<string, number>> = Object.freeze({ s: 2, m: 3.5, l: 5, xl: 10 })
+export const STROKE_WIDTH_PX: Readonly<Record<string, number>> = Object.freeze({ s: 2, m: 3.5, l: 5, xl: 10 })
 const LABEL_FONT_SIZE_PX: Readonly<Record<string, number>> = Object.freeze({ s: 18, m: 22, l: 26, xl: 32 })
-const DEFAULT_SIZE = 'm' // GeoShapeUtil.tsx getDefaultProps
+export const DEFAULT_SIZE = 'm' // GeoShapeUtil.tsx getDefaultProps
 const LINE_HEIGHT = 1.35 // theme.lineHeight, defaultThemes.ts — same value every other body cites
 
 // tlschema's DefaultFontFamilies (styles/TLFontStyle.ts:83-88) — same table
@@ -184,12 +218,78 @@ const FONT_FAMILY: Readonly<Record<string, string>> = Object.freeze({
 })
 const DEFAULT_FONT = 'draw' // GeoShapeUtil.tsx getDefaultProps
 
-// The geo label's fixed alignment (Task C6 EXPORT — not a table, the same
-// single constant the JSX used to inline directly): v1 always CENTERS a geo
-// label (module header's LABEL section) regardless of props. Exported so
-// TextEditor.tsx's editing overlay can reuse this exact value rather than
-// re-declaring 'center' independently — see TextEditor.tsx's `editorTextStyle`.
-export const GEO_LABEL_TEXT_ALIGN = 'center' as const
+// DefaultDashStyle's five real values (tlschema's TLDashStyle.ts:38 —
+// module header's DASH section). 'draw'/'solid' resolve to no dasharray
+// (see `dashArray` below); 'none' resolves `strokeColor` to `null` in
+// `geoStyle` instead (no stroke element at all).
+export const DASH_VALUES = new Set(['draw', 'solid', 'dashed', 'dotted', 'none'])
+export const DEFAULT_DASH = 'draw' // GeoShapeUtil.tsx getDefaultProps
+const DASH_LENGTH_RATIO = 2 // getPerfectDashProps.ts's default `lengthRatio`
+const DOT_RATIO = 100 // getPerfectDashProps.ts's dotted-case `ratio`
+const DOT_GAP_MULTIPLIER = 2.5 // NOT from v1 — see module header DASH ARRAYS
+
+/** dashed/dotted -> a `strokeWidth`-scaled `stroke-dasharray` string;
+ * draw/solid/none -> `undefined` (no dasharray attribute at all — see
+ * module header DASH ARRAYS for exactly which constants are v1-grounded
+ * vs. this body's own approximation). */
+export function dashArray(dash: string, strokeWidth: number): string | undefined {
+  switch (dash) {
+    case 'dashed': {
+      const segment = strokeWidth * DASH_LENGTH_RATIO
+      return `${segment} ${segment}`
+    }
+    case 'dotted': {
+      const dot = strokeWidth / DOT_RATIO
+      const gap = strokeWidth * DOT_GAP_MULTIPLIER
+      return `${dot} ${gap}`
+    }
+    default:
+      return undefined
+  }
+}
+
+// props.align (DefaultHorizontalAlignStyle, module header's LABEL section) ->
+// the label div's CSS. start/middle/end map to left/center/right for
+// text-align and flex-start/center/flex-end for justify-content (the label
+// div is a flex container so it can also vertically center — see
+// VERTICAL_ALIGN_CSS below). Keyed only by the three PRIMARY values —
+// `normalizeAlign` strips a `-legacy` suffix before indexing here, so the
+// three legacy variants share these same rows rather than duplicating them.
+const ALIGN_CSS: Readonly<Record<string, { textAlign: 'left' | 'center' | 'right'; justifyContent: 'flex-start' | 'center' | 'flex-end' }>> =
+  Object.freeze({
+    start: { textAlign: 'left', justifyContent: 'flex-start' },
+    middle: { textAlign: 'center', justifyContent: 'center' },
+    end: { textAlign: 'right', justifyContent: 'flex-end' },
+  })
+const DEFAULT_ALIGN = 'middle' // DefaultHorizontalAlignStyle defaultValue, GeoShapeUtil.tsx getDefaultProps
+
+// props.verticalAlign (DefaultVerticalAlignStyle — start/middle/end only, no
+// -legacy variants) -> the label div's align-items.
+const VERTICAL_ALIGN_CSS: Readonly<Record<string, 'flex-start' | 'center' | 'flex-end'>> = Object.freeze({
+  start: 'flex-start',
+  middle: 'center',
+  end: 'flex-end',
+})
+const DEFAULT_VERTICAL_ALIGN = 'middle' // DefaultVerticalAlignStyle defaultValue, GeoShapeUtil.tsx getDefaultProps
+
+/** `props.align`, stripped of a trailing `-legacy` (the three legacy values
+ * are real accepted values a synced document may carry — module header's
+ * LABEL section — and must render identically to their base, not fall
+ * through to the default). Unrecognized/absent -> v1's own default
+ * ('middle'). */
+function normalizeAlign(align: unknown): keyof typeof ALIGN_CSS {
+  if (typeof align !== 'string') return DEFAULT_ALIGN
+  const base = align.endsWith('-legacy') ? align.slice(0, -'-legacy'.length) : align
+  return base in ALIGN_CSS ? (base as keyof typeof ALIGN_CSS) : DEFAULT_ALIGN
+}
+
+/** `props.verticalAlign`, defaulted to v1's own 'middle' — no `-legacy`
+ * variants exist for this axis (DefaultVerticalAlignStyle). */
+function normalizeVerticalAlign(verticalAlign: unknown): keyof typeof VERTICAL_ALIGN_CSS {
+  return typeof verticalAlign === 'string' && verticalAlign in VERTICAL_ALIGN_CSS
+    ? (verticalAlign as keyof typeof VERTICAL_ALIGN_CSS)
+    : DEFAULT_VERTICAL_ALIGN
+}
 
 const DEFAULT_GEO = 'rectangle' // GeoShapeGeoStyle defaultValue
 const DEFAULT_W = 100 // GeoShapeUtil.tsx getDefaultProps
@@ -201,8 +301,13 @@ const DEFAULT_H = 100
 const SPECIAL_CASED_VARIANTS = new Set(['rectangle', 'ellipse', 'triangle', 'diamond'])
 
 export interface GeoStyle {
-  readonly strokeColor: string
+  /** null => dash:'none', render no stroke element at all (v1's
+   * PathBuilder.toSvg returns no <path> — see module header DASH). */
+  readonly strokeColor: string | null
   readonly strokeWidth: number
+  /** dashed/dotted's stroke-dasharray, scaled to strokeWidth; undefined for
+   * draw/solid/none (a clean, un-dashed stroke — or no stroke at all). */
+  readonly strokeDasharray: string | undefined
   /** null => fill:'none', render no fill at all (not even 'transparent' —
    * simplest to just omit the fill element entirely). */
   readonly fillColor: string | null
@@ -210,6 +315,12 @@ export interface GeoStyle {
   readonly fontFamily: string
   readonly fontSize: number
   readonly lineHeight: number
+  /** Resolved from `props.align` (Task R3 — see module header LABEL /
+   * ALIGN_CSS above); 'center' when absent or unrecognized (v1 default). */
+  readonly textAlign: 'left' | 'center' | 'right'
+  readonly justifyContent: 'flex-start' | 'center' | 'flex-end'
+  /** Resolved from `props.verticalAlign`; 'center' when absent (v1 default). */
+  readonly alignItems: 'flex-start' | 'center' | 'flex-end'
 }
 
 /** `props.geo`, defaulted to v1's own 'rectangle' (see module header
@@ -219,7 +330,7 @@ export function geoVariant(shape: ShapeBodyProps['shape']): string {
   return typeof props.geo === 'string' && props.geo.length > 0 ? props.geo : DEFAULT_GEO
 }
 
-function colorEntry(color: unknown): GeoColorEntry {
+export function colorEntry(color: unknown): GeoColorEntry {
   return typeof color === 'string' && color in GEO_COLORS ? GEO_COLORS[color] : GEO_COLORS[DEFAULT_COLOR]
 }
 
@@ -237,17 +348,25 @@ export function geoStyle(shape: ShapeBodyProps['shape']): GeoStyle {
   const fill = typeof props.fill === 'string' ? props.fill : DEFAULT_FILL
   const size = typeof props.size === 'string' && props.size in STROKE_WIDTH_PX ? props.size : DEFAULT_SIZE
   const font = typeof props.font === 'string' && props.font in FONT_FAMILY ? props.font : DEFAULT_FONT
+  const dash = typeof props.dash === 'string' && DASH_VALUES.has(props.dash) ? props.dash : DEFAULT_DASH
+  const strokeWidth = STROKE_WIDTH_PX[size]
 
   const fillColor = fill === 'none' ? null : fill === 'semi' ? THEME_SOLID_LIGHT : entry[FILL_VARIANT[fill] ?? 'semi']
+  const align = ALIGN_CSS[normalizeAlign(props.align)]
+  const alignItems = VERTICAL_ALIGN_CSS[normalizeVerticalAlign(props.verticalAlign)]
 
   return {
-    strokeColor: entry.solid,
-    strokeWidth: STROKE_WIDTH_PX[size],
+    strokeColor: dash === 'none' ? null : entry.solid,
+    strokeWidth,
+    strokeDasharray: dashArray(dash, strokeWidth),
     fillColor,
     labelColor: labelEntry.solid,
     fontFamily: FONT_FAMILY[font],
     fontSize: LABEL_FONT_SIZE_PX[size],
     lineHeight: LINE_HEIGHT,
+    textAlign: align.textAlign,
+    justifyContent: align.justifyContent,
+    alignItems,
   }
 }
 
@@ -277,7 +396,18 @@ export function geoLabel(shape: ShapeBodyProps['shape'], getText?: (id: string) 
  * variants; anything else falls back to the same <rect> as 'rectangle'. */
 function geoPath(variant: string, w: number, h: number, style: GeoStyle): ReactElement {
   const fill = style.fillColor ?? 'none'
-  const common = { fill, stroke: style.strokeColor, strokeWidth: style.strokeWidth }
+  // dash:'none' -> strokeColor is null -> render stroke:'none' (no visible
+  // outline; the fill, if any, still renders) — see GeoStyle's strokeColor doc.
+  const strokeProps =
+    style.strokeColor === null
+      ? { stroke: 'none' }
+      : {
+          stroke: style.strokeColor,
+          strokeWidth: style.strokeWidth,
+          strokeLinecap: 'round' as const, // matches v1's .tl-svg-container { stroke-linecap: round } (editor.css) — load-bearing for dotted to read as round dots, not invisible slivers
+          ...(style.strokeDasharray !== undefined ? { strokeDasharray: style.strokeDasharray } : {}),
+        }
+  const common = { fill, ...strokeProps }
   switch (SPECIAL_CASED_VARIANTS.has(variant) ? variant : 'rectangle') {
     case 'ellipse':
       return <ellipse cx={w / 2} cy={h / 2} rx={w / 2} ry={h / 2} {...common} />
@@ -326,9 +456,9 @@ export function GeoShape({ shape, getText }: ShapeBodyProps) {
             position: 'absolute',
             inset: 0,
             display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            textAlign: GEO_LABEL_TEXT_ALIGN,
+            alignItems: style.alignItems,
+            justifyContent: style.justifyContent,
+            textAlign: style.textAlign,
             padding: 8,
             boxSizing: 'border-box',
             overflow: 'hidden',

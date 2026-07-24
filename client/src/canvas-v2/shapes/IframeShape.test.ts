@@ -53,7 +53,7 @@ function shapeWithProps(props: Record<string, unknown>): Shape {
 {
   const shape = shapeWithProps({ w: 800, h: 600, url: 'https://example.com', title: 'docs' })
   const doc: CanvasDocument = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [shape], bindings: [] })
-  const editorState: EditorState = { camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null }
+  const editorState: EditorState = { camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p' }
   const html = renderToStaticMarkup(createElement(IframeShape, { shape, snapshot: doc, editorState }))
   assert.ok(html.includes('data-canvas-v2-shape="iframe"'), 'renders the canvas-v2 shape marker')
   assert.ok(html.includes('data-interaction-mode="idle"'), 'starts in idle interaction mode')
@@ -102,7 +102,7 @@ const embedShape = {
   x: 10, y: 10, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 100, h: 100, url: 'about:blank', title: 'live' },
 } as Shape
 const doc = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [embedShape], bindings: [] })
-const editorState: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null })
+const editorState: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p' })
 
 // FAKE TOOLCONTEXT — same rationale as canvas-react's own shape-layer.test.ts
 // and embed-reconciler.test.ts: EmbedLayer only ever touches `.editor`

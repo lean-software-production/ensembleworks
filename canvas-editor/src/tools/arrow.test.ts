@@ -1,7 +1,7 @@
 // Run: bun src/tools/arrow.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc, dumpModel } from '@ensembleworks/canvas-doc'
-import { routeArrow, type Shape } from '@ensembleworks/canvas-model'
+import { indexBetween, routeArrow, type Shape } from '@ensembleworks/canvas-model'
 import { Editor } from '../editor.js'
 import { run, script } from '../script.js'
 import { createArrowTool } from './arrow.js'
@@ -42,6 +42,9 @@ function setup() {
   assert.equal(arrow.y, 500)
   assert.deepEqual((arrow.props as any).end, { x: 100, y: 20 }, 'end is the LOCAL offset from the down point')
   assert.equal(editor.doc.listBindings().length, 0, 'no target under the cursor -- no bindings written')
+  // Task C1 (D-5): first shape (of any kind) on an empty page gets
+  // indexBetween(null, null), a valid starting key -- no crash on empty.
+  assert.equal(arrow.index, indexBetween(null, null), 'first arrow on an empty page gets indexBetween(null, null)')
   console.log('ok: unbound draw creates an arrow with the right local end offset and no bindings')
 }
 
@@ -259,6 +262,127 @@ function setup() {
   assert.equal(bindings[0]!.toId, 'shape:a', 'bound to the shape under the RELEASE point, not any hovered-over shape')
   assert.ok(bindings[0]!.id.endsWith('-end'), 'and it is the END binding')
   console.log('ok: no bindings are written mid-draw; exactly one end-binding at pointerup')
+}
+
+// ============================================================================
+// 9. Task C1 (D-5) — top-of-stack index at creation, arrow analogue.
+// ============================================================================
+
+// 9a. A sibling exists (index 'a1') -- the new arrow's index sorts strictly
+//     above it (exact value: indexBetween('a1', null)). Mutant killed:
+//     "still hardcodes 'a1'" (would equal 'a1', not sort after it) and
+//     "indexBetween(null, max)" (below, not above -- would sort BEFORE 'a1').
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(geoShape('shape:existing', 0, 0, 10, 10))
+  doc.commit()
+
+  const events = script().down(500, 500).move(600, 520).up().events()
+  run(editor, tool, events)
+  const arrow = editor.doc.listShapes().find((s) => s.kind === 'arrow')!
+  assert.ok('a1' < arrow.index, `new arrow's index (${arrow.index}) must sort after the existing 'a1' sibling`)
+  assert.equal(arrow.index, indexBetween('a1', null), 'arrow index is exactly indexBetween(maxSibling, null)')
+  console.log("ok: a new arrow's index sorts strictly after an existing sibling's")
+}
+
+// 9b. "Reads wrong parent's siblings" mutant: a page:p sibling at 'a1' and a
+//     shape parented under a DIFFERENT frame at a lexically higher index
+//     'z' -- the arrow (parented at page:p) must compute its index from
+//     ONLY the page:p sibling, not the frame child's unrelated index.
+{
+  const { doc, editor, tool } = setup()
+  // A genuinely valid key (via indexBetween -- A1's key format encodes
+  // length in the header char, so a hand-picked single letter like 'z' is
+  // NOT a valid key on its own) that lexically sorts ABOVE
+  // indexBetween('a1', null), the value the CORRECT implementation must
+  // produce for the page:p arrow below.
+  const HIGH_WRONG_PARENT_KEY = indexBetween(indexBetween('a1', null), null)
+  doc.putShape({
+    id: 'shape:frame1', kind: 'frame', parentId: 'page:p', index: 'a1', x: 1000, y: 1000, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+  } as Shape)
+  doc.putShape({
+    id: 'shape:frame-child', kind: 'geo', parentId: 'shape:frame1', index: HIGH_WRONG_PARENT_KEY, x: 1001, y: 1001, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 5, h: 5 },
+  } as Shape)
+  doc.putShape(geoShape('shape:page-sibling', 0, 0, 10, 10)) // parentId: page:p, index 'a1'
+  doc.commit()
+
+  const events = script().down(500, 500).move(600, 520).up().events()
+  run(editor, tool, events)
+  const arrow = editor.doc.listShapes().find((s) => s.kind === 'arrow')!
+  assert.equal(arrow.index, indexBetween('a1', null), "arrow's top-of-stack index reads only page:p's siblings, ignoring the frame child's unrelated, higher index")
+  console.log("ok: arrow topIndex reads only the target parent's siblings, not a shape parented elsewhere")
+}
+
+// 9c. "Lands on top": two arrows drawn in sequence -- the second's index
+//     sorts strictly after the first's.
+{
+  const { editor, tool } = setup()
+  run(editor, tool, script().down(0, 0).move(50, 50).up().events())
+  const first = editor.doc.listShapes().find((s) => s.kind === 'arrow')!
+  run(editor, tool, script().down(200, 200).move(250, 250).up().events())
+  const arrows = editor.doc.listShapes().filter((s) => s.kind === 'arrow')
+  assert.equal(arrows.length, 2, 'two arrows now exist')
+  const second = arrows.find((s) => s.id !== first.id)!
+  assert.ok(first.index < second.index, `second-drawn arrow's index (${second.index}) must sort after the first's (${first.index}) -- lands on top`)
+  console.log('ok: the second of two sequentially-drawn arrows sorts strictly after the first (lands on top)')
+}
+
+// ============================================================================
+// 10. E2 — current-page parenting. StartArrow AFTER SetCurrentPage lands on
+//     the NEW current page, not the bootstrap editor.pageId. Mutant killed:
+//     "reads editor.pageId (factory const)" -- that mutant would keep
+//     parenting to 'page:p' regardless of the switch.
+// ============================================================================
+{
+  const { doc, editor, tool } = setup()
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+
+  run(editor, tool, script().down(500, 500).move(600, 520).up().events())
+  const arrow = editor.doc.listShapes().find((s) => s.kind === 'arrow')!
+  assert.equal(arrow.parentId, 'page:q', 'arrow drawn after SetCurrentPage parents onto the CURRENT page, not editor.pageId')
+  console.log('ok: E2 — arrow parents onto the current page after SetCurrentPage')
+}
+
+// ============================================================================
+// 10b. E2 — topIndex must scan the CURRENT page's siblings, not
+//      editor.pageId's. Escaping-mutant catch: a mutant that fixes parentId
+//      to read currentPageId live but leaves `topIndex(ctx, pageId)` reading
+//      `editor.pageId` PASSES the parentId-only assertion above (both pages
+//      are empty there, so the starting index ties either way) -- it only
+//      shows up when the BOOTSTRAP page has a high-indexed sibling and the
+//      CURRENT (new) page does not.
+// ============================================================================
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape({
+    id: 'shape:page-p-high', kind: 'geo', parentId: 'page:p', index: indexBetween('a5', null), x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+  } as Shape)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+
+  run(editor, tool, script().down(500, 500).move(600, 520).up().events())
+  const arrow = editor.doc.listShapes().find((s) => s.kind === 'arrow')!
+  assert.equal(arrow.parentId, 'page:q', 'sanity: still parents onto page:q')
+  assert.equal(arrow.index, indexBetween(null, null), "topIndex reads page:q's (empty) siblings, not page:p's unrelated high-indexed shape")
+  console.log("ok: E2 — arrow topIndex scans the CURRENT page's siblings, not editor.pageId's")
+}
+
+// ============================================================================
+// 11. E2 — migration safety: with currentPageId at its boot default
+//     ('page:p', never switched), arrow creation is UNCHANGED.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  run(editor, tool, script().down(500, 500).move(600, 520).up().events())
+  const arrow = editor.doc.listShapes().find((s) => s.kind === 'arrow')!
+  assert.equal(arrow.parentId, 'page:p', 'with currentPageId at its boot default, arrow creation still parents to page:p')
+  console.log('ok: E2 — single-page default (no SetCurrentPage) still parents an arrow to page:p')
 }
 
 console.log('ok: arrow tool FSM + bindings')

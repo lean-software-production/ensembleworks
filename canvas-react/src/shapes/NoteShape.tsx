@@ -95,34 +95,85 @@ const NOTE_TEXT = '#000000' // theme.colors.light.<every color>.noteText
 const HANDWRITING_FONT = "'tldraw_draw', sans-serif" // DefaultFontFamilies.draw
 
 // The note body's fixed label layout numbers below (Task C6 EXPORT — not a
-// per-color table, just the same three constants the JSX used to inline
-// directly): every note, regardless of `props.color`, centers its label at
-// 16px/1.35 line-height. Exported so TextEditor.tsx's editing overlay can
-// reuse the EXACT SAME numbers (not re-derive/duplicate them) when deriving
-// its own font/size/align for a note being edited — see TextEditor.tsx's
-// `editorTextStyle`.
+// per-color table, just the same two constants the JSX used to inline
+// directly): every note, regardless of `props.color`, labels at 16px/1.35
+// line-height. Exported so TextEditor.tsx's editing overlay can reuse the
+// EXACT SAME numbers (not re-derive/duplicate them) when deriving its own
+// font/size for a note being edited — see TextEditor.tsx's `editorTextStyle`.
 export const NOTE_LABEL_FONT_SIZE = 16
 export const NOTE_LABEL_LINE_HEIGHT = 1.35
-export const NOTE_TEXT_ALIGN = 'center' as const
+
+// props.align (DefaultHorizontalAlignStyle — start/middle/end plus the three
+// -legacy variants, default 'middle', same enum GeoShape.tsx's ALIGN_CSS
+// documents) -> the body's own text-align/justify-content (the note body IS
+// the flex/label container — no separate label div, unlike GeoShape). Keyed
+// only by the three PRIMARY values; `normalizeAlign` strips a `-legacy`
+// suffix before indexing here so the legacy variants render identically to
+// their base rather than falling through to the default.
+const ALIGN_CSS: Readonly<Record<string, { textAlign: 'left' | 'center' | 'right'; justifyContent: 'flex-start' | 'center' | 'flex-end' }>> =
+  Object.freeze({
+    start: { textAlign: 'left', justifyContent: 'flex-start' },
+    middle: { textAlign: 'center', justifyContent: 'center' },
+    end: { textAlign: 'right', justifyContent: 'flex-end' },
+  })
+const DEFAULT_ALIGN = 'middle' // DefaultHorizontalAlignStyle defaultValue
+
+// props.verticalAlign (DefaultVerticalAlignStyle — start/middle/end only) ->
+// align-items.
+const VERTICAL_ALIGN_CSS: Readonly<Record<string, 'flex-start' | 'center' | 'flex-end'>> = Object.freeze({
+  start: 'flex-start',
+  middle: 'center',
+  end: 'flex-end',
+})
+const DEFAULT_VERTICAL_ALIGN = 'middle' // DefaultVerticalAlignStyle defaultValue
+
+/** `props.align`, stripped of a trailing `-legacy` (real accepted values a
+ * synced document may carry — must render identically to their base, not
+ * fall through to the default). Unrecognized/absent -> v1's own 'middle'. */
+function normalizeAlign(align: unknown): keyof typeof ALIGN_CSS {
+  if (typeof align !== 'string') return DEFAULT_ALIGN
+  const base = align.endsWith('-legacy') ? align.slice(0, -'-legacy'.length) : align
+  return base in ALIGN_CSS ? (base as keyof typeof ALIGN_CSS) : DEFAULT_ALIGN
+}
+
+/** `props.verticalAlign`, defaulted to v1's own 'middle' — no `-legacy`
+ * variants exist for this axis. */
+function normalizeVerticalAlign(verticalAlign: unknown): keyof typeof VERTICAL_ALIGN_CSS {
+  return typeof verticalAlign === 'string' && verticalAlign in VERTICAL_ALIGN_CSS
+    ? (verticalAlign as keyof typeof VERTICAL_ALIGN_CSS)
+    : DEFAULT_VERTICAL_ALIGN
+}
 
 export interface NoteStyle {
   readonly background: string
   readonly borderColor: string
   readonly color: string
   readonly fontFamily: string
+  /** Resolved from `props.align` (Task R3); 'center' when absent or
+   * unrecognized (v1 default). */
+  readonly textAlign: 'left' | 'center' | 'right'
+  readonly justifyContent: 'flex-start' | 'center' | 'flex-end'
+  /** Resolved from `props.verticalAlign`; 'center' when absent (v1 default). */
+  readonly alignItems: 'flex-start' | 'center' | 'flex-end'
 }
 
-/** Pure style resolver — the sticky's background/border/text-color/font,
- * derived from `props.color` the same way v1's NoteShapeUtil resolves
- * noteFill/noteBorder/noteText (light theme only — see module header). */
+/** Pure style resolver — the sticky's background/border/text-color/font/
+ * align, derived from `props.color`/`props.align`/`props.verticalAlign` the
+ * same way v1's NoteShapeUtil resolves noteFill/noteBorder/noteText (light
+ * theme only — see module header). */
 export function noteStyle(shape: ShapeBodyProps['shape']): NoteStyle {
   const props = shape.props as Record<string, unknown>
   const color = typeof props.color === 'string' && props.color in NOTE_FILL ? props.color : DEFAULT_COLOR
+  const align = ALIGN_CSS[normalizeAlign(props.align)]
+  const alignItems = VERTICAL_ALIGN_CSS[normalizeVerticalAlign(props.verticalAlign)]
   return {
     background: NOTE_FILL[color],
     borderColor: NOTE_BORDER,
     color: NOTE_TEXT,
     fontFamily: HANDWRITING_FONT,
+    textAlign: align.textAlign,
+    justifyContent: align.justifyContent,
+    alignItems,
   }
 }
 
@@ -145,8 +196,8 @@ export function NoteShape({ shape, getText }: ShapeBodyProps) {
         boxSizing: 'border-box',
         position: 'relative',
         display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
+        alignItems: style.alignItems,
+        justifyContent: style.justifyContent,
         overflow: 'hidden',
         padding: 16,
         fontSize: NOTE_LABEL_FONT_SIZE,
@@ -155,7 +206,7 @@ export function NoteShape({ shape, getText }: ShapeBodyProps) {
         background: style.background,
         color: style.color,
         fontFamily: style.fontFamily,
-        textAlign: NOTE_TEXT_ALIGN,
+        textAlign: style.textAlign,
         overflowWrap: 'break-word',
       }}
     >

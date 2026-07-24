@@ -45,6 +45,8 @@ const editorState: EditorState = {
   selection: new Set<string>(),
   hover: null,
   editingId: null,
+  nextShapeStyle: {},
+  currentPageId: 'page:p',
 }
 
 // ============================================================================
@@ -292,4 +294,193 @@ function fakeToolContext(snapshot: CanvasDocument, texts: ReadonlyMap<string, st
   console.log('ok: ShapeLayer paints parent-before-child (orderParentBeforeChild) even when the spatial index returns the child first')
 }
 
-console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text, dispatch threading, paint order)')
+// ============================================================================
+// 8. Task R1 — ShapeBody honors shape.opacity: the WRAPPER div's inline
+//    style carries `opacity` verbatim from the shape's envelope field, for
+//    every kind, kind-agnostically (one place, not per-kind). Three rows:
+//    a fractional value (0.3), the default (1), and the bug-magnet edge case
+//    (0 — nullish handling, not truthiness: `shape.opacity || 1` would wrongly
+//    force an opacity-0 shape to render fully opaque).
+// ============================================================================
+{
+  function opacityShape(id: string, opacity: number): Shape {
+    return {
+      id, kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+      isLocked: false, opacity, meta: {}, props: { w: 10, h: 10 },
+    } as Shape
+  }
+
+  const html03 = renderToStaticMarkup(createElement(ShapeBody, { shape: opacityShape('shape:op03', 0.3), snapshot: doc, editorState }))
+  const wrapper03 = html03.match(/<div data-shape-id="shape:op03"[^>]*style="([^"]*)"/)
+  assert.ok(wrapper03, `wrapper div for opacity:0.3 shape should be found in: ${html03}`)
+  assert.match(wrapper03![1], /opacity:0\.3/, `wrapper style should include opacity:0.3, got: ${wrapper03![1]}`)
+  console.log('ok: ShapeBody wrapper carries opacity:0.3')
+
+  const html1 = renderToStaticMarkup(createElement(ShapeBody, { shape: opacityShape('shape:op1', 1), snapshot: doc, editorState }))
+  const wrapper1 = html1.match(/<div data-shape-id="shape:op1"[^>]*style="([^"]*)"/)
+  assert.ok(wrapper1, `wrapper div for opacity:1 shape should be found in: ${html1}`)
+  assert.match(wrapper1![1], /opacity:1/, `wrapper style should include opacity:1, got: ${wrapper1![1]}`)
+  console.log('ok: ShapeBody wrapper carries opacity:1')
+
+  // The bug-magnet: opacity 0 must render as opacity:0, NOT be collapsed to
+  // 1 by a truthiness check (`shape.opacity || 1`) or dropped entirely by a
+  // conditional that treats 0 as "falsy/absent".
+  const html0 = renderToStaticMarkup(createElement(ShapeBody, { shape: opacityShape('shape:op0', 0), snapshot: doc, editorState }))
+  const wrapper0 = html0.match(/<div data-shape-id="shape:op0"[^>]*style="([^"]*)"/)
+  assert.ok(wrapper0, `wrapper div for opacity:0 shape should be found in: ${html0}`)
+  assert.match(wrapper0![1], /opacity:0(?!\.)/, `wrapper style should include opacity:0 (not collapsed to 1), got: ${wrapper0![1]}`)
+  console.log('ok: ShapeBody wrapper carries opacity:0 — NOT collapsed to 1 by a truthiness bug')
+}
+
+// ============================================================================
+// 9. Task R1 — ShapeLayer paints siblings via orderForPaint's (index, id)
+//    order, NOT cull/insertion order. Two overlapping ROOT shapes: shape:top
+//    carries the HIGHER index ('a2') but is listed FIRST in the shapes
+//    array (so both insertion order and queryViewport's Map-iteration cull
+//    order — see spatial-index.ts's buildSpatialIndex, which inserts cells
+//    by iterating doc.shapes in array order — would put it first); shape:bot
+//    carries the LOWER index ('a1') and is listed SECOND. Ascending index
+//    paints LATER (on top — paint-order.ts's module header), so the correct
+//    DOM order is [shape:bot, shape:top]: the OPPOSITE of both insertion and
+//    (pre-fix) cull order.
+// ============================================================================
+{
+  function indexedShape(id: string, index: string): Shape {
+    return {
+      id, kind: 'geo', parentId: 'page:p', index, x: 0, y: 0, rotation: 0,
+      isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+    } as Shape
+  }
+  const shapeTop = indexedShape('shape:top', 'a2')
+  const shapeBot = indexedShape('shape:bot', 'a1')
+  const orderDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }],
+    shapes: [shapeTop, shapeBot], // higher-index shape listed FIRST
+    bindings: [],
+  })
+  const toolContext = fakeToolContext(orderDoc)
+  const camera = { x: 0, y: 0, z: 1 }
+  const html = renderToStaticMarkup(createElement(ShapeLayer, { toolContext, camera, viewportSize: { width: 800, height: 600 } }))
+  const topAt = html.indexOf(`data-shape-id="${shapeTop.id}"`)
+  const botAt = html.indexOf(`data-shape-id="${shapeBot.id}"`)
+  assert.ok(topAt >= 0 && botAt >= 0, 'both shapes should render (both visible)')
+  assert.ok(botAt < topAt, `shape:bot (index 'a1') must render BEFORE shape:top (index 'a2') in DOM order — lower index paints first/underneath, higher index paints last/on top: botAt=${botAt} topAt=${topAt}, html=${html}`)
+  console.log("ok: ShapeLayer paints siblings in (index, id) order — higher index paints on top, opposite of insertion/cull order")
+}
+
+// ============================================================================
+// 10. Task R1 — equal-index tie-break on id: two root shapes sharing the
+//    SAME index (the all-'a1' legacy corpus — plan Decision D-2) render in
+//    id-ASCENDING order regardless of array/insertion order, so paint order
+//    is deterministic across peers rather than an accident of iteration
+//    order.
+// ============================================================================
+{
+  function tiedShape(id: string): Shape {
+    return {
+      id, kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+      isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 },
+    } as Shape
+  }
+  const shapeB = tiedShape('shape:tie-b')
+  const shapeA = tiedShape('shape:tie-a')
+  const tieDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }],
+    shapes: [shapeB, shapeA], // 'shape:tie-b' listed FIRST — id tie-break must still order 'shape:tie-a' first
+    bindings: [],
+  })
+  const toolContext = fakeToolContext(tieDoc)
+  const camera = { x: 0, y: 0, z: 1 }
+  const html = renderToStaticMarkup(createElement(ShapeLayer, { toolContext, camera, viewportSize: { width: 800, height: 600 } }))
+  const aAt = html.indexOf(`data-shape-id="${shapeA.id}"`)
+  const bAt = html.indexOf(`data-shape-id="${shapeB.id}"`)
+  assert.ok(aAt >= 0 && bAt >= 0, 'both tied-index shapes should render')
+  assert.ok(aAt < bAt, `equal-index siblings must tie-break on id ASC (shape:tie-a before shape:tie-b) regardless of array order: aAt=${aAt} bAt=${bAt}, html=${html}`)
+  console.log('ok: ShapeLayer tie-breaks equal-index siblings on id ASC')
+}
+
+// ============================================================================
+// 11. Task R1 — the PAGE render filter: ShapeLayer paints ONLY the shapes
+//    whose page ancestor (canvas-model's `pageIdOf`) equals
+//    `editorState.currentPageId`, composed with the existing culling/paint
+//    order. A fresh fakeToolContext parameterized by `currentPageId` (unlike
+//    the module-level one above, which is pinned to 'page:p') so this case
+//    can exercise both pages without disturbing every earlier case in this
+//    file.
+// ============================================================================
+function fakeToolContextForPage(snapshot: CanvasDocument, currentPageId: string): ToolContext {
+  const state: EditorState = Object.freeze({
+    camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null,
+    editingId: null, nextShapeStyle: {}, currentPageId,
+  })
+  const editor = {
+    doc: { subscribe: (_l: () => void) => () => {}, getText: (_id: string) => '' },
+    get: (): EditorState => state,
+    subscribe: (_l: () => void) => () => {},
+  } as unknown as Editor
+  return {
+    editor,
+    snapshot: () => snapshot,
+    index: () => buildSpatialIndex(snapshot),
+    hitTestTopmost: () => null,
+    queryMarquee: () => [],
+    dispose: () => {},
+  }
+}
+
+{
+  const shapeOnP: Shape = { id: 'shape:onP', kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 } } as Shape
+  const shapeOnQ: Shape = { id: 'shape:onQ', kind: 'geo', parentId: 'page:q', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 } } as Shape
+  const twoPageDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }, { id: 'page:q', name: 'Q' }],
+    shapes: [shapeOnP, shapeOnQ],
+    bindings: [],
+  })
+  const camera = { x: 0, y: 0, z: 1 }
+  const viewportSize = { width: 800, height: 600 }
+
+  // 11a. currentPageId = 'page:p' -> only shape:onP renders, shape:onQ absent.
+  const htmlP = renderToStaticMarkup(createElement(ShapeLayer, { toolContext: fakeToolContextForPage(twoPageDoc, 'page:p'), camera, viewportSize }))
+  assert.ok(htmlP.includes('data-shape-id="shape:onP"'), `shape:onP should render when currentPageId='page:p': ${htmlP}`)
+  assert.ok(!htmlP.includes('data-shape-id="shape:onQ"'), `shape:onQ (on page:q) must NOT render when currentPageId='page:p': ${htmlP}`)
+  console.log('ok: ShapeLayer paints only the current page (page:p) — the other page is absent')
+
+  // 11b. Switch currentPageId to 'page:q' -> only shape:onQ renders now.
+  const htmlQ = renderToStaticMarkup(createElement(ShapeLayer, { toolContext: fakeToolContextForPage(twoPageDoc, 'page:q'), camera, viewportSize }))
+  assert.ok(!htmlQ.includes('data-shape-id="shape:onP"'), `shape:onP (on page:p) must NOT render when currentPageId='page:q': ${htmlQ}`)
+  assert.ok(htmlQ.includes('data-shape-id="shape:onQ"'), `shape:onQ should render when currentPageId='page:q': ${htmlQ}`)
+  console.log('ok: switching currentPageId to page:q flips which page paints')
+
+  // 11c. NESTED: a child shape whose FRAME is on page:q renders only when
+  //    the current page is page:q — pageIdOf must walk to the page
+  //    ancestor, not stop at the shape's direct parentId (a mutant that
+  //    checks `shape.parentId === currentPageId` directly would wrongly
+  //    hide this child under EVERY currentPageId, since its own parentId is
+  //    the frame's id, never a page id).
+  const frameOnQ: Shape = { id: 'shape:frameQ', kind: 'frame', parentId: 'page:q', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 400, h: 400, name: 'F' } } as Shape
+  const childOfFrameOnQ: Shape = { id: 'shape:childOfFrameQ', kind: 'geo', parentId: 'shape:frameQ', index: 'a1', x: 10, y: 10, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 10, h: 10 } } as Shape
+  const nestedDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }, { id: 'page:q', name: 'Q' }],
+    shapes: [frameOnQ, childOfFrameOnQ],
+    bindings: [],
+  })
+  const nestedHtmlP = renderToStaticMarkup(createElement(ShapeLayer, { toolContext: fakeToolContextForPage(nestedDoc, 'page:p'), camera, viewportSize }))
+  assert.ok(!nestedHtmlP.includes('data-shape-id="shape:childOfFrameQ"'), `a child of a frame on page:q must NOT render when currentPageId='page:p': ${nestedHtmlP}`)
+  const nestedHtmlQ = renderToStaticMarkup(createElement(ShapeLayer, { toolContext: fakeToolContextForPage(nestedDoc, 'page:q'), camera, viewportSize }))
+  assert.ok(nestedHtmlQ.includes('data-shape-id="shape:frameQ"'), `the frame on page:q should render when currentPageId='page:q': ${nestedHtmlQ}`)
+  assert.ok(nestedHtmlQ.includes('data-shape-id="shape:childOfFrameQ"'), `a child of a frame on page:q SHOULD render when currentPageId='page:q' (pageIdOf walks to the page ancestor): ${nestedHtmlQ}`)
+  console.log('ok: ShapeLayer resolves a nested child to its PAGE ancestor (pageIdOf), not its direct parentId')
+
+  // 11d. MIGRATION SAFETY: a single-page room (every shape's page ancestor
+  //    is page:p, currentPageId='page:p') renders ALL of them — the filter
+  //    hides NOTHING. Reuses this file's module-level `doc` fixture (four
+  //    shapes, all parented to page:p directly or transitively) with the
+  //    module-level `editorState`-pinned fakeToolContext from above.
+  const migrationHtml = renderToStaticMarkup(createElement(ShapeLayer, { toolContext: fakeToolContext(doc), camera, viewportSize }))
+  assert.ok(migrationHtml.includes('data-shape-id="shape:rot"'), `single-page migration: shape:rot must still render: ${migrationHtml}`)
+  assert.ok(migrationHtml.includes('data-shape-id="shape:parent"'), `single-page migration: shape:parent must still render: ${migrationHtml}`)
+  assert.ok(migrationHtml.includes('data-shape-id="shape:child"'), `single-page migration: nested shape:child must still render: ${migrationHtml}`)
+  console.log('ok: MIGRATION SAFETY — a single-page room renders every shape unchanged, the filter hides nothing')
+}
+
+console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text, dispatch threading, paint order, opacity, page filter)')

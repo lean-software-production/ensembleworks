@@ -121,9 +121,9 @@ import type { ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { shapeBodyTransform } from './ShapeBody.js'
 import { isEmbedKind } from './shapeRegistry.js'
-import { noteStyle, NOTE_LABEL_FONT_SIZE, NOTE_LABEL_LINE_HEIGHT, NOTE_TEXT_ALIGN } from './shapes/NoteShape.js'
+import { noteStyle, NOTE_LABEL_FONT_SIZE, NOTE_LABEL_LINE_HEIGHT } from './shapes/NoteShape.js'
 import { textStyle } from './shapes/TextShape.js'
-import { geoStyle, GEO_LABEL_TEXT_ALIGN } from './shapes/GeoShape.js'
+import { geoStyle } from './shapes/GeoShape.js'
 
 export interface TextEditorProps {
   readonly toolContext: ToolContext
@@ -255,7 +255,7 @@ export function editorTextStyle(shape: Shape): EditorTextStyle {
   switch (shape.kind) {
     case 'note': {
       const s = noteStyle(shape)
-      return { fontFamily: s.fontFamily, fontSize: NOTE_LABEL_FONT_SIZE, lineHeight: NOTE_LABEL_LINE_HEIGHT, color: s.color, textAlign: NOTE_TEXT_ALIGN, padding: 4 }
+      return { fontFamily: s.fontFamily, fontSize: NOTE_LABEL_FONT_SIZE, lineHeight: NOTE_LABEL_LINE_HEIGHT, color: s.color, textAlign: s.textAlign, padding: 4 }
     }
     case 'text': {
       const s = textStyle(shape)
@@ -263,7 +263,7 @@ export function editorTextStyle(shape: Shape): EditorTextStyle {
     }
     case 'geo': {
       const s = geoStyle(shape)
-      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, color: s.labelColor, textAlign: GEO_LABEL_TEXT_ALIGN, padding: 4 }
+      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, color: s.labelColor, textAlign: s.textAlign, padding: 4 }
     }
     default:
       // Defensive only, never actually hit: TextEditor only ever mounts for

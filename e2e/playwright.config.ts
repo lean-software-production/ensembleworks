@@ -22,6 +22,11 @@ export default defineConfig({
 		locale: 'en-US',
 		timezoneId: 'UTC',
 		trace: 'retain-on-failure',
+		// Task H1: copy/paste contracts (K1-K3) drive the REAL OS clipboard via
+		// navigator.clipboard.writeText/readText — without this grant Chromium
+		// throws NotAllowedError on the first clipboard call in a headless
+		// context (no user gesture to imply permission).
+		permissions: ['clipboard-read', 'clipboard-write'],
 	},
 	expect: {
 		toHaveScreenshot: { maxDiffPixelRatio: 0.02, animations: 'disabled' },

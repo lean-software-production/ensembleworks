@@ -88,7 +88,7 @@
  * own containment guard keeps the two paths mutually exclusive (no
  * double-handling). See both functions' doc comments.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 // Task C6b — the tldraw handwriting/text webfonts (tldraw_draw/_sans/_serif/
 // _mono), self-hosted from client/public/fonts/tldraw/ (see fonts.css's own
 // header for the full why/licensing). Side-effect import, same pattern as
@@ -101,11 +101,17 @@ import {
 	Editor,
 	applyWheel,
 	createToolContext,
+	duplicateSelectionIntents,
+	pasteIntents,
+	reorderSelectionIntents,
+	screenToWorld,
 	type InputEvent,
 	type Intent,
 	type KeyInputEvent,
+	type SetStyle,
 	type ToolContext,
 } from '@ensembleworks/canvas-editor'
+import { encodeClipboard, serializeSelection } from '@ensembleworks/canvas-model'
 import { PresenceStore, SyncClientPeer, type Transport } from '@ensembleworks/canvas-sync'
 import {
 	Cursors,
@@ -129,6 +135,8 @@ import { EditingIndicators } from './EditingIndicators.js'
 import { DevOverlay, shouldShowDevOverlayFromEnvironment, useCanvasMetrics } from './DevOverlay.js'
 import { canvasV2EmbedLifecycles, registerCanvasV2Shapes } from './shapes/index.js'
 import { presentStoreV2 } from './shapes/presentStoreV2.js'
+import { StylePanel } from './StylePanel.js'
+import type { StyleAxis, StyleValue } from './style-axes.js'
 import {
 	cancelActiveTool,
 	createInitialToolStates,
@@ -136,10 +144,18 @@ import {
 	currentSnapResult,
 	deleteSelectionIntents,
 	dispatchToActiveTool,
+	pruneDanglingSelectionIntents,
 	type ToolId,
 	type ToolSet,
 	type ToolStates,
 } from './tool-loop.js'
+import { clipboardShortcut, readClipboardText, writeClipboardText } from './clipboard-dom.js'
+import { reorderShortcut } from './reorder-dom.js'
+import { extractImageFiles } from './image-drop.js'
+import { extractImageBlobs } from './image-paste.js'
+import { createImageFromBlob } from './image-create.js'
+import { clampCurrentPageIntents } from './page-switcher-dom.js'
+import { PageSwitcher } from './PageSwitcher.js'
 
 /** How long an embed (terminal/iframe/…) may sit off-screen before
  * EmbedLayer suspends it — see embedLifecycle.ts's `suspendAfterTicks` doc.
@@ -244,6 +260,21 @@ function randomPeerId(): bigint {
 
 function delay(ms: number): Promise<void> {
 	return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve()
+}
+
+/** Task P4 — pure mapping from a StylePanel axis change to the `SetStyle`
+ * intent E1 defines: `opacity` is an ENVELOPE field (`shape.opacity`, per
+ * SetStyle's own interface — canvas-editor/src/intents.ts), so that axis
+ * routes through `opacity`, NEVER `props.opacity` (E1's applyOne only ever
+ * writes the envelope field from THIS key, and canvas-react's ShapeBody
+ * only ever reads `shape.opacity` — a value parked in `props.opacity`
+ * would silently never render). Every other axis is a `props` key patch.
+ * Exported so this mapping is unit-testable in isolation, without booting a
+ * session (see CanvasV2App.test.ts's style-panel wiring cases) — `ids` is
+ * an explicit parameter (not read from `editor` here) so the test can pass
+ * a plain array and assert the exact intent shape. */
+export function buildSetStyleIntent(ids: readonly string[], axis: StyleAxis, value: StyleValue): SetStyle {
+	return axis === 'opacity' ? { type: 'SetStyle', ids, opacity: Number(value) } : { type: 'SetStyle', ids, props: { [axis]: value } }
 }
 
 interface Session {
@@ -445,7 +476,7 @@ export function CanvasV2App(props: CanvasV2AppProps) {
 				<DevOverlay
 					roomId={roomId}
 					connectionState={session ? 'connected' : 'connecting'}
-					client={{ repairCount: session?.peer.repairCount ?? 0, lastBackfillBytes: session?.peer.lastBackfillBytes ?? 0 }}
+					client={{ repairCount: session?.peer.repairCount ?? 0, lastBackfillBytes: session?.peer.lastBackfillBytes ?? 0, invalidWriteCount: session?.peer.doc.invalidWriteCount ?? 0 }}
 					metrics={metrics}
 				/>
 			)}
@@ -515,6 +546,8 @@ const TOOL_BUTTONS: ReadonlyArray<{ readonly id: ToolId; readonly label: string 
 	{ id: 'geo', label: 'Shape' },
 	{ id: 'frame', label: 'Frame' },
 	{ id: 'arrow', label: 'Arrow' },
+	{ id: 'draw', label: 'Draw' },
+	{ id: 'line', label: 'Line' },
 ]
 
 /** Cursors.tsx has no push-based "a remote peer's presence changed" hook —
@@ -552,6 +585,16 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	const [activeToolId, setActiveToolId] = useState<ToolId>('select')
 	const activeToolIdRef = useRef(activeToolId)
 	activeToolIdRef.current = activeToolId
+
+	// Task P2 — StylePanel's `isGesturing` flag: true from pointerdown until
+	// pointerup/cancel, so the panel disappears mid-drag instead of trailing
+	// it (mirrors v1 ContextualStylePanel's own `useMidGesture`). Set/cleared
+	// in `handleInput` below on the raw pointerdown/pointerup events (not
+	// derived from tool state — a flag this simple doesn't need per-tool
+	// FSM plumbing) and force-cleared by `cancelAndReset` for every
+	// abandonment path (Escape, blur, pointercancel, tool switch) that never
+	// delivers a pointerup at all.
+	const [isGesturing, setIsGesturing] = useState(false)
 
 	const [toolStates, setToolStates] = useState<ToolStates>(() => createInitialToolStates(tools))
 	const toolStatesRef = useRef(toolStates)
@@ -653,6 +696,12 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 		if (intents.length > 0) editor.applyAll(intents)
 		toolStatesRef.current = states
 		setToolStates(states)
+		// Every abandonment path this function covers (Escape, blur,
+		// pointercancel, tool switch) is a case where a plain pointerup may
+		// never arrive — clear the StylePanel gesture flag here too, not just
+		// on pointerup in handleInput below, so the panel doesn't stay hidden
+		// forever after an abandoned gesture.
+		setIsGesturing(false)
 	}, [editor, tools])
 
 	// THE single source of truth for "which keys are app-global shortcuts and
@@ -721,12 +770,131 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			// z-branch), so dropping meta+y costs them nothing.
 			const key = event.key.toLowerCase()
 			const withModifier = event.modifiers.ctrl || event.modifiers.meta
+			// pruneDanglingSelectionIntents (Task D1's undo-selection-cleanup
+			// carry-forward, tool-loop.ts's own doc comment on that function):
+			// `SetSelection` is a view intent with no inverse (editor.ts's
+			// undo()/redo() never touch EditorState), so undoing a
+			// duplicateSelectionIntents/pasteIntents batch removes the newly
+			// minted shapes but leaves `selection` still naming them — a
+			// dangling reference. Applying the pruned result (when non-empty) is
+			// itself a pure state-only intent, so it never pushes a new undo
+			// entry or clears the redo stack (editor.ts's applyAll only moves
+			// those on `docMutated`), and it's a no-op whenever undo/redo didn't
+			// touch anything selection cared about (e.g. undoing a translate).
 			if (withModifier && key === 'z' && !event.modifiers.shift) {
 				editor.undo()
+				const prune = pruneDanglingSelectionIntents(editor)
+				if (prune.length > 0) editor.applyAll(prune)
+				// Undo-clamp (Task U1, D-6, D-3): SetCurrentPage is a view
+				// intent with no undo inverse, so undoing a CreatePage +
+				// SetCurrentPage batch (the switcher's "+ new page") removes
+				// the page but leaves currentPageId still naming it — R1's
+				// render filter would then paint nothing. Same shape of fix
+				// as pruneDanglingSelectionIntents just above: check AFTER
+				// undo(), apply only when non-empty.
+				const clamp = clampCurrentPageIntents(editor)
+				if (clamp.length > 0) editor.applyAll(clamp)
 				return true
 			}
 			if ((withModifier && key === 'z' && event.modifiers.shift) || (event.modifiers.ctrl && key === 'y')) {
 				editor.redo()
+				const prune = pruneDanglingSelectionIntents(editor)
+				if (prune.length > 0) editor.applyAll(prune)
+				// Undo-clamp (Task U1, D-6) — the redo direction: a redo can
+				// equally reintroduce a DeletePage (if a delete had been
+				// undone, then redone), stranding currentPageId the same way.
+				const clamp = clampCurrentPageIntents(editor)
+				if (clamp.length > 0) editor.applyAll(clamp)
+				return true
+			}
+			// Ctrl/Cmd+C/X/V/D (Task D1) — copy/cut/paste/duplicate. The
+			// editingId===null gate already happened above (this function's
+			// first line), so `clipboardShortcut` here is the pure key->action
+			// mapping only (also independently unit-tested DOM-free in
+			// clipboard-dom.test.ts). D-7's cut ordering (write the clipboard
+			// FIRST, delete only once that write resolves — a failed write must
+			// never lose shapes) and D-6's "selection after paste/duplicate =
+			// the new root ids" are already baked into pasteIntents/
+			// duplicateSelectionIntents (canvas-editor's clipboard-intents.ts);
+			// this branch only decides WHEN to call them and where the
+			// `navigator.clipboard` I/O (async, isolated in clipboard-dom.ts)
+			// sits relative to it.
+			const clip = clipboardShortcut(event, editingId)
+			if (clip) {
+				if (clip.action === 'copy') {
+					const selection = [...editor.get().selection]
+					if (selection.length > 0) {
+						const payload = serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection)
+						void writeClipboardText(encodeClipboard(payload)).catch(() => {
+							// A failed/denied clipboard write is a no-op copy — the
+							// selection/doc are untouched either way, so there is
+							// nothing to roll back.
+						})
+					}
+				} else if (clip.action === 'cut') {
+					const selection = [...editor.get().selection]
+					if (selection.length > 0) {
+						const payload = serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection)
+						// ATOMIC CAPTURE (fixes a cut TOCTOU a review caught):
+						// deleteSelectionIntents reads the LIVE selection
+						// (tool-loop.ts), so if it were called fresh INSIDE the
+						// .then() below — after the async writeClipboardText
+						// resolves — a selection change during that (real, if
+						// brief) microtask window could make cut delete a
+						// DIFFERENT set than the one just serialized above. The
+						// dangerous direction: selection GROWS during the write
+						// -> cut deletes a shape that was never placed on the
+						// clipboard -> data lost with no clipboard copy of it.
+						// Capturing the delete intents HERE, synchronously, from
+						// the SAME selection just serialized, guarantees cut
+						// deletes EXACTLY what it copied, regardless of any
+						// selection change before the write resolves.
+						const deleteIntents = deleteSelectionIntents(editor)
+						void writeClipboardText(encodeClipboard(payload))
+							.then(() => {
+								// D-7: only APPLY the captured delete AFTER the
+								// write resolves — never before, so a failed
+								// write can't lose shapes.
+								if (deleteIntents.length > 0) editor.applyAll(deleteIntents)
+							})
+							.catch(() => {
+								// The write itself failed/was denied: intentionally
+								// do NOT delete. The selection survives untouched.
+							})
+					}
+				} else if (clip.action === 'paste') {
+					void readClipboardText()
+						.then((text) => {
+							const intents = pasteIntents(editor, text)
+							if (intents.length > 0) editor.applyAll(intents)
+						})
+						.catch(() => {
+							// A failed/denied clipboard read is a no-op paste, never
+							// a crash — mirrors decodeClipboard's own total-function,
+							// never-throws contract for hostile/malformed text.
+						})
+				} else {
+					// 'duplicate' — no clipboard I/O at all, purely synchronous.
+					const intents = duplicateSelectionIntents(editor)
+					if (intents.length > 0) editor.applyAll(intents)
+				}
+				return true
+			}
+			// Bracket-key Arrange shortcuts (Task D1, D-6) — bring-forward/
+			// send-backward/bring-to-front/send-to-back. The editingId===null
+			// gate already happened above, so `reorderShortcut` here is the pure
+			// key->op mapping only (also independently unit-tested DOM-free in
+			// reorder-dom.test.ts). `reorderSelectionIntents` (canvas-editor's
+			// E2) computes the whole batch; applying it via a single
+			// `editor.applyAll` is what makes one reorder ONE commit / ONE undo
+			// entry (E1/E2's own doc comments). No `preventDefault`: bare
+			// brackets have no competing native canvas action when
+			// editingId===null, consistent with Delete/Escape/undo/clipboard
+			// just above.
+			const reorder = reorderShortcut(event, editingId)
+			if (reorder) {
+				const intents = reorderSelectionIntents(editor, reorder.op)
+				if (intents.length > 0) editor.applyAll(intents)
 				return true
 			}
 			return false
@@ -736,6 +904,11 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 
 	const handleInput = useCallback(
 		(event: InputEvent) => {
+			// StylePanel gesture flag (Task P2) — raw pointerdown/pointerup,
+			// independent of which tool is active or what it does with the
+			// event; the panel just needs to know a drag is in flight.
+			if (event.type === 'pointerdown') setIsGesturing(true)
+			if (event.type === 'pointerup') setIsGesturing(false)
 			if (event.type === 'pointermove') {
 				// Presence: publish the WORLD-space cursor position (Task G4) —
 				// unconditional (not tool-gated), mirroring wheel's own
@@ -802,6 +975,41 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// on either side alone to uphold.
 	const dispatch = useCallback((intents: Intent[]) => editor.applyAll(intents), [editor])
 
+	// Task P4 — wires StylePanel's onStyleChange to SetStyle over the WHOLE
+	// current selection (E1 is batch — one intent, one commit, one undo entry
+	// for however many shapes are selected; see buildSetStyleIntent's own doc
+	// comment for the opacity-vs-props split). Reads `editor.get().selection`
+	// FRESH on every call (not a stale closure over `editorState`) so a
+	// selection change between renders can never leave this dispatching
+	// against a stale set of ids. An empty selection is a defensive no-op —
+	// StylePanel renders nothing (and so never fires this) once its own
+	// `relevantAxes` sees an empty selection, but this guards the callback
+	// itself against ever dispatching a body-less SetStyle.
+	const onStyleChange = useCallback(
+		(axis: StyleAxis, value: StyleValue) => {
+			const ids = Array.from(editor.get().selection)
+			if (ids.length === 0) return
+			dispatch([buildSetStyleIntent(ids, axis, value)])
+		},
+		[editor, dispatch],
+	)
+
+	// Task AS3 — StylePanel's ARMED-mode counterpart to `onStyleChange` above:
+	// dispatches `SetNextStyle` (a view intent — no doc mutation, no undo
+	// entry, AS1's `applyOne` case) instead of `SetStyle`. Kept as a
+	// SEPARATE callback (not a branch inside `onStyleChange`) so StylePanel
+	// itself picks which one to call by MODE — see StylePanel.tsx's
+	// `onArmStyle` prop doc comment for why that's deliberate, not
+	// incidental. `SetNextStyle.props` shallow-merges (editor.ts's
+	// `applyOne`), so arming color then arming size accumulates both rather
+	// than clobbering — same semantics `nextShapeStyle` already documents.
+	const onArmStyle = useCallback(
+		(axis: StyleAxis, value: StyleValue) => {
+			dispatch([{ type: 'SetNextStyle', props: { [axis]: value } }])
+		},
+		[dispatch],
+	)
+
 	// GLOBAL KEYBOARD-DELIVERY FALLBACK (B3's carried code-quality fix — see
 	// this task's own notes): Viewport's onKeyDown only fires for a keydown
 	// whose DOM target is Viewport's own div OR ONE OF ITS DESCENDANTS. The
@@ -857,11 +1065,125 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				modifiers: { shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey },
 				t: e.timeStamp,
 			}
-			handleGlobalShortcut(keyEvent, editor.get().editingId)
+			const editingId = editor.get().editingId
+			handleGlobalShortcut(keyEvent, editingId)
+			// Task D1: Ctrl/Cmd+C/X/V/D DO have competing native browser behavior
+			// (Ctrl+D bookmarks the page, Ctrl+P — N/A here, but Ctrl+V may paste
+			// into a focused field, Ctrl+C may copy a text selection) that
+			// Escape/Delete/undo never had to guard against, so this path calls
+			// preventDefault when — and only when — `clipboardShortcut` itself
+			// says this keydown IS one of the four (same pure decision
+			// `handleGlobalShortcut` just consumed above; re-deriving it here,
+			// rather than having `handleGlobalShortcut` return WHICH action it
+			// took, keeps its return type the plain `boolean` every other branch
+			// already relies on). Deliberately NOT called for editingId!==null —
+			// TextEditor's native copy/cut/paste must keep working untouched.
+			// KNOWN GAP (ground-truth correction to the plan): this `e` is only
+			// reachable from THIS document-level fallback listener. The PRIMARY
+			// path — Viewport's own onKeyDown -> canvas-react's `keyEventToInput`
+			// -> `handleInput` above — normalizes the raw KeyboardEvent into a
+			// DOM-free `KeyInputEvent` (Viewport.tsx's `handleKey`) and never
+			// retains or forwards the original event, so there is no hook to call
+			// preventDefault from there without changing canvas-react's
+			// logic-free Viewport component (out of this task's file list). In
+			// practice the viewport is a plain non-input `<div>`, so the browser
+			// has no default "paste into this element" action to suppress there,
+			// and Ctrl+D/Ctrl+P are OS/browser-reserved shortcuts most browsers
+			// ignore preventDefault for regardless of where it's called from.
+			if (clipboardShortcut(keyEvent, editingId)) e.preventDefault()
 		}
 		document.addEventListener('keydown', handleGlobalKeydown)
 		return () => document.removeEventListener('keydown', handleGlobalKeydown)
 	}, [editor, handleGlobalShortcut])
+
+	// Task W1 (docs/plans/2026-07-22-canvas-v2-assets-image.md, D-7) — the
+	// drop surface. onDragOver MUST call preventDefault: a browser div is
+	// NOT a drop target by default, so with no listener (or one that never
+	// preventDefaults) the browser refuses to fire `drop` at all and instead
+	// runs its own "navigate to/open the file" default — the wheel
+	// listener's own non-passive-preventDefault note (Viewport.tsx's module
+	// header) is the same shape of problem for a different native default.
+	const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+		e.preventDefault()
+	}, [])
+
+	// onDrop: preventDefault (stop the browser's own file-open navigation),
+	// extract image Files (image-drop.ts's extractImageFiles — DOM-free,
+	// unit-tested; non-image files in a mixed drop are silently ignored),
+	// convert the drop's CLIENT point to WORLD via the SAME
+	// `clientX/clientY - rect.left/top` -> `screenToWorld` recipe every
+	// other pointer event uses (canvas-react's dom-events.ts
+	// `pointerEventToInput`, fed by Viewport.tsx's own
+	// `getBoundingClientRect()` call) — `e.currentTarget` here is this same
+	// `data-canvas-v2-viewport` container, so the math is identical. Fires
+	// one `createImageFromBlob` per file (D-7: MVP stacks multiple files at
+	// the same world point — acceptable per plan); each call is
+	// independently async/fire-and-forget (`createImageFromBlob` itself
+	// swallows a failed upload — see image-create.ts).
+	const handleDrop = useCallback(
+		(e: DragEvent<HTMLDivElement>) => {
+			e.preventDefault()
+			const files = extractImageFiles(e.dataTransfer.files)
+			if (files.length === 0) return
+			const rect = e.currentTarget.getBoundingClientRect()
+			const local = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+			const world = screenToWorld(editor.get().camera, local)
+			for (const file of files) {
+				void createImageFromBlob(editor, file, world, editor.get().currentPageId)
+			}
+		},
+		[editor],
+	)
+
+	// Task W2 (docs/plans/2026-07-22-canvas-v2-assets-image.md, D-7) — the
+	// paste-image surface. A SEPARATE document-level `paste` listener, NOT
+	// an extension of the Ctrl+V -> readClipboardText path above (which is
+	// TEXT-only and stays untouched — see handleGlobalShortcut's 'paste'
+	// branch). extractImageBlobs (image-paste.ts, DOM-free/unit-tested)
+	// finds nothing on a text-only clipboard (an EW shape-copy's clipboard
+	// TEXT, or an ordinary text copy), so this listener no-ops and the
+	// existing Ctrl+V keydown path (already gated behind its own handler)
+	// is what fires; conversely an externally-copied/dragged-in IMAGE puts
+	// no EW-clipboard text on the clipboard, so `pasteIntents` — were it to
+	// run — would see an undecodable payload and no-op. The two paths
+	// handle disjoint clipboard content, so a single paste event never
+	// double-fires both (D-7's no-double-handling reasoning).
+	//
+	// preventDefault ONLY when an image was actually found: an
+	// unconditional preventDefault here would swallow every ordinary text
+	// paste's native/Ctrl+V-path behavior even on a clipboard this listener
+	// has nothing to do with — the mirror image of Task D1's clipboard
+	// keydown fallback, which likewise only preventDefaults the four keys
+	// `clipboardShortcut` actually recognizes.
+	//
+	// isEditableTarget guard: skip when the paste's target is a real text
+	// input/textarea/contentEditable (TextEditor's own textarea while
+	// editing shape text) — same guard `handleGlobalKeydown` above already
+	// applies to keydowns, so an image paste while mid text-edit never
+	// hijacks the native (text-only) paste TextEditor's textarea handles
+	// itself.
+	useEffect(() => {
+		function handlePaste(e: ClipboardEvent): void {
+			if (isEditableTarget(e.target as Node | null)) return
+			const clipboardData = e.clipboardData
+			if (!clipboardData) return
+			const blobs = extractImageBlobs(clipboardData)
+			if (blobs.length === 0) return
+			e.preventDefault()
+			// No pointer position on a paste — drop at the viewport's CURRENT
+			// center in world space (plan D-7), same
+			// `screenToWorld(camera, {x,y})` convention as the drop handler
+			// above, just fed the viewport's midpoint instead of a client
+			// event's coordinates.
+			const size = viewportSizeRef.current
+			const center = screenToWorld(editor.get().camera, { x: size.width / 2, y: size.height / 2 })
+			for (const blob of blobs) {
+				void createImageFromBlob(editor, blob, center, editor.get().currentPageId)
+			}
+		}
+		document.addEventListener('paste', handlePaste)
+		return () => document.removeEventListener('paste', handlePaste)
+	}, [editor])
 
 	return (
 		<div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif' }}>
@@ -887,7 +1209,8 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					</button>
 				))}
 			</div>
-			<div ref={containerRef} data-canvas-v2-viewport style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+			<PageSwitcher editor={editor} snapshot={snapshot} currentPageId={editorState.currentPageId} />
+			<div ref={containerRef} data-canvas-v2-viewport onDragOver={handleDragOver} onDrop={handleDrop} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
 				<Viewport onInput={handleInput} onViewportBlur={handleViewportBlur} onPointerCancel={cancelAndReset} style={{ position: 'absolute', inset: 0 }}>
 					<Grid camera={editorState.camera} />
 					<WorldLayer camera={editorState.camera}>
@@ -927,6 +1250,25 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 					    EditingIndicators.tsx's own module header for why it needs
 					    canvas-sync's raw `Presence.editing` field. */}
 					<EditingIndicators presence={presenceStore.all()} selfKey={selfKey} snapshot={snapshot} camera={editorState.camera} viewportSize={viewportSize} />
+					{/* Task P2 — contextual style panel, painted topmost (same STACKING
+					    CONTRACT as Cursors/EditingIndicators above: later DOM siblings
+					    paint over earlier ones). WIRED (Task P4): `onStyleChange` above
+					    dispatches a `SetStyle` intent over the whole selection — see its
+					    own doc comment and StylePanel.tsx's module header for the
+					    RED-then-GREEN history. Task AS3 adds `activeToolId`/
+					    `nextShapeStyle`/`onArmStyle` for the armed (empty-selection)
+					    mode — see StylePanel.tsx's own module header. */}
+					<StylePanel
+						selection={editorState.selection}
+						snapshot={snapshot}
+						camera={editorState.camera}
+						viewportSize={viewportSize}
+						isGesturing={isGesturing}
+						activeToolId={activeToolId}
+						nextShapeStyle={editorState.nextShapeStyle}
+						onStyleChange={onStyleChange}
+						onArmStyle={onArmStyle}
+					/>
 				</Viewport>
 			</div>
 		</div>

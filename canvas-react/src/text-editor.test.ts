@@ -90,6 +90,8 @@ function fakeToolContext(editingId: string | null): ToolContext {
     selection: new Set<string>(),
     hover: null,
     editingId,
+    nextShapeStyle: {},
+    currentPageId: 'page:p',
   })
   const editorDoc = {
     subscribe: (_listener: () => void) => () => {},

@@ -36,13 +36,25 @@ function mods(over?: { shift?: boolean; alt?: boolean; ctrl?: boolean; meta?: bo
  * surface the contracts runner should reach into). */
 function liveDocAdapter(editor: Editor): CanvasDocument {
   return {
-    pages: [], shapes: [], bindings: [],
+    pages: [], shapes: [], bindings: [], assets: [],
     byId: { get: (id: string) => editor.doc.getShape(id) } as unknown as CanvasDocument['byId'],
+    assetById: new Map(),
   }
 }
 
 function resolveAnchor(a: Anchor, editor: Editor): { x: number; y: number } {
   if (a.ref === 'point') return { x: a.x, y: a.y }
+  if (a.ref === 'element') {
+    // Task P3's 'element' anchor addresses a rendered DOM control (e.g. a
+    // style-panel swatch) — the FSM runner drives a headless Editor with no
+    // DOM at all, so there is genuinely nothing to resolve here. Every
+    // contract that uses an 'element' anchor is level:'browser' (the panel
+    // only exists in the client), and library.test.ts filters CONTRACTS to
+    // level:'fsm' before calling runContractFsm — this throw is a defensive
+    // backstop, matching textSelectionSpans'/peerEditingIndicator's
+    // established not-reachable-today posture.
+    throw new Error(`resolveAnchor: 'element' anchors (selector ${JSON.stringify(a.selector)}) are browser-only — no DOM at fsm level`)
+  }
   // Pilot 2 (Phase C): a seeded shape's centre, plus an optional SCREEN-space
   // offset — resolved against the shape's CURRENT world position at the
   // moment the gesture is turned into events (before any of it plays), via
@@ -65,6 +77,17 @@ function opsToEvents(ops: readonly GestureOp[], editor: Editor): InputEvent[] {
       case 'up': { b.up({ modifiers: mods(op.modifiers) }); break }
       case 'wheel': { const p = resolveAnchor(op.at, editor); b.wheel(op.dx, op.dy, { at: [p.x, p.y], modifiers: mods(op.modifiers) }); break }
       case 'key': { b.key(op.key, { modifiers: mods(op.modifiers) }); break }
+      case 'dropFile': {
+        // Task K (assets/image sub-cycle) — a real file drop has no
+        // DOM/File/DataTransfer at this level; the FSM runner drives a
+        // headless Editor with no drop surface at all. Every contract that
+        // uses `dropFile` is level:'browser' (K's own
+        // dropping-an-image-creates-an-image-shape), and library.test.ts
+        // filters CONTRACTS to level:'fsm' before calling runContractFsm —
+        // this throw is a defensive backstop, matching the 'element'
+        // anchor's established not-reachable-today posture above.
+        throw new Error('dropFile is browser-level; not available to the FSM runner')
+      }
     }
   }
   return b.events()
@@ -158,6 +181,51 @@ function makeObs(
     },
     peerEditingIndicator() {
       throw new Error('not observable at fsm level')
+    },
+    shapeStyle(id: string, key: string) {
+      const shape = editor.doc.getShape(id)
+      if (!shape) return null
+      if (key === 'opacity') return shape.opacity
+      const raw = (shape.props as Record<string, unknown>)[key]
+      return typeof raw === 'string' || typeof raw === 'number' ? raw : null
+    },
+    selectedShapeIds() {
+      return [...editor.get().selection]
+    },
+    shapeCount() {
+      return editor.doc.listShapes().length
+    },
+    paintOrder() {
+      // Task H1 (types.ts's Obs.paintOrder doc comment): paint order is a
+      // RENDER concept — this runner drives a headless Editor with no
+      // renderer/DOM at all, so there is genuinely nothing to observe here.
+      // Every contract that calls this is level:'browser' (Z1), and
+      // library.test.ts filters CONTRACTS to level:'fsm' before calling
+      // runContractFsm — this throw is a defensive backstop, matching
+      // textSelectionSpans'/peerEditingIndicator's established
+      // not-reachable-today posture.
+      throw new Error('not observable at fsm level')
+    },
+    shapeKind(id: string) {
+      return editor.doc.getShape(id)?.kind ?? null
+    },
+    assetSrc(id: string) {
+      // Task K (assets/image sub-cycle): resolve the shape's assetId prop
+      // against the doc's asset map. `assetId` on a non-image shape (or an
+      // image shape with no asset) is absent/null — `typeof … === 'string'`
+      // guards both, and `props` is a `Record<string, unknown>` per
+      // shapeStyle's own established cast above.
+      const shape = editor.doc.getShape(id)
+      const assetId = (shape?.props as Record<string, unknown> | undefined)?.assetId
+      if (typeof assetId !== 'string') return null
+      const asset = editor.doc.getAsset(assetId)
+      const src = (asset?.props as Record<string, unknown> | undefined)?.src
+      return typeof src === 'string' ? src : null
+    },
+    pageCount() {
+      // Task H1 (pages sub-cycle) — a doc read, like shapeCount: no
+      // throw-stub, both adapters are REAL.
+      return editor.doc.listPages().length
     },
   }
 }
