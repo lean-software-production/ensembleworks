@@ -27,6 +27,7 @@ import {
 } from '@ensembleworks/contracts'
 import { canvasTmuxSpawnSpec, openTmuxSession, type TmuxSession } from '@ensembleworks/contracts/session-manager'
 import { WebSocketServer, type WebSocket } from 'ws'
+import { stripTerminalReports } from './terminal-input-filter.ts'
 
 const PORT = Number(process.env.PORT ?? 8789)
 const SCROLLBACK_LIMIT = 256 * 1024 // bytes replayed to newly attached clients
@@ -292,7 +293,7 @@ server.on('upgrade', (req, socket, head) => {
 			if (!result.success) return
 			const msg = result.data
 			if (msg.type === 'input') {
-				session.pty.write(msg.data)
+				session.pty.write(stripTerminalReports(msg.data))
 			} else if (msg.type === 'resize') {
 				resizeSession(session, msg.cols, msg.rows)
 			}
