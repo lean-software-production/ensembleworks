@@ -33,28 +33,28 @@
 // every occurrence anywhere in the chunk is removed (a reply may be
 // concatenated with real keystrokes in one frame).
 const REPORT_PATTERNS: RegExp[] = [
-  // Primary Device Attributes (DA1) reply — CSI ? … c   e.g. \e[?1;2c
-  /\x1b\[\?[0-9;]*c/g,
-  // Secondary Device Attributes (DA2) reply — CSI > … c   e.g. \e[>0;276;0c
-  /\x1b\[>[0-9;]*c/g,
-  // Tertiary Device Attributes (DA3) reply — DCS ! | … ST
-  /\x1bP!\|[0-9A-Fa-f]*\x1b\\/g,
-  // DSR / cursor-position report — CSI … R   (plain, e.g. \e[24;80R)
-  /\x1b\[[0-9;]*R/g,
-  // DSR private status report — CSI ? … n   (e.g. \e[?1;0n)
-  /\x1b\[\?[0-9;]*n/g,
-  // DECRPM mode report — CSI ? … $ y   (e.g. \e[?2026;2$y)
-  /\x1b\[\?[0-9;]*\$y/g,
-  // XTVERSION reply — DCS > | … ST
-  /\x1bP>\|[^\x1b]*\x1b\\/g,
-  // OSC color reports (OSC 10/11/4 … ; rgb:…), terminated by ST or BEL.
-  // Constrained to the OSC numbers we actually see from color queries so
-  // this never eats an unrelated OSC.
-  /\x1b\](?:10|11|4;[0-9]+);[^\x07\x1b]*(?:\x07|\x1b\\)/g,
+	// Primary Device Attributes (DA1) reply — CSI ? … c   e.g. \e[?1;2c
+	/\x1b\[\?[0-9;]*c/g,
+	// Secondary Device Attributes (DA2) reply — CSI > … c   e.g. \e[>0;276;0c
+	/\x1b\[>[0-9;]*c/g,
+	// Tertiary Device Attributes (DA3) reply — DCS ! | … ST
+	/\x1bP!\|[0-9A-Fa-f]*\x1b\\/g,
+	// DSR / cursor-position report — CSI … R   (plain, e.g. \e[24;80R)
+	/\x1b\[[0-9;]*R/g,
+	// DSR private status report — CSI ? … n   (e.g. \e[?1;0n)
+	/\x1b\[\?[0-9;]*n/g,
+	// DECRPM mode report — CSI ? … $ y   (e.g. \e[?2026;2$y)
+	/\x1b\[\?[0-9;]*\$y/g,
+	// XTVERSION reply — DCS > | … ST
+	/\x1bP>\|[^\x1b]*\x1b\\/g,
+	// OSC color reports (OSC 10/11/4 … ; rgb:…), terminated by ST or BEL.
+	// Constrained to the OSC numbers we actually see from color queries so
+	// this never eats an unrelated OSC.
+	/\x1b\](?:10|11|4;[0-9]+);[^\x07\x1b]*(?:\x07|\x1b\\)/g,
 ]
 
 export function stripTerminalReports(data: string): string {
-  let out = data
-  for (const re of REPORT_PATTERNS) out = out.replace(re, '')
-  return out
+	let out = data
+	for (const re of REPORT_PATTERNS) out = out.replace(re, '')
+	return out
 }
