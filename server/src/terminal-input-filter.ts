@@ -40,7 +40,14 @@ const REPORT_PATTERNS: RegExp[] = [
 	// Tertiary Device Attributes (DA3) reply — DCS ! | … ST
 	/\x1bP!\|[0-9A-Fa-f]*\x1b\\/g,
 	// DSR / cursor-position report — CSI … R   (plain, e.g. \e[24;80R)
-	/\x1b\[[0-9;]*R/g,
+	// The negative lookahead spares modified F3, which xterm.js encodes into the
+	// same shape: ESC [1;<mod>R for mod 2..8 (@xterm/xterm Keyboard.ts, keyCode
+	// 114). That is real host-bound input and must never be dropped. The cost is
+	// that a genuine CPR for row 1, columns 2..8 also survives — the right way to
+	// resolve an unavoidable ambiguity, since leaking a rare report is far
+	// cheaper than silently eating a keystroke. (Unmodified F3 is ESC O R, which
+	// this pattern never matched.)
+	/\x1b\[(?!1;[2-8]R)[0-9;]*R/g,
 	// DSR private status report — CSI ? … n   (e.g. \e[?1;0n)
 	/\x1b\[\?[0-9;]*n/g,
 	// DECRPM mode report — CSI ? … $ y   (e.g. \e[?2026;2$y)

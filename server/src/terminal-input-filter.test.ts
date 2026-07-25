@@ -39,6 +39,17 @@ assert.equal(
 assert.equal(stripTerminalReports('ls -la\r'), 'ls -la\r', 'ordinary keystrokes + Enter unchanged')
 assert.equal(stripTerminalReports('\x03'), '\x03', 'Ctrl-C unchanged')
 assert.equal(stripTerminalReports('\x1b[A'), '\x1b[A', 'arrow key (CSI A) unchanged')
+// Modified F3 collides with the CPR shape: xterm.js encodes F3-with-modifier as
+// ESC [1;<mod>R (Keyboard.ts keyCode 114), mod = 2..8. Real host-bound input, must survive.
+assert.equal(stripTerminalReports('\x1bOR'), '\x1bOR', 'unmodified F3 (SS3 R) unchanged')
+assert.equal(stripTerminalReports('\x1b[1;2R'), '\x1b[1;2R', 'Shift+F3 (CSI 1;2 R) unchanged')
+assert.equal(stripTerminalReports('\x1b[1;5R'), '\x1b[1;5R', 'Ctrl+F3 (CSI 1;5 R) unchanged')
+assert.equal(stripTerminalReports('\x1b[1;8R'), '\x1b[1;8R', 'Ctrl+Shift+Alt+F3 (CSI 1;8 R) unchanged')
+assert.equal(
+	stripTerminalReports('\x1b[24;80R\x1b[1;2R'),
+	'\x1b[1;2R',
+	'CPR stripped, modified F3 in the same frame preserved',
+)
 assert.equal(
 	stripTerminalReports('\x1b[<0;10;20M'),
 	'\x1b[<0;10;20M',
