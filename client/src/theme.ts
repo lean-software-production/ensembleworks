@@ -7,6 +7,8 @@
  * Keep in sync with the CSS custom properties in theme.css.
  */
 
+import { TERMINAL_CANONICAL_COLORS } from '@ensembleworks/contracts/terminal-identity'
+
 export const wm = {
 	// Surfaces (off-white family)
 	bg: '#fafaf7',
@@ -59,8 +61,8 @@ export const wm = {
 export const paperTerminalTheme = {
 	// Pure white so terminals match the other frames (iframe/web views),
 	// reading as fresh sheets laid over the room's warmer paper.
-	background: '#fff',
-	foreground: wm.ink,
+	background: TERMINAL_CANONICAL_COLORS.background,
+	foreground: TERMINAL_CANONICAL_COLORS.foreground,
 	cursor: wm.sealBlue,
 	cursorAccent: wm.cream,
 	selectionBackground: wm.accentSoft,

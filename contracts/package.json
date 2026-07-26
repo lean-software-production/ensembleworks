@@ -6,7 +6,9 @@
   "exports": {
     ".": "./src/index.ts",
     "./session-manager": "./src/session-manager.ts",
-    "./relay-parity": "./src/relay-parity.ts"
+    "./relay-parity": "./src/relay-parity.ts",
+    "./terminal-identity": "./src/terminal-identity.ts",
+    "./terminal-responder": "./src/terminal-responder.ts"
   },
   "scripts": {
     "typecheck": "bunx tsc --noEmit"
