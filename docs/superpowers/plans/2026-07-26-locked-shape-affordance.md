@@ -50,7 +50,7 @@ Decides which shape ids should show a badge, from plain inputs. Everything that 
   - `interface BadgedShapesInput { hoveredShapeId: string | null; selectedShapeIds: readonly string[]; isLocked: (id: string) => boolean }`
   - `function badgedLockedShapeIds(input: BadgedShapesInput): string[]` — hovered id first (when it qualifies), then selected ids in their given order, no duplicates.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `client/src/chrome/lockedShapes.test.ts`:
 
@@ -166,13 +166,13 @@ assert.deepEqual(
 console.log('lockedShapes.test.ts: all assertions passed')
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `bun client/src/chrome/lockedShapes.test.ts`
 
 Expected: FAIL — module resolution error, `Cannot find module './lockedShapes'`.
 
-- [ ] **Step 3: Write the minimal implementation**
+- [x] **Step 3: Write the minimal implementation**
 
 Create `client/src/chrome/lockedShapes.ts`:
 
@@ -223,13 +223,13 @@ export function badgedLockedShapeIds(input: BadgedShapesInput): string[] {
 }
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `bun client/src/chrome/lockedShapes.test.ts`
 
 Expected: PASS — prints `lockedShapes.test.ts: all assertions passed`, exit 0.
 
-- [ ] **Step 5: Run the whole suite and the client typecheck**
+- [x] **Step 5: Run the whole suite and the client typecheck**
 
 Run: `bun run test`
 Expected: every discovered test file passes, exit 0. `lockedShapes.test.ts` appears in the list.
@@ -237,7 +237,7 @@ Expected: every discovered test file passes, exit 0. `lockedShapes.test.ts` appe
 Run: `bun run --filter '@ensembleworks/client' typecheck`
 Expected: no errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add client/src/chrome/lockedShapes.ts client/src/chrome/lockedShapes.test.ts
@@ -274,7 +274,7 @@ The visible feature. The `selectLockedShapes: true` option belongs in this task 
 
 **Reactivity.** `useValue` only re-runs when a signal it read changes. Panning and zooming change neither the hovered id nor the selection, so the computation must call `editor.getCamera()` to subscribe to camera movement — exactly as `client/src/av/leashes.tsx:39` does (`editor.getCamera() // subscribe to pan / zoom`). Without it the chips freeze in place while the canvas moves underneath them.
 
-- [ ] **Step 1: Write the component**
+- [x] **Step 1: Write the component**
 
 Create `client/src/chrome/LockedShapeBadge.tsx`:
 
@@ -390,7 +390,7 @@ export function LockedShapeBadge() {
 }
 ```
 
-- [ ] **Step 2: Mount it in the `InFrontOfTheCanvas` slot**
+- [x] **Step 2: Mount it in the `InFrontOfTheCanvas` slot**
 
 In `client/src/ui.tsx`, add the import next to the other chrome imports:
 
@@ -418,7 +418,7 @@ function InFrontOfTheCanvas() {
 }
 ```
 
-- [ ] **Step 3: Enable `selectLockedShapes` on the `<Tldraw>` mount**
+- [x] **Step 3: Enable `selectLockedShapes` on the `<Tldraw>` mount**
 
 In `client/src/App.tsx`, add the `options` prop to the existing `<Tldraw>` element (the other props stay exactly as they are):
 
@@ -446,7 +446,7 @@ In `client/src/App.tsx`, add the `options` prop to the existing `<Tldraw>` eleme
 				>
 ```
 
-- [ ] **Step 4: Typecheck and build**
+- [x] **Step 4: Typecheck and build**
 
 Run: `bun run --filter '@ensembleworks/client' typecheck`
 Expected: no errors. (If `TLShapeId` is not exported as a type from `tldraw`, import it from `@tldraw/editor` instead — the repo already depends on it transitively; a `getShapePageBounds` overload mismatch is the symptom.)
@@ -454,7 +454,7 @@ Expected: no errors. (If `TLShapeId` is not exported as a type from `tldraw`, im
 Run: `bun run test`
 Expected: all pass, exit 0.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add client/src/chrome/LockedShapeBadge.tsx client/src/ui.tsx client/src/App.tsx
@@ -494,7 +494,7 @@ Spec §8: canvas-v2 has its own hit-testing and shape stack and does not inherit
 - Consumes: nothing.
 - Produces: nothing. Comment and PR metadata only.
 
-- [ ] **Step 1: Add the marker to the CanvasV2App header comment**
+- [x] **Step 1: Add the marker to the CanvasV2App header comment**
 
 Append this paragraph to the end of the existing top-of-file doc comment block in `client/src/canvas-v2/CanvasV2App.tsx` (before the closing `*/`):
 
@@ -508,7 +508,7 @@ Append this paragraph to the end of the existing top-of-file doc comment block i
  * engine. Without it, v2 reintroduces the silent-dead-shape bug this fixed.
 ```
 
-- [ ] **Step 2: Add the contract-gate opt-out to the PR body**
+- [x] **Step 2: Add the contract-gate opt-out to the PR body**
 
 `scripts/ux-contract-presence.test.ts` fails any diff touching `client/src/canvas-v2/` without a contract or a reasoned opt-out. This change is a comment. Add this line to the PR #62 body:
 
@@ -524,7 +524,7 @@ printf '\nux-contract: none — comment-only TODO marker in CanvasV2App.tsx; the
 gh pr edit 62 --body-file /tmp/pr62-body.md
 ```
 
-- [ ] **Step 3: Verify the gate passes**
+- [x] **Step 3: Verify the gate passes**
 
 Run: `bun scripts/ux-contract-presence.test.ts`
 Expected: PASS, exit 0.
@@ -532,7 +532,7 @@ Expected: PASS, exit 0.
 Run: `bun run --filter '@ensembleworks/client' typecheck`
 Expected: no errors (a comment change must not move it, but the file is large — confirm rather than assume).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add client/src/canvas-v2/CanvasV2App.tsx
@@ -558,7 +558,7 @@ Positioning is thin glue over tldraw APIs and is covered by eyes, not by unit te
 - Consumes: the running feature from Tasks 2 and 3.
 - Produces: nothing consumed by later tasks — this is the last task.
 
-- [ ] **Step 1: Start the dev stack**
+- [x] **Step 1: Start the dev stack**
 
 Run from the repo root (host):
 
@@ -569,32 +569,37 @@ bin/dev status --json 2>/dev/null
 
 Expected: services report healthy. Open the room at the edge URL `bin/dev up` narrates (default `http://localhost:8080`).
 
-- [ ] **Step 2: Walk the smoke checklist (spec §9)**
+- [x] **Step 2: Walk the smoke checklist (spec §9)**
 
 Lock a terminal with Cmd+Shift+L (or right-click → Lock), then confirm each of these. Record the actual observed result for every line — a checklist reported as "all fine" without per-line observations is not evidence.
 
-- [ ] At rest (pointer elsewhere, nothing selected) the locked terminal looks **identical** to before — no chip, no border change.
-- [ ] Hover it → the padlock chip appears just outside the top-right of its bounds.
-- [ ] The chip does **not** overlap the terminal's own title chip (which is top-left).
-- [ ] Move the pointer away → the chip disappears.
-- [ ] Click it → it **selects** (tldraw's selection indicator appears) and the chip persists with the pointer moved away.
-- [ ] Pan and zoom while it is selected → the chip stays glued to the shape's top-right corner (this is the `editor.getCamera()` subscription).
-- [ ] Lock a **frame**, then hover one of its child shapes → the child shows a chip (`isShapeOrAncestorLocked`).
-- [ ] Repeat hover+select on a locked **arrow** and a locked **draw stroke** → both badge, positioned off their bounding box.
-- [ ] Select-all on a canvas with several locked shapes → **every** locked shape badges, no cap. Judge whether it is unpleasant when zoomed out; if it is, note it as the §5 legibility follow-up — do **not** implement a cap.
-- [ ] Draw or arrow tool armed → hovering a locked shape does not badge. This is the accepted §4 limitation, confirm it rather than treat it as a bug.
+- [x] At rest (pointer elsewhere, nothing selected) the locked terminal looks **identical** to before — no chip, no border change.
+- [x] Hover it → the padlock chip appears just outside the top-right of its bounds.
+- [x] The chip does **not** overlap the terminal's own title chip (which is top-left).
+- [x] Move the pointer away → the chip disappears.
+- [x] Click it → it **selects** (tldraw's selection indicator appears) and the chip persists with the pointer moved away.
+- [x] Pan and zoom while it is selected → the chip stays glued to the shape's top-right corner (this is the `editor.getCamera()` subscription).
+- [x] Lock a **frame**, then hover one of its child shapes → the child shows a chip (`isShapeOrAncestorLocked`).
+- [x] Repeat hover+select on a locked **arrow** and a locked **draw stroke** → both badge, positioned off their bounding box.
+- [x] Select **every** shape on a canvas with several locked shapes (via
+  `editor.setSelectedShapes(...)`) → **every** locked shape badges, no cap. Judge
+  whether it is unpleasant when zoomed out; if it is, note it as the §5
+  legibility follow-up — do **not** implement a cap. Note: this cannot be reached
+  through select-all — `Editor.selectAll()` strips locked shapes unconditionally,
+  so Ctrl+A can never badge them. See the "Correction" block in spec §5.
+- [x] Draw or arrow tool armed → hovering a locked shape does not badge. This is the accepted §4 limitation, confirm it rather than treat it as a bug.
 
-- [ ] **Step 3: Walk the regression checklist (spec §9)**
+- [x] **Step 3: Walk the regression checklist (spec §9)**
 
 `selectLockedShapes: true` must not have weakened lock semantics. On a locked terminal:
 
-- [ ] Double-click → does **not** enter edit mode / does not accept typing.
-- [ ] Drag → does **not** move.
-- [ ] Delete / Backspace with it selected → is **not** deleted.
-- [ ] Marquee-drag a box over it plus an unlocked shape, then drag the selection → the unlocked shape moves, the locked one stays put.
-- [ ] Right-click → **Unlock** is present and works; after unlocking, the shape behaves normally and no longer badges.
+- [x] Double-click → does **not** enter edit mode / does not accept typing.
+- [x] Drag → does **not** move.
+- [x] Delete / Backspace with it selected → is **not** deleted.
+- [x] Marquee-drag a box over it plus an unlocked shape, then drag the selection → the unlocked shape moves, the locked one stays put.
+- [x] Right-click → **Unlock** is present and works; after unlocking, the shape behaves normally and no longer badges.
 
-- [ ] **Step 4: Flip the spec status**
+- [x] **Step 4: Flip the spec status**
 
 In `docs/superpowers/specs/2026-07-23-locked-shape-affordance-design.md`, change line 3-4 from:
 
@@ -610,7 +615,7 @@ to:
   [`../plans/2026-07-26-locked-shape-affordance.md`](../plans/2026-07-26-locked-shape-affordance.md).
 ```
 
-- [ ] **Step 5: Full verification before claiming done**
+- [x] **Step 5: Full verification before claiming done**
 
 Run: `bun run test`
 Expected: all pass, exit 0.
@@ -621,7 +626,7 @@ Expected: every workspace clean.
 Run: `bun run build`
 Expected: succeeds.
 
-- [ ] **Step 6: Commit and push**
+- [x] **Step 6: Commit and push**
 
 ```bash
 git add docs/superpowers/specs/2026-07-23-locked-shape-affordance-design.md docs/superpowers/plans/2026-07-26-locked-shape-affordance.md

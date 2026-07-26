@@ -35,8 +35,8 @@ interface BadgePlacement {
 	y: number
 }
 
-// Reuses the terminal title chip's visual language (mono, small, uppercase
-// tracking) so the padlock reads as shape chrome rather than as canvas content.
+// Reuses the terminal title chip's visual language (mono, small) so the padlock
+// reads as shape chrome rather than as canvas content.
 const chipStyle: CSSProperties = {
 	position: 'absolute',
 	display: 'flex',
