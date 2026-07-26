@@ -127,7 +127,7 @@ import {
 	useEditorState,
 	type ViewportSize,
 } from '@ensembleworks/canvas-react'
-import { getIdentity, getRoomId } from '../identity.js'
+import { getRoomId, identityOnce } from '../identity.js'
 import { wsClientTransport, type ConnectionState, type WebSocketLike } from './ws-client-transport.js'
 import { resolvePageId } from './bootstrap-page.js'
 import { adaptPresence, createPresencePublisher, type PresencePublisher } from './presence.js'
@@ -313,7 +313,7 @@ export interface CanvasV2AppProps {
 
 export function CanvasV2App(props: CanvasV2AppProps) {
 	const roomId = props.roomId ?? getRoomId()
-	const userId = props.userId ?? getIdentity().id
+	const userId = props.userId ?? identityOnce().id
 	const [session, setSession] = useState<Session | null>(null)
 	const sessionRef = useRef<Session | null>(null)
 	// Task E1 — the REAL connection-state signal (see ws-client-transport.ts's

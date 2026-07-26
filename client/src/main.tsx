@@ -1,7 +1,7 @@
 import React, { Suspense, lazy } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
-import { getIdentity, getRoomId } from './identity'
+import { getRoomId, identityOnce, seedNameFromWhoami } from './identity'
 import { selectEngineFromEnvironment } from './engine'
 import { SingleTabGate } from './canvas-health/SingleTabGate'
 
@@ -34,7 +34,14 @@ import { SingleTabGate } from './canvas-health/SingleTabGate'
 const CanvasV2App = lazy(() => import('./canvas-v2/CanvasV2App').then((m) => ({ default: m.CanvasV2App })))
 
 const engine = selectEngineFromEnvironment(getRoomId())
-const identity = getIdentity()
+
+// Seed the display name from the Cloudflare Access identity BEFORE anything
+// reads it, so an SSO user is never asked for a name they've already given
+// (issue #55 Problem 1). Bounded and non-throwing; on any failure getIdentity()
+// prompts exactly as before. This is why identity is resolved through
+// identityOnce() at render time — a module-scope read in App.tsx would beat it.
+await seedNameFromWhoami()
+const identity = identityOnce()
 
 createRoot(document.getElementById('root')!).render(
 	<React.StrictMode>

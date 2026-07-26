@@ -22,7 +22,7 @@ import { terminalList } from '@ensembleworks/contracts'
 import { TLSocketRoom } from '@tldraw/sync-core'
 import express from 'express'
 import { type WebSocket, WebSocketServer } from 'ws'
-import { getAccessIdentity } from './access-identity.ts'
+import { getAccessIdentity, personField } from './access-identity.ts'
 import { sanitizeId } from './canvas/ids.ts'
 import { type CanvasActors, createCanvasActors } from './canvas-v2/actors.ts'
 import { ShadowMirror } from './canvas-v2/shadow.ts'
@@ -479,8 +479,18 @@ export function createSyncApp(opts: {
 		// Capture the caller's verified Cloudflare Access identity for co-author
 		// attribution. Fire-and-forget so the WS handshake isn't delayed; identity
 		// is needed only later, when a commit reads /api/participants.
+		//
+		// It also carries the identity BINDING to the logs (issue #55 Problem 1):
+		// `user=` is a random per-browser UUID, so without this line nothing in the
+		// server logs can be traced to a person. Emitted here, when resolution
+		// completes, rather than folded into `[sync] open` below — that would make
+		// the handshake wait on Access (a cold JWKS fetch is a network round-trip),
+		// and as its own line there is no race to lose. Join them on `session=`.
 		void getAccessIdentity(req.headers)
 			.then((id) => {
+				console.log(
+					`[sync] identity room=${roomId} user=${userId} session=${sessionId} ${personField(id)}`
+				)
 				if (!id) return
 				let m = registry.identitiesByUser.get(roomId)
 				if (!m) registry.identitiesByUser.set(roomId, (m = new Map()))
