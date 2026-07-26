@@ -170,6 +170,32 @@ export function chipThreshold(id: TransportId, t: Thresholds): number | null {
 }
 
 /**
+ * How long a "degrading (Ns)" age is allowed to count before it stops.
+ *
+ * Only the DISPLAY is capped; nothing decides on this number. A capped chip
+ * still carries the two facts that matter — this transport is unhealthy, and
+ * it has been for a while — and drops the one that stops being informative
+ * after the first minute, namely the exact age.
+ */
+const DEGRADING_AGE_CAP_S = 60
+
+/**
+ * The age shown beside a degrading chip, capped.
+ *
+ * LiveKit has no threshold by design (chipThreshold below), so its chip can
+ * never resolve to "down" — it degrades for as long as the fault lasts. Left
+ * uncapped that renders an ever-growing "degrading (743s)", which reads as
+ * broken telemetry rather than as a transport we already know is degraded.
+ * Capping the readout fixes that without giving livekit a threshold, which
+ * would make a non-blocking transport read as "down" (see chipThreshold's
+ * comment for why that is the wrong trade).
+ */
+export function degradingAgeLabel(unhealthyMs: number): string {
+	const secs = Math.round(Math.max(0, unhealthyMs) / 1000)
+	return secs > DEGRADING_AGE_CAP_S ? `>${DEGRADING_AGE_CAP_S}s` : `${secs}s`
+}
+
+/**
  * "Retrying in N…" — whole seconds until the next probe tick (each tick IS a
  * retry). Floored at 1 so it never reads "Retrying in 0" and never goes
  * negative when a tick runs late.

@@ -39,6 +39,7 @@ import {
 import { PanelFooter } from './PanelFooter'
 import { PanelPages } from './PanelPages'
 import { ColorSwatch, CrosstalkControl, initialsFor, type PanelTileParticipant } from './PanelTile'
+import { otherCollaborators } from './collaborators'
 import { useIsPresenting, usePresenter } from './present'
 
 // The local user's identity + A/V controls, docked at the panel bottom just
@@ -346,7 +347,13 @@ export function SidePanel({ editor }: { editor: Editor }) {
 				color: editor.user.getColor(),
 				isLocal: true,
 			}
-			const collaborators: PanelTileParticipant[] = editor.getCollaborators().map((presence) => ({
+			// Same self-ghost filter as the page rosters (see collaborators.ts):
+			// a presence record for our own user is us, not a teammate, so it
+			// must not become a second avatar dot on the rail.
+			const collaborators: PanelTileParticipant[] = otherCollaborators(
+				editor.getCollaborators(),
+				selfId
+			).map((presence) => ({
 				prefixedId: presence.userId,
 				rawId: rawUserId(presence.userId),
 				name: presence.userName?.trim() || 'Anonymous',

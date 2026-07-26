@@ -12,6 +12,7 @@ import {
 	BLOCKING_TRANSPORTS,
 	chipThreshold,
 	countdownSeconds,
+	degradingAgeLabel,
 	initialHealth,
 	markUnhealthy,
 	needsFastClock,
@@ -140,6 +141,19 @@ assert.deepEqual(transportChip(lk.livekit, 10 * 60_000, null), { kind: 'degradin
 //      a negative age — it would render as "degrading (-3s)". The Math.max
 //      floor is what prevents that, so pin it.
 assert.deepEqual(transportChip(b1.canvas, -3000, T.canvasMs), { kind: 'degrading', unhealthyMs: 0 })
+// 18c. The "degrading (Ns)" age is CAPPED for display. LiveKit has no
+//      threshold on purpose (see chipThreshold below), so its chip can never
+//      resolve to "down" — left uncapped the number just climbs for the whole
+//      outage ("degrading (743s)"), which reads as broken telemetry rather
+//      than as a known-degraded transport. The cap keeps the row honest
+//      without giving livekit a threshold it must not have.
+assert.equal(degradingAgeLabel(0), '0s')
+assert.equal(degradingAgeLabel(12_400), '12s', 'sub-cap ages round to whole seconds')
+assert.equal(degradingAgeLabel(60_000), '60s', 'exactly at the cap still shows the number')
+assert.equal(degradingAgeLabel(60_400), '60s', 'rounding to the cap is not "over" it')
+assert.equal(degradingAgeLabel(61_000), '>60s', 'past the cap stops counting')
+assert.equal(degradingAgeLabel(10 * 60_000), '>60s', 'and stays put however long it lasts')
+assert.equal(degradingAgeLabel(-3000), '0s', 'a backwards clock jump never renders a negative')
 
 // ------------------------------------------------------------------ countdown
 // 19. "Retrying in N…" counts whole seconds to the next probe tick, floor 1

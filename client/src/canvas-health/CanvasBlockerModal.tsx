@@ -18,6 +18,7 @@ import { wm } from '../theme'
 import {
 	chipThreshold,
 	countdownSeconds,
+	degradingAgeLabel,
 	transportChip,
 	TRANSPORTS,
 	type HealthState,
@@ -131,7 +132,6 @@ function TransportRow(props: {
 	const chip = transportChip(props.health[props.id], props.now, chipThreshold(props.id, props.thresholds))
 	const style = CHIP_STYLE[chip.kind]
 	const isTripped = props.tripped.includes(props.id)
-	const secs = Math.round(chip.unhealthyMs / 1000)
 	return (
 		<div
 			style={{
@@ -147,7 +147,7 @@ function TransportRow(props: {
 			<span>{transportLabel(props.id)}</span>
 			<span style={{ color: style.color }}>
 				{style.text}
-				{chip.kind === 'degrading' ? ` (${secs}s)` : ''}
+				{chip.kind === 'degrading' ? ` (${degradingAgeLabel(chip.unhealthyMs)})` : ''}
 			</span>
 		</div>
 	)
