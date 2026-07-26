@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { createQueryResponder } from './terminal-responder.ts'
+import { createQueryResponder } from './terminal-responder.js'
 
 const enc = new TextEncoder()
 const dec = new TextDecoder()
