@@ -37,6 +37,26 @@ const fromLatin1 = (s: string): Uint8Array => {
 	return b
 }
 
+const MAX_CARRY = 64
+
+/** Longest tail of s that could be the prefix of a recognisable sequence.
+ *  Empty string when the tail is definitely ordinary output. */
+function pendingPrefix(s: string): string {
+	const esc = s.lastIndexOf('\x1b')
+	if (esc === -1) return ''
+	const tail = s.slice(esc)
+	if (tail.length > MAX_CARRY) return ''
+	// Could this still grow into a match? Candidate prefixes:
+	//   \x1b            (could become CSI or OSC or RIS — but bare \x1bc
+	//                    already matched; a lone trailing ESC must be held)
+	//   \x1b[ + params  (no final byte yet)
+	//   \x1b]1, \x1b]10, \x1b]11;payload (no BEL/ST yet), incl. trailing \x1b
+	//   of an unfinished ST
+	// biome-ignore lint: control chars deliberate
+	const partial = /^\x1b$|^\x1b\[[0-9;?>=!$]*$|^\x1b\](?:1[01]?)?$|^\x1b\]1[01];[^\x07\x1b]*\x1b?$/
+	return partial.test(tail) ? tail : ''
+}
+
 // One alternation of every sequence the matrix gives a disposition for.
 // Groups: [1] CSI body for queries/DECSET/DECRST/DECSTR, [2] OSC 10/11 body.
 // RIS (\x1bc) matches via the bare alternative.
@@ -152,18 +172,20 @@ export function createQueryResponder(opts: { backend: 'tmux' | 'pty' }): QueryRe
 	return {
 		process(chunk: Uint8Array): ResponderResult {
 			const s = carry + toLatin1(chunk)
-			carry = '' // Task 5 implements real carry splitting
+			const hold = pendingPrefix(s)
+			carry = hold
+			const scan = hold ? s.slice(0, s.length - hold.length) : s
 			const out: Sink = { live: '', history: '', replies: [] }
 			let last = 0
 			SEQ_RE.lastIndex = 0
-			for (let m = SEQ_RE.exec(s); m !== null; m = SEQ_RE.exec(s)) {
-				const plain = s.slice(last, m.index)
+			for (let m = SEQ_RE.exec(scan); m !== null; m = SEQ_RE.exec(scan)) {
+				const plain = scan.slice(last, m.index)
 				out.live += plain
 				out.history += plain
 				handle(m[1], m[2], m[0], out, state, opts.backend)
 				last = SEQ_RE.lastIndex
 			}
-			const tail = s.slice(last)
+			const tail = scan.slice(last)
 			out.live += tail
 			out.history += tail
 			return {
@@ -172,7 +194,7 @@ export function createQueryResponder(opts: { backend: 'tmux' | 'pty' }): QueryRe
 				replies: out.replies.map(fromLatin1),
 			}
 		},
-		flush(): Uint8Array {
+		flush(reason: 'attach' | 'snapshot' | 'exit'): Uint8Array {
 			const pending = carry
 			carry = ''
 			return fromLatin1(pending)

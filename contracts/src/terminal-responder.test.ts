@@ -106,3 +106,47 @@ describe('OSC 10/11 (spec decision 4: pin queries, pass setters)', () => {
 		expect(out.replies).toEqual([])
 	})
 })
+
+describe('carry buffer + flush lifecycle (spec: connector integration)', () => {
+	test('a query split at EVERY byte boundary is still recognised once', () => {
+		const q = '\x1b[?2004$p'
+		for (let cut = 1; cut < q.length; cut++) {
+			const out = run('tmux', 'a' + q.slice(0, cut), q.slice(cut) + 'b')
+			expect(out.live).toBe('ab')
+			expect(out.replies).toEqual(['\x1b[?2004;2$y'])
+		}
+	})
+
+	test('a split OSC query spanning three chunks is recognised', () => {
+		const out = run('tmux', 'x\x1b]1', '1;', '?\x1b\\y')
+		expect(out.live).toBe('xy')
+		expect(out.replies).toEqual(['\x1b]11;rgb:ffff/ffff/ffff\x1b\\'])
+	})
+
+	test('incomplete prefix with no further output is returned by flush, not lost', () => {
+		const r = createQueryResponder({ backend: 'tmux' })
+		const res = r.process(enc.encode('tail\x1b[?20'))
+		expect(dec.decode(res.live)).toBe('tail')
+		expect(dec.decode(r.flush('attach'))).toBe('\x1b[?20')
+		// after flush the carry is gone
+		expect(dec.decode(r.flush('exit'))).toBe('')
+	})
+
+	test('lone ESC then plain text is not swallowed', () => {
+		const out = run('tmux', 'a\x1b', 'plain')
+		expect(out.live).toBe('a\x1bplain')
+	})
+
+	test('malformed over-long candidate is flushed as ordinary output at the 64-byte bound', () => {
+		const junk = '\x1b]11;' + 'x'.repeat(80) // no terminator
+		const out = run('tmux', junk, 'end\x07')
+		expect(out.live).toBe(junk + 'end\x07')
+		expect(out.replies).toEqual([])
+	})
+
+	test('CPR: scrubbed unanswered on tmux backend, passes through on pty backend', () => {
+		expect(run('tmux', 'a\x1b[6nb').live).toBe('ab')
+		expect(run('pty', 'a\x1b[6nb').live).toBe('a\x1b[6nb')
+		expect(run('pty', 'a\x1b[6nb').replies).toEqual([])
+	})
+})
