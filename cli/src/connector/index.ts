@@ -47,8 +47,9 @@ export async function runConnector(
 	headers: Record<string, string>,
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<number> {
-	const mgr = new ConnectorSessionManager((id, cols, rows, cwd) =>
-		openTmuxSession(spawnSpecFor(cfg.backend, id, env, cwd), cols, rows),
+	const mgr = new ConnectorSessionManager(
+		(id, cols, rows, cwd) => openTmuxSession(spawnSpecFor(cfg.backend, id, env, cwd), cols, rows),
+		{ backend: cfg.backend },
 	)
 
 	// SP4 layout restore (decision #4) — pty backend only: tmux sessions ARE

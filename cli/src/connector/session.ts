@@ -21,6 +21,7 @@
  */
 import type { TermServerMessage } from '@ensembleworks/contracts'
 import { clampTmuxGrid, type TmuxSession } from '@ensembleworks/contracts/session-manager'
+import { createQueryResponder, type QueryResponder } from '@ensembleworks/contracts/terminal-responder'
 import { capTail, type LayoutSnapshot } from './layout.ts'
 
 const SCROLLBACK_LIMIT = 256 * 1024 // bytes replayed to a newly attached channel (session.go)
@@ -37,6 +38,7 @@ export type SpawnFactory = (sessionId: string, cols: number, rows: number, cwd?:
 
 interface SessionState {
 	pty: TmuxSession
+	responder: QueryResponder
 	ring: Buffer[]
 	ringBytes: number
 	channels: Map<number, ChannelSink>
@@ -48,7 +50,10 @@ export class ConnectorSessionManager {
 	/** SP4 layout seeds, consumed by getOrCreate: last cwd + history to preload
 	 *  into the ring. Entries are deleted once used. */
 	private seeded = new Map<string, { cwd?: string; history: Buffer }>()
-	constructor(private readonly spawn: SpawnFactory) {}
+	constructor(
+		private readonly spawn: SpawnFactory,
+		private readonly opts: { backend: 'tmux' | 'pty' } = { backend: 'tmux' },
+	) {}
 
 	private getOrCreate(id: string, cols: number, rows: number): SessionState {
 		const existing = this.sessions.get(id)
@@ -56,20 +61,36 @@ export class ConnectorSessionManager {
 		const grid = clampTmuxGrid(cols, rows) // session.go getOrCreate clamps BEFORE spawn; attached reports the clamped grid
 		const seed = this.seeded.get(id)
 		this.seeded.delete(id)
+		const responder = createQueryResponder({ backend: this.opts.backend })
+		let seedHistory = seed?.history ?? Buffer.alloc(0)
+		if (seedHistory.byteLength > 0) {
+			// seed may predate scrubbing (older connector): clean it once
+			const scrubber = createQueryResponder({ backend: this.opts.backend })
+			const res = scrubber.process(seedHistory)
+			seedHistory = Buffer.concat([Buffer.from(res.history), Buffer.from(scrubber.flush('snapshot'))])
+		}
 		const pty = this.spawn(id, grid.cols, grid.rows, seed?.cwd) // canvasTmuxSpawnSpec inside; -A reattaches
 		const s: SessionState = {
 			pty,
-			ring: seed && seed.history.byteLength > 0 ? [seed.history] : [],
-			ringBytes: seed?.history.byteLength ?? 0,
+			responder,
+			ring: seedHistory.byteLength > 0 ? [seedHistory] : [],
+			ringBytes: seedHistory.byteLength,
 			channels: new Map(),
 			gone: false,
 		}
 		pty.onData((data) => {
-			const buf = Buffer.from(data, 'utf8')
-			s.ring.push(buf)
-			s.ringBytes += buf.byteLength
-			while (s.ringBytes > SCROLLBACK_LIMIT && s.ring.length > 1) s.ringBytes -= s.ring.shift()!.byteLength
-			for (const sink of s.channels.values()) sink.sendOutput(buf)
+			const { live, history, replies } = s.responder.process(Buffer.from(data, 'utf8'))
+			for (const reply of replies) s.pty.write(Buffer.from(reply).toString('latin1'))
+			if (history.byteLength > 0) {
+				const buf = Buffer.from(history)
+				s.ring.push(buf)
+				s.ringBytes += buf.byteLength
+				while (s.ringBytes > SCROLLBACK_LIMIT && s.ring.length > 1) s.ringBytes -= s.ring.shift()!.byteLength
+			}
+			if (live.byteLength > 0) {
+				const out = Buffer.from(live)
+				for (const sink of s.channels.values()) sink.sendOutput(out)
+			}
 		})
 		pty.onExit(() => {
 			s.gone = true
@@ -89,6 +110,12 @@ export class ConnectorSessionManager {
 	attach(id: string, channelId: number, cols: number, rows: number, sink: ChannelSink): boolean {
 		const s = this.getOrCreate(id, cols, rows)
 		if (s.gone) return false
+		const pending = Buffer.from(s.responder.flush('attach'))
+		if (pending.byteLength > 0) {
+			s.ring.push(pending)
+			s.ringBytes += pending.byteLength
+			for (const existingSink of s.channels.values()) existingSink.sendOutput(pending)
+		}
 		sink.sendMsg({ type: 'attached', cols: s.pty.cols, rows: s.pty.rows })
 		for (const chunk of s.ring) sink.sendOutput(chunk)
 		s.channels.set(channelId, sink)
@@ -132,6 +159,11 @@ export class ConnectorSessionManager {
 			.filter(([, s]) => !s.gone)
 			.map(([id, s]) => {
 				const cwd = readCwd(s.pty.pid)
+				const pending = Buffer.from(s.responder.flush('snapshot'))
+				if (pending.byteLength > 0) {
+					s.ring.push(pending)
+					s.ringBytes += pending.byteLength
+				}
 				const scrollbackTail = capTail(s.ring).toString('base64')
 				return cwd === undefined ? { id, scrollbackTail } : { id, cwd, scrollbackTail }
 			})

@@ -63,14 +63,29 @@ function makeSink() {
 }
 
 // Spawn factory records (id, cols, rows) and hands back a fake.
-function makeMgr() {
+function makeMgr(opts?: { backend?: 'tmux' | 'pty' }) {
 	const spawns: Array<{ id: string; cols: number; rows: number; fake: Fake }> = []
-	const mgr = new ConnectorSessionManager((id, cols, rows) => {
-		const fake = makeFake(cols, rows)
-		spawns.push({ id, cols, rows, fake })
-		return fake
-	})
+	const mgr = new ConnectorSessionManager(
+		(id, cols, rows) => {
+			const fake = makeFake(cols, rows)
+			spawns.push({ id, cols, rows, fake })
+			return fake
+		},
+		opts?.backend ? { backend: opts.backend } : undefined,
+	)
 	return { mgr, spawns }
+}
+
+// A single-session convenience wrapper for the device-query tests below:
+// `pty` is the fake spawned for whichever session is attached first.
+function makeManager(opts?: { backend?: 'tmux' | 'pty' }) {
+	const { mgr, spawns } = makeMgr(opts)
+	return {
+		mgr,
+		get pty() {
+			return spawns[0]!.fake
+		},
+	}
 }
 
 // 1. get-or-create spawns ONE pty for two attaches; attached carries session size.
@@ -246,4 +261,77 @@ console.log('ok: session — one pty/two attaches, session-size attached, scroll
 	assert.equal(brandnew.cwd, undefined, 'unseeded sessions get no cwd override')
 	assert.equal(w.out.length, 0, 'no phantom history on a fresh session')
 	console.log('ok: preseedLayout — eager respawn in seeded cwd, history-then-live replay, bad seed skipped')
+}
+
+// --- device-query fan-in (spec: connector integration) -------------------
+// The connector answers device queries (DA1/DA2/DECRQM/…) itself: replies go
+// to the pty, never to a sink; scrubbed bytes only ever land in the ring.
+
+// 8. a DA1 query in pty output is answered exactly once and never reaches sinks.
+{
+	const m = makeManager()
+	const { mgr } = m
+	const a = makeSink()
+	const b = makeSink()
+	mgr.attach('s1', 1, 80, 24, a.sink)
+	mgr.attach('s1', 2, 80, 24, b.sink)
+	m.pty.emitData('before\x1b[cafter')
+	assert.deepEqual(m.pty.writes, ['\x1b[?1;2c'], 'one reply, written to the pty')
+	assert.equal(a.out.map((x) => x.toString()).join(''), 'beforeafter', 'scrubbed for every sink')
+	assert.equal(b.out.map((x) => x.toString()).join(''), 'beforeafter')
+	console.log('ok: DA1 query answered exactly once, scrubbed from every sink')
+}
+
+// 9. the ring never stores queries: a late attacher replays clean bytes.
+{
+	const m = makeManager()
+	const { mgr } = m
+	mgr.attach('s1', 1, 80, 24, makeSink().sink)
+	m.pty.emitData('history\x1b[?2004$pmore')
+	const late = makeSink()
+	mgr.attach('s1', 2, 80, 24, late.sink)
+	assert.equal(late.out.map((x) => x.toString()).join(''), 'historymore')
+	console.log('ok: scrollback ring stores scrubbed bytes only')
+}
+
+// 10. a stale client that echoes whatever it receives has nothing to echo.
+{
+	const m = makeManager()
+	const { mgr } = m
+	const stale = makeSink()
+	// simulate a stale client: echo every received byte back as input
+	stale.sink.sendOutput = (bytes: Buffer) => {
+		stale.out.push(bytes)
+		mgr.input('s1', 3, bytes.toString('latin1'))
+	}
+	mgr.attach('s1', 3, 80, 24, stale.sink)
+	m.pty.emitData('\x1b[c\x1b[>c')
+	// pty received ONLY the responder's replies — no echoed queries
+	assert.deepEqual(m.pty.writes, ['\x1b[?1;2c', '\x1b[>0;276;0c'])
+	console.log("ok: a stale client's echo cannot re-trigger a query (it never saw one)")
+}
+
+// 11. preseeded history from an older connector is scrubbed when consumed.
+{
+	const { mgr } = makeManager()
+	mgr.preseedLayout({
+		version: 1,
+		sessions: [{ id: 's1', scrollbackTail: Buffer.from('old\x1b[cbytes').toString('base64') }],
+	})
+	const sink = makeSink()
+	mgr.attach('s1', 1, 80, 24, sink.sink)
+	assert.equal(sink.out.map((x) => x.toString()).join(''), 'oldbytes')
+	console.log('ok: preseeded scrollback from an older connector is scrubbed on consumption')
+}
+
+// 12. pty backend: CPR passes through to sinks and is not answered.
+{
+	const m = makeManager({ backend: 'pty' })
+	const { mgr } = m
+	const sink = makeSink()
+	mgr.attach('s1', 1, 80, 24, sink.sink)
+	m.pty.emitData('a\x1b[6nb')
+	assert.equal(sink.out.map((x) => x.toString()).join(''), 'a\x1b[6nb')
+	assert.deepEqual(m.pty.writes, [])
+	console.log('ok: pty backend forwards CPR unanswered')
 }
