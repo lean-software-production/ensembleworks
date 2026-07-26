@@ -16,6 +16,26 @@
  * (CSI < … M/m, CSI M …) and bracketed-paste (CSI 200~/201~) can never be
  * caught. See terminal-input-filter.test.ts for the preserved-input cases.
  *
+ * OSC color reports are deliberately let through. An earlier version of this
+ * filter also removed OSC 10/11/4 replies, which broke every TUI that asks the
+ * terminal whether it is light or dark: opencode queries `\e]11;?`, our white
+ * canvas terminal answered `\e]11;rgb:ffff/ffff/ffff`, the filter ate it, and
+ * opencode resolved even an explicitly-chosen light theme to its DARK variant
+ * (verified by bisect — restoring that one pattern flips the rendering back and
+ * forth). Two things make OSC the exception:
+ *
+ *  - Apps genuinely need the answer. Nothing else tells a program the
+ *    terminal's background color; tmux does not synthesize one.
+ *  - The surplus copies are harmless. DA1/DA2/DECRPM payloads are printable,
+ *    so extra replies echo at the shell prompt as literal garbage
+ *    (`1;2c0;276;0c`, `2026;2$y`). An OSC reply is wrapped in \e] … ST/BEL,
+ *    which readline consumes whole — firing OSC 10/11 queries at two attached
+ *    browsers with the replies passing through leaves the prompt clean.
+ *
+ * So for OSC the cure was strictly worse than the disease. The remaining
+ * stripped classes all fail that second test — their surplus really does
+ * surface as garbage — which is why they stay.
+ *
  * Accepted limitations (YAGNI):
  *  - A reply split across two WebSocket input frames could still slip
  *    through. In practice xterm emits each auto-reply in a single onData
@@ -27,6 +47,12 @@
  *    the escalation is to synthesize exactly one reply per query (Approach C).
  *  - Focus in/out (CSI I / CSI O) are out of scope and intentionally NOT
  *    stripped: they are single bytes that rarely surface as visible garbage.
+ *  - DECRPM capability replies (mode 2026 synchronized output, 2004 bracketed
+ *    paste, 1004 focus reporting) are still stripped, so apps that probe for
+ *    those features get silence and fall back. They cannot simply be let
+ *    through like OSC: their surplus copies DO echo as prompt garbage. Fixing
+ *    that properly needs Approach C (one authoritative reply per query) rather
+ *    than a filter.
  */
 
 // Each pattern targets one class of host-directed device report. `g` flag so
@@ -54,10 +80,8 @@ const REPORT_PATTERNS: RegExp[] = [
 	/\x1b\[\?[0-9;]*\$y/g,
 	// XTVERSION reply — DCS > | … ST
 	/\x1bP>\|[^\x1b]*\x1b\\/g,
-	// OSC color reports (OSC 10/11/4 … ; rgb:…), terminated by ST or BEL.
-	// Constrained to the OSC numbers we actually see from color queries so
-	// this never eats an unrelated OSC.
-	/\x1b\](?:10|11|4;[0-9]+);[^\x07\x1b]*(?:\x07|\x1b\\)/g,
+	// NOT stripped: OSC color reports (OSC 10/11/4 … ; rgb:…). See the
+	// "OSC color reports are deliberately let through" note above.
 ]
 
 export function stripTerminalReports(data: string): string {
