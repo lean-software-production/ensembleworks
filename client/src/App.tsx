@@ -14,7 +14,7 @@ import {
 } from 'tldraw'
 import 'tldraw/tldraw.css'
 import './theme.css'
-import { computeStamp, type StampRecord } from '@ensembleworks/contracts'
+import { computeStamp, rawUserId, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
 import { FramesDrawer } from './chrome/FramesDrawer'
 import { presentingAtom } from './chrome/present'
@@ -24,7 +24,10 @@ import { hexForColor } from './colors'
 import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
 import { presentStore } from './file-viewer/presentStore'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
+import { useAvSnapshot } from './av/bridge'
 import { avOverlayUtils } from './av/FadedCursorOverlay'
+import { CanvasBlockerModal } from './canvas-health/CanvasBlockerModal'
+import { useCanvasAvailability } from './canvas-health/useCanvasAvailability'
 import { getFrameId, getIdentity, getRoomId } from './identity'
 import { collectIcons, collectShapeUtils } from './kernel/plugin'
 import { installPinchGuard } from './kernel/pinchGuard'
@@ -170,6 +173,23 @@ export function App() {
 		logConnectionEvent('sync', String(syncStatus))
 	}, [syncStatus])
 
+	// The unified availability state: is this browser actually connected?
+	// Blocks interaction behind a modal when not
+	// (docs/plans/2026-07-22-connection-health-modal-design.md). Tab ownership
+	// is not this hook's question — SingleTabGate settles that above us, and
+	// never mounts this component at all without the canvas lock.
+	// LiveKit status comes through the A/V bridge because useLiveKitRoom lives
+	// inside tldraw context (AvOverlay), not here.
+	const avSnap = useAvSnapshot()
+	const rawId = rawUserId(identity.id)
+	const availability = useCanvasAvailability({
+		store: {
+			status: store.status,
+			connectionStatus: store.status === 'synced-remote' ? store.connectionStatus : null,
+		},
+		livekitStatus: avSnap?.status ?? 'disabled',
+	})
+
 	// Deep-link (frameLink spec): with `?frame=<shapeId>` in the URL, zoom the
 	// camera to that frame exactly once. The shape may not have synced in yet, so
 	// watch reactively — getShapePageBounds returns undefined until it hydrates,
@@ -252,6 +272,25 @@ export function App() {
 			{/* Frames drawer flies out to the LEFT of the side panel; an App-level
 			    sibling so it can anchor to the panel's live width (see FramesDrawer). */}
 			{editor && <FramesDrawer editor={editor} />}
+			{/* Being kicked is terminal — the only recovery is a reload — so it
+			    outranks the connection blocker below: a "Retrying in 3…" countdown
+			    over "you were removed" would tell the user to wait on something
+			    that will never resolve. Suppressing the
+			    render (rather than just stacking wasKicked's z-index on top) also
+			    unmounts the blocker's window-capture-phase input swallow, so it
+			    stops intercepting keys behind a message whose only instruction is
+			    to reload. */}
+			{!wasKicked && availability.blocked && availability.reason && (
+				<CanvasBlockerModal
+					tripped={availability.tripped}
+					health={availability.health}
+					thresholds={availability.thresholds}
+					now={availability.now}
+					nextProbeAt={availability.nextProbeAt}
+					latency={avSnap?.latencies[rawId] ?? null}
+					latencyHistory={avSnap?.latencyHistory[rawId] ?? []}
+				/>
+			)}
 			{wasKicked && (
 				<div
 					style={{
