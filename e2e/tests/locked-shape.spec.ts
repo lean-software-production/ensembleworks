@@ -109,8 +109,11 @@ test('chip sits outside the top-right of the bounds and tracks pan/zoom', async 
 		const c = ed.getCamera()
 		ed.setCamera({ x: c.x - 180, y: c.y - 120, z: c.z })
 	})
-	await page.waitForTimeout(300)
-	const panned = await geometry()
+	let panned!: Awaited<ReturnType<typeof geometry>>
+	await expect.poll(async () => {
+		panned = await geometry()
+		return panned.chip.x >= panned.shape.maxX && Math.abs(panned.chip.y - panned.shape.minY) < 8
+	}).toBe(true)
 	expect(panned.chip.x).toBeGreaterThanOrEqual(panned.shape.maxX)
 	expect(Math.abs(panned.chip.y - panned.shape.minY)).toBeLessThan(8)
 
@@ -120,8 +123,11 @@ test('chip sits outside the top-right of the bounds and tracks pan/zoom', async 
 		const c = ed.getCamera()
 		ed.setCamera({ x: c.x, y: c.y, z: c.z * 0.6 })
 	})
-	await page.waitForTimeout(300)
-	const zoomed = await geometry()
+	let zoomed!: Awaited<ReturnType<typeof geometry>>
+	await expect.poll(async () => {
+		zoomed = await geometry()
+		return zoomed.chip.x >= zoomed.shape.maxX && Math.abs(zoomed.chip.y - zoomed.shape.minY) < 8
+	}).toBe(true)
 	expect(zoomed.chip.x).toBeGreaterThanOrEqual(zoomed.shape.maxX)
 	expect(Math.abs(zoomed.chip.y - zoomed.shape.minY)).toBeLessThan(8)
 })
@@ -142,7 +148,7 @@ test('a locked FRAME badges its hovered child', async ({ page }) => {
 	await expect(page.locator(CHIP)).toHaveCount(1)
 })
 
-test('arrow and draw stroke badge too; select-all badges every locked shape (no cap)', async ({ page }) => {
+test('arrow and draw stroke badge too; explicit select-all badges every locked shape (no cap), but Ctrl+A/selectAll() badges none', async ({ page }) => {
 	await boot(page, 'lockbadge-4')
 
 	// A real draw stroke, drawn with the draw tool — its `path` prop is
@@ -199,7 +205,6 @@ test('arrow and draw stroke badge too; select-all badges every locked shape (no 
 		}
 		ed.zoomToFit()
 	})
-	await page.waitForTimeout(400)
 
 	// Ctrl+A / selectAll() does NOT pick up locked shapes: Editor.selectAll()
 	// ends in setSelectedShapes(this._getUnlockedShapeIds(ids)) (Editor.ts:2174),
@@ -210,11 +215,14 @@ test('arrow and draw stroke badge too; select-all badges every locked shape (no 
 	await page.evaluate(() => {
 		;(window as any).__ewEditor.selectAll()
 	})
-	await page.waitForTimeout(300)
-	const afterSelectAll = await page.evaluate(() => {
-		const ed = (window as any).__ewEditor
-		return { selected: ed.getSelectedShapeIds().length, chips: document.querySelectorAll('[aria-label="Locked"]').length }
-	})
+	let afterSelectAll!: { selected: number; chips: number }
+	await expect.poll(async () => {
+		afterSelectAll = await page.evaluate(() => {
+			const ed = (window as any).__ewEditor
+			return { selected: ed.getSelectedShapeIds().length, chips: document.querySelectorAll('[aria-label="Locked"]').length }
+		})
+		return afterSelectAll.selected === 0 && afterSelectAll.chips === 0
+	}).toBe(true)
 	expect(afterSelectAll.selected).toBe(0)
 	expect(afterSelectAll.chips).toBe(0)
 
@@ -224,17 +232,20 @@ test('arrow and draw stroke badge too; select-all badges every locked shape (no 
 		const ed = (window as any).__ewEditor
 		ed.setSelectedShapes(ed.getCurrentPageShapes().map((s: any) => s.id))
 	})
-	await page.waitForTimeout(400)
-	const counts = await page.evaluate(() => {
-		const ed = (window as any).__ewEditor
-		const shapes = ed.getCurrentPageShapes()
-		return {
-			total: shapes.length,
-			selected: ed.getSelectedShapeIds().length,
-			locked: shapes.filter((s: any) => ed.isShapeOrAncestorLocked(s.id)).length,
-			chips: document.querySelectorAll('[aria-label="Locked"]').length,
-		}
-	})
+	let counts!: { total: number; selected: number; locked: number; chips: number }
+	await expect.poll(async () => {
+		counts = await page.evaluate(() => {
+			const ed = (window as any).__ewEditor
+			const shapes = ed.getCurrentPageShapes()
+			return {
+				total: shapes.length,
+				selected: ed.getSelectedShapeIds().length,
+				locked: shapes.filter((s: any) => ed.isShapeOrAncestorLocked(s.id)).length,
+				chips: document.querySelectorAll('[aria-label="Locked"]').length,
+			}
+		})
+		return counts.locked === 10 && counts.selected === 10 && counts.chips === 10
+	}).toBe(true)
 	expect(counts.locked).toBe(10)
 	expect(counts.selected).toBe(10)
 	expect(counts.chips).toBe(10)
