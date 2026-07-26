@@ -202,13 +202,6 @@ async function assertCoreBodies(page: Page): Promise<void> {
 }
 
 
-// The v2 page runs as a DIFFERENT user from the v1 page.
-//
-// Not cosmetic: SingleTabGate allows one live tab per (room, user), so a
-// second tab of the SAME user in the same room is refused and never mounts —
-// v2 would never boot and the comparison could not happen. These tests are
-// about how two renderers draw the same document, not about presence, so the
-// second identity costs nothing and keeps the pair mountable.
 // Contexts spawned per test, closed after it. With workers:1 the browser is
 // reused across specs, so a context left open would keep its sync connection
 // alive and leak presence into every later test (see multiplayer.spec.ts).
@@ -219,6 +212,18 @@ test.afterEach(async () => {
 	for (const ctx of spawnedContexts.splice(0)) await ctx.close()
 })
 
+// The v2 page runs as a DIFFERENT user from the v1 page.
+//
+// Not cosmetic: SingleTabGate allows one live tab per (room, user), so a second
+// tab of the SAME user in the same room is refused and never mounts — v2 would
+// never boot and the comparison could not happen. These tests are about how two
+// renderers draw the same document, not about presence, so the second identity
+// costs nothing and keeps the pair mountable.
+//
+// The viewport is set explicitly because a hand-rolled context does NOT inherit
+// the project's `use` block, and these screenshots are pixel-compared. The
+// dialog guard is re-attached for the same reason lib/fixtures.ts adds it to
+// its own page fixture: a dialog here means the identity state never landed.
 async function newV2Page(browser: Browser, baseURL: string | undefined) {
 	const ctx = await browser.newContext({
 		storageState: identityState('E2E Parity V2', 'e2e-user-0000-0000-0009', baseURL ?? 'http://127.0.0.1:5273'),
