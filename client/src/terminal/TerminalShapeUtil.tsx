@@ -24,6 +24,7 @@ import {
 	type TermClientMessage,
 	type TermServerMessage,
 } from '@ensembleworks/contracts'
+import { registerTerminalIdentityHandlers } from '@ensembleworks/contracts/terminal-identity'
 import { useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
@@ -288,6 +289,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			scrollback: 0,
 			theme: paperTerminalTheme,
 		})
+		if (shape.props.gateway) registerTerminalIdentityHandlers(term)
 		// OSC 52: with `set-clipboard on`, tmux sends us the text whenever it's
 		// copied (mouse drag, double/triple click, vi `y`). Two gotchas handled
 		// here: (1) tmux uses an EMPTY selection field (`OSC 52 ; ; <base64>`), not

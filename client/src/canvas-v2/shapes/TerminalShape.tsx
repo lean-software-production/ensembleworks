@@ -95,6 +95,7 @@ import '@xterm/xterm/css/xterm.css'
 import type { Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from '@ensembleworks/canvas-editor'
 import type { ShapeBodyProps } from '@ensembleworks/canvas-react'
+import { registerTerminalIdentityHandlers } from '@ensembleworks/contracts/terminal-identity'
 import { CellSize, gridFor, quantizeCell } from '../../terminal/grid.js'
 import { FONT_SIZE_DEFAULT, ptyInputForKey } from '../../terminal/keys.js'
 import { termWsUrl } from '../../terminal/wsUrl.js'
@@ -239,6 +240,7 @@ export function TerminalShape({ shape, editorState, dispatch: dispatchIntents }:
     if (!container) return
 
     const term = new Terminal({ fontSize: fontSizeRef.current, fontFamily: wm.mono, scrollback: 0, theme: paperTerminalTheme })
+    if (gateway) registerTerminalIdentityHandlers(term)
     term.open(container)
     termRef.current = term
 

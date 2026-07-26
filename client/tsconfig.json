@@ -12,6 +12,7 @@
     "forceConsistentCasingInFileNames": true,
     "useDefineForClassFields": true,
     "isolatedModules": true,
+    "types": ["bun-types"],
     "paths": {
       "@ensembleworks/contracts": ["../contracts/src/index.ts"],
       "@ensembleworks/canvas-model": ["../canvas-model/src/index.ts"],

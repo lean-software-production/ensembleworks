@@ -39,3 +39,38 @@ export function oscColorReply(ps: 10 | 11): string {
 	const hex = ps === 11 ? TERMINAL_CANONICAL_COLORS.background : TERMINAL_CANONICAL_COLORS.foreground
 	return `\x1b]${ps};${rgbSpec(hex)}\x1b\\`
 }
+
+/** Structural slice of xterm.js Terminal — contracts must not depend on
+ *  @xterm/xterm; the client passes its real Terminal instance. */
+export interface IdentityTerminal {
+	parser: {
+		registerCsiHandler(
+			id: { prefix?: string; intermediates?: string; final: string },
+			cb: (params: (number | number[])[]) => boolean,
+		): unknown
+		registerOscHandler(ident: number, cb: (data: string) => boolean): unknown
+	}
+}
+
+/**
+ * Defense-in-depth for connector-backed terminals: the connector's responder
+ * normally removes every query before fan-out; these handlers make a browser
+ * that sees one anyway stay silent. Return true = handled (no auto-reply);
+ * return false = default xterm behaviour (used for setter/ambiguous forms).
+ *
+ * NEVER registers a final:'R' handler (CPR-reply shape = modified F3 shape,
+ * field report §8) and never suppresses CSI 6n (pty-backend CPR must flow).
+ */
+export function registerTerminalIdentityHandlers(term: IdentityTerminal): void {
+	const p = term.parser
+	p.registerCsiHandler({ final: 'c' }, () => true) // DA1
+	p.registerCsiHandler({ prefix: '>', final: 'c' }, () => true) // DA2
+	p.registerCsiHandler({ prefix: '=', final: 'c' }, () => true) // DA3
+	p.registerCsiHandler({ final: 'n' }, (params) => params[0] === 5) // DSR-5 only; 6n → false
+	p.registerCsiHandler({ prefix: '?', intermediates: '$', final: 'p' }, () => true) // DECRQM
+	p.registerCsiHandler({ prefix: '>', final: 'q' }, () => true) // XTVERSION
+	p.registerCsiHandler({ prefix: '?', final: 'u' }, () => true) // kitty probe
+	for (const ident of [10, 11] as const) {
+		p.registerOscHandler(ident, (data) => data === '?') // query form only
+	}
+}
