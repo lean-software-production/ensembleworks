@@ -83,7 +83,14 @@ class ResponderState {
 /** Dispositions for one matched sequence. Tasks 3–5 extend this switch. */
 function handle(body: string | undefined, osc: string | undefined, whole: string, out: Sink, state: ResponderState, backend: 'tmux' | 'pty'): void {
 	if (osc !== undefined) {
-		out.live += whole // Task 4 replaces this branch
+		// osc = "10;<payload>" or "11;<payload>" (regex group excludes terminator)
+		const ps = Number(osc.slice(0, 2)) as 10 | 11
+		const payload = osc.slice(3)
+		if (payload === '?') {
+			out.replies.push(oscColorReply(ps))
+			return // scrubbed
+		}
+		out.live += whole // setter: renderers must apply it
 		out.history += whole
 		return
 	}

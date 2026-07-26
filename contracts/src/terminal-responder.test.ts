@@ -83,3 +83,26 @@ describe('DECRQM tracked state + 1004 stripping (spec decisions 5 and 6)', () =>
 		expect(out.replies).toEqual(['\x1b[?2027;0$y'])
 	})
 })
+
+describe('OSC 10/11 (spec decision 4: pin queries, pass setters)', () => {
+	test('query form answered with canonical colours, both BEL and ST terminators', () => {
+		const st = run('tmux', '\x1b]11;?\x1b\\')
+		expect(st.replies).toEqual(['\x1b]11;rgb:ffff/ffff/ffff\x1b\\'])
+		expect(st.live).toBe('')
+		const bel = run('tmux', '\x1b]10;?\x07')
+		expect(bel.replies).toEqual(['\x1b]10;rgb:0f0f/1717/2a2a\x1b\\'])
+		expect(bel.live).toBe('')
+	})
+
+	test('setter form passes through untouched and is not answered', () => {
+		const out = run('tmux', '\x1b]11;#1a1a2e\x07plain')
+		expect(out.live).toBe('\x1b]11;#1a1a2e\x07plain')
+		expect(out.replies).toEqual([])
+	})
+
+	test('OSC 4 passes through entirely (phase 2, not handled)', () => {
+		const out = run('tmux', '\x1b]4;0;?\x07')
+		expect(out.live).toBe('\x1b]4;0;?\x07')
+		expect(out.replies).toEqual([])
+	})
+})
