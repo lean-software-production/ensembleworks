@@ -82,6 +82,12 @@ describe('DECRQM tracked state + 1004 stripping (spec decisions 5 and 6)', () =>
 		expect(out.live).toBe('\x1b[?25h')
 		expect(out.replies).toEqual(['\x1b[?2027;0$y'])
 	})
+
+	test('DECRQM with malformed or oversized params is scrubbed without answer', () => {
+		const out = run('tmux', '\x1b[?2004;2026$p\x1b[?99999999999999999999$p')
+		expect(out.replies).toEqual([])
+		expect(out.live).toBe('')
+	})
 })
 
 describe('OSC 10/11 (spec decision 4: pin queries, pass setters)', () => {
@@ -121,6 +127,15 @@ describe('carry buffer + flush lifecycle (spec: connector integration)', () => {
 		const out = run('tmux', 'x\x1b]1', '1;', '?\x1b\\y')
 		expect(out.live).toBe('xy')
 		expect(out.replies).toEqual(['\x1b]11;rgb:ffff/ffff/ffff\x1b\\'])
+	})
+
+	test('an OSC query with ST terminator split at EVERY byte boundary is still recognised once', () => {
+		const q = '\x1b]11;?\x1b\\'
+		for (let cut = 1; cut < q.length; cut++) {
+			const out = run('tmux', 'a' + q.slice(0, cut), q.slice(cut) + 'b')
+			expect(out.live).toBe('ab')
+			expect(out.replies).toEqual(['\x1b]11;rgb:ffff/ffff/ffff\x1b\\'])
+		}
 	})
 
 	test('incomplete prefix with no further output is returned by flush, not lost', () => {

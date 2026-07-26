@@ -41,6 +41,9 @@ const MAX_CARRY = 64
 
 /** Longest tail of s that could be the prefix of a recognisable sequence.
  *  Empty string when the tail is definitely ordinary output. */
+// biome-ignore lint: control chars deliberate
+const PARTIAL_RE = /^\x1b$|^\x1b\[[0-9;?>=!$]*$|^\x1b\](?:1[01]?)?$|^\x1b\]1[01];[^\x07\x1b]*\x1b?$/
+
 function pendingPrefix(s: string): string {
 	const esc = s.lastIndexOf('\x1b')
 	if (esc === -1) return ''
@@ -52,9 +55,24 @@ function pendingPrefix(s: string): string {
 	//   \x1b[ + params  (no final byte yet)
 	//   \x1b]1, \x1b]10, \x1b]11;payload (no BEL/ST yet), incl. trailing \x1b
 	//   of an unfinished ST
-	// biome-ignore lint: control chars deliberate
-	const partial = /^\x1b$|^\x1b\[[0-9;?>=!$]*$|^\x1b\](?:1[01]?)?$|^\x1b\]1[01];[^\x07\x1b]*\x1b?$/
-	return partial.test(tail) ? tail : ''
+	// The tail starting at the LAST ESC can never itself contain a second
+	// ESC, so the `...\x1b?$` alternative below only ever matches a bare
+	// trailing ESC (tail === '\x1b'). That's ambiguous: it could be the ST's
+	// leading ESC for an OSC candidate that started earlier — e.g.
+	// "\x1b]11;?\x1b" (query complete, ST's ESC arrived, backslash pending),
+	// where the last-ESC tail is just the trailing "\x1b" and the "\x1b]11;?"
+	// prefix would otherwise leak into live/history unrecognised. Check the
+	// previous ESC within the carry bound FIRST in that case, so we hold the
+	// longer candidate instead of just the trailing ESC.
+	if (tail === '\x1b') {
+		const prevEsc = s.lastIndexOf('\x1b', esc - 1)
+		if (prevEsc !== -1) {
+			const longerTail = s.slice(prevEsc)
+			if (longerTail.length <= MAX_CARRY && PARTIAL_RE.test(longerTail)) return longerTail
+		}
+	}
+	if (PARTIAL_RE.test(tail)) return tail
+	return ''
 }
 
 // One alternation of every sequence the matrix gives a disposition for.
@@ -90,8 +108,13 @@ class ResponderState {
 	 *  with ?1004 removed (empty string when 1004 was the only mode). */
 	modeSequence(body: string): string {
 		const set = body.endsWith('h')
-		const params = body.slice(1, -1).split(';').map(Number)
-		for (const p of params) {
+		const rawParams = body.slice(1, -1).split(';')
+		const params: number[] = []
+		for (const raw of rawParams) {
+			if (!/^\d{1,7}$/.test(raw)) continue // malformed/oversized: drop, don't forward
+			const p = Number(raw)
+			if (Number.isNaN(p)) continue
+			params.push(p)
 			if ((TRACKED_MODES as readonly number[]).includes(p)) this.modes.set(p, set ? 1 : 2)
 		}
 		const kept = params.filter((p) => p !== 1004)
@@ -146,7 +169,9 @@ function handle(body: string | undefined, osc: string | undefined, whole: string
 	if (body.endsWith('q')) return // XTVERSION: scrub, no answer
 	if (body === '?u') return // kitty keyboard probe: scrub, no answer
 	if (body.startsWith('?') && body.endsWith('$p')) {
-		out.replies.push(state.decrqmReply(Number(body.slice(1, -2))))
+		const p = body.slice(1, -2)
+		if (!/^\d{1,7}$/.test(p)) return // malformed/oversized param: scrub, no answer
+		out.replies.push(state.decrqmReply(Number(p)))
 		return // scrubbed
 	}
 	if (body.startsWith('?') && (body.endsWith('h') || body.endsWith('l'))) {
