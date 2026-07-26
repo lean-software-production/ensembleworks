@@ -51,3 +51,35 @@ describe('stateless queries (spec matrix rows DA1/DA2/DA3/DSR/XTVERSION/kitty)',
 		expect(out.replies).toEqual([])
 	})
 })
+
+describe('DECRQM tracked state + 1004 stripping (spec decisions 5 and 6)', () => {
+	test('initial states: tracked modes reset(2), 1004 and unknown not recognised(0)', () => {
+		const out = run('tmux', '\x1b[?2004$p\x1b[?1004$p\x1b[?2027$p')
+		expect(out.replies).toEqual(['\x1b[?2004;2$y', '\x1b[?1004;0$y', '\x1b[?2027;0$y'])
+		expect(out.live).toBe('')
+	})
+
+	test('DECSET flips tracked mode to set(1); DECRST back to reset(2); sequences pass through', () => {
+		const out = run('tmux', '\x1b[?2004h\x1b[?2004$p\x1b[?2004l\x1b[?2004$p')
+		expect(out.replies).toEqual(['\x1b[?2004;1$y', '\x1b[?2004;2$y'])
+		expect(out.live).toBe('\x1b[?2004h\x1b[?2004l')
+	})
+
+	test('RIS and DECSTR reset tracked modes to initial', () => {
+		const out = run('tmux', '\x1b[?2026h\x1bc\x1b[?2026$p')
+		expect(out.replies).toEqual(['\x1b[?2026;2$y'])
+		const out2 = run('tmux', '\x1b[?2026h\x1b[!p\x1b[?2026$p')
+		expect(out2.replies).toEqual(['\x1b[?2026;2$y'])
+	})
+
+	test('?1004 stripped from DECSET, other params in the same sequence preserved', () => {
+		const out = run('tmux', '\x1b[?1004h\x1b[?1004;2004h\x1b[?2004;1004;2026h')
+		expect(out.live).toBe('\x1b[?2004h\x1b[?2004;2026h')
+	})
+
+	test('DECSET of an untracked mode passes through and does not change answers', () => {
+		const out = run('tmux', '\x1b[?25h\x1b[?2027$p')
+		expect(out.live).toBe('\x1b[?25h')
+		expect(out.replies).toEqual(['\x1b[?2027;0$y'])
+	})
+})

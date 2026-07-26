@@ -50,8 +50,38 @@ interface Sink {
 	replies: string[]
 }
 
+class ResponderState {
+	modes: Map<number, 0 | 1 | 2>
+
+	constructor() {
+		this.modes = new Map(Object.entries(CAPABILITY_PROFILE.modes).map(([k, v]) => [Number(k), v]))
+	}
+
+	reset(): void {
+		for (const m of TRACKED_MODES) this.modes.set(m, 2)
+	}
+
+	decrqmReply(mode: number): string {
+		const state = this.modes.get(mode) ?? 0
+		return `\x1b[?${mode};${state}$y`
+	}
+
+	/** DECSET/DECRST: update tracked bits; return the sequence to forward
+	 *  with ?1004 removed (empty string when 1004 was the only mode). */
+	modeSequence(body: string): string {
+		const set = body.endsWith('h')
+		const params = body.slice(1, -1).split(';').map(Number)
+		for (const p of params) {
+			if ((TRACKED_MODES as readonly number[]).includes(p)) this.modes.set(p, set ? 1 : 2)
+		}
+		const kept = params.filter((p) => p !== 1004)
+		if (kept.length === 0) return ''
+		return `\x1b[?${kept.join(';')}${set ? 'h' : 'l'}`
+	}
+}
+
 /** Dispositions for one matched sequence. Tasks 3–5 extend this switch. */
-function handle(body: string | undefined, osc: string | undefined, whole: string, out: Sink, backend: 'tmux' | 'pty'): void {
+function handle(body: string | undefined, osc: string | undefined, whole: string, out: Sink, state: ResponderState, backend: 'tmux' | 'pty'): void {
 	if (osc !== undefined) {
 		out.live += whole // Task 4 replaces this branch
 		out.history += whole
@@ -60,6 +90,7 @@ function handle(body: string | undefined, osc: string | undefined, whole: string
 	if (body === undefined) {
 		// bare \x1bc = RIS; Task 3 resets tracked modes. Pass through (it must
 		// still reset the renderers).
+		state.reset()
 		out.live += whole
 		out.history += whole
 		return
@@ -87,13 +118,30 @@ function handle(body: string | undefined, osc: string | undefined, whole: string
 	}
 	if (body.endsWith('q')) return // XTVERSION: scrub, no answer
 	if (body === '?u') return // kitty keyboard probe: scrub, no answer
-	// DECRQM / DECSET / DECRST / DECSTR — Task 3 implements; pass through.
+	if (body.startsWith('?') && body.endsWith('$p')) {
+		out.replies.push(state.decrqmReply(Number(body.slice(1, -2))))
+		return // scrubbed
+	}
+	if (body.startsWith('?') && (body.endsWith('h') || body.endsWith('l'))) {
+		const fwd = state.modeSequence(body)
+		out.live += fwd
+		out.history += fwd
+		return
+	}
+	if (body === '!p') {
+		state.reset() // DECSTR
+		out.live += whole
+		out.history += whole
+		return
+	}
+	// unreachable for matched bodies; keep pass-through as safety
 	out.live += whole
 	out.history += whole
 }
 
 export function createQueryResponder(opts: { backend: 'tmux' | 'pty' }): QueryResponder {
 	let carry = ''
+	const state = new ResponderState()
 	return {
 		process(chunk: Uint8Array): ResponderResult {
 			const s = carry + toLatin1(chunk)
@@ -105,7 +153,7 @@ export function createQueryResponder(opts: { backend: 'tmux' | 'pty' }): QueryRe
 				const plain = s.slice(last, m.index)
 				out.live += plain
 				out.history += plain
-				handle(m[1], m[2], m[0], out, opts.backend)
+				handle(m[1], m[2], m[0], out, state, opts.backend)
 				last = SEQ_RE.lastIndex
 			}
 			const tail = s.slice(last)
