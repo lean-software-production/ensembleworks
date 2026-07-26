@@ -1,7 +1,7 @@
 # Locked-shape affordance — design
 
-- **Status:** SPEC (agreed 2026-07-23). Implementation plan follows separately
-  (superpowers:writing-plans).
+- **Status:** IMPLEMENTED (2026-07-26). Plan:
+  [`../plans/2026-07-26-locked-shape-affordance.md`](../plans/2026-07-26-locked-shape-affordance.md).
 - **Date:** 2026-07-23
 - **Motivation:** A locked shape is currently **completely indistinguishable from
   an unlocked one** and silently ignores every interaction. This has already cost
@@ -161,6 +161,16 @@ padlocks. That was wrong, for two reasons:
 So: every locked shape in the hovered/selected set gets a badge, with no ordering
 rule or truncation needed.
 
+**Correction (verified at implementation, 2026-07-26): the select-all scenario
+this section argues about cannot happen.** `Editor.selectAll()` ends in
+`setSelectedShapes(this._getUnlockedShapeIds(ids))`
+(`@tldraw/editor/src/lib/editor/Editor.ts:2174`), which strips locked shapes
+**unconditionally** — `selectLockedShapes` never reaches that path. Observed
+live: with ten locked shapes on the page, Ctrl+A selects zero and badges zero.
+A **marquee** drag *does* include locked shapes, so a user can still select many
+at once; the no-cap behaviour was proven that way instead. The conclusion above
+is unchanged — only the worst case is smaller than it was argued against.
+
 **Possible follow-up, deliberately not specified here:** when zoomed far out, badges
 may become illegible or overlap. If that proves ugly in practice, the fix is to
 suppress badges whose shape bounds fall below a legibility threshold — a rule
@@ -216,6 +226,16 @@ problem.
   out (this is what would motivate the §5 legibility follow-up).
 - **Regression:** confirm `selectLockedShapes: true` has not made locked shapes
   editable, movable or deletable.
+
+**Executed 2026-07-26**, as an automated pass over this checklist rather than by
+hand — the room exposes `window.__ewEditor`, so every line above is assertable
+through the repo's Playwright rig with real mouse input. All of it held,
+including the terminal case (badge sits clear of the terminal's top-left title
+chip) and the locked-frame-child case. One pre-existing wart surfaced and was
+**not** caused by this change: double-clicking a locked *terminal* creates a new
+empty text shape on top of it and edits that instead (the locked terminal itself
+correctly refuses edit mode). Identical with `selectLockedShapes: false`, so it
+predates this work — noted here, not fixed here.
 
 ## 10. Non-goals
 
