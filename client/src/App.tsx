@@ -241,6 +241,17 @@ export function App() {
 					overlayUtils={avOverlayUtils}
 					overrides={uiOverrides}
 					components={components}
+					// Hard prerequisite for the locked-shape padlock chip
+					// (chrome/LockedShapeBadge.tsx): hover hit-testing passes
+					// `hitLocked: editor.options.selectLockedShapes`, which defaults to
+					// false, so getHoveredShapeId() can otherwise never return a locked
+					// shape and the chip would silently never render.
+					//
+					// Accepted side effect (spec §4): locked shapes become click- and
+					// marquee-selectable. They stay protected from edits, moves and
+					// deletes — and a click now produces visible feedback instead of
+					// absolutely nothing, which is the whole point.
+					options={{ selectLockedShapes: true }}
 				>
 					{plugins.map((plugin) => {
 						const Overlay = plugin.Overlay

@@ -10,6 +10,7 @@ import { TLComponents, TLUiOverrides } from 'tldraw'
 import { CommandBar } from './chrome/CommandBar'
 import { ContextualStylePanel } from './chrome/ContextualStylePanel'
 import { FocusOverlay } from './chrome/FocusOverlay'
+import { LockedShapeBadge } from './chrome/LockedShapeBadge'
 import { collectUiSlots } from './kernel/plugin'
 import { plugins } from './plugins'
 
@@ -29,15 +30,16 @@ export const uiOverrides: TLUiOverrides = {
 }
 
 // InFrontOfTheCanvas takes one component, so the contextual style panel
-// (spec §6) and the focus-view overlay (spec §7) — two independent chrome
-// concerns that both need to render inside tldraw's canvas-region layer —
-// share the slot via a small fragment wrapper rather than one merging into
-// the other's file.
+// (spec §6), the focus-view overlay (spec §7) and the locked-shape padlock
+// chip — independent chrome concerns that all need to render inside tldraw's
+// canvas-region layer — share the slot via a small fragment wrapper rather
+// than one merging into another's file.
 function InFrontOfTheCanvas() {
 	return (
 		<>
 			<ContextualStylePanel />
 			<FocusOverlay />
+			<LockedShapeBadge />
 		</>
 	)
 }
