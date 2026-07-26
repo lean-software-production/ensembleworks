@@ -29,7 +29,16 @@ files.sort()
 
 for (const file of files) {
   console.log(`\n=== ${file} ===`)
-  const proc = Bun.spawnSync(['bun', file], { stdout: 'inherit', stderr: 'inherit' })
+  // Repo now has two test styles: plain scripts that run top-to-bottom under
+  // bare `bun <file>`, and `bun:test`-style suites (`import { describe,
+  // expect, test } from 'bun:test'`) that only work under the `bun test`
+  // subcommand — bare `bun <file>` exits 1 with "Cannot use describe outside
+  // of the test runner." Detect the import and dispatch accordingly so both
+  // styles run under this one runner.
+  const source = await Bun.file(file).text()
+  const isBunTestStyle = /from\s+['"]bun:test['"]/.test(source)
+  const cmd = isBunTestStyle ? ['bun', 'test', file] : ['bun', file]
+  const proc = Bun.spawnSync(cmd, { stdout: 'inherit', stderr: 'inherit' })
   if (proc.exitCode !== 0) {
     console.error(`\nFAIL: ${file} (exit ${proc.exitCode})`)
     process.exit(1)
