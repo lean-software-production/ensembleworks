@@ -107,6 +107,28 @@ Set it via the `options` prop on `<Tldraw>` in `client/src/App.tsx`.
   gates on the same flag). They remain protected from edits, moves and deletes.
 - This is a **net win**: it is what ends the silent-dead-shape problem. A click now
   produces visible feedback instead of nothing.
+- **Move-to-page does relocate a locked shape.** Because a locked shape is now
+  selectable, tldraw's `MoveToPageMenu` is reachable for it, and
+  `Editor.moveShapesToPage` (`@tldraw/editor` 5.1.0, `Editor.ts:7099-7128`) is
+  asymmetric: it captures content with `getContentFromCurrentPage` (no lock
+  filter), deletes with `deleteShapes` (lock-filtered, so the locked original
+  survives), then re-puts with `preserveIds: true`, overwriting the surviving
+  record in place with its new `parentId`. Measured in the browser
+  (`e2e/tests/locked-shape.spec.ts`, "move-to-page relocates a locked shape"):
+  exactly one record, now on the destination page, still locked; no duplicate,
+  and the source page is left empty. This is an upstream tldraw asymmetry that
+  `selectLockedShapes` makes reachable, not a behaviour this branch wrote; it is
+  recoverable (move it back, or unlock it) and no `ContextMenu` override is
+  added here.
+- **The contextual style panel floats for a locked selection, and does nothing.**
+  `client/src/chrome/ContextualStylePanel.tsx:32` shows on any non-empty
+  selection, so selecting a locked shape now surfaces it; every control in it is
+  a no-op, because `setStyleForSelectedShapes` does not lock-filter but the
+  `updateShapes` beneath it does. Mitigated in practice: the padlock chip is on
+  screen at the same time, explaining why nothing happens.
+- **Ctrl+C / Ctrl+V of a locked shape yields a locked clone.** `duplicateShapes`
+  is lock-filtered; copy/paste is not. Recoverable via right-click → Unlock on
+  the clone.
 
 **Known limitation:** hover is maintained only in the select tool and the text tool
 (`SelectTool/childStates/Idle.ts:49,62`, `EditingShape.ts:48,98,228`,
