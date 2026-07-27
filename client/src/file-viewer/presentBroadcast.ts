@@ -42,29 +42,38 @@ export function createPresentBroadcaster(opts: {
 	let firstFailureAt: number | null = null
 	let degraded = false
 	let flushing = false
+	let inFlight: Promise<void> | null = null
 
 	async function flush(): Promise<void> {
 		if (degraded || flushing || queue.length === 0) return
 		flushing = true
-		try {
-			await postJson('/api/canvas/file-viewer/present-events', {
-				room: opts.roomId,
-				shapeId: opts.shapeId,
-				presentId: opts.presentId,
-				entries: queue,
-			})
-			queue = []
-			firstFailureAt = null
-		} catch {
-			// Keep the queue (retry next tick); degrade after sustained failure.
-			if (firstFailureAt === null) firstFailureAt = now()
-			else if (now() - firstFailureAt >= failAfterMs) {
-				degraded = true
-				opts.onDegrade?.()
+		inFlight = (async () => {
+			let sent: typeof queue
+			try {
+				sent = queue
+				queue = []
+				await postJson('/api/canvas/file-viewer/present-events', {
+					room: opts.roomId,
+					shapeId: opts.shapeId,
+					presentId: opts.presentId,
+					entries: sent,
+				})
+				firstFailureAt = null
+			} catch {
+				// Keep the queue (retry next tick); degrade after sustained failure.
+				queue = [...sent, ...queue]
+				if (firstFailureAt === null) firstFailureAt = now()
+				else if (now() - firstFailureAt >= failAfterMs) {
+					degraded = true
+					clearIntervalFn(timer)
+					opts.onDegrade?.()
+				}
+			} finally {
+				flushing = false
+				inFlight = null
 			}
-		} finally {
-			flushing = false
-		}
+		})()
+		await inFlight
 	}
 
 	const timer = setIntervalFn(() => void flush(), flushMs)
@@ -76,6 +85,7 @@ export function createPresentBroadcaster(opts: {
 		},
 		async stop() {
 			clearIntervalFn(timer)
+			if (inFlight) await inFlight
 			await flush()
 			if (!degraded) {
 				try {
