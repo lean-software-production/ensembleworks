@@ -372,3 +372,47 @@ test('regression: selectLockedShapes did NOT make locked shapes editable, movabl
 	})
 	await expect(page.locator(CHIP)).toHaveCount(0)
 })
+
+// The style panel must not appear for a selection it cannot edit. Selecting a
+// locked shape used to float DefaultStylePanel above it with every control a
+// silent no-op — the same class of bug the padlock chip exists to kill.
+test('the contextual style panel is suppressed for an all-locked selection', async ({ page }) => {
+	const PANEL = '[data-testid="ew-style-panel"]'
+	await boot(page, 'lockbadge-7')
+	await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		ed.createShapes([
+			{ id: 'shape:sp1', type: 'geo', x: 200, y: 300, props: { w: 200, h: 150, fill: 'solid' } },
+			{ id: 'shape:sp2', type: 'geo', x: 500, y: 300, props: { w: 200, h: 150, fill: 'solid' } },
+		])
+		ed.updateShape({ id: 'shape:sp1', type: 'geo', isLocked: true })
+	})
+
+	// Unlocked selection: the panel is useful, so it shows.
+	await page.evaluate(() => {
+		;(window as any).__ewEditor.select('shape:sp2')
+	})
+	await expect(page.locator(PANEL)).toHaveCount(1)
+
+	// All-locked selection: suppressed, while the padlock chip still explains why.
+	await page.evaluate(() => {
+		;(window as any).__ewEditor.select('shape:sp1')
+	})
+	await expect(page.locator(PANEL)).toHaveCount(0)
+	await expect(page.locator(CHIP)).toHaveCount(1)
+
+	// MIXED selection: kept. tldraw's updateShapes lock-filters, so the controls
+	// still restyle the unlocked member — hiding it would remove a working tool.
+	await page.evaluate(() => {
+		;(window as any).__ewEditor.setSelectedShapes(['shape:sp1', 'shape:sp2'])
+	})
+	await expect(page.locator(PANEL)).toHaveCount(1)
+
+	// Unlocking brings the panel back for the same shape.
+	await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		ed.updateShape({ id: 'shape:sp1', type: 'geo', isLocked: false })
+		ed.select('shape:sp1')
+	})
+	await expect(page.locator(PANEL)).toHaveCount(1)
+})

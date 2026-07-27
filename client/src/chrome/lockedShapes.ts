@@ -42,3 +42,25 @@ export function badgedLockedShapeIds(input: BadgedShapesInput): string[] {
 	for (const id of selectedShapeIds) push(id)
 	return out
 }
+
+/**
+ * Is every shape in this selection locked? Drives whether the contextual style
+ * panel is suppressed (ContextualStylePanel.tsx).
+ *
+ * A style panel over an all-locked selection is a small re-run of the very bug
+ * the padlock chip exists to kill: every control renders, none of them do
+ * anything. `setStyleForSelectedShapes` does not lock-filter, but the
+ * `updateShapes` beneath it does, so the click lands and nothing changes.
+ *
+ * MIXED selections keep the panel: the controls genuinely restyle the unlocked
+ * members, so hiding it there would remove a working tool. Empty selections are
+ * false — the panel has its own armed-tool behaviour with nothing selected, and
+ * this must not suppress that.
+ */
+export function everySelectedShapeLocked(
+	selectedShapeIds: readonly string[],
+	isLocked: (id: string) => boolean
+): boolean {
+	if (selectedShapeIds.length === 0) return false
+	return selectedShapeIds.every(isLocked)
+}

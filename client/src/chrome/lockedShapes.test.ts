@@ -2,7 +2,7 @@
  * Run: bun client/src/chrome/lockedShapes.test.ts
  */
 import assert from 'node:assert/strict'
-import { badgedLockedShapeIds } from './lockedShapes'
+import { badgedLockedShapeIds, everySelectedShapeLocked } from './lockedShapes'
 
 // A lock lookup built from an explicit set — stands in for
 // editor.isShapeOrAncestorLocked, which is what the component injects.
@@ -105,5 +105,30 @@ assert.deepEqual(
 	}),
 	['shape:h', 'shape:a']
 )
+
+// ---------------------------------------------------------------------------
+// everySelectedShapeLocked — the style panel's suppression test.
+// ---------------------------------------------------------------------------
+
+// A selection of one locked shape: the panel's controls would all be no-ops.
+assert.equal(everySelectedShapeLocked(['shape:a'], lockedAmong('shape:a')), true)
+
+// One unlocked shape: the panel is useful, keep it.
+assert.equal(everySelectedShapeLocked(['shape:a'], lockedAmong()), false)
+
+// Every member locked → suppress.
+assert.equal(everySelectedShapeLocked(['shape:a', 'shape:b'], lockedAmong('shape:a', 'shape:b')), true)
+
+// MIXED selection → do NOT suppress. tldraw's updateShapes lock-filters, so the
+// controls still restyle the unlocked members; hiding the panel would take a
+// working tool away.
+assert.equal(everySelectedShapeLocked(['shape:a', 'shape:b'], lockedAmong('shape:a')), false)
+
+// Empty selection is NOT "every shape locked" — with nothing selected the panel
+// has its own armed-tool behaviour, which this must not suppress.
+assert.equal(everySelectedShapeLocked([], lockedAmong('shape:a')), false)
+
+// Ancestor-locked child counts as locked, same predicate as the badge.
+assert.equal(everySelectedShapeLocked(['shape:child'], lockedAmong('shape:child')), true)
 
 console.log('lockedShapes.test.ts: all assertions passed')

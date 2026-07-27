@@ -3,7 +3,8 @@
  * One component, two anchors — above the selection bounds when a selection
  * exists (same spot as tldraw's rich-text toolbar), or floated above the
  * command bar when a style-bearing tool is armed with nothing selected.
- * Hidden mid-gesture so it never chases a drag.
+ * Hidden mid-gesture so it never chases a drag, and hidden for an all-locked
+ * selection (see `allLocked` below).
  */
 import { type CSSProperties } from 'react'
 import {
@@ -12,7 +13,9 @@ import {
 	useEditor,
 	useRelevantStyles,
 	useValue,
+	type TLShapeId,
 } from 'tldraw'
+import { everySelectedShapeLocked } from './lockedShapes'
 import { useMidGesture } from './useMidGesture'
 
 // Tools whose next-shape styles are worth editing before drawing.
@@ -35,6 +38,20 @@ export function ContextualStylePanel() {
 		[editor]
 	)
 	const midGesture = useMidGesture()
+	// A locked shape is selectable (App.tsx's selectLockedShapes), but every
+	// control in this panel is a no-op against it — setStyleForSelectedShapes
+	// doesn't lock-filter, the updateShapes beneath it does. Showing a panel
+	// whose every control silently does nothing is the same class of bug the
+	// padlock chip exists to kill, so suppress it. Mixed selections keep the
+	// panel: the controls still restyle the unlocked members.
+	const allLocked = useValue(
+		'selection is all locked',
+		() =>
+			everySelectedShapeLocked(editor.getSelectedShapeIds(), (id) =>
+				editor.isShapeOrAncestorLocked(id as TLShapeId)
+			),
+		[editor]
+	)
 	// Editor viewport width, not window.innerWidth: the canvas region won't
 	// span the whole window once Phase 2 adds a right-hand side panel, and
 	// this stays reactive to resize (useValue re-runs on viewport change).
@@ -51,6 +68,10 @@ export function ContextualStylePanel() {
 	// `styles.size === 0`, not `styles.styles.size`.
 	if (!styles || styles.size === 0) return null
 	if (midGesture) return null
+	// Before the anchor branches below: an all-locked selection suppresses the
+	// panel outright rather than falling through to the armed-tool anchor,
+	// which would float it over the command bar for a selection it cannot edit.
+	if (allLocked) return null
 
 	let style: CSSProperties
 	if (selectionBounds) {

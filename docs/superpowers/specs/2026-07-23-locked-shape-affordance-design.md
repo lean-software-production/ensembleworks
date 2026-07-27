@@ -120,12 +120,17 @@ Set it via the `options` prop on `<Tldraw>` in `client/src/App.tsx`.
   `selectLockedShapes` makes reachable, not a behaviour this branch wrote; it is
   recoverable (move it back, or unlock it) and no `ContextMenu` override is
   added here.
-- **The contextual style panel floats for a locked selection, and does nothing.**
-  `client/src/chrome/ContextualStylePanel.tsx:32` shows on any non-empty
-  selection, so selecting a locked shape now surfaces it; every control in it is
-  a no-op, because `setStyleForSelectedShapes` does not lock-filter but the
-  `updateShapes` beneath it does. Mitigated in practice: the padlock chip is on
-  screen at the same time, explaining why nothing happens.
+- **The contextual style panel is suppressed for an all-locked selection.**
+  Initially this side effect was accepted as-is: the panel floated over a locked
+  selection with every control a silent no-op (`setStyleForSelectedShapes` does
+  not lock-filter, but the `updateShapes` beneath it does). That is the same
+  class of bug this whole design exists to kill — a control that renders and
+  does nothing — so it is now fixed rather than documented:
+  `ContextualStylePanel.tsx` hides itself when every selected shape is locked
+  (`everySelectedShapeLocked`, `chrome/lockedShapes.ts`). **Mixed selections keep
+  the panel**, because the controls genuinely restyle the unlocked members;
+  hiding it there would take away a working tool. Covered by
+  `e2e/tests/locked-shape.spec.ts`.
 - **Ctrl+C / Ctrl+V of a locked shape yields a locked clone.** `duplicateShapes`
   is lock-filtered; copy/paste is not. Recoverable via right-click → Unlock on
   the clone.
