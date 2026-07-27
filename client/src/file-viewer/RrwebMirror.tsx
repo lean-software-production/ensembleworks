@@ -48,6 +48,18 @@ export function RrwebMirror(props: {
 		let failed = false
 		let currentPresentId: string | null = null
 		let buffered: RrwebEntry[] = []
+		let fallbackTimer: ReturnType<typeof setTimeout> | undefined
+
+		// No playable stream within FALLBACK_MS of the current presentation
+		// starting → old server / truncated log / stalled peer → fall back.
+		// Re-armed per presentation (not just once at mount) so a second
+		// presentation that never sends Meta+FullSnapshot still triggers it.
+		const armFallbackTimer = () => {
+			clearTimeout(fallbackTimer)
+			fallbackTimer = setTimeout(() => {
+				if (!replayerRef.current && !failed) onFallbackRef.current()
+			}, FALLBACK_MS)
+		}
 
 		const noteMeta = (entry: RrwebEntry) => {
 			const ev = entry.event as { type?: number; data?: { width?: number; height?: number } }
@@ -91,6 +103,7 @@ export function RrwebMirror(props: {
 			buffered = []
 			recordedSize.current = null
 			currentPresentId = presentId
+			armFallbackTimer()
 		}
 
 		const apply = (entries: RrwebEntry[], meta: { presentId: string; truncated: boolean }) => {
@@ -129,10 +142,7 @@ export function RrwebMirror(props: {
 			})
 			.catch(() => {})
 
-		// No playable stream in time → old server / truncated log → fall back.
-		const fallbackTimer = setTimeout(() => {
-			if (!replayerRef.current) onFallbackRef.current()
-		}, FALLBACK_MS)
+		armFallbackTimer()
 
 		return () => {
 			disposed = true
