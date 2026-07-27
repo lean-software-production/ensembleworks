@@ -24,9 +24,12 @@ import {
 	useValue,
 } from 'tldraw'
 import { wm } from '../theme'
+import { getRoomId } from '../identity'
 import { presenterFor, type PresenterInfo } from './followLogic'
 import { forwardPinchToCanvas, parsePinchMessage } from './pinchForward'
+import { createPresentBroadcaster } from './presentBroadcast'
 import { presentStore } from './presentStore'
+import { RrwebMirror } from './RrwebMirror'
 
 export interface FileViewerShapeProps {
 	w: number
@@ -114,6 +117,42 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	const presenting = useValue('fvPresenting', () => presentStore.get(), [])
 	const isPresentingThis = presenting?.shapeId === shape.id
 
+	// rrweb broadcast (spec: 2026-07-27-file-viewer-rrweb-broadcast-design.md).
+	// Presenter: start the in-iframe recorder + batcher while presenting this
+	// shape. rrwebDegraded → presenter silently reverts to fraction-only.
+	const broadcasterRef = useRef<ReturnType<typeof createPresentBroadcaster> | null>(null)
+	const [rrwebDegraded, setRrwebDegraded] = useState(false)
+	// Follower: mirror fallback — flipped by RrwebMirror when no stream appears.
+	const [mirrorFallback, setMirrorFallback] = useState(false)
+
+	useEffect(() => {
+		if (!isPresentingThis) {
+			// Present toggled off (or unmount below): stop recorder + relay log.
+			if (broadcasterRef.current) {
+				iframeRef.current?.contentWindow?.postMessage({ type: 'ew-present-stop' }, '*')
+				void broadcasterRef.current.stop()
+				broadcasterRef.current = null
+			}
+			setRrwebDegraded(false)
+			return
+		}
+		const presentId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+		const broadcaster = createPresentBroadcaster({
+			roomId: getRoomId(),
+			shapeId: shape.id,
+			presentId,
+			onDegrade: () => setRrwebDegraded(true),
+		})
+		broadcasterRef.current = broadcaster
+		iframeRef.current?.contentWindow?.postMessage({ type: 'ew-present-start' }, '*')
+		return () => {
+			iframeRef.current?.contentWindow?.postMessage({ type: 'ew-present-stop' }, '*')
+			void broadcaster.stop()
+			broadcasterRef.current = null
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [isPresentingThis, shape.id])
+
 	// A peer presenting this shape (never me — getCollaborators is remote-only,
 	// but guard on userId too). Following is mutually exclusive with presenting.
 	// The selector collapses to a PRIMITIVE key (userId\tuserName\tfraction) so
@@ -161,7 +200,7 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	useEffect(() => {
 		const onMessage = (e: MessageEvent) => {
 			if (e.source !== iframeRef.current?.contentWindow) return
-			const d = e.data as { type?: unknown; fraction?: unknown } | null
+			const d = e.data as { type?: unknown; fraction?: unknown; event?: unknown } | null
 			if (!d || typeof d !== 'object') return
 			const pinch = parsePinchMessage(d)
 			if (pinch) {
@@ -171,12 +210,21 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 				if (iframeRef.current) forwardPinchToCanvas(iframeRef.current, pinch)
 				return
 			}
+			if (d.type === 'ew-rrweb-event') {
+				broadcasterRef.current?.push((d as { event: unknown }).event)
+				return
+			}
 			if (d.type === 'ew-file-viewer-ready') {
 				// Presenter's own refresh/rev reload → re-apply the last fraction so
 				// the reloaded document lands where the presenter left it (spec §5).
 				const mine = presentStore.get()
 				if (mine && mine.shapeId === shape.id) {
 					postScrollSet(mine.fraction)
+					// Reloaded mid-presentation → restart the recorder; rrweb emits a
+					// fresh Meta+FullSnapshot which followers splice by seq as usual.
+					if (broadcasterRef.current) {
+						iframeRef.current?.contentWindow?.postMessage({ type: 'ew-present-start' }, '*')
+					}
 				} else if (activePresenterRef.current) {
 					// Follower mid-presentation reload → re-apply the presenter's spot.
 					postScrollSet(activePresenterRef.current.fraction)
@@ -211,6 +259,12 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	useEffect(() => {
 		if (!hasPeerPresenter) setOptOutId(null)
 	}, [hasPeerPresenter])
+
+	// A new presenter (or handoff) means any prior mirror-fallback no longer
+	// applies — give the incoming presentation its own shot at the mirror.
+	useEffect(() => {
+		setMirrorFallback(false)
+	}, [activePresenter?.userId])
 
 	const togglePresent = () => {
 		if (isPresentingThis) presentStore.set(null)
@@ -289,22 +343,40 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 				{!isEditing && <span style={{ opacity: 0.6 }}>double-click to interact</span>}
 			</div>
 			{path ? (
-				<iframe
-					ref={iframeRef}
-					// Per-segment encode so exotic names (#, ?, %) round-trip the
-					// route's decode-once contract (features/files.ts re-encodes the
-					// decoded express param the same way before hitting the file-server).
-					src={`/files/${path.split('/').map(encodeURIComponent).join('/')}?rev=${rev ?? 0}`}
-					title={displayTitle}
-					style={{ flex: 1, minHeight: 0, border: 'none', width: '100%', pointerEvents: isEditing ? 'all' : 'none' }}
-					// SECURITY: no `allow-same-origin`, ever. Without it the iframe's
-					// document loads into an opaque (null) origin, so file-server
-					// content can never read the canvas's cookies/localStorage or reach
-					// the credentialed /api endpoints under the app's own origin — even
-					// though it shares allow-scripts. Adding allow-same-origin back
-					// would let an agent-authored file impersonate the signed-in user.
-					sandbox="allow-scripts allow-forms allow-downloads"
-				/>
+				<>
+					{activePresenter && !mirrorFallback && (
+						<RrwebMirror
+							roomId={getRoomId()}
+							shapeId={shape.id}
+							width={w}
+							height={h - HEADER_HEIGHT}
+							onFallback={() => setMirrorFallback(true)}
+						/>
+					)}
+					<iframe
+						ref={iframeRef}
+						// Per-segment encode so exotic names (#, ?, %) round-trip the
+						// route's decode-once contract (features/files.ts re-encodes the
+						// decoded express param the same way before hitting the file-server).
+						src={`/files/${path.split('/').map(encodeURIComponent).join('/')}?rev=${rev ?? 0}`}
+						title={displayTitle}
+						style={{
+							flex: 1,
+							minHeight: 0,
+							border: 'none',
+							width: '100%',
+							pointerEvents: isEditing ? 'all' : 'none',
+							display: activePresenter && !mirrorFallback ? 'none' : undefined,
+						}}
+						// SECURITY: no `allow-same-origin`, ever. Without it the iframe's
+						// document loads into an opaque (null) origin, so file-server
+						// content can never read the canvas's cookies/localStorage or reach
+						// the credentialed /api endpoints under the app's own origin — even
+						// though it shares allow-scripts. Adding allow-same-origin back
+						// would let an agent-authored file impersonate the signed-in user.
+						sandbox="allow-scripts allow-forms allow-downloads"
+					/>
+				</>
 			) : (
 				<div
 					style={{

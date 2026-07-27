@@ -23,6 +23,7 @@ import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
 import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
 import { presentStore } from './file-viewer/presentStore'
+import { rrwebFollowStore } from './file-viewer/rrwebFollow'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
 import { useAvSnapshot } from './av/bridge'
 import { avOverlayUtils } from './av/FadedCursorOverlay'
@@ -93,6 +94,23 @@ export function App() {
 		bindingUtils: useMemo(() => [...defaultBindingUtils], []),
 		onCustomMessageReceived(message) {
 			if (message?.type === 'kicked') setWasKicked(true)
+			else if (message?.type === 'ew-rrweb' && typeof message.shapeId === 'string') {
+				// The server fans out to every session including the presenter's;
+				// the presenter ignores their own stream (spec §2) — otherwise the
+				// store would buffer their own events unboundedly (no subscriber
+				// ever seeds a backlog on the presenting client).
+				if (presentStore.get()?.shapeId !== message.shapeId) {
+					rrwebFollowStore.ingest(
+						message as {
+							type: string
+							shapeId: string
+							presentId: string
+							truncated?: boolean
+							entries: { seq: number; event: unknown }[]
+						}
+					)
+				}
+			}
 		},
 		// Publish the client-computed spatial stamp (contracts/src/stamp.ts)
 		// on our presence record so the server just reads a field (transcript
