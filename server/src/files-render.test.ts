@@ -76,6 +76,20 @@ assert.ok(rrwebHtml.indexOf('/files-assets/rrweb.js') < rrwebHtml.indexOf('ew-pr
 const twice = injectBridge('<html><body>x</body></html>')
 assert.equal(twice.split('ew-present-start').length, 2, 'bridge injected exactly once')
 
+// Raw-HTML documents get the recorder too (present mode covers ALL local
+// content, not just rendered markdown): rrweb tag injected once, before the
+// bridge, at the same safe insertion point.
+const RRWEB_TAG_SRC = 'src="/files-assets/rrweb.js"'
+assert.equal(twice.split(RRWEB_TAG_SRC).length, 2, 'rrweb tag injected exactly once')
+assert.ok(twice.indexOf(RRWEB_TAG_SRC) < twice.indexOf('ew-present-start'), 'rrweb loads before bridge in raw HTML')
+// Bodyless fragment: both appended, order preserved.
+const bodyless = injectBridge('<p>frag</p>')
+assert.ok(bodyless.includes(RRWEB_TAG_SRC), 'rrweb tag appended to bodyless HTML')
+assert.ok(
+	bodyless.indexOf(RRWEB_TAG_SRC) < bodyless.indexOf('ew-present-start'),
+	'rrweb before bridge in bodyless HTML'
+)
+
 // error page keeps no recorder (and no rrweb tag)
 assert.ok(!errorPage('Not found', 'x').includes('/files-assets/rrweb.js'), 'error page has no rrweb asset tag')
 
