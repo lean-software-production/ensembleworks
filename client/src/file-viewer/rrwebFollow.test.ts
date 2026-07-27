@@ -1,7 +1,7 @@
 // client/src/file-viewer/rrwebFollow.test.ts
 // Run with: bun src/file-viewer/rrwebFollow.test.ts
 import assert from 'node:assert/strict'
-import { rrwebFollowStore, type RrwebEntry } from './rrwebFollow.ts'
+import { rrwebFollowStore, type RrwebEntry } from './rrwebFollow'
 
 function collect(shapeId: string) {
 	const got: RrwebEntry[] = []

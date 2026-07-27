@@ -48,7 +48,7 @@ export function createPresentBroadcaster(opts: {
 		if (degraded || flushing || queue.length === 0) return
 		flushing = true
 		inFlight = (async () => {
-			let sent: typeof queue
+			let sent: typeof queue = []
 			try {
 				sent = queue
 				queue = []
