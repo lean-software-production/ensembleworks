@@ -297,7 +297,16 @@ export function createSyncApp(opts: {
 	// (av/token, av/kick, av/pulse) → terminal-status → sticky → file-viewer →
 	// transcript → shape → frames → canvas-v2 → roadmap → discord →
 	// canvas-metrics → uploads → files
-	app.use('/api', express.json())
+	// present-events gets its own larger-limit parser (features/file-viewer.ts,
+	// sized to the relay's 5MB-per-log cap) — skip the app-wide 100kb default
+	// here so that route-level parser is the only one that ever touches its
+	// body (once express.json() has parsed/errored a request, a later parser
+	// mounted downstream never gets a second chance at it).
+	const defaultJsonParser = express.json()
+	app.use('/api', (req, res, next) => {
+		if (req.method === 'POST' && req.path === '/canvas/file-viewer/present-events') return next()
+		defaultJsonParser(req, res, next)
+	})
 
 	// Write scoping: read-only service tokens are 403'd on mutating requests.
 	app.use(createWriteScopeGuard())

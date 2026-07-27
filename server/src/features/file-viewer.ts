@@ -160,6 +160,10 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 	// POST carries no session identity, so fan-out includes the presenter, who
 	// ignores messages for shapes they are presenting.
 	const relay = createPresentRelay()
+	// Fan-out includes the presenter (the POST carries no session identity to
+	// exclude them by) — the presenting client ignores ew-rrweb for shapes it
+	// is itself presenting.
+	const truncatedNotified = new Set<string>()
 
 	const parseEntries = (raw: unknown): RelayEntry[] | null => {
 		if (!Array.isArray(raw)) return null
@@ -171,7 +175,17 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 		return out
 	}
 
-	router.post('/api/canvas/file-viewer/present-events', (req, res) => {
+	function fanOut(roomId: string, room: import('@tldraw/sync-core').TLSocketRoom, message: unknown) {
+		for (const sessions of ctx.sessions.sessionsByUser.get(roomId)?.values() ?? []) {
+			for (const sessionId of sessions) room.sendCustomMessage(sessionId, message)
+		}
+	}
+
+	// A large batch (e.g. a FullSnapshot after a long DOM) can exceed the
+	// app-wide express.json 100kb default — this route gets its own parser
+	// sized to the relay's own 5MB-per-log cap (app.ts skips the default
+	// json() parser for this one path so this is the only body parse it gets).
+	router.post('/api/canvas/file-viewer/present-events', express.json({ limit: '6mb' }), (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? ''))
 		const shapeId = typeof body.shapeId === 'string' ? body.shapeId : ''
@@ -180,13 +194,18 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 		if (!roomId || !shapeId || !presentId || !entries) {
 			return void res.status(400).json({ error: 'room, shapeId, presentId, entries[] required' })
 		}
-		const { truncated } = relay.append(roomId, shapeId, presentId, entries)
 		const room = ctx.rooms.rooms.get(roomId)
-		if (room && !truncated) {
-			const message = { type: 'ew-rrweb', shapeId, presentId, truncated, entries }
-			for (const sessions of ctx.sessions.sessionsByUser.get(roomId)?.values() ?? []) {
-				for (const sessionId of sessions) room.sendCustomMessage(sessionId, message)
-			}
+		if (!room) return void res.status(404).json({ error: 'room not found' })
+
+		const { truncated } = relay.append(roomId, shapeId, presentId, entries)
+		const notifyKey = `${roomId} ${shapeId} ${presentId}`
+		if (!truncated) {
+			fanOut(roomId, room, { type: 'ew-rrweb', shapeId, presentId, truncated, entries })
+		} else if (!truncatedNotified.has(notifyKey)) {
+			// First append to trip the cap: tell connected followers once, with
+			// no entries, so a live mirror can degrade instead of stalling silently.
+			truncatedNotified.add(notifyKey)
+			fanOut(roomId, room, { type: 'ew-rrweb', shapeId, presentId, truncated: true, entries: [] })
 		}
 		res.json({ ok: true, truncated })
 	})

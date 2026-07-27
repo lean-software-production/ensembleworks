@@ -49,6 +49,28 @@ function main() {
 	const overBytes = small.append('r', 's', 'p', [{ seq: 0, event: 'x'.repeat(100) }])
 	assert.deepEqual(overBytes, { accepted: false, truncated: true })
 
+	// idle TTL: a log with no append for idleTtlMs is dropped (lazy sweep,
+	// runs on the next append/backlog call rather than a timer).
+	let clock = 0
+	const ttl = createPresentRelay({ idleTtlMs: 1000, now: () => clock })
+	ttl.append('r', 's', 'p', [{ seq: 0, event: 'a' }])
+	assert.equal(ttl.backlog('r', 's').presentId, 'p')
+	clock = 1001
+	assert.deepEqual(ttl.backlog('r', 's'), { presentId: null, truncated: false, entries: [] }, 'idle log evicted')
+	// A fresh append after eviction starts a clean log.
+	ttl.append('r', 's', 'p2', [{ seq: 0, event: 'b' }])
+	assert.equal(ttl.backlog('r', 's').presentId, 'p2')
+
+	// global cap: bytes are shared across every (room, shape) log — a second
+	// log can trip the cap even though neither log alone would.
+	const capped = createPresentRelay({ maxTotalBytes: 150, maxBytes: 1024 })
+	const first = capped.append('r', 's1', 'p', [{ seq: 0, event: 'x'.repeat(100) }])
+	assert.deepEqual(first, { accepted: true, truncated: false })
+	const second = capped.append('r', 's2', 'p', [{ seq: 0, event: 'y'.repeat(100) }])
+	assert.deepEqual(second, { accepted: false, truncated: true }, 'global cap tripped by second log')
+	assert.equal(capped.backlog('r', 's1').truncated, false, 'first log untouched')
+	assert.equal(capped.backlog('r', 's2').truncated, true)
+
 	console.log('present-relay tests passed')
 }
 
