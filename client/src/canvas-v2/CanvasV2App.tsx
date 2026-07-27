@@ -87,6 +87,14 @@
  * and works from both paths for exactly that reason; the document listener's
  * own containment guard keeps the two paths mutually exclusive (no
  * double-handling). See both functions' doc comments.
+ *
+ * TODO(canvas-v2 locked-shape-affordance): the v1 engine shows a padlock chip
+ * on hovered/selected locked shapes (client/src/chrome/LockedShapeBadge.tsx,
+ * spec docs/superpowers/specs/2026-07-23-locked-shape-affordance-design.md
+ * §8). v2 inherits none of it — it needs both the `selectLockedShapes`
+ * equivalent in its OWN hit-testing (a locked shape excluded from hover can
+ * never surface a badge) and the badge itself, before v2 becomes the live
+ * engine. Without it, v2 reintroduces the silent-dead-shape bug this fixed.
  */
 import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 // Task C6b — the tldraw handwriting/text webfonts (tldraw_draw/_sans/_serif/
