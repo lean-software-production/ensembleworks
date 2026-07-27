@@ -66,7 +66,7 @@ export function LockedShapeBadge() {
 			// Subscribe to pan / zoom — neither the hovered id nor the selection
 			// changes when the camera moves, so without this read the chips would
 			// stay pinned to stale screen coordinates (same trick as
-			// av/leashes.tsx:39).
+			// av/leashes.tsx).
 			editor.getCamera()
 			const ids = badgedLockedShapeIds({
 				hoveredShapeId: editor.getHoveredShapeId(),

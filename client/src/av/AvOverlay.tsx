@@ -41,19 +41,19 @@ export function AvOverlay() {
 	// recording row).
 	const scribeInfos = scribes.map((scribe) => ({ id: scribe.identity, name: scribe.name }))
 
-	// Hovering a panel tile leashes it to its cursor on demand (speakers leash
-	// unconditionally). Both the hovered id and the tile's live DOM element
-	// come from the bridge now — the panel tiles (chrome/PanelTile.tsx) are
-	// the ones registering/hovering; this component only reads them.
+	// Hovering a panel tile leashes it to its cursor on demand — the only thing
+	// that draws a leash now (speaking no longer does; see av/leashes.tsx).
+	// Both the hovered id and the tile's live DOM element come from the bridge
+	// — the panel tiles (chrome/PanelTile.tsx) are the ones
+	// registering/hovering; this component only reads them.
 	const hoveredId = useHoveredFace()
 
-	// Leashes from panel tiles to their teammate's live cursor — drawn only for
-	// the active speaker or the tile you're hovering, and only when that
-	// cursor is on the page you're viewing (useLeashes' own
-	// getCollaboratorsOnCurrentPage() scoping — unchanged — enforces the
-	// "only leash faces on my current page" rule; no page-scoped face list
-	// needs deriving here). Recomputes on camera pans and cursor moves.
-	const leashes = useLeashes(editor, lk.peers, hoveredId, getFaceEl)
+	// The leash from the hovered panel tile to that teammate's live cursor,
+	// drawn only when their cursor is on the page you're viewing (useLeashes'
+	// own getCollaboratorsOnCurrentPage() scoping enforces the "only leash
+	// faces on my current page" rule; no page-scoped face list needs deriving
+	// here). Recomputes on camera pans and cursor moves.
+	const leashes = useLeashes(editor, hoveredId, getFaceEl)
 
 	// Spatial audio loop (the crosstalk level is the fade floor + off-page step).
 	useSpatialGainLoop(editor, lk, crosstalkLevel)
