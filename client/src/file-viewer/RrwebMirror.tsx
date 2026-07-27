@@ -45,7 +45,9 @@ export function RrwebMirror(props: {
 	useEffect(() => {
 		let disposed = false
 		let sawSnapshot = false
-		const buffered: RrwebEntry[] = []
+		let failed = false
+		let currentPresentId: string | null = null
+		let buffered: RrwebEntry[] = []
 
 		const noteMeta = (entry: RrwebEntry) => {
 			const ev = entry.event as { type?: number; data?: { width?: number; height?: number } }
@@ -73,17 +75,38 @@ export function RrwebMirror(props: {
 				replayerRef.current = r
 				requestAnimationFrame(fit)
 			} catch {
+				failed = true
 				onFallbackRef.current()
 			}
 		}
 
-		const apply = (entries: RrwebEntry[]) => {
+		// A new presentId on an already-subscribed shapeId means the presenter
+		// restarted or a different peer took over — tear down and start clean
+		// rather than feed a mismatched stream into the live replayer/buffer.
+		const resetForNewPresentation = (presentId: string) => {
+			replayerRef.current?.destroy()
+			replayerRef.current = null
+			sawSnapshot = false
+			failed = false
+			buffered = []
+			recordedSize.current = null
+			currentPresentId = presentId
+		}
+
+		const apply = (entries: RrwebEntry[], meta: { presentId: string; truncated: boolean }) => {
+			if (currentPresentId === null) {
+				currentPresentId = meta.presentId
+			} else if (meta.presentId !== currentPresentId) {
+				resetForNewPresentation(meta.presentId)
+			}
+			if (failed) return
 			for (const entry of entries) {
 				noteMeta(entry)
 				if (replayerRef.current) {
 					try {
 						replayerRef.current.addEvent(entry.event as any)
 					} catch {
+						failed = true
 						onFallbackRef.current()
 						return
 					}
@@ -94,7 +117,7 @@ export function RrwebMirror(props: {
 			ensureReplayer()
 		}
 
-		const unsub = rrwebFollowStore.subscribe(props.shapeId, (entries) => apply(entries))
+		const unsub = rrwebFollowStore.subscribe(props.shapeId, (entries, meta) => apply(entries, meta))
 
 		// Seed from the backlog (late join / mid-presentation mount).
 		void fetch(
