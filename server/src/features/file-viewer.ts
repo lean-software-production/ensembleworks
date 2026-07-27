@@ -19,6 +19,7 @@ import type { PluginServerContext } from '../kernel/context.ts'
 import { schema } from '../schema.ts'
 import { resolveAttribution } from '../kernel/attribution.ts'
 import { resolveCaller } from '../whoami.ts'
+import { createPresentRelay, type RelayEntry } from '../present-relay.ts'
 
 const AGENT_HOME = () => process.env.ENSEMBLEWORKS_AGENT_HOME ?? os.homedir()
 
@@ -151,6 +152,62 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 		})
 		if (!frameFound) return void res.status(404).json({ error: 'frame not found' })
 		res.json({ ok: true, id: createdId })
+	})
+
+	// ---- rrweb present relay (spec: 2026-07-27-file-viewer-rrweb-broadcast) --
+	// Presenter POSTs event batches; the server logs them (late-joiner backlog)
+	// and fans them out over the existing sync socket as a custom message. The
+	// POST carries no session identity, so fan-out includes the presenter, who
+	// ignores messages for shapes they are presenting.
+	const relay = createPresentRelay()
+
+	const parseEntries = (raw: unknown): RelayEntry[] | null => {
+		if (!Array.isArray(raw)) return null
+		const out: RelayEntry[] = []
+		for (const e of raw) {
+			if (!e || typeof e !== 'object' || typeof (e as any).seq !== 'number' || !('event' in (e as any))) return null
+			out.push({ seq: (e as any).seq, event: (e as any).event })
+		}
+		return out
+	}
+
+	router.post('/api/canvas/file-viewer/present-events', (req, res) => {
+		const body = (req.body ?? {}) as Record<string, unknown>
+		const roomId = sanitizeId(String(body.room ?? ''))
+		const shapeId = typeof body.shapeId === 'string' ? body.shapeId : ''
+		const presentId = typeof body.presentId === 'string' ? body.presentId : ''
+		const entries = parseEntries(body.entries)
+		if (!roomId || !shapeId || !presentId || !entries) {
+			return void res.status(400).json({ error: 'room, shapeId, presentId, entries[] required' })
+		}
+		const { truncated } = relay.append(roomId, shapeId, presentId, entries)
+		const room = ctx.rooms.rooms.get(roomId)
+		if (room && !truncated) {
+			const message = { type: 'ew-rrweb', shapeId, presentId, truncated, entries }
+			for (const sessions of ctx.sessions.sessionsByUser.get(roomId)?.values() ?? []) {
+				for (const sessionId of sessions) room.sendCustomMessage(sessionId, message)
+			}
+		}
+		res.json({ ok: true, truncated })
+	})
+
+	router.get('/api/canvas/file-viewer/present-events', (req, res) => {
+		const roomId = sanitizeId(String(req.query.room ?? ''))
+		const shapeId = typeof req.query.shapeId === 'string' ? req.query.shapeId : ''
+		if (!roomId || !shapeId) return void res.status(400).json({ error: 'room and shapeId required' })
+		res.json(relay.backlog(roomId, shapeId))
+	})
+
+	router.post('/api/canvas/file-viewer/present-stop', (req, res) => {
+		const body = (req.body ?? {}) as Record<string, unknown>
+		const roomId = sanitizeId(String(body.room ?? ''))
+		const shapeId = typeof body.shapeId === 'string' ? body.shapeId : ''
+		const presentId = typeof body.presentId === 'string' ? body.presentId : ''
+		if (!roomId || !shapeId || !presentId) {
+			return void res.status(400).json({ error: 'room, shapeId, presentId required' })
+		}
+		relay.stop(roomId, shapeId, presentId)
+		res.json({ ok: true })
 	})
 
 	return router
