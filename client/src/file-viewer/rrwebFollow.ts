@@ -61,8 +61,18 @@ export const rrwebFollowStore = {
 		const s = stream(msg.shapeId)
 		resetIfNewPresentation(s, msg.presentId)
 		if (msg.truncated) s.truncated = true
-		if (!s.seeded) s.pending.push(...msg.entries)
-		else deliver(s, msg.entries)
+
+		// Auto-seed if incoming entries contain seq 0 (start of this presentation)
+		if (!s.seeded && msg.entries.some((e) => e.seq === 0)) {
+			s.seeded = true
+			const buffered = s.pending
+			s.pending = []
+			deliver(s, [...msg.entries, ...buffered])
+		} else if (!s.seeded) {
+			s.pending.push(...msg.entries)
+		} else {
+			deliver(s, msg.entries)
+		}
 	},
 	seedBacklog(
 		shapeId: string,

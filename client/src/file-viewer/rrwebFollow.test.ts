@@ -42,6 +42,29 @@ function main() {
 	assert.deepEqual(a.got.map((e) => e.seq), [0, 1, 2])
 	rrwebFollowStore.clear('shape:a')
 
+	// Auto-seed on seq 0: ingest batch containing seq 0 with no prior seed → subscriber receives immediately.
+	const c = collect('shape:c')
+	rrwebFollowStore.ingest({ shapeId: 'shape:c', presentId: 'p1', entries: [{ seq: 0, event: 'meta' }, { seq: 1, event: 'snap' }] })
+	assert.deepEqual(c.got.map((e) => e.seq), [0, 1], 'seq 0 should auto-seed and deliver immediately')
+	// Later seedBacklog for the same presentId must not re-deliver duplicates.
+	rrwebFollowStore.seedBacklog('shape:c', {
+		presentId: 'p1',
+		truncated: false,
+		entries: [{ seq: 0, event: 'meta' }, { seq: 1, event: 'snap' }, { seq: 2, event: 'mut' }],
+	})
+	assert.deepEqual(c.got.map((e) => e.seq), [0, 1, 2], 'backlog should only deliver new seq 2, not re-deliver 0,1')
+
+	// Regression: live-at-seq>0 before seed still buffers.
+	const d = collect('shape:d')
+	rrwebFollowStore.ingest({ shapeId: 'shape:d', presentId: 'p1', entries: [{ seq: 5, event: 'late' }] })
+	assert.equal(d.got.length, 0, 'seq>0 without backlog should still buffer')
+	rrwebFollowStore.seedBacklog('shape:d', {
+		presentId: 'p1',
+		truncated: false,
+		entries: [{ seq: 0, event: 'meta' }, { seq: 1, event: 'snap' }, { seq: 5, event: 'late' }],
+	})
+	assert.deepEqual(d.got.map((e) => e.seq), [0, 1, 5], 'buffered entry delivered after backlog')
+
 	console.log('rrwebFollow tests passed')
 }
 
