@@ -191,3 +191,50 @@ test('right-click reaches a locked shape, even after a click-away dismissal', as
 	await page.mouse.click(at.x, at.y, { button: 'right' })
 	await expect(page.locator(MENU), 'locked shape, second right-click').toHaveCount(1)
 })
+
+// Right-clicking an UNSELECTED shape selects it, which used to float the
+// contextual style panel at the same time as the context menu — two overlapping
+// popups from one gesture. The right button should produce exactly one.
+test('right-click opens the context menu only, not the style panel too', async ({ page }) => {
+	const PANEL = '[data-testid="ew-style-panel"]'
+	await boot(page, 'ctxmenu-6')
+	await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		ed.createShapes([
+			{ id: 'shape:p1', type: 'geo', x: 200, y: 250, props: { w: 240, h: 160, fill: 'solid' } },
+		])
+	})
+	const at = await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		const b = ed.getShapePageBounds('shape:p1')
+		const tl = ed.pageToScreen({ x: b.minX, y: b.minY })
+		const br = ed.pageToScreen({ x: b.maxX, y: b.maxY })
+		return { x: (tl.x + br.x) / 2, y: (tl.y + br.y) / 2 }
+	})
+
+	// Nothing selected yet — right-click straight onto the shape.
+	await page.mouse.click(at.x, at.y, { button: 'right' })
+	await expect(page.locator(MENU)).toHaveCount(1)
+	await expect(page.locator(PANEL), 'style panel must not ride along').toHaveCount(0)
+
+	// Right-clicking an ALREADY-selected shape behaves the same way.
+	await page.keyboard.press('Escape')
+	await expect(page.locator(MENU)).toHaveCount(0)
+	await page.mouse.click(at.x, at.y)
+	await expect(page.locator(PANEL), 'left-click selection still shows the panel').toHaveCount(1)
+	await page.mouse.click(at.x, at.y, { button: 'right' })
+	await expect(page.locator(MENU)).toHaveCount(1)
+	await expect(page.locator(PANEL), 'panel yields to the context menu').toHaveCount(0)
+
+	// The panel comes back once the menu closes — but only if the shape is still
+	// selected. Escape is NOT the way to show that: tldraw's select tool clears
+	// the selection on Escape (verified: sel=[] afterwards), so the panel would
+	// correctly stay away. Dismiss by clicking the shape instead, which the menu
+	// overlay swallows, leaving the selection intact.
+	await page.mouse.click(at.x, at.y)
+	await expect(page.locator(MENU)).toHaveCount(0)
+	await expect(page.locator(PANEL), 'panel returns once the menu closes').toHaveCount(1)
+	expect(await page.evaluate(() => (window as any).__ewEditor.getSelectedShapeIds())).toEqual([
+		'shape:p1',
+	])
+})
