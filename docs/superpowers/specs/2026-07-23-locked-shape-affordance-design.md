@@ -107,19 +107,28 @@ Set it via the `options` prop on `<Tldraw>` in `client/src/App.tsx`.
   gates on the same flag). They remain protected from edits, moves and deletes.
 - This is a **net win**: it is what ends the silent-dead-shape problem. A click now
   produces visible feedback instead of nothing.
-- **Move-to-page does relocate a locked shape.** Because a locked shape is now
-  selectable, tldraw's `MoveToPageMenu` is reachable for it, and
+- **Move-to-page can relocate a locked shape — but only via a mixed selection.**
   `Editor.moveShapesToPage` (`@tldraw/editor` 5.1.0, `Editor.ts:7099-7128`) is
   asymmetric: it captures content with `getContentFromCurrentPage` (no lock
   filter), deletes with `deleteShapes` (lock-filtered, so the locked original
   survives), then re-puts with `preserveIds: true`, overwriting the surviving
-  record in place with its new `parentId`. Measured in the browser
-  (`e2e/tests/locked-shape.spec.ts`, "move-to-page relocates a locked shape"):
-  exactly one record, now on the destination page, still locked; no duplicate,
-  and the source page is left empty. This is an upstream tldraw asymmetry that
-  `selectLockedShapes` makes reachable, not a behaviour this branch wrote; it is
-  recoverable (move it back, or unlock it) and no `ContextMenu` override is
-  added here.
+  record in place with its new `parentId`. The lock does not hold.
+
+  **Reachability was measured, not assumed** (an earlier draft of this bullet
+  overstated it). tldraw's `MoveToPageMenu` is gated on
+  `useUnlockedSelectedShapesCount(1)` (`menu-hooks.ts:118`,
+  `menu-items.tsx:449`), which counts only the *unlocked* members of the
+  selection. So:
+    - **Locked shape selected alone → the item is not offered at all**, along
+      with Cut, Delete and Duplicate. Right-clicking a locked shape cannot move
+      it.
+    - **Mixed selection (at least one unlocked shape) → the item is offered**,
+      and the move carries the locked shape along to the destination page.
+
+  Left as a known limitation, deliberately undefended: it is an explicit user
+  action on a selection the user made, tldraw toasts the move, and moving it
+  back restores it. Both cases are pinned in `e2e/tests/locked-shape.spec.ts`,
+  so if a future tldraw lock-filters this path, the tests say so.
 - **The contextual style panel is suppressed for an all-locked selection.**
   Initially this side effect was accepted as-is: the panel floated over a locked
   selection with every control a silent no-op (`setStyleForSelectedShapes` does

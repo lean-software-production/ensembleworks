@@ -283,14 +283,108 @@ test('move-to-page relocates a locked shape (upstream tldraw asymmetry)', async 
 	// surviving record in place with its new parentId. Net effect: exactly one
 	// record, relocated to the destination page, still locked. No duplicate is
 	// left behind and the original page ends up empty.
-	// (Editor.ts:7099-7128. `selectLockedShapes: true` is what makes tldraw's
-	// MoveToPageMenu reachable for a locked shape; the asymmetry is upstream's.)
+	// (Editor.ts:7099-7128 — the asymmetry is upstream's.)
+	//
+	// REACHABILITY, measured rather than assumed — this is narrower than it
+	// looks, and an earlier draft of this comment overstated it. See the two
+	// tests below: the menu item is NOT offered for a locked-only selection, so
+	// you cannot do this by right-clicking a locked shape on its own. It is
+	// reachable through a MIXED selection, where the locked shape travels along
+	// with the unlocked one. This call drives the API directly.
 	expect(observed.exists).toBe(true)
 	expect(observed.shapeRecordCount).toBe(1)
 	expect(observed.parentId).toBe(observed.secondPageId)
 	expect(observed.isLocked).toBe(true)
 	expect(observed.onFirst).toEqual([])
 	expect(observed.onSecond).toEqual(['shape:mv'])
+})
+
+// The UI half of the story above. tldraw's MoveToPageMenu is gated on
+// `useUnlockedSelectedShapesCount(1)` (menu-hooks.ts:118, menu-items.tsx:449),
+// which counts only the UNLOCKED members of the selection — so a locked-only
+// selection is never offered the item, and the destructive verbs (Cut, Delete,
+// Duplicate) are absent for the same reason. This pins that, because it is the
+// reason the asymmetry above is a narrow limitation rather than a live hole.
+test('a locked-only selection is not offered Move to page (nor Cut/Delete/Duplicate)', async ({
+	page,
+}) => {
+	await boot(page, 'lockbadge-8')
+	await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		ed.createPage({ name: 'elsewhere' })
+		ed.createShapes([
+			{ id: 'shape:only', type: 'geo', x: 200, y: 250, props: { w: 240, h: 160, fill: 'solid' } },
+		])
+		ed.updateShape({ id: 'shape:only', type: 'geo', isLocked: true })
+	})
+	const at = await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		const b = ed.getShapePageBounds('shape:only')
+		const tl = ed.pageToScreen({ x: b.minX, y: b.minY })
+		const br = ed.pageToScreen({ x: b.maxX, y: b.maxY })
+		return { x: (tl.x + br.x) / 2, y: (tl.y + br.y) / 2 }
+	})
+
+	await page.mouse.click(at.x, at.y, { button: 'right' })
+	const menu = page.locator('[data-testid="context-menu"]')
+	await expect(menu).toHaveCount(1)
+	await expect(menu.locator('[data-testid="context-menu-sub.move-to-page-button"]')).toHaveCount(0)
+	await expect(menu.locator('[data-testid="context-menu.cut"]')).toHaveCount(0)
+	await expect(menu.locator('[data-testid="context-menu.delete"]')).toHaveCount(0)
+	await expect(menu.locator('[data-testid="context-menu.duplicate"]')).toHaveCount(0)
+})
+
+// The one path that DOES reach it: one unlocked shape in the selection is
+// enough to satisfy the gate, and the move then carries the locked shape along.
+// Documented in the spec as a known limitation, deliberately not defended in
+// code — it is an explicit user action, tldraw toasts the move, and moving it
+// back restores it.
+test('a mixed selection IS offered Move to page, and the locked shape travels with it', async ({
+	page,
+}) => {
+	await boot(page, 'lockbadge-9')
+	const secondPageId = await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		const firstPageId = ed.getCurrentPageId()
+		ed.createPage({ name: 'elsewhere' })
+		const second = ed.getPages().find((p: any) => p.id !== firstPageId)
+		ed.setCurrentPage(firstPageId)
+		ed.createShapes([
+			{ id: 'shape:mlk', type: 'geo', x: 200, y: 250, props: { w: 200, h: 150, fill: 'solid' } },
+			{ id: 'shape:mun', type: 'geo', x: 460, y: 250, props: { w: 200, h: 150, fill: 'solid' } },
+		])
+		ed.updateShape({ id: 'shape:mlk', type: 'geo', isLocked: true })
+		ed.setSelectedShapes(['shape:mlk', 'shape:mun'])
+		return second.id
+	})
+
+	// The gate passes because one member is unlocked.
+	const at = await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		const b = ed.getShapePageBounds('shape:mun')
+		const tl = ed.pageToScreen({ x: b.minX, y: b.minY })
+		const br = ed.pageToScreen({ x: b.maxX, y: b.maxY })
+		return { x: (tl.x + br.x) / 2, y: (tl.y + br.y) / 2 }
+	})
+	await page.mouse.click(at.x, at.y, { button: 'right' })
+	const menu = page.locator('[data-testid="context-menu"]')
+	await expect(menu).toHaveCount(1)
+	await expect(menu.locator('[data-testid="context-menu-sub.move-to-page-button"]')).toHaveCount(1)
+	await page.keyboard.press('Escape')
+
+	const after = await page.evaluate((pid) => {
+		const ed = (window as any).__ewEditor
+		ed.setSelectedShapes(['shape:mlk', 'shape:mun'])
+		ed.moveShapesToPage(ed.getSelectedShapeIds(), pid)
+		const locked = ed.store.get('shape:mlk')
+		return { parentId: locked?.parentId ?? null, isLocked: locked?.isLocked ?? null }
+	}, secondPageId)
+
+	// The locked shape moved. Recorded as a known limitation, not a defect fixed
+	// here — if a future tldraw lock-filters moveShapesToPage, this flips and
+	// this expectation is what will tell us.
+	expect(after.parentId).toBe(secondPageId)
+	expect(after.isLocked).toBe(true)
 })
 
 test('regression: selectLockedShapes did NOT make locked shapes editable, movable or deletable', async ({ page }) => {
