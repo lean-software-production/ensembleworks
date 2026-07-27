@@ -11,6 +11,7 @@ import { CommandBar } from './chrome/CommandBar'
 import { ContextualStylePanel } from './chrome/ContextualStylePanel'
 import { FocusOverlay } from './chrome/FocusOverlay'
 import { LockedShapeBadge } from './chrome/LockedShapeBadge'
+import { ResilientContextMenu } from './chrome/ResilientContextMenu'
 import { collectUiSlots } from './kernel/plugin'
 import { plugins } from './plugins'
 
@@ -46,6 +47,12 @@ function InFrontOfTheCanvas() {
 
 export const components: TLComponents = {
 	Toolbar: CommandBar,
+	// Workaround for a tldraw 5.1.0 desync that killed the context menu for the
+	// rest of the session after one click-away dismissal — see the file's header.
+	// Workaround for a tldraw 5.1.0 desync that killed the context menu for the
+	// rest of the session after one click-away dismissal — see the file's header.
+	ContextMenu: ResilientContextMenu,
+
 	StylePanel: null,
 	MenuPanel: null,
 	NavigationPanel: null,

@@ -100,3 +100,94 @@ test('middle-drag still pans the camera', async ({ page }) => {
 		)
 		.not.toEqual(before)
 })
+
+
+// The desync bug: dismissing the menu by clicking away used to kill it for the
+// REST OF THE SESSION — right-click never opened it again, on any shape, until
+// a page refresh. Dismissing with Escape left it working, which is what made the
+// bug look intermittent rather than sticky.
+//
+// Cause (tldraw 5.1.0): the menu has two sources of truth. Radix owns the Root's
+// open state; tldraw gates the content on its own `tlmenus` registry. A left
+// click while the menu is open makes MenuClickCapture call
+// `editor.menus.clearOpenMenus()` directly (MenuClickCapture.tsx:102), emptying
+// the registry without telling Radix — so Radix stays `open`, every later
+// right-click is a no-op `setOpen(true)`, `onOpenChange` never fires, and the
+// registry is never repopulated. `client/src/chrome/ResilientContextMenu.tsx`
+// remounts the Root on each close so the two can never drift.
+test('the context menu survives being dismissed by clicking away', async ({ page }) => {
+	await boot(page, 'ctxmenu-4')
+	await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		ed.createShapes([
+			{ id: 'shape:m1', type: 'geo', x: 150, y: 200, props: { w: 200, h: 150, fill: 'solid' } },
+			{ id: 'shape:m2', type: 'geo', x: 450, y: 200, props: { w: 200, h: 150, fill: 'solid' } },
+		])
+	})
+	const at = (id: string) =>
+		page.evaluate((sid) => {
+			const ed = (window as any).__ewEditor
+			const b = ed.getShapePageBounds(sid)
+			const tl = ed.pageToScreen({ x: b.minX, y: b.minY })
+			const br = ed.pageToScreen({ x: b.maxX, y: b.maxY })
+			return { x: (tl.x + br.x) / 2, y: (tl.y + br.y) / 2 }
+		}, id)
+	const A = await at('shape:m1')
+	const B = await at('shape:m2')
+
+	// Open it, then dismiss by clicking empty canvas — the poisoning step.
+	await page.mouse.click(A.x, A.y)
+	await page.mouse.click(A.x, A.y, { button: 'right' })
+	await expect(page.locator(MENU)).toHaveCount(1)
+	await page.mouse.click(80, 620)
+	await expect(page.locator(MENU)).toHaveCount(0)
+
+	// A different shape must still open it.
+	await page.mouse.click(B.x, B.y)
+	await page.mouse.click(B.x, B.y, { button: 'right' })
+	await expect(page.locator(MENU), 'right-click after a click-away dismissal').toHaveCount(1)
+
+	// And so must the original shape.
+	await page.mouse.click(80, 620)
+	await page.mouse.click(A.x, A.y)
+	await page.mouse.click(A.x, A.y, { button: 'right' })
+	await expect(page.locator(MENU), 'the same shape again').toHaveCount(1)
+
+	// Repeated click-away dismissals must not degrade it either.
+	for (let i = 0; i < 3; i++) {
+		await page.mouse.click(80, 620)
+		await expect(page.locator(MENU)).toHaveCount(0)
+		await page.mouse.click(B.x, B.y, { button: 'right' })
+		await expect(page.locator(MENU), `click-away cycle ${i + 1}`).toHaveCount(1)
+	}
+})
+
+// Right-click → Unlock is the escape hatch the locked-shape design depends on
+// (spec §6 argues the padlock badge should NOT be a control precisely because
+// this path exists). It has to work on a locked shape, after a click-away.
+test('right-click reaches a locked shape, even after a click-away dismissal', async ({ page }) => {
+	await boot(page, 'ctxmenu-5')
+	await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		ed.createShapes([
+			{ id: 'shape:lk1', type: 'geo', x: 200, y: 200, props: { w: 240, h: 160, fill: 'solid' } },
+		])
+		ed.updateShape({ id: 'shape:lk1', type: 'geo', isLocked: true })
+	})
+	const at = await page.evaluate(() => {
+		const ed = (window as any).__ewEditor
+		const b = ed.getShapePageBounds('shape:lk1')
+		const tl = ed.pageToScreen({ x: b.minX, y: b.minY })
+		const br = ed.pageToScreen({ x: b.maxX, y: b.maxY })
+		return { x: (tl.x + br.x) / 2, y: (tl.y + br.y) / 2 }
+	})
+
+	await page.mouse.click(at.x, at.y, { button: 'right' })
+	await expect(page.locator(MENU)).toHaveCount(1)
+	await page.mouse.click(80, 620)
+	await expect(page.locator(MENU)).toHaveCount(0)
+
+	// The second time is the one that used to fail.
+	await page.mouse.click(at.x, at.y, { button: 'right' })
+	await expect(page.locator(MENU), 'locked shape, second right-click').toHaveCount(1)
+})
