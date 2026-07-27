@@ -65,6 +65,30 @@ function main() {
 	})
 	assert.deepEqual(d.got.map((e) => e.seq), [0, 1, 5], 'buffered entry delivered after backlog')
 
+	// Truncation notification: the server's final message carries no entries
+	// (overflow degrade) — subscribers must still be told, once, so a live
+	// mirror can fall back instead of stalling silently forever.
+	const e = collect('shape:e')
+	rrwebFollowStore.seedBacklog('shape:e', {
+		presentId: 'p1',
+		truncated: false,
+		entries: [{ seq: 0, event: 'meta' }, { seq: 1, event: 'snap' }],
+	})
+	const metas: { presentId: string; truncated: boolean }[] = []
+	const unsub2 = rrwebFollowStore.subscribe('shape:e', (_entries, meta) => metas.push(meta))
+	rrwebFollowStore.ingest({ shapeId: 'shape:e', presentId: 'p1', truncated: true, entries: [] })
+	assert.equal(e.got.length, 2, 'no new entries delivered by the truncation message')
+	assert.ok(
+		metas.some((m) => m.truncated === true),
+		'subscriber notified of truncation despite empty entries'
+	)
+	// Repeat truncated messages after the first must not re-notify.
+	const notifyCountBefore = metas.length
+	rrwebFollowStore.ingest({ shapeId: 'shape:e', presentId: 'p1', truncated: true, entries: [] })
+	assert.equal(metas.length, notifyCountBefore, 'truncation notified once, not on every subsequent message')
+	unsub2()
+	e.unsub()
+
 	console.log('rrwebFollow tests passed')
 }
 

@@ -31,7 +31,8 @@ function stream(shapeId: string): Stream {
 	return s
 }
 
-function deliver(s: Stream, entries: RrwebEntry[]) {
+/** Returns true iff it actually notified subscribers (non-empty, fresh entries). */
+function deliver(s: Stream, entries: RrwebEntry[]): boolean {
 	// Deduplicate by seq, keeping the first occurrence
 	const seenSeqs = new Set<number>()
 	const deduped = entries.filter((e) => {
@@ -41,10 +42,11 @@ function deliver(s: Stream, entries: RrwebEntry[]) {
 	})
 
 	const fresh = deduped.filter((e) => e.seq > s.lastDelivered).sort((x, y) => x.seq - y.seq)
-	if (!fresh.length) return
+	if (!fresh.length) return false
 	s.lastDelivered = fresh[fresh.length - 1].seq
 	const meta: Meta = { presentId: s.presentId ?? '', truncated: s.truncated }
 	for (const sub of s.subs) sub(fresh, meta)
+	return true
 }
 
 function resetIfNewPresentation(s: Stream, presentId: string) {
@@ -60,18 +62,28 @@ export const rrwebFollowStore = {
 	ingest(msg: { shapeId: string; presentId: string; truncated?: boolean; entries: RrwebEntry[] }): void {
 		const s = stream(msg.shapeId)
 		resetIfNewPresentation(s, msg.presentId)
+		const wasTruncated = s.truncated
 		if (msg.truncated) s.truncated = true
 
+		let delivered = false
 		// Auto-seed if incoming entries contain seq 0 (start of this presentation)
 		if (!s.seeded && msg.entries.some((e) => e.seq === 0)) {
 			s.seeded = true
 			const buffered = s.pending
 			s.pending = []
-			deliver(s, [...msg.entries, ...buffered])
+			delivered = deliver(s, [...msg.entries, ...buffered])
 		} else if (!s.seeded) {
 			s.pending.push(...msg.entries)
 		} else {
-			deliver(s, msg.entries)
+			delivered = deliver(s, msg.entries)
+		}
+
+		// The server sends a final truncation message with no entries (overflow
+		// degrade) — make sure subscribers hear about it even though deliver()
+		// has nothing fresh to hand them.
+		if (msg.truncated && !wasTruncated && !delivered) {
+			const meta: Meta = { presentId: s.presentId ?? '', truncated: true }
+			for (const sub of s.subs) sub([], meta)
 		}
 	},
 	seedBacklog(

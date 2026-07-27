@@ -6,7 +6,7 @@
  * present) and goes quiet. Clock/fetch/interval are injectable for tests.
  */
 
-type PostJson = (url: string, body: unknown) => Promise<{ ok: boolean }>
+type PostJson = (url: string, body: unknown) => Promise<{ ok: boolean; truncated?: boolean }>
 
 const defaultPostJson: PostJson = async (url, body) => {
 	const res = await fetch(url, {
@@ -15,7 +15,14 @@ const defaultPostJson: PostJson = async (url, body) => {
 		body: JSON.stringify(body),
 	})
 	if (!res.ok) throw new Error(`POST ${url} → ${res.status}`)
-	return { ok: true }
+	let truncated = false
+	try {
+		const json = (await res.json()) as { truncated?: boolean } | null
+		truncated = Boolean(json?.truncated)
+	} catch {
+		// present-stop's response (and any other) may carry no body worth parsing.
+	}
+	return { ok: true, truncated }
 }
 
 export function createPresentBroadcaster(opts: {
@@ -52,13 +59,20 @@ export function createPresentBroadcaster(opts: {
 			try {
 				sent = queue
 				queue = []
-				await postJson('/api/canvas/file-viewer/present-events', {
+				const result = await postJson('/api/canvas/file-viewer/present-events', {
 					room: opts.roomId,
 					shapeId: opts.shapeId,
 					presentId: opts.presentId,
 					entries: sent,
 				})
 				firstFailureAt = null
+				// Server-side overflow/truncation: same degrade path as sustained
+				// failure — stop posting and let the shape revert to scroll-fraction.
+				if (result.truncated && !degraded) {
+					degraded = true
+					clearIntervalFn(timer)
+					opts.onDegrade?.()
+				}
 			} catch {
 				// Keep the queue (retry next tick); degrade after sustained failure.
 				queue = [...sent, ...queue]

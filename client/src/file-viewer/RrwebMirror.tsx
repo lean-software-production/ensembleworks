@@ -112,6 +112,18 @@ export function RrwebMirror(props: {
 			} else if (meta.presentId !== currentPresentId) {
 				resetForNewPresentation(meta.presentId)
 			}
+			// Overflow/truncation degrade: the stream is dead for this
+			// presentation — drop the replayer and let the caller fall back to
+			// scroll-fraction following, whether or not it had already started.
+			if (meta.truncated) {
+				if (!failed) {
+					failed = true
+					replayerRef.current?.destroy()
+					replayerRef.current = null
+					onFallbackRef.current()
+				}
+				return
+			}
 			if (failed) return
 			for (const entry of entries) {
 				noteMeta(entry)

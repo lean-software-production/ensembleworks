@@ -141,4 +141,33 @@ assert.deepEqual(secondFlushSeqs, [1], 'event 1 sent in second flush after stop 
 // Assert: present-stop is final POST
 assert.equal(deferredPosts[deferredPosts.length - 1].url, '/api/canvas/file-viewer/present-stop', 'present-stop is final')
 
+// Server-side truncation: a `truncated: true` response degrades exactly like
+// sustained failure — stop posting, fire onDegrade once, go quiet.
+let degradedTruncated = 0
+const truncPosts: any[] = []
+let tick5: () => Promise<void> = async () => {}
+const b5 = createPresentBroadcaster({
+	roomId: 'r1',
+	shapeId: 'shape:e',
+	presentId: 'p5',
+	onDegrade: () => degradedTruncated++,
+	postJson: async (url, body) => {
+		truncPosts.push({ url, body })
+		return { ok: true, truncated: true }
+	},
+	setIntervalFn: ((fn: () => void) => {
+		tick5 = async () => fn()
+		return 1 as any
+	}) as any,
+	clearIntervalFn: (() => {}) as any,
+})
+b5.push({ type: 4 })
+await tick5()
+assert.equal(degradedTruncated, 1, 'degrades on first truncated response')
+assert.equal(truncPosts.length, 1, 'stopped posting after truncation')
+// Further pushes are dropped once degraded (mirrors the sustained-failure path).
+b5.push({ type: 5 })
+await tick5()
+assert.equal(truncPosts.length, 1, 'no further POSTs once degraded by truncation')
+
 process.stdout.write('presentBroadcast tests passed\n')
