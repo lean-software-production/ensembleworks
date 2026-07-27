@@ -251,7 +251,18 @@ export function App() {
 					// marquee-selectable. They stay protected from edits, moves and
 					// deletes — and a click now produces visible feedback instead of
 					// absolutely nothing, which is the whole point.
-					options={{ selectLockedShapes: true }}
+					// rightClickPanning: false — the context menu was only opening
+					// "sometimes". tldraw defaults it to true, which makes
+					// right-button-drag pan the camera and fires the context menu
+					// only when the gesture did NOT become a pan
+					// (@tldraw/editor useCanvasEvents.ts:65-66). The pan engages
+					// after dragDistanceSquared = 16, i.e. FOUR pixels
+					// (options.ts:298) — measured: 4px of drift between press and
+					// release still opens the menu, 5px opens nothing at all. A
+					// hand twitch clears that, so the menu felt random. False
+					// opens it on press instead. Panning is untouched: space+drag
+					// and middle-drag both still pan (e2e/tests/context-menu.spec.ts).
+					options={{ selectLockedShapes: true, rightClickPanning: false }}
 				>
 					{plugins.map((plugin) => {
 						const Overlay = plugin.Overlay
