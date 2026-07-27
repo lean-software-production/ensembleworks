@@ -28,7 +28,7 @@ import { useAvSnapshot } from './av/bridge'
 import { avOverlayUtils } from './av/FadedCursorOverlay'
 import { CanvasBlockerModal } from './canvas-health/CanvasBlockerModal'
 import { useCanvasAvailability } from './canvas-health/useCanvasAvailability'
-import { getFrameId, getIdentity, getRoomId } from './identity'
+import { getFrameId, getRoomId, identityOnce, type Identity } from './identity'
 import { collectIcons, collectShapeUtils } from './kernel/plugin'
 import { installPinchGuard } from './kernel/pinchGuard'
 import { attachRoomHooks } from './kernel/roomHooks'
@@ -47,7 +47,10 @@ const assetUrls = { icons: collectIcons(plugins) }
 // everyone gets re-seeded once onto paper.
 const COLOR_SCHEME_SEEDED_KEY = 'ensembleworks.colorSchemeSeeded.v2'
 
-const identity = getIdentity()
+// NOT read at module scope: main.tsx awaits the /api/whoami name seed before
+// rendering, and a module-scope read here would run at import time — i.e.
+// before that await — and prompt for a name the seed was about to supply.
+// identityOnce() memoises, so every reader still sees one identity per load.
 const roomId = getRoomId()
 
 // One reactive shape-record query per store, cached so getUserPresence
@@ -59,12 +62,19 @@ let shapeQuery: { get: () => unknown[] } | null = null
 let shapeQueryStore: unknown = null
 
 // Keep tldraw presence, the sync connection and LiveKit on one stable ID.
-setUserPreferences({
-	...getUserPreferences(),
-	id: identity.id,
-	name: identity.name,
-	color: hexForColor(identity.colorKey, false),
-})
+// Once per load, at first render rather than at module eval (see roomId above);
+// idempotent, so a second call would be harmless anyway.
+let preferencesApplied = false
+function applyIdentityPreferences(identity: Identity): void {
+	if (preferencesApplied) return
+	preferencesApplied = true
+	setUserPreferences({
+		...getUserPreferences(),
+		id: identity.id,
+		name: identity.name,
+		color: hexForColor(identity.colorKey, false),
+	})
+}
 
 function wsBase(): string {
 	const proto = location.protocol === 'https:' ? 'wss' : 'ws'
@@ -72,6 +82,8 @@ function wsBase(): string {
 }
 
 export function App() {
+	const identity = identityOnce()
+	applyIdentityPreferences(identity)
 	const [wasKicked, setWasKicked] = useState(false)
 	const [editor, setEditor] = useState<Editor | null>(null)
 	const store = useSync({
