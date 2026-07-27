@@ -66,6 +66,19 @@ where the future is. The two planes stay separate code paths.
 - Accepted consequence, stated plainly: **the legacy main gateway keeps the
   fan-in bug (input injection with 2+ viewers) until it is retired.** This
   includes the `team` room, which is pinned to the legacy plane.
+  - **CHANGE NOTE (2026-07-27):** partially stale. `main` independently
+    landed `server/src/terminal-input-filter.ts` (merged into this branch),
+    an input-side filter on the legacy gateway — the field report's
+    Approach B: strip browser-generated DA1/DA2/DA3/DSR/DECRPM/XTVERSION/
+    kitty replies from `{type:'input'}` frames before the PTY; OSC 10/11
+    colour replies deliberately pass through (stripping them caused the
+    measured opencode dark-on-white regression, and their surplus copies are
+    consumed whole by readline, so they're harmless). Legacy prompt garbage
+    is therefore mitigated, with that file's stated accepted limitations
+    (split-frame replies can slip through; DECRPM probes get silence and
+    apps fall back). The connector plane's scrub-and-answer architecture in
+    this spec remains the full fix and is unchanged by it; the two planes
+    still share no code.
 - Client suppression backstop registers only for connector-backed terminals
   (`shape.props.gateway` set) — in **both** terminal components
   (`client/src/terminal/TerminalShapeUtil.tsx`,
