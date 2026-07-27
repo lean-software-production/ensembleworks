@@ -101,6 +101,15 @@ function identityForActor(actor: Actor) {
 // Resolve an anchor to a viewport-relative SCREEN point.
 async function resolveAnchor(page: Page, box: { x: number; y: number }, a: Anchor): Promise<{ x: number; y: number }> {
   if (a.ref === 'point') return { x: box.x + a.x, y: box.y + a.y }
+  if (a.ref === 'element') {
+    // Task P3's 'element' anchor — a rendered CONTROL (e.g. a style-panel
+    // swatch) that has no seeded shape id. Mirrors the 'shape' anchor's
+    // centre + SCREEN-space-offset resolution below, just via a CSS
+    // selector's bounding box instead of a `[data-shape-id]` lookup.
+    const rect = await page.locator(a.selector).boundingBox()
+    if (!rect) throw new Error(`element anchor ${JSON.stringify(a.selector)} has no bounding box`)
+    return { x: rect.x + rect.width / 2 + (a.dx ?? 0), y: rect.y + rect.height / 2 + (a.dy ?? 0) }
+  }
   const rect = await page.locator(`[data-shape-id="${a.id}"][data-shape-kind]`).boundingBox()
   if (!rect) throw new Error(`shape anchor ${a.id} has no bounding box`)
   return { x: rect.x + rect.width / 2 + (a.dx ?? 0), y: rect.y + rect.height / 2 + (a.dy ?? 0) }
@@ -148,12 +157,136 @@ async function sampleTextSelectionSpans(page: Page): Promise<number> {
 // pageObs's own doc comment), so every id it might ask about must already be
 // pre-sampled before `check` runs, exactly like `editingShape`/
 // `textSelectionSpans` are today.
+// Task AS4's Obs.selectedShapeIds() doc comment (interaction-contracts/src/
+// types.ts) names this exact mechanism for the browser adapter: read
+// `window.__ew.editor.get().selection` (a Set<string> at fsm level, per
+// editor.ts) and spread it into a plain array — same pre-sample-then-read-
+// synchronously shape as every other Obs field here. Needed because a
+// created shape's id is minted from crypto-random (create.ts's `makeId`) and
+// this runner cannot predict it; the contract discovers it via the create
+// tool's auto-selection instead.
+async function sampleSelection(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() => {
+    const ew = (window as any).__ew
+    return [...ew.editor.get().selection]
+  })
+}
+
+// Task H1's Obs.shapeCount() doc comment (interaction-contracts/src/types.ts)
+// names this exact mechanism for the browser adapter: read
+// `window.__ew.doc.listShapes().length` — the browser-side twin of the FSM
+// adapter's `editor.doc.listShapes().length`. Needed so K1-K3's copy/paste
+// contracts can assert "N shapes now exist" (duplicate/paste) or "still N"
+// (a rejected malformed paste never mutates the doc).
+async function sampleShapeCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const ew = (window as any).__ew
+    return ew.doc.listShapes().length
+  })
+}
+
+// Task H1's Obs.paintOrder() doc comment (interaction-contracts/src/types.ts)
+// names this exact mechanism for the browser adapter: read DOM document
+// order of `[data-shape-id][data-shape-kind]` elements — that IS paint
+// order, since ShapeBody paints flat, absolutely-positioned siblings in DOM
+// order (the `[data-shape-kind]` qualifier excludes the arrow overlay `<g>`,
+// which carries `data-shape-id` but no `data-shape-kind`).
+async function samplePaintOrder(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() => {
+    return [...document.querySelectorAll('[data-shape-id][data-shape-kind]')].map((el) => el.getAttribute('data-shape-id')!)
+  })
+}
+
+// Task H's Obs.shapeKind(id) doc comment (interaction-contracts/src/types.ts)
+// names this exact mechanism for the browser adapter: pre-sample each
+// candidate shape's `kind` off the live doc (window.__ew.doc.getShape),
+// mirroring sampleShapeStyles' pre-sample-then-read-synchronously shape
+// exactly. Sampled for the UNION of seeded scene ids and the current
+// selection (see sampleActor below) — same reason shapeStyle unions
+// selection into styleIds: a gesture-created shape's id is minted from
+// crypto-random and only discoverable via `selectedShapeIds()`.
+async function sampleShapeKinds(page: Page, shapeIds: readonly string[]): Promise<Readonly<Record<string, string | null>>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const ew = (window as any).__ew
+    const out: Record<string, string | null> = {}
+    for (const id of ids) {
+      const shape = ew.doc.getShape(id)
+      out[id] = shape ? shape.kind : null
+    }
+    return out
+  }, shapeIds)
+}
+
+// Task K's Obs.assetSrc(id) doc comment (interaction-contracts/src/types.ts)
+// names this exact mechanism for the browser adapter: pre-sample each
+// candidate shape's resolved `assetId -> asset.props.src` off the live doc
+// (window.__ew.doc.getShape/getAsset), mirroring sampleShapeKinds' pre-
+// sample-then-read-synchronously shape exactly (same union-of-scene-ids-
+// and-selection call site — a drop-created image shape's id is minted from
+// crypto-random and only discoverable via `selectedShapeIds()`).
+async function sampleAssetSrcs(page: Page, shapeIds: readonly string[]): Promise<Readonly<Record<string, string | null>>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const ew = (window as any).__ew
+    const out: Record<string, string | null> = {}
+    for (const id of ids) {
+      const shape = ew.doc.getShape(id)
+      const assetId = shape ? shape.props?.assetId : undefined
+      if (typeof assetId !== 'string') { out[id] = null; continue }
+      const asset = ew.doc.getAsset(assetId)
+      const src = asset ? asset.props?.src : undefined
+      out[id] = typeof src === 'string' ? src : null
+    }
+    return out
+  }, shapeIds)
+}
+
+// Task H1's Obs.pageCount() doc comment (interaction-contracts/src/types.ts)
+// names this exact mechanism for the browser adapter: read
+// `window.__ew.doc.listPages().length` — the browser-side twin of the FSM
+// adapter's `editor.doc.listPages().length`. Needed so Z1's switching-page
+// contract can assert "a page was created" at the model level, independent
+// of the paintOrder() assertion that proves the render FILTER.
+async function samplePageCount(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const ew = (window as any).__ew
+    return ew.doc.listPages().length
+  })
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
     const out: Record<string, boolean> = {}
     for (const id of ids) {
       out[id] = document.querySelector(`[data-overlay="editing"][data-editing-shape-id="${id}"]`) !== null
+    }
+    return out
+  }, shapeIds)
+}
+
+// Task P3's Obs.shapeStyle(id, key) doc comment (interaction-contracts/src/
+// types.ts) names this exact mechanism for the browser adapter: pre-sample
+// each scene shape's FULL props object + envelope opacity off the live doc
+// (window.__ew.doc.getShape, same read `seedScene` above uses to write),
+// then answer `shapeStyle(id, key)` synchronously from that snapshot —
+// mirrors editingIndicators' pre-sample-then-read-synchronously shape
+// exactly. Sampling the whole props object (not just a fixed axis list)
+// means this adapter never needs to know the style-axis vocabulary itself —
+// it stays generic over whatever key a contract's `check` asks for, exactly
+// like the FSM adapter's `shape.props[key]` read.
+async function sampleShapeStyles(
+  page: Page,
+  shapeIds: readonly string[],
+): Promise<Readonly<Record<string, { readonly opacity: number; readonly props: Readonly<Record<string, unknown>> } | null>>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const ew = (window as any).__ew
+    const out: Record<string, { opacity: number; props: Record<string, unknown> } | null> = {}
+    for (const id of ids) {
+      const shape = ew.doc.getShape(id)
+      out[id] = shape ? { opacity: shape.opacity, props: shape.props } : null
     }
     return out
   }, shapeIds)
@@ -166,20 +299,51 @@ interface ActorSample {
   readonly spans: number
   readonly editingShape: string | null
   readonly editingIndicators: Readonly<Record<string, boolean>>
+  readonly styles: Readonly<Record<string, { readonly opacity: number; readonly props: Readonly<Record<string, unknown>> } | null>>
+  readonly selection: readonly string[]
+  readonly shapeCount: number
+  readonly paintOrder: readonly string[]
+  readonly kinds: Readonly<Record<string, string | null>>
+  readonly assetSrcs: Readonly<Record<string, string | null>>
+  readonly pageCount: number
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
  * actor's page: settles a render frame first (the same RENDER-SETTLING gate
  * `nextFrame` always was, just now scoped per actor instead of the single
  * caller-supplied `page`), then reads text selection spans, the locally-
- * mounted text editor's shape id, and (Pilot 5) which of the scene's shapes
- * show a peer-editing indicator on THIS actor's own screen. */
+ * mounted text editor's shape id, (Pilot 5) which of the scene's shapes show
+ * a peer-editing indicator on THIS actor's own screen, each scene shape's
+ * stored style, and (Task AS4) the current editor selection. */
 async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promise<ActorSample> {
   await nextFrame(page)
   const spans = await sampleTextSelectionSpans(page)
   const editingShape = await sampleEditingShape(page)
   const editingIndicators = await samplePeerEditingIndicators(page, sceneShapeIds)
-  return { spans, editingShape, editingIndicators }
+  const selection = await sampleSelection(page)
+  // Task AS4: `shapeStyle` must also answer for a shape `check` discovers
+  // via `selectedShapeIds()` — e.g. armed-style-applies-to-created-shape's
+  // newly-created shape, which was never in `contract.scene()` (seeded
+  // scene shapes have known ids up front; a GESTURE-created shape's id is
+  // minted from crypto-random and only exists once the gesture runs, so it
+  // can only be discovered through the selection it auto-lands in). Sample
+  // styles for the UNION of seeded scene ids and the current selection, not
+  // just the former, or `shapeStyle(createdId, ...)` would silently read as
+  // "shape absent" (null) regardless of the shape's real stored props.
+  const styleIds = [...new Set([...sceneShapeIds, ...selection])]
+  const styles = await sampleShapeStyles(page, styleIds)
+  const shapeCount = await sampleShapeCount(page)
+  const paintOrder = await samplePaintOrder(page)
+  // Task H: same union rationale as styleIds above — a gesture-created
+  // shape's id (e.g. the pen tool's freshly-drawn stroke) is only
+  // discoverable via `selection`, never present in the seeded `sceneShapeIds`.
+  const kinds = await sampleShapeKinds(page, styleIds)
+  // Task K: same union rationale as kinds/styleIds above — a drop-created
+  // image shape's id is only discoverable via `selection`, never present in
+  // the seeded `sceneShapeIds`.
+  const assetSrcs = await sampleAssetSrcs(page, styleIds)
+  const pageCount = await samplePageCount(page)
+  return { spans, editingShape, editingIndicators, styles, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -216,6 +380,19 @@ function pageObs(
     editingShape: () => sample.editingShape,
     on: (a: Actor) => obsFor(a),
     peerEditingIndicator: (shapeId: string) => sample.editingIndicators[shapeId] ?? false,
+    shapeStyle: (id: string, key: string) => {
+      const shape = sample.styles[id]
+      if (!shape) return null
+      if (key === 'opacity') return shape.opacity
+      const raw = shape.props[key]
+      return typeof raw === 'string' || typeof raw === 'number' ? raw : null
+    },
+    selectedShapeIds: () => sample.selection,
+    shapeCount: () => sample.shapeCount,
+    paintOrder: () => sample.paintOrder,
+    shapeKind: (id: string) => sample.kinds[id] ?? null,
+    assetSrc: (id: string) => sample.assetSrcs[id] ?? null,
+    pageCount: () => sample.pageCount,
   }
 }
 
@@ -292,7 +469,18 @@ export async function runContractBrowser(page: Page, contract: Contract, browser
   const sceneShapes = contract.scene?.() ?? []
   const sceneShapeIds = sceneShapes.map((s) => s.id)
 
-  const ops: readonly GestureOp[] = contract.gesture(mulberry32(BROWSER_SEED))
+  // Task H1: a single seeded rng stream feeds BOTH `contract.clipboard` (if
+  // present) and `contract.gesture` below — same "deterministic per seed"
+  // contract every other declaration gets, just shared across the two calls
+  // instead of each minting its own mulberry32(BROWSER_SEED). Clipboard is
+  // seeded BEFORE the gesture runs (K3's malformed-clipboard contract needs
+  // the hostile payload sitting in the clipboard before Ctrl+V fires).
+  const rng = mulberry32(BROWSER_SEED)
+  if (contract.clipboard) {
+    const payload = contract.clipboard(rng)
+    await page.evaluate((text) => navigator.clipboard.writeText(text), payload)
+  }
+  const ops: readonly GestureOp[] = contract.gesture(rng)
   const actors = new Set<Actor>(ops.map((op) => op.actor ?? 'A'))
   actors.add('A')
   // An OBSERVER-only actor (Pilot 5's 'B': it never performs a single
@@ -390,6 +578,34 @@ export async function runContractBrowser(page: Page, contract: Contract, browser
           await setModifiers(actorPage, 'down', op.modifiers)
           await actorPage.keyboard.press(op.key)
           await setModifiers(actorPage, 'up', op.modifiers)
+          break
+        }
+        case 'dropFile': {
+          // Task K — Playwright's `mouse` API cannot carry a file payload,
+          // so a real drop is synthesized entirely IN-PAGE: fetch() the
+          // data-URL fixture into a Blob (Chromium supports fetching
+          // `data:` URLs), wrap it in a File + DataTransfer, then dispatch
+          // the real dragenter/dragover/drop sequence CanvasV2App.tsx's
+          // onDragOver/onDrop listeners are wired for (W1) at the resolved
+          // anchor point — the same `[data-canvas-v2-viewport]` container
+          // every other op's anchor resolves against.
+          const p = await resolveAnchor(actorPage, actorBox, op.at)
+          await actorPage.evaluate(
+            async ({ x, y, dataUrl, mimeType, name }) => {
+              const target = document.querySelector('[data-canvas-v2-viewport]')
+              if (!target) throw new Error('dropFile: [data-canvas-v2-viewport] not found')
+              const res = await fetch(dataUrl)
+              const blob = await res.blob()
+              const file = new File([blob], name ?? 'fixture.png', { type: mimeType ?? blob.type })
+              const dt = new DataTransfer()
+              dt.items.add(file)
+              const opts: DragEventInit = { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt }
+              target.dispatchEvent(new DragEvent('dragenter', opts))
+              target.dispatchEvent(new DragEvent('dragover', opts))
+              target.dispatchEvent(new DragEvent('drop', opts))
+            },
+            { x: p.x, y: p.y, dataUrl: op.dataUrl, mimeType: op.mimeType, name: op.name },
+          )
           break
         }
       }

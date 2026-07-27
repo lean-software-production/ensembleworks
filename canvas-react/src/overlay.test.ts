@@ -410,4 +410,100 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
   console.log('ok: Arrows — culling soundness: bound-terminal counterexample (visible segment, off-screen target + endpoints) renders')
 }
 
-console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing + viewport culling)')
+// ============================================================================
+// 15. Arrow styling — props.color: reuses GeoShape.tsx's GEO_COLORS table
+//     (same color->hex map every other colored shape kind uses), NOT a
+//     second hand-copied table. Expected hex hand-copied from GeoShape.tsx's
+//     GEO_COLORS.blue.solid ('#4465e9') rather than importing GEO_COLORS
+//     into this test, so the assertion doesn't just echo the implementation
+//     back at itself. RED-FIRST: before this task, Arrows.tsx hardcoded
+//     ARROW_STROKE ('var(--canvas-arrow, #1a1a1a)') and ignored props.color
+//     entirely — this block failed against that code (stroke stayed the
+//     hardcoded var(), never '#4465e9').
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const arrow = arrowShape('shape:blue', 0, 0, { color: 'blue', end: { x: 100, y: 0 } })
+  const doc = docOf([arrow])
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.match(html, /data-shape-id="shape:blue"[\s\S]*?stroke="#4465e9"/, `props.color:'blue' should stroke with GEO_COLORS.blue.solid ('#4465e9'), not the hardcoded default: ${html}`)
+  console.log("ok: Arrows — props.color:'blue' resolves via the shared GEO_COLORS table, not the hardcoded stroke")
+}
+
+// ============================================================================
+// 16. Arrow styling — props.dash: reuses GeoShape.tsx's dashArray() (same
+//     strokeWidth-scaled dasharray formula geo dashed/dotted uses).
+//     strokeWidth here is the pre-existing hardcoded default (1.5px — no
+//     props.size given), since dash and size are independent axes.
+//     dashed -> "3 3" (strokeWidth*DASH_LENGTH_RATIO(2) both segment+gap);
+//     dotted -> "0.015 3.75" (strokeWidth/DOT_RATIO(100) dot,
+//     strokeWidth*DOT_GAP_MULTIPLIER(2.5) gap) — hand-computed from the
+//     formulas GeoShape.tsx's module header DASH ARRAYS documents, not by
+//     calling dashArray() from the test. solid -> no strokeDasharray
+//     attribute at all (a plain, undashed stroke). RED-FIRST: before this
+//     task, Arrows.tsx never emitted a strokeDasharray attribute at all —
+//     dashed and dotted rendered IDENTICALLY (both plain solid lines).
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const dashedArrow = arrowShape('shape:dashed', 0, 0, { dash: 'dashed', end: { x: 100, y: 0 } })
+  const dottedArrow = arrowShape('shape:dotted', 0, 200, { dash: 'dotted', end: { x: 100, y: 200 } })
+  const solidArrow = arrowShape('shape:solid', 0, 400, { dash: 'solid', end: { x: 100, y: 400 } })
+  const doc = docOf([dashedArrow, dottedArrow, solidArrow])
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.match(html, /data-shape-id="shape:dashed"[\s\S]*?stroke-dasharray="3 3"/, `props.dash:'dashed' at the default strokeWidth(1.5) should be stroke-dasharray="3 3": ${html}`)
+  assert.match(html, /data-shape-id="shape:dotted"[\s\S]*?stroke-dasharray="0\.015 3\.75"/, `props.dash:'dotted' at the default strokeWidth(1.5) should be stroke-dasharray="0.015 3.75" — DIFFERENT from dashed's: ${html}`)
+  const solidSection = html.slice(html.indexOf('data-shape-id="shape:solid"'))
+  assert.doesNotMatch(solidSection.slice(0, solidSection.indexOf('</g>')), /stroke-dasharray/, `props.dash:'solid' should have NO stroke-dasharray attribute: ${html}`)
+  console.log('ok: Arrows — props.dash dashed/dotted/solid each resolve to distinct dasharray via the shared dashArray()')
+}
+
+// ============================================================================
+// 17. Arrow styling — props.size: reuses GeoShape.tsx's STROKE_WIDTH_PX
+//     table (s:2, m:3.5, l:5, xl:10). 'xl' must render strictly wider than
+//     's'. RED-FIRST: before this task, Arrows.tsx hardcoded
+//     strokeWidth={1.5} regardless of props.size — both would have rendered
+//     identically at 1.5, failing the "strictly wider" assertion.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const small = arrowShape('shape:s', 0, 0, { size: 's', end: { x: 100, y: 0 } })
+  const xl = arrowShape('shape:xl', 0, 200, { size: 'xl', end: { x: 100, y: 200 } })
+  const doc = docOf([small, xl])
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+  assert.match(html, /data-shape-id="shape:s"[\s\S]*?stroke-width="2"/, `props.size:'s' should be STROKE_WIDTH_PX.s (2): ${html}`)
+  assert.match(html, /data-shape-id="shape:xl"[\s\S]*?stroke-width="10"/, `props.size:'xl' should be STROKE_WIDTH_PX.xl (10), wider than 's': ${html}`)
+  console.log("ok: Arrows — props.size:'xl' renders wider strokeWidth than 's', via the shared STROKE_WIDTH_PX table")
+}
+
+// ============================================================================
+// 18. Arrow styling — props.arrowheadEnd/arrowheadStart: 'none' suppresses
+//     the arrowhead at that end; any other value draws one. Default (no
+//     props at all) matches the OLD hardcoded behavior exactly — one
+//     arrowhead, at the end only (shape.ts's documented tldraw defaults:
+//     arrowheadStart:'none', arrowheadEnd:'arrow') — so the pre-existing
+//     "no props" test in block 7/8 above still passing after this change is
+//     itself evidence the default path didn't regress. RED-FIRST: before
+//     this task, Arrows.tsx ALWAYS rendered exactly one
+//     data-overlay="arrowhead" polygon (at the end) regardless of
+//     arrowheadEnd/arrowheadStart — so arrowheadEnd:'none' (expecting ZERO
+//     end polygons) and arrowheadStart:'triangle' (expecting ONE start
+//     polygon where none ever rendered) both failed against that code.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const noEndHead = arrowShape('shape:no-end-head', 0, 0, { arrowheadEnd: 'none', end: { x: 100, y: 0 } })
+  const bothHeads = arrowShape('shape:both-heads', 0, 200, { arrowheadStart: 'triangle', arrowheadEnd: 'triangle', end: { x: 100, y: 200 } })
+  const doc = docOf([noEndHead, bothHeads])
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+
+  const noEndSection = html.slice(html.indexOf('data-shape-id="shape:no-end-head"'), html.indexOf('data-shape-id="shape:both-heads"'))
+  assert.doesNotMatch(noEndSection, /data-overlay="arrowhead"/, `arrowheadEnd:'none' should render NO arrowhead polygon: ${html}`)
+
+  const bothSection = html.slice(html.indexOf('data-shape-id="shape:both-heads"'))
+  const headMatches = bothSection.match(/data-overlay="arrowhead"/g) ?? []
+  assert.equal(headMatches.length, 2, `arrowheadStart+arrowheadEnd both non-'none' should render TWO arrowhead polygons (one per end): ${html}`)
+  console.log("ok: Arrows — arrowheadEnd:'none' suppresses the end arrowhead; arrowheadStart:'triangle' draws a start arrowhead the old code never had")
+}
+
+console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing + viewport culling + style props (color/dash/size/arrowheads))')

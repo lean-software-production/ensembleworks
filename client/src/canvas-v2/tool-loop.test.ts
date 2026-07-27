@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import type { Shape } from '@ensembleworks/canvas-model'
-import { Editor, createToolContext, type ArrowState, type CreateState, type ToolContext } from '@ensembleworks/canvas-editor'
+import { Editor, createToolContext, duplicateSelectionIntents, type ArrowState, type CreateState, type ToolContext } from '@ensembleworks/canvas-editor'
 import {
 	cancelActiveTool,
 	createInitialToolStates,
@@ -11,6 +11,7 @@ import {
 	currentSnapResult,
 	deleteSelectionIntents,
 	dispatchToActiveTool,
+	pruneDanglingSelectionIntents,
 	type SelectAndTransformState,
 } from './tool-loop.js'
 
@@ -472,6 +473,143 @@ function setup() {
 	assert.deepEqual([...editor.get().selection], [], 'selection is cleared after applying the intents')
 
 	console.log('ok: tool-loop — deleteSelectionIntents (two-shape selection, and the empty-selection no-op)')
+}
+
+// ============================================================================
+// 8. pruneDanglingSelectionIntents (Task D1's undo-selection-cleanup carry-
+//    forward) — SetSelection has no inverse (editor.ts's undo() doc comment),
+//    so undoing a duplicate/paste batch removes the newly-created shapes but
+//    leaves `editor.get().selection` pointing at their now-gone ids. This is
+//    the general fix: prune the CURRENT selection down to ids that still
+//    resolve, emitting SetSelection only when something was actually
+//    dropped.
+// ============================================================================
+{
+	const { editor } = setup()
+	editor.doc.putShape(geoShape('shape:b', 200, 200))
+	editor.doc.commit()
+
+	// A selection with nothing dangling -> no intents at all (no redundant
+	// same-value SetSelection).
+	editor.apply({ type: 'SetSelection', ids: ['shape:a', 'shape:b'] })
+	assert.deepEqual(pruneDanglingSelectionIntents(editor), [], 'a fully-resolving selection yields no intents')
+
+	// An empty selection -> also no intents (nothing to prune).
+	editor.apply({ type: 'SetSelection', ids: [] })
+	assert.deepEqual(pruneDanglingSelectionIntents(editor), [], 'an empty selection yields no intents')
+
+	// The duplicate/undo scenario itself: duplicate shape:a (selection moves
+	// to the clone's root id), then undo the duplicate's CreateShape — the
+	// clone is gone but selection still names it.
+	const before = new Set<string>(editor.doc.listShapes().map((s) => s.id))
+	editor.apply({ type: 'SetSelection', ids: ['shape:a'] })
+	editor.applyAll(duplicateSelectionIntents(editor))
+	const cloneId = [...editor.get().selection][0]!
+	assert.ok(!before.has(cloneId), 'precondition: the duplicate minted a brand-new id')
+	assert.ok(editor.doc.getShape(cloneId), 'precondition: the clone exists in the doc before undo')
+
+	editor.undo()
+	assert.equal(editor.doc.getShape(cloneId), undefined, 'precondition: undo actually removed the clone')
+	assert.deepEqual([...editor.get().selection], [cloneId], 'precondition: editor.undo() does NOT touch selection on its own — it still names the deleted clone')
+
+	assert.deepEqual(
+		pruneDanglingSelectionIntents(editor),
+		[{ type: 'SetSelection', ids: [] }],
+		'pruneDanglingSelectionIntents drops the dangling clone id, leaving the (now-empty) valid remainder',
+	)
+	editor.applyAll(pruneDanglingSelectionIntents(editor))
+	assert.deepEqual([...editor.get().selection], [], 'applying the pruned SetSelection actually clears the dangling reference')
+
+	// A MIXED selection (one live id, one dangling) prunes down to just the
+	// live one, order preserved.
+	editor.apply({ type: 'SetSelection', ids: ['shape:a'] })
+	editor.applyAll(duplicateSelectionIntents(editor))
+	const cloneId2 = [...editor.get().selection][0]!
+	editor.apply({ type: 'SetSelection', ids: ['shape:b', cloneId2] })
+	editor.undo() // removes the clone; selection still names ['shape:b', cloneId2]
+	assert.deepEqual(
+		pruneDanglingSelectionIntents(editor),
+		[{ type: 'SetSelection', ids: ['shape:b'] }],
+		'a mixed live+dangling selection prunes down to just the surviving live id',
+	)
+
+	console.log('ok: tool-loop — pruneDanglingSelectionIntents (no-op when nothing dangles, drops dangling ids after an undo)')
+}
+
+// ============================================================================
+// 8. Task W1 — the 'draw' tool is wired into the ToolSet/ToolStates/dispatch
+//    machinery exactly like arrow/create: createToolSet builds it,
+//    createInitialToolStates seeds its idle state, dispatchToActiveTool
+//    routes a pointerdown to it and applies the resulting CreateShape (the
+//    pen tool commits a one-point "dot" draw shape on pointerdown alone — no
+//    drag threshold, per draw.ts's own doc comment), and cancelActiveTool
+//    covers its in-flight 'drawing' state (which carries `id`, like
+//    arrow/create) so an abandoned mid-stroke shape doesn't leak.
+// ============================================================================
+{
+	const { editor, ctx } = setup()
+	const tools = createToolSet(ctx)
+
+	assert.ok(tools.draw, 'createToolSet must build a `draw` tool (Task W1 — createDrawTool wired in)')
+
+	const states = createInitialToolStates(tools)
+	assert.equal(states.draw, tools.draw.initialState, 'createInitialToolStates must seed a `draw` entry at the draw tool\'s own initialState')
+
+	const before = new Set<string>(editor.doc.listShapes().map((s) => s.id))
+	const afterDown = dispatchToActiveTool(tools, states, 'draw', editor, { type: 'pointerdown', x: 700, y: 700, buttons: 1, modifiers: MODS, t: 0 })
+	const createdId = editor.doc.listShapes().map((s) => s.id).find((id) => !before.has(id))
+	assert.ok(createdId, `dispatching a pointerdown to the 'draw' active tool must create a shape — shapes: ${JSON.stringify(editor.doc.listShapes())}`)
+	assert.equal(editor.doc.getShape(createdId!)?.kind, 'draw', 'the created shape must be a `draw`-kind shape')
+
+	// Mid-stroke (pointerdown landed, no pointerup yet): cancelActiveTool must
+	// delete the in-flight preview, same DeleteShapes coverage as arrow/create.
+	const drawState = afterDown.draw as { mode: string; id: string }
+	assert.equal(drawState.mode, 'drawing', 'precondition: the draw tool is mid-stroke after a bare pointerdown (no threshold gate)')
+	const cancelled = cancelActiveTool(tools, afterDown, 'draw', editor)
+	assert.deepEqual(cancelled.intents, [{ type: 'DeleteShapes', ids: [drawState.id] }], 'cancelling a mid-stroke draw gesture emits DeleteShapes for its in-flight id')
+	editor.applyAll(cancelled.intents)
+	assert.equal(editor.doc.getShape(drawState.id), undefined, 'the in-flight draw preview is actually gone after applying the cancel intent')
+
+	console.log('ok: tool-loop — the draw tool is wired into createToolSet/createInitialToolStates/dispatchToActiveTool/cancelActiveTool (Task W1)')
+}
+
+// ============================================================================
+// 9. Task W1 (line sub-cycle) — the 'line' tool is wired into the
+//    ToolSet/ToolStates/dispatch machinery exactly like arrow: createToolSet
+//    builds it, createInitialToolStates seeds its idle state,
+//    dispatchToActiveTool routes a down->move(threshold-crossing) to it and
+//    applies the resulting line-kind CreateShape (line.ts has a threshold
+//    gate like arrow — a bare pointerdown writes nothing), and
+//    cancelActiveTool covers its in-flight 'drawing' state (which carries
+//    `id`, like arrow/draw) so an abandoned mid-drag line doesn't leak.
+// ============================================================================
+{
+	const { editor, ctx } = setup()
+	const tools = createToolSet(ctx)
+
+	assert.ok(tools.line, 'createToolSet must build a `line` tool (Task W1 — createLineTool wired in)')
+
+	const states = createInitialToolStates(tools)
+	assert.equal(states.line, tools.line.initialState, 'createInitialToolStates must seed a `line` entry at the line tool\'s own initialState')
+
+	const before = new Set<string>(editor.doc.listShapes().map((s) => s.id))
+	let s = dispatchToActiveTool(tools, states, 'line', editor, { type: 'pointerdown', x: 500, y: 500, buttons: 1, modifiers: MODS, t: 0 })
+	s = dispatchToActiveTool(tools, s, 'line', editor, { type: 'pointermove', x: 520, y: 520, buttons: 1, modifiers: MODS, t: 16 })
+	const createdId = editor.doc.listShapes().map((sh) => sh.id).find((id) => !before.has(id))
+	assert.ok(createdId, `dispatching a threshold-crossing drag to the 'line' active tool must create a shape — shapes: ${JSON.stringify(editor.doc.listShapes())}`)
+	assert.equal(editor.doc.getShape(createdId!)?.kind, 'line', 'the created shape must be a `line`-kind shape')
+
+	// Mid-drag (threshold crossed, no pointerup yet): cancelActiveTool must
+	// delete the in-flight preview, same DeleteShapes coverage as arrow/draw.
+	const lineState = s.line as { mode: string; id: string }
+	assert.equal(lineState.mode, 'drawing', 'precondition: the line gesture crossed the threshold and is mid-draw')
+	const cancelled = cancelActiveTool(tools, s, 'line', editor)
+	assert.deepEqual(cancelled.intents, [{ type: 'DeleteShapes', ids: [lineState.id] }], 'cancelling a mid-draw line emits DeleteShapes for its in-flight id')
+	editor.applyAll(cancelled.intents)
+	assert.equal(editor.doc.getShape(lineState.id), undefined, 'the in-flight line preview is actually gone after applying the cancel intent')
+	assert.equal((cancelled.states.line as { mode: string }).mode, 'idle', 'the line tool itself resets to idle')
+
+	console.log('ok: tool-loop — the line tool is wired into createToolSet/createInitialToolStates/dispatchToActiveTool/cancelActiveTool (Task W1)')
 }
 
 console.log('ok: tool-loop.test.ts — all cases passed')

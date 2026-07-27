@@ -57,8 +57,30 @@ const INDEX_HTML = path.join(DIST_DIR, 'index.html')
 //     device pickers, the manual reorder/size controls) at ~10 B/line minified.
 // Same instruction as above: re-measure against a fresh `main` build rather
 // than hand-editing these numbers.
-const RAW_BASELINE_KB = 231.7
-const GZIP_BASELINE_KB = 67.82
+//
+// Re-based 2026-07-26: baseline moved to 241.07 kB raw / 71.06 kB gzip for the
+// connection-health modal + single-tab mount gate (feature/connection-health-
+// modal, PR #58). Evidence the growth is the feature's own eager code and not
+// accidental bloat, measured by building each ref alone in a clean tree:
+//   - `origin/main` built alone measures 232.17 kB / 67.98 kB — it PASSES the
+//     old gate, so none of the overage comes from the base. (Note main had
+//     already drifted +0.47 kB above the 2026-07-20 baseline on its own.)
+//   - The branch at cbb9de5 (the feature, before the acceptance-testing fix)
+//     measures 240.70 kB / 70.91 kB, so the feature itself is +8.53 kB raw /
+//     +2.93 kB gzip; the roster/ordering fix on top adds +0.37 kB / +0.15 kB.
+//   - Every vendor chunk (livekit, react, tldraw, xterm) is byte-identical
+//     between main and the branch — same content hashes — so no dependency
+//     became newly eager, and the lazy CanvasV2App chunk is untouched by this
+//     gate either way.
+//   - The delta tracks ~1,050 lines of new EAGER code, all reachable from
+//     App.tsx/main.tsx at boot: CanvasBlockerModal (274), the health reducer
+//     (200), useConnectionHealth/useCanvasAvailability/useCanvasLock (~410),
+//     thresholds (71) and SingleTabGate (85) — ~8 B/line minified, matching the
+//     ~10 B/line the 2026-07-20 re-base used.
+// Same instruction as above: re-measure against a fresh `main` build rather
+// than hand-editing these numbers.
+const RAW_BASELINE_KB = 241.07
+const GZIP_BASELINE_KB = 71.06
 const TOLERANCE = 1.02 // ~2% headroom — a real bloat should fail, not scrape by
 
 const KB = 1000 // vite's own build report uses decimal kB (bytes / 1000), not KiB — see below

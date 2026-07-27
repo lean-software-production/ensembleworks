@@ -115,6 +115,15 @@ export function ShapeBody({ shape, snapshot, editorState, getText, dispatch }: S
         height: h,
         transformOrigin: '0 0',
         transform: shapeBodyTransform(snapshot, shape),
+        // Task R1: kind-agnostic opacity — applied ONCE here, on the wrapper,
+        // so every body kind (including embeds) gets it uniformly and
+        // nothing double-dims by also applying it inside <Component>.
+        // Nullish coalescing, NOT `||` — shape.opacity is a required
+        // z.number() field (canvas-model/src/shape.ts) so it's never
+        // actually undefined, but `??` is the operator that would still do
+        // the right thing if it ever were, whereas `||` would wrongly force
+        // an opacity-0 shape to render fully opaque (0 is falsy).
+        opacity: shape.opacity ?? 1,
         // Pilot 3 (interaction-contracts/cross-widget-selection.ts): a static
         // body's text must never join a NATIVE browser text selection — a
         // canvas drag selects shapes, not text (matching tldraw's own

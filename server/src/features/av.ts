@@ -4,6 +4,7 @@
 import { avKick, avPulse, avToken } from '@ensembleworks/contracts'
 import express from 'express'
 import { AccessToken } from 'livekit-server-sdk'
+import { getAccessIdentity, personField } from '../access-identity.ts'
 import { PULSE_STALE_MS } from '../canvas/constants.ts'
 import { sanitizeId } from '../canvas/ids.ts'
 import { rawUserId } from '../kernel/presence.ts'
@@ -43,6 +44,12 @@ export function createAvRouter(ctx: PluginServerContext): express.Router {
 			canPublish: role === 'member',
 			canSubscribe: true,
 		})
+		// The identity binding for the A/V plane (issue #55 Problem 1). LiveKit's
+		// own logs only ever see the participant identity — a random per-browser
+		// UUID — so this mint is the one place a person can be attached to it.
+		console.log(
+			`[av] token room=${room} identity=${identity} role=${role} ${personField(await getAccessIdentity(req.headers))}`
+		)
 		res.json({ enabled: true, token: await token.toJwt(), url: ctx.media.url })
 	})
 

@@ -40,7 +40,10 @@ function dirtyDoc(): LoroCanvasDoc {
   const doc = LoroCanvasDoc.create({ peerId: 1n })
   doc.putPage({ id: 'page:p', name: 'P' } as any)
   for (let i = 0; i < 500; i++) doc.putShape(validShape(`shape:v${i}`) as any)
-  for (let i = 0; i < 500; i++) doc.putShape(invalidShape(`shape:bad${i}`) as any)
+  // putShapeUnchecked, not putShape: this seed is DELIBERATELY invalid — it
+  // stands in for what a remote peer's bytes can still deliver, which is the
+  // only way this state reaches a doc now that the write boundary validates.
+  for (let i = 0; i < 500; i++) doc.putShapeUnchecked(invalidShape(`shape:bad${i}`) as any)
   doc.commit()
   return doc
 }

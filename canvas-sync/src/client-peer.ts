@@ -1,4 +1,4 @@
-import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
+import { LoroCanvasDoc, type InvalidWriteHandler } from '@ensembleworks/canvas-doc'
 import type { Shape } from '@ensembleworks/canvas-model'
 import { Frame, type Transport, decode, encode } from './protocol.js'
 import type { PresenceStore } from './presence.js'
@@ -10,6 +10,11 @@ export interface SyncClientOpts {
    * only care about docs — presence-less peers simply drop Presence frames
    * (no send subscription set up, and onFrame's Presence branch is a no-op). */
   presence?: PresenceStore
+  /** Optional: forwarded to the LoroCanvasDoc this peer builds internally, so
+   * a host can observe writes the doc REFUSED. Without this passthrough the
+   * sink is unreachable from the browser — this peer owns its doc's
+   * construction, and the client constructs the PEER, never the doc. */
+  onInvalidWrite?: InvalidWriteHandler
 }
 
 // Headless sync client. No renderer (Phase 3): callers mutate via the doc and
@@ -47,7 +52,7 @@ export class SyncClientPeer {
   get lastBackfillBytes(): number { return this.lastBackfillBytesValue }
 
   constructor(opts: SyncClientOpts) {
-    this.doc = LoroCanvasDoc.create({ peerId: opts.peerId })
+    this.doc = LoroCanvasDoc.create({ peerId: opts.peerId, onInvalidWrite: opts.onInvalidWrite })
     this.transport = opts.transport
     this.presence = opts.presence
     // Forward every committed local op to whichever transport is CURRENT: the

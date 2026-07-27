@@ -70,3 +70,31 @@ export function orderByRecency(
 	const at = (id: string): number => recency[id] ?? -Infinity
 	return [...ids].sort((a, b) => at(b) - at(a))
 }
+
+/**
+ * Reconcile a settled tile order against the live roster.
+ *
+ * Joiners append at the end, leavers drop out, and the order the user settled
+ * on is otherwise preserved — no re-sort, because faces only move when the
+ * user asks (see CurrentPageMosaic).
+ *
+ * Ids are DEDUPLICATED, and that is load-bearing rather than defensive. The
+ * settled order is captured into React state at mount and only recomputed on
+ * Reorder or a remount, so a duplicate that gets in there renders the same
+ * person as two tiles — with the same React key — for the life of the mosaic,
+ * long after whatever produced it is gone. Collapsing here means no caller can
+ * make that happen.
+ */
+export function reconcileOrder(settledIds: readonly string[], rosterIds: readonly string[]): string[] {
+	const roster = new Set(rosterIds)
+	const seen = new Set<string>()
+	const out: string[] = []
+	const take = (id: string) => {
+		if (!roster.has(id) || seen.has(id)) return
+		seen.add(id)
+		out.push(id)
+	}
+	for (const id of settledIds) take(id)
+	for (const id of rosterIds) take(id)
+	return out
+}
