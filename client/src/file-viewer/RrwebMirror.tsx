@@ -10,15 +10,27 @@
 import { useEffect, useRef } from 'react'
 import { Replayer } from 'rrweb'
 import 'rrweb/dist/style.css'
+import './rrwebMirror.css'
 import { rrwebFollowStore, type RrwebEntry } from './rrwebFollow'
 
 const FALLBACK_MS = 2000
+
+/** Arrow-cursor SVG tinted with the presenter's colour, tip at top-left. */
+function cursorSvg(color: string): string {
+	return (
+		`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">` +
+		`<path d="M 2 1.5 L 2 17.5 L 6.3 13.7 L 9 19.8 L 12.1 18.4 L 9.4 12.4 L 15 12.2 Z"` +
+		` fill="${color}" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>`
+	)
+}
 
 export function RrwebMirror(props: {
 	roomId: string
 	shapeId: string
 	width: number
 	height: number
+	presenterName: string
+	presenterColor: string
 	onFallback: () => void
 }) {
 	const hostRef = useRef<HTMLDivElement | null>(null)
@@ -26,6 +38,21 @@ export function RrwebMirror(props: {
 	const replayerRef = useRef<Replayer | null>(null)
 	const onFallbackRef = useRef(props.onFallback)
 	onFallbackRef.current = props.onFallback
+	const presenterRef = useRef({ name: props.presenterName, color: props.presenterColor })
+	presenterRef.current = { name: props.presenterName, color: props.presenterColor }
+
+	// Dress rrweb's replay cursor as the presenter's tldraw cursor: no mouse
+	// tail (disabled at construction), their colour on the arrow + name pill,
+	// and a click ring in the same colour (see rrwebMirror.css).
+	const styleCursor = () => {
+		const el = hostRef.current?.querySelector('.replayer-mouse') as HTMLElement | null
+		if (!el) return
+		const { name, color } = presenterRef.current
+		el.classList.add('ew-mirror-cursor')
+		el.dataset.name = name
+		el.style.setProperty('--ew-cursor-color', color)
+		el.style.backgroundImage = `url("data:image/svg+xml,${encodeURIComponent(cursorSvg(color))}")`
+	}
 
 	// Scale the replayer wrapper to the current shape box (transform-origin
 	// top-left; recomputed on resize and on rrweb viewport-resize events).
@@ -77,6 +104,7 @@ export function RrwebMirror(props: {
 				const r = new Replayer(buffered.map((e) => e.event) as any[], {
 					root: hostRef.current,
 					liveMode: true,
+					mouseTail: false,
 				})
 				r.startLive()
 				r.on('resize', (dim) => {
@@ -85,6 +113,7 @@ export function RrwebMirror(props: {
 					fit()
 				})
 				replayerRef.current = r
+				styleCursor()
 				requestAnimationFrame(fit)
 			} catch {
 				failed = true
@@ -171,6 +200,13 @@ export function RrwebMirror(props: {
 		fit()
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [props.width, props.height])
+
+	// Restyle the cursor when the presenter (name/colour) changes without a
+	// remount — e.g. an A→B handoff on the same shape.
+	useEffect(() => {
+		styleCursor()
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [props.presenterName, props.presenterColor])
 
 	return (
 		<div

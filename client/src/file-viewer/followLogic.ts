@@ -7,14 +7,20 @@
 export interface PresenceLike {
 	userId: string
 	userName: string
+	// tldraw collaborator cursor colour (hex) — shown on the mirrored cursor.
+	color?: string
 	meta?: unknown
 }
 
 export interface PresenterInfo {
 	userId: string
 	userName: string
+	color: string
 	fraction: number
 }
+
+// Neutral fallback when presence carries no colour (older peers).
+export const PRESENTER_FALLBACK_COLOR = '#3b82f6'
 
 export function presenterFor(peers: readonly PresenceLike[], shapeId: string): PresenterInfo | null {
 	let best: PresenterInfo | null = null
@@ -27,7 +33,12 @@ export function presenterFor(peers: readonly PresenceLike[], shapeId: string): P
 		const ts = typeof m.ts === 'number' ? m.ts : 0
 		if (ts > bestTs) {
 			bestTs = ts
-			best = { userId: p.userId, userName: p.userName, fraction: m.fraction }
+			best = {
+				userId: p.userId,
+				userName: p.userName,
+				color: typeof p.color === 'string' && p.color ? p.color : PRESENTER_FALLBACK_COLOR,
+				fraction: m.fraction,
+			}
 		}
 	}
 	return best

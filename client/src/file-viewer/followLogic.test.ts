@@ -3,12 +3,20 @@
 import assert from 'node:assert/strict'
 import { presenterFor } from './followLogic'
 
-const peer = (userId: string, meta: unknown) => ({ userId, userName: userId, meta }) as never
+const peer = (userId: string, meta: unknown, color?: string) =>
+	({ userId, userName: userId, color, meta }) as never
 
 assert.equal(presenterFor([peer('a', {})], 'shape:1'), null)
 const p = presenterFor([peer('a', { fileViewerPresent: { shapeId: 'shape:1', fraction: 0.5 } })], 'shape:1')
 assert.equal(p?.userId, 'a')
 assert.equal(p?.fraction, 0.5)
+// Colour rides along from presence; missing colour falls back to the default.
+assert.equal(p?.color, '#3b82f6')
+assert.equal(
+	presenterFor([peer('a', { fileViewerPresent: { shapeId: 'shape:1', fraction: 0.5 } }, '#FF802B')], 'shape:1')
+		?.color,
+	'#FF802B'
+)
 assert.equal(presenterFor([peer('a', { fileViewerPresent: { shapeId: 'shape:2', fraction: 0.5 } })], 'shape:1'), null)
 assert.equal(presenterFor([peer('a', { fileViewerPresent: { shapeId: 42 } })], 'shape:1'), null)
 // Two presenters on one shape: the LATEST token (largest ts) wins, regardless

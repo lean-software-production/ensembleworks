@@ -22,6 +22,7 @@ import { getSettings, updateSettings } from './chrome/settings'
 import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
 import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
+import { followingStore } from './file-viewer/followingStore'
 import { presentStore } from './file-viewer/presentStore'
 import { rrwebFollowStore } from './file-viewer/rrwebFollow'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
@@ -150,7 +151,15 @@ export function App() {
 			// mechanism as the stamp's inputs.
 			return {
 				...defaults,
-				meta: { stamp, fileViewerPresent: presentStore.get(), presenting: presentingAtom.get() },
+				meta: {
+					stamp,
+					fileViewerPresent: presentStore.get(),
+					// Which presentation this client is watching (followingStore) —
+					// read reactively here like the presenter token, so the audience
+					// row updates for everyone with no server changes.
+					fileViewerFollowing: followingStore.get(),
+					presenting: presentingAtom.get(),
+				},
 			}
 		},
 	})

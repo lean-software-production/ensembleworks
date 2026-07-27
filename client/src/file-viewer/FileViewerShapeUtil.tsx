@@ -25,6 +25,7 @@ import {
 } from 'tldraw'
 import { wm } from '../theme'
 import { getRoomId } from '../identity'
+import { followingStore } from './followingStore'
 import { presenterFor, type PresenterInfo } from './followLogic'
 import { forwardPinchToCanvas, parsePinchMessage } from './pinchForward'
 import { createPresentBroadcaster } from './presentBroadcast'
@@ -165,18 +166,19 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 		'fvPresenterKey',
 		() => {
 			const p = presenterFor(editor.getCollaborators(), shape.id)
-			return p ? `${p.userId}\t${p.userName}\t${p.fraction}` : null
+			return p ? `${p.userId}\t${p.userName}\t${p.color}\t${p.fraction}` : null
 		},
 		[editor, shape.id]
 	)
 	let peer: PresenterInfo | null = null
 	if (presenterKey !== null) {
-		// fraction is the last field; join the middle back in case a userName
-		// ever contains a tab (defensive — tldraw names are plain strings).
+		// fraction/color are the last two fields; join the middle back in case a
+		// userName ever contains a tab (defensive — tldraw names are plain strings).
 		const parts = presenterKey.split('\t')
 		peer = {
 			userId: parts[0],
-			userName: parts.slice(1, -1).join('\t'),
+			userName: parts.slice(1, -2).join('\t'),
+			color: parts[parts.length - 2],
 			fraction: Number(parts[parts.length - 1]),
 		}
 	}
@@ -195,6 +197,55 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	// re-subscribing on every fraction change.
 	const activePresenterRef = useRef<PresenterInfo | null>(activePresenter)
 	activePresenterRef.current = activePresenter
+
+	// Audience row: one dot per person while a presentation is live — ringed =
+	// presenter, solid = following, dimmed = off doing their own thing. Same
+	// primitive-key pattern as presenterKey (collaborator arrays churn per
+	// cursor move; a string only bumps the epoch when membership/state change).
+	const audienceKey = useValue(
+		'fvAudienceKey',
+		() => {
+			const winner = presenterFor(editor.getCollaborators(), shape.id)
+			const mineTok = presentStore.get()
+			const presenterId = mineTok?.shapeId === shape.id ? editor.user.getId() : winner?.userId
+			if (!presenterId) return null
+			const rows = new Map<string, string>()
+			const add = (id: string, name: string, color: string, state: string) => {
+				if (!rows.has(id)) rows.set(id, [id, name, color, state].join(''))
+			}
+			const selfId = editor.user.getId()
+			const selfState =
+				presenterId === selfId ? 'presenting' : followingStore.get()?.shapeId === shape.id ? 'following' : 'idle'
+			add(selfId, `${editor.user.getName()} (you)`, editor.user.getColor(), selfState)
+			for (const c of editor.getCollaborators()) {
+				const following =
+					(c.meta as { fileViewerFollowing?: { shapeId?: unknown } } | undefined)?.fileViewerFollowing
+						?.shapeId === shape.id
+				add(
+					c.userId,
+					c.userName,
+					c.color ?? '#3b82f6',
+					c.userId === presenterId ? 'presenting' : following ? 'following' : 'idle'
+				)
+			}
+			return [...rows.values()].join('')
+		},
+		[editor, shape.id]
+	)
+
+	// Publish "I'm watching this presentation" on presence meta (followingStore
+	// twins presentStore) so everyone's audience row can show who follows.
+	const isFollowing = activePresenter !== null
+	useEffect(() => {
+		if (isFollowing) {
+			followingStore.set({ shapeId: shape.id, ts: Date.now() })
+		} else if (followingStore.get()?.shapeId === shape.id) {
+			followingStore.set(null)
+		}
+		return () => {
+			if (followingStore.get()?.shapeId === shape.id) followingStore.set(null)
+		}
+	}, [isFollowing, shape.id])
 
 	// Bridge listener: accept ONLY this iframe's own messages (source check).
 	useEffect(() => {
@@ -322,6 +373,7 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 					{path}
 				</span>
 				<span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'all' }}>
+					{audienceKey && <AudienceRow audienceKey={audienceKey} />}
 					{activePresenter && (
 						<FollowingChip
 							name={activePresenter.userName}
@@ -350,6 +402,8 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 							shapeId={shape.id}
 							width={w}
 							height={h - HEADER_HEIGHT}
+							presenterName={activePresenter.userName}
+							presenterColor={activePresenter.color}
 							onFallback={() => setMirrorFallback(true)}
 						/>
 					)}
@@ -424,6 +478,42 @@ function HeaderButton(props: {
 		>
 			{props.label}
 		</button>
+	)
+}
+
+// One dot per person while a presentation is live: ringed = presenter,
+// solid = following, dimmed = not following. Colours match canvas cursors.
+// audienceKey format: rows joined by , fields by 
+// (userId, name, color, state) — built by the fvAudienceKey selector.
+function AudienceRow(props: { audienceKey: string }) {
+	const rows = props.audienceKey.split('').map((row) => {
+		const [userId, name, color, state] = row.split('')
+		return { userId, name, color, state }
+	})
+	return (
+		<span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+			{rows.map((r) => (
+				<span
+					key={r.userId}
+					title={
+						r.state === 'presenting'
+							? `${r.name} — presenting`
+							: r.state === 'following'
+								? `${r.name} — following`
+								: `${r.name} — not following`
+					}
+					style={{
+						width: 8,
+						height: 8,
+						borderRadius: '50%',
+						background: r.color,
+						opacity: r.state === 'idle' ? 0.25 : 1,
+						boxShadow: r.state === 'presenting' ? `0 0 0 1.5px ${wm.panel}, 0 0 0 3px ${r.color}` : 'none',
+						flexShrink: 0,
+					}}
+				/>
+			))}
+		</span>
 	)
 }
 
