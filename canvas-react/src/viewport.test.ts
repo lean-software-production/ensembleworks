@@ -141,6 +141,47 @@ import { keyEventToInput, pointerEventToInput, wheelEventToInput, type KeyEventL
 }
 
 // ============================================================================
+// 5b. Task W1 (D-3) — pointerEventToInput populates `pressure` ONLY for a
+//    real stylus (`pointerType === 'pen'`); mouse/touch pointer events (and
+//    events that carry no `pointerType` at all, e.g. anything predating this
+//    field) must leave `pressure` OFF the mapped InputEvent entirely — not
+//    just `undefined` on the object (input.ts's own contract: an event with
+//    an explicit `pressure: undefined` key is not the same replay-safety
+//    guarantee as one that never had the key — see script.ts's
+//    `pressureField` for the same discipline on the FSM-test-injection side).
+// ============================================================================
+{
+  const rect: RectLike = { left: 0, top: 0 }
+  const penEvent: PointerEventLike = {
+    type: 'pointerdown', clientX: 10, clientY: 10, buttons: 1,
+    shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, timeStamp: 1,
+    pointerType: 'pen', pressure: 0.73,
+  }
+  assert.equal(
+    pointerEventToInput(penEvent, rect).pressure,
+    0.73,
+    'a pen PointerEvent must carry its real pressure onto the mapped InputEvent',
+  )
+
+  const mouseEvent: PointerEventLike = {
+    type: 'pointerdown', clientX: 10, clientY: 10, buttons: 1,
+    shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, timeStamp: 1,
+    pointerType: 'mouse', pressure: 0.5,
+  }
+  const mouseInput = pointerEventToInput(mouseEvent, rect) as { pressure?: number }
+  assert.equal(mouseInput.pressure, undefined, 'a mouse PointerEvent must NOT carry pressure onto the mapped InputEvent (D-3: pressure is a pen-only signal)')
+  assert.ok(!('pressure' in mouseInput), 'a mouse PointerEvent must not even carry the `pressure` KEY (explicit undefined is not the same replay-safety guarantee as absence)')
+
+  const untypedEvent: PointerEventLike = {
+    type: 'pointerdown', clientX: 10, clientY: 10, buttons: 1,
+    shiftKey: false, altKey: false, ctrlKey: false, metaKey: false, timeStamp: 1,
+  }
+  assert.ok(!('pressure' in pointerEventToInput(untypedEvent, rect)), 'a PointerEvent with no pointerType at all must not carry a pressure key either')
+
+  console.log('ok: pointerEventToInput — pressure populated ONLY for pointerType==="pen", key absent (not undefined) otherwise (Task W1, D-3)')
+}
+
+// ============================================================================
 // 6. Viewport composition smoke (renderToStaticMarkup — see the ACKNOWLEDGED
 //    LIMITATION in the header for what this deliberately cannot cover):
 //    the root div is focusable (tabindex="0" — without it neither key

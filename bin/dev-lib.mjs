@@ -176,11 +176,47 @@ export function attachInstructions(container, session) {
 	return [
 		"Attach to the devcontainer's tmux stack with:",
 		'',
-		`  docker exec -it ${container} tmux attach -t ${session}`,
+		// `-L <session>` is required, not optional: the dev stack runs on its own
+		// tmux server (see the socket note in bin/dev-main.mjs). Without it this
+		// command lands on the default socket, where the terminal gateway's
+		// canvas-* sessions live, and reports "no such session".
+		`  docker exec -it ${container} tmux -L ${session} attach -t ${session}`,
 		'',
 		'Detach again with:  Ctrl-b Ctrl-b d   (double-tap sends the prefix to the inner tmux)',
 		'Or drive it without attaching:  bin/dev status | logs <svc> | restart <svc>',
 	].join('\n')
+}
+
+/**
+ * Decide how `bin/dev attach` should enter the dev session, given the tmux
+ * server the caller is already inside (if any).
+ *
+ * Before the dev stack had its own socket, this was a binary: in tmux =>
+ * switch-client, else attach. With a dedicated socket the question becomes
+ * whether the caller's client is on OUR server:
+ *
+ *   - not in tmux          => plain attach
+ *   - in our server        => switch-client (as before)
+ *   - in a DIFFERENT server (a canvas terminal on the default socket, say)
+ *                          => attach, with TMUX cleared. switch-client cannot
+ *                             reach across servers, and tmux refuses to nest
+ *                             while TMUX is set. The nesting is deliberate
+ *                             here, so clear it rather than bail.
+ *
+ * $TMUX is `<socket-path>,<pid>,<session-index>`; the socket NAME is the
+ * basename of that path.
+ *
+ * @param {{ tmuxEnv: string | undefined, socket: string, session: string }} o
+ * @returns {{ mode: 'plain' | 'switch' | 'nested', args: string[], unsetTmux: boolean }}
+ */
+export function attachPlan({ tmuxEnv, socket, session }) {
+	const attach = ['-L', socket, 'attach', '-t', session]
+	if (!tmuxEnv) return { mode: 'plain', args: attach, unsetTmux: false }
+	const callerSocket = (tmuxEnv.split(',')[0] ?? '').split('/').pop()
+	if (callerSocket === socket) {
+		return { mode: 'switch', args: ['-L', socket, 'switch-client', '-t', session], unsetTmux: false }
+	}
+	return { mode: 'nested', args: attach, unsetTmux: true }
 }
 
 /**
@@ -195,8 +231,9 @@ export function attachInstructions(container, session) {
  * vite does not. The trap makes the wrapper survive the signal while the
  * child (which resets the trap on exec) still dies. This is race-free — no
  * reliance on remain-on-exit landing before a fast exit — and scoped to these
- * windows, so it never touches the human-facing canvas terminals that share
- * deploy/tmux-ensembleworks.conf. (Ported verbatim from the retired
+ * windows, so it never touches the human-facing canvas terminals (which now
+ * run on their own tmux server under deploy/tmux-ensembleworks.conf, while
+ * these windows use deploy/tmux-dev.conf). (Ported verbatim from the retired
  * ~/Work/ensembleworks-devserver launcher.)
  *
  * @param {string} cmd

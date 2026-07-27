@@ -13,7 +13,10 @@ async function main() {
 	const { port } = server.address() as { port: number }
 	const url = `http://127.0.0.1:${port}/api/telemetry/connection`
 
-	// A valid batch with one junk event mixed in (junk is skipped, not fatal).
+	// A valid batch — including the 'lock' plane (canvas-lock transitions) —
+	// with one junk event mixed in (junk is skipped, not fatal). The junk
+	// event's plane, 'nope', is a check that the gate is still a closed union:
+	// widening it to admit 'lock' must not have loosened it to admit anything.
 	const res = await fetch(url, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json' },
@@ -21,18 +24,21 @@ async function main() {
 			events: [
 				{ roomId: 'team', userId: 'u1', plane: 'livekit', event: 'reconnecting' },
 				{ roomId: 'team', userId: 'u1', plane: 'sync', event: 'offline', detail: { code: 1006 } },
+				{ roomId: 'team', userId: 'u1', plane: 'lock', event: 'granted' },
 				{ plane: 'nope', event: '' }, // invalid → skipped
 			],
 		}),
 	})
 	assert.equal(res.status, 200)
 	const summary = (await res.json()) as { written: number }
-	assert.equal(summary.written, 2, 'two valid events written, junk skipped')
+	assert.equal(summary.written, 3, 'three valid events written, junk skipped')
 
 	const file = path.join(dataDir, 'telemetry', 'team-connection.jsonl')
 	const lines = (await readFile(file, 'utf8')).trim().split('\n')
-	assert.equal(lines.length, 2)
+	assert.equal(lines.length, 3)
 	assert.equal(JSON.parse(lines[1]!).event, 'offline')
+	assert.equal(JSON.parse(lines[2]!).plane, 'lock')
+	assert.equal(JSON.parse(lines[2]!).event, 'granted')
 
 	// Empty batch → 400.
 	const bad = await fetch(url, {

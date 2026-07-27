@@ -214,7 +214,7 @@ const doc: CanvasDocument = makeDocument({
 // ShapeLayer, which DOES need a real index (its own, unrelated culling
 // path — see ShapeLayer.tsx).
 function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolContext {
-  const state: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null })
+  const state: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p' })
   const editor = {
     doc: { subscribe: (_l: () => void) => () => {} },
     get: (): EditorState => state,
@@ -287,7 +287,7 @@ function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolCo
   assert.deepEqual(embedWrapperStyle('active'), { visibility: 'visible', pointerEvents: 'auto' })
   assert.deepEqual(embedWrapperStyle('suspended'), { visibility: 'hidden', pointerEvents: 'none' })
 
-  const editorState: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null })
+  const editorState: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p' })
 
   // ACTIVE, via the real stateful EmbedHost: no effects run under
   // renderToStaticMarkup, so this observes the pre-controller 'active'
@@ -348,7 +348,7 @@ function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolCo
     isLocked: false, opacity: 1, meta: {}, props: { w: 50, h: 50 },
   }
 
-  const editorStateForDispatch: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null })
+  const editorStateForDispatch: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p' })
 
   // 10a. EmbedHost forwards dispatch straight to the resolved embed component.
   const hostHtml = renderToStaticMarkup(
@@ -406,4 +406,99 @@ function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolCo
   console.log('ok: embedBodyPropsEqual excludes dispatch from the content-memo comparison (Phase-3 memo win survives D2)')
 }
 
-console.log('ok: embed (lifecycle state machine + culling-exempt EmbedLayer + EmbedHost rendering + dispatch threading with memo-safety)')
+// ============================================================================
+// 11. Task R1 — the PAGE render filter applies to EmbedLayer too (plan
+//    Correction 2 — a culling-EXEMPT sibling that also renders shapes, so it
+//    would otherwise paint another page's terminals/iframes onto the
+//    current screen). Same page predicate as ShapeLayer
+//    (`pageIdOf(snapshot, shape) === currentPageId`), composed with the
+//    existing `isEmbedKind` + worldBounds-intersect filter — proven here
+//    with a shape DELIBERATELY off-viewport (so only the page filter, not
+//    culling, could be hiding it) to isolate the page predicate from
+//    EmbedLayer's "no viewport cull at all" contract (case 7 above).
+// ============================================================================
+function fakeToolContextForPage(snapshot: CanvasDocument, currentPageId: string): ToolContext {
+  const state: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId })
+  const editor = {
+    doc: { subscribe: (_l: () => void) => () => {} },
+    get: (): EditorState => state,
+    subscribe: (_l: () => void) => () => {},
+  } as unknown as Editor
+  return {
+    editor,
+    snapshot: () => snapshot,
+    index: () => { throw new Error('EmbedLayer must never call toolContext.index()') },
+    hitTestTopmost: () => null,
+    queryMarquee: () => [],
+    dispose: () => {},
+  }
+}
+
+{
+  const embedOnP: Shape = { id: 'shape:embed-onP', kind: 'terminal', parentId: 'page:p', index: 'a1', x: 1_000_000, y: 1_000_000, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 100, h: 100 } } as Shape
+  const embedOnQ: Shape = { id: 'shape:embed-onQ', kind: 'terminal', parentId: 'page:q', index: 'a1', x: 10, y: 10, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 100, h: 100 } } as Shape
+  const twoPageEmbedDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }, { id: 'page:q', name: 'Q' }],
+    shapes: [embedOnP, embedOnQ],
+    bindings: [],
+  })
+  const camera = { x: 0, y: 0, z: 1 }
+  const viewportSize = { width: 800, height: 600 }
+
+  const htmlP = renderToStaticMarkup(
+    createElement(EmbedLayer, { toolContext: fakeToolContextForPage(twoPageEmbedDoc, 'page:p'), camera, viewportSize, tick: 0, suspendAfterTicks: 2 }),
+  )
+  assert.ok(htmlP.includes('data-fake-embed="shape:embed-onP"'), `embed on page:p should render regardless of viewport (no cull) when currentPageId='page:p': ${htmlP}`)
+  assert.ok(!htmlP.includes('data-fake-embed="shape:embed-onQ"'), `embed on page:q must NOT render when currentPageId='page:p', even though it IS on-screen: ${htmlP}`)
+  console.log('ok: EmbedLayer paints only the current page — an on-screen embed on another page is still excluded')
+
+  const htmlQ = renderToStaticMarkup(
+    createElement(EmbedLayer, { toolContext: fakeToolContextForPage(twoPageEmbedDoc, 'page:q'), camera, viewportSize, tick: 0, suspendAfterTicks: 2 }),
+  )
+  assert.ok(!htmlQ.includes('data-fake-embed="shape:embed-onP"'), `embed on page:p must NOT render when currentPageId='page:q': ${htmlQ}`)
+  assert.ok(htmlQ.includes('data-fake-embed="shape:embed-onQ"'), `embed on page:q should render when currentPageId='page:q': ${htmlQ}`)
+  console.log('ok: switching currentPageId to page:q flips which page EmbedLayer paints')
+
+  // MIGRATION SAFETY: single-page room (both embeds on page:p) renders both
+  // regardless of viewport position — the filter hides NOTHING when every
+  // shape IS on the current page.
+  const singlePageEmbedDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }],
+    shapes: [embedOnP, { ...embedOnQ, id: 'shape:embed-onP2', parentId: 'page:p' }],
+    bindings: [],
+  })
+  const migrationHtml = renderToStaticMarkup(
+    createElement(EmbedLayer, { toolContext: fakeToolContextForPage(singlePageEmbedDoc, 'page:p'), camera, viewportSize, tick: 0, suspendAfterTicks: 2 }),
+  )
+  assert.ok(migrationHtml.includes('data-fake-embed="shape:embed-onP"'), `single-page migration: shape:embed-onP must still render: ${migrationHtml}`)
+  assert.ok(migrationHtml.includes('data-fake-embed="shape:embed-onP2"'), `single-page migration: shape:embed-onP2 must still render: ${migrationHtml}`)
+  console.log('ok: MIGRATION SAFETY — EmbedLayer in a single-page room renders every embed unchanged')
+
+  // NESTED: an embed whose FRAME parent is on page:q must resolve to
+  // page:q via pageIdOf's ancestor walk, NOT via its own direct parentId
+  // (which is the frame's id, never a page id). A mutant that checks
+  // `shape.parentId === currentPageId` directly would hide this embed under
+  // EVERY currentPageId, since its parentId is never a page id at all —
+  // this case is what actually catches that mutant for EmbedLayer (the
+  // root-parented embedOnP/embedOnQ above do NOT: their parentId already
+  // happens to equal their page id, so a parentId-only check would
+  // accidentally still pass those).
+  const frameOnQForEmbed: Shape = { id: 'shape:embed-frameQ', kind: 'frame', parentId: 'page:q', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 400, h: 400, name: 'F' } } as Shape
+  const nestedEmbedOnQ: Shape = { id: 'shape:embed-nestedQ', kind: 'terminal', parentId: 'shape:embed-frameQ', index: 'a1', x: 10, y: 10, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 50, h: 50 } } as Shape
+  const nestedEmbedDoc: CanvasDocument = makeDocument({
+    pages: [{ id: 'page:p', name: 'P' }, { id: 'page:q', name: 'Q' }],
+    shapes: [frameOnQForEmbed, nestedEmbedOnQ],
+    bindings: [],
+  })
+  const nestedHtmlP = renderToStaticMarkup(
+    createElement(EmbedLayer, { toolContext: fakeToolContextForPage(nestedEmbedDoc, 'page:p'), camera, viewportSize, tick: 0, suspendAfterTicks: 2 }),
+  )
+  assert.ok(!nestedHtmlP.includes('data-fake-embed="shape:embed-nestedQ"'), `a nested embed under a frame on page:q must NOT render when currentPageId='page:p': ${nestedHtmlP}`)
+  const nestedHtmlQ = renderToStaticMarkup(
+    createElement(EmbedLayer, { toolContext: fakeToolContextForPage(nestedEmbedDoc, 'page:q'), camera, viewportSize, tick: 0, suspendAfterTicks: 2 }),
+  )
+  assert.ok(nestedHtmlQ.includes('data-fake-embed="shape:embed-nestedQ"'), `a nested embed under a frame on page:q SHOULD render when currentPageId='page:q' (pageIdOf walks to the page ancestor): ${nestedHtmlQ}`)
+  console.log('ok: EmbedLayer resolves a nested embed to its PAGE ancestor (pageIdOf), not its direct parentId')
+}
+
+console.log('ok: embed (lifecycle state machine + culling-exempt EmbedLayer + EmbedHost rendering + dispatch threading with memo-safety, page filter)')

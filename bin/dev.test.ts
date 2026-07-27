@@ -5,6 +5,7 @@ import {
 	PORTS,
 	atLeast,
 	attachInstructions,
+	attachPlan,
 	buildServices,
 	forwardArgv,
 	hold,
@@ -294,7 +295,7 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 // caveat), never nests into the container tmux.
 {
 	const text = attachInstructions('lucid_hofstadter', 'workspace')
-	assert.ok(text.includes('docker exec -it lucid_hofstadter tmux attach'), 'attach command')
+	assert.ok(text.includes('docker exec -it lucid_hofstadter tmux -L workspace attach'), 'attach command')
 	assert.ok(text.includes('Ctrl-b Ctrl-b d'), 'nested-detach caveat')
 	console.log('ok: attachInstructions')
 }
@@ -406,9 +407,61 @@ function svc(services: ReturnType<typeof buildServices>, name: string) {
 
 // attachInstructions names the offset session.
 {
-	assert.ok(attachInstructions('abc', 'workspace').includes('tmux attach -t workspace'))
-	assert.ok(attachInstructions('abc', 'workspace-100').includes('tmux attach -t workspace-100'))
+	assert.ok(attachInstructions('abc', 'workspace').includes('attach -t workspace'))
+	assert.ok(attachInstructions('abc', 'workspace-100').includes('attach -t workspace-100'))
 	console.log('ok: attachInstructions session')
+}
+
+// The dev stack lives on its OWN tmux socket, named after the session. Without
+// `-L`, `bin/dev` shares the default socket with the terminal gateway's
+// canvas-* sessions, and tmux's `set -g` options are SERVER-global — so the
+// canvas conf's `status off` / `prefix None` would land on the dev windows
+// (and the dev conf's status bar would land on canvas terminals). Separate
+// sockets are what make deploy/tmux-dev.conf and deploy/tmux-ensembleworks.conf
+// genuinely independent rather than last-writer-wins.
+{
+	assert.ok(attachInstructions('abc', 'workspace').includes('tmux -L workspace attach -t workspace'))
+	assert.ok(
+		attachInstructions('abc', 'workspace-100').includes('tmux -L workspace-100 attach -t workspace-100'),
+		'offset stacks get their own socket too',
+	)
+	console.log('ok: attachInstructions socket')
+}
+
+// attachPlan: how `bin/dev attach` enters the dev session depends on which
+// tmux server (if any) the caller is already inside. Now that the dev stack
+// has its own socket, "am I in tmux?" is no longer the right question —
+// "am I in THIS tmux?" is.
+{
+	// Not in tmux at all: a plain attach.
+	assert.deepEqual(attachPlan({ tmuxEnv: undefined, socket: 'workspace', session: 'workspace' }), {
+		mode: 'plain',
+		args: ['-L', 'workspace', 'attach', '-t', 'workspace'],
+		unsetTmux: false,
+	})
+
+	// Already inside the dev server: switch-client, as before. TMUX's first
+	// comma-field is the socket path.
+	assert.deepEqual(
+		attachPlan({ tmuxEnv: '/tmp/tmux-1000/workspace,42,0', socket: 'workspace', session: 'workspace' }),
+		{ mode: 'switch', args: ['-L', 'workspace', 'switch-client', '-t', 'workspace'], unsetTmux: false },
+	)
+
+	// Inside a DIFFERENT tmux server — e.g. a canvas terminal on the default
+	// socket. switch-client would fail (that client isn't on our server), so
+	// attach instead, and clear TMUX so tmux allows the deliberate nesting.
+	assert.deepEqual(
+		attachPlan({ tmuxEnv: '/tmp/tmux-1000/default,42,0', socket: 'workspace', session: 'workspace' }),
+		{ mode: 'nested', args: ['-L', 'workspace', 'attach', '-t', 'workspace'], unsetTmux: true },
+	)
+
+	// Offset stacks are distinct servers from each other too.
+	assert.equal(
+		attachPlan({ tmuxEnv: '/tmp/tmux-1000/workspace,42,0', socket: 'workspace-100', session: 'workspace-100' })
+			.mode,
+		'nested',
+	)
+	console.log('ok: attachPlan')
 }
 
 // livekitDevConfigYaml: shifted ports + dev keys; node_ip only when known.

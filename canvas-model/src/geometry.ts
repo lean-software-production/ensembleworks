@@ -210,6 +210,11 @@ export function hitTestPoint(doc: CanvasDocument, shape: Shape, point: Point): b
 
 // The page a shape ultimately lives on, walking parents with the same guard<50
 // tolerance as pageOrigin (malformed trees yield undefined, not an error).
+// This is READ-PATH tolerance, not the repair contract: it stops on the
+// 'page:' PREFIX (a nonexistent page like 'page:ghost' matches) and gives up
+// after 50 hops. repair.ts's pageAncestorId is the exact version — membership
+// in doc.pages, an unbounded seen-set guard — for deciding where a rescued
+// shape lands. Do not use pageIdOf to pick a repair write target.
 export function pageIdOf(doc: CanvasDocument, s: Shape): PageId | undefined {
   let cur: Shape | undefined = s
   let guard = 0

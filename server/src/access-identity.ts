@@ -133,6 +133,18 @@ export function decodeCfAccessClaimsUnverified(
 	}
 }
 
+/**
+ * Render an AccessIdentity as the `person=…` log fields every connection plane
+ * shares (see docs/superpowers/specs/2026-07-26-access-identity-binding-design.md).
+ * One formatter so a triage grep for `person=alice@example.com` matches the sync,
+ * A/V and gateway lines identically. A null identity logs `person=none` rather
+ * than nothing: silence is indistinguishable from a broken resolver.
+ */
+export function personField(identity: AccessIdentity | null): string {
+	if (!identity) return 'person=none verified=false'
+	return `person=${identity.email} verified=${identity.verified}`
+}
+
 function devFallback(): AccessIdentity | null {
 	const { devEmail, devName } = cfg()
 	return devEmail ? { email: devEmail, name: devName, verified: false } : null

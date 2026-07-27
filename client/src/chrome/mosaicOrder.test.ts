@@ -5,7 +5,7 @@
  * Run: bun client/src/chrome/mosaicOrder.test.ts
  */
 import assert from 'node:assert/strict'
-import { orderByRecency, orderByViewportDistance, updateSpokeRecency } from './mosaicOrder'
+import { orderByRecency, orderByViewportDistance, reconcileOrder, updateSpokeRecency } from './mosaicOrder'
 
 // --- orderByViewportDistance ---
 {
@@ -54,3 +54,30 @@ import { orderByRecency, orderByViewportDistance, updateSpokeRecency } from './m
 }
 
 console.log('mosaicOrder tests passed')
+
+// ------------------------------------------------------------ reconcileOrder
+// The settled order is reconciled against the live roster on every render:
+// leavers drop out, joiners append at the end, and the order the user settled
+// on is otherwise preserved.
+assert.deepEqual(reconcileOrder(['a', 'b'], ['a', 'b']), ['a', 'b'], 'unchanged roster keeps its order')
+assert.deepEqual(reconcileOrder(['b', 'a'], ['a', 'b']), ['b', 'a'], 'the settled order wins over roster order')
+assert.deepEqual(reconcileOrder(['a', 'b'], ['a']), ['a'], 'a leaver drops out')
+assert.deepEqual(reconcileOrder(['b', 'a'], ['a', 'b', 'c']), ['b', 'a', 'c'], 'a joiner appends at the end')
+assert.deepEqual(reconcileOrder([], ['a', 'b']), ['a', 'b'], 'no settled order yet: roster order')
+
+// THE REGRESSION. A duplicate id must collapse to ONE tile.
+//
+// The settled order is captured into React state at mount and only recomputed
+// on Reorder or a remount, so anything wrong in it is permanent for the life
+// of the mosaic. computeOrder builds that array from self plus every
+// collaborator presence, and the single-tab gate's recovery path mounts a tab
+// while tldraw's server is still holding the closed holder's presence (5s
+// SESSION_REMOVAL_WAIT_TIME) — a record for OUR OWN user. That made the array
+// [self, self], which rendered the same person as two tiles with the same
+// React key, and no later deletion of the record could undo it.
+assert.deepEqual(reconcileOrder(['a', 'a'], ['a']), ['a'], 'a duplicated settled id renders once')
+assert.deepEqual(reconcileOrder(['a', 'a', 'b'], ['a', 'b']), ['a', 'b'], 'and keeps everyone else')
+assert.deepEqual(reconcileOrder(['a'], ['a', 'a']), ['a'], 'a duplicated roster id renders once')
+assert.deepEqual(reconcileOrder([], ['a', 'a', 'b']), ['a', 'b'], 'duplicates collapse with no settled order')
+
+console.log('mosaicOrder.test.ts: reconcileOrder assertions passed')

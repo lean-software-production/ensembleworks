@@ -27,10 +27,13 @@ import {
 import {
 	orderByRecency,
 	orderByViewportDistance,
+	reconcileOrder,
 	updateSpokeRecency,
 	type MosaicPoint,
 } from './mosaicOrder'
 import { MosaicChip, PanelTile, type PanelTileParticipant } from './PanelTile'
+import { rosterByPage } from './roster'
+import { otherCollaborators } from './collaborators'
 
 interface PageSectionData {
 	id: TLPageId
@@ -83,21 +86,14 @@ export function PanelPages({ editor, width }: { editor: Editor; width: number })
 				isLocal: true,
 			}
 
-			// Self goes in first under the page it's currently viewing; collaborator
-			// presence then joins in under whichever page each of them is on.
-			const byPage = new Map<TLPageId, PanelTileParticipant[]>()
-			byPage.set(currentPageId, [selfEntry])
-			for (const presence of editor.getCollaborators()) {
-				const list = byPage.get(presence.currentPageId) ?? []
-				list.push({
-					prefixedId: presence.userId,
-					rawId: rawUserId(presence.userId),
-					name: presence.userName?.trim() || 'Anonymous',
-					color: presence.color,
-					isLocal: false,
-				})
-				byPage.set(presence.currentPageId, list)
-			}
+			// Grouping (including dropping any presence record for our own user)
+			// lives in roster.ts so it is testable without an editor; this
+			// derivation only reads signals.
+			const byPage = rosterByPage({
+				self: selfEntry,
+				currentPageId,
+				presences: editor.getCollaborators(),
+			}) as Map<TLPageId, PanelTileParticipant[]>
 
 			const sections: PageSectionData[] = pages.map((page) => ({
 				id: page.id,
@@ -200,7 +196,10 @@ function computeOrder(editor: Editor): string[] {
 	const selfPoint = editor.inputs.currentPagePoint
 	cursors[selfId] = { x: selfPoint.x, y: selfPoint.y }
 	const ids = [selfId]
-	for (const presence of editor.getCollaborators()) {
+	// Our own id is already in `ids`; a presence record carrying it is our own
+	// session seen from outside (see collaborators.ts) and would push a second
+	// copy of us into the settled order.
+	for (const presence of otherCollaborators(editor.getCollaborators(), selfId)) {
 		const id = rawUserId(presence.userId)
 		ids.push(id)
 		if (presence.cursor) {
@@ -249,9 +248,7 @@ function CurrentPageMosaic({
 	// pass, the settled order is simply reconciled against the live roster.
 	const ordered = useMemo(() => {
 		const byId = new Map(participants.map((p) => [p.rawId, p]))
-		const known = orderedIds.filter((id) => byId.has(id))
-		const newcomers = participants.map((p) => p.rawId).filter((id) => !known.includes(id))
-		return [...known, ...newcomers].map((id) => byId.get(id)!)
+		return reconcileOrder(orderedIds, [...byId.keys()]).map((id) => byId.get(id)!)
 	}, [orderedIds, participants])
 
 	// FLIP bookkeeping: previous rects by rawId. Guarded by an order key so

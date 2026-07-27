@@ -359,27 +359,54 @@ tracked as separate internal-service-auth work — see issue #24.)
 
 ## Terminals & tmux
 
-Canvas terminals run an Omarchy-derived tmux config
-([deploy/tmux-ensembleworks.conf](deploy/tmux-ensembleworks.conf), adapted from
-[basecamp/omarchy](https://github.com/basecamp/omarchy), MIT — local edits
-are marked `ENSEMBLEWORKS` in the file):
+There are **two** Omarchy-derived tmux configs
+([basecamp/omarchy](https://github.com/basecamp/omarchy), MIT — local edits are
+marked `ENSEMBLEWORKS` in each file). They share no base, and must not be
+merged: tmux options set with `set -g` are *server*-global, so a single file
+could not give canvas terminals one look and the dev stack another.
 
-- Prefix is **Ctrl-Space** (Ctrl-b still works). `prefix h`/`v` split,
-  `prefix c` new window, `prefix q` reloads the config, `prefix ?` lists keys.
-- **Vi copy-mode**: `prefix [`, then `v` to select, `y` to yank — the yank
-  lands in your *browser* clipboard (OSC52 via tmux `set-clipboard` + the
-  xterm.js clipboard addon).
-- Mouse is on: wheel-scroll in a terminal scrolls tmux history.
-- The Alt-key bindings (`M-1..9`, `C-M-arrows`) work over plain `ssh` +
-  `tmux attach`, but the browser/OS eats some of them on the canvas — the
-  prefix-based bindings always work.
-- The status bar sits at the top of the terminal (Omarchy's default).
-- Apps that auto-detect light/dark (Claude Code's "Auto Terminal", vim, bat)
-  can't query the background through tmux < 3.4 (it drops OSC 11), so the
-  config exports `COLORFGBG=0;15` — the standard "light background" hint.
-  Open a fresh tmux window (or restart the app) after changing it.
-- The config applies when the tmux server starts; to restyle a running
-  server: `tmux source-file deploy/tmux-ensembleworks.conf`.
+| File | Serves | Multiplexer visible? |
+| --- | --- | --- |
+| [deploy/tmux-ensembleworks.conf](deploy/tmux-ensembleworks.conf) | canvas terminals (`canvas-<id>` sessions, spawned by the terminal gateway) | **no** — "invisible tmux" |
+| [deploy/tmux-dev.conf](deploy/tmux-dev.conf) | the `bin/dev` stack (the `workspace` session) | yes |
+
+They stay independent because they run on **different tmux servers**: in prod
+canvas terminals run as the sandbox user (its own default socket), and `bin/dev`
+always passes `tmux -L <session>` so the devcontainer — where both live under
+one user — keeps them apart too.
+
+**Canvas terminals — "invisible tmux".** A canvas terminal should read as a
+terminal, not as a multiplexer. Session persistence, scrollback and clipboard
+are kept; every affordance that reveals tmux is removed:
+
+- **No status bar, and no prefix** (`prefix`/`prefix2` are `None`), so `C-Space`
+  and `C-b` pass through to the app you're running.
+- No splits, windows or session switching, and **no right-click menu** — tmux's
+  own context menu (Horizontal Split / Kill / Respawn / Zoom) is reachable with
+  no prefix at all, so it is unbound explicitly; right-click falls through to
+  the browser's menu.
+- **Kept:** mouse on (wheel-scroll scrolls tmux history), vi copy-mode,
+  drag/double/triple-click copy landing in your *browser* clipboard (OSC52 via
+  tmux `set-clipboard` + the xterm.js clipboard addon), 50k scrollback.
+- Removals are written as explicit `unbind` lines, never omissions — the canvas
+  tmux server is long-lived and survives deploys, so the file lands via
+  `source-file`, which can only remove what it *names*.
+- Known gap: the `Esc Esc to exit focus` hint lived in the status bar and is
+  gone. It wants to be a transient overlay in the canvas client.
+
+**The dev stack** keeps the full multiplexer — prefix **Ctrl-Space** (Ctrl-b
+too), `prefix h`/`v` split, `prefix c` new window, `prefix q` reload, `prefix ?`
+lists keys, `M-1..9` window switching, status bar at the top. Attach with
+`bin/dev attach`.
+
+Both configs export `COLORFGBG=0;15` — the standard "light background" hint —
+because apps that auto-detect light/dark (Claude Code's "Auto Terminal", vim,
+bat) can't query the background through tmux < 3.4, which drops OSC 11. Open a
+fresh window (or restart the app) after changing it.
+
+A config applies when its tmux server starts; to restyle a running server:
+`tmux source-file <the conf>` (for canvas terminals the prefix is `None`, so the
+`prefix q` reload binding is unreachable — use the CLI form).
 
 The look is the **Wellmaintained paper theme**: tokens live in
 `client/src/theme.ts` (shape chrome, xterm palette) and `client/src/theme.css`

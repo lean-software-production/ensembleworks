@@ -66,7 +66,7 @@
 // below for where each rectangle's world-space coordinates come from
 // (seedGoldenBoard's own literal seeding coordinates, lib/seed.ts).
 // ============================================================================
-import { expect, test } from '../lib/fixtures'
+import { expect, identityState, test } from '../lib/fixtures'
 import { GOLDEN_BOARD_SHAPE_COUNT, seedGoldenBoard } from '../lib/seed'
 import { waitForBoot } from '../lib/canvas-v2'
 import {
@@ -83,7 +83,7 @@ import {
 	type Camera,
 	type RegionMask,
 } from '../lib/parity'
-import type { Page } from '@playwright/test'
+import type { Browser, BrowserContext, Page } from '@playwright/test'
 
 // Overall gate — CONSERVATIVE on purpose (bounds/plan: "start conservative;
 // tighten as bodies land"). Empirically, the real golden board scores
@@ -201,7 +201,43 @@ async function assertCoreBodies(page: Page): Promise<void> {
 	await expect(page.locator('[data-shape-body="geo"]')).toHaveCount(2)
 }
 
-test('golden board parity: v1 vs v2 (Task F1)', async ({ page, context }, testInfo) => {
+
+// Contexts spawned per test, closed after it. With workers:1 the browser is
+// reused across specs, so a context left open would keep its sync connection
+// alive and leak presence into every later test (see multiplayer.spec.ts).
+// Tracked here rather than in a try/finally so a mid-test failure still cleans
+// up — which is exactly when it matters.
+const spawnedContexts: BrowserContext[] = []
+test.afterEach(async () => {
+	for (const ctx of spawnedContexts.splice(0)) await ctx.close()
+})
+
+// The v2 page runs as a DIFFERENT user from the v1 page.
+//
+// Not cosmetic: SingleTabGate allows one live tab per (room, user), so a second
+// tab of the SAME user in the same room is refused and never mounts — v2 would
+// never boot and the comparison could not happen. These tests are about how two
+// renderers draw the same document, not about presence, so the second identity
+// costs nothing and keeps the pair mountable.
+//
+// The viewport is set explicitly because a hand-rolled context does NOT inherit
+// the project's `use` block, and these screenshots are pixel-compared. The
+// dialog guard is re-attached for the same reason lib/fixtures.ts adds it to
+// its own page fixture: a dialog here means the identity state never landed.
+async function newV2Page(browser: Browser, baseURL: string | undefined) {
+	const ctx = await browser.newContext({
+		storageState: identityState('E2E Parity V2', 'e2e-user-0000-0000-0009', baseURL ?? 'http://127.0.0.1:5273'),
+		viewport: { width: 1280, height: 720 },
+	})
+	spawnedContexts.push(ctx)
+	const page = await ctx.newPage()
+	page.on('dialog', (d) => {
+		throw new Error(`unexpected dialog (identity fixture broken?): ${d.message()}`)
+	})
+	return { ctx, page }
+}
+
+test('golden board parity: v1 vs v2 (Task F1)', async ({ page, browser, baseURL }, testInfo) => {
 	const room = `parity-golden-${testInfo.workerIndex}`
 	await seedGoldenBoard(room)
 
@@ -212,7 +248,7 @@ test('golden board parity: v1 vs v2 (Task F1)', async ({ page, context }, testIn
 	const bufV1 = await screenshotV1Canvas(page)
 
 	// --- v2 (same room, same content via seedV2FromV1, same camera) ---
-	const page2 = await context.newPage()
+	const { page: page2 } = await newV2Page(browser, baseURL)
 	await page2.goto(`/?room=${room}&engine=v2`)
 	await waitForBoot(page2)
 	await seedV2FromV1(page2, room)
@@ -262,7 +298,7 @@ test('golden board parity: v1 vs v2 (Task F1)', async ({ page, context }, testIn
 // ============================================================================
 test.fail(
 	'regression guard: wrong note fill color drops parity below threshold',
-	async ({ page, context }, testInfo) => {
+	async ({ page, browser, baseURL }, testInfo) => {
 		const room = `parity-regression-${testInfo.workerIndex}`
 		await seedGoldenBoard(room)
 
@@ -271,7 +307,7 @@ test.fail(
 		await hideV1Chrome(page)
 		const bufV1 = await screenshotV1Canvas(page)
 
-		const page2 = await context.newPage()
+		const { page: page2 } = await newV2Page(browser, baseURL)
 		await page2.goto(`/?room=${room}&engine=v2`)
 		await waitForBoot(page2)
 		await seedV2FromV1(page2, room, { mutateFirstNoteColor: 'violet' })

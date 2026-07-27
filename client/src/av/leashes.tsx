@@ -1,20 +1,23 @@
 /**
- * Leashes from panel tiles to their teammate's live cursor — drawn only for
- * the active speaker or the tile you're hovering, and only when that cursor
- * is on the page you're viewing. The leash anchors at the tile's on-screen
- * centre (a live DOM element looked up via `getFaceEl`, pull-based — see
- * av/bridge.ts), so it must recompute after tiles render — the useValue
- * below re-derives on camera pans, peer changes and hover changes.
+ * A leash from a panel tile to its teammate's live cursor — drawn only for the
+ * tile you're actively hovering, and only when that cursor is on the page
+ * you're viewing. The leash anchors at the tile's on-screen centre (a live DOM
+ * element looked up via `getFaceEl`, pull-based — see av/bridge.ts), so it must
+ * recompute after tiles render — the useValue below re-derives on camera pans
+ * and hover changes.
  *
- * Behaviour change vs the old faces rail (Task 5 cutover): every panel tile
- * registers as an anchor, camera on or off — the rail only registered
- * camera-on faces, so camera-off teammates never leashed. Deliberate: tiles
- * are always present in the panel, so speaking/hovered camera-off users now
- * leash to their cursor too.
+ * Speaking does NOT draw a leash. It used to (the active speaker leashed
+ * unconditionally), but a line whipping across the canvas every time anyone
+ * talks reads as noise, not information — in a room where people talk
+ * constantly it is on more than it is off. Hover stays: it's an explicit,
+ * one-at-a-time "where is this person?" request. Speaking is still signalled on
+ * the tile itself (the blue outline in chrome/PanelTile.tsx).
+ *
+ * Every panel tile registers as an anchor, camera on or off, so hovering a
+ * camera-off teammate leashes to their cursor too.
  */
 import { Editor, useValue } from 'tldraw'
 import { rawUserId } from '@ensembleworks/contracts'
-import type { RemotePeer } from './useLiveKitRoom'
 
 export interface Leash {
 	id: string
@@ -23,48 +26,43 @@ export interface Leash {
 	x2: number
 	y2: number
 	color: string
-	strong: boolean
 }
 
 export function useLeashes(
 	editor: Editor,
-	peers: RemotePeer[],
 	hoveredId: string | null,
 	getFaceEl: (id: string) => HTMLElement | null
 ): Leash[] {
 	return useValue<Leash[]>(
 		'leashes',
 		() => {
+			if (!hoveredId) return []
 			editor.getCamera() // subscribe to pan / zoom
-			const collaborators = editor.getCollaboratorsOnCurrentPage()
-			const out: Leash[] = []
-			for (const peer of peers) {
-				const id = rawUserId(peer.identity)
-				if (!peer.isSpeaking && hoveredId !== id) continue
-				const presence = collaborators.find((c) => rawUserId(c.userId) === id)
-				if (!presence?.cursor) continue
-				const el = getFaceEl(id)
-				if (!el) continue
-				const rect = el.getBoundingClientRect()
-				const end = editor.pageToViewport({ x: presence.cursor.x, y: presence.cursor.y })
-				out.push({
-					id,
+			const presence = editor
+				.getCollaboratorsOnCurrentPage()
+				.find((c) => rawUserId(c.userId) === hoveredId)
+			if (!presence?.cursor) return []
+			const el = getFaceEl(hoveredId)
+			if (!el) return []
+			const rect = el.getBoundingClientRect()
+			const end = editor.pageToViewport({ x: presence.cursor.x, y: presence.cursor.y })
+			return [
+				{
+					id: hoveredId,
 					x1: rect.left + rect.width / 2,
 					y1: rect.top + rect.height / 2,
 					x2: end.x,
 					y2: end.y,
 					color: presence.color,
-					strong: peer.isSpeaking,
-				})
-			}
-			return out
+				},
+			]
 		},
-		[editor, peers, hoveredId, getFaceEl]
+		[editor, hoveredId, getFaceEl]
 	)
 }
 
-// A full-viewport SVG that draws each active leash from a rail face to its
-// teammate's cursor. Non-interactive; sits above the canvas but below the rail.
+// A full-viewport SVG that draws the active leash from a panel tile to its
+// teammate's cursor. Non-interactive; sits above the canvas but below the panel.
 export function LeashOverlay({ leashes }: { leashes: Leash[] }) {
 	if (leashes.length === 0) return null
 	return (
@@ -86,10 +84,10 @@ export function LeashOverlay({ leashes }: { leashes: Leash[] }) {
 					x2={l.x2}
 					y2={l.y2}
 					stroke={l.color}
-					strokeWidth={l.strong ? 2.5 : 1.5}
-					strokeDasharray={l.strong ? undefined : '4 4'}
+					strokeWidth={1.5}
+					strokeDasharray="4 4"
 					strokeLinecap="round"
-					opacity={l.strong ? 0.9 : 0.6}
+					opacity={0.6}
 				/>
 			))}
 		</svg>
