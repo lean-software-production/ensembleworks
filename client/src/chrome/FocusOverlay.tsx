@@ -17,6 +17,7 @@ import { useEffect, useRef, type CSSProperties } from 'react'
 import { stopEventPropagation, useEditor, useValue } from 'tldraw'
 import { wm } from '../theme'
 import { enterFocus, exitFocus, FOCUSABLE_SHAPE_TYPES, useFocusedShapeId } from './focus'
+import { focusKeyVerdict } from './focusKeys'
 import { useIsPresenting, usePresenter } from './present'
 import { useMidGesture } from './useMidGesture'
 
@@ -188,38 +189,39 @@ export function FocusOverlay() {
 
 	// Capture-phase so a focused xterm's own attachCustomKeyEventHandler (bound
 	// to its hidden textarea, a target-phase listener) never gets a chance to
-	// swallow the chord — see TerminalShapeUtil's keydown handling. Also
+	// swallow the exit chord — see TerminalShapeUtil's keydown handling. Also
 	// Cmd+Shift+Enter for Mac users.
 	//
 	// Fix 1 (spec §7 focus guard): tldraw's own useKeyboardShortcuts arms
 	// native tools ('n' note, 'e' eraser, ...) from a target-phase listener on
-	// `document.body` — this capture-phase listener runs ahead of it, same
-	// trick the chord above relies on. While focused, the canvas gets NO tool
-	// keys at all; the terminal keeps everything (its hidden xterm textarea is
-	// excluded by the editable-target check, same guard CommandBar's own
-	// accelerator handler uses); 'p' (Present must stay startable — see
-	// CommandBar.tsx's own focused-guard) and this chord are the only two
-	// pass-throughs.
+	// `document.body` — this capture-phase listener runs ahead of it. While
+	// focused the canvas gets NO tool keys at all; the terminal keeps
+	// everything (its hidden xterm textarea is an editable target).
+	//
+	// EW26: the decision itself now lives in ./focusKeys as a pure, tested
+	// function — see its header for why 'p' stopped being a pass-through and
+	// why Escape started being swallowed. This effect is just the DOM plumbing
+	// that feeds it and acts on its verdict.
 	useEffect(() => {
 		if (!focusedShapeId) return
 		function onKeyDown(e: KeyboardEvent) {
-			if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'Enter') {
-				e.preventDefault()
-				e.stopPropagation()
-				exitFocus(editor)
-				return
-			}
-			if (e.ctrlKey || e.metaKey || e.altKey) return
-			if (e.key.length !== 1) return
-			if (e.key.toLowerCase() === 'p') return
 			const target = e.target as HTMLElement | null
-			if (target) {
-				if (target.isContentEditable) return
-				const tag = target.tagName
-				if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-			}
+			const tag = target?.tagName
+			const verdict = focusKeyVerdict({
+				key: e.key,
+				ctrlKey: e.ctrlKey,
+				metaKey: e.metaKey,
+				altKey: e.altKey,
+				shiftKey: e.shiftKey,
+				editableTarget:
+					!!target &&
+					(target.isContentEditable || tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT'),
+				inDialog: !!target?.closest?.('[role="dialog"]'),
+			})
+			if (verdict === 'pass') return
 			e.preventDefault()
 			e.stopPropagation()
+			if (verdict === 'exit') exitFocus(editor)
 		}
 		window.addEventListener('keydown', onKeyDown, true)
 		return () => window.removeEventListener('keydown', onKeyDown, true)

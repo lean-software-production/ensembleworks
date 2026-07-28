@@ -18,6 +18,13 @@
  * See presentStrips.tsx and `chrome/present.ts` for the presence-meta
  * plumbing those read.
  *
+ * EW26: Present and "new terminal" have NO keyboard accelerator. Present
+ * hijacks every person's canvas, so it is button-plus-confirmation only (see
+ * PresentConfirmDialog.tsx); 'm' went with it because a stray keystroke that
+ * spawns a shape and a PTY on the shared canvas is noise everyone else has to
+ * clean up. Every other accelerator here is self-only or trivially undoable
+ * and keeps its key.
+ *
  * Docking (spec §4 "Docking", Task 5): `settings.dockEdge` picks which
  * screen edge the NORMAL bar renders against — 'bottom' (default) needs no
  * wrapper (the Toolbar slot already anchors there), the other three edges
@@ -288,18 +295,19 @@ export function CommandBar() {
 			if (editor.getEditingShapeId() !== null) return
 			if (!editor.getInstanceState().isFocused) return
 
-			// Focus view (spec §7): a focused terminal owns the keyboard, so every
-			// bar accelerator is suppressed except 'p' — Present must stay
-			// reachable so it can preempt focus (FocusOverlay.tsx exits focus
-			// first once presenting starts, per its "Present wins" effect). The
-			// capture-phase Ctrl+Shift+Enter chord in FocusOverlay.tsx is the real
-			// exit; everything else (laser, note, Esc, ...) is reachable again
-			// once the user exits focus first.
-			if (focusedShapeId && e.key.toLowerCase() !== 'p') return
+			// Focus view (spec §7): a focused shape owns the keyboard, so every
+			// bar accelerator is suppressed — with no exceptions. EW26 removed
+			// the one that existed ('p' for Present): Present now has no
+			// keyboard route at all, only the ▶ button + its confirmation
+			// modal. The capture-phase Ctrl+Shift+Enter chord in
+			// FocusOverlay.tsx is the exit; everything else (laser, note, ...)
+			// is reachable again once the user exits focus first.
+			if (focusedShapeId) return
 
 			// Present (spec §5): Esc always returns to Work chrome — ends the
 			// broadcast if I'm presenting, opts out of follow if I'm watching.
-			// 'p' starts presenting from the normal bar. Both share this
+			// EW26 removed the 'p' branch that used to sit alongside it —
+			// Present is click-plus-confirm only now. Esc shares this
 			// handler's typing/editing guards above rather than getting an
 			// always-on path: a deliberate tradeoff (noted in the plan) — Esc
 			// won't reach Present while a shape is being edited or a text
@@ -316,15 +324,6 @@ export function CommandBar() {
 					stopFollowing()
 					return
 				}
-				return
-			}
-			if (e.key.toLowerCase() === 'p' && !isPresenting && !presenter?.userId) {
-				e.preventDefault()
-				// tryStartPresenting re-checks collaborators imperatively: the
-				// `presenter` in this closure is render-fresh at best, so two
-				// people pressing P near-simultaneously would both pass the
-				// guard above (see present.ts's doc comment).
-				tryStartPresenting(editor)
 				return
 			}
 
@@ -468,9 +467,8 @@ export function CommandBar() {
 				id="present"
 				icon="share-1"
 				label="present"
-				accelerator="p"
 				accentColor={wm.ok}
-				title="Present (P)"
+				title="Present the room's canvas"
 				iconOnly={vertical}
 				// tryStartPresenting, not presentingAtom.set(true): the button is
 				// hidden while someone else presents, but render state lags
