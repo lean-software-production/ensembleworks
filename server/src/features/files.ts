@@ -6,21 +6,15 @@
  * `gateway` is the remote seam: v1 rejects it with 501; later a relay arm
  * forwards to the named gateway instead of localhost.
  */
+/// <reference path="../rrweb-umd.d.ts" />
 import express from 'express'
-import { createRequire } from 'node:module'
 import path from 'node:path'
 import { errorPage, injectBridge, renderMarkdown } from '../files-render.ts'
-
-const require = createRequire(import.meta.url)
-// rrweb's UMD build exposes window.rrweb; package `exports` blocks the direct
-// subpath resolve, so fall back to locating the dist file next to package.json.
-const RRWEB_DIST = (() => {
-	try {
-		return require.resolve('rrweb/dist/rrweb.umd.min.cjs')
-	} catch {
-		return path.join(path.dirname(require.resolve('rrweb/package.json')), 'dist/rrweb.umd.min.cjs')
-	}
-})()
+// rrweb's UMD build exposes window.rrweb. Embedded as text at build time (the
+// relative path dodges the package's `exports` block on dist subpaths) so the
+// `bun build --compile` binary carries it — a runtime require.resolve has no
+// node_modules to find on a deployed box and would fail the boot check.
+import rrwebSource from '../../../node_modules/rrweb/dist/rrweb.umd.min.cjs' with { type: 'text' }
 
 const DOC_HTML = new Set(['.html', '.htm'])
 const DOC_MD = new Set(['.md', '.markdown'])
@@ -38,7 +32,7 @@ export function createFilesRouter(): express.Router {
 	const router = express.Router()
 
 	router.get('/files-assets/rrweb.js', (_req, res) => {
-		res.type('text/javascript').sendFile(RRWEB_DIST)
+		res.type('text/javascript').send(rrwebSource)
 	})
 
 	router.get(/^\/files\/(.+)/, async (req, res) => {
