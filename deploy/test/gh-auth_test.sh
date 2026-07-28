@@ -60,6 +60,7 @@ STUB
 		esac
 		case "$2" in
 		ok) echo "echo \"${FAKE_TOKEN}\"" ;;
+		ok-noisy) echo "echo 'ensembleworks-gh-token: warming cache' >&2; echo \"${FAKE_TOKEN}\"" ;;
 		fail) echo 'echo "ensembleworks-gh-token: github-app.env missing" >&2; exit 1' ;;
 		generic-fail) echo 'echo "ensembleworks-gh-token: mint failed: 500 from GitHub" >&2; exit 1' ;;
 		norule) echo 'exit 1' ;;
@@ -135,13 +136,28 @@ contains "$out" "gh token: <none>" "shim leaves a non-agent user's gh unauthenti
 contains "$out" "gh args: api /rate_limit" "shim passes arguments through untouched"
 eq "$(wc -l <"$MINTLOG")" "0" "shim mints nothing for a non-agent user"
 
+# The helper MUST be wired into the sandbox HOME for these two cases, or they
+# pass vacuously: with no helper configured, `git credential fill` yields
+# nothing, so a shim with its guard deleted would still leave GH_TOKEN alone
+# and still mint nothing. Wired up, deleting the guard makes the shim overwrite
+# the caller's token with FAKE_TOKEN and mint to do it — which is what these
+# assertions detect.
 stubs ensembleworks-agent ok
+git config --file "${SANDBOX}/home/.gitconfig" \
+	--add credential.https://github.com.helper "${DEPLOY}/git-credential-ensembleworks"
 out="$(GH_TOKEN=caller-chose-this run_shim api /rate_limit)"
 contains "$out" "gh token: caller-chose-this" "shim never overrides an explicit GH_TOKEN"
 eq "$(wc -l <"$MINTLOG")" "0" "shim mints nothing when GH_TOKEN is already set"
 
+# The gh stub only echoes GH_TOKEN, so this case asserts the negative: with the
+# guard present the shim execs straight through and GH_TOKEN is never set
+# (stub prints "<none>"); with it deleted the shim mints and exports
+# FAKE_TOKEN, which `lacks` catches.
 stubs ensembleworks-agent ok
+git config --file "${SANDBOX}/home/.gitconfig" \
+	--add credential.https://github.com.helper "${DEPLOY}/git-credential-ensembleworks"
 out="$(GITHUB_TOKEN=caller-chose-this run_shim api /rate_limit)"
+lacks "$out" "$FAKE_TOKEN" "shim never overrides an explicit GITHUB_TOKEN"
 eq "$(wc -l <"$MINTLOG")" "0" "shim mints nothing when GITHUB_TOKEN is already set"
 
 # With the helper wired into the throwaway HOME's gitconfig, the shim must reach
@@ -248,6 +264,12 @@ rc=$?
 eq "$rc" "1" "generic mint error: exits non-zero"
 contains "$out" "500 from GitHub" "generic mint error: surfaces the underlying error"
 lacks "$out" "App not provisioned on this box" "generic mint error: distinct from the env-missing diagnosis"
+
+# A wrapper that chats on stderr while still succeeding must not corrupt the
+# captured token: the reported length is the token's, not token+noise.
+stubs ensembleworks-agent ok-noisy
+out="$(run_doctor)"
+contains "$out" "token mint succeeded (length ${#FAKE_TOKEN})" "noisy mint: reports the token's own length"
 
 # --- check 4: credential helper configured in ~/.gitconfig ------------------
 #
@@ -358,6 +380,17 @@ eq "$rc" "0" "SSH remote found: still exits zero (warn-only)"
 contains "$out" "SSH remote bypasses credential helpers entirely" "SSH remote found: warns"
 contains "$out" "myrepo" "SSH remote found: names the offending clone"
 
+# --quiet is the form deploy.sh invokes: failures only, so one warn line per
+# SSH clone under the agent's home never lands in the deploy log.
+green_stubs
+mkdir -p "${SANDBOX}/home/repos/myrepo"
+git -C "${SANDBOX}/home/repos/myrepo" init -q
+git -C "${SANDBOX}/home/repos/myrepo" remote add origin git@github.com:lean-software-production/myrepo.git
+out="$(run_green_doctor --quiet)"
+rc=$?
+eq "$rc" "0" "SSH remote under --quiet: still exits zero"
+lacks "$out" "SSH remote bypasses" "SSH remote under --quiet: warning suppressed"
+
 green_stubs
 out="$(run_green_doctor)"
 rc=$?
@@ -372,6 +405,12 @@ contains "$deploy_src" "scp -q deploy/gh-shim" "deploy.sh ships the gh shim"
 contains "$deploy_src" "scp -q deploy/git-credential-ensembleworks" "deploy.sh ships the credential helper"
 contains "$deploy_src" "scp -q deploy/ensembleworks-gh-doctor" "deploy.sh ships the doctor"
 contains "$deploy_src" "/tmp/ew-gh-shim /usr/local/bin/gh" "deploy.sh installs the shim as /usr/local/bin/gh"
+# The shim install must stay guarded: it shadows the real gh and execs
+# /usr/bin/gh by absolute path, so installing over a tarball-installed
+# /usr/local/bin/gh would break gh for every user on the box.
+contains "$deploy_src" 'if [ ! -x /usr/bin/gh ]; then' "deploy.sh skips the shim when /usr/bin/gh is absent"
+contains "$deploy_src" "refusing to overwrite the real gh" "deploy.sh refuses to clobber a foreign /usr/local/bin/gh"
+contains "$deploy_src" "grep -q 'gh-shim' /usr/local/bin/gh" "deploy.sh recognises its own shim by marker"
 contains "$deploy_src" "/usr/local/bin/git-credential-ensembleworks" "deploy.sh installs the credential helper"
 contains "$deploy_src" "/usr/local/bin/ensembleworks-gh-doctor" "deploy.sh installs the doctor"
 contains "$deploy_src" "credential.https://github.com.helper 'cache --timeout=2700'" "deploy.sh seeds the cache helper first"

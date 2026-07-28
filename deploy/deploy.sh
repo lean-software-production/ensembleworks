@@ -266,7 +266,22 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   # for any user other than \${AGENT_USER}, so the app user, root, and any human
   # shelling in are unaffected.
   sudo install -m0755 /tmp/ew-git-credential-ensembleworks /usr/local/bin/git-credential-ensembleworks
-  sudo install -m0755 /tmp/ew-gh-shim /usr/local/bin/gh
+  # The shim shadows the real gh and execs it by absolute path (/usr/bin/gh).
+  # Nothing in this repo provisions gh, so that path is a host assumption: apt
+  # installs to /usr/bin/gh, but the release tarball installs to
+  # /usr/local/bin/gh — exactly where we install the shim. Overwriting a
+  # tarball gh would leave the shim exec'ing a binary that no longer exists,
+  # breaking gh for EVERY user on the box, unrepairable by redeploy. So: only
+  # install when the real gh is where the shim expects it, and never clobber a
+  # /usr/local/bin/gh that isn't already ours.
+  if [ ! -x /usr/bin/gh ]; then
+    echo "    warn: /usr/bin/gh not present — skipping the gh shim (git auth still installed)" >&2
+  elif [ -e /usr/local/bin/gh ] && ! grep -q 'gh-shim' /usr/local/bin/gh 2>/dev/null; then
+    echo "    ERROR: /usr/local/bin/gh exists and is not our shim — refusing to overwrite the real gh" >&2
+    exit 1
+  else
+    sudo install -m0755 /tmp/ew-gh-shim /usr/local/bin/gh
+  fi
   sudo install -m0755 /tmp/ew-ensembleworks-gh-doctor /usr/local/bin/ensembleworks-gh-doctor
   # Box-wide tmux conf the sandbox user CAN read (it can't read the app's 700 home
   # where deploy/tmux-ensembleworks.conf ships). The host-provisioned launcher

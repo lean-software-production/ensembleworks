@@ -13,8 +13,9 @@
 #
 # The token is NEVER printed — only its length, so a human can confirm one
 # exists without it leaking into a terminal transcript that the whole room can
-# see. --quiet suppresses the passing-check lines (only failures and warnings
-# print), for the deploy-time invocation.
+# see. --quiet prints only failures — it suppresses the passing-check lines AND
+# check 8's warnings, so the deploy-time invocation cannot spray one warn line
+# per SSH clone into the deploy log.
 #
 # Deliberately `set -u` only, not `-e`: nearly every check captures a command's
 # exit code to route between distinct diagnoses (mint failure vs. missing env,
@@ -63,15 +64,20 @@ esac
 # 3. the token itself mints. Distinguish "App not provisioned on this box"
 # (github-app.env missing on the app user) from any other mint/API error,
 # since they need different fixes.
-mint_out="$(sudo -n -u ensembleworks ensembleworks-gh-token 2>&1)"
+# stderr goes to its own file rather than being merged into the capture: on the
+# success path a chatty wrapper would otherwise become part of $token, making
+# the reported length wrong and letting unrelated stderr text match a case
+# pattern below.
+mint_err="$(mktemp)"
+trap 'rm -f "$mint_err"' EXIT
+token="$(sudo -n -u ensembleworks ensembleworks-gh-token 2>"$mint_err")"
 mint_rc=$?
 if [ "$mint_rc" -ne 0 ]; then
-	case "$mint_out" in
+	case "$(cat "$mint_err")" in
 	*"github-app.env missing"*) fail "github-app.env missing — App not provisioned on this box" ;;
-	*) fail "token mint failed: ${mint_out}" ;;
+	*) fail "token mint failed: $(cat "$mint_err")" ;;
 	esac
 fi
-token="$mint_out"
 [ -n "$token" ] || fail "token mint failed: ensembleworks-gh-token produced no output"
 ok "token mint succeeded (length ${#token})"
 
@@ -147,7 +153,7 @@ if [ -n "${HOME:-}" ] && [ -d "$HOME" ]; then
 		remote="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
 		case "$remote" in
 		git@github.com:*)
-			echo "warn: SSH remote bypasses credential helpers entirely — switch ${repo} to HTTPS" >&2
+			[ "$QUIET" -eq 1 ] || echo "warn: SSH remote bypasses credential helpers entirely — switch ${repo} to HTTPS" >&2
 			;;
 		esac
 	done <<REPOS
