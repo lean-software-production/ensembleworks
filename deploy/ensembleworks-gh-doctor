@@ -1,0 +1,159 @@
+#!/usr/bin/env bash
+# ensembleworks-gh-doctor — answers "why is GitHub auth failing?" with one
+# distinct diagnosis per failure mode, instead of the generic 403 that a
+# missing App install, a wrong-owner remote, and an expired token all present
+# as. Installed to /usr/local/bin by deploy/deploy.sh, and also run
+# non-interactively by deploy.sh itself right after install (see deploy.sh's
+# "Deploy-time verification").
+#
+# Runs the checks below in dependency order and stops at the first hard
+# failure — later checks assume earlier ones held, so running them past a
+# failure would just produce confusing secondary noise. Check 8 is warn-only
+# and never fails the run.
+#
+# The token is NEVER printed — only its length, so a human can confirm one
+# exists without it leaking into a terminal transcript that the whole room can
+# see. --quiet suppresses the passing-check lines (only failures and warnings
+# print), for the deploy-time invocation.
+#
+# Deliberately `set -u` only, not `-e`: nearly every check captures a command's
+# exit code to route between distinct diagnoses (mint failure vs. missing env,
+# 404 vs. bad token, ...), which `-e` would abort past before the code could be
+# inspected.
+set -u
+
+AGENT_USER="ensembleworks-agent"
+# Test seams (mirroring gh-shim's EW_GH_REAL): point the "expected helper /
+# expected gh" checks at a sandboxed script instead of the real installed
+# path. They grant nothing beyond what the caller's own environment already
+# controls.
+HELPER_PATH="${EW_GH_DOCTOR_HELPER_PATH:-/usr/local/bin/git-credential-ensembleworks}"
+
+REPO_OWNER="lean-software-production"
+REPO_NAME="ensembleworks"
+REPO_URL="https://github.com/${REPO_OWNER}/${REPO_NAME}.git"
+GH_BIN="${EW_GH_DOCTOR_GH_BIN:-/usr/local/bin/gh}"
+
+QUIET=0
+[ "${1:-}" = "--quiet" ] && QUIET=1
+
+ok() {
+	[ "$QUIET" -eq 1 ] || echo "ok  : $1"
+}
+fail() {
+	echo "FAIL: $1" >&2
+	exit 1
+}
+
+# 1. invoking user must be the sandbox agent user — every other check assumes
+# this, since the sudoers rule and gitconfig below are provisioned only for it.
+user="$(id -un)"
+[ "$user" = "$AGENT_USER" ] || fail "auth is provisioned for \`${AGENT_USER}\`; you are \`${user}\`"
+ok "invoking user is ${AGENT_USER}"
+
+# 2. the NOPASSWD sudoers rule that lets this user mint a token as the app
+# user must exist — without it, check 3's mint attempt just hangs or 403s with
+# no clue why.
+sudo_rules="$(sudo -n -l 2>/dev/null)" || sudo_rules=""
+case "$sudo_rules" in
+*ensembleworks-gh-token*) ok "NOPASSWD sudoers rule for ensembleworks-gh-token present" ;;
+*) fail "NOPASSWD sudoers rule missing — host provisioning, see \`deploy/github-app-runbook.md\`" ;;
+esac
+
+# 3. the token itself mints. Distinguish "App not provisioned on this box"
+# (github-app.env missing on the app user) from any other mint/API error,
+# since they need different fixes.
+mint_out="$(sudo -n -u ensembleworks ensembleworks-gh-token 2>&1)"
+mint_rc=$?
+if [ "$mint_rc" -ne 0 ]; then
+	case "$mint_out" in
+	*"github-app.env missing"*) fail "github-app.env missing — App not provisioned on this box" ;;
+	*) fail "token mint failed: ${mint_out}" ;;
+	esac
+fi
+token="$mint_out"
+[ -n "$token" ] || fail "token mint failed: ensembleworks-gh-token produced no output"
+ok "token mint succeeded (length ${#token})"
+
+# 4. ~/.gitconfig must chain BOTH the warm cache and our minting helper for
+# https://github.com — order is cache-first (deploy/deploy.sh seeds it that
+# way) but presence, not order, is what we can check reliably here.
+helpers="$(git config --get-all credential.https://github.com.helper 2>/dev/null || true)"
+has_cache=0
+has_ew=0
+stale=""
+while IFS= read -r h; do
+	[ -z "$h" ] && continue
+	case "$h" in
+	cache*) has_cache=1 ;;
+	"$HELPER_PATH") has_ew=1 ;;
+	*) stale="${stale} ${h}" ;;
+	esac
+done <<HELPERS
+${helpers}
+HELPERS
+if [ "$has_cache" -eq 0 ] || [ "$has_ew" -eq 0 ]; then
+	msg="credential helper not configured in ~/.gitconfig — redeploy"
+	[ -n "$stale" ] && msg="${msg} (found stale helper(s):${stale})"
+	fail "$msg"
+fi
+ok "credential helper configured (cache + ${HELPER_PATH})"
+
+# 5. the configured helper must actually hand back a password when asked —
+# distinct from check 4, since "configured" and "working" fail for different
+# reasons (reseed gitconfig vs. redeploy the helper binary).
+fill_out="$(printf 'protocol=https\nhost=github.com\n\n' |
+	GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null)" || fill_out=""
+case "$fill_out" in
+*"password="*) ok "credential fill returns a token" ;;
+*) fail "helper configured but returning nothing" ;;
+esac
+
+# 6. an actual git operation against the repo, over the credential machinery
+# just verified in checks 4/5. A 404-shaped failure means the App isn't
+# installed on that owner; anything else means the token itself is bad —
+# different fixes (install the App vs. re-provision the token).
+lsremote_out="$(GIT_TERMINAL_PROMPT=0 git ls-remote "$REPO_URL" HEAD 2>&1)"
+lsremote_rc=$?
+if [ "$lsremote_rc" -ne 0 ]; then
+	case "$lsremote_out" in
+	*"not found"*|*"Not Found"*|*"404"*) fail "App not installed on that owner (repository not found via ls-remote)" ;;
+	*) fail "token rejected / expired (git ls-remote failed: ${lsremote_out})" ;;
+	esac
+fi
+ok "git ls-remote against ${REPO_OWNER}/${REPO_NAME} succeeded"
+
+# 7. gh itself must resolve to the shim (not a `gh` earlier on PATH that
+# bypasses it entirely), and an actual API call through it must succeed.
+gh_path="$(command -v gh 2>/dev/null || true)"
+if [ "$gh_path" != "$GH_BIN" ]; then
+	fail "a different gh is earlier on PATH: ${gh_path:-<not found>}"
+fi
+gh_out="$(gh api "/repos/${REPO_OWNER}/${REPO_NAME}" --jq .full_name 2>&1)"
+gh_rc=$?
+if [ "$gh_rc" -ne 0 ]; then
+	fail "gh authenticated but API call failed: ${gh_out}"
+fi
+ok "gh (${gh_path}) authenticated and the API call succeeded (${gh_out})"
+
+# 8. warn-only: an SSH remote under the agent's home bypasses the credential
+# helper entirely (git never consults it for git@ URLs), so a clone left on
+# SSH silently falls back to whatever SSH keys happen to be around. This never
+# fails the run — a human decides whether/when to switch it.
+if [ -n "${HOME:-}" ] && [ -d "$HOME" ]; then
+	while IFS= read -r gitdir; do
+		[ -n "$gitdir" ] || continue
+		repo="$(dirname "$gitdir")"
+		remote="$(git -C "$repo" remote get-url origin 2>/dev/null || true)"
+		case "$remote" in
+		git@github.com:*)
+			echo "warn: SSH remote bypasses credential helpers entirely — switch ${repo} to HTTPS" >&2
+			;;
+		esac
+	done <<REPOS
+$(find "$HOME" -maxdepth 4 -name .git -type d 2>/dev/null)
+REPOS
+fi
+
+[ "$QUIET" -eq 1 ] || echo "all checks passed"
+exit 0
