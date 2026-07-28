@@ -80,20 +80,27 @@ through a replace op — regenerate the document and replace it.
 ## Pushing to GitHub
 
 You commit and push as the **`ensembleworks[bot]`** GitHub App, never a personal
-account. You can't read the App key (it's outside this sandbox) — instead mint a
-short-lived (~1h) token through the wrapper, then push over HTTPS:
+account — and you don't handle a token to do it. `git` and `gh` are wired to
+authenticate as the bot automatically in **any** shell: interactive, `sh -c`, a
+headless `claude -p`, or a Relay runner. Just use them:
 
 ```sh
-TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token)          # all org repos
-# TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token myrepo) # or scope to one
-git push "https://x-access-token:${TOKEN}@github.com/lean-software-production/<repo>.git" HEAD:my-branch
+git push origin HEAD:my-branch   # HTTPS remote — credentials are automatic
+gh pr create --fill              # acts as ensembleworks[bot]
+gh api /repos/lean-software-production/<repo>
 ```
 
-The **`gh` CLI is pre-wrapped** to do this for you — `gh pr create …`, `gh api …`,
-`gh run …` mint a fresh token automatically and act as the bot, so you rarely need
-the raw `git push` above.
+Clones must use an **HTTPS remote**
+(`https://github.com/lean-software-production/<repo>.git`). A `git@github.com:`
+remote goes over SSH, which bypasses the credential helper entirely and will
+fail.
 
-`main` is branch-protected, so open a PR and let a human merge — pushes straight to
-`main` are rejected by design. Credit teammates who paired with you using
-`Co-authored-by:` trailers. If the wrapper says the App isn't provisioned on this
-box, GitHub pushing just isn't set up here — carry on without it.
+`main` is branch-protected, so open a PR and let a human merge — pushes straight
+to `main` are rejected by design. Credit teammates who paired with you using
+`Co-authored-by:` trailers.
+
+If GitHub auth fails, run **`ensembleworks-gh-doctor`**. It names the actual
+cause — App not provisioned on this box, missing sudo rule, stale credential
+config, expired token, an SSH remote — instead of the generic 403 every one of
+those used to produce. If it reports the App isn't provisioned here, GitHub
+pushing just isn't set up on this box: carry on without it.

@@ -28,8 +28,11 @@ because the mob wants to drive any repo (and its CI) from inside EnsembleWorks. 
 breadth is intentional, the safety rests entirely on the *other* controls:
 
 - **Short-lived tokens** — the App's private key mints installation tokens that
-  expire in ~1 hour, so a leaked token has a 1-hour blast radius. Mint a per-repo
-  token (`gh-app-token.bash --repos <repo>`) when a job only needs one repo.
+  expire in ~1 hour, so a leaked token has a 1-hour blast radius. Tokens are
+  **org-wide tokens only** (EW25 removed `ensembleworks-gh-token`'s repo
+  argument): a repo-scoped token cached by git's credential cache gets replayed
+  against a different repo and 403s, and the App is installed org-wide anyway,
+  so scoping bought nothing but a confusing failure.
 - **PR-only via branch protection** — protect `main` on *every repo whose `main`
   matters* (not just `ensembleworks`): the bot can push branches and open PRs but a human
   merges with their own creds. This is the real safety valve, and because the token
@@ -156,19 +159,23 @@ narrow wrapper run as the app user:
   > "sessions will NOT start" warning even though sessions work. The laingville
   > bootstrap provisions both rules.
 
-- A canvas agent then mints + pushes:
+- A canvas agent doesn't mint anything by hand — `/usr/local/bin/gh` and
+  `git-credential-ensembleworks` call the wrapper for it, so plain `git push`
+  and `gh` authenticate as the bot in any shell. To mint one manually (operator
+  debugging only; the wrapper takes **no arguments** — org-wide tokens only):
 
   ```sh
-  TOKEN=$(sudo -u ensembleworks ensembleworks-gh-token)        # or: … ensembleworks-gh-token myrepo
-  git push "https://x-access-token:${TOKEN}@github.com/lean-software-production/<repo>.git" HEAD:my-branch
+  TOKEN=$(sudo -n -u ensembleworks ensembleworks-gh-token)
   ```
 
+  When auth misbehaves, run `ensembleworks-gh-doctor` rather than guessing.
+
 The wrapper hardcodes `--env` to the app user's own `github-app.env` and accepts
-only a validated comma-separated repo allowlist — it never forwards arbitrary
-`gh-app-token.bash` flags, so the sandbox user can't redirect `--env` to read files
-as the app user. Net effect on a prod box: a leaked *token* still has a ~1h blast
-radius, but the *key* can no longer be exfiltrated by the mob at all. Revocation
-(step "Revocation") is unchanged.
+no arguments at all — it never forwards arbitrary `gh-app-token.bash` flags, so
+the sandbox user can't redirect `--env` to read files as the app user. Net
+effect on a prod box: a leaked *token* still has a ~1h blast radius, but the
+*key* can no longer be exfiltrated by the mob at all. Revocation (step
+"Revocation") is unchanged.
 
 ## 7. Branch protection on `main` (the real control)
 

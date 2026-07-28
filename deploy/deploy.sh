@@ -87,13 +87,15 @@ for f in "$REQ_FILE" "$LIB_FILE" "$CADDY_PROD" \
 	deploy/posture-era \
 	deploy/tmux-ensembleworks.conf \
 	deploy/ensembleworks-gh-token \
+	deploy/git-credential-ensembleworks \
+	deploy/gh-shim \
+	deploy/ensembleworks-gh-doctor \
 	bin/gh-app-token.bash \
 	deploy/agent-home/AGENTS.md \
 	deploy/agent-home/.claude/CLAUDE.md \
 	deploy/agent-home/.claude/skills/publish-doc/SKILL.md \
 	deploy/agent-home/term.env.example \
-	deploy/agent-home/term-env.bashrc \
-	deploy/agent-home/gh-helper.bashrc; do
+	deploy/agent-home/term-env.bashrc; do
 	[ -f "$f" ] || {
 		echo "missing $f — run from the repo root" >&2
 		exit 1
@@ -258,6 +260,29 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   # the boundary. See deploy/github-app-runbook.md.
   sudo install -m0755 /tmp/ew-gh-app-token.bash /usr/local/bin/gh-app-token.bash
   sudo install -m0755 /tmp/ew-ensembleworks-gh-token /usr/local/bin/ensembleworks-gh-token
+  # EW25: the auth path itself. These live in /usr/local/bin because it is the
+  # ONLY directory every shell finds — it is on sudo's secure_path and on a
+  # scrubbed \`env -i sh\`'s PATH, where ~/.local/bin is not. All three are inert
+  # for any user other than \${AGENT_USER}, so the app user, root, and any human
+  # shelling in are unaffected.
+  sudo install -m0755 /tmp/ew-git-credential-ensembleworks /usr/local/bin/git-credential-ensembleworks
+  # The shim shadows the real gh and execs it by absolute path (/usr/bin/gh).
+  # Nothing in this repo provisions gh, so that path is a host assumption: apt
+  # installs to /usr/bin/gh, but the release tarball installs to
+  # /usr/local/bin/gh — exactly where we install the shim. Overwriting a
+  # tarball gh would leave the shim exec'ing a binary that no longer exists,
+  # breaking gh for EVERY user on the box, unrepairable by redeploy. So: only
+  # install when the real gh is where the shim expects it, and never clobber a
+  # /usr/local/bin/gh that isn't already ours.
+  if [ ! -x /usr/bin/gh ]; then
+    echo "    warn: /usr/bin/gh not present — skipping the gh shim (git auth still installed)" >&2
+  elif [ -e /usr/local/bin/gh ] && ! grep -q 'gh-shim' /usr/local/bin/gh 2>/dev/null; then
+    echo "    ERROR: /usr/local/bin/gh exists and is not our shim — refusing to overwrite the real gh" >&2
+    exit 1
+  else
+    sudo install -m0755 /tmp/ew-gh-shim /usr/local/bin/gh
+  fi
+  sudo install -m0755 /tmp/ew-ensembleworks-gh-doctor /usr/local/bin/ensembleworks-gh-doctor
   # Box-wide tmux conf the sandbox user CAN read (it can't read the app's 700 home
   # where deploy/tmux-ensembleworks.conf ships). The host-provisioned launcher
   # (/usr/local/bin/ensembleworks-term-launch) execs \`tmux -f /etc/ensembleworks/tmux.conf\`.
@@ -285,11 +310,51 @@ if id -u "\${AGENT_USER}" >/dev/null 2>&1; then
   if ! sudo -u "\${AGENT_USER}" grep -q __ew_term_env_file "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
     sudo cat /tmp/ew-agent-home/term-env.bashrc | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
   fi
-  # gh wrapper (separate marker, so boxes that already have the term.env stanza still
-  # pick this up on a later deploy).
-  if ! sudo -u "\${AGENT_USER}" grep -q __ew_gh_helper "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
-    sudo cat /tmp/ew-agent-home/gh-helper.bashrc | sudo -u "\${AGENT_USER}" tee -a "\${AGENT_HOME}/.bashrc" >/dev/null
+  # EW25: exactly ONE auth path, reachable from every shell. The legacy ~/.bashrc
+  # gh() function existed only in interactive shells, so \`claude -p\`, the Relay
+  # executor and any \`sh -c\` got the bare /usr/bin/gh and died on "gh auth
+  # login". Strip it so the PATH shim installed above is the only wrapper. This
+  # is idempotent: a .bashrc without the markers is left untouched, and nothing
+  # else in the file is affected.
+  if sudo -u "\${AGENT_USER}" grep -q __ew_gh_helper "\${AGENT_HOME}/.bashrc" 2>/dev/null; then
+    sudo -u "\${AGENT_USER}" sed -i \\
+      '/^# --- EnsembleWorks gh helper (__ew_gh_helper) ---\$/,/^# --- end EnsembleWorks gh helper ---\$/d' \\
+      "\${AGENT_HOME}/.bashrc"
+    echo "    removed the legacy interactive-only gh() stanza from \${AGENT_HOME}/.bashrc"
   fi
+  # The EW25 prototypes live in ~/.local/bin, which is EARLIER on the agent's
+  # interactive PATH than /usr/local/bin — left in place they would shadow the
+  # shim and the fix would look like it had not landed. Only delete files that
+  # are ours (they call the token wrapper); never a hand-written replacement.
+  for p in gh git-credential-ensembleworks; do
+    proto="\${AGENT_HOME}/.local/bin/\${p}"
+    if sudo -u "\${AGENT_USER}" test -f "\$proto" &&
+       sudo -u "\${AGENT_USER}" grep -q ensembleworks-gh-token "\$proto"; then
+      sudo -u "\${AGENT_USER}" rm -f "\$proto"
+      echo "    removed prototype \$proto (superseded by /usr/local/bin/\${p})"
+    fi
+  done
+  # Credential config goes in the AGENT USER's OWN ~/.gitconfig — git reads it on
+  # every invocation regardless of PATH or shell type, and nothing outside this
+  # user changes (deliberately NOT the box-wide system config: a human who has
+  # run \`gh auth login\` must keep their own identity). unset-all first makes the seed
+  # idempotent AND clears the prototype's ~/.local/bin helper path. Order
+  # matters: \`cache\` serves a warm token without a mint, and the minting helper
+  # answers the miss. 2700s against a ~60min token life leaves 15min of headroom,
+  # so a cached token can never be served past expiry. -H so git writes the
+  # target user's own ~/.gitconfig.
+  sudo -H -u "\${AGENT_USER}" git config --global --unset-all credential.https://github.com.helper || true
+  sudo -H -u "\${AGENT_USER}" git config --global --add credential.https://github.com.helper 'cache --timeout=2700'
+  sudo -H -u "\${AGENT_USER}" git config --global --add credential.https://github.com.helper /usr/local/bin/git-credential-ensembleworks
+  # Prove it in the shape that actually matters: the sandbox user under a
+  # SCRUBBED NON-INTERACTIVE shell (an interactive one would pass even with the
+  # old function). HOME is passed explicitly because ~/.gitconfig is where the
+  # credential config lives. Non-fatal, matching the CLI version self-check
+  # above — aborting a production deploy because the GitHub App is not
+  # provisioned on that host would be a worse failure than the one being fixed.
+  sudo -u "\${AGENT_USER}" env -i HOME="\${AGENT_HOME}" /bin/sh -c \\
+    '/usr/local/bin/ensembleworks-gh-doctor --quiet' ||
+    echo "    warn: ensembleworks-gh-doctor failed (diagnosis above)" >&2
 else
   echo "    sandbox user \${AGENT_USER} not present — skipping CLI + agent-home seed"
   echo "    (provision it via the laingville bootstrap; the term gateway fails closed until then)" >&2
@@ -361,6 +426,9 @@ scp -q "$PROD_UNITS"/ensembleworks-shared-browser.slice "${SSH_TARGET}:/tmp/"
 scp -q deploy/posture-era "${SSH_TARGET}:/tmp/ew-posture-era"
 scp -q deploy/tmux-ensembleworks.conf "${SSH_TARGET}:/tmp/ew-tmux.conf"
 scp -q deploy/ensembleworks-gh-token "${SSH_TARGET}:/tmp/ew-ensembleworks-gh-token"
+scp -q deploy/git-credential-ensembleworks "${SSH_TARGET}:/tmp/ew-git-credential-ensembleworks"
+scp -q deploy/gh-shim "${SSH_TARGET}:/tmp/ew-gh-shim"
+scp -q deploy/ensembleworks-gh-doctor "${SSH_TARGET}:/tmp/ew-ensembleworks-gh-doctor"
 scp -q bin/gh-app-token.bash "${SSH_TARGET}:/tmp/ew-gh-app-token.bash"
 # Pre-clean the remote dir: `scp -r src host:dest` is non-idempotent — if dest
 # already exists (a prior deploy's copy survives in /tmp until reboot), scp nests
