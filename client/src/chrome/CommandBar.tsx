@@ -43,6 +43,7 @@ import {
 	useEditor,
 	useTools,
 	useValue,
+	type TLUiDialogProps,
 } from 'tldraw'
 import { useAvSnapshot } from '../av/bridge'
 import { collectBarItems, type BarItemDescriptor, type BarItemHelpers } from '../kernel/plugin'
@@ -63,7 +64,8 @@ import { useFocusedShapeId } from './focus'
 import { EnsembleMainMenu } from './MainMenu'
 import { OverflowMenu } from './OverflowMenu'
 import { RAIL_WIDTH, usePanelLayout } from './panelLayout'
-import { presentingAtom, tryStartPresenting, useIsPresenting, usePresenter } from './present'
+import { presentingAtom, useIsPresenting, usePresenter } from './present'
+import { PresentConfirmDialog } from './PresentConfirmDialog'
 import { PresenterStrip, ViewerStrip } from './presentStrips'
 import { useSettings, type DockEdge } from './settings'
 import { wm } from '../theme'
@@ -470,11 +472,19 @@ export function CommandBar() {
 				accentColor={wm.ok}
 				title="Present the room's canvas"
 				iconOnly={vertical}
-				// tryStartPresenting, not presentingAtom.set(true): the button is
-				// hidden while someone else presents, but render state lags
-				// presence — two near-simultaneous clicks would otherwise both
-				// start presenting (see present.ts's doc comment).
-				onClick={() => tryStartPresenting(editor)}
+				// EW26: the click OPENS the confirmation; only the modal's
+				// Present button starts the broadcast (see
+				// PresentConfirmDialog.tsx). Deduped by id so a
+				// double-click reuses the one dialog rather than stacking
+				// two — same trick as the terminal gateway picker.
+				onClick={() =>
+					addDialog({
+						id: 'ew-present-confirm',
+						component: (props: TLUiDialogProps) => (
+							<PresentConfirmDialog {...props} editor={editor} />
+						),
+					})
+				}
 			/>
 
 			<div style={barDividerStyle} />
