@@ -364,4 +364,41 @@ rc=$?
 eq "$rc" "0" "no SSH remotes: exits zero"
 lacks "$out" "SSH remote bypasses" "no SSH remotes: no warning printed"
 
+
+# --- deploy.sh wiring + agent guidance --------------------------------------
+
+deploy_src="$(cat "${DEPLOY}/deploy.sh")"
+contains "$deploy_src" "scp -q deploy/gh-shim" "deploy.sh ships the gh shim"
+contains "$deploy_src" "scp -q deploy/git-credential-ensembleworks" "deploy.sh ships the credential helper"
+contains "$deploy_src" "scp -q deploy/ensembleworks-gh-doctor" "deploy.sh ships the doctor"
+contains "$deploy_src" "/tmp/ew-gh-shim /usr/local/bin/gh" "deploy.sh installs the shim as /usr/local/bin/gh"
+contains "$deploy_src" "/usr/local/bin/git-credential-ensembleworks" "deploy.sh installs the credential helper"
+contains "$deploy_src" "/usr/local/bin/ensembleworks-gh-doctor" "deploy.sh installs the doctor"
+contains "$deploy_src" "credential.https://github.com.helper 'cache --timeout=2700'" "deploy.sh seeds the cache helper first"
+contains "$deploy_src" "--unset-all credential.https://github.com.helper" "deploy.sh makes the gitconfig seed idempotent"
+contains "$deploy_src" "__ew_gh_helper" "deploy.sh still knows the legacy .bashrc marker (to strip it)"
+contains "$deploy_src" "end EnsembleWorks gh helper" "deploy.sh strips through the closing marker"
+contains "$deploy_src" ".local/bin" "deploy.sh removes the shadowing prototypes"
+contains "$deploy_src" "ensembleworks-gh-doctor --quiet" "deploy.sh runs the doctor after installing"
+lacks "$deploy_src" "/etc/gitconfig" "deploy.sh never touches /etc/gitconfig"
+
+# Split into two literals so this comment can't accidentally self-match the
+# grep below (which greps deploy/ for the legacy stanza's name).
+legacy="gh-""helper"
+eq "$(ls "${DEPLOY}/agent-home/${legacy}.bashrc" 2>/dev/null | wc -l)" "0" "the legacy bashrc stanza file is deleted"
+eq "$(grep -rl "$legacy" "${DEPLOY}" 2>/dev/null | wc -l)" "0" "nothing in deploy/ references it any more"
+
+agents_src="$(cat "${DEPLOY}/agent-home/AGENTS.md")"
+lacks "$agents_src" "x-access-token" "AGENTS.md drops the manual push recipe"
+lacks "$agents_src" "ensembleworks-gh-token myrepo" "AGENTS.md drops the repo-scoping example"
+lacks "$agents_src" "pre-wrapped" "AGENTS.md drops the interactive-only 'pre-wrapped' claim"
+contains "$agents_src" "ensembleworks-gh-doctor" "AGENTS.md names the doctor as what to run when auth fails"
+contains "$agents_src" "HTTPS remote" "AGENTS.md says clones must use HTTPS remotes"
+contains "$agents_src" "Co-authored-by:" "AGENTS.md keeps the co-author guidance"
+contains "$agents_src" "branch-protected" "AGENTS.md keeps the PR-only rule"
+
+runbook_src="$(cat "${DEPLOY}/github-app-runbook.md")"
+lacks "$runbook_src" "ensembleworks-gh-token myrepo" "the runbook drops the scoped usage line"
+contains "$runbook_src" "org-wide tokens only" "the runbook says scoping was removed"
+
 exit "$fail"
