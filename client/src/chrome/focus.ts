@@ -31,7 +31,7 @@ export function useFocusedShapeId(): TLShapeId | null {
  */
 export const FOCUSABLE_SHAPE_TYPES = new Set(['terminal', 'frame'])
 
-import { EDIT_ON_FOCUS_SHAPE_TYPES } from './focusEditing'
+import { EDIT_ON_FOCUS_SHAPE_TYPES, focusStartsEditingSession } from './focusEditing'
 
 // Re-exported so focus.ts stays the one module callers reach for; the Set
 // itself lives next door in focusEditing.ts, which is tldraw-free so its
@@ -86,8 +86,12 @@ export function enterFocus(editor: Editor, shapeId: TLShapeId) {
 	// the focused id and the editing id, so a render that saw "focused but not
 	// editing" would exit focus the instant it was entered.
 	//
-	// setEditingShape alone is the whole mechanism: TerminalShapeUtil derives
-	// its isEditing from editor.getEditingShapeId() and focuses xterm off that.
+	// setEditingShape is the STATE half of the mechanism: TerminalShapeUtil
+	// derives its isEditing from editor.getEditingShapeId(). The DOM-focus half
+	// is TerminalShapeUtil's own effect, which keys off focus-view entry as
+	// well as the editing transition — deliberately, because setEditingShape is
+	// a no-op when the shape is already being edited and the transition alone
+	// therefore misses the "already typing, then hit ⛶" path (smoke Finding 2).
 	// The select tool is deliberately NOT transitioned into its `editing_shape`
 	// state — that state owns its own click-outside / cancel semantics, which
 	// would fight focus view's matte and its exit chord for control of the
@@ -95,8 +99,14 @@ export function enterFocus(editor: Editor, shapeId: TLShapeId) {
 	autoEnteredEditing = false
 	const shape = editor.getShape(shapeId)
 	if (shape && EDIT_ON_FOCUS_SHAPE_TYPES.has(shape.type)) {
+		// Read BEFORE the call — afterwards there is no way to tell an
+		// inherited session from one we just opened.
+		autoEnteredEditing = focusStartsEditingSession({
+			shapeId,
+			shapeType: shape.type,
+			editingShapeIdBefore: editor.getEditingShapeId(),
+		})
 		editor.setEditingShape(shapeId)
-		autoEnteredEditing = true
 	}
 	focusedShapeIdAtom.set(shapeId)
 }

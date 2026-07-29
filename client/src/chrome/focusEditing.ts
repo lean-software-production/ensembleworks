@@ -20,6 +20,30 @@
 export const EDIT_ON_FOCUS_SHAPE_TYPES = new Set(['terminal'])
 
 /**
+ * Did THIS focus session start the editing session, or did it inherit one the
+ * user had already opened by double-clicking into the shape?
+ *
+ * Only matters on the way out: exitFocus unwinds editing only for sessions it
+ * opened, so a user who was already typing into a terminal, hit ⛶, then left
+ * focus view lands back exactly where they were (still editing) rather than
+ * being kicked out of their own session. Same contract as `previousIsLocked`
+ * in focus.ts — restore what was there before, never a hardcoded default.
+ *
+ * Note that `editor.setEditingShape(id)` is a NO-OP when `id` is already the
+ * editing shape, which is why this has to be read BEFORE that call and cannot
+ * be inferred afterwards.
+ */
+export function focusStartsEditingSession(args: {
+	shapeId: string
+	shapeType: string
+	editingShapeIdBefore: string | null
+}): boolean {
+	const { shapeId, shapeType, editingShapeIdBefore } = args
+	if (!EDIT_ON_FOCUS_SHAPE_TYPES.has(shapeType)) return false
+	return editingShapeIdBefore !== shapeId
+}
+
+/**
  * Self-healing rule: focus view must not outlive the editing session it
  * opened. True only when a keyboard-attaching shape is focused AND something
  * has taken editing away from it.

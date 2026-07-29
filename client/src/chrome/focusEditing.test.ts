@@ -7,7 +7,11 @@
  * canvas-health/modalCopy.test.ts's header).
  */
 import assert from 'node:assert/strict'
-import { EDIT_ON_FOCUS_SHAPE_TYPES, shouldExitFocusForLostEditing } from './focusEditing'
+import {
+	EDIT_ON_FOCUS_SHAPE_TYPES,
+	focusStartsEditingSession,
+	shouldExitFocusForLostEditing,
+} from './focusEditing'
 
 // Policy: terminals attach the keyboard on focus; frames deliberately do not.
 assert.equal(EDIT_ON_FOCUS_SHAPE_TYPES.has('terminal'), true, 'terminals attach the keyboard')
@@ -76,6 +80,55 @@ assert.equal(
 	}),
 	false,
 	'unknown shape type defers to the shape-missing self-heal'
+)
+
+// --- focusStartsEditingSession -------------------------------------------
+// The plain path: select a terminal, hit ⛶ — focus view opens the editing
+// session, so exitFocus owns closing it.
+assert.equal(
+	focusStartsEditingSession({
+		shapeId: 'shape:t1',
+		shapeType: 'terminal',
+		editingShapeIdBefore: null,
+	}),
+	true,
+	'focusing a not-yet-editing terminal starts the session'
+)
+
+// Smoke Finding 2's path: the user double-clicked in and was already typing,
+// THEN hit ⛶. setEditingShape is a no-op here; the session is theirs, not
+// ours, so exitFocus must leave it running.
+assert.equal(
+	focusStartsEditingSession({
+		shapeId: 'shape:t1',
+		shapeType: 'terminal',
+		editingShapeIdBefore: 'shape:t1',
+	}),
+	false,
+	'focusing a terminal the user is already editing inherits their session'
+)
+
+// Editing was on some OTHER shape — focus view still opens a fresh session on
+// this one, so it owns it.
+assert.equal(
+	focusStartsEditingSession({
+		shapeId: 'shape:t1',
+		shapeType: 'terminal',
+		editingShapeIdBefore: 'shape:t2',
+	}),
+	true,
+	'editing elsewhere still means this session is ours'
+)
+
+// Frames never enter editing at all, so nothing is ever ours to unwind.
+assert.equal(
+	focusStartsEditingSession({
+		shapeId: 'shape:f1',
+		shapeType: 'frame',
+		editingShapeIdBefore: null,
+	}),
+	false,
+	'frames never start an editing session'
 )
 
 console.log('focusEditing.test.ts: all assertions passed')

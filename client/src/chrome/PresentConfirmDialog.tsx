@@ -6,11 +6,14 @@
  * and the click route lands here. END PRESENTING is deliberately NOT gated —
  * stopping is never intrusive.
  *
- * Cancel is FIRST in the DOM on purpose, and there is no header close button.
- * tldraw renders dialogs through Radix (tldraw/src/lib/ui/components/
- * Dialogs.tsx), and Radix's focus scope focuses the first tabbable element in
- * the content when the dialog opens — so DOM ORDER, not an `autoFocus` prop,
- * is what actually makes a stray Enter or Space cancel instead of confirm.
+ * Cancel is FIRST in the DOM and takes the default focus EXPLICITLY (see
+ * ./presentDialogFocus), and there is no header close button — so a stray
+ * Enter or Space cancels rather than confirming a room-wide takeover. DOM
+ * order alone does NOT achieve that here, whatever it may look like: tldraw's
+ * `TldrawUiDialogBody` is unconditionally `tabIndex={0}`, so the body div,
+ * not Cancel, is the first tabbable element Radix's focus scope finds.
+ * Verified live before the fix — activeElement was `DIV.tlui-dialog__body`
+ * and Enter did nothing at all.
  *
  * Escape and a backdrop click both close via Radix's own handling, and closing
  * is Cancel by construction: presenting only ever starts from the Present
@@ -21,6 +24,7 @@
  * picker. No checkbox, no "don't ask again": a gate you can turn off is not a
  * gate.
  */
+import { useEffect, useRef } from 'react'
 import {
 	TldrawUiButton,
 	TldrawUiDialogBody,
@@ -37,8 +41,16 @@ import {
 	PRESENT_CONFIRM_LABEL,
 	PRESENT_CONFIRM_TITLE,
 } from './presentCopy'
+import { claimDialogDefaultFocus } from './presentDialogFocus'
 
 export function PresentConfirmDialog({ onClose, editor }: TLUiDialogProps & { editor: Editor }) {
+	const cancelRef = useRef<HTMLButtonElement>(null)
+	// Mount-only: this runs before the ancestor Radix FocusScope's own mount
+	// effect (React flushes child effects first), which is exactly what makes
+	// Cancel — not tldraw's tabbable body div — end up focused.
+	useEffect(() => {
+		claimDialogDefaultFocus(cancelRef.current)
+	}, [])
 	return (
 		<>
 			<TldrawUiDialogHeader>
@@ -46,7 +58,12 @@ export function PresentConfirmDialog({ onClose, editor }: TLUiDialogProps & { ed
 			</TldrawUiDialogHeader>
 			<TldrawUiDialogBody style={{ maxWidth: 420 }}>{PRESENT_CONFIRM_BODY}</TldrawUiDialogBody>
 			<TldrawUiDialogFooter className="tlui-dialog__footer__actions">
-				<TldrawUiButton type="normal" data-testid="ew-present-cancel" onClick={onClose}>
+				<TldrawUiButton
+					ref={cancelRef}
+					type="normal"
+					data-testid="ew-present-cancel"
+					onClick={onClose}
+				>
 					{PRESENT_CANCEL_LABEL}
 				</TldrawUiButton>
 				<TldrawUiButton
