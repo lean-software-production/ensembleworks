@@ -21,21 +21,21 @@ const FALLBACK_MS = 2000
  * Arrow-cursor SVG tinted with the presenter's colour, tip at top-left, plus
  * a small "driving" badge (filled circle + ▶ glyph) — the one clear signal
  * that this is a file-viewer controller's cursor, not a normal canvas
- * collaborator cursor. Sits over the arrow's own body (its broad upper
- * triangle, roughly the shape's visual centroid — NOT the tail corner,
- * which the name pill covers) so it's never hidden by the pill. Baked into
- * the same SVG (rather than a separate pseudo-element) so it always renders
- * regardless of whether the pill is on-screen, and scales together with the
- * rest of the arrow via the single counter-scale transform in
- * rrwebMirror.css.
+ * collaborator cursor. Sits lower, over the arrow's tail lobe (nudged down
+ * roughly one badge-height from an earlier centred placement, per visual
+ * feedback — still clear of the name pill, which lives further down/right
+ * still). Baked into the same SVG (rather than a separate pseudo-element)
+ * so it always renders regardless of whether the pill is on-screen, and
+ * scales together with the rest of the arrow via the single counter-scale
+ * transform in rrwebMirror.css.
  */
 function cursorSvg(color: string): string {
 	return (
 		`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">` +
 		`<path d="M 2 1.5 L 2 17.5 L 6.3 13.7 L 9 19.8 L 12.1 18.4 L 9.4 12.4 L 15 12.2 Z"` +
 		` fill="${color}" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/>` +
-		`<circle cx="6.5" cy="8.5" r="2.6" fill="${color}" stroke="#ffffff" stroke-width="1"/>` +
-		`<path d="M 5.5 7.3 L 5.5 9.7 L 7.9 8.5 Z" fill="#ffffff"/>` +
+		`<circle cx="7" cy="13.7" r="2.6" fill="${color}" stroke="#ffffff" stroke-width="1"/>` +
+		`<path d="M 6 12.5 L 6 14.9 L 8.4 13.7 Z" fill="#ffffff"/>` +
 		`</svg>`
 	)
 }
