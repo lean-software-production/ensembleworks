@@ -70,3 +70,41 @@ assert.deepEqual(authHeaders({ method: 'service-token', tokenId: 'i', tokenSecre
 assert.deepEqual(authHeaders({ method: 'none' }), {})
 
 console.log('ok: resolve — per-variable merge, lone-URL, env override, unknown-instance, precedence, no-instance error, authHeaders')
+
+// -- access auth (SP5): env token, header emission, precedence ---------------
+{
+	// ENSEMBLEWORKS_ACCESS_TOKEN alone (the in-container connector case: SP2's
+	// supervisor injects exactly this) → access auth.
+	const conn = resolveConn(
+		{},
+		{ ENSEMBLEWORKS_URL: 'https://canvas.example.com', ENSEMBLEWORKS_ACCESS_TOKEN: 'app.jwt.here' },
+		{ instances: {} },
+	)
+	assert.deepEqual(conn.auth, { method: 'access', appToken: 'app.jwt.here' })
+
+	// It wins over a service-token pair in the same env (most specific first).
+	const both = resolveConn(
+		{},
+		{
+			ENSEMBLEWORKS_URL: 'https://canvas.example.com',
+			ENSEMBLEWORKS_ACCESS_TOKEN: 'app.jwt.here',
+			ENSEMBLEWORKS_TOKEN_ID: 'tid',
+			ENSEMBLEWORKS_TOKEN_SECRET: 'tsec',
+		},
+		{ instances: {} },
+	)
+	assert.equal(both.auth.method, 'access')
+
+	// An access-browser FILE record resolves to method none here — minting is
+	// async and lives in resolveConnFresh (Task 8); pure resolveConn stays sync.
+	const rec = resolveConn({}, { ENSEMBLEWORKS_URL: 'https://canvas.example.com' }, {
+		instances: {
+			'https://canvas.example.com': { method: 'access-browser', org_token: 'org.jwt', default_room: 'team' },
+		},
+	})
+	assert.equal(rec.auth.method, 'none')
+
+	// The header is cf-access-token (Discovery #4) — NOT Authorization.
+	assert.deepEqual(authHeaders({ method: 'access', appToken: 'app.jwt.here' }), { 'cf-access-token': 'app.jwt.here' })
+	console.log('ok: resolve — access env token, precedence, cf-access-token header')
+}

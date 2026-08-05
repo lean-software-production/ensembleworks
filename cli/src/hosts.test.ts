@@ -60,4 +60,36 @@ try {
 }
 assert.equal(captured.filter((l) => l.includes('should be 0600')).length, 1, 'warns once (the 0644 load), silent on 0600')
 
+// access-browser records (SP5): org/app tokens + team domain + aud round-trip
+// losslessly; logout removes the whole record (tokens leave the disk with it).
+{
+	let h: HostsFile = { instances: {} }
+	h = setInstance(h, 'https://canvas.leansoftware.ai', {
+		method: 'access-browser',
+		org_token: 'eyJhbGciOiJSUzI1NiJ9.e30.sig-org',
+		app_token: 'eyJhbGciOiJSUzI1NiJ9.e30.sig-app',
+		team_domain: 'lean-software.cloudflareaccess.com',
+		aud: 'a1b2c3d4e5f6',
+		default_room: 'team',
+		identity: 'sam@leansoftware.ai',
+	})
+	const f = path.join(dir, 'access.toml')
+	saveHosts(f, h)
+	const back = loadHosts(f)
+	assert.deepEqual(back.instances['https://canvas.leansoftware.ai'], {
+		method: 'access-browser',
+		org_token: 'eyJhbGciOiJSUzI1NiJ9.e30.sig-org',
+		app_token: 'eyJhbGciOiJSUzI1NiJ9.e30.sig-app',
+		team_domain: 'lean-software.cloudflareaccess.com',
+		aud: 'a1b2c3d4e5f6',
+		default_room: 'team',
+		identity: 'sam@leansoftware.ai',
+	}, 'access-browser record round-trips losslessly')
+	assert.equal(statSync(f).mode & 0o777, 0o600, 'still written 0600')
+	// logout drops the record — and with it every stored token.
+	const out = removeInstance(back, 'https://canvas.leansoftware.ai')
+	assert.equal(out.instances['https://canvas.leansoftware.ai'], undefined, 'logout removes tokens with the record')
+	console.log('ok: hosts — access-browser record round-trip + logout')
+}
+
 console.log('ok: hosts — round-trip, default_instance set/reassign/clear, 0600 write, warn-on-loose-read')

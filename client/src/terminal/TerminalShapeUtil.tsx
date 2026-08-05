@@ -24,6 +24,7 @@ import {
 	type TermClientMessage,
 	type TermServerMessage,
 } from '@ensembleworks/contracts'
+import { registerTerminalIdentityHandlers } from '@ensembleworks/contracts/terminal-identity'
 import { useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
@@ -39,6 +40,8 @@ import { paperTerminalTheme, wm } from '../theme'
 import { type CellSize, gridFor, quantizeCell } from './grid'
 import { FONT_SIZE_DEFAULT, fontSizeActionForKey, nextFontSize, ptyInputForKey } from './keys'
 import { termWsUrl } from './wsUrl'
+import { gatewayPoller } from '../codespace/gatewayPoll'
+import { codespaceViewFor, inputLockedForViewer } from '../codespace/gatewayView'
 
 export interface TerminalShapeProps {
 	w: number
@@ -211,6 +214,23 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 	const [connection, setConnection] = useState<TerminalConnection>('connecting')
 	const [retryAttempt, setRetryAttempt] = useState(0)
 
+	// SP3 read-only decoration: for gateway-backed terminals, poll the registry
+	// view and stop SENDING input when the gateway is locked to someone else.
+	// The relay drops those frames server-side regardless (gateway-registry.ts
+	// onBrowserMessage) — this only spares the user typing into a void, and a
+	// stale poll can never grant access. Legacy terminals (no gateway) skip it.
+	const [inputLocked, setInputLocked] = useState(false)
+	const inputLockedRef = useRef(false)
+	useEffect(() => {
+		const gatewayId = shape.props.gateway
+		if (!gatewayId) return
+		return gatewayPoller.subscribe((list) => {
+			const locked = inputLockedForViewer(codespaceViewFor(list, gatewayId))
+			inputLockedRef.current = locked
+			setInputLocked(locked)
+		})
+	}, [shape.props.gateway])
+
 	// Rename the terminal by double-clicking its floating title, like a frame.
 	const [renaming, setRenaming] = useState(false)
 	const [draftTitle, setDraftTitle] = useState(shape.props.title)
@@ -279,6 +299,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			scrollback: 0,
 			theme: paperTerminalTheme,
 		})
+		if (shape.props.gateway) registerTerminalIdentityHandlers(term)
 		// OSC 52: with `set-clipboard on`, tmux sends us the text whenever it's
 		// copied (mouse drag, double/triple click, vi `y`). Two gotchas handled
 		// here: (1) tmux uses an EMPTY selection field (`OSC 52 ; ; <base64>`), not
@@ -456,6 +477,7 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		const cellFallbackTimer = setTimeout(captureCell, 1500)
 
 		term.onData((data) => {
+			if (inputLockedRef.current) return // read-only viewer — relay drops it anyway
 			const ws = wsRef.current
 			if (ws?.readyState === WebSocket.OPEN) {
 				const msg: TermClientMessage = { type: 'input', data }
@@ -470,10 +492,12 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 			const ptyInput = ptyInputForKey(e)
 			if (ptyInput) {
 				e.preventDefault()
-				const ws = wsRef.current
-				if (ws?.readyState === WebSocket.OPEN) {
-					const msg: TermClientMessage = { type: 'input', data: ptyInput }
-					ws.send(JSON.stringify(msg))
+				if (!inputLockedRef.current) {
+					const ws = wsRef.current
+					if (ws?.readyState === WebSocket.OPEN) {
+						const msg: TermClientMessage = { type: 'input', data: ptyInput }
+						ws.send(JSON.stringify(msg))
+					}
 				}
 				return false
 			}
@@ -815,6 +839,22 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 						}}
 					>
 						{shape.props.title}
+					</div>
+				)}
+				{inputLocked && (
+					<div
+						title="This codespace's input is locked to its owner — you can watch, not type"
+						style={{
+							marginLeft: 6,
+							padding: '2px 9px',
+							borderRadius: 'var(--tl-radius-1)',
+							background: '#f9fafb',
+							color: wm.inkMuted,
+							whiteSpace: 'pre',
+							userSelect: 'none',
+						}}
+					>
+						🔒 read-only
 					</div>
 				)}
 			</div>

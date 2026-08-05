@@ -13,9 +13,10 @@ import { hostname } from 'node:os'
 import path from 'node:path'
 import type { Globals } from '../dispatch.ts'
 import { CliError } from '../errors.ts'
-import { hostsPath, loadHosts } from '../hosts.ts'
+import { hostsPath } from '../hosts.ts'
 import { emitJson } from '../output.ts'
-import { authHeaders, type Conn, readEnv, resolveConn } from '../resolve.ts'
+import { authHeaders, type Conn } from '../resolve.ts'
+import { resolveConnFresh } from '../auth/fresh.ts'
 import { runConnector } from '../connector/index.ts'
 
 export interface ConnectConfig {
@@ -24,22 +25,44 @@ export interface ConnectConfig {
 	room: string
 	gatewayId: string
 	label: string
-	authMethod: 'service-token' | 'none'
+	authMethod: 'service-token' | 'none' | 'access'
+	backend: 'tmux' | 'pty'
+	repo?: string
+	branch?: string
 }
 
-export function resolveConnectConfig(conn: Conn, flags: { label?: string; gatewayId?: string }, env: NodeJS.ProcessEnv): ConnectConfig {
+export function resolveConnectConfig(
+	conn: Conn,
+	flags: { label?: string; gatewayId?: string; backend?: 'tmux' | 'pty'; repo?: string; branch?: string },
+	env: NodeJS.ProcessEnv,
+): ConnectConfig {
 	const label = flags.label ?? hostname()
 	const gatewayId = flags.gatewayId ?? stableGatewayId(env)
+	const backend = flags.backend ?? 'tmux' // legacy default — coexistence spec §3: tmux path unchanged
 	const wsBase = conn.url.replace(/^http/, 'ws') // http→ws, https→wss
 	const ws = new URL('/api/terminal/connect', wsBase.endsWith('/') ? wsBase : `${wsBase}/`)
 	ws.searchParams.set('gatewayId', gatewayId)
 	ws.searchParams.set('label', label)
-	return { url: conn.url, wsUrl: ws.toString(), room: conn.room, gatewayId, label, authMethod: conn.auth.method }
+	// Registration metadata (coexistence spec §4 / decision #3): carried on the
+	// connect URL for SP3's server-side registration to consume; ignored today.
+	if (flags.repo) ws.searchParams.set('repo', flags.repo)
+	if (flags.branch) ws.searchParams.set('branch', flags.branch)
+	return {
+		url: conn.url,
+		wsUrl: ws.toString(),
+		room: conn.room,
+		gatewayId,
+		label,
+		authMethod: conn.auth.method,
+		backend,
+		repo: flags.repo,
+		branch: flags.branch,
+	}
 }
 
 export async function connectSlot(args: string[], globals: Globals, env: NodeJS.ProcessEnv): Promise<number> {
 	const flags = parseConnectFlags(args)
-	const conn = resolveConn({ url: globals.url, room: globals.room }, readEnv(env), loadHosts(hostsPath(env)))
+	const conn = await resolveConnFresh({ url: globals.url, room: globals.room }, env)
 	const cfg = resolveConnectConfig(conn, flags, env)
 	if (globals.dryRun) {
 		emitJson(cfg)
@@ -48,8 +71,14 @@ export async function connectSlot(args: string[], globals: Globals, env: NodeJS.
 	return runConnector(cfg, authHeaders(conn.auth), env) // conn + env already in scope
 }
 
-function parseConnectFlags(args: string[]): { label?: string; gatewayId?: string } {
-	const flags: { label?: string; gatewayId?: string } = {}
+function parseConnectFlags(args: string[]): {
+	label?: string
+	gatewayId?: string
+	backend?: 'tmux' | 'pty'
+	repo?: string
+	branch?: string
+} {
+	const flags: { label?: string; gatewayId?: string; backend?: 'tmux' | 'pty'; repo?: string; branch?: string } = {}
 	for (let i = 0; i < args.length; i++) {
 		switch (args[i]) {
 			case '--label':
@@ -57,6 +86,18 @@ function parseConnectFlags(args: string[]): { label?: string; gatewayId?: string
 				break
 			case '--gateway-id':
 				flags.gatewayId = args[++i]
+				break
+			case '--backend': {
+				const v = args[++i]
+				if (v !== 'tmux' && v !== 'pty') throw new CliError(`--backend must be tmux or pty, got: ${v}`, 2)
+				flags.backend = v
+				break
+			}
+			case '--repo':
+				flags.repo = args[++i]
+				break
+			case '--branch':
+				flags.branch = args[++i]
 				break
 			default:
 				throw new CliError(`unknown terminal connect flag: ${args[i]}`, 2)

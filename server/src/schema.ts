@@ -4,6 +4,7 @@
  */
 import { createTLSchema, defaultBindingSchemas, defaultShapeSchemas } from '@tldraw/tlschema'
 import {
+	codespaceShapeProps,
 	fileViewerShapeProps,
 	iframeShapeProps,
 	nekoShapeProps,
@@ -21,6 +22,7 @@ export const schema = createTLSchema({
 		roadmap: { props: roadmapShapeProps },
 		screenshare: { props: screenshareShapeProps },
 		'file-viewer': { props: fileViewerShapeProps },
+		codespace: { props: codespaceShapeProps },
 	},
 	bindings: defaultBindingSchemas,
 })
