@@ -30,6 +30,7 @@ import { wsTransport } from './canvas-v2/ws-transport.ts'
 import { createAvRouter } from './features/av.ts'
 import { createCanvasMetricsRouter } from './features/canvas-metrics.ts'
 import { createCanvasV2Router } from './features/canvas-v2.ts'
+import { createDevProxyRouter, handleDevUpgrade } from './features/dev-proxy.ts'
 import { createDiscordRouter } from './features/discord.ts'
 import { createFilesRouter } from './features/files.ts'
 import { createFramesRouter } from './features/frames.ts'
@@ -395,6 +396,14 @@ export function createSyncApp(opts: {
 	// to parse) and, like uploads, must sit above the static catch-all.
 	app.use(createFilesRouter())
 
+	// Embedded dev-server proxy: /dev/{port}/* -> localhost:{port}, with the
+	// recorder bridge + URL patch + error reporter injected into top-level
+	// HTML. Bodies are piped raw to the upstream dev server, so this must sit
+	// outside the /api express.json() parser above — it does (that parser is
+	// scoped to the /api prefix, so /dev/* never reaches it) — and, like
+	// uploads/files, above the static catch-all below.
+	app.use(createDevProxyRouter())
+
 	// In production the sync server also serves the static client build; Caddy
 	// just reverse-proxies everything here.
 	const clientDist = opts.clientDist
@@ -438,6 +447,10 @@ export function createSyncApp(opts: {
 	server.on('upgrade', (req, socket, head) => {
 		const url = new URL(req.url ?? '', 'http://internal')
 		if (gatewayPlane.handleUpgrade(req, socket, head, url)) return
+
+		// Embedded dev-server WS passthrough (HMR etc.), checked before the
+		// /sync branches below — see features/dev-proxy.ts.
+		if (handleDevUpgrade(req, socket as Socket, head)) return
 
 		// Phase 2: new-engine sync (Task C3), gated on EW_CANVAS_SYNC=1 and
 		// checked BEFORE the legacy /sync/:roomId match below (a real room id
