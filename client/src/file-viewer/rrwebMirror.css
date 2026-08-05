@@ -1,8 +1,11 @@
 /*
  * Presenter-cursor styling for the rrweb mirror (RrwebMirror.tsx).
  * Replaces rrweb's stock black arrow + blue dot with the presenting peer's
- * tldraw cursor: their colour, their name pill, and a click ring in the same
- * colour. The arrow image itself is set from JS (data-URI SVG tinted with the
+ * tldraw cursor: their colour, their name pill, a click ring in the same
+ * colour, and a small "driving" badge (baked into the SVG itself, see
+ * cursorSvg()) so it reads as a file-viewer controller's cursor rather than
+ * a normal canvas collaborator cursor even when the name pill is cropped.
+ * The arrow image itself is set from JS (data-URI SVG tinted with the
  * presenter's colour — CSS can't parameterise a background-image URL);
  * everything else lives here, driven by --ew-cursor-color and data-name.
  */
@@ -24,8 +27,15 @@
 	 * automatically, so they stay proportionate to the cursor.
 	 * transform-origin: top left keeps the arrow's tip — rrweb pins
 	 * left/top to the pointer position — anchored as the box scales.
+	 *
+	 * The 1.12 factor is a deliberate small bump on top of the 1:1 counter-
+	 * scale: eyeballed against tldraw's own collaborator cursor it still read
+	 * a hair smaller even though the traced SVG-path bounding boxes were
+	 * within a pixel of each other (stroke/antialiasing at this size reads
+	 * as "smaller" even when the path math matches) — erring visibly larger
+	 * rather than matching-or-under is the safer call for legibility.
 	 */
-	transform: scale(calc(1 / var(--ew-mirror-scale, 1)));
+	transform: scale(calc(1.12 / var(--ew-mirror-scale, 1)));
 	transform-origin: top left;
 }
 

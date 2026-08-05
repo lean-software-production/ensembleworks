@@ -17,12 +17,23 @@ import { rrwebFollowStore, type RrwebEntry } from './rrwebFollow'
 
 const FALLBACK_MS = 2000
 
-/** Arrow-cursor SVG tinted with the presenter's colour, tip at top-left. */
+/**
+ * Arrow-cursor SVG tinted with the presenter's colour, tip at top-left, plus
+ * a small "driving" badge (filled circle + ▶ glyph) at the arrow's tail
+ * corner — the one clear signal that this is a file-viewer controller's
+ * cursor, not a normal canvas collaborator cursor. Baked into the same SVG
+ * (rather than a separate pseudo-element) so it always renders regardless
+ * of whether the name pill is on-screen, and scales together with the rest
+ * of the arrow via the single counter-scale transform in rrwebMirror.css.
+ */
 function cursorSvg(color: string): string {
 	return (
 		`<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">` +
 		`<path d="M 2 1.5 L 2 17.5 L 6.3 13.7 L 9 19.8 L 12.1 18.4 L 9.4 12.4 L 15 12.2 Z"` +
-		` fill="${color}" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>`
+		` fill="${color}" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/>` +
+		`<circle cx="19" cy="19" r="4" fill="${color}" stroke="#ffffff" stroke-width="1.2"/>` +
+		`<path d="M 17.6 16.9 L 17.6 21.1 L 21 19 Z" fill="#ffffff"/>` +
+		`</svg>`
 	)
 }
 
