@@ -38,9 +38,10 @@ export function createPresentRelay(caps?: {
 	let totalBytes = 0
 
 	// Frozen logs (finished presentations kept as the last view) may not starve
-	// a live one: under total-bytes pressure, evict least-recently-appended
-	// OTHER logs until the incoming batch fits.
-	function evictForRoom(selfKey: string, needed: number) {
+	// a live one: under total-bytes pressure — across ALL rooms, not just the
+	// caller's, since maxTotalBytes is a global cap — evict least-recently-
+	// appended OTHER logs until the incoming batch fits.
+	function evictOthers(selfKey: string, needed: number) {
 		while (totalBytes + needed > maxTotalBytes) {
 			let oldestKey: string | null = null
 			let oldestAt = Infinity
@@ -66,10 +67,9 @@ export function createPresentRelay(caps?: {
 				log = { presentId, truncated: false, entries: [], bytes: 0, lastAppendAt: now() }
 				logs.set(k, log)
 			}
-			log.lastAppendAt = now()
 			if (log.truncated) return { accepted: false, truncated: true }
 			const addedBytes = JSON.stringify(entries).length
-			evictForRoom(k, addedBytes)
+			evictOthers(k, addedBytes)
 			if (
 				log.entries.length + entries.length > maxEvents ||
 				log.bytes + addedBytes > maxBytes ||
@@ -81,6 +81,10 @@ export function createPresentRelay(caps?: {
 			log.entries.push(...entries)
 			log.bytes += addedBytes
 			totalBytes += addedBytes
+			// Only a successful append (or the log's creation, above) refreshes LRU
+			// freshness — a rejected append (dead truncated log) must NOT look
+			// freshly-touched, or it would out-survive healthy logs under eviction.
+			log.lastAppendAt = now()
 			return { accepted: true, truncated: false }
 		},
 		backlog(roomId, shapeId) {

@@ -9,7 +9,9 @@
  * refresh button bumps `rev`, which every client applies via sync — so
  * "refresh" is a room-wide reload, not a local one (unlike the iframe
  * shape's dev-server reload, which only resets the local <iframe>.src).
- * Double-click to interact; click away to go back to canvas navigation.
+ * Double-click to take control and interact — editing IS the baton (see
+ * PresenterInfo). There is no click-away release: the baton only lets go via
+ * yield (someone else takes control) or presence expiry (disconnect).
  */
 import { fileViewerShapeProps } from '@ensembleworks/contracts'
 import { useEffect, useRef, useState } from 'react'
@@ -124,7 +126,9 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 
 	useEffect(() => {
 		if (!isPresentingThis) {
-			// Present toggled off (or unmount below): stop recorder + relay log.
+			// Lost the baton (yielded, presence expired) or unmount below: stop
+			// recorder + relay log. There is no toggle-off — this only fires via
+			// yield-on-steal, disconnect, or unmount.
 			if (broadcasterRef.current) {
 				iframeRef.current?.contentWindow?.postMessage({ type: 'ew-present-stop' }, '*')
 				void broadcasterRef.current.stop()

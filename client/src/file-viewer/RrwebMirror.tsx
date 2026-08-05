@@ -5,7 +5,9 @@
  * rrwebFollowStore, and scales the replayer wrapper to the shape box.
  * If no playable stream appears within FALLBACK_MS (old server, truncated
  * log, replayer throw), calls onFallback() so the parent reverts to the
- * scroll-fraction follow.
+ * scroll-fraction follow. Exception: in frozen mode (no live controller) an
+ * empty/missing backlog means nothing will EVER arrive — no live stream is
+ * coming — so that case bails immediately instead of waiting out the timer.
  */
 import { useEffect, useRef } from 'react'
 import { Replayer } from 'rrweb'
@@ -182,15 +184,29 @@ export function RrwebMirror(props: {
 
 		const unsub = rrwebFollowStore.subscribe(props.shapeId, (entries, meta) => apply(entries, meta))
 
+		// Frozen mode has no live presenter — nothing will ever arrive beyond
+		// the backlog fetch, so an empty/missing result means fall back NOW
+		// rather than sit through the FALLBACK_MS wait (which exists to give a
+		// live stream time to show up). Live mode keeps the timer: a live
+		// presenter's Meta+FullSnapshot may still be in flight over the socket.
+		const bailIfFrozenAndEmpty = () => {
+			if (disposed || !frozenRef.current || replayerRef.current || failed) return
+			failed = true
+			clearTimeout(fallbackTimer)
+			onFallbackRef.current()
+		}
+
 		// Seed from the backlog (late join / mid-presentation mount).
 		void fetch(
 			`/api/canvas/file-viewer/present-events?room=${encodeURIComponent(props.roomId)}&shapeId=${encodeURIComponent(props.shapeId)}`
 		)
 			.then((res) => (res.ok ? res.json() : null))
 			.then((backlog) => {
-				if (!disposed && backlog) rrwebFollowStore.seedBacklog(props.shapeId, backlog)
+				if (disposed) return
+				if (backlog) rrwebFollowStore.seedBacklog(props.shapeId, backlog)
+				if (!backlog || backlog.presentId === null) bailIfFrozenAndEmpty()
 			})
-			.catch(() => {})
+			.catch(() => bailIfFrozenAndEmpty())
 
 		armFallbackTimer()
 

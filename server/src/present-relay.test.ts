@@ -91,6 +91,41 @@ function main() {
 		assert.equal(res.truncated, true, 'own-log cap still truncates')
 	}
 
+	// A rejected (truncated) append must NOT refresh LRU freshness: a dead log
+	// that keeps getting appended to (and keeps getting rejected) must still
+	// look stale to eviction, or it would out-survive a healthy log that was
+	// genuinely touched more recently.
+	{
+		let t = 1000
+		const small = () => [{ seq: 0, event: { pad: 'x'.repeat(400) } }] // ~430 bytes
+		const large = () => [{ seq: 0, event: { pad: 'x'.repeat(1150) } }] // ~1180 bytes
+		// maxTotalBytes chosen so the two initial small appends (~860 total)
+		// leave headroom for the rejected re-append below to NOT itself trigger
+		// eviction — only the final large append does.
+		const relay = createPresentRelay({ maxEvents: 1, maxTotalBytes: 2000, now: () => t })
+
+		relay.append('r', 'shapeA', 'pA', small()) // accepted, lastAppendAt = 1000
+		t += 1
+		relay.append('r', 'shapeB', 'pB', small()) // accepted, lastAppendAt = 1001
+		t += 1
+		// Exceeds shapeA's maxEvents cap → truncated. Without the fix this would
+		// stamp lastAppendAt = 1002, making shapeA look newer than shapeB.
+		const rejected = relay.append('r', 'shapeA', 'pA', small())
+		assert.equal(rejected.truncated, true, 'second append trips the per-log event cap')
+		t += 1
+		// A third log pushes total bytes over the cap: eviction must pick the
+		// least-recently-appended OTHER log — shapeA (still stamped 1000), not
+		// shapeB (stamped 1001) — even though shapeA's rejected append happened
+		// more recently in wall-clock terms.
+		relay.append('r', 'shapeC', 'pC', large())
+		assert.equal(
+			relay.backlog('r', 'shapeA').presentId,
+			null,
+			'dead truncated log evicted first despite its later rejected append'
+		)
+		assert.equal(relay.backlog('r', 'shapeB').presentId, 'pB', 'healthy log survives eviction')
+	}
+
 
 	console.log('present-relay tests passed')
 }

@@ -109,7 +109,8 @@ export function createPresentBroadcaster(opts: {
 						presentId: opts.presentId,
 					})
 				} catch {
-					// Best effort — the server log times out with the presentation.
+					// Best effort — a failed present-stop just leaves the relay log as
+					// the frozen last view (spec: it's retained until replaced, no TTL).
 				}
 			}
 		},
