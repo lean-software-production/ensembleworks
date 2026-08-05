@@ -31,7 +31,6 @@ import { createAvRouter } from './features/av.ts'
 import { createCanvasMetricsRouter } from './features/canvas-metrics.ts'
 import { createCanvasV2Router } from './features/canvas-v2.ts'
 import { createDiscordRouter } from './features/discord.ts'
-import { createFileViewerRouter } from './features/file-viewer.ts'
 import { createFilesRouter } from './features/files.ts'
 import { createFramesRouter } from './features/frames.ts'
 import { createParticipantsRouter } from './features/participants.ts'
@@ -43,6 +42,7 @@ import { createTerminalStatusRouter } from './features/terminal-status.ts'
 import { createToolsRouter } from './features/tools.ts'
 import { createTranscriptRouter } from './features/transcript.ts'
 import { createUploadsRouter } from './features/uploads.ts'
+import { createWebViewerRouter } from './features/web-viewer.ts'
 import { createWhoamiRouter } from './features/whoami.ts'
 import { createWriteScopeGuard } from './features/write-scope.ts'
 import { createGatewayPlane } from './gateway-registry.ts'
@@ -294,17 +294,24 @@ export function createSyncApp(opts: {
 
 	// Feature routers mount here IN THIS ORDER (Express matches top-down and the
 	// static catch-all below must stay last): whoami → participants (kernel) → av
-	// (av/token, av/kick, av/pulse) → terminal-status → sticky → file-viewer →
+	// (av/token, av/kick, av/pulse) → terminal-status → sticky → web-viewer →
 	// transcript → shape → frames → canvas-v2 → roadmap → discord →
 	// canvas-metrics → uploads → files
-	// present-events gets its own larger-limit parser (features/file-viewer.ts,
+	// present-events gets its own larger-limit parser (features/web-viewer.ts,
 	// sized to the relay's 5MB-per-log cap) — skip the app-wide 100kb default
 	// here so that route-level parser is the only one that ever touches its
 	// body (once express.json() has parsed/errored a request, a later parser
-	// mounted downstream never gets a second chance at it).
+	// mounted downstream never gets a second chance at it). Both the new path
+	// and the deprecated /file-viewer/ alias must be skipped — they share the
+	// same handler and route-level parser (createWebViewerRouter).
 	const defaultJsonParser = express.json()
 	app.use('/api', (req, res, next) => {
-		if (req.method === 'POST' && req.path === '/canvas/file-viewer/present-events') return next()
+		if (
+			req.method === 'POST' &&
+			(req.path === '/canvas/web-viewer/present-events' || req.path === '/canvas/file-viewer/present-events')
+		) {
+			return next()
+		}
 		defaultJsonParser(req, res, next)
 	})
 
@@ -357,7 +364,7 @@ export function createSyncApp(opts: {
 
 	app.use(createStickyRouter(ctx))
 
-	app.use(createFileViewerRouter(ctx))
+	app.use(createWebViewerRouter(ctx))
 
 	app.use(createTranscriptRouter(ctx))
 	app.use(createTelemetryRouter(ctx))       // POST /api/telemetry/connection (write-only beacon)
