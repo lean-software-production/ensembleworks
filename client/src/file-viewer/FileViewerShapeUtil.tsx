@@ -380,26 +380,12 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 				<span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'all' }}>
 					{audienceKey && <AudienceRow audienceKey={audienceKey} />}
 					{activePresenter && <span style={{ opacity: 0.85 }}>{activePresenter.userName} has control</span>}
+					{isPresentingThis && <span style={{ opacity: 0.85 }}>You have control</span>}
 					<HeaderButton label="↻" title="Refresh (reloads for everyone)" onClick={refresh} />
-					<HeaderButton
-						label={isPresentingThis ? 'You have control' : 'Take control'}
-						title={
-							isPresentingThis
-								? 'You are controlling this viewer — everyone sees your view'
-								: 'Take control — everyone follows your view'
-						}
-						active={isPresentingThis}
-						disabled={isPresentingThis}
-						onClick={() => {
-							if (!isPresentingThis) {
-								presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current, ts: Date.now() })
-							}
-						}}
-					/>
 				</span>
 				{!isEditing && (
 					<span style={{ opacity: 0.6 }}>
-						{showFrozen ? 'last presented view — take control to interact' : 'double-click to interact'}
+						{showFrozen ? 'last presented view — double-click to take control' : 'double-click to take control'}
 					</span>
 				)}
 			</div>

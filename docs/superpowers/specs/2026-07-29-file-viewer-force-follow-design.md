@@ -31,13 +31,15 @@ state of every non-controller. The three-state per-person model
 
 ## Transitions
 
-- **Grab:** double-click into the shape (start editing) OR click the
-  header's "Take control" button. Both set the presence baton token.
-  Works identically from the frozen state and as a steal.
-- **Steal:** same gestures while someone else holds the baton. Last-writer
-  -wins by token ts (existing presentStore LWW). The old controller's
-  editing session ends visually: their iframe flips to the mirror of the
-  new controller. Toast/label: header shows "〈name〉 has control".
+- **Grab:** double-click into the shape (start editing) — the ONLY grab
+  gesture (no header button). Sets the presence baton token. Works
+  identically from the frozen state and as a steal.
+- **Steal:** same gesture (double-click) while someone else holds the
+  baton. Last-writer-wins by token ts (existing presentStore LWW). The
+  old controller's editing session ends visually: their iframe flips to
+  the mirror of the new controller. Label: header shows "〈name〉 has
+  control" (or "You have control" for the holder) as passive text — not
+  a button.
 - **Release:** only by disconnect. Presence expiry removes the token
   (existing behaviour — the token rides presence meta, which dies with
   the session). No explicit "stop presenting" button. Deselecting or
@@ -46,9 +48,12 @@ state of every non-controller. The three-state per-person model
 ## UI changes (FileViewerShapeUtil)
 
 - Remove: FollowingChip + "stop" opt-out, `optOutId` state, the
-  Present/Presenting-stop toggle semantics.
-- Add: one header button — "Take control" (hidden/inert while YOU hold
-  the baton; then it reads "You have control", inactive).
+  Present/Presenting-stop toggle semantics, AND the "Take control"
+  header button — double-click is the only grab/steal gesture, full
+  stop (product decision: no button-based grab path at all).
+- Controller attribution is passive text only: "〈name〉 has control"
+  while a peer holds the baton, "You have control" while you do —
+  neither is a button, nothing to click.
 - Double-click-to-edit grabs the baton as a side effect of editing
   starting (editor editing-state watcher), so interaction intent and
   baton are the same thing.
@@ -58,8 +63,9 @@ state of every non-controller. The three-state per-person model
 - Audience dots simplify: ringed = controller, solid = everyone else
   (present in room). The dimmed "not following" state disappears.
 - Frozen state: mirror stays mounted showing the last frame, with a
-  subtle header hint ("last presented by 〈name〉 — take control to
-  interact"). No live indicator.
+  subtle header hint ("last presented view — double-click to take
+  control"). No live indicator. The not-editing, non-frozen hint reads
+  "double-click to take control" (was "double-click to interact").
 
 ## Relay / server changes
 
