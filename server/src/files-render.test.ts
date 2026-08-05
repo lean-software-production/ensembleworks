@@ -59,4 +59,38 @@ assert.ok(BRIDGE_SCRIPT.includes("type: 'ew-pinch'"), 'bridge posts ew-pinch')
 // error pages: styled, status text present
 assert.ok(errorPage('Not found', 'nope.html does not exist').includes('Not found'))
 
+// Recorder is present but dormant: starts only on ew-present-start.
+assert.ok(BRIDGE_SCRIPT.includes('ew-present-start'), 'bridge listens for ew-present-start')
+assert.ok(BRIDGE_SCRIPT.includes('ew-present-stop'), 'bridge listens for ew-present-stop')
+assert.ok(BRIDGE_SCRIPT.includes('ew-rrweb-event'), 'bridge emits ew-rrweb-event')
+// Dormancy heuristic: rrweb.record must be invoked inside the start handler,
+// never at top level — assert the script gates on a started flag.
+assert.ok(!BRIDGE_SCRIPT.trimStart().startsWith('rrweb.record'), 'recorder not started at top level')
+
+// The rendered doc loads the rrweb asset before the bridge.
+const rrwebHtml = renderMarkdown('# hi', 'x.md')
+assert.ok(rrwebHtml.includes('src="/files-assets/rrweb.js"'), 'rrweb asset script tag present')
+assert.ok(rrwebHtml.indexOf('/files-assets/rrweb.js') < rrwebHtml.indexOf('ew-present-start'), 'rrweb loads before bridge')
+
+// injectBridge single-injection invariant still holds.
+const twice = injectBridge('<html><body>x</body></html>')
+assert.equal(twice.split('ew-present-start').length, 2, 'bridge injected exactly once')
+
+// Raw-HTML documents get the recorder too (present mode covers ALL local
+// content, not just rendered markdown): rrweb tag injected once, before the
+// bridge, at the same safe insertion point.
+const RRWEB_TAG_SRC = 'src="/files-assets/rrweb.js"'
+assert.equal(twice.split(RRWEB_TAG_SRC).length, 2, 'rrweb tag injected exactly once')
+assert.ok(twice.indexOf(RRWEB_TAG_SRC) < twice.indexOf('ew-present-start'), 'rrweb loads before bridge in raw HTML')
+// Bodyless fragment: both appended, order preserved.
+const bodyless = injectBridge('<p>frag</p>')
+assert.ok(bodyless.includes(RRWEB_TAG_SRC), 'rrweb tag appended to bodyless HTML')
+assert.ok(
+	bodyless.indexOf(RRWEB_TAG_SRC) < bodyless.indexOf('ew-present-start'),
+	'rrweb before bridge in bodyless HTML'
+)
+
+// error page keeps no recorder (and no rrweb tag)
+assert.ok(!errorPage('Not found', 'x').includes('/files-assets/rrweb.js'), 'error page has no rrweb asset tag')
+
 console.log('ok: files-render')

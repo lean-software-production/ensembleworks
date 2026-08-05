@@ -1,0 +1,101 @@
+/*
+ * Presenter-cursor styling for the rrweb mirror (RrwebMirror.tsx).
+ * Replaces rrweb's stock black arrow + blue dot with the presenting peer's
+ * tldraw cursor: their colour, their name pill, a click ring in the same
+ * colour, and a small "driving" badge (baked into the SVG itself, see
+ * cursorSvg()) so it reads as a file-viewer controller's cursor rather than
+ * a normal canvas collaborator cursor even when the name pill is cropped.
+ * The arrow image itself is set from JS (data-URI SVG tinted with the
+ * presenter's colour — CSS can't parameterise a background-image URL);
+ * everything else lives here, driven by --ew-cursor-color and data-name.
+ */
+
+.ew-mirror-cursor {
+	width: 24px;
+	height: 24px;
+	background-size: 24px 24px;
+	/* Arrow tip sits at the SVG's top-left, which rrweb pins to the pointer. */
+	background-position: top left;
+	/* Counter-scale against the replayer wrapper's fit-to-shape transform
+	 * (--ew-mirror-scale, set by RrwebMirror.tsx's fit()): .replayer-mouse
+	 * is a direct child of .replayer-wrapper, so without this it would
+	 * shrink/grow with however much the recorded document gets scaled to
+	 * fit the shape box, instead of staying a constant on-screen size like
+	 * tldraw's own collaborator cursor (which counter-scales against zoom
+	 * the same way — CollaboratorCursorOverlayUtil.render()). The name pill
+	 * and click ring (::after/::before below) compose with this transform
+	 * automatically, so they stay proportionate to the cursor.
+	 * transform-origin: top left keeps the arrow's tip — rrweb pins
+	 * left/top to the pointer position — anchored as the box scales.
+	 *
+	 * The 1.12 factor is a deliberate small bump on top of the 1:1 counter-
+	 * scale: eyeballed against tldraw's own collaborator cursor it still read
+	 * a hair smaller even though the traced SVG-path bounding boxes were
+	 * within a pixel of each other (stroke/antialiasing at this size reads
+	 * as "smaller" even when the path math matches) — erring visibly larger
+	 * rather than matching-or-under is the safer call for legibility.
+	 */
+	transform: scale(calc(1.12 / var(--ew-mirror-scale, 1)));
+	transform-origin: top left;
+}
+
+/* Name pill (replaces rrweb's translucent blue dot ::after). */
+.ew-mirror-cursor::after {
+	content: attr(data-name);
+	position: absolute;
+	left: 15px;
+	top: 19px;
+	width: auto;
+	height: auto;
+	background: var(--ew-cursor-color, #3b82f6);
+	color: #fff;
+	font:
+		500 11px/1 system-ui,
+		sans-serif;
+	padding: 3px 8px;
+	border-radius: 10px;
+	white-space: nowrap;
+	transform: none;
+	opacity: 1;
+}
+
+/* rrweb's stock click animation targets ::after — ours lives on ::before. */
+.ew-mirror-cursor.active::after {
+	animation: none;
+}
+
+/* Click ring: expanding circle centred on the pointer. */
+.ew-mirror-cursor::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 12px;
+	height: 12px;
+	border-radius: 100%;
+	border: 2.5px solid var(--ew-cursor-color, #3b82f6);
+	transform: translate(-50%, -50%) scale(0);
+	opacity: 0;
+	pointer-events: none;
+}
+
+.ew-mirror-cursor.active::before {
+	animation: ew-click-ring 0.45s ease-out 1;
+}
+
+@keyframes ew-click-ring {
+	0% {
+		transform: translate(-50%, -50%) scale(0.4);
+		opacity: 0.9;
+	}
+	100% {
+		transform: translate(-50%, -50%) scale(3.2);
+		opacity: 0;
+	}
+}
+
+/* Frozen mirror (last-view, no controller): hide the replay cursor entirely —
+   there's no live presenter to attribute it to. */
+.ew-mirror-frozen {
+	display: none !important;
+}

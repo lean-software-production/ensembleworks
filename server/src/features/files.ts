@@ -6,9 +6,15 @@
  * `gateway` is the remote seam: v1 rejects it with 501; later a relay arm
  * forwards to the named gateway instead of localhost.
  */
+/// <reference path="../rrweb-umd.d.ts" />
 import express from 'express'
 import path from 'node:path'
 import { errorPage, injectBridge, renderMarkdown } from '../files-render.ts'
+// rrweb's UMD build exposes window.rrweb. Embedded as text at build time (the
+// relative path dodges the package's `exports` block on dist subpaths) so the
+// `bun build --compile` binary carries it — a runtime require.resolve has no
+// node_modules to find on a deployed box and would fail the boot check.
+import rrwebSource from '../../../node_modules/rrweb/dist/rrweb.umd.min.cjs' with { type: 'text' }
 
 const DOC_HTML = new Set(['.html', '.htm'])
 const DOC_MD = new Set(['.md', '.markdown'])
@@ -24,6 +30,10 @@ const filesPort = () => Number(process.env.ENSEMBLEWORKS_FILES_PORT ?? 8791)
 
 export function createFilesRouter(): express.Router {
 	const router = express.Router()
+
+	router.get('/files-assets/rrweb.js', (_req, res) => {
+		res.type('text/javascript').send(rrwebSource)
+	})
 
 	router.get(/^\/files\/(.+)/, async (req, res) => {
 		// Express 5 decodes regex capture groups, so re-encode each path segment

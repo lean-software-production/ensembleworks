@@ -22,10 +22,11 @@ import { getSettings, updateSettings } from './chrome/settings'
 import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
 import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
+import { fileViewerOverlayUtils } from './file-viewer/hideControllerCursor'
 import { presentStore } from './file-viewer/presentStore'
+import { rrwebFollowStore } from './file-viewer/rrwebFollow'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
 import { useAvSnapshot } from './av/bridge'
-import { avOverlayUtils } from './av/FadedCursorOverlay'
 import { CanvasBlockerModal } from './canvas-health/CanvasBlockerModal'
 import { useCanvasAvailability } from './canvas-health/useCanvasAvailability'
 import { getFrameId, getRoomId, identityOnce, type Identity } from './identity'
@@ -93,6 +94,23 @@ export function App() {
 		bindingUtils: useMemo(() => [...defaultBindingUtils], []),
 		onCustomMessageReceived(message) {
 			if (message?.type === 'kicked') setWasKicked(true)
+			else if (message?.type === 'ew-rrweb' && typeof message.shapeId === 'string') {
+				// The server fans out to every session including the presenter's;
+				// the presenter ignores their own stream (spec §2) — otherwise the
+				// store would buffer their own events unboundedly (no subscriber
+				// ever seeds a backlog on the presenting client).
+				if (presentStore.get()?.shapeId !== message.shapeId) {
+					rrwebFollowStore.ingest(
+						message as {
+							type: string
+							shapeId: string
+							presentId: string
+							truncated?: boolean
+							entries: { seq: number; event: unknown }[]
+						}
+					)
+				}
+			}
 		},
 		// Publish the client-computed spatial stamp (contracts/src/stamp.ts)
 		// on our presence record so the server just reads a field (transcript
@@ -121,10 +139,9 @@ export function App() {
 			})
 			// Merge two presenter tokens next to the spatial stamp — both ride
 			// this presence blob so neither needs server changes:
-			//   fileViewerPresent (file-viewer/presentStore): shapeId + scroll
-			//     fraction the file-viewer follow uses. Null when not presenting
-			//     (a valid JsonValue — followers treat "no token" and "null
-			//     token" alike).
+			//   fileViewerPresent (file-viewer/presentStore): the baton — shapeId +
+			//     scroll fraction + toggle ts. Null when nobody holds it (a valid
+			//     JsonValue — followers treat "no token" and "null token" alike).
 			//   presenting (chrome/present.ts, canvas-controls spec §5): a bare
 			//     boolean for the canvas Present mode's viewer-follow.
 			// Both read tldraw atoms inside this reactive derivation, so flipping
@@ -132,7 +149,11 @@ export function App() {
 			// mechanism as the stamp's inputs.
 			return {
 				...defaults,
-				meta: { stamp, fileViewerPresent: presentStore.get(), presenting: presentingAtom.get() },
+				meta: {
+					stamp,
+					fileViewerPresent: presentStore.get(),
+					presenting: presentingAtom.get(),
+				},
 			}
 		},
 	})
@@ -270,7 +291,7 @@ export function App() {
 					deepLinks
 					assetUrls={assetUrls}
 					shapeUtils={customShapeUtils}
-					overlayUtils={avOverlayUtils}
+					overlayUtils={fileViewerOverlayUtils}
 					overrides={uiOverrides}
 					components={components}
 					// Hard prerequisite for the locked-shape padlock chip

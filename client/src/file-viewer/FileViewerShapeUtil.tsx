@@ -9,10 +9,14 @@
  * refresh button bumps `rev`, which every client applies via sync — so
  * "refresh" is a room-wide reload, not a local one (unlike the iframe
  * shape's dev-server reload, which only resets the local <iframe>.src).
- * Double-click to interact; click away to go back to canvas navigation.
+ * Double-click to take control and interact — editing IS the baton (see
+ * PresenterInfo): the token lives exactly as long as the local editing
+ * session. It releases on edit-exit (deselect, click away, Escape, select
+ * another shape — freezing the shape at the last view for everyone), on
+ * yield (someone else takes control), or on presence expiry (disconnect).
  */
 import { fileViewerShapeProps } from '@ensembleworks/contracts'
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
@@ -24,9 +28,18 @@ import {
 	useValue,
 } from 'tldraw'
 import { wm } from '../theme'
-import { presenterFor, type PresenterInfo } from './followLogic'
+import { getRoomId } from '../identity'
+import { PRESENTER_FALLBACK_COLOR, presenterFor, type PresenterInfo } from './followLogic'
 import { forwardPinchToCanvas, parsePinchMessage } from './pinchForward'
+import { createPresentBroadcaster } from './presentBroadcast'
 import { presentStore } from './presentStore'
+
+// Code-split out: RrwebMirror eagerly pulls in rrweb's `Replayer` + its CSS
+// (~40 kB gzip) — only needed once a mirror actually mounts (live or frozen),
+// never for a file-viewer that's just sitting on the canvas unwatched. Keeping
+// it out of the entry chunk is what the bundle-size CI gate enforces
+// (client/scripts/bundle-size-check.ts).
+const RrwebMirror = lazy(() => import('./RrwebMirror').then((m) => ({ default: m.RrwebMirror })))
 
 export interface FileViewerShapeProps {
 	w: number
@@ -106,13 +119,50 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	// via presentStore, followers read it off collaborator presence.
 	const iframeRef = useRef<HTMLIFrameElement | null>(null)
 	const lastFractionRef = useRef(0)
-	// "stop" opts out of ONE presenter (their userId), not of following in
-	// general — a gapless A→B handoff must still start following B.
-	const [optOutId, setOptOutId] = useState<string | null>(null)
 
 	// Am I presenting THIS shape? (presentStore wraps a tldraw atom → reactive.)
 	const presenting = useValue('fvPresenting', () => presentStore.get(), [])
 	const isPresentingThis = presenting?.shapeId === shape.id
+
+	// rrweb broadcast (spec: 2026-07-27-file-viewer-rrweb-broadcast-design.md).
+	// Presenter: start the in-iframe recorder + batcher while presenting this
+	// shape. rrwebDegraded → presenter silently reverts to fraction-only.
+	const broadcasterRef = useRef<ReturnType<typeof createPresentBroadcaster> | null>(null)
+	const [rrwebDegraded, setRrwebDegraded] = useState(false)
+	// Follower: mirror fallback — flipped by RrwebMirror when no stream appears.
+	const [mirrorFallback, setMirrorFallback] = useState(false)
+
+	useEffect(() => {
+		if (!isPresentingThis) {
+			// Lost the baton (edit-exit release, yielded to a stealer, presence
+			// expired) or unmount below: stop the recorder + POST present-stop.
+			// present-stop is a no-op server-side now (spec: relay retention) —
+			// it does NOT delete the relay log, so the frozen mirror still has
+			// something to seed from after we release.
+			if (broadcasterRef.current) {
+				iframeRef.current?.contentWindow?.postMessage({ type: 'ew-present-stop' }, '*')
+				void broadcasterRef.current.stop()
+				broadcasterRef.current = null
+			}
+			setRrwebDegraded(false)
+			return
+		}
+		const presentId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+		const broadcaster = createPresentBroadcaster({
+			roomId: getRoomId(),
+			shapeId: shape.id,
+			presentId,
+			onDegrade: () => setRrwebDegraded(true),
+		})
+		broadcasterRef.current = broadcaster
+		iframeRef.current?.contentWindow?.postMessage({ type: 'ew-present-start' }, '*')
+		return () => {
+			iframeRef.current?.contentWindow?.postMessage({ type: 'ew-present-stop' }, '*')
+			void broadcaster.stop()
+			broadcasterRef.current = null
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [isPresentingThis, shape.id])
 
 	// A peer presenting this shape (never me — getCollaborators is remote-only,
 	// but guard on userId too). Following is mutually exclusive with presenting.
@@ -126,24 +176,25 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 		'fvPresenterKey',
 		() => {
 			const p = presenterFor(editor.getCollaborators(), shape.id)
-			return p ? `${p.userId}\t${p.userName}\t${p.fraction}` : null
+			return p ? `${p.userId}\t${p.userName}\t${p.color}\t${p.fraction}\t${p.ts}` : null
 		},
 		[editor, shape.id]
 	)
 	let peer: PresenterInfo | null = null
 	if (presenterKey !== null) {
-		// fraction is the last field; join the middle back in case a userName
-		// ever contains a tab (defensive — tldraw names are plain strings).
+		// ts/fraction/color are the last three fields; join the middle back in case a
+		// userName ever contains a tab (defensive — tldraw names are plain strings).
 		const parts = presenterKey.split('\t')
 		peer = {
 			userId: parts[0],
-			userName: parts.slice(1, -1).join('\t'),
-			fraction: Number(parts[parts.length - 1]),
+			userName: parts.slice(1, -3).join('\t'),
+			color: parts[parts.length - 3],
+			fraction: Number(parts[parts.length - 2]),
+			ts: Number(parts[parts.length - 1]),
 		}
 	}
 	const peerPresenter = peer && peer.userId !== myId ? peer : null
-	const activePresenter: PresenterInfo | null =
-		!isPresentingThis && peerPresenter && peerPresenter.userId !== optOutId ? peerPresenter : null
+	const activePresenter: PresenterInfo | null = !isPresentingThis && peerPresenter ? peerPresenter : null
 
 	// targetOrigin '*' is REQUIRED: the sandboxed document loads at an opaque
 	// (null) origin (no allow-same-origin), so no concrete origin can ever match.
@@ -157,11 +208,42 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	const activePresenterRef = useRef<PresenterInfo | null>(activePresenter)
 	activePresenterRef.current = activePresenter
 
+	// Audience row: everyone in the room is a follower by definition now — one
+	// dot per person while a presentation is live: ringed = controller, solid =
+	// watching. Same primitive-key pattern as presenterKey (collaborator arrays
+	// churn per cursor move; a string only bumps the epoch when membership/
+	// state actually changes).
+	const audienceKey = useValue(
+		'fvAudienceKey',
+		() => {
+			const winner = presenterFor(editor.getCollaborators(), shape.id)
+			const mineTok = presentStore.get()
+			const presenterId = mineTok?.shapeId === shape.id ? editor.user.getId() : winner?.userId
+			if (!presenterId) return null
+			const rows = new Map<string, string>()
+			const add = (id: string, name: string, color: string, state: string) => {
+				if (!rows.has(id)) rows.set(id, [id, name, color, state].join(''))
+			}
+			const selfId = editor.user.getId()
+			add(
+				selfId,
+				`${editor.user.getName()} (you)`,
+				editor.user.getColor(),
+				presenterId === selfId ? 'presenting' : 'watching'
+			)
+			for (const c of editor.getCollaborators()) {
+				add(c.userId, c.userName, c.color ?? '#3b82f6', c.userId === presenterId ? 'presenting' : 'watching')
+			}
+			return [...rows.values()].join('')
+		},
+		[editor, shape.id]
+	)
+
 	// Bridge listener: accept ONLY this iframe's own messages (source check).
 	useEffect(() => {
 		const onMessage = (e: MessageEvent) => {
 			if (e.source !== iframeRef.current?.contentWindow) return
-			const d = e.data as { type?: unknown; fraction?: unknown } | null
+			const d = e.data as { type?: unknown; fraction?: unknown; event?: unknown } | null
 			if (!d || typeof d !== 'object') return
 			const pinch = parsePinchMessage(d)
 			if (pinch) {
@@ -171,12 +253,21 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 				if (iframeRef.current) forwardPinchToCanvas(iframeRef.current, pinch)
 				return
 			}
+			if (d.type === 'ew-rrweb-event') {
+				broadcasterRef.current?.push((d as { event: unknown }).event)
+				return
+			}
 			if (d.type === 'ew-file-viewer-ready') {
 				// Presenter's own refresh/rev reload → re-apply the last fraction so
 				// the reloaded document lands where the presenter left it (spec §5).
 				const mine = presentStore.get()
 				if (mine && mine.shapeId === shape.id) {
 					postScrollSet(mine.fraction)
+					// Reloaded mid-presentation → restart the recorder; rrweb emits a
+					// fresh Meta+FullSnapshot which followers splice by seq as usual.
+					if (broadcasterRef.current) {
+						iframeRef.current?.contentWindow?.postMessage({ type: 'ew-present-start' }, '*')
+					}
 				} else if (activePresenterRef.current) {
 					// Follower mid-presentation reload → re-apply the presenter's spot.
 					postScrollSet(activePresenterRef.current.fraction)
@@ -204,20 +295,56 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [activePresenter?.fraction, activePresenter?.userId])
 
-	// A local "stop following" opt-out only lasts while someone is presenting —
-	// once no presenter remains, reset so the next presentation is followed.
-	// (An A→B handoff needs no reset: the opt-out is keyed to A's userId.)
-	const hasPeerPresenter = peerPresenter !== null
+	// A new presenter (or handoff) means any prior mirror-fallback no longer
+	// applies — give the incoming presentation its own shot at the mirror.
 	useEffect(() => {
-		if (!hasPeerPresenter) setOptOutId(null)
-	}, [hasPeerPresenter])
+		setMirrorFallback(false)
+	}, [activePresenter?.userId])
 
-	const togglePresent = () => {
-		if (isPresentingThis) presentStore.set(null)
-		// Turning on overwrites any other presenter: followers resolve competing
-		// tokens by the freshest ts (last-writer-wins, spec §5).
-		else presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current, ts: Date.now() })
-	}
+	// Editing IS controlling (force-follow spec): the local token lives
+	// exactly as long as the editing session. Starting to edit grabs the
+	// baton; the edit session ending — deselect, click away, Escape, select
+	// another shape — releases it, freezing the shape at our last view for
+	// everyone (including us: our own iframe hides behind the frozen mirror
+	// once the token clears, and our canvas cursor un-hides — see
+	// hideControllerCursor.ts). Idempotent against the yield-on-steal effect
+	// below: if a steal already cleared our token (and forced isEditing
+	// false) before this runs, `isPresentingThis` is already false here, so
+	// the release branch is a no-op — presentStore is local-only, clearing an
+	// already-null token never clobbers whoever just stole it.
+	useEffect(() => {
+		if (isEditing) {
+			if (!isPresentingThis) {
+				presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current, ts: Date.now() })
+			}
+		} else if (isPresentingThis) {
+			presentStore.set(null)
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [isEditing])
+
+	// Someone else took control (their token out-stamps ours): yield — clear our
+	// token and exit editing so our iframe hides behind their mirror.
+	const myTs = presenting?.shapeId === shape.id ? presenting.ts : null
+	useEffect(() => {
+		if (myTs !== null && peerPresenter && peerPresenter.ts > myTs) {
+			presentStore.set(null)
+			if (editor.getEditingShapeId() === shape.id) editor.setEditingShape(null)
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [myTs, peerPresenter?.ts, peerPresenter?.userId])
+
+	// Frozen last view: no controller → the mirror replays the backlog and sits
+	// still. mirrorFallback (no backlog / old server) reveals the plain iframe.
+	const anyController = isPresentingThis || peerPresenter !== null
+	const showFrozen = !anyController && !mirrorFallback && !isEditing
+
+	// Reset any stale fallback whenever control changes hands (or is dropped
+	// entirely) or the doc refreshes — a new presentation/refresh may
+	// repopulate the backlog, so give it its own shot at the mirror.
+	useEffect(() => {
+		setMirrorFallback(false)
+	}, [anyController, rev])
 
 	return (
 		<HTMLContainer
@@ -268,43 +395,64 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 					{path}
 				</span>
 				<span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'all' }}>
-					{activePresenter && (
-						<FollowingChip
-							name={activePresenter.userName}
-							onStop={() => setOptOutId(activePresenter.userId)}
-						/>
-					)}
+					{audienceKey && <AudienceRow audienceKey={audienceKey} />}
+					{activePresenter && <span style={{ opacity: 0.85 }}>{activePresenter.userName} has control</span>}
+					{isPresentingThis && <span style={{ opacity: 0.85 }}>You have control</span>}
 					<HeaderButton label="↻" title="Refresh (reloads for everyone)" onClick={refresh} />
-					<HeaderButton
-						label={isPresentingThis ? 'Presenting — stop' : 'Present'}
-						title={
-							isPresentingThis
-								? 'Stop presenting — others stop following your scroll'
-								: 'Present — everyone follows your scroll position'
-						}
-						active={isPresentingThis}
-						onClick={togglePresent}
-					/>
 				</span>
-				{!isEditing && <span style={{ opacity: 0.6 }}>double-click to interact</span>}
+				{!isEditing && (
+					<span style={{ opacity: 0.6 }}>
+						{showFrozen ? 'last presented view — double-click to take control' : 'double-click to take control'}
+					</span>
+				)}
 			</div>
 			{path ? (
-				<iframe
-					ref={iframeRef}
-					// Per-segment encode so exotic names (#, ?, %) round-trip the
-					// route's decode-once contract (features/files.ts re-encodes the
-					// decoded express param the same way before hitting the file-server).
-					src={`/files/${path.split('/').map(encodeURIComponent).join('/')}?rev=${rev ?? 0}`}
-					title={displayTitle}
-					style={{ flex: 1, minHeight: 0, border: 'none', width: '100%', pointerEvents: isEditing ? 'all' : 'none' }}
-					// SECURITY: no `allow-same-origin`, ever. Without it the iframe's
-					// document loads into an opaque (null) origin, so file-server
-					// content can never read the canvas's cookies/localStorage or reach
-					// the credentialed /api endpoints under the app's own origin — even
-					// though it shares allow-scripts. Adding allow-same-origin back
-					// would let an agent-authored file impersonate the signed-in user.
-					sandbox="allow-scripts allow-forms allow-downloads"
-				/>
+				<>
+					{(activePresenter && !mirrorFallback) || showFrozen ? (
+						// Suspense fallback null is fine here: RrwebMirror's own
+						// FALLBACK_MS logic (plus the frozen-mode instant-bail on an
+						// empty backlog) already covers "nothing to show yet" — a brief
+						// blank while the lazy chunk itself loads is the same class of
+						// gap, not a new one.
+						<Suspense fallback={null}>
+							<RrwebMirror
+								roomId={getRoomId()}
+								shapeId={shape.id}
+								width={w}
+								height={h - HEADER_HEIGHT}
+								presenterName={showFrozen ? '' : (activePresenter?.userName ?? '')}
+								presenterColor={
+									showFrozen ? PRESENTER_FALLBACK_COLOR : (activePresenter?.color ?? PRESENTER_FALLBACK_COLOR)
+								}
+								onFallback={() => setMirrorFallback(true)}
+								frozen={showFrozen}
+							/>
+						</Suspense>
+					) : null}
+					<iframe
+						ref={iframeRef}
+						// Per-segment encode so exotic names (#, ?, %) round-trip the
+						// route's decode-once contract (features/files.ts re-encodes the
+						// decoded express param the same way before hitting the file-server).
+						src={`/files/${path.split('/').map(encodeURIComponent).join('/')}?rev=${rev ?? 0}`}
+						title={displayTitle}
+						style={{
+							flex: 1,
+							minHeight: 0,
+							border: 'none',
+							width: '100%',
+							pointerEvents: isEditing ? 'all' : 'none',
+							display: (activePresenter && !mirrorFallback) || showFrozen ? 'none' : undefined,
+						}}
+						// SECURITY: no `allow-same-origin`, ever. Without it the iframe's
+						// document loads into an opaque (null) origin, so file-server
+						// content can never read the canvas's cookies/localStorage or reach
+						// the credentialed /api endpoints under the app's own origin — even
+						// though it shares allow-scripts. Adding allow-same-origin back
+						// would let an agent-authored file impersonate the signed-in user.
+						sandbox="allow-scripts allow-forms allow-downloads"
+					/>
+				</>
 			) : (
 				<div
 					style={{
@@ -355,38 +503,31 @@ function HeaderButton(props: {
 	)
 }
 
-// Shown while a peer is presenting this shape and you are tracking their scroll.
-// "stop" opts out locally until their presentation ends (spec §5).
-function FollowingChip(props: { name: string; onStop: () => void }) {
+// One dot per person while a presentation is live: ringed = the controller,
+// solid = watching (everyone else, by definition). Colours match canvas
+// cursors. audienceKey format: rows joined by , fields by 
+// (userId, name, color, state) — built by the fvAudienceKey selector.
+function AudienceRow(props: { audienceKey: string }) {
+	const rows = props.audienceKey.split('').map((row) => {
+		const [userId, name, color, state] = row.split('')
+		return { userId, name, color, state }
+	})
 	return (
-		<span
-			onPointerDown={stopEventPropagation}
-			style={{
-				display: 'inline-flex',
-				alignItems: 'center',
-				gap: 4,
-				fontSize: 10,
-				color: wm.inkMuted,
-				whiteSpace: 'nowrap',
-			}}
-		>
-			<span style={{ opacity: 0.85 }}>Following {props.name}</span>
-			<button
-				title="Stop following this presenter"
-				onPointerDown={stopEventPropagation}
-				onClick={props.onStop}
-				style={{
-					border: 'none',
-					background: 'transparent',
-					cursor: 'pointer',
-					fontSize: 10,
-					fontWeight: 700,
-					color: wm.sealBlue,
-					padding: '0 2px',
-				}}
-			>
-				stop
-			</button>
+		<span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+			{rows.map((r) => (
+				<span
+					key={r.userId}
+					title={r.state === 'presenting' ? `${r.name} — presenting` : `${r.name} — watching`}
+					style={{
+						width: 8,
+						height: 8,
+						borderRadius: '50%',
+						background: r.color,
+						boxShadow: r.state === 'presenting' ? `0 0 0 1.5px ${wm.panel}, 0 0 0 3px ${r.color}` : 'none',
+						flexShrink: 0,
+					}}
+				/>
+			))}
 		</span>
 	)
 }

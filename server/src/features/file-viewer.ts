@@ -19,6 +19,7 @@ import type { PluginServerContext } from '../kernel/context.ts'
 import { schema } from '../schema.ts'
 import { resolveAttribution } from '../kernel/attribution.ts'
 import { resolveCaller } from '../whoami.ts'
+import { createPresentRelay, type RelayEntry } from '../present-relay.ts'
 
 const AGENT_HOME = () => process.env.ENSEMBLEWORKS_AGENT_HOME ?? os.homedir()
 
@@ -151,6 +152,76 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 		})
 		if (!frameFound) return void res.status(404).json({ error: 'frame not found' })
 		res.json({ ok: true, id: createdId })
+	})
+
+	// ---- rrweb present relay (spec: 2026-07-27-file-viewer-rrweb-broadcast) --
+	// Presenter POSTs event batches; the server logs them (late-joiner backlog)
+	// and fans them out over the existing sync socket as a custom message. The
+	// POST carries no session identity, so fan-out includes the presenter, who
+	// ignores messages for shapes they are presenting.
+	const relay = createPresentRelay()
+	// Fan-out includes the presenter (the POST carries no session identity to
+	// exclude them by) — the presenting client ignores ew-rrweb for shapes it
+	// is itself presenting.
+	const truncatedNotified = new Set<string>()
+
+	const parseEntries = (raw: unknown): RelayEntry[] | null => {
+		if (!Array.isArray(raw)) return null
+		const out: RelayEntry[] = []
+		for (const e of raw) {
+			if (!e || typeof e !== 'object' || typeof (e as any).seq !== 'number' || !('event' in (e as any))) return null
+			out.push({ seq: (e as any).seq, event: (e as any).event })
+		}
+		return out
+	}
+
+	function fanOut(roomId: string, room: import('@tldraw/sync-core').TLSocketRoom, message: unknown) {
+		for (const sessions of ctx.sessions.sessionsByUser.get(roomId)?.values() ?? []) {
+			for (const sessionId of sessions) room.sendCustomMessage(sessionId, message)
+		}
+	}
+
+	// A large batch (e.g. a FullSnapshot after a long DOM) can exceed the
+	// app-wide express.json 100kb default — this route gets its own parser
+	// sized to the relay's own 5MB-per-log cap (app.ts skips the default
+	// json() parser for this one path so this is the only body parse it gets).
+	router.post('/api/canvas/file-viewer/present-events', express.json({ limit: '6mb' }), (req, res) => {
+		const body = (req.body ?? {}) as Record<string, unknown>
+		const roomId = sanitizeId(String(body.room ?? ''))
+		const shapeId = typeof body.shapeId === 'string' ? body.shapeId : ''
+		const presentId = typeof body.presentId === 'string' ? body.presentId : ''
+		const entries = parseEntries(body.entries)
+		if (!roomId || !shapeId || !presentId || !entries) {
+			return void res.status(400).json({ error: 'room, shapeId, presentId, entries[] required' })
+		}
+		const room = ctx.rooms.rooms.get(roomId)
+		if (!room) return void res.status(404).json({ error: 'room not found' })
+
+		const { truncated } = relay.append(roomId, shapeId, presentId, entries)
+		const notifyKey = `${roomId} ${shapeId} ${presentId}`
+		if (!truncated) {
+			fanOut(roomId, room, { type: 'ew-rrweb', shapeId, presentId, truncated, entries })
+		} else if (!truncatedNotified.has(notifyKey)) {
+			// First append to trip the cap: tell connected followers once, with
+			// no entries, so a live mirror can degrade instead of stalling silently.
+			truncatedNotified.add(notifyKey)
+			fanOut(roomId, room, { type: 'ew-rrweb', shapeId, presentId, truncated: true, entries: [] })
+		}
+		res.json({ ok: true, truncated })
+	})
+
+	router.get('/api/canvas/file-viewer/present-events', (req, res) => {
+		const roomId = sanitizeId(String(req.query.room ?? ''))
+		const shapeId = typeof req.query.shapeId === 'string' ? req.query.shapeId : ''
+		if (!roomId || !shapeId) return void res.status(400).json({ error: 'room and shapeId required' })
+		res.json(relay.backlog(roomId, shapeId))
+	})
+
+	// present-stop no longer deletes the log — a finished presentation IS the
+	// frozen last view (spec: 2026-07-29-file-viewer-force-follow-design.md).
+	// Kept as a 200 no-op so older clients' broadcasters don't error on stop.
+	router.post('/api/canvas/file-viewer/present-stop', (req, res) => {
+		res.json({ ok: true })
 	})
 
 	return router

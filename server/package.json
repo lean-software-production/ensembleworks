@@ -26,6 +26,7 @@
     "express": "^5.0.0",
     "livekit-server-sdk": "2.15.4",
     "marked": "^18.0.5",
+    "rrweb": "2.1.1",
     "ws": "^8.18.0"
   },
   "devDependencies": {

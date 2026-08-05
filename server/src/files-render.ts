@@ -46,22 +46,47 @@ export const BRIDGE_SCRIPT = `<script>(function () {
 		e.preventDefault()
 		parent.postMessage({ type: 'ew-pinch', deltaX: e.deltaX, deltaY: e.deltaY, x: e.clientX, y: e.clientY }, '*')
 	}, { passive: false })
+	// rrweb present recorder (spec: 2026-07-27-file-viewer-rrweb-broadcast).
+	// Dormant until the parent posts the present-start signal below;
+	// window.rrweb comes from the /files-assets/rrweb.js script tag the
+	// renderer emits before this bridge. Recording emits the present-event
+	// message (below) that the parent relays.
+	var stopRecord = null
+	window.addEventListener('message', function (e) {
+		var d = e && e.data
+		if (!d) return
+		if (d.type === 'ew-present-start' && !stopRecord && window.rrweb) {
+			stopRecord = window.rrweb.record({
+				emit: function (ev) { parent.postMessage({ type: 'ew-rrweb-event', event: ev }, '*') },
+				sampling: { mousemove: 40, scroll: 80 },
+			})
+		} else if (d.type === 'ew-present-stop' && stopRecord) {
+			stopRecord()
+			stopRecord = null
+		}
+	})
 	parent.postMessage({ type: 'ew-file-viewer-ready' }, '*')
 })()</script>`
 
+/** rrweb UMD asset tag — must load before BRIDGE_SCRIPT's dormant recorder. */
+export const RRWEB_TAG = '<script src="/files-assets/rrweb.js"></script>'
+
 /**
- * Inject the bridge before the last REAL closing body tag (case-insensitive,
- * optional whitespace before '>'), else append. The insertion offset uses the
- * same matcher as the presence check, so a bare '</body' substring (e.g.
- * inside a script string) can never attract the injection mid-document and
- * corrupt it (spec R6: never a broken document).
+ * Inject the rrweb asset + bridge before the last REAL closing body tag
+ * (case-insensitive, optional whitespace before '>'), else append. The
+ * insertion offset uses the same matcher as the presence check, so a bare
+ * '</body' substring (e.g. inside a script string) can never attract the
+ * injection mid-document and corrupt it (spec R6: never a broken document).
+ * Raw-HTML documents get the recorder too, so present mode covers ALL local
+ * content — the recorder stays dormant until ew-present-start either way.
  */
 export function injectBridge(html: string): string {
+	const injected = RRWEB_TAG + BRIDGE_SCRIPT
 	const re = /<\/body\s*>/gi
 	let idx = -1
 	for (let m = re.exec(html); m; m = re.exec(html)) idx = m.index
-	if (idx < 0) return html + BRIDGE_SCRIPT
-	return html.slice(0, idx) + BRIDGE_SCRIPT + html.slice(idx)
+	if (idx < 0) return html + injected
+	return html.slice(0, idx) + injected + html.slice(idx)
 }
 
 const PAGE_CSS = `<style>
@@ -82,7 +107,7 @@ function esc(s: string): string {
 /** GFM markdown → standalone styled HTML with the bridge already injected. */
 export function renderMarkdown(md: string, filename: string): string {
 	const body = marked.parse(md, { gfm: true, async: false }) as string
-	return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(filename)}</title>${PAGE_CSS}</head><body>${body}${BRIDGE_SCRIPT}</body></html>`
+	return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(filename)}</title>${PAGE_CSS}</head><body>${body}${RRWEB_TAG}${BRIDGE_SCRIPT}</body></html>`
 }
 
 /** Small styled page for 404/502/unsupported/501 — shown inside the control. */

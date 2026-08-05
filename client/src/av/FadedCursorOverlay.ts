@@ -10,6 +10,13 @@
  * Gains are read non-reactively: the overlay already repaints on cursor and
  * camera changes, which are the events that change gains. (A standup-mode
  * toggle shows on the next repaint — any pointer/camera motion.)
+ *
+ * NOT wired directly into <Tldraw overlayUtils> — file-viewer/
+ * hideControllerCursor.ts's `HideControllerCursorOverlayUtil` subclasses
+ * THIS class (composing gain-fade with baton-holder cursor-hiding onto the
+ * same 'collaborator_cursor' overlay type) and App.tsx wires that combined
+ * class in instead. See that file's header for why composing by subclassing,
+ * not by passing two same-`type` overlayUtils entries.
  */
 import { rawUserId } from '@ensembleworks/contracts'
 import { CollaboratorCursorOverlayUtil, type TLCollaboratorCursorOverlay } from 'tldraw'
@@ -31,6 +38,3 @@ export class FadedCollaboratorCursorOverlayUtil extends CollaboratorCursorOverla
 		}
 	}
 }
-
-/** Stable module-level array so <Tldraw overlayUtils> deps don't churn. */
-export const avOverlayUtils = [FadedCollaboratorCursorOverlayUtil]
