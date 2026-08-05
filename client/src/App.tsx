@@ -22,11 +22,11 @@ import { getSettings, updateSettings } from './chrome/settings'
 import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
 import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
+import { fileViewerOverlayUtils } from './file-viewer/hideControllerCursor'
 import { presentStore } from './file-viewer/presentStore'
 import { rrwebFollowStore } from './file-viewer/rrwebFollow'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
 import { useAvSnapshot } from './av/bridge'
-import { avOverlayUtils } from './av/FadedCursorOverlay'
 import { CanvasBlockerModal } from './canvas-health/CanvasBlockerModal'
 import { useCanvasAvailability } from './canvas-health/useCanvasAvailability'
 import { getFrameId, getRoomId, identityOnce, type Identity } from './identity'
@@ -291,7 +291,7 @@ export function App() {
 					deepLinks
 					assetUrls={assetUrls}
 					shapeUtils={customShapeUtils}
-					overlayUtils={avOverlayUtils}
+					overlayUtils={fileViewerOverlayUtils}
 					overrides={uiOverrides}
 					components={components}
 					// Hard prerequisite for the locked-shape padlock chip

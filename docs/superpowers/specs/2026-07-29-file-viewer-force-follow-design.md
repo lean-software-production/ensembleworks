@@ -66,6 +66,20 @@ state of every non-controller. The three-state per-person model
   subtle header hint ("last presented view — double-click to take
   control"). No live indicator. The not-editing, non-frozen hint reads
   "double-click to take control" (was "double-click to interact").
+- **Controller's canvas cursor is hidden while they hold the baton.**
+  The mirror already renders their in-control cursor inside the shape,
+  so their regular tldraw collaborator cursor elsewhere on the canvas
+  is a duplicate — `client/src/file-viewer/hideControllerCursor.ts`
+  overrides the `collaborator_cursor` overlay (subclassing the existing
+  spatial-audio gain-fade overlay, `av/FadedCursorOverlay.ts`, so both
+  behaviours compose) to drop any collaborator whose presence meta
+  carries a live `fileViewerPresent` token, checked per-collaborator
+  (self-reported), not resolved to the single per-shape LWW winner.
+  **Caveat (implemented as specified, accepted by the product owner):**
+  because release only happens via steal or disconnect (see Release,
+  above), a controller who walks away from the shape without anyone
+  stealing it stays cursor-hidden on the canvas — there is no
+  "wandered off" detection.
 
 ## Relay / server changes
 
