@@ -20,8 +20,27 @@ export function urlPatchScript(port: number): string {
 	}
 	var origFetch = window.fetch
 	if (origFetch) window.fetch = function (input, init) {
-		if (typeof input === 'string') input = patch(input)
-		else if (input && typeof input.url === 'string' && input.url.charAt(0) === '/') input = new Request(patch(input.url), input)
+		if (typeof input === 'string') {
+			input = patch(input)
+		} else if (input instanceof URL) {
+			// A URL object's .pathname is always root-absolute, unlike
+			// Request.prototype.url (always absolute) — reliably patchable.
+			if (input.host === location.host) {
+				var patched = patch(input.pathname)
+				if (patched !== input.pathname) {
+					var u2 = new URL(input.href)
+					u2.pathname = patched
+					input = u2
+				}
+			}
+		}
+		// Request-object inputs are left unpatched: Request.prototype.url is
+		// always absolute (a url.charAt(0) === '/' check here can never
+		// match), and rebuilding one via new Request(patchedUrl, input)
+		// throws a duplex-required error in Chrome once the Request carries
+		// a body. Same-origin fetch(new Request(...)) calls made directly
+		// (rather than via a string/URL) are rare enough in practice that
+		// this is an accepted gap, not a silent mishandling.
 		return origFetch.call(this, input, init)
 	}
 	var origOpen = XMLHttpRequest.prototype.open

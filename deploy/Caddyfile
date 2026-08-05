@@ -94,7 +94,7 @@
 	# upgrades the WS natively. (vite.config.ts still lists these under
 	# server.proxy for the rare case of hitting Vite on :5173 directly; behind
 	# Caddy this route wins first.)
-	@backend path /sync /sync/* /api /api/* /uploads /uploads/* /files /files/*
+	@backend path /sync /sync/* /api /api/* /uploads /uploads/* /files /files/* /files-assets /files-assets/*
 	handle @backend {
 		reverse_proxy 127.0.0.1:{$ENSEMBLEWORKS_PORT_SYNC:8788}
 	}

@@ -45,6 +45,21 @@
 		reverse_proxy localhost:8789
 	}
 
+	# Canvas backend traffic, named explicitly so it wins BEFORE @devref below —
+	# without this, any request from a dev-Referer page for one of these paths
+	# (e.g. /files-assets/rrweb.js loaded from a /dev/{port} page) would fall
+	# into @devref and get hijacked to the dev server instead, 404ing (recorder
+	# stays permanently dormant). /sync, /api, /uploads, /files, /files-assets
+	# all live on the sync server; static client assets (/assets/x.js) are
+	# handled by the catch-all below and are NOT enumerable here, but that's
+	# safe: they're only ever requested by the canvas app itself, which is
+	# never loaded from a /dev page, so they never carry a dev Referer for
+	# @devref to catch in the first place.
+	@backend path /sync /sync/* /api /api/* /uploads /uploads/* /files /files/* /files-assets /files-assets/*
+	handle @backend {
+		reverse_proxy localhost:8788
+	}
+
 	# Referer fallback (spec: web-viewer unification §2): a dev app's root-
 	# absolute asset request (/assets/x.js) misses every canvas route; if the
 	# page it came from is under /dev/{port}/, send it to that dev server via
@@ -57,8 +72,8 @@
 		reverse_proxy localhost:8788
 	}
 
-	# Everything else — the app + static client/SPA, /sync (WS), /api, /uploads —
-	# is served by the sync server (which serves client/dist in production).
+	# Everything else — the app + static client/SPA — is served by the sync
+	# server (which serves client/dist in production).
 	handle {
 		reverse_proxy localhost:8788
 	}
