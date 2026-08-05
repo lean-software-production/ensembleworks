@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# gh-shim — installed as /usr/local/bin/gh, ahead of the real /usr/bin/gh on
+# EVERY PATH (including sudo's secure_path and a scrubbed `env -i sh`), so the
+# GitHub CLI authenticates as ensembleworks[bot] in every shell: interactive,
+# `sh -c`, `claude -p`, a Relay runner. The ~/.bashrc `gh()` function this
+# replaces existed only in interactive shells, which is exactly why headless gh
+# calls died on "please run gh auth login".
+#
+# Decisions, in order:
+#   1. not the sandbox user            -> real gh, untouched
+#   2. caller already chose an identity -> real gh, untouched
+#   3. otherwise take a token from git's credential machinery, so gh and git
+#      share one code path and one warm cache
+#   4. no token -> fall through UNAUTHENTICATED, so the real gh prints its own
+#      diagnostic instead of this shim masking it
+#
+# The token only ever crosses in the environment — never on a command line,
+# never printed — and this script never runs under `set -x`.
+set -euo pipefail
+
+AGENT_USER="ensembleworks-agent"
+# Absolute path: no possibility of PATH recursion back into this shim.
+# EW_GH_REAL is a test seam (deploy/test/gh-auth_test.sh). It grants nothing: the
+# shim runs wholly as the caller's own user, and anyone who can set its
+# environment can already run any command as that user.
+REAL_GH="${EW_GH_REAL:-/usr/bin/gh}"
+
+if [ "$(id -un)" != "$AGENT_USER" ]; then
+	exec "$REAL_GH" "$@"
+fi
+if [ -n "${GH_TOKEN:-}" ] || [ -n "${GITHUB_TOKEN:-}" ]; then
+	exec "$REAL_GH" "$@"
+fi
+
+# GIT_TERMINAL_PROMPT=0 is mandatory: without it, a declining helper makes git
+# prompt for a username on a TTY and the call hangs — the exact failure EW3 hit.
+creds="$(printf 'protocol=https\nhost=github.com\n\n' |
+	GIT_TERMINAL_PROMPT=0 git credential fill 2>/dev/null)" || creds=""
+
+# A warm `cache` helper answers this without a mint; a cache miss falls through
+# to git-credential-ensembleworks. (git populates that cache itself, via its own
+# `approve`, after a real git operation succeeds — the shim never stores a
+# token, so a gh-only session re-mints per call. That is the accepted ~½s cost.)
+token=""
+while IFS='=' read -r key value; do
+	if [ "$key" = "password" ]; then token="$value"; fi
+done <<EOF
+${creds}
+EOF
+
+if [ -n "$token" ]; then
+	export GH_TOKEN="$token"
+fi
+
+exec "$REAL_GH" "$@"

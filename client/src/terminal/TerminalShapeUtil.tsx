@@ -34,6 +34,7 @@ import {
 	useEditor,
 	useValue,
 } from 'tldraw'
+import { focusedShapeIdAtom } from '../chrome/focus'
 import { paperTerminalTheme, wm } from '../theme'
 import { type CellSize, gridFor, quantizeCell } from './grid'
 import { FONT_SIZE_DEFAULT, fontSizeActionForKey, nextFontSize, ptyInputForKey } from './keys'
@@ -169,6 +170,15 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 		'isEditing',
 		() => editor.getEditingShapeId() === shape.id,
 		[editor, shape.id]
+	)
+	// Is THIS terminal the one filling the canvas in focus view? Read straight
+	// off the atom (chrome/focus.ts is the single source of truth) — see the
+	// keyboard-focus effect below for why it, and not just isEditing, has to
+	// drive xterm's DOM focus.
+	const isFocusViewed = useValue(
+		'isFocusViewed',
+		() => focusedShapeIdAtom.get() === shape.id,
+		[shape.id]
 	)
 	// Canvas zoom, but only tracked while this terminal is being edited — idle
 	// terminals don't subscribe, so zooming the board doesn't re-render them all.
@@ -545,10 +555,21 @@ function TerminalShapeComponent({ shape }: { shape: TerminalShape }) {
 
 	// Editing state drives keyboard focus. (Renderer swap on edit lives in its
 	// own effect below.)
+	//
+	// EW26: `isFocusViewed` is in the dep list, not just `isEditing`, because
+	// the editing transition alone does not cover every way a terminal ends up
+	// full-screen with the keyboard meant to be attached. If the user had
+	// already double-clicked in (so this shape IS the editing shape) and then
+	// clicks ⛶, enterFocus's setEditingShape is a no-op — no transition, this
+	// effect never re-runs — while the click itself moved DOM focus onto the ⛶
+	// button, which then unmounts and drops focus to <body>. The result was a
+	// full-screen terminal swallowing every keystroke, including the double-Esc
+	// that is supposed to get you back out: the exact bug EW26 exists to remove
+	// (smoke Finding 2). Re-running on focus-view entry re-attaches xterm.
 	useEffect(() => {
 		if (isEditing) termRef.current?.focus()
 		else termRef.current?.blur()
-	}, [isEditing])
+	}, [isEditing, isFocusViewed])
 
 	// Renderer strategy: WebGL while viewing, DOM while editing — everyone,
 	// always (no per-machine flag).
