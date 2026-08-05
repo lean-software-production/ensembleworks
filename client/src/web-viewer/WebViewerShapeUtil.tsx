@@ -117,8 +117,10 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 	const hasSource = kind === 'dev' ? port != null : Boolean(path)
 
 	const [devErrors, setDevErrors] = useState<{ kind: string; detail: string }[]>([])
+	const [errorsOpen, setErrorsOpen] = useState(false)
 	useEffect(() => {
 		setDevErrors([])
+		setErrorsOpen(false)
 	}, [rev]) // refresh clears the slate
 
 	const refresh = () => {
@@ -417,15 +419,24 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 					{activePresenter && <span style={{ opacity: 0.85 }}>{activePresenter.userName} has control</span>}
 					{isPresentingThis && <span style={{ opacity: 0.85 }}>You have control</span>}
 					{devErrors.length > 0 && (
-						<span
-							title={devErrors
-								.slice(-10)
-								.map((e) => `${e.kind === 'resource' || e.kind === 'request' ? 'proxy/asset' : 'app'}: ${e.detail}`)
-								.join('\n')}
-							style={{ color: '#b91c1c', fontWeight: 700, pointerEvents: 'all', cursor: 'help' }}
+						<button
+							title={errorsOpen ? 'Hide errors' : 'Show errors'}
+							onPointerDown={stopEventPropagation}
+							onClick={() => setErrorsOpen((v) => !v)}
+							style={{
+								border: 'none',
+								background: errorsOpen ? '#b91c1c' : 'transparent',
+								borderRadius: 3,
+								color: errorsOpen ? '#fff' : '#b91c1c',
+								fontWeight: 700,
+								fontSize: 10,
+								pointerEvents: 'all',
+								cursor: 'pointer',
+								padding: '2px 6px',
+							}}
 						>
 							⚠ {devErrors.length}
-						</span>
+						</button>
 					)}
 					<HeaderButton label="↻" title="Refresh (reloads for everyone)" onClick={refresh} />
 				</span>
@@ -435,6 +446,41 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 					</span>
 				)}
 			</div>
+			{errorsOpen && devErrors.length > 0 && (
+				<div
+					onPointerDown={stopEventPropagation}
+					onWheel={(e) => e.stopPropagation()}
+					style={{
+						position: 'absolute',
+						top: HEADER_HEIGHT,
+						right: 6,
+						zIndex: 3,
+						maxWidth: 'min(480px, 90%)',
+						maxHeight: Math.max(120, h * 0.5),
+						overflowY: 'auto',
+						background: wm.panel,
+						border: `1px solid ${wm.ruleStrong}`,
+						borderRadius: 4,
+						boxShadow: wm.shadowPaper,
+						fontFamily: wm.mono,
+						fontSize: 10,
+						color: wm.ink,
+						padding: '6px 8px',
+						pointerEvents: 'all',
+						userSelect: 'text',
+						cursor: 'text',
+					}}
+				>
+					{devErrors.map((e, i) => (
+						<div key={i} style={{ padding: '2px 0', borderBottom: i < devErrors.length - 1 ? `1px solid ${wm.rule}` : 'none' }}>
+							<span style={{ color: '#b91c1c', fontWeight: 700 }}>
+								{e.kind === 'resource' || e.kind === 'request' ? 'proxy/asset' : 'app'}
+							</span>{' '}
+							{e.detail}
+						</div>
+					))}
+				</div>
+			)}
 			{hasSource ? (
 				<>
 					{(activePresenter && !mirrorFallback) || showFrozen ? (
