@@ -14,7 +14,7 @@
  * yield (someone else takes control) or presence expiry (disconnect).
  */
 import { fileViewerShapeProps } from '@ensembleworks/contracts'
-import { useEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
@@ -31,7 +31,13 @@ import { PRESENTER_FALLBACK_COLOR, presenterFor, type PresenterInfo } from './fo
 import { forwardPinchToCanvas, parsePinchMessage } from './pinchForward'
 import { createPresentBroadcaster } from './presentBroadcast'
 import { presentStore } from './presentStore'
-import { RrwebMirror } from './RrwebMirror'
+
+// Code-split out: RrwebMirror eagerly pulls in rrweb's `Replayer` + its CSS
+// (~40 kB gzip) — only needed once a mirror actually mounts (live or frozen),
+// never for a file-viewer that's just sitting on the canvas unwatched. Keeping
+// it out of the entry chunk is what the bundle-size CI gate enforces
+// (client/scripts/bundle-size-check.ts).
+const RrwebMirror = lazy(() => import('./RrwebMirror').then((m) => ({ default: m.RrwebMirror })))
 
 export interface FileViewerShapeProps {
 	w: number
@@ -400,16 +406,25 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 			{path ? (
 				<>
 					{(activePresenter && !mirrorFallback) || showFrozen ? (
-						<RrwebMirror
-							roomId={getRoomId()}
-							shapeId={shape.id}
-							width={w}
-							height={h - HEADER_HEIGHT}
-							presenterName={showFrozen ? '' : (activePresenter?.userName ?? '')}
-							presenterColor={showFrozen ? PRESENTER_FALLBACK_COLOR : (activePresenter?.color ?? PRESENTER_FALLBACK_COLOR)}
-							onFallback={() => setMirrorFallback(true)}
-							frozen={showFrozen}
-						/>
+						// Suspense fallback null is fine here: RrwebMirror's own
+						// FALLBACK_MS logic (plus the frozen-mode instant-bail on an
+						// empty backlog) already covers "nothing to show yet" — a brief
+						// blank while the lazy chunk itself loads is the same class of
+						// gap, not a new one.
+						<Suspense fallback={null}>
+							<RrwebMirror
+								roomId={getRoomId()}
+								shapeId={shape.id}
+								width={w}
+								height={h - HEADER_HEIGHT}
+								presenterName={showFrozen ? '' : (activePresenter?.userName ?? '')}
+								presenterColor={
+									showFrozen ? PRESENTER_FALLBACK_COLOR : (activePresenter?.color ?? PRESENTER_FALLBACK_COLOR)
+								}
+								onFallback={() => setMirrorFallback(true)}
+								frozen={showFrozen}
+							/>
+						</Suspense>
 					) : null}
 					<iframe
 						ref={iframeRef}

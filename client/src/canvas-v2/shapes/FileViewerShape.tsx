@@ -43,14 +43,10 @@
  *     hazard this avoids). A named "who" (peer userName/color) is NOT
  *     restored — canvas-sync's wire carries no identity fields at all (see
  *     presence.ts's `adaptPresence` doc comment on that same gap for
- *     cursors); the legacy header's "<name> has control" attribution text is
- *     cut for this v1 port (cosmetic, no correctness stake — trivial to
- *     re-add once canvas-sync grows identity fields). NOTE: the legacy
- *     component has since moved to a force-follow baton model with no
- *     opt-out (see FileViewerShapeUtil.tsx's module header) — this v1 port
- *     predates that and was never updated to match; it still has no
- *     opt-out UI of its own to remove, but its peer-follow here is NOT yet
- *     baton-aware (no grab-on-edit/yield-on-steal/frozen-mirror).
+ *     cursors); the legacy `FollowingChip`'s "Following <name>" UI and its
+ *     per-presenter local opt-out are cut for this v1 port (cosmetic, no
+ *     correctness stake — trivial to re-add once canvas-sync grows identity
+ *     fields).
  *
  * EMBED, NO SUSPEND/RESUME HOOKS (documented, matching IframeShape's
  * rationale exactly — this IS an iframe): registers into the shared
