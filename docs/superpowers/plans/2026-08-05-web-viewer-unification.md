@@ -421,7 +421,9 @@ Then: `bun run build` and `bun client/scripts/bundle-size-check.ts` (mode/args: 
 git add -A client && git commit -m "feat(client): rename file-viewer to web-viewer, retire the iframe plugin"
 ```
 
----### Task 4: Injecting /dev proxy (server) + Caddy routing
+---
+
+### Task 4: Injecting /dev proxy (server) + Caddy routing
 
 **Files:**
 - Create: `server/src/dev-inject.ts`
