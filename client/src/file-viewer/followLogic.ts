@@ -17,6 +17,7 @@ export interface PresenterInfo {
 	userName: string
 	color: string
 	fraction: number
+	ts: number
 }
 
 // Neutral fallback when presence carries no colour (older peers).
@@ -38,6 +39,7 @@ export function presenterFor(peers: readonly PresenceLike[], shapeId: string): P
 				userName: p.userName,
 				color: typeof p.color === 'string' && p.color ? p.color : PRESENTER_FALLBACK_COLOR,
 				fraction: m.fraction,
+				ts,
 			}
 		}
 	}

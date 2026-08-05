@@ -36,4 +36,25 @@ const stale = [
 assert.equal(presenterFor(stale, 'shape:1')?.userId, 'b')
 assert.equal(presenterFor([...stale].reverse(), 'shape:1')?.userId, 'b')
 
+// ts exposure: the winner's token timestamp is surfaced so an incumbent
+// presenter can detect a steal (peer ts newer than their own token's).
+{
+	const winner = presenterFor(
+		[
+			peer('a', { fileViewerPresent: { shapeId: 's1', fraction: 0.1, ts: 100 } }),
+			peer('b', { fileViewerPresent: { shapeId: 's1', fraction: 0.9, ts: 200 } }),
+		],
+		's1'
+	)
+	assert.equal(winner?.userId, 'b')
+	assert.equal(winner?.ts, 200, 'PresenterInfo carries the winning ts')
+}
+{
+	const winner = presenterFor(
+		[peer('a', { fileViewerPresent: { shapeId: 's1', fraction: 0.1 } })],
+		's1'
+	)
+	assert.equal(winner?.ts, 0, 'missing ts normalises to 0')
+}
+
 console.log('ok: followLogic')

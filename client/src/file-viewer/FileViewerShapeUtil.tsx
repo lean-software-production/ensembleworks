@@ -166,20 +166,21 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 		'fvPresenterKey',
 		() => {
 			const p = presenterFor(editor.getCollaborators(), shape.id)
-			return p ? `${p.userId}\t${p.userName}\t${p.color}\t${p.fraction}` : null
+			return p ? `${p.userId}\t${p.userName}\t${p.color}\t${p.fraction}\t${p.ts}` : null
 		},
 		[editor, shape.id]
 	)
 	let peer: PresenterInfo | null = null
 	if (presenterKey !== null) {
-		// fraction/color are the last two fields; join the middle back in case a
+		// ts/fraction/color are the last three fields; join the middle back in case a
 		// userName ever contains a tab (defensive — tldraw names are plain strings).
 		const parts = presenterKey.split('\t')
 		peer = {
 			userId: parts[0],
-			userName: parts.slice(1, -2).join('\t'),
-			color: parts[parts.length - 2],
-			fraction: Number(parts[parts.length - 1]),
+			userName: parts.slice(1, -3).join('\t'),
+			color: parts[parts.length - 3],
+			fraction: Number(parts[parts.length - 2]),
+			ts: Number(parts[parts.length - 1]),
 		}
 	}
 	const peerPresenter = peer && peer.userId !== myId ? peer : null
