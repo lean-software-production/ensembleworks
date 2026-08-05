@@ -31,12 +31,35 @@ const dev = http.createServer((req, res) => {
 // tracks whether the client's close propagated to it.
 const devWss = new WebSocketServer({ noServer: true })
 let devSocketClosed = false
+// A second endpoint whose handshake completes ~300ms late — reproduces the
+// fix-round-2 CRITICAL race: a client that aborts while our proxy is still
+// mid-dial to this upstream.
+let slowConnOpened = false
+let slowConnClosed = false
 dev.on('upgrade', (req, socket, head) => {
-	if (req.url !== '/ws-echo') return void socket.destroy()
-	devWss.handleUpgrade(req, socket, head, (ws) => {
-		ws.on('message', (data, isBinary) => ws.send(data, { binary: isBinary }))
-		ws.on('close', () => { devSocketClosed = true })
-	})
+	if (req.url === '/ws-echo') {
+		devWss.handleUpgrade(req, socket, head, (ws) => {
+			ws.on('message', (data, isBinary) => ws.send(data, { binary: isBinary }))
+			ws.on('close', () => { devSocketClosed = true })
+		})
+	} else if (req.url === '/ws-slow') {
+		// Tracks the raw TCP connection, independent of whether the delayed
+		// handshake below ever completes — when our proxy aborts its
+		// still-connecting upstream dial (the race under test), it tears
+		// this socket down well before the 300ms timer fires, so the
+		// handshake normally never completes at all. That IS the proof the
+		// abandoned connection got closed rather than leaked.
+		socket.once('close', () => { slowConnClosed = true })
+		setTimeout(() => {
+			// A real dev server's own upgrade path would see the same dead
+			// socket in this situation; guard it here rather than let a
+			// fake-server artifact crash the test itself.
+			if (socket.destroyed || !socket.writable) return
+			devWss.handleUpgrade(req, socket, head, () => { slowConnOpened = true })
+		}, 300)
+	} else {
+		socket.destroy()
+	}
 })
 await new Promise<void>((r) => dev.listen(0, '127.0.0.1', r))
 const devPort = (dev.address() as { port: number }).port
@@ -106,6 +129,47 @@ const wsBase = `ws://127.0.0.1:${(proxy.address() as { port: number }).port}`
 	// Give the upstream a tick to observe the propagated close.
 	await new Promise((r) => setTimeout(r, 100))
 	assert.ok(devSocketClosed, "closing the client's connection propagates to the upstream dev server")
+}
+{
+	// CRITICAL (fix round 2): client aborts the WS upgrade while the upstream
+	// dial is still in flight. Previously this crashed the whole process —
+	// wss.handleUpgrade threw synchronously into a dead socket once the
+	// delayed upstream 'open' finally fired (Bun-specific), and in the
+	// meantime the upstream lost its only 'error' listener, so a later
+	// ECONNRESET was itself unhandled and fatal too. If this test file
+	// reaches its final console.log below, the process survived.
+	const client = new WebSocketImpl(`${wsBase}/dev/${devPort}/ws-slow`)
+	client.on('error', () => {})
+	await new Promise((r) => setTimeout(r, 100))
+	client.terminate()
+
+	// The upstream's handshake is deliberately delayed ~300ms; wait past that
+	// plus slack for our close-propagation to land.
+	await new Promise((r) => setTimeout(r, 500))
+
+	// Aborting well before the 300ms delayed handshake normally tears the
+	// connection down before it can ever complete, so slowConnOpened is not
+	// asserted here — it exists only so a future timing change that lets the
+	// handshake occasionally win the race is visible, not treated as a bug.
+	assert.ok(slowConnClosed, 'the abandoned upstream connection was closed rather than leaked')
+	void slowConnOpened
+
+	// The process (and this test file) is still alive to prove the crash is
+	// fixed; confirm a completely unrelated, normal round-trip still works
+	// too — nothing about handling the aborted upgrade left the proxy in a
+	// bad state for the next one.
+	const sane = new WebSocketImpl(`${wsBase}/dev/${devPort}/ws-echo`)
+	await new Promise<void>((resolve, reject) => {
+		sane.once('open', () => resolve())
+		sane.once('error', reject)
+	})
+	const echoed = await new Promise<string>((resolve, reject) => {
+		sane.once('message', (data) => resolve(data.toString()))
+		sane.once('error', reject)
+		sane.send('still alive')
+	})
+	assert.equal(echoed, 'still alive', 'a subsequent normal WS round-trip still works after the aborted one')
+	sane.close()
 }
 {
 	// Upstream dev server down for a WS upgrade → the socket is closed with a

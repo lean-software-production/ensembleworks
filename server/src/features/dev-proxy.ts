@@ -124,47 +124,81 @@ export function handleDevUpgrade(req: http.IncomingMessage, socket: Socket, head
 		headers: forwardHeaders,
 	})
 
+	// The client can abort (close, or error out) the pending upgrade while
+	// the upstream dial is still in flight — `socket` is only good for the
+	// duration of THIS upgrade, so once it's gone the upstream connection (if
+	// it ever opens) has to be torn down rather than handed to
+	// wss.handleUpgrade: that throws synchronously on a dead socket under Bun
+	// (`TypeError: upgrade requires a Request object`), and with no
+	// uncaughtException handler anywhere in server/src, an uncaught throw
+	// here takes the entire sync server down with it.
+	let aborted = false
+	const onClientAbort = () => {
+		aborted = true
+		upstream.close()
+	}
+	socket.once('close', onClientAbort)
+	socket.once('error', onClientAbort)
+
+	// The upstream WebSocket must NEVER be left without an 'error' listener —
+	// an unconsumed 'error' event is fatal (crashes the whole process) under
+	// both Node and Bun, and a connection that fails to establish can emit
+	// more than one. Register exactly one real listener for upstream's whole
+	// lifetime and just retarget what it delegates to as we move through
+	// phases (dialling -> relaying), so there's never a gap.
+	let onUpstreamError: (err: unknown) => void = () => {}
+	upstream.on('error', (err) => onUpstreamError(err))
+
 	// 'unexpected-response' (upstream completes the TCP handshake but declines
 	// the WS upgrade) is deliberately not handled here — Bun doesn't implement
 	// that event on the ws client, so a listener would be silently inert and
 	// falsely imply coverage. 'error' (e.g. nothing listening on the port) is
 	// the case that matters and works the same as the HTTP path's handler.
-	//
-	// Registered with .on (not .once): a connection that fails to establish
-	// can emit 'error' more than once, and an EventEmitter's 'error' event
-	// with no listener left to catch a second emission crashes the whole
-	// process — the `failed` guard keeps the actual 502-and-cleanup logic
-	// idempotent while the listener itself stays put to absorb any repeat.
-	let failed = false
 	const failUpgrade = () => {
-		if (failed) return
-		failed = true
-		upstream.removeAllListeners()
-		upstream.on('error', () => {})
+		socket.removeListener('close', onClientAbort)
+		socket.removeListener('error', onClientAbort)
+		onUpstreamError = () => {}
 		if (!socket.destroyed) socket.end('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n')
 	}
-	upstream.on('error', failUpgrade)
+	onUpstreamError = failUpgrade
 
 	upstream.once('open', () => {
-		upstream.removeListener('error', failUpgrade)
+		socket.removeListener('close', onClientAbort)
+		socket.removeListener('error', onClientAbort)
+
+		// The client (or its socket) died while we were still dialling
+		// upstream — nothing left to hand the now-useless upstream
+		// connection to; drop it and stop.
+		if (aborted || socket.destroyed || !socket.writable) {
+			upstream.close()
+			return
+		}
 
 		// Ephemeral, single-connection server: its only job is to complete
 		// THIS client handshake, echoing whatever subprotocol the upstream
 		// just negotiated (handleProtocols is only invoked when the client
 		// actually requested one — see ws's websocket-server.js).
 		const wss = new WebSocketServer({ noServer: true, handleProtocols: () => upstream.protocol || false })
-		wss.handleUpgrade(req, socket, head, (client) => {
-			const kill = () => {
-				client.close()
-				upstream.close()
-			}
-			client.on('message', (data, isBinary) => upstream.send(data, { binary: isBinary }))
-			upstream.on('message', (data, isBinary) => client.send(data, { binary: isBinary }))
-			client.on('close', (code, reason) => upstream.close(relayableCloseCode(code), reason))
-			upstream.on('close', (code, reason) => client.close(relayableCloseCode(code), reason))
-			client.on('error', kill)
-			upstream.on('error', kill)
-		})
+		try {
+			wss.handleUpgrade(req, socket, head, (client) => {
+				const kill = () => {
+					client.close()
+					upstream.close()
+				}
+				onUpstreamError = kill
+				client.on('message', (data, isBinary) => upstream.send(data, { binary: isBinary }))
+				upstream.on('message', (data, isBinary) => client.send(data, { binary: isBinary }))
+				client.on('close', (code, reason) => upstream.close(relayableCloseCode(code), reason))
+				upstream.on('close', (code, reason) => client.close(relayableCloseCode(code), reason))
+				client.on('error', kill)
+			})
+		} catch {
+			// Belt-and-braces for the same dead-socket race the checks above
+			// guard against — ws's handleUpgrade can still throw synchronously
+			// if the socket died in the narrow gap between them and this call.
+			// The client is already gone either way; just drop the upstream.
+			upstream.close()
+		}
 	})
 
 	return true
