@@ -74,6 +74,16 @@ export function RrwebMirror(props: {
 		wrapper.style.position = 'absolute'
 		wrapper.style.left = `${Math.max(0, (host.clientWidth - size.w * scale) / 2)}px`
 		wrapper.style.top = '0px'
+		// .replayer-mouse is a DIRECT CHILD of .replayer-wrapper (rrweb's own
+		// setupDom), so it inherits this fit scale visually — without
+		// countering it, the cursor would shrink/grow with the recorded
+		// document's size-vs-shape-box ratio instead of staying a constant
+		// on-screen size like tldraw's own collaborator cursor (which
+		// counter-scales by 1/zoom in CollaboratorCursorOverlayUtil.render()).
+		// Set on `host` (never itself transformed) so the custom property
+		// reaches `.replayer-mouse` via normal DOM inheritance regardless of
+		// the wrapper's transform; rrwebMirror.css applies the inverse.
+		if (scale > 0) host.style.setProperty('--ew-mirror-scale', String(scale))
 	}
 
 	useEffect(() => {
