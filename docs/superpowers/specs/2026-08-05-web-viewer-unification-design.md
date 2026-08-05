@@ -32,13 +32,24 @@ real dev apps.
   file shapes. The shape gains a source discriminator:
   `{ kind: 'file', path, rev }` (today's behaviour, unchanged) or
   `{ kind: 'dev', port, path }`.
+- **Migration.** Two kinds of existing shapes:
+  - **Old file-viewer shapes migrate in place, automatically.** The
+    wire type stays `file-viewer`; a tldraw shape-props migration adds
+    the `source` discriminator, defaulting existing shapes to
+    `{ kind: 'file' }` with their current path/rev. No visible change,
+    no data loss — every existing file-viewer shape simply *is* a web
+    viewer after the upgrade.
+  - **Old `iframe` shapes** auto-migrate on room load into a plain
+    tldraw `text` shape whose text is the shape's URL, formatted as a
+    link to that URL. No legacy wording, no split by local/external;
+    users recreate local ones as web viewers by hand. This migration is
+    best-effort: if it proves fiddly in practice, it may be dropped and
+    the shapes left as tldraw "unknown shape" boxes — the iframe
+    control is rarely used and the loss is acceptable.
 - **`iframe` control retired.** Shape util deleted from the v1 plugin
-  registry; creation paths removed. Existing `iframe` shapes
-  auto-migrate on room load into a plain tldraw `text` shape whose text
-  is the shape's URL, formatted as a link to that URL. No legacy
-  wording, no split by local/external. Users recreate local ones as web
-  viewers by hand. (The v2 engine's `canvas-v2/shapes/IframeShape.tsx`
-  is out of scope — v1 only, same as the force-follow work.)
+  registry; creation paths removed. (The v2 engine's
+  `canvas-v2/shapes/IframeShape.tsx` is out of scope — v1 only, same as
+  the force-follow work.)
 - **Proxy strategy: single-origin heuristic (option 2).** Cloudflared
   is the production access path and only forwards 443, so
   origin-per-port is impossible and wildcard subdomains are
