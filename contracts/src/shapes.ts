@@ -22,13 +22,6 @@ export const terminalShapeProps = {
 	fontSize: T.number.optional(),
 }
 
-export const iframeShapeProps = {
-	w: T.number,
-	h: T.number,
-	url: T.string,
-	title: T.string,
-}
-
 export const nekoShapeProps = {
 	w: T.number,
 	h: T.number,
@@ -46,13 +39,21 @@ export const roadmapShapeProps = {
 	rev: T.number.optional(),
 }
 
-export const fileViewerShapeProps = {
+export const webViewerShapeProps = {
 	w: T.number,
 	h: T.number,
-	// Path relative to the agent user's home, e.g. "my-repo/docs/report.html".
+	// Source discriminator (spec: web-viewer unification): 'file' renders a
+	// home-relative path via /files/*; 'dev' renders a VM dev server via the
+	// injecting /dev/{port} proxy. Optional so migrated records validate
+	// before the migration stamps kind (treat missing as 'file').
+	kind: T.literalEnum('file', 'dev').optional(),
+	// kind 'file': path relative to the agent user's home. kind 'dev': the
+	// in-app path under the dev server root (default '/').
 	path: T.string,
 	title: T.string,
-	// Bumped by POST /api/canvas/file-viewer refresh so every client reloads.
+	// kind 'dev' only: the localhost port the dev server listens on.
+	port: T.number.optional(),
+	// Bumped by POST /api/canvas/web-viewer refresh so every client reloads.
 	rev: T.number.optional(),
 	// Remote gateway id (future); optional so existing rooms need no migration.
 	gateway: T.string.optional(),
