@@ -26,19 +26,27 @@ real dev apps.
   `localhost:<port>` dev servers. External URLs are unsupported —
   rejected at creation with a clear message. No two-tier "dumb embed"
   mode survives.
-- **One shape, renamed.** The file-viewer becomes the **web viewer** at
-  the UI level (labels, toolbar, docs, CLI help). The wire shape type
-  stays `file-viewer` — no tldraw sync schema migration for existing
-  file shapes. The shape gains a source discriminator:
+- **One shape, renamed everywhere.** The file-viewer becomes the
+  **web viewer** in code as well as UI: wire shape type `web-viewer`
+  (store migration retypes existing `file-viewer` records), directory
+  `client/src/file-viewer/` → `client/src/web-viewer/`, presence meta
+  key `fileViewerPresent` → `webViewerPresent` (ephemeral — safe),
+  relay route names, and identifiers (`hasFileViewerBaton` →
+  `hasWebViewerBaton`, …). The HTTP creation route becomes
+  `POST /api/canvas/web-viewer`, with the old `/api/canvas/file-viewer`
+  route kept as a deprecated alias (existing agents/scripts/docs call
+  it). The shape gains a source discriminator:
   `{ kind: 'file', path, rev }` (today's behaviour, unchanged) or
   `{ kind: 'dev', port, path }`.
 - **Migration.** Two kinds of existing shapes:
-  - **Old file-viewer shapes migrate in place, automatically.** The
-    wire type stays `file-viewer`; a tldraw shape-props migration adds
-    the `source` discriminator, defaulting existing shapes to
+  - **Old file-viewer shapes migrate in place, automatically.** A
+    store-level migration retypes `file-viewer` records to `web-viewer`
+    and adds the `source` discriminator, defaulting existing shapes to
     `{ kind: 'file' }` with their current path/rev. No visible change,
-    no data loss — every existing file-viewer shape simply *is* a web
-    viewer after the upgrade.
+    no data loss. Because the migration is a schema version bump,
+    tldraw sync's standard gating applies: after the server deploys,
+    clients on the old build are prompted to reload — expected, same as
+    any schema change.
   - **Old `iframe` shapes** auto-migrate on room load into a plain
     tldraw `text` shape whose text is the shape's URL, formatted as a
     link to that URL. No legacy wording, no split by local/external;
@@ -139,8 +147,9 @@ The profile is derived from `source.kind` in exactly one place.
 
 ### 6. Creation UX
 
-- Existing file paths: unchanged (CLI/API `POST /api/canvas/file-viewer`
-  with a path).
+- Existing file paths: unchanged behaviour via
+  `POST /api/canvas/web-viewer` with a path (old `/api/canvas/
+  file-viewer` route answers as a deprecated alias).
 - Dev servers: the same creation surface accepts a
   `localhost:<port>`/port form and produces a `{ kind: 'dev' }` shape.
   `toProxiedUrl`'s localhost-detection rule carries over as the
