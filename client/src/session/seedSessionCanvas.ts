@@ -97,7 +97,7 @@ export function seedSessionCanvas(editor: Editor) {
 				type: 'web-viewer',
 				x: zone.benchPreview.x,
 				y: zone.benchPreview.y,
-				props: { w: 600, h: 420, path: '/dev/3000/', title: `${zone.name} preview (port 3000)` },
+				props: { w: 600, h: 420, kind: 'dev', port: 3000, path: '/', title: `${zone.name} preview (port 3000)` },
 			})
 
 			// Bench: advice frame for reviewer stickies.

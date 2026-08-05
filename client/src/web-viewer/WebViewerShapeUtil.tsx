@@ -17,6 +17,7 @@
  */
 import { webViewerShapeProps } from '@ensembleworks/contracts'
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { sandboxFor, srcFor } from './devSource'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
@@ -44,9 +45,16 @@ const RrwebMirror = lazy(() => import('./RrwebMirror').then((m) => ({ default: m
 export interface WebViewerShapeProps {
 	w: number
 	h: number
-	// Path relative to the agent user's home, e.g. "my-repo/docs/report.html".
+	// Source discriminator: 'file' renders a home-relative path via /files/*;
+	// 'dev' renders a VM dev server via the injecting /dev/{port} proxy.
+	// Optional so pre-migration records validate (treat missing as 'file').
+	kind?: 'file' | 'dev'
+	// kind 'file': path relative to the agent user's home. kind 'dev': the
+	// in-app path under the dev server root (default '/').
 	path: string
 	title: string
+	// kind 'dev' only: the localhost port the dev server listens on.
+	port?: number
 	// Bumped by POST /api/canvas/web-viewer refresh so every client reloads.
 	rev?: number
 	// Remote gateway id (future); optional so existing rooms need no migration.
@@ -104,8 +112,14 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 		() => editor.getEditingShapeId() === shape.id,
 		[editor, shape.id]
 	)
-	const { path, w, h, rev } = shape.props
-	const displayTitle = shape.props.title || path || 'web viewer'
+	const { path, w, h, rev, kind, port } = shape.props
+	const displayTitle = shape.props.title || (kind === 'dev' ? `:${port}` : path) || 'web viewer'
+	const hasSource = kind === 'dev' ? port != null : Boolean(path)
+
+	const [devErrors, setDevErrors] = useState<{ kind: string; detail: string }[]>([])
+	useEffect(() => {
+		setDevErrors([])
+	}, [rev]) // refresh clears the slate
 
 	const refresh = () => {
 		editor.updateShape({
@@ -245,6 +259,10 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 			if (e.source !== iframeRef.current?.contentWindow) return
 			const d = e.data as { type?: unknown; fraction?: unknown; event?: unknown } | null
 			if (!d || typeof d !== 'object') return
+			if (d.type === 'ew-dev-error' && typeof (d as any).detail === 'string') {
+				setDevErrors((prev) => (prev.length >= 50 ? prev : [...prev, { kind: String((d as any).kind), detail: (d as any).detail }]))
+				return
+			}
 			const pinch = parsePinchMessage(d)
 			if (pinch) {
 				// Pinch over the interactive viewer zooms the CANVAS (spec:
@@ -392,12 +410,23 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 					{displayTitle}
 				</span>
 				<span style={{ opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-					{path}
+					{kind === 'dev' ? `localhost:${port}${path}` : path}
 				</span>
 				<span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'all' }}>
 					{audienceKey && <AudienceRow audienceKey={audienceKey} />}
 					{activePresenter && <span style={{ opacity: 0.85 }}>{activePresenter.userName} has control</span>}
 					{isPresentingThis && <span style={{ opacity: 0.85 }}>You have control</span>}
+					{devErrors.length > 0 && (
+						<span
+							title={devErrors
+								.slice(-10)
+								.map((e) => `${e.kind === 'resource' || e.kind === 'request' ? 'proxy/asset' : 'app'}: ${e.detail}`)
+								.join('\n')}
+							style={{ color: '#b91c1c', fontWeight: 700, pointerEvents: 'all', cursor: 'help' }}
+						>
+							⚠ {devErrors.length}
+						</span>
+					)}
 					<HeaderButton label="↻" title="Refresh (reloads for everyone)" onClick={refresh} />
 				</span>
 				{!isEditing && (
@@ -406,7 +435,7 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 					</span>
 				)}
 			</div>
-			{path ? (
+			{hasSource ? (
 				<>
 					{(activePresenter && !mirrorFallback) || showFrozen ? (
 						// Suspense fallback null is fine here: RrwebMirror's own
@@ -431,10 +460,9 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 					) : null}
 					<iframe
 						ref={iframeRef}
-						// Per-segment encode so exotic names (#, ?, %) round-trip the
-						// route's decode-once contract (features/files.ts re-encodes the
-						// decoded express param the same way before hitting the file-server).
-						src={`/files/${path.split('/').map(encodeURIComponent).join('/')}?rev=${rev ?? 0}`}
+						// src/sandbox derivation (incl. the file-vs-dev SECURITY tradeoff)
+						// lives in devSource.ts, ONLY there.
+						src={srcFor(shape.props)}
 						title={displayTitle}
 						style={{
 							flex: 1,
@@ -444,13 +472,7 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 							pointerEvents: isEditing ? 'all' : 'none',
 							display: (activePresenter && !mirrorFallback) || showFrozen ? 'none' : undefined,
 						}}
-						// SECURITY: no `allow-same-origin`, ever. Without it the iframe's
-						// document loads into an opaque (null) origin, so file-server
-						// content can never read the canvas's cookies/localStorage or reach
-						// the credentialed /api endpoints under the app's own origin — even
-						// though it shares allow-scripts. Adding allow-same-origin back
-						// would let an agent-authored file impersonate the signed-in user.
-						sandbox="allow-scripts allow-forms allow-downloads"
+						sandbox={sandboxFor(kind ?? 'file')}
 					/>
 				</>
 			) : (
@@ -465,7 +487,7 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 						fontSize: 11,
 					}}
 				>
-					no file
+					no source
 				</div>
 			)}
 		</HTMLContainer>

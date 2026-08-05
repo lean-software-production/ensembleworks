@@ -43,7 +43,7 @@ export function seedDemoCanvas(editor: Editor) {
 			type: 'web-viewer',
 			x: ox + 820,
 			y: oy + 380,
-			props: { w: 720, h: 540, path: '/dev/3000/', title: 'app preview (port 3000)' },
+			props: { w: 720, h: 540, kind: 'dev', port: 3000, path: '/', title: 'app preview (port 3000)' },
 		})
 		editor.createShape({
 			type: 'arrow',
