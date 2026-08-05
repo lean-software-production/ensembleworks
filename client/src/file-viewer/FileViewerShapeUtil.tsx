@@ -10,8 +10,10 @@
  * "refresh" is a room-wide reload, not a local one (unlike the iframe
  * shape's dev-server reload, which only resets the local <iframe>.src).
  * Double-click to take control and interact — editing IS the baton (see
- * PresenterInfo). There is no click-away release: the baton only lets go via
- * yield (someone else takes control) or presence expiry (disconnect).
+ * PresenterInfo): the token lives exactly as long as the local editing
+ * session. It releases on edit-exit (deselect, click away, Escape, select
+ * another shape — freezing the shape at the last view for everyone), on
+ * yield (someone else takes control), or on presence expiry (disconnect).
  */
 import { fileViewerShapeProps } from '@ensembleworks/contracts'
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
@@ -132,9 +134,11 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 
 	useEffect(() => {
 		if (!isPresentingThis) {
-			// Lost the baton (yielded, presence expired) or unmount below: stop
-			// recorder + relay log. There is no toggle-off — this only fires via
-			// yield-on-steal, disconnect, or unmount.
+			// Lost the baton (edit-exit release, yielded to a stealer, presence
+			// expired) or unmount below: stop the recorder + POST present-stop.
+			// present-stop is a no-op server-side now (spec: relay retention) —
+			// it does NOT delete the relay log, so the frozen mirror still has
+			// something to seed from after we release.
 			if (broadcasterRef.current) {
 				iframeRef.current?.contentWindow?.postMessage({ type: 'ew-present-stop' }, '*')
 				void broadcasterRef.current.stop()
@@ -297,11 +301,24 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 		setMirrorFallback(false)
 	}, [activePresenter?.userId])
 
-	// Editing IS controlling (force-follow spec): starting to edit grabs the
-	// baton, so interaction intent and presentation are the same thing.
+	// Editing IS controlling (force-follow spec): the local token lives
+	// exactly as long as the editing session. Starting to edit grabs the
+	// baton; the edit session ending — deselect, click away, Escape, select
+	// another shape — releases it, freezing the shape at our last view for
+	// everyone (including us: our own iframe hides behind the frozen mirror
+	// once the token clears, and our canvas cursor un-hides — see
+	// hideControllerCursor.ts). Idempotent against the yield-on-steal effect
+	// below: if a steal already cleared our token (and forced isEditing
+	// false) before this runs, `isPresentingThis` is already false here, so
+	// the release branch is a no-op — presentStore is local-only, clearing an
+	// already-null token never clobbers whoever just stole it.
 	useEffect(() => {
-		if (isEditing && !isPresentingThis) {
-			presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current, ts: Date.now() })
+		if (isEditing) {
+			if (!isPresentingThis) {
+				presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current, ts: Date.now() })
+			}
+		} else if (isPresentingThis) {
+			presentStore.set(null)
 		}
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [isEditing])

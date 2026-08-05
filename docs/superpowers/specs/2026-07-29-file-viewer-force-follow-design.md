@@ -40,10 +40,21 @@ state of every non-controller. The three-state per-person model
   the mirror of the new controller. Label: header shows "〈name〉 has
   control" (or "You have control" for the holder) as passive text — not
   a button.
-- **Release:** only by disconnect. Presence expiry removes the token
-  (existing behaviour — the token rides presence meta, which dies with
-  the session). No explicit "stop presenting" button. Deselecting or
-  clicking away does NOT release the baton.
+- **Release:** on edit-exit, steal, or disconnect — three paths, no
+  explicit "stop presenting" button:
+  - **Edit-exit** (revised from the original design): the local token
+    lives exactly as long as the editing session. Deselecting, clicking
+    away, hitting Escape, or selecting another shape all end editing,
+    which releases the baton — the shape freezes at the controller's
+    last view for everyone, including the ex-controller (their own
+    iframe hides behind the frozen mirror once their token clears, and
+    per the cursor-hide UI change below, their canvas cursor reappears).
+  - **Steal:** a new controller's token out-stamps the old one (existing
+    LWW). The old controller's editing session ends visually: their
+    iframe flips to the mirror of the new controller.
+  - **Disconnect:** presence expiry removes the token (existing
+    behaviour — the token rides presence meta, which dies with the
+    session).
 
 ## UI changes (FileViewerShapeUtil)
 
@@ -55,8 +66,10 @@ state of every non-controller. The three-state per-person model
   while a peer holds the baton, "You have control" while you do —
   neither is a button, nothing to click.
 - Double-click-to-edit grabs the baton as a side effect of editing
-  starting (editor editing-state watcher), so interaction intent and
-  baton are the same thing.
+  starting, and edit-exit releases it as a side effect of editing
+  ending (same editor editing-state watcher, both directions) — so
+  interaction intent and baton are the same thing for the full lifetime
+  of the local editing session, not just at grab time.
 - While a peer holds the baton, the local iframe stays mounted but
   hidden behind the mirror (existing behaviour); double-click still
   starts editing, which grabs the baton and swaps the real iframe back.
@@ -75,11 +88,12 @@ state of every non-controller. The three-state per-person model
   behaviours compose) to drop any collaborator whose presence meta
   carries a live `fileViewerPresent` token, checked per-collaborator
   (self-reported), not resolved to the single per-shape LWW winner.
-  **Caveat (implemented as specified, accepted by the product owner):**
-  because release only happens via steal or disconnect (see Release,
-  above), a controller who walks away from the shape without anyone
-  stealing it stays cursor-hidden on the canvas — there is no
-  "wandered off" detection.
+  Cursor visibility now tracks the editing session precisely: since
+  edit-exit releases the baton (see Release, above), a controller's
+  cursor is hidden only while they are actively editing the shape — the
+  earlier "walked away and stays hidden" caveat no longer applies; it
+  was an artifact of the original steal-or-disconnect-only release
+  model, which edit-exit release supersedes.
 
 ## Relay / server changes
 
