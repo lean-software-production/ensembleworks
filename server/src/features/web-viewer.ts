@@ -42,6 +42,20 @@ export function normalizeHomePath(raw: string): string | null {
 	return p
 }
 
+/** Validate a dev-source path: must start with '/', no '.'/'..' segments —
+ * the browser RFC-3986-normalizes '../' out of an iframe src BEFORE the
+ * request leaves, so an unvalidated path here could resolve outside
+ * `/dev/{port}/` into a same-origin route like `/files/*` (see srcFor in
+ * client/src/web-viewer/devSource.ts, which applies the matching client-side
+ * defense). Returns the clean path or null. */
+export function normalizeDevPath(raw: string): string | null {
+	if (!raw) return '/'
+	if (!raw.startsWith('/')) return null
+	const pathname = raw.split('?')[0] ?? raw
+	if (pathname.split('/').some((seg) => seg === '.' || seg === '..')) return null
+	return raw
+}
+
 export function createWebViewerRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
@@ -70,6 +84,7 @@ export function createWebViewerRouter(ctx: PluginServerContext): express.Router 
 		const port = typeof rawPort === 'number' && Number.isInteger(rawPort) && rawPort > 0 && rawPort < 65536 ? rawPort : null
 		const rawPath = typeof body.path === 'string' ? body.path : ''
 		let cleanPath: string | null = null
+		let devPath: string | null = null
 		if (port === null) {
 			cleanPath = normalizeHomePath(rawPath)
 			if (!cleanPath) {
@@ -79,6 +94,13 @@ export function createWebViewerRouter(ctx: PluginServerContext): express.Router 
 			}
 		} else if (op === 'refresh') {
 			return void res.status(400).json({ error: 'refresh is by path; dev viewers reload via their own refresh button' })
+		} else {
+			devPath = normalizeDevPath(rawPath)
+			if (devPath === null) {
+				return void res
+					.status(400)
+					.json({ error: 'dev path must start with / and contain no . or .. segments' })
+			}
 		}
 
 		// ---- refresh ------------------------------------------------------------
@@ -156,7 +178,7 @@ export function createWebViewerRouter(ctx: PluginServerContext): express.Router 
 				y,
 				meta: attribution.metaAuthor ? { author: attribution.metaAuthor } : {},
 				props: port !== null
-					? { w: 960, h: 640, kind: 'dev', port, path: typeof body.path === 'string' && body.path.startsWith('/') ? body.path : '/', title, rev: 0 }
+					? { w: 960, h: 640, kind: 'dev', port, path: devPath!, title, rev: 0 }
 					: { w: 720, h: 540, kind: 'file', path: cleanPath!, title, rev: 0 },
 			})
 			store.put(viewer)

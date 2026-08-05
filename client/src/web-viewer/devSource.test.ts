@@ -37,4 +37,29 @@ assert.equal(srcFor({ kind: 'file', path: 'a/b c.html', rev: 2 }), '/files/a/b%2
 assert.equal(srcFor({ kind: 'dev', port: 3000, path: '/', rev: 0 }), '/dev/3000/?rev=0')
 assert.equal(srcFor({ kind: 'dev', port: 3000, path: '/admin?x=1', rev: 1 }), '/dev/3000/admin?x=1&rev=1')
 assert.equal(srcFor({ path: 'a.html', rev: 0 }), '/files/a.html?rev=0', 'missing kind = file (pre-migration records)')
+
+// srcFor: dot-segment path traversal is neutralized (a browser RFC-3986-
+// normalizes '../' out of an iframe src before the request leaves, which
+// would otherwise escape the /dev/{port}/ prefix into /files/*).
+assert.equal(
+	srcFor({ kind: 'dev', port: 3000, path: '/../../files/x', rev: 0 }),
+	'/dev/3000/?rev=0',
+	'leading ../ escape neutralized'
+)
+assert.equal(
+	srcFor({ kind: 'dev', port: 3000, path: '/a/../../files/x', rev: 0 }),
+	'/dev/3000/?rev=0',
+	'nested ../ escape neutralized'
+)
+assert.equal(
+	srcFor({ kind: 'dev', port: 3000, path: '/a/./b', rev: 0 }),
+	'/dev/3000/?rev=0',
+	'./ segment neutralized too'
+)
+assert.equal(
+	srcFor({ kind: 'dev', port: 3000, path: '/%2e%2e/files/x', rev: 0 }),
+	'/dev/3000/%2e%2e/files/x?rev=0',
+	'percent-encoded dots are NOT browser-normalized — not an escape, left as-is'
+)
+
 console.log('devSource.test.ts OK')

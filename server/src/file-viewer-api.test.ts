@@ -177,6 +177,29 @@ async function main() {
 		console.log('ok: refresh rejects a dev-source port with 400')
 	}
 
+	// 7b. dev path traversal (../) is rejected with 400 — a `path` starting
+	// with '/' but containing '..' segments would resolve outside the
+	// /dev/{port}/ prefix once the browser normalizes the iframe src.
+	{
+		const res = await postJson('/api/canvas/web-viewer', {
+			room: 'test',
+			op: 'open',
+			port: 5173,
+			path: '/../../files/secret.html',
+		})
+		assert.equal(res.status, 400, `dev path traversal should be 400, got ${res.status}`)
+		console.log('ok: dev path traversal (../) rejected with 400')
+
+		const nested = await postJson('/api/canvas/web-viewer', {
+			room: 'test',
+			op: 'open',
+			port: 5173,
+			path: '/a/../b',
+		})
+		assert.equal(nested.status, 400, `dev path with nested .. should be 400, got ${nested.status}`)
+		console.log('ok: dev path with nested .. rejected with 400')
+	}
+
 	// 8. the deprecated /api/canvas/file-viewer path still 200s as an alias.
 	{
 		const res = await postJson('/api/canvas/file-viewer', {

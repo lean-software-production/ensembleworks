@@ -49,7 +49,19 @@ export function sandboxFor(props: { kind?: WebViewerKind; port?: number }): stri
 export function srcFor(props: { kind?: WebViewerKind; path: string; port?: number; rev?: number }): string {
 	const rev = props.rev ?? 0
 	if (isDevSource(props)) {
-		const path = props.path.startsWith('/') ? props.path : `/${props.path || ''}`
+		let path = props.path.startsWith('/') ? props.path : `/${props.path || ''}`
+		// SECURITY: an iframe src with a '../' segment gets RFC-3986-normalized
+		// by the browser BEFORE the request leaves the page — an unpatched
+		// '/../../files/x' here would resolve outside the /dev/{port}/ prefix
+		// into the file route's allow-same-origin-free sandbox territory. This
+		// mirrors the server-side normalizeDevPath check in
+		// server/src/features/web-viewer.ts (belt-and-suspenders: the server
+		// rejects it at creation time, this covers a prop directly edited by a
+		// participant, since path is just T.string). Percent-encoded dots
+		// (`%2e%2e`) are NOT normalized by the browser and so are not an
+		// escape — deliberately left unblocked to avoid over-matching.
+		const pathname = path.split('?')[0] ?? path
+		if (pathname.split('/').some((seg) => seg === '.' || seg === '..')) path = '/'
 		return `/dev/${props.port}${path}${path.includes('?') ? '&' : '?'}rev=${rev}`
 	}
 	return `/files/${props.path.split('/').map(encodeURIComponent).join('/')}?rev=${rev}`
