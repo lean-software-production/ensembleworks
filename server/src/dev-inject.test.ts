@@ -9,6 +9,10 @@ import { injectDevPage, urlPatchScript } from './dev-inject.ts'
 	assert.ok(out.includes('/dev/3000'), 'URL patch carries the port prefix')
 	assert.ok(out.includes('ew-dev-error'), 'error reporter injected')
 	assert.ok(out.indexOf('</body>') > out.indexOf('ew-present-start'), 'injected before closing body')
+	assert.ok(out.includes('xhr.responseURL'), 'XHR reporter hooks status>=400 loads and network errors via responseURL')
+	assert.ok(out.includes("'ws '"), 'WebSocket error reporter present')
+	assert.ok(out.includes("'ws close '"), 'WebSocket abnormal-close reporter present')
+	assert.ok(out.includes('code !== 1000'), 'WebSocket close reporter ignores normal-closure codes')
 }
 {
 	// No </body>: append (same contract as injectBridge).

@@ -84,6 +84,42 @@ export function errorReporterScript(): string {
 			return res
 		})
 	}
+	// XHR: wraps XMLHttpRequest.prototype.open as already patched by
+	// urlPatchScript (this script runs after it in injectDevPage's ordering),
+	// so responseURL below reflects the /dev/{port}-rewritten request.
+	var origOpen = XMLHttpRequest.prototype.open
+	XMLHttpRequest.prototype.open = function () {
+		var xhr = this
+		xhr.addEventListener('load', function () {
+			if (xhr.status >= 400) report('request', xhr.status + ' ' + xhr.responseURL)
+		})
+		xhr.addEventListener('error', function () {
+			report('request', xhr.responseURL || 'XHR request failed')
+		})
+		return origOpen.apply(this, arguments)
+	}
+	// WebSocket: wraps the current window.WebSocket, which at this point in
+	// injection order is already urlPatchScript's URL-rewriting constructor —
+	// so constructing via OrigWS below still gets the /dev/{port} URL patch.
+	var OrigWS = window.WebSocket
+	if (OrigWS) {
+		window.WebSocket = function (url, protocols) {
+			var ws = protocols === undefined ? new OrigWS(url) : new OrigWS(url, protocols)
+			ws.addEventListener('error', function () { report('request', 'ws ' + (ws.url || url)) })
+			ws.addEventListener('close', function (e) {
+				var code = e && e.code
+				if (code !== 1000 && code !== 1001 && code !== 1005) {
+					report('request', 'ws close ' + code + ' ' + (ws.url || url))
+				}
+			})
+			return ws
+		}
+		window.WebSocket.prototype = OrigWS.prototype
+		Object.defineProperty(window.WebSocket, 'CONNECTING', { value: OrigWS.CONNECTING })
+		Object.defineProperty(window.WebSocket, 'OPEN', { value: OrigWS.OPEN })
+		Object.defineProperty(window.WebSocket, 'CLOSING', { value: OrigWS.CLOSING })
+		Object.defineProperty(window.WebSocket, 'CLOSED', { value: OrigWS.CLOSED })
+	}
 })()</script>`
 }
 
