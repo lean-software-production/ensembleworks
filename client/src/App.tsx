@@ -92,7 +92,7 @@ export function App() {
 		assets: assetStore,
 		shapeUtils: useMemo(() => [...defaultShapeUtils, ...customShapeUtils], []),
 		bindingUtils: useMemo(() => [...defaultBindingUtils], []),
-		migrations: [webViewerMigrations],
+		migrations: useMemo(() => [webViewerMigrations], []),
 		onCustomMessageReceived(message) {
 			if (message?.type === 'kicked') setWasKicked(true)
 			else if (message?.type === 'ew-rrweb' && typeof message.shapeId === 'string') {
