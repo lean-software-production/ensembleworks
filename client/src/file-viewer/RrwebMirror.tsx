@@ -218,6 +218,20 @@ export function RrwebMirror(props: {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [props.presenterName, props.presenterColor, props.frozen])
 
+	// Toggle the frozen-cursor class on every frozen⇄live transition, not just
+	// at replayer construction: the parent mounts <RrwebMirror> at the same
+	// JSX position for both branches (no key), so React reconciles the SAME
+	// instance across a controller disconnecting (live→frozen) or reconnecting
+	// on the same presentId (frozen→live, broadcaster never restarted) — the
+	// element never remounts, so nothing else re-derives this class after the
+	// first paint.
+	useEffect(() => {
+		const el = hostRef.current?.querySelector('.replayer-mouse') as HTMLElement | null
+		if (!el) return
+		if (props.frozen) el.classList.add('ew-mirror-frozen')
+		else el.classList.remove('ew-mirror-frozen')
+	}, [props.frozen])
+
 	return (
 		<div
 			ref={hostRef}
