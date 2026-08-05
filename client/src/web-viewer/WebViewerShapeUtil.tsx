@@ -472,7 +472,7 @@ function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 							pointerEvents: isEditing ? 'all' : 'none',
 							display: (activePresenter && !mirrorFallback) || showFrozen ? 'none' : undefined,
 						}}
-						sandbox={sandboxFor(kind ?? 'file')}
+						sandbox={sandboxFor(shape.props)}
 					/>
 				</>
 			) : (

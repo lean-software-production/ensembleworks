@@ -9,7 +9,12 @@ export function createWebViewerShape(editor: Editor) {
 	const { x, y } = editor.getViewportPageBounds().center
 	const id = createShapeId()
 	const dev = parseDevInput(input)
-	if (!dev && /^https?:\/\//.test(input)) {
+	// Anything URL-shaped or host:port-shaped that parseDevInput rejected is a
+	// non-local address (e.g. "https://example.com", "example.com:3000") —
+	// alert rather than silently falling through to the file branch, where it
+	// would create a broken /files/<that literal string> shape.
+	const looksLikeUrlOrHostPort = /^https?:\/\//.test(input) || /^[a-zA-Z0-9.-]+:\d{1,5}(\/.*)?$/.test(input)
+	if (!dev && looksLikeUrlOrHostPort) {
 		window.alert('Only local (localhost:<port>) URLs are supported — external URLs cannot be shared or followed.')
 		return
 	}
