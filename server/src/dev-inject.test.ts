@@ -1,6 +1,27 @@
 /** Dev-page injection: recorder bridge + URL patch + error reporter into HTML only. Run: bun server/src/dev-inject.test.ts */
 import assert from 'node:assert/strict'
-import { injectDevPage, urlPatchScript } from './dev-inject.ts'
+import { injectDevPage, rewriteScriptSrcs, urlPatchScript } from './dev-inject.ts'
+
+{
+	// Script srcs get the /dev/{port} prefix so transitive module-dependency
+	// Referers keep the routing marker; link hrefs stay untouched (css-update
+	// matches links by original href; routing rides the document Referer).
+	const html = '<html><head><script type="module" src="/@vite/client"></script>' +
+		'<link rel="stylesheet" href="/src/style.css"></head>' +
+		'<body><script src="/dev/3123/already.js"></script><script src="//cdn.example/x.js"></script></body></html>'
+	const out = rewriteScriptSrcs(html, 3123)
+	assert.ok(out.includes('src="/dev/3123/@vite/client"'), 'root-absolute script src prefixed')
+	assert.ok(out.includes('href="/src/style.css"'), 'stylesheet href untouched')
+	assert.ok(out.includes('src="/dev/3123/already.js"'), 'already-prefixed src unchanged')
+	assert.ok(out.includes('src="//cdn.example/x.js"'), 'protocol-relative src unchanged')
+}
+{
+	// injectDevPage rewrites page scripts but its own injected tags keep
+	// canvas-origin paths (rrweb must load from /files-assets, not /dev).
+	const out = injectDevPage('<html><body><script src="/src/main.ts"></script></body></html>', 3123)
+	assert.ok(out.includes('src="/dev/3123/src/main.ts"'), 'page script src prefixed')
+	assert.ok(out.includes('src="/files-assets/rrweb.js"'), 'injected rrweb tag not prefixed')
+}
 
 {
 	const out = injectDevPage('<!doctype html><html><head></head><body><div id=app></div></body></html>', 3000)
@@ -23,6 +44,11 @@ import { injectDevPage, urlPatchScript } from './dev-inject.ts'
 {
 	const script = urlPatchScript(5173)
 	assert.ok(script.includes("'/dev/5173'"), 'patch is port-specific')
+	// Vite HMR dials ws://localhost:{devPort}/ directly (its __HMR_PORT__
+	// default) — the WS wrapper must re-target that at the page origin's
+	// /dev/{port} path, since the dev port is unreachable from the browser.
+	assert.ok(script.includes("u.port === '5173'"), 'WS wrapper matches the dev port cross-host')
+	assert.ok(script.includes('location.host + prefix'), 'WS wrapper re-targets at the page-origin proxy path')
 }
 {
 	// Execute the injected fetch patch in a minimal sandbox to pin its actual

@@ -52,7 +52,20 @@ export function urlPatchScript(port: number): string {
 	window.WebSocket = function (url, protocols) {
 		try {
 			var u = new URL(url, location.href)
-			if (u.host === location.host) { u.pathname = patch(u.pathname); url = u.toString() }
+			if (u.host === location.host) {
+				u.pathname = patch(u.pathname)
+				url = u.toString()
+			} else if (
+				(u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '[::1]' || u.hostname === '::1') &&
+				u.port === '${port}'
+			) {
+				// Vite's HMR client dials ws://localhost:{devPort}/ directly (its
+				// __HMR_PORT__ default is the dev server's own port), which the
+				// browser can't reach — the dev server only listens inside the VM.
+				// Re-target it at the page origin's /dev/{port} proxy path.
+				var proto = location.protocol === 'https:' ? 'wss:' : 'ws:'
+				url = proto + '//' + location.host + prefix + u.pathname + u.search
+			}
 		} catch (e) {}
 		return protocols === undefined ? new OrigWS(url) : new OrigWS(url, protocols)
 	}
@@ -123,8 +136,30 @@ export function errorReporterScript(): string {
 })()</script>`
 }
 
+/**
+ * Rewrite root-absolute <script src="/..."> attributes to the /dev/{port}
+ * prefix. Without this, a module script at a naked-origin URL (Vite's
+ * /@vite/client) makes its transitive dependency requests with a Referer
+ * that carries no /dev/{port}/ segment — the edge's Referer fallback then
+ * routes those deps to the wrong backend and the whole module tree fails.
+ * Prefixed script URLs keep the /dev/{port}/ marker in every downstream
+ * Referer. Stylesheet hrefs are deliberately left alone: their requests use
+ * the DOCUMENT's Referer (which has the prefix), and Vite's css-update
+ * messages match <link> elements by the original root-absolute href.
+ */
+export function rewriteScriptSrcs(html: string, port: number): string {
+	const prefix = `/dev/${port}`
+	return html.replace(/(<script\b[^>]*?\ssrc=)(["'])(\/[^"']*)\2/gi, (m, pre, q, src) => {
+		if (src.startsWith('//') || src === prefix || src.startsWith(`${prefix}/`)) return m
+		return `${pre}${q}${prefix}${src}${q}`
+	})
+}
+
 /** rrweb asset + shared recorder bridge + dev-only scripts, before last </body>. */
 export function injectDevPage(html: string, port: number): string {
+	// Rewrite existing script srcs FIRST — the injected tags below (rrweb at
+	// /files-assets, inline scripts) must keep their canvas-origin paths.
+	html = rewriteScriptSrcs(html, port)
 	// Error reporter FIRST so its fetch wrapper composes under the URL patch
 	// (patch runs the underlying request; reporter observes the patched result).
 	const injected = RRWEB_TAG + urlPatchScript(port) + errorReporterScript() + BRIDGE_SCRIPT

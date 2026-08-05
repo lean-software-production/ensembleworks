@@ -98,6 +98,17 @@ const wsBase = `ws://127.0.0.1:${(proxy.address() as { port: number }).port}`
 	assert.equal(res.headers.get('content-type'), 'application/javascript')
 	assert.ok(!body.includes('ew-dev-error'), 'non-HTML untouched')
 	assert.ok(body.includes('</body> not html'), 'byte-identical passthrough')
+	// Proxied dev responses must never be browser-cacheable: the same
+	// root-absolute URL (/@vite/client, /src/*) can be served by different
+	// backends depending on Referer, and the HTTP cache keys only on URL —
+	// a cached body from one backend replayed for another kills HMR.
+	assert.equal(res.headers.get('cache-control'), 'no-store', 'passthrough responses are no-store')
+	assert.equal(res.headers.get('etag'), null, 'no etag survives (no conditional revalidation)')
+	assert.equal(res.headers.get('vary'), 'Referer', 'vary marks the Referer-dependence')
+}
+{
+	const res = await fetch(`${base}/dev/${devPort}/`)
+	assert.equal(res.headers.get('cache-control'), 'no-store', 'injected HTML is no-store too')
 }
 {
 	const res = await fetch(`${base}/dev/${devPort}/missing`)

@@ -40,16 +40,36 @@ export function createDevProxyRouter(): express.Router {
 			'accept-encoding': 'identity',
 		}
 		delete headers.connection
+		// Strip conditional headers: a 304 would tell the browser to keep its
+		// cached body, but cached bodies at this origin may belong to a
+		// different backend (see the no-store rationale below) — force full
+		// responses so poisoned entries get replaced, never revalidated.
+		delete headers['if-none-match']
+		delete headers['if-modified-since']
 		const upstream = http.request(
 			{ host: '127.0.0.1', port, method: req.method, path: upstreamPath, headers },
 			(ur) => {
 				const type = String(ur.headers['content-type'] ?? '')
+				// Never let the browser cache proxied dev responses. Root-absolute
+				// paths (/@vite/client, /src/*) are AMBIGUOUS at this origin: the
+				// same URL can be served by different backends depending on the
+				// request's Referer (the @devref fallback), and in the dev stack the
+				// canvas app's own Vite shares these exact paths. The HTTP cache
+				// keys only on URL, so a cached body from one backend gets replayed
+				// for the other — wrong HMR token, stale modules, dead HMR.
+				const uncache = (h: http.OutgoingHttpHeaders) => {
+					h['cache-control'] = 'no-store'
+					delete h['etag']
+					delete h['last-modified']
+					h['vary'] = 'Referer'
+					return h
+				}
 				if (type.includes('text/html')) {
 					const chunks: Buffer[] = []
 					ur.on('data', (c) => chunks.push(c))
 					ur.on('end', () => {
 						const html = injectDevPage(Buffer.concat(chunks).toString('utf8'), port)
-						const out = { ...ur.headers }
+						const out = uncache({ ...ur.headers })
 						delete out['content-length']
 						delete out['content-encoding']
 						// The injected body is written in one un-chunked res.end() call —
@@ -63,7 +83,7 @@ export function createDevProxyRouter(): express.Router {
 						res.end(html)
 					})
 				} else {
-					res.writeHead(ur.statusCode ?? 200, ur.headers)
+					res.writeHead(ur.statusCode ?? 200, uncache({ ...ur.headers }))
 					ur.pipe(res)
 				}
 			}
