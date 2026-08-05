@@ -29,12 +29,6 @@ function main() {
 	assert.equal(afterReset.presentId, 'p2')
 	assert.equal(afterReset.entries.length, 1)
 
-	// stop with the CURRENT presentId clears; stale presentId is a no-op
-	relay.stop('room1', 'shape:a', 'p-stale')
-	assert.equal(relay.backlog('room1', 'shape:a').presentId, 'p2')
-	relay.stop('room1', 'shape:a', 'p2')
-	assert.deepEqual(relay.backlog('room1', 'shape:a'), { presentId: null, truncated: false, entries: [] })
-
 	// event cap: overflow flips truncated, further appends rejected
 	const tiny = createPresentRelay({ maxEvents: 2 })
 	tiny.append('r', 's', 'p', [{ seq: 0, event: 'a' }, { seq: 1, event: 'b' }])
@@ -49,27 +43,54 @@ function main() {
 	const overBytes = small.append('r', 's', 'p', [{ seq: 0, event: 'x'.repeat(100) }])
 	assert.deepEqual(overBytes, { accepted: false, truncated: true })
 
-	// idle TTL: a log with no append for idleTtlMs is dropped (lazy sweep,
-	// runs on the next append/backlog call rather than a timer).
-	let clock = 0
-	const ttl = createPresentRelay({ idleTtlMs: 1000, now: () => clock })
-	ttl.append('r', 's', 'p', [{ seq: 0, event: 'a' }])
-	assert.equal(ttl.backlog('r', 's').presentId, 'p')
-	clock = 1001
-	assert.deepEqual(ttl.backlog('r', 's'), { presentId: null, truncated: false, entries: [] }, 'idle log evicted')
-	// A fresh append after eviction starts a clean log.
-	ttl.append('r', 's', 'p2', [{ seq: 0, event: 'b' }])
-	assert.equal(ttl.backlog('r', 's').presentId, 'p2')
+	// Retention: a log survives with no stop() call and no TTL — backlog after
+	// arbitrary idle time still returns the last presentation.
+	{
+		let t = 1000
+		const relay = createPresentRelay({ now: () => t })
+		relay.append('r', 's', 'p1', [{ seq: 0, event: { a: 1 } }])
+		t += 24 * 60 * 60 * 1000 // a day later
+		const b = relay.backlog('r', 's')
+		assert.equal(b.presentId, 'p1', 'log retained indefinitely (replace-or-restart)')
+		assert.equal(b.entries.length, 1)
+	}
 
-	// global cap: bytes are shared across every (room, shape) log — a second
-	// log can trip the cap even though neither log alone would.
-	const capped = createPresentRelay({ maxTotalBytes: 150, maxBytes: 1024 })
-	const first = capped.append('r', 's1', 'p', [{ seq: 0, event: 'x'.repeat(100) }])
-	assert.deepEqual(first, { accepted: true, truncated: false })
-	const second = capped.append('r', 's2', 'p', [{ seq: 0, event: 'y'.repeat(100) }])
-	assert.deepEqual(second, { accepted: false, truncated: true }, 'global cap tripped by second log')
-	assert.equal(capped.backlog('r', 's1').truncated, false, 'first log untouched')
-	assert.equal(capped.backlog('r', 's2').truncated, true)
+	// Replacement: a new presentId on the same shape supersedes the old log.
+	{
+		const relay = createPresentRelay()
+		relay.append('r', 's', 'p1', [{ seq: 0, event: { a: 1 } }])
+		relay.append('r', 's', 'p2', [{ seq: 0, event: { b: 2 } }])
+		const b = relay.backlog('r', 's')
+		assert.equal(b.presentId, 'p2', 'new presentation replaced the old log')
+		assert.equal(b.entries.length, 1)
+	}
+
+	// LRU eviction: total-bytes pressure evicts the least-recently-appended
+	// OTHER log instead of truncating the live one.
+	{
+		let t = 1000
+		// Each entry stringifies to ~60 bytes; cap total at ~2 batches.
+		const big = () => [{ seq: 0, event: { pad: 'x'.repeat(400) } }]
+		const relay = createPresentRelay({ maxTotalBytes: 1000, now: () => t })
+		relay.append('r', 'shapeA', 'pA', big())
+		t += 1
+		relay.append('r', 'shapeB', 'pB', big())
+		t += 1
+		// Third log pushes past maxTotalBytes → shapeA (oldest) evicted, shapeC accepted.
+		const res = relay.append('r', 'shapeC', 'pC', big())
+		assert.equal(res.truncated, false, 'live append accepted under pressure')
+		assert.equal(relay.backlog('r', 'shapeA').presentId, null, 'oldest log evicted')
+		assert.equal(relay.backlog('r', 'shapeB').presentId, 'pB', 'newer log kept')
+		assert.equal(relay.backlog('r', 'shapeC').presentId, 'pC', 'new log stored')
+	}
+
+	// Per-log caps still truncate the active log itself.
+	{
+		const relay = createPresentRelay({ maxBytes: 100 })
+		const res = relay.append('r', 's', 'p1', [{ seq: 0, event: { pad: 'x'.repeat(400) } }])
+		assert.equal(res.truncated, true, 'own-log cap still truncates')
+	}
+
 
 	console.log('present-relay tests passed')
 }

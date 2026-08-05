@@ -217,15 +217,10 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 		res.json(relay.backlog(roomId, shapeId))
 	})
 
+	// present-stop no longer deletes the log — a finished presentation IS the
+	// frozen last view (spec: 2026-07-29-file-viewer-force-follow-design.md).
+	// Kept as a 200 no-op so older clients' broadcasters don't error on stop.
 	router.post('/api/canvas/file-viewer/present-stop', (req, res) => {
-		const body = (req.body ?? {}) as Record<string, unknown>
-		const roomId = sanitizeId(String(body.room ?? ''))
-		const shapeId = typeof body.shapeId === 'string' ? body.shapeId : ''
-		const presentId = typeof body.presentId === 'string' ? body.presentId : ''
-		if (!roomId || !shapeId || !presentId) {
-			return void res.status(400).json({ error: 'room, shapeId, presentId required' })
-		}
-		relay.stop(roomId, shapeId, presentId)
 		res.json({ ok: true })
 	})
 
