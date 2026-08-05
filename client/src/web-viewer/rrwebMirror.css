@@ -3,7 +3,7 @@
  * Replaces rrweb's stock black arrow + blue dot with the presenting peer's
  * tldraw cursor: their colour, their name pill, a click ring in the same
  * colour, and a small "driving" badge (baked into the SVG itself, see
- * cursorSvg()) so it reads as a file-viewer controller's cursor rather than
+ * cursorSvg()) so it reads as a web-viewer controller's cursor rather than
  * a normal canvas collaborator cursor even when the name pill is cropped.
  * The arrow image itself is set from JS (data-URI SVG tinted with the
  * presenter's colour — CSS can't parameterise a background-image URL);

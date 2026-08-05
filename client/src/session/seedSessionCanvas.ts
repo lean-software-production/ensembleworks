@@ -94,10 +94,10 @@ export function seedSessionCanvas(editor: Editor) {
 
 			// Bench: live preview of the app under construction.
 			editor.createShape({
-				type: 'iframe',
+				type: 'web-viewer',
 				x: zone.benchPreview.x,
 				y: zone.benchPreview.y,
-				props: { w: 600, h: 420, url: '/dev/3000/', title: `${zone.name} preview (port 3000)` },
+				props: { w: 600, h: 420, path: '/dev/3000/', title: `${zone.name} preview (port 3000)` },
 			})
 
 			// Bench: advice frame for reviewer stickies.

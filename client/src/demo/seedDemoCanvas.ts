@@ -40,10 +40,10 @@ export function seedDemoCanvas(editor: Editor) {
 		const appFrame = createShapeId()
 		editor.createShape({
 			id: appFrame,
-			type: 'iframe',
+			type: 'web-viewer',
 			x: ox + 820,
 			y: oy + 380,
-			props: { w: 720, h: 540, url: '/dev/3000/', title: 'app preview (port 3000)' },
+			props: { w: 720, h: 540, path: '/dev/3000/', title: 'app preview (port 3000)' },
 		})
 		editor.createShape({
 			type: 'arrow',

@@ -28,8 +28,8 @@ export function presenterFor(peers: readonly PresenceLike[], shapeId: string): P
 	let bestTs = -1
 	for (const p of peers) {
 		const m = (
-			p.meta as { fileViewerPresent?: { shapeId?: unknown; fraction?: unknown; ts?: unknown } } | undefined
-		)?.fileViewerPresent
+			p.meta as { webViewerPresent?: { shapeId?: unknown; fraction?: unknown; ts?: unknown } } | undefined
+		)?.webViewerPresent
 		if (!m || m.shapeId !== shapeId || typeof m.fraction !== 'number') continue
 		const ts = typeof m.ts === 'number' ? m.ts : 0
 		if (ts > bestTs) {

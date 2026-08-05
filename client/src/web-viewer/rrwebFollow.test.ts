@@ -1,5 +1,5 @@
-// client/src/file-viewer/rrwebFollow.test.ts
-// Run with: bun src/file-viewer/rrwebFollow.test.ts
+// client/src/web-viewer/rrwebFollow.test.ts
+// Run with: bun src/web-viewer/rrwebFollow.test.ts
 import assert from 'node:assert/strict'
 import { rrwebFollowStore, type RrwebEntry } from './rrwebFollow'
 

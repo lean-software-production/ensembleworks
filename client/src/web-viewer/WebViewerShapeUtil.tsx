@@ -15,7 +15,7 @@
  * another shape — freezing the shape at the last view for everyone), on
  * yield (someone else takes control), or on presence expiry (disconnect).
  */
-import { fileViewerShapeProps } from '@ensembleworks/contracts'
+import { webViewerShapeProps } from '@ensembleworks/contracts'
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import {
 	BaseBoxShapeUtil,
@@ -36,18 +36,18 @@ import { presentStore } from './presentStore'
 
 // Code-split out: RrwebMirror eagerly pulls in rrweb's `Replayer` + its CSS
 // (~40 kB gzip) — only needed once a mirror actually mounts (live or frozen),
-// never for a file-viewer that's just sitting on the canvas unwatched. Keeping
+// never for a web-viewer that's just sitting on the canvas unwatched. Keeping
 // it out of the entry chunk is what the bundle-size CI gate enforces
 // (client/scripts/bundle-size-check.ts).
 const RrwebMirror = lazy(() => import('./RrwebMirror').then((m) => ({ default: m.RrwebMirror })))
 
-export interface FileViewerShapeProps {
+export interface WebViewerShapeProps {
 	w: number
 	h: number
 	// Path relative to the agent user's home, e.g. "my-repo/docs/report.html".
 	path: string
 	title: string
-	// Bumped by POST /api/canvas/file-viewer refresh so every client reloads.
+	// Bumped by POST /api/canvas/web-viewer refresh so every client reloads.
 	rev?: number
 	// Remote gateway id (future); optional so existing rooms need no migration.
 	gateway?: string
@@ -55,11 +55,11 @@ export interface FileViewerShapeProps {
 
 declare module '@tldraw/tlschema' {
 	interface TLGlobalShapePropsMap {
-		'file-viewer': FileViewerShapeProps
+		'web-viewer': WebViewerShapeProps
 	}
 }
 
-export type FileViewerShape = TLBaseShape<'file-viewer', FileViewerShapeProps>
+export type WebViewerShape = TLBaseShape<'web-viewer', WebViewerShapeProps>
 
 const HEADER_HEIGHT = 28
 
@@ -67,11 +67,11 @@ const HEADER_HEIGHT = 28
 // on tldraw's onWheel NOT swallowing wheel events over this shape while it's
 // being edited, which holds only while canScroll stays at ShapeUtil's default
 // false. The iframe scrolls its own document; tldraw never needs to.
-export class FileViewerShapeUtil extends BaseBoxShapeUtil<FileViewerShape> {
-	static override type = 'file-viewer' as const
-	static override props = fileViewerShapeProps
+export class WebViewerShapeUtil extends BaseBoxShapeUtil<WebViewerShape> {
+	static override type = 'web-viewer' as const
+	static override props = webViewerShapeProps
 
-	override getDefaultProps(): FileViewerShape['props'] {
+	override getDefaultProps(): WebViewerShape['props'] {
 		return { w: 720, h: 540, path: '', title: '', rev: 0 }
 	}
 
@@ -82,22 +82,22 @@ export class FileViewerShapeUtil extends BaseBoxShapeUtil<FileViewerShape> {
 		return true
 	}
 
-	override onResize(shape: FileViewerShape, info: TLResizeInfo<FileViewerShape>) {
+	override onResize(shape: WebViewerShape, info: TLResizeInfo<WebViewerShape>) {
 		return resizeBox(shape, info, { minWidth: 320, minHeight: 200 })
 	}
 
-	override component(shape: FileViewerShape) {
-		return <FileViewerShapeComponent shape={shape} />
+	override component(shape: WebViewerShape) {
+		return <WebViewerShapeComponent shape={shape} />
 	}
 
-	override getIndicatorPath(shape: FileViewerShape) {
+	override getIndicatorPath(shape: WebViewerShape) {
 		const path = new Path2D()
 		path.rect(0, 0, shape.props.w, shape.props.h)
 		return path
 	}
 }
 
-function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
+function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 	const editor = useEditor()
 	const isEditing = useValue(
 		'isEditing',
@@ -105,12 +105,12 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 		[editor, shape.id]
 	)
 	const { path, w, h, rev } = shape.props
-	const displayTitle = shape.props.title || path || 'file viewer'
+	const displayTitle = shape.props.title || path || 'web viewer'
 
 	const refresh = () => {
 		editor.updateShape({
 			id: shape.id,
-			type: 'file-viewer',
+			type: 'web-viewer',
 			props: { rev: (shape.props.rev ?? 0) + 1 },
 		})
 	}
@@ -169,7 +169,7 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	// The selector collapses to a PRIMITIVE key (userId\tuserName\tfraction) so
 	// the useValue epoch only bumps when the presenter/fraction actually changes
 	// — getCollaborators() returns a fresh array on every remote cursor move, and
-	// an object return here would re-render every file-viewer for each of them.
+	// an object return here would re-render every web-viewer for each of them.
 	// presenterFor stays the single source of matching logic.
 	const myId = useValue('fvUserId', () => editor.user.getId(), [editor])
 	const presenterKey = useValue(
