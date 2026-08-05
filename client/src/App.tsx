@@ -22,7 +22,6 @@ import { getSettings, updateSettings } from './chrome/settings'
 import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
 import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
-import { followingStore } from './file-viewer/followingStore'
 import { presentStore } from './file-viewer/presentStore'
 import { rrwebFollowStore } from './file-viewer/rrwebFollow'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
@@ -140,10 +139,9 @@ export function App() {
 			})
 			// Merge two presenter tokens next to the spatial stamp — both ride
 			// this presence blob so neither needs server changes:
-			//   fileViewerPresent (file-viewer/presentStore): shapeId + scroll
-			//     fraction the file-viewer follow uses. Null when not presenting
-			//     (a valid JsonValue — followers treat "no token" and "null
-			//     token" alike).
+			//   fileViewerPresent (file-viewer/presentStore): the baton — shapeId +
+			//     scroll fraction + toggle ts. Null when nobody holds it (a valid
+			//     JsonValue — followers treat "no token" and "null token" alike).
 			//   presenting (chrome/present.ts, canvas-controls spec §5): a bare
 			//     boolean for the canvas Present mode's viewer-follow.
 			// Both read tldraw atoms inside this reactive derivation, so flipping
@@ -154,10 +152,6 @@ export function App() {
 				meta: {
 					stamp,
 					fileViewerPresent: presentStore.get(),
-					// Which presentation this client is watching (followingStore) —
-					// read reactively here like the presenter token, so the audience
-					// row updates for everyone with no server changes.
-					fileViewerFollowing: followingStore.get(),
 					presenting: presentingAtom.get(),
 				},
 			}

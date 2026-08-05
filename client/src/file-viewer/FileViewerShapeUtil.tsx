@@ -25,8 +25,7 @@ import {
 } from 'tldraw'
 import { wm } from '../theme'
 import { getRoomId } from '../identity'
-import { followingStore } from './followingStore'
-import { presenterFor, type PresenterInfo } from './followLogic'
+import { PRESENTER_FALLBACK_COLOR, presenterFor, type PresenterInfo } from './followLogic'
 import { forwardPinchToCanvas, parsePinchMessage } from './pinchForward'
 import { createPresentBroadcaster } from './presentBroadcast'
 import { presentStore } from './presentStore'
@@ -110,9 +109,6 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	// via presentStore, followers read it off collaborator presence.
 	const iframeRef = useRef<HTMLIFrameElement | null>(null)
 	const lastFractionRef = useRef(0)
-	// "stop" opts out of ONE presenter (their userId), not of following in
-	// general — a gapless A→B handoff must still start following B.
-	const [optOutId, setOptOutId] = useState<string | null>(null)
 
 	// Am I presenting THIS shape? (presentStore wraps a tldraw atom → reactive.)
 	const presenting = useValue('fvPresenting', () => presentStore.get(), [])
@@ -184,8 +180,7 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 		}
 	}
 	const peerPresenter = peer && peer.userId !== myId ? peer : null
-	const activePresenter: PresenterInfo | null =
-		!isPresentingThis && peerPresenter && peerPresenter.userId !== optOutId ? peerPresenter : null
+	const activePresenter: PresenterInfo | null = !isPresentingThis && peerPresenter ? peerPresenter : null
 
 	// targetOrigin '*' is REQUIRED: the sandboxed document loads at an opaque
 	// (null) origin (no allow-same-origin), so no concrete origin can ever match.
@@ -199,10 +194,11 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	const activePresenterRef = useRef<PresenterInfo | null>(activePresenter)
 	activePresenterRef.current = activePresenter
 
-	// Audience row: one dot per person while a presentation is live — ringed =
-	// presenter, solid = following, dimmed = off doing their own thing. Same
-	// primitive-key pattern as presenterKey (collaborator arrays churn per
-	// cursor move; a string only bumps the epoch when membership/state change).
+	// Audience row: everyone in the room is a follower by definition now — one
+	// dot per person while a presentation is live: ringed = controller, solid =
+	// watching. Same primitive-key pattern as presenterKey (collaborator arrays
+	// churn per cursor move; a string only bumps the epoch when membership/
+	// state actually changes).
 	const audienceKey = useValue(
 		'fvAudienceKey',
 		() => {
@@ -215,38 +211,19 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 				if (!rows.has(id)) rows.set(id, [id, name, color, state].join(''))
 			}
 			const selfId = editor.user.getId()
-			const selfState =
-				presenterId === selfId ? 'presenting' : followingStore.get()?.shapeId === shape.id ? 'following' : 'idle'
-			add(selfId, `${editor.user.getName()} (you)`, editor.user.getColor(), selfState)
+			add(
+				selfId,
+				`${editor.user.getName()} (you)`,
+				editor.user.getColor(),
+				presenterId === selfId ? 'presenting' : 'watching'
+			)
 			for (const c of editor.getCollaborators()) {
-				const following =
-					(c.meta as { fileViewerFollowing?: { shapeId?: unknown } } | undefined)?.fileViewerFollowing
-						?.shapeId === shape.id
-				add(
-					c.userId,
-					c.userName,
-					c.color ?? '#3b82f6',
-					c.userId === presenterId ? 'presenting' : following ? 'following' : 'idle'
-				)
+				add(c.userId, c.userName, c.color ?? '#3b82f6', c.userId === presenterId ? 'presenting' : 'watching')
 			}
 			return [...rows.values()].join('')
 		},
 		[editor, shape.id]
 	)
-
-	// Publish "I'm watching this presentation" on presence meta (followingStore
-	// twins presentStore) so everyone's audience row can show who follows.
-	const isFollowing = activePresenter !== null
-	useEffect(() => {
-		if (isFollowing) {
-			followingStore.set({ shapeId: shape.id, ts: Date.now() })
-		} else if (followingStore.get()?.shapeId === shape.id) {
-			followingStore.set(null)
-		}
-		return () => {
-			if (followingStore.get()?.shapeId === shape.id) followingStore.set(null)
-		}
-	}, [isFollowing, shape.id])
 
 	// Bridge listener: accept ONLY this iframe's own messages (source check).
 	useEffect(() => {
@@ -304,26 +281,43 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [activePresenter?.fraction, activePresenter?.userId])
 
-	// A local "stop following" opt-out only lasts while someone is presenting —
-	// once no presenter remains, reset so the next presentation is followed.
-	// (An A→B handoff needs no reset: the opt-out is keyed to A's userId.)
-	const hasPeerPresenter = peerPresenter !== null
-	useEffect(() => {
-		if (!hasPeerPresenter) setOptOutId(null)
-	}, [hasPeerPresenter])
-
 	// A new presenter (or handoff) means any prior mirror-fallback no longer
 	// applies — give the incoming presentation its own shot at the mirror.
 	useEffect(() => {
 		setMirrorFallback(false)
 	}, [activePresenter?.userId])
 
-	const togglePresent = () => {
-		if (isPresentingThis) presentStore.set(null)
-		// Turning on overwrites any other presenter: followers resolve competing
-		// tokens by the freshest ts (last-writer-wins, spec §5).
-		else presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current, ts: Date.now() })
-	}
+	// Editing IS controlling (force-follow spec): starting to edit grabs the
+	// baton, so interaction intent and presentation are the same thing.
+	useEffect(() => {
+		if (isEditing && !isPresentingThis) {
+			presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current, ts: Date.now() })
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [isEditing])
+
+	// Someone else took control (their token out-stamps ours): yield — clear our
+	// token and exit editing so our iframe hides behind their mirror.
+	const myTs = presenting?.shapeId === shape.id ? presenting.ts : null
+	useEffect(() => {
+		if (myTs !== null && peerPresenter && peerPresenter.ts > myTs) {
+			presentStore.set(null)
+			if (editor.getEditingShapeId() === shape.id) editor.setEditingShape(null)
+		}
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [myTs, peerPresenter?.ts, peerPresenter?.userId])
+
+	// Frozen last view: no controller → the mirror replays the backlog and sits
+	// still. mirrorFallback (no backlog / old server) reveals the plain iframe.
+	const anyController = isPresentingThis || peerPresenter !== null
+	const showFrozen = !anyController && !mirrorFallback && !isEditing
+
+	// Reset any stale fallback whenever control changes hands (or is dropped
+	// entirely) or the doc refreshes — a new presentation/refresh may
+	// repopulate the backlog, so give it its own shot at the mirror.
+	useEffect(() => {
+		setMirrorFallback(false)
+	}, [anyController, rev])
 
 	return (
 		<HTMLContainer
@@ -375,39 +369,44 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 				</span>
 				<span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'all' }}>
 					{audienceKey && <AudienceRow audienceKey={audienceKey} />}
-					{activePresenter && (
-						<FollowingChip
-							name={activePresenter.userName}
-							onStop={() => setOptOutId(activePresenter.userId)}
-						/>
-					)}
+					{activePresenter && <span style={{ opacity: 0.85 }}>{activePresenter.userName} has control</span>}
 					<HeaderButton label="↻" title="Refresh (reloads for everyone)" onClick={refresh} />
 					<HeaderButton
-						label={isPresentingThis ? 'Presenting — stop' : 'Present'}
+						label={isPresentingThis ? 'You have control' : 'Take control'}
 						title={
 							isPresentingThis
-								? 'Stop presenting — others stop following your scroll'
-								: 'Present — everyone follows your scroll position'
+								? 'You are controlling this viewer — everyone sees your view'
+								: 'Take control — everyone follows your view'
 						}
 						active={isPresentingThis}
-						onClick={togglePresent}
+						disabled={isPresentingThis}
+						onClick={() => {
+							if (!isPresentingThis) {
+								presentStore.set({ shapeId: shape.id, fraction: lastFractionRef.current, ts: Date.now() })
+							}
+						}}
 					/>
 				</span>
-				{!isEditing && <span style={{ opacity: 0.6 }}>double-click to interact</span>}
+				{!isEditing && (
+					<span style={{ opacity: 0.6 }}>
+						{showFrozen ? 'last presented view — take control to interact' : 'double-click to interact'}
+					</span>
+				)}
 			</div>
 			{path ? (
 				<>
-					{activePresenter && !mirrorFallback && (
+					{(activePresenter && !mirrorFallback) || showFrozen ? (
 						<RrwebMirror
 							roomId={getRoomId()}
 							shapeId={shape.id}
 							width={w}
 							height={h - HEADER_HEIGHT}
-							presenterName={activePresenter.userName}
-							presenterColor={activePresenter.color}
+							presenterName={showFrozen ? '' : (activePresenter?.userName ?? '')}
+							presenterColor={showFrozen ? PRESENTER_FALLBACK_COLOR : (activePresenter?.color ?? PRESENTER_FALLBACK_COLOR)}
 							onFallback={() => setMirrorFallback(true)}
+							frozen={showFrozen}
 						/>
-					)}
+					) : null}
 					<iframe
 						ref={iframeRef}
 						// Per-segment encode so exotic names (#, ?, %) round-trip the
@@ -421,7 +420,7 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 							border: 'none',
 							width: '100%',
 							pointerEvents: isEditing ? 'all' : 'none',
-							display: activePresenter && !mirrorFallback ? 'none' : undefined,
+							display: (activePresenter && !mirrorFallback) || showFrozen ? 'none' : undefined,
 						}}
 						// SECURITY: no `allow-same-origin`, ever. Without it the iframe's
 						// document loads into an opaque (null) origin, so file-server
@@ -482,9 +481,9 @@ function HeaderButton(props: {
 	)
 }
 
-// One dot per person while a presentation is live: ringed = presenter,
-// solid = following, dimmed = not following. Colours match canvas cursors.
-// audienceKey format: rows joined by , fields by 
+// One dot per person while a presentation is live: ringed = the controller,
+// solid = watching (everyone else, by definition). Colours match canvas
+// cursors. audienceKey format: rows joined by , fields by 
 // (userId, name, color, state) — built by the fvAudienceKey selector.
 function AudienceRow(props: { audienceKey: string }) {
 	const rows = props.audienceKey.split('').map((row) => {
@@ -496,60 +495,17 @@ function AudienceRow(props: { audienceKey: string }) {
 			{rows.map((r) => (
 				<span
 					key={r.userId}
-					title={
-						r.state === 'presenting'
-							? `${r.name} — presenting`
-							: r.state === 'following'
-								? `${r.name} — following`
-								: `${r.name} — not following`
-					}
+					title={r.state === 'presenting' ? `${r.name} — presenting` : `${r.name} — watching`}
 					style={{
 						width: 8,
 						height: 8,
 						borderRadius: '50%',
 						background: r.color,
-						opacity: r.state === 'idle' ? 0.25 : 1,
 						boxShadow: r.state === 'presenting' ? `0 0 0 1.5px ${wm.panel}, 0 0 0 3px ${r.color}` : 'none',
 						flexShrink: 0,
 					}}
 				/>
 			))}
-		</span>
-	)
-}
-
-// Shown while a peer is presenting this shape and you are tracking their scroll.
-// "stop" opts out locally until their presentation ends (spec §5).
-function FollowingChip(props: { name: string; onStop: () => void }) {
-	return (
-		<span
-			onPointerDown={stopEventPropagation}
-			style={{
-				display: 'inline-flex',
-				alignItems: 'center',
-				gap: 4,
-				fontSize: 10,
-				color: wm.inkMuted,
-				whiteSpace: 'nowrap',
-			}}
-		>
-			<span style={{ opacity: 0.85 }}>Following {props.name}</span>
-			<button
-				title="Stop following this presenter"
-				onPointerDown={stopEventPropagation}
-				onClick={props.onStop}
-				style={{
-					border: 'none',
-					background: 'transparent',
-					cursor: 'pointer',
-					fontSize: 10,
-					fontWeight: 700,
-					color: wm.sealBlue,
-					padding: '0 2px',
-				}}
-			>
-				stop
-			</button>
 		</span>
 	)
 }

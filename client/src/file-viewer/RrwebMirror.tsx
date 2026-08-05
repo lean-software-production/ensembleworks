@@ -32,6 +32,9 @@ export function RrwebMirror(props: {
 	presenterName: string
 	presenterColor: string
 	onFallback: () => void
+	// Frozen (no live controller): replays the backlog and sits still — no
+	// cursor, no name pill, since there's no live presenter to attribute it to.
+	frozen?: boolean
 }) {
 	const hostRef = useRef<HTMLDivElement | null>(null)
 	const recordedSize = useRef<{ w: number; h: number } | null>(null)
@@ -40,6 +43,8 @@ export function RrwebMirror(props: {
 	onFallbackRef.current = props.onFallback
 	const presenterRef = useRef({ name: props.presenterName, color: props.presenterColor })
 	presenterRef.current = { name: props.presenterName, color: props.presenterColor }
+	const frozenRef = useRef(props.frozen ?? false)
+	frozenRef.current = props.frozen ?? false
 
 	// Dress rrweb's replay cursor as the presenter's tldraw cursor: no mouse
 	// tail (disabled at construction), their colour on the arrow + name pill,
@@ -113,7 +118,11 @@ export function RrwebMirror(props: {
 					fit()
 				})
 				replayerRef.current = r
-				styleCursor()
+				if (frozenRef.current) {
+					hostRef.current?.querySelector('.replayer-mouse')?.classList.add('ew-mirror-frozen')
+				} else {
+					styleCursor()
+				}
 				requestAnimationFrame(fit)
 			} catch {
 				failed = true
@@ -202,11 +211,12 @@ export function RrwebMirror(props: {
 	}, [props.width, props.height])
 
 	// Restyle the cursor when the presenter (name/colour) changes without a
-	// remount — e.g. an A→B handoff on the same shape.
+	// remount — e.g. an A→B handoff on the same shape. Frozen mirrors have no
+	// live presenter to attribute the cursor to, so leave it hidden.
 	useEffect(() => {
-		styleCursor()
+		if (!props.frozen) styleCursor()
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [props.presenterName, props.presenterColor])
+	}, [props.presenterName, props.presenterColor, props.frozen])
 
 	return (
 		<div

@@ -69,3 +69,9 @@
 		opacity: 0;
 	}
 }
+
+/* Frozen mirror (last-view, no controller): hide the replay cursor entirely —
+   there's no live presenter to attribute it to. */
+.ew-mirror-frozen {
+	display: none !important;
+}
