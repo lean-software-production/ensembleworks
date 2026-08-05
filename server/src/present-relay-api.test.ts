@@ -70,15 +70,17 @@ async function main() {
 		`expected an ew-rrweb frame, got: ${frames.slice(-3).join('\n')}`
 	)
 
-	// Stop clears the backlog
+	// Stop is now a no-op — log survives as the frozen last view
 	const stop = await postJson('/api/canvas/file-viewer/present-stop', {
 		room: 'relaytest',
 		shapeId: 'shape:fv1',
 		presentId: 'p1',
 	})
 	assert.equal(stop.status, 200)
+	assert.equal(stop.body.ok, true)
 	const after = await getJson('/api/canvas/file-viewer/present-events?room=relaytest&shapeId=shape%3Afv1')
-	assert.equal(after.body.presentId, null)
+	assert.equal(after.body.presentId, 'p1', 'log survives present-stop as frozen view')
+	assert.equal(after.body.entries.length, 1)
 
 	// Malformed body → 400
 	const bad = await postJson('/api/canvas/file-viewer/present-events', { room: 'relaytest' })
