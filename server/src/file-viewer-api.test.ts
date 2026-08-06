@@ -1,7 +1,7 @@
 // Contract tests for the file-viewer HTTP API. Boots the express app
 // in-process via createSyncApp (files-route.test.ts pattern: env vars must be
 // set before app.ts is imported, so the import is dynamic), then exercises
-// POST /api/canvas/file-viewer open/refresh end to end.
+// POST /api/canvas/web-viewer open/refresh end to end.
 // Run with: bun src/file-viewer-api.test.ts
 import assert from 'node:assert/strict'
 import { mkdtemp } from 'node:fs/promises'
@@ -25,12 +25,12 @@ async function main() {
 	const { postJson } = makeTestClient(base)
 	const room = getOrCreateRoom('test')
 	const documents = () => room.getCurrentSnapshot().documents.map((d) => d.state as any)
-	const fileViewers = () => documents().filter((r) => r.typeName === 'shape' && r.type === 'file-viewer')
+	const fileViewers = () => documents().filter((r) => r.typeName === 'shape' && r.type === 'web-viewer')
 
 	// 1. open creates a file-viewer shape with sensible defaults.
 	let createdId = ''
 	{
-		const res = await postJson('/api/canvas/file-viewer', {
+		const res = await postJson('/api/canvas/web-viewer', {
 			room: 'test',
 			op: 'open',
 			path: 'docs/r.html',
@@ -42,6 +42,8 @@ async function main() {
 
 		const shape = fileViewers().find((r) => r.id === createdId)
 		assert.ok(shape, 'a file-viewer shape exists in the room')
+		assert.equal(shape.type, 'web-viewer')
+		assert.equal(shape.props.kind, 'file')
 		assert.equal(shape.props.path, 'docs/r.html')
 		assert.equal(shape.props.rev, 0)
 		assert.equal(shape.props.title, 'r.html')
@@ -52,7 +54,7 @@ async function main() {
 
 	// 2. tilde-relative path is stripped and stored home-relative.
 	{
-		const res = await postJson('/api/canvas/file-viewer', {
+		const res = await postJson('/api/canvas/web-viewer', {
 			room: 'test',
 			op: 'open',
 			path: '~/docs/r2.html',
@@ -66,21 +68,21 @@ async function main() {
 	// 3. traversal / absolute-outside-home rejected; absolute-inside-home (via
 	//    ENSEMBLEWORKS_AGENT_HOME) accepted and stored relative.
 	{
-		const traversal = await postJson('/api/canvas/file-viewer', {
+		const traversal = await postJson('/api/canvas/web-viewer', {
 			room: 'test',
 			op: 'open',
 			path: '../../etc/passwd',
 		})
 		assert.equal(traversal.status, 400, 'traversal path must be 400')
 
-		const absoluteOutside = await postJson('/api/canvas/file-viewer', {
+		const absoluteOutside = await postJson('/api/canvas/web-viewer', {
 			room: 'test',
 			op: 'open',
 			path: '/etc/passwd',
 		})
 		assert.equal(absoluteOutside.status, 400, 'absolute path outside agent home must be 400')
 
-		const absoluteInside = await postJson('/api/canvas/file-viewer', {
+		const absoluteInside = await postJson('/api/canvas/web-viewer', {
 			room: 'test',
 			op: 'open',
 			path: `${agentHome}/x.html`,
@@ -93,7 +95,7 @@ async function main() {
 
 	// 4. gateway is rejected with 501 (v1 has no remote seam).
 	{
-		const res = await postJson('/api/canvas/file-viewer', {
+		const res = await postJson('/api/canvas/web-viewer', {
 			room: 'test',
 			op: 'open',
 			path: 'docs/r.html',
@@ -106,7 +108,7 @@ async function main() {
 	// 5. refresh bumps rev on every matching shape; repeat bumps again; a path
 	//    with no matches updates 0.
 	{
-		const r1 = await postJson('/api/canvas/file-viewer', {
+		const r1 = await postJson('/api/canvas/web-viewer', {
 			room: 'test',
 			op: 'refresh',
 			path: 'docs/r.html',
@@ -117,7 +119,7 @@ async function main() {
 		let shape = fileViewers().find((r) => r.id === createdId)
 		assert.equal(shape.props.rev, 1, 'rev bumped to 1')
 
-		const r2 = await postJson('/api/canvas/file-viewer', {
+		const r2 = await postJson('/api/canvas/web-viewer', {
 			room: 'test',
 			op: 'refresh',
 			path: 'docs/r.html',
@@ -126,7 +128,7 @@ async function main() {
 		shape = fileViewers().find((r) => r.id === createdId)
 		assert.equal(shape.props.rev, 2, 'rev bumped to 2 on second refresh')
 
-		const rAbsent = await postJson('/api/canvas/file-viewer', {
+		const rAbsent = await postJson('/api/canvas/web-viewer', {
 			room: 'test',
 			op: 'refresh',
 			path: 'docs/absent.html',
@@ -138,13 +140,77 @@ async function main() {
 
 	// 6. unknown op is 400.
 	{
-		const res = await postJson('/api/canvas/file-viewer', {
+		const res = await postJson('/api/canvas/web-viewer', {
 			room: 'test',
 			op: 'nonsense',
 			path: 'docs/r.html',
 		})
 		assert.equal(res.status, 400, `unknown op should be 400, got ${res.status}`)
 		console.log('ok: unknown op is 400')
+	}
+
+	// 7. port creates a dev-source web-viewer shape; refresh with a port is 400.
+	{
+		const res = await postJson('/api/canvas/web-viewer', {
+			room: 'test',
+			op: 'open',
+			port: 5173,
+		})
+		assert.equal(res.status, 200, `dev open should be 200, got ${JSON.stringify(res.body)}`)
+		const shape = fileViewers().find((r) => r.id === res.body.id)
+		assert.ok(shape, 'a dev web-viewer shape exists in the room')
+		assert.equal(shape.props.kind, 'dev')
+		assert.equal(shape.props.port, 5173)
+		assert.equal(shape.props.path, '/')
+		assert.equal(shape.props.title, ':5173')
+		assert.equal(shape.props.w, 960)
+		assert.equal(shape.props.h, 640)
+		console.log('ok: port creates a dev-source web-viewer shape with defaults')
+
+		const refresh = await postJson('/api/canvas/web-viewer', {
+			room: 'test',
+			op: 'refresh',
+			path: '/',
+			port: 5173,
+		})
+		assert.equal(refresh.status, 400, 'refresh with a port must be 400')
+		console.log('ok: refresh rejects a dev-source port with 400')
+	}
+
+	// 7b. dev path traversal (../) is rejected with 400 — a `path` starting
+	// with '/' but containing '..' segments would resolve outside the
+	// /dev/{port}/ prefix once the browser normalizes the iframe src.
+	{
+		const res = await postJson('/api/canvas/web-viewer', {
+			room: 'test',
+			op: 'open',
+			port: 5173,
+			path: '/../../files/secret.html',
+		})
+		assert.equal(res.status, 400, `dev path traversal should be 400, got ${res.status}`)
+		console.log('ok: dev path traversal (../) rejected with 400')
+
+		const nested = await postJson('/api/canvas/web-viewer', {
+			room: 'test',
+			op: 'open',
+			port: 5173,
+			path: '/a/../b',
+		})
+		assert.equal(nested.status, 400, `dev path with nested .. should be 400, got ${nested.status}`)
+		console.log('ok: dev path with nested .. rejected with 400')
+	}
+
+	// 8. the deprecated /api/canvas/file-viewer path still 200s as an alias.
+	{
+		const res = await postJson('/api/canvas/file-viewer', {
+			room: 'test',
+			op: 'open',
+			path: 'docs/alias.html',
+		})
+		assert.equal(res.status, 200, `alias path open should be 200, got ${JSON.stringify(res.body)}`)
+		const shape = fileViewers().find((r) => r.id === res.body.id)
+		assert.equal(shape.type, 'web-viewer', 'alias-created shape still typed web-viewer')
+		console.log('ok: deprecated /api/canvas/file-viewer path still works as an alias')
 	}
 
 	room.close()

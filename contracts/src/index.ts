@@ -3,6 +3,7 @@
 // Convention: intra-package relative imports use the `.js` extension
 // (nodenext-style; resolves to the .ts source everywhere).
 export * from './shapes.js'
+export * from './canvas-migrations.js'
 export * from './terminal-protocol.js'
 export * from './constants.js'
 export * from './stamp.js'

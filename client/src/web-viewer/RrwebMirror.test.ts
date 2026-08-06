@@ -1,4 +1,4 @@
-// Run: bun src/file-viewer/RrwebMirror.test.ts
+// Run: bun src/web-viewer/RrwebMirror.test.ts
 //
 // Regression coverage for the "frozen mirror falls back instantly on an
 // empty backlog" fix: a frozen (no live controller) mirror has no live

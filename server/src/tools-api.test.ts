@@ -11,11 +11,15 @@ import { allTools } from '@ensembleworks/contracts'
 import { createSyncApp } from './app.ts'
 
 // Exempt predicate — the kernel meta-routes, the write-only telemetry beacon,
-// the D3 internal metrics endpoint (see spec "Exempt"), and the rrweb
-// present-mode relay (spec 2026-07-27-file-viewer-rrweb-broadcast-design.md):
-// none are agent-facing tools, so none belong in the manifest. The relay
+// the D3 internal metrics endpoint (see spec "Exempt"), the rrweb
+// present-mode relay (spec 2026-07-27-file-viewer-rrweb-broadcast-design.md),
+// and the deprecated /api/canvas/file-viewer/* aliases (spec
+// 2026-08-05-web-viewer-unification-design.md — same handlers as their
+// /api/canvas/web-viewer/* counterparts, kept only for older clients, so
+// they carry no separate manifest entry). None of these are agent-facing
+// tools in their own right, so none belong in the manifest. The relay
 // routes in particular are browser-client-internal plumbing between the
-// presenter's FileViewerShapeUtil and its followers' rrwebFollow store —
+// presenter's WebViewerShapeUtil and its followers' rrwebFollow store —
 // there is no zod-shaped agent action here to declare. Every other exempt
 // thing (static, uploads, WS) is not an express `route` layer.
 const isExempt = (p: string) =>
@@ -23,6 +27,9 @@ const isExempt = (p: string) =>
 	p === '/api/tools' ||
 	p === '/api/telemetry/connection' ||
 	p === '/api/canvas/metrics' ||
+	p === '/api/canvas/web-viewer/present-events' ||
+	p === '/api/canvas/web-viewer/present-stop' ||
+	p === '/api/canvas/file-viewer' ||
 	p === '/api/canvas/file-viewer/present-events' ||
 	p === '/api/canvas/file-viewer/present-stop'
 
@@ -58,14 +65,21 @@ async function main() {
 
 	// --- Direction B: mounted ⊆ declared (no undeclared /api route) ------------
 	// Walk the express router stack, collecting every `route` layer's {method,path}.
+	// A route registered with an array of paths (e.g. the web-viewer/file-viewer
+	// alias mounting — router.post([newPath, oldPath], handler)) exposes
+	// layer.route.path as an array rather than a string, so each entry is
+	// walked individually.
 	const mounted = new Set<string>()
 	const walk = (stack: any[]) => {
 		for (const layer of stack) {
 			if (layer.route) {
-				const rp: string = layer.route.path
-				if (typeof rp === 'string' && rp.startsWith('/api') && !isExempt(rp)) {
-					for (const m of Object.keys(layer.route.methods ?? {})) {
-						if (layer.route.methods[m]) mounted.add(`${m.toUpperCase()} ${rp}`)
+				const rp: unknown = layer.route.path
+				const paths = Array.isArray(rp) ? rp : [rp]
+				for (const p of paths) {
+					if (typeof p === 'string' && p.startsWith('/api') && !isExempt(p)) {
+						for (const m of Object.keys(layer.route.methods ?? {})) {
+							if (layer.route.methods[m]) mounted.add(`${m.toUpperCase()} ${p}`)
+						}
 					}
 				}
 			} else if (layer.handle?.stack) {

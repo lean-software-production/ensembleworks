@@ -15,8 +15,9 @@
  * another shape — freezing the shape at the last view for everyone), on
  * yield (someone else takes control), or on presence expiry (disconnect).
  */
-import { fileViewerShapeProps } from '@ensembleworks/contracts'
+import { webViewerShapeProps } from '@ensembleworks/contracts'
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
+import { sandboxFor, srcFor } from './devSource'
 import {
 	BaseBoxShapeUtil,
 	HTMLContainer,
@@ -36,18 +37,25 @@ import { presentStore } from './presentStore'
 
 // Code-split out: RrwebMirror eagerly pulls in rrweb's `Replayer` + its CSS
 // (~40 kB gzip) — only needed once a mirror actually mounts (live or frozen),
-// never for a file-viewer that's just sitting on the canvas unwatched. Keeping
+// never for a web-viewer that's just sitting on the canvas unwatched. Keeping
 // it out of the entry chunk is what the bundle-size CI gate enforces
 // (client/scripts/bundle-size-check.ts).
 const RrwebMirror = lazy(() => import('./RrwebMirror').then((m) => ({ default: m.RrwebMirror })))
 
-export interface FileViewerShapeProps {
+export interface WebViewerShapeProps {
 	w: number
 	h: number
-	// Path relative to the agent user's home, e.g. "my-repo/docs/report.html".
+	// Source discriminator: 'file' renders a home-relative path via /files/*;
+	// 'dev' renders a VM dev server via the injecting /dev/{port} proxy.
+	// Optional so pre-migration records validate (treat missing as 'file').
+	kind?: 'file' | 'dev'
+	// kind 'file': path relative to the agent user's home. kind 'dev': the
+	// in-app path under the dev server root (default '/').
 	path: string
 	title: string
-	// Bumped by POST /api/canvas/file-viewer refresh so every client reloads.
+	// kind 'dev' only: the localhost port the dev server listens on.
+	port?: number
+	// Bumped by POST /api/canvas/web-viewer refresh so every client reloads.
 	rev?: number
 	// Remote gateway id (future); optional so existing rooms need no migration.
 	gateway?: string
@@ -55,11 +63,11 @@ export interface FileViewerShapeProps {
 
 declare module '@tldraw/tlschema' {
 	interface TLGlobalShapePropsMap {
-		'file-viewer': FileViewerShapeProps
+		'web-viewer': WebViewerShapeProps
 	}
 }
 
-export type FileViewerShape = TLBaseShape<'file-viewer', FileViewerShapeProps>
+export type WebViewerShape = TLBaseShape<'web-viewer', WebViewerShapeProps>
 
 const HEADER_HEIGHT = 28
 
@@ -67,11 +75,11 @@ const HEADER_HEIGHT = 28
 // on tldraw's onWheel NOT swallowing wheel events over this shape while it's
 // being edited, which holds only while canScroll stays at ShapeUtil's default
 // false. The iframe scrolls its own document; tldraw never needs to.
-export class FileViewerShapeUtil extends BaseBoxShapeUtil<FileViewerShape> {
-	static override type = 'file-viewer' as const
-	static override props = fileViewerShapeProps
+export class WebViewerShapeUtil extends BaseBoxShapeUtil<WebViewerShape> {
+	static override type = 'web-viewer' as const
+	static override props = webViewerShapeProps
 
-	override getDefaultProps(): FileViewerShape['props'] {
+	override getDefaultProps(): WebViewerShape['props'] {
 		return { w: 720, h: 540, path: '', title: '', rev: 0 }
 	}
 
@@ -82,35 +90,43 @@ export class FileViewerShapeUtil extends BaseBoxShapeUtil<FileViewerShape> {
 		return true
 	}
 
-	override onResize(shape: FileViewerShape, info: TLResizeInfo<FileViewerShape>) {
+	override onResize(shape: WebViewerShape, info: TLResizeInfo<WebViewerShape>) {
 		return resizeBox(shape, info, { minWidth: 320, minHeight: 200 })
 	}
 
-	override component(shape: FileViewerShape) {
-		return <FileViewerShapeComponent shape={shape} />
+	override component(shape: WebViewerShape) {
+		return <WebViewerShapeComponent shape={shape} />
 	}
 
-	override getIndicatorPath(shape: FileViewerShape) {
+	override getIndicatorPath(shape: WebViewerShape) {
 		const path = new Path2D()
 		path.rect(0, 0, shape.props.w, shape.props.h)
 		return path
 	}
 }
 
-function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
+function WebViewerShapeComponent({ shape }: { shape: WebViewerShape }) {
 	const editor = useEditor()
 	const isEditing = useValue(
 		'isEditing',
 		() => editor.getEditingShapeId() === shape.id,
 		[editor, shape.id]
 	)
-	const { path, w, h, rev } = shape.props
-	const displayTitle = shape.props.title || path || 'file viewer'
+	const { path, w, h, rev, kind, port } = shape.props
+	const displayTitle = shape.props.title || (kind === 'dev' ? `:${port}` : path) || 'web viewer'
+	const hasSource = kind === 'dev' ? port != null : Boolean(path)
+
+	const [devErrors, setDevErrors] = useState<{ kind: string; detail: string }[]>([])
+	const [errorsOpen, setErrorsOpen] = useState(false)
+	useEffect(() => {
+		setDevErrors([])
+		setErrorsOpen(false)
+	}, [rev]) // refresh clears the slate
 
 	const refresh = () => {
 		editor.updateShape({
 			id: shape.id,
-			type: 'file-viewer',
+			type: 'web-viewer',
 			props: { rev: (shape.props.rev ?? 0) + 1 },
 		})
 	}
@@ -169,7 +185,7 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 	// The selector collapses to a PRIMITIVE key (userId\tuserName\tfraction) so
 	// the useValue epoch only bumps when the presenter/fraction actually changes
 	// — getCollaborators() returns a fresh array on every remote cursor move, and
-	// an object return here would re-render every file-viewer for each of them.
+	// an object return here would re-render every web-viewer for each of them.
 	// presenterFor stays the single source of matching logic.
 	const myId = useValue('fvUserId', () => editor.user.getId(), [editor])
 	const presenterKey = useValue(
@@ -245,6 +261,10 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 			if (e.source !== iframeRef.current?.contentWindow) return
 			const d = e.data as { type?: unknown; fraction?: unknown; event?: unknown } | null
 			if (!d || typeof d !== 'object') return
+			if (d.type === 'ew-dev-error' && typeof (d as any).detail === 'string') {
+				setDevErrors((prev) => (prev.length >= 50 ? prev : [...prev, { kind: String((d as any).kind), detail: (d as any).detail }]))
+				return
+			}
 			const pinch = parsePinchMessage(d)
 			if (pinch) {
 				// Pinch over the interactive viewer zooms the CANVAS (spec:
@@ -392,12 +412,32 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 					{displayTitle}
 				</span>
 				<span style={{ opacity: 0.6, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-					{path}
+					{kind === 'dev' ? `localhost:${port}${path}` : path}
 				</span>
 				<span style={{ marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, pointerEvents: 'all' }}>
 					{audienceKey && <AudienceRow audienceKey={audienceKey} />}
 					{activePresenter && <span style={{ opacity: 0.85 }}>{activePresenter.userName} has control</span>}
 					{isPresentingThis && <span style={{ opacity: 0.85 }}>You have control</span>}
+					{devErrors.length > 0 && (
+						<button
+							title={errorsOpen ? 'Hide errors' : 'Show errors'}
+							onPointerDown={stopEventPropagation}
+							onClick={() => setErrorsOpen((v) => !v)}
+							style={{
+								border: 'none',
+								background: errorsOpen ? '#b91c1c' : 'transparent',
+								borderRadius: 3,
+								color: errorsOpen ? '#fff' : '#b91c1c',
+								fontWeight: 700,
+								fontSize: 10,
+								pointerEvents: 'all',
+								cursor: 'pointer',
+								padding: '2px 6px',
+							}}
+						>
+							⚠ {devErrors.length}
+						</button>
+					)}
 					<HeaderButton label="↻" title="Refresh (reloads for everyone)" onClick={refresh} />
 				</span>
 				{!isEditing && (
@@ -406,7 +446,42 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 					</span>
 				)}
 			</div>
-			{path ? (
+			{errorsOpen && devErrors.length > 0 && (
+				<div
+					onPointerDown={stopEventPropagation}
+					onWheel={(e) => e.stopPropagation()}
+					style={{
+						position: 'absolute',
+						top: HEADER_HEIGHT,
+						right: 6,
+						zIndex: 3,
+						maxWidth: 'min(480px, 90%)',
+						maxHeight: Math.max(120, h * 0.5),
+						overflowY: 'auto',
+						background: wm.panel,
+						border: `1px solid ${wm.ruleStrong}`,
+						borderRadius: 4,
+						boxShadow: wm.shadowPaper,
+						fontFamily: wm.mono,
+						fontSize: 10,
+						color: wm.ink,
+						padding: '6px 8px',
+						pointerEvents: 'all',
+						userSelect: 'text',
+						cursor: 'text',
+					}}
+				>
+					{devErrors.map((e, i) => (
+						<div key={i} style={{ padding: '2px 0', borderBottom: i < devErrors.length - 1 ? `1px solid ${wm.rule}` : 'none' }}>
+							<span style={{ color: '#b91c1c', fontWeight: 700 }}>
+								{e.kind === 'resource' || e.kind === 'request' ? 'proxy/asset' : 'app'}
+							</span>{' '}
+							{e.detail}
+						</div>
+					))}
+				</div>
+			)}
+			{hasSource ? (
 				<>
 					{(activePresenter && !mirrorFallback) || showFrozen ? (
 						// Suspense fallback null is fine here: RrwebMirror's own
@@ -431,10 +506,9 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 					) : null}
 					<iframe
 						ref={iframeRef}
-						// Per-segment encode so exotic names (#, ?, %) round-trip the
-						// route's decode-once contract (features/files.ts re-encodes the
-						// decoded express param the same way before hitting the file-server).
-						src={`/files/${path.split('/').map(encodeURIComponent).join('/')}?rev=${rev ?? 0}`}
+						// src/sandbox derivation (incl. the file-vs-dev SECURITY tradeoff)
+						// lives in devSource.ts, ONLY there.
+						src={srcFor(shape.props)}
 						title={displayTitle}
 						style={{
 							flex: 1,
@@ -444,13 +518,7 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 							pointerEvents: isEditing ? 'all' : 'none',
 							display: (activePresenter && !mirrorFallback) || showFrozen ? 'none' : undefined,
 						}}
-						// SECURITY: no `allow-same-origin`, ever. Without it the iframe's
-						// document loads into an opaque (null) origin, so file-server
-						// content can never read the canvas's cookies/localStorage or reach
-						// the credentialed /api endpoints under the app's own origin — even
-						// though it shares allow-scripts. Adding allow-same-origin back
-						// would let an agent-authored file impersonate the signed-in user.
-						sandbox="allow-scripts allow-forms allow-downloads"
+						sandbox={sandboxFor(shape.props)}
 					/>
 				</>
 			) : (
@@ -465,7 +533,7 @@ function FileViewerShapeComponent({ shape }: { shape: FileViewerShape }) {
 						fontSize: 11,
 					}}
 				>
-					no file
+					no source
 				</div>
 			)}
 		</HTMLContainer>

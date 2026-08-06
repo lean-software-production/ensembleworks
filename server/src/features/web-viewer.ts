@@ -1,9 +1,13 @@
 /**
- * file-viewer feature — POST /api/canvas/file-viewer.
- *   op:open     create a file-viewer shape pointing at a home-relative path
- *               (placement + attribution modelled on sticky).
- *   op:refresh  bump rev on every file-viewer shape matching the path — the
- *               "everyone look again" nudge (roadmap rev fan-out pattern).
+ * web-viewer feature — POST /api/canvas/web-viewer (aliased at the legacy
+ * /api/canvas/file-viewer path for older clients).
+ *   op:open     create a web-viewer shape pointing at a home-relative path
+ *               (kind 'file'), or — when `port` is given — at a local dev
+ *               server (kind 'dev'). Placement + attribution modelled on
+ *               sticky.
+ *   op:refresh  bump rev on every kind:'file' web-viewer shape matching the
+ *               path — the "everyone look again" nudge (roadmap rev fan-out
+ *               pattern). Dev viewers reload via their own refresh button.
  * v1 rejects `gateway` with 501 (the remote seam lands with the connector).
  */
 import { fileOpen } from '@ensembleworks/contracts'
@@ -38,13 +42,28 @@ export function normalizeHomePath(raw: string): string | null {
 	return p
 }
 
-export function createFileViewerRouter(ctx: PluginServerContext): express.Router {
+/** Validate a dev-source path: must start with '/', no '.'/'..' segments —
+ * the browser RFC-3986-normalizes '../' out of an iframe src BEFORE the
+ * request leaves, so an unvalidated path here could resolve outside
+ * `/dev/{port}/` into a same-origin route like `/files/*` (see srcFor in
+ * client/src/web-viewer/devSource.ts, which applies the matching client-side
+ * defense). Returns the clean path or null. */
+export function normalizeDevPath(raw: string): string | null {
+	if (!raw) return '/'
+	if (!raw.startsWith('/')) return null
+	const pathname = raw.split('?')[0] ?? raw
+	if (pathname.split('/').some((seg) => seg === '.' || seg === '..')) return null
+	return raw
+}
+
+export function createWebViewerRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
-	// Canvas API (session MVP): lets agents pop a file open on the canvas and
-	// nudge every open viewer to reload, whether or not the room is open.
+	// Canvas API (session MVP): lets agents pop a file (or dev server) open on
+	// the canvas and nudge every open file viewer to reload, whether or not
+	// the room is open.
 
-	router.post(fileOpen.http.path, async (req, res) => {
+	router.post([fileOpen.http.path, '/api/canvas/file-viewer'], async (req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? 'team'))
 		if (!roomId) return void res.status(400).json({ error: 'bad room id' })
@@ -61,12 +80,27 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 			return void res.status(501).json({ error: 'remote files not yet supported (v1)' })
 		}
 
+		const rawPort = body.port
+		const port = typeof rawPort === 'number' && Number.isInteger(rawPort) && rawPort > 0 && rawPort < 65536 ? rawPort : null
 		const rawPath = typeof body.path === 'string' ? body.path : ''
-		const cleanPath = normalizeHomePath(rawPath)
-		if (!cleanPath) {
-			return void res
-				.status(400)
-				.json({ error: 'path must be a non-empty path within the agent home (no ../ traversal)' })
+		let cleanPath: string | null = null
+		let devPath: string | null = null
+		if (port === null) {
+			cleanPath = normalizeHomePath(rawPath)
+			if (!cleanPath) {
+				return void res
+					.status(400)
+					.json({ error: 'path must be a non-empty path within the agent home (no ../ traversal), or pass port for a dev server' })
+			}
+		} else if (op === 'refresh') {
+			return void res.status(400).json({ error: 'refresh is by path; dev viewers reload via their own refresh button' })
+		} else {
+			devPath = normalizeDevPath(rawPath)
+			if (devPath === null) {
+				return void res
+					.status(400)
+					.json({ error: 'dev path must start with / and contain no . or .. segments' })
+			}
 		}
 
 		// ---- refresh ------------------------------------------------------------
@@ -76,7 +110,7 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 				for (const record of store.getAll() as any[]) {
 					if (
 						record.typeName === 'shape' &&
-						record.type === 'file-viewer' &&
+						record.type === 'web-viewer' &&
 						record.props?.path === cleanPath
 					) {
 						store.put({ ...record, props: { ...record.props, rev: (record.props.rev ?? 0) + 1 } })
@@ -90,7 +124,11 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 		// ---- open -----------------------------------------------------------------
 		const frame = typeof body.frame === 'string' ? body.frame : null
 		const title =
-			typeof body.title === 'string' && body.title.trim() ? body.title.trim() : path.basename(cleanPath)
+			typeof body.title === 'string' && body.title.trim()
+				? body.title.trim()
+				: port !== null
+					? `:${port}`
+					: path.basename(cleanPath!)
 
 		// Attribution: stamp the real caller (credential wins; anonymous body.author
 		// is a cosmetic badge only) — same rule as sticky, though the file-viewer
@@ -113,15 +151,15 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 					return
 				}
 				parentId = target.id
-				// Grid inside the frame, based on how many file-viewers it already holds.
-				const count = shapes.filter((r) => r.type === 'file-viewer' && r.parentId === parentId).length
+				// Grid inside the frame, based on how many web-viewers it already holds.
+				const count = shapes.filter((r) => r.type === 'web-viewer' && r.parentId === parentId).length
 				x = 20 + (count % STICKY_GRID_COLS) * STICKY_GRID_STEP
 				y = 20 + Math.floor(count / STICKY_GRID_COLS) * STICKY_GRID_STEP
 			} else {
-				// No frame: page origin area, offset by file-viewer count so tiles
+				// No frame: page origin area, offset by web-viewer count so tiles
 				// don't stack exactly.
 				parentId = records.find((r) => r.typeName === 'page')?.id ?? 'page:page'
-				const count = shapes.filter((r) => r.type === 'file-viewer' && r.parentId === parentId).length
+				const count = shapes.filter((r) => r.type === 'web-viewer' && r.parentId === parentId).length
 				x = count * 40
 				y = count * 40
 			}
@@ -133,19 +171,15 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 			const id = createShapeId()
 			const viewer = (schema.types.shape as any).create({
 				id,
-				type: 'file-viewer',
+				type: 'web-viewer',
 				parentId,
 				index: getIndexAbove(topIndex),
 				x,
 				y,
 				meta: attribution.metaAuthor ? { author: attribution.metaAuthor } : {},
-				props: {
-					w: 720,
-					h: 540,
-					path: cleanPath,
-					title,
-					rev: 0,
-				},
+				props: port !== null
+					? { w: 960, h: 640, kind: 'dev', port, path: devPath!, title, rev: 0 }
+					: { w: 720, h: 540, kind: 'file', path: cleanPath!, title, rev: 0 },
 			})
 			store.put(viewer)
 			createdId = id
@@ -185,7 +219,10 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 	// app-wide express.json 100kb default — this route gets its own parser
 	// sized to the relay's own 5MB-per-log cap (app.ts skips the default
 	// json() parser for this one path so this is the only body parse it gets).
-	router.post('/api/canvas/file-viewer/present-events', express.json({ limit: '6mb' }), (req, res) => {
+	router.post(
+		['/api/canvas/web-viewer/present-events', '/api/canvas/file-viewer/present-events'],
+		express.json({ limit: '6mb' }),
+		(req, res) => {
 		const body = (req.body ?? {}) as Record<string, unknown>
 		const roomId = sanitizeId(String(body.room ?? ''))
 		const shapeId = typeof body.shapeId === 'string' ? body.shapeId : ''
@@ -208,9 +245,10 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 			fanOut(roomId, room, { type: 'ew-rrweb', shapeId, presentId, truncated: true, entries: [] })
 		}
 		res.json({ ok: true, truncated })
-	})
+		}
+	)
 
-	router.get('/api/canvas/file-viewer/present-events', (req, res) => {
+	router.get(['/api/canvas/web-viewer/present-events', '/api/canvas/file-viewer/present-events'], (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? ''))
 		const shapeId = typeof req.query.shapeId === 'string' ? req.query.shapeId : ''
 		if (!roomId || !shapeId) return void res.status(400).json({ error: 'room and shapeId required' })
@@ -220,7 +258,7 @@ export function createFileViewerRouter(ctx: PluginServerContext): express.Router
 	// present-stop no longer deletes the log — a finished presentation IS the
 	// frozen last view (spec: 2026-07-29-file-viewer-force-follow-design.md).
 	// Kept as a 200 no-op so older clients' broadcasters don't error on stop.
-	router.post('/api/canvas/file-viewer/present-stop', (req, res) => {
+	router.post(['/api/canvas/web-viewer/present-stop', '/api/canvas/file-viewer/present-stop'], (req, res) => {
 		res.json({ ok: true })
 	})
 

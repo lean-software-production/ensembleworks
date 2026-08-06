@@ -1,7 +1,7 @@
 /**
  * Force-follow baton (spec: 2026-07-29-file-viewer-force-follow-design.md) —
  * hides a controller's REGULAR tldraw collaborator cursor on the canvas
- * while they hold a file-viewer baton: the mirror already renders their
+ * while they hold a web-viewer baton: the mirror already renders their
  * in-control cursor inside the shape, so the canvas-wide cursor is a
  * duplicate. Chains onto `FadedCollaboratorCursorOverlayUtil` (av/
  * FadedCursorOverlay.ts) rather than the base `CollaboratorCursorOverlayUtil`
@@ -29,7 +29,7 @@
  */
 import { type TLCollaboratorCursorOverlay } from 'tldraw'
 import { FadedCollaboratorCursorOverlayUtil } from '../av/FadedCursorOverlay'
-import { hasFileViewerBaton } from './fileViewerBaton'
+import { hasWebViewerBaton } from './webViewerBaton'
 
 const ID_PREFIX = 'collaborator_cursor:'
 
@@ -39,7 +39,7 @@ export class HideControllerCursorOverlayUtil extends FadedCollaboratorCursorOver
 		const holderIds = new Set(
 			this.editor
 				.getVisibleCollaboratorsOnCurrentPage()
-				.filter((presence) => hasFileViewerBaton(presence.meta))
+				.filter((presence) => hasWebViewerBaton(presence.meta))
 				.map((presence) => presence.userId)
 		)
 		if (holderIds.size === 0) return overlays
@@ -51,4 +51,4 @@ export class HideControllerCursorOverlayUtil extends FadedCollaboratorCursorOver
 }
 
 /** Stable module-level array so <Tldraw overlayUtils> deps don't churn. */
-export const fileViewerOverlayUtils = [HideControllerCursorOverlayUtil]
+export const webViewerOverlayUtils = [HideControllerCursorOverlayUtil]

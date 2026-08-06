@@ -26,7 +26,7 @@ export type Presenting = {
 	ts: number
 }
 
-const current = atom<Presenting | null>('fileViewerPresent', null)
+const current = atom<Presenting | null>('webViewerPresent', null)
 
 export const presentStore = {
 	get: (): Presenting | null => current.get(),

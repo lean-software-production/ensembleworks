@@ -33,10 +33,10 @@ for (const t of allTools) {
 // 3. (plugin, id) pairs unique; (method, path) pairs unique (GET+POST may share
 //    a path across methods — scribe/roadmap overloads — but never collide),
 //    EXCEPT deliberately op-discriminated same-method routes (file open/refresh
-//    both POST /api/canvas/file-viewer, disambiguated by body `op`).
+//    both POST /api/canvas/web-viewer, disambiguated by body `op`).
 const pluginIds = new Set(allTools.map((t) => `${t.plugin}.${t.id}`))
 assert.equal(pluginIds.size, allTools.length, 'duplicate (plugin, id)')
-const OP_DISCRIMINATED = new Set(['POST /api/canvas/file-viewer'])
+const OP_DISCRIMINATED = new Set(['POST /api/canvas/web-viewer'])
 const methodPathList = allTools.map((t) => `${t.http.method} ${t.http.path}`)
 const nonExemptMethodPaths = methodPathList.filter((mp) => !OP_DISCRIMINATED.has(mp))
 assert.equal(

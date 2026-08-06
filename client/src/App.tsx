@@ -14,7 +14,7 @@ import {
 } from 'tldraw'
 import 'tldraw/tldraw.css'
 import './theme.css'
-import { computeStamp, rawUserId, type StampRecord } from '@ensembleworks/contracts'
+import { computeStamp, rawUserId, webViewerMigrations, type StampRecord } from '@ensembleworks/contracts'
 import { assetStore } from './assetStore'
 import { FramesDrawer } from './chrome/FramesDrawer'
 import { presentingAtom } from './chrome/present'
@@ -22,9 +22,9 @@ import { getSettings, updateSettings } from './chrome/settings'
 import { SidePanel } from './chrome/SidePanel'
 import { hexForColor } from './colors'
 import { fetchAccessGithubIdentity, resolveGithubLogin } from './githubIdentity'
-import { fileViewerOverlayUtils } from './file-viewer/hideControllerCursor'
-import { presentStore } from './file-viewer/presentStore'
-import { rrwebFollowStore } from './file-viewer/rrwebFollow'
+import { webViewerOverlayUtils } from './web-viewer/hideControllerCursor'
+import { presentStore } from './web-viewer/presentStore'
+import { rrwebFollowStore } from './web-viewer/rrwebFollow'
 import { configureConnectionLog, flushConnectionLog, logConnectionEvent } from './av/connectionLog'
 import { useAvSnapshot } from './av/bridge'
 import { CanvasBlockerModal } from './canvas-health/CanvasBlockerModal'
@@ -92,6 +92,7 @@ export function App() {
 		assets: assetStore,
 		shapeUtils: useMemo(() => [...defaultShapeUtils, ...customShapeUtils], []),
 		bindingUtils: useMemo(() => [...defaultBindingUtils], []),
+		migrations: useMemo(() => [webViewerMigrations], []),
 		onCustomMessageReceived(message) {
 			if (message?.type === 'kicked') setWasKicked(true)
 			else if (message?.type === 'ew-rrweb' && typeof message.shapeId === 'string') {
@@ -139,7 +140,7 @@ export function App() {
 			})
 			// Merge two presenter tokens next to the spatial stamp — both ride
 			// this presence blob so neither needs server changes:
-			//   fileViewerPresent (file-viewer/presentStore): the baton — shapeId +
+			//   webViewerPresent (web-viewer/presentStore): the baton — shapeId +
 			//     scroll fraction + toggle ts. Null when nobody holds it (a valid
 			//     JsonValue — followers treat "no token" and "null token" alike).
 			//   presenting (chrome/present.ts, canvas-controls spec §5): a bare
@@ -151,7 +152,7 @@ export function App() {
 				...defaults,
 				meta: {
 					stamp,
-					fileViewerPresent: presentStore.get(),
+					webViewerPresent: presentStore.get(),
 					presenting: presentingAtom.get(),
 				},
 			}
@@ -291,7 +292,7 @@ export function App() {
 					deepLinks
 					assetUrls={assetUrls}
 					shapeUtils={customShapeUtils}
-					overlayUtils={fileViewerOverlayUtils}
+					overlayUtils={webViewerOverlayUtils}
 					overrides={uiOverrides}
 					components={components}
 					// Hard prerequisite for the locked-shape padlock chip
