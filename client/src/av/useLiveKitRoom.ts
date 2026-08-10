@@ -19,6 +19,7 @@ import {
 } from 'livekit-client'
 import { computeBackoff, RELAY_HEALTHY_RESET_MS } from '@ensembleworks/contracts/relay-parity'
 import { useEffect, useRef, useState } from 'react'
+import { AV_ACTIVITY_THROTTLE_MS, loadInitialAv, persistAv } from './avPersistence'
 import { logConnectionEvent } from './connectionLog'
 import { classifyDisconnect } from './reconnect'
 import { setScreenShareRoom } from '../screenshare/store'
@@ -71,8 +72,12 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 	const [status, setStatus] = useState<LiveKitState['status']>('connecting')
 	const [room, setRoom] = useState<Room | null>(null)
 	const [peers, setPeers] = useState<RemotePeer[]>([])
-	const [micEnabled, setMicState] = useState(false)
-	const [camEnabled, setCamState] = useState(false)
+	// Seed from the persisted preference, freshness-gated (see avPersistence):
+	// a refresh within AV_STALE_MS restores mic/cam; a long-idle/next-day load
+	// falls back to off. Computed once on mount.
+	const [initialAv] = useState(loadInitialAv)
+	const [micEnabled, setMicState] = useState(initialAv.mic)
+	const [camEnabled, setCamState] = useState(initialAv.cam)
 	const [localVideoTrack, setLocalVideoTrack] = useState<LocalTrack | null>(null)
 	const [activeDevices, setActiveDevices] = useState<LiveKitState['activeDevices']>({
 		audioinput: null,
@@ -85,9 +90,10 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 	const audioCtxRef = useRef<AudioContext | null>(null)
 	const pipelinesRef = useRef(new Map<string, AudioPipeline>())
 	// Desired publish state, mirrored from the setters so a re-joined Room (which
-	// starts with nothing published) can restore what the user had live.
-	const micEnabledRef = useRef(false)
-	const camEnabledRef = useRef(false)
+	// starts with nothing published) can restore what the user had live. Seeded
+	// from the persisted preference so the FIRST join after a refresh republishes.
+	const micEnabledRef = useRef(initialAv.mic)
+	const camEnabledRef = useRef(initialAv.cam)
 
 	useEffect(() => {
 		let cancelled = false
@@ -304,16 +310,43 @@ export function useLiveKitRoom(roomId: string, identity: string, name: string): 
 		}
 	}, [roomId, identity, name])
 
+	// Keep the persisted `lastActiveAt` fresh from REAL user activity (not a
+	// tab-alive heartbeat) so the staleness gate reflects "was the user actually
+	// here recently". Only stamps while AV is live — a mic-off/cam-off session
+	// has nothing to restore, so it never writes. Throttled to keep it cheap.
+	useEffect(() => {
+		let lastStamp = 0
+		const onActivity = () => {
+			if (!micEnabledRef.current && !camEnabledRef.current) return
+			const now = Date.now()
+			if (now - lastStamp < AV_ACTIVITY_THROTTLE_MS) return
+			lastStamp = now
+			persistAv(micEnabledRef.current, camEnabledRef.current, now)
+		}
+		const passive = { passive: true } as const
+		document.addEventListener('pointermove', onActivity, passive)
+		document.addEventListener('pointerdown', onActivity, passive)
+		document.addEventListener('keydown', onActivity, passive)
+		return () => {
+			document.removeEventListener('pointermove', onActivity)
+			document.removeEventListener('pointerdown', onActivity)
+			document.removeEventListener('keydown', onActivity)
+		}
+	}, [])
+
 	const setMicEnabled = (on: boolean) => {
 		micEnabledRef.current = on
 		room?.localParticipant.setMicrophoneEnabled(on).catch(console.error)
 		audioCtxRef.current?.resume()
 		setMicState(on)
+		// A toggle is activity: persist the new state + a fresh stamp.
+		persistAv(on, camEnabledRef.current, Date.now())
 	}
 	const setCamEnabled = (on: boolean) => {
 		camEnabledRef.current = on
 		room?.localParticipant.setCameraEnabled(on).catch(console.error)
 		setCamState(on)
+		persistAv(micEnabledRef.current, on, Date.now())
 	}
 
 	// switchActiveDevice republishes the live track on the new device; state
