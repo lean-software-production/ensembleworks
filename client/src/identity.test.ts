@@ -44,7 +44,7 @@ function stubFetch(impl: () => Promise<unknown>): void {
 	globalThis.fetch = (async () => {
 		calls++
 		return await impl()
-	}) as typeof fetch
+	}) as unknown as typeof fetch
 }
 const json = (body: unknown) => async () => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
 

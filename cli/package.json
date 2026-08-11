@@ -15,6 +15,7 @@
 	"dependencies": {
 		"@ensembleworks/contracts": "*",
 		"smol-toml": "^1.7.0",
+		"tweetnacl": "^1.0.3",
 		"ws": "^8.21.0"
 	},
 	"devDependencies": {

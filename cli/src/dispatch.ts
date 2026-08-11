@@ -16,15 +16,18 @@ import { spawnSync } from 'node:child_process'
 import { login } from './auth/login.ts'
 import { logout } from './auth/logout.ts'
 import { status } from './auth/status.ts'
+import { tokenCmd } from './auth/token.ts'
+import { codespaceGroup } from './codespace/index.ts'
 import { CliError } from './errors.ts'
-import { hostsPath, loadHosts } from './hosts.ts'
+import { hostsPath } from './hosts.ts'
 import { connectSlot } from './native/connect.ts'
 import { fileOpen, fileRefresh } from './native/file.ts'
 import { pullImages } from './native/pull-images.ts'
 import { tools } from './native/tools.ts'
 import { version } from './native/version.ts'
 import { emitLine, narrate } from './output.ts'
-import { type Conn, readEnv, resolveConn } from './resolve.ts'
+import type { Conn } from './resolve.ts'
+import { resolveConnFresh } from './auth/fresh.ts'
 import { embeddedManifest, loadManifest } from './render/manifest.ts'
 import { renderVerbHelp, runVerb } from './render/run.ts'
 
@@ -76,6 +79,7 @@ export async function dispatch(rest: string[], globals: Globals, env: NodeJS.Pro
 	if (group === undefined || group === 'help') return printTopHelp()
 	if (group === 'version') return version({ url: globals.url, room: globals.room, json: globals.json }, env)
 	if (group === 'auth') return authGroup(rest.slice(1), globals, env)
+	if (group === 'codespace') return codespaceGroup(rest.slice(1), globals, env)
 	if (group === 'tools') return tools(rest.slice(1), { url: globals.url, room: globals.room, json: globals.json }, env)
 
 	// 2. Native (group, verb) pairs — win over the manifest.
@@ -95,7 +99,9 @@ export async function dispatch(rest: string[], globals: Globals, env: NodeJS.Pro
 	}
 
 	// 3. Manifest-rendered — needs a resolved connection (url/room/auth).
-	const conn = resolveConn({ url: globals.url, room: globals.room }, readEnv(env), loadHosts(hostsPath(env)))
+	// SP5: async resolution — an access-browser instance silently mints a fresh
+	// app token here (cache-first); everything else is byte-identical.
+	const conn = await resolveConnFresh({ url: globals.url, room: globals.room }, env)
 	const { envelope, cacheFile } = await loadManifest(conn, { refresh: globals.refresh, env })
 	const entry = envelope.tools.find((t) => t.plugin === group && t.id === verb)
 	if (entry) return runVerb(entry, rest.slice(2), conn, cacheFile)
@@ -120,8 +126,10 @@ async function authGroup(args: string[], globals: Globals, env: NodeJS.ProcessEn
 			return status({ url: globals.url, json: globals.json }, env)
 		case 'logout':
 			return logout({ url: globals.url }, env)
+		case 'token':
+			return tokenCmd({ url: globals.url }, env)
 		default:
-			throw new CliError(`unknown auth command: ${sub ?? '(none)'} (expected login | status | logout)`, 2)
+			throw new CliError(`unknown auth command: ${sub ?? '(none)'} (expected login | status | token | logout)`, 2)
 	}
 }
 
@@ -129,9 +137,13 @@ function parseLoginFlags(args: string[], globals: Globals): import('./auth/login
 	const flags: import('./auth/login.ts').LoginFlags = { url: globals.url, room: globals.room }
 	for (let i = 0; i < args.length; i++) {
 		switch (args[i]) {
-			case '--method':
-				flags.method = args[++i] as 'service-token' | 'none'
+			case '--method': {
+				const v = args[++i]
+				if (v !== 'service-token' && v !== 'none' && v !== 'access-browser')
+					throw new CliError(`--method must be service-token, none, or access-browser, got: ${v}`, 2)
+				flags.method = v
 				break
+			}
 			case '--token-id':
 				flags.tokenId = args[++i]
 				break
@@ -173,6 +185,9 @@ function tryExtension(group: string, args: string[], conn: Conn, env: NodeJS.Pro
 		childEnv.ENSEMBLEWORKS_TOKEN_ID = conn.auth.tokenId
 		childEnv.ENSEMBLEWORKS_TOKEN_SECRET = conn.auth.tokenSecret
 	}
+	if (conn.auth.method === 'access') {
+		childEnv.ENSEMBLEWORKS_ACCESS_TOKEN = conn.auth.appToken
+	}
 	const res = spawnSync(bin, args, { stdio: 'inherit', env: childEnv })
 	return res.status ?? 1
 }
@@ -190,7 +205,7 @@ function unknownError(group: string, verb: string | undefined, all: { plugin: st
 function printTopHelp(): number {
 	emitLine('ensembleworks <group> <verb> [args] — a generic renderer of GET /api/tools')
 	emitLine('')
-	emitLine('native: auth login|status|logout · tools [refresh] · version · terminal connect · canvas pull-images · file open|refresh <path>')
+	emitLine('native: auth login|status|token|logout · codespace up|stop|rebuild|list|reconcile|boot-install · tools [refresh] · version · terminal connect · canvas pull-images · file open|refresh <path>')
 	emitLine('rendered: any verb from `ensembleworks tools` (canvas/roadmap/scribe/terminal/av/kernel)')
 	emitLine('global flags: --url --room --refresh --json --dry-run -h/--help')
 	return 0

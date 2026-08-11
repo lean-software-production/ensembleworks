@@ -1,5 +1,14 @@
 # Distributed Terminal Gateways — Design and Implementation Plan
 
+> **Extended by (2026-07-21):** [`2026-07-21-ew-codespaces-design.md`](./2026-07-21-ew-codespaces-design.md).
+> That doc builds directly on the gateway/connector/relay foundation described
+> here — and **supersedes this doc's central "every gateway always uses
+> TmuxBackend internally" thesis**: an EW Codespace's connector owns the PTY
+> directly and tmux is dropped (see its §"Terminal substrate"). The relay,
+> splicer, session-fan-out and outbound-registration model below are inherited
+> unchanged; read this doc for *why the gateway/relay plane exists*, and the
+> Codespaces doc for the current session unit.
+
 > **As-built note (2026-07-07).** This is the original design record. The
 > gateway model, relay/splice protocol and session semantics it describes are
 > implemented, but two specifics have since changed and this doc is **not**

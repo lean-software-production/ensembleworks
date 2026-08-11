@@ -24,6 +24,9 @@ export interface Pty {
   resize(cols: number, rows: number): void
   write(data: string): void
   kill(): void
+  /** OS pid of the spawned child — the /proc/<pid>/cwd handle for the
+   *  connector's layout snapshot (EW Codespaces SP4). */
+  readonly pid: number
 }
 
 export function spawnPty(file: string, args: string[], opts: PtyOptions): Pty {
@@ -72,5 +75,6 @@ export function spawnPty(file: string, args: string[], opts: PtyOptions): Pty {
     kill() {
       proc.kill()
     },
+    pid: proc.pid,
   }
 }
