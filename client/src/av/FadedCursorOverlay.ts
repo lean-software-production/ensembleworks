@@ -11,7 +11,7 @@
  * camera changes, which are the events that change gains. (A standup-mode
  * toggle shows on the next repaint — any pointer/camera motion.)
  *
- * NOT wired directly into <Tldraw overlayUtils> — file-viewer/
+ * NOT wired directly into <Tldraw overlayUtils> — web-viewer/
  * hideControllerCursor.ts's `HideControllerCursorOverlayUtil` subclasses
  * THIS class (composing gain-fade with baton-holder cursor-hiding onto the
  * same 'collaborator_cursor' overlay type) and App.tsx wires that combined

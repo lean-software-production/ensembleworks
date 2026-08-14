@@ -44,10 +44,10 @@ async function main() {
 	const { postJson } = makeTestClient(base)
 	const room = getOrCreateRoom('team')
 	const documents = () => room.getCurrentSnapshot().documents.map((d) => d.state as any)
-	const fileViewers = () => documents().filter((r) => r.typeName === 'shape' && r.type === 'file-viewer')
+	const fileViewers = () => documents().filter((r) => r.typeName === 'shape' && r.type === 'web-viewer')
 
 	// 1. open creates a file-viewer shape with the expected defaults.
-	const openRes = await postJson('/api/canvas/file-viewer', {
+	const openRes = await postJson('/api/canvas/web-viewer', {
 		room: 'team',
 		op: 'open',
 		path: 'report.html',
@@ -59,6 +59,7 @@ async function main() {
 
 	let shape = fileViewers().find((r) => r.id === createdId)
 	assert.ok(shape, 'a file-viewer shape exists in the room')
+	assert.equal(shape.props.kind, 'file')
 	assert.equal(shape.props.path, 'report.html')
 	assert.equal(shape.props.rev, 0)
 	assert.equal(shape.props.title, 'report.html')
@@ -87,7 +88,7 @@ async function main() {
 	console.log('ok: css served as raw passthrough')
 
 	// 5. refresh bumps rev on the matching shape.
-	const refreshRes = await postJson('/api/canvas/file-viewer', {
+	const refreshRes = await postJson('/api/canvas/web-viewer', {
 		room: 'team',
 		op: 'refresh',
 		path: 'report.html',

@@ -134,6 +134,8 @@
       "name": "@ensembleworks/contracts",
       "version": "0.0.0",
       "dependencies": {
+        "@tldraw/store": "5.1.0",
+        "@tldraw/tlschema": "5.1.0",
         "@tldraw/validate": "5.1.0",
         "zod": "^4.0.0",
       },

@@ -1,5 +1,5 @@
 /**
- * Live mirror of a presenting peer's file-viewer iframe (spec:
+ * Live mirror of a presenting peer's web-viewer iframe (spec:
  * 2026-07-27-file-viewer-rrweb-broadcast-design.md). Owns an rrweb Replayer
  * in liveMode: seeds from the HTTP backlog, appends live entries from
  * rrwebFollowStore, and scales the replayer wrapper to the shape box.
@@ -20,7 +20,7 @@ const FALLBACK_MS = 2000
 /**
  * Arrow-cursor SVG tinted with the presenter's colour, tip at top-left, plus
  * a small "driving" badge (filled circle + ▶ glyph) — the one clear signal
- * that this is a file-viewer controller's cursor, not a normal canvas
+ * that this is a web-viewer controller's cursor, not a normal canvas
  * collaborator cursor. Sits lower, over the arrow's tail lobe (nudged down
  * from an earlier centred placement, per visual feedback — still clear of
  * the name pill, which lives further down/right still). Sized 20% larger
@@ -225,7 +225,7 @@ export function RrwebMirror(props: {
 
 		// Seed from the backlog (late join / mid-presentation mount).
 		void fetch(
-			`/api/canvas/file-viewer/present-events?room=${encodeURIComponent(props.roomId)}&shapeId=${encodeURIComponent(props.shapeId)}`
+			`/api/canvas/web-viewer/present-events?room=${encodeURIComponent(props.roomId)}&shapeId=${encodeURIComponent(props.shapeId)}`
 		)
 			.then((res) => (res.ok ? res.json() : null))
 			.then((backlog) => {

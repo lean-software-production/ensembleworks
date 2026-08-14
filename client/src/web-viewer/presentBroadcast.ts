@@ -59,7 +59,7 @@ export function createPresentBroadcaster(opts: {
 			try {
 				sent = queue
 				queue = []
-				const result = await postJson('/api/canvas/file-viewer/present-events', {
+				const result = await postJson('/api/canvas/web-viewer/present-events', {
 					room: opts.roomId,
 					shapeId: opts.shapeId,
 					presentId: opts.presentId,
@@ -103,7 +103,7 @@ export function createPresentBroadcaster(opts: {
 			await flush()
 			if (!degraded) {
 				try {
-					await postJson('/api/canvas/file-viewer/present-stop', {
+					await postJson('/api/canvas/web-viewer/present-stop', {
 						room: opts.roomId,
 						shapeId: opts.shapeId,
 						presentId: opts.presentId,

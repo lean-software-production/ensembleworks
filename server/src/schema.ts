@@ -4,23 +4,23 @@
  */
 import { createTLSchema, defaultBindingSchemas, defaultShapeSchemas } from '@tldraw/tlschema'
 import {
-	fileViewerShapeProps,
-	iframeShapeProps,
 	nekoShapeProps,
 	roadmapShapeProps,
 	screenshareShapeProps,
 	terminalShapeProps,
+	webViewerMigrations,
+	webViewerShapeProps,
 } from '@ensembleworks/contracts'
 
 export const schema = createTLSchema({
 	shapes: {
 		...defaultShapeSchemas,
 		terminal: { props: terminalShapeProps },
-		iframe: { props: iframeShapeProps },
 		neko: { props: nekoShapeProps },
 		roadmap: { props: roadmapShapeProps },
 		screenshare: { props: screenshareShapeProps },
-		'file-viewer': { props: fileViewerShapeProps },
+		'web-viewer': { props: webViewerShapeProps },
 	},
 	bindings: defaultBindingSchemas,
+	migrations: [webViewerMigrations],
 })

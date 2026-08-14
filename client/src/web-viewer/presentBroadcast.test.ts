@@ -1,5 +1,5 @@
-// client/src/file-viewer/presentBroadcast.test.ts
-// Run with: bun src/file-viewer/presentBroadcast.test.ts
+// client/src/web-viewer/presentBroadcast.test.ts
+// Run with: bun src/web-viewer/presentBroadcast.test.ts
 import assert from 'node:assert/strict'
 import { createPresentBroadcaster } from './presentBroadcast'
 
@@ -24,7 +24,7 @@ b.push({ type: 4 })
 b.push({ type: 2 })
 await tick()
 assert.equal(posts.length, 1)
-assert.equal(posts[0].url, '/api/canvas/file-viewer/present-events')
+assert.equal(posts[0].url, '/api/canvas/web-viewer/present-events')
 assert.deepEqual(posts[0].body.entries.map((e: any) => e.seq), [0, 1])
 assert.equal(posts[0].body.presentId, 'p1')
 
@@ -80,8 +80,8 @@ const b3 = createPresentBroadcaster({
 b3.push({ type: 4 })
 await b3.stop()
 assert.deepEqual(stopPosts.map((p) => p.url), [
-	'/api/canvas/file-viewer/present-events',
-	'/api/canvas/file-viewer/present-stop',
+	'/api/canvas/web-viewer/present-events',
+	'/api/canvas/web-viewer/present-stop',
 ])
 
 // Concurrency: stop waits for in-flight flushes before proceeding.
@@ -105,7 +105,7 @@ const b4 = createPresentBroadcaster({
 	presentId: 'p4',
 	postJson: async (url, body) => {
 		deferredPosts.push({ url, body })
-		if (url === '/api/canvas/file-viewer/present-events' && deferredCount === 0) {
+		if (url === '/api/canvas/web-viewer/present-events' && deferredCount === 0) {
 			// Defer only the first present-events POST to test concurrency
 			deferredCount++
 			await new Promise<void>(deferredFlush)
@@ -139,7 +139,7 @@ assert.deepEqual(firstFlushSeqs, [0], 'event 0 sent in first flush')
 const secondFlushSeqs = deferredPosts[1].body.entries.map((e: any) => e.seq)
 assert.deepEqual(secondFlushSeqs, [1], 'event 1 sent in second flush after stop waits for in-flight')
 // Assert: present-stop is final POST
-assert.equal(deferredPosts[deferredPosts.length - 1].url, '/api/canvas/file-viewer/present-stop', 'present-stop is final')
+assert.equal(deferredPosts[deferredPosts.length - 1].url, '/api/canvas/web-viewer/present-stop', 'present-stop is final')
 
 // Server-side truncation: a `truncated: true` response degrades exactly like
 // sustained failure — stop posting, fire onDegrade once, go quiet.

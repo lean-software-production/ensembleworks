@@ -48,7 +48,7 @@ async function main() {
 	await new Promise((r) => setTimeout(r, 300)) // let the session register
 
 	// POST a batch → accepted, fanned out
-	const post = await postJson('/api/canvas/file-viewer/present-events', {
+	const post = await postJson('/api/canvas/web-viewer/present-events', {
 		room: 'relaytest',
 		shapeId: 'shape:fv1',
 		presentId: 'p1',
@@ -58,7 +58,7 @@ async function main() {
 	assert.equal(post.body.ok, true)
 
 	// Backlog round-trips
-	const backlog = await getJson('/api/canvas/file-viewer/present-events?room=relaytest&shapeId=shape%3Afv1')
+	const backlog = await getJson('/api/canvas/web-viewer/present-events?room=relaytest&shapeId=shape%3Afv1')
 	assert.equal(backlog.status, 200)
 	assert.equal(backlog.body.presentId, 'p1')
 	assert.equal(backlog.body.entries.length, 1)
@@ -71,23 +71,35 @@ async function main() {
 	)
 
 	// Stop is now a no-op — log survives as the frozen last view
-	const stop = await postJson('/api/canvas/file-viewer/present-stop', {
+	const stop = await postJson('/api/canvas/web-viewer/present-stop', {
 		room: 'relaytest',
 		shapeId: 'shape:fv1',
 		presentId: 'p1',
 	})
 	assert.equal(stop.status, 200)
 	assert.equal(stop.body.ok, true)
-	const after = await getJson('/api/canvas/file-viewer/present-events?room=relaytest&shapeId=shape%3Afv1')
+	const after = await getJson('/api/canvas/web-viewer/present-events?room=relaytest&shapeId=shape%3Afv1')
 	assert.equal(after.body.presentId, 'p1', 'log survives present-stop as frozen view')
 	assert.equal(after.body.entries.length, 1)
 
+	// Deprecated alias path still works and lands in the same relay log.
+	const aliasPost = await postJson('/api/canvas/file-viewer/present-events', {
+		room: 'relaytest',
+		shapeId: 'shape:fv1',
+		presentId: 'p1',
+		entries: [{ seq: 1, event: { type: 3, data: { x: 1, y: 1 } } }],
+	})
+	assert.equal(aliasPost.status, 200, 'deprecated /api/canvas/file-viewer/present-events alias still 200s')
+	assert.equal(aliasPost.body.ok, true)
+	const aliasBacklog = await getJson('/api/canvas/web-viewer/present-events?room=relaytest&shapeId=shape%3Afv1')
+	assert.equal(aliasBacklog.body.entries.length, 2, 'alias-posted entry landed in the same relay log as the new path')
+
 	// Malformed body → 400
-	const bad = await postJson('/api/canvas/file-viewer/present-events', { room: 'relaytest' })
+	const bad = await postJson('/api/canvas/web-viewer/present-events', { room: 'relaytest' })
 	assert.equal(bad.status, 400)
 
 	// Unknown room → 404, no append attempted.
-	const unknownRoom = await postJson('/api/canvas/file-viewer/present-events', {
+	const unknownRoom = await postJson('/api/canvas/web-viewer/present-events', {
 		room: 'no-such-room',
 		shapeId: 'shape:fv1',
 		presentId: 'p1',
@@ -98,7 +110,7 @@ async function main() {
 	// A batch well over the app-wide express.json 100kb default is still
 	// accepted — present-events gets its own larger-limit parser.
 	const bigEvent = { seq: 0, event: { type: 2, data: 'x'.repeat(500_000) } }
-	const bigBatch = await postJson('/api/canvas/file-viewer/present-events', {
+	const bigBatch = await postJson('/api/canvas/web-viewer/present-events', {
 		room: 'relaytest',
 		shapeId: 'shape:fv2',
 		presentId: 'pbig',
@@ -113,7 +125,7 @@ async function main() {
 	// so a connected follower can degrade instead of stalling.
 	frames.length = 0
 	const hugeEvent = { seq: 0, event: { type: 2, data: 'z'.repeat(5_500_000) } }
-	const overflow = await postJson('/api/canvas/file-viewer/present-events', {
+	const overflow = await postJson('/api/canvas/web-viewer/present-events', {
 		room: 'relaytest',
 		shapeId: 'shape:fv3',
 		presentId: 'pover',

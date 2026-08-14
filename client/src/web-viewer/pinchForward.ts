@@ -8,7 +8,7 @@
  * a synthetic ctrl-wheel ON the iframe element. It bubbles to whichever
  * engine container encloses it (tldraw's, or canvas-react's Viewport), which
  * handles it exactly like a real pinch — no engine-specific camera code.
- * Shared by both file-viewer components (legacy tldraw + canvas-v2).
+ * Shared by both web-viewer components (legacy tldraw + canvas-v2).
  */
 
 export interface PinchPayload {

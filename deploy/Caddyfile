@@ -56,10 +56,13 @@
 
 	# Embedded dev servers, proxied under the canvas origin so the iframes are
 	# same-protocol and reachable by every participant: /dev/3000/... -> :3000.
+	# The sync server now terminates /dev itself (server/src/features/
+	# dev-proxy.ts) so it can inject the recorder bridge + URL patch + error
+	# reporter into top-level HTML — Caddy just forwards the whole /dev/{port}
+	# path through, unstripped.
 	@dev path_regexp dev ^/dev/(\d+)(/.*)?$
 	handle @dev {
-		uri strip_prefix /dev/{re.dev.1}
-		reverse_proxy localhost:{re.dev.1}
+		reverse_proxy 127.0.0.1:{$ENSEMBLEWORKS_PORT_SYNC:8788}
 	}
 
 	# The shared browser (neko container, ensembleworks-shared-browser.service) is
@@ -91,8 +94,20 @@
 	# upgrades the WS natively. (vite.config.ts still lists these under
 	# server.proxy for the rare case of hitting Vite on :5173 directly; behind
 	# Caddy this route wins first.)
-	@backend path /sync /sync/* /api /api/* /uploads /uploads/* /files /files/*
+	@backend path /sync /sync/* /api /api/* /uploads /uploads/* /files /files/* /files-assets /files-assets/*
 	handle @backend {
+		reverse_proxy 127.0.0.1:{$ENSEMBLEWORKS_PORT_SYNC:8788}
+	}
+
+	# Referer fallback (spec: web-viewer unification §2): a dev app's root-
+	# absolute asset request (/assets/x.js) misses every canvas route; if the
+	# page it came from is under /dev/{port}/, send it to that dev server via
+	# the injecting proxy. Canvas-owned prefixes never reach here — every
+	# earlier handle wins first, and Caddy handle blocks are mutually
+	# exclusive in file order.
+	@devref header_regexp ref Referer /dev/(\d+)/
+	handle @devref {
+		rewrite * /dev/{re.ref.1}{uri}
 		reverse_proxy 127.0.0.1:{$ENSEMBLEWORKS_PORT_SYNC:8788}
 	}
 

@@ -1,5 +1,5 @@
 /**
- * Run: bun src/file-viewer/pinchForward.test.ts
+ * Run: bun src/web-viewer/pinchForward.test.ts
  * Pure halves only — parsePinchMessage validation and the iframe-content →
  * parent-client coordinate map. The WheelEvent dispatch half is a thin DOM
  * shim exercised manually (plan Task 5).

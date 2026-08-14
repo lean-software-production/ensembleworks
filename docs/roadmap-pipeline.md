@@ -39,7 +39,7 @@ resolve frames by **name** every time — never cache a shape id or a coordinate
   `canvas frame ROADMAP` read returns zero children for exactly this reason.)
 - **RELEASE NOTES** — a *container* frame holding one subframe per shipped
   release, named `RELEASE: vX.Y.Z`. Cards live in those.
-- **EW:FOREMAN** — the agent area (a terminal, a file-viewer, and the
+- **EW:FOREMAN** — the agent area (a terminal, a web-viewer, and the
   **ADVICE** subframe where status stickies go). Not part of the card flow.
 
 ## The card format

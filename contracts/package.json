@@ -12,6 +12,8 @@
     "typecheck": "bunx tsc --noEmit"
   },
   "dependencies": {
+    "@tldraw/store": "5.1.0",
+    "@tldraw/tlschema": "5.1.0",
     "@tldraw/validate": "5.1.0",
     "zod": "^4.0.0"
   },

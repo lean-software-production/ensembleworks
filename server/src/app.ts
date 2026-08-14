@@ -30,8 +30,8 @@ import { wsTransport } from './canvas-v2/ws-transport.ts'
 import { createAvRouter } from './features/av.ts'
 import { createCanvasMetricsRouter } from './features/canvas-metrics.ts'
 import { createCanvasV2Router } from './features/canvas-v2.ts'
+import { createDevProxyRouter, handleDevUpgrade } from './features/dev-proxy.ts'
 import { createDiscordRouter } from './features/discord.ts'
-import { createFileViewerRouter } from './features/file-viewer.ts'
 import { createFilesRouter } from './features/files.ts'
 import { createFramesRouter } from './features/frames.ts'
 import { createParticipantsRouter } from './features/participants.ts'
@@ -43,6 +43,7 @@ import { createTerminalStatusRouter } from './features/terminal-status.ts'
 import { createToolsRouter } from './features/tools.ts'
 import { createTranscriptRouter } from './features/transcript.ts'
 import { createUploadsRouter } from './features/uploads.ts'
+import { createWebViewerRouter } from './features/web-viewer.ts'
 import { createWhoamiRouter } from './features/whoami.ts'
 import { createWriteScopeGuard } from './features/write-scope.ts'
 import { createGatewayPlane } from './gateway-registry.ts'
@@ -294,17 +295,24 @@ export function createSyncApp(opts: {
 
 	// Feature routers mount here IN THIS ORDER (Express matches top-down and the
 	// static catch-all below must stay last): whoami → participants (kernel) → av
-	// (av/token, av/kick, av/pulse) → terminal-status → sticky → file-viewer →
+	// (av/token, av/kick, av/pulse) → terminal-status → sticky → web-viewer →
 	// transcript → shape → frames → canvas-v2 → roadmap → discord →
 	// canvas-metrics → uploads → files
-	// present-events gets its own larger-limit parser (features/file-viewer.ts,
+	// present-events gets its own larger-limit parser (features/web-viewer.ts,
 	// sized to the relay's 5MB-per-log cap) — skip the app-wide 100kb default
 	// here so that route-level parser is the only one that ever touches its
 	// body (once express.json() has parsed/errored a request, a later parser
-	// mounted downstream never gets a second chance at it).
+	// mounted downstream never gets a second chance at it). Both the new path
+	// and the deprecated /file-viewer/ alias must be skipped — they share the
+	// same handler and route-level parser (createWebViewerRouter).
 	const defaultJsonParser = express.json()
 	app.use('/api', (req, res, next) => {
-		if (req.method === 'POST' && req.path === '/canvas/file-viewer/present-events') return next()
+		if (
+			req.method === 'POST' &&
+			(req.path === '/canvas/web-viewer/present-events' || req.path === '/canvas/file-viewer/present-events')
+		) {
+			return next()
+		}
 		defaultJsonParser(req, res, next)
 	})
 
@@ -357,7 +365,7 @@ export function createSyncApp(opts: {
 
 	app.use(createStickyRouter(ctx))
 
-	app.use(createFileViewerRouter(ctx))
+	app.use(createWebViewerRouter(ctx))
 
 	app.use(createTranscriptRouter(ctx))
 	app.use(createTelemetryRouter(ctx))       // POST /api/telemetry/connection (write-only beacon)
@@ -387,6 +395,14 @@ export function createSyncApp(opts: {
 	// File-viewer proxy: also outside the /api json parser (GETs only, no body
 	// to parse) and, like uploads, must sit above the static catch-all.
 	app.use(createFilesRouter())
+
+	// Embedded dev-server proxy: /dev/{port}/* -> localhost:{port}, with the
+	// recorder bridge + URL patch + error reporter injected into top-level
+	// HTML. Bodies are piped raw to the upstream dev server, so this must sit
+	// outside the /api express.json() parser above — it does (that parser is
+	// scoped to the /api prefix, so /dev/* never reaches it) — and, like
+	// uploads/files, above the static catch-all below.
+	app.use(createDevProxyRouter())
 
 	// In production the sync server also serves the static client build; Caddy
 	// just reverse-proxies everything here.
@@ -431,6 +447,10 @@ export function createSyncApp(opts: {
 	server.on('upgrade', (req, socket, head) => {
 		const url = new URL(req.url ?? '', 'http://internal')
 		if (gatewayPlane.handleUpgrade(req, socket, head, url)) return
+
+		// Embedded dev-server WS passthrough (HMR etc.), checked before the
+		// /sync branches below — see features/dev-proxy.ts.
+		if (handleDevUpgrade(req, socket as Socket, head)) return
 
 		// Phase 2: new-engine sync (Task C3), gated on EW_CANVAS_SYNC=1 and
 		// checked BEFORE the legacy /sync/:roomId match below (a real room id

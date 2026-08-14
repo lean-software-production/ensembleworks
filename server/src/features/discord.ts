@@ -12,6 +12,23 @@ import { resolveCaller } from '../whoami.ts'
 export function createDiscordRouter(ctx: PluginServerContext): express.Router {
 	const router = express.Router()
 
+	// GET /api/discord/health — is the bridge bot process running? The bot's
+	// only HTTP surface is POST /post on loopback, unreachable from browsers,
+	// so the server answers on its behalf: any HTTP response from the port
+	// (even the 404 a GET earns) proves the process is up; a network error
+	// means it isn't. Feeds the command bar's useAvailable probe.
+	router.get('/api/discord/health', async (_req, res) => {
+		const botPort = process.env.DISCORD_PORT ?? '8790'
+		const up = await fetch(`http://127.0.0.1:${botPort}/post`, {
+			method: 'GET',
+			signal: AbortSignal.timeout(1000),
+		}).then(
+			() => true,
+			() => false
+		)
+		res.json({ ok: true, up })
+	})
+
 	// GET /api/discord/bindings?room=<room> — every binding for a room.
 	router.get('/api/discord/bindings', async (req, res) => {
 		const roomId = sanitizeId(String(req.query.room ?? 'team'))
