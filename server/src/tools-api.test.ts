@@ -25,6 +25,9 @@ import { createSyncApp } from './app.ts'
 const isExempt = (p: string) =>
 	p === '/api/health' ||
 	p === '/api/tools' ||
+	// Availability probe behind the command bar's useAvailable — server-internal
+	// plumbing (answers for the bot's loopback-only /post face), not an agent tool.
+	p === '/api/discord/health' ||
 	p === '/api/telemetry/connection' ||
 	p === '/api/canvas/metrics' ||
 	p === '/api/canvas/web-viewer/present-events' ||
