@@ -7,7 +7,7 @@ import http from 'node:http'
 import { mkdtemp, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { serveFile } from './file-server-core.ts'
+import { sendServedFile, serveFile } from './file-server-core.ts'
 
 async function main() {
 	// Temp agent home with the three fixture files, served by a scratch
@@ -19,9 +19,8 @@ async function main() {
 
 	const fs = http.createServer(async (req, res) => {
 		const u = new URL(req.url ?? '/', 'http://i')
-		const served = await serveFile(home, u.pathname.replace(/^\/+/, ''))
-		res.writeHead(served.status, served.headers)
-		res.end(served.body ?? undefined)
+		const served = await serveFile(home, u.pathname.replace(/^\/+/, ''), { range: req.headers.range })
+		sendServedFile(res, served, req.method)
 	})
 	await new Promise<void>((r) => fs.listen(0, '127.0.0.1', () => r()))
 	const fsPort = (fs.address() as { port: number }).port
