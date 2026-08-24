@@ -9,6 +9,7 @@
 /// <reference path="../rrweb-umd.d.ts" />
 import express from 'express'
 import path from 'node:path'
+import { Readable } from 'node:stream'
 import { errorPage, injectBridge, renderMarkdown } from '../files-render.ts'
 // rrweb's UMD build exposes window.rrweb. Embedded as text at build time (the
 // relative path dodges the package's `exports` block on dist subpaths) so the
@@ -24,6 +25,7 @@ const ASSETS = new Set([
 	'.css', '.js', '.mjs', '.json', '.map', '.txt', '.csv',
 	'.svg', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico',
 	'.woff', '.woff2', '.ttf', '.otf', '.pdf',
+	'.mp4', '.webm', '.m4a', '.mp3',
 ])
 
 const filesPort = () => Number(process.env.ENSEMBLEWORKS_FILES_PORT ?? 8791)
@@ -54,17 +56,26 @@ export function createFilesRouter(): express.Router {
 			return void sendPage(501, 'Remote files not yet supported', `gateway "${gateway}" — the remote file transport lands with the connector engine.`)
 		}
 
+		const ext = path.extname(decodedRel).toLowerCase()
+		// Range only makes sense for bytes we pass through untouched: a partial
+		// body would be rendered/bridge-injected into nonsense for md/html docs,
+		// so those hops always ask upstream for the whole file.
+		const rangeable = ASSETS.has(ext) && !DOC_HTML.has(ext) && !DOC_MD.has(ext)
+		const inboundRange = rangeable ? req.header('range') : undefined
+
 		let upstream: Response
 		try {
 			// v1: no timeout — a hung file-server hangs the request (localhost, single user).
-			upstream = await fetch(`http://127.0.0.1:${filesPort()}/${rel}`)
+			upstream = await fetch(`http://127.0.0.1:${filesPort()}/${rel}`, {
+				headers: inboundRange ? { range: inboundRange } : undefined,
+			})
 		} catch {
 			return void sendPage(502, 'File server unavailable', 'The file-server (:8791) is not responding. Is the stack service running?')
 		}
 		if (upstream.status === 403) return void sendPage(403, 'Forbidden', 'That path escapes the served home directory.')
-		if (upstream.status !== 200) return void sendPage(404, 'Not found', `${decodedRel} does not exist (or is a directory).`)
-
-		const ext = path.extname(decodedRel).toLowerCase()
+		if (upstream.status !== 200 && upstream.status !== 206 && upstream.status !== 416) {
+			return void sendPage(404, 'Not found', `${decodedRel} does not exist (or is a directory).`)
+		}
 		res.set('cache-control', 'no-store')
 		// The document iframe is an opaque origin; fetch()/module subresources need
 		// CORS on every /files response (the file-server sets this too, but the
@@ -79,9 +90,20 @@ export function createFilesRouter(): express.Router {
 			return void res.type('html').send(injectBridge(html))
 		}
 		if (ASSETS.has(ext)) {
-			const type = upstream.headers.get('content-type')
-			if (type) res.set('content-type', type)
-			return void res.send(Buffer.from(await upstream.arrayBuffer()))
+			// Pass the upstream range answer straight through — status (200/206/416)
+			// plus the headers a <video> element needs to seek. Buffering here would
+			// re-create the memory problem the streaming file-server just solved, so
+			// the upstream body is piped, not collected.
+			for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
+				const v = upstream.headers.get(h)
+				if (v) res.set(h, v)
+			}
+			res.status(upstream.status)
+			if (!upstream.body) return void res.end()
+			// Double cast: the workspace's DOM lib and node:stream/web each declare
+			// their own ReadableStream and TS won't bridge them directly.
+			const web = upstream.body as unknown as Parameters<typeof Readable.fromWeb>[0]
+			return void Readable.fromWeb(web).pipe(res)
 		}
 		return void sendPage(200, 'Unsupported type', `"${ext || '(no extension)'}" cannot be shown as a document. v1 renders HTML and Markdown.`)
 	})
