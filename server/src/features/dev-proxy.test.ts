@@ -7,6 +7,8 @@ import WebSocketImpl, { WebSocketServer } from 'ws'
 import { createDevProxyRouter, handleDevUpgrade } from './dev-proxy.ts'
 
 // Fake dev server.
+let sseOpen = 0
+let sseClosed = 0
 const dev = http.createServer((req, res) => {
 	if (req.url === '/') {
 		res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
@@ -20,6 +22,24 @@ const dev = http.createServer((req, res) => {
 		res.write('<!doctype html><html><body><h1>chunked')
 		res.write('-hi</h1></body></html>')
 		res.end()
+	} else if (req.url === '/sse') {
+		// A never-ending stream (the shape of an EventSource / long-poll /
+		// watch endpoint). Tracks whether its socket is torn down when the
+		// browser at the far end of the proxy goes away.
+		sseOpen += 1
+		req.socket.once('close', () => { sseClosed += 1 })
+		res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' })
+		res.write('data: hello\n\n')
+	} else if (req.url === '/echo' && req.method === 'POST') {
+		// Request bodies still have to reach upstream intact — the proxy only
+		// pipes when a body is actually present, so this is the guard on that
+		// branch.
+		const chunks: Buffer[] = []
+		req.on('data', (c) => chunks.push(c))
+		req.on('end', () => {
+			res.writeHead(200, { 'content-type': 'text/plain' })
+			res.end(`got:${Buffer.concat(chunks).toString('utf8')}`)
+		})
 	} else if (req.url === '/app.js') {
 		res.writeHead(200, { 'content-type': 'application/javascript' })
 		res.end('console.log("</body> not html")')
@@ -197,6 +217,30 @@ const wsBase = `ws://127.0.0.1:${(proxy.address() as { port: number }).port}`
 		client.once('close', (code) => resolve({ code }))
 	})
 	assert.ok(failure.code !== 101, 'refused WS upstream does not silently succeed the upgrade')
+}
+{
+	// A client that disconnects mid-stream must take the upstream connection
+	// with it. Under Bun every outbound HTTP request holds one of 256
+	// process-wide slots (BUN_CONFIG_MAX_HTTP_REQUESTS), so leaked upstreams
+	// eventually make EVERY later request — through this proxy or anywhere
+	// else in the server — queue forever rather than fail. That is exactly
+	// how ew-lsp-001 wedged on 2026-08-28: 256 stranded upstream sockets and
+	// every /dev/{port} URL hanging.
+	const ac = new AbortController()
+	const res = await fetch(`${base}/dev/${devPort}/sse`, { signal: ac.signal })
+	assert.equal(res.headers.get('content-type'), 'text/event-stream', 'stream is proxied through')
+	assert.equal(sseOpen, 1, 'upstream stream was opened')
+	ac.abort()
+	try { await res.text() } catch { /* aborted */ }
+
+	// Poll rather than sleep a fixed amount: teardown is a socket close, and
+	// the point is that it happens at all, promptly.
+	for (let i = 0; i < 50 && sseClosed === 0; i++) await new Promise((r) => setTimeout(r, 20))
+	assert.equal(sseClosed, 1, 'client disconnect tore down the upstream connection (no socket leak)')
+}
+{
+	const res = await fetch(`${base}/dev/${devPort}/echo`, { method: 'POST', body: 'payload' })
+	assert.equal(await res.text(), 'got:payload', 'request bodies are forwarded to the dev server')
 }
 dev.close(); proxy.close()
 console.log('dev-proxy.test.ts OK')

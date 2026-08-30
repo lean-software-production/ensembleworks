@@ -46,9 +46,14 @@ export function createDevProxyRouter(): express.Router {
 		// responses so poisoned entries get replaced, never revalidated.
 		delete headers['if-none-match']
 		delete headers['if-modified-since']
+		// True once the upstream response has been fully received, so the
+		// client-disconnect teardown below can tell "finished normally" (leave
+		// the socket alone) from "still streaming" (must be destroyed).
+		let upstreamDone = false
 		const upstream = http.request(
 			{ host: '127.0.0.1', port, method: req.method, path: upstreamPath, headers },
 			(ur) => {
+				ur.once('end', () => { upstreamDone = true })
 				const type = String(ur.headers['content-type'] ?? '')
 				// Never let the browser cache proxied dev responses. Root-absolute
 				// paths (/@vite/client, /src/*) are AMBIGUOUS at this origin: the
@@ -93,7 +98,55 @@ export function createDevProxyRouter(): express.Router {
 				res.status(502).type('html').send(errorPage('dev server unreachable', `Nothing is listening on localhost:${port}.`))
 			} else res.end()
 		})
-		req.pipe(upstream)
+		// The upstream request's lifetime MUST be bound to the client's: a
+		// client that goes away mid-flight (tab closed, navigation, an
+		// EventSource/long-poll stream the browser drops, curl giving up on a
+		// hung upstream) leaves this request with nobody reading it, and
+		// nothing else ever closes it — the connection stays ESTABLISHED for
+		// the life of the process.
+		//
+		// That leak is fatal rather than merely untidy, because under Bun every
+		// outbound HTTP request draws from ONE process-wide pool of 256
+		// concurrent requests (BUN_CONFIG_MAX_HTTP_REQUESTS), shared across
+		// every host and port. Leak 256 and the 257th request does not fail —
+		// it queues, forever. From the outside that reads as "the /dev proxy
+		// hangs, for every port", and it takes the whole server's outbound HTTP
+		// with it. Observed on ew-lsp-001 (2026-08-28): 256 stranded upstream
+		// sockets, mostly abandoned SSE streams to an embedded bb server, and
+		// every /dev/{port} URL hanging until the client timed out.
+		// Hooked to the CLIENT SOCKET's close (plus req 'aborted'), not res
+		// 'close': under Bun the response object never emits 'close' when the
+		// client goes away mid-stream, so a res-only listener silently never
+		// fires — exactly the runtime this ships on. The socket close is
+		// unambiguous on both runtimes. It also fires on ordinary keep-alive
+		// teardown long after a completed response, which is why the
+		// upstreamDone guard is load-bearing rather than an optimisation, and
+		// why the listener is removed once we're done with it (one live
+		// listener per in-flight request, not per request ever served on that
+		// socket).
+		const clientSocket = req.socket
+		const onClientGone = () => {
+			if (!upstreamDone) upstream.destroy()
+		}
+		clientSocket?.once('close', onClientGone)
+		req.once('aborted', onClientGone)
+		res.once('finish', () => clientSocket?.removeListener('close', onClientGone))
+
+		// Only pipe when there is actually a body to forward. `req.pipe(...)`
+		// is not free under Bun: piping the request stream SUPPRESSES the
+		// client-disconnect signal entirely — neither req 'aborted' nor the
+		// client socket's 'close' ever fires afterwards, so the teardown above
+		// would be dead code and the upstream would leak (see the pool note
+		// above). Bodyless requests — every GET, so every page load, asset and
+		// SSE stream, i.e. essentially all /dev traffic — take the end() path
+		// and keep their disconnect events. Requests WITH a body keep the pipe
+		// and therefore keep the old blind spot, which is the acceptable half
+		// of the trade: they are short request/response pairs, never the
+		// open-ended streams that actually stranded sockets here.
+		const len = req.headers['content-length']
+		const hasBody = (len !== undefined && len !== '0') || req.headers['transfer-encoding'] !== undefined
+		if (hasBody) req.pipe(upstream)
+		else upstream.end()
 	})
 	return router
 }
