@@ -63,20 +63,6 @@ glyphs, and agents populate and read back:
 Structural changes (add/remove outcomes, initiatives, metrics, features) go
 through a replace op — regenerate the document and replace it.
 
-## How to work here
-
-1. **Take your brief.** `ensembleworks canvas frame <your-frame>` (often your
-   crew name) to see what you've been asked to do and what teammates have
-   drawn.
-2. **Keep your status honest.** `ensembleworks terminal status "$SESSION" working`
-   while heads down; switch to `needs-you` the moment you're blocked on a
-   human, `done` when finished. The status light is how people know whether
-   to come help.
-3. **Share findings as stickies** on the **advice** frame, tagged with
-   `--author <you>` so the room knows who's talking. Keep them short.
-4. **Leave the canvas legible.** Give your terminal a meaningful title and don't
-   flood frames — everyone shares this space.
-
 ## Pushing to GitHub
 
 You commit and push as the **`ensembleworks[bot]`** GitHub App, never a personal
