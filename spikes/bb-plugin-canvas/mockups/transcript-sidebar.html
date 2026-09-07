@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mockup — room transcript as a global right panel</title>
+<style>
+  :root{
+    --bg:#111418; --panel:#191d23; --panel2:#1f242b; --border:#2a3038;
+    --text:#d7dde4; --muted:#7d8794; --accent:#5b9dff; --green:#3fb96b;
+  }
+  *{box-sizing:border-box; margin:0}
+  body{font:13px/1.5 -apple-system,'Segoe UI',sans-serif; background:var(--bg); color:var(--text); height:100vh; display:flex; flex-direction:column; overflow:hidden}
+
+  .topbar{height:38px; display:flex; align-items:center; gap:10px; padding:0 12px; background:var(--panel); border-bottom:1px solid var(--border); flex:none}
+  .topbar .logo{width:16px;height:16px;border-radius:4px;background:var(--accent)}
+  .topbar .title{font-weight:600}
+  .scene{margin-left:auto; display:flex; gap:4px}
+  .scene button{background:none;border:1px solid var(--border);color:var(--muted);padding:4px 12px;border-radius:6px;cursor:pointer;font:inherit;font-size:12px}
+  .scene button.active{background:var(--panel2);color:var(--text)}
+
+  .shell{flex:1; display:flex; min-height:0}
+  .sidebar{width:200px; flex:none; background:var(--panel); border-right:1px solid var(--border); padding:10px 8px; font-size:12px}
+  .side-h{font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); padding:6px 8px 4px}
+  .thread{padding:6px 8px; border-radius:6px; color:var(--muted); display:flex; align-items:center; gap:7px}
+  .thread.active{background:var(--panel2); color:var(--text)}
+  .thread .dot{width:7px;height:7px;border-radius:50%;flex:none}
+  .dot.run{background:var(--accent); animation:pulse 1.4s infinite} .dot.idle{background:var(--green)}
+  .canvas-row{padding:7px 8px; display:flex; align-items:center; gap:8px; color:var(--muted); margin-top:6px; border-top:1px solid var(--border)}
+  .canvas-row b{color:var(--text)}
+
+  .main{flex:1; min-width:0; display:flex; flex-direction:column}
+  .msg{max-width:560px; margin:12px 20px}
+  .msg .from{font-size:11px;color:var(--muted); margin-bottom:3px}
+  .msg .body{background:var(--panel2); border:1px solid var(--border); border-radius:10px; padding:9px 13px}
+  .msg.me .body{background:#22304a; border-color:#31456b}
+  code{background:#0d1013;padding:1px 5px;border-radius:4px;font-size:12px;color:#a9d1ff}
+  .composer{margin:auto 20px 14px; max-width:560px}
+  .cbox{background:var(--panel2); border:1px solid #3b4450; border-radius:12px; padding:10px 14px}
+  .pill{background:#2b3a52; color:#9fc1ff; border-radius:6px; padding:1px 6px; font-size:12px}
+  .caret{display:inline-block; width:1px; height:14px; background:var(--text); vertical-align:-2px; animation:blink 1s steps(1) infinite}
+
+  /* right panel — host thread panel with plugin tab */
+  .rpanel{width:340px; flex:none; border-left:1px solid var(--border); background:var(--panel); display:flex; flex-direction:column}
+  .rtabs{height:34px; flex:none; display:flex; align-items:center; gap:2px; padding:0 8px; border-bottom:1px solid var(--border)}
+  .rtab{padding:4px 10px; border-radius:6px; color:var(--muted); font-size:12px; display:flex; align-items:center; gap:6px}
+  .rtab.active{background:var(--panel2); color:var(--text)}
+  .rtab .live{width:6px;height:6px;border-radius:50%;background:var(--green); animation:pulse 1.4s infinite}
+  .rtab .x{color:#525c68; margin-left:2px}
+  .plusbtn{margin-left:auto; color:var(--muted); border:1px solid var(--border); border-radius:6px; width:22px; height:22px; display:flex; align-items:center; justify-content:center}
+
+  .tscroll{flex:1; overflow-y:auto; padding:12px 14px 8px; font-size:12.5px}
+  .daybreak{margin:2px 0 8px; font-size:10px; color:#525c68; text-transform:uppercase; letter-spacing:.08em}
+  .trow{display:flex; gap:8px; padding:2.5px 0; align-items:baseline}
+  .trow .ts{font:10px ui-monospace,monospace; color:#525c68; flex:none; width:34px}
+  .trow .sp{font-weight:600; flex:none; font-size:12px}
+  .sp.alice{color:#e2b06c} .sp.bob{color:#7fa8d9} .sp.cara{color:#9fd9a2} .sp.david{color:#c39fd9}
+  .trow .tx{color:var(--text)}
+  .trow.fresh{animation:fadein .5s}
+  .tfoot{flex:none; border-top:1px solid var(--border); padding:8px 12px; display:flex; gap:8px; align-items:center}
+  .tsearch{flex:1; background:var(--panel2); border:1px solid var(--border); border-radius:8px; padding:5px 10px; color:var(--muted); font-size:12px}
+  .tbtn{border:1px solid var(--border); background:var(--panel2); color:var(--muted); border-radius:8px; padding:5px 9px; font-size:11px; cursor:pointer}
+
+  /* launcher menu scene */
+  #launcher{position:absolute; right:352px; top:80px; width:230px; background:var(--panel); border:1px solid var(--border); border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.5); display:none; z-index:10}
+  .lhead{padding:7px 12px 4px; font-size:10px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted)}
+  .litem{padding:7px 12px; font-size:12.5px; display:flex; gap:8px; align-items:center}
+  .litem:hover{background:var(--panel2)}
+  .litem.hl{background:var(--panel2); outline:1px solid #31456b}
+
+  /* dock pill */
+  #dock{position:absolute; left:214px; bottom:14px; background:rgba(23,28,34,.92); border:1px solid var(--border); border-radius:14px; padding:6px 12px; display:flex; gap:10px; align-items:center; box-shadow:0 8px 28px rgba(0,0,0,.45); z-index:5; font-size:12px; color:var(--muted)}
+  #dock .b{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;border:1.5px solid #333c47}
+  #dock .b.speaking{border-color:var(--green); box-shadow:0 0 0 2px rgba(63,185,107,.3)}
+  #dock .tbicon{cursor:pointer; border:1px solid var(--border); border-radius:8px; padding:2px 7px}
+
+  @keyframes pulse{50%{opacity:.4}}
+  @keyframes blink{50%{opacity:0}}
+  @keyframes fadein{from{opacity:0; transform:translateY(4px)}}
+</style>
+</head>
+<body>
+
+<div class="topbar"><div class="logo"></div><div class="title">bb — EnsembleWorks · ENG-42 flaky sync test</div>
+  <div class="scene">
+    <button id="sc1" class="active" onclick="scene(1)">Transcript open</button>
+    <button id="sc2" onclick="scene(2)">How you open it</button>
+  </div>
+</div>
+
+<div class="shell">
+  <div class="sidebar">
+    <div class="side-h">Threads</div>
+    <div class="thread active"><span class="dot run"></span> ENG-42 flaky sync test</div>
+    <div class="thread"><span class="dot run"></span> Minutes — room scribe</div>
+    <div class="thread"><span class="dot idle"></span> Canvas: parity inventory</div>
+    <div class="canvas-row">🖊 <b>Canvas</b></div>
+  </div>
+
+  <div class="main">
+    <div class="msg"><div class="from">you · 14:02</div>
+      <div class="body">The retry in <code>sync-server.test.ts</code> masks the real race — can you fix the gate ordering?</div></div>
+    <div class="msg me"><div class="from">agent · 14:03</div>
+      <div class="body">Moved <code>ready()</code> ahead of <code>connect()</code>; suite green. Note: the room just discussed making arrows the parity priority — want me to fold EW12 into this branch's scope?</div></div>
+    <div class="composer">
+      <div class="cbox">No — separate card. Summarise <span class="pill">@transcript</span> last 15 min into EW12 instead<span class="caret"></span></div>
+    </div>
+  </div>
+
+  <div class="rpanel">
+    <div class="rtabs">
+      <div class="rtab active"><span class="live"></span> Room transcript <span class="x">✕</span></div>
+      <div class="rtab">Terminal</div>
+      <div class="plusbtn" id="plus">＋</div>
+    </div>
+    <div class="tscroll" id="tscroll">
+      <div class="daybreak">Live · room “main” · same panel on any thread</div>
+      <div class="trow"><span class="ts">13:59</span><span class="sp alice">alice</span><span class="tx">nice — pan feels native. what's left before we dogfood?</span></div>
+      <div class="trow"><span class="ts">14:00</span><span class="sp david">david</span><span class="tx">parity inventory first. we agreed v2 only, no tldraw</span></div>
+      <div class="trow"><span class="ts">14:02</span><span class="sp alice">alice</span><span class="tx">arrows are the top parity gap, then images. freehand can wait</span></div>
+      <div class="trow"><span class="ts">14:03</span><span class="sp david">david</span><span class="tx">put EW12 in NOW then. cara can you write the story?</span></div>
+      <div class="trow"><span class="ts">14:03</span><span class="sp cara">cara</span><span class="tx">on it — running intake against this discussion</span></div>
+    </div>
+    <div class="tfoot">
+      <div class="tsearch">Search transcript…</div>
+      <div class="tbtn">Jump to live</div>
+    </div>
+  </div>
+
+  <!-- scene 2: the launcher -->
+  <div id="launcher">
+    <div class="lhead">New tab · Actions</div>
+    <div class="litem">💬 Start side chat</div>
+    <div class="litem">🖥 Start terminal</div>
+    <div class="litem hl">📜 Room transcript <span style="margin-left:auto;font-size:10px;color:#525c68">plugin</span></div>
+    <div class="lhead" style="border-top:1px solid var(--border); margin-top:4px; padding-top:8px">Also via</div>
+    <div class="litem" style="font-size:11.5px; color:var(--muted)">⌘⇧P “room transcript”</div>
+    <div class="litem" style="font-size:11.5px; color:var(--muted)">📜 button on the AV dock</div>
+  </div>
+
+  <div id="dock">
+    <div class="b speaking" style="background:linear-gradient(140deg,#e2b06c,#9c5f3f)">👩🏽</div>
+    <div class="b" style="background:linear-gradient(140deg,#7fa8d9,#41618f)">🧔🏻</div>
+    <div class="b" style="background:linear-gradient(140deg,#c39fd9,#6b4f8f)">🙂</div>
+    <span class="tbicon" title="Open room transcript">📜</span>
+  </div>
+</div>
+
+<script>
+function scene(n){
+  document.getElementById('launcher').style.display = n === 2 ? 'block' : 'none';
+  document.getElementById('sc1').classList.toggle('active', n === 1);
+  document.getElementById('sc2').classList.toggle('active', n === 2);
+}
+const feed = [
+  ['cara',  'EW12 drafted — in INTAKE now'],
+  ['bob',   'agent in ENG-42 just offered to fold it in, told it no'],
+  ['alice', 'good — keep the card separate'],
+];
+let i = 0;
+setInterval(() => {
+  if (i >= feed.length) return;
+  const [sp, tx] = feed[i++];
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2,'0'), mm = String(now.getMinutes()).padStart(2,'0');
+  const row = document.createElement('div');
+  row.className = 'trow fresh';
+  row.innerHTML = `<span class="ts">${hh}:${mm}</span><span class="sp ${sp}">${sp}</span><span class="tx">${tx}</span>`;
+  const scroll = document.getElementById('tscroll');
+  scroll.appendChild(row);
+  scroll.scrollTop = scroll.scrollHeight;
+}, 3500);
+</script>
+</body>
+</html>
