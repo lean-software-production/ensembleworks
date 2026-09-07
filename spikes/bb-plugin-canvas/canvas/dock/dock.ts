@@ -66,19 +66,11 @@ import type {
   PluginContentScriptContext,
   PluginContentScriptDisposer,
 } from "@get-bb/plugin-sdk/app";
-import {
-  attachVideo,
-  detachVideo,
-  joinAudio,
-  leaveAudio,
-  setCameraEnabled,
-  setMuted,
-} from "../av-room.js";
+import { detachVideo } from "../av-room.js";
 import { canvasBus } from "../panel-bus.js";
-import type { AvTokenResult } from "../av.js";
 import { fetchIdentity } from "../identity.js";
-import { tabClientId } from "../tab-id.js";
 import { createContentScriptRpc } from "./rpc.js";
+import { createDockRoute } from "./route.js";
 import { createDockAnchor } from "./anchor.js";
 import { EXPANDED_AT_LOAD, nextExpanded, type ExpandEvent } from "./expand.js";
 import {
@@ -87,18 +79,14 @@ import {
   overflowLabel,
   mergeRoster,
   locateEveryone,
-  locatedTabs,
-  parseRoster,
   resolveSelfName,
   whereChoiceOf,
-  type DockBubble,
   type DockModel,
-  type DockRosterEntry,
   type WhereChoice,
 } from "./model.js";
-import { clientSideTook, shouldTryClientSide } from "./navigate.js";
 import { placePopoverBox } from "./popover-place.js";
 import { createDockRepaint } from "./repaint.js";
+import { EMPTY_MODEL, renderBubbles, type BubbleNode } from "./dom-render.js";
 import {
   chooseSqueeze,
   containerWidth,
@@ -107,29 +95,19 @@ import {
   type SqueezeTier,
 } from "./squeeze.js";
 import { createSyncScheduler } from "./sync-latch.js";
-import { DOCK_POPOVER_ID, DOCK_ROOT_ID, DOCK_STYLES } from "./styles.js";
+import { createDockDom } from "./dom.js";
+import { forgetRetiredPreferences } from "./preferences.js";
+import { wireDockControls } from "./controls.js";
 import {
   decideDoorVisible,
   decideTranscriptClick,
   transcriptDoor,
 } from "./transcript-door.js";
 import {
-  isOwnMutation,
-  planRowDecorations,
-  rowDecorationState,
   shouldScheduleSync,
-  threadRowPresence,
   type MutationShape,
-  type RowPresence,
-  type RowSlot,
 } from "./thread-status.js";
-import {
-  MAX_PATH_LENGTH,
-  jumpHref,
-  locationLabel,
-  parseLocation,
-  type BbLocation,
-} from "./where.js";
+import { createDockRows } from "./rows.js";
 
 /**
  * How often the strip re-reads room membership — and, since this feature,
@@ -156,7 +134,6 @@ const SPEAKING_TICK_MS = 250;
  * client-side routing (two animation frames, then this). Long enough for a
  * route that has to fetch before it paints anything, short enough that the
  * fallback reload does not feel like a hang. */
-const JUMP_VERIFY_MS = 150;
 
 /**
  * bb's page-header row: the 48px flex line that holds the page title on the
@@ -223,13 +200,10 @@ const ROW_DECORATION = "[data-canvas-row-presence]";
  */
 const POPOVER_NODE = "[data-canvas-dock-popover]";
 
-const ROOT_ID = DOCK_ROOT_ID;
-const STYLE_ID = "canvas-av-dock-styles";
 
 /** Preferences the floating pill persisted and the strip does not have. Cleared
  * once on mount so a window that used the old dock does not carry a dead
  * position (or a "collapsed" that now means the opposite) around forever. */
-const RETIRED_KEYS = ["canvas-av-dock:position", "canvas-av-dock:collapsed"];
 
 export function mountAvDock(
   context: PluginContentScriptContext,
@@ -244,7 +218,6 @@ export function mountAvDock(
   forgetRetiredPreferences();
 
   // ---- state ----------------------------------------------------------
-  let polledRoster: readonly DockRosterEntry[] = [];
   let expanded = EXPANDED_AT_LOAD;
   /** Bubble nodes by model key, kept across renders so a live <video> is never
    * torn down and re-created just because someone else started talking. Two
@@ -257,12 +230,15 @@ export function mountAvDock(
    * canvas panel uses. On a thread route there is no panel and no LiveKit
    * session, so without this the strip could not tell which bubble was you. */
   let selfIdentity: string | null = null;
+  const route = createDockRoute({
+    rpc,
+    isDisposed: () => disposed,
+    selfIdentity: () => selfIdentity,
+    render: () => render(),
+    onLocation: () => {},
+  });
   /** Where THIS tab is. Drives "in this thread" and stops the strip offering to
    * send you where you already are. */
-  let here: BbLocation | null = null;
-  /** The pathname `here` was parsed from, so a route change is a string
-   * compare rather than a re-parse. */
-  let herePath: string | null = null;
   /**
    * How many DOM writes the row decorations have made this generation.
    *
@@ -273,7 +249,6 @@ export function mountAvDock(
    * happening is the answer. Read off
    * `#canvas-av-dock[data-dock-row-writes]`.
    */
-  let rowWrites = 0;
   /**
    * Which tab of each person the strip last decided to point at.
    *
@@ -300,158 +275,28 @@ export function mountAvDock(
    */
   let squeeze: SqueezeTier = chooseSqueeze(measureContainer(headerRow()));
 
-  // ---- DOM ------------------------------------------------------------
-  const style = document.createElement("style");
-  style.id = STYLE_ID;
-  style.textContent = DOCK_STYLES;
-  document.head.appendChild(style);
 
-  const root = document.createElement("div");
-  root.id = ROOT_ID;
-  root.dataset.canvasDock = "";
-  // Set here and not only in setStatus(): the status line is empty until
-  // something goes wrong, and `[data-dock-status=""]` — the rule that hides it
-  // — cannot match an attribute that is absent.
-  root.dataset.dockStatus = "";
-  root.dataset.dockExpanded = "false";
-  root.dataset.dockAnchor = "fixed";
-  // The tier the faces are drawn at, mirrored out for the same reason as its
-  // neighbours: it is what makes "why is this strip only showing three faces"
-  // answerable by looking, rather than by instrumenting a measurement nobody
-  // can see. The stylesheet switches the face geometry on it too, so it has to
-  // exist before the first paint and not only after the first change.
-  root.dataset.dockSqueeze = squeeze;
-  // Where the row decorations stand, made visible. "There are no thread rows
-  // to decorate" (another plugin owns the list) and "this is broken" produce
-  // the same empty sidebar from outside the app and need different fixes — the
-  // job `data-dock-row-status` used to do for the feature-detected host API
-  // this replaced. See `rowDecorationState`.
-  root.dataset.dockRowDecor = "idle";
-  root.dataset.dockRows = "0";
-  root.dataset.dockRowWrites = "0";
-
-  // The strip. A <button>, so it is one keyboard-reachable control with one
-  // job: open the popover. That is also why the faces inside it are <span>s —
-  // a button inside a button is not valid HTML, and the fly-to-cursor
-  // affordance belongs on the big faces in the popover where you can see them.
-  const strip = document.createElement("button");
-  strip.type = "button";
-  strip.className = "dock-strip";
-  strip.dataset.canvasDockStrip = "";
-  strip.setAttribute("aria-haspopup", "dialog");
-  strip.setAttribute("aria-expanded", "false");
-  // THE DIALOG IS NO LONGER A DESCENDANT OF ITS TRIGGER, so the relationship
-  // has to be stated instead of being read off the tree. `aria-haspopup` says
-  // "this opens a dialog" and `aria-expanded` says "it is open"; neither says
-  // WHICH dialog, and until this change containment answered that. It no longer
-  // can — the popover is a child of <body>, arbitrarily far from the strip in
-  // reading order.
-  //
-  // `aria-controls` is the honest amount to claim. Its support in screen
-  // readers is uneven (it is a hint, not a guaranteed jump), but it is the
-  // attribute that MEANS this, and stating a true relationship weakly is better
-  // than not stating it. `aria-owns` was considered and rejected: it would
-  // reparent the popover into the strip in the accessibility tree, which is a
-  // stronger claim than "these are related" and a known source of confusing
-  // traversal when the visual and a11y orders disagree — which, with a
-  // body-parented fixed box, they now do.
-  //
-  // NOT VERIFIED WITH A SCREEN READER. There is no browser here.
-  strip.setAttribute("aria-controls", DOCK_POPOVER_ID);
-
-  const bubbles = document.createElement("span");
-  bubbles.className = "dock-bubbles";
-  const overflow = document.createElement("span");
-  overflow.className = "dock-overflow";
-  // The quiet "you are in a call" indication, and the affordance that keeps the
-  // popover reachable on a page where the room happens to be empty.
-  const callDot = micGlyph();
-  callDot.classList.add("dock-call");
-  strip.append(bubbles, overflow, callDot);
-
-  // THE POPOVER IS NOT INSIDE THE STRIP. It is a child of <body> with a root id
-  // of its own (canvas/dock/styles.ts holds both ids, so the sheet and these
-  // elements cannot drift), because the user reported it "showing behind the
-  // left side menu" and the screenshot cuts it off dead on the line where bb's
-  // left pane ends — pixels deleted, not dimmed, which is an ancestor's
-  // `overflow: hidden` rather than a lost z-index. Making it `position: fixed`
-  // in place would NOT have been enough: a fixed box is re-based and re-clipped
-  // by any ancestor carrying `transform`, `filter`, `backdrop-filter`,
-  // `will-change` or `contain`. Leaving the chain is what makes the escape
-  // unconditional. See canvas/dock/styles.ts's popover block, and
-  // popover-place.ts's header for how much of that was observed (none of it —
-  // there is no browser in this spike).
-  const popover = document.createElement("div");
-  popover.id = DOCK_POPOVER_ID;
-  popover.className = "dock-popover";
-  popover.dataset.canvasDockPopover = "";
-  popover.setAttribute("role", "dialog");
-  popover.setAttribute("aria-label", "Canvas room audio");
-  // Mirrored from the root, where it is also written and where external
-  // read-backs grep for it. The stylesheet's "hide the status line while it is
-  // empty" rule used to key on the root's copy and match a descendant; the
-  // status line is no longer a descendant of the root, so the rule reads this
-  // one instead. Set here as well as in `setStatus` for the same reason the
-  // root's is: `[data-dock-status=""]` cannot match an attribute that is
-  // absent, and the line is empty until something goes wrong.
-  popover.dataset.dockStatus = "";
-  popover.hidden = true;
-
-  const faces = document.createElement("div");
-  faces.className = "dock-faces";
-
-  const controls = document.createElement("div");
-  controls.className = "dock-controls";
-  const audioButton = button("dock-btn dock-audio", "", "");
-  const micButton = button("dock-btn dock-mic", "", "");
-  const cameraButton = button("dock-btn dock-camera", "", "");
-
-  // The door to the room transcript, and it lives HERE rather than beside the
-  // strip in bb's header row. The header is the scarce resource — on a phone
-  // that row holds the page title and every action bb itself wants, and a
-  // second glyph of ours is one the user pays for on every route. The popover
-  // is not scarce: it is a surface we open on demand and it already has a row
-  // of controls this is one of.
-  //
-  // No 📜 in the label. Its three neighbours are plain words, so a lone emoji
-  // here would read as the odd one out — and it is the same objection
-  // `micGlyph` below records for the strip: an emoji is a different font at a
-  // different baseline on every platform, which is not something to put in a
-  // row that has to line up.
-  //
-  // Hidden on every route where there is no door to walk through, which is
-  // every non-thread route: the transcript panel is a thread-surface object,
-  // the slot that relays the opener is not rendered anywhere else, and bb's own
-  // palette row hides itself on those routes for the same reason. See
-  // canvas/dock/transcript-door.ts.
-  const scribe = button("dock-btn dock-transcript", "Transcript", "Open the room transcript");
-  // `data-canvas-dock-scribe` SURVIVES THE MOVE. Deploy verification and
-  // external selectors grep for this attribute and for the `scribe` name; this
-  // is the same button with a new home, and renaming its handle to match a
-  // cosmetic change would break every one of them for nothing.
-  scribe.dataset.canvasDockScribe = "";
-  scribe.setAttribute("aria-label", "Open the room transcript");
-  scribe.hidden = true;
-
-  controls.append(audioButton, micButton, cameraButton, scribe);
-
-  const status = document.createElement("p");
-  status.className = "dock-status";
-  // A polite live region: the one thing here a screen reader must not miss is
-  // "LiveKit is not configured", which is the answer on every fresh install.
-  status.setAttribute("role", "status");
-  status.setAttribute("aria-live", "polite");
-
-  popover.append(faces, controls, status);
-  root.append(strip);
-  // Straight onto <body>, once, at mount. It does NOT travel with the strip:
-  // anchor.ts relocates `root` between three placements and one of them
-  // (`fixed`) also appends to <body>, but it only ever moves the one node it
-  // was given, so the popover is neither carried along nor duplicated. What
-  // makes that safe rather than merely true is that a relocation folds the
-  // popover — `syncAnchor` applies `reanchored`, which expand.ts turns into
-  // "closed" — so it is never left hanging where the strip used to be.
-  document.body.appendChild(popover);
+  const {
+    style,
+    root,
+    strip,
+    bubbles,
+    overflow,
+    popover,
+    faces,
+    audioButton,
+    micButton,
+    cameraButton,
+    scribe,
+    status,
+  } = createDockDom(squeeze);
+  const rows = createDockRows({
+    root,
+    roster: route.roster,
+    selfIdentity: () => selfIdentity,
+    isDisposed: () => disposed,
+    clearHostStatus: context.experimental_setThreadRowStatus,
+  });
 
   // ---- placement ------------------------------------------------------
   //
@@ -666,7 +511,7 @@ export function mountAvDock(
       // Free-riding on the coalesced pass the observer already drives: a bb
       // route change is a client-side DOM swap, so it always lands here, and
       // the check itself is a string compare.
-      checkRoute();
+      route.check();
       syncAnchor();
       // AFTER the anchor, deliberately: a strip that just moved between the
       // header row and the fixed corner has to be measured against the
@@ -676,7 +521,7 @@ export function mountAvDock(
       // mutations that move the strip, so the rows ride the same coalesced
       // pass rather than growing a second scheduler. rAF cannot be trusted
       // (see sync-latch.ts), and the 2s poll drives this too.
-      syncRowDecorations();
+      rows.sync();
       // LAST, and it has to be here rather than only in `render`. A window
       // resize or a pane drag that does not cross a squeeze boundary changes
       // neither the tier nor the anchor, so neither `syncSqueeze` nor
@@ -912,7 +757,7 @@ export function mountAvDock(
    */
   function currentModels(): DockModels {
     const { roster, av } = canvasBus.snapshot();
-    const merged = mergeRoster(roster, polledRoster);
+    const merged = mergeRoster(roster, route.roster());
     // Decided ONCE per render, with the last decision in hand, and handed to
     // the faces — `syncThreadRowStatuses` deliberately asks a different
     // question of the same roster (the union of tabs, not one tab per person).
@@ -960,13 +805,13 @@ export function mountAvDock(
     // The sidebar rows, driven from the same roster as the faces so the two
     // can never disagree about who is where — and, since this change, drawn
     // with the same circles.
-    syncRowDecorations();
+    rows.sync();
 
     renderBubbles(models.strip, bubbles, stripNodes, {
       video: false,
       pan: false,
       jump: false,
-      here,
+      here: route.current(),
     });
     // The popover's faces exist only while it is open, so exactly one <video>
     // per person is ever attached, and folding detaches them all rather than
@@ -978,7 +823,7 @@ export function mountAvDock(
       video: true,
       pan: true,
       jump: true,
-      here,
+      here: route.current(),
     });
 
     // "+N" while there are faces for it to be more than, a plain count when
@@ -1046,83 +891,6 @@ export function mountAvDock(
    * tab per tick instead of two, and a location that can never be newer or
    * older than the membership it arrived with.
    *
-   * The title is this tab's own `document.title`, which is how another client
-   * can render "in “glossary measure”" without this plugin ever looking a
-   * thread up. `where.ts` uses it to name a THREAD and — since the canvas
-   * panel began writing its current page name there (canvas/pages/
-   * page-title.ts, design doc D-5) — a canvas PAGE, which is the only route by
-   * which a page name can reach another client at all: the path carries a page
-   * id, never a name. So the blast radius of a client asserting a silly one is
-   * a silly thread or page name.
-   */
-  function selfReport(): {
-    clientId: string;
-    name?: string;
-    path?: string;
-    title?: string;
-    focused: boolean;
-  } {
-    const report: {
-      clientId: string;
-      name?: string;
-      path?: string;
-      title?: string;
-      focused: boolean;
-    } = {
-      clientId: tabClientId(),
-      // WHICH of this person's windows they are actually in. Recency cannot
-      // answer that — every window polls on its own 2s timer, so "reported
-      // last" flips between two live windows as their phases drift, which is
-      // what made one person's whereabouts oscillate. Only one window in the
-      // session holds the focus. Sent on every poll rather than on a focus
-      // event, because it rides a request this tab was making anyway.
-      focused: document.hasFocus(),
-    };
-    if (selfIdentity !== null) report.name = selfIdentity;
-    const path = window.location.pathname;
-    // A path the wire would reject (same cap, same rooted-path rule as the
-    // schema in server.ts) costs this tab its location, never its whole poll.
-    if (path.startsWith("/") && !path.startsWith("//") && path.length <= MAX_PATH_LENGTH) {
-      report.path = path;
-    }
-    const title = document.title.trim();
-    if (title.length > 0) report.title = title.slice(0, 200);
-    return report;
-  }
-
-  async function refreshRoster(): Promise<void> {
-    if (disposed) return;
-    try {
-      const result = await rpc.call("canvas_roster", selfReport());
-      polledRoster = parseRoster(result);
-      render();
-    } catch {
-      // Membership is an ornament on most pages: a failed poll keeps the last
-      // answer rather than emptying the strip, and the next tick retries.
-    }
-  }
-
-  /**
-   * Notice that THIS tab has moved.
-   *
-   * Route changes in bb are client-side, so there is no load event to hang
-   * this on; what there IS, already, is the rAF-coalesced callback the anchor
-   * observer drives on every DOM mutation, plus popstate for back/forward. A
-   * pathname compare is a string compare, so riding those costs nothing.
-   *
-   * It pushes IMMEDIATELY rather than waiting for the next 2s tick, because the
-   * instant you change page is exactly the instant everybody else's answer
-   * about you becomes wrong.
-   */
-  function checkRoute(): void {
-    if (disposed) return;
-    const path = window.location.pathname;
-    if (path === herePath) return;
-    herePath = path;
-    here = parseLocation(path);
-    void refreshRoster();
-    render();
-  }
 
   /**
    * Put the strip's own faces on the sidebar rows of threads people are
@@ -1162,270 +930,16 @@ export function mountAvDock(
    * right is not touched, which is both the cost argument and — since we are
    * mutating the subtree the observer watches — the termination argument.
    */
-  function syncRowDecorations(): void {
-    if (disposed) return;
-    const { roster, av } = canvasBus.snapshot();
-    const selfName = resolveSelfName(roster, av.self, selfIdentity);
-    const presence = threadRowPresence(
-      locatedTabs(mergeRoster(roster, polledRoster)).map((tab) => ({
-        name: tab.name,
-        location: parseLocation(tab.path),
-      })),
-      selfName,
-    );
-
-    let failed = false;
-    let rows: { readonly threadId: string; readonly inset: HTMLElement }[] = [];
-    try {
-      // The row is the link's parent; the title span is where the faces go.
-      // A link whose row has no title span is simply not decoratable — bb
-      // restyled it, or it is some other kind of row — and is dropped rather
-      // than guessed at. Nothing is written to the host row here: the join
-      // between a plan step and a node is the array index, held in this
-      // function, so the sidebar carries no bookkeeping of ours.
-      rows = Array.from(document.querySelectorAll<HTMLElement>(THREAD_ROW_LINK))
-        .map((link) => ({
-          threadId: link.dataset.sidebarThreadId ?? "",
-          inset: link.parentElement?.querySelector<HTMLElement>(ROW_TITLE_INSET) ?? null,
-        }))
-        .filter(
-          (row): row is { threadId: string; inset: HTMLElement } =>
-            row.threadId !== "" && row.inset !== null,
-        );
-
-      const slots: RowSlot[] = rows.map((row) => {
-        const existing = decorationOf(row.inset);
-        return {
-          threadId: row.threadId,
-          signature: existing === null ? null : (existing.dataset.canvasRowPresence ?? ""),
-          leading: existing !== null && row.inset.firstChild === existing,
-        };
-      });
-
-      for (const step of planRowDecorations(slots, presence)) {
-        const inset = rows[step.index]!.inset;
-        rowWrites += 1;
-        if (step.action === "remove") {
-          decorationOf(inset)?.remove();
-          continue;
-        }
-        if (step.action === "move") {
-          // A MOVE of a node already in the document, never a second mount —
-          // the same guarantee anchor.ts relies on for the strip itself.
-          inset.insertBefore(decorationOf(inset)!, inset.firstChild);
-          continue;
-        }
-        // add / update. Painted BEFORE it is in the document on the add path,
-        // so the insertion is one mutation record carrying one node that is
-        // wholly ours — which is the shape the loop guard recognises.
-        const node = decorationOf(inset) ?? createRowDecoration();
-        paintRowDecoration(node, step.presence);
-        if (inset.firstChild !== node) inset.insertBefore(node, inset.firstChild);
-      }
-    } catch {
-      // A host restyle that breaks a selector must cost the rows, never the
-      // strip: this runs inside the same pass that re-places the strip itself.
-      failed = true;
-    }
-
-    root.dataset.dockRowDecor = rowDecorationState(rows.length, failed);
-    root.dataset.dockRows = String(document.querySelectorAll(ROW_DECORATION).length);
-    root.dataset.dockRowWrites = String(rowWrites);
-  }
-
-  /**
-   * The one decoration on a row, and the guarantee that there is only one.
-   *
-   * Structurally there can never be two — a node is only ever CREATED when the
-   * row reports no signature at all, and every other path moves the node it
-   * found. This sweeps anyway, because the cost is a `querySelectorAll` on a
-   * span with two children and the failure it covers (a generation whose
-   * disposer did not run) is invisible otherwise.
-   */
-  function decorationOf(inset: HTMLElement): HTMLElement | null {
-    const found = inset.querySelectorAll<HTMLElement>(ROW_DECORATION);
-    for (let index = 1; index < found.length; index += 1) found[index]!.remove();
-    return found[0] ?? null;
-  }
-
-  /** Drop every decoration this generation put on a row. The nodes live in the
-   * host's DOM, so nothing else will: a disposer that left them behind would
-   * decorate rows on behalf of a plugin that is no longer running, with faces
-   * that stopped updating the moment it stopped. */
-  function clearRowDecorations(): void {
-    for (const node of Array.from(document.querySelectorAll(ROW_DECORATION))) {
-      node.remove();
-    }
-  }
-
-  /**
-   * Clear anything the RETIRED host-status call path may have left set.
-   *
-   * A one-time sweep over the rows currently in the sidebar, because that is
-   * the only enumeration available: the surface is a write with no read-back,
-   * so a generation that crashed before its disposer ran left statuses this
-   * generation cannot name. The host clears them on generation deactivate and
-   * the old disposer cleared them too, so this is belt and braces — but a stale
-   * eye sitting next to our circles would read as this feature being half
-   * migrated. Passing null is the SDK's own clear operation.
-   */
-  function retireHostRowStatuses(): void {
-    const clear = context.experimental_setThreadRowStatus;
-    if (clear === undefined) return;
-    try {
-      const links = Array.from(document.querySelectorAll<HTMLElement>(THREAD_ROW_LINK));
-      for (const link of links) {
-        const threadId = link.dataset.sidebarThreadId;
-        if (threadId !== undefined && threadId !== "") clear(threadId, null);
-      }
-    } catch {
-      // A host that no longer accepts the call is a host with nothing to clear.
-    }
-  }
-
-  /**
-   * Go to where somebody is: try client-side, fall back to a real navigation.
-   *
-   * The attempt is a pushed history entry plus a `popstate`, which bb's router
-   * answers — but that is an undocumented behaviour of somebody else's router,
-   * so it is verified rather than assumed (canvas/dock/navigate.ts's
-   * `clientSideTook`, and the tests that pin the fallback). Checked on the next
-   * two frames and then once more after JUMP_VERIFY_MS.
-   *
-   * The fallback is `location.replace`, not `assign`: the pushState above
-   * already added a history entry for this path, so replacing it leaves the
-   * back button pointing at where the user actually came from rather than at a
-   * page that never rendered.
-   */
-  function jumpTo(path: string): void {
-    const before = { path: window.location.pathname, title: document.title };
-    try {
-      window.history.pushState({}, "", path);
-      window.dispatchEvent(new PopStateEvent("popstate", { state: {} }));
-    } catch {
-      // A router that will not even take a pushed entry is not one to verify.
-      window.location.assign(path);
-      return;
-    }
-
-    let attempt = 0;
-    const verify = (): void => {
-      // The generation went away mid-jump; the page is being torn down and a
-      // navigation now would fight the teardown.
-      if (disposed) return;
-      const after = { path: window.location.pathname, title: document.title };
-      if (clientSideTook(before, after, path)) {
-        checkRoute();
-        return;
-      }
-      attempt += 1;
-      if (attempt === 1) {
-        requestAnimationFrame(verify);
-        return;
-      }
-      if (attempt === 2) {
-        window.setTimeout(verify, JUMP_VERIFY_MS);
-        return;
-      }
-      window.location.replace(path);
-    };
-    requestAnimationFrame(verify);
-  }
-
-  // ---- controls -------------------------------------------------------
-
-  audioButton.addEventListener("click", () => {
-    if (canvasBus.snapshot().av.status === "live") {
-      setStatus("");
-      void leaveAudio();
-      return;
-    }
-    setStatus("");
-    // Read the self entry at CLICK time rather than closing over a render: the
-    // canvas panel may have mounted since, and a token minted without a
-    // clientId falls back to the server's own local name.
-    const self = canvasBus.snapshot().roster.find((member) => member.isSelf);
-    void joinAudio(async () =>
-      avTokenFrom(
-        await rpc.call(
-          "canvas_av_token",
-          self === undefined ? {} : { clientId: self.clientId },
-        ),
-      ),
-    ).then((outcome) => {
-      if (outcome.ok) {
-        void refreshRoster();
-        return;
-      }
-      // The unconfigured case is a setup step, not a failure, and it says which
-      // knobs to turn. It is shown in the popover itself rather than as a
-      // toast: the strip is on every page and its own status line is
-      // guaranteed to be wherever the button the user just pressed is.
-      setStatus(
-        outcome.reason === "not_configured"
-          ? `LiveKit not configured — ${outcome.detail}`
-          : `Could not join audio: ${outcome.detail}`,
-      );
-    });
-  });
-
-  micButton.addEventListener("click", () => {
-    void setMuted(!canvasBus.snapshot().av.muted);
-  });
-
-  cameraButton.addEventListener("click", () => {
-    void setCameraEnabled(!canvasBus.snapshot().av.cameraOn);
-  });
-
-  /**
-   * Fly the canvas camera to somebody.
-   *
-   * Inherited from the canvas page's own avatar stack, which this strip
-   * replaced — it was the one behaviour that lived only there. `canvasBus.panTo`
-   * is a no-op when no canvas panel is listening, which is most bb pages, so
-   * this is safe to wire on every face everywhere.
-   */
-  faces.addEventListener("click", (event: MouseEvent) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const face = target.closest<HTMLElement>("[data-canvas-dock-pan]");
-    const clientId = face?.dataset.canvasDockPan;
-    if (clientId === undefined || clientId === "") return;
-    canvasBus.panTo(clientId);
-    apply({ type: "pan" });
-  });
-
-  /**
-   * Jump to where somebody is — the SECOND affordance on a face, below the
-   * video, and deliberately not the same gesture as the one above it: the face
-   * flies the canvas camera to their cursor, this link moves bb.
-   *
-   * It is a real `<a href>`, so middle-click, ⌘-click, right-click → copy link
-   * address and the browser's status bar all work by this handler declining to
-   * act (`shouldTryClientSide`). Only a plain left click is intercepted, and
-   * only to spare the user a full reload.
-   */
-  faces.addEventListener("click", (event: MouseEvent) => {
-    const target = event.target;
-    if (!(target instanceof Element)) return;
-    const link = target.closest<HTMLAnchorElement>("a[data-canvas-dock-jump]");
-    const path = link?.dataset.canvasDockJump;
-    if (path === undefined || path === "") return;
-    if (
-      !shouldTryClientSide({
-        button: event.button,
-        ctrlKey: event.ctrlKey,
-        metaKey: event.metaKey,
-        shiftKey: event.shiftKey,
-        altKey: event.altKey,
-        defaultPrevented: event.defaultPrevented,
-      })
-    ) {
-      return; // The browser's gesture, untouched.
-    }
-    event.preventDefault();
-    apply({ type: "jump" });
-    jumpTo(path);
+  wireDockControls({
+    audioButton,
+    micButton,
+    cameraButton,
+    faces,
+    rpc,
+    setStatus,
+    refreshRoster: route.refresh,
+    apply,
+    jumpTo: route.jumpTo,
   });
 
   // ---- subscriptions --------------------------------------------------
@@ -1449,7 +963,7 @@ export function mountAvDock(
   const pollTimer = setInterval(() => {
     // A background window's strip is not being looked at, and every bb window
     // runs one of these.
-    if (!document.hidden) void refreshRoster();
+    if (!document.hidden) void route.refresh();
     // OUTSIDE that guard, deliberately. This is the backstop for everything
     // that rides the coalesced pass, and the surface most likely to drop the
     // frame it is standing in for is exactly a hidden one.
@@ -1498,13 +1012,13 @@ export function mountAvDock(
   // Back/forward, and anything else that moves the URL without touching the
   // DOM first. Cheap, and it means a route change never waits for a mutation.
   const onPopState = (): void => {
-    checkRoute();
+    route.check();
   };
   window.addEventListener("popstate", onPopState);
 
   const onVisibility = (): void => {
     if (document.hidden) return;
-    void refreshRoster();
+    void route.refresh();
     // requestAnimationFrame does not run in a hidden tab, so a route change
     // made in a background window lands here with the strip still pointing at
     // the old row.
@@ -1523,21 +1037,21 @@ export function mountAvDock(
     render();
     // Re-report immediately: the first poll went out unnamed, and a member the
     // room cannot name is a member nobody can see.
-    void refreshRoster();
+    void route.refresh();
   });
 
   // Before the first render, so a status left behind by the retired call path
   // is gone by the time our own circles arrive.
-  retireHostRowStatuses();
+  rows.retire();
   syncAnchor();
   // Not for the tier — that was seeded from a measurement above — but for the
   // observer: without a first pass nothing is being watched until the next
   // mutation or the 2s tick, and a pane dragged in that window would move the
   // row silently.
   syncSqueeze();
-  checkRoute();
+  route.check();
   render();
-  void refreshRoster();
+  void route.refresh();
 
   return () => {
     disposed = true;
@@ -1554,7 +1068,7 @@ export function mountAvDock(
     clearInterval(speakingTimer);
     document.removeEventListener("visibilitychange", onVisibility);
     window.removeEventListener("popstate", onPopState);
-    clearRowDecorations();
+    rows.clear();
     document.removeEventListener("keydown", onKeyDown);
     document.removeEventListener("pointerdown", onPointerDown);
     // Detach every tile before the nodes go, so livekit-client is not left
@@ -1588,290 +1102,6 @@ export function mountAvDock(
 }
 
 // ---------------------------------------------------------------------------
-// The sidebar row decoration
-// ---------------------------------------------------------------------------
-
-/**
- * An empty decoration node, ready to be painted.
- *
- * `role="img"` plus an `aria-label` is what makes the accessible name readable
- * WITHOUT hovering, which is the defect being fixed: the retired host status
- * put the names in a label on a glyph that a hover replaced. The circles
- * themselves are `aria-hidden` — two initials read out one letter at a time
- * are noise next to "you, matt viewing".
- *
- * `pointer-events: none` (in the stylesheet) is not decoration: the row's
- * overlay `<a>` is `position:absolute; inset:0` and therefore paints ABOVE
- * this static span, so a click here already reaches the row (measured with
- * `elementFromPoint` on the running app — the hit at the face's centre is the
- * row's own link). Declining pointer events makes that a guarantee rather than
- * a consequence of paint order.
- */
-function createRowDecoration(): HTMLElement {
-  const node = document.createElement("span");
-  node.className = "canvas-row-presence";
-  node.setAttribute("role", "img");
-  // Present but empty until painted, so a node that somehow reached the
-  // document unpainted reads as a stale signature and gets rewritten rather
-  // than being mistaken for an absent decoration.
-  node.dataset.canvasRowPresence = "";
-  return node;
-}
-
-/**
- * Paint one row's faces.
- *
- * Torn down and rebuilt rather than reconciled child-by-child, which is the
- * opposite of what `renderBubbles` does for the strip — and correct here for
- * the reason that forced it there: the strip's faces can hold a live `<video>`
- * that must never be re-inserted. These hold two initials. The reconciliation
- * that matters happens a level up, where a row whose faces have not changed is
- * not repainted at all.
- *
- * The signature is written LAST. It is the plugin's read-back, so it must not
- * claim to describe a decoration that is only half painted.
- */
-function paintRowDecoration(node: HTMLElement, presence: RowPresence): void {
-  node.textContent = "";
-  for (const face of presence.faces) {
-    const circle = document.createElement("span");
-    circle.className = "canvas-row-face";
-    circle.dataset.canvasRowFace = face.name;
-    circle.dataset.canvasRowSelf = face.isSelf ? "true" : "false";
-    // The same name-derived hue the strip's bubble and the canvas cursor use.
-    // Inline, because it is per-person data and cannot be a class.
-    circle.style.background = face.color;
-    circle.textContent = face.initials;
-    circle.setAttribute("aria-hidden", "true");
-    node.appendChild(circle);
-  }
-  if (presence.overflow > 0) {
-    const more = document.createElement("span");
-    more.className = "canvas-row-more";
-    more.textContent = `+${presence.overflow}`;
-    more.setAttribute("aria-hidden", "true");
-    node.appendChild(more);
-  }
-  // Both, deliberately. The aria-label is the one that works — the row's
-  // overlay link is on top, so a native tooltip may never fire — but the title
-  // costs nothing and is the first thing a person inspecting the DOM reads.
-  node.title = presence.label;
-  node.setAttribute("aria-label", presence.label);
-  node.dataset.canvasRowPresence = presence.signature;
-}
-
-// ---------------------------------------------------------------------------
-// Bubbles
-// ---------------------------------------------------------------------------
-
-const EMPTY_MODEL: DockModel = { bubbles: [], overflow: 0 };
-
-interface BubbleNode {
-  readonly root: HTMLElement;
-  readonly initials: HTMLSpanElement;
-  video: HTMLVideoElement | null;
-  /** The face plus the whereabouts line under it, when there is one. The
-   * <video> must stay attached to `root`, so the two are separate nodes and
-   * this is the one the row inserts. Null on the strip's own faces, which are
-   * bare. */
-  readonly wrapper: HTMLElement | null;
-  /** "jump to them", when their location is known and they are not you. */
-  readonly link: HTMLAnchorElement | null;
-  /** The same sentence when it is NOT a link — you, or somebody whose location
-   * is unknown or stale. Where they are is still worth reading. */
-  readonly whereabouts: HTMLSpanElement | null;
-}
-
-interface BubbleOptions {
-  /** Whether a camera publisher's face becomes a live tile here. Only the
-   * popover's faces do — one attached <video> per person, ever. */
-  readonly video: boolean;
-  /** Whether a face is a button that flies the canvas camera to that person.
-   * The strip's faces are not: they are inside the strip's own <button>. */
-  readonly pan: boolean;
-  /** Whether each face carries a whereabouts line BELOW it — per the ask, the
-   * jump link is a separate affordance from the face, not the face itself. */
-  readonly jump: boolean;
-  /** The VIEWER's own location, which is what turns "in thread thr_x" into
-   * "in this thread". */
-  readonly here: BbLocation | null;
-}
-
-/**
- * Reconcile a bubble row against the model.
- *
- * Node-by-node rather than innerHTML, for one reason: a `<video>` removed from
- * the document and re-added loses its stream and flashes black. Someone else
- * starting to talk must not blink everyone's camera.
- */
-function renderBubbles(
-  model: DockModel,
-  container: HTMLElement,
-  nodes: Map<string, BubbleNode>,
-  options: BubbleOptions,
-): void {
-  const wanted = new Set(model.bubbles.map((bubble) => bubble.key));
-  for (const [key, node] of [...nodes]) {
-    if (wanted.has(key)) continue;
-    if (node.video !== null) detachVideo(key, node.video);
-    (node.wrapper ?? node.root).remove();
-    nodes.delete(key);
-  }
-
-  model.bubbles.forEach((bubble, index) => {
-    let node = nodes.get(bubble.key);
-    if (node === undefined) {
-      node = createBubble(options);
-      nodes.set(bubble.key, node);
-    }
-    updateBubble(node, bubble, options);
-    // Only touch the DOM when the node is not already where the model wants
-    // it. A `<video>` re-inserted into the tree — even into the same parent —
-    // can drop a frame or pause, and the order is alphabetical and therefore
-    // unchanged on the overwhelming majority of renders.
-    const outer = node.wrapper ?? node.root;
-    if (container.children[index] !== outer) {
-      container.insertBefore(outer, container.children[index] ?? null);
-    }
-  });
-}
-
-function createBubble(options: BubbleOptions): BubbleNode {
-  const root = document.createElement(options.pan ? "button" : "span");
-  if (root instanceof HTMLButtonElement) root.type = "button";
-  root.className = "dock-bubble";
-  const initials = document.createElement("span");
-  initials.className = "dock-initials";
-  initials.setAttribute("aria-hidden", "true");
-  root.appendChild(initials);
-  if (!options.jump) {
-    return { root, initials, video: null, wrapper: null, link: null, whereabouts: null };
-  }
-
-  const wrapper = document.createElement("div");
-  wrapper.className = "dock-face";
-  // A REAL LINK, with a real href. That is what makes middle-click, ⌘-click,
-  // "copy link address" and the browser's status bar work — none of which a
-  // <button> with a click handler can offer, however much script you write.
-  const link = document.createElement("a");
-  link.className = "dock-jump";
-  const whereabouts = document.createElement("span");
-  whereabouts.className = "dock-jump dock-jump-inert";
-  wrapper.append(root, link, whereabouts);
-  return { root, initials, video: null, wrapper, link, whereabouts };
-}
-
-function updateBubble(
-  node: BubbleNode,
-  bubble: DockBubble,
-  options: BubbleOptions,
-): void {
-  node.root.dataset.canvasDockBubble = bubble.key;
-  node.root.dataset.canvasDockSpeaking = bubble.isSpeaking ? "true" : "false";
-  node.root.dataset.canvasDockSelf = bubble.isSelf ? "true" : "false";
-  node.root.style.background = bubble.color;
-  node.initials.textContent = bubble.initials;
-
-  if (options.pan) {
-    // Disabled when that person has no cursor on the canvas: they are
-    // connected but have not moved a pointer, so there is nowhere honest to
-    // jump to, and inventing a destination would teach the gesture to lie.
-    const canPan = bubble.canPan && bubble.clientId !== null;
-    if (canPan && bubble.clientId !== null) {
-      node.root.dataset.canvasDockPan = bubble.clientId;
-    } else {
-      delete node.root.dataset.canvasDockPan;
-    }
-    if (node.root instanceof HTMLButtonElement) node.root.disabled = !canPan;
-    node.root.title = canPan
-      ? `${bubble.label} — jump to their cursor`
-      : `${bubble.label} — no cursor on the canvas yet`;
-  } else {
-    node.root.title = bubble.label;
-  }
-  node.root.setAttribute("aria-label", bubble.label);
-
-  if (node.link !== null && node.whereabouts !== null) {
-    updateWhereabouts(node.link, node.whereabouts, bubble, options.here);
-  }
-
-  if (options.video && bubble.hasVideo && node.video === null) {
-    const video = document.createElement("video");
-    video.className = "dock-video";
-    video.autoplay = true;
-    video.playsInline = true;
-    // Your own tile is your own camera: muting it is the difference between a
-    // self-view and a feedback loop.
-    video.muted = true;
-    // attachVideo answers false when the track vanished between the bus update
-    // and this frame — in which case we keep initials rather than showing a
-    // black rectangle.
-    if (attachVideo(bubble.key, video)) {
-      node.root.appendChild(video);
-      node.video = video;
-    }
-  } else if ((!options.video || !bubble.hasVideo) && node.video !== null) {
-    detachVideo(bubble.key, node.video);
-    node.video.remove();
-    node.video = null;
-  }
-  node.root.dataset.canvasDockVideo = node.video === null ? "false" : "true";
-}
-
-
-/**
- * The line under a face: where that person is, as a link when it is somewhere
- * this browser can honestly be sent.
- *
- * NO LINK FOR YOU, and no link for somebody whose location is unknown or stale
- * — the server nulls a location past LOCATION_STALE_MS precisely so this can
- * decline rather than send a teammate to the page you were on a minute ago. In
- * both cases the SENTENCE still shows: where somebody is is worth reading even
- * when there is nowhere to click.
- *
- * `href` is set from `jumpHref`, which refuses anything that is not a rooted
- * same-origin path — this string came off the wire from another client.
- */
-function updateWhereabouts(
-  link: HTMLAnchorElement,
-  inert: HTMLSpanElement,
-  bubble: DockBubble,
-  here: BbLocation | null,
-): void {
-  const there = bubble.path === null ? null : parseLocation(bubble.path);
-  const label = locationLabel(there, here, bubble.title);
-  const href = bubble.isSelf ? null : jumpHref(bubble.path);
-
-  if (href === null) {
-    link.hidden = true;
-    link.removeAttribute("href");
-    delete link.dataset.canvasDockJump;
-    // And the sentence goes with them. The node is display:none and carries no
-    // href, so only textContent scraping could ever see it — but a stale "in
-    // \u201cUnread thread\u201d" left lying inside the DOM is a wrong answer to
-    // anyone who reads the DOM, which is exactly what a test harness does.
-    link.textContent = "";
-    link.removeAttribute("title");
-    inert.hidden = false;
-    inert.textContent = label;
-    inert.title = bubble.isSelf ? `You are ${label}` : `${bubble.label} — ${label}`;
-    return;
-  }
-
-  inert.hidden = true;
-  inert.textContent = "";
-  link.hidden = false;
-  link.href = href;
-  // The path is carried in a data attribute as well as the href so the click
-  // handler reads exactly what was rendered, not the absolute URL the DOM
-  // resolves `.href` to.
-  link.dataset.canvasDockJump = href;
-  link.textContent = label;
-  link.title = `${bubble.label} — ${label}. Click to go there.`;
-  link.setAttribute("aria-label", `Go to ${bubble.name} — ${label}`);
-}
-
-// ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
 
@@ -1902,91 +1132,6 @@ function measureContainer(row: Element | null): number {
   );
 }
 
-function button(className: string, text: string, title: string): HTMLButtonElement {
-  const element = document.createElement("button");
-  element.type = "button";
-  element.className = className;
-  element.textContent = text;
-  element.title = title;
-  return element;
-}
-
-/** The strip's mic glyph: the quiet "you are in a call" tell, and the thing
- * left to click when the room is empty. Drawn rather than an emoji, because an
- * emoji in bb's title bar is a different font at a different baseline on every
- * platform. */
-function micGlyph(): SVGSVGElement {
-  const NS = "http://www.w3.org/2000/svg";
-  const svg = document.createElementNS(NS, "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "2");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  svg.setAttribute("aria-hidden", "true");
-  for (const d of [
-    "M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z",
-    "M5 11a7 7 0 0 0 14 0",
-    "M12 18v3",
-  ]) {
-    const path = document.createElementNS(NS, "path");
-    path.setAttribute("d", d);
-    svg.appendChild(path);
-  }
-  return svg;
-}
-
-/* WHAT THE STRIP SAYS ABOUT THE ROOM USED TO BE HERE — a private `describe()`
-   plus a "no bubbles means nobody is here" ternary in `render`. It is
-   `describeRoom` in canvas/dock/model.ts now, with tests/dock.test.ts on it,
-   because the `bare` tier made that second half false: a strip drawing no faces
-   for a room full of people announced "nobody here yet" to all of them. */
-
-/** The `canvas_av_token` result, narrowed. A shape we cannot read is a genuine
- * fault (not the unconfigured case), so it throws and av-room turns it into a
- * `failed` outcome the status line can show. */
-function avTokenFrom(value: unknown): AvTokenResult {
-  if (typeof value !== "object" || value === null) {
-    throw new Error("canvas_av_token returned something that is not a result");
-  }
-  const ok = Reflect.get(value, "ok");
-  if (ok === false) {
-    const detail = Reflect.get(value, "detail");
-    return {
-      ok: false,
-      error: "not_configured",
-      detail: typeof detail === "string" ? detail : "LiveKit is not configured.",
-    };
-  }
-  const url = Reflect.get(value, "url");
-  const token = Reflect.get(value, "token");
-  const room = Reflect.get(value, "room");
-  const identity = Reflect.get(value, "identity");
-  if (
-    ok !== true ||
-    typeof url !== "string" ||
-    typeof token !== "string" ||
-    typeof room !== "string" ||
-    typeof identity !== "string"
-  ) {
-    throw new Error("canvas_av_token returned a token this client cannot read");
-  }
-  return { ok: true, url, token, room, identity };
-}
-
-/** Drop the floating pill's persisted state. The dock used to remember where it
- * had been dragged to and whether it was collapsed; the strip is furniture in
- * bb's bar, has nowhere to be dragged to, and starts folded on every page load
- * by construction (canvas/dock/expand.ts). */
-function forgetRetiredPreferences(): void {
-  try {
-    for (const key of RETIRED_KEYS) window.localStorage.removeItem(key);
-  } catch {
-    // Private mode, a blocked origin, a quota — none of which should cost the
-    // user their strip.
-  }
-}
 
 // ---------------------------------------------------------------------------
 // THE TRANSCRIPT BUTTON, AND WHY IT TOOK A RELAY
