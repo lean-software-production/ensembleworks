@@ -4,7 +4,10 @@
   "type": "module",
   "scripts": {
     "test": "vitest run",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "audit:quality": "tsx scripts/quality-audit.ts",
+    "audit:quality:json": "tsx scripts/quality-audit.ts --json",
+    "audit:quality:compare": "tsx scripts/quality-audit.ts --compare"
   },
   "engines": {
     "bb": ">=0.40",

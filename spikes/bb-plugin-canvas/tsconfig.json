@@ -28,6 +28,7 @@
     "tests",
     "components",
     "lib",
-    "hooks"
+    "hooks",
+    "scripts"
   ]
 }
