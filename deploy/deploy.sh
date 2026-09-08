@@ -17,6 +17,7 @@
 #                         checksum, ew_boot_check, print the swap plan. No ssh/swap.
 #   DEPLOY_FETCH_DIR=dir  read release assets from a local dir instead of curl (tests/dry-run).
 #   EW_ALLOW_ERA_CROSS=1  permit the one sanctioned cross-era swap (cutover.sh sets it).
+#   EW_SYNC_MEMORY_MAX=8G override the derived sync MemoryMax (any systemd size: 8G, 8192M).
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
@@ -24,7 +25,8 @@ SSH_TARGET="${1:?usage: deploy.sh <ssh-target> <version> [--dry-run]}"
 VERSION="${2:?usage: deploy.sh <ssh-target> <version> [--dry-run]}"
 VERSION="${VERSION#v}" # accept 0.2.0 or v0.2.0
 TAG="v${VERSION}"
-DRY_RUN=0; [ "${3:-}" = "--dry-run" ] && DRY_RUN=1
+DRY_RUN=0
+[ "${3:-}" = "--dry-run" ] && DRY_RUN=1
 APP_USER="${APP_USER:-ensembleworks}"
 REPO_SLUG="${REPO_SLUG:-lean-software-production/ensembleworks}"
 KEEP="${KEEP:-3}"
@@ -54,14 +56,18 @@ AGENT_USER="${AGENT_USER:-ensembleworks-agent}"
 if [ "$DRY_RUN" = 1 ]; then
 	# shellcheck disable=SC1091 # relative path, resolved via `cd` to repo root above
 	. deploy/lib.sh
-	scratch="$(mktemp -d)"; trap 'rm -rf "$scratch"' EXIT
+	scratch="$(mktemp -d)"
+	trap 'rm -rf "$scratch"' EXIT
 	NEW="${scratch}/${VERSION}"
 	echo "==> [dry-run] fetching v${VERSION} into ${NEW}"
 	ew_fetch_release "${VERSION}" "${NEW}" "${REPO_SLUG}" ""
 	cp deploy/posture-era "${NEW}/.ew-era"
 	echo "==> [dry-run] boot-check"
 	# shellcheck disable=SC2015 # C is a bare `exit 1` after echo — B (echo) never fails
-	ew_boot_check "${NEW}" "" && echo "    boot-check OK" || { echo "    boot-check FAILED" >&2; exit 1; }
+	ew_boot_check "${NEW}" "" && echo "    boot-check OK" || {
+		echo "    boot-check FAILED" >&2
+		exit 1
+	}
 	echo "==> [dry-run] swap plan:"
 	echo "    release dir : ~${APP_USER}/releases/${VERSION}"
 	echo "    new era     : $(cat "${NEW}/.ew-era")"
@@ -117,6 +123,7 @@ KEEP='${KEEP}'
 EDGE_PORT='${EDGE_PORT}'
 SHARED_BROWSER='${SHARED_BROWSER}'
 EW_ALLOW_ERA_CROSS='${EW_ALLOW_ERA_CROSS:-0}'
+EW_SYNC_MEMORY_MAX='${EW_SYNC_MEMORY_MAX:-}'
 AGENT_USER='${AGENT_USER}'
 APP_HOME="\$(getent passwd "\${APP_USER}" | cut -d: -f6)"
 RELEASES="\${APP_HOME}/releases"
@@ -202,17 +209,55 @@ DB_DIR="\$(sudo grep '^DATABASE_DIR=' "\$STORAGE_ENV" | tail -n1 | cut -d= -f2-)
 sudo install -d -m 0755 "\$(dirname "\$DB_DIR")"
 sudo install -d -m 0700 -o "\${APP_USER}" -g "\${APP_USER}" "\$DB_DIR"
 
+# ---- derive the sync memory ceiling ------------------------------------------
+# A FIXED size cannot be right across a fleet spanning 7.7 -> 23 GiB of RAM: a
+# value that contains a leak on the small boxes throttles a healthy server on the
+# big one, and a value sized for the big one sits above the entire slice envelope
+# on the small ones, so it can never fire. Derive it per box instead.
+#
+# Prefer half the slice's own MemoryHigh. The unit already declares
+# Slice=ensembleworks.slice, so that envelope is the honest denominator: staying
+# well under it is what makes sync trip its OWN ceiling first, leaving the other
+# services in the slice untouched by one service's leak. Fall back to a fraction
+# of MemTotal where the host has not set an envelope (a plain box, CI, a
+# single-tenant install) so this is never load-bearing on the host's config.
+#
+# The floor is the other guard rail: below it the cap is likelier to kill a
+# healthy sync than to contain a leak, so clamp rather than emit a hostile value.
+SYNC_MEMORY_MAX="\${EW_SYNC_MEMORY_MAX:-}"
+if [ -z "\$SYNC_MEMORY_MAX" ]; then
+  slice_high="\$(systemctl show ensembleworks.slice -p MemoryHigh --value 2>/dev/null || true)"
+  case "\$slice_high" in
+    '' | *[!0-9]*) slice_high='' ;; # unset, "infinity", or anything non-numeric
+  esac
+  if [ -n "\$slice_high" ]; then
+    sync_max_mb=\$((slice_high / 1048576 / 2))
+  else
+    sync_max_mb=\$((\$(awk '/^MemTotal:/{printf "%d", \$2 / 1024}' /proc/meminfo) * 35 / 100))
+  fi
+  [ "\$sync_max_mb" -lt 1024 ] && sync_max_mb=1024
+  SYNC_MEMORY_MAX="\${sync_max_mb}M"
+fi
+echo "    sync MemoryMax: \${SYNC_MEMORY_MAX}"
+
 # ---- install prod systemd units -----------------------------------------------
 # Units are committed templates in deploy/systemd/prod/ (scp'd to /tmp); sed fills
-# in @APP_USER@ / @APP_HOME@. Slice membership + per-service MemoryLow are folded
-# into each [Service] (the host owns the ensembleworks.slice envelope; these are
-# its sub-division, summing <= the envelope MemoryLow). \${ENSEMBLEWORKS_URL} in the
-# scribe unit stays literal for systemd to expand — sed only touches @TOKENS@.
+# in @APP_USER@ / @APP_HOME@ / @SYNC_MEMORY_MAX@. Slice membership + per-service
+# MemoryLow are folded into each [Service] (the host owns the ensembleworks.slice
+# envelope; these are its sub-division, summing <= the envelope MemoryLow).
+# \${ENSEMBLEWORKS_URL} in the scribe unit stays literal for systemd to expand —
+# sed only touches @TOKENS@.
 echo "==> installing prod systemd units"
-# Drop stale per-service drop-ins from older deploys (slice/MemoryLow now in-unit).
+# Drop stale per-service drop-ins from older deploys (slice/MemoryLow/MemoryMax now
+# in-unit). NOTE this is unconditional and recursive: a drop-in written here by any
+# OTHER owner does not survive a deploy either. That is deliberate — per-service
+# resource settings have exactly one owner, this file — but it means a host-side
+# cap must be expressed in the unit above (or via EW_SYNC_MEMORY_MAX), never as an
+# ensembleworks-*.service.d/ drop-in, which would silently evaporate on the next
+# deploy and leave a false sense of containment.
 sudo rm -rf /etc/systemd/system/ensembleworks-sync.service.d /etc/systemd/system/ensembleworks-term.service.d /etc/systemd/system/ensembleworks-files.service.d /etc/systemd/system/ensembleworks-scribe.service.d /etc/systemd/system/ensembleworks-discord.service.d
 for u in ensembleworks-sync ensembleworks-term ensembleworks-files ensembleworks-scribe ensembleworks-discord; do
-  sed -e "s|@APP_USER@|\${APP_USER}|g" -e "s|@APP_HOME@|\${APP_HOME}|g" "/tmp/\${u}.service" | sudo tee "/etc/systemd/system/\${u}.service" >/dev/null
+  sed -e "s|@APP_USER@|\${APP_USER}|g" -e "s|@APP_HOME@|\${APP_HOME}|g" -e "s|@SYNC_MEMORY_MAX@|\${SYNC_MEMORY_MAX}|g" "/tmp/\${u}.service" | sudo tee "/etc/systemd/system/\${u}.service" >/dev/null
 done
 
 # ---- install the OPTIONAL shared browser (neko) ------------------------------
