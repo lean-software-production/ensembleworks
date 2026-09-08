@@ -1,0 +1,178 @@
+import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
+import { AccessToken } from "livekit-server-sdk";
+import { attachVerdictFor } from "./agent-attach.js";
+import { AgentLinks, threadTitleFor } from "./agents.js";
+import {
+  avIdentityFor,
+  LIVEKIT_ROOM,
+  livekitConfigFrom,
+  NOT_CONFIGURED_DETAIL,
+  TOKEN_TTL,
+} from "./av.js";
+import { base64ToBytes } from "./base64.js";
+import { threadListArgsFor, threadPickerOptions } from "./thread-picker.js";
+import { DEFAULT_QUERY_LIMIT, TranscriptStore } from "./transcript.js";
+import { AGENT_CHANNEL } from "./wire.js";
+import type { rpcContract } from "../server.js";
+import type { CanvasRoomHost } from "./room.js";
+import type { LocationBook } from "./locations.js";
+
+export interface RpcHandlerDependencies {
+  readonly room: CanvasRoomHost;
+  readonly locations: LocationBook;
+  readonly agents: AgentLinks;
+  readonly transcript: TranscriptStore;
+  readonly localName: string;
+  readonly settings: { get(): Promise<Record<string, string | undefined>> };
+  readonly sdk: BbPluginApi["sdk"];
+  readonly resolveProjectId: () => Promise<string>;
+  readonly realtime: { publish(channel: string, payload: unknown): void };
+  readonly log: {
+    info(message: string): void;
+  };
+}
+
+export function createRpcHandlers(
+  deps: RpcHandlerDependencies,
+): PluginRpcHandlers<typeof rpcContract> {
+  const {
+    room,
+    locations,
+    agents,
+    transcript,
+    localName,
+    settings,
+    resolveProjectId,
+    realtime,
+    log,
+  } = deps;
+
+  return {
+    canvas_join: ({ clientId, name }) => {
+      room.join(clientId, Date.now(), name);
+      return { room: room.room };
+    },
+    canvas_frame: ({ clientId, data }) => {
+      room.frame(clientId, base64ToBytes(data), Date.now());
+      return { ok: true } as const;
+    },
+    canvas_ping: ({ clientId }) => ({
+      connected: room.touch(clientId, Date.now()),
+    }),
+    canvas_leave: ({ clientId }) => {
+      room.leave(clientId);
+      return { ok: true } as const;
+    },
+    canvas_run_note: async ({ shapeId, text }) => {
+      const projectId = await resolveProjectId();
+      const thread = await deps.sdk.threads.spawn({
+        projectId,
+        environment: { type: "project-default" },
+        prompt: text,
+        title: threadTitleFor(text),
+      });
+      const link = await agents.record(shapeId, thread.id, "running");
+      realtime.publish(AGENT_CHANNEL, link);
+      log.info(
+        `note ${shapeId} -> thread ${thread.id} in project ${projectId}`,
+      );
+      return link;
+    },
+    canvas_attach_thread: async ({ shapeId, threadId }) => {
+      const canvasProjectId = await resolveProjectId();
+      const thread = await deps.sdk.threads.get({ threadId });
+      const verdict = attachVerdictFor({
+        thread,
+        shapeId,
+        holderShapeId: agents.shapeForThread(threadId),
+        canvasProjectId,
+      });
+      if (!verdict.ok) throw new Error(verdict.message);
+      const link = await agents.record(shapeId, threadId, verdict.status);
+      realtime.publish(AGENT_CHANNEL, link);
+      log.info(
+        `shape ${shapeId} attached to thread ${threadId} (${verdict.status})`,
+      );
+      return link;
+    },
+    canvas_thread_options: async () => {
+      const projectId = await resolveProjectId();
+      const rows = await deps.sdk.threads.list(threadListArgsFor(projectId));
+      const attachedBy = Object.fromEntries(
+        agents.links.map((link) => [link.threadId, link.shapeId]),
+      );
+      return { options: threadPickerOptions(rows, attachedBy) };
+    },
+    canvas_unlink_agent: async ({ shapeId }) => {
+      const link = await agents.remove(shapeId);
+      if (link === null) return { unlinked: false };
+      realtime.publish(AGENT_CHANNEL, { shapeId, unlinked: true });
+      log.info(`note ${shapeId} unlinked from thread ${link.threadId}`);
+      return { unlinked: true };
+    },
+    canvas_agents: () => ({ links: agents.links }),
+    canvas_roster: (report) => {
+      const now = Date.now();
+      if (report !== null && report.path !== undefined) {
+        locations.seen(
+          {
+            clientId: report.clientId,
+            name: report.name ?? null,
+            path: report.path,
+            title: report.title ?? null,
+            focused: report.focused === true,
+          },
+          now,
+        );
+      }
+      locations.sweep(now);
+      return { members: locations.members(room.identities, now) };
+    },
+    canvas_av_token: async ({ clientId }) => {
+      const config = livekitConfigFrom(await settings.get());
+      if (config === null) {
+        log.info("canvas_av_token: LiveKit is not configured");
+        return {
+          ok: false as const,
+          error: "not_configured" as const,
+          detail: NOT_CONFIGURED_DETAIL,
+        };
+      }
+      const identity = avIdentityFor(clientId, room.identities, localName);
+      const accessToken = new AccessToken(config.apiKey, config.apiSecret, {
+        identity,
+        name: identity,
+        ttl: TOKEN_TTL,
+      });
+      accessToken.addGrant({
+        room: LIVEKIT_ROOM,
+        roomJoin: true,
+        canPublish: true,
+        canSubscribe: true,
+      });
+      return {
+        ok: true as const,
+        url: config.url,
+        token: await accessToken.toJwt(),
+        room: LIVEKIT_ROOM,
+        identity,
+      };
+    },
+    canvas_transcript_query: ({ sinceMs, search, speaker, limit }) => ({
+      entries: transcript.query({
+        sinceMs,
+        search,
+        speaker,
+        limit: limit ?? DEFAULT_QUERY_LIMIT,
+      }),
+    }),
+    canvas_debug: () => ({
+      room: room.room,
+      shapeIds: room.peer.doc.listShapes().map((shape) => shape.id),
+      clientIds: room.clientIds,
+      identities: room.identities,
+      pendingUpdates: room.pendingUpdates,
+      snapshotBytes: room.peer.snapshot().length,
+    }),
+  };
+}
