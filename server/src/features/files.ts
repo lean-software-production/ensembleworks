@@ -62,14 +62,40 @@ export function createFilesRouter(): express.Router {
 		// so those hops always ask upstream for the whole file.
 		const rangeable = ASSETS.has(ext) && !DOC_HTML.has(ext) && !DOC_MD.has(ext)
 		const inboundRange = rangeable ? req.header('range') : undefined
+		// `fetch()` keeps reading its response after the browser has abandoned the
+		// downstream response unless we explicitly cancel it. For media scrubbing,
+		// that turns every discarded range into an orphaned file-server transfer
+		// (and, depending on the fetch implementation, a buffered response body).
+		// Tie the outbound request to the client socket rather than `res.close`:
+		// Bun does not reliably emit the latter for a mid-stream disconnect. Remove
+		// the socket listener on a normal finish because keep-alive sockets live on
+		// to serve unrelated requests.
+		const abort = new AbortController()
+		let responseFinished = false
+		const clientSocket = req.socket
+		const onClientGone = () => {
+			if (!responseFinished) abort.abort()
+		}
+		const cleanUpClientGone = () => {
+			clientSocket?.removeListener('close', onClientGone)
+			req.removeListener('aborted', onClientGone)
+		}
+		clientSocket?.once('close', onClientGone)
+		req.once('aborted', onClientGone)
+		res.once('finish', () => {
+			responseFinished = true
+			cleanUpClientGone()
+		})
 
 		let upstream: Response
 		try {
 			// v1: no timeout — a hung file-server hangs the request (localhost, single user).
 			upstream = await fetch(`http://127.0.0.1:${filesPort()}/${rel}`, {
 				headers: inboundRange ? { range: inboundRange } : undefined,
+				signal: abort.signal,
 			})
 		} catch {
+			if (abort.signal.aborted) return
 			return void sendPage(502, 'File server unavailable', 'The file-server (:8791) is not responding. Is the stack service running?')
 		}
 		if (upstream.status === 403) return void sendPage(403, 'Forbidden', 'That path escapes the served home directory.')
@@ -103,7 +129,13 @@ export function createFilesRouter(): express.Router {
 			// Double cast: the workspace's DOM lib and node:stream/web each declare
 			// their own ReadableStream and TS won't bridge them directly.
 			const web = upstream.body as unknown as Parameters<typeof Readable.fromWeb>[0]
-			return void Readable.fromWeb(web).pipe(res)
+			const body = Readable.fromWeb(web)
+			// Aborting the fetch makes the node wrapper error; consume that error so
+			// a client navigating away cannot become an uncaught process error.
+			body.on('error', () => {
+				if (!res.writableEnded) res.destroy()
+			})
+			return void body.pipe(res)
 		}
 		return void sendPage(200, 'Unsupported type', `"${ext || '(no extension)'}" cannot be shown as a document. v1 renders HTML and Markdown.`)
 	})

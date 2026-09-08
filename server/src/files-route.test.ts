@@ -18,8 +18,23 @@ async function main() {
 	await writeFile(path.join(home, 'docs', 's.css'), 'body{color:red}')
 	await writeFile(path.join(home, 'docs', 'x.bin'), 'xx')
 	await writeFile(path.join(home, 'docs', 'clip.mp4'), 'ABCDEFGHIJ') // 10 bytes
+	let resolveSlowUpstreamGone: (() => void) | undefined
+	const slowUpstreamGone = new Promise<void>((resolve) => { resolveSlowUpstreamGone = resolve })
 	const fs = http.createServer(async (req, res) => {
 		const u = new URL(req.url ?? '/', 'http://i')
+		if (u.pathname === '/docs/slow.mp4') {
+			// A deliberately endless upstream transfer. The downstream client below
+			// aborts after one chunk; its abort must reach this server rather than
+			// leaving the sync proxy fetching the rest in the background.
+			const done = () => resolveSlowUpstreamGone?.()
+			req.once('aborted', done)
+			req.socket.once('close', done)
+			res.writeHead(200, { 'content-type': 'video/mp4', 'content-length': String(1024 * 1024 * 1024) })
+			res.write(Buffer.alloc(64 * 1024))
+			const interval = setInterval(() => res.write(Buffer.alloc(64 * 1024)), 10)
+			req.socket.once('close', () => clearInterval(interval))
+			return
+		}
 		const served = await serveFile(home, u.pathname.replace(/^\/+/, ''), { range: req.headers.range })
 		sendServedFile(res, served, req.method)
 	})
@@ -66,6 +81,24 @@ async function main() {
 	assert.equal(rPart.headers.get('content-range'), 'bytes 2-4/10')
 	assert.equal(rPart.headers.get('content-length'), '3')
 	assert.equal(await rPart.text(), 'CDE')
+
+	// Browser navigation/scrubbing aborts the downstream response. The proxy
+	// must abort its fetch too, so the file-server does not keep streaming an
+	// unobserved media body (the source of #79's retained transfers).
+	await new Promise<void>((resolve, reject) => {
+		const client = http.get(`${base}/files/docs/slow.mp4`, (response) => {
+			response.once('data', () => {
+				response.destroy()
+				client.destroy()
+				resolve()
+			})
+		})
+		client.once('error', reject)
+	})
+	await Promise.race([
+		slowUpstreamGone,
+		new Promise<never>((_, reject) => setTimeout(() => reject(new Error('upstream transfer survived downstream abort')), 1_000)),
+	])
 
 	// unsatisfiable range → 416 with the size, not a 404 page
 	const r416 = await fetch(`${base}/files/docs/clip.mp4`, { headers: { range: 'bytes=99-200' } })
