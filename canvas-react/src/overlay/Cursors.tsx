@@ -30,6 +30,23 @@
 // render the same color on every client and every render, which only a pure
 // function of a stable input gives you.
 //
+// PAGE FILTERING (OPT-IN — `currentPageId`): the canvas is multi-page, and
+// a peer's `RemotePresence.page` says which page they are on (adapted down
+// from canvas-sync's optional `Presence.page`; see that field's doc comment
+// for why it is optional and why absent means "unknown"). Three states, and
+// the distinction between the last two is the whole point:
+//   - `currentPageId` prop ABSENT  -> no filtering at all, today's behaviour
+//     exactly. This is what keeps client/src/canvas-v2 (which passes no such
+//     prop) rendering unchanged.
+//   - prop present, peer's `page` PRESENT and DIFFERENT -> hidden. A cursor
+//     drifting through a page you are not on is noise at best; a presence
+//     surface that reports it as "here" is wrong and looks right.
+//   - prop present, peer's `page` ABSENT or null -> STILL SHOWN. Unknown is
+//     not "elsewhere". An older publisher that predates `Presence.page`, or
+//     one that has not published a page yet, must not be silently erased.
+// This is a render-time filter over network-supplied state — no gesture, no
+// FSM, no local interaction of its own.
+//
 // OFF-VIEWPORT: a cursor whose screen position falls outside
 // [0,width]x[0,height] is OMITTED entirely (not clamped to an edge
 // indicator) — an explicit v1 simplification (OURS): tldraw's own product
@@ -42,6 +59,12 @@ export interface RemotePresence {
   readonly cursor: { readonly x: number; readonly y: number } | null
   readonly name?: string
   readonly color?: string
+  /** Which canvas page this peer is on, or null/absent for "unknown".
+   * Structurally the same slice as canvas-sync's optional `Presence.page`
+   * (which this package may not import — see the header's RemotePresence
+   * note), narrowed by the caller's adapter. Only consulted when
+   * `CursorsProps.currentPageId` is supplied. */
+  readonly page?: string | null
 }
 
 export interface CursorsProps {
@@ -49,6 +72,11 @@ export interface CursorsProps {
   readonly selfKey: string
   readonly camera: Camera
   readonly viewportSize: ViewportSize
+  /** The page the LOCAL view is showing. OPTIONAL: omit it and no page
+   * filtering happens at all (see the header's PAGE FILTERING note) — an
+   * omission is "this caller is not page-aware", never "the local page is
+   * unknown, hide everyone". */
+  readonly currentPageId?: string
 }
 
 // Fixed palette — arbitrary but stable; swapping these values never changes
@@ -74,8 +102,22 @@ function isOnScreen(point: { x: number; y: number }, size: ViewportSize): boolea
   return point.x >= 0 && point.x <= size.width && point.y >= 0 && point.y <= size.height
 }
 
-export function Cursors({ presence, selfKey, camera, viewportSize }: CursorsProps) {
-  const entries = Object.entries(presence).filter(([key]) => key !== selfKey)
+/** True when this peer should be hidden because they are demonstrably on a
+ * DIFFERENT page. Both "the caller is not page-aware" (`currentPageId`
+ * undefined) and "the peer has not said" (`page` null/undefined) fall
+ * through to false — only a known-and-different pair hides anyone. Exported
+ * so cursors.test.ts can assert the three states directly rather than only
+ * inferring them from rendered markup. */
+export function isOnOtherPage(peerPage: string | null | undefined, currentPageId: string | undefined): boolean {
+  if (currentPageId === undefined) return false
+  if (peerPage === null || peerPage === undefined) return false
+  return peerPage !== currentPageId
+}
+
+export function Cursors({ presence, selfKey, camera, viewportSize, currentPageId }: CursorsProps) {
+  const entries = Object.entries(presence).filter(
+    ([key, peer]) => key !== selfKey && !isOnOtherPage(peer.page, currentPageId),
+  )
   if (entries.length === 0) return null
 
   return (

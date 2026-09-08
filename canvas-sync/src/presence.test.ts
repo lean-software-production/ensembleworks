@@ -139,4 +139,48 @@ function cursorAt(x: number, y: number): Presence {
 // NOTE: no timeout-expiry assertions here (wall-clock, non-deterministic) —
 // EphemeralStore's internal timer is out of scope for this deterministic suite.
 
+
+// --- (6) D-4 (docs/plans/2026-09-05-bb-canvas-multi-page-design.md): `page`
+// round-trips live and through an encodeAll()/apply() bootstrap (mirroring
+// case (5)'s shape for `editing`), AND — the half that actually matters for
+// compatibility — a publisher that PREDATES this field never sets the key,
+// so a new reader sees the key ABSENT ("unknown") rather than a decode error
+// and rather than inheriting a stale page. Both directions are asserted here
+// because both are load-bearing: the dock filters on this value, and
+// filtering on a wrongly-inherited page is exactly the "wrong and it looks
+// right" failure D-4 exists to avoid. ---
+{
+  const a = new PresenceStore('peerA')
+  const b = new PresenceStore('peerB')
+  a.onLocalUpdate((bytes) => b.apply(bytes))
+
+  const onRetro: Presence = { cursor: { x: 1, y: 1 }, viewport: null, stamp: null, presenting: [], page: 'page:retro' }
+  a.publish(onRetro)
+  assert.deepEqual(b.all()['peerA'], onRetro, 'page round-trips through onLocalUpdate/apply, live')
+
+  const c = new PresenceStore('peerC')
+  c.apply(a.encodeAll())
+  assert.equal(c.all()['peerA']?.page, 'page:retro', 'page survives an encodeAll()/apply() bootstrap too')
+
+  // `page: null` round-trips as an explicit null (same treatment `editing:
+  // null` gets in case (5)) — a publisher that knows it is on no page can say
+  // so, and that is still "do not filter" for consumers, not "elsewhere".
+  await Bun.sleep(2)
+  a.publish({ ...onRetro, page: null })
+  assert.equal(b.all()['peerA']?.page, null, 'page: null round-trips explicitly')
+
+  // The OLDER-PUBLISHER direction: a payload with no `page` key at all.
+  await Bun.sleep(2)
+  const legacy: Presence = { cursor: { x: 2, y: 2 }, viewport: null, stamp: null, presenting: [] }
+  a.publish(legacy)
+  const seen = b.all()['peerA']
+  assert.ok(seen !== undefined, "an older publisher's page-less payload still decodes (no error)")
+  assert.equal('page' in seen!, false, 'an absent page key stays ABSENT — not null, and not the page this peer published a moment ago')
+  assert.equal(seen!.page, undefined, 'reading .page on a page-less payload yields undefined = "unknown"')
+
+  a.destroy()
+  b.destroy()
+  c.destroy()
+}
+
 console.log('ok: presence')

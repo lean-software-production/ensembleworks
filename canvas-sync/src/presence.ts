@@ -23,6 +23,34 @@ export interface Presence {
    * simply never sets the key, and readers see "not editing" rather than a
    * decode error. */
   editing?: string | null
+  /** The canvas PAGE this peer is currently looking at, or null. Drives
+   * page-scoped presence: consumers hide a peer whose page is present and
+   * differs from the local page (canvas-react's `Cursors` does exactly this
+   * behind an opt-in `currentPageId` prop).
+   *
+   * WHY, given docs/plans/2026-07-22-canvas-v2-pages.md's D-7 explicitly
+   * DEFERRED this: that deferral's reasoning was sound for the standalone
+   * client — cursors are world-space, so a peer on another page just lands
+   * off-content, which is harmless. It does not transfer to the bb plugin,
+   * whose presence dock exists solely to answer "who is where". Reporting
+   * somebody as "on the canvas" while their cursor drifts through a page
+   * they are not on is the same failure that dock's own
+   * `canvas/dock/where.ts` already refuses for stale locations: a stale
+   * location is worse than none — it is wrong and it looks right. See
+   * docs/plans/2026-09-05-bb-canvas-multi-page-design.md D-4, which reverses
+   * D-7 for bb specifically without claiming the original call was wrong for
+   * the client.
+   *
+   * OPTIONAL, deliberately — same precedent and same two reasons as
+   * `editing` above. (a) An ABSENT key means "UNKNOWN", which consumers must
+   * treat as "do not filter", NOT as "on some other page": erasing a peer
+   * who simply has not told you where they are would be the same
+   * confidently-wrong report this field exists to prevent. (b) A publisher
+   * that predates this change never sets the key, so a newer reader sees
+   * "unknown" rather than a decode error — presence.test.ts case (6)
+   * asserts both directions, including that a page-less payload leaves the
+   * key genuinely absent rather than inheriting the peer's last page. */
+  page?: string | null
 }
 
 // Thin wrapper: one EphemeralStore, this peer writes its own key, reads all.

@@ -15,6 +15,15 @@ logic-free React renderer: CSS-transform world + one SVG overlay + the six
 ported custom HTML shapes) sits on top of `canvas-editor` and may touch the
 DOM, but holds no editor logic of its own.
 
+### BB Canvas plugin
+
+The first-class Canvas plugin lives at `plugins/canvas`. It intentionally keeps
+an isolated npm package and lockfile rather than joining the root Bun workspace,
+which preserves the package boundary needed for a later repository extraction.
+From that directory, verify changes with `npm run typecheck`, `npm test`,
+`npm run audit:quality:compare`, and `bb plugin build .`. The PR unit-test
+workflow runs the typecheck, test, and structural-quality gates automatically.
+
 ### Dogfood rooms (canvas v2)
 
 A per-room flag mounts the new `canvas-editor`/`canvas-react` engine instead

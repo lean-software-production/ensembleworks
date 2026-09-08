@@ -27,15 +27,52 @@
  * a bounded safety cap. In the common case the backfill has already been
  * imported, so an existing room's real page is visible here and adopted. The
  * redundant-`page:p` bootstrap described below is now only reachable in the
- * pathological tail where readiness never arrives within the cap; it remains
- * CORRECTNESS-NEUTRAL for rendering (canvas-react's ShapeLayer/EmbedLayer never
- * filter by page — "rooms are single-page today" per client/src/App.tsx's own
- * comment — so both pages' shapes render identically regardless of which page
- * owns them) and only matters to `repair()`'s orphan-reparenting target (which
- * never touches a shape that already has a valid page, i.e. never touches
- * pre-existing real content). A protocol-level fix isn't needed for the common
- * case anymore (Frame.SyncDone IS that ack); the cap-bounded tail is accepted
- * as the remaining tradeoff.
+ * pathological tail where readiness never arrives within the cap.
+ *
+ * THAT TAIL IS NO LONGER CORRECTNESS-NEUTRAL FOR RENDERING, and this comment
+ * claimed otherwise until 2026-09-05. The old claim was that "canvas-react's
+ * ShapeLayer/EmbedLayer never filter by page — rooms are single-page today —
+ * so both pages' shapes render identically regardless of which page owns
+ * them". Both halves have since stopped being true: Task R1's page filter
+ * landed on 2026-07-22 in canvas-react/src/ShapeLayer.tsx:110
+ * (`.filter((s) => pageIdOf(snapshot, s) === currentPageId)`) and
+ * canvas-react/src/embed/EmbedLayer.tsx:106 (the same predicate), and rooms
+ * are no longer single-page — CanvasV2App.tsx:1227 mounts a PageSwitcher.
+ * The App.tsx sentence that was cited still exists (App.tsx:238) but it is
+ * scoped to the LEGACY tldraw engine's frame-targeting, and was never a claim
+ * about canvas-react.
+ *
+ * SO WHAT THE TAIL ACTUALLY COSTS, in the two cases it splits into.
+ *
+ * (a) The room's real default page IS `page:p` — the overwhelmingly common
+ * case, because that literal is this codebase's ONE convention for it (see
+ * above, and server/src/canvas-v2/crash-writer.ts). The late backfill then
+ * merges onto the very page we bootstrapped, `currentPageId` already names it,
+ * and the filter changes nothing. Still correctness-neutral, just for a
+ * narrower reason than the old comment gave.
+ *
+ * (b) The room's pages do NOT include `page:p` (it was deleted, or the room
+ * came from somewhere that used other ids — `mintPageId` produces
+ * `page:<base36>`). Now the bootstrapped `page:p` is a second, empty page, the
+ * Editor's `currentPageId` names it, and every real shape — parented to the
+ * room's own page — is filtered OUT of both layers. The user sees an EMPTY
+ * canvas over intact content. Nothing else catches this: `repair()` does not,
+ * because those shapes are not orphans (their page really exists), and
+ * `clampCurrentPageIntents` does not, because it only fires when
+ * `currentPageId` DANGLES and `page:p` is a live page we just created.
+ *
+ * WHY (b) IS STILL ACCEPTED RATHER THAN FIXED. It is bounded and recoverable,
+ * not lossy: nothing is deleted or reparented, the doc still holds every shape
+ * on its real page, and CanvasV2App.tsx:1227's PageSwitcher lists both pages
+ * and switches between them in one click. It also needs BOTH the missed
+ * readiness ack AND a room with no `page:p` at all. NOT claimed: that a
+ * subsequent cold load heals itself — `canonicalPageId` picks the
+ * lexicographically smallest id, and a minted `page:<base36>` can sort either
+ * side of `page:p`, so the next load may well adopt the empty one again. A
+ * protocol-level fix isn't needed for the common case (Frame.SyncDone IS that
+ * ack); the cap-bounded tail is accepted as the remaining tradeoff — but it is
+ * now a VISIBLE, user-facing tradeoff in case (b), which is exactly the part
+ * the old comment got wrong.
  */
 import { canonicalPageId } from '@ensembleworks/canvas-model'
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'

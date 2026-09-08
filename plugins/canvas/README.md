@@ -1,6 +1,6 @@
 # bb-plugin-canvas
 
-A spike: the EnsembleWorks multiplayer infinite canvas, mounted as a BB plugin
+The EnsembleWorks multiplayer infinite canvas, mounted as a first-class BB plugin
 panel. Every open **Canvas** page in every bb client edits one shared Loro CRDT
 document; the plugin backend is the authoritative peer and persists it.
 

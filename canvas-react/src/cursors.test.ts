@@ -6,7 +6,7 @@ import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
-import { colorForKey, Cursors, type RemotePresence } from './overlay/Cursors.js'
+import { colorForKey, Cursors, isOnOtherPage, type RemotePresence } from './overlay/Cursors.js'
 
 const camera: Camera = { x: 10, y: -5, z: 2 }
 const viewportSize = { width: 800, height: 600 }
@@ -28,6 +28,7 @@ function assertOnScreen(label: string, world: { x: number; y: number }): { x: nu
   )
   return s
 }
+
 
 // ============================================================================
 // 1. Self-filtering (GENUINELY RED-VERIFIED — see procedure below): a
@@ -136,4 +137,95 @@ function assertOnScreen(label: string, world: { x: number; y: number }): { x: nu
   console.log('ok: Cursors — off-viewport cursor omitted (v1 policy, no edge-clamp indicator)')
 }
 
-console.log('ok: cursors (self-filtered, null-cursor omission, deterministic color, off-viewport omission)')
+// ============================================================================
+// PAGE FILTERING (D-4, docs/plans/2026-09-05-bb-canvas-multi-page-design.md).
+// `RemotePresence` grows an optional `page`, and `Cursors` an optional
+// `currentPageId`. Every fixture point below is assertOnScreen-guarded for
+// the same reason the self-filter fixtures are: if a cursor that a test
+// expects to be PAGE-filtered were off-viewport, the isOnScreen guard would
+// suppress it and the assertion would pass with the page filter deleted.
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// 5b. The decision itself, asserted directly on the pure predicate rather
+//     than only inferred from markup — the truth table in one place.
+// ----------------------------------------------------------------------------
+{
+  assert.equal(isOnOtherPage('page:other', undefined), false, 'no currentPageId -> never hide (caller is not page-aware)')
+  assert.equal(isOnOtherPage(undefined, undefined), false, 'neither side known -> never hide')
+  assert.equal(isOnOtherPage(undefined, 'page:here'), false, "peer has not published a page -> UNKNOWN, not elsewhere")
+  assert.equal(isOnOtherPage(null, 'page:here'), false, 'peer published page: null -> UNKNOWN, not elsewhere')
+  assert.equal(isOnOtherPage('page:here', 'page:here'), false, 'same page -> shown')
+  assert.equal(isOnOtherPage('page:there', 'page:here'), true, 'known and different -> hidden (the ONLY hiding case)')
+  console.log('ok: isOnOtherPage — only a known-and-different pair hides a peer')
+}
+
+// ----------------------------------------------------------------------------
+// 6. `currentPageId` ABSENT -> no page filtering whatsoever, even for a peer
+//    that publishes a page. This is the compatibility case: client/src/
+//    canvas-v2's CanvasV2App passes no such prop, so its behaviour must be
+//    bit-for-bit what it is today.
+// ----------------------------------------------------------------------------
+{
+  const world = { x: 100, y: 50 }
+  const expected = assertOnScreen('peerElsewhere', world)
+  const presence: Record<string, RemotePresence> = {
+    peerElsewhere: { cursor: world, name: 'Elsewhere', page: 'page:other' },
+  }
+  const html = renderToStaticMarkup(createElement(Cursors, { presence, selfKey: 'self', camera, viewportSize }))
+  assert.ok(html.includes('data-presence-key="peerElsewhere"'), `with no currentPageId prop, a peer on another page still renders: ${html}`)
+  assert.ok(html.includes(`${expected.x},${expected.y}`), `and at its usual anchor (${expected.x},${expected.y}): ${html}`)
+  console.log('ok: Cursors — currentPageId absent means NO page filtering (today\'s behaviour, unchanged)')
+}
+
+// ----------------------------------------------------------------------------
+// 7. `currentPageId` PRESENT and the peer's `page` DIFFERS -> that peer is
+//    hidden. The control peer (same page, also on-screen) must still render,
+//    so a filter that simply hid everything would fail here too.
+// ----------------------------------------------------------------------------
+{
+  const hereWorld = { x: 100, y: 50 }
+  const thereWorld = { x: 20, y: 30 }
+  const hereScreen = assertOnScreen('peerHere', hereWorld)
+  const thereScreen = assertOnScreen('peerThere', thereWorld)
+  const presence: Record<string, RemotePresence> = {
+    peerHere: { cursor: hereWorld, name: 'Here', page: 'page:here' },
+    peerThere: { cursor: thereWorld, name: 'There', page: 'page:there' },
+  }
+  const html = renderToStaticMarkup(
+    createElement(Cursors, { presence, selfKey: 'self', camera, viewportSize, currentPageId: 'page:here' }),
+  )
+  assert.ok(html.includes('data-presence-key="peerHere"'), `the same-page peer renders: ${html}`)
+  assert.ok(html.includes(`${hereScreen.x},${hereScreen.y}`), `the same-page peer keeps its anchor (${hereScreen.x},${hereScreen.y}): ${html}`)
+  assert.doesNotMatch(html, /data-presence-key="peerThere"/, 'a peer whose published page differs from currentPageId must be HIDDEN')
+  assert.doesNotMatch(html, />There</, "the other-page peer's name must not appear either")
+  assert.ok(!html.includes(`${thereScreen.x},${thereScreen.y}`), `the other-page peer's would-be anchor (${thereScreen.x},${thereScreen.y}) must not appear — it can only come from an unfiltered render`)
+  console.log('ok: Cursors — currentPageId present hides a peer whose page differs')
+}
+
+// ----------------------------------------------------------------------------
+// 8. `currentPageId` PRESENT but the peer's `page` is ABSENT (or explicitly
+//    null) -> STILL SHOWN. Unknown is not "elsewhere": an older publisher
+//    that predates Presence.page, or one that has not published a page yet,
+//    must not be silently erased from the overlay.
+// ----------------------------------------------------------------------------
+{
+  const unknownWorld = { x: 100, y: 50 }
+  const nullWorld = { x: 20, y: 30 }
+  const unknownScreen = assertOnScreen('peerUnknownPage', unknownWorld)
+  const nullScreen = assertOnScreen('peerNullPage', nullWorld)
+  const presence: Record<string, RemotePresence> = {
+    peerUnknownPage: { cursor: unknownWorld, name: 'Unknown' }, // no page key at all
+    peerNullPage: { cursor: nullWorld, name: 'Nulled', page: null }, // explicit "no page"
+  }
+  const html = renderToStaticMarkup(
+    createElement(Cursors, { presence, selfKey: 'self', camera, viewportSize, currentPageId: 'page:here' }),
+  )
+  assert.ok(html.includes('data-presence-key="peerUnknownPage"'), `a peer with no published page is still shown: ${html}`)
+  assert.ok(html.includes(`${unknownScreen.x},${unknownScreen.y}`), `and at its usual anchor (${unknownScreen.x},${unknownScreen.y}): ${html}`)
+  assert.ok(html.includes('data-presence-key="peerNullPage"'), `a peer with page: null is still shown: ${html}`)
+  assert.ok(html.includes(`${nullScreen.x},${nullScreen.y}`), `and at its usual anchor (${nullScreen.x},${nullScreen.y}): ${html}`)
+  console.log('ok: Cursors — an absent/null page is "unknown", not "elsewhere": still shown under currentPageId')
+}
+
+console.log('ok: cursors (self-filtered, null-cursor omission, deterministic color, off-viewport omission, page filtering)')

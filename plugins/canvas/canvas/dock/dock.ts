@@ -1,6 +1,6 @@
 // Composition root for the always-mounted canvas presence dock.
 //
-// ux-contract: none — behavior-preserving module extraction in spikes/bb-plugin-canvas; no interaction contract changed. No RED interaction contract is applicable because no behavior is added or fixed.
+// ux-contract: none — behavior-preserving module extraction in plugins/canvas; no interaction contract changed. No RED interaction contract is applicable because no behavior is added or fixed.
 import type {
   PluginContentScriptContext,
   PluginContentScriptDisposer,
