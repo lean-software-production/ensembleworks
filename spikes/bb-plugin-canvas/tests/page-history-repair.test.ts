@@ -233,7 +233,7 @@ describe("undoWithRepair / redoWithRepair — the move and the repair are one ca
 // ---------------------------------------------------------------------------
 
 const PANEL = readFileSync(
-  new URL("../canvas/CanvasPanel.tsx", import.meta.url),
+  new URL("../canvas/panel/session-input.ts", import.meta.url),
   "utf8",
 );
 const PANEL_CODE = stripComments(PANEL);

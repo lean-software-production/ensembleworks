@@ -402,7 +402,7 @@ const SWITCHER = stripComments(
   readFileSync(new URL("../canvas/pages/PageSwitcher.tsx", import.meta.url), "utf8"),
 );
 const PANEL = stripComments(
-  readFileSync(new URL("../canvas/CanvasPanel.tsx", import.meta.url), "utf8"),
+  readFileSync(new URL("../canvas/panel/session-view.tsx", import.meta.url), "utf8"),
 );
 
 /** The context menu's own JSX: from its marker to the tab strip that follows

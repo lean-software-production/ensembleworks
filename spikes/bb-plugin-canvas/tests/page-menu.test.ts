@@ -288,7 +288,7 @@ describe("switchPageIntents — what clicking a row is worth", () => {
 // says what is handed over, the switcher half says the handed-over values are
 // what the pure functions get. That is the shape tests/page-tabs-fit.test.ts
 // already uses for `containerWidth`, the fourth argument of this same call.
-const PANEL = readFileSync(new URL("../canvas/CanvasPanel.tsx", import.meta.url), "utf8");
+const PANEL = readFileSync(new URL("../canvas/panel/session-pages.ts", import.meta.url), "utf8");
 const PANEL_CODE = stripComments(PANEL);
 const SWITCHER = readFileSync(
   new URL("../canvas/pages/PageSwitcher.tsx", import.meta.url),

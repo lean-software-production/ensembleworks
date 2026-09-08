@@ -43,7 +43,10 @@ import {
 } from "./lib/source.js";
 
 const UI = readFileSync(new URL("../canvas/agents-ui.tsx", import.meta.url), "utf8");
-const PANEL = readFileSync(new URL("../canvas/CanvasPanel.tsx", import.meta.url), "utf8");
+const PANEL =
+  readFileSync(new URL("../canvas/panel/session-view.tsx", import.meta.url), "utf8") +
+  readFileSync(new URL("../canvas/panel/agent-sync.tsx", import.meta.url), "utf8");
+const SESSION = readFileSync(new URL("../canvas/panel/session.tsx", import.meta.url), "utf8");
 
 describe("AgentLayer picks its target from the pure rule", () => {
   it("asks agentTargetFor, over the live selection and the document's kinds", () => {
@@ -134,7 +137,7 @@ describe("Open thread goes to bb's own thread surface", () => {
     // menu item calls.
     // Marked by `onUnlink`, which only <AgentLayer> has — `loadThreadOptions`
     // is also on <CanvasSession> one level up.
-    expect(jsxAttributes(PANEL, "onUnlink").onOpen).toBe(
+    expect(jsxAttributes(SESSION, "onUnlink").onOpen).toBe(
       "(threadId) => navigate.toThread(threadId)",
     );
   });
@@ -397,7 +400,7 @@ describe("the panel is the affordance's only route to the backend", () => {
   });
 
   it("hands both ports down to the layer", () => {
-    const attrs = jsxAttributes(PANEL, "onAttach");
+    const attrs = jsxAttributes(SESSION, "onAttach");
     expect(attrs.onAttach).toBe("onAttachThread");
     expect(attrs.loadThreadOptions).toBe("loadThreadOptions");
     // ...and the launch arm's own port is untouched by the widening.

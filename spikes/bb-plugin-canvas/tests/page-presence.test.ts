@@ -220,9 +220,9 @@ describe("speaker rings are page-scoped too", () => {
 // ---------------------------------------------------------------------------
 
 const PANEL = readFileSync(
-  new URL("../canvas/CanvasPanel.tsx", import.meta.url),
+  new URL("../canvas/panel/session-presence.ts", import.meta.url),
   "utf8",
-);
+)+ readFileSync(new URL("../canvas/panel/session-view.tsx", import.meta.url), "utf8");
 const PANEL_CODE = stripComments(PANEL);
 
 /** The text of the single self-closing `<Tag ... />` element in `code`. */
@@ -253,7 +253,7 @@ describe("the panel is wired to page-scoped presence", () => {
     // and every OTHER client reads it as unknown — so page filtering works in
     // one direction only, which looks like it works.
     expect(PANEL_CODE).toContain(
-      "presencePublisher.setPage(editorState.currentPageId)",
+      "presencePublisher.setPage(currentPageId)",
     );
   });
 
@@ -268,7 +268,7 @@ describe("the panel is wired to page-scoped presence", () => {
     );
     const deps = /\}, \[([^\]]*)\]\);/.exec(after);
     expect(deps, "no dependency array follows the setPage call").not.toBeNull();
-    expect(deps![1]).toContain("editorState.currentPageId");
+    expect(deps![1]).toContain("currentPageId");
   });
 
   it("tells the speaker-ring overlay which page the local view is on", () => {
@@ -295,7 +295,7 @@ describe("the panel is wired to page-scoped presence", () => {
       .split(",")
       .map((argument) => argument.trim())
       .filter((argument) => argument.length > 0);
-    expect(args).toContain("editorState.currentPageId");
+    expect(args).toContain("currentPageId");
   });
 
   it("asks panIntentFor where a header click should land, with the live page", () => {
@@ -324,7 +324,7 @@ describe("the panel is wired to page-scoped presence", () => {
     // scope `viewportSizeRef` beside it uses); nesting it inside any callback
     // indents further and no longer matches.
     expect(PANEL_CODE).toMatch(
-      /^ {2}currentPageIdRef\.current = editorState\.currentPageId;$/m,
+      /^ {2}currentPageIdRef\.current = currentPageId;$/m,
     );
   });
 

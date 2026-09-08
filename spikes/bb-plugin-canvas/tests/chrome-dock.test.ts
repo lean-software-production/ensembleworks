@@ -31,7 +31,8 @@ import {
 } from "../canvas/pages/chrome-dock.js";
 
 const PANEL = stripComments(
-  readFileSync(new URL("../canvas/CanvasPanel.tsx", import.meta.url), "utf8"),
+  readFileSync(new URL("../canvas/panel/shared.ts", import.meta.url), "utf8") +
+    readFileSync(new URL("../canvas/panel/session-view.tsx", import.meta.url), "utf8"),
 );
 /** The module's own source. Read so the deletion of the fit ladder can be
  * asserted at BOTH ends: a dead export left behind here is a policy nothing
@@ -179,7 +180,7 @@ describe("the panel's wiring of the floating chrome", () => {
     // bails when the event target is inside `viewportRef`, so a tool button
     // moved inside that box would have every shortcut typed from it swallowed
     // by both handlers.
-    const viewport = PANEL.indexOf("data-canvas-viewport");
+    const viewport = PANEL.indexOf("<CanvasSurface");
     const dock = PANEL.indexOf("data-canvas-chrome-dock");
     expect(viewport).toBeGreaterThan(-1);
     expect(dock).toBeGreaterThan(viewport);
@@ -216,14 +217,14 @@ describe("the panel's wiring of the floating chrome", () => {
     // Not nested inside the tab ROW either — that div is where the gated strip
     // goes, and this must not share its fate.
     const row = PANEL.indexOf("data-canvas-page-tab-row");
-    const viewport = PANEL.indexOf("data-canvas-viewport");
+    const viewport = PANEL.indexOf("<CanvasSurface");
     expect(row).toBeLessThan(viewport);
     expect(overlays).toBeGreaterThan(viewport);
   });
 
   it("puts the page tabs in the FLOW at the top of the column, above the viewport", () => {
     const tabs = PANEL.indexOf("{pageSwitcher.tabs}");
-    const viewport = PANEL.indexOf("data-canvas-viewport");
+    const viewport = PANEL.indexOf("<CanvasSurface");
     expect(tabs).toBeGreaterThan(-1);
     expect(viewport).toBeGreaterThan(-1);
     // In the flow AND first: the strip takes its own height back off the

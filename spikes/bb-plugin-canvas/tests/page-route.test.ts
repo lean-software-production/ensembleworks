@@ -553,10 +553,10 @@ describe("createPageRouter — the memory between calls", () => {
 // tests/source-guard.test.ts for the stripper and its own tests.
 // ---------------------------------------------------------------------------
 
-const PANEL = readFileSync(
-  new URL("../canvas/CanvasPanel.tsx", import.meta.url),
-  "utf8",
-);
+const PANEL =
+  readFileSync(new URL("../canvas/panel/connection-boot.ts", import.meta.url), "utf8") +
+  "\n" +
+  readFileSync(new URL("../canvas/panel/session-pages.ts", import.meta.url), "utf8");
 const PANEL_CODE = stripComments(PANEL);
 const APP = readFileSync(new URL("../app.tsx", import.meta.url), "utf8");
 

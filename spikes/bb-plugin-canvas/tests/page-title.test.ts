@@ -347,7 +347,7 @@ describe("createPageDocumentTitle — the two values the panel used to thread", 
 });
 
 const PANEL = readFileSync(
-  new URL("../canvas/CanvasPanel.tsx", import.meta.url),
+  new URL("../canvas/panel/session-pages.ts", import.meta.url),
   "utf8",
 );
 

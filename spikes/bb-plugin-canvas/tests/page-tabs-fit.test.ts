@@ -150,7 +150,9 @@ describe("the width the panel actually feeds this gate", () => {
   // in a comment, with the real initial width 1024 and the 768/672 that
   // page-tabs-fit.ts's header states in caps silently false.
   const PANEL = stripComments(
-    readFileSync(new URL("../canvas/CanvasPanel.tsx", import.meta.url), "utf8"),
+    readFileSync(new URL("../canvas/panel/session.tsx", import.meta.url), "utf8") +
+      readFileSync(new URL("../canvas/panel/session-viewport.ts", import.meta.url), "utf8") +
+      readFileSync(new URL("../canvas/panel/session-pages.ts", import.meta.url), "utf8"),
   );
   const fed = new RegExp(`${FED_PROP}:\\s*([A-Za-z0-9_.]+)`).exec(PANEL);
 

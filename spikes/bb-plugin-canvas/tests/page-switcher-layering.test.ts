@@ -101,9 +101,9 @@ describe("the floating chrome dock's layer", () => {
 
   it("is not a number the panel picked for itself", () => {
     const panel = readFileSync(
-      new URL("../canvas/CanvasPanel.tsx", import.meta.url),
+      new URL("../canvas/panel/shared.ts", import.meta.url),
       "utf8",
-    );
+    ) + readFileSync(new URL("../canvas/panel/session-view.tsx", import.meta.url), "utf8");
     expect(panel.match(/zIndex:\s*[0-9]/g) ?? []).toEqual([]);
     expect(panel).toContain("zIndex: CHROME_DOCK_Z_INDEX");
   });

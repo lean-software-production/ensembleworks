@@ -1,0 +1,203 @@
+import type { ComponentProps, ReactNode, RefObject } from "react";
+import type { EditorState, InputEvent, Intent, ToolContext } from "@ensembleworks/canvas-editor";
+import type { CanvasDocument } from "@ensembleworks/canvas-model";
+import {
+  Cursors,
+  Grid,
+  Overlay,
+  ShapeLayer,
+  TextEditor,
+  Viewport,
+  WorldLayer,
+  type ViewportSize,
+} from "@ensembleworks/canvas-react";
+import { AgentLayer } from "../agents-ui.js";
+import type { ThreadOption } from "../thread-picker.js";
+import type { CanvasAgentLink } from "../wire.js";
+import { SpeakerRings } from "../roster-ui.js";
+import type { ToolId, ToolStates } from "../tool-loop.js";
+import {
+  chromeCardColumnStyle,
+  chromeTabRowStyle,
+  chromeToolbarStyle,
+  chromeToolStyle,
+  chromeWrapperStyle,
+  TOOL_BUTTONS,
+  currentSnapResult,
+} from "./shared.js";
+
+type CursorPresence = ComponentProps<typeof Cursors>["presence"];
+type SpeakerPresence = ComponentProps<typeof SpeakerRings>["presence"];
+
+interface PageSwitcherView {
+  readonly tabs: ReactNode;
+  readonly overlays: ReactNode;
+}
+
+export interface SessionViewProps {
+  readonly editorState: EditorState;
+  readonly snapshot: CanvasDocument;
+  readonly toolContext: ToolContext;
+  readonly viewportRef: RefObject<HTMLDivElement | null>;
+  readonly panelRef: RefObject<HTMLDivElement | null>;
+  readonly viewportSize: ViewportSize;
+  readonly remotePresence: CursorPresence;
+  readonly presenceAll: SpeakerPresence;
+  readonly identities: Readonly<Record<string, string>>;
+  readonly av: ComponentProps<typeof SpeakerRings>["speaking"];
+  readonly selfKey: string;
+  readonly activeToolId: ToolId;
+  readonly toolStates: ToolStates;
+  readonly handleInput: (event: InputEvent) => void;
+  readonly cancelAndReset: () => void;
+  readonly dispatch: (intents: Intent[]) => void;
+  readonly handleTextChange: (id: string, text: string) => void;
+  readonly handleEndEdit: () => void;
+  readonly selectTool: (id: ToolId) => void;
+  readonly agentLinks: Readonly<Record<string, CanvasAgentLink>>;
+  readonly pendingShapeId: string | null;
+  readonly onRun: (shapeId: string) => void;
+  readonly onOpen: (threadId: string) => void;
+  readonly onUnlink: (shapeId: string) => void;
+  readonly onAttach: (shapeId: string, threadId: string) => void;
+  readonly loadThreadOptions: () => Promise<ThreadOption[]>;
+  readonly pageSwitcher: PageSwitcherView;
+}
+
+export function SessionView(props: SessionViewProps) {
+  const pageSwitcher = props.pageSwitcher;
+  return (
+    <div ref={props.panelRef} className="flex h-full min-h-0 w-full flex-row">
+      <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
+        <div data-canvas-page-tab-row style={chromeTabRowStyle}>
+          {pageSwitcher.tabs}
+        </div>
+        <CanvasSurface {...props} />
+        <CanvasChrome {...props} />
+        {pageSwitcher.overlays}
+      </div>
+    </div>
+  );
+}
+
+function CanvasSurface({
+  editorState,
+  snapshot,
+  toolContext,
+  viewportRef,
+  viewportSize,
+  remotePresence,
+  presenceAll,
+  identities,
+  av,
+  selfKey,
+  activeToolId,
+  toolStates,
+  handleInput,
+  cancelAndReset,
+  dispatch,
+  handleTextChange,
+  handleEndEdit,
+  agentLinks,
+  pendingShapeId,
+  onRun,
+  onOpen,
+  onUnlink,
+  onAttach,
+  loadThreadOptions,
+}: SessionViewProps) {
+  return (
+    <div
+      ref={viewportRef}
+      data-canvas-viewport
+      className="relative min-h-0 flex-1"
+      style={{ background: "var(--canvas-paper, #fafaf7)" }}
+    >
+      <Viewport
+        onInput={handleInput}
+        onViewportBlur={cancelAndReset}
+        onPointerCancel={cancelAndReset}
+        style={{ position: "absolute", inset: 0 }}
+      >
+        <Grid camera={editorState.camera} />
+        <WorldLayer camera={editorState.camera}>
+          <ShapeLayer
+            toolContext={toolContext}
+            camera={editorState.camera}
+            viewportSize={viewportSize}
+            dispatch={dispatch}
+          />
+          <TextEditor
+            toolContext={toolContext}
+            onTextChange={handleTextChange}
+            onEndEdit={handleEndEdit}
+          />
+        </WorldLayer>
+        <Overlay
+          editorState={editorState}
+          snapshot={snapshot}
+          camera={editorState.camera}
+          viewportSize={viewportSize}
+          index={toolContext.index()}
+          snapResult={currentSnapResult(toolStates, activeToolId)}
+        />
+        <Cursors
+          presence={remotePresence}
+          selfKey={selfKey}
+          camera={editorState.camera}
+          viewportSize={viewportSize}
+          currentPageId={editorState.currentPageId}
+        />
+      </Viewport>
+      <AgentLayer
+        doc={snapshot}
+        camera={editorState.camera}
+        viewportSize={viewportSize}
+        selection={editorState.selection}
+        links={agentLinks}
+        currentPageId={editorState.currentPageId}
+        pendingShapeId={pendingShapeId}
+        onRun={onRun}
+        onOpen={onOpen}
+        onUnlink={onUnlink}
+        onAttach={onAttach}
+        loadThreadOptions={loadThreadOptions}
+      />
+      <SpeakerRings
+        presence={presenceAll}
+        identities={identities}
+        speaking={av}
+        camera={editorState.camera}
+        viewportSize={viewportSize}
+        selfKey={selfKey}
+        currentPageId={editorState.currentPageId}
+      />
+    </div>
+  );
+}
+
+function CanvasChrome({
+  activeToolId,
+  selectTool,
+}: SessionViewProps) {
+  return (
+    <div data-canvas-chrome-dock style={chromeWrapperStyle}>
+      <div style={chromeCardColumnStyle}>
+        <div style={chromeToolbarStyle}>
+          {TOOL_BUTTONS.map((button) => (
+            <button
+              key={button.id}
+              type="button"
+              data-canvas-tool={button.id}
+              aria-pressed={activeToolId === button.id}
+              onClick={() => selectTool(button.id)}
+              style={chromeToolStyle(activeToolId === button.id)}
+            >
+              {button.label}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}

@@ -36,7 +36,7 @@ import {
 } from "./lib/source.js";
 
 const PANEL = readFileSync(
-  new URL("../canvas/CanvasPanel.tsx", import.meta.url),
+  new URL("../canvas/panel/connection-boot.ts", import.meta.url),
   "utf8",
 );
 
