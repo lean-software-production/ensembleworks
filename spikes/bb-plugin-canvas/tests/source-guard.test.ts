@@ -87,7 +87,7 @@ describe("stripComments", () => {
     // makes the call. After stripping there must be exactly ONE occurrence —
     // the call.
     const panel = stripComments(PANEL);
-    const hits = panel.match(/resolvePageId\(peer\.doc/g) ?? [];
+    const hits = panel.match(/resolvePageId\(\s*peer\.doc/g) ?? [];
     expect(hits).toHaveLength(1);
   });
 });

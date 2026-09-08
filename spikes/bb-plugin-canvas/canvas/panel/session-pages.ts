@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useBbNavigate } from "@get-bb/plugin-sdk/app";
 import type { Editor } from "@ensembleworks/canvas-editor";
+import { writeLastPage } from "../pages/last-page.js";
 import { usePageSwitcher } from "../pages/PageSwitcher.js";
 import {
   createPageRouter,
@@ -12,6 +13,8 @@ import {
   type DocumentTitleHost,
   type PageDocumentTitle,
 } from "../pages/page-title.js";
+import { ROOM_ID } from "../wire.js";
+import { pageMemoryStore } from "./page-memory.js";
 
 type PageSwitcherArgs = Parameters<typeof usePageSwitcher>[0];
 type PageSnapshot = PageSwitcherArgs["snapshot"];
@@ -69,6 +72,10 @@ export function useSessionPages({
     });
   }, [pageTitle, snapshot.pages, editorState.currentPageId]);
   useEffect(() => () => pageTitle.restore(), [pageTitle]);
+
+  useEffect(() => {
+    writeLastPage(pageMemoryStore(), ROOM_ID, editorState.currentPageId);
+  }, [editorState.currentPageId]);
 
   const pageSwitcher = usePageSwitcher({
     editor,

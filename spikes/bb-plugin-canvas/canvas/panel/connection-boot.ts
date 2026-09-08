@@ -5,9 +5,12 @@ import { registerCoreShapes } from "@ensembleworks/canvas-react";
 import { createBbTransport, newPeerId, type BbTransport } from "../../transport.js";
 import { fetchIdentity } from "../identity.js";
 import { resolvePageId } from "../page.js";
+import { readLastPage } from "../pages/last-page.js";
 import { pageIdFromSubPath } from "../pages/page-route.js";
 import { createPresencePublisher } from "../presence-publisher.js";
 import { createToolSet } from "../tool-loop.js";
+import { ROOM_ID } from "../wire.js";
+import { pageMemoryStore } from "./page-memory.js";
 import {
   READY_TIMEOUT_MS,
   Session,
@@ -67,7 +70,11 @@ export function useConnectionBoot({
         peer.close();
         return;
       }
-      const pageId = resolvePageId(peer.doc, pageIdFromSubPath(subPathRef.current));
+      const pageId = resolvePageId(
+        peer.doc,
+        pageIdFromSubPath(subPathRef.current),
+        readLastPage(pageMemoryStore(), ROOM_ID),
+      );
       const editor = new Editor({
         doc: peer.doc,
         now: () => performance.now(),

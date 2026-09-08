@@ -569,8 +569,16 @@ describe("the panel is wired to the route", () => {
     // independent guards because losing this one line is losing cold-load deep
     // linking, C2a's headline behaviour, with nothing visible at runtime.
     expect(PANEL_CODE).toContain(
-      "resolvePageId(peer.doc, pageIdFromSubPath(subPathRef.current))",
+      "resolvePageId(\n        peer.doc,\n        pageIdFromSubPath(subPathRef.current),\n        readLastPage(pageMemoryStore(), ROOM_ID),\n      )",
     );
+  });
+
+  it("reads this client's remembered page at boot and writes every page switch", () => {
+    expect(PANEL_CODE).toMatch(
+      /useEffect\(\(\) => \{\s*writeLastPage\(pageMemoryStore\(\), ROOM_ID, editorState\.currentPageId\);\s*\}, \[editorState\.currentPageId\]\);/,
+    );
+    expect(countInCode(PANEL, "readLastPage(")).toBe(1);
+    expect(countInCode(PANEL, "writeLastPage(")).toBe(1);
   });
 
   it("reads the subPath for the seed through a ref, never a boot dependency", () => {

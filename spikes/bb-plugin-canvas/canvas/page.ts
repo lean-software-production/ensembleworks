@@ -42,15 +42,15 @@ export const BOOTSTRAP_PAGE_ID = "page:p";
 export function resolvePageId(
   doc: CanvasDoc,
   requested: string | null,
+  remembered: string | null,
 ): string {
   const pages = doc.listPages();
-  if (
-    requested !== null &&
-    requested.length > 0 &&
-    pages.some((page) => page.id === requested)
-  ) {
-    return requested;
-  }
+  const isLive = (pageId: string | null): pageId is string =>
+    pageId !== null &&
+    pageId.length > 0 &&
+    pages.some((page) => page.id === pageId);
+  if (isLive(requested)) return requested;
+  if (isLive(remembered)) return remembered;
   const existing = canonicalPageId(pages);
   if (existing) return existing;
   doc.putPage({ id: BOOTSTRAP_PAGE_ID, name: "Canvas" });
