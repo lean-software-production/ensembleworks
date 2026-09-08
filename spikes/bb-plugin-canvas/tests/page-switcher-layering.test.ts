@@ -37,7 +37,7 @@ import { DOCK_STYLES } from "../canvas/dock/styles.js";
 import { CHROME_DOCK_Z_INDEX } from "../canvas/pages/chrome-dock.js";
 
 const SWITCHER = readFileSync(
-  new URL("../canvas/pages/PageSwitcher.tsx", import.meta.url),
+  new URL("../canvas/pages/switcher/styles.ts", import.meta.url),
   "utf8",
 );
 

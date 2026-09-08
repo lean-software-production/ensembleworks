@@ -23,8 +23,16 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { countInCode, stripComments } from "./lib/source.js";
 
-const SWITCHER = stripComments(
-  readFileSync(new URL("../canvas/pages/PageSwitcher.tsx", import.meta.url), "utf8"),
+const SWITCHER = stripComments([
+  "switcher/page-menu-view.tsx",
+  "switcher/page-tabs.tsx",
+  "switcher/actions.ts",
+  "switcher/tab-menu.ts",
+  "switcher/use-page-switcher.tsx",
+  "switcher/styles.ts",
+].map((file) => readFileSync(new URL(`../canvas/pages/${file}`, import.meta.url), "utf8")).join("\n"));
+const TABS = stripComments(
+  readFileSync(new URL("../canvas/pages/switcher/page-tabs.tsx", import.meta.url), "utf8"),
 );
 
 /** The popover's JSX: from the portalled dialog's marker to the `document.body`
@@ -45,11 +53,11 @@ function popoverRegion(): string {
  * still means the STRIP — the menu that hangs off a tab on right-click is a
  * different surface with its own file, tests/page-tab-menu.test.ts. */
 function tabsRegion(): string {
-  const from = SWITCHER.indexOf("data-canvas-page-tabs");
-  const to = SWITCHER.indexOf("return { tabs, overlays }");
+  const from = TABS.indexOf("data-canvas-page-tabs");
+  const to = TABS.length;
   expect(from).toBeGreaterThan(-1);
   expect(to).toBeGreaterThan(from);
-  return SWITCHER.slice(from, to);
+  return TABS.slice(from, to);
 }
 
 describe("the tab strip shows a name and nothing else", () => {
@@ -160,7 +168,7 @@ describe("one palette, declared once", () => {
     // by this file. Two files writing their own literals is how the presence
     // popover ended up with a font nobody chose; a shared import is the fix,
     // and this is what keeps it shared.
-    expect(SWITCHER).toMatch(/from "\.\.\/pages\/chrome-dock\.js"|from "\.\/chrome-dock\.js"/);
+    expect(SWITCHER).toMatch(/from "\.\.\/chrome-dock\.js"/);
   });
 
   it("declares no colour of its own", () => {

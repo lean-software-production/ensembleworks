@@ -218,9 +218,11 @@ describe("what usePageSwitcher does with the width the panel feeds it", () => {
   // untrue, in the file whose header exists to describe this exact wiring, and
   // a guard satisfied by a decoy is how the panel-side block above was found
   // unfalsifiable on 2026-09-05.
-  const SWITCHER = stripComments(
-    readFileSync(new URL("../canvas/pages/PageSwitcher.tsx", import.meta.url), "utf8"),
-  );
+  const SWITCHER = stripComments([
+    "switcher/types.ts",
+    "switcher/use-page-switcher.tsx",
+    "switcher/page-tabs.tsx",
+  ].map((file) => readFileSync(new URL(`../canvas/pages/${file}`, import.meta.url), "utf8")).join("\n"));
 
   // Group 1: the state's name. Group 2: the setter's suffix. Group 3: the
   // identifier the seed is computed from — the whole point of the guard.

@@ -398,9 +398,17 @@ describe("NO_POPOVER_ANCHOR — what an anchorless popover hangs from", () => {
 // THE WIRING. Source text only, comment-stripped, bounded per region, and every
 // positive paired with a negative so two constants cannot simply swap roles.
 
-const SWITCHER = stripComments(
-  readFileSync(new URL("../canvas/pages/PageSwitcher.tsx", import.meta.url), "utf8"),
-);
+const SWITCHER = stripComments([
+  "switcher/tab-menu-view.tsx",
+  "switcher/tab-menu.ts",
+  "switcher/page-tabs.tsx",
+  "switcher/page-menu-view.tsx",
+  "switcher/page-menu.tsx",
+  "switcher/dom.ts",
+  "switcher/use-page-switcher.tsx",
+  "switcher/actions.ts",
+  "switcher/styles.ts",
+].map((file) => readFileSync(new URL(`../canvas/pages/${file}`, import.meta.url), "utf8")).join("\n"));
 const PANEL = stripComments(
   readFileSync(new URL("../canvas/panel/session-view.tsx", import.meta.url), "utf8"),
 );
@@ -769,7 +777,7 @@ describe("the panel's wiring seams — the menu is CONNECTED, not merely built",
     // menu whose items do nothing. `jsxAttributes` throws unless exactly one
     // element carries the marker, so this cannot be reading a second-best match.
     const item = jsxAttributes(SWITCHER, "data-canvas-page-tab-menu-item");
-    expect(item.onClick).toBe("() => runTabMenuItem(tabMenuRow, item.id)");
+    expect(item.onClick).toBe("() => runTabMenuItem(row, item.id)");
     // The two arguments are two different roles — the ROW the menu is about and
     // the ITEM that was clicked. Passed the other way round this still
     // typechecks at the JSX level and would rename by item id.
@@ -784,7 +792,7 @@ describe("the panel's wiring seams — the menu is CONNECTED, not merely built",
     // `tabMenu` either way. Bounded to the initializer, an EXACT match is
     // available and every conditional fails it.
     expect(initializerText(SWITCHER, "overlays").replace(/\s+/g, " ").trim()).toBe(
-      "<> {popover} {tabMenu} </>",
+      "<>{popover}{tabMenu}</>",
     );
   });
 
@@ -800,7 +808,7 @@ describe("the panel's wiring seams — the menu is CONNECTED, not merely built",
     // `usePageSwitcher`'s own statement list can.
     const dismissal = topLevelEffectIn(
       SWITCHER,
-      "usePageSwitcher",
+      "useTabMenu",
       'dispatchTabMenu({ type: "escape" })',
     );
     // REGISTERED BY THE EFFECT ITSELF. `callsTo` is reachability-blind — it
@@ -860,7 +868,7 @@ describe("the panel's wiring seams — the menu is CONNECTED, not merely built",
     // own body, which is what React actually executes; the exact text then
     // says the effect still does the right thing.
     expect(
-      topLevelEffectIn(SWITCHER, "usePageSwitcher", "pageTabMenuFocusItem")
+      topLevelEffectIn(SWITCHER, "useTabMenu", "pageTabMenuFocusItem")
         .replace(/\s+/g, " ")
         .trim(),
     ).toBe(
@@ -908,7 +916,7 @@ describe("the panel's wiring seams — the menu is CONNECTED, not merely built",
     // anchors cannot swap or collapse into one, and taken from the component's
     // own statement list so a placement effect moved into a dead closure fails.
     const placement = (needle: string): string =>
-      callsTo(topLevelEffectIn(SWITCHER, "usePageSwitcher", needle), "placePopoverBox")
+      callsTo(topLevelEffectIn(SWITCHER, needle === "setTabMenuBox(" ? "useTabMenu" : "usePageMenu", needle), "placePopoverBox")
         .map((call) => call.text.replace(/\s+/g, " ").trim())
         .join(" | ");
     expect(placement("setTabMenuBox(")).toBe(

@@ -21,7 +21,7 @@ import { pageDeletePrompt } from "../canvas/pages/page-delete-confirm.js";
 import { countInCode, stripComments } from "./lib/source.js";
 
 const SWITCHER = readFileSync(
-  new URL("../canvas/pages/PageSwitcher.tsx", import.meta.url),
+  new URL("../canvas/pages/switcher/actions.ts", import.meta.url),
   "utf8",
 );
 

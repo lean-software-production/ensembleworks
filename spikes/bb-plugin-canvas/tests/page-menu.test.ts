@@ -291,7 +291,7 @@ describe("switchPageIntents — what clicking a row is worth", () => {
 const PANEL = readFileSync(new URL("../canvas/panel/session-pages.ts", import.meta.url), "utf8");
 const PANEL_CODE = stripComments(PANEL);
 const SWITCHER = readFileSync(
-  new URL("../canvas/pages/PageSwitcher.tsx", import.meta.url),
+  new URL("../canvas/pages/switcher/use-page-switcher.tsx", import.meta.url),
   "utf8",
 );
 const SWITCHER_CODE = stripComments(SWITCHER);

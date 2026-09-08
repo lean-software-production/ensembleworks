@@ -763,26 +763,34 @@ describe("the drag cannot grow a hold timer without this failing", () => {
 // comments stripped, bounded to one region, and every positive is paired with
 // a negative so the two roles in a call cannot simply swap.
 
-const SWITCHER = stripComments(
-  readFileSync(new URL("../canvas/pages/PageSwitcher.tsx", import.meta.url), "utf8"),
+const SWITCHER = stripComments([
+  "switcher/actions.ts",
+  "switcher/tab-drag.ts",
+  "switcher/tab-menu.ts",
+  "switcher/page-tabs.tsx",
+  "switcher/styles.ts",
+  "switcher/use-page-switcher.tsx",
+].map((file) => readFileSync(new URL(`../canvas/pages/${file}`, import.meta.url), "utf8")).join("\n"));
+const TABS = stripComments(
+  readFileSync(new URL("../canvas/pages/switcher/page-tabs.tsx", import.meta.url), "utf8"),
 );
 
 /** One tab button's own props: from its marker to the "+" that ends the map. */
 function tabButtonRegion(): string {
-  const from = SWITCHER.indexOf("data-canvas-page-tab={row.id}");
-  const to = SWITCHER.indexOf("data-canvas-new-page-tab");
+  const from = TABS.indexOf("data-canvas-page-tab={row.id}");
+  const to = TABS.indexOf("data-canvas-new-page-tab");
   expect(from).toBeGreaterThan(-1);
   expect(to).toBeGreaterThan(from);
-  return SWITCHER.slice(from, to);
+  return TABS.slice(from, to);
 }
 
 /** The whole strip, including the drop-line markers that sit between tabs. */
 function stripRegion(): string {
-  const from = SWITCHER.indexOf("data-canvas-page-tabs");
-  const to = SWITCHER.indexOf("return { tabs, overlays }");
+  const from = TABS.indexOf("data-canvas-page-tabs");
+  const to = TABS.length;
   expect(from).toBeGreaterThan(-1);
   expect(to).toBeGreaterThan(from);
-  return SWITCHER.slice(from, to);
+  return TABS.slice(from, to);
 }
 
 describe("the component hands the gesture over rather than deciding it", () => {
@@ -1143,7 +1151,7 @@ describe("the wiring seams — the component RUNS these decisions, not merely na
     // own statement list so a whole effect parked in a dead closure fails too.
     const cancellation = topLevelEffectIn(
       SWITCHER,
-      "usePageSwitcher",
+      "useTabDrag",
       "tabDragIsActive(dragState)",
     );
     const statements = effectStatements(cancellation).map((statement) =>
