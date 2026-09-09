@@ -329,6 +329,106 @@ export function readTreeEdge(
   });
 }
 
+// ---------------------------------------------------------------------------
+// Quarantine: an edge taken OUT of a tree without being taken off the canvas
+// ---------------------------------------------------------------------------
+
+/**
+ * The key W11's repair moves a losing edge's `meta.tree` INTO.
+ *
+ * THIS IS THE WHOLE NO-SILENT-DROP MECHANISM, so it is stated here with the
+ * rest of the encoding rather than inside repair.ts. Reconciling a cycle two
+ * concurrent legal edits produced means one of the edges has to stop counting.
+ * DELETING it would take a relationship a human drew off their screen with no
+ * trace, which the plan calls out as worse than a visible refusal. So repair
+ * does not delete: it moves `meta.tree` to `meta.treeQuarantine`, and
+ *
+ *   - the arrow shape stays exactly where it was drawn,
+ *   - both of its `Binding` rows stay, still naming both nodes,
+ *   - the shape carries WHICH tree it left and WHY,
+ *   - and `restoreQuarantinedEdge` puts the one key back.
+ *
+ * A reader of the tree stops seeing it, because `readTree` keys on
+ * `meta.tree`. Nobody else loses anything.
+ *
+ * KNOWN GAP, stated rather than papered over: until W2 renders arrows, a
+ * quarantined edge and a live one look identical on the canvas (both fall back
+ * to `BoxShape`). The recovery path is real, but it is not yet VISIBLE — see
+ * the W11 artifact.
+ */
+export const TREE_QUARANTINE_KEY = "treeQuarantine";
+
+/** Ceiling on the stored explanation. The full sentence lives in the repair
+ * report an operator reads; this copy rides every sync delta to every client,
+ * so it is bounded for the same reason `meta.context` is. */
+export const MAX_QUARANTINE_DETAIL = 500;
+
+/** Strict, for the reason the page mark is: the version field is the only way
+ * this value is allowed to grow. */
+export const treeQuarantineSchema = z
+  .object({
+    v: z.literal(TREE_ENCODING_VERSION),
+    /** The tree this edge was taken out of — where a restore puts it back. */
+    tree: z.string().min(1),
+    /** The `TreeProblemKind` that decided it. Typed as a string here because
+     * the kinds are W1's vocabulary and this module sits below W1. */
+    reason: z.string().min(1),
+    detail: z.string().max(MAX_QUARANTINE_DETAIL),
+  })
+  .strict();
+export type TreeQuarantine = z.infer<typeof treeQuarantineSchema>;
+
+/**
+ * Take a tree-marked shape out of its tree, recording where it came from.
+ *
+ * `absent` for a shape that is not tree-marked — quarantining something that
+ * was never in a tree would invent a provenance the document does not have.
+ * Re-quarantining an already-quarantined shape overwrites the record with the
+ * newer reason, which is what a restore that immediately re-broke should leave
+ * behind.
+ */
+export function quarantineTreeShape(
+  shape: Shape,
+  input: { reason: string; detail: string },
+): TreeRead<Shape> {
+  const treeId = shape.meta[TREE_KEY];
+  if (typeof treeId !== "string" || treeId.length === 0) return absent();
+  const { [TREE_KEY]: _left, ...rest } = shape.meta as Record<string, unknown>;
+  const quarantine: TreeQuarantine = {
+    v: TREE_ENCODING_VERSION,
+    tree: treeId,
+    reason: input.reason,
+    detail: truncate(input.detail, MAX_QUARANTINE_DETAIL),
+  };
+  return ok({ ...shape, meta: { ...rest, [TREE_QUARANTINE_KEY]: quarantine } } as Shape);
+}
+
+/** Read a shape's quarantine record. `absent` when it carries none. */
+export function readTreeQuarantine(shape: Shape): TreeRead<TreeQuarantine> {
+  const raw = shape.meta[TREE_QUARANTINE_KEY];
+  if (raw === undefined) return absent();
+  const parsed = treeQuarantineSchema.safeParse(raw);
+  if (!parsed.success) return invalid(`shape ${shape.id}: ${parsed.error.message}`);
+  return ok(parsed.data);
+}
+
+/** Put a quarantined shape back in the tree it names — the exact inverse of
+ * `quarantineTreeShape`. `absent` when there is nothing to restore. */
+export function restoreTreeShape(shape: Shape): TreeRead<Shape> {
+  const record = readTreeQuarantine(shape);
+  if (record.status !== "ok") return record as TreeRead<Shape>;
+  const { [TREE_QUARANTINE_KEY]: _gone, ...rest } = shape.meta as Record<string, unknown>;
+  return ok({ ...shape, meta: { ...rest, [TREE_KEY]: record.value.tree } } as Shape);
+}
+
+/** Trim to a ceiling, saying so — a truncated explanation that does not admit
+ * it is one is how a reader reaches a wrong conclusion confidently. */
+function truncate(text: string, max: number): string {
+  if (text.length <= max) return text;
+  const marker = "…";
+  return text.slice(0, max - marker.length) + marker;
+}
+
 /**
  * Build a whole edge: the arrow shape and its two bindings, in the order a
  * writer should put them (shape first — a binding whose `fromId` names a

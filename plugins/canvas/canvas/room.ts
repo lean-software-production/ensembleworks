@@ -13,7 +13,9 @@
 // a non-addressee would merely waste bytes on), but it is NOT a privacy
 // boundary — noted as a known limitation.
 import { SyncServerPeer, type Transport } from "@ensembleworks/canvas-sync";
+import { dumpModel } from "@ensembleworks/canvas-doc";
 import { bytesToBase64 } from "./base64.js";
+import { repairAllTrees, type TreeRepairReport } from "./tree/repair.js";
 import type { CanvasStore } from "./store.js";
 import {
   ROOM_ID,
@@ -118,6 +120,18 @@ export class CanvasRoomHost {
   /** Highest canvas_updates.seq this host has read or written; bounds compaction. */
   #lastSeq = 0;
   #closed = false;
+  /**
+   * Inbound updates that actually APPLIED. Incremented only from
+   * `onUpdatePayload`, which canvas-sync calls for an Update frame that changed
+   * or pended — never for a presence frame and never for a no-op re-import.
+   * `frame()` compares it across a delivery to decide whether a tree
+   * reconciliation pass is worth paying for; see `repairTrees`.
+   */
+  #inboundUpdates = 0;
+  /** Reconciliation passes run (W11). Read by tests to prove the gate above
+   * actually gates — a counter is the only honest evidence that an expensive
+   * pass did NOT run. */
+  #repairPasses = 0;
 
   constructor(options: CanvasRoomHostOptions) {
     this.room = options.room ?? ROOM_ID;
@@ -136,6 +150,7 @@ export class CanvasRoomHost {
       onUpdatePayload: (payload) => {
         this.#lastSeq = this.#store.appendUpdate(this.room, payload);
         this.#updatesSinceSnapshot += 1;
+        this.#inboundUpdates += 1;
       },
     });
 
@@ -150,6 +165,13 @@ export class CanvasRoomHost {
       this.#lastSeq = logged[logged.length - 1]!.seq;
     }
     this.#updatesSinceSnapshot = logged.length;
+    // Reconcile after the replay, not during it: `commitLocalWrite` (which the
+    // pass commits through) touches `#updatesSinceSnapshot`, and that field is
+    // only assigned on the line above. A restart also has to re-run this
+    // because the log may hold a merge whose repair delta was lost in the
+    // persist window — see `commitLocalWrite`'s ORDER note and the W11
+    // artifact.
+    this.repairTrees();
     this.#log(
       `room "${this.room}" restored: snapshot ${snapshot?.length ?? 0} bytes, ${logged.length} logged updates, ${this.peer.doc.listShapes().length} shapes`,
     );
@@ -248,11 +270,53 @@ export class CanvasRoomHost {
       this.#publish({ to: clientId, resync: true });
     }
     entry.lastSeenMs = nowMs;
+    const applied = this.#inboundUpdates;
     entry.transport.deliver(bytes);
+    // W11: reconcile the trees this frame's MERGE may have broken — two peers'
+    // individually legal edits are exactly what arrives here. Gated on the
+    // frame having actually applied something, because a pass costs a whole
+    // document read and this path also carries every presence frame (a pointer
+    // move, many per second) and every no-op re-import.
+    if (this.#inboundUpdates !== applied) this.repairTrees();
     // Compact here rather than inside onUpdatePayload: by now the peer has
     // finished import + repair + commit for this frame, so the snapshot we
     // take is fully current.
     this.#maybeCompact();
+  }
+
+  /** Reconciliation passes this host has run (W11). */
+  get repairPasses(): number {
+    return this.#repairPasses;
+  }
+
+  /**
+   * Reconcile every discovery tree in this room's document (W11).
+   *
+   * The server is the only writer of a repair, which is what makes "every peer
+   * reaches the same repaired state" true in practice — but it is not what
+   * makes it SAFE: `treeRepairPlan` is a pure function of document content, so
+   * a second repairer (a reconnecting client, a future replica) computing it
+   * independently would choose the same edges. The determinism is in the plan,
+   * not in the topology.
+   *
+   * Commits through `commitLocalWrite`, so a repair is logged exactly like an
+   * agent write. Nothing is committed when there is nothing to do.
+   */
+  repairTrees(): readonly TreeRepairReport[] {
+    if (this.#closed) return [];
+    this.#repairPasses += 1;
+    const reports = repairAllTrees({
+      document: () => dumpModel(this.peer.doc),
+      getShape: (id) => this.peer.doc.getShape(id),
+      putShape: (shape) => this.peer.doc.putShape(shape),
+      commit: () => this.commitLocalWrite(),
+    });
+    for (const report of reports) {
+      // Only trees that HAD something wrong say anything: a per-frame "tree X:
+      // nothing to do" would bury the one line that matters.
+      for (const line of report.lines) this.#log(`room "${this.room}" ${line}`);
+    }
+    return reports;
   }
 
   /**
