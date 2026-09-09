@@ -134,8 +134,16 @@ function edgesOf(rigged: Rig, treeId = TREE): string[] {
     .sort();
 }
 
+/** The read spine as PRODUCTION wires it — `treeServiceForDoc`, over this
+ * rig's real doc, not a service built from the document value alone.
+ *
+ * That distinction is W14's F1 in one line: a service given only
+ * `dumpModel(doc)` cannot see the live text container a title lives in, so it
+ * agreed with the old `props.richText` write path and with nothing else. A
+ * write suite that asserts through a hand-built reader is asserting that the
+ * write path agrees with itself. */
 const viewOf = (rigged: Rig, nodeId: string) => {
-  const found = createTreeService({ document: rigged.document }).node(nodeId);
+  const found = treeServiceForDoc(rigged.doc).node(nodeId);
   if (!found.ok) return expect.unreachable(`no node ${nodeId}: ${found.detail}`);
   return found.value;
 };
@@ -756,6 +764,11 @@ describe("a document that drops the write", () => {
       getShape: (id) => doc.getShape(id),
       putShape: () => {},
       updateProps: () => {},
+      // Deaf to the title too: a target that took the text while dropping the
+      // shape would make "the write landed" half-true, which is the one thing
+      // this target exists to disprove.
+      text: (id) => doc.getText(id),
+      setText: () => {},
       putBinding: () => {},
     putPage: () => {},
       commit: () => {},
@@ -805,6 +818,8 @@ describe("reparent cannot lose the edge it is replacing", () => {
         if (doc.getShape(shape.id) !== undefined) doc.putShape(shape);
       },
       updateProps: (id, props) => doc.updateProps(id, props),
+      text: (id) => doc.getText(id),
+      setText: (id, text) => doc.setText(id, text),
       putBinding: (binding) => doc.putBinding(binding),
       commit: () => doc.commit(),
       random: seededRandom(11),
@@ -894,6 +909,8 @@ describe("post-write verification", () => {
       getShape: (id) => doc.getShape(id),
       putShape: (shape) => doc.putShape(shape),
       updateProps: (id, props) => doc.updateProps(id, props),
+      text: (id) => doc.getText(id),
+      setText: (id, text) => doc.setText(id, text),
       putBinding: (binding) => doc.putBinding(binding),
       putPage: (page) => doc.putPage(page),
       commit: () => doc.commit(),

@@ -28,6 +28,7 @@ import {
   draftWithReference,
   nodeReferenceFor,
 } from "../canvas/tree/discuss.js";
+import { NO_LIVE_TEXT } from "../canvas/shape-text.js";
 import { nodeDirective } from "../canvas/tree/node-reference.js";
 import { treeGestureTargetFor } from "../canvas/tree/gestures.js";
 import { EXAMPLE, TREE, docOf } from "./lib/tree-fixture.js";
@@ -44,7 +45,7 @@ describe("nodeReferenceFor", () => {
   const doc = docOf(EXAMPLE);
 
   it("opens with the directive W9 renders, on its own line", () => {
-    const text = okText(nodeReferenceFor(doc, TREE, "shape:schema"));
+    const text = okText(nodeReferenceFor(doc, TREE, "shape:schema", NO_LIVE_TEXT));
     const [first] = text.split("\n");
     // The EMITTER is the definition; W9's parse side is tested against this
     // same function in tests/tree-node-directive.test.ts.
@@ -52,7 +53,7 @@ describe("nodeReferenceFor", () => {
   });
 
   it("carries the path to root, root first, ending at the node itself", () => {
-    const text = okText(nodeReferenceFor(doc, TREE, "shape:schema"));
+    const text = okText(nodeReferenceFor(doc, TREE, "shape:schema", NO_LIVE_TEXT));
     expect(text).toContain("Ship discovery trees");
     expect(text).toContain("Tree service");
     expect(text).toContain("Encoding contract");
@@ -62,21 +63,21 @@ describe("nodeReferenceFor", () => {
 
   it("carries nothing else — no context note, no blocker list, no state", () => {
     const doc2 = docOf({ ...EXAMPLE, context: { "shape:schema": "a long context note" } });
-    const text = okText(nodeReferenceFor(doc2, TREE, "shape:schema"));
+    const text = okText(nodeReferenceFor(doc2, TREE, "shape:schema", NO_LIVE_TEXT));
     expect(text).not.toContain("a long context note");
     expect(text).not.toContain("Arrow renderer"); // a sibling blocker
     expect(text.split("\n")).toHaveLength(2);
   });
 
   it("names a root node without pretending it has ancestors", () => {
-    const text = okText(nodeReferenceFor(doc, TREE, "shape:goal"));
+    const text = okText(nodeReferenceFor(doc, TREE, "shape:goal", NO_LIVE_TEXT));
     expect(text).toContain("Ship discovery trees");
     expect(text.split("\n")).toHaveLength(2);
   });
 
   it("says an untitled node is untitled rather than rendering an empty step", () => {
     const bare = docOf({ nodes: { "shape:bare": "todo" }, edges: [] });
-    const text = okText(nodeReferenceFor(bare, TREE, "shape:bare"));
+    const text = okText(nodeReferenceFor(bare, TREE, "shape:bare", NO_LIVE_TEXT));
     expect(text).toContain("(untitled)");
   });
 
@@ -88,7 +89,7 @@ describe("nodeReferenceFor", () => {
       edges: ids.slice(1).map((id, i) => [id, ids[i] as string] as const),
     });
     const last = ids[ids.length - 1] as string;
-    const text = okText(nodeReferenceFor(deep, TREE, last));
+    const text = okText(nodeReferenceFor(deep, TREE, last, NO_LIVE_TEXT));
     expect(text).toContain("Step 0"); // the root survives — it is the goal
     expect(text).toContain(`Step ${ids.length - 1}`); // and so does the node
     expect(text).toContain("…"); // and the middle says it was cut
@@ -104,7 +105,7 @@ describe("nodeReferenceFor", () => {
       ),
       edges: ids.slice(1).map((id, i) => [id, ids[i] as string] as const),
     });
-    const text = okText(nodeReferenceFor(shouty, TREE, ids[ids.length - 1] as string));
+    const text = okText(nodeReferenceFor(shouty, TREE, ids[ids.length - 1] as string, NO_LIVE_TEXT));
     expect(text.length).toBeLessThanOrEqual(MAX_REFERENCE_CHARS);
     // Each step is cut to a readable label, not to the whole note.
     const path = (text.split("\n")[1] ?? "").replace(/^Path: /, "");
@@ -115,7 +116,7 @@ describe("nodeReferenceFor", () => {
 
   it("uses only the first line of a multi-line note", () => {
     const doc2 = docOf({ nodes: { "shape:n": ["todo", "Title line\nand the body"] }, edges: [] });
-    const text = okText(nodeReferenceFor(doc2, TREE, "shape:n"));
+    const text = okText(nodeReferenceFor(doc2, TREE, "shape:n", NO_LIVE_TEXT));
     expect(text).toContain("Title line");
     expect(text).not.toContain("and the body");
   });
@@ -131,14 +132,14 @@ describe("nodeReferenceFor", () => {
         ["shape:b", "shape:a"],
       ],
     });
-    const reference = nodeReferenceFor(cyclic, TREE, "shape:a");
+    const reference = nodeReferenceFor(cyclic, TREE, "shape:a", NO_LIVE_TEXT);
     const text = okText(reference);
     expect(text.split("\n")[0]).toBe(nodeDirective("shape:a"));
     expect(text).toContain("cycle");
   });
 
   it("refuses a shape that is not a node of this tree", () => {
-    const reference = nodeReferenceFor(doc, TREE, "shape:missing");
+    const reference = nodeReferenceFor(doc, TREE, "shape:missing", NO_LIVE_TEXT);
     expect(reference.ok).toBe(false);
     if (!reference.ok) expect(reference.why).toContain("shape:missing");
   });

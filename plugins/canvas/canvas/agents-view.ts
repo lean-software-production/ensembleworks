@@ -11,6 +11,7 @@ import {
   type Shape,
 } from "@ensembleworks/canvas-model";
 import type { ViewportSize } from "@ensembleworks/canvas-react";
+import { shapeText } from "./shape-text.js";
 
 /** How far outside the viewport a shape may sit before its chrome is dropped
  * entirely. A little slack so a badge anchored just past the edge of a shape
@@ -117,26 +118,18 @@ export function screenBoxFor(
 }
 
 /**
- * The prompt a note carries. Live document text first — that is what the plain
- * text editor writes, and therefore what the user actually typed — falling back
- * to flattening a `richText` body, which is how imported and fixture shapes
- * carry their text.
+ * The prompt a note carries: live document text first — what the plain-text
+ * editor writes, and therefore what the user actually typed — falling back to
+ * its `richText`, which is how imported and fixture shapes carry their text.
  *
- * The fallback is reimplemented here in five lines rather than imported:
- * canvas-react's own `flattenRichText` is not on its public barrel, and this
- * spike may not add an export to that package.
+ * BOTH THE RULE AND THE EXTRACTION ARE NOW BORROWED, not restated. This
+ * function used to decide the precedence itself and carry its own five-line
+ * richText flattener; W15 needed the same precedence for a tree node's title
+ * and found that a SECOND copy of it is how the two drift (the tree read spine
+ * read `richText` only, and reported `(untitled)` for text a human had typed —
+ * W14's F1). `canvas/shape-text.ts` is the one rule, over canvas-model's own
+ * `plainText`; all this adds is the trim a prompt wants.
  */
 export function promptTextFor(shape: Shape | undefined, live: string): string {
-  const trimmed = live.trim();
-  if (trimmed.length > 0) return trimmed;
-  const rich = (shape?.props as Record<string, unknown> | undefined)?.richText;
-  return flattenRichText(rich).trim();
-}
-
-function flattenRichText(node: unknown): string {
-  if (typeof node !== "object" || node === null) return "";
-  const value = node as { text?: unknown; content?: unknown };
-  if (typeof value.text === "string") return value.text;
-  if (Array.isArray(value.content)) return value.content.map(flattenRichText).join("");
-  return "";
+  return shapeText(shape, live).trim();
 }

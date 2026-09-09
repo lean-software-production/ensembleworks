@@ -111,6 +111,11 @@ export const writerOf = (spec: Spec): TreeWriter => {
     getShape: (id) => doc.byId.get(id),
     putShape: () => {},
     updateProps: () => {},
+    // The live text channel is EMPTY here, honestly: a fixture document has no
+    // LoroText containers at all, so its titles are the `props.richText` ones
+    // `docOf` wrote — which is exactly what `shapeText` falls back to.
+    text: () => "",
+    setText: () => {},
     putBinding: () => {},
     putPage: () => {},
     commit: () => {},

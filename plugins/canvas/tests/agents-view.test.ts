@@ -172,8 +172,18 @@ describe("promptTextFor", () => {
     expect(promptTextFor(shape, "  typed just now  ")).toBe("typed just now");
   });
 
-  it("falls back to flattening richText when there is no live text", () => {
-    expect(promptTextFor(shape, "   ")).toBe("from richText");
+  it("falls back to richText when the live container was never written", () => {
+    expect(promptTextFor(shape, "")).toBe("from richText");
+  });
+
+  it("does NOT fall back for a note the human blanked to whitespace", () => {
+    // CHANGED AT W15, deliberately. This used to answer "from richText" for a
+    // whitespace live text — but canvas-react's `labelOf` returns the
+    // whitespace (it tests `length`, not `trim().length`), so that note is
+    // BLANK on screen, and running an imported prompt off it would run
+    // something the human cannot see. One rule now decides this for the
+    // run-note prompt and for a tree node's title alike: canvas/shape-text.ts.
+    expect(promptTextFor(shape, "   ")).toBe("");
   });
 
   it("is empty when the note carries no text at all", () => {

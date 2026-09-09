@@ -134,7 +134,9 @@ export function CanvasSession({
       onAddBlocker={onAddBlocker}
       onLaunchNode={onLaunchNode}
       discussDestination={discuss.destination}
-      onDiscuss={(treeId, nodeId) => discuss.discuss(snapshot, treeId, nodeId)}
+      onDiscuss={(treeId, nodeId) =>
+        discuss.discuss(snapshot, treeId, nodeId, (id) => editor.doc.getText(id))
+      }
       pageSwitcher={pageSwitcher}
     />
   );

@@ -44,7 +44,8 @@
 // testable without a jsdom — the split canvas/agent-arms.ts's header states
 // and canvas/tree/gestures.ts already follows.
 import type { PluginComposerScope } from "@get-bb/plugin-sdk";
-import { plainText, type CanvasDocument } from "@ensembleworks/canvas-model";
+import type { CanvasDocument } from "@ensembleworks/canvas-model";
+import { shapeText, type LiveText } from "../shape-text.js";
 import { titleOf } from "./answers.js";
 import type { TreeGestureTarget } from "./gestures.js";
 import { pathToRoot, readTree, type TreeNode } from "./model.js";
@@ -182,6 +183,12 @@ export function nodeReferenceFor(
   doc: CanvasDocument,
   treeId: string,
   nodeId: string,
+  /** The live text channel — `CanvasDoc.getText`. REQUIRED, not defaulted: a
+   * caller that quietly omitted it would render a breadcrumb of the titles an
+   * import left behind rather than the ones the human typed, and paste that
+   * into the agent's own prompt (W14's F1). A caller with no doc handle passes
+   * `NO_LIVE_TEXT` and says so. */
+  text: LiveText,
 ): NodeReference {
   const directive = nodeDirective(nodeId);
   if (directive === null) {
@@ -197,13 +204,13 @@ export function nodeReferenceFor(
   // crash inside a click handler.
   if (read.status !== "ok") return { ok: true, text: `${directive}\n${NO_PATH}` };
   // `pathToRoot` walks UP; a breadcrumb reads DOWN.
-  const steps = [...read.value].reverse().map(stepTitle);
+  const steps = [...read.value].reverse().map((node) => stepTitle(node, text));
   return { ok: true, text: `${directive}\n${breadcrumb(steps, MAX_REFERENCE_CHARS - directive.length - 1)}` };
 }
 
 /** One node's label: its first line, bounded, never blank. */
-function stepTitle(node: TreeNode): string {
-  const line = (plainText(node.shape).split("\n")[0] ?? "").trim();
+function stepTitle(node: TreeNode, text: LiveText): string {
+  const line = (shapeText(node.shape, text(node.id)).split("\n")[0] ?? "").trim();
   const title = titleOf({ title: line });
   return title.length <= MAX_STEP_TITLE
     ? title

@@ -31,12 +31,16 @@ import {
   type ComposerDestination,
   type DiscussOutcome,
 } from "../tree/discuss.js";
+import type { LiveText } from "../shape-text.js";
 
 export interface TreeDiscuss {
   /** Where a reference would go, or the reason there is nowhere. The arm is
    * greyed with `why` rather than hidden. */
   readonly destination: ComposerDestination;
-  discuss(doc: CanvasDocument, treeId: string, nodeId: string): void;
+  /** `getText` is the live text channel (`editor.doc.getText`), carried
+   * alongside the document because a `CanvasDocument` does not hold the
+   * per-shape text containers a human types into — see canvas/shape-text.ts. */
+  discuss(doc: CanvasDocument, treeId: string, nodeId: string, getText: LiveText): void;
 }
 
 export function useTreeDiscuss(): TreeDiscuss {
@@ -44,7 +48,7 @@ export function useTreeDiscuss(): TreeDiscuss {
   const destination = composerDestination(composer?.scope ?? null);
 
   const discuss = useCallback(
-    (doc: CanvasDocument, treeId: string, nodeId: string) => {
+    (doc: CanvasDocument, treeId: string, nodeId: string, getText: LiveText) => {
       // Re-derived at press time rather than closed over: the panel can be
       // mounted for minutes while the composer's scope changes underneath it.
       const where = composerDestination(composer?.scope ?? null);
@@ -52,7 +56,7 @@ export function useTreeDiscuss(): TreeDiscuss {
         toast.error(where.why);
         return;
       }
-      const reference = nodeReferenceFor(doc, treeId, nodeId);
+      const reference = nodeReferenceFor(doc, treeId, nodeId, getText);
       if (!reference.ok) {
         // The reader's own sentence: it names the node, which is what a human
         // needs to work out that the tree moved under them.

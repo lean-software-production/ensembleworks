@@ -38,12 +38,12 @@
 // `CanvasDoc`, so this module stays testable against any document.
 import {
   indexBetween,
-  plainText,
   type Binding,
   type CanvasDocument,
   type Page,
   type Shape,
 } from "@ensembleworks/canvas-model";
+import { shapeText } from "../shape-text.js";
 import {
   MAX_CONTEXT_LENGTH,
   TREE_KEY,
@@ -84,6 +84,26 @@ export interface TreeWriteTarget {
   getShape(id: string): Shape | undefined;
   putShape(shape: Shape): void;
   updateProps(id: string, props: Record<string, unknown>): void;
+  /**
+   * A shape's LIVE text container, read and written — `CanvasDoc.getText` /
+   * `setText`, the per-shape LoroText keyed `text:<shapeId>`.
+   *
+   * THE TITLE CHANNEL, AND THERE IS ONLY ONE. A human's keystrokes land here
+   * (canvas-editor's `SetText` intent calls `doc.setText` verbatim), so this
+   * is where an agent's titles are written too: a rename an agent makes is
+   * the same field, in the same container, that the human would have typed
+   * into. Writing `props.richText` instead is what W14's F1 was — the agent
+   * wrote one channel, the human read the other, and each was invisible to
+   * the other while both reported success. `props.richText` survives as the
+   * READ fallback for imported documents (see canvas/shape-text.ts); nothing
+   * in this engine writes it any more.
+   *
+   * `setText` shares `putShape`'s no-op-on-unknown-id contract, so it is
+   * called AFTER the shape it titles is put, and the write is verified by
+   * reading the title back like every other one.
+   */
+  text(id: string): string;
+  setText(id: string, text: string): void;
   putBinding(binding: Binding): void;
   /** Upsert a page. W4's goal gesture needs it to MARK a page as a tree — the
    * only write in this engine that is not about a shape. Additive like every
@@ -370,21 +390,18 @@ function addGoal(
   if (!minted.ok) return minted;
   const nodeId = minted.value;
   const at = placeNewGoal(tree);
-  const shape = withTitle(
-    buildTreeNode({
-      id: nodeId,
-      treeId,
-      // The PAGE, not a frame: a goal is the top of its own tree, so it is not
-      // inheriting anybody's container.
-      parentId: treeId,
-      index: nextIndex(tree),
-      x: at.x,
-      y: at.y,
-      ...(state === undefined ? {} : { state }),
-      ...(context === undefined ? {} : { context }),
-    }),
-    titled.value,
-  );
+  const shape = buildTreeNode({
+    id: nodeId,
+    treeId,
+    // The PAGE, not a frame: a goal is the top of its own tree, so it is not
+    // inheriting anybody's container.
+    parentId: treeId,
+    index: nextIndex(tree),
+    x: at.x,
+    y: at.y,
+    ...(state === undefined ? {} : { state }),
+    ...(context === undefined ? {} : { context }),
+  });
 
   const marking = mark.status === "absent";
   return ops.applied(
@@ -393,6 +410,9 @@ function addGoal(
     () => {
       if (marking) ops.target.putPage(markTreePage(page));
       ops.target.putShape(shape);
+      // AFTER the shape: `setText` no-ops on an id the document has never
+      // seen, exactly as `putShape` rejects an invalid shape.
+      ops.target.setText(nodeId, titled.value);
     },
     {
       createdId: nodeId,
@@ -401,10 +421,16 @@ function addGoal(
         `Created goal ${nodeId} — ${titled.value} [${state ?? "todo"}] on ${treeId}, blocking nothing.`,
       ],
     },
-    (after) =>
-      after.nodes.has(nodeId)
+    (after) => {
+      const made = after.nodes.get(nodeId);
+      if (made === undefined) return `the document did not accept a new goal on ${treeId}`;
+      // The title is a SEPARATE container from the shape, so an accepted shape
+      // does not prove an accepted title — read it back through the same rule
+      // every reader uses.
+      return titleOf(ops, made) === titled.value
         ? null
-        : `the document did not accept a new goal on ${treeId}`,
+        : `goal ${nodeId} was created without its title`;
+    },
   );
 }
 
@@ -440,22 +466,19 @@ function addChild(
   const slot = placeNewChild(tree, parent.id);
   const { x, y } =
     slot.status === "ok" ? slot.value : { x: parent.shape.x, y: parent.shape.y };
-  const shape = withTitle(
-    buildTreeNode({
-      id: nodeId,
-      treeId: tree.treeId,
-      // The parent SHAPE's container, not the parent node: a node may sit
-      // inside a frame, and a child that jumped out of it would look like a
-      // move the agent never mentioned.
-      parentId: parent.shape.parentId,
-      index: nextIndex(tree),
-      x,
-      y,
-      ...(state === undefined ? {} : { state }),
-      ...(context === undefined ? {} : { context }),
-    }),
-    titled.value,
-  );
+  const shape = buildTreeNode({
+    id: nodeId,
+    treeId: tree.treeId,
+    // The parent SHAPE's container, not the parent node: a node may sit
+    // inside a frame, and a child that jumped out of it would look like a
+    // move the agent never mentioned.
+    parentId: parent.shape.parentId,
+    index: nextIndex(tree),
+    x,
+    y,
+    ...(state === undefined ? {} : { state }),
+    ...(context === undefined ? {} : { context }),
+  });
   const edge = buildTreeEdge({
     id: edgeId,
     treeId: tree.treeId,
@@ -476,6 +499,9 @@ function addChild(
       // Shape before bindings: a binding whose `fromId` names a shape the doc
       // has never seen is a dangling row repair() would sweep.
       ops.target.putShape(shape);
+      // AFTER its shape, like the goal's: `setText` cannot title a shape the
+      // document does not hold yet.
+      ops.target.setText(nodeId, titled.value);
       ops.target.putShape(edge.shape);
       for (const binding of edge.bindings) ops.target.putBinding(binding);
     },
@@ -484,12 +510,16 @@ function addChild(
       edgeId,
       changed: [`Created ${nodeId} — ${titled.value} [${state ?? "todo"}], blocking ${parent.id}.`],
     },
-    (after) =>
-      after.nodes.has(nodeId)
-        ? after.edges.some((edge) => edge.blockerId === nodeId && edge.blockedId === parent.id)
-          ? null
-          : `${nodeId} was created but the edge to ${parent.id} did not land`
-        : `the document did not accept a new node under ${parent.id}`,
+    (after) => {
+      const made = after.nodes.get(nodeId);
+      if (made === undefined) return `the document did not accept a new node under ${parent.id}`;
+      if (!after.edges.some((edge) => edge.blockerId === nodeId && edge.blockedId === parent.id)) {
+        return `${nodeId} was created but the edge to ${parent.id} did not land`;
+      }
+      return titleOf(ops, made) === titled.value
+        ? null
+        : `${nodeId} was created without its title`;
+    },
   );
 }
 
@@ -502,13 +532,19 @@ function rename(
   const found = ops.locate(nodeId);
   if (!found.ok) return found;
   const { tree, node } = found.value;
-  const was = plainText(node.shape).trim();
+  const was = titleOf(ops, node).trim();
   return ops.applied(
     tree,
     node.id,
-    // A PROPS patch, not a whole-shape put: a title lives in `props.richText`,
-    // and merging leaves every other prop (and the node's meta) as it was.
-    () => ops.target.updateProps(node.id, { richText: richTextOf(titled.value) }),
+    // THE LIVE TEXT CONTAINER, which is where a human's keystrokes land — not
+    // `props.richText`. Writing the other channel is what made a rename
+    // invisible on the canvas while the tool reported success (W14's F1,
+    // reverse direction): `labelOf` renders live text first, so a note a human
+    // had ever typed into kept showing the old title forever. A shape a human
+    // has never typed into still carries an imported `props.richText`; the
+    // read rule (canvas/shape-text.ts) puts live text above it, so the stale
+    // value is shadowed from this write on and can never surface again.
+    () => ops.target.setText(node.id, titled.value),
     {
       changed: [
         was === ""
@@ -518,7 +554,7 @@ function rename(
     },
     (after) => {
       const now = after.nodes.get(node.id);
-      return now && plainText(now.shape).trim() === titled.value
+      return now && titleOf(ops, now).trim() === titled.value
         ? null
         : `the document did not accept a new title for ${node.id}`;
     },
@@ -887,18 +923,9 @@ function withMeta(shape: Shape, fields: { state?: NodeState; context?: string })
   return { ...shape, meta: { ...shape.meta, ...fields } } as Shape;
 }
 
-/** `props.richText`, the one place canvas-model reads a note's text from
- * (`plainText` is its exact inverse). canvas-model exports no builder for it,
- * so this is the single place in the plugin that constructs one. */
-export function richTextOf(title: string): Record<string, unknown> {
-  return {
-    type: "doc",
-    content: [{ type: "paragraph", content: [{ type: "text", text: title }] }],
-  };
-}
-
-const withTitle = (shape: Shape, title: string): Shape =>
-  ({
-    ...shape,
-    props: { ...(shape.props as Record<string, unknown>), richText: richTextOf(title) },
-  }) as Shape;
+/** A node's title, read through the plugin's ONE rule for it — the same rule
+ * every reader of this document uses (canvas/shape-text.ts), so a write's
+ * read-back can never disagree with what the next `canvas_tree_node` call
+ * answers or with what the human sees on screen. */
+const titleOf = (ops: WriteOps, node: TreeNode): string =>
+  shapeText(node.shape, ops.target.text(node.id));

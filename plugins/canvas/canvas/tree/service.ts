@@ -36,7 +36,8 @@
 // no bb SDK, no CanvasDoc, no Loro, no DOM, no clock, no PRNG. The server
 // wiring that turns `room.peer.doc` into that thunk is `doc-source.ts`, one
 // function, so this module stays testable against a fixture document.
-import { plainText, type CanvasDocument } from "@ensembleworks/canvas-model";
+import type { CanvasDocument } from "@ensembleworks/canvas-model";
+import { NO_LIVE_TEXT, shapeText, type LiveText } from "../shape-text.js";
 import type { NodeState } from "./encoding.js";
 import {
   checkTreeInvariants,
@@ -71,7 +72,11 @@ import {
 export interface TreeNodeView {
   readonly id: string;
   readonly treeId: string;
-  /** The note's text, as canvas-model reads it. `""` for an empty note. */
+  /** The note's text, resolved by the plugin's ONE rule for it
+   * (`canvas/shape-text.ts`): the live text container a human types into if it
+   * holds anything, else `props.richText`. That is the order canvas-react's
+   * `labelOf` renders in, so this is the string on the human's screen. `""`
+   * for a note nobody has written in. */
   readonly title: string;
   readonly state: NodeState;
   readonly approached: boolean;
@@ -144,9 +149,18 @@ export interface TreeDigest {
  * no room to say what changed. */
 export const DIGEST_MAX_CHARS = 2_000;
 
-/** Where the service reads the document. One thunk, called once per query. */
+/** Where the service reads the document. One thunk, called once per query.
+ *
+ * TWO CHANNELS, because a note's text lives in two places and only one of them
+ * is in a `CanvasDocument`: `text` is `CanvasDoc.getText`, the live container a
+ * human's keystrokes land in, and it is what makes a typed title visible to
+ * every agent surface (W15 / W14's F1). It is OPTIONAL and defaults to
+ * `NO_LIVE_TEXT` — a caller holding only a document value (a fixture, an rpc
+ * payload) has no live channel to offer, and degrades to `props.richText`
+ * exactly as `shapeText` says. Production wires it: see doc-source.ts. */
 export interface TreeDocumentSource {
   document(): CanvasDocument;
+  text?: LiveText;
 }
 
 export interface TreeService {
@@ -172,6 +186,7 @@ export interface TreeService {
 // ---------------------------------------------------------------------------
 
 export function createTreeService(source: TreeDocumentSource): TreeService {
+  const text = source.text ?? NO_LIVE_TEXT;
   /** Read the document ONCE and locate the node's tree within it. Every
    * node-addressed query starts here, so a caller never has to know (or
    * guess, or cache) which page a node lives on — the shape says so. */
@@ -210,11 +225,11 @@ export function createTreeService(source: TreeDocumentSource): TreeService {
   return {
     trees: () => listTrees(source.document()),
 
-    node: (nodeId) => map(locate(nodeId), ({ tree, node }) => viewOf(tree, node)),
+    node: (nodeId) => map(locate(nodeId), ({ tree, node }) => viewOf(tree, node, text)),
 
     children: (nodeId) =>
       map(locate(nodeId), ({ tree, node }) =>
-        childrenOf(tree, node.id).map((child) => viewOf(tree, child)),
+        childrenOf(tree, node.id).map((child) => viewOf(tree, child, text)),
       ),
 
     pathToRoot: (nodeId) =>
@@ -222,17 +237,17 @@ export function createTreeService(source: TreeDocumentSource): TreeService {
         const path = pathToRoot(tree, node.id);
         if (path.status === "invalid") return miss("cycle", path.error);
         if (path.status === "absent") return miss("no-such-node", `no node ${nodeId} in ${tree.treeId}`);
-        return { ok: true, value: path.value.map((step) => viewOf(tree, step)) };
+        return { ok: true, value: path.value.map((step) => viewOf(tree, step, text)) };
       }),
 
     subtree: (nodeId, depth) =>
-      map(locate(nodeId), ({ tree, node }) => buildSubtree(tree, node, depth, new Set())),
+      map(locate(nodeId), ({ tree, node }) => buildSubtree(tree, node, depth, new Set(), text)),
 
     ready: (treeId) =>
-      map(load(treeId), (tree) => readyNodes(tree).map((node) => viewOf(tree, node))),
+      map(load(treeId), (tree) => readyNodes(tree).map((node) => viewOf(tree, node, text))),
 
     digest: (treeId, options) =>
-      map(load(treeId), (tree) => buildDigest(tree, options?.maxChars ?? DIGEST_MAX_CHARS)),
+      map(load(treeId), (tree) => buildDigest(tree, options?.maxChars ?? DIGEST_MAX_CHARS, text)),
   };
 }
 
@@ -249,13 +264,13 @@ function treeIdOfShape(doc: CanvasDocument, shapeId: string): string | null {
   return typeof treeId === "string" && treeId.length > 0 ? treeId : null;
 }
 
-function viewOf(tree: Tree, node: TreeNode): TreeNodeView {
+function viewOf(tree: Tree, node: TreeNode, text: LiveText): TreeNodeView {
   const parentIds = parentsOf(tree, node.id).map((parent) => parent.id);
   const childIds = childrenOf(tree, node.id).map((child) => child.id);
   return {
     id: node.id,
     treeId: tree.treeId,
-    title: plainText(node.shape),
+    title: shapeText(node.shape, text(node.id)),
     state: node.meta.state,
     approached: node.meta.approached,
     context: node.meta.context,
@@ -279,15 +294,16 @@ function buildSubtree(
   node: TreeNode,
   depth: number,
   seen: ReadonlySet<string>,
+  text: LiveText,
 ): SubtreeView {
-  const view = viewOf(tree, node);
+  const view = viewOf(tree, node, text);
   if (seen.has(node.id)) return { node: view, children: [], elided: "cycle" };
   if (depth <= 0) {
     return { node: view, children: [], elided: view.childIds.length > 0 ? "depth" : null };
   }
   const nextSeen = new Set([...seen, node.id]);
   const children = childrenOf(tree, node.id).map((child) =>
-    buildSubtree(tree, child, depth - 1, nextSeen),
+    buildSubtree(tree, child, depth - 1, nextSeen, text),
   );
   return { node: view, children, elided: null };
 }
@@ -307,7 +323,7 @@ function buildSubtree(
  * prose — a digest that guessed at what mattered would be a worse lie than a
  * short one.
  */
-function buildDigest(tree: Tree, maxChars: number): TreeDigest {
+function buildDigest(tree: Tree, maxChars: number, text: LiveText): TreeDigest {
   const nodes = treeNodes(tree);
   const problems = [...tree.problems, ...checkTreeInvariants(tree)];
   const rootIds = roots(tree).map((root) => root.id);
@@ -347,7 +363,7 @@ function buildDigest(tree: Tree, maxChars: number): TreeDigest {
       `tree ${tree.treeId} — ${counts.nodes} nodes (${counts.done} done, ${counts.wip} wip, ${counts.todo} todo), ${counts.edges} edges`,
       readyLine,
       ...problemLines,
-      ...outlineOf(tree),
+      ...outlineOf(tree, text),
     ],
     maxChars,
   );
@@ -470,20 +486,20 @@ export function fitLines(
  * Nodes no root reaches (only possible under a cycle) are appended, because
  * omitting them would hide exactly the state a reader is trying to fix.
  */
-function outlineOf(tree: Tree): readonly string[] {
+function outlineOf(tree: Tree, text: LiveText): readonly string[] {
   const lines: string[] = [];
   const listed = new Set<string>();
   const walk = (node: TreeNode, depth: number): void => {
     if (listed.has(node.id)) return;
     listed.add(node.id);
-    lines.push(lineOf(node, depth, tree));
+    lines.push(lineOf(node, depth, tree, text));
     for (const child of childrenOf(tree, node.id)) walk(child, depth + 1);
   };
   for (const root of roots(tree)) walk(root, 0);
   for (const node of treeNodes(tree)) {
     if (listed.has(node.id)) continue;
     listed.add(node.id);
-    lines.push(lineOf(node, 0, tree));
+    lines.push(lineOf(node, 0, tree, text));
   }
   return lines;
 }
@@ -491,8 +507,8 @@ function outlineOf(tree: Tree): readonly string[] {
 /** `  - shape:api [wip] Tree service` — id FIRST, because an id is what an
  * agent needs to ask the next question with, and a title is what a human
  * recognises. Both, every line, so neither reader has to cross-reference. */
-function lineOf(node: TreeNode, depth: number, tree: Tree): string {
-  const title = plainText(node.shape).split("\n")[0] ?? "";
+function lineOf(node: TreeNode, depth: number, tree: Tree, text: LiveText): string {
+  const title = shapeText(node.shape, text(node.id)).split("\n")[0] ?? "";
   const marks = [
     node.meta.approached ? "approached" : "",
     isReadyNode(tree, node) ? "ready" : "",

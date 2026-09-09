@@ -18,9 +18,19 @@ import { createTreeService, type TreeService } from "./service.js";
 import { createTreeWriter, type TreeWriter } from "./writes.js";
 import type { TreeRepairTarget } from "./repair.js";
 
-/** A tree service reading a live room's document. */
+/**
+ * A tree service reading a live room's document.
+ *
+ * TWO CHANNELS, and the second one is the whole of W15. `dumpModel` carries a
+ * shape's `props` — but NOT the per-shape LoroText container a human's
+ * keystrokes land in (`doc.getText`), which lives outside the shape tree
+ * entirely. Handing the service only the document is what made every
+ * agent-facing surface report `(untitled)` for a title a human had typed
+ * (W14's F1). `text` is that channel, and `shape-text.ts` is the one place
+ * that decides which of the two wins.
+ */
 export function treeServiceForDoc(doc: CanvasDoc): TreeService {
-  return createTreeService({ document: () => dumpModel(doc) });
+  return createTreeService({ document: () => dumpModel(doc), text: (id) => doc.getText(id) });
 }
 
 /**
@@ -50,6 +60,11 @@ export function treeWriterForDoc(
     getShape: (id) => doc.getShape(id),
     putShape: (shape) => doc.putShape(shape),
     updateProps: (id, props) => doc.updateProps(id, props),
+    // The title channel, read AND written — an agent's rename lands in the
+    // same container a human's keystrokes do, so the two can never mean two
+    // different titles for one node (W15).
+    text: (id) => doc.getText(id),
+    setText: (id, text) => doc.setText(id, text),
     putBinding: (binding) => doc.putBinding(binding),
     putPage: (page) => doc.putPage(page),
     commit,

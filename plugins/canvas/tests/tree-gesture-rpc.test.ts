@@ -18,7 +18,7 @@ import { describe, expect, it } from "vitest";
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
 import type { FakePluginHost } from "@get-bb/plugin-sdk/testing";
 import { dumpModel } from "@ensembleworks/canvas-doc";
-import { plainText } from "@ensembleworks/canvas-model";
+import { shapeText } from "../canvas/shape-text.js";
 import { markTreePage, readTreePage } from "../canvas/tree/encoding.js";
 import { readTree } from "../canvas/tree/model.js";
 import { connectPeer, type ConnectedPeer } from "./lib/room-rig.js";
@@ -62,7 +62,14 @@ describe("canvas_tree_add_goal", () => {
     const tree = treeOnClient(client);
     const created = tree.nodes.get(result.nodeId);
     expect(created).toBeDefined();
-    expect(plainText(created!.shape).trim()).toBe("Ship the loop");
+    // Read on the CLIENT's own live text container — the channel canvas-react
+    // renders from and a human types into. A server-side write that only
+    // reached `props.richText` would satisfy a `plainText` assertion here and
+    // still be invisible on a note the human had ever typed in (W14's F1).
+    expect(client.peer.doc.getText(result.nodeId)).toBe("Ship the loop");
+    expect(shapeText(created!.shape, client.peer.doc.getText(result.nodeId)).trim()).toBe(
+      "Ship the loop",
+    );
     // A goal blocks nothing: no edge came with it.
     expect(tree.edges).toHaveLength(0);
     expect(result.problems).toEqual([]);
