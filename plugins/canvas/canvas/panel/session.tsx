@@ -27,6 +27,7 @@ export function CanvasSession({
   treeGesturePending,
   onAddGoal,
   onAddBlocker,
+  onLaunchNode,
 }: CanvasSessionProps) {
   const { editor, toolContext, tools, presenceStore, presencePublisher, selfKey } = session;
   const editorState = useEditorState(editor);
@@ -131,6 +132,7 @@ export function CanvasSession({
       treeGesturePending={treeGesturePending}
       onAddGoal={onAddGoal}
       onAddBlocker={onAddBlocker}
+      onLaunchNode={onLaunchNode}
       discussDestination={discuss.destination}
       onDiscuss={(treeId, nodeId) => discuss.discuss(snapshot, treeId, nodeId)}
       pageSwitcher={pageSwitcher}

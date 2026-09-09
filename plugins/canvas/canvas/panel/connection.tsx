@@ -41,6 +41,7 @@ export function CanvasPanel({ subPath }: PluginNavPanelProps) {
           treeGesturePending={treeGestures.pending}
           onAddGoal={treeGestures.addGoal}
           onAddBlocker={treeGestures.addBlocker}
+          onLaunchNode={agents.launchNode}
         />
       )}
     </div>

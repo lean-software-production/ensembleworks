@@ -16,4 +16,6 @@ export interface CanvasSessionProps {
   readonly treeGesturePending: "goal" | "blocker" | null;
   readonly onAddGoal: (treeId: string, title: string) => void;
   readonly onAddBlocker: (parentId: string, title: string) => void;
+  /** W12: start a bb thread to work on this node. */
+  readonly onLaunchNode: (nodeId: string) => void;
 }

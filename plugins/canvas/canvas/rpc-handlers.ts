@@ -19,6 +19,7 @@ import type { LocationBook } from "./locations.js";
 import type { TreeWrite, TreeWriteOutcome, TreeWriter } from "./tree/writes.js";
 import type { TreeService } from "./tree/service.js";
 import { cardTitle } from "./tree/node-reference.js";
+import { launchBrief } from "./tree/launch.js";
 
 export interface RpcHandlerDependencies {
   readonly room: CanvasRoomHost;
@@ -172,6 +173,29 @@ export function createRpcHandlers(
           isReady: view.isReady,
         },
       };
+    },
+    canvas_tree_launch: async ({ nodeId }) => {
+      // The brief BEFORE the project: a node that cannot be briefed should
+      // fail on the node, not on a setting the human would then go and fix
+      // for nothing.
+      const brief = launchBrief(nodeId, deps.treeService);
+      if (!brief.ok) throw new Error(brief.why);
+      const projectId = await resolveProjectId();
+      const thread = await deps.sdk.threads.spawn({
+        projectId,
+        environment: { type: "project-default" },
+        prompt: brief.value.prompt,
+        title: brief.value.title,
+      });
+      // The same three lines `canvas_run_note` runs, deliberately unabstracted:
+      // two callers is not a pattern, and the badge's contract is easier to
+      // check when it is written out at each call site.
+      const link = await agents.record(nodeId, thread.id, "running");
+      realtime.publish(AGENT_CHANNEL, link);
+      log.info(
+        `tree node ${nodeId} -> thread ${thread.id} in project ${projectId}`,
+      );
+      return link;
     },
     canvas_thread_options: async () => {
       const projectId = await resolveProjectId();

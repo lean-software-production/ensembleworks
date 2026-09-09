@@ -231,6 +231,31 @@ export const rpcContract = defineRpcContract({
       .strict(),
   },
   /**
+   * W12 — START A THREAD TO WORK ON ONE NODE.
+   *
+   * NOT `canvas_run_note` WITH A BETTER PROMPT, and the difference is where the
+   * prompt comes from. `canvas_run_note` is handed the text the panel read off
+   * the shape; this is handed an ID, and the prompt is built HERE, from W5's
+   * service over the room's own document — the node's path to root, what
+   * blocks it and its context note. The panel has the document but not the
+   * service, and the prompt has to be the tree as the SERVER sees it for the
+   * same reason every tree write goes server-side (see the two gesture methods
+   * above): one reading of the tree, not two.
+   *
+   * IT MINTS AN ORDINARY LINK. `AgentLinks.record`, the same badge broadcast,
+   * the same three thread lifecycle events, the same canvas-gc sweep. There is
+   * no tree-specific link store and there must not be one — see
+   * canvas/tree/launch.ts.
+   *
+   * REJECTS RATHER THAN RETURNING A REFUSAL SHAPE, like `canvas_run_note`: a
+   * shape that is not a usable tree node produces W5's own sentence, and the
+   * panel already toasts `cause.message`.
+   */
+  canvas_tree_launch: {
+    input: z.object({ nodeId: z.string().min(1).max(MAX_NODE_ID_LENGTH) }).strict(),
+    output: agentLinkSchema,
+  },
+  /**
    * The threads the attach picker may offer. Server-side because the frontend
    * has no bb SDK at all — `bb.sdk` exists only in this process.
    *

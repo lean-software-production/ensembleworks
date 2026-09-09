@@ -194,8 +194,14 @@ export function treeInstructions(
  * One line each rather than a labelled block, because `fitLines` drops WHOLE
  * lines from the back — so a line is the unit of what can be lost, and each of
  * these three is worth losing separately.
+ *
+ * EXPORTED FOR W12. A thread launched on a node needs the same three lines in
+ * its spawn prompt (`launch.ts` argues why it cannot simply lean on this
+ * brief), and two renderings of "what node is this and what blocks it" would
+ * drift silently — a human comparing a launch prompt with a per-turn brief
+ * would see two descriptions of one node with no way to tell which is stale.
  */
-function orientationLines(node: TreeNodeView, service: TreeService): readonly string[] {
+export function orientationLines(node: TreeNodeView, service: TreeService): readonly string[] {
   return [
     `node: ${oneLine(node)}`,
     pathLine(node, service),

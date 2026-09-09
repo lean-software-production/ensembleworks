@@ -117,6 +117,31 @@ export function useAgentSync(rpcRef: { current: RpcClient }) {
       });
   }, []);
 
+  /**
+   * W12: start a thread to WORK ON a tree node.
+   *
+   * Shaped exactly like `runNote` — same `pendingShapeId`, same
+   * toast-not-banner rule, same `setAgentLinks` on the way back — because it
+   * mints the same kind of link and must reach the same badge. The one
+   * difference is what is sent: an id, not text. The prompt is built on the
+   * server from the tree (canvas/rpc-contract.ts argues why, next to the
+   * method), so there is nothing for the panel to read off the shape.
+   */
+  const launchNode = useCallback((nodeId: string) => {
+    setPendingShapeId(nodeId);
+    rpcRef.current
+      .call("canvas_tree_launch", { nodeId })
+      .then((link: CanvasAgentLink) => {
+        setAgentLinks((previous) => ({ ...previous, [link.shapeId]: link }));
+      })
+      .catch((cause: unknown) => {
+        toast.error(
+          `Could not start a thread on this node: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+      })
+      .finally(() => setPendingShapeId(null));
+  }, []);
+
   /** The picker's offer. Fetched per open rather than cached: which threads
    * exist, and which are already spoken for, both change while the panel is
    * open, and a stale list would offer a thread whose attach is now refused. */
@@ -128,5 +153,5 @@ export function useAgentSync(rpcRef: { current: RpcClient }) {
     [],
   );
 
-  return { agentLinks, pendingShapeId, refreshAgents, runNote, unlinkNote, attachThread, loadThreadOptions };
+  return { agentLinks, pendingShapeId, refreshAgents, runNote, launchNode, unlinkNote, attachThread, loadThreadOptions };
 }

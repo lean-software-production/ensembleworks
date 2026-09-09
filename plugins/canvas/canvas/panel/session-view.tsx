@@ -69,6 +69,9 @@ export interface SessionViewProps {
   readonly treeGesturePending: "goal" | "blocker" | null;
   readonly onAddGoal: (treeId: string, title: string) => void;
   readonly onAddBlocker: (parentId: string, title: string) => void;
+  /** W12: start a bb thread on this node, briefed with its context, its path
+   * to root and what blocks it. */
+  readonly onLaunchNode: (nodeId: string) => void;
   /** W8: where a node reference would land, and the call that puts one there. */
   readonly discussDestination: ComposerDestination;
   readonly onDiscuss: (treeId: string, nodeId: string) => void;
@@ -119,6 +122,7 @@ function CanvasSurface({
   treeGesturePending,
   onAddGoal,
   onAddBlocker,
+  onLaunchNode,
   discussDestination,
   onDiscuss,
 }: SessionViewProps) {
@@ -198,6 +202,9 @@ function CanvasSurface({
         pending={treeGesturePending}
         onAddGoal={onAddGoal}
         onAddBlocker={onAddBlocker}
+        agentLinks={agentLinks}
+        launchPendingShapeId={pendingShapeId}
+        onLaunchNode={onLaunchNode}
         discussDestination={discussDestination}
         onDiscuss={onDiscuss}
       />

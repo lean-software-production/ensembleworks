@@ -41,6 +41,8 @@ import {
   discussArmFor,
   type ComposerDestination,
 } from "../tree/discuss.js";
+import { workArmFor } from "../tree/launch.js";
+import type { CanvasAgentLink } from "../wire.js";
 import {
   MAX_GESTURE_TITLE,
   blockerArmFor,
@@ -71,6 +73,16 @@ export interface TreeGestureLayerProps {
   readonly discussDestination: ComposerDestination;
   /** W8: put a reference to this node in that composer. */
   readonly onDiscuss: (treeId: string, nodeId: string) => void;
+  /** W12: the shape -> thread links, so the arm can say "again" on a node that
+   * already carries one. The whole record rather than a boolean because which
+   * shape is the target is this layer's own answer (`treeGestureTargetFor`),
+   * so nothing outside it can precompute the flag. */
+  readonly agentLinks: Readonly<Record<string, CanvasAgentLink>>;
+  /** W12: the shape whose spawn is in flight, `AgentLayer`'s own field, shared
+   * so one click cannot start two threads on one node. */
+  readonly launchPendingShapeId: string | null;
+  /** W12: start a bb thread to work on this node. */
+  readonly onLaunchNode: (nodeId: string) => void;
 }
 
 const GAP_PX = 8;
@@ -128,6 +140,9 @@ export function TreeGestureLayer({
   onAddBlocker,
   discussDestination,
   onDiscuss,
+  agentLinks,
+  launchPendingShapeId,
+  onLaunchNode,
 }: TreeGestureLayerProps): ReactNode {
   const target = treeGestureTargetFor({
     selection,
@@ -188,6 +203,9 @@ export function TreeGestureLayer({
 
   const arm = target === null ? null : blockerArmFor(target);
   const discussArm = discussArmFor(target, discussDestination);
+  const workArm =
+    target === null ? null : workArmFor(target, agentLinks[target.shapeId] !== undefined);
+  const launching = target !== null && launchPendingShapeId === target.shapeId;
   const sendable = treeTitleSubmission(title).ok;
 
   return (
@@ -255,6 +273,23 @@ export function TreeGestureLayer({
               style={{ ...buttonStyle(discussArm.enabled), marginLeft: 4 }}
             >
               {discussArm.label}
+            </button>
+          )}
+          {workArm === null ? null : (
+            <button
+              type="button"
+              data-tree-launch="node"
+              disabled={!workArm.enabled || launching}
+              title={workArm.enabled ? undefined : workArm.reason}
+              onClick={() => {
+                // Guarded on the tree id for the same reason the discuss
+                // button is: the call site cannot pass a shape that is not a
+                // node even if the arm's rule and this button ever drift.
+                if (target.treeId !== null) onLaunchNode(target.shapeId);
+              }}
+              style={{ ...buttonStyle(workArm.enabled && !launching), marginLeft: 4 }}
+            >
+              {launching ? "Starting a thread…" : workArm.label}
             </button>
           )}
           {composer !== "blocker" ? null : (
