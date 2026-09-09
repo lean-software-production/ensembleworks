@@ -115,7 +115,14 @@ const PARTIAL =
  * At the real ceiling (4096) both fit with room to spare; the ranking only
  * decides what a pathological budget loses first.
  */
-const REFERENCE = `To point at one node in a reply, write ${NODE_DIRECTIVE_SYNTAX} — it renders as a card that takes the reader to that node on the canvas. Use a node's real id; a reference to anything else renders as a dead link.`;
+// ON ITS OWN LINE is not a style note — it is the difference between a card
+// and visible markup. bb parses `::name{…}` as a LEAF BLOCK directive, so it
+// only becomes a card when it is the whole line; the same text written inline
+// after a sentence stays literal `::node{id="…"}` in front of the human.
+// W14 watched a model emit it inline unprompted on its first unforced try
+// (artifacts/harness/c89c66dd/w14-end-to-end-proof.md, W9), which is what
+// makes this worth a clause in a budgeted brief rather than a comment here.
+const REFERENCE = `To point at one node in a reply, write ${NODE_DIRECTIVE_SYNTAX} on a line of its own — it renders as a card that takes the reader to that node on the canvas. Inline after other text it stays raw markup. Use a node's real id; a reference to anything else renders as a dead link.`;
 
 /** Room reserved for whichever closing sentence turns out to be true, plus its
  * newline. Reserved against the WIDER of the two before a single line is kept,
