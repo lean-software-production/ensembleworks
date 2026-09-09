@@ -38,6 +38,10 @@ import {
   CHROME_POPOVER_SHADOW,
 } from "../pages/chrome-dock.js";
 import {
+  discussArmFor,
+  type ComposerDestination,
+} from "../tree/discuss.js";
+import {
   MAX_GESTURE_TITLE,
   blockerArmFor,
   nextTreeComposer,
@@ -62,6 +66,11 @@ export interface TreeGestureLayerProps {
   readonly pending: "goal" | "blocker" | null;
   readonly onAddGoal: (treeId: string, title: string) => void;
   readonly onAddBlocker: (parentId: string, title: string) => void;
+  /** W8: where a node reference would land, or the reason there is nowhere —
+   * the arm is greyed with it, never hidden. */
+  readonly discussDestination: ComposerDestination;
+  /** W8: put a reference to this node in that composer. */
+  readonly onDiscuss: (treeId: string, nodeId: string) => void;
 }
 
 const GAP_PX = 8;
@@ -117,6 +126,8 @@ export function TreeGestureLayer({
   pending,
   onAddGoal,
   onAddBlocker,
+  discussDestination,
+  onDiscuss,
 }: TreeGestureLayerProps): ReactNode {
   const target = treeGestureTargetFor({
     selection,
@@ -176,6 +187,7 @@ export function TreeGestureLayer({
   }, [composer, currentPageId, dispatch, onAddBlocker, onAddGoal, target, title]);
 
   const arm = target === null ? null : blockerArmFor(target);
+  const discussArm = discussArmFor(target, discussDestination);
   const sendable = treeTitleSubmission(title).ok;
 
   return (
@@ -228,6 +240,23 @@ export function TreeGestureLayer({
           >
             {pending === "blocker" ? "Adding a blocker…" : arm.label}
           </button>
+          {discussArm === null ? null : (
+            <button
+              type="button"
+              data-tree-discuss="node"
+              disabled={!discussArm.enabled}
+              title={discussArm.enabled ? undefined : discussArm.reason}
+              onClick={() => {
+                // Guarded by `target.treeId` rather than by the arm alone, so
+                // the call site cannot pass a null tree id even if the arm's
+                // rule and this button ever drift apart.
+                if (target.treeId !== null) onDiscuss(target.treeId, target.shapeId);
+              }}
+              style={{ ...buttonStyle(discussArm.enabled), marginLeft: 4 }}
+            >
+              {discussArm.label}
+            </button>
+          )}
           {composer !== "blocker" ? null : (
             <Composer
               placeholder="What blocks this?"

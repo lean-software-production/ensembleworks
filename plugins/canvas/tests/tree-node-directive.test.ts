@@ -23,8 +23,10 @@ import {
   MAX_CARD_TITLE,
   MAX_NODE_ID_LENGTH,
   NODE_DIRECTIVE_ID,
+  NODE_DIRECTIVE_SYNTAX,
   cardTitle,
   nodeCard,
+  nodeDirective,
   nodeIdFromAttributes,
 } from "../canvas/tree/node-reference.js";
 
@@ -178,5 +180,61 @@ describe("nodeCard", () => {
     for (const card of cards) {
       expect("target" in card).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W8's emit side, tested against W9's parse side — the ROUND TRIP.
+//
+// These two halves are the whole of D2: W8 writes `::node{…}` into a human's
+// composer, bb parses it and hands the attributes to W9's card. If they ever
+// disagree the trip breaks in the least visible way possible — the human sends
+// a message containing a line of raw markup and nobody sees a card. So the
+// emitter is checked against `nodeIdFromAttributes` itself rather than against
+// a second hand-typed fixture of the same string.
+
+/** A deliberately strict stand-in for the host's directive parser: it accepts
+ * only the exact form `nodeDirective` claims to produce. If the emitter drifts
+ * into anything looser, this stops matching and the round trip fails here
+ * rather than in a room. */
+const attributesOfDirective = (text: string): Readonly<Record<string, string>> | null => {
+  const match = /^::([a-z][a-z0-9-]*)\{id="([^"\n]*)"\}$/.exec(text);
+  if (match === null) return null;
+  if (match[1] !== NODE_DIRECTIVE_ID) return null;
+  return { id: match[2] as string };
+};
+
+describe("nodeDirective", () => {
+  it("emits a directive whose id survives the trip back through the parse side", () => {
+    const emitted = nodeDirective("shape:api");
+    expect(emitted).not.toBeNull();
+    const attributes = attributesOfDirective(emitted as string);
+    expect(attributes).not.toBeNull();
+    expect(nodeIdFromAttributes(attributes as Record<string, string>)).toBe("shape:api");
+  });
+
+  it("refuses exactly the ids the parse side would refuse", () => {
+    for (const id of ["", "   ", "s".repeat(MAX_NODE_ID_LENGTH + 1)]) {
+      expect(nodeIdFromAttributes({ id })).toBeNull();
+      expect(nodeDirective(id)).toBeNull();
+    }
+  });
+
+  it("refuses an id that would break out of the attribute it is written into", () => {
+    // The parse side takes any string; the EMIT side is where a quote or a
+    // newline would produce a directive that parses as something else — or as
+    // nothing — so it is refused here rather than written and hoped for.
+    for (const id of ['shape:a"', "shape:a\nb", "shape:a}", "shape:a{b"]) {
+      expect(nodeDirective(id)).toBeNull();
+    }
+  });
+
+  it("is the same spelling the brief teaches a model", () => {
+    // NODE_DIRECTIVE_SYNTAX is what W7's per-turn brief tells an agent to
+    // type. One definition, so a rename cannot teach a syntax the emitter no
+    // longer writes.
+    expect(NODE_DIRECTIVE_SYNTAX).toBe(
+      (nodeDirective("shape:api") as string).replace("shape:api", "<node id>"),
+    );
   });
 });

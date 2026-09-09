@@ -17,6 +17,7 @@ import type { CanvasAgentLink } from "../wire.js";
 import { SpeakerRings } from "../roster-ui.js";
 import { QuarantinedEdges } from "./quarantine-layer.js";
 import { TreeGestureLayer } from "./tree-gesture-layer.js";
+import type { ComposerDestination } from "../tree/discuss.js";
 import type { ToolId, ToolStates } from "../tool-loop.js";
 import {
   chromeCardColumnStyle,
@@ -68,6 +69,9 @@ export interface SessionViewProps {
   readonly treeGesturePending: "goal" | "blocker" | null;
   readonly onAddGoal: (treeId: string, title: string) => void;
   readonly onAddBlocker: (parentId: string, title: string) => void;
+  /** W8: where a node reference would land, and the call that puts one there. */
+  readonly discussDestination: ComposerDestination;
+  readonly onDiscuss: (treeId: string, nodeId: string) => void;
   readonly pageSwitcher: PageSwitcherView;
 }
 
@@ -115,6 +119,8 @@ function CanvasSurface({
   treeGesturePending,
   onAddGoal,
   onAddBlocker,
+  discussDestination,
+  onDiscuss,
 }: SessionViewProps) {
   return (
     <div
@@ -192,6 +198,8 @@ function CanvasSurface({
         pending={treeGesturePending}
         onAddGoal={onAddGoal}
         onAddBlocker={onAddBlocker}
+        discussDestination={discussDestination}
+        onDiscuss={onDiscuss}
       />
       <SpeakerRings
         presence={presenceAll}

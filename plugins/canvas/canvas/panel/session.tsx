@@ -8,6 +8,7 @@ import { useSessionInput } from "./session-input.js";
 import { useSessionPages } from "./session-pages.js";
 import { useSessionPresence } from "./session-presence.js";
 import { useSessionReveal } from "./session-reveal.js";
+import { useTreeDiscuss } from "./tree-discuss.js";
 import type { CanvasSessionProps } from "./session-types.js";
 import { useSessionViewport } from "./session-viewport.js";
 import { SessionView } from "./session-view.js";
@@ -62,6 +63,10 @@ export function CanvasSession({
     livePageIds: snapshot.pages.map((page) => page.id),
     viewportSizeRef: viewport.viewportSizeRef,
   });
+  // W8's outbound leg of D2: the selected node, referenced in the composer the
+  // human is writing in. Mounted HERE because this is where the live document
+  // is — the reference is read from `snapshot`, not fetched over rpc.
+  const discuss = useTreeDiscuss();
   const { navigate, pageSwitcher } = useSessionPages({
     editor,
     snapshot,
@@ -126,6 +131,8 @@ export function CanvasSession({
       treeGesturePending={treeGesturePending}
       onAddGoal={onAddGoal}
       onAddBlocker={onAddBlocker}
+      discussDestination={discuss.destination}
+      onDiscuss={(treeId, nodeId) => discuss.discuss(snapshot, treeId, nodeId)}
       pageSwitcher={pageSwitcher}
     />
   );

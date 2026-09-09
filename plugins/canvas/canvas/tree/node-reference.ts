@@ -43,15 +43,45 @@ import { titleOf } from "./answers.js";
  * kebab-case beginning with a letter, per PluginMessageDirectiveRegistration. */
 export const NODE_DIRECTIVE_ID = "node";
 
+/** The ONE spelling of the directive. Everything below is derived from it. */
+const directiveText = (id: string): string => `::${NODE_DIRECTIVE_ID}{id="${id}"}`;
+
 /**
  * The syntax, exactly as an agent must type it.
  *
- * Lives here rather than in the brief because two surfaces spell it: the
- * instructions that teach it (canvas/tree/instructions.ts) and the
- * registration that renders it (app.tsx). One constant, so a rename cannot
- * teach a syntax the host no longer answers.
+ * Lives here rather than in the brief because THREE surfaces spell it: the
+ * instructions that teach it (canvas/tree/instructions.ts), the registration
+ * that renders it (app.tsx), and W8's affordance that WRITES it into a human's
+ * composer (`nodeDirective` below). One constant, so a rename cannot teach a
+ * syntax the host no longer answers — or emit one it no longer renders.
  */
-export const NODE_DIRECTIVE_SYNTAX = `::${NODE_DIRECTIVE_ID}{id="<node id>"}`;
+export const NODE_DIRECTIVE_SYNTAX = directiveText("<node id>");
+
+/**
+ * W8's emit side: the directive text for one node, or null when the id cannot
+ * be written as one.
+ *
+ * THE PARSE SIDE IS ONE FILE AWAY ON PURPOSE. `nodeIdFromAttributes` reads
+ * what the host handed back; this writes what the host will read. They are the
+ * two ends of D2's round trip, and a disagreement between them is invisible in
+ * the worst way — the human sends a message containing a line of raw markup
+ * and no card appears. Keeping them adjacent is what lets the suite test them
+ * against each other rather than against two hand-typed fixtures.
+ *
+ * REFUSING IS THE POINT. The parse side accepts any string, because by then
+ * the host has already decided where the attribute ended. Here, a quote or a
+ * newline or a brace inside the id would produce a directive that parses as
+ * something ELSE — a different node, or nothing at all — so an id that cannot
+ * survive the trip is refused rather than written and hoped for. Real shape
+ * ids (`shape:<nanoid>`) never contain any of these; this is the guard for the
+ * day something else mints one.
+ */
+export function nodeDirective(nodeId: string): string | null {
+  const id = nodeIdFromAttributes({ id: nodeId });
+  if (id === null) return null;
+  if (/["{}\n\r]/.test(id)) return null;
+  return directiveText(id);
+}
 
 /**
  * The longest id the card will send.
