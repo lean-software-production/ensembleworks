@@ -28,6 +28,8 @@ import {
 } from "./canvas/transcript.js";
 import { createRpcHandlers } from "./canvas/rpc-handlers.js";
 import { registerCanvasCli } from "./canvas/cli.js";
+import { registerTreeAgentTools } from "./canvas/tree/agent-tools.js";
+import { treeServiceForDoc } from "./canvas/tree/doc-source.js";
 import { rpcContract } from "./canvas/rpc-contract.js";
 export { rpcContract } from "./canvas/rpc-contract.js";
 import { CANVAS_CHANNEL } from "./canvas/wire.js";
@@ -164,6 +166,17 @@ export default async function plugin(bb: BbPluginApi) {
   );
 
   registerCanvasCli(bb, room, agents, transcript);
+
+  // The discovery tree, as tools an agent can call (W6). Registered against
+  // the LIVE room document — `treeServiceForDoc` re-reads it per query, so a
+  // thread started now still sees a node a human drew a minute ago — and
+  // scoped to threads that are actually about a tree node, since bb tool names
+  // are global and every other thread on the server would otherwise carry six
+  // canvas tools it can never use.
+  registerTreeAgentTools(bb, {
+    service: treeServiceForDoc(room.peer.doc),
+    linkedShapeId: (threadId) => agents.shapeForThread(threadId),
+  });
 
   // Cleanup on reload/disable/shutdown; hooks run LIFO. The sanctioned place
   // to clear timers and close connections.

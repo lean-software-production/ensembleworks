@@ -41,103 +41,16 @@ import {
   type TreeQuery,
   type TreeService,
 } from "../canvas/tree/service.js";
-
-const TREE = "page:tree";
-
-/** A note's title lives in its rich text, exactly as canvas-model reads it. */
-const withTitle = (shape: Shape, title: string): Shape =>
-  ({
-    ...shape,
-    props: {
-      ...(shape.props as Record<string, unknown>),
-      richText: {
-        type: "doc",
-        content: [{ type: "paragraph", content: [{ type: "text", text: title }] }],
-      },
-    },
-  }) as Shape;
-
-interface Spec {
-  /** node id -> state, or [state, title]. */
-  readonly nodes: Readonly<Record<string, NodeState | readonly [NodeState, string]>>;
-  /** `[blockerId, blockedId]` — W0's fixed "blocker BLOCKS blocked". */
-  readonly edges: readonly (readonly [string, string])[];
-  readonly treeId?: Page["id"];
-  readonly markPage?: boolean;
-  readonly extraPages?: readonly Page[];
-  readonly context?: Readonly<Record<string, string>>;
-}
-
-function docOf(spec: Spec): CanvasDocument {
-  const treeId = spec.treeId ?? TREE;
-  const shapes: Shape[] = Object.keys(spec.nodes).map((id, i) => {
-    const entry = spec.nodes[id];
-    const [state, title] = Array.isArray(entry)
-      ? (entry as readonly [NodeState, string])
-      : [entry as NodeState, ""];
-    const node = buildTreeNode({
-      id,
-      treeId,
-      parentId: treeId,
-      index: `a${i}`,
-      x: i * 200,
-      y: 0,
-      state,
-      context: spec.context?.[id],
-    });
-    return title ? withTitle(node, title) : node;
-  });
-  const bindings: Binding[] = [];
-  spec.edges.forEach(([blockerId, blockedId], i) => {
-    const built = buildTreeEdge({
-      id: `shape:edge-${i}`,
-      treeId,
-      parentId: treeId,
-      index: `b${i}`,
-      blockerId,
-      blockedId,
-      from: { x: 0, y: 0 },
-      to: { x: 100, y: 0 },
-    });
-    shapes.push(built.shape);
-    bindings.push(...built.bindings);
-  });
-  const page: Page = { id: treeId, name: "Tree" };
-  return makeDocument({
-    pages: [spec.markPage === false ? page : markTreePage(page), ...(spec.extraPages ?? [])],
-    shapes,
-    bindings,
-  });
-}
-
-/** A service over a document that never changes. */
-const serviceOf = (spec: Spec): TreeService => {
-  const doc = docOf(spec);
-  return createTreeService({ document: () => doc });
-};
-
-/**
- * The worked example every structural test below uses.
- *
- *      goal            root, blocks nothing
- *      ^   ^
- *    api   ui          the blockers of goal
- *      ^
- *   schema             a ready leaf
- */
-const EXAMPLE: Spec = {
-  nodes: {
-    "shape:goal": ["todo", "Ship discovery trees"],
-    "shape:api": ["wip", "Tree service"],
-    "shape:ui": ["todo", "Arrow renderer"],
-    "shape:schema": ["todo", "Encoding contract"],
-  },
-  edges: [
-    ["shape:api", "shape:goal"],
-    ["shape:ui", "shape:goal"],
-    ["shape:schema", "shape:api"],
-  ],
-};
+// The document builder these tests are written against — shared with W6's
+// agent-tool suite so both read W0's encoding through one set of calls.
+import {
+  EXAMPLE,
+  TREE,
+  docOf,
+  serviceOf,
+  withTitle,
+  type Spec,
+} from "./lib/tree-fixture.js";
 
 /** Assert a query answered, and hand back its value. A failure here prints
  * the service's own `detail`, which is the whole reason that field exists. */
