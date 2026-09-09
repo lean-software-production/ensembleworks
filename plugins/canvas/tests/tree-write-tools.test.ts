@@ -41,7 +41,11 @@ import { checkTreeInvariants, readTree, type TreeProblem } from "../canvas/tree/
 import { SIBLING_GAP, placeNewChild, placeNewGoal } from "../canvas/tree/layout.js";
 import { listQuarantinedEdges } from "../canvas/tree/repair.js";
 import { createTreeService } from "../canvas/tree/service.js";
-import { treeServiceForDoc, treeWriterForDoc } from "../canvas/tree/doc-source.js";
+import {
+  treeRepairTargetForDoc,
+  treeServiceForDoc,
+  treeWriterForDoc,
+} from "../canvas/tree/doc-source.js";
 import {
   MAX_TITLE_LENGTH,
   createTreeWriter,
@@ -927,6 +931,7 @@ function toolDeps(spec: Spec = EXAMPLE, seed = 1): TreeWriteToolDeps & TreeToolD
   return {
     service: treeServiceForDoc(doc),
     writer: treeWriterForDoc(doc, { random: seededRandom(seed) }),
+    repair: treeRepairTargetForDoc(doc),
     linkedShapeId: (threadId) => (threadId === THREAD ? "shape:api" : null),
   };
 }

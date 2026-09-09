@@ -672,7 +672,7 @@ function movedSentence(
   const ids = removed.map((gone) => gone.edgeId).join(", ");
   return `Moved ${nodeId}: it now blocks ${parentId} instead of ${was} (took ${removed.length} edge${
     removed.length === 1 ? "" : "s"
-  } out of the tree: ${ids} — quarantined, still drawn, restorable with restoreQuarantinedEdge).`;
+  } out of the tree: ${ids} — quarantined, still drawn, put back with canvas_tree_restore_edge or \`bb canvas tree restore\`).`;
 }
 
 function setState(

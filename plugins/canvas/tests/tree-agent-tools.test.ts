@@ -36,7 +36,15 @@ import {
   selectTreeTools,
   type TreeToolDeps,
 } from "../canvas/tree/agent-tools.js";
-import { EXAMPLE, TREE, docOf, serviceOf, writerOf, type Spec } from "./lib/tree-fixture.js";
+import {
+  EXAMPLE,
+  TREE,
+  docOf,
+  fixtureRepairTarget,
+  serviceOf,
+  writerOf,
+  type Spec,
+} from "./lib/tree-fixture.js";
 
 const THREAD = "thr_linked";
 
@@ -51,6 +59,7 @@ function depsOf(
     // is not a thing this plugin can hold.
     service: serviceOf(spec),
     writer: writerOf(spec),
+    repair: fixtureRepairTarget(spec),
     linkedShapeId: (threadId) => links[threadId] ?? null,
   };
 }
@@ -348,6 +357,7 @@ describe("freshness — the document is live under the reader", () => {
     const deps: TreeToolDeps = {
       service: createTreeService({ document: () => docOf(spec) }),
       writer: writerOf({ nodes: { "shape:goal": "todo" }, edges: [] }),
+      repair: fixtureRepairTarget({ nodes: { "shape:goal": "todo" }, edges: [] }),
       linkedShapeId: () => "shape:goal",
     };
     const before = await call(deps, "canvas_tree_children");

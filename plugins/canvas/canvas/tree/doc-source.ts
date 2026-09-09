@@ -16,6 +16,7 @@
 import { dumpModel, type CanvasDoc } from "@ensembleworks/canvas-doc";
 import { createTreeService, type TreeService } from "./service.js";
 import { createTreeWriter, type TreeWriter } from "./writes.js";
+import type { TreeRepairTarget } from "./repair.js";
 
 /** A tree service reading a live room's document. */
 export function treeServiceForDoc(doc: CanvasDoc): TreeService {
@@ -54,4 +55,30 @@ export function treeWriterForDoc(
     commit,
     random,
   });
+}
+
+/**
+ * The repair/restore target over a live room document (W11, reached at W13).
+ *
+ * FOUR CLOSURES, and the absence of the rest is the point: `TreeRepairTarget`
+ * is `TreeWriteTarget` minus every delete, so nothing reached through this
+ * handle can tombstone a shape a human drew. Quarantine and restore are both
+ * one meta key, and this is the whole surface they need.
+ *
+ * `commit` is overridable for the same reason `treeWriterForDoc`'s is: a
+ * server-local write is broadcast by canvas-sync but logged by nobody, so
+ * server.ts passes `CanvasRoomHost.commitLocalWrite` to make a restore as
+ * durable as a human's frame.
+ */
+export function treeRepairTargetForDoc(
+  doc: CanvasDoc,
+  options?: { commit?: () => void },
+): TreeRepairTarget {
+  const commit = options?.commit ?? (() => doc.commit());
+  return {
+    document: () => dumpModel(doc),
+    getShape: (id) => doc.getShape(id),
+    putShape: (shape) => doc.putShape(shape),
+    commit,
+  };
 }

@@ -38,7 +38,14 @@ import {
   type TreeToolDeps,
 } from "../canvas/tree/agent-tools.js";
 import { NODE_DIRECTIVE_SYNTAX } from "../canvas/tree/node-reference.js";
-import { EXAMPLE, TREE, serviceOf, writerOf, type Spec } from "./lib/tree-fixture.js";
+import {
+  EXAMPLE,
+  TREE,
+  fixtureRepairTarget,
+  serviceOf,
+  writerOf,
+  type Spec,
+} from "./lib/tree-fixture.js";
 
 const THREAD = "thr_linked";
 
@@ -51,6 +58,7 @@ function depsOf(
   const toolDeps: TreeToolDeps = {
     service: serviceOf(spec),
     writer: writerOf(spec),
+    repair: fixtureRepairTarget(spec),
     linkedShapeId: (threadId) => links[threadId] ?? null,
   };
   return {
@@ -408,6 +416,7 @@ describe("registration against bb", () => {
     return {
       service: serviceOf(EXAMPLE),
       writer: writerOf(EXAMPLE),
+      repair: fixtureRepairTarget(EXAMPLE),
       linkedShapeId: (threadId) => links[threadId] ?? null,
     };
   }

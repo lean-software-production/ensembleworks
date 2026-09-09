@@ -95,3 +95,41 @@ export const refuse = (text: string): PluginAgentToolResult => ({
 export const failed = <T>(
   result: Extract<TreeQuery<T>, { ok: false }>,
 ): PluginAgentToolResult => refuse(`${result.reason}: ${result.detail}`);
+
+/**
+ * ONE NODE IN FULL, as both readers of this tree see it.
+ *
+ * Lifted out of `agent-tools.ts`'s `canvas_tree_node` at W13, verbatim, for
+ * the reason this file exists at all: `bb canvas tree node` answers the same
+ * question for a human at a terminal, and a second rendering would be a second
+ * account of what "ready" means and of what an empty context note is called.
+ * Carries no tool names and no command names, so neither surface has to strip
+ * the other's idiom out of it.
+ */
+export function nodeDetail(view: TreeNodeView): string[] {
+  // Why NOT ready is worth a word: "no" alone sends a reader hunting through
+  // the blockers of a node that is simply finished.
+  const notReady =
+    view.state === "done"
+      ? "no — this node is already done"
+      : "no — something beneath it is unfinished";
+  const lines = [
+    `${view.id} — ${titleOf(view)}`,
+    `tree:       ${view.treeId}`,
+    `state:      ${view.state}${view.approached ? " (approached)" : ""}`,
+    `ready:      ${
+      view.isReady ? "yes — not done, and every blocker under it is done" : notReady
+    }`,
+    `blocks:     ${
+      view.parentIds.length === 0 ? "nothing (this is a root)" : view.parentIds.join(", ")
+    }`,
+    `blocked by: ${view.childIds.length === 0 ? "nothing" : view.childIds.join(", ")}`,
+  ];
+  if (view.parentIds.length > 1) {
+    lines.push(
+      "note:      this node blocks more than one thing, which a well-formed tree does not do",
+    );
+  }
+  lines.push("", view.context.trim() === "" ? "(no context written on this node)" : view.context);
+  return lines;
+}

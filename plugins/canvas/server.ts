@@ -29,7 +29,12 @@ import {
 import { createRpcHandlers } from "./canvas/rpc-handlers.js";
 import { registerCanvasCli } from "./canvas/cli.js";
 import { registerTreeAgentTools } from "./canvas/tree/agent-tools.js";
-import { treeServiceForDoc, treeWriterForDoc } from "./canvas/tree/doc-source.js";
+import {
+  treeRepairTargetForDoc,
+  treeServiceForDoc,
+  treeWriterForDoc,
+} from "./canvas/tree/doc-source.js";
+import { listQuarantinedEdges, restoreQuarantinedEdge } from "./canvas/tree/repair.js";
 import { rpcContract } from "./canvas/rpc-contract.js";
 export { rpcContract } from "./canvas/rpc-contract.js";
 import { CANVAS_CHANNEL } from "./canvas/wire.js";
@@ -158,6 +163,15 @@ export default async function plugin(bb: BbPluginApi) {
   // over one document, not two readers that could drift.
   const treeService = treeServiceForDoc(room.peer.doc);
 
+  // The RECOVERY half (W11, reached at W13). Its own handle rather than the
+  // writer's, because `TreeRepairTarget` is the type that cannot delete — a
+  // restore reached through the wider target would give up that guarantee for
+  // nothing. `commitLocalWrite` for the writer's reason: durable, not just
+  // broadcast.
+  const treeRepair = treeRepairTargetForDoc(room.peer.doc, {
+    commit: () => room.commitLocalWrite(),
+  });
+
   bb.rpc.register(
     rpcContract,
     createRpcHandlers({
@@ -181,7 +195,15 @@ export default async function plugin(bb: BbPluginApi) {
     agents,
   );
 
-  registerCanvasCli(bb, room, agents, transcript);
+  // `bb canvas tree` (W13): the same W5 reads, for a reader with no bb tool
+  // session — a Claude Code session in a canvas terminal. It runs in THIS
+  // process, so it holds the live document directly and answers from the same
+  // service the agent tools do.
+  registerCanvasCli(bb, room, agents, transcript, {
+    service: treeService,
+    quarantined: (treeId) => listQuarantinedEdges(treeRepair.document(), treeId),
+    restore: (edgeId) => restoreQuarantinedEdge(treeRepair, edgeId),
+  });
 
   // The discovery tree, as tools an agent can call (W6). Registered against
   // the LIVE room document — `treeServiceForDoc` re-reads it per query, so a
@@ -197,6 +219,7 @@ export default async function plugin(bb: BbPluginApi) {
   registerTreeAgentTools(bb, {
     service: treeService,
     writer: treeWriter,
+    repair: treeRepair,
     linkedShapeId: (threadId) => agents.shapeForThread(threadId),
   });
 

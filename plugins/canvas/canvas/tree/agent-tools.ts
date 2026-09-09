@@ -34,6 +34,7 @@ import {
   MAX_ANSWER_CHARS,
   failed,
   listing,
+  nodeDetail,
   ok,
   oneLine,
   outline,
@@ -46,6 +47,11 @@ import {
   createTreeWriteTools,
   type TreeWriteToolDeps,
 } from "./write-tools.js";
+import {
+  TREE_QUARANTINE_TOOL_NAMES,
+  createTreeQuarantineTools,
+  type TreeQuarantineToolDeps,
+} from "./quarantine-tools.js";
 import type { TreeWriter } from "./writes.js";
 
 /** Re-exported at its original home: W6's suite and any later reader looks for
@@ -57,7 +63,7 @@ export { MAX_ANSWER_CHARS };
 // ---------------------------------------------------------------------------
 
 /** What the tools need from the server, and nothing else. */
-export interface TreeToolDeps extends TreeWriteToolDeps {
+export interface TreeToolDeps extends TreeWriteToolDeps, TreeQuarantineToolDeps {
   /** W5's query surface, over the live room document. */
   readonly service: TreeService;
   /** W10's write engine, over the same live document. Required, not optional:
@@ -112,6 +118,10 @@ export const TREE_READ_TOOL_NAMES = [
 export const TREE_TOOL_NAMES = [
   ...TREE_READ_TOOL_NAMES,
   ...TREE_WRITE_TOOL_NAMES,
+  // W13's recovery pair. In the SAME scope as the writes, deliberately: the
+  // move that quarantines a human's edge is a write tool, so a thread that can
+  // displace a relationship must be able to see and undo what it displaced.
+  ...TREE_QUARANTINE_TOOL_NAMES,
 ] as const;
 
 // ---------------------------------------------------------------------------
@@ -230,27 +240,7 @@ export function createTreeTools(deps: TreeToolDeps): TreeToolRegistration[] {
         const found = subjectNode(params, ctx);
         if (found === null) return noSubject(deps, "node");
         if (!found.ok) return failed(found);
-        const view = found.value;
-        // Why NOT ready is worth a word: "no" alone sends a model hunting
-        // through the blockers of a node that is simply finished.
-        const notReady = view.state === "done"
-          ? "no — this node is already done"
-          : "no — something beneath it is unfinished";
-        const lines = [
-          `${view.id} — ${titleOf(view)}`,
-          `tree:       ${view.treeId}`,
-          `state:      ${view.state}${view.approached ? " (approached)" : ""}`,
-          `ready:      ${view.isReady ? "yes — not done, and every blocker under it is done" : notReady}`,
-          `blocks:     ${view.parentIds.length === 0 ? "nothing (this is a root)" : view.parentIds.join(", ")}`,
-          `blocked by: ${view.childIds.length === 0 ? "nothing" : view.childIds.join(", ")}`,
-        ];
-        if (view.parentIds.length > 1) {
-          lines.push(
-            "note:      this node blocks more than one thing, which a well-formed tree does not do",
-          );
-        }
-        lines.push("", view.context.trim() === "" ? "(no context written on this node)" : view.context);
-        return ok(lines.join("\n"));
+        return ok(nodeDetail(found.value).join("\n"));
       },
     },
     {
@@ -341,7 +331,11 @@ export function createTreeTools(deps: TreeToolDeps): TreeToolRegistration[] {
  * callback rather than register a second one, which bb rejects.
  */
 export function registerTreeAgentTools(bb: BbPluginApi, deps: TreeToolDeps): void {
-  const registered = [...createTreeTools(deps), ...createTreeWriteTools(deps)];
+  const registered = [
+    ...createTreeTools(deps),
+    ...createTreeWriteTools(deps),
+    ...createTreeQuarantineTools(deps),
+  ];
   for (const tool of registered) {
     bb.agents.registerTool({
       name: tool.name,

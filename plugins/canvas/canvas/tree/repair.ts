@@ -493,7 +493,7 @@ function reportLines(
   const lines: string[] = [];
   for (const op of applied) {
     lines.push(
-      `${treeId}: took edge ${op.edgeId} out of the tree (${op.reason}: ${op.detail}). The arrow and both its bindings are untouched on the canvas — restore the relationship with restoreQuarantinedEdge(${op.edgeId}).`,
+      `${treeId}: took edge ${op.edgeId} out of the tree (${op.reason}: ${op.detail}). The arrow and both its bindings are untouched on the canvas — put the relationship back with canvas_tree_restore_edge (or \`bb canvas tree restore ${op.edgeId}\`).`,
     );
   }
   for (const entry of rejected) {

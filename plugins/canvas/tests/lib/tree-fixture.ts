@@ -20,6 +20,7 @@ import {
 } from "../../canvas/tree/encoding.js";
 import { createTreeService, type TreeService } from "../../canvas/tree/service.js";
 import { createTreeWriter, type TreeWriter } from "../../canvas/tree/writes.js";
+import type { TreeRepairTarget } from "../../canvas/tree/repair.js";
 
 export const TREE = "page:tree";
 
@@ -139,3 +140,25 @@ export const EXAMPLE: Spec = {
     ["shape:schema", "shape:api"],
   ],
 };
+
+/**
+ * A repair target over a fixture document, for suites that must build the
+ * whole tool-deps value (W13 added `repair` to it) but never restore anything.
+ *
+ * The writes THROW rather than no-op: a fixture that silently swallowed a
+ * `putShape` would let a restore test pass against a document that never
+ * changed. Anything that actually restores wants a real `LoroCanvasDoc` — see
+ * tests/tree-quarantine-tools.test.ts.
+ */
+export function fixtureRepairTarget(spec: Spec): TreeRepairTarget {
+  const document = docOf(spec);
+  const readOnly = () => {
+    throw new Error("fixture repair target is read-only");
+  };
+  return {
+    document: () => document,
+    getShape: (id) => document.byId.get(id),
+    putShape: readOnly,
+    commit: readOnly,
+  };
+}
