@@ -12,7 +12,6 @@ import {
 } from "@ensembleworks/canvas-model";
 import { quarantineTreeShape } from "../canvas/tree/encoding.js";
 import { readTree, type Tree } from "../canvas/tree/model.js";
-import { NODE_STEP_X, NODE_STEP_Y } from "../canvas/tree/writes.js";
 import {
   DEFAULT_NODE_SIZE,
   LEVEL_GAP,
@@ -21,6 +20,7 @@ import {
   layoutSubtree,
   layoutTree,
   placeNewChild,
+  placeNewGoal,
   type NodePlacement,
 } from "../canvas/tree/layout.js";
 import { EXAMPLE, TREE, docOf, type Spec } from "./lib/tree-fixture.js";
@@ -488,26 +488,15 @@ describe("placeNewChild", () => {
     expect(held.value).toEqual({ x: 240 + DEFAULT_NODE_SIZE.w + SIBLING_GAP, y: 260 });
   });
 
-  it("reproduces the placeholder step W10 has been using, so nothing jumps", () => {
-    // writes.ts placed a new child at parent + (siblings * NODE_STEP_X,
-    // NODE_STEP_Y). For uniform 200x200 notes this function agrees exactly,
-    // which is what makes W4's swap invisible on existing trees.
-    const tree = treeOf(
-      { nodes: { "shape:goal": "todo" }, edges: [] },
-      { "shape:goal": { x: 0, y: 0 } },
-    );
-    const first = placeNewChild(tree, "shape:goal");
-    if (first.status !== "ok") throw new Error("expected ok");
-    expect(first.value).toEqual({ x: 0, y: NODE_STEP_Y });
-
-    const withOne = treeOf(
-      { nodes: { "shape:goal": "todo", "shape:a": "todo" }, edges: [["shape:a", "shape:goal"]] },
-      { "shape:goal": { x: 0, y: 0 }, "shape:a": { x: 0, y: NODE_STEP_Y } },
-    );
-    const second = placeNewChild(withOne, "shape:goal");
-    if (second.status !== "ok") throw new Error("expected ok");
-    expect(second.value).toEqual({ x: NODE_STEP_X, y: NODE_STEP_Y });
-  });
+  // THE PLACEHOLDER-PINNING TEST THAT USED TO SIT HERE IS GONE, DELIBERATELY.
+  // W3 left a test asserting that `placeNewChild` reproduced writes.ts's
+  // NODE_STEP_X/NODE_STEP_Y placeholder, as the proof that W4's swap would
+  // change nothing. W4 made the swap, the constants are gone, and a test
+  // comparing two constants could only ever have agreed with itself. Its
+  // replacement is behavioural and lives where the write happens:
+  // tests/tree-write-tools.test.ts's "addChild places the new node where W3
+  // says" — including the case the placeholder got WRONG (a sibling the human
+  // dragged), which is what makes the swap worth having.
 
   it("respects a size the caller gives it", () => {
     const tree = treeOf(
@@ -569,5 +558,97 @@ describe("placeNewChild", () => {
     const held = placeNewChild(tree, "shape:goal");
     if (held.status !== "ok") throw new Error("expected ok");
     expect(held.value).toEqual({ x: 0, y: DEFAULT_NODE_SIZE.h + LEVEL_GAP });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// placeNewGoal — W4's other creation gesture
+// ---------------------------------------------------------------------------
+//
+// "Add a goal" has no parent to hang off, so `placeNewChild` has nothing to
+// say about it. The slot is beside the whole existing forest, for the same
+// reason `layoutTree` packs goals `ROOT_GAP` apart: the eye has to read "a
+// second tree", not "a wide first one". Like every other entry point here it
+// MOVES NOTHING — it answers one position.
+describe("placeNewGoal", () => {
+  it("puts the first goal of an empty tree at the origin", () => {
+    expect(placeNewGoal(treeOf({ nodes: {}, edges: [] }))).toEqual({ x: 0, y: 0 });
+  });
+
+  it("puts a second goal ROOT_GAP right of the first, on the same band", () => {
+    const tree = treeOf(
+      { nodes: { "shape:goal": "todo" }, edges: [] },
+      { "shape:goal": { x: 40, y: 80 } },
+    );
+    expect(placeNewGoal(tree)).toEqual({ x: 40 + DEFAULT_NODE_SIZE.w + ROOT_GAP, y: 80 });
+  });
+
+  it("clears the WHOLE forest, not just the goal row", () => {
+    // A child hanging further right than any root is exactly the case a
+    // roots-only extent misses: the new goal would land on top of it.
+    const tree = treeOf(
+      {
+        nodes: { "shape:goal": "todo", "shape:a": "todo" },
+        edges: [["shape:a", "shape:goal"]],
+      },
+      { "shape:goal": { x: 0, y: 0 }, "shape:a": { x: 600, y: 260 } },
+    );
+    expect(placeNewGoal(tree)).toEqual({ x: 600 + DEFAULT_NODE_SIZE.w + ROOT_GAP, y: 0 });
+  });
+
+  it("measures a node's real width rather than assuming the default", () => {
+    // A note ignores props.w — canvas-model sizes it 200*scale wide — so the
+    // scaled goal is the honest way to ask this question.
+    const tree = treeOf(
+      { nodes: { "shape:goal": "todo" }, edges: [] },
+      { "shape:goal": { x: 0, y: 0, props: { scale: 1.5 } } },
+    );
+    expect(placeNewGoal(tree).x).toBe(300 + ROOT_GAP);
+  });
+
+  it("lines the newcomer up with the TOPMOST goal, not with a lower one", () => {
+    const tree = treeOf(
+      {
+        nodes: { "shape:goal": "todo", "shape:other": "todo" },
+        edges: [],
+      },
+      { "shape:goal": { x: 0, y: 500 }, "shape:other": { x: 300, y: 100 } },
+    );
+    expect(placeNewGoal(tree).y).toBe(100);
+  });
+
+  it("still answers on a tree that is nothing but a cycle", () => {
+    // No roots at all, so there is no goal band to line up with — the topmost
+    // NODE is the honest fallback. Answering is the point: a broken tree must
+    // not stop a human adding a fresh goal beside it.
+    const tree = treeOf(
+      {
+        nodes: { "shape:a": "todo", "shape:b": "todo" },
+        edges: [
+          ["shape:a", "shape:b"],
+          ["shape:b", "shape:a"],
+        ],
+      },
+      { "shape:a": { x: 0, y: 300 }, "shape:b": { x: 0, y: 700 } },
+    );
+    expect(placeNewGoal(tree)).toEqual({ x: DEFAULT_NODE_SIZE.w + ROOT_GAP, y: 300 });
+  });
+
+  it("ignores a node that lives in another frame", () => {
+    // Its x/y are the frame's coordinates; measuring the page's forest against
+    // them would push the newcomer to an arbitrary place. The frame that
+    // counts is the smallest-id root's, which is `layoutTree`'s own rule —
+    // hence the ids: `shape:a-goal` sorts first and sits on the page.
+    const tree = treeOf(
+      {
+        nodes: { "shape:a-goal": "todo", "shape:z-framed": "todo" },
+        edges: [],
+      },
+      {
+        "shape:a-goal": { x: 0, y: 0 },
+        "shape:z-framed": { x: 9000, y: 0, parentId: "shape:a-goal" },
+      },
+    );
+    expect(placeNewGoal(tree)).toEqual({ x: DEFAULT_NODE_SIZE.w + ROOT_GAP, y: 0 });
   });
 });

@@ -50,6 +50,7 @@ export function treeWriterForDoc(
     putShape: (shape) => doc.putShape(shape),
     updateProps: (id, props) => doc.updateProps(id, props),
     putBinding: (binding) => doc.putBinding(binding),
+    putPage: (page) => doc.putPage(page),
     commit,
     random,
   });

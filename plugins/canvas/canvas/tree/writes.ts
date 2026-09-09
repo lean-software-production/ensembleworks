@@ -41,6 +41,7 @@ import {
   plainText,
   type Binding,
   type CanvasDocument,
+  type Page,
   type Shape,
 } from "@ensembleworks/canvas-model";
 import {
@@ -48,9 +49,12 @@ import {
   TREE_KEY,
   buildTreeEdge,
   buildTreeNode,
+  markTreePage,
   quarantineTreeShape,
+  readTreePage,
   type NodeState,
 } from "./encoding.js";
+import { placeNewChild, placeNewGoal } from "./layout.js";
 import {
   checkTreeInvariants,
   childrenOf,
@@ -81,6 +85,10 @@ export interface TreeWriteTarget {
   putShape(shape: Shape): void;
   updateProps(id: string, props: Record<string, unknown>): void;
   putBinding(binding: Binding): void;
+  /** Upsert a page. W4's goal gesture needs it to MARK a page as a tree — the
+   * only write in this engine that is not about a shape. Additive like every
+   * other method here: a page cannot be removed through this seam either. */
+  putPage(page: Page): void;
   /**
    * NO `deleteShape`, NO `deleteBinding` — the same type-level guarantee W11's
    * `TreeRepairTarget` makes, and for the same reason. This engine used to
@@ -104,6 +112,8 @@ export interface TreeWriteTarget {
 export type TreeWriteRefusal =
   /** No node with that id in any tree of this document. */
   | "no-such-node"
+  /** No page with that id in this document, so there is no tree to add to. */
+  | "no-such-page"
   /** The shape exists but is not a usable node of a tree. */
   | "not-a-tree-node"
   /** The two ends of the write are in different trees. */
@@ -157,6 +167,14 @@ export interface TreeWriteOutcome {
 }
 
 export interface TreeWriter {
+  /** Create a ROOT node — a goal, blocking nothing — on `treeId`'s page,
+   * marking that page as a tree if it is not one yet. W4's gesture. */
+  addGoal(input: {
+    treeId: string;
+    title: string;
+    state?: NodeState;
+    context?: string;
+  }): TreeWrite<TreeWriteOutcome>;
   /** Create a node that BLOCKS `parentId`, and the edge saying so. */
   addChild(input: {
     parentId: string;
@@ -183,19 +201,12 @@ export interface TreeWriter {
  */
 export const MAX_TITLE_LENGTH = 500;
 
-/** How far below its parent a new node is placed, and how far apart siblings
- * sit. W3 owns real layout; this is the deterministic placeholder so a created
- * node is not stacked on top of its parent, and it is a function of the tree
- * (the sibling count), never of a clock. */
 /**
  * The quarantine `reason` a reparent stamps on the edge it replaced — a
  * MOVE, not damage. Named so a reader (and a test) can tell the two apart:
  * every other reason in a quarantine record is a `TreeProblemKind` W11 found.
  */
 export const REPARENT_REASON = "reparented";
-
-export const NODE_STEP_X = 240;
-export const NODE_STEP_Y = 260;
 
 // ---------------------------------------------------------------------------
 // The writer
@@ -232,6 +243,7 @@ export function createTreeWriter(target: TreeWriteTarget): TreeWriter {
       applyWrite(target, before, focusId, mutate, outcome, landed),
   };
   return {
+    addGoal: (input) => addGoal(ops, input),
     addChild: (input) => addChild(ops, input),
     rename: (input) => rename(ops, input),
     reparent: (input) => reparent(ops, input),
@@ -311,6 +323,91 @@ function applyWrite(
 // The five operations
 // ---------------------------------------------------------------------------
 
+/**
+ * W4's goal gesture: a ROOT node, and the page mark that makes the page a tree.
+ *
+ * THE ONE WRITE THAT DOES NOT START FROM A NODE, and therefore the only one
+ * that cannot use `locate`. Every other operation here needs a node that is
+ * already on a marked page, which means that before this existed there was no
+ * path — human or agent — to a FIRST tree at all; the only trees in existence
+ * were the ones a seed script hand-built.
+ *
+ * MARKING IS PART OF THE GESTURE, not repair. An UNMARKED page gets the mark:
+ * "put a goal here" is exactly the act that declares the page a tree, and the
+ * mark is additive (`markTreePage` copies the page and sets one key). A
+ * MALFORMED mark is REFUSED instead — restamping it would destroy the evidence
+ * of how it broke, which is W11's to look at and not a creation gesture's to
+ * erase. An already-marked page is left alone, so a second goal broadcasts no
+ * page delta at all.
+ *
+ * No edge, so no direction to get wrong, and no cycle to check: a goal blocks
+ * nothing by definition. The only refusals are the page's and the title's.
+ */
+function addGoal(
+  ops: WriteOps,
+  { treeId, title, state, context }: { treeId: string; title: string; state?: NodeState; context?: string },
+): TreeWrite<TreeWriteOutcome> {
+  const titled = checkTitle(treeId, title);
+  if (!titled.ok) return titled;
+  const noted = checkContext(treeId, context ?? "");
+  if (!noted.ok) return noted;
+
+  const doc = ops.target.document();
+  const page = doc.pages.find((candidate) => candidate.id === treeId);
+  if (page === undefined) {
+    return refusal("no-such-page", `no page ${treeId} in this document`);
+  }
+  const mark = readTreePage(page);
+  if (mark.status === "invalid") {
+    return refusal(
+      "broken-tree",
+      `page ${treeId} carries a malformed tree mark (${mark.error}); repair it before adding to it`,
+    );
+  }
+
+  const tree = readTree(doc, treeId);
+  const minted = mintShapeId(ops.target, tree);
+  if (!minted.ok) return minted;
+  const nodeId = minted.value;
+  const at = placeNewGoal(tree);
+  const shape = withTitle(
+    buildTreeNode({
+      id: nodeId,
+      treeId,
+      // The PAGE, not a frame: a goal is the top of its own tree, so it is not
+      // inheriting anybody's container.
+      parentId: treeId,
+      index: nextIndex(tree),
+      x: at.x,
+      y: at.y,
+      ...(state === undefined ? {} : { state }),
+      ...(context === undefined ? {} : { context }),
+    }),
+    titled.value,
+  );
+
+  const marking = mark.status === "absent";
+  return ops.applied(
+    tree,
+    nodeId,
+    () => {
+      if (marking) ops.target.putPage(markTreePage(page));
+      ops.target.putShape(shape);
+    },
+    {
+      createdId: nodeId,
+      changed: [
+        ...(marking ? [`Marked page ${treeId} as a tree.`] : []),
+        `Created goal ${nodeId} — ${titled.value} [${state ?? "todo"}] on ${treeId}, blocking nothing.`,
+      ],
+    },
+    (after) =>
+      after.nodes.has(nodeId)
+        ? null
+        : `the document did not accept a new goal on ${treeId}`,
+  );
+}
+
 function addChild(
   ops: WriteOps,
   { parentId, title, state, context }: { parentId: string; title: string; state?: NodeState; context?: string },
@@ -331,10 +428,18 @@ function addChild(
   if (!edgeMinted.ok) return edgeMinted;
   const edgeId = edgeMinted.value;
 
-  // W3 owns layout; this is the deterministic placeholder — a function of the
-  // tree (the sibling count), never of a clock.
-  const x = parent.shape.x + childrenOf(tree, parent.id).length * NODE_STEP_X;
-  const y = parent.shape.y + NODE_STEP_Y;
+  // W3 owns layout, and this is where W10's placeholder used to be. The
+  // difference is not cosmetic: the placeholder COUNTED siblings
+  // (`parent + n * NODE_STEP`), so a family the human had dragged got the
+  // newcomer back beside where the parent is, not beside where they put the
+  // family. `placeNewChild` reads the siblings' CURRENT positions, which is
+  // the "never fight a drag" rule applied to creation. `absent` is
+  // unreachable here — `locate` has already found the parent IN this tree —
+  // so the fallback is the parent's own point rather than a refusal an agent
+  // could do nothing with.
+  const slot = placeNewChild(tree, parent.id);
+  const { x, y } =
+    slot.status === "ok" ? slot.value : { x: parent.shape.x, y: parent.shape.y };
   const shape = withTitle(
     buildTreeNode({
       id: nodeId,

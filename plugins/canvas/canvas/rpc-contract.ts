@@ -4,6 +4,7 @@ import { AGENT_STATUSES } from "./wire.js";
 import { MAX_PATH_LENGTH } from "./dock/where.js";
 import { MAX_QUERY_LIMIT } from "./transcript.js";
 import { MAX_NAME_LENGTH } from "./identity.js";
+import { MAX_TITLE_LENGTH } from "./tree/writes.js";
 
 /** A client address minted by transport.ts's `newClientId()`. */
 const clientIdSchema = z.string().trim().min(1).max(128);
@@ -36,6 +37,23 @@ const agentLinkSchema = z
     shapeId: z.string().min(1),
     threadId: z.string().min(1),
     status: z.enum(AGENT_STATUSES),
+  })
+  .strict();
+
+/**
+ * What a tree gesture answers with.
+ *
+ * `problems` is `TreeWriteOutcome.newProblems` rendered as sentences: damage
+ * that appeared WHILE the write was in flight, which means another editor
+ * landed something at the same time. It is not an error — the write was
+ * accepted — so it rides the success answer rather than a rejection, and the
+ * panel warns rather than pretending nothing happened. W11 owns the repair.
+ */
+const treeWriteResultSchema = z
+  .object({
+    nodeId: z.string().min(1),
+    changed: z.array(z.string()),
+    problems: z.array(z.string()),
   })
   .strict();
 
@@ -119,6 +137,57 @@ export const rpcContract = defineRpcContract({
       })
       .strict(),
     output: agentLinkSchema,
+  },
+  /**
+   * W4's TWO NODE GESTURES — "add a goal" and "add a blocker under this node".
+   *
+   * WHY THESE ARE RPC AT ALL, which is the most consequential decision in W4.
+   * The panel holds a live CRDT document and could have created the note, the
+   * arrow and its two bindings locally, in one frame, with no round trip. It
+   * does not, for three reasons that all say the same thing:
+   *
+   *  1. THE REFUSALS ARE THE FEATURE. W10's engine refuses a write that would
+   *     cycle, duplicate a relationship, overflow the encoding's caps or land
+   *     on a broken tree, and re-reads the whole tree through W1 afterwards to
+   *     report damage a concurrent peer caused. A client-side create would be
+   *     a SECOND definition of what a legal tree is, and the two would drift.
+   *  2. `TreeWriteTarget` HAS NO DELETE, BY TYPE (C2's finding 1). That
+   *     guarantee is a property of the one seam every write goes through;
+   *     a gesture writing straight into the local doc goes around it.
+   *  3. DURABILITY IS THE ROOM'S. `commitLocalWrite` broadcasts AND appends to
+   *     the room's update log; a client frame is durable by the inbound path.
+   *     Both are the room's business, and neither is the panel's.
+   *
+   * The cost is honest and stated: the new node appears on the human's canvas
+   * only once the server's delta comes back, so this is not an optimistic
+   * create. That is why the title is typed BEFORE the write rather than into
+   * an empty note afterwards — there is no local shape to focus.
+   *
+   * REJECTS RATHER THAN RETURNING A REFUSAL SHAPE, like `canvas_run_note`:
+   * every refusal here is a sentence for a human, and the panel already toasts
+   * `cause.message`.
+   */
+  canvas_tree_add_goal: {
+    input: z
+      .object({
+        /** The PAGE the goal goes on. Marked as a tree by the write if it is
+         * not one yet — that is the act that starts a tree. */
+        treeId: z.string().min(1).max(200),
+        title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
+      })
+      .strict(),
+    output: treeWriteResultSchema,
+  },
+  canvas_tree_add_blocker: {
+    input: z
+      .object({
+        /** The node the new one will BLOCK — W0's direction, fixed here so the
+         * panel cannot invert it. */
+        parentId: z.string().min(1).max(200),
+        title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
+      })
+      .strict(),
+    output: treeWriteResultSchema,
   },
   /**
    * The threads the attach picker may offer. Server-side because the frontend

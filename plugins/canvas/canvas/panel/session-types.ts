@@ -13,4 +13,7 @@ export interface CanvasSessionProps {
   readonly onUnlinkNote: (shapeId: string) => void;
   readonly onAttachThread: (shapeId: string, threadId: string) => void;
   readonly loadThreadOptions: () => Promise<ThreadOption[]>;
+  readonly treeGesturePending: "goal" | "blocker" | null;
+  readonly onAddGoal: (treeId: string, title: string) => void;
+  readonly onAddBlocker: (parentId: string, title: string) => void;
 }

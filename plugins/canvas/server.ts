@@ -144,12 +144,22 @@ export default async function plugin(bb: BbPluginApi) {
 
   registerMentions(bb, transcript);
 
+  // ONE write engine for the whole plugin: the agent tools below and the
+  // panel's two gesture methods are two CALLERS of it, not two write paths.
+  // `commitLocalWrite` rather than a bare `doc.commit()`: a server-local write
+  // is broadcast by canvas-sync but logged by nobody, so the room's own method
+  // is what makes it as durable as a human's frame — see canvas/room.ts.
+  const treeWriter = treeWriterForDoc(room.peer.doc, {
+    commit: () => room.commitLocalWrite(),
+  });
+
   bb.rpc.register(
     rpcContract,
     createRpcHandlers({
       room,
       locations,
       agents,
+      treeWriter,
       transcript,
       localName,
       settings,
@@ -180,9 +190,7 @@ export default async function plugin(bb: BbPluginApi) {
   // agent's edit as durable as a human's — see canvas/room.ts.
   registerTreeAgentTools(bb, {
     service: treeServiceForDoc(room.peer.doc),
-    writer: treeWriterForDoc(room.peer.doc, {
-      commit: () => room.commitLocalWrite(),
-    }),
+    writer: treeWriter,
     linkedShapeId: (threadId) => agents.shapeForThread(threadId),
   });
 

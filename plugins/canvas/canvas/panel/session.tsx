@@ -22,6 +22,9 @@ export function CanvasSession({
   onUnlinkNote,
   onAttachThread,
   loadThreadOptions,
+  treeGesturePending,
+  onAddGoal,
+  onAddBlocker,
 }: CanvasSessionProps) {
   const { editor, toolContext, tools, presenceStore, presencePublisher, selfKey } = session;
   const editorState = useEditorState(editor);
@@ -107,6 +110,9 @@ export function CanvasSession({
       onUnlink={onUnlinkNote}
       onAttach={onAttachThread}
       loadThreadOptions={loadThreadOptions}
+      treeGesturePending={treeGesturePending}
+      onAddGoal={onAddGoal}
+      onAddBlocker={onAddBlocker}
       pageSwitcher={pageSwitcher}
     />
   );

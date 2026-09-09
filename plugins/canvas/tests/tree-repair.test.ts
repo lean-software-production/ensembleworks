@@ -896,6 +896,7 @@ describe("the repair target", () => {
       putShape: () => {},
       updateProps: () => {},
       putBinding: () => {},
+    putPage: () => {},
       commit: () => {},
       random: () => 0.5,
     };

@@ -16,6 +16,7 @@ import type { ThreadOption } from "../thread-picker.js";
 import type { CanvasAgentLink } from "../wire.js";
 import { SpeakerRings } from "../roster-ui.js";
 import { QuarantinedEdges } from "./quarantine-layer.js";
+import { TreeGestureLayer } from "./tree-gesture-layer.js";
 import type { ToolId, ToolStates } from "../tool-loop.js";
 import {
   chromeCardColumnStyle,
@@ -62,6 +63,11 @@ export interface SessionViewProps {
   readonly onUnlink: (shapeId: string) => void;
   readonly onAttach: (shapeId: string, threadId: string) => void;
   readonly loadThreadOptions: () => Promise<ThreadOption[]>;
+  /** W4's two node gestures. Which gesture's write is in flight, and the two
+   * calls that start one. */
+  readonly treeGesturePending: "goal" | "blocker" | null;
+  readonly onAddGoal: (treeId: string, title: string) => void;
+  readonly onAddBlocker: (parentId: string, title: string) => void;
   readonly pageSwitcher: PageSwitcherView;
 }
 
@@ -106,6 +112,9 @@ function CanvasSurface({
   onUnlink,
   onAttach,
   loadThreadOptions,
+  treeGesturePending,
+  onAddGoal,
+  onAddBlocker,
 }: SessionViewProps) {
   return (
     <div
@@ -171,6 +180,18 @@ function CanvasSurface({
         onUnlink={onUnlink}
         onAttach={onAttach}
         loadThreadOptions={loadThreadOptions}
+      />
+      {/* Later than <AgentLayer>, and the same posture: pointer-events none on
+          the layer, auto on the controls, anchored with screenBoxFor. */}
+      <TreeGestureLayer
+        doc={snapshot}
+        camera={editorState.camera}
+        viewportSize={viewportSize}
+        selection={editorState.selection}
+        currentPageId={editorState.currentPageId}
+        pending={treeGesturePending}
+        onAddGoal={onAddGoal}
+        onAddBlocker={onAddBlocker}
       />
       <SpeakerRings
         presence={presenceAll}

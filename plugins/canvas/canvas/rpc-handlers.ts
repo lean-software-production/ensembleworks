@@ -16,11 +16,19 @@ import { AGENT_CHANNEL } from "./wire.js";
 import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
 import type { LocationBook } from "./locations.js";
+import type { TreeWrite, TreeWriteOutcome, TreeWriter } from "./tree/writes.js";
 
 export interface RpcHandlerDependencies {
   readonly room: CanvasRoomHost;
   readonly locations: LocationBook;
   readonly agents: AgentLinks;
+  /**
+   * W10's write engine, over the room's own document — the SAME instance the
+   * agent tools hold. A human gesture and an agent tool are two callers of one
+   * write path, which is the whole point of routing the gesture through rpc
+   * (canvas/rpc-contract.ts argues it next to the two methods).
+   */
+  readonly treeWriter: TreeWriter;
   readonly transcript: TranscriptStore;
   readonly localName: string;
   readonly settings: { get(): Promise<Record<string, string | undefined>> };
@@ -29,6 +37,44 @@ export interface RpcHandlerDependencies {
   readonly realtime: { publish(channel: string, payload: unknown): void };
   readonly log: {
     info(message: string): void;
+  };
+}
+
+/**
+ * A write engine answer, as an rpc answer.
+ *
+ * A REFUSAL BECOMES A THROWN ERROR carrying the engine's own sentence, so the
+ * panel's existing `toast.error(cause.message)` path shows a human exactly
+ * what the engine said — reason code and subjects included. The alternative,
+ * a `{ ok: false }` shape, would have every caller re-render a message the
+ * engine already wrote.
+ *
+ * `newProblems` rides the SUCCESS answer, because the write did land. It means
+ * a concurrent editor damaged the tree while this write was in flight, which
+ * is W11's to reconcile and this handler's to pass on rather than swallow.
+ *
+ * EXPORTED FOR ITS OWN TEST, deliberately. The concurrent-damage case cannot
+ * be staged through the rpc lane — the write is synchronous inside the
+ * handler, so there is no moment for another peer to land an edge in — and a
+ * mutation that dropped `problems` on the floor survived the whole suite until
+ * this had a unit test of its own.
+ */
+export function treeWriteResult(
+  write: TreeWrite<TreeWriteOutcome>,
+  log: { info(message: string): void },
+): { nodeId: string; changed: string[]; problems: string[] } {
+  if (!write.ok) throw new Error(`${write.reason}: ${write.detail}`);
+  const outcome = write.value;
+  log.info(`tree gesture: ${outcome.changed.join(" ")}`);
+  return {
+    // The node the gesture made — never the focus, which for `addChild` is the
+    // PARENT. A panel that selected the focus would select the node the human
+    // already had selected and look like it did nothing.
+    nodeId: outcome.createdId ?? outcome.focusId,
+    changed: [...outcome.changed],
+    problems: outcome.newProblems.map(
+      (problem) => `${problem.kind}: ${problem.detail}`,
+    ),
   };
 }
 
@@ -95,6 +141,10 @@ export function createRpcHandlers(
       );
       return link;
     },
+    canvas_tree_add_goal: ({ treeId, title }) =>
+      treeWriteResult(deps.treeWriter.addGoal({ treeId, title }), log),
+    canvas_tree_add_blocker: ({ parentId, title }) =>
+      treeWriteResult(deps.treeWriter.addChild({ parentId, title }), log),
     canvas_thread_options: async () => {
       const projectId = await resolveProjectId();
       const rows = await deps.sdk.threads.list(threadListArgsFor(projectId));

@@ -183,6 +183,60 @@ export function placeNewChild(
 }
 
 /**
+ * W4's OTHER creation gesture: where does a brand-new GOAL go?
+ *
+ * A goal has no parent, so `placeNewChild` has nothing to say about it, and
+ * `layoutTree` is the wrong call — it would re-pack every goal on the page to
+ * make room, which is a layout the human did not ask for. This answers ONE
+ * position and moves nothing, exactly like `placeNewChild`.
+ *
+ * The slot: `ROOT_GAP` to the right of the whole existing forest, on the
+ * TOPMOST goal's band. `ROOT_GAP` rather than `SIBLING_GAP` for the reason the
+ * constant gives — the eye must read "a second tree", not "a wide first one" —
+ * and it clears every NODE rather than just the goal row, because a child
+ * hanging further right than any root is exactly what a roots-only extent
+ * would land the newcomer on top of.
+ *
+ * TOTAL: an empty tree answers the origin, and a tree that is nothing but a
+ * cycle (no roots at all) lines up with the topmost node instead. A broken
+ * tree must not stop a human starting a fresh goal beside it — that is W11's
+ * to repair, not this gesture's to refuse.
+ *
+ * FRAME. Only nodes sharing the frame of the reference node (the smallest-id
+ * root, else the smallest-id node) are measured: a framed node's x/y are the
+ * frame's coordinates, and mixing the two spaces would put the newcomer
+ * somewhere arbitrary. The same rule `placeNewChild` and `layoutTree` apply.
+ *
+ * No `newSize` parameter, unlike `placeNewChild`: the newcomer is placed by
+ * its LEFT edge against the forest's right edge, so its own width cannot
+ * change the answer. A parameter that provably does nothing is a parameter a
+ * caller will one day pass in the belief it does.
+ */
+export function placeNewGoal(tree: Tree): Position {
+  const nodes = treeNodes(tree);
+  if (nodes.length === 0) return { x: 0, y: 0 };
+  const goals = roots(tree);
+  const reference = (goals[0] ?? nodes[0]) as TreeNode;
+  const frame = reference.shape.parentId;
+  const band = goals.length > 0 ? goals : nodes;
+
+  let right = -Infinity;
+  for (const node of nodes) {
+    if (node.shape.parentId !== frame) continue;
+    right = Math.max(right, node.shape.x + sizeOf(node).w);
+  }
+  let top = Infinity;
+  for (const node of band) {
+    if (node.shape.parentId !== frame) continue;
+    top = Math.min(top, node.shape.y);
+  }
+  // Every node of this tree is in another frame: there is nothing on this
+  // page's band to measure against, so the origin is the honest answer.
+  if (right === -Infinity || top === Infinity) return { x: 0, y: 0 };
+  return { x: right + ROOT_GAP, y: top };
+}
+
+/**
  * Tidy ONE branch, leaving its root exactly where the human put it.
  *
  * The secondary entry point, and the one a "reorganise this" action wants: the

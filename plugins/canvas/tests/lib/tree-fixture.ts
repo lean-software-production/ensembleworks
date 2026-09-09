@@ -111,6 +111,7 @@ export const writerOf = (spec: Spec): TreeWriter => {
     putShape: () => {},
     updateProps: () => {},
     putBinding: () => {},
+    putPage: () => {},
     commit: () => {},
     random: () => 0.5,
   });

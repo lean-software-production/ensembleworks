@@ -38,6 +38,7 @@ import {
   readTreeQuarantine,
 } from "../canvas/tree/encoding.js";
 import { checkTreeInvariants, readTree, type TreeProblem } from "../canvas/tree/model.js";
+import { SIBLING_GAP, placeNewChild, placeNewGoal } from "../canvas/tree/layout.js";
 import { listQuarantinedEdges } from "../canvas/tree/repair.js";
 import { createTreeService } from "../canvas/tree/service.js";
 import { treeServiceForDoc, treeWriterForDoc } from "../canvas/tree/doc-source.js";
@@ -752,6 +753,7 @@ describe("a document that drops the write", () => {
       putShape: () => {},
       updateProps: () => {},
       putBinding: () => {},
+    putPage: () => {},
       commit: () => {},
       random: seededRandom(2),
     };
@@ -794,6 +796,7 @@ describe("reparent cannot lose the edge it is replacing", () => {
       getShape: (id) => doc.getShape(id),
       // Existing shapes update fine; a shape the document has never seen is
       // refused, exactly as a no-op `putShape` refusal looks from out here.
+      putPage: (page) => doc.putPage(page),
       putShape: (shape) => {
         if (doc.getShape(shape.id) !== undefined) doc.putShape(shape);
       },
@@ -888,6 +891,7 @@ describe("post-write verification", () => {
       putShape: (shape) => doc.putShape(shape),
       updateProps: (id, props) => doc.updateProps(id, props),
       putBinding: (binding) => doc.putBinding(binding),
+      putPage: (page) => doc.putPage(page),
       commit: () => doc.commit(),
       random: seededRandom(3),
     };
@@ -1191,5 +1195,175 @@ describe("a server-local write is written down before anyone sees it", () => {
     const done = writer.addChild({ parentId: "shape:goal", title: "Written by an agent" });
     if (!done.ok) return expect.unreachable(done.detail);
     expect(deltas().length).toBeGreaterThan(before);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W4 — placement, and the goal gesture
+// ---------------------------------------------------------------------------
+//
+// W10 shipped a deterministic PLACEHOLDER (`parent + siblings * NODE_STEP`)
+// and W3 shipped the real thing. These are the tests of the swap, and they are
+// deliberately behavioural: the old pinning test in tests/tree-layout.test.ts
+// compared two CONSTANTS, which agreed by construction and would have gone on
+// agreeing after the swap never happened.
+
+/** Move a shape the way a human's drag does — a whole-shape put, so the
+ * writer's next read sees the position the human left it at. */
+function drag(r: Rig, shapeId: string, x: number, y: number): void {
+  const shape = r.document().byId.get(shapeId) as Shape;
+  r.doc.putShape({ ...shape, x, y } as Shape);
+  r.doc.commit();
+}
+
+describe("addChild places the new node where W3 says", () => {
+  it("puts it beside a sibling the human DRAGGED, not beside the parent", () => {
+    // The placeholder was blind to where siblings actually are: it counted
+    // them. A goal with ONE child, dragged far away, separates the two
+    // answers: the placeholder says parent + 1 step (240, 260); W3 says
+    // beside the child where the human left it.
+    const r = rig({ nodes: { "shape:goal": ["todo", "Goal"] }, edges: [] });
+    const first = r.writer.addChild({ parentId: "shape:goal", title: "First" });
+    if (!first.ok) return expect.unreachable(first.detail);
+    drag(r, first.value.createdId as string, 1000, 800);
+
+    const second = r.writer.addChild({ parentId: "shape:goal", title: "Second" });
+    if (!second.ok) return expect.unreachable(second.detail);
+    const placed = r.document().byId.get(second.value.createdId as string) as Shape;
+    expect({ x: placed.x, y: placed.y }).toEqual({ x: 1000 + 200 + SIBLING_GAP, y: 800 });
+  });
+
+  it("agrees with placeNewChild exactly, on the tree as it was BEFORE the write", () => {
+    const r = rig();
+    const wanted = placeNewChild(readTree(r.document(), TREE), "shape:api");
+    if (wanted.status !== "ok") return expect.unreachable("expected a slot");
+    const done = r.writer.addChild({ parentId: "shape:api", title: "Second blocker" });
+    if (!done.ok) return expect.unreachable(done.detail);
+    const placed = r.document().byId.get(done.value.createdId as string) as Shape;
+    expect({ x: placed.x, y: placed.y }).toEqual(wanted.value);
+  });
+
+  it("keeps a framed child in its parent's frame, at the frame's own coordinates", () => {
+    // The frame rule W10 stated and W3 re-states: a child inherits the parent
+    // SHAPE's container, so the position must be measured in that space too.
+    const r = rig();
+    const framed = r.document().byId.get("shape:api") as Shape;
+    r.doc.putShape({ ...framed, parentId: "shape:goal" } as Shape);
+    r.doc.commit();
+    const done = r.writer.addChild({ parentId: "shape:api", title: "Under a framed node" });
+    if (!done.ok) return expect.unreachable(done.detail);
+    const placed = r.document().byId.get(done.value.createdId as string) as Shape;
+    expect(placed.parentId).toBe("shape:goal");
+  });
+});
+
+describe("addGoal", () => {
+  it("creates a ROOT node — no parent, no edge — that the read spine reads back", () => {
+    const r = rig();
+    const done = r.writer.addGoal({ treeId: TREE, title: "A second goal" });
+    if (!done.ok) return expect.unreachable(done.detail);
+    const created = done.value.createdId as string;
+    expect(done.value.edgeId).toBeUndefined();
+    const view = viewOf(r, created);
+    expect(view.title).toBe("A second goal");
+    expect(view.treeId).toBe(TREE);
+    expect(view.parentIds).toEqual([]);
+    expect(edgesOf(r)).toEqual(edgesOf(rig()));
+  });
+
+  it("places it where W3 says, clear of the whole existing forest", () => {
+    const r = rig();
+    const wanted = placeNewGoal(readTree(r.document(), TREE));
+    const done = r.writer.addGoal({ treeId: TREE, title: "Beside" });
+    if (!done.ok) return expect.unreachable(done.detail);
+    const placed = r.document().byId.get(done.value.createdId as string) as Shape;
+    expect({ x: placed.x, y: placed.y }).toEqual(wanted);
+  });
+
+  it("leaves the document with no new problem", () => {
+    const r = rig();
+    const before = r.problems().length;
+    expect(r.writer.addGoal({ treeId: TREE, title: "Clean" }).ok).toBe(true);
+    expect(r.problems()).toHaveLength(before);
+  });
+
+  it("MARKS an unmarked page, so the first goal is what starts a tree", () => {
+    // Without this there is no human path to a first tree at all: every write
+    // this engine has needs a node that is already on a marked page.
+    const r = rig({ ...EXAMPLE, nodes: {}, edges: [], markPage: false });
+    expect(readTree(r.document(), TREE).problems.map((p) => p.kind)).toContain("unmarked-page");
+    const done = r.writer.addGoal({ treeId: TREE, title: "First goal ever" });
+    if (!done.ok) return expect.unreachable(done.detail);
+    const after = readTree(r.document(), TREE);
+    expect(after.problems).toEqual([]);
+    expect(after.nodes.has(done.value.createdId as string)).toBe(true);
+    expect(done.value.changed.join(" ")).toContain(TREE);
+  });
+
+  it("does not re-stamp a page that is already a tree", () => {
+    const r = rig();
+    const done = r.writer.addGoal({ treeId: TREE, title: "Second" });
+    if (!done.ok) return expect.unreachable(done.detail);
+    // The page mark is the tree's identity: a gesture that rewrote it on every
+    // add would broadcast a page delta nobody asked for. Asserted as the
+    // ABSENCE of the marking line rather than a substring of the joined text —
+    // a case-sensitive `not.toContain("marked")` passes against "Marked page
+    // …", which is exactly the mutation that has to fail here.
+    expect(done.value.changed).toHaveLength(1);
+    expect(done.value.changed.some((line) => line.startsWith("Marked page"))).toBe(false);
+  });
+
+  it("refuses a page the document does not have, naming it, and writes nothing", () => {
+    const r = rig();
+    const before = r.fingerprint();
+    const done = r.writer.addGoal({ treeId: "page:nope", title: "Nowhere" });
+    expect(done.ok).toBe(false);
+    if (done.ok) return;
+    expect(done.reason).toBe("no-such-page");
+    expect(done.detail).toContain("page:nope");
+    expect(r.fingerprint()).toBe(before);
+  });
+
+  it("refuses a page whose tree mark is MALFORMED rather than overwriting it", () => {
+    // Repair is W11's, not a creation gesture's: silently restamping a mark
+    // somebody else broke would destroy the evidence of how it broke.
+    const r = rig();
+    const page = r.document().pages.find((candidate) => candidate.id === TREE);
+    r.doc.putPage({ ...page, tree: { v: 99 } } as never);
+    r.doc.commit();
+    const before = r.fingerprint();
+    const done = r.writer.addGoal({ treeId: TREE, title: "On a broken page" });
+    expect(done.ok).toBe(false);
+    if (done.ok) return;
+    expect(done.reason).toBe("broken-tree");
+    expect(done.detail).toContain(TREE);
+    expect(r.fingerprint()).toBe(before);
+  });
+
+  it("refuses a blank title, and a title over the cap, naming the page", () => {
+    const r = rig();
+    const blank = r.writer.addGoal({ treeId: TREE, title: "   " });
+    expect(blank.ok).toBe(false);
+    if (!blank.ok) {
+      expect(blank.reason).toBe("empty-title");
+      expect(blank.detail).toContain(TREE);
+    }
+    const long = r.writer.addGoal({ treeId: TREE, title: "x".repeat(MAX_TITLE_LENGTH + 1) });
+    expect(long.ok).toBe(false);
+    if (!long.ok) expect(long.reason).toBe("too-long");
+  });
+
+  it("takes a state and a context, like addChild does", () => {
+    const r = rig();
+    const done = r.writer.addGoal({
+      treeId: TREE,
+      title: "Stated",
+      state: "wip",
+      context: "# Goal\nProve the loop.\n",
+    });
+    if (!done.ok) return expect.unreachable(done.detail);
+    const view = viewOf(r, done.value.createdId as string);
+    expect(view.state).toBe("wip");
+    expect(view.context).toContain("Prove the loop.");
   });
 });
