@@ -1091,6 +1091,9 @@ describe("scope — a write tool is offered exactly where a read tool is", () =>
           if (selector !== null) throw new Error("bb accepts one configure callback per plugin");
           selector = fn;
         },
+        // W7 registers a brief alongside the tools. Stubbed here rather than
+        // asserted — tests/tree-instructions.test.ts owns that surface.
+        contributeInstructions: () => {},
       },
     };
     registerTreeAgentTools(bb as never, toolDeps());

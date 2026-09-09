@@ -40,6 +40,7 @@ import {
   refuse,
   titleOf,
 } from "./answers.js";
+import { treeInstructions } from "./instructions.js";
 import {
   TREE_WRITE_TOOL_NAMES,
   createTreeWriteTools,
@@ -353,4 +354,14 @@ export function registerTreeAgentTools(bb: BbPluginApi, deps: TreeToolDeps): voi
     tools: selectTreeTools(context.thread.id, deps),
     skills: [],
   }));
+  // W7's per-turn brief. A SEPARATE registration from `configure` — bb takes
+  // one of each — and it resolves its subject through the same
+  // `treeThreadSubject` the tool scope does, so a thread that gets the tools
+  // gets the brief and a thread that gets neither is silent in both.
+  bb.agents.contributeInstructions((context) =>
+    treeInstructions(context.threadId, {
+      service: deps.service,
+      subject: (threadId) => treeThreadSubject(threadId, deps),
+    }),
+  );
 }

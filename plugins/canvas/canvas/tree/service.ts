@@ -416,8 +416,14 @@ function clamp(text: string, max: number): string {
  * ends in `…`), lines are kept from the front while they fit, and the space
  * for the "N of M lines not shown" marker is RESERVED BEFORE any line is
  * kept — the marker can never be the thing that gets cut.
+ *
+ * EXPORTED FOR W7. The per-turn brief (`instructions.ts`) ranks its own lines
+ * above this digest and has the same budget problem one level up. It calls
+ * this rather than growing a second fitter, because two character budgets that
+ * disagreed about what a cut line looks like would be the same defect C1 found
+ * here, moved outwards.
  */
-function fitLines(
+export function fitLines(
   lines: readonly string[],
   maxChars: number,
 ): { text: string; truncated: boolean } {

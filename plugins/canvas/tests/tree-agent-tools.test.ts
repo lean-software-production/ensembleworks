@@ -391,6 +391,9 @@ describe("registration against bb", () => {
           ) {
             configure = provider;
           },
+          // W7 registers a brief alongside the tools. Stubbed here rather than
+          // asserted — tests/tree-instructions.test.ts owns that surface.
+          contributeInstructions() {},
         },
       },
     };
