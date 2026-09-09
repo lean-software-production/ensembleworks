@@ -29,21 +29,40 @@ import type {
   BbPluginApi,
   PluginAgentToolResult,
 } from "@get-bb/plugin-sdk";
-import type {
-  SubtreeView,
-  TreeNodeView,
-  TreeQuery,
-  TreeService,
-} from "./service.js";
+import type { TreeNodeView, TreeQuery, TreeService } from "./service.js";
+import {
+  MAX_ANSWER_CHARS,
+  failed,
+  listing,
+  ok,
+  oneLine,
+  outline,
+  refuse,
+  titleOf,
+} from "./answers.js";
+import {
+  TREE_WRITE_TOOL_NAMES,
+  createTreeWriteTools,
+  type TreeWriteToolDeps,
+} from "./write-tools.js";
+import type { TreeWriter } from "./writes.js";
+
+/** Re-exported at its original home: W6's suite and any later reader looks for
+ * the answer ceiling here, and answers.ts is where it now lives. */
+export { MAX_ANSWER_CHARS };
 
 // ---------------------------------------------------------------------------
 // The seam
 // ---------------------------------------------------------------------------
 
 /** What the tools need from the server, and nothing else. */
-export interface TreeToolDeps {
+export interface TreeToolDeps extends TreeWriteToolDeps {
   /** W5's query surface, over the live room document. */
   readonly service: TreeService;
+  /** W10's write engine, over the same live document. Required, not optional:
+   * an optional writer would mean a deployment could silently offer the read
+   * half only, and a model would learn the tree is read-only. */
+  readonly writer: TreeWriter;
   /**
    * The canvas shape this thread was launched on, or null. `AgentLinks`
    * answers this from its in-memory mirror, which is what makes it usable in
@@ -72,8 +91,8 @@ export interface TreeToolRegistration {
   execute(params: TreeToolParams, ctx: TreeToolCallContext): PluginAgentToolResult;
 }
 
-/** Every tool this node registers, in the order a reader meets them. */
-export const TREE_TOOL_NAMES = [
+/** The READ tools (W6), in the order a reader meets them. */
+export const TREE_READ_TOOL_NAMES = [
   "canvas_tree_digest",
   "canvas_tree_node",
   "canvas_tree_children",
@@ -83,83 +102,16 @@ export const TREE_TOOL_NAMES = [
 ] as const;
 
 /**
- * Ceiling on one tool answer. Twice the digest's own 2,000, because a subtree
- * or a blocker list is allowed to be the BIG answer a model asks for after the
- * digest told it something was missing — but still bounded, since a tool
- * result lands in the same context window the digest was rationing.
- */
-export const MAX_ANSWER_CHARS = 4_000;
-
-/** Longest node list any one answer spells out before it starts counting. */
-const MAX_LISTED = 40;
-
-// ---------------------------------------------------------------------------
-// Rendering — what a model actually reads
-// ---------------------------------------------------------------------------
-
-const titleOf = (view: TreeNodeView): string =>
-  view.title.trim() === "" ? "(untitled)" : view.title.trim();
-
-/** One node on one line: the unit every list answer is built from. */
-const oneLine = (view: TreeNodeView): string =>
-  `${view.id} — ${titleOf(view)} [${view.state}]${view.isReady ? " (ready)" : ""}`;
-
-/** A list of nodes, capped, saying what it left out. */
-function listing(views: readonly TreeNodeView[], empty: string): string {
-  if (views.length === 0) return empty;
-  const shown = views.slice(0, MAX_LISTED).map(oneLine);
-  if (views.length > MAX_LISTED) {
-    shown.push(
-      `… ${views.length - MAX_LISTED} of ${views.length} not shown — ask about a node by id for the rest`,
-    );
-  }
-  return shown.join("\n");
-}
-
-/** A subtree as an indented outline, with the service's own cut markers. */
-function outline(view: SubtreeView, depth = 0): string[] {
-  const indent = "  ".repeat(depth);
-  const lines = [`${indent}${oneLine(view.node)}`];
-  for (const child of view.children) lines.push(...outline(child, depth + 1));
-  if (view.elided === "depth") {
-    lines.push(
-      `${indent}  … blockers not shown (depth) — call canvas_tree_subtree on ${view.node.id}`,
-    );
-  }
-  if (view.elided === "cycle") {
-    lines.push(`${indent}  … blockers not shown (cycle) — this node is already above`);
-  }
-  return lines;
-}
-
-/** Trim an answer to the ceiling, saying so in the answer itself. */
-function bounded(text: string): string {
-  if (text.length <= MAX_ANSWER_CHARS) return text;
-  const marker = "\n… answer cut here — ask a narrower question";
-  return text.slice(0, MAX_ANSWER_CHARS - marker.length) + marker;
-}
-
-const ok = (text: string): PluginAgentToolResult => ({
-  content: [{ type: "text", text: bounded(text) }],
-});
-
-/**
- * A refusal the model can act on.
+ * Every tree tool a scoped thread gets: the reads and W10's writes.
  *
- * `isError` is set, and that is NOT a retreat from W5's "a miss is data, not a
- * throw" — nothing throws here, the tool set stays up, and the next call works.
- * The flag exists so a model cannot mistake the sentence "no node
- * shape:x" for tree CONTENT it just read. W5's rule is about the service never
- * failing; this one is about the answer never being ambiguous.
+ * ONE LIST, because there is one `bb.agents.configure` callback per plugin and
+ * scope is decided in it — a thread that may read this tree may also change it.
+ * Splitting the scope would mean a second callback, which bb rejects.
  */
-const refuse = (text: string): PluginAgentToolResult => ({
-  content: [{ type: "text", text: bounded(text) }],
-  isError: true,
-});
-
-/** A failed query, rendered with the reason the service gave. */
-const failed = <T>(result: Extract<TreeQuery<T>, { ok: false }>): PluginAgentToolResult =>
-  refuse(`${result.reason}: ${result.detail}`);
+export const TREE_TOOL_NAMES = [
+  ...TREE_READ_TOOL_NAMES,
+  ...TREE_WRITE_TOOL_NAMES,
+] as const;
 
 // ---------------------------------------------------------------------------
 // Resolving the subject
@@ -181,7 +133,8 @@ export function treeThreadSubject(
   return found.ok ? found.value : null;
 }
 
-/** Which tools this thread gets. Empty is the answer for most threads. */
+/** Which tools this thread gets — reads AND writes, or nothing. Empty is the
+ * answer for most threads on a bb server. */
 export function selectTreeTools(threadId: string, deps: TreeToolDeps): string[] {
   return treeThreadSubject(threadId, deps) === null ? [] : [...TREE_TOOL_NAMES];
 }
@@ -387,12 +340,13 @@ export function createTreeTools(deps: TreeToolDeps): TreeToolRegistration[] {
  * callback rather than register a second one, which bb rejects.
  */
 export function registerTreeAgentTools(bb: BbPluginApi, deps: TreeToolDeps): void {
-  for (const tool of createTreeTools(deps)) {
+  const registered = [...createTreeTools(deps), ...createTreeWriteTools(deps)];
+  for (const tool of registered) {
     bb.agents.registerTool({
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
-      execute: (params, ctx) => tool.execute(params, ctx),
+      parameters: tool.parameters as never,
+      execute: (params, ctx) => tool.execute(params as never, ctx),
     });
   }
   bb.agents.configure((context) => ({

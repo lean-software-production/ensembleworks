@@ -29,13 +29,14 @@ import {
 } from "../canvas/tree/service.js";
 import {
   MAX_ANSWER_CHARS,
+  TREE_READ_TOOL_NAMES,
   TREE_TOOL_NAMES,
   createTreeTools,
   registerTreeAgentTools,
   selectTreeTools,
   type TreeToolDeps,
 } from "../canvas/tree/agent-tools.js";
-import { EXAMPLE, TREE, docOf, serviceOf, type Spec } from "./lib/tree-fixture.js";
+import { EXAMPLE, TREE, docOf, serviceOf, writerOf, type Spec } from "./lib/tree-fixture.js";
 
 const THREAD = "thr_linked";
 
@@ -45,7 +46,11 @@ function depsOf(
   links: Readonly<Record<string, string>> = { [THREAD]: "shape:api" },
 ): TreeToolDeps {
   return {
+    // W10 made the write engine a required dep of the tool set: the reads and
+    // the writes are registered and scoped together, so a read-only deps value
+    // is not a thing this plugin can hold.
     service: serviceOf(spec),
+    writer: writerOf(spec),
     linkedShapeId: (threadId) => links[threadId] ?? null,
   };
 }
@@ -96,7 +101,9 @@ describe("the tool set itself", () => {
 
   it("registers each declared name exactly once", () => {
     const names = createTreeTools(depsOf(EXAMPLE)).map((tool) => tool.name);
-    expect([...names].sort()).toEqual([...TREE_TOOL_NAMES].sort());
+    // W10 split the constant: `createTreeTools` is the READ half, and
+    // TREE_TOOL_NAMES is what a scoped thread gets (reads + writes).
+    expect([...names].sort()).toEqual([...TREE_READ_TOOL_NAMES].sort());
     expect(new Set(names).size).toBe(names.length);
   });
 
@@ -319,7 +326,7 @@ describe("what the digest is forced to drop is still reachable — plan risk 1",
       edges.push([`shape:w${i}`, "shape:goal"]);
     }
     const deps = depsOf({ nodes, edges }, { [THREAD]: "shape:goal" });
-    for (const name of TREE_TOOL_NAMES) {
+    for (const name of TREE_READ_TOOL_NAMES) {
       const { text } = await call(deps, name);
       expect(text.length).toBeLessThanOrEqual(MAX_ANSWER_CHARS);
     }
@@ -340,6 +347,7 @@ describe("freshness — the document is live under the reader", () => {
     let spec: Spec = { nodes: { "shape:goal": "todo" }, edges: [] };
     const deps: TreeToolDeps = {
       service: createTreeService({ document: () => docOf(spec) }),
+      writer: writerOf({ nodes: { "shape:goal": "todo" }, edges: [] }),
       linkedShapeId: () => "shape:goal",
     };
     const before = await call(deps, "canvas_tree_children");

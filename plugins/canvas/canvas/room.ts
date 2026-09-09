@@ -255,6 +255,52 @@ export class CanvasRoomHost {
     this.#maybeCompact();
   }
 
+  /**
+   * Commit a SERVER-LOCAL write to the room document and log the delta it
+   * produced, so an agent's write is as durable as a human's (W10).
+   *
+   * WHY THIS EXISTS. Every write a client makes arrives as a frame, and
+   * canvas-sync hands the raw payload to `onUpdatePayload` BEFORE anything
+   * observable happens — that is the durable-first path above. A write made
+   * here, straight at `peer.doc`, never goes through it: `commit()` fires
+   * canvas-sync's local-update subscription, which BROADCASTS the delta to
+   * every connected client, and nothing writes it down. Without this method an
+   * agent's edit would be visible on every screen and lost on the next crash,
+   * surviving only if a compaction happened to run first — the worst kind of
+   * data loss, because it looks like it worked.
+   *
+   * ORDER, STATED HONESTLY: a local write is persist-AFTER-broadcast, not
+   * before. Loro fires local-update subscribers synchronously inside
+   * `commit()`, and canvas-sync's broadcast subscriber is registered first (in
+   * SyncServerPeer's constructor), so the frame is on the wire before this
+   * method appends the row. The window is one synchronous statement, and the
+   * alternative was not logging the write at all.
+   *
+   * THE DELTA COMES FROM `subscribeLocalUpdates`, NOT `exportUpdate(before)`.
+   * The obvious version — snapshot `versionBytes()`, commit, export since it —
+   * logs 22-byte EMPTY updates: `versionBytes()` is `oplogVersion()`, and
+   * reading it commits the pending ops first, so "before" is already "after"
+   * and the export has nothing to say. Measured, not reasoned about: the first
+   * version of this method logged two empty rows and a reloaded room came back
+   * with zero shapes.
+   */
+  commitLocalWrite(): void {
+    if (this.#closed) return;
+    const deltas: Uint8Array[] = [];
+    const unsubscribe = this.peer.doc.subscribeLocalUpdates((bytes) => deltas.push(bytes));
+    try {
+      this.peer.doc.commit();
+    } finally {
+      unsubscribe();
+    }
+    if (deltas.length === 0) return; // nothing was pending: not a write
+    for (const delta of deltas) {
+      this.#lastSeq = this.#store.appendUpdate(this.room, delta);
+      this.#updatesSinceSnapshot += 1;
+    }
+    this.#maybeCompact();
+  }
+
   leave(clientId: string): void {
     if (!this.#clients.has(clientId)) return;
     this.#clients.get(clientId)?.transport.close();

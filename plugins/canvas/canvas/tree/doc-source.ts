@@ -15,8 +15,44 @@
 // CACHE note).
 import { dumpModel, type CanvasDoc } from "@ensembleworks/canvas-doc";
 import { createTreeService, type TreeService } from "./service.js";
+import { createTreeWriter, type TreeWriter } from "./writes.js";
 
 /** A tree service reading a live room's document. */
 export function treeServiceForDoc(doc: CanvasDoc): TreeService {
   return createTreeService({ document: () => dumpModel(doc) });
+}
+
+/**
+ * A tree writer against a live room's document (W10).
+ *
+ * TWO INJECTIONS, both for the same reason the service takes a thunk — so
+ * `writes.ts` stays a pure module with no Loro, no clock and no PRNG in it:
+ *
+ * - `commit` defaults to `doc.commit()`, which broadcasts the delta to every
+ *   connected client (canvas-sync's `SyncServerPeer` subscribes to local
+ *   updates). It is OVERRIDABLE because a broadcast is not durability: the
+ *   room's SQLite update log is written by its inbound-frame path, which a
+ *   server-local write never goes through. server.ts passes
+ *   `CanvasRoomHost.commitLocalWrite`, which does both.
+ * - `random` is the entropy new shape ids are drawn from, injected exactly as
+ *   canvas-editor injects `random()` — so a test can name the id a write is
+ *   about to mint instead of fishing it out afterwards.
+ */
+export function treeWriterForDoc(
+  doc: CanvasDoc,
+  options?: { commit?: () => void; random?: () => number },
+): TreeWriter {
+  const commit = options?.commit ?? (() => doc.commit());
+  const random = options?.random ?? (() => Math.random());
+  return createTreeWriter({
+    document: () => dumpModel(doc),
+    getShape: (id) => doc.getShape(id),
+    putShape: (shape) => doc.putShape(shape),
+    updateProps: (id, props) => doc.updateProps(id, props),
+    putBinding: (binding) => doc.putBinding(binding),
+    deleteBinding: (id) => doc.deleteBinding(id),
+    deleteShape: (id) => doc.deleteShape(id),
+    commit,
+    random,
+  });
 }

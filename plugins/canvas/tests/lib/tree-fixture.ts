@@ -19,6 +19,7 @@ import {
   type NodeState,
 } from "../../canvas/tree/encoding.js";
 import { createTreeService, type TreeService } from "../../canvas/tree/service.js";
+import { createTreeWriter, type TreeWriter } from "../../canvas/tree/writes.js";
 
 export const TREE = "page:tree";
 
@@ -92,6 +93,29 @@ export function docOf(spec: Spec): CanvasDocument {
 export const serviceOf = (spec: Spec): TreeService => {
   const doc = docOf(spec);
   return createTreeService({ document: () => doc });
+};
+
+/**
+ * A writer over an IMMUTABLE fixture document — every mutation is dropped.
+ *
+ * For suites that need a `TreeWriter` to exist (W10 made it a required dep of
+ * the tool set) but are not testing writes. W10's own suite writes against a
+ * real `LoroCanvasDoc` instead, because the whole risk there is what the
+ * document actually stores; see tests/tree-write-tools.test.ts.
+ */
+export const writerOf = (spec: Spec): TreeWriter => {
+  const doc = docOf(spec);
+  return createTreeWriter({
+    document: () => doc,
+    getShape: (id) => doc.byId.get(id),
+    putShape: () => {},
+    updateProps: () => {},
+    putBinding: () => {},
+    deleteBinding: () => {},
+    deleteShape: () => {},
+    commit: () => {},
+    random: () => 0.5,
+  });
 };
 
 /**

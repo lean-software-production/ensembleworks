@@ -29,7 +29,7 @@ import {
 import { createRpcHandlers } from "./canvas/rpc-handlers.js";
 import { registerCanvasCli } from "./canvas/cli.js";
 import { registerTreeAgentTools } from "./canvas/tree/agent-tools.js";
-import { treeServiceForDoc } from "./canvas/tree/doc-source.js";
+import { treeServiceForDoc, treeWriterForDoc } from "./canvas/tree/doc-source.js";
 import { rpcContract } from "./canvas/rpc-contract.js";
 export { rpcContract } from "./canvas/rpc-contract.js";
 import { CANVAS_CHANNEL } from "./canvas/wire.js";
@@ -173,8 +173,16 @@ export default async function plugin(bb: BbPluginApi) {
   // scoped to threads that are actually about a tree node, since bb tool names
   // are global and every other thread on the server would otherwise carry six
   // canvas tools it can never use.
+  // The write half (W10) rides the same registration, because bb takes ONE
+  // configure callback per plugin and scope is decided in it. `commitLocalWrite`
+  // rather than a bare `doc.commit()`: a server-local write is broadcast by
+  // canvas-sync but logged by nobody, so the room's own method is what makes an
+  // agent's edit as durable as a human's — see canvas/room.ts.
   registerTreeAgentTools(bb, {
     service: treeServiceForDoc(room.peer.doc),
+    writer: treeWriterForDoc(room.peer.doc, {
+      commit: () => room.commitLocalWrite(),
+    }),
     linkedShapeId: (threadId) => agents.shapeForThread(threadId),
   });
 
