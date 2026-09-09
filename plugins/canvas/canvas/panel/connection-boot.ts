@@ -9,6 +9,7 @@ import { readLastPage } from "../pages/last-page.js";
 import { pageIdFromSubPath } from "../pages/page-route.js";
 import { createPresencePublisher } from "../presence-publisher.js";
 import { createToolSet } from "../tool-loop.js";
+import { registerTreeArrowShape } from "../tree/arrow-shape.js";
 import { ROOM_ID } from "../wire.js";
 import { pageMemoryStore } from "./page-memory.js";
 import {
@@ -83,6 +84,9 @@ export function useConnectionBoot({
       });
       const toolContext = createToolContext(editor);
       registerCoreShapes();
+      // W2: replace the BoxShape fallback the arrow kind would otherwise get
+      // — its routed path is drawn by the Overlay (see tree/arrow-shape.tsx).
+      registerTreeArrowShape();
       const next: Session = {
         peer,
         editor,

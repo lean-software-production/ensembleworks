@@ -15,6 +15,7 @@ import { AgentLayer } from "../agents-ui.js";
 import type { ThreadOption } from "../thread-picker.js";
 import type { CanvasAgentLink } from "../wire.js";
 import { SpeakerRings } from "../roster-ui.js";
+import { QuarantinedEdges } from "./quarantine-layer.js";
 import type { ToolId, ToolStates } from "../tool-loop.js";
 import {
   chromeCardColumnStyle,
@@ -140,6 +141,14 @@ function CanvasSurface({
           viewportSize={viewportSize}
           index={toolContext.index()}
           snapResult={currentSnapResult(toolStates, activeToolId)}
+        />
+        {/* Later sibling than <Overlay>, so the marker paints ON TOP of the
+            routed arrow that overlay already drew for the same shape. */}
+        <QuarantinedEdges
+          snapshot={snapshot}
+          camera={editorState.camera}
+          viewportSize={viewportSize}
+          currentPageId={editorState.currentPageId}
         />
         <Cursors
           presence={remotePresence}
