@@ -5,6 +5,8 @@ import { MAX_PATH_LENGTH } from "./dock/where.js";
 import { MAX_QUERY_LIMIT } from "./transcript.js";
 import { MAX_NAME_LENGTH } from "./identity.js";
 import { MAX_TITLE_LENGTH } from "./tree/writes.js";
+import { NODE_STATES } from "./tree/encoding.js";
+import { MAX_CARD_TITLE, MAX_NODE_ID_LENGTH } from "./tree/node-reference.js";
 
 /** A client address minted by transport.ts's `newClientId()`. */
 const clientIdSchema = z.string().trim().min(1).max(128);
@@ -188,6 +190,45 @@ export const rpcContract = defineRpcContract({
       })
       .strict(),
     output: treeWriteResultSchema,
+  },
+  /**
+   * ONE NODE, FOR A `::node{id="\u2026"}` CARD IN A MESSAGE (W9).
+   *
+   * WHY THE CARD ASKS AT ALL, rather than reading the message it is drawn in.
+   * The directive's attributes were written by a model at some point in the
+   * past, into a message that is kept forever; a title and a state quoted
+   * there are a snapshot of a tree that has since moved on. So the directive
+   * carries the id and nothing else, and every fact on the card is read HERE,
+   * live, through W5's service over the room's own document
+   * (canvas/tree/node-reference.ts argues it at the other end).
+   *
+   * `node: null` IS A NORMAL ANSWER, not an error: a deleted node, an id a
+   * model invented, and a shape that is not a tree node at all are the same
+   * fact from here — this document does not have that node — and an old
+   * message containing a dead reference is an ordinary thing. The card renders
+   * it as a visible dead reference; a thrown error would render as "the canvas
+   * is broken", which would be a lie about a healthy canvas.
+   *
+   * The reply is small on purpose. It feeds one line of chrome, so it carries
+   * no context note and a title already cut to a label by `cardTitle`.
+   */
+  canvas_tree_node: {
+    input: z.object({ nodeId: z.string().min(1).max(MAX_NODE_ID_LENGTH) }).strict(),
+    output: z
+      .object({
+        node: z
+          .object({
+            id: z.string().min(1),
+            /** The PAGE, which is where a click on the card goes. */
+            treeId: z.string().min(1),
+            title: z.string().max(MAX_CARD_TITLE),
+            state: z.enum(NODE_STATES),
+            isReady: z.boolean(),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
   },
   /**
    * The threads the attach picker may offer. Server-side because the frontend

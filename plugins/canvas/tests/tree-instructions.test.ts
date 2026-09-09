@@ -37,6 +37,7 @@ import {
   treeThreadSubject,
   type TreeToolDeps,
 } from "../canvas/tree/agent-tools.js";
+import { NODE_DIRECTIVE_SYNTAX } from "../canvas/tree/node-reference.js";
 import { EXAMPLE, TREE, serviceOf, writerOf, type Spec } from "./lib/tree-fixture.js";
 
 const THREAD = "thr_linked";
@@ -310,6 +311,48 @@ describe("the brief is honest about what it left out", () => {
     const text = brief(depsOf(withContext));
     expect(text).not.toContain("the whole definition of done");
     expect(text).toContain("canvas_tree_node");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 4b. The reply half — W9
+// ---------------------------------------------------------------------------
+
+describe("the brief teaches the one thing an agent cannot discover from a tool", () => {
+  // W9 makes `::node{id="…"}` in a reply render as a card that takes a human
+  // to that node on the canvas. A model that does not know the syntax never
+  // emits it, and nothing in a tool's answer can teach it: the tools speak
+  // about the tree, not about how bb renders a message. The brief is the one
+  // ambient surface a tree thread already has, so it is where the syntax
+  // belongs — one sentence, in the same reserved tail as the closing line.
+  it("names the directive, with its attribute", () => {
+    const text = brief(depsOf(EXAMPLE));
+    expect(text).toContain(NODE_DIRECTIVE_SYNTAX);
+  });
+
+  it("keeps the syntax even when the tree crowds the brief out", () => {
+    // The reserve is the point: a model on a big tree is the one MOST likely
+    // to want to point a human at a specific node.
+    const deps = depsOf(chain(250, 300), { [THREAD]: "shape:n125" });
+    for (const budget of [900, 2_000, INSTRUCTIONS_MAX_CHARS]) {
+      const text = treeInstructions(THREAD, deps, budget);
+      expect(text === null ? "" : text).toContain(NODE_DIRECTIVE_SYNTAX);
+    }
+  });
+
+  it("drops the syntax before it drops the incompleteness sentence", () => {
+    // A budget that holds neither both sentences nor any tree is pathological
+    // — the real ceiling is 4096 — but the RANKING is not: a brief that stayed
+    // quiet about being incomplete in order to teach a syntax would be lying
+    // about itself, and at that size there is barely a tree to point into.
+    const text = treeInstructions(THREAD, depsOf(chain(250, 300), { [THREAD]: "shape:n125" }), 300);
+    expect(text === null ? "" : text).toContain("INCOMPLETE");
+    expect(text === null ? "" : text).not.toContain(NODE_DIRECTIVE_SYNTAX);
+  });
+
+  it("still fits the host's ceiling with the sentence in it", () => {
+    const text = brief(depsOf(chain(250, 300), { [THREAD]: "shape:n125" }));
+    expect(text.length).toBeLessThanOrEqual(INSTRUCTIONS_MAX_CHARS);
   });
 });
 

@@ -22,7 +22,14 @@ export const MAX_ANSWER_CHARS = 4_000;
 /** Longest node list any one answer spells out before it starts counting. */
 export const MAX_LISTED = 40;
 
-export const titleOf = (view: TreeNodeView): string =>
+/** A node's title, or the one word said in its place.
+ *
+ * WIDENED to anything carrying a title (W9's `NodeCardFacts`, which is the rpc
+ * subset a `::node` card gets, not a whole `TreeNodeView`). `TreeNodeView` is
+ * still assignable, so every existing caller is unchanged — and there is now
+ * one definition of what an untitled node is CALLED, rather than a second one
+ * in the card that could drift from what a model is told. */
+export const titleOf = (view: { readonly title: string }): string =>
   view.title.trim() === "" ? "(untitled)" : view.title.trim();
 
 /** One node on one line: the unit every list answer is built from. */

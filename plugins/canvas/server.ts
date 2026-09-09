@@ -153,6 +153,11 @@ export default async function plugin(bb: BbPluginApi) {
     commit: () => room.commitLocalWrite(),
   });
 
+  // ONE read surface too, for the same reason as the writer above: the `::node`
+  // card's rpc (W9) and the agent tools (W6) are two callers of one service
+  // over one document, not two readers that could drift.
+  const treeService = treeServiceForDoc(room.peer.doc);
+
   bb.rpc.register(
     rpcContract,
     createRpcHandlers({
@@ -160,6 +165,7 @@ export default async function plugin(bb: BbPluginApi) {
       locations,
       agents,
       treeWriter,
+      treeService,
       transcript,
       localName,
       settings,
@@ -189,7 +195,7 @@ export default async function plugin(bb: BbPluginApi) {
   // canvas-sync but logged by nobody, so the room's own method is what makes an
   // agent's edit as durable as a human's — see canvas/room.ts.
   registerTreeAgentTools(bb, {
-    service: treeServiceForDoc(room.peer.doc),
+    service: treeService,
     writer: treeWriter,
     linkedShapeId: (threadId) => agents.shapeForThread(threadId),
   });

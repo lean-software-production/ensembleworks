@@ -50,6 +50,7 @@
 // registration lives in agent-tools.ts, which is what keeps this module free
 // of a cycle with it.
 import { oneLine } from "./answers.js";
+import { NODE_DIRECTIVE_SYNTAX } from "./node-reference.js";
 import { fitLines, type TreeNodeView, type TreeService } from "./service.js";
 
 /**
@@ -90,11 +91,41 @@ const WHOLE =
 const PARTIAL =
   "This brief is INCOMPLETE — parts of this tree are not shown. Read them with canvas_tree_subtree (a branch), canvas_tree_children (one node's blockers), canvas_tree_ready (the whole ready list), canvas_tree_node (a node's context), canvas_tree_digest (the outline again).";
 
+/**
+ * How to point a human at a node from inside a reply (W9).
+ *
+ * THE ONE THING NO TOOL CAN TEACH, which is why it is here rather than in a
+ * tool description. Every `canvas_tree_*` tool answers a question about the
+ * tree; none of them is about how bb renders a message, and a description that
+ * explained an unrelated rendering syntax would be teaching in the wrong place
+ * (and only to a model that happened to call that tool). The brief is the
+ * ambient surface a tree thread already has, and this is ambient knowledge: a
+ * model that does not know the syntax simply never emits it, and the return
+ * leg of D2 never runs.
+ *
+ * Reserved with the closing sentence rather than ranked with the tree lines,
+ * for the same reason: on a big tree the outline is the first thing to go, and
+ * a model on a big tree is the one MOST likely to need to point at one node in
+ * particular.
+ *
+ * IT STILL RANKS BELOW THE CLOSING SENTENCE. If the budget cannot hold both
+ * and leave a line of tree, this one goes. A brief that dropped "this is
+ * INCOMPLETE" in order to keep a syntax lesson would be lying about itself to
+ * teach a courtesy — and at that budget there is barely a tree to point INTO.
+ * At the real ceiling (4096) both fit with room to spare; the ranking only
+ * decides what a pathological budget loses first.
+ */
+const REFERENCE = `To point at one node in a reply, write ${NODE_DIRECTIVE_SYNTAX} — it renders as a card that takes the reader to that node on the canvas. Use a node's real id; a reference to anything else renders as a dead link.`;
+
 /** Room reserved for whichever closing sentence turns out to be true, plus its
  * newline. Reserved against the WIDER of the two before a single line is kept,
  * for the reason `fitLines` reserves its own marker: the sentence that admits
  * an omission must not be the thing the omission removes. */
 const CLOSING_RESERVE = Math.max(WHOLE.length, PARTIAL.length) + 1;
+
+/** Room the reference sentence needs, taken only when what is left still holds
+ * some tree — see REFERENCE's ranking note. */
+const REFERENCE_RESERVE = REFERENCE.length + 1;
 
 /** What the brief needs, and nothing else. */
 export interface TreeInstructionDeps {
@@ -125,8 +156,12 @@ export function treeInstructions(
   const node = deps.subject(threadId);
   if (node === null) return null;
 
-  const room = maxChars - CLOSING_RESERVE;
-  if (room <= 0) return null;
+  const closingRoom = maxChars - CLOSING_RESERVE;
+  if (closingRoom <= 0) return null;
+  // The reference sentence is taken out of the budget only if doing so still
+  // leaves something to say; otherwise it is dropped whole rather than cut.
+  const carriesReference = closingRoom - REFERENCE_RESERVE > 0;
+  const room = carriesReference ? closingRoom - REFERENCE_RESERVE : closingRoom;
 
   const orientation = fitLines(
     orientationLines(node, deps.service),
@@ -149,7 +184,8 @@ export function treeInstructions(
     digest.value.truncated;
 
   const body = digest !== null && digest.ok ? [orientation.text, digest.value.text] : [orientation.text];
-  return [...body, partial ? PARTIAL : WHOLE].join("\n");
+  const tail = carriesReference ? [partial ? PARTIAL : WHOLE, REFERENCE] : [partial ? PARTIAL : WHOLE];
+  return [...body, ...tail].join("\n");
 }
 
 /**

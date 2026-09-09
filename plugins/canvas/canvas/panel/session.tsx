@@ -7,6 +7,7 @@ import type { ToolId } from "../tool-loop.js";
 import { useSessionInput } from "./session-input.js";
 import { useSessionPages } from "./session-pages.js";
 import { useSessionPresence } from "./session-presence.js";
+import { useSessionReveal } from "./session-reveal.js";
 import type { CanvasSessionProps } from "./session-types.js";
 import { useSessionViewport } from "./session-viewport.js";
 import { SessionView } from "./session-view.js";
@@ -48,6 +49,18 @@ export function CanvasSession({
     presencePublisher,
     panelRef: viewport.panelRef,
     viewportRef: viewport.viewportRef,
+  });
+  // W9's return leg: a `::node` card clicked in a thread lands here, on this
+  // canvas, with that node selected and centred. Mounted next to the page
+  // router deliberately — the reveal asks for its page through the URL, which
+  // is the router's one job, rather than becoming a second thing that writes
+  // `currentPageId`.
+  useSessionReveal({
+    editor,
+    snapshot,
+    currentPageId: editorState.currentPageId,
+    livePageIds: snapshot.pages.map((page) => page.id),
+    viewportSizeRef: viewport.viewportSizeRef,
   });
   const { navigate, pageSwitcher } = useSessionPages({
     editor,

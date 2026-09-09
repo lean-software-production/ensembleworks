@@ -17,6 +17,8 @@ import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
 import type { LocationBook } from "./locations.js";
 import type { TreeWrite, TreeWriteOutcome, TreeWriter } from "./tree/writes.js";
+import type { TreeService } from "./tree/service.js";
+import { cardTitle } from "./tree/node-reference.js";
 
 export interface RpcHandlerDependencies {
   readonly room: CanvasRoomHost;
@@ -29,6 +31,13 @@ export interface RpcHandlerDependencies {
    * (canvas/rpc-contract.ts argues it next to the two methods).
    */
   readonly treeWriter: TreeWriter;
+  /**
+   * W5's read surface, over the room's own document — the SAME instance the
+   * agent tools hold, for the same reason the writer is: a second service
+   * would be a second reader of one document, and the card and the tools could
+   * then disagree about a node while looking at the same room.
+   */
+  readonly treeService: TreeService;
   readonly transcript: TranscriptStore;
   readonly localName: string;
   readonly settings: { get(): Promise<Record<string, string | undefined>> };
@@ -145,6 +154,25 @@ export function createRpcHandlers(
       treeWriteResult(deps.treeWriter.addGoal({ treeId, title }), log),
     canvas_tree_add_blocker: ({ parentId, title }) =>
       treeWriteResult(deps.treeWriter.addChild({ parentId, title }), log),
+    canvas_tree_node: ({ nodeId }) => {
+      const found = deps.treeService.node(nodeId);
+      // EVERY failure reason collapses to null, deliberately. "No such shape",
+      // "that shape is not a tree node" and "that node is on a page this room
+      // has forgotten" are one fact to a card in an old message: it cannot be
+      // followed. Reporting WHICH would put W5's reason codes into a chat
+      // bubble, where nobody can act on them.
+      if (!found.ok) return { node: null };
+      const view = found.value;
+      return {
+        node: {
+          id: view.id,
+          treeId: view.treeId,
+          title: cardTitle(view.title),
+          state: view.state,
+          isReady: view.isReady,
+        },
+      };
+    },
     canvas_thread_options: async () => {
       const projectId = await resolveProjectId();
       const rows = await deps.sdk.threads.list(threadListArgsFor(projectId));
