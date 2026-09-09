@@ -44,13 +44,11 @@ import {
   type Shape,
 } from "@ensembleworks/canvas-model";
 import {
-  BLOCKED_TERMINAL,
-  BLOCKER_TERMINAL,
   MAX_CONTEXT_LENGTH,
   TREE_KEY,
   buildTreeEdge,
   buildTreeNode,
-  edgeBindingId,
+  quarantineTreeShape,
   type NodeState,
 } from "./encoding.js";
 import {
@@ -83,8 +81,15 @@ export interface TreeWriteTarget {
   putShape(shape: Shape): void;
   updateProps(id: string, props: Record<string, unknown>): void;
   putBinding(binding: Binding): void;
-  deleteBinding(id: string): void;
-  deleteShape(id: string): void;
+  /**
+   * NO `deleteShape`, NO `deleteBinding` — the same type-level guarantee W11's
+   * `TreeRepairTarget` makes, and for the same reason. This engine used to
+   * hold both, and used them in exactly one place: `reparent`, where a
+   * declined new edge left the old one tombstoned (C2 finding 1). An edge
+   * leaves a tree by QUARANTINE now, which is a meta key on a shape the human
+   * drew, so the absence below is checkable in one line rather than only
+   * asserted by a test.
+   */
   /**
    * Commit the change — and, in production, durably log it. Injected rather
    * than `doc.commit()` because a server-local write is NOT persisted by the
@@ -182,6 +187,13 @@ export const MAX_TITLE_LENGTH = 500;
  * sit. W3 owns real layout; this is the deterministic placeholder so a created
  * node is not stacked on top of its parent, and it is a function of the tree
  * (the sibling count), never of a clock. */
+/**
+ * The quarantine `reason` a reparent stamps on the edge it replaced — a
+ * MOVE, not damage. Named so a reader (and a test) can tell the two apart:
+ * every other reason in a quarantine record is a `TreeProblemKind` W11 found.
+ */
+export const REPARENT_REASON = "reparented";
+
 export const NODE_STEP_X = 240;
 export const NODE_STEP_Y = 260;
 
@@ -435,17 +447,31 @@ function reparent(
     tree,
     node.id,
     () => {
-      // Bindings first, then the arrow: either order leaves a moment of
-      // half-edge, and deleting the rows first means that moment is a
-      // BOUND-NOTHING arrow rather than two rows pointing at a shape that is
-      // gone (which is what repair() sweeps).
-      for (const gone of removed) {
-        ops.target.deleteBinding(edgeBindingId(gone.edgeId, BLOCKER_TERMINAL));
-        ops.target.deleteBinding(edgeBindingId(gone.edgeId, BLOCKED_TERMINAL));
-        ops.target.deleteShape(gone.edgeId);
-      }
+      // THE ORDER IS THE SAFETY PROPERTY (C2 finding 1). The first version
+      // removed the old edges FIRST and let `applyWrite`'s read-back decide
+      // afterwards — so a `putShape` the document declined (its documented
+      // right: an arrow built from a valid parent can still fail
+      // `validateShape` on geometry a remote peer wrote) left the human's
+      // relationship DELETED, a Loro tombstone, while the agent was told
+      // `rejected`. Worse than the loss: `readTree` then saw a legal tree with
+      // one more root, so W11 never learned anything had gone. The new edge
+      // therefore goes in and is CHECKED before anything else moves.
       ops.target.putShape(edge.shape);
+      if (ops.target.getShape(edgeId) === undefined) return; // declined: touch nothing else
       for (const binding of edge.bindings) ops.target.putBinding(binding);
+      // QUARANTINE, NOT DELETE — the same disposal W11 uses, for the same
+      // reason: the old arrow is a thing a human drew, and taking it out of
+      // the tree is a meta key, not a tombstone. `restoreQuarantinedEdge` puts
+      // the relationship back if the move was wrong.
+      for (const gone of removed) {
+        const shape = ops.target.getShape(gone.edgeId);
+        if (shape === undefined) continue;
+        const parked = quarantineTreeShape(shape, {
+          reason: REPARENT_REASON,
+          detail: `${node.id} was moved to block ${parent.id} instead of ${gone.blockedId}`,
+        });
+        if (parked.status === "ok") ops.target.putShape(parked.value);
+      }
     },
     {
       edgeId,
@@ -456,7 +482,20 @@ function reparent(
       const parents = after.edges
         .filter((edge) => edge.blockerId === node.id)
         .map((edge) => edge.blockedId);
-      if (!parents.includes(parent.id)) return `${node.id} was not moved under ${parent.id}`;
+      if (!parents.includes(parent.id)) {
+        // A refusal that does not account for the OLD edge is the one an agent
+        // cannot act on: it has to know whether the relationship it asked to
+        // replace is still there.
+        return `the document declined the new edge ${edgeId}, so ${node.id} was not moved under ${
+          parent.id
+        }; ${
+          removed.length === 0
+            ? `${node.id} is still a root`
+            : `it still blocks ${removed.map((gone) => gone.blockedId).join(", ")} through ${removed
+                .map((gone) => gone.edgeId)
+                .join(", ")}`
+        }`;
+      }
       return parents.length === 1
         ? null
         : `${node.id} still blocks ${parents.join(", ")} — the old edges did not go`;
@@ -514,8 +553,10 @@ function checkReparent(
   return { ok: true, value: { tree, node, parent } };
 }
 
-/** What a move DID, naming the edges it took away: a removal the agent did not
- * say out loud is an edit the human cannot account for. */
+/** What a move DID, naming the edges it took out of the tree — AND saying they
+ * are recoverable. A removal the agent did not say out loud is an edit the
+ * human cannot account for, and one described as a deletion when it was a
+ * quarantine sends them looking for undo they do not need. */
 function movedSentence(
   nodeId: string,
   parentId: string,
@@ -524,9 +565,9 @@ function movedSentence(
   if (removed.length === 0) return `${nodeId} was a root; it now blocks ${parentId}.`;
   const was = removed.map((gone) => gone.blockedId).join(", ");
   const ids = removed.map((gone) => gone.edgeId).join(", ");
-  return `Moved ${nodeId}: it now blocks ${parentId} instead of ${was} (removed ${removed.length} edge${
+  return `Moved ${nodeId}: it now blocks ${parentId} instead of ${was} (took ${removed.length} edge${
     removed.length === 1 ? "" : "s"
-  }: ${ids}).`;
+  } out of the tree: ${ids} — quarantined, still drawn, restorable with restoreQuarantinedEdge).`;
 }
 
 function setState(

@@ -25,17 +25,20 @@
 import { describe, expect, it } from "vitest";
 import Database from "better-sqlite3";
 import { LoroCanvasDoc, dumpModel, loadModel } from "@ensembleworks/canvas-doc";
-import { plainText, type CanvasDocument } from "@ensembleworks/canvas-model";
+import { plainText, type CanvasDocument, type Shape } from "@ensembleworks/canvas-model";
 import type { PluginAgentToolContext } from "@get-bb/plugin-sdk";
 import {
   BLOCKED_TERMINAL,
   BLOCKER_TERMINAL,
   MAX_CONTEXT_LENGTH,
+  TREE_KEY,
   buildTreeEdge,
   buildTreeNode,
   edgeBindingId,
+  readTreeQuarantine,
 } from "../canvas/tree/encoding.js";
 import { checkTreeInvariants, readTree, type TreeProblem } from "../canvas/tree/model.js";
+import { listQuarantinedEdges } from "../canvas/tree/repair.js";
 import { createTreeService } from "../canvas/tree/service.js";
 import { treeServiceForDoc, treeWriterForDoc } from "../canvas/tree/doc-source.js";
 import {
@@ -470,19 +473,44 @@ describe("reparent", () => {
     expect(viewOf(r, "shape:schema").childIds).toContain(added.value.createdId as string);
   });
 
-  it("deletes the old edge's BINDING rows, not just its arrow", () => {
+  it("QUARANTINES the old edge rather than deleting it, keeping arrow and bindings", () => {
+    // The old contract deleted the arrow and both binding rows — a Loro
+    // tombstone for a thing a human drew, and the door C2 finding 1 came
+    // through. An edge leaves a tree the way W11 takes one out: `meta.tree`
+    // moves to `meta.treeQuarantine`, so the tree stops seeing it and the
+    // canvas keeps every byte of it.
     const r = rig();
     const oldEdge = readTree(r.document(), TREE).edges.find(
       (edge) => edge.blockerId === "shape:schema",
-    );
+    ) as { edgeId: string };
     expect(oldEdge).toBeDefined();
-    expect(r.writer.reparent({ nodeId: "shape:schema", newParentId: "shape:ui" }).ok).toBe(true);
-    const leftovers = r.doc
+    const bindingsBefore = r.doc
       .listBindings()
-      .filter((binding) => binding.fromId === (oldEdge as { edgeId: string }).edgeId);
-    expect(leftovers).toEqual([]);
-    // And the arrow shape itself is gone, so nothing reads as a half-edge.
-    expect(r.doc.getShape((oldEdge as { edgeId: string }).edgeId)).toBeUndefined();
+      .filter((binding) => binding.fromId === oldEdge.edgeId)
+      .map((binding) => binding.id)
+      .sort();
+    expect(bindingsBefore.length).toBe(2);
+
+    expect(r.writer.reparent({ nodeId: "shape:schema", newParentId: "shape:ui" }).ok).toBe(true);
+
+    // Out of the TREE...
+    expect(edgesOf(r)).not.toContain("shape:schema>shape:api");
+    expect(r.problems()).toEqual([]);
+    // ...but still in the DOCUMENT, arrow and both rows, and restorable.
+    const arrow = r.doc.getShape(oldEdge.edgeId) as Shape;
+    expect(arrow).toBeDefined();
+    expect(arrow.meta[TREE_KEY]).toBeUndefined();
+    expect(readTreeQuarantine(arrow).status).toBe("ok");
+    expect(
+      r.doc
+        .listBindings()
+        .filter((binding) => binding.fromId === oldEdge.edgeId)
+        .map((binding) => binding.id)
+        .sort(),
+    ).toEqual(bindingsBefore);
+    expect(listQuarantinedEdges(r.document(), TREE).map((entry) => entry.edgeId)).toContain(
+      oldEdge.edgeId,
+    );
   });
 
   it("REFUSES a cycle, naming both ends, and writes nothing", () => {
@@ -724,8 +752,6 @@ describe("a document that drops the write", () => {
       putShape: () => {},
       updateProps: () => {},
       putBinding: () => {},
-      deleteBinding: () => {},
-      deleteShape: () => {},
       commit: () => {},
       random: seededRandom(2),
     };
@@ -744,6 +770,80 @@ describe("a document that drops the write", () => {
       if (done.ok) continue;
       expect(done.reason).toBe("rejected");
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A refusal may never cost a relationship (C2 finding 1)
+// ---------------------------------------------------------------------------
+
+describe("reparent cannot lose the edge it is replacing", () => {
+  /**
+   * The deaf target above drops DELETES too, so it can only prove the
+   * uninteresting case: nothing happened at all. This one is the dangerous
+   * shape — a document that takes every delete and declines the new arrow,
+   * which is `CanvasDoc.putShape`'s documented right (an arrow built from an
+   * already-valid parent can still fail `validateShape` on geometry that
+   * arrived from a remote peer). If a reparent removes the old edge before the
+   * new one has landed, this target eats a human's relationship and reports
+   * `rejected` — a silent loss, with no problem left for W11 to find.
+   */
+  function declinesNewShapes(doc: LoroCanvasDoc): TreeWriteTarget {
+    return {
+      document: () => dumpModel(doc),
+      getShape: (id) => doc.getShape(id),
+      // Existing shapes update fine; a shape the document has never seen is
+      // refused, exactly as a no-op `putShape` refusal looks from out here.
+      putShape: (shape) => {
+        if (doc.getShape(shape.id) !== undefined) doc.putShape(shape);
+      },
+      updateProps: (id, props) => doc.updateProps(id, props),
+      putBinding: (binding) => doc.putBinding(binding),
+      commit: () => doc.commit(),
+      random: seededRandom(11),
+    };
+  }
+
+  it("leaves the old relationship in the tree when the document declines the new edge", () => {
+    const doc = liveDoc();
+    const writer = createTreeWriter(declinesNewShapes(doc));
+    const before = dumpModel(doc);
+
+    const done = writer.reparent({ nodeId: "shape:ui", newParentId: "shape:api" });
+
+    if (done.ok) return expect.unreachable("a declined arrow was reported as a move");
+    expect(done.reason).toBe("rejected");
+    const after = dumpModel(doc);
+    // THE POINT: shape:ui still blocks shape:goal, through the same edge, and
+    // nothing at all was tombstoned.
+    expect(readTree(after, TREE).edges.map((edge) => `${edge.blockerId}>${edge.blockedId}`).sort())
+      .toEqual(readTree(before, TREE).edges.map((edge) => `${edge.blockerId}>${edge.blockedId}`).sort());
+    expect(after.shapes.map((shape) => shape.id).sort()).toEqual(
+      before.shapes.map((shape) => shape.id).sort(),
+    );
+    expect(after.bindings.map((binding) => binding.id).sort()).toEqual(
+      before.bindings.map((binding) => binding.id).sort(),
+    );
+  });
+
+  it("says what happened to the old edge, naming it", () => {
+    const doc = liveDoc();
+    const writer = createTreeWriter(declinesNewShapes(doc));
+    const done = writer.reparent({ nodeId: "shape:ui", newParentId: "shape:api" });
+    if (done.ok) return expect.unreachable("a declined arrow was reported as a move");
+    // shape:edge-1 is the ui -> goal edge in the fixture.
+    expect(done.detail).toContain("shape:edge-1");
+  });
+
+  it("leaves no new problem behind for W11 to have to find", () => {
+    const doc = liveDoc();
+    const writer = createTreeWriter(declinesNewShapes(doc));
+    const done = writer.reparent({ nodeId: "shape:ui", newParentId: "shape:api" });
+    expect(done.ok).toBe(false);
+    const tree = readTree(dumpModel(doc), TREE);
+    expect([...tree.problems, ...checkTreeInvariants(tree)]).toEqual([]);
+    // And `ui` is not silently a second root.
+    expect(tree.edges.some((edge) => edge.blockerId === "shape:ui")).toBe(true);
   });
 });
 
@@ -788,8 +888,6 @@ describe("post-write verification", () => {
       putShape: (shape) => doc.putShape(shape),
       updateProps: (id, props) => doc.updateProps(id, props),
       putBinding: (binding) => doc.putBinding(binding),
-      deleteBinding: (id) => doc.deleteBinding(id),
-      deleteShape: (id) => doc.deleteShape(id),
       commit: () => doc.commit(),
       random: seededRandom(3),
     };
@@ -1026,5 +1124,72 @@ describe("durability of a server-local write", () => {
     const reloaded = new CanvasRoomHost({ store, publish: () => {}, room: "main" });
     const tree = readTree(dumpModel(reloaded.peer.doc), TREE);
     expect(tree.nodes.has(done.value.createdId as string)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Persist BEFORE observe (C2 finding 2)
+// ---------------------------------------------------------------------------
+
+describe("a server-local write is written down before anyone sees it", () => {
+  function room(): {
+    host: CanvasRoomHost;
+    store: CanvasStore;
+    /** Only the delta envelopes — identity broadcasts are not the subject. */
+    deltas: () => unknown[];
+  } {
+    const db = new Database(":memory:");
+    const store = new CanvasStore(db);
+    for (const statement of CANVAS_MIGRATIONS) db.exec(statement);
+    const published: unknown[] = [];
+    const host = new CanvasRoomHost({
+      store,
+      publish: (message) => published.push(message),
+      room: "main",
+    });
+    host.join("client-1", 0);
+    return {
+      host,
+      store,
+      deltas: () => published.filter((message) => (message as { data?: string }).data !== undefined),
+    };
+  }
+
+  it("broadcasts nothing when the write could not be logged", () => {
+    // THE HAZARD, stated as a test: an agent write's id is minted from
+    // injected entropy, so a delta that reached every client but never reached
+    // SQLite is not recomputable — after a crash the clients hold a node the
+    // server has no record of, and it looks like it worked.
+    const { host, store, deltas } = room();
+    loadModel(host.peer.doc, docOf(EXAMPLE));
+    host.commitLocalWrite();
+
+    (store as unknown as { appendUpdate: () => number }).appendUpdate = () => {
+      throw new Error("the update log is gone");
+    };
+    const before = deltas().length;
+    const writer = treeWriterForDoc(host.peer.doc, {
+      commit: () => host.commitLocalWrite(),
+      random: seededRandom(5),
+    });
+    expect(() => writer.addChild({ parentId: "shape:goal", title: "Written by an agent" })).toThrow(
+      /the update log is gone/,
+    );
+    expect(deltas().length).toBe(before);
+  });
+
+  it("still broadcasts the write it did log", () => {
+    // The guard above must not have bought durability by going silent.
+    const { host, deltas } = room();
+    loadModel(host.peer.doc, docOf(EXAMPLE));
+    host.commitLocalWrite();
+    const before = deltas().length;
+    const writer = treeWriterForDoc(host.peer.doc, {
+      commit: () => host.commitLocalWrite(),
+      random: seededRandom(5),
+    });
+    const done = writer.addChild({ parentId: "shape:goal", title: "Written by an agent" });
+    if (!done.ok) return expect.unreachable(done.detail);
+    expect(deltas().length).toBeGreaterThan(before);
   });
 });

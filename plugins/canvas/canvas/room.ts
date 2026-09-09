@@ -112,6 +112,14 @@ export class CanvasRoomHost {
   readonly room: string;
   readonly #store: CanvasStore;
   readonly #publish: (message: CanvasServerMessage) => void;
+  /**
+   * Where publishes go while a server-local write is being committed, or null
+   * when nothing is being deferred. See `commitLocalWrite`: everything this
+   * room says to a client leaves through `#emit`, so holding this array for
+   * the length of one commit is all it takes to make a local write
+   * persist-BEFORE-observe.
+   */
+  #deferred: CanvasServerMessage[] | null = null;
   readonly #log: (message: string) => void;
   readonly #compactEvery: number;
   readonly #clientIdleMs: number;
@@ -177,6 +185,20 @@ export class CanvasRoomHost {
     );
   }
 
+  /**
+   * THE ONE DOOR OUT. Every byte this room sends a client goes through here —
+   * the delta broadcasts canvas-sync makes through `ClientTransport.send`, the
+   * resync nudges, and the identity map. Nothing calls `#publish` directly
+   * except this method and the flush in `commitLocalWrite`.
+   */
+  #emit = (message: CanvasServerMessage): void => {
+    if (this.#deferred !== null) {
+      this.#deferred.push(message);
+      return;
+    }
+    this.#publish(message);
+  };
+
   get clientCount(): number {
     return this.#clients.size;
   }
@@ -211,7 +233,7 @@ export class CanvasRoomHost {
   join(clientId: string, nowMs: number, name?: string | null): void {
     if (this.#closed) throw new Error("CanvasRoomHost is closed");
     this.#clients.get(clientId)?.transport.close();
-    const transport = new ClientTransport(clientId, this.#publish);
+    const transport = new ClientTransport(clientId, this.#emit);
     // Drop our own bookkeeping when the transport dies for any reason
     // (explicit leave, sweep, or peer.close()).
     transport.onClose(() => {
@@ -267,7 +289,7 @@ export class CanvasRoomHost {
       this.join(clientId, nowMs);
       entry = this.#clients.get(clientId);
       if (entry === undefined) return;
-      this.#publish({ to: clientId, resync: true });
+      this.#emit({ to: clientId, resync: true });
     }
     entry.lastSeenMs = nowMs;
     const applied = this.#inboundUpdates;
@@ -333,12 +355,22 @@ export class CanvasRoomHost {
    * surviving only if a compaction happened to run first — the worst kind of
    * data loss, because it looks like it worked.
    *
-   * ORDER, STATED HONESTLY: a local write is persist-AFTER-broadcast, not
-   * before. Loro fires local-update subscribers synchronously inside
+   * ORDER: PERSIST BEFORE OBSERVE, held by BUFFERING THE PUBLISHES (C2
+   * finding 2). Loro fires local-update subscribers synchronously inside
    * `commit()`, and canvas-sync's broadcast subscriber is registered first (in
-   * SyncServerPeer's constructor), so the frame is on the wire before this
-   * method appends the row. The window is one synchronous statement, and the
-   * alternative was not logging the write at all.
+   * SyncServerPeer's constructor), so the delta reaches `ClientTransport.send`
+   * before this method could possibly append the row. That order is not ours
+   * to change — but the SEND is: every broadcast leaves through a transport
+   * this plugin owns, whose publish closure is `#emit`. So the commit runs
+   * with `#deferred` holding everything the room would have said, the deltas
+   * are written down, and only then is the buffer flushed. A crash between
+   * those two points now loses a write NOBODY SAW, which is a resync away;
+   * the old order lost a write EVERY CLIENT HAD, which is not recoverable at
+   * all — an agent write's id is minted from injected entropy, so unlike a
+   * repair pass it cannot be recomputed from what survived.
+   *
+   * If the append throws, the buffer is dropped with it: the server holds a
+   * change its clients have not seen, which the next handshake reconciles.
    *
    * THE DELTA COMES FROM `subscribeLocalUpdates`, NOT `exportUpdate(before)`.
    * The obvious version — snapshot `versionBytes()`, commit, export since it —
@@ -351,17 +383,27 @@ export class CanvasRoomHost {
   commitLocalWrite(): void {
     if (this.#closed) return;
     const deltas: Uint8Array[] = [];
+    const held: CanvasServerMessage[] = [];
+    // An outer buffer wins: a nested call (repair commits through here) must
+    // not flush what its caller is still holding.
+    const outer = this.#deferred;
+    this.#deferred = held;
     const unsubscribe = this.peer.doc.subscribeLocalUpdates((bytes) => deltas.push(bytes));
     try {
       this.peer.doc.commit();
     } finally {
       unsubscribe();
+      this.#deferred = outer;
     }
-    if (deltas.length === 0) return; // nothing was pending: not a write
     for (const delta of deltas) {
       this.#lastSeq = this.#store.appendUpdate(this.room, delta);
       this.#updatesSinceSnapshot += 1;
     }
+    // Durable: say it out loud. Nothing was pending (not a write) flushes too —
+    // a presence or identity publish that happened to land inside the window
+    // is not what this is guarding.
+    for (const message of held) this.#emit(message);
+    if (deltas.length === 0) return;
     this.#maybeCompact();
   }
 
@@ -414,7 +456,7 @@ export class CanvasRoomHost {
    * wrong label indefinitely; the next broadcast repairs any client. */
   #publishIdentities(): void {
     if (this.#closed) return;
-    this.#publish({ identities: this.identities });
+    this.#emit({ identities: this.identities });
   }
 
   #maybeCompact(): void {

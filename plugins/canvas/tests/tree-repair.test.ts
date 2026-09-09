@@ -43,7 +43,7 @@ import {
 } from "../canvas/tree/encoding.js";
 import { checkTreeInvariants, readTree, type TreeProblem } from "../canvas/tree/model.js";
 import { treeWriterForDoc } from "../canvas/tree/doc-source.js";
-import type { TreeWriteTarget } from "../canvas/tree/writes.js";
+import { REPARENT_REASON, type TreeWriteTarget } from "../canvas/tree/writes.js";
 import {
   REPAIRABLE_KINDS,
   applyTreeRepair,
@@ -109,6 +109,17 @@ function census(doc: CanvasDocument): { shapes: string[]; bindings: string[] } {
 function keptEverything(before: CanvasDocument, after: CanvasDocument): void {
   expect(census(after)).toEqual(census(before));
 }
+
+/**
+ * The edges REPAIR took out, ignoring the ones a reparent parked. Both are
+ * quarantines by design — a move takes its old edge out of the tree the same
+ * way repair does, rather than tombstoning an arrow a human drew (C2 finding
+ * 1) — and only the reason tells them apart.
+ */
+const repairQuarantines = (doc: CanvasDocument, treeId = TREE): string[] =>
+  listQuarantinedEdges(doc, treeId)
+    .filter((entry) => entry.quarantine.reason !== REPARENT_REASON)
+    .map((entry) => entry.edgeId);
 
 /** Two peers forked from one snapshot of `spec`, and the merge of their work. */
 function twoPeers(spec: Spec = EXAMPLE): {
@@ -634,6 +645,34 @@ describe("restoring a quarantined edge", () => {
     expect(listQuarantinedEdges(dumpModel(live), TREE).map((e) => e.edgeId)).toEqual([quarantined]);
   });
 
+  it("names the RIVAL EDGE a human would have to remove, not just the nodes", () => {
+    // A cycle's `subjects` are its NODES, so the refusal that came out of the
+    // first version named three notes and told the human to "remove the rival
+    // edge" — which edge, it did not say. The duplicate case hid this: there
+    // the subjects happen to BE edge ids.
+    const live = liveDoc(
+      docOf({
+        nodes: { "shape:a": "todo", "shape:b": "todo", "shape:c": "todo" },
+        edges: [
+          ["shape:a", "shape:b"],
+          ["shape:b", "shape:c"],
+          ["shape:c", "shape:a"],
+        ],
+      }),
+    );
+    const report = applyTreeRepair(targetFor(live), TREE);
+    const quarantined = report.applied[0]?.edgeId as string;
+    const rivals = readTree(dumpModel(live), TREE)
+      .edges.map((edge) => edge.edgeId)
+      .filter((id) => id !== quarantined);
+    expect(rivals.length).toBeGreaterThan(0);
+
+    const result = restoreQuarantinedEdge(targetFor(live), quarantined);
+    if (result.ok) return expect.unreachable("restoring into a live cycle was accepted");
+    expect(result.detail).toContain("cycle");
+    for (const rival of rivals) expect(result.detail).toContain(rival);
+  });
+
   it("restores the edge once the reason is gone", () => {
     const { live, quarantined, kept } = repaired();
     // A human deletes the surviving duplicate; the quarantined one is now the
@@ -784,12 +823,14 @@ describe("the room reconciles what a frame merged", () => {
     // re-deriving the repair from a document nobody wrote down.
     const reloaded = new CanvasRoomHost({ store, publish: () => {}, room: "main" });
     expect(problemsOf(dumpModel(reloaded.peer.doc))).toEqual([]);
-    expect(listQuarantinedEdges(dumpModel(reloaded.peer.doc), TREE).length).toBe(1);
+    expect(repairQuarantines(dumpModel(reloaded.peer.doc)).length).toBe(1);
   });
 
   it("repairs a merge whose repair delta never reached the log — the crash window", () => {
-    // W10's `commitLocalWrite` is persist-AFTER-broadcast: a crash between the
-    // two leaves clients holding a repair the server never wrote down. This is
+    // A repair delta can still be lost: `commitLocalWrite` now persists before
+    // it lets anything out (C2 finding 2), but a crash mid-append leaves
+    // clients holding nothing and the server holding a merge with no repair
+    // beside it. This is
     // that log — the merge, and no repair — and the room must come back
     // repaired rather than serving a cyclic tree to the next reader. Repair
     // being a pure function of content is what makes that work: the restart
@@ -810,7 +851,7 @@ describe("the room reconciles what a frame merged", () => {
 
     const restarted = new CanvasRoomHost({ store, publish: () => {}, room: "main" });
     expect(problemsOf(dumpModel(restarted.peer.doc))).toEqual([]);
-    expect(listQuarantinedEdges(dumpModel(restarted.peer.doc), TREE).length).toBe(1);
+    expect(repairQuarantines(dumpModel(restarted.peer.doc)).length).toBe(1);
   });
 
   it("does not run a repair pass for a frame that changed nothing", () => {
@@ -855,8 +896,6 @@ describe("the repair target", () => {
       putShape: () => {},
       updateProps: () => {},
       putBinding: () => {},
-      deleteBinding: () => expect.unreachable("repair may not delete a binding"),
-      deleteShape: () => expect.unreachable("repair may not delete a shape"),
       commit: () => {},
       random: () => 0.5,
     };

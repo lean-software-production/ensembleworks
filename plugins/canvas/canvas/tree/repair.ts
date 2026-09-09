@@ -260,15 +260,7 @@ function losingEdge(tree: Tree, problem: TreeProblem): string | null {
       // edges are the consecutive pairs, wrapping. Quarantine the smallest
       // edge id among them, so the SAME edge is chosen wherever the walk
       // happened to enter the cycle.
-      const ids = problem.subjects;
-      const onCycle = tree.edges
-        .filter((edge) =>
-          ids.some(
-            (id, at) => edge.blockerId === id && edge.blockedId === ids[(at + 1) % ids.length],
-          ),
-        )
-        .map((edge) => edge.edgeId);
-      return smallest(onCycle);
+      return smallest(problemEdges(tree, problem));
     }
     case "duplicate-edge":
       // `subjects` is already the edge ids, ascending: keep the first, the
@@ -278,12 +270,7 @@ function losingEdge(tree: Tree, problem: TreeProblem): string | null {
     case "multiple-parents": {
       // `subjects` is [nodeId, ...the nodes it blocks]. One of those edges
       // stays; the next smallest leaves, and a later pass takes any others.
-      const nodeId = problem.subjects[0];
-      const outgoing = tree.edges
-        .filter((edge) => edge.blockerId === nodeId)
-        .map((edge) => edge.edgeId)
-        .sort(compare);
-      return outgoing[1] ?? null;
+      return [...problemEdges(tree, problem)].sort(compare)[1] ?? null;
     }
     case "dangling-edge": {
       // `subjects` is [edgeId, ...the ids it names that are not nodes here].
@@ -311,6 +298,51 @@ function losingEdge(tree: Tree, problem: TreeProblem): string | null {
       // contract). There is no rival to choose between: the edge itself is
       // what cannot be read as a relationship.
       return problem.subjects[0] ?? null;
+  }
+}
+
+/**
+ * WHICH EDGES CARRY A PROBLEM — the set `losingEdge` chooses from, and the set
+ * a refused restore names so a human is told which arrow to remove.
+ *
+ * A problem's `subjects` are its NODES for the graph kinds, which is why the
+ * first restore refusal said "remove the rival edge first" while printing
+ * three note ids (C2 finding 3). This is the translation, in one place, so the
+ * refusal and the choice can never disagree about what an edge of a problem
+ * is.
+ */
+function problemEdges(tree: Tree, problem: TreeProblem): readonly string[] {
+  switch (problem.kind) {
+    case "cycle": {
+      // `subjects` is the cycle in order (W1), so its edges are the
+      // consecutive pairs, wrapping.
+      const ids = problem.subjects;
+      return tree.edges
+        .filter((edge) =>
+          ids.some(
+            (id, at) => edge.blockerId === id && edge.blockedId === ids[(at + 1) % ids.length],
+          ),
+        )
+        .map((edge) => edge.edgeId);
+    }
+    case "duplicate-edge":
+      // Already edge ids, ascending.
+      return problem.subjects;
+    case "multiple-parents": {
+      // `subjects` is [nodeId, ...the nodes it blocks]: every edge out of it.
+      const nodeId = problem.subjects[0];
+      return tree.edges.filter((edge) => edge.blockerId === nodeId).map((edge) => edge.edgeId);
+    }
+    case "dangling-edge":
+    case "invalid-edge":
+      // `subjects[0]` is the arrow itself (W1's contract).
+      return problem.subjects.slice(0, 1);
+    default:
+      // A kind with no edges to name — `unreachable`, `invalid-node`,
+      // `foreign-kind`, `unmarked-page`. Unlike `losingEdge`, this is asked
+      // about ARBITRARY problems (whatever a restore would create), so the
+      // fallthrough is reachable and must be an empty set, not `undefined`.
+      return [];
   }
 }
 
@@ -556,12 +588,29 @@ export function restoreQuarantinedEdge(
     (problem) => !had.has(problemKey(problem)),
   );
   if (created.length > 0) {
+    // NAME THE RIVAL EDGE, not just the nodes of the problem: a human told to
+    // remove something has to be told WHICH thing, and for every kind but
+    // `duplicate-edge` the subjects above are notes, not arrows. Derived from
+    // the PROJECTED tree — the rivals are whatever would be there alongside
+    // this edge if it came back.
+    const projectedTree = readTree(projected, treeId);
+    const rivals = [
+      ...new Set(
+        created.flatMap((problem) =>
+          problemEdges(projectedTree, problem).filter((id) => id !== edgeId),
+        ),
+      ),
+    ].sort(compare);
     return {
       ok: false,
       reason: "broken-tree",
       detail: `restoring ${edgeId} into ${treeId} would recreate ${created
         .map((problem) => `${problem.kind} (${problem.subjects.join(", ")})`)
-        .join("; ")} — the next merge would take it straight back out. Remove the rival edge first.`,
+        .join("; ")} — the next merge would take it straight back out. ${
+        rivals.length === 0
+          ? "Fix the tree first."
+          : `Remove the rival edge first: ${rivals.join(", ")}.`
+      }`,
     };
   }
 
