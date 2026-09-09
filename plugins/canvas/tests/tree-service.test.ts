@@ -319,28 +319,28 @@ describe("subtree(id, depth)", () => {
   });
 });
 
-describe("readyLeaves(treeId)", () => {
+describe("ready(treeId)", () => {
   it("lists the work that can be picked up, ascending", () => {
-    const leaves = unwrap<{ id: string }[]>(serviceOf(EXAMPLE).readyLeaves(TREE) as never);
+    const leaves = unwrap<{ id: string }[]>(serviceOf(EXAMPLE).ready(TREE) as never);
     expect(leaves.map((l) => l.id)).toEqual(["shape:schema", "shape:ui"]);
   });
 
   it("drops a leaf once it is done", () => {
     const leaves = unwrap<{ id: string }[]>(
       serviceOf({ ...EXAMPLE, nodes: { ...EXAMPLE.nodes, "shape:ui": ["done", "Arrow renderer"] } })
-        .readyLeaves(TREE) as never,
+        .ready(TREE) as never,
     );
     expect(leaves.map((l) => l.id)).toEqual(["shape:schema"]);
   });
 
   it("reports an unknown tree as data", () => {
-    const result = serviceOf(EXAMPLE).readyLeaves("page:nope");
+    const result = serviceOf(EXAMPLE).ready("page:nope");
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.reason).toBe("no-such-tree");
   });
 
   it("still serves a tree whose page lost its mark, rather than hiding the nodes", () => {
-    const result = serviceOf({ ...EXAMPLE, markPage: false }).readyLeaves(TREE);
+    const result = serviceOf({ ...EXAMPLE, markPage: false }).ready(TREE);
     expect(result.ok).toBe(true);
     expect(unwrap<{ id: string }[]>(result as never).map((l) => l.id)).toEqual([
       "shape:schema",
@@ -373,11 +373,11 @@ describe("digest(treeId)", () => {
   });
 
   it("names the roots and ready leaves as ids, not prose", () => {
-    const digest = unwrap<{ roots: string[]; readyLeaves: string[] }>(
+    const digest = unwrap<{ roots: string[]; ready: string[] }>(
       serviceOf(EXAMPLE).digest(TREE) as never,
     );
     expect(digest.roots).toEqual(["shape:goal"]);
-    expect(digest.readyLeaves).toEqual(["shape:schema", "shape:ui"]);
+    expect(digest.ready).toEqual(["shape:schema", "shape:ui"]);
   });
 
   it("surfaces both structural and invariant problems", () => {
@@ -424,14 +424,14 @@ describe("digest(treeId)", () => {
       nodes[`shape:leaf${String(i).padStart(2, "0")}`] = "todo";
       edges.push([`shape:leaf${String(i).padStart(2, "0")}`, "shape:goal"]);
     }
-    const digest = unwrap<{ text: string; readyLeaves: string[]; truncated: boolean }>(
+    const digest = unwrap<{ text: string; ready: string[]; truncated: boolean }>(
       serviceOf({ nodes, edges }).digest(TREE) as never,
     );
     const readyLine = digest.text.split("\n").find((line) => line.startsWith("ready:")) ?? "";
     expect(readyLine).toMatch(/and \d+ more/);
     expect(readyLine.length).toBeLessThan(DIGEST_MAX_CHARS / 2);
     // The prose is capped; the structured answer is still whole.
-    expect(digest.readyLeaves).toHaveLength(60);
+    expect(digest.ready).toHaveLength(60);
     expect(digest.truncated).toBe(true);
   });
 
@@ -570,7 +570,7 @@ describe("treeServiceForDoc", () => {
     expect(view.title).toBe("Ship discovery trees");
     // Direction survives the real doc: the blocker is the CHILD of the goal.
     expect(view.childIds).toEqual(["shape:api"]);
-    expect(unwrap<{ id: string }[]>(service.readyLeaves(TREE) as never).map((l) => l.id)).toEqual([
+    expect(unwrap<{ id: string }[]>(service.ready(TREE) as never).map((l) => l.id)).toEqual([
       "shape:api",
     ]);
 
@@ -579,9 +579,137 @@ describe("treeServiceForDoc", () => {
       buildTreeNode({ id: "shape:new", treeId: TREE, parentId: TREE, index: "a3", x: 400, y: 0 }),
     );
     doc.commit();
-    expect(unwrap<{ id: string }[]>(service.readyLeaves(TREE) as never).map((l) => l.id)).toEqual([
+    expect(unwrap<{ id: string }[]>(service.ready(TREE) as never).map((l) => l.id)).toEqual([
       "shape:api",
       "shape:new",
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C1 rework — the frontier, and a character budget that cannot be starved
+// ---------------------------------------------------------------------------
+
+describe("readiness is about blockers, not leaves", () => {
+  const FRONTIER: Spec = {
+    nodes: { "shape:goal": ["todo", "Ship it"], "shape:api": ["done", "Tree service"] },
+    edges: [["shape:api", "shape:goal"]],
+  };
+
+  it("calls a node with no unfinished blockers ready", () => {
+    const goal = unwrap<{ isReady: boolean }>(serviceOf(FRONTIER).node("shape:goal") as never);
+    expect(goal.isReady).toBe(true);
+  });
+
+  it("still has a frontier once the first layer is done", () => {
+    const ready = unwrap<{ id: string }[]>(serviceOf(FRONTIER).ready(TREE) as never);
+    expect(ready.map((n) => n.id)).toEqual(["shape:goal"]);
+  });
+
+  it("says so in the digest, which is what an agent is handed every turn", () => {
+    const digest = unwrap<{ text: string; ready: string[] }>(
+      serviceOf(FRONTIER).digest(TREE) as never,
+    );
+    expect(digest.ready).toEqual(["shape:goal"]);
+    expect(digest.text).toMatch(/ready:.*shape:goal/);
+  });
+});
+
+describe("the digest's budget is characters, not entries", () => {
+  /** One 240-node cycle: ONE problem line naming 240 subjects. */
+  const cyclic = (): Spec => {
+    const id = (i: number) => `shape:c${String(i).padStart(3, "0")}`;
+    const nodes: Record<string, NodeState> = {};
+    const edges: (readonly [string, string])[] = [];
+    for (let i = 0; i < 240; i += 1) {
+      nodes[id(i)] = "todo";
+      edges.push([id(i), id((i + 1) % 240)]);
+    }
+    return { nodes, edges };
+  };
+
+  it("keeps the ready line and the omission marker when one problem is enormous", () => {
+    const digest = unwrap<{ text: string; truncated: boolean }>(
+      serviceOf(cyclic()).digest(TREE) as never,
+    );
+    expect(digest.text.length).toBeLessThanOrEqual(DIGEST_MAX_CHARS);
+    expect(digest.truncated).toBe(true);
+    // The two things a reader cannot afford to lose: what is startable, and
+    // the admission that this is not the whole tree.
+    expect(digest.text).toMatch(/^ready:/m);
+    expect(digest.text).toContain("not shown");
+  });
+
+  it("cannot let one huge title spend the whole budget", () => {
+    const digest = unwrap<{ text: string }>(
+      serviceOf({
+        nodes: {
+          "shape:goal": ["todo", "T".repeat(5_000)],
+          "shape:leaf": ["todo", "small"],
+        },
+        edges: [["shape:leaf", "shape:goal"]],
+      }).digest(TREE) as never,
+    );
+    expect(digest.text.length).toBeLessThanOrEqual(DIGEST_MAX_CHARS);
+    expect(digest.text).toMatch(/^ready:/m);
+    // The oversized line is cut, and the line under it still gets its turn.
+    expect(digest.text).toContain("shape:leaf");
+  });
+
+  // Mutation survivors, each caught by nothing until its own test existed:
+  // dropping the per-line share, dropping the `…` a cut line ends with, and
+  // demoting `ready` back below the problems. The first and third defend the
+  // same property from different sides, so each masked the other.
+  it("does not let one huge line cost the whole outline", () => {
+    // Twelve ready ids of 400 characters each: the `ready:` line alone is
+    // twice the whole budget, and the ten-entry cap does not shorten it.
+    const nodes: Record<string, NodeState> = {};
+    const edges: (readonly [string, string])[] = [];
+    for (let i = 0; i < 12; i += 1) {
+      nodes[`shape:${String(i).padStart(2, "0")}${"w".repeat(400)}`] = "todo";
+    }
+    const digest = unwrap<{ text: string }>(serviceOf({ nodes, edges }).digest(TREE) as never);
+    expect(digest.text.length).toBeLessThanOrEqual(DIGEST_MAX_CHARS);
+    // The outline still got its turn.
+    expect(digest.text).toMatch(/^- shape:/m);
+  });
+
+  it("ends a cut line with an ellipsis, so the line itself says it was cut", () => {
+    const digest = unwrap<{ text: string }>(
+      serviceOf({
+        nodes: { "shape:goal": ["todo", "T".repeat(5_000)], "shape:leaf": ["todo", "small"] },
+        edges: [["shape:leaf", "shape:goal"]],
+      }).digest(TREE) as never,
+    );
+    const goalLine = digest.text.split("\n").find((line) => line.includes("shape:goal")) ?? "";
+    expect(goalLine.endsWith("…")).toBe(true);
+  });
+
+  it("keeps the frontier above the problems, however many problems there are", () => {
+    // Twelve 30-node cycles: ten problem lines, each longer than its share.
+    // Ranked below them, `ready:` never gets rendered at all.
+    const nodes: Record<string, NodeState> = {};
+    const edges: (readonly [string, string])[] = [];
+    for (let c = 0; c < 12; c += 1) {
+      const id = (i: number) => `shape:c${c}-n${String(i).padStart(2, "0")}`;
+      for (let i = 0; i < 30; i += 1) {
+        nodes[id(i)] = "todo";
+        edges.push([id(i), id((i + 1) % 30)]);
+      }
+    }
+    const digest = unwrap<{ text: string }>(serviceOf({ nodes, edges }).digest(TREE) as never);
+    const lines = digest.text.split("\n");
+    expect(lines[0]).toContain("360 nodes");
+    expect(lines[1]).toMatch(/^ready:/);
+    expect(digest.text.length).toBeLessThanOrEqual(DIGEST_MAX_CHARS);
+  });
+
+  it("never overshoots the budget, whatever the budget is", () => {
+    for (const maxChars of [40, 120, 300, 1_000, DIGEST_MAX_CHARS]) {
+      const digest = unwrap<{ text: string }>(
+        serviceOf(cyclic()).digest(TREE, { maxChars }) as never,
+      );
+      expect(digest.text.length).toBeLessThanOrEqual(maxChars);
+    }
   });
 });

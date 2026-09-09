@@ -343,3 +343,42 @@ describe("a two-node tree in a real document", () => {
     expect(BLOCKED_TERMINAL).toBe("end");
   });
 });
+
+// ---------------------------------------------------------------------------
+// C1 rework — an ambiguous terminal
+// ---------------------------------------------------------------------------
+
+// Two `start` bindings on one arrow is not a cosmetic duplicate: it makes ONE
+// edge id mean two different relationships, and a first-match read answers
+// whichever the binding array happened to list first. That is a silent,
+// order-dependent lie about a human's tree, so the edge is invalid and the
+// conflicting binding ids are named for W11 to repair from.
+describe("an edge whose terminal is bound twice", () => {
+  const secondStart = (toId: string) =>
+    ({
+      id: "binding:shape:edge-start-2",
+      fromId: EDGE,
+      toId,
+      props: { terminal: BLOCKER_TERMINAL, anchor: { nx: 0.5, ny: 0.5 } },
+      meta: {},
+    }) as never;
+
+  it("refuses to pick one, and names both bindings", () => {
+    const built = edge();
+    const read = readTreeEdge(built.shape, [...built.bindings, secondStart("shape:other")]);
+    expect(read.status).toBe("invalid");
+    expect(read.status === "invalid" && read.error).toContain(BLOCKER_TERMINAL);
+    expect(read.status === "invalid" && read.subjects).toEqual([
+      edgeBindingId(EDGE, BLOCKER_TERMINAL),
+      "binding:shape:edge-start-2",
+    ]);
+  });
+
+  it("gives the same answer whichever order the bindings arrive in", () => {
+    const built = edge();
+    const rows = [...built.bindings, secondStart("shape:other")];
+    expect(readTreeEdge(built.shape, [...rows].reverse())).toEqual(
+      readTreeEdge(built.shape, rows),
+    );
+  });
+});

@@ -46,7 +46,7 @@ import {
   parentsOf,
   pathToRoot,
   readTree,
-  readyLeaves,
+  readyNodes,
   roots,
   treeNodes,
   type Tree,
@@ -371,12 +371,12 @@ describe("the shape of the tree", () => {
   it("calls an undone node with no blockers a ready leaf", () => {
     // schema blocks api and has nothing under it; ui is done; goal and api
     // both still have work beneath them.
-    expect(ids(readyLeaves(treeOf(example)))).toEqual(["shape:schema"]);
+    expect(ids(readyNodes(treeOf(example)))).toEqual(["shape:schema"]);
   });
 
   it("does not call a done leaf ready", () => {
     const tree = treeOf({ nodes: { "shape:a": "done", "shape:b": "wip" }, edges: [] });
-    expect(ids(readyLeaves(tree))).toEqual(["shape:b"]);
+    expect(ids(readyNodes(tree))).toEqual(["shape:b"]);
   });
 });
 
@@ -494,5 +494,67 @@ describe("the invariant pass", () => {
   it("does not report an isolated node as unreachable — it is its own root", () => {
     const tree = treeOf({ nodes: { "shape:lonely": "todo" }, edges: [] });
     expect(checkTreeInvariants(tree)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C1 rework — readiness, and an ambiguous terminal
+// ---------------------------------------------------------------------------
+
+describe("readiness is about blockers, not leaves", () => {
+  it("calls a node ready once every blocker is done", () => {
+    // The frontier has to MOVE. With its only blocker done, the goal is the
+    // work that can be picked up next; a strict-leaf rule reports nothing.
+    const tree = treeOf({
+      nodes: { "shape:goal": "todo", "shape:api": "done" },
+      edges: [["shape:api", "shape:goal"]],
+    });
+    expect(ids(readyNodes(tree))).toEqual(["shape:goal"]);
+  });
+
+  it("does not call a node with an unfinished blocker ready", () => {
+    const tree = treeOf({
+      nodes: { "shape:goal": "todo", "shape:api": "wip" },
+      edges: [["shape:api", "shape:goal"]],
+    });
+    expect(ids(readyNodes(tree))).toEqual(["shape:api"]);
+  });
+});
+
+describe("an edge whose terminal is bound twice", () => {
+  it("is reported as invalid, naming the conflicting bindings", () => {
+    const built = buildTreeEdge({
+      id: "shape:ambiguous",
+      treeId: TREE,
+      parentId: TREE,
+      index: "b9",
+      blockerId: "shape:schema",
+      blockedId: "shape:goal",
+      from: { x: 0, y: 0 },
+      to: { x: 1, y: 1 },
+    });
+    const extra = {
+      id: "binding:shape:ambiguous-start-2",
+      fromId: "shape:ambiguous",
+      toId: "shape:ui",
+      props: { terminal: "start", anchor: { nx: 0.5, ny: 0.5 } },
+      meta: {},
+    } as unknown as Binding;
+    const tree = readTree(
+      docOf({
+        ...example,
+        extraShapes: [built.shape],
+        extraBindings: [...built.bindings, extra],
+      }),
+      TREE,
+    );
+    expect(kinds(tree.problems)).toEqual(["invalid-edge"]);
+    expect(tree.problems[0]?.subjects).toEqual([
+      "shape:ambiguous",
+      "binding:shape:ambiguous-start",
+      "binding:shape:ambiguous-start-2",
+    ]);
+    // And it is NOT in the graph: an ambiguous edge must not be traversed.
+    expect(tree.edges.map((e) => e.edgeId)).not.toContain("shape:ambiguous");
   });
 });

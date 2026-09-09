@@ -41,11 +41,12 @@ import type { NodeState } from "./encoding.js";
 import {
   checkTreeInvariants,
   childrenOf,
+  isReadyNode,
   listTrees,
   parentsOf,
   pathToRoot,
   readTree,
-  readyLeaves,
+  readyNodes,
   roots,
   treeNodes,
   type Tree,
@@ -80,7 +81,9 @@ export interface TreeNodeView {
   /** The nodes that BLOCK this one — its children in the drawn tree. */
   readonly childIds: readonly string[];
   readonly isRoot: boolean;
-  /** No blockers left and not done: this is work that could start now. */
+  /** Not done, and every blocker of it is done: work that could start now.
+   * W1's `isReadyNode` is the single definition — see the note there on why
+   * this is NOT "has no children". */
   readonly isReady: boolean;
 }
 
@@ -122,12 +125,14 @@ export interface TreeDigest {
     readonly problems: number;
   };
   readonly roots: readonly string[];
-  readonly readyLeaves: readonly string[];
+  /** Every ready node's id — the same list `ready(treeId)` answers with. */
+  readonly ready: readonly string[];
   /** Structural (W1's `readTree`) and graph (`checkTreeInvariants`) problems,
    * together — a caller of a digest wants "what is wrong with this tree", not
    * a lesson in which pass found it. */
   readonly problems: readonly TreeProblem[];
-  /** True when `text` does not describe every node. `counts` is always whole. */
+  /** True when `text` is not the whole truth — a line was dropped, a line was
+   * cut short, or a list hit its entry cap. `counts` is always whole. */
   readonly truncated: boolean;
 }
 
@@ -154,8 +159,11 @@ export interface TreeService {
   pathToRoot(nodeId: string): TreeQuery<readonly TreeNodeView[]>;
   /** `nodeId` with its blockers nested beneath it, `depth` levels deep. */
   subtree(nodeId: string, depth: number): TreeQuery<SubtreeView>;
-  /** The startable work in one tree, ascending by id. */
-  readyLeaves(treeId: string): TreeQuery<readonly TreeNodeView[]>;
+  /** The startable work in one tree, ascending by id: every node that is not
+   * done and has nothing unfinished under it. Named `ready`, not
+   * `readyLeaves`, because these are not necessarily leaves — a goal whose
+   * blockers are all done is startable and must be in this list. */
+  ready(treeId: string): TreeQuery<readonly TreeNodeView[]>;
   digest(treeId: string, options?: { maxChars?: number }): TreeQuery<TreeDigest>;
 }
 
@@ -220,8 +228,8 @@ export function createTreeService(source: TreeDocumentSource): TreeService {
     subtree: (nodeId, depth) =>
       map(locate(nodeId), ({ tree, node }) => buildSubtree(tree, node, depth, new Set())),
 
-    readyLeaves: (treeId) =>
-      map(load(treeId), (tree) => readyLeaves(tree).map((leaf) => viewOf(tree, leaf))),
+    ready: (treeId) =>
+      map(load(treeId), (tree) => readyNodes(tree).map((node) => viewOf(tree, node))),
 
     digest: (treeId, options) =>
       map(load(treeId), (tree) => buildDigest(tree, options?.maxChars ?? DIGEST_MAX_CHARS)),
@@ -254,7 +262,7 @@ function viewOf(tree: Tree, node: TreeNode): TreeNodeView {
     parentIds,
     childIds,
     isRoot: parentIds.length === 0,
-    isReady: node.meta.state !== "done" && childIds.length === 0,
+    isReady: isReadyNode(tree, node),
   };
 }
 
@@ -291,18 +299,19 @@ function buildSubtree(
 /**
  * A whole tree, compressed to something an agent can be handed every turn.
  *
- * The rendering DEGRADES IN A FIXED ORDER, and the order is the point: the
- * header (counts) and the problems survive longest, because they are what
- * tells a reader that what follows is partial and what is wrong with it. The
- * outline is trimmed from the tail, and the number of nodes it dropped is
- * stated. Nothing here re-flows or summarises prose — a digest that guessed
- * at what mattered would be a worse lie than a short one.
+ * The rendering DEGRADES IN A FIXED ORDER — counts, then the frontier, then
+ * the problems, then the outline — and every line is clamped to a share of
+ * the budget so no single one of them can starve the rest (`fitLines`). What
+ * survives longest is what a reader needs to know that the rest is partial:
+ * where the work is, and what is wrong. Nothing here re-flows or summarises
+ * prose — a digest that guessed at what mattered would be a worse lie than a
+ * short one.
  */
 function buildDigest(tree: Tree, maxChars: number): TreeDigest {
   const nodes = treeNodes(tree);
   const problems = [...tree.problems, ...checkTreeInvariants(tree)];
   const rootIds = roots(tree).map((root) => root.id);
-  const readyIds = readyLeaves(tree).map((leaf) => leaf.id);
+  const readyIds = readyNodes(tree).map((node) => node.id);
   const counts = {
     nodes: nodes.length,
     todo: nodes.filter((node) => node.meta.state === "todo").length,
@@ -312,17 +321,12 @@ function buildDigest(tree: Tree, maxChars: number): TreeDigest {
     problems: problems.length,
   };
 
-  const header = `tree ${tree.treeId} — ${counts.nodes} nodes (${counts.done} done, ${counts.wip} wip, ${counts.todo} todo), ${counts.edges} edges`;
-  // Both of these are CAPPED, not just the outline. A wide tree has hundreds
-  // of ready leaves and a badly broken one has hundreds of problems; either
-  // list, rendered whole, eats a 2000-char budget on its own and leaves no
-  // room for the note saying so. Capping here is what keeps the floor below
-  // an actual floor.
-  const problemLines = capped(
-    problems.map((problem) => `! ${problem.kind}: ${problem.subjects.join(", ")}`),
-    PROBLEMS_IN_DIGEST,
-    (n) => `! … and ${n} more problems`,
-  );
+  // THE ORDER IS THE PRIORITY. `fitLines` keeps lines from the front and drops
+  // from the back, so this list is a ranking: the counts orient a reader, the
+  // frontier is the one thing they can act on, the problems say why the rest
+  // may be wrong, and the outline is the detail that a small budget can lose.
+  // `ready` sits ABOVE the problems deliberately — C1's probe was one 240-node
+  // cycle whose single problem line pushed `ready:` out of the text entirely.
   const readyLine =
     readyIds.length === 0
       ? "ready: none"
@@ -331,56 +335,55 @@ function buildDigest(tree: Tree, maxChars: number): TreeDigest {
             ? ` … and ${readyIds.length - READY_IN_DIGEST} more`
             : ""
         }`;
-  const listsCut =
-    problems.length > PROBLEMS_IN_DIGEST || readyIds.length > READY_IN_DIGEST;
-  const outline = outlineOf(tree);
+  const problemLines = capped(
+    problems.map((problem) => `! ${problem.kind}: ${problem.subjects.join(", ")}`),
+    PROBLEMS_IN_DIGEST,
+    (n) => `! … and ${n} more problems`,
+  );
+  const listsCut = problems.length > PROBLEMS_IN_DIGEST || readyIds.length > READY_IN_DIGEST;
 
-  // Everything except the outline is the floor: it is what makes a truncated
-  // digest still orienting rather than merely short.
-  const fixed = [header, ...problemLines, readyLine];
-  const fixedLength = fixed.join("\n").length;
-
-  const kept: string[] = [];
-  let used = fixedLength;
-  for (const line of outline) {
-    const note = `… ${counts.nodes - kept.length} of ${counts.nodes} nodes not shown`;
-    // Only keep a line if the "not shown" note it might need still fits after
-    // it — otherwise the last line in would push the honesty out.
-    if (used + 1 + line.length + 1 + note.length > maxChars) break;
-    kept.push(line);
-    used += 1 + line.length;
-  }
-
-  const shown = kept.length;
-  const truncated = shown < outline.length;
-  const body = [
-    ...fixed,
-    ...kept,
-    ...(truncated ? [`… ${counts.nodes - shown} of ${counts.nodes} nodes not shown`] : []),
-  ].join("\n");
+  const fitted = fitLines(
+    [
+      `tree ${tree.treeId} — ${counts.nodes} nodes (${counts.done} done, ${counts.wip} wip, ${counts.todo} todo), ${counts.edges} edges`,
+      readyLine,
+      ...problemLines,
+      ...outlineOf(tree),
+    ],
+    maxChars,
+  );
 
   return {
     treeId: tree.treeId,
-    // A budget too small even for the header is a caller's choice, not a
-    // reason to overshoot it: hard-cut rather than exceed what was asked for.
-    text: body.length <= maxChars ? body : body.slice(0, maxChars),
+    text: fitted.text,
     counts,
     roots: rootIds,
-    readyLeaves: readyIds,
+    ready: readyIds,
     problems,
     // `truncated` is about the TEXT, not the structured fields: `problems`
-    // and `readyLeaves` above are always whole, however short the prose got.
-    truncated: truncated || listsCut || body.length > maxChars,
+    // and `ready` above are always whole, however short the prose got.
+    truncated: fitted.truncated || listsCut,
   };
 }
 
-/** How many ready leaves a digest's `ready:` line names before it counts the
- * rest. Ten is "enough to pick from"; the full list is in `readyLeaves`. */
+/** How many ready nodes a digest's `ready:` line names before it counts the
+ * rest. Ten is "enough to pick from"; the full list is in `ready`. A SECOND
+ * limit, not the budget: `fitLines` is what bounds the text. */
 const READY_IN_DIGEST = 10;
 
 /** How many problems a digest spells out before it counts the rest. The full
  * list is in `problems`, and W11 is the thing that reads it in full. */
 const PROBLEMS_IN_DIGEST = 10;
+
+/** No line is rendered shorter than this: below it a line is all ellipsis and
+ * no information, so the honest move is to drop it and say so. */
+const MIN_DIGEST_LINE = 40;
+
+/** No single line may take more than this share of the whole budget. One
+ * cycle problem can name every node in the tree, and one note can carry a
+ * 5,000-character title; without a per-line ceiling either of them spends the
+ * budget alone and everything below it — including the marker admitting so —
+ * is pushed out. */
+const LINE_SHARE = 8;
 
 /** First `limit` lines, plus one line saying how many were dropped. */
 function capped(
@@ -390,6 +393,66 @@ function capped(
 ): readonly string[] {
   if (lines.length <= limit) return lines;
   return [...lines.slice(0, limit), note(lines.length - limit)];
+}
+
+/** `…`-terminated, so a cut line SAYS it was cut. Never longer than `max`. */
+function clamp(text: string, max: number): string {
+  if (max <= 0) return "";
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}…`;
+}
+
+/**
+ * Fit lines into a character budget, in priority order, and never lie about it.
+ *
+ * THE BUDGET IS CHARACTERS, NOT ENTRIES. Counting entries — which is what this
+ * did before C1's critique — bounds nothing, because one entry can be
+ * arbitrarily long; a single big cycle rendered one problem line longer than
+ * the whole budget, and the final hard cut then removed the frontier and every
+ * omission marker from the text while `truncated: true` survived only in the
+ * structured object that W7 does not pass on.
+ *
+ * So: every line is clamped to its share of the budget (and a clamped line
+ * ends in `…`), lines are kept from the front while they fit, and the space
+ * for the "N of M lines not shown" marker is RESERVED BEFORE any line is
+ * kept — the marker can never be the thing that gets cut.
+ */
+function fitLines(
+  lines: readonly string[],
+  maxChars: number,
+): { text: string; truncated: boolean } {
+  const total = lines.length;
+  const marker = (dropped: number): string => `… ${dropped} of ${total} lines not shown`;
+  // Reserved against the WIDEST marker this call could need (plus its
+  // newline), so the reservation holds whenever the loop stops early.
+  const reserve = marker(total).length + 1;
+  const lineCap = Math.max(MIN_DIGEST_LINE, Math.floor(maxChars / LINE_SHARE));
+
+  const kept: string[] = [];
+  let used = 0;
+  let clamped = false;
+  for (let i = 0; i < total; i += 1) {
+    const separator = kept.length > 0 ? 1 : 0;
+    const isLast = i === total - 1;
+    const room = maxChars - used - separator - (isLast ? 0 : reserve);
+    const available = Math.min(room, lineCap);
+    if (available < MIN_DIGEST_LINE) break;
+    const line = clamp(lines[i] as string, available);
+    if (line !== lines[i]) clamped = true;
+    kept.push(line);
+    used += separator + line.length;
+  }
+
+  const dropped = total - kept.length;
+  if (kept.length === 0) {
+    // A budget too small even for one line is the caller's choice, not a
+    // reason to overshoot it: give them the highest-priority line, cut.
+    return { text: clamp(lines[0] ?? "", maxChars), truncated: true };
+  }
+  return {
+    text: dropped > 0 ? [...kept, marker(dropped)].join("\n") : kept.join("\n"),
+    truncated: clamped || dropped > 0,
+  };
 }
 
 /**
@@ -426,7 +489,7 @@ function lineOf(node: TreeNode, depth: number, tree: Tree): string {
   const title = plainText(node.shape).split("\n")[0] ?? "";
   const marks = [
     node.meta.approached ? "approached" : "",
-    node.meta.state !== "done" && childrenOf(tree, node.id).length === 0 ? "ready" : "",
+    isReadyNode(tree, node) ? "ready" : "",
   ].filter(Boolean);
   return `${"  ".repeat(depth)}- ${node.id} [${node.meta.state}]${title ? ` ${title}` : ""}${
     marks.length > 0 ? ` (${marks.join(", ")})` : ""

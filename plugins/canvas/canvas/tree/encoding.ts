@@ -50,11 +50,20 @@ export const TREE_ENCODING_VERSION = 1;
 export type TreeRead<T> =
   | { readonly status: "ok"; readonly value: T }
   | { readonly status: "absent" }
-  | { readonly status: "invalid"; readonly error: string };
+  | {
+      readonly status: "invalid";
+      readonly error: string;
+      /** The OTHER rows this verdict is about — the conflicting bindings of an
+       * ambiguous edge, say. The malformed shape's own id is the caller's
+       * (it is holding the shape); these are the ids it could not otherwise
+       * derive, and W11 repairs from ids, not from prose. */
+      readonly subjects?: readonly string[];
+    };
 
 const ok = <T>(value: T): TreeRead<T> => ({ status: "ok", value });
 const absent = <T>(): TreeRead<T> => ({ status: "absent" });
-const invalid = <T>(error: string): TreeRead<T> => ({ status: "invalid", error });
+const invalid = <T>(error: string, subjects?: readonly string[]): TreeRead<T> =>
+  subjects === undefined ? { status: "invalid", error } : { status: "invalid", error, subjects };
 
 // ---------------------------------------------------------------------------
 // The tree: a page
@@ -266,7 +275,8 @@ export interface TreeEdge {
  *
  * An arrow marked with a tree but missing either terminal binding is
  * `invalid`, NOT `absent`: a half-bound edge is precisely the state W11's
- * repair exists to find, and an `absent` answer would hide it.
+ * repair exists to find, and an `absent` answer would hide it. So is an arrow
+ * with MORE than one binding on a terminal — see `oneOf` below.
  */
 export function readTreeEdge(
   shape: Shape,
@@ -276,16 +286,38 @@ export function readTreeEdge(
   if (shape.kind !== TREE_EDGE_KIND) return absent();
   const parsed = treeEdgeMetaSchema.safeParse(shape.meta);
   if (!parsed.success) return invalid(`edge ${shape.id}: ${parsed.error.message}`);
-  const terminalOf = (terminal: string): Binding | undefined =>
-    bindings.find(
-      (binding) =>
-        binding.fromId === shape.id &&
-        (binding.props as { terminal?: unknown }).terminal === terminal,
-    );
-  const blocker = terminalOf(BLOCKER_TERMINAL);
-  const blocked = terminalOf(BLOCKED_TERMINAL);
-  if (!blocker) return invalid(`edge ${shape.id}: no ${BLOCKER_TERMINAL} binding`);
-  if (!blocked) return invalid(`edge ${shape.id}: no ${BLOCKED_TERMINAL} binding`);
+  // EXACTLY ONE binding per terminal, and the whole matching set is collected
+  // rather than first-matched. Two `start` rows are not a redundant duplicate
+  // the way a second edge row is: they make ONE edge id mean two different
+  // relationships, and `find` would answer whichever the array happened to
+  // list first — an order-dependent answer about converged CRDT state, which
+  // is the one thing this module promises never to give.
+  const terminalRows = (terminal: string): readonly Binding[] =>
+    bindings
+      .filter(
+        (binding) =>
+          binding.fromId === shape.id &&
+          (binding.props as { terminal?: unknown }).terminal === terminal,
+      )
+      .slice()
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  const oneOf = (terminal: string): TreeRead<Binding> => {
+    const rows = terminalRows(terminal);
+    if (rows.length === 0) return invalid(`edge ${shape.id}: no ${terminal} binding`);
+    if (rows.length > 1) {
+      return invalid(
+        `edge ${shape.id}: ${rows.length} ${terminal} bindings (${rows.map((row) => row.id).join(", ")}) — which node it binds is ambiguous`,
+        rows.map((row) => row.id),
+      );
+    }
+    return ok(rows[0] as Binding);
+  };
+  const blockerRead = oneOf(BLOCKER_TERMINAL);
+  if (blockerRead.status !== "ok") return blockerRead as TreeRead<TreeEdge>;
+  const blockedRead = oneOf(BLOCKED_TERMINAL);
+  if (blockedRead.status !== "ok") return blockedRead as TreeRead<TreeEdge>;
+  const blocker = blockerRead.value;
+  const blocked = blockedRead.value;
   if (blocker.toId === blocked.toId) {
     return invalid(`edge ${shape.id}: both terminals bind ${blocker.toId}`);
   }

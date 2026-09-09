@@ -18,7 +18,7 @@
 //      ^   ^
 //    api   ui         a node's CHILDREN are the nodes that BLOCK it
 //      ^
-//    schema           a READY LEAF has no children left and is not done
+//    schema           a READY node is not done and every blocker of it is
 //
 // so `childrenOf` === "the blockers of", and `parentsOf` === "the things this
 // node blocks". Two names for the same fact would rot apart, so the
@@ -95,8 +95,12 @@ export type TreeProblemKind =
 
 export interface TreeProblem {
   readonly kind: TreeProblemKind;
-  /** The ids this problem is about — sorted, except for `cycle`, whose
-   * subjects are the cycle IN ORDER, rotated to start at its smallest id. */
+  /** The ids this problem is about — sorted, with two stated exceptions:
+   * `cycle`, whose subjects are the cycle IN ORDER rotated to start at its
+   * smallest id; and the shape-level kinds (`invalid-node`, `invalid-edge`,
+   * …), which name the offending SHAPE first and then any further rows the
+   * reader implicated (an ambiguous edge's binding ids), ascending. Subject
+   * order is part of the report, so it is fixed rather than incidental. */
   readonly subjects: readonly string[];
   readonly detail: string;
 }
@@ -249,7 +253,13 @@ function shapeProblem(
 ): TreeProblem {
   return {
     kind,
-    subjects: [shape.id],
+    // The shape first, then whatever else the reader named — an ambiguous
+    // edge's conflicting bindings are rows W11 has to delete BY ID, and a
+    // detail string is not something a repair plan can act on.
+    subjects: [
+      shape.id,
+      ...(read.status === "invalid" ? (read.subjects ?? []) : []),
+    ],
     detail:
       read.status === "invalid"
         ? read.error
@@ -337,20 +347,34 @@ export function pathToRoot(tree: Tree, nodeId: string): TreeRead<readonly TreeNo
 }
 
 /**
- * The work that can actually be picked up: nodes with no children left and a
- * state that is not `done`.
+ * READINESS, defined once for the whole codebase: this node is not done, and
+ * nothing is left blocking it.
  *
- * Strictly LEAVES, as the plan named them. A node whose children are all done
- * is also startable, but it is not a leaf, and quietly widening the definition
- * would make "ready leaves" mean something different to the agent (W6/W7)
- * than it does to the human reading the same words on the canvas.
+ * NOT "is a leaf". W1 originally wrote this as "no children at all", on the
+ * argument that "ready leaves" should mean to an agent what the word leaf
+ * means to a human reading the canvas. That was wrong, and C1's critique is
+ * why: the frontier has to MOVE. A goal whose only blocker is done is exactly
+ * the work to pick up next, and a strict-leaf rule reports it as not ready —
+ * so once the initial leaves are finished, a tree with work left in it
+ * answers "nothing is ready" to W6's tools and W7's digest. A vocabulary
+ * quibble is not worth a frontier that stalls after one layer.
+ *
+ * A structural leaf still satisfies this vacuously, so the leaf case is not
+ * lost; it is just no longer the definition.
+ *
  * `approached` is deliberately not consulted: "we looked and nothing came up"
  * is a fact about a todo, not a reason to hide it.
  */
-export function readyLeaves(tree: Tree): readonly TreeNode[] {
-  return treeNodes(tree).filter(
-    (node) => node.meta.state !== "done" && childrenOf(tree, node.id).length === 0,
+export function isReadyNode(tree: Tree, node: TreeNode): boolean {
+  return (
+    node.meta.state !== "done" &&
+    childrenOf(tree, node.id).every((child) => child.meta.state === "done")
   );
+}
+
+/** Every node that is ready, ascending by id: the agent's work frontier. */
+export function readyNodes(tree: Tree): readonly TreeNode[] {
+  return treeNodes(tree).filter((node) => isReadyNode(tree, node));
 }
 
 // ---------------------------------------------------------------------------
