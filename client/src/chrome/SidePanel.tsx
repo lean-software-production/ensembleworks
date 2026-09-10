@@ -39,6 +39,7 @@ import {
 import { PanelFooter } from './PanelFooter'
 import { PanelPages } from './PanelPages'
 import { ColorSwatch, CrosstalkControl, initialsFor, type PanelTileParticipant } from './PanelTile'
+import { RoomSwitcher } from './RoomSwitcher'
 import { otherCollaborators } from './collaborators'
 import { useIsPresenting, usePresenter } from './present'
 
@@ -457,18 +458,7 @@ export function SidePanel({ editor }: { editor: Editor }) {
 			<PanelResizeGrip />
 			<div style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
 				<div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-					<span
-						style={{
-							fontFamily: wm.mono,
-							fontSize: 11,
-							fontWeight: 700,
-							textTransform: 'uppercase',
-							letterSpacing: 0.9,
-							color: wm.ink,
-						}}
-					>
-						{getRoomId()}
-					</span>
+					<RoomSwitcher />
 					<span style={{ fontFamily: wm.mono, fontSize: 11, color: wm.inkMuted }}>
 						{participantCount}
 					</span>

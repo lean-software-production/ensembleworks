@@ -36,6 +36,7 @@ import { createFilesRouter } from './features/files.ts'
 import { createFramesRouter } from './features/frames.ts'
 import { createParticipantsRouter } from './features/participants.ts'
 import { createRoadmapRouter } from './features/roadmap.ts'
+import { createRoomsRouter } from './features/rooms.ts'
 import { createShapeRouter } from './features/shape.ts'
 import { createStickyRouter } from './features/sticky.ts'
 import { createTelemetryRouter } from './features/telemetry.ts'
@@ -294,8 +295,8 @@ export function createSyncApp(opts: {
 	const app = express()
 
 	// Feature routers mount here IN THIS ORDER (Express matches top-down and the
-	// static catch-all below must stay last): whoami → participants (kernel) → av
-	// (av/token, av/kick, av/pulse) → terminal-status → sticky → web-viewer →
+	// static catch-all below must stay last): whoami → participants → rooms
+	// (kernel) → av (av/token, av/kick, av/pulse) → terminal-status → sticky → web-viewer →
 	// transcript → shape → frames → canvas-v2 → roadmap → discord →
 	// canvas-metrics → uploads → files
 	// present-events gets its own larger-limit parser (features/web-viewer.ts,
@@ -353,6 +354,8 @@ export function createSyncApp(opts: {
 	app.use(createWhoamiRouter())
 
 	app.use(createParticipantsRouter(ctx))   // kernel-reserved: /api/participants
+
+	app.use(createRoomsRouter(ctx))          // kernel-reserved: /api/rooms
 
 	app.use(createToolsRouter())             // kernel-reserved: GET /api/tools
 

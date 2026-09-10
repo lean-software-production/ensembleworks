@@ -3,15 +3,24 @@
  * The one place that constructs rooms; every feature router reaches rooms
  * through this. (Moved from app.ts's closure: rooms map + getOrCreateRoom.)
  */
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from './sqlite.ts'
 import { NodeSqliteWrapper, SQLiteSyncStorage, TLSocketRoom } from '@tldraw/sync-core'
+import { sanitizeId } from '../canvas/ids.ts'
 import { schema } from '../schema.ts'
 
 export interface RoomHost {
 	rooms: ReadonlyMap<string, TLSocketRoom>
 	getOrCreateRoom(roomId: string): TLSocketRoom
+	/**
+	 * Every room that exists: the `*.sqlite` basenames in the rooms directory
+	 * unioned with the rooms currently open in memory (a room opened this
+	 * process may not have flushed yet; a room on disk may never have been
+	 * opened this boot). Ids are filtered through sanitizeId — a stray or
+	 * hostile filename can never reach a caller — de-duplicated, sorted.
+	 */
+	listRoomIds(): string[]
 }
 
 export function createRoomHost(roomsDir: string): RoomHost {
@@ -43,5 +52,21 @@ export function createRoomHost(roomsDir: string): RoomHost {
 		return room
 	}
 
-	return { rooms, getOrCreateRoom }
+	function listRoomIds(): string[] {
+		const ids = new Set<string>()
+		if (existsSync(roomsDir)) {
+			for (const entry of readdirSync(roomsDir)) {
+				if (!entry.endsWith('.sqlite')) continue
+				ids.add(entry.slice(0, -'.sqlite'.length))
+			}
+		}
+		for (const roomId of rooms.keys()) ids.add(roomId)
+		const valid: string[] = []
+		for (const id of ids) {
+			if (sanitizeId(id)) valid.push(id)
+		}
+		return valid.sort()
+	}
+
+	return { rooms, getOrCreateRoom, listRoomIds }
 }

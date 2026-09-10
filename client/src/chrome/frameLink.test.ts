@@ -1,6 +1,6 @@
 // client/src/chrome/frameLink.test.ts
 import assert from 'node:assert/strict'
-import { parseFrameId, buildFrameLink, readFrameId } from './frameLink'
+import { parseFrameId, buildFrameLink, buildRoomLink, readFrameId } from './frameLink'
 
 // parseFrameId validates a tldraw shape id from a raw query value.
 assert.equal(parseFrameId(null), null, 'absent ⇒ null')
@@ -17,6 +17,25 @@ assert.equal(
 )
 
 console.log('ok: frameLink helpers')
+
+// buildRoomLink composes an absolute URL from origin + room.
+assert.equal(buildRoomLink('https://x.test', 'team'), 'https://x.test/?room=team')
+assert.equal(
+	buildRoomLink('https://ew.example', 'design-review'),
+	'https://ew.example/?room=design-review',
+)
+// a room id needing encoding round-trips through URLSearchParams
+{
+	const raw = 'odd room/&?='
+	const roomLink = buildRoomLink('https://ew.example', raw)
+	assert.equal(
+		new URLSearchParams(roomLink.slice(roomLink.indexOf('?'))).get('room'),
+		raw,
+		'encoded room id round-trips',
+	)
+}
+
+console.log('ok: buildRoomLink')
 
 // readFrameId parses the `frame` param out of a raw location.search string.
 assert.equal(readFrameId('?room=team&frame=shape:abc123'), 'shape:abc123')
