@@ -780,6 +780,7 @@ describe("a document that drops the write", () => {
     const writer = createTreeWriter(deafTarget());
     for (const done of [
       writer.setState({ nodeId: "shape:api", state: "done" }),
+      writer.setApproached({ nodeId: "shape:api", approached: true }),
       writer.rename({ nodeId: "shape:api", title: "Nope" }),
       writer.writeContext({ nodeId: "shape:api", context: "nope" }),
       writer.addChild({ parentId: "shape:api", title: "Nope" }),
@@ -1050,6 +1051,20 @@ describe("the write tools", () => {
     expect(answer.isError).toBe(true);
     expect(answer.text).toContain("cycle");
     expect(answer.text).toContain("another editor changed it at the same time");
+  });
+
+  // W18. `meta.approached` was readable by every agent surface and writable by
+  // nothing, so the field an agent was shown could only ever be set by a human
+  // — half a vocabulary. The human control W18 adds and this tool are two
+  // doors onto one operation.
+  it("lets an agent record that it looked at a node and nothing came up", async () => {
+    const deps = toolDeps();
+    const answer = await call(deps, "canvas_tree_set_approached", {
+      nodeId: "shape:api",
+      approached: true,
+    });
+    expect(answer.isError).toBe(false);
+    expect(answer.text).toContain("shape:api");
   });
 
   it("defaults to the thread's own node, like every read tool", async () => {

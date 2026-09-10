@@ -136,7 +136,20 @@ export type TreeWriteRefusal =
    * invalid value as a silent no-op, so an accepted-looking call that did
    * nothing is possible and is caught by reading the result back.
    */
-  | "rejected";
+  | "rejected"
+  /**
+   * The caller said what it believed was already there, and something else
+   * was (W18). The write is NOT applied.
+   *
+   * This is the only refusal in the engine that is about WHO ELSE WROTE
+   * rather than about the shape of the write, and it exists because a context
+   * note is up to 8000 characters of a human's thinking: a panel that had a
+   * note open while an agent replaced it would otherwise put the human's
+   * stale copy back and lose the agent's, silently. The engine cannot judge
+   * which is wanted, so it refuses and names the collision — the same posture
+   * every other refusal here takes, applied to a race instead of to a rule.
+   */
+  | "stale-write";
 
 export type TreeWrite<T> =
   | { readonly ok: true; readonly value: T }
@@ -186,8 +199,32 @@ export interface TreeWriter {
   /** Move a node so it blocks `newParentId` instead of whatever it blocked. */
   reparent(input: { nodeId: string; newParentId: string }): TreeWrite<TreeWriteOutcome>;
   setState(input: { nodeId: string; state: NodeState }): TreeWrite<TreeWriteOutcome>;
-  /** Overwrite a node's context note (goal / definition of done / knowns). */
-  writeContext(input: { nodeId: string; context: string }): TreeWrite<TreeWriteOutcome>;
+  /**
+   * Set (or clear) "we looked at this and nothing came up" — the separate
+   * axis `encoding.ts` describes, not a fourth state.
+   *
+   * ADDED AT THIS SEAM AT W18, not beside it. The field has been in the
+   * encoding since W0 and in every read surface since W5, and until now
+   * NOTHING could write it: the human control W18 adds would have had to
+   * mutate the browser's own copy of the document, which is exactly the
+   * second write path W4 refused to create.
+   */
+  setApproached(input: { nodeId: string; approached: boolean }): TreeWrite<TreeWriteOutcome>;
+  /**
+   * Overwrite a node's context note (goal / definition of done / knowns).
+   *
+   * `expected` is OPTIONAL and is a compare-and-set: when given, the write is
+   * refused (`stale-write`) unless the note is exactly that string right now.
+   * The human inspector always sends it — it has a note open on screen and
+   * knows what it read — and the agent tool never does, because a model
+   * calling `canvas_tree_write_context` is told to read the note first and has
+   * no draft of its own to lose.
+   */
+  writeContext(input: {
+    nodeId: string;
+    context: string;
+    expected?: string;
+  }): TreeWrite<TreeWriteOutcome>;
 }
 
 /**
@@ -442,7 +479,10 @@ const isOrderKey = (value: string): boolean => {
 
 /** Overwrite a node's tree meta fields, keeping every other key — `meta` is
  * shared with whatever else stamps a shape (encoding.ts's LOOSE note). */
-export function withMeta(shape: Shape, fields: { state?: NodeState; context?: string }): Shape {
+export function withMeta(
+  shape: Shape,
+  fields: { state?: NodeState; approached?: boolean; context?: string },
+): Shape {
   return { ...shape, meta: { ...shape.meta, ...fields } } as Shape;
 }
 

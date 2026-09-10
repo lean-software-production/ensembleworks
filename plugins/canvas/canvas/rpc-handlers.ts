@@ -159,6 +159,15 @@ export function createRpcHandlers(
       treeWriteResult(deps.treeWriter.addGoal({ treeId, title }), log),
     canvas_tree_add_blocker: ({ parentId, title }) =>
       treeWriteResult(deps.treeWriter.addChild({ parentId, title }), log),
+    // W18's three: the same engine the two gestures above call, and the same
+    // `treeWriteResult` translation — a refusal becomes a thrown sentence the
+    // panel toasts, `newProblems` rides the success answer.
+    canvas_tree_set_state: ({ nodeId, state }) =>
+      treeWriteResult(deps.treeWriter.setState({ nodeId, state }), log),
+    canvas_tree_set_approached: ({ nodeId, approached }) =>
+      treeWriteResult(deps.treeWriter.setApproached({ nodeId, approached }), log),
+    canvas_tree_write_context: ({ nodeId, context, expected }) =>
+      treeWriteResult(deps.treeWriter.writeContext({ nodeId, context, expected }), log),
     canvas_tree_node: ({ nodeId }) => {
       const found = deps.treeService.node(nodeId);
       // EVERY failure reason collapses to null, deliberately. "No such shape",

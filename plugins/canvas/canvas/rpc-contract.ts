@@ -5,7 +5,7 @@ import { MAX_PATH_LENGTH } from "./dock/where.js";
 import { MAX_QUERY_LIMIT } from "./transcript.js";
 import { MAX_NAME_LENGTH } from "./identity.js";
 import { MAX_TITLE_LENGTH } from "./tree/write-seam.js";
-import { NODE_STATES } from "./tree/encoding.js";
+import { MAX_CONTEXT_LENGTH, NODE_STATES } from "./tree/encoding.js";
 import { MAX_CARD_TITLE, MAX_NODE_ID_LENGTH } from "./tree/node-reference.js";
 
 /** A client address minted by transport.ts's `newClientId()`. */
@@ -200,6 +200,67 @@ export const rpcContract = defineRpcContract({
          * panel cannot invert it. */
         parentId: z.string().min(1).max(200),
         title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
+      })
+      .strict(),
+    output: treeWriteResultSchema,
+  },
+  /**
+   * W18 — THE INSPECTOR's three edits: `state`, `approached` and the context
+   * note.
+   *
+   * SERVER-SIDE FOR THE SAME REASON THE TWO GESTURES ABOVE ARE, restated
+   * because this is the second time the argument is used and it is the one
+   * that matters: the engine is the single definition of a legal write, it
+   * re-reads W1's invariants after every one, and `commitLocalWrite` is what
+   * makes the change durable rather than merely broadcast. A panel editing
+   * `meta` in the browser's own copy would be a second write path with none of
+   * the three.
+   *
+   * NAMED EXACTLY AS THE AGENT TOOLS ARE. `canvas_tree_set_state` here and
+   * `canvas_tree_set_state` in `write-tools.ts` are two doors onto ONE
+   * operation, and the point of this whole node is that the human and the
+   * agent are editing the same fields with the same meanings — a different
+   * name at each door would be the beginning of a second vocabulary. (W4's
+   * gesture methods are named differently from their tools because their
+   * subjects differ: `add_blocker` names a relationship, `add_child` names a
+   * position.)
+   */
+  canvas_tree_set_state: {
+    input: z
+      .object({
+        nodeId: z.string().min(1).max(MAX_NODE_ID_LENGTH),
+        state: z.enum(NODE_STATES),
+      })
+      .strict(),
+    output: treeWriteResultSchema,
+  },
+  canvas_tree_set_approached: {
+    input: z
+      .object({
+        nodeId: z.string().min(1).max(MAX_NODE_ID_LENGTH),
+        /** "We looked at this and nothing came up" — a fact about a `todo`,
+         * not a fourth state (encoding.ts). */
+        approached: z.boolean(),
+      })
+      .strict(),
+    output: treeWriteResultSchema,
+  },
+  /**
+   * The context note, with `expected` REQUIRED on this door.
+   *
+   * The agent tool's `expected` is optional; the panel's is not, and that
+   * asymmetry is the whole multiplayer answer. A human has a note open on
+   * screen and can say what they read; if an agent or another human replaced
+   * it in the meantime the engine refuses (`stale-write`) and the panel shows
+   * both values rather than overwriting one of them. An optional field here
+   * would make the silent overwrite reachable by forgetting to pass it.
+   */
+  canvas_tree_write_context: {
+    input: z
+      .object({
+        nodeId: z.string().min(1).max(MAX_NODE_ID_LENGTH),
+        context: z.string().max(MAX_CONTEXT_LENGTH),
+        expected: z.string().max(MAX_CONTEXT_LENGTH),
       })
       .strict(),
     output: treeWriteResultSchema,

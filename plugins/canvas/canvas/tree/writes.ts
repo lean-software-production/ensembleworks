@@ -82,6 +82,7 @@ export function createTreeWriter(target: TreeWriteTarget): TreeWriter {
     rename: (input) => rename(ops, input),
     reparent: (input) => reparent(ops, input),
     setState: (input) => setState(ops, input),
+    setApproached: (input) => setApproached(ops, input),
     writeContext: (input) => writeContext(ops, input),
   };
 }
@@ -333,9 +334,54 @@ function setState(
   );
 }
 
+/**
+ * "We looked at this and nothing came up."
+ *
+ * A SEPARATE AXIS FROM `state`, exactly as encoding.ts defines it, and this
+ * operation is deliberately shaped like `setState` rather than folded into it:
+ * an approached `todo` is a real and useful thing to be, and a fourth state
+ * would make it unsayable.
+ *
+ * It lives in this file, beside the other additive operations, and D6's
+ * warning about growing `writes.ts` was weighed: a separate module holding one
+ * twenty-line mutation would put the two halves of one axis in two files, and
+ * D6 says explicitly that shrinking this file by splitting things that belong
+ * together is moving a metric, not improving a seam.
+ */
+function setApproached(
+  ops: WriteOps,
+  { nodeId, approached }: { nodeId: string; approached: boolean },
+): TreeWrite<TreeWriteOutcome> {
+  const found = ops.locate(nodeId);
+  if (!found.ok) return found;
+  const { tree, node } = found.value;
+  const was = node.meta.approached;
+  return ops.applied(
+    tree,
+    node.id,
+    () => ops.target.putShape(withMeta(node.shape, { approached })),
+    {
+      changed:
+        was === approached
+          ? [
+              `${node.id} was already ${approached ? "approached" : "not approached"}; nothing changed.`,
+            ]
+          : [
+              approached
+                ? `${node.id} is marked approached — looked at, nothing came up.`
+                : `${node.id} is no longer marked approached.`,
+            ],
+    },
+    (after) =>
+      after.nodes.get(node.id)?.meta.approached === approached
+        ? null
+        : `the document did not accept approached=${approached} for ${node.id}`,
+  );
+}
+
 function writeContext(
   ops: WriteOps,
-  { nodeId, context }: { nodeId: string; context: string },
+  { nodeId, context, expected }: { nodeId: string; context: string; expected?: string },
 ): TreeWrite<TreeWriteOutcome> {
   const noted = checkContext(nodeId, context);
   if (!noted.ok) return noted;
@@ -343,6 +389,17 @@ function writeContext(
   if (!found.ok) return found;
   const { tree, node } = found.value;
   const was = node.meta.context;
+  // COMPARE-AND-SET, and the comparison is against `undefined`, not against
+  // `""`. An empty expectation is a real claim — "this note was blank when I
+  // opened it" — and is the single most likely one a human editor makes, so
+  // reading it as "no expectation" would disable the guard precisely in the
+  // case it exists for.
+  if (expected !== undefined && expected !== was) {
+    return refusal(
+      "stale-write",
+      `${nodeId} now holds ${was.length} characters of context, not the ${expected.length} this write expected — somebody else wrote it in the meantime, so nothing was overwritten.`,
+    );
+  }
   return ops.applied(
     tree,
     node.id,

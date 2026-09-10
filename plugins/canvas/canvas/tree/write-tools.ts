@@ -41,6 +41,7 @@ export interface TreeWriteToolParams {
   readonly newParentId?: string;
   readonly title?: string;
   readonly state?: (typeof NODE_STATES)[number];
+  readonly approached?: boolean;
   readonly context?: string;
 }
 
@@ -60,6 +61,7 @@ export const TREE_WRITE_TOOL_NAMES = [
   "canvas_tree_rename",
   "canvas_tree_reparent",
   "canvas_tree_set_state",
+  "canvas_tree_set_approached",
   "canvas_tree_write_context",
 ] as const;
 
@@ -105,6 +107,15 @@ const reparentParams = z.object({
 const setStateParams = z.object({
   nodeId,
   state: z.enum(NODE_STATES).describe("todo, wip or done."),
+});
+
+const setApproachedParams = z.object({
+  nodeId,
+  approached: z
+    .boolean()
+    .describe(
+      "True once you have looked at this node and nothing new came up. A fact about a todo, not a fourth state — a node can be approached and still not done.",
+    ),
 });
 
 const writeContextParams = z.object({
@@ -232,6 +243,19 @@ export function createTreeWriteTools(deps: TreeWriteToolDeps): TreeWriteToolRegi
         if (id === null) return noSubject();
         return answer(
           deps.writer.setState({ nodeId: id, state: params.state ?? "todo" }),
+        );
+      },
+    },
+    {
+      name: "canvas_tree_set_approached",
+      description:
+        "Record that this node has been looked at and nothing new came up — or take that mark back off. Separate from state: an approached node can still be todo.",
+      parameters: setApproachedParams,
+      execute(params, ctx) {
+        const id = subject(params.nodeId, ctx.threadId);
+        if (id === null) return noSubject();
+        return answer(
+          deps.writer.setApproached({ nodeId: id, approached: params.approached ?? false }),
         );
       },
     },

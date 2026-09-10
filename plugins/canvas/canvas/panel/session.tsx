@@ -28,6 +28,10 @@ export function CanvasSession({
   onAddGoal,
   onAddBlocker,
   onLaunchNode,
+  inspectorPending,
+  onSetState,
+  onSetApproached,
+  onWriteContext,
 }: CanvasSessionProps) {
   const { editor, toolContext, tools, presenceStore, presencePublisher, selfKey } = session;
   const editorState = useEditorState(editor);
@@ -133,6 +137,11 @@ export function CanvasSession({
       onAddGoal={onAddGoal}
       onAddBlocker={onAddBlocker}
       onLaunchNode={onLaunchNode}
+      inspectorPending={inspectorPending}
+      onSetState={onSetState}
+      onSetApproached={onSetApproached}
+      onWriteContext={onWriteContext}
+      textOf={(id) => editor.doc.getText(id)}
       discussRoute={discuss.route}
       onDiscuss={(treeId, nodeId) =>
         discuss.discuss(snapshot, treeId, nodeId, (id) => editor.doc.getText(id))

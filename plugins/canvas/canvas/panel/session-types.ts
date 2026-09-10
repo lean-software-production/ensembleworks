@@ -1,6 +1,8 @@
 import type { CanvasAgentLink } from "../wire.js";
 import type { ThreadOption } from "../thread-picker.js";
 import type { Session } from "./shared.js";
+import type { InspectorEdit } from "./tree-inspector-sync.js";
+import type { NodeState } from "../tree/encoding.js";
 
 export interface CanvasSessionProps {
   readonly session: Session;
@@ -18,4 +20,9 @@ export interface CanvasSessionProps {
   readonly onAddBlocker: (parentId: string, title: string) => void;
   /** W12: start a bb thread to work on this node. */
   readonly onLaunchNode: (nodeId: string) => void;
+  /** W18: the inspector's three edits, over rpc into the same write engine. */
+  readonly inspectorPending: InspectorEdit | null;
+  readonly onSetState: (nodeId: string, state: NodeState) => void;
+  readonly onSetApproached: (nodeId: string, approached: boolean) => void;
+  readonly onWriteContext: (nodeId: string, context: string, expected: string) => Promise<boolean>;
 }
