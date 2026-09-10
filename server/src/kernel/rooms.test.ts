@@ -3,7 +3,7 @@
 // with the rooms currently open in memory, filtered through sanitizeId, sorted
 // ascending, each id exactly once.
 import assert from 'node:assert/strict'
-import { writeFileSync } from 'node:fs'
+import { readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdtemp } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -23,12 +23,21 @@ async function main() {
 	}
 
 	// 2. Files on disk -> sorted ascending, extension stripped.
+	// The five names below are chosen so that readdirSync's *raw* order is
+	// demonstrably unsorted (measured: beta, mid, alpha, yank, zeta), which is
+	// what makes the sort load-bearing — a two-file dir comes back in insertion
+	// order and would pass even with the sort deleted.
 	{
 		const dir = await roomsDir()
-		writeFileSync(path.join(dir, 'beta.sqlite'), '')
-		writeFileSync(path.join(dir, 'alpha.sqlite'), '')
+		for (const name of ['zeta', 'yank', 'alpha', 'mid', 'beta']) {
+			writeFileSync(path.join(dir, `${name}.sqlite`), '')
+		}
 		const host = createRoomHost(dir)
-		assert.deepEqual(host.listRoomIds(), ['alpha', 'beta'], 'disk rooms should sort ascending')
+		assert.deepEqual(
+			host.listRoomIds(),
+			['alpha', 'beta', 'mid', 'yank', 'zeta'],
+			'disk rooms should sort ascending'
+		)
 		console.log('ok: disk rooms -> sorted')
 	}
 
@@ -65,6 +74,26 @@ async function main() {
 			room.close()
 		}
 		console.log('ok: disk ∪ memory de-duplicated')
+	}
+
+	// 6. A room open in memory with NO file on disk is still listed — the
+	// documented "opened this process, may not have flushed yet" case. Removing
+	// the sqlite files after opening reproduces it without the disk scan being
+	// able to supply the id.
+	{
+		const dir = await roomsDir()
+		const host = createRoomHost(dir)
+		const room = host.getOrCreateRoom('mem')
+		try {
+			for (const suffix of ['', '-wal', '-shm']) {
+				rmSync(path.join(dir, `mem.sqlite${suffix}`), { force: true })
+			}
+			assert.deepEqual(readdirSync(dir), [], 'precondition: no room file left on disk')
+			assert.deepEqual(host.listRoomIds(), ['mem'], 'in-memory-only rooms must be listed')
+		} finally {
+			room.close()
+		}
+		console.log('ok: memory-only room listed')
 	}
 }
 
