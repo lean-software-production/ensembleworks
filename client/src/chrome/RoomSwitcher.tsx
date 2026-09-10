@@ -73,7 +73,10 @@ export function RoomSwitcher() {
 	// room list. It also lifts the popover out of the header's stacking
 	// context, above the participant tiles rendered below it. Same reasoning
 	// and the same shape as the device picker's list above.
-	const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null)
+	// Anchored by its RIGHT edge, like the device picker: the panel is a
+	// right-edge sidebar, so left-aligning the list to the trigger pushes it
+	// off the viewport once the panel is near MIN_WIDTH.
+	const [anchor, setAnchor] = useState<{ top: number; right: number } | null>(null)
 	const rootRef = useRef<HTMLDivElement | null>(null)
 	const abortRef = useRef<AbortController | null>(null)
 
@@ -134,7 +137,9 @@ export function RoomSwitcher() {
 		const next = !open
 		if (next) {
 			const rect = rootRef.current?.getBoundingClientRect()
-			if (rect) setAnchor({ top: rect.bottom + 6, left: rect.left })
+			if (rect) {
+				setAnchor({ top: rect.bottom + 6, right: Math.max(8, window.innerWidth - rect.right) })
+			}
 			load()
 		}
 		setOpen(next)
@@ -174,7 +179,7 @@ export function RoomSwitcher() {
 						...popoverBoxStyle,
 						position: 'fixed',
 						top: anchor.top,
-						left: anchor.left,
+						right: anchor.right,
 						zIndex: 10,
 						minWidth: 180,
 						maxWidth: 'min(300px, 90vw)',

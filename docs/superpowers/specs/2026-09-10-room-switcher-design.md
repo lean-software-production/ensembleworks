@@ -1,6 +1,6 @@
 # Room switcher — design
 
-- **Status:** SPEC (2026-09-10). Plan:
+- **Status:** IMPLEMENTED (2026-09-10). Plan:
   [`../plans/2026-09-10-room-switcher.md`](../plans/2026-09-10-room-switcher.md).
 - **Date:** 2026-09-10
 - **Motivation:** Rooms exist, but there is no way to reach one from inside the

@@ -85,7 +85,7 @@ Declare the route once, in the contracts package, so the server route, the
   `http: { method: 'GET', path: '/api/rooms' }`, `zodInput: z.object({})`,
   `zodOutput: z.object({ rooms: z.array(z.object({ id: z.string(), participants: z.number() })) })`.
 
-- [ ] **Step 1: Add the ToolDef**
+- [x] **Step 1: Add the ToolDef**
 
 In `contracts/src/tools/kernel.ts`, after `kernelParticipants`:
 
@@ -102,11 +102,11 @@ export const kernelRooms: ToolDef = {
 }
 ```
 
-- [ ] **Step 2: Register it**
+- [x] **Step 2: Register it**
 
 Extend the export list: `export const kernelTools: ToolDef[] = [kernelWhoami, kernelParticipants, kernelRooms]`.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 Run `bun run typecheck`, then `bun run test`. If any existing suite asserts the
 tool manifest's contents or count (check `e2e/tests/contracts.spec.ts` and
@@ -131,7 +131,7 @@ union of what is on disk and what is open in memory.
 - Produces: `RoomHost.listRoomIds(): string[]` — validated ids, de-duplicated,
   sorted ascending.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `server/src/kernel/rooms.test.ts`. Run with `bun src/kernel/rooms.test.ts`.
 Cover, using `mkdtemp` for the rooms dir (the `server/src/database-dir.test.ts`
@@ -148,7 +148,7 @@ not needed:
 
 Close any rooms you open (`room.close()`) so the test exits cleanly.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 Add `listRoomIds` to the `RoomHost` interface and its implementation in
 `createRoomHost`:
@@ -160,7 +160,7 @@ Add `listRoomIds` to the `RoomHost` interface and its implementation in
 - Map through `sanitizeId` (import from `../canvas/ids.ts`), drop nulls.
 - Return sorted ascending.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 `bun src/kernel/rooms.test.ts` passes; `bun run typecheck` clean.
 
@@ -179,7 +179,7 @@ A thin router: the list from Task 2, joined against live presence.
 - Consumes: `kernelRooms` (Task 1), `ctx.rooms.listRoomIds()` (Task 2).
 - Produces: `createRoomsRouter(ctx: PluginServerContext): express.Router`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `server/src/rooms-api.test.ts`, following `server/src/database-dir.test.ts`
 for boot and `server/src/canvas-api.test.ts` for HTTP calling convention. Over a
@@ -192,7 +192,7 @@ temp `databaseDir`:
 4. Response shape parses against `kernelRooms.zodOutput` — this is the drift
    anchor; assert it explicitly.
 
-- [ ] **Step 2: Implement the router**
+- [x] **Step 2: Implement the router**
 
 Create `server/src/features/rooms.ts`, mirroring
 `server/src/features/participants.ts`'s structure:
@@ -219,14 +219,14 @@ export function createRoomsRouter(ctx: PluginServerContext): express.Router {
 de-duplicates by raw user id, so a teammate with two tabs counts once
 (spec §3.1).
 
-- [ ] **Step 3: Mount it**
+- [x] **Step 3: Mount it**
 
 In `server/src/app.ts`, add `app.use(createRoomsRouter(ctx))` immediately after
 the `createParticipantsRouter(ctx)` line (~355), with a matching
 `// kernel-reserved: /api/rooms` comment, and add the new router to the ordered
 list in the block comment above the mounts (~line 300).
 
-- [ ] **Step 4: Verify**
+- [x] **Step 4: Verify**
 
 `bun src/rooms-api.test.ts` passes; `bun run typecheck` and `bun run test` clean.
 
@@ -245,7 +245,7 @@ builder so the two URL shapes cannot drift.
 - Consumes: nothing.
 - Produces: `buildRoomLink(origin: string, room: string): string` → `${origin}/?room=<encoded>`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Extend `client/src/chrome/frameLink.test.ts`:
 
@@ -254,7 +254,7 @@ Extend `client/src/chrome/frameLink.test.ts`:
 3. **Regression:** the existing `buildFrameLink` assertions still hold verbatim
    after the refactor — same param order, same output string.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 Add `buildRoomLink` using `URLSearchParams`, and rewrite `buildFrameLink` to
 build on it (append `frame`) — or, if delegating changes the emitted param
@@ -262,7 +262,7 @@ order, leave `buildFrameLink` as-is and simply place `buildRoomLink` beside it.
 **The existing output string must not change**; the no-regression assertion
 decides which form you keep. Keep the module free of React/DOM/tldraw imports.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 `bun client/src/chrome/frameLink.test.ts` passes.
 
@@ -286,7 +286,7 @@ Everything the popover decides, decided outside React so it can be tested.
     narrowing of the fetch result; drop entries that are not
     `{ id: string, participants: number }`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `client/src/chrome/rooms.test.ts`:
 
@@ -300,11 +300,11 @@ Create `client/src/chrome/rooms.test.ts`:
 5. `parseRoomsPayload` on `null`, `{}`, `{ rooms: 'x' }`, and an array with one
    good and one malformed entry → `[]`, `[]`, `[]`, and just the good entry.
 
-- [ ] **Step 2: Implement**
+- [x] **Step 2: Implement**
 
 Write the module. No React import, no DOM, no tldraw — it runs under bare `bun`.
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 `bun client/src/chrome/rooms.test.ts` passes.
 
@@ -325,7 +325,7 @@ decision comes from Task 5.
 - Produces: `<RoomSwitcher />` — no props; reads `getRoomId()` itself, matching
   how the span it replaces worked.
 
-- [ ] **Step 1: Build the component**
+- [x] **Step 1: Build the component**
 
 `client/src/chrome/RoomSwitcher.tsx`:
 
@@ -352,7 +352,7 @@ decision comes from Task 5.
   fetch).
 - **Dismissal** — close on Escape and on click outside; do not trap focus.
 
-- [ ] **Step 2: Wire it into the panel**
+- [x] **Step 2: Wire it into the panel**
 
 In `client/src/chrome/SidePanel.tsx`, replace the static room-id `<span>`
 (~lines 468-471, the one rendering `{getRoomId()}`) with `<RoomSwitcher />`,
@@ -360,7 +360,7 @@ leaving the surrounding flex row and the participant-count span untouched. Do
 **not** render it in the collapsed 32px rail branch (~line 368) — the rail keeps
 its current content (spec §3.2).
 
-- [ ] **Step 3: Verify**
+- [x] **Step 3: Verify**
 
 `bun run typecheck` and `bun run test` clean. There is no unit test for this
 component by construction (Global Constraints); Task 7 is its verification.
@@ -372,7 +372,7 @@ component by construction (Global Constraints); Task 7 is its verification.
 **Files:**
 - Modify: `docs/superpowers/specs/2026-09-10-room-switcher-design.md` (line 3)
 
-- [ ] **Step 1: Run it**
+- [x] **Step 1: Run it**
 
 `bin/dev up` from the repo root, then drive the running app in a browser:
 
@@ -390,10 +390,78 @@ component by construction (Global Constraints); Task 7 is its verification.
 
 Capture a screenshot of the open popover.
 
-- [ ] **Step 2: Close out**
+- [x] **Step 2: Close out**
 
 - Flip the spec's Status line from SPEC to `IMPLEMENTED (2026-09-10)`.
 - Confirm the PR body carries
   `ux-contract: none — side-panel chrome, not a canvas interaction surface.`
 - Record any as-built delta (e.g. the CLI-verb question from Task 1 Step 3) in
   an Execution notes section at the foot of this plan.
+
+---
+
+## Execution notes (2026-09-10)
+
+**CLI verb — no delta.** Task 1 Step 3's open question is answered: `ensembleworks
+kernel rooms` exists purely from the `kernelTools` registration. `cli/src/render/
+manifest.ts` builds its snapshot from `buildManifest(allTools, CLI_BUILD)` and
+`cli/src/dispatch.ts` renders verbs generically, so no CLI change was needed.
+`kernelRooms.http.path` also satisfies the registry's no-`/:param`
+CLI-renderability rule.
+
+**The plan under-counted the tool-count assertions.** Step 3 named
+`e2e/tests/contracts.spec.ts` and "anything under `cli/`". In fact that spec
+asserts nothing about the count, and four unit suites hardcode it:
+`contracts/src/tools/tools.test.ts`, `cli/src/render/manifest.test.ts`,
+`cli/src/cli-api.test.ts`, `server/src/tools-api.test.ts` (27 → 28). Unavoidable
+collateral, not scope creep.
+
+**`bun run test` cannot be green at the end of Tasks 1 and 2**, contrary to the
+Global Constraints. `server/src/tools-api.test.ts` asserts bidirectionally that
+every declared verb is mounted, so declaring `kernelRooms` in Task 1 without
+mounting the route until Task 3 fails by construction. Correctly reported rather
+than papered over (no stub router, no exemption-list edit). If green-per-task is
+ever a hard requirement, Tasks 1 and 3 must be one commit.
+
+**Two sandbox artefacts, not code failures.** `server/src/connector-loopback.test.ts`
+and `relay-loopback.test.ts` fail under the tool sandbox with `error connecting
+to /tmp/tmux-1000/default (Operation not permitted)`. Both pass outside it. Note
+also that `scripts/run-tests.ts` exits on the first failing file, so one broken
+suite masks everything alphabetically after it.
+
+**Three defects the per-task reviews missed, caught by the whole-branch review.**
+All in `RoomSwitcher.tsx`, all fixed in `9ef1b69`:
+1. The popover had no `zIndex` and `popoverBoxStyle` supplies none, so
+   participant tiles — positioned elements later in tree order in the same
+   stacking context — painted over it whenever a room had occupants.
+2. Its `minWidth: 180` matched the panel's own `MIN_WIDTH`, and the panel root is
+   `overflowY: auto` (so overflow-x computes to `auto` and clips).
+3. `toggle` called `load()` from inside the `setOpen` updater; updaters must be
+   pure and StrictMode double-invokes them, firing two `/api/rooms` requests per
+   open.
+
+Fixes (1) and (2) by adopting the viewport-anchored `position: fixed` pattern
+already documented at `SidePanel.tsx:137-141` for the device picker. **The plan
+caused (1) and (2)** by instructing the implementer to use `popoverBoxStyle`
+without pointing at that precedent — a plan-authoring lesson, not an implementer
+error.
+
+**As-built delta: `e2e/tests/room-switcher.spec.ts` was added**, which the File
+Structure table does not list. Justified: `RoomSwitcher.tsx` has no unit test by
+construction, so Task 7's manual smoke was its only verification — making that
+smoke executable closes the gap permanently. It immediately earned its place by
+catching a **fourth** defect the whole-branch review had not: the first fix
+left-anchored the popover to the trigger, which overflowed the viewport's right
+edge (1310 > 1280) at a 180px panel. Now right-anchored, like the device picker.
+Five specs cover the list, the narrow-panel geometry (both clipping and
+z-order, via `elementFromPoint`), navigate/inert-current-row, the
+single-request-per-open guarantee, and the error+retry path.
+
+**Spec §3.1's "known delta" confirmed in the wild.** The screenshot at a 180px
+panel shows the header reading `2` (client-side `getCollaborators().length + 1`)
+while the popover reads `1` (server-side deduped presence). Both honest, exactly
+as documented; no action.
+
+**Not verified:** the plan's smoke steps 6 (collapsed rail) and 7 (server
+stopped) were covered by reasoning and a route-level 500 respectively, not by a
+real rail interaction or a real server kill.
