@@ -1,12 +1,23 @@
 {
   "version": 1,
-  "baselineCommit": "340f511",
-  "note": "RE-FROZEN AT W14 (2026-09-09), the single deliberate act D4 traded eleven nodes of red gate for. productionTokenLines and decisionPoints are re-frozen at the tip of the discovery-tree feature: 11303 -> 16610 lines and 1153 -> 1770 decision points, both the feature's real size, checked once here rather than re-baselined per node. totalDebt is DELIBERATELY NOT re-frozen and still carries ee79ab4's 5273 — see the D6 correction in artifacts/harness/c89c66dd/w14-end-to-end-proof.md. compare() computes improvement as (frozen.totalDebt - current)/frozen.totalDebt, so freezing totalDebt at the current value pins improvement to 0% forever and the 90% floor can never be met again. The floor is therefore not a drift alarm at all: with a fixed divisor it is an ABSOLUTE ceiling of ~527 debt units, which does not go stale and must not be re-baselined. It is red at 89.00% because current debt is 580 - 53 units over - and it stays red until someone pays that down.",
+  "baselineCommit": "3b80925",
+  "note": "RE-FROZEN AT W18 (2026-09-10), the second and final re-freeze of this feature \u2014 see D10 in artifacts/harness/c89c66dd/plan.md. productionTokenLines 16610 -> 17695 and decisionPoints 1770 -> 1850, the discovery tree's real size once the node inspector and on-canvas state marks landed. W14 froze the first eleven nodes; this freezes the four that followed the C3 critique and the owner's own testing. Both are deliberate operator acts, not per-node re-baselining. totalDebt is STILL NOT re-frozen and still carries ee79ab4's 5273: compare() computes improvement as (frozen.totalDebt - current)/frozen.totalDebt, so freezing it pins improvement to 0% forever. With a fixed divisor the 90% floor is an ABSOLUTE ceiling of ~527 debt units, which does not go stale and must never be re-baselined. It currently reads 93.48% (debt 344) and passes on its own merits.",
   "formula": "moduleDebt=sum(max(0,tokenLines(file)-500)); functionDebt=sum(max(0,tokenLines(function)-150)); totalDebt=moduleDebt+functionDebt",
-  "fileScope": ["app.tsx", "server.ts", "transport.ts", "canvas/**/*.ts(x)", "hooks/**/*.ts(x)", "lib/**/*.ts(x)"],
-  "invariants": { "productionTokenLines": 16610, "decisionPoints": 1770, "localImportCycleCount": 0 },
-  "productionTokenLines": 16610,
-  "decisionPoints": 1770,
+  "fileScope": [
+    "app.tsx",
+    "server.ts",
+    "transport.ts",
+    "canvas/**/*.ts(x)",
+    "hooks/**/*.ts(x)",
+    "lib/**/*.ts(x)"
+  ],
+  "invariants": {
+    "productionTokenLines": 17695,
+    "decisionPoints": 1850,
+    "localImportCycleCount": 0
+  },
+  "productionTokenLines": 17695,
+  "decisionPoints": 1850,
   "localImportCycleCount": 0,
   "moduleDebt": 2990,
   "functionDebt": 2283,
