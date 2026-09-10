@@ -27,4 +27,15 @@ export const kernelParticipants: ToolDef = {
 	}),
 }
 
-export const kernelTools: ToolDef[] = [kernelWhoami, kernelParticipants]
+export const kernelRooms: ToolDef = {
+	plugin: 'kernel',
+	id: 'rooms',
+	http: { method: 'GET', path: '/api/rooms' },
+	help: 'List every room that exists, with live participant counts.',
+	zodInput: z.object({}),
+	zodOutput: z.object({
+		rooms: z.array(z.object({ id: z.string(), participants: z.number() })),
+	}),
+}
+
+export const kernelTools: ToolDef[] = [kernelWhoami, kernelParticipants, kernelRooms]
