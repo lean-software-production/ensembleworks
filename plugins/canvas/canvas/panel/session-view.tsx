@@ -18,7 +18,7 @@ import { SpeakerRings } from "../roster-ui.js";
 import { pageScopedDocument } from "./page-scope.js";
 import { QuarantinedEdges } from "./quarantine-layer.js";
 import { TreeGestureLayer } from "./tree-gesture-layer.js";
-import type { ComposerDestination } from "../tree/discuss.js";
+import type { DiscussRoute } from "../tree/discuss.js";
 import type { ToolId, ToolStates } from "../tool-loop.js";
 import {
   chromeCardColumnStyle,
@@ -74,7 +74,7 @@ export interface SessionViewProps {
    * to root and what blocks it. */
   readonly onLaunchNode: (nodeId: string) => void;
   /** W8: where a node reference would land, and the call that puts one there. */
-  readonly discussDestination: ComposerDestination;
+  readonly discussRoute: DiscussRoute;
   readonly onDiscuss: (treeId: string, nodeId: string) => void;
   readonly pageSwitcher: PageSwitcherView;
 }
@@ -124,7 +124,7 @@ function CanvasSurface({
   onAddGoal,
   onAddBlocker,
   onLaunchNode,
-  discussDestination,
+  discussRoute,
   onDiscuss,
 }: SessionViewProps) {
   const overlayDoc = useMemo(
@@ -216,7 +216,7 @@ function CanvasSurface({
         agentLinks={agentLinks}
         launchPendingShapeId={pendingShapeId}
         onLaunchNode={onLaunchNode}
-        discussDestination={discussDestination}
+        discussRoute={discussRoute}
         onDiscuss={onDiscuss}
       />
       <SpeakerRings

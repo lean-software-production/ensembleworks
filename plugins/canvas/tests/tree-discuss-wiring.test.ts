@@ -24,13 +24,21 @@ describe("the discuss control asks the tested module for its rule", () => {
     const [call] = callsTo(LAYER, "discussArmFor");
     expect(call).toBeDefined();
     expect(call.text).toContain("target");
-    expect(call.text).toContain("discussDestination");
+    expect(call.text).toContain("discussRoute");
   });
 
   it("hangs the call on the button that carries it", () => {
     const button = jsxAttributes(LAYER, "data-tree-discuss");
     expect(button.onClick).toContain("onDiscuss(target.treeId, target.shapeId)");
     expect(button.disabled).toBe("!discussArm.enabled");
+  });
+
+  it("renders the enabled control's warning, not only its refusal (W17)", () => {
+    // `hint` is what an ENABLED press costs — leaving the canvas. A title that
+    // only ever showed `reason` would drop it silently.
+    const button = jsxAttributes(LAYER, "data-tree-discuss");
+    expect(button.title).toContain("discussArm.hint");
+    expect(button.title).toContain("discussArm.reason");
   });
 });
 
@@ -47,5 +55,26 @@ describe("the reference is read from the document the panel already holds", () =
   it("writes through updateText, never setText — a draft in progress survives", () => {
     expect(callsTo(HOOK, "composer.updateText")).toHaveLength(1);
     expect(HOOK).not.toContain("setText");
+  });
+});
+
+describe("W17 — the press has somewhere to go from the canvas route", () => {
+  // The bug this guards is not a wrong mapping, it is an UNREACHABLE one: the
+  // canvas is a nav panel, whose composer scope is the case W8 refused, so the
+  // control was greyed on the only surface it ships on. The rule itself is
+  // tested in tests/tree-discuss-reach.test.ts; these two lines are the seam
+  // where the hook must actually take the fallback rather than give up.
+  it("navigates to the compose surface, seeded and focused, when there is no composer", () => {
+    const [call] = callsTo(HOOK, "navigate.toCompose");
+    expect(call).toBeDefined();
+    expect(call.text).toContain("initialPrompt: reference.text");
+    expect(call.text).toContain("focusPrompt: true");
+  });
+
+  it("asks the tested module which route this scope takes, never the raw scope", () => {
+    expect(callsTo(HOOK, "discussRouteFor").length).toBeGreaterThan(0);
+    // The refusal branch is gone from the panel too: there is no scope from
+    // which pressing the control does nothing.
+    expect(HOOK).not.toContain("composerDestination");
   });
 });

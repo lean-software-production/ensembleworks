@@ -133,7 +133,7 @@ export function CanvasSession({
       onAddGoal={onAddGoal}
       onAddBlocker={onAddBlocker}
       onLaunchNode={onLaunchNode}
-      discussDestination={discuss.destination}
+      discussRoute={discuss.route}
       onDiscuss={(treeId, nodeId) =>
         discuss.discuss(snapshot, treeId, nodeId, (id) => editor.doc.getText(id))
       }

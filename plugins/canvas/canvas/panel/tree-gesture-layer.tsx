@@ -39,7 +39,7 @@ import {
 } from "../pages/chrome-dock.js";
 import {
   discussArmFor,
-  type ComposerDestination,
+  type DiscussRoute,
 } from "../tree/discuss.js";
 import { workArmFor } from "../tree/launch.js";
 import type { CanvasAgentLink } from "../wire.js";
@@ -72,7 +72,7 @@ export interface TreeGestureLayerProps {
   readonly onAddBlocker: (parentId: string, title: string) => void;
   /** W8: where a node reference would land, or the reason there is nowhere —
    * the arm is greyed with it, never hidden. */
-  readonly discussDestination: ComposerDestination;
+  readonly discussRoute: DiscussRoute;
   /** W8: put a reference to this node in that composer. */
   readonly onDiscuss: (treeId: string, nodeId: string) => void;
   /** W12: the shape -> thread links, so the arm can say "again" on a node that
@@ -140,7 +140,7 @@ export function TreeGestureLayer({
   pending,
   onAddGoal,
   onAddBlocker,
-  discussDestination,
+  discussRoute,
   onDiscuss,
   agentLinks,
   launchPendingShapeId,
@@ -214,7 +214,7 @@ export function TreeGestureLayer({
     currentPage === undefined ? { status: "absent" } : markStateOf(currentPage),
   );
   const arm = target === null ? null : blockerArmFor(target);
-  const discussArm = discussArmFor(target, discussDestination);
+  const discussArm = discussArmFor(target, discussRoute);
   const workArm =
     target === null ? null : workArmFor(target, agentLinks[target.shapeId] !== undefined);
   const launching = target !== null && launchPendingShapeId === target.shapeId;
@@ -276,7 +276,16 @@ export function TreeGestureLayer({
               type="button"
               data-tree-discuss="node"
               disabled={!discussArm.enabled}
-              title={discussArm.enabled ? undefined : discussArm.reason}
+              // A REFUSAL and a WARNING are different sentences on the same
+              // element: `reason` is why it will not act, `hint` is what an
+              // enabled press is about to cost you (W17 — leaving the canvas).
+              title={
+                discussArm.enabled
+                  ? discussArm.hint === ""
+                    ? undefined
+                    : discussArm.hint
+                  : discussArm.reason
+              }
               onClick={() => {
                 // Guarded by `target.treeId` rather than by the arm alone, so
                 // the call site cannot pass a null tree id even if the arm's

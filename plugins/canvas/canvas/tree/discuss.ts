@@ -28,13 +28,19 @@
 //    to insert at, and `focus()` puts the caret after the insert, which is
 //    where a human continues typing anyway.
 //
-// 3. IT WRITES INTO A NAMED PLACE OR IT REFUSES OUT LOUD. `useComposer()`
-//    resolves to a different draft depending on where the panel is mounted
-//    (`PluginComposerScope`); the one scope that is not a destination is a
-//    new-thread composer whose project has not resolved yet. There, the arm is
-//    greyed with the reason — agent-arms.ts's "disabled, never hidden" call —
-//    because a control that appears to work and writes into nowhere is the
-//    worst of the three options.
+// 3. IT WRITES INTO A NAMED PLACE, AND WHEN THERE IS NONE IT MAKES ONE (W17).
+//    `useComposer()` resolves to a different draft depending on where the
+//    panel is mounted (`PluginComposerScope`); the one scope that is not a
+//    draft you can write into is a new-thread composer whose project has not
+//    resolved yet. W8 greyed the arm there and reasoned soundly about it — and
+//    that is the ONE scope a plugin NAV PANEL ever sees, so the control was
+//    greyed on the only surface it ships on, from the day it landed, with a
+//    green suite underneath it. `discussRouteFor` is the fix: no in-place
+//    draft means NAVIGATE to the compose surface seeded with the same block
+//    (`toCompose({initialPrompt, focusPrompt})`), which is a real destination
+//    a human can see and send. The refusal branch is gone rather than left
+//    unreachable — see `discussRouteFor` for why compose is the FALLBACK and
+//    not the only path.
 //
 // 4. THE SYNTAX IS NOT SPELLED HERE. `nodeDirective` (node-reference.ts) is
 //    the single emitter, next to the parse side it has to agree with.
@@ -123,6 +129,41 @@ export function composerDestination(scope: PluginComposerScope | null): Composer
   }
 }
 
+/** Where a press ends up: the draft already in front of the human, or the
+ * compose surface this navigates to. Both are real; neither is a refusal. */
+export type DiscussRoute =
+  /** Insert into the composer this panel is mounted beside. */
+  | { readonly kind: "composer"; readonly where: string }
+  /** Navigate to the root compose surface, seeded with the reference. `why`
+   * is the in-place composer's absence, kept for the tooltip — a human is
+   * about to leave the canvas and is owed the reason. */
+  | { readonly kind: "compose"; readonly where: string; readonly why: string };
+
+/** What the compose surface is called in a sentence to a human. */
+const COMPOSE_WHERE = "a new chat";
+
+/**
+ * W17. Where "discuss this node" goes from this scope — and it always goes
+ * somewhere.
+ *
+ * COMPOSE IS THE FALLBACK, NOT THE ONLY PATH, and the weighing is this:
+ * navigating away from the canvas costs the human their selection, their
+ * camera and their place in a spatial surface they were reading. When there IS
+ * a draft in front of them — a thread, a side chat, a queued message, a
+ * resolved new-thread composer — putting the reference THERE keeps them where
+ * they are and keeps W8's decision 2 (a draft in progress survives) meaningful.
+ * A human with a side chat open plausibly wants the reference in that side
+ * chat, not to be thrown at a fresh compose screen. So the in-place write wins
+ * whenever it is available, and `toCompose` covers exactly the case that used
+ * to be a dead end.
+ */
+export function discussRouteFor(scope: PluginComposerScope | null): DiscussRoute {
+  const destination = composerDestination(scope);
+  return destination.ok
+    ? { kind: "composer", where: destination.where }
+    : { kind: "compose", where: COMPOSE_WHERE, why: destination.why };
+}
+
 // ---------------------------------------------------------------------------
 // The arm
 
@@ -133,21 +174,32 @@ export interface DiscussArm {
   readonly enabled: boolean;
   /** Empty when enabled. */
   readonly reason: string;
+  /** Said on an ENABLED control that is about to do something a human would
+   * not otherwise expect — here, leave the canvas. Empty when there is
+   * nothing to warn about. Kept separate from `reason` because a warning and
+   * a refusal are not the same fact and must not render the same way. */
+  readonly hint: string;
 }
 
 /**
- * The "discuss this node" arm for this selection and this composer.
+ * The "discuss this node" arm for this selection and this route.
  *
  * Null with no target at all — there is no shape to anchor it to, which is
  * W4's rule for the whole anchored group rather than a new one.
  *
- * DISABLED, NEVER HIDDEN otherwise: a control that vanishes on a note that is
- * not a tree node reads as a bug, and one that vanishes because a composer is
- * unresolved reads as a broken build. Both say why instead.
+ * ONE REFUSAL LEFT, and it is reachable: a selected shape that is not a node
+ * of a tree. W8's second refusal — "there is nowhere to write" — is GONE
+ * rather than left unreachable, because W17 gave that case a destination
+ * (`discussRouteFor`). A branch that can never be taken is worse than no
+ * branch: it reads as coverage while nothing exercises it.
+ *
+ * The label CHANGES on the compose route. "Discuss this node" that silently
+ * navigates away from a canvas is a small betrayal; the button says where it
+ * is about to take you, and the tooltip says why it cannot stay.
  */
 export function discussArmFor(
   target: TreeGestureTarget | null,
-  destination: ComposerDestination,
+  route: DiscussRoute,
 ): DiscussArm | null {
   if (target === null) return null;
   const label = "Discuss this node";
@@ -155,11 +207,18 @@ export function discussArmFor(
     return {
       label,
       enabled: false,
+      hint: "",
       reason: "This shape is not a node of a tree — start one with “Add a goal”.",
     };
   }
-  if (!destination.ok) return { label, enabled: false, reason: destination.why };
-  return { label, enabled: true, reason: "" };
+  return route.kind === "composer"
+    ? { label, enabled: true, reason: "", hint: "" }
+    : {
+        label: `${label} in ${route.where}`,
+        enabled: true,
+        reason: "",
+        hint: `${route.why} Opens ${route.where} with this node referenced — you will leave the canvas.`,
+      };
 }
 
 // ---------------------------------------------------------------------------
@@ -274,7 +333,7 @@ export function draftWithReference(current: string, reference: string): string |
  * defaulting an unrun update to "already referenced" would tell a human their
  * reference is sitting in a message that does not contain it.
  */
-export type DiscussOutcome = "inserted" | "duplicate" | "unrun";
+export type DiscussOutcome = "inserted" | "duplicate" | "unrun" | "navigated";
 
 export interface DiscussReport {
   readonly tone: "success" | "info" | "error";
@@ -294,6 +353,14 @@ export function discussReport(outcome: DiscussOutcome, where: string): DiscussRe
   switch (outcome) {
     case "inserted":
       return { tone: "success", text: `Referenced this node in ${where} — press send when ready.` };
+    case "navigated":
+      // A DIFFERENT sentence from `inserted` on purpose: the human is no
+      // longer looking at the canvas, and "referenced this node" alone would
+      // not explain why the view just changed under them.
+      return {
+        tone: "success",
+        text: `Opened ${where} with this node referenced — press send when ready.`,
+      };
     case "duplicate":
       return { tone: "info", text: `This node is referenced in ${where} already.` };
     case "unrun":

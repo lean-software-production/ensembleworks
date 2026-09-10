@@ -25,6 +25,7 @@ import {
   composerDestination,
   discussArmFor,
   discussReport,
+  discussRouteFor,
   draftWithReference,
   nodeReferenceFor,
 } from "../canvas/tree/discuss.js";
@@ -189,13 +190,14 @@ describe("discussArmFor", () => {
     if (arm === null) throw new Error("expected an arm");
     return arm;
   };
-  const here = composerDestination({ kind: "thread", threadId: "thr_1" });
-  const nowhere = composerDestination(null);
+  const here = discussRouteFor({ kind: "thread", threadId: "thr_1" });
+  const away = discussRouteFor(null);
 
   it("is offered on a tree node with a composer in scope", () => {
     const arm = armOf(targetIn(doc, "shape:api"), here);
     expect(arm.enabled).toBe(true);
     expect(arm.reason).toBe("");
+    expect(arm.hint).toBe("");
   });
 
   it("is greyed — never hidden — on a shape that is not a tree node", () => {
@@ -206,10 +208,15 @@ describe("discussArmFor", () => {
     expect(loose).toBeDefined();
   });
 
-  it("is greyed with the destination's own reason when there is nowhere to write", () => {
-    const arm = armOf(targetIn(doc, "shape:api"), nowhere);
-    expect(arm.enabled).toBe(false);
-    if (!nowhere.ok) expect(arm.reason).toBe(nowhere.why);
+  it("says where it is taking you when there is no composer to write into", () => {
+    // W17: this used to be a greyed control. It is now an enabled one that
+    // names its destination in the label and warns, in the tooltip, that a
+    // press leaves the canvas.
+    const arm = armOf(targetIn(doc, "shape:api"), away);
+    expect(arm.enabled).toBe(true);
+    expect(arm.reason).toBe("");
+    if (away.kind === "compose") expect(arm.label).toContain(away.where);
+    expect(arm.hint).toContain("leave the canvas");
   });
 
   it("has no arm at all without a target — there is nothing to anchor it to", () => {
