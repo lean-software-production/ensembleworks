@@ -363,14 +363,6 @@ export function checkContext(subject: string, context: string): TreeWrite<string
   return { ok: true, value: context };
 }
 
-/**
- * Walk UP from a node — the things it blocks — collecting what it reaches.
- *
- * `cycle` rather than a truncated list when the walk revisits a node, for the
- * same reason `model.pathToRoot` refuses: a truncated answer here would let a
- * cycle-creating write through. Under `multiple-parents` every branch is
- * followed, because a cycle through EITHER parent is still a cycle.
-
 /** Structural and graph problems together — what "is this tree broken" means. */
 export const problemsOf = (tree: Tree): readonly TreeProblem[] => [
   ...tree.problems,
