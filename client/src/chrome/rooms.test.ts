@@ -4,16 +4,18 @@ import { parseRoomsPayload, toRoomRows, type RoomSummary } from './rooms'
 
 // toRoomRows preserves the server's order — the payload is already sorted
 // alphabetically server-side and the client must not re-sort (spec §3.1).
+// The fixture is deliberately NOT in alphabetical order so that any accidental
+// client-side sort would flip these assertions red.
 {
 	const rooms: RoomSummary[] = [
-		{ id: 'alpha', participants: 0 },
-		{ id: 'design-review', participants: 2 },
-		{ id: 'team', participants: 3 },
+		{ id: 'zulu', participants: 0 },
+		{ id: 'alpha', participants: 2 },
+		{ id: 'mike', participants: 3 },
 	]
-	const rows = toRoomRows(rooms, 'team')
+	const rows = toRoomRows(rooms, 'mike')
 	assert.deepEqual(
 		rows.map((r) => r.id),
-		['alpha', 'design-review', 'team'],
+		['zulu', 'alpha', 'mike'],
 		'server order preserved',
 	)
 
