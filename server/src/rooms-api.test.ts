@@ -82,6 +82,31 @@ async function main() {
 		app.server.close()
 		console.log('ok: response parses against kernelRooms.zodOutput')
 	}
+
+	// 5. The count is people, not connections: two presence records carrying the
+	//    same raw user id (one teammate with two tabs open) count once. This is
+	//    what forces buildParticipants(...).length over refs.length — the latter
+	//    would report 2 here.
+	{
+		const { app, client } = await boot()
+		const room = app.getOrCreateRoom('alpha') as any
+		const rec = {
+			userId: 'user:u1',
+			userName: 'Ada',
+			currentPageId: 'page:1',
+			cursor: { x: 0, y: 0 },
+			lastActivityTimestamp: 1,
+		}
+		room.getPresenceRecords = () => ({ a: rec, b: rec })
+		const res = await client.getJson(kernelRooms.http.path)
+		assert.deepEqual(
+			res.body,
+			{ rooms: [{ id: 'alpha', participants: 1 }] },
+			'two tabs of one teammate must count as one participant'
+		)
+		app.server.close()
+		console.log('ok: two presence records, one user -> participants: 1')
+	}
 }
 
 main().then(
