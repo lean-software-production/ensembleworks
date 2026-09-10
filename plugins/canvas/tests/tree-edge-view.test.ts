@@ -38,7 +38,7 @@ import {
   markTreePage,
   quarantineTreeShape,
 } from "../canvas/tree/encoding.js";
-import { REPARENT_REASON } from "../canvas/tree/writes.js";
+import { REPARENT_REASON } from "../canvas/tree/reparent.js";
 import {
   QUARANTINE_LABEL_PREFIX,
   QUARANTINE_STROKE,

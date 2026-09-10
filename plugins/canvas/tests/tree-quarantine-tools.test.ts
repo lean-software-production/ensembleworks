@@ -24,7 +24,7 @@ import { LoroCanvasDoc, dumpModel, loadModel } from "@ensembleworks/canvas-doc";
 import type { PluginAgentToolContext } from "@get-bb/plugin-sdk";
 import { quarantineTreeShape, readTreeQuarantine } from "../canvas/tree/encoding.js";
 import { readTree } from "../canvas/tree/model.js";
-import { listQuarantinedEdges } from "../canvas/tree/repair.js";
+import { listQuarantinedEdges, restoreQuarantinedEdge } from "../canvas/tree/repair.js";
 import {
   treeRepairTargetForDoc,
   treeServiceForDoc,
@@ -236,7 +236,20 @@ describe("canvas_tree_restore_edge — putting a relationship back", () => {
 });
 
 describe("the promise the agent reads", () => {
-  it("a move's own answer names the tool that undoes it, not an internal function", () => {
+  /**
+   * W16/B3. This test used to assert the OPPOSITE — that a move's answer names
+   * `canvas_tree_restore_edge`. W13 wrote it to close C2 obligation 3 ("the
+   * actor that displaces a human's edge must be able to undo it"), and it was
+   * green, and the sentence it pinned was false every single time.
+   *
+   * THE FALSITY IS PROBED HERE, NOT ARGUED. A reparent always leaves the moved
+   * node with a live parent edge, so restoring the edge it displaced always
+   * projects `multiple-parents`, so `restoreQuarantinedEdge` always refuses.
+   * The probe below is the reason this assertion is allowed to be a wording
+   * assertion: it establishes the ground truth first, in the same document,
+   * through the same production adapters the tool uses.
+   */
+  it("a move's own answer does not advertise a restore that is refused every time", () => {
     const doc = LoroCanvasDoc.create({ peerId: 12n });
     loadModel(doc, docOf(EXAMPLE));
     doc.commit();
@@ -244,9 +257,18 @@ describe("the promise the agent reads", () => {
 
     const moved = writer.reparent({ nodeId: "shape:ui", newParentId: "shape:api" });
     expect(moved.ok).toBe(true);
-    const sentence = moved.ok ? moved.value.changed.join(" ") : "";
+    const displaced = moved.ok ? (moved.value.removedEdgeIds ?? []) : [];
+    expect(displaced).toHaveLength(1);
 
-    expect(sentence).toContain("canvas_tree_restore_edge");
+    // GROUND TRUTH: the advertised recovery, attempted for real.
+    const putBack = restoreQuarantinedEdge(treeRepairTargetForDoc(doc), displaced[0]);
+    expect(putBack.ok).toBe(false);
+
+    const sentence = moved.ok ? moved.value.changed.join(" ") : "";
+    // So the sentence may not send the caller there...
+    expect(sentence).not.toContain("canvas_tree_restore_edge");
+    // ...and must name the move that DOES put the relationship back.
+    expect(sentence).toContain("canvas_tree_reparent");
     // The old name was a module-private function the caller could not call.
     expect(sentence).not.toContain("restoreQuarantinedEdge(");
   });

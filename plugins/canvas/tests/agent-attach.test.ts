@@ -86,6 +86,57 @@ describe("attachVerdictFor", () => {
     });
   });
 
+  /**
+   * W16/F4 — C3 promoted this from "recorded" to a warning it wants shipped.
+   *
+   * THE PROPERTY. bb builds a thread's agent-tool set ONCE, when the runtime is
+   * constructed. `canvas_tree_launch` works because the shape->thread link is
+   * written BEFORE `threads.spawn`, so the tools are there from turn 1. ATTACH
+   * is the other order: the runtime already exists, so a thread attached to a
+   * tree node gets ZERO `canvas_tree_*` tools and no orientation brief, and
+   * keeps getting zero — forever, until the runtime is released (W14 watched
+   * all 13 tools appear after `bb thread stop`).
+   *
+   * It is not a refusal: the attach is legitimate and the badge is real. It is
+   * the most confusing state this feature can produce, so the ATTACH SAYS SO.
+   * The door that works (`Work on this node`) is named, because a warning that
+   * only describes the problem leaves the human to guess the fix.
+   */
+  describe("attaching to a tree node", () => {
+    it("still allows it, and warns that the tools are not there yet", () => {
+      const verdict = attachVerdictFor({ ...base, thread: probe(), shapeIsTreeNode: true });
+      expect(verdict.ok).toBe(true);
+      const warning = verdict.ok ? (verdict.warning ?? "") : "";
+      expect(warning).not.toBe("");
+      expect(warning).toContain("Work on this node");
+    });
+
+    it("says nothing at all when the shape is not a tree node", () => {
+      const verdict = attachVerdictFor({ ...base, thread: probe(), shapeIsTreeNode: false });
+      expect(verdict.ok && verdict.warning).toBeUndefined();
+    });
+
+    it("warns on the shape, not on the thread's status — every live status warns", () => {
+      for (const status of ["active", "idle", "starting", "stopping"] as const) {
+        const verdict = attachVerdictFor({
+          ...base,
+          thread: probe({ status }),
+          shapeIsTreeNode: true,
+        });
+        expect(verdict.ok && (verdict.warning ?? "")).not.toBe("");
+      }
+    });
+
+    it("does not warn instead of refusing — a refusal still wins", () => {
+      const verdict = attachVerdictFor({
+        ...base,
+        thread: probe({ archivedAt: 12 }),
+        shapeIsTreeNode: true,
+      });
+      expect(verdict.ok).toBe(false);
+    });
+  });
+
   it("refuses a deleted thread", () => {
     const verdict = attachVerdictFor({ ...base, thread: probe({ deletedAt: 12 }) });
     expect(verdict.ok).toBe(false);

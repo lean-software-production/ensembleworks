@@ -46,6 +46,8 @@ import type { CanvasAgentLink } from "../wire.js";
 import {
   MAX_GESTURE_TITLE,
   blockerArmFor,
+  goalArmFor,
+  markStateOf,
   nextTreeComposer,
   treeGestureTargetFor,
   treeTitleSubmission,
@@ -201,6 +203,16 @@ export function TreeGestureLayer({
     dispatch({ type: "submitted" });
   }, [composer, currentPageId, dispatch, onAddBlocker, onAddGoal, target, title]);
 
+  // W16/B2: what the goal button is FOR depends on whether this page is a tree
+  // yet — see `goalArmFor`. The page may be missing from the snapshot for a
+  // render (a peer deleted it, an undo is mid-clamp), which is the same real
+  // state `pageTabMenuTarget` answers null for; an unknown page is treated as
+  // unmarked, so the button offers to start a tree rather than claiming there
+  // already is one.
+  const currentPage = doc.pages.find((page) => page.id === currentPageId);
+  const goalArm = goalArmFor(
+    currentPage === undefined ? { status: "absent" } : markStateOf(currentPage),
+  );
   const arm = target === null ? null : blockerArmFor(target);
   const discussArm = discussArmFor(target, discussDestination);
   const workArm =
@@ -219,11 +231,12 @@ export function TreeGestureLayer({
         <button
           type="button"
           data-tree-gesture="add-goal"
-          disabled={pending !== null}
+          disabled={pending !== null || !goalArm.enabled}
+          title={goalArm.reason === "" ? undefined : goalArm.reason}
           onClick={() => dispatch({ type: "open", gesture: "add-goal" })}
-          style={buttonStyle(pending === null)}
+          style={buttonStyle(pending === null && goalArm.enabled)}
         >
-          {pending === "goal" ? "Adding a goal…" : "Add a goal"}
+          {pending === "goal" ? "Adding a goal…" : goalArm.label}
         </button>
         {composer !== "goal" ? null : (
           <Composer

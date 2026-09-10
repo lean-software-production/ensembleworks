@@ -4,7 +4,7 @@ import { AGENT_STATUSES } from "./wire.js";
 import { MAX_PATH_LENGTH } from "./dock/where.js";
 import { MAX_QUERY_LIMIT } from "./transcript.js";
 import { MAX_NAME_LENGTH } from "./identity.js";
-import { MAX_TITLE_LENGTH } from "./tree/writes.js";
+import { MAX_TITLE_LENGTH } from "./tree/write-seam.js";
 import { NODE_STATES } from "./tree/encoding.js";
 import { MAX_CARD_TITLE, MAX_NODE_ID_LENGTH } from "./tree/node-reference.js";
 
@@ -138,7 +138,20 @@ export const rpcContract = defineRpcContract({
         threadId: z.string().min(1).max(200),
       })
       .strict(),
-    output: agentLinkSchema,
+    /**
+     * THE LINK, AND ANYTHING THE ATTACH HAS TO SAY ABOUT ITSELF (W16/F4).
+     *
+     * A wrapper rather than an extra field on the link, because a warning is a
+     * fact about this ACT and the link is a durable value that gets stored in
+     * panel state and re-broadcast on the agent channel — a transient sentence
+     * riding inside it would outlive the moment it is about.
+     */
+    output: z
+      .object({
+        link: agentLinkSchema,
+        warning: z.string().optional(),
+      })
+      .strict(),
   },
   /**
    * W4's TWO NODE GESTURES — "add a goal" and "add a blocker under this node".

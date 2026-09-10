@@ -46,12 +46,12 @@ import {
   treeServiceForDoc,
   treeWriterForDoc,
 } from "../canvas/tree/doc-source.js";
+import { createTreeWriter } from "../canvas/tree/writes.js";
 import {
   MAX_TITLE_LENGTH,
-  createTreeWriter,
   type TreeWriteTarget,
   type TreeWriter,
-} from "../canvas/tree/writes.js";
+} from "../canvas/tree/write-seam.js";
 import {
   TREE_WRITE_TOOL_NAMES,
   createTreeWriteTools,

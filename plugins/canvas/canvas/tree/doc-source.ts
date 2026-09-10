@@ -15,7 +15,8 @@
 // CACHE note).
 import { dumpModel, type CanvasDoc } from "@ensembleworks/canvas-doc";
 import { createTreeService, type TreeService } from "./service.js";
-import { createTreeWriter, type TreeWriter } from "./writes.js";
+import { createTreeWriter } from "./writes.js";
+import type { TreeWriter } from "./write-seam.js";
 import type { TreeRepairTarget } from "./repair.js";
 
 /**

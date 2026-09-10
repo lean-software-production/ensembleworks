@@ -16,7 +16,7 @@ import { AGENT_CHANNEL } from "./wire.js";
 import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
 import type { LocationBook } from "./locations.js";
-import type { TreeWrite, TreeWriteOutcome, TreeWriter } from "./tree/writes.js";
+import type { TreeWrite, TreeWriteOutcome, TreeWriter } from "./tree/write-seam.js";
 import type { TreeService } from "./tree/service.js";
 import { cardTitle } from "./tree/node-reference.js";
 import { launchBrief } from "./tree/launch.js";
@@ -142,6 +142,10 @@ export function createRpcHandlers(
         shapeId,
         holderShapeId: agents.shapeForThread(threadId),
         canvasProjectId,
+        // Read off the DOCUMENT, not off the link store: whether this shape is
+        // a tree node is a fact about what the human clicked, and the room's
+        // document is the only thing that knows it.
+        shapeIsTreeNode: deps.treeService.node(shapeId).ok,
       });
       if (!verdict.ok) throw new Error(verdict.message);
       const link = await agents.record(shapeId, threadId, verdict.status);
@@ -149,7 +153,7 @@ export function createRpcHandlers(
       log.info(
         `shape ${shapeId} attached to thread ${threadId} (${verdict.status})`,
       );
-      return link;
+      return verdict.warning === undefined ? { link } : { link, warning: verdict.warning };
     },
     canvas_tree_add_goal: ({ treeId, title }) =>
       treeWriteResult(deps.treeWriter.addGoal({ treeId, title }), log),

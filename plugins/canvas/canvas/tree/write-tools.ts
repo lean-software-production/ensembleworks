@@ -22,7 +22,7 @@ import type { PluginAgentToolResult } from "@get-bb/plugin-sdk";
 import { NODE_STATES } from "./encoding.js";
 import { ok, outline, refuse } from "./answers.js";
 import type { TreeNodeView, TreeService } from "./service.js";
-import type { TreeWriteOutcome, TreeWriter, TreeWrite } from "./writes.js";
+import type { TreeWriteOutcome, TreeWriter, TreeWrite } from "./write-seam.js";
 
 /** What the write tools need from the server. */
 export interface TreeWriteToolDeps {

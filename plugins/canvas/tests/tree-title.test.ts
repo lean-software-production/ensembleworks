@@ -181,3 +181,68 @@ describe("a note the human blanked out", () => {
     expect(readTitle(doc, "shape:api").trim()).toBe("");
   });
 });
+
+describe("what a node's ONE-LINE label is — one definition, three surfaces", () => {
+  /**
+   * W16. C3 probed this and found THREE answers to one question, on the same
+   * node, in the same document:
+   *
+   *   NodeView.title      -> the whole text, both lines, leading spaces
+   *   digest outline line -> the first line, NOT trimmed ("[wip]   Ship it")
+   *   W8's breadcrumb     -> the first line, trimmed
+   *
+   * Cosmetic on the day it was found, and exactly the drift shape that cost
+   * this run three reworks: two implementations of one rule, each with one
+   * witness. `firstLine` in canvas/shape-text.ts is now the single definition
+   * and all three surfaces route through it — the same move `shapeText` itself
+   * made one level up for "which channel does the text come from".
+   *
+   * THE TITLE IS WRITTEN THROUGH THE HUMAN PATH, so this asserts against text a
+   * person could really produce (a wrapped note, a leading space) rather than
+   * against a fixture only this test can make.
+   */
+  const RAGGED = "  Ship it\nsecond line";
+
+  it("shows the first line, trimmed, in the node view every agent surface reads", () => {
+    const doc = liveDoc();
+    humanTypes(doc, "shape:api", RAGGED);
+    doc.commit();
+    expect(readTitle(doc, "shape:api")).toBe("Ship it");
+  });
+
+  it("shows the same label in the digest outline, with no ragged indent", () => {
+    const doc = liveDoc();
+    humanTypes(doc, "shape:api", RAGGED);
+    doc.commit();
+    const digest = treeServiceForDoc(doc).digest(TREE);
+    if (!digest.ok) return expect.unreachable(digest.detail);
+    const line = digest.value.text.split("\n").find((row: string) => row.includes("shape:api")) ?? "";
+    expect(line).toContain("[wip] Ship it");
+    expect(line).not.toContain("second line");
+  });
+
+  it("shows the same label in W8's breadcrumb", () => {
+    const doc = liveDoc();
+    humanTypes(doc, "shape:api", RAGGED);
+    doc.commit();
+    const reference = nodeReferenceFor(dumpModel(doc), TREE, "shape:api", (id) => doc.getText(id));
+    expect(reference.ok).toBe(true);
+    const text = reference.ok ? reference.text : "";
+    expect(text).toContain("Ship it");
+    expect(text).not.toContain("second line");
+  });
+
+  it("gives all three surfaces the SAME string — the property, not three spellings of it", () => {
+    const doc = liveDoc();
+    humanTypes(doc, "shape:api", RAGGED);
+    doc.commit();
+    const view = readTitle(doc, "shape:api");
+    const digest = treeServiceForDoc(doc).digest(TREE);
+    if (!digest.ok) return expect.unreachable(digest.detail);
+    const outline =
+      digest.value.text.split("\n").find((row: string) => row.includes("shape:api")) ?? "";
+    const reference = nodeReferenceFor(dumpModel(doc), TREE, "shape:api", (id) => doc.getText(id));
+    expect(outline).toContain(view);
+    expect(reference.ok && reference.text).toContain(view);
+  });
+});

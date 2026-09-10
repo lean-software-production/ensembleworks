@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode, RefObject } from "react";
+import { useMemo, type ComponentProps, type ReactNode, type RefObject } from "react";
 import type { EditorState, InputEvent, Intent, ToolContext } from "@ensembleworks/canvas-editor";
 import type { CanvasDocument } from "@ensembleworks/canvas-model";
 import {
@@ -15,6 +15,7 @@ import { AgentLayer } from "../agents-ui.js";
 import type { ThreadOption } from "../thread-picker.js";
 import type { CanvasAgentLink } from "../wire.js";
 import { SpeakerRings } from "../roster-ui.js";
+import { pageScopedDocument } from "./page-scope.js";
 import { QuarantinedEdges } from "./quarantine-layer.js";
 import { TreeGestureLayer } from "./tree-gesture-layer.js";
 import type { ComposerDestination } from "../tree/discuss.js";
@@ -126,6 +127,10 @@ function CanvasSurface({
   discussDestination,
   onDiscuss,
 }: SessionViewProps) {
+  const overlayDoc = useMemo(
+    () => pageScopedDocument(snapshot, editorState.currentPageId),
+    [snapshot, editorState.currentPageId],
+  );
   return (
     <div
       ref={viewportRef}
@@ -153,9 +158,15 @@ function CanvasSurface({
             onEndEdit={handleEndEdit}
           />
         </WorldLayer>
+        {/* THE PAGE-SCOPED document, not the whole one (W16/B2). canvas-react's
+            `Arrows` filters by viewport and not by page, so an arrow on another
+            page is painted over this one whenever their world boxes overlap —
+            which, since pages share one coordinate space, is routine. Its
+            sibling <QuarantinedEdges> below has always taken `currentPageId`;
+            this is the same posture, arrived at three months later. */}
         <Overlay
           editorState={editorState}
-          snapshot={snapshot}
+          snapshot={overlayDoc}
           camera={editorState.camera}
           viewportSize={viewportSize}
           index={toolContext.index()}

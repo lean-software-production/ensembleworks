@@ -43,7 +43,8 @@ import {
 } from "../canvas/tree/encoding.js";
 import { checkTreeInvariants, readTree, type TreeProblem } from "../canvas/tree/model.js";
 import { treeWriterForDoc } from "../canvas/tree/doc-source.js";
-import { REPARENT_REASON, type TreeWriteTarget } from "../canvas/tree/writes.js";
+import { REPARENT_REASON } from "../canvas/tree/reparent.js";
+import type { TreeWriteTarget } from "../canvas/tree/write-seam.js";
 import {
   REPAIRABLE_KINDS,
   applyTreeRepair,

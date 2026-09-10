@@ -17,8 +17,8 @@
 //
 // PURE, and free of the bb SDK and the DOM, so it is importable from the
 // browser bundle and testable without one.
-import type { Shape } from "@ensembleworks/canvas-model";
-import { readTreeNode } from "./encoding.js";
+import type { Page, Shape } from "@ensembleworks/canvas-model";
+import { readTreeNode, readTreePage } from "./encoding.js";
 
 /** The two gestures, in the order a reader meets them. */
 export const TREE_GESTURE_IDS = ["add-goal", "add-blocker"] as const;
@@ -102,6 +102,83 @@ export function blockerArmFor(target: TreeGestureTarget): TreeGestureArm {
     };
   }
   return { label: "Add a blocker…", enabled: true, reason: "" };
+}
+
+/**
+ * What the tree-mark of the page you are looking at is, as much of it as this
+ * decision needs.
+ *
+ * A THREE-STATE FACT, not a boolean, because `addGoal` treats the three
+ * differently and a boolean would collapse the two that matter: an ABSENT mark
+ * is written by the gesture (that is how a tree starts), an INVALID one is
+ * REFUSED (`broken-tree` — restamping would destroy the evidence of how it
+ * broke, which is W11's to look at). Structurally `encoding.ts`'s
+ * `readTreePage` result, narrowed to the two fields, so this module stays a
+ * pure rule over values a caller already has.
+ */
+export interface TreePageMarkState {
+  readonly status: "ok" | "absent" | "invalid";
+  /** Why the mark could not be read. Present only on `invalid`. */
+  readonly error?: string;
+}
+
+/**
+ * A page's mark, as `goalArmFor` needs it.
+ *
+ * ONE TRANSLATION, HERE. The component could call `readTreePage` itself, but
+ * then the mapping from a read verdict to a button state would live in a .tsx
+ * this project cannot test (no jsdom), which is the exact failure the whole
+ * `gestures.ts` module exists to prevent. The `error` is carried through rather
+ * than replaced with a house phrase: it names WHICH key is malformed, and a
+ * human who has to repair a page mark needs that, not "something is wrong".
+ */
+export function markStateOf(page: Page): TreePageMarkState {
+  const read = readTreePage(page);
+  return read.status === "invalid"
+    ? { status: "invalid", error: read.error }
+    : { status: read.status };
+}
+
+/**
+ * The "add a goal" arm for the page on screen.
+ *
+ * THE BUTTON USED TO BE UNCONDITIONAL AND ITS LABEL USED TO BE FALSE (C3's B2,
+ * from W14's `03-otherpage-recheck.png`). `TreeGestureLayer` rendered "Add a
+ * goal" in the corner of every page of every room the plugin serves, and on a
+ * page that was not a tree, pressing it MARKED the page as one — a conversion
+ * the label never mentioned. That is the defect: not that the control exists,
+ * but that on most pages it did something other than what it said.
+ *
+ * IT IS NOT HIDDEN ON A NON-TREE PAGE, and that is a deliberate refusal of the
+ * obvious fix. This gesture is the ONLY door to a FIRST tree in the whole
+ * feature — there is no `canvas_tree_add_goal` agent tool, `bb canvas tree` has
+ * no create verb, and every other write needs a node that is already on a
+ * marked page. Gate it on `status === "ok"` and no tree can ever be started
+ * from a cold room: the only pages that would offer the button are the ones
+ * that are already trees. So the label states the consequence instead, which is
+ * C3's own alternative ("an explicit 'start a tree here' intent that says so").
+ *
+ * INVALID IS GREYED WITH THE REASON, matching `blockerArmFor` and agent-arms.ts:
+ * `addGoal` refuses a malformed mark outright, so an enabled button there is one
+ * that can only ever produce a refusal toast.
+ */
+export function goalArmFor(mark: TreePageMarkState): TreeGestureArm {
+  if (mark.status === "invalid") {
+    return {
+      label: "Add a goal",
+      enabled: false,
+      reason: `This page carries a malformed tree mark (${
+        mark.error ?? "no detail"
+      }), so a goal cannot be added to it until it is repaired.`,
+    };
+  }
+  if (mark.status === "absent") {
+    // The whole point of the sentence: pressing this turns the page into a
+    // tree. Said in the LABEL rather than in a tooltip, because the label is
+    // the only part a human reads before clicking.
+    return { label: "Start a tree here", enabled: true, reason: "" };
+  }
+  return { label: "Add a goal", enabled: true, reason: "" };
 }
 
 /** A typed title, judged before it is sent. */

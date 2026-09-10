@@ -52,7 +52,7 @@ import {
   createTreeQuarantineTools,
   type TreeQuarantineToolDeps,
 } from "./quarantine-tools.js";
-import type { TreeWriter } from "./writes.js";
+import type { TreeWriter } from "./write-seam.js";
 
 /** Re-exported at its original home: W6's suite and any later reader looks for
  * the answer ceiling here, and answers.ts is where it now lives. */
@@ -120,7 +120,16 @@ export const TREE_TOOL_NAMES = [
   ...TREE_WRITE_TOOL_NAMES,
   // W13's recovery pair. In the SAME scope as the writes, deliberately: the
   // move that quarantines a human's edge is a write tool, so a thread that can
-  // displace a relationship must be able to see and undo what it displaced.
+  // displace a relationship must be able to SEE what it displaced.
+  //
+  // SEE, NOT UNDO — the original wording here claimed both and C3 (B3) probed
+  // the second half false. `canvas_tree_restore_edge` cannot put back an edge a
+  // REPARENT displaced, ever: the move leaves a live parent edge, so the restore
+  // would project `multiple-parents` and is refused. The pair still belongs in
+  // this scope, on the narrower and true ground that `repair`-reason
+  // quarantines ARE restorable and that a thread which changed the tree must be
+  // able to read what its change took out of it. Undoing a move is another
+  // `canvas_tree_reparent`, which is what the move's own answer now says.
   ...TREE_QUARANTINE_TOOL_NAMES,
 ] as const;
 

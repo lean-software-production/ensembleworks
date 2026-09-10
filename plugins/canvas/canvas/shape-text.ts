@@ -14,12 +14,24 @@
 //
 // THE RULE: live text wins whenever it is non-empty; otherwise `richText`.
 //
-// It is not an arbitrary tie-break — it is the order canvas-react's `labelOf`
-// already resolves a label in, which is to say it is WHAT THE HUMAN SEES ON
-// SCREEN. Any reader that picked the other order would answer a question
-// about a canvas the human is not looking at, which is exactly the W14 F1
-// defect: the tree read spine took titles from `richText` alone and reported
-// `(untitled)` for text a human had plainly typed.
+// It is not an arbitrary tie-break — it is canvas-react's `labelOf` order for
+// a text-capable shape, MINUS the frame's `name` field and the kind-string
+// fallback, which is to say it is WHAT THE HUMAN SEES ON SCREEN. Any reader
+// that picked the other order would answer a question about a canvas the human
+// is not looking at, which is exactly the W14 F1 defect: the tree read spine
+// took titles from `richText` alone and reported `(untitled)` for text a human
+// had plainly typed.
+//
+// W16 CORRECTION — W15 wrote "`labelOf`'s exact order" here and C3 checked it.
+// It is not exact. `labelOf` (canvas-react/src/shapes/label.ts) resolves
+// live text -> `props.name` -> `props.richText` -> `shape.kind`; this resolves
+// live text -> `props.richText` -> `""`. Two steps differ, and both differences
+// are unreachable for a tree node rather than accidental: `encoding.ts` rejects
+// any shape whose kind is not `note`, so `props.name` (the FRAME's field) can
+// never apply, and falling back to the kind string would tell an agent a node
+// is titled "note", which is worse than telling it the node is untitled. The
+// behaviour is right; the sentence was not, and "exact order" is the kind of
+// claim the next reader builds on.
 //
 // ONE RULE, ONE PLACE. `canvas/agents-view.ts`'s `promptTextFor` had this
 // resolution open-coded (with its own re-implemented richText flattener); it
@@ -64,4 +76,34 @@ export function shapeText(shape: Shape | undefined, live: string): string {
   // "this note is empty").
   if (live.length > 0) return live;
   return shape === undefined ? "" : plainText(shape);
+}
+
+/**
+ * A node's ONE-LINE LABEL: the first line of what it says, trimmed.
+ *
+ * ONE DEFINITION, because there were three (C3's §5, probed on a node whose
+ * text a human typed as `"  Ship it\nsecond line"`):
+ *
+ *   `service.ts` viewOf   -> the WHOLE text, both lines, leading spaces
+ *   `service.ts` lineOf   -> the first line, NOT trimmed -> `[wip]   Ship it`
+ *   `discuss.ts` stepTitle -> the first line, trimmed
+ *
+ * Nothing about a tree was WRONG because of it — a newline in a title is
+ * unusual and the damage was a ragged indent — but it is exactly the drift that
+ * cost this run three reworks, and the tell was already in W15's evidence: the
+ * two first-line implementations were each killed by exactly one mutation,
+ * because they were two implementations of one rule with one witness apiece.
+ *
+ * TRIMMED IS THE RULE, and it is the trimming half that fixes the visible
+ * defect: the digest's indent is structural (`"  ".repeat(depth)`), so a
+ * title's own leading spaces made the outline's tree shape read wrong.
+ *
+ * NOT USED BY THE WRITE PATH. `writes.ts` verifies an accepted write by reading
+ * the text back with `shapeText`, not with this: "did the document take the
+ * bytes I sent" and "what is this node called" are different questions, and a
+ * read-back that trimmed would report success for a write that landed
+ * differently from how it was made.
+ */
+export function firstLine(shape: Shape | undefined, live: string): string {
+  return (shapeText(shape, live).split("\n")[0] ?? "").trim();
 }

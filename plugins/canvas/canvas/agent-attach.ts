@@ -33,8 +33,40 @@ export interface AttachProbe {
 export type AttachRefusal = "gone" | "archived" | "other-project" | "other-shape";
 
 export type AttachVerdict =
-  | { readonly ok: true; readonly status: CanvasAgentStatus }
+  | {
+      readonly ok: true;
+      readonly status: CanvasAgentStatus;
+      /** A sentence the user must SEE even though the attach succeeded. Absent
+       * on the ordinary path — see `TREE_ATTACH_WARNING`. */
+      readonly warning?: string;
+    }
   | { readonly ok: false; readonly reason: AttachRefusal; readonly message: string };
+
+/**
+ * W16/F4 — what an attach to a TREE NODE has to say out loud.
+ *
+ * THE PROPERTY, which is a fact about bb and not about this plugin: a thread's
+ * agent tools are decided ONCE, when its runtime is constructed. W12 pinned
+ * that from the other side — `canvas_tree_launch` writes the shape->thread link
+ * BEFORE `threads.spawn`, precisely so the tree tools exist from turn 1.
+ * Attaching inverts the order: the runtime is already up, so the link arrives
+ * too late to change its tool set, and the thread gets ZERO `canvas_tree_*`
+ * tools and no orientation brief. Not for a turn — until the runtime is
+ * released. W14 watched all thirteen appear after `bb thread stop`.
+ *
+ * NOT A REFUSAL. The attach is a legitimate thing to want (the badge, the
+ * status, the link all work), and refusing it would take away a capability to
+ * avoid explaining one. But it is the most confusing failure this feature can
+ * produce — an agent that has been told it is working on a tree and cannot see
+ * one — so it is said at the moment the human causes it.
+ *
+ * NAMES THE DOOR THAT WORKS. A warning that only describes the problem leaves
+ * the fix to be guessed, and the fix here is not guessable: it is either a
+ * restart of the thread or W12's "Work on this node", and nothing on screen
+ * connects either to the symptom.
+ */
+export const TREE_ATTACH_WARNING =
+  "This thread is now linked to a tree node, but it will not have the canvas_tree_* tools or the tree brief until its runtime restarts — bb builds a thread's tool set when the thread starts, and this link arrived after that. Restart the thread, or use “Work on this node” to launch one that has them from its first turn.";
 
 /**
  * bb's five runtime states, mapped onto the badge's three.
@@ -138,6 +170,9 @@ export function attachVerdictFor(input: {
   readonly holderShapeId: string | null;
   /** The project the canvas's agents live in. */
   readonly canvasProjectId: string;
+  /** Is the shape being bound a node of a discovery tree? Decides the WARNING,
+   * never the verdict — see `TREE_ATTACH_WARNING`. */
+  readonly shapeIsTreeNode?: boolean;
 }): AttachVerdict {
   const { thread, shapeId, holderShapeId, canvasProjectId } = input;
   if (thread.deletedAt !== null) {
@@ -168,5 +203,10 @@ export function attachVerdictFor(input: {
       message: `Thread ${thread.id} is already attached to ${holderShapeId}. Unlink it there first — one thread can only badge one shape.`,
     };
   }
-  return { ok: true, status: attachStatusFor(thread.status) };
+  // AFTER every refusal, so a warning can never be mistaken for one: a thread
+  // that may not be attached at all has nothing to be warned about.
+  const status = attachStatusFor(thread.status);
+  return input.shapeIsTreeNode === true
+    ? { ok: true, status, warning: TREE_ATTACH_WARNING }
+    : { ok: true, status };
 }

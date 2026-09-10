@@ -45,7 +45,7 @@
 // and canvas/tree/gestures.ts already follows.
 import type { PluginComposerScope } from "@get-bb/plugin-sdk";
 import type { CanvasDocument } from "@ensembleworks/canvas-model";
-import { shapeText, type LiveText } from "../shape-text.js";
+import { firstLine, type LiveText } from "../shape-text.js";
 import { titleOf } from "./answers.js";
 import type { TreeGestureTarget } from "./gestures.js";
 import { pathToRoot, readTree, type TreeNode } from "./model.js";
@@ -210,7 +210,7 @@ export function nodeReferenceFor(
 
 /** One node's label: its first line, bounded, never blank. */
 function stepTitle(node: TreeNode, text: LiveText): string {
-  const line = (shapeText(node.shape, text(node.id)).split("\n")[0] ?? "").trim();
+  const line = firstLine(node.shape, text(node.id));
   const title = titleOf({ title: line });
   return title.length <= MAX_STEP_TITLE
     ? title

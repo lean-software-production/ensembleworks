@@ -19,7 +19,8 @@ import {
   type NodeState,
 } from "../../canvas/tree/encoding.js";
 import { createTreeService, type TreeService } from "../../canvas/tree/service.js";
-import { createTreeWriter, type TreeWriter } from "../../canvas/tree/writes.js";
+import { createTreeWriter } from "../../canvas/tree/writes.js";
+import type { TreeWriter } from "../../canvas/tree/write-seam.js";
 import type { TreeRepairTarget } from "../../canvas/tree/repair.js";
 
 export const TREE = "page:tree";

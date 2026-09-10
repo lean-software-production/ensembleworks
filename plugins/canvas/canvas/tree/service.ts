@@ -37,7 +37,7 @@
 // wiring that turns `room.peer.doc` into that thunk is `doc-source.ts`, one
 // function, so this module stays testable against a fixture document.
 import type { CanvasDocument } from "@ensembleworks/canvas-model";
-import { NO_LIVE_TEXT, shapeText, type LiveText } from "../shape-text.js";
+import { NO_LIVE_TEXT, firstLine, type LiveText } from "../shape-text.js";
 import type { NodeState } from "./encoding.js";
 import {
   checkTreeInvariants,
@@ -270,7 +270,9 @@ function viewOf(tree: Tree, node: TreeNode, text: LiveText): TreeNodeView {
   return {
     id: node.id,
     treeId: tree.treeId,
-    title: shapeText(node.shape, text(node.id)),
+    // The node's one-line label, from the ONE definition of it (W16). It used
+    // to be the whole text here and the first line in two other surfaces.
+    title: firstLine(node.shape, text(node.id)),
     state: node.meta.state,
     approached: node.meta.approached,
     context: node.meta.context,
@@ -508,7 +510,7 @@ function outlineOf(tree: Tree, text: LiveText): readonly string[] {
  * agent needs to ask the next question with, and a title is what a human
  * recognises. Both, every line, so neither reader has to cross-reference. */
 function lineOf(node: TreeNode, depth: number, tree: Tree, text: LiveText): string {
-  const title = shapeText(node.shape, text(node.id)).split("\n")[0] ?? "";
+  const title = firstLine(node.shape, text(node.id));
   const marks = [
     node.meta.approached ? "approached" : "",
     isReadyNode(tree, node) ? "ready" : "",

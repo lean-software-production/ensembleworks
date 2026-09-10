@@ -64,7 +64,7 @@ import {
   type TreeProblem,
   type TreeProblemKind,
 } from "./model.js";
-import type { TreeWrite, TreeWriteTarget } from "./writes.js";
+import { problemKey, problemsOf, type TreeWrite, type TreeWriteTarget } from "./write-seam.js";
 
 // ---------------------------------------------------------------------------
 // The seam
@@ -201,13 +201,6 @@ export function treeRepairPlan(doc: CanvasDocument, treeId: string): TreeRepairP
     })),
   };
 }
-
-/** Structural and graph problems together — what "is this tree broken" means.
- * The same pair `writes.problemsOf` asks; both read W1, neither re-derives. */
-const problemsOf = (tree: Tree): readonly TreeProblem[] => [
-  ...tree.problems,
-  ...checkTreeInvariants(tree),
-];
 
 /** Tree-marked arrows the graph never took in (dangling, half-bound), so the
  * pass bound covers the edges that are problems rather than edges. */
@@ -623,8 +616,3 @@ export function restoreQuarantinedEdge(
   return { ok: true, value: { edgeId, treeId } };
 }
 
-/** Identity of a problem, for "was this here before". The same key
- * `writes.problemKey` uses; both exist because neither module may import the
- * other's private helper, and the string is one line. */
-const problemKey = (problem: TreeProblem): string =>
-  `${problem.kind}|${problem.subjects.join(",")}`;

@@ -44,7 +44,7 @@ import { titleOf, nodeDetail } from "./answers.js";
 import type { QuarantinedEdge } from "./repair.js";
 import type { SubtreeView, TreeNodeView, TreeService } from "./service.js";
 import type { TreeProblem } from "./model.js";
-import type { TreeWrite } from "./writes.js";
+import type { TreeWrite } from "./write-seam.js";
 
 export const TREE_CLI_USAGE = [
   "Usage:",

@@ -105,8 +105,14 @@ export function useAgentSync(rpcRef: { current: RpcClient }) {
   const attachThread = useCallback((shapeId: string, threadId: string) => {
     rpcRef.current
       .call("canvas_attach_thread", { shapeId, threadId })
-      .then((link: CanvasAgentLink) => {
+      .then(({ link, warning }: { link: CanvasAgentLink; warning?: string }) => {
         setAgentLinks((previous) => ({ ...previous, [link.shapeId]: link }));
+        // W16/F4: the attach SUCCEEDED and still has something the user has to
+        // know — a thread attached to a tree node has no tree tools until its
+        // runtime restarts. A warning toast rather than an error one, because
+        // nothing failed; `duration` is left to sonner's default for a warning,
+        // which is longer than an info's.
+        if (warning !== undefined) toast.warning(warning);
       })
       .catch((cause: unknown) => {
         // A toast, for the same reason a refused spawn gets one: the canvas

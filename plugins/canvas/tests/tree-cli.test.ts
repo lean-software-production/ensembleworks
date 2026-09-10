@@ -26,7 +26,7 @@ import {
 } from "../canvas/tree/cli-view.js";
 import type { QuarantinedEdge } from "../canvas/tree/repair.js";
 import { createTreeService } from "../canvas/tree/service.js";
-import type { TreeWrite } from "../canvas/tree/writes.js";
+import type { TreeWrite } from "../canvas/tree/write-seam.js";
 import { EXAMPLE, TREE, docOf, type Spec } from "./lib/tree-fixture.js";
 
 /**
