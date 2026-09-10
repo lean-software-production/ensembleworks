@@ -66,6 +66,14 @@ export function RoomSwitcher() {
 	const roomId = getRoomId()
 	const [open, setOpen] = useState(false)
 	const [state, setState] = useState<LoadState>({ status: 'loading' })
+	// Viewport-anchored popover position, captured from the trigger's rect at
+	// open time. position:fixed escapes the panel root's overflow clipping —
+	// the panel is overflowY:auto, which computes overflow-x to auto as well,
+	// and can be dragged down to MIN_WIDTH (panelLayout.ts), narrower than the
+	// room list. It also lifts the popover out of the header's stacking
+	// context, above the participant tiles rendered below it. Same reasoning
+	// and the same shape as the device picker's list above.
+	const [anchor, setAnchor] = useState<{ top: number; left: number } | null>(null)
 	const rootRef = useRef<HTMLDivElement | null>(null)
 	const abortRef = useRef<AbortController | null>(null)
 
@@ -119,12 +127,18 @@ export function RoomSwitcher() {
 		}
 	}, [open])
 
+	// The next state is computed outside setOpen: a state updater must be pure,
+	// and StrictMode double-invokes it in dev — starting the fetch in there
+	// fired two /api/rooms requests per open.
 	const toggle = useCallback(() => {
-		setOpen((wasOpen) => {
-			if (!wasOpen) load()
-			return !wasOpen
-		})
-	}, [load])
+		const next = !open
+		if (next) {
+			const rect = rootRef.current?.getBoundingClientRect()
+			if (rect) setAnchor({ top: rect.bottom + 6, left: rect.left })
+			load()
+		}
+		setOpen(next)
+	}, [open, load])
 
 	function onPick(row: RoomRow) {
 		// The current room is inert: clicking it only closes the popover, so a
@@ -148,13 +162,23 @@ export function RoomSwitcher() {
 				{roomId}
 				<span aria-hidden="true">▾</span>
 			</button>
-			{open && (
+			{open && anchor && (
 				<div
 					data-testid="ew-room-switcher-menu"
 					role="menu"
-					// Anchored below the trigger. popoverBoxStyle only — the bar's
-					// popoverPositionStyle is dock-edge logic and does not apply.
-					style={{ ...popoverBoxStyle, top: 'calc(100% + 6px)', left: 0, minWidth: 180 }}
+					// popoverBoxStyle supplies the shared chrome only; its
+					// position:absolute is overridden here (see `anchor` above), and
+					// the bar's popoverPositionStyle is dock-edge logic that does
+					// not apply to a panel-anchored popover.
+					style={{
+						...popoverBoxStyle,
+						position: 'fixed',
+						top: anchor.top,
+						left: anchor.left,
+						zIndex: 10,
+						minWidth: 180,
+						maxWidth: 'min(300px, 90vw)',
+					}}
 				>
 					{state.status === 'loading' && (
 						<span style={{ ...lineStyle, color: wm.inkSubtle }}>loading…</span>
