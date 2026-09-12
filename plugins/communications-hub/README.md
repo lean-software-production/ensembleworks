@@ -16,8 +16,7 @@ A **conversation** is the context a thread attaches to. A **meeting** is one kin
 
 ## Install for local development
 
-Requires BB >=0.42 with the host-compatible Plugin SDK pin (validated here at
-0.4.84), Node.js 22+, and npm.
+Requires BB >=0.42 with Plugin SDK 0.4.47, Node.js 22+, and npm.
 
 ```sh
 npm ci --include=dev
@@ -118,11 +117,7 @@ bb plugin types --check
 bb plugin build
 ```
 
-## Historical source validation
-
-The following records validation in the original repository before the monorepo
-import. For the current SDK 0.4.84 checks and marketplace demonstration, see
-[the monorepo demo guide](../../docs/communications-marketplace-demo.md).
+## Validation performed
 
 Verified on 2026-09-11 against BB with Plugin SDK 0.4.47 on this machine:
 
@@ -148,12 +143,3 @@ Further live runs on 2026-09-11 confirmed capture does not require the app owner
 ## Provenance
 
 The first build of this plugin was lost when its BB workspace was destroyed. This tree was reconstructed from agent transcripts and re-verified; see the recovery note in [the implementation plan](docs/superpowers/plans/2026-09-10-communications-hub.md).
-
-## EnsembleWorks import
-
-This copy is the file-import demonstration for the EnsembleWorks plugin
-collection. It preserves the isolated npm package and lockfile from the source
-checkout; import provenance is recorded in [docs/provenance.md](docs/provenance.md).
-The root guide covers the separate-instance marketplace preview and the later
-stable-range switch. This PR does not perform an active-instance install or
-repeat live Zoom verification.

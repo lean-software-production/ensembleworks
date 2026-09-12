@@ -7,7 +7,7 @@ import {
   type PluginRpcTestHandlers,
 } from "@get-bb/plugin-sdk/testing/app";
 import { rpcContract } from "../src/contracts";
-import type { Conversation, TranscriptSegment } from "../src/domain";
+import type { Conversation, Registrant, Room, TranscriptSegment } from "../src/domain";
 
 const conversation: Conversation = {
   id: "conversation-1",
@@ -20,6 +20,7 @@ const conversation: Conversation = {
   captureState: "idle",
   captureDetail: null,
   captureEndedAt: null,
+  roomId: null,
   interruptionCount: 0,
   segmentCount: 2,
 };
@@ -69,10 +70,40 @@ const interleavedSegments: TranscriptSegment[] = [
   },
 ];
 
+const room: Room = {
+  id: "room-1",
+  name: "Team standup",
+  sourceId: "zoom",
+  externalId: "88800011122",
+  joinUrl: "https://zoom.us/j/88800011122?pwd=token",
+  hostUser: "operator@example.com",
+  createdAt: 1_700_000_000_000,
+  archivedAt: null,
+  expiresAt: 1_855_000_000_000,
+  sourceDeletedAt: null,
+};
+
+const registrant: Registrant = {
+  id: "registrant-1",
+  roomId: "room-1",
+  name: "David Laing",
+  email: "david@example.com",
+  externalId: "Zw5D8sBxQ1KqMnEAS2NuiQ",
+  joinUrl: "https://zoom.us/w/88800011122?tk=token",
+  createdAt: 1_700_000_050_000,
+};
+
 function handlers(
   overrides: Partial<PluginRpcTestHandlers<typeof rpcContract>> = {},
 ): PluginRpcTestHandlers<typeof rpcContract> {
   return {
+    "rooms.list": () => ({ rooms: [room] }),
+    "rooms.create": ({ name }) => ({ ...room, id: "room-2", name }),
+    "rooms.archive": () => ({ ...room, archivedAt: 1_700_000_100_000 }),
+    "rooms.renew": () => ({ ...room, expiresAt: 1_960_000_000_000 }),
+    "rooms.delete": () => ({ ...room, archivedAt: 1_700_000_200_000, sourceDeletedAt: 1_700_000_200_000 }),
+    "registrants.list": () => ({ registrants: [registrant] }),
+    "registrants.add": ({ name, email }) => ({ ...registrant, id: "registrant-2", name, email }),
     "conversations.list": () => ({
       conversations: [conversation],
       hasMore: false,
@@ -93,21 +124,29 @@ function handlers(
       hasMore: false,
       nextCursor: 8,
     }),
-    "attachments.get": () => ({ attachment: null, conversation: null }),
+    "attachments.get": () => ({ attachment: null, conversation: null, room: null }),
     "attachments.set": ({ threadId, conversationId }) => ({
       threadId,
+      roomId: null,
       conversationId,
+      cursor: 0,
+    }),
+    "attachments.setRoom": ({ threadId, roomId }) => ({
+      threadId,
+      roomId,
+      conversationId: null,
       cursor: 0,
     }),
     "attachments.detach": () => ({ ok: true }),
     "attachments.acknowledge": ({ threadId, conversationId, cursor }) => ({
       threadId,
+      roomId: null,
       conversationId,
       cursor,
     }),
     "capture.stop": () => ({ ...conversation, captureState: "stopped" }),
     "sources.status": () => ({
-      zoom: { configured: true, enabled: false },
+      zoom: { configured: true, enabled: false, canCreateRooms: false },
       webhookPath: "/plugins/communications-hub/webhooks/zoom",
       importReady: true,
     }),
@@ -119,6 +158,7 @@ afterEach(() => {
   cleanup();
   vi.useRealTimers();
 });
+
 describe("Communications Hub app", () => {
   it("registers the Communications navigation and thread surfaces", async () => {
     const app = await loadPluginApp(() => import("../app"));
@@ -283,8 +323,8 @@ describe("Communications Hub app", () => {
       slot.inspection.rpcCalls.some(({ method }) => method === "attachments.acknowledge"),
     ).toBe(false);
 
-    fireEvent.change(slot.getByLabelText("Choose conversation"), {
-      target: { value: "conversation-1" },
+    fireEvent.change(slot.getByLabelText("Choose a room or conversation"), {
+      target: { value: "conversation:conversation-1" },
     });
     fireEvent.click(slot.getByRole("button", { name: "Attach conversation" }));
     await slot.findByText("Ship the transcript reader.");
@@ -300,6 +340,49 @@ describe("Communications Hub app", () => {
     ).toContain("Reading and search do not acknowledge passages automatically.");
   });
 
+  it("issues a personal link for a registered person", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(app.navPanels[0]!, { subPath: "" }, { rpc: handlers() });
+
+    await slot.findByText("Team standup");
+    fireEvent.change(await slot.findByLabelText("Name for Team standup"), { target: { value: "Ada Lovelace" } });
+    fireEvent.change(slot.getByLabelText("Email for Team standup"), { target: { value: "ada@example.com" } });
+    fireEvent.click(slot.getByRole("button", { name: "Add person" }));
+
+    await waitFor(() =>
+      expect(slot.inspection.rpcCalls).toContainEqual({
+        method: "registrants.add",
+        input: { roomId: "room-1", name: "Ada Lovelace", email: "ada@example.com" },
+      }),
+    );
+  });
+
+  it("follows a room, and says so before anyone has met in it", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.threadPanelActions[0]!,
+      { threadId: "thread-a", params: null },
+      { rpc: handlers() },
+    );
+
+    await slot.findByRole("option", { name: "Team standup" });
+    fireEvent.change(slot.getByLabelText("Choose a room or conversation"), {
+      target: { value: "room:room-1" },
+    });
+    // The button names the consequence: a room target follows, a conversation target does not.
+    fireEvent.click(slot.getByRole("button", { name: "Follow room" }));
+
+    await waitFor(() =>
+      expect(slot.inspection.rpcCalls).toContainEqual({
+        method: "attachments.setRoom",
+        input: { threadId: "thread-a", roomId: "room-1" },
+      }),
+    );
+    // A room nobody has met in resolves to no conversation, which is a normal state and not
+    // an error: the thread is waiting for the first sitting.
+    await slot.findByText(/Nobody has met in it yet/);
+  });
+
   it("shows per-thread attachment state in the header and opens the panel", async () => {
     const app = await loadPluginApp(() => import("../app"));
     const slot = renderSlot(
@@ -310,10 +393,12 @@ describe("Communications Hub app", () => {
           "attachments.get": () => ({
             attachment: {
               threadId: "thread-a",
+              roomId: null,
               conversationId: conversation.id,
               cursor: 7,
             },
             conversation,
+            room: null,
           }),
         }),
         openThreadPanel: () => true,
@@ -338,8 +423,9 @@ describe("Communications Hub app", () => {
       {
         rpc: handlers({
           "attachments.get": () => ({
-            attachment: { threadId: "thread-a", conversationId: conversation.id, cursor: 0 },
+            attachment: { threadId: "thread-a", roomId: null, conversationId: conversation.id, cursor: 0 },
             conversation,
+            room: null,
           }),
           "transcripts.read": () => ({
             conversation,

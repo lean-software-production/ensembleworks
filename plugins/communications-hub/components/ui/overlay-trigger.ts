@@ -37,6 +37,7 @@ function isKeyboardInputElement(element: Element): element is HTMLElement {
     element.closest("[contenteditable='true']") !== null
   );
 }
+
 export function blurActiveKeyboardInputWithin(container: Element | null): void {
   if (typeof document === "undefined") return;
 

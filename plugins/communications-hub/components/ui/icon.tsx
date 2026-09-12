@@ -173,6 +173,7 @@ export function preloadExtendedIcons(): Promise<void> {
   );
   return extendedIconsLoad;
 }
+
 const EMPTY_ICON: IconSvgElement = [];
 
 export interface IconProps {

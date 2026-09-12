@@ -7,7 +7,7 @@ import {
   type PluginNavPanelProps, type PluginThreadHeaderActionProps, type PluginThreadPanelProps,
 } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "./src/contracts";
-import type { Conversation, ThreadAttachment, TranscriptSegment } from "./src/domain";
+import type { Conversation, Registrant, Room, ThreadAttachment, TranscriptSegment } from "./src/domain";
 import { groupSegments, type SpeakerBlock } from "./src/grouping";
 import type { ImportFormat } from "./src/adapters/import";
 import { Button } from "./components/ui/button";
@@ -395,7 +395,7 @@ function SourceStatus() {
   const rpc = useRpc<typeof rpcContract>();
   const connection = useRealtimeConnectionState();
   const [status, setStatus] = useState<{
-    zoom: { configured: boolean; enabled: boolean }; webhookPath: string; importReady: boolean;
+    zoom: { configured: boolean; enabled: boolean; canCreateRooms: boolean }; webhookPath: string; importReady: boolean;
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const refetch = useCallback(() => {
@@ -414,6 +414,7 @@ function SourceStatus() {
             <span className="rounded-full bg-secondary px-2 py-1">{status.importReady ? "Import ready" : "Import unavailable"}</span>
             <span className="rounded-full bg-secondary px-2 py-1">{status.zoom.configured ? "Zoom configured" : "Zoom not configured"}</span>
             <span className="rounded-full bg-secondary px-2 py-1">{status.zoom.enabled ? "Zoom enabled" : "Zoom disabled"}</span>
+            <span className="rounded-full bg-secondary px-2 py-1">{status.zoom.canCreateRooms ? "Room creation ready" : "Room creation unconfigured"}</span>
           </div>
           <details className="mt-3 text-sm">
             <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Zoom setup details</summary>
@@ -441,6 +442,167 @@ function ConversationList({ conversations, open }: { conversations: Conversation
         </button></li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * Create and list reusable meeting rooms.
+ *
+ * Deliberately a page action rather than an agent tool. Creating a meeting spends money and
+ * produces a real invitation, and transcript text sits in agent context, so a sentence spoken
+ * in a meeting must never be able to reach this.
+ */
+/** People registered for one room, and the control that issues a personal link. */
+function RoomRegistrants({ room }: { room: Room }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [registrants, setRegistrants] = useState<Registrant[] | null>(null);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  const refetch = useCallback(() => {
+    rpc.call("registrants.list", { roomId: room.id }).then(
+      (value) => { setRegistrants(value.registrants); setError(null); },
+      (cause) => setError(errorText(cause)),
+    );
+  }, [rpc, room.id]);
+  useEffect(refetch, [refetch]);
+
+  const add = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!name.trim() || !email.trim() || pending) return;
+    setPending(true);
+    try {
+      await rpc.call("registrants.add", { roomId: room.id, name: name.trim(), email: email.trim() });
+      setName(""); setEmail(""); setError(null); refetch();
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setPending(false); }
+  };
+
+  return (
+    <div className="mt-2 space-y-2 border-t border-border pt-2">
+      <p className="text-xs text-muted-foreground">
+        Each person gets their own link. Whoever opens it joins under the name below, signed in
+        to Zoom or not, and the plain room link asks anyone else to register first.
+      </p>
+      <form className="flex flex-wrap gap-2" onSubmit={add}>
+        <Input aria-label={`Name for ${room.name}`} placeholder="David Laing" value={name} onChange={(event) => setName(event.target.value)} className="max-w-[12rem]" />
+        <Input aria-label={`Email for ${room.name}`} placeholder="david@example.com" value={email} onChange={(event) => setEmail(event.target.value)} className="max-w-[14rem]" />
+        <Button type="submit" size="sm" variant="outline" disabled={pending || !name.trim() || !email.trim()}>{pending ? "Registering…" : "Add person"}</Button>
+      </form>
+      <ErrorMessage error={error} />
+      {registrants === null ? null : registrants.length === 0 ? (
+        <p className="text-xs text-muted-foreground">Nobody registered yet.</p>
+      ) : (
+        <ul className="space-y-1">
+          {registrants.map((person) => (
+            <li key={person.id} className="flex flex-wrap items-center justify-between gap-2 text-sm">
+              <span className="truncate">{person.name} <span className="text-xs text-muted-foreground">{person.email}</span></span>
+              <Button type="button" size="sm" variant="ghost" onClick={async () => {
+                try { await navigator.clipboard.writeText(person.joinUrl); setCopied(person.id); }
+                catch (cause) { setError(errorText(cause)); }
+              }}>{copied === person.id ? "Copied" : "Copy personal link"}</Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** Warn before a room stops working, rather than on the morning it does. */
+function RoomExpiry({ expiresAt }: { expiresAt: number | null }) {
+  if (expiresAt === null) return null;
+  const days = Math.round((expiresAt - Date.now()) / 86_400_000);
+  if (days > 60) return null;
+  return <span className="text-xs text-amber-600">
+    {days <= 0 ? "This room has expired." : `Expires in ${days} day${days === 1 ? "" : "s"}.`}
+  </span>;
+}
+
+function Rooms() {
+  const rpc = useRpc<typeof rpcContract>();
+  const [rooms, setRooms] = useState<Room[] | null>(null);
+  const [name, setName] = useState("");
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState<string | null>(null);
+  // Deleting kills every link into a room, so it asks once rather than acting on one click.
+  const [confirming, setConfirming] = useState<string | null>(null);
+  const refetch = useCallback(() => {
+    rpc.call("rooms.list", {}).then(
+      (value) => { setRooms(value.rooms); setError(null); },
+      (cause) => setError(errorText(cause)),
+    );
+  }, [rpc]);
+  useEffect(refetch, [refetch]);
+  useChangedSignal(refetch);
+
+  const create = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const next = name.trim();
+    if (!next || pending) return;
+    setPending(true);
+    try {
+      await rpc.call("rooms.create", { name: next });
+      setName(""); setError(null); refetch();
+    } catch (cause) { setError(errorText(cause)); }
+    finally { setPending(false); }
+  };
+
+  return (
+    <section aria-labelledby="rooms-heading" className="space-y-3 rounded-lg border border-border bg-card p-4">
+      <h2 id="rooms-heading" className="font-semibold">Meeting rooms</h2>
+      <p className="text-xs text-muted-foreground">
+        A room is one reusable Zoom meeting. Its join URL never changes, and every sitting in it
+        becomes its own conversation.
+      </p>
+      <form className="flex flex-wrap gap-2" onSubmit={create}>
+        <Input aria-label="Room name" placeholder="Team standup" value={name} onChange={(event) => setName(event.target.value)} className="max-w-xs" />
+        <Button type="submit" size="sm" disabled={pending || !name.trim()}>{pending ? "Creating…" : "Create room"}</Button>
+      </form>
+      <ErrorMessage error={error} />
+      {rooms === null ? <StatusBox>Loading rooms…</StatusBox> : rooms.length === 0 ? (
+        <StatusBox>No rooms yet. Creating one schedules a Zoom meeting you can reuse.</StatusBox>
+      ) : (
+        <ul className="space-y-2">
+          {rooms.map((room) => (
+            <li key={room.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border px-3 py-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium">{room.name}</p>
+                <code className="block truncate text-xs text-muted-foreground">{room.joinUrl}</code>
+                <RoomExpiry expiresAt={room.expiresAt} />
+              </div>
+              <div className="flex gap-2">
+                <Button type="button" size="sm" variant="outline" onClick={async () => {
+                  try { await navigator.clipboard.writeText(room.joinUrl); setCopied(room.id); }
+                  catch (cause) { setError(errorText(cause)); }
+                }}>{copied === room.id ? "Copied" : "Copy join link"}</Button>
+                <Button type="button" size="sm" variant="outline" onClick={async () => {
+                  try { await rpc.call("rooms.renew", { roomId: room.id }); setError(null); refetch(); }
+                  catch (cause) { setError(errorText(cause)); }
+                }}>Renew</Button>
+                <Button type="button" size="sm" variant="ghost" onClick={async () => {
+                  try { await rpc.call("rooms.archive", { roomId: room.id }); setError(null); refetch(); }
+                  catch (cause) { setError(errorText(cause)); }
+                }}>Archive</Button>
+                {confirming === room.id ? (
+                  <Button type="button" size="sm" variant="destructive" onClick={async () => {
+                    setConfirming(null);
+                    try { await rpc.call("rooms.delete", { roomId: room.id }); setError(null); refetch(); }
+                    catch (cause) { setError(errorText(cause)); }
+                  }}>Confirm: kill every link</Button>
+                ) : (
+                  <Button type="button" size="sm" variant="ghost" onClick={() => setConfirming(room.id)}>Delete at Zoom</Button>
+                )}
+              </div>
+              <div className="w-full"><RoomRegistrants room={room} /></div>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
@@ -484,6 +646,7 @@ function CommunicationsPage({ subPath }: PluginNavPanelProps) {
   }
   return <div className="h-full min-h-0 overflow-y-auto"><div className="mx-auto w-full max-w-3xl space-y-5 px-4 pb-6 pt-4 md:px-5">
     <SourceStatus />
+    <Rooms />
     <ImportForm onImported={(value) => { refetch(); navigate.toPluginPanel("communications", { subPath: value.id }); }} />
     <section aria-labelledby="recent-conversations" className="space-y-3">
       <h2 id="recent-conversations" className="font-semibold">Recent conversations</h2>
@@ -514,17 +677,26 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
   const [attachment, setAttachment] = useState<ThreadAttachment | null>(null);
   const [conversation, setConversation] = useState<Conversation | null>(null);
   const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [rooms, setRooms] = useState<Room[]>([]);
+  const [room, setRoom] = useState<Room | null>(null);
+  // One picker for two kinds of target, so the value carries which kind it is.
   const [selected, setSelected] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const refetch = useCallback(async () => {
     try {
-      const [attached, listed] = await Promise.all([
+      const [attached, listed, listedRooms] = await Promise.all([
         rpc.call("attachments.get", { threadId }),
         rpc.call("conversations.list", { offset: 0, limit: 100 }),
+        rpc.call("rooms.list", {}),
       ]);
-      setAttachment(attached.attachment); setConversation(attached.conversation); setConversations(listed.conversations);
-      setSelected((value) => value || attached.conversation?.id || listed.conversations[0]?.id || "");
+      setAttachment(attached.attachment); setConversation(attached.conversation);
+      setRoom(attached.room); setConversations(listed.conversations); setRooms(listedRooms.rooms);
+      setSelected((value) => value
+        || (attached.room ? `room:${attached.room.id}` : "")
+        || (attached.conversation ? `conversation:${attached.conversation.id}` : "")
+        || (listedRooms.rooms[0] ? `room:${listedRooms.rooms[0].id}` : "")
+        || (listed.conversations[0] ? `conversation:${listed.conversations[0].id}` : ""));
       setError(null);
     } catch (cause) { setError(errorText(cause)); }
   }, [rpc, threadId]);
@@ -534,34 +706,49 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
 
   const attach = async () => {
     if (!selected) return;
+    const [kind, id] = [selected.slice(0, selected.indexOf(":")), selected.slice(selected.indexOf(":") + 1)];
     setPending(true);
     try {
-      const next = await rpc.call("attachments.set", { threadId, conversationId: selected });
+      const next = kind === "room"
+        ? await rpc.call("attachments.setRoom", { threadId, roomId: id })
+        : await rpc.call("attachments.set", { threadId, conversationId: id });
       setAttachment(next);
-      setConversation(conversations.find(({ id }) => id === selected) ?? await rpc.call("conversations.get", { conversationId: selected }));
+      setRoom(kind === "room" ? rooms.find((item) => item.id === id) ?? null : null);
+      setConversation(next.conversationId === null
+        ? null
+        : conversations.find((item) => item.id === next.conversationId)
+          ?? await rpc.call("conversations.get", { conversationId: next.conversationId }));
       setError(null);
     } catch (cause) { setError(errorText(cause)); }
     finally { setPending(false); }
   };
 
   return <div className="h-full min-h-0 overflow-y-auto p-4"><div className="space-y-4">
-    <label className="block space-y-1 text-sm"><span>Choose conversation</span>
-      <select aria-label="Choose conversation" className="block h-9 w-full rounded-md border border-input bg-background px-3 text-sm" value={selected} onChange={(event) => setSelected(event.target.value)}>
-        {!conversations.length ? <option value="">No conversations available</option> : null}
-        {conversations.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
+    <label className="block space-y-1 text-sm"><span>Choose a room or conversation</span>
+      <select aria-label="Choose a room or conversation" className="block h-9 w-full rounded-md border border-input bg-background px-3 text-sm" value={selected} onChange={(event) => setSelected(event.target.value)}>
+        {!conversations.length && !rooms.length ? <option value="">Nothing available</option> : null}
+        {rooms.length ? <optgroup label="Rooms — follow each new sitting">
+          {rooms.map((item) => <option key={item.id} value={`room:${item.id}`}>{item.name}</option>)}
+        </optgroup> : null}
+        {conversations.length ? <optgroup label="Conversations — one sitting only">
+          {conversations.map((item) => <option key={item.id} value={`conversation:${item.id}`}>{item.title}</option>)}
+        </optgroup> : null}
       </select>
     </label>
     <div className="flex flex-wrap gap-2">
-      <Button type="button" size="sm" disabled={pending || !selected} onClick={() => void attach()}>{pending ? "Attaching…" : "Attach conversation"}</Button>
+      <Button type="button" size="sm" disabled={pending || !selected} onClick={() => void attach()}>{pending ? "Attaching…" : selected.startsWith("room:") ? "Follow room" : "Attach conversation"}</Button>
       {attachment ? <Button type="button" size="sm" variant="outline" disabled={pending} onClick={async () => {
         setPending(true);
-        try { await rpc.call("attachments.detach", { threadId }); setAttachment(null); setConversation(null); setError(null); }
+        try { await rpc.call("attachments.detach", { threadId }); setAttachment(null); setConversation(null); setRoom(null); setError(null); }
         catch (cause) { setError(errorText(cause)); }
         finally { setPending(false); }
       }}>Detach</Button> : null}
     </div>
     <ErrorMessage error={error} />
-    {!attachment || !conversation ? <StatusBox>Attach this thread to a conversation to read its transcript.</StatusBox> : <>
+    {attachment && room && !conversation ? (
+      <StatusBox>Following {room.name}. Nobody has met in it yet — the next sitting will appear here.</StatusBox>
+    ) : !attachment || !conversation ? <StatusBox>Attach this thread to a room or conversation to read its transcript.</StatusBox> : <>
+      {room ? <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">Following {room.name}. Showing its current sitting; a new one replaces it here.</div> : null}
       <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">Reading cursor: passage {attachment.cursor}. Reading and search do not acknowledge passages automatically.</div>
       <TranscriptView
         conversationId={conversation.id} compact

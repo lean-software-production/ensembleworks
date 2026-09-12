@@ -15,6 +15,7 @@ interface CompactViewportOverrideProviderProps {
   children: ReactNode;
   isCompactViewport: boolean;
 }
+
 export function CompactViewportOverrideProvider({
   children,
   isCompactViewport,

@@ -100,23 +100,40 @@ describe("speaker grouping", () => {
     expect(blocks[0]!.speaker).toBeNull();
   });
 
-  it("keeps two speakers apart when they chose the same display name", () => {
-    // Zoom guests type their own name, so a shared one is not a shared person. Merging
-    // these would attribute one participant's words to another.
+  it("joins one person's turns across their two connections", () => {
+    // Measured: one human joining from two browsers produced two participant ids in a single
+    // meeting. Keying on the id split their turns in half and rendered them as two speakers.
+    const first = { ...segment("David Laing", "Starting on the migration,", 0, 2_000), speakerId: "16778240" };
+    const second = { ...segment("David Laing", "and then the tests.", 2_200, 4_000), speakerId: "16791552" };
+    const blocks = groupSegments([first, second]);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0]!.text).toBe("Starting on the migration, and then the tests.");
+  });
+
+  it("merges two participants who share a display name", () => {
+    // The accepted cost of trusting the name. Rooms register their participants, so the name
+    // is one BB issued, but a stranger self-registering under an existing name would have
+    // their words joined to that person's. Registration is a gate, not proof of identity.
     const first = { ...segment("Dave", "I'll take the migration.", 0, 2_000), speakerId: "111" };
     const second = { ...segment("Dave", "No, I'm doing that.", 2_200, 4_000), speakerId: "222" };
     const blocks = groupSegments([first, second]);
-    expect(blocks).toHaveLength(2);
-    expect(blocks.map((block) => block.text)).toEqual(["I'll take the migration.", "No, I'm doing that."]);
+    expect(blocks).toHaveLength(1);
   });
 
-  it("joins one speaker's run across a display-name change", () => {
-    // The identity Zoom assigns outlasts the name the participant typed.
+  it("splits a run when the display name changes mid-meeting", () => {
+    // The other cost. Zoom lets a participant rename themselves unless the host disables it,
+    // and the name is now what identifies them, so a rename reads as a new speaker.
     const first = { ...segment("Dave", "Renaming myself,", 0, 2_000), speakerId: "111" };
     const second = { ...segment("David Laing", "there we go.", 2_200, 4_000), speakerId: "111" };
     const blocks = groupSegments([first, second]);
-    expect(blocks).toHaveLength(1);
-    expect(blocks[0]!.text).toBe("Renaming myself, there we go.");
+    expect(blocks).toHaveLength(2);
+  });
+
+  it("still separates unattributed speech by participant id", () => {
+    // Without a name there is nothing else to go on, so the id keeps its old job.
+    const first = { ...segment(null, "One voice.", 0, 2_000), speakerId: "111" };
+    const second = { ...segment(null, "A different one.", 2_200, 4_000), speakerId: "222" };
+    expect(groupSegments([first, second])).toHaveLength(2);
   });
 
   it("returns nothing for no segments", () => {

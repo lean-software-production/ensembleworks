@@ -17,6 +17,7 @@ export interface SpeakerBlock {
   lastSequence: number;
   receivedAt: number;
 }
+
 export interface GroupSegmentsOptions {
   /** Silence from a speaker that ends their run. */
   gapMs?: number;
@@ -50,11 +51,15 @@ export function groupSegments(
   const openBySpeaker = new Map<string, SpeakerBlock>();
 
   for (const segment of [...segments].sort((left, right) => left.sequence - right.sequence)) {
-    // Prefer the source's participant id: two guests can pick the same display name, and
-    // merging their turns would attribute one person's words to another.
-    const key = segment.speakerId !== null && segment.speakerId !== undefined
-      ? `id:${segment.speakerId}`
-      : `name:${segment.speaker ?? ""}`;
+    // Prefer the display name. Rooms register their participants, so the name is one BB chose
+    // and Zoom applied. The participant id identifies a connection rather than a person: one
+    // human joining from two browsers produced two ids within a single meeting, and keying on
+    // them split their turns in half. The id remains the tiebreaker for unattributed speech.
+    const key = segment.speaker
+      ? `name:${segment.speaker}`
+      : segment.speakerId !== null && segment.speakerId !== undefined
+        ? `id:${segment.speakerId}`
+        : "name:";
     const open = openBySpeaker.get(key);
     const timed = segment.startMs !== null && open?.endMs !== null && open?.endMs !== undefined;
     const withinGap = timed && segment.startMs! - open!.endMs! <= gapMs;

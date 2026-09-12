@@ -16,6 +16,7 @@ const conversation: Conversation = {
   captureState: "idle",
   captureDetail: null,
   captureEndedAt: null,
+  roomId: null,
   interruptionCount: 0,
   segmentCount: 0,
 };
@@ -133,6 +134,7 @@ describe("read payload", () => {
     expect(after).toBeLessThan(before / 3);
   });
 });
+
 describe("search payload", () => {
   it("keeps scattered matches as separate passages even for one speaker", () => {
     const payload = buildSearchPayload(

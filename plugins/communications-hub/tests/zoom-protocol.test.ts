@@ -218,6 +218,7 @@ describe("Zoom RTMS protocol", () => {
     expect(states.at(-1)).toBe("stopped");
   });
 });
+
 describe("Zoom RTMS destination validation", () => {
   it.each([
     "ws://rtms.zoom.us/signal",

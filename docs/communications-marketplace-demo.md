@@ -111,7 +111,7 @@ verification cannot be skipped. Pushes send the branch and tag atomically.
 
 ## Validation on 12 September 2026
 
-- BB 0.43.0 / Plugin SDK 0.4.84; 85 plugin tests, typecheck, SDK check, and build pass.
+- BB 0.43.0 / Plugin SDK 0.4.84; 148 plugin tests, typecheck, SDK check, and build pass.
 - Nine release/catalog guardrail tests pass; a separate cheaper-model review
   validated the fixes for version regression and preview-range mismatch.
 - The actual release script created annotated `communications-hub/v0.1.1-preview.1`

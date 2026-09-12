@@ -18,6 +18,7 @@ export interface ResponsiveOverlayContextValue {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
+
 const RESPONSIVE_DRAWER_REALIZE_FALLBACK_MS = 120;
 
 function resetDrawerKeyboardStyles(drawerElement: HTMLElement | null): void {

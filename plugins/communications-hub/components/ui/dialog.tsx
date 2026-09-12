@@ -206,6 +206,7 @@ type DialogContentProps = React.ComponentPropsWithoutRef<
   onAfterCloseAutoFocus?: () => void;
   hideCloseButton?: boolean;
 };
+
 const DialogContent = React.forwardRef<HTMLDivElement, DialogContentProps>(
   (
     {

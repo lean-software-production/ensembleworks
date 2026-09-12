@@ -115,6 +115,7 @@ export function registerExtendedIcons(map: ExtendedIconMap): void {
   extendedIcons = map;
   for (const listener of listeners) listener();
 }
+
 export function getExtendedIcons(): ExtendedIconMap | null {
   return extendedIcons;
 }

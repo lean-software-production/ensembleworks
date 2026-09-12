@@ -55,6 +55,7 @@ export interface RtmsSocket {
   send(data: string): void;
   close(code?: number, reason?: string): void;
 }
+
 export type RtmsSocketFactory = (url: string, handlers: SocketHandlers) => RtmsSocket;
 
 export interface ZoomRtmsSessionOptions {

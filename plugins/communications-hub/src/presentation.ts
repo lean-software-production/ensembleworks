@@ -21,6 +21,7 @@ import type { TranscriptPage } from "./hub.js";
 export interface CitationBase {
   base: string;
 }
+
 export interface PresentedBlock {
   /** "7" for a single passage, "7-9" for a speaker's run. Append to `citations.base`. */
   citation: string;

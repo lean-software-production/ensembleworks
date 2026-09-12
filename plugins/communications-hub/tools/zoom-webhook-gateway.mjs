@@ -84,6 +84,7 @@ const server = createServer((incoming, response) => {
     upstream.end(body);
   });
 });
+
 server.listen(port, "127.0.0.1", () => {
   console.log(`zoom-webhook-gateway listening on http://127.0.0.1:${port}`);
   console.log(`forwarding only POST ${allowedPath} to ${target.origin}`);

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { captureStateSchema, segmentInputSchema, type CaptureState, type Conversation, type SegmentInput, type ThreadAttachment, type TranscriptSegment } from './domain';
+import { captureStateSchema, segmentInputSchema, type CaptureState, type Conversation, type Registrant, type Room, type SegmentInput, type ThreadAttachment, type TranscriptSegment } from './domain';
 
 export const readOptionsSchema = z.object({
   after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(30).default(20),
@@ -26,6 +26,29 @@ export const migrations = [
     INSERT INTO segment_search(rowid,text) VALUES (new.rowid,new.text); END`,
   `CREATE TABLE IF NOT EXISTS attachments (
     threadId TEXT PRIMARY KEY, conversationId TEXT NOT NULL REFERENCES conversations(id), cursor INTEGER NOT NULL DEFAULT 0)`,
+  `CREATE TABLE IF NOT EXISTS rooms (
+    id TEXT PRIMARY KEY, name TEXT NOT NULL, sourceId TEXT NOT NULL, externalId TEXT NOT NULL,
+    joinUrl TEXT NOT NULL, hostUser TEXT NOT NULL, createdAt INTEGER NOT NULL, archivedAt INTEGER,
+    UNIQUE(sourceId, externalId))`,
+  /**
+   * Thread targets supersede `attachments`.
+   *
+   * A thread must be able to point at a room that has no sitting yet, and the original table
+   * declares conversationId NOT NULL. SQLite cannot relax that in place, and the recorded
+   * migration cannot be edited, so a new table is created and the existing rows copied. The
+   * old table is left untouched: nothing reads it, and dropping it would destroy the only
+   * copy of cursor state if a load ever had to fall back.
+   */
+  `CREATE TABLE IF NOT EXISTS thread_targets (
+    threadId TEXT PRIMARY KEY, roomId TEXT REFERENCES rooms(id),
+    conversationId TEXT REFERENCES conversations(id), cursor INTEGER NOT NULL DEFAULT 0,
+    CHECK (roomId IS NOT NULL OR conversationId IS NOT NULL))`,
+  `INSERT OR IGNORE INTO thread_targets(threadId,conversationId,cursor)
+    SELECT threadId,conversationId,cursor FROM attachments`,
+  `CREATE TABLE IF NOT EXISTS registrants (
+    id TEXT PRIMARY KEY, roomId TEXT NOT NULL REFERENCES rooms(id), name TEXT NOT NULL,
+    email TEXT NOT NULL, externalId TEXT NOT NULL, joinUrl TEXT NOT NULL, createdAt INTEGER NOT NULL,
+    UNIQUE(roomId, email))`,
 ];
 
 /** SQLite owns runtime state. No platform or BB-thread API dependencies. */
@@ -50,6 +73,9 @@ export class Hub {
     const additions: [string, string, string][] = [
       ['conversations','captureEndedAt','INTEGER'],
       ['segments','speakerId','TEXT'],
+      ['conversations','roomId','TEXT'],
+      ['rooms','expiresAt','INTEGER'],
+      ['rooms','sourceDeletedAt','INTEGER'],
     ];
     for (const [table,column,type] of additions) {
       const columns=this.db.prepare(`PRAGMA table_info(${table})`).all() as {name:string}[];
@@ -75,6 +101,118 @@ export class Hub {
     const next=z.string().trim().min(1).max(200).parse(title);
     this.db.prepare('UPDATE conversations SET title=? WHERE id=?').run(next,id);
     this.changed(); return this.getConversation(id);
+  }
+  /**
+   * Record a room BB created at the source.
+   *
+   * The row is written only after the source confirms the meeting, so a room in the database
+   * always has a join URL that works. Unique on (sourceId, externalId) so a retried creation
+   * cannot leave two rows pointing at one Zoom meeting.
+   */
+  createRoom(input: {name: string; sourceId: string; externalId: string; joinUrl: string; hostUser: string; expiresAt?: number | null}): Room {
+    const parsed=z.object({
+      name:z.string().trim().min(1).max(200), sourceId:idSchema, externalId:idSchema,
+      joinUrl:z.string().trim().min(1).max(2_048), hostUser:z.string().trim().min(1).max(320),
+      expiresAt:z.number().int().positive().nullable().optional(),
+    }).strict().parse(input);
+    const id=randomUUID();
+    this.db.prepare('INSERT INTO rooms(id,name,sourceId,externalId,joinUrl,hostUser,createdAt,expiresAt) VALUES(?,?,?,?,?,?,?,?)')
+      .run(id,parsed.name,parsed.sourceId,parsed.externalId,parsed.joinUrl,parsed.hostUser,Date.now(),parsed.expiresAt ?? null);
+    this.changed(); return this.getRoom(id);
+  }
+  /**
+   * Record a person registered for a room.
+   *
+   * Unique on (room, email) so re-registering the same person cannot leave two live links for
+   * them, which would make the participant list ambiguous about who is who.
+   */
+  createRegistrant(input: {roomId: string; name: string; email: string; externalId: string; joinUrl: string}): Registrant {
+    const parsed=z.object({
+      roomId:idSchema, name:z.string().trim().min(1).max(200),
+      email:z.string().trim().min(3).max(320), externalId:idSchema,
+      joinUrl:z.string().trim().min(1).max(2_048),
+    }).strict().parse(input);
+    this.getRoom(parsed.roomId);
+    const id=randomUUID();
+    this.db.prepare('INSERT INTO registrants(id,roomId,name,email,externalId,joinUrl,createdAt) VALUES(?,?,?,?,?,?,?)')
+      .run(id,parsed.roomId,parsed.name,parsed.email,parsed.externalId,parsed.joinUrl,Date.now());
+    this.changed(); return this.db.prepare('SELECT * FROM registrants WHERE id=?').get(id) as Registrant;
+  }
+  /** Record a renewed lifespan. The Zoom meeting is unchanged, so links already issued still work. */
+  setRoomExpiry(roomId: string, expiresAt: number): Room {
+    this.getRoom(roomId);
+    this.db.prepare('UPDATE rooms SET expiresAt=? WHERE id=?').run(z.number().int().positive().parse(expiresAt),roomId);
+    this.changed(); return this.getRoom(roomId);
+  }
+  /**
+   * Record that a room's meeting no longer exists at the source.
+   *
+   * Archived too, because a room whose join URLs are dead should not be offered. The row and
+   * its registrants stay: conversations reference the room, and the registrant list is the
+   * record of who was given a link that has since been revoked.
+   */
+  markRoomDeleted(roomId: string): Room {
+    this.getRoom(roomId);
+    const now=Date.now();
+    this.db.prepare('UPDATE rooms SET sourceDeletedAt=coalesce(sourceDeletedAt,?),archivedAt=coalesce(archivedAt,?) WHERE id=?').run(now,now,roomId);
+    this.changed(); return this.getRoom(roomId);
+  }
+  listRegistrants(roomId: string) {
+    idSchema.parse(roomId);
+    return {registrants:this.db.prepare('SELECT * FROM registrants WHERE roomId=? ORDER BY createdAt,id').all(roomId) as Registrant[]};
+  }
+  getRoom(id: string): Room {
+    idSchema.parse(id);
+    const result=this.db.prepare('SELECT * FROM rooms WHERE id=?').get(id) as Room|undefined;
+    if (!result) throw new Error('Room not found');
+    return result;
+  }
+  /** Resolve a room from a source identifier, so a capture can be linked to the room it happened in. */
+  findRoom(sourceId: string, externalId: string): Room|null {
+    idSchema.parse(sourceId); idSchema.parse(externalId);
+    return (this.db.prepare('SELECT * FROM rooms WHERE sourceId=? AND externalId=?').get(sourceId,externalId) as Room|undefined) ?? null;
+  }
+  listRooms(options: {includeArchived?: boolean} = {}) {
+    const {includeArchived}=z.object({includeArchived:z.boolean().default(false)}).parse(options);
+    const rows=this.db.prepare(`SELECT * FROM rooms ${includeArchived?'':'WHERE archivedAt IS NULL'} ORDER BY createdAt DESC,id`).all() as Room[];
+    return {rooms:rows};
+  }
+  /**
+   * Archive a room.
+   *
+   * Local only: the Zoom meeting is left alone, because deleting it would break a join URL
+   * people may still have, and its past conversations stay readable either way.
+   */
+  archiveRoom(id: string): Room {
+    this.getRoom(id);
+    this.db.prepare('UPDATE rooms SET archivedAt=coalesce(archivedAt,?) WHERE id=?').run(Date.now(),id);
+    this.changed(); return this.getRoom(id);
+  }
+  /**
+   * Rename a conversation only if it still carries the title we expect.
+   *
+   * A source can learn a better name after a capture has started, but a human may have renamed
+   * it in the meantime. Comparing first means the late, automatic name can never overwrite the
+   * deliberate one; the compare and write are one statement, so there is no window between them.
+   */
+  renameIfUnchanged(id: string, expected: string, title: string): Conversation {
+    this.getConversation(id);
+    const next=z.string().trim().min(1).max(200).parse(title);
+    this.db.prepare('UPDATE conversations SET title=? WHERE id=? AND title=?').run(next,id,expected);
+    this.changed(); return this.getConversation(id);
+  }
+  /** Link a capture to the room it happened in. Idempotent: a reconnect re-links the same room. */
+  setConversationRoom(conversationId: string, roomId: string): Conversation {
+    this.getConversation(conversationId); this.getRoom(roomId);
+    this.db.transaction(()=>{
+      this.db.prepare('UPDATE conversations SET roomId=? WHERE id=?').run(roomId,conversationId);
+      // Threads following this room move to the new sitting. The cursor resets because
+      // sequences restart per conversation, so carrying it over would mark the opening of the
+      // new sitting as already read.
+      this.db.prepare('UPDATE thread_targets SET conversationId=?,cursor=0 WHERE roomId=? AND conversationId IS NOT ?')
+        .run(conversationId,roomId,conversationId);
+    })();
+    this.changed(); return this.getConversation(conversationId);
   }
   getConversation(id: string): Conversation {
     idSchema.parse(id);
@@ -124,21 +262,52 @@ export class Hub {
   interruptActiveCaptures() {
     this.db.prepare("UPDATE conversations SET interruptionCount=interruptionCount+1,captureState='interrupted',captureDetail='Capture interrupted by plugin restart; earlier passages remain available.' WHERE captureState IN ('connecting','capturing','paused')").run();
   }
+  /** Point a thread at one conversation. The cursor survives re-attaching to the same one. */
   attach(threadId:string,conversationId:string):ThreadAttachment {
     idSchema.parse(threadId); this.getConversation(conversationId);
-    this.db.prepare(`INSERT INTO attachments(threadId,conversationId,cursor) VALUES(?,?,0)
-      ON CONFLICT(threadId) DO UPDATE SET conversationId=excluded.conversationId,
-      cursor=CASE WHEN attachments.conversationId=excluded.conversationId THEN attachments.cursor ELSE 0 END`).run(threadId,conversationId);
+    this.db.prepare(`INSERT INTO thread_targets(threadId,roomId,conversationId,cursor) VALUES(?,NULL,?,0)
+      ON CONFLICT(threadId) DO UPDATE SET roomId=NULL,conversationId=excluded.conversationId,
+      cursor=CASE WHEN thread_targets.conversationId=excluded.conversationId THEN thread_targets.cursor ELSE 0 END`).run(threadId,conversationId);
     this.changed(); return this.getAttachment(threadId)!;
   }
-  detach(threadId:string) { idSchema.parse(threadId); this.db.prepare('DELETE FROM attachments WHERE threadId=?').run(threadId); this.changed(); }
-  getAttachment(threadId:string):ThreadAttachment|null { idSchema.parse(threadId); return this.db.prepare('SELECT * FROM attachments WHERE threadId=?').get(threadId) as ThreadAttachment|undefined ?? null; }
+  /**
+   * Point a thread at a room rather than one sitting in it.
+   *
+   * A room fragments into a conversation per occupancy period, so a thread attached to one
+   * sitting goes stale the moment the room empties and refills - silently, which is the worst
+   * way for it to happen. A room target follows, resolving to whichever sitting is current.
+   *
+   * Attaching to a room with no sitting yet is normal: a team attaches the thread when the
+   * room is made, not when someone first speaks.
+   */
+  attachRoom(threadId:string,roomId:string):ThreadAttachment {
+    idSchema.parse(threadId); this.getRoom(roomId);
+    const current=this.currentRoomConversation(roomId);
+    this.db.prepare(`INSERT INTO thread_targets(threadId,roomId,conversationId,cursor) VALUES(?,?,?,0)
+      ON CONFLICT(threadId) DO UPDATE SET roomId=excluded.roomId,conversationId=excluded.conversationId,
+      cursor=CASE WHEN thread_targets.conversationId IS excluded.conversationId THEN thread_targets.cursor ELSE 0 END`)
+      .run(threadId,roomId,current);
+    this.changed(); return this.getAttachment(threadId)!;
+  }
+  /**
+   * The room's most recent sitting, or null before anyone has met in it.
+   *
+   * Ties on createdAt break by insertion order, not by id. Two sittings can be created in the
+   * same millisecond, and ids are random UUIDs, so ordering by id picked an arbitrary one of
+   * the two as "latest".
+   */
+  private currentRoomConversation(roomId:string):string|null {
+    const row=this.db.prepare('SELECT id FROM conversations WHERE roomId=? ORDER BY createdAt DESC,rowid DESC LIMIT 1').get(roomId) as {id:string}|undefined;
+    return row?.id ?? null;
+  }
+  detach(threadId:string) { idSchema.parse(threadId); this.db.prepare('DELETE FROM thread_targets WHERE threadId=?').run(threadId); this.changed(); }
+  getAttachment(threadId:string):ThreadAttachment|null { idSchema.parse(threadId); return this.db.prepare('SELECT * FROM thread_targets WHERE threadId=?').get(threadId) as ThreadAttachment|undefined ?? null; }
   acknowledge(threadId:string,conversationId:string,cursor:number) {
     z.number().int().nonnegative().parse(cursor); const a=this.getAttachment(threadId);
     if (!a || a.conversationId!==conversationId) throw new Error('Conversation is not attached to this thread');
     const max=(this.db.prepare('SELECT coalesce(max(sequence),0) AS n FROM segments WHERE conversationId=?').get(conversationId) as {n:number}).n;
     if (cursor>max) throw new Error('Cursor exceeds available transcript');
-    this.db.prepare('UPDATE attachments SET cursor=max(cursor,?) WHERE threadId=?').run(cursor,threadId); this.changed(); return this.getAttachment(threadId)!;
+    this.db.prepare('UPDATE thread_targets SET cursor=max(cursor,?) WHERE threadId=?').run(cursor,threadId); this.changed(); return this.getAttachment(threadId)!;
   }
   readTranscript(conversationId:string,options:ReadOptions = {}):TranscriptPage { return this.queryTranscript(conversationId,options); }
   searchTranscript(conversationId:string,options:ReadOptions & {query:string}):TranscriptPage {

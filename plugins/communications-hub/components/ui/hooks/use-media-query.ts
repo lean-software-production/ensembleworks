@@ -42,6 +42,7 @@ function createMediaQueryRef(query: string): MediaQueryRef | null {
   mediaQueryCache.set(query, ref);
   return ref;
 }
+
 export function subscribeMediaQuery(
   query: string,
   notify: () => void,
