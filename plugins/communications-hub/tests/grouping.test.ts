@@ -140,3 +140,29 @@ describe("speaker grouping", () => {
     expect(groupSegments([])).toEqual([]);
   });
 });
+
+it('groups point-timed speech across interjections without inventing an end time', () => {
+  const rows = [
+    segment('Ada', 'The migration', 1000, null),
+    segment('Ben', 'Yes.', 2000, null),
+    segment('Ada', 'needs tests', 3500, null),
+    segment('Ada', 'before shipping.', 6000, null),
+    segment('Ada', 'A later topic.', 30000, null),
+  ];
+  const blocks = groupSegments(rows);
+  expect(blocks.map(b => b.text)).toEqual(['The migration needs tests before shipping.', 'Yes.', 'A later topic.']);
+  expect(blocks[0]!.sequences).toEqual([rows[0]!.sequence, rows[2]!.sequence, rows[3]!.sequence]);
+  expect(blocks[0]!.endMs).toBeNull();
+  expect(rows.every(row => row.endMs === null)).toBe(true);
+});
+
+it('keeps a point-timed monologue together at the 6–10 second chunk cadence in the reported screenshot', () => {
+  const times = [0, 8000, 14000, 23000, 33000];
+  const rows = times.map((time, i) => segment('Aldric (Vivaldi)', `Chunk ${i}.`, time, null));
+  const blocks = groupSegments([...rows, segment('Aldric (Vivaldi)', 'Later turn.', 60000, null)]);
+  expect(blocks.map(block => block.text)).toEqual(['Chunk 0. Chunk 1. Chunk 2. Chunk 3. Chunk 4.', 'Later turn.']);
+  expect(blocks[0]!.sequences).toEqual(rows.map(row => row.sequence));
+  expect(blocks[0]!.endMs).toBeNull();
+  // Actual utterance ends still use the narrower silence threshold.
+  expect(groupSegments(times.map((time, i) => segment('Aldric', `Chunk ${i}.`, time, time+1000)))).toHaveLength(5);
+});

@@ -486,3 +486,91 @@ describe("Communications Hub app", () => {
     await slot.findByText("This conversation link is invalid.");
   });
 });
+
+it('opens live conversations at the tail and appends every incoming page without Load more', async () => {
+  const app = await loadPluginApp(() => import('../app'));
+  let rows = Array.from({length:45}, (_,i) => ({...segments[0]!, id:`live-${i+1}`, sequence:i+1, text:`Live speech ${i+1}`, speaker:`Speaker ${i+1}`}));
+  const current = () => ({...conversation,captureState:'capturing' as const,segmentCount:rows.length});
+  const slot = renderSlot(app.navPanels[0]!, {subPath:conversation.id}, {rpc:handlers({
+    'conversations.get':current,
+    'transcripts.read':({after=0,limit=20}) => {const rest=rows.filter(s=>s.sequence>after);const page=rest.slice(0,limit);return {conversation:current(),segments:page,hasMore:rest.length>limit,nextCursor:page.at(-1)?.sequence??after};},
+  })});
+  await slot.findByText('Live speech 45');
+  expect(slot.queryByText('Live speech 1')).toBeNull();
+  rows=[...rows,...Array.from({length:25},(_,i)=>({...segments[1]!,id:`new-${i}`,sequence:46+i,text:`New speech ${i}`,speaker:`New speaker ${i}`}))];
+  await slot.behavior.emitRealtime('communications-changed',{changed:true});
+  await slot.findByText('New speech 24');
+  expect(slot.getByText('Live speech 45')).toBeTruthy();
+  expect(slot.queryByRole('button',{name:'Load more'})).toBeNull();
+  expect(slot.inspection.rpcCalls.some(c=>c.method==='attachments.acknowledge')).toBe(false);
+  await slot.behavior.setRealtimeConnectionState('reconnecting');
+  rows = [...rows, ...Array.from({length:210},(_,i)=>({...segments[0]!,id:`reconnected-${i}`,sequence:71+i,text:`Reconnected speech ${i}`,speaker:`Reconnected speaker ${i}`}))];
+  await slot.behavior.setRealtimeConnectionState('connected');
+  await slot.findByText('Reconnected speech 209');
+  expect(slot.getByRole('list',{name:'Transcript passages'}).children.length).toBe(200);
+  expect(slot.queryByText('Live speech 45')).toBeNull();
+});
+
+it('pauses when scrolling back and resumes at the latest speech without replacing search results', async () => {
+  const app = await loadPluginApp(() => import('../app'));
+  let rows = [...segments];
+  const current = () => ({...conversation,captureState:'capturing' as const,segmentCount:rows.length});
+  const slot = renderSlot(app.navPanels[0]!, {subPath:conversation.id}, {rpc:handlers({
+    'conversations.get':current,
+    'transcripts.read':({after=0}) => {const page=rows.filter(s=>s.sequence>after);return {conversation:current(),segments:page,hasMore:false,nextCursor:page.at(-1)?.sequence??after};},
+  })});
+  await slot.findByText(segments[1]!.text);
+  const list = slot.getByRole('list',{name:'Transcript passages'});
+  Object.defineProperties(list,{scrollHeight:{value:1000,configurable:true},clientHeight:{value:200,configurable:true}});
+  fireEvent.scroll(list,{target:{scrollTop:100}});
+  expect(slot.getByRole('button',{name:'Follow live'})).toBeTruthy();
+  rows.push({...segments[0]!,id:'new-9',sequence:9,text:'New while paused',speaker:'New speaker'});
+  await slot.behavior.emitRealtime('communications-changed',{changed:true});
+  expect(slot.queryByText('New while paused')).toBeNull();
+  fireEvent.click(slot.getByRole('button',{name:'Follow live'}));
+  await slot.findByText('New while paused');
+  fireEvent.change(slot.getByLabelText('Search transcript'),{target:{value:'citations'}});
+  fireEvent.submit(slot.getByRole('search'));
+  await slot.findByText('Results for “citations”');
+  await slot.behavior.setRealtimeConnectionState('reconnecting');
+  await slot.behavior.setRealtimeConnectionState('connected');
+  expect(slot.getByText('Results for “citations”')).toBeTruthy();
+  expect(slot.queryByText('New while paused')).toBeNull();
+});
+
+it('discards an in-flight live response when a search replaces it', async () => {
+  const app = await loadPluginApp(() => import('../app'));
+  let release: (()=>void) | undefined;
+  let reads = 0;
+  const slot = renderSlot(app.navPanels[0]!, {subPath:conversation.id}, {rpc:handlers({
+    'conversations.get':()=>({...conversation,captureState:'capturing'}),
+    'transcripts.read':async()=>{
+      if (++reads > 1) await new Promise<void>(resolve=>{release=resolve;});
+      return {conversation,segments,hasMore:false,nextCursor:8};
+    },
+  })});
+  await slot.findByText(segments[0]!.text);
+  await slot.behavior.emitRealtime('communications-changed',{changed:true});
+  await waitFor(()=>expect(release).toBeDefined());
+  fireEvent.change(slot.getByLabelText('Search transcript'),{target:{value:'citations'}});
+  fireEvent.submit(slot.getByRole('search'));
+  await slot.findByText('Results for “citations”');
+  release!();
+  await waitFor(()=>expect(slot.queryByText(segments[0]!.text)).toBeNull());
+  expect(slot.getByText('Results for “citations”')).toBeTruthy();
+});
+
+it('renders EnsembleWorks point-timed speech as the same grouped speaker blocks', async () => {
+  const app = await loadPluginApp(() => import('../app'));
+  const pointSegments = interleavedSegments.map((segment, index) => ({
+    ...segment, startMs: [1000,2000,3500][index]!, endMs:null,
+  }));
+  const current = {...conversation,sourceId:'ensembleworks',captureState:'capturing' as const,segmentCount:3};
+  const slot = renderSlot(app.navPanels[0]!, {subPath:conversation.id}, {rpc:handlers({
+    'conversations.get':()=>current,
+    'transcripts.read':()=>({conversation:current,segments:pointSegments,hasMore:false,nextCursor:9}),
+  })});
+  await slot.findByText('Ship the transcript reader. And the reader ships Friday.');
+  expect(slot.getByRole('list',{name:'Transcript passages'}).children.length).toBe(2);
+  expect(slot.getByRole('button',{name:'Open citation 7–9'})).toBeTruthy();
+});

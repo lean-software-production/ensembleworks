@@ -204,3 +204,13 @@ describe("search payload", () => {
     expect(ada!.continues).toBeUndefined();
   });
 });
+
+it('marks point-timed speaker runs open at page boundaries and preserves their citations', () => {
+  const result = buildReadPayload(page([
+    segment(1, 'Ada', 'First', 1000, null),
+    segment(2, 'Ada', 'second', 9000, null),
+    segment(3, 'Ben', 'Interjection', 19000, null),
+  ], true), base);
+  expect(result.blocks[0]).toMatchObject({text:'First second',citation:'1-2',sequences:[1,2],endMs:null,continues:true});
+  expect(result.blocks[1]).toMatchObject({citation:'3',continues:true});
+});

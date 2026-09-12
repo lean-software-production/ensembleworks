@@ -48,21 +48,23 @@ function ErrorMessage({ error }: { error: string | null }) {
 
 /** Coalesce status-only notifications so a busy capture cannot flood RPC. */
 function useChangedSignal(refetch: () => void) {
+  const latest = useRef(refetch);
+  latest.current = refetch;
   const last = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const changed = useCallback(() => {
     const remaining = 1_000 - (Date.now() - last.current);
     if (remaining <= 0) {
       last.current = Date.now();
-      refetch();
+      latest.current();
     } else if (timer.current === null) {
       timer.current = setTimeout(() => {
         timer.current = null;
         last.current = Date.now();
-        refetch();
+        latest.current();
       }, remaining);
     }
-  }, [refetch]);
+  }, []);
   useRealtime("communications-changed", changed);
   useEffect(() => () => {
     if (timer.current !== null) clearTimeout(timer.current);
@@ -114,66 +116,122 @@ function TranscriptView({
     }
   }, [conversationId, rpc]);
 
-  const accept = useCallback((next: Page, append: boolean) => {
-    setPage((current) => append && current !== null
-      ? { ...next, segments: [...current.segments, ...next.segments] }
-      : next);
-    onPageRef.current?.(next);
-    setError(null);
-  }, []);
-
-  const read = useCallback(async (after: number, append = false) => {
-    setPending(true);
-    try {
-      const next = await rpc.call("transcripts.read", { conversationId, after, limit: PAGE_SIZE });
-      setActiveQuery("");
-      accept(next, append);
-    } catch (cause) {
-      setError(errorText(cause));
-      if (!append) setPage(null);
-    } finally {
-      setPending(false);
-    }
-  }, [accept, conversationId, rpc]);
-
+  const [following, setFollowing] = useState(false);
+  const followingRef = useRef(false);
+  const pageRef = useRef<Page | null>(null);
+  const queryRef = useRef("");
+  const generation = useRef(0);
+  const busy = useRef(false);
+  const transcriptList = useRef<HTMLOListElement>(null);
   const startAfter = Math.max(0, (initialSequence ?? 1) - 1);
-  useEffect(() => { void read(startAfter); }, [read, startAfter]);
-  const refresh = useCallback(() => { void read(startAfter); }, [read, startAfter]);
-  useChangedSignal(refresh);
 
-  const search = async (event: FormEvent) => {
+  // A new search, citation or conversation invalidates all older responses.
+  // Live updates append by ingestion sequence; they never reload the first page.
+  const load = useCallback(async (options: {
+    after?: number; append?: boolean; query?: string; follow?: boolean; latest?: boolean;
+  }) => {
+    const request = ++generation.current;
+    busy.current = true;
+    setPending(true);
+    let follow = options.follow ?? false;
+    followingRef.current = follow;
+    setFollowing(follow);
+    queryRef.current = options.query ?? "";
+    setActiveQuery(queryRef.current);
+    try {
+      let after = options.after ?? 0;
+      let append = options.append ?? false;
+      if (options.latest) {
+        const conversation = await rpc.call("conversations.get", { conversationId });
+        if (request !== generation.current) return;
+        follow = options.follow ?? ["connecting", "capturing", "paused", "interrupted"].includes(conversation.captureState);
+        followingRef.current = follow;
+        setFollowing(follow);
+        after = follow ? Math.max(0, conversation.segmentCount - PAGE_SIZE) : 0;
+      }
+      do {
+        const next = queryRef.current
+          ? await rpc.call("transcripts.search", { conversationId, query: queryRef.current, after, limit: PAGE_SIZE })
+          : await rpc.call("transcripts.read", { conversationId, after, limit: PAGE_SIZE });
+        if (request !== generation.current) return;
+        if (next.hasMore && next.nextCursor <= after) throw new Error("Transcript page did not advance.");
+        const existing = append ? pageRef.current?.segments ?? [] : [];
+        const seen = new Set(existing.map(segment => segment.sequence));
+        const combined = [...existing, ...next.segments.filter(segment => !seen.has(segment.sequence))];
+        // Following keeps a bounded live window. Pausing preserves that window;
+        // older passages remain addressable through search and citation links.
+        const accepted = { ...next, segments: follow ? combined.slice(-200) : combined };
+        pageRef.current = accepted;
+        setPage(accepted);
+        onPageRef.current?.(accepted);
+        setError(null);
+        if (!follow || !next.hasMore) break;
+        after = next.nextCursor;
+        append = true;
+      } while (request === generation.current);
+    } catch (cause) {
+      if (request === generation.current) setError(errorText(cause));
+    } finally {
+      if (request === generation.current) {
+        busy.current = false;
+        setPending(false);
+      }
+    }
+  }, [conversationId, rpc]);
+
+  useEffect(() => {
+    pageRef.current = null;
+    setPage(null);
+    setQuery("");
+    setError(null);
+    void load(initialSequence === undefined ? { latest: true } : { after: startAfter });
+    return () => { generation.current++; };
+  }, [load, startAfter, initialSequence]);
+
+  const refresh = useCallback(() => {
+    if (busy.current || pageRef.current === null) return;
+    if (followingRef.current) {
+      void load({ after: pageRef.current.nextCursor, append: true, follow: true });
+      return;
+    }
+    const request = generation.current;
+    rpc.call("conversations.get", { conversationId }).then(conversation => {
+      if (request !== generation.current || pageRef.current === null) return;
+      const next = { ...pageRef.current, conversation };
+      pageRef.current = next;
+      setPage(next);
+      onPageRef.current?.(next);
+    }, () => { /* Preserve the current read/search view on a status refresh failure. */ });
+  }, [conversationId, load, rpc]);
+  useChangedSignal(refresh);
+  const connection = useRealtimeConnectionState();
+  useEffect(() => { if (connection === "connected") refresh(); }, [connection, refresh]);
+  // Also recover a missed notification (including one received mid-request).
+  useEffect(() => {
+    const timer = setInterval(refresh, 5000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+  useEffect(() => {
+    if (following && transcriptList.current) transcriptList.current.scrollTop = transcriptList.current.scrollHeight;
+  }, [following, page]);
+
+  const pause = () => {
+    generation.current++;
+    busy.current = false;
+    followingRef.current = false;
+    setFollowing(false);
+    setPending(false);
+  };
+  const goLive = () => { setQuery(""); void load({ latest: true, follow: true }); };
+  const search = (event: FormEvent) => {
     event.preventDefault();
     const value = query.trim();
-    if (value === "") return void read(0);
-    setPending(true);
-    try {
-      const next = await rpc.call("transcripts.search", {
-        conversationId, query: value, after: 0, limit: PAGE_SIZE,
-      });
-      setActiveQuery(value);
-      accept(next, false);
-    } catch (cause) {
-      setError(errorText(cause));
-    } finally {
-      setPending(false);
-    }
+    if (!value) return goLive();
+    void load({ query: value });
   };
-
-  const loadMore = async () => {
-    if (page === null) return;
-    setPending(true);
-    try {
-      const next = activeQuery === ""
-        ? await rpc.call("transcripts.read", { conversationId, after: page.nextCursor, limit: PAGE_SIZE })
-        : await rpc.call("transcripts.search", {
-            conversationId, query: activeQuery, after: page.nextCursor, limit: PAGE_SIZE,
-          });
-      accept(next, true);
-    } catch (cause) {
-      setError(errorText(cause));
-    } finally {
-      setPending(false);
-    }
+  const loadMore = () => {
+    if (pageRef.current === null || busy.current) return;
+    void load({ after: pageRef.current.nextCursor, append: true, query: queryRef.current });
   };
 
   // Presentation only: segments stay immutable and each member sequence still
@@ -233,13 +291,24 @@ function TranscriptView({
       {activeQuery ? (
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
           <span>Results for “{activeQuery}”</span>
-          <button type="button" className="underline hover:text-foreground" onClick={() => void read(0)}>Clear search</button>
+          <button type="button" className="underline hover:text-foreground" onClick={goLive}>Clear search</button>
         </div>
       ) : null}
+      <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+        <span>{following ? "Following live · latest 200 passages" : "Live following paused"}</span>
+        <Button type="button" size="sm" variant="outline" onClick={following ? pause : goLive}>
+          {following ? "Pause live updates" : "Follow live"}
+        </Button>
+      </div>
       <ErrorMessage error={error} />
       {page !== null && page.segments.length === 0 ? <StatusBox>{activeQuery ? "No matching passages." : "No transcript passages yet."}</StatusBox> : null}
       {page !== null && page.segments.length > 0 ? (
-        <ol className="divide-y divide-border rounded-lg border border-border bg-card">
+        <ol ref={transcriptList} aria-label="Transcript passages"
+          className="max-h-[60vh] overflow-y-auto divide-y divide-border rounded-lg border border-border bg-card"
+          onScroll={(event) => {
+            const list = event.currentTarget;
+            if (followingRef.current && list.scrollHeight - list.clientHeight - list.scrollTop > 48) pause();
+          }}>
           {blocks.map((block) => {
             // A cited range highlights every block it touches, so a quote that
             // spans passages lands on all of them rather than just the first.
@@ -280,7 +349,7 @@ function TranscriptView({
           })}
         </ol>
       ) : null}
-      {page?.hasMore ? <Button type="button" variant="outline" disabled={pending} onClick={() => void loadMore()}>{pending ? "Loading…" : "Load more"}</Button> : null}
+      {page?.hasMore && !following ? <Button type="button" variant="outline" disabled={pending} onClick={() => void loadMore()}>{pending ? "Loading…" : "Load more"}</Button> : null}
     </section>
   );
 }

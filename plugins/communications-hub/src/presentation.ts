@@ -1,5 +1,5 @@
 import type { Conversation } from "./domain.js";
-import { DEFAULT_GAP_MS, groupSegments } from "./grouping.js";
+import { DEFAULT_GAP_MS, DEFAULT_POINT_GAP_MS, groupSegments } from "./grouping.js";
 import type { TranscriptPage } from "./hub.js";
 
 /**
@@ -117,10 +117,10 @@ export function buildReadPayload(page: TranscriptPage, citationBase: string): Re
     (highest, segment) => (highest === null || segment.sequence > highest ? segment.sequence : highest),
     null,
   );
-  const pageEndMs = page.segments.reduce<number | null>(
-    (latest, segment) => (segment.endMs !== null && (latest === null || segment.endMs > latest) ? segment.endMs : latest),
-    null,
-  );
+  const boundaries = new Map(page.segments.map(segment => [segment.sequence, segment.endMs ?? segment.startMs]));
+  const latestTime = (latest: number | null, time: number | null): number | null =>
+    time !== null && (latest === null || time > latest) ? time : latest;
+  const pageEndMs = [...boundaries.values()].reduce<number | null>(latestTime, null);
 
   const blocks = groupSegments(page.segments).map<PresentedBlock>(block => {
     const sequences = [...block.sequences].sort((left, right) => left - right);
@@ -133,7 +133,9 @@ export function buildReadPayload(page: TranscriptPage, citationBase: string): Re
       endMs: block.endMs,
     };
     const holdsPageEnd = lastSequence !== null && sequences[sequences.length - 1] === lastSequence;
-    const stillOpen = presented.endMs !== null && pageEndMs !== null && pageEndMs - presented.endMs <= DEFAULT_GAP_MS;
+    const blockBoundary = sequences.reduce<number | null>((latest, sequence) => latestTime(latest, boundaries.get(sequence) ?? null), null);
+    const allowedGap = block.endMs === null ? DEFAULT_POINT_GAP_MS : DEFAULT_GAP_MS;
+    const stillOpen = blockBoundary !== null && pageEndMs !== null && pageEndMs - blockBoundary <= allowedGap;
     if (page.hasMore && (holdsPageEnd || stillOpen)) {
       presented.continues = true;
     }

@@ -21,12 +21,16 @@ export interface SpeakerBlock {
 export interface GroupSegmentsOptions {
   /** Silence from a speaker that ends their run. */
   gapMs?: number;
+  /** Chunk-to-chunk proximity when utterance end times are unavailable; not measured silence. */
+  pointGapMs?: number;
   /** Cap on a block's combined characters, so one monologue cannot grow without bound. */
   maxChars?: number;
 }
 
 /** A speaker pauses for about this long between sentences; longer reads as a new turn. */
 export const DEFAULT_GAP_MS = 3_000;
+/** Point timestamps include chunk speech/processing time, so allow a wider cadence. */
+export const DEFAULT_POINT_GAP_MS = 15_000;
 const DEFAULT_MAX_CHARS = 2_000;
 
 /**
@@ -49,6 +53,7 @@ export function groupSegments(
   const maxChars = options.maxChars ?? DEFAULT_MAX_CHARS;
   const blocks: SpeakerBlock[] = [];
   const openBySpeaker = new Map<string, SpeakerBlock>();
+  const lastTimeBySpeaker = new Map<string, number | null>();
 
   for (const segment of [...segments].sort((left, right) => left.sequence - right.sequence)) {
     // Prefer the display name. Rooms register their participants, so the name is one BB chose
@@ -61,14 +66,20 @@ export function groupSegments(
         ? `id:${segment.speakerId}`
         : "name:";
     const open = openBySpeaker.get(key);
-    const timed = segment.startMs !== null && open?.endMs !== null && open?.endMs !== undefined;
-    const withinGap = timed && segment.startMs! - open!.endMs! <= gapMs;
+    // Some sources report only a point timestamp. Use it to measure proximity,
+    // without turning it into an invented utterance duration in the block.
+    const lastTime = lastTimeBySpeaker.get(key) ?? null;
+    const segmentTime = segment.endMs ?? segment.startMs;
+    const timed = segment.startMs !== null && lastTime !== null;
+    const allowedGap = open?.endMs === null ? options.pointGapMs ?? DEFAULT_POINT_GAP_MS : gapMs;
+    const withinGap = timed && segment.startMs! - lastTime! <= allowedGap;
     const withinLength = open ? open.text.length + 1 + segment.text.length <= maxChars : false;
 
     if (open && withinGap && withinLength) {
       open.sequences.push(segment.sequence);
       open.text = `${open.text} ${segment.text}`;
-      open.endMs = segment.endMs === null ? open.endMs : Math.max(open.endMs!, segment.endMs);
+      open.endMs = segment.endMs === null ? null : Math.max(open.endMs ?? segment.endMs, segment.endMs);
+      lastTimeBySpeaker.set(key, segmentTime === null ? null : Math.max(lastTime!, segmentTime));
       open.lastSequence = segment.sequence;
       open.receivedAt = Math.max(open.receivedAt, segment.receivedAt);
       continue;
@@ -86,6 +97,7 @@ export function groupSegments(
     };
     blocks.push(block);
     openBySpeaker.set(key, block);
+    lastTimeBySpeaker.set(key, segmentTime);
   }
 
   return blocks;
