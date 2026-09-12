@@ -1,0 +1,28 @@
+# Communications Hub MVP specification
+
+## Agreed outcome
+A single BB instance hosts a persistent conversation library. Platform-independent BB thread attachments and agent tools retrieve imported or live transcripts. Zoom is the first live source adapter. Canonical language lives in [the glossary](../../glossary.md), referenced by AGENTS.md.
+
+## Scope and architecture
+Ship one TypeScript BB plugin, with a SQLite-backed hub, source adapters, backend RPC/CLI/agent tools, and a React Communications panel plus thread panel/header control. No separate hosted hub, accounts, sharing, bots, autonomous spoken-command execution, embeddings, audio storage, or other AV adapters.
+
+The hub assigns opaque conversation IDs; source connection plus external occurrence ID is unique. Segments are immutable and have stable citation addresses, adapter deduplication keys, relative speech timestamps when available, and receipt timestamps. A segment's citation address is its conversation and ingestion sequence. Stored row identifiers and deduplication keys are hub-internal and are not part of the retrieval surface. Thread attachments have independent explicit acknowledgement cursors. Imports create separate conversations; reconciling cleaned-up transcript versions is deferred without overwriting prior citations.
+
+## Vertical slice
+Import UTF-8 WebVTT, SRT, or plain text (maximum 1 MB), view/search the transcript, attach a BB thread, retrieve relevant passages with citation addresses and timing through tools/CLI, and acknowledge a reading cursor. State survives plugin reload. Plain text retains paragraphs and optional speaker prefixes with null timestamps. Malformed timed files fail atomically. Limit each segment to 2,000 characters and retrieval pages to 20 by default, 30 maximum. Larger import passages may split preserving attribution and timing.
+
+## Zoom proof of concept
+Configure a General app with transcript-only RTMS access, started/stopped webhooks, and automatic capture for conversations the operator hosts. Store client secret and webhook secret in BB secret settings. Verify raw-body HMAC and timestamp before accepting webhooks; process URL validation securely. Accept only original-host started events. Map conversation UUID to hub occurrence and stream ID to capture transport. Authenticate signaling/media WebSockets, request transcript-only data, acknowledge readiness/keep-alives, handle stop/pause/disconnect, deduplicate delivery, and close sockets/timers on disposal. Bound payloads and reconnect attempts; surface interrupted state rather than promising lossless recovery or retroactive history. Local Stop capture closes this instance's connection; Zoom controls own upstream RTMS consent/session settings.
+
+The plugin remains usable without Zoom credentials. A public HTTPS webhook route is required for live Zoom setup. Do not expose all of BB as a convenience. No fake connected status: distinguish configured credentials, active connection, transcript receipt, and interrupted capture. Live verification requires an actual configured Zoom app and conversation; protocol tests alone are not live verification.
+
+## BB UX and agent behaviour
+Communications navigation panel lists recent conversations with source/status/receipt freshness, imports files or pasted text, opens transcripts, supports bounded search/pagination, and shows source readiness and webhook setup. Thread panel picks/attaches/detaches conversations and reads passages; header opens it. Routes to a conversation support citation deep links when possible, addressing a single passage or a span of them. Independent thread attachment lookup happens at tool execution time, not session configuration time.
+
+Tools: list conversations; current conversation; search transcript; read transcript by sequence/time and optionally since acknowledged cursor; acknowledge cursor. Read/search default to the attached conversation. Explicit conversation ID supports intentional cross-conversation access within this BB instance. Attachment changes require an explicit UI/CLI action. Transcripts are untrusted reference material. Nothing automatically starts agent work or forwards conversation speech as user instructions. Agent output includes stable passage references, capture coverage/status, and pagination indicators. A reference may address a span of passages when consecutive speech is presented as one, provided the exact member sequences remain available and each stays individually citable. Presentation may group or omit repeated fields, but never changes what was stored.
+
+## Verification and delivery
+Tests use real SQLite and the BB public fake host, plus a controlled WebSocket peer for transport. Cover import formats and rejection, persistence, per-thread isolation/cursors, deduplication, bounds, signature rejection, capture cleanup, and UI import/attachment/read states. Run typecheck and bb plugin build. Install locally for a live BB smoke test if supported by the environment; report actual Zoom verification separately. Supply README, fixture transcript, Zoom setup guide, spec, glossary, and AGENTS.md. No remote publish is included.
+
+## Accepted refinement: spaces and conversations
+The hub's generic entity is Conversation. A Meeting is one synchronous kind of conversation. A Space is an ongoing channel or recurring location which may later contain multiple conversations. Future channel adapters can present calendar-day windows in an explicit timezone while preserving cross-day replies and stable message IDs. The MVP does not implement Slack/Discord, daily partitioning, or space subscriptions. Core IDs, tool names, storage and attachment terminology use conversation; Zoom-specific meeting terminology stays in its adapter/setup.
