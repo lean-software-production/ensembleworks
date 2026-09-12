@@ -17,6 +17,10 @@
 | Capture | Receiving live transcription into the hub. It belongs to the hub, not a thread or agent session. |
 | Capture state | Whether capture is connecting, capturing, paused, stopped, interrupted, or ended; idle means no live capture (such as an import). |
 | Reading cursor | A per-thread acknowledged ingestion sequence. Reading/searching does not advance it implicitly. |
+| Conversation watch | Explicitly enabled automatic wake-ups for one thread and its currently attached conversation. Its purpose comes from the user’s existing thread task. It stops when the conversation attachment changes. |
+| Processed cursor | A watch’s acknowledged ingestion sequence, independent of the thread’s reading cursor. Advanced only after the agent handles the passages successfully. |
+| Watch generation | A unique identity for one start-to-stop watch lifetime. Prevents acknowledgements from an older watch advancing a new watch. |
+| Wake-up | A metadata-only message asking an idle thread agent to continue its existing task using newly available passages. Delivery may repeat until processing is acknowledged. |
 | Source key | Adapter-provided identity used to deduplicate retransmitted segments within a conversation. |
 | Provenance | The source connection, external occurrence identity, and source key explaining where a segment came from. |
 

@@ -44,4 +44,16 @@ Sub-agents receive disjoint file ownership. Interaction-contract obligations app
 
 ## Execution evidence
 
-Pending implementation.
+Implemented on 2026-09-12 with three `gpt-5.6-luna` sub-agents for storage, dispatcher, and UI, followed by primary-agent integration and review.
+
+- Public SDK 0.4.84 matches the host (`bb plugin types --check`). `threads.send` supports idle-check/auto delivery but has no idempotency key; the durable attempt timestamp and separate processing acknowledgement implement the documented at-least-once behavior.
+- Added SQLite watch migration, generation validation, independent processing cursor, lifecycle stop, metadata-only dispatcher, 15-second batching, 60-second polling/cooldown, UI and CLI controls, agent status/ack tools, and user/agent documentation.
+- Review corrected realtime watch-status refresh, pending UI request invalidation, polling timer/abort-listener cleanup, stale dispatch checks, and Stop cancelling a still-pending Start request. The send API can queue a message if the thread becomes busy after its status check; already dispatched work cannot be revoked by this MVP.
+- `npm test`: all 188 tests in 14 files passed. After adding the final pending-Start cancellation regression, focused server tests passed (12 tests across server and watch-server), and focused dispatcher tests passed (9). These include real SQLite/public fake-host integration for dropped pokes, busy arrivals, independent acknowledgements, reload persistence, and stop during asynchronous dispatch checks.
+- `npm run typecheck`: passed after final changes.
+- `bb plugin build`: server and frontend bundles emitted; no public SDK additions or dependency changes.
+- `git diff --check`: passed. Unrelated pre-existing edits remain untouched.
+
+Live limitation: no watch was enabled on an existing thread, and no live provider-generated HTML mind map was exercised. The README contains the live smoke procedure. This delivery builds the plugin; it does not reload a currently capturing plugin or publish/deploy it.
+
+The BB instance remains the access boundary, matching existing attachment RPC/CLI behavior. Watch agent tools are scoped to the invoking thread; explicit CLI/UI thread IDs remain supported. `ux-contract: none — this change touches the Communications Hub plugin, not the repository’s canvas interaction-bearing paths.`

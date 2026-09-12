@@ -78,6 +78,14 @@ type Page = {
   nextCursor: number;
 };
 
+type ConversationWatch = {
+  threadId: string;
+  conversationId: string;
+  generation: string;
+  processedCursor: number;
+  lastAttemptAt: number | null;
+};
+
 function TranscriptView({
   conversationId, initialSequence, initialEndSequence, compact = false, onPage, onSend,
 }: {
@@ -752,6 +760,9 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
   const [selected, setSelected] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [watch, setWatch] = useState<ConversationWatch | null>(null);
+  const [watchPending, setWatchPending] = useState(false);
+  const watchRequest = useRef(0);
   const refetch = useCallback(async () => {
     try {
       const [attached, listed, listedRooms] = await Promise.all([
@@ -770,7 +781,26 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
     } catch (cause) { setError(errorText(cause)); }
   }, [rpc, threadId]);
   useEffect(() => { void refetch(); }, [refetch]);
-  const realtimeRefresh = useCallback(() => { void refetch(); }, [refetch]);
+  // Watch state has its own request so a slow watch lookup cannot hold up the
+  // conversation picker, and responses from a previous thread cannot replace it.
+  const refreshWatch = useCallback(async () => {
+    const request = ++watchRequest.current;
+    try {
+      const result = await rpc.call("watch.get", { threadId });
+      if (request === watchRequest.current) setWatch(result.watch as ConversationWatch | null);
+    } catch (cause) {
+      if (request === watchRequest.current) setError(errorText(cause));
+    }
+  }, [rpc, threadId]);
+  useEffect(() => {
+    setWatch(null);
+    void refreshWatch();
+    return () => { watchRequest.current++; };
+  }, [refreshWatch]);
+  const realtimeRefresh = useCallback(() => {
+    void refetch();
+    void refreshWatch();
+  }, [refetch, refreshWatch]);
   useChangedSignal(realtimeRefresh);
 
   const attach = async () => {
@@ -788,6 +818,7 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
         : conversations.find((item) => item.id === next.conversationId)
           ?? await rpc.call("conversations.get", { conversationId: next.conversationId }));
       setError(null);
+      await refreshWatch();
     } catch (cause) { setError(errorText(cause)); }
     finally { setPending(false); }
   };
@@ -805,10 +836,10 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
       </select>
     </label>
     <div className="flex flex-wrap gap-2">
-      <Button type="button" size="sm" disabled={pending || !selected} onClick={() => void attach()}>{pending ? "Attaching…" : selected.startsWith("room:") ? "Follow room" : "Attach conversation"}</Button>
-      {attachment ? <Button type="button" size="sm" variant="outline" disabled={pending} onClick={async () => {
+      <Button type="button" size="sm" disabled={pending || watchPending || !selected} onClick={() => void attach()}>{pending ? "Attaching…" : selected.startsWith("room:") ? "Follow room" : "Attach conversation"}</Button>
+      {attachment ? <Button type="button" size="sm" variant="outline" disabled={pending || watchPending} onClick={async () => {
         setPending(true);
-        try { await rpc.call("attachments.detach", { threadId }); setAttachment(null); setConversation(null); setRoom(null); setError(null); }
+        try { await rpc.call("attachments.detach", { threadId }); setAttachment(null); setConversation(null); setRoom(null); setWatch(null); setError(null); }
         catch (cause) { setError(errorText(cause)); }
         finally { setPending(false); }
       }}>Detach</Button> : null}
@@ -819,6 +850,36 @@ function ThreadConversationPanel({ threadId }: PluginThreadPanelProps) {
     ) : !attachment || !conversation ? <StatusBox>Attach this thread to a room or conversation to read its transcript.</StatusBox> : <>
       {room ? <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">Following {room.name}. Showing its current sitting; a new one replaces it here.</div> : null}
       <div className="rounded-md bg-muted px-3 py-2 text-xs text-muted-foreground">Reading cursor: passage {attachment.cursor}. Reading and search do not acknowledge passages automatically.</div>
+      <section aria-label="Conversation watch" className="space-y-2 rounded-md border px-3 py-3">
+        <div className="text-sm font-medium">Watch this conversation</div>
+        {watch === null ? (
+          <p className="text-xs text-muted-foreground">Give this thread a task first, then watch for new passages.</p>
+        ) : (
+          <p className="text-xs text-muted-foreground">Watching · processed through passage {watch.processedCursor}{watch.lastAttemptAt === null ? "" : " · last attempt " + new Date(watch.lastAttemptAt).toLocaleTimeString()}</p>
+        )}
+        <div className="flex flex-wrap gap-2">
+          {watch === null ? (
+            <Button type="button" size="sm" disabled={watchPending || pending} onClick={async () => {
+              setWatchPending(true);
+              const request = ++watchRequest.current;
+              try {
+                const started = await rpc.call("watch.start", { threadId });
+                if (request === watchRequest.current) { setWatch(started as ConversationWatch); setError(null); }
+              }
+              catch (cause) { setError(errorText(cause)); }
+              finally { setWatchPending(false); }
+            }}>{watchPending ? "Starting…" : "Watch conversation"}</Button>
+          ) : (
+            <Button type="button" variant="outline" size="sm" disabled={watchPending || pending} onClick={async () => {
+              setWatchPending(true);
+              const request = ++watchRequest.current;
+              try { await rpc.call("watch.stop", { threadId }); if (request === watchRequest.current) { setWatch(null); setError(null); } }
+              catch (cause) { setError(errorText(cause)); }
+              finally { setWatchPending(false); }
+            }}>{watchPending ? "Stopping…" : "Stop watching"}</Button>
+          )}
+        </div>
+      </section>
       <TranscriptView
         conversationId={conversation.id} compact
         onPage={(page) => setConversation(page.conversation)}

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import { z } from 'zod';
-import { captureStateSchema, segmentInputSchema, type CaptureState, type Conversation, type Registrant, type Room, type SegmentInput, type ThreadAttachment, type TranscriptSegment } from './domain';
+import { captureStateSchema, segmentInputSchema, watchSchema, type CaptureState, type Conversation, type ConversationWatch, type Registrant, type Room, type SegmentInput, type ThreadAttachment, type TranscriptSegment } from './domain';
 
 export const readOptionsSchema = z.object({
   after: z.number().int().nonnegative().default(0), limit: z.number().int().min(1).max(30).default(20),
@@ -49,6 +49,10 @@ export const migrations = [
     id TEXT PRIMARY KEY, roomId TEXT NOT NULL REFERENCES rooms(id), name TEXT NOT NULL,
     email TEXT NOT NULL, externalId TEXT NOT NULL, joinUrl TEXT NOT NULL, createdAt INTEGER NOT NULL,
     UNIQUE(roomId, email))`,
+  `CREATE TABLE IF NOT EXISTS conversation_watches (
+    threadId TEXT PRIMARY KEY, conversationId TEXT NOT NULL REFERENCES conversations(id),
+    generation TEXT NOT NULL, processedCursor INTEGER NOT NULL DEFAULT 0, lastAttemptAt INTEGER,
+    UNIQUE(threadId, generation))`,
 ];
 
 /** SQLite owns runtime state. No platform or BB-thread API dependencies. */
@@ -209,6 +213,8 @@ export class Hub {
       // Threads following this room move to the new sitting. The cursor resets because
       // sequences restart per conversation, so carrying it over would mark the opening of the
       // new sitting as already read.
+      const targets=this.db.prepare('SELECT threadId FROM thread_targets WHERE roomId=? AND conversationId IS NOT ?').all(roomId,conversationId) as {threadId:string}[];
+      for (const target of targets) this.stopWatchInternal(target.threadId);
       this.db.prepare('UPDATE thread_targets SET conversationId=?,cursor=0 WHERE roomId=? AND conversationId IS NOT ?')
         .run(conversationId,roomId,conversationId);
     })();
@@ -265,6 +271,8 @@ export class Hub {
   /** Point a thread at one conversation. The cursor survives re-attaching to the same one. */
   attach(threadId:string,conversationId:string):ThreadAttachment {
     idSchema.parse(threadId); this.getConversation(conversationId);
+    const current=this.getAttachment(threadId);
+    if (current?.conversationId !== conversationId) this.stopWatchInternal(threadId);
     this.db.prepare(`INSERT INTO thread_targets(threadId,roomId,conversationId,cursor) VALUES(?,NULL,?,0)
       ON CONFLICT(threadId) DO UPDATE SET roomId=NULL,conversationId=excluded.conversationId,
       cursor=CASE WHEN thread_targets.conversationId=excluded.conversationId THEN thread_targets.cursor ELSE 0 END`).run(threadId,conversationId);
@@ -283,6 +291,8 @@ export class Hub {
   attachRoom(threadId:string,roomId:string):ThreadAttachment {
     idSchema.parse(threadId); this.getRoom(roomId);
     const current=this.currentRoomConversation(roomId);
+    const previous=this.getAttachment(threadId);
+    if (previous?.conversationId !== current) this.stopWatchInternal(threadId);
     this.db.prepare(`INSERT INTO thread_targets(threadId,roomId,conversationId,cursor) VALUES(?,?,?,0)
       ON CONFLICT(threadId) DO UPDATE SET roomId=excluded.roomId,conversationId=excluded.conversationId,
       cursor=CASE WHEN thread_targets.conversationId IS excluded.conversationId THEN thread_targets.cursor ELSE 0 END`)
@@ -300,7 +310,7 @@ export class Hub {
     const row=this.db.prepare('SELECT id FROM conversations WHERE roomId=? ORDER BY createdAt DESC,rowid DESC LIMIT 1').get(roomId) as {id:string}|undefined;
     return row?.id ?? null;
   }
-  detach(threadId:string) { idSchema.parse(threadId); this.db.prepare('DELETE FROM thread_targets WHERE threadId=?').run(threadId); this.changed(); }
+  detach(threadId:string) { idSchema.parse(threadId); this.stopWatchInternal(threadId); this.db.prepare('DELETE FROM thread_targets WHERE threadId=?').run(threadId); this.changed(); }
   getAttachment(threadId:string):ThreadAttachment|null { idSchema.parse(threadId); return this.db.prepare('SELECT * FROM thread_targets WHERE threadId=?').get(threadId) as ThreadAttachment|undefined ?? null; }
   acknowledge(threadId:string,conversationId:string,cursor:number) {
     z.number().int().nonnegative().parse(cursor); const a=this.getAttachment(threadId);
@@ -308,6 +318,73 @@ export class Hub {
     const max=(this.db.prepare('SELECT coalesce(max(sequence),0) AS n FROM segments WHERE conversationId=?').get(conversationId) as {n:number}).n;
     if (cursor>max) throw new Error('Cursor exceeds available transcript');
     this.db.prepare('UPDATE thread_targets SET cursor=max(cursor,?) WHERE threadId=?').run(cursor,threadId); this.changed(); return this.getAttachment(threadId)!;
+  }
+  private stopWatchInternal(threadId:string): boolean {
+    return this.db.prepare('DELETE FROM conversation_watches WHERE threadId=?').run(threadId).changes > 0;
+  }
+  private watchRow(threadId:string): ConversationWatch | null {
+    const row=this.db.prepare('SELECT * FROM conversation_watches WHERE threadId=?').get(threadId) as ConversationWatch|undefined;
+    return row ? watchSchema.parse(row) : null;
+  }
+  private watchIsAttached(watch: ConversationWatch): boolean {
+    const attachment=this.db.prepare('SELECT conversationId FROM thread_targets WHERE threadId=?').get(watch.threadId) as {conversationId:string|null}|undefined;
+    return attachment?.conversationId === watch.conversationId;
+  }
+  startWatch(threadId:string): ConversationWatch {
+    idSchema.parse(threadId);
+    const existing=this.getWatch(threadId);
+    const attachment=this.getAttachment(threadId);
+    if (!attachment?.conversationId) throw new Error('Thread must be attached to a conversation');
+    if (existing && existing.conversationId === attachment.conversationId) return existing;
+    if (existing) this.stopWatchInternal(threadId);
+    const watch={threadId,conversationId:attachment.conversationId,generation:randomUUID(),processedCursor:0,lastAttemptAt:null};
+    this.db.prepare('INSERT INTO conversation_watches(threadId,conversationId,generation,processedCursor,lastAttemptAt) VALUES(?,?,?,?,?)')
+      .run(watch.threadId,watch.conversationId,watch.generation,watch.processedCursor,watch.lastAttemptAt);
+    this.changed(); return watchSchema.parse(watch);
+  }
+  getWatch(threadId:string): ConversationWatch | null {
+    idSchema.parse(threadId);
+    const watch=this.watchRow(threadId);
+    if (!watch) return null;
+    if (this.watchIsAttached(watch)) return watch;
+    if (this.stopWatchInternal(threadId)) this.changed();
+    return null;
+  }
+  listWatches(): ConversationWatch[] {
+    const rows=this.db.prepare('SELECT * FROM conversation_watches ORDER BY threadId').all() as ConversationWatch[];
+    let stopped=false;
+    for (const watch of rows) {
+      if (!this.watchIsAttached(watch) && this.stopWatchInternal(watch.threadId)) stopped=true;
+    }
+    if (stopped) this.changed();
+    return rows.filter(watch => this.watchIsAttached(watch));
+  }
+  stopWatch(threadId:string): void {
+    idSchema.parse(threadId);
+    if (this.stopWatchInternal(threadId)) this.changed();
+  }
+  acknowledgeWatch(threadId:string,conversationId:string,generation:string,cursor:number): ConversationWatch {
+    idSchema.parse(threadId); idSchema.parse(conversationId); idSchema.parse(generation);
+    z.number().int().nonnegative().parse(cursor);
+    const watch=this.getWatch(threadId);
+    if (!watch || watch.conversationId !== conversationId || watch.generation !== generation) throw new Error('Watch generation is no longer current');
+    const max=this.latestSequence(conversationId);
+    if (cursor>max) throw new Error('Cursor exceeds available transcript');
+    if (cursor<=watch.processedCursor) return watch;
+    this.db.prepare('UPDATE conversation_watches SET processedCursor=max(processedCursor,?) WHERE threadId=? AND generation=?')
+      .run(cursor,threadId,generation);
+    this.changed(); return this.watchRow(threadId)!;
+  }
+  markWatchAttempt(threadId:string,generation:string,at:number): boolean {
+    idSchema.parse(threadId); idSchema.parse(generation); z.number().int().nonnegative().parse(at);
+    const watch=this.getWatch(threadId);
+    if (!watch || watch.generation !== generation) return false;
+    this.db.prepare('UPDATE conversation_watches SET lastAttemptAt=? WHERE threadId=? AND generation=?').run(at,threadId,generation);
+    this.changed(); return true;
+  }
+  latestSequence(conversationId:string): number {
+    this.getConversation(conversationId);
+    return (this.db.prepare('SELECT coalesce(max(sequence),0) AS n FROM segments WHERE conversationId=?').get(conversationId) as {n:number}).n;
   }
   readTranscript(conversationId:string,options:ReadOptions = {}):TranscriptPage { return this.queryTranscript(conversationId,options); }
   searchTranscript(conversationId:string,options:ReadOptions & {query:string}):TranscriptPage {

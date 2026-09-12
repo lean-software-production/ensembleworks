@@ -62,6 +62,11 @@ export const attachmentSchema = z.object({
   cursor: z.number(),
 });
 export type ThreadAttachment = z.infer<typeof attachmentSchema>;
+export const watchSchema = z.object({
+  threadId: z.string(), conversationId: z.string(), generation: z.string(),
+  processedCursor: z.number().int().nonnegative(), lastAttemptAt: z.number().int().nonnegative().nullable(),
+});
+export type ConversationWatch = z.infer<typeof watchSchema>;
 /** Source adapters depend on this interface, not BB threads or the concrete hub. */
 export interface TranscriptSink {
   ensureConversation(sourceId: string, externalId: string, title: string): {id: string};

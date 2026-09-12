@@ -144,6 +144,15 @@ function handlers(
       conversationId,
       cursor,
     }),
+    "watch.get": () => ({ watch: null }),
+    "watch.start": ({ threadId }) => ({
+      threadId,
+      conversationId: conversation.id,
+      generation: "watch-generation-1",
+      processedCursor: 0,
+      lastAttemptAt: null,
+    }),
+    "watch.stop": () => ({ ok: true }),
     "capture.stop": () => ({ ...conversation, captureState: "stopped" }),
     "sources.status": () => ({
       ensembleworks: { enabled: false, conversationId: null },
@@ -340,6 +349,76 @@ describe("Communications Hub app", () => {
     expect(
       (await slot.findByText(/Reading cursor: passage/)).textContent,
     ).toContain("Reading and search do not acknowledge passages automatically.");
+  });
+
+  it("starts and stops watching an attached conversation and shows its progress", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: "thread-a", params: null }, {
+      rpc: handlers({
+        "attachments.get": () => ({
+          attachment: { threadId: "thread-a", roomId: null, conversationId: conversation.id, cursor: 0 },
+          conversation,
+          room: null,
+        }),
+        "watch.get": () => ({ watch: {
+          threadId: "thread-a", conversationId: conversation.id, generation: "watch-generation-1",
+          processedCursor: 7, lastAttemptAt: null,
+        } }),
+      }),
+    });
+
+    await slot.findByText("Watching · processed through passage 7");
+    fireEvent.click(slot.getByRole("button", { name: "Stop watching" }));
+    await waitFor(() => expect(slot.inspection.rpcCalls).toContainEqual({
+      method: "watch.stop", input: { threadId: "thread-a" },
+    }));
+    await slot.findByRole("button", { name: "Watch conversation" });
+    fireEvent.click(slot.getByRole("button", { name: "Watch conversation" }));
+    await waitFor(() => expect(slot.inspection.rpcCalls).toContainEqual({
+      method: "watch.start", input: { threadId: "thread-a" },
+    }));
+    await slot.findByText("Watching · processed through passage 0");
+  });
+
+  it("surfaces watch start failures", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: "thread-a", params: null }, {
+      rpc: handlers({
+        "attachments.get": () => ({
+          attachment: { threadId: "thread-a", roomId: null, conversationId: conversation.id, cursor: 0 },
+          conversation,
+          room: null,
+        }),
+        "watch.start": () => { throw new Error("Give the thread a task before watching."); },
+      }),
+    });
+
+    await slot.findByRole("button", { name: "Watch conversation" });
+    fireEvent.click(slot.getByRole("button", { name: "Watch conversation" }));
+    await waitFor(() => expect(slot.getByRole("alert").textContent).toContain("Give the thread a task"));
+  });
+
+  it("refreshes watch progress when the hub signals a conversation change", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    let processedCursor = 7;
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: "thread-a", params: null }, {
+      rpc: handlers({
+        "attachments.get": () => ({
+          attachment: { threadId: "thread-a", roomId: null, conversationId: conversation.id, cursor: 0 },
+          conversation,
+          room: null,
+        }),
+        "watch.get": () => ({ watch: {
+          threadId: "thread-a", conversationId: conversation.id, generation: "watch-generation-1",
+          processedCursor, lastAttemptAt: null,
+        } }),
+      }),
+    });
+
+    await slot.findByText("Watching · processed through passage 7");
+    processedCursor = 9;
+    await slot.behavior.emitRealtime("communications-changed", { changed: true });
+    await slot.findByText("Watching · processed through passage 9");
   });
 
   it("issues a personal link for a registered person", async () => {
