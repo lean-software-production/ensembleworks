@@ -26,3 +26,6 @@ spikes/phase0/dist/
 bossman-*.png
 .worktrees/
 .worktrees/
+
+# Local planning state
+.yaks/
