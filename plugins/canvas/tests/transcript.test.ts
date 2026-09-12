@@ -603,3 +603,22 @@ describe("the pure pieces", () => {
     expect(transcriptEntryFrom("nope")).toBeNull();
   });
 });
+
+describe("durable transcript feed", () => {
+  it("pages by insertion id across tied and late speech, and preserves stream identity on reload", async () => {
+    const host = await bootHost();
+    await postScribe(host, [
+      { ts: 2000, speaker: "A", text: "first" },
+      { ts: 2000, speaker: "A", text: "second" },
+      { ts: 1000, speaker: "B", text: "late" },
+    ]);
+    const page = await host.harness.behavior.callRpc("canvas_transcript_feed", { after: 0, limit: 2 }) as {streamId:string; nextCursor:number; entries:TranscriptEntry[]; hasMore:boolean};
+    expect(page.entries.map(e => e.text)).toEqual(["first", "second"]);
+    expect(page.hasMore).toBe(true);
+    const reloaded = await host.harness.lifecycle.reload(plugin);
+    hosts.push(reloaded);
+    const tail = await reloaded.harness.behavior.callRpc("canvas_transcript_feed", { after: page.nextCursor, limit: 2 });
+    expect(tail).toMatchObject({streamId:page.streamId, entries:[{text:"late"}],hasMore:false});
+    await expect(reloaded.harness.behavior.callRpc("canvas_transcript_feed", { after: -1, limit: 100 })).rejects.toThrow();
+  });
+});

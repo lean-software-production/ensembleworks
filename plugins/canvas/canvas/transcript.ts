@@ -167,6 +167,19 @@ export class TranscriptStore {
     return rows.reverse();
   }
 
+  /** Durable insertion-order feed. Speech timestamps may arrive late or tie. */
+  feed(after: number, limit: number) {
+    const streamId = this.#db.prepare<[], { id: string }>(
+      "SELECT id FROM canvas_transcript_feed",
+    ).get()!.id;
+    const rows = this.#db.prepare<[number, number], TranscriptEntry & { id: number }>(
+      "SELECT id, ts, speaker, text FROM canvas_transcript WHERE id > ? ORDER BY id LIMIT ?",
+    ).all(after, limit + 1);
+    const entries = rows.slice(0, limit);
+    return { streamId, entries, hasMore: rows.length > limit,
+      nextCursor: entries.at(-1)?.id ?? after };
+  }
+
   /** How many entries match, ignoring `limit`. What the mention menu's
    * subtitles show, so a window that is empty says so before it is picked. */
   count(filter: TranscriptFilter = {}): number {

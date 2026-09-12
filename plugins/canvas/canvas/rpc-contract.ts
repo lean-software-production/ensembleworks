@@ -298,6 +298,12 @@ export const rpcContract = defineRpcContract({
    * `limit` is the TAIL: the newest N matching entries, then returned oldest
    * first so a caller renders it top to bottom without reversing anything.
    */
+  canvas_transcript_feed: {
+    input: z.object({ after: z.number().int().nonnegative(), limit: z.number().int().min(1).max(100) }).strict(),
+    output: z.object({ streamId: z.string(), entries: z.array(z.object({
+      id: z.number().int().positive(), ts: z.number(), speaker: z.string(), text: z.string(),
+    }).strict()), hasMore: z.boolean(), nextCursor: z.number().int().nonnegative() }).strict(),
+  },
   canvas_transcript_query: {
     input: z
       .object({

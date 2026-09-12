@@ -19,7 +19,7 @@ const PAGE_SIZE = 20;
 const MAX_FILE_BYTES = 1_000_000;
 
 const errorText = (cause: unknown) => cause instanceof Error ? cause.message : String(cause);
-const sourceLabel = (id: string) => id === "import" ? "Imported" : id === "zoom" ? "Zoom" : id;
+const sourceLabel = (id: string) => id === "import" ? "Imported" : id === "zoom" ? "Zoom" : id === "canvas" ? "BB Canvas" : id === "ensembleworks" ? "EnsembleWorks V1" : id;
 const captureLabel = (state: Conversation["captureState"]) =>
   state === "idle" ? "Imported transcript" : state[0]!.toUpperCase() + state.slice(1);
 

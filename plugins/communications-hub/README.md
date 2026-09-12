@@ -143,3 +143,38 @@ Further live runs on 2026-09-11 confirmed capture does not require the app owner
 ## Provenance
 
 The first build of this plugin was lost when its BB workspace was destroyed. This tree was reconstructed from agent transcripts and re-verified; see the recovery note in [the implementation plan](docs/superpowers/plans/2026-09-10-communications-hub.md).
+
+## EnsembleWorks V1 (existing LiveKit transcript)
+
+The `ensembleworks` source reads the V1 server's existing `/api/scribe/transcript` endpoint. No upstream code change, new recorder or BB Canvas plugin is needed.
+
+```sh
+bb communications v1-start http://localhost:8788 team "EnsembleWorks V1"
+bb communications attach <returned-conversation-id>
+bb communications status
+bb communications v1-stop <conversation-id>
+```
+
+Capture starts from the current time by default. Supply an optional fourth argument, `since-ms` (Unix milliseconds), to include earlier speech. There is one active V1 source connection per Hub. Stop before switching server or room. Repeating start while active returns the existing conversation; it does not change the historical window. A stopped capture stays readable, and starting again creates a separate conversation. The panel's Stop capture also stops this source. The URL must be reachable from the BB server and have no embedded credentials; this adapter does not support authenticated V1 gateways.
+
+The adapter polls every two seconds, persists progress through BB storage, deduplicates utterance IDs and preserves LiveKit speaker identity. Thread reads, search, citations and independent acknowledgement cursors work as for other Hub conversations. HTTP requests time out after ten seconds and are aborted on disposal. Transcript contents and source errors stay out of logs.
+
+**V1 coverage limits:** the existing endpoint returns a timestamp-filtered tail rather than a durable sequence feed. Capture rereads a 60-second overlap to catch tied timestamps and moderately late speech. Arrivals older than that overlap are not discoverable. A response reaching 10,000 entries or 16 MiB interrupts capture without advancing its checkpoint, because it may omit earlier speech. Resolve the source/backlog before resuming, or explicitly stop and start a later window. Source history deletion/replacement cannot reliably be detected by this API. Capturing means the endpoint is reachable, not that upstream audio is healthy. Receipt freshness and capture detail remain visible.
+
+## BB Canvas transcript feed
+
+The Canvas adapter follows the transcript already received by the installed `canvas` plugin from the existing LiveKit scribe. Build and reload both plugins from this checkout before starting it; the Canvas plugin must expose `canvas_transcript_feed`.
+
+```sh
+bb communications canvas-start "EnsembleWorks team conversation"
+bb communications attach <returned-conversation-id>
+bb communications status
+```
+
+The initial capture imports **all retained Canvas transcript entries**, then checks for new entries every two seconds. An explicit start/stop defines the conversation; there is no automatic daily partition or thread subscription. Each thread can attach through the existing Conversation panel or CLI and use the same read, search, citation and acknowledgement tools as other sources.
+
+`bb communications canvas-stop <conversation-id>` (or Stop capture in the panel) preserves the transcript and stops ingestion. Plugin reload resumes enabled capture automatically. Starting after a stop creates another conversation and imports retained history again.
+
+The feed uses stable source storage identity and insertion IDs, not speech timestamps, so tied timestamps, late speech, paginated backlogs and retries do not lose or duplicate passages within a capture. Hub SQLite stores passages; BB KV stores progress, saved only after append. A source database replacement interrupts the capture rather than mixing sources; stop and start a new capture to adopt it. Long utterances split into passages of at most 2,000 characters. Source-relative timing starts at the first imported utterance; earlier late arrivals have unknown timing. Speaker identity and end times are unknown because the Canvas store only has display labels and point timestamps.
+
+“Capturing” means the store is reachable. It does not assert that upstream LiveKit/Whisper is healthy; consult receipt freshness. No transcript text or upstream errors are logged. This adapter adds no inbound webhook, credentials, audio capture, or automatic agent dispatch.

@@ -146,6 +146,8 @@ function handlers(
     }),
     "capture.stop": () => ({ ...conversation, captureState: "stopped" }),
     "sources.status": () => ({
+      ensembleworks: { enabled: false, conversationId: null },
+      canvas: { enabled: false, conversationId: null, cursor: 0 },
       zoom: { configured: true, enabled: false, canCreateRooms: false },
       webhookPath: "/plugins/communications-hub/webhooks/zoom",
       importReady: true,

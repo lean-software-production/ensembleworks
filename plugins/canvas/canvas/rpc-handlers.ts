@@ -158,6 +158,7 @@ export function createRpcHandlers(
         identity,
       };
     },
+    canvas_transcript_feed: ({ after, limit }) => transcript.feed(after, limit),
     canvas_transcript_query: ({ sinceMs, search, speaker, limit }) => ({
       entries: transcript.query({
         sinceMs,

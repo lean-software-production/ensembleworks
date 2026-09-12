@@ -4,6 +4,8 @@ import { Hub, type TranscriptPage } from './src/hub';
 import { id, importInput, readInput, rpcContract } from './src/contracts';
 import { parseTranscript } from './src/adapters/import';
 import { buildReadPayload, buildSearchPayload } from './src/presentation';
+import { registerEnsembleWorks } from './src/adapters/ensembleworks';
+import { registerCanvas } from './src/adapters/canvas';
 import { registerZoom } from './src/adapters/zoom';
 
 export { rpcContract } from './src/contracts';
@@ -26,6 +28,10 @@ const usage=`bb communications commands (JSON output):
   delete-room <room-id>
   registrants <room-id>
   register <room-id> <name> <email>
+  v1-start <server-url> <room> <title> [since-ms]
+  v1-stop <conversation-id>
+  canvas-start <title>
+  canvas-stop <conversation-id>
   status
 Use the Communications panel to import files. Omitted thread-id uses the invoking BB thread.`;
 
@@ -39,7 +45,9 @@ export default async function plugin(bb:BbPluginApi) {
   const db=bb.storage.database(); const hub=new Hub(db,changed,statements=>bb.storage.migrate(db,statements));
   hub.interruptActiveCaptures();
   const zoom=await registerZoom(bb,hub);
-  const sources=async()=>({zoom:await zoom.status(),importReady:true,webhookPath:`/api/v1/plugins/${bb.pluginId}/http/zoom/webhook`});
+  const canvas=await registerCanvas(bb,hub);
+  const ensembleworks=await registerEnsembleWorks(bb,hub);
+  const sources=async()=>({ensembleworks:ensembleworks.status(),canvas:canvas.status(),zoom:await zoom.status(),importReady:true,webhookPath:`/api/v1/plugins/${bb.pluginId}/http/zoom/webhook`});
   const current=(threadId:string)=>{
     const attachment=hub.getAttachment(threadId);
     return {
@@ -81,7 +89,7 @@ export default async function plugin(bb:BbPluginApi) {
     'rooms.delete':({roomId})=>zoom.deleteRoom(roomId),
     'registrants.list':({roomId})=>hub.listRegistrants(roomId),
     'registrants.add':({roomId,name,email})=>zoom.addRegistrant(roomId,{name,email}),
-    'capture.stop':({conversationId})=>{hub.getConversation(conversationId);zoom.stop(conversationId);return hub.getConversation(conversationId);},
+    'capture.stop':async({conversationId})=>{hub.getConversation(conversationId);await canvas.stop(conversationId);await ensembleworks.stop(conversationId);zoom.stop(conversationId);return hub.getConversation(conversationId);},
     'sources.status':sources,
   });
   bb.events.on('thread.deleted',({thread})=>hub.detach(thread.id));
@@ -121,6 +129,10 @@ export default async function plugin(bb:BbPluginApi) {
     {name:'delete-room',summary:'Delete a room at Zoom, killing every link into it',usage:'bb communications delete-room <room-id>'},
     {name:'registrants',summary:'List people registered for a room',usage:'bb communications registrants <room-id>'},
     {name:'register',summary:'Register a person and issue their personal join link',usage:'bb communications register <room-id> <name> <email>'},
+    {name:'v1-start',summary:'Follow the existing EnsembleWorks V1 transcript',usage:'bb communications v1-start <server-url> <room> <title> [since-ms]'},
+    {name:'v1-stop',summary:'Stop following the V1 transcript',usage:'bb communications v1-stop <conversation-id>'},
+    {name:'canvas-start',summary:'Import retained Canvas speech and follow new entries',usage:'bb communications canvas-start <title>'},
+    {name:'canvas-stop',summary:'Stop following the Canvas transcript',usage:'bb communications canvas-stop <conversation-id>'},
     {name:'status',summary:'Show source readiness',usage:'bb communications status'},
   ],async run(argv,ctx){
     const [command,...a]=argv;
@@ -146,6 +158,10 @@ export default async function plugin(bb:BbPluginApi) {
         case 'delete-room':if(a.length!==1)throw new Error(usage);result=await zoom.deleteRoom(a[0]!);break;
         case 'registrants':if(a.length!==1)throw new Error(usage);result=hub.listRegistrants(a[0]!);break;
         case 'register':if(a.length!==3)throw new Error(usage);result=await zoom.addRegistrant(a[0]!,{name:a[1]!,email:a[2]!});break;
+        case 'v1-start':if(a.length<3||a.length>4)throw new Error(usage);result=await ensembleworks.start(a[0]!,a[1]!,a[2]!,a[3]===undefined?Date.now():Number(a[3]));break;
+        case 'v1-stop':if(a.length!==1)throw new Error(usage);hub.getConversation(a[0]!);await ensembleworks.stop(a[0]!);result=hub.getConversation(a[0]!);break;
+        case 'canvas-start':if(a.length!==1)throw new Error(usage);result=await canvas.start(z.string().trim().min(1).max(200).parse(a[0]));break;
+        case 'canvas-stop':if(a.length!==1)throw new Error(usage);hub.getConversation(a[0]!);await canvas.stop(a[0]!);result=hub.getConversation(a[0]!);break;
         case 'status':if(a.length)throw new Error(usage);result=await sources();break;
         default:throw new Error(usage);
       }

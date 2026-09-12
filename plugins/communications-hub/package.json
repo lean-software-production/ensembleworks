@@ -14,7 +14,9 @@
     },
     "server": "./server.ts",
     "app": "./app.tsx",
-    "skills": []
+    "skills": [
+      "skills/canvas-transcript"
+    ]
   },
   "dependencies": {
     "@hugeicons/core-free-icons": "^4.1.3",

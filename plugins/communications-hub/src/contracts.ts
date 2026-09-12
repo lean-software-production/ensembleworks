@@ -27,5 +27,5 @@ export const rpcContract=defineRpcContract({
   'registrants.list':{input:z.object({roomId:id}).strict(),output:z.object({registrants:z.array(registrantSchema)})},
   'registrants.add':{input:z.object({roomId:id,name:z.string().trim().min(1).max(200),email:z.string().trim().min(3).max(320)}).strict(),output:registrantSchema},
   'capture.stop':{input:z.object({conversationId:id}).strict(),output:conversationSchema},
-  'sources.status':{input:z.null(),output:z.object({zoom:z.object({configured:z.boolean(),enabled:z.boolean(),canCreateRooms:z.boolean()}),webhookPath:z.string(),importReady:z.boolean()})},
+  'sources.status':{input:z.null(),output:z.object({ensembleworks:z.object({enabled:z.boolean(),conversationId:z.string().nullable()}),canvas:z.object({enabled:z.boolean(),conversationId:z.string().nullable(),cursor:z.number()}),zoom:z.object({configured:z.boolean(),enabled:z.boolean(),canCreateRooms:z.boolean()}),webhookPath:z.string(),importReady:z.boolean()})},
 });
