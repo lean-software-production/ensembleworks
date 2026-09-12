@@ -128,43 +128,26 @@ export const CHROME_DOCK_TOOLBAR_OVERFLOW = "wrap" as const;
 // ---------------------------------------------------------------------------
 // THE PALETTE.
 //
-// DECLARED HERE, NEVER READ FROM bb AND NEVER INHERITED. House rule, and it has
-// already cost this plugin once: the presence popover silently inherited a font
-// from its old parent and lost it when it was re-parented to <body>. Two things
-// make a shared palette necessary rather than tidy now:
-//
-//   1. The floating card is drawn by canvas/CanvasPanel.tsx and the tabs
-//      sitting ON it by canvas/pages/PageSwitcher.tsx. A tab that does not
-//      match the card it is joined to does not read as a tab at all, and two
-//      files holding their own literals is how they drift.
-//   2. The bar used to be host-tokened (`bg-card`, `border-border`,
-//      `text-muted-foreground`) because it was part of bb's chrome band. It is
-//      now painted OVER the canvas — a document surface with its own paper
-//      colour — so a host token would be a colour chosen for a different
-//      background, and under a dark bb theme a legible-on-bb foreground can
-//      land on this light card.
-//
-// tests/page-switcher-tabs.test.ts refuses any colour literal in
-// PageSwitcher.tsx, which is what keeps this the only palette.
+// Shared BB theme tokens also resolve for menus portalled to document.body.
 
 /** The chrome's own text, one stack, declared once — same reason the presence
  * dock has a UI_FONT: a portalled node inherits nothing, and a font written in
  * two places becomes two fonts. */
 export const CHROME_FONT = '12px/1.35 -apple-system, "Segoe UI", system-ui, sans-serif';
 
-export const CHROME_INK = "#0f172a";
-export const CHROME_PAPER = "#fafaf7";
+export const CHROME_INK = "var(--foreground)";
+export const CHROME_PAPER = "var(--card)";
 /** An input's own surface — brighter than the card, so a field reads as a
  * field. */
-export const CHROME_FIELD = "#ffffff";
-export const CHROME_ACCENT = "#004990";
-export const CHROME_HAIRLINE = "rgba(15,23,42,0.22)";
-export const CHROME_FAINT = "rgba(15,23,42,0.12)";
-export const CHROME_MUTED = "rgba(15,23,42,0.28)";
+export const CHROME_FIELD = "var(--background)";
+export const CHROME_ACCENT = "var(--primary)";
+export const CHROME_HAIRLINE = "var(--border)";
+export const CHROME_FAINT = "var(--border)";
+export const CHROME_MUTED = "var(--muted-foreground)";
 /** A tab that is NOT the current one: pushed back behind the card's surface
  * rather than tinted a different hue, so "recessed" survives being looked at
  * quickly. */
-export const CHROME_RECESS = "rgba(15,23,42,0.07)";
+export const CHROME_RECESS = "var(--muted)";
 
 /**
  * What makes the card legible over arbitrary drawn content.

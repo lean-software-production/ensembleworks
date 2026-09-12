@@ -42,6 +42,13 @@ const agentLinkSchema = z
 // Schemas run at the wire boundary. Handler input/output are inferred from
 // this shared contract; CanvasPanel.tsx imports only its type.
 export const rpcContract = defineRpcContract({
+  canvas_thread_excerpts: {
+    input: z.object({ threadIds: z.array(z.string().min(1).max(200)).max(20) }).strict(),
+    output: z.record(z.string(), z.object({
+      text: z.string().max(320),
+      label: z.string().max(80),
+    }).strict()),
+  },
   // The client half of the canvas transport. Replies are never returned here:
   // every server -> client frame goes out over bb.realtime on CANVAS_CHANNEL,
   // because a SyncRequest can produce several frames and some server -> client

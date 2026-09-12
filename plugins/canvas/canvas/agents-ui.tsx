@@ -76,6 +76,7 @@ import {
   type ThreadOption,
 } from "./thread-picker.js";
 import type { CanvasAgentLink, CanvasAgentStatus } from "./wire.js";
+import { ThreadOverview } from "./thread-overview-ui.js";
 
 /**
  * Badge dot styling per status. `bg-destructive` is a host token (failure is a
@@ -152,6 +153,15 @@ export function AgentLayer({
       className="absolute inset-0"
       style={{ pointerEvents: "none" }}
     >
+      <ThreadOverview
+        doc={doc}
+        camera={camera}
+        viewportSize={viewportSize}
+        currentPageId={currentPageId}
+        selection={selection}
+        links={links}
+        onOpen={onOpen}
+      />
       {Object.values(links).map((link) => {
         const box = screenBoxFor(doc, camera, viewportSize, link.shapeId, currentPageId);
         if (box === null) return null;

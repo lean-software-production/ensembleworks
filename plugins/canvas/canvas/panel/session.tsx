@@ -10,6 +10,7 @@ import { useSessionPresence } from "./session-presence.js";
 import type { CanvasSessionProps } from "./session-types.js";
 import { useSessionViewport } from "./session-viewport.js";
 import { SessionView } from "./session-view.js";
+import { useThreadReturn } from "./session-thread-return.js";
 
 export function CanvasSession({
   session,
@@ -53,6 +54,7 @@ export function CanvasSession({
     subPath,
     columnWidth: viewport.columnWidth,
   });
+  const openThread = useThreadReturn({ editor, subPath, navigate, cancelAndReset: input.cancelAndReset });
 
   const handleRunNote = useCallback(
     (shapeId: string) => {
@@ -103,7 +105,7 @@ export function CanvasSession({
       agentLinks={agentLinks}
       pendingShapeId={pendingShapeId}
       onRun={handleRunNote}
-      onOpen={(threadId) => navigate.toThread(threadId)}
+      onOpen={openThread}
       onUnlink={onUnlinkNote}
       onAttach={onAttachThread}
       loadThreadOptions={loadThreadOptions}

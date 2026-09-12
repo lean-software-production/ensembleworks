@@ -58,6 +58,8 @@
  * `navPanel({ path })` and CanvasPanel's `toPluginPanel(path)` have to name
  * the same string, and nothing at runtime would report it if they drifted.
  */
+import { parseThreadReturnRoute } from "../thread-return-route.js";
+
 export const CANVAS_PANEL_PATH = "canvas";
 
 /**
@@ -81,7 +83,8 @@ export const CANVAS_PANEL_PATH = "canvas";
  */
 export function pageIdFromSubPath(subPath: string | null | undefined): string | null {
   if (typeof subPath !== "string") return null;
-  const trimmed = subPath.trim().replace(/^\/+/, "").replace(/\/+$/, "").trim();
+  const pagePath = parseThreadReturnRoute(subPath)?.pagePath ?? subPath;
+  const trimmed = pagePath.trim().replace(/^\/+/, "").replace(/\/+$/, "").trim();
   if (trimmed.length === 0) return null;
   try {
     return decodeURIComponent(trimmed);

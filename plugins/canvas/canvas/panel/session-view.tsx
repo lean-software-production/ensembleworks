@@ -1,4 +1,5 @@
-import type { ComponentProps, ReactNode, RefObject } from "react";
+import { canvasThemeStyle, canvasShapeThemeCss } from "../theme.js";
+import { useMemo, type ComponentProps, type ReactNode, type RefObject } from "react";
 import type { EditorState, InputEvent, Intent, ToolContext } from "@ensembleworks/canvas-editor";
 import type { CanvasDocument } from "@ensembleworks/canvas-model";
 import {
@@ -66,8 +67,10 @@ export interface SessionViewProps {
 
 export function SessionView(props: SessionViewProps) {
   const pageSwitcher = props.pageSwitcher;
+  const shapeThemeCss = useMemo(() => canvasShapeThemeCss(props.snapshot), [props.snapshot]);
   return (
-    <div ref={props.panelRef} className="flex h-full min-h-0 w-full flex-row">
+    <div ref={props.panelRef} data-canvas-themed style={canvasThemeStyle} className="flex h-full min-h-0 w-full flex-row">
+      <style>{shapeThemeCss}</style>
       <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <div data-canvas-page-tab-row style={chromeTabRowStyle}>
           {pageSwitcher.tabs}

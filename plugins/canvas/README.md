@@ -1,5 +1,47 @@
 # bb-plugin-canvas
 
+Canvas follows BB’s appearance theme: paper, grid, toolbar, tabs, menus, frames,
+neutral drawing/text colours, and selection controls update with the host theme.
+Sticky-note colours and explicit drawing colours remain document content. Theme
+adaptation is local presentation and does not alter the shared canvas document.
+
+## Canvas-first experiment
+
+Linked shapes show thread cards below them: BB's title, current status,
+attention/unread information, activity count, project and machine names, and an excerpt of the latest
+assistant response, rendered with BB’s Markdown component. Click a card (or the existing badge's
+**Open thread**) to use BB's full thread view. **Back to canvas** in the thread
+header restores the page, camera, and surviving selection. Threads opened
+elsewhere have a **Canvas** button to enter the map.
+
+Return locations are private to the browser tab, retained in session storage
+(up to 40 visits, with a bounded payload). If the same thread was opened from
+several distinct locations, the header asks which visit to return to. The URL
+carries a return token; opening that URL in another browser still opens the
+page, but cannot restore private view state. Deleted pages fall back through
+the existing page router; deleted or moved shapes are omitted from selection.
+
+Cards follow their linked shapes and scale with canvas zoom, including their text
+and spacing. Partially visible cards are clipped at the viewport edge. Selecting a shape hides its card so its editing controls remain usable.
+**Hide threads** shows a count for the current page and hides cards until the canvas remounts; the existing badges
+and unlink menu remain available. This first experiment covers explicitly linked
+threads, not an automatic layout of every BB thread, generated progress summaries,
+or a change to BB's startup route. Cards can overlap when linked shapes are close.
+
+Response excerpts use BB's output API, refreshed every 15 seconds for up to 20
+visible cards. Reads stop while the tab is hidden or cards are hidden. The server
+only reads explicitly linked threads, caps each excerpt at 320 characters, and
+keeps a bounded 15-second memory cache. Missing or failed reads show a conversation
+fallback. “Latest response” is an excerpt, not a generated progress summary or a
+live token stream. No additional model calls are made.
+
+This change is confined to the Canvas plugin. It does not change the clean-room
+editor/renderer interaction surfaces. Validation includes the plugin typecheck,
+unit tests, structural-quality gate, build, and a browser component test of the
+navigation callbacks and restored editor state. The component test substitutes
+BB routing; it does not establish live host navigation fidelity.
+
+
 The EnsembleWorks multiplayer infinite canvas, mounted as a first-class BB plugin
 panel. Every open **Canvas** page in every bb client edits one shared Loro CRDT
 document; the plugin backend is the authoritative peer and persists it.

@@ -131,14 +131,14 @@ describe("Open thread goes to bb's own thread surface", () => {
     expect(countInCode(PANEL, "threadPanel")).toBe(0);
   });
 
-  it("hands the badge's open port straight to bb's navigator", () => {
+  it("hands the badge's open port to the canvas return navigation", () => {
     // ATTACHED, not merely present: `navigate.toThread` somewhere in the file
     // is satisfied by a call nothing reaches. This pins it to the prop the
     // menu item calls.
     // Marked by `onUnlink`, which only <AgentLayer> has — `loadThreadOptions`
     // is also on <CanvasSession> one level up.
     expect(jsxAttributes(SESSION, "onUnlink").onOpen).toBe(
-      "(threadId) => navigate.toThread(threadId)",
+      "openThread",
     );
   });
 
