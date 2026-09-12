@@ -16,6 +16,8 @@ import { TranscriptDoorSlot } from "./canvas/dock/transcript-door-slot.js";
 import { decidePageCommandAvailable, pageDoor } from "./canvas/pages/page-door.js";
 import { CANVAS_PANEL_PATH } from "./canvas/pages/page-route.js";
 import { CanvasOnlineCount } from "./canvas/roster-ui.js";
+import { NodeDirectiveCard } from "./canvas/tree/NodeDirectiveCard.js";
+import { NODE_DIRECTIVE_ID } from "./canvas/tree/node-reference.js";
 import { TranscriptView } from "./canvas/transcript-ui.js";
 
 /** The `threadPanelAction` id, referenced by the palette row that opens it. */
@@ -77,6 +79,23 @@ export default definePluginApp((app) => {
     icon: "MessageCircle",
     layout: "flush",
     component: TranscriptView,
+  });
+
+  // A NODE, NAMED IN A REPLY (W9) — the return leg of D2: W8 carries a node
+  // from the canvas into the conversation, this carries one back. An agent
+  // writes `::node{id="shape:…"}`, bb hands the attributes to this component,
+  // and a click on the card it draws puts that node selected and centred on
+  // the canvas — routing to its page first if the canvas is elsewhere.
+  //
+  // The id is the ONLY attribute, and every fact on the card is read live over
+  // rpc: a title or a state quoted in a message that is kept forever is a
+  // snapshot of a tree that has moved on. canvas/tree/node-reference.ts argues
+  // it, and the syntax is taught in the per-turn brief
+  // (canvas/tree/instructions.ts), which is the one surface a tree thread has
+  // without asking.
+  app.slots.messageDirective({
+    id: NODE_DIRECTIVE_ID,
+    component: NodeDirectiveCard,
   });
 
   app.slots.commandPaletteAction({

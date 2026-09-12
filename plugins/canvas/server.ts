@@ -28,6 +28,13 @@ import {
 } from "./canvas/transcript.js";
 import { createRpcHandlers } from "./canvas/rpc-handlers.js";
 import { registerCanvasCli } from "./canvas/cli.js";
+import { registerTreeAgentTools } from "./canvas/tree/agent-tools.js";
+import {
+  treeRepairTargetForDoc,
+  treeServiceForDoc,
+  treeWriterForDoc,
+} from "./canvas/tree/doc-source.js";
+import { listQuarantinedEdges, restoreQuarantinedEdge } from "./canvas/tree/repair.js";
 import { rpcContract } from "./canvas/rpc-contract.js";
 export { rpcContract } from "./canvas/rpc-contract.js";
 import { CANVAS_CHANNEL } from "./canvas/wire.js";
@@ -142,12 +149,37 @@ export default async function plugin(bb: BbPluginApi) {
 
   registerMentions(bb, transcript);
 
+  // ONE write engine for the whole plugin: the agent tools below and the
+  // panel's two gesture methods are two CALLERS of it, not two write paths.
+  // `commitLocalWrite` rather than a bare `doc.commit()`: a server-local write
+  // is broadcast by canvas-sync but logged by nobody, so the room's own method
+  // is what makes it as durable as a human's frame — see canvas/room.ts.
+  const treeWriter = treeWriterForDoc(room.peer.doc, {
+    commit: () => room.commitLocalWrite(),
+  });
+
+  // ONE read surface too, for the same reason as the writer above: the `::node`
+  // card's rpc (W9) and the agent tools (W6) are two callers of one service
+  // over one document, not two readers that could drift.
+  const treeService = treeServiceForDoc(room.peer.doc);
+
+  // The RECOVERY half (W11, reached at W13). Its own handle rather than the
+  // writer's, because `TreeRepairTarget` is the type that cannot delete — a
+  // restore reached through the wider target would give up that guarantee for
+  // nothing. `commitLocalWrite` for the writer's reason: durable, not just
+  // broadcast.
+  const treeRepair = treeRepairTargetForDoc(room.peer.doc, {
+    commit: () => room.commitLocalWrite(),
+  });
+
   bb.rpc.register(
     rpcContract,
     createRpcHandlers({
       room,
       locations,
       agents,
+      treeWriter,
+      treeService,
       transcript,
       localName,
       settings,
@@ -163,7 +195,33 @@ export default async function plugin(bb: BbPluginApi) {
     agents,
   );
 
-  registerCanvasCli(bb, room, agents, transcript);
+  // `bb canvas tree` (W13): the same W5 reads, for a reader with no bb tool
+  // session — a Claude Code session in a canvas terminal. It runs in THIS
+  // process, so it holds the live document directly and answers from the same
+  // service the agent tools do.
+  registerCanvasCli(bb, room, agents, transcript, {
+    service: treeService,
+    quarantined: (treeId) => listQuarantinedEdges(treeRepair.document(), treeId),
+    restore: (edgeId) => restoreQuarantinedEdge(treeRepair, edgeId),
+  });
+
+  // The discovery tree, as tools an agent can call (W6). Registered against
+  // the LIVE room document — `treeServiceForDoc` re-reads it per query, so a
+  // thread started now still sees a node a human drew a minute ago — and
+  // scoped to threads that are actually about a tree node, since bb tool names
+  // are global and every other thread on the server would otherwise carry six
+  // canvas tools it can never use.
+  // The write half (W10) rides the same registration, because bb takes ONE
+  // configure callback per plugin and scope is decided in it. `commitLocalWrite`
+  // rather than a bare `doc.commit()`: a server-local write is broadcast by
+  // canvas-sync but logged by nobody, so the room's own method is what makes an
+  // agent's edit as durable as a human's — see canvas/room.ts.
+  registerTreeAgentTools(bb, {
+    service: treeService,
+    writer: treeWriter,
+    repair: treeRepair,
+    linkedShapeId: (threadId) => agents.shapeForThread(threadId),
+  });
 
   // Cleanup on reload/disable/shutdown; hooks run LIFO. The sanctioned place
   // to clear timers and close connections.

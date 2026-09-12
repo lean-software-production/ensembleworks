@@ -595,20 +595,24 @@ describe("attaching a shape to an existing thread", () => {
     );
     await plugin(host.bb);
 
-    const link = (await host.harness.behavior.callRpc("canvas_attach_thread", {
+    const attached = (await host.harness.behavior.callRpc("canvas_attach_thread", {
       shapeId: "shape:box",
       threadId: "th_existing",
-    })) as CanvasAgentLink;
+    })) as { link: CanvasAgentLink; warning?: string };
 
     // "running", not because attach assumes it the way spawn does, but because
     // bb said the thread is `active`.
-    expect(link).toEqual({
+    expect(attached.link).toEqual({
       shapeId: "shape:box",
       threadId: "th_existing",
       status: "running",
     });
-    expect(await links(host)).toEqual([link]);
-    expect(agentSignals(host)).toEqual([link]);
+    // W16/F4: `shape:box` is a plain note, not a tree node, so the attach has
+    // nothing extra to say. The warning's own rule is tested in
+    // tests/agent-attach.test.ts.
+    expect(attached.warning).toBeUndefined();
+    expect(await links(host)).toEqual([attached.link]);
+    expect(agentSignals(host)).toEqual([attached.link]);
   });
 
   it("starts an idle thread's badge idle, not running", async () => {
@@ -618,9 +622,9 @@ describe("attaching a shape to an existing thread", () => {
     const link = (await host.harness.behavior.callRpc("canvas_attach_thread", {
       shapeId: "shape:box",
       threadId: "th_existing",
-    })) as CanvasAgentLink;
+    })) as { link: CanvasAgentLink; warning?: string };
 
-    expect(link.status).toBe("idle");
+    expect(link.link.status).toBe("idle");
   });
 
   it("attaches to a NON-note shape, which the launch arm cannot", async () => {
@@ -630,9 +634,9 @@ describe("attaching a shape to an existing thread", () => {
     const link = (await host.harness.behavior.callRpc("canvas_attach_thread", {
       shapeId: "shape:frame",
       threadId: "th_existing",
-    })) as CanvasAgentLink;
+    })) as { link: CanvasAgentLink; warning?: string };
 
-    expect(link.shapeId).toBe("shape:frame");
+    expect(link.link.shapeId).toBe("shape:frame");
   });
 
   it("VERIFIES the thread before recording anything", async () => {
@@ -736,9 +740,9 @@ describe("attaching a shape to an existing thread", () => {
     const again = (await host.harness.behavior.callRpc("canvas_attach_thread", {
       shapeId: "shape:box",
       threadId: "th_one",
-    })) as CanvasAgentLink;
+    })) as { link: CanvasAgentLink; warning?: string };
 
-    expect(again).toEqual({ shapeId: "shape:box", threadId: "th_one", status: "idle" });
+    expect(again.link).toEqual({ shapeId: "shape:box", threadId: "th_one", status: "idle" });
     expect(await links(host)).toHaveLength(1);
   });
 

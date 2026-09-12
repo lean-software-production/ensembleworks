@@ -13,7 +13,9 @@
 // a non-addressee would merely waste bytes on), but it is NOT a privacy
 // boundary — noted as a known limitation.
 import { SyncServerPeer, type Transport } from "@ensembleworks/canvas-sync";
+import { dumpModel } from "@ensembleworks/canvas-doc";
 import { bytesToBase64 } from "./base64.js";
+import { repairAllTrees, type TreeRepairReport } from "./tree/repair.js";
 import type { CanvasStore } from "./store.js";
 import {
   ROOM_ID,
@@ -110,6 +112,14 @@ export class CanvasRoomHost {
   readonly room: string;
   readonly #store: CanvasStore;
   readonly #publish: (message: CanvasServerMessage) => void;
+  /**
+   * Where publishes go while a server-local write is being committed, or null
+   * when nothing is being deferred. See `commitLocalWrite`: everything this
+   * room says to a client leaves through `#emit`, so holding this array for
+   * the length of one commit is all it takes to make a local write
+   * persist-BEFORE-observe.
+   */
+  #deferred: CanvasServerMessage[] | null = null;
   readonly #log: (message: string) => void;
   readonly #compactEvery: number;
   readonly #clientIdleMs: number;
@@ -118,6 +128,18 @@ export class CanvasRoomHost {
   /** Highest canvas_updates.seq this host has read or written; bounds compaction. */
   #lastSeq = 0;
   #closed = false;
+  /**
+   * Inbound updates that actually APPLIED. Incremented only from
+   * `onUpdatePayload`, which canvas-sync calls for an Update frame that changed
+   * or pended — never for a presence frame and never for a no-op re-import.
+   * `frame()` compares it across a delivery to decide whether a tree
+   * reconciliation pass is worth paying for; see `repairTrees`.
+   */
+  #inboundUpdates = 0;
+  /** Reconciliation passes run (W11). Read by tests to prove the gate above
+   * actually gates — a counter is the only honest evidence that an expensive
+   * pass did NOT run. */
+  #repairPasses = 0;
 
   constructor(options: CanvasRoomHostOptions) {
     this.room = options.room ?? ROOM_ID;
@@ -136,6 +158,7 @@ export class CanvasRoomHost {
       onUpdatePayload: (payload) => {
         this.#lastSeq = this.#store.appendUpdate(this.room, payload);
         this.#updatesSinceSnapshot += 1;
+        this.#inboundUpdates += 1;
       },
     });
 
@@ -150,10 +173,31 @@ export class CanvasRoomHost {
       this.#lastSeq = logged[logged.length - 1]!.seq;
     }
     this.#updatesSinceSnapshot = logged.length;
+    // Reconcile after the replay, not during it: `commitLocalWrite` (which the
+    // pass commits through) touches `#updatesSinceSnapshot`, and that field is
+    // only assigned on the line above. A restart also has to re-run this
+    // because the log may hold a merge whose repair delta was lost in the
+    // persist window — see `commitLocalWrite`'s ORDER note and the W11
+    // artifact.
+    this.repairTrees();
     this.#log(
       `room "${this.room}" restored: snapshot ${snapshot?.length ?? 0} bytes, ${logged.length} logged updates, ${this.peer.doc.listShapes().length} shapes`,
     );
   }
+
+  /**
+   * THE ONE DOOR OUT. Every byte this room sends a client goes through here —
+   * the delta broadcasts canvas-sync makes through `ClientTransport.send`, the
+   * resync nudges, and the identity map. Nothing calls `#publish` directly
+   * except this method and the flush in `commitLocalWrite`.
+   */
+  #emit = (message: CanvasServerMessage): void => {
+    if (this.#deferred !== null) {
+      this.#deferred.push(message);
+      return;
+    }
+    this.#publish(message);
+  };
 
   get clientCount(): number {
     return this.#clients.size;
@@ -189,7 +233,7 @@ export class CanvasRoomHost {
   join(clientId: string, nowMs: number, name?: string | null): void {
     if (this.#closed) throw new Error("CanvasRoomHost is closed");
     this.#clients.get(clientId)?.transport.close();
-    const transport = new ClientTransport(clientId, this.#publish);
+    const transport = new ClientTransport(clientId, this.#emit);
     // Drop our own bookkeeping when the transport dies for any reason
     // (explicit leave, sweep, or peer.close()).
     transport.onClose(() => {
@@ -245,13 +289,121 @@ export class CanvasRoomHost {
       this.join(clientId, nowMs);
       entry = this.#clients.get(clientId);
       if (entry === undefined) return;
-      this.#publish({ to: clientId, resync: true });
+      this.#emit({ to: clientId, resync: true });
     }
     entry.lastSeenMs = nowMs;
+    const applied = this.#inboundUpdates;
     entry.transport.deliver(bytes);
+    // W11: reconcile the trees this frame's MERGE may have broken — two peers'
+    // individually legal edits are exactly what arrives here. Gated on the
+    // frame having actually applied something, because a pass costs a whole
+    // document read and this path also carries every presence frame (a pointer
+    // move, many per second) and every no-op re-import.
+    if (this.#inboundUpdates !== applied) this.repairTrees();
     // Compact here rather than inside onUpdatePayload: by now the peer has
     // finished import + repair + commit for this frame, so the snapshot we
     // take is fully current.
+    this.#maybeCompact();
+  }
+
+  /** Reconciliation passes this host has run (W11). */
+  get repairPasses(): number {
+    return this.#repairPasses;
+  }
+
+  /**
+   * Reconcile every discovery tree in this room's document (W11).
+   *
+   * The server is the only writer of a repair, which is what makes "every peer
+   * reaches the same repaired state" true in practice — but it is not what
+   * makes it SAFE: `treeRepairPlan` is a pure function of document content, so
+   * a second repairer (a reconnecting client, a future replica) computing it
+   * independently would choose the same edges. The determinism is in the plan,
+   * not in the topology.
+   *
+   * Commits through `commitLocalWrite`, so a repair is logged exactly like an
+   * agent write. Nothing is committed when there is nothing to do.
+   */
+  repairTrees(): readonly TreeRepairReport[] {
+    if (this.#closed) return [];
+    this.#repairPasses += 1;
+    const reports = repairAllTrees({
+      document: () => dumpModel(this.peer.doc),
+      getShape: (id) => this.peer.doc.getShape(id),
+      putShape: (shape) => this.peer.doc.putShape(shape),
+      commit: () => this.commitLocalWrite(),
+    });
+    for (const report of reports) {
+      // Only trees that HAD something wrong say anything: a per-frame "tree X:
+      // nothing to do" would bury the one line that matters.
+      for (const line of report.lines) this.#log(`room "${this.room}" ${line}`);
+    }
+    return reports;
+  }
+
+  /**
+   * Commit a SERVER-LOCAL write to the room document and log the delta it
+   * produced, so an agent's write is as durable as a human's (W10).
+   *
+   * WHY THIS EXISTS. Every write a client makes arrives as a frame, and
+   * canvas-sync hands the raw payload to `onUpdatePayload` BEFORE anything
+   * observable happens — that is the durable-first path above. A write made
+   * here, straight at `peer.doc`, never goes through it: `commit()` fires
+   * canvas-sync's local-update subscription, which BROADCASTS the delta to
+   * every connected client, and nothing writes it down. Without this method an
+   * agent's edit would be visible on every screen and lost on the next crash,
+   * surviving only if a compaction happened to run first — the worst kind of
+   * data loss, because it looks like it worked.
+   *
+   * ORDER: PERSIST BEFORE OBSERVE, held by BUFFERING THE PUBLISHES (C2
+   * finding 2). Loro fires local-update subscribers synchronously inside
+   * `commit()`, and canvas-sync's broadcast subscriber is registered first (in
+   * SyncServerPeer's constructor), so the delta reaches `ClientTransport.send`
+   * before this method could possibly append the row. That order is not ours
+   * to change — but the SEND is: every broadcast leaves through a transport
+   * this plugin owns, whose publish closure is `#emit`. So the commit runs
+   * with `#deferred` holding everything the room would have said, the deltas
+   * are written down, and only then is the buffer flushed. A crash between
+   * those two points now loses a write NOBODY SAW, which is a resync away;
+   * the old order lost a write EVERY CLIENT HAD, which is not recoverable at
+   * all — an agent write's id is minted from injected entropy, so unlike a
+   * repair pass it cannot be recomputed from what survived.
+   *
+   * If the append throws, the buffer is dropped with it: the server holds a
+   * change its clients have not seen, which the next handshake reconciles.
+   *
+   * THE DELTA COMES FROM `subscribeLocalUpdates`, NOT `exportUpdate(before)`.
+   * The obvious version — snapshot `versionBytes()`, commit, export since it —
+   * logs 22-byte EMPTY updates: `versionBytes()` is `oplogVersion()`, and
+   * reading it commits the pending ops first, so "before" is already "after"
+   * and the export has nothing to say. Measured, not reasoned about: the first
+   * version of this method logged two empty rows and a reloaded room came back
+   * with zero shapes.
+   */
+  commitLocalWrite(): void {
+    if (this.#closed) return;
+    const deltas: Uint8Array[] = [];
+    const held: CanvasServerMessage[] = [];
+    // An outer buffer wins: a nested call (repair commits through here) must
+    // not flush what its caller is still holding.
+    const outer = this.#deferred;
+    this.#deferred = held;
+    const unsubscribe = this.peer.doc.subscribeLocalUpdates((bytes) => deltas.push(bytes));
+    try {
+      this.peer.doc.commit();
+    } finally {
+      unsubscribe();
+      this.#deferred = outer;
+    }
+    for (const delta of deltas) {
+      this.#lastSeq = this.#store.appendUpdate(this.room, delta);
+      this.#updatesSinceSnapshot += 1;
+    }
+    // Durable: say it out loud. Nothing was pending (not a write) flushes too —
+    // a presence or identity publish that happened to land inside the window
+    // is not what this is guarding.
+    for (const message of held) this.#emit(message);
+    if (deltas.length === 0) return;
     this.#maybeCompact();
   }
 
@@ -304,7 +456,7 @@ export class CanvasRoomHost {
    * wrong label indefinitely; the next broadcast repairs any client. */
   #publishIdentities(): void {
     if (this.#closed) return;
-    this.#publish({ identities: this.identities });
+    this.#emit({ identities: this.identities });
   }
 
   #maybeCompact(): void {

@@ -7,6 +7,8 @@ import {
 import type { rpcContract } from "../../server";
 import { tabClientId } from "../tab-id.js";
 import { useAgentSync } from "./agent-sync.js";
+import { useTreeGestures } from "./tree-gesture-sync.js";
+import { useTreeInspectorEdits } from "./tree-inspector-sync.js";
 import { useConnectionBoot } from "./connection-boot.js";
 import { useConnectionEvents } from "./connection-events.js";
 import { useConnectionState } from "./connection-state.js";
@@ -28,6 +30,10 @@ export function useCanvasConnection({ subPath }: Pick<PluginNavPanelProps, "subP
   const selfNameRef = useRef<string | null>(null);
   const [identities, setIdentities] = useState<Record<string, string>>({});
   const agents = useAgentSync(rpcRef);
+  // W4's gestures ride the SAME rpc client the rest of the panel does; the
+  // write itself runs on the server (canvas/rpc-contract.ts).
+  const treeGestures = useTreeGestures(rpcRef);
+  const treeInspector = useTreeInspectorEdits(rpcRef);
   const makeTransport = useCallback(
     (): BbTransport =>
       createBbTransport({
@@ -88,5 +94,14 @@ export function useCanvasConnection({ subPath }: Pick<PluginNavPanelProps, "subP
     resync,
     refreshAgents: agents.refreshAgents,
   });
-  return { session, error, connectionState, identities, selfName, agents };
+  return {
+    session,
+    error,
+    connectionState,
+    identities,
+    selfName,
+    agents,
+    treeGestures,
+    treeInspector,
+  };
 }

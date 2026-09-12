@@ -16,11 +16,29 @@ import { AGENT_CHANNEL } from "./wire.js";
 import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
 import type { LocationBook } from "./locations.js";
+import type { TreeWrite, TreeWriteOutcome, TreeWriter } from "./tree/write-seam.js";
+import type { TreeService } from "./tree/service.js";
+import { cardTitle } from "./tree/node-reference.js";
+import { launchBrief } from "./tree/launch.js";
 
 export interface RpcHandlerDependencies {
   readonly room: CanvasRoomHost;
   readonly locations: LocationBook;
   readonly agents: AgentLinks;
+  /**
+   * W10's write engine, over the room's own document — the SAME instance the
+   * agent tools hold. A human gesture and an agent tool are two callers of one
+   * write path, which is the whole point of routing the gesture through rpc
+   * (canvas/rpc-contract.ts argues it next to the two methods).
+   */
+  readonly treeWriter: TreeWriter;
+  /**
+   * W5's read surface, over the room's own document — the SAME instance the
+   * agent tools hold, for the same reason the writer is: a second service
+   * would be a second reader of one document, and the card and the tools could
+   * then disagree about a node while looking at the same room.
+   */
+  readonly treeService: TreeService;
   readonly transcript: TranscriptStore;
   readonly localName: string;
   readonly settings: { get(): Promise<Record<string, string | undefined>> };
@@ -29,6 +47,44 @@ export interface RpcHandlerDependencies {
   readonly realtime: { publish(channel: string, payload: unknown): void };
   readonly log: {
     info(message: string): void;
+  };
+}
+
+/**
+ * A write engine answer, as an rpc answer.
+ *
+ * A REFUSAL BECOMES A THROWN ERROR carrying the engine's own sentence, so the
+ * panel's existing `toast.error(cause.message)` path shows a human exactly
+ * what the engine said — reason code and subjects included. The alternative,
+ * a `{ ok: false }` shape, would have every caller re-render a message the
+ * engine already wrote.
+ *
+ * `newProblems` rides the SUCCESS answer, because the write did land. It means
+ * a concurrent editor damaged the tree while this write was in flight, which
+ * is W11's to reconcile and this handler's to pass on rather than swallow.
+ *
+ * EXPORTED FOR ITS OWN TEST, deliberately. The concurrent-damage case cannot
+ * be staged through the rpc lane — the write is synchronous inside the
+ * handler, so there is no moment for another peer to land an edge in — and a
+ * mutation that dropped `problems` on the floor survived the whole suite until
+ * this had a unit test of its own.
+ */
+export function treeWriteResult(
+  write: TreeWrite<TreeWriteOutcome>,
+  log: { info(message: string): void },
+): { nodeId: string; changed: string[]; problems: string[] } {
+  if (!write.ok) throw new Error(`${write.reason}: ${write.detail}`);
+  const outcome = write.value;
+  log.info(`tree gesture: ${outcome.changed.join(" ")}`);
+  return {
+    // The node the gesture made — never the focus, which for `addChild` is the
+    // PARENT. A panel that selected the focus would select the node the human
+    // already had selected and look like it did nothing.
+    nodeId: outcome.createdId ?? outcome.focusId,
+    changed: [...outcome.changed],
+    problems: outcome.newProblems.map(
+      (problem) => `${problem.kind}: ${problem.detail}`,
+    ),
   };
 }
 
@@ -86,12 +142,71 @@ export function createRpcHandlers(
         shapeId,
         holderShapeId: agents.shapeForThread(threadId),
         canvasProjectId,
+        // Read off the DOCUMENT, not off the link store: whether this shape is
+        // a tree node is a fact about what the human clicked, and the room's
+        // document is the only thing that knows it.
+        shapeIsTreeNode: deps.treeService.node(shapeId).ok,
       });
       if (!verdict.ok) throw new Error(verdict.message);
       const link = await agents.record(shapeId, threadId, verdict.status);
       realtime.publish(AGENT_CHANNEL, link);
       log.info(
         `shape ${shapeId} attached to thread ${threadId} (${verdict.status})`,
+      );
+      return verdict.warning === undefined ? { link } : { link, warning: verdict.warning };
+    },
+    canvas_tree_add_goal: ({ treeId, title }) =>
+      treeWriteResult(deps.treeWriter.addGoal({ treeId, title }), log),
+    canvas_tree_add_blocker: ({ parentId, title }) =>
+      treeWriteResult(deps.treeWriter.addChild({ parentId, title }), log),
+    // W18's three: the same engine the two gestures above call, and the same
+    // `treeWriteResult` translation — a refusal becomes a thrown sentence the
+    // panel toasts, `newProblems` rides the success answer.
+    canvas_tree_set_state: ({ nodeId, state }) =>
+      treeWriteResult(deps.treeWriter.setState({ nodeId, state }), log),
+    canvas_tree_set_approached: ({ nodeId, approached }) =>
+      treeWriteResult(deps.treeWriter.setApproached({ nodeId, approached }), log),
+    canvas_tree_write_context: ({ nodeId, context, expected }) =>
+      treeWriteResult(deps.treeWriter.writeContext({ nodeId, context, expected }), log),
+    canvas_tree_node: ({ nodeId }) => {
+      const found = deps.treeService.node(nodeId);
+      // EVERY failure reason collapses to null, deliberately. "No such shape",
+      // "that shape is not a tree node" and "that node is on a page this room
+      // has forgotten" are one fact to a card in an old message: it cannot be
+      // followed. Reporting WHICH would put W5's reason codes into a chat
+      // bubble, where nobody can act on them.
+      if (!found.ok) return { node: null };
+      const view = found.value;
+      return {
+        node: {
+          id: view.id,
+          treeId: view.treeId,
+          title: cardTitle(view.title),
+          state: view.state,
+          isReady: view.isReady,
+        },
+      };
+    },
+    canvas_tree_launch: async ({ nodeId }) => {
+      // The brief BEFORE the project: a node that cannot be briefed should
+      // fail on the node, not on a setting the human would then go and fix
+      // for nothing.
+      const brief = launchBrief(nodeId, deps.treeService);
+      if (!brief.ok) throw new Error(brief.why);
+      const projectId = await resolveProjectId();
+      const thread = await deps.sdk.threads.spawn({
+        projectId,
+        environment: { type: "project-default" },
+        prompt: brief.value.prompt,
+        title: brief.value.title,
+      });
+      // The same three lines `canvas_run_note` runs, deliberately unabstracted:
+      // two callers is not a pattern, and the badge's contract is easier to
+      // check when it is written out at each call site.
+      const link = await agents.record(nodeId, thread.id, "running");
+      realtime.publish(AGENT_CHANNEL, link);
+      log.info(
+        `tree node ${nodeId} -> thread ${thread.id} in project ${projectId}`,
       );
       return link;
     },

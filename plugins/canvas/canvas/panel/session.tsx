@@ -7,6 +7,8 @@ import type { ToolId } from "../tool-loop.js";
 import { useSessionInput } from "./session-input.js";
 import { useSessionPages } from "./session-pages.js";
 import { useSessionPresence } from "./session-presence.js";
+import { useSessionReveal } from "./session-reveal.js";
+import { useTreeDiscuss } from "./tree-discuss.js";
 import type { CanvasSessionProps } from "./session-types.js";
 import { useSessionViewport } from "./session-viewport.js";
 import { SessionView } from "./session-view.js";
@@ -22,6 +24,14 @@ export function CanvasSession({
   onUnlinkNote,
   onAttachThread,
   loadThreadOptions,
+  treeGesturePending,
+  onAddGoal,
+  onAddBlocker,
+  onLaunchNode,
+  inspectorPending,
+  onSetState,
+  onSetApproached,
+  onWriteContext,
 }: CanvasSessionProps) {
   const { editor, toolContext, tools, presenceStore, presencePublisher, selfKey } = session;
   const editorState = useEditorState(editor);
@@ -46,6 +56,22 @@ export function CanvasSession({
     panelRef: viewport.panelRef,
     viewportRef: viewport.viewportRef,
   });
+  // W9's return leg: a `::node` card clicked in a thread lands here, on this
+  // canvas, with that node selected and centred. Mounted next to the page
+  // router deliberately — the reveal asks for its page through the URL, which
+  // is the router's one job, rather than becoming a second thing that writes
+  // `currentPageId`.
+  useSessionReveal({
+    editor,
+    snapshot,
+    currentPageId: editorState.currentPageId,
+    livePageIds: snapshot.pages.map((page) => page.id),
+    viewportSizeRef: viewport.viewportSizeRef,
+  });
+  // W8's outbound leg of D2: the selected node, referenced in the composer the
+  // human is writing in. Mounted HERE because this is where the live document
+  // is — the reference is read from `snapshot`, not fetched over rpc.
+  const discuss = useTreeDiscuss();
   const { navigate, pageSwitcher } = useSessionPages({
     editor,
     snapshot,
@@ -107,6 +133,19 @@ export function CanvasSession({
       onUnlink={onUnlinkNote}
       onAttach={onAttachThread}
       loadThreadOptions={loadThreadOptions}
+      treeGesturePending={treeGesturePending}
+      onAddGoal={onAddGoal}
+      onAddBlocker={onAddBlocker}
+      onLaunchNode={onLaunchNode}
+      inspectorPending={inspectorPending}
+      onSetState={onSetState}
+      onSetApproached={onSetApproached}
+      onWriteContext={onWriteContext}
+      textOf={(id) => editor.doc.getText(id)}
+      discussRoute={discuss.route}
+      onDiscuss={(treeId, nodeId) =>
+        discuss.discuss(snapshot, treeId, nodeId, (id) => editor.doc.getText(id))
+      }
       pageSwitcher={pageSwitcher}
     />
   );

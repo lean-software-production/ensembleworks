@@ -2110,6 +2110,35 @@ bb plugin config canvas  # the project + the three LiveKit settings
 npm test                 # vitest: the backend + transport suite (no bb server needed)
 ```
 
+## Read the discovery tree from a terminal
+
+`bb canvas tree` answers the same questions the `canvas_tree_*` agent tools do,
+for a reader with no bb tool session — a Claude Code session in a canvas
+terminal, or a human at a prompt. It runs inside the plugin server process, so
+it reads the live room document directly.
+
+```
+bb canvas tree                       # every tree: size, what is ready, what is wrong
+bb canvas tree show                  # the whole tree as an outline (indent = "blocks")
+bb canvas tree show shape:api        # just the branch under one node
+bb canvas tree show --depth 2        # cut the walk; the marker names how to read further
+bb canvas tree node shape:api        # one node in full, including its context note
+bb canvas tree ready                 # what could be started right now
+bb canvas tree quarantined           # edges a move or a repair took out of the tree
+bb canvas tree restore shape:edge-1  # put one back
+```
+
+Every verb takes `--json`, which prints the tree service's own values (and, on
+a failure, the reason as data — the exit code carries ok/failed). A tree id may
+be omitted whenever the canvas holds exactly one tree; a NODE id never needs
+one, because the shape records which tree it is in.
+
+`quarantined` / `restore` are the recovery surface: a move leaves the edge it
+replaced drawn on the canvas but out of the tree, and a restore is refused —
+naming the rival edge to remove first — while something else stands in its
+place. The same pair is reachable from a thread as `canvas_tree_quarantined`
+and `canvas_tree_restore_edge`.
+
 ## Types & API reference
 
 The plugin API ships as the npm package `@get-bb/plugin-sdk`, pinned to an

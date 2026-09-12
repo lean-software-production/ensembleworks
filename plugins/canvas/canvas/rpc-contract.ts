@@ -4,6 +4,9 @@ import { AGENT_STATUSES } from "./wire.js";
 import { MAX_PATH_LENGTH } from "./dock/where.js";
 import { MAX_QUERY_LIMIT } from "./transcript.js";
 import { MAX_NAME_LENGTH } from "./identity.js";
+import { MAX_TITLE_LENGTH } from "./tree/write-seam.js";
+import { MAX_CONTEXT_LENGTH, NODE_STATES } from "./tree/encoding.js";
+import { MAX_CARD_TITLE, MAX_NODE_ID_LENGTH } from "./tree/node-reference.js";
 
 /** A client address minted by transport.ts's `newClientId()`. */
 const clientIdSchema = z.string().trim().min(1).max(128);
@@ -36,6 +39,23 @@ const agentLinkSchema = z
     shapeId: z.string().min(1),
     threadId: z.string().min(1),
     status: z.enum(AGENT_STATUSES),
+  })
+  .strict();
+
+/**
+ * What a tree gesture answers with.
+ *
+ * `problems` is `TreeWriteOutcome.newProblems` rendered as sentences: damage
+ * that appeared WHILE the write was in flight, which means another editor
+ * landed something at the same time. It is not an error — the write was
+ * accepted — so it rides the success answer rather than a rejection, and the
+ * panel warns rather than pretending nothing happened. W11 owns the repair.
+ */
+const treeWriteResultSchema = z
+  .object({
+    nodeId: z.string().min(1),
+    changed: z.array(z.string()),
+    problems: z.array(z.string()),
   })
   .strict();
 
@@ -118,6 +138,195 @@ export const rpcContract = defineRpcContract({
         threadId: z.string().min(1).max(200),
       })
       .strict(),
+    /**
+     * THE LINK, AND ANYTHING THE ATTACH HAS TO SAY ABOUT ITSELF (W16/F4).
+     *
+     * A wrapper rather than an extra field on the link, because a warning is a
+     * fact about this ACT and the link is a durable value that gets stored in
+     * panel state and re-broadcast on the agent channel — a transient sentence
+     * riding inside it would outlive the moment it is about.
+     */
+    output: z
+      .object({
+        link: agentLinkSchema,
+        warning: z.string().optional(),
+      })
+      .strict(),
+  },
+  /**
+   * W4's TWO NODE GESTURES — "add a goal" and "add a blocker under this node".
+   *
+   * WHY THESE ARE RPC AT ALL, which is the most consequential decision in W4.
+   * The panel holds a live CRDT document and could have created the note, the
+   * arrow and its two bindings locally, in one frame, with no round trip. It
+   * does not, for three reasons that all say the same thing:
+   *
+   *  1. THE REFUSALS ARE THE FEATURE. W10's engine refuses a write that would
+   *     cycle, duplicate a relationship, overflow the encoding's caps or land
+   *     on a broken tree, and re-reads the whole tree through W1 afterwards to
+   *     report damage a concurrent peer caused. A client-side create would be
+   *     a SECOND definition of what a legal tree is, and the two would drift.
+   *  2. `TreeWriteTarget` HAS NO DELETE, BY TYPE (C2's finding 1). That
+   *     guarantee is a property of the one seam every write goes through;
+   *     a gesture writing straight into the local doc goes around it.
+   *  3. DURABILITY IS THE ROOM'S. `commitLocalWrite` broadcasts AND appends to
+   *     the room's update log; a client frame is durable by the inbound path.
+   *     Both are the room's business, and neither is the panel's.
+   *
+   * The cost is honest and stated: the new node appears on the human's canvas
+   * only once the server's delta comes back, so this is not an optimistic
+   * create. That is why the title is typed BEFORE the write rather than into
+   * an empty note afterwards — there is no local shape to focus.
+   *
+   * REJECTS RATHER THAN RETURNING A REFUSAL SHAPE, like `canvas_run_note`:
+   * every refusal here is a sentence for a human, and the panel already toasts
+   * `cause.message`.
+   */
+  canvas_tree_add_goal: {
+    input: z
+      .object({
+        /** The PAGE the goal goes on. Marked as a tree by the write if it is
+         * not one yet — that is the act that starts a tree. */
+        treeId: z.string().min(1).max(200),
+        title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
+      })
+      .strict(),
+    output: treeWriteResultSchema,
+  },
+  canvas_tree_add_blocker: {
+    input: z
+      .object({
+        /** The node the new one will BLOCK — W0's direction, fixed here so the
+         * panel cannot invert it. */
+        parentId: z.string().min(1).max(200),
+        title: z.string().trim().min(1).max(MAX_TITLE_LENGTH),
+      })
+      .strict(),
+    output: treeWriteResultSchema,
+  },
+  /**
+   * W18 — THE INSPECTOR's three edits: `state`, `approached` and the context
+   * note.
+   *
+   * SERVER-SIDE FOR THE SAME REASON THE TWO GESTURES ABOVE ARE, restated
+   * because this is the second time the argument is used and it is the one
+   * that matters: the engine is the single definition of a legal write, it
+   * re-reads W1's invariants after every one, and `commitLocalWrite` is what
+   * makes the change durable rather than merely broadcast. A panel editing
+   * `meta` in the browser's own copy would be a second write path with none of
+   * the three.
+   *
+   * NAMED EXACTLY AS THE AGENT TOOLS ARE. `canvas_tree_set_state` here and
+   * `canvas_tree_set_state` in `write-tools.ts` are two doors onto ONE
+   * operation, and the point of this whole node is that the human and the
+   * agent are editing the same fields with the same meanings — a different
+   * name at each door would be the beginning of a second vocabulary. (W4's
+   * gesture methods are named differently from their tools because their
+   * subjects differ: `add_blocker` names a relationship, `add_child` names a
+   * position.)
+   */
+  canvas_tree_set_state: {
+    input: z
+      .object({
+        nodeId: z.string().min(1).max(MAX_NODE_ID_LENGTH),
+        state: z.enum(NODE_STATES),
+      })
+      .strict(),
+    output: treeWriteResultSchema,
+  },
+  canvas_tree_set_approached: {
+    input: z
+      .object({
+        nodeId: z.string().min(1).max(MAX_NODE_ID_LENGTH),
+        /** "We looked at this and nothing came up" — a fact about a `todo`,
+         * not a fourth state (encoding.ts). */
+        approached: z.boolean(),
+      })
+      .strict(),
+    output: treeWriteResultSchema,
+  },
+  /**
+   * The context note, with `expected` REQUIRED on this door.
+   *
+   * The agent tool's `expected` is optional; the panel's is not, and that
+   * asymmetry is the whole multiplayer answer. A human has a note open on
+   * screen and can say what they read; if an agent or another human replaced
+   * it in the meantime the engine refuses (`stale-write`) and the panel shows
+   * both values rather than overwriting one of them. An optional field here
+   * would make the silent overwrite reachable by forgetting to pass it.
+   */
+  canvas_tree_write_context: {
+    input: z
+      .object({
+        nodeId: z.string().min(1).max(MAX_NODE_ID_LENGTH),
+        context: z.string().max(MAX_CONTEXT_LENGTH),
+        expected: z.string().max(MAX_CONTEXT_LENGTH),
+      })
+      .strict(),
+    output: treeWriteResultSchema,
+  },
+  /**
+   * ONE NODE, FOR A `::node{id="\u2026"}` CARD IN A MESSAGE (W9).
+   *
+   * WHY THE CARD ASKS AT ALL, rather than reading the message it is drawn in.
+   * The directive's attributes were written by a model at some point in the
+   * past, into a message that is kept forever; a title and a state quoted
+   * there are a snapshot of a tree that has since moved on. So the directive
+   * carries the id and nothing else, and every fact on the card is read HERE,
+   * live, through W5's service over the room's own document
+   * (canvas/tree/node-reference.ts argues it at the other end).
+   *
+   * `node: null` IS A NORMAL ANSWER, not an error: a deleted node, an id a
+   * model invented, and a shape that is not a tree node at all are the same
+   * fact from here — this document does not have that node — and an old
+   * message containing a dead reference is an ordinary thing. The card renders
+   * it as a visible dead reference; a thrown error would render as "the canvas
+   * is broken", which would be a lie about a healthy canvas.
+   *
+   * The reply is small on purpose. It feeds one line of chrome, so it carries
+   * no context note and a title already cut to a label by `cardTitle`.
+   */
+  canvas_tree_node: {
+    input: z.object({ nodeId: z.string().min(1).max(MAX_NODE_ID_LENGTH) }).strict(),
+    output: z
+      .object({
+        node: z
+          .object({
+            id: z.string().min(1),
+            /** The PAGE, which is where a click on the card goes. */
+            treeId: z.string().min(1),
+            title: z.string().max(MAX_CARD_TITLE),
+            state: z.enum(NODE_STATES),
+            isReady: z.boolean(),
+          })
+          .strict()
+          .nullable(),
+      })
+      .strict(),
+  },
+  /**
+   * W12 — START A THREAD TO WORK ON ONE NODE.
+   *
+   * NOT `canvas_run_note` WITH A BETTER PROMPT, and the difference is where the
+   * prompt comes from. `canvas_run_note` is handed the text the panel read off
+   * the shape; this is handed an ID, and the prompt is built HERE, from W5's
+   * service over the room's own document — the node's path to root, what
+   * blocks it and its context note. The panel has the document but not the
+   * service, and the prompt has to be the tree as the SERVER sees it for the
+   * same reason every tree write goes server-side (see the two gesture methods
+   * above): one reading of the tree, not two.
+   *
+   * IT MINTS AN ORDINARY LINK. `AgentLinks.record`, the same badge broadcast,
+   * the same three thread lifecycle events, the same canvas-gc sweep. There is
+   * no tree-specific link store and there must not be one — see
+   * canvas/tree/launch.ts.
+   *
+   * REJECTS RATHER THAN RETURNING A REFUSAL SHAPE, like `canvas_run_note`: a
+   * shape that is not a usable tree node produces W5's own sentence, and the
+   * panel already toasts `cause.message`.
+   */
+  canvas_tree_launch: {
+    input: z.object({ nodeId: z.string().min(1).max(MAX_NODE_ID_LENGTH) }).strict(),
     output: agentLinkSchema,
   },
   /**

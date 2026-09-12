@@ -105,8 +105,14 @@ export function useAgentSync(rpcRef: { current: RpcClient }) {
   const attachThread = useCallback((shapeId: string, threadId: string) => {
     rpcRef.current
       .call("canvas_attach_thread", { shapeId, threadId })
-      .then((link: CanvasAgentLink) => {
+      .then(({ link, warning }: { link: CanvasAgentLink; warning?: string }) => {
         setAgentLinks((previous) => ({ ...previous, [link.shapeId]: link }));
+        // W16/F4: the attach SUCCEEDED and still has something the user has to
+        // know — a thread attached to a tree node has no tree tools until its
+        // runtime restarts. A warning toast rather than an error one, because
+        // nothing failed; `duration` is left to sonner's default for a warning,
+        // which is longer than an info's.
+        if (warning !== undefined) toast.warning(warning);
       })
       .catch((cause: unknown) => {
         // A toast, for the same reason a refused spawn gets one: the canvas
@@ -115,6 +121,31 @@ export function useAgentSync(rpcRef: { current: RpcClient }) {
           `Could not attach this shape: ${cause instanceof Error ? cause.message : String(cause)}`,
         );
       });
+  }, []);
+
+  /**
+   * W12: start a thread to WORK ON a tree node.
+   *
+   * Shaped exactly like `runNote` — same `pendingShapeId`, same
+   * toast-not-banner rule, same `setAgentLinks` on the way back — because it
+   * mints the same kind of link and must reach the same badge. The one
+   * difference is what is sent: an id, not text. The prompt is built on the
+   * server from the tree (canvas/rpc-contract.ts argues why, next to the
+   * method), so there is nothing for the panel to read off the shape.
+   */
+  const launchNode = useCallback((nodeId: string) => {
+    setPendingShapeId(nodeId);
+    rpcRef.current
+      .call("canvas_tree_launch", { nodeId })
+      .then((link: CanvasAgentLink) => {
+        setAgentLinks((previous) => ({ ...previous, [link.shapeId]: link }));
+      })
+      .catch((cause: unknown) => {
+        toast.error(
+          `Could not start a thread on this node: ${cause instanceof Error ? cause.message : String(cause)}`,
+        );
+      })
+      .finally(() => setPendingShapeId(null));
   }, []);
 
   /** The picker's offer. Fetched per open rather than cached: which threads
@@ -128,5 +159,5 @@ export function useAgentSync(rpcRef: { current: RpcClient }) {
     [],
   );
 
-  return { agentLinks, pendingShapeId, refreshAgents, runNote, unlinkNote, attachThread, loadThreadOptions };
+  return { agentLinks, pendingShapeId, refreshAgents, runNote, launchNode, unlinkNote, attachThread, loadThreadOptions };
 }

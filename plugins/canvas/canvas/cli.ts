@@ -2,6 +2,7 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { CanvasRoomHost } from "./room.js";
 import type { AgentLinks } from "./agents.js";
 import { parseTranscriptArgs, type TranscriptStore } from "./transcript.js";
+import { runTreeCli, type TreeCliDeps } from "./tree/cli-view.js";
 import { formatTranscriptLine } from "./transcript-view.js";
 
 export function registerCanvasCli(
@@ -9,6 +10,7 @@ export function registerCanvasCli(
   room: CanvasRoomHost,
   agents: AgentLinks,
   transcript: TranscriptStore,
+  tree: TreeCliDeps,
 ): void {
   const usage = [
     "Usage:",
@@ -17,6 +19,8 @@ export function registerCanvasCli(
     "  bb canvas agents [--json]   Every shape -> agent-thread link",
     "  bb canvas transcript [--since 10m|2h|1d] [--search TEXT] [--speaker NAME] [--limit N] [--json]",
     "                              What was said in the room",
+    "  bb canvas tree [show|node|ready|quarantined|restore] …",
+    "                              The discovery tree on the canvas (bb canvas tree help)",
   ].join("\n");
   bb.cli.register({
     name: "canvas",
@@ -36,6 +40,18 @@ export function registerCanvasCli(
         name: "agents",
         summary: "List every note -> agent-thread link and its status",
         usage: "bb canvas agents [--json]",
+      },
+      {
+        // ONE entry for the whole verb set: `commands` is flat metadata keyed
+        // by first token, and this is what `bb --help` and the
+        // plugin-commands skill read WITHOUT executing plugin code — so the
+        // sub-verbs have to live in the usage line or they are invisible to
+        // the agent this command exists for.
+        name: "tree",
+        summary:
+          "Read the discovery tree on the canvas: its trees, one node, the outline, what is ready, and what repair took out",
+        usage:
+          "bb canvas tree [--json] | show [ID] [--depth N] | node <NODE> | ready [TREE] | quarantined [TREE] | restore <EDGE>",
       },
       {
         name: "transcript",
@@ -68,6 +84,12 @@ export function registerCanvasCli(
             ? "No transcript entries."
             : entries.map(formatTranscriptLine).join("\n"),
         };
+      }
+      if (command === "tree") {
+        // The CLI runs INSIDE the plugin server process, so it holds the live
+        // room document directly — the same one the agent tools read, with no
+        // rpc, no snapshot and no staleness between them.
+        return runTreeCli(argv.slice(argv.indexOf("tree") + 1), tree);
       }
       const shapeIds = room.peer.doc.listShapes().map((shape) => shape.id);
       switch (command) {

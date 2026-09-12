@@ -1,4 +1,4 @@
-import type { ComponentProps, ReactNode, RefObject } from "react";
+import { useMemo, type ComponentProps, type ReactNode, type RefObject } from "react";
 import type { EditorState, InputEvent, Intent, ToolContext } from "@ensembleworks/canvas-editor";
 import type { CanvasDocument } from "@ensembleworks/canvas-model";
 import {
@@ -15,6 +15,15 @@ import { AgentLayer } from "../agents-ui.js";
 import type { ThreadOption } from "../thread-picker.js";
 import type { CanvasAgentLink } from "../wire.js";
 import { SpeakerRings } from "../roster-ui.js";
+import { pageScopedDocument } from "./page-scope.js";
+import { QuarantinedEdges } from "./quarantine-layer.js";
+import { TreeGestureLayer } from "./tree-gesture-layer.js";
+import { TreeInspector } from "./tree-inspector.js";
+import { TreeStateLayer } from "./tree-state-layer.js";
+import type { DiscussRoute } from "../tree/discuss.js";
+import type { InspectorEdit } from "./tree-inspector-sync.js";
+import type { NodeState } from "../tree/encoding.js";
+import type { LiveText } from "../shape-text.js";
 import type { ToolId, ToolStates } from "../tool-loop.js";
 import {
   chromeCardColumnStyle,
@@ -61,6 +70,25 @@ export interface SessionViewProps {
   readonly onUnlink: (shapeId: string) => void;
   readonly onAttach: (shapeId: string, threadId: string) => void;
   readonly loadThreadOptions: () => Promise<ThreadOption[]>;
+  /** W4's two node gestures. Which gesture's write is in flight, and the two
+   * calls that start one. */
+  readonly treeGesturePending: "goal" | "blocker" | null;
+  readonly onAddGoal: (treeId: string, title: string) => void;
+  readonly onAddBlocker: (parentId: string, title: string) => void;
+  /** W12: start a bb thread on this node, briefed with its context, its path
+   * to root and what blocks it. */
+  readonly onLaunchNode: (nodeId: string) => void;
+  /** W8: where a node reference would land, and the call that puts one there. */
+  readonly discussRoute: DiscussRoute;
+  readonly onDiscuss: (treeId: string, nodeId: string) => void;
+  /** W18: the inspector's three edits, and which one is in flight. */
+  readonly inspectorPending: InspectorEdit | null;
+  readonly onSetState: (nodeId: string, state: NodeState) => void;
+  readonly onSetApproached: (nodeId: string, approached: boolean) => void;
+  readonly onWriteContext: (nodeId: string, context: string, expected: string) => Promise<boolean>;
+  /** W18: the live text channel, so the inspector titles a node with what the
+   * human typed rather than with `props.richText` (canvas/shape-text.ts). */
+  readonly textOf: LiveText;
   readonly pageSwitcher: PageSwitcherView;
 }
 
@@ -76,6 +104,18 @@ export function SessionView(props: SessionViewProps) {
         <CanvasChrome {...props} />
         {pageSwitcher.overlays}
       </div>
+      {/* W18. A COLUMN, not a popover anchored to the node — the argument is
+          in tree-inspector.tsx's header (an 8000-character note, an anchor
+          that moves while you type, and a canvas that has to stay visible). */}
+      <TreeInspector
+        doc={props.snapshot}
+        selection={props.editorState.selection}
+        textOf={props.textOf}
+        pending={props.inspectorPending}
+        onSetState={props.onSetState}
+        onSetApproached={props.onSetApproached}
+        onWriteContext={props.onWriteContext}
+      />
     </div>
   );
 }
@@ -105,7 +145,17 @@ function CanvasSurface({
   onUnlink,
   onAttach,
   loadThreadOptions,
+  treeGesturePending,
+  onAddGoal,
+  onAddBlocker,
+  onLaunchNode,
+  discussRoute,
+  onDiscuss,
 }: SessionViewProps) {
+  const overlayDoc = useMemo(
+    () => pageScopedDocument(snapshot, editorState.currentPageId),
+    [snapshot, editorState.currentPageId],
+  );
   return (
     <div
       ref={viewportRef}
@@ -133,13 +183,27 @@ function CanvasSurface({
             onEndEdit={handleEndEdit}
           />
         </WorldLayer>
+        {/* THE PAGE-SCOPED document, not the whole one (W16/B2). canvas-react's
+            `Arrows` filters by viewport and not by page, so an arrow on another
+            page is painted over this one whenever their world boxes overlap —
+            which, since pages share one coordinate space, is routine. Its
+            sibling <QuarantinedEdges> below has always taken `currentPageId`;
+            this is the same posture, arrived at three months later. */}
         <Overlay
           editorState={editorState}
-          snapshot={snapshot}
+          snapshot={overlayDoc}
           camera={editorState.camera}
           viewportSize={viewportSize}
           index={toolContext.index()}
           snapResult={currentSnapResult(toolStates, activeToolId)}
+        />
+        {/* Later sibling than <Overlay>, so the marker paints ON TOP of the
+            routed arrow that overlay already drew for the same shape. */}
+        <QuarantinedEdges
+          snapshot={snapshot}
+          camera={editorState.camera}
+          viewportSize={viewportSize}
+          currentPageId={editorState.currentPageId}
         />
         <Cursors
           presence={remotePresence}
@@ -162,6 +226,32 @@ function CanvasSurface({
         onUnlink={onUnlink}
         onAttach={onAttach}
         loadThreadOptions={loadThreadOptions}
+      />
+      {/* Later than <AgentLayer>, and the same posture: pointer-events none on
+          the layer, auto on the controls, anchored with screenBoxFor. */}
+      <TreeGestureLayer
+        doc={snapshot}
+        camera={editorState.camera}
+        viewportSize={viewportSize}
+        selection={editorState.selection}
+        currentPageId={editorState.currentPageId}
+        pending={treeGesturePending}
+        onAddGoal={onAddGoal}
+        onAddBlocker={onAddBlocker}
+        agentLinks={agentLinks}
+        launchPendingShapeId={pendingShapeId}
+        onLaunchNode={onLaunchNode}
+        discussRoute={discussRoute}
+        onDiscuss={onDiscuss}
+      />
+      {/* W18's compact half: state on every node of this page, readable with
+          nothing selected. `pointer-events: none` throughout — it has no
+          controls, so it can never take a gesture from the canvas. */}
+      <TreeStateLayer
+        doc={snapshot}
+        camera={editorState.camera}
+        viewportSize={viewportSize}
+        currentPageId={editorState.currentPageId}
       />
       <SpeakerRings
         presence={presenceAll}

@@ -3,8 +3,16 @@ import { CanvasSession } from "./session.js";
 import { useCanvasConnection } from "./connection-runtime.js";
 
 export function CanvasPanel({ subPath }: PluginNavPanelProps) {
-  const { session, error, connectionState, identities, selfName, agents } =
-    useCanvasConnection({ subPath });
+  const {
+    session,
+    error,
+    connectionState,
+    identities,
+    selfName,
+    agents,
+    treeGestures,
+    treeInspector,
+  } = useCanvasConnection({ subPath });
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col">
       {error === null ? null : (
@@ -38,6 +46,14 @@ export function CanvasPanel({ subPath }: PluginNavPanelProps) {
           onUnlinkNote={agents.unlinkNote}
           onAttachThread={agents.attachThread}
           loadThreadOptions={agents.loadThreadOptions}
+          treeGesturePending={treeGestures.pending}
+          onAddGoal={treeGestures.addGoal}
+          onAddBlocker={treeGestures.addBlocker}
+          onLaunchNode={agents.launchNode}
+          inspectorPending={treeInspector.pending}
+          onSetState={treeInspector.setState}
+          onSetApproached={treeInspector.setApproached}
+          onWriteContext={treeInspector.writeContext}
         />
       )}
     </div>
