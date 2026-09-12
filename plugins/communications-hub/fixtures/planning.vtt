@@ -1,0 +1,13 @@
+WEBVTT
+
+00:00:01.000 --> 00:00:06.000
+<v Alex>Let's add authentication to the import endpoint.</v>
+
+00:00:07.000 --> 00:00:12.000
+<v Sam>Existing local imports should keep working. We only need a token on the external webhook.</v>
+
+00:00:13.000 --> 00:00:18.000
+<v Alex>Agreed. Keep local import as it is, and verify the webhook signature before accepting any content.</v>
+
+00:00:19.000 --> 00:00:24.000
+<v Sam>Also show when capture was interrupted. The agent needs to know if a passage might be missing.</v>

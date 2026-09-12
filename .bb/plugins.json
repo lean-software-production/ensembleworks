@@ -1,0 +1,9 @@
+{
+  "$schema": "https://getbb.app/schemas/plugins.schema.json",
+  "schemaVersion": 1,
+  "name": "ensembleworks-plugins",
+  "plugins": [
+    { "name": "canvas", "source": "./plugins/canvas" },
+    { "name": "communications-hub", "source": "./plugins/communications-hub" }
+  ]
+}

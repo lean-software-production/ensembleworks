@@ -1,0 +1,52 @@
+name: communications-hub
+
+on:
+  pull_request:
+    paths:
+      - "plugins/communications-hub/**"
+      - ".bb/plugins.json"
+      - "marketplace.json"
+      - "icons/communications-hub.svg"
+      - "scripts/plugin-release.*"
+      - "docs/communications-marketplace-demo.md"
+      - ".github/workflows/communications-hub.yml"
+  push:
+    branches: [main]
+    paths:
+      - "plugins/communications-hub/**"
+      - ".bb/plugins.json"
+      - "marketplace.json"
+      - "icons/communications-hub.svg"
+      - "scripts/plugin-release.*"
+      - "docs/communications-marketplace-demo.md"
+      - ".github/workflows/communications-hub.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plugin:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/communications-hub
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.12.0, cache: npm, cache-dependency-path: plugins/communications-hub/package-lock.json }
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm install --global bb-app@0.43.0
+      - run: bb plugin types --check
+      - run: bb plugin build
+
+  release-and-catalog:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22.12.0 }
+      - run: node --test scripts/plugin-release.test.mjs
+      - run: node -e "const fs=require('fs'); const p=JSON.parse(fs.readFileSync('marketplace.json','utf8')); if (p.plugins.length !== 1 || p.plugins[0].id !== 'communications-hub') throw new Error('catalog must contain only Communications Hub'); if (p.plugins[0].source.git.range !== '>=0.1.1-preview.1 <0.1.1') throw new Error('catalog is not selecting the published preview range');"
