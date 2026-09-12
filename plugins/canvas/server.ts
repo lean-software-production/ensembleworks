@@ -7,14 +7,9 @@
 // room "main" plus the rpc half of its transport. See canvas/room.ts for the
 // bb-specific wire mapping and transport.ts for the client half that
 // canvas/CanvasPanel.tsx mounts.
-import os from "node:os";
 import { type BbPluginApi } from "@get-bb/plugin-sdk";
 import { AgentLinks } from "./canvas/agents.js";
 import { resolveCanvasProjectId } from "./canvas/agent-project.js";
-import {
-  resolveIdentity,
-} from "./canvas/identity.js";
-import { LocationBook } from "./canvas/locations.js";
 import { CanvasRoomHost } from "./canvas/room.js";
 import { CANVAS_MIGRATIONS, CanvasStore } from "./canvas/store.js";
 import {
@@ -40,12 +35,6 @@ export default async function plugin(bb: BbPluginApi) {
   // see canvas/agent-project.ts for why guessing a project was worse than an
   // error that names this setting.
   //
-  // The three LiveKit settings are what turns "Join audio" from a toast into a
-  // call. The two credentials are `secret: true`, so they live in this plugin's
-  // 0600 secrets file, never reach the plugin database, and are never served to
-  // the frontend — only the minted, short-lived token crosses to the browser.
-  // `livekitUrl` is not secret: it is a hostname the client has to be told
-  // anyway.
   const settings = bb.settings.define({
     project: {
       type: "project",
@@ -53,30 +42,7 @@ export default async function plugin(bb: BbPluginApi) {
       description:
         "Which project the canvas's agent threads live in — spawned into, listed from, and attached within. Required: unset refuses the launch rather than guessing.",
     },
-    livekitUrl: {
-      type: "string",
-      label: "LiveKit URL",
-      description: "wss://… of the LiveKit server that carries canvas audio.",
-      default: "",
-    },
-    livekitApiKey: {
-      type: "string",
-      label: "LiveKit API key",
-      description: "Used only to sign access tokens; never sent to a browser.",
-      secret: true,
-    },
-    livekitApiSecret: {
-      type: "string",
-      label: "LiveKit API secret",
-      description: "Used only to sign access tokens; never sent to a browser.",
-      secret: true,
-    },
   });
-
-  /** This server's own identity, used as the LiveKit participant name for a
-   * caller the room does not (yet) know. Resolved with no request header
-   * because an rpc handler never sees one — the `local:<user>` branch. */
-  const localName = resolveIdentity(undefined, os.userInfo().username).name;
 
   // Persisted shape -> thread links, mirrored in memory. Loaded HERE, in the
   // factory, so the very first `canvas_agents` call after a reload already has
@@ -114,15 +80,6 @@ export default async function plugin(bb: BbPluginApi) {
     publish: (envelope) => bb.realtime.publish(CANVAS_CHANNEL, envelope),
     log: (message) => bb.log.info(message),
   });
-  // Who is WHERE, which is a different question from who is in the sync room:
-  // every bb tab reports here on its roster poll, including the many that will
-  // never open a canvas. Deliberately not folded into CanvasRoomHost — a room
-  // member owns a transport and every canvas delta is published once per
-  // transport, so making every bb tab a room member would multiply canvas
-  // traffic by the number of tabs that cannot render a canvas. See
-  // canvas/locations.ts.
-  const locations = new LocationBook();
-
   // The room's OTHER half: what was said in it. Same database, entirely
   // separate table — the canvas document is a CRDT nobody queries and the
   // transcript is a query surface nobody edits.
@@ -134,7 +91,6 @@ export default async function plugin(bb: BbPluginApi) {
   registerBackground(
     bb,
     room,
-    locations,
     agents,
   );
 
@@ -146,11 +102,8 @@ export default async function plugin(bb: BbPluginApi) {
     rpcContract,
     createRpcHandlers({
       room,
-      locations,
       agents,
       transcript,
-      localName,
-      settings,
       resolveProjectId,
       realtime: bb.realtime,
       log: bb.log,

@@ -1,29 +1,18 @@
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
-import { AccessToken } from "livekit-server-sdk";
 import { attachVerdictFor } from "./agent-attach.js";
 import { AgentLinks, threadTitleFor } from "./agents.js";
-import {
-  avIdentityFor,
-  LIVEKIT_ROOM,
-  livekitConfigFrom,
-  NOT_CONFIGURED_DETAIL,
-  TOKEN_TTL,
-} from "./av.js";
 import { base64ToBytes } from "./base64.js";
 import { threadListArgsFor, threadPickerOptions } from "./thread-picker.js";
 import { DEFAULT_QUERY_LIMIT, TranscriptStore } from "./transcript.js";
 import { AGENT_CHANNEL } from "./wire.js";
 import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
-import type { LocationBook } from "./locations.js";
+import { createThreadExcerptReader } from "./thread-excerpts.js";
 
 export interface RpcHandlerDependencies {
   readonly room: CanvasRoomHost;
-  readonly locations: LocationBook;
   readonly agents: AgentLinks;
   readonly transcript: TranscriptStore;
-  readonly localName: string;
-  readonly settings: { get(): Promise<Record<string, string | undefined>> };
   readonly sdk: BbPluginApi["sdk"];
   readonly resolveProjectId: () => Promise<string>;
   readonly realtime: { publish(channel: string, payload: unknown): void };
@@ -37,17 +26,20 @@ export function createRpcHandlers(
 ): PluginRpcHandlers<typeof rpcContract> {
   const {
     room,
-    locations,
     agents,
     transcript,
-    localName,
-    settings,
     resolveProjectId,
     realtime,
     log,
   } = deps;
 
+  const readExcerpts = createThreadExcerptReader(
+    deps.sdk.threads,
+    (threadId) => agents.shapeForThread(threadId) !== null,
+  );
+
   return {
+    canvas_thread_excerpts: ({ threadIds }) => readExcerpts(threadIds),
     canvas_join: ({ clientId, name }) => {
       room.join(clientId, Date.now(), name);
       return { room: room.room };
@@ -111,53 +103,14 @@ export function createRpcHandlers(
       return { unlinked: true };
     },
     canvas_agents: () => ({ links: agents.links }),
-    canvas_roster: (report) => {
-      const now = Date.now();
-      if (report !== null && report.path !== undefined) {
-        locations.seen(
-          {
-            clientId: report.clientId,
-            name: report.name ?? null,
-            path: report.path,
-            title: report.title ?? null,
-            focused: report.focused === true,
-          },
-          now,
-        );
-      }
-      locations.sweep(now);
-      return { members: locations.members(room.identities, now) };
-    },
-    canvas_av_token: async ({ clientId }) => {
-      const config = livekitConfigFrom(await settings.get());
-      if (config === null) {
-        log.info("canvas_av_token: LiveKit is not configured");
-        return {
-          ok: false as const,
-          error: "not_configured" as const,
-          detail: NOT_CONFIGURED_DETAIL,
-        };
-      }
-      const identity = avIdentityFor(clientId, room.identities, localName);
-      const accessToken = new AccessToken(config.apiKey, config.apiSecret, {
-        identity,
-        name: identity,
-        ttl: TOKEN_TTL,
-      });
-      accessToken.addGrant({
-        room: LIVEKIT_ROOM,
-        roomJoin: true,
-        canPublish: true,
-        canSubscribe: true,
-      });
-      return {
-        ok: true as const,
-        url: config.url,
-        token: await accessToken.toJwt(),
-        room: LIVEKIT_ROOM,
-        identity,
-      };
-    },
+    // Kept as an explicit compatibility result for existing Canvas bundles.
+    // Presence and Huddle now own these capabilities and their configuration.
+    canvas_roster: () => ({ members: [] }),
+    canvas_av_token: async () => ({
+      ok: false as const,
+      error: "not_configured" as const,
+      detail: "Canvas no longer owns AV. Install and configure the Huddle plugin.",
+    }),
     canvas_transcript_feed: ({ after, limit }) => transcript.feed(after, limit),
     canvas_transcript_query: ({ sinceMs, search, speaker, limit }) => ({
       entries: transcript.query({

@@ -1,0 +1,31 @@
+{
+  "name": "bb-plugin-presence",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "engines": {
+    "bb": ">=0.40",
+    "bbPluginSdk": ">=0.4.84"
+  },
+  "bb": {
+    "name": "Presence",
+    "description": "Expiring, scoped BB typing awareness.",
+    "branding": {
+      "icon": "UsersRound"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.4.84",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

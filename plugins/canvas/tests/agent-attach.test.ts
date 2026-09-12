@@ -27,7 +27,7 @@ function probe(overrides: Partial<AttachProbe> = {}): AttachProbe {
 
 describe("attachStatusFor", () => {
   it("maps every bb runtime status to one of the three badge statuses", () => {
-    for (const status of ["active", "error", "idle", "starting", "stopping"] as const) {
+    for (const status of ["active", "error", "idle", "pending", "starting", "stopping"] as const) {
       expect(AGENT_STATUSES).toContain(attachStatusFor(status));
     }
   });

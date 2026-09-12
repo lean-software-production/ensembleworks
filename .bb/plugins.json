@@ -4,6 +4,8 @@
   "name": "ensembleworks-plugins",
   "plugins": [
     { "name": "canvas", "source": "./plugins/canvas" },
-    { "name": "communications-hub", "source": "./plugins/communications-hub" }
+    { "name": "communications-hub", "source": "./plugins/communications-hub" },
+    { "name": "presence", "source": "./plugins/presence" },
+    { "name": "huddle", "source": "./plugins/huddle" }
   ]
 }

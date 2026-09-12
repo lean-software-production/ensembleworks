@@ -11,17 +11,20 @@
 import { definePluginApp } from "@get-bb/plugin-sdk/app";
 import { toast } from "sonner";
 import { CanvasPanel } from "./canvas/CanvasPanel.js";
-import { mountAvDock } from "./canvas/dock/dock.js";
-import { TranscriptDoorSlot } from "./canvas/dock/transcript-door-slot.js";
 import { decidePageCommandAvailable, pageDoor } from "./canvas/pages/page-door.js";
 import { CANVAS_PANEL_PATH } from "./canvas/pages/page-route.js";
-import { CanvasOnlineCount } from "./canvas/roster-ui.js";
 import { TranscriptView } from "./canvas/transcript-ui.js";
+import { CanvasReturnAction } from "./canvas/thread-return-ui.js";
 
 /** The `threadPanelAction` id, referenced by the palette row that opens it. */
 const TRANSCRIPT_ACTION = "transcript";
 
 export default definePluginApp((app) => {
+  app.slots.experimental_threadHeaderAction({
+    id: "back-to-canvas",
+    title: "Back to canvas",
+    component: CanvasReturnAction,
+  });
   app.slots.navPanel({
     id: "canvas",
     title: "Canvas",
@@ -39,14 +42,6 @@ export default definePluginApp((app) => {
     // the navigation are pinned to one string.
     path: CANVAS_PANEL_PATH,
     component: CanvasPanel,
-    // No `headerContent`. It used to hold an avatar stack and the audio
-    // control, and the presence strip below now renders exactly that widget
-    // into exactly that row — on every bb route, not just this one. Keeping
-    // both would have drawn the roster twice, here and only here.
-    // A dot and a number on the sidebar row, so "somebody is on the canvas" is
-    // visible from anywhere in bb without opening the page. Mounted in every
-    // window, so it is deliberately rpc + realtime only — no canvas, no editor.
-    experimental_sidebarAccessory: CanvasOnlineCount,
   });
 
   // The room transcript: three registrations and four doors, ONE component.
@@ -117,44 +112,4 @@ export default definePluginApp((app) => {
     },
   });
 
-  // The FOURTH door — the "Transcript" button in the presence strip's popover,
-  // beside Join audio / Mute / Camera on — and the reason it is a slot that
-  // renders nothing.
-  //
-  // The strip is a content script, so it has no React fiber and cannot call
-  // `useBbNavigate().openThreadPanel`; and the transcript panel is not
-  // URL-addressable (measured 2026-09-01: every sanctioned open leaves path,
-  // query, hash, `history.state` and `history.length` untouched — the tab's
-  // identity lives in localStorage), so the guarded client-side navigation in
-  // canvas/dock/navigate.ts has nothing to push at either.
-  //
-  // What works is a relay: this component renders inside bb's thread-route
-  // provider and publishes that hook into the module singleton in
-  // canvas/dock/transcript-door.ts, which the strip's button then calls. It is
-  // the same seam canvas/panel-bus.ts already uses for `panTo`. Registered
-  // AFTER the action it opens, so the id it names is always present.
-  app.slots.experimental_threadHeaderAction({
-    id: "transcript-door",
-    title: "Room transcript",
-    component: TranscriptDoorSlot,
-  });
-
-  // The presence strip — who is in the room, and (one click down) the controls
-  // for talking to them, in bb's own page-header row on EVERY bb page.
-  //
-  // A content script rather than a slot because it is the only registration
-  // that outlives a route change: a `headerContent` disappears the moment you
-  // leave the canvas page, and a call you are in is not allowed to. It appends
-  // itself as the trailing child of the host's header row and follows that row
-  // across navigations, falling back to a flat fixed position in the same band
-  // on the routes that render no header at all. See the long note at the top of
-  // canvas/dock/dock.ts, and canvas/dock/anchor.ts for the placement rules.
-  //
-  // It drives ONE LiveKit session — canvas/av-room.ts, whose phase machine
-  // (canvas/av-session.ts) makes a second click attach to the first rather than
-  // open a second connection.
-  app.contentScripts.register({
-    id: "av-dock",
-    mount: mountAvDock,
-  });
 });

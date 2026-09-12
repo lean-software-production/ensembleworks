@@ -5,7 +5,6 @@ import {
   IDENTITY_ROUTE_PATH,
   resolveIdentity,
 } from "./identity.js";
-import type { LocationBook } from "./locations.js";
 import type { CanvasRoomHost } from "./room.js";
 import { AGENT_CHANNEL, CANVAS_CHANNEL, TRANSCRIPT_CHANNEL } from "./wire.js";
 import {
@@ -31,7 +30,6 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 export function registerBackground(
   bb: BbPluginApi,
   room: CanvasRoomHost,
-  locations: LocationBook,
   agents: AgentLinks,
 ): void {
   bb.background.service("canvas-gc", {
@@ -55,7 +53,6 @@ export function registerBackground(
         if (signal.aborted) break;
         const nowMs = Date.now();
         room.sweep(nowMs);
-        locations.sweep(nowMs);
       }
     },
   });

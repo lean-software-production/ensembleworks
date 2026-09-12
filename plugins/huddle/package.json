@@ -1,0 +1,33 @@
+{
+  "name": "bb-plugin-huddle",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "engines": {
+    "bb": ">=0.40",
+    "bbPluginSdk": ">=0.4.84"
+  },
+  "bb": {
+    "name": "Huddle",
+    "description": "Join a LiveKit huddle from any BB thread.",
+    "branding": {
+      "icon": "AudioWaveform"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx"
+  },
+  "dependencies": {
+    "livekit-client": "^2.22.1",
+    "livekit-server-sdk": "^2.18.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.4.84",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

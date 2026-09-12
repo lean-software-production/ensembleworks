@@ -16,8 +16,8 @@
 // `bb.sdk.threads.get` resolves to.
 import type { CanvasAgentStatus } from "./wire.js";
 
-/** bb's own five thread runtime states, as `threadResponseSchema.status`. */
-export type BbThreadStatus = "active" | "error" | "idle" | "starting" | "stopping";
+/** bb's current thread runtime states, as `threadResponseSchema.status`. */
+export type BbThreadStatus = "active" | "error" | "idle" | "pending" | "starting" | "stopping";
 
 /** The fields of a fetched thread that decide an attach. */
 export interface AttachProbe {
@@ -37,7 +37,7 @@ export type AttachVerdict =
   | { readonly ok: false; readonly reason: AttachRefusal; readonly message: string };
 
 /**
- * bb's five runtime states, mapped onto the badge's three.
+ * bb's runtime states, mapped onto the badge's three.
  *
  * The badge has exactly three colours (canvas/wire.ts's AGENT_STATUSES) and
  * that is deliberate there, so this is a narrowing and two of its five answers
@@ -48,7 +48,7 @@ export type AttachVerdict =
  * - `starting` -> RUNNING, because that is the state a freshly spawned thread
  *   is in and launch already paints it amber; two paths that disagreed about
  *   the same instant would be a bug visible as a flicker.
- * - `stopping` -> RUNNING, because a turn being cancelled has not finished.
+ * - `pending`, `starting`, and `stopping` -> RUNNING because none is finished.
  *   Both readings self-correct — `thread.idle` fires when it settles and moves
  *   the badge either way — so the tie-break is which is wrong in the meantime,
  *   and "finished" claims an answer that is not there yet.
@@ -60,6 +60,7 @@ export function attachStatusFor(status: BbThreadStatus): CanvasAgentStatus {
     case "idle":
       return "idle";
     case "active":
+    case "pending":
     case "starting":
     case "stopping":
       return "running";
