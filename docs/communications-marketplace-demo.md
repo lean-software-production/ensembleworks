@@ -8,7 +8,8 @@ Import provenance is recorded in
 
 ## Local developer checks
 
-Use BB 0.43.0 and Node 22.19 or newer in the Node 22 line (CI pins 22.22.3).
+Use BB 0.43.0 and Node 22.19 or newer in the Node 22 line.
+GitHub Actions CI for this plugin is deferred; run these checks locally.
 
 ```sh
 cd plugins/communications-hub
@@ -64,10 +65,12 @@ that each result has a stable citation link, that reading does not implicitly
 advance the thread cursor, and that an explicit acknowledge does. Reload the
 plugin and verify the conversation, attachment, and cursor remain present.
 
-To prove updating, install preview.1 before publishing preview.2, then run
+To prove updating, install the current preview before publishing the next, then run
 `bb plugin outdated` and `bb plugin update communications-hub --yes`. Verify the
 installed version and that the same conversation, attachment, cursor, and
-citations remain. If both tags already exist, a new install selects preview.2.
+citations remain. A new install selects the highest published preview.
+The first GitHub publication is preview.3; previews .1 and .2 were local
+validation releases and are not published to GitHub.
 
 When a stable release is ready, publish a stable tag and change only the
 catalog source range to a stable range such as `^0.1.1`; refresh the catalog
@@ -83,11 +86,11 @@ do not hand-tag. Preview mode requires an explicit prerelease version:
 
 ```sh
 node scripts/plugin-release.mjs preview \
-  --plugin communications-hub --version 0.1.1-preview.1 --check
+  --plugin communications-hub --version 0.1.1-preview.4 --check
 node scripts/plugin-release.mjs preview \
-  --plugin communications-hub --version 0.1.1-preview.1
+  --plugin communications-hub --version 0.1.1-preview.4
 node scripts/plugin-release.mjs preview \
-  --plugin communications-hub --version 0.1.1-preview.2
+  --plugin communications-hub --version 0.1.1-preview.5
 ```
 
 The first command is side-effect-free. The latter two publish commands require
@@ -128,8 +131,9 @@ Only the isolated server's Git subprocesses redirected the repository URL to
 the temporary mirror, through process-scoped Git configuration. The catalog,
 semver resolution, subdirectory selection, clean managed builds, storage, and
 update activation used BB's real implementation. No global Git rewrite was set.
-The remote branch and tags still need bot-authorized publication for another
-machine to install this demo from GitHub.
+The GitHub preview.3 publication omits the GitHub Actions workflow because the
+available publishing credential lacks workflow scope. The release script's
+local verification remains mandatory; earlier local preview tags are unchanged.
 
 ## Development workflow
 
