@@ -8,6 +8,8 @@ Import provenance is recorded in
 
 ## Local developer checks
 
+Use BB 0.43.0 and Node 22.19 or newer in the Node 22 line (CI pins 22.22.3).
+
 ```sh
 cd plugins/communications-hub
 npm ci
@@ -17,14 +19,32 @@ bb plugin types --check
 bb plugin build
 ```
 
-The build produces ignored `dist/` artifacts. This PR does not install the
-plugin into the active BB instance or claim a live update test.
+The build produces ignored `dist/` artifacts. The live checks below use an
+isolated BB instance; the team's existing Communications Hub is not replaced.
 
 ## Separate-instance marketplace demo
 
-After the parent publishes the preview tags, use a separate BB instance or
-isolated data directory. From this checkout, the local catalog can be added
-without installing code:
+After publishing the PR branch and first preview tag, use a separate BB
+instance. For example, run this in a dedicated terminal (choose unused ports):
+
+```sh
+bb-app --data-dir /tmp/ensembleworks-demo --server-bind-host 127.0.0.1 \
+  --server-port 39886 --host-daemon-port 39887
+```
+
+In the terminal used for the following demo commands, select that instance
+explicitly and clear any inherited thread context:
+
+```sh
+unset BB_PROJECT_ID BB_THREAD_ID BB_ENVIRONMENT_ID BB_HOST_ID
+export BB_SERVER_URL=http://127.0.0.1:39886
+export BB_HOST_DAEMON_PORT=39887
+bb status
+bb marketplace add git:https://github.com/lean-software-production/ensembleworks.git@bb-plugin-decomposition-doc
+bb plugin install communications-hub@ensembleworks --yes
+```
+
+Alternatively, from the repository root, use the local catalog while developing:
 
 ```sh
 bb marketplace add path:$PWD
@@ -43,6 +63,11 @@ thread, then use the conversation panel or CLI to read/search passages. Check
 that each result has a stable citation link, that reading does not implicitly
 advance the thread cursor, and that an explicit acknowledge does. Reload the
 plugin and verify the conversation, attachment, and cursor remain present.
+
+To prove updating, install preview.1 before publishing preview.2, then run
+`bb plugin outdated` and `bb plugin update communications-hub --yes`. Verify the
+installed version and that the same conversation, attachment, cursor, and
+citations remain. If both tags already exist, a new install selects preview.2.
 
 When a stable release is ready, publish a stable tag and change only the
 catalog source range to a stable range such as `^0.1.1`; refresh the catalog
@@ -65,8 +90,8 @@ node scripts/plugin-release.mjs preview \
   --plugin communications-hub --version 0.1.1-preview.2
 ```
 
-The first command is side-effect-free. The latter two are the parent-owned
-publish commands and require a clean working tree. `--no-push` creates the
+The first command is side-effect-free. The latter two publish commands require
+a clean working tree. `--no-push` creates the
 release commit and tag for an operator to inspect; `--check` creates neither.
 Stable releases use the same script on synchronized `main`, for example:
 
@@ -75,8 +100,48 @@ node scripts/plugin-release.mjs stable \
   --plugin communications-hub --version 0.1.1 --check
 ```
 
-The stable command is shown in check mode here; publishing it requires the
-parent's deliberate release action.
+The script currently supports Communications Hub only. It rejects equal or
+lower versions, previews outside the catalog's `0.1.1-preview.N` line, existing
+tags, and stable releases not synchronized with the live remote main. Every
+release runs a clean dependency install, tests, typecheck, SDK check, and build;
+verification cannot be skipped. Pushes send the branch and tag atomically.
+
+## Validation on 12 September 2026
+
+- BB 0.43.0 / Plugin SDK 0.4.84; 85 plugin tests, typecheck, SDK check, and build pass.
+- Nine release/catalog guardrail tests pass; a separate cheaper-model review
+  validated the fixes for version regression and preview-range mismatch.
+- The actual release script created annotated `communications-hub/v0.1.1-preview.1`
+  and `communications-hub/v0.1.1-preview.2` tags in a disposable Git mirror.
+- A fresh BB instance accepted the catalog, installed preview.1 as a managed
+  Git plugin, discovered preview.2 with `plugin outdated`, and updated successfully.
+- Chromium imported the WebVTT fixture through the UI and rendered four
+  passages; searching for “webhook” returned two passages with citation links
+  and no page errors.
+- CLI checks attached a conversation to a real BB thread, verified that reading
+  left its cursor at zero, acknowledged sequence two, and confirmed the four
+  passages, attachment, and cursor survived reload and update.
+- Reusing the second release tag was rejected without moving it.
+
+These are local integration results, not a claim of publication on GitHub.
+Only the isolated server's Git subprocesses redirected the repository URL to
+the temporary mirror, through process-scoped Git configuration. The catalog,
+semver resolution, subdirectory selection, clean managed builds, storage, and
+update activation used BB's real implementation. No global Git rewrite was set.
+The remote branch and tags still need bot-authorized publication for another
+machine to install this demo from GitHub.
+
+## Development workflow
+
+`.bb/workflows/communications-marketplace-demo.js` records the one-off
+implementation/validation/feedback workflow used for this PR. It selects
+GPT-5.6-Luna explicitly and bounds validation to three rounds. It is a development
+harness, not the proposed product-level Automated Workflows domain.
+
+The first run stopped on a provider usage limit. A resumed run completed
+implementation but its validator hit another usage limit. A separate
+cheaper-model review and final parent validation completed the review and live
+checks; the BB workflow itself must not be described as a successful full loop.
 
 No Zoom setup, LiveKit migration, factory integration, presence implementation,
 or active-instance installation is part of this file-import demonstration.

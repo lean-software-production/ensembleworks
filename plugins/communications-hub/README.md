@@ -118,7 +118,11 @@ bb plugin types --check
 bb plugin build
 ```
 
-## Validation performed
+## Historical source validation
+
+The following records validation in the original repository before the monorepo
+import. For the current SDK 0.4.84 checks and marketplace demonstration, see
+[the monorepo demo guide](../../docs/communications-marketplace-demo.md).
 
 Verified on 2026-09-11 against BB with Plugin SDK 0.4.47 on this machine:
 
