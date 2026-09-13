@@ -5,7 +5,8 @@ import type { RunGraph } from './graph-contract';
 
 import { graphImage, latestStages } from './graph-image';
 
-export function GraphPreview({ jobId, threadId, runId, status, compact = false }: { jobId: string; threadId: string; runId: string | null; status: string | null; compact?: boolean }) {
+type GraphProps = { jobId: string; threadId: string; runId: string | null; status: string | null };
+export function useRunGraph({ jobId, threadId, runId, status }: GraphProps) {
   const rpc = useRpc<typeof rpcContract>();
   const [graph, setGraph] = useState<RunGraph | null>(null);
   const [error, setError] = useState(false);
@@ -25,6 +26,15 @@ export function GraphPreview({ jobId, threadId, runId, status, compact = false }
     void refresh();
     return () => { disposed = true; clearTimeout(timer); };
   }, [rpc, jobId, threadId, runId, status]);
+  return { graph, error };
+}
+
+export function GraphPreview(props: GraphProps & { compact?: boolean }) {
+  const snapshot = useRunGraph(props);
+  return <GraphSnapshot {...snapshot} runId={props.runId} compact={props.compact} />;
+}
+
+export function GraphSnapshot({ graph, error, runId, compact = false }: { graph: RunGraph | null; error: boolean; runId: string | null; compact?: boolean }) {
   const image = useMemo(() => {
     if (!graph) return null;
     try { return graphImage(graph); } catch { return null; }

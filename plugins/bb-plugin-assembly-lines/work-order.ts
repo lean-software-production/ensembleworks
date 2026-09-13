@@ -18,6 +18,7 @@ const relativePath = z.string().trim().min(1).max(500).refine(
 /** Frozen task-specific input. Workflow defaults are versioned with the package. */
 export const workOrderSchema = z.object({
   title: z.string().trim().min(1).max(160),
+  displayTitle: z.string().trim().min(1).max(60).optional(),
   objective: text,
   baseSha: z.string().regex(/^[a-f0-9]{40}$/i, "Use the full starting commit SHA"),
   line: linePathSchema.optional(),

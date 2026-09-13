@@ -142,3 +142,9 @@ Tests retain the project template's runtime guards. The starter avoids
 `max_visits=1`, which rejects the first visit in Fabro 0.254.0, and uses explicit
 success transitions plus terminal goal gates. Time budgets are checked between
 stages and applied to commands, not enforced as a global process-tree deadline.
+
+Composer banners use a workflow glyph and execution-status icon; tooltips retain
+the full title and separate acceptance verdict. Set optional work-order
+`displayTitle` (1–60 characters) for a concise banner label; otherwise the full
+title is truncated visually. Active runs show their current stage. Expand the
+banner to see the mini DAG, or use the sidebar button for details.

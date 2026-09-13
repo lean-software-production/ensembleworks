@@ -4,7 +4,8 @@ import type { PluginMessageDirectiveProps, PluginThreadPanelProps } from "@get-b
 import type { rpcContract, JobView } from "./contracts";
 import { Button } from "./components/ui/button";
 import { Icon } from "./components/ui/icon";
-import { GraphPreview } from "./run-graph";
+import { GraphPreview, GraphSnapshot, useRunGraph } from "./run-graph";
+import { latestStages } from "./graph-image";
 import { cn } from "./lib/utils";
 
 type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
@@ -273,11 +274,36 @@ function ComposerGraphBanner() {
   useRealtime("jobs-changed", () => { void refresh(); });
   const job = state?.threadId === threadId ? state.job : null;
   if (!job) return null;
-  return <button type="button" aria-label={`Open Fabro run ${title(job)}`} onClick={() => navigate.openThreadPanel({ actionId: ACTION, params: { jobId: job.id }, title: "Fabro" })} className="w-full min-w-0 rounded-lg border border-border bg-card p-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-    <div className="flex items-center justify-between gap-2 text-xs"><span className="truncate font-medium">{title(job)}</span><span className="shrink-0 text-muted-foreground">{label(job.engineStatus ?? job.observationState)}</span></div>
-    <GraphPreview key={job.id} jobId={job.id} threadId={job.threadId} runId={job.runId} status={job.engineStatus} compact />
-    {state?.error ? <p className="mt-1 text-xs text-muted-foreground">Run update unavailable; showing the last snapshot.</p> : null}
-  </button>;
+  return <ComposerRun key={`${job.threadId}:${job.id}`} job={job} stale={state?.error ?? false} open={() => navigate.openThreadPanel({ actionId: ACTION, params: { jobId: job.id }, title: "Fabro" })} />;
+}
+
+function ComposerRun({ job, stale, open }: { job: Job; stale: boolean; open: () => void }) {
+  const [expanded, setExpanded] = useState(false);
+  const snapshot = useRunGraph({ jobId: job.id, threadId: job.threadId, runId: job.runId, status: job.engineStatus });
+  const status = job.engineStatus ?? job.observationState;
+  const running = status === "running";
+  const stage = running && !snapshot.error && snapshot.graph ? [...latestStages(snapshot.graph).values()].find(value => value.status === "running") : null;
+  const unavailable = stale || !!job.connectionError || snapshot.error;
+  const statusText = unavailable ? "Update unavailable" : `Execution: ${label(status)}`;
+  const statusIcon = unavailable ? "!" : running ? "◌" : status === "succeeded" ? "✓" : ["failed", "dead", "error"].includes(status) ? "×" : ["needs_input", "paused", "waiting_for_input"].includes(status) ? "Ⅱ" : "○";
+  const statusColor = unavailable ? "text-amber-600" : running ? "text-blue-600" : status === "succeeded" ? "text-emerald-600" : ["failed", "dead", "error"].includes(status) ? "text-destructive" : "text-amber-600";
+
+  return <div className="w-full min-w-0 rounded-lg border border-border bg-card p-2">
+    <div className="flex items-center gap-2">
+      <button type="button" aria-label={`${expanded ? "Collapse" : "Expand"} Fabro graph`} aria-expanded={expanded} onClick={() => setExpanded(value => !value)} className="flex min-w-0 flex-1 items-center gap-2 rounded text-left text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <Icon name={expanded ? "ChevronDown" : "ChevronRight"} className="size-4 shrink-0" />
+        <span title="Fabro" aria-label="Fabro" className="shrink-0"><Icon name="Workflow" className="size-3" /></span>
+        <span title={title(job)} className="min-w-0 flex-1 truncate font-medium">{job.workOrder.displayTitle ?? title(job)}</span>
+        {stage ? <span title={stage.name || stage.node_id} className="max-w-24 truncate text-muted-foreground">· {stage.name || label(stage.node_id)}</span> : null}
+        <span role="img" aria-label={statusText} title={`${statusText}. Acceptance: ${label(job.acceptanceVerdict)}`} className={cn("shrink-0 text-sm", statusColor, running && !unavailable && "animate-spin motion-reduce:animate-none")}>{statusIcon}</span>
+      </button>
+      <button type="button" aria-label={`Open Fabro run ${title(job)}`} onClick={open} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Icon name="PanelRight" className="size-4" /></button>
+    </div>
+    {expanded ? <button type="button" aria-label="Open Fabro graph details" onClick={open} className="block w-full rounded text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+      <GraphSnapshot {...snapshot} runId={job.runId} compact />
+      {stale ? <p className="mt-1 text-xs text-muted-foreground">Run update unavailable; showing the last snapshot.</p> : null}
+    </button> : null}
+  </div>;
 }
 
 function JobsPage() {
