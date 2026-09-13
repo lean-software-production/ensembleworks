@@ -26,8 +26,9 @@
 // in canvas-editor's drag tools.
 import type { ReactNode } from 'react'
 import type { CanvasDocument, Bounds } from '@ensembleworks/canvas-model'
-import { worldBounds, worldCorners } from '@ensembleworks/canvas-model'
+import { routeArrow, worldBounds, worldCorners } from '@ensembleworks/canvas-model'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
+import { pathString } from './Arrows.js'
 
 export interface SelectionProps {
   readonly snapshot: CanvasDocument
@@ -79,6 +80,31 @@ export function Selection({ snapshot, selection, camera }: SelectionProps) {
   for (const id of selection) {
     const shape = snapshot.byId.get(id)
     if (!shape) continue // vanished between selection and render — omit, never throw
+    // ARROW SPECIAL CASE (Task arrow-body, gap 2/3): an arrow has no
+    // meaningful box quad — worldCorners degenerates to worldBounds'
+    // path-following AABB rotated by 0 (arrows carry no rotation prop),
+    // which would draw a visually wrong rectangle around the diagonal/
+    // curved line instead of tracing it. Indicate the EXACT routed path
+    // (routeArrow — the SAME path Arrows.tsx's overlay line draws) as an
+    // SVG <path>, never a <polygon>.
+    if (shape.kind === 'arrow') {
+      const routed = routeArrow(snapshot, shape, snapshot.bindings)
+      const start = worldToScreen(camera, routed.start)
+      const end = worldToScreen(camera, routed.end)
+      const mid = routed.mid ? worldToScreen(camera, routed.mid) : undefined
+      outlines.push(
+        <path
+          key={id}
+          data-overlay="selection-outline"
+          data-shape-id={id}
+          d={pathString(start, end, mid)}
+          fill="none"
+          stroke={OUTLINE_STROKE}
+          strokeWidth={1}
+        />,
+      )
+      continue
+    }
     const points = worldCorners(snapshot, shape)
       .map((p) => worldToScreen(camera, p))
       .map((p) => `${p.x},${p.y}`)

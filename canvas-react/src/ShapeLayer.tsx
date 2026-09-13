@@ -134,6 +134,19 @@ export function ShapeLayer({ toolContext, camera, viewportSize, dispatch }: Shap
     <>
       {visibleShapes.map((shape) => {
         if (isEmbedKind(shape.kind)) return null // embed kinds are EmbedLayer's exclusive job — see module header
+        // OVERLAY-ONLY KINDS (Task arrow-body): an arrow's whole visual —
+        // path, arrowheads, label — is drawn by the overlay's Arrows.tsx, a
+        // SIBLING layer to this one, never a ShapeLayer body. Arrow is
+        // deliberately unregistered in registerCoreShapes.ts (shape-
+        // registry.test.ts pins `lookupShapeComponent('arrow')` still
+        // falling back to BoxShape — that stays true; this is a render-time
+        // skip, not a registry change), so without this guard every arrow
+        // would ALSO get the registry's FALLBACK POLICY box body (a
+        // translucent blue rounded rect labeled "arrow") behind its real
+        // overlay line. Skipping here, rather than registering a null
+        // component, keeps the registry's fallback semantics intact for
+        // every OTHER kind that has not yet earned its own dedicated body.
+        if (shape.kind === 'arrow') return null
         // getText: reads through toolContext.editor.doc (the SAME "not an
         // import" posture TextEditor.tsx documents) so a text-capable
         // kind's body can render live LoroText content — see

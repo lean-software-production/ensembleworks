@@ -203,7 +203,13 @@ function arrowStyle(shape: Shape): ArrowStyle {
   return { stroke: dash === 'none' ? 'none' : stroke, strokeWidth, strokeDasharray, headStart, headEnd }
 }
 
-function pathString(start: Point, end: Point, mid?: Point): string {
+/** The SVG path `d` string for a routed arrow's screen-space segment —
+ * `M start L end` (straight) or `M start Q mid end` (curved, `mid` is
+ * routeArrow's quadratic control point already converted to screen space).
+ * Exported (Task arrow-body) so Selection.tsx's arrow indicator can trace
+ * the EXACT same path this component draws, rather than reimplementing the
+ * two-branch `M .. L/Q ..` composition a second time. */
+export function pathString(start: Point, end: Point, mid?: Point): string {
   if (!mid) return `M ${start.x} ${start.y} L ${end.x} ${end.y}`
   return `M ${start.x} ${start.y} Q ${mid.x} ${mid.y} ${end.x} ${end.y}`
 }
