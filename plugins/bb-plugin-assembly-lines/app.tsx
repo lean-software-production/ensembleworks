@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Markdown, definePluginApp, experimental_Diff, useBbContext, useBbNavigate, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
+import { Markdown, definePluginApp, experimental_Diff, useBbContext, useBbNavigate, useComposerView, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { PluginMessageDirectiveProps, PluginThreadPanelProps } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, JobView } from "./contracts";
 import { Button } from "./components/ui/button";
@@ -240,6 +240,46 @@ function Panel({ threadId, params }: PluginThreadPanelProps) {
   return <div className="h-full overflow-y-auto p-4"><div className="mx-auto max-w-xl space-y-4 overflow-hidden"><div><p className="text-xs uppercase tracking-wide text-muted-foreground">Assembly line</p><h2 className="mt-1 text-lg font-semibold">{title(job)}</h2><p className="mt-1 break-all font-mono text-xs text-muted-foreground">{job.id}</p></div><div className="rounded-lg border border-border bg-card p-4"><Progress job={job} /><GraphPreview jobId={job.id} threadId={job.threadId} runId={job.runId} status={job.engineStatus} /><p className="mt-3 text-sm text-muted-foreground">{job.workOrder.objective}</p>{job.connectionError ? <p className="mt-2 break-words text-sm text-destructive">{job.connectionError}</p> : null}</div>{detailsError ? <p className="rounded-md border border-destructive/40 p-3 text-sm text-destructive">Run details refresh failed; showing persisted evidence if available: {detailsError}</p> : null}<section className="space-y-2 rounded-lg border border-border bg-card p-4"><div className="flex flex-wrap items-center justify-between gap-2"><h3 className="text-sm font-semibold">Summary</h3><StatusPill status={job.engineStatus ?? job.observationState} /></div><dl className="grid grid-cols-[auto,1fr] gap-x-3 gap-y-1 text-sm"><dt className="text-muted-foreground">Execution</dt><dd>{label(job.engineStatus ?? job.observationState)}</dd><dt className="text-muted-foreground">Acceptance</dt><dd>{label(job.acceptanceVerdict)}{job.acceptanceReason ? ` — ${job.acceptanceReason}` : ""}</dd><dt className="text-muted-foreground">Attempts</dt><dd>{String(data.summary.attempts ?? "unknown")}</dd><dt className="text-muted-foreground">Commit</dt><dd className="break-all font-mono text-xs">{data.summary.resultSha ?? "unknown"}</dd><dt className="text-muted-foreground">Checkout</dt><dd className="break-all font-mono text-xs">{data.summary.retainedCheckout ?? "not retained yet"}</dd><dt className="text-muted-foreground">Files</dt><dd className="break-words">{data.summary.changedFiles.length ? data.summary.changedFiles.join(", ") : "unknown"}</dd></dl>{data.parseError ? <p className="rounded border border-amber-300 bg-amber-50 p-2 text-sm text-amber-800">Run details could not be parsed: {data.parseError}</p> : null}</section><DiffView data={data.diff} /><ChecksView groups={data.checks} /><section className="space-y-2"><h3 className="text-sm font-semibold">Review</h3>{data.reviewMarkdown ? <Markdown content={data.reviewMarkdown} className="text-sm" /> : <p className="text-sm text-muted-foreground">Workflow review is not available yet.</p>}<div className="rounded-md border border-border p-3 text-sm"><p className="font-medium">Thread acceptance</p><p className="mt-1 text-muted-foreground">{label(job.acceptanceVerdict)}{job.acceptanceReason ? ` — ${job.acceptanceReason}` : ""}</p></div></section><details className="rounded-lg border border-border bg-card p-3"><summary className="cursor-pointer text-sm font-medium">Raw JSON</summary><pre className="mt-2 max-h-72 overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap">{data.raw}</pre>{details?.artifacts ? <pre className="mt-2 max-h-48 overflow-auto rounded bg-muted p-3 text-xs whitespace-pre-wrap">{details.artifacts}</pre> : null}</details>{showFabro && job.fabroUrl ? <div className="overflow-hidden rounded-lg border border-border"><iframe title="Fabro run" src={job.fabroUrl} sandbox="allow-scripts allow-forms" className="h-96 w-full" /><p className="border-t border-border p-2 text-xs text-muted-foreground">Fabro is isolated in a sandbox. Use the external link if this run requires host features.</p></div> : null}<div className="flex flex-wrap gap-2">{job.fabroUrl ? <><Button variant="outline" onClick={() => setShowFabro(value => !value)}><Icon name="PanelRight" className="size-4" />{showFabro ? "Hide Fabro" : "View Fabro"}</Button><Button variant="outline" onClick={() => navigate.openUrl(job.fabroUrl!)}><Icon name="ExternalLink" className="size-4" />Open externally</Button></> : <p className="text-xs text-muted-foreground">Fabro run link is not available yet.</p>}{DONE.has(job.acceptanceVerdict) ? <Button onClick={() => navigate.toThread(job.threadId)}><Icon name="Check" className="size-4" />Return for acceptance</Button> : null}</div></div></div>;
 }
 
+function ComposerGraphBanner() {
+  const { scope } = useComposerView();
+  const threadId = scope.kind === "thread" ? scope.threadId : null;
+  const rpc = useRpc<typeof rpcContract>();
+  const navigate = useBbNavigate();
+  const sequence = useRef(0);
+  const [state, setState] = useState<{ threadId: string; job: Job | null; error: boolean } | null>(null);
+  const refresh = useCallback(async () => {
+    const current = ++sequence.current;
+    if (!threadId) return;
+    try {
+      let after: string | undefined;
+      let latest: Job | null = null;
+      const cursors = new Set<string>();
+      do {
+        const page: { jobs: JobView[]; nextCursor: string | null } = await rpc.call("listJobs", { threadId, ...(after ? { after } : {}) });
+        if (current !== sequence.current) return;
+        for (const job of page.jobs) {
+          if (job.threadId === threadId && (!latest || job.createdAt > latest.createdAt || (job.createdAt === latest.createdAt && job.id > latest.id))) latest = job;
+        }
+        after = page.nextCursor ?? undefined;
+        if (after && cursors.has(after)) throw new Error("Repeated job cursor");
+        if (after) cursors.add(after);
+      } while (after);
+      setState({ threadId, job: latest, error: false });
+    } catch {
+      if (current === sequence.current) setState(previous => ({ threadId, job: previous?.threadId === threadId ? previous.job : null, error: true }));
+    }
+  }, [rpc, threadId]);
+  useEffect(() => { void refresh(); return () => { sequence.current++; }; }, [refresh]);
+  useRealtime("jobs-changed", () => { void refresh(); });
+  const job = state?.threadId === threadId ? state.job : null;
+  if (!job) return null;
+  return <button type="button" aria-label={`Open Fabro run ${title(job)}`} onClick={() => navigate.openThreadPanel({ actionId: ACTION, params: { jobId: job.id }, title: "Fabro" })} className="w-full min-w-0 rounded-lg border border-border bg-card p-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+    <div className="flex items-center justify-between gap-2 text-xs"><span className="truncate font-medium">{title(job)}</span><span className="shrink-0 text-muted-foreground">{label(job.engineStatus ?? job.observationState)}</span></div>
+    <GraphPreview key={job.id} jobId={job.id} threadId={job.threadId} runId={job.runId} status={job.engineStatus} compact />
+    {state?.error ? <p className="mt-1 text-xs text-muted-foreground">Run update unavailable; showing the last snapshot.</p> : null}
+  </button>;
+}
+
 function JobsPage() {
   const rpc = useRpc<typeof rpcContract>(); const navigate = useBbNavigate(); const { threadId } = useBbContext(); const [jobs, setJobs] = useState<Job[] | null>(null);
   useEffect(() => { if (!threadId) { setJobs([]); return; } rpc.call("listJobs", { threadId }).then(r => setJobs(r.jobs as Job[]), () => setJobs([])); }, [rpc, threadId]);
@@ -247,6 +287,7 @@ function JobsPage() {
 }
 
 export default definePluginApp(app => {
+  app.composer.customize({ id: "fabro-run", scopes: ["thread"], banners: [{ id: "dag", chrome: "bare", component: ComposerGraphBanner }] });
   app.slots.navPanel({ id: "assembly-lines", title: "Fabro", icon: "Workflow", path: "assembly-lines", component: JobsPage });
   app.slots.threadPanelAction({ id: ACTION, title: "Assembly line", icon: "Workflow", layout: "flush", component: Panel });
   app.slots.messageDirective({ id: "assembly-line", component: Directive });

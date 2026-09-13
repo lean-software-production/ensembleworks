@@ -5,7 +5,7 @@ import type { RunGraph } from './graph-contract';
 
 import { graphImage, latestStages } from './graph-image';
 
-export function GraphPreview({ jobId, threadId, runId, status }: { jobId: string; threadId: string; runId: string | null; status: string | null }) {
+export function GraphPreview({ jobId, threadId, runId, status, compact = false }: { jobId: string; threadId: string; runId: string | null; status: string | null; compact?: boolean }) {
   const rpc = useRpc<typeof rpcContract>();
   const [graph, setGraph] = useState<RunGraph | null>(null);
   const [error, setError] = useState(false);
@@ -35,11 +35,11 @@ export function GraphPreview({ jobId, threadId, runId, status }: { jobId: string
   const summary = stages.map(s => `${s.node_id}: ${s.status.replaceAll('_', ' ')}${s.visit > 1 ? ` (visit ${s.visit})` : ''}`).join('; ');
   return <div className="mt-3">
     <div className="overflow-hidden rounded-md border border-border bg-slate-50 p-2">
-      <img src={image} alt={`Fabro workflow graph. ${summary}`} className="mx-auto h-auto w-full" />
+      <img src={image} alt={`Fabro workflow graph. ${summary}`} className={compact ? "mx-auto max-h-28 w-full object-contain" : "mx-auto h-auto w-full"} />
     </div>
-    <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground" aria-hidden="true">
+    {!compact ? <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground" aria-hidden="true">
       <span>🟢 Completed</span><span>🔵 Running</span><span>🔴 Failed</span><span>○ Pending</span>
-    </div>
+    </div> : null}
     {error ? <p className="mt-1 text-xs text-destructive">Graph update unavailable; showing the last snapshot.</p> : null}
     {!graph!.stagesComplete ? <p className="mt-1 text-xs text-muted-foreground">Stage history is partial.</p> : null}
   </div>;

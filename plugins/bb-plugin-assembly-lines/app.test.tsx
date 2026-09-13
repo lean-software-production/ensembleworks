@@ -318,3 +318,45 @@ describe("Assembly Lines app", () => {
     slot.lifecycle.unmount();
   });
 });
+
+
+describe("Fabro composer banner", () => {
+  it("uses the composer thread, finds the latest paginated run and opens its sidebar", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    const customization = app.composerCustomizations[0]!;
+    expect(customization.scopes).toEqual(["thread"]);
+    const latest = { ...job, id: "newest", createdAt: 10, workOrder: { ...job.workOrder, title: "Latest run" } };
+    const slot = renderSlot(customization.banners![0]!, {}, {
+      context: { threadId: "unrelated-route" }, composer: { scope: { kind: "thread", threadId: job.threadId } },
+      rpc: { listJobs: (input: unknown) => {
+        const value = input as { threadId: string; after?: string };
+        expect(value.threadId).toBe(job.threadId);
+        return value.after ? { jobs: [latest], nextCursor: null } : { jobs: [job], nextCursor: "page2" };
+      }, getRunGraph: () => graph },
+    });
+    const button = await slot.findByRole("button", { name: "Open Fabro run Latest run" });
+    expect(await slot.findByRole("img", { name: /Fabro workflow graph/ })).toBeTruthy();
+    fireEvent.click(button);
+    expect(slot.navigateCalls).toContainEqual({ method: "openThreadPanel", options: { actionId: "job", params: { jobId: "newest" }, title: "Fabro" } });
+    slot.lifecycle.unmount();
+  });
+
+  it("hides without jobs and updates on realtime completion", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    let jobs: JobView[] = [];
+    const slot = renderSlot(app.composerCustomizations[0]!.banners![0]!, {}, {
+      composer: { scope: { kind: "thread", threadId: job.threadId } },
+      rpc: { listJobs: () => ({ jobs, nextCursor: null }), getRunGraph: () => graph },
+    });
+    expect(slot.queryByRole("button")).toBeNull();
+    jobs = [job];
+    await slot.behavior.emitRealtime("jobs-changed", { jobId: job.id });
+    await slot.findByRole("button", { name: "Open Fabro run Refactor parser" });
+    jobs = [{ ...job, engineStatus: "succeeded" }];
+    await slot.behavior.emitRealtime("jobs-changed", { jobId: job.id });
+    await slot.findByText("Succeeded");
+    await slot.behavior.setComposerScope({ kind: "thread", threadId: "empty-thread" });
+    await waitFor(() => expect(slot.queryByRole("button")).toBeNull());
+    slot.lifecycle.unmount();
+  });
+});
