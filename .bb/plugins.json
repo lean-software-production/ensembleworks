@@ -7,6 +7,6 @@
     { "name": "communications-hub", "source": "./plugins/communications-hub" },
     { "name": "presence", "source": "./plugins/presence" },
     { "name": "huddle", "source": "./plugins/huddle" },
-    { "name": "assembly-lines", "source": "./plugins/bb-plugin-assembly-lines" }
+    { "name": "fabro", "source": "./plugins/bb-plugin-fabro" }
   ]
 }

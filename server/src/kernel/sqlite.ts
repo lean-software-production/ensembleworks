@@ -24,6 +24,10 @@ export class DatabaseSync {
 
   constructor(filename: string) {
     this.#db = new Database(filename)
+    // Allow transient locks from another connection's recovery/checkpoint to
+    // clear. Set this before journal_mode: opening WAL can itself need a lock.
+    // Keep the wait bounded so persistent contention still fails visibly.
+    this.#db.exec('PRAGMA busy_timeout = 1000')
     // WAL mode replaces rollback-journal's create→fsync→delete cycle per write
     // transaction with append-to-WAL + periodic checkpoint, and synchronous=NORMAL
     // drops an fsync per commit (durability weakens only on OS crash, not app
