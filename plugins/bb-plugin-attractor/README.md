@@ -55,21 +55,36 @@ gets a real BB-thread backend in T4:
   below) and a `Context` interface backing `engine/context.ts`.
 - `engine/context.ts` — a dot-path key-value context (`get`/`set` walk
   `"response.plan"` into nested objects, matching `dot/conditions.ts`'s own
-  `context.<path>` resolution and its own-property-only guard against
-  `Object.prototype` keys), `merge()` for shallow top-level
-  `context_updates`, and `clone()`/`toObject()` for parallel-branch
-  isolation and persistence, all with full deep-copy semantics.
+  `context.<path>` resolution). Both directions guard against
+  `Object.prototype` pollution: `get` only resolves *own* keys (so it never
+  returns an inherited `Object.prototype` member like `constructor`), and
+  `set`/`merge` refuse (throw) a path with a `__proto__`, `constructor` or
+  `prototype` segment rather than writing through to the prototype chain.
+  `merge()` dot-traverses each `context_updates` key the same way `set()`
+  does — a key like `"build.status"` lands at `context.build.status`, not a
+  literal top-level `"build.status"` key — so anything a handler merges in
+  is readable the same way an edge `condition` reads it. `clone()`/
+  `toObject()` give parallel-branch isolation and persistence, all with
+  full deep-copy semantics.
 - `engine/router.ts` — the next-node selection cascade (steps 1-6, plus
-  `selectRetryTargetCandidates`/`selectRetryTarget` for step 7):
+  `selectRetryTargetCandidates`/`selectRetryTarget` for step 7 and
+  `isRetryEligible` for whether a null decision should consult it):
   `jump_to_node`, conditional edges (weight then lexical target tiebreak),
-  `preferred_label` (with accelerator-prefix stripping on both sides),
-  `suggested_next_ids`, `on_failure` (`route`/`exit`/`succeed`, including
-  `succeed`'s outcome rewrite-and-retry of steps 2-6), unconditional edges,
-  and node-then-graph `retry_target`/`fallback_retry_target`.
+  `preferred_label` (with accelerator-prefix stripping on both sides,
+  matched against *any* outgoing edge's label — including a conditional
+  edge whose condition just evaluated false), `suggested_next_ids` (same,
+  any edge), `on_failure` (`route`/`exit`/`succeed`, including `succeed`'s
+  outcome rewrite-and-retry of steps 2-6), unconditional edges, and
+  node-then-graph `retry_target`/`fallback_retry_target`.
   `selectRetryTargetCandidates` returns the *whole* existing-node cascade
   (not just its first entry) so the engine can apply `max_visits` to each
   candidate in turn — a visit-exhausted `retry_target` falls through to
-  `fallback_retry_target` rather than ending the cascade.
+  `fallback_retry_target` rather than ending the cascade. Step 7 is only
+  ever consulted for a genuinely unresolved failure (or a chosen edge whose
+  target turned out visit-exhausted) — never for a non-failed outcome that
+  simply dead-ends, which instead terminates via step 8 with its own
+  outcome; otherwise a graph-level `retry_target` on a node with no
+  outgoing edges would route to itself forever once it succeeded.
 - `engine/events.ts` — stamps a handler's narrow `StageScopedEvent` (`log`,
   `agent.thread`, `human.requested`/`human.answered`) into a fully-formed
   `RunEvent` (`runId`/`ts`/`stageId`/`nodeId`).
@@ -82,11 +97,18 @@ gets a real BB-thread backend in T4:
   retries with fixed 1s/2s/4s delays via an injected clock (only for a
   thrown handler error — a returned `Outcome{status:"failed"}` is a
   business outcome that goes through the normal `on_failure` cascade, not
-  the retry loop), `parallel`/`parallel.fan_in` fan-out with per-branch
-  context clones and `parallel.results`/`parallel.branch_count` written to
-  the parent context only (never a top-level branch merge), checkpoint
-  saves after every non-terminal stage, checkpoint-driven resume, and
-  cancellation via `AbortSignal`.
+  the retry loop; T4 revisits this once the real command handler maps a
+  process exit code to an outcome), `parallel`/`parallel.fan_in` fan-out
+  with per-branch context clones, a fork node's `max_parallel` bounding how
+  many branches run concurrently (unset/0 = unbounded), and
+  `parallel.results`/`parallel.branch_count` written to the parent context
+  only (never a top-level branch merge), checkpoint saves after every
+  non-terminal stage, checkpoint-driven resume, and cancellation via
+  `AbortSignal`. Event `stageId`s carry `<nodeId>@<visit>#<attempt>` for
+  `stage.started`/`stage.completed`/`stage.failed`; the identity form
+  `<nodeId>@<visit>` (no attempt) is what handlers, the checkpoint sink and
+  `stage.skipped` see, per the plan's "`#<attempt>` only in events, never
+  as identity".
 
 All of `engine/` is pure (no BB imports, no timers of its own, no
 randomness — the clock and checkpoint sink are injected) and is exercised

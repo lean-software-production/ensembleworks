@@ -8,7 +8,7 @@
 
 import { createContext } from "./context";
 import { createStageEmitter } from "./events";
-import { selectRetryTargetCandidates, selectRoute } from "./router";
+import { isRetryEligible, selectRetryTargetCandidates, selectRoute } from "./router";
 import type { WorkflowEdge } from "../dot/graph";
 import type {
   Checkpoint,
@@ -29,6 +29,14 @@ function stageId(nodeId: string, visit: number): string {
   return `${nodeId}@${visit}`;
 }
 
+// Per the plan: "Stage ids are `<nodeId>@<visit>` (and `<nodeId>@<visit>#<attempt>`
+// only in events, never as identity)." stageId() above is the identity form —
+// handed to handlers, the checkpoint sink, and stage.skipped — while this is
+// only for the attempt-bearing events (stage.started/completed/failed).
+function eventStageId(nodeId: string, visit: number, attempt: number): string {
+  return `${stageId(nodeId, visit)}#${attempt}`;
+}
+
 function effectiveMaxVisits(node: WorkflowNode, graph: WorkflowGraph): number {
   return node.maxVisits ?? graph.maxNodeVisits;
 }
@@ -43,6 +51,27 @@ function findStartNode(graph: WorkflowGraph): WorkflowNode {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+// Runs `worker` over `items` with at most `limit` in flight at once (0/undefined
+// = unlimited, i.e. today's behaviour). Order of the returned array always
+// matches `items`, regardless of completion order.
+async function mapWithConcurrencyLimit<T, R>(items: T[], limit: number | undefined, worker: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  if (!limit || limit >= items.length) {
+    return Promise.all(items.map(worker));
+  }
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  async function runNext(): Promise<void> {
+    for (;;) {
+      const current = nextIndex;
+      nextIndex += 1;
+      if (current >= items.length) return;
+      results[current] = await worker(items[current], current);
+    }
+  }
+  await Promise.all(Array.from({ length: limit }, () => runNext()));
+  return results;
 }
 
 interface ParallelBranchResult {
@@ -175,10 +204,19 @@ export class Engine {
   // -------------------------------------------------------------------------
 
   private route(node: WorkflowNode, outcome: Outcome): string | null {
-    let decision = selectRoute({ node, graph: this.graph, outcome, context: this.context.toObject() });
+    const routeInput = { node, graph: this.graph, outcome, context: this.context.toObject() };
+    let decision = selectRoute(routeInput);
+    // A selected edge whose target is visit-exhausted always falls through to
+    // step 7, regardless of outcome status ("routing continues from step 7
+    // as a failure"). A decision-less dead end only falls through to step 7
+    // when isRetryEligible says the outcome was a genuine unresolved failure
+    // — a non-failed outcome that simply has no outgoing edge terminates via
+    // step 8 instead (see router.ts's isRetryEligible for why).
+    let consultRetry = decision === null && isRetryEligible(routeInput);
     if (decision && !this.isEnterable(decision.nodeId)) {
       this.emitSkipped(decision.nodeId, "max_visits_exceeded");
       decision = null;
+      consultRetry = true;
     }
     if (decision) {
       this.emit({
@@ -192,17 +230,19 @@ export class Engine {
       });
       return decision.nodeId;
     }
-    const retryTargetId = this.consultRetryTarget(node);
-    if (retryTargetId) {
-      this.emit({
-        type: "edge.selected",
-        runId: this.runId,
-        ts: this.clock.now(),
-        from: node.id,
-        to: retryTargetId,
-        reason: "retry_target",
-      });
-      return retryTargetId;
+    if (consultRetry) {
+      const retryTargetId = this.consultRetryTarget(node);
+      if (retryTargetId) {
+        this.emit({
+          type: "edge.selected",
+          runId: this.runId,
+          ts: this.clock.now(),
+          from: node.id,
+          to: retryTargetId,
+          reason: "retry_target",
+        });
+        return retryTargetId;
+      }
     }
     return null;
   }
@@ -255,7 +295,7 @@ export class Engine {
     let attempt = 1;
     for (;;) {
       const sId = stageId(node.id, visit);
-      this.emit({ type: "stage.started", runId: this.runId, ts: this.clock.now(), stageId: sId, nodeId: node.id, visit, attempt });
+      this.emit({ type: "stage.started", runId: this.runId, ts: this.clock.now(), stageId: eventStageId(node.id, visit, attempt), nodeId: node.id, visit, attempt });
       const outcome = await this.executeStage(node, this.context, visit, attempt, sId);
       if ("ok" in outcome && outcome.ok) {
         return outcome.value;
@@ -266,7 +306,7 @@ export class Engine {
         type: "stage.failed",
         runId: this.runId,
         ts: this.clock.now(),
-        stageId: sId,
+        stageId: eventStageId(node.id, visit, attempt),
         nodeId: node.id,
         visit,
         attempt,
@@ -306,7 +346,7 @@ export class Engine {
         emit,
       });
       const wallTimeMs = this.clock.now() - startedAt;
-      this.emit({ type: "stage.completed", runId: this.runId, ts: this.clock.now(), stageId: sId, nodeId: node.id, visit, attempt, outcome, wallTimeMs });
+      this.emit({ type: "stage.completed", runId: this.runId, ts: this.clock.now(), stageId: eventStageId(node.id, visit, attempt), nodeId: node.id, visit, attempt, outcome, wallTimeMs });
       return { ok: true, value: outcome };
     } catch (error) {
       return { ok: false, error };
@@ -370,7 +410,7 @@ export class Engine {
           type: "stage.started",
           runId: this.runId,
           ts: this.clock.now(),
-          stageId: sId,
+          stageId: eventStageId(node.id, visit, 1),
           nodeId: node.id,
           visit,
           attempt: 1,
@@ -384,7 +424,7 @@ export class Engine {
             type: "stage.failed",
             runId: this.runId,
             ts: this.clock.now(),
-            stageId: sId,
+            stageId: eventStageId(node.id, visit, 1),
             nodeId: node.id,
             visit,
             attempt: 1,
@@ -422,7 +462,7 @@ export class Engine {
       };
     };
 
-    const branchOutcomes = await Promise.all(branchEdges.map((edge, index) => runBranch(edge, index)));
+    const branchOutcomes = await mapWithConcurrencyLimit(branchEdges, forkNode.maxParallel, (edge, index) => runBranch(edge, index));
     if (this.signal.aborted) return null;
 
     const results = branchOutcomes.map((b) => b.result);

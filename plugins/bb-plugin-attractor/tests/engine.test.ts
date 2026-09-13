@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { parseWorkflowGraph, type WorkflowGraph } from "../dot/graph";
 import { runEngine } from "../engine/engine";
 import type { Checkpoint, Handler, HandlerRegistry, Outcome, RunEvent } from "../engine/types";
@@ -255,6 +255,40 @@ describe("engine: max_visits exhaustion", () => {
     expect(seen).toContain("rescue");
     expect(result.status).toBe("succeeded");
   });
+
+  it("a graph-level retry_target does not loop forever once the retry target itself succeeds with no route onward", async () => {
+    const graph = graphFrom(`digraph G {
+      graph [retry_target="rescue"]
+      start  [shape=Mdiamond]
+      exit   [shape=Msquare]
+      build  [on_failure="exit"]
+      rescue [shape=box]
+      start -> build -> exit
+    }`);
+    let rescueRuns = 0;
+    const controller = new AbortController();
+    const handlers = baseHandlers({
+      agent: {
+        run: async (input) => {
+          if (input.node.id === "rescue") {
+            rescueRuns += 1;
+            // Safety valve so a regression hangs this test for a few laps
+            // instead of forever, rather than actually relying on it.
+            if (rescueRuns > 5) controller.abort();
+          }
+          return { status: input.node.id === "build" ? "failed" : "succeeded" };
+        },
+      },
+    });
+    const { clock } = makeClock();
+    const result = await runEngine({ graph, handlers, runId: "r", clock, signal: controller.signal, onEvent: () => {} });
+
+    // "rescue" succeeds and has no outgoing edges, so per routing step 8 the
+    // run must terminate with rescue's own outcome instead of re-consulting
+    // the graph-level retry_target against itself forever.
+    expect(rescueRuns).toBe(1);
+    expect(result.status).toBe("succeeded");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -412,9 +446,13 @@ describe("engine: retries", () => {
     expect(sleeps).toEqual([1000, 2000]);
 
     const failedEvents = events.filter((e) => e.type === "stage.failed");
+    // Event-level stageId carries the attempt suffix ("a@1#1", "a@1#2", ...) so
+    // two attempts of the same visit don't render as identical timeline rows;
+    // the underlying identity (used for the handler/checkpoint) stays "a@1"
+    // for both, per the plan's "#<attempt> only in events, never as identity".
     expect(failedEvents).toEqual([
-      { type: "stage.failed", runId: "r", ts: expect.any(Number), stageId: "a@1", nodeId: "a", visit: 1, attempt: 1, error: "boom 1", willRetry: true },
-      { type: "stage.failed", runId: "r", ts: expect.any(Number), stageId: "a@1", nodeId: "a", visit: 1, attempt: 2, error: "boom 2", willRetry: true },
+      { type: "stage.failed", runId: "r", ts: expect.any(Number), stageId: "a@1#1", nodeId: "a", visit: 1, attempt: 1, error: "boom 1", willRetry: true },
+      { type: "stage.failed", runId: "r", ts: expect.any(Number), stageId: "a@1#2", nodeId: "a", visit: 1, attempt: 2, error: "boom 2", willRetry: true },
     ]);
   });
 
@@ -478,6 +516,46 @@ describe("engine: parallel fan-out", () => {
       { id: "architecture", index: 1, status: "succeeded", context_updates: { seenBefore: null } },
       { id: "quality", index: 2, status: "succeeded", context_updates: { seenBefore: null } },
     ]);
+  });
+
+  it("honours a fork node's max_parallel by never running more branches concurrently than the cap", async () => {
+    const graph = graphFrom(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      fork  [shape=component, max_parallel=2]
+      merge [shape=tripleoctagon]
+      b1 [shape=box]
+      b2 [shape=box]
+      b3 [shape=box]
+      b4 [shape=box]
+      start -> fork
+      fork -> b1 -> merge
+      fork -> b2 -> merge
+      fork -> b3 -> merge
+      fork -> b4 -> merge
+      merge -> exit
+    }`);
+    let inFlight = 0;
+    let peak = 0;
+    let started = 0;
+    const handlers = baseHandlers({
+      agent: {
+        run: async () => {
+          inFlight += 1;
+          started += 1;
+          peak = Math.max(peak, inFlight);
+          await new Promise((resolve) => setTimeout(resolve, 5));
+          inFlight -= 1;
+          return { status: "succeeded" };
+        },
+      },
+    });
+    const { clock } = makeClock();
+    const result = await runEngine({ graph, handlers, runId: "r", clock, signal: NEVER_ABORT, onEvent: () => {} });
+
+    expect(started).toBe(4);
+    expect(peak).toBeLessThanOrEqual(2);
+    expect(result.status).toBe("succeeded");
   });
 });
 
@@ -593,6 +671,37 @@ describe("engine: checkpoint save + resume", () => {
     expect(events[0]).not.toEqual(expect.objectContaining({ type: "run.started" }));
     expect(events.filter((e) => e.type === "stage.started")).toHaveLength(1);
     expect(events.filter((e) => e.type === "stage.started")[0]).toMatchObject({ nodeId: "exit" });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defensive: engine writes must never pollute Object.prototype
+// ---------------------------------------------------------------------------
+
+describe("engine: context writes never pollute Object.prototype", () => {
+  afterEach(() => {
+    delete (Object.prototype as Record<string, unknown>).polluted2;
+  });
+
+  it("running a workflow whose node id is __proto__.polluted2 does not leak onto Object.prototype", async () => {
+    // engine.ts writes `response.<node.id>`; a node id containing "__proto__"
+    // must not let that write reach through to Object.prototype, reachable
+    // with no direct Context access at all.
+    const graph = graphFrom(`digraph G {
+      start [shape=Mdiamond]
+      "__proto__.polluted2" [shape=box]
+      start -> "__proto__.polluted2"
+    }`);
+    const handlers = baseHandlers({ agent: succeedHandler({ text: "pwned" }) });
+    const { clock } = makeClock();
+    // The engine-level context write now throws on an unsafe path rather than
+    // silently writing through; the run must still finish (as failed), not
+    // pollute the prototype, and must not throw out of runEngine itself.
+    const result = await runEngine({ graph, handlers, runId: "r", clock, signal: NEVER_ABORT, onEvent: () => {} });
+
+    const probe = {} as Record<string, unknown>;
+    expect(probe.polluted2).toBeUndefined();
+    expect(result.status).toBe("failed");
   });
 });
 

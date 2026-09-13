@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createContext } from "../engine/context";
 
 describe("engine/context: dot-path key-value context", () => {
@@ -43,6 +43,13 @@ describe("engine/context: dot-path key-value context", () => {
     expect(ctx.toObject().nested).toEqual({ b: 1 });
   });
 
+  it("merge dot-traverses a key containing a dot, so it is readable the same way an edge condition would read it", () => {
+    const ctx = createContext({});
+    ctx.merge({ "build.status": "green" } as never);
+    expect(ctx.toObject()).toEqual({ build: { status: "green" } });
+    expect(ctx.get("build.status")).toBe("green");
+  });
+
   it("merge with undefined is a no-op", () => {
     const ctx = createContext({ a: 1 });
     ctx.merge(undefined);
@@ -72,5 +79,35 @@ describe("engine/context: dot-path key-value context", () => {
     const ctx = createContext(initial as never);
     (initial.nested as Record<string, unknown>).a = 999;
     expect(ctx.toObject()).toEqual({ nested: { a: 1 } });
+  });
+
+  describe("set does not pollute Object.prototype", () => {
+    afterEach(() => {
+      // Belt-and-braces: if a defect lets a test leak a pollution, don't let
+      // it poison every other test file that runs in this process afterwards.
+      delete (Object.prototype as Record<string, unknown>).polluted;
+      delete (Object.prototype as Record<string, unknown>).polluted2;
+    });
+
+    it("rejects a leading __proto__ segment instead of writing through to Object.prototype", () => {
+      const ctx = createContext({});
+      expect(() => ctx.set("__proto__.polluted", "yes")).toThrow();
+      const probe = {} as Record<string, unknown>;
+      expect(probe.polluted).toBeUndefined();
+    });
+
+    it("rejects a __proto__ segment nested under an existing intermediate key", () => {
+      const ctx = createContext({});
+      expect(() => ctx.set("response.__proto__.polluted2", "pwned")).toThrow();
+      const probe = {} as Record<string, unknown>;
+      expect(probe.polluted2).toBeUndefined();
+    });
+
+    it("rejects constructor/prototype segments the same way", () => {
+      const ctx = createContext({});
+      expect(() => ctx.set("constructor.prototype.polluted", "yes")).toThrow();
+      const probe = {} as Record<string, unknown>;
+      expect(probe.polluted).toBeUndefined();
+    });
   });
 });

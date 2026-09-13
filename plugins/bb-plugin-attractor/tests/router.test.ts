@@ -147,6 +147,34 @@ describe("engine/router: routing cascade steps 1-8", () => {
     expect(decision).toEqual({ nodeId: "c", reason: "suggested" });
   });
 
+  it("step 3: preferred_label can select a conditional edge whose condition evaluated false in step 2", () => {
+    const graph = graphFrom(`digraph G {
+      a -> exit  [label="Accept", condition="context.mode = strict"]
+      a -> other [label="Other"]
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded", preferredLabel: "Accept" }),
+      context: { mode: "lenient" },
+    });
+    expect(decision).toEqual({ nodeId: "exit", reason: "preferred_label", edgeLabel: "Accept" });
+  });
+
+  it("step 4: suggested_next_ids can select a conditional edge whose condition evaluated false in step 2", () => {
+    const graph = graphFrom(`digraph G {
+      a -> exit  [condition="context.mode = strict"]
+      a -> other
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded", suggestedNextIds: ["exit"] }),
+      context: { mode: "lenient" },
+    });
+    expect(decision).toEqual({ nodeId: "exit", reason: "suggested" });
+  });
+
   it("step 5 on_failure=route: a failed outcome with no matching edge falls through to unconditional edges", () => {
     const graph = graphFrom(`digraph G {
       graph [on_failure="route"]

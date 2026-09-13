@@ -30,13 +30,27 @@ function getPath(root: Record<string, JsonValue>, path: string): JsonValue | und
   return current as JsonValue | undefined;
 }
 
+// Dangerous keys that would otherwise let a dot-path write reach
+// Object.prototype (or a constructor) through a plain `current[segment]`
+// assignment/lookup — e.g. `response.__proto__.polluted`, or a node id of
+// plain `__proto__` writing `response.<node_id>`. Segments are rejected
+// outright rather than silently skipped, matching getPath's own refusal to
+// resolve inherited members.
+const UNSAFE_SEGMENTS = new Set(["__proto__", "constructor", "prototype"]);
+
 function setPath(root: Record<string, JsonValue>, path: string, value: JsonValue): void {
   const segments = path.split(".").filter((s) => s.length > 0);
   if (segments.length === 0) return;
+  if (segments.some((segment) => UNSAFE_SEGMENTS.has(segment))) {
+    throw new Error(`refusing to write unsafe context path "${path}"`);
+  }
   let current: Record<string, JsonValue> = root;
   for (let i = 0; i < segments.length - 1; i++) {
     const segment = segments[i];
-    const next = current[segment];
+    // Only ever treat an *own* property as an existing container; an
+    // inherited one (e.g. via a prototype-polluted parent, or the object's
+    // own built-ins) must not be walked into or reused.
+    const next = Object.prototype.hasOwnProperty.call(current, segment) ? current[segment] : undefined;
     if (typeof next !== "object" || next === null || Array.isArray(next)) {
       current[segment] = {};
     }
@@ -62,8 +76,13 @@ class ContextImpl implements Context {
 
   merge(updates: Record<string, JsonValue> | undefined): void {
     if (!updates) return;
+    // Each key is itself a dot-path (via setPath), not a literal top-level
+    // key: an agent's context_updates: {"build.status": "green"} must land
+    // where an edge condition's `context.build.status` can actually read it
+    // — getPath already dot-traverses, so a flat `root[key] = value` here
+    // would silently write somewhere conditions can never see.
     for (const [key, value] of Object.entries(updates)) {
-      this.root[key] = deepClone(value);
+      setPath(this.root, key, deepClone(value));
     }
   }
 
