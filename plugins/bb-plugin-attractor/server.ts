@@ -122,6 +122,11 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     listRuns: ({ threadId, after }) => rpcContract.listRuns.output.parse(service.listRuns({ threadId, after })),
     getGraph: ({ runId, threadId }) => rpcContract.getGraph.output.parse(owned(runId, threadId).run ? service.getGraph(runId) : null),
     getEvents: ({ runId, threadId, sinceSeq }) => rpcContract.getEvents.output.parse({ events: owned(runId, threadId).run ? service.getEvents(runId, sinceSeq) : [] }),
+    stopRun: ({ runId, threadId }) => {
+      if (!owned(runId, threadId).run) return { stopped: false };
+      service.stopRun(runId);
+      return { stopped: true };
+    },
   });
 
   bb.agents.registerTool({

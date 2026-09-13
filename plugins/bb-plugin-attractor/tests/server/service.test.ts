@@ -165,6 +165,27 @@ describe("createService: run lifecycle", () => {
     expect(view?.edges).toContainEqual({ from: "start", to: "plan", label: null, condition: null });
   });
 
+  it("getGraph reports the graph's rankdir and each node's declared model/provider, for the DAG UI (T5)", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    const backend = fakeBackend(async () => ({ status: "succeeded" }));
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient() });
+    const STYLED_GRAPH = `digraph G {
+      graph [rankdir=LR]
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      plan  [label="Plan", prompt="do it", model="claude-sonnet-5", provider="anthropic"]
+      start -> plan -> exit
+    }`;
+    const { run } = await service.createAndStartRun({ source: STYLED_GRAPH, threadId: "origin-thread", projectId: "project-1", environmentId: "env-1" });
+    await vi.waitFor(() => expect(store.getRun(run.id).status).toBe("succeeded"));
+
+    const view = service.getGraph(run.id);
+    expect(view?.rankdir).toBe("LR");
+    expect(view?.nodes.find((n) => n.id === "plan")).toMatchObject({ model: "claude-sonnet-5", provider: "anthropic" });
+    expect(view?.nodes.find((n) => n.id === "start")).toMatchObject({ model: null, provider: null });
+  });
+
   it("stopRun aborts the run's controller, letting a backend that observes the signal unwedge the stage", async () => {
     const host = makeHost();
     const store = new RunStore(new Database(":memory:"));

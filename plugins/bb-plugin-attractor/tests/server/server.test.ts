@@ -82,7 +82,7 @@ describe("attractor server plugin", () => {
   it("loads and registers rpc, cli, tools, and the background service", async () => {
     const host = makeHost();
     await plugin(host.bb);
-    expect(host.harness.inspection.registrations.rpcMethods.sort()).toEqual(["getEvents", "getGraph", "getRun", "listRuns"]);
+    expect(host.harness.inspection.registrations.rpcMethods.sort()).toEqual(["getEvents", "getGraph", "getRun", "listRuns", "stopRun"]);
     expect(host.harness.inspection.registrations.cli?.name).toBe("attractor");
     expect(host.harness.inspection.registrations.agentTools.map((t) => t.name).sort()).toEqual(["attractor_inspect", "attractor_result", "attractor_run"]);
     expect(host.harness.inspection.registrations.services.map((s) => s.name)).toContain("attractor-runs");
@@ -281,6 +281,30 @@ describe("attractor server plugin", () => {
     expect(stolen.run).toBeNull();
     const stolenGraph = await host.harness.behavior.callRpc("getGraph", { runId, threadId: "another-thread" });
     expect(stolenGraph).toBeNull();
+  });
+
+  it("RPC: stopRun aborts a running run, scoped to its owning thread (the Panel's Stop button, T5)", async () => {
+    const host = makeHost();
+    // Never auto-completes: only stopRun below should ever settle it.
+    host.harness.sdk.stub("threads.spawn", async () => makeThreadResponse({ id: "worker-thread" }));
+    host.harness.sdk.stub("threads.stop", async () => ({ ok: true }));
+    await plugin(host.bb);
+
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(() => expect(host.harness.sdk.callsTo("threads.spawn").length).toBeGreaterThan(0));
+
+    // A different thread can't stop this run.
+    const foreignStop = (await host.harness.behavior.callRpc("stopRun", { runId, threadId: "another-thread" })) as { stopped: boolean };
+    expect(foreignStop.stopped).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect((await host.harness.behavior.callRpc("getRun", { runId, threadId: "thread-1" }) as { run: { status: string } }).run.status).toBe("running");
+
+    const stopped = (await host.harness.behavior.callRpc("stopRun", { runId, threadId: "thread-1" })) as { stopped: boolean };
+    expect(stopped.stopped).toBe(true);
+    await vi.waitFor(async () => {
+      const got = (await host.harness.behavior.callRpc("getRun", { runId, threadId: "thread-1" })) as { run: { status: string } };
+      expect(got.run.status).toBe("cancelled");
+    }, { timeout: 2000 });
   });
 
   it("resumes a run stuck at 'running' from its last checkpoint when the background service starts after a reload", async () => {

@@ -13,10 +13,10 @@ contracts, and the task breakdown this plugin is built against.
 
 ## Status
 
-Through task T4. `app.tsx` is still the T1 scaffold (no slots yet — the
-`attractor-run` message directive, thread-panel action and DAG UI land in
-T5; human gates in T6). `server.ts` and `host.ts` are now the real T4
-integration described below.
+Through task T5. `app.tsx` now registers the real `attractor-run` message
+directive and thread-panel action, backed by the DAG/stage-list/event-
+timeline UI described below (human gates still land in T6). `server.ts` and
+`host.ts` are the T4 integration described below.
 T2 adds the **DOT front-end** — parsing and validating workflow graphs, with
 no execution yet:
 
@@ -206,7 +206,53 @@ scoping, and resuming a run stuck "running" across a simulated reload);
 output bounding); `tests/handlers/*` and `tests/server/store.test.ts` cover
 the rest with plain fakes.
 
-The DAG UI and human gates land in later tasks (T5–T7).
+T5 adds the **DAG UI**:
+
+- `ui/dag.tsx` — a pure `layoutGraph()` (dagre, rank direction from the
+  graph's `rankdir`) plus `DagView`, an SVG rendering with a live execution
+  overlay: shape hints per `handlerKind` (start/human/command/conditional/
+  parallel get distinct outlines; exit/agent/prompt stay a rounded rect),
+  status colour (`pending`/`running`/`succeeded`/`failed`/`skipped`), a
+  visit-count badge once `visit > 1`, the run's current node highlighted,
+  and traversed edges (derived from `edge.selected` events, not persisted
+  per-edge state) drawn solid/arrowed with the last-selected reason and
+  label in a `<title>`; an agent/prompt node with a known worker thread is
+  clickable.
+- `ui/stages.tsx` — the stage list (node, status, visit, duration via
+  `formatDuration`, the node's declared provider/model, and an "Open
+  thread" link when a stage has a worker thread).
+- `ui/events.tsx` — a paged (`PAGE_SIZE = 50`), oldest-first-within-page
+  event timeline starting on the most recent page, with a one-line
+  `describeEvent` summary per `RunEvent` variant.
+- `ui/run-panel.tsx` — `RunPanel`, the data-fetching component shared by
+  both surfaces: `getRun`/`getGraph`/`getEvents` on mount, refetch on any
+  `attractor-runs` realtime signal (or one naming this run), a header
+  (title, status, elapsed, *visited*/total stages), and mode-specific
+  layout (`"directive"`: DAG + expandable stage list + "Open in right
+  panel"; `"panel"`: DAG + stage list + event timeline + a Stop button
+  while the run is active).
+- `app.tsx` — registers the `attractor-run` `messageDirective` (renders
+  `RunPanel` in `"directive"` mode, or an error when the directive's `run`
+  attribute is missing/blank) and the matching `threadPanelAction`
+  (`"panel"` mode, reading `runId` from the tab's `params`).
+
+`ui/*` and `app.tsx` only ever import from `server/contracts.ts` (zod
+schemas + their inferred TS types) and `engine/types.ts` (the pure
+`RunEvent` union) — never `server/service.ts` or `server/store.ts`, which
+pull in `better-sqlite3`, a native module that must never end up in the
+app's esbuild bundle (`bb plugin build .`'s `dist/app.js` is ~60 KB with
+zero references to it, vs. `dist/server.js`'s ~850 KB).
+
+`tests/ui/dag.test.ts` covers `layoutGraph` directly (deterministic,
+node-environment, no DOM); `tests/ui/dag.render.test.tsx`,
+`tests/ui/stages.test.tsx` and `tests/ui/events.test.tsx` cover their
+respective components under jsdom; `tests/app.test.tsx` exercises the
+directive and panel end-to-end through `@get-bb/plugin-sdk/testing/app`'s
+`loadPluginApp`/`renderSlot` against a fake RPC (invalid/blank run id,
+node/status rendering, "Open in right panel", the Stop button, realtime
+refetch, and error/not-found states).
+
+Human gates land in T6; T7 adds the worked examples and end-to-end tests.
 
 ## Development
 
@@ -394,3 +440,53 @@ bb plugin build .
   and registers rpc, cli, tools, and the background service" case, which
   asserts the same "the plugin loads under the bb host" fact against a
   real (fake) host instead of a hand-rolled partial one.
+
+- **`getGraph`'s `GraphView` now also carries `rankdir` and each node's
+  declared `model`/`provider` (T5, small extension to T4's RPC surface).**
+  T4's `graphViewSchema` didn't expose the graph's `rankdir` or any
+  per-node model/provider, but T5's DAG explicitly needs "rank direction
+  from the graph's `rankdir`" and the stage list needs a provider column.
+  `server/service.ts`'s `toGraphView` now includes both, and
+  `server/contracts.ts` also exports the schemas' inferred TS types
+  (`RunView`/`StageView`/`GraphNodeView`/`GraphEdgeView`/`GraphView`) so
+  `ui/*`/`app.tsx` can consume them without importing `server/service.ts`.
+  The **provider/model shown is the node's declared DOT attribute**, not
+  the live-resolved stylesheet/thread-default tuple `server/backend.ts`
+  computes per run (T4's real answer to "which model actually ran this
+  stage") — that resolved tuple isn't persisted per-stage anywhere a T4
+  test depends on, and adding it felt like a bigger surface change than a
+  UI task should make unprompted. A node with no declared `model`/
+  `provider` attribute shows "—" in the stage list even though it in fact
+  ran against a stylesheet- or thread-default-resolved model.
+
+- **Added a `stopRun` RPC method (T5, not in T4's RPC list).** T4's RPC
+  list was `getRun`/`listRuns`/`getGraph`/`getEvents` (all reads); stopping
+  a run was CLI-only (`bb attractor stop <runId>`). T5's Panel explicitly
+  needs a "Stop button", so `server/contracts.ts`/`server.ts` add a
+  `stopRun` RPC with the same `owned()` thread-scoping as every other
+  runId-taking surface, returning `{ stopped: boolean }` (`false` rather
+  than a thrown error for "not your run" / "no such run", so the UI can't
+  learn whether a foreign runId exists). Reuses `service.stopRun`, the
+  same code path the CLI's `stop` subcommand already calls.
+
+- **DAG node shapes are a simplified visual mapping, not a literal
+  redraw of the DOT shapes (T5).** The plan's acceptance only requires
+  start/exit/human/command to be visually distinct; `ui/dag.tsx` gives
+  each `handlerKind` a `shapePoints()` outline (diamond for `start`/
+  `conditional`, hexagon for `human`, parallelogram for `command`, an
+  octagon standing in for both `component`/`tripleoctagon` on `parallel`/
+  `parallel.fan_in`) and leaves `exit`/`agent`/`prompt` as a plain rounded
+  rect — there is no separate "double-bordered" `Msquare` treatment for
+  `exit` beyond that, since the acceptance criteria only calls for
+  human/command to be distinguishable from the rest, not for a pixel-exact
+  Graphviz shape library.
+
+- **Test-infra note: raw `render()` needs an explicit `afterEach(cleanup)`
+  in this project's vitest config (T5, not a plan deviation, but worth
+  recording).** `vitest.config.ts` doesn't set `test.globals`, so
+  `@testing-library/react`'s own auto-cleanup (which looks for a global
+  `afterEach`) never engages; every new `tests/ui/*.test.tsx` file and
+  `tests/app.test.tsx` (which renders through the SDK's `renderSlot`, built
+  on the same `render()`) explicitly imports `cleanup` and registers
+  `afterEach(cleanup)`, matching the pattern a future UI test file should
+  follow too.

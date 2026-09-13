@@ -49,6 +49,8 @@ export const stageSchema = z.object({
 
 export const eventSchema = z.object({ seq: z.number() }).and(json);
 
+export const rankdirSchema = z.enum(["TB", "LR", "BT", "RL"]);
+
 export const graphNodeSchema = z.object({
   id: z.string(),
   label: z.string().nullable(),
@@ -57,6 +59,8 @@ export const graphNodeSchema = z.object({
   goalGate: z.boolean(),
   status: stageStatusSchema.nullable(),
   visit: z.number(),
+  model: z.string().nullable(),
+  provider: z.string().nullable(),
 });
 
 export const graphEdgeSchema = z.object({
@@ -66,7 +70,17 @@ export const graphEdgeSchema = z.object({
   condition: z.string().nullable(),
 });
 
-export const graphViewSchema = z.object({ nodes: z.array(graphNodeSchema), edges: z.array(graphEdgeSchema) });
+export const graphViewSchema = z.object({ rankdir: rankdirSchema, nodes: z.array(graphNodeSchema), edges: z.array(graphEdgeSchema) });
+
+// TS types inferred from the schemas above, for the app side (ui/*, app.tsx)
+// to consume without ever importing server/service.ts or server/store.ts —
+// those pull in better-sqlite3 (a native module), which must never end up in
+// the app's esbuild bundle.
+export type RunView = z.infer<typeof runSchema>;
+export type StageView = z.infer<typeof stageSchema>;
+export type GraphNodeView = z.infer<typeof graphNodeSchema>;
+export type GraphEdgeView = z.infer<typeof graphEdgeSchema>;
+export type GraphView = z.infer<typeof graphViewSchema>;
 
 const selection = z.object({ runId: id, threadId: id }).strict();
 
@@ -75,4 +89,8 @@ export const rpcContract = defineRpcContract({
   listRuns: { input: z.object({ threadId: id, after: z.string().max(500).optional() }).strict(), output: z.object({ runs: z.array(runSchema).max(200), nextCursor: z.string().nullable() }) },
   getGraph: { input: selection, output: graphViewSchema.nullable() },
   getEvents: { input: selection.extend({ sinceSeq: z.number().int().min(0).optional() }), output: z.object({ events: z.array(eventSchema) }) },
+  // Backs the Panel's Stop button (T5). `stopped: false` distinguishes "not
+  // your run" / "no such run" from an actual abort, without leaking whether a
+  // runId exists to a caller that doesn't own it.
+  stopRun: { input: selection, output: z.object({ stopped: z.boolean() }) },
 });

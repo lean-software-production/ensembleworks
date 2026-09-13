@@ -63,6 +63,11 @@ export interface GraphNodeView {
   goalGate: boolean;
   status: Stage["status"] | null;
   visit: number;
+  /** The node's declared (DOT-attribute) model/provider — not the live-resolved
+   * stylesheet/thread-default tuple, which server/backend.ts resolves per-run
+   * and does not persist per-stage. See README "Deviations from the plan". */
+  model: string | null;
+  provider: string | null;
 }
 export interface GraphEdgeView {
   from: string;
@@ -71,6 +76,7 @@ export interface GraphEdgeView {
   condition: string | null;
 }
 export interface GraphView {
+  rankdir: WorkflowGraph["rankdir"];
   nodes: GraphNodeView[];
   edges: GraphEdgeView[];
 }
@@ -81,10 +87,20 @@ function toGraphView(graph: WorkflowGraph, stages: Stage[]): GraphView {
   const nodes = graph.nodeOrder.map((id) => {
     const node = graph.nodes.get(id)!;
     const stage = latestByNode.get(id);
-    return { id, label: node.label ?? null, shape: node.shape, handlerKind: node.handlerKind, goalGate: node.goalGate, status: stage?.status ?? null, visit: stage?.visit ?? 0 };
+    return {
+      id,
+      label: node.label ?? null,
+      shape: node.shape,
+      handlerKind: node.handlerKind,
+      goalGate: node.goalGate,
+      status: stage?.status ?? null,
+      visit: stage?.visit ?? 0,
+      model: node.model ?? null,
+      provider: node.provider ?? null,
+    };
   });
   const edges = graph.edges.map((edge) => ({ from: edge.from, to: edge.to, label: edge.label ?? null, condition: edge.condition ?? null }));
-  return { nodes, edges };
+  return { rankdir: graph.rankdir, nodes, edges };
 }
 
 // -----------------------------------------------------------------------
