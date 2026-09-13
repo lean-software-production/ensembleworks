@@ -265,12 +265,29 @@ T6 adds **human gates** — the `hexagon` handler, end to end:
   exercised through the real engine in `tests/engine.test.ts`'s "human gate
   routing" block). A chosen option's raw edge label becomes the outcome's
   `preferredLabel`, so the existing routing cascade (step 3) takes it to the
-  matching edge — no new routing logic needed. Context keys written exactly
+  matching edge — no new routing logic needed. A free-text answer instead
+  carries no edge label to match, so it sets the outcome's `jumpToNode`
+  directly to the graph's `freeform=true` edge's target (cascade step 1),
+  bypassing steps 2-6 entirely — without this, a free-text answer would
+  fall through to step 6 and silently take one of the gate's *button* edges
+  instead (validation finding, T6 round 2 — see "engine: human gate
+  routing" > "routes free text along the freeform edge" in
+  `tests/engine.test.ts`). Context keys written exactly
   per the plan: `human.gate.selected`, `human.gate.label` (button choices
   only), `human.gate.text` (freeform only), `human.gate.<node>.answer` /
-  `.label`. A user cancel or an unanswered timeout with nothing to fall back
-  to fails the stage clearly (never hangs) — and, since there's no answer to
-  drive `respondWithChoice`'s own `human.answered` emit, both branches emit
+  `.label` — `dot/validate.ts` flags a gate node id of
+  `selected`/`label`/`text` as `human-gate-reserved-id` (round 2: those ids
+  collide with the fixed keys above, silently clobbering one write with the
+  other) and a gate with neither a labeled edge nor a `freeform` edge as
+  `human-gate-no-options` (round 2: such a gate could previously only ever
+  be cancelled). A user cancel, an unanswered timeout with nothing to fall
+  back to, or a timed-out gate whose `human.default_choice` names no
+  outgoing edge label (round 2 — previously a typo'd default choice still
+  returned a bogus `succeeded`/`preferredLabel` that fell through to step 6
+  and took an arbitrary unconditional edge) fails the stage clearly (never
+  hangs) — and, since there's no answer to
+  drive `respondWithChoice`'s own `human.answered` emit, all three failure
+  branches emit
   a bare `human.answered` (no `answer`) themselves, so `applyEventToStore`
   still clears the transient `blocked` run/stage status before the routing
   cascade carries the run on through the failed gate's outgoing edges.

@@ -194,6 +194,49 @@ function checkEnumsAndNumerics(graph: WorkflowGraph, diagnostics: Diagnostic[]):
   }
 }
 
+// The context-key contract for a `human` (hexagon) gate (handlers/human.ts's
+// `gateContextUpdates`) writes both a fixed `human.gate.<selected|label|text>`
+// key and a per-node `human.gate.<node id>.<answer|label>` key as flat
+// dot-paths merged into the same object. If a gate node's id is literally
+// "selected", "label" or "text", the two writes collide on the exact same
+// path — one silently overwrites the other (e.g. `human.gate.selected`
+// becomes an object instead of the chosen label string) — so it's flagged
+// here rather than left to corrupt context silently (validation finding, T6
+// round 2).
+const RESERVED_HUMAN_GATE_IDS = new Set(["selected", "label", "text"]);
+
+function checkHumanGates(graph: WorkflowGraph, diagnostics: Diagnostic[]): void {
+  for (const node of graph.nodes.values()) {
+    if (node.handlerKind !== "human") continue;
+
+    if (RESERVED_HUMAN_GATE_IDS.has(node.id)) {
+      diagnostics.push(
+        error(
+          "human-gate-reserved-id",
+          `human gate '${node.id}' has an id reserved by the human.gate.* context-key contract ` +
+            `(selected|label|text) — its per-node "human.gate.${node.id}.answer" write would collide ` +
+            `with the gate's shared "human.gate.${node.id}" key; rename the node`,
+          { nodeId: node.id },
+        ),
+      );
+    }
+
+    const outgoing = graph.edges.filter((e) => e.from === node.id);
+    const hasOption = outgoing.some((e) => e.label !== undefined);
+    const hasFreeform = outgoing.some((e) => e.freeform);
+    if (!hasOption && !hasFreeform) {
+      diagnostics.push(
+        error(
+          "human-gate-no-options",
+          `human gate '${node.id}' has no outgoing edge with a label and none marked freeform=true — ` +
+            "it can never be answered (only cancelled)",
+          { nodeId: node.id },
+        ),
+      );
+    }
+  }
+}
+
 function checkRandomSelectionConditions(graph: WorkflowGraph, diagnostics: Diagnostic[]): void {
   for (const edge of graph.edges) {
     const source = graph.nodes.get(edge.from);
@@ -218,6 +261,7 @@ export function validate(graph: WorkflowGraph): Diagnostic[] {
   checkConditions(graph, diagnostics);
   checkHandlerRequirements(graph, diagnostics);
   checkRetryTargets(graph, diagnostics);
+  checkHumanGates(graph, diagnostics);
   checkRandomSelectionConditions(graph, diagnostics);
   checkEnumsAndNumerics(graph, diagnostics);
   return diagnostics;

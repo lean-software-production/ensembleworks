@@ -109,7 +109,8 @@ export function createHumanHandler(interviewer: HumanInterviewer, ctx: HumanHand
       const { node, graph, context, runId, stageId, signal, emit } = input;
       const outgoing = graph.edges.filter((e) => e.from === node.id);
       const options = buildOptions(outgoing);
-      const freeform = outgoing.some((e) => e.freeform);
+      const freeformEdge = outgoing.find((e) => e.freeform);
+      const freeform = freeformEdge !== undefined;
 
       emit({ type: "human.requested", options: options.map((o) => o.raw) });
 
@@ -146,7 +147,21 @@ export function createHumanHandler(interviewer: HumanInterviewer, ctx: HumanHand
             failureReason: `human gate "${node.id}" timed out with no "human.default_choice" context value to fall back to`,
           };
         }
-        return respondWithChoice(node.id, fallback, emit);
+        // The fallback must actually name one of the gate's outgoing edges
+        // (by raw label or its accelerator-stripped text) — otherwise a
+        // typo'd default_choice would still return a "succeeded" outcome
+        // whose bogus preferredLabel matches nothing in the routing
+        // cascade's step 3, silently falling through to step 6 and taking
+        // an arbitrary unconditional edge (validation finding, T6 round 2).
+        const matched = options.find((o) => o.raw === fallback || o.text === fallback);
+        if (!matched) {
+          emit({ type: "human.answered" });
+          return {
+            status: "failed",
+            failureReason: `human gate "${node.id}" timed out and "human.default_choice" ("${fallback}") does not match any outgoing edge label`,
+          };
+        }
+        return respondWithChoice(node.id, matched.raw, emit);
       }
 
       if (result.kind === "choice") {
@@ -156,6 +171,12 @@ export function createHumanHandler(interviewer: HumanInterviewer, ctx: HumanHand
       emit({ type: "human.answered", answer: result.text });
       return {
         status: "succeeded",
+        // Route explicitly to the freeform edge's target: a free-text answer
+        // carries no edge label, so without a jumpToNode the routing
+        // cascade's preferred_label/suggested_next_ids steps would never
+        // fire and step 6 (unconditional edges) would silently pick one of
+        // the gate's *button* edges instead (validation finding, T6 round 2).
+        jumpToNode: freeformEdge?.to,
         text: result.text,
         contextUpdates: gateContextUpdates(node.id, { selected: result.text, text: result.text }),
       };

@@ -841,6 +841,26 @@ describe("engine: human gate routing", () => {
     expect(result.status).toBe("succeeded");
   });
 
+  it("routes free text along the freeform edge, not one of the button edges (validation finding, T6 round 2)", async () => {
+    const graph = graphFrom(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      notes [label="Record notes"]
+      gate  [shape=hexagon, label="Approve?"]
+      start -> gate
+      gate -> exit  [label="[A] Approve"]
+      gate -> notes [freeform=true]
+      notes -> exit
+    }`);
+    const human = createHumanHandler({ ask: async () => ({ kind: "text", text: "please hold off" }) }, { threadId: "thread-1" });
+    const { events, onEvent } = collector();
+    const { clock } = makeClock();
+    const result = await runEngine({ graph, handlers: baseHandlers({ human }), runId: "r", clock, signal: NEVER_ABORT, onEvent });
+
+    expect(result.status).toBe("succeeded");
+    expect(events).toContainEqual(expect.objectContaining({ type: "edge.selected", from: "gate", to: "notes" }));
+  });
+
   it("fails the run when the human gate times out with nothing to fall back to", async () => {
     // `on_failure="exit"` so the gate's failed outcome actually ends the run
     // (step 5) instead of falling through to step 6's unconditional edges —

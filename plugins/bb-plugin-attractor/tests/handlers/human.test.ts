@@ -160,6 +160,36 @@ describe("createHumanHandler", () => {
     });
   });
 
+  it("routes free text to the freeform edge's target (not a button edge) via jumpToNode", async () => {
+    const g = parseWorkflowGraph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      notes [label="Record notes"]
+      gate  [shape=hexagon, label="Approve?"]
+      start -> gate
+      gate -> exit  [label="[A] Approve"]
+      gate -> notes [freeform=true]
+      notes -> exit
+    }`) as unknown as WorkflowGraph;
+    const { interviewer: iv } = interviewer({ kind: "text", text: "please hold off" });
+    const handler = createHumanHandler(iv, { threadId: "thread-1" });
+
+    const outcome = await handler.run({
+      node: node(g, "gate"),
+      graph: g,
+      context: createContext({}),
+      visit: 1,
+      attempt: 1,
+      runId: "r1",
+      stageId: "gate@1",
+      signal: NEVER_ABORT,
+      emit: () => {},
+    } as never);
+
+    expect(outcome.status).toBe("succeeded");
+    expect(outcome.jumpToNode).toBe("notes");
+  });
+
   it("falls back to the human.default_choice context value on timeout", async () => {
     const g = graph();
     const { interviewer: iv } = interviewer({ kind: "timeout" });
@@ -182,6 +212,18 @@ describe("createHumanHandler", () => {
     expect(outcome.status).toBe("failed");
     expect(outcome.failureReason).toMatch(/timed out/i);
     expect(outcome.failureReason).toMatch(/default_choice/);
+  });
+
+  it("fails clearly on timeout when human.default_choice does not match any outgoing edge label (validation finding, T6 round 2)", async () => {
+    const g = graph();
+    const { interviewer: iv } = interviewer({ kind: "timeout" });
+    const handler = createHumanHandler(iv, { threadId: "thread-1" });
+
+    const outcome = await handler.run(baseInput(g, { human: { default_choice: "Approvve" } }));
+
+    expect(outcome.status).toBe("failed");
+    expect(outcome.failureReason).toMatch(/default_choice/);
+    expect(outcome.failureReason).toMatch(/Approvve/);
   });
 
   it("fails clearly when the human cancels the interaction", async () => {

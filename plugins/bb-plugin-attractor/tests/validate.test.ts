@@ -120,4 +120,29 @@ describe("dot/validate", () => {
       'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", max_visits=abc] start->n->exit }';
     expect(codes(source)).toContain("invalid-numeric-value");
   });
+
+  // Validation findings (T6 round 2).
+
+  it("flags a human gate node whose id collides with the human.gate.* context-key namespace", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] selected[shape=hexagon] start->selected selected->exit[label="[A] Approve"] }';
+    expect(codes(source)).toContain("human-gate-reserved-id");
+  });
+
+  it("does not flag a human gate node whose id does not collide with the reserved words", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon] start->gate gate->exit[label="[A] Approve"] }';
+    expect(codes(source)).not.toContain("human-gate-reserved-id");
+  });
+
+  it("flags a human gate node with no labeled outgoing edges and no freeform edge (unanswerable)", () => {
+    const source = 'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon] start->gate gate->exit }';
+    expect(codes(source)).toContain("human-gate-no-options");
+  });
+
+  it("does not flag a human gate node whose only outgoing edge is freeform", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon] start->gate gate->exit[freeform=true] }';
+    expect(codes(source)).not.toContain("human-gate-no-options");
+  });
 });
