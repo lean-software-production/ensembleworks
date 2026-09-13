@@ -9,8 +9,7 @@ import { createTranscriptStore } from './transcript-store.ts'
 const line = (t: number, text: string) =>
 	`${JSON.stringify({ id: `${t}-x`, t, identity: 'a', name: 'A', text, page: null, cursor: null, frame: null })}\n`
 
-async function main() {
-	const dir = await mkdtemp(path.join(os.tmpdir(), 'transcript-'))
+async function main(dir: string) {
 	const store = createTranscriptStore(dir)
 	const file = path.join(dir, 'team.jsonl')
 
@@ -51,6 +50,16 @@ async function main() {
 	await writeFile(file, line(10, 'restored'))
 	assert.deepEqual((await store.read('team')).map((e) => e.text), ['restored'])
 
+	// Rewriting it in place (same inode) to at least its indexed size rebuilds
+	// too, rather than serving stale byte spans.
+	await writeFile(file, line(20, 'rewritten') + line(30, 'in place') + line(40, 'longer than before'))
+	assert.deepEqual((await store.read('team')).map((e) => e.text), ['rewritten', 'in place', 'longer than before'])
+
+	// A skewed early timestamp (t is caller-supplied) comes back alongside the
+	// recent tail, without the lines in between being selected.
+	await writeFile(file, line(9e12, 'skewed') + line(1, 'old') + line(2, 'old') + line(3, 'recent') + line(4, 'recent'))
+	assert.deepEqual((await store.read('team', { since: 2 })).map((e) => e.text), ['skewed', 'recent', 'recent'])
+
 	// A file far larger than one index chunk indexes and reads correctly.
 	const big = createTranscriptStore(dir)
 	const text = 'x'.repeat(900)
@@ -64,4 +73,9 @@ async function main() {
 	console.log('ok: transcript-store')
 }
 
-main()
+const dir = await mkdtemp(path.join(os.tmpdir(), 'transcript-'))
+try {
+	await main(dir)
+} finally {
+	await rm(dir, { recursive: true, force: true })
+}

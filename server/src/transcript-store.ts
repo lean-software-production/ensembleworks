@@ -18,7 +18,7 @@
  * line), extended incrementally from the bytes appended since the last read,
  * and a read fetches only the byte span of the lines it returns.
  */
-import { appendFile, mkdir, open, stat } from 'node:fs/promises'
+import { appendFile, type FileHandle, mkdir, open, stat } from 'node:fs/promises'
 import path from 'node:path'
 
 export interface TranscriptEntry {
@@ -48,8 +48,9 @@ export interface TranscriptStore {
 // Per-room line index. `t`/`start`/`end` are parallel arrays, one slot per
 // parseable line, in file order; `offset` is how many bytes of the file have
 // been indexed (always a line boundary — a torn trailing line waits for its
-// newline). `ino` + a shrinking size detect the file being replaced/truncated
-// (restore from backup), which forces a rebuild.
+// newline). A new `ino`, a shrinking size, or a last indexed line that no
+// longer reads back detects the file being replaced or rewritten (restore from
+// backup), which forces a rebuild.
 interface RoomIndex {
 	ino: number
 	offset: number
@@ -91,10 +92,16 @@ export function createTranscriptStore(dir: string): TranscriptStore {
 			index = { ino: info.ino, offset: 0, t: [], start: [], end: [] }
 			indexes.set(roomId, index)
 		}
-		if (info.size === index.offset) return index
+		if (index.offset === 0 && info.size === 0) return index
 
 		const handle = await open(file, 'r')
 		try {
+			// A same-inode rewrite that didn't shrink the file slips past the checks
+			// above; if the last indexed line no longer reads back, start over.
+			if (index.offset > 0 && !(await lastLineIntact(handle, index))) {
+				index = { ino: info.ino, offset: 0, t: [], start: [], end: [] }
+				indexes.set(roomId, index)
+			}
 			let pending = Buffer.alloc(0)
 			let pendingStart = index.offset
 			let position = index.offset
@@ -118,6 +125,19 @@ export function createTranscriptStore(dir: string): TranscriptStore {
 			await handle.close()
 		}
 		return index
+	}
+
+	async function lastLineIntact(handle: FileHandle, index: RoomIndex): Promise<boolean> {
+		const last = index.t.length - 1
+		if (last < 0) return false
+		const bytes = Buffer.alloc(index.end[last]! - index.start[last]! + 1)
+		const { bytesRead } = await handle.read(bytes, 0, bytes.length, index.start[last]!)
+		if (bytesRead !== bytes.length || bytes[bytes.length - 1] !== NEWLINE) return false
+		try {
+			return (JSON.parse(bytes.toString('utf8')) as { t?: unknown }).t === index.t[last]
+		} catch {
+			return false
+		}
 	}
 
 	function indexLine(index: RoomIndex, line: Buffer, start: number, end: number) {
@@ -157,24 +177,32 @@ export function createTranscriptStore(dir: string): TranscriptStore {
 				const selected = opts.limit && matches.length > opts.limit ? matches.slice(-opts.limit) : matches
 				if (!selected.length) return []
 
-				const spanStart = index.start[selected[0]!]!
-				const spanEnd = index.end[selected.at(-1)!]!
-				const span = Buffer.alloc(spanEnd - spanStart)
+				// Read each run of adjacent selected lines as one span. t is
+				// caller-supplied, so one early line with a skewed timestamp matches
+				// every poll — reading first-to-last would drag in the whole file.
+				const entries: TranscriptEntry[] = []
 				const handle = await open(fileFor(roomId), 'r')
 				try {
-					await handle.read(span, 0, span.length, spanStart)
+					for (let runStart = 0; runStart < selected.length; ) {
+						let runEnd = runStart
+						while (runEnd + 1 < selected.length && selected[runEnd + 1] === selected[runEnd]! + 1) runEnd++
+						const spanStart = index.start[selected[runStart]!]!
+						const span = Buffer.alloc(index.end[selected[runEnd]!]! - spanStart)
+						await handle.read(span, 0, span.length, spanStart)
+						for (let k = runStart; k <= runEnd; k++) {
+							const i = selected[k]!
+							const line = span.subarray(index.start[i]! - spanStart, index.end[i]! - spanStart).toString('utf8')
+							try {
+								entries.push(JSON.parse(line) as TranscriptEntry)
+							} catch {
+								// The file was swapped between indexing and this read; the next
+								// read notices and rebuilds.
+							}
+						}
+						runStart = runEnd + 1
+					}
 				} finally {
 					await handle.close()
-				}
-				const entries: TranscriptEntry[] = []
-				for (const i of selected) {
-					const line = span.subarray(index.start[i]! - spanStart, index.end[i]! - spanStart).toString('utf8')
-					try {
-						entries.push(JSON.parse(line) as TranscriptEntry)
-					} catch {
-						// The file was swapped between indexing and this read; the next
-						// read sees the new inode and rebuilds.
-					}
 				}
 				return entries
 			})
