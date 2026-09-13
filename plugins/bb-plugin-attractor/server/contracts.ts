@@ -120,6 +120,13 @@ export type GraphView = z.infer<typeof graphViewSchema>;
 
 const selection = z.object({ runId: id, threadId: id }).strict();
 
+// One row of the active-runs composer banner (`ui/active-runs-banner.tsx`):
+// a run plus everything it needs to render inline — the run's own stages
+// and its parsed graph — so the banner never has to fan out into three RPC
+// calls per row the way a single run's directive/panel does.
+export const activeRunSchema = z.object({ run: runSchema, stages: z.array(stageSchema), graph: graphViewSchema });
+export type ActiveRun = z.infer<typeof activeRunSchema>;
+
 export const rpcContract = defineRpcContract({
   getRun: { input: selection, output: z.object({ run: runSchema.nullable(), stages: z.array(stageSchema) }) },
   listRuns: { input: z.object({ threadId: id, after: z.string().max(500).optional() }).strict(), output: z.object({ runs: z.array(runSchema).max(200), nextCursor: z.string().nullable() }) },
@@ -129,6 +136,13 @@ export const rpcContract = defineRpcContract({
   // your run" / "no such run" from an actual abort, without leaking whether a
   // runId exists to a caller that doesn't own it.
   stopRun: { input: selection, output: z.object({ stopped: z.boolean() }) },
+  // Backs the active-runs composer banner: every run still "running" or
+  // "blocked" for the calling thread, newest first, capped at 10.
+  activeRuns: { input: z.object({ threadId: id }).strict(), output: z.object({ runs: z.array(activeRunSchema).max(10) }) },
+  // Backs the banner's inline human-gate answer buttons — the same
+  // ownership-scoped resolution as `bb attractor answer`/`answerHumanGate`,
+  // but stamped with actor "ui" instead of "cli".
+  answerGate: { input: z.object({ runId: id, threadId: id, answer: z.string().min(1).max(2000) }).strict(), output: z.object({ answered: z.boolean(), reason: z.string().optional() }) },
 });
 
 // -----------------------------------------------------------------------

@@ -74,6 +74,13 @@ describe("Attractor app", () => {
     expect(app.threadPanelActions.map((a) => ({ id: a.id, title: a.title }))).toEqual([{ id: "attractor-run", title: "Attractor run" }]);
   });
 
+  it("registers the active-runs composer banner, scoped to the thread composer (active-runs composer banner follow-up)", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    expect(app.composerCustomizations.map((c) => ({ id: c.id, scopes: c.scopes, banners: c.banners?.map((b) => ({ id: b.id, chrome: b.chrome })) }))).toEqual([
+      { id: "attractor-status", scopes: ["thread"], banners: [{ id: "active-runs", chrome: "bare" }] },
+    ]);
+  });
+
   it("registers the human-gate pendingInteraction renderer (T6)", async () => {
     const app = await loadPluginApp(() => import("../app"));
     expect(app.pendingInteractions.map((p) => p.id)).toEqual(["attractor-human-gate"]);

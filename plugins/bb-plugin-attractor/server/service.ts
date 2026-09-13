@@ -507,6 +507,18 @@ export function createService(deps: ServiceDeps) {
     return store.listRuns({ threadId: options.threadId, after: options.after });
   }
 
+  // Backs the active-runs composer banner (RPC `activeRuns`): every run
+  // still in flight for this thread, each already paired with its stages
+  // and parsed graph so the banner never has to make three RPC round trips
+  // per row the way `ui/run-panel.tsx`'s `useRunData` does for a single run.
+  const ACTIVE_RUNS_LIMIT = 10;
+  function activeRuns(threadId: string): { run: Run; stages: Stage[]; graph: GraphView }[] {
+    return store.listActiveRuns({ threadId, limit: ACTIVE_RUNS_LIMIT }).map((run) => {
+      const stages = store.listStages(run.id);
+      return { run, stages, graph: toGraphView(graphFor(run), stages) };
+    });
+  }
+
   // A run's source is immutable, so its parsed graph is cached per run id:
   // the UI refetches the graph on every realtime event and re-parsing the
   // DOT each time was pure waste. Bounded by evicting once it grows large.
@@ -550,12 +562,12 @@ export function createService(deps: ServiceDeps) {
   // attractor answer <runId> approve` and `... A` both work as well as the
   // literal edge label. Falls back to free text only when the gate's
   // `freeform` edge allows it.
-  function resolveHumanAnswerValue(payload: HumanGatePayload, answer: string) {
+  function resolveHumanAnswerValue(payload: HumanGatePayload, answer: string, actor: "ui" | "cli") {
     const trimmed = answer.trim();
     const lower = trimmed.toLowerCase();
     const match = payload.options.find((o) => o.raw === trimmed || o.text.toLowerCase() === lower || (o.key !== null && o.key.toLowerCase() === lower));
-    if (match) return humanGateValueSchema.parse({ kind: "choice", raw: match.raw, via: "cli" });
-    if (payload.freeform) return humanGateValueSchema.parse({ kind: "text", text: answer, via: "cli" });
+    if (match) return humanGateValueSchema.parse({ kind: "choice", raw: match.raw, via: actor });
+    if (payload.freeform) return humanGateValueSchema.parse({ kind: "text", text: answer, via: actor });
     return null;
   }
 
@@ -566,7 +578,7 @@ export function createService(deps: ServiceDeps) {
   // request side, `bb.ui.requestInput`); see README "Deviations from the
   // plan" for why `bb.sdk.threads.interactions.list`/`respond` is the right,
   // faithful way to resolve one from outside the app's own renderer.
-  async function answerHumanGate(runId: string, answer: string): Promise<{ answered: boolean; reason?: string }> {
+  async function answerHumanGate(runId: string, answer: string, actor: "ui" | "cli" = "cli"): Promise<{ answered: boolean; reason?: string }> {
     const run = store.tryGetRun(runId);
     if (!run) return { answered: false, reason: "no such run" };
     const pending = await bb.sdk.threads.interactions.list({ threadId: run.threadId });
@@ -580,7 +592,7 @@ export function createService(deps: ServiceDeps) {
       if (!origin || origin.rendererId !== HUMAN_GATE_RENDERER_ID) continue;
       const parsedPayload = humanGatePayloadSchema.safeParse(interaction.payload.data);
       if (!parsedPayload.success || parsedPayload.data.runId !== runId) continue;
-      const value = resolveHumanAnswerValue(parsedPayload.data, answer);
+      const value = resolveHumanAnswerValue(parsedPayload.data, answer, actor);
       if (!value) return { answered: false, reason: `"${answer}" matches no option and this gate does not accept free text` };
       await bb.sdk.threads.interactions.respond({ interactionId: interaction.id, threadId: run.threadId, value });
       return { answered: true };
@@ -605,7 +617,7 @@ export function createService(deps: ServiceDeps) {
     }
   }
 
-  return { createAndStartRun, getRun, listRuns, getGraph, getEvents, stopRun, answerHumanGate, resumeRunningRuns };
+  return { createAndStartRun, getRun, listRuns, activeRuns, getGraph, getEvents, stopRun, answerHumanGate, resumeRunningRuns };
 }
 
 export type Service = ReturnType<typeof createService>;

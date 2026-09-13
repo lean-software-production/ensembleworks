@@ -30,9 +30,35 @@ import { EventTimeline, type EventView } from "./events";
 
 type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
 
-const REALTIME_CHANNEL = "attractor-runs";
+/** The realtime channel every run publishes one message per engine event on — shared by this panel and `ui/active-runs-banner.tsx`. */
+export const REALTIME_CHANNEL = "attractor-runs";
 const ACTION_ID = "attractor-run";
-const REFRESH_COALESCE_MS = 150;
+export const REFRESH_COALESCE_MS = 150;
+
+/**
+ * Subscribes to `channel`, coalescing a burst of realtime messages into one
+ * trailing `refresh()` call `coalesceMs` after the first of the burst — a
+ * busy stage can emit several events within a few milliseconds, and without
+ * this a subscriber would issue a refetch per event. `shouldRefresh` (when
+ * given) filters which payloads even start the coalescing window; omit it to
+ * refresh on every message on the channel (the active-runs banner has no
+ * single runId to filter by, so it refreshes on any event on this channel).
+ * Shared by `useRunData` below and `ui/active-runs-banner.tsx`'s own refresh.
+ */
+export function useCoalescedRealtimeRefresh(channel: string, refresh: () => void, coalesceMs: number, shouldRefresh?: (payload: unknown) => boolean) {
+  const pendingRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (pendingRefresh.current !== null) clearTimeout(pendingRefresh.current);
+  }, []);
+  useRealtime(channel, (payload) => {
+    if (shouldRefresh && !shouldRefresh(payload)) return;
+    if (pendingRefresh.current !== null) return;
+    pendingRefresh.current = setTimeout(() => {
+      pendingRefresh.current = null;
+      refresh();
+    }, coalesceMs);
+  });
+}
 
 function useRunData(rpc: Rpc, runId: string, threadId: string) {
   const [run, setRun] = useState<RunView | null>(null);
@@ -64,24 +90,15 @@ function useRunData(rpc: Rpc, runId: string, threadId: string) {
   // The server publishes one realtime message per engine event, and a busy
   // stage can emit several within a few milliseconds. Coalesce them into one
   // trailing refetch so the panel never issues a burst of RPC triplets.
-  const pendingRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(() => () => {
-    if (pendingRefresh.current !== null) clearTimeout(pendingRefresh.current);
-  }, []);
-  useRealtime(REALTIME_CHANNEL, (payload) => {
+  useCoalescedRealtimeRefresh(REALTIME_CHANNEL, refresh, REFRESH_COALESCE_MS, (payload) => {
     const named = payload && typeof payload === "object" ? (payload as { runId?: string }).runId : undefined;
-    if (named !== undefined && named !== runId) return;
-    if (pendingRefresh.current !== null) return;
-    pendingRefresh.current = setTimeout(() => {
-      pendingRefresh.current = null;
-      refresh();
-    }, REFRESH_COALESCE_MS);
+    return named === undefined || named === runId;
   });
 
   return { run, stages, graph, events, loaded, error, refresh };
 }
 
-function useNow(active: boolean): number {
+export function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;
@@ -97,8 +114,9 @@ function latestThreadIdByNode(stages: StageView[]): Record<string, string | null
   return byNode;
 }
 
-// Status word colour, per the restyle's card chrome spec.
-const STATUS_TEXT_CLASS: Record<RunView["status"], string> = {
+// Status word colour, per the restyle's card chrome spec. Exported for
+// `ui/active-runs-banner.tsx`'s per-run status word (same mapping).
+export const STATUS_TEXT_CLASS: Record<RunView["status"], string> = {
   running: "text-amber-600",
   blocked: "text-amber-600",
   succeeded: "text-green-600",
@@ -106,8 +124,8 @@ const STATUS_TEXT_CLASS: Record<RunView["status"], string> = {
   cancelled: "text-muted-foreground",
 };
 
-/** The label of the stage a blocked run is waiting on — human gate or agent-waiting alike (item 5) — for the card's "Waiting: <label>" summary suffix. Null when nothing is blocked, or the graph hasn't loaded. */
-function waitingNodeLabel(run: RunView, stages: StageView[], graph: GraphView | null): string | null {
+/** The label of the stage a blocked run is waiting on — human gate or agent-waiting alike (item 5) — for the card's "Waiting: <label>" summary suffix. Null when nothing is blocked, or the graph hasn't loaded. Exported for `ui/active-runs-banner.tsx`'s per-row summary. */
+export function waitingNodeLabel(run: RunView, stages: StageView[], graph: GraphView | null): string | null {
   if (run.status !== "blocked") return null;
   const blockedStage = stages.find((s) => s.status === "blocked");
   if (!blockedStage) return null;

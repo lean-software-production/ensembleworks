@@ -316,6 +316,21 @@ export class RunStore {
     return rows.map((r) => r.id);
   }
 
+  /**
+   * The active-runs composer banner's source of rows: every run owned by
+   * `threadId` still "running" or "blocked", newest first, capped at
+   * `limit`. Unlike `listRuns` (oldest-first, paginated for a full history
+   * view) this is a single unpaginated read for a small, self-bounding set —
+   * a thread realistically never has more than a handful of runs in flight
+   * at once, and the banner only ever shows the most recent few anyway.
+   */
+  listActiveRuns(options: { threadId: string; limit: number }): Run[] {
+    const rows = this.#db
+      .prepare("SELECT * FROM attractor_runs WHERE thread_id=? AND status IN ('running', 'blocked') ORDER BY created_at DESC, id DESC LIMIT ?")
+      .all(options.threadId, options.limit) as RunRow[];
+    return rows.map((row) => this.#toRun(row));
+  }
+
   saveCheckpoint(id: string, checkpoint: Checkpoint, now = Date.now()): Run {
     this.getRun(id);
     this.#db

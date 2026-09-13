@@ -22,7 +22,14 @@
  */
 
 import type { WorkflowEdge, WorkflowGraph } from "../dot/graph";
+import { parseAcceleratorLabel } from "../dot/accelerator";
 import type { Context, Handler, HandlerInput, JsonValue, Outcome, StageScopedEvent } from "../engine/types";
+
+// Re-exported for backward compatibility: this handler's own tests (and any
+// other caller) still import `parseAcceleratorLabel` from here — the
+// accelerator-parsing logic itself now lives in `dot/accelerator.ts` so
+// `ui/active-runs-banner.tsx` can share it without importing handler code.
+export { parseAcceleratorLabel };
 
 export interface HumanGateOption {
   /** Original edge label, as authored (e.g. "[A] Approve"). */
@@ -107,20 +114,6 @@ export interface HumanHandlerContext {
    * in which case a set `review_target` is reported as unreadable.
    */
   readReviewTarget?(path: string): Promise<ReviewTargetSummary>;
-}
-
-// A single leading "[K] ", "K) " or "K - " accelerator prefix, K being one
-// non-space character — matches engine/router.ts's own accelerator handling
-// (kept as a separate, small copy here rather than a shared export: this one
-// also needs the parsed key, not just the stripped text, and this handler
-// must not take on a dependency on the engine's routing internals).
-const ACCELERATOR_RE = /^(?:\[([^\]]*)\]|(\S)\)|(\S)\s-)\s*/;
-
-export function parseAcceleratorLabel(label: string): { key: string | null; text: string } {
-  const match = ACCELERATOR_RE.exec(label);
-  if (!match) return { key: null, text: label };
-  const key = match[1] ?? match[2] ?? match[3] ?? null;
-  return { key, text: label.slice(match[0].length) };
 }
 
 function buildOptions(edges: WorkflowEdge[]): HumanGateOption[] {

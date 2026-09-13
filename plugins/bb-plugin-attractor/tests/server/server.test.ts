@@ -115,7 +115,7 @@ describe("attractor server plugin", () => {
   it("loads and registers rpc, cli, tools, and the background service", async () => {
     const host = makeHost();
     await plugin(host.bb);
-    expect(host.harness.inspection.registrations.rpcMethods.sort()).toEqual(["getEvents", "getGraph", "getRun", "listRuns", "stopRun"]);
+    expect(host.harness.inspection.registrations.rpcMethods.sort()).toEqual(["activeRuns", "answerGate", "getEvents", "getGraph", "getRun", "listRuns", "stopRun"]);
     expect(host.harness.inspection.registrations.cli?.name).toBe("attractor");
     expect(host.harness.inspection.registrations.agentTools.map((t) => t.name).sort()).toEqual(["attractor_inspect", "attractor_result", "attractor_run"]);
     expect(host.harness.inspection.registrations.services.map((s) => s.name)).toContain("attractor-runs");
@@ -607,6 +607,66 @@ describe("attractor server plugin", () => {
     const answered = await host.harness.behavior.runCli(["answer", runId, "approve"], { threadId: "thread-1" });
     expect(answered.exitCode).toBe(1);
     expect(answered.stderr).toContain("no pending human gate");
+  });
+
+  it("RPC: activeRuns returns only running/blocked runs owned by the calling thread, each paired with its stages and graph", async () => {
+    const host = makeHost();
+    await plugin(host.bb);
+
+    // Completes immediately with the default stubs — must never appear.
+    const finished = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await waitForTerminalStatus(host, finished.runId);
+
+    // Never completes on its own — stays "running".
+    host.harness.sdk.stub("threads.spawn", async () => makeThreadResponse({ id: "worker-thread" }));
+    const ownRun = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE, title: "Own run" }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(() => expect(host.harness.sdk.callsTo("threads.spawn").length).toBeGreaterThan(0));
+
+    // A different thread's own in-flight run must never show up here.
+    toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE, title: "Foreign run" }, { threadId: "another-thread", projectId: "project-1" }));
+
+    const result = (await host.harness.behavior.callRpc("activeRuns", { threadId: "thread-1" })) as {
+      runs: Array<{ run: { id: string; threadId: string; status: string; title: string | null }; stages: unknown[]; graph: { nodes: unknown[] } | null }>;
+    };
+    expect(result.runs.map((r) => r.run.id)).toEqual([ownRun.runId]);
+    expect(result.runs[0]!.run.status).toBe("running");
+    expect(Array.isArray(result.runs[0]!.stages)).toBe(true);
+    expect(result.runs[0]!.stages.length).toBeGreaterThan(0);
+    expect(result.runs[0]!.graph?.nodes.length).toBeGreaterThan(0);
+
+    // Stop it so it doesn't outlive the test.
+    await host.harness.behavior.callRpc("stopRun", { runId: ownRun.runId, threadId: "thread-1" });
+  });
+
+  it("RPC: activeRuns for a thread with no runs (or none still active) returns an empty list", async () => {
+    const host = makeHost();
+    await plugin(host.bb);
+    const result = (await host.harness.behavior.callRpc("activeRuns", { threadId: "thread-1" })) as { runs: unknown[] };
+    expect(result.runs).toEqual([]);
+  });
+
+  it("RPC: answerGate resolves a run's blocked human gate scoped to its owning thread, stamping the stage's actor as 'ui'", async () => {
+    const host = makeHost();
+    bridgeHumanGateInteractions(host);
+    await plugin(host.bb);
+
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: HUMAN_GATE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(async () => {
+      const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+      expect(status).toBe("blocked");
+    });
+
+    // A different thread can't answer this run's gate.
+    const foreign = (await host.harness.behavior.callRpc("answerGate", { runId, threadId: "another-thread", answer: "approve" })) as { answered: boolean; reason?: string };
+    expect(foreign.answered).toBe(false);
+    expect(foreign.reason).toBe("no such run");
+
+    const answered = (await host.harness.behavior.callRpc("answerGate", { runId, threadId: "thread-1", answer: "approve" })) as { answered: boolean };
+    expect(answered.answered).toBe(true);
+
+    await waitForTerminalStatus(host, runId);
+    const stages = JSON.parse((await host.harness.behavior.runCli(["stages", runId], { threadId: "thread-1" })).stdout) as Array<{ nodeId: string; actor: string | null }>;
+    expect(stages.find((s) => s.nodeId === "gate")?.actor).toBe("ui");
   });
 
   const AGENT_WAIT_SOURCE = `digraph G {

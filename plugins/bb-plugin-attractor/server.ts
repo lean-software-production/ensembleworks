@@ -173,6 +173,11 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
       service.stopRun(runId);
       return { stopped: true };
     },
+    activeRuns: ({ threadId }) => rpcContract.activeRuns.output.parse({ runs: service.activeRuns(threadId) }),
+    answerGate: async ({ runId, threadId, answer }) => {
+      if (!owned(runId, threadId).run) return { answered: false, reason: "no such run" };
+      return rpcContract.answerGate.output.parse(await service.answerHumanGate(runId, answer, "ui"));
+    },
   });
 
   bb.agents.registerTool({

@@ -135,6 +135,45 @@ describe("createService: run lifecycle", () => {
     expect(host.harness.inspection.realtimeSignals.some((s) => s.channel === "attractor-runs")).toBe(true);
   });
 
+  it("activeRuns pairs each running/blocked run owned by the thread with its stages and graph, excluding finished runs and other threads' runs (active-runs composer banner)", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    let calls = 0;
+    const backend = fakeBackend(async () => {
+      calls += 1;
+      // The first and third worker calls never resolve — their runs stay
+      // "running" forever (for this test); the second resolves immediately.
+      if (calls === 2) return { status: "succeeded" as const };
+      return new Promise(() => {});
+    });
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient() });
+
+    const { run: ownActive } = await service.createAndStartRun({ source: SIMPLE_GRAPH, threadId: "origin-thread", projectId: "project-1", environmentId: "env-1", title: "Own active" });
+    await vi.waitFor(() => expect(store.listStages(ownActive.id).some((s) => s.nodeId === "plan")).toBe(true));
+
+    const { run: ownFinished } = await service.createAndStartRun({ source: SIMPLE_GRAPH, threadId: "origin-thread", projectId: "project-1", environmentId: "env-1" });
+    await vi.waitFor(() => expect(store.getRun(ownFinished.id).status).toBe("succeeded"));
+
+    const { run: foreignActive } = await service.createAndStartRun({ source: SIMPLE_GRAPH, threadId: "other-thread", projectId: "project-1", environmentId: "env-1" });
+    await vi.waitFor(() => expect(store.listStages(foreignActive.id).some((s) => s.nodeId === "plan")).toBe(true));
+
+    const result = service.activeRuns("origin-thread");
+
+    expect(result.map((r) => r.run.id)).toEqual([ownActive.id]);
+    expect(result[0]!.run.status).toBe("running");
+    expect(result[0]!.stages.map((s) => s.nodeId)).toEqual(["start", "plan"]);
+    expect(result[0]!.graph.nodes.map((n) => n.id).sort()).toEqual(["exit", "plan", "start"]);
+  });
+
+  it("activeRuns returns nothing for a thread with no runs", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    const backend = fakeBackend(async () => new Promise(() => {}));
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient() });
+
+    expect(service.activeRuns("origin-thread")).toEqual([]);
+  });
+
   it("retries a stage whose backend call throws (an engine-retryable fault), succeeding on the second attempt", async () => {
     const host = makeHost();
     const store = new RunStore(new Database(":memory:"));
@@ -488,6 +527,36 @@ describe("createService: answerHumanGate (T6, bb attractor answer)", () => {
 
     expect(result).toEqual({ answered: true });
     expect(respondCalls).toEqual([{ interactionId: "interaction-1", threadId: "origin-thread", value: { kind: "choice", raw: "[A] Approve", via: "cli" } }]);
+  });
+
+  it("stamps the resolved value with an explicit 'ui' actor (the answerGate RPC, backing the active-runs composer banner's inline gate buttons)", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    const backend = fakeBackend(async () => ({ status: "succeeded" }));
+    const respondCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.interactions.list", async () => [
+      pluginInteraction({
+        data: {
+          runId: "run-x",
+          nodeId: "gate",
+          question: "Approve plan?",
+          options: [{ raw: "[A] Approve", key: "A", text: "Approve", to: "exit" }],
+          freeform: false,
+          questionType: null,
+        },
+      }),
+    ]);
+    host.harness.sdk.stub("threads.interactions.respond", async (args: unknown) => {
+      respondCalls.push(args);
+      return {};
+    });
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient() });
+    store.createRun({ id: "run-x", threadId: "origin-thread", projectId: null, environmentId: null, title: null, source: HUMAN_GATE_GRAPH, graph: {}, initialContext: {} });
+
+    const result = await service.answerHumanGate("run-x", "[A] Approve", "ui");
+
+    expect(result).toEqual({ answered: true });
+    expect(respondCalls).toEqual([{ interactionId: "interaction-1", threadId: "origin-thread", value: { kind: "choice", raw: "[A] Approve", via: "ui" } }]);
   });
 
   it("reports no match rather than guessing when the answer names no option and the gate isn't freeform", async () => {

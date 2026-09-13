@@ -199,6 +199,28 @@ describe("RunStore", () => {
     expect(store.listRunningRunIds().sort()).toEqual(["run-1", "run-2"]);
   });
 
+  it("lists a thread's active (running/blocked) runs newest first, excluding finished runs and other threads' runs (active-runs composer banner)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} }, 1_000);
+    store.createRun({ id: "run-2", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} }, 2_000);
+    store.setStatus("run-2", "blocked");
+    store.createRun({ id: "run-3", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} }, 3_000);
+    store.recordFinish("run-3", { status: "succeeded", finalOutcome: { status: "succeeded" }, goalGateFailures: [], context: {} });
+    store.createRun({ id: "run-4", threadId: "other", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} }, 4_000);
+
+    const active = store.listActiveRuns({ threadId: "t", limit: 10 });
+    expect(active.map((r) => r.id)).toEqual(["run-2", "run-1"]);
+  });
+
+  it("caps listActiveRuns at the given limit", () => {
+    const store = makeStore();
+    for (let i = 0; i < 5; i++) {
+      store.createRun({ id: `run-${i}`, threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} }, 1_000 + i);
+    }
+    const active = store.listActiveRuns({ threadId: "t", limit: 2 });
+    expect(active.map((r) => r.id)).toEqual(["run-4", "run-3"]);
+  });
+
   it("throws a clear error for an unknown run id", () => {
     const store = makeStore();
     expect(() => store.getRun("missing")).toThrow(/not found/);

@@ -209,18 +209,43 @@ node id per line). An unknown path exits `1` with `no such field: <path>`
 on stderr (for an array result, that's true when *any* element lacks it).
 
 **RPC** (`server/contracts.ts`, consumed by `ui/*`/`app.tsx` via `useRpc`):
-`getRun`, `listRuns`, `getGraph`, `getEvents`, `stopRun` — every method is
-scoped to the calling thread's own runs.
+`getRun`, `listRuns`, `getGraph`, `getEvents`, `stopRun`, `activeRuns`,
+`answerGate` — every method is scoped to the calling thread's own runs.
 
 **Realtime**: the `attractor-runs` channel publishes `{ runId, threadId }`
-on every event; `ui/run-panel.tsx`'s `RunPanel` subscribes via
-`useRealtime` and refetches.
+on every event; `ui/run-panel.tsx`'s `RunPanel` and `ui/active-runs-
+banner.tsx`'s `ActiveRunsBanner` both subscribe via `useRealtime` and
+refetch.
 
 **Directive / panel**: the `attractor-run` message directive
 (`::attractor-run{run="<runId>" thread="<threadId>"}`) renders a header, the
 DAG, and an expandable stage list inline in chat; "Open in right panel"
 opens the same run in the thread side panel with the full DAG, stage list,
 event timeline, and a Stop button.
+
+### Active-runs composer banner
+
+Every run still `running` or `blocked` for the thread you're typing into
+shows as a row in a banner just above the composer — no need to have the
+directive card pasted into (or still visible in) this thread to see a run
+is still going. Registered from `app.tsx` via `app.composer.customize({
+id: "attractor-status", scopes: ["thread"], banners: [{ id: "active-runs",
+chrome: "bare", component: ActiveRunsBanner }] })`, the same shape BB's
+own built-in Workflows plugin uses for its composer "active runs" strip.
+
+Each row shows the run's title, coloured status word, `n/N stages`, and
+live elapsed time; a chevron ("Open in right panel") opens the run in the
+thread panel; an expand toggle reveals the same vertical DAG and stage
+list the directive/panel show. A row blocked on a **human gate** (a
+`hexagon` node) also renders its outgoing-edge options as inline answer
+buttons — clicking one calls the `answerGate` RPC (the same resolution as
+`bb attractor answer`/the `pendingInteraction` renderer, but stamped
+`actor: "ui"`) and refreshes — plus a "Reviewing: `<path>`" hint when the
+gate has a `review_target`, and an "Open thread" link when the routing
+predecessor's worker thread is known. The banner fetches on mount, then
+refetches on `attractor-runs` realtime events (coalesced like the panel)
+and on a 5s fallback poll while any row is still active; a run drops off
+the banner the instant it reaches a terminal status.
 
 **Cross-thread cards.** The `thread` attribute names the run's *origin*
 thread — every RPC call a card makes is scoped to it, not to whatever
@@ -1291,3 +1316,41 @@ bb plugin build .
   both ends — and keeps a panel opened from a cross-thread card addressing
   the run's actual origin thread even though the panel host thread and the
   run's thread differ.
+
+- **Active-runs composer banner: the accelerator parser moved to `dot/
+  accelerator.ts`, not duplicated a third time.** `handlers/human.ts`
+  already carried its own copy of the "`[K] `/`K) `/`K - `" accelerator
+  regex (deliberately kept separate from `engine/router.ts`'s own
+  stripping-only version — see that file's comment), and the banner needs
+  the exact same parse (it only ever sees a `GraphView`'s raw edge labels,
+  not the richer `HumanGateOption[]` the server already built for a real
+  gate payload). Rather than adding a third copy, `parseAcceleratorLabel`
+  now lives in `dot/accelerator.ts` — a dependency-free module `ui/*.tsx`
+  can safely import — and `handlers/human.ts` re-exports it so its own
+  existing tests (and any other caller) keep working unchanged.
+
+- **`activeRuns` is a flat, unpaginated top-10 read, not `listRuns`'s
+  cursor-paginated history view.** `RunStore.listActiveRuns({ threadId,
+  limit })` is a new, separate store method (`ORDER BY created_at DESC, id
+  DESC LIMIT ?`) rather than a filter bolted onto `listRuns` (which is
+  oldest-first and cursor-paginated for a full run history) — a thread
+  realistically never has more than a handful of runs in flight at once,
+  and the banner only ever needs the most recent few.
+
+- **`answerHumanGate` grew an `actor` parameter (default `"cli"`), rather
+  than a parallel `answerHumanGateAsUi` function.** The banner's inline
+  gate buttons need the exact same ownership-scoped resolution `bb
+  attractor answer` already provides, just stamped `via: "ui"` instead of
+  `via: "cli"` on the resulting `HumanGateValue` — `server.ts`'s CLI
+  handler keeps calling it with two arguments (the default covers it), and
+  the new `answerGate` RPC is the only caller that passes `"ui"`
+  explicitly.
+
+- **The banner's DAG passes `events: []` to `DagView`, not the run's real
+  event log.** `activeRuns` intentionally doesn't fetch each row's events
+  (that's a third RPC round trip per row, and the banner's expanded DAG is
+  a quick-glance affordance, not the full panel) — `DagView` still renders
+  every node's status correctly from the graph alone, it just shows no
+  traversed-edge emphasis/selection-reason tooltips the way the directive/
+  panel's DAG does. Opening the run in the right panel (the chevron) shows
+  the full picture.

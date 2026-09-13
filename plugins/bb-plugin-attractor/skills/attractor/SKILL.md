@@ -109,6 +109,11 @@ pair), the prompt also gets a `Parallel results (N):` section, one bullet
 per branch (`- <branch id> | <status>: <text preview>`), so a digest stage
 can actually see what each branch said, not just its status.
 
+Every thread also shows a small "active runs" banner just above the message
+box, listing any run still `running`/`blocked` for that thread — a quick
+status/stage-count/elapsed-time glance (and, for a run blocked on a human
+gate, inline answer buttons) with no directive card required.
+
 ## Inspecting a run
 
 `attractor_inspect({ runId })` returns the run's status
