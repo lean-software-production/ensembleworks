@@ -1,5 +1,4 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import type { TranscriptSink, SegmentInput } from '../domain';
@@ -16,6 +15,15 @@ export const POLL_MS = 2000;
 export const IDLE_POLL_MAX_MS = 30_000;
 export function nextPollDelay(previous: number, progressed: boolean) {
   return progressed ? POLL_MS : Math.min(Math.max(previous, POLL_MS) * 2, IDLE_POLL_MAX_MS);
+}
+// Global setTimeout rather than node:timers/promises, so tests can fake the cadence.
+function delay(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal.addEventListener('abort', onAbort, {once: true});
+  });
 }
 const responseSchema = z.object({ ok: z.literal(true), now: z.number().int().nonnegative(),
   entries: z.array(z.object({ id: z.string().min(1).max(256), t: z.number().int().nonnegative(),
@@ -95,11 +103,20 @@ export async function registerEnsembleWorks(bb: BbPluginApi, hub: TranscriptSink
       return false;
     }
   }
+  // Aborted by start() so a loop that backed off while capture was off wakes
+  // into the fast cadence instead of sleeping out up to IDLE_POLL_MAX_MS.
+  let wake = new AbortController();
   bb.background.service('ensembleworks-transcript', {async start(signal) {
-    let wait = POLL_MS;
+    let wait = POLL_MS; let woken = false;
     while (!signal.aborted && !lifetime.signal.aborted) {
-      wait = nextPollDelay(wait, await exclusive(poll));
-      try { await delay(wait, undefined, {signal}); } catch { break; }
+      // start() has just polled, so a woken loop waits POLL_MS before the next.
+      wait = woken ? POLL_MS : nextPollDelay(wait, await exclusive(poll));
+      woken = false;
+      const waking = wake.signal;
+      try { await delay(wait, AbortSignal.any([signal, waking])); } catch {
+        if (signal.aborted || !waking.aborted) break;
+        wake = new AbortController(); woken = true;
+      }
     }
   }});
   bb.onDispose(async () => {
@@ -121,7 +138,7 @@ export async function registerEnsembleWorks(bb: BbPluginApi, hub: TranscriptSink
       const next: Capture = {conversationId:conversation.id,url,room,since,anchor:since,enabled:true};
       await bb.storage.kv.set(KEY,next); capture=next;
       hub.setCapture(conversation.id,'connecting','Waiting for the V1 transcript.');
-      await poll(); return {conversationId:conversation.id};
+      await poll(); wake.abort(); return {conversationId:conversation.id};
     }),
     stop: (conversationId: string) => exclusive(async () => {
       if (capture?.conversationId !== conversationId || !capture.enabled) return;
