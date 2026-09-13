@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseWorkflowGraph, type WorkflowGraph } from "../dot/graph";
-import { selectRoute, selectRetryTarget } from "../engine/router";
+import { selectRoute, selectRetryTarget, selectRetryTargetCandidates } from "../engine/router";
 import type { Outcome } from "../engine/types";
 
 function graphFrom(dot: string): WorkflowGraph {
@@ -116,6 +116,24 @@ describe("engine/router: routing cascade steps 1-8", () => {
       context: {},
     });
     expect(decision).toEqual({ nodeId: "approve", reason: "preferred_label", edgeLabel: "Approve" });
+  });
+
+  it("step 3: a legitimate label containing ')' is not mistaken for a 'K) ' accelerator prefix", () => {
+    // "run(x) thing" has no leading accelerator at all, but its first word
+    // happens to contain ')'; stripping must not treat "run(x" as the
+    // accelerator key K and eat it, or this label collides with an
+    // unrelated "thing"-labelled edge.
+    const graph = graphFrom(`digraph G {
+      a -> wrong   [label="thing"]
+      a -> literal [label="run(x) thing"]
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded", preferredLabel: "run(x) thing" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "literal", reason: "preferred_label", edgeLabel: "run(x) thing" });
   });
 
   it("step 4: suggested_next_ids picks the first suggestion that names an outgoing edge target", () => {
@@ -287,5 +305,22 @@ describe("engine/router: step 7 retry_target / fallback_retry_target resolution"
   it("returns undefined when no retry target is configured anywhere", () => {
     const graph = graphFrom(`digraph G { a [shape=box] }`);
     expect(selectRetryTarget(graph.nodes.get("a")!, graph)).toBeUndefined();
+  });
+
+  it("selectRetryTargetCandidates exposes the full existing-node cascade, not just its first entry, so the engine can apply max_visits to each in turn", () => {
+    const graph = graphFrom(`digraph G {
+      graph [retry_target="graphTarget", fallback_retry_target="graphFallback"]
+      a [retry_target="nodeTarget", fallback_retry_target="nodeFallback"]
+      nodeTarget [shape=box]
+      nodeFallback [shape=box]
+      graphTarget [shape=box]
+      graphFallback [shape=box]
+    }`);
+    expect(selectRetryTargetCandidates(graph.nodes.get("a")!, graph)).toEqual([
+      "nodeTarget",
+      "nodeFallback",
+      "graphTarget",
+      "graphFallback",
+    ]);
   });
 });

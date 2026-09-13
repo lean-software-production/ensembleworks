@@ -231,6 +231,30 @@ describe("engine: max_visits exhaustion", () => {
       { type: "edge.selected", runId: "r", ts: expect.any(Number), from: "a", to: "rescue", reason: "retry_target" },
     ]);
   });
+
+  it("falls through to fallback_retry_target when retry_target names a node that is itself visit-exhausted", async () => {
+    const graph = graphFrom(`digraph G {
+      start [shape=Mdiamond]
+      a [on_failure="exit", retry_target="used", fallback_retry_target="rescue"]
+      used [max_visits=1]
+      rescue [shape=box]
+      start -> used -> a
+    }`);
+    const seen: string[] = [];
+    const handlers = baseHandlers({
+      agent: {
+        run: async (input) => {
+          seen.push(input.node.id);
+          return { status: input.node.id === "a" ? "failed" : "succeeded" };
+        },
+      },
+    });
+    const { clock } = makeClock();
+    const result = await runEngine({ graph, handlers, runId: "r", clock, signal: NEVER_ABORT, onEvent: () => {} });
+
+    expect(seen).toContain("rescue");
+    expect(result.status).toBe("succeeded");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -282,6 +306,26 @@ describe("engine: goal gates", () => {
 
     expect(result.status).toBe("succeeded");
     expect(result.goalGateFailures).toEqual([]);
+  });
+
+  it("honours a goal_gate on a node executed inside a parallel branch (a branch node is a visited node)", async () => {
+    const graph = graphFrom(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      fork  [shape=component]
+      merge [shape=tripleoctagon]
+      lint  [goal_gate=true]
+      start -> fork
+      fork -> lint
+      lint -> merge
+      merge -> exit
+    }`);
+    const handlers = baseHandlers({ agent: succeedHandler({ status: "failed" }) });
+    const { clock } = makeClock();
+    const result = await runEngine({ graph, handlers, runId: "r", clock, signal: NEVER_ABORT, onEvent: () => {} });
+
+    expect(result.goalGateFailures).toEqual(["lint"]);
+    expect(result.status).toBe("failed");
   });
 });
 

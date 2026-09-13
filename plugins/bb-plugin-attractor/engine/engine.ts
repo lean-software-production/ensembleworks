@@ -8,7 +8,7 @@
 
 import { createContext } from "./context";
 import { createStageEmitter } from "./events";
-import { selectRetryTarget, selectRoute } from "./router";
+import { selectRetryTargetCandidates, selectRoute } from "./router";
 import type { WorkflowEdge } from "../dot/graph";
 import type {
   Checkpoint,
@@ -207,11 +207,15 @@ export class Engine {
     return null;
   }
 
+  // Step 7's full cascade: node retry_target, node fallback_retry_target, graph
+  // retry_target, graph fallback_retry_target — each candidate is subject to
+  // max_visits, and a visit-exhausted candidate falls through to the next one
+  // rather than ending the cascade (plan: "subject to max_visits of the target").
   private consultRetryTarget(node: WorkflowNode): string | undefined {
-    const candidate = selectRetryTarget(node, this.graph);
-    if (candidate === undefined) return undefined;
-    if (this.isEnterable(candidate)) return candidate;
-    this.emitSkipped(candidate, "max_visits_exceeded");
+    for (const candidate of selectRetryTargetCandidates(node, this.graph)) {
+      if (this.isEnterable(candidate)) return candidate;
+      this.emitSkipped(candidate, "max_visits_exceeded");
+    }
     return undefined;
   }
 
@@ -310,12 +314,24 @@ export class Engine {
   }
 
   private applyOutcomeToContext(node: WorkflowNode, outcome: Outcome): void {
-    this.context.set("last_stage", node.id);
+    this.writeOutcomeToContext(this.context, node, outcome);
+    this.recordGoalGate(node, outcome);
+  }
+
+  // Shared by the main walk (applyOutcomeToContext) and each parallel branch
+  // (runParallelFanOut's runBranch): every node the engine executes, whichever
+  // context it runs against, writes these keys and — if goal-gated — its
+  // outcome status, so goal gates on branch nodes are honoured at exit too.
+  private writeOutcomeToContext(context: Context, node: WorkflowNode, outcome: Outcome): void {
+    context.set("last_stage", node.id);
     if (outcome.text !== undefined) {
-      this.context.set("last_response", outcome.text.slice(0, 200));
-      this.context.set(`response.${node.id}`, outcome.text);
+      context.set("last_response", outcome.text.slice(0, 200));
+      context.set(`response.${node.id}`, outcome.text);
     }
-    this.context.merge(outcome.contextUpdates);
+    context.merge(outcome.contextUpdates);
+  }
+
+  private recordGoalGate(node: WorkflowNode, outcome: Outcome): void {
     if (node.goalGate) {
       this.goalGateOutcomes[node.id] = outcome.status;
     }
@@ -380,12 +396,8 @@ export class Engine {
           break;
         }
         const outcome = executed.value;
-        branchContext.set("last_stage", node.id);
-        if (outcome.text !== undefined) {
-          branchContext.set("last_response", outcome.text.slice(0, 200));
-          branchContext.set(`response.${node.id}`, outcome.text);
-        }
-        branchContext.merge(outcome.contextUpdates);
+        this.writeOutcomeToContext(branchContext, node, outcome);
+        this.recordGoalGate(node, outcome);
         lastOutcome = outcome;
         lastNodeId = node.id;
 

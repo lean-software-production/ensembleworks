@@ -59,28 +59,34 @@ gets a real BB-thread backend in T4:
   `Object.prototype` keys), `merge()` for shallow top-level
   `context_updates`, and `clone()`/`toObject()` for parallel-branch
   isolation and persistence, all with full deep-copy semantics.
-- `engine/router.ts` — the next-node selection cascade (steps 1-6, plus a
-  separate `selectRetryTarget` for step 7): `jump_to_node`, conditional
-  edges (weight then lexical target tiebreak), `preferred_label` (with
-  accelerator-prefix stripping on both sides), `suggested_next_ids`,
-  `on_failure` (`route`/`exit`/`succeed`, including `succeed`'s outcome
-  rewrite-and-retry of steps 2-6), unconditional edges, and node-then-graph
-  `retry_target`/`fallback_retry_target`.
+- `engine/router.ts` — the next-node selection cascade (steps 1-6, plus
+  `selectRetryTargetCandidates`/`selectRetryTarget` for step 7):
+  `jump_to_node`, conditional edges (weight then lexical target tiebreak),
+  `preferred_label` (with accelerator-prefix stripping on both sides),
+  `suggested_next_ids`, `on_failure` (`route`/`exit`/`succeed`, including
+  `succeed`'s outcome rewrite-and-retry of steps 2-6), unconditional edges,
+  and node-then-graph `retry_target`/`fallback_retry_target`.
+  `selectRetryTargetCandidates` returns the *whole* existing-node cascade
+  (not just its first entry) so the engine can apply `max_visits` to each
+  candidate in turn — a visit-exhausted `retry_target` falls through to
+  `fallback_retry_target` rather than ending the cascade.
 - `engine/events.ts` — stamps a handler's narrow `StageScopedEvent` (`log`,
   `agent.thread`, `human.requested`/`human.answered`) into a fully-formed
   `RunEvent` (`runId`/`ts`/`stageId`/`nodeId`).
 - `engine/engine.ts` — the walker: visit tracking and `max_visits`/
   `max_node_visits` gating (a non-enterable candidate is skipped and
-  routing falls back to step 7 from the *completing* node), goal-gate
-  evaluation at run termination, retries with fixed 1s/2s/4s delays via an
-  injected clock (only for a thrown handler error — a returned
-  `Outcome{status:"failed"}` is a business outcome that goes through the
-  normal `on_failure` cascade, not the retry loop), `parallel`/
-  `parallel.fan_in` fan-out with per-branch context clones and
-  `parallel.results`/`parallel.branch_count` written to the parent context
-  only (never a top-level branch merge), checkpoint saves after every
-  non-terminal stage, checkpoint-driven resume, and cancellation via
-  `AbortSignal`.
+  routing falls back to step 7 from the *completing* node, itself walking
+  every candidate under the same `max_visits` gate), goal-gate evaluation
+  at run termination (recorded for every visited node, including one
+  executed inside a `parallel` branch — a branch node is a visited node),
+  retries with fixed 1s/2s/4s delays via an injected clock (only for a
+  thrown handler error — a returned `Outcome{status:"failed"}` is a
+  business outcome that goes through the normal `on_failure` cascade, not
+  the retry loop), `parallel`/`parallel.fan_in` fan-out with per-branch
+  context clones and `parallel.results`/`parallel.branch_count` written to
+  the parent context only (never a top-level branch merge), checkpoint
+  saves after every non-terminal stage, checkpoint-driven resume, and
+  cancellation via `AbortSignal`.
 
 All of `engine/` is pure (no BB imports, no timers of its own, no
 randomness — the clock and checkpoint sink are injected) and is exercised

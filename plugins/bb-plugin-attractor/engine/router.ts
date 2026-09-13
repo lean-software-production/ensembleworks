@@ -25,12 +25,15 @@ export interface RouteDecision {
 }
 
 // Strip a single leading "[K] ", "K) " or "K - " accelerator prefix before
-// comparing a preferred_label to an edge label.
+// comparing a preferred_label to an edge label. K is a single accelerator
+// key character (not a run of non-space characters) so a legitimate label
+// whose first word happens to contain ')' or " - " isn't mistaken for one,
+// e.g. "run(x) thing" must not be reduced to "thing".
 function stripAccelerator(label: string): string {
   return label
     .replace(/^\[[^\]]*\]\s*/, "")
-    .replace(/^\S+\)\s*/, "")
-    .replace(/^\S+\s-\s*/, "");
+    .replace(/^\S\)\s*/, "")
+    .replace(/^\S\s-\s*/, "");
 }
 
 function outgoingEdges(nodeId: string, graph: WorkflowGraph): WorkflowEdge[] {
@@ -107,11 +110,19 @@ export function selectRoute(input: RouteInput): RouteDecision | null {
   return attempt(input.node, input.graph, input.outcome, input.context, true);
 }
 
-/** Step 7: node then graph retry_target / fallback_retry_target, first candidate that names an existing node. */
-export function selectRetryTarget(node: WorkflowNode, graph: WorkflowGraph): string | undefined {
+/**
+ * Step 7, full cascade: node `retry_target`, node `fallback_retry_target`,
+ * graph `retry_target`, graph `fallback_retry_target` — in that order,
+ * restricted to candidates that name an existing node. The caller (the
+ * engine) is responsible for walking this list and applying `max_visits`
+ * to each candidate in turn, per "subject to max_visits of the target".
+ */
+export function selectRetryTargetCandidates(node: WorkflowNode, graph: WorkflowGraph): string[] {
   const candidates = [node.retryTarget, node.fallbackRetryTarget, graph.retryTarget, graph.fallbackRetryTarget];
-  for (const candidate of candidates) {
-    if (candidate !== undefined && graph.nodes.has(candidate)) return candidate;
-  }
-  return undefined;
+  return candidates.filter((candidate): candidate is string => candidate !== undefined && graph.nodes.has(candidate));
+}
+
+/** Step 7, existence-only: first candidate that names an existing node (ignores max_visits). */
+export function selectRetryTarget(node: WorkflowNode, graph: WorkflowGraph): string | undefined {
+  return selectRetryTargetCandidates(node, graph)[0];
 }
