@@ -1,11 +1,13 @@
 // @vitest-environment jsdom
-import { fireEvent, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it } from "vitest";
 import { loadPluginApp, renderSlot } from "@get-bb/plugin-sdk/testing/app";
 import type { JobView } from "./contracts";
 import { graphImage, latestStages } from './graph-image';
 
 const graph = { svg: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 80"><g class="node"><title>plan</title><rect width="100" height="40"/><text x="10" y="20">Plan</text></g></svg>', stages: [{ node_id: 'plan', name: 'plan', status: 'running', visit: 1 }], stagesComplete: true };
+
+afterEach(() => cleanup());
 
 const job: JobView = {
   id: "job-1", threadId: "thread-1", projectId: null, environmentId: null, hostId: null,
@@ -21,6 +23,37 @@ const job: JobView = {
   resultRevision: null, result: null, completionState: "pending", completionDetail: null,
   completionMessageId: null, acceptanceVerdict: "pending", acceptanceReason: null, acceptanceResultRevision: null,
 };
+
+const diffPatch = `diff --git a/src/a.ts b/src/a.ts
+index 1111111..2222222 100644
+--- a/src/a.ts
++++ b/src/a.ts
+@@ -1 +1 @@
+-old
++new
+diff --git a/src/b.ts b/src/b.ts
+new file mode 100644
+--- /dev/null
++++ b/src/b.ts
+@@ -0,0 +1 @@
++second
+`;
+
+function evidence(overrides: Record<string, unknown> = {}) {
+  return {
+    workspace: {
+      path: "/tmp/fabro/job-1/checkout",
+      files: {
+        "delivery.json": { text: JSON.stringify({ changedFiles: ["src/a.ts", "src/b.ts"], attempts: 2, resultSha: "b".repeat(40), review: "# Review\n\n- Looks good" }), truncated: false },
+        "baseline.json": { text: JSON.stringify({ checks: [{ command: "npm test -- --run baseline", exitCode: 0, signal: null, error: null, stdout: "baseline ok", stderr: "" }] }), truncated: false },
+        "validation.json": { text: JSON.stringify({ checks: [{ command: "npm test", exitCode: 1, signal: null, error: null, stdout: "ran", stderr: "failed" }], quality: { command: "git diff --check", exitCode: 0, signal: null, error: null, stdout: "", stderr: "" } }), truncated: false },
+        "review.md": { text: "# Review\n\n- Looks good", truncated: false },
+        "diff.patch": { text: diffPatch, truncated: false },
+      },
+    },
+    ...overrides,
+  };
+}
 
 describe("Assembly Lines app", () => {
   it('shows a referenced run in another thread and keeps its owner in the sidebar', async () => {
@@ -105,6 +138,87 @@ describe("Assembly Lines app", () => {
     await slot.findByText("Succeeded");
     await slot.findByRole('img', { name: /plan: succeeded/ });
     expect(calls).toBe(2);
+    slot.lifecycle.unmount();
+  });
+
+  it("renders readable sidebar results with summary, multi-file changes, checks, review, and collapsed raw JSON", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    const delivered = { ...job, engineStatus: "succeeded", observationState: "succeeded", acceptanceVerdict: "rejected", acceptanceReason: "needs one more test", workspacePath: "/tmp/fabro/job-1/checkout", resultRevision: 1 };
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: job.threadId, params: { jobId: job.id } }, { rpc: {
+      getJob: () => ({ job: delivered, fabroUrl: "https://fabro.example/runs/run-1" }),
+      getRunGraph: () => graph,
+      getRunDetails: () => ({ job: delivered, fabroUrl: "https://fabro.example/runs/run-1", details: JSON.stringify(evidence()), artifacts: "Preserved checkout: /tmp/fabro/job-1/checkout" }),
+    } });
+    await slot.findByRole("heading", { name: "Summary" });
+    expect(slot.getAllByText("Rejected — needs one more test").length).toBeGreaterThan(0);
+    expect(await slot.findByText("src/a.ts, src/b.ts")).toBeTruthy();
+    expect(slot.getByText("src/a.ts")).toBeTruthy();
+    expect(slot.getByText("src/b.ts")).toBeTruthy();
+    expect(slot.getByText("Final validation")).toBeTruthy();
+    expect(slot.getAllByText("Fail").length).toBeGreaterThan(0);
+    fireEvent.click(slot.getByText(/npm test$/));
+    expect(await slot.findByText("failed")).toBeTruthy();
+    expect(slot.getByRole("heading", { name: "Review" })).toBeTruthy();
+    expect(slot.getAllByText(/Looks good/).length).toBeGreaterThan(0);
+    expect(slot.getByText("Raw JSON").closest("details")?.hasAttribute("open")).toBe(false);
+    fireEvent.click(slot.getByText("Raw JSON"));
+    expect(await slot.findByText(/delivery\.json/)).toBeTruthy();
+    slot.lifecycle.unmount();
+  });
+
+  it("uses persisted results when detail refresh fails and does not mark errored checks as passing", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    const persisted = evidence({ workspace: { path: "/tmp/fallback", files: {
+      "validation.json": { text: JSON.stringify({ checks: [{ command: "maybe", exitCode: null, signal: null, error: "spawn failed", stdout: "", stderr: "" }] }), truncated: false },
+      "diff.patch": { text: "", truncated: true },
+    } } });
+    const persistedJob = { ...job, result: persisted, resultRevision: 1, engineStatus: "failed", observationState: "failed" };
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: job.threadId, params: { jobId: job.id } }, { rpc: {
+      getJob: () => ({ job: persistedJob, fabroUrl: null }),
+      getRunGraph: () => graph,
+      getRunDetails: () => { throw new Error("host offline"); },
+    } });
+    await slot.findByText(/Run details refresh failed/);
+    expect(slot.getByText("Diff evidence was truncated.")).toBeTruthy();
+    expect(slot.getByText("Final validation")).toBeTruthy();
+    expect(slot.getAllByText("Fail").length).toBeGreaterThan(0);
+    fireEvent.click(slot.getByText("maybe"));
+    expect(await slot.findByText("spawn failed")).toBeTruthy();
+    slot.lifecycle.unmount();
+  });
+
+  it("renders running and malformed partial evidence safely", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: job.threadId, params: { jobId: job.id } }, { rpc: {
+      getJob: () => ({ job, fabroUrl: null }),
+      getRunGraph: () => graph,
+      getRunDetails: () => ({ job, fabroUrl: null, details: "{not json", artifacts: "" }),
+    } });
+    await slot.findByText(/Run details could not be parsed/);
+    expect(slot.getByText("No changes were reported.")).toBeTruthy();
+    expect(slot.getByText("Check evidence is not available yet.")).toBeTruthy();
+    fireEvent.click(slot.getByText("Raw JSON"));
+    expect(await slot.findByText("{not json")).toBeTruthy();
+    slot.lifecycle.unmount();
+  });
+
+  it("clears and ignores stale run details when switching jobs", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    let resolveFirst: ((value: unknown) => void) | null = null;
+    const first = new Promise(resolve => { resolveFirst = resolve; });
+    const job2 = { ...job, id: "job-2", runId: "run-2", workOrder: { ...job.workOrder, title: "Second job" } };
+    const Panel = app.threadPanelActions[0]!.component;
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: job.threadId, params: { jobId: job.id } }, { rpc: {
+      getJob: (input: unknown) => ({ job: (input as { jobId: string }).jobId === "job-2" ? job2 : job, fabroUrl: null }),
+      getRunGraph: () => graph,
+      getRunDetails: (input: unknown) => (input as { jobId: string }).jobId === "job-1" ? first : { job: job2, fabroUrl: null, details: JSON.stringify(evidence({ workspace: { path: "/tmp/job2", files: { "diff.patch": { text: "", truncated: false } } } })), artifacts: "" },
+    } });
+    await slot.findByText("Refactor parser");
+    slot.lifecycle.rerender(<Panel threadId={job.threadId} params={{ jobId: "job-2" }} />);
+    await slot.findByText("Second job");
+    resolveFirst!({ job, fabroUrl: null, details: JSON.stringify(evidence({ workspace: { path: "/tmp/stale", files: { "delivery.json": { text: JSON.stringify({ changedFiles: ["stale.ts"] }), truncated: false } } } })), artifacts: "" });
+    await waitFor(() => expect(slot.queryByText("stale.ts")).toBeNull());
+    expect(slot.getByText("No changes were reported.")).toBeTruthy();
     slot.lifecycle.unmount();
   });
 });
