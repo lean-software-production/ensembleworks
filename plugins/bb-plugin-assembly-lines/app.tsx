@@ -36,6 +36,11 @@ type SidebarData = {
   checks: CheckGroup[];
   reviewMarkdown?: string;
 };
+type ParsedEvidence = {
+  raw: string;
+  evidence: JsonObject | null;
+  parseError?: string;
+};
 
 function isObject(value: unknown): value is JsonObject { return !!value && typeof value === "object" && !Array.isArray(value); }
 function stringValue(value: unknown): string | undefined { return typeof value === "string" ? value : undefined; }
@@ -101,7 +106,8 @@ function splitDiff(patch: string): DiffFile[] {
     return { name: match[2] ?? match[1] ?? `File ${index + 1}`, patch: filePatch, binary: /GIT binary patch|Binary files /.test(filePatch), malformed: !/^diff --git /m.test(filePatch) };
   });
 }
-function parseSidebarData(job: Job, details: DetailsState): SidebarData {
+
+function parseEvidence(details: DetailsState, job: Job): ParsedEvidence {
   const raw = details?.text || (job.result ? stringifyRaw(job.result) : "");
   let evidence: JsonObject | null = null;
   let parseError: string | undefined;
@@ -112,6 +118,11 @@ function parseSidebarData(job: Job, details: DetailsState): SidebarData {
     evidence = job.result;
   }
   if (parseError && isObject(job.result)) evidence = job.result;
+  return { raw, evidence, parseError };
+}
+
+function parseSidebarData(job: Job, details: DetailsState): SidebarData {
+  const { raw, evidence, parseError } = parseEvidence(details, job);
   const files = fileEntries(evidence);
   const delivery = parseMaybeFileJson(files, "delivery.json") ?? (isObject(evidence?.delivery) ? evidence.delivery : null);
   const baseline = isObject(delivery?.baseline) ? delivery.baseline : isObject(delivery?.before) ? delivery.before : objectFromFile(files, "baseline.json");
