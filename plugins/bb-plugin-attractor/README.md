@@ -29,7 +29,9 @@ no execution yet:
 - `dot/validate.ts` — lint rules producing `Diagnostic[]` (no/multiple
   start or exit nodes, unreachable nodes, edges to missing nodes, malformed
   conditions, agent/command nodes missing `prompt`/`script`, missing retry
-  targets, conditions on `selection=random` nodes).
+  targets, conditions on `selection=random` nodes), plus defensive
+  `invalid-enum-value`/`invalid-numeric-value` checks on `on_failure`,
+  `reasoning_effort` and `max_visits`.
 - `dot/conditions.ts` — the edge-condition grammar (`Expr`/`Or`/`And`/
   `Unary`/`Clause`), parser + evaluator, with numeric-vs-lexical comparison,
   `contains`/`matches`, and Fabro-style truthiness.
@@ -81,3 +83,10 @@ bb plugin build .
   `parseWorkflowGraph` — and `tests/validate.test.ts` exercises them the same
   way, by pushing a synthetic edge onto an already-built graph object rather
   than parsing DOT text.
+
+- **Graph-scope `key=value;` statements (no `graph [..]` wrapper) are not
+  supported.** Idiomatic Graphviz allows a bare assignment at the top of a
+  graph body, e.g. `rankdir=LR;`, as shorthand for `graph [rankdir=LR];`.
+  The plan's dialect list only names the `graph [..]` form, so this parser
+  treats a bare `key=value` graph-scope statement as a syntax error rather
+  than a graph attribute. Prefer `graph [key=value, ...]` when authoring.

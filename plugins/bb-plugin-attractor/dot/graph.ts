@@ -100,6 +100,17 @@ function coerceScalar(raw: RawValue): DotValue {
   return text;
 }
 
+// Boolean-typed attributes (goal_gate, allow_partial, freeform) must accept
+// both a bare `true`/`false` (already coerced to a JS boolean by
+// coerceScalar) and a *quoted* "true"/"false" (still a string, per Graphviz's
+// "every value is a string" convention: `goal_gate="false"` is idiomatic and
+// must mean false, not `Boolean("false") === true`).
+function coerceBoolean(value: DotValue): boolean {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value !== 0;
+  return value.trim().toLowerCase() === "true";
+}
+
 const DURATION_RE = /^(\d+(?:\.\d+)?)(ms|s|m|h|d)$/;
 const DURATION_MS: Record<string, number> = { ms: 1, s: 1000, m: 60_000, h: 3_600_000, d: 86_400_000 };
 
@@ -240,8 +251,8 @@ function createOrUpdateNode(
   if (explicit.has("fallback_retry_target")) {
     node.fallbackRetryTarget = coerceScalar(explicit.get("fallback_retry_target")!.value) as string;
   }
-  if (explicit.has("goal_gate")) node.goalGate = Boolean(coerceScalar(explicit.get("goal_gate")!.value));
-  if (explicit.has("allow_partial")) node.allowPartial = Boolean(coerceScalar(explicit.get("allow_partial")!.value));
+  if (explicit.has("goal_gate")) node.goalGate = coerceBoolean(coerceScalar(explicit.get("goal_gate")!.value));
+  if (explicit.has("allow_partial")) node.allowPartial = coerceBoolean(coerceScalar(explicit.get("allow_partial")!.value));
   if (explicit.has("model")) node.model = coerceScalar(explicit.get("model")!.value) as string;
   if (explicit.has("provider")) node.provider = coerceScalar(explicit.get("provider")!.value) as string;
   if (explicit.has("reasoning_effort")) {
@@ -283,7 +294,7 @@ function createEdge(from: string, to: string, explicitAttrs: DotAttr[]): Workflo
   if (explicit.has("label")) edge.label = coerceScalar(explicit.get("label")!.value) as string;
   if (explicit.has("condition")) edge.condition = coerceScalar(explicit.get("condition")!.value) as string;
   if (explicit.has("weight")) edge.weight = Number(coerceScalar(explicit.get("weight")!.value));
-  if (explicit.has("freeform")) edge.freeform = Boolean(coerceScalar(explicit.get("freeform")!.value));
+  if (explicit.has("freeform")) edge.freeform = coerceBoolean(coerceScalar(explicit.get("freeform")!.value));
   if (explicit.has("loop_restart")) edge.loopRestart = coerceScalar(explicit.get("loop_restart")!.value) as string;
   return edge;
 }

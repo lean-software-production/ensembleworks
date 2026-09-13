@@ -289,6 +289,14 @@ function getPath(obj: unknown, path: string): unknown {
     if (current === null || current === undefined || typeof current !== "object") {
       return undefined;
     }
+    // Only resolve keys the context object actually owns: a plain index
+    // lookup also resolves inherited Object.prototype members (constructor,
+    // toString, hasOwnProperty, ...), which would make e.g.
+    // "context.constructor" evaluate truthy even though no such context key
+    // was ever set.
+    if (!Object.prototype.hasOwnProperty.call(current, segment)) {
+      return undefined;
+    }
     current = (current as Record<string, unknown>)[segment];
   }
   return current;

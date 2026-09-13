@@ -117,3 +117,15 @@ describe("parseCondition error handling", () => {
     expect(() => parseCondition('context.x matches "^h.*o$"')).not.toThrow();
   });
 });
+
+describe("condition context path lookup does not leak the JS prototype chain", () => {
+  it("does not treat inherited Object.prototype members as present context keys", () => {
+    expect(ev("context.constructor", ctx({ context: {} }))).toBe(false);
+    expect(ev("context.toString", ctx({ context: {} }))).toBe(false);
+    expect(ev("context.hasOwnProperty", ctx({ context: {} }))).toBe(false);
+  });
+
+  it("still resolves a genuine own-property path", () => {
+    expect(ev("context.plan", ctx({ context: { plan: "x" } }))).toBe(true);
+  });
+});

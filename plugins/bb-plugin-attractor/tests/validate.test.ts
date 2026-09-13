@@ -90,4 +90,34 @@ describe("dot/validate", () => {
       'digraph G { start[shape=Mdiamond] exit[shape=Msquare] fork[shape=component, selection=random] a[prompt="p"] start->fork fork->a a->exit }';
     expect(codes(source)).not.toContain("condition-on-random-selection");
   });
+
+  it("flags a node-level on_failure value outside route|exit|succeed", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", on_failure=bogus] start->n->exit }';
+    expect(codes(source)).toContain("invalid-enum-value");
+  });
+
+  it("flags a graph-level on_failure value outside route|exit|succeed", () => {
+    const source =
+      'digraph G { graph[on_failure=bogus] start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p"] start->n->exit }';
+    expect(codes(source)).toContain("invalid-enum-value");
+  });
+
+  it("flags a reasoning_effort value outside low|medium|high", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", reasoning_effort=ultra] start->n->exit }';
+    expect(codes(source)).toContain("invalid-enum-value");
+  });
+
+  it("does not flag valid on_failure/reasoning_effort values", () => {
+    const source =
+      'digraph G { graph[on_failure=exit] start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", on_failure=succeed, reasoning_effort=high] start->n->exit }';
+    expect(codes(source)).not.toContain("invalid-enum-value");
+  });
+
+  it("flags a non-numeric max_visits", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", max_visits=abc] start->n->exit }';
+    expect(codes(source)).toContain("invalid-numeric-value");
+  });
 });

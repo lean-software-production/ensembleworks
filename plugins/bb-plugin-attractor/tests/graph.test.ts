@@ -207,6 +207,26 @@ describe("dot/graph: quoted scalars keep their string kind", () => {
     );
     expect(graph.nodes.get("n")?.maxVisits).toBe(3);
   });
+
+  it("still types a quoted 'false' boolean attribute as false (goal_gate, allow_partial, freeform)", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", goal_gate="false", allow_partial="false"] start->n->exit[freeform="false"] }',
+    );
+    const n = graph.nodes.get("n")!;
+    expect(n.goalGate).toBe(false);
+    expect(n.allowPartial).toBe(false);
+    expect(graph.edges.find((e) => e.to === "exit")?.freeform).toBe(false);
+  });
+
+  it("still types a quoted 'true' boolean attribute as true (goal_gate, allow_partial, freeform)", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", goal_gate="true", allow_partial="true"] start->n->exit[freeform="true"] }',
+    );
+    const n = graph.nodes.get("n")!;
+    expect(n.goalGate).toBe(true);
+    expect(n.allowPartial).toBe(true);
+    expect(graph.edges.find((e) => e.to === "exit")?.freeform).toBe(true);
+  });
 });
 
 describe("dot/graph: hyphenated bare values", () => {

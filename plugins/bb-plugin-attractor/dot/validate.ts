@@ -156,6 +156,44 @@ function checkRetryTargets(graph: WorkflowGraph, diagnostics: Diagnostic[]): voi
   }
 }
 
+const ON_FAILURE_VALUES = new Set(["route", "exit", "succeed"]);
+const REASONING_EFFORT_VALUES = new Set(["low", "medium", "high"]);
+
+function checkEnumsAndNumerics(graph: WorkflowGraph, diagnostics: Diagnostic[]): void {
+  const checkOnFailure = (value: string | undefined, source: string): void => {
+    if (value !== undefined && !ON_FAILURE_VALUES.has(value)) {
+      diagnostics.push(
+        error(
+          "invalid-enum-value",
+          `${source} has on_failure='${value}', which is not one of route|exit|succeed`,
+        ),
+      );
+    }
+  };
+
+  checkOnFailure(graph.onFailure, "the graph");
+
+  for (const node of graph.nodes.values()) {
+    checkOnFailure(node.onFailure, `node '${node.id}'`);
+
+    if (node.reasoningEffort !== undefined && !REASONING_EFFORT_VALUES.has(node.reasoningEffort)) {
+      diagnostics.push(
+        error(
+          "invalid-enum-value",
+          `node '${node.id}' has reasoning_effort='${node.reasoningEffort}', which is not one of low|medium|high`,
+          { nodeId: node.id },
+        ),
+      );
+    }
+
+    if (node.maxVisits !== undefined && Number.isNaN(node.maxVisits)) {
+      diagnostics.push(
+        error("invalid-numeric-value", `node '${node.id}' has a non-numeric max_visits`, { nodeId: node.id }),
+      );
+    }
+  }
+}
+
 function checkRandomSelectionConditions(graph: WorkflowGraph, diagnostics: Diagnostic[]): void {
   for (const edge of graph.edges) {
     const source = graph.nodes.get(edge.from);
@@ -181,5 +219,6 @@ export function validate(graph: WorkflowGraph): Diagnostic[] {
   checkHandlerRequirements(graph, diagnostics);
   checkRetryTargets(graph, diagnostics);
   checkRandomSelectionConditions(graph, diagnostics);
+  checkEnumsAndNumerics(graph, diagnostics);
   return diagnostics;
 }
