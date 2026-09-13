@@ -1,0 +1,63 @@
+// Routine dependency updates, one at a time, each verified by the repo's
+// typecheck + test suite. "Easy" updates land as commits on the current
+// branch and go up as a PR; anything that fails verification or carries
+// breaking changes is written up under docs/dependency-upgrades/ for a
+// future manual upgrade.
+//
+// Exercises: a goal-gated baseline command with a failure route straight to
+// exit, a command whose output feeds an agent via a file, a Codex triage
+// stage (model_stylesheet with a second provider), a human gate with a
+// review_target, a bounded loop driven by numeric context conditions set
+// through attractor_result context_updates, a goal-gated final verify, and
+// a command node that opens the PR.
+//
+// Working state lives in .local/dep-updates/ (gitignored): outdated.txt,
+// queue.json (the ordered work list, one entry per logical update), and
+// plan.md (what the human approves).
+digraph DependencyUpdates {
+  graph [goal="Apply every safe dependency update and write up the rest",
+         default_permission_mode="full",
+         model_stylesheet="* { provider: claude-code; model: claude-haiku-4-5-20251001; } #triage { provider: codex; model: gpt-5.6-luna; reasoning_effort: medium; } #writeup { provider: codex; model: gpt-5.6-luna; }"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+
+  install [shape=parallelogram, label="Baseline", goal_gate=true, timeout="20m",
+           script="bun install --frozen-lockfile && bun run typecheck && bun run test"]
+
+  outdated [shape=parallelogram, label="List outdated", timeout="10m",
+            script="mkdir -p .local/dep-updates && bun outdated --filter '*' | tee .local/dep-updates/outdated.txt"]
+
+  triage [label="Triage", max_visits=3,
+          prompt="You are triaging dependency updates for this Bun-workspaces monorepo. Read .local/dep-updates/outdated.txt, the output of `bun outdated --filter '*'` (columns: Package, Current, Update, Latest, Workspace).\n\nGroup the rows into logical updates: the same package listed in several workspaces is ONE update covering all of them; packages that must move together are ONE update (react + react-dom + @types/react + @types/react-dom; tldraw + every @tldraw/* package; loro-crdt everywhere). Treat bun-types as skipped (it is pinned to the installed bun). Ignore the (peer) rows.\n\nTarget version for each update is the Latest column. For every update whose target crosses a major version, and for any minor bump of tldraw, loro-crdt, livekit-client, livekit-server-sdk, @livekit/rtc-node or vite, check the release notes for breaking changes: `npm view <pkg> repository.url` then `gh api 'repos/<owner>/<repo>/releases?per_page=30' --jq '.[] | \"## \" + .tag_name + \"\\n\" + (.body // \"\")'`, or the package's CHANGELOG. Classify each update as auto (patch or minor with no breaking changes that affect this repo) or manual (major bump; breaking changes that touch this repo; or notes you could not find). Do not edit any package.json or run bun install.\n\nWrite two files. (1) .local/dep-updates/queue.json: a JSON array in the order to attempt them (patch first, then minor, then any major classed auto); each element is {\"id\": \"<short id>\", \"packages\": [{\"name\": \"<pkg>\", \"from\": \"<current>\", \"to\": \"<target>\", \"workspaces\": [\"<workspace name>\"]}], \"kind\": \"patch|minor|major\", \"class\": \"auto|manual\", \"notes\": \"<one line: breaking-change findings or why deferred>\", \"status\": \"pending|manual|skipped\"} with status pending for auto, manual for manual, skipped for bun-types. (2) .local/dep-updates/plan.md: a short human-readable plan with a table of the updates to attempt in order (id, packages, from, to, kind) and a table of updates deferred to manual (packages, from, to, reason).\n\nReply with two lines: how many updates will be attempted, how many are deferred."]
+
+  approve [shape=hexagon, label="Approve update plan?", review_target=".local/dep-updates/plan.md"]
+
+  apply [label="Apply next update", max_visits=20, timeout="30m",
+         output_schema="routing",
+         prompt="You are applying ONE dependency update from .local/dep-updates/queue.json in this Bun-workspaces monorepo, then verifying it. Follow these steps exactly.\n\n1. Read .local/dep-updates/queue.json. Pick the FIRST entry whose status is \"pending\". If there is none, go to step 6.\n2. For each package in the entry, in each listed workspace, set that package's version in the workspace's package.json to the entry's target, keeping the existing range prefix (^ or ~ or none). Edit nothing else. Then run `bun install` once from the repo root.\n3. Run `bun run typecheck && bun run test` from the repo root.\n4. If both pass: run `git add -A && git commit -m \"chore(deps): <id> to <target version>\"` and set the entry's status to \"done\".\n5. If either fails: run `git checkout -- . && git clean -fd && bun install` to revert everything, set the entry's status to \"failed\" and its notes to a one-line summary of the first error. Never change source code to make an update pass; a failing update is reverted and recorded, nothing more.\n6. Save queue.json. Count entries with status pending (remaining) and entries with status done or failed (attempted).\n7. Call the attractor_result tool exactly once with {\"outcome\": \"succeeded\", \"context_updates\": {\"deps_remaining\": <remaining>, \"deps_attempted\": <attempted>}}. Reply with one line: <id> -> done or failed, or: nothing left."]
+
+  next [shape=diamond, label="More?"]
+
+  writeup [label="Write up", timeout="30m",
+           prompt="Read .local/dep-updates/queue.json, .local/dep-updates/plan.md and `git log --oneline origin/main..HEAD`, and run `date +%F` for today's date. Write docs/dependency-upgrades/<today>.md (create the directory) with three sections. (1) Applied: a table of the updates committed on this branch (packages, from -> to, commit). (2) Needs manual work: one subsection per entry whose status is failed or manual, giving packages, current -> target, why it was deferred (the breaking-change notes for manual entries, the recorded error for failed ones) and a suggested approach for a future manual upgrade. (3) Skipped: entries with status skipped and why. Use only the versions, notes and dates found in those files; invent nothing. Then run `git add docs/dependency-upgrades && git commit -m \"docs: dependency upgrade notes\"`. Reply with the file path."]
+
+  verify [shape=parallelogram, label="Verify branch", goal_gate=true, timeout="20m",
+          script="bun install --frozen-lockfile && bun run typecheck && bun run test"]
+
+  pr [shape=parallelogram, label="Open PR", timeout="5m",
+      script="set -e\nbranch=$(git branch --show-current)\ngit push origin \"HEAD:$branch\"\nnotes=$(ls docs/dependency-upgrades/*.md | tail -1)\n{\n  echo '## Summary'\n  echo\n  echo \"Routine dependency updates applied one at a time by the Attractor dependency-updates workflow (plugins/bb-plugin-attractor/examples/dependency-updates.dot), each verified with \\`bun run typecheck && bun run test\\`. Updates that failed verification or carry breaking changes are written up in \\`$notes\\` for manual follow-up.\"\n  echo\n  cat \"$notes\"\n  echo\n  echo 'ux-contract: none — dependency version bumps only, no interaction-bearing code changed.'\n} > .local/dep-updates/pr-body.md\nenv -u GH_TOKEN -u GITHUB_TOKEN gh pr create --base main --head \"$branch\" --title 'chore(deps): routine dependency updates' --body-file .local/dep-updates/pr-body.md"]
+
+  start -> install
+  install -> outdated [condition="outcome=succeeded"]
+  install -> exit     [condition="outcome=failed"]
+  outdated -> triage -> approve
+  approve -> apply  [label="[A] Approve"]
+  approve -> triage [label="[R] Revise"]
+  apply -> next
+  next -> apply   [condition="deps_remaining > 0 && deps_attempted < 18"]
+  next -> writeup
+  writeup -> verify
+  verify -> pr [condition="outcome=succeeded"]
+  verify -> exit [condition="outcome=failed"]
+  pr -> exit
+}

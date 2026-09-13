@@ -42,6 +42,16 @@ plan's Appendix and exercised end to end in `tests/e2e.test.ts`:
   `max_node_visits` bound so a persistently broken build terminates the run
   instead of looping forever.
 
+A fourth, real-world graph is not from the plan and is not in the e2e
+suite: `examples/dependency-updates.dot` applies this repo's outdated
+dependencies one at a time (Codex triages and writes up, Haiku applies),
+verifying each with `bun run typecheck && bun run test`, keeps the ones that
+pass as commits, writes the rest up under `docs/dependency-upgrades/`, and
+opens a PR. It shows a goal-gated baseline with a failure route to `exit`, a
+human gate with a `review_target`, a loop bounded by numeric context
+conditions set via `attractor_result` `context_updates`, and a `command`
+node that runs `gh pr create`.
+
 Validate a graph without running it: `bb attractor validate <path>`.
 
 ### Dialect at a glance
