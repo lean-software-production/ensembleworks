@@ -8,6 +8,23 @@ The plugin owns the connection, isolated checkout, durable run tracking, cards,
 completion delivery, and acceptance. The project owns the workflow, scripts,
 input schema, output schema, and acceptance instructions.
 
+## Set up a fresh project
+
+Ask **“Set up Fabro pipelines for this project.”** The `setup-fabro` skill inspects
+repository instructions, package scripts and CI, recommends an appropriate starter
+set, and copies selected recipes into the project with explicit checks:
+
+- Implement an approved plan (Ralph loop)
+- Improve code quality
+- Review a committed change without source edits
+- Fix a reproduced bug with protected regression evidence
+
+The setup script never runs discovered commands or submits a workflow. Existing
+lines are never overwritten. Generated work orders clearly mark task-specific
+inputs still needed; the skill validates schemas, graphs and isolated runner
+behavior before handoff. Upstream references and recipe provenance live in the
+skill's recipe guide. Plugin updates leave project-owned lines alone.
+
 ## Create a project line
 
 Ask the agent: **“Create a refactor line for this project.”** The bundled

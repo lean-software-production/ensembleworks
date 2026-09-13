@@ -5,6 +5,8 @@ description: Create or adapt a project-owned Fabro refactoring line, including i
 
 # Create a Fabro line
 
+For guided selection of several pipeline types in a fresh project, use setup-fabro. This skill handles a focused refactor-line creation request.
+
 The project owns the workflow. The Fabro plugin supplies execution, run cards,
 completion delivery, and acceptance. Creating a line does not submit it.
 

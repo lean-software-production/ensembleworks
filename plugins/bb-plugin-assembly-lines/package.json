@@ -56,7 +56,8 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
-    "build": "bb plugin build ."
+    "test": "npm run test:recipes && vitest run",
+    "build": "bb plugin build .",
+    "test:recipes": "node --test skills/setup-fabro/scripts/setup-project.test.mjs"
   }
 }
