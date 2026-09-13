@@ -12,6 +12,7 @@ import { drawCreatesADrawShape } from './contracts/draw-creates-a-draw-shape.js'
 import { droppingAnImageCreatesAnImageShape } from './contracts/dropping-an-image-creates-an-image-shape.js'
 import { duplicateReidsAndOffsets } from './contracts/duplicate-reids-and-offsets.js'
 import { editingIndicator } from './contracts/editing-indicator.js'
+import { enterKeyEditPreservesText } from './contracts/enter-key-edit-preserves-text.js'
 import { enterKeyEditsSelection } from './contracts/enter-key-edits-selection.js'
 import { lineCreatesALineShape } from './contracts/line-creates-a-line-shape.js'
 import { malformedClipboardRejected } from './contracts/malformed-clipboard-rejected.js'
@@ -43,4 +44,5 @@ export const CONTRACTS: readonly Contract[] = [
   switchingPageChangesRenderedShapes,
   enterKeyEditsSelection,
   noteCreateBeginsEditing,
+  enterKeyEditPreservesText,
 ]

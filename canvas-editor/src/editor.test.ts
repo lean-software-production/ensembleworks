@@ -1110,4 +1110,21 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: EndEdit\'s auto-delete undo/redo round-trips')
 }
 
+{
+  // Validator-blocking advisory (create-edit-flow FIXER task): EndEdit's
+  // auto-delete must not leave the just-deleted shape's id stranded in
+  // `selection` -- DeleteShapes' own callers always pair a delete with
+  // SetSelection([]) (tool-loop.ts's deleteSelectionIntents); EndEdit's
+  // internal delete has no such caller, so the clear must be part of
+  // EndEdit's own result.
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:dangling-selection', { kind: 'text' }) })
+  editor.apply({ type: 'SetSelection', ids: ['shape:dangling-selection'] })
+  editor.apply({ type: 'BeginEdit', id: 'shape:dangling-selection' })
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:dangling-selection'), undefined, 'sanity: the empty text shape was deleted')
+  assert.deepEqual([...editor.get().selection], [], 'the deleted shape id must not remain in selection')
+  console.log('ok: EndEdit\'s auto-delete also clears the deleted id out of selection')
+}
+
 console.log('ok: canvas-editor editor + intents')

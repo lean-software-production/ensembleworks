@@ -886,15 +886,23 @@ export class Editor {
         return { state: { ...state, editingId: intent.id }, docMutated: false, stateChanged: true }
 
       case 'EndEdit': {
-        // tldraw parity (TextShapeUtil.onEditEnd, node_modules/tldraw/src/
-        // lib/shapes/text/TextShapeUtil.tsx:249-254): a `text` shape left
-        // with no (trimmed) content when editing ends is deleted, not kept
-        // as an invisible, still-selectable, still-synced empty box
-        // (TextShape.tsx renders a transparent, border-less div for one).
-        // `note` is deliberately EXCLUDED — NoteShapeUtil has no such
-        // onEditEnd hook in v1; a sticky's colored body is a real object
-        // even with no text, unlike a bare text shape whose only visible
-        // content IS its text. Reads `state.editingId` (the shape ABOUT to
+        // tldraw-INSPIRED, not literal parity (validator advisory,
+        // create-edit-flow FIXER task — TextShapeUtil.onEditEnd,
+        // node_modules/tldraw/src/lib/shapes/text/TextShapeUtil.tsx:249-256,
+        // uses `.trimEnd()`, so a leading-whitespace-only text shape survives
+        // there; this uses `.trim()`, which also treats LEADING whitespace
+        // as empty and deletes it too — a deliberate divergence, not an
+        // oversight: v1 has no way to author a text shape whose only content
+        // is leading whitespace on purpose, so the stricter check is simpler
+        // and arguably better without losing anything a real user could
+        // want). a `text` shape left with no (trimmed) content when editing
+        // ends is deleted, not kept as an invisible, still-selectable,
+        // still-synced empty box (TextShape.tsx renders a transparent,
+        // border-less div for one). `note` is deliberately EXCLUDED —
+        // NoteShapeUtil has no such onEditEnd hook in v1; a sticky's colored
+        // body is a real object even with no text, unlike a bare text shape
+        // whose only visible content IS its text. Reads `state.editingId`
+        // (the shape ABOUT to
         // stop being edited), never `intent` (EndEdit carries no id of its
         // own — the editing shape is state, not part of the intent).
         const editingId = state.editingId
@@ -916,7 +924,18 @@ export class Editor {
         const undo: InverseOp[] = orderParentBeforeChild([...toRestore.values()], toRestore)
           .map((s) => ({ op: 'putShape', shape: s }))
         const redo: InverseOp[] = [{ op: 'deleteShape', id: editingId }]
-        return { state: nextState, docMutated: true, stateChanged: true, undo, redo }
+        // DANGLING-SELECTION FIX (validator advisory, create-edit-flow FIXER
+        // task): DeleteShapes' own callers always pair a delete with
+        // SetSelection([]) (tool-loop.ts's deleteSelectionIntents) so a
+        // deleted shape's id never survives in `selection` -- this internal
+        // auto-delete had no such caller, so strip the just-deleted id out
+        // of `nextState.selection` here, the same way. A plain filter (not a
+        // blanket clear-to-empty): a multi-select that happened to include
+        // the now-deleted shape keeps every OTHER still-live id selected.
+        const selection = nextState.selection.has(editingId)
+          ? new Set([...nextState.selection].filter((id) => id !== editingId))
+          : nextState.selection
+        return { state: { ...nextState, selection }, docMutated: true, stateChanged: true, undo, redo }
       }
 
       case 'SetIndex': {

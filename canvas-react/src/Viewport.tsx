@@ -109,8 +109,20 @@ import { keyEventToInput, pointerEventToInput, wheelEventToInput } from './dom-e
 export interface ViewportProps {
   /** Called once per normalized input event, in the order the browser
    * delivered the underlying DOM events. The renderer never batches,
-   * reorders, or drops events here. */
-  readonly onInput: (event: InputEvent) => void
+   * reorders, or drops events here.
+   *
+   * RETURN VALUE (create-edit-flow FIXER task): for a `keydown`, returning
+   * `true` tells this renderer to call the native event's `preventDefault()`
+   * — needed for e.g. select.ts's Enter-to-edit branch, whose `BeginEdit`
+   * intent synchronously mounts TextEditor's `autoFocus`-ed textarea WITHIN
+   * this same keydown; without suppressing the browser's own default action,
+   * "Enter inserts a newline" lands on that freshly-focused textarea instead
+   * of doing nothing, stamping a stray `\n` into the shape's text on every
+   * keyboard-driven edit-entry (reproduced and pinned by the
+   * `enter-key-edit-preserves-text` browser contract). Ignored for
+   * `keyup`/every other event type — `handleKey` only checks it for
+   * `keydown`, and nothing here calls it eagerly for other event kinds. */
+  readonly onInput: (event: InputEvent) => boolean | void
   /** The abandonment-gap hook — see module header. Optional: a caller with
    * no in-flight-gesture cancellation wired yet (e.g. this unit's own tests)
    * simply omits it. */
@@ -174,7 +186,13 @@ export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, c
   }
 
   function handleKey(e: KeyboardEvent<HTMLDivElement>): void {
-    onInput(keyEventToInput({ type: e.type as 'keydown' | 'keyup', key: e.key, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, timeStamp: e.timeStamp }))
+    const shouldPreventDefault = onInput(keyEventToInput({ type: e.type as 'keydown' | 'keyup', key: e.key, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, timeStamp: e.timeStamp }))
+    // See ViewportProps.onInput's RETURN VALUE doc comment above — only
+    // `keydown` ever asks for this (Enter-to-edit's stray-newline fix); a
+    // `keyup` caller returning `true` would be a caller bug, not something
+    // to guard against here specifically, but gating on `e.type` keeps this
+    // narrowly scoped to the one real use rather than a blanket preventDefault.
+    if (shouldPreventDefault && e.type === 'keydown') e.preventDefault()
   }
 
   return (

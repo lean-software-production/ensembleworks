@@ -967,6 +967,32 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				// in-flight gesture for `cancelAndReset` to abandon.
 				setActiveToolId('select')
 			}
+			// STRAY-NEWLINE FIX (validator-blocking, create-edit-flow FIXER
+			// task): select.ts's Enter-to-edit branch (tools/select.ts's own
+			// ENTER-TO-EDIT comment) fires `BeginEdit` from a keydown -- but the
+			// native Enter keydown that carried it is never `preventDefault`-ed,
+			// and TextEditor.tsx's textarea takes `autoFocus` SYNCHRONOUSLY as
+			// part of applying that same BeginEdit (the intent flips editingId,
+			// this component re-renders and mounts the textarea before the
+			// ORIGINAL keydown's browser-native default-action phase runs) -- so
+			// "Enter inserts a newline" lands on the freshly-focused textarea
+			// instead of doing nothing, silently prepending a newline to the
+			// shape's text on every keyboard-driven edit-entry (pinned by the
+			// `enter-key-edit-preserves-text` browser contract's RED). Detected
+			// POST-HOC by comparing editingId before/after this exact dispatch
+			// (same before/after-editingId shape `shouldFallBackToSelect` already
+			// uses above) rather than re-deriving select.ts's own selection/
+			// isTextCapableKind predicate here: only select.ts's Enter branch can
+			// ever flip editingId from null to non-null IN RESPONSE TO a keydown
+			// (every other BeginEdit source -- double-click, a create tool's
+			// finalizeIntents -- fires from a pointer event, never a keydown), so
+			// this read is exact, not a heuristic, and can never drift out of
+			// sync with select.ts's own gating. Viewport.tsx's handleKey calls
+			// `e.preventDefault()` on this `true` (see its onInput doc comment) --
+			// still within the SAME synchronous keydown dispatch, so the native
+			// default action is suppressed in time despite running after the
+			// state update above.
+			return event.type === 'keydown' && event.key === 'Enter' && editingIdBeforeDispatch === null && editor.get().editingId !== null
 		},
 		[editor, tools, presencePublisher, handleGlobalShortcut],
 	)
