@@ -1,0 +1,38 @@
+{
+  "name": "bb-plugin-attractor",
+  "version": "0.1.0",
+  "type": "module",
+  "engines": {
+    "bb": ">=0.43",
+    "bbPluginSdk": ">=0.4.84"
+  },
+  "bb": {
+    "name": "Attractor",
+    "description": "Runs Graphviz DOT workflow definitions (the Attractor dialect) with BB threads as the agent backend, and renders the workflow DAG with live execution state.",
+    "branding": {
+      "icon": "Workflow"
+    },
+    "server": "./server.ts",
+    "app": "./app.tsx",
+    "host": "./host.ts",
+    "skills": ["skills"]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "build": "bb plugin build ."
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.4.84",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.2.7"
+  }
+}
