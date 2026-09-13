@@ -12,8 +12,8 @@ import type { RunStatus, StageStatus } from "./store";
 const id = z.string().min(1).max(200);
 const json = z.json();
 
-export const runStatusSchema: z.ZodType<RunStatus> = z.enum(["running", "succeeded", "failed", "cancelled"]);
-export const stageStatusSchema: z.ZodType<StageStatus> = z.enum(["running", "succeeded", "failed", "skipped"]);
+export const runStatusSchema: z.ZodType<RunStatus> = z.enum(["running", "blocked", "succeeded", "failed", "cancelled"]);
+export const stageStatusSchema: z.ZodType<StageStatus> = z.enum(["running", "blocked", "succeeded", "failed", "skipped"]);
 export const outcomeStatusSchema = z.enum(["succeeded", "failed", "partially_succeeded", "skipped"]);
 
 export const runSchema = z.object({
@@ -94,3 +94,39 @@ export const rpcContract = defineRpcContract({
   // runId exists to a caller that doesn't own it.
   stopRun: { input: selection, output: z.object({ stopped: z.boolean() }) },
 });
+
+// -----------------------------------------------------------------------
+// Human gate (T6) — the JSON shape passed as `bb.ui.requestInput`'s payload
+// and read back by the `pendingInteraction` renderer (ui/human-gate.tsx),
+// plus the JSON `value` shape that renderer's `submit()` sends back and
+// server/human.ts validates. Shared here (rather than only living inside
+// handlers/human.ts / server/human.ts) so the renderer never has to import
+// past server/contracts.ts, matching every other ui/*.tsx module.
+// -----------------------------------------------------------------------
+
+export const HUMAN_GATE_RENDERER_ID = "attractor-human-gate";
+
+export const humanGateOptionSchema = z.object({
+  raw: z.string(),
+  key: z.string().nullable(),
+  text: z.string(),
+  to: z.string(),
+});
+
+export const humanGatePayloadSchema = z.object({
+  runId: id,
+  nodeId: z.string(),
+  question: z.string(),
+  options: z.array(humanGateOptionSchema),
+  freeform: z.boolean(),
+  questionType: z.string().nullable(),
+});
+
+export const humanGateValueSchema = z.union([
+  z.object({ kind: z.literal("choice"), raw: z.string() }).strict(),
+  z.object({ kind: z.literal("text"), text: z.string() }).strict(),
+]);
+
+export type HumanGateOption = z.infer<typeof humanGateOptionSchema>;
+export type HumanGatePayload = z.infer<typeof humanGatePayloadSchema>;
+export type HumanGateValue = z.infer<typeof humanGateValueSchema>;

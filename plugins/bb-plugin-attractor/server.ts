@@ -11,6 +11,7 @@ import type { BbPluginApi, PluginAgentToolResult } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { hostContract } from "./host-contract";
 import { createThreadAgentBackend } from "./server/backend";
+import { createThreadHumanInterviewer } from "./server/human";
 import { rpcContract } from "./server/contracts";
 import { createService, resolveWorkflowPath } from "./server/service";
 import { RUN_MIGRATIONS, RunStore } from "./server/store";
@@ -66,11 +67,12 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   const store = new RunStore(db);
 
   const agentBackend = createThreadAgentBackend(bb);
+  const humanInterviewer = createThreadHumanInterviewer(bb);
   const execClient = bb.hosts.experimental_client({ contract: hostContract });
   const lifecycle = new AbortController();
   bb.onDispose(() => lifecycle.abort());
 
-  const service = createService({ bb, store, agentBackend, execClient });
+  const service = createService({ bb, store, agentBackend, execClient, humanInterviewer });
 
   async function resolveSource(input: { source?: string; path?: string }, threadId: string): Promise<string> {
     if (input.source !== undefined) return input.source;
@@ -162,7 +164,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   });
 
   const usage =
-    "bb attractor validate <path> | run <path> [--input k=v ...] [--title t] | status <runId> | stages <runId> | events <runId> [--since seq] | stop <runId>\nRun within the originating BB thread.";
+    "bb attractor validate <path> | run <path> [--input k=v ...] [--title t] | status <runId> | stages <runId> | events <runId> [--since seq] | stop <runId> | answer <runId> <label|text>\nRun within the originating BB thread.";
 
   function parseInputFlags(argv: string[]): { inputs: Record<string, string>; rest: string[] } {
     const inputs: Record<string, string> = {};
@@ -195,6 +197,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
       { name: "stages", summary: "List a run's stages", usage: "bb attractor stages <runId>" },
       { name: "events", summary: "List a run's events", usage: "bb attractor events <runId> [--since seq]" },
       { name: "stop", summary: "Stop a running run", usage: "bb attractor stop <runId>" },
+      { name: "answer", summary: "Answer a run's blocked human gate", usage: "bb attractor answer <runId> <label|text>" },
     ],
     async run(argv, ctx) {
       try {
@@ -223,6 +226,9 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
         } else if (command === "stop" && rest[0]) {
           if (!owned(rest[0], ctx.threadId).run) throw new Error(`no such run: ${rest[0]}`);
           result = service.stopRun(rest[0]);
+        } else if (command === "answer" && rest[0] && rest.length > 1) {
+          if (!owned(rest[0], ctx.threadId).run) throw new Error(`no such run: ${rest[0]}`);
+          result = await service.answerHumanGate(rest[0], rest.slice(1).join(" "));
         } else {
           throw new Error(usage);
         }

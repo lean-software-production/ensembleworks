@@ -91,6 +91,9 @@ export type NodeStatus = GraphNodeView["status"];
 const STATUS_COLOR: Record<NonNullable<NodeStatus> | "pending", { fill: string; stroke: string }> = {
   pending: { fill: "#f1f5f9", stroke: "#94a3b8" },
   running: { fill: "#dbeafe", stroke: "#2563eb" },
+  // T6: a human gate waiting on its answer — distinct from "running" so the
+  // DAG visibly flags where a run is stuck on a person, not just busy.
+  blocked: { fill: "#fef3c7", stroke: "#d97706" },
   succeeded: { fill: "#dcfce7", stroke: "#16a34a" },
   failed: { fill: "#fee2e2", stroke: "#dc2626" },
   skipped: { fill: "#f5f5f4", stroke: "#a8a29e" },

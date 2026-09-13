@@ -18,8 +18,10 @@ import { createPromptHandler } from "../handlers/prompt";
 import { createCommandHandler, type CommandExecInput, type CommandExecResult } from "../handlers/command";
 import { conditionalHandler } from "../handlers/conditional";
 import { forkHandler, joinHandler } from "../handlers/parallel";
+import { createHumanHandler, type HumanInterviewer } from "../handlers/human";
 import { startHandler, exitHandler } from "../handlers/start-exit";
 import type { AgentBackend } from "./backend";
+import { HUMAN_GATE_RENDERER_ID, humanGatePayloadSchema, humanGateValueSchema, type HumanGatePayload } from "./contracts";
 import { DEFAULT_TIMEOUT_MS, type ExecOutput } from "../host-contract";
 import { RunStore, type Run, type Stage } from "./store";
 
@@ -149,6 +151,23 @@ function applyEventToStore(store: RunStore, runId: string, event: RunEvent): voi
       store.setStageThreadId(runId, nodeId, visit, event.threadId);
       return;
     }
+    // T6: a human gate is waiting on its answer — surface that on both the
+    // stage and the run ("run status blocked while waiting"), and clear it
+    // back to "running" once the gate is answered. Neither status is ever
+    // terminal: recordFinish (called once the whole run ends) always
+    // overwrites the run's status with succeeded/failed/cancelled.
+    case "human.requested": {
+      const visit = parseVisitFromStageId(event.stageId, event.nodeId);
+      store.setStageStatus(runId, event.nodeId, visit, "blocked");
+      store.setStatus(runId, "blocked");
+      return;
+    }
+    case "human.answered": {
+      const visit = parseVisitFromStageId(event.stageId, event.nodeId);
+      store.setStageStatus(runId, event.nodeId, visit, "running");
+      store.setStatus(runId, "running");
+      return;
+    }
     default:
       return;
   }
@@ -188,8 +207,16 @@ export interface ServiceDeps {
   store: RunStore;
   agentBackend: AgentBackend;
   execClient: ExecClient;
+  /** Optional: falls back to an interviewer that fails any human gate clearly, for tests/callers that never reach one. */
+  humanInterviewer?: HumanInterviewer;
   clock?: { now(): number; sleep(ms: number, signal: AbortSignal): Promise<void> };
 }
+
+const UNCONFIGURED_HUMAN_INTERVIEWER: HumanInterviewer = {
+  async ask() {
+    throw new Error("no human interviewer is configured for this plugin instance");
+  },
+};
 
 export interface CreateRunInput {
   source: string;
@@ -210,6 +237,7 @@ interface RunEnvironmentContext {
 
 export function createService(deps: ServiceDeps) {
   const { bb, store, agentBackend, execClient } = deps;
+  const humanInterviewer = deps.humanInterviewer ?? UNCONFIGURED_HUMAN_INTERVIEWER;
   const clock = deps.clock ?? REAL_CLOCK;
   const controllers = new Map<string, AbortController>();
 
@@ -241,9 +269,7 @@ export function createService(deps: ServiceDeps) {
       conditional: conditionalHandler,
       parallel: forkHandler,
       "parallel.fan_in": joinHandler,
-      // T6 implements the real human-gate handler (pendingInteraction + bb.ui.requestInput).
-      // A graph reaching a human node before then fails clearly rather than hanging forever.
-      human: { async run() { return { status: "failed", failureReason: "human gates are not implemented yet (T6)" }; } },
+      human: createHumanHandler(humanInterviewer, { threadId: envCtx.threadId }),
     };
   }
 
@@ -337,6 +363,49 @@ export function createService(deps: ServiceDeps) {
     return store.getRun(runId);
   }
 
+  // Matches `answer` against an option's raw label, its accelerator-stripped
+  // display text, or its accelerator key (all case-insensitively), so `bb
+  // attractor answer <runId> approve` and `... A` both work as well as the
+  // literal edge label. Falls back to free text only when the gate's
+  // `freeform` edge allows it.
+  function resolveHumanAnswerValue(payload: HumanGatePayload, answer: string) {
+    const trimmed = answer.trim();
+    const lower = trimmed.toLowerCase();
+    const match = payload.options.find((o) => o.raw === trimmed || o.text.toLowerCase() === lower || (o.key !== null && o.key.toLowerCase() === lower));
+    if (match) return humanGateValueSchema.parse({ kind: "choice", raw: match.raw });
+    if (payload.freeform) return humanGateValueSchema.parse({ kind: "text", text: answer });
+    return null;
+  }
+
+  // Resolves the `bb.ui.requestInput` interaction `server/human.ts` opened
+  // for this run's human gate — an alternative to clicking a rendered
+  // button, for `bb attractor answer <runId> <label|text>` (T6). Not
+  // documented among the plan's "BB plugin SDK notes" (which only covers the
+  // request side, `bb.ui.requestInput`); see README "Deviations from the
+  // plan" for why `bb.sdk.threads.interactions.list`/`respond` is the right,
+  // faithful way to resolve one from outside the app's own renderer.
+  async function answerHumanGate(runId: string, answer: string): Promise<{ answered: boolean; reason?: string }> {
+    const run = store.tryGetRun(runId);
+    if (!run) return { answered: false, reason: "no such run" };
+    const pending = await bb.sdk.threads.interactions.list({ threadId: run.threadId });
+    for (const interaction of pending) {
+      // `payload.kind === "plugin"` uniquely identifies a `PluginPendingInteraction`
+      // per the SDK's own schema (only that variant sets it), but TypeScript
+      // can't correlate a discriminant nested one field deep across a union
+      // this wide — hence the cast rather than a narrowed `interaction.origin`.
+      if (interaction.payload.kind !== "plugin") continue;
+      const origin = interaction.origin as { kind: "plugin"; pluginId: string; rendererId: string } | undefined;
+      if (!origin || origin.rendererId !== HUMAN_GATE_RENDERER_ID) continue;
+      const parsedPayload = humanGatePayloadSchema.safeParse(interaction.payload.data);
+      if (!parsedPayload.success || parsedPayload.data.runId !== runId) continue;
+      const value = resolveHumanAnswerValue(parsedPayload.data, answer);
+      if (!value) return { answered: false, reason: `"${answer}" matches no option and this gate does not accept free text` };
+      await bb.sdk.threads.interactions.respond({ interactionId: interaction.id, threadId: run.threadId, value });
+      return { answered: true };
+    }
+    return { answered: false, reason: "no pending human gate for this run" };
+  }
+
   async function resumeRunningRuns(): Promise<void> {
     for (const runId of store.listRunningRunIds()) {
       const run = store.getRun(runId);
@@ -351,7 +420,7 @@ export function createService(deps: ServiceDeps) {
     }
   }
 
-  return { createAndStartRun, getRun, listRuns, getGraph, getEvents, stopRun, resumeRunningRuns };
+  return { createAndStartRun, getRun, listRuns, getGraph, getEvents, stopRun, answerHumanGate, resumeRunningRuns };
 }
 
 export type Service = ReturnType<typeof createService>;

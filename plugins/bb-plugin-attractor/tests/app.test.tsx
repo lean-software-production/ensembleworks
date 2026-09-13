@@ -74,6 +74,40 @@ describe("Attractor app", () => {
     expect(app.threadPanelActions.map((a) => ({ id: a.id, title: a.title }))).toEqual([{ id: "attractor-run", title: "Attractor run" }]);
   });
 
+  it("registers the human-gate pendingInteraction renderer (T6)", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    expect(app.pendingInteractions.map((p) => p.id)).toEqual(["attractor-human-gate"]);
+  });
+
+  it("renders the human-gate pendingInteraction with its options as buttons", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const submit = () => Promise.resolve();
+    const slot = renderSlot(
+      app.pendingInteractions[0]!,
+      {
+        interaction: {
+          id: "interaction-1",
+          threadId: "thread-1",
+          title: "Approve plan?",
+          createdAt: 0,
+          expiresAt: null,
+          payload: {
+            runId: "run-1",
+            nodeId: "gate",
+            question: "Approve plan?",
+            options: [{ raw: "[A] Approve", key: "A", text: "Approve", to: "exit" }],
+            freeform: false,
+            questionType: null,
+          },
+        },
+        submit,
+        cancel: () => Promise.resolve(),
+      },
+      { rpc: baseRpc() },
+    );
+    expect(slot.getByRole("button", { name: "[A] Approve" })).toBeTruthy();
+  });
+
   it("shows an error when the directive has no run id", async () => {
     const app = await loadPluginApp(() => import("../app"));
     const slot = renderSlot(
@@ -133,6 +167,17 @@ describe("Attractor app", () => {
     const stopButton = await slot.findByRole("button", { name: /stop/i });
     stopButton.click();
     await waitFor(() => expect(stopCalledWith).toEqual({ runId: "run-1", threadId: "thread-1" }));
+  });
+
+  it("still offers a Stop button while the run is blocked on a human gate (T6)", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.threadPanelActions[0]!,
+      { threadId: "thread-1", params: { runId: "run-1" } },
+      { rpc: baseRpc({ run: { ...RUN, status: "blocked" } }) },
+    );
+    await waitFor(() => expect(slot.container.querySelector("[data-run-status]")?.textContent).toBe("blocked"));
+    expect(slot.queryByRole("button", { name: /stop/i })).toBeTruthy();
   });
 
   it("does not offer a Stop button once the run has finished", async () => {

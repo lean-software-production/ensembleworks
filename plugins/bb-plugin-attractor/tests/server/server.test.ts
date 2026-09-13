@@ -1,6 +1,39 @@
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "../../server";
+import { HUMAN_GATE_RENDERER_ID } from "../../server/contracts";
+
+// `bb.ui.requestInput`'s pending interactions (harness.pendingInteractions /
+// submitInteraction) and `bb.sdk.threads.interactions.*` are two independent,
+// unstubbed-by-default mechanisms in createFakePluginHost — unlike the real
+// host, the fake doesn't wire one to the other. This bridges them for a test
+// host so `bb attractor answer` (which only ever talks to
+// `threads.interactions.list`/`respond`, per server/service.ts's
+// `answerHumanGate`) can resolve a gate that a real `attractor_run` opened
+// via `bb.ui.requestInput`, exercising the whole path end to end.
+function bridgeHumanGateInteractions(host: ReturnType<typeof createFakePluginHost>) {
+  host.harness.sdk.stub("threads.interactions.list", async ({ threadId }: { threadId: string }) =>
+    host.harness.pendingInteractions
+      .filter((p) => p.threadId === threadId && p.rendererId === HUMAN_GATE_RENDERER_ID)
+      .map((p) => ({
+        id: p.id,
+        threadId: p.threadId,
+        createdAt: Date.now(),
+        expiresAt: null,
+        resolvedAt: null,
+        status: "pending" as const,
+        statusReason: null,
+        turnId: null,
+        resolution: null,
+        origin: { kind: "plugin" as const, pluginId: "attractor", rendererId: p.rendererId },
+        payload: { kind: "plugin" as const, title: p.title, data: p.payload },
+      })),
+  );
+  host.harness.sdk.stub("threads.interactions.respond", async ({ interactionId, value }: { interactionId: string; value: unknown }) => {
+    host.harness.submitInteraction(interactionId, value as never);
+    return {};
+  });
+}
 
 const hosts: ReturnType<typeof createFakePluginHost>[] = [];
 afterEach(async () => {
@@ -346,5 +379,65 @@ describe("attractor server plugin", () => {
     // re-executes "start".
     const stages = JSON.parse((await reloaded.harness.behavior.runCli(["stages", runId], { threadId: "thread-1" })).stdout);
     expect(stages.filter((s: { nodeId: string }) => s.nodeId === "start")).toHaveLength(1);
+  });
+
+  const HUMAN_GATE_SOURCE = `digraph G {
+    start [shape=Mdiamond]
+    exit  [shape=Msquare]
+    revise [label="Revise", prompt="Revise the plan."]
+    gate  [shape=hexagon, label="Approve plan?"]
+    start -> gate
+    gate -> exit   [label="[A] Approve"]
+    gate -> revise [label="R) Revise"]
+    revise -> exit
+  }`;
+
+  it("bb attractor answer resolves a run's blocked human gate end to end, routing by the chosen label", async () => {
+    const host = makeHost();
+    bridgeHumanGateInteractions(host);
+    await plugin(host.bb);
+
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: HUMAN_GATE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(async () => {
+      const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+      expect(status).toBe("blocked");
+    });
+
+    const answered = await host.harness.behavior.runCli(["answer", runId, "approve"], { threadId: "thread-1" });
+    expect(answered.exitCode).toBe(0);
+    expect(JSON.parse(answered.stdout)).toEqual({ answered: true });
+
+    await waitForTerminalStatus(host, runId);
+    const finalStatus = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+    expect(finalStatus).toBe("succeeded");
+    const stages = JSON.parse((await host.harness.behavior.runCli(["stages", runId], { threadId: "thread-1" })).stdout);
+    expect(stages.map((s: { nodeId: string }) => s.nodeId)).toEqual(["start", "gate", "exit"]);
+  });
+
+  it("bb attractor answer is scoped to the owning thread and rejects an unrecognized label", async () => {
+    const host = makeHost();
+    bridgeHumanGateInteractions(host);
+    await plugin(host.bb);
+
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: HUMAN_GATE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(async () => {
+      const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+      expect(status).toBe("blocked");
+    });
+
+    const foreignAnswer = await host.harness.behavior.runCli(["answer", runId, "approve"], { threadId: "another-thread" });
+    expect(foreignAnswer.exitCode).toBe(1);
+
+    const badAnswer = await host.harness.behavior.runCli(["answer", runId, "yolo"], { threadId: "thread-1" });
+    expect(JSON.parse(badAnswer.stdout)).toMatchObject({ answered: false });
+
+    // Still blocked — neither the foreign nor the unrecognized answer unwedged it.
+    const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+    expect(status).toBe("blocked");
+
+    // Clean up so the pending bb.ui.requestInput doesn't outlive the test.
+    const answered = await host.harness.behavior.runCli(["answer", runId, "approve"], { threadId: "thread-1" });
+    expect(JSON.parse(answered.stdout)).toEqual({ answered: true });
+    await waitForTerminalStatus(host, runId);
   });
 });

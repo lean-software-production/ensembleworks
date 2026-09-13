@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { parseWorkflowGraph, type WorkflowGraph } from "../dot/graph";
 import { runEngine } from "../engine/engine";
 import type { Checkpoint, Handler, HandlerRegistry, Outcome, RunEvent } from "../engine/types";
+import { createHumanHandler } from "../handlers/human";
 import { PLAN_IMPLEMENT_REVIEW, PARALLEL_REVIEW } from "./fixtures/appendix-graphs";
 
 // ---------------------------------------------------------------------------
@@ -772,6 +773,96 @@ describe("engine: context writes never pollute Object.prototype", () => {
     const probe = {} as Record<string, unknown>;
     expect(probe.polluted2).toBeUndefined();
     expect(result.status).toBe("failed");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Human gate routing (T6), driven end to end through the real engine with a
+// fake HumanInterviewer standing in for server/human.ts's real bb.ui-backed
+// one.
+// ---------------------------------------------------------------------------
+
+describe("engine: human gate routing", () => {
+  const HUMAN_GATE_GRAPH = `digraph G {
+    start [shape=Mdiamond]
+    exit  [shape=Msquare]
+    revise [label="Revise"]
+    gate  [shape=hexagon, label="Approve plan?"]
+    start -> gate
+    gate -> exit   [label="[A] Approve"]
+    gate -> revise [label="R) Revise"]
+    revise -> exit
+  }`;
+
+  it("routes to the edge matching the human's chosen label via preferred_label", async () => {
+    const graph = graphFrom(HUMAN_GATE_GRAPH);
+    const human = createHumanHandler(
+      { ask: async () => ({ kind: "choice", option: { raw: "[A] Approve", key: "A", text: "Approve", to: "exit" } }) },
+      { threadId: "thread-1" },
+    );
+    const { events, onEvent } = collector();
+    const { clock } = makeClock();
+    const result = await runEngine({ graph, handlers: baseHandlers({ human }), runId: "r", clock, signal: NEVER_ABORT, onEvent });
+
+    expect(result.status).toBe("succeeded");
+    expect(events).toContainEqual(expect.objectContaining({ type: "edge.selected", from: "gate", to: "exit", reason: "preferred_label" }));
+    expect(events.filter((e) => e.type === "human.requested")).toHaveLength(1);
+    expect(events.filter((e) => e.type === "human.answered")).toHaveLength(1);
+  });
+
+  it("routes to a different edge when the human picks the other option", async () => {
+    const graph = graphFrom(HUMAN_GATE_GRAPH);
+    const human = createHumanHandler(
+      { ask: async () => ({ kind: "choice", option: { raw: "R) Revise", key: "R", text: "Revise", to: "revise" } }) },
+      { threadId: "thread-1" },
+    );
+    const { events, onEvent } = collector();
+    const { clock } = makeClock();
+    const result = await runEngine({ graph, handlers: baseHandlers({ human }), runId: "r", clock, signal: NEVER_ABORT, onEvent });
+
+    expect(result.status).toBe("succeeded");
+    expect(events).toContainEqual(expect.objectContaining({ type: "edge.selected", from: "gate", to: "revise", reason: "preferred_label" }));
+  });
+
+  it("falls back to the human.default_choice context value on a timeout and still routes correctly", async () => {
+    const graph = graphFrom(HUMAN_GATE_GRAPH);
+    const human = createHumanHandler({ ask: async () => ({ kind: "timeout" }) }, { threadId: "thread-1" });
+    const { clock } = makeClock();
+    const result = await runEngine({
+      graph,
+      handlers: baseHandlers({ human }),
+      runId: "r",
+      initialContext: { human: { default_choice: "[A] Approve" } },
+      clock,
+      signal: NEVER_ABORT,
+      onEvent: () => {},
+    });
+
+    expect(result.status).toBe("succeeded");
+  });
+
+  it("fails the run when the human gate times out with nothing to fall back to", async () => {
+    // `on_failure="exit"` so the gate's failed outcome actually ends the run
+    // (step 5) instead of falling through to step 6's unconditional edges —
+    // both outgoing edges here carry only a `label`, no `condition`, so
+    // without this they'd still be picked as "unconditional" per the routing
+    // cascade even though the stage itself failed.
+    const graph = graphFrom(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      revise [label="Revise"]
+      gate  [shape=hexagon, label="Approve plan?", on_failure="exit"]
+      start -> gate
+      gate -> exit   [label="[A] Approve"]
+      gate -> revise [label="R) Revise"]
+      revise -> exit
+    }`);
+    const human = createHumanHandler({ ask: async () => ({ kind: "timeout" }) }, { threadId: "thread-1" });
+    const { clock } = makeClock();
+    const result = await runEngine({ graph, handlers: baseHandlers({ human }), runId: "r", clock, signal: NEVER_ABORT, onEvent: () => {} });
+
+    expect(result.status).toBe("failed");
+    expect(result.finalOutcome?.failureReason).toMatch(/default_choice/);
   });
 });
 

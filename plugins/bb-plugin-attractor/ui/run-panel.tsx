@@ -100,7 +100,7 @@ export function RunPanel({ runId, threadId, mode }: RunPanelProps) {
   const navigate = useBbNavigate();
   const { run, stages, graph, events, loaded, error, refresh } = useRunData(rpc, runId, threadId);
   const [expanded, setExpanded] = useState(false);
-  const now = useNow(run?.status === "running");
+  const now = useNow(run?.status === "running" || run?.status === "blocked");
 
   if (error) return <p role="alert">Could not load Attractor run: {error}</p>;
   if (!loaded) return <p role="status">Loading Attractor run…</p>;
@@ -139,7 +139,7 @@ export function RunPanel({ runId, threadId, mode }: RunPanelProps) {
     <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 12 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <RunHeader run={run} graph={graph} stages={stages} now={now} />
-        {run.status === "running" ? (
+        {run.status === "running" || run.status === "blocked" ? (
           <button type="button" onClick={() => rpc.call("stopRun", { runId, threadId }).then(refresh)}>
             Stop
           </button>

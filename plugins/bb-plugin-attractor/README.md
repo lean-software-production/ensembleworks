@@ -13,10 +13,11 @@ contracts, and the task breakdown this plugin is built against.
 
 ## Status
 
-Through task T5. `app.tsx` now registers the real `attractor-run` message
-directive and thread-panel action, backed by the DAG/stage-list/event-
-timeline UI described below (human gates still land in T6). `server.ts` and
-`host.ts` are the T4 integration described below.
+Through task T6. `handlers/human.ts` + `server/human.ts` + `ui/human-gate.tsx`
+implement human gates end to end (see the T6 section below); `app.tsx`
+registers the real `attractor-run` message directive and thread-panel
+action, backed by the DAG/stage-list/event-timeline UI described below.
+`server.ts` and `host.ts` are the T4 integration described below.
 T2 adds the **DOT front-end** — parsing and validating workflow graphs, with
 no execution yet:
 
@@ -252,7 +253,76 @@ directive and panel end-to-end through `@get-bb/plugin-sdk/testing/app`'s
 node/status rendering, "Open in right panel", the Stop button, realtime
 refetch, and error/not-found states).
 
-Human gates land in T6; T7 adds the worked examples and end-to-end tests.
+T6 adds **human gates** — the `hexagon` handler, end to end:
+
+- `handlers/human.ts` — builds the option list from `gate`'s outgoing edges
+  (`parseAcceleratorLabel` reads a `"[K] label"` / `"K) label"` / `"K - label"`
+  prefix into `{ key, text }`; edges with no `condition` and just a `label`
+  are the choices), marks `freeform: true` when any outgoing edge declares
+  `freeform=true`, and asks an injected `HumanInterviewer` — the same
+  injection-seam pattern as `handlers/agent.ts`'s `AgentBackend`, so `engine/`
+  stays BB-free and this handler is unit-tested with a fake interviewer (and
+  exercised through the real engine in `tests/engine.test.ts`'s "human gate
+  routing" block). A chosen option's raw edge label becomes the outcome's
+  `preferredLabel`, so the existing routing cascade (step 3) takes it to the
+  matching edge — no new routing logic needed. Context keys written exactly
+  per the plan: `human.gate.selected`, `human.gate.label` (button choices
+  only), `human.gate.text` (freeform only), `human.gate.<node>.answer` /
+  `.label`. A user cancel or an unanswered timeout with nothing to fall back
+  to fails the stage clearly (never hangs).
+- `server/human.ts` — the real `HumanInterviewer`, via `bb.ui.requestInput`
+  (`rendererId: "attractor-human-gate"`, from `server/contracts.ts`'s
+  `HUMAN_GATE_RENDERER_ID`). Maps `requestInput`'s cancellation reasons:
+  `"timeout"` → `{ kind: "timeout" }`, `"user"` (the pendingInteraction's own
+  Cancel button) → `{ kind: "cancelled" }`, anything else (in particular
+  `"request-aborted"`, exactly what the Stop button's `AbortSignal` produces)
+  → a thrown error, so the engine treats a Stop the same way it does for an
+  in-flight agent stage rather than quietly recording a declined gate.
+- `server/service.ts` — wires `createHumanHandler` into the handler
+  registry (an optional `humanInterviewer` dependency, defaulting to one
+  that fails clearly, so every pre-T6 test that never reaches a human node
+  is unaffected); `applyEventToStore` sets both the stage and the run's
+  `status` to a new `"blocked"` value on `human.requested`, back to
+  `"running"` on `human.answered` — never a terminal status, `recordFinish`
+  always overwrites it once the run actually ends. `listRunningRunIds` now
+  also picks up `"blocked"` runs so a plugin restart while a gate is waiting
+  doesn't strand the run (it simply re-asks on resume, from its last
+  checkpoint before the gate). `answerHumanGate(runId, answer)` backs `bb
+  attractor answer` — see "Deviations" below for how it resolves a live
+  `bb.ui.requestInput` interaction from outside the app's own renderer.
+- `ui/human-gate.tsx` — the `pendingInteraction` renderer: one button per
+  option (`[key] text`), a free-text field + Submit when the payload's
+  `freeform` is true, and a Cancel button. Reads/writes the `HumanGate*`
+  zod schemas in `server/contracts.ts` (payload in, `HumanGateValue` out via
+  `submit()`), registered in `app.tsx` under `HUMAN_GATE_RENDERER_ID`.
+- `ui/dag.tsx` gets a `"blocked"` status colour (amber) and `ui/run-panel.tsx`
+  treats `"blocked"` like `"running"` for the elapsed-time ticker and the
+  Stop button (a human gate can still be aborted).
+- CLI: `bb attractor answer <runId> <label|text>` — matches `answer` against
+  an option's raw label, its accelerator-stripped text, or its accelerator
+  key (case-insensitively), falling back to free text only when the gate's
+  `freeform` allows it; scoped to the run's owning thread like every other
+  runId subcommand.
+
+`tests/handlers/human.test.ts` unit-tests the handler against a fake
+interviewer (options built from edges, accelerator parsing, context keys,
+freeform, timeout with/without `human.default_choice`, cancellation);
+`tests/engine.test.ts`'s "human gate routing" block runs it through the
+real engine; `tests/server/human.test.ts` exercises the real
+`bb.ui.requestInput`-backed interviewer against
+`@get-bb/plugin-sdk/testing`'s fake host (the request carries the edge
+options, a submitted choice/text/cancel/abort maps correctly, a malformed
+or unknown submitted value is rejected rather than guessed); `tests/server/
+service.test.ts` covers the run/stage `"blocked"`↔`"running"` transition and
+`answerHumanGate`'s matching/ownership logic; `tests/server/server.test.ts`
+adds full end-to-end coverage of `bb attractor answer` against a real
+`attractor_run` (see "Deviations" below on how that test bridges the fake
+host's two otherwise-disconnected interaction mechanisms); `tests/ui/
+human-gate.test.tsx` covers the renderer (buttons per option, freeform
+field, Cancel, invalid-payload fallback) and `tests/app.test.tsx` adds its
+registration + a smoke render.
+
+T7 adds the worked examples and end-to-end tests.
 
 ## Development
 
@@ -411,13 +481,54 @@ bb plugin build .
   (`server/contracts.ts`), which isn't turned into provider-facing JSON
   Schema, still uses `z.json()` for a run's full context/outcome/events.
 
-- **Human (`hexagon`) nodes fail clearly rather than block (T4).** Human
-  gates are T6's task; until then, `server/service.ts`'s `HandlerRegistry`
-  gives `human` a stub that returns `{ status: "failed", failureReason:
-  "human gates are not implemented yet (T6)" }` so a graph reaching one
-  fails the stage (and, via the normal `on_failure` cascade, the run) with
-  a clear message instead of hanging forever waiting for an answer that
-  can never come.
+- **Human (`hexagon`) nodes (T4 stub, implemented T6).** T4 gave `human` a
+  stub that always failed the stage; T6 replaces it with the real
+  `handlers/human.ts` + `server/human.ts` + `ui/human-gate.tsx` described
+  above. `createService`'s `humanInterviewer` dependency is *optional*,
+  defaulting to one that still fails clearly (`"no human interviewer is
+  configured for this plugin instance"`) — this keeps every earlier task's
+  `createService({...})` call site (none of which pass one, and none of
+  which reach a human node) working unchanged, and means a graph that
+  somehow reaches a human node with no interviewer configured still fails
+  the stage instead of hanging, exactly like the old T4 stub did.
+
+- **"timeout -> human.default_choice" (T6) is a context key, not a new node
+  attribute.** The plan's T6 task list names this behaviour without saying
+  whether `human.default_choice` is a context key an earlier stage can set
+  (via `context_updates` or a run's `inputs`) or an undocumented node
+  attribute — `default_choice` appears nowhere in "Node attributes". This
+  implementation reads it as a context key
+  (`context.get("human.default_choice")`, i.e. `context.human.default_choice`
+  once dot-path-nested), the more literal reading of the name and the one
+  that needs no addition to the documented dialect. A timeout with no such
+  context value fails the stage clearly rather than guessing.
+
+- **`bb attractor answer` resolves a live interaction via
+  `bb.sdk.threads.interactions.list`/`respond` (T6), an SDK area the plan's
+  "BB plugin SDK notes" doesn't mention** (that section only documents the
+  request side, `bb.ui.requestInput`). Resolving a pending interaction from
+  outside the app's own `pendingInteraction` renderer needs *some* SDK
+  surface; `bb.sdk.threads.interactions` (`list`/`get`/`respond`/`resolve`/
+  `cancel`) is the general one for exactly this, per its own schema (a
+  `PluginPendingInteraction`'s shape — `origin: { kind: "plugin", rendererId
+  }`, `payload: { kind: "plugin", data }` — is what `bb.ui.requestInput`
+  itself creates), so `server/service.ts`'s `answerHumanGate` uses it: list
+  the run's origin thread's pending interactions, find the one whose
+  `rendererId` is `HUMAN_GATE_RENDERER_ID` and whose payload's `runId`
+  matches, match the given answer against an option (or accept it as free
+  text when the gate allows), and `respond()` with the same
+  `HumanGateValue` shape the renderer's own `submit()` would send.
+  `@get-bb/plugin-sdk/testing`'s `createFakePluginHost` does **not** wire
+  `bb.ui.requestInput`'s pending interactions to `bb.sdk.threads.
+  interactions.*` (confirmed by direct probing — the latter simply throws
+  "not stubbed" unless a test stubs it, entirely independent internal
+  state from `harness.pendingInteractions`/`submitInteraction`). So
+  `tests/server/server.test.ts`'s end-to-end `bb attractor answer` tests
+  install a small bridge (`bridgeHumanGateInteractions`) that stubs
+  `threads.interactions.list`/`respond` to read/resolve the harness's own
+  `pendingInteractions`/`submitInteraction` — this is test-only plumbing to
+  compensate for the fake host's two otherwise-disconnected mechanisms, not
+  a claim about how the real host actually wires them together.
 
 - **Ownership scoping applies everywhere a runId crosses a thread boundary
   (T4, not explicitly required by the plan).** `server.ts`'s shared `owned()`

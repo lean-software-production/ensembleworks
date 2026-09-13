@@ -58,8 +58,12 @@ export const RUN_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS attractor_events_run_seq ON attractor_events(run_id, seq)`,
 ] as const;
 
-export type RunStatus = "running" | "succeeded" | "failed" | "cancelled";
-export type StageStatus = "running" | "succeeded" | "failed" | "skipped";
+// "blocked" (T6): a run/stage waiting on a human gate's answer — set by
+// server/service.ts's applyEventToStore on a `human.requested` event and
+// cleared back to "running" on `human.answered`, never persisted as a
+// terminal status (recordFinish only ever writes succeeded/failed/cancelled).
+export type RunStatus = "running" | "blocked" | "succeeded" | "failed" | "cancelled";
+export type StageStatus = "running" | "blocked" | "succeeded" | "failed" | "skipped";
 
 export interface CreateRunInput {
   id: string;
@@ -240,8 +244,9 @@ export class RunStore {
     return { runs, nextCursor: hasMore && last ? encodeCursor(last.createdAt, last.id) : null };
   }
 
+  /** Every run still in flight for the background service to resume on plugin (re)start — "running" and "blocked" (T6: a plugin restart while a human gate is waiting must not strand the run). */
   listRunningRunIds(): string[] {
-    const rows = this.#db.prepare("SELECT id FROM attractor_runs WHERE status='running' ORDER BY created_at, id").all() as { id: string }[];
+    const rows = this.#db.prepare("SELECT id FROM attractor_runs WHERE status IN ('running', 'blocked') ORDER BY created_at, id").all() as { id: string }[];
     return rows.map((r) => r.id);
   }
 
@@ -282,6 +287,18 @@ export class RunStore {
         id,
       );
     return this.getRun(id);
+  }
+
+  /** Sets a run's status directly, without touching finishedAt/error/etc. — used for the transient "blocked" state (T6). */
+  setStatus(id: string, status: RunStatus, now = Date.now()): Run {
+    this.getRun(id);
+    this.#db.prepare("UPDATE attractor_runs SET status=?, updated_at=? WHERE id=?").run(status, now, id);
+    return this.getRun(id);
+  }
+
+  /** Sets one stage row's status directly, without touching its other fields — used for the transient "blocked" state (T6). */
+  setStageStatus(runId: string, nodeId: string, visit: number, status: StageStatus): void {
+    this.#db.prepare("UPDATE attractor_stages SET status=? WHERE run_id=? AND node_id=? AND visit=?").run(status, runId, nodeId, visit);
   }
 
   upsertStage(runId: string, input: UpsertStageInput): void {

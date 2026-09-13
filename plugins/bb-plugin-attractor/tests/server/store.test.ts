@@ -120,8 +120,35 @@ describe("RunStore", () => {
     expect(store.listRunningRunIds()).toEqual(["run-1"]);
   });
 
+  it("also lists blocked run ids for background resume (T6: a restart mid-human-gate must not strand the run)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.createRun({ id: "run-2", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.setStatus("run-2", "blocked");
+    expect(store.listRunningRunIds().sort()).toEqual(["run-1", "run-2"]);
+  });
+
   it("throws a clear error for an unknown run id", () => {
     const store = makeStore();
     expect(() => store.getRun("missing")).toThrow(/not found/);
+  });
+
+  it("sets a run's status directly (T6: blocked while a human gate waits)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    const blocked = store.setStatus("run-1", "blocked");
+    expect(blocked.status).toBe("blocked");
+    const running = store.setStatus("run-1", "running");
+    expect(running.status).toBe("running");
+  });
+
+  it("sets a stage's status directly without disturbing its other fields (T6: blocked while a human gate waits)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "gate@1", nodeId: "gate", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    store.setStageStatus("run-1", "gate", 1, "blocked");
+    expect(store.listStages("run-1")[0]).toMatchObject({ nodeId: "gate", visit: 1, status: "blocked" });
+    store.setStageStatus("run-1", "gate", 1, "running");
+    expect(store.listStages("run-1")[0]).toMatchObject({ status: "running" });
   });
 });

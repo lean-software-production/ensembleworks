@@ -35,7 +35,7 @@ Node shape (or an explicit `type=` attribute) selects the handler:
 | `box` (default) | `agent` | full-tool BB worker thread | `prompt` |
 | `tab` | `prompt` | single-call worker thread | `prompt` |
 | `parallelogram` | `command` | runs a shell script on the environment's host | `script` |
-| `hexagon` | `human` | asks a human to choose an outgoing edge (not yet implemented — see below) | — |
+| `hexagon` | `human` | asks a human to choose an outgoing edge (or type free text on a `freeform=true` edge) | — |
 | `diamond` | `conditional` | routes on the previous stage's outcome, no work of its own | — |
 | `component` | `parallel` | fans out over its outgoing edges | — |
 | `tripleoctagon` | `parallel.fan_in` | where fanned-out branches converge | — |
@@ -52,11 +52,27 @@ Edges route by `condition="outcome=succeeded"` (see the full grammar in the
 plan doc), by label (a human gate, or an agent's `preferred_next_label`), or
 unconditionally by highest `weight`.
 
-**Not yet implemented:** human gates (`hexagon` nodes) fail the stage with a
-clear error rather than blocking on an answer — land in a later task. A
-`command` node's `output_schema` beyond the literal string `"routing"` (an
-inline JSON Schema) is accepted but not separately validated; only the
-`routing` shape is checked.
+A human gate's outgoing edges are its options — label them with an optional
+accelerator prefix (`"[A] Approve"`, `"R) Revise"`, or `"A - Approve"`); add
+`freeform=true` to an edge to also accept free text. A human answers a
+blocked run either by clicking a button in the chat surface, or from a
+terminal:
+
+```
+bb attractor answer <runId> <label|text>
+```
+
+`<label>` matches an option's raw edge label, its accelerator-stripped
+text, or its accelerator key, case-insensitively; anything else is only
+accepted as free text if the gate is `freeform`. A run blocked on a human
+gate shows status `blocked` (`bb attractor status <runId>`) until answered.
+A gate with a `timeout` and nothing to answer falls back to the
+`human.default_choice` context key if one is set (e.g. via `attractor_run`'s
+`inputs`), otherwise the stage fails clearly rather than hanging forever.
+
+**Not yet implemented:** a `command` node's `output_schema` beyond the
+literal string `"routing"` (an inline JSON Schema) is accepted but not
+separately validated; only the `routing` shape is checked.
 
 ## Running a graph
 
@@ -88,6 +104,7 @@ bb attractor status <runId>
 bb attractor stages <runId>
 bb attractor events <runId> [--since seq]
 bb attractor stop <runId>
+bb attractor answer <runId> <label|text>  # answer a blocked human gate
 ```
 
 ## Structured results (`output_schema="routing"`)
