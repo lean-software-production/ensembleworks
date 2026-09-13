@@ -14,12 +14,6 @@ function fixture(t, name, {inputs={},scope=['src'],attempts=2}={}) {
   mkdirSync(join(cwd,'src')); writeFileSync(join(cwd,'src/feature.js'),'export const value = 1;\n');
   writeFileSync(join(cwd,'feature-plan.md'),'# Approved feature\nAdd the planned behavior and cover it with tests.\n');
   writeFileSync(join(cwd,'.gitignore'),'node_modules/\n.fabro-input/\n.fabro-output/\n');
-  if (name==='refactor-fabro-plugin') {
-    const path = join(cwd,'plugins/bb-plugin-assembly-lines'); mkdirSync(path,{recursive:true});
-    writeFileSync(join(path,'package.json'),JSON.stringify({name:'fixture',version:'1.0.0',scripts:{typecheck:'node -e "process.exit(0)"',test:'node -e "process.exit(0)"',build:'node -e "process.exit(0)"'}}));
-    writeFileSync(join(path,'package-lock.json'),JSON.stringify({name:'fixture',version:'1.0.0',lockfileVersion:3,packages:{'':{name:'fixture',version:'1.0.0'}}}));
-    writeFileSync(join(path,'helper.js'),'export const value = 1;\n');
-  }
   git(cwd,'init','-q');git(cwd,'config','user.name','Test');git(cwd,'config','user.email','test@example.com');git(cwd,'add','.');git(cwd,'commit','-qm','fixture');
   const baseSha = git(cwd,'rev-parse','HEAD');
   mkdirSync(join(cwd,'.fabro-input'));mkdirSync(join(cwd,'.fabro-output'));
@@ -34,7 +28,7 @@ const reviewed = {verdict:'accept',criteria:[{index:0,passed:true,evidence:'Insp
 function plan(f) { f.write('progress.json',{tasks:structuredClone(tasks)});assert.equal(f.run('check-plan').status,0); }
 
 test('Ralph retains task progress across iterations and delivers only a complete reviewed plan',t=>{
-  const f=fixture(t,'ralph-loop');assert.equal(f.run('baseline').status,0);plan(f);assert.equal(f.run('begin-attempt').status,0);
+  const f=fixture(t,'implement-plan');assert.equal(f.run('baseline').status,0);plan(f);assert.equal(f.run('begin-attempt').status,0);
   writeFileSync(join(f.cwd,'src/feature.js'),'export const value = 2;\n');
   f.write('progress.json',{tasks:tasks.map((x,i)=>({...x,done:i===0}))});f.write('review.md','Independent review of actual change');f.write('review.json',reviewed);
   assert.equal(f.run('validate').status,0);assert.match(f.run('deliver').stderr,/unfinished tasks/);
@@ -48,7 +42,7 @@ test('Ralph retains task progress across iterations and delivers only a complete
 });
 
 test('Ralph rejects incomplete coverage, rewritten task definitions, and changes to the approved plan',t=>{
-  const f=fixture(t,'ralph-loop');assert.equal(f.run('baseline').status,0);
+  const f=fixture(t,'implement-plan');assert.equal(f.run('baseline').status,0);
   f.write('progress.json',{tasks:[tasks[0]]});assert.match(f.run('check-plan').stderr,/every work-order acceptance/);
   plan(f);f.write('progress.json',{tasks:tasks.map(x=>({...x,title:'different'}))});assert.match(f.run('begin-attempt').stderr,/cannot be redefined/);
   f.write('progress.json',{tasks});assert.equal(f.run('begin-attempt').status,0);
@@ -57,23 +51,14 @@ test('Ralph rejects incomplete coverage, rewritten task definitions, and changes
 });
 
 test('Ralph requires a committed plan and refuses failed validation',t=>{
-  const missing=fixture(t,'ralph-loop',{inputs:{planPath:'missing.md'}});assert.match(missing.run('baseline').stderr,/committed regular file/);
-  const f=fixture(t,'ralph-loop');assert.equal(f.run('baseline').status,0);plan(f);assert.equal(f.run('begin-attempt').status,0);
+  const missing=fixture(t,'implement-plan',{inputs:{planPath:'missing.md'}});assert.match(missing.run('baseline').stderr,/committed regular file/);
+  const f=fixture(t,'implement-plan');assert.equal(f.run('baseline').status,0);plan(f);assert.equal(f.run('begin-attempt').status,0);
   writeFileSync(join(f.cwd,'src/feature.js'),'syntax is broken {{{');assert.match(f.run('validate').stderr,/Validation failed/);
   assert.equal(existsSync(join(f.cwd,'.fabro-output/delivery.json')),false);
 });
 
-test('plugin dogfood line pins checks and refuses outside scope or check configuration edits',t=>{
-  const f=fixture(t,'refactor-fabro-plugin',{scope:['.'],inputs:{validationCommands:['touch override-ran'],qualityCommand:'true'}});
-  assert.equal(f.run('baseline').status,0);assert.equal(existsSync(join(f.cwd,'override-ran')),false);
-  assert.equal(f.run('begin-attempt').status,0);
-  writeFileSync(join(f.cwd,'src/feature.js'),'export const value = 2;\n');assert.match(f.run('validate').stderr,/scope/);
-  writeFileSync(join(f.cwd,'src/feature.js'),'export const value = 1;\n');
-  writeFileSync(join(f.cwd,'plugins/bb-plugin-assembly-lines/package.json'),'{}');assert.match(f.run('validate').stderr,/preserve dependency and validation/);
-});
-
 test('live Ralph graph repairs a failed iteration and returns a complete delivery', {skip: !process.env.FABRO_GRAPH_TEST, timeout:75000}, async t=>{
-  const f=fixture(t,'ralph-loop');
+  const f=fixture(t,'implement-plan');
   const fake = `import {readFileSync,writeFileSync} from 'node:fs';
 const phase=process.argv[2];const tasks=${JSON.stringify(tasks)};
 if(phase==='plan')writeFileSync('.fabro-output/progress.json',JSON.stringify({tasks}));
@@ -87,7 +72,7 @@ if(phase==='review'){
  writeFileSync('.fabro-output/review.json',JSON.stringify(${JSON.stringify(reviewed)}));
 }`;
   writeFileSync(join(f.cwd,'.fabro-input/fake-agent.mjs'),fake);
-  let source=readFileSync(join(f.cwd,'.fabro/lines/ralph-loop/workflow.fabro'),'utf8');
+  let source=readFileSync(join(f.cwd,'.fabro/lines/implement-plan/workflow.fabro'),'utf8');
   for(const id of ['plan','implement','review'])source=source.replace(new RegExp('^  '+id+' \\[.*\\]$','m'),`  ${id} [shape=parallelogram, goal_gate=true, script="node .fabro-input/fake-agent.mjs ${id}"]`);
   source=source.replace('condition="preferred_label=Accept"','condition="outcome=succeeded"');
   const base='http://127.0.0.1:3000';

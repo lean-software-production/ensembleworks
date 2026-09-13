@@ -1,0 +1,39 @@
+{
+  "requestKey": "implement-plan-1",
+  "workOrder": {
+    "title": "Implement approved plan",
+    "displayTitle": "Implement approved plan",
+    "objective": "REPLACE_WITH_CONCRETE_OBJECTIVE",
+    "baseSha": "REPLACE_WITH_FULL_COMMIT_SHA",
+    "line": ".fabro/lines/implement-plan/line.json",
+    "inputs": {
+      "setupCommands": [
+        "npm --prefix plugins/bb-plugin-assembly-lines ci --include=dev --cache /tmp/fabro-plugin-npm-cache"
+      ],
+      "validationCommands": [
+        "npm --prefix plugins/bb-plugin-assembly-lines run typecheck",
+        "npm --prefix plugins/bb-plugin-assembly-lines test",
+        "npm --prefix plugins/bb-plugin-assembly-lines run build"
+      ],
+      "qualityCommand": "git diff --check",
+      "qualityMode": "gate",
+      "planPath": "docs/plans/REPLACE_WITH_APPROVED_PLAN.md"
+    },
+    "scope": [
+      "plugins/bb-plugin-assembly-lines"
+    ],
+    "constraints": [
+      "Preserve repository instructions and unrelated behavior; do not weaken checks or edit line definitions.",
+      "No merge, push, deployment or external comments.",
+      "For canvas-editor tools, canvas-react, or client canvas-v2 input/tool changes, declare or extend an interaction contract (or justify ux-contract: none), record verbatim RED before fixing and stop if unreachable, implement Obs additions in both FSM and browser adapters, and independently verify RED/GREEN during review.",
+      "Do not weaken tests or change package scripts, lockfiles, compiler/test configuration or line definitions to pass checks. Narrow scope to the agreed files before submission."
+    ],
+    "acceptanceCriteria": [
+      "REPLACE_WITH_TASK_SPECIFIC_CRITERIA",
+      "Pass configured checks and satisfy the line delivery contract."
+    ],
+    "maxAttempts": 3,
+    "maxMinutes": 60,
+    "maxChangedFiles": 10
+  }
+}

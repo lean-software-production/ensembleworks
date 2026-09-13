@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "name": "Ralph feature implementation loop",
+  "name": "Review a committed change",
   "workflow": "workflow.fabro",
   "files": [
     "workflow.fabro",
@@ -14,7 +14,7 @@
     "required": [
       "validationCommands",
       "qualityCommand",
-      "planPath"
+      "reviewBaseSha"
     ],
     "properties": {
       "setupCommands": {
@@ -46,11 +46,9 @@
         ],
         "description": "Default gate requires exit zero. Report allows findings but still rejects execution errors."
       },
-      "planPath": {
+      "reviewBaseSha": {
         "type": "string",
-        "minLength": 1,
-        "maxLength": 500,
-        "pattern": "^(?!/)(?!.*\\\\)(?!.*(?:^|/)\\.\\.(?:/|$)).+\\.md$"
+        "pattern": "^[a-f0-9]{40}$"
       }
     }
   },
@@ -63,10 +61,7 @@
       "before",
       "after",
       "review",
-      "outcome",
-      "plan",
-      "tasks",
-      "criterionReview"
+      "outcome"
     ],
     "properties": {
       "baseSha": {
@@ -81,7 +76,8 @@
         "type": "array",
         "items": {
           "type": "string"
-        }
+        },
+        "maxItems": 0
       },
       "before": {
         "type": "object"
@@ -94,54 +90,9 @@
         "minLength": 1
       },
       "outcome": {
-        "const": "changed"
-      },
-      "plan": {
-        "type": "object",
-        "required": [
-          "path",
-          "baseSha",
-          "sha256"
-        ],
-        "properties": {
-          "path": {
-            "type": "string"
-          },
-          "baseSha": {
-            "type": "string"
-          },
-          "sha256": {
-            "type": "string"
-          }
-        }
-      },
-      "tasks": {
-        "type": "array",
-        "minItems": 1,
-        "items": {
-          "type": "object",
-          "required": [
-            "id",
-            "title",
-            "done"
-          ],
-          "properties": {
-            "id": {
-              "type": "string"
-            },
-            "title": {
-              "type": "string"
-            },
-            "done": {
-              "const": true
-            }
-          }
-        }
-      },
-      "criterionReview": {
-        "type": "object"
+        "const": "reviewed"
       }
     }
   },
-  "acceptanceInstructions": "Compare the actual diff and checks against the approved plan pinned at baseSha and every original acceptance criterion. Read task progress and criterion review evidence; independently verify claims. All tasks must be complete, every criterion evidenced, and required interaction-contract RED/green and independent verification preserved. Do not accept workflow success or a completion claim alone. No merge, push, or deployment."
+  "acceptanceInstructions": "Inspect review.md and target.patch against the requested reviewBaseSha..baseSha and scoped paths. Findings must cite evidence and distinguish findings from uncertainty. Verify reviewed means a completed review, not approval of the code. Source and HEAD must remain unchanged. No fixes, commits, external comments or publication. For canvas-editor tools, canvas-react, or client canvas-v2 input/tool changes, declare or extend an interaction contract (or justify ux-contract: none), record verbatim RED before fixing and stop if unreachable, implement Obs additions in both FSM and browser adapters, and independently verify RED/GREEN during review."
 }

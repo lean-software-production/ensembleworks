@@ -1,4 +1,4 @@
-# Improve code quality
+# Review a change
 
 Recipe edition 1, maintained by the BB Fabro plugin; inspired by https://docs.fabro.sh/examples/repl-handoff and https://docs.fabro.sh/examples/definition-of-done. Project-owned copy; plugin updates never overwrite it. Review line.json, workflow.fabro and runner.mjs.
 
@@ -11,7 +11,7 @@ Quality: git diff --check
 
 Complete all REPLACE_WITH fields in work-order.example.json, freeze the task scope and criteria, and commit the line before submission. Commands are copied, not executed by setup. Run baseline and isolated failure-path checks before the first model run. Use the assembly-lines skill for an explicitly requested execution.
 
-Require a concrete quality improvement and preserved behavior, not merely successful commands.
+reviewBaseSha must be an ancestor of baseSha. Review covers that range restricted to scope. Checks must pass at baseline. Source changes are rejected; reviewed means the review completed, not that findings were approved.
 
 ## EnsembleWorks customization
 

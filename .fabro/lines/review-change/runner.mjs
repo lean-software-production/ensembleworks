@@ -7,17 +7,7 @@ const input = resolve(root, '.fabro-input');
 const output = resolve(root, '.fabro-output');
 mkdirSync(output, {recursive: true});
 const envelope = JSON.parse(readFileSync(resolve(input, 'work-order.json'), 'utf8'));
-const plugin = 'plugins/bb-plugin-assembly-lines';
-// This dogfood line owns its target and gates; submissions cannot replace them.
-const order = {...envelope, inputs: {},
-  setupCommands: [`cd ${plugin} && npm ci --include=dev --cache /tmp/fabro-plugin-npm-cache`],
-  validationCommands: [
-    `cd ${plugin} && npm run typecheck`,
-    `cd ${plugin} && env -u FABRO_GRAPH_TEST npm test`,
-    `cd ${plugin} && npm run build`,
-  ],
-  qualityCommand: 'git diff --check', qualityMode: 'gate',
-};
+const order = {...envelope, ...envelope.inputs};
 const phase = process.argv[2];
 const statePath = resolve(output, 'execution.json');
 let state = existsSync(statePath) ? JSON.parse(readFileSync(statePath, 'utf8')) : {startedAt: Date.now(), attempts: 0};
@@ -50,12 +40,11 @@ function changedPaths() {
 }
 function policy() {
   const changed = changedPaths();
-  const inScope = changed.every(file => file.startsWith(plugin + '/') && order.scope.some(raw => {
+  if (changed.length || git(['rev-parse','HEAD']).trim() !== order.baseSha) throw new Error('Review line must not modify source or HEAD');
+  const inScope = changed.every(file => order.scope.some(raw => {
     const prefix = raw.replace(/^\.\//,'').replace(/\/$/,'');
     return prefix === '.' || file === prefix || file.startsWith(prefix + '/');
   }));
-  const protectedFiles = [`${plugin}/package.json`, `${plugin}/package-lock.json`, `${plugin}/tsconfig.json`, `${plugin}/vitest.config.ts`];
-  if (changed.some(path => protectedFiles.includes(path))) throw new Error('Refactor must preserve dependency and validation configuration');
   const result = {changed, inScope, maxChangedFiles:order.maxChangedFiles, passed:inScope && changed.length <= order.maxChangedFiles};
   save('scope.json',result);
   if (!result.passed) throw new Error('Changes exceed the agreed scope or file limit');
@@ -73,6 +62,11 @@ try {
     const baseline = checks('baseline');
     save('baseline.json',baseline);
     if (!baseline.passed) throw new Error('Baseline validation failed');
+    if (!/^[a-f0-9]{40}$/.test(order.reviewBaseSha)) throw new Error('reviewBaseSha must be full SHA');
+    git(['merge-base','--is-ancestor',order.reviewBaseSha,order.baseSha]);
+    const paths = order.scope.map(p => p.replace(/^\.\//,'') || '.');
+    writeFileSync(resolve(output,'target.patch'),git(['--literal-pathspecs','diff',order.reviewBaseSha,order.baseSha,'--',...paths]));
+    policy();
     state.baseline = true; save('execution.json',state);
   } else if (phase === 'begin-attempt') {
     if (!state.baseline) throw new Error('No passing baseline');
@@ -81,7 +75,6 @@ try {
     save('execution.json',state);
   } else if (phase === 'validate') {
     if (!state.baseline) throw new Error('No passing baseline');
-    policy();
     const validation = checks('after');
     save('validation.json',validation);
     policy();
@@ -89,7 +82,6 @@ try {
   } else if (phase === 'deliver') {
     if (!state.baseline) throw new Error('No passing baseline');
     // Recheck after the reviewer: review must not make unvalidated changes.
-    policy();
     const finalChecks = checks('final'); save('final.json',finalChecks);
     if (!finalChecks.passed) throw new Error('Final validation failed');
     const scope = policy();
@@ -98,19 +90,9 @@ try {
     if (!existsSync(reviewPath)) throw new Error('No review evidence');
     const review = readFileSync(reviewPath,'utf8').slice(0,30000);
     if (!review.trim()) throw new Error('Empty review evidence');
-    if (scope.changed.length) {
-      // Explicit paths avoid accidentally committing workflow scratch files.
-      execFileSync('git',['--literal-pathspecs','add','-A','--',...scope.changed],{stdio:'inherit'});
-      // Also refuse pre-staged artifacts or changes outside the work order.
-      const staged = git(['diff','--cached','--name-only','-z']).split('\0').filter(Boolean);
-      if (staged.some(path => !scope.changed.includes(path))) throw new Error('Unexpected staged files');
-      const hasStaged = spawnSync('git',['diff','--cached','--quiet']);
-      if (hasStaged.status === 1) execFileSync('git',['-c','user.name=Assembly Lines','-c','user.email=assembly-lines@localhost','commit','-m','refactor: improve code quality'],{stdio:'inherit'});
-      else if (hasStaged.status !== 0) throw new Error('Cannot inspect staged changes');
-    }
     const resultSha = git(['rev-parse','HEAD']).trim();
     const delivery = {baseSha:order.baseSha,resultSha,objective:order.objective,changedFiles:scope.changed,
-      outcome:scope.changed.length ? 'changed' : 'no_change',attempts:state.attempts,
+      outcome:'reviewed',attempts:state.attempts,
       before:baseline,after:finalChecks,review,completedAt:new Date().toISOString()};
     save('delivery.json',delivery);
     writeFileSync(resolve(output,'diff.patch'),git(['diff','--binary',order.baseSha,resultSha,'--']));

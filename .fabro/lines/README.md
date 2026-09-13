@@ -1,35 +1,40 @@
 # Project Fabro lines
 
-These workflows belong to this repository and are read from the submitted Git
-commit. Submit through a BB thread using the Fabro plugin; the DAG card and final
-acceptance review stay attached to that thread.
+These project-owned recipes are read from the submitted Git commit. Define a
+concrete task in a BB thread; its Fabro card and acceptance review stay there.
 
 | Line | Purpose |
 | --- | --- |
-| [refactor-code-quality](refactor-code-quality/README.md) | General behavior-preserving refactoring with caller-selected checks. |
-| [refactor-fabro-plugin](refactor-fabro-plugin/README.md) | Dogfood the Fabro plugin with fixed scope boundaries and plugin checks. |
-| [ralph-loop](ralph-loop/README.md) | Implement an approved, committed feature plan through a bounded implement/check/review loop. |
+| [implement-plan](implement-plan/README.md) | Ralph loop implementing an approved, committed Markdown plan. |
+| [refactor-code-quality](refactor-code-quality/README.md) | Improve maintainability while preserving behavior. |
+| [review-change](review-change/README.md) | Review a committed range without editing source. |
+| [fix-bug](fix-bug/README.md) | Repair a reproduced bug with an immutable committed regression. |
 
-The dedicated lines include `work-order.example.json`. Copy an example outside
-the working source tree, fill its placeholders and full base commit, then submit
-it from the originating thread. Do not use an example's request key for multiple
-jobs with different inputs. Creating a line does not launch it.
+All four examples use the Fabro plugin's isolated npm package as the initial
+dogfood scope, with lockfile installation, typecheck, tests and build, plus
+`git diff --check`. Environment is `local`. Planning, implementation and
+independent review use Fabro's configured model default (currently OpenAI
+`gpt-5.5`). Command stages still run deterministic checks.
+Choose narrower source paths and explicit acceptance criteria for each task.
+For application or Canvas work, select the appropriate workspace checks as
+described in each line README; plugin checks do not cover those surfaces.
 
-Verify the project runners:
+Copy `work-order.example.json` outside the source tree and replace all
+`REPLACE_WITH` markers. A plan run needs a committed approved plan, a review needs
+a full ancestor review-base SHA, and a bug fix needs a committed failing regression
+plus its reproduction command. Commit the line definitions before submission.
+Setup creates no run and acceptance never merges, pushes or deploys.
 
-```sh
-node --test .fabro/lines/tests/lines.test.mjs
-```
+These four recipes replace the earlier `ralph-loop` and `refactor-fabro-plugin`
+paths. New submissions should use the names above. Existing jobs retain their
+frozen line package. The general refactor now uses explicit work-order commands;
+it does not inherit the retired plugin-specific runner's fixed-command policy.
+Do not weaken checks or widen scope to get a passing result.
 
-An opt-in live Ralph graph regression uses shell substitutes for agent nodes,
-checks a failed first iteration followed by a successful repair, and makes no
-model calls:
-
-```sh
-FABRO_GRAPH_TEST=1 node --test .fabro/lines/tests/lines.test.mjs
-```
-
-The live check requires the local Fabro service and its existing CLI dev-token.
-Fabro's validator emits advisory `goal_gate_has_retry` warnings because terminal
-failures intentionally do not retry through goal-gate fallback targets. Repairs
-use explicit graph edges and the runtime attempt budget.
+Verify project Ralph guards with `node --test .fabro/lines/tests/lines.test.mjs`.
+Set `FABRO_GRAPH_TEST=1` for its optional local-server shell-only graph regression.
+Run `npm --prefix plugins/bb-plugin-assembly-lines run test:recipes` for the
+four-recipe scaffold and runner suite (no model calls). Set `FABRO_BIN` to the
+installed CLI path to validate generated graphs too. Graph validation can emit
+advisory `goal_gate_has_retry` warnings; repairs use explicit graph edges and
+runner attempt limits.

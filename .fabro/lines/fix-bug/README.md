@@ -1,4 +1,4 @@
-# Improve code quality
+# Fix a reproduced bug
 
 Recipe edition 1, maintained by the BB Fabro plugin; inspired by https://docs.fabro.sh/examples/repl-handoff and https://docs.fabro.sh/examples/definition-of-done. Project-owned copy; plugin updates never overwrite it. Review line.json, workflow.fabro and runner.mjs.
 
@@ -11,7 +11,7 @@ Quality: git diff --check
 
 Complete all REPLACE_WITH fields in work-order.example.json, freeze the task scope and criteria, and commit the line before submission. Commands are copied, not executed by setup. Run baseline and isolated failure-path checks before the first model run. Use the assembly-lines skill for an explicitly requested execution.
 
-Require a concrete quality improvement and preserved behavior, not merely successful commands.
+Commit a real failing regression first. Keep it outside the repair scope; the runner protects regressionPaths. Existing baseline checks must pass independently of that regression. For Node, moving a *.test.mjs file to another directory may still leave it in automatic discovery; use an explicit baseline test selection or a separately invoked reproducer outside the discovery pattern. A nonzero exit alone is not proof of a bug: inspect the failure.
 
 ## EnsembleWorks customization
 
@@ -29,5 +29,10 @@ own npm typecheck/test/quality/build gates. Do not assume the Fabro plugin check
 cover application or Canvas changes.
 
 For canvas-editor tools, canvas-react, or client canvas-v2 input/tool changes, declare or extend an interaction contract (or justify ux-contract: none), record verbatim RED before fixing and stop if unreachable, implement Obs additions in both FSM and browser adapters, and independently verify RED/GREEN during review.
+
+The reproducer must be committed and outside the repair scope. If it is picked up
+by the plugin's normal test command, select the unrelated baseline tests explicitly
+for this work order; do not weaken or rewrite package scripts. Both the normal
+checks and the separately invoked reproducer must pass after the fix.
 
 Validation, test and build stages remain shell commands.
