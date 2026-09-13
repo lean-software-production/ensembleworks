@@ -365,9 +365,136 @@ describe("Fabro composer banner", () => {
     await slot.findByRole("button", { name: "Open Fabro run Refactor parser" });
     jobs = [{ ...job, engineStatus: "succeeded" }];
     await slot.behavior.emitRealtime("jobs-changed", { jobId: job.id });
-    await slot.findByRole("img", { name: "Execution: Succeeded" });
+    await slot.findByText("Ready for review");
     await slot.behavior.setComposerScope({ kind: "thread", threadId: "empty-thread" });
     await waitFor(() => expect(slot.queryByRole("button")).toBeNull());
+    slot.lifecycle.unmount();
+  });
+
+  it("collapses a previously expanded running graph to a ready-for-review notice without polling the graph", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    let current: JobView = job;
+    let graphCalls = 0;
+    const slot = renderSlot(app.composerCustomizations[0]!.banners![0]!, {}, {
+      composer: { scope: { kind: "thread", threadId: job.threadId } },
+      rpc: {
+        listJobs: () => ({ jobs: [current], nextCursor: null }),
+        getRunGraph: () => { graphCalls++; return graph; },
+      },
+    });
+    fireEvent.click(await slot.findByRole("button", { name: "Expand Fabro graph" }));
+    expect(await slot.findByRole("img", { name: /Fabro workflow graph/ })).toBeTruthy();
+    expect(graphCalls).toBe(1);
+    current = { ...job, engineStatus: "succeeded", observationState: "succeeded", completionState: "succeeded" };
+    await slot.behavior.emitRealtime("jobs-changed", { jobId: job.id, threadId: job.threadId });
+    await slot.findByText("Ready for review");
+    expect(slot.queryByRole("button", { name: /Expand Fabro graph|Collapse Fabro graph/ })).toBeNull();
+    expect(slot.queryByRole("img", { name: /Fabro workflow graph/ })).toBeNull();
+    expect(graphCalls).toBe(1);
+    fireEvent.click(slot.getByRole("button", { name: "Open Fabro run Refactor parser" }));
+    expect(slot.navigateCalls).toContainEqual({ method: "openThreadPanel", options: { actionId: "job", params: { jobId: job.id }, title: "Fabro" } });
+    slot.lifecycle.unmount();
+  });
+
+  it("hides an accepted latest job without resurrecting older jobs", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    const older = { ...job, id: "older", createdAt: 1, workOrder: { ...job.workOrder, title: "Older run" } };
+    let latest = { ...job, id: "latest", createdAt: 2, engineStatus: "succeeded", observationState: "succeeded" };
+    const slot = renderSlot(app.composerCustomizations[0]!.banners![0]!, {}, {
+      composer: { scope: { kind: "thread", threadId: job.threadId } },
+      rpc: { listJobs: () => ({ jobs: [older, latest], nextCursor: null }), getRunGraph: () => graph },
+    });
+    await slot.findByText("Ready for review");
+    latest = { ...latest, acceptanceVerdict: "accepted" };
+    await slot.behavior.emitRealtime("jobs-changed", { jobId: latest.id, threadId: job.threadId });
+    await waitFor(() => expect(slot.queryByText("Ready for review")).toBeNull());
+    expect(slot.queryByText("Older run")).toBeNull();
+    slot.lifecycle.unmount();
+  });
+
+  it("gives assessment attention precedence over succeeded execution and locally dismisses it", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    const rework = { ...job, engineStatus: "succeeded", observationState: "succeeded", acceptanceVerdict: "needs_input", resultRevision: 1 };
+    const slot = renderSlot(app.composerCustomizations[0]!.banners![0]!, {}, {
+      composer: { scope: { kind: "thread", threadId: job.threadId } },
+      rpc: { listJobs: () => ({ jobs: [rework], nextCursor: null }), getRunGraph: () => { throw new Error("graph should not be mounted"); } },
+    });
+    await slot.findByText("Needs input");
+    expect(slot.queryByText("Ready for review")).toBeNull();
+    fireEvent.click(slot.getByRole("button", { name: "Open details for Refactor parser" }));
+    expect(slot.navigateCalls).toContainEqual({ method: "openThreadPanel", options: { actionId: "job", params: { jobId: job.id }, title: "Fabro" } });
+    fireEvent.click(slot.getByRole("button", { name: "Dismiss Needs input notice for Refactor parser" }));
+    await waitFor(() => expect(slot.queryByText("Needs input")).toBeNull());
+    slot.lifecycle.unmount();
+  });
+
+  it("persists dismissed attention through remounts, isolates by thread, and resurfaces changed revisions", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    let currentThread = job.threadId;
+    let current = { ...job, engineStatus: "failed", observationState: "failed", resultRevision: 1 };
+    const render = () => renderSlot(app.composerCustomizations[0]!.banners![0]!, {}, {
+      composer: { scope: { kind: "thread", threadId: currentThread } },
+      rpc: { listJobs: () => ({ jobs: [{ ...current, threadId: currentThread }], nextCursor: null }), getRunGraph: () => graph },
+    });
+    let slot = render();
+    await slot.findByText("Failed");
+    fireEvent.click(slot.getByRole("button", { name: "Dismiss Failed notice for Refactor parser" }));
+    await waitFor(() => expect(slot.queryByText("Failed")).toBeNull());
+    slot.lifecycle.unmount();
+
+    slot = render();
+    await waitFor(() => expect(slot.queryByText("Failed")).toBeNull());
+    slot.lifecycle.unmount();
+
+    currentThread = "thread-2";
+    slot = render();
+    await slot.findByText("Failed");
+    slot.lifecycle.unmount();
+
+    currentThread = job.threadId;
+    current = { ...current, resultRevision: 2 };
+    slot = render();
+    await slot.findByText("Failed");
+    slot.lifecycle.unmount();
+  });
+
+  it("uses an in-memory dismissal fallback when session storage throws", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    const original = Object.getOwnPropertyDescriptor(window, "sessionStorage");
+    Object.defineProperty(window, "sessionStorage", { configurable: true, get: () => { throw new Error("blocked"); } });
+    const failed = { ...job, engineStatus: "cancelled", observationState: "cancelled", resultRevision: 1 };
+    const slot = renderSlot(app.composerCustomizations[0]!.banners![0]!, {}, {
+      composer: { scope: { kind: "thread", threadId: job.threadId } },
+      rpc: { listJobs: () => ({ jobs: [failed], nextCursor: null }), getRunGraph: () => graph },
+    });
+    await slot.findByText("Cancelled");
+    fireEvent.click(slot.getByRole("button", { name: "Dismiss Cancelled notice for Refactor parser" }));
+    await waitFor(() => expect(slot.queryByText("Cancelled")).toBeNull());
+    if (original) Object.defineProperty(window, "sessionStorage", original);
+    slot.lifecycle.unmount();
+  });
+
+  it("keeps dismissed attention in memory when session storage writes fail", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    const original = Object.getOwnPropertyDescriptor(window, "sessionStorage");
+    const failed = { ...job, id: "write-fail-job", runId: "write-fail-run", engineStatus: "failed", observationState: "failed", resultRevision: 1 };
+    Object.defineProperty(window, "sessionStorage", {
+      configurable: true,
+      value: { getItem: () => null, setItem: () => { throw new Error("quota exceeded"); } },
+    });
+    const render = () => renderSlot(app.composerCustomizations[0]!.banners![0]!, {}, {
+      composer: { scope: { kind: "thread", threadId: job.threadId } },
+      rpc: { listJobs: () => ({ jobs: [failed], nextCursor: null }), getRunGraph: () => graph },
+    });
+    let slot = render();
+    await slot.findByText("Failed");
+    fireEvent.click(slot.getByRole("button", { name: "Dismiss Failed notice for Refactor parser" }));
+    await waitFor(() => expect(slot.queryByText("Failed")).toBeNull());
+    slot.lifecycle.unmount();
+
+    slot = render();
+    await waitFor(() => expect(slot.queryByText("Failed")).toBeNull());
+    if (original) Object.defineProperty(window, "sessionStorage", original);
     slot.lifecycle.unmount();
   });
 });

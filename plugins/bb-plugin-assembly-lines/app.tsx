@@ -41,12 +41,74 @@ type ParsedEvidence = {
   evidence: JsonObject | null;
   parseError?: string;
 };
+type ComposerNotice = {
+  kind: "active" | "hidden" | "ready" | "attention";
+  label: string;
+  dismissible?: boolean;
+  tone?: "success" | "warning" | "danger";
+  description?: string;
+};
+
+const ACCEPTED_VERDICTS = new Set(["accepted", "approved"]);
+const REWORK_VERDICTS = new Set(["rework", "rework_needed", "rejected"]);
+const NEEDS_INPUT_VERDICTS = new Set(["needs_input", "input_needed"]);
+const SUCCESS_STATUSES = new Set(["succeeded", "delivered"]);
+const FAILED_STATUSES = new Set(["failed", "dead", "error"]);
+const CANCELLED_STATUSES = new Set(["cancelled", "canceled"]);
+const DISMISSED_STORAGE_KEY = "fabro:composer-dismissed:v1";
+const dismissedFallback = new Set<string>();
 
 function isObject(value: unknown): value is JsonObject { return !!value && typeof value === "object" && !Array.isArray(value); }
 function stringValue(value: unknown): string | undefined { return typeof value === "string" ? value : undefined; }
 function arrayStrings(value: unknown): string[] { return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : []; }
 function stringifyRaw(value: unknown) { try { return JSON.stringify(value, null, 2); } catch { return String(value); } }
 function parseJson(text?: string): JsonObject | null { if (!text) return null; try { const value = JSON.parse(text); return isObject(value) ? value : null; } catch { return null; } }
+function statusOf(job: Job) { return job.engineStatus ?? job.observationState; }
+function resultRevisionOf(job: Job) { return job.resultRevision ?? job.acceptanceResultRevision ?? "none"; }
+function dismissalKey(job: Job) {
+  return [
+    job.threadId,
+    job.id,
+    job.runId ?? "no-run",
+    String(resultRevisionOf(job)),
+    job.acceptanceVerdict,
+    statusOf(job) ?? "unknown",
+  ].join("\u0000");
+}
+function readDismissedKeys(): Set<string> {
+  const keys = new Set(dismissedFallback);
+  try {
+    if (typeof window === "undefined") return keys;
+    const raw = window.sessionStorage.getItem(DISMISSED_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    if (Array.isArray(parsed)) for (const item of parsed) if (typeof item === "string") keys.add(item);
+  } catch {
+    // Keep the in-memory session fallback.
+  }
+  return keys;
+}
+function writeDismissedKeys(keys: Set<string>) {
+  dismissedFallback.clear();
+  for (const key of keys) dismissedFallback.add(key);
+  try { if (typeof window !== "undefined") window.sessionStorage.setItem(DISMISSED_STORAGE_KEY, JSON.stringify([...keys])); } catch { /* keep the in-memory fallback */ }
+}
+function isDismissed(key: string) { return readDismissedKeys().has(key); }
+function dismissKey(key: string) {
+  const keys = readDismissedKeys();
+  keys.add(key);
+  writeDismissedKeys(keys);
+}
+function composerNotice(job: Job): ComposerNotice {
+  const status = statusOf(job);
+  const verdict = job.acceptanceVerdict;
+  if (ACCEPTED_VERDICTS.has(verdict)) return { kind: "hidden", label: "" };
+  if (NEEDS_INPUT_VERDICTS.has(verdict)) return { kind: "attention", label: "Needs input", dismissible: true, tone: "warning", description: "Acceptance needs input. Execution remains available in details." };
+  if (REWORK_VERDICTS.has(verdict)) return { kind: "attention", label: "Rework needed", dismissible: true, tone: "danger", description: "Acceptance requested rework. Execution remains available in details." };
+  if (CANCELLED_STATUSES.has(status)) return { kind: "attention", label: "Cancelled", dismissible: true, tone: "warning", description: `Execution ${label(status)}; acceptance is ${label(verdict)}.` };
+  if (FAILED_STATUSES.has(status)) return { kind: "attention", label: "Failed", dismissible: true, tone: "danger", description: `Execution ${label(status)}; acceptance is ${label(verdict)}.` };
+  if (SUCCESS_STATUSES.has(status) && verdict === "pending") return { kind: "ready", label: "Ready for review", tone: "success", description: "Execution succeeded. Acceptance is pending review." };
+  return { kind: "active", label: "" };
+}
 function fileEntries(evidence: JsonObject | null): SidebarData["files"] {
   const workspace = isObject(evidence?.workspace) ? evidence.workspace : null;
   const files = isObject(workspace?.files) ? workspace.files : {};
@@ -285,13 +347,40 @@ function ComposerGraphBanner() {
   useRealtime("jobs-changed", () => { void refresh(); });
   const job = state?.threadId === threadId ? state.job : null;
   if (!job) return null;
-  return <ComposerRun key={`${job.threadId}:${job.id}`} job={job} stale={state?.error ?? false} open={() => navigate.openThreadPanel({ actionId: ACTION, params: { jobId: job.id }, title: "Fabro" })} />;
+  const notice = composerNotice(job);
+  if (notice.kind === "hidden") return null;
+  if (notice.kind === "attention" && isDismissed(dismissalKey(job))) return null;
+  const open = () => navigate.openThreadPanel({ actionId: ACTION, params: { jobId: job.id }, title: "Fabro" });
+  if (notice.kind === "active") return <ComposerRun key={`${job.threadId}:${job.id}`} job={job} stale={state?.error ?? false} open={open} />;
+  return <ComposerNoticeLine key={`${job.threadId}:${job.id}:${notice.kind}`} job={job} notice={notice} open={open} />;
+}
+
+function ComposerNoticeLine({ job, notice, open }: { job: Job; notice: ComposerNotice; open: () => void }) {
+  const [, setDismissedVersion] = useState(0);
+  const key = dismissalKey(job);
+  if (notice.kind === "attention" && isDismissed(key)) return null;
+  const toneClass = notice.tone === "success" ? "text-emerald-600" : notice.tone === "danger" ? "text-destructive" : "text-amber-600";
+  const icon = notice.tone === "success" ? "✓" : notice.tone === "danger" ? "!" : "○";
+  const dismiss = () => {
+    dismissKey(key);
+    setDismissedVersion(value => value + 1);
+  };
+  return <div className="w-full min-w-0 rounded-lg border border-border bg-card p-2">
+    <div className="flex items-center gap-2 text-xs">
+      <span title="Fabro" aria-label="Fabro" className="shrink-0"><Icon name="Workflow" className="size-3" /></span>
+      <span title={title(job)} className="min-w-0 flex-1 truncate font-medium">{job.workOrder.displayTitle ?? title(job)}</span>
+      <span className={cn("shrink-0 font-medium", toneClass)}>{notice.label}</span>
+      <span role="img" aria-label={`${notice.label}. Execution: ${label(statusOf(job))}. Acceptance: ${label(job.acceptanceVerdict)}`} title={notice.description} className={cn("shrink-0 text-sm", toneClass)}>{icon}</span>
+      {notice.dismissible ? <button type="button" aria-label={`Dismiss ${notice.label} notice for ${title(job)}`} onClick={dismiss} className="shrink-0 rounded px-1 text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Dismiss</button> : null}
+      <button type="button" aria-label={notice.dismissible ? `Open details for ${title(job)}` : `Open Fabro run ${title(job)}`} onClick={open} className="shrink-0 rounded p-1 text-muted-foreground hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><Icon name="PanelRight" className="size-4" /></button>
+    </div>
+  </div>;
 }
 
 function ComposerRun({ job, stale, open }: { job: Job; stale: boolean; open: () => void }) {
   const [expanded, setExpanded] = useState(false);
   const snapshot = useRunGraph({ jobId: job.id, threadId: job.threadId, runId: job.runId, status: job.engineStatus });
-  const status = job.engineStatus ?? job.observationState;
+  const status = statusOf(job);
   const running = status === "running";
   const stage = running && !snapshot.error && snapshot.graph ? [...latestStages(snapshot.graph).values()].find(value => value.status === "running") : null;
   const unavailable = stale || !!job.connectionError || snapshot.error;
