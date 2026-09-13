@@ -75,8 +75,10 @@ const TRUNCATION_MARKER = " …[truncated]";
 
 type Completion = { kind: "idle"; text: string | null } | { kind: "failed"; error: string | null } | { kind: "deleted" } | { kind: "aborted" };
 
-// Per the plan's "Prompt assembly": "a bullet summary of prior stages (node
-// id, label, status, first 200 chars of response / command tail)". Status
+// Per the plan's "Prompt assembly": a bullet summary of prior stages (node
+// id, label, status, and the first PROMPT_PREVIEW_LENGTH chars of the
+// response / command tail, marked when cut; the full text stays available
+// in context.response.<node_id>). Status
 // comes from `stage_status.<nodeId>` (engine.ts's writeOutcomeToContext) and
 // the label from the graph itself — the response map alone (keyed by node
 // id, text only) can't tell a downstream agent whether a prior stage
