@@ -13,8 +13,10 @@ contracts, and the task breakdown this plugin is built against.
 
 ## Status
 
-Through task T3. `server.ts`, `app.tsx` and `host.ts` are still the T1
-scaffold (load under the bb host, no behaviour beyond a startup log line).
+Through task T4. `app.tsx` is still the T1 scaffold (no slots yet — the
+`attractor-run` message directive, thread-panel action and DAG UI land in
+T5; human gates in T6). `server.ts` and `host.ts` are now the real T4
+integration described below.
 T2 adds the **DOT front-end** — parsing and validating workflow graphs, with
 no execution yet:
 
@@ -117,8 +119,86 @@ event-sequence walk of the Appendix's `PlanImplementReview` example (a plan
 revision loop, a failing-then-passing test node, and a routing-JSON review
 node) as its integration-level check.
 
-The BB-thread backend, storage, tools, CLI, RPC surface, DAG UI and human
-gates land in later tasks (T4–T7).
+T4 adds the **BB integration** — the plugin actually runs a graph now:
+
+- `server/backend.ts` — the BB-thread `CodergenBackend`: spawns a hidden
+  worker thread per `agent`/`prompt` stage (reusing the origin thread's
+  environment), resolves its model/provider/reasoning_effort tuple
+  (`model_stylesheet`, then explicit node attributes, then the origin
+  thread's own provider/defaults — validated against the live
+  `bb.sdk.providers.models` catalog, never silently substituted), and waits
+  for `thread.idle`/`thread.failed`/`thread.deleted` (registering its three
+  `bb.events.on` listeners exactly once, since the SDK has no unsubscribe,
+  and dispatching by threadId through an internal map — a fast/replayed
+  completion is also reconciled immediately via `bb.sdk.threads.get`
+  without waiting for the event). A `thread.failed`/`thread.deleted`
+  completion **throws**, which is deliberate: engine.ts's own
+  `max_retries` machinery only retries a *thrown* handler error, never a
+  returned business `Outcome`, so a dead worker thread is exactly the
+  "infra fault" that mechanism is for (see T3's README note it flagged as
+  needing T4 to settle). For an `output_schema` node, the worker must call
+  the `attractor_result` tool; an invalid or missing report gets up to two
+  corrective re-prompts of the same thread (`bb.sdk.threads.send`) before
+  the stage is recorded failed.
+- `handlers/agent.ts` / `handlers/prompt.ts` — thin adapters from the
+  engine's `Handler` shape onto `AgentBackend.run`, carrying the per-run
+  threadId/projectId/environmentId the backend needs. `prompt` (the `tab`
+  shape's "single LLM call, read-only tools") is otherwise identical to
+  `agent` in v1 — see "Deviations" below.
+- `handlers/command.ts` — runs a node's `script` through an injected `exec`
+  dependency (wired to the real `host.ts` RPC in `server/service.ts`) and
+  maps its exit code/timeout to an Outcome, writing `command.output` /
+  `command.exit_code` to context per the dialect's context-keys list.
+- `handlers/conditional.ts` — a `diamond` node has no prompt/script of its
+  own; it mirrors the *previous* stage's outcome status via a new
+  `context.last_outcome` key engine.ts now writes after every stage (not in
+  the plan's literal context-keys list — see "Deviations" below), which is
+  what lets the Appendix's BranchLoop `check` node's own
+  `condition="outcome=succeeded|failed"` edges mean anything.
+- `handlers/parallel.ts` / `handlers/start-exit.ts` — trivial always-succeed
+  handlers for `parallel`/`parallel.fan_in`/`start`/`exit`: engine.ts itself
+  already does the fan-out/fan-in and goal-gate/termination bookkeeping
+  around these nodes' own stage.
+- `host.ts` / `host-contract.ts` — the real `exec` host RPC: runs `script`
+  via `/bin/sh -c` in a detached process group (so a timeout/abort can kill
+  a build tool's own children, not just the shell), `cwd` = the
+  environment's path, `ATTRACTOR_RUN_ID`/`ATTRACTOR_NODE_ID` env, optional
+  stdin, and stdout/stderr bounded to the last 64 KiB (tail, not head).
+- `server/store.ts` — a `better-sqlite3`-backed `RunStore` (runs, stages,
+  events; append-only migrations, matching `bb-plugin-assembly-lines`'s
+  `JobStore` shape), taking the `Database.Database` handle directly so it
+  is unit-testable without a fake `bb`.
+- `server/service.ts` — run lifecycle: validates and persists a run,
+  starts it in the background (`runEngine` with the real handler
+  registry), persists every event/stage transition and checkpoint,
+  publishes `bb.realtime` on the `attractor-runs` channel, and resumes
+  every `running` run from its last checkpoint (`resumeRunningRuns`,
+  called by the `attractor-runs` background service on load — this is how
+  a run survives a plugin restart). `resolveWorkflowPath` resolves a
+  `path` input relative to the origin thread's environment root and
+  rejects any traversal outside it.
+- `server/contracts.ts` — the `getRun`/`listRuns`/`getGraph`/`getEvents`
+  RPC contract; every read is scoped to the calling thread's own runs.
+- `server.ts` — wires all of the above: the `attractor_run` /
+  `attractor_inspect` / `attractor_result` agent tools, `bb agents.configure`
+  gating (a spawned worker thread gets only `attractor_result` when its
+  node needs a structured result, otherwise no plugin tools at all; the
+  origin thread gets `attractor_run`/`attractor_inspect` + the `attractor`
+  skill), the `bb attractor validate|run|status|stages|events|stop` CLI,
+  and the `attractor-runs` background service.
+
+`tests/server/backend.test.ts`, `tests/server/service.test.ts` and
+`tests/server/server.test.ts` exercise this against
+`@get-bb/plugin-sdk/testing`'s `createFakePluginHost` (spawn args, idle →
+output → outcome, a failed thread retrying, structured-result
+validation/retry, path-traversal rejection, directive text, RPC ownership
+scoping, and resuming a run stuck "running" across a simulated reload);
+`tests/host.test.ts` exercises the real `exec` host entry via
+`experimental_createHostEntryHarness` (exit code, stdin, timeout/kill,
+output bounding); `tests/handlers/*` and `tests/server/store.test.ts` cover
+the rest with plain fakes.
+
+The DAG UI and human gates land in later tasks (T5–T7).
 
 ## Development
 
@@ -222,3 +302,73 @@ bb plugin build .
   evaluating the gate anyway can only ever keep an already-failing run
   failing, never flip a run that would otherwise succeed — so this is a
   safe superset of the literal wording, not a narrowing.
+
+- **`context.last_outcome` (T4, new engine.ts context key).** The plan's
+  "Context keys written by handlers" list doesn't include a way for a
+  `conditional`/diamond node — which has no prompt/script of its own — to
+  know the *previous* stage's outcome status, which its own outgoing
+  `condition="outcome=succeeded|failed"` edges need (see the Appendix's
+  BranchLoop example's `check` node). `engine.ts`'s `writeOutcomeToContext`
+  now also writes `context.last_outcome` after every stage (main walk and
+  parallel branches alike), and `handlers/conditional.ts` mirrors it as its
+  own outcome. This is additive — no existing context key changed meaning —
+  and is covered by a new `tests/engine.test.ts` case plus
+  `tests/handlers/conditional.test.ts`.
+
+- **`prompt` (`tab`) nodes are not actually read-only (T4).** The plan
+  describes `tab` as "single LLM call, read-only tools", but BB's plugin
+  SDK has no per-tool read-only restriction a plugin can apply to a
+  spawned worker thread — `bb.sdk.threads.spawn` takes a permission *mode*
+  (`accept-edits`/`auto`/`full`), not a tool allowlist, and that mode
+  already comes from the origin thread's own defaults or the stylesheet.
+  `handlers/prompt.ts` is therefore identical to `handlers/agent.ts` in
+  v1; a real read-only mode would need either a BB SDK addition or a
+  provider-specific permission override, out of scope here.
+
+- **Structured-result validation only actually validates the `routing`
+  shape (T4).** `output_schema` is documented as `"routing" | inline JSON
+  Schema string`, but v1 only implements real validation for the literal
+  `"routing"` value (`server/backend.ts`'s `validateRoutingResult`,
+  matching the "Routing output schema" section's exact field list). A node
+  with an inline JSON-Schema-string `output_schema` still gets the
+  `attractor_result` tool and the same routing-shape check; its own schema
+  string is not separately parsed or enforced. Documented in
+  `skills/attractor/SKILL.md` too.
+
+- **`inputs`/`context_updates` tool parameters are flat scalar maps, not
+  arbitrary JSON (T4).** A plugin agent tool's `parameters` schema is
+  turned into a JSON Schema for the provider, and the SDK's own
+  `registerTool` refuses one containing a recursive local `$ref` chain —
+  which is exactly what `zod`'s `z.json()` produces, being defined
+  recursively. `attractor_run`'s `inputs` and `attractor_result`'s
+  `context_updates` are therefore `Record<string, string | number |
+  boolean | null>` rather than arbitrary JSON values. The RPC surface
+  (`server/contracts.ts`), which isn't turned into provider-facing JSON
+  Schema, still uses `z.json()` for a run's full context/outcome/events.
+
+- **Human (`hexagon`) nodes fail clearly rather than block (T4).** Human
+  gates are T6's task; until then, `server/service.ts`'s `HandlerRegistry`
+  gives `human` a stub that returns `{ status: "failed", failureReason:
+  "human gates are not implemented yet (T6)" }` so a graph reaching one
+  fails the stage (and, via the normal `on_failure` cascade, the run) with
+  a clear message instead of hanging forever waiting for an answer that
+  can never come.
+
+- **RPC ownership scoping (T4, not explicitly required by the plan).**
+  `server.ts`'s `getRun`/`getGraph`/`getEvents` RPC handlers check the
+  stored run's `threadId` against the caller's own `threadId` and return
+  null/empty rather than another thread's run details, matching the
+  ownership check `bb-plugin-assembly-lines`'s RPC surface already applies
+  to its jobs. Not called out in the plan's RPC list, but seemed like an
+  obvious-enough safety property to skip only with a good reason, and
+  there wasn't one.
+
+- **T1's scaffold test is superseded, not extended (T4).** `tests/
+  scaffold.test.ts` faked a minimal `bb` object (`{ log }`) and asserted
+  `server.ts` logged a startup line — true of the T1 stub, but `server.ts`
+  now needs the full `BbPluginApi` (storage, hosts, sdk, rpc, agents, cli,
+  background) to load at all, and no longer logs anything on a bare
+  happy-path load. It's replaced by `tests/server/server.test.ts`'s "loads
+  and registers rpc, cli, tools, and the background service" case, which
+  asserts the same "the plugin loads under the bb host" fact against a
+  real (fake) host instead of a hand-rolled partial one.

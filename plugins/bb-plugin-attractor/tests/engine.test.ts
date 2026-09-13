@@ -678,6 +678,49 @@ describe("engine: checkpoint save + resume", () => {
 // Defensive: engine writes must never pollute Object.prototype
 // ---------------------------------------------------------------------------
 
+describe("engine: last_outcome context key (T4: lets a conditional/diamond node mirror the preceding stage's outcome)", () => {
+  it("writes context.last_outcome after every stage, readable by the next node's own outcome-based routing", async () => {
+    // "check" (a diamond/conditional node with no prompt/script of its own) routes
+    // by "outcome=succeeded|failed" on its own outgoing edges; per the Appendix's
+    // BranchLoop example, its own handler must therefore be able to mirror
+    // whatever the *previous* stage's outcome was, and `context.last_outcome` is
+    // how it reads that.
+    const graph = graphFrom(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      build [shape=parallelogram, script="npm run build"]
+      check [shape=diamond]
+      fix   [prompt="fix it"]
+      start -> build -> check
+      check -> exit [condition="outcome=succeeded"]
+      check -> fix  [condition="outcome=failed"]
+    }`);
+    let checkSawLastOutcome: unknown;
+    const handlers = baseHandlers({
+      command: succeedHandler({ status: "failed", text: "build output" }),
+      conditional: {
+        run: async (input) => ({ status: (input.context.get("last_outcome") as string) === "failed" ? "failed" : "succeeded" }),
+      },
+      agent: {
+        run: async (input) => {
+          checkSawLastOutcome = input.context.get("last_outcome");
+          return { status: "succeeded" };
+        },
+      },
+    });
+    const { clock } = makeClock();
+    const { onEvent } = collector();
+    const result = await runEngine({ graph, handlers, runId: "r", clock, signal: NEVER_ABORT, onEvent });
+
+    // build failed -> check mirrors "failed" -> routes to fix, which itself then
+    // observes check's own (mirrored) outcome as the new last_outcome.
+    expect(checkSawLastOutcome).toBe("failed");
+    // fix has no outgoing edge, so the run dead-ends on fix's own (succeeded)
+    // outcome rather than reaching exit — this test is only about last_outcome.
+    expect(result.status).toBe("succeeded");
+  });
+});
+
 describe("engine: context writes never pollute Object.prototype", () => {
   afterEach(() => {
     delete (Object.prototype as Record<string, unknown>).polluted2;

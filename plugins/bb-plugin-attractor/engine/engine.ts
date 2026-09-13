@@ -364,6 +364,12 @@ export class Engine {
   // outcome status, so goal gates on branch nodes are honoured at exit too.
   private writeOutcomeToContext(context: Context, node: WorkflowNode, outcome: Outcome): void {
     context.set("last_stage", node.id);
+    // Not in the plan's literal "Context keys written by handlers" list, but
+    // needed for a `conditional` (diamond) node — which has no prompt/script of
+    // its own — to mirror the *previous* stage's outcome onto its own outgoing
+    // "outcome=succeeded|failed" edge conditions (see the Appendix's BranchLoop
+    // example's `check` node). See README "Deviations from the plan" (T4).
+    context.set("last_outcome", outcome.status);
     if (outcome.text !== undefined) {
       context.set("last_response", outcome.text.slice(0, 200));
       context.set(`response.${node.id}`, outcome.text);
