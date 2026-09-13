@@ -269,7 +269,11 @@ T6 adds **human gates** — the `hexagon` handler, end to end:
   per the plan: `human.gate.selected`, `human.gate.label` (button choices
   only), `human.gate.text` (freeform only), `human.gate.<node>.answer` /
   `.label`. A user cancel or an unanswered timeout with nothing to fall back
-  to fails the stage clearly (never hangs).
+  to fails the stage clearly (never hangs) — and, since there's no answer to
+  drive `respondWithChoice`'s own `human.answered` emit, both branches emit
+  a bare `human.answered` (no `answer`) themselves, so `applyEventToStore`
+  still clears the transient `blocked` run/stage status before the routing
+  cascade carries the run on through the failed gate's outgoing edges.
 - `server/human.ts` — the real `HumanInterviewer`, via `bb.ui.requestInput`
   (`rendererId: "attractor-human-gate"`, from `server/contracts.ts`'s
   `HUMAN_GATE_RENDERER_ID`). Maps `requestInput`'s cancellation reasons:
@@ -501,7 +505,51 @@ bb plugin build .
   (`context.get("human.default_choice")`, i.e. `context.human.default_choice`
   once dot-path-nested), the more literal reading of the name and the one
   that needs no addition to the documented dialect. A timeout with no such
-  context value fails the stage clearly rather than guessing.
+  context value fails the stage clearly rather than guessing. For this to be
+  reachable at all, a run's `inputs` (T6 fix round 1) are now dot-path
+  expanded into the initial context the same way an agent's
+  `context_updates` already are — `attractor_run`'s tool schema and `bb
+  attractor run --input k=v` can only produce a flat scalar map (no nested
+  objects, so `attractor_run` stays representable as non-recursive JSON
+  Schema for every model provider's tool list), so `inputs: {
+  "human.default_choice": "[A] Approve" }` is the only shape a caller can
+  actually send; `createAndStartRun` now merges it through `Context.merge`
+  before persisting it as the run's `initialContext`, so the literal dotted
+  key lands where `context.get("human.default_choice")` — and every
+  `context.<path>` edge condition — can see it. Previously it was stored
+  verbatim as a literal top-level key named `"human.default_choice"` and was
+  invisible to both.
+
+- **`question_type` (T6) is parsed, threaded through to the interviewer's
+  `payload.questionType`, and otherwise left uninterpreted.** The plan lists
+  `question_type` as a node attribute and names "`question_type` overrides"
+  as a T6 behaviour, but never says what it overrides — there is no
+  candidate value vocabulary (`"yesno"` is only ever used as an example) and
+  no described rendering/routing effect to override, unlike `freeform`
+  (an edge attribute with a stated meaning) or `human.default_choice`
+  (named, if not fully specified). Rather than invent UI semantics the plan
+  doesn't ask for, this implementation carries the attribute end to end —
+  `dot/graph.ts` parses it, `handlers/human.ts` passes it to the
+  `HumanInterviewer`, `server/human.ts` puts it on the `bb.ui.requestInput`
+  payload — so a future renderer (or a different `HUMAN_GATE_RENDERER_ID`
+  consumer) has it available, but the shipped `ui/human-gate.tsx` doesn't
+  branch on it: its rendering (buttons per edge option, plus a free-text
+  field when any outgoing edge is `freeform`) already covers every case the
+  plan actually describes, `question_type` included.
+
+- **Accelerator-key answers take priority over literal free text on a
+  `freeform` gate (T6).** `resolveHumanAnswerValue` (`bb attractor answer`)
+  matches `answer` against an option's raw label, its stripped text, or its
+  accelerator key (case-insensitively) before ever falling back to free
+  text — so on a gate offering `"[A] Approve"`, `bb attractor answer <run> a`
+  is read as "pick Approve", not as the literal one-character text answer
+  "a", even when the gate also declares `freeform=true`. This is a
+  deliberate choice, consistent with how the same three forms are matched
+  everywhere else (`parseAcceleratorLabel`, the router's own accelerator
+  handling) — a `freeform` edge is meant to let a gate accept an answer
+  outside its button set, not to make its buttons' own accelerators
+  ambiguous with text that happens to collide with one. `tests/server/
+  service.test.ts` locks this precedence in with a regression test.
 
 - **`bb attractor answer` resolves a live interaction via
   `bb.sdk.threads.interactions.list`/`respond` (T6), an SDK area the plan's

@@ -272,6 +272,69 @@ describe("createService: human gates (T6)", () => {
     // failed, never left "running"/"blocked" forever.
     await vi.waitFor(() => expect(store.listStages(run.id).find((s) => s.nodeId === "gate")).toMatchObject({ status: "failed" }));
   });
+
+  // Validation finding (blocking): SKILL.md/README both document that a
+  // timed-out gate "falls back to the `human.default_choice` context key ...
+  // set via `attractor_run`'s `inputs`" — but `attractor_run`'s tool schema
+  // (and `bb attractor run --input k=v`) can only produce a *flat* map, so
+  // `inputs: { "human.default_choice": "..." }` is the only shape a caller
+  // can actually send. That must land where `context.get("human.default_choice")`
+  // (a dot-path read) can see it, not as a literal dotted top-level key.
+  it("expands a run's flat dotted `inputs` keys (as produced by attractor_run/--input) into nested context, so human.default_choice is reachable on timeout", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    const backend = fakeBackend(async () => ({ status: "succeeded" }));
+    const humanInterviewer: HumanInterviewer = { ask: async () => ({ kind: "timeout" }) };
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient(), humanInterviewer });
+
+    const { run } = await service.createAndStartRun({
+      source: HUMAN_GATE_GRAPH,
+      threadId: "origin-thread",
+      projectId: "project-1",
+      environmentId: "env-1",
+      inputs: { "human.default_choice": "[A] Approve" },
+    });
+    await vi.waitFor(() => expect(store.getRun(run.id).status).not.toBe("running"));
+
+    expect(store.getRun(run.id).status).toBe("succeeded");
+    expect(store.listStages(run.id).find((s) => s.nodeId === "gate")).toMatchObject({ status: "succeeded" });
+  });
+
+  // Validation finding (minor): a human gate that ends *without* an answer
+  // (cancelled, or timeout with nothing to fall back to) must still clear the
+  // run/stage's transient "blocked" status — the run keeps executing further
+  // stages via the routing cascade's unconditional edges, and those stages
+  // must not run while the run is still reporting "blocked".
+  it("clears the run's blocked status when a human gate is cancelled, before routing onward to the next stage", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    let resolveAfter: ((outcome: { status: "succeeded" }) => void) | null = null;
+    const backend = fakeBackend((input: AgentRunInput) => {
+      if (input.node.id !== "after") return Promise.resolve({ status: "succeeded" as const });
+      return new Promise((resolve) => {
+        resolveAfter = resolve;
+      });
+    });
+    const humanInterviewer: HumanInterviewer = { ask: async () => ({ kind: "cancelled" }) };
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient(), humanInterviewer });
+
+    const GATE_THEN_STAGE_GRAPH = `digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      gate  [shape=hexagon, label="Approve?"]
+      after [label="After", prompt="work"]
+      start -> gate
+      gate -> after [label="[A] Approve"]
+      after -> exit
+    }`;
+    const { run } = await service.createAndStartRun({ source: GATE_THEN_STAGE_GRAPH, threadId: "origin-thread", projectId: "project-1", environmentId: "env-1" });
+
+    await vi.waitFor(() => expect(resolveAfter).not.toBeNull());
+    expect(store.getRun(run.id).status).toBe("running");
+
+    resolveAfter!({ status: "succeeded" });
+    await vi.waitFor(() => expect(store.getRun(run.id).status).toBe("succeeded"));
+  });
 });
 
 describe("createService: answerHumanGate (T6, bb attractor answer)", () => {
@@ -343,6 +406,41 @@ describe("createService: answerHumanGate (T6, bb attractor answer)", () => {
     const result = await service.answerHumanGate("run-x", "yolo");
 
     expect(result.answered).toBe(false);
+  });
+
+  // Validation finding (minor, documented as a deliberate deviation in
+  // README's "Deviations from the plan"): an accelerator-key match takes
+  // priority over the literal free-text fallback, even on a `freeform`
+  // gate, matching how the same three forms (raw label / stripped text /
+  // accelerator key) are matched everywhere else in this plugin.
+  it("prefers an accelerator-key match over literal free text, even on a freeform gate", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    const backend = fakeBackend(async () => ({ status: "succeeded" }));
+    const respondCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.interactions.list", async () => [
+      pluginInteraction({
+        data: {
+          runId: "run-x",
+          nodeId: "gate",
+          question: "Approve plan?",
+          options: [{ raw: "[A] Approve", key: "A", text: "Approve", to: "exit" }],
+          freeform: true,
+          questionType: null,
+        },
+      }),
+    ]);
+    host.harness.sdk.stub("threads.interactions.respond", async (args: unknown) => {
+      respondCalls.push(args);
+      return {};
+    });
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient() });
+    store.createRun({ id: "run-x", threadId: "origin-thread", projectId: null, environmentId: null, title: null, source: HUMAN_GATE_GRAPH, graph: {}, initialContext: {} });
+
+    const result = await service.answerHumanGate("run-x", "a");
+
+    expect(result).toEqual({ answered: true });
+    expect(respondCalls).toEqual([{ interactionId: "interaction-1", threadId: "origin-thread", value: { kind: "choice", raw: "[A] Approve" } }]);
   });
 
   it("reports no pending gate when there is no matching interaction for this run", async () => {

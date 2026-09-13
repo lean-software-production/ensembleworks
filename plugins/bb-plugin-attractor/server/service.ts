@@ -11,6 +11,7 @@ import posixPath from "node:path/posix";
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { parseWorkflowGraph, type WorkflowGraph } from "../dot/graph";
 import { validate as validateGraph } from "../dot/validate";
+import { createContext } from "../engine/context";
 import { runEngine } from "../engine/engine";
 import type { Checkpoint, HandlerRegistry, JsonValue, Outcome, RunEvent } from "../engine/types";
 import { createAgentHandler, type AgentHandlerContext } from "../handlers/agent";
@@ -113,6 +114,24 @@ function parseVisitFromStageId(stageId: string, nodeId: string): number {
   const suffix = stageId.slice(nodeId.length + 1);
   const visit = Number.parseInt(suffix, 10);
   return Number.isFinite(visit) ? visit : 0;
+}
+
+// `attractor_run`'s tool schema (and `bb attractor run --input k=v`) can only
+// produce a *flat* map of scalars — a recursive JSON schema isn't accepted by
+// every model provider's tool list (see server.ts's `scalarValueSchema`
+// comment) — so a caller wanting to set a nested context value like
+// `human.default_choice` (per skills/attractor/SKILL.md and README's
+// documented timeout fallback) can only ever send it as a literal dotted key:
+// `inputs: { "human.default_choice": "..." }`. `Context`'s reads/writes are
+// dot-path (`context.get("human.default_choice")`, `dot/conditions.ts`'s
+// `context.<path>`), so a flat top-level key would be invisible to both.
+// Expand every `inputs` key through the same dot-path merge an agent's
+// `context_updates` already goes through, before it's ever persisted as the
+// run's initial context.
+function expandFlatInputsToContext(inputs: Record<string, JsonValue> | undefined): Record<string, JsonValue> {
+  const context = createContext();
+  context.merge(inputs);
+  return context.toObject();
 }
 
 function outcomeStageStatus(outcome: Outcome): Stage["status"] {
@@ -329,7 +348,7 @@ export function createService(deps: ServiceDeps) {
       title: input.title ?? graph.name,
       source: input.source,
       graph: toGraphView(graph, []),
-      initialContext: input.inputs ?? {},
+      initialContext: expandFlatInputsToContext(input.inputs),
     });
     publish(run);
     // Fire-and-forget: the tool/CLI call returns as soon as the run is durably

@@ -128,12 +128,19 @@ export function createHumanHandler(interviewer: HumanInterviewer, ctx: HumanHand
       });
 
       if (result.kind === "cancelled") {
+        // No answer arrived, but the gate is done waiting: emit human.answered
+        // (with no `answer`) so applyEventToStore clears the run/stage's
+        // transient "blocked" status the same way an actual answer would —
+        // otherwise the run keeps reporting "blocked" while the routing
+        // cascade carries it on through this failed stage's outgoing edges.
+        emit({ type: "human.answered" });
         return { status: "failed", failureReason: `human gate "${node.id}" was cancelled before answering` };
       }
 
       if (result.kind === "timeout") {
         const fallback = context.get("human.default_choice");
         if (typeof fallback !== "string") {
+          emit({ type: "human.answered" });
           return {
             status: "failed",
             failureReason: `human gate "${node.id}" timed out with no "human.default_choice" context value to fall back to`,
