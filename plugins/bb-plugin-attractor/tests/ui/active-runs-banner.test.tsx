@@ -158,6 +158,44 @@ describe("ActiveRunsBanner", () => {
     await waitFor(() => expect(answerCalledWith).toEqual({ runId: "run-2", threadId: "thread-1", answer: "[A] Approve" }));
   });
 
+  it("shows the reviewed file and an Open thread link for a blocked human gate with gate context", async () => {
+    const stagesWithContext: StageView[] = GATE_STAGES.map((stage) =>
+      stage.nodeId === "gate"
+        ? {
+            ...stage,
+            gateContext: {
+              context: { nodeId: "plan", label: "Plan", text: "1. do the thing", threadId: "plan-worker-thread" },
+              reviewTarget: { path: "PLAN.md", text: "# Plan" },
+            },
+          }
+        : stage,
+    );
+    const slot = await renderBanner({ activeRuns: () => ({ runs: [{ run: GATE_RUN, stages: stagesWithContext, graph: GATE_GRAPH }] }) });
+    await slot.findByText("Gate run");
+
+    expect(slot.getByText(/Reviewing: PLAN\.md/)).toBeTruthy();
+    const openThread = slot.getByRole("button", { name: /open thread/i });
+    openThread.click();
+    expect(slot.inspection.navigateCalls).toContainEqual({ method: "toThread", threadId: "plan-worker-thread" });
+  });
+
+  it("keeps the last known rows when an activeRuns refresh fails, so a blocked run's banner does not vanish on a transient error", async () => {
+    let calls = 0;
+    const slot = await renderBanner({
+      activeRuns: () => {
+        calls += 1;
+        if (calls === 1) return { runs: [{ run: GATE_RUN, stages: GATE_STAGES, graph: GATE_GRAPH }] };
+        throw new Error("transient");
+      },
+    });
+    await slot.findByText("Gate run");
+
+    await slot.behavior.emitRealtime("attractor-runs", { runId: "run-2", threadId: "thread-1" });
+    await waitFor(() => expect(calls).toBeGreaterThan(1));
+    // The failed refresh must not collapse the banner into the empty state.
+    expect(slot.getByText("Gate run")).toBeTruthy();
+  });
+
   it("opens the thread panel with the run and thread ids from the chevron", async () => {
     const slot = await renderBanner({ activeRuns: () => ({ runs: [{ run: RUN, stages: STAGES, graph: GRAPH }] }) });
     await slot.findByText("Plan Implement Review");

@@ -60,7 +60,11 @@ function useActiveRuns(rpc: Rpc, threadId: string | null) {
     }
     rpc.call("activeRuns", { threadId }).then(
       (result) => setRuns(result.runs),
-      () => setRuns([]),
+      // A transient RPC failure is not "no active runs": keep the last known
+      // rows so the banner stays up and the fallback poll below keeps
+      // retrying (a run parked on a human gate publishes no realtime events
+      // while it waits, so the poll is its only recovery path).
+      () => setRuns((previous) => previous),
     );
   }, [rpc, threadId]);
 
