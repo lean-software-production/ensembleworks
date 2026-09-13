@@ -138,9 +138,26 @@ describe("RunStore", () => {
     const store = new RunStore(db);
     store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
     store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
-    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: null });
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: null, gateContext: null });
     // And re-opening the now-migrated database a second time is a no-op, not an error.
     expect(() => new RunStore(db)).not.toThrow();
+  });
+
+  it("records and clears a stage's gate context (human.requested event's context/reviewTarget summary)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "gate@1", nodeId: "gate", visit: 1, attempt: 1, status: "blocked", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ gateContext: null });
+
+    const gateContext = {
+      context: { nodeId: "revise", label: "Revise", text: "the revised plan", threadId: "worker-thread" },
+      reviewTarget: { path: "PLAN.md", text: "# The plan" },
+    };
+    store.setStageGateContext("run-1", "gate", 1, gateContext);
+    expect(store.listStages("run-1")[0]).toMatchObject({ gateContext });
+
+    store.setStageGateContext("run-1", "gate", 1, null);
+    expect(store.listStages("run-1")[0]).toMatchObject({ gateContext: null });
   });
 
   it("appends events with an increasing seq and lists them since a cursor", () => {

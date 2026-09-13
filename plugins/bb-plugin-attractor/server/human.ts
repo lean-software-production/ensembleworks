@@ -38,6 +38,11 @@ export function createThreadHumanInterviewer(bb: BbPluginApi): HumanInterviewer 
       options: input.options.map((o) => ({ raw: o.raw, key: o.key, text: o.text, to: o.to })),
       freeform: input.freeform,
       questionType: input.questionType ?? null,
+      // Same "bare object literal" rebuild as `options` above, for the same
+      // reason (HumanGateContext/ReviewTargetSummary are interfaces, with no
+      // index signature).
+      context: input.gateContext ? { nodeId: input.gateContext.nodeId, label: input.gateContext.label, text: input.gateContext.text, threadId: input.gateContext.threadId } : null,
+      reviewTarget: input.reviewTarget ? { path: input.reviewTarget.path, content: input.reviewTarget.content, error: input.reviewTarget.error } : null,
     };
 
     const result = await bb.ui.requestInput(

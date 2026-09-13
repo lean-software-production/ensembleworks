@@ -76,6 +76,7 @@ export function StageList({ stages, graph, now, onOpenThread }: StageListProps) 
                 {stage.status}
                 {stage.actor ? ` (answered via ${stage.actor})` : ""}
                 {stage.status === "blocked" && stage.waitingReason ? ` (waiting: ${stage.waitingReason})` : ""}
+                {stage.status === "blocked" && stage.gateContext?.reviewTarget ? ` (reviewing ${stage.gateContext.reviewTarget.path})` : ""}
               </td>
               <td>{stage.visit}</td>
               <td>{formatDuration(Math.max(0, elapsedMs))}</td>

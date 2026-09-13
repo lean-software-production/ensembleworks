@@ -163,4 +163,16 @@ describe("dot/validate", () => {
       'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon] start->gate gate->exit[freeform=true] }';
     expect(codes(source)).not.toContain("human-gate-no-options");
   });
+
+  it("flags an empty review_target", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon, review_target=""] start->gate gate->exit[label="[A] Approve"] }';
+    expect(codes(source)).toContain("invalid-review-target");
+  });
+
+  it("does not flag a non-empty review_target", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon, review_target="PLAN.md"] start->gate gate->exit[label="[A] Approve"] }';
+    expect(codes(source)).not.toContain("invalid-review-target");
+  });
 });

@@ -75,7 +75,9 @@ that order against the node's own attribute, then the graph's
 permission mode; BB may still cap a spawned worker at the origin thread's
 own permission ceiling regardless of what is requested here), `max_parallel`,
 `question_type`, `join_policy` (`all`\|`any`\|`first` — v1 implements `all`),
-`stdin_source`.
+`stdin_source`, `review_target` (a `human` gate's workspace-relative file
+path to show alongside its question — see "Human gates" below; note this is
+**not** Fabro's `review_target`, see "Deviations from the plan").
 
 Edge attributes: `label`, `condition`, `weight` (int, default `0`),
 `freeform` (human gates), `loop_restart` (parsed, ignored in v1).
@@ -109,6 +111,29 @@ nothing to answer falls back to the `human.default_choice` context key if
 one is set (e.g. via `attractor_run`'s `inputs`), otherwise the stage fails
 clearly rather than hanging forever.
 
+**What the gate shows (2026-09-13 follow-up).** A human asked "Approve
+plan?" can now see what plan: above the buttons, the renderer shows
+
+- a **"Reviewing: `<path>`"** block when the node declares `review_target`
+  (a workspace-relative path, e.g. `review_target="PLAN.md"`) — the file is
+  read at gate-open time (`bb.sdk.files.read`, resolved against the run's
+  environment the same way a workflow `path` is; a path that escapes the
+  environment root or names a missing file shows an error there instead of
+  failing the gate); rendered as Markdown for a `.md` path, or a scrollable
+  monospace block otherwise;
+- a collapsible **"Output of `<label>`"** block with the *previous* stage's
+  response text (the context key `last_stage` at the time the gate opens,
+  or the gate's single predecessor in the graph when that key is unset) —
+  open by default when there's no `review_target` to show, collapsed
+  otherwise;
+- an **"Open thread"** button when that previous stage's worker thread is
+  known, jumping straight to it.
+
+This context is also on the `human.requested` event (a short summary:
+node id/label/thread id, the reviewed path, and the first 200 characters of
+each text), and `bb attractor stages`'/the run panel's stage table show
+"reviewing `<path>`" for a blocked gate with a `review_target`.
+
 ### Worker prompts (blocked agent/prompt stages)
 
 A worker thread inherits the origin thread's own permission mode/ceiling —
@@ -138,8 +163,11 @@ bb thread interactions approve <interactionId> <workerThreadId>   # or: grant
 - `attractor_run({ source | path, inputs?, title? })` — validates and
   persists a run, starts it in the background, and returns
   `{ runId, previewDirective }`. Emit `previewDirective` (a
-  `::attractor-run{run="<runId>"}` message directive) exactly once, on its
-  own line, so the room sees a live card.
+  `::attractor-run{run="<runId>" thread="<threadId>"}` message directive,
+  `threadId` being the run's origin thread) exactly once, on its
+  own line, so the room sees a live card. The `thread` attribute means the
+  directive can be pasted into (or forwarded to) any other thread and still
+  resolve — see "Cross-thread cards" below.
 - `attractor_inspect({ runId })` — the run's status and every stage's
   status/visit count/worker `threadId`.
 - `attractor_result` — registered only for a spawned worker thread whose
@@ -171,6 +199,15 @@ again" response, not an error). `stop` exits `1` with
 successful stop prints only `{ stopped: true, status: "cancelled" }`, not
 the whole run.
 
+**`--field <dot.path>`** (any command): prints just the value at that path
+instead of the whole JSON object — a bare scalar with no surrounding quotes
+(`bb attractor status <runId> --field status` prints `running`, not
+`"running"`), an object/array as JSON. For a command whose result is itself
+an array (`stages`, `events`) the path is applied to *each element*, one
+line per element (`bb attractor stages <runId> --field nodeId` prints one
+node id per line). An unknown path exits `1` with `no such field: <path>`
+on stderr (for an array result, that's true when *any* element lacks it).
+
 **RPC** (`server/contracts.ts`, consumed by `ui/*`/`app.tsx` via `useRpc`):
 `getRun`, `listRuns`, `getGraph`, `getEvents`, `stopRun` — every method is
 scoped to the calling thread's own runs.
@@ -180,10 +217,23 @@ on every event; `ui/run-panel.tsx`'s `RunPanel` subscribes via
 `useRealtime` and refetches.
 
 **Directive / panel**: the `attractor-run` message directive
-(`::attractor-run{run="<runId>"}`) renders a header, the DAG, and an
-expandable stage list inline in chat; "Open in right panel" opens the same
-run in the thread side panel with the full DAG, stage list, event timeline,
-and a Stop button.
+(`::attractor-run{run="<runId>" thread="<threadId>"}`) renders a header, the
+DAG, and an expandable stage list inline in chat; "Open in right panel"
+opens the same run in the thread side panel with the full DAG, stage list,
+event timeline, and a Stop button.
+
+**Cross-thread cards.** The `thread` attribute names the run's *origin*
+thread — every RPC call a card makes is scoped to it, not to whatever
+thread happens to be hosting the card (`app.tsx`'s `Directive` uses
+`attributes.thread?.trim() || message.threadId`, so a directive authored
+before this attribute existed, or pasted by hand without it, still falls
+back to its own hosting thread exactly as before). This means
+`::attractor-run{run="<runId>" thread="<threadId>"}` — the exact text
+`attractor_run`/`bb attractor run` return — can be copied into *any* thread
+and still render the live card; ownership is unchanged (a card for a run
+whose `thread` attribute doesn't actually match that run's origin thread
+still renders "not found", the same as omitting the attribute against a
+foreign run's id).
 
 ### Structured results (`output_schema="routing"`)
 
@@ -1170,3 +1220,74 @@ bb plugin build .
   illustrative example list. Covered by `tests/server/server.test.ts`'s
   end-to-end test (asserts a plugin interaction's `waitingReason` is its
   `rendererId`).
+
+- **`review_target` (gate-context follow-up) is a workspace-relative file
+  path, not Fabro's boolean of the same name.** Fabro's `review_target` is
+  a boolean flag on a review-type node ("this stage's output should be
+  reviewed"); this dialect instead reads it as a **path**
+  (`review_target="PLAN.md"`) naming the file a `human` gate should show
+  alongside its question, resolved the same way a workflow `path` is
+  (`server/service.ts`'s `resolveWorkflowPath`, against the run's
+  environment root). This plugin has no existing notion of a
+  "review-type" node distinct from `human`, and a path is strictly more
+  useful than a boolean for the same purpose (showing a human *what* to
+  review, not just *that* something should be reviewed) — so the deviation
+  trades Fabro-literal semantics for a value that's actually actionable
+  here.
+
+- **Gate context's routing "predecessor" is `context.last_stage`, falling
+  back to the graph's edge, not a persisted stage-visit chain
+  (gate-context follow-up).** `handlers/human.ts`'s `buildGateContext`
+  reads `context.get("last_stage")` (the engine's own `last_stage` key,
+  written after every stage) for the node id to show; when that key is
+  unset (the gate is the very first node after `start`, or `last_stage`
+  was overwritten unexpectedly), it falls back to the gate's first
+  incoming edge in the graph rather than failing to show anything. A gate
+  reached via a genuinely non-trivial routing path (e.g. after a
+  `conditional`/parallel join) still shows the *literal* previous stage
+  visited, which is the same thing a human reading the DAG immediately
+  above the gate would call "what happened right before this" — this
+  wasn't required to trace back through `suggested_next_ids`/parallel
+  branch provenance for a "true" causal predecessor, which the engine
+  doesn't track as a first-class concept anywhere else either.
+
+- **`HumanInterviewer.stageThreadId` and `HumanHandlerContext.
+  readReviewTarget` are both optional, defaulting to "unknown"/"unreadable"
+  rather than required (gate-context follow-up).** Every existing
+  `HumanInterviewer`/`HumanHandlerContext` construction site in the test
+  suite (and any future one that doesn't care about gate context) keeps
+  compiling and behaving exactly as before: a gate context with no
+  `stageThreadId` lookup just reports `threadId: null` (no "Open thread"
+  button), and a `review_target` with no `readReviewTarget` closure
+  reports it as unreadable (a real error string, not a crash or a silently
+  dropped attribute) rather than requiring every caller to wire both up.
+  `server/service.ts`'s `buildHandlers` is the one real call site that
+  supplies both, backed by `RunStore.listStages` and
+  `resolveWorkflowPath`/`bb.sdk.files.read` respectively.
+
+- **The `human.requested` event's `context`/`reviewTarget` are short
+  summaries (200-character text, no `error` field), not the gate payload's
+  full shapes (gate-context follow-up).** The live gate payload sent to
+  `bb.ui.requestInput` carries the full (20,000/60,000-character-capped)
+  text/content plus a separate `error` field for a failed `review_target`
+  read; the event (and the `attractor_stages.gate_context_json` column it's
+  persisted into, exposed as `StageView.gateContext`) instead carries only
+  `{ nodeId, label, threadId, text }` / `{ path, text }`, each `text`
+  capped to 200 characters — a failed read's error message stands in for
+  `reviewTarget.text` there, so the CLI/stage-table surface still shows
+  *something* went wrong without a second field only one of the two
+  surfaces would ever populate. This keeps the persisted-forever event log
+  and stage row small; a human wanting the full text/content opens the
+  live gate (while it's still open) or the reviewed file/thread directly.
+
+- **Cross-thread cards: the panel carries `threadId` through
+  `openThreadPanel`'s `params`, not a second navigation argument (cross-
+  thread cards follow-up).** `PluginThreadPanelProps.params` is already an
+  arbitrary JSON value a directive's "Open in right panel"
+  button controls; `ui/run-panel.tsx`'s `onOpenPanel` adds `threadId`
+  alongside the existing `runId` there, and `app.tsx`'s `Panel` reads
+  `params.threadId ?? threadId` (its own hosting thread) back out. This
+  needed no SDK/contract change — `params` was already untyped JSON on
+  both ends — and keeps a panel opened from a cross-thread card addressing
+  the run's actual origin thread even though the panel host thread and the
+  run's thread differ.

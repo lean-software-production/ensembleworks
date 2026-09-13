@@ -125,7 +125,9 @@ describe("attractor server plugin", () => {
     const host = makeHost();
     await plugin(host.bb);
     const result = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
-    expect(result.previewDirective).toBe(`::attractor-run{run="${result.runId}"}`);
+    // Cross-thread cards follow-up: the directive carries the origin
+    // thread id so it can be pasted into any thread and still resolve.
+    expect(result.previewDirective).toBe(`::attractor-run{run="${result.runId}" thread="thread-1"}`);
     const inspected = toolJson(await host.harness.behavior.callAgentTool("attractor_inspect", { runId: result.runId }, { threadId: "thread-1", projectId: "project-1" }));
     expect(inspected.run.id).toBe(result.runId);
     await waitForTerminalStatus(host, result.runId);
@@ -503,6 +505,71 @@ describe("attractor server plugin", () => {
     expect(stages.map((s: { nodeId: string }) => s.nodeId)).toEqual(["start", "gate", "exit"]);
   });
 
+  const REVIEW_TARGET_SOURCE = `digraph G {
+    start [shape=Mdiamond]
+    exit  [shape=Msquare]
+    gate  [shape=hexagon, label="Approve plan?", review_target="PLAN.md"]
+    start -> gate
+    gate -> exit [label="[A] Approve"]
+  }`;
+
+  it("gate-context follow-up: bb attractor stages exposes a blocked human gate's review_target content, read through bb.sdk.files.read", async () => {
+    const host = makeHost();
+    host.harness.sdk.stub("files.read", async (args: { path: string }) => {
+      if (args.path === "/repo/PLAN.md") return { content: "# The plan", contentEncoding: "utf8" as const, sha256: "x", sizeBytes: 1 };
+      return baseFileRead(args);
+    });
+    await plugin(host.bb);
+
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: REVIEW_TARGET_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(async () => {
+      const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+      expect(status).toBe("blocked");
+    });
+
+    const stages = JSON.parse((await host.harness.behavior.runCli(["stages", runId], { threadId: "thread-1" })).stdout) as { nodeId: string; gateContext: unknown }[];
+    const gateStage = stages.find((s) => s.nodeId === "gate")!;
+    expect(gateStage.gateContext).toMatchObject({ reviewTarget: { path: "PLAN.md", text: "# The plan" } });
+
+    // Clean up the pending interaction so it doesn't outlive the test.
+    bridgeHumanGateInteractions(host);
+    const answered = await host.harness.behavior.runCli(["answer", runId, "approve"], { threadId: "thread-1" });
+    expect(JSON.parse(answered.stdout)).toEqual({ answered: true });
+    await waitForTerminalStatus(host, runId);
+  });
+
+  it("gate-context follow-up: a review_target that escapes the environment root is reported as an error, not thrown", async () => {
+    const host = makeHost();
+    await plugin(host.bb);
+
+    const source = `digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      gate  [shape=hexagon, label="Approve plan?", review_target="../secrets.md"]
+      start -> gate
+      gate -> exit [label="[A] Approve"]
+    }`;
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(async () => {
+      const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+      expect(status).toBe("blocked");
+    });
+
+    const stages = JSON.parse((await host.harness.behavior.runCli(["stages", runId], { threadId: "thread-1" })).stdout) as { nodeId: string; gateContext: { reviewTarget: { path: string; text: string | null } } }[];
+    const gateStage = stages.find((s) => s.nodeId === "gate")!;
+    // The stage/event summary's reviewTarget carries only `path`/`text` (no
+    // separate error field) — a failed read's error message stands in for
+    // `text` (handlers/human.ts's emit call), so the CLI/RPC surface still
+    // shows *something* went wrong without needing a second field.
+    expect(gateStage.gateContext.reviewTarget).toMatchObject({ path: "../secrets.md" });
+    expect(gateStage.gateContext.reviewTarget.text).toMatch(/escapes/);
+
+    bridgeHumanGateInteractions(host);
+    const answered = await host.harness.behavior.runCli(["answer", runId, "approve"], { threadId: "thread-1" });
+    expect(JSON.parse(answered.stdout)).toEqual({ answered: true });
+    await waitForTerminalStatus(host, runId);
+  });
+
   it("bb attractor answer is scoped to the owning thread and rejects an unrecognized label", async () => {
     const host = makeHost();
     bridgeHumanGateInteractions(host);
@@ -700,5 +767,93 @@ describe("attractor server plugin", () => {
     await plugin(host.bb);
     const result = await host.harness.behavior.runCli(["bogus", "--help"], {});
     expect(result.exitCode).toBe(1);
+  });
+
+  describe("--field <dot.path>", () => {
+    it("prints a scalar field raw, with no surrounding quotes", async () => {
+      const host = makeHost();
+      await plugin(host.bb);
+      const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+
+      const result = await host.harness.behavior.runCli(["status", runId, "--field", "threadId"], { threadId: "thread-1" });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("thread-1");
+    });
+
+    it("prints an object/array field as JSON", async () => {
+      const host = makeHost();
+      await plugin(host.bb);
+      const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+
+      const result = await host.harness.behavior.runCli(["status", runId, "--field", "goalGateFailures"], { threadId: "thread-1" });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("[]");
+    });
+
+    it("applies the field to each element of an array result, one line per element", async () => {
+      const host = makeHost();
+      await plugin(host.bb);
+      const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+      await waitForTerminalStatus(host, runId);
+
+      const result = await host.harness.behavior.runCli(["stages", runId, "--field", "nodeId"], { threadId: "thread-1" });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.split("\n")).toEqual(["start", "plan", "exit"]);
+    });
+
+    it("resolves a nested dot-path", async () => {
+      const host = makeHost();
+      await plugin(host.bb);
+      const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+      await waitForTerminalStatus(host, runId);
+
+      const result = await host.harness.behavior.runCli(["status", runId, "--field", "finalOutcome.status"], { threadId: "thread-1" });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("succeeded");
+    });
+
+    it("exits 1 with 'no such field: <path>' for a field that doesn't exist", async () => {
+      const host = makeHost();
+      await plugin(host.bb);
+      const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+
+      const result = await host.harness.behavior.runCli(["status", runId, "--field", "bogus.path"], { threadId: "thread-1" });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("no such field: bogus.path");
+    });
+
+    it("exits 1 when any element of an array result is missing the field", async () => {
+      const host = makeHost();
+      await plugin(host.bb);
+      const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+      await waitForTerminalStatus(host, runId);
+
+      const result = await host.harness.behavior.runCli(["stages", runId, "--field", "bogus"], { threadId: "thread-1" });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe("no such field: bogus");
+    });
+
+    it("does not let --field leak into `answer`'s free-text join", async () => {
+      const host = makeHost();
+      bridgeHumanGateInteractions(host);
+      await plugin(host.bb);
+      const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: HUMAN_GATE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+      await vi.waitFor(async () => {
+        const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+        expect(status).toBe("blocked");
+      });
+
+      const result = await host.harness.behavior.runCli(["answer", runId, "approve", "--field", "answered"], { threadId: "thread-1" });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe("true");
+      await waitForTerminalStatus(host, runId);
+    });
   });
 });

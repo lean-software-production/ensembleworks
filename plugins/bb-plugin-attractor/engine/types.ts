@@ -93,7 +93,14 @@ export type EdgeSelectedReason =
 export type StageScopedEvent =
   | { type: "log"; message: string }
   | { type: "agent.thread"; threadId: string; provider: string; model: string; reasoningLevel: string | null }
-  | { type: "human.requested"; options?: string[] }
+  | {
+      type: "human.requested";
+      options?: string[];
+      /** The stage that routed into this gate (gate-context follow-up) — nodeId/label/text/threadId, or null when there is none to show. */
+      context?: { nodeId: string; label: string | null; text: string | null; threadId: string | null } | null;
+      /** The `review_target` node attribute's file, if set — path plus its (possibly-error) text. */
+      reviewTarget?: { path: string; text: string | null } | null;
+    }
   | { type: "human.answered"; answer?: string; actor?: "ui" | "cli" | "default" }
   // Dogfood-2 fix: a worker thread (an agent/prompt stage's spawned thread)
   // stopped on its own pending interaction (a permission/file-change/
@@ -156,7 +163,16 @@ export type RunEvent =
   | { type: "agent.thread"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string; provider: string; model: string; reasoningLevel: string | null }
   | { type: "agent.waiting"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string; interactionId: string; kind: string; title: string | null }
   | { type: "agent.resumed"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string }
-  | { type: "human.requested"; runId: string; ts: number; stageId: string; nodeId: string; options?: string[] }
+  | {
+      type: "human.requested";
+      runId: string;
+      ts: number;
+      stageId: string;
+      nodeId: string;
+      options?: string[];
+      context?: { nodeId: string; label: string | null; text: string | null; threadId: string | null } | null;
+      reviewTarget?: { path: string; text: string | null } | null;
+    }
   | { type: "human.answered"; runId: string; ts: number; stageId: string; nodeId: string; answer?: string; actor?: "ui" | "cli" | "default" }
   | { type: "checkpoint.saved"; runId: string; ts: number; stageId: string }
   | { type: "log"; runId: string; ts: number; stageId?: string; message: string };

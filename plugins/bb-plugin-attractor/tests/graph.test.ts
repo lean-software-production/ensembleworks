@@ -268,3 +268,19 @@ describe("dot/graph: permission_mode", () => {
     expect(graph.defaultPermissionMode).toBeUndefined();
   });
 });
+
+describe("dot/graph: review_target (gate context)", () => {
+  it("parses a human gate's review_target attribute", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon, review_target="PLAN.md"] start->gate gate->exit[label="[A] Approve"] }',
+    );
+    expect(graph.nodes.get("gate")?.reviewTarget).toBe("PLAN.md");
+  });
+
+  it("leaves review_target undefined when not set", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon] start->gate gate->exit[label="[A] Approve"] }',
+    );
+    expect(graph.nodes.get("gate")?.reviewTarget).toBeUndefined();
+  });
+});

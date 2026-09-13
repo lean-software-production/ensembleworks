@@ -228,7 +228,11 @@ export function RunPanel({ runId, threadId, mode }: RunPanelProps) {
           now={now}
           dag={dag}
           maxWidth
-          onOpenPanel={() => navigate.openThreadPanel({ actionId: ACTION_ID, params: { runId }, title: run.title ?? "Attractor run" })}
+          // Carries this card's (possibly cross-thread) `threadId` along in
+          // params — app.tsx's `Panel` reads it back so the opened panel
+          // keeps addressing the run's actual origin thread, not whatever
+          // thread the panel happens to be opened into.
+          onOpenPanel={() => navigate.openThreadPanel({ actionId: ACTION_ID, params: { runId, threadId }, title: run.title ?? "Attractor run" })}
           footer={
             <>
               <button type="button" onClick={() => setExpanded((v) => !v)} style={{ background: "none", border: "none", padding: 0, color: "inherit", textDecoration: "underline", cursor: "pointer" }}>

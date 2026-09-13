@@ -19,14 +19,19 @@ import { createPromptHandler } from "../handlers/prompt";
 import { createCommandHandler, type CommandExecInput, type CommandExecResult } from "../handlers/command";
 import { conditionalHandler } from "../handlers/conditional";
 import { forkHandler, joinHandler } from "../handlers/parallel";
-import { createHumanHandler, type HumanInterviewer } from "../handlers/human";
+import { createHumanHandler, type HumanHandlerContext, type HumanInterviewer, type ReviewTargetSummary } from "../handlers/human";
 import { startHandler, exitHandler } from "../handlers/start-exit";
 import type { AgentBackend } from "./backend";
 import { HUMAN_GATE_RENDERER_ID, humanGatePayloadSchema, humanGateValueSchema, type HumanGatePayload } from "./contracts";
 import { DEFAULT_TIMEOUT_MS, type ExecOutput } from "../host-contract";
-import { RunStore, type Run, type Stage } from "./store";
+import { RunStore, type GateContextSummary, type Run, type Stage } from "./store";
 
 const REALTIME_CHANNEL = "attractor-runs";
+
+/** Decodes a `bb.sdk.files.read` result's content, honouring its `contentEncoding`. Shared by `resolveSource`/`server.ts` (a workflow's DOT source) and `readReviewTargetFile` below (a gate's `review_target` file). */
+export function decodeFileContent(file: { content: string; contentEncoding: "utf8" | "base64" }): string {
+  return file.contentEncoding === "base64" ? Buffer.from(file.content, "base64").toString("utf8") : file.content;
+}
 
 // -----------------------------------------------------------------------
 // Path resolution — "resolves `path` relative to the origin thread's
@@ -52,6 +57,41 @@ export function resolveWorkflowPath(relativePath: string, environmentPath: strin
     throw new Error(`workflow path escapes the environment root: ${relativePath}`);
   }
   return resolved;
+}
+
+// -----------------------------------------------------------------------
+// review_target reading (gate-context follow-up) — handlers/human.ts's
+// injected `HumanHandlerContext.readReviewTarget`, with hostId/
+// environmentPath already baked in by `buildHandlers` below (the same way
+// `buildHandlers`'s `command` handler closure already bakes in `envCtx.
+// environmentPath` as `cwd`).
+// -----------------------------------------------------------------------
+
+const REVIEW_TARGET_CONTENT_LIMIT = 60_000;
+
+function truncateReviewTarget(text: string): string {
+  return text.length > REVIEW_TARGET_CONTENT_LIMIT ? `${text.slice(0, REVIEW_TARGET_CONTENT_LIMIT)} …[truncated]` : text;
+}
+
+async function readReviewTargetFile(bb: BbPluginApi, envCtx: RunEnvironmentContext, path: string): Promise<ReviewTargetSummary> {
+  let resolved: string;
+  try {
+    resolved = resolveWorkflowPath(path, envCtx.environmentPath);
+  } catch (err) {
+    // Rejected (e.g. path traversal): reported on the gate payload's own
+    // `reviewTarget.error`, never thrown — a bad `review_target` must not
+    // take down the whole gate (see handlers/human.ts's `buildReviewTarget`).
+    return { path, content: null, error: err instanceof Error ? err.message : String(err) };
+  }
+  try {
+    const file = await bb.sdk.files.read({ hostId: envCtx.hostId, path: resolved });
+    if ("notModified" in file) return { path, content: null, error: "not found" };
+    return { path, content: truncateReviewTarget(decodeFileContent(file)), error: null };
+  } catch {
+    // Any read failure (most commonly ENOENT) is reported the same way — see
+    // README "Deviations from the plan" (gate context).
+    return { path, content: null, error: "not found" };
+  }
 }
 
 // -----------------------------------------------------------------------
@@ -182,6 +222,12 @@ function applyEventToStore(store: RunStore, runId: string, event: RunEvent): voi
       const visit = parseVisitFromStageId(event.stageId, event.nodeId);
       store.setStageStatus(runId, event.nodeId, visit, "blocked");
       store.setStatus(runId, "blocked");
+      // Gate-context follow-up: persist the "what is being reviewed" summary
+      // on the stage row so `bb attractor stages` and the run panel can show
+      // it without re-reading the event log — null when neither a
+      // predecessor context nor a review_target was found.
+      const gateContext: GateContextSummary | null = event.context || event.reviewTarget ? { context: event.context ?? null, reviewTarget: event.reviewTarget ?? null } : null;
+      store.setStageGateContext(runId, event.nodeId, visit, gateContext);
       return;
     }
     case "human.answered": {
@@ -357,7 +403,25 @@ export function createService(deps: ServiceDeps) {
       conditional: conditionalHandler,
       parallel: forkHandler,
       "parallel.fan_in": joinHandler,
-      human: createHumanHandler(humanInterviewer, { threadId: envCtx.threadId }),
+      human: createHumanHandler(
+        {
+          ...humanInterviewer,
+          // Gate-context follow-up: backs `HumanInterviewer.stageThreadId`
+          // with the store, since the interviewer itself (server/human.ts)
+          // has no run/stage state of its own. Reports the *latest* stage
+          // for that node id, matching the "attaches a worker threadId"
+          // convention every other per-node stage lookup in this file uses.
+          stageThreadId: (runId: string, nodeId: string): string | null =>
+            store
+              .listStages(runId)
+              .filter((s) => s.nodeId === nodeId)
+              .at(-1)?.threadId ?? null,
+        },
+        {
+          threadId: envCtx.threadId,
+          readReviewTarget: (path: string) => readReviewTargetFile(bb, envCtx, path),
+        } satisfies HumanHandlerContext,
+      ),
     };
   }
 
@@ -425,7 +489,12 @@ export function createService(deps: ServiceDeps) {
     // Fire-and-forget: the tool/CLI call returns as soon as the run is durably
     // persisted, per the plan's "persists a run, starts it in the background".
     void executeRun(run, null, envCtx);
-    return { run, directive: `::attractor-run{run="${run.id}"}` };
+    // The `thread` attribute (cross-thread cards follow-up) lets this
+    // directive be pasted into any thread and still resolve — app.tsx's
+    // `Directive` reads it as the RunPanel's threadId instead of the
+    // hosting message's own thread, while server.ts's ownership check
+    // (`owned()`) still only ever accepts the run's *actual* origin thread.
+    return { run, directive: `::attractor-run{run="${run.id}" thread="${run.threadId}"}` };
   }
 
   function getRun(runId: string): { run: Run | null; stages: Stage[] } {

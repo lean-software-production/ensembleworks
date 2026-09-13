@@ -88,7 +88,9 @@ describe("createService: run lifecycle", () => {
       environmentId: "env-1",
     });
 
-    expect(directive).toBe(`::attractor-run{run="${run.id}"}`);
+    // The `thread` attribute (cross-thread cards follow-up) lets this
+    // directive be pasted into any thread and still resolve.
+    expect(directive).toBe(`::attractor-run{run="${run.id}" thread="origin-thread"}`);
     expect(store.getRun(run.id).id).toBe(run.id);
     // Let the fire-and-forget background execution finish before the host is
     // disposed in afterEach — otherwise its trailing bb.realtime.publish call

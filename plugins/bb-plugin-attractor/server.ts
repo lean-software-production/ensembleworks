@@ -13,7 +13,7 @@ import { hostContract } from "./host-contract";
 import { createThreadAgentBackend } from "./server/backend";
 import { createThreadHumanInterviewer } from "./server/human";
 import { rpcContract } from "./server/contracts";
-import { createService, resolveWorkflowPath } from "./server/service";
+import { createService, decodeFileContent, resolveWorkflowPath } from "./server/service";
 import { RunStore } from "./server/store";
 
 const id = z.string().min(1).max(200);
@@ -60,8 +60,44 @@ function safeError(error: unknown): string {
   return error instanceof Error ? error.message : "Attractor operation failed";
 }
 
-function decodeFileContent(file: { content: string; contentEncoding: "utf8" | "base64" }): string {
-  return file.contentEncoding === "base64" ? Buffer.from(file.content, "base64").toString("utf8") : file.content;
+// -----------------------------------------------------------------------
+// `--field <dot.path>` (CLI follow-up): every subcommand that prints JSON
+// can instead print just the value at a dot-path — scalars raw (no quotes),
+// objects/arrays as JSON. For an array result (`stages`, `events`) the path
+// is applied to each element and one line is printed per element. Pure
+// helpers, independent of any particular command's result shape.
+// -----------------------------------------------------------------------
+
+function getFieldValue(value: unknown, path: string): { found: boolean; value: unknown } {
+  const segments = path.split(".").filter((s) => s.length > 0);
+  let current: unknown = value;
+  for (const segment of segments) {
+    if (current === null || current === undefined || typeof current !== "object") return { found: false, value: undefined };
+    if (!Object.prototype.hasOwnProperty.call(current, segment)) return { found: false, value: undefined };
+    current = (current as Record<string, unknown>)[segment];
+  }
+  return { found: true, value: current };
+}
+
+function formatFieldValue(value: unknown): string {
+  if (value === null) return "null";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+/** Applies `--field` to a command's result. `null` (not an error) means "no such field", so the caller can turn that into a clean exit-1. */
+function extractField(result: unknown, field: string): string | null {
+  if (Array.isArray(result)) {
+    const lines: string[] = [];
+    for (const item of result) {
+      const { found, value } = getFieldValue(item, field);
+      if (!found) return null;
+      lines.push(formatFieldValue(value));
+    }
+    return lines.join("\n");
+  }
+  const { found, value } = getFieldValue(result, field);
+  return found ? formatFieldValue(value) : null;
 }
 
 export default async function plugin(bb: BbPluginApi): Promise<void> {
@@ -196,7 +232,9 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   });
 
   const usage =
-    "bb attractor validate <path> | run <path> [--input k=v ...] [--title t] | status <runId> | stages <runId> | events <runId> [--since seq] | stop <runId> | answer <runId> <label|text>\nRun within the originating BB thread.";
+    "bb attractor validate <path> | run <path> [--input k=v ...] [--title t] | status <runId> | stages <runId> | events <runId> [--since seq] | stop <runId> | answer <runId> <label|text>\n" +
+    "Every command takes an optional --field <dot.path> to print one value instead of the full JSON (one line per element for an array result).\n" +
+    "Run within the originating BB thread.";
 
   // One-line description of each command's JSON stdout shape, for `bb
   // attractor <command> --help` / `bb attractor help <command>` (item 12) —
@@ -204,14 +242,15 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   // `bb.cli.register` below, since `PluginCliCommandInfo` only has
   // name/summary/usage and that metadata is also read by the host itself
   // (and the plugin-commands skill) without running plugin code.
+  const FIELD_FLAG_NOTE = "Add --field <dot.path> to print one value (raw for a scalar, JSON for an object/array; one line per element for an array result) instead of the full JSON.";
   const COMMAND_OUTPUT_SHAPE: Record<string, string> = {
-    validate: "JSON output: { diagnostics: Diagnostic[] }.",
-    run: "JSON output: { runId: string, previewDirective: string }.",
-    status: "JSON output: the Run object.",
-    stages: "JSON output: Stage[] (per-node status, visit, provider, thread id).",
-    events: "JSON output: Event[] (each stamped with a seq).",
-    stop: "JSON output: { stopped: true, status: \"cancelled\" } on success.",
-    answer: "JSON output: { answered: boolean, reason?: string }.",
+    validate: `JSON output: { diagnostics: Diagnostic[] }. ${FIELD_FLAG_NOTE}`,
+    run: `JSON output: { runId: string, previewDirective: string }. ${FIELD_FLAG_NOTE}`,
+    status: `JSON output: the Run object. ${FIELD_FLAG_NOTE}`,
+    stages: `JSON output: Stage[] (per-node status, visit, provider, thread id). ${FIELD_FLAG_NOTE}`,
+    events: `JSON output: Event[] (each stamped with a seq). ${FIELD_FLAG_NOTE}`,
+    stop: `JSON output: { stopped: true, status: "cancelled" } on success. ${FIELD_FLAG_NOTE}`,
+    answer: `JSON output: { answered: boolean, reason?: string }. ${FIELD_FLAG_NOTE}`,
   };
 
   const CLI_COMMANDS = [
@@ -275,7 +314,20 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
         }
         if (!ctx.threadId) throw new Error("Run this command from a BB thread");
         const [command, ...args] = argv;
-        const { inputs, rest } = parseInputFlags(args);
+        const { inputs, rest: rawRest } = parseInputFlags(args);
+        // Stripped out of `rest` up front (not just read via indexOf, the
+        // way --title/--since are) so it can never leak into `answer`'s
+        // free-text join of every remaining argument.
+        let field: string | undefined;
+        const rest: string[] = [];
+        for (let i = 0; i < rawRest.length; i++) {
+          if (rawRest[i] === "--field" && rawRest[i + 1] !== undefined) {
+            field = rawRest[i + 1];
+            i += 1;
+          } else {
+            rest.push(rawRest[i]);
+          }
+        }
         let result: unknown;
         if (command === "validate" && rest[0]) {
           const source = await resolveSource({ path: rest[0] }, ctx.threadId);
@@ -313,6 +365,11 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
           result = answer;
         } else {
           throw new Error(usage);
+        }
+        if (field !== undefined) {
+          const extracted = extractField(result, field);
+          if (extracted === null) return { exitCode: 1, stderr: `no such field: ${field}` };
+          return { exitCode: 0, stdout: extracted };
         }
         return { exitCode: 0, stdout: JSON.stringify(result) };
       } catch (error) {

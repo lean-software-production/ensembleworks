@@ -21,8 +21,8 @@
  * edge a timed-out gate should take.
  */
 
-import type { WorkflowEdge } from "../dot/graph";
-import type { Handler, JsonValue, Outcome, StageScopedEvent } from "../engine/types";
+import type { WorkflowEdge, WorkflowGraph } from "../dot/graph";
+import type { Context, Handler, HandlerInput, JsonValue, Outcome, StageScopedEvent } from "../engine/types";
 
 export interface HumanGateOption {
   /** Original edge label, as authored (e.g. "[A] Approve"). */
@@ -33,6 +33,30 @@ export interface HumanGateOption {
   text: string;
   /** The edge's target node id. */
   to: string;
+}
+
+/**
+ * The stage that routed into this gate (gate-context follow-up) — surfaced
+ * on the gate payload (server/contracts.ts's `humanGatePayloadSchema`) so a
+ * human answering "Approve plan?" can see what plan. `nodeId` is the
+ * context key `last_stage` at the time the gate opens, falling back to the
+ * gate's single predecessor in the graph when `last_stage` is absent (e.g.
+ * the gate is the run's very first node); `text` is the full (capped)
+ * `response.<nodeId>` context value; `threadId` is that stage's latest
+ * worker thread id, via `HumanInterviewer.stageThreadId`.
+ */
+export interface HumanGateContext {
+  nodeId: string;
+  label: string | null;
+  text: string | null;
+  threadId: string | null;
+}
+
+/** The `review_target` node attribute's file, read at gate-open time (server/service.ts's `resolveWorkflowPath` + `bb.sdk.files.read`, via `HumanHandlerContext.readReviewTarget`). `error` is set (not thrown) for a missing file or a path that escapes the environment root. */
+export interface ReviewTargetSummary {
+  path: string;
+  content: string | null;
+  error: string | null;
 }
 
 export interface HumanAskInput {
@@ -49,6 +73,10 @@ export interface HumanAskInput {
   questionType?: string;
   timeoutMs?: number;
   signal: AbortSignal;
+  /** The stage that routed into this gate, or null when there is none to show. Optional so a caller building a `HumanAskInput` by hand (tests) doesn't have to supply it. */
+  gateContext?: HumanGateContext | null;
+  /** The node's `review_target` file, or null when the node has none. */
+  reviewTarget?: ReviewTargetSummary | null;
 }
 
 export type HumanAskResult =
@@ -59,10 +87,26 @@ export type HumanAskResult =
 
 export interface HumanInterviewer {
   ask(input: HumanAskInput): Promise<HumanAskResult>;
+  /**
+   * The worker thread id a prior stage ran under, for the gate-context
+   * "Open thread" affordance — server/service.ts backs this with
+   * `RunStore.listStages`. Optional: a caller with no store access (most
+   * tests) can omit it, and the gate context simply reports `threadId: null`.
+   */
+  stageThreadId?(runId: string, nodeId: string): string | null;
 }
 
 export interface HumanHandlerContext {
   threadId: string;
+  /**
+   * Reads the `review_target` node attribute's file, with hostId/
+   * environmentPath already baked in by server/service.ts's `buildHandlers`
+   * (the same way the `command` handler's injected `exec` already has its
+   * `cwd` baked in) — see README "Deviations from the plan" (gate context).
+   * Optional: undefined when no environment is wired (e.g. most tests),
+   * in which case a set `review_target` is reported as unreadable.
+   */
+  readReviewTarget?(path: string): Promise<ReviewTargetSummary>;
 }
 
 // A single leading "[K] ", "K) " or "K - " accelerator prefix, K being one
@@ -104,16 +148,67 @@ function respondWithChoice(nodeId: string, raw: string, emit: (e: StageScopedEve
   return { status: "succeeded", preferredLabel: raw, text, contextUpdates: gateContextUpdates(nodeId, { selected: raw, label: text, actor }) };
 }
 
+// Full gate-context text is capped generously (it's shown in a collapsible
+// block, not a fixed-size widget); the `human.requested` event's own summary
+// caps much harder (`EVENT_SUMMARY_LIMIT`) since it's persisted forever.
+const GATE_CONTEXT_TEXT_LIMIT = 20_000;
+const EVENT_SUMMARY_LIMIT = 200;
+
+function truncate(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit)} …[truncated]` : text;
+}
+
+function findPredecessor(graph: WorkflowGraph, nodeId: string): string | null {
+  return graph.edges.find((e) => e.to === nodeId)?.from ?? null;
+}
+
+function buildGateContext(
+  graph: WorkflowGraph,
+  context: Context,
+  gateNodeId: string,
+  runId: string,
+  interviewer: HumanInterviewer,
+): HumanGateContext | null {
+  const lastStage = context.get("last_stage");
+  const sourceNodeId = typeof lastStage === "string" ? lastStage : findPredecessor(graph, gateNodeId);
+  if (sourceNodeId === null) return null;
+  const label = graph.nodes.get(sourceNodeId)?.label ?? null;
+  const rawText = context.get(`response.${sourceNodeId}`);
+  const text = typeof rawText === "string" ? truncate(rawText, GATE_CONTEXT_TEXT_LIMIT) : null;
+  const threadId = interviewer.stageThreadId?.(runId, sourceNodeId) ?? null;
+  return { nodeId: sourceNodeId, label, text, threadId };
+}
+
+async function buildReviewTarget(node: { reviewTarget?: string }, ctx: HumanHandlerContext): Promise<ReviewTargetSummary | null> {
+  if (node.reviewTarget === undefined) return null;
+  if (!ctx.readReviewTarget) {
+    return { path: node.reviewTarget, content: null, error: "review_target could not be read: no file reader is configured for this run" };
+  }
+  return ctx.readReviewTarget(node.reviewTarget);
+}
+
 export function createHumanHandler(interviewer: HumanInterviewer, ctx: HumanHandlerContext): Handler {
   return {
-    async run(input) {
+    async run(input: HandlerInput) {
       const { node, graph, context, runId, stageId, signal, emit } = input;
       const outgoing = graph.edges.filter((e) => e.from === node.id);
       const options = buildOptions(outgoing);
       const freeformEdge = outgoing.find((e) => e.freeform);
       const freeform = freeformEdge !== undefined;
 
-      emit({ type: "human.requested", options: options.map((o) => o.raw) });
+      const gateContext = buildGateContext(graph, context, node.id, runId, interviewer);
+      const reviewTarget = await buildReviewTarget(node, ctx);
+
+      emit({
+        type: "human.requested",
+        options: options.map((o) => o.raw),
+        context: gateContext
+          ? { nodeId: gateContext.nodeId, label: gateContext.label, threadId: gateContext.threadId, text: gateContext.text !== null ? truncate(gateContext.text, EVENT_SUMMARY_LIMIT) : null }
+          : null,
+        reviewTarget: reviewTarget
+          ? { path: reviewTarget.path, text: reviewTarget.content !== null ? truncate(reviewTarget.content, EVENT_SUMMARY_LIMIT) : reviewTarget.error }
+          : null,
+      });
 
       const result = await interviewer.ask({
         runId,
@@ -127,6 +222,8 @@ export function createHumanHandler(interviewer: HumanInterviewer, ctx: HumanHand
         questionType: node.questionType,
         timeoutMs: node.timeoutMs,
         signal,
+        gateContext,
+        reviewTarget,
       });
 
       if (result.kind === "cancelled") {

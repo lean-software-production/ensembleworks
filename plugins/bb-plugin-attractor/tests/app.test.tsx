@@ -128,6 +128,33 @@ describe("Attractor app", () => {
     expect(slot.getByText(/no run id/i)).toBeTruthy();
   });
 
+  it("cross-thread cards: uses the directive's thread attribute (not the hosting message's thread) for every RPC call", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.messageDirectives[0]!,
+      {
+        attributes: { run: "run-1", thread: "origin-thread" },
+        source: '::attractor-run{run="run-1" thread="origin-thread"}',
+        message: { id: "m1", threadId: "pasted-into-thread", turnId: null, projectId: null },
+        openWorkspaceFile: null,
+      },
+      { rpc: baseRpc() },
+    );
+    await slot.findByText("Plan Implement Review");
+    expect(slot.inspection.rpcCalls).toContainEqual({ method: "getRun", input: { runId: "run-1", threadId: "origin-thread" } });
+  });
+
+  it("cross-thread cards: falls back to the hosting message's own thread when the directive has no thread attribute", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.messageDirectives[0]!,
+      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
+      { rpc: baseRpc() },
+    );
+    await slot.findByText("Plan Implement Review");
+    expect(slot.inspection.rpcCalls).toContainEqual({ method: "getRun", input: { runId: "run-1", threadId: "thread-1" } });
+  });
+
   it("renders the run's header, DAG nodes, and per-node status from the RPC", async () => {
     const app = await loadPluginApp(() => import("../app"));
     const slot = renderSlot(
@@ -263,8 +290,45 @@ describe("Attractor app", () => {
     openButton.click();
     expect(slot.inspection.navigateCalls).toContainEqual({
       method: "openThreadPanel",
-      options: { actionId: "attractor-run", params: { runId: "run-1" }, title: "Plan Implement Review" },
+      // Carries this card's threadId along (cross-thread cards follow-up):
+      // app.tsx's `Panel` reads `params.threadId` back so the opened panel
+      // keeps addressing the run's actual origin thread.
+      options: { actionId: "attractor-run", params: { runId: "run-1", threadId: "thread-1" }, title: "Plan Implement Review" },
     });
+  });
+
+  it("opens the thread panel carrying a cross-thread card's origin threadId, not the panel-hosting thread", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.messageDirectives[0]!,
+      {
+        attributes: { run: "run-1", thread: "origin-thread" },
+        source: '::attractor-run{run="run-1" thread="origin-thread"}',
+        message: { id: "m1", threadId: "pasted-into-thread", turnId: null, projectId: null },
+        openWorkspaceFile: null,
+      },
+      { rpc: baseRpc() },
+    );
+    const openButton = await slot.findByRole("button", { name: /open in (right )?panel/i });
+    openButton.click();
+    expect(slot.inspection.navigateCalls).toContainEqual({
+      method: "openThreadPanel",
+      options: { actionId: "attractor-run", params: { runId: "run-1", threadId: "origin-thread" }, title: "Plan Implement Review" },
+    });
+  });
+
+  it("cross-thread cards: the thread panel uses params.threadId over its own hosting thread", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: "panel-hosting-thread", params: { runId: "run-1", threadId: "origin-thread" } }, { rpc: baseRpc() });
+    await slot.findByText("Plan Implement Review");
+    expect(slot.inspection.rpcCalls).toContainEqual({ method: "getRun", input: { runId: "run-1", threadId: "origin-thread" } });
+  });
+
+  it("cross-thread cards: the thread panel falls back to its own hosting thread when params carries none", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: "thread-1", params: { runId: "run-1" } }, { rpc: baseRpc() });
+    await slot.findByText("Plan Implement Review");
+    expect(slot.inspection.rpcCalls).toContainEqual({ method: "getRun", input: { runId: "run-1", threadId: "thread-1" } });
   });
 
   it("renders the panel with a Stop button that calls stopRun while the run is active", async () => {

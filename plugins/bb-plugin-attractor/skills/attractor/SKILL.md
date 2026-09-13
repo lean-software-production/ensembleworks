@@ -58,7 +58,11 @@ unconditionally by highest `weight`.
 
 A human gate's outgoing edges are its options — label them with an optional
 accelerator prefix (`"[A] Approve"`, `"R) Revise"`, or `"A - Approve"`); add
-`freeform=true` to an edge to also accept free text. A human answers a
+`freeform=true` to an edge to also accept free text. Add `review_target` (a
+workspace-relative path, e.g. `review_target="PLAN.md"`) to show that file
+alongside the question — Markdown for a `.md` path, plain text otherwise;
+the gate also shows the previous stage's response text (collapsible) and an
+"Open thread" link to it, when known. A human answers a
 blocked run either by clicking a button in the chat surface, or from a
 terminal:
 
@@ -87,6 +91,10 @@ path that would escape the root is rejected). A successful call returns
 own line**, so the room sees a live card for the run. The run is validated
 and persisted before the call returns, then executed in the background —
 it survives a plugin restart from its last checkpoint.
+
+`previewDirective` is `::attractor-run{run="<runId>" thread="<threadId>"}` —
+its `thread` attribute (the run's origin thread) means the exact text can be
+pasted into any other thread and the card still renders and resolves there.
 
 ```
 attractor_run({ path: "workflows/plan-implement-review.dot", title: "Ship the fix" })
@@ -141,6 +149,12 @@ Every subcommand taking a `<runId>` exits `1` with `no such run: <runId>`
 on stderr for an unknown/not-owned run; `answer` also exits `1` when there
 is no pending gate to answer, and `stop` exits `1` when the run isn't in
 flight.
+
+Add `--field <dot.path>` to any command to print just that value instead of
+the full JSON — a scalar prints raw (no quotes), an object/array prints as
+JSON, and for an array result (`stages`, `events`) the path is applied to
+each element, one per line (e.g. `bb attractor stages <runId> --field
+status`). An unknown path exits `1` with `no such field: <path>`.
 
 ## Structured results (`output_schema="routing"`)
 

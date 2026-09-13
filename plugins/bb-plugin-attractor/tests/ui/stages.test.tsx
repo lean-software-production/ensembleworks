@@ -112,6 +112,58 @@ describe("StageList", () => {
     expect(onOpenThread).toHaveBeenCalledWith("worker-1");
   });
 
+  it("shows what a blocked human gate is reviewing (gate-context follow-up)", () => {
+    const stages: StageView[] = [
+      {
+        runId: "r1",
+        stageId: "gate@1",
+        nodeId: "gate",
+        visit: 1,
+        attempt: 1,
+        status: "blocked",
+        outcomeStatus: null,
+        threadId: null,
+        providerId: null,
+        model: null,
+        reasoningLevel: null,
+        actor: null,
+        waitingReason: null,
+        gateContext: { context: null, reviewTarget: { path: "PLAN.md", text: "# The plan" } },
+        startedAt: 1000,
+        completedAt: null,
+      },
+    ];
+    const { container } = render(<StageList stages={stages} graph={GRAPH} now={2000} />);
+    const statusOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(2)`)?.textContent;
+    expect(statusOf("gate@1")).toBe("blocked (reviewing PLAN.md)");
+  });
+
+  it("does not show 'reviewing' once the gate is no longer blocked", () => {
+    const stages: StageView[] = [
+      {
+        runId: "r1",
+        stageId: "gate@1",
+        nodeId: "gate",
+        visit: 1,
+        attempt: 1,
+        status: "succeeded",
+        outcomeStatus: "succeeded",
+        threadId: null,
+        providerId: null,
+        model: null,
+        reasoningLevel: null,
+        actor: "ui",
+        waitingReason: null,
+        gateContext: { context: null, reviewTarget: { path: "PLAN.md", text: "# The plan" } },
+        startedAt: 1000,
+        completedAt: 1500,
+      },
+    ];
+    const { container } = render(<StageList stages={stages} graph={GRAPH} now={2000} />);
+    const statusOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(2)`)?.textContent;
+    expect(statusOf("gate@1")).toBe("succeeded (answered via ui)");
+  });
+
   it("opens a stage's worker thread when its thread link is clicked", () => {
     const onOpenThread = vi.fn();
     const { getByRole } = render(<StageList stages={STAGES} graph={GRAPH} now={2000} onOpenThread={onOpenThread} />);

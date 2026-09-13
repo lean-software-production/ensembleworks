@@ -78,6 +78,11 @@ const STAGE_COLUMN_ADDITIONS: { column: string; ddl: string }[] = [
   { column: "reasoning_level", ddl: "ALTER TABLE attractor_stages ADD COLUMN reasoning_level TEXT" },
   { column: "actor", ddl: "ALTER TABLE attractor_stages ADD COLUMN actor TEXT" },
   { column: "waiting_reason", ddl: "ALTER TABLE attractor_stages ADD COLUMN waiting_reason TEXT" },
+  // Gate-context follow-up: the human.requested event's context/reviewTarget
+  // summary (server/contracts.ts's `stageGateContextSchema`), persisted so
+  // `bb attractor stages` and the run panel can show what a blocked human
+  // gate is reviewing without re-reading the event log.
+  { column: "gate_context_json", ddl: "ALTER TABLE attractor_stages ADD COLUMN gate_context_json TEXT" },
 ];
 
 function ensureStageColumns(db: Database.Database): void {
@@ -94,6 +99,18 @@ function ensureStageColumns(db: Database.Database): void {
 export type RunStatus = "running" | "blocked" | "succeeded" | "failed" | "cancelled";
 export type StageStatus = "running" | "blocked" | "succeeded" | "failed" | "skipped" | "cancelled";
 export type StageActor = "ui" | "cli" | "default";
+
+/**
+ * The `human.requested` event's context/reviewTarget summary (gate-context
+ * follow-up), persisted per-stage so a blocked human gate's "what is being
+ * reviewed" survives a page refresh / plugin restart without re-reading the
+ * event log — server/contracts.ts's `stageGateContextSchema` mirrors this
+ * shape for the RPC/CLI view.
+ */
+export interface GateContextSummary {
+  context: { nodeId: string; label: string | null; text: string | null; threadId: string | null } | null;
+  reviewTarget: { path: string; text: string | null } | null;
+}
 
 export interface CreateRunInput {
   id: string;
@@ -142,6 +159,8 @@ export interface Stage {
   actor: StageActor | null;
   /** Human-readable reason this stage is currently "blocked" — a worker's pending-interaction kind/title (server/backend.ts's `agent.waiting`), or null when nothing is waiting. */
   waitingReason: string | null;
+  /** The gate this stage opened (a human.requested event's context/reviewTarget summary), or null for every non-gate stage. */
+  gateContext: GateContextSummary | null;
   startedAt: number;
   completedAt: number | null;
 }
@@ -197,6 +216,7 @@ type StageRow = {
   reasoning_level: string | null;
   actor: string | null;
   waiting_reason: string | null;
+  gate_context_json: string | null;
   started_at: number;
   completed_at: number | null;
 };
@@ -395,6 +415,13 @@ export class RunStore {
     this.#db.prepare("UPDATE attractor_stages SET waiting_reason=? WHERE run_id=? AND node_id=? AND visit=?").run(reason, runId, nodeId, visit);
   }
 
+  /** Records (or clears, with `null`) a stage's gate context — the `human.requested` event's context/reviewTarget summary (gate-context follow-up). */
+  setStageGateContext(runId: string, nodeId: string, visit: number, gateContext: GateContextSummary | null): void {
+    this.#db
+      .prepare("UPDATE attractor_stages SET gate_context_json=? WHERE run_id=? AND node_id=? AND visit=?")
+      .run(gateContext ? JSON.stringify(gateContext) : null, runId, nodeId, visit);
+  }
+
   listStages(runId: string): Stage[] {
     // rowid (not started_at) preserves first-insertion order even when two
     // stages start within the same clock millisecond (a real risk with the
@@ -416,6 +443,7 @@ export class RunStore {
       reasoningLevel: row.reasoning_level,
       actor: (row.actor as StageActor | null) ?? null,
       waitingReason: row.waiting_reason ?? null,
+      gateContext: row.gate_context_json ? (JSON.parse(row.gate_context_json) as GateContextSummary) : null,
       startedAt: row.started_at,
       completedAt: row.completed_at,
     }));

@@ -92,7 +92,15 @@ describe("createHumanHandler", () => {
         ],
       }),
     );
-    expect(events).toContainEqual({ type: "human.requested", options: ["[A] Approve", "R) Revise"] });
+    expect(events).toContainEqual({
+      type: "human.requested",
+      options: ["[A] Approve", "R) Revise"],
+      // Fallback to the gate's single predecessor ("start") since this
+      // test's context never sets `last_stage`; "start" has no label/
+      // response text of its own, so context is present but mostly null.
+      context: { nodeId: "start", label: null, text: null, threadId: null },
+      reviewTarget: null,
+    });
   });
 
   it("returns a succeeded outcome with preferredLabel + context keys on a button choice", async () => {
@@ -285,5 +293,123 @@ describe("createHumanHandler", () => {
     } as never);
 
     expect(ask).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 30_000, questionType: "yesno" }));
+  });
+});
+
+describe("createHumanHandler: gate context (2026-09-13 follow-up)", () => {
+  it("passes the last_stage node's label, response text and worker thread id as gateContext", async () => {
+    const g = graph();
+    const { ask, interviewer: iv } = interviewer({ kind: "choice", option: { raw: "[A] Approve", key: "A", text: "Approve", to: "exit" } });
+    iv.stageThreadId = vi.fn().mockReturnValue("worker-thread-7");
+    const handler = createHumanHandler(iv, { threadId: "thread-1" });
+
+    await handler.run(
+      baseInput(g, { last_stage: "revise", response: { revise: "Here is the revised plan." } }),
+    );
+
+    expect(iv.stageThreadId).toHaveBeenCalledWith("r1", "revise");
+    expect(ask).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateContext: { nodeId: "revise", label: "Revise", text: "Here is the revised plan.", threadId: "worker-thread-7" },
+      }),
+    );
+  });
+
+  it("falls back to the gate's single predecessor in the graph when last_stage is absent", async () => {
+    const g = graph();
+    const { ask, interviewer: iv } = interviewer({ kind: "choice", option: { raw: "[A] Approve", key: "A", text: "Approve", to: "exit" } });
+    const handler = createHumanHandler(iv, { threadId: "thread-1" });
+
+    await handler.run(baseInput(g));
+
+    expect(ask).toHaveBeenCalledWith(
+      expect.objectContaining({ gateContext: { nodeId: "start", label: null, text: null, threadId: null } }),
+    );
+  });
+
+  it("reads a node's review_target file through the injected reader and passes it to the interviewer", async () => {
+    const g = parseWorkflowGraph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      gate  [shape=hexagon, label="Approve plan?", review_target="PLAN.md"]
+      start -> gate
+      gate -> exit [label="[A] Approve"]
+    }`) as unknown as WorkflowGraph;
+    const { ask, interviewer: iv } = interviewer({ kind: "choice", option: { raw: "[A] Approve", key: "A", text: "Approve", to: "exit" } });
+    const readReviewTarget = vi.fn().mockResolvedValue({ path: "PLAN.md", content: "# The plan", error: null });
+    const handler = createHumanHandler(iv, { threadId: "thread-1", readReviewTarget });
+
+    await handler.run({
+      node: node(g, "gate"),
+      graph: g,
+      context: createContext({}),
+      visit: 1,
+      attempt: 1,
+      runId: "r1",
+      stageId: "gate@1",
+      signal: NEVER_ABORT,
+      emit: () => {},
+    } as never);
+
+    expect(readReviewTarget).toHaveBeenCalledWith("PLAN.md");
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ reviewTarget: { path: "PLAN.md", content: "# The plan", error: null } }));
+  });
+
+  it("surfaces a rejected review_target (e.g. path traversal) as an error field, not a thrown error", async () => {
+    const g = parseWorkflowGraph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      gate  [shape=hexagon, label="Approve plan?", review_target="../secrets.md"]
+      start -> gate
+      gate -> exit [label="[A] Approve"]
+    }`) as unknown as WorkflowGraph;
+    const { ask, interviewer: iv } = interviewer({ kind: "choice", option: { raw: "[A] Approve", key: "A", text: "Approve", to: "exit" } });
+    const readReviewTarget = vi.fn().mockResolvedValue({ path: "../secrets.md", content: null, error: "workflow path escapes the environment root: ../secrets.md" });
+    const handler = createHumanHandler(iv, { threadId: "thread-1", readReviewTarget });
+
+    const outcome = await handler.run({
+      node: node(g, "gate"),
+      graph: g,
+      context: createContext({}),
+      visit: 1,
+      attempt: 1,
+      runId: "r1",
+      stageId: "gate@1",
+      signal: NEVER_ABORT,
+      emit: () => {},
+    } as never);
+
+    expect(outcome.status).toBe("succeeded");
+    expect(ask).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewTarget: { path: "../secrets.md", content: null, error: expect.stringMatching(/escapes/) } }),
+    );
+  });
+
+  it("reports review_target as unreadable when no reader is configured for this run", async () => {
+    const g = parseWorkflowGraph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      gate  [shape=hexagon, label="Approve plan?", review_target="PLAN.md"]
+      start -> gate
+      gate -> exit [label="[A] Approve"]
+    }`) as unknown as WorkflowGraph;
+    const { ask, interviewer: iv } = interviewer({ kind: "choice", option: { raw: "[A] Approve", key: "A", text: "Approve", to: "exit" } });
+    const handler = createHumanHandler(iv, { threadId: "thread-1" });
+
+    await handler.run({
+      node: node(g, "gate"),
+      graph: g,
+      context: createContext({}),
+      visit: 1,
+      attempt: 1,
+      runId: "r1",
+      stageId: "gate@1",
+      signal: NEVER_ABORT,
+      emit: () => {},
+    } as never);
+
+    expect(ask).toHaveBeenCalledWith(
+      expect.objectContaining({ reviewTarget: { path: "PLAN.md", content: null, error: expect.any(String) } }),
+    );
   });
 });

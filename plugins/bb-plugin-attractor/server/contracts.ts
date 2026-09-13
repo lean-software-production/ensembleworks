@@ -35,6 +35,32 @@ export const runSchema = z.object({
   finishedAt: z.number().nullable(),
 });
 
+// The stage/event summary of a human gate's routing context (gate-context
+// follow-up) — shared by `humanGatePayloadSchema.context`, the
+// `human.requested` event, and `StageView.gateContext` (persisted as the
+// `attractor_stages.gate_context_json` column). Text lengths differ by call
+// site (handlers/human.ts caps the event/stage summary far harder than the
+// live gate payload it sends to `bb.ui.requestInput`), but the shape is one.
+export const humanGateContextSchema = z.object({
+  nodeId: z.string(),
+  label: z.string().nullable(),
+  text: z.string().nullable(),
+  threadId: z.string().nullable(),
+});
+
+/** The `review_target` node attribute's summary, as attached to a stage/event — path plus its (possibly-error) text, capped short. */
+export const gateReviewTargetSummarySchema = z.object({
+  path: z.string(),
+  text: z.string().nullable(),
+});
+
+export const stageGateContextSchema = z
+  .object({
+    context: humanGateContextSchema.nullable(),
+    reviewTarget: gateReviewTargetSummarySchema.nullable(),
+  })
+  .nullable();
+
 export const stageSchema = z.object({
   runId: id,
   stageId: z.string(),
@@ -49,6 +75,8 @@ export const stageSchema = z.object({
   reasoningLevel: z.string().nullable(),
   actor: stageActorSchema.nullable(),
   waitingReason: z.string().nullable(),
+  /** The gate this stage opened (blocked human stage only) — null once nothing was ever a gate, or before this follow-up shipped. */
+  gateContext: stageGateContextSchema.optional(),
   startedAt: z.number(),
   completedAt: z.number().nullable(),
 });
@@ -121,6 +149,13 @@ export const humanGateOptionSchema = z.object({
   to: z.string(),
 });
 
+/** The `review_target` node attribute's file, as sent in full to the gate's renderer — see `humanGateContextSchema` for why this is a separate (larger) shape from the stage/event summary. */
+export const humanGateReviewTargetSchema = z.object({
+  path: z.string(),
+  content: z.string().nullable(),
+  error: z.string().nullable(),
+});
+
 export const humanGatePayloadSchema = z.object({
   runId: id,
   nodeId: z.string(),
@@ -128,6 +163,10 @@ export const humanGatePayloadSchema = z.object({
   options: z.array(humanGateOptionSchema),
   freeform: z.boolean(),
   questionType: z.string().nullable(),
+  // Both optional (not just nullable) so a payload recorded/replayed from
+  // before this follow-up shipped still parses (missing key, not `null`).
+  context: humanGateContextSchema.nullable().optional(),
+  reviewTarget: humanGateReviewTargetSchema.nullable().optional(),
 });
 
 // `via` names who submitted this value — the pendingInteraction renderer
@@ -145,3 +184,6 @@ export const humanGateValueSchema = z.union([
 export type HumanGateOption = z.infer<typeof humanGateOptionSchema>;
 export type HumanGatePayload = z.infer<typeof humanGatePayloadSchema>;
 export type HumanGateValue = z.infer<typeof humanGateValueSchema>;
+export type HumanGateContextView = z.infer<typeof humanGateContextSchema>;
+export type HumanGateReviewTargetView = z.infer<typeof humanGateReviewTargetSchema>;
+export type StageGateContextView = z.infer<typeof stageGateContextSchema>;

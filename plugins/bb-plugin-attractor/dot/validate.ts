@@ -257,6 +257,22 @@ function checkHumanGates(graph: WorkflowGraph, diagnostics: Diagnostic[]): void 
   }
 }
 
+// `review_target` (gate-context follow-up): a workspace-relative path a
+// human gate shows alongside its question. Only its shape is checked here
+// (non-empty) — the path is resolved/read at gate-open time (handlers/
+// human.ts + server/service.ts's resolveWorkflowPath), which reports a
+// missing file or an escape from the environment root as the gate payload's
+// own `reviewTarget.error`, not a validation diagnostic.
+function checkReviewTarget(graph: WorkflowGraph, diagnostics: Diagnostic[]): void {
+  for (const node of graph.nodes.values()) {
+    if (node.reviewTarget !== undefined && node.reviewTarget.trim().length === 0) {
+      diagnostics.push(
+        error("invalid-review-target", `node '${node.id}' has an empty review_target`, { nodeId: node.id }),
+      );
+    }
+  }
+}
+
 function checkRandomSelectionConditions(graph: WorkflowGraph, diagnostics: Diagnostic[]): void {
   for (const edge of graph.edges) {
     const source = graph.nodes.get(edge.from);
@@ -282,6 +298,7 @@ export function validate(graph: WorkflowGraph): Diagnostic[] {
   checkHandlerRequirements(graph, diagnostics);
   checkRetryTargets(graph, diagnostics);
   checkHumanGates(graph, diagnostics);
+  checkReviewTarget(graph, diagnostics);
   checkRandomSelectionConditions(graph, diagnostics);
   checkEnumsAndNumerics(graph, diagnostics);
   return diagnostics;
