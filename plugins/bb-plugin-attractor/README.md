@@ -878,6 +878,11 @@ bb plugin build .
   or the `attractor` skill, so a stage cannot fan out recursively. Workers
   are spawned as root hidden threads (no `parentThreadId`), as a hidden
   thread with a parent would report its turns to the origin thread.
+  Known limitation: the backend only learns a worker's id once `spawn`
+  resolves, so an `attractor_result` call that arrives before that (the
+  model would have to emit a tool call before the spawn RPC returns) is
+  rejected and costs one of the two corrective re-prompts; the stage still
+  converges.
 
 - **Dispose semantics (whole-branch review fix).** `server.ts` threads its
   `lifecycle` AbortController into `createService` as `disposeSignal`. On

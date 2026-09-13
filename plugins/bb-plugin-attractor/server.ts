@@ -164,7 +164,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
       // (see bb.agents.configure below), so the guard lives here, not only in
       // the tool list.
       if (!agentBackend.isAwaitingResult(ctx.threadId)) {
-        return textResult({ recorded: false, error: "this stage does not expect a structured result; answer in text instead" });
+        return textResult({ recorded: false, error: "no structured result is expected from this thread right now; if your stage prompt asked for one, finish your answer and call attractor_result again" });
       }
       agentBackend.reportResult(ctx.threadId, input);
       return textResult({ recorded: true });

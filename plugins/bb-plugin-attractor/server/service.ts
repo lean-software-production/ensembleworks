@@ -499,7 +499,10 @@ export function createService(deps: ServiceDeps) {
         const checkpoint = store.loadCheckpoint(runId);
         void executeRun(run, checkpoint, envCtx);
       } catch (err) {
-        store.recordFinish(runId, { status: "failed", finalOutcome: null, goalGateFailures: [], context: run.context, error: err instanceof Error ? err.message : String(err) });
+        // Same dispose guard as every other terminal write: a resume that
+        // fails while this instance is shutting down must not stamp a
+        // permanent "failed" on a run the next instance could still resume.
+        safeRecordFinish(runId, { status: "failed", finalOutcome: null, goalGateFailures: [], context: run.context, error: err instanceof Error ? err.message : String(err) });
       }
     }
   }
