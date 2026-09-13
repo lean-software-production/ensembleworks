@@ -13,7 +13,7 @@ contracts, and the task breakdown this plugin is built against.
 
 ## Status
 
-Through task T2. `server.ts`, `app.tsx` and `host.ts` are still the T1
+Through task T3. `server.ts`, `app.tsx` and `host.ts` are still the T1
 scaffold (load under the bb host, no behaviour beyond a startup log line).
 T2 adds the **DOT front-end** — parsing and validating workflow graphs, with
 no execution yet:
@@ -44,8 +44,53 @@ exercised against the three Appendix example graphs and real Fabro job
 graphs (see "Deviations from the plan" below) in
 `tests/dot-integration.test.ts`.
 
-The execution engine, BB-thread backend, storage, tools, CLI, RPC surface,
-DAG UI and human gates land in later tasks (T3–T7).
+T3 adds the **execution engine** (`engine/`), still entirely BB-free — it is
+driven by fake handlers/clock/checkpoint sink in its own tests, and only
+gets a real BB-thread backend in T4:
+
+- `engine/types.ts` — the contracts from the plan's "Engine contracts"
+  section (`Outcome`, `HandlerInput`, `Handler`, `HandlerRegistry`,
+  `EngineOptions`, `RunResult`, `RunEvent`, `StageScopedEvent`), plus a
+  `Checkpoint` shape (not fully specified by the plan; see "Deviations"
+  below) and a `Context` interface backing `engine/context.ts`.
+- `engine/context.ts` — a dot-path key-value context (`get`/`set` walk
+  `"response.plan"` into nested objects, matching `dot/conditions.ts`'s own
+  `context.<path>` resolution and its own-property-only guard against
+  `Object.prototype` keys), `merge()` for shallow top-level
+  `context_updates`, and `clone()`/`toObject()` for parallel-branch
+  isolation and persistence, all with full deep-copy semantics.
+- `engine/router.ts` — the next-node selection cascade (steps 1-6, plus a
+  separate `selectRetryTarget` for step 7): `jump_to_node`, conditional
+  edges (weight then lexical target tiebreak), `preferred_label` (with
+  accelerator-prefix stripping on both sides), `suggested_next_ids`,
+  `on_failure` (`route`/`exit`/`succeed`, including `succeed`'s outcome
+  rewrite-and-retry of steps 2-6), unconditional edges, and node-then-graph
+  `retry_target`/`fallback_retry_target`.
+- `engine/events.ts` — stamps a handler's narrow `StageScopedEvent` (`log`,
+  `agent.thread`, `human.requested`/`human.answered`) into a fully-formed
+  `RunEvent` (`runId`/`ts`/`stageId`/`nodeId`).
+- `engine/engine.ts` — the walker: visit tracking and `max_visits`/
+  `max_node_visits` gating (a non-enterable candidate is skipped and
+  routing falls back to step 7 from the *completing* node), goal-gate
+  evaluation at run termination, retries with fixed 1s/2s/4s delays via an
+  injected clock (only for a thrown handler error — a returned
+  `Outcome{status:"failed"}` is a business outcome that goes through the
+  normal `on_failure` cascade, not the retry loop), `parallel`/
+  `parallel.fan_in` fan-out with per-branch context clones and
+  `parallel.results`/`parallel.branch_count` written to the parent context
+  only (never a top-level branch merge), checkpoint saves after every
+  non-terminal stage, checkpoint-driven resume, and cancellation via
+  `AbortSignal`.
+
+All of `engine/` is pure (no BB imports, no timers of its own, no
+randomness — the clock and checkpoint sink are injected) and is exercised
+with fake handlers only; `tests/engine.test.ts` includes a full recorded
+event-sequence walk of the Appendix's `PlanImplementReview` example (a plan
+revision loop, a failing-then-passing test node, and a routing-JSON review
+node) as its integration-level check.
+
+The BB-thread backend, storage, tools, CLI, RPC surface, DAG UI and human
+gates land in later tasks (T4–T7).
 
 ## Development
 
@@ -90,3 +135,62 @@ bb plugin build .
   The plan's dialect list only names the `graph [..]` form, so this parser
   treats a bare `key=value` graph-scope statement as a syntax error rather
   than a graph attribute. Prefer `graph [key=value, ...]` when authoring.
+
+- **`Checkpoint` (T3).** The plan's engine contracts snippet references
+  `checkpoint?: { save(state: Checkpoint): Promise<void>; load?: Checkpoint }`
+  but never defines `Checkpoint` itself. `engine/types.ts` defines it as
+  `{ runId, nextNodeId, context, visitCounts, goalGateOutcomes }` — enough
+  state that loading one and resuming needs to replay nothing before
+  `nextNodeId` (verified in `tests/engine.test.ts`). `server/store.ts` (T4)
+  is expected to persist this shape; if that task finds it insufficient
+  (e.g. for resuming mid-parallel-fan-out — see below), it should extend
+  rather than replace it.
+
+- **Checkpoint granularity vs. `parallel` fan-out (T3).** A checkpoint is
+  only saved at points in the *main* walk (after a non-parallel stage
+  picks its next node, and once after a whole `parallel`/`parallel.fan_in`
+  group has converged), not after each individual parallel branch stage.
+  Resuming mid-fan-out therefore re-runs the whole group rather than only
+  the branches that hadn't finished. This wasn't in the acceptance
+  criteria (which only requires "checkpoint save after every stage" and a
+  resume test with a linear graph, both of which pass) and finer-grained
+  parallel checkpointing did not seem worth the added complexity for v1.
+
+- **Retry vs. `on_failure` (T3).** "Retries: `max_retries` per node with
+  fixed 1s/2s/4s delays" is separate machinery from the `on_failure`
+  routing cascade. This implementation treats them as covering different
+  failure sources: `max_retries` retries a **thrown handler error** (e.g.
+  an infra/network fault) in place, re-running the same stage; a handler
+  that *returns* `Outcome{status:"failed"}` is a normal business outcome
+  that is never retried in place — it goes straight through the
+  `on_failure` cascade (`route`/`exit`/`succeed`) like any other outcome.
+  Only once retries are exhausted does a thrown error turn into a
+  synthetic `{status:"failed"}` outcome that then also goes through that
+  same cascade. This reading isn't spelled out in the plan and a future
+  task may need to reconcile it against T4's real agent/command handlers
+  (e.g. should a non-zero command exit code retry via `max_retries`,
+  or route via `on_failure` the same as a routing-JSON `failed`
+  outcome? this implementation assumes the latter, since it's already an
+  `Outcome`, not a throw).
+
+- **`parallel` fan-in target (T3).** The plan describes `component`
+  (fan-out) / `tripleoctagon` (fan-in) shapes but not how the engine
+  should locate *which* fan-in node a set of branches converges on. This
+  implementation lets each branch run its own normal routing cascade
+  (so a branch may be more than one node long) until it *would* enter a
+  `parallel.fan_in`-kind node, stops there without running it, and then
+  has the fork itself continue the main walk at that node (first, if
+  branches disagree, by sorting the reached ids lexicographically — not
+  exercised by any test, since every branch in both the Appendix example
+  and this task's own tests converges on the same single node).
+
+- **Goal-gate evaluation timing (T3).** "Goal gates: at exit, every visited
+  node with `goal_gate=true`..." is implemented as "whenever the run
+  terminates for any reason" (reaching the `exit` node, step 8's "no next
+  node", or a `max_visits`/on_failure=exit dead end), not only when an
+  `exit`-shaped node is actually reached. In every graph the dialect
+  requires (validate.ts requires exactly one `exit`), the two coincide for
+  a successful run; for a run that dead-ends before ever reaching `exit`,
+  evaluating the gate anyway can only ever keep an already-failing run
+  failing, never flip a run that would otherwise succeed — so this is a
+  safe superset of the literal wording, not a narrowing.

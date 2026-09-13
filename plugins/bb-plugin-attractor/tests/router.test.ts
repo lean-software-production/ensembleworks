@@ -1,0 +1,291 @@
+import { describe, expect, it } from "vitest";
+import { parseWorkflowGraph, type WorkflowGraph } from "../dot/graph";
+import { selectRoute, selectRetryTarget } from "../engine/router";
+import type { Outcome } from "../engine/types";
+
+function graphFrom(dot: string): WorkflowGraph {
+  return parseWorkflowGraph(dot);
+}
+
+function outcome(overrides: Partial<Outcome> & { status: Outcome["status"] }): Outcome {
+  return { ...overrides };
+}
+
+describe("engine/router: routing cascade steps 1-8", () => {
+  it("step 1: jump_to_node bypasses edges entirely, even ones that would otherwise match", () => {
+    const graph = graphFrom(`digraph G {
+      a -> b [condition="outcome=succeeded"]
+      a -> c
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded", jumpToNode: "c" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "c", reason: "jump" });
+  });
+
+  it("step 1: a jump to a node not in the graph is ignored, falling through to normal edges", () => {
+    const graph = graphFrom(`digraph G { a -> b }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded", jumpToNode: "ghost" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "b", reason: "unconditional" });
+  });
+
+  it("step 2: a true conditional edge wins over an unconditional edge", () => {
+    const graph = graphFrom(`digraph G {
+      a -> b [condition="outcome=succeeded"]
+      a -> c
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "b", reason: "condition" });
+  });
+
+  it("step 2: among matching conditional edges, highest weight wins", () => {
+    const graph = graphFrom(`digraph G {
+      a -> b [condition="outcome=succeeded", weight=1]
+      a -> c [condition="outcome=succeeded", weight=5]
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "c", reason: "condition" });
+  });
+
+  it("step 2: on a weight tie among matching conditional edges, lexicographically smallest target wins", () => {
+    const graph = graphFrom(`digraph G {
+      a -> zeta [condition="outcome=succeeded"]
+      a -> beta [condition="outcome=succeeded"]
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "beta", reason: "condition" });
+  });
+
+  it("step 2: conditions can read context. paths", () => {
+    const graph = graphFrom(`digraph G {
+      a -> b [condition="context.score > 3"]
+      a -> c
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded" }),
+      context: { score: 5 },
+    });
+    expect(decision).toEqual({ nodeId: "b", reason: "condition" });
+  });
+
+  it("step 3: preferred_label matches an edge label, stripping accelerator prefixes on both sides", () => {
+    const graph = graphFrom(`digraph G {
+      a -> approve [label="[A] Approve"]
+      a -> revise  [label="[R] Revise"]
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded", preferredLabel: "Approve" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "approve", reason: "preferred_label", edgeLabel: "[A] Approve" });
+  });
+
+  it("step 3: preferred_label with its own accelerator prefix still matches", () => {
+    const graph = graphFrom(`digraph G { a -> approve [label="Approve"] }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded", preferredLabel: "[A] Approve" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "approve", reason: "preferred_label", edgeLabel: "Approve" });
+  });
+
+  it("step 4: suggested_next_ids picks the first suggestion that names an outgoing edge target", () => {
+    const graph = graphFrom(`digraph G { a -> b  a -> c }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded", suggestedNextIds: ["ghost", "c", "b"] }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "c", reason: "suggested" });
+  });
+
+  it("step 5 on_failure=route: a failed outcome with no matching edge falls through to unconditional edges", () => {
+    const graph = graphFrom(`digraph G {
+      graph [on_failure="route"]
+      a -> b
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "failed" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "b", reason: "unconditional" });
+  });
+
+  it("step 5 on_failure=exit: a failed outcome skips unconditional edges (step 6 is not consulted)", () => {
+    const graph = graphFrom(`digraph G {
+      a [on_failure="exit"]
+      a -> b
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "failed" }),
+      context: {},
+    });
+    expect(decision).toBeNull();
+  });
+
+  it("step 5 on_failure=succeed: rewrites the outcome and re-runs 2-6, so a succeeded-only conditional edge now matches", () => {
+    const graph = graphFrom(`digraph G {
+      a [on_failure="succeed"]
+      a -> b [condition="outcome=succeeded"]
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "failed" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "b", reason: "condition" });
+  });
+
+  it("node-level on_failure overrides the graph default", () => {
+    const graph = graphFrom(`digraph G {
+      graph [on_failure="exit"]
+      a [on_failure="route"]
+      a -> b
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "failed" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "b", reason: "unconditional" });
+  });
+
+  it("step 6: a succeeded outcome with no conditional/preferred/suggested match takes the unconditional edge", () => {
+    const graph = graphFrom(`digraph G { a -> b }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "b", reason: "unconditional" });
+  });
+
+  it("step 6: among unconditional edges, highest weight wins", () => {
+    const graph = graphFrom(`digraph G {
+      a -> b [weight=1]
+      a -> c [weight=9]
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "c", reason: "unconditional" });
+  });
+
+  it("step 6: on a weight tie among unconditional edges, lexicographically smallest target wins", () => {
+    const graph = graphFrom(`digraph G {
+      a -> zeta
+      a -> beta
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "beta", reason: "unconditional" });
+  });
+
+  it("step 8: no outgoing edges at all yields null (caller terminates the run with this node's outcome)", () => {
+    const graph = graphFrom(`digraph G { a [shape=box] }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded" }),
+      context: {},
+    });
+    expect(decision).toBeNull();
+  });
+});
+
+describe("engine/router: step 7 retry_target / fallback_retry_target resolution", () => {
+  it("prefers the node's own retry_target", () => {
+    const graph = graphFrom(`digraph G {
+      graph [retry_target="graphTarget"]
+      a [retry_target="nodeTarget", fallback_retry_target="nodeFallback"]
+      nodeTarget [shape=box]
+      nodeFallback [shape=box]
+      graphTarget [shape=box]
+    }`);
+    expect(selectRetryTarget(graph.nodes.get("a")!, graph)).toBe("nodeTarget");
+  });
+
+  it("falls back to the node's fallback_retry_target when it has no retry_target", () => {
+    const graph = graphFrom(`digraph G {
+      a [fallback_retry_target="nodeFallback"]
+      nodeFallback [shape=box]
+    }`);
+    expect(selectRetryTarget(graph.nodes.get("a")!, graph)).toBe("nodeFallback");
+  });
+
+  it("falls back to the graph's retry_target when the node has neither", () => {
+    const graph = graphFrom(`digraph G {
+      graph [retry_target="graphTarget"]
+      a [shape=box]
+      graphTarget [shape=box]
+    }`);
+    expect(selectRetryTarget(graph.nodes.get("a")!, graph)).toBe("graphTarget");
+  });
+
+  it("falls back to the graph's fallback_retry_target as a last resort", () => {
+    const graph = graphFrom(`digraph G {
+      graph [fallback_retry_target="graphFallback"]
+      a [shape=box]
+      graphFallback [shape=box]
+    }`);
+    expect(selectRetryTarget(graph.nodes.get("a")!, graph)).toBe("graphFallback");
+  });
+
+  it("skips a candidate that does not name an existing node and tries the next one", () => {
+    const graph = graphFrom(`digraph G {
+      graph [retry_target="graphTarget"]
+      a [retry_target="ghost"]
+      graphTarget [shape=box]
+    }`);
+    expect(selectRetryTarget(graph.nodes.get("a")!, graph)).toBe("graphTarget");
+  });
+
+  it("returns undefined when no retry target is configured anywhere", () => {
+    const graph = graphFrom(`digraph G { a [shape=box] }`);
+    expect(selectRetryTarget(graph.nodes.get("a")!, graph)).toBeUndefined();
+  });
+});
