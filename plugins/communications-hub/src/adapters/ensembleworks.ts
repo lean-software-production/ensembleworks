@@ -1,5 +1,4 @@
 import { randomUUID, createHash } from 'node:crypto';
-import { setTimeout as delay } from 'node:timers/promises';
 import type { BbPluginApi } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import type { TranscriptSink, SegmentInput } from '../domain';
@@ -8,6 +7,24 @@ const LIMIT = 10_000;
 const MAX_BYTES = 16 * 1024 * 1024;
 const OVERLAP_MS = 60_000;
 const KEY = 'ensembleworks:capture';
+// Poll quickly while speech is arriving, and back off to IDLE_POLL_MAX_MS while
+// it isn't (or while the source is failing). Every V1 poll costs the sync
+// server a transcript read, and an idle room with capture left on otherwise
+// polls the same overlap window every 2s forever.
+export const POLL_MS = 2000;
+export const IDLE_POLL_MAX_MS = 30_000;
+export function nextPollDelay(previous: number, progressed: boolean) {
+  return progressed ? POLL_MS : Math.min(Math.max(previous, POLL_MS) * 2, IDLE_POLL_MAX_MS);
+}
+// Global setTimeout rather than node:timers/promises, so tests can fake the cadence.
+function delay(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    if (signal.aborted) return reject(signal.reason);
+    const onAbort = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, ms);
+    signal.addEventListener('abort', onAbort, {once: true});
+  });
+}
 const responseSchema = z.object({ ok: z.literal(true), now: z.number().int().nonnegative(),
   entries: z.array(z.object({ id: z.string().min(1).max(256), t: z.number().int().nonnegative(),
     identity: z.string().min(1).max(200), name: z.string().max(200),
@@ -46,15 +63,16 @@ export async function registerEnsembleWorks(bb: BbPluginApi, hub: TranscriptSink
   function exclusive<T>(fn: () => Promise<T>): Promise<T> {
     const next = pending.then(fn); pending = next.catch(() => {}); return next;
   }
-  async function poll() {
-    if (!capture?.enabled || lifetime.signal.aborted) return;
+  // Resolves true when the cursor advanced, i.e. new speech arrived.
+  async function poll(): Promise<boolean> {
+    if (!capture?.enabled || lifetime.signal.aborted) return false;
     const current = capture;
     try {
       const page = await readResponse(await request(transcriptUrl(current.url, current.room,
         Math.max(current.anchor, current.since - OVERLAP_MS)), {
         signal: AbortSignal.any([lifetime.signal, AbortSignal.timeout(10_000)]), redirect: 'error',
       }));
-      if (lifetime.signal.aborted) return;
+      if (lifetime.signal.aborted) return false;
       // The V1 API returns a tail, not a forward page. A full result may have
       // dropped earlier entries, so never advance over it as if it were complete.
       if (page.entries.length === LIMIT) throw new Error('Source tail saturated');
@@ -75,18 +93,30 @@ export async function registerEnsembleWorks(bb: BbPluginApi, hub: TranscriptSink
       for (let i=0; i<segments.length; i+=1000) hub.appendSegments(current.conversationId, segments.slice(i,i+1000));
       const next = {...current, since};
       await bb.storage.kv.set(KEY, next);
-      if (lifetime.signal.aborted) return;
+      if (lifetime.signal.aborted) return false;
       capture = next;
       hub.setCapture(current.conversationId, 'capturing', 'Following V1 transcripts with a 60-second overlap; older late arrivals and upstream audio gaps cannot be detected.');
+      return since > current.since;
     } catch {
       if (!lifetime.signal.aborted) hub.setCapture(current.conversationId, 'interrupted',
         'V1 transcript unavailable, invalid, or catch-up exceeds 10,000 entries / 16 MiB. Cursor retained; retrying.');
+      return false;
     }
   }
+  // Aborted by start() so a loop that backed off while capture was off wakes
+  // into the fast cadence instead of sleeping out up to IDLE_POLL_MAX_MS.
+  let wake = new AbortController();
   bb.background.service('ensembleworks-transcript', {async start(signal) {
+    let wait = POLL_MS; let woken = false;
     while (!signal.aborted && !lifetime.signal.aborted) {
-      await exclusive(poll);
-      try { await delay(2000, undefined, {signal}); } catch { break; }
+      // start() has just polled, so a woken loop waits POLL_MS before the next.
+      wait = woken ? POLL_MS : nextPollDelay(wait, await exclusive(poll));
+      woken = false;
+      const waking = wake.signal;
+      try { await delay(wait, AbortSignal.any([signal, waking])); } catch {
+        if (signal.aborted || !waking.aborted) break;
+        wake = new AbortController(); woken = true;
+      }
     }
   }});
   bb.onDispose(async () => {
@@ -108,7 +138,7 @@ export async function registerEnsembleWorks(bb: BbPluginApi, hub: TranscriptSink
       const next: Capture = {conversationId:conversation.id,url,room,since,anchor:since,enabled:true};
       await bb.storage.kv.set(KEY,next); capture=next;
       hub.setCapture(conversation.id,'connecting','Waiting for the V1 transcript.');
-      await poll(); return {conversationId:conversation.id};
+      await poll(); wake.abort(); return {conversationId:conversation.id};
     }),
     stop: (conversationId: string) => exclusive(async () => {
       if (capture?.conversationId !== conversationId || !capture.enabled) return;

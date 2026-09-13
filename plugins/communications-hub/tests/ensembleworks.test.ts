@@ -1,7 +1,7 @@
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { createFakePluginHost } from '@get-bb/plugin-sdk/testing';
 import { Hub } from '../src/hub';
-import { registerEnsembleWorks, transcriptUrl } from '../src/adapters/ensembleworks';
+import { IDLE_POLL_MAX_MS, POLL_MS, nextPollDelay, registerEnsembleWorks, transcriptUrl } from '../src/adapters/ensembleworks';
 const hosts: ReturnType<typeof createFakePluginHost>[]=[];
 afterEach(async()=>{for(const host of hosts.splice(0)) await host.harness.lifecycle.dispose();});
 const row=(id:string,t:number,text='Speech')=>({id,t,text,identity:'livekit:alice',name:'Alice'});
@@ -67,4 +67,24 @@ it('cancels an in-flight source request on disposal',async()=>{
   await expect.poll(()=>began).toBe(true);
   await host.harness.lifecycle.dispose();await start;
   expect(aborted).toBe(true);
+});
+it('backs off polling while no new speech arrives and snaps back when it does',()=>{
+  let wait=POLL_MS;const idle:number[]=[];
+  for(let i=0;i<6;i++){wait=nextPollDelay(wait,false);idle.push(wait);}
+  expect(idle).toEqual([4000,8000,16000,30000,30000,30000]);
+  expect(Math.max(...idle)).toBe(IDLE_POLL_MAX_MS);
+  expect(nextPollDelay(IDLE_POLL_MAX_MS,true)).toBe(POLL_MS);
+});
+it('resumes the fast poll cadence as soon as capture starts, even after backing off',async()=>{
+  vi.useFakeTimers();
+  try {
+    const s=await setup();
+    const service=s.host.harness.behavior.runService('ensembleworks-transcript');
+    await vi.advanceTimersByTimeAsync(120_000);
+    await s.adapter().start('http://localhost:8788','team','Team',0);
+    const afterStart=s.requests.length;
+    await vi.advanceTimersByTimeAsync(POLL_MS);
+    expect(s.requests.length).toBeGreaterThan(afterStart);
+    service.controller.abort();await service.done;
+  } finally {vi.useRealTimers();}
 });
