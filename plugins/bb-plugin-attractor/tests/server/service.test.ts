@@ -1,7 +1,8 @@
 import Database from "better-sqlite3";
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createService, resolveWorkflowPath } from "../../server/service";
+import { HOST_CALL_GRACE_MS, createService, hostCallTimeoutMs, resolveWorkflowPath } from "../../server/service";
+import { DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS } from "../../host-contract";
 import { RunStore } from "../../server/store";
 import type { AgentBackend, AgentRunInput } from "../../server/backend";
 import type { HumanAskResult, HumanInterviewer } from "../../handlers/human";
@@ -640,5 +641,75 @@ describe("createService: answerHumanGate (T6, bb attractor answer)", () => {
     const result = await service.answerHumanGate("missing", "approve");
 
     expect(result).toEqual({ answered: false, reason: "no such run" });
+  });
+});
+
+describe("createService: command node host-call deadline", () => {
+  // Dogfood run 4 (2026-09-13): the `bun install && typecheck && test`
+  // baseline died at exactly 30 s with "host plugin call … exceeded its
+  // deadline" — the SDK's default host RPC timeout — even though the node
+  // declared `timeout="20m"`. The exec client call must carry its own
+  // `timeoutMs`, sitting past the script's so the host entry can still
+  // report `{ timedOut: true }` when it is the script that overruns.
+  it("passes a host RPC timeoutMs derived from the node's timeout to the exec client", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    const execClient = noopExecClient();
+    const service = createService({ bb: host.bb, store, agentBackend: fakeBackend(async () => ({ status: "succeeded" })), execClient });
+
+    const { run } = await service.createAndStartRun({
+      source: `digraph G {
+        start [shape=Mdiamond]
+        exit  [shape=Msquare]
+        build [shape=parallelogram, script="bun run test", timeout="20m"]
+        start -> build -> exit
+      }`,
+      threadId: "origin-thread",
+      projectId: "project-1",
+      environmentId: "env-1",
+    });
+    await vi.waitFor(() => expect(store.getRun(run.id).status).toBe("succeeded"));
+
+    expect(execClient.call).toHaveBeenCalledTimes(1);
+    const [method, input, options] = execClient.call.mock.calls[0]!;
+    expect(method).toBe("exec");
+    expect(input.timeoutMs).toBe(20 * 60_000);
+    expect(options.timeoutMs).toBe(20 * 60_000 + HOST_CALL_GRACE_MS);
+  });
+
+  it("uses the contract default when the node has no timeout, and never exceeds the 30-minute host ceiling", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    const execClient = noopExecClient();
+    const service = createService({ bb: host.bb, store, agentBackend: fakeBackend(async () => ({ status: "succeeded" })), execClient });
+
+    const { run } = await service.createAndStartRun({
+      source: `digraph G {
+        start [shape=Mdiamond]
+        exit  [shape=Msquare]
+        quick [shape=parallelogram, script="true"]
+        slow  [shape=parallelogram, script="true", timeout="3h"]
+        start -> quick -> slow -> exit
+      }`,
+      threadId: "origin-thread",
+      projectId: "project-1",
+      environmentId: "env-1",
+    });
+    await vi.waitFor(() => expect(store.getRun(run.id).status).toBe("succeeded"));
+
+    const [, quickInput, quickOptions] = execClient.call.mock.calls[0]!;
+    expect(quickInput.timeoutMs).toBe(DEFAULT_TIMEOUT_MS);
+    expect(quickOptions.timeoutMs).toBe(DEFAULT_TIMEOUT_MS + HOST_CALL_GRACE_MS);
+    const [, slowInput, slowOptions] = execClient.call.mock.calls[1]!;
+    // A 3 h node timeout would be rejected by the host contract's schema
+    // (max 30 min); the service clamps both the script and the RPC deadline.
+    expect(slowInput.timeoutMs).toBe(MAX_TIMEOUT_MS);
+    expect(slowOptions.timeoutMs).toBe(MAX_TIMEOUT_MS);
+  });
+
+  it("hostCallTimeoutMs adds the grace and caps at the host ceiling", () => {
+    expect(hostCallTimeoutMs(1_000)).toBe(1_000 + HOST_CALL_GRACE_MS);
+    expect(hostCallTimeoutMs(MAX_TIMEOUT_MS - 1)).toBe(MAX_TIMEOUT_MS);
+    expect(hostCallTimeoutMs(MAX_TIMEOUT_MS)).toBe(MAX_TIMEOUT_MS);
   });
 });

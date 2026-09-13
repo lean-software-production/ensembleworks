@@ -475,6 +475,12 @@ T4 adds the **BB integration** — the plugin actually runs a graph now:
   a build tool's own children, not just the shell), `cwd` = the
   environment's path, `ATTRACTOR_RUN_ID`/`ATTRACTOR_NODE_ID` env, optional
   stdin, and stdout/stderr bounded to the last 64 KiB (tail, not head).
+  The service passes the node's `timeout` (default 2 min, capped at the
+  contract's 30 min) as the script's own kill timer **and**, plus a 5 s
+  grace, as the host RPC call's `timeoutMs` — the SDK's default host-call
+  deadline is 30 s, which is what killed dogfood run 4's
+  `bun install && typecheck && test` baseline stage ("host plugin call …
+  exceeded its deadline") before this was wired through.
 - `server/store.ts` — a `better-sqlite3`-backed `RunStore` (runs, stages,
   events; append-only migrations, matching `bb-plugin-assembly-lines`'s
   `JobStore` shape), taking the `Database.Database` handle directly so it
