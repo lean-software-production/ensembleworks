@@ -154,7 +154,7 @@ describe("Assembly Lines app", () => {
     expect(await slot.findByText("src/a.ts, src/b.ts")).toBeTruthy();
     expect(slot.getByText("src/a.ts")).toBeTruthy();
     expect(slot.getByText("src/b.ts")).toBeTruthy();
-    expect(slot.getByText("Final validation")).toBeTruthy();
+    expect(slot.getByText("Latest validation (non-final)")).toBeTruthy();
     expect(slot.getAllByText("Fail").length).toBeGreaterThan(0);
     fireEvent.click(slot.getByText(/npm test$/));
     expect(await slot.findByText("failed")).toBeTruthy();
@@ -180,7 +180,7 @@ describe("Assembly Lines app", () => {
     } });
     await slot.findByText(/Run details refresh failed/);
     expect(slot.getByText("Diff evidence was truncated.")).toBeTruthy();
-    expect(slot.getByText("Final validation")).toBeTruthy();
+    expect(slot.getByText("Latest validation (non-final)")).toBeTruthy();
     expect(slot.getAllByText("Fail").length).toBeGreaterThan(0);
     fireEvent.click(slot.getByText("maybe"));
     expect(await slot.findByText("spawn failed")).toBeTruthy();
@@ -195,10 +195,61 @@ describe("Assembly Lines app", () => {
       getRunDetails: () => ({ job, fabroUrl: null, details: "{not json", artifacts: "" }),
     } });
     await slot.findByText(/Run details could not be parsed/);
-    expect(slot.getByText("No changes were reported.")).toBeTruthy();
+    expect(slot.getByText("Diff evidence is not available yet.")).toBeTruthy();
     expect(slot.getByText("Check evidence is not available yet.")).toBeTruthy();
     fireEvent.click(slot.getByText("Raw JSON"));
     expect(await slot.findByText("{not json")).toBeTruthy();
+    slot.lifecycle.unmount();
+  });
+
+  it("prefers final delivery checks over stale validation and reports missing exits as unknown", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    const delivered = { ...job, resultRevision: 1, engineStatus: "succeeded", observationState: "succeeded" };
+    const fresh = evidence({
+      workspace: {
+        path: "/tmp/final",
+        files: {
+          "delivery.json": { text: JSON.stringify({
+            after: { checks: [{ command: "final check", exitCode: 1, signal: null, error: null, stdout: "", stderr: "real failure" }] },
+          }), truncated: false },
+          "validation.json": { text: JSON.stringify({ checks: [{ command: "stale validation", exitCode: 0, signal: null, error: null, stdout: "old pass", stderr: "" }] }), truncated: false },
+          "baseline.json": { text: JSON.stringify({ checks: [{ command: "unknown setup", signal: null, error: null, stdout: "", stderr: "" }] }), truncated: false },
+          "diff.patch": { text: "", truncated: false },
+        },
+      },
+    });
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: job.threadId, params: { jobId: job.id } }, { rpc: {
+      getJob: () => ({ job: delivered, fabroUrl: null }),
+      getRunGraph: () => graph,
+      getRunDetails: () => ({ job: delivered, fabroUrl: null, details: JSON.stringify(fresh), artifacts: "" }),
+    } });
+    await slot.findByText("Final validation");
+    expect(slot.queryByText("Latest validation (non-final)")).toBeNull();
+    expect(slot.getByText("final check")).toBeTruthy();
+    expect(slot.queryByText("stale validation")).toBeNull();
+    expect(slot.getAllByText("Fail").length).toBeGreaterThan(0);
+    expect(slot.getAllByText("Unknown").length).toBeGreaterThan(0);
+    fireEvent.click(slot.getByText("final check"));
+    expect(await slot.findByText("real failure")).toBeTruthy();
+    slot.lifecycle.unmount();
+  });
+
+  it("falls back to persisted evidence when fresh details are malformed while keeping malformed raw input", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    const persisted = evidence({ workspace: { path: "/tmp/persisted", files: {
+      "delivery.json": { text: JSON.stringify({ changedFiles: ["persisted.ts"], attempts: 1, resultSha: "c".repeat(40) }), truncated: false },
+      "diff.patch": { text: "", truncated: false },
+    } } });
+    const persistedJob = { ...job, result: persisted, resultRevision: 1, engineStatus: "succeeded", observationState: "succeeded" };
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: job.threadId, params: { jobId: job.id } }, { rpc: {
+      getJob: () => ({ job: persistedJob, fabroUrl: null }),
+      getRunGraph: () => graph,
+      getRunDetails: () => ({ job: persistedJob, fabroUrl: null, details: "{fresh malformed", artifacts: "" }),
+    } });
+    await slot.findByText(/Run details could not be parsed/);
+    expect(slot.getByText("persisted.ts")).toBeTruthy();
+    fireEvent.click(slot.getByText("Raw JSON"));
+    expect(await slot.findByText("{fresh malformed")).toBeTruthy();
     slot.lifecycle.unmount();
   });
 
@@ -219,6 +270,51 @@ describe("Assembly Lines app", () => {
     resolveFirst!({ job, fabroUrl: null, details: JSON.stringify(evidence({ workspace: { path: "/tmp/stale", files: { "delivery.json": { text: JSON.stringify({ changedFiles: ["stale.ts"] }), truncated: false } } } })), artifacts: "" });
     await waitFor(() => expect(slot.queryByText("stale.ts")).toBeNull());
     expect(slot.getByText("No changes were reported.")).toBeTruthy();
+    slot.lifecycle.unmount();
+  });
+
+  it("clears and ignores stale jobs when switching panel identities", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    let resolveFirst: ((value: unknown) => void) | null = null;
+    const first = new Promise(resolve => { resolveFirst = resolve; });
+    const job2 = { ...job, id: "job-2", runId: "run-2", workOrder: { ...job.workOrder, title: "Second job" } };
+    const Panel = app.threadPanelActions[0]!.component;
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: job.threadId, params: { jobId: job.id } }, { rpc: {
+      getJob: (input: unknown) => (input as { jobId: string }).jobId === "job-1" ? first : { job: job2, fabroUrl: null },
+      getRunGraph: () => graph,
+      getRunDetails: () => ({ job: job2, fabroUrl: null, details: JSON.stringify(evidence({ workspace: { path: "/tmp/job2", files: { "diff.patch": { text: "", truncated: false } } } })), artifacts: "" }),
+    } });
+    slot.lifecycle.rerender(<Panel threadId={job.threadId} params={{ jobId: "job-2" }} />);
+    await slot.findByText("Second job");
+    resolveFirst!({ job: { ...job, workOrder: { ...job.workOrder, title: "Stale first job" } }, fabroUrl: null });
+    await waitFor(() => expect(slot.queryByText("Stale first job")).toBeNull());
+    expect(slot.getByText("Second job")).toBeTruthy();
+    slot.lifecycle.unmount();
+  });
+
+  it("keeps the newest same-job refresh when earlier getJob responses resolve late", async () => {
+    const app = await loadPluginApp(() => import("./app"));
+    let calls = 0;
+    let resolveSlow: ((value: unknown) => void) | null = null;
+    const slow = new Promise(resolve => { resolveSlow = resolve; });
+    const slot = renderSlot(app.threadPanelActions[0]!, { threadId: job.threadId, params: { jobId: job.id } }, { rpc: {
+      getJob: () => {
+        calls++;
+        if (calls === 1) return { job: { ...job, workOrder: { ...job.workOrder, title: "Initial job" } }, fabroUrl: null };
+        if (calls === 2) return slow;
+        return { job: { ...job, workOrder: { ...job.workOrder, title: "Newest job" } }, fabroUrl: null };
+      },
+      getRunGraph: () => graph,
+      getRunDetails: () => ({ job, fabroUrl: null, details: JSON.stringify(evidence({ workspace: { path: "/tmp/job", files: { "diff.patch": { text: "", truncated: false } } } })), artifacts: "" }),
+    } });
+    await slot.findByText("Initial job");
+    await slot.behavior.emitRealtime("jobs-changed", { jobId: job.id, threadId: job.threadId });
+    await slot.behavior.emitRealtime("jobs-changed", { jobId: job.id, threadId: job.threadId });
+    await slot.findByText("Newest job");
+    resolveSlow!({ job: { ...job, workOrder: { ...job.workOrder, title: "Older refresh job" } }, fabroUrl: null });
+    await waitFor(() => expect(slot.queryByText("Older refresh job")).toBeNull());
+    expect(slot.getByText("Newest job")).toBeTruthy();
+    expect(calls).toBe(3);
     slot.lifecycle.unmount();
   });
 });

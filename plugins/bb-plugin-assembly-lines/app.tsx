@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Markdown, definePluginApp, experimental_Diff, useBbContext, useBbNavigate, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { PluginMessageDirectiveProps, PluginThreadPanelProps } from "@get-bb/plugin-sdk/app";
 import type { rpcContract, JobView } from "./contracts";
@@ -56,8 +56,9 @@ function parseMaybeFileJson(files: SidebarData["files"], name: string): JsonObje
   return parseJson(file.text);
 }
 function checkStatus(check: JsonObject): CheckStatus {
-  if (check.error || check.signal || check.exitCode === null || check.exitCode === undefined) return check.exitCode === 0 && !check.error && !check.signal ? "pass" : "fail";
-  return check.exitCode === 0 ? "pass" : "fail";
+  if (check.error || check.signal) return "fail";
+  if (typeof check.exitCode === "number") return check.exitCode === 0 ? "pass" : "fail";
+  return "unknown";
 }
 function toCheck(value: unknown, fallback: string): Check {
   if (!isObject(value)) return { label: fallback, status: "unknown" };
@@ -85,6 +86,9 @@ function checksFrom(value: JsonObject | null, title: string): CheckGroup | null 
   if (!checks.length) return null;
   return { title, checks, status: groupStatus(checks) };
 }
+function objectFromFile(files: SidebarData["files"], name: string): JsonObject | null {
+  return parseMaybeFileJson(files, name);
+}
 function splitDiff(patch: string): DiffFile[] {
   if (!patch.trim()) return [];
   const starts = [...patch.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)];
@@ -106,16 +110,19 @@ function parseSidebarData(job: Job, details: DetailsState): SidebarData {
   } else if (isObject(job.result)) {
     evidence = job.result;
   }
+  if (parseError && isObject(job.result)) evidence = job.result;
   const files = fileEntries(evidence);
   const delivery = parseMaybeFileJson(files, "delivery.json") ?? (isObject(evidence?.delivery) ? evidence.delivery : null);
-  const baseline = parseMaybeFileJson(files, "baseline.json") ?? (isObject(delivery?.baseline) ? delivery.baseline : isObject(delivery?.before) ? delivery.before : null);
-  const validation = parseMaybeFileJson(files, "validation.json") ?? (isObject(delivery?.validation) ? delivery.validation : isObject(delivery?.final) ? delivery.final : isObject(delivery?.after) ? delivery.after : null);
-  const groups = [checksFrom(baseline, "Baseline"), checksFrom(validation, "Final validation")].filter((g): g is CheckGroup => !!g);
+  const baseline = isObject(delivery?.baseline) ? delivery.baseline : isObject(delivery?.before) ? delivery.before : objectFromFile(files, "baseline.json");
+  const final = isObject(delivery?.after) ? delivery.after : isObject(delivery?.final) ? delivery.final : objectFromFile(files, "final.json");
+  const validation = isObject(delivery?.validation) ? delivery.validation : objectFromFile(files, "validation.json");
+  const groups = [checksFrom(baseline, "Baseline"), checksFrom(final, "Final validation") ?? checksFrom(validation, "Latest validation (non-final)")].filter((g): g is CheckGroup => !!g);
   if (isObject(delivery?.quality)) groups.push({ title: "Quality", checks: [toCheck(delivery.quality, "Quality check")], status: toCheck(delivery.quality, "Quality check").status });
   const changedFiles = arrayStrings(delivery?.changedFiles).concat(arrayStrings(isObject(evidence?.scope) ? evidence.scope.changedFiles : undefined));
   const diffText = files["diff.patch"]?.text ?? stringValue(evidence?.diff) ?? (isObject(evidence?.diff) ? stringValue(evidence.diff.preview) : undefined);
   const diffTruncated = files["diff.patch"]?.truncated || (isObject(evidence?.diff) && evidence.diff.truncated === true);
   const unavailable = files["diff.patch"]?.unavailable || (isObject(evidence?.diff) && evidence.diff.unavailable === true);
+  const hasDiffEvidence = Object.prototype.hasOwnProperty.call(files, "diff.patch") || typeof evidence?.diff !== "undefined" || delivery?.noChanges === true || delivery?.diffStatus === "empty";
   const diffFiles = diffText ? splitDiff(diffText) : [];
   return {
     parseError,
@@ -132,7 +139,8 @@ function parseSidebarData(job: Job, details: DetailsState): SidebarData {
     diff: unavailable ? { status: "unavailable", message: "Diff evidence is unavailable.", files: [] }
       : diffTruncated ? { status: "truncated", message: "Diff evidence was truncated.", files: diffFiles }
       : diffFiles.length ? { status: diffFiles.some(file => file.malformed) ? "malformed" : "ok", files: diffFiles }
-      : { status: raw ? "empty" : "unavailable", message: raw ? "No changes were reported." : "Diff evidence is not available yet.", files: [] },
+      : hasDiffEvidence ? { status: "empty", message: "No changes were reported.", files: [] }
+      : { status: "unavailable", message: "Diff evidence is not available yet.", files: [] },
     checks: groups,
     reviewMarkdown: files["review.md"]?.text ?? stringValue(delivery?.review) ?? stringValue(delivery?.reviewMarkdown),
   };
@@ -155,17 +163,29 @@ function ChecksView({ groups }: { groups: CheckGroup[] }) {
 }
 
 function useJob(rpc: Rpc, jobId: string | null, threadId: string | null) {
-  const [job, setJob] = useState<Job | null>(null); const [loaded, setLoaded] = useState(false); const [error, setError] = useState<string | null>(null);
+  const key = jobId && threadId ? `${threadId}\u0000${jobId}` : null;
+  const [state, setState] = useState<{ key: string | null; job: Job | null; loaded: boolean; error: string | null }>({ key: null, job: null, loaded: false, error: null });
+  const requestSeq = useRef(0);
   const refresh = useCallback(() => {
-    if (!jobId) return;
-    if (!threadId) return;
-    rpc.call("getJob", { jobId, threadId }).then((r) => { setJob(r.job ? { ...r.job, fabroUrl: r.fabroUrl } as Job : null); setLoaded(true); setError(null); }, e => { setLoaded(true); setError(e instanceof Error ? e.message : String(e)); });
-  }, [jobId, rpc, threadId]);
-  useEffect(refresh, [refresh]);
+    if (!jobId || !threadId || !key) return;
+    const seq = ++requestSeq.current;
+    rpc.call("getJob", { jobId, threadId }).then((r) => {
+      if (seq !== requestSeq.current) return;
+      setState({ key, job: r.job ? { ...r.job, fabroUrl: r.fabroUrl } as Job : null, loaded: true, error: null });
+    }, e => {
+      if (seq !== requestSeq.current) return;
+      setState({ key, job: null, loaded: true, error: e instanceof Error ? e.message : String(e) });
+    });
+  }, [jobId, key, rpc, threadId]);
+  useEffect(() => {
+    setState({ key, job: null, loaded: false, error: null });
+    refresh();
+  }, [key, refresh]);
   useRealtime("jobs-changed", (payload) => {
-    if (!payload || typeof payload !== "object" || (payload as { jobId?: string }).jobId === jobId) refresh();
+    if (!payload || typeof payload !== "object") refresh();
+    else if ((payload as { jobId?: string }).jobId === jobId && (!(payload as { threadId?: string }).threadId || (payload as { threadId?: string }).threadId === threadId)) refresh();
   });
-  return { job, loaded, error };
+  return state.key === key ? { job: state.job, loaded: state.loaded, error: state.error } : { job: null, loaded: false, error: null };
 }
 
 function Progress({ job }: { job: Job }) {
@@ -195,21 +215,22 @@ function Panel({ threadId, params }: PluginThreadPanelProps) {
   const [details, setDetails] = useState<DetailsState>(null);
   const [detailsError, setDetailsError] = useState<string | null>(null);
   const [showFabro, setShowFabro] = useState(false);
+  const detailsSeq = useRef(0);
   useEffect(() => {
     setDetails(null);
     setDetailsError(null);
     if (!id || !job) return;
-    let stale = false;
+    const seq = ++detailsSeq.current;
     rpc.call("getRunDetails", { jobId: id, threadId: ownerThreadId }).then(r => {
-      if (stale) return;
+      if (seq !== detailsSeq.current) return;
       setDetails({ text: r.details, artifacts: r.artifacts, fresh: true });
       setDetailsError(null);
     }, e => {
-      if (stale) return;
+      if (seq !== detailsSeq.current) return;
       setDetails(job.result ? { text: stringifyRaw(job.result), artifacts: "", fresh: false } : null);
       setDetailsError(e instanceof Error ? e.message : String(e));
     });
-    return () => { stale = true; };
+    return () => { detailsSeq.current++; };
   }, [id, job, rpc, ownerThreadId]);
   if (!id) return <p className="p-4 text-sm text-destructive">This panel has no job id.</p>;
   if (error) return <p className="p-4 text-sm text-destructive" role="alert">{error}</p>;
