@@ -210,9 +210,9 @@ T5 adds the **DAG UI**:
 
 - `ui/dag.tsx` — a pure `layoutGraph()` (dagre, rank direction from the
   graph's `rankdir`) plus `DagView`, an SVG rendering with a live execution
-  overlay: shape hints per `handlerKind` (start/human/command/conditional/
-  parallel get distinct outlines; exit/agent/prompt stay a rounded rect),
-  status colour (`pending`/`running`/`succeeded`/`failed`/`skipped`), a
+  overlay: shape hints per `handlerKind` (start/exit/human/command/
+  conditional/parallel each get a distinct outline; only agent/prompt stay a
+  plain rounded rect), status colour (`pending`/`running`/`succeeded`/`failed`/`skipped`), a
   visit-count badge once `visit > 1`, the run's current node highlighted,
   and traversed edges (derived from `edge.selected` events, not persisted
   per-edge state) drawn solid/arrowed with the last-selected reason and
@@ -470,16 +470,17 @@ bb plugin build .
   same code path the CLI's `stop` subcommand already calls.
 
 - **DAG node shapes are a simplified visual mapping, not a literal
-  redraw of the DOT shapes (T5).** The plan's acceptance only requires
-  start/exit/human/command to be visually distinct; `ui/dag.tsx` gives
-  each `handlerKind` a `shapePoints()` outline (diamond for `start`/
-  `conditional`, hexagon for `human`, parallelogram for `command`, an
-  octagon standing in for both `component`/`tripleoctagon` on `parallel`/
-  `parallel.fan_in`) and leaves `exit`/`agent`/`prompt` as a plain rounded
-  rect — there is no separate "double-bordered" `Msquare` treatment for
-  `exit` beyond that, since the acceptance criteria only calls for
-  human/command to be distinguishable from the rest, not for a pixel-exact
-  Graphviz shape library.
+  redraw of the DOT shapes (T5).** `ui/dag.tsx`'s `shapePoints()` gives
+  every `handlerKind` its own outline: a clip-tipped diamond for `start`
+  (standing in for `Mdiamond`), a plain diamond for `conditional`, a
+  hexagon for `human`, a parallelogram for `command`, a clip-cornered
+  rectangle for `exit` (standing in for `Msquare`), and an octagon (with
+  wider corner cuts than `exit`'s, so the two stay distinct) standing in
+  for both `component`/`tripleoctagon` on `parallel`/`parallel.fan_in`;
+  only `agent`/`prompt` remain a plain rounded rect. This satisfies the
+  plan's "start/exit/human/command distinct" acceptance without being a
+  pixel-exact Graphviz shape library (no true multi-line `M`-prefix corner
+  decorations, no bevelled `Msquare` double border).
 
 - **Test-infra note: raw `render()` needs an explicit `afterEach(cleanup)`
   in this project's vitest config (T5, not a plan deviation, but worth

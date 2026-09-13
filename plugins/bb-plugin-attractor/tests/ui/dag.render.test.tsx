@@ -44,15 +44,30 @@ const EVENTS: RunEvent[] = [
 
 describe("DagView", () => {
   it("gives start/exit/human/command nodes distinct shape hints", () => {
-    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    const graphWithConditional: GraphView = {
+      ...GRAPH,
+      nodes: [...GRAPH.nodes, node("check", { handlerKind: "conditional", status: null, visit: 0 })],
+    };
+    const { container } = render(<DagView graph={graphWithConditional} events={[]} />);
+    // Fingerprint the node's primary outline element the same way regardless
+    // of whether it's a <rect> or a <polygon>, so "exit now uses a distinct
+    // shape from agent/prompt" and "start is distinct from conditional" are
+    // both provable even though both pairs used to render byte-identical
+    // outlines (same tag, same attributes).
+    const outlineOf = (id: string) => {
+      const el = container.querySelector(`[data-node-id="${id}"] polygon, [data-node-id="${id}"] rect`)!;
+      return [el.tagName, el.getAttribute("points"), el.getAttribute("rx"), el.getAttribute("width"), el.getAttribute("height")].join("|");
+    };
     const shapeOf = (id: string) => container.querySelector(`[data-node-id="${id}"] polygon, [data-node-id="${id}"] rect`)?.tagName;
-    const pointsOf = (id: string) => container.querySelector(`[data-node-id="${id}"] polygon`)?.getAttribute("points");
     expect(shapeOf("start")).toBe("polygon");
     expect(shapeOf("approve")).toBe("polygon"); // human
     expect(shapeOf("build")).toBe("polygon"); // command
-    expect(shapeOf("exit")).toBe("rect"); // exit stays a plain rect
+    // exit (Msquare) must no longer be a plain rect indistinguishable from an agent/prompt node.
+    expect(outlineOf("exit")).not.toBe(outlineOf("plan")); // plan is a "prompt" node, falls to the default rect too
+    // start (Mdiamond) must no longer share conditional's plain diamond outline.
+    expect(outlineOf("start")).not.toBe(outlineOf("check"));
     // start (diamond) and approve (hexagon) and build (parallelogram) must not share the same outline.
-    const shapes = new Set([pointsOf("start"), pointsOf("approve"), pointsOf("build")]);
+    const shapes = new Set([outlineOf("start"), outlineOf("approve"), outlineOf("build")]);
     expect(shapes.size).toBe(3);
   });
 
@@ -110,5 +125,30 @@ describe("DagView", () => {
     expect(planNode.getAttribute("role")).toBeNull();
     fireEvent.click(planNode);
     expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("renders two parallel edges between the same node pair as distinct, non-colliding React elements", () => {
+    // A legal DOT dialect graph can route two alternative conditions between
+    // the same pair of nodes (e.g. two outcomes of a conditional both
+    // leading elsewhere then converging). Both edges must render — with no
+    // duplicate-key collision — and each keep its own selection reason.
+    const graph: GraphView = {
+      rankdir: "TB",
+      nodes: [node("check", { handlerKind: "conditional" }), node("fix", { handlerKind: "agent" })],
+      edges: [
+        { from: "check", to: "fix", label: null, condition: "outcome=failed" },
+        { from: "check", to: "fix", label: null, condition: "outcome=partially_succeeded" },
+      ],
+    };
+    const events: RunEvent[] = [
+      { type: "run.started", runId: "run-1", ts: 1 },
+      { type: "edge.selected", runId: "run-1", ts: 2, from: "check", to: "fix", reason: "condition", edgeLabel: "outcome=failed" },
+    ];
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { container } = render(<DagView graph={graph} events={events} />);
+    expect(container.querySelectorAll('[data-edge="check->fix"]')).toHaveLength(2);
+    const keyWarning = errorSpy.mock.calls.some((call) => String(call[0]).includes("same key"));
+    expect(keyWarning).toBe(false);
+    errorSpy.mockRestore();
   });
 });

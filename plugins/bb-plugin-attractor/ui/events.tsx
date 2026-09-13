@@ -5,7 +5,7 @@
  * (see ui/dag.tsx's header comment on the app-bundle boundary).
  */
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { RunEvent } from "../engine/types";
 
 export const PAGE_SIZE = 50;
@@ -52,10 +52,23 @@ export interface EventTimelineProps {
   events: EventView[];
 }
 
-/** Paged, oldest-first-within-page event log. Starts on the most recent page. */
+/**
+ * Paged, oldest-first-within-page event log. Starts on the most recent page,
+ * and — as long as the viewer hasn't paged away from the newest page — keeps
+ * following it forward as a live run appends events past a page boundary.
+ * Once the viewer pages back to look at history, growth no longer yanks them
+ * forward; they have to page `Newer` back to resume following.
+ */
 export function EventTimeline({ events }: EventTimelineProps) {
   const pageCount = Math.max(1, Math.ceil(events.length / PAGE_SIZE));
   const [page, setPage] = useState(pageCount - 1);
+  const prevPageCountRef = useRef(pageCount);
+  useEffect(() => {
+    const prevPageCount = prevPageCountRef.current;
+    prevPageCountRef.current = pageCount;
+    if (pageCount === prevPageCount) return;
+    setPage((currentPage) => (currentPage >= prevPageCount - 1 ? pageCount - 1 : currentPage));
+  }, [pageCount]);
   const clampedPage = Math.min(page, pageCount - 1);
   const start = clampedPage * PAGE_SIZE;
   const pageEvents = events.slice(start, start + PAGE_SIZE);

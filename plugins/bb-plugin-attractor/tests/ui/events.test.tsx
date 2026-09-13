@@ -71,4 +71,25 @@ describe("EventTimeline", () => {
     const { getByText } = render(<EventTimeline events={[]} />);
     expect(getByText(/no events yet/i)).toBeTruthy();
   });
+
+  it("follows a live run onto the newest page as events grow past the page size", () => {
+    // Mounts on an empty run (page 1 of 1), then the realtime refetch grows
+    // it past 2 pages worth of events — the timeline should stay pinned to
+    // the newest page, per its own docstring ("Starts on the most recent
+    // page"), not remain stranded on the page it first mounted with.
+    const { container, rerender, getByText } = render(<EventTimeline events={[]} />);
+    rerender(<EventTimeline events={events(PAGE_SIZE * 2 + 5)} />);
+    expect(getByText("Page 3 of 3")).toBeTruthy();
+    const rows = container.querySelectorAll("[data-event-seq]");
+    expect(rows).toHaveLength(5);
+    expect(rows[0].getAttribute("data-event-seq")).toBe(String(PAGE_SIZE * 2 + 1));
+  });
+
+  it("does not yank the viewer forward if they had paged back to an older page", () => {
+    const { getByRole, getByText, rerender } = render(<EventTimeline events={events(PAGE_SIZE + 5)} />);
+    fireEvent.click(getByRole("button", { name: /older/i })); // now on page 1 of 2
+    expect(getByText("Page 1 of 2")).toBeTruthy();
+    rerender(<EventTimeline events={events(PAGE_SIZE * 2 + 5)} />); // grows to 3 pages
+    expect(getByText("Page 1 of 3")).toBeTruthy();
+  });
 });
