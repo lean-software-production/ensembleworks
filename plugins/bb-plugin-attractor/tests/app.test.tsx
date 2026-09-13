@@ -51,8 +51,8 @@ const GRAPH: GraphView = {
 };
 
 const STAGES: StageView[] = [
-  { runId: "run-1", stageId: "start@1", nodeId: "start", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, startedAt: 1_000, completedAt: 1_200 },
-  { runId: "run-1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: "worker-thread-1", startedAt: 1_200, completedAt: null },
+  { runId: "run-1", stageId: "start@1", nodeId: "start", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, providerId: null, model: null, reasoningLevel: null, actor: null, startedAt: 1_000, completedAt: 1_200 },
+  { runId: "run-1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: "worker-thread-1", providerId: null, model: null, reasoningLevel: null, actor: null, startedAt: 1_200, completedAt: null },
 ];
 
 function baseRpc(overrides: Partial<{ run: RunView | null; stages: StageView[]; graph: GraphView | null }> = {}) {
@@ -139,6 +139,19 @@ describe("Attractor app", () => {
     expect(slot.getByText("running")).toBeTruthy();
     expect(slot.container.querySelector('[data-node-id="plan"][data-status="running"]')).toBeTruthy();
     expect(slot.container.querySelector('[data-node-id="start"][data-status="succeeded"]')).toBeTruthy();
+  });
+
+  it("lays out the directive's 'Show stages' and 'Open in right panel' buttons in a gapped row, not run together", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.messageDirectives[0]!,
+      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
+      { rpc: baseRpc() },
+    );
+    const showStages = await slot.findByRole("button", { name: /show stages/i });
+    const row = showStages.parentElement as HTMLElement;
+    expect(row.style.display).toBe("flex");
+    expect(Number.parseInt(row.style.gap, 10)).toBeGreaterThanOrEqual(8);
   });
 
   it("opens the thread panel from the directive's 'Open in right panel' action", async () => {

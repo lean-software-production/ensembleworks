@@ -57,14 +57,14 @@ export function createThreadHumanInterviewer(bb: BbPluginApi): HumanInterviewer 
     }
     const data = parsed.data;
     if (data.kind === "text") {
-      return { kind: "text", text: data.text };
+      return { kind: "text", text: data.text, actor: data.via };
     }
     const raw = data.raw;
     const option = input.options.find((o) => o.raw === raw);
     if (!option) {
       throw new Error(`human gate for node "${input.nodeId}" chose an unknown option: ${raw}`);
     }
-    return { kind: "choice", option };
+    return { kind: "choice", option, actor: data.via };
   }
 
   return { ask };

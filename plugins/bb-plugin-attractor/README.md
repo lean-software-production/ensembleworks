@@ -128,7 +128,20 @@ bb attractor stages <runId>
 bb attractor events <runId> [--since seq]
 bb attractor stop <runId>
 bb attractor answer <runId> <label|text>  # answer a blocked human gate
+bb attractor --help                       # lists every command + summary
+bb attractor <command> --help             # (or `help <command>`) usage + JSON output shape
 ```
+
+Every `<runId>`-taking subcommand (`status`, `stages`, `events`, `stop`,
+`answer`) exits `1` with `no such run: <runId>` on stderr for an unknown or
+not-owned run id — it never silently prints `null`/`[]` with a `0` exit
+code. `answer` also exits `1` (reason on stderr) when the run has no
+pending human gate to answer; a mismatched label/text on a real pending
+gate still exits `0` with `{ answered: false, reason }` (a legitimate "try
+again" response, not an error). `stop` exits `1` with
+`run <runId> is not running` when the run isn't in flight, and a
+successful stop prints only `{ stopped: true, status: "cancelled" }`, not
+the whole run.
 
 **RPC** (`server/contracts.ts`, consumed by `ui/*`/`app.tsx` via `useRpc`):
 `getRun`, `listRuns`, `getGraph`, `getEvents`, `stopRun` — every method is
@@ -665,7 +678,10 @@ bb plugin build .
   branches alike, same as `last_outcome`), and `server/backend.ts`'s
   `summarizePriorStages` reads it (plus the node's `label` from the graph) to
   build each bullet. Additive, covered by a new `tests/engine.test.ts` case
-  plus `tests/server/backend.test.ts`'s prompt-assembly test.
+  plus `tests/server/backend.test.ts`'s prompt-assembly test. Each bullet's
+  response preview is capped at 400 characters, with a trailing
+  `…[truncated]` marker when a response was actually cut — the full text is
+  always still in `context.response.<node_id>` for a node that needs more of it.
 
 - **`prompt` (`tab`) nodes are not actually read-only (T4).** The plan
   describes `tab` as "single LLM call, read-only tools", but BB's plugin

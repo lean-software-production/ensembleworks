@@ -37,6 +37,15 @@ describe("describeEvent", () => {
     expect(text).toContain("boom");
     expect(text).toContain("retry");
   });
+  it("summarizes a human.answered event's actor when present", () => {
+    const withActor = describeEvent({ type: "human.answered", runId: "r1", ts: 0, stageId: "gate@1", nodeId: "gate", answer: "Approve", actor: "ui", seq: 1 });
+    expect(withActor).toContain("Approve");
+    expect(withActor).toContain("via ui");
+  });
+  it("omits the actor clause from a human.answered event with no known actor", () => {
+    const noActor = describeEvent({ type: "human.answered", runId: "r1", ts: 0, stageId: "gate@1", nodeId: "gate", answer: "Approve", seq: 1 });
+    expect(noActor).not.toContain("via");
+  });
 });
 
 describe("EventTimeline", () => {

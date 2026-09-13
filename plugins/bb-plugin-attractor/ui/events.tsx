@@ -38,7 +38,7 @@ export function describeEvent(event: EventView): string {
     case "human.requested":
       return `${event.nodeId}: human input requested`;
     case "human.answered":
-      return `${event.nodeId}: human answered${event.answer ? `: ${event.answer}` : ""}`;
+      return `${event.nodeId}: human answered${event.answer ? `: ${event.answer}` : ""}${event.actor ? ` (answered via ${event.actor})` : ""}`;
     case "checkpoint.saved":
       return `Checkpoint saved at ${event.stageId}`;
     case "log":

@@ -165,9 +165,9 @@ function applyEventToStore(store: RunStore, runId: string, event: RunEvent): voi
       store.upsertStage(runId, { stageId: event.stageId, nodeId: event.nodeId, visit: parseVisitFromStageId(event.stageId, event.nodeId), attempt: 1, status: "skipped", outcomeStatus: null, threadId: null, startedAt: event.ts, completedAt: event.ts });
       return;
     case "agent.thread": {
-      const nodeId = event.stageId.split("@")[0];
-      const visit = parseVisitFromStageId(event.stageId, nodeId);
-      store.setStageThreadId(runId, nodeId, visit, event.threadId);
+      const visit = parseVisitFromStageId(event.stageId, event.nodeId);
+      store.setStageThreadId(runId, event.nodeId, visit, event.threadId);
+      store.setStageProvider(runId, event.nodeId, visit, event.provider, event.model, event.reasoningLevel);
       return;
     }
     // T6: a human gate is waiting on its answer — surface that on both the
@@ -185,6 +185,7 @@ function applyEventToStore(store: RunStore, runId: string, event: RunEvent): voi
       const visit = parseVisitFromStageId(event.stageId, event.nodeId);
       store.setStageStatus(runId, event.nodeId, visit, "running");
       store.setStatus(runId, "running");
+      if (event.actor) store.setStageActor(runId, event.nodeId, visit, event.actor);
       return;
     }
     default:
@@ -456,8 +457,8 @@ export function createService(deps: ServiceDeps) {
     const trimmed = answer.trim();
     const lower = trimmed.toLowerCase();
     const match = payload.options.find((o) => o.raw === trimmed || o.text.toLowerCase() === lower || (o.key !== null && o.key.toLowerCase() === lower));
-    if (match) return humanGateValueSchema.parse({ kind: "choice", raw: match.raw });
-    if (payload.freeform) return humanGateValueSchema.parse({ kind: "text", text: answer });
+    if (match) return humanGateValueSchema.parse({ kind: "choice", raw: match.raw, via: "cli" });
+    if (payload.freeform) return humanGateValueSchema.parse({ kind: "text", text: answer, via: "cli" });
     return null;
   }
 

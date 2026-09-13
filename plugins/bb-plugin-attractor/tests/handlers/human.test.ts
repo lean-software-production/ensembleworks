@@ -126,6 +126,30 @@ describe("createHumanHandler", () => {
     expect(events).toContainEqual({ type: "human.answered", answer: "[A] Approve" });
   });
 
+  it("carries the interviewer's actor through to the human.answered event and the human.gate.actor context key", async () => {
+    const g = graph();
+    const events: StageScopedEvent[] = [];
+    const { interviewer: iv } = interviewer({ kind: "choice", option: { raw: "[A] Approve", key: "A", text: "Approve", to: "exit" }, actor: "ui" });
+    const handler = createHumanHandler(iv, { threadId: "thread-1" });
+
+    const outcome = await handler.run(baseInput(g, {}, (e) => events.push(e)));
+
+    expect(events).toContainEqual({ type: "human.answered", answer: "[A] Approve", actor: "ui" });
+    expect(outcome.contextUpdates).toMatchObject({ "human.gate.actor": "ui" });
+  });
+
+  it("attributes a timeout's human.default_choice fallback to the 'default' actor, not an unknown ui/cli one", async () => {
+    const g = graph();
+    const events: StageScopedEvent[] = [];
+    const { interviewer: iv } = interviewer({ kind: "timeout" });
+    const handler = createHumanHandler(iv, { threadId: "thread-1" });
+
+    const outcome = await handler.run(baseInput(g, { human: { default_choice: "[A] Approve" } }, (e) => events.push(e)));
+
+    expect(events).toContainEqual({ type: "human.answered", answer: "[A] Approve", actor: "default" });
+    expect(outcome.contextUpdates).toMatchObject({ "human.gate.actor": "default" });
+  });
+
   it("marks freeform=true when any outgoing edge declares it, and returns a succeeded outcome from free text with no preferredLabel", async () => {
     const g = parseWorkflowGraph(`digraph G {
       start [shape=Mdiamond]

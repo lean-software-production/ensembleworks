@@ -25,13 +25,13 @@ export function createStageEmitter(opts: StageEmitterOptions): (event: StageScop
         onEvent({ type: "log", runId, ts, stageId, message: event.message });
         return;
       case "agent.thread":
-        onEvent({ type: "agent.thread", runId, ts, stageId, threadId: event.threadId });
+        onEvent({ type: "agent.thread", runId, ts, stageId, nodeId, threadId: event.threadId, provider: event.provider, model: event.model, reasoningLevel: event.reasoningLevel });
         return;
       case "human.requested":
         onEvent({ type: "human.requested", runId, ts, stageId, nodeId, options: event.options });
         return;
       case "human.answered":
-        onEvent({ type: "human.answered", runId, ts, stageId, nodeId, answer: event.answer });
+        onEvent({ type: "human.answered", runId, ts, stageId, nodeId, answer: event.answer, actor: event.actor });
         return;
       default: {
         const _exhaustive: never = event;

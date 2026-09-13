@@ -25,8 +25,10 @@ describe("engine/events: stage-scoped event emitter", () => {
       now: () => 7,
       onEvent: (e) => events.push(e),
     });
-    emit({ type: "agent.thread", threadId: "thread-abc" });
-    expect(events).toEqual([{ type: "agent.thread", runId: "run-1", ts: 7, stageId: "plan@1", threadId: "thread-abc" }]);
+    emit({ type: "agent.thread", threadId: "thread-abc", provider: "anthropic", model: "claude-sonnet-5", reasoningLevel: "medium" });
+    expect(events).toEqual([
+      { type: "agent.thread", runId: "run-1", ts: 7, stageId: "plan@1", nodeId: "plan", threadId: "thread-abc", provider: "anthropic", model: "claude-sonnet-5", reasoningLevel: "medium" },
+    ]);
   });
 
   it("stamps human.requested and human.answered with the stage's node id", () => {
@@ -44,6 +46,19 @@ describe("engine/events: stage-scoped event emitter", () => {
       { type: "human.requested", runId: "run-1", ts: 1, stageId: "approve@1", nodeId: "approve", options: ["Approve", "Revise"] },
       { type: "human.answered", runId: "run-1", ts: 1, stageId: "approve@1", nodeId: "approve", answer: "Approve" },
     ]);
+  });
+
+  it("stamps human.answered with the responding actor when the handler reports one", () => {
+    const events: RunEvent[] = [];
+    const emit = createStageEmitter({
+      runId: "run-1",
+      stageId: "approve@1",
+      nodeId: "approve",
+      now: () => 1,
+      onEvent: (e) => events.push(e),
+    });
+    emit({ type: "human.answered", answer: "Approve", actor: "ui" });
+    expect(events).toEqual([{ type: "human.answered", runId: "run-1", ts: 1, stageId: "approve@1", nodeId: "approve", answer: "Approve", actor: "ui" }]);
   });
 
   it("calls now() fresh for each emitted event", () => {

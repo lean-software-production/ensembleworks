@@ -52,8 +52,8 @@ export interface HumanAskInput {
 }
 
 export type HumanAskResult =
-  | { kind: "choice"; option: HumanGateOption }
-  | { kind: "text"; text: string }
+  | { kind: "choice"; option: HumanGateOption; actor?: "ui" | "cli" }
+  | { kind: "text"; text: string; actor?: "ui" | "cli" }
   | { kind: "timeout" }
   | { kind: "cancelled" };
 
@@ -88,19 +88,20 @@ function buildOptions(edges: WorkflowEdge[]): HumanGateOption[] {
     });
 }
 
-function gateContextUpdates(nodeId: string, fields: { selected: string; label?: string; text?: string }): Record<string, JsonValue> {
+function gateContextUpdates(nodeId: string, fields: { selected: string; label?: string; text?: string; actor?: "ui" | "cli" | "default" }): Record<string, JsonValue> {
   const updates: Record<string, JsonValue> = { "human.gate.selected": fields.selected };
   if (fields.label !== undefined) updates["human.gate.label"] = fields.label;
   if (fields.text !== undefined) updates["human.gate.text"] = fields.text;
+  if (fields.actor !== undefined) updates["human.gate.actor"] = fields.actor;
   updates[`human.gate.${nodeId}.answer`] = fields.selected;
   if (fields.label !== undefined) updates[`human.gate.${nodeId}.label`] = fields.label;
   return updates;
 }
 
-function respondWithChoice(nodeId: string, raw: string, emit: (e: StageScopedEvent) => void): Outcome {
-  emit({ type: "human.answered", answer: raw });
+function respondWithChoice(nodeId: string, raw: string, emit: (e: StageScopedEvent) => void, actor?: "ui" | "cli" | "default"): Outcome {
+  emit({ type: "human.answered", answer: raw, actor });
   const { text } = parseAcceleratorLabel(raw);
-  return { status: "succeeded", preferredLabel: raw, text, contextUpdates: gateContextUpdates(nodeId, { selected: raw, label: text }) };
+  return { status: "succeeded", preferredLabel: raw, text, contextUpdates: gateContextUpdates(nodeId, { selected: raw, label: text, actor }) };
 }
 
 export function createHumanHandler(interviewer: HumanInterviewer, ctx: HumanHandlerContext): Handler {
@@ -161,14 +162,17 @@ export function createHumanHandler(interviewer: HumanInterviewer, ctx: HumanHand
             failureReason: `human gate "${node.id}" timed out and "human.default_choice" ("${fallback}") does not match any outgoing edge label`,
           };
         }
-        return respondWithChoice(node.id, matched.raw, emit);
+        // A synthetic answer from the timeout fallback, not a submitted
+        // value — always attributed to "default" (never the unknown ui/cli
+        // actor that never actually answered).
+        return respondWithChoice(node.id, matched.raw, emit, "default");
       }
 
       if (result.kind === "choice") {
-        return respondWithChoice(node.id, result.option.raw, emit);
+        return respondWithChoice(node.id, result.option.raw, emit, result.actor);
       }
 
-      emit({ type: "human.answered", answer: result.text });
+      emit({ type: "human.answered", answer: result.text, actor: result.actor });
       return {
         status: "succeeded",
         // Route explicitly to the freeform edge's target: a free-text answer
@@ -178,7 +182,7 @@ export function createHumanHandler(interviewer: HumanInterviewer, ctx: HumanHand
         // the gate's *button* edges instead (validation finding, T6 round 2).
         jumpToNode: freeformEdge?.to,
         text: result.text,
-        contextUpdates: gateContextUpdates(node.id, { selected: result.text, text: result.text }),
+        contextUpdates: gateContextUpdates(node.id, { selected: result.text, text: result.text, actor: result.actor }),
       };
     },
   };

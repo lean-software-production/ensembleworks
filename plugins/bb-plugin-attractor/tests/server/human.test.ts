@@ -63,7 +63,31 @@ describe("createThreadHumanInterviewer", () => {
     host.harness.submitInteraction(pending.id, { kind: "choice", raw: "[A] Approve" });
     const result = await askPromise;
 
-    expect(result).toEqual({ kind: "choice", option: OPTIONS[0] });
+    expect(result).toEqual({ kind: "choice", option: OPTIONS[0], actor: undefined });
+  });
+
+  it("surfaces the submitted value's 'via' as the result's actor", async () => {
+    const host = makeHost();
+    const interviewer = createThreadHumanInterviewer(host.bb);
+
+    const askPromise = interviewer.ask(baseAsk());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const pending = host.harness.pendingInteractions[0]!;
+    host.harness.submitInteraction(pending.id, { kind: "choice", raw: "[A] Approve", via: "cli" });
+
+    expect(await askPromise).toEqual({ kind: "choice", option: OPTIONS[0], actor: "cli" });
+  });
+
+  it("surfaces 'via' on a freeform text answer too", async () => {
+    const host = makeHost();
+    const interviewer = createThreadHumanInterviewer(host.bb);
+
+    const askPromise = interviewer.ask(baseAsk({ freeform: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const pending = host.harness.pendingInteractions[0]!;
+    host.harness.submitInteraction(pending.id, { kind: "text", text: "sounds good", via: "ui" });
+
+    expect(await askPromise).toEqual({ kind: "text", text: "sounds good", actor: "ui" });
   });
 
   it("passes freeform=true and question_type through to the payload", async () => {

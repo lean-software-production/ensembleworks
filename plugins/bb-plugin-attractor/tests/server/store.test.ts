@@ -89,6 +89,49 @@ describe("RunStore", () => {
     expect(store.listStages("run-1")[0]).toMatchObject({ threadId: "worker-thread" });
   });
 
+  it("records a stage's actually-resolved provider/model/reasoning tuple, defaulting to null before the agent.thread event", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: null, model: null, reasoningLevel: null });
+    store.setStageProvider("run-1", "plan", 1, "anthropic", "claude-sonnet-5", "medium");
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: "anthropic", model: "claude-sonnet-5", reasoningLevel: "medium" });
+  });
+
+  it("keeps a stage's provider tuple after a later upsert (e.g. stage.completed) for the same (nodeId, visit)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    store.setStageProvider("run-1", "plan", 1, "anthropic", "claude-sonnet-5", "medium");
+    store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, startedAt: 1, completedAt: 2 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: "anthropic", model: "claude-sonnet-5", reasoningLevel: "medium", status: "succeeded" });
+  });
+
+  it("records who answered a human gate stage (human.answered event's actor)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "gate@1", nodeId: "gate", visit: 1, attempt: 1, status: "blocked", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ actor: null });
+    store.setStageActor("run-1", "gate", 1, "ui");
+    expect(store.listStages("run-1")[0]).toMatchObject({ actor: "ui" });
+  });
+
+  it("opening an existing (pre-migration) database adds the new stage columns idempotently", () => {
+    const db = new Database(":memory:");
+    // Simulate the table as it looked before this migration.
+    db.exec(`CREATE TABLE attractor_stages (
+      run_id TEXT NOT NULL, stage_id TEXT NOT NULL, node_id TEXT NOT NULL, visit INTEGER NOT NULL,
+      attempt INTEGER NOT NULL, status TEXT NOT NULL, outcome_status TEXT, thread_id TEXT,
+      started_at INTEGER NOT NULL, completed_at INTEGER, PRIMARY KEY (run_id, node_id, visit)
+    )`);
+    const store = new RunStore(db);
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: null, model: null, reasoningLevel: null, actor: null });
+    // And re-opening the now-migrated database a second time is a no-op, not an error.
+    expect(() => new RunStore(db)).not.toThrow();
+  });
+
   it("appends events with an increasing seq and lists them since a cursor", () => {
     const store = makeStore();
     store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });

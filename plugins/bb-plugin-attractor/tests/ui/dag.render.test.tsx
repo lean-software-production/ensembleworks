@@ -127,6 +127,69 @@ describe("DagView", () => {
     expect(onOpenThread).not.toHaveBeenCalled();
   });
 
+  it("gives every untraversed edge a legible, solid, dark stroke — not the old near-invisible light dashed line", () => {
+    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    const untraversed = container.querySelector('[data-edge="approve->build"]')!;
+    expect(untraversed.getAttribute("stroke")).toBe("#64748b");
+    expect(untraversed.getAttribute("stroke-width")).toBe("1.5");
+    expect(untraversed.getAttribute("stroke-dasharray")).toBeNull();
+  });
+
+  it("keeps a traversed edge blue/2px with the traversed arrowhead, unaffected by back-edge-ness", () => {
+    const { container } = render(<DagView graph={GRAPH} events={EVENTS} />);
+    const traversed = container.querySelector('[data-edge="start->plan"]')!;
+    expect(traversed.getAttribute("stroke")).toBe("#2563eb");
+    expect(traversed.getAttribute("stroke-width")).toBe("2");
+    expect(traversed.getAttribute("marker-end")).toContain("attractor-arrow-traversed");
+  });
+
+  it("may dash an untraversed back edge while keeping it the same legible stroke colour/width", () => {
+    const loopGraph: GraphView = {
+      rankdir: "LR",
+      nodes: [node("a", { handlerKind: "agent" }), node("b", { handlerKind: "agent" })],
+      edges: [
+        { from: "a", to: "b", label: null, condition: null },
+        { from: "b", to: "a", label: "[R] Retry", condition: null },
+      ],
+    };
+    const { container } = render(<DagView graph={loopGraph} events={[]} />);
+    const backEdge = container.querySelector('[data-edge="b->a"]')!;
+    expect(backEdge.getAttribute("data-back-edge")).toBe("true");
+    expect(backEdge.getAttribute("stroke")).toBe("#64748b");
+    expect(backEdge.getAttribute("stroke-width")).toBe("1.5");
+    expect(backEdge.getAttribute("stroke-dasharray")).not.toBeNull();
+  });
+
+  it("draws an edge's DOT label on the diagram at its midpoint, backed by a white rect, and keeps the title tooltip", () => {
+    const { container } = render(<DagView graph={GRAPH} events={EVENTS} />);
+    const labelGroup = container.querySelector('[data-edge-label="plan->approve"]')!;
+    expect(labelGroup).toBeTruthy();
+    expect(labelGroup.querySelector("text")?.textContent).toBe("[A] Approve");
+    expect(labelGroup.querySelector("rect")).toBeTruthy();
+    expect(container.querySelector('[data-edge="plan->approve"] title')?.textContent).toContain("preferred_label");
+  });
+
+  it("falls back to a shortened routing condition as the on-diagram edge label when there is no DOT label", () => {
+    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    const labelGroup = container.querySelector('[data-edge-label="build->exit"]')!;
+    expect(labelGroup.querySelector("text")?.textContent).toBe("outcome=succeeded");
+  });
+
+  it("draws no on-diagram label for an edge with neither a DOT label nor a condition", () => {
+    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    expect(container.querySelector('[data-edge-label="start->plan"]')).toBeNull();
+  });
+
+  it("sizes the svg to fill its container width and scale by the natural viewBox aspect ratio, not a fixed 160px box", () => {
+    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    const svg = container.querySelector("svg")!;
+    expect(svg.getAttribute("preserveAspectRatio")).toBe("xMidYMid meet");
+    expect(svg.getAttribute("viewBox")).toMatch(/^0 0 \d+ \d+$/);
+    expect((svg as unknown as HTMLElement).style.width).toBe("100%");
+    expect((svg as unknown as HTMLElement).style.height).toBe("auto");
+    expect(Number.parseInt((svg as unknown as HTMLElement).style.maxHeight, 10)).toBeGreaterThan(0);
+  });
+
   it("renders two parallel edges between the same node pair as distinct, non-colliding React elements", () => {
     // A legal DOT dialect graph can route two alternative conditions between
     // the same pair of nodes (e.g. two outcomes of a conditional both

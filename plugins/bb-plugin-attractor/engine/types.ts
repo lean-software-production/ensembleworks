@@ -92,9 +92,9 @@ export type EdgeSelectedReason =
 /** Events a handler may emit mid-stage, via HandlerInput.emit(); the engine stamps runId/ts/stageId/nodeId. */
 export type StageScopedEvent =
   | { type: "log"; message: string }
-  | { type: "agent.thread"; threadId: string }
+  | { type: "agent.thread"; threadId: string; provider: string; model: string; reasoningLevel: string | null }
   | { type: "human.requested"; options?: string[] }
-  | { type: "human.answered"; answer?: string };
+  | { type: "human.answered"; answer?: string; actor?: "ui" | "cli" | "default" };
 
 export type RunEvent =
   | { type: "run.started"; runId: string; ts: number }
@@ -144,8 +144,8 @@ export type RunEvent =
       edgeLabel?: string;
       reason: EdgeSelectedReason;
     }
-  | { type: "agent.thread"; runId: string; ts: number; stageId: string; threadId: string }
+  | { type: "agent.thread"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string; provider: string; model: string; reasoningLevel: string | null }
   | { type: "human.requested"; runId: string; ts: number; stageId: string; nodeId: string; options?: string[] }
-  | { type: "human.answered"; runId: string; ts: number; stageId: string; nodeId: string; answer?: string }
+  | { type: "human.answered"; runId: string; ts: number; stageId: string; nodeId: string; answer?: string; actor?: "ui" | "cli" | "default" }
   | { type: "checkpoint.saved"; runId: string; ts: number; stageId: string }
   | { type: "log"; runId: string; ts: number; stageId?: string; message: string };

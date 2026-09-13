@@ -40,8 +40,8 @@ const GRAPH: GraphView = {
 };
 
 const STAGES: StageView[] = [
-  { runId: "r1", stageId: "start@1", nodeId: "start", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, startedAt: 1000, completedAt: 1500 },
-  { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: "thread-9", startedAt: 2000, completedAt: null },
+  { runId: "r1", stageId: "start@1", nodeId: "start", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, providerId: null, model: null, reasoningLevel: null, actor: null, startedAt: 1000, completedAt: 1500 },
+  { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: "thread-9", providerId: null, model: null, reasoningLevel: null, actor: null, startedAt: 2000, completedAt: null },
 ];
 
 describe("StageList", () => {
@@ -65,6 +65,30 @@ describe("StageList", () => {
     const providerOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(5)`)?.textContent;
     expect(providerOf("plan@1")).toBe("anthropic / claude-sonnet-5");
     expect(providerOf("start@1")).toBe("—"); // start has no declared model/provider
+  });
+
+  it("prefers the stage's actually-resolved provider/model tuple over the node's merely-declared one", () => {
+    const stages: StageView[] = [
+      { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: "thread-9", providerId: "openai", model: "gpt-5", reasoningLevel: "high", actor: null, startedAt: 1000, completedAt: 1500 },
+    ];
+    const { container } = render(<StageList stages={stages} graph={GRAPH} now={2000} />);
+    const providerOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(5)`)?.textContent;
+    expect(providerOf("plan@1")).toBe("openai / gpt-5");
+  });
+
+  it("falls back to the node's declared provider/model when the stage has no resolved tuple yet", () => {
+    const { container } = render(<StageList stages={STAGES} graph={GRAPH} now={2000} />);
+    const providerOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(5)`)?.textContent;
+    expect(providerOf("plan@1")).toBe("anthropic / claude-sonnet-5");
+  });
+
+  it("shows who answered a human gate stage in the status cell", () => {
+    const stages: StageView[] = [
+      { runId: "r1", stageId: "gate@1", nodeId: "gate", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, providerId: null, model: null, reasoningLevel: null, actor: "ui", startedAt: 1000, completedAt: 1500 },
+    ];
+    const { container } = render(<StageList stages={stages} graph={GRAPH} now={2000} />);
+    const statusOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(2)`)?.textContent;
+    expect(statusOf("gate@1")).toBe("succeeded (answered via ui)");
   });
 
   it("opens a stage's worker thread when its thread link is clicked", () => {

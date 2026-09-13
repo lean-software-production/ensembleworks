@@ -48,7 +48,7 @@ describe("HumanGate", () => {
 
     fireEvent.click(getByRole("button", { name: "[A] Approve" }));
 
-    expect(submit).toHaveBeenCalledWith({ kind: "choice", raw: "[A] Approve" });
+    expect(submit).toHaveBeenCalledWith({ kind: "choice", raw: "[A] Approve", via: "ui" });
   });
 
   it("shows a free-text field and submit button only when the payload is freeform", () => {
@@ -70,7 +70,7 @@ describe("HumanGate", () => {
     fireEvent.change(getByPlaceholderText(/type an answer/i), { target: { value: "sounds good" } });
     fireEvent.click(getByRole("button", { name: /submit/i }));
 
-    expect(submit).toHaveBeenCalledWith({ kind: "text", text: "sounds good" });
+    expect(submit).toHaveBeenCalledWith({ kind: "text", text: "sounds good", via: "ui" });
   });
 
   it("does not submit empty freeform text", () => {

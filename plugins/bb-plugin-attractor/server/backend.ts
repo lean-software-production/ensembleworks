@@ -70,7 +70,8 @@ export interface AgentBackend {
 }
 
 const MAX_CORRECTIVE_RETRIES = 2;
-const PROMPT_PREVIEW_LENGTH = 200;
+const PROMPT_PREVIEW_LENGTH = 400;
+const TRUNCATION_MARKER = " …[truncated]";
 
 type Completion = { kind: "idle"; text: string | null } | { kind: "failed"; error: string | null } | { kind: "deleted" } | { kind: "aborted" };
 
@@ -90,7 +91,9 @@ function summarizePriorStages(context: Context, graph: WorkflowGraph): string {
     const label = graph.nodes.get(nodeId)?.label;
     const status = statusOf(nodeId);
     const heading = [nodeId, label, status].filter((part): part is string => Boolean(part)).join(" | ");
-    return `- ${heading}: ${String(text).slice(0, PROMPT_PREVIEW_LENGTH)}`;
+    const full = String(text);
+    const preview = full.length > PROMPT_PREVIEW_LENGTH ? `${full.slice(0, PROMPT_PREVIEW_LENGTH)}${TRUNCATION_MARKER}` : full;
+    return `- ${heading}: ${preview}`;
   });
   return lines.length ? `Prior stages:\n${lines.join("\n")}\n\n` : "";
 }
@@ -264,7 +267,7 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     const workerThreadId = spawned.id;
     workerThreads.add(workerThreadId);
     if (node.outputSchema !== undefined) workerNeedsResult.add(workerThreadId);
-    emit({ type: "agent.thread", threadId: workerThreadId });
+    emit({ type: "agent.thread", threadId: workerThreadId, provider: tuple.providerId, model: tuple.model, reasoningLevel: tuple.reasoningLevel ?? null });
 
     try {
       const completion = await reconcileOrWait(workerThreadId, signal);

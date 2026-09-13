@@ -332,6 +332,7 @@ describe("attractor server plugin", () => {
 
     const stopResult = await host.harness.behavior.runCli(["stop", ran.runId], { threadId: "thread-1" });
     expect(stopResult.exitCode).toBe(0);
+    expect(JSON.parse(stopResult.stdout)).toEqual({ stopped: true, status: "cancelled" });
 
     await vi.waitFor(async () => {
       const status = JSON.parse((await host.harness.behavior.runCli(["status", ran.runId], { threadId: "thread-1" })).stdout).status;
@@ -354,16 +355,25 @@ describe("attractor server plugin", () => {
     ).rejects.toThrow(/no such run/);
 
     const foreignStatus = await host.harness.behavior.runCli(["status", runId], { threadId: "another-thread" });
-    expect(JSON.parse(foreignStatus.stdout)).toBeNull();
+    expect(foreignStatus.exitCode).toBe(1);
+    expect(foreignStatus.stderr).toContain(`no such run: ${runId}`);
 
     const foreignStages = await host.harness.behavior.runCli(["stages", runId], { threadId: "another-thread" });
-    expect(JSON.parse(foreignStages.stdout)).toEqual([]);
+    expect(foreignStages.exitCode).toBe(1);
+    expect(foreignStages.stderr).toContain(`no such run: ${runId}`);
 
     const foreignEvents = await host.harness.behavior.runCli(["events", runId], { threadId: "another-thread" });
-    expect(JSON.parse(foreignEvents.stdout)).toEqual([]);
+    expect(foreignEvents.exitCode).toBe(1);
+    expect(foreignEvents.stderr).toContain(`no such run: ${runId}`);
 
     const foreignStop = await host.harness.behavior.runCli(["stop", runId], { threadId: "another-thread" });
     expect(foreignStop.exitCode).toBe(1);
+    expect(foreignStop.stderr).toContain(`no such run: ${runId}`);
+
+    const unknownRunId = "not-a-real-run";
+    const unknownStatus = await host.harness.behavior.runCli(["status", unknownRunId], { threadId: "thread-1" });
+    expect(unknownStatus.exitCode).toBe(1);
+    expect(unknownStatus.stderr).toBe(`no such run: ${unknownRunId}`);
 
     // The owning thread can still do all of the above.
     const ownStatus = await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" });
@@ -518,5 +528,76 @@ describe("attractor server plugin", () => {
     const answered = await host.harness.behavior.runCli(["answer", runId, "approve"], { threadId: "thread-1" });
     expect(JSON.parse(answered.stdout)).toEqual({ answered: true });
     await waitForTerminalStatus(host, runId);
+  });
+
+  it("bb attractor answer on a run with no pending gate exits 1 with the reason on stderr", async () => {
+    const host = makeHost();
+    bridgeHumanGateInteractions(host);
+    await plugin(host.bb);
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await waitForTerminalStatus(host, runId);
+
+    const answered = await host.harness.behavior.runCli(["answer", runId, "approve"], { threadId: "thread-1" });
+    expect(answered.exitCode).toBe(1);
+    expect(answered.stderr).toContain("no pending human gate");
+  });
+
+  it("bb attractor stop on a run that is not in flight exits 1 rather than pretending to stop it", async () => {
+    const host = makeHost();
+    await plugin(host.bb);
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await waitForTerminalStatus(host, runId);
+
+    const stopResult = await host.harness.behavior.runCli(["stop", runId], { threadId: "thread-1" });
+    expect(stopResult.exitCode).toBe(1);
+    expect(stopResult.stderr).toBe(`run ${runId} is not running`);
+  });
+
+  it("bb attractor status on an unknown runId exits 1 with 'no such run' on stderr", async () => {
+    const host = makeHost();
+    await plugin(host.bb);
+    const result = await host.harness.behavior.runCli(["status", "nope"], { threadId: "thread-1" });
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe("no such run: nope");
+  });
+
+  it("bb attractor --help lists every command with its one-line summary", async () => {
+    const host = makeHost();
+    await plugin(host.bb);
+    const result = await host.harness.behavior.runCli(["--help"], {});
+    expect(result.exitCode).toBe(0);
+    for (const { usage, summary } of [
+      { usage: "bb attractor validate <path>", summary: "Validate a workflow file" },
+      { usage: "bb attractor run <path> [--input k=v] [--title t]", summary: "Run a workflow file" },
+      { usage: "bb attractor status <runId>", summary: "Show a run's status" },
+      { usage: "bb attractor stages <runId>", summary: "List a run's stages" },
+      { usage: "bb attractor events <runId> [--since seq]", summary: "List a run's events" },
+      { usage: "bb attractor stop <runId>", summary: "Stop a running run" },
+      { usage: "bb attractor answer <runId> <label|text>", summary: "Answer a run's blocked human gate" },
+    ]) {
+      expect(result.stdout).toContain(usage);
+      expect(result.stdout).toContain(summary);
+    }
+  });
+
+  it("bb attractor <command> --help and bb attractor help <command> both print that command's usage plus its JSON output shape, with no thread required", async () => {
+    const host = makeHost();
+    await plugin(host.bb);
+
+    const viaFlag = await host.harness.behavior.runCli(["status", "--help"], {});
+    expect(viaFlag.exitCode).toBe(0);
+    expect(viaFlag.stdout).toContain("bb attractor status <runId>");
+    expect(viaFlag.stdout.toLowerCase()).toContain("json output");
+
+    const viaHelpCommand = await host.harness.behavior.runCli(["help", "status"], {});
+    expect(viaHelpCommand.exitCode).toBe(0);
+    expect(viaHelpCommand.stdout).toBe(viaFlag.stdout);
+  });
+
+  it("bb attractor <unknown> --help exits 1 rather than silently falling through", async () => {
+    const host = makeHost();
+    await plugin(host.bb);
+    const result = await host.harness.behavior.runCli(["bogus", "--help"], {});
+    expect(result.exitCode).toBe(1);
   });
 });

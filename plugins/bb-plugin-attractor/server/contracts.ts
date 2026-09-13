@@ -7,7 +7,7 @@
 
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import type { RunStatus, StageStatus } from "./store";
+import type { RunStatus, StageActor, StageStatus } from "./store";
 
 const id = z.string().min(1).max(200);
 const json = z.json();
@@ -15,6 +15,7 @@ const json = z.json();
 export const runStatusSchema: z.ZodType<RunStatus> = z.enum(["running", "blocked", "succeeded", "failed", "cancelled"]);
 export const stageStatusSchema: z.ZodType<StageStatus> = z.enum(["running", "blocked", "succeeded", "failed", "skipped"]);
 export const outcomeStatusSchema = z.enum(["succeeded", "failed", "partially_succeeded", "skipped"]);
+export const stageActorSchema: z.ZodType<StageActor> = z.enum(["ui", "cli", "default"]);
 
 export const runSchema = z.object({
   id,
@@ -43,6 +44,10 @@ export const stageSchema = z.object({
   status: stageStatusSchema,
   outcomeStatus: outcomeStatusSchema.nullable(),
   threadId: z.string().nullable(),
+  providerId: z.string().nullable(),
+  model: z.string().nullable(),
+  reasoningLevel: z.string().nullable(),
+  actor: stageActorSchema.nullable(),
   startedAt: z.number(),
   completedAt: z.number().nullable(),
 });
@@ -122,9 +127,16 @@ export const humanGatePayloadSchema = z.object({
   questionType: z.string().nullable(),
 });
 
+// `via` names who submitted this value — the pendingInteraction renderer
+// (ui/human-gate.tsx) always sends "ui"; `bb attractor answer` (server/
+// service.ts's answerHumanGate) always sends "cli". Optional (rather than
+// required) so a stored/replayed value from before this field existed still
+// parses; server/human.ts's ask() treats a missing `via` as an unknown actor
+// and omits it from the resulting human.answered event (see engine/types.ts's
+// StageScopedEvent "human.answered": actor is "omit when unknown").
 export const humanGateValueSchema = z.union([
-  z.object({ kind: z.literal("choice"), raw: z.string() }).strict(),
-  z.object({ kind: z.literal("text"), text: z.string() }).strict(),
+  z.object({ kind: z.literal("choice"), raw: z.string(), via: z.enum(["ui", "cli"]).optional() }).strict(),
+  z.object({ kind: z.literal("text"), text: z.string(), via: z.enum(["ui", "cli"]).optional() }).strict(),
 ]);
 
 export type HumanGateOption = z.infer<typeof humanGateOptionSchema>;

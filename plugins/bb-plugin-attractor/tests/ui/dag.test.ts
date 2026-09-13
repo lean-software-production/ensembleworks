@@ -85,6 +85,84 @@ describe("layoutGraph", () => {
     expect(laidOut.height).toBeGreaterThan(0);
   });
 
+  it("marks a loop edge (target rank <= source rank) as a back edge, and a forward edge as not one", () => {
+    const laidOut = layoutGraph(LINEAR_GRAPH);
+    for (const edge of laidOut.edges) expect(edge.isBackEdge).toBe(false);
+  });
+
+  it("identifies the dogfood graph's loop edges (approve->plan, check->implement, review->implement) as back edges", () => {
+    const graph: GraphView = {
+      rankdir: "LR",
+      nodes: [
+        node("start", { handlerKind: "start" }),
+        node("plan", { handlerKind: "prompt" }),
+        node("approve", { handlerKind: "human" }),
+        node("implement", { handlerKind: "agent" }),
+        node("check", { handlerKind: "command" }),
+        node("review", { handlerKind: "conditional" }),
+        node("exit", { handlerKind: "exit" }),
+      ],
+      edges: [
+        { from: "start", to: "plan", label: null, condition: null },
+        { from: "plan", to: "approve", label: null, condition: null },
+        { from: "approve", to: "plan", label: "[R] Revise", condition: null },
+        { from: "approve", to: "implement", label: "[A] Approve", condition: null },
+        { from: "implement", to: "check", label: null, condition: null },
+        { from: "check", to: "implement", label: "[R] Retry", condition: "outcome=failed" },
+        { from: "check", to: "review", label: null, condition: "outcome=succeeded" },
+        { from: "review", to: "implement", label: null, condition: "outcome=failed" },
+        { from: "review", to: "exit", label: null, condition: "outcome=succeeded" },
+      ],
+    };
+    const laidOut = layoutGraph(graph);
+    const backEdgeOf = (from: string, to: string) => laidOut.edges.find((e) => e.from === from && e.to === to)!.isBackEdge;
+    expect(backEdgeOf("approve", "plan")).toBe(true);
+    expect(backEdgeOf("check", "implement")).toBe(true);
+    expect(backEdgeOf("review", "implement")).toBe(true);
+    expect(backEdgeOf("start", "plan")).toBe(false);
+    expect(backEdgeOf("plan", "approve")).toBe(false);
+    expect(backEdgeOf("approve", "implement")).toBe(false);
+    expect(backEdgeOf("implement", "check")).toBe(false);
+    expect(backEdgeOf("check", "review")).toBe(false);
+    expect(backEdgeOf("review", "exit")).toBe(false);
+  });
+
+  it("lays the dogfood graph's main path out with strictly increasing x (LR) and keeps check's y within one node height of implement/review, despite its loop edges", () => {
+    const graph: GraphView = {
+      rankdir: "LR",
+      nodes: [
+        node("start", { handlerKind: "start" }),
+        node("plan", { handlerKind: "prompt" }),
+        node("approve", { handlerKind: "human" }),
+        node("implement", { handlerKind: "agent" }),
+        node("check", { handlerKind: "command" }),
+        node("review", { handlerKind: "conditional" }),
+        node("exit", { handlerKind: "exit" }),
+      ],
+      edges: [
+        { from: "start", to: "plan", label: null, condition: null },
+        { from: "plan", to: "approve", label: null, condition: null },
+        { from: "approve", to: "plan", label: "[R] Revise", condition: null },
+        { from: "approve", to: "implement", label: "[A] Approve", condition: null },
+        { from: "implement", to: "check", label: null, condition: null },
+        { from: "check", to: "implement", label: "[R] Retry", condition: "outcome=failed" },
+        { from: "check", to: "review", label: null, condition: "outcome=succeeded" },
+        { from: "review", to: "implement", label: null, condition: "outcome=failed" },
+        { from: "review", to: "exit", label: null, condition: "outcome=succeeded" },
+      ],
+    };
+    const laidOut = layoutGraph(graph);
+    const byId = new Map(laidOut.nodes.map((n) => [n.id, n]));
+    const mainPath = ["start", "plan", "approve", "implement", "check", "review", "exit"].map((id) => byId.get(id)!);
+    for (let i = 1; i < mainPath.length; i++) expect(mainPath[i]!.x).toBeGreaterThan(mainPath[i - 1]!.x);
+
+    const check = byId.get("check")!;
+    const implement = byId.get("implement")!;
+    const review = byId.get("review")!;
+    expect(Math.abs(check.y - implement.y)).toBeLessThanOrEqual(check.height);
+    expect(Math.abs(check.y - review.y)).toBeLessThanOrEqual(check.height);
+  });
+
   it("handles a fan-out/fan-in graph (parallel branches) without throwing", () => {
     const graph: GraphView = {
       rankdir: "TB",

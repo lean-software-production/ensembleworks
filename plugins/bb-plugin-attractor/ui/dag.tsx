@@ -22,9 +22,18 @@ import type { EdgeSelectedReason, RunEvent } from "../engine/types";
 
 export const NODE_WIDTH = 168;
 export const NODE_HEIGHT = 52;
+// Tuned per docs/plans/2026-09-13-attractor-runner-plan.md's dogfood-polish
+// findings: the previous, smaller nodesep produced a wobbly rankdir=LR
+// layout (Check pushed down off the main row, short stub edges) once real
+// loops (see BACK_EDGE_WEIGHT below) entered the graph.
 const NODE_SEP = 32;
 const RANK_SEP = 56;
 const MARGIN = 24;
+// A back edge (one that loops to an already-visited rank — see
+// `isBackEdge`) gets zero weight so dagre's rank-assignment pass optimizes
+// for the main forward path's edges only; a loop edge pulling on ranks is
+// exactly what produced the T5 "Check pushed down" layout wobble.
+const BACK_EDGE_WEIGHT = 0;
 
 export interface LaidOutNode extends GraphNodeView {
   x: number;
@@ -37,6 +46,8 @@ export interface LaidOutEdge extends GraphEdgeView {
   points: { x: number; y: number }[];
   /** This edge's position in `graph.edges` — disambiguates two DOT edges between the same node pair (a legal, if unusual, graph) as distinct dagre edges and distinct React keys. */
   edgeIndex: number;
+  /** True when this edge's target rank is <= its source rank in the final layout — a loop (e.g. `approve -> plan`, `check -> implement`), not part of the graph's forward flow. */
+  isBackEdge: boolean;
 }
 
 export interface LaidOutGraph {
@@ -46,8 +57,13 @@ export interface LaidOutGraph {
   edges: LaidOutEdge[];
 }
 
-/** Pure dagre layout: deterministic node positions + routed edge points for a GraphView. No DOM. */
-export function layoutGraph(graph: GraphView): LaidOutGraph {
+interface BuiltGraph {
+  g: dagre.graphlib.Graph;
+  validEdges: { edge: GraphEdgeView; edgeIndex: number }[];
+}
+
+/** Builds the dagre graph for one layout pass, applying `edgeWeight` per edge (by its index in `graph.edges`) when given. */
+function buildDagreGraph(graph: GraphView, edgeWeight?: (edgeIndex: number) => number): BuiltGraph {
   // `multigraph: true` because this dialect allows two DOT edges between the
   // same node pair (e.g. two conditional outcomes both routed to the same
   // next node) — a plain graph collapses those into one dagre edge, losing
@@ -59,24 +75,51 @@ export function layoutGraph(graph: GraphView): LaidOutGraph {
   g.setGraph({ rankdir: graph.rankdir, nodesep: NODE_SEP, ranksep: RANK_SEP, marginx: MARGIN, marginy: MARGIN });
   g.setDefaultEdgeLabel(() => ({}));
   for (const node of graph.nodes) g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+  const validEdges: { edge: GraphEdgeView; edgeIndex: number }[] = [];
   graph.edges.forEach((edge, edgeIndex) => {
     // A node reachable only through a validation-rejected edge (dangling
     // target) would make dagre throw; skip rather than crash the whole DAG.
-    if (g.hasNode(edge.from) && g.hasNode(edge.to)) g.setEdge(edge.from, edge.to, {}, String(edgeIndex));
+    if (!g.hasNode(edge.from) || !g.hasNode(edge.to)) return;
+    validEdges.push({ edge, edgeIndex });
+    const weight = edgeWeight ? edgeWeight(edgeIndex) : 1;
+    g.setEdge(edge.from, edge.to, { weight }, String(edgeIndex));
   });
-  dagre.layout(g);
+  return { g, validEdges };
+}
+
+/** Pure dagre layout: deterministic node positions + routed edge points for a GraphView. No DOM. */
+export function layoutGraph(graph: GraphView): LaidOutGraph {
+  // First pass, uniform edge weight: establishes a rank per node so back
+  // edges (loops like `approve -> plan`) can be told apart from the graph's
+  // forward flow purely from the resulting layout, per the plan's own
+  // definition ("target rank <= source rank").
+  const first = buildDagreGraph(graph);
+  dagre.layout(first.g);
+  const isBackEdgeFirstPass = new Map<number, boolean>();
+  for (const { edge, edgeIndex } of first.validEdges) {
+    const fromRank = (first.g.node(edge.from) as { rank?: number }).rank ?? 0;
+    const toRank = (first.g.node(edge.to) as { rank?: number }).rank ?? 0;
+    isBackEdgeFirstPass.set(edgeIndex, toRank <= fromRank);
+  }
+
+  // Second pass: zero-weight the back edges found above so a loop no longer
+  // pulls on the main path's rank assignment (the "Check pushed down" T5
+  // finding), then lay out again from a clean graph.
+  const second = buildDagreGraph(graph, (edgeIndex) => (isBackEdgeFirstPass.get(edgeIndex) ? BACK_EDGE_WEIGHT : 1));
+  dagre.layout(second.g);
 
   const nodes: LaidOutNode[] = graph.nodes.map((node) => {
-    const laid = g.node(node.id);
+    const laid = second.g.node(node.id);
     return { ...node, x: laid.x, y: laid.y, width: laid.width, height: laid.height };
   });
-  const edges: LaidOutEdge[] = graph.edges.flatMap((edge, edgeIndex) => {
-    if (!g.hasNode(edge.from) || !g.hasNode(edge.to)) return [];
-    const laid = g.edge(edge.from, edge.to, String(edgeIndex));
-    return [{ ...edge, points: laid?.points ?? [], edgeIndex }];
+  const edges: LaidOutEdge[] = second.validEdges.map(({ edge, edgeIndex }) => {
+    const laid = second.g.edge(edge.from, edge.to, String(edgeIndex));
+    const fromRank = (second.g.node(edge.from) as { rank?: number }).rank ?? 0;
+    const toRank = (second.g.node(edge.to) as { rank?: number }).rank ?? 0;
+    return { ...edge, points: laid?.points ?? [], edgeIndex, isBackEdge: toRank <= fromRank };
   });
 
-  const graphLabel = g.graph() as { width?: number; height?: number };
+  const graphLabel = second.g.graph() as { width?: number; height?: number };
   const width = graphLabel.width ?? nodes.reduce((max, n) => Math.max(max, n.x + n.width / 2), 0);
   const height = graphLabel.height ?? nodes.reduce((max, n) => Math.max(max, n.y + n.height / 2), 0);
   return { width, height, nodes, edges };
@@ -167,6 +210,37 @@ function pathFor(points: { x: number; y: number }[]): string {
   return points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
 }
 
+/** The point at (approximately) half the polyline's total length — used to place an edge's label. Falls back to the midpoint of a 2-point (or shorter) path. */
+function midpointOf(points: { x: number; y: number }[]): { x: number; y: number } | null {
+  if (points.length === 0) return null;
+  if (points.length === 1) return points[0]!;
+  const segmentLengths = points.slice(1).map((p, i) => Math.hypot(p.x - points[i]!.x, p.y - points[i]!.y));
+  const total = segmentLengths.reduce((sum, len) => sum + len, 0);
+  if (total === 0) return points[0]!;
+  let travelled = 0;
+  const half = total / 2;
+  for (let i = 0; i < segmentLengths.length; i++) {
+    const segment = segmentLengths[i]!;
+    if (travelled + segment >= half) {
+      const t = segment === 0 ? 0 : (half - travelled) / segment;
+      const from = points[i]!;
+      const to = points[i + 1]!;
+      return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
+    }
+    travelled += segment;
+  }
+  return points[points.length - 1]!;
+}
+
+const MAX_CONDITION_LABEL_LENGTH = 30;
+
+/** The DOT-declared edge label if present, else a shortened form of its routing condition, else null (no on-diagram text — the `<title>` tooltip still carries the full detail). */
+function edgeDisplayLabel(edge: Pick<GraphEdgeView, "label" | "condition">): string | null {
+  if (edge.label) return edge.label;
+  if (edge.condition) return edge.condition.length > MAX_CONDITION_LABEL_LENGTH ? `${edge.condition.slice(0, MAX_CONDITION_LABEL_LENGTH - 1)}…` : edge.condition;
+  return null;
+}
+
 export interface DagViewProps {
   graph: GraphView;
   /** All events recorded for the run so far — used to find traversed edges and their selection reason. */
@@ -191,12 +265,12 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
       role="img"
       aria-label="Workflow DAG"
       viewBox={`0 0 ${viewWidth} ${viewHeight}`}
-      width="100%"
-      style={{ minHeight: 160, background: "#fff" }}
+      preserveAspectRatio="xMidYMid meet"
+      style={{ width: "100%", height: "auto", maxHeight: 520, minHeight: 160, background: "#fff", display: "block" }}
     >
       <defs>
         <marker id="attractor-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
+          <path d="M0,0 L10,5 L0,10 z" fill="#64748b" />
         </marker>
         <marker id="attractor-arrow-traversed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" fill="#2563eb" />
@@ -206,20 +280,40 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
         {laidOut.edges.map((edge) => {
           const selection = selections.get(`${edge.from} ${edge.to}`);
           const traversed = Boolean(selection);
+          const label = edgeDisplayLabel(edge);
+          const midpoint = label ? midpointOf(edge.points) : null;
+          // Untraversed edges are always solid #64748b/1.5px — legible on their
+          // own — except a back edge (a loop like `approve -> plan`) may also
+          // dash to visually flag it as "not the forward path", without
+          // dropping back to the old, barely-visible light grey. A traversed
+          // edge stays blue/2px regardless of back-edge-ness (unchanged).
+          const stroke = traversed ? "#2563eb" : "#64748b";
+          const strokeWidth = traversed ? 2 : 1.5;
+          const strokeDasharray = !traversed && edge.isBackEdge ? "6 4" : undefined;
           return (
-            <path
-              key={`${edge.from}->${edge.to}#${edge.edgeIndex}`}
-              data-edge={`${edge.from}->${edge.to}`}
-              data-traversed={traversed}
-              d={pathFor(edge.points)}
-              fill="none"
-              stroke={traversed ? "#2563eb" : "#cbd5e1"}
-              strokeWidth={traversed ? 2 : 1}
-              strokeDasharray={traversed ? undefined : "4 3"}
-              markerEnd={`url(#${traversed ? "attractor-arrow-traversed" : "attractor-arrow"})`}
-            >
-              <title>{selection ? `${edge.from} → ${edge.to} (${selection.reason}${selection.edgeLabel ? `: ${selection.edgeLabel}` : ""})` : `${edge.from} → ${edge.to}`}</title>
-            </path>
+            <g key={`${edge.from}->${edge.to}#${edge.edgeIndex}`}>
+              <path
+                data-edge={`${edge.from}->${edge.to}`}
+                data-traversed={traversed}
+                data-back-edge={edge.isBackEdge}
+                d={pathFor(edge.points)}
+                fill="none"
+                stroke={stroke}
+                strokeWidth={strokeWidth}
+                strokeDasharray={strokeDasharray}
+                markerEnd={`url(#${traversed ? "attractor-arrow-traversed" : "attractor-arrow"})`}
+              >
+                <title>{selection ? `${edge.from} → ${edge.to} (${selection.reason}${selection.edgeLabel ? `: ${selection.edgeLabel}` : ""})` : `${edge.from} → ${edge.to}`}</title>
+              </path>
+              {label && midpoint ? (
+                <g data-edge-label={`${edge.from}->${edge.to}`} transform={`translate(${midpoint.x}, ${midpoint.y})`}>
+                  <rect x={-(label.length * 3.6 + 4)} y={-8} width={label.length * 7.2 + 8} height={16} rx={3} fill="#fff" fillOpacity={0.9} />
+                  <text textAnchor="middle" y={4} fontSize={11} fill="#334155">
+                    {label}
+                  </text>
+                </g>
+              ) : null}
+            </g>
           );
         })}
       </g>
@@ -259,7 +353,7 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
                 <rect width={node.width} height={node.height} rx={8} fill={color.fill} stroke={color.stroke} strokeWidth={isCurrent ? 3 : 1.5} />
               )}
               {isCurrent ? <rect width={node.width} height={node.height} rx={8} fill="none" stroke="#1d4ed8" strokeWidth={1} strokeDasharray="2 2" /> : null}
-              <text x={node.width / 2} y={node.height / 2 + 4} textAnchor="middle" fontSize={12} fill="#0f172a">
+              <text x={node.width / 2} y={node.height / 2 + 4} textAnchor="middle" fontSize={13} fill="#0f172a">
                 {node.label ?? node.id}
               </text>
               {node.visit > 1 ? (

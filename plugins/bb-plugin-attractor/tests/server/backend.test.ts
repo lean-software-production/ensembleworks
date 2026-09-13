@@ -174,7 +174,7 @@ describe("createThreadAgentBackend: completion", () => {
     await flush();
     await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
     await runPromise;
-    expect(emitted).toEqual([{ type: "agent.thread", threadId: "worker-thread" }]);
+    expect(emitted).toEqual([{ type: "agent.thread", threadId: "worker-thread", provider: "anthropic", model: "claude-sonnet-5", reasoningLevel: "medium" }]);
   });
 
   it("throws (an engine-retryable fault) when the worker thread fails", async () => {
@@ -384,5 +384,58 @@ describe("createThreadAgentBackend: prompt assembly", () => {
 
     const prompt = (spawnCalls[0] as { prompt: string }).prompt;
     expect(prompt).toContain("plan | Plan | succeeded: the plan is done");
+  });
+
+  it("raises the prior-stage preview to 400 chars and marks a cut response with a trailing truncation marker", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      plan  [label="Plan", prompt="Write a plan."]
+      build [label="Build", prompt="Build it."]
+      start -> plan -> build -> exit
+    }`);
+    const longResponse = "x".repeat(350) + "y".repeat(100); // 450 chars, past the old 200-char cut
+    const context = createContext({ response: { plan: longResponse }, stage_status: { plan: "succeeded" } });
+    const runPromise = backend.run({ ...baseInput(g, "build"), context });
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await runPromise;
+
+    const prompt = (spawnCalls[0] as { prompt: string }).prompt;
+    expect(prompt).toContain(`${"x".repeat(350)}${"y".repeat(50)} …[truncated]`);
+    expect(prompt).not.toContain("y".repeat(100));
+  });
+
+  it("does not append a truncation marker when the prior stage's response fits within 400 chars", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      plan  [label="Plan", prompt="Write a plan."]
+      build [label="Build", prompt="Build it."]
+      start -> plan -> build -> exit
+    }`);
+    const context = createContext({ response: { plan: "short response" }, stage_status: { plan: "succeeded" } });
+    const runPromise = backend.run({ ...baseInput(g, "build"), context });
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await runPromise;
+
+    const prompt = (spawnCalls[0] as { prompt: string }).prompt;
+    expect(prompt).toContain("plan | Plan | succeeded: short response");
+    expect(prompt).not.toContain("[truncated]");
   });
 });

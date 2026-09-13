@@ -27,13 +27,13 @@ export function HumanGate({ interaction, submit, cancel }: PluginPendingInteract
   const payload = parsed.data;
 
   const choose = (raw: string) => {
-    void submit({ kind: "choice", raw } satisfies HumanGateValue);
+    void submit({ kind: "choice", raw, via: "ui" } satisfies HumanGateValue);
   };
 
   const submitText = () => {
     const trimmed = text.trim();
     if (!trimmed) return;
-    void submit({ kind: "text", text: trimmed } satisfies HumanGateValue);
+    void submit({ kind: "text", text: trimmed, via: "ui" } satisfies HumanGateValue);
   };
 
   return (

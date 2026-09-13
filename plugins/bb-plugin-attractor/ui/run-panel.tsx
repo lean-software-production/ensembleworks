@@ -133,7 +133,7 @@ export function RunPanel({ runId, threadId, mode }: RunPanelProps) {
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <RunHeader run={run} graph={graph} stages={stages} now={now} />
         {dag}
-        <div>
+        <div style={{ display: "flex", gap: 8 }}>
           <button type="button" onClick={() => setExpanded((v) => !v)}>
             {expanded ? "Hide stages" : "Show stages"}
           </button>

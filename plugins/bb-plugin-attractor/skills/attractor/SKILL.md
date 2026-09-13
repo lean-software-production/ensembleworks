@@ -88,6 +88,11 @@ it survives a plugin restart from its last checkpoint.
 attractor_run({ path: "workflows/plan-implement-review.dot", title: "Ship the fix" })
 ```
 
+Each agent/prompt stage's prompt includes a bullet per prior stage (node id,
+label, status, and up to 400 characters of its response, marked
+`…[truncated]` when cut) — the full text is always available to a later
+stage via `context.response.<node_id>`.
+
 ## Inspecting a run
 
 `attractor_inspect({ runId })` returns the run's status
@@ -106,7 +111,13 @@ bb attractor stages <runId>
 bb attractor events <runId> [--since seq]
 bb attractor stop <runId>
 bb attractor answer <runId> <label|text>  # answer a blocked human gate
+bb attractor --help                       # or `<command> --help` / `help <command>`
 ```
+
+Every subcommand taking a `<runId>` exits `1` with `no such run: <runId>`
+on stderr for an unknown/not-owned run; `answer` also exits `1` when there
+is no pending gate to answer, and `stop` exits `1` when the run isn't in
+flight.
 
 ## Structured results (`output_schema="routing"`)
 

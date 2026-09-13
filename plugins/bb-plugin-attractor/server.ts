@@ -198,6 +198,43 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   const usage =
     "bb attractor validate <path> | run <path> [--input k=v ...] [--title t] | status <runId> | stages <runId> | events <runId> [--since seq] | stop <runId> | answer <runId> <label|text>\nRun within the originating BB thread.";
 
+  // One-line description of each command's JSON stdout shape, for `bb
+  // attractor <command> --help` / `bb attractor help <command>` (item 12) —
+  // kept alongside (not inside) the `commands` metadata handed to
+  // `bb.cli.register` below, since `PluginCliCommandInfo` only has
+  // name/summary/usage and that metadata is also read by the host itself
+  // (and the plugin-commands skill) without running plugin code.
+  const COMMAND_OUTPUT_SHAPE: Record<string, string> = {
+    validate: "JSON output: { diagnostics: Diagnostic[] }.",
+    run: "JSON output: { runId: string, previewDirective: string }.",
+    status: "JSON output: the Run object.",
+    stages: "JSON output: Stage[] (per-node status, visit, provider, thread id).",
+    events: "JSON output: Event[] (each stamped with a seq).",
+    stop: "JSON output: { stopped: true, status: \"cancelled\" } on success.",
+    answer: "JSON output: { answered: boolean, reason?: string }.",
+  };
+
+  const CLI_COMMANDS = [
+    { name: "validate", summary: "Validate a workflow file", usage: "bb attractor validate <path>" },
+    { name: "run", summary: "Run a workflow file", usage: "bb attractor run <path> [--input k=v] [--title t]" },
+    { name: "status", summary: "Show a run's status", usage: "bb attractor status <runId>" },
+    { name: "stages", summary: "List a run's stages", usage: "bb attractor stages <runId>" },
+    { name: "events", summary: "List a run's events", usage: "bb attractor events <runId> [--since seq]" },
+    { name: "stop", summary: "Stop a running run", usage: "bb attractor stop <runId>" },
+    { name: "answer", summary: "Answer a run's blocked human gate", usage: "bb attractor answer <runId> <label|text>" },
+  ];
+
+  function fullHelp(): string {
+    const lines = CLI_COMMANDS.map((c) => `  ${c.usage}\n    ${c.summary}. ${COMMAND_OUTPUT_SHAPE[c.name] ?? ""}`.trimEnd());
+    return `bb attractor — Run and inspect Attractor DOT workflows\n\n${lines.join("\n")}\n\nRun within the originating BB thread.`;
+  }
+
+  function commandHelp(name: string): string | null {
+    const cmd = CLI_COMMANDS.find((c) => c.name === name);
+    if (!cmd) return null;
+    return `${cmd.usage}\n${cmd.summary}. ${COMMAND_OUTPUT_SHAPE[cmd.name] ?? ""}`.trimEnd();
+  }
+
   function parseInputFlags(argv: string[]): { inputs: Record<string, string>; rest: string[] } {
     const inputs: Record<string, string> = {};
     const rest: string[] = [];
@@ -222,18 +259,20 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
   bb.cli.register({
     name: "attractor",
     summary: "Run and inspect Attractor DOT workflows",
-    commands: [
-      { name: "validate", summary: "Validate a workflow file", usage: "bb attractor validate <path>" },
-      { name: "run", summary: "Run a workflow file", usage: "bb attractor run <path> [--input k=v] [--title t]" },
-      { name: "status", summary: "Show a run's status", usage: "bb attractor status <runId>" },
-      { name: "stages", summary: "List a run's stages", usage: "bb attractor stages <runId>" },
-      { name: "events", summary: "List a run's events", usage: "bb attractor events <runId> [--since seq]" },
-      { name: "stop", summary: "Stop a running run", usage: "bb attractor stop <runId>" },
-      { name: "answer", summary: "Answer a run's blocked human gate", usage: "bb attractor answer <runId> <label|text>" },
-    ],
+    commands: CLI_COMMANDS,
     async run(argv, ctx) {
       try {
-        if (!argv.length || argv[0] === "--help") return { exitCode: 0, stdout: usage };
+        if (!argv.length || argv[0] === "--help") return { exitCode: 0, stdout: fullHelp() };
+        if (argv[0] === "help" && argv[1]) {
+          const help = commandHelp(argv[1]);
+          if (!help) throw new Error(`unknown command: ${argv[1]}`);
+          return { exitCode: 0, stdout: help };
+        }
+        if (argv[1] === "--help") {
+          const help = commandHelp(argv[0]);
+          if (!help) throw new Error(`unknown command: ${argv[0]}`);
+          return { exitCode: 0, stdout: help };
+        }
         if (!ctx.threadId) throw new Error("Run this command from a BB thread");
         const [command, ...args] = argv;
         const { inputs, rest } = parseInputFlags(args);
@@ -248,19 +287,30 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
           const title = titleIndex >= 0 ? rest[titleIndex + 1] : undefined;
           result = await runWorkflow({ path: rest[0], inputs, title }, ctx.threadId, ctx.projectId ?? "");
         } else if (command === "status" && rest[0]) {
-          result = owned(rest[0], ctx.threadId).run;
+          const { run } = owned(rest[0], ctx.threadId);
+          if (!run) throw new Error(`no such run: ${rest[0]}`);
+          result = run;
         } else if (command === "stages" && rest[0]) {
-          result = owned(rest[0], ctx.threadId).stages;
+          const { run, stages } = owned(rest[0], ctx.threadId);
+          if (!run) throw new Error(`no such run: ${rest[0]}`);
+          result = stages;
         } else if (command === "events" && rest[0]) {
+          const { run } = owned(rest[0], ctx.threadId);
+          if (!run) throw new Error(`no such run: ${rest[0]}`);
           const sinceIndex = rest.indexOf("--since");
           const sinceSeq = sinceIndex >= 0 ? Number(rest[sinceIndex + 1]) : undefined;
-          result = owned(rest[0], ctx.threadId).run ? service.getEvents(rest[0], sinceSeq) : [];
+          result = service.getEvents(rest[0], sinceSeq);
         } else if (command === "stop" && rest[0]) {
-          if (!owned(rest[0], ctx.threadId).run) throw new Error(`no such run: ${rest[0]}`);
-          result = service.stopRun(rest[0]);
+          const { run } = owned(rest[0], ctx.threadId);
+          if (!run) throw new Error(`no such run: ${rest[0]}`);
+          if (run.status !== "running" && run.status !== "blocked") throw new Error(`run ${rest[0]} is not running`);
+          const updated = service.stopRun(rest[0]);
+          result = { stopped: true, status: updated.status };
         } else if (command === "answer" && rest[0] && rest.length > 1) {
           if (!owned(rest[0], ctx.threadId).run) throw new Error(`no such run: ${rest[0]}`);
-          result = await service.answerHumanGate(rest[0], rest.slice(1).join(" "));
+          const answer = await service.answerHumanGate(rest[0], rest.slice(1).join(" "));
+          if (!answer.answered && answer.reason === "no pending human gate for this run") throw new Error(answer.reason);
+          result = answer;
         } else {
           throw new Error(usage);
         }

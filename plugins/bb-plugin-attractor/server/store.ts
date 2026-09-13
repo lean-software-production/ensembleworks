@@ -58,12 +58,36 @@ export const RUN_MIGRATIONS = [
   `CREATE INDEX IF NOT EXISTS attractor_events_run_seq ON attractor_events(run_id, seq)`,
 ] as const;
 
+// Columns added after `attractor_stages` first shipped, applied idempotently
+// via `PRAGMA table_info` below rather than folded into the `CREATE TABLE`
+// above — installed databases already have the table, and SQLite has no
+// `ADD COLUMN IF NOT EXISTS`. `provider_id`/`model`/`reasoning_level` record
+// the *actually-resolved* tuple a worker ran with (server/backend.ts's
+// `resolveModelTuple`, via the `agent.thread` event) — distinct from the
+// node's merely-declared `model`/`provider` DOT attributes, which
+// `toGraphView` already surfaces. `actor` records who answered a human gate
+// (`"ui" | "cli" | "default"`, handlers/human.ts's `human.answered` event).
+const STAGE_COLUMN_ADDITIONS: { column: string; ddl: string }[] = [
+  { column: "provider_id", ddl: "ALTER TABLE attractor_stages ADD COLUMN provider_id TEXT" },
+  { column: "model", ddl: "ALTER TABLE attractor_stages ADD COLUMN model TEXT" },
+  { column: "reasoning_level", ddl: "ALTER TABLE attractor_stages ADD COLUMN reasoning_level TEXT" },
+  { column: "actor", ddl: "ALTER TABLE attractor_stages ADD COLUMN actor TEXT" },
+];
+
+function ensureStageColumns(db: Database.Database): void {
+  const existing = new Set((db.prepare("PRAGMA table_info(attractor_stages)").all() as { name: string }[]).map((row) => row.name));
+  for (const { column, ddl } of STAGE_COLUMN_ADDITIONS) {
+    if (!existing.has(column)) db.exec(ddl);
+  }
+}
+
 // "blocked" (T6): a run/stage waiting on a human gate's answer — set by
 // server/service.ts's applyEventToStore on a `human.requested` event and
 // cleared back to "running" on `human.answered`, never persisted as a
 // terminal status (recordFinish only ever writes succeeded/failed/cancelled).
 export type RunStatus = "running" | "blocked" | "succeeded" | "failed" | "cancelled";
 export type StageStatus = "running" | "blocked" | "succeeded" | "failed" | "skipped";
+export type StageActor = "ui" | "cli" | "default";
 
 export interface CreateRunInput {
   id: string;
@@ -104,6 +128,12 @@ export interface Stage {
   status: StageStatus;
   outcomeStatus: OutcomeStatus | null;
   threadId: string | null;
+  /** The actually-resolved provider/model/reasoning tuple a worker ran with (server/backend.ts's `resolveModelTuple`, via the `agent.thread` event) — null until that event lands, e.g. for non-agent/prompt stages. */
+  providerId: string | null;
+  model: string | null;
+  reasoningLevel: string | null;
+  /** Who answered a human gate stage (handlers/human.ts's `human.answered` event) — null for every non-human stage and for one not yet answered. */
+  actor: StageActor | null;
   startedAt: number;
   completedAt: number | null;
 }
@@ -154,6 +184,10 @@ type StageRow = {
   status: string;
   outcome_status: string | null;
   thread_id: string | null;
+  provider_id: string | null;
+  model: string | null;
+  reasoning_level: string | null;
+  actor: string | null;
   started_at: number;
   completed_at: number | null;
 };
@@ -178,7 +212,10 @@ export class RunStore {
 
   constructor(db: Database.Database) {
     this.#db = db;
-    db.transaction(() => RUN_MIGRATIONS.forEach((statement) => db.exec(statement)))();
+    db.transaction(() => {
+      RUN_MIGRATIONS.forEach((statement) => db.exec(statement));
+      ensureStageColumns(db);
+    })();
   }
 
   createRun(input: CreateRunInput, now = Date.now()): Run {
@@ -318,6 +355,18 @@ export class RunStore {
     this.#db.prepare("UPDATE attractor_stages SET thread_id=? WHERE run_id=? AND node_id=? AND visit=?").run(threadId, runId, nodeId, visit);
   }
 
+  /** Records the actually-resolved provider/model/reasoning tuple a worker ran with, alongside `setStageThreadId` (both driven by the same `agent.thread` event). */
+  setStageProvider(runId: string, nodeId: string, visit: number, providerId: string, model: string, reasoningLevel: string | null): void {
+    this.#db
+      .prepare("UPDATE attractor_stages SET provider_id=?, model=?, reasoning_level=? WHERE run_id=? AND node_id=? AND visit=?")
+      .run(providerId, model, reasoningLevel, runId, nodeId, visit);
+  }
+
+  /** Records who answered a human gate stage (the `human.answered` event's `actor`). */
+  setStageActor(runId: string, nodeId: string, visit: number, actor: StageActor): void {
+    this.#db.prepare("UPDATE attractor_stages SET actor=? WHERE run_id=? AND node_id=? AND visit=?").run(actor, runId, nodeId, visit);
+  }
+
   listStages(runId: string): Stage[] {
     // rowid (not started_at) preserves first-insertion order even when two
     // stages start within the same clock millisecond (a real risk with the
@@ -334,6 +383,10 @@ export class RunStore {
       status: row.status as StageStatus,
       outcomeStatus: (row.outcome_status as OutcomeStatus | null) ?? null,
       threadId: row.thread_id,
+      providerId: row.provider_id,
+      model: row.model,
+      reasoningLevel: row.reasoning_level,
+      actor: (row.actor as StageActor | null) ?? null,
       startedAt: row.started_at,
       completedAt: row.completed_at,
     }));

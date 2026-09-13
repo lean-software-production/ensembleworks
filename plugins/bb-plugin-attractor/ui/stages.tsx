@@ -22,10 +22,20 @@ export function formatDuration(ms: number): string {
   return parts.join(" ");
 }
 
-function providerLabel(node: GraphView["nodes"][number] | undefined): string {
-  if (!node || (!node.provider && !node.model)) return "—";
-  if (node.provider && node.model) return `${node.provider} / ${node.model}`;
-  return node.provider ?? node.model ?? "—";
+/**
+ * Prefers the stage's actually-resolved provider/model tuple
+ * (`server/backend.ts`'s `resolveModelTuple`, persisted via the
+ * `agent.thread` event) over the node's merely-declared DOT attributes —
+ * three real worker threads all resolving to the thread/stylesheet default
+ * used to show as an all-dashes column even though a real provider ran them.
+ * Falls back to the declared tuple, then a dash.
+ */
+function providerLabel(stage: StageView, node: GraphView["nodes"][number] | undefined): string {
+  const providerId = stage.providerId ?? node?.provider ?? null;
+  const model = stage.model ?? node?.model ?? null;
+  if (!providerId && !model) return "—";
+  if (providerId && model) return `${providerId} / ${model}`;
+  return providerId ?? model ?? "—";
 }
 
 export interface StageListProps {
@@ -58,10 +68,10 @@ export function StageList({ stages, graph, now, onOpenThread }: StageListProps) 
           return (
             <tr key={stage.stageId} data-stage-id={stage.stageId} data-status={stage.status}>
               <td>{node?.label ?? stage.nodeId}</td>
-              <td>{stage.status}</td>
+              <td>{stage.status}{stage.actor ? ` (answered via ${stage.actor})` : ""}</td>
               <td>{stage.visit}</td>
               <td>{formatDuration(Math.max(0, elapsedMs))}</td>
-              <td>{providerLabel(node)}</td>
+              <td>{providerLabel(stage, node)}</td>
               <td>
                 {stage.threadId && onOpenThread ? (
                   <button type="button" onClick={() => onOpenThread(stage.threadId!)}>

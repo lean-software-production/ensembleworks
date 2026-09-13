@@ -112,7 +112,7 @@ describe("createService: run lifecycle", () => {
     const host = makeHost();
     const store = new RunStore(new Database(":memory:"));
     const backend = fakeBackend(async (input: AgentRunInput) => {
-      input.emit({ type: "agent.thread", threadId: "worker-thread" });
+      input.emit({ type: "agent.thread", threadId: "worker-thread", provider: "anthropic", model: "claude-sonnet-5", reasoningLevel: "medium" });
       return { status: "succeeded", text: "the plan" };
     });
     const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient() });
@@ -122,7 +122,13 @@ describe("createService: run lifecycle", () => {
 
     const stages = store.listStages(run.id);
     expect(stages.map((s) => s.nodeId)).toEqual(["start", "plan", "exit"]);
-    expect(stages.find((s) => s.nodeId === "plan")).toMatchObject({ status: "succeeded", threadId: "worker-thread" });
+    expect(stages.find((s) => s.nodeId === "plan")).toMatchObject({
+      status: "succeeded",
+      threadId: "worker-thread",
+      providerId: "anthropic",
+      model: "claude-sonnet-5",
+      reasoningLevel: "medium",
+    });
     expect(store.listEvents(run.id).some((e) => e.type === "run.completed")).toBe(true);
     expect(host.harness.inspection.realtimeSignals.some((s) => s.channel === "attractor-runs")).toBe(true);
   });
@@ -470,7 +476,7 @@ describe("createService: answerHumanGate (T6, bb attractor answer)", () => {
     const result = await service.answerHumanGate("run-x", "approve");
 
     expect(result).toEqual({ answered: true });
-    expect(respondCalls).toEqual([{ interactionId: "interaction-1", threadId: "origin-thread", value: { kind: "choice", raw: "[A] Approve" } }]);
+    expect(respondCalls).toEqual([{ interactionId: "interaction-1", threadId: "origin-thread", value: { kind: "choice", raw: "[A] Approve", via: "cli" } }]);
   });
 
   it("reports no match rather than guessing when the answer names no option and the gate isn't freeform", async () => {
@@ -529,7 +535,7 @@ describe("createService: answerHumanGate (T6, bb attractor answer)", () => {
     const result = await service.answerHumanGate("run-x", "a");
 
     expect(result).toEqual({ answered: true });
-    expect(respondCalls).toEqual([{ interactionId: "interaction-1", threadId: "origin-thread", value: { kind: "choice", raw: "[A] Approve" } }]);
+    expect(respondCalls).toEqual([{ interactionId: "interaction-1", threadId: "origin-thread", value: { kind: "choice", raw: "[A] Approve", via: "cli" } }]);
   });
 
   it("reports no pending gate when there is no matching interaction for this run", async () => {
