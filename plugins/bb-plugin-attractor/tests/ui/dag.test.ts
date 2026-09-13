@@ -163,6 +163,41 @@ describe("layoutGraph", () => {
     expect(Math.abs(check.y - review.y)).toBeLessThanOrEqual(check.height);
   });
 
+  // Follow-up-1 fix for the dogfood-polish round-1 finding: the test above
+  // ("lays the dogfood graph's main path out...") stays green whether or
+  // not `layoutGraph` zero-weights back edges — the dogfood graph's own
+  // ranks are already correct from `ranksep`/`nodesep` tuning alone, so it
+  // cannot discriminate the two-pass mechanism from a no-op. This graph has
+  // three back edges converging on `x` (`z->x`, `y->x`, `t->s` — `t->s`
+  // does not target `x` but still pulls the shared rank-balancing pass) so
+  // a single, uniformly-weighted dagre pass visibly bows the main path
+  // (measured directly: x/y/z land at y=86/112/86, a 26px arc) while
+  // zero-weighting those back edges on the second pass flattens it to a
+  // single y for x, y and z. Confirmed RED against a reverted, single-pass
+  // `layoutGraph` before writing the fix (see README "Deviations from the
+  // plan").
+  it("zero-weights back edges so a multi-loop graph's main path lands flat, not bowed by a uniform-weight dagre pass", () => {
+    const graph: GraphView = {
+      rankdir: "LR",
+      nodes: [node("s", { handlerKind: "start" }), node("x"), node("y"), node("z"), node("t", { handlerKind: "exit" })],
+      edges: [
+        { from: "s", to: "x", label: null, condition: null },
+        { from: "x", to: "y", label: null, condition: null },
+        { from: "y", to: "z", label: null, condition: null },
+        { from: "z", to: "t", label: null, condition: null },
+        { from: "z", to: "x", label: null, condition: null },
+        { from: "y", to: "x", label: null, condition: null },
+        { from: "t", to: "s", label: null, condition: null },
+      ],
+    };
+    const laidOut = layoutGraph(graph);
+    const byId = new Map(laidOut.nodes.map((n) => [n.id, n]));
+    // A single uniform-weight pass gives x/y/z distinct y's (86/112/86); the
+    // fix's second, zero-weighted pass must collapse them to one shared y.
+    expect(byId.get("x")!.y).toBe(byId.get("y")!.y);
+    expect(byId.get("y")!.y).toBe(byId.get("z")!.y);
+  });
+
   it("handles a fan-out/fan-in graph (parallel branches) without throwing", () => {
     const graph: GraphView = {
       rankdir: "TB",

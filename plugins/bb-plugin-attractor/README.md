@@ -846,6 +846,8 @@ bb plugin build .
   UI task should make unprompted. A node with no declared `model`/
   `provider` attribute shows "—" in the stage list even though it in fact
   ran against a stylesheet- or thread-default-resolved model.
+  **Superseded by the dogfood-polish round (see below): the actually-resolved
+  tuple is now persisted per stage and preferred over the declared one.**
 
 - **Added a `stopRun` RPC method (T5, not in T4's RPC list).** T4's RPC
   list was `getRun`/`listRuns`/`getGraph`/`getEvents` (all reads); stopping
@@ -919,3 +921,42 @@ bb plugin build .
   engine event; `ui/run-panel.tsx` coalesces bursts into one trailing
   refetch (150 ms) and the service caches each run's parsed graph, so a busy
   stage no longer re-parses the DOT and issues an RPC triplet per event.
+
+- **Dogfood-polish round 1: DAG back-edge zero-weighting (item 4) has no
+  discriminating regression test on the dogfood graph itself.** The
+  dogfood run's `plan -> approve -> implement -> check -> review -> exit`
+  graph already lays out with `check`/`implement`/`review` within one node
+  height of each other from `ranksep`/`nodesep` tuning alone — a single,
+  uniformly-weighted dagre pass and `layoutGraph`'s actual two-pass,
+  zero-weighted-back-edge pass produce byte-identical coordinates for that
+  specific graph (verified directly: both give `check` at y=76 against
+  `implement`/`review` at y=66/50). So
+  `tests/ui/dag.test.ts`'s "lays the dogfood graph's main path out…" test
+  was green before the two-pass mechanism existed and remains green after —
+  it is real coverage of the *outcome* (no wobble on this graph) but cannot
+  demonstrate the *mechanism* (zero-weighting back edges) actually does
+  anything, since dagre's default rank-balancing was never pulling this
+  particular graph's ranks off in the first place. A second, genuinely
+  discriminating test was added — a 5-node graph with three back edges
+  converging on one node (`s->x->y->z->t` plus `z->x`, `y->x`, `t->s`) where
+  a single uniform-weight pass visibly bows the main path (`x`/`y`/`z` land
+  at y=86/112/86) and the zero-weighted second pass flattens it
+  (`x`/`y`/`z` all land at the same y). Confirmed RED by reverting
+  `layoutGraph` to its single-pass form and reproducing the 86≠112 failure
+  before restoring the fix — see
+  `tests/ui/dag.test.ts`'s "zero-weights back edges so a multi-loop graph's
+  main path lands flat…" test and its comment.
+
+- **Dogfood-polish round 1: item 3's SVG kept a `minHeight: 160` /
+  `background: "#fff"` floor after "remove the fixed white 160px box
+  feel" was asked for.** Both are now removed (`ui/dag.tsx`'s `<svg>`
+  style is just `width`/`height`/`maxHeight`/`display`), so a small diagram
+  in a narrow card scales down with the viewBox's own aspect ratio instead
+  of flooring at 160px. `tests/ui/dag.render.test.tsx`'s sizing test now
+  also asserts no `min-height` is set.
+
+- **Dogfood-polish round 1: item 6 persisted `reasoningLevel` end to end
+  but never rendered it.** `ui/stages.tsx`'s `providerLabel` now appends
+  `" (<reasoningLevel>)"` when the resolved stage carries one (there is no
+  declared-DOT equivalent to fall back to), so the Provider column shows
+  the genuinely complete actual tuple, not just provider/model.

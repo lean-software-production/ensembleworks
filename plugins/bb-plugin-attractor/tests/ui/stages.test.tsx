@@ -73,6 +73,15 @@ describe("StageList", () => {
     ];
     const { container } = render(<StageList stages={stages} graph={GRAPH} now={2000} />);
     const providerOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(5)`)?.textContent;
+    expect(providerOf("plan@1")).toBe("openai / gpt-5 (high)");
+  });
+
+  it("omits the reasoning level suffix when the resolved stage has none", () => {
+    const stages: StageView[] = [
+      { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: "thread-9", providerId: "openai", model: "gpt-5", reasoningLevel: null, actor: null, startedAt: 1000, completedAt: 1500 },
+    ];
+    const { container } = render(<StageList stages={stages} graph={GRAPH} now={2000} />);
+    const providerOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(5)`)?.textContent;
     expect(providerOf("plan@1")).toBe("openai / gpt-5");
   });
 

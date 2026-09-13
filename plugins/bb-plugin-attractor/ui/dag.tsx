@@ -266,7 +266,7 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
       aria-label="Workflow DAG"
       viewBox={`0 0 ${viewWidth} ${viewHeight}`}
       preserveAspectRatio="xMidYMid meet"
-      style={{ width: "100%", height: "auto", maxHeight: 520, minHeight: 160, background: "#fff", display: "block" }}
+      style={{ width: "100%", height: "auto", maxHeight: 520, display: "block" }}
     >
       <defs>
         <marker id="attractor-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">

@@ -28,14 +28,18 @@ export function formatDuration(ms: number): string {
  * `agent.thread` event) over the node's merely-declared DOT attributes —
  * three real worker threads all resolving to the thread/stylesheet default
  * used to show as an all-dashes column even though a real provider ran them.
- * Falls back to the declared tuple, then a dash.
+ * Falls back to the declared tuple, then a dash. The resolved reasoning
+ * level (there is no declared-DOT equivalent) is appended in parentheses
+ * when known, so the actual tuple shown is genuinely complete, not just
+ * provider/model.
  */
 function providerLabel(stage: StageView, node: GraphView["nodes"][number] | undefined): string {
   const providerId = stage.providerId ?? node?.provider ?? null;
   const model = stage.model ?? node?.model ?? null;
+  const reasoningLevel = stage.reasoningLevel ? ` (${stage.reasoningLevel})` : "";
   if (!providerId && !model) return "—";
-  if (providerId && model) return `${providerId} / ${model}`;
-  return providerId ?? model ?? "—";
+  if (providerId && model) return `${providerId} / ${model}${reasoningLevel}`;
+  return `${providerId ?? model ?? "—"}${reasoningLevel}`;
 }
 
 export interface StageListProps {

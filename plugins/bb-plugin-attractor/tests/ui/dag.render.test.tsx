@@ -188,6 +188,10 @@ describe("DagView", () => {
     expect((svg as unknown as HTMLElement).style.width).toBe("100%");
     expect((svg as unknown as HTMLElement).style.height).toBe("auto");
     expect(Number.parseInt((svg as unknown as HTMLElement).style.maxHeight, 10)).toBeGreaterThan(0);
+    // No fixed white 160px box floor: the element must not carry a
+    // `min-height` at all, so a small diagram in a narrow card shrinks with
+    // its own viewBox aspect ratio instead of flooring at a fixed height.
+    expect((svg as unknown as HTMLElement).style.minHeight).toBe("");
   });
 
   it("renders two parallel edges between the same node pair as distinct, non-colliding React elements", () => {
