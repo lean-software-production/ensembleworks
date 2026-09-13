@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import { makeDocument, type Binding, type CanvasDocument } from './document.js'
 import { worldBounds, hitTestPoint } from './geometry.js'
-import { buildSpatialIndex, hitTestTopmost } from './spatial-index.js'
+import { buildSpatialIndex, hitTestTopmost, queryMarquee } from './spatial-index.js'
 import type { Shape } from './shape.js'
 
 const base = () => ({ index: 'a1', isLocked: false, opacity: 1, meta: {} })
@@ -105,6 +105,27 @@ function doc(shapes: Shape[], bindings: Binding[] = []): CanvasDocument {
   assert.equal(hitTestTopmost(index, d, { x: 400, y: 0 }), 'shape:arrow', 'clicking near the line, far from the start, selects the arrow')
   assert.equal(hitTestTopmost(index, d, { x: 60, y: 60 }), null, 'clicking empty space near (but off) the start misses — the old fake-box bug')
   console.log('ok: hitTestTopmost follows the arrow\'s real path through the spatial index')
+}
+
+// ============================================================================
+// 6. Marquee 'intersect' narrow phase (validator regression, item 4): a
+//    rubber-band dragged squarely over an arrow's line, far from its start,
+//    must select it. Before the fix, queryMarquee's narrow phase tested the
+//    marquee rect against `worldCorners` — still the stale 100x100-at-start
+//    box for an arrow — even though the broad phase (worldBounds-driven) had
+//    already become path-aware.
+// ============================================================================
+{
+  const arrow = arrowShape('shape:arrow', 0, 0, { end: { x: 500, y: 0 } })
+  const d = doc([arrow])
+  const index = buildSpatialIndex(d)
+  const marquee = { minX: 400, minY: -10, maxX: 480, maxY: 10 }
+  assert.deepEqual(
+    queryMarquee(index, d, marquee, 'intersect'),
+    ['shape:arrow'],
+    'a marquee over the line 400 units from the start selects the arrow, not just near its start',
+  )
+  console.log('ok: queryMarquee(\'intersect\') follows the arrow\'s real path, not the stale box quad')
 }
 
 console.log('ok: arrow-geometry (worldBounds/hitTestPoint/hitTestTopmost follow the drawn path, straight/curved/bound/unbound)')

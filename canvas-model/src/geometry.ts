@@ -312,7 +312,7 @@ function distanceToQuadratic(p: Point, start: Point, mid: Point, end: Point): nu
 // (a "comfortable click target" in screen px at zoom 1, where world and
 // screen units coincide) — OURS, tune alongside this file's other tunable
 // constants (see localBounds' comment) if real usage says otherwise.
-const ARROW_HIT_MARGIN = 8
+export const ARROW_HIT_MARGIN = 8
 
 function arrowHitTest(doc: CanvasDocument, arrow: Shape, point: Point): boolean {
   const start = resolveArrowEndpointRaw(doc, arrow, 'start')
@@ -321,6 +321,40 @@ function arrowHitTest(doc: CanvasDocument, arrow: Shape, point: Point): boolean 
   const bend = typeof rawBend === 'number' && Number.isFinite(rawBend) ? rawBend : 0
   const dist = bend === 0 ? distanceToSegment(point, start, end) : distanceToQuadratic(point, start, curveMidRaw(start, end, bend), end)
   return dist <= ARROW_HIT_MARGIN
+}
+
+// Polyline approximation of an arrow's RESOLVED path (same endpoint/curve
+// resolution as arrowHitTest/arrowPathBounds above), for exact geometric
+// tests that need real points along the path rather than just a bbox or a
+// point-distance check — currently spatial-index.ts's queryMarquee
+// 'intersect' narrow phase (Task arrow-body validator fix, gap 4): a
+// marquee rectangle must be tested against the arrow's REAL LINE, not
+// worldCorners' generic box-quad SAT test (worldCorners has no arrow special
+// case — an arrow has no meaningful rotated box to test against, same
+// reasoning as hitTestPoint's kind==='arrow' branch above).
+// Straight (bend===0): exactly [start, end] — a marquee/segment intersection
+// test needs no more. Curved: sampled into the SAME 16 sub-segments
+// distanceToQuadratic already uses, so a marquee that would register a
+// click-precision curve hit and a marquee-drag hit agree on one sampling
+// density defined once.
+export function arrowPathPoints(doc: CanvasDocument, arrow: Shape): Point[] {
+  const start = resolveArrowEndpointRaw(doc, arrow, 'start')
+  const end = resolveArrowEndpointRaw(doc, arrow, 'end')
+  const rawBend = (arrow.props as { bend?: number } | undefined)?.bend
+  const bend = typeof rawBend === 'number' && Number.isFinite(rawBend) ? rawBend : 0
+  if (bend === 0) return [start, end]
+  const mid = curveMidRaw(start, end, bend)
+  const SAMPLES = 16
+  const points: Point[] = [start]
+  for (let i = 1; i <= SAMPLES; i++) {
+    const t = i / SAMPLES
+    const it = 1 - t
+    points.push({
+      x: it * it * start.x + 2 * it * t * mid.x + t * t * end.x,
+      y: it * it * start.y + 2 * it * t * mid.y + t * t * end.y,
+    })
+  }
+  return points
 }
 
 // Inverse-transform a WORLD point into `shape`'s LOCAL frame: undo the

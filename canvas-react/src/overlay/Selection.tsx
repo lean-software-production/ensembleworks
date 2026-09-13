@@ -81,12 +81,13 @@ export function Selection({ snapshot, selection, camera }: SelectionProps) {
     const shape = snapshot.byId.get(id)
     if (!shape) continue // vanished between selection and render — omit, never throw
     // ARROW SPECIAL CASE (Task arrow-body, gap 2/3): an arrow has no
-    // meaningful box quad — worldCorners degenerates to worldBounds'
-    // path-following AABB rotated by 0 (arrows carry no rotation prop),
-    // which would draw a visually wrong rectangle around the diagonal/
-    // curved line instead of tracing it. Indicate the EXACT routed path
-    // (routeArrow — the SAME path Arrows.tsx's overlay line draws) as an
-    // SVG <path>, never a <polygon>.
+    // meaningful box quad — worldCorners is still built from localBounds'
+    // stale 100x100-at-start default for an arrow (it has no kind==='arrow'
+    // special case; only worldBounds/hitTestPoint in geometry.ts do), which
+    // would draw a visually wrong rectangle around the diagonal/curved line
+    // instead of tracing it. Indicate the EXACT routed path (routeArrow —
+    // the SAME path Arrows.tsx's overlay line draws) as an SVG <path>,
+    // never a <polygon>.
     if (shape.kind === 'arrow') {
       const routed = routeArrow(snapshot, shape, snapshot.bindings)
       const start = worldToScreen(camera, routed.start)

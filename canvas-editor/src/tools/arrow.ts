@@ -109,10 +109,16 @@ export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
   // id — the arrow itself is already IN the context's snapshot mid-drag,
   // per create.ts's frame-capture SELF-EXCLUSION note, so without this
   // guard the arrow could bind to itself once its own bounding box grows
-  // under the cursor).
+  // under the cursor). The exclusion is passed straight into hitTestTopmost
+  // (validator fix, gap 1) rather than checked after the fact: at pointerup
+  // the cursor sits EXACTLY on the arrow's own terminal, so the arrow is
+  // always the topmost hit there — dropping it post-hoc would bail to "no
+  // hit" every time instead of falling through to whatever real shape the
+  // arrow was actually drawn onto (the whole point of drawing an arrow onto
+  // a shape: it should bind to THAT shape, not nothing).
   function bindingAt(worldPt: { readonly x: number; readonly y: number }, excludeId: string): ArrowBinding | undefined {
-    const hit = ctx.hitTestTopmost(worldPt)
-    if (!hit || hit === excludeId) return undefined
+    const hit = ctx.hitTestTopmost(worldPt, new Set([excludeId]))
+    if (!hit) return undefined
     const anchor = resolveArrowAnchor(ctx.snapshot(), hit, worldPt)
     return { targetId: hit, anchor }
   }
