@@ -13,7 +13,7 @@ const id = z.string().min(1).max(200);
 const json = z.json();
 
 export const runStatusSchema: z.ZodType<RunStatus> = z.enum(["running", "blocked", "succeeded", "failed", "cancelled"]);
-export const stageStatusSchema: z.ZodType<StageStatus> = z.enum(["running", "blocked", "succeeded", "failed", "skipped"]);
+export const stageStatusSchema: z.ZodType<StageStatus> = z.enum(["running", "blocked", "succeeded", "failed", "skipped", "cancelled"]);
 export const outcomeStatusSchema = z.enum(["succeeded", "failed", "partially_succeeded", "skipped"]);
 export const stageActorSchema: z.ZodType<StageActor> = z.enum(["ui", "cli", "default"]);
 

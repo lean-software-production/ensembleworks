@@ -231,10 +231,15 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     maybeEmitResumed(payload.thread.id);
     waiters.get(payload.thread.id)?.({ kind: "idle", text: payload.lastAssistantText });
   });
+  // A worker that fails or is deleted while parked on a prompt is no longer
+  // waiting on it either — clear the stage's waiting reason before the
+  // completion settles, so the row never keeps a stale "waiting: …".
   bb.events.on("thread.failed", (payload) => {
+    maybeEmitResumed(payload.thread.id);
     waiters.get(payload.thread.id)?.({ kind: "failed", error: payload.error });
   });
   bb.events.on("thread.deleted", (payload) => {
+    maybeEmitResumed(payload.thread.id);
     waiters.get(payload.thread.id)?.({ kind: "deleted" });
   });
   // Fired after a pending interaction row is committed — the moment a

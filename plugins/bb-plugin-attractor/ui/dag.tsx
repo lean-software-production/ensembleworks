@@ -172,6 +172,10 @@ const STATUS_COLOR: Record<NonNullable<NodeStatus> | "pending", { fill: string; 
   succeeded: { fill: "#dcfce7", stroke: "#16a34a" },
   failed: { fill: "#fee2e2", stroke: "#dc2626" },
   skipped: { fill: "#f5f5f4", stroke: "#a8a29e" },
+  // The stage a run was stopped in: settled by the finish path rather than
+  // by a stage event, so it reads as "abandoned" (grey, dashed like skipped)
+  // rather than failed.
+  cancelled: { fill: "#f5f5f4", stroke: "#a8a29e" },
 };
 
 export function statusColor(status: NodeStatus): { fill: string; stroke: string } {

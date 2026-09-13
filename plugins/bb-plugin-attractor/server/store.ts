@@ -92,7 +92,7 @@ function ensureStageColumns(db: Database.Database): void {
 // cleared back to "running" on `human.answered`, never persisted as a
 // terminal status (recordFinish only ever writes succeeded/failed/cancelled).
 export type RunStatus = "running" | "blocked" | "succeeded" | "failed" | "cancelled";
-export type StageStatus = "running" | "blocked" | "succeeded" | "failed" | "skipped";
+export type StageStatus = "running" | "blocked" | "succeeded" | "failed" | "skipped" | "cancelled";
 export type StageActor = "ui" | "cli" | "default";
 
 export interface CreateRunInput {
@@ -374,6 +374,20 @@ export class RunStore {
   /** Records who answered a human gate stage (the `human.answered` event's `actor`). */
   setStageActor(runId: string, nodeId: string, visit: number, actor: StageActor): void {
     this.#db.prepare("UPDATE attractor_stages SET actor=? WHERE run_id=? AND node_id=? AND visit=?").run(actor, runId, nodeId, visit);
+  }
+
+  /**
+   * Settles every stage row still in flight (`running` or `blocked`) as
+   * `cancelled` with a completion time and no waiting reason. Called when a
+   * run finishes as cancelled: the engine emits no stage event for the stage
+   * it was aborted in, so without this the row stayed `running` forever
+   * (dogfood-2 finding). Returns the number of rows settled.
+   */
+  settleInFlightStages(runId: string, now = Date.now()): number {
+    const result = this.#db
+      .prepare("UPDATE attractor_stages SET status='cancelled', completed_at=?, waiting_reason=NULL WHERE run_id=? AND status IN ('running','blocked')")
+      .run(now, runId);
+    return result.changes;
   }
 
   /** Records (or clears, with `null`) a stage's waiting reason — the `agent.waiting`/`agent.resumed` events (dogfood-2 fix). */

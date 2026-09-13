@@ -322,6 +322,10 @@ export function createService(deps: ServiceDeps) {
   function safeRecordFinish(runId: string, patch: Parameters<typeof store.recordFinish>[1]): void {
     if (disposing) return;
     try {
+      // The engine emits no stage event for the stage it was aborted in, so
+      // settle whatever is still in flight before the run's own terminal
+      // status lands (dogfood-2: cancelled runs left a `running` stage row).
+      if (patch.status === "cancelled") store.settleInFlightStages(runId, clock.now());
       const finished = store.recordFinish(runId, patch);
       publish(finished);
     } catch (err) {

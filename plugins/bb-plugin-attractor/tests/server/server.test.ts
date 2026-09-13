@@ -600,6 +600,30 @@ describe("attractor server plugin", () => {
     await waitForTerminalStatus(host, runId);
   });
 
+  it("clears a worker's waiting reason when the worker fails while parked on its prompt", async () => {
+    const host = makeHost();
+    host.harness.sdk.stub("threads.spawn", async () => makeThreadResponse({ id: "worker-thread" }));
+    await plugin(host.bb);
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: AGENT_WAIT_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(() => expect(host.harness.sdk.callsTo("threads.spawn").length).toBeGreaterThan(0));
+
+    await host.harness.behavior.emitThreadEvent("interaction.pending", {
+      thread: makeThreadResponse({ id: "worker-thread" }),
+      interaction: pendingPluginInteraction("worker-thread"),
+    });
+    await vi.waitFor(async () => {
+      const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+      expect(status).toBe("blocked");
+    });
+
+    await host.harness.behavior.emitThreadEvent("thread.failed", { thread: makeThreadResponse({ id: "worker-thread" }), error: "provider exploded" });
+    await waitForTerminalStatus(host, runId);
+    const stages = JSON.parse((await host.harness.behavior.runCli(["stages", runId], { threadId: "thread-1" })).stdout) as { nodeId: string; status: string; waitingReason: string | null }[];
+    const implement = stages.find((s) => s.nodeId === "implement")!;
+    expect(implement.waitingReason).toBeNull();
+    expect(implement.status).not.toBe("blocked");
+  });
+
   it("ignores a pending interaction on a thread this backend did not spawn", async () => {
     const host = makeHost();
     host.harness.sdk.stub("threads.spawn", async () => makeThreadResponse({ id: "worker-thread" }));

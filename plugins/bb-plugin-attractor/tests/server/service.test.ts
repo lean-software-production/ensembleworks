@@ -300,6 +300,15 @@ describe("createService: run lifecycle", () => {
     await vi.waitFor(() => expect(store.getRun(run.id).status).toBe("cancelled"));
     // A second stop on a run that is no longer in flight is a harmless read.
     expect(service.stopRun(run.id).status).toBe("cancelled");
+
+    // The stage the engine was aborted in gets no stage event of its own, so
+    // the finish path must settle it: no `running` row survives a cancel.
+    await vi.waitFor(() => {
+      const plan = store.listStages(run.id).find((s) => s.nodeId === "plan");
+      expect(plan?.status).toBe("cancelled");
+      expect(plan?.completedAt).not.toBeNull();
+    });
+    expect(store.listStages(run.id).some((s) => s.status === "running" || s.status === "blocked")).toBe(false);
   });
 });
 

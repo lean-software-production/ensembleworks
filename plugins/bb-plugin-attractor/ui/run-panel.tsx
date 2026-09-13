@@ -125,6 +125,8 @@ interface RunCardProps {
   onOpenPanel?: () => void;
   /** "directive" caps the card's width (`max-w-md`); "panel" fills its container. */
   maxWidth: boolean;
+  /** Optional footer row rendered inside the card, below the legend (the directive's "Show stages" toggle). */
+  footer?: ReactNode;
 }
 
 /**
@@ -133,7 +135,7 @@ interface RunCardProps {
  * summary line (stage count, elapsed, and "Waiting: <label>" while blocked),
  * the DAG in a white rounded box, and a status-colour legend.
  */
-function RunCard({ run, graph, stages, now, dag, onOpenPanel, maxWidth }: RunCardProps) {
+function RunCard({ run, graph, stages, now, dag, onOpenPanel, maxWidth, footer }: RunCardProps) {
   const total = graph?.nodes.length ?? 0;
   const visited = new Set(stages.map((s) => s.nodeId)).size;
   const elapsedMs = (run.finishedAt ?? now) - run.createdAt;
@@ -167,6 +169,7 @@ function RunCard({ run, graph, stages, now, dag, onOpenPanel, maxWidth }: RunCar
         <LegendEntry color="#d97706" label="Blocked" />
         <LegendEntry color="#94a3b8" label="Pending" hollow />
       </div>
+      {footer ? <div data-card-footer className="mt-2 text-xs">{footer}</div> : null}
     </div>
   );
 }
@@ -226,11 +229,15 @@ export function RunPanel({ runId, threadId, mode }: RunPanelProps) {
           dag={dag}
           maxWidth
           onOpenPanel={() => navigate.openThreadPanel({ actionId: ACTION_ID, params: { runId }, title: run.title ?? "Attractor run" })}
+          footer={
+            <>
+              <button type="button" onClick={() => setExpanded((v) => !v)} style={{ background: "none", border: "none", padding: 0, color: "inherit", textDecoration: "underline", cursor: "pointer" }}>
+                {expanded ? "Hide stages" : "Show stages"}
+              </button>
+              {expanded ? <StageList stages={stages} graph={graph} now={now} onOpenThread={onOpenThread} /> : null}
+            </>
+          }
         />
-        <button type="button" onClick={() => setExpanded((v) => !v)} style={{ background: "none", border: "none", padding: 0, color: "inherit", textDecoration: "underline", cursor: "pointer" }}>
-          {expanded ? "Hide stages" : "Show stages"}
-        </button>
-        {expanded ? <StageList stages={stages} graph={graph} now={now} onOpenThread={onOpenThread} /> : null}
       </div>
     );
   }

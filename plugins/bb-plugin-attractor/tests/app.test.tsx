@@ -152,6 +152,11 @@ describe("Attractor app", () => {
     const chevron = await slot.findByRole("button", { name: /open in (right )?panel/i });
     expect(chevron).not.toBe(showStages);
     expect(chevron.parentElement).not.toBe(showStages.parentElement);
+    // The toggle is the card's own footer row, inside the card rather than a
+    // sibling below it, so the card reads as one unit (restyle follow-up).
+    const card = slot.container.querySelector(".rounded-lg.border.border-border.bg-card")!;
+    expect(card.contains(showStages)).toBe(true);
+    expect(showStages.closest("[data-card-footer]")).toBeTruthy();
   });
 
   it("renders the directive as a dark BB card (rounded, bordered, max-w-md)", async () => {

@@ -615,7 +615,9 @@ screenshot, and three real plugin gaps the run itself exposed.
   itself so spacing accounts for real sizes, not just the SVG rendering.
   Status fill/stroke: `succeeded` #dcfce7/#16a34a, `running` #dbeafe/#2563eb
   (2.5px stroke), `blocked` #fef3c7/#d97706, `failed` #fee2e2/#dc2626,
-  `skipped` #f5f5f4/#a8a29e, `pending` #ffffff/#94a3b8 (hollow).
+  `skipped` #f5f5f4/#a8a29e, `cancelled` #f5f5f4/#a8a29e (the stage a run
+  was stopped in; settled by the finish path, since the engine emits no
+  stage event for an aborted stage), `pending` #ffffff/#94a3b8 (hollow).
 - Edges render as a smoothed spline (`pathFor`'s `Q`-command
   midpoint-smoothing between consecutive dagre-routed points) rather than a
   sharp polyline; stroke #94a3b8/1.25px untraversed (matching the pending
