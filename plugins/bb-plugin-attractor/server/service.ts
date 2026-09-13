@@ -34,9 +34,18 @@ export function resolveWorkflowPath(relativePath: string, environmentPath: strin
   if (posixPath.isAbsolute(relativePath)) {
     throw new Error(`workflow path must be relative to the environment root, got an absolute path: ${relativePath}`);
   }
-  const root = posixPath.normalize(environmentPath);
+  // A trailing slash survives posixPath.normalize() (e.g. "/repo/" stays
+  // "/repo/"), which would otherwise make every relative path compare against
+  // the wrong prefix ("/repo//...") below and get rejected as "escaping" a
+  // root that never had one. Strip it (root "/" itself normalizes to "" here,
+  // so it falls back to "/").
+  const root = posixPath.normalize(environmentPath).replace(/\/+$/, "") || "/";
   const resolved = posixPath.normalize(posixPath.join(root, relativePath));
-  if (resolved !== root && !resolved.startsWith(`${root}/`)) {
+  // Root "/" is its own prefix ("//" is not); every other root needs the
+  // trailing slash added back on to avoid a sibling directory with the same
+  // prefix (e.g. root "/repo" must not admit a resolved "/repo-evil/...").
+  const prefix = root === "/" ? root : `${root}/`;
+  if (resolved !== root && !resolved.startsWith(prefix)) {
     throw new Error(`workflow path escapes the environment root: ${relativePath}`);
   }
   return resolved;

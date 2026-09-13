@@ -199,6 +199,98 @@ describe("createThreadAgentBackend: completion", () => {
     const outcome = await backend.run(baseInput(g, "plan"));
     expect(outcome).toEqual({ status: "succeeded", text: "the plan is done" });
   });
+
+  it("does not lose a thread.idle delivered while the post-spawn reconcile get() is still in flight", async () => {
+    const host = makeHost();
+    // A signal, rather than a raw timing race, pins down exactly when the
+    // reconcile get() call for "worker-thread" has actually started — which
+    // is necessarily *after* reconcileOrWait has already registered its
+    // waiter (that registration is synchronous, before the get() call is
+    // even made). Firing the idle event only once this fires reproduces the
+    // "stale snapshot, taken before idle" race deterministically: the get()
+    // call's eventual (delayed) "active" response must not be allowed to
+    // clobber a completion an event already delivered while it was in flight.
+    let signalGetStarted: () => void = () => {};
+    const getStarted = new Promise<void>((resolve) => {
+      signalGetStarted = resolve;
+    });
+    host.harness.sdk.stub("threads.get", async (args: { threadId: string }) => {
+      if (args.threadId !== "worker-thread") return makeThreadResponse({ id: "origin-thread", providerId: "anthropic", projectId: "project-1", environmentId: "env-1" });
+      signalGetStarted();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return makeThreadResponse({ id: "worker-thread", status: "active" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(PLAN_GRAPH);
+
+    const runPromise = backend.run(baseInput(g, "plan"));
+    await getStarted;
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+
+    const outcome = await Promise.race([
+      runPromise,
+      new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error("HUNG: agent stage never completed")), 1500)),
+    ]);
+    expect(outcome).toEqual({ status: "succeeded", text: "the plan is done" });
+  });
+});
+
+describe("createThreadAgentBackend: cancellation", () => {
+  it("refuses to spawn a worker thread once the run has already been cancelled", async () => {
+    const host = makeHost();
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(PLAN_GRAPH);
+    const controller = new AbortController();
+    controller.abort();
+    await expect(backend.run({ ...baseInput(g, "plan"), signal: controller.signal })).rejects.toThrow(/cancelled/);
+    expect(host.harness.sdk.callsTo("threads.spawn")).toHaveLength(0);
+  });
+
+  it("stops the live worker thread and rejects the stage when the run is aborted while awaiting its completion", async () => {
+    const host = makeHost();
+    const stopCalls: unknown[] = [];
+    // Never completes on its own — only an explicit stop should ever settle this stage.
+    host.harness.sdk.stub("threads.spawn", async () => makeThreadResponse({ id: "worker-thread" }));
+    host.harness.sdk.stub("threads.stop", async (args: unknown) => {
+      stopCalls.push(args);
+      return { ok: true };
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(PLAN_GRAPH);
+    const controller = new AbortController();
+    const runPromise = backend.run({ ...baseInput(g, "plan"), signal: controller.signal });
+    await flush();
+
+    controller.abort();
+    await expect(runPromise).rejects.toThrow(/cancelled/);
+    expect(stopCalls).toEqual([{ threadId: "worker-thread" }]);
+  });
+
+  it("also stops the worker thread when the abort happens mid corrective-retry wait for a structured result", async () => {
+    const host = makeHost();
+    const stopCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async () => makeThreadResponse({ id: "worker-thread" }));
+    host.harness.sdk.stub("threads.stop", async (args: unknown) => {
+      stopCalls.push(args);
+      return { ok: true };
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      review [label="Review", prompt="Review.", output_schema="routing"]
+      start -> review -> exit
+    }`);
+    const controller = new AbortController();
+    const runPromise = backend.run({ ...baseInput(g, "review"), signal: controller.signal });
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "not json" });
+    await vi.waitFor(() => expect(host.harness.sdk.callsTo("threads.send")).toHaveLength(1));
+
+    controller.abort();
+    await expect(runPromise).rejects.toThrow(/cancelled/);
+    expect(stopCalls).toEqual([{ threadId: "worker-thread" }]);
+  });
 });
 
 describe("createThreadAgentBackend: structured results (output_schema=routing)", () => {
@@ -263,5 +355,34 @@ describe("createThreadAgentBackend: structured results (output_schema=routing)",
     await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "{}" });
     const outcome = await runPromise;
     expect(outcome).toEqual({ status: "failed", failureReason: "could not decide", text: "the plan is done" });
+  });
+});
+
+describe("createThreadAgentBackend: prompt assembly", () => {
+  it("includes each prior stage's node id, label, and status alongside its response preview", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      plan  [label="Plan", prompt="Write a plan."]
+      build [label="Build", prompt="Build it."]
+      start -> plan -> build -> exit
+    }`);
+    // As if the engine had already run "plan" (engine.ts's writeOutcomeToContext
+    // writes exactly these two keys per completed stage).
+    const context = createContext({ response: { plan: "the plan is done" }, stage_status: { plan: "succeeded" } });
+    const runPromise = backend.run({ ...baseInput(g, "build"), context });
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await runPromise;
+
+    const prompt = (spawnCalls[0] as { prompt: string }).prompt;
+    expect(prompt).toContain("plan | Plan | succeeded: the plan is done");
   });
 });

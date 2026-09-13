@@ -370,6 +370,11 @@ export class Engine {
     // "outcome=succeeded|failed" edge conditions (see the Appendix's BranchLoop
     // example's `check` node). See README "Deviations from the plan" (T4).
     context.set("last_outcome", outcome.status);
+    // Also not in the plan's literal key list: per-node outcome status,
+    // keyed by node id, so a prompt-assembly step (server/backend.ts's
+    // summarizePriorStages) can report each prior stage's status rather than
+    // only the single most recent one via last_outcome.
+    context.set(`stage_status.${node.id}`, outcome.status);
     if (outcome.text !== undefined) {
       context.set("last_response", outcome.text.slice(0, 200));
       context.set(`response.${node.id}`, outcome.text);

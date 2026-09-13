@@ -139,7 +139,15 @@ T4 adds the **BB integration** — the plugin actually runs a graph now:
   needing T4 to settle). For an `output_schema` node, the worker must call
   the `attractor_result` tool; an invalid or missing report gets up to two
   corrective re-prompts of the same thread (`bb.sdk.threads.send`) before
-  the stage is recorded failed.
+  the stage is recorded failed. Every wait also races `input.signal`: `bb
+  attractor stop`/`stopRun` aborts the engine's per-run `AbortController`,
+  which the backend observes by calling `bb.sdk.threads.stop` on the live
+  worker thread and settling the stage as cancelled — without this, a run
+  parked on an agent/prompt stage could never actually be stopped, since
+  nothing else was watching the signal. Once a stage settles (however it
+  settles), its worker thread is archived (`bb.sdk.threads.archive`),
+  best-effort, so a plugin doesn't accumulate a hidden thread per stage for
+  the life of the project.
 - `handlers/agent.ts` / `handlers/prompt.ts` — thin adapters from the
   engine's `Handler` shape onto `AgentBackend.run`, carrying the per-run
   threadId/projectId/environmentId the backend needs. `prompt` (the `tab`
@@ -315,6 +323,17 @@ bb plugin build .
   and is covered by a new `tests/engine.test.ts` case plus
   `tests/handlers/conditional.test.ts`.
 
+- **`context.stage_status.<nodeId>` (T4, new engine.ts context key).**
+  `last_outcome` only ever holds the *most recent* stage's status, but the
+  plan's "Prompt assembly" section asks the worker prompt's prior-stages
+  summary to include each prior stage's own status alongside its response
+  preview. `engine.ts`'s `writeOutcomeToContext` now also writes
+  `context.stage_status.<nodeId>` after every stage (main walk and parallel
+  branches alike, same as `last_outcome`), and `server/backend.ts`'s
+  `summarizePriorStages` reads it (plus the node's `label` from the graph) to
+  build each bullet. Additive, covered by a new `tests/engine.test.ts` case
+  plus `tests/server/backend.test.ts`'s prompt-assembly test.
+
 - **`prompt` (`tab`) nodes are not actually read-only (T4).** The plan
   describes `tab` as "single LLM call, read-only tools", but BB's plugin
   SDK has no per-tool read-only restriction a plugin can apply to a
@@ -354,14 +373,17 @@ bb plugin build .
   a clear message instead of hanging forever waiting for an answer that
   can never come.
 
-- **RPC ownership scoping (T4, not explicitly required by the plan).**
-  `server.ts`'s `getRun`/`getGraph`/`getEvents` RPC handlers check the
-  stored run's `threadId` against the caller's own `threadId` and return
-  null/empty rather than another thread's run details, matching the
-  ownership check `bb-plugin-assembly-lines`'s RPC surface already applies
-  to its jobs. Not called out in the plan's RPC list, but seemed like an
-  obvious-enough safety property to skip only with a good reason, and
-  there wasn't one.
+- **Ownership scoping applies everywhere a runId crosses a thread boundary
+  (T4, not explicitly required by the plan).** `server.ts`'s shared `owned()`
+  helper checks the stored run's `threadId` against the caller's own
+  `threadId`, matching the ownership check `bb-plugin-assembly-lines`'s RPC
+  surface already applies to its jobs. It's used by the RPC
+  `getRun`/`getGraph`/`getEvents` handlers, by the `attractor_inspect` agent
+  tool, and by every CLI subcommand that takes a runId (`status`, `stages`,
+  `events`, `stop`) — a thread cannot read another thread's run's DOT source
+  or context, nor stop its run, just by learning its id. Not called out in
+  the plan's RPC list, but seemed like an obvious-enough safety property to
+  apply consistently rather than only at the RPC surface.
 
 - **T1's scaffold test is superseded, not extended (T4).** `tests/
   scaffold.test.ts` faked a minimal `bb` object (`{ log }`) and asserted

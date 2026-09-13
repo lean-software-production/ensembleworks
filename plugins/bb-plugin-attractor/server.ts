@@ -99,18 +99,21 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     return { runId: run.id, previewDirective: directive };
   }
 
-  function inspectRun(runId: string) {
-    const { run, stages } = service.getRun(runId);
-    if (!run) throw new Error(`no such run: ${runId}`);
-    return { run, stages };
-  }
-
-  // A run's threadId is checked against the RPC caller's own threadId on
-  // every read so one thread can never read another thread's run — the same
-  // ownership rule the sibling bb-plugin-assembly-lines applies to its jobs.
+  // A run's threadId is checked against the caller's own threadId on every
+  // read (RPC, attractor_inspect, and every CLI subcommand that takes a
+  // runId) so one thread can never read — or, for `stop`, mutate — another
+  // thread's run, the same ownership rule the sibling bb-plugin-assembly-lines
+  // applies to its jobs. Defined once and reused everywhere a runId crosses a
+  // thread boundary, rather than only at the RPC surface.
   function owned(runId: string, threadId: string) {
     const { run, stages } = service.getRun(runId);
     if (!run || run.threadId !== threadId) return { run: null, stages: [] };
+    return { run, stages };
+  }
+
+  function inspectRun(runId: string, threadId: string) {
+    const { run, stages } = owned(runId, threadId);
+    if (!run) throw new Error(`no such run: ${runId}`);
     return { run, stages };
   }
 
@@ -133,7 +136,7 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     description: "Read an Attractor run's status and per-stage state.",
     instructions: TOOL_INSTRUCTIONS,
     parameters: inspectInputSchema,
-    execute: async ({ runId }) => textResult(inspectRun(runId)),
+    execute: async ({ runId }, ctx) => textResult(inspectRun(runId, ctx.threadId)),
   });
   bb.agents.registerTool({
     name: "attractor_result",
@@ -205,14 +208,15 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
           const title = titleIndex >= 0 ? rest[titleIndex + 1] : undefined;
           result = await runWorkflow({ path: rest[0], inputs, title }, ctx.threadId, ctx.projectId ?? "");
         } else if (command === "status" && rest[0]) {
-          result = service.getRun(rest[0]).run;
+          result = owned(rest[0], ctx.threadId).run;
         } else if (command === "stages" && rest[0]) {
-          result = service.getRun(rest[0]).stages;
+          result = owned(rest[0], ctx.threadId).stages;
         } else if (command === "events" && rest[0]) {
           const sinceIndex = rest.indexOf("--since");
           const sinceSeq = sinceIndex >= 0 ? Number(rest[sinceIndex + 1]) : undefined;
-          result = service.getEvents(rest[0], sinceSeq);
+          result = owned(rest[0], ctx.threadId).run ? service.getEvents(rest[0], sinceSeq) : [];
         } else if (command === "stop" && rest[0]) {
+          if (!owned(rest[0], ctx.threadId).run) throw new Error(`no such run: ${rest[0]}`);
           result = service.stopRun(rest[0]);
         } else {
           throw new Error(usage);

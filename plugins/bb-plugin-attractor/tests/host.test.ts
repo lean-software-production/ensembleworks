@@ -62,4 +62,29 @@ describe("attractor host exec entry", () => {
     expect(result.stdout.endsWith("END")).toBe(true);
     await harness.experimental_dispose();
   });
+
+  it("bounds stdout to at most MAX_OUTPUT_BYTES actual bytes, not UTF-16 code units, for multi-byte output", async () => {
+    const harness = experimental_createHostEntryHarness(hostEntry);
+    // "é" is 2 UTF-8 bytes but 1 UTF-16 code unit — a byte-correct bound must
+    // still cap the wire payload at 64 KiB of bytes, not 64 Ki *characters*.
+    const result = await harness.experimental_call("exec", {
+      script: "node -e \"process.stdout.write('\\u00e9'.repeat(60000))\"",
+      cwd: await cwd(),
+    });
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(64 * 1024);
+    await harness.experimental_dispose();
+  });
+
+  it("does not crash the host on EPIPE when a script exits without draining a large stdin payload", async () => {
+    const harness = experimental_createHostEntryHarness(hostEntry);
+    // Larger than any OS pipe buffer; `echo`/`exit` never read stdin, so the
+    // write below hits EPIPE once the child's stdin fd closes on exit.
+    const result = await harness.experimental_call("exec", {
+      script: "echo ignored; exit 0",
+      cwd: await cwd(),
+      stdin: "x".repeat(900_000),
+    });
+    expect(result.exitCode).toBe(0);
+    await harness.experimental_dispose();
+  });
 });

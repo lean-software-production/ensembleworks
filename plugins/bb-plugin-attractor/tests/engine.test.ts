@@ -721,6 +721,33 @@ describe("engine: last_outcome context key (T4: lets a conditional/diamond node 
   });
 });
 
+describe("engine: stage_status context key (T4: lets prompt assembly report each prior stage's outcome, not just the latest)", () => {
+  it("writes context.stage_status.<nodeId> for every node it visits, keyed by node id rather than overwritten like last_outcome", async () => {
+    const graph = graphFrom(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      plan  [prompt="plan"]
+      build [prompt="build"]
+      start -> plan -> build -> exit
+    }`);
+    const handlers = baseHandlers({
+      agent: {
+        run: async (input) => ({ status: input.node.id === "plan" ? "failed" : "succeeded" }),
+      },
+    });
+    const { clock } = makeClock();
+    const result = await runEngine({ graph, handlers, runId: "r", clock, signal: NEVER_ABORT, onEvent: () => {} });
+
+    const stageStatus = result.context.stage_status as Record<string, unknown>;
+    // Default on_failure="route" lets the walk fall through plan's
+    // unconditional edge to "build" despite plan's failure; both nodes' own
+    // statuses must remain independently readable rather than one clobbering
+    // the other (unlike last_outcome, which only ever holds the latest).
+    expect(stageStatus.plan).toBe("failed");
+    expect(stageStatus.build).toBe("succeeded");
+  });
+});
+
 describe("engine: context writes never pollute Object.prototype", () => {
   afterEach(() => {
     delete (Object.prototype as Record<string, unknown>).polluted2;

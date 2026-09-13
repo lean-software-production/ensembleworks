@@ -189,6 +189,75 @@ describe("attractor server plugin", () => {
     expect(result.stderr).toContain("bb attractor");
   });
 
+  it("CLI: events --since only returns events after the given seq", async () => {
+    const host = makeHost();
+    await plugin(host.bb);
+    const ran = JSON.parse((await host.harness.behavior.runCli(["run", "workflows/plan.dot"], { threadId: "thread-1", projectId: "project-1" })).stdout);
+    await waitForTerminalStatus(host, ran.runId);
+
+    const all = JSON.parse((await host.harness.behavior.runCli(["events", ran.runId], { threadId: "thread-1" })).stdout) as Array<{ seq: number }>;
+    expect(all.length).toBeGreaterThan(1);
+    const midSeq = all[0].seq;
+
+    const since = JSON.parse((await host.harness.behavior.runCli(["events", ran.runId, "--since", String(midSeq)], { threadId: "thread-1" })).stdout) as Array<{ seq: number }>;
+    expect(since.every((e) => e.seq > midSeq)).toBe(true);
+    expect(since.length).toBe(all.length - 1);
+  });
+
+  it("bb attractor stop unwedges a run parked on an agent stage awaiting a worker thread that never completes on its own", async () => {
+    const host = makeHost();
+    // Never auto-completes: only the CLI stop below should ever settle it.
+    host.harness.sdk.stub("threads.spawn", async () => makeThreadResponse({ id: "worker-thread" }));
+    const stopCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.stop", async (args: unknown) => {
+      stopCalls.push(args);
+      return { ok: true };
+    });
+    await plugin(host.bb);
+
+    const ran = JSON.parse((await host.harness.behavior.runCli(["run", "workflows/plan.dot"], { threadId: "thread-1", projectId: "project-1" })).stdout);
+    await vi.waitFor(() => expect(host.harness.sdk.callsTo("threads.spawn").length).toBeGreaterThan(0));
+
+    const stopResult = await host.harness.behavior.runCli(["stop", ran.runId], { threadId: "thread-1" });
+    expect(stopResult.exitCode).toBe(0);
+
+    await vi.waitFor(async () => {
+      const status = JSON.parse((await host.harness.behavior.runCli(["status", ran.runId], { threadId: "thread-1" })).stdout).status;
+      expect(status).not.toBe("running");
+    }, { timeout: 2000 });
+
+    const finalStatus = JSON.parse((await host.harness.behavior.runCli(["status", ran.runId], { threadId: "thread-1" })).stdout).status;
+    expect(finalStatus).toBe("cancelled");
+    expect(stopCalls).toEqual([{ threadId: "worker-thread" }]);
+  });
+
+  it("attractor_inspect and every CLI runId subcommand are scoped to the owning thread", async () => {
+    const host = makeHost();
+    await plugin(host.bb);
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await waitForTerminalStatus(host, runId);
+
+    await expect(
+      host.harness.behavior.callAgentTool("attractor_inspect", { runId }, { threadId: "another-thread", projectId: "project-1" }),
+    ).rejects.toThrow(/no such run/);
+
+    const foreignStatus = await host.harness.behavior.runCli(["status", runId], { threadId: "another-thread" });
+    expect(JSON.parse(foreignStatus.stdout)).toBeNull();
+
+    const foreignStages = await host.harness.behavior.runCli(["stages", runId], { threadId: "another-thread" });
+    expect(JSON.parse(foreignStages.stdout)).toEqual([]);
+
+    const foreignEvents = await host.harness.behavior.runCli(["events", runId], { threadId: "another-thread" });
+    expect(JSON.parse(foreignEvents.stdout)).toEqual([]);
+
+    const foreignStop = await host.harness.behavior.runCli(["stop", runId], { threadId: "another-thread" });
+    expect(foreignStop.exitCode).toBe(1);
+
+    // The owning thread can still do all of the above.
+    const ownStatus = await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" });
+    expect(JSON.parse(ownStatus.stdout).id).toBe(runId);
+  });
+
   it("RPC: getRun/listRuns/getGraph/getEvents read back a run, scoped to its owning thread", async () => {
     const host = makeHost();
     await plugin(host.bb);

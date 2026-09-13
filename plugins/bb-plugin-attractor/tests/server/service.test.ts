@@ -20,6 +20,16 @@ describe("resolveWorkflowPath", () => {
   it("rejects an absolute path", () => {
     expect(() => resolveWorkflowPath("/etc/passwd", "/repo")).toThrow(/escapes|absolute/);
   });
+
+  it("tolerates a trailing slash on the environment root instead of rejecting every relative path", () => {
+    expect(resolveWorkflowPath("plan.dot", "/repo/")).toBe("/repo/plan.dot");
+    expect(resolveWorkflowPath("workflows/plan.dot", "/repo/")).toBe("/repo/workflows/plan.dot");
+    expect(() => resolveWorkflowPath("../secrets.dot", "/repo/")).toThrow(/escapes/);
+  });
+
+  it("still handles the environment root being exactly '/'", () => {
+    expect(resolveWorkflowPath("plan.dot", "/")).toBe("/plan.dot");
+  });
 });
 
 const hosts: ReturnType<typeof createFakePluginHost>[] = [];
@@ -153,5 +163,25 @@ describe("createService: run lifecycle", () => {
     const view = service.getGraph(run.id);
     expect(view?.nodes.find((n) => n.id === "plan")).toMatchObject({ status: "succeeded", visit: 1 });
     expect(view?.edges).toContainEqual({ from: "start", to: "plan", label: null, condition: null });
+  });
+
+  it("stopRun aborts the run's controller, letting a backend that observes the signal unwedge the stage", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    // A stand-in for server/backend.ts's real behaviour post-fix: it never
+    // resolves on its own, only on the signal it was handed.
+    const backend = fakeBackend(
+      (input: AgentRunInput) =>
+        new Promise((_resolve, reject) => {
+          input.signal.addEventListener("abort", () => reject(new Error("worker thread stopped: run was cancelled")), { once: true });
+        }),
+    );
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient() });
+
+    const { run } = await service.createAndStartRun({ source: SIMPLE_GRAPH, threadId: "origin-thread", projectId: "project-1", environmentId: "env-1" });
+    await vi.waitFor(() => expect(store.getRun(run.id).status).toBe("running"));
+
+    service.stopRun(run.id);
+    await vi.waitFor(() => expect(store.getRun(run.id).status).toBe("cancelled"));
   });
 });
