@@ -265,9 +265,13 @@ function checkHumanGates(graph: WorkflowGraph, diagnostics: Diagnostic[]): void 
 // own `reviewTarget.error`, not a validation diagnostic.
 function checkReviewTarget(graph: WorkflowGraph, diagnostics: Diagnostic[]): void {
   for (const node of graph.nodes.values()) {
-    if (node.reviewTarget !== undefined && node.reviewTarget.trim().length === 0) {
+    if (node.reviewTarget === undefined) continue;
+    // The attribute is coerced, not typed, at parse time: Fabro's own spelling
+    // `review_target=true` (a boolean) or a number must produce a diagnostic,
+    // not a TypeError out of `.trim()`.
+    if (typeof node.reviewTarget !== "string" || node.reviewTarget.trim().length === 0) {
       diagnostics.push(
-        error("invalid-review-target", `node '${node.id}' has an empty review_target`, { nodeId: node.id }),
+        error("invalid-review-target", `node '${node.id}' has an invalid review_target (expected a non-empty workspace-relative path)`, { nodeId: node.id }),
       );
     }
   }

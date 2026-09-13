@@ -170,6 +170,15 @@ describe("dot/validate", () => {
     expect(codes(source)).toContain("invalid-review-target");
   });
 
+  it("flags a non-string review_target (Fabro's boolean spelling) with a diagnostic rather than throwing", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon, review_target=true] start->gate gate->exit[label="[A] Approve"] }';
+    expect(codes(source)).toContain("invalid-review-target");
+    const numeric =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon, review_target=5] start->gate gate->exit[label="[A] Approve"] }';
+    expect(codes(numeric)).toContain("invalid-review-target");
+  });
+
   it("does not flag a non-empty review_target", () => {
     const source =
       'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon, review_target="PLAN.md"] start->gate gate->exit[label="[A] Approve"] }';
