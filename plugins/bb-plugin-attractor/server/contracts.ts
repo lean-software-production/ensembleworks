@@ -48,6 +48,7 @@ export const stageSchema = z.object({
   model: z.string().nullable(),
   reasoningLevel: z.string().nullable(),
   actor: stageActorSchema.nullable(),
+  waitingReason: z.string().nullable(),
   startedAt: z.number(),
   completedAt: z.number().nullable(),
 });
@@ -66,6 +67,8 @@ export const graphNodeSchema = z.object({
   visit: z.number(),
   model: z.string().nullable(),
   provider: z.string().nullable(),
+  /** The latest stage's waiting reason (kind), when this node is currently "blocked" — null otherwise (dogfood-2 fix's `agent.waiting`). */
+  waitingReason: z.string().nullable(),
 });
 
 export const graphEdgeSchema = z.object({

@@ -61,6 +61,34 @@ describe("engine/events: stage-scoped event emitter", () => {
     expect(events).toEqual([{ type: "human.answered", runId: "run-1", ts: 1, stageId: "approve@1", nodeId: "approve", answer: "Approve", actor: "ui" }]);
   });
 
+  it("stamps agent.waiting with the worker threadId/interactionId/kind/title", () => {
+    const events: RunEvent[] = [];
+    const emit = createStageEmitter({
+      runId: "run-1",
+      stageId: "implement@1",
+      nodeId: "implement",
+      now: () => 9,
+      onEvent: (e) => events.push(e),
+    });
+    emit({ type: "agent.waiting", threadId: "worker-1", interactionId: "int-1", kind: "permission", title: "Edit file.ts" });
+    expect(events).toEqual([
+      { type: "agent.waiting", runId: "run-1", ts: 9, stageId: "implement@1", nodeId: "implement", threadId: "worker-1", interactionId: "int-1", kind: "permission", title: "Edit file.ts" },
+    ]);
+  });
+
+  it("stamps agent.resumed with the worker threadId", () => {
+    const events: RunEvent[] = [];
+    const emit = createStageEmitter({
+      runId: "run-1",
+      stageId: "implement@1",
+      nodeId: "implement",
+      now: () => 10,
+      onEvent: (e) => events.push(e),
+    });
+    emit({ type: "agent.resumed", threadId: "worker-1" });
+    expect(events).toEqual([{ type: "agent.resumed", runId: "run-1", ts: 10, stageId: "implement@1", nodeId: "implement", threadId: "worker-1" }]);
+  });
+
   it("calls now() fresh for each emitted event", () => {
     const events: RunEvent[] = [];
     let t = 0;

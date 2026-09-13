@@ -16,7 +16,7 @@ afterEach(cleanup);
 import type { RunEvent } from "../../engine/types";
 
 function node(id: string, overrides: Partial<GraphView["nodes"][number]> = {}): GraphView["nodes"][number] {
-  return { id, label: id, shape: "box", handlerKind: "agent", goalGate: false, status: null, visit: 0, model: null, provider: null, ...overrides };
+  return { id, label: id, shape: "box", handlerKind: "agent", goalGate: false, status: null, visit: 0, model: null, provider: null, waitingReason: null, ...overrides };
 }
 
 const GRAPH: GraphView = {
@@ -50,25 +50,50 @@ describe("DagView", () => {
     };
     const { container } = render(<DagView graph={graphWithConditional} events={[]} />);
     // Fingerprint the node's primary outline element the same way regardless
-    // of whether it's a <rect> or a <polygon>, so "exit now uses a distinct
-    // shape from agent/prompt" and "start is distinct from conditional" are
-    // both provable even though both pairs used to render byte-identical
+    // of whether it's a <rect>, <polygon> or <ellipse>, so every pair below
+    // is provably distinct even though several used to render byte-identical
     // outlines (same tag, same attributes).
+    const selector = (id: string) => `[data-node-id="${id}"] polygon, [data-node-id="${id}"] rect, [data-node-id="${id}"] ellipse`;
     const outlineOf = (id: string) => {
-      const el = container.querySelector(`[data-node-id="${id}"] polygon, [data-node-id="${id}"] rect`)!;
+      const el = container.querySelector(selector(id))!;
       return [el.tagName, el.getAttribute("points"), el.getAttribute("rx"), el.getAttribute("width"), el.getAttribute("height")].join("|");
     };
-    const shapeOf = (id: string) => container.querySelector(`[data-node-id="${id}"] polygon, [data-node-id="${id}"] rect`)?.tagName;
+    const shapeOf = (id: string) => container.querySelector(selector(id))?.tagName;
     expect(shapeOf("start")).toBe("polygon");
     expect(shapeOf("approve")).toBe("polygon"); // human
     expect(shapeOf("build")).toBe("polygon"); // command
-    // exit (Msquare) must no longer be a plain rect indistinguishable from an agent/prompt node.
-    expect(outlineOf("exit")).not.toBe(outlineOf("plan")); // plan is a "prompt" node, falls to the default rect too
+    expect(shapeOf("plan")).toBe("ellipse"); // prompt
+    expect(shapeOf("exit")).toBe("polygon");
+    // exit (Msquare) must no longer be a plain rect indistinguishable from an agent/prompt node — it's a distinct shape entirely (polygon vs. ellipse).
+    expect(outlineOf("exit")).not.toBe(outlineOf("plan"));
     // start (Mdiamond) must no longer share conditional's plain diamond outline.
     expect(outlineOf("start")).not.toBe(outlineOf("check"));
     // start (diamond) and approve (hexagon) and build (parallelogram) must not share the same outline.
     const shapes = new Set([outlineOf("start"), outlineOf("approve"), outlineOf("build")]);
     expect(shapes.size).toBe(3);
+  });
+
+  it("renders agent and prompt nodes as ellipses", () => {
+    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    expect(container.querySelector('[data-node-id="plan"] ellipse')).toBeTruthy();
+  });
+
+  it("titles a blocked agent/prompt node with its waiting reason (dogfood-2 fix)", () => {
+    const blockedGraph: GraphView = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((n) => (n.id === "plan" ? { ...n, status: "blocked" as const, waitingReason: "permission" } : n)),
+    };
+    const { container } = render(<DagView graph={blockedGraph} events={[]} />);
+    expect(container.querySelector('[data-node-id="plan"] title')?.textContent).toBe("Waiting: permission in worker thread");
+  });
+
+  it("does not title a blocked node when it has no waiting reason (e.g. a human gate)", () => {
+    const blockedGraph: GraphView = {
+      ...GRAPH,
+      nodes: GRAPH.nodes.map((n) => (n.id === "approve" ? { ...n, status: "blocked" as const } : n)),
+    };
+    const { container } = render(<DagView graph={blockedGraph} events={[]} />);
+    expect(container.querySelector('[data-node-id="approve"] title')).toBeNull();
   });
 
   it("colors nodes by status", () => {
@@ -77,6 +102,24 @@ describe("DagView", () => {
     expect(container.querySelector('[data-node-id="plan"]')?.getAttribute("data-status")).toBe("running");
     expect(container.querySelector('[data-node-id="build"]')?.getAttribute("data-status")).toBe("failed");
     expect(container.querySelector('[data-node-id="approve"]')?.getAttribute("data-status")).toBe("pending");
+  });
+
+  it("fills/strokes each status with the Graphviz-card palette, hollow pending, and a heavier stroke on the running node", () => {
+    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    const outlineOf = (id: string) => container.querySelector(`[data-node-id="${id}"] polygon, [data-node-id="${id}"] rect, [data-node-id="${id}"] ellipse`)!;
+    const start = outlineOf("start"); // succeeded
+    expect(start.getAttribute("fill")).toBe("#dcfce7");
+    expect(start.getAttribute("stroke")).toBe("#16a34a");
+    const plan = outlineOf("plan"); // running
+    expect(plan.getAttribute("fill")).toBe("#dbeafe");
+    expect(plan.getAttribute("stroke")).toBe("#2563eb");
+    expect(plan.getAttribute("stroke-width")).toBe("2.5");
+    const build = outlineOf("build"); // failed
+    expect(build.getAttribute("fill")).toBe("#fee2e2");
+    expect(build.getAttribute("stroke")).toBe("#dc2626");
+    const approve = outlineOf("approve"); // pending — hollow
+    expect(approve.getAttribute("fill")).toBe("#ffffff");
+    expect(approve.getAttribute("stroke")).toBe("#94a3b8");
   });
 
   it("shows a visit badge only when visit > 1", () => {
@@ -127,11 +170,11 @@ describe("DagView", () => {
     expect(onOpenThread).not.toHaveBeenCalled();
   });
 
-  it("gives every untraversed edge a legible, solid, dark stroke — not the old near-invisible light dashed line", () => {
+  it("gives every untraversed edge a legible, solid, grey Graphviz-style stroke — not the old near-invisible light dashed line", () => {
     const { container } = render(<DagView graph={GRAPH} events={[]} />);
     const untraversed = container.querySelector('[data-edge="approve->build"]')!;
-    expect(untraversed.getAttribute("stroke")).toBe("#64748b");
-    expect(untraversed.getAttribute("stroke-width")).toBe("1.5");
+    expect(untraversed.getAttribute("stroke")).toBe("#94a3b8");
+    expect(untraversed.getAttribute("stroke-width")).toBe("1.25");
     expect(untraversed.getAttribute("stroke-dasharray")).toBeNull();
   });
 
@@ -155,17 +198,23 @@ describe("DagView", () => {
     const { container } = render(<DagView graph={loopGraph} events={[]} />);
     const backEdge = container.querySelector('[data-edge="b->a"]')!;
     expect(backEdge.getAttribute("data-back-edge")).toBe("true");
-    expect(backEdge.getAttribute("stroke")).toBe("#64748b");
-    expect(backEdge.getAttribute("stroke-width")).toBe("1.5");
+    expect(backEdge.getAttribute("stroke")).toBe("#94a3b8");
+    expect(backEdge.getAttribute("stroke-width")).toBe("1.25");
     expect(backEdge.getAttribute("stroke-dasharray")).not.toBeNull();
   });
 
-  it("draws an edge's DOT label on the diagram at its midpoint, backed by a white rect, and keeps the title tooltip", () => {
+  it("draws an edge's DOT label on the diagram at its midpoint with a white text halo (no background rect), and keeps the title tooltip", () => {
     const { container } = render(<DagView graph={GRAPH} events={EVENTS} />);
     const labelGroup = container.querySelector('[data-edge-label="plan->approve"]')!;
     expect(labelGroup).toBeTruthy();
-    expect(labelGroup.querySelector("text")?.textContent).toBe("[A] Approve");
-    expect(labelGroup.querySelector("rect")).toBeTruthy();
+    const text = labelGroup.querySelector("text")!;
+    expect(text.textContent).toBe("[A] Approve");
+    expect(text.getAttribute("paint-order")).toBe("stroke");
+    expect(text.getAttribute("stroke")).toBe("#fff");
+    expect(text.getAttribute("stroke-width")).toBe("3");
+    expect(text.getAttribute("fill")).toBe("#475569");
+    expect(text.getAttribute("font-size")).toBe("11");
+    expect(labelGroup.querySelector("rect")).toBeNull();
     expect(container.querySelector('[data-edge="plan->approve"] title')?.textContent).toContain("preferred_label");
   });
 

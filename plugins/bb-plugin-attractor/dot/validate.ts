@@ -158,6 +158,7 @@ function checkRetryTargets(graph: WorkflowGraph, diagnostics: Diagnostic[]): voi
 
 const ON_FAILURE_VALUES = new Set(["route", "exit", "succeed"]);
 const REASONING_EFFORT_VALUES = new Set(["low", "medium", "high"]);
+const PERMISSION_MODE_VALUES = new Set(["accept-edits", "workspace-write", "auto", "full", "readonly"]);
 
 function checkEnumsAndNumerics(graph: WorkflowGraph, diagnostics: Diagnostic[]): void {
   const checkOnFailure = (value: string | undefined, source: string): void => {
@@ -173,6 +174,15 @@ function checkEnumsAndNumerics(graph: WorkflowGraph, diagnostics: Diagnostic[]):
 
   checkOnFailure(graph.onFailure, "the graph");
 
+  if (graph.defaultPermissionMode !== undefined && !PERMISSION_MODE_VALUES.has(graph.defaultPermissionMode)) {
+    diagnostics.push(
+      error(
+        "invalid-enum-value",
+        `the graph has default_permission_mode='${graph.defaultPermissionMode}', which is not one of accept-edits|workspace-write|auto|full|readonly`,
+      ),
+    );
+  }
+
   for (const node of graph.nodes.values()) {
     checkOnFailure(node.onFailure, `node '${node.id}'`);
 
@@ -181,6 +191,16 @@ function checkEnumsAndNumerics(graph: WorkflowGraph, diagnostics: Diagnostic[]):
         error(
           "invalid-enum-value",
           `node '${node.id}' has reasoning_effort='${node.reasoningEffort}', which is not one of low|medium|high`,
+          { nodeId: node.id },
+        ),
+      );
+    }
+
+    if (node.permissionMode !== undefined && !PERMISSION_MODE_VALUES.has(node.permissionMode)) {
+      diagnostics.push(
+        error(
+          "invalid-enum-value",
+          `node '${node.id}' has permission_mode='${node.permissionMode}', which is not one of accept-edits|workspace-write|auto|full|readonly`,
           { nodeId: node.id },
         ),
       );

@@ -71,6 +71,8 @@ export interface GraphNodeView {
    * and does not persist per-stage. See README "Deviations from the plan". */
   model: string | null;
   provider: string | null;
+  /** The latest stage's waiting reason (kind), when this node is currently "blocked" — null otherwise (dogfood-2 fix's `agent.waiting`). */
+  waitingReason: string | null;
 }
 export interface GraphEdgeView {
   from: string;
@@ -100,6 +102,7 @@ function toGraphView(graph: WorkflowGraph, stages: Stage[]): GraphView {
       visit: stage?.visit ?? 0,
       model: node.model ?? null,
       provider: node.provider ?? null,
+      waitingReason: stage?.waitingReason ?? null,
     };
   });
   const edges = graph.edges.map((edge) => ({ from: edge.from, to: edge.to, label: edge.label ?? null, condition: edge.condition ?? null }));
@@ -186,6 +189,27 @@ function applyEventToStore(store: RunStore, runId: string, event: RunEvent): voi
       store.setStageStatus(runId, event.nodeId, visit, "running");
       store.setStatus(runId, "running");
       if (event.actor) store.setStageActor(runId, event.nodeId, visit, event.actor);
+      return;
+    }
+    // Dogfood-2 fix: a worker thread stopped on its own pending interaction —
+    // mirrors human.requested/answered above (blocked stage + blocked run),
+    // with the interaction's kind persisted as the stage's waiting reason so
+    // both the stage table and the DAG can show *what* it's waiting on.
+    case "agent.waiting": {
+      const visit = parseVisitFromStageId(event.stageId, event.nodeId);
+      store.setStageStatus(runId, event.nodeId, visit, "blocked");
+      store.setStageWaitingReason(runId, event.nodeId, visit, event.kind);
+      store.setStatus(runId, "blocked");
+      return;
+    }
+    case "agent.resumed": {
+      const visit = parseVisitFromStageId(event.stageId, event.nodeId);
+      store.setStageStatus(runId, event.nodeId, visit, "running");
+      store.setStageWaitingReason(runId, event.nodeId, visit, null);
+      // Only clear the run's own "blocked" status if nothing else is still
+      // waiting (another agent.waiting stage, or an unrelated human gate).
+      const stillBlocked = store.listStages(runId).some((s) => s.status === "blocked");
+      if (!stillBlocked) store.setStatus(runId, "running");
       return;
     }
     default:

@@ -44,7 +44,11 @@ Useful node attributes: `max_visits` (loop cap), `max_retries` (retries a
 thrown/infra fault, not a business failure), `goal_gate=true` (the run only
 succeeds if every goal-gated node's last outcome was `succeeded` or
 `partially_succeeded`), `model`/`provider`/`reasoning_effort` (or a graph-level
-`model_stylesheet`), `output_schema="routing"` (the stage must call the
+`model_stylesheet`), `permission_mode` (`accept-edits`\|`workspace-write`\|
+`auto`\|`full`\|`readonly`; a graph-level `default_permission_mode` sets the
+fallback) — **a spawned worker still inherits the origin thread's own
+permission ceiling**, so a node asking for more than that thread allows gets
+capped, not upgraded, `output_schema="routing"` (the stage must call the
 `attractor_result` tool with a structured routing decision instead of just
 answering in text).
 
@@ -91,15 +95,34 @@ attractor_run({ path: "workflows/plan-implement-review.dot", title: "Ship the fi
 Each agent/prompt stage's prompt includes a bullet per prior stage (node id,
 label, status, and up to 400 characters of its response, marked
 `…[truncated]` when cut) — the full text is always available to a later
-stage via `context.response.<node_id>`.
+stage via `context.response.<node_id>`. When `context.parallel.results` is
+non-empty (a fan-in/digest stage right after a `parallel`/`parallel.fan_in`
+pair), the prompt also gets a `Parallel results (N):` section, one bullet
+per branch (`- <branch id> | <status>: <text preview>`), so a digest stage
+can actually see what each branch said, not just its status.
 
 ## Inspecting a run
 
 `attractor_inspect({ runId })` returns the run's status
-(`running`/`blocked`/`succeeded`/`failed`/`cancelled`; `blocked` means a
-human gate is waiting for an answer) and every stage's status, visit
-count, and (for an agent/prompt stage) its worker `threadId` — open that
-thread to read the stage's own conversation.
+(`running`/`blocked`/`succeeded`/`failed`/`cancelled`) and every stage's
+status, visit count, and (for an agent/prompt stage) its worker `threadId` —
+open that thread to read the stage's own conversation.
+
+`blocked` means either a human gate is waiting for an answer, or an
+agent/prompt stage's own worker thread is stopped on **its** pending
+interaction — a permission prompt, a file-change approval, a plan
+confirmation, or a plugin-rendered question, whatever the provider or a
+plugin asked mid-turn. A blocked stage's `waitingReason` names what kind of
+prompt it is; the DAG card renders that node amber with a "Waiting: `<kind>`
+in worker thread" tooltip, and the stage table shows "waiting: `<kind>`"
+next to an "Open thread" link. Click the node (or "Open thread") to jump
+into the worker thread and answer the prompt like you would in any other
+thread; from a terminal instead:
+
+```
+bb thread interactions list <workerThreadId>
+bb thread interactions approve <interactionId> <workerThreadId>   # or: grant
+```
 
 ## From a terminal
 

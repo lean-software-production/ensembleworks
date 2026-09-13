@@ -40,9 +40,9 @@ const RUN: RunView = {
 const GRAPH: GraphView = {
   rankdir: "TB",
   nodes: [
-    { id: "start", label: "start", shape: "Mdiamond", handlerKind: "start", goalGate: false, status: "succeeded", visit: 1, model: null, provider: null },
-    { id: "plan", label: "Plan", shape: "tab", handlerKind: "prompt", goalGate: false, status: "running", visit: 1, model: "claude-sonnet-5", provider: "anthropic" },
-    { id: "exit", label: "exit", shape: "Msquare", handlerKind: "exit", goalGate: false, status: null, visit: 0, model: null, provider: null },
+    { id: "start", label: "start", shape: "Mdiamond", handlerKind: "start", goalGate: false, status: "succeeded", visit: 1, model: null, provider: null, waitingReason: null },
+    { id: "plan", label: "Plan", shape: "tab", handlerKind: "prompt", goalGate: false, status: "running", visit: 1, model: "claude-sonnet-5", provider: "anthropic", waitingReason: null },
+    { id: "exit", label: "exit", shape: "Msquare", handlerKind: "exit", goalGate: false, status: null, visit: 0, model: null, provider: null, waitingReason: null },
   ],
   edges: [
     { from: "start", to: "plan", label: null, condition: null },
@@ -51,8 +51,8 @@ const GRAPH: GraphView = {
 };
 
 const STAGES: StageView[] = [
-  { runId: "run-1", stageId: "start@1", nodeId: "start", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, providerId: null, model: null, reasoningLevel: null, actor: null, startedAt: 1_000, completedAt: 1_200 },
-  { runId: "run-1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: "worker-thread-1", providerId: null, model: null, reasoningLevel: null, actor: null, startedAt: 1_200, completedAt: null },
+  { runId: "run-1", stageId: "start@1", nodeId: "start", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: null, startedAt: 1_000, completedAt: 1_200 },
+  { runId: "run-1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: "worker-thread-1", providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: null, startedAt: 1_200, completedAt: null },
 ];
 
 function baseRpc(overrides: Partial<{ run: RunView | null; stages: StageView[]; graph: GraphView | null }> = {}) {
@@ -141,7 +141,7 @@ describe("Attractor app", () => {
     expect(slot.container.querySelector('[data-node-id="start"][data-status="succeeded"]')).toBeTruthy();
   });
 
-  it("lays out the directive's 'Show stages' and 'Open in right panel' buttons in a gapped row, not run together", async () => {
+  it("puts the chevron ('Open in right panel') in the card's header row, separate from the footer's 'Show stages' toggle", async () => {
     const app = await loadPluginApp(() => import("../app"));
     const slot = renderSlot(
       app.messageDirectives[0]!,
@@ -149,9 +149,102 @@ describe("Attractor app", () => {
       { rpc: baseRpc() },
     );
     const showStages = await slot.findByRole("button", { name: /show stages/i });
-    const row = showStages.parentElement as HTMLElement;
-    expect(row.style.display).toBe("flex");
-    expect(Number.parseInt(row.style.gap, 10)).toBeGreaterThanOrEqual(8);
+    const chevron = await slot.findByRole("button", { name: /open in (right )?panel/i });
+    expect(chevron).not.toBe(showStages);
+    expect(chevron.parentElement).not.toBe(showStages.parentElement);
+  });
+
+  it("renders the directive as a dark BB card (rounded, bordered, max-w-md)", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.messageDirectives[0]!,
+      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
+      { rpc: baseRpc() },
+    );
+    await slot.findByText("Plan Implement Review");
+    const card = slot.container.querySelector(".rounded-lg.border.border-border.bg-card")!;
+    expect(card).toBeTruthy();
+    expect(card.className).toContain("max-w-md");
+    expect(card.className).toContain("shadow-sm");
+  });
+
+  it("colors the status word by run status", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const cases: [string, string][] = [
+      ["running", "text-amber-600"],
+      ["blocked", "text-amber-600"],
+      ["succeeded", "text-green-600"],
+      ["failed", "text-destructive"],
+      ["cancelled", "text-muted-foreground"],
+    ];
+    for (const [status, expectedClass] of cases) {
+      const slot = renderSlot(
+        app.messageDirectives[0]!,
+        { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
+        { rpc: baseRpc({ run: { ...RUN, status: status as RunView["status"] } }) },
+      );
+      await waitFor(() => expect(slot.container.querySelector("[data-run-status]")?.textContent).toBe(status));
+      expect(slot.container.querySelector("[data-run-status]")?.className).toContain(expectedClass);
+      cleanup();
+    }
+  });
+
+  it("shows the first 8 characters of the run id in monospace, next to the status", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.messageDirectives[0]!,
+      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
+      { rpc: baseRpc() },
+    );
+    await slot.findByText("Plan Implement Review");
+    const shortId = slot.getByText(RUN.id.slice(0, 8));
+    expect(shortId.className).toContain("font-mono");
+    expect(shortId.className).toContain("text-xs");
+    expect(shortId.className).toContain("text-muted-foreground");
+  });
+
+  it("shows the stages/elapsed summary line and a legend with Completed/Running/Failed/Blocked/Pending", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.messageDirectives[0]!,
+      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
+      { rpc: baseRpc() },
+    );
+    await slot.findByText(/Stages: \d+\/\d+/);
+    expect(slot.getByText(/Elapsed:/)).toBeTruthy();
+    expect(slot.getByText("Completed")).toBeTruthy();
+    expect(slot.getByText("Running")).toBeTruthy();
+    expect(slot.getByText("Failed")).toBeTruthy();
+    expect(slot.getByText("Blocked")).toBeTruthy();
+    expect(slot.getByText("Pending")).toBeTruthy();
+  });
+
+  it("shows a 'Waiting: <node label>' summary suffix when the run is blocked", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const stages: StageView[] = [
+      { ...STAGES[0]!, },
+      { ...STAGES[1]!, status: "blocked" },
+    ];
+    const slot = renderSlot(
+      app.messageDirectives[0]!,
+      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
+      { rpc: baseRpc({ run: { ...RUN, status: "blocked" }, stages }) },
+    );
+    await waitFor(() => expect(slot.container.querySelector("[data-run-status]")?.textContent).toBe("blocked"));
+    expect(slot.getByText(/Waiting: Plan/)).toBeTruthy();
+  });
+
+  it("wraps the DAG's svg inside a white rounded box", async () => {
+    const app = await loadPluginApp(() => import("../app"));
+    const slot = renderSlot(
+      app.messageDirectives[0]!,
+      { attributes: { run: "run-1" }, source: '::attractor-run{run="run-1"}', message: { id: "m1", threadId: "thread-1", turnId: null, projectId: null }, openWorkspaceFile: null },
+      { rpc: baseRpc() },
+    );
+    await slot.findByText("Plan Implement Review");
+    const box = slot.container.querySelector(".bg-white.rounded-md")!;
+    expect(box).toBeTruthy();
+    expect(box.querySelector("svg")).toBeTruthy();
   });
 
   it("opens the thread panel from the directive's 'Open in right panel' action", async () => {

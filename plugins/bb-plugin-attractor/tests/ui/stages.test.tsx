@@ -30,7 +30,7 @@ describe("formatDuration", () => {
 });
 
 function node(id: string, overrides: Partial<GraphView["nodes"][number]> = {}): GraphView["nodes"][number] {
-  return { id, label: id, shape: "box", handlerKind: "agent", goalGate: false, status: null, visit: 0, model: null, provider: null, ...overrides };
+  return { id, label: id, shape: "box", handlerKind: "agent", goalGate: false, status: null, visit: 0, model: null, provider: null, waitingReason: null, ...overrides };
 }
 
 const GRAPH: GraphView = {
@@ -40,8 +40,8 @@ const GRAPH: GraphView = {
 };
 
 const STAGES: StageView[] = [
-  { runId: "r1", stageId: "start@1", nodeId: "start", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, providerId: null, model: null, reasoningLevel: null, actor: null, startedAt: 1000, completedAt: 1500 },
-  { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: "thread-9", providerId: null, model: null, reasoningLevel: null, actor: null, startedAt: 2000, completedAt: null },
+  { runId: "r1", stageId: "start@1", nodeId: "start", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: null, startedAt: 1000, completedAt: 1500 },
+  { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: "thread-9", providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: null, startedAt: 2000, completedAt: null },
 ];
 
 describe("StageList", () => {
@@ -69,7 +69,7 @@ describe("StageList", () => {
 
   it("prefers the stage's actually-resolved provider/model tuple over the node's merely-declared one", () => {
     const stages: StageView[] = [
-      { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: "thread-9", providerId: "openai", model: "gpt-5", reasoningLevel: "high", actor: null, startedAt: 1000, completedAt: 1500 },
+      { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: "thread-9", providerId: "openai", model: "gpt-5", reasoningLevel: "high", actor: null, waitingReason: null, startedAt: 1000, completedAt: 1500 },
     ];
     const { container } = render(<StageList stages={stages} graph={GRAPH} now={2000} />);
     const providerOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(5)`)?.textContent;
@@ -78,7 +78,7 @@ describe("StageList", () => {
 
   it("omits the reasoning level suffix when the resolved stage has none", () => {
     const stages: StageView[] = [
-      { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: "thread-9", providerId: "openai", model: "gpt-5", reasoningLevel: null, actor: null, startedAt: 1000, completedAt: 1500 },
+      { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: "thread-9", providerId: "openai", model: "gpt-5", reasoningLevel: null, actor: null, waitingReason: null, startedAt: 1000, completedAt: 1500 },
     ];
     const { container } = render(<StageList stages={stages} graph={GRAPH} now={2000} />);
     const providerOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(5)`)?.textContent;
@@ -93,11 +93,23 @@ describe("StageList", () => {
 
   it("shows who answered a human gate stage in the status cell", () => {
     const stages: StageView[] = [
-      { runId: "r1", stageId: "gate@1", nodeId: "gate", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, providerId: null, model: null, reasoningLevel: null, actor: "ui", startedAt: 1000, completedAt: 1500 },
+      { runId: "r1", stageId: "gate@1", nodeId: "gate", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, providerId: null, model: null, reasoningLevel: null, actor: "ui", waitingReason: null, startedAt: 1000, completedAt: 1500 },
     ];
     const { container } = render(<StageList stages={stages} graph={GRAPH} now={2000} />);
     const statusOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(2)`)?.textContent;
     expect(statusOf("gate@1")).toBe("succeeded (answered via ui)");
+  });
+
+  it("shows a blocked agent stage's waiting reason and still offers the Open thread link", () => {
+    const stages: StageView[] = [
+      { runId: "r1", stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "blocked", outcomeStatus: null, threadId: "worker-1", providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: "permission: Edit file.ts", startedAt: 1000, completedAt: null },
+    ];
+    const onOpenThread = vi.fn();
+    const { container, getByRole } = render(<StageList stages={stages} graph={GRAPH} now={2000} onOpenThread={onOpenThread} />);
+    const statusOf = (stageId: string) => container.querySelector(`[data-stage-id="${stageId}"] td:nth-child(2)`)?.textContent;
+    expect(statusOf("plan@1")).toBe("blocked (waiting: permission: Edit file.ts)");
+    fireEvent.click(getByRole("button", { name: /open thread/i }));
+    expect(onOpenThread).toHaveBeenCalledWith("worker-1");
   });
 
   it("opens a stage's worker thread when its thread link is clicked", () => {

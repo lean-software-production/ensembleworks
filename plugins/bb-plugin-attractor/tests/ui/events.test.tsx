@@ -46,6 +46,19 @@ describe("describeEvent", () => {
     const noActor = describeEvent({ type: "human.answered", runId: "r1", ts: 0, stageId: "gate@1", nodeId: "gate", answer: "Approve", seq: 1 });
     expect(noActor).not.toContain("via");
   });
+
+  it("summarizes agent.waiting with the worker thread, kind, and title", () => {
+    const text = describeEvent({ type: "agent.waiting", runId: "r1", ts: 0, stageId: "implement@1", nodeId: "implement", threadId: "worker-1", interactionId: "int-1", kind: "permission", title: "Edit file.ts", seq: 1 });
+    expect(text).toContain("worker-1");
+    expect(text).toContain("permission");
+    expect(text).toContain("Edit file.ts");
+  });
+
+  it("summarizes agent.resumed with the worker thread", () => {
+    const text = describeEvent({ type: "agent.resumed", runId: "r1", ts: 0, stageId: "implement@1", nodeId: "implement", threadId: "worker-1", seq: 1 });
+    expect(text).toContain("worker-1");
+    expect(text).toContain("resumed");
+  });
 });
 
 describe("EventTimeline", () => {

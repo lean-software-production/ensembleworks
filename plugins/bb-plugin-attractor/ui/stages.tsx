@@ -72,7 +72,11 @@ export function StageList({ stages, graph, now, onOpenThread }: StageListProps) 
           return (
             <tr key={stage.stageId} data-stage-id={stage.stageId} data-status={stage.status}>
               <td>{node?.label ?? stage.nodeId}</td>
-              <td>{stage.status}{stage.actor ? ` (answered via ${stage.actor})` : ""}</td>
+              <td>
+                {stage.status}
+                {stage.actor ? ` (answered via ${stage.actor})` : ""}
+                {stage.status === "blocked" && stage.waitingReason ? ` (waiting: ${stage.waitingReason})` : ""}
+              </td>
               <td>{stage.visit}</td>
               <td>{formatDuration(Math.max(0, elapsedMs))}</td>
               <td>{providerLabel(stage, node)}</td>

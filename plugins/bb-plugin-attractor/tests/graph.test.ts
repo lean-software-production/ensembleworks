@@ -244,3 +244,27 @@ describe("dot/graph: hyphenated bare values", () => {
     expect(graph.edges[0].weight).toBe(-1);
   });
 });
+
+describe("dot/graph: permission_mode", () => {
+  it("parses a node's permission_mode attribute", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", permission_mode=accept-edits] start->n->exit }',
+    );
+    expect(graph.nodes.get("n")?.permissionMode).toBe("accept-edits");
+  });
+
+  it("parses a graph-level default_permission_mode attribute", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { graph[default_permission_mode=readonly] start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p"] start->n->exit }',
+    );
+    expect(graph.defaultPermissionMode).toBe("readonly");
+  });
+
+  it("leaves permission_mode/default_permission_mode undefined when not set", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p"] start->n->exit }',
+    );
+    expect(graph.nodes.get("n")?.permissionMode).toBeUndefined();
+    expect(graph.defaultPermissionMode).toBeUndefined();
+  });
+});

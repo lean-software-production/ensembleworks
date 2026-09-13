@@ -116,6 +116,17 @@ describe("RunStore", () => {
     expect(store.listStages("run-1")[0]).toMatchObject({ actor: "ui" });
   });
 
+  it("records and clears a stage's waiting reason (agent.waiting/agent.resumed)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "implement@1", nodeId: "implement", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ waitingReason: null });
+    store.setStageWaitingReason("run-1", "implement", 1, "permission: Edit file.ts");
+    expect(store.listStages("run-1")[0]).toMatchObject({ waitingReason: "permission: Edit file.ts" });
+    store.setStageWaitingReason("run-1", "implement", 1, null);
+    expect(store.listStages("run-1")[0]).toMatchObject({ waitingReason: null });
+  });
+
   it("opening an existing (pre-migration) database adds the new stage columns idempotently", () => {
     const db = new Database(":memory:");
     // Simulate the table as it looked before this migration.
@@ -127,7 +138,7 @@ describe("RunStore", () => {
     const store = new RunStore(db);
     store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
     store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
-    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: null, model: null, reasoningLevel: null, actor: null });
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: null });
     // And re-opening the now-migrated database a second time is a no-op, not an error.
     expect(() => new RunStore(db)).not.toThrow();
   });

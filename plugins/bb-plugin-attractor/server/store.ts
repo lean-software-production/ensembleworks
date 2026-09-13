@@ -67,11 +67,17 @@ export const RUN_MIGRATIONS = [
 // node's merely-declared `model`/`provider` DOT attributes, which
 // `toGraphView` already surfaces. `actor` records who answered a human gate
 // (`"ui" | "cli" | "default"`, handlers/human.ts's `human.answered` event).
+// `waiting_reason` (dogfood-2 fix): the human-readable reason a stage is
+// currently "blocked" on — a worker thread's pending interaction kind/title
+// (server/backend.ts's "interaction.pending" listener, via the
+// `agent.waiting`/`agent.resumed` events) alongside the pre-existing human-gate
+// "blocked" status, which had no reason column of its own.
 const STAGE_COLUMN_ADDITIONS: { column: string; ddl: string }[] = [
   { column: "provider_id", ddl: "ALTER TABLE attractor_stages ADD COLUMN provider_id TEXT" },
   { column: "model", ddl: "ALTER TABLE attractor_stages ADD COLUMN model TEXT" },
   { column: "reasoning_level", ddl: "ALTER TABLE attractor_stages ADD COLUMN reasoning_level TEXT" },
   { column: "actor", ddl: "ALTER TABLE attractor_stages ADD COLUMN actor TEXT" },
+  { column: "waiting_reason", ddl: "ALTER TABLE attractor_stages ADD COLUMN waiting_reason TEXT" },
 ];
 
 function ensureStageColumns(db: Database.Database): void {
@@ -134,6 +140,8 @@ export interface Stage {
   reasoningLevel: string | null;
   /** Who answered a human gate stage (handlers/human.ts's `human.answered` event) — null for every non-human stage and for one not yet answered. */
   actor: StageActor | null;
+  /** Human-readable reason this stage is currently "blocked" — a worker's pending-interaction kind/title (server/backend.ts's `agent.waiting`), or null when nothing is waiting. */
+  waitingReason: string | null;
   startedAt: number;
   completedAt: number | null;
 }
@@ -188,6 +196,7 @@ type StageRow = {
   model: string | null;
   reasoning_level: string | null;
   actor: string | null;
+  waiting_reason: string | null;
   started_at: number;
   completed_at: number | null;
 };
@@ -367,6 +376,11 @@ export class RunStore {
     this.#db.prepare("UPDATE attractor_stages SET actor=? WHERE run_id=? AND node_id=? AND visit=?").run(actor, runId, nodeId, visit);
   }
 
+  /** Records (or clears, with `null`) a stage's waiting reason — the `agent.waiting`/`agent.resumed` events (dogfood-2 fix). */
+  setStageWaitingReason(runId: string, nodeId: string, visit: number, reason: string | null): void {
+    this.#db.prepare("UPDATE attractor_stages SET waiting_reason=? WHERE run_id=? AND node_id=? AND visit=?").run(reason, runId, nodeId, visit);
+  }
+
   listStages(runId: string): Stage[] {
     // rowid (not started_at) preserves first-insertion order even when two
     // stages start within the same clock millisecond (a real risk with the
@@ -387,6 +401,7 @@ export class RunStore {
       model: row.model,
       reasoningLevel: row.reasoning_level,
       actor: (row.actor as StageActor | null) ?? null,
+      waitingReason: row.waiting_reason ?? null,
       startedAt: row.started_at,
       completedAt: row.completed_at,
     }));

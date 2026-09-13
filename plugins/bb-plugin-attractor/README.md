@@ -59,6 +59,7 @@ Validate a graph without running it: `bb attractor validate <path>`.
 | `tripleoctagon` | `parallel.fan_in` | where fanned-out branches converge | — | branches write only to `parallel.results`/`parallel.branch_count`, never a top-level merge |
 
 Graph attributes: `goal`, `rankdir`, `model_stylesheet`,
+`default_permission_mode` (`accept-edits`\|`workspace-write`\|`auto`\|`full`\|`readonly`),
 `default_max_retries`, `on_failure` (`route`\|`exit`\|`succeed`),
 `retry_target`, `fallback_retry_target`, `max_node_visits` (`0` = unlimited).
 
@@ -67,8 +68,14 @@ Node attributes: `label`, `shape`/`type`, `class`, `prompt`, `script`,
 `fallback_retry_target`, `goal_gate`, `allow_partial`, `output_schema`
 (`"routing"` or an inline JSON Schema string — only `"routing"` is actually
 validated in v1), `model`, `provider`, `reasoning_effort`
-(`low`\|`medium`\|`high`), `max_parallel`, `question_type`, `join_policy`
-(`all`\|`any`\|`first` — v1 implements `all`), `stdin_source`.
+(`low`\|`medium`\|`high`), `permission_mode`
+(`accept-edits`\|`workspace-write`\|`auto`\|`full`\|`readonly` — resolved in
+that order against the node's own attribute, then the graph's
+`default_permission_mode`, then the origin thread's own default execution
+permission mode; BB may still cap a spawned worker at the origin thread's
+own permission ceiling regardless of what is requested here), `max_parallel`,
+`question_type`, `join_policy` (`all`\|`any`\|`first` — v1 implements `all`),
+`stdin_source`.
 
 Edge attributes: `label`, `condition`, `weight` (int, default `0`),
 `freeform` (human gates), `loop_restart` (parsed, ignored in v1).
@@ -101,6 +108,27 @@ gate reports status `blocked` until answered; a gate with a `timeout` and
 nothing to answer falls back to the `human.default_choice` context key if
 one is set (e.g. via `attractor_run`'s `inputs`), otherwise the stage fails
 clearly rather than hanging forever.
+
+### Worker prompts (blocked agent/prompt stages)
+
+A worker thread inherits the origin thread's own permission mode/ceiling —
+`permission_mode` (node) and `default_permission_mode` (graph) request a
+mode, but BB may still cap a worker at whatever the origin thread already
+allows. A worker that hits its own prompt mid-turn (a file-edit/command
+approval, a plan confirmation, a provider question, or a plugin-rendered
+one) stops there exactly like any other BB thread would — before this fix
+the run just showed `running` forever with no visible reason (dogfood run
+`411d2c5a`'s `implement` worker). Now that stage (and the run) reports
+`blocked`, with a `waitingReason` naming the prompt's kind: the DAG renders
+that node amber with a "Waiting: `<kind>` in worker thread" tooltip, and the
+stage table shows "waiting: `<kind>`" next to an "Open thread" link.
+Clicking the node or "Open thread" jumps a human into the worker thread to
+answer the prompt directly; from a terminal instead:
+
+```
+bb thread interactions list <workerThreadId>
+bb thread interactions approve <interactionId> <workerThreadId>   # or: grant
+```
 
 ## Running a graph
 
@@ -181,8 +209,9 @@ authoring/running agent.
 
 ## Status
 
-Through task T7 (examples, docs, end-to-end). `examples/*.dot` holds the
-three worked graphs above; `tests/e2e.test.ts` runs each of them through
+Through the vertical Fabro-style run card restyle and dogfood-2 fixes (see
+the section below). `examples/*.dot` holds the three worked graphs above;
+`tests/e2e.test.ts` runs each of them through
 the *real* engine and handler adapters (only the BB-facing dependencies —
 an `AgentBackend`, a command `exec`, a `HumanInterviewer` — are scripted
 fakes), asserting the visited node path, a plan/implement/review approve
@@ -287,7 +316,13 @@ gets a real BB-thread backend in T4:
   with per-branch context clones, a fork node's `max_parallel` bounding how
   many branches run concurrently (unset/0 = unbounded), and
   `parallel.results`/`parallel.branch_count` written to the parent context
-  only (never a top-level branch merge), checkpoint saves after every
+  only (never a top-level branch merge) — each `parallel.results` entry is
+  `{ id, index, status, context_updates?, text? }`, `text` being the
+  branch's own last-stage outcome text in full (dogfood-2 fix: a fan-in/
+  digest stage could previously only see each branch's status, not what it
+  actually said; `server/backend.ts`'s `assemblePrompt` renders a non-empty
+  `parallel.results` as a `Parallel results (N):` prompt section, one bullet
+  per branch, right after `Prior stages:`), checkpoint saves after every
   non-terminal stage, checkpoint-driven resume, and cancellation via
   `AbortSignal`. Event `stageId`s carry `<nodeId>@<visit>#<attempt>` for
   `stage.started`/`stage.completed`/`stage.failed`; the identity form
@@ -391,11 +426,12 @@ the rest with plain fakes.
 
 T5 adds the **DAG UI**:
 
-- `ui/dag.tsx` — a pure `layoutGraph()` (dagre, rank direction from the
-  graph's `rankdir`) plus `DagView`, an SVG rendering with a live execution
-  overlay: shape hints per `handlerKind` (start/exit/human/command/
-  conditional/parallel each get a distinct outline; only agent/prompt stay a
-  plain rounded rect), status colour (`pending`/`running`/`succeeded`/`failed`/`skipped`), a
+- `ui/dag.tsx` — a pure `layoutGraph()` (dagre; `direction` defaults to
+  "TB", regardless of the graph's own `rankdir` — see the restyle section
+  below) plus `DagView`, an SVG rendering with a live execution overlay:
+  shape hints per `handlerKind` (ellipse for agent/prompt, and a distinct
+  outline for every other kind — start/exit/human/command/conditional/
+  parallel), status colour (`pending`/`running`/`succeeded`/`failed`/`skipped`/`blocked`), a
   visit-count badge once `visit > 1`, the run's current node highlighted,
   and traversed edges (derived from `edge.selected` events, not persisted
   per-edge state) drawn solid/arrowed with the last-selected reason and
@@ -553,6 +589,139 @@ T7 adds the worked examples and end-to-end tests:
   `skills/attractor/SKILL.md`'s agent-facing version of the same material.
 - `docs/plans/2026-09-13-attractor-runner-plan.md`'s Status line, updated
   to reflect all seven tasks landed.
+
+## Vertical Fabro-style run card restyle + dogfood-2 fixes
+
+A second dogfood run (`411d2c5a-149b-49d8-b727-9d28acae3976`) drove two
+changes: a restyle of the run card to match a reference Fabro-style
+screenshot, and three real plugin gaps the run itself exposed.
+
+**Restyle** (`ui/dag.tsx`, `ui/run-panel.tsx`, `ui/stages.tsx`, `app.tsx`):
+
+- `ui/dag.tsx`'s `layoutGraph(graph, direction?)` takes an explicit
+  `direction` ("TB" | "LR"), **defaulting to "TB"** — the card always
+  renders top-to-bottom regardless of the DOT graph's own `rankdir`, which
+  stays parsed and exposed on `GraphView` but is no longer consulted for
+  layout. `DagView` takes the same `direction` prop (also defaulting to
+  "TB"). The two-pass back-edge weighting is unchanged; only which axis
+  ranks land on changed.
+- Node shapes now read like actual Graphviz output: `agent`/`prompt` are
+  ellipses (previously a plain rounded rect, indistinguishable from `exit`'s
+  old rect too), `command` stays a parallelogram, `human` a hexagon,
+  `conditional` a diamond, `parallel`/`parallel.fan_in` an octagon,
+  `start`/`exit` the existing Mdiamond/Msquare. Node width now follows its
+  label (~7.5px/char + 28px padding, clamped 88–240px) instead of a fixed
+  168px, and height is a fixed 40px (was 52px) — both fed into `layoutGraph`
+  itself so spacing accounts for real sizes, not just the SVG rendering.
+  Status fill/stroke: `succeeded` #dcfce7/#16a34a, `running` #dbeafe/#2563eb
+  (2.5px stroke), `blocked` #fef3c7/#d97706, `failed` #fee2e2/#dc2626,
+  `skipped` #f5f5f4/#a8a29e, `pending` #ffffff/#94a3b8 (hollow).
+- Edges render as a smoothed spline (`pathFor`'s `Q`-command
+  midpoint-smoothing between consecutive dagre-routed points) rather than a
+  sharp polyline; stroke #94a3b8/1.25px untraversed (matching the pending
+  node's hollow outline), #2563eb/2px traversed, an untraversed back edge
+  may still dash. An edge's on-diagram label lost its white background rect
+  in favour of a `paint-order="stroke"` white text-stroke halo (`stroke="#fff"`,
+  `strokeWidth 3`) — legible over a crossing line/node without a boxy
+  background; the `<title>` tooltip is unchanged.
+- The card itself (`ui/run-panel.tsx`'s new `RunCard`, shared by both
+  surfaces): a dark BB card (`rounded-lg border border-border bg-card p-3
+  shadow-sm`, `max-w-md` only in directive mode) with a header (workflow
+  icon + bold title + a chevron button, `aria-label="Open in right panel"`,
+  directive-only), a status row (status word coloured by
+  `running`/`blocked` → amber, `succeeded` → green, `failed` → destructive,
+  `cancelled` → muted, plus the run id's first 8 characters in monospace),
+  a summary line (`Stages: n/N · Elapsed: <duration>`, plus `· Waiting:
+  <node label>` while blocked), the DAG inside a white rounded box, and a
+  status-colour legend row. The directive's "Show stages" toggle moved to
+  its own footer button, now that "Open in right panel" lives in the
+  header.
+
+**Dogfood-2 fixes:**
+
+1. **Worker approval prompts are invisible (`server/backend.ts`,
+   `server/service.ts`, `server/store.ts`, `engine/types.ts`,
+   `engine/events.ts`, `ui/*`).** In run `411d2c5a` the `implement` worker
+   (a hidden thread) stopped on a file-edit approval; the run showed
+   `running` forever with nothing pointing at why. `server/backend.ts` now
+   subscribes once to `bb.events.on("interaction.pending", ...)`: when the
+   interacting thread is a worker this backend spawned (`workerThreads`, or
+   `thread.originPluginId === bb.pluginId`), it looks up that worker's
+   *live stage's* `emit` — remembered per worker thread id in
+   `emitByWorkerThread` (set alongside `workerThreads.add` in `run()`,
+   deleted in the same `finally`, precisely so an event delivered outside
+   `run()`'s own await can still reach the right stage) — and emits a new
+   `agent.waiting` event (`threadId`, `interactionId`, `kind`, `title`).
+   `kind` is the plugin-origin interaction's own `rendererId` when
+   `payload.kind === "plugin"`, else the provider interaction's own
+   `payload.kind` (e.g. `"approval"`, `"user_question"`, or a provider's own
+   `"<namespace>/<name>"` kind). When that worker next fires `thread.active`
+   or `thread.idle`, a new `agent.resumed` event clears it — guarded by a
+   `waitingWorkers` set so an ordinary (never-blocked) worker's own idle
+   transition never emits a spurious "resumed". `engine/types.ts` gained
+   both events (`StageScopedEvent` + a fully-stamped `RunEvent` form
+   carrying `runId`/`ts`/`stageId`/`nodeId`), and `engine/events.ts`'s
+   `createStageEmitter` stamps them the same way it already does
+   `agent.thread`. `server/service.ts`'s `applyEventToStore` mirrors the
+   existing `human.requested`/`human.answered` handling: `agent.waiting`
+   sets the stage `blocked` and persists its `waitingReason` (`kind`) via a
+   new nullable `attractor_stages.waiting_reason` column (same idempotent
+   `PRAGMA table_info` + `ALTER TABLE` pattern as `provider_id`/`actor`),
+   and sets the run `blocked`; `agent.resumed` clears both, but only
+   restores the run to `running` if no *other* stage is still blocked
+   (another `agent.waiting`, or an unrelated human gate). `bb attractor
+   stages` includes `waitingReason`. UI: a blocked agent/prompt node
+   renders amber with a `"Waiting: <kind> in worker thread"` tooltip (only
+   when `waitingReason` is set — a human-gate `blocked` node has none and
+   stays untitled); the stage table shows `"blocked (waiting: <kind>)"`
+   next to the existing "Open thread" link; the card's summary line already
+   covers this generically via `"· Waiting: <label>"` (any blocked stage,
+   human gate or worker prompt alike). README/SKILL.md document that a
+   worker inherits the origin thread's permission mode/ceiling, that
+   `blocked` can mean a worker's own pending prompt, and that
+   `bb thread interactions list <workerThreadId>` then `bb thread
+   interactions approve|grant <interactionId> <workerThreadId>` unblocks it
+   from a terminal. Tests: `tests/events.test.ts` (stamping),
+   `tests/server/store.test.ts` (the column + accessor),
+   `tests/server/service.test.ts` (`applyEventToStore`'s blocked/cleared
+   transitions), `tests/server/server.test.ts` (end to end against
+   `createFakePluginHost` — `host.harness.behavior.emitThreadEvent(
+   "interaction.pending", { thread, interaction })`, matching the existing
+   `"thread.idle"` emission pattern; a non-worker thread's interaction is
+   ignored), `tests/ui/dag.render.test.tsx` and `tests/ui/stages.test.tsx`.
+
+2. **`permission_mode` node/graph attribute (`dot/graph.ts`,
+   `dot/validate.ts`, `server/backend.ts`).** `permission_mode` (node) and
+   `default_permission_mode` (graph) accept `accept-edits` |
+   `workspace-write` | `auto` | `full` | `readonly`; `dot/validate.ts`
+   flags any other value as `invalid-enum-value`, the same pattern as
+   `reasoning_effort`/`on_failure`. `resolveModelTuple` resolves it in the
+   same order as model/provider/reasoning_effort: the node's own attribute,
+   then the graph's default, then the origin thread's own default
+   execution permission mode. **Deviation:** BB's own `bb.sdk.threads.spawn`
+   (and `defaultExecutionOptions`) permission-mode vocabulary is only three
+   values — `accept-edits` | `auto` | `full` — the dialect's other two
+   values don't exist in BB at all. `resolveModelTuple` maps
+   `workspace-write` → `accept-edits` (both auto-approve file edits) and
+   `readonly` → `auto` (BB's most conservative real mode — it still prompts
+   before anything a more permissive mode would auto-approve, the closest
+   available approximation of "never write silently") before ever reaching
+   `spawn`, whose own zod schema would otherwise reject an unrecognised
+   literal outright. Tests: `dot/graph.ts` typing + parsing,
+   `dot/validate.ts`'s enum check, and `server/backend.ts`'s spawn-args
+   tests (including the two-value mapping).
+
+3. **Parallel branch results carried no text (`engine/engine.ts`,
+   `server/backend.ts`).** `runParallelFanOut`'s `runBranch` result gained a
+   `text` field (the branch's own last-stage outcome text, in full) —
+   documented above under "Context keys". `server/backend.ts`'s
+   `assemblePrompt` renders a non-empty `context.parallel.results` as a
+   `Parallel results (N):` section right after `Prior stages:`, one bullet
+   per branch (`- <id> | <status>: <text preview>`, truncated the same way
+   as a prior stage's response). Tests: `tests/engine.test.ts`'s new
+   parallel-results-carry-text case, and `tests/server/backend.test.ts`'s
+   prompt-assembly tests for the section (present, ordered after "Prior
+   stages:", truncated, and omitted when there is nothing to show).
 
 ## Development
 
@@ -860,17 +1029,19 @@ bb plugin build .
   same code path the CLI's `stop` subcommand already calls.
 
 - **DAG node shapes are a simplified visual mapping, not a literal
-  redraw of the DOT shapes (T5).** `ui/dag.tsx`'s `shapePoints()` gives
-  every `handlerKind` its own outline: a clip-tipped diamond for `start`
-  (standing in for `Mdiamond`), a plain diamond for `conditional`, a
-  hexagon for `human`, a parallelogram for `command`, a clip-cornered
-  rectangle for `exit` (standing in for `Msquare`), and an octagon (with
-  wider corner cuts than `exit`'s, so the two stay distinct) standing in
-  for both `component`/`tripleoctagon` on `parallel`/`parallel.fan_in`;
-  only `agent`/`prompt` remain a plain rounded rect. This satisfies the
-  plan's "start/exit/human/command distinct" acceptance without being a
-  pixel-exact Graphviz shape library (no true multi-line `M`-prefix corner
-  decorations, no bevelled `Msquare` double border).
+  redraw of the DOT shapes (T5; restyled onto ellipses for agent/prompt in
+  the vertical Fabro-style restyle round).** `ui/dag.tsx`'s `shapePoints()`
+  gives every polygon `handlerKind` its own outline: a clip-tipped diamond
+  for `start` (standing in for `Mdiamond`), a plain diamond for
+  `conditional`, a hexagon for `human`, a parallelogram for `command`, a
+  clip-cornered rectangle for `exit` (standing in for `Msquare`), and an
+  octagon (with wider corner cuts than `exit`'s, so the two stay distinct)
+  standing in for both `component`/`tripleoctagon` on
+  `parallel`/`parallel.fan_in`; `agent`/`prompt` render as a true `<ellipse>`
+  (not a polygon at all). This satisfies the plan's "start/exit/human/
+  command distinct" acceptance without being a pixel-exact Graphviz shape
+  library (no true multi-line `M`-prefix corner decorations, no bevelled
+  `Msquare` double border).
 
 - **Test-infra note: raw `render()` needs an explicit `afterEach(cleanup)`
   in this project's vitest config (T5, not a plan deviation, but worth
@@ -960,3 +1131,40 @@ bb plugin build .
   `" (<reasoningLevel>)"` when the resolved stage carries one (there is no
   declared-DOT equivalent to fall back to), so the Provider column shows
   the genuinely complete actual tuple, not just provider/model.
+
+- **`permission_mode`'s two extra values map down to BB's three (vertical
+  Fabro-style restyle round, dogfood-2 fix item 6).** The Attractor DOT
+  dialect's `permission_mode`/`default_permission_mode` document five
+  values (`accept-edits`\|`workspace-write`\|`auto`\|`full`\|`readonly`,
+  matching other coding-agent tooling's vocabulary), but
+  `bb.sdk.threads.spawn`'s own `permissionMode` — and
+  `defaultExecutionOptions`'s — is exactly three (`accept-edits`\|`auto`\|
+  `full`); BB has no `workspace-write`/`readonly` concept anywhere.
+  `server/backend.ts`'s `resolveModelTuple` maps `workspace-write` →
+  `accept-edits` and `readonly` → `auto` before ever reaching `spawn`
+  (whose own zod schema would otherwise reject an unrecognised literal
+  outright) — see the "Vertical Fabro-style run card restyle + dogfood-2
+  fixes" section above for the full rationale. This is additive/lossy in
+  one direction only: a graph author can still *write* the fuller
+  five-value vocabulary (useful for readability, and for a future BB
+  permission mode this plugin doesn't need to change to pick up), but the
+  two dialect-only values collapse onto their closest BB-real mode at spawn
+  time. Covered by `tests/server/backend.test.ts`'s mapping test.
+
+- **`agent.waiting`'s `kind` is the interaction's own `payload.kind` (or a
+  plugin interaction's `rendererId`), not a fixed
+  permission/file-change/command/plan/question vocabulary (dogfood-2 fix
+  item 5).** The real `PendingInteraction` union's `payload.kind` is
+  `"approval"` (with the actual detail one level deeper, in
+  `payload.subject.kind`: `command`\|`file_change`\|`permission_grant`\|
+  `plan`\|`tool_use`), `"user_question"`, a provider's own free-form
+  `"<namespace>/<name>"` string, or `"plugin"` (whose real identity is
+  `origin.rendererId`). Rather than re-deriving a synthetic, narrower label
+  from `payload.subject.kind` for the `"approval"` case alone (asymmetric
+  with the other three payload kinds, and just as opaque to a human reading
+  the DAG tooltip), `interactionKind` reports the literal `payload.kind`
+  (or `rendererId` for a plugin interaction) — still a `kind` classifying
+  what a worker stopped on, just not collapsed onto the plan brief's
+  illustrative example list. Covered by `tests/server/server.test.ts`'s
+  end-to-end test (asserts a plugin interaction's `waitingReason` is its
+  `rendererId`).

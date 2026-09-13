@@ -140,6 +140,96 @@ describe("createThreadAgentBackend: spawning", () => {
     expect(spawnCalls[0]).toMatchObject({ model: "claude-opus-5", providerId: "anthropic", reasoningLevel: "high" });
   });
 
+  it("prefers a node's own permission_mode over the origin thread's default", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      plan  [label="Plan", prompt="Write a plan.", permission_mode=accept-edits]
+      start -> plan -> exit
+    }`);
+    const runPromise = backend.run(baseInput(g, "plan"));
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await runPromise;
+
+    expect(spawnCalls[0]).toMatchObject({ permissionMode: "accept-edits" });
+  });
+
+  it("falls back to the graph's default_permission_mode when the node declares none", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(`digraph G {
+      graph [default_permission_mode=full]
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      plan  [label="Plan", prompt="Write a plan."]
+      start -> plan -> exit
+    }`);
+    const runPromise = backend.run(baseInput(g, "plan"));
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await runPromise;
+
+    expect(spawnCalls[0]).toMatchObject({ permissionMode: "full" });
+  });
+
+  it("maps a dialect-only permission_mode (workspace-write/readonly) down to the closest BB spawn permission mode (accept-edits/auto)", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      write [label="Write", prompt="Write.", permission_mode=workspace-write]
+      readonly [label="Readonly", prompt="Read only.", permission_mode=readonly]
+      start -> write -> readonly -> exit
+    }`);
+    const writeRun = backend.run(baseInput(g, "write"));
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await writeRun;
+    const readonlyRun = backend.run(baseInput(g, "readonly"));
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await readonlyRun;
+
+    expect(spawnCalls[0]).toMatchObject({ permissionMode: "accept-edits" });
+    expect(spawnCalls[1]).toMatchObject({ permissionMode: "auto" });
+  });
+
+  it("falls back to the origin thread's default execution permission mode when neither the node nor the graph declares one", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(PLAN_GRAPH);
+    const runPromise = backend.run(baseInput(g, "plan"));
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await runPromise;
+
+    expect(spawnCalls[0]).toMatchObject({ permissionMode: "full" });
+  });
+
   it("fails the stage with a clear error rather than silently substituting an unknown model", async () => {
     const host = makeHost();
     const backend = createThreadAgentBackend(host.bb);
@@ -437,5 +527,87 @@ describe("createThreadAgentBackend: prompt assembly", () => {
     const prompt = (spawnCalls[0] as { prompt: string }).prompt;
     expect(prompt).toContain("plan | Plan | succeeded: short response");
     expect(prompt).not.toContain("[truncated]");
+  });
+
+  it("renders a 'Parallel results (N):' section after 'Prior stages:' when context.parallel.results is non-empty", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      digest [label="Digest", prompt="Summarise the branches."]
+      start -> digest -> exit
+    }`);
+    const context = createContext({
+      response: { fork: "fanned out" },
+      stage_status: { fork: "succeeded" },
+      parallel: {
+        branch_count: 2,
+        results: [
+          { id: "security", index: 0, status: "succeeded", text: "no issues found" },
+          { id: "quality", index: 1, status: "failed", text: "lint errors remain" },
+        ],
+      },
+    });
+    const runPromise = backend.run({ ...baseInput(g, "digest"), context });
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await runPromise;
+
+    const prompt = (spawnCalls[0] as { prompt: string }).prompt;
+    expect(prompt).toContain("Parallel results (2):");
+    expect(prompt).toContain("- security | succeeded: no issues found");
+    expect(prompt).toContain("- quality | failed: lint errors remain");
+    // The section must come after "Prior stages:" per the plan.
+    expect(prompt.indexOf("Prior stages:")).toBeLessThan(prompt.indexOf("Parallel results (2):"));
+  });
+
+  it("truncates a parallel branch's text preview the same way as a prior stage's response", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(`digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      digest [label="Digest", prompt="Summarise the branches."]
+      start -> digest -> exit
+    }`);
+    const longText = "x".repeat(450);
+    const context = createContext({ parallel: { branch_count: 1, results: [{ id: "security", index: 0, status: "succeeded", text: longText }] } });
+    const runPromise = backend.run({ ...baseInput(g, "digest"), context });
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await runPromise;
+
+    const prompt = (spawnCalls[0] as { prompt: string }).prompt;
+    expect(prompt).toContain(`${"x".repeat(400)} …[truncated]`);
+    expect(prompt).not.toContain("x".repeat(450));
+  });
+
+  it("omits the 'Parallel results' section when context.parallel.results is absent or empty", async () => {
+    const host = makeHost();
+    const spawnCalls: unknown[] = [];
+    host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
+      spawnCalls.push(args);
+      return makeThreadResponse({ id: "worker-thread" });
+    });
+    const backend = createThreadAgentBackend(host.bb);
+    const g = graph(PLAN_GRAPH);
+    const runPromise = backend.run(baseInput(g, "plan"));
+    await flush();
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await runPromise;
+
+    const prompt = (spawnCalls[0] as { prompt: string }).prompt;
+    expect(prompt).not.toContain("Parallel results");
   });
 });

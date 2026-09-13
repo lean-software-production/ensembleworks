@@ -25,6 +25,7 @@ export type OnFailurePolicy = "route" | "exit" | "succeed";
 export type ReasoningEffort = "low" | "medium" | "high";
 export type JoinPolicy = "all" | "any" | "first";
 export type Rankdir = "TB" | "LR" | "BT" | "RL";
+export type PermissionMode = "accept-edits" | "workspace-write" | "auto" | "full" | "readonly";
 
 export type DotValue = string | number | boolean;
 
@@ -48,6 +49,7 @@ export interface WorkflowNode {
   model?: string;
   provider?: string;
   reasoningEffort?: ReasoningEffort;
+  permissionMode?: PermissionMode;
   maxParallel?: number;
   questionType?: string;
   joinPolicy?: JoinPolicy;
@@ -72,6 +74,7 @@ export interface WorkflowGraph {
   goal?: string;
   rankdir: Rankdir;
   modelStylesheet?: string;
+  defaultPermissionMode?: PermissionMode;
   defaultMaxRetries?: number;
   onFailure: OnFailurePolicy;
   retryTarget?: string;
@@ -258,6 +261,9 @@ function createOrUpdateNode(
   if (explicit.has("reasoning_effort")) {
     node.reasoningEffort = coerceScalar(explicit.get("reasoning_effort")!.value) as ReasoningEffort;
   }
+  if (explicit.has("permission_mode")) {
+    node.permissionMode = coerceScalar(explicit.get("permission_mode")!.value) as PermissionMode;
+  }
   if (explicit.has("max_parallel")) node.maxParallel = Number(coerceScalar(explicit.get("max_parallel")!.value));
   if (explicit.has("question_type")) node.questionType = coerceScalar(explicit.get("question_type")!.value) as string;
   if (explicit.has("join_policy")) node.joinPolicy = coerceScalar(explicit.get("join_policy")!.value) as JoinPolicy;
@@ -311,6 +317,7 @@ interface BuildState {
     goal?: string;
     rankdir: Rankdir;
     modelStylesheet?: string;
+    defaultPermissionMode?: PermissionMode;
     defaultMaxRetries?: number;
     onFailure: OnFailurePolicy;
     retryTarget?: string;
@@ -325,6 +332,9 @@ function applyGraphAttrs(state: BuildState, attrs: DotAttr[]): void {
   if (explicit.has("rankdir")) state.graph.rankdir = coerceScalar(explicit.get("rankdir")!.value) as Rankdir;
   if (explicit.has("model_stylesheet")) {
     state.graph.modelStylesheet = coerceScalar(explicit.get("model_stylesheet")!.value) as string;
+  }
+  if (explicit.has("default_permission_mode")) {
+    state.graph.defaultPermissionMode = coerceScalar(explicit.get("default_permission_mode")!.value) as PermissionMode;
   }
   if (explicit.has("default_max_retries")) {
     state.graph.defaultMaxRetries = Number(coerceScalar(explicit.get("default_max_retries")!.value));
@@ -412,6 +422,7 @@ export function buildWorkflowGraph(ast: DotGraphAst): WorkflowGraph {
     goal: state.graph.goal,
     rankdir: state.graph.rankdir,
     modelStylesheet: state.graph.modelStylesheet,
+    defaultPermissionMode: state.graph.defaultPermissionMode,
     defaultMaxRetries: state.graph.defaultMaxRetries,
     onFailure: state.graph.onFailure,
     retryTarget: state.graph.retryTarget,

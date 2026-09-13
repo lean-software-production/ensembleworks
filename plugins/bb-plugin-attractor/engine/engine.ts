@@ -79,6 +79,8 @@ interface ParallelBranchResult {
   index: number;
   status: OutcomeStatus;
   context_updates?: Record<string, JsonValue>;
+  /** The branch's last stage's outcome text (full, not previewed) — lets a fan-in/digest stage see what each branch actually said, not just its status. */
+  text?: string;
 }
 
 export class Engine {
@@ -468,7 +470,13 @@ export class Engine {
       }
 
       return {
-        result: { id: lastNodeId, index, status: lastOutcome.status, context_updates: lastOutcome.contextUpdates },
+        result: {
+          id: lastNodeId,
+          index,
+          status: lastOutcome.status,
+          context_updates: lastOutcome.contextUpdates,
+          ...(lastOutcome.text !== undefined ? { text: lastOutcome.text } : {}),
+        },
         joinNodeId,
       };
     };

@@ -100,14 +100,43 @@ function summarizePriorStages(context: Context, graph: WorkflowGraph): string {
   return lines.length ? `Prior stages:\n${lines.join("\n")}\n\n` : "";
 }
 
+// A fan-in/digest stage otherwise sees `context.parallel.results` as opaque
+// JSON it must remember to inspect itself — per the plan, render the same
+// information a human would read off the DAG's parallel branches as a
+// prompt section, right after "Prior stages:", so a digest worker's prompt
+// actually carries what each branch said (see README "Deviations from the
+// plan" — dogfood run 411d2c5a's digest worker replied that
+// `parallel.results` held nothing usable).
+interface ParallelResultEntry {
+  id?: unknown;
+  status?: unknown;
+  text?: unknown;
+}
+
+function summarizeParallelResults(context: Context): string {
+  const parallel = context.get("parallel");
+  if (!parallel || typeof parallel !== "object" || Array.isArray(parallel)) return "";
+  const results = (parallel as Record<string, unknown>).results;
+  if (!Array.isArray(results) || results.length === 0) return "";
+  const lines = (results as ParallelResultEntry[]).map((entry) => {
+    const id = typeof entry.id === "string" ? entry.id : "?";
+    const status = typeof entry.status === "string" ? entry.status : "?";
+    const full = typeof entry.text === "string" ? entry.text : "";
+    const preview = full.length > PROMPT_PREVIEW_LENGTH ? `${full.slice(0, PROMPT_PREVIEW_LENGTH)}${TRUNCATION_MARKER}` : full;
+    return `- ${id} | ${status}: ${preview}`;
+  });
+  return `Parallel results (${results.length}):\n${lines.join("\n")}\n\n`;
+}
+
 function assemblePrompt(node: WorkflowNode, graph: WorkflowGraph, context: Context): string {
   const goal = graph.goal ? `Goal: ${graph.goal}\n\n` : "";
   const history = summarizePriorStages(context, graph);
+  const parallelResults = summarizeParallelResults(context);
   const body = node.prompt ?? "";
   const schemaInstruction = node.outputSchema
     ? `\n\nWhen you are done, call the attractor_result tool exactly once with your JSON result value.`
     : "";
-  return `${goal}${history}${body}${schemaInstruction}`;
+  return `${goal}${history}${parallelResults}${body}${schemaInstruction}`;
 }
 
 interface RoutingResult {
@@ -155,8 +184,51 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
   // `context.origin.pluginId === bb.pluginId`, which BB stamps on every
   // thread this plugin spawns. These sets only refine the answer afterwards.
   const workerThreads = new Set<string>();
+  // Dogfood-2 fix: per live worker thread, the `emit` (HandlerInput.emit,
+  // already stamped runId/stageId/nodeId by the engine) of the stage
+  // currently awaiting that worker — set right alongside `workerThreads.add`
+  // in `run()` below, deleted in the same `finally`. This is how an
+  // "interaction.pending"/"thread.active" event delivered *outside* `run()`'s
+  // own await (which only ever sees the worker's final idle/failed/deleted)
+  // can still emit a stage-scoped event for the run currently executing it.
+  const emitByWorkerThread = new Map<string, (event: StageScopedEvent) => void>();
+  // Which worker threads currently have an unresolved pending interaction —
+  // guards against emitting a spurious `agent.resumed` off of a worker's
+  // *ordinary* thread.active/thread.idle transition (i.e. one that was never
+  // preceded by an `agent.waiting`).
+  const waitingWorkers = new Set<string>();
+
+  function isKnownWorkerThread(threadId: string, originPluginId: string | null): boolean {
+    return workerThreads.has(threadId) || originPluginId === bb.pluginId;
+  }
+
+  // The interaction's routing kind: a plugin-origin interaction's own
+  // rendererId (uniquely identifying what asked, e.g. a file-edit approval
+  // renderer from another plugin), else the provider interaction's own
+  // `payload.kind` (e.g. "approval", "user_question", or a provider's own
+  // `"<namespace>/<name>"` custom kind). Loosely typed (the real
+  // `PendingInteraction` union has no field in common across every arm) —
+  // narrowed defensively at each read instead.
+  function interactionKind(interaction: unknown): string {
+    const record = interaction as { payload?: { kind?: unknown }; origin?: { rendererId?: unknown } };
+    const kind = record.payload?.kind;
+    if (kind === "plugin") return typeof record.origin?.rendererId === "string" ? record.origin.rendererId : "plugin";
+    return typeof kind === "string" ? kind : "unknown";
+  }
+
+  function interactionTitle(interaction: unknown): string | null {
+    const record = interaction as { payload?: { title?: unknown } };
+    return typeof record.payload?.title === "string" ? record.payload.title : null;
+  }
+
+  function maybeEmitResumed(threadId: string): void {
+    if (!waitingWorkers.has(threadId)) return;
+    waitingWorkers.delete(threadId);
+    emitByWorkerThread.get(threadId)?.({ type: "agent.resumed", threadId });
+  }
 
   bb.events.on("thread.idle", (payload) => {
+    maybeEmitResumed(payload.thread.id);
     waiters.get(payload.thread.id)?.({ kind: "idle", text: payload.lastAssistantText });
   });
   bb.events.on("thread.failed", (payload) => {
@@ -164,6 +236,20 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
   });
   bb.events.on("thread.deleted", (payload) => {
     waiters.get(payload.thread.id)?.({ kind: "deleted" });
+  });
+  // Fired after a pending interaction row is committed — the moment a
+  // worker's own turn actually stopped on a permission/file-change/command/
+  // plan/question prompt (or a plugin-rendered one) that nothing was
+  // watching before this fix: the run just showed "running" forever.
+  bb.events.on("interaction.pending", ({ thread, interaction }) => {
+    if (!isKnownWorkerThread(thread.id, thread.originPluginId)) return;
+    const emit = emitByWorkerThread.get(thread.id);
+    if (!emit) return; // the stage already settled (or was never tracked) — nothing to attribute this to.
+    waitingWorkers.add(thread.id);
+    emit({ type: "agent.waiting", threadId: thread.id, interactionId: interaction.id, kind: interactionKind(interaction), title: interactionTitle(interaction) });
+  });
+  bb.events.on("thread.active", (payload) => {
+    maybeEmitResumed(payload.thread.id);
   });
 
   async function stopQuietly(threadId: string): Promise<void> {
@@ -223,6 +309,25 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     return completionPromise;
   }
 
+  // BB's own permission-mode vocabulary (`bb.sdk.threads.spawn`'s
+  // `permissionMode`, and `defaultExecutionOptions`'s) is exactly three
+  // values: `accept-edits` | `auto` | `full`. The Attractor DOT dialect's
+  // `permission_mode`/`default_permission_mode` attributes document two more
+  // — `workspace-write`/`readonly`, matching other coding-agent tooling's
+  // vocabulary — for graph-authoring convenience. Map those two down to the
+  // closest BB-supported mode before ever reaching `spawn` (whose own zod
+  // schema would otherwise reject an unknown literal outright):
+  // `workspace-write` -> `accept-edits` (both auto-approve file edits, just
+  // scoped differently), `readonly` -> `auto` (BB's most conservative real
+  // mode — it still prompts before anything a more permissive mode would
+  // auto-approve, which is the closest available approximation of "never
+  // write silently"). See README "Deviations from the plan".
+  function toBbPermissionMode(mode: string | undefined): "accept-edits" | "auto" | "full" | undefined {
+    if (mode === "workspace-write") return "accept-edits";
+    if (mode === "readonly") return "auto";
+    return mode as "accept-edits" | "auto" | "full" | undefined;
+  }
+
   async function resolveModelTuple(node: WorkflowNode, graph: WorkflowGraph, threadId: string, environmentId: string) {
     const rules = graph.modelStylesheet ? parseStylesheet(graph.modelStylesheet) : [];
     const style = resolveStyle(
@@ -235,7 +340,12 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     const model = style.model ?? defaults?.model;
     if (!model) throw new Error(`no model could be resolved for node "${node.id}" (no stylesheet/node model and no thread default execution options)`);
     const reasoningLevel = style.reasoningEffort ?? defaults?.reasoningLevel;
-    const permissionMode = defaults?.permissionMode;
+    // permission_mode resolution mirrors model/provider/reasoning_effort's own
+    // order: the node's own declared attribute wins, then the graph's
+    // default_permission_mode, then whatever the origin thread would use by
+    // default — BB may still cap a spawned worker at the origin thread's own
+    // permission ceiling regardless of what is requested here.
+    const permissionMode = toBbPermissionMode(node.permissionMode ?? graph.defaultPermissionMode ?? defaults?.permissionMode);
 
     const catalog = await bb.sdk.providers.models({ environmentId, providerId });
     const known = catalog.models.some((m) => m.model === model || m.id === model);
@@ -268,6 +378,7 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     });
     const workerThreadId = spawned.id;
     workerThreads.add(workerThreadId);
+    emitByWorkerThread.set(workerThreadId, emit);
     if (node.outputSchema !== undefined) workerNeedsResult.add(workerThreadId);
     emit({ type: "agent.thread", threadId: workerThreadId, provider: tuple.providerId, model: tuple.model, reasoningLevel: tuple.reasoningLevel ?? null });
 
@@ -280,6 +391,8 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     } finally {
       waiters.delete(workerThreadId);
       workerThreads.delete(workerThreadId);
+      emitByWorkerThread.delete(workerThreadId);
+      waitingWorkers.delete(workerThreadId);
       workerNeedsResult.delete(workerThreadId);
       reportedResults.delete(workerThreadId);
       // Best-effort, fire-and-forget: the worker thread has served its

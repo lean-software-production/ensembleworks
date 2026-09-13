@@ -115,6 +115,24 @@ describe("dot/validate", () => {
     expect(codes(source)).not.toContain("invalid-enum-value");
   });
 
+  it("flags a node permission_mode value outside accept-edits|workspace-write|auto|full|readonly", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", permission_mode=bogus] start->n->exit }';
+    expect(codes(source)).toContain("invalid-enum-value");
+  });
+
+  it("flags a graph-level default_permission_mode value outside the allowed set", () => {
+    const source =
+      'digraph G { graph[default_permission_mode=bogus] start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p"] start->n->exit }';
+    expect(codes(source)).toContain("invalid-enum-value");
+  });
+
+  it("does not flag valid permission_mode/default_permission_mode values", () => {
+    const source =
+      'digraph G { graph[default_permission_mode=readonly] start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", permission_mode=accept-edits] start->n->exit }';
+    expect(codes(source)).not.toContain("invalid-enum-value");
+  });
+
   it("flags a non-numeric max_visits", () => {
     const source =
       'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", max_visits=abc] start->n->exit }';

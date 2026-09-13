@@ -94,7 +94,16 @@ export type StageScopedEvent =
   | { type: "log"; message: string }
   | { type: "agent.thread"; threadId: string; provider: string; model: string; reasoningLevel: string | null }
   | { type: "human.requested"; options?: string[] }
-  | { type: "human.answered"; answer?: string; actor?: "ui" | "cli" | "default" };
+  | { type: "human.answered"; answer?: string; actor?: "ui" | "cli" | "default" }
+  // Dogfood-2 fix: a worker thread (an agent/prompt stage's spawned thread)
+  // stopped on its own pending interaction (a permission/file-change/
+  // command/plan/question prompt, or a plugin-rendered one) — server/
+  // backend.ts emits this through the live stage's remembered `emit` (see
+  // its header comment) so the run visibly shows "blocked", not "running
+  // forever", while a human answers it. `agent.resumed` clears it once the
+  // thread goes active/idle again.
+  | { type: "agent.waiting"; threadId: string; interactionId: string; kind: string; title: string | null }
+  | { type: "agent.resumed"; threadId: string };
 
 export type RunEvent =
   | { type: "run.started"; runId: string; ts: number }
@@ -145,6 +154,8 @@ export type RunEvent =
       reason: EdgeSelectedReason;
     }
   | { type: "agent.thread"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string; provider: string; model: string; reasoningLevel: string | null }
+  | { type: "agent.waiting"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string; interactionId: string; kind: string; title: string | null }
+  | { type: "agent.resumed"; runId: string; ts: number; stageId: string; nodeId: string; threadId: string }
   | { type: "human.requested"; runId: string; ts: number; stageId: string; nodeId: string; options?: string[] }
   | { type: "human.answered"; runId: string; ts: number; stageId: string; nodeId: string; answer?: string; actor?: "ui" | "cli" | "default" }
   | { type: "checkpoint.saved"; runId: string; ts: number; stageId: string }

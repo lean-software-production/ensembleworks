@@ -35,6 +35,10 @@ export function describeEvent(event: EventView): string {
       return `${event.from} → ${event.to} (${event.reason}${event.edgeLabel ? `: ${event.edgeLabel}` : ""})`;
     case "agent.thread":
       return `${event.stageId}: worker thread ${event.threadId}`;
+    case "agent.waiting":
+      return `${event.stageId}: worker thread ${event.threadId} waiting on ${event.kind}${event.title ? ` (${event.title})` : ""}`;
+    case "agent.resumed":
+      return `${event.stageId}: worker thread ${event.threadId} resumed`;
     case "human.requested":
       return `${event.nodeId}: human input requested`;
     case "human.answered":

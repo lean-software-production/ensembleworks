@@ -519,6 +519,23 @@ describe("engine: parallel fan-out", () => {
     ]);
   });
 
+  it("carries each branch's last outcome text into its parallel.results entry", async () => {
+    const graph = graphFrom(PARALLEL_REVIEW);
+    const handlers = baseHandlers({
+      agent: {
+        run: async (input) => ({ status: "succeeded", text: `${input.node.id} says hi` }),
+      },
+    });
+    const { clock } = makeClock();
+    const result = await runEngine({ graph, handlers, runId: "r", clock, signal: NEVER_ABORT, onEvent: () => {} });
+
+    expect(result.status).toBe("succeeded");
+    const context = result.context as Record<string, unknown>;
+    const parallel = context.parallel as { results: { id: string; text?: string }[] };
+    expect(parallel.results.map((r) => r.text)).toEqual(["security says hi", "architecture says hi", "quality says hi"]);
+    expect(parallel.results.map((r) => r.id)).toEqual(["security", "architecture", "quality"]);
+  });
+
   it("honours a fork node's max_parallel by never running more branches concurrently than the cap", async () => {
     const graph = graphFrom(`digraph G {
       start [shape=Mdiamond]

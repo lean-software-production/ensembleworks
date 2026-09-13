@@ -11,7 +11,7 @@ import { layoutGraph } from "../../ui/dag";
 import type { GraphView } from "../../server/contracts";
 
 function node(id: string, overrides: Partial<GraphView["nodes"][number]> = {}): GraphView["nodes"][number] {
-  return { id, label: id, shape: "box", handlerKind: "agent", goalGate: false, status: null, visit: 0, model: null, provider: null, ...overrides };
+  return { id, label: id, shape: "box", handlerKind: "agent", goalGate: false, status: null, visit: 0, model: null, provider: null, waitingReason: null, ...overrides };
 }
 
 const LINEAR_GRAPH: GraphView = {
@@ -49,7 +49,7 @@ describe("layoutGraph", () => {
     }
   });
 
-  it("stacks a top-to-bottom (rankdir=TB) chain with strictly increasing y and roughly equal x", () => {
+  it("stacks a top-to-bottom chain with strictly increasing y and roughly equal x, by default (no direction given)", () => {
     const laidOut = layoutGraph(LINEAR_GRAPH);
     const ys = laidOut.nodes.map((n) => n.y);
     for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeGreaterThan(ys[i - 1]);
@@ -57,8 +57,17 @@ describe("layoutGraph", () => {
     for (const x of xs) expect(Math.abs(x - xs[0])).toBeLessThan(1);
   });
 
-  it("lays a left-to-right (rankdir=LR) chain out with strictly increasing x", () => {
+  it("ignores the DOT graph's own rankdir and still lays out top-to-bottom by default", () => {
+    // LINEAR_GRAPH's own rankdir is "TB"; declare "LR" on the graph itself to
+    // prove the default direction below comes from layoutGraph's own
+    // parameter, never graph.rankdir.
     const laidOut = layoutGraph({ ...LINEAR_GRAPH, rankdir: "LR" });
+    const ys = laidOut.nodes.map((n) => n.y);
+    for (let i = 1; i < ys.length; i++) expect(ys[i]).toBeGreaterThan(ys[i - 1]);
+  });
+
+  it('lays a chain out with strictly increasing x when given direction "LR" — regardless of the graph\'s own declared rankdir', () => {
+    const laidOut = layoutGraph(LINEAR_GRAPH, "LR");
     const xs = laidOut.nodes.map((n) => n.x);
     for (let i = 1; i < xs.length; i++) expect(xs[i]).toBeGreaterThan(xs[i - 1]);
   });
@@ -127,31 +136,32 @@ describe("layoutGraph", () => {
     expect(backEdgeOf("review", "exit")).toBe(false);
   });
 
-  it("lays the dogfood graph's main path out with strictly increasing x (LR) and keeps check's y within one node height of implement/review, despite its loop edges", () => {
-    const graph: GraphView = {
-      rankdir: "LR",
-      nodes: [
-        node("start", { handlerKind: "start" }),
-        node("plan", { handlerKind: "prompt" }),
-        node("approve", { handlerKind: "human" }),
-        node("implement", { handlerKind: "agent" }),
-        node("check", { handlerKind: "command" }),
-        node("review", { handlerKind: "conditional" }),
-        node("exit", { handlerKind: "exit" }),
-      ],
-      edges: [
-        { from: "start", to: "plan", label: null, condition: null },
-        { from: "plan", to: "approve", label: null, condition: null },
-        { from: "approve", to: "plan", label: "[R] Revise", condition: null },
-        { from: "approve", to: "implement", label: "[A] Approve", condition: null },
-        { from: "implement", to: "check", label: null, condition: null },
-        { from: "check", to: "implement", label: "[R] Retry", condition: "outcome=failed" },
-        { from: "check", to: "review", label: null, condition: "outcome=succeeded" },
-        { from: "review", to: "implement", label: null, condition: "outcome=failed" },
-        { from: "review", to: "exit", label: null, condition: "outcome=succeeded" },
-      ],
-    };
-    const laidOut = layoutGraph(graph);
+  const DOGFOOD_GRAPH: GraphView = {
+    rankdir: "LR",
+    nodes: [
+      node("start", { handlerKind: "start" }),
+      node("plan", { handlerKind: "prompt" }),
+      node("approve", { handlerKind: "human" }),
+      node("implement", { handlerKind: "agent" }),
+      node("check", { handlerKind: "command" }),
+      node("review", { handlerKind: "conditional" }),
+      node("exit", { handlerKind: "exit" }),
+    ],
+    edges: [
+      { from: "start", to: "plan", label: null, condition: null },
+      { from: "plan", to: "approve", label: null, condition: null },
+      { from: "approve", to: "plan", label: "[R] Revise", condition: null },
+      { from: "approve", to: "implement", label: "[A] Approve", condition: null },
+      { from: "implement", to: "check", label: null, condition: null },
+      { from: "check", to: "implement", label: "[R] Retry", condition: "outcome=failed" },
+      { from: "check", to: "review", label: null, condition: "outcome=succeeded" },
+      { from: "review", to: "implement", label: null, condition: "outcome=failed" },
+      { from: "review", to: "exit", label: null, condition: "outcome=succeeded" },
+    ],
+  };
+
+  it("lays the dogfood graph's main path out with strictly increasing x when given direction \"LR\" and keeps check's y within one node height of implement/review, despite its loop edges", () => {
+    const laidOut = layoutGraph(DOGFOOD_GRAPH, "LR");
     const byId = new Map(laidOut.nodes.map((n) => [n.id, n]));
     const mainPath = ["start", "plan", "approve", "implement", "check", "review", "exit"].map((id) => byId.get(id)!);
     for (let i = 1; i < mainPath.length; i++) expect(mainPath[i]!.x).toBeGreaterThan(mainPath[i - 1]!.x);
@@ -161,6 +171,19 @@ describe("layoutGraph", () => {
     const review = byId.get("review")!;
     expect(Math.abs(check.y - implement.y)).toBeLessThanOrEqual(check.height);
     expect(Math.abs(check.y - review.y)).toBeLessThanOrEqual(check.height);
+  });
+
+  it("lays the dogfood graph's main path out with strictly increasing y by default (TB) and keeps check's x within one node width of implement/review, despite its loop edges", () => {
+    const laidOut = layoutGraph(DOGFOOD_GRAPH);
+    const byId = new Map(laidOut.nodes.map((n) => [n.id, n]));
+    const mainPath = ["start", "plan", "approve", "implement", "check", "review", "exit"].map((id) => byId.get(id)!);
+    for (let i = 1; i < mainPath.length; i++) expect(mainPath[i]!.y).toBeGreaterThan(mainPath[i - 1]!.y);
+
+    const check = byId.get("check")!;
+    const implement = byId.get("implement")!;
+    const review = byId.get("review")!;
+    expect(Math.abs(check.x - implement.x)).toBeLessThanOrEqual(check.width);
+    expect(Math.abs(check.x - review.x)).toBeLessThanOrEqual(check.width);
   });
 
   // Follow-up-1 fix for the dogfood-polish round-1 finding: the test above
@@ -190,7 +213,11 @@ describe("layoutGraph", () => {
         { from: "t", to: "s", label: null, condition: null },
       ],
     };
-    const laidOut = layoutGraph(graph);
+    // Explicit direction "LR": this test's whole premise (the bow shows up
+    // in .y, the perpendicular axis) is specific to a left-to-right layout —
+    // layoutGraph's own default direction is "TB" regardless of this
+    // graph's declared rankdir, per the vertical-by-default restyle.
+    const laidOut = layoutGraph(graph, "LR");
     const byId = new Map(laidOut.nodes.map((n) => [n.id, n]));
     // A single uniform-weight pass gives x/y/z distinct y's (86/112/86); the
     // fix's second, zero-weighted pass must collapse them to one shared y.

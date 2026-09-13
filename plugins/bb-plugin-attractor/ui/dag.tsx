@@ -1,11 +1,16 @@
 /**
- * `ui/dag.tsx` — dagre layout, then an SVG DAG with a live execution
- * overlay, per docs/plans/2026-09-13-attractor-runner-plan.md T5 ("DAG:
- * dagre layout; node shape hints (start/exit/human/command distinct);
- * status colours pending/running/succeeded/failed/skipped; visit badge when
- * > 1; current node highlighted; traversed edges emphasised with the
+ * `ui/dag.tsx` — dagre layout, then a Graphviz-like SVG DAG with a live
+ * execution overlay, per docs/plans/2026-09-13-attractor-runner-plan.md T5
+ * and the vertical Fabro-style restyle: dagre layout laid out top-to-bottom
+ * by default (see `direction` below — the DOT graph's own `rankdir` stays
+ * parsed and available on `GraphView` but is not consulted by this layout);
+ * node shape hints per `handlerKind` (ellipse for agent/prompt,
+ * parallelogram for command, hexagon for human, diamond for conditional,
+ * octagon for parallel/fan_in, Mdiamond/Msquare for start/exit); status
+ * colours pending/running/succeeded/failed/skipped/blocked; visit badge
+ * when > 1; current node highlighted; traversed edges emphasised with the
  * last-selected reason in a title; click on an agent node opens its worker
- * thread").
+ * thread.
  *
  * `layoutGraph` is a pure function (no React, no DOM) so it is unit-tested
  * directly under vitest's default "node" environment — see
@@ -20,8 +25,9 @@ import * as dagre from "@dagrejs/dagre";
 import type { GraphEdgeView, GraphNodeView, GraphView } from "../server/contracts";
 import type { EdgeSelectedReason, RunEvent } from "../engine/types";
 
+/** A nominal node size, used only as a viewBox floor — real node sizes follow their label (see `nodeSizeFor`). */
 export const NODE_WIDTH = 168;
-export const NODE_HEIGHT = 52;
+export const NODE_HEIGHT = 40;
 // Tuned per docs/plans/2026-09-13-attractor-runner-plan.md's dogfood-polish
 // findings: the previous, smaller nodesep produced a wobbly rankdir=LR
 // layout (Check pushed down off the main row, short stub edges) once real
@@ -34,6 +40,21 @@ const MARGIN = 24;
 // for the main forward path's edges only; a loop edge pulling on ranks is
 // exactly what produced the T5 "Check pushed down" layout wobble.
 const BACK_EDGE_WEIGHT = 0;
+/** DagView's rank direction, independent of the DOT graph's own `rankdir` (parsed but not consulted here — see the module doc). */
+export type LayoutDirection = "TB" | "LR";
+const DEFAULT_DIRECTION: LayoutDirection = "TB";
+
+// Graphviz-like node sizing: width follows the label, height is fixed.
+const CHAR_WIDTH = 7.5;
+const LABEL_PADDING = 28;
+const MIN_NODE_WIDTH = 88;
+const MAX_NODE_WIDTH = 240;
+
+function nodeSizeFor(label: string): { width: number; height: number } {
+  const raw = label.length * CHAR_WIDTH + LABEL_PADDING;
+  const width = Math.min(MAX_NODE_WIDTH, Math.max(MIN_NODE_WIDTH, Math.round(raw)));
+  return { width, height: NODE_HEIGHT };
+}
 
 export interface LaidOutNode extends GraphNodeView {
   x: number;
@@ -63,7 +84,7 @@ interface BuiltGraph {
 }
 
 /** Builds the dagre graph for one layout pass, applying `edgeWeight` per edge (by its index in `graph.edges`) when given. */
-function buildDagreGraph(graph: GraphView, edgeWeight?: (edgeIndex: number) => number): BuiltGraph {
+function buildDagreGraph(graph: GraphView, direction: LayoutDirection, edgeWeight?: (edgeIndex: number) => number): BuiltGraph {
   // `multigraph: true` because this dialect allows two DOT edges between the
   // same node pair (e.g. two conditional outcomes both routed to the same
   // next node) — a plain graph collapses those into one dagre edge, losing
@@ -72,9 +93,13 @@ function buildDagreGraph(graph: GraphView, edgeWeight?: (edgeIndex: number) => n
   // *value* of `{}` (not `undefined`) is required here or dagre's named-edge
   // path throws reading `.points` off an unset label.
   const g = new dagre.graphlib.Graph({ multigraph: true });
-  g.setGraph({ rankdir: graph.rankdir, nodesep: NODE_SEP, ranksep: RANK_SEP, marginx: MARGIN, marginy: MARGIN });
+  // `direction` (this function's own parameter, defaulted by `layoutGraph`)
+  // drives dagre's rankdir — never `graph.rankdir`, which stays parsed and
+  // exposed on `GraphView` but is not consulted for layout (see the module
+  // doc: the card always renders top-to-bottom by default).
+  g.setGraph({ rankdir: direction, nodesep: NODE_SEP, ranksep: RANK_SEP, marginx: MARGIN, marginy: MARGIN });
   g.setDefaultEdgeLabel(() => ({}));
-  for (const node of graph.nodes) g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+  for (const node of graph.nodes) g.setNode(node.id, nodeSizeFor(node.label ?? node.id));
   const validEdges: { edge: GraphEdgeView; edgeIndex: number }[] = [];
   graph.edges.forEach((edge, edgeIndex) => {
     // A node reachable only through a validation-rejected edge (dangling
@@ -87,13 +112,18 @@ function buildDagreGraph(graph: GraphView, edgeWeight?: (edgeIndex: number) => n
   return { g, validEdges };
 }
 
-/** Pure dagre layout: deterministic node positions + routed edge points for a GraphView. No DOM. */
-export function layoutGraph(graph: GraphView): LaidOutGraph {
+/**
+ * Pure dagre layout: deterministic node positions + routed edge points for a
+ * GraphView. No DOM. `direction` defaults to "TB" (vertical, Fabro-style)
+ * regardless of the graph's own declared `rankdir` — pass "LR" explicitly
+ * for a left-to-right layout.
+ */
+export function layoutGraph(graph: GraphView, direction: LayoutDirection = DEFAULT_DIRECTION): LaidOutGraph {
   // First pass, uniform edge weight: establishes a rank per node so back
   // edges (loops like `approve -> plan`) can be told apart from the graph's
   // forward flow purely from the resulting layout, per the plan's own
   // definition ("target rank <= source rank").
-  const first = buildDagreGraph(graph);
+  const first = buildDagreGraph(graph, direction);
   dagre.layout(first.g);
   const isBackEdgeFirstPass = new Map<number, boolean>();
   for (const { edge, edgeIndex } of first.validEdges) {
@@ -105,7 +135,7 @@ export function layoutGraph(graph: GraphView): LaidOutGraph {
   // Second pass: zero-weight the back edges found above so a loop no longer
   // pulls on the main path's rank assignment (the "Check pushed down" T5
   // finding), then lay out again from a clean graph.
-  const second = buildDagreGraph(graph, (edgeIndex) => (isBackEdgeFirstPass.get(edgeIndex) ? BACK_EDGE_WEIGHT : 1));
+  const second = buildDagreGraph(graph, direction, (edgeIndex) => (isBackEdgeFirstPass.get(edgeIndex) ? BACK_EDGE_WEIGHT : 1));
   dagre.layout(second.g);
 
   const nodes: LaidOutNode[] = graph.nodes.map((node) => {
@@ -132,7 +162,9 @@ export function layoutGraph(graph: GraphView): LaidOutGraph {
 export type NodeStatus = GraphNodeView["status"];
 
 const STATUS_COLOR: Record<NonNullable<NodeStatus> | "pending", { fill: string; stroke: string }> = {
-  pending: { fill: "#f1f5f9", stroke: "#94a3b8" },
+  // Hollow: a plain white fill, same grey outline as an untraversed edge —
+  // a pending node reads as "not yet reached" rather than a flat grey box.
+  pending: { fill: "#ffffff", stroke: "#94a3b8" },
   running: { fill: "#dbeafe", stroke: "#2563eb" },
   // T6: a human gate waiting on its answer — distinct from "running" so the
   // DAG visibly flags where a run is stuck on a person, not just busy.
@@ -144,6 +176,32 @@ const STATUS_COLOR: Record<NonNullable<NodeStatus> | "pending", { fill: string; 
 
 export function statusColor(status: NodeStatus): { fill: string; stroke: string } {
   return STATUS_COLOR[status ?? "pending"];
+}
+
+/** Node outline stroke width by status (a running node's border reads slightly heavier, per the restyle), before any current-node emphasis is applied. */
+function statusStrokeWidth(status: NodeStatus): number {
+  return status === "running" ? 2.5 : 1.5;
+}
+
+type ShapeKind = "polygon" | "ellipse" | "rect";
+
+/** The primary outline element kind for a node's shape hint, keyed by handlerKind — a Graphviz-like reading (ellipse for agent/prompt) rather than a uniform box for every kind. */
+function shapeKindFor(handlerKind: string): ShapeKind {
+  switch (handlerKind) {
+    case "start":
+    case "human":
+    case "command":
+    case "conditional":
+    case "exit":
+    case "parallel":
+    case "parallel.fan_in":
+      return "polygon";
+    case "agent":
+    case "prompt":
+      return "ellipse";
+    default:
+      return "rect";
+  }
 }
 
 /** SVG polygon points (or null for a plain rounded rect) for a node's shape hint, keyed by handlerKind. */
@@ -205,9 +263,27 @@ function latestEdgeSelections(events: readonly RunEvent[]): Map<string, EdgeSele
   return byEdge;
 }
 
+/**
+ * A smoothed SVG path through dagre's routed points — a "Q" (quadratic)
+ * command per intermediate point, midpoint-smoothed between consecutive
+ * points, then a final "L" into the last point — rather than the old sharp
+ * polyline, so an edge reads like a Graphviz spline instead of a ruler-drawn
+ * dogleg. Two (or fewer) points have nothing to smooth and stay a straight line.
+ */
 function pathFor(points: { x: number; y: number }[]): string {
   if (points.length === 0) return "";
-  return points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  if (points.length <= 2) return points.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  let d = `M${points[0]!.x},${points[0]!.y}`;
+  for (let i = 1; i < points.length - 1; i++) {
+    const current = points[i]!;
+    const next = points[i + 1]!;
+    const midX = (current.x + next.x) / 2;
+    const midY = (current.y + next.y) / 2;
+    d += ` Q${current.x},${current.y} ${midX},${midY}`;
+  }
+  const last = points[points.length - 1]!;
+  d += ` L${last.x},${last.y}`;
+  return d;
 }
 
 /** The point at (approximately) half the polyline's total length — used to place an edge's label. Falls back to the midpoint of a 2-point (or shorter) path. */
@@ -251,11 +327,13 @@ export interface DagViewProps {
   threadIdByNode?: Record<string, string | null | undefined>;
   /** Called when an agent/prompt node with a known worker thread is clicked. */
   onOpenThread?: (threadId: string) => void;
+  /** Rank direction for `layoutGraph` — defaults to "TB" (vertical, Fabro-style), regardless of the graph's own declared `rankdir` (see the module doc). */
+  direction?: LayoutDirection;
 }
 
 /** dagre-laid-out SVG rendering of a workflow graph with a live execution overlay. */
-export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenThread }: DagViewProps) {
-  const laidOut = layoutGraph(graph);
+export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenThread, direction = DEFAULT_DIRECTION }: DagViewProps) {
+  const laidOut = layoutGraph(graph, direction);
   const selections = latestEdgeSelections(events);
   const viewWidth = Math.max(laidOut.width, NODE_WIDTH);
   const viewHeight = Math.max(laidOut.height, NODE_HEIGHT);
@@ -270,7 +348,7 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
     >
       <defs>
         <marker id="attractor-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-          <path d="M0,0 L10,5 L0,10 z" fill="#64748b" />
+          <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
         </marker>
         <marker id="attractor-arrow-traversed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" fill="#2563eb" />
@@ -282,13 +360,13 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
           const traversed = Boolean(selection);
           const label = edgeDisplayLabel(edge);
           const midpoint = label ? midpointOf(edge.points) : null;
-          // Untraversed edges are always solid #64748b/1.5px — legible on their
-          // own — except a back edge (a loop like `approve -> plan`) may also
-          // dash to visually flag it as "not the forward path", without
-          // dropping back to the old, barely-visible light grey. A traversed
-          // edge stays blue/2px regardless of back-edge-ness (unchanged).
-          const stroke = traversed ? "#2563eb" : "#64748b";
-          const strokeWidth = traversed ? 2 : 1.5;
+          // Untraversed edges are always solid #94a3b8/1.25px (the same grey
+          // as a pending node's hollow outline) — legible on their own —
+          // except a back edge (a loop like `approve -> plan`) may also dash
+          // to visually flag it as "not the forward path". A traversed edge
+          // stays blue/2px regardless of back-edge-ness (unchanged).
+          const stroke = traversed ? "#2563eb" : "#94a3b8";
+          const strokeWidth = traversed ? 2 : 1.25;
           const strokeDasharray = !traversed && edge.isBackEdge ? "6 4" : undefined;
           return (
             <g key={`${edge.from}->${edge.to}#${edge.edgeIndex}`}>
@@ -307,8 +385,10 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
               </path>
               {label && midpoint ? (
                 <g data-edge-label={`${edge.from}->${edge.to}`} transform={`translate(${midpoint.x}, ${midpoint.y})`}>
-                  <rect x={-(label.length * 3.6 + 4)} y={-8} width={label.length * 7.2 + 8} height={16} rx={3} fill="#fff" fillOpacity={0.9} />
-                  <text textAnchor="middle" y={4} fontSize={11} fill="#334155">
+                  {/* No background rect (per the restyle): a white text-stroke halo
+                      (paint-order="stroke") keeps the label legible over a crossing
+                      edge/node without a boxy background. */}
+                  <text textAnchor="middle" y={4} fontSize={11} fill="#475569" paintOrder="stroke" stroke="#fff" strokeWidth={3}>
                     {label}
                   </text>
                 </g>
@@ -323,7 +403,9 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
           const isCurrent = node.id === currentNodeId;
           const threadId = threadIdByNode?.[node.id] ?? null;
           const clickable = opensWorkerThread(node.handlerKind) && Boolean(threadId) && Boolean(onOpenThread);
-          const points = shapePoints(node.handlerKind, node.width, node.height);
+          const shapeKind = shapeKindFor(node.handlerKind);
+          const points = shapeKind === "polygon" ? shapePoints(node.handlerKind, node.width, node.height) : null;
+          const strokeWidth = isCurrent ? 3 : statusStrokeWidth(node.status);
           const x = node.x - node.width / 2;
           const y = node.y - node.height / 2;
           return (
@@ -347,13 +429,19 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
               style={{ cursor: clickable ? "pointer" : "default" }}
               transform={`translate(${x}, ${y})`}
             >
-              {points ? (
-                <polygon points={points} fill={color.fill} stroke={color.stroke} strokeWidth={isCurrent ? 3 : 1.5} />
+              {/* Dogfood-2 fix: a blocked agent/prompt node (waiting on a worker's
+                  own pending interaction, as opposed to a human-gate "blocked"
+                  with no waitingReason) gets a tooltip naming what it's stuck on. */}
+              {node.status === "blocked" && node.waitingReason ? <title>{`Waiting: ${node.waitingReason} in worker thread`}</title> : null}
+              {shapeKind === "polygon" && points ? (
+                <polygon points={points} fill={color.fill} stroke={color.stroke} strokeWidth={strokeWidth} />
+              ) : shapeKind === "ellipse" ? (
+                <ellipse cx={node.width / 2} cy={node.height / 2} rx={node.width / 2} ry={node.height / 2} fill={color.fill} stroke={color.stroke} strokeWidth={strokeWidth} />
               ) : (
-                <rect width={node.width} height={node.height} rx={8} fill={color.fill} stroke={color.stroke} strokeWidth={isCurrent ? 3 : 1.5} />
+                <rect width={node.width} height={node.height} rx={8} fill={color.fill} stroke={color.stroke} strokeWidth={strokeWidth} />
               )}
               {isCurrent ? <rect width={node.width} height={node.height} rx={8} fill="none" stroke="#1d4ed8" strokeWidth={1} strokeDasharray="2 2" /> : null}
-              <text x={node.width / 2} y={node.height / 2 + 4} textAnchor="middle" fontSize={13} fill="#0f172a">
+              <text x={node.width / 2} y={node.height / 2 + 4} textAnchor="middle" fontSize={12} fill="#0f172a">
                 {node.label ?? node.id}
               </text>
               {node.visit > 1 ? (

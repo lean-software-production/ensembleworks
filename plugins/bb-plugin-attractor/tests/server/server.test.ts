@@ -542,6 +542,83 @@ describe("attractor server plugin", () => {
     expect(answered.stderr).toContain("no pending human gate");
   });
 
+  const AGENT_WAIT_SOURCE = `digraph G {
+    start [shape=Mdiamond]
+    exit  [shape=Msquare]
+    implement [label="Implement", prompt="Implement it."]
+    start -> implement -> exit
+  }`;
+
+  function pendingPluginInteraction(threadId: string, overrides: { id?: string; rendererId?: string; title?: string } = {}) {
+    return {
+      id: overrides.id ?? "int-1",
+      threadId,
+      createdAt: Date.now(),
+      expiresAt: null,
+      resolvedAt: null,
+      status: "pending" as const,
+      statusReason: null,
+      turnId: null,
+      resolution: null,
+      origin: { kind: "plugin" as const, pluginId: "other-plugin", rendererId: overrides.rendererId ?? "file-edit" },
+      payload: { kind: "plugin" as const, title: overrides.title ?? "Edit file.ts", data: {} },
+    };
+  }
+
+  it("marks a worker's pending interaction as a blocked stage with a waiting reason, and blocks the run — clearing on thread.active", async () => {
+    const host = makeHost();
+    host.harness.sdk.stub("threads.spawn", async () => makeThreadResponse({ id: "worker-thread" }));
+    await plugin(host.bb);
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: AGENT_WAIT_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(() => expect(host.harness.sdk.callsTo("threads.spawn").length).toBeGreaterThan(0));
+
+    await host.harness.behavior.emitThreadEvent("interaction.pending", {
+      thread: makeThreadResponse({ id: "worker-thread" }),
+      interaction: pendingPluginInteraction("worker-thread"),
+    });
+
+    await vi.waitFor(async () => {
+      const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+      expect(status).toBe("blocked");
+    });
+    const stages = JSON.parse((await host.harness.behavior.runCli(["stages", runId], { threadId: "thread-1" })).stdout) as { nodeId: string; status: string; waitingReason: string | null }[];
+    const implement = stages.find((s) => s.nodeId === "implement")!;
+    expect(implement.status).toBe("blocked");
+    expect(implement.waitingReason).toBe("file-edit");
+
+    await host.harness.behavior.emitThreadEvent("thread.active", { thread: makeThreadResponse({ id: "worker-thread" }) });
+    await vi.waitFor(async () => {
+      const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+      expect(status).toBe("running");
+    });
+    const stagesAfter = JSON.parse((await host.harness.behavior.runCli(["stages", runId], { threadId: "thread-1" })).stdout) as { nodeId: string; status: string; waitingReason: string | null }[];
+    const implementAfter = stagesAfter.find((s) => s.nodeId === "implement")!;
+    expect(implementAfter.status).toBe("running");
+    expect(implementAfter.waitingReason).toBeNull();
+
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await waitForTerminalStatus(host, runId);
+  });
+
+  it("ignores a pending interaction on a thread this backend did not spawn", async () => {
+    const host = makeHost();
+    host.harness.sdk.stub("threads.spawn", async () => makeThreadResponse({ id: "worker-thread" }));
+    await plugin(host.bb);
+    const { runId } = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: AGENT_WAIT_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(() => expect(host.harness.sdk.callsTo("threads.spawn").length).toBeGreaterThan(0));
+
+    await host.harness.behavior.emitThreadEvent("interaction.pending", {
+      thread: makeThreadResponse({ id: "thread-1" }),
+      interaction: pendingPluginInteraction("thread-1", { id: "int-2" }),
+    });
+
+    const status = JSON.parse((await host.harness.behavior.runCli(["status", runId], { threadId: "thread-1" })).stdout).status;
+    expect(status).toBe("running");
+
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await waitForTerminalStatus(host, runId);
+  });
+
   it("bb attractor stop on a run that is not in flight exits 1 rather than pretending to stop it", async () => {
     const host = makeHost();
     await plugin(host.bb);
