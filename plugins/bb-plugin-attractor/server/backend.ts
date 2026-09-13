@@ -1,0 +1,466 @@
+/**
+ * The BB-thread `CodergenBackend`, per
+ * docs/plans/2026-09-13-attractor-runner-plan.md "BB plugin SDK notes"
+ * ("Spawning a worker thread") and "Prompt assembly (`compact` fidelity
+ * only in v1)".
+ *
+ * Spawns a hidden worker thread per `agent`/`prompt` stage, resolves its
+ * model/provider/reasoning_effort tuple (stylesheet, then explicit node
+ * attributes, then the origin thread's own provider/defaults — validated
+ * against the live catalog, never silently substituted), waits for
+ * `thread.idle`/`thread.failed`/`thread.deleted`, and — for an
+ * `output_schema` node — validates the worker's `attractor_result` tool
+ * report against the node's schema, re-prompting the same thread up to
+ * twice on an invalid or missing report before giving up.
+ *
+ * `bb.events.on` has no unsubscribe, so this module registers its three
+ * thread-lifecycle listeners exactly once per plugin load (here, once per
+ * `createThreadAgentBackend` call) and dispatches by threadId through an
+ * internal map, rather than registering a new listener per spawned thread.
+ *
+ * Lost-event race: `waitForCompletion` registers its waiter in the `waiters`
+ * map *before* the "reconcile immediately after spawn" `threads.get` call is
+ * awaited, so a `thread.idle`/`thread.failed` delivered while that call is in
+ * flight resolves the same promise instead of being dropped — the reconcile
+ * read only gets to act when the map entry is still present afterwards
+ * (nothing raced it).
+ *
+ * Cancellation: every wait observes `input.signal`. On abort it calls
+ * `bb.sdk.threads.stop` on the live worker thread and settles the pending
+ * completion as `{ kind: "aborted" }`, which `run()` turns into a rejected
+ * stage promise — this is what lets the engine's own abort check
+ * (`server/service.ts`'s `stopRun` -> `AbortController.abort()`) actually
+ * unwedge a run parked on an agent/prompt stage instead of hanging forever.
+ */
+
+import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { parseStylesheet, resolveStyle } from "../dot/stylesheet";
+import type { Context, Outcome, StageScopedEvent, WorkflowGraph, WorkflowNode } from "../engine/types";
+
+export interface AgentRunInput {
+  node: WorkflowNode;
+  graph: WorkflowGraph;
+  context: Context;
+  runId: string;
+  stageId: string;
+  signal: AbortSignal;
+  emit(event: StageScopedEvent): void;
+  /** The origin thread this run was started from — source of provider/model defaults and the environment to reuse. */
+  threadId: string;
+  projectId: string;
+  environmentId: string;
+}
+
+export interface AgentBackend {
+  run(input: AgentRunInput): Promise<Outcome>;
+  /** Called by the `attractor_result` tool's execute() when the worker reports a structured result. */
+  reportResult(workerThreadId: string, value: unknown): void;
+  /**
+   * Whether `threadId` is a live worker awaiting a structured result. Drives
+   * both `bb.agents.configure`'s tool gating and the `attractor_result` tool's
+   * own guard (a report from any other thread is rejected, not recorded).
+   */
+  isAwaitingResult(threadId: string): boolean;
+  /**
+   * Whether `threadId` is a live worker this backend spawned (structured or
+   * not). Only true once `spawn` has resolved; server.ts combines it with
+   * `context.origin.pluginId` to also cover the worker's first `thread.start`.
+   */
+  isWorkerThread(threadId: string): boolean;
+}
+
+const MAX_CORRECTIVE_RETRIES = 2;
+const PROMPT_PREVIEW_LENGTH = 400;
+const TRUNCATION_MARKER = " …[truncated]";
+
+type Completion = { kind: "idle"; text: string | null } | { kind: "failed"; error: string | null } | { kind: "deleted" } | { kind: "aborted" };
+
+// Per the plan's "Prompt assembly": a bullet summary of prior stages (node
+// id, label, status, and the first PROMPT_PREVIEW_LENGTH chars of the
+// response / command tail, marked when cut; the full text stays available
+// in context.response.<node_id>). Status
+// comes from `stage_status.<nodeId>` (engine.ts's writeOutcomeToContext) and
+// the label from the graph itself — the response map alone (keyed by node
+// id, text only) can't tell a downstream agent whether a prior stage
+// succeeded or failed.
+function summarizePriorStages(context: Context, graph: WorkflowGraph): string {
+  const response = context.get("response");
+  if (!response || typeof response !== "object" || Array.isArray(response)) return "";
+  const stageStatus = context.get("stage_status");
+  const statusOf = (nodeId: string): string | undefined =>
+    stageStatus && typeof stageStatus === "object" && !Array.isArray(stageStatus) ? (stageStatus as Record<string, unknown>)[nodeId] as string | undefined : undefined;
+  const lines = Object.entries(response as Record<string, unknown>).map(([nodeId, text]) => {
+    const label = graph.nodes.get(nodeId)?.label;
+    const status = statusOf(nodeId);
+    const heading = [nodeId, label, status].filter((part): part is string => Boolean(part)).join(" | ");
+    const full = String(text);
+    const preview = full.length > PROMPT_PREVIEW_LENGTH ? `${full.slice(0, PROMPT_PREVIEW_LENGTH)}${TRUNCATION_MARKER}` : full;
+    return `- ${heading}: ${preview}`;
+  });
+  return lines.length ? `Prior stages:\n${lines.join("\n")}\n\n` : "";
+}
+
+// A fan-in/digest stage otherwise sees `context.parallel.results` as opaque
+// JSON it must remember to inspect itself — per the plan, render the same
+// information a human would read off the DAG's parallel branches as a
+// prompt section, right after "Prior stages:", so a digest worker's prompt
+// actually carries what each branch said (see README "Deviations from the
+// plan" — dogfood run 411d2c5a's digest worker replied that
+// `parallel.results` held nothing usable).
+interface ParallelResultEntry {
+  id?: unknown;
+  status?: unknown;
+  text?: unknown;
+}
+
+function summarizeParallelResults(context: Context): string {
+  const parallel = context.get("parallel");
+  if (!parallel || typeof parallel !== "object" || Array.isArray(parallel)) return "";
+  const results = (parallel as Record<string, unknown>).results;
+  if (!Array.isArray(results) || results.length === 0) return "";
+  const lines = (results as ParallelResultEntry[]).map((entry) => {
+    const id = typeof entry.id === "string" ? entry.id : "?";
+    const status = typeof entry.status === "string" ? entry.status : "?";
+    const full = typeof entry.text === "string" ? entry.text : "";
+    const preview = full.length > PROMPT_PREVIEW_LENGTH ? `${full.slice(0, PROMPT_PREVIEW_LENGTH)}${TRUNCATION_MARKER}` : full;
+    return `- ${id} | ${status}: ${preview}`;
+  });
+  return `Parallel results (${results.length}):\n${lines.join("\n")}\n\n`;
+}
+
+function assemblePrompt(node: WorkflowNode, graph: WorkflowGraph, context: Context): string {
+  const goal = graph.goal ? `Goal: ${graph.goal}\n\n` : "";
+  const history = summarizePriorStages(context, graph);
+  const parallelResults = summarizeParallelResults(context);
+  const body = node.prompt ?? "";
+  const schemaInstruction = node.outputSchema
+    ? `\n\nWhen you are done, call the attractor_result tool exactly once with your JSON result value.`
+    : "";
+  return `${goal}${history}${parallelResults}${body}${schemaInstruction}`;
+}
+
+interface RoutingResult {
+  outcome: "succeeded" | "failed" | "partially_succeeded";
+  preferred_next_label?: string;
+  suggested_next_ids?: string[];
+  failure_reason?: string;
+  context_updates?: Record<string, unknown>;
+}
+
+const ROUTING_OUTCOMES = new Set(["succeeded", "failed", "partially_succeeded"]);
+
+function validateRoutingResult(value: unknown): { ok: true; value: RoutingResult } | { ok: false; error: string } {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return { ok: false, error: "result must be a JSON object" };
+  const record = value as Record<string, unknown>;
+  if (typeof record.outcome !== "string" || !ROUTING_OUTCOMES.has(record.outcome)) {
+    return { ok: false, error: 'result.outcome must be one of "succeeded", "failed", "partially_succeeded"' };
+  }
+  return { ok: true, value: record as unknown as RoutingResult };
+}
+
+function outcomeFromRouting(result: RoutingResult, text: string | null): Outcome {
+  return {
+    status: result.outcome,
+    ...(result.preferred_next_label !== undefined ? { preferredLabel: result.preferred_next_label } : {}),
+    ...(result.suggested_next_ids !== undefined ? { suggestedNextIds: result.suggested_next_ids } : {}),
+    ...(result.failure_reason !== undefined ? { failureReason: result.failure_reason } : {}),
+    ...(result.context_updates !== undefined ? { contextUpdates: result.context_updates as Outcome["contextUpdates"] } : {}),
+    ...(text !== null ? { text } : {}),
+  };
+}
+
+export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
+  // Each entry is a `finish` callback that is idempotent and self-removing
+  // (see waitForCompletion): whichever of an event, an abort, or a manual
+  // reconcile-driven settle happens first wins, and the other becomes a
+  // harmless no-op because the entry is already gone from the map.
+  const waiters = new Map<string, (completion: Completion) => void>();
+  const reportedResults = new Map<string, unknown>();
+  const workerNeedsResult = new Set<string>();
+  // Keyed by the worker's own thread id, which is only known once `spawn`
+  // resolves. `bb.agents.configure` can run for the worker *before* that
+  // (its thread.start fires inside the spawn call), so server.ts does not
+  // rely on these sets alone: it also recognises a worker by
+  // `context.origin.pluginId === bb.pluginId`, which BB stamps on every
+  // thread this plugin spawns. These sets only refine the answer afterwards.
+  const workerThreads = new Set<string>();
+  // Dogfood-2 fix: per live worker thread, the `emit` (HandlerInput.emit,
+  // already stamped runId/stageId/nodeId by the engine) of the stage
+  // currently awaiting that worker — set right alongside `workerThreads.add`
+  // in `run()` below, deleted in the same `finally`. This is how an
+  // "interaction.pending"/"thread.active" event delivered *outside* `run()`'s
+  // own await (which only ever sees the worker's final idle/failed/deleted)
+  // can still emit a stage-scoped event for the run currently executing it.
+  const emitByWorkerThread = new Map<string, (event: StageScopedEvent) => void>();
+  // Which worker threads currently have an unresolved pending interaction —
+  // guards against emitting a spurious `agent.resumed` off of a worker's
+  // *ordinary* thread.active/thread.idle transition (i.e. one that was never
+  // preceded by an `agent.waiting`).
+  const waitingWorkers = new Set<string>();
+
+  function isKnownWorkerThread(threadId: string, originPluginId: string | null): boolean {
+    return workerThreads.has(threadId) || originPluginId === bb.pluginId;
+  }
+
+  // The interaction's routing kind: a plugin-origin interaction's own
+  // rendererId (uniquely identifying what asked, e.g. a file-edit approval
+  // renderer from another plugin), else the provider interaction's own
+  // `payload.kind` (e.g. "approval", "user_question", or a provider's own
+  // `"<namespace>/<name>"` custom kind). Loosely typed (the real
+  // `PendingInteraction` union has no field in common across every arm) —
+  // narrowed defensively at each read instead.
+  function interactionKind(interaction: unknown): string {
+    const record = interaction as { payload?: { kind?: unknown }; origin?: { rendererId?: unknown } };
+    const kind = record.payload?.kind;
+    if (kind === "plugin") return typeof record.origin?.rendererId === "string" ? record.origin.rendererId : "plugin";
+    return typeof kind === "string" ? kind : "unknown";
+  }
+
+  function interactionTitle(interaction: unknown): string | null {
+    const record = interaction as { payload?: { title?: unknown } };
+    return typeof record.payload?.title === "string" ? record.payload.title : null;
+  }
+
+  function maybeEmitResumed(threadId: string): void {
+    if (!waitingWorkers.has(threadId)) return;
+    waitingWorkers.delete(threadId);
+    emitByWorkerThread.get(threadId)?.({ type: "agent.resumed", threadId });
+  }
+
+  bb.events.on("thread.idle", (payload) => {
+    maybeEmitResumed(payload.thread.id);
+    waiters.get(payload.thread.id)?.({ kind: "idle", text: payload.lastAssistantText });
+  });
+  // A worker that fails or is deleted while parked on a prompt is no longer
+  // waiting on it either — clear the stage's waiting reason before the
+  // completion settles, so the row never keeps a stale "waiting: …".
+  bb.events.on("thread.failed", (payload) => {
+    maybeEmitResumed(payload.thread.id);
+    waiters.get(payload.thread.id)?.({ kind: "failed", error: payload.error });
+  });
+  bb.events.on("thread.deleted", (payload) => {
+    maybeEmitResumed(payload.thread.id);
+    waiters.get(payload.thread.id)?.({ kind: "deleted" });
+  });
+  // Fired after a pending interaction row is committed — the moment a
+  // worker's own turn actually stopped on a permission/file-change/command/
+  // plan/question prompt (or a plugin-rendered one) that nothing was
+  // watching before this fix: the run just showed "running" forever.
+  bb.events.on("interaction.pending", ({ thread, interaction }) => {
+    if (!isKnownWorkerThread(thread.id, thread.originPluginId)) return;
+    const emit = emitByWorkerThread.get(thread.id);
+    if (!emit) return; // the stage already settled (or was never tracked) — nothing to attribute this to.
+    waitingWorkers.add(thread.id);
+    emit({ type: "agent.waiting", threadId: thread.id, interactionId: interaction.id, kind: interactionKind(interaction), title: interactionTitle(interaction) });
+  });
+  bb.events.on("thread.active", (payload) => {
+    maybeEmitResumed(payload.thread.id);
+  });
+
+  async function stopQuietly(threadId: string): Promise<void> {
+    try {
+      await bb.sdk.threads.stop({ threadId });
+    } catch (err) {
+      bb.log.warn(`attractor: failed to stop worker thread ${threadId} after cancellation: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  // Registers a waiter for `threadId`'s next lifecycle event *and* races it
+  // against `signal`: on abort, stops the live worker thread and settles the
+  // wait as `{ kind: "aborted" }` rather than leaving the stage promise
+  // pending forever. The waiter is stored (and reachable via `waiters.get`)
+  // before any `await` happens here, so a caller that also wants to consult
+  // an async snapshot (e.g. the post-spawn reconcile `threads.get`) can
+  // safely await that afterwards and check whether this entry is still
+  // present to know if an event already won the race.
+  function waitForCompletion(threadId: string, signal: AbortSignal): Promise<Completion> {
+    return new Promise((resolve) => {
+      let settled = false;
+      const finish = (completion: Completion) => {
+        if (settled) return;
+        settled = true;
+        waiters.delete(threadId);
+        signal.removeEventListener("abort", onAbort);
+        resolve(completion);
+      };
+      const onAbort = () => {
+        // Fire-and-forget, and must never throw here (sync or async): this
+        // runs either directly or from an `abort` event dispatch, and either
+        // way an escaping error would either skip `finish` below or surface
+        // as an unhandled exception rather than a rejected stage.
+        void stopQuietly(threadId);
+        finish({ kind: "aborted" });
+      };
+      waiters.set(threadId, finish);
+      if (signal.aborted) onAbort();
+      else signal.addEventListener("abort", onAbort, { once: true });
+    });
+  }
+
+  // Registers the waiter, then reconciles with a live snapshot in case the
+  // worker already finished before the listeners above could matter (a fast
+  // local model, a replayed event). The waiter is registered first (see
+  // waitForCompletion) so a lifecycle event delivered *during* the `get()`
+  // await is never lost — only when the entry is still pending afterwards
+  // does the snapshot get to decide anything.
+  async function reconcileOrWait(threadId: string, signal: AbortSignal): Promise<Completion> {
+    const completionPromise = waitForCompletion(threadId, signal);
+    const immediate = await bb.sdk.threads.get({ threadId });
+    const stillPending = waiters.get(threadId);
+    if (stillPending) {
+      if (immediate.status === "idle") stillPending({ kind: "idle", text: null });
+      else if (immediate.status === "error") stillPending({ kind: "failed", error: null });
+    }
+    return completionPromise;
+  }
+
+  // BB's own permission-mode vocabulary (`bb.sdk.threads.spawn`'s
+  // `permissionMode`, and `defaultExecutionOptions`'s) is exactly three
+  // values: `accept-edits` | `auto` | `full`. The Attractor DOT dialect's
+  // `permission_mode`/`default_permission_mode` attributes document two more
+  // — `workspace-write`/`readonly`, matching other coding-agent tooling's
+  // vocabulary — for graph-authoring convenience. Map those two down to the
+  // closest BB-supported mode before ever reaching `spawn` (whose own zod
+  // schema would otherwise reject an unknown literal outright):
+  // `workspace-write` -> `accept-edits` (both auto-approve file edits, just
+  // scoped differently), `readonly` -> `auto` (BB's most conservative real
+  // mode — it still prompts before anything a more permissive mode would
+  // auto-approve, which is the closest available approximation of "never
+  // write silently"). See README "Deviations from the plan".
+  function toBbPermissionMode(mode: string | undefined): "accept-edits" | "auto" | "full" | undefined {
+    if (mode === "workspace-write") return "accept-edits";
+    if (mode === "readonly") return "auto";
+    return mode as "accept-edits" | "auto" | "full" | undefined;
+  }
+
+  async function resolveModelTuple(node: WorkflowNode, graph: WorkflowGraph, threadId: string, environmentId: string) {
+    const rules = graph.modelStylesheet ? parseStylesheet(graph.modelStylesheet) : [];
+    const style = resolveStyle(
+      { id: node.id, shape: node.shape, classes: node.classes },
+      rules,
+      { model: node.model, provider: node.provider, reasoningEffort: node.reasoningEffort },
+    );
+    const [origin, defaults] = await Promise.all([bb.sdk.threads.get({ threadId }), bb.sdk.threads.defaultExecutionOptions({ threadId })]);
+    const providerId = style.provider ?? origin.providerId;
+    const model = style.model ?? defaults?.model;
+    if (!model) throw new Error(`no model could be resolved for node "${node.id}" (no stylesheet/node model and no thread default execution options)`);
+    const reasoningLevel = style.reasoningEffort ?? defaults?.reasoningLevel;
+    // permission_mode resolution mirrors model/provider/reasoning_effort's own
+    // order: the node's own declared attribute wins, then the graph's
+    // default_permission_mode, then whatever the origin thread would use by
+    // default — BB may still cap a spawned worker at the origin thread's own
+    // permission ceiling regardless of what is requested here.
+    const permissionMode = toBbPermissionMode(node.permissionMode ?? graph.defaultPermissionMode ?? defaults?.permissionMode);
+
+    const catalog = await bb.sdk.providers.models({ environmentId, providerId });
+    const known = catalog.models.some((m) => m.model === model || m.id === model);
+    if (!known) throw new Error(`unknown model "${model}" for provider "${providerId}" — refusing to silently substitute`);
+
+    return { providerId, model, reasoningLevel, permissionMode };
+  }
+
+  async function run(input: AgentRunInput): Promise<Outcome> {
+    const { node, graph, context, threadId, projectId, environmentId, emit, signal } = input;
+    if (signal.aborted) throw new Error("run was cancelled before the stage started");
+    const tuple = await resolveModelTuple(node, graph, threadId, environmentId);
+    const prompt = assemblePrompt(node, graph, context);
+
+    // Workers are deliberately spawned as *root* hidden threads (no
+    // parentThreadId): a hidden thread that has a parent reports its turns and
+    // blockers to that parent, which would spam the origin thread. BB still
+    // records this plugin as the spawn origin (`origin.pluginId`), which is
+    // what server.ts's `bb.agents.configure` keys worker tool gating on.
+    const spawned = await bb.sdk.threads.spawn({
+      projectId,
+      environment: { type: "reuse", environmentId },
+      prompt,
+      title: node.label ?? node.id,
+      providerId: tuple.providerId,
+      model: tuple.model,
+      reasoningLevel: tuple.reasoningLevel,
+      permissionMode: tuple.permissionMode,
+      visibility: "hidden",
+    });
+    const workerThreadId = spawned.id;
+    workerThreads.add(workerThreadId);
+    emitByWorkerThread.set(workerThreadId, emit);
+    if (node.outputSchema !== undefined) workerNeedsResult.add(workerThreadId);
+    emit({ type: "agent.thread", threadId: workerThreadId, provider: tuple.providerId, model: tuple.model, reasoningLevel: tuple.reasoningLevel ?? null });
+
+    try {
+      const completion = await reconcileOrWait(workerThreadId, signal);
+      if (node.outputSchema === undefined) {
+        return await resolveFreeText(workerThreadId, completion);
+      }
+      return await resolveStructured(workerThreadId, completion, signal);
+    } finally {
+      waiters.delete(workerThreadId);
+      workerThreads.delete(workerThreadId);
+      emitByWorkerThread.delete(workerThreadId);
+      waitingWorkers.delete(workerThreadId);
+      workerNeedsResult.delete(workerThreadId);
+      reportedResults.delete(workerThreadId);
+      // Best-effort, fire-and-forget: the worker thread has served its
+      // purpose once the stage has settled (including on cancellation, where
+      // it was already stopped above). archiveQuietly fully contains any
+      // failure (sync throw or async rejection) itself — this must never
+      // turn a settled stage outcome into a rejection via the `finally`.
+      void archiveQuietly(workerThreadId);
+    }
+  }
+
+  async function archiveQuietly(workerThreadId: string): Promise<void> {
+    try {
+      await bb.sdk.threads.archive({ threadId: workerThreadId });
+    } catch (err) {
+      bb.log.warn(`attractor: failed to archive worker thread ${workerThreadId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  async function textOf(workerThreadId: string): Promise<string | null> {
+    const { output } = await bb.sdk.threads.output({ threadId: workerThreadId });
+    return output;
+  }
+
+  async function resolveFreeText(workerThreadId: string, completion: Completion): Promise<Outcome> {
+    if (completion.kind === "aborted") throw new Error(`worker thread ${workerThreadId} stopped: run was cancelled`);
+    if (completion.kind === "failed") throw new Error(completion.error ?? `worker thread ${workerThreadId} failed`);
+    if (completion.kind === "deleted") throw new Error(`worker thread ${workerThreadId} was deleted before completing`);
+    const text = await textOf(workerThreadId);
+    return { status: "succeeded", ...(text !== null ? { text } : {}) };
+  }
+
+  async function resolveStructured(workerThreadId: string, initial: Completion, signal: AbortSignal): Promise<Outcome> {
+    let completion = initial;
+    for (let attempt = 0; ; attempt++) {
+      if (completion.kind === "aborted") throw new Error(`worker thread ${workerThreadId} stopped: run was cancelled`);
+      if (completion.kind === "failed") throw new Error(completion.error ?? `worker thread ${workerThreadId} failed`);
+      if (completion.kind === "deleted") throw new Error(`worker thread ${workerThreadId} was deleted before completing`);
+
+      const text = await textOf(workerThreadId);
+      const reported = reportedResults.get(workerThreadId);
+      const validated = reported !== undefined ? validateRoutingResult(reported) : { ok: false as const, error: "no attractor_result report was received" };
+      if (validated.ok) return outcomeFromRouting(validated.value, text);
+
+      if (attempt >= MAX_CORRECTIVE_RETRIES) {
+        return { status: "failed", failureReason: `attractor_result validation failed after ${attempt} corrective retr${attempt === 1 ? "y" : "ies"}: ${validated.error}`, ...(text !== null ? { text } : {}) };
+      }
+      reportedResults.delete(workerThreadId);
+      await bb.sdk.threads.send({
+        threadId: workerThreadId,
+        mode: "queue-if-active",
+        input: [{ type: "text", text: `That result was invalid (${validated.error}). Call attractor_result again with a corrected JSON value.`, mentions: [] }],
+      });
+      completion = await waitForCompletion(workerThreadId, signal);
+    }
+  }
+
+  return {
+    run,
+    reportResult(workerThreadId, value) {
+      reportedResults.set(workerThreadId, value);
+    },
+    isAwaitingResult: (threadId) => workerNeedsResult.has(threadId),
+    isWorkerThread: (threadId) => workerThreads.has(threadId),
+  };
+}

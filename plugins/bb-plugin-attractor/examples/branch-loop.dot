@@ -1,0 +1,19 @@
+// Build, check the outcome, and loop back through a fix stage until the
+// build is green (bounded by max_node_visits so a persistently broken build
+// terminates the run rather than looping forever).
+//
+// Exercises: graph-level `max_node_visits`, `on_failure="route"`, a
+// `diamond` conditional node routing on the previous stage's outcome, and a
+// goal-gated command node. Copied verbatim from
+// docs/plans/2026-09-13-attractor-runner-plan.md's Appendix.
+digraph BranchLoop {
+  graph [goal="Make the build green", max_node_visits=4, on_failure="route"]
+  start [shape=Mdiamond]  exit [shape=Msquare]
+  build [shape=parallelogram, script="npm run build", goal_gate=true]
+  fix   [prompt="The build failed. Read the output in context and fix it."]
+  check [shape=diamond]
+  start -> build -> check
+  check -> exit [condition="outcome=succeeded"]
+  check -> fix  [condition="outcome=failed"]
+  fix -> build
+}

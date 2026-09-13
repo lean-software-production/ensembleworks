@@ -1,0 +1,247 @@
+import Database from "better-sqlite3";
+import { describe, expect, it } from "vitest";
+import { RunStore } from "../../server/store";
+
+function makeStore() {
+  return new RunStore(new Database(":memory:"));
+}
+
+const graph = { name: "G", goal: "g", nodes: [], edges: [] };
+
+describe("RunStore", () => {
+  it("creates a run and reads it back with defaults", () => {
+    const store = makeStore();
+    const run = store.createRun({
+      id: "run-1",
+      threadId: "thread-1",
+      projectId: "project-1",
+      environmentId: "env-1",
+      title: "My run",
+      source: "digraph G {}",
+      graph,
+      initialContext: { a: 1 },
+    });
+    expect(run.status).toBe("running");
+    expect(run.currentNodeId).toBeNull();
+    expect(run.goalGateFailures).toEqual([]);
+    expect(store.getRun("run-1")).toEqual(run);
+  });
+
+  it("rejects creating a second run with the same id", () => {
+    const store = makeStore();
+    const input = { id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} };
+    store.createRun(input);
+    expect(() => store.createRun(input)).toThrow(/already exists/);
+  });
+
+  it("saves a checkpoint and reflects it on the run", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    const run = store.saveCheckpoint("run-1", {
+      runId: "run-1",
+      nextNodeId: "plan",
+      context: { last_stage: "start" },
+      visitCounts: { start: 1 },
+      goalGateOutcomes: {},
+    });
+    expect(run.currentNodeId).toBe("plan");
+    expect(run.context).toEqual({ last_stage: "start" });
+    expect(store.loadCheckpoint("run-1")).toEqual({
+      runId: "run-1",
+      nextNodeId: "plan",
+      context: { last_stage: "start" },
+      visitCounts: { start: 1 },
+      goalGateOutcomes: {},
+    });
+  });
+
+  it("records a finished run", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    const run = store.recordFinish("run-1", {
+      status: "succeeded",
+      finalOutcome: { status: "succeeded", text: "done" },
+      goalGateFailures: [],
+      context: { last_stage: "exit" },
+    });
+    expect(run.status).toBe("succeeded");
+    expect(run.finishedAt).not.toBeNull();
+    expect(run.finalOutcome).toEqual({ status: "succeeded", text: "done" });
+  });
+
+  it("upserts stages keyed by (runId, nodeId, visit) and lists them in visit order", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "start@1", nodeId: "start", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    store.upsertStage("run-1", { stageId: "start@1", nodeId: "start", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, startedAt: 1, completedAt: 2 });
+    store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: "thread-worker", startedAt: 3 });
+    const stages = store.listStages("run-1");
+    expect(stages).toHaveLength(2);
+    expect(stages[0]).toMatchObject({ nodeId: "start", status: "succeeded", completedAt: 2 });
+    expect(stages[1]).toMatchObject({ nodeId: "plan", status: "running", threadId: "thread-worker" });
+  });
+
+  it("attaches a worker threadId to an already-started stage (agent.thread event)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    store.setStageThreadId("run-1", "plan", 1, "worker-thread");
+    expect(store.listStages("run-1")[0]).toMatchObject({ threadId: "worker-thread" });
+  });
+
+  it("records a stage's actually-resolved provider/model/reasoning tuple, defaulting to null before the agent.thread event", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: null, model: null, reasoningLevel: null });
+    store.setStageProvider("run-1", "plan", 1, "anthropic", "claude-sonnet-5", "medium");
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: "anthropic", model: "claude-sonnet-5", reasoningLevel: "medium" });
+  });
+
+  it("keeps a stage's provider tuple after a later upsert (e.g. stage.completed) for the same (nodeId, visit)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    store.setStageProvider("run-1", "plan", 1, "anthropic", "claude-sonnet-5", "medium");
+    store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "succeeded", outcomeStatus: "succeeded", threadId: null, startedAt: 1, completedAt: 2 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: "anthropic", model: "claude-sonnet-5", reasoningLevel: "medium", status: "succeeded" });
+  });
+
+  it("records who answered a human gate stage (human.answered event's actor)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "gate@1", nodeId: "gate", visit: 1, attempt: 1, status: "blocked", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ actor: null });
+    store.setStageActor("run-1", "gate", 1, "ui");
+    expect(store.listStages("run-1")[0]).toMatchObject({ actor: "ui" });
+  });
+
+  it("records and clears a stage's waiting reason (agent.waiting/agent.resumed)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "implement@1", nodeId: "implement", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ waitingReason: null });
+    store.setStageWaitingReason("run-1", "implement", 1, "permission: Edit file.ts");
+    expect(store.listStages("run-1")[0]).toMatchObject({ waitingReason: "permission: Edit file.ts" });
+    store.setStageWaitingReason("run-1", "implement", 1, null);
+    expect(store.listStages("run-1")[0]).toMatchObject({ waitingReason: null });
+  });
+
+  it("opening an existing (pre-migration) database adds the new stage columns idempotently", () => {
+    const db = new Database(":memory:");
+    // Simulate the table as it looked before this migration.
+    db.exec(`CREATE TABLE attractor_stages (
+      run_id TEXT NOT NULL, stage_id TEXT NOT NULL, node_id TEXT NOT NULL, visit INTEGER NOT NULL,
+      attempt INTEGER NOT NULL, status TEXT NOT NULL, outcome_status TEXT, thread_id TEXT,
+      started_at INTEGER NOT NULL, completed_at INTEGER, PRIMARY KEY (run_id, node_id, visit)
+    )`);
+    const store = new RunStore(db);
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "plan@1", nodeId: "plan", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ providerId: null, model: null, reasoningLevel: null, actor: null, waitingReason: null, gateContext: null });
+    // And re-opening the now-migrated database a second time is a no-op, not an error.
+    expect(() => new RunStore(db)).not.toThrow();
+  });
+
+  it("records and clears a stage's gate context (human.requested event's context/reviewTarget summary)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "gate@1", nodeId: "gate", visit: 1, attempt: 1, status: "blocked", outcomeStatus: null, threadId: null, startedAt: 1 });
+    expect(store.listStages("run-1")[0]).toMatchObject({ gateContext: null });
+
+    const gateContext = {
+      context: { nodeId: "revise", label: "Revise", text: "the revised plan", threadId: "worker-thread" },
+      reviewTarget: { path: "PLAN.md", text: "# The plan" },
+    };
+    store.setStageGateContext("run-1", "gate", 1, gateContext);
+    expect(store.listStages("run-1")[0]).toMatchObject({ gateContext });
+
+    store.setStageGateContext("run-1", "gate", 1, null);
+    expect(store.listStages("run-1")[0]).toMatchObject({ gateContext: null });
+  });
+
+  it("appends events with an increasing seq and lists them since a cursor", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    const s1 = store.appendEvent("run-1", { type: "run.started", runId: "run-1", ts: 1 });
+    const s2 = store.appendEvent("run-1", { type: "run.completed", runId: "run-1", ts: 2, status: "succeeded", goalGateFailures: [] });
+    expect(s2).toBe(s1 + 1);
+    expect(store.listEvents("run-1")).toHaveLength(2);
+    expect(store.listEvents("run-1", s1)).toHaveLength(1);
+    expect(store.listEvents("run-1", s1)[0].type).toBe("run.completed");
+  });
+
+  it("lists runs for a thread newest-last with a cursor", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.createRun({ id: "run-2", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.createRun({ id: "run-3", threadId: "other", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    const page = store.listRuns({ threadId: "t", limit: 1 });
+    expect(page.runs.map((r) => r.id)).toEqual(["run-1"]);
+    expect(page.nextCursor).not.toBeNull();
+    const next = store.listRuns({ threadId: "t", limit: 1, after: page.nextCursor! });
+    expect(next.runs.map((r) => r.id)).toEqual(["run-2"]);
+  });
+
+  it("lists running run ids for background resume", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.createRun({ id: "run-2", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.recordFinish("run-2", { status: "succeeded", finalOutcome: { status: "succeeded" }, goalGateFailures: [], context: {} });
+    expect(store.listRunningRunIds()).toEqual(["run-1"]);
+  });
+
+  it("also lists blocked run ids for background resume (T6: a restart mid-human-gate must not strand the run)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.createRun({ id: "run-2", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.setStatus("run-2", "blocked");
+    expect(store.listRunningRunIds().sort()).toEqual(["run-1", "run-2"]);
+  });
+
+  it("lists a thread's active (running/blocked) runs newest first, excluding finished runs and other threads' runs (active-runs composer banner)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} }, 1_000);
+    store.createRun({ id: "run-2", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} }, 2_000);
+    store.setStatus("run-2", "blocked");
+    store.createRun({ id: "run-3", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} }, 3_000);
+    store.recordFinish("run-3", { status: "succeeded", finalOutcome: { status: "succeeded" }, goalGateFailures: [], context: {} });
+    store.createRun({ id: "run-4", threadId: "other", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} }, 4_000);
+
+    const active = store.listActiveRuns({ threadId: "t", limit: 10 });
+    expect(active.map((r) => r.id)).toEqual(["run-2", "run-1"]);
+  });
+
+  it("caps listActiveRuns at the given limit", () => {
+    const store = makeStore();
+    for (let i = 0; i < 5; i++) {
+      store.createRun({ id: `run-${i}`, threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} }, 1_000 + i);
+    }
+    const active = store.listActiveRuns({ threadId: "t", limit: 2 });
+    expect(active.map((r) => r.id)).toEqual(["run-4", "run-3"]);
+  });
+
+  it("throws a clear error for an unknown run id", () => {
+    const store = makeStore();
+    expect(() => store.getRun("missing")).toThrow(/not found/);
+  });
+
+  it("sets a run's status directly (T6: blocked while a human gate waits)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    const blocked = store.setStatus("run-1", "blocked");
+    expect(blocked.status).toBe("blocked");
+    const running = store.setStatus("run-1", "running");
+    expect(running.status).toBe("running");
+  });
+
+  it("sets a stage's status directly without disturbing its other fields (T6: blocked while a human gate waits)", () => {
+    const store = makeStore();
+    store.createRun({ id: "run-1", threadId: "t", projectId: null, environmentId: null, title: null, source: "digraph G{}", graph, initialContext: {} });
+    store.upsertStage("run-1", { stageId: "gate@1", nodeId: "gate", visit: 1, attempt: 1, status: "running", outcomeStatus: null, threadId: null, startedAt: 1 });
+    store.setStageStatus("run-1", "gate", 1, "blocked");
+    expect(store.listStages("run-1")[0]).toMatchObject({ nodeId: "gate", visit: 1, status: "blocked" });
+    store.setStageStatus("run-1", "gate", 1, "running");
+    expect(store.listStages("run-1")[0]).toMatchObject({ status: "running" });
+  });
+});
