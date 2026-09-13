@@ -421,13 +421,19 @@ function geoPath(variant: string, w: number, h: number, style: GeoStyle): ReactE
   }
 }
 
-export function GeoShape({ shape, getText }: ShapeBodyProps) {
+export function GeoShape({ shape, getText, editorState }: ShapeBodyProps) {
   const props = shape.props as Record<string, unknown>
   const w = typeof props.w === 'number' && props.w > 0 ? props.w : DEFAULT_W
   const h = typeof props.h === 'number' && props.h > 0 ? props.h : DEFAULT_H
   const variant = geoVariant(shape)
   const style = geoStyle(shape)
-  const label = geoLabel(shape, getText)
+  // STATIC LABEL HIDDEN WHILE EDITING (label-render task gap fix):
+  // TextEditor.tsx mounts a sibling textarea overlay while `editorState.
+  // editingId === shape.id` — rendering this body's OWN label text at the
+  // same time double-draws it underneath the editing surface. `editorState`
+  // is optional (most fixtures/goldens omit it, per shapeRegistry.ts's
+  // ShapeBodyProps doc comment) — absent means "not editing", never a crash.
+  const label = editorState?.editingId === shape.id ? '' : geoLabel(shape, getText)
 
   return (
     <div
@@ -463,6 +469,7 @@ export function GeoShape({ shape, getText }: ShapeBodyProps) {
             boxSizing: 'border-box',
             overflow: 'hidden',
             overflowWrap: 'break-word',
+            whiteSpace: 'pre-wrap', // label-render task gap fix: preserve newlines the textarea happily accepted (TextEditor.tsx)
             pointerEvents: 'none',
             color: style.labelColor,
             fontFamily: style.fontFamily,

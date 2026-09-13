@@ -223,9 +223,16 @@ export function textContent(shape: ShapeBodyProps['shape'], getText?: (id: strin
   return ''
 }
 
-export function TextShape({ shape, getText }: ShapeBodyProps) {
+export function TextShape({ shape, getText, editorState }: ShapeBodyProps) {
   const style = textStyle(shape)
-  const text = textContent(shape, getText)
+  // STATIC LABEL HIDDEN WHILE EDITING (label-render task gap fix):
+  // TextEditor.tsx mounts a sibling textarea overlay while `editorState.
+  // editingId === shape.id` — rendering this body's OWN text at the same
+  // time double-draws it underneath the editing surface (a ghosted/bold
+  // look since both sit at the exact same position). `editorState` is
+  // optional (most fixtures/goldens omit it, per shapeRegistry.ts's
+  // ShapeBodyProps doc comment) — absent means "not editing", never a crash.
+  const text = editorState?.editingId === shape.id ? '' : textContent(shape, getText)
   return (
     <div
       data-shape-body="text"

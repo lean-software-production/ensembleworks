@@ -7,7 +7,12 @@ import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Shape } from '@ensembleworks/canvas-model'
+import type { EditorState } from '@ensembleworks/canvas-editor'
 import { TextShape, textContent, textStyle } from './TextShape.js'
+
+function editorStateWith(overrides: Partial<EditorState> = {}): EditorState {
+  return { camera: { x: 0, y: 0, z: 1 }, selection: new Set(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p', ...overrides }
+}
 
 function textShape(overrides: Partial<Shape> = {}): Shape {
   return {
@@ -169,6 +174,32 @@ function textShape(overrides: Partial<Shape> = {}): Shape {
   assert.ok(html.includes('background:transparent') || html.includes('background:rgba(0,0,0,0)'), 'TextShape renders a transparent background, no box fill')
   assert.ok(!html.includes('border:1px') && !html.includes('border-bottom'), 'TextShape renders no border/box chrome')
   console.log('ok: TextShape — transparent background, no border (bare text, no box)')
+}
+
+// ============================================================================
+// 9. STATIC LABEL HIDDEN WHILE EDITING (label-render task): while
+//    `editorState.editingId` is this shape's id, the body must not render
+//    its own copy of the text — TextEditor.tsx's sibling textarea overlay is
+//    the only visible copy. Not editing (a different id, or an absent
+//    editorState) still renders the text as before.
+// ============================================================================
+{
+  const shape = textShape({ props: {} })
+  const editingHtml = renderToStaticMarkup(
+    createElement(TextShape, { shape, snapshot: undefined as any, editorState: editorStateWith({ editingId: shape.id }), getText: () => 'hello' }),
+  )
+  assert.ok(!editingHtml.includes('hello'), `TextShape must not render its own text while this shape is being edited, got: ${editingHtml}`)
+
+  const notEditingHtml = renderToStaticMarkup(
+    createElement(TextShape, { shape, snapshot: undefined as any, editorState: editorStateWith({ editingId: 'shape:someone-else' }), getText: () => 'hello' }),
+  )
+  assert.ok(notEditingHtml.includes('hello'), "a different shape being edited must not hide THIS text shape's content")
+
+  const noEditorStateHtml = renderToStaticMarkup(
+    createElement(TextShape, { shape, snapshot: undefined as any, editorState: undefined as any, getText: () => 'hello' }),
+  )
+  assert.ok(noEditorStateHtml.includes('hello'), 'an absent editorState (most fixtures/goldens) renders the text normally')
+  console.log('ok: TextShape — static text hidden while this shape is being edited, shown otherwise')
 }
 
 console.log('ok: text-shape (live text first with richText fallback, v1 font/size/color/align styling, transparent/borderless, empty renders empty)')

@@ -121,7 +121,7 @@ import type { ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { shapeBodyTransform } from './ShapeBody.js'
 import { isEmbedKind } from './shapeRegistry.js'
-import { noteStyle, NOTE_LABEL_FONT_SIZE, NOTE_LABEL_LINE_HEIGHT } from './shapes/NoteShape.js'
+import { noteStyle, NOTE_LABEL_LINE_HEIGHT } from './shapes/NoteShape.js'
 import { textStyle } from './shapes/TextShape.js'
 import { geoStyle } from './shapes/GeoShape.js'
 
@@ -200,13 +200,14 @@ export function handleEditorKeyDown(key: string, onEndEdit: () => void): void {
  * MATCH whichever text-capable kind (note/text/geo — canvas-model's
  * isTextCapableKind) is currently being edited (Task C6 — "the editing mount
  * must not jump visually vs the rich bodies"). Reuses each body's own pure
- * style resolver — NoteShape.tsx's `noteStyle`, TextShape.tsx's `textStyle`,
- * GeoShape.tsx's `geoStyle` — rather than re-deriving the color/font/size
- * tables those modules already own; NoteShape.tsx/GeoShape.tsx additionally
- * export their fixed label-layout CONSTANTS (fontSize/lineHeight/textAlign —
- * not tables, the same numbers every note/geo label uses regardless of
- * props) for the identical single-source-of-truth reason. See those modules'
- * GROUNDING headers for where every value ultimately traces back to v1.
+ * style resolver — NoteShape.tsx's `noteStyle` (whose `.fontSize` now
+ * follows props.size, label-render task — not a fixed 16px), TextShape.tsx's
+ * `textStyle`, GeoShape.tsx's `geoStyle` — rather than re-deriving the
+ * color/font/size tables those modules already own. NoteShape.tsx
+ * additionally exports `NOTE_LABEL_LINE_HEIGHT` (v1's `size`-INVARIANT line
+ * height — unlike font size, it does not vary by props.size) for the same
+ * single-source-of-truth reason. See those modules' GROUNDING headers for
+ * where every value ultimately traces back to v1.
  *
  * NOTE COLOR: `noteStyle(shape).color` is v1's fixed noteText (#000000,
  * black in every theme color) — NOT the sticky's own fill color; matches
@@ -255,7 +256,7 @@ export function editorTextStyle(shape: Shape): EditorTextStyle {
   switch (shape.kind) {
     case 'note': {
       const s = noteStyle(shape)
-      return { fontFamily: s.fontFamily, fontSize: NOTE_LABEL_FONT_SIZE, lineHeight: NOTE_LABEL_LINE_HEIGHT, color: s.color, textAlign: s.textAlign, padding: 4 }
+      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: NOTE_LABEL_LINE_HEIGHT, color: s.color, textAlign: s.textAlign, padding: 4 }
     }
     case 'text': {
       const s = textStyle(shape)

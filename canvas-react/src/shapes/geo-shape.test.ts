@@ -6,7 +6,12 @@ import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { Shape } from '@ensembleworks/canvas-model'
+import type { EditorState } from '@ensembleworks/canvas-editor'
 import { GeoShape, geoStyle, geoVariant, geoLabel } from './GeoShape.js'
+
+function editorStateWith(overrides: Partial<EditorState> = {}): EditorState {
+  return { camera: { x: 0, y: 0, z: 1 }, selection: new Set(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p', ...overrides }
+}
 
 function geoShape(overrides: Partial<Shape> = {}): Shape {
   return {
@@ -25,8 +30,8 @@ function geoShape(overrides: Partial<Shape> = {}): Shape {
   } as Shape
 }
 
-function render(shape: Shape, getText?: (id: string) => string) {
-  return renderToStaticMarkup(createElement(GeoShape, { shape, snapshot: undefined as any, editorState: undefined as any, getText }))
+function render(shape: Shape, getText?: (id: string) => string, editorState?: EditorState) {
+  return renderToStaticMarkup(createElement(GeoShape, { shape, snapshot: undefined as any, editorState: (editorState ?? undefined) as any, getText }))
 }
 
 // ============================================================================
@@ -340,6 +345,39 @@ function render(shape: Shape, getText?: (id: string) => string) {
   assert.match(labelDiv(absent)!, /align-items:center/, `an absent verticalAlign prop defaults to v1's own default (middle) -> center, got: ${labelDiv(absent)}`)
 
   console.log('ok: GeoShape — props.verticalAlign honored (start/middle/end), default middle/center')
+}
+
+// ============================================================================
+// MULTI-LINE labels (label-render task): a geo's label must preserve
+// newlines — the editing textarea happily accepts Enter (TextEditor.tsx),
+// but the label div previously had no `white-space` override, so the
+// browser's default `normal` would collapse them on blur.
+// ============================================================================
+{
+  const html = render(geoShape({ props: {} }), () => 'line one\nline two')
+  assert.ok(html.includes('white-space:pre-wrap'), `geo label should set white-space:pre-wrap so newlines survive, got: ${html}`)
+  assert.ok(html.includes('line one\nline two'), 'the literal newline character reaches the rendered markup')
+  console.log('ok: GeoShape — white-space:pre-wrap so multi-line labels survive')
+}
+
+// ============================================================================
+// STATIC LABEL HIDDEN WHILE EDITING (label-render task): while
+// `editorState.editingId` is this shape's id, the label div must not render
+// its own copy of the text — TextEditor.tsx's sibling textarea overlay is
+// the only visible copy. Not editing (a different id, or an absent
+// editorState) still renders the label as before.
+// ============================================================================
+{
+  const shape = geoShape({ props: {} })
+  const editingHtml = render(shape, () => 'hello', editorStateWith({ editingId: shape.id }))
+  assert.ok(!editingHtml.includes('hello'), `GeoShape must not render its own label text while this shape is being edited, got: ${editingHtml}`)
+
+  const notEditingHtml = render(shape, () => 'hello', editorStateWith({ editingId: 'shape:someone-else' }))
+  assert.ok(notEditingHtml.includes('hello'), "a different shape being edited must not hide THIS geo's label")
+
+  const noEditorStateHtml = render(shape, () => 'hello')
+  assert.ok(noEditorStateHtml.includes('hello'), 'an absent editorState (most fixtures/goldens) renders the label normally')
+  console.log('ok: GeoShape — static label hidden while this shape is being edited, shown otherwise')
 }
 
 console.log('ok: geo-shape (variant discriminator + real SVG geometry, v1-grounded stroke/fill, live label, DOM wiring, dash, align)')
