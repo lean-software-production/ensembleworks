@@ -48,7 +48,8 @@ Human output by default; add `--json` for machine output. Non-zero exit on any e
 | `bin/relay comment RLY-12 "…"` | Post a comment (as Relay AI) |
 | `bin/relay move RLY-12 Code` | Move to a stage (by name, e.g. `"Code:Review"`) |
 | `bin/relay status RLY-12 working` | Set status (`ready`\|`working`\|`needs_input`\|`in_review`) |
-| `bin/relay describe RLY-12 @spec.md` | Set the card's **description** (the spec) |
+| `bin/relay describe RLY-12 @summary.md` | Set the card's **description** (the short intake summary) |
+| `bin/relay spec RLY-12 @spec.md` | Set the card's **spec** (the approved design; authored at Spec) |
 | `bin/relay criteria RLY-12 @criteria.md` | Set the card's **acceptance criteria** (numbered; authored at Spec, run at Code) |
 | `bin/relay plan RLY-12 @plan.md` | Set the card's **plan** (travels with the card) |
 | `bin/relay branch RLY-12 rly-12-…` | Record the **branch** this card's work lives on |
@@ -231,7 +232,8 @@ build your own runner or agents, honor these:
    A step must be self-contained: it cannot assume the tree is where it left it.
 
 4. **Work travels *with the card*, not in shared repo files.** The **spec** is the card's
-   `description`; the **acceptance criteria** are the card's `acceptance_criteria` field; the
+   `spec` field (the `description` field holds only the short intake summary); the
+   **acceptance criteria** are the card's `acceptance_criteria` field; the
    **plan** is the card's `plan` field. A step materializes these into the repo just-in-time
    (inside the card's branch, at the per-card `$RELAY_PLAN` path) and never relies on a shared
    worktree-root file that another card would clobber.

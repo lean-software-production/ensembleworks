@@ -1,0 +1,364 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Canvas Rewrite Track — Dashboard</title>
+<style>
+  :root {
+    --bg: #f7f8fa;
+    --panel: #ffffff;
+    --panel-2: #f1f3f6;
+    --border: #dfe3ea;
+    --text: #1b1f27;
+    --text-dim: #5b6472;
+    --accent: #2f5fd0;
+    --good: #12875a;
+    --warn: #97650f;
+    --danger: #c53c30;
+    --mono: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    line-height: 1.55;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 32px 24px 96px; }
+  h1 { font-size: 1.7rem; margin: 0 0 6px; }
+  h2 { font-size: 1.25rem; margin: 0 0 12px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
+  h3 { font-size: 1.02rem; margin: 20px 0 8px; color: var(--text); }
+  p { color: var(--text-dim); margin: 0 0 12px; }
+  a { color: var(--accent); }
+  code, .mono { font-family: var(--mono); font-size: 0.88em; }
+  code { background: #eef0f4; padding: 1px 5px; border-radius: 4px; color: #2a3040; border: 1px solid #e1e5ec; }
+
+  header.top { margin-bottom: 28px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+  .chip {
+    font-size: 0.78rem; padding: 4px 10px; border-radius: 999px;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text-dim);
+  }
+  .chip.good { color: var(--good); border-color: #12875a55; background: #12875a14; }
+  .chip.warn { color: var(--warn); border-color: #97650f55; background: #97650f14; }
+  .chip.danger { color: var(--danger); border-color: #c53c3055; background: #c53c3014; }
+
+  nav.toc { margin: 22px 0 32px; padding: 14px 18px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; }
+  nav.toc ul { margin: 0; padding-left: 18px; columns: 2; font-size: 0.92rem; }
+  nav.toc a { text-decoration: none; }
+  nav.toc a:hover { text-decoration: underline; }
+
+  section { margin: 36px 0; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 18px 20px; margin: 14px 0;
+  }
+
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--panel-2);
+    padding: 12px 16px; border-radius: 6px; margin: 14px 0; font-size: 0.94rem;
+  }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout.info { border-left-color: var(--accent); }
+  .callout.good { border-left-color: var(--good); }
+  .callout.warn { border-left-color: var(--warn); }
+  .callout.danger { border-left-color: var(--danger); }
+  .callout strong { color: var(--text); }
+
+  .badge {
+    display: inline-block; font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em;
+    padding: 2px 8px; border-radius: 5px; text-transform: uppercase;
+  }
+  .badge.done { background: #12875a1f; color: var(--good); }
+  .badge.open { background: #2f5fd01f; color: var(--accent); }
+  .badge.todo { background: #00000010; color: var(--text-dim); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.92rem; margin: 10px 0; }
+  th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--text-dim); font-weight: 600; font-size: 0.82rem; text-transform: uppercase; letter-spacing: 0.02em; }
+  tr:last-child td { border-bottom: none; }
+
+  .sev { font-size: 0.72rem; font-weight: 700; padding: 2px 8px; border-radius: 5px; text-transform: uppercase; }
+  .sev.high { background: #c53c301f; color: var(--danger); }
+  .sev.med { background: #97650f1f; color: var(--warn); }
+  .sev.low { background: #00000010; color: var(--text-dim); }
+
+  .timeline { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0; }
+  .tl-node {
+    flex: 1 1 120px; min-width: 120px; border-radius: 8px; padding: 12px 12px;
+    border: 1px solid var(--border); background: var(--panel-2); position: relative;
+  }
+  .tl-node.done { border-color: #12875a55; }
+  .tl-node.here { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .tl-node.pending { opacity: 0.55; }
+  .tl-node .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .tl-node.done .dot { background: var(--good); }
+  .tl-node.here .dot { background: var(--accent); }
+  .tl-node.pending .dot { background: var(--text-dim); }
+  .tl-node .label { font-weight: 600; font-size: 0.86rem; }
+  .tl-node .date { font-size: 0.72rem; color: var(--text-dim); margin-top: 3px; }
+  .tl-you { font-size: 0.65rem; color: var(--accent); font-weight: 700; letter-spacing: 0.04em; margin-top: 4px; }
+
+  .cause-table td:first-child, .cause-table th:first-child { white-space: nowrap; }
+  footer { margin-top: 60px; color: var(--text-dim); font-size: 0.8rem; border-top: 1px solid var(--border); padding-top: 16px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <h1>Canvas Rewrite Track</h1>
+  <p>tldraw → agent-first canvas engine (<code>canvas-model</code> / <code>canvas-doc</code> / <code>canvas-sync</code> / <code>canvas-editor</code> / <code>canvas-react</code>), rolled out per-room behind a dogfood flag.</p>
+  <div class="chips">
+    <span class="chip good">Phases 0–4 + perf-parity — merged</span>
+    <span class="chip open">PR #57 open — core authoring parity + write-safety</span>
+    <span class="chip">main @ <code>af09e21</code> (v0.23.0)</span>
+    <span class="chip warn">v2 not yet at load-time parity with v1</span>
+  </div>
+</header>
+
+<nav class="toc">
+  <ul>
+    <li><a href="#progress">Progress overview</a></li>
+    <li><a href="#phase4">Phase 4 — parity + stability (merged)</a></li>
+    <li><a href="#perf-parity">Perf-parity push (merged)</a></li>
+    <li><a href="#pr57">PR #57 — authoring parity + write-safety (open)</a></li>
+    <li><a href="#risks">Risks</a></li>
+    <li><a href="#deploy">Deploy / release</a></li>
+  </ul>
+</nav>
+
+<section id="progress">
+  <h2>Progress overview</h2>
+  <p>
+    The original 7-phase plan (<code>docs/plans/2026-07-10-canvas-rewrite-design.md</code>) covered Phases 0–6.
+    Phases 0–4 are done and merged. Two further pieces of work have organically grown off the
+    end of that plan, outside its original numbering: a <strong>v2 load-performance-parity push</strong>
+    (PR&nbsp;#48 + #50, merged 2026-07-20) and, now, a much larger <strong>core-authoring-parity + write-path-safety
+    push</strong> (PR&nbsp;#57), currently open against <code>main</code>.
+  </p>
+  <p>
+    <code>main</code> is at <code>af09e21</code>, tag <code>v0.23.0</code> — three releases (<code>v0.22.0</code>,
+    <code>v0.22.1</code>, <code>v0.23.0</code>) have shipped since the perf-parity push landed, none of them
+    touching the canvas track (they carried an unrelated A/V panel feature, an "invisible tmux" change,
+    and the initial Relay integration, respectively).
+  </p>
+
+  <div class="timeline">
+    <div class="tl-node done"><span class="dot"></span><span class="label">Phase 0</span><div class="date">baseline, merged</div></div>
+    <div class="tl-node done"><span class="dot"></span><span class="label">Phase 1</span><div class="date">merged</div></div>
+    <div class="tl-node done"><span class="dot"></span><span class="label">Phase 2</span><div class="date">merged</div></div>
+    <div class="tl-node done"><span class="dot"></span><span class="label">Phase 3</span><div class="date">merged</div></div>
+    <div class="tl-node done"><span class="dot"></span><span class="label">Phase 4</span><div class="date">merged 2026-07-19</div></div>
+    <div class="tl-node done"><span class="dot"></span><span class="label">Perf-parity push</span><div class="date">PR #48/#50, merged 2026-07-20</div></div>
+    <div class="tl-node here"><span class="dot"></span><span class="label">PR #57</span><div class="date">authoring + write-safety</div><div class="tl-you">YOU ARE HERE — open, CI green</div></div>
+    <div class="tl-node pending"><span class="dot"></span><span class="label">Phase 5</span><div class="date">not started</div></div>
+    <div class="tl-node pending"><span class="dot"></span><span class="label">Phase 6</span><div class="date">not started</div></div>
+  </div>
+
+  <table>
+    <thead><tr><th>Milestone</th><th>Status</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr><td>Phase 0 — clean-room baseline</td><td><span class="badge done">done</span></td><td>PR #33</td></tr>
+      <tr><td>Phase 1–3</td><td><span class="badge done">done</span></td><td>editor/react engine + sync, pre-dogfood</td></tr>
+      <tr><td>Phase 4 — parity + stability</td><td><span class="badge done">done merged 2026-07-19</span></td><td>PR #47, merge commit <code>b5bd3b3</code></td></tr>
+      <tr><td>Perf-parity push (unplanned)</td><td><span class="badge done">done merged 2026-07-20</span></td><td>PR #48 + #50 → <code>main</code> via <code>2d46a93</code></td></tr>
+      <tr><td>PR #57 — authoring parity + write-safety (unplanned)</td><td><span class="badge open">open</span></td><td>feature-complete, CI green, mergeable, <strong>no review yet</strong></td></tr>
+      <tr><td>Phase 5 / 6</td><td><span class="badge todo">not started</span></td><td>per original design doc</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="phase4">
+  <h2>Phase 4 — parity + stability <span class="badge done">merged</span></h2>
+  <div class="callout good">
+    <p><strong>Merged 2026-07-19</strong>, merge commit <code>b5bd3b3</code> (PR #47, branch <code>canvas-phase4</code>).
+    Grew to 100 commits / +18K / 138 files by merge time (absorbed an unrelated main-side PR #29 "crosstalk"
+    plus the new <code>interaction-contracts</code> framework this repo now requires for anything touching
+    <code>canvas-editor/src/tools/</code>, <code>canvas-react/src/</code>, or <code>client/src/canvas-v2/</code>).</p>
+  </div>
+  <p>
+    v2 rooms went from a <code>BoxShape</code> placeholder to real note/frame/text/geo bodies, Delete/Backspace,
+    local-only undo/redo (an editor-level inverse-intent stack — loro-crdt's own <code>UndoManager</code> was
+    ruled out as unsafe for this), total gesture cancellation, a restored embed write-path (terminal rename,
+    screenshare still-frame stamp-back, file-viewer rev-bump), and a connection-state banner.
+  </p>
+  <p>Owner-accepted gap carried forward: undo is per-pointermove-commit granularity, not gesture-atomic
+    (a multi-step drag needs multiple <code>Ctrl+Z</code>) — tracked, not re-litigated. Four OBSERVE-straddler
+    items (SQLite <code>VACUUM</code>, lossy-repair edges, <code>pendingImports</code> re-request, reconnect delta)
+    were all re-deferred with no threshold tripped. The one open DoD item at merge time — a nightly
+    <code>canvas-soak.yml</code> run on the recalibrated settings — closed the following day, green on
+    main's post-merge tip.</p>
+</section>
+
+<section id="perf-parity">
+  <h2>Perf-parity push <span class="badge done">merged</span></h2>
+  <div class="callout info">
+    <p>Two PRs stacked on each other, both authored directly by a human (Trevoke), not subagent-driven
+    like Phases 1–4: <code>main</code> ← <a href="https://github.com/lean-software-production/ensembleworks/pull/48">#48</a>
+    <code>fix/v2-boot-sync-ready</code> ← <a href="https://github.com/lean-software-production/ensembleworks/pull/50">#50</a>
+    <code>perf/v2-first-shape-harness</code>. #50 merged into #48's branch first; that combined branch then
+    merged into <code>main</code> via #48's own merge, commit <code>2d46a93</code>, 2026-07-20.
+    <strong>Neither PR got a human review before merging</strong> — a deviation from every prior phase's
+    review-gate pattern.</p>
+  </div>
+  <h3>PR #48 — real sync-readiness signal</h3>
+  <p>Replaced v2's fixed 400ms boot sleep with an actual signal: a new additive protocol frame
+    <code>Frame.SyncDone</code> (tag 4), sent by the server right after the backfill <code>Update</code> in
+    reply to a <code>SyncRequest</code>. <code>SyncClientPeer.ready()</code> resolves on it (re-armed on every
+    <code>reconnect()</code>). <code>CanvasV2App.boot()</code> now races <code>peer.ready()</code> against a
+    400ms safety-cap delay instead of always sleeping the full 400ms. Deploy-safe since unknown frame tags
+    were already ignored by both peers.</p>
+  <h3>PR #50 — load-parity measurement (does not fix)</h3>
+  <p>A time-to-first-shape harness seeding a room over the real <code>/sync/v2</code> WebSocket, against a
+    production <code>vite build</code> served by <code>vite preview</code>.</p>
+  <div class="callout warn">
+    <p><strong>Headline finding: v2@100 shapes loaded at 1.18x v1@100's time-to-first-shape</strong>
+    (506.8ms vs 428.7ms), against the owner's acceptance bar of ≤1.00x. Measured, not fixed by this PR.</p>
+  </div>
+  <table class="cause-table">
+    <thead><tr><th>Candidate cause</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td>Oplog volume</td><td>Ruled out — 1.00x</td></tr>
+      <tr><td>Toolbar → first-shape gap</td><td>Ruled out — ~0ms</td></tr>
+      <tr><td>Cold-actor replay</td><td>Not implicated — 28.7ms delta</td></tr>
+      <tr><td>Client-side bootstrap</td><td>Implicated — ~300ms (~55–60% of load); tied to v2's ~4.2MB lazy <code>CanvasV2App</code> chunk vs v1's ~1.7MB <code>tldraw</code> chunk</td></tr>
+    </tbody>
+  </table>
+  <p style="font-size:0.86rem;">Comparability caveats stated in the PR itself: the measured engine-only delta
+    is ~78ms, not ~300ms (v1's own bootstrap was never sub-split); v2's seed content is simpler, which biases
+    1.18x to <em>understate</em> the real gap; different DOM selectors (<code>.tl-shape</code> vs
+    <code>[data-shape-id]</code>) whose equivalence is unverified; different seeding transports; and
+    100-shape/loopback-only scale hides real bandwidth cost.</p>
+  <p>Also added: a double-gated (<code>EW_CANVAS_SYNC=1</code> AND <code>EW_CANVAS_TEST_EVICT=1</code>)
+    test-only cold-actor eviction route, <code>POST /api/canvas-v2/test/evict/:roomId</code>, in
+    <code>server/src/app.ts</code> — inert unless both flags are set, and a live socket still vetoes eviction.</p>
+  <div class="callout danger">
+    <p><strong>Runbook:</strong> never set <code>EW_CANVAS_TEST_EVICT=1</code> on staging or prod outside a
+    deliberate, supervised perf run — it's a live, unauthenticated HTTP control-plane surface once both flags
+    are set.</p>
+  </div>
+</section>
+
+<section id="pr57">
+  <h2>PR #57 — core authoring parity + write-path safety <span class="badge open">open, not yet merged</span></h2>
+  <div class="callout warn">
+    <p><strong>Correction to the "has landed" framing:</strong> as of this update,
+    <a href="https://github.com/lean-software-production/ensembleworks/pull/57">PR #57</a> is <strong>open</strong>
+    against <code>main</code> — <code>mergedAt</code> is null and there is no merge commit on <code>main</code>.
+    It <em>is</em> feature-complete, mergeable, and every CI check is green
+    (<code>bundle-size</code>, <code>canvas-v2-load</code>, <code>canvas-v2-perf</code>, <code>e2e</code>,
+    <code>unit-tests</code> all pass), with no reviewer decision recorded yet. Treat the summary below as
+    "what this PR will do once merged," not as already-shipped.</p>
+  </div>
+  <p>Takes v2 from "renders shapes" to "you can actually author on it." Four things land together
+    (branch <code>fix/v2-write-validation</code>, author Trevoke, 132 files changed, +29,763/&#8209;339):</p>
+  <ul>
+    <li><strong>Styling, copy/paste, and stacking (z-order)</strong> — full parity with v1 today, including
+      real cross-app copy/paste (not an in-app buffer) and stacking that actually re-renders.</li>
+    <li><strong>New shape types</strong> — freehand drawing, lines, and images (with a proper asset store),
+      the shape types v2 was missing.</li>
+    <li><strong>Multiple pages</strong> — create, switch, rename, reorder.</li>
+    <li><strong>A data-loss fix</strong> — a malformed shape can no longer cascade-delete everything nested
+      inside it. Proportionate repair now drops only the offending shape and rescues its children onto the
+      page they were already on, rather than wiping the whole subtree.</li>
+  </ul>
+  <p>Delivered as eight reviewed sub-projects (subagent-driven: implementer + two-stage spec/quality review +
+    fix loops per task, same discipline as Phase 4), with full write-path validation added at both the
+    <code>putShape</code> and <code>updateProps</code> boundaries — pasted/dropped content is now treated as
+    untrusted and re-validated (including against Loro's own <code>undefined</code>→<code>null</code>
+    coercion) before it can touch a document. Nine new interaction contracts land in
+    <code>@ensembleworks/interaction-contracts</code> (draw, line, image-drop, style-apply, paste,
+    duplicate, bring-to-front, page-switch, malformed-clipboard-rejected).</p>
+  <p>All automated tests green: 240 unit + 50 end-to-end.</p>
+
+  <h3>Benchmark results (in the PR)</h3>
+  <table>
+    <thead><tr><th>Load scenario</th><th>v2 (this PR)</th><th>v1 (reference)</th></tr></thead>
+    <tbody>
+      <tr><td>100 shapes</td><td><strong>521 ms</strong></td><td>505 ms</td></tr>
+      <tr><td>1,000 shapes</td><td><strong>565 ms</strong></td><td>—</td></tr>
+    </tbody>
+  </table>
+  <p style="font-size:0.86rem;">PR's own characterization: time-to-first-shape is essentially at parity with
+    v1 (~1.0x) and within ~3% of the pre-work baseline, despite adding substantial new code to the bundle —
+    the engine's own work is effectively instant; nearly all load time is generic app startup. The 1,000-shape
+    run is flagged in the PR as noisy and worth re-running before being quoted precisely. This reads as
+    consistent with, not yet a formal re-measurement of, the 1.18x gap found by PR #50 — no follow-up to that
+    specific baseline is claimed here.</p>
+
+  <h3>What's next (per the PR)</h3>
+  <ul>
+    <li>Turning v2 on for real (non-test) rooms — the groundwork to feed live v1 rooms into v2 is now unblocked.</li>
+    <li>Polish: right-click stacking menu, image file-picker, richer line editing.</li>
+    <li>Deferred: showing which page each teammate is on; garbage-collecting unused image files; rendering
+      legacy freehand strokes drawn in v1 (new ones render fine going forward).</li>
+  </ul>
+
+  <div class="callout info">
+    <p>Also on <code>main</code> since the last snapshot, unrelated to this PR: a design doc
+    (<code>docs/plans/2026-07-22-connection-health-modal-design.md</code>) for a unified connection-health
+    modal + single-tab enforcement. It's scoped to the live v1 engine; canvas-v2 parity is explicitly called
+    out in the doc as a follow-up, not yet planned.</p>
+  </div>
+</section>
+
+<section id="risks">
+  <h2>Risks</h2>
+  <table>
+    <thead><tr><th>Risk</th><th>Sev</th><th>Notes</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>v2 room load is measurably slower than v1, not at parity</td>
+        <td><span class="sev high">high</span></td>
+        <td>Finding from 2026-07-19 (1.18x), still true as of the perf-parity push merge (2026-07-20). No
+          dedicated follow-up fix PR exists yet; PR #57's own benchmark suggests near-parity but wasn't run
+          as an apples-to-apples re-test of the original 1.18x baseline. v2 dogfood rooms may still feel
+          slower to open than v1 ones.</td>
+      </tr>
+      <tr>
+        <td>PR #57 merging without human review</td>
+        <td><span class="sev med">med</span></td>
+        <td>Same governance deviation as #48/#50 — no <code>reviewDecision</code> recorded yet on a 132-file,
+          +29.7K-line PR. CI is green and it's mergeable, but nothing has checked it with human eyes.</td>
+      </tr>
+      <tr>
+        <td>Test-only cold-actor eviction route live on main</td>
+        <td><span class="sev low">low</span></td>
+        <td>Unauthenticated but double-gated (<code>EW_CANVAS_SYNC=1</code> + <code>EW_CANVAS_TEST_EVICT=1</code>);
+          inert unless both flags set on a deployment.</td>
+      </tr>
+      <tr>
+        <td>Undo is per-pointermove-commit, not gesture-atomic</td>
+        <td><span class="sev low">low</span></td>
+        <td>Owner-accepted from Phase 4; a multi-step drag needs multiple <code>Ctrl+Z</code>. Tracked as a
+          follow-up.</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="deploy">
+  <h2>Deploy / release</h2>
+  <div class="callout warn">
+    <p><code>main</code>'s latest tag is <code>v0.23.0</code> (release commit on top of the perf-parity work,
+    via two unrelated feature releases in between). PR #57 is not merged, so nothing in this section is
+    blocked on a release cut yet — once #57 lands, cut a fresh release before deploying it to staging:</p>
+  </div>
+  <pre class="mono" style="background:#eef0f4; border:1px solid #e1e5ec; color:#2a3040; padding:12px 14px; border-radius:8px; overflow-x:auto;">deploy/release.sh minor     # from a clean, synced main → tags the next v0.24.0</pre>
+  <p>Not executable from the agent sandbox (no SSH creds — see <code>ew-sandbox-quirks</code> memory).
+    Runbook reminder carried over from the perf-parity push: never set <code>EW_CANVAS_TEST_EVICT=1</code> on
+    staging/prod outside a deliberate, supervised perf run.</p>
+</section>
+
+<footer>
+  Report rebuilt 2026-07-24 — the previous version of this file was untracked and was lost between sessions
+  (never committed to git); this is a from-scratch reconstruction informed by persisted memory notes plus a
+  fresh read of GitHub/git state. See <code>CLAUDE.md</code> for the canvas-rewrite track's workspace layout.
+</footer>
+
+</div>
+</body>
+</html>
