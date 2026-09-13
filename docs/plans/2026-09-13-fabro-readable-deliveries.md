@@ -4,18 +4,18 @@ Approved in BB thread thr_jh922rygfz: replace the default raw JSON results displ
 
 ## Goal and boundaries
 
-Users should be able to review a Fabro delivery without decoding escaped JSON. Work only in plugins/bb-plugin-assembly-lines. Preserve the existing DAG card, sidebar opening, owner-thread routing, external link, acceptance navigation, existing iframe toggle, job persistence, CLI/tools and RPC contracts. Do not add dependencies or change package scripts, lockfiles, compiler/test configuration, credentials, or line definitions. No merge, push, deployment, or plugin installation by the workflow.
+Users should be able to review a Fabro delivery without decoding escaped JSON. Work only in plugins/bb-plugin-fabro. Preserve the existing DAG card, sidebar opening, owner-thread routing, external link, acceptance navigation, existing iframe toggle, job persistence, CLI/tools and RPC contracts. Do not add dependencies or change package scripts, lockfiles, compiler/test configuration, credentials, or workflow definitions. No merge, push, deployment, or plugin installation by the workflow.
 
 ## Implementation guidance
 
-Inspect app.tsx Panel, contracts.ts, server.ts getRunDetails, host evidence and app.test.tsx. getRunDetails.details is serialized evidence; persisted job.result is a fallback. Evidence workspace.files entries contain text and truncated fields. delivery.json embeds before/after checks, attempts, changedFiles, resultSha, review; validation.json/baseline.json/review.md/diff.patch may be available before delivery. Support current and legacy/partial envelopes without assuming every field exists. Parse at the boundary into typed presentation data, guard JSON parsing and field types, honor truncation indicators, and avoid throwing on malformed or unexpected payloads. Prefer fresh valid detail evidence, with explicit fallback to persisted evidence. Never let unavailable data imply success.
+Inspect app.tsx Panel, contracts.ts, server.ts getRunDetails, host evidence and app.test.tsx. getRunDetails.details is serialized evidence; persisted job.result is a fallback. Evidence workspace.files entries contain text and truncated fields. delivery.json embeds before/after checks, attempts, changedFiles, resultSha, review; validation.json/baseworkflow.json/review.md/diff.patch may be available before delivery. Support current and legacy/partial envelopes without assuming every field exists. Parse at the boundary into typed presentation data, guard JSON parsing and field types, honor truncation indicators, and avoid throwing on malformed or unexpected payloads. Prefer fresh valid detail evidence, with explicit fallback to persisted evidence. Never let unavailable data imply success.
 
 Use installed public SDK exports (inspect declarations): Markdown for review and experimental_Diff for per-file unified patches if supported. The latter takes one file patch; split multi-file diffs correctly, with readable plain-text fallback for unsupported/binary/malformed patches. Do not use raw HTML injection. Existing styles/components should make the result look native to BB. No new backend protocol is required.
 
 ## Required behavior
 
 - Summary shows execution status and acceptance separately, changed files, attempts and delivery commit when known. Show the retained checkout path accessibly with wrapping.
-- Changes displays actual diff with line breaks and added/removed highlighting, per-file where possible. Handle no change, unavailable, binary and truncated diffs honestly.
+- Changes displays actual diff with workflow breaks and added/removed highlighting, per-file where possible. Handle no change, unavailable, binary and truncated diffs honestly.
 - Checks groups available baseline and final/latest validation evidence, labels commands with pass/fail/unknown, and exposes stdout/stderr/error/exit details in keyboard-accessible expandable logs. Null exit, signal or execution errors cannot count as passing. Quality checks are included.
 - Review displays formatted Markdown and acceptance verdict/reason separately from the workflow's own review.
 - Raw JSON remains available in a collapsed section. Malformed details remain inspectable there and show a concise fallback message.
