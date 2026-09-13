@@ -153,6 +153,7 @@ import {
 	deleteSelectionIntents,
 	dispatchToActiveTool,
 	pruneDanglingSelectionIntents,
+	shouldFallBackToSelect,
 	type ToolId,
 	type ToolSet,
 	type ToolStates,
@@ -948,9 +949,24 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			if (event.type === 'keydown' && handleGlobalShortcut(event, editor.get().editingId)) {
 				return
 			}
+			// Captured BEFORE dispatch (create-edit-flow task): the ONLY signal
+			// `shouldFallBackToSelect` needs is whether THIS dispatch just
+			// transitioned editingId from null to non-null while a create tool
+			// was active — see that function's own doc comment for why it reads
+			// editingId rather than inspecting intents directly.
+			const activeBeforeDispatch = activeToolIdRef.current
+			const editingIdBeforeDispatch = editor.get().editingId
 			const next = dispatchToActiveTool(tools, toolStatesRef.current, activeToolIdRef.current, editor, event)
 			toolStatesRef.current = next
 			setToolStates(next)
+			if (shouldFallBackToSelect(activeBeforeDispatch, editingIdBeforeDispatch, editor.get().editingId)) {
+				// Direct setActiveToolId, not the toolbar's `selectTool` wrapper:
+				// the create tool that just fired BeginEdit already returned to
+				// its own idle state as part of finalizing this same gesture (its
+				// FSM's pointerup/pointing->idle transition), so there is no
+				// in-flight gesture for `cancelAndReset` to abandon.
+				setActiveToolId('select')
+			}
 		},
 		[editor, tools, presencePublisher, handleGlobalShortcut],
 	)

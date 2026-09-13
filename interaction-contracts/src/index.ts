@@ -12,10 +12,12 @@ import { drawCreatesADrawShape } from './contracts/draw-creates-a-draw-shape.js'
 import { droppingAnImageCreatesAnImageShape } from './contracts/dropping-an-image-creates-an-image-shape.js'
 import { duplicateReidsAndOffsets } from './contracts/duplicate-reids-and-offsets.js'
 import { editingIndicator } from './contracts/editing-indicator.js'
+import { enterKeyEditsSelection } from './contracts/enter-key-edits-selection.js'
 import { lineCreatesALineShape } from './contracts/line-creates-a-line-shape.js'
 import { malformedClipboardRejected } from './contracts/malformed-clipboard-rejected.js'
 import { modalityExclusivity } from './contracts/modality-exclusivity.js'
 import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js'
+import { noteCreateBeginsEditing } from './contracts/note-create-begins-editing.js'
 import { pastePlacesAndSelects } from './contracts/paste-places-and-selects.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
 import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
@@ -39,4 +41,6 @@ export const CONTRACTS: readonly Contract[] = [
   lineCreatesALineShape,
   droppingAnImageCreatesAnImageShape,
   switchingPageChangesRenderedShapes,
+  enterKeyEditsSelection,
+  noteCreateBeginsEditing,
 ]

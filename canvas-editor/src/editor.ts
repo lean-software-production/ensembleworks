@@ -885,8 +885,39 @@ export class Editor {
       case 'BeginEdit':
         return { state: { ...state, editingId: intent.id }, docMutated: false, stateChanged: true }
 
-      case 'EndEdit':
-        return { state: { ...state, editingId: null }, docMutated: false, stateChanged: true }
+      case 'EndEdit': {
+        // tldraw parity (TextShapeUtil.onEditEnd, node_modules/tldraw/src/
+        // lib/shapes/text/TextShapeUtil.tsx:249-254): a `text` shape left
+        // with no (trimmed) content when editing ends is deleted, not kept
+        // as an invisible, still-selectable, still-synced empty box
+        // (TextShape.tsx renders a transparent, border-less div for one).
+        // `note` is deliberately EXCLUDED — NoteShapeUtil has no such
+        // onEditEnd hook in v1; a sticky's colored body is a real object
+        // even with no text, unlike a bare text shape whose only visible
+        // content IS its text. Reads `state.editingId` (the shape ABOUT to
+        // stop being edited), never `intent` (EndEdit carries no id of its
+        // own — the editing shape is state, not part of the intent).
+        const editingId = state.editingId
+        const nextState: EditorState = { ...state, editingId: null }
+        if (editingId === null) {
+          return { state: nextState, docMutated: false, stateChanged: true }
+        }
+        const shape = this.doc.getShape(editingId)
+        if (!shape || shape.kind !== 'text' || this.doc.getText(editingId).trim().length > 0) {
+          return { state: nextState, docMutated: false, stateChanged: true }
+        }
+        // Cascade-aware delete, same machinery as DeleteShapes above (a text
+        // shape is a leaf in practice — nothing else can be parented under
+        // one — but reusing collectSubtreeParentFirst/orderParentBeforeChild
+        // costs nothing and stays correct if that ever changes).
+        const toRestore = new Map<string, Shape>()
+        for (const s of collectSubtreeParentFirst(this.doc, editingId)) toRestore.set(s.id, s)
+        this.doc.deleteShape(editingId)
+        const undo: InverseOp[] = orderParentBeforeChild([...toRestore.values()], toRestore)
+          .map((s) => ({ op: 'putShape', shape: s }))
+        const redo: InverseOp[] = [{ op: 'deleteShape', id: editingId }]
+        return { state: nextState, docMutated: true, stateChanged: true, undo, redo }
+      }
 
       case 'SetIndex': {
         // Index-only whole-shape write (Task E1, D-4): `index` is an

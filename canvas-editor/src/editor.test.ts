@@ -1047,4 +1047,67 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: SetCurrentPage switches currentPageId, view-only (no commit, no undo), notifies subscribers')
 }
 
+// ============================================================================
+// 29. create-edit-flow task — EndEdit auto-deletes an empty `text` shape
+//    (tldraw parity: node_modules/tldraw/src/lib/shapes/text/
+//    TextShapeUtil.tsx:249-254's onEditEnd). `note` is deliberately
+//    EXCLUDED (NoteShapeUtil has no such hook — a sticky's colored body is
+//    a real object even with no text).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:empty-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:empty-text' })
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:empty-text'), undefined, 'an empty text shape is deleted when its editing session ends')
+  assert.equal(editor.get().editingId, null, 'editingId still clears to null')
+  console.log('ok: EndEdit deletes an empty text shape')
+}
+
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:blank-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:blank-text' })
+  editor.apply({ type: 'SetText', id: 'shape:blank-text', text: '   ' }) // whitespace-only -- trims to empty
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:blank-text'), undefined, 'a whitespace-only text shape is deleted too (trimmed before the emptiness check)')
+  console.log('ok: EndEdit deletes a whitespace-only text shape')
+}
+
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:has-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:has-text' })
+  editor.apply({ type: 'SetText', id: 'shape:has-text', text: 'hello' })
+  editor.apply({ type: 'EndEdit' })
+  assert.ok(editor.doc.getShape('shape:has-text'), 'a text shape with real content survives EndEdit')
+  console.log('ok: EndEdit keeps a non-empty text shape')
+}
+
+{
+  const { editor } = makeEditor(1n)
+  // kind defaults to 'note' (this file's `shape()` helper) — an empty NOTE
+  // must survive EndEdit; only `text` auto-deletes.
+  editor.apply({ type: 'CreateShape', shape: shape('shape:empty-note') })
+  editor.apply({ type: 'BeginEdit', id: 'shape:empty-note' })
+  editor.apply({ type: 'EndEdit' })
+  assert.ok(editor.doc.getShape('shape:empty-note'), 'an empty NOTE (not text) is never auto-deleted -- v1 has no such hook for notes')
+  console.log('ok: EndEdit never deletes an empty note')
+}
+
+{
+  // Undo/redo round-trip: EndEdit's delete must be a real, undoable batch
+  // (same InverseOp convention DeleteShapes itself uses).
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:undoable', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:undoable' })
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:undoable'), undefined, 'sanity: deleted')
+  editor.undo()
+  assert.ok(editor.doc.getShape('shape:undoable'), 'undo restores the auto-deleted empty text shape')
+  editor.redo()
+  assert.equal(editor.doc.getShape('shape:undoable'), undefined, 'redo re-deletes it')
+  console.log('ok: EndEdit\'s auto-delete undo/redo round-trips')
+}
+
 console.log('ok: canvas-editor editor + intents')

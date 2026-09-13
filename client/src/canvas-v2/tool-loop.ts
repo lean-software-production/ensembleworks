@@ -148,6 +148,28 @@ export function dispatchToActiveTool(
 }
 
 /**
+ * v1 parity (create-edit-flow task): note/text auto-enter editing on
+ * creation (canvas-editor's create.ts `finalizeIntents` now appends
+ * `BeginEdit` for those two kinds), and tldraw's own note/text
+ * `Pointing.complete()` (node_modules/tldraw/src/lib/shapes/{note,text}/
+ * toolStates/Pointing.ts) always pairs that with
+ * `editor.setCurrentTool('select.editing_shape')` — a completed create-and-
+ * edit hands control back to the select tool, it never leaves the create
+ * tool armed for a second click to spawn a second empty shape. The
+ * CALLER (CanvasV2App) reads `editor.get().editingId` itself immediately
+ * before and after its own `dispatchToActiveTool` call and passes both
+ * here — this function takes no `Intent[]` because the SAME transition
+ * (null -> non-null editingId) can just as well come from select.ts's own
+ * Enter-to-edit or double-click path, where `active` is ALREADY 'select';
+ * the `active !== 'select'` guard makes those a no-op, so this one
+ * function fires ONLY for "a CREATE tool's click just began editing",
+ * never for select's own pre-existing BeginEdit paths.
+ */
+export function shouldFallBackToSelect(active: ToolId, editingIdBefore: string | null, editingIdAfter: string | null): boolean {
+	return active !== 'select' && editingIdBefore === null && editingIdAfter !== null
+}
+
+/**
  * The abandonment-gap cancel policy (canvas-editor's tools/arrow.ts +
  * tools/create.ts both document the same gap: once a drag threshold is
  * crossed, the in-flight PREVIEW shape is committed to the doc on every
