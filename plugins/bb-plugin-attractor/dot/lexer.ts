@@ -30,7 +30,7 @@ export interface Token {
 
 export class DotLexError extends Error {}
 
-const BARE_CHAR = /[A-Za-z0-9_.+]/;
+const BARE_CHAR = /[A-Za-z0-9_.+-]/;
 
 export function tokenize(source: string): Token[] {
   const tokens: Token[] = [];
@@ -163,7 +163,11 @@ export function tokenize(source: string): Token[] {
 
     if (BARE_CHAR.test(c)) {
       let text = "";
-      while (i < n && BARE_CHAR.test(source[i])) {
+      // A '-' that starts an arrow ('->') ends the bare word rather than being
+      // absorbed into it, so e.g. `foo-bar->baz` still tokenizes as BARE ARROW
+      // BARE even though '-' is itself a valid bare-word character (needed for
+      // hyphenated identifiers like `claude-sonnet-5` and negative numbers).
+      while (i < n && BARE_CHAR.test(source[i]) && !(source[i] === "-" && source[i + 1] === ">")) {
         text += source[i];
         advance();
       }

@@ -228,12 +228,9 @@ class ConditionParser {
 
   private parseClause(): ConditionNode {
     const keyTok = this.expect("WORD");
-    let key = keyTok.text;
     // Allow "context." followed immediately by a path, e.g. "context.human.gate.selected".
     // The tokenizer already includes '.' in WORD, so "context.foo" arrives as one token.
-    if (key === "context" && this.peek().kind === "OP" && (this.peek().text === "=" || this.peek().text === "!=")) {
-      // bare "context" used as a key on its own (unusual, but syntactically valid: truthiness/clause on the whole bag)
-    }
+    const key = keyTok.text;
     if (this.peek().kind !== "OP") {
       return { kind: "truthy", key };
     }
@@ -246,6 +243,20 @@ class ConditionParser {
       );
     }
     this.advance();
+    if (op === "matches") {
+      // Validate the regex eagerly, at parse time, so a graph with a syntactically
+      // valid condition but an invalid regex is caught by validate() (bad-condition)
+      // instead of throwing an unhandled SyntaxError deep in evaluateCondition.
+      try {
+        void new RegExp(valueTok.text);
+      } catch (err) {
+        throw new ConditionSyntaxError(
+          `invalid regular expression '${valueTok.text}' for 'matches' at position ${valueTok.pos}: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+    }
     return { kind: "clause", key, op, value: valueTok.text };
   }
 }

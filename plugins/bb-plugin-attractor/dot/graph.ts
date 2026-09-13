@@ -90,6 +90,10 @@ export class DotGraphError extends Error {}
 
 function coerceScalar(raw: RawValue): DotValue {
   const { text } = raw;
+  // A quoted value is always a string, however numeric- or boolean-looking its
+  // text is (e.g. prompt="0", label="404"): only bare (unquoted) tokens like
+  // `true` or `3` are eligible for coercion.
+  if (raw.kind === "string") return text;
   if (/^(true|false)$/.test(text)) return text === "true";
   if (/^-?\d+$/.test(text)) return Number.parseInt(text, 10);
   if (/^-?\d+\.\d+$/.test(text)) return Number.parseFloat(text);

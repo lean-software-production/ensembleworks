@@ -106,4 +106,14 @@ describe("parseCondition error handling", () => {
     const result = tryParseCondition("outcome=succeeded");
     expect(result.ok).toBe(true);
   });
+
+  it("rejects a matches clause whose regex is syntactically invalid, at parse time", () => {
+    expect(() => parseCondition('context.x matches "["')).toThrow();
+    const result = tryParseCondition('context.x matches "["');
+    expect(result.ok).toBe(false);
+  });
+
+  it("accepts a matches clause with a valid regex", () => {
+    expect(() => parseCondition('context.x matches "^h.*o$"')).not.toThrow();
+  });
 });

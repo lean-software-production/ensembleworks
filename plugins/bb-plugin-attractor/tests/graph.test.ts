@@ -167,3 +167,60 @@ describe("dot/graph: node/edge collection", () => {
     expect(graph.edges[1]).toMatchObject({ from: "b", to: "c" });
   });
 });
+
+describe("dot/graph: quoted scalars keep their string kind", () => {
+  it("keeps a quoted numeric-looking label as a string", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[label="404", prompt="p"] start->n->exit }',
+    );
+    expect(graph.nodes.get("n")?.label).toBe("404");
+    expect(typeof graph.nodes.get("n")?.label).toBe("string");
+  });
+
+  it("keeps a quoted numeric-looking prompt as a string (a prompt of \"0\" is still a prompt)", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="0"] start->n->exit }',
+    );
+    expect(graph.nodes.get("n")?.prompt).toBe("0");
+  });
+
+  it("keeps a quoted numeric edge label as a string (numbered human-gate choices)", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] gate[shape=hexagon] a[prompt="p"] start->gate gate->a[label="1"] gate->exit[label="2"] a->exit }',
+    );
+    const edge = graph.edges.find((e) => e.from === "gate" && e.to === "a")!;
+    expect(edge.label).toBe("1");
+    expect(typeof edge.label).toBe("string");
+    expect(() => (edge.label as string).replace(/^\[\w+\]\s*/, "")).not.toThrow();
+  });
+
+  it("keeps a quoted boolean-looking label as a string", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] start->exit[label="true"] }',
+    );
+    expect(graph.edges[0].label).toBe("true");
+  });
+
+  it("still coerces bare (unquoted) numeric and boolean attribute values", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", max_visits=3] start->n->exit }',
+    );
+    expect(graph.nodes.get("n")?.maxVisits).toBe(3);
+  });
+});
+
+describe("dot/graph: hyphenated bare values", () => {
+  it("parses a bare hyphenated model id", () => {
+    const graph = parseWorkflowGraph(
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", model=claude-sonnet-5] start->n->exit }',
+    );
+    expect(graph.nodes.get("n")?.model).toBe("claude-sonnet-5");
+  });
+
+  it("parses a bare negative edge weight", () => {
+    const graph = parseWorkflowGraph(
+      "digraph G { start[shape=Mdiamond] exit[shape=Msquare] start->exit[weight=-1] }",
+    );
+    expect(graph.edges[0].weight).toBe(-1);
+  });
+});

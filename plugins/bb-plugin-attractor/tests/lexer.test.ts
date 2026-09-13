@@ -70,4 +70,23 @@ describe("dot/lexer", () => {
     expect(tokens[0]).toMatchObject({ line: 1 });
     expect(tokens[1]).toMatchObject({ line: 2 });
   });
+
+  it("tokenizes hyphenated bare words as a single BARE token", () => {
+    const tokens = tokenize("model=claude-sonnet-5");
+    expect(tokens.map((t) => t.kind)).toEqual(["BARE", "EQUALS", "BARE", "EOF"]);
+    expect(tokens[2]).toMatchObject({ kind: "BARE", text: "claude-sonnet-5" });
+  });
+
+  it("tokenizes a negative bare number", () => {
+    const tokens = tokenize("weight=-1");
+    expect(tokens.map((t) => t.kind)).toEqual(["BARE", "EQUALS", "BARE", "EOF"]);
+    expect(tokens[2]).toMatchObject({ kind: "BARE", text: "-1" });
+  });
+
+  it("still splits a hyphenated word immediately followed by -> into a BARE and an ARROW", () => {
+    const tokens = tokenize("foo-bar->baz");
+    expect(tokens.map((t) => t.kind)).toEqual(["BARE", "ARROW", "BARE", "EOF"]);
+    expect(tokens[0]).toMatchObject({ text: "foo-bar" });
+    expect(tokens[2]).toMatchObject({ text: "baz" });
+  });
 });

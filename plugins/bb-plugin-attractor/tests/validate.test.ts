@@ -56,6 +56,17 @@ describe("dot/validate", () => {
     expect(codes(source)).toContain("handler-missing-script");
   });
 
+  it("does not flag a node whose quoted prompt is the numeric-looking string \"0\"", () => {
+    const source = 'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="0"] start->n->exit }';
+    expect(codes(source)).not.toContain("handler-missing-prompt");
+  });
+
+  it("flags a bad condition whose regex is syntactically invalid", () => {
+    const source =
+      'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p"] start->n n->exit[condition="context.x matches \\"[\\""] }';
+    expect(codes(source)).toContain("bad-condition");
+  });
+
   it("flags a missing retry target", () => {
     const source =
       'digraph G { start[shape=Mdiamond] exit[shape=Msquare] n[prompt="p", retry_target="ghost"] start->n->exit }';

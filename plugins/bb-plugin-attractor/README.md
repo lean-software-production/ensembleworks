@@ -69,3 +69,15 @@ bb plugin build .
   graphs are copied into `tests/fixtures/fabro-graphs.ts` and exercised in
   `tests/dot-integration.test.ts`; there was no third distinct graph to
   include.
+
+- **The `edge-missing-target`/`edge-missing-source` validate rules are not
+  reachable from real, authored DOT source.** `dot/graph.ts`'s statement
+  walker auto-creates a node for every id mentioned in an edge chain (so
+  `a -> ghost` always yields a node named `ghost`, which then falls through
+  to `handler-missing-prompt` etc. instead), so a graph parsed from DOT text
+  can never actually have an edge pointing at a genuinely missing node. The
+  rules are still real defensive coverage — they protect `validate()` against
+  any future caller that builds a `WorkflowGraph` by hand instead of via
+  `parseWorkflowGraph` — and `tests/validate.test.ts` exercises them the same
+  way, by pushing a synthetic edge onto an already-built graph object rather
+  than parsing DOT text.
