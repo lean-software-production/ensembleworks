@@ -14,7 +14,7 @@ import { createThreadAgentBackend } from "./server/backend";
 import { createThreadHumanInterviewer } from "./server/human";
 import { rpcContract } from "./server/contracts";
 import { createService, resolveWorkflowPath } from "./server/service";
-import { RUN_MIGRATIONS, RunStore } from "./server/store";
+import { RunStore } from "./server/store";
 
 const id = z.string().min(1).max(200);
 
@@ -49,6 +49,9 @@ const routingResultSchema = z.object({
 const TOOL_INSTRUCTIONS =
   "Attractor runs a Graphviz DOT workflow graph as a BB-thread-backed pipeline. attractor_run validates the graph, persists a run, and starts it in the background — emit the returned previewDirective exactly once, on its own line. attractor_inspect reads a run's status and stages.";
 
+const WORKER_INSTRUCTIONS =
+  "You are an Attractor workflow stage worker. Follow the stage prompt. Your final text is the stage's result, not a message to a person. Only call attractor_result if the stage prompt asks for a structured routing result. Never start new workflows.";
+
 function textResult(value: unknown): PluginAgentToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value) }] };
 }
@@ -62,17 +65,22 @@ function decodeFileContent(file: { content: string; contentEncoding: "utf8" | "b
 }
 
 export default async function plugin(bb: BbPluginApi): Promise<void> {
-  const db = bb.storage.database();
-  bb.storage.migrate(db, [...RUN_MIGRATIONS]);
-  const store = new RunStore(db);
+  // RunStore owns its schema (idempotent CREATE IF NOT EXISTS statements run
+  // in its constructor) so a store opened directly in tests and one opened
+  // here behave identically; see README "Deviations from the plan".
+  const store = new RunStore(bb.storage.database());
 
   const agentBackend = createThreadAgentBackend(bb);
   const humanInterviewer = createThreadHumanInterviewer(bb);
   const execClient = bb.hosts.experimental_client({ contract: hostContract });
+  // Aborted on dispose/reload: the service aborts every in-flight run's
+  // engine (which stops its worker threads) and stops writing to the store,
+  // leaving each run "running" at its last checkpoint for the next plugin
+  // instance's resumeRunningRuns() to pick up.
   const lifecycle = new AbortController();
   bb.onDispose(() => lifecycle.abort());
 
-  const service = createService({ bb, store, agentBackend, execClient, humanInterviewer });
+  const service = createService({ bb, store, agentBackend, execClient, humanInterviewer, disposeSignal: lifecycle.signal });
 
   async function resolveSource(input: { source?: string; path?: string }, threadId: string): Promise<string> {
     if (input.source !== undefined) return input.source;
@@ -151,14 +159,38 @@ export default async function plugin(bb: BbPluginApi): Promise<void> {
     instructions: "Only call this when instructed to by the stage prompt. Report the JSON routing result described there.",
     parameters: routingResultSchema,
     execute: async (input, ctx) => {
+      // Only a live worker whose node declared an output_schema may report.
+      // Free-text workers can still see this tool at their first thread.start
+      // (see bb.agents.configure below), so the guard lives here, not only in
+      // the tool list.
+      if (!agentBackend.isAwaitingResult(ctx.threadId)) {
+        return textResult({ recorded: false, error: "this stage does not expect a structured result; answer in text instead" });
+      }
       agentBackend.reportResult(ctx.threadId, input);
       return textResult({ recorded: true });
     },
   });
 
   bb.agents.configure((context) => {
-    if (agentBackend.isWorkerThread(context.thread.id)) {
-      return { tools: agentBackend.isAwaitingResult(context.thread.id) ? ["attractor_result"] : [], skills: [] };
+    // This callback runs at a thread's start and at every turn submit. For a
+    // worker, its first resolution happens *inside* bb.sdk.threads.spawn(),
+    // before the backend learns the worker's id — so the reliable worker
+    // signal is `origin.pluginId`, which BB stamps on threads this plugin
+    // spawned (the same rule BB's built-in Workflows plugin relies on). The
+    // backend's own sets refine the answer once the id is known.
+    const threadId = context.thread.id;
+    const spawnedByUs = context.origin.pluginId === bb.pluginId;
+    if (spawnedByUs || agentBackend.isWorkerThread(threadId)) {
+      // A known free-text worker gets no plugin tools. A worker we cannot yet
+      // classify (first thread.start) conservatively gets attractor_result;
+      // the tool itself rejects reports from stages that do not expect one.
+      const known = agentBackend.isWorkerThread(threadId);
+      const withResultTool = !known || agentBackend.isAwaitingResult(threadId);
+      return {
+        tools: withResultTool ? ["attractor_result"] : [],
+        skills: [],
+        instructions: WORKER_INSTRUCTIONS,
+      };
     }
     return { tools: ["attractor_run", "attractor_inspect"], skills: ["attractor"] };
   });

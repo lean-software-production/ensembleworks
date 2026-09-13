@@ -55,9 +55,17 @@ export interface AgentBackend {
   run(input: AgentRunInput): Promise<Outcome>;
   /** Called by the `attractor_result` tool's execute() when the worker reports a structured result. */
   reportResult(workerThreadId: string, value: unknown): void;
-  /** Whether `threadId` is a live worker awaiting a structured result — drives `bb.agents.configure`'s tool gating. */
+  /**
+   * Whether `threadId` is a live worker awaiting a structured result. Drives
+   * both `bb.agents.configure`'s tool gating and the `attractor_result` tool's
+   * own guard (a report from any other thread is rejected, not recorded).
+   */
   isAwaitingResult(threadId: string): boolean;
-  /** Whether `threadId` is a live worker this backend spawned at all (structured or not) — also drives tool gating. */
+  /**
+   * Whether `threadId` is a live worker this backend spawned (structured or
+   * not). Only true once `spawn` has resolved; server.ts combines it with
+   * `context.origin.pluginId` to also cover the worker's first `thread.start`.
+   */
   isWorkerThread(threadId: string): boolean;
 }
 
@@ -135,6 +143,12 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
   const waiters = new Map<string, (completion: Completion) => void>();
   const reportedResults = new Map<string, unknown>();
   const workerNeedsResult = new Set<string>();
+  // Keyed by the worker's own thread id, which is only known once `spawn`
+  // resolves. `bb.agents.configure` can run for the worker *before* that
+  // (its thread.start fires inside the spawn call), so server.ts does not
+  // rely on these sets alone: it also recognises a worker by
+  // `context.origin.pluginId === bb.pluginId`, which BB stamps on every
+  // thread this plugin spawns. These sets only refine the answer afterwards.
   const workerThreads = new Set<string>();
 
   bb.events.on("thread.idle", (payload) => {
@@ -231,6 +245,11 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     const tuple = await resolveModelTuple(node, graph, threadId, environmentId);
     const prompt = assemblePrompt(node, graph, context);
 
+    // Workers are deliberately spawned as *root* hidden threads (no
+    // parentThreadId): a hidden thread that has a parent reports its turns and
+    // blockers to that parent, which would spam the origin thread. BB still
+    // records this plugin as the spawn origin (`origin.pluginId`), which is
+    // what server.ts's `bb.agents.configure` keys worker tool gating on.
     const spawned = await bb.sdk.threads.spawn({
       projectId,
       environment: { type: "reuse", environmentId },

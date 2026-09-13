@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { parseWorkflowGraph, type WorkflowGraph } from "../dot/graph";
-import { selectRoute, selectRetryTarget, selectRetryTargetCandidates } from "../engine/router";
+import { selectRoute, selectRetryTargetCandidates } from "../engine/router";
+
+// The engine walks the full candidate cascade (applying max_visits to each);
+// these tests only care about its first existing entry.
+const selectRetryTarget = (...args: Parameters<typeof selectRetryTargetCandidates>) => selectRetryTargetCandidates(...args)[0];
 import type { Outcome } from "../engine/types";
 
 function graphFrom(dot: string): WorkflowGraph {
@@ -116,6 +120,23 @@ describe("engine/router: routing cascade steps 1-8", () => {
       context: {},
     });
     expect(decision).toEqual({ nodeId: "approve", reason: "preferred_label", edgeLabel: "Approve" });
+  });
+
+  it("step 3: only one accelerator prefix is stripped, so a label whose text itself starts like one survives intact", () => {
+    // "[A] B) Go" carries the "[A] " accelerator; its text is "B) Go". A human
+    // gate hands back the raw label; a sequential strip would reduce both
+    // sides to "Go" and match the wrong edge.
+    const graph = graphFrom(`digraph G {
+      a -> wrong [label="Go"]
+      a -> right [label="[A] B) Go"]
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("a")!,
+      graph,
+      outcome: outcome({ status: "succeeded", preferredLabel: "[A] B) Go" }),
+      context: {},
+    });
+    expect(decision).toEqual({ nodeId: "right", reason: "preferred_label", edgeLabel: "[A] B) Go" });
   });
 
   it("step 3: a legitimate label containing ')' is not mistaken for a 'K) ' accelerator prefix", () => {

@@ -229,6 +229,18 @@ export interface ServiceDeps {
   /** Optional: falls back to an interviewer that fails any human gate clearly, for tests/callers that never reach one. */
   humanInterviewer?: HumanInterviewer;
   clock?: { now(): number; sleep(ms: number, signal: AbortSignal): Promise<void> };
+  /**
+   * Aborted once, when the plugin is disposed or about to be replaced by a reload —
+   * wired from server.ts's `lifecycle` AbortController. This immediately aborts every
+   * in-flight run's own controller (stopping its worker threads too, via
+   * `AgentBackend.run`'s signal handling) so nothing keeps driving a run against what
+   * may become a closed database. Unlike an explicit `stopRun`, it deliberately does
+   * *not* record a terminal ("cancelled") status for any of them: each run is left
+   * exactly as a fresh plugin instance's `resumeRunningRuns` (server.ts's background
+   * service) needs to find it — still "running", at its last saved checkpoint — so
+   * that instance drives it forward instead of two engines racing on the same row.
+   */
+  disposeSignal?: AbortSignal;
 }
 
 const UNCONFIGURED_HUMAN_INTERVIEWER: HumanInterviewer = {
@@ -259,9 +271,37 @@ export function createService(deps: ServiceDeps) {
   const humanInterviewer = deps.humanInterviewer ?? UNCONFIGURED_HUMAN_INTERVIEWER;
   const clock = deps.clock ?? REAL_CLOCK;
   const controllers = new Map<string, AbortController>();
+  // Flips once `deps.disposeSignal` aborts and never resets — this plugin instance is
+  // shutting down. `executeRun` consults it to skip `recordFinish` (see there for why).
+  let disposing = deps.disposeSignal?.aborted ?? false;
+
+  function abortAllRuns(): void {
+    disposing = true;
+    for (const controller of controllers.values()) controller.abort();
+  }
+  if (deps.disposeSignal) {
+    if (deps.disposeSignal.aborted) disposing = true;
+    else deps.disposeSignal.addEventListener("abort", abortAllRuns, { once: true });
+  }
 
   function publish(run: Run): void {
     bb.realtime.publish(REALTIME_CHANNEL, { runId: run.id, threadId: run.threadId });
+  }
+
+  // Wraps every `store.recordFinish` call: skipped entirely once disposing (see
+  // `disposeSignal` above — a dispose-triggered abort must never persist a terminal
+  // status), and guarded against a closed database otherwise (e.g. a lifecycle event
+  // arriving for a run that had already started unwinding right as storage tore down)
+  // so it can never escape `executeRun` as an unhandled rejection through the
+  // fire-and-forget `void executeRun(...)` call sites below.
+  function safeRecordFinish(runId: string, patch: Parameters<typeof store.recordFinish>[1]): void {
+    if (disposing) return;
+    try {
+      const finished = store.recordFinish(runId, patch);
+      publish(finished);
+    } catch (err) {
+      bb.log.warn(`attractor: failed to record finish for run ${runId}: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   async function resolveRunEnvironment(threadId: string, projectId: string, environmentId: string): Promise<RunEnvironmentContext> {
@@ -293,6 +333,10 @@ export function createService(deps: ServiceDeps) {
   }
 
   async function executeRun(run: Run, checkpoint: Checkpoint | null, envCtx: RunEnvironmentContext): Promise<void> {
+    // A run can reach here after disposal has begun (e.g. a `resumeRunningRuns()`
+    // still in flight when `disposeSignal` fires). Do not start an engine at
+    // all: the run stays "running" at its checkpoint for the next instance.
+    if (disposing) return;
     const controller = new AbortController();
     controllers.set(run.id, controller);
     try {
@@ -318,16 +362,14 @@ export function createService(deps: ServiceDeps) {
           publish(run);
         },
       });
-      const finished = store.recordFinish(run.id, {
+      safeRecordFinish(run.id, {
         status: result.status,
         finalOutcome: result.finalOutcome,
         goalGateFailures: result.goalGateFailures,
         context: result.context,
       });
-      publish(finished);
     } catch (err) {
-      const finished = store.recordFinish(run.id, { status: "failed", finalOutcome: null, goalGateFailures: [], context: run.context, error: err instanceof Error ? err.message : String(err) });
-      publish(finished);
+      safeRecordFinish(run.id, { status: "failed", finalOutcome: null, goalGateFailures: [], context: run.context, error: err instanceof Error ? err.message : String(err) });
     } finally {
       controllers.delete(run.id);
     }
@@ -367,19 +409,42 @@ export function createService(deps: ServiceDeps) {
     return store.listRuns({ threadId: options.threadId, after: options.after });
   }
 
+  // A run's source is immutable, so its parsed graph is cached per run id:
+  // the UI refetches the graph on every realtime event and re-parsing the
+  // DOT each time was pure waste. Bounded by evicting once it grows large.
+  const parsedGraphs = new Map<string, WorkflowGraph>();
+  const PARSED_GRAPH_CACHE_LIMIT = 256;
+  function graphFor(run: Run): WorkflowGraph {
+    const cached = parsedGraphs.get(run.id);
+    if (cached) return cached;
+    const graph = parseWorkflowGraph(run.source);
+    if (parsedGraphs.size >= PARSED_GRAPH_CACHE_LIMIT) parsedGraphs.clear();
+    parsedGraphs.set(run.id, graph);
+    return graph;
+  }
+
   function getGraph(runId: string): GraphView | null {
     const run = store.tryGetRun(runId);
     if (!run) return null;
-    return toGraphView(parseWorkflowGraph(run.source), store.listStages(runId));
+    return toGraphView(graphFor(run), store.listStages(runId));
   }
 
   function getEvents(runId: string, sinceSeq?: number) {
     return store.listEvents(runId, sinceSeq);
   }
 
+  // Aborts the run's engine and reflects the request immediately: the
+  // engine's own "cancelled" finish lands asynchronously (after its worker
+  // thread is stopped), and callers such as `bb attractor stop` read the
+  // returned Run straight away. A run that is no longer in flight is
+  // returned untouched.
   function stopRun(runId: string): Run {
-    controllers.get(runId)?.abort();
-    return store.getRun(runId);
+    const controller = controllers.get(runId);
+    if (!controller) return store.getRun(runId);
+    controller.abort();
+    const updated = store.setStatus(runId, "cancelled");
+    publish(updated);
+    return updated;
   }
 
   // Matches `answer` against an option's raw label, its accelerator-stripped

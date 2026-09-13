@@ -29,11 +29,15 @@ export interface RouteDecision {
 // key character (not a run of non-space characters) so a legitimate label
 // whose first word happens to contain ')' or " - " isn't mistaken for one,
 // e.g. "run(x) thing" must not be reduced to "thing".
+const ACCELERATOR_PREFIXES = [/^\[[^\]]*\]\s*/, /^\S\)\s*/, /^\S\s-\s*/];
+
 function stripAccelerator(label: string): string {
-  return label
-    .replace(/^\[[^\]]*\]\s*/, "")
-    .replace(/^\S\)\s*/, "")
-    .replace(/^\S\s-\s*/, "");
+  // Exactly one prefix is stripped: applying the patterns in sequence would
+  // let "[A] B) Go" collapse to "Go" instead of "B) Go".
+  for (const pattern of ACCELERATOR_PREFIXES) {
+    if (pattern.test(label)) return label.replace(pattern, "");
+  }
+  return label;
 }
 
 function outgoingEdges(nodeId: string, graph: WorkflowGraph): WorkflowEdge[] {
@@ -150,9 +154,4 @@ export function isRetryEligible(input: RouteInput): boolean {
 export function selectRetryTargetCandidates(node: WorkflowNode, graph: WorkflowGraph): string[] {
   const candidates = [node.retryTarget, node.fallbackRetryTarget, graph.retryTarget, graph.fallbackRetryTarget];
   return candidates.filter((candidate): candidate is string => candidate !== undefined && graph.nodes.has(candidate));
-}
-
-/** Step 7, existence-only: first candidate that names an existing node (ignores max_visits). */
-export function selectRetryTarget(node: WorkflowNode, graph: WorkflowGraph): string | undefined {
-  return selectRetryTargetCandidates(node, graph)[0];
 }

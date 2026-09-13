@@ -70,8 +70,8 @@ A gate with a `timeout` and nothing to answer falls back to the
 `human.default_choice` context key if one is set (e.g. via `attractor_run`'s
 `inputs`), otherwise the stage fails clearly rather than hanging forever.
 
-**Not yet implemented:** a `command` node's `output_schema` beyond the
-literal string `"routing"` (an inline JSON Schema) is accepted but not
+**Not yet implemented:** an `agent`/`prompt` node's `output_schema` beyond
+the literal string `"routing"` (an inline JSON Schema) is accepted but not
 separately validated; only the `routing` shape is checked.
 
 ## Running a graph
@@ -91,7 +91,8 @@ attractor_run({ path: "workflows/plan-implement-review.dot", title: "Ship the fi
 ## Inspecting a run
 
 `attractor_inspect({ runId })` returns the run's status
-(`running`/`succeeded`/`failed`/`cancelled`) and every stage's status, visit
+(`running`/`blocked`/`succeeded`/`failed`/`cancelled`; `blocked` means a
+human gate is waiting for an answer) and every stage's status, visit
 count, and (for an agent/prompt stage) its worker `threadId` — open that
 thread to read the stage's own conversation.
 

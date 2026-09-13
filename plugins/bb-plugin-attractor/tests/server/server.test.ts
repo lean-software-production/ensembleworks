@@ -200,6 +200,85 @@ describe("attractor server plugin", () => {
     await waitForTerminalStatus(host, routing.runId);
   });
 
+  // Regression for the whole-branch review's blocking finding: bb.agents.configure's
+  // callback "runs at thread.start / turn.submit" — and a spawned worker's thread.start
+  // fires *inside* bb.sdk.threads.spawn(...), before that call's promise resolves with
+  // the worker's own id. The two tests above only ever resolve configuration *after*
+  // spawn has already returned, so they can't see this: they'd pass even if gating were
+  // wired entirely on the worker's own id (populated too late). Reproduce the real
+  // ordering by resolving configuration from inside the `threads.spawn` stub itself.
+  it("gates a spawned worker thread correctly at the instant thread.start actually fires, mid-spawn — not just after spawn resolves", async () => {
+    const host = makeHost();
+    const capturedByRunId: Record<string, { tools: string[]; skills: string[] }> = {};
+    let nextRunLabel: "freeText" | "routing" = "freeText";
+    host.harness.sdk.stub("threads.spawn", async () => {
+      const workerId = "worker-thread";
+      // BB stamps the spawning plugin on the new thread's configuration
+      // context; that is the only worker signal available this early.
+      const config = await host.harness.behavior.resolveAgentConfiguration({
+        ...agentConfigContext(workerId),
+        origin: { kind: null, pluginId: host.bb.pluginId },
+      });
+      capturedByRunId[nextRunLabel] = { tools: config.tools.map((t) => t.name), skills: config.skills };
+      return makeThreadResponse({ id: workerId });
+    });
+    await plugin(host.bb);
+
+    const freeText = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(() => expect(capturedByRunId.freeText).toBeDefined());
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await waitForTerminalStatus(host, freeText.runId);
+
+    // A worker must never hold attractor_run/attractor_inspect or the attractor
+    // skill at the moment its session starts — that combination is exactly what
+    // lets a spawned worker call attractor_run itself and fan out recursively.
+    // Before spawn resolves the backend cannot yet tell a free-text worker from
+    // a routing one, so it conservatively gets attractor_result (which rejects
+    // reports from stages that do not expect one — see the test below).
+    expect(capturedByRunId.freeText.tools).toEqual(["attractor_result"]);
+    expect(capturedByRunId.freeText.skills).toEqual([]);
+
+    nextRunLabel = "routing";
+    const ROUTING_SOURCE = `digraph G {
+      start [shape=Mdiamond]
+      exit  [shape=Msquare]
+      review [prompt="review", output_schema="routing"]
+      start -> review -> exit
+    }`;
+    const routing = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: ROUTING_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(() => expect(capturedByRunId.routing).toBeDefined());
+    await host.harness.behavior.callAgentTool("attractor_result", { outcome: "succeeded" }, { threadId: "worker-thread", projectId: "project-1" });
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "{}" });
+    await waitForTerminalStatus(host, routing.runId);
+
+    // A routing (output_schema) worker must already hold attractor_result at that
+    // same instant — otherwise resolveStructured never sees a report and burns every
+    // corrective retry on "no attractor_result report was received".
+    expect(capturedByRunId.routing.tools).toEqual(["attractor_result"]);
+    expect(capturedByRunId.routing.skills).toEqual([]);
+  });
+
+  it("attractor_result rejects a report from a thread that is not a worker awaiting a structured result", async () => {
+    const host = makeHost();
+    host.harness.sdk.stub("threads.spawn", async () => makeThreadResponse({ id: "worker-thread" }));
+    await plugin(host.bb);
+
+    // From the origin thread (never a worker).
+    const fromOrigin = toolJson(await host.harness.behavior.callAgentTool("attractor_result", { outcome: "succeeded" }, { threadId: "thread-1", projectId: "project-1" }));
+    expect(fromOrigin.recorded).toBe(false);
+
+    // From a live free-text worker (no output_schema on its node).
+    const freeText = toolJson(await host.harness.behavior.callAgentTool("attractor_run", { source: INLINE_SOURCE }, { threadId: "thread-1", projectId: "project-1" }));
+    await vi.waitFor(() => expect(host.harness.sdk.callsTo("threads.spawn").length).toBeGreaterThan(0));
+    const fromFreeTextWorker = toolJson(await host.harness.behavior.callAgentTool("attractor_result", { outcome: "failed" }, { threadId: "worker-thread", projectId: "project-1" }));
+    expect(fromFreeTextWorker.recorded).toBe(false);
+    await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
+    await waitForTerminalStatus(host, freeText.runId);
+    // The rejected "failed" report must not have influenced the free-text stage.
+    const status = JSON.parse((await host.harness.behavior.runCli(["status", freeText.runId], { threadId: "thread-1" })).stdout).status;
+    expect(status).toBe("succeeded");
+  });
+
   it("CLI: validate reports diagnostics, run starts a run, status reads it back", async () => {
     const host = makeHost();
     await plugin(host.bb);

@@ -177,7 +177,10 @@ fakes), asserting the visited node path, a plan/implement/review approve
 both a build-loop success and a build that never turns green within
 `max_node_visits`. The "Authoring a graph"/"Running a graph" sections above
 are this task's README docs; `docs/plans/2026-09-13-attractor-runner-plan.md`'s
-Status line is updated alongside this commit.
+Status line is updated alongside this commit. A whole-branch review then
+produced two blocking findings (worker tool gating, dispose behaviour) and
+several minor ones; their fixes are recorded at the end of "Deviations from
+the plan".
 
 `handlers/human.ts` + `server/human.ts` + `ui/human-gate.tsx`
 implement human gates end to end (see the T6 section below); `app.tsx`
@@ -860,3 +863,38 @@ bb plugin build .
   on the same `render()`) explicitly imports `cleanup` and registers
   `afterEach(cleanup)`, matching the pattern a future UI test file should
   follow too.
+
+- **Worker tool gating keys on `context.origin.pluginId`, not only on the
+  backend's own bookkeeping (whole-branch review fix).** `bb.agents.configure`
+  runs for a worker at its very first `thread.start`, which fires inside
+  `bb.sdk.threads.spawn()` before the backend learns the worker's id. So a
+  worker is recognised first by `origin.pluginId === bb.pluginId` (BB stamps
+  the spawning plugin on the thread; the built-in Workflows plugin relies on
+  the same rule) and only refined by the backend's `isWorkerThread` /
+  `isAwaitingResult` sets afterwards. At that first resolution a worker gets
+  `attractor_result` conservatively; the tool itself rejects (does not
+  record) a report from any thread that is not a live worker awaiting a
+  structured result. Workers never see `attractor_run`, `attractor_inspect`
+  or the `attractor` skill, so a stage cannot fan out recursively. Workers
+  are spawned as root hidden threads (no `parentThreadId`), as a hidden
+  thread with a parent would report its turns to the origin thread.
+
+- **Dispose semantics (whole-branch review fix).** `server.ts` threads its
+  `lifecycle` AbortController into `createService` as `disposeSignal`. On
+  dispose/reload every in-flight run's engine is aborted (which stops its
+  worker threads), no further engine is started, and — unlike an explicit
+  `stopRun` — no terminal status is persisted: the run is left `running` at
+  its last checkpoint for the next plugin instance's `resumeRunningRuns()`.
+  `stopRun` now marks the run `cancelled` synchronously so `bb attractor
+  stop` and the panel's Stop button read back the new state immediately.
+
+- **`RunStore` is the single owner of the schema.** Its constructor runs the
+  idempotent `CREATE … IF NOT EXISTS` statements; `server.ts` no longer also
+  passes them through `bb.storage.migrate`, so tests that open a store on an
+  in-memory database and the plugin host see exactly the same setup path.
+  Versioned migrations, when needed, should be added to `RunStore` too.
+
+- **Panel refetch coalescing.** The realtime channel publishes once per
+  engine event; `ui/run-panel.tsx` coalesces bursts into one trailing
+  refetch (150 ms) and the service caches each run's parsed graph, so a busy
+  stage no longer re-parses the DOT and issues an RPC triplet per event.

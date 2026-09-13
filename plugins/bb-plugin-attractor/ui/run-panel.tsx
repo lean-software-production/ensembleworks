@@ -9,7 +9,7 @@
  * Live updates through `useRealtime("attractor-runs")` → refetch."
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useBbNavigate, useRealtime, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../server/contracts";
 import type { GraphView, RunView, StageView } from "../server/contracts";
@@ -21,6 +21,7 @@ type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
 
 const REALTIME_CHANNEL = "attractor-runs";
 const ACTION_ID = "attractor-run";
+const REFRESH_COALESCE_MS = 150;
 
 function useRunData(rpc: Rpc, runId: string, threadId: string) {
   const [run, setRun] = useState<RunView | null>(null);
@@ -48,9 +49,22 @@ function useRunData(rpc: Rpc, runId: string, threadId: string) {
   }, [rpc, runId, threadId]);
 
   useEffect(refresh, [refresh]);
+
+  // The server publishes one realtime message per engine event, and a busy
+  // stage can emit several within a few milliseconds. Coalesce them into one
+  // trailing refetch so the panel never issues a burst of RPC triplets.
+  const pendingRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (pendingRefresh.current !== null) clearTimeout(pendingRefresh.current);
+  }, []);
   useRealtime(REALTIME_CHANNEL, (payload) => {
     const named = payload && typeof payload === "object" ? (payload as { runId?: string }).runId : undefined;
-    if (named === undefined || named === runId) refresh();
+    if (named !== undefined && named !== runId) return;
+    if (pendingRefresh.current !== null) return;
+    pendingRefresh.current = setTimeout(() => {
+      pendingRefresh.current = null;
+      refresh();
+    }, REFRESH_COALESCE_MS);
   });
 
   return { run, stages, graph, events, loaded, error, refresh };

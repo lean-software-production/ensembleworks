@@ -206,6 +206,95 @@ describe("createService: run lifecycle", () => {
     service.stopRun(run.id);
     await vi.waitFor(() => expect(store.getRun(run.id).status).toBe("cancelled"));
   });
+
+  // Regression for the whole-branch review's second blocking finding: the plugin's
+  // `lifecycle` AbortController was never threaded into `createService`, so disposing
+  // (or reloading) the plugin never actually stopped an in-flight run's engine — it kept
+  // running against what becomes a closed database, and a later `resumeRunningRuns()`
+  // (from the reloaded instance) would start a second engine on the same still-"running"
+  // row while the first was still alive.
+  it("disposeSignal aborts every in-flight run's controller, and does not persist a terminal status for it (unlike an explicit stopRun)", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    let sawAbort = false;
+    let stageStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      stageStarted = resolve;
+    });
+    const backend = fakeBackend(
+      (input: AgentRunInput) =>
+        new Promise((_resolve, reject) => {
+          stageStarted();
+          input.signal.addEventListener(
+            "abort",
+            () => {
+              sawAbort = true;
+              reject(new Error("worker thread stopped: run was cancelled"));
+            },
+            { once: true },
+          );
+        }),
+    );
+    const disposeController = new AbortController();
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient(), disposeSignal: disposeController.signal });
+
+    const { run } = await service.createAndStartRun({ source: SIMPLE_GRAPH, threadId: "origin-thread", projectId: "project-1", environmentId: "env-1" });
+    // A run is "running" from creation, before its engine reaches the agent
+    // stage — wait for the stage itself so the abort is observed mid-stage.
+    await started;
+
+    disposeController.abort();
+    await vi.waitFor(() => expect(sawAbort).toBe(true));
+
+    // Give the aborted stage's rejection time to propagate all the way through the
+    // engine and back to executeRun's completion handling.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    // Left exactly as a fresh plugin instance's resumeRunningRuns() needs to find it —
+    // still "running", at its last saved checkpoint — never flipped to a terminal status
+    // the way an explicit stopRun's "cancelled" is above.
+    expect(store.getRun(run.id).status).toBe("running");
+  });
+
+  it("a disposeSignal that is already aborted stops the service from starting any engine, leaving the run for the next instance", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    const run = vi.fn(async () => ({ status: "succeeded" as const }));
+    const backend = fakeBackend(run);
+    const disposeController = new AbortController();
+    disposeController.abort();
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient(), disposeSignal: disposeController.signal });
+
+    const created = await service.createAndStartRun({ source: SIMPLE_GRAPH, threadId: "origin-thread", projectId: "project-1", environmentId: "env-1" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(run).not.toHaveBeenCalled();
+    expect(store.listEvents(created.run.id)).toEqual([]);
+    expect(store.getRun(created.run.id).status).toBe("running");
+  });
+
+  it("stopRun reflects the cancellation immediately in the returned run, not only after the engine unwinds", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    let stageStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      stageStarted = resolve;
+    });
+    const backend = fakeBackend(
+      (input: AgentRunInput) =>
+        new Promise((_resolve, reject) => {
+          stageStarted();
+          input.signal.addEventListener("abort", () => reject(new Error("worker thread stopped: run was cancelled")), { once: true });
+        }),
+    );
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient() });
+    const { run } = await service.createAndStartRun({ source: SIMPLE_GRAPH, threadId: "origin-thread", projectId: "project-1", environmentId: "env-1" });
+    await started;
+
+    expect(service.stopRun(run.id).status).toBe("cancelled");
+    await vi.waitFor(() => expect(store.getRun(run.id).status).toBe("cancelled"));
+    // A second stop on a run that is no longer in flight is a harmless read.
+    expect(service.stopRun(run.id).status).toBe("cancelled");
+  });
 });
 
 const HUMAN_GATE_GRAPH = `digraph G {
