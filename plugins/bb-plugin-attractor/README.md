@@ -11,9 +11,175 @@ See `docs/plans/2026-09-13-attractor-runner-plan.md` (in the main
 repository) for the full design, the supported DOT dialect, the engine
 contracts, and the task breakdown this plugin is built against.
 
+## Authoring a graph
+
+A workflow is a `digraph Name { ... }` (see "Supported DOT dialect" below for
+the full grammar). Every graph needs exactly one start node and one exit
+node; `dot/validate.ts` rejects anything else before a run is ever started.
+
+```dot
+digraph Example {
+  graph [goal="What this run is trying to accomplish"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  plan  [label="Plan", prompt="Read the task and write a short plan."]
+  build [shape=parallelogram, script="npm run build", goal_gate=true]
+  start -> plan -> build -> exit
+}
+```
+
+Three worked examples live in `examples/`, each copied verbatim from the
+plan's Appendix and exercised end to end in `tests/e2e.test.ts`:
+
+- `examples/plan-implement-review.dot` — a plan/implement/test loop with a
+  `model_stylesheet`, a human approval gate, `max_visits` loop caps, a
+  goal-gated `command` (test) node, and a structured `output_schema="routing"`
+  review stage.
+- `examples/parallel-review.dot` — a `component` fan-out into three
+  independent review lenses that converge on a `tripleoctagon` fan-in node.
+- `examples/branch-loop.dot` — a `command` (build) node, a `diamond`
+  conditional routing on the previous stage's outcome, and a graph-level
+  `max_node_visits` bound so a persistently broken build terminates the run
+  instead of looping forever.
+
+Validate a graph without running it: `bb attractor validate <path>`.
+
+### Dialect at a glance
+
+| Shape | `type=` | Handler | Needs | Notes |
+|---|---|---|---|---|
+| `Mdiamond` | `start` | entry point | — | reserved ids `start`/`Start` also default to this |
+| `Msquare` | `exit` | run termination | — | reserved ids `exit`/`Exit`/`end`/`End` also default to this |
+| `box` (default) | `agent` | full-tool BB worker thread | `prompt` | model/provider/reasoning_effort from the node, the `model_stylesheet`, or the origin thread's defaults, in that order |
+| `tab` | `prompt` | single-call worker thread | `prompt` | v1 is otherwise identical to `agent` — see "Deviations" |
+| `parallelogram` | `command` | runs `script` on the environment's host via `host.ts` | `script` | writes `command.output`/`command.exit_code` |
+| `hexagon` | `human` | asks a human to pick an outgoing edge, or free text on a `freeform=true` edge | — | see "Human gates" below |
+| `diamond` | `conditional` | routes on the previous stage's outcome; no work of its own | — | see `context.last_outcome` |
+| `component` | `parallel` | fans out over its outgoing edges | — | pairs with a `parallel.fan_in` node |
+| `tripleoctagon` | `parallel.fan_in` | where fanned-out branches converge | — | branches write only to `parallel.results`/`parallel.branch_count`, never a top-level merge |
+
+Graph attributes: `goal`, `rankdir`, `model_stylesheet`,
+`default_max_retries`, `on_failure` (`route`\|`exit`\|`succeed`),
+`retry_target`, `fallback_retry_target`, `max_node_visits` (`0` = unlimited).
+
+Node attributes: `label`, `shape`/`type`, `class`, `prompt`, `script`,
+`timeout`, `max_visits`, `max_retries`, `on_failure`, `retry_target`,
+`fallback_retry_target`, `goal_gate`, `allow_partial`, `output_schema`
+(`"routing"` or an inline JSON Schema string — only `"routing"` is actually
+validated in v1), `model`, `provider`, `reasoning_effort`
+(`low`\|`medium`\|`high`), `max_parallel`, `question_type`, `join_policy`
+(`all`\|`any`\|`first` — v1 implements `all`), `stdin_source`.
+
+Edge attributes: `label`, `condition`, `weight` (int, default `0`),
+`freeform` (human gates), `loop_restart` (parsed, ignored in v1).
+
+Condition grammar (`dot/conditions.ts`):
+`Key Op Value` or a bare `Key` (truthiness), joined with `&&`/`||`/`!`.
+`Key` is `outcome`, `preferred_label`, or a `context.`-prefixed (or bare)
+dot-path. `Op` is `= != > < >= <= contains matches`. `outcome` is one of
+`succeeded`/`failed`/`partially_succeeded`/`skipped`.
+
+Routing, after a stage completes, tries in order: (1) the outcome's
+`jumpToNode`; (2) a conditional edge whose condition is true (highest
+`weight`, then lexicographically smallest target); (3) `preferred_label`
+matched against an edge's label (accelerator prefixes stripped); (4)
+`suggested_next_ids`; (5) a failed outcome's effective `on_failure`; (6) an
+unconditional edge; (7) the node's then the graph's `retry_target`/
+`fallback_retry_target`, subject to the target's own `max_visits`; (8) no
+next node — the run terminates with this node's outcome. See the plan's
+"Supported DOT dialect" section for the exact algorithm.
+
+### Human gates
+
+A `hexagon` node's outgoing edges are its options — label them with an
+optional accelerator prefix (`"[A] Approve"`, `"R) Revise"`, or
+`"A - Approve"`); add `freeform=true` to an edge to also accept free text
+(routed via that edge, bypassing the button options). A human answers a
+blocked run either by clicking a button in the chat/panel surface, or from a
+terminal: `bb attractor answer <runId> <label|text>`. A run blocked on a
+gate reports status `blocked` until answered; a gate with a `timeout` and
+nothing to answer falls back to the `human.default_choice` context key if
+one is set (e.g. via `attractor_run`'s `inputs`), otherwise the stage fails
+clearly rather than hanging forever.
+
+## Running a graph
+
+**Agent tools** (registered for the origin thread only, via
+`bb.agents.configure`):
+
+- `attractor_run({ source | path, inputs?, title? })` — validates and
+  persists a run, starts it in the background, and returns
+  `{ runId, previewDirective }`. Emit `previewDirective` (a
+  `::attractor-run{run="<runId>"}` message directive) exactly once, on its
+  own line, so the room sees a live card.
+- `attractor_inspect({ runId })` — the run's status and every stage's
+  status/visit count/worker `threadId`.
+- `attractor_result` — registered only for a spawned worker thread whose
+  node declared `output_schema`; the worker must call it exactly once with
+  the structured routing decision (see "Structured results" below).
+
+**CLI** (`bb attractor …`, scoped to the calling thread's own runs):
+
+```
+bb attractor validate <path>              # lint a graph, no run
+bb attractor run <path> [--input k=v]     # same as attractor_run, from argv
+bb attractor status <runId>
+bb attractor stages <runId>
+bb attractor events <runId> [--since seq]
+bb attractor stop <runId>
+bb attractor answer <runId> <label|text>  # answer a blocked human gate
+```
+
+**RPC** (`server/contracts.ts`, consumed by `ui/*`/`app.tsx` via `useRpc`):
+`getRun`, `listRuns`, `getGraph`, `getEvents`, `stopRun` — every method is
+scoped to the calling thread's own runs.
+
+**Realtime**: the `attractor-runs` channel publishes `{ runId, threadId }`
+on every event; `ui/run-panel.tsx`'s `RunPanel` subscribes via
+`useRealtime` and refetches.
+
+**Directive / panel**: the `attractor-run` message directive
+(`::attractor-run{run="<runId>"}`) renders a header, the DAG, and an
+expandable stage list inline in chat; "Open in right panel" opens the same
+run in the thread side panel with the full DAG, stage list, event timeline,
+and a Stop button.
+
+### Structured results (`output_schema="routing"`)
+
+A stage whose prompt asks for a routing decision must call the
+`attractor_result` tool exactly once with:
+
+```json
+{
+  "outcome": "succeeded",
+  "preferred_next_label": "Accept",
+  "context_updates": { "reviewed": true }
+}
+```
+
+`outcome` is required (`succeeded`, `failed`, or `partially_succeeded`);
+`preferred_next_label`, `suggested_next_ids`, `failure_reason`, and
+`context_updates` are optional. An invalid or missing report gets a
+follow-up correction message in the same thread (up to twice) before the
+stage is recorded as failed.
+
+See `skills/attractor/SKILL.md` for the same material pitched at an
+authoring/running agent.
+
 ## Status
 
-Through task T6. `handlers/human.ts` + `server/human.ts` + `ui/human-gate.tsx`
+Through task T7 (examples, docs, end-to-end). `examples/*.dot` holds the
+three worked graphs above; `tests/e2e.test.ts` runs each of them through
+the *real* engine and handler adapters (only the BB-facing dependencies —
+an `AgentBackend`, a command `exec`, a `HumanInterviewer` — are scripted
+fakes), asserting the visited node path, a plan/implement/review approve
+*and* revise-then-approve loop, a three-way parallel fan-out/fan-in, and
+both a build-loop success and a build that never turns green within
+`max_node_visits`. The "Authoring a graph"/"Running a graph" sections above
+are this task's README docs; `docs/plans/2026-09-13-attractor-runner-plan.md`'s
+Status line is updated alongside this commit.
+
+`handlers/human.ts` + `server/human.ts` + `ui/human-gate.tsx`
 implement human gates end to end (see the T6 section below); `app.tsx`
 registers the real `attractor-run` message directive and thread-panel
 action, backed by the DAG/stage-list/event-timeline UI described below.
@@ -343,7 +509,34 @@ human-gate.test.tsx` covers the renderer (buttons per option, freeform
 field, Cancel, invalid-payload fallback) and `tests/app.test.tsx` adds its
 registration + a smoke render.
 
-T7 adds the worked examples and end-to-end tests.
+T7 adds the worked examples and end-to-end tests:
+
+- `examples/plan-implement-review.dot`, `examples/parallel-review.dot`,
+  `examples/branch-loop.dot` — the plan's three Appendix graphs, copied
+  verbatim (see "Authoring a graph" above for what each one exercises).
+- `tests/e2e.test.ts` — wires the *real* handler adapters
+  (`handlers/agent.ts`/`prompt.ts`/`command.ts`/`conditional.ts`/
+  `parallel.ts`/`start-exit.ts`/`human.ts`) to scripted fakes for the three
+  BB-facing injection seams (`AgentBackend`, a command `exec` function, a
+  `HumanInterviewer`) and runs each example through the real
+  `dot/graph.ts` parser and `engine/engine.ts` walker, asserting the
+  visited node path from the recorded `RunEvent`s. Unlike
+  `tests/engine.test.ts` (trivial always-succeed fake `Handler`s), this is
+  the first test to exercise the actual handler-adapter wiring
+  `server/service.ts` assembles for a live run, end to end and BB-free.
+  Five cases: PlanImplementReview's happy path and its
+  approve/revise-then-approve loop; ParallelReview's three-way fan-out/
+  fan-in (asserting `parallel.branch_count`/`parallel.results`, and the
+  branch node ids as a set since branches may interleave); BranchLoop's
+  build-fails-then-succeeds loop and a build that never turns green within
+  `max_node_visits` (asserting the run fails its goal gate and the loop is
+  actually bounded, not infinite).
+- README's "Authoring a graph"/"Running a graph" sections (dialect table,
+  routing cascade summary, human gates, CLI/tool/RPC/directive reference,
+  structured-result contract) — this task's docs deliverable, distinct from
+  `skills/attractor/SKILL.md`'s agent-facing version of the same material.
+- `docs/plans/2026-09-13-attractor-runner-plan.md`'s Status line, updated
+  to reflect all seven tasks landed.
 
 ## Development
 
