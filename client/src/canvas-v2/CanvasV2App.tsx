@@ -129,6 +129,7 @@ import { PresenceStore, SyncClientPeer, type Transport } from '@ensembleworks/ca
 import {
 	Cursors,
 	EmbedLayer,
+	FrameNameEditor,
 	Grid,
 	Overlay,
 	registerCoreShapes,
@@ -1033,6 +1034,12 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 
 	const handleTextChange = useCallback((id: string, text: string) => editor.apply({ type: 'SetText', id, text }), [editor])
 	const handleEndEdit = useCallback(() => editor.apply({ type: 'EndEdit' }), [editor])
+	// frame-interaction task, gap 1: a frame's rename input writes through
+	// UpdateProps (props.name is a plain field, not a doc-text container --
+	// see FrameNameEditor.tsx's module header), sharing EndEdit with the
+	// richText TextEditor above (both mounts fire the same intent to close
+	// out whichever one is currently active).
+	const handleFrameNameChange = useCallback((id: string, name: string) => editor.apply({ type: 'UpdateProps', id, props: { name } }), [editor])
 
 	// Task D2 — the write handle threaded to shape bodies (canvas-react's
 	// ShapeBodyProps.dispatch) so D3-D5's embeds (roadmap/file-viewer/…) can
@@ -1308,6 +1315,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 							dispatch={dispatch}
 						/>
 						<TextEditor toolContext={toolContext} onTextChange={handleTextChange} onEndEdit={handleEndEdit} />
+						<FrameNameEditor toolContext={toolContext} onNameChange={handleFrameNameChange} onEndEdit={handleEndEdit} />
 					</WorldLayer>
 					<Overlay
 						editorState={editorState}

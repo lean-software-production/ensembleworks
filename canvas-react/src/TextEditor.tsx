@@ -295,6 +295,15 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorP
   // textarea over a live terminal session. Guarded here, at the mount
   // decision, rather than trusting every future trigger to remember.
   if (isEmbedKind(shape.kind)) return null
+  // FRAME GUARD (frame-interaction task, gap 1): select.ts's double-click
+  // gate now ALSO fires BeginEdit for a frame (header-band click, not
+  // text-capability — see select.ts's `opensFrameRename`). A frame's
+  // editingId is rendered by the SEPARATE FrameNameEditor (a plain
+  // `props.name` input, not richText), never this component: a frame
+  // carries no doc text container for `editor.doc.getText` to read, and a
+  // full-body textarea would be the wrong affordance/geometry entirely
+  // (rename is the small header label, not the frame's whole interior).
+  if (shape.kind === 'frame') return null
 
   const { maxX: w, maxY: h } = localBounds(shape) // localBounds is always {minX:0, minY:0, maxX:w, maxY:h} — geometry.ts's contract, same as ShapeBody.tsx
   const text = toolContext.editor.doc.getText(editingId) // READ through editor.doc — see module header's "not an import" note

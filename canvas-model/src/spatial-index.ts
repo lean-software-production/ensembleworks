@@ -42,6 +42,7 @@ import { type CanvasDocument } from './document.js'
 import { type Shape } from './shape.js'
 import {
   type Bounds, type Point, arrowPathPoints, medianSize, rotationAxes, worldBounds, worldCorners, worldTransform, hitTestPoint,
+  shapeHitIndexBounds,
 } from './geometry.js'
 
 export interface SpatialIndex {
@@ -140,10 +141,23 @@ export function buildSpatialIndex(doc: CanvasDocument): SpatialIndex {
   const overflow: string[] = []
   let cellRange: SpatialIndex['cellRange'] = null
   for (const shape of doc.shapes) {
+    // boundsById is the shape's TRUE worldBounds -- this is a PUBLIC map
+    // (snapping.ts's featuresOf reads it for alignment-guide edges, and
+    // queryMarquee('contain') answers containment from it), so it must never
+    // reflect shapeHitIndexBounds' header-band widening: doing so shifted a
+    // frame's snapped edges and 'contain' containment up into empty header
+    // space (frame-interaction validator fix -- the widening is legitimate
+    // ONLY for grid bucketing, below).
     const bounds = worldBounds(doc, shape)
     boundsById.set(shape.id, bounds)
-    const minCx = Math.floor(bounds.minX / cellSize), maxCx = Math.floor(bounds.maxX / cellSize)
-    const minCy = Math.floor(bounds.minY / cellSize), maxCy = Math.floor(bounds.maxY / cellSize)
+    // shapeHitIndexBounds (frame-interaction task, gap 2): identical to
+    // worldBounds for every kind except frame, where it's widened to also
+    // cover the header band -- used ONLY to decide which grid cells this
+    // shape is bucketed into (so a header click's cell lists the frame as a
+    // candidate at all), never as boundsById itself (see above).
+    const hitBounds = shapeHitIndexBounds(doc, shape)
+    const minCx = Math.floor(hitBounds.minX / cellSize), maxCx = Math.floor(hitBounds.maxX / cellSize)
+    const minCy = Math.floor(hitBounds.minY / cellSize), maxCy = Math.floor(hitBounds.maxY / cellSize)
     if (!cellSpanIsSane(minCx, maxCx, minCy, maxCy)) { overflow.push(shape.id); continue }
     cellRange = cellRange === null
       ? { minCx, maxCx, minCy, maxCy }
