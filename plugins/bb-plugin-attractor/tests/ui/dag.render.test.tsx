@@ -170,6 +170,18 @@ describe("DagView", () => {
     expect(onOpenThread).not.toHaveBeenCalled();
   });
 
+  it("opens a clickable node's worker thread from the keyboard, with Enter and with Space", () => {
+    const onOpenThread = vi.fn();
+    const { container } = render(<DagView graph={GRAPH} events={[]} threadIdByNode={{ plan: "thread-42" }} onOpenThread={onOpenThread} />);
+    const planNode = container.querySelector('[data-node-id="plan"]')!;
+    fireEvent.keyDown(planNode, { key: "Enter" });
+    fireEvent.keyDown(planNode, { key: " " });
+    expect(onOpenThread.mock.calls).toEqual([["thread-42"], ["thread-42"]]);
+    // An unrelated key does nothing.
+    fireEvent.keyDown(planNode, { key: "a" });
+    expect(onOpenThread).toHaveBeenCalledTimes(2);
+  });
+
   it("gives a clickable node a visible affordance: a distinguishing CSS class, and a tooltip naming the worker thread", () => {
     const { container } = render(<DagView graph={GRAPH} events={[]} threadIdByNode={{ plan: "thread-42" }} onOpenThread={() => {}} />);
     const planNode = container.querySelector('[data-node-id="plan"]')!;

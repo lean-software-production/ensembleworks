@@ -7,7 +7,7 @@
  * and pointer-drag panning.
  */
 import { cleanup, fireEvent, render } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { DagView } from "../../ui/dag";
 import type { GraphView } from "../../server/contracts";
 
@@ -123,6 +123,90 @@ describe("DagView zoom/pan controls", () => {
     const wrapper = container.querySelector('[data-testid="dag-viewport"]') as HTMLElement;
     expect(wrapper).toBeTruthy();
     expect(wrapper.style.overflow).toBe("hidden");
+  });
+
+  it("a drag that starts on a clickable node pans, and does not also open that node's worker thread", () => {
+    // The two features have to coexist: grabbing the DAG to pan often means
+    // grabbing it *by* a node, and the browser synthesises a click on that
+    // node when the drag ends. Before the slop threshold + click suppression
+    // that click navigated the human straight into the worker thread.
+    const onOpenThread = vi.fn();
+    const { container } = render(<DagView graph={GRAPH} events={[]} threadIdByNode={{ plan: "thread-1" }} onOpenThread={onOpenThread} />);
+    const svg = container.querySelector("svg")!;
+    const planNode = container.querySelector('[data-node-id="plan"]')!;
+    const before = getTransform(container);
+
+    fireEvent.pointerDown(planNode, { pointerId: 1, button: 0, clientX: 10, clientY: 10, bubbles: true });
+    fireEvent.pointerMove(svg, { pointerId: 1, clientX: 120, clientY: 60 });
+    fireEvent.pointerUp(svg, { pointerId: 1, clientX: 120, clientY: 60 });
+    fireEvent.click(planNode);
+
+    expect(getTransform(container)).not.toBe(before); // it really did pan
+    expect(onOpenThread).not.toHaveBeenCalled();
+  });
+
+  it("a plain click on a node (with the pixel or two of wobble a real press has) still opens its worker thread", () => {
+    const onOpenThread = vi.fn();
+    const { container } = render(<DagView graph={GRAPH} events={[]} threadIdByNode={{ plan: "thread-1" }} onOpenThread={onOpenThread} />);
+    const svg = container.querySelector("svg")!;
+    const planNode = container.querySelector('[data-node-id="plan"]')!;
+    const before = getTransform(container);
+
+    fireEvent.pointerDown(planNode, { pointerId: 1, button: 0, clientX: 10, clientY: 10, bubbles: true });
+    fireEvent.pointerMove(svg, { pointerId: 1, clientX: 11, clientY: 12 }); // under the threshold
+    fireEvent.pointerUp(svg, { pointerId: 1, clientX: 11, clientY: 12 });
+    fireEvent.click(planNode);
+
+    expect(getTransform(container)).toBe(before); // no pan from a wobble
+    expect(onOpenThread).toHaveBeenCalledWith("thread-1");
+  });
+
+  it("a drag never captures the pointer until it has actually become a pan", () => {
+    // Pointer capture re-targets the browser's synthesised `click` to the
+    // capturing element, so capturing on pointerdown would break node clicks.
+    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    const svg = container.querySelector("svg")! as SVGSVGElement;
+    const capture = vi.fn();
+    (svg as unknown as { setPointerCapture: unknown }).setPointerCapture = capture;
+    (svg as unknown as { releasePointerCapture: unknown }).releasePointerCapture = vi.fn();
+
+    fireEvent.pointerDown(svg, { pointerId: 1, button: 0, clientX: 10, clientY: 10 });
+    expect(capture).not.toHaveBeenCalled();
+    fireEvent.pointerMove(svg, { pointerId: 1, clientX: 11, clientY: 11 });
+    expect(capture).not.toHaveBeenCalled(); // still under the threshold
+    fireEvent.pointerMove(svg, { pointerId: 1, clientX: 80, clientY: 80 });
+    expect(capture).toHaveBeenCalledWith(1);
+  });
+
+  it("releases pointer capture on pointerup and on pointercancel", () => {
+    for (const endEvent of ["pointerUp", "pointerCancel"] as const) {
+      const { container, unmount } = render(<DagView graph={GRAPH} events={[]} />);
+      const svg = container.querySelector("svg")! as SVGSVGElement;
+      const release = vi.fn();
+      (svg as unknown as { setPointerCapture: unknown }).setPointerCapture = vi.fn();
+      (svg as unknown as { releasePointerCapture: unknown }).releasePointerCapture = release;
+
+      fireEvent.pointerDown(svg, { pointerId: 7, button: 0, clientX: 0, clientY: 0 });
+      fireEvent.pointerMove(svg, { pointerId: 7, clientX: 90, clientY: 90 });
+      fireEvent[endEvent](svg, { pointerId: 7, clientX: 90, clientY: 90 });
+      expect(release, endEvent).toHaveBeenCalledWith(7);
+      unmount();
+    }
+  });
+
+  it("removes its native wheel listener on unmount (no leaked listener on a detached DAG)", () => {
+    const { container, unmount } = render(<DagView graph={GRAPH} events={[]} />);
+    const svg = container.querySelector("svg")!;
+    // Sanity: while mounted, a ctrl+wheel is ours and gets preventDefault-ed.
+    expect(fireEvent.wheel(svg, { deltaY: -100, ctrlKey: true })).toBe(false);
+
+    unmount();
+
+    // After unmount the handler must be gone — a ctrl+wheel on the detached
+    // node is now nobody's, so nothing cancels it.
+    const event = new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaY: -100, ctrlKey: true });
+    svg.dispatchEvent(event);
+    expect(event.defaultPrevented).toBe(false);
   });
 
   it("still exposes nodes as focusable buttons when a click handler is provided", () => {

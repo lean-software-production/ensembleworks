@@ -562,9 +562,14 @@ T5 adds the **DAG UI**:
   reliably `preventDefault()` — so pinch-zoom and an explicit ctrl+wheel
   both work); a *plain* wheel is left completely alone (no
   `preventDefault()`, no zoom) so the thread/panel underneath keeps
-  scrolling normally, per "Scroll ownership" below. Once zoomed in, drag
-  with a pointer to pan (`pointerdown`/`pointermove`/`pointerup`,
-  `setPointerCapture`). The DAG box wrapper (`data-testid="dag-viewport"`)
+  scrolling normally, per "Scroll ownership" below. Drag with a pointer to
+  pan, at any zoom level (`pointerdown`/`pointermove`/`pointerup`) — "fit"
+  always gets you back. A press only becomes a pan once the pointer has
+  travelled `DRAG_THRESHOLD_PX`, and only then is `setPointerCapture` taken:
+  capturing on `pointerdown` would re-target the browser's synthesised
+  `click` to the `<svg>` and break node clicking, and a pan that started on
+  a node swallows that trailing click so panning never navigates you into a
+  worker thread by accident. The DAG box wrapper (`data-testid="dag-viewport"`)
   is `overflow: hidden`, never `overflow: auto` — the same scroll-ownership
   rule as the rest of the card.
 - `ui/stages.tsx` — the stage list: four columns (Node, Status, Duration,

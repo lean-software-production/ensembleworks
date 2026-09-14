@@ -59,6 +59,8 @@ const DEFAULT_ZOOM: ZoomState = { scale: 1, tx: 0, ty: 0 };
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 4;
 const ZOOM_STEP = 1.2;
+// How far a pointer must travel before a press counts as a pan rather than a click.
+const DRAG_THRESHOLD_PX = 4;
 
 function clampScale(scale: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
@@ -376,7 +378,11 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
 
   const [zoom, setZoom] = useState<ZoomState>(DEFAULT_ZOOM);
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const dragState = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null);
+  const dragState = useRef<{ pointerId: number; lastX: number; lastY: number; startX: number; startY: number; panning: boolean } | null>(null);
+  // Set when a drag actually panned, so the `click` the browser synthesises
+  // at the end of that drag does not also open the node the drag happened to
+  // start on. Cleared by the click it suppresses, or by the next pointerdown.
+  const suppressNextClick = useRef(false);
 
   const center = { x: viewWidth / 2, y: viewHeight / 2 };
   const zoomIn = useCallback(() => setZoom((z) => zoomAround(z, ZOOM_STEP, center)), [viewWidth, viewHeight]);
@@ -404,24 +410,42 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
   }, [viewWidth, viewHeight]);
 
   const onPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
-    // Only a plain, unmodified primary-button drag pans — a node click still
-    // fires its own onClick, and this never interferes with a modifier+wheel
-    // zoom (a different event type entirely).
+    // Only a plain, unmodified primary-button drag pans, and this never
+    // interferes with a modifier+wheel zoom (a different event type entirely).
+    // Note what is deliberately NOT done here: no `setPointerCapture`. A press
+    // that turns out to be an ordinary node click must stay an ordinary node
+    // click, and capturing the pointer up front re-targets the browser's
+    // synthesised `click` to the capturing <svg>, which would stop a node's
+    // own onClick from ever firing. Capture is taken in onPointerMove, once
+    // the pointer has travelled far enough to be a pan rather than a click.
     if (event.button !== 0) return;
-    dragState.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY };
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    suppressNextClick.current = false;
+    dragState.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY, startX: event.clientX, startY: event.clientY, panning: false };
   };
   const onPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
     const drag = dragState.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
+    if (!drag.panning) {
+      // Below the slop threshold this is still a click in progress — a human
+      // pressing a node always wobbles a pixel or two before releasing.
+      if (Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY) < DRAG_THRESHOLD_PX) return;
+      drag.panning = true;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    }
     const dx = event.clientX - drag.lastX;
     const dy = event.clientY - drag.lastY;
-    dragState.current = { pointerId: drag.pointerId, lastX: event.clientX, lastY: event.clientY };
+    drag.lastX = event.clientX;
+    drag.lastY = event.clientY;
     setZoom((z) => ({ ...z, tx: z.tx + dx, ty: z.ty + dy }));
   };
   const endDrag = (event: React.PointerEvent<SVGSVGElement>) => {
-    if (dragState.current?.pointerId !== event.pointerId) return;
-    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    const drag = dragState.current;
+    if (drag?.pointerId !== event.pointerId) return;
+    if (drag.panning) {
+      event.currentTarget.releasePointerCapture?.(event.pointerId);
+      // A pan that started on a node ends with a `click` on that node; swallow it.
+      suppressNextClick.current = true;
+    }
     dragState.current = null;
   };
 
@@ -539,7 +563,17 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
               role={clickable ? "button" : undefined}
               tabIndex={clickable ? 0 : undefined}
               aria-label={clickable ? `Open worker thread for ${node.label ?? node.id}` : undefined}
-              onClick={clickable ? () => onOpenThread!(threadId!) : undefined}
+              onClick={
+                clickable
+                  ? () => {
+                      if (suppressNextClick.current) {
+                        suppressNextClick.current = false;
+                        return;
+                      }
+                      onOpenThread!(threadId!);
+                    }
+                  : undefined
+              }
               onKeyDown={
                 clickable
                   ? (event) => {
