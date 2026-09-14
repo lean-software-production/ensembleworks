@@ -115,7 +115,6 @@ import {
 	applyWheel,
 	buildSetStyleIntent,
 	cancelActiveTool,
-	clipboardShortcut,
 	createInitialToolStates,
 	createToolContext,
 	createToolSet,
@@ -126,12 +125,11 @@ import {
 	pasteIntents,
 	redoWithRepair,
 	reorderSelectionIntents,
-	reorderShortcut,
+	resolveShortcut,
 	screenToWorld,
 	selectAllIntents,
 	shouldFallBackToSelect,
 	TOOL_SHORTCUT_LABEL,
-	toolShortcut,
 	undoWithRepair,
 	type InputEvent,
 	type Intent,
@@ -774,190 +772,156 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// the pre-refactor branch's own unconditional early return.
 	const handleGlobalShortcut = useCallback(
 		(event: KeyInputEvent, editingId: string | null): boolean => {
-			if (editingId !== null) return false // TextEditor owns the keyboard while editing
-			if (event.key === 'Escape') {
-				cancelAndReset()
-				// Escape returns to the select tool (Task keyboard fix-round,
-				// validator-caught gap; tldraw parity — Idle.onCancel ->
-				// setCurrentTool('select')). `selectTool` itself calls
-				// cancelAndReset again internally — harmless (the gesture this
-				// call just cancelled is already gone, so its own cancel is a
-				// no-op) — and is the ONE place that also sets activeToolId, so
-				// calling it here (rather than duplicating that setState) keeps
-				// "switch to select" defined in exactly one place.
-				selectTool('select')
-				return true
-			}
-			if (event.key === 'Delete' || event.key === 'Backspace') {
-				const intents = deleteSelectionIntents(editor)
-				if (intents.length > 0) editor.applyAll(intents)
-				return true
-			}
-			// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (Task B4) — the ONE site both entry
-			// points funnel through (see this function's own doc comment above),
-			// so undo/redo work identically whether the viewport or a toolbar
-			// button holds focus. `key.toLowerCase()` because a real browser
-			// reports the shifted letter's case differently across platforms
-			// (observed: 'z' unshifted, 'Z' shifted) — comparing case-
-			// insensitively means Ctrl+Shift+Z matches regardless of which case
-			// the DOM handed back, rather than silently failing on one platform.
-			// No preventDefault: this mount never focuses a native
-			// input/textarea/contentEditable while these fire (the editingId
-			// gate above already routes text-editing elsewhere), so there's no
-			// competing native undo to suppress — consistent with Escape/Delete/
-			// Backspace just above, which don't call it either.
-			//
-			// REDO KEY SCOPING (correctness): the z-branch (undo) and the
-			// shift-z alternative (redo) accept EITHER ctrl or meta — Ctrl+Z is
-			// the Windows/Linux undo and Cmd+Shift+Z the Mac-native redo. But
-			// the 'y' redo alternative requires `ctrl` SPECIFICALLY, never meta:
-			// Ctrl+Y is the Windows redo convention, whereas Cmd+Y on Safari is
-			// the native "Show All History" shortcut — and since nothing here
-			// calls preventDefault, binding meta+y would fire redo AND pop
-			// Safari's history window. Mac users get redo via Cmd+Shift+Z (the
-			// z-branch), so dropping meta+y costs them nothing.
-			const key = event.key.toLowerCase()
-			const withModifier = event.modifiers.ctrl || event.modifiers.meta
-			// undoWithRepair/redoWithRepair (canvas-editor/src/session/history.js)
-			// fold together the two repairs a history move can strand: a dangling
-			// selection (SetSelection has no undo inverse — tool-loop.ts's
-			// pruneDanglingSelectionIntents doc comment) and a dangling
-			// currentPageId (SetCurrentPage likewise has no inverse — Task U1,
-			// D-6, D-3; a redo can equally reintroduce a DeletePage and strand
-			// currentPageId the same way as an undo).
-			if (withModifier && key === 'z' && !event.modifiers.shift) {
-				undoWithRepair(editor)
-				return true
-			}
-			if ((withModifier && key === 'z' && event.modifiers.shift) || (event.modifiers.ctrl && key === 'y')) {
-				redoWithRepair(editor)
-				return true
-			}
-			// Ctrl/Cmd+C/X/V/D (Task D1) — copy/cut/paste/duplicate. The
-			// editingId===null gate already happened above (this function's
-			// first line), so `clipboardShortcut` here is the pure key->action
-			// mapping only (also independently unit-tested DOM-free in
-			// clipboard-dom.test.ts). D-7's cut ordering (write the clipboard
-			// FIRST, delete only once that write resolves — a failed write must
-			// never lose shapes) and D-6's "selection after paste/duplicate =
-			// the new root ids" are already baked into pasteIntents/
-			// duplicateSelectionIntents (canvas-editor's clipboard-intents.ts);
-			// this branch only decides WHEN to call them and where the
-			// `navigator.clipboard` I/O (async, isolated in clipboard-dom.ts)
-			// sits relative to it.
-			const clip = clipboardShortcut(event, editingId)
-			if (clip) {
-				if (clip.action === 'copy') {
-					const selection = [...editor.get().selection]
-					if (selection.length > 0) {
-						const payload = serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection)
-						void writeClipboardText(encodeClipboard(payload)).catch(() => {
-							// A failed/denied clipboard write is a no-op copy — the
-							// selection/doc are untouched either way, so there is
-							// nothing to roll back.
-						})
-					}
-				} else if (clip.action === 'cut') {
-					const selection = [...editor.get().selection]
-					if (selection.length > 0) {
-						const payload = serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection)
-						// ATOMIC CAPTURE (fixes a cut TOCTOU a review caught):
-						// deleteSelectionIntents reads the LIVE selection
-						// (tool-loop.ts), so if it were called fresh INSIDE the
-						// .then() below — after the async writeClipboardText
-						// resolves — a selection change during that (real, if
-						// brief) microtask window could make cut delete a
-						// DIFFERENT set than the one just serialized above. The
-						// dangerous direction: selection GROWS during the write
-						// -> cut deletes a shape that was never placed on the
-						// clipboard -> data lost with no clipboard copy of it.
-						// Capturing the delete intents HERE, synchronously, from
-						// the SAME selection just serialized, guarantees cut
-						// deletes EXACTLY what it copied, regardless of any
-						// selection change before the write resolves.
-						const deleteIntents = deleteSelectionIntents(editor)
-						void writeClipboardText(encodeClipboard(payload))
-							.then(() => {
-								// D-7: only APPLY the captured delete AFTER the
-								// write resolves — never before, so a failed
-								// write can't lose shapes.
-								if (deleteIntents.length > 0) editor.applyAll(deleteIntents)
+			// `resolveShortcut` (canvas-editor/src/session/keyboard.ts) is the ONE
+			// pure key->command decision, shared by every host — it already
+			// carries the `editingId === null` gate internally (TextEditor owns
+			// the keyboard while editing), so this switch only APPLIES each
+			// command; it makes no key/modifier decisions of its own. Order is
+			// fixed inside the resolver (cancel, delete, undo, redo, clipboard,
+			// z-order, select-all, tool letters) — this switch just mirrors that
+			// via the returned command's `type`, not by re-deriving order here.
+			const command = resolveShortcut(event, editingId)
+			if (command === null) return false
+			switch (command.type) {
+				case 'cancel':
+					cancelAndReset()
+					// Escape returns to the select tool (Task keyboard fix-round,
+					// validator-caught gap; tldraw parity — Idle.onCancel ->
+					// setCurrentTool('select')). `selectTool` itself calls
+					// cancelAndReset again internally — harmless (the gesture this
+					// call just cancelled is already gone, so its own cancel is a
+					// no-op) — and is the ONE place that also sets activeToolId, so
+					// calling it here (rather than duplicating that setState) keeps
+					// "switch to select" defined in exactly one place.
+					selectTool('select')
+					return true
+				case 'delete': {
+					const intents = deleteSelectionIntents(editor)
+					if (intents.length > 0) editor.applyAll(intents)
+					return true
+				}
+				// Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y (Task B4) — the ONE site both entry
+				// points funnel through (see this function's own doc comment above),
+				// so undo/redo work identically whether the viewport or a toolbar
+				// button holds focus. No preventDefault: this mount never focuses a
+				// native input/textarea/contentEditable while these fire (the
+				// editingId gate already routes text-editing elsewhere), so there's
+				// no competing native undo to suppress — consistent with
+				// cancel/delete above, which don't call it either.
+				// undoWithRepair/redoWithRepair (canvas-editor/src/session/history.js)
+				// fold together the two repairs a history move can strand: a dangling
+				// selection (SetSelection has no undo inverse — tool-loop.ts's
+				// pruneDanglingSelectionIntents doc comment) and a dangling
+				// currentPageId (SetCurrentPage likewise has no inverse — Task U1,
+				// D-6, D-3; a redo can equally reintroduce a DeletePage and strand
+				// currentPageId the same way as an undo).
+				case 'undo':
+					undoWithRepair(editor)
+					return true
+				case 'redo':
+					redoWithRepair(editor)
+					return true
+				// Ctrl/Cmd+C/X/V/D (Task D1) — copy/cut/paste/duplicate. D-7's cut
+				// ordering (write the clipboard FIRST, delete only once that write
+				// resolves — a failed write must never lose shapes) and D-6's
+				// "selection after paste/duplicate = the new root ids" are already
+				// baked into pasteIntents/duplicateSelectionIntents (canvas-editor's
+				// clipboard-intents.ts); this branch only decides WHEN to call them
+				// and where the `navigator.clipboard` I/O (async, isolated in
+				// clipboard-dom.ts) sits relative to it.
+				case 'clipboard': {
+					if (command.action === 'copy') {
+						const selection = [...editor.get().selection]
+						if (selection.length > 0) {
+							const payload = serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection)
+							void writeClipboardText(encodeClipboard(payload)).catch(() => {
+								// A failed/denied clipboard write is a no-op copy — the
+								// selection/doc are untouched either way, so there is
+								// nothing to roll back.
+							})
+						}
+					} else if (command.action === 'cut') {
+						const selection = [...editor.get().selection]
+						if (selection.length > 0) {
+							const payload = serializeSelection(editor.doc.listShapes(), editor.doc.listBindings(), selection)
+							// ATOMIC CAPTURE (fixes a cut TOCTOU a review caught):
+							// deleteSelectionIntents reads the LIVE selection
+							// (tool-loop.ts), so if it were called fresh INSIDE the
+							// .then() below — after the async writeClipboardText
+							// resolves — a selection change during that (real, if
+							// brief) microtask window could make cut delete a
+							// DIFFERENT set than the one just serialized above. The
+							// dangerous direction: selection GROWS during the write
+							// -> cut deletes a shape that was never placed on the
+							// clipboard -> data lost with no clipboard copy of it.
+							// Capturing the delete intents HERE, synchronously, from
+							// the SAME selection just serialized, guarantees cut
+							// deletes EXACTLY what it copied, regardless of any
+							// selection change before the write resolves.
+							const deleteIntents = deleteSelectionIntents(editor)
+							void writeClipboardText(encodeClipboard(payload))
+								.then(() => {
+									// D-7: only APPLY the captured delete AFTER the
+									// write resolves — never before, so a failed
+									// write can't lose shapes.
+									if (deleteIntents.length > 0) editor.applyAll(deleteIntents)
+								})
+								.catch(() => {
+									// The write itself failed/was denied: intentionally
+									// do NOT delete. The selection survives untouched.
+								})
+						}
+					} else if (command.action === 'paste') {
+						void readClipboardText()
+							.then((text) => {
+								const intents = pasteIntents(editor, text)
+								if (intents.length > 0) editor.applyAll(intents)
 							})
 							.catch(() => {
-								// The write itself failed/was denied: intentionally
-								// do NOT delete. The selection survives untouched.
+								// A failed/denied clipboard read is a no-op paste, never
+								// a crash — mirrors decodeClipboard's own total-function,
+								// never-throws contract for hostile/malformed text.
 							})
+					} else {
+						// 'duplicate' — no clipboard I/O at all, purely synchronous.
+						const intents = duplicateSelectionIntents(editor)
+						if (intents.length > 0) editor.applyAll(intents)
 					}
-				} else if (clip.action === 'paste') {
-					void readClipboardText()
-						.then((text) => {
-							const intents = pasteIntents(editor, text)
-							if (intents.length > 0) editor.applyAll(intents)
-						})
-						.catch(() => {
-							// A failed/denied clipboard read is a no-op paste, never
-							// a crash — mirrors decodeClipboard's own total-function,
-							// never-throws contract for hostile/malformed text.
-						})
-				} else {
-					// 'duplicate' — no clipboard I/O at all, purely synchronous.
-					const intents = duplicateSelectionIntents(editor)
+					return true
+				}
+				// Bracket-key Arrange shortcuts (Task D1, D-6) — bring-forward/
+				// send-backward/bring-to-front/send-to-back. `reorderSelectionIntents`
+				// (canvas-editor's E2) computes the whole batch; applying it via a
+				// single `editor.applyAll` is what makes one reorder ONE commit / ONE
+				// undo entry (E1/E2's own doc comments). No `preventDefault`: bare
+				// brackets have no competing native canvas action when
+				// editingId===null, consistent with cancel/delete/undo/clipboard
+				// just above.
+				case 'reorder': {
+					const intents = reorderSelectionIntents(editor, command.op)
 					if (intents.length > 0) editor.applyAll(intents)
+					return true
 				}
-				return true
+				// Ctrl/Cmd+A select-all (Task keyboard/K4) — tldraw parity
+				// (actions.tsx's `select-all`, `kbd: 'cmd+a,ctrl+a'`).
+				// `selectAllIntents` is a pure helper (canvas-editor) that reads the
+				// CURRENT page's top-level shapes fresh off `editor` — always
+				// applied via `editor.applyAll` even when empty, since SetSelection
+				// is a view intent (docMutated: false) with nothing to gate on.
+				case 'selectAll':
+					editor.applyAll(selectAllIntents(editor))
+					return true
+				// Tool-selection shortcuts (Task keyboard/K3) — tldraw's single-key
+				// tool shortcuts (v/h/n/t/r/o/a/f/d/l). `r`/`o` additionally arm the
+				// geo variant via `SetNextStyle` — the same armed-style path
+				// StylePanel's AS3 mode already uses (a view intent, no undo entry).
+				case 'tool':
+					selectTool(command.shortcut.toolId)
+					if (command.shortcut.armGeo) {
+						editor.applyAll([{ type: 'SetNextStyle', props: { geo: command.shortcut.armGeo } }])
+					}
+					return true
 			}
-			// Bracket-key Arrange shortcuts (Task D1, D-6) — bring-forward/
-			// send-backward/bring-to-front/send-to-back. The editingId===null
-			// gate already happened above, so `reorderShortcut` here is the pure
-			// key->op mapping only (also independently unit-tested DOM-free in
-			// reorder-dom.test.ts). `reorderSelectionIntents` (canvas-editor's
-			// E2) computes the whole batch; applying it via a single
-			// `editor.applyAll` is what makes one reorder ONE commit / ONE undo
-			// entry (E1/E2's own doc comments). No `preventDefault`: bare
-			// brackets have no competing native canvas action when
-			// editingId===null, consistent with Delete/Escape/undo/clipboard
-			// just above.
-			const reorder = reorderShortcut(event, editingId)
-			if (reorder) {
-				const intents = reorderSelectionIntents(editor, reorder.op)
-				if (intents.length > 0) editor.applyAll(intents)
-				return true
-			}
-			// Ctrl/Cmd+A select-all (Task keyboard/K4) — tldraw parity
-			// (actions.tsx's `select-all`, `kbd: 'cmd+a,ctrl+a'`).
-			// `key === 'a'` (not the raw event.key, matching the z/y checks
-			// above) plus withModifier, computed once above for the undo/redo
-			// branches and still in scope here. `selectAllIntents` is a pure
-			// helper (canvas-editor) that reads the CURRENT page's top-level
-			// shapes fresh off `editor` — always applied via `editor.applyAll`
-			// even when empty, since SetSelection is a view intent
-			// (docMutated: false) with nothing to gate on.
-			if (withModifier && key === 'a') {
-				editor.applyAll(selectAllIntents(editor))
-				return true
-			}
-			// Tool-selection shortcuts (Task keyboard/K3) — tldraw's
-			// single-key tool shortcuts (v/h/n/t/r/o/a/f/d/l). `toolShortcut`
-			// (canvas-editor/src/session/tool-shortcut.ts) is the pure key->tool
-			// decision, already gated on editingId/no-modifier internally; it
-			// is called here (rather than earlier) so it never shadows any of
-			// the modified shortcuts above (Ctrl+Z, Ctrl+A, Ctrl+C/X/V/D, the
-			// bracket keys) — those all require a modifier the tool shortcuts
-			// explicitly reject, so ordering doesn't change behavior, but
-			// keeping it last mirrors "more specific / more surprising
-			// shortcuts first" the whole function otherwise follows. `r`/`o`
-			// additionally arm the geo variant via `SetNextStyle` — the same
-			// armed-style path StylePanel's AS3 mode already uses (a view
-			// intent, no undo entry).
-			const shortcut = toolShortcut(event, editingId)
-			if (shortcut) {
-				selectTool(shortcut.toolId)
-				if (shortcut.armGeo) {
-					editor.applyAll([{ type: 'SetNextStyle', props: { geo: shortcut.armGeo } }])
-				}
-				return true
-			}
-			return false
 		},
 		[editor, cancelAndReset, selectTool],
 	)
@@ -1228,7 +1192,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			// (Ctrl+D bookmarks the page, Ctrl+P — N/A here, but Ctrl+V may paste
 			// into a focused field, Ctrl+C may copy a text selection) that
 			// Escape/Delete/undo never had to guard against, so this path calls
-			// preventDefault when — and only when — `clipboardShortcut` itself
+			// preventDefault when — and only when — `resolveShortcut` itself
 			// says this keydown IS one of the four (same pure decision
 			// `handleGlobalShortcut` just consumed above; re-deriving it here,
 			// rather than having `handleGlobalShortcut` return WHICH action it
@@ -1251,7 +1215,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			// "paste into this element" action to suppress there, and
 			// Ctrl+D/Ctrl+P are OS/browser-reserved shortcuts most browsers
 			// ignore preventDefault for regardless of where it's called from.
-			if (clipboardShortcut(keyEvent, editingId)) e.preventDefault()
+			if (resolveShortcut(keyEvent, editingId)?.type === 'clipboard') e.preventDefault()
 		}
 		document.addEventListener('keydown', handleGlobalKeydown)
 		return () => document.removeEventListener('keydown', handleGlobalKeydown)
