@@ -68,10 +68,13 @@ No DOM, React, clock or PRNG access, so the FSM contract runner exercises it.
   plugin's agent layer), `overlays` (e.g. the web app's editing indicators and
   dev overlay).
 - `Toolbar` (icon buttons, tooltips with shortcut letters, `role="toolbar"`,
-  `aria-pressed`), `StylePanel` and its icons, the canvas fonts, and
-  `canvas-ui.css`.
+  `aria-pressed`), `StylePanel` and its icons, and the canvas fonts.
 - Styling reads a documented set of `--canvas-ui-*` custom properties with
-  defaults equal to the web app's current look.
+  defaults equal to the web app's current look. *As shipped:* there is no
+  `canvas-ui.css`. Chrome styles are inline React styles whose values are
+  `var(--canvas-ui-*, <web-app default>)` (`canvas-ui/src/theme.ts`,
+  `UI_VARS`). A host sets the properties on an ancestor element; the plugin
+  maps them to bb tokens inline in `plugins/canvas/canvas/theme.ts`.
 
 **Host port — `CanvasHost`.** Kept deliberately small:
 
@@ -94,11 +97,28 @@ No DOM, React, clock or PRNG access, so the FSM contract runner exercises it.
 DOM input → `Viewport` → `useCanvasSession` → keyboard resolver or the active
 tool's FSM → intents → `editor.applyAll` → doc → host transport syncs.
 
-One keydown listener on the canvas container (not only the viewport). It
-ignores keys whose target is an editable field, except the commit and cancel
-keys the text editor already handles. When an edit ends, focus returns to the
-canvas container. This removes the plugin's current failure where, after
-editing text, focus falls to `body` and every canvas shortcut stops working.
+*As shipped* (`canvas-ui/src/use-canvas-session.ts`, `keyboard-scope.ts`):
+focus is not moved back to the canvas when an edit ends; it falls to `body` as
+before. Instead keydowns reach the session two ways:
+
+- Keydowns inside the viewport go through the `Viewport`'s own `onKeyDown` to
+  `handleInput`: shortcuts first, then the active tool.
+- A document `keydown` listener handles everything else inside the host's
+  keyboard scope (`keyboardScopeRef`: the web app's root, the plugin's panel).
+  It ignores editable targets and anything the viewport already handled.
+  Shortcuts (Delete, Escape, undo, clipboard, reorder, tool letters, select
+  all) run from any in-scope target, including a focused toolbar button or
+  page tab. Tool input (Enter, arrow nudge) runs only when the target is
+  `body`, so Enter on a focused chrome button activates the button and does
+  not begin editing. An Enter that begins an edit from `body` is
+  `preventDefault`ed so no newline lands in the new text editor.
+- A `body`-targeted keydown counts as in scope only while the user's last
+  `pointerdown` or `focusin` landed inside the scope (initially true). After
+  editing text, focus on `body` still runs canvas shortcuts. After clicking
+  another bb pane, Backspace or Ctrl+C there does not act on the canvas.
+
+This removes the plugin's old failure where, after editing text, every canvas
+shortcut stopped working until the user clicked the canvas.
 
 ### Migration (each stage leaves both hosts green)
 
@@ -110,7 +130,8 @@ editing text, focus falls to `body` and every canvas shortcut stops working.
 3. **Adopt `canvas-ui` in the plugin.** Delete `plugins/canvas/canvas/tool-loop.ts`,
    `panel/session-input.ts` and the toolbar markup in `panel/session-view.tsx`;
    map bb theme tokens; keep bottom-dock placement via the toolbar slot.
-   Verify early that `bb plugin build` bundles CSS from a sibling package.
+   (No CSS file ships, so there was no sibling-package CSS bundling to verify;
+   see Layers.)
 4. **Fix the cross-page arrow bug in the shared renderer.**
    `canvas-react/src/overlay/Arrows.tsx` draws every arrow in the room
    regardless of page (same code on `main`); filter by `pageIdOf` like
@@ -121,16 +142,21 @@ editing text, focus falls to `body` and every canvas shortcut stops working.
 - FSM contract lane covers the moved pure logic.
 - The web app's browser contract lane remains the browser proof for
   `canvas-ui` (it mounts the same components the plugin mounts).
-- Plugin: a vitest test that mounts `CanvasSurface` with a fake `CanvasHost`;
-  plugin typecheck, tests, `npm run audit:quality:compare`, `bb plugin build .`.
+- `canvas-ui/src/use-canvas-session.test.ts` mounts `useCanvasSession` +
+  `CanvasSurface` in happy-dom with a real `Editor` and a fake `CanvasHost`
+  (scope-gated Backspace, clipboard write and failure notice, Enter/arrows on
+  a focused chrome button versus `body`). The plugin keeps static-render
+  vitest checks (`plugins/canvas/tests/shared-surface.test.ts`); plugin
+  typecheck, tests, `npm run audit:quality:compare`, `bb plugin build .`.
 - A checked-in live-bb browser smoke script beside
   `plugins/canvas/tests/live-smoke.ts`, run by hand against a running bb.
 - No new source-text wiring guards.
 
 ### Risks
 
-- `bb plugin build` bundling CSS from a sibling package is unproven (the
-  plugin imports only TypeScript from siblings today). Check first in stage 3.
+- ~~`bb plugin build` bundling CSS from a sibling package is unproven.~~
+  Did not arise: canvas-ui ships no CSS file (inline `var()` styles only), so
+  the plugin still imports only TypeScript from siblings.
 - The ew-lsp-001 deploy recipe must sync `canvas-ui` alongside the other
   canvas packages, because bb rebuilds the frontend bundle from source on
   reload.
