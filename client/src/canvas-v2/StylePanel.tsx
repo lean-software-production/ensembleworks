@@ -167,7 +167,23 @@ function humanize(value: string): string {
 // definition, near PANEL_FLIP_HEADROOM) for the anchor-vs-edge clamp bug
 // this cap used to be paired with (a P4 first pass clamped only the anchor
 // point, which still let a wide-but-bounded panel spill off-screen).
-const PANEL_MAX_WIDTH = 320
+//
+// LAYOUT FIX (style-memory task, defect a): 320 was too narrow for the
+// `color` row's real content once style-panel-icons shrank every OTHER
+// control to a fixed 24px icon button — the color row is the one row that
+// never got smaller (`swatchButtonStyle` stayed a fixed 20px circle, same as
+// before that pass), and COLOR carries 13 values (canvas-model's COLOR
+// enum), the most of any axis. 320's content width (320 - 2*10 padding -
+// 2*1 border = 298px) fits only 12 of the 13 swatches per row (13*20 +
+// 12*4-gap = 308px needed), so 'white' (the 13th) wrapped onto its own
+// second row alone — cosmetically broken next to every other single-row
+// group. 340's content width (318px) comfortably fits all 13
+// (308px, +10px headroom) on one row, matching tldraw's own single-row
+// color swatch layout. Pinned by `StylePanel.position.test.ts`'s
+// `colorRowWidth() <= panelContentWidth()` case, computed from the REAL
+// swatch/gap constants, not a hand-typed pixel count, so a future value
+// added to the COLOR enum re-proves this instead of silently rotting.
+const PANEL_MAX_WIDTH = 340
 // Bounds panel HEIGHT the same way PANEL_MAX_WIDTH bounds width — see that
 // constant's doc comment. `overflowY: 'auto'` on PANEL_STYLE below is the
 // safety net for a selection with an unusually large union of relevant axis
@@ -237,7 +253,7 @@ const PANEL_STYLE: CSSProperties = {
 const ROW_GROUP_STYLE: CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
 const ROW_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4 }
 const ROW_LABEL_STYLE: CSSProperties = { fontSize: 10, color: '#475569', fontWeight: 600, letterSpacing: 0.2 }
-const ROW_VALUES_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 4 }
+const ROW_VALUES_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 4 } // gap mirrors SWATCH_GAP_PX below (declared after use — CSS-in-JS values only, no import-order issue)
 
 // tldraw's own opacity control offers five discrete steps (Decisions §
 // Parity value-sets, "opacity") — style-axes.ts's STYLE_VALUE_SETS.opacity
@@ -249,10 +265,20 @@ const OPACITY_VALUES = STYLE_VALUE_SETS.opacity
 // the container above sets 'none'. Without this, a click aimed at a swatch
 // would fall through the panel to the canvas underneath instead of hitting
 // the button.
+// Exported as named constants (not left as magic numbers inside
+// `swatchButtonStyle`/`ROW_VALUES_STYLE`) so `panelContentWidth`/
+// `colorRowWidth` below — and `StylePanel.position.test.ts`'s pinning test —
+// compute the SAME numbers the real CSS renders, never a second, driftable
+// hand-copy of them.
+const SWATCH_PX = 20
+const SWATCH_GAP_PX = 4
+const PANEL_HORIZONTAL_PADDING_PX = 10 // PANEL_STYLE's `padding: '8px 10px'`, left+right
+const PANEL_BORDER_PX = 1 // PANEL_STYLE's `border: '1px solid ...'`, left+right
+
 function swatchButtonStyle(current: boolean): CSSProperties {
 	return {
-		width: 20,
-		height: 20,
+		width: SWATCH_PX,
+		height: SWATCH_PX,
 		borderRadius: '50%',
 		border: current ? '2px solid #004990' : '1px solid rgba(15,23,42,0.25)',
 		boxShadow: current ? '0 0 0 1px #fafaf7 inset' : undefined,
@@ -260,6 +286,28 @@ function swatchButtonStyle(current: boolean): CSSProperties {
 		padding: 0,
 		pointerEvents: 'auto',
 	}
+}
+
+/** The panel's real, on-screen CONTENT width (inside its own padding and
+ * border) — `boxSizing: 'border-box'` (PANEL_STYLE) folds both back inside
+ * `maxWidth`, so this is `PANEL_MAX_WIDTH` minus both sides' padding and
+ * border, not `PANEL_MAX_WIDTH` itself (see that constant's FIXUP comment).
+ * Exported for `StylePanel.position.test.ts`'s color-row-fits-on-one-line
+ * pin (layout defect a, style-memory task). */
+export function panelContentWidth(): number {
+	return PANEL_MAX_WIDTH - 2 * (PANEL_HORIZONTAL_PADDING_PX + PANEL_BORDER_PX)
+}
+
+/** The `color` row's real rendered width — N swatches at `SWATCH_PX` each,
+ * `N - 1` gaps of `SWATCH_GAP_PX` between them (`ROW_VALUES_STYLE`'s `gap`),
+ * no trailing gap. `N` is read from the REAL value set
+ * (`STYLE_VALUE_SETS.color.length`, canvas-model's COLOR enum via
+ * style-axes.ts), not a hand-typed "13" — so a future color added to the
+ * model re-proves (or breaks) this pin automatically, rather than silently
+ * going stale. Exported for the same test as `panelContentWidth`. */
+export function colorRowWidth(): number {
+	const n = STYLE_VALUE_SETS.color.length
+	return n * SWATCH_PX + (n - 1) * SWATCH_GAP_PX
 }
 
 // Task style-panel-icons — every non-color/non-opacity control is now a
@@ -417,7 +465,7 @@ function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
 								aria-label={`${Math.round(v * 100)}%`}
 								title={`${Math.round(v * 100)}%`}
 								style={opacityStopStyle(isCurrent)}
-								onClick={(e) => onStyleChange('opacity', v, { onlySelection: e.ctrlKey || e.metaKey })}
+								onClick={(e) => onStyleChange('opacity', v, { onlySelection: Boolean(e?.ctrlKey || e?.metaKey) })}
 							/>
 						)
 					})}
@@ -443,7 +491,7 @@ function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
 							title={humanize(v)}
 							aria-label={humanize(v)}
 							style={{ ...swatchButtonStyle(isCurrent), background: colorSwatchHex(v) }}
-							onClick={(e) => onStyleChange(axis, v, { onlySelection: e.ctrlKey || e.metaKey })}
+							onClick={(e) => onStyleChange(axis, v, { onlySelection: Boolean(e?.ctrlKey || e?.metaKey) })}
 						/>
 					) : (
 						<button
@@ -455,7 +503,7 @@ function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
 							title={humanize(v)}
 							aria-label={humanize(v)}
 							style={segButtonStyle(isCurrent)}
-							onClick={(e) => onStyleChange(axis, v, { onlySelection: e.ctrlKey || e.metaKey })}
+							onClick={(e) => onStyleChange(axis, v, { onlySelection: Boolean(e?.ctrlKey || e?.metaKey) })}
 						>
 							{axisIcon(axis, v)}
 						</button>
@@ -594,6 +642,15 @@ export function avoidAnchorOverlap(
 ): PanelPosition & { readonly maxHeight?: number } {
 	const minY = Math.min(c1.y, c2.y)
 	const maxY = Math.max(c1.y, c2.y)
+	// The two "ideal" (non-overlapping) edges and the real room available past
+	// each — computed UNCONDITIONALLY, regardless of which placement
+	// `clampPanelPosition` originally chose, because a squeeze needs to know
+	// BOTH sides' room to pick the roomier one (see the LAYOUT FIX note below).
+	const idealTop = maxY + margin // BELOW placement's ideal top edge
+	const belowRoom = Math.max(0, viewportSize.height - idealTop - margin)
+	const idealBottom = minY - margin // ABOVE placement's ideal bottom edge
+	const aboveRoom = Math.max(0, idealBottom - margin)
+
 	if (position.transform === 'translateX(-50%)') {
 		// "below" placement (also the no-bounds top-center fallback, which
 		// trivially satisfies `top >= idealTop` since idealTop is world-bounds
@@ -601,17 +658,31 @@ export function avoidAnchorOverlap(
 		// is the panel's literal TOP edge. A squeeze already happened iff the
 		// clamp pulled it above (numerically less than) the ideal top-of-panel
 		// position right after the selection's bottom edge.
-		const idealTop = maxY + margin
 		if (position.top >= idealTop) return position
-		return { ...position, top: idealTop, maxHeight: Math.max(0, viewportSize.height - idealTop - margin) }
+		// LAYOUT FIX (style-memory task, defect b — v2-geo-selected.png): a
+		// squeeze used to ALWAYS stay on the side `clampPanelPosition` already
+		// picked (FLIP_HEADROOM is a rough "is minY small?" heuristic, blind to
+		// how much room the panel's real content actually needs) — for a
+		// selection anchored near the viewport's top edge but whose OWN bottom
+		// sits deep in a short/narrow viewport, that side can have almost no
+		// room left (a tall geo panel's last row, "Shape", rendering mostly
+		// off-screen), while the OTHER side has more. Flip to ABOVE whenever it
+		// would give strictly more room than squeezing below does.
+		if (aboveRoom > belowRoom) {
+			return { ...position, top: idealBottom, transform: 'translate(-50%, -100%)', maxHeight: aboveRoom }
+		}
+		return { ...position, top: idealTop, maxHeight: belowRoom }
 	}
 	// "above" placement: `top` is the panel's literal BOTTOM edge (the CSS
 	// `translate(-50%, -100%)` transform makes it so). A squeeze already
 	// happened iff the clamp pushed that bottom edge below (numerically past)
 	// the ideal bottom-of-panel position right above the selection's top edge.
-	const idealBottom = minY - margin
 	if (position.top <= idealBottom) return position
-	return { ...position, top: idealBottom, maxHeight: Math.max(0, idealBottom - margin) }
+	// Symmetric flip to BELOW — see the "below" branch's LAYOUT FIX note above.
+	if (belowRoom > aboveRoom) {
+		return { ...position, top: idealTop, transform: 'translateX(-50%)', maxHeight: belowRoom }
+	}
+	return { ...position, top: idealBottom, maxHeight: aboveRoom }
 }
 
 function computePosition(

@@ -22,7 +22,7 @@
 // (160-90)=70px past the viewport boundary — invisible to the browser
 // contract (centered scene) but real for any edge-anchored selection.
 import assert from 'node:assert/strict'
-import { avoidAnchorOverlap, clampPanelPosition } from './StylePanel.js'
+import { avoidAnchorOverlap, clampPanelPosition, colorRowWidth, panelContentWidth } from './StylePanel.js'
 
 const VIEWPORT = { width: 1280, height: 720 }
 const PANEL_SIZE = { width: 320, height: 200 } // mirrors PANEL_MAX_WIDTH/height-under-cap
@@ -167,6 +167,83 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 	const fixed = avoidAnchorOverlap(clamped, c1, c2, viewport, MARGIN)
 	assert.deepEqual(fixed, clamped, `no squeeze needed — avoidAnchorOverlap returns clampPanelPosition's result unchanged (no maxHeight override) — clamped: ${JSON.stringify(clamped)}, fixed: ${JSON.stringify(fixed)}`)
 	console.log('ok: avoidAnchorOverlap — a no-op when clampPanelPosition never squeezed (plenty of room)')
+}
+
+// ============================================================================
+// 7. LAYOUT DEFECT (a), style-memory task — the 13-value `color` row must fit
+//    on ONE line inside the panel's real content width, not wrap (the
+//    observed bug: 12 swatches on row one, 'white' alone on row two, a
+//    cosmetic break from every other single-row axis group). Computed from
+//    the REAL swatch/gap/padding constants (`colorRowWidth`/
+//    `panelContentWidth`, StylePanel.tsx), not hand-typed pixel counts, so a
+//    future color addition or CSS tweak re-proves this instead of silently
+//    rotting.
+// ============================================================================
+{
+	const needed = colorRowWidth()
+	const available = panelContentWidth()
+	assert.ok(
+		needed <= available,
+		`the color row's real width (${needed}px) must fit within the panel's content width (${available}px) on one line — a wider value must not silently start wrapping the swatches`,
+	)
+	console.log(`ok: colorRowWidth (${needed}px) fits within panelContentWidth (${available}px) — the 13 color swatches render on one line`)
+}
+
+// ============================================================================
+// 8. LAYOUT DEFECT (b), style-memory task — TALL PANEL / GEO CASE:
+//    `avoidAnchorOverlap`'s below-placement squeeze must flip to ABOVE
+//    placement when that gives strictly more room than squeezing below would
+//    — the reported bug (v2-geo-selected.png): a geo selection near the
+//    bottom of a short-ish viewport forced BELOW placement (clampPanelPosition
+//    picked "below" because minY < FLIP_HEADROOM), got squeezed into a sliver
+//    of room below the selection, and the geo/"Shape" row (last of six groups)
+//    rendered mostly off the bottom of the viewport. A selection whose top is
+//    close to the viewport top (small minY, so clampPanelPosition's own
+//    branch choice is "below") but whose BOTTOM sits deep in a short viewport
+//    (little room actually below it) is exactly this shape: below-room is
+//    tiny, above-room is comparatively larger — avoidAnchorOverlap must
+//    prefer the roomier side instead of mechanically honoring the
+//    branch clampPanelPosition already committed to.
+// ============================================================================
+{
+	const viewport = { width: 1280, height: 300 } // short viewport, geo-panel-scale content
+	const c1 = { x: 636, y: 80 } // minY(80) < FLIP_HEADROOM(220) -> clampPanelPosition picks "below"
+	const c2 = { x: 644, y: 280 } // maxY(280) close to the viewport's own bottom (300) -> almost no room below
+	const clamped = clampPanelPosition(c1, c2, viewport, PANEL_SIZE, MARGIN, FLIP_HEADROOM)
+	assert.equal(clamped.transform, 'translateX(-50%)', 'precondition: minY < FLIP_HEADROOM selects the below-placement branch')
+
+	const fixed = avoidAnchorOverlap(clamped, c1, c2, viewport, MARGIN)
+	assert.equal(
+		fixed.transform,
+		'translate(-50%, -100%)',
+		`the tall-panel/short-viewport case must FLIP to above placement (more real room above the selection than below it) — fixed: ${JSON.stringify(fixed)}`,
+	)
+	assert.ok(fixed.maxHeight !== undefined && fixed.maxHeight > 0, `a positive dynamic maxHeight is returned after the flip — got ${fixed.maxHeight}`)
+	// The flipped (above) box must still stay fully on-screen and never
+	// overlap the selection's own bounds — same guarantees as case 5's
+	// below-branch squeeze, just for the flipped direction.
+	const bottomEdge = fixed.top // 'above' transform: `top` IS the box's bottom edge
+	const topEdge = bottomEdge - fixed.maxHeight!
+	assert.ok(topEdge >= 0, `the flipped panel's top edge (${topEdge}) must not go negative`)
+	assert.ok(bottomEdge <= Math.min(c1.y, c2.y), `the flipped panel's bottom edge (${bottomEdge}) must not overlap the selection (top=${Math.min(c1.y, c2.y)})`)
+	console.log(`ok: avoidAnchorOverlap — a tall panel with more room ABOVE than below flips placement instead of squeezing into a sliver below (top=${fixed.top}, maxHeight=${fixed.maxHeight})`)
+}
+
+// ============================================================================
+// 9. The flip in case 8 must NOT fire when below-room is already the roomier
+//    side (case 5's own scenario, re-affirmed) — avoidAnchorOverlap must not
+//    flip gratuitously just because a squeeze happened at all.
+// ============================================================================
+{
+	const viewport = { width: 1280, height: 680 }
+	const panelSize = { width: PANEL_SIZE.width, height: 480 }
+	const c1 = { x: 200, y: 120 }
+	const c2 = { x: 400, y: 320 }
+	const clamped = clampPanelPosition(c1, c2, viewport, panelSize, MARGIN, FLIP_HEADROOM)
+	const fixed = avoidAnchorOverlap(clamped, c1, c2, viewport, MARGIN)
+	assert.equal(fixed.transform, 'translateX(-50%)', 'below-room is still roomier here — must NOT flip to above')
+	assert.equal(fixed.top, c2.y + MARGIN, 'unflipped squeeze behaves exactly as case 5 pins')
+	console.log('ok: avoidAnchorOverlap — does not flip when the originally-chosen side is already the roomier one')
 }
 
 console.log('ok: StylePanel.position.test.ts — all cases passed')
