@@ -106,6 +106,60 @@ describe("DagView zoom/pan controls", () => {
     expect(getTransform(container)).not.toBe(before);
   });
 
+  it("ctrl+wheel zooms about the cursor, keeping the graph point under it fixed on screen", () => {
+    // A rect offset from the origin and scaled relative to the viewBox, so
+    // the client->viewBox conversion actually has work to do.
+    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    const svg = container.querySelector("svg")! as SVGSVGElement;
+    const [, , viewBoxWidthStr, viewBoxHeightStr] = svg.getAttribute("viewBox")!.split(" ");
+    const viewBoxWidth = Number(viewBoxWidthStr);
+    const viewBoxHeight = Number(viewBoxHeightStr);
+    const rect = { left: 50, top: 20, width: viewBoxWidth * 2, height: viewBoxHeight * 2 };
+    svg.getBoundingClientRect = () => ({ ...rect, right: rect.left + rect.width, bottom: rect.top + rect.height, x: rect.left, y: rect.top, toJSON() {} }) as DOMRect;
+
+    const clientX = 150;
+    const clientY = 90;
+    // Pivot in viewBox user units, replicating the conversion the fix must do.
+    const pivot = { x: (clientX - rect.left) * (viewBoxWidth / rect.width), y: (clientY - rect.top) * (viewBoxHeight / rect.height) };
+
+    fireEvent.wheel(svg, { deltaY: -100, ctrlKey: true, clientX, clientY });
+
+    const match = getTransform(container).match(/translate\(([-\d.]+), ([-\d.]+)\) scale\(([-\d.]+)\)/);
+    expect(match).toBeTruthy();
+    const [, txStr, tyStr, scaleStr] = match!;
+    const tx = Number(txStr);
+    const ty = Number(tyStr);
+    const scale = Number(scaleStr);
+    expect(scale).toBeCloseTo(1.2);
+    // zoomAround's invariant: pivot stays fixed on screen, i.e.
+    // tx + scale * localX == pivot.x for the local point under the pivot.
+    const appliedFactor = scale / 1; // starting scale was 1
+    const expectedTx = pivot.x - (pivot.x - 0) * appliedFactor;
+    const expectedTy = pivot.y - (pivot.y - 0) * appliedFactor;
+    expect(tx).toBeCloseTo(expectedTx);
+    expect(ty).toBeCloseTo(expectedTy);
+  });
+
+  it("ctrl+wheel at the viewport centre matches the zoom-in button", () => {
+    const { getByRole, container } = render(<DagView graph={GRAPH} events={[]} />);
+    const svg = container.querySelector("svg")! as SVGSVGElement;
+    const [, , viewBoxWidthStr, viewBoxHeightStr] = svg.getAttribute("viewBox")!.split(" ");
+    const viewBoxWidth = Number(viewBoxWidthStr);
+    const viewBoxHeight = Number(viewBoxHeightStr);
+    const rect = { left: 0, top: 0, width: viewBoxWidth, height: viewBoxHeight };
+    svg.getBoundingClientRect = () => ({ ...rect, right: rect.width, bottom: rect.height, x: 0, y: 0, toJSON() {} }) as DOMRect;
+
+    fireEvent.wheel(svg, { deltaY: -100, ctrlKey: true, clientX: viewBoxWidth / 2, clientY: viewBoxHeight / 2 });
+    const wheelTransform = getTransform(container);
+
+    cleanup();
+    const rerendered = render(<DagView graph={GRAPH} events={[]} />);
+    fireEvent.click(rerendered.getByRole("button", { name: /zoom in/i }));
+    const buttonTransform = getTransform(rerendered.container);
+
+    expect(wheelTransform).toBe(buttonTransform);
+  });
+
   it("pans via pointer drag once zoomed in", () => {
     const { getByRole, container } = render(<DagView graph={GRAPH} events={[]} />);
     fireEvent.click(getByRole("button", { name: /zoom in/i }));

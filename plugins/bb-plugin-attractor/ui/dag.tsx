@@ -86,6 +86,29 @@ function svgClientScale(svg: SVGSVGElement, viewWidth: number, viewHeight: numbe
   };
 }
 
+/**
+ * Converts a pointer event's client (screen) coordinates into the `<svg>`'s
+ * own viewBox user units — the coordinate space `zoomAround`'s `pivot` and
+ * the zoom group's `translate` live in. Prefers `getScreenCTM()` (its
+ * inverse maps screen px straight to viewBox units; unavailable in jsdom);
+ * falls back to the bounding rect's origin plus the viewBox/rendered-size
+ * ratio, treating a zero/undefined rendered size as no scaling.
+ */
+function clientPointToViewBox(svg: SVGSVGElement, clientX: number, clientY: number, viewWidth: number, viewHeight: number): { x: number; y: number } {
+  const ctm = svg.getScreenCTM?.();
+  if (ctm) {
+    const point = svg.createSVGPoint();
+    point.x = clientX;
+    point.y = clientY;
+    const transformed = point.matrixTransform(ctm.inverse());
+    return { x: transformed.x, y: transformed.y };
+  }
+  const rect = svg.getBoundingClientRect();
+  const scaleX = rect.width ? viewWidth / rect.width : 1;
+  const scaleY = rect.height ? viewHeight / rect.height : 1;
+  return { x: (clientX - rect.left) * scaleX, y: (clientY - rect.top) * scaleY };
+}
+
 /** Zooms `state` by `factor` around the viewBox point `pivot`, keeping that point stationary on screen. */
 function zoomAround(state: ZoomState, factor: number, pivot: { x: number; y: number }): ZoomState {
   const nextScale = clampScale(state.scale * factor);
@@ -422,7 +445,8 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
       if (!event.ctrlKey && !event.metaKey) return; // let the host scroll normally
       event.preventDefault();
       const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
-      setZoom((z) => zoomAround(z, factor, center));
+      const pivot = clientPointToViewBox(svg, event.clientX, event.clientY, viewWidth, viewHeight);
+      setZoom((z) => zoomAround(z, factor, pivot));
     };
     svg.addEventListener("wheel", handler, { passive: false });
     return () => svg.removeEventListener("wheel", handler);
