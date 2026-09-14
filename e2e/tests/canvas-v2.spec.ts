@@ -435,7 +435,7 @@ test('canvas-v2 new engine: undo — Ctrl+Z fully restores a deleted shape (sing
 		await expect(pageB.locator(`[data-shape-id="${id1}"]`)).toHaveCount(0, { timeout: 10_000 })
 
 		await page.keyboard.press('Control+z')
-		await expect(page.locator(`[data-shape-id="${id1}"]`)).toHaveCount(1, { timeout: 5_000 })
+		await expect(page.locator(`[data-shape-id="${id1}"][data-shape-kind]`)).toHaveCount(1, { timeout: 5_000 })
 		await expect.poll(() => page.evaluate((id) => !!(window as any).__ew.doc.getShape(id), id1)).toBe(true)
 		await expect(pageB.locator(`[data-shape-id="${id1}"]`)).toBeVisible({ timeout: 10_000 })
 		await expect
