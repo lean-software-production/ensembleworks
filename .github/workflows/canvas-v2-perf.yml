@@ -9,6 +9,7 @@ on:
     paths:
       - 'canvas-react/**'
       - 'canvas-editor/**'
+      - 'canvas-ui/**'
       - 'client/src/canvas-v2/**'
       - 'e2e/perf/canvas-v2-perf.spec.ts'
       - 'e2e/lib/canvas-v2.ts'
