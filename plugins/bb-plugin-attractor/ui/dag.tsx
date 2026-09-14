@@ -21,6 +21,8 @@
  * must never end up in the app's esbuild bundle.
  */
 
+import { useCallback, useEffect, useRef, useState } from "react";
+import type * as React from "react";
 import * as dagre from "@dagrejs/dagre";
 import type { GraphEdgeView, GraphNodeView, GraphView } from "../server/contracts";
 import type { EdgeSelectedReason, RunEvent } from "../engine/types";
@@ -43,6 +45,36 @@ const BACK_EDGE_WEIGHT = 0;
 /** DagView's rank direction, independent of the DOT graph's own `rankdir` (parsed but not consulted here — see the module doc). */
 export type LayoutDirection = "TB" | "LR";
 const DEFAULT_DIRECTION: LayoutDirection = "TB";
+
+// Zoom/pan: a scale/translate applied to the whole rendered graph via one
+// wrapping `<g>` (`dag-zoom-group` below), independent of dagre's own
+// coordinates. `DEFAULT_ZOOM` is the fit-to-width rendering the DAG box
+// already shows today — "fit" resets to exactly this, never anything derived.
+interface ZoomState {
+  scale: number;
+  tx: number;
+  ty: number;
+}
+const DEFAULT_ZOOM: ZoomState = { scale: 1, tx: 0, ty: 0 };
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 4;
+const ZOOM_STEP = 1.2;
+
+function clampScale(scale: number): number {
+  return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+}
+
+/** Zooms `state` by `factor` around the viewBox point `pivot`, keeping that point stationary on screen. */
+function zoomAround(state: ZoomState, factor: number, pivot: { x: number; y: number }): ZoomState {
+  const nextScale = clampScale(state.scale * factor);
+  if (nextScale === state.scale) return state;
+  const appliedFactor = nextScale / state.scale;
+  return {
+    scale: nextScale,
+    tx: pivot.x - (pivot.x - state.tx) * appliedFactor,
+    ty: pivot.y - (pivot.y - state.ty) * appliedFactor,
+  };
+}
 
 // Graphviz-like node sizing: width follows the label, height is fixed.
 const CHAR_WIDTH = 7.5;
@@ -342,14 +374,82 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
   const viewWidth = Math.max(laidOut.width, NODE_WIDTH);
   const viewHeight = Math.max(laidOut.height, NODE_HEIGHT);
 
+  const [zoom, setZoom] = useState<ZoomState>(DEFAULT_ZOOM);
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const dragState = useRef<{ pointerId: number; lastX: number; lastY: number } | null>(null);
+
+  const center = { x: viewWidth / 2, y: viewHeight / 2 };
+  const zoomIn = useCallback(() => setZoom((z) => zoomAround(z, ZOOM_STEP, center)), [viewWidth, viewHeight]);
+  const zoomOut = useCallback(() => setZoom((z) => zoomAround(z, 1 / ZOOM_STEP, center)), [viewWidth, viewHeight]);
+  const fit = useCallback(() => setZoom(DEFAULT_ZOOM), []);
+
+  // A plain wheel must reach the host untouched (the thread/panel scroll
+  // container underneath) — only ctrl/meta+wheel (pinch-zoom or an explicit
+  // zoom gesture) is ours to intercept. React attaches its synthetic wheel
+  // listener passively, so `preventDefault()` from an `onWheel` prop would be
+  // silently ignored by the browser; a manual non-passive listener is
+  // required to actually stop the page from also scrolling/zooming.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+    const handler = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return; // let the host scroll normally
+      event.preventDefault();
+      const factor = event.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP;
+      setZoom((z) => zoomAround(z, factor, center));
+    };
+    svg.addEventListener("wheel", handler, { passive: false });
+    return () => svg.removeEventListener("wheel", handler);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewWidth, viewHeight]);
+
+  const onPointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
+    // Only a plain, unmodified primary-button drag pans — a node click still
+    // fires its own onClick, and this never interferes with a modifier+wheel
+    // zoom (a different event type entirely).
+    if (event.button !== 0) return;
+    dragState.current = { pointerId: event.pointerId, lastX: event.clientX, lastY: event.clientY };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+  };
+  const onPointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    const drag = dragState.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.lastX;
+    const dy = event.clientY - drag.lastY;
+    dragState.current = { pointerId: drag.pointerId, lastX: event.clientX, lastY: event.clientY };
+    setZoom((z) => ({ ...z, tx: z.tx + dx, ty: z.ty + dy }));
+  };
+  const endDrag = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (dragState.current?.pointerId !== event.pointerId) return;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+    dragState.current = null;
+  };
+
   return (
-    <svg
-      role="img"
-      aria-label="Workflow DAG"
-      viewBox={`0 0 ${viewWidth} ${viewHeight}`}
-      preserveAspectRatio="xMidYMid meet"
-      style={{ width: "100%", height: "auto", maxHeight: 520, display: "block" }}
-    >
+    <div data-testid="dag-viewport" style={{ position: "relative", overflow: "hidden" }}>
+      <div style={{ position: "absolute", top: 4, right: 4, zIndex: 1, display: "flex", flexDirection: "column", gap: 2 }}>
+        <ZoomButton label="Zoom in" onClick={zoomIn}>
+          +
+        </ZoomButton>
+        <ZoomButton label="Zoom out" onClick={zoomOut}>
+          −
+        </ZoomButton>
+        <ZoomButton label="Fit" onClick={fit}>
+          ⤢
+        </ZoomButton>
+      </div>
+      <svg
+        ref={svgRef}
+        role="img"
+        aria-label="Workflow DAG"
+        viewBox={`0 0 ${viewWidth} ${viewHeight}`}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ width: "100%", height: "auto", maxHeight: 520, display: "block", touchAction: "none" }}
+        onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={endDrag}
+        onPointerCancel={endDrag}
+      >
       <defs>
         <marker id="attractor-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8" />
@@ -358,6 +458,7 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
           <path d="M0,0 L10,5 L0,10 z" fill="#2563eb" />
         </marker>
       </defs>
+      <g data-testid="dag-zoom-group" transform={`translate(${zoom.tx}, ${zoom.ty}) scale(${zoom.scale})`}>
       <g>
         {laidOut.edges.map((edge) => {
           const selection = selections.get(`${edge.from} ${edge.to}`);
@@ -460,6 +561,40 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
           );
         })}
       </g>
-    </svg>
+      </g>
+      </svg>
+    </div>
+  );
+}
+
+interface ZoomButtonProps {
+  label: string;
+  onClick: () => void;
+  children: React.ReactNode;
+}
+
+/** One button in the DAG's overlaid zoom-control cluster. */
+function ZoomButton({ label, onClick, children }: ZoomButtonProps) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      style={{
+        width: 22,
+        height: 22,
+        lineHeight: "20px",
+        padding: 0,
+        borderRadius: 4,
+        border: "1px solid #cbd5e1",
+        background: "#ffffff",
+        color: "#334155",
+        cursor: "pointer",
+        fontSize: 13,
+      }}
+    >
+      {children}
+    </button>
   );
 }

@@ -544,7 +544,20 @@ T5 adds the **DAG UI**:
   and traversed edges (derived from `edge.selected` events, not persisted
   per-edge state) drawn solid/arrowed with the last-selected reason and
   label in a `<title>`; an agent/prompt node with a known worker thread is
-  clickable.
+  clickable. `DagView` also overlays a small zoom control cluster
+  (+/−/fit, top-right of the box) — zoom applies a scale/translate on one
+  inner `<g data-testid="dag-zoom-group">` around the edges and nodes,
+  clamped to `[0.5, 4]`; "fit" resets to exactly the default fit-to-width
+  transform. Ctrl/⌘+wheel over the DAG also zooms (a manual, non-passive
+  native `wheel` listener — a synthetic React `onWheel` handler cannot
+  reliably `preventDefault()` — so pinch-zoom and an explicit ctrl+wheel
+  both work); a *plain* wheel is left completely alone (no
+  `preventDefault()`, no zoom) so the thread/panel underneath keeps
+  scrolling normally, per "Scroll ownership" below. Once zoomed in, drag
+  with a pointer to pan (`pointerdown`/`pointermove`/`pointerup`,
+  `setPointerCapture`). The DAG box wrapper (`data-testid="dag-viewport"`)
+  is `overflow: hidden`, never `overflow: auto` — the same scroll-ownership
+  rule as the rest of the card.
 - `ui/stages.tsx` — the stage list (node, status, visit, duration via
   `formatDuration`, the node's declared provider/model, and an "Open
   thread" link when a stage has a worker thread).
