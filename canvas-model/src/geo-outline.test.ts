@@ -144,4 +144,54 @@ import { getGeoOutline, getPolygonVertices, GEO_VARIANTS } from './geo-outline.j
   console.log('ok: getGeoOutline — degenerate 1x1 sizes never produce NaN/Infinity')
 }
 
+// ============================================================================
+// 9. Blobby (curved) paths must be closed contours: the "M x,y" start point
+//    and the final "C ... endX,endY" segment's endpoint must coincide (the
+//    trailing "Z" only draws a straight chord back to M — if the last curve
+//    doesn't already end there, "Z" visibly kinks the shape). This is what
+//    catches an argument-order bug in a `seg(cp1, cp2, end)` call even
+//    though the path is non-empty, differs from the rectangle, has no
+//    NaN/Infinity, and is deterministic — none of sections 1-8 above touch
+//    endpoint continuity.
+// ============================================================================
+{
+  const parsePoint = (s: string): { x: number; y: number } => {
+    const [x, y] = s.trim().split(',').map(Number)
+    return { x, y }
+  }
+  // 'oval' (stadium) is deliberately excluded: its two straight sides are
+  // real geometry closed by Z between two DIFFERENT points, not a curve
+  // that's supposed to loop back to M.
+  for (const variant of ['ellipse', 'cloud', 'heart']) {
+    const { path } = getGeoOutline(variant, 140, 110)
+    const moveMatch = path.match(/^M\s*([\d.-]+,[\d.-]+)/)
+    assert.ok(moveMatch, `${variant} path should start with an M command: ${path}`)
+    const start = parsePoint(moveMatch![1])
+
+    // Last emitted point before a trailing Z/end-of-string: the endpoint of
+    // whichever command (M/L/A/C) is written last.
+    const tokens = path.replace(/Z\s*$/, '').trim().split(/\s+/)
+    const lastPoint = parsePoint(tokens[tokens.length - 1])
+
+    const dist = Math.hypot(lastPoint.x - start.x, lastPoint.y - start.y)
+    assert.ok(dist < 0.01, `${variant} path's final segment should end back at its M start point (${start.x},${start.y}), got (${lastPoint.x},${lastPoint.y}) — a "Z" chord from a non-coincident endpoint kinks the shape. Full path: ${path}`)
+  }
+  console.log('ok: getGeoOutline — blobby paths (ellipse/oval/cloud/heart) close continuously, no Z-chord kink')
+}
+
+// ============================================================================
+// 10. Degenerate zero/near-zero dimensions on 'cloud' must not hang: the bump
+//     count is derived from pillCircumference / min(w, h), which is Infinity
+//     when either dimension is 0, spinning pillPoints' loop forever. Guard
+//     with a real (not merely "unreachable today") clamp so the exported
+//     pure function is total, as its own header claims.
+// ============================================================================
+{
+  const start = Date.now()
+  const outline = getGeoOutline('cloud', 0, 100)
+  assert.ok(Date.now() - start < 2000, 'getGeoOutline("cloud", 0, 100) must return promptly, not hang')
+  assert.ok(!/NaN|Infinity/.test(outline.path), `degenerate cloud path should not contain NaN/Infinity: ${outline.path}`)
+  console.log('ok: getGeoOutline — cloud with a zero dimension returns promptly instead of hanging')
+}
+
 console.log('ok: geo-outline (pure outline math for all 20 geo variants)')

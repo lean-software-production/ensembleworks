@@ -177,7 +177,7 @@ function heartPath(w: number, h: number): string {
     seg({ x: o * 1.5, y: k * 3 }, { x: 0, y: k * 2.5 }, { x: 0, y: k * 1.2 }),
     seg({ x: 0, y: -k * 0.32 }, { x: o * 1.85, y: -k * 0.32 }, { x: cx, y: k * 0.9 }),
     seg({ x: o * 2.15, y: -k * 0.32 }, { x: w, y: -k * 0.32 }, { x: w, y: k * 1.2 }),
-    seg({ x: cx, y: h }, { x: w, y: k * 2.5 }, { x: o * 2.5, y: k * 3 }),
+    seg({ x: w, y: k * 2.5 }, { x: o * 2.5, y: k * 3 }, { x: cx, y: h }),
     'Z',
   ].join(' ')
 }
@@ -283,12 +283,18 @@ function dist(a: Point, b: Point): number {
 const CLOUD_BUMP_PX = 70 // v1's SIZES.m (default 'm' size style) — see module header
 const CLOUD_BUMP_PROTRUSION = 0.2 // v1's BUMP_PROTRUSION
 
+const CLOUD_MAX_BUMPS = 200 // sane ceiling: bounds both worst-case path length and pillPoints' loop, degenerate w/h=0 included
+
 function cloudPath(w: number, h: number): string {
   const pillCircumference = ovalPerimeter(w, h)
-  const numBumps = Math.max(
-    Math.ceil(pillCircumference / CLOUD_BUMP_PX),
-    6,
-    Math.ceil(pillCircumference / Math.min(w, h)),
+  const shortSide = Math.min(w, h)
+  const numBumps = Math.min(
+    Math.max(
+      Math.ceil(pillCircumference / CLOUD_BUMP_PX),
+      6,
+      shortSide > 0 ? Math.ceil(pillCircumference / shortSide) : CLOUD_MAX_BUMPS,
+    ),
+    CLOUD_MAX_BUMPS,
   )
   const targetBumpProtrusion = (pillCircumference / numBumps) * CLOUD_BUMP_PROTRUSION
 
