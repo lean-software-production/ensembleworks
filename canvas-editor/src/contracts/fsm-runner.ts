@@ -249,6 +249,11 @@ function makeObs(
       // throw-stub, both adapters are REAL.
       return editor.doc.listShapes().map((s) => s.id)
     },
+    hoveredShapeId() {
+      // arrow-handles task — a doc/editor-state read, like editingShape:
+      // no throw-stub, both adapters are REAL.
+      return editor.get().hover
+    },
   }
 }
 

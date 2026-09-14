@@ -6,6 +6,7 @@ export * from './types.js'
 import type { Contract } from './types.js'
 import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies-to-created-shape.js'
 import { arrowBindsToTargetShape } from './contracts/arrow-binds-to-target-shape.js'
+import { arrowHandleDragPreviewsHover } from './contracts/arrow-handle-drag-previews-hover.js'
 import { arrowMidHandleBends } from './contracts/arrow-mid-handle-bends.js'
 import { arrowNudgeMovesSelection } from './contracts/arrow-nudge-moves-selection.js'
 import { arrowTerminalHandleRebinds } from './contracts/arrow-terminal-handle-rebinds.js'
@@ -65,4 +66,5 @@ export const CONTRACTS: readonly Contract[] = [
   selectAllSelectsEveryShapeOnPage,
   arrowMidHandleBends,
   arrowTerminalHandleRebinds,
+  arrowHandleDragPreviewsHover,
 ]

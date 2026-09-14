@@ -385,4 +385,36 @@ function setup() {
   console.log('ok: E2 — single-page default (no SetCurrentPage) still parents an arrow to page:p')
 }
 
+// ============================================================================
+// 12. arrow-handles task (gap 3): drawing an arrow over a candidate target
+//     previews it via SetHover (editor.get().hover) WHILE drawing, not just
+//     after release -- and clears hover once the pointer drags back OFF
+//     the target, and again once the gesture ends. Stepped by hand (not
+//     `run()`, which only returns the FINAL state) so hover can be read
+//     BETWEEN events, mid-gesture.
+// ============================================================================
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(geoShape('shape:target', 300, 0)) // 100x100, so [300,400]x[0,100]
+  doc.commit()
+
+  let state: unknown = tool.initialState
+  const step = (event: ReturnType<ReturnType<typeof script>['events']>[number]) => {
+    const r = tool.onEvent(state as never, event)
+    state = r.state
+    if (r.intents.length) editor.applyAll(r.intents)
+  }
+
+  for (const e of script().down(50, 50).events()) step(e)
+  for (const e of script(undefined).move(350, 50).events()) step(e) // lands on shape:target's center
+  assert.equal(editor.get().hover, 'shape:target', 'hover previews the candidate target while still dragging, before pointerup')
+
+  for (const e of script(undefined).move(900, 900).events()) step(e) // continue the SAME gesture off the target
+  assert.equal(editor.get().hover, null, 'hover clears once the pointer drags back off the target, still mid-gesture')
+
+  for (const e of script(undefined).up().events()) step(e)
+  assert.equal(editor.get().hover, null, 'hover stays cleared once the gesture ends')
+  console.log('ok: drawing an arrow previews (and un-previews) the candidate binding target via SetHover')
+}
+
 console.log('ok: arrow tool FSM + bindings')
