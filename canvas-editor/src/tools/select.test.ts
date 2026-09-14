@@ -450,4 +450,41 @@ function setup() {
   console.log('ok: shift held during a drag constrains movement to the dominant axis')
 }
 
+// ============================================================================
+// 20. Shift-constrained drag must not leak snap onto the LOCKED axis
+//    (validator repro, Task keyboard/K2 fix-round): a snap target that sits
+//    a few px off the locked axis must never pull the drag off that axis --
+//    flattenForShift zeroes the suppressed axis BEFORE computeSnappedDelta,
+//    but snapCandidates finds each axis's best guide independently, so a
+//    target close to the (already-zeroed) suppressed axis can re-add
+//    movement there. shape:a spans [0,100]x[0,100]; shape:snap-c sits at
+//    (400,3) -- 3 world units off shape:a's y=0, well inside the 5-unit
+//    snap threshold (5% of the 100-unit medianSize). Dragging shape:a from
+//    its center (50,50) to (350,53) with Shift held: raw dx=300, dy=3 --
+//    |dx|>|dy| so Shift must flatten dy to 0 and hold it there for the
+//    WHOLE gesture, snap target notwithstanding.
+// ============================================================================
+{
+  // A MINIMAL two-shape doc (not `setup()`'s fixture, which seeds several
+  // OTHER shapes sharing shape:a's exact y=[0,100] range -- those would tie
+  // shape:snap-c's delta=3 with their own delta=0 and mask the leak this
+  // case exists to catch). Just shape:a and shape:c, matching the
+  // validator's exact repro numbers.
+  const doc = LoroCanvasDoc.create({ peerId: 1n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape(geoShape('shape:a', 0, 0))
+  doc.putShape(geoShape('shape:c', 400, 3))
+  doc.commit()
+  const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+  const ctx = createToolContext(editor)
+  const tool = createSelectTool(ctx)
+  const SHIFT = { shift: true, alt: false, ctrl: false, meta: false }
+  const events = script().down(50, 50).move(350, 53, { modifiers: SHIFT }).up().events()
+  run(editor, tool, events)
+  const a = doc.getShape('shape:a')!
+  assert.equal(a.x, 300, 'shift-constrained drag still applies the full delta on the dominant (x) axis')
+  assert.equal(a.y, 0, 'a snap target close to the LOCKED axis must never reintroduce movement there')
+  console.log('ok: shift-constrained drag holds the locked axis at zero even next to a snap target')
+}
+
 console.log('ok: select tool FSM (select/marquee/translate)')

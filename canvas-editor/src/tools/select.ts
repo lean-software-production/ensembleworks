@@ -244,10 +244,27 @@ function nudgeDirection(key: string): { dx: number; dy: number } | null {
  * transition's own first move (onPointing, below) and every subsequent
  * onDragging pointermove, so a drag that STARTS with Shift already held is
  * constrained from its very first committed step, not just from the second
- * move onward. */
-function flattenForShift(dx: number, dy: number, shift: boolean): { dx: number; dy: number } {
-  if (!shift) return { dx, dy }
-  return Math.abs(dx) < Math.abs(dy) ? { dx: 0, dy } : { dx, dy: 0 }
+ * move onward.
+ *
+ * Also reports WHICH axis it locked (`lockedAxis`), so computeSnappedDelta
+ * can re-zero that same axis AFTER snapping (fix for the validator-caught
+ * snap leak, Task keyboard fix-round): snapCandidates finds the best guide
+ * on X and Y INDEPENDENTLY, so a target sitting close to the suppressed
+ * axis's (already-zeroed) position can still report a non-zero delta on
+ * that axis — without re-zeroing after the fact, that snap adjustment
+ * reintroduces the exact movement Shift was just told to suppress. tldraw
+ * avoids this the same way: Translating.ts's snapTranslateShapes takes a
+ * `lockedAxis` and re-flattens the snapped delta by it (see this function's
+ * caller). `null` when shift is false (nothing locked) OR when dx/dy tie
+ * exactly (an arbitrary pick would be no more "correct" than leaving both
+ * live — ties are astronomically rare pointer input anyway). */
+function flattenForShift(
+  dx: number, dy: number, shift: boolean,
+): { dx: number; dy: number; lockedAxis: 'x' | 'y' | null } {
+  if (!shift) return { dx, dy, lockedAxis: null }
+  if (Math.abs(dx) < Math.abs(dy)) return { dx: 0, dy, lockedAxis: 'x' }
+  if (Math.abs(dy) < Math.abs(dx)) return { dx, dy: 0, lockedAxis: 'y' }
+  return { dx, dy, lockedAxis: null }
 }
 
 // ============================================================================
@@ -293,7 +310,20 @@ function unionWorldBounds(doc: CanvasDocument, ids: readonly string[]): Bounds |
  * used ONLY for target lookups (medianSize + candidate bounds). `excluded`
  * MUST likewise be the drag-start-computed set, passed straight through to
  * snapCandidates' `opts.excludedIds` escape hatch so this never re-derives it
- * per move. */
+ * per move.
+ *
+ * `lockedAxis` (Task keyboard fix-round — validator-caught snap leak): when
+ * flattenForShift suppressed an axis, that SAME axis is re-zeroed here AFTER
+ * snapCandidates runs, not just before it. snapCandidates finds the best
+ * guide on X and Y INDEPENDENTLY of one another, so a target sitting close
+ * to the suppressed axis's (already-zeroed) candidate position can still
+ * report a non-zero `snapResult.dx`/`dy` on THAT axis — left unzeroed, a
+ * comment on this very function used to (wrongly) claim that could "never"
+ * happen; it does. Only the DELTA is re-zeroed, never the reported
+ * `snapResult`/guide — the renderer still draws the guide line that WOULD
+ * have applied were the axis not locked, exactly matching tldraw's own
+ * snapTranslateShapes (Translating.ts), which re-flattens the delta by
+ * `lockedAxis` but leaves the returned nudges/guides untouched. */
 function computeSnappedDelta(
   startBounds: Bounds,
   frozenSnap: CanvasDocument,
@@ -302,13 +332,16 @@ function computeSnappedDelta(
   excluded: ReadonlySet<string>,
   rawDx: number,
   rawDy: number,
+  lockedAxis: 'x' | 'y' | null = null,
 ): { dx: number; dy: number; snapResult: SnapResult } {
   const bounds: Bounds = {
     minX: startBounds.minX + rawDx, minY: startBounds.minY + rawDy,
     maxX: startBounds.maxX + rawDx, maxY: startBounds.maxY + rawDy,
   }
   const snapResult = snapCandidates(frozenIndex, frozenSnap, movingIds, bounds, { excludedIds: excluded })
-  return { dx: rawDx + snapResult.dx, dy: rawDy + snapResult.dy, snapResult }
+  const dx = lockedAxis === 'x' ? 0 : rawDx + snapResult.dx
+  const dy = lockedAxis === 'y' ? 0 : rawDy + snapResult.dy
+  return { dx, dy, snapResult }
 }
 
 function toggleOrAdd(current: ReadonlySet<string>, id: string): string[] {
@@ -450,8 +483,8 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
           minX: grabWorld.x, minY: grabWorld.y, maxX: grabWorld.x, maxY: grabWorld.y,
         }
         const to = screenToWorld(camera, here)
-        const { dx: rawDx, dy: rawDy } = flattenForShift(to.x - grabWorld.x, to.y - grabWorld.y, event.modifiers.shift)
-        const { dx, dy, snapResult } = computeSnappedDelta(startBounds, snapshot, snapIndex, movingIds, excludedIds, rawDx, rawDy)
+        const { dx: rawDx, dy: rawDy, lockedAxis } = flattenForShift(to.x - grabWorld.x, to.y - grabWorld.y, event.modifiers.shift)
+        const { dx, dy, snapResult } = computeSnappedDelta(startBounds, snapshot, snapIndex, movingIds, excludedIds, rawDx, rawDy, lockedAxis)
         intents.push({ type: 'TranslateShapes', ids: movingIds, dx, dy })
         return {
           state: { mode: 'dragging', targetId, grabWorld, startBounds, applied: { dx, dy }, movingIds, excludedIds, snapshot, snapIndex, snapResult },
@@ -518,10 +551,19 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // decision above; a drag can start unshifted and have Shift pressed
       // mid-gesture, or vice versa, and tldraw's own Translating.ts reads
       // the CURRENT shift key on every move for exactly that reason).
-      // flattenForShift zeroes whichever axis has the smaller magnitude —
-      // applied BEFORE computeSnappedDelta so a snap candidate on the
-      // suppressed axis can never reintroduce movement there.
-      const { dx: rawDx, dy: rawDy } = flattenForShift(
+      // flattenForShift zeroes whichever axis has the smaller magnitude,
+      // applied BEFORE computeSnappedDelta — but that alone is NOT enough:
+      // snapCandidates finds the best guide on X and Y INDEPENDENTLY, so a
+      // snap target sitting close to the suppressed axis's (already-zeroed)
+      // candidate position can still report a non-zero delta on THAT axis
+      // and reintroduce the very movement Shift just suppressed (a prior
+      // version of this comment claimed that could "never" happen — it can;
+      // see select.test.ts's locked-axis-next-to-a-snap-target case).
+      // computeSnappedDelta's own `lockedAxis` param re-zeroes that axis
+      // AFTER snapping runs, closing the gap — tldraw's Translating.ts fix
+      // (snapTranslateShapes re-flattening by `lockedAxis`) for the exact
+      // same leak.
+      const { dx: rawDx, dy: rawDy, lockedAxis } = flattenForShift(
         cursorWorld.x - state.grabWorld.x, cursorWorld.y - state.grabWorld.y, event.modifiers.shift,
       )
       // Reuses the FROZEN startBounds/snapshot/index from drag start
@@ -532,7 +574,7 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // totalDy is the TOTAL (raw + snap) delta from the grab point — NOT a
       // per-move increment.
       const { dx: totalDx, dy: totalDy, snapResult } = computeSnappedDelta(
-        state.startBounds, state.snapshot, state.snapIndex, state.movingIds, state.excludedIds, rawDx, rawDy,
+        state.startBounds, state.snapshot, state.snapIndex, state.movingIds, state.excludedIds, rawDx, rawDy, lockedAxis,
       )
       // The STEP to commit this move is the difference between the newly
       // computed TOTAL and what was already `applied` — this is what keeps a
