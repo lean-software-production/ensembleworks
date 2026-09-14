@@ -215,6 +215,13 @@ const PANEL_STYLE: CSSProperties = {
 	maxWidth: PANEL_MAX_WIDTH,
 	maxHeight: PANEL_MAX_HEIGHT,
 	overflowY: 'auto',
+	// FIXUP (validator review): content-box sizing (the default) means
+	// padding + border add ON TOP of maxWidth, so the rendered node measured
+	// 342px against a documented-as-hard 320px cap (10px padding + 1px
+	// border per side). border-box folds padding/border back inside
+	// maxWidth so PANEL_MAX_WIDTH is actually the ceiling clampPanelPosition's
+	// edge-clamp math assumes it is.
+	boxSizing: 'border-box',
 }
 
 // `flexWrap: 'wrap'` (not the previous no-wrap default) — see PANEL_MAX_WIDTH's
@@ -344,16 +351,26 @@ const OPACITY_LINE_STYLE: CSSProperties = {
 	transform: 'translateY(-50%)',
 	pointerEvents: 'none',
 }
+// The stop's VISUAL dot (8px, 14px when current) stays small to read as a
+// slider track, but the clickable <button> itself is padded out to a much
+// larger square hit target (20px, close to the old text pills' ~16-30px)
+// via `padding` around a smaller `backgroundClip`-drawn dot — a small
+// pointer target is a real regression from either the old pills or a true
+// slider's full-width draggable track (validator advisory).
+const OPACITY_STOP_HIT_PX = 20
 function opacityStopStyle(current: boolean): CSSProperties {
+	const dot = current ? 14 : 8
 	return {
 		position: 'relative',
-		width: current ? 14 : 8,
-		height: current ? 14 : 8,
+		width: OPACITY_STOP_HIT_PX,
+		height: OPACITY_STOP_HIT_PX,
 		borderRadius: '50%',
-		border: current ? '2px solid #004990' : '1px solid rgba(15,23,42,0.4)',
-		background: current ? '#004990' : '#fafaf7',
+		border: 'none',
+		background: current ? '#004990' : 'rgba(15,23,42,0.4)',
+		backgroundClip: 'content-box',
+		padding: (OPACITY_STOP_HIT_PX - dot) / 2,
+		boxSizing: 'border-box',
 		cursor: 'pointer',
-		padding: 0,
 		pointerEvents: 'auto',
 	}
 }

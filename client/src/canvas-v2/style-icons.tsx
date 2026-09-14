@@ -413,10 +413,16 @@ export function ArrowheadIcon({ variant }: { readonly variant: string }) {
 				</Svg>
 			)
 		case 'inverted':
+			// A genuinely mirrored (backward-pointing/concave) head, not
+			// 'triangle's vertex list merely reversed — reversing a simple
+			// polygon's winding order is pixel-IDENTICAL (SVG winding has no
+			// visual effect here), so the two would be indistinguishable to
+			// the user. Mirroring the tip's x instead produces an actually
+			// different silhouette: the point faces back toward the shaft.
 			return (
 				<Svg>
 					{shaft}
-					<polygon points="14,17 21,12 14,7" {...outline} />
+					<polygon points="21,7 14,12 21,17" {...outline} />
 				</Svg>
 			)
 		case 'square':

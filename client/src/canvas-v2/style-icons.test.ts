@@ -18,6 +18,39 @@ function html(el: unknown): string {
 	return renderToStaticMarkup(el as never)
 }
 
+// Normalizes an SVG markup string's point-bearing shapes (polygon/polyline
+// points, line/rect/circle coordinate attrs) into a SORTED set of (x,y)
+// pairs, order-independent. Two glyphs that are literal mirror images or
+// genuinely different shapes must differ under this fingerprint; two glyphs
+// that differ only in the WINDING ORDER of the same vertex set (e.g. a
+// polygon's points reversed) will — correctly — collide, because a reversed
+// closed polygon is pixel-identical. This catches the class of bug where a
+// naive string-equality check ("does the markup differ") passes even though
+// nothing about the rendered picture actually differs.
+function geometricFingerprint(svgMarkup: string): string {
+	const points: Array<[number, number]> = []
+	for (const m of svgMarkup.matchAll(/points="([^"]+)"/g)) {
+		for (const pair of m[1]!.trim().split(/\s+/)) {
+			const [x, y] = pair.split(',').map(Number)
+			points.push([x!, y!])
+		}
+	}
+	for (const m of svgMarkup.matchAll(/<(line|rect|circle)[^>]*>/g)) {
+		const tag = m[0]
+		const attr = (name: string) => {
+			const am = tag.match(new RegExp(`${name}="([^"]+)"`))
+			return am ? Number(am[1]) : undefined
+		}
+		if (tag.startsWith('<line')) points.push([attr('x1')!, attr('y1')!], [attr('x2')!, attr('y2')!])
+		else if (tag.startsWith('<rect')) points.push([attr('x')!, attr('y')!], [attr('width')!, attr('height')!])
+		else if (tag.startsWith('<circle')) points.push([attr('cx')!, attr('cy')!], [attr('r')!, 0])
+	}
+	return points
+		.map(([x, y]) => `${x},${y}`)
+		.sort()
+		.join(' ')
+}
+
 // ============================================================================
 // 1. Every FILL value renders a DISTINCT glyph from every other FILL value —
 //    the fallback (a bare stroked rect) would otherwise be silently
@@ -119,6 +152,22 @@ function html(el: unknown): string {
 			assert.notEqual(rendered.get(values[i]!), rendered.get(values[j]!), `arrowhead icons for "${values[i]}" and "${values[j]}" must differ`)
 		}
 	}
+	// Markup-string inequality alone is not enough: a polygon whose points
+	// are merely listed in reverse order renders IDENTICAL pixels (SVG
+	// winding has no visual effect on a simple filled/unfilled shape), so a
+	// string comparison passes tautologically for that pair even though the
+	// user sees the same picture twice. Compare a normalized, order-
+	// independent geometric fingerprint too, which collapses a mere-reversal
+	// pair (same vertex set) but must NOT collapse 'triangle' vs 'inverted'
+	// specifically — 'inverted' has to be an actually different (mirrored)
+	// shape, not a relisting of the same three points.
+	const fingerprints = new Map<string, string>()
+	for (const v of values) fingerprints.set(v, geometricFingerprint(rendered.get(v)!))
+	assert.notEqual(
+		fingerprints.get('triangle'),
+		fingerprints.get('inverted'),
+		`"triangle" and "inverted" must be geometrically distinct shapes, not the same vertex set reordered`,
+	)
 	console.log('ok: ArrowheadIcon — all 9 values (incl. the model-only "pipe") render distinct glyphs')
 }
 
