@@ -311,34 +311,60 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
 // ============================================================================
 // 9. Arrowhead tangent orientation: STRAIGHT arrow orients along
 //    (end - start); CURVED arrow orients along (end - mid), NOT (end -
-//    start) — both hand-computed via direct trig (not by calling
-//    arrowheadPoints), then cross-checked against arrowheadPoints itself.
+//    start) — both hand-computed via direct rotation math matching the
+//    default 'arrow' glyph (an OPEN chevron — tldraw's real default, ported
+//    in arrowheadGlyph's 'arrow'/default case; see that function's doc
+//    comment for the source citation), scaled by headScale (strokeWidth /
+//    DEFAULT_STROKE_WIDTH_PX — here 3/1.5 = 2, since z=2 and no props.size
+//    is set: baseStrokeWidth 1.5 * z 2 = 3).
 // ============================================================================
 {
   const camera: Camera = { x: 10, y: -5, z: 2 }
+  const HEAD_SCALE = 2 // (1.5 * z2) / 1.5
 
-  function handArrowhead(tail: { x: number; y: number }, tip: { x: number; y: number }) {
-    const angle = Math.atan2(tip.y - tail.y, tip.x - tail.x)
-    const cos = Math.cos(angle), sin = Math.sin(angle)
-    const back = { x: tip.x - 10 * cos, y: tip.y - 10 * sin }
-    const left = { x: back.x + 4 * -sin, y: back.y + 4 * cos }
-    const right = { x: back.x - 4 * -sin, y: back.y - 4 * cos }
-    return [tip, left, right] as const
+  // Mirrors arrowheadGlyph's 'arrow' case exactly, independently
+  // re-implemented (not calling the library function) so this is a real
+  // cross-check, not an echo of the implementation.
+  function handChevron(tail: { x: number; y: number }, tip: { x: number; y: number }, scale: number) {
+    const len = 10 * scale
+    const dx = tip.x - tail.x, dy = tip.y - tail.y
+    const dist = Math.hypot(dx, dy)
+    const int = { x: tip.x + (-dx / dist) * len, y: tip.y + (-dy / dist) * len }
+    const rotAround = (p: { x: number; y: number }, center: { x: number; y: number }, angle: number) => {
+      const d = { x: p.x - center.x, y: p.y - center.y }
+      const c = Math.cos(angle), s = Math.sin(angle)
+      return { x: center.x + d.x * c - d.y * s, y: center.y + d.x * s + d.y * c }
+    }
+    const PL = rotAround(int, tip, Math.PI / 6)
+    const PR = rotAround(int, tip, -Math.PI / 6)
+    return [PL, tip, PR] as const
+  }
+
+  // Pulls the 3 numeric points out of a rendered `d="M x y L x y L x y"`
+  // chevron string — a float-tolerant cross-check (the test's own
+  // independently-ordered floating point arithmetic need not produce the
+  // EXACT same last-ULP string as the library's, only the same point within
+  // epsilon).
+  function parseChevron(d: string): [{ x: number; y: number }, { x: number; y: number }, { x: number; y: number }] {
+    const nums = d.match(/-?\d+(\.\d+)?(e-?\d+)?/g)!.map(Number)
+    return [{ x: nums[0]!, y: nums[1]! }, { x: nums[2]!, y: nums[3]! }, { x: nums[4]!, y: nums[5]! }]
+  }
+  function assertPointsClose(actual: readonly { x: number; y: number }[], expected: readonly { x: number; y: number }[], msg: string) {
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(actual[i]!.x - expected[i]!.x) < 1e-6 && Math.abs(actual[i]!.y - expected[i]!.y) < 1e-6, `${msg} — point ${i}: ${JSON.stringify(actual[i])} vs ${JSON.stringify(expected[i])}`)
+    }
   }
 
   // Straight: tail = start, tip = end.
   {
     const startScreen = toScreen(camera, { x: 0, y: 0 })
     const endScreen = toScreen(camera, { x: 100, y: 0 })
-    const expected = handArrowhead(startScreen, endScreen)
-    const viaLibrary = arrowheadPoints(startScreen, endScreen)
-    for (let i = 0; i < 3; i++) {
-      assert.ok(Math.abs(expected[i]!.x - viaLibrary[i]!.x) < 1e-9 && Math.abs(expected[i]!.y - viaLibrary[i]!.y) < 1e-9, `point ${i} should match`)
-    }
+    const expected = handChevron(startScreen, endScreen, HEAD_SCALE)
     const doc = docOf([arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } })])
     const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
-    const pointsStr = expected.map((p) => `${p.x},${p.y}`).join(' ')
-    assert.ok(html.includes(`data-overlay="arrowhead" points="${pointsStr}"`), `straight arrowhead should point along (end-start): ${html}`)
+    const dMatch = html.match(/data-overlay="arrowhead" d="([^"]+)"/)
+    assert.ok(dMatch, `expected a rendered arrowhead path: ${html}`)
+    assertPointsClose(parseChevron(dMatch![1]!), expected, 'straight arrowhead should point along (end-start)')
     console.log('ok: Arrows — straight arrowhead oriented along (end - start)')
   }
 
@@ -346,15 +372,12 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
   {
     const midScreen = toScreen(camera, { x: 50, y: 10 })
     const endScreen = toScreen(camera, { x: 100, y: 0 })
-    const expected = handArrowhead(midScreen, endScreen)
-    const viaLibrary = arrowheadPoints(midScreen, endScreen)
-    for (let i = 0; i < 3; i++) {
-      assert.ok(Math.abs(expected[i]!.x - viaLibrary[i]!.x) < 1e-9 && Math.abs(expected[i]!.y - viaLibrary[i]!.y) < 1e-9, `point ${i} should match`)
-    }
+    const expected = handChevron(midScreen, endScreen, HEAD_SCALE)
     const doc = docOf([arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 }, bend: 10 })])
     const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
-    const pointsStr = expected.map((p) => `${p.x},${p.y}`).join(' ')
-    assert.ok(html.includes(`data-overlay="arrowhead" points="${pointsStr}"`), `curved arrowhead should point along (end-mid), NOT (end-start): ${html}`)
+    const dMatch = html.match(/data-overlay="arrowhead" d="([^"]+)"/)
+    assert.ok(dMatch, `expected a rendered arrowhead path: ${html}`)
+    assertPointsClose(parseChevron(dMatch![1]!), expected, 'curved arrowhead should point along (end-mid), NOT (end-start)')
     console.log('ok: Arrows — curved arrowhead oriented along (end - mid), not (end - start)')
   }
 }
@@ -634,4 +657,70 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
   console.log('ok: Selection — curved arrow indicator traces its routed quadratic Bézier, respecting camera')
 }
 
-console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing + viewport culling + style props (color/dash/size/arrowheads))')
+// ============================================================================
+// 19. Arrowhead GLYPH VARIANTS (arrow-handles task, gap 4): each of the 8
+//     non-'none' ARROWHEAD values renders a STRUCTURALLY DISTINCT glyph, not
+//     the same triangle repeated 8 times -- 'dot' renders a <circle>, every
+//     other type a <path> with its own distinct `d`, and no two path `d`s
+//     coincide. 'pipe' renders NOTHING (checked against tldraw source --
+//     arrowheads.ts's getArrowheadPathForType has no 'pipe' case and falls
+//     through to `return ''` -- see arrowheadGlyph's own module comment).
+//     RED-FIRST: before this task every non-'none' type rendered the exact
+//     same <polygon> triangle -- this block's "8 distinct d/kind values"
+//     assertion would have failed with 7 duplicates.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const types = ['arrow', 'triangle', 'square', 'dot', 'diamond', 'inverted', 'bar'] as const
+  const shapes = types.map((t, i) => arrowShape(`shape:${t}`, 0, i * 100, { arrowheadEnd: t, end: { x: 100, y: i * 100 } }))
+  const pipeShape = arrowShape('shape:pipe', 0, 700, { arrowheadEnd: 'pipe', end: { x: 100, y: 700 } })
+  const doc = docOf([...shapes, pipeShape])
+  const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+
+  const glyphSignatures = new Set<string>()
+  for (const t of types) {
+    const start = html.indexOf(`data-shape-id="shape:${t}"`)
+    const section = html.slice(start, html.indexOf('</g>', start)) // THIS shape's own <g> only
+    const circleMatch = section.match(/<circle data-overlay="arrowhead"[^>]*>/)
+    const pathMatch = section.match(/<path data-overlay="arrowhead" d="([^"]+)"/)
+    const signature = circleMatch ? `circle:${circleMatch[0]}` : pathMatch ? `path:${pathMatch[1]}` : null
+    assert.ok(signature, `expected a rendered arrowhead glyph for type '${t}': ${html}`)
+    assert.ok(!glyphSignatures.has(signature!), `type '${t}' rendered a glyph identical to an earlier type -- expected 8 STRUCTURALLY DISTINCT glyphs: ${html}`)
+    glyphSignatures.add(signature!)
+  }
+  assert.equal(glyphSignatures.size, types.length, 'every non-none arrowhead type renders a distinct glyph')
+
+  const pipeSection = html.slice(html.indexOf('data-shape-id="shape:pipe"'))
+  assert.doesNotMatch(pipeSection.slice(0, pipeSection.indexOf('</g>')), /data-overlay="arrowhead"/, `'pipe' should render NO glyph, matching tldraw's own real (source-verified) invisible behavior: ${html}`)
+  console.log("ok: Arrows — all 8 non-'none' arrowhead types render structurally distinct glyphs; 'pipe' renders nothing (matches v1 source)")
+}
+
+// ============================================================================
+// 20. ZOOM-STABLE STROKE + ARROWHEAD SIZE (gap 5): an arrow's stroke-width
+//     and arrowhead scale with camera.z, exactly like a geo/note shape's own
+//     stroke (which scales for free via WorldLayer's CSS transform -- see
+//     arrowStyle's own doc comment for the v1 citation: ArrowShapeUtil.tsx's
+//     SVG lives inside that SAME world-space-transformed container). At
+//     z=1 with no props.size, strokeWidth is the OLD hardcoded default
+//     (1.5px) exactly -- RED-FIRST: before this task strokeWidth was a flat
+//     DEFAULT_STROKE_WIDTH_PX regardless of zoom, so a z=4 arrow rendered
+//     IDENTICALLY thin to a z=1 one -- this assertion (strokeWidth
+//     STRICTLY GREATER at z=4) would have failed against that code.
+// ============================================================================
+{
+  const arrowAtZ = (z: number) => {
+    const camera: Camera = { x: 0, y: 0, z }
+    const doc = docOf([arrowShape('shape:a', 0, 0, { end: { x: 100, y: 0 } })])
+    const html = renderToStaticMarkup(createElement(Arrows, { snapshot: doc, camera, viewportSize: VP, index: buildSpatialIndex(doc) }))
+    const strokeWidthMatch = html.match(/stroke-width="([\d.]+)"/)
+    assert.ok(strokeWidthMatch, `expected a stroke-width attribute: ${html}`)
+    return Number(strokeWidthMatch![1])
+  }
+  const atZ1 = arrowAtZ(1)
+  const atZ4 = arrowAtZ(4)
+  assert.equal(atZ1, 1.5, 'z=1, no props.size: strokeWidth is exactly the old hardcoded default (1.5px) -- no regression for the common case')
+  assert.equal(atZ4, 6, 'z=4: strokeWidth scales linearly with zoom (1.5 * 4 = 6), matching a geo shape\'s own zoom-stable stroke')
+  console.log('ok: Arrows — stroke-width scales with camera.z (zoom-stable, matching v1 + every other shape kind)')
+}
+
+console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing + viewport culling + style props (color/dash/size/arrowheads) + glyph variants + zoom-stable sizing)')
