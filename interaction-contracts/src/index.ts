@@ -29,6 +29,7 @@ import { scrollDirection } from './contracts/scroll-direction.js'
 import { selectAllSelectsEveryShapeOnPage } from './contracts/select-all-selects-every-shape-on-page.js'
 import { shiftDragConstrainsToAxis } from './contracts/shift-drag-constrains-to-axis.js'
 import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
+import { styleEditArmsNextShape } from './contracts/style-edit-arms-next-shape.js'
 import { switchingPageChangesRenderedShapes } from './contracts/switching-page-changes-rendered-shapes.js'
 import { toolShortcutSwitchesAndArmsTool } from './contracts/tool-shortcut-switches-and-arms-tool.js'
 
@@ -43,6 +44,7 @@ export const CONTRACTS: readonly Contract[] = [
   editingIndicator,
   styleAppliesToSelection,
   armedStyleAppliesToCreatedShape,
+  styleEditArmsNextShape,
   duplicateReidsAndOffsets,
   pastePlacesAndSelects,
   malformedClipboardRejected,

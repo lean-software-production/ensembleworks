@@ -59,7 +59,7 @@ import { type CSSProperties } from 'react'
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { combinedWorldBounds, GEO_COLORS } from '@ensembleworks/canvas-react'
-import { currentValue, relevantAxes, relevantAxesForTool, STYLE_VALUE_SETS, type StyleAxis, type StyleValue } from './style-axes.js'
+import { currentValue, kindDefault, kindForTool, relevantAxes, relevantAxesForTool, STYLE_VALUE_SETS, type StyleAxis, type StyleValue } from './style-axes.js'
 import { AlignIcon, ArrowheadIcon, DashIcon, FillIcon, FontIcon, GeoIcon, SizeIcon } from './style-icons.js'
 import type { ToolId } from './tool-loop.js'
 
@@ -78,16 +78,21 @@ export interface StylePanelProps {
 	 * source (selection mode never reads this; it reads live shape props via
 	 * `currentValue` instead). */
 	readonly nextShapeStyle: Record<string, unknown>
-	/** Dispatches `SetStyle` over the current selection. Called only in
-	 * selection mode (`selection.size > 0`) — see module header. */
-	readonly onStyleChange: (axis: StyleAxis, value: StyleValue) => void
+	/** Dispatches `SetStyle` over the current selection — and, per gap 3 of
+	 * the style-memory task, ALSO arms `nextShapeStyle` (next-shape style
+	 * memory, tldraw parity) unless the click's `options.onlySelection` flag
+	 * is set (Ctrl/Cmd held — "this shape only"). Called only in selection
+	 * mode (`selection.size > 0`) — see module header. */
+	readonly onStyleChange: (axis: StyleAxis, value: StyleValue, options?: { readonly onlySelection: boolean }) => void
 	/** Task AS3 — dispatches `SetNextStyle` (arms the tool). Called only in
 	 * armed mode (`selection.size === 0` and `activeToolId` is style-bearing)
 	 * — see module header. Kept as a SEPARATE prop from `onStyleChange`
 	 * (rather than one callback the panel disambiguates internally) so a
 	 * wrong-mode wiring bug shows up as "the wrong prop got called", directly
-	 * observable in a component test without booting a session. */
-	readonly onArmStyle: (axis: StyleAxis, value: StyleValue) => void
+	 * observable in a component test without booting a session. Ignores the
+	 * shared `options` parameter — there is no selection in armed mode for
+	 * `onlySelection` to restrict. */
+	readonly onArmStyle: (axis: StyleAxis, value: StyleValue, options?: { readonly onlySelection: boolean }) => void
 }
 
 // Visual grouping (plan: "color row, fill/dash, size/font, align"), extended
@@ -162,7 +167,23 @@ function humanize(value: string): string {
 // definition, near PANEL_FLIP_HEADROOM) for the anchor-vs-edge clamp bug
 // this cap used to be paired with (a P4 first pass clamped only the anchor
 // point, which still let a wide-but-bounded panel spill off-screen).
-const PANEL_MAX_WIDTH = 320
+//
+// LAYOUT FIX (style-memory task, defect a): 320 was too narrow for the
+// `color` row's real content once style-panel-icons shrank every OTHER
+// control to a fixed 24px icon button — the color row is the one row that
+// never got smaller (`swatchButtonStyle` stayed a fixed 20px circle, same as
+// before that pass), and COLOR carries 13 values (canvas-model's COLOR
+// enum), the most of any axis. 320's content width (320 - 2*10 padding -
+// 2*1 border = 298px) fits only 12 of the 13 swatches per row (13*20 +
+// 12*4-gap = 308px needed), so 'white' (the 13th) wrapped onto its own
+// second row alone — cosmetically broken next to every other single-row
+// group. 340's content width (318px) comfortably fits all 13
+// (308px, +10px headroom) on one row, matching tldraw's own single-row
+// color swatch layout. Pinned by `StylePanel.position.test.ts`'s
+// `colorRowWidth() <= panelContentWidth()` case, computed from the REAL
+// swatch/gap constants, not a hand-typed pixel count, so a future value
+// added to the COLOR enum re-proves this instead of silently rotting.
+const PANEL_MAX_WIDTH = 340
 // Bounds panel HEIGHT the same way PANEL_MAX_WIDTH bounds width — see that
 // constant's doc comment. `overflowY: 'auto'` on PANEL_STYLE below is the
 // safety net for a selection with an unusually large union of relevant axis
@@ -232,7 +253,7 @@ const PANEL_STYLE: CSSProperties = {
 const ROW_GROUP_STYLE: CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
 const ROW_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4 }
 const ROW_LABEL_STYLE: CSSProperties = { fontSize: 10, color: '#475569', fontWeight: 600, letterSpacing: 0.2 }
-const ROW_VALUES_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 4 }
+const ROW_VALUES_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 4 } // gap mirrors SWATCH_GAP_PX below (declared after use — CSS-in-JS values only, no import-order issue)
 
 // tldraw's own opacity control offers five discrete steps (Decisions §
 // Parity value-sets, "opacity") — style-axes.ts's STYLE_VALUE_SETS.opacity
@@ -244,10 +265,20 @@ const OPACITY_VALUES = STYLE_VALUE_SETS.opacity
 // the container above sets 'none'. Without this, a click aimed at a swatch
 // would fall through the panel to the canvas underneath instead of hitting
 // the button.
+// Exported as named constants (not left as magic numbers inside
+// `swatchButtonStyle`/`ROW_VALUES_STYLE`) so `panelContentWidth`/
+// `colorRowWidth` below — and `StylePanel.position.test.ts`'s pinning test —
+// compute the SAME numbers the real CSS renders, never a second, driftable
+// hand-copy of them.
+const SWATCH_PX = 20
+const SWATCH_GAP_PX = 4
+const PANEL_HORIZONTAL_PADDING_PX = 10 // PANEL_STYLE's `padding: '8px 10px'`, left+right
+const PANEL_BORDER_PX = 1 // PANEL_STYLE's `border: '1px solid ...'`, left+right
+
 function swatchButtonStyle(current: boolean): CSSProperties {
 	return {
-		width: 20,
-		height: 20,
+		width: SWATCH_PX,
+		height: SWATCH_PX,
 		borderRadius: '50%',
 		border: current ? '2px solid #004990' : '1px solid rgba(15,23,42,0.25)',
 		boxShadow: current ? '0 0 0 1px #fafaf7 inset' : undefined,
@@ -255,6 +286,28 @@ function swatchButtonStyle(current: boolean): CSSProperties {
 		padding: 0,
 		pointerEvents: 'auto',
 	}
+}
+
+/** The panel's real, on-screen CONTENT width (inside its own padding and
+ * border) — `boxSizing: 'border-box'` (PANEL_STYLE) folds both back inside
+ * `maxWidth`, so this is `PANEL_MAX_WIDTH` minus both sides' padding and
+ * border, not `PANEL_MAX_WIDTH` itself (see that constant's FIXUP comment).
+ * Exported for `StylePanel.position.test.ts`'s color-row-fits-on-one-line
+ * pin (layout defect a, style-memory task). */
+export function panelContentWidth(): number {
+	return PANEL_MAX_WIDTH - 2 * (PANEL_HORIZONTAL_PADDING_PX + PANEL_BORDER_PX)
+}
+
+/** The `color` row's real rendered width — N swatches at `SWATCH_PX` each,
+ * `N - 1` gaps of `SWATCH_GAP_PX` between them (`ROW_VALUES_STYLE`'s `gap`),
+ * no trailing gap. `N` is read from the REAL value set
+ * (`STYLE_VALUE_SETS.color.length`, canvas-model's COLOR enum via
+ * style-axes.ts), not a hand-typed "13" — so a future color added to the
+ * model re-proves (or breaks) this pin automatically, rather than silently
+ * going stale. Exported for the same test as `panelContentWidth`. */
+export function colorRowWidth(): number {
+	const n = STYLE_VALUE_SETS.color.length
+	return n * SWATCH_PX + (n - 1) * SWATCH_GAP_PX
 }
 
 // Task style-panel-icons — every non-color/non-opacity control is now a
@@ -315,13 +368,21 @@ function axisIcon(axis: StyleAxis, value: string) {
 interface AxisRowProps {
 	readonly axis: StyleAxis
 	/** Precomputed by the caller: `currentValue(shapes, axis)` in selection
-	 * mode, or `armedValue(nextShapeStyle, axis)` in armed mode (AS3) — this
-	 * row never knows which mode it's rendering for, only the resolved value
-	 * and where to send a change. There is no 'mixed' concept in armed mode
-	 * (there's no multi-shape selection to disagree), so armed callers only
-	 * ever pass a definite value or `undefined`, never `'mixed'`. */
+	 * mode, or `armedValue(nextShapeStyle, toolId, axis)` in armed mode (AS3)
+	 * — this row never knows which mode it's rendering for, only the resolved
+	 * value and where to send a change. There is no 'mixed' concept in armed
+	 * mode (there's no multi-shape selection to disagree), so armed callers
+	 * only ever pass a definite value or `undefined`, never `'mixed'`. */
 	readonly value: StyleValue | 'mixed' | undefined
-	readonly onStyleChange: (axis: StyleAxis, value: StyleValue) => void
+	/** Task style-memory (gap 3) — `onlySelection` mirrors the click's
+	 * Ctrl/Cmd modifier (tldraw parity: StylePanelContext.tsx's "every style
+	 * click sets BOTH setStyleForSelectedShapes AND setStyleForNextShapes
+	 * unless Ctrl/Cmd held"). In SELECTION mode this tells the mount site's
+	 * `onStyleChange` to restyle ONLY the current selection, leaving
+	 * `nextShapeStyle` (next-shape style memory) untouched — the "this shape
+	 * only" escape hatch. In ARMED mode there is no selection to restrict, so
+	 * `onArmStyle` simply ignores the third argument. */
+	readonly onStyleChange: (axis: StyleAxis, value: StyleValue, options?: { readonly onlySelection: boolean }) => void
 }
 
 // Task style-panel-icons — opacity restyled as a slider TRACK with a stop
@@ -404,7 +465,7 @@ function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
 								aria-label={`${Math.round(v * 100)}%`}
 								title={`${Math.round(v * 100)}%`}
 								style={opacityStopStyle(isCurrent)}
-								onClick={() => onStyleChange('opacity', v)}
+								onClick={(e) => onStyleChange('opacity', v, { onlySelection: Boolean(e?.ctrlKey || e?.metaKey) })}
 							/>
 						)
 					})}
@@ -430,7 +491,7 @@ function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
 							title={humanize(v)}
 							aria-label={humanize(v)}
 							style={{ ...swatchButtonStyle(isCurrent), background: colorSwatchHex(v) }}
-							onClick={() => onStyleChange(axis, v)}
+							onClick={(e) => onStyleChange(axis, v, { onlySelection: Boolean(e?.ctrlKey || e?.metaKey) })}
 						/>
 					) : (
 						<button
@@ -442,7 +503,7 @@ function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
 							title={humanize(v)}
 							aria-label={humanize(v)}
 							style={segButtonStyle(isCurrent)}
-							onClick={() => onStyleChange(axis, v)}
+							onClick={(e) => onStyleChange(axis, v, { onlySelection: Boolean(e?.ctrlKey || e?.metaKey) })}
 						>
 							{axisIcon(axis, v)}
 						</button>
@@ -581,6 +642,15 @@ export function avoidAnchorOverlap(
 ): PanelPosition & { readonly maxHeight?: number } {
 	const minY = Math.min(c1.y, c2.y)
 	const maxY = Math.max(c1.y, c2.y)
+	// The two "ideal" (non-overlapping) edges and the real room available past
+	// each — computed UNCONDITIONALLY, regardless of which placement
+	// `clampPanelPosition` originally chose, because a squeeze needs to know
+	// BOTH sides' room to pick the roomier one (see the LAYOUT FIX note below).
+	const idealTop = maxY + margin // BELOW placement's ideal top edge
+	const belowRoom = Math.max(0, viewportSize.height - idealTop - margin)
+	const idealBottom = minY - margin // ABOVE placement's ideal bottom edge
+	const aboveRoom = Math.max(0, idealBottom - margin)
+
 	if (position.transform === 'translateX(-50%)') {
 		// "below" placement (also the no-bounds top-center fallback, which
 		// trivially satisfies `top >= idealTop` since idealTop is world-bounds
@@ -588,17 +658,31 @@ export function avoidAnchorOverlap(
 		// is the panel's literal TOP edge. A squeeze already happened iff the
 		// clamp pulled it above (numerically less than) the ideal top-of-panel
 		// position right after the selection's bottom edge.
-		const idealTop = maxY + margin
 		if (position.top >= idealTop) return position
-		return { ...position, top: idealTop, maxHeight: Math.max(0, viewportSize.height - idealTop - margin) }
+		// LAYOUT FIX (style-memory task, defect b — v2-geo-selected.png): a
+		// squeeze used to ALWAYS stay on the side `clampPanelPosition` already
+		// picked (FLIP_HEADROOM is a rough "is minY small?" heuristic, blind to
+		// how much room the panel's real content actually needs) — for a
+		// selection anchored near the viewport's top edge but whose OWN bottom
+		// sits deep in a short/narrow viewport, that side can have almost no
+		// room left (a tall geo panel's last row, "Shape", rendering mostly
+		// off-screen), while the OTHER side has more. Flip to ABOVE whenever it
+		// would give strictly more room than squeezing below does.
+		if (aboveRoom > belowRoom) {
+			return { ...position, top: idealBottom, transform: 'translate(-50%, -100%)', maxHeight: aboveRoom }
+		}
+		return { ...position, top: idealTop, maxHeight: belowRoom }
 	}
 	// "above" placement: `top` is the panel's literal BOTTOM edge (the CSS
 	// `translate(-50%, -100%)` transform makes it so). A squeeze already
 	// happened iff the clamp pushed that bottom edge below (numerically past)
 	// the ideal bottom-of-panel position right above the selection's top edge.
-	const idealBottom = minY - margin
 	if (position.top <= idealBottom) return position
-	return { ...position, top: idealBottom, maxHeight: Math.max(0, idealBottom - margin) }
+	// Symmetric flip to BELOW — see the "below" branch's LAYOUT FIX note above.
+	if (belowRoom > aboveRoom) {
+		return { ...position, top: idealTop, transform: 'translateX(-50%)', maxHeight: belowRoom }
+	}
+	return { ...position, top: idealBottom, maxHeight: aboveRoom }
 }
 
 function computePosition(
@@ -624,6 +708,82 @@ function stopPropagation(e: { stopPropagation(): void }): void {
 	e.stopPropagation()
 }
 
+/**
+ * FIXER (style-memory, validator round 2, blocking item 2): PANEL_STYLE's
+ * container is deliberately `pointer-events: none` (see that constant's own
+ * REGRESSION FIX comment) so empty panel space passes clicks through to the
+ * canvas underneath — but CSS `pointer-events: none` disables hit-testing
+ * for EVERY pointer-driven event, wheel included, not just click/drag. That
+ * made a wheel gesture aimed at the panel fall straight through to
+ * Viewport's own root div (canvas-react/src/Viewport.tsx), which reads it
+ * as a camera pan — so `overflowY: 'auto'`'s scrollbar was never reachable:
+ * a real browser session driving a 300px wheel over the panel left its
+ * `scrollTop` at 0 and moved the camera by -300 instead (validator repro,
+ * pinned by `e2e/tests/style-panel-scroll.spec.ts`).
+ *
+ * Fix: a native, non-passive `wheel` listener bound in the CAPTURE phase on
+ * `window` — the same non-passive-listener idiom Viewport.tsx's own module
+ * header explains (a JSX `onWheel` can't preventDefault reliably, and here
+ * it additionally couldn't even fire — pointer-events:none excludes the
+ * element from hit-testing, so React's synthetic wheel handler would never
+ * see events over the panel at all). Capture-phase on `window` sees the
+ * event BEFORE it reaches Viewport's own bubble-phase listener; when the
+ * pointer is over the panel's live `getBoundingClientRect()`, this scrolls
+ * the panel's own `scrollTop` by the wheel's `deltaY` and calls both
+ * `preventDefault()` (blocks the page-level default) and `stopPropagation()`
+ * (capture-phase stopPropagation halts the event before it ever reaches the
+ * target/bubble phase, so Viewport's listener never runs for it) — outside
+ * the panel's rect, the event is untouched and reaches Viewport exactly as
+ * before. Manually driving `scrollTop` (rather than relying on the
+ * suppressed native scroll) works whether or not the content currently
+ * overflows: the browser clamps `scrollTop` to `[0, scrollHeight -
+ * clientHeight]` on assignment, so this is a harmless no-op once nothing is
+ * clipped.
+ *
+ * NOT a hook, deliberately: this file's own test suite (StylePanel.test.ts,
+ * cases 9/10) calls `StylePanel({...})` as a PLAIN FUNCTION — inspecting the
+ * returned element tree directly, never through `createElement`/a real
+ * render — which is a house pattern for a pure-render component predating
+ * this fix (see that file's own header) and runs with no React dispatcher
+ * active at all. A `useRef`/`useEffect` pair here would throw "Invalid hook
+ * call" the instant such a test ran (verified: it does). A plain module-
+ * scope singleton plus a REF CALLBACK (an ordinary function prop, not a
+ * hook — `<div ref={panelRefCallback}>`) sidesteps that entirely: harmless
+ * to include in a tree nobody ever reconciles, and wired up automatically
+ * the moment a real render DOES mount the div. `bindPanelWheelListenerOnce`
+ * also no-ops when `window` doesn't exist (this same static-markup test
+ * environment) rather than throwing.
+ */
+let livePanelEl: HTMLDivElement | null = null
+let panelWheelListenerBound = false
+
+function handlePanelWheel(e: WheelEvent): void {
+	const el = livePanelEl
+	if (!el) return
+	const rect = el.getBoundingClientRect()
+	const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom
+	if (!inside) return
+	el.scrollTop += e.deltaY
+	e.preventDefault()
+	e.stopPropagation()
+}
+
+function bindPanelWheelListenerOnce(): void {
+	if (panelWheelListenerBound) return
+	if (typeof window === 'undefined') return // no browser global (e.g. StylePanel.test.ts's static-markup rig) — nothing to bind to
+	window.addEventListener('wheel', handlePanelWheel, { passive: false, capture: true })
+	panelWheelListenerBound = true
+}
+
+/** Ref callback (not a hook) for both PANEL_STYLE divs below — records
+ * whichever one is currently mounted (only one of the two modes ever
+ * renders at once) so `handlePanelWheel` always targets the live node, and
+ * lazily binds the one process-lifetime `window` listener on first mount. */
+function panelRefCallback(el: HTMLDivElement | null): void {
+	livePanelEl = el
+	if (el) bindPanelWheelListenerOnce()
+}
+
 // Task AS3 — armed mode has no selection bounds to anchor against
 // (`computePosition` above needs a live selection's world bounds via
 // `combinedWorldBounds`). Floated top-center under the toolbar instead —
@@ -633,13 +793,21 @@ function stopPropagation(e: { stopPropagation(): void }): void {
 // coincidence of matching numbers.
 const ARMED_PANEL_POSITION: CSSProperties = { left: '50%', top: MARGIN, transform: 'translateX(-50%)' }
 
-/** Armed-mode counterpart to `currentValue` (AS3): `nextShapeStyle[axis]`
- * verbatim if it's a string/number, else `undefined` — never `'mixed'`
- * (there's no shape selection to disagree; `nextShapeStyle` is a single flat
- * record, see EditorState.nextShapeStyle's own doc comment in editor.ts). */
-function armedValue(nextShapeStyle: Record<string, unknown>, axis: StyleAxis): StyleValue | undefined {
+/** Armed-mode counterpart to `currentValue` (AS3, extended by gap 2 of the
+ * style-memory task): `nextShapeStyle[axis]` verbatim if it's a
+ * string/number; otherwise falls back to `toolId`'s kind default
+ * (`kindDefault`, style-axes.ts) — the same "unset shows what it would
+ * actually render with" fallback `currentValue` gives a live selection,
+ * applied here to the pre-creation armed panel so a fresh mount (nothing
+ * armed yet) shows tldraw's real `stylesForNextShape`-equivalent defaults
+ * instead of a blank row. Never `'mixed'` (there's no shape selection to
+ * disagree; `nextShapeStyle` is a single flat record, see
+ * EditorState.nextShapeStyle's own doc comment in editor.ts). */
+function armedValue(nextShapeStyle: Record<string, unknown>, toolId: ToolId, axis: StyleAxis): StyleValue | undefined {
 	const raw = nextShapeStyle[axis]
-	return typeof raw === 'string' || typeof raw === 'number' ? raw : undefined
+	if (typeof raw === 'string' || typeof raw === 'number') return raw
+	const kind = kindForTool(toolId)
+	return kind ? kindDefault(kind, axis) : undefined
 }
 
 /**
@@ -697,6 +865,7 @@ export function StylePanel({
 
 		return (
 			<div
+				ref={panelRefCallback}
 				data-testid="ew-style-panel"
 				data-canvas-v2-style-panel
 				data-style-panel-mode="selection"
@@ -723,6 +892,7 @@ export function StylePanel({
 
 	return (
 		<div
+			ref={panelRefCallback}
 			data-testid="ew-style-panel"
 			data-canvas-v2-style-panel
 			data-style-panel-mode="armed"
@@ -733,7 +903,7 @@ export function StylePanel({
 			{armedGroups.map((group) => (
 				<div key={group.join('-')} style={ROW_GROUP_STYLE}>
 					{group.map((axis) => (
-						<AxisRow key={axis} axis={axis} value={armedValue(nextShapeStyle, axis)} onStyleChange={onArmStyle} />
+						<AxisRow key={axis} axis={axis} value={armedValue(nextShapeStyle, activeToolId, axis)} onStyleChange={onArmStyle} />
 					))}
 				</div>
 			))}

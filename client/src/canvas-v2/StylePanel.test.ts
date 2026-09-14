@@ -446,6 +446,41 @@ function findStyleValueOnClick(node: unknown, styleValue: string): (() => void) 
 }
 
 // ============================================================================
+// 13. Task style-memory (gap 2) — a FRESH mount's armed panel (empty
+//     nextShapeStyle, nothing armed yet) shows the tool's REAL defaults
+//     marked current, not a blank row. v1's armed panel always shows
+//     tldraw's real `stylesForNextShape` values (which start as tldraw's own
+//     shape defaults); v2's `nextShapeStyle` starts `{}` (editor.ts), so
+//     before this fix every control showed nothing current on first arm.
+//     Mutant: armedValue ignores the kind default and stays undefined for
+//     an unset axis.
+// ============================================================================
+{
+	const html = renderToStaticMarkup(
+		createElement(StylePanel, {
+			selection: new Set<string>(),
+			snapshot: docOf(),
+			camera: CAMERA,
+			viewportSize: VIEWPORT,
+			isGesturing: false,
+			activeToolId: 'geo',
+			nextShapeStyle: {}, // fresh mount — nothing armed yet
+			onStyleChange: noop,
+			onArmStyle: noop,
+		}),
+	)
+	assert.ok(
+		/data-style-value="black"[^>]*data-current="true"|data-current="true"[^>]*data-style-value="black"/.test(html),
+		`armed geo panel, nothing armed yet — color defaults to 'black' marked current — html: ${html}`,
+	)
+	assert.ok(
+		/data-style-value="rectangle"[^>]*data-current="true"|data-current="true"[^>]*data-style-value="rectangle"/.test(html),
+		`armed geo panel, nothing armed yet — geo variant defaults to 'rectangle' marked current — html: ${html}`,
+	)
+	console.log("ok: armed panel — a fresh mount (empty nextShapeStyle) shows the tool kind's real defaults marked current")
+}
+
+// ============================================================================
 // Task style-panel-icons — RED before the icon-ification: today's non-color
 // controls render plain `humanize(v)` text (e.g. the fill row literally
 // contains the text "Solid"), never an SVG. This pins the swap to icon

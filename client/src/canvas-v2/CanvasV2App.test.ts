@@ -1274,7 +1274,11 @@ async function main() {
 		})
 
 		const ewStyle = (globalThis as any).window.__ew as {
-			editor: { get(): { selection: Set<string> }; apply(intent: unknown): void; undo(): void }
+			editor: {
+				get(): { selection: Set<string>; nextShapeStyle: Record<string, unknown> }
+				apply(intent: unknown): void
+				undo(): void
+			}
 			doc: { getShape(id: string): { opacity: number; props: Record<string, unknown> } | undefined }
 		}
 
@@ -1301,6 +1305,7 @@ async function main() {
 			'a shape OUTSIDE the selection must be untouched — proves the wiring dispatches ids=selection, not ids=whole doc',
 		)
 		console.log('ok: CanvasV2App — clicking the StylePanel color swatch dispatches SetStyle across the WHOLE selection, sparing an unselected shape')
+
 
 		const opacityBtn = styleContainer.querySelector('[data-style-control="opacity"] [data-style-value="0.5"]') as HTMLElement | null
 		assert.ok(opacityBtn, `the panel's 50% opacity button must render — DOM: ${styleContainer.innerHTML}`)
@@ -1339,6 +1344,36 @@ async function main() {
 			'the SAME single Ctrl+Z must not also revert the EARLIER, separately-committed color change',
 		)
 		console.log('ok: CanvasV2App — a single Ctrl+Z reverts the whole StylePanel opacity batch in one step, without touching the earlier color commit')
+
+		// ======================================================================
+		// (i-bis) TASK style-memory (gap 3) — STYLE MEMORY: an ordinary (no
+		// modifier) style click ALSO arms `nextShapeStyle`, so the NEXT created
+		// shape picks up the same style (tldraw parity — StylePanelContext.tsx's
+		// "every style click sets BOTH setStyleForSelectedShapes AND
+		// setStyleForNextShapes unless Ctrl/Cmd held"). The blue-swatch click
+		// above was a plain click, so it must ALSO have armed nextShapeStyle.
+		// ======================================================================
+		assert.equal(
+			ewStyle.editor.get().nextShapeStyle.color,
+			'blue',
+			'a plain (non-modified) style click over a selection must ALSO arm nextShapeStyle — the next-shape style memory tldraw parity gap',
+		)
+		console.log('ok: CanvasV2App — a plain style click over a selection also arms nextShapeStyle (next-shape style memory)')
+
+		// Ctrl/Cmd-held click is the escape hatch: "this shape only", must NOT
+		// touch nextShapeStyle (it stays at whatever it was armed to before).
+		const redSwatch = styleContainer.querySelector('[data-style-control="color"] [data-style-value="red"]') as HTMLElement | null
+		assert.ok(redSwatch, `the panel's red color swatch must render — DOM: ${styleContainer.innerHTML}`)
+		await act(async () => {
+			redSwatch!.dispatchEvent(new (win as any).MouseEvent('click', { ctrlKey: true, bubbles: true, cancelable: true }))
+		})
+		assert.equal(ewStyle.doc.getShape('shape:style-x')?.props.color, 'red', 'a Ctrl-held click still restyles the selected shapes')
+		assert.equal(
+			ewStyle.editor.get().nextShapeStyle.color,
+			'blue',
+			'a Ctrl/Cmd-held style click is the "this shape only" escape hatch — it must NOT arm nextShapeStyle',
+		)
+		console.log('ok: CanvasV2App — a Ctrl/Cmd-held style click restyles the selection only, leaving nextShapeStyle (armed style) untouched')
 
 		await act(async () => {
 			styleRoot.unmount()

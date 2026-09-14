@@ -90,9 +90,49 @@ const geo = (props: Record<string, unknown> = {}, extra: Partial<Shape> = {}) =>
   console.log('ok: currentValue -- disagreeing selection reports "mixed" (mutant: first-value-wins killed)')
 }
 {
+  // DELIBERATE PINNED-BEHAVIOUR CHANGE (style-memory task, gap 1): v1's
+  // tldraw shapes always carry concrete default props, so a freshly created
+  // shape's panel always shows an active value, never a blank row. v2's
+  // create tool writes `props: {}` for an unset axis, so `currentValue` used
+  // to report `undefined` here -- reading as "broken" rather than "default"
+  // once the panel highlights nothing for a shape that visibly renders
+  // black/m/draw. `currentValue` now folds in the shape KIND's rendered
+  // default (STYLE_DEFAULTS_BY_KIND, mirrored from canvas-react's own
+  // per-shape DEFAULT_* constants) when a style prop is unset, so a bare
+  // note's color reports 'black' -- the value it actually renders with.
   const bareNote = note({})
-  assert.equal(currentValue([bareNote], 'color'), undefined, 'a shape with no color prop set reports undefined')
-  console.log('ok: currentValue -- unset prop reports undefined')
+  assert.equal(currentValue([bareNote], 'color'), 'black', 'an unset color prop falls back to the note kind default (black), matching what it renders')
+  console.log('ok: currentValue -- unset color prop falls back to the shape kind default')
+}
+{
+  // A geo shape's unset props fall back to GeoShape.tsx's own defaults --
+  // fill/dash/size/font/align/verticalAlign/geo all resolve, not just color.
+  const bareGeo = geo({})
+  assert.equal(currentValue([bareGeo], 'fill'), 'none', 'unset geo fill falls back to the geo kind default (none)')
+  assert.equal(currentValue([bareGeo], 'dash'), 'draw', 'unset geo dash falls back to the geo kind default (draw)')
+  assert.equal(currentValue([bareGeo], 'size'), 'm', 'unset geo size falls back to the geo kind default (m)')
+  assert.equal(currentValue([bareGeo], 'geo'), 'rectangle', 'unset geo variant falls back to the geo kind default (rectangle)')
+  console.log('ok: currentValue -- unset geo props fall back to their geo kind defaults')
+}
+{
+  // A REAL, explicitly-stored value still wins over the default -- the
+  // fallback only ever fills in an ABSENT prop, never overrides a stored one.
+  const redNote = note({ color: 'red' })
+  assert.equal(currentValue([redNote], 'color'), 'red', 'a stored value is never shadowed by the kind default')
+  console.log('ok: currentValue -- a stored value still wins over the kind default')
+}
+{
+  // Two bare notes (both falling back to the SAME default) agree -- reports
+  // the shared default, not 'mixed'.
+  assert.equal(currentValue([note({}), note({})], 'color'), 'black', 'two bare notes agree on the same fallback default, not mixed')
+  console.log('ok: currentValue -- two bare shapes agree on the same fallback default')
+}
+{
+  // One bare (falls back to 'black') and one explicit 'red' -- genuinely
+  // disagree, must report 'mixed', not silently prefer either.
+  const v = currentValue([note({}), note({ color: 'red' })], 'color')
+  assert.equal(v, 'mixed', 'a bare shape (default black) and an explicit red shape disagree -- mixed')
+  console.log('ok: currentValue -- a defaulted value and a differing explicit value report mixed')
 }
 {
   // opacity reads the ENVELOPE, not props -- this is the R1/E1 contract:
