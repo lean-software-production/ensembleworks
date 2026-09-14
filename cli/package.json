@@ -15,7 +15,7 @@
 	"dependencies": {
 		"@ensembleworks/contracts": "*",
 		"smol-toml": "^1.7.0",
-		"ws": "^8.21.0"
+		"ws": "^8.21.3"
 	},
 	"devDependencies": {
 		"@types/node": "^22.0.0",
