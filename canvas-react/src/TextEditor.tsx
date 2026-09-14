@@ -115,12 +115,13 @@
 // `SetText`/`EndEdit` Intents applied through `editor.apply` — this
 // component only reads editor/doc state and forwards raw DOM change/key
 // events, exactly like Viewport.tsx forwards raw pointer/wheel/key events.
-import { useRef, type ChangeEvent, type CompositionEvent, type KeyboardEvent } from 'react'
+import { useEffect, useRef, type ChangeEvent, type CompositionEvent, type KeyboardEvent } from 'react'
 import { localBounds, type Shape } from '@ensembleworks/canvas-model'
-import type { ToolContext } from '@ensembleworks/canvas-editor'
+import { computeAutosizeProps, type ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { shapeBodyTransform } from './ShapeBody.js'
 import { isEmbedKind } from './shapeRegistry.js'
+import { measureTextSize } from './measure-text.js'
 import { noteStyle, NOTE_LABEL_LINE_HEIGHT } from './shapes/NoteShape.js'
 import { textStyle } from './shapes/TextShape.js'
 import { geoStyle } from './shapes/GeoShape.js'
@@ -137,6 +138,15 @@ export interface TextEditorProps {
    * never calls `editor.apply`/constructs an `EndEdit` Intent itself — the
    * caller does that. */
   readonly onEndEdit: () => void
+  /** text-autosize task — fired whenever a text change would grow/shrink
+   * the editing shape's box (canvas-editor's `computeAutosizeProps`
+   * returned non-null against a fresh DOM measurement). `props` is the
+   * exact partial-props object to UpdateProps-merge onto the shape; same
+   * "renderer never constructs an Intent" contract as onTextChange/
+   * onEndEdit above — the caller turns this into `UpdateProps`. Optional:
+   * omitting it (e.g. a test harness) simply opts the mount out of
+   * autosizing, same as a text edit that never triggers it. */
+  readonly onAutosize?: (id: string, props: Record<string, unknown>) => void
 }
 
 /** IME composition tracking (see the module header's IME COMPOSITION
@@ -276,7 +286,7 @@ export function editorTextStyle(shape: Shape): EditorTextStyle {
   }
 }
 
-export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorProps) {
+export function TextEditor({ toolContext, onTextChange, onEndEdit, onAutosize }: TextEditorProps) {
   const snapshot = useDocSnapshot(toolContext)
   const editorState = useEditorState(toolContext.editor)
   // Per-mount IME composition flag (see the module header's IME COMPOSITION
@@ -286,6 +296,38 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorP
   const composition = useRef<TextCompositionState>({ composing: false })
   const editingId = editorState.editingId
   const shape = editingId ? snapshot.byId.get(editingId) : undefined
+  // liveText, ALSO declared before the early returns (rules of hooks — the
+  // effect below reads it): same `editor.doc.getText` read the render path
+  // further down does, just hoisted so the autosize effect can depend on it
+  // without re-reading through a conditional branch.
+  const liveText = editingId ? toolContext.editor.doc.getText(editingId) : undefined
+  // text-autosize task — remeasure and, if the fresh measurement would
+  // change the shape's box, forward the props to the caller (which turns
+  // them into an UpdateProps intent — see onAutosize's own doc comment on
+  // why THIS component never constructs the intent itself). Runs whenever
+  // the editing shape, its live text, or its own props (e.g. after a PRIOR
+  // autosize write lands, or a remote SetText/UpdateProps arrives) change.
+  // SELF-CONVERGING, not an infinite loop: once the shape's props already
+  // match the fresh measurement, computeAutosizeProps returns null and the
+  // effect is a no-op — the same "no-op skip" guard camera-follow-style
+  // effects elsewhere in this codebase lean on.
+  useEffect(() => {
+    if (!editingId || !shape || !onAutosize) return
+    if (isEmbedKind(shape.kind) || shape.kind === 'frame' || typeof liveText !== 'string') return
+    const s = editorTextStyle(shape)
+    const { maxX: boxW } = localBounds(shape)
+    // `text` kind measures its NATURAL width (autoSize grows both axes);
+    // note/geo wrap to their current inner content width (padding
+    // subtracted — see measureTextSize's own wrapWidth doc comment) since
+    // only their HEIGHT may grow (growY).
+    const wrapWidth = shape.kind === 'text' ? undefined : Math.max(0, boxW - s.padding * 2)
+    const measured = measureTextSize(
+      { text: liveText, fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, padding: s.padding },
+      wrapWidth,
+    )
+    const next = computeAutosizeProps(shape, measured)
+    if (next) onAutosize(editingId, next)
+  }, [editingId, shape, liveText, onAutosize])
   if (!editingId || !shape) return null // no active edit, or the editing shape vanished — mount nothing (see module header)
   // EMBED GUARD: never mount a text editor over an embed-kind shape
   // (terminal/iframe/screenshare — shapeRegistry.ts's isEmbedKind, the same

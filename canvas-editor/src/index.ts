@@ -16,6 +16,7 @@ export const CANVAS_EDITOR_VERSION = 1 as const
 
 export * from './intents.js'
 export * from './editor.js'
+export * from './autosize.js'
 export * from './clipboard-intents.js'
 export * from './reorder-intents.js'
 export * from './select-all-intents.js'
