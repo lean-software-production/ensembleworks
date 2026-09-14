@@ -218,6 +218,13 @@ const DEFAULT_FILL = 'none' // GeoShapeUtil.tsx getDefaultProps
 export const STROKE_WIDTH_PX: Readonly<Record<string, number>> = Object.freeze({ s: 2, m: 3.5, l: 5, xl: 10 })
 const LABEL_FONT_SIZE_PX: Readonly<Record<string, number>> = Object.freeze({ s: 18, m: 22, l: 26, xl: 32 })
 export const DEFAULT_SIZE = 'm' // GeoShapeUtil.tsx getDefaultProps
+
+// text-autosize fixer task: the geo label's own rendered padding (below),
+// exported so TextEditor.tsx's autosize MEASUREMENT can match it exactly —
+// same rationale as NoteShape.tsx's NOTE_LABEL_PADDING export (see that
+// module's doc comment for why the editing textarea's own `padding: 4` is
+// NOT a stand-in for this).
+export const GEO_LABEL_PADDING = 8
 const LINE_HEIGHT = 1.35 // theme.lineHeight, defaultThemes.ts — same value every other body cites
 
 // tlschema's DefaultFontFamilies (styles/TLFontStyle.ts:83-88) — same table
@@ -517,7 +524,7 @@ export function GeoShape({ shape, getText, editorState }: ShapeBodyProps) {
             alignItems: style.alignItems,
             justifyContent: style.justifyContent,
             textAlign: style.textAlign,
-            padding: 8,
+            padding: GEO_LABEL_PADDING,
             boxSizing: 'border-box',
             overflow: 'hidden',
             overflowWrap: 'break-word',

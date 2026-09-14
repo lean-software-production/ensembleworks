@@ -122,9 +122,9 @@ import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { shapeBodyTransform } from './ShapeBody.js'
 import { isEmbedKind } from './shapeRegistry.js'
 import { measureTextSize } from './measure-text.js'
-import { noteStyle, NOTE_LABEL_LINE_HEIGHT } from './shapes/NoteShape.js'
+import { noteStyle, NOTE_LABEL_LINE_HEIGHT, NOTE_LABEL_PADDING } from './shapes/NoteShape.js'
 import { textStyle } from './shapes/TextShape.js'
-import { geoStyle } from './shapes/GeoShape.js'
+import { geoStyle, GEO_LABEL_PADDING } from './shapes/GeoShape.js'
 
 export interface TextEditorProps {
   readonly toolContext: ToolContext
@@ -316,13 +316,25 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit, onAutosize }:
     if (isEmbedKind(shape.kind) || shape.kind === 'frame' || typeof liveText !== 'string') return
     const s = editorTextStyle(shape)
     const { maxX: boxW } = localBounds(shape)
+    // MEASUREMENT PADDING, fixer round: the RENDERED STATIC BODY's padding
+    // (NoteShape 16 / GeoShape 8 / TextShape 0), NOT `editorTextStyle`'s
+    // `padding` (4 for note/geo) — that value is a purely visual choice for
+    // the EDITING textarea's caret box (see editorTextStyle's PARITY GAP
+    // doc comment) and was never meant to double as the measurement basis.
+    // computeAutosizeProps compares the measured height against
+    // geometry.ts's baseline, which itself reflects the STATIC body's box —
+    // measuring against the smaller editing-padding wraps text at a wider
+    // effective column than the body actually renders, under-computing
+    // growY and clipping text the moment editing ends (the defect a
+    // validator round caught via the `labelOverflow` contract check).
+    const labelPadding = shape.kind === 'note' ? NOTE_LABEL_PADDING : shape.kind === 'geo' ? GEO_LABEL_PADDING : 0
     // `text` kind measures its NATURAL width (autoSize grows both axes);
     // note/geo wrap to their current inner content width (padding
     // subtracted — see measureTextSize's own wrapWidth doc comment) since
     // only their HEIGHT may grow (growY).
-    const wrapWidth = shape.kind === 'text' ? undefined : Math.max(0, boxW - s.padding * 2)
+    const wrapWidth = shape.kind === 'text' ? undefined : Math.max(0, boxW - labelPadding * 2)
     const measured = measureTextSize(
-      { text: liveText, fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, padding: s.padding },
+      { text: liveText, fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, padding: labelPadding },
       wrapWidth,
     )
     const next = computeAutosizeProps(shape, measured)
