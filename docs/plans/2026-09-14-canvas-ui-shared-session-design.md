@@ -197,3 +197,44 @@ current polished chrome, tinted per host through the CSS variables.
 1. Run `bun run typecheck` and `bun run test` at the repo root, then `npm run typecheck && npm test && npm run audit:quality:compare && bb plugin build .` in `plugins/canvas`.
 2. Read the exit codes.
 3. Expect: all exit 0, apart from the two server loopback tests that cannot open a tmux socket inside an agent sandbox.
+
+## Verification (2026-09-14)
+
+Live bb smoke (`e2e/scripts/bb-canvas-smoke.mjs` against bb `0.43.0`), plugin reloaded from this branch (`bb plugin reload canvas`, exit 0):
+
+```
+tabs before run: ["First Page","Discovery","LinkedIn Ads"]
+tabs after cleanup: ["First Page","Discovery","LinkedIn Ads"]
+PASS  AC1 nine icon tools with shortcut tooltips  [{"id":"select","title":"Select (V)","icon":true},{"id":"hand","title":"Hand (H)","icon":true},{"id":"note","title":"Note (N)","icon":true},{"id":"text","title":"Text (T)","icon":true},{"id":"geo","title":"Shape (R)","icon":true},{"id":"frame","title":"Frame (F)","icon":true},{"id":"arrow","title":"Arrow (A)","icon":true},{"id":"draw","title":"Draw (D)","icon":true},{"id":"line","title":"Line (L)","icon":true}]
+PASS  AC3 note tool returns to Select; next click creates nothing  tool=select notes=1
+PASS  AC2 colour and font change  {"styleBefore":{"background":"rgb(252, 225, 156)","font":"tldraw_draw, sans-serif"},"styleAfter":{"background":"rgb(138, 163, 255)","font":"tldraw_serif, serif"},"docProps":null}
+PASS  AC7 style panel matches bb light/dark appearance  panel=rgb(239, 241, 245) body=rgb(239, 241, 245)
+PASS  AC6 long note text grows the note  {"w":200,"h":299,"scroll":299,"client":299}
+FAIL  AC4 Ctrl+Z works after editing without clicking  before=2 after=2
+PASS  AC5 arrow drawn on its page only  here=1 freshPage=0
+PASS  EXTRA-A Backspace scoped to canvas focus (outside page text ignored, canvas click deletes)  outsideTextFound=1 before=1 afterOutsideBackspace=1 afterCanvasBackspace=0
+PASS  EXTRA-B Ctrl+Z after page creation undoes cleanly, page still present  notesBefore=1 notesAfter=0 viewportPresent=1 currentTabPresent=1
+PASS  no page errors  []
+```
+
+9/10 checks passed. **AC4 fails on the live bb server**: pressing Ctrl+Z twice after
+creating a note and typing into it does not remove the note (`before=2 after=2` — two
+notes existed on the scratch page, and two undo presses removed neither). This
+reproduces in isolation (single note on a fresh page, up to 5 undo presses, note never
+removed — see `/tmp/claude-1000/bbshots/task8-AC4.png`) and is intermittent, not
+deterministic: the same Ctrl+Z-after-Escape sequence sometimes *does* undo on the first
+press (observed in EXTRA-B, and once during investigation on a page with prior
+undo-stack entries). Isolated checks during investigation ruled out a test-script
+defect: focus after Escape from note-text-editing correctly moves to `document.body`
+(the design's documented "body counts as in scope" case), and undo/Backspace work
+reliably for `geo` shapes created and deleted/undone on the spot. The defect is
+specific to the note tool's create-then-type-then-Escape path — the undo/redo stack
+entry for that sequence is either not recorded or not reachable via Ctrl+Z as
+consistently as for other shapes. This is a product-level regression for the controller
+to route, not a test looseness issue; the check was left as specified in the brief
+(exactly two Ctrl+Z presses, no clicking).
+
+Web app: full Playwright lane 83/83 (one `feel.spec.ts` failure seen on a combined run
+turned out to be flaky/order-dependent — it passed both standalone and on a clean
+re-run of the full lane); repo typecheck 0; plugin typecheck, tests (1229/1229), quality
+audit (95.22% improvement vs `ee79ab4`) and build all exit 0.
