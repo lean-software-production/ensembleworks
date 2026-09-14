@@ -196,6 +196,48 @@ async function main() {
 	console.log('ok: CanvasV2App — the viewport carries the brand paper background, and a real pointermove paints/clears a hover indicator (Task visual-chrome)')
 
 	// ==========================================================================
+	// (a3) HOVER IS GATED TO THE SELECT TOOL (Task visual-chrome fixer round —
+	// validator-reported blocking finding): editorState.hover lives on the
+	// editor's shared state, not on the active tool, and canvas-editor's
+	// select.ts only ever CLEARS it from its own idle pointermove — switching
+	// away to another tool leaves the last hovered id (and its painted
+	// indicator) stuck forever, since the new tool's FSM never touches hover
+	// at all. Re-hover shape:seed-1, then switch to the Frame tool via the
+	// real toolbar button (not a direct editor.apply) and assert the
+	// indicator is gone AND stays gone through a further pointermove (the
+	// "frozen" repro from the validator's browser session).
+	// ==========================================================================
+	await act(async () => {
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 50, clientY: 50, buttons: 0 }))
+	})
+	assert.ok(
+		container.querySelector('[data-overlay="hover-indicator"]'),
+		`precondition: re-hovering shape:seed-1 must paint the indicator again — DOM: ${container.innerHTML}`,
+	)
+
+	const frameToolButton = container.querySelector('[data-canvas-v2-tool="frame"]') as HTMLElement | null
+	assert.ok(frameToolButton, `the Frame tool button must render — DOM: ${container.innerHTML}`)
+	await act(async () => {
+		frameToolButton!.dispatchEvent(new (win as any).MouseEvent('click', { bubbles: true, cancelable: true }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`switching to the Frame tool must clear the stale hover indicator — DOM: ${container.innerHTML}`,
+	)
+
+	await act(async () => {
+		// A further pointermove while Frame is active — must NOT resurrect the
+		// indicator (select.ts's FSM isn't even running, so nothing recomputes
+		// hover; it must simply stay cleared).
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 55, clientY: 55, buttons: 0 }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`the hover indicator must stay cleared while a non-select tool is active, even after further pointermoves — DOM: ${container.innerHTML}`,
+	)
+	console.log('ok: CanvasV2App — switching off the select tool clears the stale hover indicator instead of freezing it (Task visual-chrome fixer round)')
+
+	// ==========================================================================
 	// (b) A SERVER-SIDE putShape APPEARS IN THE DOM AFTER SYNC.
 	// ==========================================================================
 	await act(async () => {

@@ -1013,9 +1013,22 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			// case Viewport's blur hook covers, just triggered explicitly instead
 			// of by focus loss.
 			cancelAndReset()
+			// FIXER round (validator blocking finding): editorState.hover lives
+			// on the shared editor state, not on any one tool's FSM state, and
+			// select.ts (the only producer) only ever clears it from its OWN
+			// idle pointermove. Leaving 'select' for any other tool therefore
+			// stranded the last hovered id forever — Overlay/Hover.tsx kept
+			// painting (and freezing) a ring for a shape the new tool has
+			// nothing to do with. Clearing it here, at the one place tool
+			// switches are funneled through, is symmetric with cancelAndReset
+			// just above (also a "leaving select tears down select's leftover
+			// state" step) and needs no new prop/type threaded into canvas-react.
+			if (activeToolIdRef.current === 'select' && id !== 'select') {
+				editor.apply({ type: 'SetHover', id: null })
+			}
 			setActiveToolId(id)
 		},
-		[cancelAndReset],
+		[cancelAndReset, editor],
 	)
 
 	const handleTextChange = useCallback((id: string, text: string) => editor.apply({ type: 'SetText', id, text }), [editor])
