@@ -94,14 +94,17 @@ import type { ShapeBodyProps } from '../shapeRegistry.js'
 
 const FRAME_FILL = '#ffffff' // colors.light.black.frameFill
 const FRAME_STROKE = '#717171' // colors.light.black.frameStroke
-const HEADER_FILL = '#f9fafb' // colors.light.negativeSpace
-const HEADER_BORDER = '#f9fafb' // colors.light.negativeSpace (same value — see GROUNDING)
-const HEADER_TEXT = '#000000' // colors.light.black.frameText
-const HEADER_HEIGHT = 24 // --tl-frame-height, tldraw.css:1239
-const HEADER_RADIUS = 4 // --tl-radius-1, tldraw.css:24
-const HEADER_FONT_SIZE = 12 // .tl-frame-heading, tldraw.css:1250
-const HEADER_PADDING_X = 6 // --tl-frame-padding-x, tldraw.css:1238
-const HEADER_OFFSET_X = -7 // FrameShapeUtil.tsx:284 offsetX (colors off), applied FrameHeading.tsx:69
+// Exported (frame-interaction task, gap 1): FrameNameEditor.tsx positions its
+// rename <input> exactly over this header chrome, so it reuses these SAME
+// constants rather than a second hand-copied set that could silently drift.
+export const HEADER_FILL = '#f9fafb' // colors.light.negativeSpace
+export const HEADER_BORDER = '#f9fafb' // colors.light.negativeSpace (same value — see GROUNDING)
+export const HEADER_TEXT = '#000000' // colors.light.black.frameText
+export const HEADER_HEIGHT = 24 // --tl-frame-height, tldraw.css:1239
+export const HEADER_RADIUS = 4 // --tl-radius-1, tldraw.css:24
+export const HEADER_FONT_SIZE = 12 // .tl-frame-heading, tldraw.css:1250
+export const HEADER_PADDING_X = 6 // --tl-frame-padding-x, tldraw.css:1238
+export const HEADER_OFFSET_X = -7 // FrameShapeUtil.tsx:284 offsetX (colors off), applied FrameHeading.tsx:69
 const DEFAULT_LABEL = 'Frame' // frameHelpers.ts's defaultEmptyAs(name, 'Frame')
 
 /** `shape.props.name`, defaulted to the literal `"Frame"` for an
