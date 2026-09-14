@@ -151,6 +151,51 @@ async function main() {
 	console.log("ok: CanvasV2App — mount handshakes and renders the server's existing shapes")
 
 	// ==========================================================================
+	// (a2) VISUAL CHROME (Task visual-chrome): the viewport surface carries the
+	// brand paper background (gap 1), and a real pointermove over a shape with
+	// the select tool active (the default active tool) paints a hover
+	// indicator that disappears once the pointer moves off it (gaps "hover
+	// shape indicator" / "hover outline") — end to end through the real
+	// select.ts FSM -> editor.ts's `hover` state -> Overlay.tsx -> Hover.tsx,
+	// not just Hover.tsx's own isolated component test (canvas-react/src/
+	// overlay.test.ts covers that in isolation).
+	// ==========================================================================
+	const viewportContainerEl = container.querySelector('[data-canvas-v2-viewport]') as HTMLElement | null
+	assert.ok(viewportContainerEl, `the viewport container must render — DOM: ${container.innerHTML}`)
+	assert.equal(
+		viewportContainerEl!.style.background,
+		'var(--wm-bg-warm)',
+		'the viewport container must carry the brand paper background token, not browser-default white',
+	)
+
+	const hoverViewportEl = container.querySelector('[tabindex]') as HTMLElement | null
+	assert.ok(hoverViewportEl, `the viewport element must exist — DOM: ${container.innerHTML}`)
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		'precondition: nothing is hovered before any pointermove',
+	)
+	await act(async () => {
+		// shape:seed-1 is a geo shape at world (10,10), 80x60 (seedShape's
+		// defaults) -- at the identity default camera (x:0,y:0,z:1) and this
+		// happy-dom container's (0,0) bounding rect, screen coords equal world
+		// coords, so clientX/Y (50,50) lands inside it.
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 50, clientY: 50, buttons: 0 }))
+	})
+	const hoverIndicator = container.querySelector('[data-overlay="hover-indicator"]')
+	assert.ok(hoverIndicator, `hovering shape:seed-1 with the select tool active must paint a hover indicator — DOM: ${container.innerHTML}`)
+	assert.equal(hoverIndicator!.getAttribute('data-shape-id'), 'shape:seed-1', 'the hover indicator must be tagged with the hovered shape\'s id')
+
+	await act(async () => {
+		// Move far away, off every shape.
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 5000, clientY: 5000, buttons: 0 }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`moving the pointer off every shape must clear the hover indicator — DOM: ${container.innerHTML}`,
+	)
+	console.log('ok: CanvasV2App — the viewport carries the brand paper background, and a real pointermove paints/clears a hover indicator (Task visual-chrome)')
+
+	// ==========================================================================
 	// (b) A SERVER-SIDE putShape APPEARS IN THE DOM AFTER SYNC.
 	// ==========================================================================
 	await act(async () => {

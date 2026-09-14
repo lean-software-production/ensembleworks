@@ -105,6 +105,11 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 // mounts that editor, so this is the ONLY place v2's real dogfood mount
 // gets them from.
 import './fonts.css'
+// Visual chrome fidelity (polish/visual-chrome) — defines the `--canvas-*`
+// custom properties canvas-react's overlay falls back on (see that file's
+// own header): bridges them to this app's `--wm-*` brand tokens without
+// canvas-react ever importing/hardcoding a brand value itself.
+import './canvas-v2.css'
 import {
 	Editor,
 	applyWheel,
@@ -1267,7 +1272,15 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				))}
 			</div>
 			<PageSwitcher editor={editor} snapshot={snapshot} currentPageId={editorState.currentPageId} />
-			<div ref={containerRef} data-canvas-v2-viewport onDragOver={handleDragOver} onDrop={handleDrop} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+			{/* Visual chrome fidelity (polish/visual-chrome, gap 1): v1's canvas
+			    surface is the warm brand paper (theme.css's `.tl-theme__light`
+			    sets `--tl-color-background: var(--wm-bg-warm)`) — this container
+			    is v2's equivalent surface (Viewport/Grid paint nothing of their
+			    own; Grid.tsx is dots-only, transparent everywhere else), so it's
+			    the one place v2 needs an explicit background to stop reading as
+			    browser-default white. Consumes the SAME `--wm-bg-warm` token
+			    theme.css already defines — no second hex hardcoded here. */}
+			<div ref={containerRef} data-canvas-v2-viewport onDragOver={handleDragOver} onDrop={handleDrop} style={{ position: 'relative', flex: 1, minWidth: 0, background: 'var(--wm-bg-warm)' }}>
 				<Viewport onInput={handleInput} onViewportBlur={handleViewportBlur} onPointerCancel={cancelAndReset} style={{ position: 'absolute', inset: 0 }}>
 					<Grid camera={editorState.camera} />
 					<WorldLayer camera={editorState.camera}>

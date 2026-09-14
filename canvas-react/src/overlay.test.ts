@@ -11,6 +11,7 @@ import { buildSpatialIndex, makeDocument, routeArrow, type Binding, type CanvasD
 import { selectionHandles, worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { arrowheadPoints, Arrows } from './overlay/Arrows.js'
 import { combinedWorldBounds, Selection } from './overlay/Selection.js'
+import { Hover } from './overlay/Hover.js'
 import { Handles } from './overlay/Handles.js'
 import { SnapGuides } from './overlay/SnapGuides.js'
 
@@ -183,6 +184,67 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
   const guidesHtml = renderToStaticMarkup(createElement(SnapGuides, { camera, viewportSize: { width: 100, height: 100 } }))
   assert.equal(guidesHtml, '', 'no snapResult renders nothing from SnapGuides')
   console.log('ok: empty selection / absent snap result render nothing')
+}
+
+// ============================================================================
+// 6b. Hover (Task visual-chrome, gaps "hover shape indicator" / "hover
+//     outline"): editorState.hover was computed and stored (canvas-editor's
+//     select tool) but never painted — this component is that paint step.
+// ============================================================================
+{
+  // hover === null -> nothing.
+  {
+    const doc = docOf([geoShape('shape:a', 0, 0)])
+    const camera: Camera = { x: 0, y: 0, z: 1 }
+    const html = renderToStaticMarkup(createElement(Hover, { snapshot: doc, hover: null, selection: new Set<string>(), camera }))
+    assert.equal(html, '', 'hover===null renders nothing')
+  }
+  // Hovering a shape ALREADY in the selection renders nothing (its own
+  // selection outline already gives that feedback — tldraw parity, see
+  // ShapeIndicatorOverlayUtil.ts's `!idsToDisplay.includes(hovered)` guard).
+  {
+    const doc = docOf([geoShape('shape:a', 0, 0)])
+    const camera: Camera = { x: 0, y: 0, z: 1 }
+    const html = renderToStaticMarkup(
+      createElement(Hover, { snapshot: doc, hover: 'shape:a', selection: new Set(['shape:a']), camera }),
+    )
+    assert.equal(html, '', 'a hovered shape that is ALSO selected renders no separate hover indicator')
+  }
+  // Hovering a non-selected shape draws its outline — exact screen points,
+  // hand-computed independently (same convention as case 1 above).
+  {
+    const shape = geoShape('shape:hover', 10, 20, 40, 30)
+    const doc = docOf([shape])
+    const camera: Camera = { x: 5, y: -10, z: 1.5 }
+    const corners = [{ x: 10, y: 20 }, { x: 50, y: 20 }, { x: 50, y: 50 }, { x: 10, y: 50 }]
+    const expectedPoints = corners.map((c) => toScreen(camera, c)).map((p) => `${p.x},${p.y}`).join(' ')
+    const html = renderToStaticMarkup(
+      createElement(Hover, { snapshot: doc, hover: 'shape:hover', selection: new Set<string>(), camera }),
+    )
+    assert.ok(
+      html.includes(`data-overlay="hover-indicator"`) && html.includes(`points="${expectedPoints}"`),
+      `hovering an unselected shape should draw its outline at "${expectedPoints}": ${html}`,
+    )
+    assert.match(html, /stroke-width="1.5"/, `hover indicator should stroke at 1.5px (tldraw parity): ${html}`)
+  }
+  // Arrow special case: hovering an arrow traces its routed path (same
+  // shapeOutlineNode dispatch Selection.tsx's own arrow case uses).
+  {
+    const arrow = arrowShape('shape:arrow-hover', 0, 0, { end: { x: 100, y: 0 } })
+    const doc = docOf([arrow])
+    const camera: Camera = { x: 10, y: -5, z: 2 }
+    const startScreen = toScreen(camera, { x: 0, y: 0 })
+    const endScreen = toScreen(camera, { x: 100, y: 0 })
+    const html = renderToStaticMarkup(
+      createElement(Hover, { snapshot: doc, hover: 'shape:arrow-hover', selection: new Set<string>(), camera }),
+    )
+    assert.ok(html.includes('<path'), `an arrow's hover indicator should be a <path>, not a <polygon>: ${html}`)
+    assert.ok(
+      html.includes(`d="M ${startScreen.x} ${startScreen.y} L ${endScreen.x} ${endScreen.y}"`),
+      `an arrow's hover indicator should trace its routed path: ${html}`,
+    )
+  }
+  console.log('ok: Hover — null/already-selected render nothing, an unselected hover draws its outline at 1.5px, an arrow traces its routed path')
 }
 
 // ============================================================================
