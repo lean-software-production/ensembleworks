@@ -4,7 +4,7 @@
 // mutators; everything upstream (tools, scripts, the renderer) only ever
 // produces or reads Intents/EditorState.
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'
-import { assetSchema, bindingSchema, toLocalPoint, type Binding, type CanvasDocument, type Page, type Point, type Shape } from '@ensembleworks/canvas-model'
+import { assetSchema, bindingSchema, plainText, toLocalPoint, type Binding, type CanvasDocument, type Page, type Point, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from './intents.js'
 
 // ============================================================================
@@ -911,7 +911,18 @@ export class Editor {
           return { state: nextState, docMutated: false, stateChanged: true }
         }
         const shape = this.doc.getShape(editingId)
-        if (!shape || shape.kind !== 'text' || this.doc.getText(editingId).trim().length > 0) {
+        // DATA-LOSS FIX (validator-blocking finding, create-edit-flow FIXER
+        // round 3): the live LoroText channel is empty for any shape whose
+        // content was imported/reconciled from a v1 room -- v1 content
+        // lives in `props.richText`, and reconcile never touches the
+        // per-shape LoroText container (server/src/canvas-v2/
+        // reconcile.test.ts case 5: richText round-trips, getText() stays
+        // ''). canvas-react still RENDERS that richText, so such a shape is
+        // fully visible content. Checking doc.getText() alone treated it as
+        // empty and deleted it on a mere open-and-abandon edit. `plainText`
+        // (canvas-model) reads props.richText the same way canvas-react
+        // does, so a shape is only "empty" here when BOTH channels are.
+        if (!shape || shape.kind !== 'text' || this.doc.getText(editingId).trim().length > 0 || plainText(shape).trim().length > 0) {
           return { state: nextState, docMutated: false, stateChanged: true }
         }
         // Cascade-aware delete, same machinery as DeleteShapes above (a text

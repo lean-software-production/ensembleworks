@@ -1127,4 +1127,31 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: EndEdit\'s auto-delete also clears the deleted id out of selection')
 }
 
+{
+  // Validator-blocking finding (create-edit-flow FIXER round 3): EndEdit's
+  // emptiness check reads ONLY the live LoroText channel
+  // (doc.getText(editingId)), never props.richText. A shape imported/
+  // reconciled from a v1 tldraw room carries its content in props.richText
+  // while its LoroText channel stays genuinely empty (pinned by
+  // server/src/canvas-v2/reconcile.test.ts case 5 -- richText round-trips,
+  // getText() stays ''). canvas-react's TextShape renders that richText, so
+  // the shape is fully visible content -- yet opening and abandoning an
+  // edit (BeginEdit -> EndEdit with no typing) deleted it, a real,
+  // synced-to-peers data loss. Fix must treat a shape with non-empty
+  // props.richText as non-empty even when its LoroText channel is blank.
+  const { editor } = makeEditor(1n)
+  editor.apply({
+    type: 'CreateShape',
+    shape: shape('shape:imported-text', {
+      kind: 'text',
+      props: { richText: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'IMPORTED FROM V1' }] }] } },
+    }),
+  })
+  assert.equal(editor.doc.getText('shape:imported-text'), '', 'sanity: the LoroText channel is genuinely empty for richText-only content, same as reconcile.test.ts case 5')
+  editor.apply({ type: 'BeginEdit', id: 'shape:imported-text' })
+  editor.apply({ type: 'EndEdit' })
+  assert.ok(editor.doc.getShape('shape:imported-text'), 'a text shape whose only content is props.richText must survive an edit-and-abandon -- it is NOT empty just because its LoroText channel is blank')
+  console.log('ok: EndEdit does not delete a text shape whose content lives in props.richText')
+}
+
 console.log('ok: canvas-editor editor + intents')
