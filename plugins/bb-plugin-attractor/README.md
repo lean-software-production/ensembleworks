@@ -557,14 +557,19 @@ T5 adds the **DAG UI**:
   (+/−/fit, top-right of the box) — zoom applies a scale/translate on one
   inner `<g data-testid="dag-zoom-group">` around the edges and nodes,
   clamped to `[0.5, 4]`; "fit" resets to exactly the default fit-to-width
-  transform. Ctrl/⌘+wheel over the DAG also zooms (a manual, non-passive
-  native `wheel` listener — a synthetic React `onWheel` handler cannot
-  reliably `preventDefault()` — so pinch-zoom and an explicit ctrl+wheel
-  both work); a *plain* wheel is left completely alone (no
-  `preventDefault()`, no zoom) so the thread/panel underneath keeps
-  scrolling normally, per "Scroll ownership" below. Drag with a pointer to
-  pan, at any zoom level (`pointerdown`/`pointermove`/`pointerup`) — "fit"
-  always gets you back. A press only becomes a pan once the pointer has
+  transform. Ctrl/⌘+wheel over the DAG also zooms, about the point under the
+  cursor rather than the graph's centre (a manual, non-passive native
+  `wheel` listener — a synthetic React `onWheel` handler cannot reliably
+  `preventDefault()` — so pinch-zoom and an explicit ctrl+wheel both work);
+  a *plain* wheel is left completely alone (no `preventDefault()`, no zoom)
+  so the thread/panel underneath keeps scrolling normally, per "Scroll
+  ownership" below. The +/− buttons still zoom about the graph's centre.
+  Drag with a pointer to pan, at any zoom level
+  (`pointerdown`/`pointermove`/`pointerup`) — the drag delta is converted
+  from screen pixels into the `<svg>`'s own viewBox user units before it's
+  applied, so panning tracks the cursor 1:1 even when the svg renders
+  scaled to its container. "fit" always gets you back. A press only becomes
+  a pan once the pointer has
   travelled `DRAG_THRESHOLD_PX`, and only then is `setPointerCapture` taken:
   capturing on `pointerdown` would re-target the browser's synthesised
   `click` to the `<svg>` and break node clicking, and a pan that started on
