@@ -5,9 +5,10 @@
  * answer routes by preferred_label".
  */
 import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import { HUMAN_GATE_RENDERER_ID } from "../../server/contracts";
-import { createThreadHumanInterviewer } from "../../server/human";
+import { REQUEST_SLICE_MS, createThreadHumanInterviewer } from "../../server/human";
 import type { HumanGateOption } from "../../handlers/human";
 
 const hosts: ReturnType<typeof createFakePluginHost>[] = [];
@@ -159,5 +160,57 @@ describe("createThreadHumanInterviewer", () => {
     host.harness.submitInteraction(host.harness.pendingInteractions[0]!.id, { kind: "choice", raw: "Not an option" });
 
     await expect(askPromise).rejects.toThrow(/unknown option/);
+  });
+});
+
+describe("createThreadHumanInterviewer: waiting longer than one requestInput can", () => {
+  // Dogfood run 4 (2026-09-13): bb.ui.requestInput defaults to a ten-minute
+  // timeout (capped at one hour), so a gate with no `timeout` of its own
+  // expired while the human was away. The interviewer now asks in slices
+  // and re-issues the interaction when a slice expires before the gate's
+  // own deadline.
+  function fakeBb(results: Array<{ outcome: "submitted"; value: unknown } | { outcome: "cancelled"; reason: string }>) {
+    const requestInput = vi.fn();
+    for (const r of results) requestInput.mockResolvedValueOnce(r);
+    return { bb: { ui: { requestInput } } as unknown as BbPluginApi, requestInput };
+  }
+
+  it("re-issues the interaction after a slice times out when the gate has no timeout of its own", async () => {
+    const { bb, requestInput } = fakeBb([
+      { outcome: "cancelled", reason: "timeout" },
+      { outcome: "cancelled", reason: "timeout" },
+      { outcome: "submitted", value: { kind: "choice", raw: "[A] Approve", via: "ui" } },
+    ]);
+    const result = await createThreadHumanInterviewer(bb).ask(baseAsk());
+    expect(result).toEqual({ kind: "choice", option: OPTIONS[0], actor: "ui" });
+    expect(requestInput).toHaveBeenCalledTimes(3);
+    for (const call of requestInput.mock.calls) expect(call[0].timeoutMs).toBe(REQUEST_SLICE_MS);
+  });
+
+  it("caps each slice at the SDK maximum but never asks past the node's own timeout", async () => {
+    const { bb, requestInput } = fakeBb([]);
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      requestInput.mockImplementation(async (request: { timeoutMs: number }) => {
+        vi.setSystemTime(Date.now() + request.timeoutMs);
+        return { outcome: "cancelled", reason: "timeout" };
+      });
+      const result = await createThreadHumanInterviewer(bb).ask(baseAsk({ timeoutMs: REQUEST_SLICE_MS + 90_000 }));
+      expect(result).toEqual({ kind: "timeout" });
+      expect(requestInput).toHaveBeenCalledTimes(2);
+      expect(requestInput.mock.calls[0]![0].timeoutMs).toBe(REQUEST_SLICE_MS);
+      expect(requestInput.mock.calls[1]![0].timeoutMs).toBe(90_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a short node timeout is passed through as a single slice and reported as a timeout when it expires", async () => {
+    const { bb, requestInput } = fakeBb([{ outcome: "cancelled", reason: "timeout" }]);
+    const result = await createThreadHumanInterviewer(bb).ask(baseAsk({ timeoutMs: 30_000 }));
+    expect(result).toEqual({ kind: "timeout" });
+    expect(requestInput).toHaveBeenCalledTimes(1);
+    expect(requestInput.mock.calls[0]![0].timeoutMs).toBe(30_000);
   });
 });

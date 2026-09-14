@@ -15,7 +15,7 @@
     "@tldraw/store": "5.1.0",
     "@tldraw/tlschema": "5.1.0",
     "@tldraw/validate": "5.1.0",
-    "zod": "^4.0.0"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

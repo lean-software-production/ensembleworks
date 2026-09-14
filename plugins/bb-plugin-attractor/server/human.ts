@@ -25,6 +25,9 @@ import type { BbPluginApi } from "@get-bb/plugin-sdk";
 import type { HumanAskInput, HumanAskResult, HumanInterviewer } from "../handlers/human";
 import { HUMAN_GATE_RENDERER_ID, humanGateValueSchema } from "./contracts";
 
+/** The SDK's hard cap on a single `requestInput` wait (one hour); see `ask`. */
+export const REQUEST_SLICE_MS = 60 * 60_000;
+
 export function createThreadHumanInterviewer(bb: BbPluginApi): HumanInterviewer {
   async function ask(input: HumanAskInput): Promise<HumanAskResult> {
     const payload = {
@@ -45,10 +48,31 @@ export function createThreadHumanInterviewer(bb: BbPluginApi): HumanInterviewer 
       reviewTarget: input.reviewTarget ? { path: input.reviewTarget.path, content: input.reviewTarget.content, error: input.reviewTarget.error } : null,
     };
 
-    const result = await bb.ui.requestInput(
-      { threadId: input.threadId, rendererId: HUMAN_GATE_RENDERER_ID, title: input.title, payload, timeoutMs: input.timeoutMs },
-      { signal: input.signal },
-    );
+    // `bb.ui.requestInput` times out after ten minutes by default and caps
+    // `timeoutMs` at one hour, so one call can never wait as long as a human
+    // gate legitimately does (a plan review left overnight). Ask in slices
+    // instead: each slice is at most the SDK cap and never past the node's
+    // own deadline; a slice that expires with deadline still ahead simply
+    // re-issues the interaction. Dogfood run 4 (2026-09-13) lost its
+    // "Approve plan?" gate to that ten-minute default.
+    const deadline = input.timeoutMs !== undefined ? Date.now() + input.timeoutMs : Number.POSITIVE_INFINITY;
+    let result: Awaited<ReturnType<typeof bb.ui.requestInput>>;
+    for (;;) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return { kind: "timeout" };
+      const slice = Math.min(remaining, REQUEST_SLICE_MS);
+      result = await bb.ui.requestInput(
+        { threadId: input.threadId, rendererId: HUMAN_GATE_RENDERER_ID, title: input.title, payload, timeoutMs: slice },
+        { signal: input.signal },
+      );
+      // A slice shorter than the remaining budget that expired is just a
+      // slice boundary — ask again. A slice that *was* the whole remaining
+      // budget expiring is the gate's own timeout (decided by the slice
+      // size, not by re-reading the clock, so a fast reply can't be
+      // mistaken for time left).
+      if (result.outcome === "cancelled" && result.reason === "timeout" && slice < remaining) continue;
+      break;
+    }
 
     if (result.outcome === "cancelled") {
       if (result.reason === "timeout") return { kind: "timeout" };

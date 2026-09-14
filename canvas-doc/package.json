@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@ensembleworks/canvas-model": "*",
-    "loro-crdt": "1.13.6"
+    "loro-crdt": "1.16.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

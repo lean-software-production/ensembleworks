@@ -42,6 +42,20 @@ plan's Appendix and exercised end to end in `tests/e2e.test.ts`:
   `max_node_visits` bound so a persistently broken build terminates the run
   instead of looping forever.
 
+A fourth, real-world graph is not from the plan and is not in the e2e
+suite: `examples/dependency-updates.dot` applies this repo's outdated
+dependencies one at a time (Codex triages and writes up; a Haiku worker
+only edits `package.json` and runs `bun install`), verifying each with
+`bun run typecheck && bun run test` in a `command` node, committing or
+reverting in further `command` nodes (so an agent can neither batch nor
+misreport — dogfood run 4 taught that lesson), writing the failures and
+deferred majors up under `docs/dependency-upgrades/`, and opening a PR. It
+shows a goal-gated baseline with a failure route to `exit`, a human gate
+with a `review_target` and no timeout (it waits until answered), a loop
+whose continuation routes on `command.output contains MORE|DONE` printed
+by the sibling `dependency-updates.queue.mjs` helper, and a `command` node
+that runs `gh pr create`.
+
 Validate a graph without running it: `bb attractor validate <path>`.
 
 ### Dialect at a glance
@@ -110,6 +124,18 @@ gate reports status `blocked` until answered; a gate with a `timeout` and
 nothing to answer falls back to the `human.default_choice` context key if
 one is set (e.g. via `attractor_run`'s `inputs`), otherwise the stage fails
 clearly rather than hanging forever.
+
+A gate **without** a `timeout` waits until it is answered: `bb.ui.requestInput`
+itself defaults to ten minutes and caps a single wait at one hour, so
+`server/human.ts` asks in hour-long slices and re-issues the interaction
+whenever a slice expires before the gate's own deadline (dogfood run 4 lost
+its "Approve plan?" gate to that ten-minute default). And a gate that
+*fails* — timed out with no usable default, cancelled — never routes down
+one of its option edges: the router's step 6 (unconditional edges) is
+skipped for a failed `human` node, so the run dead-ends on the gate's own
+failure instead of silently "approving" (the same run had exactly that
+happen before the fix). Route a failed gate explicitly with a
+`condition="outcome=failed"` edge if the graph wants a fallback path.
 
 **What the gate shows (2026-09-13 follow-up).** A human asked "Approve
 plan?" can now see what plan: above the buttons, the renderer shows
@@ -465,6 +491,12 @@ T4 adds the **BB integration** — the plugin actually runs a graph now:
   a build tool's own children, not just the shell), `cwd` = the
   environment's path, `ATTRACTOR_RUN_ID`/`ATTRACTOR_NODE_ID` env, optional
   stdin, and stdout/stderr bounded to the last 64 KiB (tail, not head).
+  The service passes the node's `timeout` (default 2 min, capped at the
+  contract's 30 min) as the script's own kill timer **and**, plus a 5 s
+  grace, as the host RPC call's `timeoutMs` — the SDK's default host-call
+  deadline is 30 s, which is what killed dogfood run 4's
+  `bun install && typecheck && test` baseline stage ("host plugin call …
+  exceeded its deadline") before this was wired through.
 - `server/store.ts` — a `better-sqlite3`-backed `RunStore` (runs, stages,
   events; append-only migrations, matching `bb-plugin-assembly-lines`'s
   `JobStore` shape), taking the `Database.Database` handle directly so it

@@ -23,7 +23,7 @@ import { createHumanHandler, type HumanHandlerContext, type HumanInterviewer, ty
 import { startHandler, exitHandler } from "../handlers/start-exit";
 import type { AgentBackend } from "./backend";
 import { HUMAN_GATE_RENDERER_ID, humanGatePayloadSchema, humanGateValueSchema, type HumanGatePayload } from "./contracts";
-import { DEFAULT_TIMEOUT_MS, type ExecOutput } from "../host-contract";
+import { DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, type ExecOutput } from "../host-contract";
 import { RunStore, type GateContextSummary, type Run, type Stage } from "./store";
 
 const REALTIME_CHANNEL = "attractor-runs";
@@ -289,7 +289,27 @@ const REAL_CLOCK = { now: () => Date.now(), sleep: sleepAbortable };
 // -----------------------------------------------------------------------
 
 export interface ExecClient {
-  call(method: "exec", input: CommandExecInput & { cwd: string }, options: { hostId: string; signal?: AbortSignal }): Promise<ExecOutput>;
+  call(method: "exec", input: CommandExecInput & { cwd: string }, options: { hostId: string; signal?: AbortSignal; timeoutMs?: number }): Promise<ExecOutput>;
+}
+
+/**
+ * Grace added on top of a command node's own `timeout` for the host RPC
+ * call's deadline: the host entry (`host.ts`) kills the script itself at
+ * `timeoutMs` and still has to report `{ timedOut: true }` back, so the RPC
+ * deadline must sit past the script's, never at it.
+ */
+export const HOST_CALL_GRACE_MS = 5_000;
+
+/**
+ * The host RPC call's own deadline for a command node's script. Without this
+ * every `bb.hosts.experimental_client` call fails after the SDK's 30-second
+ * default ("host plugin call … exceeded its deadline") no matter what the
+ * node's `timeout` says — dogfood run 4's `bun install && typecheck && test`
+ * baseline died at exactly 30 s that way. Capped at the host contract's
+ * `MAX_TIMEOUT_MS` (30 minutes), which is also the SDK's own ceiling.
+ */
+export function hostCallTimeoutMs(scriptTimeoutMs: number): number {
+  return Math.min(scriptTimeoutMs + HOST_CALL_GRACE_MS, MAX_TIMEOUT_MS);
 }
 
 export interface ServiceDeps {
@@ -393,12 +413,14 @@ export function createService(deps: ServiceDeps) {
       agent: createAgentHandler(agentBackend, agentCtx),
       prompt: createPromptHandler(agentBackend, agentCtx),
       command: createCommandHandler({
-        exec: (input: CommandExecInput, options: { signal: AbortSignal }): Promise<CommandExecResult> =>
-          execClient.call(
+        exec: (input: CommandExecInput, options: { signal: AbortSignal }): Promise<CommandExecResult> => {
+          const timeoutMs = Math.min(input.timeoutMs ?? DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
+          return execClient.call(
             "exec",
-            { ...input, cwd: envCtx.environmentPath, timeoutMs: input.timeoutMs ?? DEFAULT_TIMEOUT_MS },
-            { hostId: envCtx.hostId, signal: options.signal },
-          ),
+            { ...input, cwd: envCtx.environmentPath, timeoutMs },
+            { hostId: envCtx.hostId, signal: options.signal, timeoutMs: hostCallTimeoutMs(timeoutMs) },
+          );
+        },
       }),
       conditional: conditionalHandler,
       parallel: forkHandler,
