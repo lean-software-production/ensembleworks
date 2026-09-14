@@ -102,7 +102,7 @@
 // decision to the caller via `onPointerCancel`, unconditionally — no
 // InputEvent mapping needed (the caller doesn't need coordinates to decide
 // "abandon whatever's in flight", the same as onViewportBlur).
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
+import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode, type UIEvent } from 'react'
 import type { InputEvent } from '@ensembleworks/canvas-editor'
 import { keyEventToInput, pointerEventToInput, wheelEventToInput } from './dom-events.js'
 
@@ -185,6 +185,31 @@ export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, c
     onPointerCancel?.()
   }
 
+  // text-autosize task — the viewport must NEVER actually scroll: panning is
+  // exclusively the camera's CSS transform on WorldLayer (Viewport.tsx's own
+  // module header), and every screen->world conversion in this package
+  // (pointerEventToInput above) assumes `el.getBoundingClientRect()` alone
+  // describes the mapping — it has no notion of the container's OWN
+  // scrollTop/scrollLeft. Before autosize, a text-capable shape's box never
+  // exceeded the viewport while being edited, so this was a latent gap, not
+  // a live bug: growY/autoSize now legitimately grow a FOCUSED, in-edit
+  // textarea past the viewport's height, and Chromium's native "scroll the
+  // focused element's nearest scroll container into view" kicks in — even
+  // though this div is `overflow: hidden`, which is STILL a scroll container
+  // for that purpose (it just has no visible scrollbar/wheel-scroll UI). The
+  // resulting nonzero scrollTop silently desyncs every later hit-test/click
+  // from the DOM's actual rendered positions until something resets it —
+  // nothing previously did. Snapping back to (0,0) on the rare `scroll`
+  // event this container should never otherwise receive is cheap and fully
+  // general (it doesn't matter WHAT triggered the scroll).
+  function handleScroll(e: UIEvent<HTMLDivElement>): void {
+    const el = e.currentTarget
+    if (el.scrollTop !== 0 || el.scrollLeft !== 0) {
+      el.scrollTop = 0
+      el.scrollLeft = 0
+    }
+  }
+
   function handleKey(e: KeyboardEvent<HTMLDivElement>): void {
     const shouldPreventDefault = onInput(keyEventToInput({ type: e.type as 'keydown' | 'keyup', key: e.key, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, timeStamp: e.timeStamp }))
     // See ViewportProps.onInput's RETURN VALUE doc comment above — only
@@ -210,6 +235,7 @@ export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, c
       onPointerCancel={handlePointerCancel}
       onKeyDown={handleKey}
       onKeyUp={handleKey}
+      onScroll={handleScroll}
       onBlur={onViewportBlur}
     >
       {children}

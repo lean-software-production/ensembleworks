@@ -27,6 +27,7 @@ import { noteResizeHandlesSuppressed } from './contracts/note-resize-handles-sup
 import { pastePlacesAndSelects } from './contracts/paste-places-and-selects.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
 import { selectAllSelectsEveryShapeOnPage } from './contracts/select-all-selects-every-shape-on-page.js'
+import { shapeGrowsToFitTypedText } from './contracts/shape-grows-to-fit-typed-text.js'
 import { shiftDragConstrainsToAxis } from './contracts/shift-drag-constrains-to-axis.js'
 import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
 import { styleEditArmsNextShape } from './contracts/style-edit-arms-next-shape.js'
@@ -63,4 +64,5 @@ export const CONTRACTS: readonly Contract[] = [
   shiftDragConstrainsToAxis,
   toolShortcutSwitchesAndArmsTool,
   selectAllSelectsEveryShapeOnPage,
+  shapeGrowsToFitTypedText,
 ]

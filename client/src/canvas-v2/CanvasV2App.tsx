@@ -1082,6 +1082,13 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 
 	const handleTextChange = useCallback((id: string, text: string) => editor.apply({ type: 'SetText', id, text }), [editor])
 	const handleEndEdit = useCallback(() => editor.apply({ type: 'EndEdit' }), [editor])
+	// text-autosize task — TextEditor.tsx measures the live label in the DOM
+	// and hands back the exact props canvas-editor's `computeAutosizeProps`
+	// decided on; this callback is the ONLY place that turns it into an
+	// intent (TextEditor never constructs one itself — see its onAutosize
+	// doc comment), same seam as handleTextChange above turning raw text
+	// into SetText.
+	const handleTextAutosize = useCallback((id: string, props: Record<string, unknown>) => editor.apply({ type: 'UpdateProps', id, props }), [editor])
 	// frame-interaction task, gap 1: a frame's rename input writes through
 	// UpdateProps (props.name is a plain field, not a doc-text container --
 	// see FrameNameEditor.tsx's module header), sharing EndEdit with the
@@ -1429,7 +1436,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 							lifecycleFor={canvasV2EmbedLifecycles.lifecycleFor}
 							dispatch={dispatch}
 						/>
-						<TextEditor toolContext={toolContext} onTextChange={handleTextChange} onEndEdit={handleEndEdit} />
+						<TextEditor toolContext={toolContext} onTextChange={handleTextChange} onEndEdit={handleEndEdit} onAutosize={handleTextAutosize} />
 						<FrameNameEditor toolContext={toolContext} onNameChange={handleFrameNameChange} onEndEdit={handleEndEdit} />
 					</WorldLayer>
 					<Overlay

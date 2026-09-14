@@ -122,6 +122,18 @@ const DEFAULT_SIZE = 'm' // NoteShapeUtil.tsx:172 getDefaultProps
 // edited — see TextEditor.tsx's `editorTextStyle`.
 export const NOTE_LABEL_LINE_HEIGHT = 1.35
 
+// text-autosize fixer task: the note body's own rendered padding (below),
+// exported so TextEditor.tsx's autosize MEASUREMENT can match it exactly.
+// Deliberately NOT the same value as editorTextStyle's editing-textarea
+// `padding: 4` — that 4px is a purely visual choice for the caret's editing
+// box (see TextEditor.tsx's PARITY GAP note) and was never meant to stand in
+// for the static body's real 16px inset. Measuring wrap/height against the
+// wrong (smaller) padding wraps text at a wider effective column than the
+// body actually renders, so `computeAutosizeProps` under-computes growY and
+// the static body clips text the moment editing ends — the exact defect a
+// validator round caught via the new `labelOverflow` contract check.
+export const NOTE_LABEL_PADDING = 16
+
 // Deterministic per-id "lift"/"jitter" for the drop shadow below — a djb2
 // hash (the SAME idiom as Cursors.tsx's `colorForKey`; NOT Math.random, so
 // a given note always renders an IDENTICAL shadow — pure and reproducible,
@@ -308,7 +320,7 @@ export function NoteShape({ shape, getText, editorState }: ShapeBodyProps) {
         alignItems: style.alignItems,
         justifyContent: style.justifyContent,
         overflow: 'hidden',
-        padding: 16,
+        padding: NOTE_LABEL_PADDING,
         fontSize: style.fontSize,
         lineHeight: NOTE_LABEL_LINE_HEIGHT,
         whiteSpace: 'pre-wrap', // gap fix: preserve newlines the textarea happily accepted (TextEditor.tsx)
