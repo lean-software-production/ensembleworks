@@ -567,9 +567,18 @@ T5 adds the **DAG UI**:
   `setPointerCapture`). The DAG box wrapper (`data-testid="dag-viewport"`)
   is `overflow: hidden`, never `overflow: auto` — the same scroll-ownership
   rule as the rest of the card.
-- `ui/stages.tsx` — the stage list (node, status, visit, duration via
-  `formatDuration`, the node's declared provider/model, and an "Open
-  thread" link when a stage has a worker thread).
+- `ui/stages.tsx` — the stage list: four columns (Node, Status, Duration,
+  Thread), `table-layout: fixed` with wrapping cells, so it fits inside the
+  message-directive card's `max-w-md` (28rem) without spilling sideways —
+  it used to be six columns (Node, Status, Visit, Duration, Provider,
+  Thread), which didn't. `Visit` folds into the Node column as a "×N"
+  suffix (only when `visit > 1`); the node's resolved-or-declared
+  provider/model (`formatDuration` for elapsed/fixed duration, as before)
+  renders as muted subtext under the node's name instead of its own
+  column. An "Open thread" link still appears in the Thread column when a
+  stage has a worker thread. The same four-column layout is used in both
+  the card and the wider panel — no separate `overflow-x: auto` wrapper is
+  needed at either width.
 - `ui/events.tsx` — a paged (`PAGE_SIZE = 50`), oldest-first-within-page
   event timeline starting on the most recent page, with a one-line
   `describeEvent` summary per `RunEvent` variant.
