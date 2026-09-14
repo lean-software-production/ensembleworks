@@ -38,6 +38,7 @@ import { parseAcceleratorLabel } from "../dot/accelerator";
 import { DagView } from "./dag";
 import { StageList, formatDuration } from "./stages";
 import { STATUS_TEXT_CLASS, REALTIME_CHANNEL, REFRESH_COALESCE_MS, useCoalescedRealtimeRefresh, useNow, waitingNodeLabel } from "./run-panel";
+import { latestThreadIdByNode } from "./thread-by-node";
 
 type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
 
@@ -180,7 +181,7 @@ function ActiveRunRow({ activeRun, threadId, now, expanded, onToggleExpand, onOp
       {expanded ? (
         <div className="mt-2" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <div className="overflow-hidden rounded-md border border-border bg-white p-2">
-            <DagView graph={graph} events={[]} currentNodeId={run.currentNodeId} onOpenThread={onOpenThread} direction="TB" />
+            <DagView graph={graph} events={[]} currentNodeId={run.currentNodeId} threadIdByNode={latestThreadIdByNode(stages)} onOpenThread={onOpenThread} direction="TB" />
           </div>
           <StageList stages={stages} graph={graph} now={now} onOpenThread={onOpenThread} />
         </div>

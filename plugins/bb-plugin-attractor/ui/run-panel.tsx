@@ -27,6 +27,7 @@ import type { GraphView, RunView, StageView } from "../server/contracts";
 import { DagView } from "./dag";
 import { StageList, formatDuration } from "./stages";
 import { EventTimeline, type EventView } from "./events";
+import { latestThreadIdByNode } from "./thread-by-node";
 
 type Rpc = ReturnType<typeof useRpc<typeof rpcContract>>;
 
@@ -106,12 +107,6 @@ export function useNow(active: boolean): number {
     return () => clearInterval(timer);
   }, [active]);
   return now;
-}
-
-function latestThreadIdByNode(stages: StageView[]): Record<string, string | null | undefined> {
-  const byNode: Record<string, string | null | undefined> = {};
-  for (const stage of stages) byNode[stage.nodeId] = stage.threadId ?? byNode[stage.nodeId];
-  return byNode;
 }
 
 // Status word colour, per the restyle's card chrome spec. Exported for

@@ -140,6 +140,18 @@ describe("ActiveRunsBanner", () => {
     expect(slot.getByTestId("attractor-stage-list")).toBeTruthy();
   });
 
+  it("opens a node's worker thread when clicked in the banner's expanded DAG (the banner used to render DagView with no threadIdByNode at all, so no node was ever clickable)", async () => {
+    const slot = await renderBanner({ activeRuns: () => ({ runs: [{ run: RUN, stages: STAGES, graph: GRAPH }] }) });
+    await slot.findByText("Plan Implement Review");
+    fireEvent.click(slot.getByRole("button", { name: /expand run details/i }));
+    await slot.findByRole("img", { name: "Workflow DAG" });
+
+    const planNode = slot.container.querySelector('[data-node-id="plan"]')!;
+    expect(planNode.getAttribute("role")).toBe("button");
+    fireEvent.click(planNode);
+    expect(slot.inspection.navigateCalls).toContainEqual({ method: "toThread", threadId: "worker-thread-1" });
+  });
+
   it("renders inline option buttons for a blocked human gate, calling answerGate with the chosen edge label", async () => {
     let answerCalledWith: unknown = null;
     const slot = await renderBanner({

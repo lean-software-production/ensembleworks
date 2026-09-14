@@ -457,6 +457,20 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
         <marker id="attractor-arrow-traversed" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
           <path d="M0,0 L10,5 L0,10 z" fill="#2563eb" />
         </marker>
+        {/* A clickable node's hover/focus highlight, driven by CSS
+            `:hover`/`:focus` on the node's own `<g>` — no JS hover state —
+            per the "thicker stroke or a subtle glow" affordance. */}
+        <style>{`
+          .attractor-node--clickable:hover polygon,
+          .attractor-node--clickable:hover ellipse,
+          .attractor-node--clickable:hover rect,
+          .attractor-node--clickable:focus polygon,
+          .attractor-node--clickable:focus ellipse,
+          .attractor-node--clickable:focus rect {
+            stroke-width: 3;
+            filter: drop-shadow(0 0 3px rgba(37, 99, 235, 0.55));
+          }
+        `}</style>
       </defs>
       <g data-testid="dag-zoom-group" transform={`translate(${zoom.tx}, ${zoom.ty}) scale(${zoom.scale})`}>
       <g>
@@ -520,6 +534,8 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
               data-handler-kind={node.handlerKind}
               data-status={node.status ?? "pending"}
               data-current={isCurrent}
+              data-clickable={clickable}
+              className={clickable ? "attractor-node--clickable" : undefined}
               role={clickable ? "button" : undefined}
               tabIndex={clickable ? 0 : undefined}
               aria-label={clickable ? `Open worker thread for ${node.label ?? node.id}` : undefined}
@@ -536,8 +552,17 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
             >
               {/* Dogfood-2 fix: a blocked agent/prompt node (waiting on a worker's
                   own pending interaction, as opposed to a human-gate "blocked"
-                  with no waitingReason) gets a tooltip naming what it's stuck on. */}
-              {node.status === "blocked" && node.waitingReason ? <title>{`Waiting: ${node.waitingReason} in worker thread`}</title> : null}
+                  with no waitingReason) gets a tooltip naming what it's stuck on.
+                  A clickable node with no such wait gets an "Open worker thread"
+                  tooltip instead — the affordance a hover/focus glow alone (see
+                  the `.attractor-node--clickable` rule in <defs>'s <style>,
+                  driven purely by CSS `:hover`/`:focus`, no JS hover state)
+                  can't convey to a keyboard or screen-reader user. */}
+              {node.status === "blocked" && node.waitingReason ? (
+                <title>{`Waiting: ${node.waitingReason} in worker thread`}</title>
+              ) : clickable ? (
+                <title>{`Open worker thread ${threadId}`}</title>
+              ) : null}
               {shapeKind === "polygon" && points ? (
                 <polygon points={points} fill={color.fill} stroke={color.stroke} strokeWidth={strokeWidth} />
               ) : shapeKind === "ellipse" ? (
@@ -546,9 +571,23 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
                 <rect width={node.width} height={node.height} rx={8} fill={color.fill} stroke={color.stroke} strokeWidth={strokeWidth} />
               )}
               {isCurrent ? <rect width={node.width} height={node.height} rx={8} fill="none" stroke="#1d4ed8" strokeWidth={1} strokeDasharray="2 2" /> : null}
-              <text x={node.width / 2} y={node.height / 2 + 4} textAnchor="middle" fontSize={12} fill="#0f172a">
+              <text
+                x={node.width / 2}
+                y={node.height / 2 + 4}
+                textAnchor="middle"
+                fontSize={12}
+                fill="#0f172a"
+                textDecoration={clickable ? "underline" : undefined}
+              >
                 {node.label ?? node.id}
               </text>
+              {clickable ? (
+                // A small "open thread" glyph, top-left of the node — the
+                // affordance a sighted mouse user sees without hovering.
+                <text data-open-thread-glyph x={4} y={12} fontSize={10} fill="#2563eb">
+                  ↗
+                </text>
+              ) : null}
               {node.visit > 1 ? (
                 <g transform={`translate(${node.width - 12}, -4)`} data-visit-badge={node.visit}>
                   <circle r={9} fill="#1d4ed8" />

@@ -544,7 +544,16 @@ T5 adds the **DAG UI**:
   and traversed edges (derived from `edge.selected` events, not persisted
   per-edge state) drawn solid/arrowed with the last-selected reason and
   label in a `<title>`; an agent/prompt node with a known worker thread is
-  clickable. `DagView` also overlays a small zoom control cluster
+  clickable, in all three surfaces (directive card, panel, composer banner —
+  `ui/thread-by-node.ts`'s `latestThreadIdByNode(stages)` is the one nodeId
+  -> threadId derivation shared by all three, so a fix to it, or to the
+  affordance below, always reaches all three at once). A clickable node
+  carries a visible affordance so it doesn't just look like every other
+  node: a `.attractor-node--clickable` CSS class (hover/focus gets a
+  thicker stroke and a subtle blue glow, purely via CSS `:hover`/`:focus` —
+  no JS hover state), an underlined label, a small "↗" glyph, and a
+  `<title>Open worker thread <id></title>` tooltip — a non-clickable node
+  gets none of these. `DagView` also overlays a small zoom control cluster
   (+/−/fit, top-right of the box) — zoom applies a scale/translate on one
   inner `<g data-testid="dag-zoom-group">` around the edges and nodes,
   clamped to `[0.5, 4]`; "fit" resets to exactly the default fit-to-width
