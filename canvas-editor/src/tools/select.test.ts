@@ -408,4 +408,107 @@ function setup() {
   console.log('ok: Enter with a multi-shape selection is a no-op')
 }
 
+// ============================================================================
+// frame-interaction task fixtures: a 300x300 frame at (0,0) with a 50x50
+// child note fully inside it at (50,50)-(100,100), plus the shared fixtures
+// -- isolated from the numbered tests above (own setup, no shared indices).
+// ============================================================================
+function frameSetup() {
+  const doc = LoroCanvasDoc.create({ peerId: 1n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape({
+    id: 'shape:frame', kind: 'frame', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 300, h: 300, name: 'My Frame' },
+  } as Shape)
+  doc.putShape({
+    // 'geo' (not 'note' -- geometry.ts's size() ignores note's props.w/h
+    // entirely and always renders it at a fixed 200x200, which would make
+    // this "small child fully inside the frame" fixture actually span
+    // 50,50-250,250 and wrongly overlap the interior-drag test below).
+    id: 'shape:child', kind: 'geo', parentId: 'shape:frame', index: 'a1', x: 50, y: 50, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 50, h: 50 },
+  } as Shape)
+  doc.commit()
+  const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+  const ctx = createToolContext(editor)
+  const tool = createSelectTool(ctx)
+  return { doc, editor, ctx, tool }
+}
+
+// ============================================================================
+// 17. Marquee that only CLIPS a frame's edge (does not fully enclose it)
+//    must NOT select the frame (tldraw parity, gap 4) -- brushing the
+//    frame's top-left corner, well clear of its child note.
+// ============================================================================
+{
+  const { editor, tool } = frameSetup()
+  const events = script().down(-10, -10).move(20, 20).up().events()
+  run(editor, tool, events)
+  assert.deepEqual([...editor.get().selection], [], 'a marquee that only clips the frame edge selects nothing (frame excluded, child untouched)')
+  console.log('ok: marquee clipping a frame edge does not select the frame')
+}
+
+// ============================================================================
+// 18. Marquee that FULLY ENCLOSES the frame selects it (and its fully-
+//    enclosed child).
+// ============================================================================
+{
+  const { editor, tool } = frameSetup()
+  // minY -34 (past -FRAME_HEADER_HEIGHT=-24) so the brush also encloses the
+  // frame's indexed header band, not just its 300x300 body -- see
+  // shapeHitIndexBounds' doc comment (spatial-index.ts) for why a frame's
+  // 'contain' bounds include the header.
+  const events = script().down(-10, -34).move(310, 310).up().events()
+  run(editor, tool, events)
+  assert.deepEqual(new Set(editor.get().selection), new Set(['shape:frame', 'shape:child']), 'a marquee that fully encloses the frame (incl. its header band) selects it (and its enclosed child)')
+  console.log('ok: marquee fully enclosing a frame selects it')
+}
+
+// ============================================================================
+// 19. Interior click-drag inside an EMPTY frame region marquees the frame's
+//    children instead of dragging the frame (gap 3, hollow interior).
+// ============================================================================
+{
+  const { editor, tool, doc } = frameSetup()
+  // (150,150)-(250,250): deep inside the frame's empty interior (nowhere
+  // near shape:child at 50,50-100,100), well past FRAME_EDGE_MARGIN from
+  // every border.
+  const events = script().down(150, 150).move(250, 250).up().events()
+  run(editor, tool, events)
+  assert.deepEqual([...editor.get().selection], [], 'dragging inside the empty interior marquees (selecting nothing here), not the frame')
+  const frame = doc.getShape('shape:frame')!
+  assert.equal(frame.x, 0, 'the frame itself did not move')
+  assert.equal(frame.y, 0)
+  console.log('ok: drag inside an empty frame interior marquees instead of dragging the frame')
+}
+
+// ============================================================================
+// 20. Double-click on the frame's HEADER band begins editing (rename, gap 1
+//    trigger + gap 2 header-hit wiring) -- a frame is not text-capable, so
+//    this is a SEPARATE gate from the note/text/geo one (test 10).
+// ============================================================================
+{
+  const { editor, tool } = frameSetup()
+  // Header band: local y in [-24,0), local x in [0,300] -- world (150,-12).
+  const events = script().down(150, -12).up().down(150, -12).up().events()
+  run(editor, tool, events)
+  assert.equal(editor.get().editingId, 'shape:frame', 'double-click on the frame header begins editing (rename)')
+  assert.deepEqual([...editor.get().selection], ['shape:frame'])
+  console.log('ok: double-click on a frame header begins editing')
+}
+
+// ============================================================================
+// 21. Double-click on the frame's BORDER (not the header) never begins
+//    editing -- falls through to ordinary click-select, same as any other
+//    non-text-capable kind.
+// ============================================================================
+{
+  const { editor, tool } = frameSetup()
+  const events = script().down(0, 150).up().down(0, 150).up().events() // left border, not the header
+  run(editor, tool, events)
+  assert.equal(editor.get().editingId, null, 'double-click on the frame border does not begin editing')
+  assert.deepEqual([...editor.get().selection], ['shape:frame'], 'the second click still resolves as an ordinary select')
+  console.log('ok: double-click on a frame border does not begin editing')
+}
+
 console.log('ok: select tool FSM (select/marquee/translate)')

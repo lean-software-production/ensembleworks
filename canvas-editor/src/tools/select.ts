@@ -103,6 +103,7 @@
 // live-read shim is gone with it.
 import {
   computeExcludedIds,
+  isPointInFrameHeaderBand,
   isTextCapableKind,
   snapCandidates,
   worldBounds,
@@ -444,7 +445,19 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // "did the shape actually resolve" check needed because a vanished
         // target can't be hit-tested as `targetId` in the first place.
         const shape = ctx.snapshot().byId.get(targetId)
-        if (state.doubleClick && shape && isTextCapableKind(shape.kind)) {
+        // FRAME RENAME (frame-interaction task, gap 1): a double-click that
+        // lands specifically on the frame's HEADER band (canvas-model's
+        // isPointInFrameHeaderBand — the header label, not the body/border)
+        // also begins editing, in place of the ordinary isTextCapableKind
+        // gate (a frame is never text-capable — canvas-model/src/shape.ts's
+        // TEXT_CAPABLE_KINDS deliberately excludes it). The generic
+        // BeginEdit(target)/editingId machinery is reused verbatim; it's the
+        // CLIENT's job (client/src/canvas-v2, DOM authoring layer) to mount
+        // a name-input editor instead of the richText TextEditor when
+        // editingId resolves to a frame — this FSM only decides WHEN to
+        // fire the intent, never what UI renders for it.
+        const opensFrameRename = shape?.kind === 'frame' && isPointInFrameHeaderBand(ctx.snapshot(), shape, worldOf(event))
+        if (state.doubleClick && shape && (isTextCapableKind(shape.kind) || opensFrameRename)) {
           intents.push({ type: 'SetSelection', ids: [targetId] })
           intents.push({ type: 'BeginEdit', id: targetId })
         } else if (state.shiftDown) {
@@ -548,7 +561,22 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // differs (SAT-against-true-quad here vs. line-segment-vs-geometry
       // there) — hence "pending golden-parity calibration" rather than a
       // confirmed match.
-      const ids = ctx.queryMarquee(bounds, 'intersect')
+      // FRAME EXCEPTION (frame-interaction task, gap 4 — tldraw parity:
+      // Brushing.ts:199-203 skips a frame-like shape unless the brush FULLY
+      // contains it): a marquee that merely CLIPS a frame's edge must select
+      // the frame's children, never the frame itself — otherwise the very
+      // next drag moves the whole frame + contents instead of the notes the
+      // user actually brushed. Every other kind keeps the 'intersect' result
+      // above unchanged; a frame candidate is additionally required to
+      // appear in the 'contain' (full-enclosure) query.
+      const intersectIds = ctx.queryMarquee(bounds, 'intersect')
+      const snapshot = ctx.snapshot()
+      const ids = intersectIds.some((id) => snapshot.byId.get(id)?.kind === 'frame')
+        ? (() => {
+            const containedIds = new Set(ctx.queryMarquee(bounds, 'contain'))
+            return intersectIds.filter((id) => snapshot.byId.get(id)?.kind !== 'frame' || containedIds.has(id))
+          })()
+        : intersectIds
       return { state: IDLE, intents: [{ type: 'SetSelection', ids }] }
     }
     return { state, intents: [] }

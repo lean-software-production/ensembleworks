@@ -423,6 +423,21 @@ export function frameHeaderLocalBounds(shape: Shape): Bounds {
   return { minX: lb.minX, minY: lb.minY - FRAME_HEADER_HEIGHT, maxX: lb.maxX, maxY: lb.minY }
 }
 
+/** True iff WORLD `point` falls in `shape`'s header band (frameHeaderLocalBounds)
+ * — false for a non-frame kind, or for a point that lands on the frame's
+ * body/border instead. Exposed on its own (distinct from hitTestPoint,
+ * which treats header/border/interior-miss as one boolean) so a caller that
+ * needs to distinguish WHICH part of a frame was hit — canvas-editor's
+ * select tool, deciding whether a double-click opens the rename input
+ * (frame-interaction task, gap 1) — doesn't have to re-derive the same
+ * local-space band test. */
+export function isPointInFrameHeaderBand(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+  if (shape.kind !== 'frame') return false
+  const local = toLocalPoint(doc, shape, point)
+  const header = frameHeaderLocalBounds(shape)
+  return local.x >= header.minX && local.x <= header.maxX && local.y >= header.minY && local.y <= header.maxY
+}
+
 // Is `point` (world/page space) inside this shape's rotated box? Inverse-
 // transforms the point into local space (toLocalPoint) and tests it against
 // the axis-aligned local box — cheaper and exactly equivalent to testing
