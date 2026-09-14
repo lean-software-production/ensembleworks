@@ -17,6 +17,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { makeDocument, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import type { Camera } from '@ensembleworks/canvas-editor'
+import { GEO_COLORS } from '@ensembleworks/canvas-react'
 import { StylePanel } from './StylePanel.js'
 
 const CAMERA: Camera = { x: 0, y: 0, z: 1 }
@@ -442,6 +443,115 @@ function findStyleValueOnClick(node: unknown, styleValue: string): (() => void) 
 		`armed panel does not ALSO mark blue current — html: ${html}`,
 	)
 	console.log('ok: armed panel — nextShapeStyle.color:red is marked current, not a default')
+}
+
+// ============================================================================
+// Task style-panel-icons — RED before the icon-ification: today's non-color
+// controls render plain `humanize(v)` text (e.g. the fill row literally
+// contains the text "Solid"), never an SVG. This pins the swap to icon
+// buttons (mutant: a control still rendering pure text, no <svg> anywhere in
+// its block).
+// ============================================================================
+
+/** Extract the DOM block for one `data-style-control="axis"` row (same
+ * "outer div through its matching closing tags" heuristic case 5 above
+ * already uses). */
+function controlBlock(html: string, axis: string): string {
+	const re = new RegExp(`<div[^>]*data-style-control="${axis}"[\\s\\S]*?<\\/div>\\s*<\\/div>`)
+	const match = html.match(re)
+	assert.ok(match, `"${axis}" control block found — html: ${html}`)
+	return match![0]
+}
+
+// ============================================================================
+// 13. A geo selection's fill/dash/size/font/align/geo controls each render at
+//     least one inline <svg> icon glyph — not just text (mutant: AxisRow
+//     still calling `humanize(v)` as the button's only child).
+// ============================================================================
+{
+	const s = shape({ id: 'shape:g2', kind: 'geo', props: { geo: 'star', fill: 'pattern', dash: 'dotted', size: 'l', font: 'mono', align: 'end' } })
+	const html = renderToStaticMarkup(
+		createElement(StylePanel, {
+			selection: new Set([s.id]),
+			snapshot: docOf(s),
+			camera: CAMERA,
+			viewportSize: VIEWPORT,
+			isGesturing: false,
+			activeToolId: 'geo',
+			nextShapeStyle: {},
+			onStyleChange: noop,
+			onArmStyle: noop,
+		}),
+	)
+	for (const axis of ['fill', 'dash', 'size', 'font', 'align', 'geo']) {
+		const block = controlBlock(html, axis)
+		assert.ok(/<svg[ >]/.test(block) || /font-family/.test(block), `"${axis}" control renders an icon glyph, not just text — block: ${block}`)
+	}
+	console.log('ok: icon-ification — fill/dash/size/font/align/geo controls each render an icon glyph')
+}
+
+// ============================================================================
+// 14. The color swatch hex values are read from canvas-react's GEO_COLORS
+//     (the SAME table the shape renderer paints with) rather than a second,
+//     hand-typed, drift-prone map — pins ALL 13 colors exactly, including the
+//     six the old hardcoded map disagreed with (grey/light-blue/yellow/
+//     orange/light-green/white — this task's brief).
+// ============================================================================
+{
+	const s = shape({ id: 'shape:n8', kind: 'note', props: { color: 'blue' } })
+	const html = renderToStaticMarkup(
+		createElement(StylePanel, {
+			selection: new Set([s.id]),
+			snapshot: docOf(s),
+			camera: CAMERA,
+			viewportSize: VIEWPORT,
+			isGesturing: false,
+			activeToolId: 'note',
+			nextShapeStyle: {},
+			onStyleChange: noop,
+			onArmStyle: noop,
+		}),
+	)
+	for (const [name, entry] of Object.entries(GEO_COLORS)) {
+		const swatchMatch = html.match(new RegExp(`<button[^>]*data-style-value="${name}"[^>]*style="([^"]*)"`))
+		assert.ok(swatchMatch, `"${name}" swatch renders — html: ${html}`)
+		assert.ok(
+			swatchMatch![1]!.toLowerCase().includes(`background:${entry.solid.toLowerCase()}`) ||
+				swatchMatch![1]!.toLowerCase().includes(`background: ${entry.solid.toLowerCase()}`),
+			`"${name}" swatch hex matches canvas-react's GEO_COLORS.${name}.solid (${entry.solid}) exactly — style: ${swatchMatch![1]}`,
+		)
+	}
+	console.log('ok: color swatches — every hex matches canvas-react\'s real GEO_COLORS.solid table, not a second hand-typed copy')
+}
+
+// ============================================================================
+// 15. Arrowhead controls (9 values each, including the model's extra
+//     'pipe' value tldraw's own panel doesn't offer) still expose every
+//     value via data-style-value, now as icon glyphs.
+// ============================================================================
+{
+	const s = shape({ id: 'shape:a1', kind: 'arrow', props: { arrowheadStart: 'none', arrowheadEnd: 'arrow' } })
+	const html = renderToStaticMarkup(
+		createElement(StylePanel, {
+			selection: new Set([s.id]),
+			snapshot: docOf(s),
+			camera: CAMERA,
+			viewportSize: VIEWPORT,
+			isGesturing: false,
+			activeToolId: 'arrow',
+			nextShapeStyle: {},
+			onStyleChange: noop,
+			onArmStyle: noop,
+		}),
+	)
+	for (const axis of ['arrowheadStart', 'arrowheadEnd']) {
+		const block = controlBlock(html, axis)
+		for (const value of ['arrow', 'triangle', 'square', 'dot', 'pipe', 'diamond', 'inverted', 'bar', 'none']) {
+			assert.ok(block.includes(`data-style-value="${value}"`), `"${axis}" offers "${value}" — block: ${block}`)
+		}
+		assert.ok(/<svg[ >]/.test(block), `"${axis}" renders icon glyphs, not text — block: ${block}`)
+	}
+	console.log('ok: arrowhead pickers — all 9 values (incl. the model-only "pipe") render as icon glyphs')
 }
 
 console.log('ok: StylePanel (P2/AS3) — renders per-selection styles from a props-injected snapshot/selection, and armed-tool next-shape styles when nothing is selected (component-level, `onStyleChange`/`onArmStyle` stubbed here; the real dispatch wiring is CanvasV2App.test.ts case (i)/AS3\'s onArmStyle, Task P4/AS3)')

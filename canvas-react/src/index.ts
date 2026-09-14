@@ -42,3 +42,11 @@ export * from './overlay/Handles.js'
 export * from './overlay/SnapGuides.js'
 export * from './overlay/Arrows.js'
 export * from './overlay/Cursors.js'
+// Task style-panel-icons — GEO_COLORS is the SINGLE source of truth for
+// which hex a `color` style value actually paints (GeoShape.tsx, shared with
+// DrawShape/LineShape's own color resolution). Exported narrowly (not the
+// whole GeoShape module) so a style-panel color swatch can read the exact
+// same table instead of a second, hand-typed, drift-prone copy — see
+// client/src/canvas-v2/StylePanel.tsx's swatch hex lookup.
+export type { GeoColorEntry } from './shapes/GeoShape.js'
+export { GEO_COLORS } from './shapes/GeoShape.js'
