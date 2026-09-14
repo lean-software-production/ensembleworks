@@ -145,8 +145,9 @@ plan?" can now see what plan: above the buttons, the renderer shows
   read at gate-open time (`bb.sdk.files.read`, resolved against the run's
   environment the same way a workflow `path` is; a path that escapes the
   environment root or names a missing file shows an error there instead of
-  failing the gate); rendered as Markdown for a `.md` path, or a scrollable
-  monospace block otherwise;
+  failing the gate); rendered as Markdown for a `.md` path, or a wrapped
+  monospace block otherwise — deliberately *not* a height-capped scrolling
+  box, see "Scroll ownership" below;
 - a collapsible **"Output of `<label>`"** block with the *previous* stage's
   response text (the context key `last_stage` at the time the gate opens,
   or the gate's single predecessor in the graph when that key is unset) —
@@ -556,7 +557,30 @@ T5 adds the **DAG UI**:
   (title, status, elapsed, *visited*/total stages), and mode-specific
   layout (`"directive"`: DAG + expandable stage list + "Open in right
   panel"; `"panel"`: DAG + stage list + event timeline + a Stop button
-  while the run is active).
+  while the run is active, inside a `h-full min-h-0 overflow-y-auto`
+  root — see "Scroll ownership" below).
+
+#### Scroll ownership
+
+Two rules, enforced by `tests/ui/scroll.test.tsx`:
+
+- **The chat and composer surfaces own no scrolling.** The message
+  directive, the human-gate `pendingInteraction` and the active-runs
+  composer banner all render inside containers BB scrolls (the thread
+  timeline, the composer stack). A bounded vertical scroll container
+  anywhere inside them — a `max-height` plus `overflow: auto`, as the
+  gate's review-target `<pre>` used to have — sits under the pointer and
+  swallows the wheel, so the *thread* stops scrolling while the pointer is
+  over the card. (`overflow: hidden`, `overflow-x: auto`, and an inner
+  scroller already at its end all chain to the host normally; only a
+  bounded, still-scrollable vertical box traps it.) Long content flows
+  instead, and the host scrolls it.
+- **The flush thread panel owns all of its scrolling.** `app.tsx`
+  registers the panel action with `layout: "flush"`, which the SDK defines
+  as "the full tab area (no padding, definite height, no host scrolling)".
+  The panel root is therefore `flex h-full min-h-0 flex-col overflow-y-auto
+  p-3` — without it the pane's own definite height simply clips the stage
+  table and event log with nothing able to scroll to them.
 - `app.tsx` — registers the `attractor-run` `messageDirective` (renders
   `RunPanel` in `"directive"` mode, or an error when the directive's `run`
   attribute is missing/blank) and the matching `threadPanelAction`
