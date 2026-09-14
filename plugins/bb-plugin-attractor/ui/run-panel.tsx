@@ -264,8 +264,19 @@ export function RunPanel({ runId, threadId, mode }: RunPanelProps) {
     );
   }
 
+  // `app.tsx` registers this panel with `layout: "flush"`, which the SDK
+  // documents as "the full tab area (no padding, definite height, no host
+  // scrolling)" — the component owns padding *and* scrolling. A plain
+  // auto-height column therefore overflowed the definite-height tab and was
+  // simply clipped: the stage table and event log rendered below the fold
+  // with nothing able to scroll to them. `h-full min-h-0 overflow-y-auto`
+  // makes this root the pane's own scroll container (the same shape
+  // plugins/bb-plugin-fabro's flush panel root uses). Keep the scrolling on
+  // this root only — a nested bounded scroller here, or in either of the
+  // chat/composer surfaces, swallows the host's wheel events (see
+  // ui/human-gate.tsx's ReviewTargetBlock).
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12, padding: 12 }}>
+    <div data-testid="attractor-run-panel" className="flex h-full min-h-0 flex-col gap-3 overflow-y-auto p-3">
       <div style={{ display: "flex", alignItems: "flex-start", gap: 8 }}>
         <div style={{ flex: 1 }}>
           <RunCard run={run} graph={graph} stages={stages} now={now} dag={dag} maxWidth={false} />

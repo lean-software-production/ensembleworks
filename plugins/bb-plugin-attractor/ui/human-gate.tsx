@@ -33,7 +33,14 @@ function ReviewTargetBlock({ reviewTarget }: { reviewTarget: HumanGateReviewTarg
       ) : isMarkdown ? (
         <Markdown content={reviewTarget.content ?? ""} />
       ) : (
-        <pre style={{ fontFamily: "monospace", maxHeight: 320, overflow: "auto" }}>{reviewTarget.content}</pre>
+        // Deliberately *not* a bounded `maxHeight`/`overflow: auto` box. The
+        // gate renders into the thread's composer stack, which is scrolled by
+        // BB's own container; a nested vertical scroll container here sits
+        // under the pointer and consumes the wheel, so the thread itself
+        // stops scrolling while hovering the gate. Let the text flow (wrapped,
+        // so it does not spill sideways either) and leave scrolling to the
+        // host — the same thing the `.md` branch above already does.
+        <pre data-review-target-text style={{ fontFamily: "monospace", whiteSpace: "pre-wrap", overflowWrap: "anywhere", margin: 0 }}>{reviewTarget.content}</pre>
       )}
     </div>
   );
