@@ -15,7 +15,7 @@
  * binding can't drift between "what the key does" and "what the tooltip
  * claims it does".
  */
-import type { KeyInputEvent } from '@ensembleworks/canvas-editor'
+import type { KeyInputEvent } from '../input.js'
 import type { ToolId } from './tool-loop.js'
 
 export interface ToolShortcut {

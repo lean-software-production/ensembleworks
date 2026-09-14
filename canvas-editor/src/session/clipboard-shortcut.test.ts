@@ -1,14 +1,15 @@
-// Run: bun src/canvas-v2/clipboard-dom.test.ts
+// Run: bun src/session/clipboard-shortcut.test.ts
 //
 // Task D1's testable slice: `clipboardShortcut(event, editingId)`, the pure,
 // DOM-free key->action DECISION the plan's own Step 1 names verbatim
 // ("a DOM-free unit test on the decision helper ... asserting Ctrl+D->
 // duplicate, Cmd+C->copy, and that editingId!==null yields null"). The
-// actual `navigator.clipboard` I/O (writeClipboardText/readClipboardText)
-// is DOM/async and left to the K1/K2 browser contracts per the task brief —
-// not faked here.
+// actual clipboard I/O (writeClipboardText/readClipboardText) is DOM/async,
+// stays behind in the web app's own client/src/canvas-v2/clipboard-dom.ts,
+// and is left to the K1/K2 browser contracts per the task brief — not faked
+// here.
 import assert from 'node:assert/strict'
-import { clipboardShortcut } from './clipboard-dom.js'
+import { clipboardShortcut } from './clipboard-shortcut.js'
 
 const MODS = { shift: false, alt: false, ctrl: false, meta: false }
 

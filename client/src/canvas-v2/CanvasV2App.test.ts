@@ -37,7 +37,8 @@ const win = new Window()
 const { createElement, StrictMode, act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { SyncServerPeer, SyncClientPeer, PresenceStore, makePair } = await import('@ensembleworks/canvas-sync')
-const { CanvasV2App, buildSetStyleIntent } = await import('./CanvasV2App.js')
+const { CanvasV2App } = await import('./CanvasV2App.js')
+const { buildSetStyleIntent } = await import('@ensembleworks/canvas-editor')
 type Transport = import('@ensembleworks/canvas-sync').Transport
 type Shape = import('@ensembleworks/canvas-model').Shape
 

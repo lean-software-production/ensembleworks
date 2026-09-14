@@ -57,11 +57,21 @@
 // contract to describe.
 import { type CSSProperties } from 'react'
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
-import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
+import {
+	currentValue,
+	kindDefault,
+	kindForTool,
+	relevantAxes,
+	relevantAxesForTool,
+	STYLE_VALUE_SETS,
+	worldToScreen,
+	type Camera,
+	type StyleAxis,
+	type StyleValue,
+	type ToolId,
+} from '@ensembleworks/canvas-editor'
 import { combinedWorldBounds, GEO_COLORS } from '@ensembleworks/canvas-react'
-import { currentValue, kindDefault, kindForTool, relevantAxes, relevantAxesForTool, STYLE_VALUE_SETS, type StyleAxis, type StyleValue } from './style-axes.js'
 import { AlignIcon, ArrowheadIcon, DashIcon, FillIcon, FontIcon, GeoIcon, SizeIcon } from './style-icons.js'
-import type { ToolId } from './tool-loop.js'
 
 export interface StylePanelProps {
 	readonly selection: ReadonlySet<string>

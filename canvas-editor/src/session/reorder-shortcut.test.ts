@@ -1,14 +1,14 @@
-// Run: bun src/canvas-v2/reorder-dom.test.ts
+// Run: bun src/session/reorder-shortcut.test.ts
 //
 // Task D1's testable slice: `reorderShortcut(event, editingId)`, the pure,
-// DOM-free key->op DECISION (D-6), mirroring clipboard-dom.test.ts's
+// DOM-free key->op DECISION (D-6), mirroring clipboard-shortcut.test.ts's
 // `clipboardShortcut` coverage. The actual dispatch
-// (reorderSelectionIntents -> editor.applyAll) is composed in
-// CanvasV2App.tsx's handleGlobalShortcut and is NOT re-tested here; the
-// end-to-end "press ] -> shape moves up in paint order" is Z1's browser
-// contract (see the plan's D1 section: "Don't fake a browser RED here").
+// (reorderSelectionIntents -> editor.applyAll) is composed in each host's
+// own global shortcut handler and is NOT re-tested here; the end-to-end
+// "press ] -> shape moves up in paint order" is Z1's browser contract (see
+// the plan's D1 section: "Don't fake a browser RED here").
 import assert from 'node:assert/strict'
-import { reorderShortcut } from './reorder-dom.js'
+import { reorderShortcut } from './reorder-shortcut.js'
 
 const MODS = { shift: false, alt: false, ctrl: false, meta: false }
 

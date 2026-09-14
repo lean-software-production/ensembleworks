@@ -11,7 +11,7 @@
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { STYLE_VALUE_SETS } from './style-axes.js'
+import { STYLE_VALUE_SETS } from '@ensembleworks/canvas-editor'
 import { AlignIcon, ArrowheadIcon, DashIcon, FillIcon, FontIcon, GeoIcon, SizeIcon } from './style-icons.js'
 
 function html(el: unknown): string {

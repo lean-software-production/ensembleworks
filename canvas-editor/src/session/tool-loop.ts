@@ -27,26 +27,18 @@
  * (there is no "transform tool" button there either; handles just appear on
  * a selection made via the select tool).
  */
-import type { Editor, Intent, Tool, ToolContext } from '@ensembleworks/canvas-editor'
-import {
-	createArrowTool,
-	createCreateTool,
-	createDrawTool,
-	createHandTool,
-	createLineTool,
-	createSelectAndTransformTool,
-	type ArrowState,
-	type CreateKind,
-	type CreateState,
-	type DrawState,
-	type HandState,
-	type LineState,
-	type SelectAndTransformState,
-	type SelectState,
-} from '@ensembleworks/canvas-editor'
+import type { Editor } from '../editor.js'
+import type { Intent } from '../intents.js'
+import type { Tool } from '../input.js'
+import type { ToolContext } from '../tools/tool-context.js'
+import { createArrowTool, type ArrowState } from '../tools/arrow.js'
+import { createCreateTool, type CreateKind, type CreateState } from '../tools/create.js'
+import { createDrawTool, type DrawState } from '../tools/draw.js'
+import { createHandTool, type HandState } from '../tools/hand.js'
+import { createLineTool, type LineState } from '../tools/line.js'
+import { createSelectAndTransformTool, type SelectAndTransformState } from '../tools/select-and-transform.js'
+import type { SelectState } from '../tools/select.js'
 import type { SnapResult } from '@ensembleworks/canvas-model'
-
-export { createSelectAndTransformTool, type SelectAndTransformState } from '@ensembleworks/canvas-editor'
 
 /** The toolbar's tool identifiers — see CanvasV2App.tsx's toolbar for the
  * button list. 'transform' is deliberately ABSENT (see module header). */

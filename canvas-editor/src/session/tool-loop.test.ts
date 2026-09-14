@@ -2,18 +2,21 @@
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import type { Shape } from '@ensembleworks/canvas-model'
-import { Editor, createToolContext, duplicateSelectionIntents, type ArrowState, type CreateState, type ToolContext } from '@ensembleworks/canvas-editor'
+import { Editor } from '../editor.js'
+import { duplicateSelectionIntents } from '../clipboard-intents.js'
+import { createToolContext, type ToolContext } from '../tools/tool-context.js'
+import type { ArrowState } from '../tools/arrow.js'
+import type { CreateState } from '../tools/create.js'
+import { createSelectAndTransformTool, type SelectAndTransformState } from '../tools/select-and-transform.js'
 import {
 	cancelActiveTool,
 	createInitialToolStates,
-	createSelectAndTransformTool,
 	createToolSet,
 	currentSnapResult,
 	deleteSelectionIntents,
 	dispatchToActiveTool,
 	pruneDanglingSelectionIntents,
 	shouldFallBackToSelect,
-	type SelectAndTransformState,
 } from './tool-loop.js'
 
 const FIXED_RANDOM = () => 0.5

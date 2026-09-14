@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import { Editor } from '@ensembleworks/canvas-editor'
 import { orderedPages, type Page } from '@ensembleworks/canvas-model'
-import { clampCurrentPageIntents, deletePageIntents, movePageIntents, newPageIntents } from './page-switcher-dom.js'
+import { deletePageIntents, movePageIntents, newPageIntents } from './page-switcher-dom.js'
 
 const FIXED_RANDOM = () => 0.5
 
@@ -146,30 +146,6 @@ function makeEditor(pages: Page[], currentPageId: string) {
 	assert.deepEqual(movePageIntents(editor, 'page:c', 'left'), [], 'the first page cannot move left')
 	assert.deepEqual(movePageIntents(editor, 'page:a', 'right'), [], 'the last page cannot move right')
 	console.log('ok: page-switcher-dom — movePageIntents moves a page exactly one slot in orderedPages, no-ops at the ends')
-}
-
-// ============================================================================
-// 6. clampCurrentPageIntents: [] when currentPageId is valid; a
-//    SetCurrentPage(canonical) when it names no live page.
-// ============================================================================
-{
-	const { editor: validEditor } = makeEditor(
-		[
-			{ id: 'page:p', name: 'P', index: 'a0' },
-			{ id: 'page:q', name: 'Q', index: 'a1' },
-		],
-		'page:q',
-	)
-	assert.deepEqual(clampCurrentPageIntents(validEditor), [], 'a valid currentPageId yields no clamp intent (no spurious SetCurrentPage)')
-
-	// Simulate the undo-strands-currentPageId edge: currentPageId names a
-	// page that no longer exists in the doc (e.g. after undoing a CreatePage
-	// the switcher had just switched to).
-	const { doc, editor: danglingEditor } = makeEditor([{ id: 'page:p', name: 'P', index: 'a0' }], 'page:ghost')
-	const clamp = clampCurrentPageIntents(danglingEditor)
-	assert.deepEqual(clamp, [{ type: 'SetCurrentPage', pageId: 'page:p' }], 'a dangling currentPageId clamps to the canonical (lexicographically smallest) live page')
-	void doc
-	console.log('ok: page-switcher-dom — clampCurrentPageIntents no-ops when valid, clamps to canonical when dangling')
 }
 
 console.log('ok: page-switcher-dom.test.ts — all cases passed')

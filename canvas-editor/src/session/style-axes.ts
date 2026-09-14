@@ -21,6 +21,7 @@
 // carry them), but this panel only ever offers the three primary values as
 // choosable options — see `ALIGN_PRIMARY` below.
 import { STYLE_VALUE_SETS as MODEL_STYLE_VALUE_SETS, type Shape, type ShapeKind } from '@ensembleworks/canvas-model'
+import type { SetStyle } from '../intents.js'
 import type { ToolId } from './tool-loop.js'
 
 // The five discrete opacity steps tldraw's own opacity control offers
@@ -229,4 +230,19 @@ export function currentValue(shapes: readonly Shape[], axis: StyleAxis): StyleVa
  */
 export function kindDefault(kind: ShapeKind, axis: StyleAxis): string | undefined {
   return STYLE_DEFAULTS_BY_KIND[kind]?.[axis]
+}
+
+/** Task P4 — pure mapping from a StylePanel axis change to the `SetStyle`
+ * intent E1 defines: `opacity` is an ENVELOPE field (`shape.opacity`, per
+ * SetStyle's own interface — canvas-editor/src/intents.ts), so that axis
+ * routes through `opacity`, NEVER `props.opacity` (E1's applyOne only ever
+ * writes the envelope field from THIS key, and canvas-react's ShapeBody
+ * only ever reads `shape.opacity` — a value parked in `props.opacity`
+ * would silently never render). Every other axis is a `props` key patch.
+ * Exported so this mapping is unit-testable in isolation, without booting a
+ * session (see CanvasV2App.test.ts's style-panel wiring cases) — `ids` is
+ * an explicit parameter (not read from `editor` here) so the test can pass
+ * a plain array and assert the exact intent shape. */
+export function buildSetStyleIntent(ids: readonly string[], axis: StyleAxis, value: StyleValue): SetStyle {
+  return axis === 'opacity' ? { type: 'SetStyle', ids, opacity: Number(value) } : { type: 'SetStyle', ids, props: { [axis]: value } }
 }

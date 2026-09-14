@@ -9,7 +9,7 @@
  * so — deliberately, per the plan's file list — it has no helper here and
  * is dispatched directly from `PageSwitcher.tsx`.
  */
-import { canonicalPageId, generateKeyBetween, orderedPages, type Page, type PageId } from '@ensembleworks/canvas-model'
+import { generateKeyBetween, orderedPages, type Page, type PageId } from '@ensembleworks/canvas-model'
 import type { Editor, Intent } from '@ensembleworks/canvas-editor'
 
 /** Mint a page id the same DOM-edge way `image-create.ts`'s clipboard/create
@@ -93,25 +93,4 @@ export function movePageIntents(editor: Editor, id: string, dir: MoveDir): Inten
 	const nextNext = ordered[i + 2]
 	const index = generateKeyBetween(next.index ?? null, nextNext?.index ?? null)
 	return [{ type: 'ReorderPage', id, index }]
-}
-
-/** Undo-clamp (D-6, D-3): `SetCurrentPage` is a view intent with no undo
- * inverse (D-2), so undoing a `CreatePage`+`SetCurrentPage` batch removes
- * the page but leaves `currentPageId` still naming it — the render filter
- * (R1) would then show an empty canvas. Mirrors `tool-loop.ts`'s
- * `pruneDanglingSelectionIntents`: read the CURRENT `currentPageId` live,
- * and only when it names no LIVE page, emit a `SetCurrentPage` onto the
- * canonical page (`canonicalPageId` — the lexicographically-smallest page
- * id, `repair.ts`'s convergent choice, reused here rather than inventing a
- * second "pick a fallback page" rule). Returns `[]` (no spurious
- * `SetCurrentPage`) whenever `currentPageId` already names a live page — a
- * normal undo/redo that never touched the current page must not re-dispatch
- * a same-value SetCurrentPage on every call. */
-export function clampCurrentPageIntents(editor: Editor): Intent[] {
-	const pages = editor.doc.listPages()
-	const current = editor.get().currentPageId
-	if (pages.some((p) => p.id === current)) return []
-	const canonical = canonicalPageId(pages)
-	if (canonical === undefined) return []
-	return [{ type: 'SetCurrentPage', pageId: canonical }]
 }

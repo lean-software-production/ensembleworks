@@ -113,17 +113,36 @@ import './canvas-v2.css'
 import {
 	Editor,
 	applyWheel,
+	buildSetStyleIntent,
+	cancelActiveTool,
+	clipboardShortcut,
+	createInitialToolStates,
 	createToolContext,
+	createToolSet,
+	currentSnapResult,
+	deleteSelectionIntents,
+	dispatchToActiveTool,
 	duplicateSelectionIntents,
 	pasteIntents,
+	redoWithRepair,
 	reorderSelectionIntents,
+	reorderShortcut,
 	screenToWorld,
 	selectAllIntents,
+	shouldFallBackToSelect,
+	TOOL_SHORTCUT_LABEL,
+	toolShortcut,
+	undoWithRepair,
 	type InputEvent,
 	type Intent,
 	type KeyInputEvent,
 	type SetStyle,
+	type StyleAxis,
+	type StyleValue,
 	type ToolContext,
+	type ToolId,
+	type ToolSet,
+	type ToolStates,
 } from '@ensembleworks/canvas-editor'
 import { encodeClipboard, serializeSelection } from '@ensembleworks/canvas-model'
 import { PresenceStore, SyncClientPeer, type Transport } from '@ensembleworks/canvas-sync'
@@ -151,27 +170,10 @@ import { DevOverlay, shouldShowDevOverlayFromEnvironment, useCanvasMetrics } fro
 import { canvasV2EmbedLifecycles, registerCanvasV2Shapes } from './shapes/index.js'
 import { presentStoreV2 } from './shapes/presentStoreV2.js'
 import { StylePanel } from './StylePanel.js'
-import type { StyleAxis, StyleValue } from './style-axes.js'
-import {
-	cancelActiveTool,
-	createInitialToolStates,
-	createToolSet,
-	currentSnapResult,
-	deleteSelectionIntents,
-	dispatchToActiveTool,
-	pruneDanglingSelectionIntents,
-	shouldFallBackToSelect,
-	type ToolId,
-	type ToolSet,
-	type ToolStates,
-} from './tool-loop.js'
-import { clipboardShortcut, readClipboardText, writeClipboardText } from './clipboard-dom.js'
-import { reorderShortcut } from './reorder-dom.js'
-import { TOOL_SHORTCUT_LABEL, toolShortcut } from './tool-shortcut.js'
+import { readClipboardText, writeClipboardText } from './clipboard-dom.js'
 import { extractImageFiles } from './image-drop.js'
 import { extractImageBlobs } from './image-paste.js'
 import { createImageFromBlob } from './image-create.js'
-import { clampCurrentPageIntents } from './page-switcher-dom.js'
 import { PageSwitcher } from './PageSwitcher.js'
 
 /** How long an embed (terminal/iframe/…) may sit off-screen before
@@ -277,21 +279,6 @@ function randomPeerId(): bigint {
 
 function delay(ms: number): Promise<void> {
 	return ms > 0 ? new Promise((r) => setTimeout(r, ms)) : Promise.resolve()
-}
-
-/** Task P4 — pure mapping from a StylePanel axis change to the `SetStyle`
- * intent E1 defines: `opacity` is an ENVELOPE field (`shape.opacity`, per
- * SetStyle's own interface — canvas-editor/src/intents.ts), so that axis
- * routes through `opacity`, NEVER `props.opacity` (E1's applyOne only ever
- * writes the envelope field from THIS key, and canvas-react's ShapeBody
- * only ever reads `shape.opacity` — a value parked in `props.opacity`
- * would silently never render). Every other axis is a `props` key patch.
- * Exported so this mapping is unit-testable in isolation, without booting a
- * session (see CanvasV2App.test.ts's style-panel wiring cases) — `ids` is
- * an explicit parameter (not read from `editor` here) so the test can pass
- * a plain array and assert the exact intent shape. */
-export function buildSetStyleIntent(ids: readonly string[], axis: StyleAxis, value: StyleValue): SetStyle {
-	return axis === 'opacity' ? { type: 'SetStyle', ids, opacity: Number(value) } : { type: 'SetStyle', ids, props: { [axis]: value } }
 }
 
 interface Session {
@@ -831,41 +818,19 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			// z-branch), so dropping meta+y costs them nothing.
 			const key = event.key.toLowerCase()
 			const withModifier = event.modifiers.ctrl || event.modifiers.meta
-			// pruneDanglingSelectionIntents (Task D1's undo-selection-cleanup
-			// carry-forward, tool-loop.ts's own doc comment on that function):
-			// `SetSelection` is a view intent with no inverse (editor.ts's
-			// undo()/redo() never touch EditorState), so undoing a
-			// duplicateSelectionIntents/pasteIntents batch removes the newly
-			// minted shapes but leaves `selection` still naming them — a
-			// dangling reference. Applying the pruned result (when non-empty) is
-			// itself a pure state-only intent, so it never pushes a new undo
-			// entry or clears the redo stack (editor.ts's applyAll only moves
-			// those on `docMutated`), and it's a no-op whenever undo/redo didn't
-			// touch anything selection cared about (e.g. undoing a translate).
+			// undoWithRepair/redoWithRepair (canvas-editor/src/session/history.js)
+			// fold together the two repairs a history move can strand: a dangling
+			// selection (SetSelection has no undo inverse — tool-loop.ts's
+			// pruneDanglingSelectionIntents doc comment) and a dangling
+			// currentPageId (SetCurrentPage likewise has no inverse — Task U1,
+			// D-6, D-3; a redo can equally reintroduce a DeletePage and strand
+			// currentPageId the same way as an undo).
 			if (withModifier && key === 'z' && !event.modifiers.shift) {
-				editor.undo()
-				const prune = pruneDanglingSelectionIntents(editor)
-				if (prune.length > 0) editor.applyAll(prune)
-				// Undo-clamp (Task U1, D-6, D-3): SetCurrentPage is a view
-				// intent with no undo inverse, so undoing a CreatePage +
-				// SetCurrentPage batch (the switcher's "+ new page") removes
-				// the page but leaves currentPageId still naming it — R1's
-				// render filter would then paint nothing. Same shape of fix
-				// as pruneDanglingSelectionIntents just above: check AFTER
-				// undo(), apply only when non-empty.
-				const clamp = clampCurrentPageIntents(editor)
-				if (clamp.length > 0) editor.applyAll(clamp)
+				undoWithRepair(editor)
 				return true
 			}
 			if ((withModifier && key === 'z' && event.modifiers.shift) || (event.modifiers.ctrl && key === 'y')) {
-				editor.redo()
-				const prune = pruneDanglingSelectionIntents(editor)
-				if (prune.length > 0) editor.applyAll(prune)
-				// Undo-clamp (Task U1, D-6) — the redo direction: a redo can
-				// equally reintroduce a DeletePage (if a delete had been
-				// undone, then redone), stranding currentPageId the same way.
-				const clamp = clampCurrentPageIntents(editor)
-				if (clamp.length > 0) editor.applyAll(clamp)
+				redoWithRepair(editor)
 				return true
 			}
 			// Ctrl/Cmd+C/X/V/D (Task D1) — copy/cut/paste/duplicate. The
@@ -973,7 +938,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			}
 			// Tool-selection shortcuts (Task keyboard/K3) — tldraw's
 			// single-key tool shortcuts (v/h/n/t/r/o/a/f/d/l). `toolShortcut`
-			// (client/src/canvas-v2/tool-shortcut.ts) is the pure key->tool
+			// (canvas-editor/src/session/tool-shortcut.ts) is the pure key->tool
 			// decision, already gated on editingId/no-modifier internally; it
 			// is called here (rather than earlier) so it never shadows any of
 			// the modified shortcuts above (Ctrl+Z, Ctrl+A, Ctrl+C/X/V/D, the

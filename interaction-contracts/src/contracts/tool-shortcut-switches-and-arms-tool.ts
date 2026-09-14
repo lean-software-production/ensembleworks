@@ -1,7 +1,7 @@
 // Task keyboard/K3 (canvas-v2 polish batch — "Keyboard parity") — the
 // interaction contract that discharges the tool-shortcut keydown branch
 // this task adds to CanvasV2App.tsx's `handleGlobalShortcut`
-// (client/src/canvas-v2/tool-shortcut.ts's pure `toolShortcut` decision):
+// (canvas-editor/src/session/tool-shortcut.ts's pure `toolShortcut` decision):
 // pressing 'r' (with nothing focused in a text field) must switch the
 // active tool to 'geo' AND arm the geo variant to 'rectangle' (the same
 // `SetNextStyle` path StylePanel's armed mode already uses, Task AS3) —

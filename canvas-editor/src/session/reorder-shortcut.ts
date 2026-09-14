@@ -1,7 +1,7 @@
 /**
  * The pure key -> Arrange-op DECISION for the four bracket-key reorder
  * shortcuts (Task D1, D-6) — DOM-free and unit-testable, mirroring
- * `clipboard-dom.ts`'s `clipboardShortcut`. CanvasV2App.tsx's
+ * `clipboard-shortcut.ts`'s `clipboardShortcut`. CanvasV2App.tsx's
  * `handleGlobalShortcut` is the only caller: it maps the returned `op` to
  * `reorderSelectionIntents(editor, op)` and applies the batch in one
  * `editor.applyAll(...)` call (one commit, one undo entry — canvas-editor's
@@ -15,8 +15,8 @@
  * is also why `]` must not casually be treated as "the same key, shift
  * optional": `]` and `}` are different characters mapping to different ops.
  */
-import type { KeyInputEvent } from '@ensembleworks/canvas-editor'
-import type { ReorderOp } from '@ensembleworks/canvas-editor'
+import type { KeyInputEvent } from '../input.js'
+import type { ReorderOp } from '../reorder-intents.js'
 
 /**
  * Pure decision: does this keydown mean a bracket-key Arrange shortcut, and
