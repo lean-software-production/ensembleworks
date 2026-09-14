@@ -116,8 +116,15 @@ function attempt(node: WorkflowNode, graph: WorkflowGraph, outcome: Outcome, con
     // "route": keep failed and fall through to step 6 below.
   }
 
-  // Step 6: unconditional edges.
-  if (unconditionalEdges.length > 0) {
+  // Step 6: unconditional edges. A human gate's unconditional edges are its
+  // *options* — the choices a person picks between — so a gate that failed
+  // (timed out, was cancelled, or a bad default_choice) must never fall
+  // through to one of them: dogfood run 4 (2026-09-13) had an expired
+  // "Approve plan?" gate silently take its "[A] Approve" edge this way. A
+  // failed gate dead-ends here instead (retry target, then the run ends
+  // with the gate's own failure); an answered gate never reaches this step
+  // because its answer routes by preferred_label in step 3.
+  if (unconditionalEdges.length > 0 && !(node.handlerKind === "human" && outcome.status === "failed")) {
     const [chosen] = byWeightThenTarget(unconditionalEdges);
     return { decision: { nodeId: chosen.to, reason: "unconditional", edgeLabel: chosen.label }, retryEligible: false };
   }

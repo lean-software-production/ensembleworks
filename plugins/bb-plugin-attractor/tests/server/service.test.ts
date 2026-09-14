@@ -448,10 +448,11 @@ describe("createService: human gates (T6)", () => {
 
   // Validation finding (minor): a human gate that ends *without* an answer
   // (cancelled, or timeout with nothing to fall back to) must still clear the
-  // run/stage's transient "blocked" status — the run keeps executing further
-  // stages via the routing cascade's unconditional edges, and those stages
-  // must not run while the run is still reporting "blocked".
-  it("clears the run's blocked status when a human gate is cancelled, before routing onward to the next stage", async () => {
+  // run/stage's transient "blocked" status — the run may keep executing
+  // further stages via an explicit `condition="outcome=failed"` edge (never
+  // via one of the gate's option edges, since dogfood run 4), and those
+  // stages must not run while the run is still reporting "blocked".
+  it("clears the run's blocked status when a human gate is cancelled, before routing onward along an explicit failure edge", async () => {
     const host = makeHost();
     const store = new RunStore(new Database(":memory:"));
     let resolveAfter: ((outcome: { status: "succeeded" }) => void) | null = null;
@@ -470,7 +471,8 @@ describe("createService: human gates (T6)", () => {
       gate  [shape=hexagon, label="Approve?"]
       after [label="After", prompt="work"]
       start -> gate
-      gate -> after [label="[A] Approve"]
+      gate -> exit  [label="[A] Approve"]
+      gate -> after [condition="outcome=failed"]
       after -> exit
     }`;
     const { run } = await service.createAndStartRun({ source: GATE_THEN_STAGE_GRAPH, threadId: "origin-thread", projectId: "project-1", environmentId: "env-1" });
@@ -480,6 +482,43 @@ describe("createService: human gates (T6)", () => {
 
     resolveAfter!({ status: "succeeded" });
     await vi.waitFor(() => expect(store.getRun(run.id).status).toBe("succeeded"));
+  });
+
+  // Dogfood run 4 (2026-09-13): an expired "Approve plan?" gate took its own
+  // "[A] Approve" edge through the cascade's unconditional fallback. A gate
+  // that ends without an answer and has no explicit failure edge must end
+  // the run as failed — never continue as if an option had been chosen.
+  it("ends the run as failed when a human gate is cancelled and the graph has no explicit failure edge", async () => {
+    const host = makeHost();
+    const store = new RunStore(new Database(":memory:"));
+    const afterRan = vi.fn();
+    const backend = fakeBackend(async (input: AgentRunInput) => {
+      if (input.node.id === "after") afterRan();
+      return { status: "succeeded" as const };
+    });
+    const humanInterviewer: HumanInterviewer = { ask: async () => ({ kind: "cancelled" }) };
+    const service = createService({ bb: host.bb, store, agentBackend: backend, execClient: noopExecClient(), humanInterviewer });
+
+    const { run } = await service.createAndStartRun({
+      source: `digraph G {
+        start [shape=Mdiamond]
+        exit  [shape=Msquare]
+        gate  [shape=hexagon, label="Approve?"]
+        after [label="After", prompt="work"]
+        start -> gate
+        gate -> after [label="[A] Approve"]
+        gate -> start [label="[R] Revise"]
+        after -> exit
+      }`,
+      threadId: "origin-thread",
+      projectId: "project-1",
+      environmentId: "env-1",
+    });
+    await vi.waitFor(() => expect(store.getRun(run.id).status).not.toBe("running"));
+
+    expect(store.getRun(run.id).status).toBe("failed");
+    expect(afterRan).not.toHaveBeenCalled();
+    expect(store.listStages(run.id).find((s) => s.nodeId === "gate")).toMatchObject({ status: "failed" });
   });
 });
 

@@ -373,3 +373,42 @@ describe("engine/router: step 7 retry_target / fallback_retry_target resolution"
     ]);
   });
 });
+
+describe("engine/router: a failed human gate never takes one of its option edges", () => {
+  // Dogfood run 4 (2026-09-13): an "Approve plan?" gate expired (SDK default
+  // requestInput timeout), its stage failed, and the cascade fell through
+  // step 6 to the first unconditional edge — which was "[A] Approve".
+  it("dead-ends a failed gate instead of routing down the first unconditional (option) edge", () => {
+    const graph = graphFrom(`digraph G {
+      gate [shape=hexagon]
+      gate -> apply  [label="[A] Approve"]
+      gate -> triage [label="[R] Revise"]
+    }`);
+    const decision = selectRoute({
+      node: graph.nodes.get("gate")!,
+      graph,
+      outcome: outcome({ status: "failed", failureReason: "timed out" }),
+      context: {},
+    });
+    expect(decision).toBeNull();
+  });
+
+  it("still honours an explicit conditional edge on a failed gate, and a succeeded answer's preferred_label", () => {
+    const graph = graphFrom(`digraph G {
+      gate [shape=hexagon]
+      gate -> apply   [label="[A] Approve"]
+      gate -> abandon [condition="outcome=failed"]
+    }`);
+    const node = graph.nodes.get("gate")!;
+    expect(selectRoute({ node, graph, outcome: outcome({ status: "failed" }), context: {} })).toEqual({ nodeId: "abandon", reason: "condition", edgeLabel: undefined });
+    expect(selectRoute({ node, graph, outcome: outcome({ status: "succeeded", preferredLabel: "[A] Approve" }), context: {} })).toEqual({ nodeId: "apply", reason: "preferred_label", edgeLabel: "[A] Approve" });
+  });
+
+  it("leaves non-human nodes' unconditional fallback untouched on failure", () => {
+    const graph = graphFrom(`digraph G {
+      build [shape=parallelogram, script="make"]
+      build -> fix
+    }`);
+    expect(selectRoute({ node: graph.nodes.get("build")!, graph, outcome: outcome({ status: "failed" }), context: {} })).toEqual({ nodeId: "fix", reason: "unconditional", edgeLabel: undefined });
+  });
+});

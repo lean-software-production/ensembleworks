@@ -7,13 +7,16 @@
 // Exercises: a goal-gated baseline command with a failure route straight to
 // exit, a command whose output feeds an agent via a file, a Codex triage
 // stage (model_stylesheet with a second provider), a human gate with a
-// review_target, a bounded loop driven by numeric context conditions set
-// through attractor_result context_updates, a goal-gated final verify, and
-// a command node that opens the PR.
+// review_target (and no timeout — it waits until answered), a loop in which
+// the agent only edits package.json and the surrounding command nodes do
+// the verifying, committing, reverting and counting (routing on
+// `outcome=` and on `command.output contains …`), a goal-gated final
+// verify, and a command node that opens the PR.
 //
 // Working state lives in .local/dep-updates/ (gitignored): outdated.txt,
-// queue.json (the ordered work list, one entry per logical update), and
-// plan.md (what the human approves).
+// queue.json (the ordered work list, one entry per logical update, kept by
+// dependency-updates.queue.mjs), current (the entry being applied),
+// last-test.log, and plan.md (what the human approves).
 digraph DependencyUpdates {
   graph [goal="Apply every safe dependency update and write up the rest",
          default_permission_mode="full",
@@ -32,11 +35,20 @@ digraph DependencyUpdates {
 
   approve [shape=hexagon, label="Approve update plan?", review_target=".local/dep-updates/plan.md"]
 
-  apply [label="Apply next update", max_visits=20, timeout="30m",
-         output_schema="routing",
-         prompt="You are applying ONE dependency update from .local/dep-updates/queue.json in this Bun-workspaces monorepo, then verifying it. Follow these steps exactly.\n\n1. Read .local/dep-updates/queue.json. Pick the FIRST entry whose status is \"pending\". If there is none, go to step 6.\n2. For each package in the entry, in each listed workspace, set that package's version in the workspace's package.json to the entry's target, keeping the existing range prefix (^ or ~ or none). Edit nothing else. Then run `bun install` once from the repo root.\n3. Run `bun run typecheck && bun run test` from the repo root.\n4. If both pass: run `git add -A && git commit -m \"chore(deps): <id> to <target version>\"` and set the entry's status to \"done\".\n5. If either fails: run `git checkout -- . && git clean -fd && bun install` to revert everything, set the entry's status to \"failed\" and its notes to a one-line summary of the first error. Never change source code to make an update pass; a failing update is reverted and recorded, nothing more.\n6. Save queue.json. Count entries with status pending (remaining) and entries with status done or failed (attempted).\n7. Call the attractor_result tool exactly once with {\"outcome\": \"succeeded\", \"context_updates\": {\"deps_remaining\": <remaining>, \"deps_attempted\": <attempted>}}. Reply with one line: <id> -> done or failed, or: nothing left."]
+  apply [label="Apply next update", max_visits=20, timeout="20m",
+         prompt="You are applying ONE dependency update in this Bun-workspaces monorepo. Follow these steps exactly and do nothing else.\n\n1. Run `bun plugins/bb-plugin-attractor/examples/dependency-updates.queue.mjs next`. It prints the update to apply as JSON (id, packages with name/from/to/workspaces) and remembers it as the current entry. If it prints `none`, reply with the single line `nothing left` and stop.\n2. For each package in the entry, in each listed workspace, set that package's version in the workspace's package.json to the entry's `to` version, keeping the existing range prefix (^ or ~ or none). Edit nothing else.\n3. Run `bun install` once from the repo root.\n4. Reply with one line: `<id>: applied`.\n\nDo NOT run the tests, do NOT commit, do NOT revert, and do NOT edit queue.json — the workflow's next stages verify, commit or revert, and record the result themselves. Apply exactly one entry per turn even if more are pending."]
 
-  next [shape=diamond, label="More?"]
+  test [shape=parallelogram, label="Typecheck + test", timeout="20m",
+        script="(bun run typecheck && bun run test) > .local/dep-updates/last-test.log 2>&1; rc=$?; tail -c 20000 .local/dep-updates/last-test.log; exit $rc"]
+
+  keep [shape=parallelogram, label="Commit", timeout="5m",
+        script="id=$(cat .local/dep-updates/current 2>/dev/null); if [ -n \"$id\" ]; then git add -A && git commit -q -m \"chore(deps): $id\" && bun plugins/bb-plugin-attractor/examples/dependency-updates.queue.mjs mark done; else echo 'nothing to commit'; fi"]
+
+  revert [shape=parallelogram, label="Revert", timeout="10m",
+          script="git checkout -- . && git clean -fd && bun install && bun plugins/bb-plugin-attractor/examples/dependency-updates.queue.mjs mark failed .local/dep-updates/last-test.log"]
+
+  count [shape=parallelogram, label="More?", timeout="1m",
+         script="bun plugins/bb-plugin-attractor/examples/dependency-updates.queue.mjs count"]
 
   writeup [label="Write up", timeout="30m",
            prompt="Read .local/dep-updates/queue.json, .local/dep-updates/plan.md and `git log --oneline origin/main..HEAD`, and run `date +%F` for today's date. Write docs/dependency-upgrades/<today>.md (create the directory) with three sections. (1) Applied: a table of the updates committed on this branch (packages, from -> to, commit). (2) Needs manual work: one subsection per entry whose status is failed or manual, giving packages, current -> target, why it was deferred (the breaking-change notes for manual entries, the recorded error for failed ones) and a suggested approach for a future manual upgrade. (3) Skipped: entries with status skipped and why. Use only the versions, notes and dates found in those files; invent nothing. Then run `git add docs/dependency-upgrades && git commit -m \"docs: dependency upgrade notes\"`. Reply with the file path."]
@@ -53,9 +65,13 @@ digraph DependencyUpdates {
   outdated -> triage -> approve
   approve -> apply  [label="[A] Approve"]
   approve -> triage [label="[R] Revise"]
-  apply -> next
-  next -> apply   [condition="deps_remaining > 0 && deps_attempted < 18"]
-  next -> writeup
+  apply -> test
+  test -> keep   [condition="outcome=succeeded"]
+  test -> revert [condition="outcome=failed"]
+  keep -> count
+  revert -> count
+  count -> apply   [condition="command.output contains MORE"]
+  count -> writeup [condition="command.output contains DONE"]
   writeup -> verify
   verify -> pr [condition="outcome=succeeded"]
   verify -> exit [condition="outcome=failed"]

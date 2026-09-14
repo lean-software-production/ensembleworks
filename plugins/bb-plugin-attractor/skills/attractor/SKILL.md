@@ -76,7 +76,10 @@ accepted as free text if the gate is `freeform`. A run blocked on a human
 gate shows status `blocked` (`bb attractor status <runId>`) until answered.
 A gate with a `timeout` and nothing to answer falls back to the
 `human.default_choice` context key if one is set (e.g. via `attractor_run`'s
-`inputs`), otherwise the stage fails clearly rather than hanging forever.
+`inputs`), otherwise the stage fails clearly rather than hanging forever. A gate without a `timeout` waits indefinitely (BB re-shows the prompt every
+hour until someone answers). A gate that fails never takes one of its own
+option edges — the run stops on the gate's failure unless the graph routes
+`condition="outcome=failed"` somewhere explicitly.
 
 **Not yet implemented:** an `agent`/`prompt` node's `output_schema` beyond
 the literal string `"routing"` (an inline JSON Schema) is accepted but not
