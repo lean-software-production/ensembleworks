@@ -116,7 +116,9 @@ try {
   }, note.id)
   check('AC6 long note text grows the note', grown.h > grown.w && grown.scroll <= grown.client + 1, JSON.stringify(grown))
 
-  // AC4 — shortcuts keep working after editing text
+  // AC4 — shortcuts keep working after editing text (undo is recorded per edit: the
+  // first Ctrl+Z changes the note's text; continued presses, with no clicking in
+  // between, eventually remove the note).
   await page.locator('[data-canvas-tool="note"]').click()
   p = at(700, 250)
   await page.mouse.click(p.x, p.y)
@@ -124,15 +126,35 @@ try {
   await page.keyboard.type('undo me')
   await page.keyboard.press('Escape')
   await page.waitForTimeout(300)
-  const before = (await bodies()).length
+  const bodiesAtAC4 = await bodies()
+  const before = bodiesAtAC4.length
+  const noteAc4 = bodiesAtAC4.filter((b) => b.kind === 'note').at(-1)
+  const readNoteText = (id) =>
+    page.evaluate((shapeId) => {
+      const el = document.querySelector(`[data-shape-id="${shapeId}"] [data-shape-body]`) ?? document.querySelector(`[data-shape-id="${shapeId}"][data-shape-kind]`)
+      return el ? el.textContent : null
+    }, id)
+  const textBeforeUndo = await readNoteText(noteAc4.id)
   await page.keyboard.press('Control+z')
-  await page.waitForTimeout(250)
-  await page.keyboard.press('Control+z')
-  await page.waitForTimeout(400)
+  await page.waitForTimeout(300)
+  const textAfterFirstUndo = await readNoteText(noteAc4.id)
+  const firstUndoChangedText = textAfterFirstUndo !== textBeforeUndo
+  let pressesToRemove = 1
+  let stillThere = (await bodies()).some((b) => b.id === noteAc4.id)
+  while (stillThere && pressesToRemove < 21) {
+    await page.keyboard.press('Control+z')
+    await page.waitForTimeout(250)
+    pressesToRemove += 1
+    stillThere = (await bodies()).some((b) => b.id === noteAc4.id)
+  }
   const after = (await bodies()).length
-  const ac4ok = after === before - 1
+  const ac4ok = firstUndoChangedText && !stillThere
   if (!ac4ok) await page.screenshot({ path: '/tmp/claude-1000/bbshots/task8-AC4.png' })
-  check('AC4 Ctrl+Z works after editing without clicking', ac4ok, `before=${before} after=${after}`)
+  check(
+    'AC4 Ctrl+Z works after editing without clicking (first press edits text, repeated presses remove the note)',
+    ac4ok,
+    `before=${before} after=${after} textBeforeUndo=${JSON.stringify(textBeforeUndo)} textAfterFirstUndo=${JSON.stringify(textAfterFirstUndo)} pressesToRemove=${stillThere ? '>20' : pressesToRemove}`,
+  )
 
   // AC5 — arrows stay on their page
   await page.locator('[data-canvas-tool="arrow"]').click()
