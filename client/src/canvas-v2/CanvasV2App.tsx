@@ -775,6 +775,15 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			if (editingId !== null) return false // TextEditor owns the keyboard while editing
 			if (event.key === 'Escape') {
 				cancelAndReset()
+				// Escape returns to the select tool (Task keyboard fix-round,
+				// validator-caught gap; tldraw parity — Idle.onCancel ->
+				// setCurrentTool('select')). `selectTool` itself calls
+				// cancelAndReset again internally — harmless (the gesture this
+				// call just cancelled is already gone, so its own cancel is a
+				// no-op) — and is the ONE place that also sets activeToolId, so
+				// calling it here (rather than duplicating that setState) keeps
+				// "switch to select" defined in exactly one place.
+				selectTool('select')
 				return true
 			}
 			if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -1112,8 +1121,30 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			const container = containerRef.current
 			if (!container) return
 			const target = e.target as Node | null
-			if (target && container.contains(target)) return // already handled by Viewport's own onKeyDown -> handleInput
 			if (isEditableTarget(target)) return
+			const editingId = editor.get().editingId
+			// Ctrl/Cmd+A preventDefault (Task keyboard fix-round, validator-
+			// caught gap): the browser's native select-all is a DOCUMENT-WIDE
+			// default (unlike paste, it has nothing to do with which element is
+			// focused), so — UNLIKE the KNOWN GAP noted below for clipboard
+			// shortcuts — it is NOT out of reach from the viewport-focused path.
+			// This native `keydown` listener is attached on `document`, and
+			// NEITHER Viewport's own onKeyDown handler (canvas-react's
+			// Viewport.tsx) NOR handleInput above ever calls
+			// `stopPropagation()`, so a keydown that originates on the focused
+			// viewport div still bubbles all the way up to this listener same as
+			// one that originates on a focused toolbar button — this one
+			// `preventDefault()` call, placed BEFORE the containment guard
+			// below, covers both entry points without touching canvas-react's
+			// logic-free Viewport component. Gated on `editingId === null`
+			// (mirroring `handleGlobalShortcut`'s own gate) so TextEditor's
+			// native "select all text in this field" keeps working while
+			// editing — `isEditableTarget` already returns early for the
+			// textarea itself above, but this keeps the two checks aligned by
+			// intent, not just by the coincidence that today's only editable
+			// target IS the thing being edited.
+			if (editingId === null && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') e.preventDefault()
+			if (target && container.contains(target)) return // already handled by Viewport's own onKeyDown -> handleInput
 			// Rewrite the raw DOM event into the normalized KeyInputEvent the
 			// shared policy speaks — carrying modifiers verbatim so the
 			// modifier-bearing shortcuts (B4's Ctrl+Z/Ctrl+Shift+Z/Ctrl+Y) work
@@ -1124,8 +1155,24 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				modifiers: { shift: e.shiftKey, alt: e.altKey, ctrl: e.ctrlKey, meta: e.metaKey },
 				t: e.timeStamp,
 			}
-			const editingId = editor.get().editingId
-			handleGlobalShortcut(keyEvent, editingId)
+			const consumed = handleGlobalShortcut(keyEvent, editingId)
+			// Arrow-key nudge fallback (Task keyboard fix-round, validator-
+			// caught gap): nudge lives only in the select tool's FSM
+			// (canvas-editor's select.ts), reached the same way every other
+			// tool-specific keydown is — `dispatchToActiveTool`, which
+			// `handleInput` above already calls unconditionally once
+			// `handleGlobalShortcut` declines a key. Before this fix, THIS path
+			// never called it at all, so nudge (and any other future
+			// tool-owned keydown) silently no-op'd the moment a toolbar button
+			// held focus — the exact delivery gap this whole fallback listener
+			// exists to close for Escape/Delete. Mirrors handleInput's own
+			// dispatch/apply/state-update sequence exactly, against the SAME
+			// toolStatesRef/activeToolIdRef this path already shares with it.
+			if (!consumed) {
+				const next = dispatchToActiveTool(tools, toolStatesRef.current, activeToolIdRef.current, editor, keyEvent)
+				toolStatesRef.current = next
+				setToolStates(next)
+			}
 			// Task D1: Ctrl/Cmd+C/X/V/D DO have competing native browser behavior
 			// (Ctrl+D bookmarks the page, Ctrl+P — N/A here, but Ctrl+V may paste
 			// into a focused field, Ctrl+C may copy a text selection) that
@@ -1137,23 +1184,27 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			// took, keeps its return type the plain `boolean` every other branch
 			// already relies on). Deliberately NOT called for editingId!==null —
 			// TextEditor's native copy/cut/paste must keep working untouched.
-			// KNOWN GAP (ground-truth correction to the plan): this `e` is only
-			// reachable from THIS document-level fallback listener. The PRIMARY
-			// path — Viewport's own onKeyDown -> canvas-react's `keyEventToInput`
-			// -> `handleInput` above — normalizes the raw KeyboardEvent into a
-			// DOM-free `KeyInputEvent` (Viewport.tsx's `handleKey`) and never
-			// retains or forwards the original event, so there is no hook to call
-			// preventDefault from there without changing canvas-react's
-			// logic-free Viewport component (out of this task's file list). In
-			// practice the viewport is a plain non-input `<div>`, so the browser
-			// has no default "paste into this element" action to suppress there,
-			// and Ctrl+D/Ctrl+P are OS/browser-reserved shortcuts most browsers
+			// KNOWN GAP (ground-truth correction to the plan, narrowed by the
+			// Ctrl+A fix above): this `e` is only reachable from THIS
+			// document-level fallback listener. The PRIMARY path — Viewport's
+			// own onKeyDown -> canvas-react's `keyEventToInput` -> `handleInput`
+			// above — normalizes the raw KeyboardEvent into a DOM-free
+			// `KeyInputEvent` (Viewport.tsx's `handleKey`) and never retains or
+			// forwards the original event, so there is no hook to call
+			// preventDefault from THERE directly without changing canvas-react's
+			// logic-free Viewport component (out of this task's file list) —
+			// this listener's own native bubble-up (see the Ctrl+A comment
+			// above) is what closes that gap instead, for any shortcut this
+			// listener itself knows to preventDefault. In practice the viewport
+			// is a plain non-input `<div>`, so the browser has no default
+			// "paste into this element" action to suppress there, and
+			// Ctrl+D/Ctrl+P are OS/browser-reserved shortcuts most browsers
 			// ignore preventDefault for regardless of where it's called from.
 			if (clipboardShortcut(keyEvent, editingId)) e.preventDefault()
 		}
 		document.addEventListener('keydown', handleGlobalKeydown)
 		return () => document.removeEventListener('keydown', handleGlobalKeydown)
-	}, [editor, handleGlobalShortcut])
+	}, [editor, handleGlobalShortcut, tools])
 
 	// Task W1 (docs/plans/2026-07-22-canvas-v2-assets-image.md, D-7) — the
 	// drop surface. onDragOver MUST call preventDefault: a browser div is

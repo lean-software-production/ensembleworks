@@ -503,8 +503,12 @@ async function main() {
 		doc: { listShapes(): Array<{ id: string }>; getShape(id: string): unknown }
 	}
 
-	function dispatchKey(target: HTMLElement, opts: { key: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): void {
-		target.dispatchEvent(
+	// Returns whatever `dispatchEvent` itself returns: `false` iff the event
+	// was cancelable AND some listener called `preventDefault()` on it — used
+	// below (Task keyboard fix-round) to prove Ctrl/Cmd+A's preventDefault
+	// actually fires, not just that a handler ran.
+	function dispatchKey(target: HTMLElement, opts: { key: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): boolean {
+		return target.dispatchEvent(
 			new (win as any).KeyboardEvent('keydown', {
 				key: opts.key,
 				ctrlKey: opts.ctrlKey ?? false,
@@ -849,6 +853,114 @@ async function main() {
 		ewClip.editor.apply({ type: 'DeleteShapes', ids: [pastedId] })
 		ewClip.editor.apply({ type: 'SetSelection', ids: [] })
 	})
+
+	// ==========================================================================
+	// (f7) TASK keyboard FIX-ROUND — Ctrl/Cmd+A must preventDefault, from
+	// BOTH keydown entry points (validator repro: without this, the
+	// browser's native select-all also fires, painting the whole app chrome
+	// text-selection-blue). Proven directly via `dispatchEvent`'s own return
+	// value (`false` iff some listener called `preventDefault()` on a
+	// cancelable event) rather than inspecting `window.getSelection()` —
+	// happy-dom doesn't implement native document text selection, but it DOES
+	// implement the real DOM event contract this assertion depends on.
+	// ==========================================================================
+	{
+		// (f7a) PRIMARY PATH — dispatched on the focused viewport div.
+		let notPreventedViewport = true
+		await act(async () => {
+			viewportEl!.focus()
+			notPreventedViewport = dispatchKey(viewportEl!, { key: 'a', ctrlKey: true })
+		})
+		assert.equal(
+			notPreventedViewport,
+			false,
+			'Ctrl+A dispatched on the focused VIEWPORT must call preventDefault (dispatchEvent returns false) so the browser\'s native select-all never also fires',
+		)
+		console.log('ok: CanvasV2App — Ctrl+A calls preventDefault on the primary (viewport-focused) path')
+
+		// (f7b) DOCUMENT-LEVEL FALLBACK PATH — a toolbar button holds focus,
+		// same technique (f5)/(d4) use above.
+		const selectBtnA = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+		assert.ok(selectBtnA, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
+		await act(async () => {
+			selectBtnA!.focus()
+		})
+		assert.equal(document.activeElement, selectBtnA, 'precondition: the toolbar button holds focus, NOT the viewport')
+		let notPreventedToolbar = true
+		await act(async () => {
+			notPreventedToolbar = dispatchKey(selectBtnA!, { key: 'a', ctrlKey: true })
+		})
+		assert.equal(
+			notPreventedToolbar,
+			false,
+			'Ctrl+A dispatched on a FOCUSED TOOLBAR BUTTON must ALSO call preventDefault (document-level fallback path)',
+		)
+		console.log('ok: CanvasV2App — Ctrl+A calls preventDefault even while a toolbar button holds focus (document-listener path)')
+	}
+
+	// ==========================================================================
+	// (f8) TASK keyboard FIX-ROUND — arrow-key nudge must not be dead
+	// whenever a toolbar button holds focus. Validator repro: click the
+	// Select toolbar button (so it holds focus, exactly the state a real
+	// click leaves), then ArrowRight must still nudge the selection by 1
+	// world unit, same as it does from the viewport-focused path.
+	// ==========================================================================
+	{
+		const ewNudge = (globalThis as any).window.__ew as {
+			editor: { get(): { selection: ReadonlySet<string> }; apply(intent: unknown): void }
+			doc: { getShape(id: string): { x: number; y: number } | undefined }
+		}
+		await act(async () => {
+			ewNudge.editor.apply({ type: 'CreateShape', shape: seedShape('shape:nudge-a', 900, 900) })
+			ewNudge.editor.apply({ type: 'SetSelection', ids: ['shape:nudge-a'] })
+		})
+		const selectBtnNudge = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+		assert.ok(selectBtnNudge, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
+		// Move focus to the toolbar button WITHOUT clicking it (no tool-switch
+		// side effect) — the same real-browser "a button holds focus after
+		// being clicked" state (f5)/(d4) simulate above.
+		await act(async () => {
+			selectBtnNudge!.focus()
+		})
+		assert.equal(document.activeElement, selectBtnNudge, 'precondition: the select toolbar button holds focus, NOT the viewport')
+		await act(async () => {
+			dispatchKey(selectBtnNudge!, { key: 'ArrowRight' })
+		})
+		const nudged = ewNudge.doc.getShape('shape:nudge-a')
+		assert.equal(nudged?.x, 901, 'ArrowRight dispatched on a FOCUSED TOOLBAR BUTTON must still nudge the selection by 1 world unit (document-listener path)')
+		assert.equal(nudged?.y, 900, 'ArrowRight only moves x')
+		console.log('ok: CanvasV2App — arrow-key nudge reaches the select tool FSM even while a toolbar button holds focus')
+
+		// Cleanup: remove the temp shape, net zero for the (e) precondition below.
+		await act(async () => {
+			ewNudge.editor.apply({ type: 'DeleteShapes', ids: ['shape:nudge-a'] })
+			ewNudge.editor.apply({ type: 'SetSelection', ids: [] })
+		})
+	}
+
+	// ==========================================================================
+	// (f9) TASK keyboard FIX-ROUND — Escape returns to the select tool (an
+	// explicit goal item, tldraw parity: Idle.onCancel -> setCurrentTool
+	// ('select')). Validator repro: arm the note tool ('n'), then Escape —
+	// the note toolbar button must no longer be aria-pressed, and the select
+	// button must be.
+	// ==========================================================================
+	{
+		const noteBtnEsc = container.querySelector('[data-canvas-v2-tool="note"]') as HTMLElement | null
+		const selectBtnEsc2 = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+		assert.ok(noteBtnEsc && selectBtnEsc2, `the note and select toolbar buttons must exist — DOM: ${container.innerHTML}`)
+		await act(async () => {
+			viewportEl!.focus()
+			dispatchKey(viewportEl!, { key: 'n' })
+		})
+		assert.equal(noteBtnEsc!.getAttribute('aria-pressed'), 'true', 'precondition: the note tool is armed after pressing "n"')
+		await act(async () => {
+			dispatchKey(viewportEl!, { key: 'Escape' })
+		})
+		assert.equal(noteBtnEsc!.getAttribute('aria-pressed'), 'false', 'Escape must disarm the note tool')
+		assert.equal(selectBtnEsc2!.getAttribute('aria-pressed'), 'true', 'Escape must switch the active tool back to select (tldraw parity)')
+		console.log('ok: CanvasV2App — Escape switches the active tool back to select')
+	}
 
 	// ==========================================================================
 	// (e) UNMOUNT DISPOSES CLEANLY: no more sync reaches the (now-torn-down)
