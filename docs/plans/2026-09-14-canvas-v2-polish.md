@@ -66,17 +66,19 @@ green; full Playwright e2e lane 76/76. The only red in `bun run test` is
 `server/src/{connector,relay}-loopback.test.ts`, which cannot open the tmux
 socket inside the agent sandbox (environmental, pre-existing).
 
-## Batch 2 — in flight at time of writing
+## Batch 2 — outcome when the run was wrapped up (2026-09-14)
 
-`arrow-handles` (endpoint/bend handles, rebind, hover binding target,
-arrowhead glyphs), `text-autosize` (text w/h and note/geo `growY` from a
-DOM measurer injected into the editor), `style-memory` (next-shape style
-learns from edits, fresh shapes show current values, swatch row and panel
-overflow fixes), `marquee-live` (brush rectangle, live selection,
-Shift-add), `frame-reparent` (drag into/out of frames, clipping),
-`drag-modifiers` (Alt-duplicate, Ctrl+D, rotation snap, live Alt/Shift
-resize, Escape reverts drag), `toolbar-icons`, `context-menu`,
-`geo-hittest` (hit-test the variant outline).
+| Task | State |
+|---|---|
+| `style-memory` | **Merged.** Styling a selection also arms the next-shape style (Ctrl/Cmd skips it); fresh shapes and the armed panel show real defaults; all 13 swatches on one row; the panel flips above the selection when a tall geo panel would overflow the viewport. Passed round 2. |
+| `text-autosize` | **Not merged — on `polish/text-autosize`, awaiting re-validation.** Text grows w/h and note/geo grow `growY` as you type, via a DOM measurer feeding `UpdateProps`. Round 1 failed on a padding mismatch that still clipped text; the fixer's commit addresses it and strengthens the contract with a `labelOverflow` Obs. The round-2 validator died on the session limit before running. Fixed-width text (side-handle resize) is out of scope. |
+| `arrow-handles` | **Not merged — on `polish/arrow-handles`, awaiting re-validation.** Start/end/bend handles, rebinding with a hover highlight, all 9 arrowhead glyphs, zoom-stable sizing. Round 1 passed the visuals but failed because Escape/blur mid terminal-drag left a bound arrow unbound. Commit `2a96604` reverts abandoned drags; its validator also died on the session limit. |
+| `marquee-live`, `frame-reparent`, `drag-modifiers` | Not started. Implementers died on the session limit before committing anything. |
+| `toolbar-icons`, `context-menu`, `geo-hittest` | Not started. |
+
+To resume: re-run a validator against the two unmerged branches, merge on
+pass, then relaunch the remaining six tasks from `batch2.json` (the brief
+content is summarised in the rows above and in the gap list).
 
 ## Deferred (known, not started)
 
