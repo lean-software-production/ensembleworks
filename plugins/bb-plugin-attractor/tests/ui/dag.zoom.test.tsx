@@ -118,6 +118,30 @@ describe("DagView zoom/pan controls", () => {
     expect(pannedTransform).not.toBe(zoomedTransform);
   });
 
+  it("pans by the pointer delta converted into SVG viewBox units, not raw screen pixels", () => {
+    // The <svg> renders scaled to its container (viewBox width !=
+    // getBoundingClientRect().width here), so a screen-pixel drag delta must
+    // be converted into viewBox user units before it's added to the
+    // translate — otherwise the graph tracks the cursor at the wrong rate.
+    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    const svg = container.querySelector("svg")! as SVGSVGElement;
+    const [, , viewBoxWidthStr] = svg.getAttribute("viewBox")!.split(" ");
+    const viewBoxWidth = Number(viewBoxWidthStr);
+    const renderedWidth = viewBoxWidth * 2; // svg rendered twice as wide as its viewBox
+    svg.getBoundingClientRect = () =>
+      ({ width: renderedWidth, height: 100, left: 0, top: 0, right: renderedWidth, bottom: 100, x: 0, y: 0, toJSON() {} }) as DOMRect;
+
+    fireEvent.pointerDown(svg, { pointerId: 1, button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(svg, { pointerId: 1, clientX: 140, clientY: 100 }); // dx = 40 screen px
+    fireEvent.pointerUp(svg, { pointerId: 1, clientX: 140, clientY: 100 });
+
+    const match = getTransform(container).match(/translate\(([-\d.]+), ([-\d.]+)\)/);
+    expect(match).toBeTruthy();
+    const tx = Number(match![1]);
+    // 40 screen px * (viewBoxWidth / renderedWidth) = 40 * 0.5 = 20 viewBox units.
+    expect(tx).toBeCloseTo(40 * (viewBoxWidth / renderedWidth));
+  });
+
   it("the DAG box wrapper uses overflow: hidden, never overflow: auto", () => {
     const { container } = render(<DagView graph={GRAPH} events={[]} />);
     const wrapper = container.querySelector('[data-testid="dag-viewport"]') as HTMLElement;

@@ -66,6 +66,26 @@ function clampScale(scale: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
 }
 
+/**
+ * The scale to multiply a screen-pixel delta/offset by to get the
+ * equivalent in the `<svg>`'s own viewBox user units — 1 unless the svg is
+ * rendered at a different size than its viewBox (e.g. scaled to fit its
+ * container). Prefers `getScreenCTM()` (unavailable in jsdom); falls back
+ * to the viewBox/rendered-size ratio, treating a zero/undefined rendered
+ * size as no scaling.
+ */
+function svgClientScale(svg: SVGSVGElement, viewWidth: number, viewHeight: number): { x: number; y: number } {
+  const ctm = svg.getScreenCTM?.();
+  if (ctm && ctm.a && ctm.d) {
+    return { x: 1 / ctm.a, y: 1 / ctm.d };
+  }
+  const rect = svg.getBoundingClientRect();
+  return {
+    x: rect.width ? viewWidth / rect.width : 1,
+    y: rect.height ? viewHeight / rect.height : 1,
+  };
+}
+
 /** Zooms `state` by `factor` around the viewBox point `pivot`, keeping that point stationary on screen. */
 function zoomAround(state: ZoomState, factor: number, pivot: { x: number; y: number }): ZoomState {
   const nextScale = clampScale(state.scale * factor);
@@ -436,7 +456,9 @@ export function DagView({ graph, events, currentNodeId, threadIdByNode, onOpenTh
     const dy = event.clientY - drag.lastY;
     drag.lastX = event.clientX;
     drag.lastY = event.clientY;
-    setZoom((z) => ({ ...z, tx: z.tx + dx, ty: z.ty + dy }));
+    const svg = svgRef.current;
+    const clientScale = svg ? svgClientScale(svg, viewWidth, viewHeight) : { x: 1, y: 1 };
+    setZoom((z) => ({ ...z, tx: z.tx + dx * clientScale.x, ty: z.ty + dy * clientScale.y }));
   };
   const endDrag = (event: React.PointerEvent<SVGSVGElement>) => {
     const drag = dragState.current;
