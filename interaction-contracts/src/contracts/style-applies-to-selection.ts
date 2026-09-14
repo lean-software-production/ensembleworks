@@ -2,7 +2,7 @@
 // contract that discharges this styling sub-cycle's CLAUDE.md obligation:
 // seed two geo shapes, marquee-select both, click the style panel's blue
 // color swatch, and assert BOTH shapes' stored color changed to 'blue'.
-// Browser-only: the panel (client/src/canvas-v2/StylePanel.tsx) is a React/
+// Browser-only: the panel (canvas-ui/src/StylePanel.tsx) is a React/
 // DOM component — the FSM runner drives headless tool FSMs against a
 // DOM-less Editor and has no panel to click, so this gesture can only run
 // through real Playwright input against a live ?engine=v2 room.

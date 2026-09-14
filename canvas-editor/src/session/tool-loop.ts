@@ -1,8 +1,9 @@
 /**
- * The v1 tool-switching model + the abandonment-cancel policy — pulled out
- * of CanvasV2App.tsx so both are plain, DOM-free, house-testable functions
- * (script.ts's `run()`-style dispatch semantics, applied by hand here since
- * CanvasV2App drives a LIVE event stream rather than a pre-built array).
+ * The v1 tool-switching model + the abandonment-cancel policy — plain,
+ * DOM-free, house-testable functions (script.ts's `run()`-style dispatch
+ * semantics, applied by hand here since canvas-ui's `useCanvasSession`, the
+ * one caller every host mounts, drives a LIVE event stream rather than a
+ * pre-built array).
  *
  * TOOL-SWITCHING MODEL (decided here, v1 — documented rather than left
  * implicit): one `ToolId` is "active" at a time, chosen by the toolbar.
@@ -18,11 +19,11 @@
  * really the UNION of both: click/drag/marquee-select (select.ts) AND
  * drag a resize/rotate handle when something is already selected
  * (transform.ts). The select+transform composite now lives in canvas-editor
- * (`tools/select-and-transform.ts`) and is re-exported below for the
- * client's existing importers.
+ * (`tools/select-and-transform.ts`) and is imported below; `createToolSet`
+ * builds it as the 'select' entry.
  *
  * No V1 SUPPORT for switching TO the transform tool explicitly via a toolbar
- * button (there is no such button — see CanvasV2App.tsx's toolbar) — it is
+ * button (there is no such button — see canvas-ui's Toolbar.tsx) — it is
  * reachable ONLY through the select composite, matching tldraw's own product
  * (there is no "transform tool" button there either; handles just appear on
  * a selection made via the select tool).
@@ -40,15 +41,15 @@ import { createSelectAndTransformTool, type SelectAndTransformState } from '../t
 import type { SelectState } from '../tools/select.js'
 import type { SnapResult } from '@ensembleworks/canvas-model'
 
-/** The toolbar's tool identifiers — see CanvasV2App.tsx's toolbar for the
- * button list. 'transform' is deliberately ABSENT (see module header). */
+/** The toolbar's tool identifiers — see canvas-ui's Toolbar.tsx `TOOL_ORDER`
+ * for the button list. 'transform' is deliberately ABSENT (see module header). */
 export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'arrow' | 'draw' | 'line'
 
 /** One `Tool<unknown>` instance per `ToolId`, built ONCE per `ToolContext` —
  * mirrors every tool factory's own "call once per Editor/ToolContext"
  * contract (tool-context.ts's own doc comment says the same about itself).
  * `unknown` state (not a discriminated union across all seven) because the
- * caller (CanvasV2App) only ever looks up ONE tool by the currently-active
+ * caller (canvas-ui's useCanvasSession) only ever looks up ONE tool by the currently-active
  * `ToolId` and threads that specific tool's own state through — see
  * `ToolLoop` below. */
 export interface ToolSet {
@@ -148,7 +149,7 @@ export function dispatchToActiveTool(
  * `editor.setCurrentTool('select.editing_shape')` — a completed create-and-
  * edit hands control back to the select tool, it never leaves the create
  * tool armed for a second click to spawn a second empty shape. The
- * CALLER (CanvasV2App) reads `editor.get().editingId` itself immediately
+ * CALLER (canvas-ui's useCanvasSession) reads `editor.get().editingId` itself immediately
  * before and after its own `dispatchToActiveTool` call and passes both
  * here — this function takes no `Intent[]` because the SAME transition
  * (null -> non-null editingId) can just as well come from select.ts's own
@@ -170,9 +171,10 @@ export function shouldFallBackToSelect(active: ToolId, editingIdBefore: string |
  * preview shape permanently visible to every peer unless something deletes
  * it). This package (canvas-editor) explicitly leaves that cancel wiring to
  * "the Seam D/G3 wiring that owns those lifecycle events" — this function
- * IS that wiring's policy half (CanvasV2App.tsx calls it from
- * `onViewportBlur` AND from the toolbar's tool-switch handler, both of which
- * abandon whatever gesture was in flight on the tool being left).
+ * IS that wiring's policy half (canvas-ui's useCanvasSession calls it from
+ * `cancelAndReset`, which runs on viewport blur, pointercancel, Escape and
+ * every tool switch, all of which abandon whatever gesture was in flight on
+ * the tool being left).
  *
  * COVERAGE, STATED HONESTLY PER TOOL (not every tool's in-flight state
  * carries a shape id to delete):
@@ -235,8 +237,8 @@ export function shouldFallBackToSelect(active: ToolId, editingIdBefore: string |
  * that's the emitting caller's job, and this is that caller). An EMPTY
  * selection returns `[]` — no no-op DeleteShapes([]) and no redundant
  * SetSelection([]) when the selection is already empty. Stays in this
- * DOM-free module (CanvasV2App.tsx's keydown listener is the only DOM-facing
- * half of this wiring) per the module boundary this file's header states.
+ * DOM-free module (canvas-ui's useCanvasSession keydown handling is the only
+ * DOM-facing half of this wiring) per the module boundary this file's header states.
  */
 export function deleteSelectionIntents(editor: Editor): Intent[] {
 	const ids = [...editor.get().selection]
@@ -275,8 +277,8 @@ export function deleteSelectionIntents(editor: Editor): Intent[] {
  * undo/redo when nothing dangled would otherwise emit a same-value
  * SetSelection every time, and editor.ts's own state-change note says
  * SetSelection notifies even when the ids are identical). Call this right
- * after `editor.undo()`/`editor.redo()` in CanvasV2App's shared shortcut
- * policy — applying the result (if non-empty) is a pure state-only intent
+ * after `editor.undo()`/`editor.redo()` (session/history.ts's
+ * `undoWithRepair`/`redoWithRepair` do) — applying the result (if non-empty) is a pure state-only intent
  * (`docMutated` stays false), so it never pushes a new undo entry or clears
  * the redo stack (editor.ts's applyAll: the undo/redo stacks only move on
  * `docMutated`).

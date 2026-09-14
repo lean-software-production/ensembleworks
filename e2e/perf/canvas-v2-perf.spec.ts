@@ -438,13 +438,12 @@ test.describe('canvas-v2 browser perf', () => {
 	// never actually been exercised by this rig. This scenario closes that
 	// gap directly.
 	//
-	// DRIVING SELECT-ALL: Ctrl+A/Cmd+A is NOT wired anywhere in canvas-editor,
-	// canvas-react, or client (grepped for `SelectAll`/`selectAll`/a keydown
-	// case on `'a'` — none exist; client/src/canvas-v2/CanvasV2App.tsx's
-	// `handleGlobalShortcut` wires exactly Escape/Delete/undo-redo, no
-	// select-all case). So this dispatches the SAME real intent a future
-	// Ctrl+A handler would — `editor.applyAll([{type: 'SetSelection', ids}])`
-	// (canvas-editor/src/intents.ts's `SetSelection`) — with every id
+	// DRIVING SELECT-ALL: when this scenario was written Ctrl+A/Cmd+A was not
+	// wired anywhere (it is now: canvas-editor's session/keyboard.ts
+	// `resolveShortcut` selectAll command). The scenario still dispatches the
+	// intent directly, keeping keyboard delivery out of the measurement:
+	// `editor.applyAll([{type: 'SetSelection', ids}])` (canvas-editor/src/
+	// intents.ts's `SetSelection`) with every id
 	// `seedGrid` deterministically produces (`shape:seed-<i>`,
 	// lib/canvas-v2.ts), not a DOM/CSS hack.
 	//

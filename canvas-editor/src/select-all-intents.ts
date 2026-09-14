@@ -13,7 +13,8 @@
  * Always returns exactly one SetSelection intent (even `ids: []` on an
  * empty page) -- harmless either way: SetSelection is a view intent
  * (docMutated: false, editor.ts), so it never touches the undo stack. The
- * caller (CanvasV2App.tsx's handleGlobalShortcut) applies it via
+ * caller (canvas-ui's useCanvasSession, on session/keyboard.ts's selectAll
+ * command) applies it via
  * editor.applyAll(...), same as every other intent-emitting shortcut here.
  *
  * Sorted by fractional index (id as a tiebreak for equal indices) --

@@ -415,9 +415,9 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
     // BeginEdit re-emission is harmless elsewhere in this file: a stray
     // Enter that reaches here while ALREADY editing (this tool's own idle
     // state, so nothing should normally be mid-edit AND idle here — the
-    // client's handleGlobalShortcut gates keydowns on editingId===null
-    // before they ever reach a tool — but this FSM must not assume its
-    // caller's discipline) must not re-fire a no-op BeginEdit against a
+    // session's resolveShortcut declines every key while editingId is set,
+    // and editing keys normally land in the TextEditor's textarea rather
+    // than here — but this FSM must not assume its caller's discipline) must not re-fire a no-op BeginEdit against a
     // stale read. `editor.get().selection` (not this FSM's own state) is
     // the single source of truth for "what's selected" — select.ts never
     // carries its own copy of the selection.

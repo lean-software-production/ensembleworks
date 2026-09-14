@@ -1,13 +1,15 @@
 // Task keyboard/K4 (canvas-v2 polish batch — "Keyboard parity") — the
 // interaction contract that discharges the Ctrl/Cmd+A branch this task adds
-// to CanvasV2App.tsx's `handleGlobalShortcut`: with nothing selected,
+// to CanvasV2App.tsx's `handleGlobalShortcut` (now canvas-editor's
+// `resolveShortcut`, run by canvas-ui's useCanvasSession): with nothing selected,
 // Ctrl+A (Playwright's `keyboard.press` normalizes Cmd+A/Ctrl+A per-OS —
 // the browser runner drives Chromium under Linux/CI, where Ctrl is the
 // accelerator key) selects every top-level shape on the current page —
 // tldraw parity (actions.tsx's `select-all`, `kbd: 'cmd+a,ctrl+a'`).
 //
 // Browser-only: like Ctrl+C/X/V/D/Z/Y and the bracket reorder keys,
-// Ctrl+A routes through `handleGlobalShortcut`, never a tool FSM.
+// Ctrl+A routes through canvas-ui's useCanvasSession shortcut path, never a
+// tool FSM.
 //
 // RED (teeth-checked live): with the Ctrl+A branch reverted (or absent),
 // the keydown falls through to `dispatchToActiveTool` -- the select tool's
@@ -30,7 +32,7 @@ export const selectAllSelectsEveryShapeOnPage: Contract = {
   ],
   gesture: (_rng: Rng): GestureOp[] => [
     // Nothing selected/edited, so this keydown reaches
-    // handleGlobalShortcut's Ctrl+A branch.
+    // the session's selectAll command.
     { kind: 'key', key: 'a', modifiers: { ctrl: true } },
   ],
   check: (obs: Obs): string | null => {

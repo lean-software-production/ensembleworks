@@ -38,7 +38,7 @@
  *   6. `createToolContext(editor)` + `registerCanvasV2Shapes()` + `registerCoreShapes()`
  *      (both idempotently guarded inside their own function, order-independent —
  *      they populate the same process-wide canvas-react shapeRegistry Map)
- *      + `createToolSet(toolContext)` (tool-loop.ts).
+ *      + `createToolSet(toolContext)` (canvas-editor's session/tool-loop.ts).
  *   7. `window.__ew = { editor, doc: peer.doc, presencePublisher }` — the
  *      design's E2E debug hook (mirrors the legacy app's `window.__ewEditor`,
  *      App.tsx). `presencePublisher` (Task G4) lets a test drive this

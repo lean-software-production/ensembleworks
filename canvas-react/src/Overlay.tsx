@@ -37,10 +37,9 @@
 // editor's select tool (tools/select.ts) now computes snapCandidates on every
 // pointermove of a drag-translate gesture (excludedIds precomputed ONCE at
 // drag start — see that file's SNAP-DURING-DRAG section) and carries the
-// result on its own 'dragging' FSM state. The client (Unit 13, client/src/
-// canvas-v2/tool-loop.ts's `currentSnapResult`) reads it back out of the
-// select tool's current ToolStates and threads it into THIS prop
-// (CanvasV2App.tsx). Undefined whenever there's nothing to show (not
+// result on its own 'dragging' FSM state. canvas-ui's CanvasSurface reads it
+// back out of the select tool's current ToolStates (canvas-editor's
+// session/tool-loop.ts `currentSnapResult`) and threads it into THIS prop. Undefined whenever there's nothing to show (not
 // dragging, a different tool active, or the drag hasn't computed its first
 // snap yet) — SnapGuides.tsx's existing "renders nothing on undefined"
 // handling needed no change at all.

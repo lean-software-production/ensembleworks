@@ -326,7 +326,7 @@ const EPS = 1e-6
 //     gesture-start snapshot (`startShapes`) on its Resizing/Rotating state
 //     the moment the gesture begins mutating the doc (onPointing's first
 //     threshold-crossing move), so a caller who abandons the gesture
-//     (client/src/canvas-v2/tool-loop.ts's cancelActiveTool) can restore
+//     (canvas-editor/src/session/tool-loop.ts's cancelActiveTool) can restore
 //     every affected shape verbatim regardless of how many incremental
 //     ResizeShapes commits happened. Drive TWO pointermoves (two separate
 //     incremental commits, no pointerup — still mid-gesture) and prove

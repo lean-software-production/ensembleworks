@@ -1,10 +1,10 @@
 // Pure emitter helpers over the clipboard model (canvas-model/src/
 // clipboard.ts's serializeSelection/decodeClipboard/cloneWithNewIds) — one
 // batch of EXISTING intents each, mirroring the landed
-// `deleteSelectionIntents` precedent (client/src/canvas-v2/tool-loop.ts):
+// `deleteSelectionIntents` precedent (session/tool-loop.ts):
 // no new mutation machinery, just CreateShape x N + PutBinding x M (E2,
 // validated by bindingSchema) + one SetSelection(newRootIds). The caller
-// (client's Ctrl+D/Ctrl+V wiring, Task D1) applies the returned array through
+// (canvas-ui's useCanvasSession Ctrl+D/Ctrl+V wiring) applies the returned array through
 // a single `editor.applyAll(...)` call, which is what makes the whole
 // duplicate/paste ONE commit / ONE undo entry (see editor.ts's applyAll doc
 // comment) — this module never calls applyAll itself.

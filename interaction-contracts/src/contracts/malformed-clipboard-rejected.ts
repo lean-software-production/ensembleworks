@@ -18,8 +18,8 @@
 // `validateShape` filter at all. This payload instead passes both of those
 // guards and forces the per-shape filter to be what does the work.
 //
-// Browser-only, empty scene (Ctrl+V routes through
-// CanvasV2App.tsx's `handleGlobalShortcut`, never a tool FSM — same as
+// Browser-only, empty scene (Ctrl+V routes through canvas-ui's
+// useCanvasSession shortcut path, never a tool FSM — same as
 // K1/K2 — and there is nothing to seed: a malformed paste must create
 // nothing out of nothing).
 //

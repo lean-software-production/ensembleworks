@@ -3,9 +3,9 @@
  * single-key tool shortcuts (useTools.tsx: v/h/n/t/r/o/a/f/d/l), reduced to
  * the ToolId set v2 actually ships (no eraser/laser/text-alias tools --
  * tool-loop.ts's `ToolId` union is the exhaustive v2 list). DOM-free and
- * unit-testable, mirroring clipboard-dom.ts/reorder-dom.ts:
- * CanvasV2App.tsx's `handleGlobalShortcut` is the only caller, and composes
- * the result (selectTool(hit.toolId), plus a SetNextStyle({geo: armGeo})
+ * unit-testable, mirroring clipboard-shortcut.ts/reorder-shortcut.ts:
+ * session/keyboard.ts's `resolveShortcut` is the only caller, and canvas-ui's
+ * useCanvasSession composes the result (selectTool(hit.toolId), plus a SetNextStyle({geo: armGeo})
  * dispatch when armGeo is set -- the same armed-style path StylePanel's
  * AS3 mode already uses).
  *
@@ -50,8 +50,8 @@ const TOOL_SHORTCUTS: readonly { readonly key: string; readonly shortcut: ToolSh
 /**
  * Pure decision: does this keydown mean a tool-switch shortcut, and which
  * tool (+ optional armed geo variant)? Gated on `editingId === null` exactly
- * like Escape/Delete/undo/clipboard/reorder in CanvasV2App.tsx's
- * `handleGlobalShortcut` -- every one of these letters is an ordinary
+ * like Escape/Delete/undo/clipboard/reorder in session/keyboard.ts's
+ * `resolveShortcut` -- every one of these letters is an ordinary
  * typeable character, so while a shape is being text-edited the
  * TextEditor's own textarea must receive them unmolested. Also suppressed
  * whenever Ctrl/Cmd/Alt is held: bare letters are the tldraw-parity tool

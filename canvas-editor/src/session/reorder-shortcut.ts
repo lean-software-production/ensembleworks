@@ -1,8 +1,9 @@
 /**
  * The pure key -> Arrange-op DECISION for the four bracket-key reorder
  * shortcuts (Task D1, D-6) — DOM-free and unit-testable, mirroring
- * `clipboard-shortcut.ts`'s `clipboardShortcut`. CanvasV2App.tsx's
- * `handleGlobalShortcut` is the only caller: it maps the returned `op` to
+ * `clipboard-shortcut.ts`'s `clipboardShortcut`. session/keyboard.ts's
+ * `resolveShortcut` is the only caller, and canvas-ui's useCanvasSession maps
+ * the returned `op` to
  * `reorderSelectionIntents(editor, op)` and applies the batch in one
  * `editor.applyAll(...)` call (one commit, one undo entry — canvas-editor's
  * E2). The actual "press ] -> shape moves up in paint order" is proved
@@ -21,7 +22,7 @@ import type { ReorderOp } from '../reorder-intents.js'
 /**
  * Pure decision: does this keydown mean a bracket-key Arrange shortcut, and
  * which op? Gated on `editingId === null` exactly like Escape/Delete/
- * undo/clipboard in CanvasV2App.tsx's `handleGlobalShortcut` — brackets are
+ * undo/clipboard in session/keyboard.ts's `resolveShortcut` — brackets are
  * ordinary typeable characters, so while a shape is being text-edited the
  * TextEditor's own textarea must receive them unmolested.
  */

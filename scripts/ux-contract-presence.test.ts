@@ -24,11 +24,13 @@ import { execSync } from 'node:child_process'
 
 // ============================================================================
 // The vocabulary — kept in sync with the plan's path lists AND with reality:
-// canvas-editor/src/tools/, canvas-react/src/, and client/src/canvas-v2/ are
-// where v2's tool FSMs, the React renderer, and the client-side input/tool
-// glue (tool-loop.ts, ws-client-transport.ts, presence.ts, CanvasV2App.tsx,
-// bootstrap-page.ts, DevOverlay.tsx) actually live today — verified by
-// listing each directory, not assumed from the plan's prose. The contracts
+// canvas-editor/src/tools/ and canvas-editor/src/session/ hold v2's tool FSMs
+// and the DOM-free session policy (tool loop, shortcut resolution, history);
+// canvas-react/src/ is the React renderer; canvas-ui/src/ is the shared
+// session hook, toolbar, style panel and CanvasSurface every host mounts; and
+// client/src/canvas-v2/ is the web app's own mount glue (CanvasV2App.tsx,
+// ws-client-transport.ts, presence.ts, bootstrap-page.ts, DevOverlay.tsx) —
+// verified by listing each directory, not assumed from the plan's prose. The contracts
 // module spans interaction-contracts/ (the pure declarations), the FSM
 // runner directory canvas-editor/src/contracts/, and the browser runner's two
 // files in e2e/ — also verified present.

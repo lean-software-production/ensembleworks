@@ -13,7 +13,7 @@
 // (the Playwright clipboard-read/write permission grant) end-to-end too.
 //
 // Browser-only: like Delete/undo/redo/Ctrl+D, Ctrl+C/Ctrl+V route through
-// CanvasV2App.tsx's `handleGlobalShortcut`, never a tool FSM.
+// canvas-ui's useCanvasSession shortcut path, never a tool FSM.
 //
 // RED (Obligation 2/4, teeth-checked live): with D1's `c`/`v` branches
 // reverted to no-ops, both keys do nothing — `shapeCount()` stays 2 and

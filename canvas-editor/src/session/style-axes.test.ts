@@ -1,4 +1,4 @@
-// Run: bun src/canvas-v2/style-axes.test.ts
+// Run: bun src/session/style-axes.test.ts
 // Task P1 (docs/plans/2026-07-21-canvas-v2-styling.md) — pure unit tests for
 // style-axes.ts's relevance (`relevantAxes`) and current-value (`currentValue`)
 // helpers. No DOM/React: shapes are plain `Shape` object literals.

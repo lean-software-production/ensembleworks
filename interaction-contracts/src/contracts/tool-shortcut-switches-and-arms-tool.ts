@@ -1,6 +1,7 @@
 // Task keyboard/K3 (canvas-v2 polish batch — "Keyboard parity") — the
 // interaction contract that discharges the tool-shortcut keydown branch
-// this task adds to CanvasV2App.tsx's `handleGlobalShortcut`
+// this task added to CanvasV2App.tsx's `handleGlobalShortcut` (now
+// canvas-editor's `resolveShortcut`, run by canvas-ui's useCanvasSession)
 // (canvas-editor/src/session/tool-shortcut.ts's pure `toolShortcut` decision):
 // pressing 'r' (with nothing focused in a text field) must switch the
 // active tool to 'geo' AND arm the geo variant to 'rectangle' (the same
@@ -17,9 +18,9 @@
 // switched the tool, the SELECT tool (still active) would just marquee/
 // deselect on that click and no shape would be created at all.
 //
-// Browser-only: like every other CanvasV2App.tsx global keydown shortcut
+// Browser-only: like every other global keydown shortcut
 // (Escape/Delete/undo/redo/clipboard/reorder), this routes through
-// `handleGlobalShortcut`, never a tool FSM directly -- the FSM runner drives
+// canvas-ui's useCanvasSession shortcut path, never a tool FSM directly -- the FSM runner drives
 // tool FSMs only.
 //
 // RED (teeth-checked live): with the tool-shortcut branch reverted (or
@@ -39,7 +40,7 @@ export const toolShortcutSwitchesAndArmsTool: Contract = {
   gesture: (_rng: Rng): GestureOp[] => [
     // No text field is focused (an empty scene starts with nothing
     // selected/edited), so this bare 'r' keydown reaches
-    // handleGlobalShortcut's tool-shortcut branch.
+    // the session's tool-shortcut command.
     { kind: 'key', key: 'r' },
     // Click (not drag) on empty canvas, well clear of the toolbar.
     { kind: 'down', at: { ref: 'point', x: 500, y: 560 } },

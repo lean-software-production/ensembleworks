@@ -424,8 +424,8 @@ async function main() {
 	// (d3e) ESCAPE, PRIMARY PATH (Task B3): a real `Escape` keydown dispatched
 	// on the FOCUSED VIEWPORT DIV (not a toolbar button — that's d4's fallback
 	// path) drives the WHOLE primary chain end to end: Viewport.onKeyDown ->
-	// keyEventToInput -> CanvasV2App.handleInput -> the shared
-	// handleGlobalShortcut policy -> cancelAndReset -> the in-flight preview's
+	// keyEventToInput -> the session's handleInput (canvas-ui) -> the shared
+	// resolveShortcut policy -> cancelAndReset -> the in-flight preview's
 	// DeleteShapes. The other Escape integration case (d4) deliberately
 	// bypasses handleInput (it dispatches on a focused sibling button, so only
 	// the document-level listener sees it), so this is the ONLY test that
@@ -460,7 +460,7 @@ async function main() {
 	assert.equal(document.activeElement, viewportEl, 'precondition: the VIEWPORT div holds focus (this is the primary onKeyDown path, not the toolbar fallback)')
 
 	// The real primary-path Escape: dispatched ON the focused viewport div, so
-	// it flows through Viewport.onKeyDown -> handleInput -> handleGlobalShortcut
+	// it flows through Viewport.onKeyDown -> handleInput -> resolveShortcut
 	// (NOT the document-level fallback — the fallback's containment guard skips
 	// any target inside the viewport container, so this is unambiguously the
 	// primary path).
@@ -470,7 +470,7 @@ async function main() {
 	assert.equal(
 		ewEsc.doc.listShapes().find((s) => s.id === escPreview!.id),
 		undefined,
-		'a real Escape keydown on the FOCUSED VIEWPORT cancels the in-flight create-drag preview (handleInput -> shared handleGlobalShortcut -> cancelAndReset)',
+		'a real Escape keydown on the FOCUSED VIEWPORT cancels the in-flight create-drag preview (handleInput -> shared resolveShortcut -> cancelAndReset)',
 	)
 	console.log('ok: CanvasV2App — a real Escape keydown on the focused viewport cancels an in-flight gesture (primary handleInput path)')
 
@@ -573,8 +573,8 @@ async function main() {
 
 	// ==========================================================================
 	// (f) CTRL+Z / CTRL+SHIFT+Z / CTRL+Y -> editor.undo()/redo() (Task B4),
-	// through the SAME shared `handleGlobalShortcut` policy Escape/Delete/
-	// Backspace use (see CanvasV2App.tsx's own doc comment on that function).
+	// through the SAME shared `resolveShortcut` policy Escape/Delete/
+	// Backspace use (canvas-editor's session/keyboard.ts).
 	// Every case here asserts a REAL doc effect (a shape appearing/
 	// disappearing), never a mock of editor.undo()/redo() — proving the
 	// keydown actually drove the real undo/redo stack, not just that some
@@ -691,7 +691,7 @@ async function main() {
 
 	// (f5) FROM THE TOOLBAR-FOCUSED PATH (the document-level listener, not
 	// handleInput): proves the shared gate delivers Ctrl+Z regardless of
-	// focus — the payoff of B3's handleGlobalShortcut extraction. Moves focus
+	// focus — the payoff of B3's shared-shortcut extraction. Moves focus
 	// to a toolbar button WITHOUT clicking it (no tool-switch side effect),
 	// same technique (d4) uses above.
 	const selectBtnUndo = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
@@ -716,7 +716,7 @@ async function main() {
 
 	// ==========================================================================
 	// (f6) TASK D1 — CTRL/CMD+D / C / X / V: duplicate/copy/cut/paste, driven
-	// through the SAME shared `handleGlobalShortcut` policy as Escape/Delete/
+	// through the SAME shared `resolveShortcut` policy as Escape/Delete/
 	// undo above. Ctrl+D never touches `navigator.clipboard` at all (pure
 	// `editor.applyAll(duplicateSelectionIntents(...))`); C/X/V go through the
 	// REAL `navigator.clipboard` — happy-dom implements a genuine in-memory
@@ -887,7 +887,7 @@ async function main() {
 			}
 		})
 	await act(async () => {
-		// The keydown dispatch runs handleGlobalShortcut's cut branch
+		// The keydown dispatch runs the session's cut command
 		// SYNCHRONOUSLY, all the way through starting the (now-pending)
 		// clipboard write — so whatever it captures (or doesn't) for the
 		// eventual delete is already decided by the time dispatchEvent

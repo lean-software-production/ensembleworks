@@ -9,9 +9,9 @@
 //
 // FSM-level (not browser-only): the nudge branch lives entirely inside the
 // select tool's own FSM (tools/select.ts), which the FSM runner drives
-// directly via script.ts's `.key()` builder — no CanvasV2App/DOM plumbing
+// directly via script.ts's `.key()` builder — no session/DOM plumbing
 // is exercised by this behavior, unlike Ctrl+A/tool-switch shortcuts (which
-// route through CanvasV2App.tsx's handleGlobalShortcut and so can only be
+// route through canvas-ui's useCanvasSession shortcut path and so can only be
 // proven at the browser level — see this task's OTHER new contract for
 // those).
 //

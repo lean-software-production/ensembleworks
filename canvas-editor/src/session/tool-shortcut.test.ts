@@ -1,9 +1,9 @@
-// Run: bun src/canvas-v2/tool-shortcut.test.ts
+// Run: bun src/session/tool-shortcut.test.ts
 //
 // The pure key -> tool-switch DECISION (Task keyboard/K3) -- DOM-free and
-// unit-testable, mirroring clipboard-dom.test.ts/reorder-dom.test.ts.
-// CanvasV2App.tsx's `handleGlobalShortcut` is the only caller: it maps a hit
-// to `selectTool(hit.toolId)` plus, when `armGeo` is set, a `SetNextStyle`
+// unit-testable, mirroring clipboard-shortcut.test.ts/reorder-shortcut.test.ts.
+// session/keyboard.ts's `resolveShortcut` is the only caller; canvas-ui's
+// useCanvasSession runs the resulting command: `selectTool(hit.toolId)` plus, when `armGeo` is set, a `SetNextStyle`
 // dispatch over `{ geo: hit.armGeo }` (AS3's armed-style path). The actual
 // end-to-end "press 'r' -> the geo tool activates and arms rectangle" is
 // proved by the `tool-shortcut-switches-and-arms-tool` interaction contract,

@@ -361,7 +361,8 @@ test('canvas-v2 new engine: delete — Delete/Backspace remove a selected shape 
 		await expect(shapeB2).toHaveCount(0, { timeout: 10_000 })
 
 		// --- Delete while the shape is being TEXT-EDITED must NOT delete it ---
-		// (handleGlobalShortcut's `editingId !== null` gate — CanvasV2App.tsx —
+		// (resolveShortcut's `editingId !== null` gate — canvas-editor's
+		// session/keyboard.ts —
 		// defers Delete/Backspace to TextEditor's own textarea, which only
 		// edits characters and never deletes the shape.)
 		const id3 = await createNoteAt(page, boxA)
@@ -579,10 +580,9 @@ test("canvas-v2 new engine: undo is LOCAL-ONLY per peer — A's Ctrl+Z reverts o
 		// A undoes ITS OWN last batch (creating X). No prior click/focus setup
 		// needed here — A's last DOM interaction was createNoteAt's own
 		// closing click on the 'select' toolbar button, so this Ctrl+Z is
-		// delivered via CanvasV2App's document-level keydown fallback (the
-		// button is a viewport SIBLING, not a descendant — see that
-		// component's GLOBAL KEYBOARD-DELIVERY FALLBACK note), which funnels
-		// through the exact same `handleGlobalShortcut` policy either way.
+		// delivered via canvas-ui's useCanvasSession document-level keydown
+		// listener (the button is a viewport SIBLING, not a descendant), which
+		// funnels through the exact same `resolveShortcut` policy either way.
 		await page.keyboard.press('Control+z')
 
 		// X gone on BOTH clients.
@@ -643,7 +643,7 @@ test('canvas-v2 new engine: cancellation — Escape/blur/pointercancel abandon a
 	await page.mouse.down()
 	await page.mouse.move(p0.x + 60, p0.y + 60) // crosses DRAG_THRESHOLD -> preview shape committed (create.ts's 'dragging')
 	await expect(page.locator('[data-shape-kind="geo"]')).toHaveCount(1) // sanity: the preview really is live mid-drag
-	await page.keyboard.press('Escape') // handleGlobalShortcut -> cancelAndReset -> DeleteShapes([previewId])
+	await page.keyboard.press('Escape') // resolveShortcut -> cancelAndReset -> DeleteShapes([previewId])
 	await page.mouse.up() // release the real button (tool FSM is already back to idle by the time this lands)
 	await expect(page.locator('[data-shape-kind="geo"]')).toHaveCount(0)
 	await expect.poll(shapeCount).toBe(0)

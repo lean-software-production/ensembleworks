@@ -6,7 +6,7 @@
 // note to red, draw a new note, and it must ALSO be red, not the tool's own
 // stale/default armed style. Browser-only, same rationale as
 // `style-applies-to-selection`/`armed-style-applies-to-created-shape`: the
-// panel (client/src/canvas-v2/StylePanel.tsx) is a React/DOM component with
+// panel (canvas-ui/src/StylePanel.tsx) is a React/DOM component with
 // no FSM-level equivalent to click.
 //
 // GESTURE: seed one geo shape, select it, click the SELECTION panel's blue

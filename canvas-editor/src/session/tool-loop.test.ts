@@ -1,4 +1,4 @@
-// Run: bun src/canvas-v2/tool-loop.test.ts
+// Run: bun src/session/tool-loop.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import type { Shape } from '@ensembleworks/canvas-model'
@@ -746,7 +746,7 @@ function setup() {
 
 // ============================================================================
 // 11. shouldFallBackToSelect (create-edit-flow task) — the pure decision
-//    CanvasV2App's handleInput consults after every dispatchToActiveTool
+//    canvas-ui's useCanvasSession consults after every dispatchToActiveTool
 //    call: fires ONLY when editingId transitioned null -> non-null while a
 //    NON-select tool was active. See tool-loop.ts's own doc comment for why
 //    it's the editingId transition (not the raw Intent[]) that's compared.
@@ -763,7 +763,7 @@ function setup() {
 // ============================================================================
 // 12. End-to-end: dispatching a note-tool click through dispatchToActiveTool
 //    really does flip editingId from null to the new shape's id — the live
-//    signal shouldFallBackToSelect above is built to consume (CanvasV2App
+//    signal shouldFallBackToSelect above is built to consume (useCanvasSession
 //    wires the two together; this proves the producer side of that wiring
 //    independent of any React/DOM harness).
 // ============================================================================
@@ -781,7 +781,7 @@ function setup() {
 
 	const editingIdAfter = editor.get().editingId
 	assert.ok(editingIdAfter, 'a completed note click begins editing the new shape')
-	assert.ok(shouldFallBackToSelect(activeBefore, editingIdBefore, editingIdAfter), 'CanvasV2App would switch the toolbar back to select after this dispatch')
+	assert.ok(shouldFallBackToSelect(activeBefore, editingIdBefore, editingIdAfter), 'the session would switch the toolbar back to select after this dispatch')
 	console.log('ok: tool-loop — a note click flips editingId in exactly the shape shouldFallBackToSelect consumes')
 }
 

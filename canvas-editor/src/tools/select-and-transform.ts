@@ -13,9 +13,9 @@
 // client/React/DOM import), so it belongs in the clean-room editor beside the
 // two FSMs it unions — AND hosting it here lets the interaction-contracts FSM
 // runner drive the REAL composite the client ships (not a re-derivation that
-// could drift from the handoff rule below). tool-loop.ts now re-exports it, so
-// the client's public surface is unchanged. See git history for the full
-// original prose.
+// could drift from the handoff rule below). canvas-editor's session/
+// tool-loop.ts `createToolSet` builds it as the 'select' tool. See git history
+// for the full original prose.
 import type { Intent } from '../intents.js'
 import type { Tool } from '../input.js'
 import { createSelectTool, type SelectState } from './select.js'
