@@ -368,4 +368,86 @@ function setup() {
   console.log('ok: snap-during-drag finds no candidates far from every other shape -- empty SnapResult, unsnapped translate')
 }
 
+// ============================================================================
+// 16. Arrow-key nudge (Task keyboard/K1): with a shape selected and the tool
+//    idle, a bare ArrowRight keydown moves the selection by NUDGE_PX (1)
+//    world unit; ArrowLeft/Up/Down move in the expected direction. One
+//    keydown -> exactly one TranslateShapes intent (one undo step per
+//    keypress, matching e2e/goldens/feel.json's nudgePx).
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:a'] })
+  const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
+  const key = (k: string, mods = NEUTRAL) => ({ type: 'keydown' as const, key: k, modifiers: mods, t: 0 })
+
+  const right = tool.onEvent(tool.initialState, key('ArrowRight'))
+  assert.deepEqual(right.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 1, dy: 0 }], 'ArrowRight nudges +1 world unit in x')
+
+  const left = tool.onEvent(tool.initialState, key('ArrowLeft'))
+  assert.deepEqual(left.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: -1, dy: 0 }], 'ArrowLeft nudges -1 world unit in x')
+
+  const down = tool.onEvent(tool.initialState, key('ArrowDown'))
+  assert.deepEqual(down.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 0, dy: 1 }], 'ArrowDown nudges +1 world unit in y')
+
+  const up = tool.onEvent(tool.initialState, key('ArrowUp'))
+  assert.deepEqual(up.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 0, dy: -1 }], 'ArrowUp nudges -1 world unit in y')
+
+  console.log('ok: arrow-key nudge moves the selection by 1 world unit per direction')
+}
+
+// ============================================================================
+// 17. Shift+arrow nudges by SHIFT_NUDGE_PX (10), matching feel.json's
+//    shiftNudgePx.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:a'] })
+  const SHIFT = { shift: true, alt: false, ctrl: false, meta: false }
+  const key = (k: string) => ({ type: 'keydown' as const, key: k, modifiers: SHIFT, t: 0 })
+
+  const right = tool.onEvent(tool.initialState, key('ArrowRight'))
+  assert.deepEqual(right.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 10, dy: 0 }], 'Shift+ArrowRight nudges +10 world units')
+
+  console.log('ok: shift+arrow nudges by 10 world units')
+}
+
+// ============================================================================
+// 18. Nudge no-ops: an empty selection emits no intent, and an unrelated key
+//    (falling through onIdle's existing branches) emits no intent either.
+// ============================================================================
+{
+  const { tool } = setup()
+  const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
+  const key = (k: string) => ({ type: 'keydown' as const, key: k, modifiers: NEUTRAL, t: 0 })
+
+  const noSelection = tool.onEvent(tool.initialState, key('ArrowRight'))
+  assert.deepEqual(noSelection.intents, [], 'ArrowRight with an empty selection is a no-op')
+
+  const unrelated = tool.onEvent(tool.initialState, key('q'))
+  assert.deepEqual(unrelated.intents, [], 'an unrelated key is a no-op')
+
+  console.log('ok: nudge no-ops on an empty selection or an unrelated key')
+}
+
+// ============================================================================
+// 19. Shift-constrained drag (Task keyboard/K2): holding Shift while
+//    dragging flattens the move to whichever axis has the larger raw
+//    displacement from the grab point (tldraw's Translating.ts parity) --
+//    the OTHER axis is held at zero for the whole gesture.
+// ============================================================================
+{
+  const { editor, tool, doc } = setup()
+  const SHIFT = { shift: true, alt: false, ctrl: false, meta: false }
+  // shape:a spans world [0,100]x[0,100]; grab at its center (50,50). Move to
+  // (54, 70): raw dx=4, dy=20 -- |dy|>|dx|, so shift must flatten dx to 0 and
+  // keep the full dy.
+  const events = script().down(50, 50).move(54, 70, { modifiers: SHIFT }).up().events()
+  run(editor, tool, events)
+  const a = doc.getShape('shape:a')!
+  assert.equal(a.x, 0, 'shift-constrained drag holds the non-dominant (x) axis at zero')
+  assert.equal(a.y, 20, 'shift-constrained drag applies the full delta on the dominant (y) axis')
+  console.log('ok: shift held during a drag constrains movement to the dominant axis')
+}
+
 console.log('ok: select tool FSM (select/marquee/translate)')

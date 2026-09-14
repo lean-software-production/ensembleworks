@@ -211,6 +211,46 @@ export type SelectState = Idle | Pointing | Dragging | Marquee
 const IDLE: Idle = { mode: 'idle', lastClick: null }
 
 // ============================================================================
+// Arrow-key nudge (Task keyboard/K1) — pinned to e2e/goldens/feel.json's
+// captured tldraw numbers (nudgePx: 1, shiftNudgePx: 10), NOT re-derived
+// from tldraw source: MAJOR_NUDGE_FACTOR/MINOR_NUDGE_FACTOR live in
+// tldraw's Idle.ts and are applied against a *grid-aware* base step there,
+// whereas the golden numbers are what the capture rig actually observed at
+// z=1 on an ungridded canvas — the exact case this tool cares about
+// matching. Grid-aware nudging is a documented, deferred upgrade (no grid
+// concept exists in v2 yet).
+// ============================================================================
+const NUDGE_PX = 1
+const SHIFT_NUDGE_PX = 10
+
+/** ArrowUp/Down/Left/Right -> a {dx, dy} unit vector, or null for every other
+ * key. World-space convention (input.ts's screen==world at z=1, +y is
+ * DOWN — same convention TranslateShapes/screenToWorld already use
+ * throughout this file), so ArrowDown/ArrowRight are POSITIVE. */
+function nudgeDirection(key: string): { dx: number; dy: number } | null {
+  switch (key) {
+    case 'ArrowLeft': return { dx: -1, dy: 0 }
+    case 'ArrowRight': return { dx: 1, dy: 0 }
+    case 'ArrowUp': return { dx: 0, dy: -1 }
+    case 'ArrowDown': return { dx: 0, dy: 1 }
+    default: return null
+  }
+}
+
+/** SHIFT-CONSTRAINED DRAG (Task keyboard/K2) — tldraw parity (Translating.ts's
+ * `flatten`): given a RAW (pre-snap) delta from the drag's grab point, zero
+ * whichever axis has the SMALLER magnitude, keeping the dominant axis's full
+ * value. A no-op when `shift` is false. Shared by the Pointing->Dragging
+ * transition's own first move (onPointing, below) and every subsequent
+ * onDragging pointermove, so a drag that STARTS with Shift already held is
+ * constrained from its very first committed step, not just from the second
+ * move onward. */
+function flattenForShift(dx: number, dy: number, shift: boolean): { dx: number; dy: number } {
+  if (!shift) return { dx, dy }
+  return Math.abs(dx) < Math.abs(dy) ? { dx: 0, dy } : { dx, dy: 0 }
+}
+
+// ============================================================================
 // Snap-during-drag helper (shared by the Pointing->Dragging transition move
 // AND every subsequent onDragging pointermove — see the module header).
 // ============================================================================
@@ -334,6 +374,22 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       const hit = ctx.hitTestTopmost(worldOf(event))
       return { state, intents: [{ type: 'SetHover', id: hit }] }
     }
+    if (event.type === 'keydown') {
+      // Arrow-key nudge (Task keyboard/K1) — only while idle: a nudge
+      // mid-drag/mid-marquee would race the gesture's own TranslateShapes,
+      // so this deliberately never fires from onPointing/onDragging/
+      // onMarquee (none of which handle 'keydown' at all, falling through to
+      // their own no-op default). Reads the LIVE selection (editor.get(),
+      // never a cached one) — one keydown, one TranslateShapes, one
+      // editor.applyAll() commit at the caller (CanvasV2App's
+      // dispatchToActiveTool/tool-loop.ts), i.e. one undo step per keypress.
+      const dir = nudgeDirection(event.key)
+      if (!dir) return { state, intents: [] }
+      const ids = [...editor.get().selection]
+      if (ids.length === 0) return { state, intents: [] }
+      const amount = event.modifiers.shift ? SHIFT_NUDGE_PX : NUDGE_PX
+      return { state, intents: [{ type: 'TranslateShapes', ids, dx: dir.dx * amount, dy: dir.dy * amount }] }
+    }
     return { state, intents: [] }
   }
 
@@ -394,7 +450,7 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
           minX: grabWorld.x, minY: grabWorld.y, maxX: grabWorld.x, maxY: grabWorld.y,
         }
         const to = screenToWorld(camera, here)
-        const rawDx = to.x - grabWorld.x, rawDy = to.y - grabWorld.y
+        const { dx: rawDx, dy: rawDy } = flattenForShift(to.x - grabWorld.x, to.y - grabWorld.y, event.modifiers.shift)
         const { dx, dy, snapResult } = computeSnappedDelta(startBounds, snapshot, snapIndex, movingIds, excludedIds, rawDx, rawDy)
         intents.push({ type: 'TranslateShapes', ids: movingIds, dx, dy })
         return {
@@ -456,8 +512,18 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // the grabbed world point stays under the cursor; the drift-prone
       // incremental screen anchor is gone). Mirrors transform.ts's
       // recompute-from-gesture-start-anchors pattern.
-      const rawDx = cursorWorld.x - state.grabWorld.x
-      const rawDy = cursorWorld.y - state.grabWorld.y
+      // SHIFT-CONSTRAINED DRAG (Task keyboard/K2) — live modifier read off
+      // THIS pointermove (never the Pointing state's frozen `shiftDown`,
+      // which only ever captured shift-AT-POINTERDOWN for the click-toggle
+      // decision above; a drag can start unshifted and have Shift pressed
+      // mid-gesture, or vice versa, and tldraw's own Translating.ts reads
+      // the CURRENT shift key on every move for exactly that reason).
+      // flattenForShift zeroes whichever axis has the smaller magnitude —
+      // applied BEFORE computeSnappedDelta so a snap candidate on the
+      // suppressed axis can never reintroduce movement there.
+      const { dx: rawDx, dy: rawDy } = flattenForShift(
+        cursorWorld.x - state.grabWorld.x, cursorWorld.y - state.grabWorld.y, event.modifiers.shift,
+      )
       // Reuses the FROZEN startBounds/snapshot/index from drag start
       // (state.startBounds/state.snapshot/state.snapIndex) — never a fresh
       // ctx.snapshot()/ctx.index() read here (see the module header's

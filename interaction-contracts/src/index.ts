@@ -5,6 +5,7 @@
 export * from './types.js'
 import type { Contract } from './types.js'
 import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies-to-created-shape.js'
+import { arrowNudgeMovesSelection } from './contracts/arrow-nudge-moves-selection.js'
 import { bringToFrontPaintsOnTop } from './contracts/bring-to-front-paints-on-top.js'
 import { crossWidgetSelection } from './contracts/cross-widget-selection.js'
 import { cursorLock } from './contracts/cursor-lock.js'
@@ -18,8 +19,11 @@ import { modalityExclusivity } from './contracts/modality-exclusivity.js'
 import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js'
 import { pastePlacesAndSelects } from './contracts/paste-places-and-selects.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
+import { selectAllSelectsEveryShapeOnPage } from './contracts/select-all-selects-every-shape-on-page.js'
+import { shiftDragConstrainsToAxis } from './contracts/shift-drag-constrains-to-axis.js'
 import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
 import { switchingPageChangesRenderedShapes } from './contracts/switching-page-changes-rendered-shapes.js'
+import { toolShortcutSwitchesAndArmsTool } from './contracts/tool-shortcut-switches-and-arms-tool.js'
 
 export const CONTRACTS: readonly Contract[] = [
   // Pilot declarations are added here, one per phase (B–F).
@@ -39,4 +43,8 @@ export const CONTRACTS: readonly Contract[] = [
   lineCreatesALineShape,
   droppingAnImageCreatesAnImageShape,
   switchingPageChangesRenderedShapes,
+  arrowNudgeMovesSelection,
+  shiftDragConstrainsToAxis,
+  toolShortcutSwitchesAndArmsTool,
+  selectAllSelectsEveryShapeOnPage,
 ]

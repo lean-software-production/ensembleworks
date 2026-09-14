@@ -113,6 +113,7 @@ import {
 	pasteIntents,
 	reorderSelectionIntents,
 	screenToWorld,
+	selectAllIntents,
 	type InputEvent,
 	type Intent,
 	type KeyInputEvent,
@@ -159,6 +160,7 @@ import {
 } from './tool-loop.js'
 import { clipboardShortcut, readClipboardText, writeClipboardText } from './clipboard-dom.js'
 import { reorderShortcut } from './reorder-dom.js'
+import { TOOL_SHORTCUT_LABEL, toolShortcut } from './tool-shortcut.js'
 import { extractImageFiles } from './image-drop.js'
 import { extractImageBlobs } from './image-paste.js'
 import { createImageFromBlob } from './image-create.js'
@@ -719,6 +721,26 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 		setIsGesturing(false)
 	}, [editor, tools])
 
+	// Moved above handleGlobalShortcut (Task keyboard/K3) — the tool-shortcut
+	// branch below calls this directly, so it must already be initialized by
+	// the time handleGlobalShortcut's own useCallback body is defined in this
+	// render pass (a `const` declared later in the same component-function
+	// scope is still in its temporal dead zone if referenced from a
+	// dependency array evaluated before it, even though referencing it from
+	// inside a callback BODY — invoked later, after the whole render has
+	// completed — would have been safe either way).
+	const selectTool = useCallback(
+		(id: ToolId) => {
+			// Cancel whatever the tool being LEFT has in flight before switching
+			// away from it — a toolbar click mid-drag is the same abandonment
+			// case Viewport's blur hook covers, just triggered explicitly instead
+			// of by focus loss.
+			cancelAndReset()
+			setActiveToolId(id)
+		},
+		[cancelAndReset],
+	)
+
 	// THE single source of truth for "which keys are app-global shortcuts and
 	// what each does" (Task B3 refactor). BOTH keydown entry points call it —
 	// `handleInput` for keydowns whose DOM target is the viewport (or a
@@ -912,9 +934,43 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				if (intents.length > 0) editor.applyAll(intents)
 				return true
 			}
+			// Ctrl/Cmd+A select-all (Task keyboard/K4) — tldraw parity
+			// (actions.tsx's `select-all`, `kbd: 'cmd+a,ctrl+a'`).
+			// `key === 'a'` (not the raw event.key, matching the z/y checks
+			// above) plus withModifier, computed once above for the undo/redo
+			// branches and still in scope here. `selectAllIntents` is a pure
+			// helper (canvas-editor) that reads the CURRENT page's top-level
+			// shapes fresh off `editor` — always applied via `editor.applyAll`
+			// even when empty, since SetSelection is a view intent
+			// (docMutated: false) with nothing to gate on.
+			if (withModifier && key === 'a') {
+				editor.applyAll(selectAllIntents(editor))
+				return true
+			}
+			// Tool-selection shortcuts (Task keyboard/K3) — tldraw's
+			// single-key tool shortcuts (v/h/n/t/r/o/a/f/d/l). `toolShortcut`
+			// (client/src/canvas-v2/tool-shortcut.ts) is the pure key->tool
+			// decision, already gated on editingId/no-modifier internally; it
+			// is called here (rather than earlier) so it never shadows any of
+			// the modified shortcuts above (Ctrl+Z, Ctrl+A, Ctrl+C/X/V/D, the
+			// bracket keys) — those all require a modifier the tool shortcuts
+			// explicitly reject, so ordering doesn't change behavior, but
+			// keeping it last mirrors "more specific / more surprising
+			// shortcuts first" the whole function otherwise follows. `r`/`o`
+			// additionally arm the geo variant via `SetNextStyle` — the same
+			// armed-style path StylePanel's AS3 mode already uses (a view
+			// intent, no undo entry).
+			const shortcut = toolShortcut(event, editingId)
+			if (shortcut) {
+				selectTool(shortcut.toolId)
+				if (shortcut.armGeo) {
+					editor.applyAll([{ type: 'SetNextStyle', props: { geo: shortcut.armGeo } }])
+				}
+				return true
+			}
 			return false
 		},
-		[editor, cancelAndReset],
+		[editor, cancelAndReset, selectTool],
 	)
 
 	const handleInput = useCallback(
@@ -958,18 +1014,6 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// Abandonment-gap cancel — see the module header's ABANDONMENT-CANCEL
 	// WIRING note. Viewport's designated hook (canvas-react/src/Viewport.tsx).
 	const handleViewportBlur = cancelAndReset
-
-	const selectTool = useCallback(
-		(id: ToolId) => {
-			// Cancel whatever the tool being LEFT has in flight before switching
-			// away from it — a toolbar click mid-drag is the same abandonment
-			// case Viewport's blur hook covers, just triggered explicitly instead
-			// of by focus loss.
-			cancelAndReset()
-			setActiveToolId(id)
-		},
-		[cancelAndReset],
-	)
 
 	const handleTextChange = useCallback((id: string, text: string) => editor.apply({ type: 'SetText', id, text }), [editor])
 	const handleEndEdit = useCallback(() => editor.apply({ type: 'EndEdit' }), [editor])
@@ -1209,6 +1253,14 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 						type="button"
 						data-canvas-v2-tool={btn.id}
 						aria-pressed={activeToolId === btn.id}
+						// Tool tooltip / shortcut hint (Task keyboard/K5) — tldraw
+						// parity (barButtons.tsx's `title`). TOOL_SHORTCUT_LABEL is
+						// derived from tool-shortcut.ts's TOOL_SHORTCUTS, so the hint
+						// can never drift from the actual key mapping; a ToolId with
+						// no shortcut (there are none currently, but the map is
+						// Partial) falls back to the bare label.
+						title={TOOL_SHORTCUT_LABEL[btn.id] ? `${btn.label} (${TOOL_SHORTCUT_LABEL[btn.id]})` : btn.label}
+						aria-label={TOOL_SHORTCUT_LABEL[btn.id] ? `${btn.label} (${TOOL_SHORTCUT_LABEL[btn.id]})` : btn.label}
 						onClick={() => selectTool(btn.id)}
 						style={{
 							padding: '4px 10px',
