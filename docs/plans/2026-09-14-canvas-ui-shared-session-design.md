@@ -228,9 +228,9 @@ current polished chrome, tinted per host through the CSS variables.
 2. Read the exit codes.
 3. Expect: all exit 0, apart from the two server loopback tests that cannot open a tmux socket inside an agent sandbox.
 
-## Verification (2026-09-14, updated)
+## Verification (2026-09-14, after the final-review fix wave)
 
-Live bb smoke (`e2e/scripts/bb-canvas-smoke.mjs` against bb `0.43.0`), plugin reloaded from this branch (`bb plugin reload canvas`, exit 0):
+Live bb smoke (`e2e/scripts/bb-canvas-smoke.mjs` against bb `0.43.0`), plugin reloaded from this branch (`bb plugin reload canvas`, exit 0), script exit 0. The script now deletes only the page ids it created, and runs AC7 twice: in bb's current (light) appearance, and in a Playwright context emulating the dark colour scheme.
 
 ```
 tabs before run: ["First Page","Discovery","LinkedIn Ads"]
@@ -238,25 +238,22 @@ tabs after cleanup: ["First Page","Discovery","LinkedIn Ads"]
 PASS  AC1 nine icon tools with shortcut tooltips  [{"id":"select","title":"Select (V)","icon":true},{"id":"hand","title":"Hand (H)","icon":true},{"id":"note","title":"Note (N)","icon":true},{"id":"text","title":"Text (T)","icon":true},{"id":"geo","title":"Shape (R)","icon":true},{"id":"frame","title":"Frame (F)","icon":true},{"id":"arrow","title":"Arrow (A)","icon":true},{"id":"draw","title":"Draw (D)","icon":true},{"id":"line","title":"Line (L)","icon":true}]
 PASS  AC3 note tool returns to Select; next click creates nothing  tool=select notes=1
 PASS  AC2 colour and font change  {"styleBefore":{"background":"rgb(252, 225, 156)","font":"tldraw_draw, sans-serif"},"styleAfter":{"background":"rgb(138, 163, 255)","font":"tldraw_serif, serif"},"docProps":null}
-PASS  AC7 style panel matches bb light/dark appearance  panel=rgb(239, 241, 245) body=rgb(239, 241, 245)
+PASS  AC7 style panel matches bb appearance and uses the bb mapping (default scheme)  panel=rgb(239, 241, 245) body=rgb(239, 241, 245) bodyDark=false
 PASS  AC6 long note text grows the note  {"w":200,"h":299,"scroll":299,"client":299}
 PASS  AC4 Ctrl+Z works after editing without clicking (first press edits text, repeated presses remove the note)  before=2 after=1 textBeforeUndo="undo me" textAfterFirstUndo="undo m" pressesToRemove=8
 PASS  AC5 arrow drawn on its page only  here=1 freshPage=0
 PASS  EXTRA-A Backspace scoped to canvas focus (outside page text ignored, canvas click deletes)  outsideTextFound=1 before=1 afterOutsideBackspace=1 afterCanvasBackspace=0
 PASS  EXTRA-B Ctrl+Z after page creation undoes cleanly, page still present  notesBefore=1 notesAfter=0 viewportPresent=1 currentTabPresent=1
+SKIP  AC7 dark scheme (human-verify: bb did not follow the emulated dark colour scheme)  {"body":"rgb(239, 241, 245)","panel":"rgb(239, 241, 245)","toolbar":"rgba(0, 0, 0, 0)","toolFg":"rgb(76, 79, 105)"}
 PASS  no page errors  []
 ```
 
-10/10 checks passed. The AC4 failure recorded in the first pass of this Verification
-section was the acceptance criterion, not the product: the editor records one undo
-step per `SetText` (i.e. per keystroke), so two Ctrl+Z presses only revert the note's
-last two typed characters, not its creation — matching the owner-accepted per-edit
-undo granularity gap. AC4 was corrected to assert what the shortcut actually needs to
-do (first press edits text, continued presses with no clicking eventually remove the
-note), and the live run above confirms it holds: the first Ctrl+Z changed
-`"undo me"` → `"undo m"`, and the note was gone after 8 presses.
+10 checks passed, 1 skipped. Page tabs are identical before and after the run.
 
-Web app: full Playwright lane 83/83 (one `feel.spec.ts` failure seen on a combined run
-turned out to be flaky/order-dependent — it passed both standalone and on a clean
-re-run of the full lane); repo typecheck 0; plugin typecheck, tests (1229/1229), quality
-audit (95.22% improvement vs `ee79ab4`) and build all exit 0.
+**AC7 light:** passes, and now also asserts the panel is not the web app's fallback `rgb(250, 250, 247)`, so the bb token mapping is proven live rather than merely "light like the body".
+
+**AC7 dark: human-verify.** bb did not follow Playwright's emulated dark colour scheme (the body stayed `rgb(239, 241, 245)`), so the dark pass could not observe dark chrome. bb's appearance setting was deliberately not changed. To verify: switch bb to dark appearance, open the Canvas with a note selected, and confirm the toolbar and style panel render dark backgrounds with light text.
+
+AC4 asserts per-edit undo (the first Ctrl+Z changes the note's text; repeated presses with no clicking remove the note), matching the owner-accepted per-edit undo granularity gap: the editor records one undo step per `SetText`.
+
+Web app: full Playwright lane `bunx playwright test --project=e2e` 84/84 (includes the new `enter-on-chrome-button-does-not-edit` browser contract); repo `bun run typecheck` 0; `bun run test` passes apart from `server/src/relay-loopback.test.ts` (cannot open the tmux socket inside the agent sandbox), with every file after it run individually and passing; plugin `npm run typecheck` 0, `npm test` 1229/1229, `npm run audit:quality:compare` 0 (95.22% improvement vs `ee79ab4`), `bb plugin build .` 0.
