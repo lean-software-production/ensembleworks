@@ -89,6 +89,7 @@
         "@ensembleworks/canvas-react": "*",
       },
       "devDependencies": {
+        "@ensembleworks/canvas-doc": "*",
         "@types/node": "^22.0.0",
         "@types/react": "^19.0.0",
         "@types/react-dom": "^19.0.0",

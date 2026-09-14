@@ -438,7 +438,7 @@ function opacityStopStyle(current: boolean): CSSProperties {
 		height: OPACITY_STOP_HIT_PX,
 		borderRadius: '50%',
 		border: 'none',
-		background: current ? UI_VARS.accent : UI_VARS.trackLine,
+		background: current ? UI_VARS.accent : UI_VARS.stopInactive,
 		backgroundClip: 'content-box',
 		padding: (OPACITY_STOP_HIT_PX - dot) / 2,
 		boxSizing: 'border-box',

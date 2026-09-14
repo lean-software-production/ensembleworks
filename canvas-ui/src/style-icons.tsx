@@ -165,7 +165,7 @@ export function SizeIcon({ variant }: { readonly variant: string }) {
 
 // ============================================================================
 // Font — an "Aa" glyph set in the ACTUAL webfont each value paints with
-// (fonts.css, vendored alongside this task's own family — same
+// (fonts.ts's @font-face rules, vendored alongside this task's own family — same
 // tldraw_draw/tldraw_sans/tldraw_serif/tldraw_mono names NoteShape/GeoShape/
 // TextShape already declare), so the icon doubles as a live preview, not
 // just a labeled placeholder.

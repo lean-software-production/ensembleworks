@@ -139,7 +139,7 @@ async function assertCoreBody(page: import('@playwright/test').Page, name: strin
 // assertion above is the REAL guard; this is backup, not a substitute.
 const CORE_MAX_DIFF_PIXEL_RATIO = 0.008
 
-// Task C7 — the 4 tldraw webfonts (client/src/canvas-v2/fonts.css, self-
+// Task C7 — the 4 tldraw webfonts (canvas-ui/src/fonts.ts's CanvasFonts, self-
 // hosted since Task C6b) load ASYNCHRONOUSLY; a screenshot taken before a
 // face finishes loading would nondeterministically bake in the sans-serif/
 // serif/monospace fallback instead of the real handwriting/IBM-Plex glyphs

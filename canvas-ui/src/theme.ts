@@ -13,10 +13,11 @@ export const UI_VARS = {
 	accentSoft: 'var(--canvas-ui-accent-soft, #dbe6fb)',
 	// Panel drop shadow (StylePanel's PANEL_STYLE.boxShadow).
 	shadow: 'var(--canvas-ui-shadow, 0 2px 10px rgba(15,23,42,0.18))',
-	// Swatch/segmented-button inactive border (StylePanel's swatchButtonStyle).
+	// Colour-swatch inactive border only (StylePanel's swatchButtonStyle);
+	// segmented buttons use controlBorder.
 	swatchBorder: 'var(--canvas-ui-swatch-border, rgba(15,23,42,0.25))',
 	// Opacity slider inactive stop dot (StylePanel's opacityStopStyle).
-	trackLine: 'var(--canvas-ui-track-line, rgba(15,23,42,0.4))',
+	stopInactive: 'var(--canvas-ui-stop-inactive, rgba(15,23,42,0.4))',
 } as const
 
 export type UiVar = keyof typeof UI_VARS

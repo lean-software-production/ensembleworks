@@ -95,7 +95,7 @@ function geometricFingerprint(svgMarkup: string): string {
 }
 
 // ============================================================================
-// 4. Every FONT value renders its OWN webfont family (fonts.css names) — a
+// 4. Every FONT value renders its OWN webfont family (fonts.ts names) — a
 //    live preview, not four identical "Aa"s.
 // ============================================================================
 {
