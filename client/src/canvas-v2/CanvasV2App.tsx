@@ -105,6 +105,11 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from 'react'
 // mounts that editor, so this is the ONLY place v2's real dogfood mount
 // gets them from.
 import './fonts.css'
+// Visual chrome fidelity (polish/visual-chrome) — defines the `--canvas-*`
+// custom properties canvas-react's overlay falls back on (see that file's
+// own header): bridges them to this app's `--wm-*` brand tokens without
+// canvas-react ever importing/hardcoding a brand value itself.
+import './canvas-v2.css'
 import {
 	Editor,
 	applyWheel,
@@ -1008,9 +1013,22 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			// case Viewport's blur hook covers, just triggered explicitly instead
 			// of by focus loss.
 			cancelAndReset()
+			// FIXER round (validator blocking finding): editorState.hover lives
+			// on the shared editor state, not on any one tool's FSM state, and
+			// select.ts (the only producer) only ever clears it from its OWN
+			// idle pointermove. Leaving 'select' for any other tool therefore
+			// stranded the last hovered id forever — Overlay/Hover.tsx kept
+			// painting (and freezing) a ring for a shape the new tool has
+			// nothing to do with. Clearing it here, at the one place tool
+			// switches are funneled through, is symmetric with cancelAndReset
+			// just above (also a "leaving select tears down select's leftover
+			// state" step) and needs no new prop/type threaded into canvas-react.
+			if (activeToolIdRef.current === 'select' && id !== 'select') {
+				editor.apply({ type: 'SetHover', id: null })
+			}
 			setActiveToolId(id)
 		},
-		[cancelAndReset],
+		[cancelAndReset, editor],
 	)
 
 	const handleTextChange = useCallback((id: string, text: string) => editor.apply({ type: 'SetText', id, text }), [editor])
@@ -1267,7 +1285,15 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 				))}
 			</div>
 			<PageSwitcher editor={editor} snapshot={snapshot} currentPageId={editorState.currentPageId} />
-			<div ref={containerRef} data-canvas-v2-viewport onDragOver={handleDragOver} onDrop={handleDrop} style={{ position: 'relative', flex: 1, minWidth: 0 }}>
+			{/* Visual chrome fidelity (polish/visual-chrome, gap 1): v1's canvas
+			    surface is the warm brand paper (theme.css's `.tl-theme__light`
+			    sets `--tl-color-background: var(--wm-bg-warm)`) — this container
+			    is v2's equivalent surface (Viewport/Grid paint nothing of their
+			    own; Grid.tsx is dots-only, transparent everywhere else), so it's
+			    the one place v2 needs an explicit background to stop reading as
+			    browser-default white. Consumes the SAME `--wm-bg-warm` token
+			    theme.css already defines — no second hex hardcoded here. */}
+			<div ref={containerRef} data-canvas-v2-viewport onDragOver={handleDragOver} onDrop={handleDrop} style={{ position: 'relative', flex: 1, minWidth: 0, background: 'var(--wm-bg-warm)' }}>
 				<Viewport onInput={handleInput} onViewportBlur={handleViewportBlur} onPointerCancel={cancelAndReset} style={{ position: 'absolute', inset: 0 }}>
 					<Grid camera={editorState.camera} />
 					<WorldLayer camera={editorState.camera}>

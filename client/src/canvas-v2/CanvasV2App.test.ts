@@ -151,6 +151,93 @@ async function main() {
 	console.log("ok: CanvasV2App — mount handshakes and renders the server's existing shapes")
 
 	// ==========================================================================
+	// (a2) VISUAL CHROME (Task visual-chrome): the viewport surface carries the
+	// brand paper background (gap 1), and a real pointermove over a shape with
+	// the select tool active (the default active tool) paints a hover
+	// indicator that disappears once the pointer moves off it (gaps "hover
+	// shape indicator" / "hover outline") — end to end through the real
+	// select.ts FSM -> editor.ts's `hover` state -> Overlay.tsx -> Hover.tsx,
+	// not just Hover.tsx's own isolated component test (canvas-react/src/
+	// overlay.test.ts covers that in isolation).
+	// ==========================================================================
+	const viewportContainerEl = container.querySelector('[data-canvas-v2-viewport]') as HTMLElement | null
+	assert.ok(viewportContainerEl, `the viewport container must render — DOM: ${container.innerHTML}`)
+	assert.equal(
+		viewportContainerEl!.style.background,
+		'var(--wm-bg-warm)',
+		'the viewport container must carry the brand paper background token, not browser-default white',
+	)
+
+	const hoverViewportEl = container.querySelector('[tabindex]') as HTMLElement | null
+	assert.ok(hoverViewportEl, `the viewport element must exist — DOM: ${container.innerHTML}`)
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		'precondition: nothing is hovered before any pointermove',
+	)
+	await act(async () => {
+		// shape:seed-1 is a geo shape at world (10,10), 80x60 (seedShape's
+		// defaults) -- at the identity default camera (x:0,y:0,z:1) and this
+		// happy-dom container's (0,0) bounding rect, screen coords equal world
+		// coords, so clientX/Y (50,50) lands inside it.
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 50, clientY: 50, buttons: 0 }))
+	})
+	const hoverIndicator = container.querySelector('[data-overlay="hover-indicator"]')
+	assert.ok(hoverIndicator, `hovering shape:seed-1 with the select tool active must paint a hover indicator — DOM: ${container.innerHTML}`)
+	assert.equal(hoverIndicator!.getAttribute('data-shape-id'), 'shape:seed-1', 'the hover indicator must be tagged with the hovered shape\'s id')
+
+	await act(async () => {
+		// Move far away, off every shape.
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 5000, clientY: 5000, buttons: 0 }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`moving the pointer off every shape must clear the hover indicator — DOM: ${container.innerHTML}`,
+	)
+	console.log('ok: CanvasV2App — the viewport carries the brand paper background, and a real pointermove paints/clears a hover indicator (Task visual-chrome)')
+
+	// ==========================================================================
+	// (a3) HOVER IS GATED TO THE SELECT TOOL (Task visual-chrome fixer round —
+	// validator-reported blocking finding): editorState.hover lives on the
+	// editor's shared state, not on the active tool, and canvas-editor's
+	// select.ts only ever CLEARS it from its own idle pointermove — switching
+	// away to another tool leaves the last hovered id (and its painted
+	// indicator) stuck forever, since the new tool's FSM never touches hover
+	// at all. Re-hover shape:seed-1, then switch to the Frame tool via the
+	// real toolbar button (not a direct editor.apply) and assert the
+	// indicator is gone AND stays gone through a further pointermove (the
+	// "frozen" repro from the validator's browser session).
+	// ==========================================================================
+	await act(async () => {
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 50, clientY: 50, buttons: 0 }))
+	})
+	assert.ok(
+		container.querySelector('[data-overlay="hover-indicator"]'),
+		`precondition: re-hovering shape:seed-1 must paint the indicator again — DOM: ${container.innerHTML}`,
+	)
+
+	const frameToolButton = container.querySelector('[data-canvas-v2-tool="frame"]') as HTMLElement | null
+	assert.ok(frameToolButton, `the Frame tool button must render — DOM: ${container.innerHTML}`)
+	await act(async () => {
+		frameToolButton!.dispatchEvent(new (win as any).MouseEvent('click', { bubbles: true, cancelable: true }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`switching to the Frame tool must clear the stale hover indicator — DOM: ${container.innerHTML}`,
+	)
+
+	await act(async () => {
+		// A further pointermove while Frame is active — must NOT resurrect the
+		// indicator (select.ts's FSM isn't even running, so nothing recomputes
+		// hover; it must simply stay cleared).
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 55, clientY: 55, buttons: 0 }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`the hover indicator must stay cleared while a non-select tool is active, even after further pointermoves — DOM: ${container.innerHTML}`,
+	)
+	console.log('ok: CanvasV2App — switching off the select tool clears the stale hover indicator instead of freezing it (Task visual-chrome fixer round)')
+
+	// ==========================================================================
 	// (b) A SERVER-SIDE putShape APPEARS IN THE DOM AFTER SYNC.
 	// ==========================================================================
 	await act(async () => {

@@ -48,6 +48,7 @@ import type { CanvasDocument, SpatialIndex } from '@ensembleworks/canvas-model'
 import type { Camera, EditorState } from '@ensembleworks/canvas-editor'
 import { isFixedSizeSelection, type SnapResult } from '@ensembleworks/canvas-model'
 import { combinedWorldBounds, Selection } from './overlay/Selection.js'
+import { Hover } from './overlay/Hover.js'
 import { Handles } from './overlay/Handles.js'
 import { SnapGuides } from './overlay/SnapGuides.js'
 import { Arrows } from './overlay/Arrows.js'
@@ -69,10 +70,14 @@ export interface OverlayProps {
 // PAINT ORDER (later = on top; no z-index — same house convention as
 // Viewport.tsx's Grid-before-WorldLayer): Arrows first (they're DOCUMENT
 // CONTENT, conceptually "under" any selection chrome drawn on top of them),
-// then Selection outlines, then SnapGuides (a transient drag affordance that
-// should stay visible over static outlines), then Handles topmost (the
-// transform tool's geometric targets — nothing should occlude them). OURS:
-// no tldraw-source citation for this exact order.
+// then the Hover indicator (a lighter-weight affordance that a real
+// selection should visually outrank), then Selection outlines, then
+// SnapGuides (a transient drag affordance that should stay visible over
+// static outlines), then Handles topmost (the transform tool's geometric
+// targets — nothing should occlude them). OURS: no tldraw-source citation
+// for this exact order (v1 batches hover+selection into ONE stroke call at
+// the same z — see ShapeIndicatorOverlayUtil.ts — so there's no source
+// ordering to match here either way).
 export function Overlay({ editorState, snapshot, camera, viewportSize, index, snapResult }: OverlayProps) {
   // combinedWorldBounds already returns null for an empty selection (zero
   // iterations never sets its internal `any` flag) — Handles' own `!bounds`
@@ -105,6 +110,7 @@ export function Overlay({ editorState, snapshot, camera, viewportSize, index, sn
       style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
     >
       <Arrows snapshot={snapshot} camera={camera} viewportSize={viewportSize} index={index} />
+      <Hover snapshot={snapshot} hover={editorState.hover} selection={editorState.selection} camera={camera} />
       <Selection snapshot={snapshot} selection={editorState.selection} camera={camera} />
       <SnapGuides snapResult={snapResult} camera={camera} viewportSize={viewportSize} />
       <Handles bounds={editingSelected ? null : combinedBounds} camera={camera} hideResizeHandles={hideResizeHandles} />
