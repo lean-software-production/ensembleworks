@@ -56,6 +56,18 @@ whose continuation routes on `command.output contains MORE|DONE` printed
 by the sibling `dependency-updates.queue.mjs` helper, and a `command` node
 that runs `gh pr create`.
 
+A fifth graph, `examples/upgrade-vite-8.dot`, is the *major*-version
+counterpart: one upgrade (Vite 8 + @vitejs/plugin-react 6) run as a
+migration — Codex researches and writes the plan, a human approves it, a
+`command` node bumps versions deterministically (via the sibling
+`upgrade.bump.mjs`), Sonnet migrates config and code in a bounded fix loop
+against a goal-gated `verify` command whose failures fall through the
+cascade's step 7 (`retry_target="migrate"`, then
+`fallback_retry_target="abandon"`), Codex reviews the diff and bundle-size
+delta and routes Accept/Repair/Abandon, a second human gate approves the
+migration, and either a PR opens or an abandon stage writes up the blockers
+and opens a draft PR so partial work survives.
+
 Validate a graph without running it: `bb attractor validate <path>`.
 
 ### Dialect at a glance
