@@ -72,6 +72,7 @@ import {
 } from '@ensembleworks/canvas-editor'
 import { combinedWorldBounds, GEO_COLORS } from '@ensembleworks/canvas-react'
 import { AlignIcon, ArrowheadIcon, DashIcon, FillIcon, FontIcon, GeoIcon, SizeIcon } from './style-icons.js'
+import { UI_VARS } from './theme.js'
 
 export interface StylePanelProps {
 	readonly selection: ReadonlySet<string>
@@ -211,13 +212,13 @@ const PANEL_STYLE: CSSProperties = {
 	flexDirection: 'column',
 	gap: 8,
 	padding: '8px 10px',
-	background: '#fafaf7',
-	border: '1px solid rgba(15,23,42,0.14)',
+	background: UI_VARS.panelBg,
+	border: `1px solid ${UI_VARS.panelBorder}`,
 	borderRadius: 8,
-	boxShadow: '0 2px 10px rgba(15,23,42,0.18)',
+	boxShadow: UI_VARS.shadow,
 	fontFamily: 'system-ui, sans-serif',
 	fontSize: 11,
-	color: '#0f172a',
+	color: UI_VARS.panelFg,
 	// REGRESSION FIX (client/src/canvas-v2 v2-write-validation branch): this
 	// USED to be 'all', which made the panel's entire bounding box — not just
 	// its buttons — a pointer target. Because the panel is anchored ON TOP of
@@ -262,7 +263,7 @@ const PANEL_STYLE: CSSProperties = {
 // non-wrapping flex row of intrinsically-sized children).
 const ROW_GROUP_STYLE: CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
 const ROW_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4 }
-const ROW_LABEL_STYLE: CSSProperties = { fontSize: 10, color: '#475569', fontWeight: 600, letterSpacing: 0.2 }
+const ROW_LABEL_STYLE: CSSProperties = { fontSize: 10, color: UI_VARS.panelMuted, fontWeight: 600, letterSpacing: 0.2 }
 const ROW_VALUES_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 4 } // gap mirrors SWATCH_GAP_PX below (declared after use — CSS-in-JS values only, no import-order issue)
 
 // tldraw's own opacity control offers five discrete steps (Decisions §
@@ -290,8 +291,8 @@ function swatchButtonStyle(current: boolean): CSSProperties {
 		width: SWATCH_PX,
 		height: SWATCH_PX,
 		borderRadius: '50%',
-		border: current ? '2px solid #004990' : '1px solid rgba(15,23,42,0.25)',
-		boxShadow: current ? '0 0 0 1px #fafaf7 inset' : undefined,
+		border: current ? `2px solid ${UI_VARS.accent}` : `1px solid ${UI_VARS.swatchBorder}`,
+		boxShadow: current ? `0 0 0 1px ${UI_VARS.panelBg} inset` : undefined,
 		cursor: 'pointer',
 		padding: 0,
 		pointerEvents: 'auto',
@@ -336,9 +337,9 @@ function segButtonStyle(current: boolean): CSSProperties {
 		justifyContent: 'center',
 		padding: 0,
 		borderRadius: 4,
-		border: current ? '1px solid #004990' : '1px solid rgba(15,23,42,0.22)',
-		background: current ? '#dbe6fb' : 'transparent',
-		color: current ? '#004990' : '#0f172a',
+		border: current ? `1px solid ${UI_VARS.accent}` : `1px solid ${UI_VARS.controlBorder}`,
+		background: current ? UI_VARS.accentSoft : 'transparent',
+		color: current ? UI_VARS.accent : UI_VARS.panelFg,
 		cursor: 'pointer',
 		pointerEvents: 'auto',
 	}
@@ -418,7 +419,7 @@ const OPACITY_LINE_STYLE: CSSProperties = {
 	right: 4,
 	top: '50%',
 	height: 2,
-	background: 'rgba(15,23,42,0.22)',
+	background: UI_VARS.controlBorder,
 	transform: 'translateY(-50%)',
 	pointerEvents: 'none',
 }
@@ -437,7 +438,7 @@ function opacityStopStyle(current: boolean): CSSProperties {
 		height: OPACITY_STOP_HIT_PX,
 		borderRadius: '50%',
 		border: 'none',
-		background: current ? '#004990' : 'rgba(15,23,42,0.4)',
+		background: current ? UI_VARS.accent : UI_VARS.trackLine,
 		backgroundClip: 'content-box',
 		padding: (OPACITY_STOP_HIT_PX - dot) / 2,
 		boxSizing: 'border-box',

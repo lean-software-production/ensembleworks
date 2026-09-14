@@ -216,7 +216,7 @@ async function main() {
 		`precondition: re-hovering shape:seed-1 must paint the indicator again — DOM: ${container.innerHTML}`,
 	)
 
-	const frameToolButton = container.querySelector('[data-canvas-v2-tool="frame"]') as HTMLElement | null
+	const frameToolButton = container.querySelector('[data-canvas-tool="frame"]') as HTMLElement | null
 	assert.ok(frameToolButton, `the Frame tool button must render — DOM: ${container.innerHTML}`)
 	await act(async () => {
 		frameToolButton!.dispatchEvent(new (win as any).MouseEvent('click', { bubbles: true, cancelable: true }))
@@ -434,8 +434,8 @@ async function main() {
 	// shapes (the preview is created then cancelled) so (e)'s pre-unmount count
 	// precondition still holds.
 	// ==========================================================================
-	const geoBtnEsc = container.querySelector('[data-canvas-v2-tool="geo"]') as HTMLElement | null
-	const selectBtnEsc = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+	const geoBtnEsc = container.querySelector('[data-canvas-tool="geo"]') as HTMLElement | null
+	const selectBtnEsc = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 	assert.ok(geoBtnEsc && selectBtnEsc, `the geo and select toolbar buttons must exist — DOM: ${container.innerHTML}`)
 
 	// Switch to the geo tool (real click) so a viewport drag creates a preview.
@@ -499,8 +499,8 @@ async function main() {
 	// for both Escape (cancels an in-flight create-drag) and Delete (removes a
 	// selected shape).
 	// ==========================================================================
-	const geoBtn = container.querySelector('[data-canvas-v2-tool="geo"]') as HTMLElement | null
-	const selectBtn = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+	const geoBtn = container.querySelector('[data-canvas-tool="geo"]') as HTMLElement | null
+	const selectBtn = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 	assert.ok(geoBtn && selectBtn, `both the geo and select toolbar buttons must exist in the DOM — DOM: ${container.innerHTML}`)
 
 	// Switch to the geo (Shape) tool via a REAL click on its own button (this
@@ -694,7 +694,7 @@ async function main() {
 	// focus — the payoff of B3's handleGlobalShortcut extraction. Moves focus
 	// to a toolbar button WITHOUT clicking it (no tool-switch side effect),
 	// same technique (d4) uses above.
-	const selectBtnUndo = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+	const selectBtnUndo = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 	assert.ok(selectBtnUndo, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
 	await act(async () => {
 		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-e', 580, 580) })
@@ -968,7 +968,7 @@ async function main() {
 
 		// (f7b) DOCUMENT-LEVEL FALLBACK PATH — a toolbar button holds focus,
 		// same technique (f5)/(d4) use above.
-		const selectBtnA = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+		const selectBtnA = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 		assert.ok(selectBtnA, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
 		await act(async () => {
 			selectBtnA!.focus()
@@ -1002,7 +1002,7 @@ async function main() {
 			ewNudge.editor.apply({ type: 'CreateShape', shape: seedShape('shape:nudge-a', 900, 900) })
 			ewNudge.editor.apply({ type: 'SetSelection', ids: ['shape:nudge-a'] })
 		})
-		const selectBtnNudge = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+		const selectBtnNudge = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 		assert.ok(selectBtnNudge, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
 		// Move focus to the toolbar button WITHOUT clicking it (no tool-switch
 		// side effect) — the same real-browser "a button holds focus after
@@ -1034,8 +1034,8 @@ async function main() {
 	// button must be.
 	// ==========================================================================
 	{
-		const noteBtnEsc = container.querySelector('[data-canvas-v2-tool="note"]') as HTMLElement | null
-		const selectBtnEsc2 = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+		const noteBtnEsc = container.querySelector('[data-canvas-tool="note"]') as HTMLElement | null
+		const selectBtnEsc2 = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 		assert.ok(noteBtnEsc && selectBtnEsc2, `the note and select toolbar buttons must exist — DOM: ${container.innerHTML}`)
 		await act(async () => {
 			viewportEl!.focus()
@@ -1419,8 +1419,8 @@ async function main() {
 			await new Promise((r) => setTimeout(r, 0))
 		})
 
-		const drawBtn = drawContainer.querySelector('[data-canvas-v2-tool="draw"]') as HTMLElement | null
-		const selectBtnDraw = drawContainer.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+		const drawBtn = drawContainer.querySelector('[data-canvas-tool="draw"]') as HTMLElement | null
+		const selectBtnDraw = drawContainer.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 		assert.ok(drawBtn, `the Draw toolbar button must render — DOM: ${drawContainer.innerHTML}`)
 		assert.ok(selectBtnDraw, 'precondition: the select button renders')
 		assert.equal(selectBtnDraw!.getAttribute('aria-pressed'), 'true', 'precondition: select is the default active tool')

@@ -33,7 +33,7 @@ import { execSync } from 'node:child_process'
 // runner directory canvas-editor/src/contracts/, and the browser runner's two
 // files in e2e/ — also verified present.
 // ============================================================================
-const INTERACTION_BEARING_PREFIXES = ['canvas-editor/src/tools/', 'canvas-react/src/', 'client/src/canvas-v2/'] as const
+const INTERACTION_BEARING_PREFIXES = ['canvas-editor/src/tools/', 'canvas-editor/src/session/', 'canvas-react/src/', 'canvas-ui/src/', 'client/src/canvas-v2/'] as const
 
 const CONTRACTS_MODULE_PREFIXES = ['interaction-contracts/', 'canvas-editor/src/contracts/'] as const
 const CONTRACTS_MODULE_EXACT_FILES = ['e2e/lib/contracts.ts', 'e2e/tests/contracts.spec.ts'] as const
@@ -95,6 +95,15 @@ export function checkPresence(changedFiles: readonly string[], prBody: string): 
   assert.ok(v !== null, 'an interaction-bearing change with no contracts touch and no marker must be flagged')
   assert.ok(v!.includes('canvas-editor/src/tools/select.ts'), 'the violation message names the offending file')
   console.log('ok: presence check flags an interaction-bearing diff with no contracts touch and no marker')
+}
+{
+  // RED: canvas-ui is interaction-bearing too (Task 4 — Toolbar/StylePanel
+  // are host-agnostic React chrome shared by both the web app and the bb
+  // Canvas plugin) — no contracts touch, no marker.
+  const v = checkPresence(['canvas-ui/src/Toolbar.tsx'], '')
+  assert.ok(v !== null, 'a canvas-ui change with no contracts touch and no marker must be flagged')
+  assert.ok(v!.includes('canvas-ui/src/Toolbar.tsx'), 'the violation message names the offending file')
+  console.log('ok: presence check flags a canvas-ui/src change with no contracts touch and no marker')
 }
 {
   // GREEN: same interaction-bearing file, PLUS a contracts-module touch.

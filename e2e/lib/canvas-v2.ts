@@ -30,7 +30,7 @@ export async function viewportBox(page: Page) {
  * synchronously just before that same call — see CanvasV2App.tsx's
  * CONSTRUCTION SEQUENCE step 7). */
 export async function waitForBoot(page: Page) {
-	await expect(page.locator('[data-canvas-v2-tool="select"]')).toBeVisible({ timeout: 15_000 })
+	await expect(page.locator('[data-canvas-tool="select"]')).toBeVisible({ timeout: 15_000 })
 }
 
 /** Click the `note` tool, then click ANCHOR (viewport-relative) to
@@ -41,9 +41,9 @@ export async function waitForBoot(page: Page) {
  * otherwise, tool-loop.ts's TOOL-SWITCHING MODEL). Returns the created
  * shape's id (read off the rendered `data-shape-id`, not guessed). */
 export async function createNoteAt(page: Page, box: { x: number; y: number }): Promise<string> {
-	await page.locator('[data-canvas-v2-tool="note"]').click()
+	await page.locator('[data-canvas-tool="note"]').click()
 	await page.mouse.click(box.x + ANCHOR.x, box.y + ANCHOR.y)
-	await page.locator('[data-canvas-v2-tool="select"]').click()
+	await page.locator('[data-canvas-tool="select"]').click()
 	const shape = page.locator('[data-shape-kind="note"]')
 	await expect(shape).toBeVisible({ timeout: 10_000 })
 	const id = await shape.getAttribute('data-shape-id')

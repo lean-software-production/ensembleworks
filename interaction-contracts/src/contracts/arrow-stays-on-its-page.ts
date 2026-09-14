@@ -3,7 +3,7 @@
 // in the room regardless of page, while ShapeLayer filtered shape bodies.
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
-const ARROW_TOOL_SELECTOR = '[data-canvas-v2-tool="arrow"]'
+const ARROW_TOOL_SELECTOR = '[data-canvas-tool="arrow"]'
 const NEW_PAGE_SELECTOR = '[data-canvas-v2-new-page]'
 
 export const arrowStaysOnItsPage: Contract = {

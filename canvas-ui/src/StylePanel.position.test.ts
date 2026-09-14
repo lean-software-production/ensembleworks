@@ -1,4 +1,4 @@
-// Run: bun src/canvas-v2/StylePanel.position.test.ts
+// Run: bun src/StylePanel.position.test.ts
 // Review fix (post-Task P4) — pins `clampPanelPosition`'s ON-SCREEN
 // guarantee: given the selection's screen-space corners, the viewport size,
 // and the panel's MAXIMUM rendered size (PANEL_MAX_WIDTH/PANEL_MAX_HEIGHT —

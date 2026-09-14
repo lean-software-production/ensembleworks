@@ -35,9 +35,9 @@ import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 const SEEDED_ID = 'shape:style-memory-seed'
 
 // The toolbar button CanvasV2App.tsx renders for each tool
-// (`data-canvas-v2-tool={btn.id}` — same convention
+// (`data-canvas-tool={btn.id}` — same convention
 // `armed-style-applies-to-created-shape` already anchors onto).
-const GEO_TOOL_SELECTOR = '[data-canvas-v2-tool="geo"]'
+const GEO_TOOL_SELECTOR = '[data-canvas-tool="geo"]'
 
 // The SELECTION panel's blue color swatch — `data-style-panel-mode`
 // distinguishes this from the ARMED panel's own blue swatch (same

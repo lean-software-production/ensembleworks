@@ -468,10 +468,10 @@ test('canvas-v2 new engine: undo — Ctrl+Z fully restores a deleted shape (sing
 		// with id1's bounds (computeSnappedDelta's snap candidates) and
 		// confuse the position math below.
 		// ------------------------------------------------------------------
-		await page.locator('[data-canvas-v2-tool="note"]').click()
+		await page.locator('[data-canvas-tool="note"]').click()
 		const p2 = { x: boxA.x + 900, y: boxA.y + 520 }
 		await page.mouse.click(p2.x, p2.y)
-		await page.locator('[data-canvas-v2-tool="select"]').click()
+		await page.locator('[data-canvas-tool="select"]').click()
 		const note2 = page.locator(`[data-shape-kind="note"]:not([data-shape-id="${id1}"])`)
 		await expect(note2).toBeVisible({ timeout: 10_000 })
 		const id2 = await note2.getAttribute('data-shape-id')
@@ -567,9 +567,9 @@ test("canvas-v2 new engine: undo is LOCAL-ONLY per peer — A's Ctrl+Z reverts o
 		// for every OTHER case in this file (fresh room, first shape), but by
 		// now B's DOM already shows X (converged from A), so the same manual
 		// sequence is inlined here with an explicit `:not(...)` filter for X's id.
-		await pageB.locator('[data-canvas-v2-tool="note"]').click()
+		await pageB.locator('[data-canvas-tool="note"]').click()
 		await pageB.mouse.click(boxB.x + ANCHOR.x, boxB.y + ANCHOR.y)
-		await pageB.locator('[data-canvas-v2-tool="select"]').click()
+		await pageB.locator('[data-canvas-tool="select"]').click()
 		const noteY = pageB.locator(`[data-shape-kind="note"]:not([data-shape-id="${idX}"])`)
 		await expect(noteY).toBeVisible({ timeout: 10_000 })
 		const idY = await noteY.getAttribute('data-shape-id')
@@ -637,7 +637,7 @@ test('canvas-v2 new engine: cancellation — Escape/blur/pointercancel abandon a
 		})
 
 	// --- 1) create-drag then Escape -> no preview persists ---
-	await page.locator('[data-canvas-v2-tool="geo"]').click()
+	await page.locator('[data-canvas-tool="geo"]').click()
 	const p0 = { x: box.x + 500, y: box.y + 500 }
 	await page.mouse.move(p0.x, p0.y)
 	await page.mouse.down()
@@ -647,10 +647,10 @@ test('canvas-v2 new engine: cancellation — Escape/blur/pointercancel abandon a
 	await page.mouse.up() // release the real button (tool FSM is already back to idle by the time this lands)
 	await expect(page.locator('[data-shape-kind="geo"]')).toHaveCount(0)
 	await expect.poll(shapeCount).toBe(0)
-	await page.locator('[data-canvas-v2-tool="select"]').click()
+	await page.locator('[data-canvas-tool="select"]').click()
 
 	// --- 2) create-drag then BLUR the viewport (not Escape, not pointerup) -> no preview persists ---
-	await page.locator('[data-canvas-v2-tool="geo"]').click()
+	await page.locator('[data-canvas-tool="geo"]').click()
 	const p1 = { x: box.x + 500, y: box.y + 200 }
 	await page.mouse.move(p1.x, p1.y)
 	await page.mouse.down()
@@ -661,14 +661,14 @@ test('canvas-v2 new engine: cancellation — Escape/blur/pointercancel abandon a
 	await page.mouse.up()
 	await expect(page.locator('[data-shape-kind="geo"]')).toHaveCount(0)
 	await expect.poll(shapeCount).toBe(0)
-	await page.locator('[data-canvas-v2-tool="select"]').click()
+	await page.locator('[data-canvas-tool="select"]').click()
 
 	// --- 3) arrow-draw then Escape -> no arrow persists (bounds DoD #5) ---
 	// Arrows have no shape body at all (ShapeLayer.tsx skips them — the
 	// polish/arrow-body change); the only DOM an arrow owns is its path in
 	// the SVG overlay (overlay/Arrows.tsx's `<g data-overlay="arrow">`), so
 	// that is what we count here.
-	await page.locator('[data-canvas-v2-tool="arrow"]').click()
+	await page.locator('[data-canvas-tool="arrow"]').click()
 	const p2 = { x: box.x + 200, y: box.y + 500 }
 	await page.mouse.move(p2.x, p2.y)
 	await page.mouse.down()
@@ -678,10 +678,10 @@ test('canvas-v2 new engine: cancellation — Escape/blur/pointercancel abandon a
 	await page.mouse.up()
 	await expect(page.locator('[data-overlay="arrow"]')).toHaveCount(0)
 	await expect.poll(shapeCount).toBe(0)
-	await page.locator('[data-canvas-v2-tool="select"]').click()
+	await page.locator('[data-canvas-tool="select"]').click()
 
 	// --- 4) a pointercancel mid-create-drag -> no preview persists ---
-	await page.locator('[data-canvas-v2-tool="note"]').click()
+	await page.locator('[data-canvas-tool="note"]').click()
 	const p3 = { x: box.x + 800, y: box.y + 300 }
 	await page.mouse.move(p3.x, p3.y)
 	await page.mouse.down()

@@ -27,8 +27,8 @@
 // a clean, specific assertion failure.
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
-const ARROW_TOOL_SELECTOR = '[data-canvas-v2-tool="arrow"]'
-const SELECT_TOOL_SELECTOR = '[data-canvas-v2-tool="select"]'
+const ARROW_TOOL_SELECTOR = '[data-canvas-tool="arrow"]'
+const SELECT_TOOL_SELECTOR = '[data-canvas-tool="select"]'
 
 const TARGET_ID = 'shape:arrow-rebind-target'
 const START = { x: 300, y: 300 }

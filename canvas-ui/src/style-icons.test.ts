@@ -1,4 +1,4 @@
-// Run: bun src/canvas-v2/style-icons.test.ts
+// Run: bun src/style-icons.test.ts
 // Task style-panel-icons — pins that every value in canvas-model's style
 // enums (read through style-axes.ts's STYLE_VALUE_SETS, the same value-set
 // source of truth StylePanel.tsx renders from) gets an EXPLICIT icon glyph

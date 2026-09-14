@@ -38,9 +38,9 @@
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
 // The toolbar button CanvasV2App.tsx renders for each tool
-// (`data-canvas-v2-tool={btn.id}` — TOOL_BUTTONS' `id`s are the same
+// (`data-canvas-tool={btn.id}` — TOOL_BUTTONS' `id`s are the same
 // `ToolId` union the armed panel keys off of).
-const GEO_TOOL_SELECTOR = '[data-canvas-v2-tool="geo"]'
+const GEO_TOOL_SELECTOR = '[data-canvas-tool="geo"]'
 
 // The armed panel's blue color swatch. StylePanel.tsx's module header names
 // this exact selector as AS4's anchor: the armed panel carries

@@ -1,4 +1,4 @@
-// Run: bun src/canvas-v2/StylePanel.test.ts
+// Run: bun src/StylePanel.test.ts
 // Task P2 (docs/plans/2026-07-21-canvas-v2-styling.md) — component test for
 // the contextual style panel's RENDERING (which controls show, which value is
 // marked current/mixed). renderToStaticMarkup (this house's usual rig for a

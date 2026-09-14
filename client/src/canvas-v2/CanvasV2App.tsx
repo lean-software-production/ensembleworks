@@ -129,7 +129,6 @@ import {
 	screenToWorld,
 	selectAllIntents,
 	shouldFallBackToSelect,
-	TOOL_SHORTCUT_LABEL,
 	undoWithRepair,
 	type InputEvent,
 	type Intent,
@@ -167,7 +166,7 @@ import { EditingIndicators } from './EditingIndicators.js'
 import { DevOverlay, shouldShowDevOverlayFromEnvironment, useCanvasMetrics } from './DevOverlay.js'
 import { canvasV2EmbedLifecycles, registerCanvasV2Shapes } from './shapes/index.js'
 import { presentStoreV2 } from './shapes/presentStoreV2.js'
-import { StylePanel } from './StylePanel.js'
+import { StylePanel, Toolbar } from '@ensembleworks/canvas-ui'
 import { readClipboardText, writeClipboardText } from './clipboard-dom.js'
 import { extractImageFiles } from './image-drop.js'
 import { extractImageBlobs } from './image-paste.js'
@@ -546,18 +545,6 @@ function ConnectionBanner({ state }: { readonly state: ConnectionState }) {
 		</div>
 	)
 }
-
-const TOOL_BUTTONS: ReadonlyArray<{ readonly id: ToolId; readonly label: string }> = [
-	{ id: 'select', label: 'Select' },
-	{ id: 'hand', label: 'Hand' },
-	{ id: 'note', label: 'Note' },
-	{ id: 'text', label: 'Text' },
-	{ id: 'geo', label: 'Shape' },
-	{ id: 'frame', label: 'Frame' },
-	{ id: 'arrow', label: 'Arrow' },
-	{ id: 'draw', label: 'Draw' },
-	{ id: 'line', label: 'Line' },
-]
 
 /** Cursors.tsx has no push-based "a remote peer's presence changed" hook —
  * canvas-sync's PresenceStore only exposes `onLocalUpdate` (fires for THIS
@@ -1312,35 +1299,8 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 
 	return (
 		<div style={{ position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', fontFamily: 'system-ui, sans-serif' }}>
-			<div style={{ display: 'flex', gap: 4, padding: 6, borderBottom: '1px solid rgba(15,23,42,0.12)', background: '#fafaf7' }}>
-				{TOOL_BUTTONS.map((btn) => (
-					<button
-						key={btn.id}
-						type="button"
-						data-canvas-v2-tool={btn.id}
-						aria-pressed={activeToolId === btn.id}
-						// Tool tooltip / shortcut hint (Task keyboard/K5) — tldraw
-						// parity (barButtons.tsx's `title`). TOOL_SHORTCUT_LABEL is
-						// derived from tool-shortcut.ts's TOOL_SHORTCUTS, so the hint
-						// can never drift from the actual key mapping; a ToolId with
-						// no shortcut (there are none currently, but the map is
-						// Partial) falls back to the bare label.
-						title={TOOL_SHORTCUT_LABEL[btn.id] ? `${btn.label} (${TOOL_SHORTCUT_LABEL[btn.id]})` : btn.label}
-						aria-label={TOOL_SHORTCUT_LABEL[btn.id] ? `${btn.label} (${TOOL_SHORTCUT_LABEL[btn.id]})` : btn.label}
-						onClick={() => selectTool(btn.id)}
-						style={{
-							padding: '4px 10px',
-							borderRadius: 4,
-							border: activeToolId === btn.id ? '1px solid #004990' : '1px solid rgba(15,23,42,0.22)',
-							background: activeToolId === btn.id ? '#004990' : 'transparent',
-							color: activeToolId === btn.id ? '#fafaf7' : '#0f172a',
-							fontSize: 12,
-							cursor: 'pointer',
-						}}
-					>
-						{btn.label}
-					</button>
-				))}
+			<div style={{ display: 'flex', padding: 6, borderBottom: '1px solid rgba(15,23,42,0.12)', background: '#fafaf7' }}>
+				<Toolbar activeToolId={activeToolId} onSelectTool={selectTool} />
 			</div>
 			<PageSwitcher editor={editor} snapshot={snapshot} currentPageId={editorState.currentPageId} />
 			{/* Visual chrome fidelity (polish/visual-chrome, gap 1): v1's canvas

@@ -35,9 +35,9 @@
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
 // The toolbar button CanvasV2App.tsx renders for each tool
-// (`data-canvas-v2-tool={btn.id}` — verified, TOOL_BUTTONS' `{ id: 'arrow',
+// (`data-canvas-tool={btn.id}` — verified, TOOL_BUTTONS' `{ id: 'arrow',
 // label: 'Arrow' }` entry).
-const ARROW_TOOL_SELECTOR = '[data-canvas-v2-tool="arrow"]'
+const ARROW_TOOL_SELECTOR = '[data-canvas-tool="arrow"]'
 
 const TARGET_ID = 'shape:arrow-bind-target'
 

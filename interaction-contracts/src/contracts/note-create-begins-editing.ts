@@ -22,7 +22,7 @@
 // while a shape genuinely existed and was selected.
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
-const NOTE_TOOL_SELECTOR = '[data-canvas-v2-tool="note"]'
+const NOTE_TOOL_SELECTOR = '[data-canvas-tool="note"]'
 
 export const noteCreateBeginsEditing: Contract = {
   name: 'note-create-begins-editing',

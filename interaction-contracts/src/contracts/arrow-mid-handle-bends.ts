@@ -35,8 +35,8 @@
 // a clean, specific assertion failure.
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
-const ARROW_TOOL_SELECTOR = '[data-canvas-v2-tool="arrow"]'
-const SELECT_TOOL_SELECTOR = '[data-canvas-v2-tool="select"]'
+const ARROW_TOOL_SELECTOR = '[data-canvas-tool="arrow"]'
+const SELECT_TOOL_SELECTOR = '[data-canvas-tool="select"]'
 
 // World == screen here (fresh room, identity camera) — same convention
 // arrow-binds-to-target-shape's own literal points rely on.
