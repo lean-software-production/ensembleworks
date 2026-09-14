@@ -217,6 +217,19 @@ export interface Obs {
    * adapter reads `editor.doc.listPages().length` directly, the browser
    * adapter samples `window.__ew.doc.listPages().length`. */
   pageCount(): number
+  /** A shape's LIVE text content (`CanvasDoc.getText(id)`), or null when the
+   * shape is absent. create-edit-flow's fixer task — the enter-key-edits-
+   * selection contract is FSM-level only, where no DOM textarea exists, so
+   * it is structurally incapable of catching a keyboard-driven edit that
+   * corrupts the shape's text (e.g. Enter both beginning the edit AND
+   * inserting a stray newline once the browser refocuses onto the
+   * newly-mounted textarea within the same keydown). This probe is what
+   * lets a BROWSER-level contract assert on the actual stored text, not
+   * just "editing began". Available at BOTH levels (reads doc state, not
+   * the DOM) — no throw-stub: the FSM adapter reads `editor.doc.getText`
+   * directly, the browser adapter pre-samples `window.__ew.doc.getText`
+   * for the same id union `shapeStyle`/`shapeKind` already sample. */
+  shapeText(id: string): string | null
 }
 
 /** A contract declaration = data. */

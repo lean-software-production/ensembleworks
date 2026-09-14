@@ -368,4 +368,44 @@ function setup() {
   console.log('ok: snap-during-drag finds no candidates far from every other shape -- empty SnapResult, unsnapped translate')
 }
 
+// ============================================================================
+// 14. Enter-to-edit (create-edit-flow task, tldraw parity: node_modules/
+//    tldraw/src/lib/tools/SelectTool/childStates/Idle.ts:640-661): with a
+//    lone TEXT-CAPABLE shape selected, an Enter keydown begins editing it.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  const events = script().down(450, 50).up().key('Enter').events()
+  run(editor, tool, events)
+  assert.deepEqual([...editor.get().selection], ['shape:note'], 'shape:note stays selected')
+  assert.equal(editor.get().editingId, 'shape:note', 'Enter on a lone selected text-capable shape begins editing it')
+  console.log('ok: Enter begins editing a lone selected text-capable shape')
+}
+
+// ============================================================================
+// 15. Enter on a lone selected NON-text-capable shape (a 'terminal' embed)
+//    is a no-op -- never begins editing.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  const events = script().down(650, 50).up().key('Enter').events()
+  run(editor, tool, events)
+  assert.deepEqual([...editor.get().selection], ['shape:terminal'])
+  assert.equal(editor.get().editingId, null, 'Enter on a non-text-capable selected shape never begins editing')
+  console.log('ok: Enter on a non-text-capable selection is a no-op')
+}
+
+// ============================================================================
+// 16. Enter with MULTIPLE shapes selected (or nothing selected) is a no-op
+//    -- v1 only auto-edits a LONE selected shape.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:a', 'shape:note'] })
+  const events = script().key('Enter').events()
+  run(editor, tool, events)
+  assert.equal(editor.get().editingId, null, 'Enter with more than one shape selected does not begin editing')
+  console.log('ok: Enter with a multi-shape selection is a no-op')
+}
+
 console.log('ok: select tool FSM (select/marquee/translate)')

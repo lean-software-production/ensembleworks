@@ -1047,4 +1047,111 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: SetCurrentPage switches currentPageId, view-only (no commit, no undo), notifies subscribers')
 }
 
+// ============================================================================
+// 29. create-edit-flow task — EndEdit auto-deletes an empty `text` shape
+//    (tldraw parity: node_modules/tldraw/src/lib/shapes/text/
+//    TextShapeUtil.tsx:249-254's onEditEnd). `note` is deliberately
+//    EXCLUDED (NoteShapeUtil has no such hook — a sticky's colored body is
+//    a real object even with no text).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:empty-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:empty-text' })
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:empty-text'), undefined, 'an empty text shape is deleted when its editing session ends')
+  assert.equal(editor.get().editingId, null, 'editingId still clears to null')
+  console.log('ok: EndEdit deletes an empty text shape')
+}
+
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:blank-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:blank-text' })
+  editor.apply({ type: 'SetText', id: 'shape:blank-text', text: '   ' }) // whitespace-only -- trims to empty
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:blank-text'), undefined, 'a whitespace-only text shape is deleted too (trimmed before the emptiness check)')
+  console.log('ok: EndEdit deletes a whitespace-only text shape')
+}
+
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:has-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:has-text' })
+  editor.apply({ type: 'SetText', id: 'shape:has-text', text: 'hello' })
+  editor.apply({ type: 'EndEdit' })
+  assert.ok(editor.doc.getShape('shape:has-text'), 'a text shape with real content survives EndEdit')
+  console.log('ok: EndEdit keeps a non-empty text shape')
+}
+
+{
+  const { editor } = makeEditor(1n)
+  // kind defaults to 'note' (this file's `shape()` helper) — an empty NOTE
+  // must survive EndEdit; only `text` auto-deletes.
+  editor.apply({ type: 'CreateShape', shape: shape('shape:empty-note') })
+  editor.apply({ type: 'BeginEdit', id: 'shape:empty-note' })
+  editor.apply({ type: 'EndEdit' })
+  assert.ok(editor.doc.getShape('shape:empty-note'), 'an empty NOTE (not text) is never auto-deleted -- v1 has no such hook for notes')
+  console.log('ok: EndEdit never deletes an empty note')
+}
+
+{
+  // Undo/redo round-trip: EndEdit's delete must be a real, undoable batch
+  // (same InverseOp convention DeleteShapes itself uses).
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:undoable', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:undoable' })
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:undoable'), undefined, 'sanity: deleted')
+  editor.undo()
+  assert.ok(editor.doc.getShape('shape:undoable'), 'undo restores the auto-deleted empty text shape')
+  editor.redo()
+  assert.equal(editor.doc.getShape('shape:undoable'), undefined, 'redo re-deletes it')
+  console.log('ok: EndEdit\'s auto-delete undo/redo round-trips')
+}
+
+{
+  // Validator-blocking advisory (create-edit-flow FIXER task): EndEdit's
+  // auto-delete must not leave the just-deleted shape's id stranded in
+  // `selection` -- DeleteShapes' own callers always pair a delete with
+  // SetSelection([]) (tool-loop.ts's deleteSelectionIntents); EndEdit's
+  // internal delete has no such caller, so the clear must be part of
+  // EndEdit's own result.
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:dangling-selection', { kind: 'text' }) })
+  editor.apply({ type: 'SetSelection', ids: ['shape:dangling-selection'] })
+  editor.apply({ type: 'BeginEdit', id: 'shape:dangling-selection' })
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:dangling-selection'), undefined, 'sanity: the empty text shape was deleted')
+  assert.deepEqual([...editor.get().selection], [], 'the deleted shape id must not remain in selection')
+  console.log('ok: EndEdit\'s auto-delete also clears the deleted id out of selection')
+}
+
+{
+  // Validator-blocking finding (create-edit-flow FIXER round 3): EndEdit's
+  // emptiness check reads ONLY the live LoroText channel
+  // (doc.getText(editingId)), never props.richText. A shape imported/
+  // reconciled from a v1 tldraw room carries its content in props.richText
+  // while its LoroText channel stays genuinely empty (pinned by
+  // server/src/canvas-v2/reconcile.test.ts case 5 -- richText round-trips,
+  // getText() stays ''). canvas-react's TextShape renders that richText, so
+  // the shape is fully visible content -- yet opening and abandoning an
+  // edit (BeginEdit -> EndEdit with no typing) deleted it, a real,
+  // synced-to-peers data loss. Fix must treat a shape with non-empty
+  // props.richText as non-empty even when its LoroText channel is blank.
+  const { editor } = makeEditor(1n)
+  editor.apply({
+    type: 'CreateShape',
+    shape: shape('shape:imported-text', {
+      kind: 'text',
+      props: { richText: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'IMPORTED FROM V1' }] }] } },
+    }),
+  })
+  assert.equal(editor.doc.getText('shape:imported-text'), '', 'sanity: the LoroText channel is genuinely empty for richText-only content, same as reconcile.test.ts case 5')
+  editor.apply({ type: 'BeginEdit', id: 'shape:imported-text' })
+  editor.apply({ type: 'EndEdit' })
+  assert.ok(editor.doc.getShape('shape:imported-text'), 'a text shape whose only content is props.richText must survive an edit-and-abandon -- it is NOT empty just because its LoroText channel is blank')
+  console.log('ok: EndEdit does not delete a text shape whose content lives in props.richText')
+}
+
 console.log('ok: canvas-editor editor + intents')

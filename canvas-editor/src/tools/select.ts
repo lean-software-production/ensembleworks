@@ -334,6 +334,30 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       const hit = ctx.hitTestTopmost(worldOf(event))
       return { state, intents: [{ type: 'SetHover', id: hit }] }
     }
+    // ENTER-TO-EDIT (tldraw parity, checked against source: node_modules/
+    // tldraw/src/lib/tools/SelectTool/childStates/Idle.ts:640-661 — Enter on
+    // a lone, text-capable selected shape begins editing it). Gated on
+    // `editingId === null` for the same idempotency reason double-click's
+    // BeginEdit re-emission is harmless elsewhere in this file: a stray
+    // Enter that reaches here while ALREADY editing (this tool's own idle
+    // state, so nothing should normally be mid-edit AND idle here — the
+    // client's handleGlobalShortcut gates keydowns on editingId===null
+    // before they ever reach a tool — but this FSM must not assume its
+    // caller's discipline) must not re-fire a no-op BeginEdit against a
+    // stale read. `editor.get().selection` (not this FSM's own state) is
+    // the single source of truth for "what's selected" — select.ts never
+    // carries its own copy of the selection.
+    if (event.type === 'keydown' && event.key === 'Enter') {
+      const selection = editor.get().selection
+      if (selection.size === 1 && editor.get().editingId === null) {
+        const [targetId] = selection
+        const shape = ctx.snapshot().byId.get(targetId!)
+        if (shape && isTextCapableKind(shape.kind)) {
+          return { state, intents: [{ type: 'BeginEdit', id: targetId! }] }
+        }
+      }
+      return { state, intents: [] }
+    }
     return { state, intents: [] }
   }
 

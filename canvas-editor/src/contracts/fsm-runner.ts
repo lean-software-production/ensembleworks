@@ -227,6 +227,14 @@ function makeObs(
       // throw-stub, both adapters are REAL.
       return editor.doc.listPages().length
     },
+    shapeText(id: string) {
+      // create-edit-flow fixer task — a doc read, like shapeStyle/shapeKind:
+      // no throw-stub, both adapters are REAL. `editor.doc.getShape` gates
+      // absence (getText itself has no "shape doesn't exist" signal — it
+      // would just read an empty Loro text container).
+      if (!editor.doc.getShape(id)) return null
+      return editor.doc.getText(id)
+    },
   }
 }
 

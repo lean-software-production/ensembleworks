@@ -12,6 +12,7 @@ import {
 	deleteSelectionIntents,
 	dispatchToActiveTool,
 	pruneDanglingSelectionIntents,
+	shouldFallBackToSelect,
 	type SelectAndTransformState,
 } from './tool-loop.js'
 
@@ -610,6 +611,47 @@ function setup() {
 	assert.equal((cancelled.states.line as { mode: string }).mode, 'idle', 'the line tool itself resets to idle')
 
 	console.log('ok: tool-loop — the line tool is wired into createToolSet/createInitialToolStates/dispatchToActiveTool/cancelActiveTool (Task W1)')
+}
+
+// ============================================================================
+// 11. shouldFallBackToSelect (create-edit-flow task) — the pure decision
+//    CanvasV2App's handleInput consults after every dispatchToActiveTool
+//    call: fires ONLY when editingId transitioned null -> non-null while a
+//    NON-select tool was active. See tool-loop.ts's own doc comment for why
+//    it's the editingId transition (not the raw Intent[]) that's compared.
+// ============================================================================
+{
+	assert.equal(shouldFallBackToSelect('note', null, 'shape:a'), true, 'a create tool that just began editing falls back to select')
+	assert.equal(shouldFallBackToSelect('text', null, 'shape:a'), true)
+	assert.equal(shouldFallBackToSelect('select', null, 'shape:a'), false, 'select itself beginning to edit (Enter/double-click) is not a "fall back" — it is already select')
+	assert.equal(shouldFallBackToSelect('note', 'shape:old', 'shape:a'), false, 'editingId was ALREADY non-null (a different edit was already in flight) -- not this dispatch\'s doing')
+	assert.equal(shouldFallBackToSelect('geo', null, null), false, 'no editing began at all (e.g. a geo click, which never auto-edits) -- no fallback')
+	console.log('ok: tool-loop — shouldFallBackToSelect fires only on a create tool\'s null->non-null editingId transition')
+}
+
+// ============================================================================
+// 12. End-to-end: dispatching a note-tool click through dispatchToActiveTool
+//    really does flip editingId from null to the new shape's id — the live
+//    signal shouldFallBackToSelect above is built to consume (CanvasV2App
+//    wires the two together; this proves the producer side of that wiring
+//    independent of any React/DOM harness).
+// ============================================================================
+{
+	const { editor, ctx } = setup()
+	const tools = createToolSet(ctx)
+	let states = createInitialToolStates(tools)
+
+	const editingIdBefore = editor.get().editingId
+	assert.equal(editingIdBefore, null, 'precondition: nothing is being edited yet')
+	const activeBefore = 'note' as const
+
+	states = dispatchToActiveTool(tools, states, activeBefore, editor, { type: 'pointerdown', x: 500, y: 500, buttons: 1, modifiers: MODS, t: 0 })
+	states = dispatchToActiveTool(tools, states, activeBefore, editor, { type: 'pointerup', x: 500, y: 500, buttons: 0, modifiers: MODS, t: 16 })
+
+	const editingIdAfter = editor.get().editingId
+	assert.ok(editingIdAfter, 'a completed note click begins editing the new shape')
+	assert.ok(shouldFallBackToSelect(activeBefore, editingIdBefore, editingIdAfter), 'CanvasV2App would switch the toolbar back to select after this dispatch')
+	console.log('ok: tool-loop — a note click flips editingId in exactly the shape shouldFallBackToSelect consumes')
 }
 
 console.log('ok: tool-loop.test.ts — all cases passed')

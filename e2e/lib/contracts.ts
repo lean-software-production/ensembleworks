@@ -292,6 +292,21 @@ async function sampleShapeStyles(
   }, shapeIds)
 }
 
+// create-edit-flow fixer task's Obs.shapeText(id) doc comment (interaction-
+// contracts/src/types.ts) — same pre-sample-then-read-synchronously shape as
+// sampleShapeStyles just above, reading `window.__ew.doc.getText` instead of
+// `getShape`. A shape absent from the doc gets `null` (getText itself has no
+// "shape doesn't exist" signal — it would read an empty Loro text container).
+async function sampleShapeTexts(page: Page, shapeIds: readonly string[]): Promise<Readonly<Record<string, string | null>>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const ew = (window as any).__ew
+    const out: Record<string, string | null> = {}
+    for (const id of ids) out[id] = ew.doc.getShape(id) ? ew.doc.getText(id) : null
+    return out
+  }, shapeIds)
+}
+
 /** One actor's pre-sampled observation values — see `pageObs`'s doc comment
  * for why these must be sampled BEFORE `contract.check` runs rather than
  * read lazily from inside an `Obs` method. */
@@ -300,6 +315,7 @@ interface ActorSample {
   readonly editingShape: string | null
   readonly editingIndicators: Readonly<Record<string, boolean>>
   readonly styles: Readonly<Record<string, { readonly opacity: number; readonly props: Readonly<Record<string, unknown>> } | null>>
+  readonly texts: Readonly<Record<string, string | null>>
   readonly selection: readonly string[]
   readonly shapeCount: number
   readonly paintOrder: readonly string[]
@@ -332,6 +348,11 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // "shape absent" (null) regardless of the shape's real stored props.
   const styleIds = [...new Set([...sceneShapeIds, ...selection])]
   const styles = await sampleShapeStyles(page, styleIds)
+  // create-edit-flow fixer task: same union rationale as styleIds above — a
+  // just-selected/just-edited shape's text is what `shapeText` needs to
+  // answer for, and the union already covers both seeded and gesture-
+  // discovered ids.
+  const texts = await sampleShapeTexts(page, styleIds)
   const shapeCount = await sampleShapeCount(page)
   const paintOrder = await samplePaintOrder(page)
   // Task H: same union rationale as styleIds above — a gesture-created
@@ -343,7 +364,7 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // the seeded `sceneShapeIds`.
   const assetSrcs = await sampleAssetSrcs(page, styleIds)
   const pageCount = await samplePageCount(page)
-  return { spans, editingShape, editingIndicators, styles, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount }
+  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -393,6 +414,7 @@ function pageObs(
     shapeKind: (id: string) => sample.kinds[id] ?? null,
     assetSrc: (id: string) => sample.assetSrcs[id] ?? null,
     pageCount: () => sample.pageCount,
+    shapeText: (id: string) => sample.texts[id] ?? null,
   }
 }
 
