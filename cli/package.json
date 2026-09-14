@@ -14,7 +14,7 @@
 	},
 	"dependencies": {
 		"@ensembleworks/contracts": "*",
-		"smol-toml": "^1.7.0",
+		"smol-toml": "^1.8.0",
 		"ws": "^8.21.3"
 	},
 	"devDependencies": {
