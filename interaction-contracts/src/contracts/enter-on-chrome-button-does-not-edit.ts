@@ -1,9 +1,9 @@
 // Enter on a focused chrome button inside the canvas's keyboard scope is the
 // button's own key: it activates the button and must not also begin editing
 // the selected shape. canvas-ui's useCanvasSession forwards keydowns from
-// outside the viewport through a document listener; only shortcuts (Delete,
-// Escape, Ctrl+Z, ...) may act from a focused control, while tool input
-// (Enter, arrows) is accepted there only from the body.
+// outside the viewport through a document listener; from a focused control
+// it withholds the control's activation keys (Enter, Space) from the tool,
+// while shortcuts and arrow nudge still act.
 //
 // Browser-only: the toolbar is a DOM control and focus is a DOM concept, so
 // the FSM runner has nothing to click.

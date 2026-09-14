@@ -173,28 +173,32 @@ function note(h: Harness): { x: number; y: number } {
 	console.log('ok: (c) a rejected clipboard write calls host.notify')
 }
 
-// (d) Enter or an arrow key on a focused chrome button inside the scope is the
-// button's own key: it must not begin editing or nudge the selected note.
+// (d) Enter or Space on a focused chrome button inside the scope is the
+// button's own activation key: it must not begin editing the selected note.
+// Arrow nudge still reaches the tool from a focused button (the web app's
+// CanvasV2App.test.ts case f8), and shortcuts still run.
 {
 	const h = await mount()
 	await act(async () => h.editor.apply({ type: 'SetSelection', ids: ['shape:n'] }))
 	const before = note(h)
+	let enter: KeyboardEvent | undefined
 	await act(async () => {
 		h.toolButton.focus()
-		keydown(h.toolButton, 'Enter')
+		enter = keydown(h.toolButton, 'Enter')
+		keydown(h.toolButton, ' ')
 	})
 	assert.equal(h.editor.get().editingId, null, 'Enter on a focused toolbar button must not begin editing the selected note')
+	assert.equal(enter!.defaultPrevented, false, "the button's own Enter activation is not suppressed")
 	await act(async () => {
 		keydown(h.toolButton, 'ArrowRight')
 	})
-	assert.deepEqual(note(h), before, 'ArrowRight on a focused toolbar button must not nudge the selection')
-	// Shortcuts still work from a focused button (the old toolbar behaviour).
+	assert.deepEqual(note(h), { x: before.x + 1, y: before.y }, 'ArrowRight on a focused toolbar button still nudges the selection')
 	await act(async () => {
 		keydown(h.toolButton, 'Delete')
 	})
 	assert.equal(h.editor.doc.listShapes().length, 0, 'Delete on a focused toolbar button still deletes the selection')
 	await h.unmount()
-	console.log('ok: (d) Enter/arrows on a focused chrome button stay with the button; shortcuts still run')
+	console.log('ok: (d) Enter/Space on a focused chrome button stay with the button; arrows and shortcuts still run')
 }
 
 // (e) From body, Enter still begins editing (and suppresses its native default

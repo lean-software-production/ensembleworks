@@ -108,10 +108,13 @@ before. Instead keydowns reach the session two ways:
   It ignores editable targets and anything the viewport already handled.
   Shortcuts (Delete, Escape, undo, clipboard, reorder, tool letters, select
   all) run from any in-scope target, including a focused toolbar button or
-  page tab. Tool input (Enter, arrow nudge) runs only when the target is
-  `body`, so Enter on a focused chrome button activates the button and does
-  not begin editing. An Enter that begins an edit from `body` is
-  `preventDefault`ed so no newline lands in the new text editor.
+  page tab. Other keys go to the active tool, except that on a focused chrome
+  control Enter and Space (its activation keys) and keys the control already
+  `preventDefault`ed stay with the control: Enter on a focused toolbar button
+  or page tab activates it and does not begin editing the selection, while
+  arrow nudge still works from a focused toolbar button. An Enter that begins
+  an edit from `body` is `preventDefault`ed so no newline lands in the new
+  text editor.
 - A `body`-targeted keydown counts as in scope only while the user's last
   `pointerdown` or `focusin` landed inside the scope (initially true). After
   editing text, focus on `body` still runs canvas shortcuts. After clicking
@@ -144,8 +147,8 @@ shortcut stopped working until the user clicked the canvas.
   `canvas-ui` (it mounts the same components the plugin mounts).
 - `canvas-ui/src/use-canvas-session.test.ts` mounts `useCanvasSession` +
   `CanvasSurface` in happy-dom with a real `Editor` and a fake `CanvasHost`
-  (scope-gated Backspace, clipboard write and failure notice, Enter/arrows on
-  a focused chrome button versus `body`). The plugin keeps static-render
+  (scope-gated Backspace, clipboard write and failure notice, Enter/Space and
+  arrows on a focused chrome button versus `body`). The plugin keeps static-render
   vitest checks (`plugins/canvas/tests/shared-surface.test.ts`); plugin
   typecheck, tests, `npm run audit:quality:compare`, `bb plugin build .`.
 - A checked-in live-bb browser smoke script beside

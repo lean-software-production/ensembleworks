@@ -80,6 +80,11 @@ export function isEditableTarget(node: EventTarget | null): boolean {
 	return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable === true
 }
 
+/** Keys a focused button activates on. */
+function isControlActivationKey(key: string): boolean {
+	return key === 'Enter' || key === ' '
+}
+
 export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSession {
 	const { editor, toolContext, tools, host, keyboardScopeRef, viewportContainerRef } = options
 
@@ -262,11 +267,13 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 				runCommand(command)
 				return
 			}
-			// Non-shortcut keys (Enter, arrows) go to the tool only from the body.
-			// On a focused chrome control inside the scope (a toolbar button, a
-			// page tab) they are that control's own keys: Enter activates it and
-			// must not also begin editing the selection.
-			if (target !== null && target !== body) return
+			// Tool input from a focused chrome control inside the scope (a toolbar
+			// button, a page tab): Enter and Space are that control's activation
+			// keys, so they must not also reach the tool (Enter would begin
+			// editing the selection), and a key the control already handled
+			// (defaultPrevented) is its own. Other keys, such as arrow nudge,
+			// still reach the tool, as they did from a focused toolbar button.
+			if (target !== null && target !== body && (isControlActivationKey(e.key) || e.defaultPrevented)) return
 			if (dispatchToTool(keyEvent)) e.preventDefault()
 		}
 		document.addEventListener('keydown', onKeydown)
