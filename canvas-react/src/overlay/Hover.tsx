@@ -1,7 +1,8 @@
-// The hovered-shape indicator — tldraw parity target: ShapeIndicatorOverlayUtil
-// (@tldraw/editor) strokes the shape under the cursor at 1.5 SCREEN px in the
-// theme's selectionStroke color whenever the select tool is idle/editing, the
-// pointer is over the canvas, AND the hovered shape ISN'T already selected
+// The hovered-shape indicator — tldraw parity target: tldraw's own
+// ShapeIndicatorOverlayUtil strokes the shape under the cursor at 1.5 SCREEN
+// px in the theme's selectionStroke color whenever the select tool is
+// idle/editing, the pointer is over the canvas, AND the hovered shape ISN'T
+// already selected
 // (its own selection outline already gives that feedback — see that file's
 // `!idsToDisplay.includes(hovered)` guard). canvas-editor's select tool
 // already computes and stores this (editor.ts's `hover: string | null`,
