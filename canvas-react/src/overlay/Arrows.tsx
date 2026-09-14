@@ -98,7 +98,7 @@
 // this file renders arrow-kind shapes ONLY; a hypothetical Ink.tsx is
 // deferred, not stubbed.
 import type { Binding, Bounds, CanvasDocument, Point, Shape, SpatialIndex } from '@ensembleworks/canvas-model'
-import { queryViewport, routeArrow, STYLE_VALUE_SETS, toWorldPoint, worldBounds } from '@ensembleworks/canvas-model'
+import { ARROW_HIT_MARGIN, queryViewport, routeArrow, STYLE_VALUE_SETS, toWorldPoint, worldBounds } from '@ensembleworks/canvas-model'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { viewportWorldBounds, type ViewportSize } from '../ShapeLayer.js'
 import { DASH_VALUES, dashArray, GEO_COLORS, STROKE_WIDTH_PX } from '../shapes/GeoShape.js'
@@ -203,7 +203,13 @@ function arrowStyle(shape: Shape): ArrowStyle {
   return { stroke: dash === 'none' ? 'none' : stroke, strokeWidth, strokeDasharray, headStart, headEnd }
 }
 
-function pathString(start: Point, end: Point, mid?: Point): string {
+/** The SVG path `d` string for a routed arrow's screen-space segment —
+ * `M start L end` (straight) or `M start Q mid end` (curved, `mid` is
+ * routeArrow's quadratic control point already converted to screen space).
+ * Exported (Task arrow-body) so Selection.tsx's arrow indicator can trace
+ * the EXACT same path this component draws, rather than reimplementing the
+ * two-branch `M .. L/Q ..` composition a second time. */
+export function pathString(start: Point, end: Point, mid?: Point): string {
   if (!mid) return `M ${start.x} ${start.y} L ${end.x} ${end.y}`
   return `M ${start.x} ${start.y} Q ${mid.x} ${mid.y} ${end.x} ${end.y}`
 }
@@ -290,14 +296,23 @@ export function Arrows({ snapshot, camera, viewportSize, index, routeFn }: Arrow
     if (t && ((t.start !== undefined && visibleIds.has(t.start)) || (t.end !== undefined && visibleIds.has(t.end)))) return true
     // (c) conservative segment bbox: union of both terminals' contributions
     // (whole target worldBounds for bound, exact stored point for unbound),
-    // inflated by |bend| for the curve bulge — see the SOUNDNESS note.
+    // inflated by |bend| for the curve bulge — see the SOUNDNESS note — PLUS
+    // ARROW_HIT_MARGIN (validator fix, gap 2): an exact (zero-width/height,
+    // for an axis-aligned unbound arrow) bbox can sit a few world units
+    // outside the viewport while the arrow's actual STROKE — which has
+    // visible width, unlike this bbox's mathematical line — still reaches
+    // into it. Reusing the same click-precision margin geometry.ts's
+    // arrowHitTest uses keeps one tunable constant for "how far off the
+    // exact line an arrow is still meaningfully present," rather than a
+    // second, independently-drifting one here.
     const b1 = terminalBounds(snapshot, arrow, 'start', t?.start)
     const b2 = terminalBounds(snapshot, arrow, 'end', t?.end)
     const rawBend = (arrow.props as { bend?: number })?.bend
     const bend = typeof rawBend === 'number' && Number.isFinite(rawBend) ? Math.abs(rawBend) : 0
+    const inflate = bend + ARROW_HIT_MARGIN
     const bbox: Bounds = {
-      minX: Math.min(b1.minX, b2.minX) - bend, minY: Math.min(b1.minY, b2.minY) - bend,
-      maxX: Math.max(b1.maxX, b2.maxX) + bend, maxY: Math.max(b1.maxY, b2.maxY) + bend,
+      minX: Math.min(b1.minX, b2.minX) - inflate, minY: Math.min(b1.minY, b2.minY) - inflate,
+      maxX: Math.max(b1.maxX, b2.maxX) + inflate, maxY: Math.max(b1.maxY, b2.maxY) + inflate,
     }
     return boundsIntersect(bbox, viewport)
   })

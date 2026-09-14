@@ -483,4 +483,28 @@ function fakeToolContextForPage(snapshot: CanvasDocument, currentPageId: string)
   console.log('ok: MIGRATION SAFETY — a single-page room renders every shape unchanged, the filter hides nothing')
 }
 
+// ============================================================================
+// 12. Task arrow-body (gap 1/3): an arrow-kind shape gets NO shape body at
+//    all from ShapeLayer — not BoxShape's fallback box, not anything else.
+//    Arrows are drawn entirely by Overlay's Arrows.tsx (path + arrowheads,
+//    a SIBLING layer never exercised by ShapeLayer); rendering the registry
+//    fallback body for an unregistered 'arrow' kind (shapeRegistry.ts's
+//    FALLBACK POLICY, otherwise correct for every OTHER unregistered kind)
+//    would draw a spurious labeled box behind every arrow, in addition to
+//    the correct overlay line.
+// ============================================================================
+{
+  const arrowShape: Shape = {
+    id: 'shape:arrow1', kind: 'arrow', parentId: 'page:p', index: 'a1', x: 50, y: 50, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { end: { x: 100, y: 0 } },
+  } as Shape
+  const arrowDoc: CanvasDocument = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [arrowShape], bindings: [] })
+  const toolContext = fakeToolContext(arrowDoc)
+  const camera = { x: 0, y: 0, z: 1 }
+  const html = renderToStaticMarkup(createElement(ShapeLayer, { toolContext, camera, viewportSize: { width: 800, height: 600 } }))
+  assert.ok(!html.includes(`data-shape-id="${arrowShape.id}"`), `an arrow shape must get NO ShapeLayer body at all (no wrapper div): ${html}`)
+  assert.ok(!html.includes('data-shape-body="box"'), `an arrow must never render the BoxShape fallback: ${html}`)
+  console.log('ok: ShapeLayer renders no shape body for arrow-kind shapes (no spurious BoxShape fallback)')
+}
+
 console.log('ok: shape-layer (rigid-transform positioning, flat-sibling composition, culling, registry fallback/override, live text, dispatch threading, paint order, opacity, page filter)')

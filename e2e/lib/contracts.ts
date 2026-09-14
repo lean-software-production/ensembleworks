@@ -255,6 +255,41 @@ async function samplePageCount(page: Page): Promise<number> {
   })
 }
 
+// Arrow-body task's Obs.shapeBindingTarget(fromId, terminal) doc comment
+// (interaction-contracts/src/types.ts) names this exact mechanism for the
+// browser adapter: read the WHOLE live bindings table
+// (window.__ew.doc.listBindings()) once, keyed by `${fromId}|${terminal}` —
+// NOT sampled per-id like shapeKind/assetSrc, because the one shape this
+// Obs method needs to answer for (a just-drawn arrow) is never in the
+// seeded scene AND never lands in `selectedShapeIds()` either (arrow.ts
+// never auto-selects, per line-creates-a-line-shape's own module-comment
+// note on that divergence) — so there is no id set to union against ahead
+// of time. A contract instead discovers the arrow's id via `listShapeIds()`
+// and looks its binding up in this whole-table snapshot.
+async function sampleBindings(page: Page): Promise<Readonly<Record<string, string | null>>> {
+  return page.evaluate(() => {
+    const ew = (window as any).__ew
+    const out: Record<string, string | null> = {}
+    for (const b of ew.doc.listBindings()) {
+      const terminal = b.props?.terminal
+      if (terminal !== 'start' && terminal !== 'end') continue
+      out[`${b.fromId}|${terminal}`] = b.toId
+    }
+    return out
+  })
+}
+
+// Arrow-body task's Obs.listShapeIds() doc comment (interaction-contracts/
+// src/types.ts) names this exact mechanism for the browser adapter: read
+// `window.__ew.doc.listShapes().map(s => s.id)` — the browser-side twin of
+// the FSM adapter's `editor.doc.listShapes().map(s => s.id)`.
+async function sampleShapeIds(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() => {
+    const ew = (window as any).__ew
+    return ew.doc.listShapes().map((s: { id: string }) => s.id)
+  })
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -322,6 +357,8 @@ interface ActorSample {
   readonly kinds: Readonly<Record<string, string | null>>
   readonly assetSrcs: Readonly<Record<string, string | null>>
   readonly pageCount: number
+  readonly bindings: Readonly<Record<string, string | null>>
+  readonly shapeIds: readonly string[]
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -364,7 +401,11 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // the seeded `sceneShapeIds`.
   const assetSrcs = await sampleAssetSrcs(page, styleIds)
   const pageCount = await samplePageCount(page)
-  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount }
+  // Arrow-body task: the whole bindings table, not id-keyed — see
+  // sampleBindings' own doc comment for why no id union works here.
+  const bindings = await sampleBindings(page)
+  const shapeIds = await sampleShapeIds(page)
+  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -415,6 +456,8 @@ function pageObs(
     assetSrc: (id: string) => sample.assetSrcs[id] ?? null,
     pageCount: () => sample.pageCount,
     shapeText: (id: string) => sample.texts[id] ?? null,
+    shapeBindingTarget: (fromId: string, terminal: 'start' | 'end') => sample.bindings[`${fromId}|${terminal}`] ?? null,
+    listShapeIds: () => sample.shapeIds,
   }
 }
 

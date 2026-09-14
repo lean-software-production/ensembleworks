@@ -506,4 +506,47 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
   console.log("ok: Arrows — arrowheadEnd:'none' suppresses the end arrowhead; arrowheadStart:'triangle' draws a start arrowhead the old code never had")
 }
 
+// ============================================================================
+// 13. Task arrow-body (gap 2/3): an arrow's selection indicator must trace
+//    its actual routed path (straight or curved, bound or unbound) — NOT
+//    worldCorners' box quad, which for an arrow is the stale localBounds
+//    100x100-at-start default. Selection.tsx special-cases kind === 'arrow'
+//    to draw routeArrow's own path (the SAME path Arrows.tsx renders) as an
+//    SVG <path>, never a <polygon> box, for that shape.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const arrow = arrowShape('shape:arrow', 200, 300, { end: { x: 400, y: 0 } })
+  const doc = docOf([arrow])
+  const routed = routeArrow(doc, arrow, doc.bindings)
+  const startScreen = worldToScreen(camera, routed.start)
+  const endScreen = worldToScreen(camera, routed.end)
+
+  const html = renderToStaticMarkup(createElement(Selection, { snapshot: doc, selection: new Set(['shape:arrow']), camera }))
+  assert.doesNotMatch(html, /<polygon/, `an arrow's selection indicator must not be a box polygon: ${html}`)
+  assert.match(html, /<path/, `an arrow's selection indicator must be a path tracing its routed line: ${html}`)
+  assert.ok(
+    html.includes(`M ${startScreen.x} ${startScreen.y} L ${endScreen.x} ${endScreen.y}`),
+    `arrow selection path should trace the exact routed straight segment: ${html}`,
+  )
+  console.log('ok: Selection — straight arrow indicator traces its routed start->end path, not a box quad')
+}
+
+{
+  const camera: Camera = { x: 10, y: -5, z: 2 }
+  const arrow = arrowShape('shape:curved', 0, 0, { end: { x: 200, y: 0 }, bend: 40 })
+  const doc = docOf([arrow])
+  const routed = routeArrow(doc, arrow, doc.bindings)
+  const startScreen = worldToScreen(camera, routed.start)
+  const endScreen = worldToScreen(camera, routed.end)
+  const midScreen = worldToScreen(camera, routed.mid!)
+
+  const html = renderToStaticMarkup(createElement(Selection, { snapshot: doc, selection: new Set(['shape:curved']), camera }))
+  assert.ok(
+    html.includes(`M ${startScreen.x} ${startScreen.y} Q ${midScreen.x} ${midScreen.y} ${endScreen.x} ${endScreen.y}`),
+    `curved arrow selection path should trace the exact quadratic control point, converted to screen under this camera: ${html}`,
+  )
+  console.log('ok: Selection — curved arrow indicator traces its routed quadratic Bézier, respecting camera')
+}
+
 console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing + viewport culling + style props (color/dash/size/arrowheads))')

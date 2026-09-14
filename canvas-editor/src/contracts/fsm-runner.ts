@@ -235,6 +235,20 @@ function makeObs(
       if (!editor.doc.getShape(id)) return null
       return editor.doc.getText(id)
     },
+    shapeBindingTarget(fromId: string, terminal: 'start' | 'end') {
+      // Arrow-body task — a doc read, like shapeCount/pageCount: no
+      // throw-stub, both adapters are REAL. Mirrors arrow-route.ts's
+      // resolveEndpoint's own binding lookup convention exactly.
+      const binding = editor.doc
+        .listBindings()
+        .find((b) => b.fromId === fromId && (b.props as { terminal?: string } | undefined)?.terminal === terminal)
+      return binding?.toId ?? null
+    },
+    listShapeIds() {
+      // Arrow-body task — a doc read, like shapeCount/pageCount: no
+      // throw-stub, both adapters are REAL.
+      return editor.doc.listShapes().map((s) => s.id)
+    },
   }
 }
 

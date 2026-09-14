@@ -86,8 +86,12 @@ export interface ToolContext {
   index(): SpatialIndex
   /** hitTestTopmost against the current index+snapshot pair (see
    * canvas-model/spatial-index.ts) — `point` is WORLD space; the caller
-   * (a tool) converts screen->world via screenToWorld before calling. */
-  hitTestTopmost(point: Point): string | null
+   * (a tool) converts screen->world via screenToWorld before calling.
+   * `excludeIds`, if given, is threaded straight through to canvas-model's
+   * hitTestTopmost so a caller can drop its own in-progress shape (e.g.
+   * arrow.ts's bindingAt) from the pool WITHOUT bailing to "no hit" — the
+   * next-topmost real candidate under the cursor still wins. */
+  hitTestTopmost(point: Point, excludeIds?: ReadonlySet<string>): string | null
   /** queryMarquee against the current index+snapshot pair. `bounds` is WORLD
    * space. */
   queryMarquee(bounds: Bounds, mode: 'intersect' | 'contain'): string[]
@@ -139,9 +143,9 @@ export function createToolContext(editor: Editor, opts: ToolContextOpts = {}): T
     editor,
     snapshot: () => fresh().snap,
     index: () => fresh().index,
-    hitTestTopmost: (point) => {
+    hitTestTopmost: (point, excludeIds) => {
       const { snap: s, index: i } = fresh()
-      return hitTestTopmostIndexed(i, s, point)
+      return hitTestTopmostIndexed(i, s, point, excludeIds)
     },
     queryMarquee: (bounds, mode) => {
       const { snap: s, index: i } = fresh()
