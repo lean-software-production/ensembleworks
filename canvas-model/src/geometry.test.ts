@@ -1,7 +1,7 @@
 // Run: bun src/geometry.test.ts
 import assert from 'node:assert/strict'
 import { makeDocument } from './document.js'
-import { pageBounds, centroid, medianSize, pageIdOf } from './geometry.js'
+import { pageBounds, centroid, medianSize, pageIdOf, isFixedSizeSelection } from './geometry.js'
 
 const base = () => ({ rotation: 0, isLocked: false, opacity: 1, meta: {} })
 // Notes ignore props.w/h (tldraw never stores them): size = 200*scale × (200+growY)*scale.
@@ -61,5 +61,25 @@ const geo = (id: string, w: number) =>
 assert.equal(medianSize([]), 100)
 assert.equal(medianSize([geo('shape:1', 10), geo('shape:2', 30)]), 20)
 assert.equal(medianSize([geo('shape:1', 10), geo('shape:2', 30), geo('shape:3', 90)]), 30)
+
+// isFixedSizeSelection (note-fixed-size task): true iff EVERY id resolves to
+// a fixed-size kind ('note'); false for an empty/all-vanished selection, a
+// mixed selection, or an all-non-fixed selection.
+const mixedDoc = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [
+    { id: 'shape:n1', kind: 'note', parentId: 'page:p', index: 'a1', x: 0, y: 0, props: { color: 'yellow' }, ...base() } as any,
+    { id: 'shape:n2', kind: 'note', parentId: 'page:p', index: 'a2', x: 50, y: 0, props: { color: 'yellow' }, ...base() } as any,
+    { id: 'shape:g1', kind: 'geo', parentId: 'page:p', index: 'a3', x: 100, y: 0, props: { w: 100, h: 100 }, ...base() } as any,
+  ],
+  bindings: [],
+})
+assert.equal(isFixedSizeSelection(mixedDoc, ['shape:n1']), true, 'a single note-only selection is fixed-size')
+assert.equal(isFixedSizeSelection(mixedDoc, ['shape:n1', 'shape:n2']), true, 'an all-note selection is fixed-size')
+assert.equal(isFixedSizeSelection(mixedDoc, ['shape:g1']), false, 'a geo-only selection is not fixed-size')
+assert.equal(isFixedSizeSelection(mixedDoc, ['shape:n1', 'shape:g1']), false, 'a MIXED note+geo selection is not fixed-size (one non-fixed shape disqualifies the whole selection)')
+assert.equal(isFixedSizeSelection(mixedDoc, []), false, 'an empty selection is not fixed-size (nothing to suppress handles for)')
+assert.equal(isFixedSizeSelection(mixedDoc, ['shape:ghost']), false, 'a selection referencing only a vanished id is not fixed-size')
+assert.equal(isFixedSizeSelection(mixedDoc, ['shape:n1', 'shape:ghost']), true, 'a vanished id is tolerantly skipped, not treated as disqualifying')
 
 console.log('ok: geometry')

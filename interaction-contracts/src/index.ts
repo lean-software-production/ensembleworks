@@ -20,6 +20,7 @@ import { malformedClipboardRejected } from './contracts/malformed-clipboard-reje
 import { modalityExclusivity } from './contracts/modality-exclusivity.js'
 import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js'
 import { noteCreateBeginsEditing } from './contracts/note-create-begins-editing.js'
+import { noteResizeHandlesSuppressed } from './contracts/note-resize-handles-suppressed.js'
 import { pastePlacesAndSelects } from './contracts/paste-places-and-selects.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
 import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
@@ -32,6 +33,7 @@ export const CONTRACTS: readonly Contract[] = [
   crossWidgetSelection,
   modalityExclusivity,
   noTransformWhileTyping,
+  noteResizeHandlesSuppressed,
   editingIndicator,
   styleAppliesToSelection,
   armedStyleAppliesToCreatedShape,

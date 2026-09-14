@@ -1,6 +1,6 @@
 import { type CanvasDocument } from './document.js'
 import { isPageId, type PageId } from './ids.js'
-import { type Shape } from './shape.js'
+import { isFixedSizeKind, type Shape } from './shape.js'
 
 // ============================================================================
 // ROTATION CONVENTION (NORMATIVE — the renderer, the editor, and the Phase-5
@@ -117,6 +117,36 @@ function size(s: Shape): { w: number; h: number } {
 export function localBounds(shape: Shape): Bounds {
   const { w, h } = size(shape)
   return { minX: 0, minY: 0, maxX: w, maxY: h }
+}
+
+// note-fixed-size task — true iff EVERY id in `ids` resolves to a shape whose
+// kind is fixed-size (isFixedSizeKind — 'note', matching this file's own
+// note special case in `size()` above: a note's rendered box is
+// `200 * props.scale` and never reads props.w/h, so ResizeShapes' props.w/h
+// scaling has nothing to act on for it). Consumed by BOTH the FSM-level
+// suppression (canvas-editor's transform tool, which must never ARM a
+// corner/edge handle for such a selection) and the paint-level suppression
+// (canvas-react's Handles/Overlay, which must never DRAW one) — one shared
+// predicate so the two can't silently drift apart, same reasoning as
+// selectionHandles being the FSM's single source of truth for handle layout.
+//
+// TOLERANT, matching this package's "skip, never throw" discipline (see
+// Overlay/transform.ts's own selection-bounds helpers): an id with no
+// resolving shape (selection referencing a deleted shape) is simply skipped,
+// neither proving nor disproving the predicate on its own. An EMPTY or
+// entirely-vanished selection returns false — "every shape is fixed-size" is
+// vacuously true over zero shapes, but a selection with nothing real in it
+// has no handles to suppress in the first place, so false (don't suppress)
+// is the useful answer here, not the logically-vacuous one.
+export function isFixedSizeSelection(doc: CanvasDocument, ids: Iterable<string>): boolean {
+  let any = false
+  for (const id of ids) {
+    const shape = doc.byId.get(id)
+    if (!shape) continue
+    any = true
+    if (!isFixedSizeKind(shape.kind)) return false
+  }
+  return any
 }
 
 // This shape's world (page-space) rigid transform, composing the parent
