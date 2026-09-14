@@ -59,7 +59,7 @@ import { type CSSProperties } from 'react'
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { combinedWorldBounds, GEO_COLORS } from '@ensembleworks/canvas-react'
-import { currentValue, relevantAxes, relevantAxesForTool, STYLE_VALUE_SETS, type StyleAxis, type StyleValue } from './style-axes.js'
+import { currentValue, kindDefault, kindForTool, relevantAxes, relevantAxesForTool, STYLE_VALUE_SETS, type StyleAxis, type StyleValue } from './style-axes.js'
 import { AlignIcon, ArrowheadIcon, DashIcon, FillIcon, FontIcon, GeoIcon, SizeIcon } from './style-icons.js'
 import type { ToolId } from './tool-loop.js'
 
@@ -78,16 +78,21 @@ export interface StylePanelProps {
 	 * source (selection mode never reads this; it reads live shape props via
 	 * `currentValue` instead). */
 	readonly nextShapeStyle: Record<string, unknown>
-	/** Dispatches `SetStyle` over the current selection. Called only in
-	 * selection mode (`selection.size > 0`) — see module header. */
-	readonly onStyleChange: (axis: StyleAxis, value: StyleValue) => void
+	/** Dispatches `SetStyle` over the current selection — and, per gap 3 of
+	 * the style-memory task, ALSO arms `nextShapeStyle` (next-shape style
+	 * memory, tldraw parity) unless the click's `options.onlySelection` flag
+	 * is set (Ctrl/Cmd held — "this shape only"). Called only in selection
+	 * mode (`selection.size > 0`) — see module header. */
+	readonly onStyleChange: (axis: StyleAxis, value: StyleValue, options?: { readonly onlySelection: boolean }) => void
 	/** Task AS3 — dispatches `SetNextStyle` (arms the tool). Called only in
 	 * armed mode (`selection.size === 0` and `activeToolId` is style-bearing)
 	 * — see module header. Kept as a SEPARATE prop from `onStyleChange`
 	 * (rather than one callback the panel disambiguates internally) so a
 	 * wrong-mode wiring bug shows up as "the wrong prop got called", directly
-	 * observable in a component test without booting a session. */
-	readonly onArmStyle: (axis: StyleAxis, value: StyleValue) => void
+	 * observable in a component test without booting a session. Ignores the
+	 * shared `options` parameter — there is no selection in armed mode for
+	 * `onlySelection` to restrict. */
+	readonly onArmStyle: (axis: StyleAxis, value: StyleValue, options?: { readonly onlySelection: boolean }) => void
 }
 
 // Visual grouping (plan: "color row, fill/dash, size/font, align"), extended
@@ -315,13 +320,21 @@ function axisIcon(axis: StyleAxis, value: string) {
 interface AxisRowProps {
 	readonly axis: StyleAxis
 	/** Precomputed by the caller: `currentValue(shapes, axis)` in selection
-	 * mode, or `armedValue(nextShapeStyle, axis)` in armed mode (AS3) — this
-	 * row never knows which mode it's rendering for, only the resolved value
-	 * and where to send a change. There is no 'mixed' concept in armed mode
-	 * (there's no multi-shape selection to disagree), so armed callers only
-	 * ever pass a definite value or `undefined`, never `'mixed'`. */
+	 * mode, or `armedValue(nextShapeStyle, toolId, axis)` in armed mode (AS3)
+	 * — this row never knows which mode it's rendering for, only the resolved
+	 * value and where to send a change. There is no 'mixed' concept in armed
+	 * mode (there's no multi-shape selection to disagree), so armed callers
+	 * only ever pass a definite value or `undefined`, never `'mixed'`. */
 	readonly value: StyleValue | 'mixed' | undefined
-	readonly onStyleChange: (axis: StyleAxis, value: StyleValue) => void
+	/** Task style-memory (gap 3) — `onlySelection` mirrors the click's
+	 * Ctrl/Cmd modifier (tldraw parity: StylePanelContext.tsx's "every style
+	 * click sets BOTH setStyleForSelectedShapes AND setStyleForNextShapes
+	 * unless Ctrl/Cmd held"). In SELECTION mode this tells the mount site's
+	 * `onStyleChange` to restyle ONLY the current selection, leaving
+	 * `nextShapeStyle` (next-shape style memory) untouched — the "this shape
+	 * only" escape hatch. In ARMED mode there is no selection to restrict, so
+	 * `onArmStyle` simply ignores the third argument. */
+	readonly onStyleChange: (axis: StyleAxis, value: StyleValue, options?: { readonly onlySelection: boolean }) => void
 }
 
 // Task style-panel-icons — opacity restyled as a slider TRACK with a stop
@@ -404,7 +417,7 @@ function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
 								aria-label={`${Math.round(v * 100)}%`}
 								title={`${Math.round(v * 100)}%`}
 								style={opacityStopStyle(isCurrent)}
-								onClick={() => onStyleChange('opacity', v)}
+								onClick={(e) => onStyleChange('opacity', v, { onlySelection: e.ctrlKey || e.metaKey })}
 							/>
 						)
 					})}
@@ -430,7 +443,7 @@ function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
 							title={humanize(v)}
 							aria-label={humanize(v)}
 							style={{ ...swatchButtonStyle(isCurrent), background: colorSwatchHex(v) }}
-							onClick={() => onStyleChange(axis, v)}
+							onClick={(e) => onStyleChange(axis, v, { onlySelection: e.ctrlKey || e.metaKey })}
 						/>
 					) : (
 						<button
@@ -442,7 +455,7 @@ function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
 							title={humanize(v)}
 							aria-label={humanize(v)}
 							style={segButtonStyle(isCurrent)}
-							onClick={() => onStyleChange(axis, v)}
+							onClick={(e) => onStyleChange(axis, v, { onlySelection: e.ctrlKey || e.metaKey })}
 						>
 							{axisIcon(axis, v)}
 						</button>
@@ -633,13 +646,21 @@ function stopPropagation(e: { stopPropagation(): void }): void {
 // coincidence of matching numbers.
 const ARMED_PANEL_POSITION: CSSProperties = { left: '50%', top: MARGIN, transform: 'translateX(-50%)' }
 
-/** Armed-mode counterpart to `currentValue` (AS3): `nextShapeStyle[axis]`
- * verbatim if it's a string/number, else `undefined` — never `'mixed'`
- * (there's no shape selection to disagree; `nextShapeStyle` is a single flat
- * record, see EditorState.nextShapeStyle's own doc comment in editor.ts). */
-function armedValue(nextShapeStyle: Record<string, unknown>, axis: StyleAxis): StyleValue | undefined {
+/** Armed-mode counterpart to `currentValue` (AS3, extended by gap 2 of the
+ * style-memory task): `nextShapeStyle[axis]` verbatim if it's a
+ * string/number; otherwise falls back to `toolId`'s kind default
+ * (`kindDefault`, style-axes.ts) — the same "unset shows what it would
+ * actually render with" fallback `currentValue` gives a live selection,
+ * applied here to the pre-creation armed panel so a fresh mount (nothing
+ * armed yet) shows tldraw's real `stylesForNextShape`-equivalent defaults
+ * instead of a blank row. Never `'mixed'` (there's no shape selection to
+ * disagree; `nextShapeStyle` is a single flat record, see
+ * EditorState.nextShapeStyle's own doc comment in editor.ts). */
+function armedValue(nextShapeStyle: Record<string, unknown>, toolId: ToolId, axis: StyleAxis): StyleValue | undefined {
 	const raw = nextShapeStyle[axis]
-	return typeof raw === 'string' || typeof raw === 'number' ? raw : undefined
+	if (typeof raw === 'string' || typeof raw === 'number') return raw
+	const kind = kindForTool(toolId)
+	return kind ? kindDefault(kind, axis) : undefined
 }
 
 /**
@@ -733,7 +754,7 @@ export function StylePanel({
 			{armedGroups.map((group) => (
 				<div key={group.join('-')} style={ROW_GROUP_STYLE}>
 					{group.map((axis) => (
-						<AxisRow key={axis} axis={axis} value={armedValue(nextShapeStyle, axis)} onStyleChange={onArmStyle} />
+						<AxisRow key={axis} axis={axis} value={armedValue(nextShapeStyle, activeToolId, axis)} onStyleChange={onArmStyle} />
 					))}
 				</div>
 			))}

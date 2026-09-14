@@ -1115,11 +1115,28 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// StylePanel renders nothing (and so never fires this) once its own
 	// `relevantAxes` sees an empty selection, but this guards the callback
 	// itself against ever dispatching a body-less SetStyle.
+	//
+	// Task style-memory (gap 3) — STYLE MEMORY: tldraw parity
+	// (StylePanelContext.tsx: "every style click sets BOTH
+	// setStyleForSelectedShapes AND setStyleForNextShapes unless Ctrl/Cmd
+	// held") means an ordinary style click must ALSO arm `nextShapeStyle`, so
+	// the NEXT shape drawn with this tool picks up the just-applied style —
+	// otherwise recoloring a selected note to red then drawing a new note
+	// hands back a black note, the classic muscle-memory break. Both intents
+	// go through the SAME `dispatch` call (one `applyAll` batch): `SetStyle`
+	// is undoable (docMutated), `SetNextStyle` is a view intent with no undo
+	// entry of its own (editor.ts's `applyOne` case) — batching them does not
+	// change either's individual undo semantics, `applyAll` just runs both in
+	// one pass. `options?.onlySelection` (set when the click held Ctrl/Cmd,
+	// StylePanel.tsx's `AxisRow`) is the escape hatch: restyle the selection
+	// only, leave the armed next-shape style exactly as it was.
 	const onStyleChange = useCallback(
-		(axis: StyleAxis, value: StyleValue) => {
+		(axis: StyleAxis, value: StyleValue, options?: { readonly onlySelection: boolean }) => {
 			const ids = Array.from(editor.get().selection)
 			if (ids.length === 0) return
-			dispatch([buildSetStyleIntent(ids, axis, value)])
+			const intents: Intent[] = [buildSetStyleIntent(ids, axis, value)]
+			if (!options?.onlySelection) intents.push({ type: 'SetNextStyle', props: { [axis]: value } })
+			dispatch(intents)
 		},
 		[editor, dispatch],
 	)
@@ -1134,7 +1151,7 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 	// `applyOne`), so arming color then arming size accumulates both rather
 	// than clobbering — same semantics `nextShapeStyle` already documents.
 	const onArmStyle = useCallback(
-		(axis: StyleAxis, value: StyleValue) => {
+		(axis: StyleAxis, value: StyleValue, _options?: { readonly onlySelection: boolean }) => {
 			dispatch([{ type: 'SetNextStyle', props: { [axis]: value } }])
 		},
 		[dispatch],

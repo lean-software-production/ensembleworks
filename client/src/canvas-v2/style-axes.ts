@@ -81,6 +81,29 @@ const STYLE_AXES_BY_KIND: Partial<Record<ShapeKind, readonly StyleAxis[]>> = {
   arrow: ['color', 'fill', 'dash', 'size', 'font', 'arrowheadStart', 'arrowheadEnd'],
 }
 
+// Task style-memory (gap 1) — the concrete default value each kind renders
+// an axis with when its props key is ABSENT. tldraw shapes always carry
+// concrete default props (every ShapeUtil's `getDefaultProps()`), so v1's
+// panel never has a blank/unset row to display. v2's create tool
+// deliberately writes `props: {}` for an unset axis (create.ts's `propsFor`
+// doc comment), so this table is what lets the PANEL still show the value
+// the shape actually RENDERS with — mirrored verbatim from canvas-react's
+// own per-shape DEFAULT_* constants (NoteShape.tsx/TextShape.tsx/
+// GeoShape.tsx), which is the renderer this panel must never disagree with.
+// `arrow` is included for completeness (its axes/defaults match
+// ArrowShapeUtil.tsx's `getDefaultProps`, node_modules/tldraw/src/lib/
+// shapes/arrow/ArrowShapeUtil.tsx:242-260) even though canvas-react has no
+// dedicated ArrowShape body yet — a future one must keep agreeing with this
+// table, not re-derive it. `align`/`verticalAlign` here are the NORMALIZED
+// (non-`-legacy`) base values — `currentValue` below normalizes a raw
+// `-legacy` value the same way, so the two can never disagree.
+const STYLE_DEFAULTS_BY_KIND: Partial<Record<ShapeKind, Partial<Record<StyleAxis, string>>>> = {
+  note: { color: 'black', size: 'm', font: 'draw', align: 'middle', verticalAlign: 'middle' },
+  text: { color: 'black', size: 'm', font: 'draw', textAlign: 'start' },
+  geo: { color: 'black', fill: 'none', dash: 'draw', size: 'm', font: 'draw', align: 'middle', verticalAlign: 'middle', geo: 'rectangle' },
+  arrow: { color: 'black', fill: 'none', dash: 'draw', size: 'm', font: 'draw', arrowheadStart: 'none', arrowheadEnd: 'arrow' },
+}
+
 /**
  * Which style axes are worth showing a control for, given the current
  * selection — the UNION of every selected shape's supported axes (parity
@@ -138,6 +161,17 @@ export function relevantAxesForTool(toolId: ToolId): StyleAxis[] {
   return AXIS_ORDER.filter((axis) => relevant.has(axis))
 }
 
+/** `TOOL_TO_KIND`'s lookup, exported for the armed panel's default fallback
+ * (gap 2, style-memory task): `StylePanel.tsx`'s `armedValue` needs the
+ * shape KIND a currently-armed tool would create, to look up
+ * `kindDefault(kind, axis)` — the same "unset shows its real default"
+ * fallback `currentValue` gives a live selection, applied here to the
+ * pre-creation armed panel instead. `undefined` for `select`/`hand`/an
+ * unrecognized id, same as `relevantAxesForTool`'s own no-op case. */
+export function kindForTool(toolId: ToolId): ShapeKind | undefined {
+  return TOOL_TO_KIND[toolId]
+}
+
 export type StyleValue = string | number
 
 /** `props.align` (or a legacy `-legacy` variant) stripped of the suffix, so
@@ -170,10 +204,29 @@ export function currentValue(shapes: readonly Shape[], axis: StyleAxis): StyleVa
     const axes = STYLE_AXES_BY_KIND[shape.kind]
     if (!axes || !axes.includes(axis)) continue // this shape's kind has no opinion on `axis`
     const raw = (shape.props as Record<string, unknown>)[axis]
-    if (typeof raw !== 'string') continue // unset on this shape -> no opinion
-    values.push(axis === 'align' ? normalizeAlign(raw) : raw)
+    // Task style-memory (gap 1): an UNSET prop is no longer "no opinion" --
+    // it falls back to the shape kind's rendered default (see
+    // STYLE_DEFAULTS_BY_KIND above), the same value canvas-react actually
+    // paints the shape with. Only a genuinely absent default (a kind/axis
+    // pair this table doesn't cover) still contributes no opinion.
+    const resolved = typeof raw === 'string' ? raw : STYLE_DEFAULTS_BY_KIND[shape.kind]?.[axis]
+    if (resolved === undefined) continue
+    values.push(axis === 'align' ? normalizeAlign(resolved) : resolved)
   }
   if (values.length === 0) return undefined
   const [first, ...rest] = values
   return rest.every((v) => v === first) ? first! : 'mixed'
+}
+
+/**
+ * Armed-mode counterpart to `currentValue`'s default fallback (gap 2): the
+ * value a NEW shape of `kind` would carry for `axis` if nothing overrides
+ * it — `STYLE_DEFAULTS_BY_KIND`'s entry, or `undefined` for a kind/axis this
+ * table doesn't cover (e.g. `opacity`, which the armed panel already reads
+ * from a literal `1` default at the call site, or a kind with no row at
+ * all). Exported so `StylePanel.tsx`'s `armedValue` can fold this in without
+ * a second, hand-typed copy of the defaults table.
+ */
+export function kindDefault(kind: ShapeKind, axis: StyleAxis): string | undefined {
+  return STYLE_DEFAULTS_BY_KIND[kind]?.[axis]
 }
