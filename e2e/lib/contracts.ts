@@ -290,6 +290,30 @@ async function sampleShapeIds(page: Page): Promise<readonly string[]> {
   })
 }
 
+// text-autosize fixer task's Obs.labelOverflow(id) doc comment (interaction-
+// contracts/src/types.ts): reads the RENDERED static label's own
+// overflow:hidden box (never the editing textarea, which never mounts once
+// a contract's gesture has run its trailing Escape) and compares
+// scrollHeight to clientHeight. Prefers GeoShape's dedicated
+// `[data-shape-geo-label]` box (geo's overflow-hidden label lives on a child
+// of `[data-shape-body="geo"]`, not that element itself — see
+// GeoShape.tsx); falls back to `[data-shape-body]` directly for note/text,
+// whose own body element IS the overflow-hidden label box. Absent shape or
+// no such box (e.g. an empty label, or a non-text-capable kind) reads false
+// — nothing to overflow.
+async function sampleLabelOverflow(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const out: Record<string, boolean> = {}
+    for (const id of ids) {
+      const root = document.querySelector(`[data-shape-id="${id}"]`)
+      const box = root?.querySelector('[data-shape-geo-label]') ?? root?.querySelector('[data-shape-body]') ?? null
+      out[id] = box ? box.scrollHeight > box.clientHeight : false
+    }
+    return out
+  }, shapeIds)
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -359,6 +383,7 @@ interface ActorSample {
   readonly pageCount: number
   readonly bindings: Readonly<Record<string, string | null>>
   readonly shapeIds: readonly string[]
+  readonly labelOverflow: Readonly<Record<string, boolean>>
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -405,7 +430,11 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // sampleBindings' own doc comment for why no id union works here.
   const bindings = await sampleBindings(page)
   const shapeIds = await sampleShapeIds(page)
-  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds }
+  // text-autosize fixer task: same union rationale as kinds/assetSrcs above
+  // — reuses styleIds (seeded scene ids ∪ current selection) rather than a
+  // separate sample pass.
+  const labelOverflow = await sampleLabelOverflow(page, styleIds)
+  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -458,6 +487,7 @@ function pageObs(
     shapeText: (id: string) => sample.texts[id] ?? null,
     shapeBindingTarget: (fromId: string, terminal: 'start' | 'end') => sample.bindings[`${fromId}|${terminal}`] ?? null,
     listShapeIds: () => sample.shapeIds,
+    labelOverflow: (id: string) => sample.labelOverflow[id] ?? false,
   }
 }
 

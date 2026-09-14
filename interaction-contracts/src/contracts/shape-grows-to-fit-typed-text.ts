@@ -59,6 +59,17 @@ export const shapeGrowsToFitTypedText: Contract = {
     if (typeof geoGrowY !== 'number' || geoGrowY <= 0) {
       return `typing long text into geo ${GEO_ID} should grow its box via props.growY, got ${JSON.stringify(geoGrowY)}`
     }
+    // Fixer round: growY > 0 alone doesn't prove growY is ENOUGH — a
+    // systematically-too-small growY (e.g. measuring against the wrong box
+    // model) still passes the two checks above while the rendered label
+    // clips half its text. labelOverflow reads the actual static body the
+    // user sees after Escape.
+    if (obs.labelOverflow(NOTE_ID)) {
+      return `note ${NOTE_ID}'s rendered label still overflows its box after growY was applied — text is clipped`
+    }
+    if (obs.labelOverflow(GEO_ID)) {
+      return `geo ${GEO_ID}'s rendered label still overflows its box after growY was applied — text is clipped`
+    }
     return null
   },
 }

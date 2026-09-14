@@ -249,6 +249,16 @@ function makeObs(
       // throw-stub, both adapters are REAL.
       return editor.doc.listShapes().map((s) => s.id)
     },
+    labelOverflow() {
+      // text-autosize fixer task (types.ts's Obs.labelOverflow doc comment):
+      // scrollHeight/clientHeight are DOM layout concepts this headless
+      // runner has nothing to lay out — this throw is a defensive backstop,
+      // matching textSelectionSpans'/paintOrder's established
+      // not-reachable-today posture (every contract that calls this is
+      // level:'browser', and library.test.ts filters CONTRACTS to
+      // level:'fsm' before calling runContractFsm).
+      throw new Error('not observable at fsm level')
+    },
   }
 }
 

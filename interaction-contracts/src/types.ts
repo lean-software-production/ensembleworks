@@ -256,6 +256,20 @@ export interface Obs {
    * `editor.doc.listShapes().map(s => s.id)` directly, the browser adapter
    * samples `window.__ew.doc.listShapes().map(s => s.id)`. */
   listShapeIds(): readonly string[]
+  /** True when a text-capable shape's RENDERED static label (note/geo/text
+   * body, post-edit — never the editing textarea) is currently clipping its
+   * own content — `scrollHeight > clientHeight` on the label's own
+   * overflow:hidden box. Returns false for an absent shape or one with no
+   * such box. text-autosize fixer task — `shapeStyle(id, 'growY')` alone
+   * cannot catch a systematically-wrong growY (it only proves growY is
+   * NON-ZERO, not that it is ENOUGH): this reads the actual rendered box the
+   * user sees after Escape, the same box the bug (measuring against the
+   * textarea's box model instead of the static body's) silently under-grew.
+   * Browser-only by construction — `scrollHeight`/`clientHeight` are DOM
+   * layout concepts a headless FSM run has nothing to lay out; the FSM
+   * adapter throws 'not observable at fsm level', matching
+   * textSelectionSpans'/paintOrder's established throw-stub pattern. */
+  labelOverflow(id: string): boolean
 }
 
 /** A contract declaration = data. */

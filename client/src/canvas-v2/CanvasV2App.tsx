@@ -1035,7 +1035,6 @@ function CanvasV2Session({ session }: { readonly session: Session }) {
 			// editingId rather than inspecting intents directly.
 			const activeBeforeDispatch = activeToolIdRef.current
 			const editingIdBeforeDispatch = editor.get().editingId
-			if (typeof window !== 'undefined' && (window as any).__DEBUG_INPUT) console.log('handleInput dispatch', event.type, activeToolIdRef.current)
 			const next = dispatchToActiveTool(tools, toolStatesRef.current, activeToolIdRef.current, editor, event)
 			toolStatesRef.current = next
 			setToolStates(next)
