@@ -145,6 +145,29 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
 }
 
 // ============================================================================
+// 4b. note-fixed-size task: `hideResizeHandles` suppresses the 4 corner + 4
+//    edge handles, leaving ONLY the rotate handle painted. Default (prop
+//    omitted) keeps painting all 9, unchanged — every existing call site
+//    above this one never passes the prop, so this is purely additive.
+// ============================================================================
+{
+  const bounds = { minX: 0, minY: 0, maxX: 200, maxY: 200 }
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const htmlHidden = renderToStaticMarkup(createElement(Handles, { bounds, camera, hideResizeHandles: true }))
+  assert.match(htmlHidden, /data-handle-id="rotate"/, 'rotate handle still paints when resize handles are hidden')
+  for (const id of ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w']) {
+    assert.doesNotMatch(htmlHidden, new RegExp(`data-handle-id="${id}"`), `corner/edge handle "${id}" must not paint when hideResizeHandles is true`)
+  }
+  const htmlShown = renderToStaticMarkup(createElement(Handles, { bounds, camera, hideResizeHandles: false }))
+  for (const h of selectionHandles(bounds)) {
+    assert.match(htmlShown, new RegExp(`data-handle-id="${h.id}"`), `handle ${h.id} should still paint when hideResizeHandles is false`)
+  }
+  const htmlDefault = renderToStaticMarkup(createElement(Handles, { bounds, camera }))
+  assert.equal(htmlDefault, htmlShown, 'omitting hideResizeHandles defaults to false (paints all 9, byte-identical to explicit false)')
+  console.log('ok: Handles — hideResizeHandles suppresses corner/edge handles, keeps rotate, defaults to false')
+}
+
+// ============================================================================
 // 5. SnapGuides: exact line coordinates for one x-axis and one y-axis guide,
 //    hand-computed against a known camera + viewport.
 // ============================================================================

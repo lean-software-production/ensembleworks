@@ -46,7 +46,7 @@
 // handling needed no change at all.
 import type { CanvasDocument, SpatialIndex } from '@ensembleworks/canvas-model'
 import type { Camera, EditorState } from '@ensembleworks/canvas-editor'
-import type { SnapResult } from '@ensembleworks/canvas-model'
+import { isFixedSizeSelection, type SnapResult } from '@ensembleworks/canvas-model'
 import { combinedWorldBounds, Selection } from './overlay/Selection.js'
 import { Handles } from './overlay/Handles.js'
 import { SnapGuides } from './overlay/SnapGuides.js'
@@ -87,6 +87,16 @@ export function Overlay({ editorState, snapshot, camera, viewportSize, index, sn
   // render-only fix is insufficient on its own (see E8's seam decision).
   const editingSelected =
     editorState.editingId !== null && editorState.selection.has(editorState.editingId)
+  // note-fixed-size task (tldraw parity: NoteShapeUtil.hideResizeHandles()
+  // returns true — a note's selection box shows no resize handles, only
+  // rotate): don't PAINT corner/edge handles when EVERY selected shape is a
+  // fixed-size kind (canvas-model's isFixedSizeSelection — currently just
+  // 'note'). Same "render-only fix is insufficient alone" reasoning as the
+  // editingSelected guard just above — transform.ts's own hittable-handle
+  // filter is what makes the invariant TRUE; this is the matching cosmetic
+  // half, so the painted chrome doesn't promise an interaction the FSM
+  // refuses.
+  const hideResizeHandles = isFixedSizeSelection(snapshot, editorState.selection)
   return (
     <svg
       data-canvas-layer="overlay"
@@ -97,7 +107,7 @@ export function Overlay({ editorState, snapshot, camera, viewportSize, index, sn
       <Arrows snapshot={snapshot} camera={camera} viewportSize={viewportSize} index={index} />
       <Selection snapshot={snapshot} selection={editorState.selection} camera={camera} />
       <SnapGuides snapResult={snapResult} camera={camera} viewportSize={viewportSize} />
-      <Handles bounds={editingSelected ? null : combinedBounds} camera={camera} />
+      <Handles bounds={editingSelected ? null : combinedBounds} camera={camera} hideResizeHandles={hideResizeHandles} />
     </svg>
   )
 }

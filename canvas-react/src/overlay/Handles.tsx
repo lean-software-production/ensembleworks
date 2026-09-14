@@ -19,6 +19,14 @@ import type { Bounds } from '@ensembleworks/canvas-model'
 export interface HandlesProps {
   readonly bounds: Bounds | null
   readonly camera: Camera
+  /** note-fixed-size task (tldraw parity: NoteShapeUtil.hideResizeHandles()
+   * returns true): when true, only the ROTATE handle paints — the 4 corner +
+   * 4 edge handles are suppressed entirely, matching transform.ts's own
+   * hittable-handle filter for an all-fixed-size selection (Overlay.tsx
+   * computes this via canvas-model's isFixedSizeSelection). Defaults to
+   * false so every OTHER existing caller/test (a plain `bounds` prop, no
+   * third arg) keeps painting all 9 handles exactly as before. */
+  readonly hideResizeHandles?: boolean
 }
 
 // Rendered handle size, SCREEN pixels, zoom-independent (a fixed px square at
@@ -36,9 +44,10 @@ const ROTATE_HANDLE_RADIUS_PX = 5
 const HANDLE_FILL = 'var(--canvas-handle, #ffffff)'
 const HANDLE_STROKE = 'var(--canvas-handle-stroke, #4b8bf4)'
 
-export function Handles({ bounds, camera }: HandlesProps) {
+export function Handles({ bounds, camera, hideResizeHandles = false }: HandlesProps) {
   if (!bounds) return null
-  const handles: Handle[] = selectionHandles(bounds)
+  const allHandles: Handle[] = selectionHandles(bounds)
+  const handles = hideResizeHandles ? allHandles.filter((h) => h.kind === 'rotate') : allHandles
 
   return (
     <>

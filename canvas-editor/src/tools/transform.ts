@@ -22,7 +22,7 @@
 // a rotated PARENT still resizes/rotates world-correctly even though the
 // handles this tool shows for it are axis-aligned).
 import {
-  centroid, worldBounds, type Bounds, type CanvasDocument, type Point, type Shape,
+  centroid, isFixedSizeSelection, worldBounds, type Bounds, type CanvasDocument, type Point, type Shape,
 } from '@ensembleworks/canvas-model'
 import type { Intent } from '../intents.js'
 import { crossedThreshold, screenToWorld, worldToScreen, type Camera, type InputEvent, type Tool } from '../input.js'
@@ -289,7 +289,20 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
     const bounds = selectionWorldBounds(ctx.snapshot(), ids)
     if (!bounds) return { state, intents: [] } // empty/all-vanished selection: nothing to grab a handle on
     const handlesAtStart = selectionHandles(bounds)
-    const hit = hitHandle(handlesAtStart, { x: event.x, y: event.y }, editor.get().camera, HIT_TOLERANCE_PX)
+    // note-fixed-size task (tldraw parity: NoteShapeUtil.hideResizeHandles()
+    // returns true, onResize() is a no-op): when EVERY selected shape is a
+    // fixed-size kind (canvas-model's isFixedSizeSelection — currently just
+    // 'note'), only the ROTATE handle may ever be grabbed — corner/edge
+    // handles must never ARM, not merely "resize to no visible effect".
+    // Filtering the HITTABLE set (not `handlesAtStart` itself) is deliberate:
+    // onPointing's rotate branch still needs the full 9-handle list to
+    // reconstruct the union bounds for its rotation center (see
+    // unionBoundsOfHandles below), so the corner/edge geometry must survive
+    // even when those handles can never be the one actually grabbed.
+    const hittable = isFixedSizeSelection(ctx.snapshot(), ids)
+      ? handlesAtStart.filter((h) => h.kind === 'rotate')
+      : handlesAtStart
+    const hit = hitHandle(hittable, { x: event.x, y: event.y }, editor.get().camera, HIT_TOLERANCE_PX)
     if (!hit) return { state, intents: [] } // miss: this tool never changes selection itself
     return {
       state: { mode: 'pointing', downScreen: { x: event.x, y: event.y }, handle: hit, ids, handlesAtStart, shiftDown: event.modifiers.shift },

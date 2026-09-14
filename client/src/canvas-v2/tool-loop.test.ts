@@ -361,14 +361,25 @@ function setup() {
 //    click. Without the composite resetting the select leg on the transform
 //    handoff, select's Idle.lastClick survives the resize and the
 //    post-resize click reads as the "second" click of a double-click ->
-//    spurious BeginEdit. The fixture shape is a 'note' (text-capable, per
-//    canvas-model's isTextCapableKind) so the spurious edit REALLY fires if
-//    the bug is present -- not vacuously null.
+//    spurious BeginEdit. The fixture shape is a 'geo' (text-capable, per
+//    canvas-model's isTextCapableKind, so the spurious edit REALLY fires if
+//    the bug is present -- not vacuously null).
+//
+//    FIXTURE KIND (note-fixed-size task, CHANGED from 'note' to 'geo'): this
+//    test's own precondition is that the SE-handle grab routes to the
+//    TRANSFORM leg -- exactly the behavior note-fixed-size's fix now refuses
+//    for an all-fixed-size (note-only) selection (transform.ts's hittable-
+//    handle filter, canvas-model's isFixedSizeSelection). 'geo' is equally
+//    text-capable (so the double-click-to-edit control case is unaffected)
+//    but NOT fixed-size, so its corner/edge handles stay armable -- this
+//    test keeps exercising the handoff-reset behavior it was written for,
+//    same "SCENE KIND ratified" precedent as no-transform-while-typing.ts's
+//    own note-to-geo swap.
 // ============================================================================
 {
 	const doc = LoroCanvasDoc.create({ peerId: 1n })
 	doc.putPage({ id: 'page:p', name: 'P' })
-	doc.putShape({ id: 'shape:n', kind: 'note', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: {} } as Shape)
+	doc.putShape({ id: 'shape:n', kind: 'geo', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 200, h: 200 } } as Shape)
 	doc.commit()
 	const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
 	const ctx: ToolContext = createToolContext(editor)
@@ -381,11 +392,11 @@ function setup() {
 		if (r.intents.length > 0) editor.applyAll(r.intents)
 	}
 
-	// Click the note (a note's kind-default local box is 200x200 -- see
-	// canvas-model geometry.ts's size(): notes render 200*scale square).
+	// Click the shape (an explicit 200x200 box, so the SE handle lands at a
+	// round (200,200) exactly).
 	send({ type: 'pointerdown', x: 100, y: 100, buttons: 1, modifiers: MODS, t: 0 })
 	send({ type: 'pointerup', x: 100, y: 100, buttons: 0, modifiers: MODS, t: 16 })
-	assert.deepEqual([...editor.get().selection], ['shape:n'], 'precondition: the note is selected')
+	assert.deepEqual([...editor.get().selection], ['shape:n'], 'precondition: the shape is selected')
 
 	// Resize via the SE handle at (200,200): the ENTIRE gesture routes to the
 	// transform leg -- select's FSM never sees these three events.
@@ -395,8 +406,8 @@ function setup() {
 	send({ type: 'pointerup', x: 220, y: 220, buttons: 0, modifiers: MODS, t: 64 })
 	assert.equal(state.active, 'select', 'precondition: the resize ended, control returned to the select leg')
 
-	// The reviewer's probe: click the note again, still within DOUBLE_CLICK_MS
-	// (450) of the FIRST click (t=0/16).
+	// The reviewer's probe: click the shape again, still within
+	// DOUBLE_CLICK_MS (450) of the FIRST click (t=0/16).
 	send({ type: 'pointerdown', x: 100, y: 100, buttons: 1, modifiers: MODS, t: 80 })
 	send({ type: 'pointerup', x: 100, y: 100, buttons: 0, modifiers: MODS, t: 96 })
 	assert.equal(editor.get().editingId, null, 'click -> handle-resize -> click must NEVER read as a double-click (stale lastClick across the transform gesture)')
