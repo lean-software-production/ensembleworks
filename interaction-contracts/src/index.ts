@@ -20,6 +20,7 @@ import { duplicateReidsAndOffsets } from './contracts/duplicate-reids-and-offset
 import { editingIndicator } from './contracts/editing-indicator.js'
 import { enterKeyEditPreservesText } from './contracts/enter-key-edit-preserves-text.js'
 import { enterKeyEditsSelection } from './contracts/enter-key-edits-selection.js'
+import { enterOnChromeButtonDoesNotEdit } from './contracts/enter-on-chrome-button-does-not-edit.js'
 import { frameHeaderDoubleClickRenames } from './contracts/frame-header-double-click-renames.js'
 import { frameInteriorIsHollow } from './contracts/frame-interior-is-hollow.js'
 import { lineCreatesALineShape } from './contracts/line-creates-a-line-shape.js'
@@ -73,4 +74,5 @@ export const CONTRACTS: readonly Contract[] = [
   arrowTerminalHandleRebinds,
   arrowHandleDragPreviewsHover,
   arrowStaysOnItsPage,
+  enterOnChromeButtonDoesNotEdit,
 ]

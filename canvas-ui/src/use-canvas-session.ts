@@ -177,15 +177,20 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 		[editor, runCommand],
 	)
 
+	/** Feeds one event to the active tool. Returns true when it was an Enter
+	 * that just began a text edit: that keydown's native default must be
+	 * suppressed, or it types a newline into the freshly focused editor. */
 	const dispatchToTool = useCallback(
-		(event: InputEvent): void => {
+		(event: InputEvent): boolean => {
 			const activeBefore = activeToolIdRef.current
 			const editingBefore = editor.get().editingId
 			const next = dispatchToActiveTool(tools, toolStatesRef.current, activeBefore, editor, event)
 			toolStatesRef.current = next
 			setToolStates(next)
+			const editingAfter = editor.get().editingId
 			// A create tool that just began a text edit hands over to select.
-			if (shouldFallBackToSelect(activeBefore, editingBefore, editor.get().editingId)) setActiveToolId('select')
+			if (shouldFallBackToSelect(activeBefore, editingBefore, editingAfter)) setActiveToolId('select')
+			return event.type === 'keydown' && event.key === 'Enter' && editingBefore === null && editingAfter !== null
 		},
 		[editor, tools],
 	)
@@ -201,11 +206,8 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 				return
 			}
 			if (event.type === 'keydown' && handleShortcut(event)) return
-			const editingBefore = editor.get().editingId
-			dispatchToTool(event)
-			// An Enter that just began a text edit must not also type a newline
-			// into the freshly focused editor: the Viewport preventDefaults on true.
-			return event.type === 'keydown' && event.key === 'Enter' && editingBefore === null && editor.get().editingId !== null
+			// The Viewport preventDefaults on true (an Enter that began an edit).
+			return dispatchToTool(event)
 		},
 		[editor, handleShortcut, dispatchToTool],
 	)
@@ -239,7 +241,8 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 			const target = e.target as Node | null
 			if (isEditableTarget(target)) return
 			const scope = keyboardScopeRef.current
-			if (!isKeyTargetInScope(target, scope, scope?.ownerDocument.body ?? null, lastInteractionInScopeRef.current)) return
+			const body = scope?.ownerDocument.body ?? null
+			if (!isKeyTargetInScope(target, scope, body, lastInteractionInScopeRef.current)) return
 			const keyEvent: KeyInputEvent = {
 				type: 'keydown',
 				key: e.key,
@@ -255,8 +258,16 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 			// viewport-focused Ctrl+V keydown would also cancel the native paste
 			// event the image-paste listener relies on.
 			if (command?.type === 'clipboard') e.preventDefault()
-			if (command) runCommand(command)
-			else dispatchToTool(keyEvent)
+			if (command) {
+				runCommand(command)
+				return
+			}
+			// Non-shortcut keys (Enter, arrows) go to the tool only from the body.
+			// On a focused chrome control inside the scope (a toolbar button, a
+			// page tab) they are that control's own keys: Enter activates it and
+			// must not also begin editing the selection.
+			if (target !== null && target !== body) return
+			if (dispatchToTool(keyEvent)) e.preventDefault()
 		}
 		document.addEventListener('keydown', onKeydown)
 		return () => document.removeEventListener('keydown', onKeydown)
