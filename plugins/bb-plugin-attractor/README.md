@@ -544,10 +544,46 @@ T5 adds the **DAG UI**:
   and traversed edges (derived from `edge.selected` events, not persisted
   per-edge state) drawn solid/arrowed with the last-selected reason and
   label in a `<title>`; an agent/prompt node with a known worker thread is
-  clickable.
-- `ui/stages.tsx` — the stage list (node, status, visit, duration via
-  `formatDuration`, the node's declared provider/model, and an "Open
-  thread" link when a stage has a worker thread).
+  clickable, in all three surfaces (directive card, panel, composer banner —
+  `ui/thread-by-node.ts`'s `latestThreadIdByNode(stages)` is the one nodeId
+  -> threadId derivation shared by all three, so a fix to it, or to the
+  affordance below, always reaches all three at once). A clickable node
+  carries a visible affordance so it doesn't just look like every other
+  node: a `.attractor-node--clickable` CSS class (hover/focus gets a
+  thicker stroke and a subtle blue glow, purely via CSS `:hover`/`:focus` —
+  no JS hover state), an underlined label, a small "↗" glyph, and a
+  `<title>Open worker thread <id></title>` tooltip — a non-clickable node
+  gets none of these. `DagView` also overlays a small zoom control cluster
+  (+/−/fit, top-right of the box) — zoom applies a scale/translate on one
+  inner `<g data-testid="dag-zoom-group">` around the edges and nodes,
+  clamped to `[0.5, 4]`; "fit" resets to exactly the default fit-to-width
+  transform. Ctrl/⌘+wheel over the DAG also zooms (a manual, non-passive
+  native `wheel` listener — a synthetic React `onWheel` handler cannot
+  reliably `preventDefault()` — so pinch-zoom and an explicit ctrl+wheel
+  both work); a *plain* wheel is left completely alone (no
+  `preventDefault()`, no zoom) so the thread/panel underneath keeps
+  scrolling normally, per "Scroll ownership" below. Drag with a pointer to
+  pan, at any zoom level (`pointerdown`/`pointermove`/`pointerup`) — "fit"
+  always gets you back. A press only becomes a pan once the pointer has
+  travelled `DRAG_THRESHOLD_PX`, and only then is `setPointerCapture` taken:
+  capturing on `pointerdown` would re-target the browser's synthesised
+  `click` to the `<svg>` and break node clicking, and a pan that started on
+  a node swallows that trailing click so panning never navigates you into a
+  worker thread by accident. The DAG box wrapper (`data-testid="dag-viewport"`)
+  is `overflow: hidden`, never `overflow: auto` — the same scroll-ownership
+  rule as the rest of the card.
+- `ui/stages.tsx` — the stage list: four columns (Node, Status, Duration,
+  Thread), `table-layout: fixed` with wrapping cells, so it fits inside the
+  message-directive card's `max-w-md` (28rem) without spilling sideways —
+  it used to be six columns (Node, Status, Visit, Duration, Provider,
+  Thread), which didn't. `Visit` folds into the Node column as a "×N"
+  suffix (only when `visit > 1`); the node's resolved-or-declared
+  provider/model (`formatDuration` for elapsed/fixed duration, as before)
+  renders as muted subtext under the node's name instead of its own
+  column. An "Open thread" link still appears in the Thread column when a
+  stage has a worker thread. The same four-column layout is used in both
+  the card and the wider panel — no separate `overflow-x: auto` wrapper is
+  needed at either width.
 - `ui/events.tsx` — a paged (`PAGE_SIZE = 50`), oldest-first-within-page
   event timeline starting on the most recent page, with a one-line
   `describeEvent` summary per `RunEvent` variant.

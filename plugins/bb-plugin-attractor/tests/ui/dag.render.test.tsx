@@ -170,6 +170,39 @@ describe("DagView", () => {
     expect(onOpenThread).not.toHaveBeenCalled();
   });
 
+  it("opens a clickable node's worker thread from the keyboard, with Enter and with Space", () => {
+    const onOpenThread = vi.fn();
+    const { container } = render(<DagView graph={GRAPH} events={[]} threadIdByNode={{ plan: "thread-42" }} onOpenThread={onOpenThread} />);
+    const planNode = container.querySelector('[data-node-id="plan"]')!;
+    fireEvent.keyDown(planNode, { key: "Enter" });
+    fireEvent.keyDown(planNode, { key: " " });
+    expect(onOpenThread.mock.calls).toEqual([["thread-42"], ["thread-42"]]);
+    // An unrelated key does nothing.
+    fireEvent.keyDown(planNode, { key: "a" });
+    expect(onOpenThread).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives a clickable node a visible affordance: a distinguishing CSS class, and a tooltip naming the worker thread", () => {
+    const { container } = render(<DagView graph={GRAPH} events={[]} threadIdByNode={{ plan: "thread-42" }} onOpenThread={() => {}} />);
+    const planNode = container.querySelector('[data-node-id="plan"]')!;
+    expect(planNode.getAttribute("data-clickable")).toBe("true");
+    expect((planNode.getAttribute("class") ?? "")).toMatch(/clickable/);
+    expect(planNode.querySelector("title")?.textContent).toBe("Open worker thread thread-42");
+  });
+
+  it("does not give a non-clickable node the clickable affordance", () => {
+    const { container } = render(<DagView graph={GRAPH} events={[]} />);
+    const planNode = container.querySelector('[data-node-id="plan"]')!;
+    expect(planNode.getAttribute("data-clickable")).toBe("false");
+    expect(planNode.getAttribute("class") ?? "").not.toMatch(/clickable/);
+    // A non-clickable node never carries the "open thread" tooltip, even the
+    // dogfood-2 waiting-reason title on a *blocked* node stays distinct from it.
+    expect(planNode.querySelector("title")?.textContent ?? "").not.toMatch(/^Open worker thread/);
+
+    const approveNode = container.querySelector('[data-node-id="approve"]')!; // human node, never clickable
+    expect(approveNode.getAttribute("data-clickable")).toBe("false");
+  });
+
   it("gives every untraversed edge a legible, solid, grey Graphviz-style stroke — not the old near-invisible light dashed line", () => {
     const { container } = render(<DagView graph={GRAPH} events={[]} />);
     const untraversed = container.querySelector('[data-edge="approve->build"]')!;

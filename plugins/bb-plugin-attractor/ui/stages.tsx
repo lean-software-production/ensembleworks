@@ -51,17 +51,27 @@ export interface StageListProps {
   onOpenThread?: (threadId: string) => void;
 }
 
+// Wraps rather than grows the column: a long node label or provider/model
+// string must never be the thing that pushes the table past its container
+// (see the module doc — `table-layout: fixed` alone only stops columns from
+// growing to fit content, it does nothing about the content itself).
+const WRAP_CELL_STYLE = { overflowWrap: "break-word" as const, wordBreak: "break-word" as const };
+
 export function StageList({ stages, graph, now, onOpenThread }: StageListProps) {
   const nodeById = new Map((graph?.nodes ?? []).map((n) => [n.id, n]));
   return (
-    <table data-testid="attractor-stage-list" style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
+    <table data-testid="attractor-stage-list" style={{ width: "100%", fontSize: 12, borderCollapse: "collapse", tableLayout: "fixed" }}>
+      <colgroup>
+        <col style={{ width: "40%" }} />
+        <col style={{ width: "32%" }} />
+        <col style={{ width: "14%" }} />
+        <col style={{ width: "14%" }} />
+      </colgroup>
       <thead>
         <tr>
           <th style={{ textAlign: "left" }}>Node</th>
           <th style={{ textAlign: "left" }}>Status</th>
-          <th style={{ textAlign: "left" }}>Visit</th>
           <th style={{ textAlign: "left" }}>Duration</th>
-          <th style={{ textAlign: "left" }}>Provider</th>
           <th style={{ textAlign: "left" }}>Thread</th>
         </tr>
       </thead>
@@ -69,19 +79,28 @@ export function StageList({ stages, graph, now, onOpenThread }: StageListProps) 
         {stages.map((stage) => {
           const node = nodeById.get(stage.nodeId);
           const elapsedMs = (stage.completedAt ?? now) - stage.startedAt;
+          const provider = providerLabel(stage, node);
           return (
             <tr key={stage.stageId} data-stage-id={stage.stageId} data-status={stage.status}>
-              <td>{node?.label ?? stage.nodeId}</td>
-              <td>
+              <td data-col="node" style={WRAP_CELL_STYLE}>
+                <div>
+                  {node?.label ?? stage.nodeId}
+                  {stage.visit > 1 ? <span className="text-muted-foreground"> ×{stage.visit}</span> : null}
+                </div>
+                {provider !== "—" ? (
+                  <div className="text-muted-foreground" style={{ fontSize: 11 }}>
+                    {provider}
+                  </div>
+                ) : null}
+              </td>
+              <td data-col="status" style={WRAP_CELL_STYLE}>
                 {stage.status}
                 {stage.actor ? ` (answered via ${stage.actor})` : ""}
                 {stage.status === "blocked" && stage.waitingReason ? ` (waiting: ${stage.waitingReason})` : ""}
                 {stage.status === "blocked" && stage.gateContext?.reviewTarget ? ` (reviewing ${stage.gateContext.reviewTarget.path})` : ""}
               </td>
-              <td>{stage.visit}</td>
-              <td>{formatDuration(Math.max(0, elapsedMs))}</td>
-              <td>{providerLabel(stage, node)}</td>
-              <td>
+              <td data-col="duration">{formatDuration(Math.max(0, elapsedMs))}</td>
+              <td data-col="thread">
                 {stage.threadId && onOpenThread ? (
                   <button type="button" onClick={() => onOpenThread(stage.threadId!)}>
                     Open thread
