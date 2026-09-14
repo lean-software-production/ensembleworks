@@ -331,6 +331,17 @@ async function sampleHoveredId(page: Page): Promise<string | null> {
   })
 }
 
+// Task 1 (arrow-stays-on-its-page): the ids of every arrow actually PAINTED
+// in the overlay right now — canvas-react's Arrows.tsx renders
+// `data-overlay="arrow" data-shape-id={arrow.id}` per drawn arrow. Distinct
+// from sampleShapeIds (the whole doc): an arrow that exists in the doc but
+// lives on a different page must not appear here.
+async function sampleRenderedArrowIds(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() =>
+    [...document.querySelectorAll('[data-overlay="arrow"]')].map((el) => el.getAttribute('data-shape-id') ?? ''),
+  )
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -402,6 +413,7 @@ interface ActorSample {
   readonly shapeIds: readonly string[]
   readonly labelOverflow: Readonly<Record<string, boolean>>
   readonly hoveredId: string | null
+  readonly renderedArrowIds: readonly string[]
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -453,7 +465,8 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // separate sample pass.
   const labelOverflow = await sampleLabelOverflow(page, styleIds)
   const hoveredId = await sampleHoveredId(page)
-  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId }
+  const renderedArrowIds = await sampleRenderedArrowIds(page)
+  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId, renderedArrowIds }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -508,6 +521,7 @@ function pageObs(
     listShapeIds: () => sample.shapeIds,
     labelOverflow: (id: string) => sample.labelOverflow[id] ?? false,
     hoveredShapeId: () => sample.hoveredId,
+    renderedArrowIds: () => sample.renderedArrowIds,
   }
 }
 

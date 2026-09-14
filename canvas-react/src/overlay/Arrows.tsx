@@ -98,7 +98,7 @@
 // this file renders arrow-kind shapes ONLY; a hypothetical Ink.tsx is
 // deferred, not stubbed.
 import type { Binding, Bounds, CanvasDocument, Point, Shape, SpatialIndex } from '@ensembleworks/canvas-model'
-import { ARROW_HIT_MARGIN, queryViewport, routeArrow, STYLE_VALUE_SETS, toWorldPoint, worldBounds } from '@ensembleworks/canvas-model'
+import { ARROW_HIT_MARGIN, pageIdOf, queryViewport, routeArrow, STYLE_VALUE_SETS, toWorldPoint, worldBounds } from '@ensembleworks/canvas-model'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { viewportWorldBounds, type ViewportSize } from '../ShapeLayer.js'
 import { DASH_VALUES, dashArray, GEO_COLORS, STROKE_WIDTH_PX } from '../shapes/GeoShape.js'
@@ -117,6 +117,10 @@ export interface ArrowsProps {
    * (pinning that culled arrows are never routed — overlay.test.ts's
    * counter case). Production callers omit it. */
   readonly routeFn?: typeof routeArrow
+  /** The page being viewed. When set, only arrows whose parent chain resolves
+   * to this page are drawn (same rule as ShapeLayer). Unset draws every arrow,
+   * for callers that render a single-page document. */
+  readonly currentPageId?: string
 }
 
 const ARROW_STROKE = 'var(--canvas-arrow, #1a1a1a)'
@@ -450,8 +454,10 @@ function ArrowheadNode({ glyph, fill, strokeWidth }: { readonly glyph: NonNullab
     : <path data-overlay="arrowhead" d={glyph.d} fill="none" stroke={fill} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />
 }
 
-export function Arrows({ snapshot, camera, viewportSize, index, routeFn }: ArrowsProps) {
-  const allArrows = snapshot.shapes.filter((s) => s.kind === 'arrow')
+export function Arrows({ snapshot, camera, viewportSize, index, routeFn, currentPageId }: ArrowsProps) {
+  const allArrows = snapshot.shapes.filter(
+    (s) => s.kind === 'arrow' && (currentPageId === undefined || pageIdOf(snapshot, s) === currentPageId),
+  )
   if (allArrows.length === 0) return null
 
   const viewport = viewportWorldBounds(camera, viewportSize)

@@ -264,6 +264,11 @@ function makeObs(
       // no throw-stub, both adapters are REAL.
       return editor.get().hover
     },
+    renderedArrowIds() {
+      // Rendered DOM is not observable in the headless runner; every contract
+      // that calls this is level:'browser'.
+      throw new Error('not observable at fsm level')
+    },
   }
 }
 

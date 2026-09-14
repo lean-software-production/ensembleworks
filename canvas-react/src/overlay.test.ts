@@ -723,4 +723,27 @@ function toScreen(camera: Camera, p: { x: number; y: number }): { x: number; y: 
   console.log('ok: Arrows — stroke-width scales with camera.z (zoom-stable, matching v1 + every other shape kind)')
 }
 
-console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing + viewport culling + style props (color/dash/size/arrowheads) + glyph variants + zoom-stable sizing)')
+// ============================================================================
+// 21. Arrows are page-scoped (Task 1, docs/plans/2026-09-14-canvas-ui-
+//    shared-session-plan.md): an arrow parented to another page is not
+//    drawn. ShapeLayer already filters shape bodies by page via pageIdOf;
+//    Arrows did not — this pins the same rule for the overlay.
+// ============================================================================
+{
+  const camera: Camera = { x: 0, y: 0, z: 1 }
+  const onP = arrowShape('shape:arrow-p', 10, 10, { end: { x: 100, y: 0 } })
+  const onQ: Shape = { ...arrowShape('shape:arrow-q', 10, 10, { end: { x: 100, y: 0 } }), parentId: 'page:q' } as Shape
+  const doc = makeDocument({ pages: [{ id: 'page:p', name: 'P' }, { id: 'page:q', name: 'Q' }], shapes: [onP, onQ], bindings: [] })
+  const html = renderToStaticMarkup(createElement(Arrows, {
+    snapshot: doc,
+    camera,
+    viewportSize: VP,
+    index: buildSpatialIndex(doc),
+    currentPageId: 'page:q',
+  }))
+  assert.ok(html.includes('data-shape-id="shape:arrow-q"'), `the arrow on the current page is drawn: ${html}`)
+  assert.ok(!html.includes('data-shape-id="shape:arrow-p"'), `the arrow on another page is not drawn: ${html}`)
+  console.log('ok: Arrows draws only arrows on the current page')
+}
+
+console.log('ok: overlay (selection outlines, combined bounds, handles, zoom-independence, snap guides, arrow rendering + tangent orientation + live re-routing + viewport culling + style props (color/dash/size/arrowheads) + glyph variants + zoom-stable sizing + page-scoping)')

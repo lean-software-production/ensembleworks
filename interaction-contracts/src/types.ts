@@ -282,6 +282,13 @@ export interface Obs {
    * data-shape-id={shape.id}` — see Selection.tsx's shared
    * `shapeOutlineNode`), or null when no such element is mounted. */
   hoveredShapeId(): string | null
+  /** Ids of the arrows currently RENDERED in the overlay — the
+   * `data-shape-id` of every `[data-overlay="arrow"]` element, in DOM order.
+   * Distinct from `listShapeIds()` (the doc): an arrow can exist in the doc
+   * yet must not be drawn when it lives on another page. Browser-only by
+   * construction (it reads rendered DOM); the FSM adapter throws
+   * 'not observable at fsm level'. */
+  renderedArrowIds(): readonly string[]
 }
 
 /** A contract declaration = data. */

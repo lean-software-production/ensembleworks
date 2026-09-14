@@ -119,7 +119,7 @@ export function Overlay({ editorState, snapshot, camera, viewportSize, index, sn
       height={viewportSize.height}
       style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
     >
-      <Arrows snapshot={snapshot} camera={camera} viewportSize={viewportSize} index={index} />
+      <Arrows snapshot={snapshot} camera={camera} viewportSize={viewportSize} index={index} currentPageId={editorState.currentPageId} />
       <Hover snapshot={snapshot} hover={editorState.hover} selection={editorState.selection} camera={camera} />
       <Selection snapshot={snapshot} selection={editorState.selection} camera={camera} />
       <SnapGuides snapResult={snapResult} camera={camera} viewportSize={viewportSize} />

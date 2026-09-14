@@ -9,6 +9,7 @@ import { arrowBindsToTargetShape } from './contracts/arrow-binds-to-target-shape
 import { arrowHandleDragPreviewsHover } from './contracts/arrow-handle-drag-previews-hover.js'
 import { arrowMidHandleBends } from './contracts/arrow-mid-handle-bends.js'
 import { arrowNudgeMovesSelection } from './contracts/arrow-nudge-moves-selection.js'
+import { arrowStaysOnItsPage } from './contracts/arrow-stays-on-its-page.js'
 import { arrowTerminalHandleRebinds } from './contracts/arrow-terminal-handle-rebinds.js'
 import { bringToFrontPaintsOnTop } from './contracts/bring-to-front-paints-on-top.js'
 import { crossWidgetSelection } from './contracts/cross-widget-selection.js'
@@ -71,4 +72,5 @@ export const CONTRACTS: readonly Contract[] = [
   arrowMidHandleBends,
   arrowTerminalHandleRebinds,
   arrowHandleDragPreviewsHover,
+  arrowStaysOnItsPage,
 ]
