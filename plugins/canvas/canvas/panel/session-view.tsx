@@ -1,30 +1,18 @@
 import { canvasThemeStyle, canvasShapeThemeCss } from "../theme.js";
 import { useMemo, type ComponentProps, type ReactNode, type RefObject } from "react";
-import type { EditorState, InputEvent, Intent, ToolContext } from "@ensembleworks/canvas-editor";
+import type { EditorState } from "@ensembleworks/canvas-editor";
 import type { CanvasDocument } from "@ensembleworks/canvas-model";
-import {
-  Cursors,
-  Grid,
-  Overlay,
-  ShapeLayer,
-  TextEditor,
-  Viewport,
-  WorldLayer,
-  type ViewportSize,
-} from "@ensembleworks/canvas-react";
+import { Cursors, type ViewportSize } from "@ensembleworks/canvas-react";
+import { CanvasSurface, Toolbar, type CanvasSession } from "@ensembleworks/canvas-ui";
 import { AgentLayer } from "../agents-ui.js";
 import type { ThreadOption } from "../thread-picker.js";
 import type { CanvasAgentLink } from "../wire.js";
 import { SpeakerRings } from "../roster-ui.js";
-import type { ToolId, ToolStates } from "../tool-loop.js";
 import {
   chromeCardColumnStyle,
   chromeTabRowStyle,
   chromeToolbarStyle,
-  chromeToolStyle,
   chromeWrapperStyle,
-  TOOL_BUTTONS,
-  currentSnapResult,
 } from "./shared.js";
 
 type CursorPresence = ComponentProps<typeof Cursors>["presence"];
@@ -38,7 +26,6 @@ interface PageSwitcherView {
 export interface SessionViewProps {
   readonly editorState: EditorState;
   readonly snapshot: CanvasDocument;
-  readonly toolContext: ToolContext;
   readonly viewportRef: RefObject<HTMLDivElement | null>;
   readonly panelRef: RefObject<HTMLDivElement | null>;
   readonly viewportSize: ViewportSize;
@@ -47,14 +34,7 @@ export interface SessionViewProps {
   readonly identities: Readonly<Record<string, string>>;
   readonly av: ComponentProps<typeof SpeakerRings>["speaking"];
   readonly selfKey: string;
-  readonly activeToolId: ToolId;
-  readonly toolStates: ToolStates;
-  readonly handleInput: (event: InputEvent) => void;
-  readonly cancelAndReset: () => void;
-  readonly dispatch: (intents: Intent[]) => void;
-  readonly handleTextChange: (id: string, text: string) => void;
-  readonly handleEndEdit: () => void;
-  readonly selectTool: (id: ToolId) => void;
+  readonly canvas: CanvasSession;
   readonly agentLinks: Readonly<Record<string, CanvasAgentLink>>;
   readonly pendingShapeId: string | null;
   readonly onRun: (shapeId: string) => void;
@@ -75,7 +55,7 @@ export function SessionView(props: SessionViewProps) {
         <div data-canvas-page-tab-row style={chromeTabRowStyle}>
           {pageSwitcher.tabs}
         </div>
-        <CanvasSurface {...props} />
+        <CanvasViewport {...props} />
         <CanvasChrome {...props} />
         {pageSwitcher.overlays}
       </div>
@@ -83,10 +63,9 @@ export function SessionView(props: SessionViewProps) {
   );
 }
 
-function CanvasSurface({
+function CanvasViewport({
   editorState,
   snapshot,
-  toolContext,
   viewportRef,
   viewportSize,
   remotePresence,
@@ -94,13 +73,7 @@ function CanvasSurface({
   identities,
   av,
   selfKey,
-  activeToolId,
-  toolStates,
-  handleInput,
-  cancelAndReset,
-  dispatch,
-  handleTextChange,
-  handleEndEdit,
+  canvas,
   agentLinks,
   pendingShapeId,
   onRun,
@@ -116,42 +89,21 @@ function CanvasSurface({
       className="relative min-h-0 flex-1"
       style={{ background: "var(--canvas-paper, #fafaf7)" }}
     >
-      <Viewport
-        onInput={handleInput}
-        onViewportBlur={cancelAndReset}
-        onPointerCancel={cancelAndReset}
-        style={{ position: "absolute", inset: 0 }}
-      >
-        <Grid camera={editorState.camera} />
-        <WorldLayer camera={editorState.camera}>
-          <ShapeLayer
-            toolContext={toolContext}
+      <CanvasSurface
+        session={canvas}
+        editorState={editorState}
+        snapshot={snapshot}
+        viewportSize={viewportSize}
+        overlays={
+          <Cursors
+            presence={remotePresence}
+            selfKey={selfKey}
             camera={editorState.camera}
             viewportSize={viewportSize}
-            dispatch={dispatch}
+            currentPageId={editorState.currentPageId}
           />
-          <TextEditor
-            toolContext={toolContext}
-            onTextChange={handleTextChange}
-            onEndEdit={handleEndEdit}
-          />
-        </WorldLayer>
-        <Overlay
-          editorState={editorState}
-          snapshot={snapshot}
-          camera={editorState.camera}
-          viewportSize={viewportSize}
-          index={toolContext.index()}
-          snapResult={currentSnapResult(toolStates, activeToolId)}
-        />
-        <Cursors
-          presence={remotePresence}
-          selfKey={selfKey}
-          camera={editorState.camera}
-          viewportSize={viewportSize}
-          currentPageId={editorState.currentPageId}
-        />
-      </Viewport>
+        }
+      />
       <AgentLayer
         doc={snapshot}
         camera={editorState.camera}
@@ -179,26 +131,16 @@ function CanvasSurface({
   );
 }
 
-function CanvasChrome({
-  activeToolId,
-  selectTool,
-}: SessionViewProps) {
+function CanvasChrome({ canvas }: SessionViewProps) {
   return (
     <div data-canvas-chrome-dock style={chromeWrapperStyle}>
       <div style={chromeCardColumnStyle}>
         <div style={chromeToolbarStyle}>
-          {TOOL_BUTTONS.map((button) => (
-            <button
-              key={button.id}
-              type="button"
-              data-canvas-tool={button.id}
-              aria-pressed={activeToolId === button.id}
-              onClick={() => selectTool(button.id)}
-              style={chromeToolStyle(activeToolId === button.id)}
-            >
-              {button.label}
-            </button>
-          ))}
+          <Toolbar
+            activeToolId={canvas.activeToolId}
+            onSelectTool={canvas.selectTool}
+            style={{ background: "transparent", border: "none", padding: 0 }}
+          />
         </div>
       </div>
     </div>

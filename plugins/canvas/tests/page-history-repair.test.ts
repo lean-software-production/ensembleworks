@@ -18,7 +18,6 @@
 // user has SWITCHED PAGES since the undo (a SetCurrentPage is a view intent
 // and does not clear the redo stack), which is exactly the case a fix written
 // for the undo direction alone would miss.
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { LoroCanvasDoc } from "@ensembleworks/canvas-doc";
 import { Editor } from "@ensembleworks/canvas-editor";
@@ -29,7 +28,6 @@ import {
   redoWithRepair,
   undoWithRepair,
 } from "../canvas/pages/history-repair.js";
-import { countInCode, stripComments } from "./lib/source.js";
 
 function makeEditor(pages: readonly Page[], currentPageId: string) {
   const doc = LoroCanvasDoc.create({ peerId: 1n });
@@ -208,114 +206,6 @@ describe("undoWithRepair / redoWithRepair — the move and the repair are one ca
   });
 });
 
-// ---------------------------------------------------------------------------
-// THE PANEL WIRING. CanvasPanel.tsx is a .tsx and there is no jsdom here, so
-// nothing behavioural can watch a keystroke run its branch. These read
-// comment-stripped CODE for the reason tests/source-guard.test.ts documents.
-//
-// WHY THIS BLOCK EXISTS AT ALL. Verified by mutation on 2026-09-05, against the
-// code as it stood before `undoWithRepair`/`redoWithRepair`: deleting
-//
-//     const repair = historyRepairIntents(editor);
-//     if (repair.length > 0) editor.applyAll(repair);
-//
-// from the REDO branch, and separately from the UNDO branch, each left `npx tsc
-// --noEmit` at exit 0 and the whole spike suite at 39 files / 843 tests passed.
-// The failure that buys is the worst one this feature has: Ctrl+Z removes the
-// page `currentPageId` still names, canvas-react's ShapeLayer/EmbedLayer paint
-// only shapes on that page, and the canvas goes BLANK with the document
-// perfectly intact.
-//
-// EACH BRANCH IS GUARDED INDEPENDENTLY, because a guard that passes while only
-// one branch is wired is not a guard — that is precisely the pair of mutations
-// above. Hence the branch bodies are located by their own conditions rather
-// than the file being searched as a whole.
-// ---------------------------------------------------------------------------
-
-const PANEL = readFileSync(
-  new URL("../canvas/panel/session-input.ts", import.meta.url),
-  "utf8",
-);
-const PANEL_CODE = stripComments(PANEL);
-
-/**
- * The shortcut branch whose condition contains `marker`, from the marker to
- * that branch's `return`.
- *
- * The marker is asserted UNIQUE in code, so a second occurrence (which would
- * make "the branch" ambiguous and this slice arbitrary) fails here rather than
- * quietly guarding the wrong lines.
- */
-function shortcutBranch(marker: string): string {
-  expect(countInCode(PANEL, marker), `\`${marker}\` no longer identifies one branch`).toBe(1);
-  const at = PANEL_CODE.indexOf(marker);
-  const end = PANEL_CODE.indexOf("return true;", at);
-  expect(end, `no \`return true;\` after \`${marker}\``).toBeGreaterThan(at);
-  return PANEL_CODE.slice(at, end);
-}
-
-describe("the panel repairs on both history branches", () => {
-  it("makes no history move that skips the repair", () => {
-    // WHAT THIS ACTUALLY REACHES, stated exactly — an earlier version of this
-    // comment claimed there was "no branch, present or future" in which a
-    // keystroke could move history without the repair, and review disproved
-    // that absolute form on 2026-09-05: with the undo branch rewritten to
-    // `const ed = editor; ed.undo();` plus a decoy string literal
-    // `const _decoy = "undoWithRepair(editor)";` inside the same branch, the
-    // panel moved history with no repair at all and `npx tsc --noEmit` was
-    // exit 0 with 39 files / 875 tests passed. `editor.undo` alone does not
-    // see through an alias.
-    //
-    // So the reach is now the pair below, and the pair is what the claim is
-    // about: no MENTION of `editor.undo`/`editor.redo` (which catches taking
-    // the method as a value: `const u = editor.undo`), and no member CALL
-    // named `.undo(`/`.redo(` at all, through any receiver — which is what
-    // catches the alias. The panel has no other legitimate `.undo(`/`.redo(`
-    // to collide with: it drives history exclusively through the two helpers.
-    //
-    // NOT A PROOF, and the comment will not pretend otherwise: a local
-    // shadow of the imported `undoWithRepair` name, or a method taken off an
-    // alias (`const u = ed.undo`), still slips past all four assertions in
-    // this file. Those are deliberate acts, not the plausible edit the
-    // 2026-09-05 mutations were.
-    expect(countInCode(PANEL, "editor.undo")).toBe(0);
-    expect(countInCode(PANEL, "editor.redo")).toBe(0);
-    expect(countInCode(PANEL, ".undo(")).toBe(0);
-    expect(countInCode(PANEL, ".redo(")).toBe(0);
-  });
-
-  it("wires the undo branch to undoWithRepair", () => {
-    // THE TRAILING SEMICOLON IS LOAD-BEARING: `stripComments` removes comments
-    // but not string literals, so `const _decoy = "undoWithRepair(editor)";`
-    // satisfies a bare `toContain("undoWithRepair(editor)")` — that decoy is
-    // half of the mutation review used on 2026-09-05 to disprove the
-    // absolute claim above. A string ends `)";`, a statement ends `);`.
-    const branch = shortcutBranch("!event.modifiers.shift");
-    expect(branch).toContain("undoWithRepair(editor);");
-    // Not the other direction: a redo in the undo branch typechecks fine.
-    expect(branch).not.toContain("redoWithRepair");
-  });
-
-  it("wires the redo branch to redoWithRepair", () => {
-    // `key === "y"` is the Ctrl+Y clause, which only the redo branch has.
-    const branch = shortcutBranch('key === "y"');
-    expect(branch).toContain("redoWithRepair(editor);");
-    expect(branch).not.toContain("undoWithRepair");
-  });
-
-  it("calls each of them exactly once", () => {
-    // A branch guard reads a slice; two call sites for one direction would
-    // mean a second, unguarded place where history moves. Counted as
-    // statements (see the semicolon note above), so a decoy string cannot
-    // top the count back up to 1 after the real call is deleted.
-    expect(countInCode(PANEL, "undoWithRepair(editor);")).toBe(1);
-    expect(countInCode(PANEL, "redoWithRepair(editor);")).toBe(1);
-  });
-
-  it("recomputes no repair of its own", () => {
-    // HANDS, NOT POLICY. `historyRepairIntents` composed in the .tsx is what
-    // the mutations deleted; a copy of it here would be a decision no test in
-    // this jsdom-free project could reach.
-    expect(countInCode(PANEL, "historyRepairIntents")).toBe(0);
-  });
-});
+// The keyboard wiring (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y -> undoWithRepair /
+// redoWithRepair) lives in the shared canvas-ui session, and is pinned by
+// canvas-editor/src/session/history.test.ts and keyboard.test.ts.
