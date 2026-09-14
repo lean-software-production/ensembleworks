@@ -22,10 +22,11 @@
 // a rotated PARENT still resizes/rotates world-correctly even though the
 // handles this tool shows for it are axis-aligned).
 import {
-  centroid, isFixedSizeSelection, worldBounds, type Bounds, type CanvasDocument, type Point, type Shape,
+  centroid, isFixedSizeSelection, resolveArrowAnchor, routeArrow, worldBounds, type Bounds, type CanvasDocument, type Point, type Shape,
 } from '@ensembleworks/canvas-model'
-import type { Intent } from '../intents.js'
+import type { ArrowBinding, Intent } from '../intents.js'
 import { crossedThreshold, screenToWorld, worldToScreen, type Camera, type InputEvent, type Tool } from '../input.js'
+import { arrowHandles, bendFromPoint, hitArrowHandle, type ArrowHandleId } from './arrow-handles.js'
 import type { ToolContext } from './tool-context.js'
 
 export type HandleId = 'nw' | 'n' | 'ne' | 'e' | 'se' | 's' | 'sw' | 'w' | 'rotate'
@@ -246,7 +247,34 @@ interface Rotating {
   readonly startShapes: readonly Shape[]
 }
 
-export type TransformState = Idle | Pointing | Resizing | Rotating
+// ============================================================================
+// ARROW HANDLES (arrow-handles task) — a LONE selected 'arrow' shape shows
+// three handles (start/end/mid, arrow-handles.ts) INSTEAD OF the 8
+// resize + rotate handles above: an arrow has no meaningful box-resize
+// concept (its geometry is its two terminals + bend, not a w/h rect), so
+// `onIdle` branches to this model whenever `ids` is exactly one arrow —
+// see the branch there for the exact condition. Multi-select (even one
+// containing an arrow) still falls through to the ordinary box-handle path,
+// same "OURS, undocumented scope limit" posture as the module header's
+// rotated-handle note: tldraw's own real multi-select-with-an-arrow chrome
+// is not attempted here.
+interface PointingArrow {
+  readonly mode: 'pointingArrow'
+  readonly downScreen: Point
+  readonly arrowId: string
+  readonly handle: ArrowHandleId
+}
+interface DraggingArrowTerminal {
+  readonly mode: 'draggingArrowTerminal'
+  readonly arrowId: string
+  readonly terminal: 'start' | 'end'
+}
+interface DraggingArrowBend {
+  readonly mode: 'draggingArrowBend'
+  readonly arrowId: string
+}
+
+export type TransformState = Idle | Pointing | Resizing | Rotating | PointingArrow | DraggingArrowTerminal | DraggingArrowBend
 
 const IDLE: TransformState = { mode: 'idle' }
 
@@ -265,8 +293,24 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
         case 'pointing': return onPointing(state, event)
         case 'resizing': return onResizing(state, event)
         case 'rotating': return onRotating(state, event)
+        case 'pointingArrow': return onPointingArrow(state, event)
+        case 'draggingArrowTerminal': return onDraggingArrowTerminal(state, event)
+        case 'draggingArrowBend': return onDraggingArrowBend(state, event)
       }
     },
+  }
+
+  // Resolve a binding candidate at `worldPt`, if the pointer is over a shape
+  // OTHER than `excludeId` (the dragged arrow itself) — SAME composition as
+  // arrow.ts's own module-private `bindingAt` (not imported from there: the
+  // two tool FSMs are otherwise independent, and this is five lines — see
+  // arrow.ts's own precedent for not coupling two tool files over a small
+  // shared helper).
+  function arrowBindingCandidate(worldPt: Point, excludeId: string): ArrowBinding | undefined {
+    const hit = ctx.hitTestTopmost(worldPt, new Set([excludeId]))
+    if (!hit) return undefined
+    const anchor = resolveArrowAnchor(ctx.snapshot(), hit, worldPt)
+    return { targetId: hit, anchor }
   }
 
   function onIdle(state: Idle, event: InputEvent): { state: TransformState; intents: Intent[] } {
@@ -286,6 +330,25 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
     // reason about.
     const editingId = editor.get().editingId
     if (editingId !== null && ids.includes(editingId)) return { state, intents: [] }
+
+    // ARROW HANDLES (arrow-handles task): a LONE selected arrow shows its
+    // own start/end/mid handles INSTEAD of the box model below — see the
+    // TransformState module comment. Checked BEFORE selectionWorldBounds:
+    // an arrow's worldBounds-derived box handles would be meaningless (a
+    // thin/degenerate rect for a mostly-horizontal or -vertical arrow).
+    if (ids.length === 1) {
+      const soleShape = ctx.snapshot().byId.get(ids[0]!)
+      if (soleShape && soleShape.kind === 'arrow') {
+        const handles = arrowHandles(ctx.snapshot(), soleShape)
+        const hit = hitArrowHandle(handles, { x: event.x, y: event.y }, editor.get().camera, HIT_TOLERANCE_PX)
+        if (!hit) return { state, intents: [] } // miss: falls through to select.ts's ordinary body-drag
+        return {
+          state: { mode: 'pointingArrow', downScreen: { x: event.x, y: event.y }, arrowId: soleShape.id, handle: hit },
+          intents: [],
+        }
+      }
+    }
+
     const bounds = selectionWorldBounds(ctx.snapshot(), ids)
     if (!bounds) return { state, intents: [] } // empty/all-vanished selection: nothing to grab a handle on
     const handlesAtStart = selectionHandles(bounds)
@@ -383,6 +446,88 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
       return { state: next, intents }
     }
     return { state, intents: [] }
+  }
+
+  // THRESHOLD GATE (same discipline as arrow.ts's own drawing gesture, and
+  // this file's own box-handle onPointing above): a click on a handle with
+  // no drag is a no-op — back to idle, zero intents.
+  function onPointingArrow(state: PointingArrow, event: InputEvent): { state: TransformState; intents: Intent[] } {
+    if (event.type === 'pointerup') return { state: IDLE, intents: [] }
+    if (event.type !== 'pointermove') return { state, intents: [] }
+    const here = crossedThreshold(state.downScreen, event)
+    if (!here) return { state, intents: [] }
+
+    if (state.handle === 'mid') {
+      const shape = ctx.snapshot().byId.get(state.arrowId)
+      if (!shape) return { state: IDLE, intents: [] } // vanished mid-gesture — nothing to bend
+      const routed = routeArrow(ctx.snapshot(), shape, ctx.snapshot().bindings)
+      const bend = bendFromPoint(routed.start, routed.end, worldOf(here))
+      return { state: { mode: 'draggingArrowBend', arrowId: state.arrowId }, intents: [{ type: 'UpdateProps', id: state.arrowId, props: { bend } }] }
+    }
+
+    // start/end: LIVE PREVIEW, NO SPECULATIVE BINDING (arrow.ts's own
+    // documented posture, reused here): every intermediate move clears this
+    // terminal's binding and writes its raw point — a bound terminal's
+    // rendered position otherwise ignores `point` entirely (routeArrow
+    // resolves it from the LIVE binding anchor, not stored x/y or props.end
+    // — see arrow-route.ts's `resolveEndpoint`), so leaving the OLD binding
+    // in place mid-drag would make the drag visually inert. The REAL
+    // binding is resolved and written exactly once, at pointerup (below) —
+    // same "one binding-writing moment" reasoning as arrow.ts's own module
+    // header. SetHover previews the prospective target while dragging
+    // (Hover.tsx already renders whatever `editorState.hover` holds).
+    const worldPt = worldOf(here)
+    const candidate = arrowBindingCandidate(worldPt, state.arrowId)
+    return {
+      state: { mode: 'draggingArrowTerminal', arrowId: state.arrowId, terminal: state.handle },
+      intents: [
+        { type: 'SetHover', id: candidate?.targetId ?? null },
+        { type: 'MoveArrowTerminal', id: state.arrowId, terminal: state.handle, point: worldPt },
+      ],
+    }
+  }
+
+  // COMMIT CADENCE WATCH-ITEM (same note as select.ts's onDragging/
+  // transform.ts's own onResizing/onRotating above): one MoveArrowTerminal
+  // per pointermove, one doc.commit() per mouse move for the whole gesture.
+  function onDraggingArrowTerminal(state: DraggingArrowTerminal, event: InputEvent): { state: TransformState; intents: Intent[] } {
+    if (event.type !== 'pointermove' && event.type !== 'pointerup') return { state, intents: [] }
+    const worldPt = worldOf({ x: event.x, y: event.y })
+    const candidate = arrowBindingCandidate(worldPt, state.arrowId)
+    if (event.type === 'pointerup') {
+      // Resolve and write the REAL binding exactly once, here — see the
+      // LIVE PREVIEW note in onPointingArrow above. Clear hover: the
+      // gesture is over, and select.ts's own onIdle will re-set it (or
+      // not) from the very next pointermove regardless.
+      return {
+        state: IDLE,
+        intents: [
+          { type: 'SetHover', id: null },
+          { type: 'MoveArrowTerminal', id: state.arrowId, terminal: state.terminal, point: worldPt, binding: candidate },
+        ],
+      }
+    }
+    return {
+      state,
+      intents: [
+        { type: 'SetHover', id: candidate?.targetId ?? null },
+        { type: 'MoveArrowTerminal', id: state.arrowId, terminal: state.terminal, point: worldPt },
+      ],
+    }
+  }
+
+  function onDraggingArrowBend(state: DraggingArrowBend, event: InputEvent): { state: TransformState; intents: Intent[] } {
+    if (event.type !== 'pointermove' && event.type !== 'pointerup') return { state, intents: [] }
+    const shape = ctx.snapshot().byId.get(state.arrowId)
+    const next: TransformState = event.type === 'pointerup' ? IDLE : state
+    if (!shape) return { state: next, intents: [] } // vanished mid-gesture — nothing to bend
+    // Chord (start/end) is bend-INVARIANT (clipEndpoint never reads bend —
+    // see arrow-route.ts's routeArrow doc comment on CURVE + CLIPPING
+    // ORDERING), so re-reading it fresh every move (rather than caching it
+    // at gesture start) is both correct and simplest.
+    const routed = routeArrow(ctx.snapshot(), shape, ctx.snapshot().bindings)
+    const bend = bendFromPoint(routed.start, routed.end, worldOf({ x: event.x, y: event.y }))
+    return { state: next, intents: [{ type: 'UpdateProps', id: state.arrowId, props: { bend } }] }
   }
 }
 

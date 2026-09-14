@@ -102,6 +102,16 @@ export function Overlay({ editorState, snapshot, camera, viewportSize, index, sn
   // half, so the painted chrome doesn't promise an interaction the FSM
   // refuses.
   const hideResizeHandles = isFixedSizeSelection(snapshot, editorState.selection)
+  // arrow-handles task: a LONE selected 'arrow' shape gets Handles.tsx's
+  // arrow-handle model instead of the box one — mirrors transform.ts's own
+  // onIdle branch (see TransformState's module comment there) exactly, so
+  // the painted chrome always matches what the FSM will actually respond to.
+  const soleArrow = (() => {
+    if (editorState.selection.size !== 1) return null
+    const [id] = editorState.selection
+    const shape = snapshot.byId.get(id!)
+    return shape && shape.kind === 'arrow' ? shape : null
+  })()
   return (
     <svg
       data-canvas-layer="overlay"
@@ -113,7 +123,13 @@ export function Overlay({ editorState, snapshot, camera, viewportSize, index, sn
       <Hover snapshot={snapshot} hover={editorState.hover} selection={editorState.selection} camera={camera} />
       <Selection snapshot={snapshot} selection={editorState.selection} camera={camera} />
       <SnapGuides snapResult={snapResult} camera={camera} viewportSize={viewportSize} />
-      <Handles bounds={editingSelected ? null : combinedBounds} camera={camera} hideResizeHandles={hideResizeHandles} />
+      <Handles
+        bounds={editingSelected ? null : combinedBounds}
+        camera={camera}
+        hideResizeHandles={hideResizeHandles}
+        soleArrow={editingSelected ? null : soleArrow}
+        snapshot={snapshot}
+      />
     </svg>
   )
 }

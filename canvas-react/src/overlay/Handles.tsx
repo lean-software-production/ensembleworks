@@ -13,8 +13,8 @@
 // computes — a single rotated shape's handles come out axis-aligned here too,
 // automatically, with no special-casing: this component inherits the scope
 // limit rather than re-deciding it.
-import { HIT_TOLERANCE_PX, selectionHandles, worldToScreen, type Camera, type Handle } from '@ensembleworks/canvas-editor'
-import type { Bounds } from '@ensembleworks/canvas-model'
+import { arrowHandles, HIT_TOLERANCE_PX, selectionHandles, worldToScreen, type Camera, type Handle } from '@ensembleworks/canvas-editor'
+import type { Bounds, CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 
 export interface HandlesProps {
   readonly bounds: Bounds | null
@@ -27,6 +27,16 @@ export interface HandlesProps {
    * false so every OTHER existing caller/test (a plain `bounds` prop, no
    * third arg) keeps painting all 9 handles exactly as before. */
   readonly hideResizeHandles?: boolean
+  /** arrow-handles task: the LONE selected shape when (and only when) it's
+   * kind 'arrow', or null/undefined otherwise. When present, this component
+   * paints transform.ts's arrow-handle model (start/end/mid — arrow-
+   * handles.ts's `arrowHandles`) INSTEAD of the box resize/rotate handles
+   * above — mirrors transform.ts's own onIdle branch exactly (a lone
+   * selected arrow gets arrow handles, never box handles; see that file's
+   * TransformState module comment). Requires `snapshot` to route the arrow
+   * (routeArrow needs the whole doc, for bound-terminal resolution). */
+  readonly soleArrow?: Shape | null
+  readonly snapshot?: CanvasDocument
 }
 
 // Rendered handle size, SCREEN pixels, zoom-independent (a fixed px square at
@@ -51,7 +61,42 @@ const HANDLE_STROKE_WIDTH = 1.5
 const HANDLE_FILL = 'var(--canvas-handle, #ffffff)'
 const HANDLE_STROKE = 'var(--canvas-handle-stroke, #4b8bf4)'
 
-export function Handles({ bounds, camera, hideResizeHandles = false }: HandlesProps) {
+// Arrow terminal handles (start/end) — a plain circle, same fill/stroke
+// chrome as the rotate handle's glyph above, sized a touch larger (this is
+// the PRIMARY drag target for an arrow, unlike the box model's secondary
+// rotate handle). The mid (bend) handle is visually smaller/lighter — a
+// "virtual" affordance, matching tldraw's own convention that a straight
+// arrow's midpoint handle is a lower-emphasis grab target than its two real
+// terminals (ArrowShapeUtil.tsx types it `type: 'virtual'`, not `'vertex'`).
+const ARROW_TERMINAL_RADIUS_PX = 5
+const ARROW_MID_RADIUS_PX = 4
+const ARROW_MID_FILL = 'var(--canvas-handle-mid, #ffffff)'
+
+export function Handles({ bounds, camera, hideResizeHandles = false, soleArrow, snapshot }: HandlesProps) {
+  if (soleArrow && snapshot) {
+    return (
+      <>
+        {arrowHandles(snapshot, soleArrow).map((h) => {
+          const s = worldToScreen(camera, h.point)
+          const isMid = h.id === 'mid'
+          return (
+            <circle
+              key={h.id}
+              data-overlay="arrow-handle"
+              data-handle-id={h.id}
+              cx={s.x}
+              cy={s.y}
+              r={isMid ? ARROW_MID_RADIUS_PX : ARROW_TERMINAL_RADIUS_PX}
+              fill={isMid ? ARROW_MID_FILL : HANDLE_FILL}
+              stroke={HANDLE_STROKE}
+              strokeWidth={HANDLE_STROKE_WIDTH}
+              opacity={isMid ? 0.7 : 1}
+            />
+          )
+        })}
+      </>
+    )
+  }
   if (!bounds) return null
   const allHandles: Handle[] = selectionHandles(bounds)
   const handles = hideResizeHandles ? allHandles.filter((h) => h.kind === 'rotate') : allHandles
