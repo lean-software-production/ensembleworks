@@ -1,0 +1,25 @@
+/*
+ * EnsembleWorks embed mode: hide t3code's left thread-list sidebar and its
+ * chrome. Injected into the built bundle by deploy/t3code-embed/build.sh;
+ * active only when embed.js has latched .ew-embed onto <html> (?embed=1).
+ *
+ * Selector contract (verify against the pinned upstream before bumping
+ * UPSTREAM_PIN — see README.md):
+ *  - [data-slot="sidebar"][data-side="left"]  desktop sidebar root
+ *      (apps/web/src/components/ui/sidebar.tsx, Sidebar component)
+ *  - [data-slot="sidebar"][data-mobile="true"] mobile sheet variant
+ *  - [data-slot="sidebar-rail"]               resize/toggle rail
+ *  - [data-sidebar-control]                   floating toggle button wrapper
+ *      (apps/web/src/components/AppSidebarLayout.tsx, SidebarControl)
+ *
+ * display:none on the sidebar root also defeats the sidebar.toggle keyboard
+ * shortcut: toggling only flips React state, and the root stays hidden in
+ * every state. SidebarInset expands to full width on its own (the sidebar's
+ * layout gap lives inside the hidden root).
+ */
+html.ew-embed [data-slot="sidebar"][data-side="left"],
+html.ew-embed [data-slot="sidebar"][data-mobile="true"],
+html.ew-embed [data-slot="sidebar-rail"],
+html.ew-embed [data-sidebar-control] {
+	display: none !important;
+}
