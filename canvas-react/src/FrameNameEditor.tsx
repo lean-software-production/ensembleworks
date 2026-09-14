@@ -22,7 +22,7 @@
 // a name edit is reported via `onNameChange(id, name)`; Escape/Enter/blur
 // via `onEndEdit()`. Both are the CALLER's job (client/src/canvas-v2) to
 // turn into UpdateProps/EndEdit Intents through `editor.apply`.
-import { useRef, type ChangeEvent, type KeyboardEvent } from 'react'
+import { useRef, type ChangeEvent, type FocusEvent, type KeyboardEvent } from 'react'
 import { localBounds } from '@ensembleworks/canvas-model'
 import type { ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
@@ -30,6 +30,12 @@ import { shapeBodyTransform } from './ShapeBody.js'
 import {
   HEADER_FILL, HEADER_BORDER, HEADER_TEXT, HEADER_HEIGHT, HEADER_RADIUS, HEADER_FONT_SIZE, HEADER_PADDING_X, HEADER_OFFSET_X,
 } from './shapes/FrameShape.js'
+
+// Editing-affordance accent (frame-interaction validator advisory) — no
+// shared selection/accent color constant exists elsewhere in canvas-react
+// to reuse yet, so this is a locally-scoped choice (tldraw's own selection
+// blue), not a re-derivation of an existing value.
+const EDITING_RING_COLOR = '#4465e9'
 
 export interface FrameNameEditorProps {
   readonly toolContext: ToolContext
@@ -55,6 +61,16 @@ export function handleFrameNameKeyDown(key: string, onEndEdit: () => void): void
   if (key === 'Escape' || key === 'Enter') onEndEdit()
 }
 
+/** Select-all-on-open (frame-interaction validator advisory): tldraw
+ * selects a shape's whole existing name the moment rename opens, so typing
+ * replaces it rather than appending after the caret. Takes anything with a
+ * `select()` method (an `HTMLInputElement`, or a fake in a test) rather
+ * than the full FocusEvent so it stays pure/directly testable, same
+ * posture as handleFrameNameKeyDown above. */
+export function handleFrameNameFocus(target: { select(): void }): void {
+  target.select()
+}
+
 /** `shape.props.name`, verbatim (never defaulted to the "Frame" placeholder
  * FrameShape.tsx's `frameLabel` shows for an EMPTY name — the editing
  * input's value must be the real (possibly empty) stored string, not a
@@ -67,10 +83,11 @@ export function frameNameValue(props: Record<string, unknown>): string {
 export function FrameNameEditor({ toolContext, onNameChange, onEndEdit }: FrameNameEditorProps) {
   const snapshot = useDocSnapshot(toolContext)
   const editorState = useEditorState(toolContext.editor)
-  // Declared BEFORE the early returns below (rules of hooks) — unused
-  // (this editor keeps no composition state, unlike TextEditor's IME
-  // window) but present for the same hook-ordering safety, cheap insurance
-  // against a future addition needing a ref here.
+  // Declared BEFORE the early returns below (rules of hooks). Used by
+  // onFocus below to select-all (handleFrameNameFocus) -- kept as a ref
+  // rather than relying on the FocusEvent's own `e.target` so the pure
+  // handler's contract (`{ select(): void }`) stays trivially satisfied by
+  // either.
   const inputRef = useRef<HTMLInputElement>(null)
   const editingId = editorState.editingId
   const shape = editingId ? snapshot.byId.get(editingId) : undefined
@@ -100,6 +117,7 @@ export function FrameNameEditor({ toolContext, onNameChange, onEndEdit }: FrameN
         value={name}
         onChange={(e: ChangeEvent<HTMLInputElement>) => onNameChange(editingId, e.target.value)}
         onKeyDown={(e: KeyboardEvent<HTMLInputElement>) => handleFrameNameKeyDown(e.key, onEndEdit)}
+        onFocus={(e: FocusEvent<HTMLInputElement>) => handleFrameNameFocus(e.target)}
         onBlur={onEndEdit}
         // BELT-AND-SUSPENDERS (same modality-exclusivity guard TextEditor.tsx's
         // textarea carries): keeps the canvas viewport from ever seeing this
@@ -116,7 +134,13 @@ export function FrameNameEditor({ toolContext, onNameChange, onEndEdit }: FrameN
           borderRadius: HEADER_RADIUS,
           border: 'none',
           outline: 'none',
-          boxShadow: `inset 0 0 0 1px ${HEADER_BORDER}`,
+          // Visible editing affordance (frame-interaction validator advisory):
+          // this input mounts ONLY while editingId points at this frame, so
+          // there's no separate ":focus" state to distinguish -- a static
+          // accent ring is what tells it apart from FrameShape.tsx's static
+          // label, which shares HEADER_FILL/HEADER_BORDER (both resolve to
+          // the same near-white hex, see that file's GROUNDING comment).
+          boxShadow: `inset 0 0 0 1px ${HEADER_BORDER}, 0 0 0 2px ${EDITING_RING_COLOR}`,
           background: HEADER_FILL,
           color: HEADER_TEXT,
           padding: `0 ${HEADER_PADDING_X}px`,

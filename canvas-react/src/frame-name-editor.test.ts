@@ -8,7 +8,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { makeDocument, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import type { Editor, EditorState, ToolContext } from '@ensembleworks/canvas-editor'
-import { FrameNameEditor, frameNameValue, handleFrameNameKeyDown } from './FrameNameEditor.js'
+import { FrameNameEditor, frameNameValue, handleFrameNameKeyDown, handleFrameNameFocus } from './FrameNameEditor.js'
 import { HEADER_HEIGHT } from './shapes/FrameShape.js'
 
 const frameShape = (id: string, name: string | undefined, x = 0, y = 0, w = 300, h = 300): Shape =>
@@ -116,6 +116,18 @@ function fakeToolContext(editingId: string | null): ToolContext {
   handleFrameNameKeyDown('a', () => ended++)
   assert.equal(ended, 2, 'an ordinary character key is a no-op')
   console.log('ok: handleFrameNameKeyDown ends the edit on Escape/Enter only')
+}
+
+// ============================================================================
+// 7. handleFrameNameFocus (validator advisory: select-all on rename open, so
+//    typing replaces the existing name instead of appending after the
+//    caret, tldraw parity) -- calls select() on whatever it's given.
+// ============================================================================
+{
+  let selectCalls = 0
+  handleFrameNameFocus({ select: () => { selectCalls++ } })
+  assert.equal(selectCalls, 1, 'handleFrameNameFocus selects the whole input value')
+  console.log('ok: handleFrameNameFocus selects the input\'s contents')
 }
 
 console.log('ok: frame-name-editor')

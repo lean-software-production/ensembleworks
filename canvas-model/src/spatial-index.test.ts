@@ -43,6 +43,32 @@ assert.deepEqual(
   'contain mode: only the fully-inside shape qualifies',
 )
 
+// frame-interaction validator fix: boundsById must stay the frame's TRUE
+// worldBounds (unwidened by the header band) -- shapeHitIndexBounds' header
+// widening may only steer which CELLS a frame is bucketed into, never the
+// bounds snapping.ts (via index.boundsById.get) or queryMarquee('contain')
+// answer with. A frame at (0,0) 300x300 -- boundsById must read back exactly
+// {0,0,300,300}, not widened up by FRAME_HEADER_HEIGHT (24).
+const frameBoundsDoc = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [{ id: 'shape:frame', kind: 'frame', parentId: 'page:p', x: 0, y: 0, rotation: 0, props: { w: 300, h: 300, name: 'F' }, ...base() } as any],
+  bindings: [],
+})
+const frameBoundsIndex = buildSpatialIndex(frameBoundsDoc)
+assert.deepEqual(
+  frameBoundsIndex.boundsById.get('shape:frame'),
+  { minX: 0, minY: 0, maxX: 300, maxY: 300 },
+  'boundsById for a frame is its true worldBounds, NOT widened by the header band',
+)
+// But a point in the header band (world y in [-24,0), which is OUTSIDE that
+// true worldBounds) must still be bucketed as a hitTestTopmost candidate --
+// the widening must still happen for CELL bucketing, just not boundsById.
+assert.equal(
+  hitTestTopmost(frameBoundsIndex, frameBoundsDoc, { x: 150, y: -10 }),
+  'shape:frame',
+  'a header-band point (outside true worldBounds) still hit-tests the frame via widened cell bucketing',
+)
+
 // queryMarquee 'intersect': rotated-quad-accurate -- a marquee touching only
 // the empty AABB corner of a rotated shape must NOT select it.
 // 100x100 box at (0,0) rotated pi/4: AABB is [-70.71,70.71] x [0,141.42], but

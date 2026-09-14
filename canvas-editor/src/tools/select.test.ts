@@ -449,19 +449,20 @@ function frameSetup() {
 }
 
 // ============================================================================
-// 18. Marquee that FULLY ENCLOSES the frame selects it (and its fully-
-//    enclosed child).
+// 18. Marquee that FULLY ENCLOSES the frame's visible 300x300 body selects it
+//    (and its fully-enclosed child) -- tldraw's Brushing.ts parity requires
+//    containment of the shape's page bounds ONLY, not its indexed header
+//    band (that widening is a spatial-index CELL-bucketing device only --
+//    see spatial-index.ts's boundsById doc comment -- never a containment
+//    requirement). A brush that starts right at the frame's true top edge
+//    (-10, well short of -FRAME_HEADER_HEIGHT=-24) must be enough.
 // ============================================================================
 {
   const { editor, tool } = frameSetup()
-  // minY -34 (past -FRAME_HEADER_HEIGHT=-24) so the brush also encloses the
-  // frame's indexed header band, not just its 300x300 body -- see
-  // shapeHitIndexBounds' doc comment (spatial-index.ts) for why a frame's
-  // 'contain' bounds include the header.
-  const events = script().down(-10, -34).move(310, 310).up().events()
+  const events = script().down(-10, -10).move(310, 310).up().events()
   run(editor, tool, events)
-  assert.deepEqual(new Set(editor.get().selection), new Set(['shape:frame', 'shape:child']), 'a marquee that fully encloses the frame (incl. its header band) selects it (and its enclosed child)')
-  console.log('ok: marquee fully enclosing a frame selects it')
+  assert.deepEqual(new Set(editor.get().selection), new Set(['shape:frame', 'shape:child']), 'a marquee that fully encloses the frame\'s visible body (not its header band) selects it (and its enclosed child)')
+  console.log('ok: marquee fully enclosing a frame\'s body selects it')
 }
 
 // ============================================================================
