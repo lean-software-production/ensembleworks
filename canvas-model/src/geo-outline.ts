@@ -81,7 +81,8 @@ export interface GeoOutline {
 
 function polygonPath(points: readonly Point[]): string {
   if (points.length === 0) return ''
-  const [first, ...rest] = points
+  const first = points[0]!
+  const rest = points.slice(1)
   return `M ${first.x},${first.y} ${rest.map(p => `L ${p.x},${p.y}`).join(' ')} Z`
 }
 

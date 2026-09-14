@@ -87,13 +87,49 @@ function render(shape: Shape, getText?: (id: string) => string, editorState?: Ed
 }
 
 // ============================================================================
-// 3. Unhandled variant falls back to a rectangle outline, never a crash.
+// 3. Every one of the 20 geo variants renders its OWN real geometry (Task
+//    "geo-variants" — canvas-model's geo-outline.ts is the source of every
+//    variant's path/vertices now; GeoShape.tsx no longer special-cases only
+//    4 of them). A truly unrecognized geo string still falls back to a
+//    rectangle, never a crash.
 // ============================================================================
 {
-  const star = geoShape({ props: { geo: 'star', w: 100, h: 100 } })
+  const star = geoShape({ props: { geo: 'star', w: 200, h: 190 } })
   const html = render(star)
-  assert.ok(html.includes('<rect'), 'an unhandled geo variant (star) falls back to a plain rectangle outline, not a crash')
-  console.log('ok: GeoShape — unhandled variant (star) falls back to a rectangle outline, documented, never a crash')
+  assert.ok(html.includes('<polygon') || html.includes('<path'), 'star renders real geometry (a polygon or path), not a <rect> fallback')
+  assert.ok(!/<rect[^>]*width="200"/.test(html), 'star must not fall back to a plain rectangle outline any more')
+
+  const cloud = geoShape({ props: { geo: 'cloud', w: 300, h: 180 } })
+  const cloudHtml = render(cloud)
+  assert.ok(cloudHtml.includes('<path'), 'cloud (a curved "blobby" variant) renders a real <path>')
+
+  const unknown = geoShape({ props: { geo: 'not-a-real-geo-type', w: 60, h: 40 } })
+  const unknownHtml = render(unknown)
+  assert.ok(unknownHtml.includes('0,0') && unknownHtml.includes('60,0') && unknownHtml.includes('60,40') && unknownHtml.includes('0,40'), 'a truly unrecognized geo variant still falls back to a rectangle outline (a polygon through the 4 corners now, via getGeoOutline\'s own default), documented, never a crash')
+
+  console.log('ok: GeoShape — every one of the 20 geo variants renders its own real geometry; a truly unknown variant still falls back to rectangle')
+}
+
+// ============================================================================
+// 3b. x-box/check-box draw their un-filled internal marks (diagonals /
+//     check) on top of the outer rectangle, using the same stroke color —
+//     and hide them too when dash:'none' turns the stroke off (an internal
+//     mark with no outline reads as a rendering bug, not a legitimate look).
+// ============================================================================
+{
+  const xBox = render(geoShape({ props: { geo: 'x-box', color: 'blue' } }))
+  const xBoxPaths = xBox.match(/<path[^>]*>/g) ?? []
+  assert.equal(xBoxPaths.length, 2, 'x-box renders exactly 2 internal <path> strokes (its diagonals)')
+  assert.ok(xBoxPaths.every(p => p.includes('fill="none"') && p.includes('#4465e9')), 'x-box internal strokes are unfilled and colored like the shapes stroke')
+
+  const checkBox = render(geoShape({ props: { geo: 'check-box', color: 'green' } }))
+  const checkPaths = checkBox.match(/<path[^>]*>/g) ?? []
+  assert.equal(checkPaths.length, 1, 'check-box renders exactly 1 internal <path> stroke (its check mark)')
+
+  const xBoxNoStroke = render(geoShape({ props: { geo: 'x-box', dash: 'none' } }))
+  assert.ok(!xBoxNoStroke.includes('<path'), 'dash:none hides x-boxs internal diagonals along with its outer stroke')
+
+  console.log('ok: GeoShape — x-box/check-box draw un-filled internal marks matching the stroke color, hidden when dash:none')
 }
 
 // ============================================================================
