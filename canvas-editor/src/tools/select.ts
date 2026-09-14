@@ -418,6 +418,9 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // dispatchToActiveTool/tool-loop.ts), i.e. one undo step per keypress.
       const dir = nudgeDirection(event.key)
       if (!dir) return { state, intents: [] }
+      // Never while text-editing: the textarea owns arrow keys for caret
+      // movement (tldraw parity) — pinned by select.test.ts case 16b.
+      if (editor.get().editingId !== null) return { state, intents: [] }
       const ids = [...editor.get().selection]
       if (ids.length === 0) return { state, intents: [] }
       const amount = event.modifiers.shift ? SHIFT_NUDGE_PX : NUDGE_PX

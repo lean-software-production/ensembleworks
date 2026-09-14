@@ -396,6 +396,24 @@ function setup() {
   console.log('ok: arrow-key nudge moves the selection by 1 world unit per direction')
 }
 
+// 16b. Arrow keys while a shape is being TEXT-EDITED must NOT nudge it: the
+//    textarea owns arrow keys for caret movement (tldraw parity — arrows in
+//    the rich-text editor never move the shape). Mutant killed: a select tool
+//    that reads only `selection` and ignores `editingId` emits a
+//    TranslateShapes here (the round-2 validator's real-browser repro: shape
+//    drifted 200,120 -> 198,119 while arrowing back to fix a typo).
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:note'] })
+  editor.apply({ type: 'BeginEdit', id: 'shape:note' })
+  assert.equal(editor.get().editingId, 'shape:note', 'precondition: the note is being edited')
+  const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
+  const left = tool.onEvent(tool.initialState, { type: 'keydown' as const, key: 'ArrowLeft', modifiers: NEUTRAL, t: 0 })
+  assert.deepEqual(left.intents, [], 'ArrowLeft while text-editing emits NO TranslateShapes (caret movement only)')
+  console.log('ok: arrow keys never nudge a shape that is being text-edited')
+}
+
 // ============================================================================
 // 17. Shift+arrow nudges by SHIFT_NUDGE_PX (10), matching feel.json's
 //    shiftNudgePx.
