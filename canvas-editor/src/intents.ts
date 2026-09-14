@@ -222,6 +222,42 @@ export interface CompleteArrow {
   readonly toBinding?: ArrowBinding
 }
 
+/** Move ONE terminal ('start' or 'end') of an ALREADY-COMPLETE arrow to
+ * `point` (WORLD space) and REPLACE that terminal's binding wholesale — the
+ * arrow-terminal-handle drag tool's write path (canvas-editor/src/tools/
+ * transform.ts's arrow-handle branch), distinct from StartArrow/
+ * CompleteArrow above (which only ever WRITE a binding, never clear one —
+ * see arrow.ts's module header). Unlike StartArrow/CompleteArrow, this
+ * intent can also CLEAR a terminal's binding: `binding` omitted means
+ * "unbound" — the existing `binding:<id>-<terminal>` row (if any) is
+ * deleted and none is written back — which is exactly what a mid-drag
+ * (dragging a bound terminal off its target, or across empty canvas) needs:
+ * the old binding must not silently keep overriding `point` (routeArrow
+ * resolves a BOUND terminal from its binding's live anchor, ignoring the
+ * shape's own stored x/y or props.end entirely — arrow-route.ts's
+ * `resolveEndpoint`), or `point` would have no visible effect while still
+ * bound.
+ *
+ * 'start' writes `point` to the shape's OWN x/y (StartArrow's convention:
+ * the arrow's x/y IS its start point) and re-expresses `props.end` as a
+ * local offset from the NEW x/y so the END terminal's WORLD position is
+ * unchanged (moving start must not also silently drag the other end) --
+ * unless the end is itself bound, in which case its stored props.end is
+ * stale/ignored by routing anyway and re-deriving it is harmless. 'end'
+ * writes `props.end` as a local offset from the (unchanged) x/y, mirroring
+ * CompleteArrow's own end-write exactly.
+ *
+ * Silent no-op (no doc write, no undo entry) if `id` doesn't resolve to an
+ * arrow — the same TOLERANCE CONTRACT CompleteArrow's own `id` guard
+ * documents. */
+export interface MoveArrowTerminal {
+  readonly type: 'MoveArrowTerminal'
+  readonly id: string
+  readonly terminal: 'start' | 'end'
+  readonly point: Point
+  readonly binding?: ArrowBinding
+}
+
 /** Create a page (Task E3, docs/plans/2026-07-22-canvas-v2-pages.md, D-3):
  * `doc.putPage(intent.page)` verbatim — the caller (the switcher UI, Task
  * U1) mints the full `Page` record (id via `random`, `name`, and a
@@ -324,6 +360,7 @@ export type Intent =
   | SetStyle
   | StartArrow
   | CompleteArrow
+  | MoveArrowTerminal
   | CreatePage
   | DeletePage
   | RenamePage

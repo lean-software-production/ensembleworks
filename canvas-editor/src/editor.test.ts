@@ -1154,4 +1154,97 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: EndEdit does not delete a text shape whose content lives in props.richText')
 }
 
+// ============================================================================
+// 16. MoveArrowTerminal: moving the UNBOUND end to a new point rewrites
+//     props.end (local offset), writes no binding when none is given, and
+//     undo/redo round-trip cleanly.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'StartArrow', shape: shape('shape:arrow', { kind: 'arrow', x: 0, y: 0, props: { end: { x: 100, y: 0 } } }) })
+
+  editor.apply({ type: 'MoveArrowTerminal', id: 'shape:arrow', terminal: 'end', point: { x: 40, y: 80 } })
+  let arrow = editor.doc.getShape('shape:arrow')!
+  assert.deepEqual((arrow.props as any).end, { x: 40, y: 80 }, 'end moved to the new LOCAL offset (x/y unchanged at 0,0)')
+  assert.equal(editor.doc.listBindings().length, 0, 'no binding given: none written')
+
+  editor.undo()
+  arrow = editor.doc.getShape('shape:arrow')!
+  assert.deepEqual((arrow.props as any).end, { x: 100, y: 0 }, 'undo restores the pre-move end')
+  editor.redo()
+  arrow = editor.doc.getShape('shape:arrow')!
+  assert.deepEqual((arrow.props as any).end, { x: 40, y: 80 }, 'redo re-applies the move')
+  console.log('ok: MoveArrowTerminal moves an unbound end and undo/redo round-trips')
+}
+
+// ============================================================================
+// 17. MoveArrowTerminal: moving the START terminal writes shape.x/y AND
+//     re-expresses props.end so the END terminal's WORLD position is
+//     UNCHANGED (moving start must not also drag the other end).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'StartArrow', shape: shape('shape:arrow', { kind: 'arrow', x: 0, y: 0, props: { end: { x: 100, y: 0 } } }) }) // world end = (100,0)
+
+  editor.apply({ type: 'MoveArrowTerminal', id: 'shape:arrow', terminal: 'start', point: { x: 30, y: 20 } })
+  const arrow = editor.doc.getShape('shape:arrow')!
+  assert.equal(arrow.x, 30)
+  assert.equal(arrow.y, 20)
+  assert.deepEqual((arrow.props as any).end, { x: 70, y: -20 }, 'end re-expressed so world end stays at (100,0): 100-30=70, 0-20=-20')
+  console.log('ok: MoveArrowTerminal on start keeps the end\'s world position fixed')
+}
+
+// ============================================================================
+// 18. MoveArrowTerminal: REPLACES a terminal's binding -- writes a NEW
+//     binding when `binding` is given (even over an existing one for that
+//     terminal), and CLEARS it (deletes the row) when omitted.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { kind: 'geo', props: { w: 50, h: 50 } }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b', { kind: 'geo', x: 200, props: { w: 50, h: 50 } }) })
+  editor.apply({
+    type: 'StartArrow',
+    shape: shape('shape:arrow', { kind: 'arrow', x: 25, y: 25, props: { end: { x: 175, y: 0 } } }),
+    fromBinding: { targetId: 'shape:a', anchor: { nx: 0.5, ny: 0.5 } },
+  })
+  assert.equal(editor.doc.listBindings().length, 1, 'sanity: one start binding written')
+
+  // Re-bind the start terminal to shape:b instead.
+  editor.apply({
+    type: 'MoveArrowTerminal',
+    id: 'shape:arrow',
+    terminal: 'start',
+    point: { x: 225, y: 25 },
+    binding: { targetId: 'shape:b', anchor: { nx: 0.5, ny: 0.5 } },
+  })
+  let bindings = editor.doc.listBindings()
+  assert.equal(bindings.length, 1, 'still exactly one start binding -- old replaced, not appended')
+  assert.equal(bindings[0]!.toId, 'shape:b', 'now bound to the new target')
+
+  // Drag it off onto empty canvas: binding omitted -> cleared entirely.
+  editor.apply({ type: 'MoveArrowTerminal', id: 'shape:arrow', terminal: 'start', point: { x: 500, y: 500 } })
+  bindings = editor.doc.listBindings()
+  assert.equal(bindings.length, 0, 'binding omitted: the existing start binding is deleted, none written back')
+  console.log('ok: MoveArrowTerminal replaces a terminal\'s binding, and clears it when none is given')
+}
+
+// ============================================================================
+// 19. MoveArrowTerminal on a vanished arrow is a total no-op -- no props
+//     write, no binding write, matching CompleteArrow's own tolerance.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:target', { kind: 'geo', props: { w: 50, h: 50 } }) })
+  editor.apply({ type: 'StartArrow', shape: shape('shape:arrow', { kind: 'arrow' }) })
+  editor.apply({ type: 'DeleteShapes', ids: ['shape:arrow'] })
+
+  editor.apply({
+    type: 'MoveArrowTerminal', id: 'shape:arrow', terminal: 'end', point: { x: 10, y: 10 },
+    binding: { targetId: 'shape:target', anchor: { nx: 0.5, ny: 0.5 } },
+  })
+  assert.equal(editor.doc.listBindings().length, 0, 'no dangling binding for a vanished arrow')
+  console.log('ok: MoveArrowTerminal on a vanished arrow is a total no-op')
+}
+
 console.log('ok: canvas-editor editor + intents')
