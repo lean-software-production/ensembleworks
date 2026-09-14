@@ -10,7 +10,7 @@
       "version": "0.1.0",
       "dependencies": {
         "@ensembleworks/canvas-model": "*",
-        "loro-crdt": "1.13.6",
+        "loro-crdt": "1.16.1",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -72,7 +72,7 @@
       "dependencies": {
         "@ensembleworks/canvas-doc": "*",
         "@ensembleworks/canvas-model": "*",
-        "loro-crdt": "1.13.6",
+        "loro-crdt": "1.16.1",
       },
       "devDependencies": {
         "@types/node": "^22.0.0",
@@ -890,7 +890,7 @@
 
     "loglevel": ["loglevel@1.9.2", "", {}, "sha512-HgMmCqIJSAKqo68l0rS2AanEWfkxaZ5wNiEFb5ggm08lDs9Xl2KxBlX3PTcaD2chBM1gXAYf491/M2Rv8Jwayg=="],
 
-    "loro-crdt": ["loro-crdt@1.13.6", "", {}, "sha512-OsnKW64J+1XdCMafAqR+aASn/wQEgDzwcDwu6dDOVSxxbLPFgnU6LX8ja+hd5PnEcT+kuz9eXSagvlYXsRbQIw=="],
+    "loro-crdt": ["loro-crdt@1.16.1", "", {}, "sha512-olUkbQEjeeE78Kx6BknYrpbaX43wxRAycoiLZUSLVcMFKMSZ8RxPfp244kNVQEM8MQfgkbnwrNOaHU/yUb5Ncg=="],
 
     "lru-cache": ["lru-cache@5.1.1", "", { "dependencies": { "yallist": "^3.0.2" } }, "sha512-KpNARQA3Iwv+jTA0utUVVbrh+Jlrr1Fv0e56GGzAFOXN7dk/FviaDW8LHmK52DlcH4WP2n6gI8vN1aesBFgo9w=="],
 
