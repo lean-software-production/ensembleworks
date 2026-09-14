@@ -268,10 +268,30 @@ interface DraggingArrowTerminal {
   readonly mode: 'draggingArrowTerminal'
   readonly arrowId: string
   readonly terminal: 'start' | 'end'
+  /** Gesture-start pre-image (cancellation parity with Resizing/Rotating's
+   * `startShapes` above) — the terminal's own ROUTED world point and
+   * whatever binding currently occupies it, both captured in
+   * onPointingArrow BEFORE this gesture's own first MoveArrowTerminal
+   * intent. That first intent unconditionally clears the binding (the
+   * LIVE-PREVIEW, NO-SPECULATIVE-BINDING behavior documented below), so an
+   * abandoned gesture needs its own record of what to put back.
+   * cancelActiveTool (tool-loop.ts) replays these straight through one
+   * MoveArrowTerminal(point: startPoint, binding: startBinding) — the same
+   * intent this drag already emits every move, which already knows how to
+   * both re-land a point and delete-then-optionally-restore a binding in
+   * one write; no new intent type needed. */
+  readonly startPoint: Point
+  readonly startBinding?: ArrowBinding
 }
 interface DraggingArrowBend {
   readonly mode: 'draggingArrowBend'
   readonly arrowId: string
+  /** Gesture-start pre-image, same cancellation-parity purpose as above:
+   * the whole arrow shape as it stood before this gesture's first
+   * UpdateProps(bend). cancelActiveTool restores it via one CreateShape,
+   * the same whole-shape revert convention Resizing/Rotating's startShapes
+   * already established. */
+  readonly startShape: Shape
 }
 
 export type TransformState = Idle | Pointing | Resizing | Rotating | PointingArrow | DraggingArrowTerminal | DraggingArrowBend
@@ -462,7 +482,10 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
       if (!shape) return { state: IDLE, intents: [] } // vanished mid-gesture — nothing to bend
       const routed = routeArrow(ctx.snapshot(), shape, ctx.snapshot().bindings)
       const bend = bendFromPoint(routed.start, routed.end, worldOf(here))
-      return { state: { mode: 'draggingArrowBend', arrowId: state.arrowId }, intents: [{ type: 'UpdateProps', id: state.arrowId, props: { bend } }] }
+      // startShape captured HERE, before this same move's own first
+      // UpdateProps below — same pre-mutation-read discipline as onPointing's
+      // captureStartShapes (see its doc comment).
+      return { state: { mode: 'draggingArrowBend', arrowId: state.arrowId, startShape: shape }, intents: [{ type: 'UpdateProps', id: state.arrowId, props: { bend } }] }
     }
 
     // start/end: LIVE PREVIEW, NO SPECULATIVE BINDING (arrow.ts's own
@@ -476,10 +499,25 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
     // same "one binding-writing moment" reasoning as arrow.ts's own module
     // header. SetHover previews the prospective target while dragging
     // (Hover.tsx already renders whatever `editorState.hover` holds).
+    const shape = ctx.snapshot().byId.get(state.arrowId)
+    if (!shape) return { state: IDLE, intents: [] } // vanished mid-gesture — nothing to drag
+    // Gesture-start pre-image (see DraggingArrowTerminal's own doc comment):
+    // the terminal's CURRENT routed point (matches arrowHandles' own
+    // world-space, routed — not raw props — convention) and whatever
+    // binding presently occupies it, both read BEFORE this move's own
+    // first MoveArrowTerminal clears the binding below.
+    const routedAtStart = routeArrow(ctx.snapshot(), shape, ctx.snapshot().bindings)
+    const startPoint = state.handle === 'start' ? routedAtStart.start : routedAtStart.end
+    const bindingId = `binding:${state.arrowId}-${state.handle}`
+    const existingBinding = ctx.snapshot().bindings.find((b) => b.id === bindingId)
+    const startBinding: ArrowBinding | undefined = existingBinding
+      ? { targetId: existingBinding.toId, anchor: (existingBinding.props as { anchor: { nx: number; ny: number } }).anchor }
+      : undefined
+
     const worldPt = worldOf(here)
     const candidate = arrowBindingCandidate(worldPt, state.arrowId)
     return {
-      state: { mode: 'draggingArrowTerminal', arrowId: state.arrowId, terminal: state.handle },
+      state: { mode: 'draggingArrowTerminal', arrowId: state.arrowId, terminal: state.handle, startPoint, startBinding },
       intents: [
         { type: 'SetHover', id: candidate?.targetId ?? null },
         { type: 'MoveArrowTerminal', id: state.arrowId, terminal: state.handle, point: worldPt },
