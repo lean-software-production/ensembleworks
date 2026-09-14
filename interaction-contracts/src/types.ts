@@ -270,6 +270,18 @@ export interface Obs {
    * adapter throws 'not observable at fsm level', matching
    * textSelectionSpans'/paintOrder's established throw-stub pattern. */
   labelOverflow(id: string): boolean
+  /** The id of the shape currently shown as HOVERED (a prospective-target
+   * preview, distinct from `selectedShapeIds()`), or null when nothing is.
+   * arrow-handles task (gap 3) — proves a candidate binding target is
+   * previewed WHILE dragging an arrow terminal (or drawing a new arrow),
+   * not just resolved silently at release. Available at BOTH levels: the
+   * FSM adapter reads `editor.get().hover` directly (the same field
+   * `SetHover` writes — editor.ts's EditorState); the browser adapter reads
+   * the rendered hover indicator's `data-shape-id` (canvas-react's
+   * Hover.tsx renders `data-overlay="hover-indicator"
+   * data-shape-id={shape.id}` — see Selection.tsx's shared
+   * `shapeOutlineNode`), or null when no such element is mounted. */
+  hoveredShapeId(): string | null
 }
 
 /** A contract declaration = data. */

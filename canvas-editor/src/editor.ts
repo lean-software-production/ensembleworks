@@ -773,6 +773,62 @@ export class Editor {
         return { state, docMutated: true, stateChanged: false, undo, redo }
       }
 
+      case 'MoveArrowTerminal': {
+        // Same vanished-arrow tolerance as CompleteArrow above: a skipped
+        // intent writes neither the point nor the binding, so a raced
+        // remote delete can never leave a dangling binding behind.
+        const shape = this.doc.getShape(intent.id)
+        if (!shape) return { state, docMutated: false, stateChanged: false }
+
+        // Full-shape pre-image (same putShape-as-universal-inverse
+        // convention as every other case in this switch) — captured BEFORE
+        // any mutation below, so it already holds the OLD x/y and props.
+        const undo: InverseOp[] = [{ op: 'putShape', shape }]
+
+        let nextShape: Shape
+        if (intent.terminal === 'start') {
+          // The arrow's x/y IS its start point (StartArrow's convention).
+          // Re-express props.end so the END terminal's WORLD position is
+          // unchanged by moving start — end = oldWorldEnd - newStart.
+          const oldEnd = (shape.props as { end?: Point })?.end ?? { x: 0, y: 0 }
+          const oldWorldEnd = { x: shape.x + oldEnd.x, y: shape.y + oldEnd.y }
+          const newEnd = { x: oldWorldEnd.x - intent.point.x, y: oldWorldEnd.y - intent.point.y }
+          nextShape = { ...shape, x: intent.point.x, y: intent.point.y, props: { ...shape.props, end: newEnd } }
+        } else {
+          const end = { x: intent.point.x - shape.x, y: intent.point.y - shape.y }
+          nextShape = { ...shape, props: { ...shape.props, end } }
+        }
+        this.doc.putShape(nextShape)
+        const redo: InverseOp[] = [{ op: 'putShape', shape: nextShape }]
+
+        // REPLACE this terminal's binding wholesale: delete whatever binding
+        // (if any) currently occupies `binding:<id>-<terminal>` — same id
+        // convention StartArrow/CompleteArrow use — then write the new one
+        // iff `intent.binding` is present. Omitted `binding` therefore
+        // CLEARS it (see the intent's own doc comment for why this must be
+        // possible, unlike StartArrow/CompleteArrow's write-only bindings).
+        const bindingId = `binding:${intent.id}-${intent.terminal}`
+        const existing = this.doc.listBindings().find((b) => b.id === bindingId)
+        if (existing) {
+          this.doc.deleteBinding(bindingId)
+          undo.unshift({ op: 'putBinding', binding: existing })
+          redo.push({ op: 'deleteBinding', id: bindingId })
+        }
+        if (intent.binding) {
+          const binding: Binding = {
+            id: bindingId as any,
+            fromId: intent.id as any,
+            toId: intent.binding.targetId as any,
+            props: { terminal: intent.terminal, anchor: intent.binding.anchor },
+            meta: {},
+          }
+          this.doc.putBinding(binding)
+          undo.unshift({ op: 'deleteBinding', id: binding.id })
+          redo.push({ op: 'putBinding', binding })
+        }
+        return { state, docMutated: true, stateChanged: false, undo, redo }
+      }
+
       // Create a page (Task E3, D-3): the caller (the switcher UI) mints the
       // full Page record and carries it verbatim, the same posture as
       // CreateShape above. Does NOT touch currentPageId — a caller that

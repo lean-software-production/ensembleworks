@@ -333,6 +333,28 @@ export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: Too
 			for (const shape of transform.startShapes) {
 				if (editor.doc.getShape(shape.id)) intents.push({ type: 'CreateShape', shape })
 			}
+		} else if (transform.mode === 'draggingArrowTerminal') {
+			// Abandoned mid-drag arrow terminal (validator-reported gap): the
+			// live-preview mid-drag write already cleared this terminal's
+			// binding (transform.ts's onPointingArrow doc comment), so
+			// restoring just the point would leave a previously-bound arrow
+			// permanently unbound. One MoveArrowTerminal back to the
+			// gesture-start point + binding both re-lands the terminal and
+			// restores (or re-clears) the binding in the same write
+			// MoveArrowTerminal already makes for every other move of this
+			// same gesture -- see transform.ts's DraggingArrowTerminal doc
+			// comment. TOLERANT: skip a vanished arrow, same posture as the
+			// resize/rotate revert above.
+			if (editor.doc.getShape(transform.arrowId)) {
+				intents.push({ type: 'SetHover', id: null })
+				intents.push({ type: 'MoveArrowTerminal', id: transform.arrowId, terminal: transform.terminal, point: transform.startPoint, binding: transform.startBinding })
+			}
+		} else if (transform.mode === 'draggingArrowBend') {
+			// Abandoned mid-drag arrow bend: props.bend is mutated in place by
+			// UpdateProps on every move (no threshold-gated single commit), so
+			// revert via the SAME whole-shape CreateShape convention the
+			// resize/rotate branch above uses for its own startShapes.
+			if (editor.doc.getShape(transform.arrowId)) intents.push({ type: 'CreateShape', shape: transform.startShape })
 		}
 	}
 	// hand: never creates OR mutates a shape (pans the camera only) —

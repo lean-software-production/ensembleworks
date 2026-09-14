@@ -259,6 +259,11 @@ function makeObs(
       // level:'fsm' before calling runContractFsm).
       throw new Error('not observable at fsm level')
     },
+    hoveredShapeId() {
+      // arrow-handles task — a doc/editor-state read, like editingShape:
+      // no throw-stub, both adapters are REAL.
+      return editor.get().hover
+    },
   }
 }
 

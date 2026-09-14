@@ -23,6 +23,10 @@ function geoShape(id: string, x: number, y: number, w = 100, h = 100): Shape {
 	return { id, kind: 'geo', parentId: 'page:p', index: 'a1', x, y, rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w, h } } as Shape
 }
 
+function arrowShape(id: string, x: number, y: number, props: Record<string, unknown> = {}): Shape {
+	return { id, kind: 'arrow', parentId: 'page:p', index: 'a1', x, y, rotation: 0, isLocked: false, opacity: 1, meta: {}, props } as Shape
+}
+
 function setup() {
 	const doc = LoroCanvasDoc.create({ peerId: 1n })
 	doc.putPage({ id: 'page:p', name: 'P' })
@@ -352,6 +356,119 @@ function setup() {
 	assert.equal(reverted2.x, before2.x)
 
 	console.log('ok: tool-loop — cancelActiveTool skips a shape that vanished mid-gesture, still restoring the survivors (Task B5 tolerance)')
+}
+
+// ============================================================================
+// 4f. cancelActiveTool COVERAGE — transform's ARROW TERMINAL leg
+//    ('draggingArrowTerminal', reached only via the select composite's lone-
+//    selected-arrow branch): validator-reported gap, RED against the
+//    unfixed code — cancelActiveTool's 'select' branch only reverts
+//    'resizing'/'rotating', so an in-flight terminal drag fell through the
+//    switch with ZERO revert intents, leaving the terminal stranded exactly
+//    where Escape/blur/pointercancel/a tool switch caught it. Unbound arrow
+//    case first (no pre-existing binding to lose) — the bound case (the
+//    validator's actual repro) is 4g below.
+// ============================================================================
+{
+	const { editor, ctx } = setup()
+	const tools = createToolSet(ctx)
+	let states = createInitialToolStates(tools)
+	editor.doc.putShape(arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } }))
+	editor.doc.commit()
+	editor.apply({ type: 'SetSelection', ids: ['shape:arrow'] })
+
+	// Grab the END handle (routed at world (100,0), camera identity) and drag
+	// it well past crossedThreshold's gate, onto empty canvas.
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 100, y: 0, buttons: 1, modifiers: MODS, t: 0 })
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 300, y: 300, buttons: 1, modifiers: MODS, t: 16 })
+	assert.equal((states.select as SelectAndTransformState).transform.mode, 'draggingArrowTerminal', 'precondition: transform is mid terminal-drag')
+	const midDrag = editor.doc.getShape('shape:arrow')!
+	assert.deepEqual((midDrag.props as { end?: unknown }).end, { x: 300, y: 300 }, 'precondition: the drag actually moved the end terminal')
+
+	const cancelled = cancelActiveTool(tools, states, 'select', editor)
+	assert.ok(cancelled.intents.length > 0, 'cancelling a mid terminal-drag emits a revert intent (currently emits none — RED)')
+	assert.deepEqual(cancelled.states, createInitialToolStates(tools), 'a terminal-drag cancel resets the whole composite back to pristine initialState')
+
+	editor.applyAll(cancelled.intents)
+	const reverted = editor.doc.getShape('shape:arrow')!
+	assert.deepEqual((reverted.props as { end?: unknown }).end, { x: 100, y: 0 }, 'end terminal reverted to its exact gesture-start point')
+	assert.equal(editor.doc.listBindings().length, 0, 'still unbound after the revert (never speculatively bound to whatever was under the cancel point)')
+
+	console.log('ok: tool-loop — cancelActiveTool reverts a mid-drag UNBOUND arrow terminal to its gesture-start point')
+}
+
+// ============================================================================
+// 4g. cancelActiveTool COVERAGE — transform's ARROW TERMINAL leg, BOUND
+//    case (the validator's exact repro): an arrow's end is bound to a geo
+//    target; dragging the end handle away and cancelling must restore BOTH
+//    the terminal's point AND the binding — MoveArrowTerminal's own
+//    mid-drag write unconditionally clears the binding for its live-preview
+//    behavior (transform.ts's onPointingArrow doc comment), so a naive
+//    "just put the shape back" revert would leave the arrow permanently
+//    unbound even though its geometry looks restored.
+// ============================================================================
+{
+	const { editor, ctx } = setup()
+	const tools = createToolSet(ctx)
+	let states = createInitialToolStates(tools)
+	editor.doc.putShape(geoShape('shape:target', 200, 0, 100, 100)) // center (250, 50)
+	editor.doc.putShape(arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } }))
+	editor.doc.putBinding({ id: 'binding:shape:arrow-end' as any, fromId: 'shape:arrow' as any, toId: 'shape:target' as any, props: { terminal: 'end', anchor: { nx: 0.5, ny: 0.5 } }, meta: {} })
+	editor.doc.commit()
+	editor.apply({ type: 'SetSelection', ids: ['shape:arrow'] })
+	assert.equal(editor.doc.listBindings().length, 1, 'precondition: the end terminal starts bound to shape:target')
+
+	// Grab the end handle at its ROUTED (clipped-to-boundary) position — the
+	// ray from start (0,0) toward shape:target's center (250,50) clips its
+	// box [200,0]x[300,100] at (200,40) (arrowHandles/routeArrow's own
+	// computation, not a hand geometry derivation here).
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 200, y: 40, buttons: 1, modifiers: MODS, t: 0 })
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 500, y: 500, buttons: 1, modifiers: MODS, t: 16 })
+	assert.equal((states.select as SelectAndTransformState).transform.mode, 'draggingArrowTerminal', 'precondition: transform is mid terminal-drag')
+	assert.equal(editor.doc.listBindings().length, 0, 'precondition: the live-preview mid-drag write already cleared the binding')
+
+	const cancelled = cancelActiveTool(tools, states, 'select', editor)
+	editor.applyAll(cancelled.intents)
+
+	const bindings = editor.doc.listBindings()
+	assert.equal(bindings.length, 1, 'the binding is restored after cancelling the abandoned drag (currently stays at 0 — RED)')
+	assert.equal(bindings[0]!.toId, 'shape:target')
+	const reverted = editor.doc.getShape('shape:arrow')!
+	assert.deepEqual((reverted.props as { end?: unknown }).end, { x: 200, y: 40 }, 'end terminal reverted to its exact gesture-start (routed, clipped) point')
+
+	console.log('ok: tool-loop — cancelActiveTool restores BOTH point and binding after abandoning a bound arrow terminal drag')
+}
+
+// ============================================================================
+// 4h. cancelActiveTool COVERAGE — transform's ARROW BEND leg
+//    ('draggingArrowBend'): same missing-branch gap as 4f/4g above, for the
+//    mid handle. props.bend is mutated in place by UpdateProps on every
+//    pointermove (no threshold-gated single commit) — cancel must revert it
+//    to its exact gesture-start value via the same whole-shape CreateShape
+//    convention B5 established for resize/rotate.
+// ============================================================================
+{
+	const { editor, ctx } = setup()
+	const tools = createToolSet(ctx)
+	let states = createInitialToolStates(tools)
+	editor.doc.putShape(arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } }))
+	editor.doc.commit()
+	editor.apply({ type: 'SetSelection', ids: ['shape:arrow'] })
+
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointerdown', x: 50, y: 0, buttons: 1, modifiers: MODS, t: 0 })
+	states = dispatchToActiveTool(tools, states, 'select', editor, { type: 'pointermove', x: 50, y: 30, buttons: 1, modifiers: MODS, t: 16 })
+	assert.equal((states.select as SelectAndTransformState).transform.mode, 'draggingArrowBend', 'precondition: transform is mid bend-drag')
+	const midDrag = editor.doc.getShape('shape:arrow')!
+	assert.equal((midDrag.props as { bend?: number }).bend, 30, 'precondition: the drag actually bent the arrow')
+
+	const cancelled = cancelActiveTool(tools, states, 'select', editor)
+	assert.ok(cancelled.intents.length > 0, 'cancelling a mid bend-drag emits a revert intent (currently emits none — RED)')
+	editor.applyAll(cancelled.intents)
+
+	const reverted = editor.doc.getShape('shape:arrow')!
+	assert.equal((reverted.props as { bend?: number }).bend, undefined, 'bend reverted to its exact gesture-start value (unset)')
+
+	console.log('ok: tool-loop — cancelActiveTool reverts a mid bend-drag to its gesture-start bend value')
 }
 
 // ============================================================================

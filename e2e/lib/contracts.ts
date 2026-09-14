@@ -314,6 +314,23 @@ async function sampleLabelOverflow(page: Page, shapeIds: readonly string[]): Pro
   }, shapeIds)
 }
 
+// arrow-handles task's Obs.hoveredShapeId() doc comment (interaction-
+// contracts/src/types.ts) names this exact mechanism for the browser
+// adapter: read the rendered hover indicator's `data-shape-id` off the DOM
+// (canvas-react's Hover.tsx renders `data-overlay="hover-indicator"
+// data-shape-id={shape.id}`), null when no such element is mounted. A DOM
+// read (not a `window.__ew` doc read, unlike listShapeIds/bindings above):
+// `hover` is editor-LOCAL view state (editor.ts's EditorState), not part of
+// the CRDT doc `__ew.doc` exposes — the rendered indicator IS the source of
+// truth this adapter has for it, same posture as sampleEditingShape's own
+// DOM-only read for `editingId`.
+async function sampleHoveredId(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const el = document.querySelector('[data-overlay="hover-indicator"]')
+    return el ? el.getAttribute('data-shape-id') : null
+  })
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -384,6 +401,7 @@ interface ActorSample {
   readonly bindings: Readonly<Record<string, string | null>>
   readonly shapeIds: readonly string[]
   readonly labelOverflow: Readonly<Record<string, boolean>>
+  readonly hoveredId: string | null
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -434,7 +452,8 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // — reuses styleIds (seeded scene ids ∪ current selection) rather than a
   // separate sample pass.
   const labelOverflow = await sampleLabelOverflow(page, styleIds)
-  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow }
+  const hoveredId = await sampleHoveredId(page)
+  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -488,6 +507,7 @@ function pageObs(
     shapeBindingTarget: (fromId: string, terminal: 'start' | 'end') => sample.bindings[`${fromId}|${terminal}`] ?? null,
     listShapeIds: () => sample.shapeIds,
     labelOverflow: (id: string) => sample.labelOverflow[id] ?? false,
+    hoveredShapeId: () => sample.hoveredId,
   }
 }
 

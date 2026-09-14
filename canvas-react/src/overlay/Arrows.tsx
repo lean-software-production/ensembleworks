@@ -171,13 +171,29 @@ interface ArrowStyle {
   readonly strokeDasharray: string | undefined
   readonly headStart: string
   readonly headEnd: string
+  /** arrowheadGlyph's scale multiplier — see arrowStyle's doc comment. */
+  readonly headScale: number
 }
 
 /** Resolves an arrow shape's props into concrete visual values, reusing
  * GeoShape.tsx's color/size/dash tables. Absent/unrecognized props fall
  * back to this file's OWN pre-existing defaults (see module comment above),
- * not GeoShape's. */
-function arrowStyle(shape: Shape): ArrowStyle {
+ * not GeoShape's.
+ *
+ * ZOOM-STABLE SIZING (gap 5, checked against v1 source: ArrowShapeUtil.tsx's
+ * SVG lives inside tldraw's own world-space-transformed shape container, so
+ * its stroke-width/arrowhead — both defined in the shape's own LOCAL units —
+ * scale with the camera for free, the same way GeoShape.tsx's stroke does
+ * here via WorldLayer's CSS transform). This overlay is SCREEN-space (module
+ * header: "no zoom division is needed" for HANDLE/SELECTION chrome — but an
+ * ARROW's stroke is DOCUMENT CONTENT, not UI chrome, so that constant-
+ * screen-size posture is wrong for it specifically) — `zoom` (camera.z) is
+ * applied here explicitly so a `strokeWidth` resolved from STROKE_WIDTH_PX
+ * (or the absent-prop default) grows/shrinks with the camera exactly like a
+ * geo/note shape's own stroke does, and `strokeDasharray` is computed from
+ * that SAME zoomed width so the dash pattern scales proportionally too, not
+ * just the line thickness. */
+function arrowStyle(shape: Shape, zoom: number): ArrowStyle {
   const props = shape.props as Record<string, unknown>
 
   const stroke = typeof props.color === 'string' && props.color in GEO_COLORS
@@ -185,12 +201,15 @@ function arrowStyle(shape: Shape): ArrowStyle {
     : ARROW_STROKE
 
   const size = typeof props.size === 'string' && props.size in STROKE_WIDTH_PX ? props.size : undefined
-  const strokeWidth = size ? STROKE_WIDTH_PX[size] : DEFAULT_STROKE_WIDTH_PX
+  const baseStrokeWidth = size ? STROKE_WIDTH_PX[size] : DEFAULT_STROKE_WIDTH_PX
+  const strokeWidth = baseStrokeWidth * zoom
 
   const dash = typeof props.dash === 'string' && DASH_VALUES.has(props.dash) ? props.dash : undefined
   // dash:'none' -> no stroke element (see ArrowStyle.stroke doc); otherwise
   // reuse dashArray() for dashed/dotted, undefined (a plain solid line) for
-  // draw/solid/absent — the exact old rendering when dash is unset.
+  // draw/solid/absent — the exact old rendering when dash is unset. Computed
+  // from the ALREADY-ZOOMED strokeWidth (not baseStrokeWidth) so the dash
+  // pattern scales with the camera exactly like the line itself.
   const strokeDasharray = dash ? dashArray(dash, strokeWidth) : undefined
 
   const headStart = typeof props.arrowheadStart === 'string' && ARROWHEAD_VALUES.has(props.arrowheadStart)
@@ -200,7 +219,17 @@ function arrowStyle(shape: Shape): ArrowStyle {
     ? props.arrowheadEnd
     : DEFAULT_ARROWHEAD_END
 
-  return { stroke: dash === 'none' ? 'none' : stroke, strokeWidth, strokeDasharray, headStart, headEnd }
+  // Glyph scale factor for arrowheadGlyph's ARROWHEAD_LENGTH_PX/HALF_WIDTH_PX
+  // baselines — proportional to the (already-zoomed) strokeWidth, matching
+  // v1's own "arrowhead sized by stroke width and scale" contract (arrow-
+  // route.ts... no, arrowheads.ts's getArrowheadPathForType(info, side,
+  // strokeWidth) signature — the arrowhead genuinely takes strokeWidth as an
+  // input up there too). 1 at the default size+z=1 (baseStrokeWidth ===
+  // DEFAULT_STROKE_WIDTH_PX, zoom === 1), so every pre-existing default-style
+  // arrow renders at EXACTLY the old fixed 10px/4px glyph size.
+  const headScale = strokeWidth / DEFAULT_STROKE_WIDTH_PX
+
+  return { stroke: dash === 'none' ? 'none' : stroke, strokeWidth, strokeDasharray, headStart, headEnd, headScale }
 }
 
 /** The SVG path `d` string for a routed arrow's screen-space segment —
@@ -222,21 +251,148 @@ export function pathString(start: Point, end: Point, mid?: Point): string {
  * documented degenerate case): `Math.atan2(0, 0)` is well-defined (0, not
  * NaN), so this still returns a finite (if visually meaningless) triangle,
  * never throws or emits NaN into the SVG. */
-export function arrowheadPoints(tail: Point, tip: Point): [Point, Point, Point] {
+export function arrowheadPoints(tail: Point, tip: Point, scale = 1): [Point, Point, Point] {
   const angle = Math.atan2(tip.y - tail.y, tip.x - tail.x)
   const cos = Math.cos(angle)
   const sin = Math.sin(angle)
-  const backX = tip.x - ARROWHEAD_LENGTH_PX * cos
-  const backY = tip.y - ARROWHEAD_LENGTH_PX * sin
+  const backX = tip.x - ARROWHEAD_LENGTH_PX * scale * cos
+  const backY = tip.y - ARROWHEAD_LENGTH_PX * scale * sin
   // Perpendicular to the tangent, same 90°-rotation convention geometry.ts
   // documents ((x,y) -> (-y,x)) — screen space, not world space, since these
   // points are already converted; the convention is the same rotation either
   // way, just applied to a different vector.
   const perpX = -sin
   const perpY = cos
-  const left: Point = { x: backX + ARROWHEAD_HALF_WIDTH_PX * perpX, y: backY + ARROWHEAD_HALF_WIDTH_PX * perpY }
-  const right: Point = { x: backX - ARROWHEAD_HALF_WIDTH_PX * perpX, y: backY - ARROWHEAD_HALF_WIDTH_PX * perpY }
+  const left: Point = { x: backX + ARROWHEAD_HALF_WIDTH_PX * scale * perpX, y: backY + ARROWHEAD_HALF_WIDTH_PX * scale * perpY }
+  const right: Point = { x: backX - ARROWHEAD_HALF_WIDTH_PX * scale * perpX, y: backY - ARROWHEAD_HALF_WIDTH_PX * scale * perpY }
   return [tip, left, right]
+}
+
+// ============================================================================
+// ARROWHEAD GLYPH VARIANTS (arrow-handles task, gap 4): canvas-model's
+// ARROWHEAD enum (shape.ts) types 9 values — 'arrow', 'triangle', 'square',
+// 'dot', 'pipe', 'diamond', 'inverted', 'bar', 'none' — but until this task
+// every non-'none' value rendered the SAME plain filled triangle
+// (arrowheadPoints above). This ports tldraw's real per-type geometry
+// (node_modules/tldraw/src/lib/shapes/arrow/arrowheads.ts —
+// getArrowhead/getTriangleHead/getInvertedTriangleHead/getDotHead/
+// getDiamondHead/getSquareHead/getBarHead), adapted from that file's WORLD-
+// space {point, int} (a terminal + a second point pulled back toward the
+// other terminal) to this file's existing SCREEN-space {tail, tip}
+// convention — `int` here is a point pulled back from `tip` TOWARD `tail`
+// by a `len` derived from `scale` (see `arrowheadBase` below), rather than
+// tldraw's own `clamp(compareLength / 5, strokeWidth, strokeWidth * 3)`
+// (OURS, documented simplification: this file already computes `scale`
+// from strokeWidth for the zoom/size-stable sizing fix — gap 5 — so reusing
+// IT here, instead of re-deriving tldraw's own per-terminal clamp formula,
+// is one fewer independently-tuned constant, at the cost of not being a
+// byte-identical port).
+//
+// 'pipe' — CHECKED AGAINST SOURCE, not assumed: `ARROWHEAD` is a valid
+// tlschema enum member (the installed tlschema package's shapes/
+// TLArrowShape.ts:68) but
+// `getArrowheadPathForType`'s switch (arrowheads.ts) has NO 'pipe' case and
+// no default arm either — the switch simply falls through to the function's
+// trailing `return ''`, an EMPTY path string. tldraw's real shipped renderer
+// therefore draws literally nothing for `arrowhead: 'pipe'` — this is not a
+// dead/unused enum value id happened to skip; it is a value the shipped
+// product accepts but renders invisibly. This file matches that exactly
+// (`'pipe'` and `'none'` both resolve to `null` below) rather than inventing
+// a plausible-looking pipe glyph tldraw itself does not have.
+const HALF_PI = Math.PI / 2
+
+function rotVec(v: Point, angle: number): Point {
+  const c = Math.cos(angle), s = Math.sin(angle)
+  return { x: v.x * c - v.y * s, y: v.x * s + v.y * c }
+}
+function rotAround(p: Point, center: Point, angle: number): Point {
+  const d = { x: p.x - center.x, y: p.y - center.y }
+  const r = rotVec(d, angle)
+  return { x: center.x + r.x, y: center.y + r.y }
+}
+function lerpPt(a: Point, b: Point, t: number): Point {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
+}
+
+/** `point` = the visible terminal (`tip`); `int` = a point pulled back from
+ * it toward `tail` by `ARROWHEAD_LENGTH_PX * scale` — tldraw's own {point,
+ * int} pair (see module comment above), degenerate zero-length tail->tip
+ * falling back to `int === point` (never NaN), same posture as
+ * `arrowheadPoints`'s own degenerate-tip note. */
+function arrowheadBase(tail: Point, tip: Point, scale: number): { point: Point; int: Point } {
+  const len = ARROWHEAD_LENGTH_PX * scale
+  const dx = tip.x - tail.x, dy = tip.y - tail.y
+  const dist = Math.hypot(dx, dy)
+  if (dist === 0) return { point: tip, int: tip }
+  const ux = -dx / dist, uy = -dy / dist // unit vector from tip TOWARD tail
+  return { point: tip, int: { x: tip.x + ux * len, y: tip.y + uy * len } }
+}
+
+/** One rendered glyph: either a filled/stroked path, or (dot) a circle.
+ * `fill: null` means "stroke only, no fill" (the 'arrow'/'bar' open-line
+ * variants) — mirrors ArrowStyle.stroke's own `'none'` sentinel convention
+ * elsewhere in this file. */
+type ArrowheadGlyph = { readonly kind: 'path'; readonly d: string; readonly filled: boolean } | { readonly kind: 'circle'; readonly cx: number; readonly cy: number; readonly r: number } | null
+
+function arrowheadGlyph(type: string, tail: Point, tip: Point, scale: number): ArrowheadGlyph {
+  if (type === 'none' || type === 'pipe') return null // see module comment: 'pipe' is real-but-invisible in tldraw too
+  const { point, int } = arrowheadBase(tail, tip, scale)
+  const pt = (p: Point) => `${p.x} ${p.y}`
+  switch (type) {
+    case 'triangle': {
+      const PL = rotAround(int, point, Math.PI / 6)
+      const PR = rotAround(int, point, -Math.PI / 6)
+      return { kind: 'path', d: `M ${pt(PL)} L ${pt(PR)} L ${pt(point)} Z`, filled: true }
+    }
+    case 'inverted': {
+      const d = { x: (int.x - point.x) / 2, y: (int.y - point.y) / 2 }
+      const PL = { x: point.x + rotVec(d, HALF_PI).x, y: point.y + rotVec(d, HALF_PI).y }
+      const PR = { x: point.x - rotVec(d, HALF_PI).x, y: point.y - rotVec(d, HALF_PI).y }
+      return { kind: 'path', d: `M ${pt(PL)} L ${pt(int)} L ${pt(PR)} Z`, filled: true }
+    }
+    case 'dot': {
+      const A = lerpPt(point, int, 0.45)
+      const r = Math.hypot(A.x - point.x, A.y - point.y)
+      return { kind: 'circle', cx: A.x, cy: A.y, r }
+    }
+    case 'diamond': {
+      const PB = lerpPt(point, int, 0.75)
+      const PL = rotAround(PB, point, Math.PI / 4)
+      const PR = rotAround(PB, point, -Math.PI / 4)
+      const mid = lerpPt(PL, PR, 0.5)
+      const PQ = { x: 2 * mid.x - point.x, y: 2 * mid.y - point.y }
+      return { kind: 'path', d: `M ${pt(PQ)} L ${pt(PR)} L ${pt(point)} L ${pt(PL)} Z`, filled: true }
+    }
+    case 'square': {
+      const PB = lerpPt(point, int, 0.85)
+      const d = { x: (PB.x - point.x) / 2, y: (PB.y - point.y) / 2 }
+      const rd = rotVec(d, HALF_PI)
+      const PL1 = { x: point.x + rd.x, y: point.y + rd.y }
+      const PR1 = { x: point.x - rd.x, y: point.y - rd.y }
+      const PL2 = { x: PB.x + rd.x, y: PB.y + rd.y }
+      const PR2 = { x: PB.x - rd.x, y: PB.y - rd.y }
+      return { kind: 'path', d: `M ${pt(PL1)} L ${pt(PL2)} L ${pt(PR2)} L ${pt(PR1)} Z`, filled: true }
+    }
+    case 'bar': {
+      const d = { x: (int.x - point.x) / 2, y: (int.y - point.y) / 2 }
+      const rd = rotVec(d, HALF_PI)
+      const PL = { x: point.x + rd.x, y: point.y + rd.y }
+      const PR = { x: point.x - rd.x, y: point.y - rd.y }
+      return { kind: 'path', d: `M ${pt(PL)} L ${pt(PR)}`, filled: false }
+    }
+    case 'arrow':
+    default: {
+      // tldraw's real default: an OPEN two-segment chevron (`M PL L point L
+      // PR`, no closing `Z`) — checked against source (arrowheads.ts's
+      // `getArrowhead`), NOT the filled triangle this file rendered for
+      // every arrow before this task. `default` also covers any future/
+      // unrecognized-but-non-'none' value, matching arrowStyle's own
+      // fallback-to-'arrow' resolution below.
+      const PL = rotAround(int, point, Math.PI / 6)
+      const PR = rotAround(int, point, -Math.PI / 6)
+      return { kind: 'path', d: `M ${pt(PL)} L ${pt(point)} L ${pt(PR)}`, filled: false }
+    }
+  }
 }
 
 // Plain inclusive AABB intersection (canvas-model keeps its own equivalent
@@ -277,6 +433,21 @@ function terminalBounds(snapshot: CanvasDocument, arrow: Shape, terminal: 'start
   const localPt: Point = terminal === 'start' ? { x: 0, y: 0 } : ((arrow.props as { end?: Point })?.end ?? { x: 0, y: 0 })
   const p = toWorldPoint(snapshot, arrow, localPt)
   return { minX: p.x, minY: p.y, maxX: p.x, maxY: p.y }
+}
+
+/** Paints one resolved ArrowheadGlyph — a filled/stroked `<path>` or (the
+ * 'dot' type) a `<circle>`. `data-overlay="arrowhead"` on every branch (the
+ * existing per-end presence/count assertions key off this attribute, not
+ * the element tag). `strokeWidth` is passed through for the OPEN variants
+ * ('arrow'/'bar', `filled: false`) — an un-filled path needs a real stroke
+ * to be visible at all, unlike every closed/filled variant. */
+function ArrowheadNode({ glyph, fill, strokeWidth }: { readonly glyph: NonNullable<ReturnType<typeof arrowheadGlyph>>; readonly fill: string; readonly strokeWidth: number }) {
+  if (glyph.kind === 'circle') {
+    return <circle data-overlay="arrowhead" cx={glyph.cx} cy={glyph.cy} r={glyph.r} fill={fill} />
+  }
+  return glyph.filled
+    ? <path data-overlay="arrowhead" d={glyph.d} fill={fill} />
+    : <path data-overlay="arrowhead" d={glyph.d} fill="none" stroke={fill} strokeWidth={strokeWidth} strokeLinejoin="round" strokeLinecap="round" />
 }
 
 export function Arrows({ snapshot, camera, viewportSize, index, routeFn }: ArrowsProps) {
@@ -325,19 +496,20 @@ export function Arrows({ snapshot, camera, viewportSize, index, routeFn }: Arrow
         const startScreen = worldToScreen(camera, routed.start)
         const endScreen = worldToScreen(camera, routed.end)
         const midScreen = routed.mid ? worldToScreen(camera, routed.mid) : undefined
-        const style = arrowStyle(arrow)
+        const style = arrowStyle(arrow, camera.z)
+        const headFill = style.stroke !== 'none' ? style.stroke : ARROW_STROKE
         // End arrowhead: tail is the tangent's "from" point at t=1 (mid for
         // a curve, start for a straight segment — see module header
         // ARROWHEAD ORIENTATION), tip is the visible end point.
         const endTail = midScreen ?? startScreen
-        const [endTip, endLeft, endRight] = arrowheadPoints(endTail, endScreen)
-        // Start arrowhead: the SAME arrowheadPoints(tail, tip) composition,
-        // mirrored — tip is now the visible START point, and tail is the
-        // point one step further along the path FROM start (mid for a
-        // curve, end for a straight segment), so the triangle points
-        // outward at the start end exactly symmetrically to the end one.
+        const endGlyph = style.headEnd !== 'none' ? arrowheadGlyph(style.headEnd, endTail, endScreen, style.headScale) : null
+        // Start arrowhead: the SAME {tail, tip} composition, mirrored — tip
+        // is now the visible START point, and tail is the point one step
+        // further along the path FROM start (mid for a curve, end for a
+        // straight segment), so the glyph points outward at the start end
+        // exactly symmetrically to the end one.
         const startTail = midScreen ?? endScreen
-        const [startTip, startLeft, startRight] = arrowheadPoints(startTail, startScreen)
+        const startGlyph = style.headStart !== 'none' ? arrowheadGlyph(style.headStart, startTail, startScreen, style.headScale) : null
         return (
           <g key={arrow.id} data-overlay="arrow" data-shape-id={arrow.id}>
             {style.stroke !== 'none' && (
@@ -349,26 +521,8 @@ export function Arrows({ snapshot, camera, viewportSize, index, routeFn }: Arrow
                 {...(style.strokeDasharray !== undefined ? { strokeDasharray: style.strokeDasharray } : {})}
               />
             )}
-            {/* Per-type arrowhead GLYPH fidelity (square/dot/pipe/diamond/
-                inverted/bar all drawing their own real shape, not this
-                triangle) is a documented simplification, same posture as
-                GeoShape.tsx's rectangle-fallback for un-special-cased geo
-                variants — only 'none' vs "some arrowhead present" is this
-                task's required behavior. */}
-            {style.headEnd !== 'none' && (
-              <polygon
-                data-overlay="arrowhead"
-                points={`${endTip.x},${endTip.y} ${endLeft.x},${endLeft.y} ${endRight.x},${endRight.y}`}
-                fill={style.stroke !== 'none' ? style.stroke : ARROW_STROKE}
-              />
-            )}
-            {style.headStart !== 'none' && (
-              <polygon
-                data-overlay="arrowhead"
-                points={`${startTip.x},${startTip.y} ${startLeft.x},${startLeft.y} ${startRight.x},${startRight.y}`}
-                fill={style.stroke !== 'none' ? style.stroke : ARROW_STROKE}
-              />
-            )}
+            {endGlyph && <ArrowheadNode glyph={endGlyph} fill={headFill} strokeWidth={style.strokeWidth} />}
+            {startGlyph && <ArrowheadNode glyph={startGlyph} fill={headFill} strokeWidth={style.strokeWidth} />}
           </g>
         )
       })}
