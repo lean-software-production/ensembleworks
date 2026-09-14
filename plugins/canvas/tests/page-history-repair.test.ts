@@ -207,5 +207,9 @@ describe("undoWithRepair / redoWithRepair — the move and the repair are one ca
 });
 
 // The keyboard wiring (Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y -> undoWithRepair /
-// redoWithRepair) lives in the shared canvas-ui session, and is pinned by
-// canvas-editor/src/session/history.test.ts and keyboard.test.ts.
+// redoWithRepair) now lives in canvas-ui's useCanvasSession, which no unit
+// test reaches. What IS covered: canvas-editor/src/session/keyboard.test.ts
+// pins that those keys resolve to the undo/redo commands, and history.test.ts
+// (plus the cases above) pins that the helpers repair what they strand. The
+// step between them, runCommand's undo/redo cases calling the helpers, is
+// checked by the live-bb smoke (Task 8): undo right after creating a page.

@@ -33,6 +33,7 @@ import {
 } from '@ensembleworks/canvas-editor'
 import { encodeClipboard, serializeSelection } from '@ensembleworks/canvas-model'
 import type { CanvasHost } from './host.js'
+import { isKeyTargetInScope } from './keyboard-scope.js'
 import type { StylePanelProps } from './StylePanel.js'
 
 export interface UseCanvasSessionOptions {
@@ -209,6 +210,24 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 		[editor, handleShortcut, dispatchToTool],
 	)
 
+	// Whether the user's last pointerdown or focus landed inside the keyboard
+	// scope. Body-targeted keydowns count as canvas shortcuts only while it is
+	// true (see keyboard-scope.ts). Starts true: the canvas has just mounted,
+	// so it is what the user opened, and nothing else has been touched since.
+	const lastInteractionInScopeRef = useRef(true)
+	useEffect(() => {
+		function onInteraction(e: Event): void {
+			const scope = keyboardScopeRef.current
+			lastInteractionInScopeRef.current = scope !== null && scope.contains(e.target as Node | null)
+		}
+		document.addEventListener('pointerdown', onInteraction, true)
+		document.addEventListener('focusin', onInteraction, true)
+		return () => {
+			document.removeEventListener('pointerdown', onInteraction, true)
+			document.removeEventListener('focusin', onInteraction, true)
+		}
+	}, [keyboardScopeRef])
+
 	// Keydowns delivered outside the viewport (a focused toolbar button, or the
 	// body) never reach the Viewport's own onKeyDown, so a document listener
 	// covers them. It skips editable targets, and skips targets inside the
@@ -220,9 +239,7 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 			const target = e.target as Node | null
 			if (isEditableTarget(target)) return
 			const scope = keyboardScopeRef.current
-			const body = scope?.ownerDocument.body
-			const inScope = target === null || target === body || (scope !== null && scope.contains(target))
-			if (!inScope) return
+			if (!isKeyTargetInScope(target, scope, scope?.ownerDocument.body ?? null, lastInteractionInScopeRef.current)) return
 			const keyEvent: KeyInputEvent = {
 				type: 'keydown',
 				key: e.key,
