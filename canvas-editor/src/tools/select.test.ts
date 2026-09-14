@@ -369,6 +369,144 @@ function setup() {
 }
 
 // ============================================================================
+// 16. Arrow-key nudge (Task keyboard/K1): with a shape selected and the tool
+//    idle, a bare ArrowRight keydown moves the selection by NUDGE_PX (1)
+//    world unit; ArrowLeft/Up/Down move in the expected direction. One
+//    keydown -> exactly one TranslateShapes intent (one undo step per
+//    keypress, matching e2e/goldens/feel.json's nudgePx).
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:a'] })
+  const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
+  const key = (k: string, mods = NEUTRAL) => ({ type: 'keydown' as const, key: k, modifiers: mods, t: 0 })
+
+  const right = tool.onEvent(tool.initialState, key('ArrowRight'))
+  assert.deepEqual(right.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 1, dy: 0 }], 'ArrowRight nudges +1 world unit in x')
+
+  const left = tool.onEvent(tool.initialState, key('ArrowLeft'))
+  assert.deepEqual(left.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: -1, dy: 0 }], 'ArrowLeft nudges -1 world unit in x')
+
+  const down = tool.onEvent(tool.initialState, key('ArrowDown'))
+  assert.deepEqual(down.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 0, dy: 1 }], 'ArrowDown nudges +1 world unit in y')
+
+  const up = tool.onEvent(tool.initialState, key('ArrowUp'))
+  assert.deepEqual(up.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 0, dy: -1 }], 'ArrowUp nudges -1 world unit in y')
+
+  console.log('ok: arrow-key nudge moves the selection by 1 world unit per direction')
+}
+
+// 16b. Arrow keys while a shape is being TEXT-EDITED must NOT nudge it: the
+//    textarea owns arrow keys for caret movement (tldraw parity — arrows in
+//    the rich-text editor never move the shape). Mutant killed: a select tool
+//    that reads only `selection` and ignores `editingId` emits a
+//    TranslateShapes here (the round-2 validator's real-browser repro: shape
+//    drifted 200,120 -> 198,119 while arrowing back to fix a typo).
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:note'] })
+  editor.apply({ type: 'BeginEdit', id: 'shape:note' })
+  assert.equal(editor.get().editingId, 'shape:note', 'precondition: the note is being edited')
+  const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
+  const left = tool.onEvent(tool.initialState, { type: 'keydown' as const, key: 'ArrowLeft', modifiers: NEUTRAL, t: 0 })
+  assert.deepEqual(left.intents, [], 'ArrowLeft while text-editing emits NO TranslateShapes (caret movement only)')
+  console.log('ok: arrow keys never nudge a shape that is being text-edited')
+}
+
+// ============================================================================
+// 17. Shift+arrow nudges by SHIFT_NUDGE_PX (10), matching feel.json's
+//    shiftNudgePx.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:a'] })
+  const SHIFT = { shift: true, alt: false, ctrl: false, meta: false }
+  const key = (k: string) => ({ type: 'keydown' as const, key: k, modifiers: SHIFT, t: 0 })
+
+  const right = tool.onEvent(tool.initialState, key('ArrowRight'))
+  assert.deepEqual(right.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 10, dy: 0 }], 'Shift+ArrowRight nudges +10 world units')
+
+  console.log('ok: shift+arrow nudges by 10 world units')
+}
+
+// ============================================================================
+// 18. Nudge no-ops: an empty selection emits no intent, and an unrelated key
+//    (falling through onIdle's existing branches) emits no intent either.
+// ============================================================================
+{
+  const { tool } = setup()
+  const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
+  const key = (k: string) => ({ type: 'keydown' as const, key: k, modifiers: NEUTRAL, t: 0 })
+
+  const noSelection = tool.onEvent(tool.initialState, key('ArrowRight'))
+  assert.deepEqual(noSelection.intents, [], 'ArrowRight with an empty selection is a no-op')
+
+  const unrelated = tool.onEvent(tool.initialState, key('q'))
+  assert.deepEqual(unrelated.intents, [], 'an unrelated key is a no-op')
+
+  console.log('ok: nudge no-ops on an empty selection or an unrelated key')
+}
+
+// ============================================================================
+// 19. Shift-constrained drag (Task keyboard/K2): holding Shift while
+//    dragging flattens the move to whichever axis has the larger raw
+//    displacement from the grab point (tldraw's Translating.ts parity) --
+//    the OTHER axis is held at zero for the whole gesture.
+// ============================================================================
+{
+  const { editor, tool, doc } = setup()
+  const SHIFT = { shift: true, alt: false, ctrl: false, meta: false }
+  // shape:a spans world [0,100]x[0,100]; grab at its center (50,50). Move to
+  // (54, 70): raw dx=4, dy=20 -- |dy|>|dx|, so shift must flatten dx to 0 and
+  // keep the full dy.
+  const events = script().down(50, 50).move(54, 70, { modifiers: SHIFT }).up().events()
+  run(editor, tool, events)
+  const a = doc.getShape('shape:a')!
+  assert.equal(a.x, 0, 'shift-constrained drag holds the non-dominant (x) axis at zero')
+  assert.equal(a.y, 20, 'shift-constrained drag applies the full delta on the dominant (y) axis')
+  console.log('ok: shift held during a drag constrains movement to the dominant axis')
+}
+
+// ============================================================================
+// 20. Shift-constrained drag must not leak snap onto the LOCKED axis
+//    (validator repro, Task keyboard/K2 fix-round): a snap target that sits
+//    a few px off the locked axis must never pull the drag off that axis --
+//    flattenForShift zeroes the suppressed axis BEFORE computeSnappedDelta,
+//    but snapCandidates finds each axis's best guide independently, so a
+//    target close to the (already-zeroed) suppressed axis can re-add
+//    movement there. shape:a spans [0,100]x[0,100]; shape:snap-c sits at
+//    (400,3) -- 3 world units off shape:a's y=0, well inside the 5-unit
+//    snap threshold (5% of the 100-unit medianSize). Dragging shape:a from
+//    its center (50,50) to (350,53) with Shift held: raw dx=300, dy=3 --
+//    |dx|>|dy| so Shift must flatten dy to 0 and hold it there for the
+//    WHOLE gesture, snap target notwithstanding.
+// ============================================================================
+{
+  // A MINIMAL two-shape doc (not `setup()`'s fixture, which seeds several
+  // OTHER shapes sharing shape:a's exact y=[0,100] range -- those would tie
+  // shape:snap-c's delta=3 with their own delta=0 and mask the leak this
+  // case exists to catch). Just shape:a and shape:c, matching the
+  // validator's exact repro numbers.
+  const doc = LoroCanvasDoc.create({ peerId: 1n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape(geoShape('shape:a', 0, 0))
+  doc.putShape(geoShape('shape:c', 400, 3))
+  doc.commit()
+  const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+  const ctx = createToolContext(editor)
+  const tool = createSelectTool(ctx)
+  const SHIFT = { shift: true, alt: false, ctrl: false, meta: false }
+  const events = script().down(50, 50).move(350, 53, { modifiers: SHIFT }).up().events()
+  run(editor, tool, events)
+  const a = doc.getShape('shape:a')!
+  assert.equal(a.x, 300, 'shift-constrained drag still applies the full delta on the dominant (x) axis')
+  assert.equal(a.y, 0, 'a snap target close to the LOCKED axis must never reintroduce movement there')
+  console.log('ok: shift-constrained drag holds the locked axis at zero even next to a snap target')
+}
+
+console.log('ok: select tool FSM (select/marquee/translate)')
+// ============================================================================
 // 14. Enter-to-edit (create-edit-flow task, tldraw parity: node_modules/
 //    tldraw/src/lib/tools/SelectTool/childStates/Idle.ts:640-661): with a
 //    lone TEXT-CAPABLE shape selected, an Enter keydown begins editing it.
