@@ -217,6 +217,32 @@ export interface Obs {
    * adapter reads `editor.doc.listPages().length` directly, the browser
    * adapter samples `window.__ew.doc.listPages().length`. */
   pageCount(): number
+  /** The shape id a binding from `fromId`'s `terminal` ('start' or 'end')
+   * points at, or null when no such binding exists. Arrow-body task
+   * (arrow.ts's `binding:<arrowId>-<terminal>` id convention, StartArrow/
+   * CompleteArrow's doc comments) — the contract that proves "drawing an
+   * arrow onto a shape actually binds to it" needs a read of the doc's
+   * bindings, not just its shapes. Available at BOTH levels (reads doc
+   * state, not the DOM) — no throw-stub: the FSM adapter reads
+   * `editor.doc.listBindings()` directly, the browser adapter pre-samples
+   * the WHOLE live bindings table off `window.__ew.doc.listBindings()`
+   * (there is no id set to union sampling against ahead of time — see
+   * `listShapeIds` below for why). */
+  shapeBindingTarget(fromId: string, terminal: 'start' | 'end'): string | null
+  /** Every shape id currently in the doc, all pages/kinds — the full-listing
+   * analogue of `shapeCount()`. Arrow-body task — needed because an arrow's
+   * id is minted from crypto-random and, UNLIKE line/draw, the arrow tool
+   * never auto-selects its just-drawn shape (arrow.ts emits no
+   * `SetSelection`, per line-creates-a-line-shape's own module-comment note
+   * on that divergence) AND an arrow renders no `[data-shape-kind]` DOM
+   * element at all (ShapeLayer.tsx excludes arrow's body entirely — it is
+   * pure SVG overlay), so `paintOrder()` can never see it either. A
+   * contract discovers a drawn arrow's id by diffing this against its
+   * seeded scene ids. Available at BOTH levels (reads doc state, not the
+   * DOM) — no throw-stub: the FSM adapter reads
+   * `editor.doc.listShapes().map(s => s.id)` directly, the browser adapter
+   * samples `window.__ew.doc.listShapes().map(s => s.id)`. */
+  listShapeIds(): readonly string[]
 }
 
 /** A contract declaration = data. */
