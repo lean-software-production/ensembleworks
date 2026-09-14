@@ -377,6 +377,52 @@ export function toWorldPoint(doc: CanvasDocument, shape: Shape, point: Point): P
   return { x: r.x + t.x, y: r.y + t.y }
 }
 
+// ============================================================================
+// FRAME HIT-TEST (frame-interaction task, gaps 2/3/5): a frame's interior is
+// HOLLOW — a click deep inside an empty frame must MISS (so the select tool
+// starts a marquee there instead of dragging the whole frame + its
+// children), while the frame stays selectable/draggable via a BORDER
+// edge-margin band and a HEADER label band rendered above its top-left
+// corner (canvas-react's FrameShape.tsx). This is the model-side half of
+// that renderer's chrome — kept in sync with its HEADER_HEIGHT constant by
+// this file's own comment (not a shared import: canvas-react may depend on
+// canvas-model, never the reverse).
+// ============================================================================
+
+/** The frame header band's height, in WORLD units — mirrors canvas-react's
+ * FrameShape.tsx `HEADER_HEIGHT` (24, itself v1's `--tl-frame-height`
+ * tldraw.css constant). WORLD, not screen: this file has no notion of
+ * camera/zoom (same caveat ARROW_HIT_MARGIN documents above), so a header
+ * rendered as 24 CSS px inside WorldLayer's camera-scaled container is 24
+ * world units at zoom 1 — exact at that zoom, a fixed-size approximation at
+ * any other, same tradeoff every other pixel-ish tolerance in this file
+ * already accepts. */
+export const FRAME_HEADER_HEIGHT = 24
+
+/** How close to a frame's border (in WORLD units, both inside and — via the
+ * inclusive box test below — right up to the true edge) still counts as a
+ * hit, keeping the frame itself selectable/draggable by its edge even
+ * though its interior is hollow. Mirrors ARROW_HIT_MARGIN's "comfortable
+ * click target" tradeoff/value (8) — this file's other pixel-ish
+ * tolerance. */
+export const FRAME_EDGE_MARGIN = 8
+
+/** The frame's header band, in the frame's OWN local frame: a strip of
+ * height FRAME_HEADER_HEIGHT sitting immediately ABOVE the frame's local
+ * box (local y in [-FRAME_HEADER_HEIGHT, 0)), spanning the frame's full
+ * width — an approximation of canvas-react's FrameShape.tsx header (which
+ * clips to `maxWidth:'100%'` of the frame but can render NARROWER when the
+ * name is short; over-inclusion here is the same accepted tradeoff this
+ * whole file already takes for arrow hit margins/culling bounds — a
+ * generous hit region is a UX nicety, never a correctness bug). Exported
+ * for spatial-index.ts's index-bounds helper below, which needs the SAME
+ * band to widen a frame's indexed bounds so a header click's grid cell
+ * actually contains the frame as a candidate in the first place. */
+export function frameHeaderLocalBounds(shape: Shape): Bounds {
+  const lb = localBounds(shape)
+  return { minX: lb.minX, minY: lb.minY - FRAME_HEADER_HEIGHT, maxX: lb.maxX, maxY: lb.minY }
+}
+
 // Is `point` (world/page space) inside this shape's rotated box? Inverse-
 // transforms the point into local space (toLocalPoint) and tests it against
 // the axis-aligned local box — cheaper and exactly equivalent to testing
@@ -386,11 +432,59 @@ export function toWorldPoint(doc: CanvasDocument, shape: Shape, point: Point): P
 // ARROW SPECIAL CASE (Task arrow-body): see worldBounds' comment — an arrow
 // has no meaningful local box to test against, so this delegates to
 // arrowHitTest (line/curve-proximity, not box containment) instead.
+//
+// FRAME SPECIAL CASE (frame-interaction task, gaps 2/3/5): a frame hits
+// iff the point falls in its HEADER band (frameHeaderLocalBounds, above —
+// selects/drags the frame by its name label) OR within FRAME_EDGE_MARGIN of
+// its border (selects/drags the frame by its edge) — the interior beyond
+// that margin is a deliberate MISS, so a marquee started there rubber-bands
+// the frame's children instead of moving the frame. Every other kind keeps
+// the original solid-box test unchanged (gap 5's broader "every kind"
+// fill-awareness is explicitly NOT implemented here — scoped to frame only,
+// the high-impact case; see this task's report).
 export function hitTestPoint(doc: CanvasDocument, shape: Shape, point: Point): boolean {
   if (shape.kind === 'arrow') return arrowHitTest(doc, shape, point)
   const local = toLocalPoint(doc, shape, point)
   const lb = localBounds(shape)
+  if (shape.kind === 'frame') {
+    const header = frameHeaderLocalBounds(shape)
+    if (local.x >= header.minX && local.x <= header.maxX && local.y >= header.minY && local.y <= header.maxY) return true
+    const inBox = local.x >= lb.minX && local.x <= lb.maxX && local.y >= lb.minY && local.y <= lb.maxY
+    if (!inBox) return false
+    return (
+      local.x <= lb.minX + FRAME_EDGE_MARGIN || local.x >= lb.maxX - FRAME_EDGE_MARGIN ||
+      local.y <= lb.minY + FRAME_EDGE_MARGIN || local.y >= lb.maxY - FRAME_EDGE_MARGIN
+    )
+  }
   return local.x >= lb.minX && local.x <= lb.maxX && local.y >= lb.minY && local.y <= lb.maxY
+}
+
+// The bounds spatial-index.ts buckets a shape under (Task frame-interaction,
+// gap 2): identical to worldBounds for every kind EXCEPT frame, where it is
+// widened to also cover the header band (frameHeaderLocalBounds) rotated
+// into world space — otherwise a click on the header, which sits OUTSIDE
+// worldBounds' own box, would hash to a grid cell that never lists the frame
+// as a candidate at all, and hitTestPoint's header branch above would never
+// even run. Deliberately NOT folded into worldBounds itself: worldBounds
+// also feeds transform.ts's resize-handle placement and Selection.tsx's
+// selection-outline box, where "the frame's real geometry" (not the header
+// chrome) is the correct answer — widening THOSE would move resize handles
+// and the outline up into the header, a regression this task doesn't own.
+export function shapeHitIndexBounds(doc: CanvasDocument, shape: Shape): Bounds {
+  const base = worldBounds(doc, shape)
+  if (shape.kind !== 'frame') return base
+  const t = worldTransform(doc, shape)
+  const header = frameHeaderLocalBounds(shape)
+  const corners = [
+    { x: header.minX, y: header.minY }, { x: header.maxX, y: header.minY },
+    { x: header.maxX, y: header.maxY }, { x: header.minX, y: header.maxY },
+  ].map((p) => { const r = rotatePoint(p, t.rotation); return { x: r.x + t.x, y: r.y + t.y } })
+  return {
+    minX: Math.min(base.minX, ...corners.map((c) => c.x)),
+    minY: Math.min(base.minY, ...corners.map((c) => c.y)),
+    maxX: Math.max(base.maxX, ...corners.map((c) => c.x)),
+    maxY: Math.max(base.maxY, ...corners.map((c) => c.y)),
+  }
 }
 
 // ============================================================================

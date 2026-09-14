@@ -42,6 +42,7 @@ import { type CanvasDocument } from './document.js'
 import { type Shape } from './shape.js'
 import {
   type Bounds, type Point, arrowPathPoints, medianSize, rotationAxes, worldBounds, worldCorners, worldTransform, hitTestPoint,
+  shapeHitIndexBounds,
 } from './geometry.js'
 
 export interface SpatialIndex {
@@ -140,7 +141,11 @@ export function buildSpatialIndex(doc: CanvasDocument): SpatialIndex {
   const overflow: string[] = []
   let cellRange: SpatialIndex['cellRange'] = null
   for (const shape of doc.shapes) {
-    const bounds = worldBounds(doc, shape)
+    // shapeHitIndexBounds (frame-interaction task, gap 2): identical to
+    // worldBounds for every kind except frame, where it's widened to also
+    // cover the header band -- see that function's own doc comment for why
+    // this is the ONE place the widening happens (never worldBounds itself).
+    const bounds = shapeHitIndexBounds(doc, shape)
     boundsById.set(shape.id, bounds)
     const minCx = Math.floor(bounds.minX / cellSize), maxCx = Math.floor(bounds.maxX / cellSize)
     const minCy = Math.floor(bounds.minY / cellSize), maxCy = Math.floor(bounds.maxY / cellSize)
