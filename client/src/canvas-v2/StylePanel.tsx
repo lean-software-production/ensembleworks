@@ -708,6 +708,82 @@ function stopPropagation(e: { stopPropagation(): void }): void {
 	e.stopPropagation()
 }
 
+/**
+ * FIXER (style-memory, validator round 2, blocking item 2): PANEL_STYLE's
+ * container is deliberately `pointer-events: none` (see that constant's own
+ * REGRESSION FIX comment) so empty panel space passes clicks through to the
+ * canvas underneath — but CSS `pointer-events: none` disables hit-testing
+ * for EVERY pointer-driven event, wheel included, not just click/drag. That
+ * made a wheel gesture aimed at the panel fall straight through to
+ * Viewport's own root div (canvas-react/src/Viewport.tsx), which reads it
+ * as a camera pan — so `overflowY: 'auto'`'s scrollbar was never reachable:
+ * a real browser session driving a 300px wheel over the panel left its
+ * `scrollTop` at 0 and moved the camera by -300 instead (validator repro,
+ * pinned by `e2e/tests/style-panel-scroll.spec.ts`).
+ *
+ * Fix: a native, non-passive `wheel` listener bound in the CAPTURE phase on
+ * `window` — the same non-passive-listener idiom Viewport.tsx's own module
+ * header explains (a JSX `onWheel` can't preventDefault reliably, and here
+ * it additionally couldn't even fire — pointer-events:none excludes the
+ * element from hit-testing, so React's synthetic wheel handler would never
+ * see events over the panel at all). Capture-phase on `window` sees the
+ * event BEFORE it reaches Viewport's own bubble-phase listener; when the
+ * pointer is over the panel's live `getBoundingClientRect()`, this scrolls
+ * the panel's own `scrollTop` by the wheel's `deltaY` and calls both
+ * `preventDefault()` (blocks the page-level default) and `stopPropagation()`
+ * (capture-phase stopPropagation halts the event before it ever reaches the
+ * target/bubble phase, so Viewport's listener never runs for it) — outside
+ * the panel's rect, the event is untouched and reaches Viewport exactly as
+ * before. Manually driving `scrollTop` (rather than relying on the
+ * suppressed native scroll) works whether or not the content currently
+ * overflows: the browser clamps `scrollTop` to `[0, scrollHeight -
+ * clientHeight]` on assignment, so this is a harmless no-op once nothing is
+ * clipped.
+ *
+ * NOT a hook, deliberately: this file's own test suite (StylePanel.test.ts,
+ * cases 9/10) calls `StylePanel({...})` as a PLAIN FUNCTION — inspecting the
+ * returned element tree directly, never through `createElement`/a real
+ * render — which is a house pattern for a pure-render component predating
+ * this fix (see that file's own header) and runs with no React dispatcher
+ * active at all. A `useRef`/`useEffect` pair here would throw "Invalid hook
+ * call" the instant such a test ran (verified: it does). A plain module-
+ * scope singleton plus a REF CALLBACK (an ordinary function prop, not a
+ * hook — `<div ref={panelRefCallback}>`) sidesteps that entirely: harmless
+ * to include in a tree nobody ever reconciles, and wired up automatically
+ * the moment a real render DOES mount the div. `bindPanelWheelListenerOnce`
+ * also no-ops when `window` doesn't exist (this same static-markup test
+ * environment) rather than throwing.
+ */
+let livePanelEl: HTMLDivElement | null = null
+let panelWheelListenerBound = false
+
+function handlePanelWheel(e: WheelEvent): void {
+	const el = livePanelEl
+	if (!el) return
+	const rect = el.getBoundingClientRect()
+	const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom
+	if (!inside) return
+	el.scrollTop += e.deltaY
+	e.preventDefault()
+	e.stopPropagation()
+}
+
+function bindPanelWheelListenerOnce(): void {
+	if (panelWheelListenerBound) return
+	if (typeof window === 'undefined') return // no browser global (e.g. StylePanel.test.ts's static-markup rig) — nothing to bind to
+	window.addEventListener('wheel', handlePanelWheel, { passive: false, capture: true })
+	panelWheelListenerBound = true
+}
+
+/** Ref callback (not a hook) for both PANEL_STYLE divs below — records
+ * whichever one is currently mounted (only one of the two modes ever
+ * renders at once) so `handlePanelWheel` always targets the live node, and
+ * lazily binds the one process-lifetime `window` listener on first mount. */
+function panelRefCallback(el: HTMLDivElement | null): void {
+	livePanelEl = el
+	if (el) bindPanelWheelListenerOnce()
+}
+
 // Task AS3 — armed mode has no selection bounds to anchor against
 // (`computePosition` above needs a live selection's world bounds via
 // `combinedWorldBounds`). Floated top-center under the toolbar instead —
@@ -789,6 +865,7 @@ export function StylePanel({
 
 		return (
 			<div
+				ref={panelRefCallback}
 				data-testid="ew-style-panel"
 				data-canvas-v2-style-panel
 				data-style-panel-mode="selection"
@@ -815,6 +892,7 @@ export function StylePanel({
 
 	return (
 		<div
+			ref={panelRefCallback}
 			data-testid="ew-style-panel"
 			data-canvas-v2-style-panel
 			data-style-panel-mode="armed"
