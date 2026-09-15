@@ -379,6 +379,13 @@ export function StylePanel({
 			onPointerDown={stopPropagation}
 			onPointerUp={stopPropagation}
 			onKeyDown={(e) => {
+				// Enter/Space on a focused control are the control's own activation
+				// keys; the Viewport would otherwise take Enter as "edit the selection"
+				// and preventDefault the button's click. Not preventDefaulted here.
+				if ((e.key === 'Enter' || e.key === ' ') && e.target !== e.currentTarget) {
+					e.stopPropagation()
+					return
+				}
 				if (e.key !== 'Escape' || openSlot === null) return
 				// Stop here so neither the Viewport nor the session's document listener
 				// treats this Escape as a canvas cancel.

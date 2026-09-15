@@ -37,6 +37,7 @@ import { shapeGrowsToFitTypedText } from './contracts/shape-grows-to-fit-typed-t
 import { shiftDragConstrainsToAxis } from './contracts/shift-drag-constrains-to-axis.js'
 import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
 import { stylePopoverEscape } from './contracts/style-popover-escape.js'
+import { styleTriggerEnter } from './contracts/style-trigger-enter.js'
 import { styleEditArmsNextShape } from './contracts/style-edit-arms-next-shape.js'
 import { switchingPageChangesRenderedShapes } from './contracts/switching-page-changes-rendered-shapes.js'
 import { toolShortcutSwitchesAndArmsTool } from './contracts/tool-shortcut-switches-and-arms-tool.js'
@@ -79,4 +80,5 @@ export const CONTRACTS: readonly Contract[] = [
   arrowStaysOnItsPage,
   enterOnChromeButtonDoesNotEdit,
   selectIgnoresOtherPages,
+  styleTriggerEnter,
 ]
