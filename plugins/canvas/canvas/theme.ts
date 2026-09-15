@@ -40,6 +40,11 @@ export function canvasShapeThemeCss(doc: CanvasDocument): string {
     // and scrolls inside a bounded parent) as a flex child; without these two
     // it can grow past the pane and never scroll (the pane clips it).
     `${scope} .bbthread-chat{flex:1 1 auto;min-height:0}`,
+    // The bbthread pane's resize divider (BbThreadShape.tsx): inline styles
+    // draw its default 1px center line, but `:hover` needs a real CSS rule
+    // (there is no inline-style equivalent), so it lives here like every
+    // other themed pseudo-selector this file owns.
+    `${scope} [data-canvas-bbthread="divider"]:hover{background:var(--primary)}`,
   ];
   for (const shape of doc.byId.values()) {
     const props = shape.props as Record<string, unknown>;

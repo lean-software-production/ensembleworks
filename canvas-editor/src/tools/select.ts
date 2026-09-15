@@ -102,13 +102,18 @@
 // drag start; the prior model's `liveBoundsAdapter`/`candidateBoundsAfterDelta`
 // live-read shim is gone with it.
 import {
+  BBTHREAD_PANE_MAX_FRACTION,
+  BBTHREAD_PANE_MIN_FRACTION,
   computeExcludedIds,
   isFrameLike,
   isPointInBbthreadPane,
   isPointInFrameHeaderBand,
+  isPointOnBbthreadDivider,
   isTextCapableKind,
+  localBounds,
   pageIdOf,
   snapCandidates,
+  toLocalPoint,
   worldBounds,
   type Bounds,
   type CanvasDocument,
@@ -211,7 +216,46 @@ interface Marquee {
   readonly downScreen: { readonly x: number; readonly y: number }
 }
 
-export type SelectState = Idle | Pointing | Dragging | Marquee
+/** Resizable-pane task (docs/plans/2026-09-15-bb-thread-frame.md's
+ * "Resizable pane" section) — entered from Idle instead of Pointing when a
+ * pointerdown lands on a bbthread's divider band (canvas-model's
+ * `isPointOnBbthreadDivider`), taking precedence over BOTH the ordinary
+ * pane-is-solid translate path (Pointing->Dragging, which the divider band
+ * would otherwise also qualify for — it sits inside the solid pane) and the
+ * pane double-click-to-edit gate (onPointing's `opensBbthreadPane`), which
+ * never even gets a look-in because this mode is entered straight from
+ * Idle's pointerdown, before a Pointing state (and hence a double-click
+ * check) is ever created. Every pointermove commits a `paneFraction`
+ * UpdateProps directly (no threshold gate, unlike Pointing->Dragging — a
+ * resize starts moving on the very first move, exactly like Dragging's own
+ * per-move commits); pointerup returns to Idle with no intents. Nothing to
+ * revert on cancel (tool-loop.ts's `cancelActiveTool`): each move's
+ * UpdateProps is already committed, the exact same posture Dragging's own
+ * translate takes (see that function's cancelActiveTool 'select' branch,
+ * which reverts only the transform composite's leg, never a plain
+ * Dragging/Marquee/ResizingPane gesture of select's OWN FSM). */
+interface ResizingPane {
+  readonly mode: 'resizingPane'
+  /** The bbthread shape being resized. */
+  readonly id: string
+  /** The shape's local width (`localBounds(shape).maxX`), frozen at the
+   * Idle->ResizingPane transition — the divisor `(w - localX) / w` needs to
+   * stay fixed across the whole gesture, exactly like Dragging's own frozen
+   * `startBounds`; a resize never changes the shape's own w/h, so this never
+   * goes stale mid-gesture. */
+  readonly w: number
+  /** The doc/index-free CanvasDocument snapshot read ONCE at the
+   * Idle->ResizingPane transition (see the module header's REBUILD-CADENCE
+   * DISCIPLINE section) — reused by every subsequent pointermove's
+   * `toLocalPoint` call for the shape's world->local projection. Safe to
+   * freeze: this gesture only ever writes `paneFraction`, never the shape's
+   * x/y/rotation/parent chain, so the frozen transform this snapshot yields
+   * never goes stale mid-gesture the way a moving shape's OWN position
+   * would. */
+  readonly snapshot: CanvasDocument
+}
+
+export type SelectState = Idle | Pointing | Dragging | Marquee | ResizingPane
 
 const IDLE: Idle = { mode: 'idle', lastClick: null }
 
@@ -398,6 +442,8 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
           return onDragging(state, event)
         case 'marquee':
           return onMarquee(state, event)
+        case 'resizingPane':
+          return onResizingPane(state, event)
       }
     },
   }
@@ -405,14 +451,7 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
   function onIdle(state: Idle, event: InputEvent): { state: SelectState; intents: Intent[] } {
     if (event.type === 'pointerdown') {
       const hit = ctx.hitTestTopmost(worldOf(event))
-      // Double-click candidacy, decided ONCE here (see the module header):
-      // same target as the last completed click, within the shared
-      // isDoubleClick window/radius (event.t/x/y deltas only).
-      const doubleClick =
-        hit !== null &&
-        state.lastClick !== null &&
-        state.lastClick.targetId === hit &&
-        isDoubleClick(state.lastClick, event)
+      const editingId = editor.get().editingId
       // END-EDIT-ON-OUTSIDE-CLICK (pane input routing task): a pointerdown
       // that lands on anything OTHER than the shape currently being edited
       // ends that edit FIRST, before the normal pointing/selection
@@ -425,12 +464,38 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // and here editingId is still non-null at the moment this fires, same
       // as any other EndEdit emission). A click on the editing shape itself
       // (hit === editingId) is explicitly excluded — that's a normal
-      // re-click within the same edit, not an "outside" click.
-      const editingId = editor.get().editingId
-      const intents: Intent[] = editingId !== null && hit !== editingId ? [{ type: 'EndEdit' }] : []
+      // re-click within the same edit, not an "outside" click. Computed here
+      // (before the divider check below) because BOTH the divider path and
+      // the ordinary pointing path need the exact same EndEdit intent.
+      const endEditIntents: Intent[] = editingId !== null && hit !== editingId ? [{ type: 'EndEdit' }] : []
+      // RESIZABLE PANE (docs/plans/2026-09-15-bb-thread-frame.md's
+      // "Resizable pane" section): a pointerdown landing on a bbthread's
+      // divider band (canvas-model's isPointOnBbthreadDivider) enters
+      // ResizingPane directly from Idle — BEFORE the ordinary Pointing
+      // transition below ever runs — so it takes precedence over both the
+      // pane-is-solid translate path (the divider sits inside that same
+      // solid pane) and the pane double-click-to-edit gate (onPointing's
+      // opensBbthreadPane, which never gets a look-in: a Pointing state is
+      // never created for a divider-starting gesture in the first place).
+      if (hit !== null) {
+        const snapshot = ctx.snapshot()
+        const hitShape = snapshot.byId.get(hit)
+        if (hitShape && hitShape.kind === 'bbthread' && isPointOnBbthreadDivider(snapshot, hitShape, worldOf(event))) {
+          const w = localBounds(hitShape).maxX
+          return { state: { mode: 'resizingPane', id: hit, w, snapshot }, intents: endEditIntents }
+        }
+      }
+      // Double-click candidacy, decided ONCE here (see the module header):
+      // same target as the last completed click, within the shared
+      // isDoubleClick window/radius (event.t/x/y deltas only).
+      const doubleClick =
+        hit !== null &&
+        state.lastClick !== null &&
+        state.lastClick.targetId === hit &&
+        isDoubleClick(state.lastClick, event)
       return {
         state: { mode: 'pointing', downScreen: { x: event.x, y: event.y }, targetId: hit, shiftDown: event.modifiers.shift, doubleClick },
-        intents,
+        intents: endEditIntents,
       }
     }
     if (event.type === 'pointermove') {
@@ -754,6 +819,35 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
           })()
         : intersectIds
       return { state: IDLE, intents: [{ type: 'SetSelection', ids }] }
+    }
+    return { state, intents: [] }
+  }
+
+  // RESIZABLE PANE (docs/plans/2026-09-15-bb-thread-frame.md's "Resizable
+  // pane" section): every pointermove projects the CURRENT cursor into the
+  // resized shape's own local frame (via the FROZEN snapshot/w captured at
+  // the Idle->ResizingPane transition — see that state's doc comment) and
+  // commits the resulting clamped fraction directly, no threshold gate (a
+  // resize tracks the cursor from its very first move, unlike Pointing-
+  // >Dragging's crossedThreshold gate — there is no "was this actually a
+  // click" ambiguity here, since a divider-starting gesture is NEVER a
+  // click target itself). pointerup returns to Idle with NO intents: like
+  // Dragging's own translate, every move already committed its own
+  // UpdateProps, so there is nothing left to flush at gesture end.
+  function onResizingPane(state: ResizingPane, event: InputEvent): { state: SelectState; intents: Intent[] } {
+    if (event.type === 'pointermove') {
+      const shape = state.snapshot.byId.get(state.id)
+      // TOLERANCE: a mid-gesture remote delete of the target shape is not
+      // this tool's problem to detect (same posture as onDragging's own
+      // TOLERANCE CONTRACT note) — simply stop emitting further UpdateProps
+      // for an id that no longer resolves, rather than throwing.
+      if (!shape) return { state, intents: [] }
+      const local = toLocalPoint(state.snapshot, shape, worldOf(event))
+      const fraction = Math.min(BBTHREAD_PANE_MAX_FRACTION, Math.max(BBTHREAD_PANE_MIN_FRACTION, (state.w - local.x) / state.w))
+      return { state, intents: [{ type: 'UpdateProps', id: state.id, props: { paneFraction: fraction } }] }
+    }
+    if (event.type === 'pointerup') {
+      return { state: IDLE, intents: [] }
     }
     return { state, intents: [] }
   }

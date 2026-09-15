@@ -4,6 +4,7 @@
 // — see that file's own header and docs/plans/2026-09-15-bb-thread-frame.md.
 import { describe, expect, it } from "vitest";
 import type { Shape } from "@ensembleworks/canvas-model";
+import { BBTHREAD_DIVIDER_MARGIN } from "@ensembleworks/canvas-model";
 import {
   bbthreadPaneState,
   paneInteraction,
@@ -269,5 +270,29 @@ describe("paneLayout", () => {
   it("never inverts the pane body for a pane too short for its own header+footer rows", () => {
     const layout = paneLayout(bbthread({}, { h: 50 }));
     expect(layout.paneBody.maxY).toBeGreaterThanOrEqual(layout.paneBody.minY);
+  });
+
+  it("centers the divider on the pane's left edge, spanning its y-range", () => {
+    const layout = paneLayout(bbthread());
+    // pane.minX is 640 on a default-size (960x600) bbthread (see above); the
+    // divider is a `2 * BBTHREAD_DIVIDER_MARGIN`-wide strip centred on it.
+    expectBoundsClose(layout.divider, {
+      minX: layout.pane.minX - BBTHREAD_DIVIDER_MARGIN,
+      maxX: layout.pane.minX + BBTHREAD_DIVIDER_MARGIN,
+      minY: layout.pane.minY,
+      maxY: layout.pane.maxY,
+    });
+  });
+
+  it("follows a non-default paneFraction — 0.5 starts the pane at w/2", () => {
+    const layout = paneLayout(bbthread({ paneFraction: 0.5 }));
+    expectBoundsClose(layout.pane, { minX: 480, minY: 24, maxX: 960, maxY: 600 });
+    expectBoundsClose(layout.workspace, { minX: 0, minY: 24, maxX: 480, maxY: 600 });
+    expectBoundsClose(layout.divider, {
+      minX: 480 - BBTHREAD_DIVIDER_MARGIN,
+      maxX: 480 + BBTHREAD_DIVIDER_MARGIN,
+      minY: 24,
+      maxY: 600,
+    });
   });
 });

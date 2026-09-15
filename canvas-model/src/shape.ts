@@ -274,8 +274,15 @@ const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   // geometry.ts's isFrameLike) whose right third renders a solid "thread
   // pane" (the BB plugin's ThreadChat mount). `name` mirrors frame's own
   // header label; `threadId` is the bound project thread's id, absent
-  // ("unbound") until the plugin's picker/spawn flow sets it.
-  bbthread: box.extend({ name: z.string().optional(), threadId: z.string().optional() }),
+  // ("unbound") until the plugin's picker/spawn flow sets it. `paneFraction`
+  // (resizable-pane task, docs/plans/2026-09-15-bb-thread-frame.md) is the
+  // synced width of the pane as a fraction of the shape's total width, from
+  // the right edge — any finite number validates here; clamping to
+  // [BBTHREAD_PANE_MIN_FRACTION, BBTHREAD_PANE_MAX_FRACTION] is the READER's
+  // job (geometry.ts's `paneFractionOf`), not the schema's, so an
+  // out-of-range or stale value from an older client still round-trips
+  // losslessly through the doc.
+  bbthread: box.extend({ name: z.string().optional(), threadId: z.string().optional(), paneFraction: z.number().optional() }),
 }
 
 // The strict envelope shared by every shape. props is refined per-kind below.

@@ -347,6 +347,25 @@ function BbThreadShapeInner({ shape, snapshot, editorState, getText, dispatch }:
           </div>
         )}
       </div>
+      {/* SIBLING of the pane div, not inside it (docs/plans/2026-09-15-bb-
+          thread-frame.md's "Resizable pane" section): the pane carries
+          `data-canvas-interactive` while focused, which makes canvas-react's
+          viewport yield every pointer event whose DOM target lands inside it
+          — a divider nested in the pane would never reach the canvas to
+          resize anything. Rendered AFTER the pane in DOM order so it paints
+          on top of the pane's own `borderLeft`. No pointer handlers: the
+          select tool's `resizingPane` mode (canvas-editor) hit-tests this
+          same band on the CANVAS side (`isPointOnBbthreadDivider`) and drives
+          the resize from there. */}
+      <div
+        data-canvas-bbthread="divider"
+        style={{
+          ...boundsStyle(layout.divider),
+          cursor: "ew-resize",
+          background:
+            "linear-gradient(to right, transparent calc(50% - 0.5px), var(--border) calc(50% - 0.5px), var(--border) calc(50% + 0.5px), transparent calc(50% + 0.5px))",
+        }}
+      />
     </div>
   );
 }

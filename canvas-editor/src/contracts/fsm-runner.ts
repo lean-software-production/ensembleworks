@@ -277,6 +277,13 @@ function makeObs(
       // The armed flyout is rendered chrome; every contract reading it is level:'browser'.
       throw new Error('not observable at fsm level')
     },
+    shapeProp(id: string, key: string) {
+      // Resizable-pane task — a doc read, like shapeStyle/shapeKind: no
+      // throw-stub, both adapters are REAL. Unlike shapeStyle, this returns
+      // the prop's RAW value (no string/number narrowing) — see the Obs
+      // interface doc comment.
+      return editor.doc.getShape(id)?.props[key]
+    },
   }
 }
 

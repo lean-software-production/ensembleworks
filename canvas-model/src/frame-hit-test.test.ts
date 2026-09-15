@@ -11,6 +11,7 @@ import { makeDocument } from './document.js'
 import {
   hitTestPoint, FRAME_HEADER_HEIGHT, FRAME_EDGE_MARGIN,
   isFrameLike, isPointInBbthreadPane, localBounds, bbthreadPaneLocalBounds, bbthreadWorkspaceLocalBounds, BBTHREAD_PANE_FRACTION,
+  paneFractionOf, BBTHREAD_PANE_MIN_FRACTION, BBTHREAD_PANE_MAX_FRACTION, BBTHREAD_DIVIDER_MARGIN, isPointOnBbthreadDivider,
 } from './geometry.js'
 
 const base = () => ({ index: 'a1', isLocked: false, opacity: 1, meta: {} })
@@ -152,5 +153,69 @@ assert.equal(isPointInBbthreadPane(bbDoc, bbthread, { x: 150, y: -FRAME_HEADER_H
 
 // (4) a non-bbthread kind never reports a pane hit, even at the same coordinates.
 assert.equal(isPointInBbthreadPane(doc, frame, { x: 250, y: 200 }), false, 'a plain frame has no thread pane at all')
+
+// ============================================================================
+// Resizable pane task (docs/plans/2026-09-15-bb-thread-frame.md's "Resizable
+// pane" section) — paneFractionOf's clamp/default, isPointOnBbthreadDivider,
+// and bbthreadPaneLocalBounds/bbthreadWorkspaceLocalBounds tracking a
+// non-default paneFraction.
+// ============================================================================
+
+const bbBare = (props: Record<string, unknown>) =>
+  ({ id: 'shape:bb2', kind: 'bbthread', parentId: 'page:p', x: 0, y: 0, rotation: 0, props, ...base() } as any)
+
+// (1) no paneFraction prop -> the default (BBTHREAD_PANE_FRACTION, 1/3).
+assert.equal(paneFractionOf(bbBare({ w: 900, h: 600 })), BBTHREAD_PANE_FRACTION, 'an absent paneFraction resolves to the default')
+
+// (2) a non-number paneFraction -> the default (schema rejects this at
+// validateShape time, but paneFractionOf itself must degrade gracefully for
+// any raw props object a caller hands it directly).
+assert.equal(paneFractionOf(bbBare({ w: 900, h: 600, paneFraction: '0.5' })), BBTHREAD_PANE_FRACTION, 'a non-number paneFraction resolves to the default')
+assert.equal(paneFractionOf(bbBare({ w: 900, h: 600, paneFraction: NaN })), BBTHREAD_PANE_FRACTION, 'a NaN paneFraction resolves to the default')
+
+// (3) an in-range paneFraction passes through unchanged.
+assert.equal(paneFractionOf(bbBare({ w: 900, h: 600, paneFraction: 0.5 })), 0.5, 'an in-range paneFraction passes through unchanged')
+
+// (4) below BBTHREAD_PANE_MIN_FRACTION clamps up to the floor.
+assert.equal(paneFractionOf(bbBare({ w: 900, h: 600, paneFraction: 0.01 })), BBTHREAD_PANE_MIN_FRACTION, 'a paneFraction below the min clamps to BBTHREAD_PANE_MIN_FRACTION')
+
+// (5) above BBTHREAD_PANE_MAX_FRACTION clamps down to the ceiling.
+assert.equal(paneFractionOf(bbBare({ w: 900, h: 600, paneFraction: 5 })), BBTHREAD_PANE_MAX_FRACTION, 'a paneFraction above the max clamps to BBTHREAD_PANE_MAX_FRACTION')
+
+// (6) bbthreadPaneLocalBounds/bbthreadWorkspaceLocalBounds track a
+// non-default paneFraction: a 900x600 bbthread with paneFraction 0.5 splits
+// evenly at local x=450.
+{
+  const half = bbBare({ w: 900, h: 600, paneFraction: 0.5 })
+  const halfDoc = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [half], bindings: [] })
+  const halfShape = halfDoc.byId.get('shape:bb2')!
+  assert.deepEqual(bbthreadPaneLocalBounds(halfShape), { minX: 450, minY: FRAME_HEADER_HEIGHT, maxX: 900, maxY: 600 }, 'the pane bounds follow a resized paneFraction')
+  assert.deepEqual(bbthreadWorkspaceLocalBounds(halfShape), { minX: 0, minY: FRAME_HEADER_HEIGHT, maxX: 450, maxY: 600 }, 'the workspace bounds follow a resized paneFraction')
+}
+
+// (7) isPointOnBbthreadDivider: a point within BBTHREAD_DIVIDER_MARGIN of the
+// pane's left edge (local x=600 for the default-fraction 900x600 bbthread
+// fixture, modulo float noise in the (1 - 1/3) division -- so the boundary
+// checks below stay one full unit clear of the margin on either side rather
+// than pinning the exact float, which `900 * (1 - 1/3)` does not land on
+// 600.0 dead-on) hits, whether on the pane side or the workspace side; a
+// point further away, or above/below the pane's y-range, misses.
+assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600, y: 300 }), true, 'exactly on the divider hits')
+assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600 - (BBTHREAD_DIVIDER_MARGIN - 1), y: 300 }), true, 'just inside the workspace-side of the divider margin hits')
+assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600 + (BBTHREAD_DIVIDER_MARGIN - 1), y: 300 }), true, 'just inside the pane-side of the divider margin hits')
+assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600 - (BBTHREAD_DIVIDER_MARGIN + 1), y: 300 }), false, 'just past the workspace-side margin misses')
+assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600 + (BBTHREAD_DIVIDER_MARGIN + 1), y: 300 }), false, 'just past the pane-side margin misses')
+assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600, y: FRAME_HEADER_HEIGHT - 1 }), false, 'above the pane (in the header band) misses')
+assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600, y: 601 }), false, 'below the pane (past the shape) misses')
+assert.equal(isPointOnBbthreadDivider(doc, frame, { x: 600, y: 300 }), false, 'a plain frame has no divider at all')
+
+// (8) hitTestPoint counts the divider band as a hit even on the
+// workspace-side half of the margin, which falls OUTSIDE bbthreadPaneLocalBounds
+// (a would-be miss on the otherwise-hollow interior without this).
+assert.equal(
+  hitTestPoint(bbDoc, bbthread, { x: 600 - (BBTHREAD_DIVIDER_MARGIN - 1), y: 300 }),
+  true,
+  'the workspace-side half of the divider margin still hits the shape',
+)
 
 console.log('ok: frame-hit-test')

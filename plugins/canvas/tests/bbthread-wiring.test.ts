@@ -11,7 +11,7 @@
 // `git show dc70212^:plugins/canvas/tests/agent-affordance-wiring.test.ts`).
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { bodyStatements, callsTo, countInCode, initializerText, ternaryArms } from "./lib/source.js";
+import { bodyStatements, callsTo, countInCode, initializerText, jsxElementRange, ternaryArms } from "./lib/source.js";
 
 const SHAPE = readFileSync(new URL("../canvas/shapes/BbThreadShape.tsx", import.meta.url), "utf8");
 const BOOT = readFileSync(new URL("../canvas/panel/connection-boot.ts", import.meta.url), "utf8");
@@ -68,6 +68,30 @@ describe("BbThreadShape renders the pure decisions, not inline logic", () => {
     const calls = callsTo(SHAPE, "spawnPromptFor");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.text).toContain("childrenOf(snapshot, shape.id)");
+  });
+});
+
+describe("the resize divider is a sibling of the pane, forwarded to the canvas", () => {
+  it("renders the divider OUTSIDE the pane div, after it in DOM order", () => {
+    const pane = jsxElementRange(SHAPE, 'data-canvas-bbthread="pane"');
+    const divider = jsxElementRange(SHAPE, 'data-canvas-bbthread="divider"');
+    // Not nested: a divider inside the pane's own range would never be
+    // reachable while the pane carries `data-canvas-interactive` (the
+    // viewport yield rule swallows events aimed at anything inside it).
+    const nestedInPane = divider.start >= pane.start && divider.end <= pane.end;
+    expect(nestedInPane).toBe(false);
+    // After, not before: painted on top of the pane's own borderLeft.
+    expect(divider.start).toBeGreaterThan(pane.end);
+  });
+
+  it("the divider has no pointer handlers and is never marked interactive", () => {
+    const range = jsxElementRange(SHAPE, 'data-canvas-bbthread="divider"');
+    const text = SHAPE.slice(range.start, range.end);
+    expect(text).not.toContain("onPointerDown");
+    expect(text).not.toContain("data-canvas-interactive");
+    // It still needs to look draggable and sit where paneLayout says.
+    expect(text).toContain("ew-resize");
+    expect(text).toContain("layout.divider");
   });
 });
 

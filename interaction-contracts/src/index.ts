@@ -10,6 +10,8 @@ import { bbthreadPaneIsSolid } from './contracts/bbthread-pane-is-solid.js'
 import { bbthreadWorkspaceIsHollow } from './contracts/bbthread-workspace-is-hollow.js'
 import { bbthreadPaneDoubleClickBeginsEditing } from './contracts/bbthread-pane-double-click-begins-editing.js'
 import { bbthreadEscapeEndsEditing } from './contracts/bbthread-escape-ends-editing.js'
+import { bbthreadDividerDragResizesPane } from './contracts/bbthread-divider-drag-resizes-pane.js'
+import { bbthreadDividerDragClampsAtTwoThirds } from './contracts/bbthread-divider-drag-clamps-at-two-thirds.js'
 import { editingEndsOnOutsideClick } from './contracts/editing-ends-on-outside-click.js'
 import { arrowHandleDragPreviewsHover } from './contracts/arrow-handle-drag-previews-hover.js'
 import { arrowMidHandleBends } from './contracts/arrow-mid-handle-bends.js'
@@ -78,6 +80,8 @@ export const CONTRACTS: readonly Contract[] = [
   bbthreadWorkspaceIsHollow,
   bbthreadPaneDoubleClickBeginsEditing,
   bbthreadEscapeEndsEditing,
+  bbthreadDividerDragResizesPane,
+  bbthreadDividerDragClampsAtTwoThirds,
   editingEndsOnOutsideClick,
   frameHeaderDoubleClickRenames,
   arrowNudgeMovesSelection,

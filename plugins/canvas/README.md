@@ -154,6 +154,20 @@ canvas-model's job, not this component's — see `isFrameLike`,
 `bbthreadPaneLocalBounds` and `bbthreadWorkspaceLocalBounds` in
 `canvas-model/src/geometry.ts`.
 
+**The pane is resizable** — drag its left edge. Width is a synced `paneFraction`
+prop on the shape (`canvas-model`'s `paneFractionOf`, clamped to
+`BBTHREAD_PANE_MIN_FRACTION`–`BBTHREAD_PANE_MAX_FRACTION`, 20%–66% of the
+frame's width), not local UI state, so it survives a reload and shows the same
+to every peer. The drag itself is handled entirely by canvas-editor's select
+tool, never by this plugin: a pointerdown within the divider band
+(`isPointOnBbthreadDivider`) enters a `resizingPane` mode and emits
+`UpdateProps { paneFraction }` on every move. `BbThreadShape.tsx` only DRAWS
+the handle — a thin strip rendered as a SIBLING of the pane div (never nested
+inside it), positioned per `paneLayout(shape).divider`, so it keeps forwarding
+its pointer events to the canvas even while the pane itself is focused and
+carrying `data-canvas-interactive` — which is exactly what makes the handle
+work while you're mid-read of the thread, not just when the pane is idle.
+
 | File | What it owns |
 | --- | --- |
 | `canvas/shapes/bbthread-model.ts` | every pure decision: pane state, the spawn prompt, `paneInteraction` (interactive/hint, from editor state), and the pane's own internal layout (title row / body / footer) |

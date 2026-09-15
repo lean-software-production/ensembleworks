@@ -492,33 +492,94 @@ export function isPointInFrameHeaderBand(doc: CanvasDocument, shape: Shape, poin
 // ============================================================================
 
 /** The fraction of a bbthread's width given to the solid thread pane, from
- * the right edge. */
+ * the right edge — the DEFAULT, used whenever `shape.props.paneFraction` is
+ * absent/non-numeric. See `paneFractionOf` below for the resolved-per-shape
+ * value (resizable-pane task, docs/plans/2026-09-15-bb-thread-frame.md's
+ * "Resizable pane" section). */
 export const BBTHREAD_PANE_FRACTION = 1 / 3
 
+/** Resizable-pane task — the pane's width can never shrink narrower than
+ * this fraction of the shape's total width (a floor that keeps the thread
+ * timeline usable) or wider than `BBTHREAD_PANE_MAX_FRACTION` (a ceiling
+ * that keeps the hollow workspace from disappearing entirely). Both bound
+ * `paneFractionOf`'s clamp AND canvas-editor's `resizingPane` drag mode,
+ * which computes the SAME clamp on every pointermove — kept here, not
+ * re-derived there, so the two can never silently drift apart. */
+export const BBTHREAD_PANE_MIN_FRACTION = 0.2
+export const BBTHREAD_PANE_MAX_FRACTION = 2 / 3
+
+/** The bbthread's RESOLVED pane fraction: `shape.props.paneFraction` when it
+ * is a finite number, clamped to [BBTHREAD_PANE_MIN_FRACTION,
+ * BBTHREAD_PANE_MAX_FRACTION] — falling back to the default
+ * (BBTHREAD_PANE_FRACTION, itself inside that range) when the prop is
+ * absent or not a finite number (an older client's un-set shape, or a
+ * malformed/NaN value some future writer manages to store). Clamping lives
+ * HERE, the reader, not in the schema (canvas-model/src/shape.ts's bbthread
+ * props accept any finite number) — see that schema's own doc comment for
+ * why: a stored value briefly outside range (a future writer's bug, a
+ * relaxed max in some later release) still round-trips losslessly instead
+ * of being silently rewritten by every reader that happens to touch it. */
+export function paneFractionOf(shape: Shape): number {
+  const raw = (shape.props as { paneFraction?: unknown }).paneFraction
+  const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : BBTHREAD_PANE_FRACTION
+  return Math.min(BBTHREAD_PANE_MAX_FRACTION, Math.max(BBTHREAD_PANE_MIN_FRACTION, value))
+}
+
 /** The bbthread's thread-pane rect, in the shape's OWN local frame: the
- * right `BBTHREAD_PANE_FRACTION` of its width, BELOW the header band (local
+ * right `paneFractionOf(shape)` of its width, BELOW the header band (local
  * y in [FRAME_HEADER_HEIGHT, h]). Meaningless for any other kind — callers
  * only invoke this once `shape.kind === 'bbthread'` is already established
  * (hitTestPoint below). */
 export function bbthreadPaneLocalBounds(shape: Shape): Bounds {
   const lb = localBounds(shape)
+  const fraction = paneFractionOf(shape)
   return {
-    minX: lb.maxX * (1 - BBTHREAD_PANE_FRACTION), minY: FRAME_HEADER_HEIGHT,
+    minX: lb.maxX * (1 - fraction), minY: FRAME_HEADER_HEIGHT,
     maxX: lb.maxX, maxY: lb.maxY,
   }
 }
 
 /** The bbthread's hollow workspace rect, in the shape's OWN local frame: the
- * left two-thirds of its width, BELOW the header band — the complement of
- * `bbthreadPaneLocalBounds` (same y-range, x from 0 up to the pane's left
- * edge). Where creation-time-captured children (isFrameLike's frame-capture
- * treatment) live. */
+ * left `1 - paneFractionOf(shape)` of its width, BELOW the header band — the
+ * complement of `bbthreadPaneLocalBounds` (same y-range, x from 0 up to the
+ * pane's left edge). Where creation-time-captured children (isFrameLike's
+ * frame-capture treatment) live. */
 export function bbthreadWorkspaceLocalBounds(shape: Shape): Bounds {
   const lb = localBounds(shape)
+  const fraction = paneFractionOf(shape)
   return {
     minX: lb.minX, minY: FRAME_HEADER_HEIGHT,
-    maxX: lb.maxX * (1 - BBTHREAD_PANE_FRACTION), maxY: lb.maxY,
+    maxX: lb.maxX * (1 - fraction), maxY: lb.maxY,
   }
+}
+
+/** Resizable-pane task — how close to the pane's left edge (in WORLD units,
+ * both inside and outside it) still counts as grabbing the DIVIDER rather
+ * than the pane's body or the hollow workspace beside it. Mirrors
+ * FRAME_EDGE_MARGIN's "comfortable click target" tradeoff/value, halved (a
+ * narrower target than a whole frame's border, since the divider sits deep
+ * inside the shape rather than along its outer edge — a wide margin there
+ * would eat into the workspace/pane click targets on either side). */
+export const BBTHREAD_DIVIDER_MARGIN = 6
+
+/** True iff WORLD `point` falls within `BBTHREAD_DIVIDER_MARGIN` of `shape`'s
+ * pane's left edge (`bbthreadPaneLocalBounds(shape).minX`), at a y within the
+ * pane's own y-range — false for any non-'bbthread' kind. Resizable-pane
+ * task — canvas-editor's select tool gates its `resizingPane` drag mode on
+ * this (taking precedence over the ordinary pane-is-solid translate AND the
+ * pane double-click-to-edit gate, both of which the divider band otherwise
+ * overlaps), and `hitTestPoint` below folds it into the bbthread's overall
+ * hit region so the band right OUTSIDE the pane's own bounds (the half of
+ * the margin that spills into the hollow workspace) still resolves as a hit
+ * on the shape instead of a miss. */
+export function isPointOnBbthreadDivider(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+  if (shape.kind !== 'bbthread') return false
+  const local = toLocalPoint(doc, shape, point)
+  const pane = bbthreadPaneLocalBounds(shape)
+  return (
+    Math.abs(local.x - pane.minX) <= BBTHREAD_DIVIDER_MARGIN &&
+    local.y >= pane.minY && local.y <= pane.maxY
+  )
 }
 
 /** True iff WORLD `point` falls in `shape`'s thread pane
@@ -569,6 +630,12 @@ export function hitTestPoint(doc: CanvasDocument, shape: Shape, point: Point): b
     if (shape.kind === 'bbthread') {
       const pane = bbthreadPaneLocalBounds(shape)
       if (local.x >= pane.minX && local.x <= pane.maxX && local.y >= pane.minY && local.y <= pane.maxY) return true
+      // Resizable-pane task: the divider's margin straddles the pane's left
+      // edge, so half of it (paneLeft - margin .. paneLeft) falls just
+      // OUTSIDE the pane rect just tested above, in the otherwise-hollow
+      // workspace -- without this, a pointerdown grabbing that half of the
+      // divider would miss the shape entirely and start a marquee instead.
+      if (isPointOnBbthreadDivider(doc, shape, point)) return true
     }
     const inBox = local.x >= lb.minX && local.x <= lb.maxX && local.y >= lb.minY && local.y <= lb.maxY
     if (!inBox) return false

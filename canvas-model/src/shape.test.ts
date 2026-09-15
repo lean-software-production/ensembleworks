@@ -445,4 +445,14 @@ assert.ok(
 )
 assert.ok(!validateShape(bbthreadWith({ threadId: 123 })).ok, 'a non-string threadId is rejected')
 assert.ok(!validateShape(bbthreadWith({ name: 42 })).ok, 'a non-string name is rejected')
+
+// Resizable-pane task — bbthread props += optional paneFraction: z.number(),
+// any finite value (clamping is geometry.ts's paneFractionOf's job, not the
+// schema's -- see that function's doc comment).
+assert.ok(validateShape(bbthreadWith({ w: 960, h: 600, paneFraction: 0.5 })).ok, 'a bbthread with a numeric paneFraction validates')
+assert.ok(
+  validateShape(bbthreadWith({ w: 960, h: 600, paneFraction: 5 })).ok,
+  'an out-of-[0.2,2/3]-range paneFraction still validates at the schema level -- clamping is the reader job, not the schema',
+)
+assert.ok(!validateShape(bbthreadWith({ w: 960, h: 600, paneFraction: '0.5' })).ok, 'a non-number paneFraction is rejected')
 console.log('ok: bbthread props schema')

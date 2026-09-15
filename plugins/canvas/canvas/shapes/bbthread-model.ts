@@ -26,7 +26,7 @@
 //      header split (hit-testing depends on it); this file only subdivides
 //      the pane's own interior, which hit-testing has no opinion about.
 import type { Bounds, Shape } from "@ensembleworks/canvas-model";
-import { bbthreadPaneLocalBounds, bbthreadWorkspaceLocalBounds, frameHeaderLocalBounds } from "@ensembleworks/canvas-model";
+import { BBTHREAD_DIVIDER_MARGIN, bbthreadPaneLocalBounds, bbthreadWorkspaceLocalBounds, frameHeaderLocalBounds } from "@ensembleworks/canvas-model";
 import { promptTextFor } from "../shape-text.js";
 
 // ---------------------------------------------------------------------------
@@ -239,6 +239,13 @@ export interface BbThreadLayout {
   readonly workspace: Bounds;
   /** The solid right-third thread pane, the whole thing. */
   readonly pane: Bounds;
+  /** The draggable resize strip: a vertical band centred on the pane's left
+   * edge, `2 * BBTHREAD_DIVIDER_MARGIN` wide, spanning the pane's y-range
+   * (below the header). canvas-editor's select tool hit-tests the same band
+   * (`isPointOnBbthreadDivider`, canvas-model) to enter its resizing mode; this
+   * is only the RENDERED rect, restated here so BbThreadShape.tsx draws it
+   * from the same one function as every other rect it needs. */
+  readonly divider: Bounds;
   /** The pane's own title row: thread title + status pill. */
   readonly paneHeaderRow: Bounds;
   /** The pane's own middle: the `ThreadChat` mount (or the picker/gone
@@ -255,9 +262,15 @@ export function paneLayout(shape: Shape): BbThreadLayout {
   const header = frameHeaderLocalBounds(shape);
   const workspace = bbthreadWorkspaceLocalBounds(shape);
   const pane = bbthreadPaneLocalBounds(shape);
+  const divider: Bounds = {
+    minX: pane.minX - BBTHREAD_DIVIDER_MARGIN,
+    minY: pane.minY,
+    maxX: pane.minX + BBTHREAD_DIVIDER_MARGIN,
+    maxY: pane.maxY,
+  };
   const paneHeaderRow: Bounds = { minX: pane.minX, minY: pane.minY, maxX: pane.maxX, maxY: pane.minY + PANE_HEADER_ROW_HEIGHT };
   const paneFooter: Bounds = { minX: pane.minX, minY: pane.maxY - PANE_FOOTER_HEIGHT, maxX: pane.maxX, maxY: pane.maxY };
   const bodyMaxY = Math.max(paneHeaderRow.maxY, paneFooter.minY);
   const paneBody: Bounds = { minX: pane.minX, minY: paneHeaderRow.maxY, maxX: pane.maxX, maxY: bodyMaxY };
-  return { header, workspace, pane, paneHeaderRow, paneBody, paneFooter };
+  return { header, workspace, pane, divider, paneHeaderRow, paneBody, paneFooter };
 }
