@@ -133,23 +133,30 @@ identically to "absent" everywhere a `bbthread` shape's binding is read
 (`threadIdOf`, `canvas/thread-frames.ts`'s own `stringProp`), is this plugin's
 one workaround for that gap.
 
-**The pane is the only solid part of the frame's interior**, and it follows
-the same idle/focused policy the web app's canvas-v2 embeds use (reimplemented
-locally — this plugin does not import from `client/`, see
-`canvas/shapes/bbthread-model.ts`'s INTERACTION MODE section): a single click
-selects or drags the frame like any other shape, exactly as it would over the
-frame's hollow left two-thirds; **double-click the pane** to focus it, which
-stops its own pointer/wheel/keyboard events from reaching the canvas so the
-timeline scrolls and clicks land on the picker/`ThreadChat` instead of arming
-a drag or a marquee; **Escape, or a click outside the pane**, returns to idle.
-Hit-testing itself (which part of a `bbthread` shape is "solid") is
+**The pane is the only solid part of the frame's interior**, and whether it is
+interactive right now is decided by the EDITOR, not this component
+(docs/plans/2026-09-15-bb-thread-frame.md's "Pane input routing" follow-up): a
+single click selects or drags the frame like any other shape, exactly as it
+would over the frame's hollow left two-thirds; **double-click the pane** to
+start editing it (canvas-editor's select-tool FSM turns that into `BeginEdit
+{ region: 'body' }`), which makes canvas-react's viewport yield every
+pointer/wheel event — and every key but Escape — whose DOM target lands
+inside the pane, so the timeline scrolls and clicks reach the picker/
+`ThreadChat` instead of arming a drag or a marquee; **Escape, or a click
+outside the pane**, ends the edit and hands input back to the canvas. There is
+no local idle/focused reducer in this plugin any more — `BbThreadShape.tsx`
+only reads `editorState.editingId`/`editingRegion` (via
+`paneInteraction`, `canvas/shapes/bbthread-model.ts`) and reflects the
+answer: it sets `data-canvas-interactive` on the pane only while interactive,
+and shows a small hint ("Double-click to read · Esc to leave", etc) while it
+isn't. Hit-testing itself (which part of a `bbthread` shape is "solid") is
 canvas-model's job, not this component's — see `isFrameLike`,
 `bbthreadPaneLocalBounds` and `bbthreadWorkspaceLocalBounds` in
 `canvas-model/src/geometry.ts`.
 
 | File | What it owns |
 | --- | --- |
-| `canvas/shapes/bbthread-model.ts` | every pure decision: pane state, the spawn prompt, the idle/focused reducer, and the pane's own internal layout (title row / body / footer) |
+| `canvas/shapes/bbthread-model.ts` | every pure decision: pane state, the spawn prompt, `paneInteraction` (interactive/hint, from editor state), and the pane's own internal layout (title row / body / footer) |
 | `canvas/shapes/BbThreadShape.tsx` | the body — "hands only", wires the model's decisions to real DOM and to `ThreadChat`/`experimental_useSidebarThreads`/`useRpc` |
 | `canvas/shapes/bbthread-host.ts` | how the body's **Open full →** button reaches the canvas session's own thread-return navigation, without widening `ShapeBodyProps` for one shape |
 | `canvas/thread-picker.ts` | the picker's ordering/filtering (shared with the retired launch-or-attach spike) |

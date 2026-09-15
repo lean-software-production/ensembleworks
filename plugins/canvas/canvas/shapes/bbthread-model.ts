@@ -10,12 +10,15 @@
 //      (with a title, a status pill and a tone) / gone.
 //   2. `spawnPromptFor` — the seed prompt for "New thread from these
 //      elements", joining the frame's children's text.
-//   3. `reduceInteractionMode` / `shouldSwallowEvents` — the idle/focused
-//      state machine the web app's client/src/canvas-v2/shapes/
-//      interactionMode.ts already ships. REIMPLEMENTED HERE, NOT IMPORTED:
-//      this plugin may not depend on `client/`, and the rule itself is one
-//      paragraph — see OURS v1 below, copied verbatim from that file's own
-//      header so the two never state the policy differently.
+//   3. `paneInteraction` — whether the pane is "interactive" right now, and
+//      what hint to show when it isn't. This used to be a local idle/
+//      focused reducer owned by this module (double-click swallowed events,
+//      Escape/outside-click exited); per docs/plans/2026-09-15-bb-thread-
+//      frame.md's "Pane input routing" follow-up, that policy moved OUT of
+//      the shape entirely and into the editor FSM + canvas-react's viewport
+//      yield rule (`data-canvas-interactive`). This module now only
+//      REFLECTS the editor's own `editingId`/`editingRegion` state — it
+//      decides nothing about when editing starts or ends.
 //   4. `paneLayout` — the pane's own local-pixel sub-rects (title row /
 //      chat body / footer), built on top of canvas-model's
 //      `bbthreadPaneLocalBounds`/`bbthreadWorkspaceLocalBounds`/
@@ -173,42 +176,49 @@ export function spawnPromptFor(children: readonly Shape[], getText: (id: string)
 }
 
 // ---------------------------------------------------------------------------
-// 3. INTERACTION MODE (idle/focused) — reimplemented, not imported; see the
-// module header for why.
+// 3. PANE INTERACTION — reflects editor state, decides nothing.
 // ---------------------------------------------------------------------------
 
 /**
- * OURS v1 (copied verbatim from client/src/canvas-v2/shapes/
- * interactionMode.ts's own header, which is the ratified statement of this
- * policy — restated here because this plugin cannot import that file):
- *
- *   'idle'    — a single click selects the shape; pointer/keyboard events
- *               are NOT swallowed, so they reach the canvas's own
- *               select/pan/zoom handling exactly like any other shape.
- *   'focused' — entered via a dedicated affordance (double-click on the
- *               pane); pointer/keyboard events ARE swallowed
- *               (stopPropagation) so scrolling the timeline, clicking a
- *               message, etc. never also drives canvas tools. Escape or a
- *               click outside the pane's own DOM exits back to 'idle'.
+ * The editor-local fields `paneInteraction` reads — a local structural type
+ * (same posture as `SidebarThreadLike` above) so a unit test can hand it a
+ * plain object instead of a whole `EditorState`.
  */
-export type InteractionMode = "idle" | "focused";
-
-export type InteractionEvent = "focus-request" | "exit-request";
-
-/** Pure transition table — total, idempotent no-ops where the event doesn't
- * apply (a focus-request while already focused stays focused; an
- * exit-request while already idle stays idle). */
-export function reduceInteractionMode(mode: InteractionMode, event: InteractionEvent): InteractionMode {
-  if (event === "focus-request") return "focused";
-  return "idle";
+export interface PaneEditorState {
+  readonly editingId: string | null;
+  readonly editingRegion: "name" | "body" | null;
 }
 
-/** True iff `mode` should stopPropagation on pointer/wheel/keyboard events
- * reaching the pane — the one predicate every event handler in
- * BbThreadShape.tsx consults, so idle/focused -> swallow-or-not is decided
- * in exactly one place. */
-export function shouldSwallowEvents(mode: InteractionMode): boolean {
-  return mode === "focused";
+export interface PaneInteraction {
+  /** True iff THIS shape's pane is the one currently being edited
+   * (`editingId === shape.id && editingRegion === 'body'`) — the select
+   * tool's double-click-in-the-pane transition (canvas-editor) is the only
+   * thing that ever makes this true; this module just reads the result. */
+  readonly interactive: boolean;
+  /** Shown only while NOT interactive — null while `interactive` (nothing to
+   * hint at once you're already in) and null while `pane.kind === 'loading'`
+   * (nothing useful to say about a state that resolves itself). */
+  readonly hint: string | null;
+}
+
+const HINT_FOR_KIND: Partial<Record<PaneState["kind"], string>> = {
+  unbound: "Double-click to choose a thread",
+  bound: "Double-click to read · Esc to leave",
+  gone: "Double-click to unbind",
+};
+
+/**
+ * Whether this shape's pane is interactive right now, and what hint to show
+ * when it isn't. `pane` supplies the hint's WORDING (it differs by
+ * unbound/bound/gone; `loading` gets none); `editorState` supplies whether
+ * this shape is the one being edited, at the `'body'` region specifically
+ * (`'name'` is the frame-header rename, a wholly separate edit this pane has
+ * no opinion about).
+ */
+export function paneInteraction(shape: Shape, pane: PaneState, editorState: PaneEditorState): PaneInteraction {
+  const interactive = editorState.editingId === shape.id && editorState.editingRegion === "body";
+  const hint = interactive ? null : (HINT_FOR_KIND[pane.kind] ?? null);
+  return { interactive, hint };
 }
 
 // ---------------------------------------------------------------------------

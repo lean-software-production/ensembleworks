@@ -33,6 +33,16 @@ for (const [event, expected] of cases) {
 console.log('ok: resolveShortcut maps every host shortcut to one command')
 
 for (const [event] of cases) {
+  // Escape is the one deliberate exception (pane input routing task,
+  // docs/plans/2026-09-15-bb-thread-frame.md's follow-up section) — see the
+  // dedicated case below.
+  if (event.key === 'Escape') continue
   assert.equal(resolveShortcut(event, 'shape:editing'), null, `no shortcut fires while text-editing: ${event.key}`)
 }
-console.log('ok: resolveShortcut is silent while a shape is being text-edited')
+console.log('ok: resolveShortcut is silent (except Escape) while a shape is being text-edited')
+
+// Escape while editing resolves to 'endEdit', not 'cancel' — a region with
+// no DOM editing surface of its own (a bbthread's thread pane) has nothing
+// else to catch the keypress and end the edit itself.
+assert.deepEqual(resolveShortcut(key('Escape'), 'shape:editing'), { type: 'endEdit' }, 'Escape while editing resolves to endEdit')
+console.log('ok: resolveShortcut resolves Escape to endEdit while editing')

@@ -104,6 +104,7 @@
 import {
   computeExcludedIds,
   isFrameLike,
+  isPointInBbthreadPane,
   isPointInFrameHeaderBand,
   isTextCapableKind,
   pageIdOf,
@@ -412,9 +413,24 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         state.lastClick !== null &&
         state.lastClick.targetId === hit &&
         isDoubleClick(state.lastClick, event)
+      // END-EDIT-ON-OUTSIDE-CLICK (pane input routing task): a pointerdown
+      // that lands on anything OTHER than the shape currently being edited
+      // ends that edit FIRST, before the normal pointing/selection
+      // machinery below decides what this click means. Today this only
+      // matters at the FSM level for a kind with no DOM editing surface of
+      // its own (a bbthread's thread pane has no textarea to blur) — every
+      // text-capable kind already gets this for free from TextEditor.tsx's
+      // own blur handler, so this EndEdit is harmless-but-redundant there
+      // (editor.ts's EndEdit is idempotent once editingId is already null,
+      // and here editingId is still non-null at the moment this fires, same
+      // as any other EndEdit emission). A click on the editing shape itself
+      // (hit === editingId) is explicitly excluded — that's a normal
+      // re-click within the same edit, not an "outside" click.
+      const editingId = editor.get().editingId
+      const intents: Intent[] = editingId !== null && hit !== editingId ? [{ type: 'EndEdit' }] : []
       return {
         state: { mode: 'pointing', downScreen: { x: event.x, y: event.y }, targetId: hit, shiftDown: event.modifiers.shift, doubleClick },
-        intents: [],
+        intents,
       }
     }
     if (event.type === 'pointermove') {
@@ -446,6 +462,22 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         }
       }
       return { state, intents: [] }
+    }
+    // ESCAPE-ENDS-EDITING (pane input routing task, docs/plans/
+    // 2026-09-15-bb-thread-frame.md's follow-up section): mirrors the
+    // browser path's session/keyboard.ts `resolveShortcut` change (a new
+    // 'endEdit' ShortcutCommand) at the FSM level, where no session layer
+    // sits between raw input and this tool — library.test.ts's fsm-runner
+    // feeds a 'key' GestureOp straight to this tool's onEvent, so ending an
+    // edit on Escape has to be a decision this FSM makes itself too, not
+    // something only the browser's session wiring handles. A region with its
+    // OWN DOM editing surface (note/text/geo's TextEditor.tsx textarea, a
+    // frame-like name's FrameNameEditor.tsx input) already ends its edit on
+    // Escape via that surface's own keydown handling before a keydown would
+    // reach here in a real browser — this branch is what a region with NO
+    // such surface (a bbthread's thread pane) relies on instead.
+    if (event.type === 'keydown' && event.key === 'Escape' && editor.get().editingId !== null) {
+      return { state, intents: [{ type: 'EndEdit' }] }
     }
     if (event.type === 'keydown') {
       // Arrow-key nudge (Task keyboard/K1) — only while idle: a nudge
@@ -566,9 +598,21 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // — this FSM only decides WHEN to fire the intent, never what UI
         // renders for it.
         const opensFrameRename = shape !== undefined && isFrameLike(shape.kind) && isPointInFrameHeaderBand(ctx.snapshot(), shape, worldOf(event))
-        if (state.doubleClick && shape && (isTextCapableKind(shape.kind) || opensFrameRename)) {
+        // PANE INPUT ROUTING (pane input routing task, docs/plans/
+        // 2026-09-15-bb-thread-frame.md's follow-up section): a double-click
+        // landing inside a bbthread's solid thread pane (canvas-model's
+        // isPointInBbthreadPane) also begins editing, exactly like
+        // isTextCapableKind/opensFrameRename above — 'bbthread' is never
+        // text-capable, and this is a DIFFERENT region of the shape than its
+        // header band, so it gets its own gate rather than folding into
+        // either existing condition. `region: 'body'` distinguishes this
+        // from a header-band rename (`region: 'name'`) so the CLIENT knows
+        // which editing surface to mount (FrameNameEditor vs the pane
+        // itself) — see editor.ts's EditorState.editingRegion.
+        const opensBbthreadPane = shape !== undefined && shape.kind === 'bbthread' && isPointInBbthreadPane(ctx.snapshot(), shape, worldOf(event))
+        if (state.doubleClick && shape && (isTextCapableKind(shape.kind) || opensFrameRename || opensBbthreadPane)) {
           intents.push({ type: 'SetSelection', ids: [targetId] })
-          intents.push({ type: 'BeginEdit', id: targetId })
+          intents.push({ type: 'BeginEdit', id: targetId, region: opensFrameRename ? 'name' : 'body' })
         } else if (state.shiftDown) {
           intents.push({ type: 'SetSelection', ids: toggleOrAdd(editor.get().selection, targetId) })
         } else {

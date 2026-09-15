@@ -54,6 +54,18 @@ export interface EditorState {
   readonly selection: ReadonlySet<string>
   readonly hover: string | null
   readonly editingId: string | null
+  /** WHICH part of `editingId` is being edited — 'name' (a frame-like
+   * shape's header-band rename input, FrameNameEditor.tsx) or 'body' (the
+   * shape's own content: TextEditor.tsx's richText textarea for a
+   * text-capable kind, or a bbthread's thread pane). Pane input routing
+   * task (docs/plans/2026-09-15-bb-thread-frame.md's "Pane input routing"
+   * follow-up) — null iff `editingId` is null; the two fields are always
+   * written together (BeginEdit sets both, EndEdit clears both) so this
+   * invariant never needs a separate runtime check. Defaults to 'body' when
+   * a BeginEdit doesn't say otherwise (every pre-existing BeginEdit emitter —
+   * Enter-to-edit, double-click-to-edit a text-capable shape, a create
+   * tool's auto-edit — keeps meaning exactly what it always did). */
+  readonly editingRegion: 'name' | 'body' | null
   readonly nextShapeStyle: Record<string, unknown>
   readonly currentPageId: string
 }
@@ -68,6 +80,7 @@ const INITIAL_STATE: EditorState = {
   selection: new Set(),
   hover: null,
   editingId: null,
+  editingRegion: null,
   nextShapeStyle: {},
   currentPageId: '',
 }
@@ -206,6 +219,7 @@ export class Editor {
       selection: new Set(s.selection),
       hover: s.hover,
       editingId: s.editingId,
+      editingRegion: s.editingRegion,
       nextShapeStyle: Object.freeze({ ...s.nextShapeStyle }),
       currentPageId: s.currentPageId,
     })
@@ -939,7 +953,7 @@ export class Editor {
         return { state: { ...state, hover: intent.id }, docMutated: false, stateChanged: true }
 
       case 'BeginEdit':
-        return { state: { ...state, editingId: intent.id }, docMutated: false, stateChanged: true }
+        return { state: { ...state, editingId: intent.id, editingRegion: intent.region ?? 'body' }, docMutated: false, stateChanged: true }
 
       case 'EndEdit': {
         // tldraw-INSPIRED, not literal parity (validator advisory,
@@ -962,7 +976,7 @@ export class Editor {
         // stop being edited), never `intent` (EndEdit carries no id of its
         // own — the editing shape is state, not part of the intent).
         const editingId = state.editingId
-        const nextState: EditorState = { ...state, editingId: null }
+        const nextState: EditorState = { ...state, editingId: null, editingRegion: null }
         if (editingId === null) {
           return { state: nextState, docMutated: false, stateChanged: true }
         }
@@ -1069,7 +1083,7 @@ export class Editor {
         const ended = state.editingId === null ? null : this.applyOne({ type: 'EndEdit' }, state)
         return {
           ...ended,
-          state: { ...(ended?.state ?? state), currentPageId: intent.pageId, selection: new Set(), hover: null, editingId: null },
+          state: { ...(ended?.state ?? state), currentPageId: intent.pageId, selection: new Set(), hover: null, editingId: null, editingRegion: null },
           docMutated: ended?.docMutated ?? false,
           stateChanged: true,
         }

@@ -91,7 +91,14 @@ export function FrameNameEditor({ toolContext, onNameChange, onEndEdit }: FrameN
   const inputRef = useRef<HTMLInputElement>(null)
   const editingId = editorState.editingId
   const shape = editingId ? snapshot.byId.get(editingId) : undefined
-  if (!editingId || !shape || !isFrameLike(shape.kind)) return null // no active frame-like edit, or it vanished/isn't frame-like (TextEditor.tsx owns every other kind)
+  // REGION GATE (pane input routing task, docs/plans/2026-09-15-bb-thread-
+  // frame.md's follow-up section): a bbthread's editingId also resolves
+  // isFrameLike (isFrameLike covers 'frame' and 'bbthread' alike), but its
+  // `region: 'body'` edit is the thread PANE, not a header rename — this
+  // component mounts ONLY for `region: 'name'`, the same gate the select
+  // tool's opensFrameRename branch used to decide which BeginEdit region to
+  // send in the first place (canvas-editor's select.ts).
+  if (!editingId || !shape || !isFrameLike(shape.kind) || editorState.editingRegion !== 'name') return null // no active header-rename edit, or it vanished/isn't frame-like/isn't the name region (TextEditor.tsx owns every other kind; the bbthread pane owns 'body')
 
   const { maxX: w, maxY: h } = localBounds(shape)
   const name = frameNameValue(shape.props as Record<string, unknown>)

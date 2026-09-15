@@ -214,7 +214,7 @@ const doc: CanvasDocument = makeDocument({
 // ShapeLayer, which DOES need a real index (its own, unrelated culling
 // path — see ShapeLayer.tsx).
 function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolContext {
-  const state: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p' })
+  const state: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, editingRegion: null, nextShapeStyle: {}, currentPageId: 'page:p' })
   const editor = {
     doc: { subscribe: (_l: () => void) => () => {} },
     get: (): EditorState => state,
@@ -287,7 +287,7 @@ function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolCo
   assert.deepEqual(embedWrapperStyle('active'), { visibility: 'visible', pointerEvents: 'auto' })
   assert.deepEqual(embedWrapperStyle('suspended'), { visibility: 'hidden', pointerEvents: 'none' })
 
-  const editorState: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p' })
+  const editorState: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, editingRegion: null, nextShapeStyle: {}, currentPageId: 'page:p' })
 
   // ACTIVE, via the real stateful EmbedHost: no effects run under
   // renderToStaticMarkup, so this observes the pre-controller 'active'
@@ -348,7 +348,7 @@ function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolCo
     isLocked: false, opacity: 1, meta: {}, props: { w: 50, h: 50 },
   }
 
-  const editorStateForDispatch: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p' })
+  const editorStateForDispatch: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, editingRegion: null, nextShapeStyle: {}, currentPageId: 'page:p' })
 
   // 10a. EmbedHost forwards dispatch straight to the resolved embed component.
   const hostHtml = renderToStaticMarkup(
@@ -418,7 +418,7 @@ function fakeToolContext(snapshot: CanvasDocument, indexThrows: boolean): ToolCo
 //    EmbedLayer's "no viewport cull at all" contract (case 7 above).
 // ============================================================================
 function fakeToolContextForPage(snapshot: CanvasDocument, currentPageId: string): ToolContext {
-  const state: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId })
+  const state: EditorState = Object.freeze({ camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null, editingId: null, editingRegion: null, nextShapeStyle: {}, currentPageId })
   const editor = {
     doc: { subscribe: (_l: () => void) => () => {} },
     get: (): EditorState => state,

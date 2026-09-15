@@ -11,6 +11,7 @@ import { toolShortcut, type ToolShortcut } from './tool-shortcut.js'
 
 export type ShortcutCommand =
   | { readonly type: 'cancel' }
+  | { readonly type: 'endEdit' }
   | { readonly type: 'delete' }
   | { readonly type: 'undo' }
   | { readonly type: 'redo' }
@@ -20,7 +21,15 @@ export type ShortcutCommand =
   | { readonly type: 'tool'; readonly shortcut: ToolShortcut }
 
 export function resolveShortcut(event: KeyInputEvent, editingId: string | null): ShortcutCommand | null {
-  if (editingId !== null) return null
+  // PANE INPUT ROUTING (docs/plans/2026-09-15-bb-thread-frame.md's
+  // follow-up section): while editing, every OTHER shortcut still declines
+  // (a text-capable shape's TextEditor.tsx textarea, or a frame-like
+  // shape's FrameNameEditor.tsx input, owns the keyboard for anything else),
+  // but Escape must still end the edit — previously this returned `null`
+  // unconditionally here, so Escape was silently swallowed for any editing
+  // region with no DOM surface of its own to catch it (a bbthread's thread
+  // pane has no textarea/input to fire its own Escape handling).
+  if (editingId !== null) return event.key === 'Escape' ? { type: 'endEdit' } : null
   if (event.key === 'Escape') return { type: 'cancel' }
   if (event.key === 'Delete' || event.key === 'Backspace') return { type: 'delete' }
   const key = event.key.toLowerCase()

@@ -31,7 +31,7 @@ import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { cameraTransform, WorldLayer } from './WorldLayer.js'
 import { Grid } from './Grid.js'
 import { Viewport } from './Viewport.js'
-import { keyEventToInput, pointerEventToInput, wheelEventToInput, type KeyEventLike, type PointerEventLike, type RectLike, type WheelEventLike } from './dom-events.js'
+import { keyEventToInput, pointerEventToInput, wheelEventToInput, yieldsToInteractive, type KeyEventLike, type PointerEventLike, type RectLike, type WheelEventLike } from './dom-events.js'
 
 // ============================================================================
 // 1. cameraTransform: exact string for two hand-picked cameras.
@@ -179,6 +179,25 @@ import { keyEventToInput, pointerEventToInput, wheelEventToInput, type KeyEventL
   assert.ok(!('pressure' in pointerEventToInput(untypedEvent, rect)), 'a PointerEvent with no pointerType at all must not carry a pressure key either')
 
   console.log('ok: pointerEventToInput — pressure populated ONLY for pointerType==="pen", key absent (not undefined) otherwise (Task W1, D-3)')
+}
+
+// ============================================================================
+// 5b. yieldsToInteractive (pane input routing task) — fabricated targets,
+//    no real DOM (this file's own no-DOM house style).
+// ============================================================================
+{
+  assert.equal(yieldsToInteractive(null), false, 'a null target never yields')
+
+  const nonElement = {} as unknown as EventTarget
+  assert.equal(yieldsToInteractive(nonElement), false, 'a structural value with no closest() never yields')
+
+  const insideInteractive = { closest: () => ({}) } as unknown as EventTarget
+  assert.equal(yieldsToInteractive(insideInteractive), true, 'a target whose closest() finds a match yields')
+
+  const outsideInteractive = { closest: () => null } as unknown as EventTarget
+  assert.equal(yieldsToInteractive(outsideInteractive), false, 'a target whose closest() finds nothing does not yield')
+
+  console.log('ok: yieldsToInteractive — null / non-Element / matching / non-matching fabricated targets')
 }
 
 // ============================================================================

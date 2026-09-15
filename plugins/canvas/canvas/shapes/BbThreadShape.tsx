@@ -1,9 +1,22 @@
 // The `bbthread` shape's body — "hands only": every decision it renders
-// comes from bbthread-model.ts (state, layout, interaction mode, the spawn
-// prompt); this file only wires those decisions to real DOM elements and the
-// host SDK's `ThreadChat`/`experimental_useSidebarThreads`/`useRpc` hooks.
-// See docs/plans/2026-09-15-bb-thread-frame.md and this plugin's README's
-// "The bb thread frame" section.
+// comes from bbthread-model.ts (pane state, layout, pane interaction, the
+// spawn prompt); this file only wires those decisions to real DOM elements
+// and the host SDK's `ThreadChat`/`experimental_useSidebarThreads`/`useRpc`
+// hooks. See docs/plans/2026-09-15-bb-thread-frame.md and this plugin's
+// README's "The bb thread frame" section.
+//
+// INTERACTION POLICY (2026-09-15, "Pane input routing" follow-up): the
+// EDITOR decides whether the pane is interactive, not this body. Double-
+// clicking the pane, Escape, and clicking outside are all handled by
+// canvas-editor's select-tool FSM now (`BeginEdit { region: 'body' }` /
+// `EndEdit`); this component only READS `editorState.editingId`/
+// `editingRegion` (via `paneInteraction`) and reflects the answer: it sets
+// `data-canvas-interactive` on the pane ONLY while interactive — the
+// attribute canvas-react's viewport yield rule looks for to stop capturing/
+// forwarding pointer, wheel and (non-Escape) key events aimed inside it —
+// and shows a small hint bar (double-click to focus / Esc to leave / etc)
+// while it is not. There is no local idle/focused reducer here any more;
+// see bbthread-model.ts's PANE INTERACTION section.
 //
 // NOT AN EMBED (canvas-react's `registerShape` `{ embed: true }` flag):
 // `ThreadChat` keeps its own connection to the thread and re-fetches on
@@ -11,11 +24,15 @@
 // cull-unmount just means the next mount re-subscribes.
 //
 // MEMO STRATEGY (shapeRegistry.ts's ShapeBodyProps doc comment): wrapped in
-// `React.memo` with a CONTENT comparator on `shape` alone
-// (`stableStringify`, canvas-model's canonical serialization) — `snapshot`
-// changes identity every doc commit regardless of whether this shape's own
-// children changed, and diffing against it would defeat the whole point of
-// memoizing a body this heavy (a live `ThreadChat` mount). CONSEQUENCE,
+// `React.memo` with a CONTENT comparator on `shape`
+// (`stableStringify`, canvas-model's canonical serialization) PLUS
+// `editorState.editingId`/`editingRegion` — the two editor-state fields
+// `paneInteraction` reads, so a change in either (this pane becoming/
+// ceasing to be the one being edited) still re-renders even though `shape`
+// itself didn't change. `snapshot` changes identity every doc commit
+// regardless of whether this shape's own children changed, and diffing
+// against it would defeat the whole point of memoizing a body this heavy (a
+// live `ThreadChat` mount) — so it stays OUT of the comparator. CONSEQUENCE,
 // STATED PLAINLY: `snapshot`/`getText` are read ONLY inside the "New thread
 // from these elements" codepath (computed where used, never hoisted into a
 // `useMemo` keyed on `snapshot` — that would still only run when this
@@ -29,17 +46,7 @@
 // spawn-prompt freshness, and the common case (add children, then click
 // "New thread") re-renders anyway via the pointer/selection activity that
 // usually surrounds it.
-import {
-  memo,
-  useEffect,
-  useRef,
-  useState,
-  type CSSProperties,
-  type KeyboardEvent as ReactKeyboardEvent,
-  type PointerEvent as ReactPointerEvent,
-  type RefObject,
-  type WheelEvent as ReactWheelEvent,
-} from "react";
+import { memo, useEffect, useState, type CSSProperties } from "react";
 import { childrenOf, stableStringify, type Shape } from "@ensembleworks/canvas-model";
 import type { ShapeBodyProps } from "@ensembleworks/canvas-react";
 import { ThreadChat, experimental_useSidebarThreads, useRpc } from "@get-bb/plugin-sdk/app";
@@ -48,12 +55,10 @@ import { filterThreadOptions, type ThreadOption } from "../thread-picker.js";
 import { openBbThread } from "./bbthread-host.js";
 import {
   bbthreadPaneState,
+  paneInteraction,
   paneLayout,
-  reduceInteractionMode,
-  shouldSwallowEvents,
   spawnPromptFor,
   threadIdOf,
-  type InteractionMode,
   type PaneState,
   type PaneTone,
 } from "./bbthread-model.js";
@@ -167,53 +172,20 @@ function UnboundPicker({ options, error, query, onQuery, onPick, spawnDisabled, 
   );
 }
 
-interface BbThreadInteraction {
-  readonly mode: InteractionMode;
-  readonly swallow: boolean;
-  readonly onDoubleClick: () => void;
-}
-
-/** The idle/focused DOM wiring: a double-click on the pane focuses it
- * (pointer/wheel/keydown then stop reaching the canvas); Escape or a
- * pointerdown outside the pane's own root exits — same shape as the web
- * app's `useInteractionMode` hook, reimplemented against
- * bbthread-model.ts's reducer (see that file's INTERACTION MODE section for
- * why this plugin cannot import the original). */
-function useBbThreadInteraction(rootRef: RefObject<HTMLDivElement | null>): BbThreadInteraction {
-  const [mode, setMode] = useState<InteractionMode>("idle");
-  useEffect(() => {
-    if (mode !== "focused") return;
-    const exit = () => setMode((m) => reduceInteractionMode(m, "exit-request"));
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") exit();
-    };
-    const onPointerDown = (e: PointerEvent) => {
-      const root = rootRef.current;
-      if (root && e.target instanceof Node && !root.contains(e.target)) exit();
-    };
-    document.addEventListener("keydown", onKeyDown, true);
-    document.addEventListener("pointerdown", onPointerDown, true);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown, true);
-      document.removeEventListener("pointerdown", onPointerDown, true);
-    };
-  }, [mode, rootRef]);
-  return { mode, swallow: shouldSwallowEvents(mode), onDoubleClick: () => setMode((m) => reduceInteractionMode(m, "focus-request")) };
-}
-
-function BbThreadShapeInner({ shape, snapshot, getText, dispatch }: ShapeBodyProps) {
+function BbThreadShapeInner({ shape, snapshot, editorState, getText, dispatch }: ShapeBodyProps) {
   const rpc = useRpc<typeof rpcContract>();
   const sidebar = experimental_useSidebarThreads();
   const threadId = threadIdOf(shape);
   const thread = threadId === null ? undefined : sidebar.threads.find((t) => t.id === threadId);
   const pane: PaneState = bbthreadPaneState(shape, thread, sidebar.status);
   const layout = paneLayout(shape);
-
-  const rootRef = useRef<HTMLDivElement>(null);
-  const { swallow, onDoubleClick } = useBbThreadInteraction(rootRef);
-  const swallowHandlers = swallow
-    ? { onPointerDown: (e: ReactPointerEvent) => e.stopPropagation(), onWheel: (e: ReactWheelEvent) => e.stopPropagation(), onKeyDown: (e: ReactKeyboardEvent) => e.stopPropagation() }
-    : {};
+  const interaction = paneInteraction(shape, pane, { editingId: editorState.editingId, editingRegion: editorState.editingRegion });
+  // A present-but-empty `data-canvas-interactive` attribute means
+  // interactive (canvas-react's viewport yield rule keys off PRESENCE, not
+  // value) — so this must be an absent key, not a `false`-valued one, when
+  // not interactive. Named so the conditional itself (not just its use) is
+  // independently assertable — see tests/bbthread-wiring.test.ts.
+  const interactiveAttrs = interaction.interactive ? { "data-canvas-interactive": "" } : {};
 
   const [options, setOptions] = useState<ThreadOption[] | null>(null);
   const [query, setQuery] = useState("");
@@ -276,11 +248,19 @@ function BbThreadShapeInner({ shape, snapshot, getText, dispatch }: ShapeBodyPro
       </div>
       <div data-canvas-bbthread="workspace" style={{ ...boundsStyle(layout.workspace), pointerEvents: "none" }} />
       <div
-        ref={rootRef}
         data-canvas-bbthread="pane"
-        onDoubleClick={onDoubleClick}
-        {...swallowHandlers}
-        style={{ ...boundsStyle(layout.pane), display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border)", background: "var(--card)", overflow: "hidden" }}
+        {...interactiveAttrs}
+        style={{
+          ...boundsStyle(layout.pane),
+          display: "flex",
+          flexDirection: "column",
+          borderLeft: "1px solid var(--border)",
+          background: "var(--card)",
+          overflow: "hidden",
+          userSelect: interaction.interactive ? "text" : "none",
+          cursor: interaction.interactive ? "auto" : "default",
+          boxShadow: interaction.interactive ? "inset 0 0 0 2px var(--primary)" : "none",
+        }}
       >
         <div
           style={{
@@ -347,13 +327,37 @@ function BbThreadShapeInner({ shape, snapshot, getText, dispatch }: ShapeBodyPro
             </>
           )}
         </div>
+        {interaction.hint !== null && (
+          <div
+            data-canvas-bbthread="hint"
+            style={{
+              position: "absolute",
+              left: 0,
+              right: 0,
+              bottom: 0,
+              pointerEvents: "none",
+              padding: "3px 8px",
+              fontSize: 10,
+              color: "var(--muted-foreground)",
+              background: "color-mix(in srgb, var(--card) 70%, transparent)",
+              textAlign: "center",
+            }}
+          >
+            {interaction.hint}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 function bbthreadPropsEqual(a: ShapeBodyProps, b: ShapeBodyProps): boolean {
-  return a.shape.id === b.shape.id && stableStringify(a.shape) === stableStringify(b.shape);
+  return (
+    a.shape.id === b.shape.id &&
+    stableStringify(a.shape) === stableStringify(b.shape) &&
+    a.editorState.editingId === b.editorState.editingId &&
+    a.editorState.editingRegion === b.editorState.editingRegion
+  );
 }
 
 export const BbThreadShape = memo(BbThreadShapeInner, bbthreadPropsEqual);

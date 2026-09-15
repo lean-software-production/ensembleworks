@@ -131,6 +131,16 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 					cancelAndReset()
 					selectTool('select')
 					return
+				case 'endEdit':
+					// Pane input routing task (docs/plans/2026-09-15-bb-thread-frame.md's
+					// follow-up section) — Escape while editing a region with no DOM
+					// surface of its own (a bbthread's thread pane) resolves here
+					// instead of 'cancel': it must end ONLY the edit, not also reset
+					// the active tool back to 'select' (cancelAndReset()/selectTool()
+					// would be redundant — the select tool is already active whenever
+					// editingId is set) or abandon an unrelated in-flight gesture.
+					apply([{ type: 'EndEdit' }])
+					return
 				case 'delete':
 					apply(deleteSelectionIntents(editor))
 					return

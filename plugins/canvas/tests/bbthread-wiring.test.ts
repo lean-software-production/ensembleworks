@@ -11,7 +11,7 @@
 // `git show dc70212^:plugins/canvas/tests/agent-affordance-wiring.test.ts`).
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { bodyStatements, callsTo, countInCode, initializerText } from "./lib/source.js";
+import { bodyStatements, callsTo, countInCode, initializerText, ternaryArms } from "./lib/source.js";
 
 const SHAPE = readFileSync(new URL("../canvas/shapes/BbThreadShape.tsx", import.meta.url), "utf8");
 const BOOT = readFileSync(new URL("../canvas/panel/connection-boot.ts", import.meta.url), "utf8");
@@ -30,18 +30,38 @@ describe("BbThreadShape renders the pure decisions, not inline logic", () => {
     expect(countInCode(SHAPE, "1 / 3")).toBe(0);
   });
 
-  it("decides pointer/wheel/keyboard swallowing with shouldSwallowEvents, inside the interaction hook", () => {
-    const statements = bodyStatements(SHAPE, "useBbThreadInteraction");
-    const ret = statements.at(-1) ?? "";
-    expect(ret.startsWith("return ")).toBe(true);
-    expect(ret).toContain("shouldSwallowEvents(mode)");
+  it("decides pane interactivity/hint with paneInteraction, not a reimplemented rule", () => {
+    expect(initializerText(SHAPE, "interaction")).toBe(
+      "paneInteraction(shape, pane, { editingId: editorState.editingId, editingRegion: editorState.editingRegion })",
+    );
   });
 
-  it("drives the idle/focused transition through reduceInteractionMode, not a hand-written toggle", () => {
-    const calls = callsTo(SHAPE, "reduceInteractionMode");
-    expect(calls.length).toBeGreaterThanOrEqual(2); // focus-request (double-click) + exit-request (Escape/click-outside)
-    expect(calls.some((call) => call.text.includes('"focus-request"'))).toBe(true);
-    expect(calls.some((call) => call.text.includes('"exit-request"'))).toBe(true);
+  it("sets data-canvas-interactive on the pane conditionally, never unconditionally", () => {
+    const arms = ternaryArms(SHAPE, "interactiveAttrs");
+    expect(arms.condition).toBe("interaction.interactive");
+    expect(arms.whenTrue.replace(/\s+/g, "")).toBe('{"data-canvas-interactive":""}');
+    expect(arms.whenFalse.replace(/\s+/g, "")).toBe("{}");
+    // The pane element must actually spread this computed value — a decoy
+    // that kept `interactiveAttrs` perfectly conditional but never attached
+    // it to any element would satisfy the assertions above while leaving
+    // the pane permanently non-interactive to the viewport.
+    expect(countInCode(SHAPE, "{...interactiveAttrs}")).toBe(1);
+  });
+
+  it("no longer swallows events itself — no shouldSwallowEvents/stopPropagation left in the body", () => {
+    expect(countInCode(SHAPE, "shouldSwallowEvents")).toBe(0);
+    expect(countInCode(SHAPE, "stopPropagation")).toBe(0);
+    expect(countInCode(SHAPE, "reduceInteractionMode")).toBe(0);
+    expect(countInCode(SHAPE, "useBbThreadInteraction")).toBe(0);
+    expect(countInCode(SHAPE, "onDoubleClick")).toBe(0);
+  });
+
+  it("the memo comparator reads editorState.editingId and editingRegion, not just shape content", () => {
+    const statements = bodyStatements(SHAPE, "bbthreadPropsEqual");
+    const ret = statements.at(-1) ?? "";
+    expect(ret.startsWith("return")).toBe(true);
+    expect(ret).toContain("a.editorState.editingId === b.editorState.editingId");
+    expect(ret).toContain("a.editorState.editingRegion === b.editorState.editingRegion");
   });
 
   it("seeds the spawn prompt with spawnPromptFor over the frame's own children", () => {

@@ -45,6 +45,7 @@ const editorState: EditorState = {
   selection: new Set<string>(),
   hover: null,
   editingId: null,
+  editingRegion: null,
   nextShapeStyle: {},
   currentPageId: 'page:p',
 }
@@ -411,7 +412,7 @@ function fakeToolContext(snapshot: CanvasDocument, texts: ReadonlyMap<string, st
 function fakeToolContextForPage(snapshot: CanvasDocument, currentPageId: string): ToolContext {
   const state: EditorState = Object.freeze({
     camera: Object.freeze({ x: 0, y: 0, z: 1 }), selection: new Set<string>(), hover: null,
-    editingId: null, nextShapeStyle: {}, currentPageId,
+    editingId: null, editingRegion: null, nextShapeStyle: {}, currentPageId,
   })
   const editor = {
     doc: { subscribe: (_l: () => void) => () => {}, getText: (_id: string) => '' },

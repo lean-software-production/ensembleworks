@@ -10,7 +10,7 @@ import assert from 'node:assert/strict'
 import { makeDocument } from './document.js'
 import {
   hitTestPoint, FRAME_HEADER_HEIGHT, FRAME_EDGE_MARGIN,
-  isFrameLike, localBounds, bbthreadPaneLocalBounds, bbthreadWorkspaceLocalBounds, BBTHREAD_PANE_FRACTION,
+  isFrameLike, isPointInBbthreadPane, localBounds, bbthreadPaneLocalBounds, bbthreadWorkspaceLocalBounds, BBTHREAD_PANE_FRACTION,
 } from './geometry.js'
 
 const base = () => ({ index: 'a1', isLocked: false, opacity: 1, meta: {} })
@@ -134,5 +134,23 @@ assert.equal(
   true,
   'the left edge margin hits a bbthread exactly like a frame',
 )
+
+// ============================================================================
+// isPointInBbthreadPane (pane input routing task): standalone predicate the
+// select tool uses to distinguish "double-click landed in the solid thread
+// pane" from every other bbthread hit region.
+// ============================================================================
+
+// (1) a point inside the pane hits.
+assert.equal(isPointInBbthreadPane(bbDoc, bbthread, { x: 800, y: 300 }), true, 'a point inside the thread pane is reported')
+
+// (2) a point in the hollow workspace misses.
+assert.equal(isPointInBbthreadPane(bbDoc, bbthread, { x: 200, y: 300 }), false, 'a point in the hollow workspace is not in the pane')
+
+// (3) a point in the header band misses (even though hitTestPoint hits there too).
+assert.equal(isPointInBbthreadPane(bbDoc, bbthread, { x: 150, y: -FRAME_HEADER_HEIGHT / 2 }), false, 'a point in the header band is not in the pane')
+
+// (4) a non-bbthread kind never reports a pane hit, even at the same coordinates.
+assert.equal(isPointInBbthreadPane(doc, frame, { x: 250, y: 200 }), false, 'a plain frame has no thread pane at all')
 
 console.log('ok: frame-hit-test')

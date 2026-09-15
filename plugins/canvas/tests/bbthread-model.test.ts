@@ -6,12 +6,12 @@ import { describe, expect, it } from "vitest";
 import type { Shape } from "@ensembleworks/canvas-model";
 import {
   bbthreadPaneState,
+  paneInteraction,
   paneLayout,
-  reduceInteractionMode,
-  shouldSwallowEvents,
   spawnPromptFor,
   threadIdOf,
   toneFor,
+  type PaneState,
   type SidebarThreadLike,
 } from "../canvas/shapes/bbthread-model.js";
 
@@ -184,26 +184,59 @@ describe("spawnPromptFor", () => {
   });
 });
 
-describe("reduceInteractionMode / shouldSwallowEvents", () => {
-  it("focuses on a focus-request from idle", () => {
-    expect(reduceInteractionMode("idle", "focus-request")).toBe("focused");
+describe("paneInteraction", () => {
+  const shape = bbthread();
+  const notEditing = { editingId: null, editingRegion: null };
+
+  it("is not interactive when nothing is being edited", () => {
+    expect(paneInteraction(shape, { kind: "unbound" }, notEditing)).toEqual({
+      interactive: false,
+      hint: "Double-click to choose a thread",
+    });
   });
 
-  it("stays focused on a focus-request while already focused", () => {
-    expect(reduceInteractionMode("focused", "focus-request")).toBe("focused");
+  it("is not interactive when a DIFFERENT shape is being edited", () => {
+    const editorState = { editingId: "shape:someone-else", editingRegion: "body" as const };
+    expect(paneInteraction(shape, { kind: "unbound" }, editorState)).toEqual({
+      interactive: false,
+      hint: "Double-click to choose a thread",
+    });
   });
 
-  it("exits to idle on an exit-request from focused", () => {
-    expect(reduceInteractionMode("focused", "exit-request")).toBe("idle");
+  it("is not interactive when THIS shape is being edited at the 'name' region", () => {
+    const editorState = { editingId: shape.id, editingRegion: "name" as const };
+    expect(paneInteraction(shape, { kind: "bound", title: "t", statusLabel: "Idle", tone: "idle", isArchived: false }, editorState)).toEqual({
+      interactive: false,
+      hint: "Double-click to read · Esc to leave",
+    });
   });
 
-  it("stays idle on an exit-request while already idle", () => {
-    expect(reduceInteractionMode("idle", "exit-request")).toBe("idle");
+  it("is interactive when THIS shape is being edited at the 'body' region", () => {
+    const editorState = { editingId: shape.id, editingRegion: "body" as const };
+    expect(paneInteraction(shape, { kind: "bound", title: "t", statusLabel: "Idle", tone: "idle", isArchived: false }, editorState)).toEqual({
+      interactive: true,
+      hint: null,
+    });
   });
 
-  it("swallows events only in focused mode", () => {
-    expect(shouldSwallowEvents("idle")).toBe(false);
-    expect(shouldSwallowEvents("focused")).toBe(true);
+  it("hints 'choose a thread' when unbound", () => {
+    const pane: PaneState = { kind: "unbound" };
+    expect(paneInteraction(shape, pane, notEditing).hint).toBe("Double-click to choose a thread");
+  });
+
+  it("hints nothing while loading", () => {
+    const pane: PaneState = { kind: "loading" };
+    expect(paneInteraction(shape, pane, notEditing).hint).toBeNull();
+  });
+
+  it("hints 'read · Esc to leave' when bound", () => {
+    const pane: PaneState = { kind: "bound", title: "t", statusLabel: "Idle", tone: "idle", isArchived: false };
+    expect(paneInteraction(shape, pane, notEditing).hint).toBe("Double-click to read · Esc to leave");
+  });
+
+  it("hints 'unbind' when gone", () => {
+    const pane: PaneState = { kind: "gone" };
+    expect(paneInteraction(shape, pane, notEditing).hint).toBe("Double-click to unbind");
   });
 });
 

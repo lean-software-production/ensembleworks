@@ -8,6 +8,9 @@ import { armedStyleAppliesToCreatedShape } from './contracts/armed-style-applies
 import { arrowBindsToTargetShape } from './contracts/arrow-binds-to-target-shape.js'
 import { bbthreadPaneIsSolid } from './contracts/bbthread-pane-is-solid.js'
 import { bbthreadWorkspaceIsHollow } from './contracts/bbthread-workspace-is-hollow.js'
+import { bbthreadPaneDoubleClickBeginsEditing } from './contracts/bbthread-pane-double-click-begins-editing.js'
+import { bbthreadEscapeEndsEditing } from './contracts/bbthread-escape-ends-editing.js'
+import { editingEndsOnOutsideClick } from './contracts/editing-ends-on-outside-click.js'
 import { arrowHandleDragPreviewsHover } from './contracts/arrow-handle-drag-previews-hover.js'
 import { arrowMidHandleBends } from './contracts/arrow-mid-handle-bends.js'
 import { arrowNudgeMovesSelection } from './contracts/arrow-nudge-moves-selection.js'
@@ -73,6 +76,9 @@ export const CONTRACTS: readonly Contract[] = [
   frameInteriorIsHollow,
   bbthreadPaneIsSolid,
   bbthreadWorkspaceIsHollow,
+  bbthreadPaneDoubleClickBeginsEditing,
+  bbthreadEscapeEndsEditing,
+  editingEndsOnOutsideClick,
   frameHeaderDoubleClickRenames,
   arrowNudgeMovesSelection,
   shiftDragConstrainsToAxis,

@@ -521,6 +521,23 @@ export function bbthreadWorkspaceLocalBounds(shape: Shape): Bounds {
   }
 }
 
+/** True iff WORLD `point` falls in `shape`'s thread pane
+ * (`bbthreadPaneLocalBounds`) — false for any non-'bbthread' kind, or for a
+ * point that lands on the bbthread's header/border/hollow workspace
+ * instead. Pane input routing task (docs/plans/2026-09-15-bb-thread-frame.md's
+ * "Pane input routing" follow-up) — mirrors `isPointInFrameHeaderBand`'s own
+ * shape (local-space band test, exposed standalone) so canvas-editor's select
+ * tool can distinguish "double-click landed in the solid thread pane" (begins
+ * editing with `region: 'body'`) from "landed in the header band"
+ * (`isPointInFrameHeaderBand`, `region: 'name'`) without re-deriving either
+ * local-space test itself. */
+export function isPointInBbthreadPane(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+  if (shape.kind !== 'bbthread') return false
+  const local = toLocalPoint(doc, shape, point)
+  const pane = bbthreadPaneLocalBounds(shape)
+  return local.x >= pane.minX && local.x <= pane.maxX && local.y >= pane.minY && local.y <= pane.maxY
+}
+
 // Is `point` (world/page space) inside this shape's rotated box? Inverse-
 // transforms the point into local space (toLocalPoint) and tests it against
 // the axis-aligned local box — cheaper and exactly equivalent to testing
