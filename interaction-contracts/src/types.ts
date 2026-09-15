@@ -217,6 +217,78 @@ export interface Obs {
    * adapter reads `editor.doc.listPages().length` directly, the browser
    * adapter samples `window.__ew.doc.listPages().length`. */
   pageCount(): number
+  /** A shape's LIVE text content (`CanvasDoc.getText(id)`), or null when the
+   * shape is absent. create-edit-flow's fixer task — the enter-key-edits-
+   * selection contract is FSM-level only, where no DOM textarea exists, so
+   * it is structurally incapable of catching a keyboard-driven edit that
+   * corrupts the shape's text (e.g. Enter both beginning the edit AND
+   * inserting a stray newline once the browser refocuses onto the
+   * newly-mounted textarea within the same keydown). This probe is what
+   * lets a BROWSER-level contract assert on the actual stored text, not
+   * just "editing began". Available at BOTH levels (reads doc state, not
+   * the DOM) — no throw-stub: the FSM adapter reads `editor.doc.getText`
+   * directly, the browser adapter pre-samples `window.__ew.doc.getText`
+   * for the same id union `shapeStyle`/`shapeKind` already sample. */
+  shapeText(id: string): string | null
+  /** The shape id a binding from `fromId`'s `terminal` ('start' or 'end')
+   * points at, or null when no such binding exists. Arrow-body task
+   * (arrow.ts's `binding:<arrowId>-<terminal>` id convention, StartArrow/
+   * CompleteArrow's doc comments) — the contract that proves "drawing an
+   * arrow onto a shape actually binds to it" needs a read of the doc's
+   * bindings, not just its shapes. Available at BOTH levels (reads doc
+   * state, not the DOM) — no throw-stub: the FSM adapter reads
+   * `editor.doc.listBindings()` directly, the browser adapter pre-samples
+   * the WHOLE live bindings table off `window.__ew.doc.listBindings()`
+   * (there is no id set to union sampling against ahead of time — see
+   * `listShapeIds` below for why). */
+  shapeBindingTarget(fromId: string, terminal: 'start' | 'end'): string | null
+  /** Every shape id currently in the doc, all pages/kinds — the full-listing
+   * analogue of `shapeCount()`. Arrow-body task — needed because an arrow's
+   * id is minted from crypto-random and, UNLIKE line/draw, the arrow tool
+   * never auto-selects its just-drawn shape (arrow.ts emits no
+   * `SetSelection`, per line-creates-a-line-shape's own module-comment note
+   * on that divergence) AND an arrow renders no `[data-shape-kind]` DOM
+   * element at all (ShapeLayer.tsx excludes arrow's body entirely — it is
+   * pure SVG overlay), so `paintOrder()` can never see it either. A
+   * contract discovers a drawn arrow's id by diffing this against its
+   * seeded scene ids. Available at BOTH levels (reads doc state, not the
+   * DOM) — no throw-stub: the FSM adapter reads
+   * `editor.doc.listShapes().map(s => s.id)` directly, the browser adapter
+   * samples `window.__ew.doc.listShapes().map(s => s.id)`. */
+  listShapeIds(): readonly string[]
+  /** True when a text-capable shape's RENDERED static label (note/geo/text
+   * body, post-edit — never the editing textarea) is currently clipping its
+   * own content — `scrollHeight > clientHeight` on the label's own
+   * overflow:hidden box. Returns false for an absent shape or one with no
+   * such box. text-autosize fixer task — `shapeStyle(id, 'growY')` alone
+   * cannot catch a systematically-wrong growY (it only proves growY is
+   * NON-ZERO, not that it is ENOUGH): this reads the actual rendered box the
+   * user sees after Escape, the same box the bug (measuring against the
+   * textarea's box model instead of the static body's) silently under-grew.
+   * Browser-only by construction — `scrollHeight`/`clientHeight` are DOM
+   * layout concepts a headless FSM run has nothing to lay out; the FSM
+   * adapter throws 'not observable at fsm level', matching
+   * textSelectionSpans'/paintOrder's established throw-stub pattern. */
+  labelOverflow(id: string): boolean
+  /** The id of the shape currently shown as HOVERED (a prospective-target
+   * preview, distinct from `selectedShapeIds()`), or null when nothing is.
+   * arrow-handles task (gap 3) — proves a candidate binding target is
+   * previewed WHILE dragging an arrow terminal (or drawing a new arrow),
+   * not just resolved silently at release. Available at BOTH levels: the
+   * FSM adapter reads `editor.get().hover` directly (the same field
+   * `SetHover` writes — editor.ts's EditorState); the browser adapter reads
+   * the rendered hover indicator's `data-shape-id` (canvas-react's
+   * Hover.tsx renders `data-overlay="hover-indicator"
+   * data-shape-id={shape.id}` — see Selection.tsx's shared
+   * `shapeOutlineNode`), or null when no such element is mounted. */
+  hoveredShapeId(): string | null
+  /** Ids of the arrows currently RENDERED in the overlay — the
+   * `data-shape-id` of every `[data-overlay="arrow"]` element, in DOM order.
+   * Distinct from `listShapeIds()` (the doc): an arrow can exist in the doc
+   * yet must not be drawn when it lives on another page. Browser-only by
+   * construction (it reads rendered DOM); the FSM adapter throws
+   * 'not observable at fsm level'. */
+  renderedArrowIds(): readonly string[]
 }
 
 /** A contract declaration = data. */

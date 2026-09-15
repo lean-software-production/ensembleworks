@@ -126,8 +126,9 @@ describe("the bar has no width ladder, because it has nothing to drop", () => {
   it("still draws every tool button, ungated", () => {
     // The point of the deletion is that nothing in the bar is width-dependent
     // any more. A new `if` around a control would have to come back through
-    // this module.
-    expect(countInCode(PANEL, "TOOL_BUTTONS.map(")).toBe(1);
+    // this module. The buttons themselves are canvas-ui's shared <Toolbar>,
+    // mounted exactly once and unconditionally.
+    expect(countInCode(PANEL, "<Toolbar")).toBe(1);
   });
 });
 
@@ -180,7 +181,7 @@ describe("the panel's wiring of the floating chrome", () => {
     // bails when the event target is inside `viewportRef`, so a tool button
     // moved inside that box would have every shortcut typed from it swallowed
     // by both handlers.
-    const viewport = PANEL.indexOf("<CanvasSurface");
+    const viewport = PANEL.indexOf("<CanvasViewport");
     const dock = PANEL.indexOf("data-canvas-chrome-dock");
     expect(viewport).toBeGreaterThan(-1);
     expect(dock).toBeGreaterThan(viewport);
@@ -217,14 +218,14 @@ describe("the panel's wiring of the floating chrome", () => {
     // Not nested inside the tab ROW either — that div is where the gated strip
     // goes, and this must not share its fate.
     const row = PANEL.indexOf("data-canvas-page-tab-row");
-    const viewport = PANEL.indexOf("<CanvasSurface");
+    const viewport = PANEL.indexOf("<CanvasViewport");
     expect(row).toBeLessThan(viewport);
     expect(overlays).toBeGreaterThan(viewport);
   });
 
   it("puts the page tabs in the FLOW at the top of the column, above the viewport", () => {
     const tabs = PANEL.indexOf("{pageSwitcher.tabs}");
-    const viewport = PANEL.indexOf("<CanvasSurface");
+    const viewport = PANEL.indexOf("<CanvasViewport");
     expect(tabs).toBeGreaterThan(-1);
     expect(viewport).toBeGreaterThan(-1);
     // In the flow AND first: the strip takes its own height back off the

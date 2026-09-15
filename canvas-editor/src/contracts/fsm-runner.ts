@@ -227,6 +227,48 @@ function makeObs(
       // throw-stub, both adapters are REAL.
       return editor.doc.listPages().length
     },
+    shapeText(id: string) {
+      // create-edit-flow fixer task — a doc read, like shapeStyle/shapeKind:
+      // no throw-stub, both adapters are REAL. `editor.doc.getShape` gates
+      // absence (getText itself has no "shape doesn't exist" signal — it
+      // would just read an empty Loro text container).
+      if (!editor.doc.getShape(id)) return null
+      return editor.doc.getText(id)
+    },
+    shapeBindingTarget(fromId: string, terminal: 'start' | 'end') {
+      // Arrow-body task — a doc read, like shapeCount/pageCount: no
+      // throw-stub, both adapters are REAL. Mirrors arrow-route.ts's
+      // resolveEndpoint's own binding lookup convention exactly.
+      const binding = editor.doc
+        .listBindings()
+        .find((b) => b.fromId === fromId && (b.props as { terminal?: string } | undefined)?.terminal === terminal)
+      return binding?.toId ?? null
+    },
+    listShapeIds() {
+      // Arrow-body task — a doc read, like shapeCount/pageCount: no
+      // throw-stub, both adapters are REAL.
+      return editor.doc.listShapes().map((s) => s.id)
+    },
+    labelOverflow() {
+      // text-autosize fixer task (types.ts's Obs.labelOverflow doc comment):
+      // scrollHeight/clientHeight are DOM layout concepts this headless
+      // runner has nothing to lay out — this throw is a defensive backstop,
+      // matching textSelectionSpans'/paintOrder's established
+      // not-reachable-today posture (every contract that calls this is
+      // level:'browser', and library.test.ts filters CONTRACTS to
+      // level:'fsm' before calling runContractFsm).
+      throw new Error('not observable at fsm level')
+    },
+    hoveredShapeId() {
+      // arrow-handles task — a doc/editor-state read, like editingShape:
+      // no throw-stub, both adapters are REAL.
+      return editor.get().hover
+    },
+    renderedArrowIds() {
+      // Rendered DOM is not observable in the headless runner; every contract
+      // that calls this is level:'browser'.
+      throw new Error('not observable at fsm level')
+    },
   }
 }
 

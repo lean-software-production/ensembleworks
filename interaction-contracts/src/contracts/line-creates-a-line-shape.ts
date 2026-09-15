@@ -35,10 +35,10 @@
 // this contract's own assertions.
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
-// The toolbar button CanvasV2App.tsx renders for each tool
-// (`data-canvas-v2-tool={btn.id}` — verified, W1's TOOL_BUTTONS entry
-// `{ id: 'line', label: 'Line' }`).
-const LINE_TOOL_SELECTOR = '[data-canvas-v2-tool="line"]'
+// The toolbar button canvas-ui's Toolbar.tsx renders for each tool
+// (`data-canvas-tool={id}` — its TOOL_ORDER entry `{ id: 'line', label:
+// 'Line' }`).
+const LINE_TOOL_SELECTOR = '[data-canvas-tool="line"]'
 
 export const lineCreatesALineShape: Contract = {
   name: 'line-creates-a-line-shape',

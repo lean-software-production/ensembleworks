@@ -4,7 +4,7 @@
 // color swatch (dispatches `SetNextStyle`, Task AS3), then create a geo
 // shape on empty canvas; assert the newly-created shape's stored color is
 // 'blue'. Browser-only, same rationale as `style-applies-to-selection`: the
-// panel (client/src/canvas-v2/StylePanel.tsx) is a React/DOM component with
+// panel (canvas-ui/src/StylePanel.tsx) is a React/DOM component with
 // no FSM-level equivalent to click.
 //
 // DISCOVERING THE CREATED SHAPE'S ID: the created shape's id is minted from
@@ -37,10 +37,10 @@
 // `!== 'blue'`.) Task AS2 turns this GREEN.
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
-// The toolbar button CanvasV2App.tsx renders for each tool
-// (`data-canvas-v2-tool={btn.id}` — TOOL_BUTTONS' `id`s are the same
-// `ToolId` union the armed panel keys off of).
-const GEO_TOOL_SELECTOR = '[data-canvas-v2-tool="geo"]'
+// The toolbar button canvas-ui's Toolbar.tsx renders for each tool
+// (`data-canvas-tool={id}` — TOOL_ORDER's `id`s are the same `ToolId`
+// union the armed panel keys off of).
+const GEO_TOOL_SELECTOR = '[data-canvas-tool="geo"]'
 
 // The armed panel's blue color swatch. StylePanel.tsx's module header names
 // this exact selector as AS4's anchor: the armed panel carries

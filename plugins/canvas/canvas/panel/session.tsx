@@ -1,10 +1,9 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useDocSnapshot, useEditorState } from "@ensembleworks/canvas-react";
-import type { Intent } from "@ensembleworks/canvas-editor";
+import { useCanvasSession, type CanvasHost } from "@ensembleworks/canvas-ui";
 import { toast } from "sonner";
 import { promptTextFor } from "../agents-view.js";
-import type { ToolId } from "../tool-loop.js";
-import { useSessionInput } from "./session-input.js";
+import { useSessionDebug } from "./session-debug.js";
 import { useSessionPages } from "./session-pages.js";
 import { useSessionPresence } from "./session-presence.js";
 import type { CanvasSessionProps } from "./session-types.js";
@@ -38,15 +37,26 @@ export function CanvasSession({
     currentPageId: editorState.currentPageId,
     viewportSizeRef: viewport.viewportSizeRef,
   });
-  const input = useSessionInput({
+  const host = useMemo<CanvasHost>(
+    () => ({
+      clipboard: {
+        read: () => navigator.clipboard.readText(),
+        write: (text) => navigator.clipboard.writeText(text),
+      },
+      notify: (message) => toast.error(message),
+      onCursorScreen: (point) => presencePublisher.setCursorFromScreen(point, editor.get().camera),
+    }),
+    [editor, presencePublisher],
+  );
+  const canvas = useCanvasSession({
     editor,
-    tools,
     toolContext,
-    presenceStore,
-    presencePublisher,
-    panelRef: viewport.panelRef,
-    viewportRef: viewport.viewportRef,
+    tools,
+    host,
+    keyboardScopeRef: viewport.panelRef,
+    viewportContainerRef: viewport.viewportRef,
   });
+  useSessionDebug({ editor, toolContext, presenceStore, handleInput: canvas.handleInput });
   const { navigate, pageSwitcher } = useSessionPages({
     editor,
     snapshot,
@@ -54,7 +64,7 @@ export function CanvasSession({
     subPath,
     columnWidth: viewport.columnWidth,
   });
-  const openThread = useThreadReturn({ editor, subPath, navigate, cancelAndReset: input.cancelAndReset });
+  const openThread = useThreadReturn({ editor, subPath, navigate, cancelAndReset: canvas.cancelAndReset });
 
   const handleRunNote = useCallback(
     (shapeId: string) => {
@@ -70,22 +80,10 @@ export function CanvasSession({
     },
     [editor, snapshot, onRunNote],
   );
-  const dispatch = useCallback(
-    (intents: Intent[]) => editor.applyAll(intents),
-    [editor],
-  );
-  const handleTextChange = useCallback(
-    (id: string, text: string) => editor.apply({ type: "SetText", id, text }),
-    [editor],
-  );
-  const handleEndEdit = useCallback(() => editor.apply({ type: "EndEdit" }), [editor]);
-  const selectTool = useCallback((id: ToolId) => input.selectTool(id), [input.selectTool]);
-
   return (
     <SessionView
       editorState={editorState}
       snapshot={snapshot}
-      toolContext={toolContext}
       viewportRef={viewport.viewportRef}
       panelRef={viewport.panelRef}
       viewportSize={viewport.viewportSize}
@@ -94,14 +92,7 @@ export function CanvasSession({
       identities={identities}
       av={presence.av.speaking}
       selfKey={selfKey}
-      activeToolId={input.activeToolId}
-      toolStates={input.toolStates}
-      handleInput={input.handleInput}
-      cancelAndReset={input.cancelAndReset}
-      dispatch={dispatch}
-      handleTextChange={handleTextChange}
-      handleEndEdit={handleEndEdit}
-      selectTool={selectTool}
+      canvas={canvas}
       agentLinks={agentLinks}
       pendingShapeId={pendingShapeId}
       onRun={handleRunNote}

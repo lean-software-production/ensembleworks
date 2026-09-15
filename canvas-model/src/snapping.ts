@@ -3,9 +3,7 @@
 // rotation-independent 0..1 coordinate an arrow endpoint binds to on its
 // target — Seam C7 consumes this for arrow routing).
 import { descendantsOf, type CanvasDocument } from './document.js'
-import {
-  type Bounds, type Point, localBounds, medianSize, toLocalPoint, toWorldPoint,
-} from './geometry.js'
+import { type Bounds, medianSize } from './geometry.js'
 import { queryViewport, type SpatialIndex } from './spatial-index.js'
 
 // ============================================================================
@@ -157,59 +155,12 @@ export function snapCandidates(
 }
 
 // ============================================================================
-// Arrow anchor resolution (Seam C7 dependency)
+// Arrow anchor resolution (Seam C7 dependency) — MOVED to geometry.ts (Task
+// arrow-body): geometry.ts's own arrowPathBounds/arrowHitTest need these two
+// functions too, and geometry.ts sits BELOW this module in the package's
+// dependency order (this file already imports FROM geometry.ts, never the
+// reverse), so defining them there and re-exporting here keeps every
+// existing `from './snapping.js'` import working byte-compatibly without
+// duplicating the logic across two files.
 // ============================================================================
-
-// Clamp to [0,1], TOTAL over all number inputs: Math.max/Math.min PROPAGATE
-// NaN rather than clamping it, so a bare max/min chain would let a
-// NaN-poisoned caller point produce a NaN anchor — which, persisted into a
-// binding, silently breaks that arrow forever (anchorToWorld does no
-// re-validation). Non-finite input (NaN from arithmetic on a NaN point;
-// ±Infinity likewise) falls back to 0.5 — center, matching
-// resolveArrowAnchor's missing-target fallback philosophy.
-const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5)
-
-/**
- * Normalized anchor (0..1 on both axes, clamped) of a world `point` within
- * `targetId`'s LOCAL unrotated box — computed by inverse-transforming the
- * world point (toLocalPoint) and dividing by the box's own w/h. Independent
- * of the target's rotation and parent chain by construction (that's exactly
- * what toLocalPoint undoes), so it stays valid as the target moves/rotates —
- * the whole reason arrow bindings store a normalized anchor instead of a
- * world offset.
- *
- * Degenerate paths: missing target -> {nx:0.5, ny:0.5} (center — an
- * arbitrary but harmless default; the caller (Seam C7) is expected to drop
- * the binding for a target that no longer resolves, this is just a total,
- * non-throwing fallback). Zero-width or zero-height local box -> that axis's
- * normalized coordinate is 0 (dividing by a zero span is meaningless; 0 is a
- * stable, arbitrary pick — since min===max on that axis, anchorToWorld's
- * result is IDENTICAL for every nx/ny choice there, so the choice of default
- * never actually loses information on that axis).
- */
-export function resolveArrowAnchor(doc: CanvasDocument, targetId: string, point: Point): { nx: number; ny: number } {
-  const shape = doc.byId.get(targetId)
-  if (!shape) return { nx: 0.5, ny: 0.5 }
-  const local = toLocalPoint(doc, shape, point)
-  const lb = localBounds(shape)
-  const w = lb.maxX - lb.minX, h = lb.maxY - lb.minY
-  const nx = w > 0 ? clamp01((local.x - lb.minX) / w) : 0
-  const ny = h > 0 ? clamp01((local.y - lb.minY) / h) : 0
-  return { nx, ny }
-}
-
-/**
- * The inverse of resolveArrowAnchor: map a normalized (nx,ny) anchor back to
- * a world point, given the target's CURRENT transform (so this re-resolves
- * correctly after the target has moved/rotated — arrow routing calls this
- * every frame, not once at bind time). Missing target -> {x:0, y:0}
- * (documented total fallback, matching resolveArrowAnchor's degenerate-path
- * policy).
- */
-export function anchorToWorld(doc: CanvasDocument, targetId: string, anchor: { nx: number; ny: number }): Point {
-  const shape = doc.byId.get(targetId)
-  if (!shape) return { x: 0, y: 0 }
-  const lb = localBounds(shape)
-  const local: Point = { x: lb.minX + anchor.nx * (lb.maxX - lb.minX), y: lb.minY + anchor.ny * (lb.maxY - lb.minY) }
-  return toWorldPoint(doc, shape, local)
-}
+export { resolveArrowAnchor, anchorToWorld } from './geometry.js'

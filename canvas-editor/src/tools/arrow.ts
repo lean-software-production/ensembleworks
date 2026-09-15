@@ -109,10 +109,16 @@ export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
   // id — the arrow itself is already IN the context's snapshot mid-drag,
   // per create.ts's frame-capture SELF-EXCLUSION note, so without this
   // guard the arrow could bind to itself once its own bounding box grows
-  // under the cursor).
+  // under the cursor). The exclusion is passed straight into hitTestTopmost
+  // (validator fix, gap 1) rather than checked after the fact: at pointerup
+  // the cursor sits EXACTLY on the arrow's own terminal, so the arrow is
+  // always the topmost hit there — dropping it post-hoc would bail to "no
+  // hit" every time instead of falling through to whatever real shape the
+  // arrow was actually drawn onto (the whole point of drawing an arrow onto
+  // a shape: it should bind to THAT shape, not nothing).
   function bindingAt(worldPt: { readonly x: number; readonly y: number }, excludeId: string): ArrowBinding | undefined {
-    const hit = ctx.hitTestTopmost(worldPt)
-    if (!hit || hit === excludeId) return undefined
+    const hit = ctx.hitTestTopmost(worldPt, new Set([excludeId]))
+    if (!hit) return undefined
     const anchor = resolveArrowAnchor(ctx.snapshot(), hit, worldPt)
     return { targetId: hit, anchor }
   }
@@ -151,6 +157,12 @@ export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
               isLocked: false, opacity: 1, meta: {}, props: { end: { x: 0, y: 0 } },
             } as Shape
             const fromBinding = bindingAt(startWorld, id)
+            // END-terminal hover preview (gap 3) on this SAME transition —
+            // see the 'drawing' pointermove case below for the full
+            // rationale; this is just that same preview, computed once more
+            // here because the threshold-crossing move itself is consumed
+            // by THIS case, not 'drawing''s own pointermove handler.
+            const hoverCandidate = bindingAt(worldOf(here), id)
             // StartArrow + the first live end-point preview share ONE batch
             // (one commit — editor.ts's commit granularity): the arrow
             // appears already stretched to the pointer, never as a
@@ -159,6 +171,7 @@ export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
               state: { mode: 'drawing', id },
               intents: [
                 { type: 'StartArrow', shape, fromBinding },
+                { type: 'SetHover', id: hoverCandidate?.targetId ?? null },
                 { type: 'CompleteArrow', id, end: worldOf(here) },
               ],
             }
@@ -173,6 +186,17 @@ export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
           if (event.type === 'pointermove') {
             const worldPt = worldOf(event)
             // Live preview only — see the module header: no toBinding here.
+            // SetHover (arrow-handles task, gap 3) DOES preview the
+            // prospective target though — a pure VIEW intent (editor.ts's
+            // hover field, never the CRDT doc), so it carries none of the
+            // "can only write a binding, never clear one" hazard the module
+            // header documents for CompleteArrow's own toBinding: hover is
+            // trivially re-computed and overwritten every move, with no
+            // notion of a stale write to retract. canvas-react's Hover.tsx
+            // is already wired to `editorState.hover` (the arrow-handles
+            // task's terminal-drag reuses the exact same mechanism) — this
+            // is the ONLY change needed to make the target-under-cursor
+            // visible WHILE drawing, not just after release.
             //
             // COMMIT CADENCE WATCH-ITEM (owned by the H3 perf rig): each of
             // these per-pointermove CompleteArrow previews becomes ONE
@@ -183,12 +207,25 @@ export function createArrowTool(ctx: ToolContext): Tool<ArrowState> {
             // is unmeasured until H3 profiles it. Same note in select.ts's
             // onDragging, create.ts's dragging state, and transform.ts's
             // onResizing.
-            return { state, intents: [{ type: 'CompleteArrow', id: state.id, end: worldPt }] }
+            const candidate = bindingAt(worldPt, state.id)
+            return {
+              state,
+              intents: [
+                { type: 'SetHover', id: candidate?.targetId ?? null },
+                { type: 'CompleteArrow', id: state.id, end: worldPt },
+              ],
+            }
           }
           if (event.type === 'pointerup') {
             const worldPt = worldOf(event)
             const toBinding = bindingAt(worldPt, state.id)
-            return { state: IDLE, intents: [{ type: 'CompleteArrow', id: state.id, end: worldPt, toBinding }] }
+            return {
+              state: IDLE,
+              intents: [
+                { type: 'SetHover', id: null },
+                { type: 'CompleteArrow', id: state.id, end: worldPt, toBinding },
+              ],
+            }
           }
           return { state, intents: [] }
         }

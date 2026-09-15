@@ -17,7 +17,7 @@ import type { LoadSample } from './load-metrics.ts'
 
 /** canvas-react stamps these on every rendered shape body (ShapeBody.tsx). */
 export const V2_SHAPE_SELECTOR = '[data-shape-id]'
-export const V2_TOOLBAR_SELECTOR = '[data-canvas-v2-tool="select"]'
+export const V2_TOOLBAR_SELECTOR = '[data-canvas-tool="select"]'
 /** tldraw's own rendered-shape class — the v1 comparison arm. */
 export const V1_SHAPE_SELECTOR = '.tl-shape'
 

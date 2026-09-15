@@ -27,8 +27,8 @@ in README "Development".
 ## Interaction Contract (mandatory in unit specs)
 
 Every unit spec that touches an interaction-bearing surface —
-`canvas-editor/src/tools/`, `canvas-react/src/`, or `client/src/canvas-v2/`
-input/tool files — must include an **Interaction Contract** section. It has
+`canvas-editor/src/tools/`, `canvas-editor/src/session/`, `canvas-react/src/`,
+`canvas-ui/src/`, or `client/src/canvas-v2/` input/tool files — must include an **Interaction Contract** section. It has
 exactly two legal forms:
 
 1. One or more contract declarations: name, a sketch of the seeded gesture,

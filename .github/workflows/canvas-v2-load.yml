@@ -8,6 +8,7 @@ on:
     paths:
       - 'canvas-react/**'
       - 'canvas-editor/**'
+      - 'canvas-ui/**'
       - 'canvas-doc/**'
       - 'canvas-sync/**'
       - 'client/src/canvas-v2/**'

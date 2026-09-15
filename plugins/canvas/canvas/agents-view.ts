@@ -1,8 +1,8 @@
 // The pure half of the agent overlay: where a badge goes, and what a note's
 // prompt is. DOM-free and React-free on purpose — the same split
-// `transport.ts` and `tool-loop.ts` already use, so the two decisions most
-// worth getting right are testable without a browser and `agents-ui.tsx`
-// stays a thin adapter.
+// `transport.ts` and canvas-editor's session module already use, so the two
+// decisions most worth getting right are testable without a browser and
+// `agents-ui.tsx` stays a thin adapter.
 import { worldToScreen, type Camera } from "@ensembleworks/canvas-editor";
 import {
   pageIdOf,

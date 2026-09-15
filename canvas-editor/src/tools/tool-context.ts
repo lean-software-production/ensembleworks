@@ -47,9 +47,19 @@
 // underlying Loro doc's subscribe — firing on every commit(), local OR
 // imported (remote peers' edits included), which is exactly "any mutation"
 // per the staleness contract's REBUILD CADENCE note.
+//
+// PAGE SCOPING: the index spans the WHOLE room (every page's shapes), but
+// hitTestTopmost/queryMarquee answer only for shapes on the editor's CURRENT
+// page, read live from editor.get().currentPageId at call time — the same
+// `pageIdOf(snapshot, shape) === currentPageId` rule ShapeLayer and Arrows
+// render by. Without it a click on an empty page selected an invisible shape
+// from another page at the same world coordinates, and arrows could bind to
+// one. snapshot()/index() stay room-wide; a consumer reading them directly
+// (e.g. select.ts's snap pool) applies the page rule itself.
 import {
   buildSpatialIndex,
   hitTestTopmost as hitTestTopmostIndexed,
+  pageIdOf,
   queryMarquee as queryMarqueeIndexed,
   type Bounds,
   type CanvasDocument,
@@ -86,10 +96,17 @@ export interface ToolContext {
   index(): SpatialIndex
   /** hitTestTopmost against the current index+snapshot pair (see
    * canvas-model/spatial-index.ts) — `point` is WORLD space; the caller
-   * (a tool) converts screen->world via screenToWorld before calling. */
-  hitTestTopmost(point: Point): string | null
+   * (a tool) converts screen->world via screenToWorld before calling.
+   * `excludeIds`, if given, is threaded straight through to canvas-model's
+   * hitTestTopmost so a caller can drop its own in-progress shape (e.g.
+   * arrow.ts's bindingAt) from the pool WITHOUT bailing to "no hit" — the
+   * next-topmost real candidate under the cursor still wins.
+   * Only shapes on the CURRENT page are candidates (see PAGE SCOPING); an
+   * off-page shape is dropped before the topmost pick, so it never shadows
+   * an on-page shape beneath it. */
+  hitTestTopmost(point: Point, excludeIds?: ReadonlySet<string>): string | null
   /** queryMarquee against the current index+snapshot pair. `bounds` is WORLD
-   * space. */
+   * space. Returns only shapes on the CURRENT page (see PAGE SCOPING). */
   queryMarquee(bounds: Bounds, mode: 'intersect' | 'contain'): string[]
   /** Unsubscribe the context's doc listener. MUST be called when the
    * context's owner is done with it — Seam D: on unmount (React
@@ -139,13 +156,18 @@ export function createToolContext(editor: Editor, opts: ToolContextOpts = {}): T
     editor,
     snapshot: () => fresh().snap,
     index: () => fresh().index,
-    hitTestTopmost: (point) => {
+    hitTestTopmost: (point, excludeIds) => {
       const { snap: s, index: i } = fresh()
-      return hitTestTopmostIndexed(i, s, point)
+      const pageId = editor.get().currentPageId
+      return hitTestTopmostIndexed(i, s, point, excludeIds, (shape) => pageIdOf(s, shape) === pageId)
     },
     queryMarquee: (bounds, mode) => {
       const { snap: s, index: i } = fresh()
-      return queryMarqueeIndexed(i, s, bounds, mode)
+      const pageId = editor.get().currentPageId
+      return queryMarqueeIndexed(i, s, bounds, mode).filter((id) => {
+        const shape = s.byId.get(id)
+        return shape !== undefined && pageIdOf(s, shape) === pageId
+      })
     },
     dispose: unsubscribe,
   }

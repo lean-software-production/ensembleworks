@@ -21,7 +21,6 @@
 // pass-through (`{ type: "RenamePage", id, name }`, no editor read needed),
 // so a helper would only add indirection.
 import {
-  canonicalPageId,
   generateKeyBetween,
   orderedPages,
   type Page,
@@ -164,25 +163,4 @@ export function dropPageIntents(editor: Editor, id: string, target: number | nul
   return [{ type: "ReorderPage", id, index: generateKeyBetween(before, after) }];
 }
 
-/** The undo/redo safety net (design doc R-1).
- *
- * SetCurrentPage is a VIEW intent with no undo inverse
- * (canvas-editor/src/editor.ts:927), so undoing a CreatePage+SetCurrentPage
- * batch removes the page while currentPageId still names it — and the render
- * filter (canvas-react ShapeLayer/EmbedLayer) then paints NOTHING. Redo can
- * strand it the same way by reintroducing a DeletePage.
- *
- * Reads currentPageId LIVE and emits a SetCurrentPage onto the canonical page
- * (canonicalPageId — the lexicographically smallest live page id, canvas-
- * model repair.ts's convergent choice, reused rather than inventing a second
- * "pick a fallback page" rule) ONLY when currentPageId names no live page.
- * Returns [] otherwise: the caller runs this after EVERY undo and redo, so a
- * same-value SetCurrentPage on every keystroke would be pure churn. */
-export function clampCurrentPageIntents(editor: Editor): Intent[] {
-  const pages = editor.doc.listPages();
-  const current = editor.get().currentPageId;
-  if (pages.some((p) => p.id === current)) return [];
-  const canonical = canonicalPageId(pages);
-  if (canonical === undefined) return [];
-  return [{ type: "SetCurrentPage", pageId: canonical }];
-}
+export { clampCurrentPageIntents } from "@ensembleworks/canvas-editor";

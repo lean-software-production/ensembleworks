@@ -1,6 +1,6 @@
 import { type CanvasDocument } from './document.js'
 import { isPageId, type PageId } from './ids.js'
-import { type Shape } from './shape.js'
+import { isFixedSizeKind, type Shape } from './shape.js'
 
 // ============================================================================
 // ROTATION CONVENTION (NORMATIVE — the renderer, the editor, and the Phase-5
@@ -119,6 +119,36 @@ export function localBounds(shape: Shape): Bounds {
   return { minX: 0, minY: 0, maxX: w, maxY: h }
 }
 
+// note-fixed-size task — true iff EVERY id in `ids` resolves to a shape whose
+// kind is fixed-size (isFixedSizeKind — 'note', matching this file's own
+// note special case in `size()` above: a note's rendered box is
+// `200 * props.scale` and never reads props.w/h, so ResizeShapes' props.w/h
+// scaling has nothing to act on for it). Consumed by BOTH the FSM-level
+// suppression (canvas-editor's transform tool, which must never ARM a
+// corner/edge handle for such a selection) and the paint-level suppression
+// (canvas-react's Handles/Overlay, which must never DRAW one) — one shared
+// predicate so the two can't silently drift apart, same reasoning as
+// selectionHandles being the FSM's single source of truth for handle layout.
+//
+// TOLERANT, matching this package's "skip, never throw" discipline (see
+// Overlay/transform.ts's own selection-bounds helpers): an id with no
+// resolving shape (selection referencing a deleted shape) is simply skipped,
+// neither proving nor disproving the predicate on its own. An EMPTY or
+// entirely-vanished selection returns false — "every shape is fixed-size" is
+// vacuously true over zero shapes, but a selection with nothing real in it
+// has no handles to suppress in the first place, so false (don't suppress)
+// is the useful answer here, not the logically-vacuous one.
+export function isFixedSizeSelection(doc: CanvasDocument, ids: Iterable<string>): boolean {
+  let any = false
+  for (const id of ids) {
+    const shape = doc.byId.get(id)
+    if (!shape) continue
+    any = true
+    if (!isFixedSizeKind(shape.kind)) return false
+  }
+  return any
+}
+
 // This shape's world (page-space) rigid transform, composing the parent
 // chain root-to-leaf (see composeTransform). Total by construction:
 //   - Missing parent (byId can hold orphans mid-merge; repair() fixes them
@@ -169,12 +199,192 @@ export function worldCorners(doc: CanvasDocument, shape: Shape, precomputedTrans
 // min/max of its worldCorners. For an unrotated shape with unrotated
 // ancestors this degenerates to pageBounds' result (see the cross-check in
 // hit-test.test.ts).
+//
+// ARROW SPECIAL CASE (Task arrow-body): an arrow's real "body" is the drawn
+// start->end path, not a local (0,0)..(w,h) box — arrows carry no props.w/h,
+// so size()'s DEFAULTS fallback (100x100) would otherwise hang a fixed box
+// off the arrow's START point regardless of where its actual end/bound
+// target is. See arrowPathBounds below for the path-following replacement.
 export function worldBounds(doc: CanvasDocument, shape: Shape): Bounds {
+  if (shape.kind === 'arrow') return arrowPathBounds(doc, shape)
   const corners = worldCorners(doc, shape)
   return {
     minX: Math.min(...corners.map((c) => c.x)), minY: Math.min(...corners.map((c) => c.y)),
     maxX: Math.max(...corners.map((c) => c.x)), maxY: Math.max(...corners.map((c) => c.y)),
   }
+}
+
+// ============================================================================
+// ARROW BOUNDS / HIT-TEST (Task arrow-body — worldBounds/hitTestPoint's
+// kind === 'arrow' special case, self-contained in this file)
+//
+// An arrow's meaningful geometry is the path from its (possibly BOUND) start
+// terminal to its (possibly BOUND) end terminal — exactly what arrow-route.ts's
+// `routeArrow` computes for RENDERING. This block resolves the SAME two
+// endpoints (bound terminal -> anchorToWorld against the CURRENT target;
+// unbound -> the arrow's own stored point) but deliberately WITHOUT
+// routeArrow's boundary-CLIPPING step (arrow-route.ts's clipToBoundary trims
+// the VISIBLE line to stop at a bound target's edge — a rendering nicety,
+// not a bounds/hit-test concern): the unclipped anchor point sits ON or
+// inside the target's own box (nx/ny is clamped to [0,1] against that box),
+// so using it makes this file's bounds/hit-test AT MOST slightly more
+// generous than the visually-clipped line — never less — matching this
+// whole codebase's established "over-inclusion is fine, omission is the
+// real bug" posture (spatial-index.ts's STALENESS CONTRACT; Arrows.tsx's
+// OVER-INCLUSION SEMANTICS, which takes the same shortcut — a bound
+// terminal's WHOLE target worldBounds, not its exact clipped anchor — for
+// its own culling bbox).
+//
+// NOT IMPLEMENTED VIA arrow-route.ts's `routeArrow` ON PURPOSE: arrow-route.ts
+// already imports THIS file (toWorldPoint, worldCorners) and, transitively
+// via snapping.ts's spatial-index.ts import, sits ABOVE spatial-index.ts in
+// the package's dependency order; this file staying a self-contained leaf
+// (no import of arrow-route.ts) avoids turning that into a real import
+// cycle. The small duplication below (endpoint resolution, curve midpoint)
+// is the accepted cost — same tradeoff Arrows.tsx already made for its own
+// culling bbox rather than calling the exact (but more expensive/entangled)
+// routeArrow.
+// ============================================================================
+
+// The RAW (unclipped) world point for one of an arrow's two terminals: the
+// live anchor on its bound target if bound (and that target still
+// resolves), else the arrow's own stored point (start: its own x/y; end:
+// props.end as a local offset from x/y, defaulting to {x:0,y:0} — a
+// degenerate zero-length arrow, never a throw).
+function resolveArrowEndpointRaw(doc: CanvasDocument, arrow: Shape, terminal: 'start' | 'end'): Point {
+  const binding = doc.bindings.find((b) => b.fromId === arrow.id && (b.props as { terminal?: string } | undefined)?.terminal === terminal)
+  if (binding) {
+    const target = doc.byId.get(binding.toId)
+    if (target) {
+      const anchor = (binding.props as { anchor?: { nx: number; ny: number } }).anchor ?? { nx: 0.5, ny: 0.5 }
+      return anchorToWorld(doc, binding.toId, anchor)
+    }
+    // vanished target (binding row survives, toId no longer resolves) — fall
+    // through to the arrow's own stored point, same fallback arrow-route.ts's
+    // resolveEndpoint documents for this case.
+  }
+  const p = arrow.props as { end?: Point } | undefined
+  const localPt: Point = terminal === 'start' ? { x: 0, y: 0 } : (p?.end ?? { x: 0, y: 0 })
+  return toWorldPoint(doc, arrow, localPt)
+}
+
+// Path-following world bounds: the AABB of {start, end}, inflated by
+// |bend| on both axes for a curved arrow. A quadratic Bézier lies entirely
+// within the convex hull of {start, mid, end} (standard property), and
+// curveMidRaw's control point is exactly `bend` away from the chord's
+// midpoint along the perpendicular — so inflating the straight chord's AABB
+// by |bend| on both axes is a safe (if not pixel-tight) superset of the
+// curve, without needing the mid point's exact direction. Same shortcut
+// Arrows.tsx's own culling bbox takes for the identical reason.
+function arrowPathBounds(doc: CanvasDocument, arrow: Shape): Bounds {
+  const start = resolveArrowEndpointRaw(doc, arrow, 'start')
+  const end = resolveArrowEndpointRaw(doc, arrow, 'end')
+  const rawBend = (arrow.props as { bend?: number } | undefined)?.bend
+  const bend = typeof rawBend === 'number' && Number.isFinite(rawBend) ? Math.abs(rawBend) : 0
+  return {
+    minX: Math.min(start.x, end.x) - bend, minY: Math.min(start.y, end.y) - bend,
+    maxX: Math.max(start.x, end.x) + bend, maxY: Math.max(start.y, end.y) + bend,
+  }
+}
+
+// The quadratic curve's control point — same convention as arrow-route.ts's
+// curveMid (perpendicular 90° rotation of the chord's unit direction,
+// applied at its midpoint; zero-length chord falls back to the midpoint
+// with no curvature). Duplicated here (not imported — see the module header)
+// rather than left unbuilt, so `arrowHitTest` below can test a curved
+// arrow's real path, not just its straight chord.
+function curveMidRaw(start: Point, end: Point, bend: number): Point {
+  const mx = (start.x + end.x) / 2, my = (start.y + end.y) / 2
+  const dx = end.x - start.x, dy = end.y - start.y
+  const len = Math.hypot(dx, dy)
+  if (len === 0) return { x: mx, y: my }
+  const ux = dx / len, uy = dy / len
+  return { x: mx + -uy * bend, y: my + ux * bend }
+}
+
+function distanceToSegment(p: Point, a: Point, b: Point): number {
+  const dx = b.x - a.x, dy = b.y - a.y
+  const len2 = dx * dx + dy * dy
+  if (len2 === 0) return Math.hypot(p.x - a.x, p.y - a.y)
+  const t = Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2))
+  return Math.hypot(p.x - (a.x + dx * t), p.y - (a.y + dy * t))
+}
+
+// Distance from `p` to the quadratic Bézier through (start, mid, end),
+// approximated by sampling the curve into straight sub-segments and taking
+// the nearest one — a total, cheap approximation (no closed-form point-to-
+// quadratic distance is needed for a click-precision hit test). 16 segments
+// is generous for the gentle, single-curve arcs this shape supports (Phase-4
+// scope — see arrow-route.ts's CURVE + CLIPPING ORDERING note).
+function distanceToQuadratic(p: Point, start: Point, mid: Point, end: Point): number {
+  const SAMPLES = 16
+  let best = Infinity
+  let prev = start
+  for (let i = 1; i <= SAMPLES; i++) {
+    const t = i / SAMPLES
+    const it = 1 - t
+    const cur: Point = {
+      x: it * it * start.x + 2 * it * t * mid.x + t * t * end.x,
+      y: it * it * start.y + 2 * it * t * mid.y + t * t * end.y,
+    }
+    best = Math.min(best, distanceToSegment(p, prev, cur))
+    prev = cur
+  }
+  return best
+}
+
+// Click-precision slack for an arrow's line/curve, in WORLD units. This file
+// has no notion of camera/zoom (canvas-editor's select tool converts a
+// screen click to a world point BEFORE calling hitTestPoint), so this is
+// necessarily a fixed world-space tolerance rather than a screen-pixel one —
+// same tradeoff every other kind's exact (zero-margin) box hit test already
+// makes. 8 mirrors canvas-editor/src/tools/transform.ts's HIT_TOLERANCE_PX
+// (a "comfortable click target" in screen px at zoom 1, where world and
+// screen units coincide) — OURS, tune alongside this file's other tunable
+// constants (see localBounds' comment) if real usage says otherwise.
+export const ARROW_HIT_MARGIN = 8
+
+function arrowHitTest(doc: CanvasDocument, arrow: Shape, point: Point): boolean {
+  const start = resolveArrowEndpointRaw(doc, arrow, 'start')
+  const end = resolveArrowEndpointRaw(doc, arrow, 'end')
+  const rawBend = (arrow.props as { bend?: number } | undefined)?.bend
+  const bend = typeof rawBend === 'number' && Number.isFinite(rawBend) ? rawBend : 0
+  const dist = bend === 0 ? distanceToSegment(point, start, end) : distanceToQuadratic(point, start, curveMidRaw(start, end, bend), end)
+  return dist <= ARROW_HIT_MARGIN
+}
+
+// Polyline approximation of an arrow's RESOLVED path (same endpoint/curve
+// resolution as arrowHitTest/arrowPathBounds above), for exact geometric
+// tests that need real points along the path rather than just a bbox or a
+// point-distance check — currently spatial-index.ts's queryMarquee
+// 'intersect' narrow phase (Task arrow-body validator fix, gap 4): a
+// marquee rectangle must be tested against the arrow's REAL LINE, not
+// worldCorners' generic box-quad SAT test (worldCorners has no arrow special
+// case — an arrow has no meaningful rotated box to test against, same
+// reasoning as hitTestPoint's kind==='arrow' branch above).
+// Straight (bend===0): exactly [start, end] — a marquee/segment intersection
+// test needs no more. Curved: sampled into the SAME 16 sub-segments
+// distanceToQuadratic already uses, so a marquee that would register a
+// click-precision curve hit and a marquee-drag hit agree on one sampling
+// density defined once.
+export function arrowPathPoints(doc: CanvasDocument, arrow: Shape): Point[] {
+  const start = resolveArrowEndpointRaw(doc, arrow, 'start')
+  const end = resolveArrowEndpointRaw(doc, arrow, 'end')
+  const rawBend = (arrow.props as { bend?: number } | undefined)?.bend
+  const bend = typeof rawBend === 'number' && Number.isFinite(rawBend) ? rawBend : 0
+  if (bend === 0) return [start, end]
+  const mid = curveMidRaw(start, end, bend)
+  const SAMPLES = 16
+  const points: Point[] = [start]
+  for (let i = 1; i <= SAMPLES; i++) {
+    const t = i / SAMPLES
+    const it = 1 - t
+    points.push({
+      x: it * it * start.x + 2 * it * t * mid.x + t * t * end.x,
+      y: it * it * start.y + 2 * it * t * mid.y + t * t * end.y,
+    })
+  }
+  return points
 }
 
 // Inverse-transform a WORLD point into `shape`'s LOCAL frame: undo the
@@ -197,15 +407,197 @@ export function toWorldPoint(doc: CanvasDocument, shape: Shape, point: Point): P
   return { x: r.x + t.x, y: r.y + t.y }
 }
 
+// ============================================================================
+// FRAME HIT-TEST (frame-interaction task, gaps 2/3/5): a frame's interior is
+// HOLLOW — a click deep inside an empty frame must MISS (so the select tool
+// starts a marquee there instead of dragging the whole frame + its
+// children), while the frame stays selectable/draggable via a BORDER
+// edge-margin band and a HEADER label band rendered above its top-left
+// corner (canvas-react's FrameShape.tsx). This is the model-side half of
+// that renderer's chrome — kept in sync with its HEADER_HEIGHT constant by
+// this file's own comment (not a shared import: canvas-react may depend on
+// canvas-model, never the reverse).
+// ============================================================================
+
+/** The frame header band's height, in WORLD units — mirrors canvas-react's
+ * FrameShape.tsx `HEADER_HEIGHT` (24, itself v1's `--tl-frame-height`
+ * tldraw.css constant). WORLD, not screen: this file has no notion of
+ * camera/zoom (same caveat ARROW_HIT_MARGIN documents above), so a header
+ * rendered as 24 CSS px inside WorldLayer's camera-scaled container is 24
+ * world units at zoom 1 — exact at that zoom, a fixed-size approximation at
+ * any other, same tradeoff every other pixel-ish tolerance in this file
+ * already accepts. */
+export const FRAME_HEADER_HEIGHT = 24
+
+/** How close to a frame's border (in WORLD units, both inside and — via the
+ * inclusive box test below — right up to the true edge) still counts as a
+ * hit, keeping the frame itself selectable/draggable by its edge even
+ * though its interior is hollow. Mirrors ARROW_HIT_MARGIN's "comfortable
+ * click target" tradeoff/value (8) — this file's other pixel-ish
+ * tolerance. */
+export const FRAME_EDGE_MARGIN = 8
+
+/** The frame's header band, in the frame's OWN local frame: a strip of
+ * height FRAME_HEADER_HEIGHT sitting immediately ABOVE the frame's local
+ * box (local y in [-FRAME_HEADER_HEIGHT, 0)), spanning the frame's full
+ * width — an approximation of canvas-react's FrameShape.tsx header (which
+ * clips to `maxWidth:'100%'` of the frame but can render NARROWER when the
+ * name is short; over-inclusion here is the same accepted tradeoff this
+ * whole file already takes for arrow hit margins/culling bounds — a
+ * generous hit region is a UX nicety, never a correctness bug). Exported
+ * for spatial-index.ts's index-bounds helper below, which needs the SAME
+ * band to widen a frame's indexed bounds so a header click's grid cell
+ * actually contains the frame as a candidate in the first place. */
+export function frameHeaderLocalBounds(shape: Shape): Bounds {
+  const lb = localBounds(shape)
+  return { minX: lb.minX, minY: lb.minY - FRAME_HEADER_HEIGHT, maxX: lb.maxX, maxY: lb.minY }
+}
+
+/** True iff WORLD `point` falls in `shape`'s header band (frameHeaderLocalBounds)
+ * — false for a non-frame kind, or for a point that lands on the frame's
+ * body/border instead. Exposed on its own (distinct from hitTestPoint,
+ * which treats header/border/interior-miss as one boolean) so a caller that
+ * needs to distinguish WHICH part of a frame was hit — canvas-editor's
+ * select tool, deciding whether a double-click opens the rename input
+ * (frame-interaction task, gap 1) — doesn't have to re-derive the same
+ * local-space band test. */
+export function isPointInFrameHeaderBand(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+  if (shape.kind !== 'frame') return false
+  const local = toLocalPoint(doc, shape, point)
+  const header = frameHeaderLocalBounds(shape)
+  return local.x >= header.minX && local.x <= header.maxX && local.y >= header.minY && local.y <= header.maxY
+}
+
 // Is `point` (world/page space) inside this shape's rotated box? Inverse-
 // transforms the point into local space (toLocalPoint) and tests it against
 // the axis-aligned local box — cheaper and exactly equivalent to testing
 // the point against the rotated quad in world space. Inclusive of the
 // boundary (matches worldBounds treating min/max as part of the box).
+//
+// ARROW SPECIAL CASE (Task arrow-body): see worldBounds' comment — an arrow
+// has no meaningful local box to test against, so this delegates to
+// arrowHitTest (line/curve-proximity, not box containment) instead.
+//
+// FRAME SPECIAL CASE (frame-interaction task, gaps 2/3/5): a frame hits
+// iff the point falls in its HEADER band (frameHeaderLocalBounds, above —
+// selects/drags the frame by its name label) OR within FRAME_EDGE_MARGIN of
+// its border (selects/drags the frame by its edge) — the interior beyond
+// that margin is a deliberate MISS, so a marquee started there rubber-bands
+// the frame's children instead of moving the frame. Every other kind keeps
+// the original solid-box test unchanged (gap 5's broader "every kind"
+// fill-awareness is explicitly NOT implemented here — scoped to frame only,
+// the high-impact case; see this task's report).
 export function hitTestPoint(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+  if (shape.kind === 'arrow') return arrowHitTest(doc, shape, point)
   const local = toLocalPoint(doc, shape, point)
   const lb = localBounds(shape)
+  if (shape.kind === 'frame') {
+    const header = frameHeaderLocalBounds(shape)
+    if (local.x >= header.minX && local.x <= header.maxX && local.y >= header.minY && local.y <= header.maxY) return true
+    const inBox = local.x >= lb.minX && local.x <= lb.maxX && local.y >= lb.minY && local.y <= lb.maxY
+    if (!inBox) return false
+    return (
+      local.x <= lb.minX + FRAME_EDGE_MARGIN || local.x >= lb.maxX - FRAME_EDGE_MARGIN ||
+      local.y <= lb.minY + FRAME_EDGE_MARGIN || local.y >= lb.maxY - FRAME_EDGE_MARGIN
+    )
+  }
   return local.x >= lb.minX && local.x <= lb.maxX && local.y >= lb.minY && local.y <= lb.maxY
+}
+
+// The bounds spatial-index.ts buckets a shape under (Task frame-interaction,
+// gap 2): identical to worldBounds for every kind EXCEPT frame, where it is
+// widened to also cover the header band (frameHeaderLocalBounds) rotated
+// into world space — otherwise a click on the header, which sits OUTSIDE
+// worldBounds' own box, would hash to a grid cell that never lists the frame
+// as a candidate at all, and hitTestPoint's header branch above would never
+// even run. Deliberately NOT folded into worldBounds itself: worldBounds
+// also feeds transform.ts's resize-handle placement and Selection.tsx's
+// selection-outline box, where "the frame's real geometry" (not the header
+// chrome) is the correct answer — widening THOSE would move resize handles
+// and the outline up into the header, a regression this task doesn't own.
+export function shapeHitIndexBounds(doc: CanvasDocument, shape: Shape): Bounds {
+  const base = worldBounds(doc, shape)
+  if (shape.kind !== 'frame') return base
+  const t = worldTransform(doc, shape)
+  const header = frameHeaderLocalBounds(shape)
+  const corners = [
+    { x: header.minX, y: header.minY }, { x: header.maxX, y: header.minY },
+    { x: header.maxX, y: header.maxY }, { x: header.minX, y: header.maxY },
+  ].map((p) => { const r = rotatePoint(p, t.rotation); return { x: r.x + t.x, y: r.y + t.y } })
+  return {
+    minX: Math.min(base.minX, ...corners.map((c) => c.x)),
+    minY: Math.min(base.minY, ...corners.map((c) => c.y)),
+    maxX: Math.max(base.maxX, ...corners.map((c) => c.x)),
+    maxY: Math.max(base.maxY, ...corners.map((c) => c.y)),
+  }
+}
+
+// ============================================================================
+// Arrow anchor resolution (Seam C7 dependency) — MOVED HERE from snapping.ts
+// (Task arrow-body): resolveArrowEndpointRaw above (and arrow-route.ts's
+// routeArrow) both need anchorToWorld, and snapping.ts itself depends on
+// spatial-index.ts (for snapCandidates' queryViewport calls) — keeping
+// anchorToWorld/resolveArrowAnchor there would force a real import cycle the
+// moment arrow-route.ts (already relied on by spatial-index.ts's callers)
+// needed them too. Both functions only ever needed geometry.ts's own
+// primitives (toLocalPoint/toWorldPoint/localBounds), never spatial-index.ts,
+// so moving them here keeps this file a leaf. snapping.ts re-exports both
+// names so every existing `from './snapping.js'` import keeps working
+// byte-compatibly.
+// ============================================================================
+
+// Clamp to [0,1], TOTAL over all number inputs: Math.max/Math.min PROPAGATE
+// NaN rather than clamping it, so a bare max/min chain would let a
+// NaN-poisoned caller point produce a NaN anchor — which, persisted into a
+// binding, silently breaks that arrow forever (anchorToWorld does no
+// re-validation). Non-finite input (NaN from arithmetic on a NaN point;
+// ±Infinity likewise) falls back to 0.5 — center, matching
+// resolveArrowAnchor's missing-target fallback philosophy.
+const clamp01 = (v: number): number => (Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0.5)
+
+/**
+ * Normalized anchor (0..1 on both axes, clamped) of a world `point` within
+ * `targetId`'s LOCAL unrotated box — computed by inverse-transforming the
+ * world point (toLocalPoint) and dividing by the box's own w/h. Independent
+ * of the target's rotation and parent chain by construction (that's exactly
+ * what toLocalPoint undoes), so it stays valid as the target moves/rotates —
+ * the whole reason arrow bindings store a normalized anchor instead of a
+ * world offset.
+ *
+ * Degenerate paths: missing target -> {nx:0.5, ny:0.5} (center — an
+ * arbitrary but harmless default; the caller (Seam C7) is expected to drop
+ * the binding for a target that no longer resolves, this is just a total,
+ * non-throwing fallback). Zero-width or zero-height local box -> that axis's
+ * normalized coordinate is 0 (dividing by a zero span is meaningless; 0 is a
+ * stable, arbitrary pick — since min===max on that axis, anchorToWorld's
+ * result is IDENTICAL for every nx/ny choice there, so the choice of default
+ * never actually loses information on that axis).
+ */
+export function resolveArrowAnchor(doc: CanvasDocument, targetId: string, point: Point): { nx: number; ny: number } {
+  const shape = doc.byId.get(targetId)
+  if (!shape) return { nx: 0.5, ny: 0.5 }
+  const local = toLocalPoint(doc, shape, point)
+  const lb = localBounds(shape)
+  const w = lb.maxX - lb.minX, h = lb.maxY - lb.minY
+  const nx = w > 0 ? clamp01((local.x - lb.minX) / w) : 0
+  const ny = h > 0 ? clamp01((local.y - lb.minY) / h) : 0
+  return { nx, ny }
+}
+
+/**
+ * The inverse of resolveArrowAnchor: map a normalized (nx,ny) anchor back to
+ * a world point, given the target's CURRENT transform (so this re-resolves
+ * correctly after the target has moved/rotated — arrow routing calls this
+ * every frame, not once at bind time). Missing target -> {x:0, y:0}
+ * (documented total fallback, matching resolveArrowAnchor's degenerate-path
+ * policy).
+ */
+export function anchorToWorld(doc: CanvasDocument, targetId: string, anchor: { nx: number; ny: number }): Point {
+  const shape = doc.byId.get(targetId)
+  if (!shape) return { x: 0, y: 0 }
+  const lb = localBounds(shape)
+  const local: Point = { x: lb.minX + anchor.nx * (lb.maxX - lb.minX), y: lb.minY + anchor.ny * (lb.maxY - lb.minY) }
+  return toWorldPoint(doc, shape, local)
 }
 
 // The page a shape ultimately lives on, walking parents with the same guard<50

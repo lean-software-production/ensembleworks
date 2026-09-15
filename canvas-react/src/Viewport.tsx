@@ -102,15 +102,27 @@
 // decision to the caller via `onPointerCancel`, unconditionally — no
 // InputEvent mapping needed (the caller doesn't need coordinates to decide
 // "abandon whatever's in flight", the same as onViewportBlur).
-import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode } from 'react'
+import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode, type UIEvent } from 'react'
 import type { InputEvent } from '@ensembleworks/canvas-editor'
 import { keyEventToInput, pointerEventToInput, wheelEventToInput } from './dom-events.js'
 
 export interface ViewportProps {
   /** Called once per normalized input event, in the order the browser
    * delivered the underlying DOM events. The renderer never batches,
-   * reorders, or drops events here. */
-  readonly onInput: (event: InputEvent) => void
+   * reorders, or drops events here.
+   *
+   * RETURN VALUE (create-edit-flow FIXER task): for a `keydown`, returning
+   * `true` tells this renderer to call the native event's `preventDefault()`
+   * — needed for e.g. select.ts's Enter-to-edit branch, whose `BeginEdit`
+   * intent synchronously mounts TextEditor's `autoFocus`-ed textarea WITHIN
+   * this same keydown; without suppressing the browser's own default action,
+   * "Enter inserts a newline" lands on that freshly-focused textarea instead
+   * of doing nothing, stamping a stray `\n` into the shape's text on every
+   * keyboard-driven edit-entry (reproduced and pinned by the
+   * `enter-key-edit-preserves-text` browser contract). Ignored for
+   * `keyup`/every other event type — `handleKey` only checks it for
+   * `keydown`, and nothing here calls it eagerly for other event kinds. */
+  readonly onInput: (event: InputEvent) => boolean | void
   /** The abandonment-gap hook — see module header. Optional: a caller with
    * no in-flight-gesture cancellation wired yet (e.g. this unit's own tests)
    * simply omits it. */
@@ -173,8 +185,39 @@ export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, c
     onPointerCancel?.()
   }
 
+  // text-autosize task — the viewport must NEVER actually scroll: panning is
+  // exclusively the camera's CSS transform on WorldLayer (Viewport.tsx's own
+  // module header), and every screen->world conversion in this package
+  // (pointerEventToInput above) assumes `el.getBoundingClientRect()` alone
+  // describes the mapping — it has no notion of the container's OWN
+  // scrollTop/scrollLeft. Before autosize, a text-capable shape's box never
+  // exceeded the viewport while being edited, so this was a latent gap, not
+  // a live bug: growY/autoSize now legitimately grow a FOCUSED, in-edit
+  // textarea past the viewport's height, and Chromium's native "scroll the
+  // focused element's nearest scroll container into view" kicks in — even
+  // though this div is `overflow: hidden`, which is STILL a scroll container
+  // for that purpose (it just has no visible scrollbar/wheel-scroll UI). The
+  // resulting nonzero scrollTop silently desyncs every later hit-test/click
+  // from the DOM's actual rendered positions until something resets it —
+  // nothing previously did. Snapping back to (0,0) on the rare `scroll`
+  // event this container should never otherwise receive is cheap and fully
+  // general (it doesn't matter WHAT triggered the scroll).
+  function handleScroll(e: UIEvent<HTMLDivElement>): void {
+    const el = e.currentTarget
+    if (el.scrollTop !== 0 || el.scrollLeft !== 0) {
+      el.scrollTop = 0
+      el.scrollLeft = 0
+    }
+  }
+
   function handleKey(e: KeyboardEvent<HTMLDivElement>): void {
-    onInput(keyEventToInput({ type: e.type as 'keydown' | 'keyup', key: e.key, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, timeStamp: e.timeStamp }))
+    const shouldPreventDefault = onInput(keyEventToInput({ type: e.type as 'keydown' | 'keyup', key: e.key, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, timeStamp: e.timeStamp }))
+    // See ViewportProps.onInput's RETURN VALUE doc comment above — only
+    // `keydown` ever asks for this (Enter-to-edit's stray-newline fix); a
+    // `keyup` caller returning `true` would be a caller bug, not something
+    // to guard against here specifically, but gating on `e.type` keeps this
+    // narrowly scoped to the one real use rather than a blanket preventDefault.
+    if (shouldPreventDefault && e.type === 'keydown') e.preventDefault()
   }
 
   return (
@@ -192,6 +235,7 @@ export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, c
       onPointerCancel={handlePointerCancel}
       onKeyDown={handleKey}
       onKeyUp={handleKey}
+      onScroll={handleScroll}
       onBlur={onViewportBlur}
     >
       {children}

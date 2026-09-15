@@ -1047,4 +1047,277 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: SetCurrentPage switches currentPageId, view-only (no commit, no undo), notifies subscribers')
 }
 
+// 28b. Switching to a DIFFERENT page clears the page-local view state —
+//     selection, hover, editingId — so handles, Delete and the style panel
+//     never act on shapes the user can no longer see. A same-page
+//     SetCurrentPage leaves them alone, and a SetSelection batched AFTER the
+//     switch (thread-return's bookmark restore) still lands.
+{
+  const { doc, editor } = makeEditor(1n)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'CreateShape', shape: shape('shape:n') })
+  editor.applyAll([{ type: 'SetSelection', ids: ['shape:n'] }, { type: 'SetHover', id: 'shape:n' }, { type: 'BeginEdit', id: 'shape:n' }])
+  assert.deepEqual([...editor.get().selection], ['shape:n'], 'precondition: selected')
+  assert.equal(editor.get().hover, 'shape:n', 'precondition: hovered')
+  assert.equal(editor.get().editingId, 'shape:n', 'precondition: editing')
+
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:p' })
+  assert.deepEqual([...editor.get().selection], ['shape:n'], 'same-page SetCurrentPage keeps the selection')
+  assert.equal(editor.get().hover, 'shape:n', 'same-page SetCurrentPage keeps hover')
+  assert.equal(editor.get().editingId, 'shape:n', 'same-page SetCurrentPage keeps editingId')
+
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+  assert.equal(editor.get().currentPageId, 'page:q')
+  assert.deepEqual([...editor.get().selection], [], 'switching to another page clears the selection')
+  assert.equal(editor.get().hover, null, 'switching to another page clears hover')
+  assert.equal(editor.get().editingId, null, 'switching to another page clears editingId')
+  console.log('ok: SetCurrentPage to another page clears selection/hover/editingId; same page keeps them')
+}
+
+{
+  const { doc, editor } = makeEditor(1n)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'CreateShape', shape: shape('shape:on-p') })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:on-q', { parentId: 'page:q' }) })
+  editor.apply({ type: 'SetSelection', ids: ['shape:on-p'] })
+  editor.applyAll([{ type: 'SetCurrentPage', pageId: 'page:q' }, { type: 'SetSelection', ids: ['shape:on-q'] }])
+  assert.equal(editor.get().currentPageId, 'page:q')
+  assert.deepEqual([...editor.get().selection], ['shape:on-q'], '[SetCurrentPage(q), SetSelection([x])] in one batch ends with selection [x]')
+  console.log('ok: a SetSelection batched after SetCurrentPage survives the switch (thread-return restore)')
+}
+
+// 28c. Switching page mid-edit ENDS the edit, not just nulls editingId: an
+//     empty text shape is auto-deleted exactly as EndEdit would (undoable),
+//     even when the caller batches EndEdit after the switch (thread-return's
+//     [SetCurrentPage, SetSelection, EndEdit]); a text shape with content
+//     survives.
+{
+  const { doc, editor } = makeEditor(1n)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'CreateShape', shape: shape('shape:empty-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:empty-text' })
+  editor.applyAll([{ type: 'SetCurrentPage', pageId: 'page:q' }, { type: 'SetSelection', ids: [] }, { type: 'EndEdit' }])
+  assert.equal(editor.doc.getShape('shape:empty-text'), undefined, 'an empty text shape being edited is deleted when the page switches')
+  assert.equal(editor.get().editingId, null, 'editingId is null after the switch')
+  editor.undo()
+  assert.ok(editor.doc.getShape('shape:empty-text'), 'the auto-delete on page switch is undoable, like EndEdit\'s')
+  console.log('ok: SetCurrentPage mid-edit auto-deletes an empty text shape (EndEdit behaviour)')
+}
+
+{
+  const { doc, editor } = makeEditor(1n)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'CreateShape', shape: shape('shape:full-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:full-text' })
+  editor.apply({ type: 'SetText', id: 'shape:full-text', text: 'keep me' })
+  editor.applyAll([{ type: 'SetCurrentPage', pageId: 'page:q' }, { type: 'SetSelection', ids: [] }, { type: 'EndEdit' }])
+  assert.ok(editor.doc.getShape('shape:full-text'), 'a text shape with content survives a page switch mid-edit')
+  assert.equal(editor.get().editingId, null)
+  console.log('ok: SetCurrentPage mid-edit keeps a text shape that has content')
+}
+
+// ============================================================================
+// 29. create-edit-flow task — EndEdit auto-deletes an empty `text` shape
+//    (tldraw parity: node_modules/tldraw/src/lib/shapes/text/
+//    TextShapeUtil.tsx:249-254's onEditEnd). `note` is deliberately
+//    EXCLUDED (NoteShapeUtil has no such hook — a sticky's colored body is
+//    a real object even with no text).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:empty-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:empty-text' })
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:empty-text'), undefined, 'an empty text shape is deleted when its editing session ends')
+  assert.equal(editor.get().editingId, null, 'editingId still clears to null')
+  console.log('ok: EndEdit deletes an empty text shape')
+}
+
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:blank-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:blank-text' })
+  editor.apply({ type: 'SetText', id: 'shape:blank-text', text: '   ' }) // whitespace-only -- trims to empty
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:blank-text'), undefined, 'a whitespace-only text shape is deleted too (trimmed before the emptiness check)')
+  console.log('ok: EndEdit deletes a whitespace-only text shape')
+}
+
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:has-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:has-text' })
+  editor.apply({ type: 'SetText', id: 'shape:has-text', text: 'hello' })
+  editor.apply({ type: 'EndEdit' })
+  assert.ok(editor.doc.getShape('shape:has-text'), 'a text shape with real content survives EndEdit')
+  console.log('ok: EndEdit keeps a non-empty text shape')
+}
+
+{
+  const { editor } = makeEditor(1n)
+  // kind defaults to 'note' (this file's `shape()` helper) — an empty NOTE
+  // must survive EndEdit; only `text` auto-deletes.
+  editor.apply({ type: 'CreateShape', shape: shape('shape:empty-note') })
+  editor.apply({ type: 'BeginEdit', id: 'shape:empty-note' })
+  editor.apply({ type: 'EndEdit' })
+  assert.ok(editor.doc.getShape('shape:empty-note'), 'an empty NOTE (not text) is never auto-deleted -- v1 has no such hook for notes')
+  console.log('ok: EndEdit never deletes an empty note')
+}
+
+{
+  // Undo/redo round-trip: EndEdit's delete must be a real, undoable batch
+  // (same InverseOp convention DeleteShapes itself uses).
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:undoable', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:undoable' })
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:undoable'), undefined, 'sanity: deleted')
+  editor.undo()
+  assert.ok(editor.doc.getShape('shape:undoable'), 'undo restores the auto-deleted empty text shape')
+  editor.redo()
+  assert.equal(editor.doc.getShape('shape:undoable'), undefined, 'redo re-deletes it')
+  console.log('ok: EndEdit\'s auto-delete undo/redo round-trips')
+}
+
+{
+  // Validator-blocking advisory (create-edit-flow FIXER task): EndEdit's
+  // auto-delete must not leave the just-deleted shape's id stranded in
+  // `selection` -- DeleteShapes' own callers always pair a delete with
+  // SetSelection([]) (tool-loop.ts's deleteSelectionIntents); EndEdit's
+  // internal delete has no such caller, so the clear must be part of
+  // EndEdit's own result.
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:dangling-selection', { kind: 'text' }) })
+  editor.apply({ type: 'SetSelection', ids: ['shape:dangling-selection'] })
+  editor.apply({ type: 'BeginEdit', id: 'shape:dangling-selection' })
+  editor.apply({ type: 'EndEdit' })
+  assert.equal(editor.doc.getShape('shape:dangling-selection'), undefined, 'sanity: the empty text shape was deleted')
+  assert.deepEqual([...editor.get().selection], [], 'the deleted shape id must not remain in selection')
+  console.log('ok: EndEdit\'s auto-delete also clears the deleted id out of selection')
+}
+
+{
+  // Validator-blocking finding (create-edit-flow FIXER round 3): EndEdit's
+  // emptiness check reads ONLY the live LoroText channel
+  // (doc.getText(editingId)), never props.richText. A shape imported/
+  // reconciled from a v1 tldraw room carries its content in props.richText
+  // while its LoroText channel stays genuinely empty (pinned by
+  // server/src/canvas-v2/reconcile.test.ts case 5 -- richText round-trips,
+  // getText() stays ''). canvas-react's TextShape renders that richText, so
+  // the shape is fully visible content -- yet opening and abandoning an
+  // edit (BeginEdit -> EndEdit with no typing) deleted it, a real,
+  // synced-to-peers data loss. Fix must treat a shape with non-empty
+  // props.richText as non-empty even when its LoroText channel is blank.
+  const { editor } = makeEditor(1n)
+  editor.apply({
+    type: 'CreateShape',
+    shape: shape('shape:imported-text', {
+      kind: 'text',
+      props: { richText: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'IMPORTED FROM V1' }] }] } },
+    }),
+  })
+  assert.equal(editor.doc.getText('shape:imported-text'), '', 'sanity: the LoroText channel is genuinely empty for richText-only content, same as reconcile.test.ts case 5')
+  editor.apply({ type: 'BeginEdit', id: 'shape:imported-text' })
+  editor.apply({ type: 'EndEdit' })
+  assert.ok(editor.doc.getShape('shape:imported-text'), 'a text shape whose only content is props.richText must survive an edit-and-abandon -- it is NOT empty just because its LoroText channel is blank')
+  console.log('ok: EndEdit does not delete a text shape whose content lives in props.richText')
+}
+
+// ============================================================================
+// 16. MoveArrowTerminal: moving the UNBOUND end to a new point rewrites
+//     props.end (local offset), writes no binding when none is given, and
+//     undo/redo round-trip cleanly.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'StartArrow', shape: shape('shape:arrow', { kind: 'arrow', x: 0, y: 0, props: { end: { x: 100, y: 0 } } }) })
+
+  editor.apply({ type: 'MoveArrowTerminal', id: 'shape:arrow', terminal: 'end', point: { x: 40, y: 80 } })
+  let arrow = editor.doc.getShape('shape:arrow')!
+  assert.deepEqual((arrow.props as any).end, { x: 40, y: 80 }, 'end moved to the new LOCAL offset (x/y unchanged at 0,0)')
+  assert.equal(editor.doc.listBindings().length, 0, 'no binding given: none written')
+
+  editor.undo()
+  arrow = editor.doc.getShape('shape:arrow')!
+  assert.deepEqual((arrow.props as any).end, { x: 100, y: 0 }, 'undo restores the pre-move end')
+  editor.redo()
+  arrow = editor.doc.getShape('shape:arrow')!
+  assert.deepEqual((arrow.props as any).end, { x: 40, y: 80 }, 'redo re-applies the move')
+  console.log('ok: MoveArrowTerminal moves an unbound end and undo/redo round-trips')
+}
+
+// ============================================================================
+// 17. MoveArrowTerminal: moving the START terminal writes shape.x/y AND
+//     re-expresses props.end so the END terminal's WORLD position is
+//     UNCHANGED (moving start must not also drag the other end).
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'StartArrow', shape: shape('shape:arrow', { kind: 'arrow', x: 0, y: 0, props: { end: { x: 100, y: 0 } } }) }) // world end = (100,0)
+
+  editor.apply({ type: 'MoveArrowTerminal', id: 'shape:arrow', terminal: 'start', point: { x: 30, y: 20 } })
+  const arrow = editor.doc.getShape('shape:arrow')!
+  assert.equal(arrow.x, 30)
+  assert.equal(arrow.y, 20)
+  assert.deepEqual((arrow.props as any).end, { x: 70, y: -20 }, 'end re-expressed so world end stays at (100,0): 100-30=70, 0-20=-20')
+  console.log('ok: MoveArrowTerminal on start keeps the end\'s world position fixed')
+}
+
+// ============================================================================
+// 18. MoveArrowTerminal: REPLACES a terminal's binding -- writes a NEW
+//     binding when `binding` is given (even over an existing one for that
+//     terminal), and CLEARS it (deletes the row) when omitted.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:a', { kind: 'geo', props: { w: 50, h: 50 } }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:b', { kind: 'geo', x: 200, props: { w: 50, h: 50 } }) })
+  editor.apply({
+    type: 'StartArrow',
+    shape: shape('shape:arrow', { kind: 'arrow', x: 25, y: 25, props: { end: { x: 175, y: 0 } } }),
+    fromBinding: { targetId: 'shape:a', anchor: { nx: 0.5, ny: 0.5 } },
+  })
+  assert.equal(editor.doc.listBindings().length, 1, 'sanity: one start binding written')
+
+  // Re-bind the start terminal to shape:b instead.
+  editor.apply({
+    type: 'MoveArrowTerminal',
+    id: 'shape:arrow',
+    terminal: 'start',
+    point: { x: 225, y: 25 },
+    binding: { targetId: 'shape:b', anchor: { nx: 0.5, ny: 0.5 } },
+  })
+  let bindings = editor.doc.listBindings()
+  assert.equal(bindings.length, 1, 'still exactly one start binding -- old replaced, not appended')
+  assert.equal(bindings[0]!.toId, 'shape:b', 'now bound to the new target')
+
+  // Drag it off onto empty canvas: binding omitted -> cleared entirely.
+  editor.apply({ type: 'MoveArrowTerminal', id: 'shape:arrow', terminal: 'start', point: { x: 500, y: 500 } })
+  bindings = editor.doc.listBindings()
+  assert.equal(bindings.length, 0, 'binding omitted: the existing start binding is deleted, none written back')
+  console.log('ok: MoveArrowTerminal replaces a terminal\'s binding, and clears it when none is given')
+}
+
+// ============================================================================
+// 19. MoveArrowTerminal on a vanished arrow is a total no-op -- no props
+//     write, no binding write, matching CompleteArrow's own tolerance.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  editor.apply({ type: 'CreateShape', shape: shape('shape:target', { kind: 'geo', props: { w: 50, h: 50 } }) })
+  editor.apply({ type: 'StartArrow', shape: shape('shape:arrow', { kind: 'arrow' }) })
+  editor.apply({ type: 'DeleteShapes', ids: ['shape:arrow'] })
+
+  editor.apply({
+    type: 'MoveArrowTerminal', id: 'shape:arrow', terminal: 'end', point: { x: 10, y: 10 },
+    binding: { targetId: 'shape:target', anchor: { nx: 0.5, ny: 0.5 } },
+  })
+  assert.equal(editor.doc.listBindings().length, 0, 'no dangling binding for a vanished arrow')
+  console.log('ok: MoveArrowTerminal on a vanished arrow is a total no-op')
+}
+
 console.log('ok: canvas-editor editor + intents')

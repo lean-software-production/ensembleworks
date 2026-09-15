@@ -34,6 +34,23 @@ export function isTextCapableKind(kind: ShapeKind): boolean {
   return (TEXT_CAPABLE_KINDS as readonly string[]).includes(kind)
 }
 
+// The kinds tldraw treats as FIXED SIZE — no resize handles, resize is a
+// no-op (tldraw's NoteShapeUtil.hideResizeHandles() returns true and
+// onResize() is a no-op; see geometry.ts's `size()` note-special-case for
+// the matching v2 sizing rule: a note's rendered box is `200 * props.scale`
+// and NEVER reads props.w/h). Same static, kind-name-only allowlist
+// convention as TEXT_CAPABLE_KINDS above, for the same cross-package reason:
+// canvas-editor's transform tool (FSM-level suppression) and canvas-react's
+// Handles/Overlay (paint-level suppression) both need this fact and neither
+// may import the other.
+export const FIXED_SIZE_KINDS = ['note'] as const
+export type FixedSizeKind = (typeof FIXED_SIZE_KINDS)[number]
+
+/** True iff `kind` is one of FIXED_SIZE_KINDS above. */
+export function isFixedSizeKind(kind: ShapeKind): boolean {
+  return (FIXED_SIZE_KINDS as readonly string[]).includes(kind)
+}
+
 // Rich text is ProseMirror JSON; we keep it verbatim for lossless round-trip and
 // derive plain text for semantics. Structural (not exhaustively typed).
 const richText = z.object({ type: z.literal('doc'), content: z.array(z.any()) })

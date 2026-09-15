@@ -326,7 +326,7 @@ const EPS = 1e-6
 //     gesture-start snapshot (`startShapes`) on its Resizing/Rotating state
 //     the moment the gesture begins mutating the doc (onPointing's first
 //     threshold-crossing move), so a caller who abandons the gesture
-//     (client/src/canvas-v2/tool-loop.ts's cancelActiveTool) can restore
+//     (canvas-editor/src/session/tool-loop.ts's cancelActiveTool) can restore
 //     every affected shape verbatim regardless of how many incremental
 //     ResizeShapes commits happened. Drive TWO pointermoves (two separate
 //     incremental commits, no pointerup — still mid-gesture) and prove
@@ -420,6 +420,95 @@ const EPS = 1e-6
   assert.equal((reverted2.props as { w: number }).w, (before2.props as { w: number }).w)
   assert.equal(reverted2.x, before2.x)
   console.log('ok: cancel-revert — a multi-select resize gesture\'s startShapes covers every affected shape')
+}
+
+const arrowShape = (id: string, x: number, y: number, props: Record<string, unknown> = {}): Shape => ({
+  id, kind: 'arrow', parentId: 'page:p', index: 'a1', x, y, rotation: 0,
+  isLocked: false, opacity: 1, meta: {}, props, ...({} as Partial<Shape>),
+} as Shape)
+
+// ============================================================================
+// ARROW HANDLES (arrow-handles task)
+// ============================================================================
+
+// 15. A lone selected arrow's MID handle sits at the chord midpoint
+//     (straight arrow) -- dragging it writes props.bend, not a resize.
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } }))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:arrow'] })
+
+  const events = script().down(50, 0).move(50, 30).up().events()
+  const finalState = run(editor, tool, events)
+  assert.equal(finalState.mode, 'idle', 'gesture completed, back to idle')
+  const arrow = editor.doc.getShape('shape:arrow')!
+  assert.equal((arrow.props as { bend?: number }).bend, 30, 'dragging the mid handle down 30 world units sets bend to 30')
+  console.log('ok: dragging a selected arrow\'s mid handle bends it')
+}
+
+// 16. Dragging a selected arrow's END handle moves it, and clicking on
+//     empty canvas leaves it unbound (props.end updated, no binding).
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } }))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:arrow'] })
+
+  const events = script().down(100, 0).move(150, 60).up().events()
+  const finalState = run(editor, tool, events)
+  assert.equal(finalState.mode, 'idle')
+  const arrow = editor.doc.getShape('shape:arrow')!
+  assert.deepEqual((arrow.props as { end?: unknown }).end, { x: 150, y: 60 }, 'end terminal moved to the new LOCAL offset')
+  assert.equal(editor.doc.listBindings().length, 0, 'dropped on empty canvas: no binding')
+  console.log('ok: dragging a selected arrow\'s end handle moves it (no target under the drop: unbound)')
+}
+
+// 17. Dragging a selected arrow's END handle onto another shape re-binds
+//     it there, AND emits SetHover for the candidate target mid-drag.
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(geoShape('shape:target', 200, 0, 100, 100)) // center (250, 50)
+  doc.putShape(arrowShape('shape:arrow', 0, 0, { end: { x: 100, y: 0 } }))
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:arrow'] })
+
+  const events = script().down(100, 0).move(250, 50).up().events()
+  const finalState = run(editor, tool, events)
+  assert.equal(finalState.mode, 'idle')
+  const bindings = editor.doc.listBindings()
+  const endBinding = bindings.find((b) => b.id === 'binding:shape:arrow-end')
+  assert.ok(endBinding, 'end handle dropped on shape:target writes the end binding')
+  assert.equal(endBinding!.toId, 'shape:target')
+  assert.deepEqual((endBinding!.props as { anchor: unknown }).anchor, { nx: 0.5, ny: 0.5 })
+  // Gesture-end SetHover(null): re-run just the final up event's intents to
+  // confirm hover is cleared (checked indirectly via editor state).
+  assert.equal(editor.get().hover, null, 'hover cleared once the gesture ends')
+  console.log('ok: dragging a selected arrow\'s end handle onto a shape re-binds it there')
+}
+
+// 18. Re-binding an ALREADY-bound start terminal to a DIFFERENT target
+//     REPLACES the old binding wholesale (never leaves two).
+{
+  const { doc, editor, tool } = setup()
+  doc.putShape(geoShape('shape:a', 0, 0, 50, 50)) // center (25,25)
+  doc.putShape(geoShape('shape:b', 300, 0, 50, 50)) // center (325,25)
+  doc.putShape(arrowShape('shape:arrow', 25, 25, { end: { x: 100, y: 0 } }))
+  doc.putBinding({ id: 'binding:shape:arrow-start' as any, fromId: 'shape:arrow' as any, toId: 'shape:a' as any, props: { terminal: 'start', anchor: { nx: 0.5, ny: 0.5 } }, meta: {} })
+  doc.commit()
+  editor.apply({ type: 'SetSelection', ids: ['shape:arrow'] })
+
+  // The start handle sits where the ROUTED (clipped-to-boundary) line
+  // actually starts, not at the raw anchor center: the arrow's end sits at
+  // world (125,25), so the ray from there into shape:a's box [0,50]x[0,50]
+  // crosses its right edge at (50,25) -- routeArrow's documented CLIPPING
+  // behavior for a bound terminal (arrow-route.ts's clipEndpoint).
+  const events = script().down(50, 25).move(325, 25).up().events()
+  run(editor, tool, events)
+  const bindings = editor.doc.listBindings()
+  assert.equal(bindings.length, 1, 'still exactly one start binding')
+  assert.equal(bindings[0]!.toId, 'shape:b', 'replaced, not appended')
+  console.log('ok: re-binding an already-bound start terminal replaces the binding, never appends')
 }
 
 console.log('ok: transform tool (resize/rotate handles) + world-correct frame conversion')

@@ -26,20 +26,31 @@
 // `props: r.props ?? {}`) carries a real v1 geo shape's `props.geo` through
 // to the model at runtime regardless of the typed schema's silence on it.
 //
-// GEOMETRY: getGeoShapePath.ts's `defaultGeoTypeDefinitions` is the source
-// of every variant's actual path. Special-cased here (the "common" set the
-// task calls out): rectangle (a plain box), ellipse (arcTo a true ellipse,
-// not a superellipse), triangle (apex at (w/2,0), base corners at (w,h)/
-// (0,h)), diamond (top/right/bottom/left points at the four edge
-// midpoints). Every OTHER variant (cloud/pentagon/hexagon/octagon/star/
-// rhombus/rhombus-2/oval/trapezoid/the four arrows/x-box/check-box/heart)
-// falls back to a plain rectangle OUTLINE — documented here, not a crash —
-// real polygon math for the remaining ~16 variants is future work, not this
-// task's scope. SVG is drawn in a viewBox exactly `w x h` (the shape's own
-// props.w/props.h, default 100x100 per GeoShapeUtil.tsx's getDefaultProps)
-// at 100%x100% of the body div, which ShapeBody.tsx already sizes to the
-// shape's localBounds — so shape-space coordinates ARE screen pixels here,
-// same posture as every other body in this package.
+// GEOMETRY (Task "geo-variants" — all 20 geo variants render their real
+// geometry, not just 4): getGeoShapePath.ts's `defaultGeoTypeDefinitions`
+// is the source of every variant's proportions. Four variants keep their
+// own native SVG element here (rectangle -> <rect>, ellipse -> a true
+// arcTo'd ellipse via <ellipse>, triangle -> apex at (w/2,0)/base corners
+// at (w,h)/(0,h), diamond -> the four edge midpoints — see
+// NATIVE_ELEMENT_VARIANTS below for why). Every OTHER variant (cloud,
+// pentagon, hexagon, octagon, star, rhombus, rhombus-2, oval, trapezoid,
+// the four arrows, x-box, check-box, heart) is now drawn from
+// canvas-model's `getGeoOutline` (geo-outline.ts) — a clean-room port of
+// getGeoShapePath.ts's proportions, exposed as either closed polygon
+// vertices (straight-edge variants, rendered as <polygon>) or an SVG path
+// `d` string (curved variants, rendered as <path>). x-box/check-box also
+// draw an un-filled internal stroke (diagonals / check mark) on top of
+// their rectangle outline. A truly UNRECOGNIZED geo string still falls
+// back to a plain rectangle outline (getGeoOutline's own default), not a
+// crash. Cloud is a documented simplification: v1 wiggles its bumps with a
+// per-shape seeded PRNG for an organic look; geo-outline.ts keeps v1's
+// bump-count/protrusion math but renders them evenly spaced (no PRNG — see
+// that module's PURITY header) — same proportions, less texture. SVG is
+// drawn in a viewBox exactly `w x h` (the shape's own props.w/props.h,
+// default 100x100 per GeoShapeUtil.tsx's getDefaultProps) at 100%x100% of
+// the body div, which ShapeBody.tsx already sizes to the shape's
+// localBounds — so shape-space coordinates ARE screen pixels here, same
+// posture as every other body in this package.
 //
 // STROKE COLOR: `getColorValue(colors, color, 'solid')`
 // (GeoShapeUtil.tsx's getDefaultDisplayValues: `strokeColor:
@@ -151,6 +162,7 @@
 // fall through to the center default — `normalizeAlign` strips the
 // `-legacy` suffix before the lookup so both cases share one code path.
 import type { ReactElement } from 'react'
+import { getGeoOutline } from '@ensembleworks/canvas-model'
 import type { ShapeBodyProps } from '../shapeRegistry.js'
 import { flattenRichText } from './label.js'
 
@@ -206,6 +218,13 @@ const DEFAULT_FILL = 'none' // GeoShapeUtil.tsx getDefaultProps
 export const STROKE_WIDTH_PX: Readonly<Record<string, number>> = Object.freeze({ s: 2, m: 3.5, l: 5, xl: 10 })
 const LABEL_FONT_SIZE_PX: Readonly<Record<string, number>> = Object.freeze({ s: 18, m: 22, l: 26, xl: 32 })
 export const DEFAULT_SIZE = 'm' // GeoShapeUtil.tsx getDefaultProps
+
+// text-autosize fixer task: the geo label's own rendered padding (below),
+// exported so TextEditor.tsx's autosize MEASUREMENT can match it exactly —
+// same rationale as NoteShape.tsx's NOTE_LABEL_PADDING export (see that
+// module's doc comment for why the editing textarea's own `padding: 4` is
+// NOT a stand-in for this).
+export const GEO_LABEL_PADDING = 8
 const LINE_HEIGHT = 1.35 // theme.lineHeight, defaultThemes.ts — same value every other body cites
 
 // tlschema's DefaultFontFamilies (styles/TLFontStyle.ts:83-88) — same table
@@ -295,10 +314,17 @@ const DEFAULT_GEO = 'rectangle' // GeoShapeGeoStyle defaultValue
 const DEFAULT_W = 100 // GeoShapeUtil.tsx getDefaultProps
 const DEFAULT_H = 100
 
-// The variants this body draws with real, shape-specific geometry — every
-// other value in GeoShapeGeoStyle's 20-entry enum falls back to a plain
-// rectangle outline (see module header GEOMETRY).
-const SPECIAL_CASED_VARIANTS = new Set(['rectangle', 'ellipse', 'triangle', 'diamond'])
+// The four variants this body draws with dedicated native SVG elements
+// (<rect>/<ellipse>/<polygon>) rather than canvas-model's generic outline
+// path — kept as their own cases below purely because existing tests assert
+// on these specific element tags/attrs (e.g. <rect width="…">, <ellipse
+// cx="…">). Every OTHER variant (the 16 that used to fall back to a plain
+// rectangle — see Task "geo-variants") now renders real geometry sourced
+// from canvas-model's getGeoOutline (geo-outline.ts): a <polygon> for
+// straight-edge ("polygon" snapType) variants, a <path> for curved
+// ("blobby") ones. A truly UNRECOGNIZED geo string still falls back to a
+// plain rectangle (getGeoOutline's own defaulting), never a crash.
+const NATIVE_ELEMENT_VARIANTS = new Set(['rectangle', 'ellipse', 'triangle', 'diamond'])
 
 export interface GeoStyle {
   /** null => dash:'none', render no stroke element at all (v1's
@@ -389,11 +415,19 @@ export function geoLabel(shape: ShapeBodyProps['shape'], getText?: (id: string) 
   return ''
 }
 
-/** The SVG element for one geo variant, sized to `w`x`h` in shape-space
+/** The SVG element(s) for one geo variant, sized to `w`x`h` in shape-space
  * (the enclosing <svg>'s viewBox is exactly `0 0 w h`, so these are already
- * screen pixels — see module header GEOMETRY). Vertices/centers copied from
- * getGeoShapePath.ts's defaultGeoTypeDefinitions for the four special-cased
- * variants; anything else falls back to the same <rect> as 'rectangle'. */
+ * screen pixels — see module header GEOMETRY). The four NATIVE_ELEMENT_
+ * VARIANTS keep their own hand-written element (vertices/centers copied
+ * from getGeoShapePath.ts's defaultGeoTypeDefinitions — see that Set's own
+ * comment for why); every other variant (including a truly unrecognized
+ * geo string, which getGeoOutline itself defaults to 'rectangle') is drawn
+ * from canvas-model's getGeoOutline: a <polygon> when it exposes closed
+ * vertices (straight-edge variants), else a <path> from its `d` string
+ * (curved variants). x-box/check-box additionally draw their un-filled
+ * internalPaths (diagonals / check mark) on top, with no fill of their own
+ * — only a stroke, and only when dash isn't 'none' (an internal mark should
+ * disappear along with the outer stroke, not render alone). */
 function geoPath(variant: string, w: number, h: number, style: GeoStyle): ReactElement {
   const fill = style.fillColor ?? 'none'
   // dash:'none' -> strokeColor is null -> render stroke:'none' (no visible
@@ -408,7 +442,8 @@ function geoPath(variant: string, w: number, h: number, style: GeoStyle): ReactE
           ...(style.strokeDasharray !== undefined ? { strokeDasharray: style.strokeDasharray } : {}),
         }
   const common = { fill, ...strokeProps }
-  switch (SPECIAL_CASED_VARIANTS.has(variant) ? variant : 'rectangle') {
+
+  switch (NATIVE_ELEMENT_VARIANTS.has(variant) ? variant : '') {
     case 'ellipse':
       return <ellipse cx={w / 2} cy={h / 2} rx={w / 2} ry={h / 2} {...common} />
     case 'triangle':
@@ -416,18 +451,48 @@ function geoPath(variant: string, w: number, h: number, style: GeoStyle): ReactE
     case 'diamond':
       return <polygon points={`${w / 2},0 ${w},${h / 2} ${w / 2},${h} 0,${h / 2}`} {...common} />
     case 'rectangle':
-    default:
       return <rect x={0} y={0} width={w} height={h} {...common} />
   }
+
+  const outline = getGeoOutline(variant, w, h)
+  const outer = outline.vertices
+    ? <polygon points={outline.vertices.map(p => `${p.x},${p.y}`).join(' ')} {...common} />
+    : <path d={outline.path} {...common} />
+
+  if (outline.internalPaths.length === 0) return outer
+  const internalStrokeColor = style.strokeColor
+  return (
+    <>
+      {outer}
+      {internalStrokeColor !== null &&
+        outline.internalPaths.map((d, i) => (
+          <path
+            key={i}
+            d={d}
+            fill="none"
+            stroke={internalStrokeColor}
+            strokeWidth={style.strokeWidth}
+            strokeLinecap="round"
+            {...(style.strokeDasharray !== undefined ? { strokeDasharray: style.strokeDasharray } : {})}
+          />
+        ))}
+    </>
+  )
 }
 
-export function GeoShape({ shape, getText }: ShapeBodyProps) {
+export function GeoShape({ shape, getText, editorState }: ShapeBodyProps) {
   const props = shape.props as Record<string, unknown>
   const w = typeof props.w === 'number' && props.w > 0 ? props.w : DEFAULT_W
   const h = typeof props.h === 'number' && props.h > 0 ? props.h : DEFAULT_H
   const variant = geoVariant(shape)
   const style = geoStyle(shape)
-  const label = geoLabel(shape, getText)
+  // STATIC LABEL HIDDEN WHILE EDITING (label-render task gap fix):
+  // TextEditor.tsx mounts a sibling textarea overlay while `editorState.
+  // editingId === shape.id` — rendering this body's OWN label text at the
+  // same time double-draws it underneath the editing surface. `editorState`
+  // is optional (most fixtures/goldens omit it, per shapeRegistry.ts's
+  // ShapeBodyProps doc comment) — absent means "not editing", never a crash.
+  const label = editorState?.editingId === shape.id ? '' : geoLabel(shape, getText)
 
   return (
     <div
@@ -459,10 +524,11 @@ export function GeoShape({ shape, getText }: ShapeBodyProps) {
             alignItems: style.alignItems,
             justifyContent: style.justifyContent,
             textAlign: style.textAlign,
-            padding: 8,
+            padding: GEO_LABEL_PADDING,
             boxSizing: 'border-box',
             overflow: 'hidden',
             overflowWrap: 'break-word',
+            whiteSpace: 'pre-wrap', // label-render task gap fix: preserve newlines the textarea happily accepted (TextEditor.tsx)
             pointerEvents: 'none',
             color: style.labelColor,
             fontFamily: style.fontFamily,

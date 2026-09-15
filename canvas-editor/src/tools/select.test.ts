@@ -368,4 +368,286 @@ function setup() {
   console.log('ok: snap-during-drag finds no candidates far from every other shape -- empty SnapResult, unsnapped translate')
 }
 
+// ============================================================================
+// 16. Arrow-key nudge (Task keyboard/K1): with a shape selected and the tool
+//    idle, a bare ArrowRight keydown moves the selection by NUDGE_PX (1)
+//    world unit; ArrowLeft/Up/Down move in the expected direction. One
+//    keydown -> exactly one TranslateShapes intent (one undo step per
+//    keypress, matching e2e/goldens/feel.json's nudgePx).
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:a'] })
+  const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
+  const key = (k: string, mods = NEUTRAL) => ({ type: 'keydown' as const, key: k, modifiers: mods, t: 0 })
+
+  const right = tool.onEvent(tool.initialState, key('ArrowRight'))
+  assert.deepEqual(right.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 1, dy: 0 }], 'ArrowRight nudges +1 world unit in x')
+
+  const left = tool.onEvent(tool.initialState, key('ArrowLeft'))
+  assert.deepEqual(left.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: -1, dy: 0 }], 'ArrowLeft nudges -1 world unit in x')
+
+  const down = tool.onEvent(tool.initialState, key('ArrowDown'))
+  assert.deepEqual(down.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 0, dy: 1 }], 'ArrowDown nudges +1 world unit in y')
+
+  const up = tool.onEvent(tool.initialState, key('ArrowUp'))
+  assert.deepEqual(up.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 0, dy: -1 }], 'ArrowUp nudges -1 world unit in y')
+
+  console.log('ok: arrow-key nudge moves the selection by 1 world unit per direction')
+}
+
+// 16b. Arrow keys while a shape is being TEXT-EDITED must NOT nudge it: the
+//    textarea owns arrow keys for caret movement (tldraw parity — arrows in
+//    the rich-text editor never move the shape). Mutant killed: a select tool
+//    that reads only `selection` and ignores `editingId` emits a
+//    TranslateShapes here (the round-2 validator's real-browser repro: shape
+//    drifted 200,120 -> 198,119 while arrowing back to fix a typo).
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:note'] })
+  editor.apply({ type: 'BeginEdit', id: 'shape:note' })
+  assert.equal(editor.get().editingId, 'shape:note', 'precondition: the note is being edited')
+  const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
+  const left = tool.onEvent(tool.initialState, { type: 'keydown' as const, key: 'ArrowLeft', modifiers: NEUTRAL, t: 0 })
+  assert.deepEqual(left.intents, [], 'ArrowLeft while text-editing emits NO TranslateShapes (caret movement only)')
+  console.log('ok: arrow keys never nudge a shape that is being text-edited')
+}
+
+// ============================================================================
+// 17. Shift+arrow nudges by SHIFT_NUDGE_PX (10), matching feel.json's
+//    shiftNudgePx.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:a'] })
+  const SHIFT = { shift: true, alt: false, ctrl: false, meta: false }
+  const key = (k: string) => ({ type: 'keydown' as const, key: k, modifiers: SHIFT, t: 0 })
+
+  const right = tool.onEvent(tool.initialState, key('ArrowRight'))
+  assert.deepEqual(right.intents, [{ type: 'TranslateShapes', ids: ['shape:a'], dx: 10, dy: 0 }], 'Shift+ArrowRight nudges +10 world units')
+
+  console.log('ok: shift+arrow nudges by 10 world units')
+}
+
+// ============================================================================
+// 18. Nudge no-ops: an empty selection emits no intent, and an unrelated key
+//    (falling through onIdle's existing branches) emits no intent either.
+// ============================================================================
+{
+  const { tool } = setup()
+  const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
+  const key = (k: string) => ({ type: 'keydown' as const, key: k, modifiers: NEUTRAL, t: 0 })
+
+  const noSelection = tool.onEvent(tool.initialState, key('ArrowRight'))
+  assert.deepEqual(noSelection.intents, [], 'ArrowRight with an empty selection is a no-op')
+
+  const unrelated = tool.onEvent(tool.initialState, key('q'))
+  assert.deepEqual(unrelated.intents, [], 'an unrelated key is a no-op')
+
+  console.log('ok: nudge no-ops on an empty selection or an unrelated key')
+}
+
+// ============================================================================
+// 19. Shift-constrained drag (Task keyboard/K2): holding Shift while
+//    dragging flattens the move to whichever axis has the larger raw
+//    displacement from the grab point (tldraw's Translating.ts parity) --
+//    the OTHER axis is held at zero for the whole gesture.
+// ============================================================================
+{
+  const { editor, tool, doc } = setup()
+  const SHIFT = { shift: true, alt: false, ctrl: false, meta: false }
+  // shape:a spans world [0,100]x[0,100]; grab at its center (50,50). Move to
+  // (54, 70): raw dx=4, dy=20 -- |dy|>|dx|, so shift must flatten dx to 0 and
+  // keep the full dy.
+  const events = script().down(50, 50).move(54, 70, { modifiers: SHIFT }).up().events()
+  run(editor, tool, events)
+  const a = doc.getShape('shape:a')!
+  assert.equal(a.x, 0, 'shift-constrained drag holds the non-dominant (x) axis at zero')
+  assert.equal(a.y, 20, 'shift-constrained drag applies the full delta on the dominant (y) axis')
+  console.log('ok: shift held during a drag constrains movement to the dominant axis')
+}
+
+// ============================================================================
+// 20. Shift-constrained drag must not leak snap onto the LOCKED axis
+//    (validator repro, Task keyboard/K2 fix-round): a snap target that sits
+//    a few px off the locked axis must never pull the drag off that axis --
+//    flattenForShift zeroes the suppressed axis BEFORE computeSnappedDelta,
+//    but snapCandidates finds each axis's best guide independently, so a
+//    target close to the (already-zeroed) suppressed axis can re-add
+//    movement there. shape:a spans [0,100]x[0,100]; shape:snap-c sits at
+//    (400,3) -- 3 world units off shape:a's y=0, well inside the 5-unit
+//    snap threshold (5% of the 100-unit medianSize). Dragging shape:a from
+//    its center (50,50) to (350,53) with Shift held: raw dx=300, dy=3 --
+//    |dx|>|dy| so Shift must flatten dy to 0 and hold it there for the
+//    WHOLE gesture, snap target notwithstanding.
+// ============================================================================
+{
+  // A MINIMAL two-shape doc (not `setup()`'s fixture, which seeds several
+  // OTHER shapes sharing shape:a's exact y=[0,100] range -- those would tie
+  // shape:snap-c's delta=3 with their own delta=0 and mask the leak this
+  // case exists to catch). Just shape:a and shape:c, matching the
+  // validator's exact repro numbers.
+  const doc = LoroCanvasDoc.create({ peerId: 1n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape(geoShape('shape:a', 0, 0))
+  doc.putShape(geoShape('shape:c', 400, 3))
+  doc.commit()
+  const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+  const ctx = createToolContext(editor)
+  const tool = createSelectTool(ctx)
+  const SHIFT = { shift: true, alt: false, ctrl: false, meta: false }
+  const events = script().down(50, 50).move(350, 53, { modifiers: SHIFT }).up().events()
+  run(editor, tool, events)
+  const a = doc.getShape('shape:a')!
+  assert.equal(a.x, 300, 'shift-constrained drag still applies the full delta on the dominant (x) axis')
+  assert.equal(a.y, 0, 'a snap target close to the LOCKED axis must never reintroduce movement there')
+  console.log('ok: shift-constrained drag holds the locked axis at zero even next to a snap target')
+}
+
+console.log('ok: select tool FSM (select/marquee/translate)')
+// ============================================================================
+// 14. Enter-to-edit (create-edit-flow task, tldraw parity: node_modules/
+//    tldraw/src/lib/tools/SelectTool/childStates/Idle.ts:640-661): with a
+//    lone TEXT-CAPABLE shape selected, an Enter keydown begins editing it.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  const events = script().down(450, 50).up().key('Enter').events()
+  run(editor, tool, events)
+  assert.deepEqual([...editor.get().selection], ['shape:note'], 'shape:note stays selected')
+  assert.equal(editor.get().editingId, 'shape:note', 'Enter on a lone selected text-capable shape begins editing it')
+  console.log('ok: Enter begins editing a lone selected text-capable shape')
+}
+
+// ============================================================================
+// 15. Enter on a lone selected NON-text-capable shape (a 'terminal' embed)
+//    is a no-op -- never begins editing.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  const events = script().down(650, 50).up().key('Enter').events()
+  run(editor, tool, events)
+  assert.deepEqual([...editor.get().selection], ['shape:terminal'])
+  assert.equal(editor.get().editingId, null, 'Enter on a non-text-capable selected shape never begins editing')
+  console.log('ok: Enter on a non-text-capable selection is a no-op')
+}
+
+// ============================================================================
+// 16. Enter with MULTIPLE shapes selected (or nothing selected) is a no-op
+//    -- v1 only auto-edits a LONE selected shape.
+// ============================================================================
+{
+  const { editor, tool } = setup()
+  editor.apply({ type: 'SetSelection', ids: ['shape:a', 'shape:note'] })
+  const events = script().key('Enter').events()
+  run(editor, tool, events)
+  assert.equal(editor.get().editingId, null, 'Enter with more than one shape selected does not begin editing')
+  console.log('ok: Enter with a multi-shape selection is a no-op')
+}
+
+// ============================================================================
+// frame-interaction task fixtures: a 300x300 frame at (0,0) with a 50x50
+// child note fully inside it at (50,50)-(100,100), plus the shared fixtures
+// -- isolated from the numbered tests above (own setup, no shared indices).
+// ============================================================================
+function frameSetup() {
+  const doc = LoroCanvasDoc.create({ peerId: 1n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape({
+    id: 'shape:frame', kind: 'frame', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 300, h: 300, name: 'My Frame' },
+  } as Shape)
+  doc.putShape({
+    // 'geo' (not 'note' -- geometry.ts's size() ignores note's props.w/h
+    // entirely and always renders it at a fixed 200x200, which would make
+    // this "small child fully inside the frame" fixture actually span
+    // 50,50-250,250 and wrongly overlap the interior-drag test below).
+    id: 'shape:child', kind: 'geo', parentId: 'shape:frame', index: 'a1', x: 50, y: 50, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 50, h: 50 },
+  } as Shape)
+  doc.commit()
+  const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+  const ctx = createToolContext(editor)
+  const tool = createSelectTool(ctx)
+  return { doc, editor, ctx, tool }
+}
+
+// ============================================================================
+// 17. Marquee that only CLIPS a frame's edge (does not fully enclose it)
+//    must NOT select the frame (tldraw parity, gap 4) -- brushing the
+//    frame's top-left corner, well clear of its child note.
+// ============================================================================
+{
+  const { editor, tool } = frameSetup()
+  const events = script().down(-10, -10).move(20, 20).up().events()
+  run(editor, tool, events)
+  assert.deepEqual([...editor.get().selection], [], 'a marquee that only clips the frame edge selects nothing (frame excluded, child untouched)')
+  console.log('ok: marquee clipping a frame edge does not select the frame')
+}
+
+// ============================================================================
+// 18. Marquee that FULLY ENCLOSES the frame's visible 300x300 body selects it
+//    (and its fully-enclosed child) -- tldraw's Brushing.ts parity requires
+//    containment of the shape's page bounds ONLY, not its indexed header
+//    band (that widening is a spatial-index CELL-bucketing device only --
+//    see spatial-index.ts's boundsById doc comment -- never a containment
+//    requirement). A brush that starts right at the frame's true top edge
+//    (-10, well short of -FRAME_HEADER_HEIGHT=-24) must be enough.
+// ============================================================================
+{
+  const { editor, tool } = frameSetup()
+  const events = script().down(-10, -10).move(310, 310).up().events()
+  run(editor, tool, events)
+  assert.deepEqual(new Set(editor.get().selection), new Set(['shape:frame', 'shape:child']), 'a marquee that fully encloses the frame\'s visible body (not its header band) selects it (and its enclosed child)')
+  console.log('ok: marquee fully enclosing a frame\'s body selects it')
+}
+
+// ============================================================================
+// 19. Interior click-drag inside an EMPTY frame region marquees the frame's
+//    children instead of dragging the frame (gap 3, hollow interior).
+// ============================================================================
+{
+  const { editor, tool, doc } = frameSetup()
+  // (150,150)-(250,250): deep inside the frame's empty interior (nowhere
+  // near shape:child at 50,50-100,100), well past FRAME_EDGE_MARGIN from
+  // every border.
+  const events = script().down(150, 150).move(250, 250).up().events()
+  run(editor, tool, events)
+  assert.deepEqual([...editor.get().selection], [], 'dragging inside the empty interior marquees (selecting nothing here), not the frame')
+  const frame = doc.getShape('shape:frame')!
+  assert.equal(frame.x, 0, 'the frame itself did not move')
+  assert.equal(frame.y, 0)
+  console.log('ok: drag inside an empty frame interior marquees instead of dragging the frame')
+}
+
+// ============================================================================
+// 20. Double-click on the frame's HEADER band begins editing (rename, gap 1
+//    trigger + gap 2 header-hit wiring) -- a frame is not text-capable, so
+//    this is a SEPARATE gate from the note/text/geo one (test 10).
+// ============================================================================
+{
+  const { editor, tool } = frameSetup()
+  // Header band: local y in [-24,0), local x in [0,300] -- world (150,-12).
+  const events = script().down(150, -12).up().down(150, -12).up().events()
+  run(editor, tool, events)
+  assert.equal(editor.get().editingId, 'shape:frame', 'double-click on the frame header begins editing (rename)')
+  assert.deepEqual([...editor.get().selection], ['shape:frame'])
+  console.log('ok: double-click on a frame header begins editing')
+}
+
+// ============================================================================
+// 21. Double-click on the frame's BORDER (not the header) never begins
+//    editing -- falls through to ordinary click-select, same as any other
+//    non-text-capable kind.
+// ============================================================================
+{
+  const { editor, tool } = frameSetup()
+  const events = script().down(0, 150).up().down(0, 150).up().events() // left border, not the header
+  run(editor, tool, events)
+  assert.equal(editor.get().editingId, null, 'double-click on the frame border does not begin editing')
+  assert.deepEqual([...editor.get().selection], ['shape:frame'], 'the second click still resolves as an ordinary select')
+  console.log('ok: double-click on a frame border does not begin editing')
+}
+
 console.log('ok: select tool FSM (select/marquee/translate)')

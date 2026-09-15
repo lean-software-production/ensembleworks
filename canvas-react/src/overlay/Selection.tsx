@@ -25,9 +25,59 @@
 // WorldLayer's contain/will-change hints and the COMMIT CADENCE watch-items
 // in canvas-editor's drag tools.
 import type { ReactNode } from 'react'
-import type { CanvasDocument, Bounds } from '@ensembleworks/canvas-model'
-import { worldBounds, worldCorners } from '@ensembleworks/canvas-model'
+import type { CanvasDocument, Bounds, Shape } from '@ensembleworks/canvas-model'
+import { routeArrow, worldBounds, worldCorners } from '@ensembleworks/canvas-model'
 import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
+import { pathString } from './Arrows.js'
+
+/**
+ * ONE shape's outline as a screen-space SVG node — an arrow traces its
+ * routed path (Arrows.tsx's SAME pathString, per the ARROW SPECIAL CASE note
+ * below), every other kind traces its rotated worldCorners quad. Shared by
+ * Selection (below) and Hover.tsx so "how do we draw a shape's indicator
+ * outline" has exactly one implementation, not two that could drift apart —
+ * the two callers differ only in stroke color/width and the `data-overlay`
+ * tag a consumer/test selects by.
+ */
+export function shapeOutlineNode(
+  snapshot: CanvasDocument,
+  shape: Shape,
+  camera: Camera,
+  opts: { readonly key: string; readonly dataOverlay: string; readonly stroke: string; readonly strokeWidth: number },
+): ReactNode {
+  if (shape.kind === 'arrow') {
+    const routed = routeArrow(snapshot, shape, snapshot.bindings)
+    const start = worldToScreen(camera, routed.start)
+    const end = worldToScreen(camera, routed.end)
+    const mid = routed.mid ? worldToScreen(camera, routed.mid) : undefined
+    return (
+      <path
+        key={opts.key}
+        data-overlay={opts.dataOverlay}
+        data-shape-id={shape.id}
+        d={pathString(start, end, mid)}
+        fill="none"
+        stroke={opts.stroke}
+        strokeWidth={opts.strokeWidth}
+      />
+    )
+  }
+  const points = worldCorners(snapshot, shape)
+    .map((p) => worldToScreen(camera, p))
+    .map((p) => `${p.x},${p.y}`)
+    .join(' ')
+  return (
+    <polygon
+      key={opts.key}
+      data-overlay={opts.dataOverlay}
+      data-shape-id={shape.id}
+      points={points}
+      fill="none"
+      stroke={opts.stroke}
+      strokeWidth={opts.strokeWidth}
+    />
+  )
+}
 
 export interface SelectionProps {
   readonly snapshot: CanvasDocument
@@ -69,6 +119,13 @@ export function combinedWorldBounds(snapshot: CanvasDocument, ids: Iterable<stri
   return any ? { minX, minY, maxX, maxY } : null
 }
 
+// tldraw parity (SelectionForegroundOverlayUtil.ts's `options.lineWidth`,
+// checked against source): a 1.5 SCREEN-space px stroke at every zoom — v1
+// renders in world space with ctx scaled by zoom so its `1.5 / zoom` world
+// units come out to 1.5px on screen; this overlay is already screen-space
+// (Overlay.tsx's module header), so the plain constant IS that same
+// zoom-invariant 1.5px with no division needed.
+const SELECTION_STROKE_WIDTH = 1.5
 const OUTLINE_STROKE = 'var(--canvas-selection, #4b8bf4)'
 const BOUNDS_STROKE = 'var(--canvas-selection-bounds, #4b8bf4)'
 
@@ -79,20 +136,13 @@ export function Selection({ snapshot, selection, camera }: SelectionProps) {
   for (const id of selection) {
     const shape = snapshot.byId.get(id)
     if (!shape) continue // vanished between selection and render — omit, never throw
-    const points = worldCorners(snapshot, shape)
-      .map((p) => worldToScreen(camera, p))
-      .map((p) => `${p.x},${p.y}`)
-      .join(' ')
     outlines.push(
-      <polygon
-        key={id}
-        data-overlay="selection-outline"
-        data-shape-id={id}
-        points={points}
-        fill="none"
-        stroke={OUTLINE_STROKE}
-        strokeWidth={1}
-      />,
+      shapeOutlineNode(snapshot, shape, camera, {
+        key: id,
+        dataOverlay: 'selection-outline',
+        stroke: OUTLINE_STROKE,
+        strokeWidth: SELECTION_STROKE_WIDTH,
+      }),
     )
   }
 
@@ -101,6 +151,13 @@ export function Selection({ snapshot, selection, camera }: SelectionProps) {
   // information, so the extra rect would be redundant (and, for a rotated
   // single shape, visually confusing: a second axis-aligned box drawn right
   // on top of the rotated quad outline).
+  //
+  // tldraw parity: v1's own selection box (SelectionForegroundOverlayUtil's
+  // `_renderSelectionBox`) is a plain SOLID `strokeRect` at the same
+  // lineWidth as every other selection stroke — no dashed treatment. The
+  // combined-bounds rect used to draw `strokeDasharray="4 3"` (flagged in
+  // this task's brief as "not a v1 treatment"); dropped so multi-select
+  // reads as the same solid chrome as a single selection.
   const combined = selection.size > 1 ? combinedWorldBounds(snapshot, selection) : null
   let boundsRect: ReactNode = null
   if (combined) {
@@ -115,8 +172,7 @@ export function Selection({ snapshot, selection, camera }: SelectionProps) {
         height={Math.abs(br.y - tl.y)}
         fill="none"
         stroke={BOUNDS_STROKE}
-        strokeWidth={1}
-        strokeDasharray="4 3"
+        strokeWidth={SELECTION_STROKE_WIDTH}
       />
     )
   }

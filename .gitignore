@@ -29,3 +29,6 @@ bossman-*.png
 
 # Local planning state
 .yaks/
+
+# Playwright output committed at repo root by mistake before (see e2e/.gitignore)
+test-results/

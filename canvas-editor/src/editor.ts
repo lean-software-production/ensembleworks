@@ -4,7 +4,7 @@
 // mutators; everything upstream (tools, scripts, the renderer) only ever
 // produces or reads Intents/EditorState.
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'
-import { assetSchema, bindingSchema, toLocalPoint, type Binding, type CanvasDocument, type Page, type Point, type Shape } from '@ensembleworks/canvas-model'
+import { assetSchema, bindingSchema, plainText, toLocalPoint, type Binding, type CanvasDocument, type Page, type Point, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from './intents.js'
 
 // ============================================================================
@@ -773,6 +773,62 @@ export class Editor {
         return { state, docMutated: true, stateChanged: false, undo, redo }
       }
 
+      case 'MoveArrowTerminal': {
+        // Same vanished-arrow tolerance as CompleteArrow above: a skipped
+        // intent writes neither the point nor the binding, so a raced
+        // remote delete can never leave a dangling binding behind.
+        const shape = this.doc.getShape(intent.id)
+        if (!shape) return { state, docMutated: false, stateChanged: false }
+
+        // Full-shape pre-image (same putShape-as-universal-inverse
+        // convention as every other case in this switch) — captured BEFORE
+        // any mutation below, so it already holds the OLD x/y and props.
+        const undo: InverseOp[] = [{ op: 'putShape', shape }]
+
+        let nextShape: Shape
+        if (intent.terminal === 'start') {
+          // The arrow's x/y IS its start point (StartArrow's convention).
+          // Re-express props.end so the END terminal's WORLD position is
+          // unchanged by moving start — end = oldWorldEnd - newStart.
+          const oldEnd = (shape.props as { end?: Point })?.end ?? { x: 0, y: 0 }
+          const oldWorldEnd = { x: shape.x + oldEnd.x, y: shape.y + oldEnd.y }
+          const newEnd = { x: oldWorldEnd.x - intent.point.x, y: oldWorldEnd.y - intent.point.y }
+          nextShape = { ...shape, x: intent.point.x, y: intent.point.y, props: { ...shape.props, end: newEnd } }
+        } else {
+          const end = { x: intent.point.x - shape.x, y: intent.point.y - shape.y }
+          nextShape = { ...shape, props: { ...shape.props, end } }
+        }
+        this.doc.putShape(nextShape)
+        const redo: InverseOp[] = [{ op: 'putShape', shape: nextShape }]
+
+        // REPLACE this terminal's binding wholesale: delete whatever binding
+        // (if any) currently occupies `binding:<id>-<terminal>` — same id
+        // convention StartArrow/CompleteArrow use — then write the new one
+        // iff `intent.binding` is present. Omitted `binding` therefore
+        // CLEARS it (see the intent's own doc comment for why this must be
+        // possible, unlike StartArrow/CompleteArrow's write-only bindings).
+        const bindingId = `binding:${intent.id}-${intent.terminal}`
+        const existing = this.doc.listBindings().find((b) => b.id === bindingId)
+        if (existing) {
+          this.doc.deleteBinding(bindingId)
+          undo.unshift({ op: 'putBinding', binding: existing })
+          redo.push({ op: 'deleteBinding', id: bindingId })
+        }
+        if (intent.binding) {
+          const binding: Binding = {
+            id: bindingId as any,
+            fromId: intent.id as any,
+            toId: intent.binding.targetId as any,
+            props: { terminal: intent.terminal, anchor: intent.binding.anchor },
+            meta: {},
+          }
+          this.doc.putBinding(binding)
+          undo.unshift({ op: 'deleteBinding', id: binding.id })
+          redo.push({ op: 'putBinding', binding })
+        }
+        return { state, docMutated: true, stateChanged: false, undo, redo }
+      }
+
       // Create a page (Task E3, D-3): the caller (the switcher UI) mints the
       // full Page record and carries it verbatim, the same posture as
       // CreateShape above. Does NOT touch currentPageId — a caller that
@@ -885,8 +941,69 @@ export class Editor {
       case 'BeginEdit':
         return { state: { ...state, editingId: intent.id }, docMutated: false, stateChanged: true }
 
-      case 'EndEdit':
-        return { state: { ...state, editingId: null }, docMutated: false, stateChanged: true }
+      case 'EndEdit': {
+        // tldraw-INSPIRED, not literal parity (validator advisory,
+        // create-edit-flow FIXER task — TextShapeUtil.onEditEnd,
+        // node_modules/tldraw/src/lib/shapes/text/TextShapeUtil.tsx:249-256,
+        // uses `.trimEnd()`, so a leading-whitespace-only text shape survives
+        // there; this uses `.trim()`, which also treats LEADING whitespace
+        // as empty and deletes it too — a deliberate divergence, not an
+        // oversight: v1 has no way to author a text shape whose only content
+        // is leading whitespace on purpose, so the stricter check is simpler
+        // and arguably better without losing anything a real user could
+        // want). a `text` shape left with no (trimmed) content when editing
+        // ends is deleted, not kept as an invisible, still-selectable,
+        // still-synced empty box (TextShape.tsx renders a transparent,
+        // border-less div for one). `note` is deliberately EXCLUDED —
+        // NoteShapeUtil has no such onEditEnd hook in v1; a sticky's colored
+        // body is a real object even with no text, unlike a bare text shape
+        // whose only visible content IS its text. Reads `state.editingId`
+        // (the shape ABOUT to
+        // stop being edited), never `intent` (EndEdit carries no id of its
+        // own — the editing shape is state, not part of the intent).
+        const editingId = state.editingId
+        const nextState: EditorState = { ...state, editingId: null }
+        if (editingId === null) {
+          return { state: nextState, docMutated: false, stateChanged: true }
+        }
+        const shape = this.doc.getShape(editingId)
+        // DATA-LOSS FIX (validator-blocking finding, create-edit-flow FIXER
+        // round 3): the live LoroText channel is empty for any shape whose
+        // content was imported/reconciled from a v1 room -- v1 content
+        // lives in `props.richText`, and reconcile never touches the
+        // per-shape LoroText container (server/src/canvas-v2/
+        // reconcile.test.ts case 5: richText round-trips, getText() stays
+        // ''). canvas-react still RENDERS that richText, so such a shape is
+        // fully visible content. Checking doc.getText() alone treated it as
+        // empty and deleted it on a mere open-and-abandon edit. `plainText`
+        // (canvas-model) reads props.richText the same way canvas-react
+        // does, so a shape is only "empty" here when BOTH channels are.
+        if (!shape || shape.kind !== 'text' || this.doc.getText(editingId).trim().length > 0 || plainText(shape).trim().length > 0) {
+          return { state: nextState, docMutated: false, stateChanged: true }
+        }
+        // Cascade-aware delete, same machinery as DeleteShapes above (a text
+        // shape is a leaf in practice — nothing else can be parented under
+        // one — but reusing collectSubtreeParentFirst/orderParentBeforeChild
+        // costs nothing and stays correct if that ever changes).
+        const toRestore = new Map<string, Shape>()
+        for (const s of collectSubtreeParentFirst(this.doc, editingId)) toRestore.set(s.id, s)
+        this.doc.deleteShape(editingId)
+        const undo: InverseOp[] = orderParentBeforeChild([...toRestore.values()], toRestore)
+          .map((s) => ({ op: 'putShape', shape: s }))
+        const redo: InverseOp[] = [{ op: 'deleteShape', id: editingId }]
+        // DANGLING-SELECTION FIX (validator advisory, create-edit-flow FIXER
+        // task): DeleteShapes' own callers always pair a delete with
+        // SetSelection([]) (tool-loop.ts's deleteSelectionIntents) so a
+        // deleted shape's id never survives in `selection` -- this internal
+        // auto-delete had no such caller, so strip the just-deleted id out
+        // of `nextState.selection` here, the same way. A plain filter (not a
+        // blanket clear-to-empty): a multi-select that happened to include
+        // the now-deleted shape keeps every OTHER still-live id selected.
+        const selection = nextState.selection.has(editingId)
+          ? new Set([...nextState.selection].filter((id) => id !== editingId))
+          : nextState.selection
+        return { state: { ...nextState, selection }, docMutated: true, stateChanged: true, undo, redo }
+      }
 
       case 'SetIndex': {
         // Index-only whole-shape write (Task E1, D-4): `index` is an
@@ -928,8 +1045,34 @@ export class Editor {
         // View intent (Task E1, D-2): switches EditorState.currentPageId
         // ONLY — no doc write, no undo/redo arrays, mirroring
         // SetCamera/SetSelection/SetHover/BeginEdit/EndEdit/SetNextStyle
-        // above exactly. Switching pages is a view change, not undoable.
-        return { state: { ...state, currentPageId: intent.pageId }, docMutated: false, stateChanged: true }
+        // above exactly. Switching pages is a view change, not undoable
+        // (the one exception — ending an open edit — is described below).
+        // Switching to a DIFFERENT page also clears the page-local view
+        // state — selection, hover, editingId all name shapes on the page
+        // being left, and leaving them set would let handles, Delete and the
+        // style panel act on shapes the user can no longer see. A same-page
+        // SetCurrentPage leaves them untouched. A SetSelection batched AFTER
+        // the switch (thread-return's bookmark restore) applies on top of
+        // the cleared state, so it still lands.
+        //
+        // An edit in progress is ENDED, not merely nulled: the switch runs
+        // the EndEdit case itself (below it only ever sees editingId set, so
+        // this is its real work), which auto-deletes an empty text shape
+        // with its undo entry. Nulling editingId directly would leave a
+        // later EndEdit in the same batch (thread-return, page-route) with
+        // nothing to finish, stranding an invisible synced empty text box
+        // on the page being left. While an edit is open this intent is
+        // therefore undoable exactly when EndEdit would be.
+        if (intent.pageId === state.currentPageId) {
+          return { state: { ...state, currentPageId: intent.pageId }, docMutated: false, stateChanged: true }
+        }
+        const ended = state.editingId === null ? null : this.applyOne({ type: 'EndEdit' }, state)
+        return {
+          ...ended,
+          state: { ...(ended?.state ?? state), currentPageId: intent.pageId, selection: new Set(), hover: null, editingId: null },
+          docMutated: ended?.docMutated ?? false,
+          stateChanged: true,
+        }
     }
   }
 

@@ -15,6 +15,7 @@
     "@ensembleworks/canvas-model": "*",
     "@ensembleworks/canvas-react": "*",
     "@ensembleworks/canvas-sync": "*",
+    "@ensembleworks/canvas-ui": "*",
     "@ensembleworks/contracts": "*",
     "@tldraw/sync": "5.1.0",
     "@xterm/addon-clipboard": "^0.2.0",

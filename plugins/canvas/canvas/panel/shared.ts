@@ -1,14 +1,7 @@
 import type { CSSProperties } from "react";
 import { PresenceStore, SyncClientPeer } from "@ensembleworks/canvas-sync";
-import type {
-  Editor,
-  SelectAndTransformState,
-  SelectState,
-  ToolContext,
-} from "@ensembleworks/canvas-editor";
-import type { SnapResult } from "@ensembleworks/canvas-model";
+import type { Editor, ToolContext, ToolSet } from "@ensembleworks/canvas-editor";
 import {
-  CHROME_ACCENT,
   CHROME_DOCK_EDGE_GAP_PX,
   CHROME_DOCK_POINTER_EVENTS,
   CHROME_DOCK_TOOLBAR_OVERFLOW,
@@ -21,20 +14,10 @@ import {
   CHROME_SHADOW,
 } from "../pages/chrome-dock.js";
 import type { PresencePublisher } from "../presence-publisher.js";
-import type { ToolId, ToolSet, ToolStates } from "../tool-loop.js";
 
 export const READY_TIMEOUT_MS = 4_000;
 export const PRESENCE_POLL_MS = 150;
 export const KEEPALIVE_MS = 45_000;
-
-export const TOOL_BUTTONS: ReadonlyArray<{ readonly id: ToolId; readonly label: string }> = [
-  { id: "select", label: "Select" },
-  { id: "hand", label: "Hand" },
-  { id: "note", label: "Note" },
-  { id: "frame", label: "Frame" },
-  { id: "text", label: "Text" },
-  { id: "geo", label: "Shape" },
-];
 
 export const chromeWrapperStyle: CSSProperties = {
   position: "absolute",
@@ -78,20 +61,6 @@ export const chromeToolbarStyle: CSSProperties = {
   minWidth: 0,
 };
 
-export function chromeToolStyle(active: boolean): CSSProperties {
-  return {
-    padding: "4px 10px",
-    borderRadius: 6,
-    border: "none",
-    background: active ? CHROME_ACCENT : "transparent",
-    color: active ? CHROME_PAPER : CHROME_INK,
-    font: CHROME_FONT,
-    fontWeight: active ? 600 : 400,
-    cursor: "pointer",
-    whiteSpace: "nowrap",
-  };
-}
-
 export interface Session {
   readonly peer: SyncClientPeer;
   readonly editor: Editor;
@@ -128,26 +97,4 @@ export function canvasDebugEnabled(): boolean {
   } catch {
     return false;
   }
-}
-
-export function isEditableTarget(node: Node | null): boolean {
-  if (!node || typeof (node as { tagName?: unknown }).tagName !== "string") return false;
-  const element = node as HTMLElement;
-  return (
-    element.tagName === "INPUT" ||
-    element.tagName === "TEXTAREA" ||
-    element.isContentEditable === true
-  );
-}
-
-export function currentSnapResult(
-  states: ToolStates,
-  active: ToolId,
-): SnapResult | undefined {
-  if (active !== "select") return undefined;
-  const composite = states.select as SelectAndTransformState;
-  if (composite.active !== "select") return undefined;
-  const select = composite.select as SelectState;
-  if (select.mode !== "dragging") return undefined;
-  return select.snapResult ?? undefined;
 }

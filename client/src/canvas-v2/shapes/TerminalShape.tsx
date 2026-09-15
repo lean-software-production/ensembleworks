@@ -591,11 +591,11 @@ export function TerminalShape({ shape, editorState, dispatch: dispatchIntents }:
             onBlur={commitTitleRename}
             onKeyDown={(e) => {
               // Swallow EVERY keydown — without this, e.g. Backspace/Delete
-              // while editing the title would bubble to CanvasV2App's
-              // document-level global-shortcut listener
-              // (handleGlobalShortcut, gated on editingId === null — which
-              // IS null here, since this input's local focus is not the
-              // editor's editingId concept) and delete the SHAPE instead of
+              // while editing the title would bubble to the Viewport's
+              // onKeyDown (canvas-ui's useCanvasSession handleInput ->
+              // canvas-editor's resolveShortcut, gated on editingId === null
+              // — which IS null here, since this input's local focus is not
+              // the editor's editingId concept) and delete the SHAPE instead of
               // a character of the title.
               e.stopPropagation()
               if (e.key === 'Enter') {

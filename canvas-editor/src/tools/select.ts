@@ -103,7 +103,9 @@
 // live-read shim is gone with it.
 import {
   computeExcludedIds,
+  isPointInFrameHeaderBand,
   isTextCapableKind,
+  pageIdOf,
   snapCandidates,
   worldBounds,
   type Bounds,
@@ -178,8 +180,9 @@ interface Dragging {
    * transition (see the module header's SNAP-DURING-DRAG section), never
    * recomputed off a possibly-drifted `editor.get().selection` mid-gesture. */
   readonly movingIds: readonly string[]
-  /** `movingIds` ∪ every descendant — computed ONCE via canvas-model's
-   * `computeExcludedIds` at the SAME transition, reused verbatim by every
+  /** `movingIds` ∪ every descendant ∪ every shape not on the current page —
+   * computed ONCE via `snapExcludedIds` (canvas-model's `computeExcludedIds`
+   * plus the page rule) at the SAME transition, reused verbatim by every
    * subsequent pointermove's `snapCandidates` call (see the module header). */
   readonly excludedIds: ReadonlySet<string>
   /** The doc/index pair `ctx.snapshot()`/`ctx.index()` returned at the
@@ -209,6 +212,63 @@ interface Marquee {
 export type SelectState = Idle | Pointing | Dragging | Marquee
 
 const IDLE: Idle = { mode: 'idle', lastClick: null }
+
+// ============================================================================
+// Arrow-key nudge (Task keyboard/K1) — pinned to e2e/goldens/feel.json's
+// captured tldraw numbers (nudgePx: 1, shiftNudgePx: 10), NOT re-derived
+// from tldraw source: MAJOR_NUDGE_FACTOR/MINOR_NUDGE_FACTOR live in
+// tldraw's Idle.ts and are applied against a *grid-aware* base step there,
+// whereas the golden numbers are what the capture rig actually observed at
+// z=1 on an ungridded canvas — the exact case this tool cares about
+// matching. Grid-aware nudging is a documented, deferred upgrade (no grid
+// concept exists in v2 yet).
+// ============================================================================
+const NUDGE_PX = 1
+const SHIFT_NUDGE_PX = 10
+
+/** ArrowUp/Down/Left/Right -> a {dx, dy} unit vector, or null for every other
+ * key. World-space convention (input.ts's screen==world at z=1, +y is
+ * DOWN — same convention TranslateShapes/screenToWorld already use
+ * throughout this file), so ArrowDown/ArrowRight are POSITIVE. */
+function nudgeDirection(key: string): { dx: number; dy: number } | null {
+  switch (key) {
+    case 'ArrowLeft': return { dx: -1, dy: 0 }
+    case 'ArrowRight': return { dx: 1, dy: 0 }
+    case 'ArrowUp': return { dx: 0, dy: -1 }
+    case 'ArrowDown': return { dx: 0, dy: 1 }
+    default: return null
+  }
+}
+
+/** SHIFT-CONSTRAINED DRAG (Task keyboard/K2) — tldraw parity (Translating.ts's
+ * `flatten`): given a RAW (pre-snap) delta from the drag's grab point, zero
+ * whichever axis has the SMALLER magnitude, keeping the dominant axis's full
+ * value. A no-op when `shift` is false. Shared by the Pointing->Dragging
+ * transition's own first move (onPointing, below) and every subsequent
+ * onDragging pointermove, so a drag that STARTS with Shift already held is
+ * constrained from its very first committed step, not just from the second
+ * move onward.
+ *
+ * Also reports WHICH axis it locked (`lockedAxis`), so computeSnappedDelta
+ * can re-zero that same axis AFTER snapping (fix for the validator-caught
+ * snap leak, Task keyboard fix-round): snapCandidates finds the best guide
+ * on X and Y INDEPENDENTLY, so a target sitting close to the suppressed
+ * axis's (already-zeroed) position can still report a non-zero delta on
+ * that axis — without re-zeroing after the fact, that snap adjustment
+ * reintroduces the exact movement Shift was just told to suppress. tldraw
+ * avoids this the same way: Translating.ts's snapTranslateShapes takes a
+ * `lockedAxis` and re-flattens the snapped delta by it (see this function's
+ * caller). `null` when shift is false (nothing locked) OR when dx/dy tie
+ * exactly (an arbitrary pick would be no more "correct" than leaving both
+ * live — ties are astronomically rare pointer input anyway). */
+function flattenForShift(
+  dx: number, dy: number, shift: boolean,
+): { dx: number; dy: number; lockedAxis: 'x' | 'y' | null } {
+  if (!shift) return { dx, dy, lockedAxis: null }
+  if (Math.abs(dx) < Math.abs(dy)) return { dx: 0, dy, lockedAxis: 'x' }
+  if (Math.abs(dy) < Math.abs(dx)) return { dx, dy: 0, lockedAxis: 'y' }
+  return { dx, dy, lockedAxis: null }
+}
 
 // ============================================================================
 // Snap-during-drag helper (shared by the Pointing->Dragging transition move
@@ -253,7 +313,20 @@ function unionWorldBounds(doc: CanvasDocument, ids: readonly string[]): Bounds |
  * used ONLY for target lookups (medianSize + candidate bounds). `excluded`
  * MUST likewise be the drag-start-computed set, passed straight through to
  * snapCandidates' `opts.excludedIds` escape hatch so this never re-derives it
- * per move. */
+ * per move.
+ *
+ * `lockedAxis` (Task keyboard fix-round — validator-caught snap leak): when
+ * flattenForShift suppressed an axis, that SAME axis is re-zeroed here AFTER
+ * snapCandidates runs, not just before it. snapCandidates finds the best
+ * guide on X and Y INDEPENDENTLY of one another, so a target sitting close
+ * to the suppressed axis's (already-zeroed) candidate position can still
+ * report a non-zero `snapResult.dx`/`dy` on THAT axis — left unzeroed, a
+ * comment on this very function used to (wrongly) claim that could "never"
+ * happen; it does. Only the DELTA is re-zeroed, never the reported
+ * `snapResult`/guide — the renderer still draws the guide line that WOULD
+ * have applied were the axis not locked, exactly matching tldraw's own
+ * snapTranslateShapes (Translating.ts), which re-flattens the delta by
+ * `lockedAxis` but leaves the returned nudges/guides untouched. */
 function computeSnappedDelta(
   startBounds: Bounds,
   frozenSnap: CanvasDocument,
@@ -262,13 +335,28 @@ function computeSnappedDelta(
   excluded: ReadonlySet<string>,
   rawDx: number,
   rawDy: number,
+  lockedAxis: 'x' | 'y' | null = null,
 ): { dx: number; dy: number; snapResult: SnapResult } {
   const bounds: Bounds = {
     minX: startBounds.minX + rawDx, minY: startBounds.minY + rawDy,
     maxX: startBounds.maxX + rawDx, maxY: startBounds.maxY + rawDy,
   }
   const snapResult = snapCandidates(frozenIndex, frozenSnap, movingIds, bounds, { excludedIds: excluded })
-  return { dx: rawDx + snapResult.dx, dy: rawDy + snapResult.dy, snapResult }
+  const dx = lockedAxis === 'x' ? 0 : rawDx + snapResult.dx
+  const dy = lockedAxis === 'y' ? 0 : rawDy + snapResult.dy
+  return { dx, dy, snapResult }
+}
+
+/** The drag-start snap exclusion set: canvas-model's computeExcludedIds
+ * (movingIds and their descendants) PLUS every shape not on `pageId`. The
+ * frozen index spans the whole room, so without the page half a drag would
+ * snap to guides from shapes on other pages the user cannot see. Computed
+ * ONCE at the Pointing->Dragging transition, like computeExcludedIds alone
+ * was. */
+function snapExcludedIds(snapshot: CanvasDocument, movingIds: readonly string[], pageId: string): Set<string> {
+  const excluded = computeExcludedIds(snapshot, movingIds)
+  for (const s of snapshot.shapes) if (pageIdOf(snapshot, s) !== pageId) excluded.add(s.id)
+  return excluded
 }
 
 function toggleOrAdd(current: ReadonlySet<string>, id: string): string[] {
@@ -334,6 +422,49 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       const hit = ctx.hitTestTopmost(worldOf(event))
       return { state, intents: [{ type: 'SetHover', id: hit }] }
     }
+    // ENTER-TO-EDIT (tldraw parity, checked against source: node_modules/
+    // tldraw/src/lib/tools/SelectTool/childStates/Idle.ts:640-661 — Enter on
+    // a lone, text-capable selected shape begins editing it). Gated on
+    // `editingId === null` for the same idempotency reason double-click's
+    // BeginEdit re-emission is harmless elsewhere in this file: a stray
+    // Enter that reaches here while ALREADY editing (this tool's own idle
+    // state, so nothing should normally be mid-edit AND idle here — the
+    // session's resolveShortcut declines every key while editingId is set,
+    // and editing keys normally land in the TextEditor's textarea rather
+    // than here — but this FSM must not assume its caller's discipline) must not re-fire a no-op BeginEdit against a
+    // stale read. `editor.get().selection` (not this FSM's own state) is
+    // the single source of truth for "what's selected" — select.ts never
+    // carries its own copy of the selection.
+    if (event.type === 'keydown' && event.key === 'Enter') {
+      const selection = editor.get().selection
+      if (selection.size === 1 && editor.get().editingId === null) {
+        const [targetId] = selection
+        const shape = ctx.snapshot().byId.get(targetId!)
+        if (shape && isTextCapableKind(shape.kind)) {
+          return { state, intents: [{ type: 'BeginEdit', id: targetId! }] }
+        }
+      }
+      return { state, intents: [] }
+    }
+    if (event.type === 'keydown') {
+      // Arrow-key nudge (Task keyboard/K1) — only while idle: a nudge
+      // mid-drag/mid-marquee would race the gesture's own TranslateShapes,
+      // so this deliberately never fires from onPointing/onDragging/
+      // onMarquee (none of which handle 'keydown' at all, falling through to
+      // their own no-op default). Reads the LIVE selection (editor.get(),
+      // never a cached one) — one keydown, one TranslateShapes, one
+      // editor.applyAll() commit at the caller (CanvasV2App's
+      // dispatchToActiveTool/tool-loop.ts), i.e. one undo step per keypress.
+      const dir = nudgeDirection(event.key)
+      if (!dir) return { state, intents: [] }
+      // Never while text-editing: the textarea owns arrow keys for caret
+      // movement (tldraw parity) — pinned by select.test.ts case 16b.
+      if (editor.get().editingId !== null) return { state, intents: [] }
+      const ids = [...editor.get().selection]
+      if (ids.length === 0) return { state, intents: [] }
+      const amount = event.modifiers.shift ? SHIFT_NUDGE_PX : NUDGE_PX
+      return { state, intents: [{ type: 'TranslateShapes', ids, dx: dir.dx * amount, dy: dir.dy * amount }] }
+    }
     return { state, intents: [] }
   }
 
@@ -382,7 +513,7 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // derived from this SAME read, never a separate one.
         const snapshot = ctx.snapshot()
         const snapIndex = ctx.index()
-        const excludedIds = computeExcludedIds(snapshot, movingIds)
+        const excludedIds = snapExcludedIds(snapshot, movingIds, editor.get().currentPageId)
         const camera = editor.get().camera
         // ABSOLUTE-ANCHOR MODEL (see the module header): grabWorld is the
         // WORLD point under the cursor at pointerdown — the fixed anchor
@@ -394,8 +525,8 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
           minX: grabWorld.x, minY: grabWorld.y, maxX: grabWorld.x, maxY: grabWorld.y,
         }
         const to = screenToWorld(camera, here)
-        const rawDx = to.x - grabWorld.x, rawDy = to.y - grabWorld.y
-        const { dx, dy, snapResult } = computeSnappedDelta(startBounds, snapshot, snapIndex, movingIds, excludedIds, rawDx, rawDy)
+        const { dx: rawDx, dy: rawDy, lockedAxis } = flattenForShift(to.x - grabWorld.x, to.y - grabWorld.y, event.modifiers.shift)
+        const { dx, dy, snapResult } = computeSnappedDelta(startBounds, snapshot, snapIndex, movingIds, excludedIds, rawDx, rawDy, lockedAxis)
         intents.push({ type: 'TranslateShapes', ids: movingIds, dx, dy })
         return {
           state: { mode: 'dragging', targetId, grabWorld, startBounds, applied: { dx, dy }, movingIds, excludedIds, snapshot, snapIndex, snapResult },
@@ -420,7 +551,19 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // "did the shape actually resolve" check needed because a vanished
         // target can't be hit-tested as `targetId` in the first place.
         const shape = ctx.snapshot().byId.get(targetId)
-        if (state.doubleClick && shape && isTextCapableKind(shape.kind)) {
+        // FRAME RENAME (frame-interaction task, gap 1): a double-click that
+        // lands specifically on the frame's HEADER band (canvas-model's
+        // isPointInFrameHeaderBand — the header label, not the body/border)
+        // also begins editing, in place of the ordinary isTextCapableKind
+        // gate (a frame is never text-capable — canvas-model/src/shape.ts's
+        // TEXT_CAPABLE_KINDS deliberately excludes it). The generic
+        // BeginEdit(target)/editingId machinery is reused verbatim; it's the
+        // CLIENT's job (client/src/canvas-v2, DOM authoring layer) to mount
+        // a name-input editor instead of the richText TextEditor when
+        // editingId resolves to a frame — this FSM only decides WHEN to
+        // fire the intent, never what UI renders for it.
+        const opensFrameRename = shape?.kind === 'frame' && isPointInFrameHeaderBand(ctx.snapshot(), shape, worldOf(event))
+        if (state.doubleClick && shape && (isTextCapableKind(shape.kind) || opensFrameRename)) {
           intents.push({ type: 'SetSelection', ids: [targetId] })
           intents.push({ type: 'BeginEdit', id: targetId })
         } else if (state.shiftDown) {
@@ -456,8 +599,27 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // the grabbed world point stays under the cursor; the drift-prone
       // incremental screen anchor is gone). Mirrors transform.ts's
       // recompute-from-gesture-start-anchors pattern.
-      const rawDx = cursorWorld.x - state.grabWorld.x
-      const rawDy = cursorWorld.y - state.grabWorld.y
+      // SHIFT-CONSTRAINED DRAG (Task keyboard/K2) — live modifier read off
+      // THIS pointermove (never the Pointing state's frozen `shiftDown`,
+      // which only ever captured shift-AT-POINTERDOWN for the click-toggle
+      // decision above; a drag can start unshifted and have Shift pressed
+      // mid-gesture, or vice versa, and tldraw's own Translating.ts reads
+      // the CURRENT shift key on every move for exactly that reason).
+      // flattenForShift zeroes whichever axis has the smaller magnitude,
+      // applied BEFORE computeSnappedDelta — but that alone is NOT enough:
+      // snapCandidates finds the best guide on X and Y INDEPENDENTLY, so a
+      // snap target sitting close to the suppressed axis's (already-zeroed)
+      // candidate position can still report a non-zero delta on THAT axis
+      // and reintroduce the very movement Shift just suppressed (a prior
+      // version of this comment claimed that could "never" happen — it can;
+      // see select.test.ts's locked-axis-next-to-a-snap-target case).
+      // computeSnappedDelta's own `lockedAxis` param re-zeroes that axis
+      // AFTER snapping runs, closing the gap — tldraw's Translating.ts fix
+      // (snapTranslateShapes re-flattening by `lockedAxis`) for the exact
+      // same leak.
+      const { dx: rawDx, dy: rawDy, lockedAxis } = flattenForShift(
+        cursorWorld.x - state.grabWorld.x, cursorWorld.y - state.grabWorld.y, event.modifiers.shift,
+      )
       // Reuses the FROZEN startBounds/snapshot/index from drag start
       // (state.startBounds/state.snapshot/state.snapIndex) — never a fresh
       // ctx.snapshot()/ctx.index() read here (see the module header's
@@ -466,7 +628,7 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // totalDy is the TOTAL (raw + snap) delta from the grab point — NOT a
       // per-move increment.
       const { dx: totalDx, dy: totalDy, snapResult } = computeSnappedDelta(
-        state.startBounds, state.snapshot, state.snapIndex, state.movingIds, state.excludedIds, rawDx, rawDy,
+        state.startBounds, state.snapshot, state.snapIndex, state.movingIds, state.excludedIds, rawDx, rawDy, lockedAxis,
       )
       // The STEP to commit this move is the difference between the newly
       // computed TOTAL and what was already `applied` — this is what keeps a
@@ -524,7 +686,22 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // differs (SAT-against-true-quad here vs. line-segment-vs-geometry
       // there) — hence "pending golden-parity calibration" rather than a
       // confirmed match.
-      const ids = ctx.queryMarquee(bounds, 'intersect')
+      // FRAME EXCEPTION (frame-interaction task, gap 4 — tldraw parity:
+      // Brushing.ts:199-203 skips a frame-like shape unless the brush FULLY
+      // contains it): a marquee that merely CLIPS a frame's edge must select
+      // the frame's children, never the frame itself — otherwise the very
+      // next drag moves the whole frame + contents instead of the notes the
+      // user actually brushed. Every other kind keeps the 'intersect' result
+      // above unchanged; a frame candidate is additionally required to
+      // appear in the 'contain' (full-enclosure) query.
+      const intersectIds = ctx.queryMarquee(bounds, 'intersect')
+      const snapshot = ctx.snapshot()
+      const ids = intersectIds.some((id) => snapshot.byId.get(id)?.kind === 'frame')
+        ? (() => {
+            const containedIds = new Set(ctx.queryMarquee(bounds, 'contain'))
+            return intersectIds.filter((id) => snapshot.byId.get(id)?.kind !== 'frame' || containedIds.has(id))
+          })()
+        : intersectIds
       return { state: IDLE, intents: [{ type: 'SetSelection', ids }] }
     }
     return { state, intents: [] }

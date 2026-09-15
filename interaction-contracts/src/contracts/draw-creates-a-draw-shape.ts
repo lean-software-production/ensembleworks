@@ -33,10 +33,10 @@
 // a FAKE red that proves nothing about this contract's own assertions.
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
-// The toolbar button CanvasV2App.tsx renders for each tool
-// (`data-canvas-v2-tool={btn.id}` — verified, W1's TOOL_BUTTONS entry
-// `{ id: 'draw', label: 'Draw' }`).
-const DRAW_TOOL_SELECTOR = '[data-canvas-v2-tool="draw"]'
+// The toolbar button canvas-ui's Toolbar.tsx renders for each tool
+// (`data-canvas-tool={id}` — its TOOL_ORDER entry `{ id: 'draw', label:
+// 'Draw' }`).
+const DRAW_TOOL_SELECTOR = '[data-canvas-tool="draw"]'
 
 export const drawCreatesADrawShape: Contract = {
   name: 'draw-creates-a-draw-shape',

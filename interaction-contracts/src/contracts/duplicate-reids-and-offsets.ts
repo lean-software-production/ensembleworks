@@ -4,8 +4,8 @@
 // end-to-end "duplicate" characterization — the exact +20 offset is C3's
 // pure `cloneWithNewIds` test's job, not this contract's).
 //
-// Browser-only: like Delete/undo/redo, Ctrl+D routes through
-// CanvasV2App.tsx's `handleGlobalShortcut`, never a tool FSM — the FSM
+// Browser-only: like Delete/undo/redo, Ctrl+D routes through canvas-ui's
+// useCanvasSession shortcut path, never a tool FSM — the FSM
 // runner drives tool FSMs only (types.ts's `Obs`/`Contract` doc comments,
 // CLAUDE.md's "Copy/paste/duplicate are keyboard + clipboard driven" note),
 // so this can only run through real Playwright input against a live
@@ -43,9 +43,9 @@ export const duplicateReidsAndOffsets: Contract = {
     // a translate-drag (crossedThreshold never fires with zero movement).
     { kind: 'down', at: { ref: 'shape', id: ID, dx: 0, dy: 0 } },
     { kind: 'up' },
-    // Ctrl+D: the duplicate shortcut (clipboard-dom.ts's `clipboardShortcut`
-    // maps 'd' + ctrl/meta to 'duplicate'; CanvasV2App.tsx's
-    // `handleGlobalShortcut` calls `duplicateSelectionIntents` synchronously
+    // Ctrl+D: the duplicate shortcut (canvas-editor's `clipboardShortcut`
+    // maps 'd' + ctrl/meta to 'duplicate'; canvas-ui's useCanvasSession
+    // calls `duplicateSelectionIntents` synchronously
     // — no clipboard I/O at all for this action).
     { kind: 'key', key: 'd', modifiers: { ctrl: true } },
   ],

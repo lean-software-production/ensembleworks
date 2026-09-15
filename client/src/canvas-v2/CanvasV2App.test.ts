@@ -37,7 +37,8 @@ const win = new Window()
 const { createElement, StrictMode, act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 const { SyncServerPeer, SyncClientPeer, PresenceStore, makePair } = await import('@ensembleworks/canvas-sync')
-const { CanvasV2App, buildSetStyleIntent } = await import('./CanvasV2App.js')
+const { CanvasV2App } = await import('./CanvasV2App.js')
+const { buildSetStyleIntent } = await import('@ensembleworks/canvas-editor')
 type Transport = import('@ensembleworks/canvas-sync').Transport
 type Shape = import('@ensembleworks/canvas-model').Shape
 
@@ -149,6 +150,93 @@ async function main() {
 		`the server's pre-existing shape must be rendered after the sync handshake — DOM: ${container.innerHTML}`,
 	)
 	console.log("ok: CanvasV2App — mount handshakes and renders the server's existing shapes")
+
+	// ==========================================================================
+	// (a2) VISUAL CHROME (Task visual-chrome): the viewport surface carries the
+	// brand paper background (gap 1), and a real pointermove over a shape with
+	// the select tool active (the default active tool) paints a hover
+	// indicator that disappears once the pointer moves off it (gaps "hover
+	// shape indicator" / "hover outline") — end to end through the real
+	// select.ts FSM -> editor.ts's `hover` state -> Overlay.tsx -> Hover.tsx,
+	// not just Hover.tsx's own isolated component test (canvas-react/src/
+	// overlay.test.ts covers that in isolation).
+	// ==========================================================================
+	const viewportContainerEl = container.querySelector('[data-canvas-v2-viewport]') as HTMLElement | null
+	assert.ok(viewportContainerEl, `the viewport container must render — DOM: ${container.innerHTML}`)
+	assert.equal(
+		viewportContainerEl!.style.background,
+		'var(--wm-bg-warm)',
+		'the viewport container must carry the brand paper background token, not browser-default white',
+	)
+
+	const hoverViewportEl = container.querySelector('[tabindex]') as HTMLElement | null
+	assert.ok(hoverViewportEl, `the viewport element must exist — DOM: ${container.innerHTML}`)
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		'precondition: nothing is hovered before any pointermove',
+	)
+	await act(async () => {
+		// shape:seed-1 is a geo shape at world (10,10), 80x60 (seedShape's
+		// defaults) -- at the identity default camera (x:0,y:0,z:1) and this
+		// happy-dom container's (0,0) bounding rect, screen coords equal world
+		// coords, so clientX/Y (50,50) lands inside it.
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 50, clientY: 50, buttons: 0 }))
+	})
+	const hoverIndicator = container.querySelector('[data-overlay="hover-indicator"]')
+	assert.ok(hoverIndicator, `hovering shape:seed-1 with the select tool active must paint a hover indicator — DOM: ${container.innerHTML}`)
+	assert.equal(hoverIndicator!.getAttribute('data-shape-id'), 'shape:seed-1', 'the hover indicator must be tagged with the hovered shape\'s id')
+
+	await act(async () => {
+		// Move far away, off every shape.
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 5000, clientY: 5000, buttons: 0 }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`moving the pointer off every shape must clear the hover indicator — DOM: ${container.innerHTML}`,
+	)
+	console.log('ok: CanvasV2App — the viewport carries the brand paper background, and a real pointermove paints/clears a hover indicator (Task visual-chrome)')
+
+	// ==========================================================================
+	// (a3) HOVER IS GATED TO THE SELECT TOOL (Task visual-chrome fixer round —
+	// validator-reported blocking finding): editorState.hover lives on the
+	// editor's shared state, not on the active tool, and canvas-editor's
+	// select.ts only ever CLEARS it from its own idle pointermove — switching
+	// away to another tool leaves the last hovered id (and its painted
+	// indicator) stuck forever, since the new tool's FSM never touches hover
+	// at all. Re-hover shape:seed-1, then switch to the Frame tool via the
+	// real toolbar button (not a direct editor.apply) and assert the
+	// indicator is gone AND stays gone through a further pointermove (the
+	// "frozen" repro from the validator's browser session).
+	// ==========================================================================
+	await act(async () => {
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 50, clientY: 50, buttons: 0 }))
+	})
+	assert.ok(
+		container.querySelector('[data-overlay="hover-indicator"]'),
+		`precondition: re-hovering shape:seed-1 must paint the indicator again — DOM: ${container.innerHTML}`,
+	)
+
+	const frameToolButton = container.querySelector('[data-canvas-tool="frame"]') as HTMLElement | null
+	assert.ok(frameToolButton, `the Frame tool button must render — DOM: ${container.innerHTML}`)
+	await act(async () => {
+		frameToolButton!.dispatchEvent(new (win as any).MouseEvent('click', { bubbles: true, cancelable: true }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`switching to the Frame tool must clear the stale hover indicator — DOM: ${container.innerHTML}`,
+	)
+
+	await act(async () => {
+		// A further pointermove while Frame is active — must NOT resurrect the
+		// indicator (select.ts's FSM isn't even running, so nothing recomputes
+		// hover; it must simply stay cleared).
+		hoverViewportEl!.dispatchEvent(new (win as any).PointerEvent('pointermove', { bubbles: true, cancelable: true, pointerId: 99, clientX: 55, clientY: 55, buttons: 0 }))
+	})
+	assert.ok(
+		!container.querySelector('[data-overlay="hover-indicator"]'),
+		`the hover indicator must stay cleared while a non-select tool is active, even after further pointermoves — DOM: ${container.innerHTML}`,
+	)
+	console.log('ok: CanvasV2App — switching off the select tool clears the stale hover indicator instead of freezing it (Task visual-chrome fixer round)')
 
 	// ==========================================================================
 	// (b) A SERVER-SIDE putShape APPEARS IN THE DOM AFTER SYNC.
@@ -336,8 +424,8 @@ async function main() {
 	// (d3e) ESCAPE, PRIMARY PATH (Task B3): a real `Escape` keydown dispatched
 	// on the FOCUSED VIEWPORT DIV (not a toolbar button — that's d4's fallback
 	// path) drives the WHOLE primary chain end to end: Viewport.onKeyDown ->
-	// keyEventToInput -> CanvasV2App.handleInput -> the shared
-	// handleGlobalShortcut policy -> cancelAndReset -> the in-flight preview's
+	// keyEventToInput -> the session's handleInput (canvas-ui) -> the shared
+	// resolveShortcut policy -> cancelAndReset -> the in-flight preview's
 	// DeleteShapes. The other Escape integration case (d4) deliberately
 	// bypasses handleInput (it dispatches on a focused sibling button, so only
 	// the document-level listener sees it), so this is the ONLY test that
@@ -346,8 +434,8 @@ async function main() {
 	// shapes (the preview is created then cancelled) so (e)'s pre-unmount count
 	// precondition still holds.
 	// ==========================================================================
-	const geoBtnEsc = container.querySelector('[data-canvas-v2-tool="geo"]') as HTMLElement | null
-	const selectBtnEsc = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+	const geoBtnEsc = container.querySelector('[data-canvas-tool="geo"]') as HTMLElement | null
+	const selectBtnEsc = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 	assert.ok(geoBtnEsc && selectBtnEsc, `the geo and select toolbar buttons must exist — DOM: ${container.innerHTML}`)
 
 	// Switch to the geo tool (real click) so a viewport drag creates a preview.
@@ -372,7 +460,7 @@ async function main() {
 	assert.equal(document.activeElement, viewportEl, 'precondition: the VIEWPORT div holds focus (this is the primary onKeyDown path, not the toolbar fallback)')
 
 	// The real primary-path Escape: dispatched ON the focused viewport div, so
-	// it flows through Viewport.onKeyDown -> handleInput -> handleGlobalShortcut
+	// it flows through Viewport.onKeyDown -> handleInput -> resolveShortcut
 	// (NOT the document-level fallback — the fallback's containment guard skips
 	// any target inside the viewport container, so this is unambiguously the
 	// primary path).
@@ -382,7 +470,7 @@ async function main() {
 	assert.equal(
 		ewEsc.doc.listShapes().find((s) => s.id === escPreview!.id),
 		undefined,
-		'a real Escape keydown on the FOCUSED VIEWPORT cancels the in-flight create-drag preview (handleInput -> shared handleGlobalShortcut -> cancelAndReset)',
+		'a real Escape keydown on the FOCUSED VIEWPORT cancels the in-flight create-drag preview (handleInput -> shared resolveShortcut -> cancelAndReset)',
 	)
 	console.log('ok: CanvasV2App — a real Escape keydown on the focused viewport cancels an in-flight gesture (primary handleInput path)')
 
@@ -411,8 +499,8 @@ async function main() {
 	// for both Escape (cancels an in-flight create-drag) and Delete (removes a
 	// selected shape).
 	// ==========================================================================
-	const geoBtn = container.querySelector('[data-canvas-v2-tool="geo"]') as HTMLElement | null
-	const selectBtn = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+	const geoBtn = container.querySelector('[data-canvas-tool="geo"]') as HTMLElement | null
+	const selectBtn = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 	assert.ok(geoBtn && selectBtn, `both the geo and select toolbar buttons must exist in the DOM — DOM: ${container.innerHTML}`)
 
 	// Switch to the geo (Shape) tool via a REAL click on its own button (this
@@ -485,8 +573,8 @@ async function main() {
 
 	// ==========================================================================
 	// (f) CTRL+Z / CTRL+SHIFT+Z / CTRL+Y -> editor.undo()/redo() (Task B4),
-	// through the SAME shared `handleGlobalShortcut` policy Escape/Delete/
-	// Backspace use (see CanvasV2App.tsx's own doc comment on that function).
+	// through the SAME shared `resolveShortcut` policy Escape/Delete/
+	// Backspace use (canvas-editor's session/keyboard.ts).
 	// Every case here asserts a REAL doc effect (a shape appearing/
 	// disappearing), never a mock of editor.undo()/redo() — proving the
 	// keydown actually drove the real undo/redo stack, not just that some
@@ -503,8 +591,12 @@ async function main() {
 		doc: { listShapes(): Array<{ id: string }>; getShape(id: string): unknown }
 	}
 
-	function dispatchKey(target: HTMLElement, opts: { key: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): void {
-		target.dispatchEvent(
+	// Returns whatever `dispatchEvent` itself returns: `false` iff the event
+	// was cancelable AND some listener called `preventDefault()` on it — used
+	// below (Task keyboard fix-round) to prove Ctrl/Cmd+A's preventDefault
+	// actually fires, not just that a handler ran.
+	function dispatchKey(target: HTMLElement, opts: { key: string; ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }): boolean {
+		return target.dispatchEvent(
 			new (win as any).KeyboardEvent('keydown', {
 				key: opts.key,
 				ctrlKey: opts.ctrlKey ?? false,
@@ -599,10 +691,10 @@ async function main() {
 
 	// (f5) FROM THE TOOLBAR-FOCUSED PATH (the document-level listener, not
 	// handleInput): proves the shared gate delivers Ctrl+Z regardless of
-	// focus — the payoff of B3's handleGlobalShortcut extraction. Moves focus
+	// focus — the payoff of B3's shared-shortcut extraction. Moves focus
 	// to a toolbar button WITHOUT clicking it (no tool-switch side effect),
 	// same technique (d4) uses above.
-	const selectBtnUndo = container.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+	const selectBtnUndo = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 	assert.ok(selectBtnUndo, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
 	await act(async () => {
 		ewUndo.editor.apply({ type: 'CreateShape', shape: seedShape('shape:undo-e', 580, 580) })
@@ -624,7 +716,7 @@ async function main() {
 
 	// ==========================================================================
 	// (f6) TASK D1 — CTRL/CMD+D / C / X / V: duplicate/copy/cut/paste, driven
-	// through the SAME shared `handleGlobalShortcut` policy as Escape/Delete/
+	// through the SAME shared `resolveShortcut` policy as Escape/Delete/
 	// undo above. Ctrl+D never touches `navigator.clipboard` at all (pure
 	// `editor.applyAll(duplicateSelectionIntents(...))`); C/X/V go through the
 	// REAL `navigator.clipboard` — happy-dom implements a genuine in-memory
@@ -795,7 +887,7 @@ async function main() {
 			}
 		})
 	await act(async () => {
-		// The keydown dispatch runs handleGlobalShortcut's cut branch
+		// The keydown dispatch runs the session's cut command
 		// SYNCHRONOUSLY, all the way through starting the (now-pending)
 		// clipboard write — so whatever it captures (or doesn't) for the
 		// eventual delete is already decided by the time dispatchEvent
@@ -849,6 +941,114 @@ async function main() {
 		ewClip.editor.apply({ type: 'DeleteShapes', ids: [pastedId] })
 		ewClip.editor.apply({ type: 'SetSelection', ids: [] })
 	})
+
+	// ==========================================================================
+	// (f7) TASK keyboard FIX-ROUND — Ctrl/Cmd+A must preventDefault, from
+	// BOTH keydown entry points (validator repro: without this, the
+	// browser's native select-all also fires, painting the whole app chrome
+	// text-selection-blue). Proven directly via `dispatchEvent`'s own return
+	// value (`false` iff some listener called `preventDefault()` on a
+	// cancelable event) rather than inspecting `window.getSelection()` —
+	// happy-dom doesn't implement native document text selection, but it DOES
+	// implement the real DOM event contract this assertion depends on.
+	// ==========================================================================
+	{
+		// (f7a) PRIMARY PATH — dispatched on the focused viewport div.
+		let notPreventedViewport = true
+		await act(async () => {
+			viewportEl!.focus()
+			notPreventedViewport = dispatchKey(viewportEl!, { key: 'a', ctrlKey: true })
+		})
+		assert.equal(
+			notPreventedViewport,
+			false,
+			'Ctrl+A dispatched on the focused VIEWPORT must call preventDefault (dispatchEvent returns false) so the browser\'s native select-all never also fires',
+		)
+		console.log('ok: CanvasV2App — Ctrl+A calls preventDefault on the primary (viewport-focused) path')
+
+		// (f7b) DOCUMENT-LEVEL FALLBACK PATH — a toolbar button holds focus,
+		// same technique (f5)/(d4) use above.
+		const selectBtnA = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
+		assert.ok(selectBtnA, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
+		await act(async () => {
+			selectBtnA!.focus()
+		})
+		assert.equal(document.activeElement, selectBtnA, 'precondition: the toolbar button holds focus, NOT the viewport')
+		let notPreventedToolbar = true
+		await act(async () => {
+			notPreventedToolbar = dispatchKey(selectBtnA!, { key: 'a', ctrlKey: true })
+		})
+		assert.equal(
+			notPreventedToolbar,
+			false,
+			'Ctrl+A dispatched on a FOCUSED TOOLBAR BUTTON must ALSO call preventDefault (document-level fallback path)',
+		)
+		console.log('ok: CanvasV2App — Ctrl+A calls preventDefault even while a toolbar button holds focus (document-listener path)')
+	}
+
+	// ==========================================================================
+	// (f8) TASK keyboard FIX-ROUND — arrow-key nudge must not be dead
+	// whenever a toolbar button holds focus. Validator repro: click the
+	// Select toolbar button (so it holds focus, exactly the state a real
+	// click leaves), then ArrowRight must still nudge the selection by 1
+	// world unit, same as it does from the viewport-focused path.
+	// ==========================================================================
+	{
+		const ewNudge = (globalThis as any).window.__ew as {
+			editor: { get(): { selection: ReadonlySet<string> }; apply(intent: unknown): void }
+			doc: { getShape(id: string): { x: number; y: number } | undefined }
+		}
+		await act(async () => {
+			ewNudge.editor.apply({ type: 'CreateShape', shape: seedShape('shape:nudge-a', 900, 900) })
+			ewNudge.editor.apply({ type: 'SetSelection', ids: ['shape:nudge-a'] })
+		})
+		const selectBtnNudge = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
+		assert.ok(selectBtnNudge, `the select toolbar button must exist — DOM: ${container.innerHTML}`)
+		// Move focus to the toolbar button WITHOUT clicking it (no tool-switch
+		// side effect) — the same real-browser "a button holds focus after
+		// being clicked" state (f5)/(d4) simulate above.
+		await act(async () => {
+			selectBtnNudge!.focus()
+		})
+		assert.equal(document.activeElement, selectBtnNudge, 'precondition: the select toolbar button holds focus, NOT the viewport')
+		await act(async () => {
+			dispatchKey(selectBtnNudge!, { key: 'ArrowRight' })
+		})
+		const nudged = ewNudge.doc.getShape('shape:nudge-a')
+		assert.equal(nudged?.x, 901, 'ArrowRight dispatched on a FOCUSED TOOLBAR BUTTON must still nudge the selection by 1 world unit (document-listener path)')
+		assert.equal(nudged?.y, 900, 'ArrowRight only moves x')
+		console.log('ok: CanvasV2App — arrow-key nudge reaches the select tool FSM even while a toolbar button holds focus')
+
+		// Cleanup: remove the temp shape, net zero for the (e) precondition below.
+		await act(async () => {
+			ewNudge.editor.apply({ type: 'DeleteShapes', ids: ['shape:nudge-a'] })
+			ewNudge.editor.apply({ type: 'SetSelection', ids: [] })
+		})
+	}
+
+	// ==========================================================================
+	// (f9) TASK keyboard FIX-ROUND — Escape returns to the select tool (an
+	// explicit goal item, tldraw parity: Idle.onCancel -> setCurrentTool
+	// ('select')). Validator repro: arm the note tool ('n'), then Escape —
+	// the note toolbar button must no longer be aria-pressed, and the select
+	// button must be.
+	// ==========================================================================
+	{
+		const noteBtnEsc = container.querySelector('[data-canvas-tool="note"]') as HTMLElement | null
+		const selectBtnEsc2 = container.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
+		assert.ok(noteBtnEsc && selectBtnEsc2, `the note and select toolbar buttons must exist — DOM: ${container.innerHTML}`)
+		await act(async () => {
+			viewportEl!.focus()
+			dispatchKey(viewportEl!, { key: 'n' })
+		})
+		assert.equal(noteBtnEsc!.getAttribute('aria-pressed'), 'true', 'precondition: the note tool is armed after pressing "n"')
+		await act(async () => {
+			dispatchKey(viewportEl!, { key: 'Escape' })
+		})
+		assert.equal(noteBtnEsc!.getAttribute('aria-pressed'), 'false', 'Escape must disarm the note tool')
+		assert.equal(selectBtnEsc2!.getAttribute('aria-pressed'), 'true', 'Escape must switch the active tool back to select (tldraw parity)')
+		console.log('ok: CanvasV2App — Escape switches the active tool back to select')
+	}
 
 	// ==========================================================================
 	// (e) UNMOUNT DISPOSES CLEANLY: no more sync reaches the (now-torn-down)
@@ -1075,7 +1275,11 @@ async function main() {
 		})
 
 		const ewStyle = (globalThis as any).window.__ew as {
-			editor: { get(): { selection: Set<string> }; apply(intent: unknown): void; undo(): void }
+			editor: {
+				get(): { selection: Set<string>; nextShapeStyle: Record<string, unknown> }
+				apply(intent: unknown): void
+				undo(): void
+			}
 			doc: { getShape(id: string): { opacity: number; props: Record<string, unknown> } | undefined }
 		}
 
@@ -1102,6 +1306,7 @@ async function main() {
 			'a shape OUTSIDE the selection must be untouched — proves the wiring dispatches ids=selection, not ids=whole doc',
 		)
 		console.log('ok: CanvasV2App — clicking the StylePanel color swatch dispatches SetStyle across the WHOLE selection, sparing an unselected shape')
+
 
 		const opacityBtn = styleContainer.querySelector('[data-style-control="opacity"] [data-style-value="0.5"]') as HTMLElement | null
 		assert.ok(opacityBtn, `the panel's 50% opacity button must render — DOM: ${styleContainer.innerHTML}`)
@@ -1140,6 +1345,36 @@ async function main() {
 			'the SAME single Ctrl+Z must not also revert the EARLIER, separately-committed color change',
 		)
 		console.log('ok: CanvasV2App — a single Ctrl+Z reverts the whole StylePanel opacity batch in one step, without touching the earlier color commit')
+
+		// ======================================================================
+		// (i-bis) TASK style-memory (gap 3) — STYLE MEMORY: an ordinary (no
+		// modifier) style click ALSO arms `nextShapeStyle`, so the NEXT created
+		// shape picks up the same style (tldraw parity — StylePanelContext.tsx's
+		// "every style click sets BOTH setStyleForSelectedShapes AND
+		// setStyleForNextShapes unless Ctrl/Cmd held"). The blue-swatch click
+		// above was a plain click, so it must ALSO have armed nextShapeStyle.
+		// ======================================================================
+		assert.equal(
+			ewStyle.editor.get().nextShapeStyle.color,
+			'blue',
+			'a plain (non-modified) style click over a selection must ALSO arm nextShapeStyle — the next-shape style memory tldraw parity gap',
+		)
+		console.log('ok: CanvasV2App — a plain style click over a selection also arms nextShapeStyle (next-shape style memory)')
+
+		// Ctrl/Cmd-held click is the escape hatch: "this shape only", must NOT
+		// touch nextShapeStyle (it stays at whatever it was armed to before).
+		const redSwatch = styleContainer.querySelector('[data-style-control="color"] [data-style-value="red"]') as HTMLElement | null
+		assert.ok(redSwatch, `the panel's red color swatch must render — DOM: ${styleContainer.innerHTML}`)
+		await act(async () => {
+			redSwatch!.dispatchEvent(new (win as any).MouseEvent('click', { ctrlKey: true, bubbles: true, cancelable: true }))
+		})
+		assert.equal(ewStyle.doc.getShape('shape:style-x')?.props.color, 'red', 'a Ctrl-held click still restyles the selected shapes')
+		assert.equal(
+			ewStyle.editor.get().nextShapeStyle.color,
+			'blue',
+			'a Ctrl/Cmd-held style click is the "this shape only" escape hatch — it must NOT arm nextShapeStyle',
+		)
+		console.log('ok: CanvasV2App — a Ctrl/Cmd-held style click restyles the selection only, leaving nextShapeStyle (armed style) untouched')
 
 		await act(async () => {
 			styleRoot.unmount()
@@ -1184,8 +1419,8 @@ async function main() {
 			await new Promise((r) => setTimeout(r, 0))
 		})
 
-		const drawBtn = drawContainer.querySelector('[data-canvas-v2-tool="draw"]') as HTMLElement | null
-		const selectBtnDraw = drawContainer.querySelector('[data-canvas-v2-tool="select"]') as HTMLElement | null
+		const drawBtn = drawContainer.querySelector('[data-canvas-tool="draw"]') as HTMLElement | null
+		const selectBtnDraw = drawContainer.querySelector('[data-canvas-tool="select"]') as HTMLElement | null
 		assert.ok(drawBtn, `the Draw toolbar button must render — DOM: ${drawContainer.innerHTML}`)
 		assert.ok(selectBtnDraw, 'precondition: the select button renders')
 		assert.equal(selectBtnDraw!.getAttribute('aria-pressed'), 'true', 'precondition: select is the default active tool')

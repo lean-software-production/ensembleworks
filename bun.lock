@@ -80,6 +80,30 @@
         "typescript": "^5.7.0",
       },
     },
+    "canvas-ui": {
+      "name": "@ensembleworks/canvas-ui",
+      "version": "0.1.0",
+      "dependencies": {
+        "@ensembleworks/canvas-editor": "*",
+        "@ensembleworks/canvas-model": "*",
+        "@ensembleworks/canvas-react": "*",
+      },
+      "devDependencies": {
+        "@ensembleworks/canvas-doc": "*",
+        "@types/node": "^22.0.0",
+        "@types/react": "^19.0.0",
+        "@types/react-dom": "^19.0.0",
+        "bun-types": "1.3.14",
+        "happy-dom": "^20.10.6",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+        "typescript": "^5.7.0",
+      },
+      "peerDependencies": {
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+      },
+    },
     "cli": {
       "name": "@ensembleworks/cli",
       "version": "0.1.0",
@@ -108,6 +132,7 @@
         "@ensembleworks/canvas-model": "*",
         "@ensembleworks/canvas-react": "*",
         "@ensembleworks/canvas-sync": "*",
+        "@ensembleworks/canvas-ui": "*",
         "@ensembleworks/contracts": "*",
         "@tldraw/sync": "5.1.0",
         "@xterm/addon-clipboard": "^0.2.0",
@@ -243,6 +268,8 @@
     "@ensembleworks/canvas-react": ["@ensembleworks/canvas-react@workspace:canvas-react"],
 
     "@ensembleworks/canvas-sync": ["@ensembleworks/canvas-sync@workspace:canvas-sync"],
+
+    "@ensembleworks/canvas-ui": ["@ensembleworks/canvas-ui@workspace:canvas-ui"],
 
     "@ensembleworks/cli": ["@ensembleworks/cli@workspace:cli"],
 

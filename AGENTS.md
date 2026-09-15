@@ -2,7 +2,7 @@
 
 Multiplayer infinite-canvas team room: tldraw + tmux terminals + LiveKit spatial audio.
 Workspaces: `contracts`, `canvas-model`, `canvas-doc`, `canvas-sync`,
-`canvas-editor`, `canvas-react`, `client`, `server`, `transcriber`, `cli`,
+`canvas-editor`, `canvas-react`, `canvas-ui`, `client`, `server`, `transcriber`, `cli`,
 `discord`, `e2e` (Bun workspaces). `discord` is the Discord bridge bot (inbound
 messages → frame stickies; outbound summaries → bound channels; internal
 /post on :8790). `canvas-model` (pure typed canvas model), `canvas-doc` (Loro
@@ -13,7 +13,10 @@ selection/hover/editing state + tools as pure FSMs against an injected
 clock/PRNG, no DOM) completes that clean-room set. `canvas-react` (thin,
 logic-free React renderer: CSS-transform world + one SVG overlay + the six
 ported custom HTML shapes) sits on top of `canvas-editor` and may touch the
-DOM, but holds no editor logic of its own.
+DOM, but holds no editor logic of its own. `canvas-ui` (host-agnostic React
+canvas chrome: session hook, surface, toolbar, style panel) is mounted by
+both the web app's v2 mount and the bb Canvas plugin; it holds no transport
+or host code.
 
 ### BB Canvas plugin
 
@@ -62,8 +65,8 @@ all re-deferred, no threshold tripped) live in
 ### Interaction contracts
 
 Every unit that touches an interaction-bearing surface —
-`canvas-editor/src/tools/`, `canvas-react/src/`, or `client/src/canvas-v2/`
-input/tool files — declares an interaction contract in
+`canvas-editor/src/tools/`, `canvas-editor/src/session/`, `canvas-react/src/`,
+`canvas-ui/src/`, or `client/src/canvas-v2/` input/tool files — declares an interaction contract in
 `@ensembleworks/interaction-contracts`, or records `ux-contract: none —
 <reason>` in the PR body when the change genuinely has no interaction
 surface. A contract is a seeded gesture plus an invariant expressed against

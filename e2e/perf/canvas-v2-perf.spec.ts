@@ -438,13 +438,12 @@ test.describe('canvas-v2 browser perf', () => {
 	// never actually been exercised by this rig. This scenario closes that
 	// gap directly.
 	//
-	// DRIVING SELECT-ALL: Ctrl+A/Cmd+A is NOT wired anywhere in canvas-editor,
-	// canvas-react, or client (grepped for `SelectAll`/`selectAll`/a keydown
-	// case on `'a'` — none exist; client/src/canvas-v2/CanvasV2App.tsx's
-	// `handleGlobalShortcut` wires exactly Escape/Delete/undo-redo, no
-	// select-all case). So this dispatches the SAME real intent a future
-	// Ctrl+A handler would — `editor.applyAll([{type: 'SetSelection', ids}])`
-	// (canvas-editor/src/intents.ts's `SetSelection`) — with every id
+	// DRIVING SELECT-ALL: when this scenario was written Ctrl+A/Cmd+A was not
+	// wired anywhere (it is now: canvas-editor's session/keyboard.ts
+	// `resolveShortcut` selectAll command). The scenario still dispatches the
+	// intent directly, keeping keyboard delivery out of the measurement:
+	// `editor.applyAll([{type: 'SetSelection', ids}])` (canvas-editor/src/
+	// intents.ts's `SetSelection`) with every id
 	// `seedGrid` deterministically produces (`shape:seed-<i>`,
 	// lib/canvas-v2.ts), not a DOM/CSS hack.
 	//
@@ -670,13 +669,13 @@ test.describe('canvas-v2 browser perf', () => {
 		const box = await viewportBox(page)
 		const create = await measure(page, async () => {
 			for (let i = 0; i < 20; i++) {
-				await page.locator('[data-canvas-v2-tool="note"]').click()
+				await page.locator('[data-canvas-tool="note"]').click()
 				const col = i % 5
 				const row = Math.floor(i / 5)
 				await page.mouse.click(box.x + 120 + col * 220, box.y + 120 + row * 150)
 			}
 		})
-		await page.locator('[data-canvas-v2-tool="select"]').click()
+		await page.locator('[data-canvas-tool="select"]').click()
 		await expect(page.locator('[data-shape-kind="note"]')).toHaveCount(20)
 
 		maybeRecord('rapid-create-20', { create })
@@ -686,7 +685,7 @@ test.describe('canvas-v2 browser perf', () => {
 		// of the existing 20 (the task's explicit third metric) — measured as
 		// its own, separate scenario so the 20-creation frame-time measurement
 		// above isn't perturbed by the extra evaluate() round-trips this needs.
-		await page.locator('[data-canvas-v2-tool="note"]').click()
+		await page.locator('[data-canvas-tool="note"]').click()
 		const latencyMs = await pointerToPaint(page, { x: box.x + ANCHOR.x, y: box.y + ANCHOR.y })
 		console.log(`[canvas-v2-perf] pointerdown -> first-paint-proxy latency: ${latencyMs}ms`)
 		maybeRecord('pointer-to-paint', { latencyMs })

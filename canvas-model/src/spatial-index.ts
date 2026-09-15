@@ -39,8 +39,10 @@
 // wrong doc's geometry). Keep the pairing straight at the call site.
 // ============================================================================
 import { type CanvasDocument } from './document.js'
+import { type Shape } from './shape.js'
 import {
-  type Bounds, type Point, medianSize, rotationAxes, worldBounds, worldCorners, worldTransform, hitTestPoint,
+  type Bounds, type Point, arrowPathPoints, medianSize, rotationAxes, worldBounds, worldCorners, worldTransform, hitTestPoint,
+  shapeHitIndexBounds,
 } from './geometry.js'
 
 export interface SpatialIndex {
@@ -139,10 +141,23 @@ export function buildSpatialIndex(doc: CanvasDocument): SpatialIndex {
   const overflow: string[] = []
   let cellRange: SpatialIndex['cellRange'] = null
   for (const shape of doc.shapes) {
+    // boundsById is the shape's TRUE worldBounds -- this is a PUBLIC map
+    // (snapping.ts's featuresOf reads it for alignment-guide edges, and
+    // queryMarquee('contain') answers containment from it), so it must never
+    // reflect shapeHitIndexBounds' header-band widening: doing so shifted a
+    // frame's snapped edges and 'contain' containment up into empty header
+    // space (frame-interaction validator fix -- the widening is legitimate
+    // ONLY for grid bucketing, below).
     const bounds = worldBounds(doc, shape)
     boundsById.set(shape.id, bounds)
-    const minCx = Math.floor(bounds.minX / cellSize), maxCx = Math.floor(bounds.maxX / cellSize)
-    const minCy = Math.floor(bounds.minY / cellSize), maxCy = Math.floor(bounds.maxY / cellSize)
+    // shapeHitIndexBounds (frame-interaction task, gap 2): identical to
+    // worldBounds for every kind except frame, where it's widened to also
+    // cover the header band -- used ONLY to decide which grid cells this
+    // shape is bucketed into (so a header click's cell lists the frame as a
+    // candidate at all), never as boundsById itself (see above).
+    const hitBounds = shapeHitIndexBounds(doc, shape)
+    const minCx = Math.floor(hitBounds.minX / cellSize), maxCx = Math.floor(hitBounds.maxX / cellSize)
+    const minCy = Math.floor(hitBounds.minY / cellSize), maxCy = Math.floor(hitBounds.maxY / cellSize)
     if (!cellSpanIsSane(minCx, maxCx, minCy, maxCy)) { overflow.push(shape.id); continue }
     cellRange = cellRange === null
       ? { minCx, maxCx, minCy, maxCy }
@@ -239,12 +254,61 @@ export function queryMarquee(
   return pool.filter((id) => {
     const shape = doc.byId.get(id)
     if (!shape) return false
+    // ARROW SPECIAL CASE (Task arrow-body validator fix, gap 4): an arrow
+    // has no meaningful rotated box to run the generic SAT test against —
+    // worldCorners' localBounds-derived quad for an arrow is the stale
+    // 100x100-at-start default (same reason hitTestPoint special-cases
+    // kind==='arrow' above it in this file's sibling geometry.ts). Test the
+    // marquee rect against the arrow's REAL resolved path instead
+    // (arrowPathPoints — straight chord or curve polyline, same resolution
+    // arrowHitTest/arrowPathBounds use). The marquee itself is always
+    // axis-aligned (no rotation), so a segment-vs-AABB test suffices — no
+    // SAT needed on this side.
+    if (shape.kind === 'arrow') return arrowIntersectsRect(doc, shape, bounds)
     // One worldTransform call, reused for both the rotation (SAT axes) and
     // the corners (worldCorners' precomputedTransform param) — avoids
     // walking the parent chain twice per candidate.
     const t = worldTransform(doc, shape)
     return rectQuadIntersects(bounds, worldCorners(doc, shape, t), t.rotation)
   })
+}
+
+// Does `arrow`'s resolved path (straight chord or curve polyline —
+// arrowPathPoints) pass through `rect` at all? Checked segment-by-segment
+// (2 points for a straight arrow, 17 for a sampled curve) via
+// segmentIntersectsRect. Any one touching segment is enough (an OR across
+// the whole polyline).
+function arrowIntersectsRect(doc: CanvasDocument, arrow: Shape, rect: Bounds): boolean {
+  const points = arrowPathPoints(doc, arrow)
+  for (let i = 1; i < points.length; i++) {
+    if (segmentIntersectsRect(points[i - 1]!, points[i]!, rect)) return true
+  }
+  return false
+}
+
+// Exact segment-vs-axis-aligned-rect intersection (Liang-Barsky clipping):
+// true iff the segment [a,b] touches `rect` anywhere (either endpoint
+// inside, or the segment crosses into the rect's span). Inclusive of the
+// boundary, matching this file's other geometric tests' inclusive
+// convention (rectQuadIntersects, boundsIntersect).
+function segmentIntersectsRect(a: Point, b: Point, rect: Bounds): boolean {
+  const inside = (p: Point) => p.x >= rect.minX && p.x <= rect.maxX && p.y >= rect.minY && p.y <= rect.maxY
+  if (inside(a) || inside(b)) return true
+  const dx = b.x - a.x, dy = b.y - a.y
+  const p = [-dx, dx, -dy, dy]
+  const q = [a.x - rect.minX, rect.maxX - a.x, a.y - rect.minY, rect.maxY - a.y]
+  let t0 = 0, t1 = 1
+  for (let i = 0; i < 4; i++) {
+    const pi = p[i]!, qi = q[i]!
+    if (pi === 0) {
+      if (qi < 0) return false // parallel to this edge and entirely outside it
+      continue
+    }
+    const r = qi / pi
+    if (pi < 0) { if (r > t1) return false; if (r > t0) t0 = r }
+    else { if (r < t0) return false; if (r < t1) t1 = r }
+  }
+  return t0 <= t1
 }
 
 function projectOntoAxis(points: readonly Point[], axis: Point): [number, number] {
@@ -325,10 +389,33 @@ function isDescendantOf(doc: CanvasDocument, id: string, ancestorId: string): bo
 // STALENESS: candidates come from build-time buckets but hitTestPoint runs
 // against the CURRENT doc — stale index ⇒ omissions only, never a false
 // hit (contract at the top of this file).
-export function hitTestTopmost(index: SpatialIndex, doc: CanvasDocument, point: Point): string | null {
+// `excludeIds` (Task arrow-body validator fix, gap 1): ids to drop from the
+// candidate pool BEFORE the antichain/z-order pick — e.g. the arrow tool's
+// own in-progress shape, which is already written into the doc mid-drag
+// (see arrow.ts's bindingAt) and would otherwise shadow whatever shape sits
+// under its own terminal. Excluding it here (rather than the caller
+// special-casing "hit === myOwnId -> null") means the SECOND-topmost real
+// candidate under the cursor still wins, instead of the whole query bailing
+// to "no hit" the moment the excluded shape happens to be topmost.
+// `include`, if given, is a second pre-pick filter over the resolved Shape —
+// the tool layer passes "is on the current page" here. Like `excludeIds` it
+// runs BEFORE the antichain/z-order pick, so a rejected shape stacked above
+// an accepted one can never shadow it.
+export function hitTestTopmost(
+  index: SpatialIndex,
+  doc: CanvasDocument,
+  point: Point,
+  excludeIds?: ReadonlySet<string>,
+  include?: (shape: Shape) => boolean,
+): string | null {
   const key = cellKey(Math.floor(point.x / index.cellSize), Math.floor(point.y / index.cellSize))
   const candidates = [...(index.cells.get(key) ?? []), ...index.overflow]
-  const hits = candidates.filter((id) => { const s = doc.byId.get(id); return s ? hitTestPoint(doc, s, point) : false })
+  const hits = candidates
+    .filter((id) => !excludeIds?.has(id))
+    .filter((id) => {
+      const s = doc.byId.get(id)
+      return s ? (include === undefined || include(s)) && hitTestPoint(doc, s, point) : false
+    })
   if (hits.length === 0) return null
   if (hits.length === 1) return hits[0]!
   const isAncestorOfAnotherHit = (id: string) => hits.some((other) => other !== id && isDescendantOf(doc, other, id))

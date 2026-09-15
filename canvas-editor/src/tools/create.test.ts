@@ -518,4 +518,44 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
   console.log('ok: E2 — drag-create threads the current page consistently across every pointermove + pointerup')
 }
 
+// ============================================================================
+// 10. create-edit-flow task — tldraw parity: click-creating a note or text
+//    shape immediately begins editing it (BeginEdit, editor.get().editingId
+//    === the new shape's id), matching node_modules/tldraw/src/lib/shapes/
+//    {note,text}/toolStates/Pointing.ts's `complete()` ->
+//    startEditingShapeWithRichText. geo and frame do NOT auto-edit (geo's
+//    own Pointing.ts `complete()` only ever calls
+//    `editor.setCurrentTool('select')`, never begins editing) — confirmed
+//    per-kind here so a future regression that over-applies BeginEdit to
+//    every kind is caught.
+// ============================================================================
+for (const kind of ['note', 'text'] as const) {
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, kind)
+  run(editor, tool, script().down(300, 300).up().events())
+  const created = editor.doc.listShapes()[0]!
+  assert.equal(editor.get().editingId, created.id, `${kind}: click-create begins editing the new shape immediately`)
+  console.log(`ok: click-create ${kind} begins editing immediately (tldraw parity)`)
+}
+
+for (const kind of ['geo', 'frame'] as const) {
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, kind)
+  run(editor, tool, script().down(300, 300).up().events())
+  assert.equal(editor.get().editingId, null, `${kind}: click-create does NOT begin editing (tldraw parity: only note/text auto-edit)`)
+  console.log(`ok: click-create ${kind} does not begin editing`)
+}
+
+// Drag-create note/text also begins editing at the finalizing pointerup —
+// the SAME finalizeIntents path both the click and drag legs funnel through
+// (this file's own header names finalizeIntents as the one seam both share).
+{
+  const { editor, ctx } = setup()
+  const tool = createCreateTool(ctx, 'text')
+  run(editor, tool, script().down(0, 0).move(80, 80).up().events())
+  const created = editor.doc.listShapes()[0]!
+  assert.equal(editor.get().editingId, created.id, 'drag-create text also begins editing at pointerup')
+  console.log('ok: drag-create text begins editing immediately (tldraw parity)')
+}
+
 console.log('ok: create tools (note/text/geo/frame) + frame capture')

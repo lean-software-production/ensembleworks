@@ -227,8 +227,24 @@ function frameCaptureIntents(ctx: ToolContext, frame: Shape): Intent[] {
   return [{ type: 'ReparentShapes', ids: contained, parentId: frame.id }]
 }
 
+// tldraw parity, checked against source: note's and text's own Pointing
+// state (`complete()`, both under node_modules/tldraw/src/lib/shapes/{note,
+// text}/toolStates/Pointing.ts) end a completed creation by calling
+// `startEditingShapeWithRichText` — click a note or text shape into
+// existence and you're immediately typing into it, no second gesture. geo
+// (and frame, which isn't text-capable at all) do NOT get this: geo's own
+// Pointing.ts `complete()` only ever calls `editor.setCurrentTool('select')`
+// — a created rectangle is selected, never auto-entered into edit mode; you
+// double-click it afterward to type, exactly as select.ts's existing
+// double-click-to-edit path already covers. So this is deliberately NOT
+// `isTextCapableKind` (which also answers true for geo, a DIFFERENT
+// question this file doesn't need to ask) — just the two kinds v1 actually
+// auto-edits.
+const AUTO_EDIT_KINDS: ReadonlySet<CreateKind> = new Set(['note', 'text'])
+
 function finalizeIntents(ctx: ToolContext, shape: Shape): Intent[] {
   const intents: Intent[] = [{ type: 'CreateShape', shape }, { type: 'SetSelection', ids: [shape.id] }]
+  if (AUTO_EDIT_KINDS.has(shape.kind as CreateKind)) intents.push({ type: 'BeginEdit', id: shape.id })
   if (shape.kind === 'frame') intents.push(...frameCaptureIntents(ctx, shape))
   return intents
 }

@@ -13,7 +13,7 @@ export function useSessionDebug({
   readonly editor: Editor;
   readonly toolContext: ToolContext;
   readonly presenceStore: PresenceStore;
-  readonly handleInput: (event: InputEvent) => void;
+  readonly handleInput: (event: InputEvent) => boolean | void;
 }) {
   const handleInputRef = useRef(handleInput);
   handleInputRef.current = handleInput;

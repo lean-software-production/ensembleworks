@@ -48,3 +48,8 @@ export async function seedGoldenBoard(room: string): Promise<string[]> {
 	return ids
 }
 export const GOLDEN_BOARD_SHAPE_COUNT = 10
+/** How many of those shapes are arrows. v2 gives an arrow NO shape body
+ * (ShapeLayer.tsx skips the kind; it paints only through overlay/Arrows.tsx),
+ * so a `[data-shape-kind]` count on a v2 room sees GOLDEN_BOARD_SHAPE_COUNT
+ * minus this. */
+export const GOLDEN_BOARD_ARROW_COUNT = 1

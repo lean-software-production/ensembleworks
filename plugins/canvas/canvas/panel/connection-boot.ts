@@ -1,5 +1,5 @@
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
-import { Editor, createToolContext } from "@ensembleworks/canvas-editor";
+import { Editor, createToolContext, createToolSet } from "@ensembleworks/canvas-editor";
 import { PresenceStore, SyncClientPeer } from "@ensembleworks/canvas-sync";
 import { registerCoreShapes } from "@ensembleworks/canvas-react";
 import { createBbTransport, newPeerId, type BbTransport } from "../../transport.js";
@@ -8,7 +8,6 @@ import { resolvePageId } from "../page.js";
 import { readLastPage } from "../pages/last-page.js";
 import { pageIdFromSubPath } from "../pages/page-route.js";
 import { createPresencePublisher } from "../presence-publisher.js";
-import { createToolSet } from "../tool-loop.js";
 import { ROOM_ID } from "../wire.js";
 import { pageMemoryStore } from "./page-memory.js";
 import {

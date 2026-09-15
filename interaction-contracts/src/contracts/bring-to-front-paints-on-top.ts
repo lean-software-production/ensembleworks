@@ -6,8 +6,8 @@
 // press Shift+] (bring-to-front), and assert via paintOrder() that the
 // selected shape is now LAST in paint order (on top of everything else).
 //
-// Browser-only: reorder is keyboard-driven through CanvasV2App.tsx's
-// `handleGlobalShortcut`, never a tool FSM (like Delete/undo/copy/paste) —
+// Browser-only: reorder is keyboard-driven through canvas-ui's
+// useCanvasSession shortcut path, never a tool FSM (like Delete/undo/copy/paste) —
 // the FSM runner drives tool FSMs only, so this can only run through real
 // Playwright input against a live ?engine=v2 room. Also, `paintOrder()`
 // itself is browser-only by construction (H1) — it reads the renderer's DOM

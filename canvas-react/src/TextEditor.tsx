@@ -115,15 +115,16 @@
 // `SetText`/`EndEdit` Intents applied through `editor.apply` — this
 // component only reads editor/doc state and forwards raw DOM change/key
 // events, exactly like Viewport.tsx forwards raw pointer/wheel/key events.
-import { useRef, type ChangeEvent, type CompositionEvent, type KeyboardEvent } from 'react'
+import { useEffect, useRef, type ChangeEvent, type CompositionEvent, type KeyboardEvent } from 'react'
 import { localBounds, type Shape } from '@ensembleworks/canvas-model'
-import type { ToolContext } from '@ensembleworks/canvas-editor'
+import { computeAutosizeProps, type ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { shapeBodyTransform } from './ShapeBody.js'
 import { isEmbedKind } from './shapeRegistry.js'
-import { noteStyle, NOTE_LABEL_FONT_SIZE, NOTE_LABEL_LINE_HEIGHT } from './shapes/NoteShape.js'
+import { measureTextSize } from './measure-text.js'
+import { noteStyle, NOTE_LABEL_LINE_HEIGHT, NOTE_LABEL_PADDING } from './shapes/NoteShape.js'
 import { textStyle } from './shapes/TextShape.js'
-import { geoStyle } from './shapes/GeoShape.js'
+import { geoStyle, GEO_LABEL_PADDING } from './shapes/GeoShape.js'
 
 export interface TextEditorProps {
   readonly toolContext: ToolContext
@@ -137,6 +138,15 @@ export interface TextEditorProps {
    * never calls `editor.apply`/constructs an `EndEdit` Intent itself — the
    * caller does that. */
   readonly onEndEdit: () => void
+  /** text-autosize task — fired whenever a text change would grow/shrink
+   * the editing shape's box (canvas-editor's `computeAutosizeProps`
+   * returned non-null against a fresh DOM measurement). `props` is the
+   * exact partial-props object to UpdateProps-merge onto the shape; same
+   * "renderer never constructs an Intent" contract as onTextChange/
+   * onEndEdit above — the caller turns this into `UpdateProps`. Optional:
+   * omitting it (e.g. a test harness) simply opts the mount out of
+   * autosizing, same as a text edit that never triggers it. */
+  readonly onAutosize?: (id: string, props: Record<string, unknown>) => void
 }
 
 /** IME composition tracking (see the module header's IME COMPOSITION
@@ -200,13 +210,14 @@ export function handleEditorKeyDown(key: string, onEndEdit: () => void): void {
  * MATCH whichever text-capable kind (note/text/geo — canvas-model's
  * isTextCapableKind) is currently being edited (Task C6 — "the editing mount
  * must not jump visually vs the rich bodies"). Reuses each body's own pure
- * style resolver — NoteShape.tsx's `noteStyle`, TextShape.tsx's `textStyle`,
- * GeoShape.tsx's `geoStyle` — rather than re-deriving the color/font/size
- * tables those modules already own; NoteShape.tsx/GeoShape.tsx additionally
- * export their fixed label-layout CONSTANTS (fontSize/lineHeight/textAlign —
- * not tables, the same numbers every note/geo label uses regardless of
- * props) for the identical single-source-of-truth reason. See those modules'
- * GROUNDING headers for where every value ultimately traces back to v1.
+ * style resolver — NoteShape.tsx's `noteStyle` (whose `.fontSize` now
+ * follows props.size, label-render task — not a fixed 16px), TextShape.tsx's
+ * `textStyle`, GeoShape.tsx's `geoStyle` — rather than re-deriving the
+ * color/font/size tables those modules already own. NoteShape.tsx
+ * additionally exports `NOTE_LABEL_LINE_HEIGHT` (v1's `size`-INVARIANT line
+ * height — unlike font size, it does not vary by props.size) for the same
+ * single-source-of-truth reason. See those modules' GROUNDING headers for
+ * where every value ultimately traces back to v1.
  *
  * NOTE COLOR: `noteStyle(shape).color` is v1's fixed noteText (#000000,
  * black in every theme color) — NOT the sticky's own fill color; matches
@@ -255,7 +266,7 @@ export function editorTextStyle(shape: Shape): EditorTextStyle {
   switch (shape.kind) {
     case 'note': {
       const s = noteStyle(shape)
-      return { fontFamily: s.fontFamily, fontSize: NOTE_LABEL_FONT_SIZE, lineHeight: NOTE_LABEL_LINE_HEIGHT, color: s.color, textAlign: s.textAlign, padding: 4 }
+      return { fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: NOTE_LABEL_LINE_HEIGHT, color: s.color, textAlign: s.textAlign, padding: 4 }
     }
     case 'text': {
       const s = textStyle(shape)
@@ -275,7 +286,7 @@ export function editorTextStyle(shape: Shape): EditorTextStyle {
   }
 }
 
-export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorProps) {
+export function TextEditor({ toolContext, onTextChange, onEndEdit, onAutosize }: TextEditorProps) {
   const snapshot = useDocSnapshot(toolContext)
   const editorState = useEditorState(toolContext.editor)
   // Per-mount IME composition flag (see the module header's IME COMPOSITION
@@ -285,6 +296,50 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorP
   const composition = useRef<TextCompositionState>({ composing: false })
   const editingId = editorState.editingId
   const shape = editingId ? snapshot.byId.get(editingId) : undefined
+  // liveText, ALSO declared before the early returns (rules of hooks — the
+  // effect below reads it): same `editor.doc.getText` read the render path
+  // further down does, just hoisted so the autosize effect can depend on it
+  // without re-reading through a conditional branch.
+  const liveText = editingId ? toolContext.editor.doc.getText(editingId) : undefined
+  // text-autosize task — remeasure and, if the fresh measurement would
+  // change the shape's box, forward the props to the caller (which turns
+  // them into an UpdateProps intent — see onAutosize's own doc comment on
+  // why THIS component never constructs the intent itself). Runs whenever
+  // the editing shape, its live text, or its own props (e.g. after a PRIOR
+  // autosize write lands, or a remote SetText/UpdateProps arrives) change.
+  // SELF-CONVERGING, not an infinite loop: once the shape's props already
+  // match the fresh measurement, computeAutosizeProps returns null and the
+  // effect is a no-op — the same "no-op skip" guard camera-follow-style
+  // effects elsewhere in this codebase lean on.
+  useEffect(() => {
+    if (!editingId || !shape || !onAutosize) return
+    if (isEmbedKind(shape.kind) || shape.kind === 'frame' || typeof liveText !== 'string') return
+    const s = editorTextStyle(shape)
+    const { maxX: boxW } = localBounds(shape)
+    // MEASUREMENT PADDING, fixer round: the RENDERED STATIC BODY's padding
+    // (NoteShape 16 / GeoShape 8 / TextShape 0), NOT `editorTextStyle`'s
+    // `padding` (4 for note/geo) — that value is a purely visual choice for
+    // the EDITING textarea's caret box (see editorTextStyle's PARITY GAP
+    // doc comment) and was never meant to double as the measurement basis.
+    // computeAutosizeProps compares the measured height against
+    // geometry.ts's baseline, which itself reflects the STATIC body's box —
+    // measuring against the smaller editing-padding wraps text at a wider
+    // effective column than the body actually renders, under-computing
+    // growY and clipping text the moment editing ends (the defect a
+    // validator round caught via the `labelOverflow` contract check).
+    const labelPadding = shape.kind === 'note' ? NOTE_LABEL_PADDING : shape.kind === 'geo' ? GEO_LABEL_PADDING : 0
+    // `text` kind measures its NATURAL width (autoSize grows both axes);
+    // note/geo wrap to their current inner content width (padding
+    // subtracted — see measureTextSize's own wrapWidth doc comment) since
+    // only their HEIGHT may grow (growY).
+    const wrapWidth = shape.kind === 'text' ? undefined : Math.max(0, boxW - labelPadding * 2)
+    const measured = measureTextSize(
+      { text: liveText, fontFamily: s.fontFamily, fontSize: s.fontSize, lineHeight: s.lineHeight, padding: labelPadding },
+      wrapWidth,
+    )
+    const next = computeAutosizeProps(shape, measured)
+    if (next) onAutosize(editingId, next)
+  }, [editingId, shape, liveText, onAutosize])
   if (!editingId || !shape) return null // no active edit, or the editing shape vanished — mount nothing (see module header)
   // EMBED GUARD: never mount a text editor over an embed-kind shape
   // (terminal/iframe/screenshare — shapeRegistry.ts's isEmbedKind, the same
@@ -294,6 +349,15 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit }: TextEditorP
   // textarea over a live terminal session. Guarded here, at the mount
   // decision, rather than trusting every future trigger to remember.
   if (isEmbedKind(shape.kind)) return null
+  // FRAME GUARD (frame-interaction task, gap 1): select.ts's double-click
+  // gate now ALSO fires BeginEdit for a frame (header-band click, not
+  // text-capability — see select.ts's `opensFrameRename`). A frame's
+  // editingId is rendered by the SEPARATE FrameNameEditor (a plain
+  // `props.name` input, not richText), never this component: a frame
+  // carries no doc text container for `editor.doc.getText` to read, and a
+  // full-body textarea would be the wrong affordance/geometry entirely
+  // (rename is the small header label, not the frame's whole interior).
+  if (shape.kind === 'frame') return null
 
   const { maxX: w, maxY: h } = localBounds(shape) // localBounds is always {minX:0, minY:0, maxX:w, maxY:h} — geometry.ts's contract, same as ShapeBody.tsx
   const text = toolContext.editor.doc.getText(editingId) // READ through editor.doc — see module header's "not an import" note

@@ -67,7 +67,7 @@
 // (seedGoldenBoard's own literal seeding coordinates, lib/seed.ts).
 // ============================================================================
 import { expect, identityState, test } from '../lib/fixtures'
-import { GOLDEN_BOARD_SHAPE_COUNT, seedGoldenBoard } from '../lib/seed'
+import { GOLDEN_BOARD_ARROW_COUNT, GOLDEN_BOARD_SHAPE_COUNT, seedGoldenBoard } from '../lib/seed'
 import { waitForBoot } from '../lib/canvas-v2'
 import {
 	applyV2Camera,
@@ -121,7 +121,9 @@ async function settleV1(page: Page): Promise<Camera> {
 }
 
 async function settleV2(page: Page, camera: Camera): Promise<void> {
-	await expect(page.locator('[data-shape-kind]')).toHaveCount(GOLDEN_BOARD_SHAPE_COUNT, { timeout: 15_000 })
+	// Arrows own no shape body in v2 (overlay-only), so they never carry
+	// `[data-shape-kind]` — see GOLDEN_BOARD_ARROW_COUNT.
+	await expect(page.locator('[data-shape-kind]')).toHaveCount(GOLDEN_BOARD_SHAPE_COUNT - GOLDEN_BOARD_ARROW_COUNT, { timeout: 15_000 })
 	await applyV2Camera(page, camera)
 	await page.evaluate(() => (document as unknown as { fonts: { ready: Promise<unknown> } }).fonts.ready)
 	await page.waitForTimeout(PAINT_SETTLE_MS)

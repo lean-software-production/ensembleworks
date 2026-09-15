@@ -244,7 +244,10 @@ function fontToken(fontFamily: string): string {
   )
   assert.ok(html.includes(fontToken(noteExpected.fontFamily)), `note editor should use the sticky's handwriting font-family: ${html}`)
   assert.ok(html.includes(noteExpected.color), `note editor should use the sticky's label color: ${html}`)
-  assert.ok(html.includes('font-size:16px'), 'note editor should match NoteShape\'s fixed 16px label size')
+  // label-render task: NoteShape's font size now follows props.size (LABEL_FONT_SIZES,
+  // default 'm' -> 22px) instead of a fixed 16px — asserted against noteStyle's OWN
+  // resolved value so this can't drift from the body it's supposed to match.
+  assert.ok(html.includes(`font-size:${noteExpected.fontSize}px`), `note editor should match NoteShape's props.size-derived label size (${noteExpected.fontSize}px): ${html}`)
   assert.ok(html.includes('text-align:center'), 'note editor should center like NoteShape\'s label')
   console.log('ok: editing a note matches NoteShape\'s font-family/size/color/align')
 }

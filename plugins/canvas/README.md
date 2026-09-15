@@ -58,8 +58,11 @@ document; the plugin backend is the authoritative peer and persists it.
   `av.ts`) with its UI (`roster-ui.tsx`), LiveKit (`av-room.ts`), the room
   transcript (`transcript.ts`, `transcript-view.ts`, `transcript-ui.tsx`), the
   header ↔ body seam (`panel-bus.ts`), and the frontend mount
-  (`CanvasPanel.tsx`) with its tool loop, page resolution, and presence
-  publisher.
+  (`CanvasPanel.tsx`) with its page resolution and presence publisher. The
+  canvas controls (tools, shortcuts, toolbar, style panel, text editing) come
+  from the shared `@ensembleworks/canvas-ui` package, the same one the
+  EnsembleWorks web app mounts; this plugin supplies the bb transport, theme
+  mapping, page tabs, agent layer and dock.
 - `transport.ts` — the client half of the transport: outbound frames over rpc,
   inbound frames off `bb.realtime`.
 - `app.tsx` — registers the full-bleed **Canvas** nav panel, its sidebar count
@@ -1898,8 +1901,10 @@ are coloured with the same name → hue hash the cursors and avatars use, so one
 person is one colour everywhere in this plugin.
 
 The canvas packages (`@ensembleworks/canvas-model`, `-doc`, `-sync`, `-editor`,
-`-react`) are consumed as `file:` deps straight from the EnsembleWorks
-checkout, as raw TypeScript. This spike never modifies them.
+`-react`, `-ui`) are consumed as `file:` deps straight from the EnsembleWorks
+checkout, as raw TypeScript. This spike never modifies them. A deploy must sync
+every one of those sibling workspaces alongside `plugins/canvas` — `canvas-model/`,
+`canvas-doc/`, `canvas-sync/`, `canvas-editor/`, `canvas-react/` and `canvas-ui/`.
 
 ### Known cost: the app bundle is ~5.2 MB
 

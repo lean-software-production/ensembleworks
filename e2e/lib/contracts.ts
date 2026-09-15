@@ -255,6 +255,93 @@ async function samplePageCount(page: Page): Promise<number> {
   })
 }
 
+// Arrow-body task's Obs.shapeBindingTarget(fromId, terminal) doc comment
+// (interaction-contracts/src/types.ts) names this exact mechanism for the
+// browser adapter: read the WHOLE live bindings table
+// (window.__ew.doc.listBindings()) once, keyed by `${fromId}|${terminal}` —
+// NOT sampled per-id like shapeKind/assetSrc, because the one shape this
+// Obs method needs to answer for (a just-drawn arrow) is never in the
+// seeded scene AND never lands in `selectedShapeIds()` either (arrow.ts
+// never auto-selects, per line-creates-a-line-shape's own module-comment
+// note on that divergence) — so there is no id set to union against ahead
+// of time. A contract instead discovers the arrow's id via `listShapeIds()`
+// and looks its binding up in this whole-table snapshot.
+async function sampleBindings(page: Page): Promise<Readonly<Record<string, string | null>>> {
+  return page.evaluate(() => {
+    const ew = (window as any).__ew
+    const out: Record<string, string | null> = {}
+    for (const b of ew.doc.listBindings()) {
+      const terminal = b.props?.terminal
+      if (terminal !== 'start' && terminal !== 'end') continue
+      out[`${b.fromId}|${terminal}`] = b.toId
+    }
+    return out
+  })
+}
+
+// Arrow-body task's Obs.listShapeIds() doc comment (interaction-contracts/
+// src/types.ts) names this exact mechanism for the browser adapter: read
+// `window.__ew.doc.listShapes().map(s => s.id)` — the browser-side twin of
+// the FSM adapter's `editor.doc.listShapes().map(s => s.id)`.
+async function sampleShapeIds(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() => {
+    const ew = (window as any).__ew
+    return ew.doc.listShapes().map((s: { id: string }) => s.id)
+  })
+}
+
+// text-autosize fixer task's Obs.labelOverflow(id) doc comment (interaction-
+// contracts/src/types.ts): reads the RENDERED static label's own
+// overflow:hidden box (never the editing textarea, which never mounts once
+// a contract's gesture has run its trailing Escape) and compares
+// scrollHeight to clientHeight. Prefers GeoShape's dedicated
+// `[data-shape-geo-label]` box (geo's overflow-hidden label lives on a child
+// of `[data-shape-body="geo"]`, not that element itself — see
+// GeoShape.tsx); falls back to `[data-shape-body]` directly for note/text,
+// whose own body element IS the overflow-hidden label box. Absent shape or
+// no such box (e.g. an empty label, or a non-text-capable kind) reads false
+// — nothing to overflow.
+async function sampleLabelOverflow(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const out: Record<string, boolean> = {}
+    for (const id of ids) {
+      const root = document.querySelector(`[data-shape-id="${id}"]`)
+      const box = root?.querySelector('[data-shape-geo-label]') ?? root?.querySelector('[data-shape-body]') ?? null
+      out[id] = box ? box.scrollHeight > box.clientHeight : false
+    }
+    return out
+  }, shapeIds)
+}
+
+// arrow-handles task's Obs.hoveredShapeId() doc comment (interaction-
+// contracts/src/types.ts) names this exact mechanism for the browser
+// adapter: read the rendered hover indicator's `data-shape-id` off the DOM
+// (canvas-react's Hover.tsx renders `data-overlay="hover-indicator"
+// data-shape-id={shape.id}`), null when no such element is mounted. A DOM
+// read (not a `window.__ew` doc read, unlike listShapeIds/bindings above):
+// `hover` is editor-LOCAL view state (editor.ts's EditorState), not part of
+// the CRDT doc `__ew.doc` exposes — the rendered indicator IS the source of
+// truth this adapter has for it, same posture as sampleEditingShape's own
+// DOM-only read for `editingId`.
+async function sampleHoveredId(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const el = document.querySelector('[data-overlay="hover-indicator"]')
+    return el ? el.getAttribute('data-shape-id') : null
+  })
+}
+
+// Task 1 (arrow-stays-on-its-page): the ids of every arrow actually PAINTED
+// in the overlay right now — canvas-react's Arrows.tsx renders
+// `data-overlay="arrow" data-shape-id={arrow.id}` per drawn arrow. Distinct
+// from sampleShapeIds (the whole doc): an arrow that exists in the doc but
+// lives on a different page must not appear here.
+async function sampleRenderedArrowIds(page: Page): Promise<readonly string[]> {
+  return page.evaluate(() =>
+    [...document.querySelectorAll('[data-overlay="arrow"]')].map((el) => el.getAttribute('data-shape-id') ?? ''),
+  )
+}
+
 async function samplePeerEditingIndicators(page: Page, shapeIds: readonly string[]): Promise<Record<string, boolean>> {
   if (shapeIds.length === 0) return {}
   return page.evaluate((ids) => {
@@ -292,6 +379,21 @@ async function sampleShapeStyles(
   }, shapeIds)
 }
 
+// create-edit-flow fixer task's Obs.shapeText(id) doc comment (interaction-
+// contracts/src/types.ts) — same pre-sample-then-read-synchronously shape as
+// sampleShapeStyles just above, reading `window.__ew.doc.getText` instead of
+// `getShape`. A shape absent from the doc gets `null` (getText itself has no
+// "shape doesn't exist" signal — it would read an empty Loro text container).
+async function sampleShapeTexts(page: Page, shapeIds: readonly string[]): Promise<Readonly<Record<string, string | null>>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const ew = (window as any).__ew
+    const out: Record<string, string | null> = {}
+    for (const id of ids) out[id] = ew.doc.getShape(id) ? ew.doc.getText(id) : null
+    return out
+  }, shapeIds)
+}
+
 /** One actor's pre-sampled observation values — see `pageObs`'s doc comment
  * for why these must be sampled BEFORE `contract.check` runs rather than
  * read lazily from inside an `Obs` method. */
@@ -300,12 +402,18 @@ interface ActorSample {
   readonly editingShape: string | null
   readonly editingIndicators: Readonly<Record<string, boolean>>
   readonly styles: Readonly<Record<string, { readonly opacity: number; readonly props: Readonly<Record<string, unknown>> } | null>>
+  readonly texts: Readonly<Record<string, string | null>>
   readonly selection: readonly string[]
   readonly shapeCount: number
   readonly paintOrder: readonly string[]
   readonly kinds: Readonly<Record<string, string | null>>
   readonly assetSrcs: Readonly<Record<string, string | null>>
   readonly pageCount: number
+  readonly bindings: Readonly<Record<string, string | null>>
+  readonly shapeIds: readonly string[]
+  readonly labelOverflow: Readonly<Record<string, boolean>>
+  readonly hoveredId: string | null
+  readonly renderedArrowIds: readonly string[]
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -332,6 +440,11 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // "shape absent" (null) regardless of the shape's real stored props.
   const styleIds = [...new Set([...sceneShapeIds, ...selection])]
   const styles = await sampleShapeStyles(page, styleIds)
+  // create-edit-flow fixer task: same union rationale as styleIds above — a
+  // just-selected/just-edited shape's text is what `shapeText` needs to
+  // answer for, and the union already covers both seeded and gesture-
+  // discovered ids.
+  const texts = await sampleShapeTexts(page, styleIds)
   const shapeCount = await sampleShapeCount(page)
   const paintOrder = await samplePaintOrder(page)
   // Task H: same union rationale as styleIds above — a gesture-created
@@ -343,7 +456,17 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // the seeded `sceneShapeIds`.
   const assetSrcs = await sampleAssetSrcs(page, styleIds)
   const pageCount = await samplePageCount(page)
-  return { spans, editingShape, editingIndicators, styles, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount }
+  // Arrow-body task: the whole bindings table, not id-keyed — see
+  // sampleBindings' own doc comment for why no id union works here.
+  const bindings = await sampleBindings(page)
+  const shapeIds = await sampleShapeIds(page)
+  // text-autosize fixer task: same union rationale as kinds/assetSrcs above
+  // — reuses styleIds (seeded scene ids ∪ current selection) rather than a
+  // separate sample pass.
+  const labelOverflow = await sampleLabelOverflow(page, styleIds)
+  const hoveredId = await sampleHoveredId(page)
+  const renderedArrowIds = await sampleRenderedArrowIds(page)
+  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId, renderedArrowIds }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -393,6 +516,12 @@ function pageObs(
     shapeKind: (id: string) => sample.kinds[id] ?? null,
     assetSrc: (id: string) => sample.assetSrcs[id] ?? null,
     pageCount: () => sample.pageCount,
+    shapeText: (id: string) => sample.texts[id] ?? null,
+    shapeBindingTarget: (fromId: string, terminal: 'start' | 'end') => sample.bindings[`${fromId}|${terminal}`] ?? null,
+    listShapeIds: () => sample.shapeIds,
+    labelOverflow: (id: string) => sample.labelOverflow[id] ?? false,
+    hoveredShapeId: () => sample.hoveredId,
+    renderedArrowIds: () => sample.renderedArrowIds,
   }
 }
 

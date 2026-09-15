@@ -13,12 +13,30 @@
 // computes — a single rotated shape's handles come out axis-aligned here too,
 // automatically, with no special-casing: this component inherits the scope
 // limit rather than re-deciding it.
-import { HIT_TOLERANCE_PX, selectionHandles, worldToScreen, type Camera, type Handle } from '@ensembleworks/canvas-editor'
-import type { Bounds } from '@ensembleworks/canvas-model'
+import { arrowHandles, HIT_TOLERANCE_PX, selectionHandles, worldToScreen, type Camera, type Handle } from '@ensembleworks/canvas-editor'
+import type { Bounds, CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 
 export interface HandlesProps {
   readonly bounds: Bounds | null
   readonly camera: Camera
+  /** note-fixed-size task (tldraw parity: NoteShapeUtil.hideResizeHandles()
+   * returns true): when true, only the ROTATE handle paints — the 4 corner +
+   * 4 edge handles are suppressed entirely, matching transform.ts's own
+   * hittable-handle filter for an all-fixed-size selection (Overlay.tsx
+   * computes this via canvas-model's isFixedSizeSelection). Defaults to
+   * false so every OTHER existing caller/test (a plain `bounds` prop, no
+   * third arg) keeps painting all 9 handles exactly as before. */
+  readonly hideResizeHandles?: boolean
+  /** arrow-handles task: the LONE selected shape when (and only when) it's
+   * kind 'arrow', or null/undefined otherwise. When present, this component
+   * paints transform.ts's arrow-handle model (start/end/mid — arrow-
+   * handles.ts's `arrowHandles`) INSTEAD of the box resize/rotate handles
+   * above — mirrors transform.ts's own onIdle branch exactly (a lone
+   * selected arrow gets arrow handles, never box handles; see that file's
+   * TransformState module comment). Requires `snapshot` to route the arrow
+   * (routeArrow needs the whole doc, for bound-terminal resolution). */
+  readonly soleArrow?: Shape | null
+  readonly snapshot?: CanvasDocument
 }
 
 // Rendered handle size, SCREEN pixels, zoom-independent (a fixed px square at
@@ -33,18 +51,76 @@ export interface HandlesProps {
 const HANDLE_SIZE_PX = HIT_TOLERANCE_PX
 const ROTATE_HANDLE_RADIUS_PX = 5
 
+// tldraw parity (SelectionForegroundOverlayUtil.ts's `options.lineWidth`,
+// same 1.5 SCREEN px this file's sibling Selection.tsx now uses for its own
+// stroke — see that file's SELECTION_STROKE_WIDTH comment for why no zoom
+// division is needed here). OURS otherwise: not tuned against tldraw's own
+// handle chrome beyond this stroke width + the size constant above.
+const HANDLE_STROKE_WIDTH = 1.5
+
 const HANDLE_FILL = 'var(--canvas-handle, #ffffff)'
 const HANDLE_STROKE = 'var(--canvas-handle-stroke, #4b8bf4)'
 
-export function Handles({ bounds, camera }: HandlesProps) {
+// Arrow terminal handles (start/end) — a plain circle, same fill/stroke
+// chrome as the rotate handle's glyph above, sized a touch larger (this is
+// the PRIMARY drag target for an arrow, unlike the box model's secondary
+// rotate handle). The mid (bend) handle is visually smaller/lighter — a
+// "virtual" affordance, matching tldraw's own convention that a straight
+// arrow's midpoint handle is a lower-emphasis grab target than its two real
+// terminals (ArrowShapeUtil.tsx types it `type: 'virtual'`, not `'vertex'`).
+const ARROW_TERMINAL_RADIUS_PX = 5
+const ARROW_MID_RADIUS_PX = 4
+const ARROW_MID_FILL = 'var(--canvas-handle-mid, #ffffff)'
+
+export function Handles({ bounds, camera, hideResizeHandles = false, soleArrow, snapshot }: HandlesProps) {
+  if (soleArrow && snapshot) {
+    return (
+      <>
+        {arrowHandles(snapshot, soleArrow).map((h) => {
+          const s = worldToScreen(camera, h.point)
+          const isMid = h.id === 'mid'
+          return (
+            <circle
+              key={h.id}
+              data-overlay="arrow-handle"
+              data-handle-id={h.id}
+              cx={s.x}
+              cy={s.y}
+              r={isMid ? ARROW_MID_RADIUS_PX : ARROW_TERMINAL_RADIUS_PX}
+              fill={isMid ? ARROW_MID_FILL : HANDLE_FILL}
+              stroke={HANDLE_STROKE}
+              strokeWidth={HANDLE_STROKE_WIDTH}
+              opacity={isMid ? 0.7 : 1}
+            />
+          )
+        })}
+      </>
+    )
+  }
   if (!bounds) return null
-  const handles: Handle[] = selectionHandles(bounds)
+  const allHandles: Handle[] = selectionHandles(bounds)
+  const handles = hideResizeHandles ? allHandles.filter((h) => h.kind === 'rotate') : allHandles
 
   return (
     <>
       {handles.map((h) => {
         const s = worldToScreen(camera, h.point)
         if (h.kind === 'rotate') {
+          // SCOPE LIMIT (OURS, cited not re-decided here — this task's brief
+          // flags v1's own rotate handle as an INVISIBLE hit zone around each
+          // resize corner (ShapeIndicatorOverlayUtil/SelectionForegroundOverlayUtil
+          // draw no rotate glyph at all), whereas this codebase's rotate
+          // handle is transform.ts's single OFFSET point above the top edge
+          // (selectionHandles' documented single-top-handle model, distinct
+          // from tldraw's per-corner zones — see this file's own module
+          // header SCOPE LIMIT note). Removing this glyph to chase literal
+          // v1 parity would leave that offset point with NO visual
+          // affordance at all (unlike v1, where the invisible zone sits
+          // right on a corner handle the user can already see) — a
+          // discoverability regression this task's effort budget (S) isn't
+          // the place to redesign the rotate-handle model itself. Kept
+          // visible, tuned to the same stroke width as every other selection
+          // chrome instead.
           return (
             <circle
               key={h.id}
@@ -56,7 +132,7 @@ export function Handles({ bounds, camera }: HandlesProps) {
               r={ROTATE_HANDLE_RADIUS_PX}
               fill={HANDLE_FILL}
               stroke={HANDLE_STROKE}
-              strokeWidth={1}
+              strokeWidth={HANDLE_STROKE_WIDTH}
             />
           )
         }
@@ -72,7 +148,7 @@ export function Handles({ bounds, camera }: HandlesProps) {
             height={HANDLE_SIZE_PX}
             fill={HANDLE_FILL}
             stroke={HANDLE_STROKE}
-            strokeWidth={1}
+            strokeWidth={HANDLE_STROKE_WIDTH}
           />
         )
       })}
