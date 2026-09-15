@@ -70,8 +70,8 @@ import {
 	type StyleValue,
 	type ToolId,
 } from '@ensembleworks/canvas-editor'
-import { combinedWorldBounds, GEO_COLORS } from '@ensembleworks/canvas-react'
-import { AlignIcon, ArrowheadIcon, DashIcon, FillIcon, FontIcon, GeoIcon, SizeIcon } from './style-icons.js'
+import { combinedWorldBounds } from '@ensembleworks/canvas-react'
+import { AxisRow, SWATCH_GAP_PX, SWATCH_PX } from './style-controls.js'
 import { UI_VARS } from './theme.js'
 
 export interface StylePanelProps {
@@ -119,43 +119,6 @@ const AXIS_GROUPS: readonly (readonly StyleAxis[])[] = [
 	['arrowheadStart', 'arrowheadEnd'],
 	['opacity'],
 ]
-
-const AXIS_LABELS: Record<StyleAxis, string> = {
-	color: 'Color',
-	fill: 'Fill',
-	dash: 'Dash',
-	size: 'Size',
-	font: 'Font',
-	align: 'Align',
-	verticalAlign: 'Vertical align',
-	textAlign: 'Text align',
-	geo: 'Shape',
-	arrowheadStart: 'Arrow start',
-	arrowheadEnd: 'Arrow end',
-	opacity: 'Opacity',
-}
-
-// Task style-panel-icons — swatch hue for the `color` axis, read from
-// canvas-react's GEO_COLORS (the SAME table GeoShape/DrawShape/LineShape
-// paint a shape's stroke/fill with — canvas-react/src/shapes/GeoShape.tsx),
-// not a second, hand-typed copy. This REPLACES the old `COLOR_SWATCH_HEX`
-// map, whose own comment used to admit it was "NOT a verified match" — it
-// disagreed with the real painted color on 6 of 13 values (grey/light-blue/
-// yellow/orange/light-green/white — this task's brief). `.solid` is the
-// variant GEO_COLORS itself documents as the plain stroke/fill-none color
-// (GeoShapeUtil's own default look), the right one for a swatch that's
-// showing "this is the `color` value," not a `fill` STYLE preview.
-function colorSwatchHex(value: string): string {
-	return GEO_COLORS[value]?.solid ?? '#94a3b8'
-}
-
-/** kebab-case value -> "Title Case" display label ('x-box' -> 'X Box'). */
-function humanize(value: string): string {
-	return value
-		.split('-')
-		.map((w) => (w.length === 0 ? w : w[0]!.toUpperCase() + w.slice(1)))
-		.join(' ')
-}
 
 // Bounded so `clampPanelPosition`'s edge-clamp math (below) has a GUARANTEED
 // upper bound to clamp against — the real DOM node's rendered width can never
@@ -262,42 +225,9 @@ const PANEL_STYLE: CSSProperties = {
 // the panel wider than its cap (which `maxWidth` alone cannot prevent for a
 // non-wrapping flex row of intrinsically-sized children).
 const ROW_GROUP_STYLE: CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
-const ROW_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4 }
-const ROW_LABEL_STYLE: CSSProperties = { fontSize: 10, color: UI_VARS.panelMuted, fontWeight: 600, letterSpacing: 0.2 }
-const ROW_VALUES_STYLE: CSSProperties = { display: 'flex', flexWrap: 'wrap', gap: 4 } // gap mirrors SWATCH_GAP_PX below (declared after use — CSS-in-JS values only, no import-order issue)
 
-// tldraw's own opacity control offers five discrete steps (Decisions §
-// Parity value-sets, "opacity") — style-axes.ts's STYLE_VALUE_SETS.opacity
-// carries the same five, so this reads that instead of re-typing them.
-const OPACITY_VALUES = STYLE_VALUE_SETS.opacity
-
-// Every actual control (swatch/segmented button) opts BACK IN to hit-testing
-// with `pointerEvents: 'auto'` — see PANEL_STYLE's own doc comment for why
-// the container above sets 'none'. Without this, a click aimed at a swatch
-// would fall through the panel to the canvas underneath instead of hitting
-// the button.
-// Exported as named constants (not left as magic numbers inside
-// `swatchButtonStyle`/`ROW_VALUES_STYLE`) so `panelContentWidth`/
-// `colorRowWidth` below — and `StylePanel.position.test.ts`'s pinning test —
-// compute the SAME numbers the real CSS renders, never a second, driftable
-// hand-copy of them.
-const SWATCH_PX = 20
-const SWATCH_GAP_PX = 4
 const PANEL_HORIZONTAL_PADDING_PX = 10 // PANEL_STYLE's `padding: '8px 10px'`, left+right
 const PANEL_BORDER_PX = 1 // PANEL_STYLE's `border: '1px solid ...'`, left+right
-
-function swatchButtonStyle(current: boolean): CSSProperties {
-	return {
-		width: SWATCH_PX,
-		height: SWATCH_PX,
-		borderRadius: '50%',
-		border: current ? `2px solid ${UI_VARS.accent}` : `1px solid ${UI_VARS.swatchBorder}`,
-		boxShadow: current ? `0 0 0 1px ${UI_VARS.panelBg} inset` : undefined,
-		cursor: 'pointer',
-		padding: 0,
-		pointerEvents: 'auto',
-	}
-}
 
 /** The panel's real, on-screen CONTENT width (inside its own padding and
  * border) — `boxSizing: 'border-box'` (PANEL_STYLE) folds both back inside
@@ -319,210 +249,6 @@ export function panelContentWidth(): number {
 export function colorRowWidth(): number {
 	const n = STYLE_VALUE_SETS.color.length
 	return n * SWATCH_PX + (n - 1) * SWATCH_GAP_PX
-}
-
-// Task style-panel-icons — every non-color/non-opacity control is now a
-// fixed-size ICON button (was a variable-width text pill sized to
-// `humanize(v)`'s string length — the very thing that forced a 20-entry geo
-// row to wrap across ~5 lines, PANEL_MAX_WIDTH/HEIGHT's own doc comments'
-// "1030px wide" / "480px tall" measurements). A fixed square keeps every
-// group's grid compact regardless of how long a value's name is.
-const ICON_BUTTON_PX = 24
-function segButtonStyle(current: boolean): CSSProperties {
-	return {
-		width: ICON_BUTTON_PX,
-		height: ICON_BUTTON_PX,
-		display: 'flex',
-		alignItems: 'center',
-		justifyContent: 'center',
-		padding: 0,
-		borderRadius: 4,
-		border: current ? `1px solid ${UI_VARS.accent}` : `1px solid ${UI_VARS.controlBorder}`,
-		background: current ? UI_VARS.accentSoft : 'transparent',
-		color: current ? UI_VARS.accent : UI_VARS.panelFg,
-		cursor: 'pointer',
-		pointerEvents: 'auto',
-	}
-}
-
-/** The icon glyph for one axis/value pair (style-icons.tsx) — the button's
- * only visible child now (its accessible name comes from `aria-label`, its
- * tooltip from `title`, both still `humanize(value)` as before). `opacity`
- * never reaches here (AxisRow's opacity branch renders its own numeric
- * label, below) and `color` never reaches here either (AxisRow's `color`
- * branch renders a plain swatch, below) — this only ever covers the
- * remaining, genuinely icon-able axes. */
-function axisIcon(axis: StyleAxis, value: string) {
-	switch (axis) {
-		case 'fill':
-			return <FillIcon variant={value} />
-		case 'dash':
-			return <DashIcon variant={value} />
-		case 'size':
-			return <SizeIcon variant={value} />
-		case 'font':
-			return <FontIcon variant={value} />
-		case 'align':
-		case 'textAlign':
-		case 'verticalAlign':
-			return <AlignIcon axis={axis} variant={value} />
-		case 'geo':
-			return <GeoIcon variant={value} />
-		case 'arrowheadStart':
-		case 'arrowheadEnd':
-			return <ArrowheadIcon variant={value} />
-		default:
-			return null
-	}
-}
-
-interface AxisRowProps {
-	readonly axis: StyleAxis
-	/** Precomputed by the caller: `currentValue(shapes, axis)` in selection
-	 * mode, or `armedValue(nextShapeStyle, toolId, axis)` in armed mode (AS3)
-	 * — this row never knows which mode it's rendering for, only the resolved
-	 * value and where to send a change. There is no 'mixed' concept in armed
-	 * mode (there's no multi-shape selection to disagree), so armed callers
-	 * only ever pass a definite value or `undefined`, never `'mixed'`. */
-	readonly value: StyleValue | 'mixed' | undefined
-	/** Task style-memory (gap 3) — `onlySelection` mirrors the click's
-	 * Ctrl/Cmd modifier (tldraw parity: StylePanelContext.tsx's "every style
-	 * click sets BOTH setStyleForSelectedShapes AND setStyleForNextShapes
-	 * unless Ctrl/Cmd held"). In SELECTION mode this tells the mount site's
-	 * `onStyleChange` to restyle ONLY the current selection, leaving
-	 * `nextShapeStyle` (next-shape style memory) untouched — the "this shape
-	 * only" escape hatch. In ARMED mode there is no selection to restrict, so
-	 * `onArmStyle` simply ignores the third argument. */
-	readonly onStyleChange: (axis: StyleAxis, value: StyleValue, options?: { readonly onlySelection: boolean }) => void
-}
-
-// Task style-panel-icons — opacity restyled as a slider TRACK with a stop
-// per OPACITY_VALUES entry (visual parity with v1's TldrawUiSlider — a
-// continuous track with a thumb — approximated here without pulling in a
-// drag-gesture library or Radix: this is a PURELY VISUAL restyle of the same
-// five discrete, click-to-select stops the old text-pill row already used —
-// see StylePanel.tsx's own module header for why that keeps this change
-// out of interaction-contract scope). A mixed selection shows an EMPTY track
-// (no stop marked current), mirroring v1's own `value === null` -> no thumb
-// convention (TldrawUiSlider.tsx), rather than defaulting to one wrongly.
-const OPACITY_TRACK_STYLE: CSSProperties = {
-	position: 'relative',
-	display: 'flex',
-	alignItems: 'center',
-	justifyContent: 'space-between',
-	width: 130,
-	height: ICON_BUTTON_PX,
-}
-const OPACITY_LINE_STYLE: CSSProperties = {
-	position: 'absolute',
-	left: 4,
-	right: 4,
-	top: '50%',
-	height: 2,
-	background: UI_VARS.controlBorder,
-	transform: 'translateY(-50%)',
-	pointerEvents: 'none',
-}
-// The stop's VISUAL dot (8px, 14px when current) stays small to read as a
-// slider track, but the clickable <button> itself is padded out to a much
-// larger square hit target (20px, close to the old text pills' ~16-30px)
-// via `padding` around a smaller `backgroundClip`-drawn dot — a small
-// pointer target is a real regression from either the old pills or a true
-// slider's full-width draggable track (validator advisory).
-const OPACITY_STOP_HIT_PX = 20
-function opacityStopStyle(current: boolean): CSSProperties {
-	const dot = current ? 14 : 8
-	return {
-		position: 'relative',
-		width: OPACITY_STOP_HIT_PX,
-		height: OPACITY_STOP_HIT_PX,
-		borderRadius: '50%',
-		border: 'none',
-		background: current ? UI_VARS.accent : UI_VARS.stopInactive,
-		backgroundClip: 'content-box',
-		padding: (OPACITY_STOP_HIT_PX - dot) / 2,
-		boxSizing: 'border-box',
-		cursor: 'pointer',
-		pointerEvents: 'auto',
-	}
-}
-
-/** One labeled row: the axis's value-set rendered as swatches (color), a
- * slider-styled track (opacity), or icon buttons (everything else), current
- * value marked, 'mixed' shown distinctly rather than defaulting to (wrongly)
- * marking one value current. */
-function AxisRow({ axis, value, onStyleChange }: AxisRowProps) {
-	const mixed = value === 'mixed'
-
-	if (axis === 'opacity') {
-		const numeric = typeof value === 'number' ? value : undefined
-		return (
-			<div style={ROW_STYLE} data-style-control="opacity" data-style-mixed={mixed ? 'true' : undefined}>
-				<span style={ROW_LABEL_STYLE}>
-					{AXIS_LABELS.opacity}
-					{mixed ? ' — mixed' : numeric !== undefined ? ` — ${Math.round(numeric * 100)}%` : ''}
-				</span>
-				<div style={OPACITY_TRACK_STYLE}>
-					<div style={OPACITY_LINE_STYLE} />
-					{OPACITY_VALUES.map((v) => {
-						const isCurrent = !mixed && numeric === v
-						return (
-							<button
-								key={v}
-								type="button"
-								data-style-value={v}
-								aria-pressed={isCurrent}
-								data-current={isCurrent ? 'true' : undefined}
-								aria-label={`${Math.round(v * 100)}%`}
-								title={`${Math.round(v * 100)}%`}
-								style={opacityStopStyle(isCurrent)}
-								onClick={(e) => onStyleChange('opacity', v, { onlySelection: Boolean(e?.ctrlKey || e?.metaKey) })}
-							/>
-						)
-					})}
-				</div>
-			</div>
-		)
-	}
-
-	const values = STYLE_VALUE_SETS[axis]
-	return (
-		<div style={ROW_STYLE} data-style-control={axis} data-style-mixed={mixed ? 'true' : undefined}>
-			<span style={ROW_LABEL_STYLE}>{AXIS_LABELS[axis]}{mixed ? ' — mixed' : ''}</span>
-			<div style={ROW_VALUES_STYLE}>
-				{values.map((v) => {
-					const isCurrent = !mixed && value === v
-					return axis === 'color' ? (
-						<button
-							key={v}
-							type="button"
-							data-style-value={v}
-							aria-pressed={isCurrent}
-							data-current={isCurrent ? 'true' : undefined}
-							title={humanize(v)}
-							aria-label={humanize(v)}
-							style={{ ...swatchButtonStyle(isCurrent), background: colorSwatchHex(v) }}
-							onClick={(e) => onStyleChange(axis, v, { onlySelection: Boolean(e?.ctrlKey || e?.metaKey) })}
-						/>
-					) : (
-						<button
-							key={v}
-							type="button"
-							data-style-value={v}
-							aria-pressed={isCurrent}
-							data-current={isCurrent ? 'true' : undefined}
-							title={humanize(v)}
-							aria-label={humanize(v)}
-							style={segButtonStyle(isCurrent)}
-							onClick={(e) => onStyleChange(axis, v, { onlySelection: Boolean(e?.ctrlKey || e?.metaKey) })}
-						>
-							{axisIcon(axis, v)}
-						</button>
-					)
-				})}
-			</div>
-		</div>
-	)
 }
 
 // DefaultStylePanel-sized headroom guess (v1's PANEL_FLIP_HEADROOM, same
