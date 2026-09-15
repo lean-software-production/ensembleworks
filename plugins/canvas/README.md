@@ -85,8 +85,9 @@ and pushes this peer's full history back up.
 ## The bb thread frame
 
 A native `bbthread` shape binds a piece of the canvas to a real bb thread. Its
-right third renders the host `ThreadChat` in `variant: "timeline"` — read-only,
-no composer, just the conversation as it happens — while its left two thirds
+right third renders the host `ThreadChat` — `variant: "timeline"` while idle
+(read-only, just the conversation as it happens) and `variant: "compact"` with
+the host composer once you double-click into it — while its left two thirds
 stay an ordinary hollow frame you can drop other shapes into. Binding happens
 one of two ways: pick an existing project thread from a picker, or spawn a new
 one seeded from the text of the frame's own children (a handful of notes
@@ -99,7 +100,7 @@ into bb's own thread view.
 | Spawn a new thread | rpc `canvas_spawn_thread { prompt }` → `bb.sdk.threads.spawn`, returning `{ threadId }` for the shape to record on itself |
 | Bind the result | an ordinary `UpdateProps` write of `threadId` onto the shape — a canvas-document edit like any other, not a separate rpc |
 | Read from a shell | `bb canvas thread-frames [--json]` — every `bbthread` shape's id, name, bound thread, and direct children (`canvas/thread-frames.ts`) |
-| Chat | the host `ThreadChat` component, `variant: "timeline"`, `layout: "contained"` |
+| Chat | the host `ThreadChat` component, `variant: "timeline"` idle / `"compact"` focused, `layout: "contained"` |
 
 This replaces an earlier spike (launch a thread from a note, or attach one to
 any shape, tracked in `bb.storage.kv`) rather than extending it: that kv-backed
@@ -148,8 +149,10 @@ no local idle/focused reducer in this plugin any more — `BbThreadShape.tsx`
 only reads `editorState.editingId`/`editingRegion` (via
 `paneInteraction`, `canvas/shapes/bbthread-model.ts`) and reflects the
 answer: it sets `data-canvas-interactive` on the pane only while interactive,
-and shows a small hint ("Double-click to read · Esc to leave", etc) while it
-isn't. Hit-testing itself (which part of a `bbthread` shape is "solid") is
+and shows a small hint ("Double-click to read or reply · Esc to leave", etc)
+while it isn't. While focused the pane also switches the host `ThreadChat` to
+`variant: "compact"` so you can reply in place, right there in the composer;
+idle stays `variant: "timeline"` — read-only, no composer. Hit-testing itself (which part of a `bbthread` shape is "solid") is
 canvas-model's job, not this component's — see `isFrameLike`,
 `bbthreadPaneLocalBounds` and `bbthreadWorkspaceLocalBounds` in
 `canvas-model/src/geometry.ts`.

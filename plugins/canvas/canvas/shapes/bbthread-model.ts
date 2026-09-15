@@ -203,7 +203,7 @@ export interface PaneInteraction {
 
 const HINT_FOR_KIND: Partial<Record<PaneState["kind"], string>> = {
   unbound: "Double-click to choose a thread",
-  bound: "Double-click to read · Esc to leave",
+  bound: "Double-click to read or reply · Esc to leave",
   gone: "Double-click to unbind",
 };
 

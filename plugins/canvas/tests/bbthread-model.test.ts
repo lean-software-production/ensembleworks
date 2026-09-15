@@ -208,7 +208,7 @@ describe("paneInteraction", () => {
     const editorState = { editingId: shape.id, editingRegion: "name" as const };
     expect(paneInteraction(shape, { kind: "bound", title: "t", statusLabel: "Idle", tone: "idle", isArchived: false }, editorState)).toEqual({
       interactive: false,
-      hint: "Double-click to read · Esc to leave",
+      hint: "Double-click to read or reply · Esc to leave",
     });
   });
 
@@ -230,9 +230,9 @@ describe("paneInteraction", () => {
     expect(paneInteraction(shape, pane, notEditing).hint).toBeNull();
   });
 
-  it("hints 'read · Esc to leave' when bound", () => {
+  it("hints 'read or reply · Esc to leave' when bound", () => {
     const pane: PaneState = { kind: "bound", title: "t", statusLabel: "Idle", tone: "idle", isArchived: false };
-    expect(paneInteraction(shape, pane, notEditing).hint).toBe("Double-click to read · Esc to leave");
+    expect(paneInteraction(shape, pane, notEditing).hint).toBe("Double-click to read or reply · Esc to leave");
   });
 
   it("hints 'unbind' when gone", () => {

@@ -11,7 +11,17 @@
 // `git show dc70212^:plugins/canvas/tests/agent-affordance-wiring.test.ts`).
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { bodyStatements, callsTo, countInCode, initializerText, jsxElementRange, ternaryArms } from "./lib/source.js";
+import {
+  bodyStatements,
+  callsTo,
+  countInCode,
+  effectStatements,
+  initializerText,
+  jsxAttributes,
+  jsxElementRange,
+  ternaryArms,
+  topLevelEffectIn,
+} from "./lib/source.js";
 
 const SHAPE = readFileSync(new URL("../canvas/shapes/BbThreadShape.tsx", import.meta.url), "utf8");
 const BOOT = readFileSync(new URL("../canvas/panel/connection-boot.ts", import.meta.url), "utf8");
@@ -68,6 +78,30 @@ describe("BbThreadShape renders the pure decisions, not inline logic", () => {
     const calls = callsTo(SHAPE, "spawnPromptFor");
     expect(calls).toHaveLength(1);
     expect(calls[0]?.text).toContain("childrenOf(snapshot, shape.id)");
+  });
+});
+
+describe("the pane's ThreadChat gains the composer while focused (2026-09-15 trial)", () => {
+  it("picks the ThreadChat variant with a ternary on interaction.interactive, compact/timeline", () => {
+    const arms = ternaryArms(SHAPE, "chatVariant");
+    expect(arms.condition).toBe("interaction.interactive");
+    expect(arms.whenTrue).toBe('"compact"');
+    expect(arms.whenFalse).toBe('"timeline"');
+  });
+
+  it("passes both chatVariant and a focusRequest counter to the ThreadChat element", () => {
+    const attrs = jsxAttributes(SHAPE, "className");
+    expect(attrs.variant).toBe("chatVariant");
+    expect(attrs.focusRequest).toBe("focusRequest");
+  });
+
+  it("bumps focusRequest from a useEffect keyed on interaction.interactive, not unconditionally", () => {
+    const effect = topLevelEffectIn(SHAPE, "BbThreadShapeInner", "setFocusRequest");
+    expect(effect).toContain("[interaction.interactive]");
+    const statements = effectStatements(effect);
+    expect(statements).toHaveLength(1);
+    expect(statements[0]).toContain("if (interaction.interactive)");
+    expect(statements[0]).toContain("setFocusRequest((n) => n + 1)");
   });
 });
 

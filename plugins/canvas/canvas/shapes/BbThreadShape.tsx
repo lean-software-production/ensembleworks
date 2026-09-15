@@ -18,6 +18,20 @@
 // while it is not. There is no local idle/focused reducer here any more;
 // see bbthread-model.ts's PANE INTERACTION section.
 //
+// COMPOSER WHILE FOCUSED (2026-09-15, owner-approved trial): the pane is
+// read-only (`ThreadChat variant="timeline"`) while idle, and gains the host
+// composer (`variant="compact"`) the moment it becomes interactive — a
+// `focusRequest` counter (bumped on every idle→interactive transition) rides
+// along so a double-click lands the user directly in the composer rather
+// than just the transcript. Two known trade-offs, under live trial: (1) the
+// variant switch REMOUNTS `ThreadChat` (it is a different `variant`, not a
+// prop update), so the timeline's scroll position resets on both focus and
+// blur; (2) Escape is always forwarded straight through by the viewport
+// (canvas-react's yield rule never withholds it) and ends the pane's editing
+// state, so a host popover inside the composer that also listens for Escape
+// (an emoji picker, say) may drop the user out of the pane instead of just
+// closing itself.
+//
 // NOT AN EMBED (canvas-react's `registerShape` `{ embed: true }` flag):
 // `ThreadChat` keeps its own connection to the thread and re-fetches on
 // mount, exactly like RoadmapShape.tsx's own "not an embed" note — a
@@ -186,6 +200,17 @@ function BbThreadShapeInner({ shape, snapshot, editorState, getText, dispatch }:
   // not interactive. Named so the conditional itself (not just its use) is
   // independently assertable — see tests/bbthread-wiring.test.ts.
   const interactiveAttrs = interaction.interactive ? { "data-canvas-interactive": "" } : {};
+  // "compact" carries the host composer, "timeline" is read-only-transcript
+  // — see the module header's COMPOSER WHILE FOCUSED note.
+  const chatVariant = interaction.interactive ? "compact" : "timeline";
+
+  // Bumped once on every idle→interactive transition (never on a mount that
+  // starts non-interactive, and never on the interactive→idle transition
+  // back out) so a double-click into the pane also focuses the composer.
+  const [focusRequest, setFocusRequest] = useState(0);
+  useEffect(() => {
+    if (interaction.interactive) setFocusRequest((n) => n + 1);
+  }, [interaction.interactive]);
 
   const [options, setOptions] = useState<ThreadOption[] | null>(null);
   const [query, setQuery] = useState("");
@@ -301,7 +326,9 @@ function BbThreadShapeInner({ shape, snapshot, editorState, getText, dispatch }:
               </button>
             </div>
           )}
-          {pane.kind === "bound" && threadId !== null && <ThreadChat threadId={threadId} variant="timeline" layout="contained" className="bbthread-chat" />}
+          {pane.kind === "bound" && threadId !== null && (
+            <ThreadChat threadId={threadId} variant={chatVariant} layout="contained" className="bbthread-chat" focusRequest={focusRequest} />
+          )}
         </div>
         <div
           style={{
