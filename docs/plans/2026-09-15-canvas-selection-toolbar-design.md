@@ -1,6 +1,8 @@
 # Canvas v2 — compact selection toolbar and tool rail (design)
 
-Status: draft for review, 2026-09-15.
+Status: approved 2026-09-15 — variant A (light pill) + left tool rail, one PR.
+Clickable mockup: [2026-09-15-canvas-selection-toolbar-mockup.html](2026-09-15-canvas-selection-toolbar-mockup.html)
+(open in a browser; "A · Light pill" + "Left rail" is the chosen combination).
 
 ## Problem
 
@@ -47,11 +49,14 @@ kind.** At rest this is roughly a fifth of our panel's area.
 3. **Per-kind layout table** replaces the generic `AXIS_GROUPS` stacking.
 4. **Mixed selections show the intersection** of the kinds' axes, not the
    union.
-5. **Two deliveries from this one design:**
-   - **PR 1 — selection toolbar** (selection mode of `StylePanel`).
-   - **PR 2 — vertical tool rail + armed flyout**: `Toolbar` moves to a left
+5. **One PR, two parts** (bundled at owner's request, 2026-09-15). Land
+   Part 1 commits first so the branch is reviewable in order:
+   - **Part 1 — selection toolbar** (selection mode of `StylePanel`).
+   - **Part 2 — vertical tool rail + armed flyout**: `Toolbar` moves to a left
      vertical rail; armed-mode style options become a flyout beside the
      active tool button, replacing the floating top-centre armed panel.
+6. **Variant A chosen** over dark pill (FigJam-style) and hybrid inline
+   colours, after reviewing the mockup.
 
 The per-kind layout below is a first guess, explicitly expected to be tuned
 after dogfooding.
@@ -88,7 +93,7 @@ Changing `relevantAxes` itself from union to intersection is **not** part of
 this; only the toolbar's slot resolution intersects. (`relevantAxes` has
 other callers — style memory and the armed panel.)
 
-## PR 1 — selection toolbar (`canvas-ui`)
+## Part 1 — selection toolbar (`canvas-ui`)
 
 ### Rendering
 
@@ -143,7 +148,7 @@ other callers — style memory and the armed panel.)
   `aria-pressed` unchanged. Existing selectors keep resolving once the
   popover is open.
 
-## PR 2 — vertical tool rail + armed flyout
+## Part 2 — vertical tool rail + armed flyout
 
 - `Toolbar` renders as a vertical rail on the left edge (both hosts),
   vertically centred, same tool set and icons.
@@ -160,9 +165,9 @@ other callers — style memory and the armed panel.)
 
 ## Interaction contracts
 
-Both PRs touch `canvas-ui/src/` so the obligations in CLAUDE.md apply.
+Both parts touch `canvas-ui/src/` so the obligations in CLAUDE.md apply.
 
-PR 1:
+Part 1:
 
 - **Extend** `style-applies-to-selection` and `style-edit-arms-next-shape`:
   gesture becomes select → click `[data-style-trigger="colour"]` → click the
@@ -182,7 +187,7 @@ PR 1:
 - Update `e2e/tests/context-menu.spec.ts`, `locked-shape.spec.ts`; retire or
   rewrite `style-panel-scroll.spec.ts` if the wheel listener goes.
 
-PR 2:
+Part 2:
 
 - **Extend** `armed-style-applies-to-created-shape`: click rail tool → click
   blue in flyout → create shape → check colour.
