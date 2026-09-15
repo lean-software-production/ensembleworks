@@ -34,7 +34,9 @@ const containerStyle: CSSProperties = {
 	// Containing block for the rail's flyout.
 	position: 'relative',
 	display: 'inline-flex',
-	gap: 2,
+	// Lets a host's max-height shrink the rail (its scroller takes the overflow).
+	minHeight: 0,
+	boxSizing: 'border-box',
 	padding: 4,
 	borderRadius: 8,
 	background: UI_VARS.panelBg,
@@ -57,6 +59,12 @@ function buttonStyle(active: boolean): CSSProperties {
 	}
 }
 
+// A rail taller than its host scrolls rather than pushing tools off-edge.
+// Deliberately unpositioned: overflow clips only descendants contained inside
+// the scroller, and the flyout is contained by the rail around it.
+const RAIL_SCROLLER_STYLE: CSSProperties = { display: 'flex', flexDirection: 'column', gap: 2, minHeight: 0, overflowX: 'hidden', overflowY: 'auto' }
+const ROW_STYLE: CSSProperties = { display: 'flex', flexDirection: 'row', gap: 2 }
+
 const SEPARATOR_STYLE: CSSProperties = { height: 1, margin: '2px 4px', background: UI_VARS.panelBorder }
 
 export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'horizontal', nextShapeStyle, onArmStyle }: ToolbarProps) {
@@ -70,32 +78,34 @@ export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'hori
 			aria-orientation={orientation}
 			style={{ ...containerStyle, flexDirection: vertical ? 'column' : 'row', ...style }}
 		>
-			{TOOL_ORDER.map(({ id, label }) => {
-				const shortcut = TOOL_SHORTCUT_LABEL[id]
-				const title = shortcut ? `${label} (${shortcut})` : label
-				const active = activeToolId === id
-				return (
-					// Not positioned: the flyout inside resolves against the rail itself.
-					<div key={id} style={{ display: 'flex', flexDirection: 'column' }}>
-						<button
-							type="button"
-							data-canvas-tool={id}
-							aria-pressed={active}
-							aria-label={title}
-							title={title}
-							onClick={() => onSelectTool(id)}
-							style={buttonStyle(active)}
-						>
-							<ToolIcon tool={id} />
-						</button>
-						{active && showFlyout && (
-							<ArmedStyleFlyout toolId={id} nextShapeStyle={nextShapeStyle} onArmStyle={onArmStyle} />
-						)}
-						{/* Navigation tools (select, hand) sit apart from the creation tools on the rail. */}
-						{vertical && id === 'hand' && <div aria-hidden="true" style={SEPARATOR_STYLE} />}
-					</div>
-				)
-			})}
+			<div data-canvas-toolbar-scroller style={vertical ? RAIL_SCROLLER_STYLE : ROW_STYLE}>
+				{TOOL_ORDER.map(({ id, label }) => {
+					const shortcut = TOOL_SHORTCUT_LABEL[id]
+					const title = shortcut ? `${label} (${shortcut})` : label
+					const active = activeToolId === id
+					return (
+						// Not positioned: the flyout inside resolves against the rail itself.
+						<div key={id} style={{ display: 'flex', flexDirection: 'column' }}>
+							<button
+								type="button"
+								data-canvas-tool={id}
+								aria-pressed={active}
+								aria-label={title}
+								title={title}
+								onClick={() => onSelectTool(id)}
+								style={buttonStyle(active)}
+							>
+								<ToolIcon tool={id} />
+							</button>
+							{active && showFlyout && (
+								<ArmedStyleFlyout toolId={id} nextShapeStyle={nextShapeStyle} onArmStyle={onArmStyle} />
+							)}
+							{/* Navigation tools (select, hand) sit apart from the creation tools on the rail. */}
+							{vertical && id === 'hand' && <div aria-hidden="true" style={SEPARATOR_STYLE} />}
+						</div>
+					)
+				})}
+			</div>
 		</div>
 	)
 }

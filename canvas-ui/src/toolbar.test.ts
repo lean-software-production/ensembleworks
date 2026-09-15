@@ -94,6 +94,21 @@ console.log('ok: vertical rail with an armed flyout beside the active style tool
 	console.log('ok: rail flyout is centred on the rail and capped to the host height')
 }
 
+// A rail taller than its host scrolls its buttons instead of pushing tools
+// off-edge. The scroller is unpositioned, so the flyout (contained by the
+// rail itself) is never clipped by it.
+{
+	const container = openingTag(railHtml, 'data-canvas-toolbar')
+	assert.match(container, /position:relative/, `the rail is the flyout's containing block — ${container}`)
+	assert.match(container, /min-height:0/, `the rail can shrink to a host max-height — ${container}`)
+	const scroller = openingTag(railHtml, 'data-canvas-toolbar-scroller')
+	assert.match(scroller, /min-height:0/, `the scroller can shrink — ${scroller}`)
+	assert.match(scroller, /overflow-y:auto/, `the scroller scrolls — ${scroller}`)
+	assert.ok(!scroller.includes('position:'), `the scroller is not positioned, so it cannot clip the flyout — ${scroller}`)
+	assert.ok(railHtml.indexOf('data-canvas-toolbar-scroller') < railHtml.indexOf('data-canvas-tool="select"'), 'buttons live in the scroller')
+	console.log('ok: a tall rail scrolls its buttons without clipping the flyout')
+}
+
 // Frame arms only opacity, which the flyout omits: no empty card.
 {
 	const frameHtml = renderToStaticMarkup(createElement(ArmedStyleFlyout, { toolId: 'frame', nextShapeStyle: {}, onArmStyle: () => {} }))

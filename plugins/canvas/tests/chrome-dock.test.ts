@@ -29,7 +29,7 @@ import {
   CHROME_DOCK_TOOLBAR_OVERFLOW,
   CHROME_DOCK_Z_INDEX,
 } from "../canvas/pages/chrome-dock.js";
-import { chromeColumnStyle, chromeWrapperStyle } from "../canvas/panel/shared.js";
+import { chromeStageStyle, chromeToolbarStyle, chromeWrapperStyle } from "../canvas/panel/shared.js";
 
 const PANEL = stripComments(
   readFileSync(new URL("../canvas/panel/shared.ts", import.meta.url), "utf8") +
@@ -281,11 +281,35 @@ describe("the panel's wiring of the floating chrome", () => {
     expect(countInCode(PANEL, "nextShapeStyle={editorState.nextShapeStyle}")).toBe(1);
   });
 
-  it("makes the canvas column a size container, so the flyout caps to the pane", () => {
-    // canvas-ui's flyout caps its height with `cqh`; without a container that
-    // falls back to the window, which a short split pane would clip.
-    expect(chromeColumnStyle.containerType).toBe("size");
-    expect(countInCode(PANEL, "style={chromeColumnStyle}")).toBe(1);
+  it("makes the stage below the tab row the size container the rail centres in", () => {
+    // canvas-ui's flyout caps its height with `cqh` and is centred on the rail.
+    // If the container (and the rail's centring box) included the tab row, a
+    // short pane's flyout would reach up over the tabs; without a container at
+    // all, `cqh` falls back to the window.
+    expect(chromeStageStyle.containerType).toBe("size");
+    expect(countInCode(PANEL, "style={chromeStageStyle}")).toBe(1);
+    expect(countInCode(PANEL, "containerType")).toBe(1);
+    const stage = PANEL.indexOf("data-canvas-stage");
+    const row = PANEL.indexOf("data-canvas-page-tab-row");
+    expect(stage).toBeGreaterThan(row);
+    // The viewport and the dock are both inside the stage, still as siblings.
+    const viewport = PANEL.indexOf("<CanvasViewport");
+    const dock = PANEL.indexOf("<CanvasChrome {...props}");
+    expect(viewport).toBeGreaterThan(stage);
+    expect(dock).toBeGreaterThan(viewport);
+    const stageClose = PANEL.indexOf("</div>", dock);
+    expect(PANEL.indexOf("{pageSwitcher.overlays}")).toBeGreaterThan(stageClose);
+    // A definite height: a growing flex item, so size containment cannot
+    // collapse it to zero.
+    const stageTag = PANEL.slice(stage, PANEL.indexOf(">", stage));
+    expect(stageTag).toMatch(/flex-1/);
+    expect(stageTag).toMatch(/min-h-0/);
+  });
+
+  it("caps the rail card to the stage so a short pane scrolls the rail", () => {
+    expect(chromeToolbarStyle.maxHeight).toBe(`calc(100cqh - ${2 * CHROME_DOCK_EDGE_GAP_PX}px)`);
+    expect(chromeToolbarStyle.minHeight).toBe(0);
+    expect(chromeToolbarStyle.boxSizing).toBe("border-box");
   });
 
   it("names the overflow answer rather than guessing in CSS", () => {

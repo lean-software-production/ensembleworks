@@ -71,7 +71,7 @@
  * never surface a badge) and the badge itself, before v2 becomes the live
  * engine. Without it, v2 reintroduces the silent-dead-shape bug this fixed.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent } from 'react'
 // Visual chrome fidelity (polish/visual-chrome) — defines the `--canvas-*`
 // custom properties canvas-react's overlay falls back on (see that file's
 // own header): bridges them to this app's `--wm-*` brand tokens without
@@ -465,6 +465,20 @@ function ConnectionBanner({ state }: { readonly state: ConnectionState }) {
  * exposed by the PresenceStore wrapper today). */
 const PRESENCE_POLL_MS = 150
 
+// A definite-height flex item, so `container-type: size` never collapses it.
+const STAGE_STYLE: CSSProperties = { position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', containerType: 'size' }
+// Centred in the stage; taller than it, the rail scrolls its buttons.
+const RAIL_EDGE_GAP_PX = 10
+const RAIL_STYLE: CSSProperties = {
+	position: 'absolute',
+	left: RAIL_EDGE_GAP_PX,
+	top: '50%',
+	transform: 'translateY(-50%)',
+	maxHeight: `calc(100cqh - ${2 * RAIL_EDGE_GAP_PX}px)`,
+	zIndex: 600,
+	boxShadow: 'var(--canvas-ui-shadow, 0 2px 10px rgba(15,23,42,0.18))',
+}
+
 function CanvasV2Session({ session: mount }: { readonly session: Session }) {
 	const { editor, toolContext, tools, presenceStore, presencePublisher, selfKey } = mount
 	const editorState = useEditorState(editor)
@@ -695,50 +709,55 @@ function CanvasV2Session({ session: mount }: { readonly session: Session }) {
 			    the one place v2 needs an explicit background to stop reading as
 			    browser-default white. Consumes the SAME `--wm-bg-warm` token
 			    theme.css already defines — no second hex hardcoded here. */}
-			<div ref={containerRef} data-canvas-v2-viewport onDragOver={handleDragOver} onDrop={handleDrop} style={{ position: 'relative', flex: 1, minWidth: 0, background: 'var(--wm-bg-warm)' }}>
-				{/* Embeds ride the world-layer slot; collaborator cursors (Task G4)
-				    and peer editing indicators (Task F4) ride the screen-space
-				    overlay slot, painted above the selection overlay and below the
-				    style panel. `presenceStore.all()` is re-read every
-				    PRESENCE_POLL_MS tick (see that constant's doc comment).
-				    EditingIndicators reads the raw store (not `adaptPresence`'s
-				    Cursors-shaped narrowing) — it needs `Presence.editing`. */}
-				<CanvasSurface
-					session={session}
-					editorState={editorState}
-					snapshot={snapshot}
-					viewportSize={viewportSize}
-					worldLayers={
-						<EmbedLayer
-							toolContext={toolContext}
-							camera={editorState.camera}
-							viewportSize={viewportSize}
-							tick={tick}
-							suspendAfterTicks={SUSPEND_AFTER_TICKS}
-							lifecycleFor={canvasV2EmbedLifecycles.lifecycleFor}
-							dispatch={session.dispatch}
-						/>
-					}
-					overlays={
-						<>
-							<Cursors presence={adaptPresence(presenceStore.all())} selfKey={selfKey} camera={editorState.camera} viewportSize={viewportSize} />
-							<EditingIndicators presence={presenceStore.all()} selfKey={selfKey} snapshot={snapshot} camera={editorState.camera} viewportSize={viewportSize} />
-						</>
-					}
+			{/* The stage below the page tabs: the rail centres in it and it is the
+			    size container the rail and its flyout cap their height to, so
+			    neither can reach up over the tab row in a short window. */}
+			<div data-canvas-v2-stage style={STAGE_STYLE}>
+				<div ref={containerRef} data-canvas-v2-viewport onDragOver={handleDragOver} onDrop={handleDrop} style={{ position: 'relative', flex: 1, minWidth: 0, background: 'var(--wm-bg-warm)' }}>
+					{/* Embeds ride the world-layer slot; collaborator cursors (Task G4)
+					    and peer editing indicators (Task F4) ride the screen-space
+					    overlay slot, painted above the selection overlay and below the
+					    style panel. `presenceStore.all()` is re-read every
+					    PRESENCE_POLL_MS tick (see that constant's doc comment).
+					    EditingIndicators reads the raw store (not `adaptPresence`'s
+					    Cursors-shaped narrowing) — it needs `Presence.editing`. */}
+					<CanvasSurface
+						session={session}
+						editorState={editorState}
+						snapshot={snapshot}
+						viewportSize={viewportSize}
+						worldLayers={
+							<EmbedLayer
+								toolContext={toolContext}
+								camera={editorState.camera}
+								viewportSize={viewportSize}
+								tick={tick}
+								suspendAfterTicks={SUSPEND_AFTER_TICKS}
+								lifecycleFor={canvasV2EmbedLifecycles.lifecycleFor}
+								dispatch={session.dispatch}
+							/>
+						}
+						overlays={
+							<>
+								<Cursors presence={adaptPresence(presenceStore.all())} selfKey={selfKey} camera={editorState.camera} viewportSize={viewportSize} />
+								<EditingIndicators presence={presenceStore.all()} selfKey={selfKey} snapshot={snapshot} camera={editorState.camera} viewportSize={viewportSize} />
+							</>
+						}
+					/>
+				</div>
+				{/* A left rail over the canvas, in the stage rather than the
+				    viewport container: the session's keydown listener ignores targets
+				    inside that container, so a focused rail button there would stop
+				    forwarding shortcuts. */}
+				<Toolbar
+					orientation="vertical"
+					activeToolId={session.activeToolId}
+					onSelectTool={session.selectTool}
+					nextShapeStyle={editorState.nextShapeStyle}
+					onArmStyle={session.onArmStyle}
+					style={RAIL_STYLE}
 				/>
 			</div>
-			{/* A left rail over the canvas, in the fixed root rather than the
-			    viewport container: the session's keydown listener ignores targets
-			    inside that container, so a focused rail button there would stop
-			    forwarding shortcuts. */}
-			<Toolbar
-				orientation="vertical"
-				activeToolId={session.activeToolId}
-				onSelectTool={session.selectTool}
-				nextShapeStyle={editorState.nextShapeStyle}
-				onArmStyle={session.onArmStyle}
-				style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', zIndex: 600, boxShadow: 'var(--canvas-ui-shadow, 0 2px 10px rgba(15,23,42,0.18))' }}
-			/>
 		</div>
 	)
 }

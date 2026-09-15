@@ -48,9 +48,10 @@ function flyoutAxes(toolId: ToolId): StyleAxis[] {
 const CARD_STYLE: CSSProperties = {
 	position: 'absolute',
 	// Beside the rail and centred on it rather than on the button: hosts
-	// centre the rail vertically, so a card centred on it and capped to the
-	// host's height can never leave the host, however tall (geo ≈ 490px).
-	// `cqh` reads the host's size container, else falls back to the viewport.
+	// centre the rail vertically in a size container (the canvas area below
+	// their page tabs), so a card centred on it and capped to that height can
+	// never leave it, however tall (geo ≈ 490px). Without a container, `cqh`
+	// falls back to the viewport.
 	left: 'calc(100% + 10px)',
 	top: '50%',
 	transform: 'translateY(-50%)',

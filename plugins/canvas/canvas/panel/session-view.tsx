@@ -10,7 +10,7 @@ import type { CanvasAgentLink } from "../wire.js";
 import { SpeakerRings } from "../roster-ui.js";
 import {
   chromeCardColumnStyle,
-  chromeColumnStyle,
+  chromeStageStyle,
   chromeTabRowStyle,
   chromeToolbarStyle,
   chromeWrapperStyle,
@@ -52,12 +52,14 @@ export function SessionView(props: SessionViewProps) {
   return (
     <div ref={props.panelRef} data-canvas-themed style={canvasThemeStyle} className="flex h-full min-h-0 w-full flex-row">
       <style>{shapeThemeCss}</style>
-      <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col" style={chromeColumnStyle}>
+      <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <div data-canvas-page-tab-row style={chromeTabRowStyle}>
           {pageSwitcher.tabs}
         </div>
-        <CanvasViewport {...props} />
-        <CanvasChrome {...props} />
+        <div data-canvas-stage className="relative flex min-h-0 flex-1 flex-col" style={chromeStageStyle}>
+          <CanvasViewport {...props} />
+          <CanvasChrome {...props} />
+        </div>
         {pageSwitcher.overlays}
       </div>
     </div>

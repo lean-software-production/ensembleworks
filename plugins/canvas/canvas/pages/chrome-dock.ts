@@ -69,8 +69,7 @@ export const CHROME_DOCK_Z_INDEX = 40;
  *
  * THE REGRESSION THIS EXISTS TO PREVENT is invisible to every test in this
  * project and would be very visible to a user: the wrapper sits over the
- * drawing surface, so if it (or a later stretched version of it) took pointer
- * events, gestures starting there would hit the wrapper instead of <Viewport>,
+ * drawing surface, so if it took pointer events, gestures starting there would hit the wrapper instead of <Viewport>,
  * produce nothing, and look like the canvas was broken.
  *
  * So: the wrapper is transparent to the pointer and only the CARD takes
@@ -92,7 +91,9 @@ export const CHROME_DOCK_POINTER_EVENTS: {
  *
  * NOWRAP. The rail is one vertical column on the left edge; wrapping would
  * grow a second column over the canvas and push the armed-style flyout beside
- * it further across the drawing surface. Nine 32px tools fit any usable pane.
+ * it further across the drawing surface. Nine 32px tools need about 330px, so
+ * a shorter pane does not fit them: the rail is capped to the stage below the
+ * tab row and canvas-ui's rail scrolls its buttons instead.
  *
  * THE PAGE TAB STRIP SCROLLS (`overflowX: "auto"` in
  * canvas/pages/PageSwitcher.tsx) because pages are UNBOUNDED.
