@@ -4,7 +4,7 @@ import { createElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import { createToolContext, createToolSet, createInitialToolStates, Editor } from '@ensembleworks/canvas-editor'
-import { CanvasSurface } from './CanvasSurface.js'
+import { CanvasSurface, effectiveOpenSlot, selectionKey } from './CanvasSurface.js'
 import type { CanvasSession } from './use-canvas-session.js'
 
 const doc = LoroCanvasDoc.create({ peerId: 1n })
@@ -46,3 +46,10 @@ assert.ok(html.includes('data-host-overlay'), 'renders the host overlay slot')
 assert.ok(html.indexOf('data-host-overlay') < html.indexOf('data-style-panel-mode'), 'host overlays paint below the style panel')
 console.log('ok: CanvasSurface renders shapes, host overlays and the style panel')
 toolContext.dispose()
+
+const sel = new Set(['shape:a', 'shape:b'])
+const state = { slot: 'color' as const, selectionKey: selectionKey(sel) }
+assert.equal(effectiveOpenSlot(state, new Set(['shape:b', 'shape:a']), false), 'color', 'same selection (any order) keeps it open')
+assert.equal(effectiveOpenSlot(state, new Set(['shape:a']), false), null, 'selection change closes it')
+assert.equal(effectiveOpenSlot(state, sel, true), null, 'a gesture closes it')
+console.log('ok: open popover closes on selection change and gesture')
