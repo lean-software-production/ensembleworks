@@ -213,3 +213,71 @@ Part 2:
 - Legacy tldraw `ContextualStylePanel` in `client/src/chrome/`.
 - Changing `relevantAxes` semantics.
 - Font size steppers (Mural's `A−`/`A+`) — revisit after dogfooding.
+
+## Execution notes (2026-09-15)
+
+### Visual check (web app, v2 engine, Playwright 1280x720)
+
+Screenshots in `~/.bb/thread-storage/thr_jrjdkpxprn/screenshots/`. They were
+taken with a throwaway spec against the e2e webServer and the room ids
+`vis-*`. The spec was not committed.
+
+- `01-note-closed.png`: the pill (colour, font, size `M`, align, `⋯`) sits
+  centred about 8px above the note. It does not overlap the note.
+- `02-note-colour-open.png`: the colour popover opens upward, centred on its
+  trigger, and stays clear of the note. The 13th swatch (white) wraps onto a
+  row of its own.
+- `03-geo.png`: the geo bar (shape, colour, fill, dash, align, `⋯`) sits above
+  the resize handles.
+- `04-geo-arrow-mixed.png`: the shapes were a geo plus a seeded `arrow`
+  (`props.end`). The bar shows only the shared slots (colour, fill, dash,
+  `⋯`), centred over the union bounds.
+- `05-note-more-open.png`: `⋯` opens an opacity slider above the bar. The
+  slider has no label.
+- `06-armed-note.png`: the note tool is active on the rail. Its flyout is to
+  the right, centred on the rail (see the Task 6 ruling), and inside the
+  viewport.
+- `07-armed-geo.png`: the geo flyout is about 488px tall (y 117 to 604) and
+  fits in the viewport.
+- `08-short-window-armed-geo.png` (1280x420): the flyout is capped and
+  scrolls (the `Size` row is cut at the bottom edge). **Defect:** its top edge
+  (y≈13) covers the page-switcher row, including the tab and `+`. The rail
+  itself (y≈52) is clear of that row.
+- `09-note-near-top.png`: the note is at y=10. The bar flips below it and the
+  colour popover opens further down, away from the note.
+
+At 720px the rail (y 201 to 519) is clear of the page switcher. No bar
+overlapped its selection, and nothing was clipped except in 08.
+
+### RED evidence
+
+- Task 4, `style-popover-escape` against unfixed code:
+  `Error: expected Escape to close the style popover, but "color" is still open`.
+  The reviewer's revert of the `onKeyDown` handler reproduced the same error.
+- Task 5, `armed-style-applies-to-created-shape` migrated to the rail flyout,
+  before the implementation:
+  `Error: locator.boundingBox: Test timeout of 60000ms exceeded.` while
+  `waiting for locator('[data-canvas-toolbar] [data-style-panel-mode="armed"] [data-style-control="color"] [data-style-value="blue"]')`.
+  The brief expected "has no bounding box", but the element did not exist at
+  all, so the locator waited until the timeout. The cause is the same.
+
+### Controller rulings
+
+- Popover max size is 200x220 and the flip headroom is 284px. The arrow `⋯`
+  popover measures about 206px, so the brief's 180 was too small.
+- The Escape focus return looks up the trigger inside its own panel
+  (`e.currentTarget.querySelector`), not by a page-global id, so two canvases
+  on one page (bb split panes) don't collide.
+- The interim horizontal flyout used `side:'end'` because measured e2e
+  collisions ruled out placing it below. Task 6 removed it once both hosts
+  moved to the vertical rail.
+- The rail flyout is centred on the rail, not level with the active button,
+  with a `calc(100cqh - 24px)` cap and scroll. Top-edge anchoring can't be
+  capped in pure CSS. Screenshot 08 shows this is the cause of the
+  short-window overlap with the page-switcher row.
+- The e2e cancellation drag moved from (200,500) to (500,500) because the
+  armed-arrow flyout covers x 61 to 281.
+- Test regexes don't depend on attribute order. The Task 5 WIP commits were
+  squashed with `git reset --soft`.
+
+Plugin visual check in a short bb split pane: pending owner.
