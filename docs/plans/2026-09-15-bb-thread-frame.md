@@ -58,3 +58,32 @@ current already-low number would make `(frozen.totalDebt - result.totalDebt) / f
 moment nothing new is added — failing a check whose job is to catch NEW debt, not to demand improvement on
 top of improvement. `npm run audit:quality:compare` passes as of this note (99.37% improvement vs `ee79ab4`,
 0% drift on all three invariants).
+
+## Pane input routing (2026-09-15, follow-up after live test)
+
+Scrolling and selecting inside the pane did not work. Causes: the viewport's native non-passive `wheel`
+listener runs before any React-level `stopPropagation`; pointer capture on pointerdown retargets `click`/
+`dblclick` at the viewport so the body's double-click never fires; the shape wrapper sets `user-select: none`;
+and while `editingId` is set the session drops every shortcut including Escape (text shapes exit editing via
+their textarea's own Escape/blur, which the pane has none of).
+
+Decision: "interacting with a thread pane" is an EDITOR STATE, decided at the input funnel, not fought from
+inside the body.
+
+- `EditorState.editingRegion: 'name' | 'body' | null` (null iff `editingId` is null). `BeginEdit` gains
+  `region?: 'name' | 'body'` (default `'body'`). Frame header rename sends `'name'`; `FrameNameEditor` mounts
+  only for `'name'`.
+- Select tool: a double-click inside a bbthread's pane (`bbthreadPaneLocalBounds`) → `SetSelection` +
+  `BeginEdit { region: 'body' }`. A pointerdown on anything other than the editing shape ends the edit
+  (`EndEdit` first, then the normal pointing transition). Escape while editing → `EndEdit` (new `endEdit`
+  shortcut command; `resolveShortcut` no longer returns null for Escape while editing).
+- Viewport yield rule (canvas-react, one place): if a DOM event's target is inside an element carrying
+  `data-canvas-interactive`, pointer events are neither captured nor forwarded, wheel is neither forwarded nor
+  `preventDefault`ed, and keys are forwarded only when `key === 'Escape'`.
+- Body: sets `data-canvas-interactive` and `user-select: text` on the pane only while
+  `editingId === shape.id && editingRegion === 'body'`; otherwise shows a "Double-click to read · Esc to leave"
+  hint. Its memo comparator includes `editingId`/`editingRegion`. The local idle/focused reducer is removed.
+
+Contracts (FSM): `bbthread-pane-double-click-begins-editing`, `bbthread-escape-ends-editing`,
+`editing-ends-on-outside-click` (text shape; today the FSM never ends an edit on an outside click — the DOM
+textarea blur does). All three RED before the change.
