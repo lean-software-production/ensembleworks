@@ -17,7 +17,7 @@
     "name": "Canvas",
     "description": "A multiplayer infinite canvas, synced across every open bb client.",
     "branding": {
-      "icon": "PenTool"
+      "icon": "./assets/icon.svg"
     },
     "server": "./server.ts",
     "app": "./app.tsx"
