@@ -1,6 +1,6 @@
 // Run: bun src/StylePanel.test.ts
 // Component test for the style panel's RENDERING: the selection toolbar's
-// triggers and popover, and the armed-tool panel. renderToStaticMarkup (this
+// triggers and popover. renderToStaticMarkup (this
 // house's usual rig for a pure-render component, no DOM emulator needed) with
 // props-injected selection + snapshot and stubbed callbacks. StylePanel only
 // ever calls the injected props; the real dispatch wiring is proven by
@@ -46,10 +46,7 @@ function baseProps() {
 		camera: CAMERA,
 		viewportSize: VIEWPORT,
 		isGesturing: false,
-		activeToolId: 'select' as const,
-		nextShapeStyle: {},
 		onStyleChange: noop,
-		onArmStyle: noop,
 		openSlot: null as ToolbarSlotId | null,
 		onOpenSlotChange: noop,
 	}
@@ -267,31 +264,22 @@ function findTriggerOnClick(node: unknown, slot: string): (() => void) | undefin
 	console.log('ok: isGesturing — panel hidden mid-gesture')
 }
 
-// A LIVE SELECTION plus an armed tool: selection wins, and a swatch click in
-// the open popover calls onStyleChange, never onArmStyle.
+// A swatch click in the open popover calls onStyleChange.
 {
 	const s = shape({ id: 'shape:n7', kind: 'note', props: { color: 'blue' } })
-	const armCalls: Array<{ axis: string; value: unknown }> = []
 	const styleChangeCalls: Array<{ axis: string; value: unknown }> = []
 	const props = {
 		...baseProps(),
 		selection: new Set([s.id]),
 		snapshot: docOf(s),
-		activeToolId: 'geo' as const,
-		nextShapeStyle: { color: 'red' },
 		openSlot: 'color' as const,
 		onStyleChange: (axis: string, value: unknown) => styleChangeCalls.push({ axis, value }),
-		onArmStyle: (axis: string, value: unknown) => armCalls.push({ axis, value }),
 	}
-	const html = renderToStaticMarkup(createElement(StylePanel, props))
-	assert.ok(html.includes('data-style-panel-mode="selection"'), `selection wins over an armed tool — html: ${html}`)
-	assert.ok(!html.includes('data-style-panel-mode="armed"'), `armed mode does NOT render when a selection exists — html: ${html}`)
 	const onClick = findStyleValueOnClick(StylePanel(props), 'red')
 	assert.ok(onClick, `selection popover's red color swatch has an onClick handler`)
 	onClick!()
-	assert.deepEqual(styleChangeCalls, [{ axis: 'color', value: 'red' }], `selection-mode click calls onStyleChange — styleChangeCalls: ${JSON.stringify(styleChangeCalls)}`)
-	assert.equal(armCalls.length, 0, `onArmStyle must not be called — armCalls: ${JSON.stringify(armCalls)}`)
-	console.log('ok: selection + armed tool — selection wins (SetStyle); arming does not override')
+	assert.deepEqual(styleChangeCalls, [{ axis: 'color', value: 'red' }], `popover click calls onStyleChange — styleChangeCalls: ${JSON.stringify(styleChangeCalls)}`)
+	console.log('ok: selection popover click calls onStyleChange (SetStyle)')
 }
 
 // A geo selection's popovers render icon glyphs for every icon-able axis.
@@ -342,77 +330,17 @@ function findTriggerOnClick(node: unknown, slot: string): (() => void) | undefin
 }
 
 // ============================================================================
-// Armed mode (empty selection, a style-bearing tool armed) and the empty case
+// Empty selection
 // ============================================================================
 
-// Empty selection AND no armed style-bearing tool: renders nothing.
+// Empty selection renders nothing, even with a style-bearing tool armed: the
+// armed options live beside the tool toolbar (toolbar.test.ts). The stale
+// prop is spread in to prove the panel ignores it.
 {
-	const html = renderToStaticMarkup(createElement(StylePanel, baseProps()))
-	assert.equal(html, '', `empty selection, no armed style tool — renders nothing — html: ${html}`)
-	console.log('ok: empty selection, select tool active — panel renders nothing')
+	const staleArmedTool = { activeToolId: 'note' }
+	const html = renderToStaticMarkup(createElement(StylePanel, { ...baseProps(), ...staleArmedTool }))
+	assert.equal(html, '', `empty selection with the note tool armed renders nothing — html: ${html}`)
+	console.log('ok: empty selection — panel renders nothing, even with a style tool armed')
 }
 
-// Armed geo tool, empty selection: the armed panel renders geo-relevant axes.
-{
-	const html = renderToStaticMarkup(createElement(StylePanel, { ...baseProps(), activeToolId: 'geo' }))
-	assert.ok(html.includes('data-style-panel-mode="armed"'), `armed geo tool — panel renders in armed mode — html: ${html}`)
-	for (const axis of ['color', 'fill', 'dash', 'geo']) {
-		assert.ok(html.includes(`data-style-control="${axis}"`), `armed geo — ${axis} control renders — html: ${html}`)
-	}
-	console.log('ok: armed geo tool, empty selection — armed panel renders geo-relevant axes')
-}
-
-// Armed mode's blue swatch click calls onArmStyle — never onStyleChange.
-{
-	const armCalls: Array<{ axis: string; value: unknown }> = []
-	const styleChangeCalls: Array<{ axis: string; value: unknown }> = []
-	const tree = StylePanel({
-		...baseProps(),
-		activeToolId: 'geo',
-		onStyleChange: (axis, value) => styleChangeCalls.push({ axis, value }),
-		onArmStyle: (axis, value) => armCalls.push({ axis, value }),
-	})
-	const onClick = findStyleValueOnClick(tree, 'blue')
-	assert.ok(onClick, `armed panel's blue color swatch has an onClick handler`)
-	onClick!()
-	assert.deepEqual(armCalls, [{ axis: 'color', value: 'blue' }], `armed click calls onArmStyle — armCalls: ${JSON.stringify(armCalls)}`)
-	assert.equal(styleChangeCalls.length, 0, `armed click never calls onStyleChange — styleChangeCalls: ${JSON.stringify(styleChangeCalls)}`)
-	console.log('ok: armed mode click calls onArmStyle (SetNextStyle), never onStyleChange (SetStyle)')
-}
-
-// Empty selection AND the hand tool: renders nothing.
-{
-	const html = renderToStaticMarkup(createElement(StylePanel, { ...baseProps(), activeToolId: 'hand' }))
-	assert.equal(html, '', `empty selection, hand tool active — renders nothing — html: ${html}`)
-	console.log('ok: empty selection, hand tool active — panel renders nothing')
-}
-
-// The armed panel reflects nextShapeStyle's current values, not the defaults.
-{
-	const html = renderToStaticMarkup(createElement(StylePanel, { ...baseProps(), activeToolId: 'geo', nextShapeStyle: { color: 'red' } }))
-	assert.ok(
-		/data-style-value="red"[^>]*data-current="true"|data-current="true"[^>]*data-style-value="red"/.test(html),
-		`armed nextShapeStyle.color:'red' is marked current — html: ${html}`,
-	)
-	assert.ok(
-		!/data-style-value="blue"[^>]*data-current="true"|data-current="true"[^>]*data-style-value="blue"/.test(html),
-		`armed panel does not ALSO mark blue current — html: ${html}`,
-	)
-	console.log('ok: armed panel — nextShapeStyle.color:red is marked current, not a default')
-}
-
-// A fresh armed mount (empty nextShapeStyle) shows the tool kind's real defaults.
-{
-	const html = renderToStaticMarkup(createElement(StylePanel, { ...baseProps(), activeToolId: 'geo' }))
-	assert.ok(
-		/data-style-value="black"[^>]*data-current="true"|data-current="true"[^>]*data-style-value="black"/.test(html),
-		`armed geo panel, nothing armed yet — color defaults to 'black' marked current — html: ${html}`,
-	)
-	assert.ok(
-		/data-style-value="rectangle"[^>]*data-current="true"|data-current="true"[^>]*data-style-value="rectangle"/.test(html),
-		`armed geo panel, nothing armed yet — geo variant defaults to 'rectangle' marked current — html: ${html}`,
-	)
-	console.log("ok: armed panel — a fresh mount shows the tool kind's real defaults marked current")
-}
-
-console.log('ok: StylePanel — selection toolbar triggers/popover and armed-tool panel')
+console.log('ok: StylePanel — selection toolbar triggers and popover')

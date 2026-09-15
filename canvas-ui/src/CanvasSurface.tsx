@@ -84,10 +84,7 @@ export function CanvasSurface({ session, editorState, snapshot, viewportSize, wo
 				camera={editorState.camera}
 				viewportSize={viewportSize}
 				isGesturing={session.isGesturing}
-				activeToolId={session.activeToolId}
-				nextShapeStyle={editorState.nextShapeStyle}
 				onStyleChange={session.onStyleChange}
-				onArmStyle={session.onArmStyle}
 				openSlot={openSlot}
 				onOpenSlotChange={onOpenSlotChange}
 			/>

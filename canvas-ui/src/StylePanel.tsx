@@ -1,15 +1,9 @@
-// Contextual style chrome for the canvas, in two mutually exclusive modes:
-//
-// SELECTION MODE (`selection.size > 0`): a one-row toolbar anchored to the
+// Selection style chrome for the canvas: a one-row toolbar anchored to the
 // selection's screen bounds. `toolbarSlots` (canvas-editor) decides which
 // triggers show; each trigger's face shows the slot's current value, and the
 // open slot (`openSlot`, owned by the host) renders a popover of `AxisRow`
 // value controls. A value click calls `onStyleChange` (-> `SetStyle`).
-//
-// ARMED MODE (empty selection, a style-bearing tool armed): a stacked panel of
-// `nextShapeStyle`'s values under the toolbar; a click calls `onArmStyle`
-// (-> `SetNextStyle`). Selection is checked first, so arming a tool never
-// overrides styling what is selected.
+// Next-shape (armed) style lives beside the tool toolbar (ArmedStyleFlyout).
 //
 // Hidden entirely mid-gesture so it never chases a drag. Stays hook-free:
 // StylePanel.test.ts calls it as a plain function to reach real onClicks.
@@ -17,17 +11,12 @@ import { type CSSProperties, type ReactNode } from 'react'
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 import {
 	currentValue,
-	kindDefault,
-	kindForTool,
-	relevantAxesForTool,
 	toolbarSlots,
 	worldToScreen,
 	type Camera,
-	type StyleAxis,
 	type StyleValue,
 	type ToolbarSlot,
 	type ToolbarSlotId,
-	type ToolId,
 } from '@ensembleworks/canvas-editor'
 import { combinedWorldBounds } from '@ensembleworks/canvas-react'
 import { AXIS_LABELS, AxisRow, axisIcon, colorSwatchHex, humanize, ICON_BUTTON_PX, SWATCH_GAP_PX, SWATCH_PX, type StyleChange } from './style-controls.js'
@@ -42,16 +31,9 @@ export interface StylePanelProps {
 	/** Set on pointerdown, cleared on pointerup/cancel — the panel disappears
 	 * rather than trailing a live drag. */
 	readonly isGesturing: boolean
-	/** The armed tool; only consulted when `selection` is empty. */
-	readonly activeToolId: ToolId
-	/** Armed-mode value source; selection mode reads live shape props instead. */
-	readonly nextShapeStyle: Record<string, unknown>
-	/** Selection mode: `SetStyle` over the selection (and next-shape style
+	/** `SetStyle` over the selection (and next-shape style
 	 * memory unless `options.onlySelection`, i.e. Ctrl/Cmd held). */
 	readonly onStyleChange: StyleChange
-	/** Armed mode: `SetNextStyle`. A separate prop so a wrong-mode wiring bug
-	 * shows up as the wrong callback being called. */
-	readonly onArmStyle: StyleChange
 	/** The selection toolbar slot whose popover is open. Host-owned so it can
 	 * close on Escape, outside click or selection change. */
 	readonly openSlot: ToolbarSlotId | null
@@ -332,61 +314,8 @@ function computeBarBox(
 	return { left: position.left - width / 2, top: side === 'above' ? position.top - BAR_HEIGHT : position.top, side }
 }
 
-const triggerDomId = (slot: ToolbarSlotId) => `ew-style-trigger-${slot}`
-
 function stopPropagation(e: { stopPropagation(): void }): void {
 	e.stopPropagation()
-}
-
-// ---------------------------------------------------------------------------
-// Armed panel (stacked rows, top-centre under the toolbar)
-// ---------------------------------------------------------------------------
-
-const AXIS_GROUPS: readonly (readonly StyleAxis[])[] = [
-	['color'],
-	['fill', 'dash'],
-	['size', 'font'],
-	['align', 'verticalAlign', 'textAlign'],
-	['geo'],
-	['arrowheadStart', 'arrowheadEnd'],
-	['opacity'],
-]
-
-const ARMED_PANEL_STYLE: CSSProperties = {
-	position: 'absolute',
-	display: 'flex',
-	flexDirection: 'column',
-	gap: 8,
-	padding: '8px 10px',
-	background: UI_VARS.panelBg,
-	border: `1px solid ${UI_VARS.panelBorder}`,
-	borderRadius: 8,
-	boxShadow: UI_VARS.shadow,
-	fontFamily: 'system-ui, sans-serif',
-	fontSize: 11,
-	color: UI_VARS.panelFg,
-	pointerEvents: 'none',
-	zIndex: 500,
-	minWidth: 160,
-	// 340 fits all 13 colour swatches on one row inside padding and border.
-	maxWidth: 340,
-	maxHeight: 480,
-	overflowY: 'auto',
-	boxSizing: 'border-box',
-	left: '50%',
-	top: MARGIN,
-	transform: 'translateX(-50%)',
-}
-
-const ROW_GROUP_STYLE: CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
-
-/** `nextShapeStyle[axis]` if set, else the armed tool's kind default — so a
- * fresh mount shows what the shape would actually render with. */
-function armedValue(nextShapeStyle: Record<string, unknown>, toolId: ToolId, axis: StyleAxis): StyleValue | undefined {
-	const raw = nextShapeStyle[axis]
-	if (typeof raw === 'string' || typeof raw === 'number') return raw
-	const kind = kindForTool(toolId)
-	return kind ? kindDefault(kind, axis) : undefined
 }
 
 export function StylePanel({
@@ -395,127 +324,98 @@ export function StylePanel({
 	camera,
 	viewportSize,
 	isGesturing,
-	activeToolId,
-	nextShapeStyle,
 	onStyleChange,
-	onArmStyle,
 	openSlot,
 	onOpenSlotChange,
 }: StylePanelProps) {
-	if (isGesturing) return null
+	if (isGesturing || selection.size === 0) return null
 
-	if (selection.size > 0) {
-		const shapes: Shape[] = []
-		for (const id of selection) {
-			const shape = snapshot.byId.get(id)
-			if (shape) shapes.push(shape)
+	const shapes: Shape[] = []
+	for (const id of selection) {
+		const shape = snapshot.byId.get(id)
+		if (shape) shapes.push(shape)
+	}
+	const slots = toolbarSlots(shapes.map((s) => s.kind))
+	if (slots.length === 0) return null
+
+	const width = barWidth(slots)
+	const bar = computeBarBox(snapshot, selection, camera, viewportSize, width)
+	const openIndex = slots.findIndex((s) => s.id === openSlot)
+	const open = openIndex >= 0 ? slots[openIndex]! : undefined
+
+	let popover: ReactNode = null
+	if (open) {
+		const pos = popoverPosition(
+			{ left: bar.left, top: bar.top, width, height: BAR_HEIGHT },
+			{ left: bar.left + triggerOffset(slots, openIndex), width: TRIGGER_WIDTH_PX },
+			POPOVER_MAX,
+			viewportSize,
+			bar.side,
+			MARGIN,
+		)
+		// The real, usually shorter card hugs the bar-side edge of its box so it
+		// stays by its trigger; overflowY makes a capped height real.
+		const placement: CSSProperties = {
+			left: pos.left + POPOVER_MAX.width / 2,
+			top: bar.side === 'above' ? pos.top + pos.maxHeight : pos.top,
+			transform: bar.side === 'above' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
+			maxHeight: pos.maxHeight,
 		}
-		const slots = toolbarSlots(shapes.map((s) => s.kind))
-		if (slots.length === 0) return null
-
-		const width = barWidth(slots)
-		const bar = computeBarBox(snapshot, selection, camera, viewportSize, width)
-		const openIndex = slots.findIndex((s) => s.id === openSlot)
-		const open = openIndex >= 0 ? slots[openIndex]! : undefined
-
-		let popover: ReactNode = null
-		if (open) {
-			const pos = popoverPosition(
-				{ left: bar.left, top: bar.top, width, height: BAR_HEIGHT },
-				{ left: bar.left + triggerOffset(slots, openIndex), width: TRIGGER_WIDTH_PX },
-				POPOVER_MAX,
-				viewportSize,
-				bar.side,
-				MARGIN,
-			)
-			// The real, usually shorter card hugs the bar-side edge of its box so it
-			// stays by its trigger; overflowY makes a capped height real.
-			const placement: CSSProperties = {
-				left: pos.left + POPOVER_MAX.width / 2,
-				top: bar.side === 'above' ? pos.top + pos.maxHeight : pos.top,
-				transform: bar.side === 'above' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
-				maxHeight: pos.maxHeight,
-			}
-			const fixedWidth = POPOVER_WIDTH_BY_SLOT[open.id]
-			popover = (
-				<div data-style-popover={open.id} style={{ ...POPOVER_STYLE, ...placement, ...(fixedWidth ? { width: fixedWidth } : {}) }}>
-					{open.axes.map((axis) => (
-						<AxisRow key={axis} axis={axis} value={currentValue(shapes, axis)} onStyleChange={onStyleChange} showLabel={open.axes.length > 1} />
-					))}
-				</div>
-			)
-		}
-
-		return (
-			<div
-				data-testid="ew-style-panel"
-				data-canvas-v2-style-panel
-				data-style-panel-mode="selection"
-				onPointerDown={stopPropagation}
-				onPointerUp={stopPropagation}
-				onKeyDown={(e) => {
-					if (e.key !== 'Escape' || openSlot === null) return
-					// Stop here so neither the Viewport nor the session's document listener
-					// treats this Escape as a canvas cancel.
-					e.stopPropagation()
-					e.preventDefault()
-					// Focus goes back to the trigger rather than the unmounting popover.
-					if (typeof document !== 'undefined') document.getElementById(triggerDomId(openSlot))?.focus()
-					onOpenSlotChange(null)
-				}}
-				style={WRAPPER_STYLE}
-			>
-				<div style={{ ...BAR_STYLE, left: bar.left, top: bar.top, width }}>
-					{slots.flatMap((slot) => {
-						const value = slot.id === 'more' ? undefined : currentValue(shapes, slot.axes[0]!)
-						const isOpen = openSlot === slot.id
-						const title = triggerTitle(slot, value)
-						const trigger = (
-							<button
-								key={slot.id}
-								id={triggerDomId(slot.id)}
-								type="button"
-								data-style-trigger={slot.id}
-								aria-haspopup="true"
-								aria-expanded={isOpen}
-								data-style-mixed={value === 'mixed' ? 'true' : undefined}
-								title={title}
-								aria-label={title}
-								style={triggerStyle(isOpen)}
-								onClick={() => onOpenSlotChange(isOpen ? null : slot.id)}
-							>
-								{triggerFace(slot, value)}
-							</button>
-						)
-						return slot.id === 'more' ? [<div key="divider" style={DIVIDER_STYLE} />, trigger] : [trigger]
-					})}
-				</div>
-				{popover}
+		const fixedWidth = POPOVER_WIDTH_BY_SLOT[open.id]
+		popover = (
+			<div data-style-popover={open.id} style={{ ...POPOVER_STYLE, ...placement, ...(fixedWidth ? { width: fixedWidth } : {}) }}>
+				{open.axes.map((axis) => (
+					<AxisRow key={axis} axis={axis} value={currentValue(shapes, axis)} onStyleChange={onStyleChange} showLabel={open.axes.length > 1} />
+				))}
 			</div>
 		)
 	}
-
-	const armedAxes = new Set(relevantAxesForTool(activeToolId))
-	if (armedAxes.size === 0) return null
-
-	const armedGroups = AXIS_GROUPS.map((group) => group.filter((axis) => armedAxes.has(axis))).filter((group) => group.length > 0)
 
 	return (
 		<div
 			data-testid="ew-style-panel"
 			data-canvas-v2-style-panel
-			data-style-panel-mode="armed"
+			data-style-panel-mode="selection"
 			onPointerDown={stopPropagation}
 			onPointerUp={stopPropagation}
-			style={ARMED_PANEL_STYLE}
+			onKeyDown={(e) => {
+				if (e.key !== 'Escape' || openSlot === null) return
+				// Stop here so neither the Viewport nor the session's document listener
+				// treats this Escape as a canvas cancel.
+				e.stopPropagation()
+				e.preventDefault()
+				// Focus goes back to the trigger rather than the unmounting popover.
+				// Scoped to this panel so two canvases on one page never cross-focus.
+				e.currentTarget.querySelector<HTMLElement>(`[data-style-trigger="${openSlot}"]`)?.focus()
+				onOpenSlotChange(null)
+			}}
+			style={WRAPPER_STYLE}
 		>
-			{armedGroups.map((group) => (
-				<div key={group.join('-')} style={ROW_GROUP_STYLE}>
-					{group.map((axis) => (
-						<AxisRow key={axis} axis={axis} value={armedValue(nextShapeStyle, activeToolId, axis)} onStyleChange={onArmStyle} />
-					))}
-				</div>
-			))}
+			<div style={{ ...BAR_STYLE, left: bar.left, top: bar.top, width }}>
+				{slots.flatMap((slot) => {
+					const value = slot.id === 'more' ? undefined : currentValue(shapes, slot.axes[0]!)
+					const isOpen = openSlot === slot.id
+					const title = triggerTitle(slot, value)
+					const trigger = (
+						<button
+							key={slot.id}
+							type="button"
+							data-style-trigger={slot.id}
+							aria-haspopup="true"
+							aria-expanded={isOpen}
+							data-style-mixed={value === 'mixed' ? 'true' : undefined}
+							title={title}
+							aria-label={title}
+							style={triggerStyle(isOpen)}
+							onClick={() => onOpenSlotChange(isOpen ? null : slot.id)}
+						>
+							{triggerFace(slot, value)}
+						</button>
+					)
+					return slot.id === 'more' ? [<div key="divider" style={DIVIDER_STYLE} />, trigger] : [trigger]
+				})}
+			</div>
+			{popover}
 		</div>
 	)
 }

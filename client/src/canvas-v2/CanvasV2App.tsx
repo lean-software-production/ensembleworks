@@ -687,7 +687,12 @@ function CanvasV2Session({ session: mount }: { readonly session: Session }) {
 			    the only place the dogfood mount gets them. */}
 			<CanvasFonts baseUrl="/fonts/tldraw" />
 			<div style={{ display: 'flex', padding: 6 }}>
-				<Toolbar activeToolId={session.activeToolId} onSelectTool={session.selectTool} />
+				<Toolbar
+					activeToolId={session.activeToolId}
+					onSelectTool={session.selectTool}
+					nextShapeStyle={editorState.nextShapeStyle}
+					onArmStyle={session.onArmStyle}
+				/>
 			</div>
 			<PageSwitcher editor={editor} snapshot={snapshot} currentPageId={editorState.currentPageId} />
 			{/* Visual chrome fidelity (polish/visual-chrome, gap 1): v1's canvas
