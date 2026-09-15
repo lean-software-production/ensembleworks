@@ -20,10 +20,6 @@ export interface ArmedStyleFlyoutProps {
 	readonly toolId: ToolId
 	readonly nextShapeStyle: Record<string, unknown>
 	readonly onArmStyle: StyleChange
-	/** `right`: a column beside a vertical rail's button, centred on it.
-	 * `end`: a wide, short card past the end of a horizontal bar, so it
-	 * extends the bar rather than hanging down over the canvas. */
-	readonly side: 'right' | 'end'
 }
 
 /** `nextShapeStyle[axis]` if set, else the armed tool's kind default — so a
@@ -49,13 +45,17 @@ function flyoutAxes(toolId: ToolId): StyleAxis[] {
 	return [...new Set([...ordered, ...relevant])]
 }
 
-const SIDE_PLACEMENT: Record<ArmedStyleFlyoutProps['side'], CSSProperties> = {
-	right: { left: 'calc(100% + 10px)', top: '50%', transform: 'translateY(-50%)' },
-	end: { left: 'calc(100% + 10px)', top: 0, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'flex-start', columnGap: 14, width: 'max-content', maxWidth: 760 },
-}
-
 const CARD_STYLE: CSSProperties = {
 	position: 'absolute',
+	// Beside the rail and centred on it rather than on the button: hosts
+	// centre the rail vertically, so a card centred on it and capped to the
+	// host's height can never leave the host, however tall (geo ≈ 490px).
+	// `cqh` reads the host's size container, else falls back to the viewport.
+	left: 'calc(100% + 10px)',
+	top: '50%',
+	transform: 'translateY(-50%)',
+	maxHeight: 'calc(100cqh - 24px)',
+	overflowY: 'auto',
 	display: 'flex',
 	flexDirection: 'column',
 	rowGap: 8,
@@ -84,7 +84,7 @@ function stopPropagation(e: { stopPropagation(): void }): void {
 	e.stopPropagation()
 }
 
-export function ArmedStyleFlyout({ toolId, nextShapeStyle, onArmStyle, side }: ArmedStyleFlyoutProps): ReactElement | null {
+export function ArmedStyleFlyout({ toolId, nextShapeStyle, onArmStyle }: ArmedStyleFlyoutProps): ReactElement | null {
 	const axes = flyoutAxes(toolId)
 	if (axes.length === 0) return null
 	return (
@@ -93,9 +93,9 @@ export function ArmedStyleFlyout({ toolId, nextShapeStyle, onArmStyle, side }: A
 			data-style-panel-mode="armed"
 			onPointerDown={stopPropagation}
 			onPointerUp={stopPropagation}
-			style={{ ...CARD_STYLE, ...SIDE_PLACEMENT[side] }}
+			style={CARD_STYLE}
 		>
-			<h4 style={side === 'end' ? { ...HEADING_STYLE, flexBasis: '100%' } : HEADING_STYLE}>{TOOL_HEADINGS[toolId] ?? toolId}</h4>
+			<h4 style={HEADING_STYLE}>{TOOL_HEADINGS[toolId] ?? toolId}</h4>
 			{axes.map((axis) => (
 				<AxisRow key={axis} axis={axis} value={armedValue(nextShapeStyle, toolId, axis)} onStyleChange={onArmStyle} />
 			))}

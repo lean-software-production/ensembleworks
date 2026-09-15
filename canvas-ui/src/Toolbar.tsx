@@ -23,15 +23,15 @@ export interface ToolbarProps {
 	/** Merged over the toolbar's own container style — hosts use it for placement. */
 	readonly style?: CSSProperties
 	readonly orientation?: 'horizontal' | 'vertical'
-	/** With `onArmStyle`, shows the active tool's next-shape style: beside its
-	 * button on a vertical rail, past the bar's end when horizontal. */
+	/** With `onArmStyle` on a vertical rail, shows the active tool's next-shape
+	 * style beside the rail. A horizontal toolbar shows none. */
 	readonly nextShapeStyle?: Record<string, unknown>
 	/** `SetNextStyle`; a host that omits it gets no flyout. */
 	readonly onArmStyle?: StyleChange
 }
 
 const containerStyle: CSSProperties = {
-	// Containing block for a horizontal bar's flyout.
+	// Containing block for the rail's flyout.
 	position: 'relative',
 	display: 'inline-flex',
 	gap: 2,
@@ -61,7 +61,7 @@ const SEPARATOR_STYLE: CSSProperties = { height: 1, margin: '2px 4px', backgroun
 
 export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'horizontal', nextShapeStyle, onArmStyle }: ToolbarProps) {
 	const vertical = orientation === 'vertical'
-	const showFlyout = nextShapeStyle !== undefined && onArmStyle !== undefined
+	const showFlyout = vertical && nextShapeStyle !== undefined && onArmStyle !== undefined
 	return (
 		<div
 			role="toolbar"
@@ -75,7 +75,8 @@ export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'hori
 				const title = shortcut ? `${label} (${shortcut})` : label
 				const active = activeToolId === id
 				return (
-					<div key={id} style={{ position: 'relative', display: 'flex', flexDirection: 'column' }}>
+					// Not positioned: the flyout inside resolves against the rail itself.
+					<div key={id} style={{ display: 'flex', flexDirection: 'column' }}>
 						<button
 							type="button"
 							data-canvas-tool={id}
@@ -87,20 +88,14 @@ export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'hori
 						>
 							<ToolIcon tool={id} />
 						</button>
-						{vertical && active && showFlyout && (
-							<ArmedStyleFlyout toolId={id} nextShapeStyle={nextShapeStyle} onArmStyle={onArmStyle} side="right" />
+						{active && showFlyout && (
+							<ArmedStyleFlyout toolId={id} nextShapeStyle={nextShapeStyle} onArmStyle={onArmStyle} />
 						)}
 						{/* Navigation tools (select, hand) sit apart from the creation tools on the rail. */}
 						{vertical && id === 'hand' && <div aria-hidden="true" style={SEPARATOR_STYLE} />}
 					</div>
 				)
 			})}
-			{/* Past the bar's end rather than under the button: below, a tall card
-			    would cover the host's chrome under the bar and the canvas area
-			    where the next shape gets drawn. */}
-			{!vertical && showFlyout && (
-				<ArmedStyleFlyout toolId={activeToolId} nextShapeStyle={nextShapeStyle} onArmStyle={onArmStyle} side="end" />
-			)}
 		</div>
 	)
 }

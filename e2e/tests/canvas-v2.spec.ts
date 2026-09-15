@@ -669,7 +669,8 @@ test('canvas-v2 new engine: cancellation — Escape/blur/pointercancel abandon a
 	// the SVG overlay (overlay/Arrows.tsx's `<g data-overlay="arrow">`), so
 	// that is what we count here.
 	await page.locator('[data-canvas-tool="arrow"]').click()
-	const p2 = { x: box.x + 200, y: box.y + 500 }
+	// Clear of the left rail's armed-arrow flyout (viewport x ≈ 61–281).
+	const p2 = { x: box.x + 500, y: box.y + 500 }
 	await page.mouse.move(p2.x, p2.y)
 	await page.mouse.down()
 	await page.mouse.move(p2.x + 80, p2.y + 80) // crosses threshold -> arrow.ts's 'drawing' (StartArrow committed)

@@ -686,14 +686,6 @@ function CanvasV2Session({ session: mount }: { readonly session: Session }) {
 			    <Tldraw> registers these itself; v2 never mounts it, so this is
 			    the only place the dogfood mount gets them. */}
 			<CanvasFonts baseUrl="/fonts/tldraw" />
-			<div style={{ display: 'flex', padding: 6 }}>
-				<Toolbar
-					activeToolId={session.activeToolId}
-					onSelectTool={session.selectTool}
-					nextShapeStyle={editorState.nextShapeStyle}
-					onArmStyle={session.onArmStyle}
-				/>
-			</div>
 			<PageSwitcher editor={editor} snapshot={snapshot} currentPageId={editorState.currentPageId} />
 			{/* Visual chrome fidelity (polish/visual-chrome, gap 1): v1's canvas
 			    surface is the warm brand paper (theme.css's `.tl-theme__light`
@@ -735,6 +727,18 @@ function CanvasV2Session({ session: mount }: { readonly session: Session }) {
 					}
 				/>
 			</div>
+			{/* A left rail over the canvas, in the fixed root rather than the
+			    viewport container: the session's keydown listener ignores targets
+			    inside that container, so a focused rail button there would stop
+			    forwarding shortcuts. */}
+			<Toolbar
+				orientation="vertical"
+				activeToolId={session.activeToolId}
+				onSelectTool={session.selectTool}
+				nextShapeStyle={editorState.nextShapeStyle}
+				onArmStyle={session.onArmStyle}
+				style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', zIndex: 600, boxShadow: 'var(--canvas-ui-shadow, 0 2px 10px rgba(15,23,42,0.18))' }}
+			/>
 		</div>
 	)
 }

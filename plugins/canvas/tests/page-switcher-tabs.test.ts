@@ -101,11 +101,9 @@ describe("the tab strip shows a name and nothing else", () => {
   });
 
   it("scrolls rather than wrapping, because the page list is unbounded", () => {
-    // The opposite answer from the toolbar's (canvas/pages/chrome-dock.ts's
-    // CHROME_DOCK_TOOLBAR_OVERFLOW = "wrap"), and deliberately: the toolbar
-    // holds a fixed handful of controls, so a second line ends the problem,
-    // while pages are unbounded and wrapping them would grow the floating card
-    // until it ate the canvas.
+    // Pages are unbounded, so wrapping them would grow the strip until it ate
+    // the canvas; the tool rail (canvas/pages/chrome-dock.ts's
+    // CHROME_DOCK_TOOLBAR_OVERFLOW) is a fixed handful of controls.
     expect(SWITCHER).toMatch(/overflowX:\s*"auto"/);
   });
 });

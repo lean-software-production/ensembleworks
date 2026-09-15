@@ -74,27 +74,36 @@ assert.ok(!selectHtml.includes('data-style-panel-mode="armed"'), 'no flyout for 
 assert.ok(!html.includes('data-style-panel-mode="armed"'), 'no flyout when the host passes no onArmStyle')
 console.log('ok: vertical rail with an armed flyout beside the active style tool')
 
-// A horizontal toolbar (the web app's top bar) opens the flyout past its end.
+// A horizontal toolbar renders no flyout: both hosts show armed style on the rail.
 {
 	const topHtml = renderToStaticMarkup(createElement(Toolbar, { activeToolId: 'note', onSelectTool: () => {}, nextShapeStyle: {}, onArmStyle: () => {} }))
 	assert.match(topHtml, /data-canvas-toolbar[^>]*aria-orientation="horizontal"/, 'toolbar defaults to horizontal')
-	assert.match(openingTag(topHtml, 'data-style-panel-mode="armed"'), /left:calc\(100% \+ 10px\);top:0;/, 'horizontal flyout opens past the bar end')
-	assert.match(openingTag(topHtml, 'data-style-panel-mode="armed"'), /flex-direction:row;.*flex-wrap:wrap/, 'horizontal flyout lays axes out in rows, staying short')
-	assert.ok(topHtml.lastIndexOf('data-canvas-tool=') < topHtml.indexOf('data-style-panel-mode="armed"'), 'horizontal flyout follows the last button')
-	assert.match(openingTag(railHtml, 'data-style-panel-mode="armed"'), /left:calc\(100% \+ 10px\);top:50%/, 'vertical flyout opens beside the rail button')
-	console.log('ok: flyout side follows orientation')
+	assert.ok(!topHtml.includes('data-style-panel-mode="armed"'), `horizontal toolbar renders no flyout — html: ${topHtml}`)
+	console.log('ok: horizontal toolbar renders no flyout')
+}
+
+// The rail's flyout stays inside the host: centred on the rail (which hosts
+// centre vertically), capped to the host's height, scrolling past that.
+{
+	const card = openingTag(railHtml, 'data-style-panel-mode="armed"')
+	assert.match(card, /left:calc\(100% \+ 10px\);top:50%;transform:translateY\(-50%\)/, `flyout opens beside the rail, centred on it — ${card}`)
+	assert.match(card, /max-height:calc\(100cqh - 24px\)/, `flyout height is capped to the host — ${card}`)
+	assert.match(card, /overflow-y:auto/, `a capped flyout scrolls — ${card}`)
+	const geoWrapper = railHtml.slice(railHtml.lastIndexOf('<div', railHtml.indexOf('data-canvas-tool="geo"')), railHtml.indexOf('data-canvas-tool="geo"'))
+	assert.ok(!geoWrapper.includes('position:relative'), `the button wrapper is not the flyout's containing block — ${geoWrapper}`)
+	console.log('ok: rail flyout is centred on the rail and capped to the host height')
 }
 
 // Frame arms only opacity, which the flyout omits: no empty card.
 {
-	const frameHtml = renderToStaticMarkup(createElement(ArmedStyleFlyout, { toolId: 'frame', nextShapeStyle: {}, onArmStyle: () => {}, side: 'right' }))
+	const frameHtml = renderToStaticMarkup(createElement(ArmedStyleFlyout, { toolId: 'frame', nextShapeStyle: {}, onArmStyle: () => {} }))
 	assert.equal(frameHtml, '', `frame renders no flyout — html: ${frameHtml}`)
 	console.log('ok: a tool with no non-opacity axis renders no flyout')
 }
 
 // The flyout reflects nextShapeStyle's values, not the defaults.
 {
-	const flyHtml = renderToStaticMarkup(createElement(ArmedStyleFlyout, { toolId: 'geo', nextShapeStyle: { color: 'red' }, onArmStyle: () => {}, side: 'right' }))
+	const flyHtml = renderToStaticMarkup(createElement(ArmedStyleFlyout, { toolId: 'geo', nextShapeStyle: { color: 'red' }, onArmStyle: () => {} }))
 	assert.ok(isCurrent(flyHtml, 'red'), `armed nextShapeStyle.color:'red' is marked current — html: ${flyHtml}`)
 	assert.ok(!isCurrent(flyHtml, 'blue'), `flyout does not ALSO mark blue current — html: ${flyHtml}`)
 	console.log('ok: flyout — nextShapeStyle.color:red is marked current, not a default')
@@ -102,7 +111,7 @@ console.log('ok: vertical rail with an armed flyout beside the active style tool
 
 // A fresh flyout (empty nextShapeStyle) shows the tool kind's real defaults.
 {
-	const flyHtml = renderToStaticMarkup(createElement(ArmedStyleFlyout, { toolId: 'geo', nextShapeStyle: {}, onArmStyle: () => {}, side: 'right' }))
+	const flyHtml = renderToStaticMarkup(createElement(ArmedStyleFlyout, { toolId: 'geo', nextShapeStyle: {}, onArmStyle: () => {} }))
 	assert.ok(isCurrent(flyHtml, 'black'), `color defaults to 'black' marked current — html: ${flyHtml}`)
 	assert.ok(isCurrent(flyHtml, 'rectangle'), `geo variant defaults to 'rectangle' marked current — html: ${flyHtml}`)
 	assert.equal(armedValue({}, 'geo', 'color'), 'black')
@@ -114,7 +123,7 @@ console.log('ok: vertical rail with an armed flyout beside the active style tool
 // A flyout swatch click calls onArmStyle (SetNextStyle).
 {
 	const armCalls: Array<{ axis: string; value: unknown }> = []
-	const tree = ArmedStyleFlyout({ toolId: 'geo', nextShapeStyle: {}, onArmStyle: (axis, value) => armCalls.push({ axis, value }), side: 'right' })
+	const tree = ArmedStyleFlyout({ toolId: 'geo', nextShapeStyle: {}, onArmStyle: (axis, value) => armCalls.push({ axis, value }) })
 	const swatch = findElement(tree, (p) => p['data-style-value'] === 'blue')
 	const onClick = swatch?.props?.['onClick'] as (() => void) | undefined
 	assert.ok(onClick, `flyout's blue color swatch has an onClick handler`)

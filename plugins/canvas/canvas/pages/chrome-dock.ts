@@ -68,11 +68,10 @@ export const CHROME_DOCK_Z_INDEX = 40;
  * Who takes pointer events in the floating group, and who passes them through.
  *
  * THE REGRESSION THIS EXISTS TO PREVENT is invisible to every test in this
- * project and would be very visible to a user: the wrapper is STRETCHED across
- * the full width of the drawing surface (that is how the card gets centred),
- * so if the wrapper took pointer events, the whole bottom band of the canvas
- * would silently stop drawing. A gesture starting there would hit the wrapper
- * instead of <Viewport>, produce nothing, and look like the canvas was broken.
+ * project and would be very visible to a user: the wrapper sits over the
+ * drawing surface, so if it (or a later stretched version of it) took pointer
+ * events, gestures starting there would hit the wrapper instead of <Viewport>,
+ * produce nothing, and look like the canvas was broken.
  *
  * So: the wrapper is transparent to the pointer and only the CARD takes
  * clicks. `pointer-events: auto` on the card is not redundant with the default
@@ -89,23 +88,16 @@ export const CHROME_DOCK_POINTER_EVENTS: {
 } = { wrapper: "none", card: "auto" };
 
 /**
- * What the toolbar does when its contents are wider than the panel.
+ * What the tool rail does when it is taller than the panel.
  *
- * WRAP, not scroll and not clip. The toolbar's contents are a BOUNDED set — the
- * Pages button, six tool buttons and one chip — so a second line ends the
- * problem outright and every control stays visible and reachable. Scrolling
- * would hide controls behind a gesture with no affordance announcing it, and
- * clipping would delete them. The cost is that a wrapped bar covers more of the
- * canvas, which is cheap here in a way it was not when this was a flow row: the
- * canvas underneath is pannable, so nothing is unreachable, whereas a flow row
- * took the height away permanently.
+ * NOWRAP. The rail is one vertical column on the left edge; wrapping would
+ * grow a second column over the canvas and push the armed-style flyout beside
+ * it further across the drawing surface. Nine 32px tools fit any usable pane.
  *
- * THE PAGE TAB STRIP ANSWERS THE OPPOSITE WAY (`overflowX: "auto"` in
- * canvas/pages/PageSwitcher.tsx) because pages are UNBOUNDED: wrapping them
- * would let the card grow until it ate the canvas. Two different answers, one
- * reason — whether the thing being laid out has a ceiling.
+ * THE PAGE TAB STRIP SCROLLS (`overflowX: "auto"` in
+ * canvas/pages/PageSwitcher.tsx) because pages are UNBOUNDED.
  */
-export const CHROME_DOCK_TOOLBAR_OVERFLOW = "wrap" as const;
+export const CHROME_DOCK_TOOLBAR_OVERFLOW = "nowrap" as const;
 
 // NO WIDTH LADDER. There used to be one — `ChromeDockFit`, a 480px threshold
 // with 48px of hysteresis, and `chromeDockShowsSelfName` — and the ONE thing it

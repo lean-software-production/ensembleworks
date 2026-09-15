@@ -29,6 +29,7 @@ import {
   CHROME_DOCK_TOOLBAR_OVERFLOW,
   CHROME_DOCK_Z_INDEX,
 } from "../canvas/pages/chrome-dock.js";
+import { chromeColumnStyle, chromeWrapperStyle } from "../canvas/panel/shared.js";
 
 const PANEL = stripComments(
   readFileSync(new URL("../canvas/panel/shared.ts", import.meta.url), "utf8") +
@@ -43,12 +44,10 @@ const MODULE = stripComments(
 
 describe("CHROME_DOCK_POINTER_EVENTS — the dead-strip guard", () => {
   it("lets the wrapper pass pointers through and only the card take them", () => {
-    // THE REGRESSION THIS FORBIDS. The floating group is stretched across the
-    // bottom of the drawing surface so its card can be centred. If that
-    // stretched wrapper takes pointer events, the whole bottom band of the
-    // canvas silently stops drawing — a gesture that starts there hits the
-    // wrapper instead of <Viewport>, and no test in this project can see it,
-    // because the failure is a hit-test in a browser we do not have.
+    // THE REGRESSION THIS FORBIDS. The floating group sits over the drawing
+    // surface. If its wrapper takes pointer events, gestures that start there
+    // hit the wrapper instead of <Viewport>, and no test in this project can
+    // see it, because the failure is a hit-test in a browser we do not have.
     expect(CHROME_DOCK_POINTER_EVENTS.wrapper).toBe("none");
     expect(CHROME_DOCK_POINTER_EVENTS.card).toBe("auto");
   });
@@ -79,12 +78,11 @@ describe("CHROME_DOCK_EDGE_GAP_PX", () => {
   });
 });
 
-describe("CHROME_DOCK_TOOLBAR_OVERFLOW — wider than the panel", () => {
-  it("wraps rather than scrolling or clipping", () => {
-    // The toolbar's contents are a BOUNDED set (Pages + six tools + a chip),
-    // so a second line ends the problem. Scrolling would hide controls behind
-    // a gesture nobody knows is available, and hiding would delete them.
-    expect(CHROME_DOCK_TOOLBAR_OVERFLOW).toBe("wrap");
+describe("CHROME_DOCK_TOOLBAR_OVERFLOW — a rail taller than the panel", () => {
+  it("stays one column rather than wrapping into a second", () => {
+    // The rail is a single vertical column beside the canvas; a wrapped second
+    // column would push the armed flyout further over the drawing surface.
+    expect(CHROME_DOCK_TOOLBAR_OVERFLOW).toBe("nowrap");
   });
 });
 
@@ -262,15 +260,32 @@ describe("the panel's wiring of the floating chrome", () => {
   });
 
   it("names the edge gap rather than writing offsets", () => {
-    // Bottom-centred: pinned to the bottom edge, and stretched left-to-right
-    // by the same gap so the card can centre itself inside it. Bounded to the
-    // wrapper's own style object — a file-wide match would be satisfied by any
-    // other rule that happened to mention the constant.
+    // Left-edge rail: pinned to the left by the gap and centred vertically.
+    // Bounded to the wrapper's own style object.
     const style = chromeStyle();
-    expect(style).toMatch(/bottom:\s*CHROME_DOCK_EDGE_GAP_PX\s*,/);
     expect(style).toMatch(/left:\s*CHROME_DOCK_EDGE_GAP_PX\s*,/);
-    expect(style).toMatch(/right:\s*CHROME_DOCK_EDGE_GAP_PX\s*,/);
-    expect(style).toMatch(/justifyContent:\s*"center"\s*,/);
+    expect(style).not.toMatch(/bottom:|right:|justifyContent:/);
+  });
+
+  it("docks the tool rail on the left edge, vertically centred", () => {
+    expect(chromeWrapperStyle.left).toBe(CHROME_DOCK_EDGE_GAP_PX);
+    expect(chromeWrapperStyle.top).toBe("50%");
+    expect(chromeWrapperStyle.transform).toBe("translateY(-50%)");
+    expect(chromeWrapperStyle.bottom).toBeUndefined();
+    expect(chromeWrapperStyle.right).toBeUndefined();
+  });
+
+  it("renders the rail vertically with the armed flyout wired", () => {
+    expect(countInCode(PANEL, 'orientation="vertical"')).toBe(1);
+    expect(countInCode(PANEL, "onArmStyle={canvas.onArmStyle}")).toBe(1);
+    expect(countInCode(PANEL, "nextShapeStyle={editorState.nextShapeStyle}")).toBe(1);
+  });
+
+  it("makes the canvas column a size container, so the flyout caps to the pane", () => {
+    // canvas-ui's flyout caps its height with `cqh`; without a container that
+    // falls back to the window, which a short split pane would clip.
+    expect(chromeColumnStyle.containerType).toBe("size");
+    expect(countInCode(PANEL, "style={chromeColumnStyle}")).toBe(1);
   });
 
   it("names the overflow answer rather than guessing in CSS", () => {

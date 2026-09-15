@@ -10,6 +10,7 @@ import type { CanvasAgentLink } from "../wire.js";
 import { SpeakerRings } from "../roster-ui.js";
 import {
   chromeCardColumnStyle,
+  chromeColumnStyle,
   chromeTabRowStyle,
   chromeToolbarStyle,
   chromeWrapperStyle,
@@ -51,7 +52,7 @@ export function SessionView(props: SessionViewProps) {
   return (
     <div ref={props.panelRef} data-canvas-themed style={canvasThemeStyle} className="flex h-full min-h-0 w-full flex-row">
       <style>{shapeThemeCss}</style>
-      <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
+      <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col" style={chromeColumnStyle}>
         <div data-canvas-page-tab-row style={chromeTabRowStyle}>
           {pageSwitcher.tabs}
         </div>
@@ -131,14 +132,17 @@ function CanvasViewport({
   );
 }
 
-function CanvasChrome({ canvas }: SessionViewProps) {
+function CanvasChrome({ canvas, editorState }: SessionViewProps) {
   return (
     <div data-canvas-chrome-dock style={chromeWrapperStyle}>
       <div style={chromeCardColumnStyle}>
         <div style={chromeToolbarStyle}>
           <Toolbar
+            orientation="vertical"
             activeToolId={canvas.activeToolId}
             onSelectTool={canvas.selectTool}
+            nextShapeStyle={editorState.nextShapeStyle}
+            onArmStyle={canvas.onArmStyle}
             style={{ background: "transparent", border: "none", padding: 0 }}
           />
         </div>
