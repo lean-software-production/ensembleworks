@@ -332,6 +332,8 @@ function computeBarBox(
 	return { left: position.left - width / 2, top: side === 'above' ? position.top - BAR_HEIGHT : position.top, side }
 }
 
+const triggerDomId = (slot: ToolbarSlotId) => `ew-style-trigger-${slot}`
+
 function stopPropagation(e: { stopPropagation(): void }): void {
 	e.stopPropagation()
 }
@@ -451,6 +453,16 @@ export function StylePanel({
 				data-style-panel-mode="selection"
 				onPointerDown={stopPropagation}
 				onPointerUp={stopPropagation}
+				onKeyDown={(e) => {
+					if (e.key !== 'Escape' || openSlot === null) return
+					// Stop here so neither the Viewport nor the session's document listener
+					// treats this Escape as a canvas cancel.
+					e.stopPropagation()
+					e.preventDefault()
+					// Focus goes back to the trigger rather than the unmounting popover.
+					if (typeof document !== 'undefined') document.getElementById(triggerDomId(openSlot))?.focus()
+					onOpenSlotChange(null)
+				}}
 				style={WRAPPER_STYLE}
 			>
 				<div style={{ ...BAR_STYLE, left: bar.left, top: bar.top, width }}>
@@ -461,6 +473,7 @@ export function StylePanel({
 						const trigger = (
 							<button
 								key={slot.id}
+								id={triggerDomId(slot.id)}
 								type="button"
 								data-style-trigger={slot.id}
 								aria-haspopup="true"

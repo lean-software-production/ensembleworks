@@ -269,6 +269,10 @@ function makeObs(
       // that calls this is level:'browser'.
       throw new Error('not observable at fsm level')
     },
+    openStylePopover() {
+      // The style popover is rendered chrome; every contract reading it is level:'browser'.
+      throw new Error('not observable at fsm level')
+    },
   }
 }
 

@@ -289,6 +289,10 @@ export interface Obs {
    * construction (it reads rendered DOM); the FSM adapter throws
    * 'not observable at fsm level'. */
   renderedArrowIds(): readonly string[]
+  /** The slot id of the style popover currently open over the selection
+   * (`[data-style-popover]`), or null. Browser-only: the popover is rendered
+   * chrome; the FSM adapter throws 'not observable at fsm level'. */
+  openStylePopover(): string | null
 }
 
 /** A contract declaration = data. */

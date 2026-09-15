@@ -414,6 +414,7 @@ interface ActorSample {
   readonly labelOverflow: Readonly<Record<string, boolean>>
   readonly hoveredId: string | null
   readonly renderedArrowIds: readonly string[]
+  readonly openStylePopover: string | null
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -466,7 +467,8 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   const labelOverflow = await sampleLabelOverflow(page, styleIds)
   const hoveredId = await sampleHoveredId(page)
   const renderedArrowIds = await sampleRenderedArrowIds(page)
-  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId, renderedArrowIds }
+  const openStylePopover = await page.evaluate(() => document.querySelector('[data-style-popover]')?.getAttribute('data-style-popover') ?? null)
+  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId, renderedArrowIds, openStylePopover }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -522,6 +524,7 @@ function pageObs(
     labelOverflow: (id: string) => sample.labelOverflow[id] ?? false,
     hoveredShapeId: () => sample.hoveredId,
     renderedArrowIds: () => sample.renderedArrowIds,
+    openStylePopover: () => sample.openStylePopover,
   }
 }
 
