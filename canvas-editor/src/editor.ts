@@ -1045,7 +1045,8 @@ export class Editor {
         // View intent (Task E1, D-2): switches EditorState.currentPageId
         // ONLY — no doc write, no undo/redo arrays, mirroring
         // SetCamera/SetSelection/SetHover/BeginEdit/EndEdit/SetNextStyle
-        // above exactly. Switching pages is a view change, not undoable.
+        // above exactly. Switching pages is a view change, not undoable
+        // (the one exception — ending an open edit — is described below).
         // Switching to a DIFFERENT page also clears the page-local view
         // state — selection, hover, editingId all name shapes on the page
         // being left, and leaving them set would let handles, Delete and the
@@ -1053,12 +1054,23 @@ export class Editor {
         // SetCurrentPage leaves them untouched. A SetSelection batched AFTER
         // the switch (thread-return's bookmark restore) applies on top of
         // the cleared state, so it still lands.
+        //
+        // An edit in progress is ENDED, not merely nulled: the switch runs
+        // the EndEdit case itself (below it only ever sees editingId set, so
+        // this is its real work), which auto-deletes an empty text shape
+        // with its undo entry. Nulling editingId directly would leave a
+        // later EndEdit in the same batch (thread-return, page-route) with
+        // nothing to finish, stranding an invisible synced empty text box
+        // on the page being left. While an edit is open this intent is
+        // therefore undoable exactly when EndEdit would be.
         if (intent.pageId === state.currentPageId) {
           return { state: { ...state, currentPageId: intent.pageId }, docMutated: false, stateChanged: true }
         }
+        const ended = state.editingId === null ? null : this.applyOne({ type: 'EndEdit' }, state)
         return {
-          state: { ...state, currentPageId: intent.pageId, selection: new Set(), hover: null, editingId: null },
-          docMutated: false,
+          ...ended,
+          state: { ...(ended?.state ?? state), currentPageId: intent.pageId, selection: new Set(), hover: null, editingId: null },
+          docMutated: ended?.docMutated ?? false,
           stateChanged: true,
         }
     }

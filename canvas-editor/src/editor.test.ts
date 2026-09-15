@@ -1088,6 +1088,38 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: a SetSelection batched after SetCurrentPage survives the switch (thread-return restore)')
 }
 
+// 28c. Switching page mid-edit ENDS the edit, not just nulls editingId: an
+//     empty text shape is auto-deleted exactly as EndEdit would (undoable),
+//     even when the caller batches EndEdit after the switch (thread-return's
+//     [SetCurrentPage, SetSelection, EndEdit]); a text shape with content
+//     survives.
+{
+  const { doc, editor } = makeEditor(1n)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'CreateShape', shape: shape('shape:empty-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:empty-text' })
+  editor.applyAll([{ type: 'SetCurrentPage', pageId: 'page:q' }, { type: 'SetSelection', ids: [] }, { type: 'EndEdit' }])
+  assert.equal(editor.doc.getShape('shape:empty-text'), undefined, 'an empty text shape being edited is deleted when the page switches')
+  assert.equal(editor.get().editingId, null, 'editingId is null after the switch')
+  editor.undo()
+  assert.ok(editor.doc.getShape('shape:empty-text'), 'the auto-delete on page switch is undoable, like EndEdit\'s')
+  console.log('ok: SetCurrentPage mid-edit auto-deletes an empty text shape (EndEdit behaviour)')
+}
+
+{
+  const { doc, editor } = makeEditor(1n)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'CreateShape', shape: shape('shape:full-text', { kind: 'text' }) })
+  editor.apply({ type: 'BeginEdit', id: 'shape:full-text' })
+  editor.apply({ type: 'SetText', id: 'shape:full-text', text: 'keep me' })
+  editor.applyAll([{ type: 'SetCurrentPage', pageId: 'page:q' }, { type: 'SetSelection', ids: [] }, { type: 'EndEdit' }])
+  assert.ok(editor.doc.getShape('shape:full-text'), 'a text shape with content survives a page switch mid-edit')
+  assert.equal(editor.get().editingId, null)
+  console.log('ok: SetCurrentPage mid-edit keeps a text shape that has content')
+}
+
 // ============================================================================
 // 29. create-edit-flow task — EndEdit auto-deletes an empty `text` shape
 //    (tldraw parity: node_modules/tldraw/src/lib/shapes/text/
