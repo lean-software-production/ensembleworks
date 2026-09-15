@@ -87,3 +87,25 @@ inside the body.
 Contracts (FSM): `bbthread-pane-double-click-begins-editing`, `bbthread-escape-ends-editing`,
 `editing-ends-on-outside-click` (text shape; today the FSM never ends an edit on an outside click — the DOM
 textarea blur does). All three RED before the change.
+
+## Resizable pane (2026-09-15, owner request)
+
+The pane's left edge is draggable. Width is a synced shape prop, not local UI state.
+
+- canvas-model: `bbthread` props += `paneFraction?: number`. `BBTHREAD_PANE_MIN_FRACTION = 0.2`,
+  `BBTHREAD_PANE_MAX_FRACTION = 2/3`, `BBTHREAD_PANE_FRACTION` stays the default (1/3).
+  `paneFractionOf(shape)` = clamp(prop ?? default). `bbthreadPaneLocalBounds`/`bbthreadWorkspaceLocalBounds`
+  use it. `BBTHREAD_DIVIDER_MARGIN = 6` (local px each side of the pane's left edge, below the header);
+  `isPointOnBbthreadDivider(doc, shape, worldPoint)`. `hitTestPoint` treats the divider band as a hit.
+- canvas-editor select tool: pointerdown on a bbthread's divider enters a `resizingPane` mode (takes
+  precedence over translate); each move emits `UpdateProps { paneFraction: clamp((w - localX) / w) }`;
+  pointerup returns to idle. Escape/cancel drops the mode (props already committed per move, like translate).
+- Obs: `shapeProp(id, key): unknown` added to the interface and BOTH adapters (fsm-runner reads the editor doc;
+  e2e/lib/contracts.ts reads the page's doc the same way shapeDisplacement does).
+- Contracts (FSM): `bbthread-divider-drag-resizes-pane` (900×600 frame, divider at x=600; drag to x=450 →
+  paneFraction 0.5 and shape displacement 0) and `bbthread-divider-drag-clamps-at-two-thirds` (drag to
+  x=100 → paneFraction 2/3, displacement 0). Both RED today: the divider lies in the solid pane, so the drag
+  translates the frame.
+- Plugin body: draws a divider strip as a SIBLING of the pane div (never inside the interactive element, so
+  the drag is forwarded to the canvas even while the pane is focused), `cursor: ew-resize`, positioned over the
+  pane's left edge; layout follows `paneFractionOf`.
