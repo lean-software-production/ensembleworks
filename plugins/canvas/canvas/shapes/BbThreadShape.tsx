@@ -283,6 +283,9 @@ function BbThreadShapeInner({ shape, snapshot, editorState, getText, dispatch }:
           background: "var(--card)",
           overflow: "hidden",
           userSelect: interaction.interactive ? "text" : "none",
+          // The viewport sets touch-action:none; re-enable native touch scrolling
+          // inside the pane while it is the interactive island.
+          touchAction: interaction.interactive ? "auto" : "none",
           cursor: interaction.interactive ? "auto" : "default",
           boxShadow: interaction.interactive ? "inset 0 0 0 2px var(--primary)" : "none",
         }}

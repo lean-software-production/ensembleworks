@@ -294,6 +294,16 @@ import { keyEventToInput, pointerEventToInput, wheelEventToInput, yieldsToIntera
   console.log('ok: Viewport — a real pointercancel DOM event invokes onPointerCancel exactly once')
 }
 
+// touch-action: the viewport root must opt out of the browser's own touch
+// gestures (page scroll / pinch), or a finger drag never becomes a canvas
+// gesture — it is cancelled at its first move. A pure-markup assertion on the
+// rendered inline style; the behaviour itself needs a real touch device.
+{
+  const html = renderToStaticMarkup(createElement(Viewport, { onInput: () => false }, null))
+  assert.ok(/touch-action:\s*none/.test(html), `viewport root must render touch-action:none, got: ${html.slice(0, 200)}`)
+  console.log('ok: viewport root sets touch-action:none')
+}
+
 console.log('ok: viewport (transform string, worldToScreen agreement, WorldLayer/Grid rendering, dom-events mappers, composition smoke, pointercancel wiring)')
 
 // House rule for any test that boots a DOM/browser-ish environment (see

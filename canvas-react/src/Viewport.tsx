@@ -259,7 +259,12 @@ export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, c
       // onKeyDown/onKeyUp never fire (a non-focusable div never receives
       // key events) and onBlur never fires either (nothing to blur FROM).
       tabIndex={0}
-      style={{ position: 'relative', overflow: 'hidden', outline: 'none', ...style }}
+      // touch-action: none — without it a finger drag is claimed by the browser
+      // for page scroll/pinch and arrives here as `pointercancel`, so every
+      // touch gesture dies at its first move. An interactive island (an element
+      // carrying data-canvas-interactive, whose events this viewport yields) may
+      // set its own touch-action to re-enable native scrolling inside it.
+      style={{ position: 'relative', overflow: 'hidden', outline: 'none', touchAction: 'none', ...style }}
       onPointerDown={handlePointer}
       onPointerMove={handlePointer}
       onPointerUp={handlePointer}
