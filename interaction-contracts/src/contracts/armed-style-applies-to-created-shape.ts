@@ -42,13 +42,11 @@ import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 // union the armed panel keys off of).
 const GEO_TOOL_SELECTOR = '[data-canvas-tool="geo"]'
 
-// The armed panel's blue color swatch. StylePanel.tsx's module header names
-// this exact selector as AS4's anchor: the armed panel carries
-// `data-style-panel-mode="armed"` (distinct from the selection panel's
-// `data-style-panel-mode="selection"` P3 anchors onto), so this cannot
-// collide with `style-applies-to-selection`'s own BLUE_SWATCH_SELECTOR even
-// though both target a `data-style-value="blue"` color swatch.
-const ARMED_BLUE_SWATCH_SELECTOR = '[data-style-panel-mode="armed"] [data-style-control="color"] [data-style-value="blue"]'
+// The armed flyout's blue color swatch, scoped to the tool toolbar: the armed
+// controls live beside the active tool button (canvas-ui ArmedStyleFlyout),
+// not in a floating panel. `data-style-panel-mode="armed"` keeps this
+// distinct from `style-applies-to-selection`'s selection-bar swatch.
+const ARMED_BLUE_SWATCH_SELECTOR = '[data-canvas-toolbar] [data-style-panel-mode="armed"] [data-style-control="color"] [data-style-value="blue"]'
 
 export const armedStyleAppliesToCreatedShape: Contract = {
   name: 'armed-style-applies-to-created-shape',
@@ -57,12 +55,11 @@ export const armedStyleAppliesToCreatedShape: Contract = {
   // No seeded shapes — see module header's EMPTY SCENE note.
   scene: () => [],
   gesture: (_rng: Rng): GestureOp[] => [
-    // Arm the geo tool (selection is already empty — an empty scene starts
-    // with nothing selected — so the panel switches to armed mode as soon
-    // as `activeToolId` becomes 'geo').
+    // Arm the geo tool (an empty scene starts with nothing selected); its
+    // armed flyout opens beside the button.
     { kind: 'down', at: { ref: 'element', selector: GEO_TOOL_SELECTOR } },
     { kind: 'up' },
-    // Click the panel's armed blue color swatch: dispatches
+    // Click the flyout's blue color swatch: dispatches
     // `SetNextStyle{ props: { color: 'blue' } }` (Task AS3), NOT `SetStyle`
     // (there is no selection for `SetStyle` to apply to).
     { kind: 'down', at: { ref: 'element', selector: ARMED_BLUE_SWATCH_SELECTOR } },
@@ -70,9 +67,8 @@ export const armedStyleAppliesToCreatedShape: Contract = {
     // Click (not drag) on empty canvas: down then up with NO move between
     // them stays under create.ts's crossedThreshold check, so the create
     // tool's 'pointing' state click-creates via `clickShape`/`finalizeIntents`
-    // rather than drag-creating. A point well clear of the toolbar (top) and
-    // the armed panel (top-center, PANEL_MAX_HEIGHT 480 under MARGIN 8) so
-    // the pointerdown genuinely lands on empty canvas, not on a control.
+    // rather than drag-creating. A point well clear of the toolbar and its
+    // flyout so the pointerdown lands on empty canvas, not on a control.
     { kind: 'down', at: { ref: 'point', x: 500, y: 560 } },
     { kind: 'up' },
   ],

@@ -1,33 +1,21 @@
 // Run: bun src/StylePanel.position.test.ts
-// Review fix (post-Task P4) — pins `clampPanelPosition`'s ON-SCREEN
-// guarantee: given the selection's screen-space corners, the viewport size,
-// and the panel's MAXIMUM rendered size (PANEL_MAX_WIDTH/PANEL_MAX_HEIGHT —
-// real CSS caps on PANEL_STYLE, so the actual DOM node can never exceed
-// them), the returned `{left, top, transform}` position must place the
-// panel's REAL on-screen box (after the transform) entirely within
-// [0, viewportWidth] x [0, viewportHeight] (a small MARGIN inside that, per
-// the function's own contract).
+// Pins the selection toolbar's placement math: `clampPanelPosition` keeps the
+// box's real on-screen edges (after its transform) inside the viewport,
+// `avoidAnchorOverlap` keeps it off the selection, and `popoverPosition` opens
+// a popover on the bar's far side without crossing back over it.
 //
-// WHY A UNIT TEST, NOT JUST THE BROWSER CONTRACT: the P3 browser contract
-// (style-applies-to-selection) seeds two shapes CENTERED in the viewport, so
-// its own midX never approaches an edge — it structurally cannot exercise
-// this clamp's edge cases. This test drives the pure math directly with an
-// anchor near the LEFT edge and near the RIGHT edge instead.
-//
-// BUG THIS CATCHES (found in code review of Task P4's first pass): the
-// original fix clamped only the panel's ANCHOR point to
-// [EDGE_CLAMP, viewportWidth - EDGE_CLAMP] with EDGE_CLAMP=90, then centered
-// the panel with `translateX(-50%)`. Since PANEL_MAX_WIDTH/2 = 160 > 90, a
-// panel anchored 90px from an edge still had its actual edge land up to
-// (160-90)=70px past the viewport boundary — invisible to the browser
-// contract (centered scene) but real for any edge-anchored selection.
+// Unit-tested rather than left to the browser contracts: those seed shapes
+// centred in the viewport, so they never reach the edge cases. A clamp that
+// only bounded the anchor point (not the centred box) would let a wide box
+// spill past an edge for any edge-anchored selection.
 import assert from 'node:assert/strict'
-import { avoidAnchorOverlap, clampPanelPosition, colorRowWidth, panelContentWidth } from './StylePanel.js'
+import { avoidAnchorOverlap, clampPanelPosition, popoverPosition } from './StylePanel.js'
 
 const VIEWPORT = { width: 1280, height: 720 }
-const PANEL_SIZE = { width: 320, height: 200 } // mirrors PANEL_MAX_WIDTH/height-under-cap
+const PANEL_SIZE = { width: 320, height: 200 }
 const MARGIN = 8
-const FLIP_HEADROOM = 220
+// Matches StylePanel's BAR_FLIP_HEADROOM: bar (40) + popover (220) + 3 margins.
+const FLIP_HEADROOM = 284
 
 /** The panel's REAL on-screen left/right edges, given the CSS this function
  * always returns: `left` + `transform: translateX(-50%)` (both horizontal
@@ -115,28 +103,26 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 }
 
 // ============================================================================
-// 5. REGRESSION PIN — `avoidAnchorOverlap`'s whole reason to exist: a
-//    below-placement selection in a viewport too short to fit PANEL_MAX_HEIGHT
-//    (480) fully past the selection's bottom edge. `clampPanelPosition`
+// 5. `avoidAnchorOverlap`'s reason to exist: a
+//    below-placement selection in a viewport too short to fit a 480px panel
+//    fully past the selection's bottom edge. `clampPanelPosition`
 //    alone (still correctly, on its own on-screen contract — case 3 above)
 //    squeezes `top` back UP to keep a worst-case-height box on-screen, which
 //    for an actually-short real panel drags its rendered controls on top of
-//    the selection itself — this is EXACTLY the double-click-to-edit /
-//    delete / drag-a-selected-shape regression (a color swatch silently ate
-//    the click meant for the shape underneath it; reproduced empirically
-//    with a 1280x680 viewport, a 200x200 note anchored at screen (300,220),
-//    numbers pulled directly from the failing e2e case). `avoidAnchorOverlap`
+//    the selection itself, where a control would eat a double-click / drag
+//    meant for the shape (geometry: 1280x680 viewport, a 200x200 note at
+//    screen (300,220)). `avoidAnchorOverlap`
 //    must reposition the panel back to the selection's own edge (no overlap,
 //    ever) and shrink it (via the returned `maxHeight`) to fit, while STILL
 //    keeping the panel's real (dynamically-sized) box fully on-screen.
 // ============================================================================
 {
 	const viewport = { width: 1280, height: 680 } // matches the e2e case's real viewport (720 minus the 40px toolbar)
-	const panelSize = { width: PANEL_SIZE.width, height: 480 } // PANEL_MAX_HEIGHT's real value
+	const panelSize = { width: PANEL_SIZE.width, height: 480 }
 	const c1 = { x: 200, y: 120 } // note top-left, screen-space (ANCHOR (300,220) minus half a 200x200 note)
 	const c2 = { x: 400, y: 320 } // note bottom-right
 	const clamped = clampPanelPosition(c1, c2, viewport, panelSize, MARGIN, FLIP_HEADROOM)
-	assert.equal(clamped.transform, 'translateX(-50%)', 'precondition: minY(120) < FLIP_HEADROOM(220) selects the below-placement branch')
+	assert.equal(clamped.transform, 'translateX(-50%)', 'precondition: minY(120) < FLIP_HEADROOM(284) selects the below-placement branch')
 	assert.ok(clamped.top < c2.y + MARGIN, `precondition: clampPanelPosition alone squeezes top (${clamped.top}) above the selection's bottom edge + margin (${c2.y + MARGIN}) — this is the bug avoidAnchorOverlap fixes`)
 
 	const fixed = avoidAnchorOverlap(clamped, c1, c2, viewport, MARGIN)
@@ -170,34 +156,10 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 }
 
 // ============================================================================
-// 7. LAYOUT DEFECT (a), style-memory task — the 13-value `color` row must fit
-//    on ONE line inside the panel's real content width, not wrap (the
-//    observed bug: 12 swatches on row one, 'white' alone on row two, a
-//    cosmetic break from every other single-row axis group). Computed from
-//    the REAL swatch/gap/padding constants (`colorRowWidth`/
-//    `panelContentWidth`, StylePanel.tsx), not hand-typed pixel counts, so a
-//    future color addition or CSS tweak re-proves this instead of silently
-//    rotting.
-// ============================================================================
-{
-	const needed = colorRowWidth()
-	const available = panelContentWidth()
-	assert.ok(
-		needed <= available,
-		`the color row's real width (${needed}px) must fit within the panel's content width (${available}px) on one line — a wider value must not silently start wrapping the swatches`,
-	)
-	console.log(`ok: colorRowWidth (${needed}px) fits within panelContentWidth (${available}px) — the 13 color swatches render on one line`)
-}
-
-// ============================================================================
-// 8. LAYOUT DEFECT (b), style-memory task — TALL PANEL / GEO CASE:
-//    `avoidAnchorOverlap`'s below-placement squeeze must flip to ABOVE
-//    placement when that gives strictly more room than squeezing below would
-//    — the reported bug (v2-geo-selected.png): a geo selection near the
-//    bottom of a short-ish viewport forced BELOW placement (clampPanelPosition
-//    picked "below" because minY < FLIP_HEADROOM), got squeezed into a sliver
-//    of room below the selection, and the geo/"Shape" row (last of six groups)
-//    rendered mostly off the bottom of the viewport. A selection whose top is
+// 7. Tall box in a short viewport: `avoidAnchorOverlap`'s below-placement
+//    squeeze must flip to ABOVE placement when that gives strictly more room
+//    than squeezing below would, rather than squeezing the box into a sliver
+//    that renders mostly off the viewport's bottom. A selection whose top is
 //    close to the viewport top (small minY, so clampPanelPosition's own
 //    branch choice is "below") but whose BOTTOM sits deep in a short viewport
 //    (little room actually below it) is exactly this shape: below-room is
@@ -207,7 +169,7 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 // ============================================================================
 {
 	const viewport = { width: 1280, height: 300 } // short viewport, geo-panel-scale content
-	const c1 = { x: 636, y: 80 } // minY(80) < FLIP_HEADROOM(220) -> clampPanelPosition picks "below"
+	const c1 = { x: 636, y: 80 } // minY(80) < FLIP_HEADROOM(284) -> clampPanelPosition picks "below"
 	const c2 = { x: 644, y: 280 } // maxY(280) close to the viewport's own bottom (300) -> almost no room below
 	const clamped = clampPanelPosition(c1, c2, viewport, PANEL_SIZE, MARGIN, FLIP_HEADROOM)
 	assert.equal(clamped.transform, 'translateX(-50%)', 'precondition: minY < FLIP_HEADROOM selects the below-placement branch')
@@ -230,7 +192,7 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 }
 
 // ============================================================================
-// 9. The flip in case 8 must NOT fire when below-room is already the roomier
+// 8. The flip in case 7 must NOT fire when below-room is already the roomier
 //    side (case 5's own scenario, re-affirmed) — avoidAnchorOverlap must not
 //    flip gratuitously just because a squeeze happened at all.
 // ============================================================================
@@ -244,6 +206,48 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 	assert.equal(fixed.transform, 'translateX(-50%)', 'below-room is still roomier here — must NOT flip to above')
 	assert.equal(fixed.top, c2.y + MARGIN, 'unflipped squeeze behaves exactly as case 5 pins')
 	console.log('ok: avoidAnchorOverlap — does not flip when the originally-chosen side is already the roomier one')
+}
+
+// ============================================================================
+// 9. popoverPosition — opens on the side of the bar away from the selection,
+//    centred on its trigger, clamped to the viewport.
+// ============================================================================
+{
+	// Above the selection: popover opens above the bar, centred on its trigger.
+	assert.deepEqual(
+		popoverPosition({ left: 400, top: 300, width: 200, height: 40 }, { left: 420, width: 30 }, { width: 180, height: 60 }, { width: 1280, height: 720 }, 'above', 8),
+		{ left: 345, top: 232, maxHeight: 60 },
+	)
+	// Below the selection: popover opens below the bar.
+	assert.deepEqual(
+		popoverPosition({ left: 400, top: 300, width: 200, height: 40 }, { left: 420, width: 30 }, { width: 180, height: 60 }, { width: 1280, height: 720 }, 'below', 8),
+		{ left: 345, top: 348, maxHeight: 60 },
+	)
+	// Clamped at the viewport's left edge.
+	assert.equal(popoverPosition({ left: 0, top: 300, width: 200, height: 40 }, { left: 4, width: 30 }, { width: 180, height: 60 }, { width: 1280, height: 720 }, 'below', 8).left, 8)
+	console.log('ok: popoverPosition opens away from the selection and clamps')
+}
+
+// ============================================================================
+// 10. popoverPosition never crosses back over the bar (and so the selection)
+//     when the away side is short: it caps its height to the room there.
+//     Geometry: 1280x680 viewport, selection y 200->500, bar below at 508.
+// ============================================================================
+{
+	const viewport = { width: 1280, height: 680 }
+	const popover = { width: 200, height: 220 }
+	const below = { left: 500, top: 508, width: 215, height: 40 }
+	const pos = popoverPosition(below, { left: 510, width: 32 }, popover, viewport, 'below', 8)
+	assert.ok(pos.top >= below.top + below.height + 8, `below-bar popover starts past the bar's bottom edge — got top=${pos.top}`)
+	assert.equal(pos.maxHeight, 680 - 556 - 8, `height capped to the room left below — got ${pos.maxHeight}`)
+	assert.ok(pos.top + pos.maxHeight <= viewport.height - 8, 'capped popover stays on-screen')
+
+	const above = { left: 500, top: 100, width: 215, height: 40 }
+	const up = popoverPosition(above, { left: 510, width: 32 }, popover, viewport, 'above', 8)
+	assert.ok(up.top + up.maxHeight <= above.top - 8, `above-bar popover ends before the bar's top edge — got bottom=${up.top + up.maxHeight}`)
+	assert.equal(up.top, 8, 'capped above-bar popover starts at the viewport margin')
+	assert.equal(up.maxHeight, 100 - 8 - 8, 'height capped to the room left above')
+	console.log('ok: popoverPosition caps its height to the away-side room instead of overlapping the bar')
 }
 
 console.log('ok: StylePanel.position.test.ts — all cases passed')

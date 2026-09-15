@@ -1,0 +1,451 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Canvas selection toolbar — mockups</title>
+<style>
+  :root {
+    --accent: #7c5cd6; --accent-soft: #efeafc; --fg: #1f2328; --muted: #6b7280;
+    --panel: #ffffff; --border: #e3e3e8; --shadow: 0 4px 16px rgba(0,0,0,.10), 0 1px 3px rgba(0,0,0,.08);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 13px system-ui, sans-serif; color: var(--fg); background: #fff; }
+  header { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  header .group { display: flex; gap: 4px; align-items: center; }
+  header .group > span { color: var(--muted); font-size: 11px; font-weight: 600; margin-right: 4px; text-transform: uppercase; letter-spacing: .04em; }
+  header button { border: 1px solid var(--border); background: #fff; border-radius: 6px; padding: 4px 9px; cursor: pointer; font: inherit; }
+  header button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .note-text { color: var(--muted); font-size: 12px; padding: 6px 14px; border-bottom: 1px solid var(--border); background: #fafafa; }
+
+  #stage { position: relative; height: 640px; overflow: hidden; background-color: #f7f7f5;
+    background-image: radial-gradient(#c9c9c9 1px, transparent 1px); background-size: 22px 22px; }
+
+  .shape { position: absolute; display: flex; padding: 14px; font-size: 17px; line-height: 1.3; cursor: pointer; user-select: none; }
+  .shape.note { box-shadow: 0 6px 10px -6px rgba(0,0,0,.25); }
+  .shape.sel { outline: 2px solid var(--accent); outline-offset: 0; }
+  svg.arrows { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+
+  /* ---- toolbar (variant A light / B dark / C hybrid) ---- */
+  .bar { position: absolute; display: flex; align-items: center; gap: 2px; padding: 4px; border-radius: 10px;
+    background: var(--panel); border: 1px solid var(--border); box-shadow: var(--shadow); transform: translate(-50%, -100%); z-index: 10; white-space: nowrap; }
+  .bar .div { width: 1px; align-self: stretch; margin: 4px 3px; background: var(--border); }
+  .trig { height: 30px; min-width: 30px; padding: 0 6px; display: flex; gap: 3px; align-items: center; justify-content: center;
+    border: 0; border-radius: 6px; background: transparent; color: var(--fg); cursor: pointer; font: 13px system-ui; }
+  .trig:hover { background: #f1f1f4; }
+  .trig.open { background: var(--accent-soft); color: var(--accent); }
+  .trig .chev { width: 8px; opacity: .55; }
+  .dot { width: 18px; height: 18px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); }
+  .dot.mixed { background: conic-gradient(#e03131 0 25%, #4465e9 0 50%, #099268 0 75%, #f1ac4b 0) !important; }
+  .quick { width: 16px; height: 16px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); cursor: pointer; margin: 0 1px; }
+  .quick.cur { box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px var(--accent); }
+
+  .bar.dark { background: #1e1e1e; border-color: #1e1e1e; border-radius: 12px; }
+  .bar.dark .trig { color: #f2f2f2; } .bar.dark .trig:hover { background: #333; }
+  .bar.dark .trig.open { background: #3a3350; color: #fff; }
+  .bar.dark .div { background: #3a3a3a; }
+  .bar.dark .dot { border-color: rgba(255,255,255,.25); }
+
+  .pop { position: absolute; z-index: 11; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+    padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .pop.dark { background: #1e1e1e; border-color: #2c2c2c; color: #eee; }
+  .pop .lbl { font-size: 10px; font-weight: 600; color: var(--muted); letter-spacing: .03em; }
+  .row { display: flex; flex-wrap: wrap; gap: 4px; }
+  .sw { width: 22px; height: 22px; border-radius: 50%; border: 1px solid rgba(0,0,0,.15); cursor: pointer; padding: 0; }
+  .sw.cur { box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px var(--accent); }
+  .ib { min-width: 28px; height: 28px; padding: 0 6px; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: inherit;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; font: 13px system-ui; }
+  .pop.dark .ib { border-color: #3a3a3a; }
+  .ib.cur { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
+  .pop.dark .ib.cur { background: #3a3350; color: #fff; }
+  .menu { display: flex; flex-direction: column; gap: 2px; min-width: 150px; }
+  .menu .ib { justify-content: space-between; border: 0; height: 30px; padding: 0 8px; }
+
+  /* ---- current (before) panel ---- */
+  .old { position: absolute; transform: translateX(-50%); background: #f7f7f5; border: 1px solid #ddd; border-radius: 8px; box-shadow: var(--shadow);
+    padding: 8px 10px; display: flex; flex-direction: column; gap: 8px; z-index: 10; width: 340px; font-size: 11px; }
+  .old .grp { display: flex; gap: 14px; flex-wrap: wrap; }
+  .old .lbl { font-size: 10px; color: var(--muted); font-weight: 600; margin-bottom: 4px; }
+  .old .sw { width: 20px; height: 20px; }
+  .old .ib { width: 24px; min-width: 24px; height: 24px; padding: 0; border-color: #ccc; }
+
+  /* ---- tool chrome ---- */
+  .bottombar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; gap: 2px; padding: 4px;
+    background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); z-index: 9; }
+  .rail { position: absolute; left: 14px; top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 2px; padding: 4px;
+    background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); z-index: 9; }
+  .tool { width: 34px; height: 34px; border: 0; border-radius: 7px; background: transparent; cursor: pointer; display: flex; align-items: center; justify-content: center; color: #333; }
+  .tool:hover { background: #f1f1f4; } .tool.on { background: var(--accent); color: #fff; }
+  .rail .sep { height: 1px; background: var(--border); margin: 3px 4px; }
+  .flyout { position: absolute; z-index: 12; background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow);
+    padding: 10px 12px; display: flex; flex-direction: column; gap: 9px; width: 214px; transform: translateY(-50%); }
+  .flyout h4 { margin: 0; font-size: 12px; }
+  .flyout .lbl { font-size: 10px; font-weight: 600; color: var(--muted); }
+  .flyout .sw { width: 20px; height: 20px; }
+  .flyout::before { content: ""; position: absolute; left: -6px; top: 50%; width: 10px; height: 10px; background: #fff; border-left: 1px solid var(--border); border-bottom: 1px solid var(--border); transform: translateY(-50%) rotate(45deg); }
+  .caption { position: absolute; right: 14px; top: 12px; max-width: 290px; background: rgba(255,255,255,.92); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; font-size: 12px; color: #444; z-index: 8; }
+  .caption b { color: var(--fg); }
+</style>
+</head>
+<body>
+<header>
+  <div class="group" id="g-scene"><span>Selection</span></div>
+  <div class="group" id="g-variant"><span>Bar style</span></div>
+  <div class="group" id="g-chrome"><span>Tools</span></div>
+</header>
+<div class="note-text">Click shapes to select (shift-click adds). Click bar buttons to open popovers; picking a value restyles the shape live. Click a note/text/geo/arrow tool in the left rail to see the armed flyout. Empty canvas click clears selection.</div>
+<div id="stage"></div>
+
+<script>
+const PALETTE = { black:'#1d1d1d', grey:'#9fa8b2', 'light-violet':'#e085f4', violet:'#ae3ec9', blue:'#4465e9', 'light-blue':'#4ba1f1',
+  yellow:'#f1ac4b', orange:'#e16919', green:'#099268', 'light-green':'#4cb05e', 'light-red':'#f87777', red:'#e03131', white:'#ffffff' };
+const QUICK = ['yellow','light-green','light-blue','light-violet','light-red'];
+const VALUES = {
+  color: Object.keys(PALETTE), size: ['s','m','l','xl'], font: ['draw','sans','serif','mono'],
+  align: ['start','middle','end'], verticalAlign: ['start','middle','end'], textAlign: ['start','middle','end'],
+  fill: ['none','semi','solid','pattern'], dash: ['draw','solid','dashed','dotted'],
+  geo: ['rectangle','ellipse','triangle','diamond','hexagon','star','cloud','heart','arrow-right','check-box'],
+  arrowheadStart: ['none','arrow','triangle','dot','bar'], arrowheadEnd: ['none','arrow','triangle','dot','bar'],
+  opacity: [0.1,0.25,0.5,0.75,1],
+};
+const LABEL = { color:'Colour', size:'Size', font:'Font', align:'Horizontal', verticalAlign:'Vertical', textAlign:'Align', fill:'Fill', dash:'Stroke',
+  geo:'Shape', arrowheadStart:'Start', arrowheadEnd:'End', opacity:'Opacity' };
+
+// Proposed per-kind layout table (design doc § Per-kind layout table)
+const LAYOUT = {
+  note:  [['color'],['font'],['size'],['align','verticalAlign'],{more:['opacity']}],
+  text:  [['color'],['font'],['size'],['textAlign'],{more:['opacity']}],
+  geo:   [['geo'],['color'],['fill'],['dash'],['align','verticalAlign'],{more:['size','font','opacity']}],
+  arrow: [['color'],['dash'],['arrowheadStart','arrowheadEnd'],{more:['size','fill','font','opacity']}],
+};
+const AXES = k => LAYOUT[k].flatMap(s => s.more ? s.more : s);
+
+function slotsFor(kinds) {
+  const common = new Set(AXES(kinds[0]).filter(a => kinds.every(k => AXES(k).includes(a))));
+  const out = []; let more = [];
+  for (const s of LAYOUT[kinds[0]]) {
+    if (s.more) { more = s.more.filter(a => common.has(a)); continue; }
+    const f = s.filter(a => common.has(a)); if (f.length) out.push(f);
+  }
+  // axes that are "top level" for some kind but in more for the first kind stay in more; fine for a mockup
+  return { slots: out, more };
+}
+
+// ---------- scene ----------
+const SCENES = {
+  note: { label: 'Note', sel: ['n2'] },
+  text: { label: 'Text', sel: ['t1'] },
+  geo: { label: 'Geo', sel: ['g1'] },
+  arrow: { label: 'Arrow', sel: ['a1'] },
+  mixed: { label: 'Geo + arrow (mixed)', sel: ['g1','a1'] },
+  notes: { label: '2 notes, diff colours', sel: ['n1','n2'] },
+};
+const shapes = {
+  n1: { kind:'note', x:190, y:90,  w:200, h:200, text:'Talk to an agent about a node', s:{ color:'yellow', size:'m', font:'sans', align:'middle', verticalAlign:'middle', opacity:1 } },
+  n2: { kind:'note', x:470, y:250, w:200, h:200, text:'Ship the discovery tree', s:{ color:'light-blue', size:'m', font:'sans', align:'middle', verticalAlign:'middle', opacity:1 } },
+  n3: { kind:'note', x:760, y:400, w:200, h:200, text:'W15 goal via the gesture', s:{ color:'yellow', size:'m', font:'sans', align:'middle', verticalAlign:'middle', opacity:1 } },
+  t1: { kind:'text', x:760, y:110, w:230, h:60, text:'Discovery tree — sprint 15', s:{ color:'black', size:'l', font:'sans', textAlign:'start', opacity:1 } },
+  g1: { kind:'geo', x:230, y:420, w:170, h:120, text:'Decide policy', s:{ color:'violet', fill:'semi', dash:'solid', size:'m', font:'sans', align:'middle', verticalAlign:'middle', geo:'rectangle', opacity:1 } },
+  a1: { kind:'arrow', x1:400, y1:480, x2:470, y2:400, s:{ color:'black', fill:'none', dash:'solid', size:'m', font:'sans', arrowheadStart:'none', arrowheadEnd:'arrow', opacity:1 } },
+};
+const state = { scene:'note', variant:'light', chrome:'rail', sel:new Set(['n2']), open:null, tool:null };
+
+// ---------- icons ----------
+const svg = (inner, w=16, h=16) => `<svg width="${w}" height="${h}" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+const CHEV = `<svg class="chev" viewBox="0 0 8 8" width="8" height="8"><path d="M1.5 3l2.5 2.5L6.5 3" stroke="currentColor" stroke-width="1.4" fill="none" stroke-linecap="round"/></svg>`;
+const ICON = {
+  align: v => svg({start:'<path d="M2 4h12M2 8h8M2 12h10"/>', middle:'<path d="M2 4h12M4 8h8M3 12h10"/>', end:'<path d="M2 4h12M6 8h8M4 12h10"/>'}[v]),
+  textAlign: v => ICON.align(v),
+  verticalAlign: v => svg({start:'<path d="M3 2h10M6 6h4"/>', middle:'<path d="M3 8h10M6 5h4M6 11h4" opacity=".5"/><path d="M6 8h4"/>', end:'<path d="M3 14h10M6 10h4"/>'}[v]),
+  fill: v => svg({none:'<rect x="3" y="3" width="10" height="10" rx="2"/>', semi:'<rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor" fill-opacity=".25"/>',
+    solid:'<rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor"/>', pattern:'<rect x="3" y="3" width="10" height="10" rx="2"/><path d="M4 9l5-5M5 12l7-7M9 12l3-3"/>'}[v]),
+  dash: v => svg({draw:'<path d="M2 9c2-3 3 2 5-1s3 2 5-1 2 1 2 1"/>', solid:'<path d="M2 8h12"/>', dashed:'<path d="M2 8h3M7 8h3M12 8h2"/>', dotted:'<path d="M2 8h.1M5.5 8h.1M9 8h.1M12.5 8h.1" stroke-width="2.4"/>'}[v]),
+  size: v => `<span style="font-weight:600;font-size:12px">${v.toUpperCase()}</span>`,
+  font: v => `<span style="font-size:14px;font-family:${{draw:'"Comic Sans MS",cursive',sans:'system-ui',serif:'Georgia,serif',mono:'ui-monospace,monospace'}[v]}">Aa</span>`,
+  geo: v => svg({rectangle:'<rect x="2.5" y="4" width="11" height="8" rx="1"/>', ellipse:'<ellipse cx="8" cy="8" rx="5.5" ry="4"/>', triangle:'<path d="M8 3l5.5 10h-11z"/>',
+    diamond:'<path d="M8 2l6 6-6 6-6-6z"/>', hexagon:'<path d="M5 2.5h6L14 8l-3 5.5H5L2 8z"/>', star:'<path d="M8 2l1.8 3.8 4.2.5-3.1 2.9.8 4.1L8 11.3l-3.7 2 .8-4.1L2 6.3l4.2-.5z"/>',
+    cloud:'<path d="M4.5 12a2.5 2.5 0 01-.3-5 3.5 3.5 0 016.8-1 2.7 2.7 0 01.5 6z"/>', heart:'<path d="M8 13.5S2 10 2 6a3 3 0 016-1 3 3 0 016 1c0 4-6 7.5-6 7.5z"/>',
+    'arrow-right':'<path d="M2 6h7V3l5 5-5 5v-3H2z"/>', 'check-box':'<rect x="2.5" y="2.5" width="11" height="11" rx="1.5"/><path d="M5 8l2 2 4-4"/>'}[v]),
+  arrowheadStart: v => svg({none:'<path d="M3 8h10"/>', arrow:'<path d="M3 8h10M6 5L3 8l3 3"/>', triangle:'<path d="M5 8h8"/><path d="M6 5L3 8l3 3z" fill="currentColor"/>', dot:'<path d="M6 8h7"/><circle cx="4" cy="8" r="1.8" fill="currentColor"/>', bar:'<path d="M3 8h10M3 5v6"/>'}[v]),
+  arrowheadEnd: v => `<span style="display:inline-flex;transform:scaleX(-1)">${ICON.arrowheadStart(v)}</span>`,
+  opacity: v => `<span style="font-size:11px">${Math.round(v*100)}%</span>`,
+  more: () => svg('<circle cx="3.5" cy="8" r=".6" fill="currentColor"/><circle cx="8" cy="8" r=".6" fill="currentColor"/><circle cx="12.5" cy="8" r=".6" fill="currentColor"/>'),
+};
+const TOOL_ICON = {
+  select: svg('<path d="M4 2l8 5-3.5 1L10.5 13 9 14 7 9l-3 2.5z" fill="currentColor"/>'),
+  hand: svg('<path d="M5 8V4a1 1 0 012 0v3V3a1 1 0 012 0v4-3a1 1 0 012 0v5a5 5 0 01-5 5c-2 0-3-1-4-3L2.5 9a1 1 0 011.7-1z"/>'),
+  note: svg('<path d="M3 3h10v6l-4 4H3z"/><path d="M9 13V9h4"/>'),
+  text: svg('<path d="M3 4V3h10v1M8 3v10M6 13h4"/>'),
+  geo: svg('<rect x="2.5" y="2.5" width="7" height="7" rx="1"/><circle cx="11" cy="11" r="3"/>'),
+  arrow: svg('<path d="M3 13L13 3M7 3h6v6"/>'),
+  draw: svg('<path d="M2 12c3-6 5 2 8-3s2-6 4-6"/>'),
+  frame: svg('<path d="M4 1v14M12 1v14M1 4h14M1 12h14"/>'),
+  eraser: svg('<path d="M6 13l-3-3 7-7 4 4-6 6zM6 13h8"/>'),
+};
+
+// ---------- helpers ----------
+const $ = (tag, attrs={}, html='') => { const e = document.createElement(tag); for (const [k,v] of Object.entries(attrs)) e.setAttribute(k,v); e.innerHTML = html; return e; };
+const tint = (c, pct) => `color-mix(in srgb, ${PALETTE[c]} ${pct}%, white)`;
+function current(ids, axis) {
+  const vals = [...new Set(ids.map(id => shapes[id].s[axis]))];
+  return vals.length === 1 ? vals[0] : 'mixed';
+}
+function triggerFace(axis, v) {
+  if (axis === 'color') return v === 'mixed' ? `<span class="dot mixed"></span>` : `<span class="dot" style="background:${PALETTE[v]}"></span>`;
+  if (v === 'mixed') return `<span style="opacity:.6">—</span>`;
+  return ICON[axis](v);
+}
+function bbox(ids) {
+  let x1=1e9,y1=1e9,x2=-1e9,y2=-1e9;
+  for (const id of ids) { const s = shapes[id];
+    const b = s.kind==='arrow' ? [Math.min(s.x1,s.x2),Math.min(s.y1,s.y2),Math.max(s.x1,s.x2),Math.max(s.y1,s.y2)] : [s.x,s.y,s.x+s.w,s.y+s.h];
+    x1=Math.min(x1,b[0]); y1=Math.min(y1,b[1]); x2=Math.max(x2,b[2]); y2=Math.max(y2,b[3]); }
+  return {x1,y1,x2,y2};
+}
+function apply(ids, axis, v) { for (const id of ids) if (axis in shapes[id].s) shapes[id].s[axis] = v; render(); }
+
+// ---------- render ----------
+const stage = document.getElementById('stage');
+function render() {
+  stage.innerHTML = '';
+  const ids = [...state.sel];
+
+  // arrows
+  const svgEl = document.createElementNS('http://www.w3.org/2000/svg','svg'); svgEl.classList.add('arrows');
+  for (const [id,s] of Object.entries(shapes)) if (s.kind==='arrow') {
+    const dash = {solid:'', dashed:'8 6', dotted:'1 6', draw:''}[s.s.dash];
+    const w = {s:2,m:3,l:5,xl:8}[s.s.size];
+    const col = PALETTE[s.s.color];
+    const head = (x,y,ang,type) => { if (type==='none') return ''; const L=12, a=.5;
+      const p1=[x-L*Math.cos(ang-a), y-L*Math.sin(ang-a)], p2=[x-L*Math.cos(ang+a), y-L*Math.sin(ang+a)];
+      if (type==='dot') return `<circle cx="${x}" cy="${y}" r="5" fill="${col}"/>`;
+      if (type==='bar') return `<path d="M${x-8*Math.sin(ang)} ${y+8*Math.cos(ang)}L${x+8*Math.sin(ang)} ${y-8*Math.cos(ang)}" stroke="${col}" stroke-width="${w}"/>`;
+      return `<path d="M${p1}L${x} ${y}L${p2}${type==='triangle'?'z':''}" stroke="${col}" stroke-width="${w}" fill="${type==='triangle'?col:'none'}" stroke-linejoin="round"/>`; };
+    const ang = Math.atan2(s.y2-s.y1, s.x2-s.x1);
+    svgEl.innerHTML += `<g opacity="${s.s.opacity}"><path d="M${s.x1} ${s.y1}L${s.x2} ${s.y2}" stroke="${col}" stroke-width="${w}" stroke-dasharray="${dash}" stroke-linecap="round"/>
+      ${head(s.x2,s.y2,ang,s.s.arrowheadEnd)}${head(s.x1,s.y1,ang+Math.PI,s.s.arrowheadStart)}
+      <line x1="${s.x1}" y1="${s.y1}" x2="${s.x2}" y2="${s.y2}" stroke="transparent" stroke-width="16" style="pointer-events:stroke;cursor:pointer" data-id="${id}"/>
+      ${state.sel.has(id)?`<circle cx="${s.x1}" cy="${s.y1}" r="5" fill="#fff" stroke="var(--accent)" stroke-width="2"/><circle cx="${s.x2}" cy="${s.y2}" r="5" fill="#fff" stroke="var(--accent)" stroke-width="2"/>`:''}</g>`;
+  }
+  // context arrows between notes (decorative)
+  svgEl.innerHTML += `<path d="M390 190 L470 300" stroke="#333" stroke-width="1.5" fill="none"/><path d="M670 350 L760 470" stroke="#333" stroke-width="1.5" fill="none"/>`;
+  stage.appendChild(svgEl);
+
+  for (const [id,s] of Object.entries(shapes)) if (s.kind!=='arrow') {
+    const e = $('div', { class:`shape ${s.kind}${state.sel.has(id)?' sel':''}`, 'data-id':id }, s.text);
+    const fs = {s:13,m:17,l:23,xl:30}[s.s.size];
+    const ff = {draw:'"Comic Sans MS",cursive',sans:'system-ui',serif:'Georgia,serif',mono:'ui-monospace,monospace'}[s.s.font];
+    const ha = {start:'flex-start',middle:'center',end:'flex-end'}[s.s.align ?? s.s.textAlign];
+    const va = {start:'flex-start',middle:'center',end:'flex-end'}[s.s.verticalAlign ?? 'start'];
+    Object.assign(e.style, { left:s.x+'px', top:s.y+'px', width:s.w+'px', height:s.h+'px', fontSize:fs+'px', fontFamily:ff, opacity:s.s.opacity,
+      justifyContent: ha, alignItems: va, textAlign: {start:'left',middle:'center',end:'right'}[s.s.align ?? s.s.textAlign] });
+    if (s.kind==='note') e.style.background = tint(s.s.color, 45);
+    if (s.kind==='text') { e.style.color = PALETTE[s.s.color]; e.style.padding='4px'; }
+    if (s.kind==='geo') {
+      const col = PALETTE[s.s.color];
+      e.style.color = '#1d1d1d';
+      const shapePath = { rectangle:`<rect x="1.5" y="1.5" width="${s.w-3}" height="${s.h-3}" rx="6"/>`, ellipse:`<ellipse cx="${s.w/2}" cy="${s.h/2}" rx="${s.w/2-2}" ry="${s.h/2-2}"/>`,
+        triangle:`<path d="M${s.w/2} 2L${s.w-2} ${s.h-2}H2z"/>`, diamond:`<path d="M${s.w/2} 2L${s.w-2} ${s.h/2}L${s.w/2} ${s.h-2}L2 ${s.h/2}z"/>` }[s.s.geo]
+        ?? `<rect x="1.5" y="1.5" width="${s.w-3}" height="${s.h-3}" rx="${s.h/2}"/>`;
+      const fill = {none:'none', semi:tint(s.s.color,18), solid:PALETTE[s.s.color], pattern:tint(s.s.color,35)}[s.s.fill];
+      const dash = {solid:'', dashed:'10 7', dotted:'1 7', draw:''}[s.s.dash];
+      e.innerHTML = `<svg width="${s.w}" height="${s.h}" style="position:absolute;inset:0;overflow:visible"><g stroke="${col}" stroke-width="${{s:2,m:3,l:5,xl:8}[s.s.size]}" fill="${fill}" stroke-dasharray="${dash}" stroke-linecap="round">${shapePath}</g></svg><span style="position:relative">${s.text}</span>`;
+      if (s.s.fill==='solid') e.querySelector('span').style.color='#fff';
+    }
+    stage.appendChild(e);
+  }
+
+  // tool chrome
+  if (state.chrome === 'bottom') {
+    const bar = $('div', { class:'bottombar' });
+    for (const t of Object.keys(TOOL_ICON)) { const b = $('button', { class:'tool'+(t==='select'&&!state.tool?' on':''), title:t }, TOOL_ICON[t]); bar.appendChild(b); }
+    stage.appendChild(bar);
+  } else {
+    const rail = $('div', { class:'rail' });
+    for (const t of Object.keys(TOOL_ICON)) {
+      if (t==='note') rail.appendChild($('div',{class:'sep'}));
+      const on = state.tool ? state.tool===t : t==='select';
+      const b = $('button', { class:'tool'+(on?' on':''), title:t, 'data-tool':t }, TOOL_ICON[t]); rail.appendChild(b);
+    }
+    stage.appendChild(rail);
+  }
+
+  if (state.tool && state.chrome==='rail' && LAYOUT[state.tool]) renderFlyout();
+  else if (ids.length) {
+    if (state.variant === 'before') renderOld(ids); else renderBar(ids);
+  }
+
+  const cap = $('div', { class:'caption' }, CAPTIONS[state.tool && state.chrome==='rail' ? 'flyout' : state.variant]);
+  stage.appendChild(cap);
+}
+
+const CAPTIONS = {
+  light: '<b>A — Light pill (Miro / Mural).</b> One row, current value on each button, values in a popover. Rare axes in ⋯. Matches our existing light chrome.',
+  dark: '<b>B — Dark pill (FigJam).</b> Same slots as A, high-contrast. Stands out from pastel stickies; less like the rest of our chrome.',
+  hybrid: '<b>C — Hybrid.</b> Like A, but 5 common colours inline so recolouring a sticky stays one click. ▾ opens the full palette.',
+  before: '<b>Today.</b> Every axis and value always visible, labelled rows. ~340px wide.',
+  flyout: '<b>PR 2 — armed tool flyout.</b> Picking a tool on the rail shows next-shape style beside it, values expanded (like Mural’s sticky-notes panel). Replaces the floating top-centre panel.',
+};
+
+function renderBar(ids) {
+  const kinds = [...new Set(ids.map(id => shapes[id].kind))];
+  const { slots, more } = slotsFor(kinds);
+  const b = bbox(ids);
+  const dark = state.variant === 'dark';
+  const bar = $('div', { class:'bar'+(dark?' dark':'') });
+  const cx = (b.x1+b.x2)/2;
+  let top = b.y1 - 12, below = false;
+  if (top < 60) { top = b.y2 + 12; below = true; }
+  bar.style.left = cx+'px'; bar.style.top = top+'px';
+  if (below) bar.style.transform = 'translate(-50%, 0)';
+
+  slots.forEach((axes, i) => {
+    if (i && (axes[0]==='color' || slots[i-1][0]==='color' || axes[0]==='align')) bar.appendChild($('div',{class:'div'}));
+    const key = axes.join('+');
+    if (state.variant==='hybrid' && axes[0]==='color') {
+      const cur = current(ids,'color');
+      const wrap = $('div', { style:'display:flex;align-items:center;padding:0 3px' });
+      for (const c of QUICK) { const q = $('span', { class:'quick'+(cur===c?' cur':''), title:c }); q.style.background = PALETTE[c]; q.onclick = e => { e.stopPropagation(); apply(ids,'color',c); }; wrap.appendChild(q); }
+      bar.appendChild(wrap);
+      const t = $('button', { class:'trig'+(state.open===key?' open':''), title:'All colours' }, (QUICK.includes(cur)?'':triggerFace('color',cur)) + CHEV);
+      t.onclick = e => { e.stopPropagation(); state.open = state.open===key?null:key; render(); };
+      bar.appendChild(t);
+      return;
+    }
+    const face = triggerFace(axes[0], current(ids, axes[0]));
+    const t = $('button', { class:'trig'+(state.open===key?' open':''), title: axes.map(a=>LABEL[a]).join(' / ') }, face + (dark && axes[0]!=='align' ? CHEV : ''));
+    t.onclick = e => { e.stopPropagation(); state.open = state.open===key?null:key; render(); };
+    bar.appendChild(t);
+  });
+  if (more.length) {
+    bar.appendChild($('div',{class:'div'}));
+    const t = $('button', { class:'trig'+(state.open==='more'?' open':''), title:'More' }, ICON.more());
+    t.onclick = e => { e.stopPropagation(); state.open = state.open==='more'?null:'more'; render(); };
+    bar.appendChild(t);
+  }
+  stage.appendChild(bar);
+
+  if (state.open) {
+    const axes = state.open==='more' ? more : state.open.split('+');
+    const trig = [...bar.querySelectorAll('.trig')].find(el => el.classList.contains('open'));
+    const pop = $('div', { class:'pop'+(dark?' dark':'') });
+    for (const a of axes) {
+      const cur = current(ids, a);
+      if (axes.length > 1 || state.open==='more') pop.appendChild($('div',{class:'lbl'}, LABEL[a] + (cur==='mixed'?' — mixed':'')));
+      const row = $('div', { class:'row' });
+      if (a==='color') {
+        row.style.width = '166px';
+        for (const c of VALUES.color) { const s = $('button', { class:'sw'+(cur===c?' cur':''), title:c }); s.style.background = PALETTE[c]; s.onclick = e => { e.stopPropagation(); apply(ids,a,c); }; row.appendChild(s); }
+      } else {
+        if (a==='geo') row.style.width = '166px';
+        for (const v of VALUES[a]) { const s = $('button', { class:'ib'+(cur===v?' cur':''), title:String(v) }, ICON[a](v)); s.onclick = e => { e.stopPropagation(); apply(ids,a,v); }; row.appendChild(s); }
+      }
+      pop.appendChild(row);
+    }
+    stage.appendChild(pop);
+    const br = bar.getBoundingClientRect(), sr = stage.getBoundingClientRect(), tr = trig.getBoundingClientRect(), pr = pop.getBoundingClientRect();
+    let left = tr.left - sr.left + tr.width/2 - pr.width/2;
+    left = Math.max(8, Math.min(left, sr.width - pr.width - 8));
+    // open away from the selection
+    const popTop = below ? br.bottom - sr.top + 6 : br.top - sr.top - pr.height - 6;
+    pop.style.left = left+'px'; pop.style.top = Math.max(8, popTop)+'px';
+    pop.onclick = e => e.stopPropagation();
+  }
+  bar.onclick = e => e.stopPropagation();
+}
+
+function renderOld(ids) {
+  const kinds = [...new Set(ids.map(id => shapes[id].kind))];
+  const axes = [...new Set(kinds.flatMap(AXES))]; // union, as today
+  const groups = [['color'],['fill','dash'],['size','font'],['align','verticalAlign','textAlign'],['geo'],['arrowheadStart','arrowheadEnd'],['opacity']]
+    .map(g => g.filter(a => axes.includes(a))).filter(g => g.length);
+  const b = bbox(ids);
+  const p = $('div', { class:'old' });
+  for (const g of groups) {
+    const grp = $('div', { class:'grp' });
+    for (const a of g) {
+      const cur = current(ids.filter(id => a in shapes[id].s), a);
+      const col = $('div'); col.appendChild($('div',{class:'lbl'}, (a==='align'?'Align':a==='verticalAlign'?'Vertical align':LABEL[a]) + (cur==='mixed'?' — mixed':'') + (a==='opacity'&&cur!=='mixed'?` — ${Math.round(cur*100)}%`:'')));
+      const row = $('div',{class:'row'});
+      for (const v of VALUES[a]) {
+        const s = a==='color' ? $('button',{class:'sw'+(cur===v?' cur':'')}) : $('button',{class:'ib'+(cur===v?' cur':'')}, a==='opacity'?'':ICON[a](v));
+        if (a==='color') s.style.background = PALETTE[v];
+        if (a==='opacity') { s.style.cssText += ';border-radius:50%;width:14px;min-width:14px;height:14px;background:'+(cur===v?'var(--accent)':'#bbb'); }
+        s.onclick = e => { e.stopPropagation(); apply(ids,a,v); };
+        row.appendChild(s);
+      }
+      col.appendChild(row); grp.appendChild(col);
+    }
+    p.appendChild(grp);
+  }
+  p.style.left = (b.x1+b.x2)/2+'px'; p.style.top = (b.y2+12)+'px';
+  p.onclick = e => e.stopPropagation();
+  stage.appendChild(p);
+}
+
+function renderFlyout() {
+  const k = state.tool;
+  const btn = stage.querySelector(`[data-tool="${k}"]`);
+  const sr = stage.getBoundingClientRect(), br = btn.getBoundingClientRect();
+  const f = $('div', { class:'flyout' });
+  f.appendChild($('h4', {}, {note:'Sticky note', text:'Text', geo:'Shape', arrow:'Arrow'}[k]));
+  const next = state.next[k];
+  for (const a of AXES(k)) {
+    if (a==='opacity') continue;
+    f.appendChild($('div',{class:'lbl'}, a==='align'?'Align':a==='verticalAlign'?'Vertical align':LABEL[a]));
+    const row = $('div',{class:'row'});
+    for (const v of VALUES[a]) {
+      const s = a==='color' ? $('button',{class:'sw'+(next[a]===v?' cur':''), title:v}) : $('button',{class:'ib'+(next[a]===v?' cur':''), title:String(v)}, ICON[a](v));
+      if (a==='color') s.style.background = PALETTE[v];
+      s.onclick = e => { e.stopPropagation(); next[a]=v; render(); };
+      row.appendChild(s);
+    }
+    f.appendChild(row);
+  }
+  f.style.left = (br.right - sr.left + 12)+'px'; f.style.top = (br.top - sr.top + br.height/2)+'px';
+  f.onclick = e => e.stopPropagation();
+  stage.appendChild(f);
+  // clamp vertically
+  const fr = f.getBoundingClientRect();
+  if (fr.top < sr.top + 8) f.style.top = (parseFloat(f.style.top) + (sr.top + 8 - fr.top))+'px';
+  if (fr.bottom > sr.bottom - 8) f.style.top = (parseFloat(f.style.top) - (fr.bottom - sr.bottom + 8))+'px';
+}
+state.next = {
+  note: { color:'yellow', size:'m', font:'sans', align:'middle', verticalAlign:'middle' },
+  text: { color:'black', size:'m', font:'sans', textAlign:'start' },
+  geo: { color:'black', fill:'none', dash:'draw', size:'m', font:'draw', align:'middle', verticalAlign:'middle', geo:'rectangle' },
+  arrow: { color:'black', fill:'none', dash:'draw', size:'m', font:'draw', arrowheadStart:'none', arrowheadEnd:'arrow' },
+};
+
+// ---------- interactions ----------
+stage.addEventListener('click', e => {
+  const tool = e.target.closest('[data-tool]');
+  if (tool) { const t = tool.dataset.tool; state.tool = (t==='select'||state.tool===t) ? null : t; if (state.tool) state.sel.clear(); state.open=null; render(); return; }
+  const hit = e.target.closest('[data-id]');
+  if (hit) {
+    const id = hit.dataset.id; state.tool = null;
+    if (e.shiftKey) state.sel.has(id) ? state.sel.delete(id) : state.sel.add(id); else { state.sel = new Set([id]); }
+    state.open = null; render(); return;
+  }
+  state.sel.clear(); state.open = null; state.tool = null; render();
+});
+document.addEventListener('keydown', e => { if (e.key==='Escape') { if (state.open) state.open=null; else if (state.tool) state.tool=null; else state.sel.clear(); render(); } });
+
+function buttons(groupId, items, key, after) {
+  const g = document.getElementById(groupId);
+  for (const [val, label] of items) {
+    const b = $('button', {}, label); b.dataset.val = val;
+    b.onclick = () => { state[key] = val; after?.(val); sync(); render(); };
+    g.appendChild(b);
+  }
+}
+function sync() {
+  for (const [gid,key] of [['g-scene','scene'],['g-variant','variant'],['g-chrome','chrome']])
+    for (const b of document.getElementById(gid).querySelectorAll('button')) b.classList.toggle('on', b.dataset.val===state[key]);
+}
+buttons('g-scene', Object.entries(SCENES).map(([k,v]) => [k, v.label]), 'scene', v => { state.sel = new Set(SCENES[v].sel); state.open=null; state.tool=null; if (v==='notes') shapes.n1.s.color='yellow'; });
+buttons('g-variant', [['light','A · Light pill'],['dark','B · Dark pill'],['hybrid','C · Hybrid colours'],['before','Today']], 'variant', () => state.open=null);
+buttons('g-chrome', [['rail','Left rail (PR 2)'],['bottom','Bottom bar (today)']], 'chrome', () => state.tool=null);
+sync(); render();
+</script>
+</body>
+</html>

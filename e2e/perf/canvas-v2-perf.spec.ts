@@ -672,7 +672,9 @@ test.describe('canvas-v2 browser perf', () => {
 				await page.locator('[data-canvas-tool="note"]').click()
 				const col = i % 5
 				const row = Math.floor(i / 5)
-				await page.mouse.click(box.x + 120 + col * 220, box.y + 120 + row * 150)
+				// Grid starts at x=360: the note tool's armed-style flyout sits
+				// beside the left rail (out to x≈290) and would swallow clicks.
+				await page.mouse.click(box.x + 360 + col * 200, box.y + 120 + row * 150)
 			}
 		})
 		await page.locator('[data-canvas-tool="select"]').click()

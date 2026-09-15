@@ -30,12 +30,15 @@ import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js
 import { noteCreateBeginsEditing } from './contracts/note-create-begins-editing.js'
 import { noteResizeHandlesSuppressed } from './contracts/note-resize-handles-suppressed.js'
 import { pastePlacesAndSelects } from './contracts/paste-places-and-selects.js'
+import { railFlyoutFollowsTool } from './contracts/rail-flyout-follows-tool.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
 import { selectAllSelectsEveryShapeOnPage } from './contracts/select-all-selects-every-shape-on-page.js'
 import { selectIgnoresOtherPages } from './contracts/select-ignores-other-pages.js'
 import { shapeGrowsToFitTypedText } from './contracts/shape-grows-to-fit-typed-text.js'
 import { shiftDragConstrainsToAxis } from './contracts/shift-drag-constrains-to-axis.js'
 import { styleAppliesToSelection } from './contracts/style-applies-to-selection.js'
+import { stylePopoverEscape } from './contracts/style-popover-escape.js'
+import { styleTriggerEnter } from './contracts/style-trigger-enter.js'
 import { styleEditArmsNextShape } from './contracts/style-edit-arms-next-shape.js'
 import { switchingPageChangesRenderedShapes } from './contracts/switching-page-changes-rendered-shapes.js'
 import { toolShortcutSwitchesAndArmsTool } from './contracts/tool-shortcut-switches-and-arms-tool.js'
@@ -50,6 +53,7 @@ export const CONTRACTS: readonly Contract[] = [
   noteResizeHandlesSuppressed,
   editingIndicator,
   styleAppliesToSelection,
+  stylePopoverEscape,
   armedStyleAppliesToCreatedShape,
   styleEditArmsNextShape,
   duplicateReidsAndOffsets,
@@ -77,4 +81,6 @@ export const CONTRACTS: readonly Contract[] = [
   arrowStaysOnItsPage,
   enterOnChromeButtonDoesNotEdit,
   selectIgnoresOtherPages,
+  styleTriggerEnter,
+  railFlyoutFollowsTool,
 ]

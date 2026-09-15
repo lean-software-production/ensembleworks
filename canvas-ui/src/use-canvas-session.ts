@@ -34,7 +34,7 @@ import {
 import { encodeClipboard, serializeSelection } from '@ensembleworks/canvas-model'
 import type { CanvasHost } from './host.js'
 import { isKeyTargetInScope } from './keyboard-scope.js'
-import type { StylePanelProps } from './StylePanel.js'
+import type { StyleChange } from './style-controls.js'
 
 export interface UseCanvasSessionOptions {
 	readonly editor: Editor
@@ -67,8 +67,8 @@ export interface CanvasSession {
 	readonly handleInput: (event: InputEvent) => boolean | void
 	/** Stable write handle for shape bodies and embeds. */
 	readonly dispatch: (intents: Intent[]) => void
-	readonly onStyleChange: StylePanelProps['onStyleChange']
-	readonly onArmStyle: StylePanelProps['onArmStyle']
+	readonly onStyleChange: StyleChange
+	readonly onArmStyle: StyleChange
 }
 
 /** True for a text input, textarea or contentEditable element. Duck-typed on
@@ -280,7 +280,7 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 		return () => document.removeEventListener('keydown', onKeydown)
 	}, [editor, runCommand, dispatchToTool, keyboardScopeRef, viewportContainerRef])
 
-	const onStyleChange = useCallback<StylePanelProps['onStyleChange']>(
+	const onStyleChange = useCallback<StyleChange>(
 		(axis: StyleAxis, value: StyleValue, opts) => {
 			const ids = Array.from(editor.get().selection)
 			if (ids.length === 0) return
@@ -293,7 +293,7 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 		[editor, dispatch],
 	)
 
-	const onArmStyle = useCallback<StylePanelProps['onArmStyle']>(
+	const onArmStyle = useCallback<StyleChange>(
 		(axis: StyleAxis, value: StyleValue) => dispatch([{ type: 'SetNextStyle', props: { [axis]: value } }]),
 		[dispatch],
 	)

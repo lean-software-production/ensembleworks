@@ -1290,8 +1290,18 @@ async function main() {
 			ewStyle.editor.apply({ type: 'SetSelection', ids: ['shape:style-x', 'shape:style-y'] })
 		})
 
+		// Values live in per-slot popovers: click the slot's trigger, then
+		// re-query (the popover mounts on the re-render).
+		const openSlot = async (slot: string) => {
+			const trigger = styleContainer.querySelector(`[data-style-trigger="${slot}"]`) as HTMLElement | null
+			assert.ok(trigger, `the ${slot} slot trigger must render — DOM: ${styleContainer.innerHTML}`)
+			await act(async () => {
+				trigger!.click()
+			})
+		}
+		await openSlot('color')
 		const blueSwatch = styleContainer.querySelector(
-			'[data-style-control="color"] [data-style-value="blue"]',
+			'[data-style-popover="color"] [data-style-value="blue"]',
 		) as HTMLElement | null
 		assert.ok(blueSwatch, `the panel's blue color swatch must render for a 2-shape geo selection — DOM: ${styleContainer.innerHTML}`)
 		await act(async () => {
@@ -1308,6 +1318,7 @@ async function main() {
 		console.log('ok: CanvasV2App — clicking the StylePanel color swatch dispatches SetStyle across the WHOLE selection, sparing an unselected shape')
 
 
+		await openSlot('more')
 		const opacityBtn = styleContainer.querySelector('[data-style-control="opacity"] [data-style-value="0.5"]') as HTMLElement | null
 		assert.ok(opacityBtn, `the panel's 50% opacity button must render — DOM: ${styleContainer.innerHTML}`)
 		await act(async () => {
@@ -1363,7 +1374,8 @@ async function main() {
 
 		// Ctrl/Cmd-held click is the escape hatch: "this shape only", must NOT
 		// touch nextShapeStyle (it stays at whatever it was armed to before).
-		const redSwatch = styleContainer.querySelector('[data-style-control="color"] [data-style-value="red"]') as HTMLElement | null
+		await openSlot('color')
+		const redSwatch = styleContainer.querySelector('[data-style-popover="color"] [data-style-value="red"]') as HTMLElement | null
 		assert.ok(redSwatch, `the panel's red color swatch must render — DOM: ${styleContainer.innerHTML}`)
 		await act(async () => {
 			redSwatch!.dispatchEvent(new (win as any).MouseEvent('click', { ctrlKey: true, bubbles: true, cancelable: true }))

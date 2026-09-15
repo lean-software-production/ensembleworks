@@ -19,15 +19,25 @@ export const READY_TIMEOUT_MS = 4_000;
 export const PRESENCE_POLL_MS = 150;
 export const KEEPALIVE_MS = 45_000;
 
+// The stage is the canvas area below the page tab row. It is the size
+// container canvas-ui's flyout caps its height to (`cqh`) and the box the rail
+// centres in, so neither can reach up over the tabs in a short pane. A flex
+// item with `flex-1`/`min-h-0` in the full-height column, so its height is
+// definite and size containment cannot collapse it.
+export const chromeStageStyle: CSSProperties = {
+  containerType: "size",
+};
+
+// A left-edge rail, centred vertically in the stage; canvas-ui's flyout sits
+// beside it, centred on it too.
 export const chromeWrapperStyle: CSSProperties = {
   position: "absolute",
-  bottom: CHROME_DOCK_EDGE_GAP_PX,
   left: CHROME_DOCK_EDGE_GAP_PX,
-  right: CHROME_DOCK_EDGE_GAP_PX,
+  top: "50%",
+  transform: "translateY(-50%)",
   zIndex: CHROME_DOCK_Z_INDEX,
   pointerEvents: CHROME_DOCK_POINTER_EVENTS.wrapper,
   display: "flex",
-  justifyContent: "center",
 };
 
 export const chromeTabRowStyle: CSSProperties = {
@@ -46,12 +56,18 @@ export const chromeCardColumnStyle: CSSProperties = {
   minWidth: 0,
 };
 
+// Capped to the stage; the rail's own scroller takes any overflow, so a pane
+// shorter than the rail never pushes tools off-edge.
 export const chromeToolbarStyle: CSSProperties = {
   display: "flex",
+  flexDirection: "column",
+  boxSizing: "border-box",
+  maxHeight: `calc(100cqh - ${2 * CHROME_DOCK_EDGE_GAP_PX}px)`,
+  minHeight: 0,
   alignItems: "center",
   gap: 4,
   flexWrap: CHROME_DOCK_TOOLBAR_OVERFLOW,
-  padding: "5px 6px",
+  padding: "6px 5px",
   borderRadius: 10,
   border: `1px solid ${CHROME_HAIRLINE}`,
   background: CHROME_PAPER,

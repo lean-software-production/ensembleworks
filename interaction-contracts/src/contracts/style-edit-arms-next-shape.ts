@@ -1,35 +1,9 @@
-// Task style-memory (gap 3) — the interaction contract that pins NEXT-SHAPE
-// STYLE MEMORY: tldraw parity (StylePanelContext.tsx, "every style click
-// sets BOTH setStyleForSelectedShapes AND setStyleForNextShapes unless
-// Ctrl/Cmd held") means editing a SELECTION's style must ALSO update the
-// style used for the next shape drawn with that tool — recolor a selected
-// note to red, draw a new note, and it must ALSO be red, not the tool's own
-// stale/default armed style. Browser-only, same rationale as
-// `style-applies-to-selection`/`armed-style-applies-to-created-shape`: the
-// panel (canvas-ui/src/StylePanel.tsx) is a React/DOM component with
-// no FSM-level equivalent to click.
-//
-// GESTURE: seed one geo shape, select it, click the SELECTION panel's blue
-// color swatch (dispatches `SetStyle` — Task P4 — over the selection); click
-// empty canvas with the select tool still active to CLEAR the selection
-// (select.ts's empty-click -> `SetSelection([])`, line ~572); arm the geo
-// tool (now armed mode, since selection is empty); click empty canvas again
-// to CREATE a new geo shape WITHOUT touching the armed panel's swatches at
-// all. If styling the earlier selection also armed `nextShapeStyle` (gap 3's
-// fix), the freshly created shape inherits blue with no second arming click
-// — if it doesn't, the new shape gets whatever the tool's stale/default
-// armed style was (never blue, since nothing here ever clicked the ARMED
-// panel's blue swatch).
-//
-// RED (as landed, style-memory task): CanvasV2App.tsx's pre-fix
-// `onStyleChange` dispatches only `SetStyle` over the selection, never also
-// `SetNextStyle` (see that module's own gap-3 doc comment on `onStyleChange`
-// for the fix). So the gesture resolves cleanly (the swatch click restyles
-// the selected shape, the selection clears, the geo tool arms, a NEW shape
-// IS created on the second empty-canvas click), and the RED is a genuine
-// "the new shape's color stayed at the tool's stale default, expected
-// 'blue'" value assertion — never a locator-not-found or empty-selection
-// error.
+// Next-shape style memory: editing a selection's style also arms the style
+// for the next shape drawn. Seed one geo shape, select it, open the selection
+// toolbar's color popover and click blue, click empty canvas to clear the
+// selection, arm the geo tool, click empty canvas to create a shape, and
+// assert the new shape is blue with no armed-panel click. Browser-only, same
+// rationale as `style-applies-to-selection`.
 import type { Contract, GestureOp, Obs, Rng } from '../types.js'
 
 const SEEDED_ID = 'shape:style-memory-seed'
@@ -39,12 +13,9 @@ const SEEDED_ID = 'shape:style-memory-seed'
 // `armed-style-applies-to-created-shape` already anchors onto).
 const GEO_TOOL_SELECTOR = '[data-canvas-tool="geo"]'
 
-// The SELECTION panel's blue color swatch — `data-style-panel-mode`
-// distinguishes this from the ARMED panel's own blue swatch (same
-// distinction `style-applies-to-selection`/`armed-style-applies-to-created-
-// shape` already rely on, so this contract's own selector can never
-// accidentally collide with either).
-const SELECTION_BLUE_SWATCH_SELECTOR = '[data-style-panel-mode="selection"] [data-style-control="color"] [data-style-value="blue"]'
+// Scoped to the selection toolbar so it never collides with the armed panel.
+const COLOR_TRIGGER_SELECTOR = '[data-style-panel-mode="selection"] [data-style-trigger="color"]'
+const SELECTION_BLUE_SWATCH_SELECTOR = '[data-style-popover="color"] [data-style-value="blue"]'
 
 export const styleEditArmsNextShape: Contract = {
   name: 'style-edit-arms-next-shape',
@@ -57,8 +28,10 @@ export const styleEditArmsNextShape: Contract = {
     // itself, no marquee needed for a single shape).
     { kind: 'down', at: { ref: 'shape', id: SEEDED_ID } },
     { kind: 'up' },
-    // Click the SELECTION panel's blue swatch: dispatches `SetStyle` over
-    // the selection — and, per gap 3's fix, should ALSO arm `nextShapeStyle`.
+    // Open the color popover and click blue: dispatches `SetStyle` over the
+    // selection and should also arm `nextShapeStyle`.
+    { kind: 'down', at: { ref: 'element', selector: COLOR_TRIGGER_SELECTOR } },
+    { kind: 'up' },
     { kind: 'down', at: { ref: 'element', selector: SELECTION_BLUE_SWATCH_SELECTOR } },
     { kind: 'up' },
     // Click empty canvas (well clear of the seeded shape and the panel) with

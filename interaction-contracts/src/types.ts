@@ -289,6 +289,15 @@ export interface Obs {
    * construction (it reads rendered DOM); the FSM adapter throws
    * 'not observable at fsm level'. */
   renderedArrowIds(): readonly string[]
+  /** The slot id of the style popover currently open over the selection
+   * (`[data-style-popover]`), or null. Browser-only: the popover is rendered
+   * chrome; the FSM adapter throws 'not observable at fsm level'. */
+  openStylePopover(): string | null
+  /** For each armed next-shape style flyout rendered on the tool rail
+   * (`[data-style-panel-mode="armed"]`), the `data-canvas-tool` of the rail
+   * button it is attached to, in DOM order. Browser-only: the flyout is
+   * rendered chrome; the FSM adapter throws 'not observable at fsm level'. */
+  armedFlyoutTools(): readonly string[]
 }
 
 /** A contract declaration = data. */
