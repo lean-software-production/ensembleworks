@@ -36,6 +36,10 @@ export function canvasShapeThemeCss(doc: CanvasDocument): string {
   const rules = [
     `${scope} [data-shape-body="frame"],${scope} [data-shape-body="bbthread"]{background:var(--background)!important;border-color:var(--border)!important}`,
     `${scope} [data-shape-frame-header]{background:var(--card)!important;color:var(--foreground)!important;box-shadow:inset 0 0 0 1px var(--border)!important}`,
+    // The bbthread pane mounts the host ThreadChat (layout "contained": fills
+    // and scrolls inside a bounded parent) as a flex child; without these two
+    // it can grow past the pane and never scroll (the pane clips it).
+    `${scope} .bbthread-chat{flex:1 1 auto;min-height:0}`,
   ];
   for (const shape of doc.byId.values()) {
     const props = shape.props as Record<string, unknown>;
