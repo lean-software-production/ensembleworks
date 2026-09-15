@@ -223,6 +223,23 @@ function findTriggerOnClick(node: unknown, slot: string): (() => void) | undefin
 	console.log('ok: containers pass pointers through, controls take them')
 }
 
+// A tall selection whose bar sits below it with little room left: the
+// popover stays below the bar with a capped, scrollable height instead of
+// being pulled back over the bar and the selection.
+{
+	const g = shape({ id: 'shape:tall', kind: 'geo', y: 200, props: { w: 200, h: 450 } })
+	const html = renderSelection([g], 'more')
+	const px = (tag: string, prop: string) => Number(tag.match(new RegExp(`(?:^|[;"])${prop}:(-?[\\d.]+)px`))?.[1])
+	const barTag = html.match(/^<div[^>]*data-testid="ew-style-panel"[^>]*>(<div[^>]*>)/)![1]!
+	const popTag = openingTag(html, 'data-style-popover="more"')
+	const barBottom = px(barTag, 'top') + px(barTag, 'height')
+	assert.ok(barBottom <= VIEWPORT.height, `precondition: bar is on-screen below the selection — bar: ${barTag}`)
+	assert.ok(px(popTag, 'top') >= barBottom, `popover starts below the bar (${barBottom}) — popover: ${popTag}`)
+	assert.ok(px(popTag, 'top') + px(popTag, 'max-height') <= VIEWPORT.height, `capped popover stays on-screen — popover: ${popTag}`)
+	assert.match(popTag, /overflow-y:auto/, 'the cap is real: overflow scrolls')
+	console.log('ok: short away-side room caps the popover instead of overlapping the bar')
+}
+
 // Clicking a trigger toggles its slot through onOpenSlotChange.
 {
 	const n = shape({ id: 'shape:n', kind: 'note', props: {} })

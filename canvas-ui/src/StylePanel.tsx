@@ -139,8 +139,10 @@ export function avoidAnchorOverlap(
 }
 
 /** Where a popover opens for a trigger on the bar: centred on the trigger, on
- * the bar's side away from the selection, clamped to the viewport. Returns
- * the top-left of a `popover`-sized box. */
+ * the bar's side away from the selection. It never crosses back over the bar
+ * (which would bury the bar and the selection under clickable controls): when
+ * that side is short, `maxHeight` caps it to the room left. Returns the
+ * top-left and height budget of the popover's box. */
 export function popoverPosition(
 	bar: { readonly left: number; readonly top: number; readonly width: number; readonly height: number },
 	trigger: { readonly left: number; readonly width: number },
@@ -148,11 +150,16 @@ export function popoverPosition(
 	viewport: { readonly width: number; readonly height: number },
 	side: 'above' | 'below',
 	margin: number,
-): { left: number; top: number } {
+): { left: number; top: number; maxHeight: number } {
 	const centre = trigger.left + trigger.width / 2
 	const left = clampRange(centre - popover.width / 2, margin, viewport.width - popover.width - margin)
-	const top = side === 'above' ? bar.top - popover.height - margin : bar.top + bar.height + margin
-	return { left, top: clampRange(top, margin, viewport.height - popover.height - margin) }
+	if (side === 'below') {
+		const top = bar.top + bar.height + margin
+		return { left, top, maxHeight: Math.max(0, Math.min(popover.height, viewport.height - margin - top)) }
+	}
+	const bottom = bar.top - margin
+	const maxHeight = Math.max(0, Math.min(popover.height, bottom - margin))
+	return { left, top: bottom - maxHeight, maxHeight }
 }
 
 // ---------------------------------------------------------------------------
@@ -232,6 +239,7 @@ const POPOVER_STYLE: CSSProperties = {
 	width: 'max-content',
 	maxWidth: POPOVER_MAX.width,
 	maxHeight: POPOVER_MAX.height,
+	overflowY: 'auto',
 }
 
 // Fixed widths set swatches/icons per line for the big single-axis value sets
@@ -418,12 +426,13 @@ export function StylePanel({
 				bar.side,
 				MARGIN,
 			)
-			// `pos` bounds a POPOVER_MAX box; the real, usually smaller card is
-			// centred in it and hugs the bar-side edge so it stays by its trigger.
+			// The real, usually shorter card hugs the bar-side edge of its box so it
+			// stays by its trigger; overflowY makes a capped height real.
 			const placement: CSSProperties = {
 				left: pos.left + POPOVER_MAX.width / 2,
-				top: bar.side === 'above' ? pos.top + POPOVER_MAX.height : pos.top,
+				top: bar.side === 'above' ? pos.top + pos.maxHeight : pos.top,
 				transform: bar.side === 'above' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
+				maxHeight: pos.maxHeight,
 			}
 			const fixedWidth = POPOVER_WIDTH_BY_SLOT[open.id]
 			popover = (

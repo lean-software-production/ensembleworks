@@ -232,16 +232,38 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 	// Above the selection: popover opens above the bar, centred on its trigger.
 	assert.deepEqual(
 		popoverPosition({ left: 400, top: 300, width: 200, height: 40 }, { left: 420, width: 30 }, { width: 180, height: 60 }, { width: 1280, height: 720 }, 'above', 8),
-		{ left: 345, top: 232 },
+		{ left: 345, top: 232, maxHeight: 60 },
 	)
 	// Below the selection: popover opens below the bar.
 	assert.deepEqual(
 		popoverPosition({ left: 400, top: 300, width: 200, height: 40 }, { left: 420, width: 30 }, { width: 180, height: 60 }, { width: 1280, height: 720 }, 'below', 8),
-		{ left: 345, top: 348 },
+		{ left: 345, top: 348, maxHeight: 60 },
 	)
 	// Clamped at the viewport's left edge.
 	assert.equal(popoverPosition({ left: 0, top: 300, width: 200, height: 40 }, { left: 4, width: 30 }, { width: 180, height: 60 }, { width: 1280, height: 720 }, 'below', 8).left, 8)
 	console.log('ok: popoverPosition opens away from the selection and clamps')
+}
+
+// ============================================================================
+// 10. popoverPosition never crosses back over the bar (and so the selection)
+//     when the away side is short: it caps its height to the room there.
+//     Geometry: 1280x680 viewport, selection y 200->500, bar below at 508.
+// ============================================================================
+{
+	const viewport = { width: 1280, height: 680 }
+	const popover = { width: 200, height: 220 }
+	const below = { left: 500, top: 508, width: 215, height: 40 }
+	const pos = popoverPosition(below, { left: 510, width: 32 }, popover, viewport, 'below', 8)
+	assert.ok(pos.top >= below.top + below.height + 8, `below-bar popover starts past the bar's bottom edge — got top=${pos.top}`)
+	assert.equal(pos.maxHeight, 680 - 556 - 8, `height capped to the room left below — got ${pos.maxHeight}`)
+	assert.ok(pos.top + pos.maxHeight <= viewport.height - 8, 'capped popover stays on-screen')
+
+	const above = { left: 500, top: 100, width: 215, height: 40 }
+	const up = popoverPosition(above, { left: 510, width: 32 }, popover, viewport, 'above', 8)
+	assert.ok(up.top + up.maxHeight <= above.top - 8, `above-bar popover ends before the bar's top edge — got bottom=${up.top + up.maxHeight}`)
+	assert.equal(up.top, 8, 'capped above-bar popover starts at the viewport margin')
+	assert.equal(up.maxHeight, 100 - 8 - 8, 'height capped to the room left above')
+	console.log('ok: popoverPosition caps its height to the away-side room instead of overlapping the bar')
 }
 
 console.log('ok: StylePanel.position.test.ts — all cases passed')
