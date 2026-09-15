@@ -30,6 +30,7 @@ import { noTransformWhileTyping } from './contracts/no-transform-while-typing.js
 import { noteCreateBeginsEditing } from './contracts/note-create-begins-editing.js'
 import { noteResizeHandlesSuppressed } from './contracts/note-resize-handles-suppressed.js'
 import { pastePlacesAndSelects } from './contracts/paste-places-and-selects.js'
+import { railFlyoutFollowsTool } from './contracts/rail-flyout-follows-tool.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
 import { selectAllSelectsEveryShapeOnPage } from './contracts/select-all-selects-every-shape-on-page.js'
 import { selectIgnoresOtherPages } from './contracts/select-ignores-other-pages.js'
@@ -81,4 +82,5 @@ export const CONTRACTS: readonly Contract[] = [
   enterOnChromeButtonDoesNotEdit,
   selectIgnoresOtherPages,
   styleTriggerEnter,
+  railFlyoutFollowsTool,
 ]

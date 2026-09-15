@@ -194,6 +194,29 @@ Part 2:
 - **New** `rail-flyout-follows-tool`: arm note then geo; invariant: exactly
   one flyout, anchored to the geo button, showing geo's slots.
 
+**CHANGE NOTE (2026-09-15, final review):**
+
+- `style-toolbar-intersection` is not a contract. Which triggers a mixed
+  selection shows is rendering, not interaction, so it is covered by unit
+  tests instead: `toolbarSlots` (canvas-editor) and the StylePanel
+  mixed-selection trigger tests (`StylePanel.test.ts`). The plan omitted it
+  and commit 235eeec's note that it "lands in Tasks 3-4" is superseded here.
+- `style-popover-dismiss` landed as `style-popover-escape`.
+- `rail-flyout-follows-tool` landed as a regression contract for behaviour
+  that was already correct, with a new browser-only `Obs`
+  `armedFlyoutTools()` (FSM throw-stub). Its invariant is "exactly one
+  flyout, attached to the geo button"; which slots it shows stays with
+  `toolbar.test.ts`. Having no RED, it was verified by temporarily attaching
+  the flyout to the note button, observing the failure, and restoring.
+- **New** `style-trigger-enter`: Enter on a focused style trigger activates
+  it and never begins editing the selected shape (the panel stops Enter/Space
+  from its controls reaching the Viewport).
+- Escape on a surface where clicking a trigger leaves focus on the Viewport
+  (Safari, macOS Firefox) is handled in `CanvasSurface` and unit-tested only
+  (`canvas-surface.test.ts`): Chromium focuses the trigger on click, so a
+  browser contract cannot reproduce it.
+- Arrow-key navigation inside popovers is deferred to a follow-up.
+
 ## Testing
 
 - `canvas-editor`: unit tests for `toolbarSlots` (per-kind layout, the
