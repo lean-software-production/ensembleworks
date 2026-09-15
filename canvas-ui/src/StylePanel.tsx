@@ -225,10 +225,10 @@ const POPOVER_STYLE: CSSProperties = {
 }
 
 // Fixed widths set swatches/icons per line for the big single-axis value sets
-// (6 colours, 5 geo shapes); +2 absorbs sub-pixel rounding.
+// (13 colours as 7 + 6, 5 geo shapes); +2 absorbs sub-pixel rounding.
 const POPOVER_CHROME_PX = 2 * (POPOVER_PADDING_PX + BAR_BORDER_PX) + 2
 const POPOVER_WIDTH_BY_SLOT: Partial<Record<ToolbarSlotId, number>> = {
-	color: 6 * SWATCH_PX + 5 * SWATCH_GAP_PX + POPOVER_CHROME_PX,
+	color: 7 * SWATCH_PX + 6 * SWATCH_GAP_PX + POPOVER_CHROME_PX,
 	geo: 5 * ICON_BUTTON_PX + 4 * SWATCH_GAP_PX + POPOVER_CHROME_PX,
 }
 
@@ -365,7 +365,7 @@ export function StylePanel({
 		popover = (
 			<div data-style-popover={open.id} style={{ ...POPOVER_STYLE, ...placement, ...(fixedWidth ? { width: fixedWidth } : {}) }}>
 				{open.axes.map((axis) => (
-					<AxisRow key={axis} axis={axis} value={currentValue(shapes, axis)} onStyleChange={onStyleChange} showLabel={open.axes.length > 1} />
+					<AxisRow key={axis} axis={axis} value={currentValue(shapes, axis)} onStyleChange={onStyleChange} showLabel={open.axes.length > 1 || open.id === 'more'} />
 				))}
 			</div>
 		)

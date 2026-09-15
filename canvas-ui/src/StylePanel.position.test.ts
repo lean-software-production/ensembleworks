@@ -1,31 +1,21 @@
 // Run: bun src/StylePanel.position.test.ts
-// Review fix (post-Task P4) — pins `clampPanelPosition`'s ON-SCREEN
-// guarantee: given the selection's screen-space corners, the viewport size,
-// and the panel's MAXIMUM rendered size, the returned `{left, top, transform}` position must place the
-// panel's REAL on-screen box (after the transform) entirely within
-// [0, viewportWidth] x [0, viewportHeight] (a small MARGIN inside that, per
-// the function's own contract).
+// Pins the selection toolbar's placement math: `clampPanelPosition` keeps the
+// box's real on-screen edges (after its transform) inside the viewport,
+// `avoidAnchorOverlap` keeps it off the selection, and `popoverPosition` opens
+// a popover on the bar's far side without crossing back over it.
 //
-// WHY A UNIT TEST, NOT JUST THE BROWSER CONTRACT: the P3 browser contract
-// (style-applies-to-selection) seeds two shapes CENTERED in the viewport, so
-// its own midX never approaches an edge — it structurally cannot exercise
-// this clamp's edge cases. This test drives the pure math directly with an
-// anchor near the LEFT edge and near the RIGHT edge instead.
-//
-// BUG THIS CATCHES (found in code review of Task P4's first pass): the
-// original fix clamped only the panel's ANCHOR point to
-// [EDGE_CLAMP, viewportWidth - EDGE_CLAMP] with EDGE_CLAMP=90, then centered
-// the panel with `translateX(-50%)`. For a 320px panel (160 > 90), a
-// panel anchored 90px from an edge still had its actual edge land up to
-// (160-90)=70px past the viewport boundary — invisible to the browser
-// contract (centered scene) but real for any edge-anchored selection.
+// Unit-tested rather than left to the browser contracts: those seed shapes
+// centred in the viewport, so they never reach the edge cases. A clamp that
+// only bounded the anchor point (not the centred box) would let a wide box
+// spill past an edge for any edge-anchored selection.
 import assert from 'node:assert/strict'
 import { avoidAnchorOverlap, clampPanelPosition, popoverPosition } from './StylePanel.js'
 
 const VIEWPORT = { width: 1280, height: 720 }
 const PANEL_SIZE = { width: 320, height: 200 }
 const MARGIN = 8
-const FLIP_HEADROOM = 220
+// Matches StylePanel's BAR_FLIP_HEADROOM: bar (40) + popover (220) + 3 margins.
+const FLIP_HEADROOM = 284
 
 /** The panel's REAL on-screen left/right edges, given the CSS this function
  * always returns: `left` + `transform: translateX(-50%)` (both horizontal
@@ -113,17 +103,15 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 }
 
 // ============================================================================
-// 5. REGRESSION PIN — `avoidAnchorOverlap`'s whole reason to exist: a
+// 5. `avoidAnchorOverlap`'s reason to exist: a
 //    below-placement selection in a viewport too short to fit a 480px panel
 //    fully past the selection's bottom edge. `clampPanelPosition`
 //    alone (still correctly, on its own on-screen contract — case 3 above)
 //    squeezes `top` back UP to keep a worst-case-height box on-screen, which
 //    for an actually-short real panel drags its rendered controls on top of
-//    the selection itself — this is EXACTLY the double-click-to-edit /
-//    delete / drag-a-selected-shape regression (a color swatch silently ate
-//    the click meant for the shape underneath it; reproduced empirically
-//    with a 1280x680 viewport, a 200x200 note anchored at screen (300,220),
-//    numbers pulled directly from the failing e2e case). `avoidAnchorOverlap`
+//    the selection itself, where a control would eat a double-click / drag
+//    meant for the shape (geometry: 1280x680 viewport, a 200x200 note at
+//    screen (300,220)). `avoidAnchorOverlap`
 //    must reposition the panel back to the selection's own edge (no overlap,
 //    ever) and shrink it (via the returned `maxHeight`) to fit, while STILL
 //    keeping the panel's real (dynamically-sized) box fully on-screen.
@@ -134,7 +122,7 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 	const c1 = { x: 200, y: 120 } // note top-left, screen-space (ANCHOR (300,220) minus half a 200x200 note)
 	const c2 = { x: 400, y: 320 } // note bottom-right
 	const clamped = clampPanelPosition(c1, c2, viewport, panelSize, MARGIN, FLIP_HEADROOM)
-	assert.equal(clamped.transform, 'translateX(-50%)', 'precondition: minY(120) < FLIP_HEADROOM(220) selects the below-placement branch')
+	assert.equal(clamped.transform, 'translateX(-50%)', 'precondition: minY(120) < FLIP_HEADROOM(284) selects the below-placement branch')
 	assert.ok(clamped.top < c2.y + MARGIN, `precondition: clampPanelPosition alone squeezes top (${clamped.top}) above the selection's bottom edge + margin (${c2.y + MARGIN}) — this is the bug avoidAnchorOverlap fixes`)
 
 	const fixed = avoidAnchorOverlap(clamped, c1, c2, viewport, MARGIN)
@@ -168,14 +156,10 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 }
 
 // ============================================================================
-// 7. LAYOUT DEFECT (b), style-memory task — TALL PANEL / GEO CASE:
-//    `avoidAnchorOverlap`'s below-placement squeeze must flip to ABOVE
-//    placement when that gives strictly more room than squeezing below would
-//    — the reported bug (v2-geo-selected.png): a geo selection near the
-//    bottom of a short-ish viewport forced BELOW placement (clampPanelPosition
-//    picked "below" because minY < FLIP_HEADROOM), got squeezed into a sliver
-//    of room below the selection, and the geo/"Shape" row (last of six groups)
-//    rendered mostly off the bottom of the viewport. A selection whose top is
+// 7. Tall box in a short viewport: `avoidAnchorOverlap`'s below-placement
+//    squeeze must flip to ABOVE placement when that gives strictly more room
+//    than squeezing below would, rather than squeezing the box into a sliver
+//    that renders mostly off the viewport's bottom. A selection whose top is
 //    close to the viewport top (small minY, so clampPanelPosition's own
 //    branch choice is "below") but whose BOTTOM sits deep in a short viewport
 //    (little room actually below it) is exactly this shape: below-room is
@@ -185,7 +169,7 @@ function horizontalEdges(left: number, width: number): { readonly leftEdge: numb
 // ============================================================================
 {
 	const viewport = { width: 1280, height: 300 } // short viewport, geo-panel-scale content
-	const c1 = { x: 636, y: 80 } // minY(80) < FLIP_HEADROOM(220) -> clampPanelPosition picks "below"
+	const c1 = { x: 636, y: 80 } // minY(80) < FLIP_HEADROOM(284) -> clampPanelPosition picks "below"
 	const c2 = { x: 644, y: 280 } // maxY(280) close to the viewport's own bottom (300) -> almost no room below
 	const clamped = clampPanelPosition(c1, c2, viewport, PANEL_SIZE, MARGIN, FLIP_HEADROOM)
 	assert.equal(clamped.transform, 'translateX(-50%)', 'precondition: minY < FLIP_HEADROOM selects the below-placement branch')

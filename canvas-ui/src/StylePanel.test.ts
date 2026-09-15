@@ -329,18 +329,28 @@ function findTriggerOnClick(node: unknown, slot: string): (() => void) | undefin
 	console.log('ok: arrowhead pickers — all 9 values render as icon glyphs')
 }
 
-// ============================================================================
-// Empty selection
-// ============================================================================
-
-// Empty selection renders nothing, even with a style-bearing tool armed: the
-// armed options live beside the tool toolbar (toolbar.test.ts). The stale
-// prop is spread in to prove the panel ignores it.
+// Single-axis popovers are named by their trigger, except `more`: a note's
+// `more` holds only opacity, and a bare slider there has no name.
 {
-	const staleArmedTool = { activeToolId: 'note' }
-	const html = renderToStaticMarkup(createElement(StylePanel, { ...baseProps(), ...staleArmedTool }))
-	assert.equal(html, '', `empty selection with the note tool armed renders nothing — html: ${html}`)
-	console.log('ok: empty selection — panel renders nothing, even with a style tool armed')
+	const n = shape({ id: 'shape:lbl', kind: 'note', props: {} })
+	assert.ok(renderSelection([n], 'more').includes('>Opacity'), 'the note `more` popover labels its lone opacity row')
+	assert.ok(!renderSelection([n], 'size').includes('>Size'), 'a single-axis slot popover stays unlabelled')
+	console.log('ok: a single-axis `more` popover keeps its label')
+}
+
+// The colour popover fits its 13 swatches in two rows of 7 (no orphan row).
+{
+	const n = shape({ id: 'shape:cols', kind: 'note', props: {} })
+	const tag = openingTag(renderSelection([n], 'color'), 'data-style-popover="color"')
+	assert.match(tag, /(?:^|[;"])width:184px/, `7 swatches + 6 gaps + chrome — popover: ${tag}`)
+	console.log('ok: colour popover is 7 swatches wide')
+}
+
+// Empty selection renders nothing.
+{
+	const html = renderToStaticMarkup(createElement(StylePanel, baseProps()))
+	assert.equal(html, '', `empty selection renders nothing — html: ${html}`)
+	console.log('ok: empty selection — panel renders nothing')
 }
 
 console.log('ok: StylePanel — selection toolbar triggers and popover')
