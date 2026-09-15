@@ -105,6 +105,7 @@ import {
   computeExcludedIds,
   isPointInFrameHeaderBand,
   isTextCapableKind,
+  pageIdOf,
   snapCandidates,
   worldBounds,
   type Bounds,
@@ -179,8 +180,9 @@ interface Dragging {
    * transition (see the module header's SNAP-DURING-DRAG section), never
    * recomputed off a possibly-drifted `editor.get().selection` mid-gesture. */
   readonly movingIds: readonly string[]
-  /** `movingIds` ∪ every descendant — computed ONCE via canvas-model's
-   * `computeExcludedIds` at the SAME transition, reused verbatim by every
+  /** `movingIds` ∪ every descendant ∪ every shape not on the current page —
+   * computed ONCE via `snapExcludedIds` (canvas-model's `computeExcludedIds`
+   * plus the page rule) at the SAME transition, reused verbatim by every
    * subsequent pointermove's `snapCandidates` call (see the module header). */
   readonly excludedIds: ReadonlySet<string>
   /** The doc/index pair `ctx.snapshot()`/`ctx.index()` returned at the
@@ -345,6 +347,18 @@ function computeSnappedDelta(
   return { dx, dy, snapResult }
 }
 
+/** The drag-start snap exclusion set: canvas-model's computeExcludedIds
+ * (movingIds and their descendants) PLUS every shape not on `pageId`. The
+ * frozen index spans the whole room, so without the page half a drag would
+ * snap to guides from shapes on other pages the user cannot see. Computed
+ * ONCE at the Pointing->Dragging transition, like computeExcludedIds alone
+ * was. */
+function snapExcludedIds(snapshot: CanvasDocument, movingIds: readonly string[], pageId: string): Set<string> {
+  const excluded = computeExcludedIds(snapshot, movingIds)
+  for (const s of snapshot.shapes) if (pageIdOf(snapshot, s) !== pageId) excluded.add(s.id)
+  return excluded
+}
+
 function toggleOrAdd(current: ReadonlySet<string>, id: string): string[] {
   // Shift-click TOGGLE (our documented choice to match tldraw parity):
   // node_modules/tldraw/src/lib/tools/SelectTool/childStates/PointingShape.ts
@@ -499,7 +513,7 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // derived from this SAME read, never a separate one.
         const snapshot = ctx.snapshot()
         const snapIndex = ctx.index()
-        const excludedIds = computeExcludedIds(snapshot, movingIds)
+        const excludedIds = snapExcludedIds(snapshot, movingIds, editor.get().currentPageId)
         const camera = editor.get().camera
         // ABSOLUTE-ANCHOR MODEL (see the module header): grabWorld is the
         // WORLD point under the cursor at pointerdown — the fixed anchor

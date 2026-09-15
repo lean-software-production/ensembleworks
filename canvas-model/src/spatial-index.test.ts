@@ -117,6 +117,11 @@ assert.equal(hitTestTopmost(zIndex, zDoc, { x: 90, y: 90 }), 'shape:front', 'unr
 assert.equal(hitTestTopmost(zIndex, zDoc, { x: 15, y: 15 }), 'shape:child', 'children win over their ancestor regardless of array order')
 // A point with no shapes: null.
 assert.equal(hitTestTopmost(zIndex, zDoc, { x: 99999, y: 99999 }), null, 'no hits: null')
+// `include` (page scoping): a shape the predicate rejects is dropped BEFORE
+// the topmost pick, so it can never shadow an accepted shape beneath it.
+assert.equal(hitTestTopmost(zIndex, zDoc, { x: 90, y: 90 }, undefined, (s) => s.id !== 'shape:front'), 'shape:back', 'include: a rejected topmost shape does not shadow the accepted one under it')
+assert.equal(hitTestTopmost(zIndex, zDoc, { x: 90, y: 90 }, undefined, () => false), null, 'include: rejecting every candidate is a miss')
+assert.equal(hitTestTopmost(zIndex, zDoc, { x: 90, y: 90 }, new Set(['shape:front']), () => true), 'shape:back', 'include composes with excludeIds')
 
 // Regression: the tie-break must NOT be a naive pairwise fold (best = fold
 // over hits comparing each new candidate only against the running "best").

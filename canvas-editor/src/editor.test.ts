@@ -1047,6 +1047,47 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: SetCurrentPage switches currentPageId, view-only (no commit, no undo), notifies subscribers')
 }
 
+// 28b. Switching to a DIFFERENT page clears the page-local view state —
+//     selection, hover, editingId — so handles, Delete and the style panel
+//     never act on shapes the user can no longer see. A same-page
+//     SetCurrentPage leaves them alone, and a SetSelection batched AFTER the
+//     switch (thread-return's bookmark restore) still lands.
+{
+  const { doc, editor } = makeEditor(1n)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'CreateShape', shape: shape('shape:n') })
+  editor.applyAll([{ type: 'SetSelection', ids: ['shape:n'] }, { type: 'SetHover', id: 'shape:n' }, { type: 'BeginEdit', id: 'shape:n' }])
+  assert.deepEqual([...editor.get().selection], ['shape:n'], 'precondition: selected')
+  assert.equal(editor.get().hover, 'shape:n', 'precondition: hovered')
+  assert.equal(editor.get().editingId, 'shape:n', 'precondition: editing')
+
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:p' })
+  assert.deepEqual([...editor.get().selection], ['shape:n'], 'same-page SetCurrentPage keeps the selection')
+  assert.equal(editor.get().hover, 'shape:n', 'same-page SetCurrentPage keeps hover')
+  assert.equal(editor.get().editingId, 'shape:n', 'same-page SetCurrentPage keeps editingId')
+
+  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+  assert.equal(editor.get().currentPageId, 'page:q')
+  assert.deepEqual([...editor.get().selection], [], 'switching to another page clears the selection')
+  assert.equal(editor.get().hover, null, 'switching to another page clears hover')
+  assert.equal(editor.get().editingId, null, 'switching to another page clears editingId')
+  console.log('ok: SetCurrentPage to another page clears selection/hover/editingId; same page keeps them')
+}
+
+{
+  const { doc, editor } = makeEditor(1n)
+  doc.putPage({ id: 'page:q', name: 'Q' })
+  doc.commit()
+  editor.apply({ type: 'CreateShape', shape: shape('shape:on-p') })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:on-q', { parentId: 'page:q' }) })
+  editor.apply({ type: 'SetSelection', ids: ['shape:on-p'] })
+  editor.applyAll([{ type: 'SetCurrentPage', pageId: 'page:q' }, { type: 'SetSelection', ids: ['shape:on-q'] }])
+  assert.equal(editor.get().currentPageId, 'page:q')
+  assert.deepEqual([...editor.get().selection], ['shape:on-q'], '[SetCurrentPage(q), SetSelection([x])] in one batch ends with selection [x]')
+  console.log('ok: a SetSelection batched after SetCurrentPage survives the switch (thread-return restore)')
+}
+
 // ============================================================================
 // 29. create-edit-flow task — EndEdit auto-deletes an empty `text` shape
 //    (tldraw parity: node_modules/tldraw/src/lib/shapes/text/

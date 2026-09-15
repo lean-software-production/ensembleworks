@@ -276,8 +276,9 @@ const binding = (id: string, fromId: string, toId: string): Binding =>
   doc.putPage({ id: 'page:q', name: 'Q' })
   doc.putShape(shape('shape:source', { x: 10, y: 10 }))
   doc.commit()
-  editor.apply({ type: 'SetSelection', ids: ['shape:source'] })
-  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+  // Switch FIRST, then select: SetCurrentPage to another page clears the
+  // selection, so the cross-page selection this case needs is set after it.
+  editor.applyAll([{ type: 'SetCurrentPage', pageId: 'page:q' }, { type: 'SetSelection', ids: ['shape:source'] }])
 
   const intents = duplicateSelectionIntents(editor)
   const created = (intents.find((i) => i.type === 'CreateShape') as { shape: Shape }).shape
@@ -330,8 +331,9 @@ const binding = (id: string, fromId: string, toId: string): Binding =>
   doc.putShape(shape('shape:page-p-high', { index: generateKeyBetween('a5', null) })) // on page:p, high index
   doc.putShape(shape('shape:source', { index: 'a1' }))
   doc.commit()
-  editor.apply({ type: 'SetSelection', ids: ['shape:source'] })
-  editor.apply({ type: 'SetCurrentPage', pageId: 'page:q' })
+  // Switch FIRST, then select: SetCurrentPage to another page clears the
+  // selection, so the cross-page selection this case needs is set after it.
+  editor.applyAll([{ type: 'SetCurrentPage', pageId: 'page:q' }, { type: 'SetSelection', ids: ['shape:source'] }])
 
   const intents = duplicateSelectionIntents(editor)
   const created = (intents.find((i) => i.type === 'CreateShape') as { shape: Shape }).shape

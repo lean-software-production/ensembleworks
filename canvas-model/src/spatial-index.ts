@@ -397,12 +397,25 @@ function isDescendantOf(doc: CanvasDocument, id: string, ancestorId: string): bo
 // special-casing "hit === myOwnId -> null") means the SECOND-topmost real
 // candidate under the cursor still wins, instead of the whole query bailing
 // to "no hit" the moment the excluded shape happens to be topmost.
-export function hitTestTopmost(index: SpatialIndex, doc: CanvasDocument, point: Point, excludeIds?: ReadonlySet<string>): string | null {
+// `include`, if given, is a second pre-pick filter over the resolved Shape —
+// the tool layer passes "is on the current page" here. Like `excludeIds` it
+// runs BEFORE the antichain/z-order pick, so a rejected shape stacked above
+// an accepted one can never shadow it.
+export function hitTestTopmost(
+  index: SpatialIndex,
+  doc: CanvasDocument,
+  point: Point,
+  excludeIds?: ReadonlySet<string>,
+  include?: (shape: Shape) => boolean,
+): string | null {
   const key = cellKey(Math.floor(point.x / index.cellSize), Math.floor(point.y / index.cellSize))
   const candidates = [...(index.cells.get(key) ?? []), ...index.overflow]
   const hits = candidates
     .filter((id) => !excludeIds?.has(id))
-    .filter((id) => { const s = doc.byId.get(id); return s ? hitTestPoint(doc, s, point) : false })
+    .filter((id) => {
+      const s = doc.byId.get(id)
+      return s ? (include === undefined || include(s)) && hitTestPoint(doc, s, point) : false
+    })
   if (hits.length === 0) return null
   if (hits.length === 1) return hits[0]!
   const isAncestorOfAnotherHit = (id: string) => hits.some((other) => other !== id && isDescendantOf(doc, other, id))

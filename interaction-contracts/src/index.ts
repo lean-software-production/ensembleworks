@@ -31,6 +31,7 @@ import { noteCreateBeginsEditing } from './contracts/note-create-begins-editing.
 import { noteResizeHandlesSuppressed } from './contracts/note-resize-handles-suppressed.js'
 import { pastePlacesAndSelects } from './contracts/paste-places-and-selects.js'
 import { scrollDirection } from './contracts/scroll-direction.js'
+import { selectIgnoresOtherPages } from './contracts/select-ignores-other-pages.js'
 import { selectAllSelectsEveryShapeOnPage } from './contracts/select-all-selects-every-shape-on-page.js'
 import { shapeGrowsToFitTypedText } from './contracts/shape-grows-to-fit-typed-text.js'
 import { shiftDragConstrainsToAxis } from './contracts/shift-drag-constrains-to-axis.js'
@@ -75,4 +76,5 @@ export const CONTRACTS: readonly Contract[] = [
   arrowHandleDragPreviewsHover,
   arrowStaysOnItsPage,
   enterOnChromeButtonDoesNotEdit,
+  selectIgnoresOtherPages,
 ]

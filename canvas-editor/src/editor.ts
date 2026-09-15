@@ -1046,7 +1046,21 @@ export class Editor {
         // ONLY — no doc write, no undo/redo arrays, mirroring
         // SetCamera/SetSelection/SetHover/BeginEdit/EndEdit/SetNextStyle
         // above exactly. Switching pages is a view change, not undoable.
-        return { state: { ...state, currentPageId: intent.pageId }, docMutated: false, stateChanged: true }
+        // Switching to a DIFFERENT page also clears the page-local view
+        // state — selection, hover, editingId all name shapes on the page
+        // being left, and leaving them set would let handles, Delete and the
+        // style panel act on shapes the user can no longer see. A same-page
+        // SetCurrentPage leaves them untouched. A SetSelection batched AFTER
+        // the switch (thread-return's bookmark restore) applies on top of
+        // the cleared state, so it still lands.
+        if (intent.pageId === state.currentPageId) {
+          return { state: { ...state, currentPageId: intent.pageId }, docMutated: false, stateChanged: true }
+        }
+        return {
+          state: { ...state, currentPageId: intent.pageId, selection: new Set(), hover: null, editingId: null },
+          docMutated: false,
+          stateChanged: true,
+        }
     }
   }
 
