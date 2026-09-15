@@ -1,77 +1,37 @@
-// Task P2 (docs/plans/2026-07-21-canvas-v2-styling.md) — contextual style
-// panel, mirroring v1's `client/src/chrome/ContextualStylePanel.tsx`: one
-// component, anchored above the current selection's screen bounds, hidden
-// mid-gesture so it never chases a drag. Reads P1's pure `relevantAxes` /
-// `currentValue` helpers (style-axes.ts) to decide which controls to show
-// and their value/'mixed' state; value-sets come from `STYLE_VALUE_SETS`
-// (style-axes.ts, itself sourced from the model via Task M3 — never a
-// second hand-typed copy of tldraw's palette).
+// Contextual style chrome for the canvas, in two mutually exclusive modes:
 //
-// WIRED as of Task P4: every control's onClick calls the `onStyleChange`
-// PROP, and CanvasV2Session (CanvasV2App.tsx) now mounts this with a real
-// handler that dispatches `SetStyle` over the current selection — see that
-// module's `buildSetStyleIntent`/`onStyleChange`. Task P2 landed this
-// component with the prop deliberately unwired (a no-op at the mount site)
-// so Task P3's browser contract had a clean RED (swatch renders, click did
-// nothing -> the shape's stored style stayed unchanged) BEFORE P4's fix
-// landed. This component still does not import the editor's apply/SetStyle
-// machinery itself — it only ever calls the injected prop.
+// SELECTION MODE (`selection.size > 0`): a one-row toolbar anchored to the
+// selection's screen bounds. `toolbarSlots` (canvas-editor) decides which
+// triggers show; each trigger's face shows the slot's current value, and the
+// open slot (`openSlot`, owned by the host) renders a popover of `AxisRow`
+// value controls. A value click calls `onStyleChange` (-> `SetStyle`).
 //
-// Armed-tool / next-shape-style mode (Task AS3): when `selection` is empty
-// AND `activeToolId` is one of the style-bearing tools (`relevantAxesForTool`
-// in style-axes.ts — note/text/geo/arrow/frame), the panel switches to a
-// SECOND render path that shows `nextShapeStyle`'s current values instead of
-// a selection's, and calls `onArmStyle` (dispatching `SetNextStyle` at the
-// CanvasV2Session mount site) instead of `onStyleChange` (`SetStyle`) on
-// click. `select`/`hand` armed with an empty selection still renders null —
-// same as before AS3. The two modes are mutually exclusive and selection
-// always wins (a non-empty selection short-circuits before `activeToolId` is
-// even consulted): arming a tool never overrides styling an existing
-// selection. The armed panel carries `data-style-panel-mode="armed"` (the
-// selection panel now carries `data-style-panel-mode="selection"`) as a
-// stable hook — AS4's browser contract anchors onto
-// `[data-style-panel-mode="armed"] [data-style-control="color"]
-// [data-style-value="blue"]`.
+// ARMED MODE (empty selection, a style-bearing tool armed): a stacked panel of
+// `nextShapeStyle`'s values under the toolbar; a click calls `onArmStyle`
+// (-> `SetNextStyle`). Selection is checked first, so arming a tool never
+// overrides styling what is selected.
 //
-// Task style-panel-icons — visual-parity pass: every non-color control's
-// button now renders an icon glyph (style-icons.tsx) instead of a plain
-// `humanize(v)` text pill, the `geo`/`arrowheadStart`/`arrowheadEnd` rows are
-// therefore far more compact (fixed-size icon buttons instead of
-// variable-width text pills — this is what was forcing PANEL_MAX_WIDTH/
-// HEIGHT's caps in the first place), the `opacity` row is restyled as a
-// slider-look track, and the `color` swatch hex now comes from
-// canvas-react's real `GEO_COLORS` table instead of a second, hand-typed,
-// drift-prone map (`colorSwatchHex` below).
-//
-// ux-contract: none — every change in this pass is a PURE RESKIN of
-// controls that already existed: same `<button>` elements, same
-// `data-style-control`/`data-style-value`/`data-current`/`aria-pressed`
-// attributes, same `onClick` -> `onStyleChange`/`onArmStyle` wiring, same
-// click-a-value-to-select-it gesture. Only the button's rendered CONTENT
-// (icon vs. text) and size changed — verified by StylePanel.test.ts's
-// pre-existing data-attribute assertions, which all keep passing UNMODIFIED
-// (cases 1-12), plus new cases (13-15) pinning the icon content itself. No
-// control gained a new interaction (no dropdown/popover, no drag — the
-// opacity "slider" is still discrete click-to-select stops, just restyled
-// to look like a track), so there is no new gesture for an interaction
-// contract to describe.
-import { type CSSProperties } from 'react'
+// Hidden entirely mid-gesture so it never chases a drag. Stays hook-free:
+// StylePanel.test.ts calls it as a plain function to reach real onClicks.
+import { type CSSProperties, type ReactNode } from 'react'
 import type { CanvasDocument, Shape } from '@ensembleworks/canvas-model'
 import {
 	currentValue,
 	kindDefault,
 	kindForTool,
-	relevantAxes,
 	relevantAxesForTool,
-	STYLE_VALUE_SETS,
+	toolbarSlots,
 	worldToScreen,
 	type Camera,
 	type StyleAxis,
 	type StyleValue,
+	type ToolbarSlot,
+	type ToolbarSlotId,
 	type ToolId,
 } from '@ensembleworks/canvas-editor'
 import { combinedWorldBounds } from '@ensembleworks/canvas-react'
-import { AxisRow, SWATCH_GAP_PX, SWATCH_PX } from './style-controls.js'
+import { AXIS_LABELS, AxisRow, axisIcon, colorSwatchHex, humanize, ICON_BUTTON_PX, SWATCH_GAP_PX, SWATCH_PX, type StyleChange } from './style-controls.js'
+import { FontIcon } from './style-icons.js'
 import { UI_VARS } from './theme.js'
 
 export interface StylePanelProps {
@@ -79,195 +39,30 @@ export interface StylePanelProps {
 	readonly snapshot: CanvasDocument
 	readonly camera: Camera
 	readonly viewportSize: { readonly width: number; readonly height: number }
-	/** Set on pointerdown, cleared on pointerup/cancel (CanvasV2Session) — the
-	 * panel disappears entirely rather than trailing a live drag. */
+	/** Set on pointerdown, cleared on pointerup/cancel — the panel disappears
+	 * rather than trailing a live drag. */
 	readonly isGesturing: boolean
-	/** Task AS3 — the toolbar's currently-armed tool. Only consulted when
-	 * `selection` is empty (selection mode never reads this). */
+	/** The armed tool; only consulted when `selection` is empty. */
 	readonly activeToolId: ToolId
-	/** Task AS3 — `EditorState.nextShapeStyle`, the armed-mode "current value"
-	 * source (selection mode never reads this; it reads live shape props via
-	 * `currentValue` instead). */
+	/** Armed-mode value source; selection mode reads live shape props instead. */
 	readonly nextShapeStyle: Record<string, unknown>
-	/** Dispatches `SetStyle` over the current selection — and, per gap 3 of
-	 * the style-memory task, ALSO arms `nextShapeStyle` (next-shape style
-	 * memory, tldraw parity) unless the click's `options.onlySelection` flag
-	 * is set (Ctrl/Cmd held — "this shape only"). Called only in selection
-	 * mode (`selection.size > 0`) — see module header. */
-	readonly onStyleChange: (axis: StyleAxis, value: StyleValue, options?: { readonly onlySelection: boolean }) => void
-	/** Task AS3 — dispatches `SetNextStyle` (arms the tool). Called only in
-	 * armed mode (`selection.size === 0` and `activeToolId` is style-bearing)
-	 * — see module header. Kept as a SEPARATE prop from `onStyleChange`
-	 * (rather than one callback the panel disambiguates internally) so a
-	 * wrong-mode wiring bug shows up as "the wrong prop got called", directly
-	 * observable in a component test without booting a session. Ignores the
-	 * shared `options` parameter — there is no selection in armed mode for
-	 * `onlySelection` to restrict. */
-	readonly onArmStyle: (axis: StyleAxis, value: StyleValue, options?: { readonly onlySelection: boolean }) => void
+	/** Selection mode: `SetStyle` over the selection (and next-shape style
+	 * memory unless `options.onlySelection`, i.e. Ctrl/Cmd held). */
+	readonly onStyleChange: StyleChange
+	/** Armed mode: `SetNextStyle`. A separate prop so a wrong-mode wiring bug
+	 * shows up as the wrong callback being called. */
+	readonly onArmStyle: StyleChange
+	/** The selection toolbar slot whose popover is open. Host-owned so it can
+	 * close on Escape, outside click or selection change. */
+	readonly openSlot: ToolbarSlotId | null
+	readonly onOpenSlotChange: (slot: ToolbarSlotId | null) => void
 }
 
-// Visual grouping (plan: "color row, fill/dash, size/font, align"), extended
-// to the remaining axes. A group whose axes are ALL irrelevant to the current
-// selection renders nothing — see `renderGroups` below, which filters each
-// group down to the axes `relevantAxes` actually returned.
-const AXIS_GROUPS: readonly (readonly StyleAxis[])[] = [
-	['color'],
-	['fill', 'dash'],
-	['size', 'font'],
-	['align', 'verticalAlign', 'textAlign'],
-	['geo'],
-	['arrowheadStart', 'arrowheadEnd'],
-	['opacity'],
-]
-
-// Bounded so `clampPanelPosition`'s edge-clamp math (below) has a GUARANTEED
-// upper bound to clamp against — the real DOM node's rendered width can never
-// exceed this CSS `maxWidth`, regardless of content, so clamping the panel's
-// CENTER to keep a PANEL_MAX_WIDTH-wide box on-screen is always sufficient
-// for the (possibly narrower) real box too. A selection whose relevant axes
-// span most of the groups (e.g. two geo shapes: color/fill/dash/size/font/
-// align/verticalAlign/geo) has enough buttons to lay out past 1000px wide
-// with NO cap at all — not just a cosmetic clip: Task P3's browser contract
-// clicks a specific swatch by DOM selector via a raw mouse-move-to-
-// coordinate (no Playwright visibility check), so a bounding-box that lands
-// off-screen makes the click miss the button entirely and silently land on
-// nothing (empirically reproduced: an unbounded panel for this exact
-// two-geo-shape selection measured 1030px wide, left edge at x:-265).
-// `flexWrap` on ROW_GROUP_STYLE below is what lets a group's columns
-// actually wrap once this cap makes them not fit.
-//
-// REVIEW FIX: capping the WIDTH alone is not sufficient on its own — see
-// `clampPanelPosition`'s doc comment (and the comment just above its
-// definition, near PANEL_FLIP_HEADROOM) for the anchor-vs-edge clamp bug
-// this cap used to be paired with (a P4 first pass clamped only the anchor
-// point, which still let a wide-but-bounded panel spill off-screen).
-//
-// LAYOUT FIX (style-memory task, defect a): 320 was too narrow for the
-// `color` row's real content once style-panel-icons shrank every OTHER
-// control to a fixed 24px icon button — the color row is the one row that
-// never got smaller (`swatchButtonStyle` stayed a fixed 20px circle, same as
-// before that pass), and COLOR carries 13 values (canvas-model's COLOR
-// enum), the most of any axis. 320's content width (320 - 2*10 padding -
-// 2*1 border = 298px) fits only 12 of the 13 swatches per row (13*20 +
-// 12*4-gap = 308px needed), so 'white' (the 13th) wrapped onto its own
-// second row alone — cosmetically broken next to every other single-row
-// group. 340's content width (318px) comfortably fits all 13
-// (308px, +10px headroom) on one row, matching tldraw's own single-row
-// color swatch layout. Pinned by `StylePanel.position.test.ts`'s
-// `colorRowWidth() <= panelContentWidth()` case, computed from the REAL
-// swatch/gap constants, not a hand-typed pixel count, so a future value
-// added to the COLOR enum re-proves this instead of silently rotting.
-const PANEL_MAX_WIDTH = 340
-// Bounds panel HEIGHT the same way PANEL_MAX_WIDTH bounds width — see that
-// constant's doc comment. `overflowY: 'auto'` on PANEL_STYLE below is the
-// safety net for a selection with an unusually large union of relevant axis
-// groups (e.g. a MIXED geo+arrow+text selection could show nearly every
-// group at once) that would otherwise need more room than this cap allows —
-// it scrolls internally rather than silently exceeding the bound
-// `clampPanelPosition` relies on. 480 comfortably covers the tallest
-// observed case today (a 2-geo-shape selection — 8 relevant groups —
-// measured 434px after the width fix above).
-const PANEL_MAX_HEIGHT = 480
-
-const PANEL_STYLE: CSSProperties = {
-	position: 'absolute',
-	display: 'flex',
-	flexDirection: 'column',
-	gap: 8,
-	padding: '8px 10px',
-	background: UI_VARS.panelBg,
-	border: `1px solid ${UI_VARS.panelBorder}`,
-	borderRadius: 8,
-	boxShadow: UI_VARS.shadow,
-	fontFamily: 'system-ui, sans-serif',
-	fontSize: 11,
-	color: UI_VARS.panelFg,
-	// REGRESSION FIX (client/src/canvas-v2 v2-write-validation branch): this
-	// USED to be 'all', which made the panel's entire bounding box — not just
-	// its buttons — a pointer target. Because the panel is anchored ON TOP of
-	// the selection it describes (`computePosition` above), that container
-	// silently ate every drag/double-click/delete gesture aimed at a selected
-	// shape wherever the panel happened to overlap it (proven by e2e:
-	// "render convergence", "the editing loop — double-click to edit", and
-	// "delete — Delete/Backspace" all failing at the panel's introduction).
-	// 'none' here removes the CONTAINER (and the plain <div>/<span> wrapper
-	// rows inside it — AxisRow's ROW_STYLE/ROW_LABEL_STYLE/ROW_VALUES_STYLE
-	// never opt back in) from hit-testing, so a pointer over empty panel
-	// space — or over a label, a row gap, anything that isn't a control —
-	// passes straight through to whatever is underneath (Viewport's own
-	// root div, i.e. the canvas). Only the actual controls
-	// (`swatchButtonStyle`/`segButtonStyle` below) set `pointerEvents:
-	// 'auto'`, which re-enables hit-testing for just that element. A pointer
-	// event landing on a control still bubbles up through this
-	// pointer-events:none container in the ordinary DOM way (CSS
-	// `pointer-events` governs hit-testing/targeting only, never event
-	// propagation), so the container's `onPointerDown`/`onPointerUp`
-	// stopPropagation below still fires for control clicks and still stops
-	// them from reaching Viewport — see that handler's own doc comment.
-	pointerEvents: 'none',
-	zIndex: 500,
-	minWidth: 160,
-	maxWidth: PANEL_MAX_WIDTH,
-	maxHeight: PANEL_MAX_HEIGHT,
-	overflowY: 'auto',
-	// FIXUP (validator review): content-box sizing (the default) means
-	// padding + border add ON TOP of maxWidth, so the rendered node measured
-	// 342px against a documented-as-hard 320px cap (10px padding + 1px
-	// border per side). border-box folds padding/border back inside
-	// maxWidth so PANEL_MAX_WIDTH is actually the ceiling clampPanelPosition's
-	// edge-clamp math assumes it is.
-	boxSizing: 'border-box',
-}
-
-// `flexWrap: 'wrap'` (not the previous no-wrap default) — see PANEL_MAX_WIDTH's
-// doc comment: this is what lets a group's own axis-columns drop onto a new
-// line once PANEL_STYLE's cap makes them not fit on one, instead of forcing
-// the panel wider than its cap (which `maxWidth` alone cannot prevent for a
-// non-wrapping flex row of intrinsically-sized children).
-const ROW_GROUP_STYLE: CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
-
-const PANEL_HORIZONTAL_PADDING_PX = 10 // PANEL_STYLE's `padding: '8px 10px'`, left+right
-const PANEL_BORDER_PX = 1 // PANEL_STYLE's `border: '1px solid ...'`, left+right
-
-/** The panel's real, on-screen CONTENT width (inside its own padding and
- * border) — `boxSizing: 'border-box'` (PANEL_STYLE) folds both back inside
- * `maxWidth`, so this is `PANEL_MAX_WIDTH` minus both sides' padding and
- * border, not `PANEL_MAX_WIDTH` itself (see that constant's FIXUP comment).
- * Exported for `StylePanel.position.test.ts`'s color-row-fits-on-one-line
- * pin (layout defect a, style-memory task). */
-export function panelContentWidth(): number {
-	return PANEL_MAX_WIDTH - 2 * (PANEL_HORIZONTAL_PADDING_PX + PANEL_BORDER_PX)
-}
-
-/** The `color` row's real rendered width — N swatches at `SWATCH_PX` each,
- * `N - 1` gaps of `SWATCH_GAP_PX` between them (`ROW_VALUES_STYLE`'s `gap`),
- * no trailing gap. `N` is read from the REAL value set
- * (`STYLE_VALUE_SETS.color.length`, canvas-model's COLOR enum via
- * style-axes.ts), not a hand-typed "13" — so a future color added to the
- * model re-proves (or breaks) this pin automatically, rather than silently
- * going stale. Exported for the same test as `panelContentWidth`. */
-export function colorRowWidth(): number {
-	const n = STYLE_VALUE_SETS.color.length
-	return n * SWATCH_PX + (n - 1) * SWATCH_GAP_PX
-}
-
-// DefaultStylePanel-sized headroom guess (v1's PANEL_FLIP_HEADROOM, same
-// idea): below this much room above the selection, drop the panel below it
-// instead of clipping off the top of the viewport.
-const PANEL_FLIP_HEADROOM = 220
 const MARGIN = 8
-// REVIEW FIX (post-P4): P4's first pass clamped only the panel's ANCHOR
-// point to a fixed [90, W-90] range before centering it with
-// `translateX(-50%)`. That's insufficient once the panel's own half-width
-// exceeds that 90px margin — PANEL_MAX_WIDTH/2 is 160 > 90, so an anchor
-// 90px from the edge still centered a panel whose real edge landed up to
-// 70px past the viewport boundary (empirically reproduced: left=90 ->
-// rendered edges [-70, 250] for a 320px panel in a 1280px viewport — pinned
-// by StylePanel.position.test.ts). `clampPanelPosition` below replaces that
-// fixed-margin anchor clamp with a proper EDGE clamp (bounds the panel's
-// actual left/right/top/bottom against `panelSize`, not just its center
-// point) — see that function's own doc comment for the corrected,
-// actually-true on-screen guarantee.
+
+// ---------------------------------------------------------------------------
+// Positioning (pure)
+// ---------------------------------------------------------------------------
 
 export interface PanelPosition {
 	readonly left: number
@@ -276,38 +71,18 @@ export interface PanelPosition {
 }
 
 function clampRange(value: number, min: number, max: number): number {
-	// Degenerate case: the available span (max - min) is narrower than the
-	// panel itself — e.g. a viewport thinner than PANEL_MAX_WIDTH. There is no
-	// on-screen placement that satisfies both bounds; centering in the
-	// available range is the least-bad fallback (matches this file's other
-	// "defensive, not the expected path" fallbacks).
+	// No placement satisfies both bounds (viewport narrower than the box):
+	// centre in the available range as the least-bad fallback.
 	if (min > max) return (min + max) / 2
 	return Math.min(Math.max(value, min), max)
 }
 
 /**
- * Pure positioning math (no DOM/model access — `computePosition` below
- * resolves the selection's SCREEN-space corners and delegates here). Given
- * those corners, the viewport size, and the panel's MAXIMUM rendered size
- * (`panelSize` — PANEL_MAX_WIDTH/PANEL_MAX_HEIGHT below, the actual CSS caps
- * on `PANEL_STYLE`, so the real DOM node is GUARANTEED never to exceed this,
- * regardless of content), returns a `{left, top, transform}` CSS position
- * whose real on-screen box — after the `transform` is applied — stays within
- * `[margin, viewportSize.{width,height} - margin]` on BOTH axes.
- *
- * This clamps the panel's ACTUAL EDGES, not just its anchor point (the bug
- * this replaces — see the comment just above this function's definition): a
- * `translateX(-50%)`-centered panel's real left/right edges are
- * `center ∓ panelSize.width/2`, so keeping the CENTER within
- * `[panelSize.width/2 + margin, viewportWidth - panelSize.width/2 - margin]`
- * is what actually keeps those edges on-screen — a plain anchor clamp with a
- * fixed margin smaller than half the panel's width cannot, no matter what
- * that margin is set to. Same reasoning vertically: the "below" placement's
- * `top` is a literal top edge (clamped against `[margin, viewportHeight -
- * panelSize.height - margin]`); the "above" placement's `top` is the panel's
- * BOTTOM edge under `translate(-50%, -100%)` (clamped against
- * `[panelSize.height + margin, viewportHeight - margin]` so the resulting
- * TOP edge, `bottom - panelSize.height`, stays >= margin).
+ * Places a box of at most `panelSize` centred on the selection, below it when
+ * there is less than `flipHeadroom` above, otherwise above it. Clamps the
+ * box's real edges (after `transform`), not just its anchor, so the whole box
+ * stays within `margin` of the viewport. For the "above" placement `top` is
+ * the box's bottom edge (`translate(-50%, -100%)`).
  */
 export function clampPanelPosition(
 	c1: { readonly x: number; readonly y: number },
@@ -330,45 +105,10 @@ export function clampPanelPosition(
 }
 
 /**
- * REGRESSION FIX (second half — the pointer-events fix on PANEL_STYLE/
- * swatchButtonStyle/segButtonStyle above is necessary but NOT sufficient on
- * its own): `clampPanelPosition`'s on-screen guarantee (pinned verbatim by
- * StylePanel.position.test.ts, untouched by this fix) clamps the panel's
- * `top` ASSUMING it may render at the full worst-case PANEL_MAX_HEIGHT (see
- * that constant's own doc comment — 480px, "comfortably covers the tallest
- * OBSERVED case", far more than a typical panel actually needs: a one-shape
- * note selection measures ~194px). In any viewport too short to fit that
- * 480px worst case entirely past the selection's own edge — which is most
- * normal browser windows for a selection anchored anywhere but the very top
- * — the clamp pulls the panel's position back TOWARD the selection so a
- * hypothetical full-height box would still land on-screen. For an actually
- * short panel, that squeeze is pure waste: it drags the panel's REAL,
- * rendered controls on top of the selection's own screen bounds. That's
- * what let a color swatch silently eat a click meant for the shape
- * underneath it — proven by e2e (the double-click-to-edit / delete /
- * drag-a-selected-shape regression this whole file's REGRESSION FIX
- * comments are about): the clamped top can land literally inside the
- * shape's own [minY, maxY] span, and the panel's first row (color swatches)
- * renders right at that position.
- *
- * This is a POST-PROCESSING step on `clampPanelPosition`'s result, not a
- * change to that function or its contract — `clampPanelPosition` still
- * always returns an on-screen position for a worst-case-height panel, full
- * stop, and every one of its own pinned unit tests keeps passing unmodified.
- * When the clamp's `top` already stops short of the ideal non-overlapping
- * edge (`maxY + margin` below the selection, `minY - margin` above it), this
- * repositions the panel back to that ideal edge — so it is NEVER on top of
- * the selection it describes — and instead hands back a dynamic `maxHeight`
- * (spread into the JSX style object over PANEL_STYLE's constant 480,
- * identical to how `left`/`top`/`transform` already override PANEL_STYLE
- * today) capped to whatever room is actually left in that direction.
- * `overflowY: 'auto'` on PANEL_STYLE remains the safety net for real content
- * that still doesn't fit even that dynamic budget — same role it always
- * had, just against a tighter (correct, non-overlapping) cap instead of the
- * flat 480. The last-resort failure mode in a viewport too short for
- * anything is a small-but-present, non-overlapping panel — never one
- * silently sitting on top of, and eating clicks for, the shape it's
- * attached to.
+ * Post-processes `clampPanelPosition` so the box never overlaps the selection:
+ * an edge clamp that pulled it onto the selection would let chrome eat clicks
+ * meant for the shape. Moves the box back to the selection's edge (flipping
+ * to the roomier side) and returns the `maxHeight` left on that side.
  */
 export function avoidAnchorOverlap(
 	position: PanelPosition,
@@ -379,167 +119,259 @@ export function avoidAnchorOverlap(
 ): PanelPosition & { readonly maxHeight?: number } {
 	const minY = Math.min(c1.y, c2.y)
 	const maxY = Math.max(c1.y, c2.y)
-	// The two "ideal" (non-overlapping) edges and the real room available past
-	// each — computed UNCONDITIONALLY, regardless of which placement
-	// `clampPanelPosition` originally chose, because a squeeze needs to know
-	// BOTH sides' room to pick the roomier one (see the LAYOUT FIX note below).
-	const idealTop = maxY + margin // BELOW placement's ideal top edge
+	const idealTop = maxY + margin
 	const belowRoom = Math.max(0, viewportSize.height - idealTop - margin)
-	const idealBottom = minY - margin // ABOVE placement's ideal bottom edge
+	const idealBottom = minY - margin
 	const aboveRoom = Math.max(0, idealBottom - margin)
 
 	if (position.transform === 'translateX(-50%)') {
-		// "below" placement (also the no-bounds top-center fallback, which
-		// trivially satisfies `top >= idealTop` since idealTop is world-bounds
-		// derived and MARGIN is tiny — never triggers an override for it): `top`
-		// is the panel's literal TOP edge. A squeeze already happened iff the
-		// clamp pulled it above (numerically less than) the ideal top-of-panel
-		// position right after the selection's bottom edge.
 		if (position.top >= idealTop) return position
-		// LAYOUT FIX (style-memory task, defect b — v2-geo-selected.png): a
-		// squeeze used to ALWAYS stay on the side `clampPanelPosition` already
-		// picked (FLIP_HEADROOM is a rough "is minY small?" heuristic, blind to
-		// how much room the panel's real content actually needs) — for a
-		// selection anchored near the viewport's top edge but whose OWN bottom
-		// sits deep in a short/narrow viewport, that side can have almost no
-		// room left (a tall geo panel's last row, "Shape", rendering mostly
-		// off-screen), while the OTHER side has more. Flip to ABOVE whenever it
-		// would give strictly more room than squeezing below does.
 		if (aboveRoom > belowRoom) {
 			return { ...position, top: idealBottom, transform: 'translate(-50%, -100%)', maxHeight: aboveRoom }
 		}
 		return { ...position, top: idealTop, maxHeight: belowRoom }
 	}
-	// "above" placement: `top` is the panel's literal BOTTOM edge (the CSS
-	// `translate(-50%, -100%)` transform makes it so). A squeeze already
-	// happened iff the clamp pushed that bottom edge below (numerically past)
-	// the ideal bottom-of-panel position right above the selection's top edge.
 	if (position.top <= idealBottom) return position
-	// Symmetric flip to BELOW — see the "below" branch's LAYOUT FIX note above.
 	if (belowRoom > aboveRoom) {
 		return { ...position, top: idealTop, transform: 'translateX(-50%)', maxHeight: belowRoom }
 	}
 	return { ...position, top: idealBottom, maxHeight: aboveRoom }
 }
 
-function computePosition(
+/** Where a popover opens for a trigger on the bar: centred on the trigger, on
+ * the bar's side away from the selection, clamped to the viewport. Returns
+ * the top-left of a `popover`-sized box. */
+export function popoverPosition(
+	bar: { readonly left: number; readonly top: number; readonly width: number; readonly height: number },
+	trigger: { readonly left: number; readonly width: number },
+	popover: { readonly width: number; readonly height: number },
+	viewport: { readonly width: number; readonly height: number },
+	side: 'above' | 'below',
+	margin: number,
+): { left: number; top: number } {
+	const centre = trigger.left + trigger.width / 2
+	const left = clampRange(centre - popover.width / 2, margin, viewport.width - popover.width - margin)
+	const top = side === 'above' ? bar.top - popover.height - margin : bar.top + bar.height + margin
+	return { left, top: clampRange(top, margin, viewport.height - popover.height - margin) }
+}
+
+// ---------------------------------------------------------------------------
+// Selection toolbar
+// ---------------------------------------------------------------------------
+
+// Fixed trigger geometry lets the bar's width and each trigger's offset be
+// computed without DOM measurement, so positioning stays pure and static.
+const BAR_BORDER_PX = 1
+const BAR_PADDING_PX = 4
+const TRIGGER_WIDTH_PX = 32
+const TRIGGER_HEIGHT_PX = 30
+const BAR_GAP_PX = 2
+const TRIGGER_STEP_PX = TRIGGER_WIDTH_PX + BAR_GAP_PX // 34
+const DIVIDER_PX = 1
+const BAR_HEIGHT = 2 * BAR_BORDER_PX + 2 * BAR_PADDING_PX + TRIGGER_HEIGHT_PX // 40
+// Widest layout is geo's six slots.
+const BAR_MAX_WIDTH = 6 * TRIGGER_STEP_PX + 12
+// 220 tall: the arrow `more` popover stacks four labelled rows.
+const POPOVER_MAX = { width: 200, height: 220 } as const
+// Room needed above the selection for the bar plus a popover opening above it.
+const BAR_FLIP_HEADROOM = BAR_HEIGHT + POPOVER_MAX.height + 3 * MARGIN
+
+const dividerWidth = (slots: readonly ToolbarSlot[]) => (slots.some((s) => s.id === 'more') ? DIVIDER_PX + BAR_GAP_PX : 0)
+
+function barWidth(slots: readonly ToolbarSlot[]): number {
+	return 2 * (BAR_BORDER_PX + BAR_PADDING_PX) + slots.length * TRIGGER_STEP_PX - BAR_GAP_PX + dividerWidth(slots)
+}
+
+/** A trigger's left edge within the bar; `more` sits after the divider. */
+function triggerOffset(slots: readonly ToolbarSlot[], index: number): number {
+	const divider = slots[index]!.id === 'more' ? dividerWidth(slots) : 0
+	return BAR_BORDER_PX + BAR_PADDING_PX + index * TRIGGER_STEP_PX + divider
+}
+
+const WRAPPER_STYLE: CSSProperties = { position: 'absolute', inset: 0, pointerEvents: 'none' }
+
+// Containers are pointer-events:none so chrome sitting over the selection
+// never eats a drag/double-click/delete aimed at the shape; only controls opt
+// back in. Pointer events on a control still bubble to the wrapper's
+// stopPropagation (CSS pointer-events affects hit-testing, not propagation),
+// which keeps control clicks from reaching Viewport as canvas gestures.
+const CARD_STYLE: CSSProperties = {
+	position: 'absolute',
+	background: UI_VARS.panelBg,
+	border: `${BAR_BORDER_PX}px solid ${UI_VARS.panelBorder}`,
+	borderRadius: 10,
+	boxShadow: UI_VARS.shadow,
+	color: UI_VARS.panelFg,
+	fontFamily: 'system-ui, sans-serif',
+	fontSize: 11,
+	pointerEvents: 'none',
+	zIndex: 500,
+	boxSizing: 'border-box',
+}
+
+const BAR_STYLE: CSSProperties = {
+	...CARD_STYLE,
+	display: 'flex',
+	flexDirection: 'row',
+	alignItems: 'center',
+	gap: BAR_GAP_PX,
+	padding: BAR_PADDING_PX,
+	height: BAR_HEIGHT,
+	whiteSpace: 'nowrap',
+}
+
+const POPOVER_PADDING_PX = 8
+const POPOVER_STYLE: CSSProperties = {
+	...CARD_STYLE,
+	display: 'flex',
+	flexDirection: 'column',
+	gap: 8,
+	padding: POPOVER_PADDING_PX,
+	// max-content keeps a popover near the viewport's right edge from being
+	// squeezed by its containing block.
+	width: 'max-content',
+	maxWidth: POPOVER_MAX.width,
+	maxHeight: POPOVER_MAX.height,
+}
+
+// Fixed widths set swatches/icons per line for the big single-axis value sets
+// (6 colours, 5 geo shapes); +2 absorbs sub-pixel rounding.
+const POPOVER_CHROME_PX = 2 * (POPOVER_PADDING_PX + BAR_BORDER_PX) + 2
+const POPOVER_WIDTH_BY_SLOT: Partial<Record<ToolbarSlotId, number>> = {
+	color: 6 * SWATCH_PX + 5 * SWATCH_GAP_PX + POPOVER_CHROME_PX,
+	geo: 5 * ICON_BUTTON_PX + 4 * SWATCH_GAP_PX + POPOVER_CHROME_PX,
+}
+
+const DIVIDER_STYLE: CSSProperties = { width: DIVIDER_PX, alignSelf: 'stretch', background: UI_VARS.panelBorder, flexShrink: 0 }
+
+function triggerStyle(open: boolean): CSSProperties {
+	return {
+		width: TRIGGER_WIDTH_PX,
+		height: TRIGGER_HEIGHT_PX,
+		flexShrink: 0,
+		display: 'flex',
+		alignItems: 'center',
+		justifyContent: 'center',
+		padding: 0,
+		border: 'none',
+		borderRadius: 6,
+		background: open ? UI_VARS.accentSoft : 'transparent',
+		color: open ? UI_VARS.accent : UI_VARS.panelFg,
+		fontFamily: 'inherit',
+		fontSize: 12,
+		fontWeight: 600,
+		cursor: 'pointer',
+		pointerEvents: 'auto',
+	}
+}
+
+const MIXED_COLOR_SWATCH = `conic-gradient(${colorSwatchHex('red')} 0 25%, ${colorSwatchHex('yellow')} 0 50%, ${colorSwatchHex('green')} 0 75%, ${colorSwatchHex('blue')} 0)`
+
+function SwatchFace({ background }: { readonly background: string }) {
+	return (
+		<span
+			style={{ width: 18, height: 18, borderRadius: '50%', background, border: `1px solid ${UI_VARS.swatchBorder}`, boxSizing: 'border-box', display: 'inline-block' }}
+		/>
+	)
+}
+
+function MoreIcon() {
+	return (
+		<svg width={16} height={16} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+			<circle cx={3} cy={8} r={1.5} />
+			<circle cx={8} cy={8} r={1.5} />
+			<circle cx={13} cy={8} r={1.5} />
+		</svg>
+	)
+}
+
+function triggerFace(slot: ToolbarSlot, value: StyleValue | 'mixed' | undefined): ReactNode {
+	if (slot.id === 'more') return <MoreIcon />
+	const axis = slot.axes[0]!
+	if (axis === 'color') return <SwatchFace background={value === 'mixed' ? MIXED_COLOR_SWATCH : colorSwatchHex(String(value ?? ''))} />
+	if (value === 'mixed') return '–'
+	if (value === undefined) return null
+	const v = String(value)
+	if (axis === 'size') return v.toUpperCase()
+	if (axis === 'font') return <FontIcon variant={v} />
+	return axisIcon(axis, v)
+}
+
+function triggerTitle(slot: ToolbarSlot, value: StyleValue | 'mixed' | undefined): string {
+	if (slot.id === 'more') return 'More styles'
+	const label = AXIS_LABELS[slot.axes[0]!]
+	return value === undefined ? label : `${label}: ${humanize(String(value))}`
+}
+
+/** The bar's top-left in screen space and which side of the selection it sits on. */
+function computeBarBox(
 	snapshot: CanvasDocument,
 	selection: ReadonlySet<string>,
 	camera: Camera,
 	viewportSize: { readonly width: number; readonly height: number },
-): CSSProperties {
+	width: number,
+): { readonly left: number; readonly top: number; readonly side: 'above' | 'below' } {
 	const bounds = combinedWorldBounds(snapshot, selection)
 	if (!bounds) {
-		// Selection resolved to no live shape's bounds (unusual — relevantAxes
-		// already returned a non-empty axis list, so this is a defensive
-		// fallback, not the expected path): anchor near the top center.
-		return { left: viewportSize.width / 2, top: MARGIN, transform: 'translateX(-50%)' }
+		// Defensive: slots resolved but no live bounds — anchor top-centre.
+		return { left: viewportSize.width / 2 - width / 2, top: MARGIN, side: 'below' }
 	}
 	const c1 = worldToScreen(camera, { x: bounds.minX, y: bounds.minY })
 	const c2 = worldToScreen(camera, { x: bounds.maxX, y: bounds.maxY })
-	const position = clampPanelPosition(c1, c2, viewportSize, { width: PANEL_MAX_WIDTH, height: PANEL_MAX_HEIGHT }, MARGIN, PANEL_FLIP_HEADROOM)
-	return avoidAnchorOverlap(position, c1, c2, viewportSize, MARGIN)
+	const clamped = clampPanelPosition(c1, c2, viewportSize, { width: BAR_MAX_WIDTH, height: BAR_HEIGHT }, MARGIN, BAR_FLIP_HEADROOM)
+	const position = avoidAnchorOverlap(clamped, c1, c2, viewportSize, MARGIN)
+	const side = position.transform === 'translate(-50%, -100%)' ? 'above' : 'below'
+	return { left: position.left - width / 2, top: side === 'above' ? position.top - BAR_HEIGHT : position.top, side }
 }
 
 function stopPropagation(e: { stopPropagation(): void }): void {
 	e.stopPropagation()
 }
 
-/**
- * FIXER (style-memory, validator round 2, blocking item 2): PANEL_STYLE's
- * container is deliberately `pointer-events: none` (see that constant's own
- * REGRESSION FIX comment) so empty panel space passes clicks through to the
- * canvas underneath — but CSS `pointer-events: none` disables hit-testing
- * for EVERY pointer-driven event, wheel included, not just click/drag. That
- * made a wheel gesture aimed at the panel fall straight through to
- * Viewport's own root div (canvas-react/src/Viewport.tsx), which reads it
- * as a camera pan — so `overflowY: 'auto'`'s scrollbar was never reachable:
- * a real browser session driving a 300px wheel over the panel left its
- * `scrollTop` at 0 and moved the camera by -300 instead (validator repro,
- * pinned by `e2e/tests/style-panel-scroll.spec.ts`).
- *
- * Fix: a native, non-passive `wheel` listener bound in the CAPTURE phase on
- * `window` — the same non-passive-listener idiom Viewport.tsx's own module
- * header explains (a JSX `onWheel` can't preventDefault reliably, and here
- * it additionally couldn't even fire — pointer-events:none excludes the
- * element from hit-testing, so React's synthetic wheel handler would never
- * see events over the panel at all). Capture-phase on `window` sees the
- * event BEFORE it reaches Viewport's own bubble-phase listener; when the
- * pointer is over the panel's live `getBoundingClientRect()`, this scrolls
- * the panel's own `scrollTop` by the wheel's `deltaY` and calls both
- * `preventDefault()` (blocks the page-level default) and `stopPropagation()`
- * (capture-phase stopPropagation halts the event before it ever reaches the
- * target/bubble phase, so Viewport's listener never runs for it) — outside
- * the panel's rect, the event is untouched and reaches Viewport exactly as
- * before. Manually driving `scrollTop` (rather than relying on the
- * suppressed native scroll) works whether or not the content currently
- * overflows: the browser clamps `scrollTop` to `[0, scrollHeight -
- * clientHeight]` on assignment, so this is a harmless no-op once nothing is
- * clipped.
- *
- * NOT a hook, deliberately: this file's own test suite (StylePanel.test.ts,
- * cases 9/10) calls `StylePanel({...})` as a PLAIN FUNCTION — inspecting the
- * returned element tree directly, never through `createElement`/a real
- * render — which is a house pattern for a pure-render component predating
- * this fix (see that file's own header) and runs with no React dispatcher
- * active at all. A `useRef`/`useEffect` pair here would throw "Invalid hook
- * call" the instant such a test ran (verified: it does). A plain module-
- * scope singleton plus a REF CALLBACK (an ordinary function prop, not a
- * hook — `<div ref={panelRefCallback}>`) sidesteps that entirely: harmless
- * to include in a tree nobody ever reconciles, and wired up automatically
- * the moment a real render DOES mount the div. `bindPanelWheelListenerOnce`
- * also no-ops when `window` doesn't exist (this same static-markup test
- * environment) rather than throwing.
- */
-let livePanelEl: HTMLDivElement | null = null
-let panelWheelListenerBound = false
+// ---------------------------------------------------------------------------
+// Armed panel (stacked rows, top-centre under the toolbar)
+// ---------------------------------------------------------------------------
 
-function handlePanelWheel(e: WheelEvent): void {
-	const el = livePanelEl
-	if (!el) return
-	const rect = el.getBoundingClientRect()
-	const inside = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom
-	if (!inside) return
-	el.scrollTop += e.deltaY
-	e.preventDefault()
-	e.stopPropagation()
+const AXIS_GROUPS: readonly (readonly StyleAxis[])[] = [
+	['color'],
+	['fill', 'dash'],
+	['size', 'font'],
+	['align', 'verticalAlign', 'textAlign'],
+	['geo'],
+	['arrowheadStart', 'arrowheadEnd'],
+	['opacity'],
+]
+
+const ARMED_PANEL_STYLE: CSSProperties = {
+	position: 'absolute',
+	display: 'flex',
+	flexDirection: 'column',
+	gap: 8,
+	padding: '8px 10px',
+	background: UI_VARS.panelBg,
+	border: `1px solid ${UI_VARS.panelBorder}`,
+	borderRadius: 8,
+	boxShadow: UI_VARS.shadow,
+	fontFamily: 'system-ui, sans-serif',
+	fontSize: 11,
+	color: UI_VARS.panelFg,
+	pointerEvents: 'none',
+	zIndex: 500,
+	minWidth: 160,
+	// 340 fits all 13 colour swatches on one row inside padding and border.
+	maxWidth: 340,
+	maxHeight: 480,
+	overflowY: 'auto',
+	boxSizing: 'border-box',
+	left: '50%',
+	top: MARGIN,
+	transform: 'translateX(-50%)',
 }
 
-function bindPanelWheelListenerOnce(): void {
-	if (panelWheelListenerBound) return
-	if (typeof window === 'undefined') return // no browser global (e.g. StylePanel.test.ts's static-markup rig) — nothing to bind to
-	window.addEventListener('wheel', handlePanelWheel, { passive: false, capture: true })
-	panelWheelListenerBound = true
-}
+const ROW_GROUP_STYLE: CSSProperties = { display: 'flex', gap: 14, flexWrap: 'wrap' }
 
-/** Ref callback (not a hook) for both PANEL_STYLE divs below — records
- * whichever one is currently mounted (only one of the two modes ever
- * renders at once) so `handlePanelWheel` always targets the live node, and
- * lazily binds the one process-lifetime `window` listener on first mount. */
-function panelRefCallback(el: HTMLDivElement | null): void {
-	livePanelEl = el
-	if (el) bindPanelWheelListenerOnce()
-}
-
-// Task AS3 — armed mode has no selection bounds to anchor against
-// (`computePosition` above needs a live selection's world bounds via
-// `combinedWorldBounds`). Floated top-center under the toolbar instead —
-// the same top-center anchor `computePosition`'s own defensive "selection
-// resolved to no live shape's bounds" fallback already uses above, reused
-// here because it's the identical situation (no bounds to anchor to), not a
-// coincidence of matching numbers.
-const ARMED_PANEL_POSITION: CSSProperties = { left: '50%', top: MARGIN, transform: 'translateX(-50%)' }
-
-/** Armed-mode counterpart to `currentValue` (AS3, extended by gap 2 of the
- * style-memory task): `nextShapeStyle[axis]` verbatim if it's a
- * string/number; otherwise falls back to `toolId`'s kind default
- * (`kindDefault`, style-axes.ts) — the same "unset shows what it would
- * actually render with" fallback `currentValue` gives a live selection,
- * applied here to the pre-creation armed panel so a fresh mount (nothing
- * armed yet) shows tldraw's real `stylesForNextShape`-equivalent defaults
- * instead of a blank row. Never `'mixed'` (there's no shape selection to
- * disagree; `nextShapeStyle` is a single flat record, see
- * EditorState.nextShapeStyle's own doc comment in editor.ts). */
+/** `nextShapeStyle[axis]` if set, else the armed tool's kind default — so a
+ * fresh mount shows what the shape would actually render with. */
 function armedValue(nextShapeStyle: Record<string, unknown>, toolId: ToolId, axis: StyleAxis): StyleValue | undefined {
 	const raw = nextShapeStyle[axis]
 	if (typeof raw === 'string' || typeof raw === 'number') return raw
@@ -547,34 +379,6 @@ function armedValue(nextShapeStyle: Record<string, unknown>, toolId: ToolId, axi
 	return kind ? kindDefault(kind, axis) : undefined
 }
 
-/**
- * Contextual style panel (Task P2 selection mode; Task AS3 armed mode).
- * SELECTION MODE (`selection.size > 0`, unchanged from P2/P4): renders
- * nothing when the live selection has no style-relevant axis, or mid-
- * gesture; on change, calls `onStyleChange` (-> `SetStyle` over the
- * selection). ARMED MODE (`selection.size === 0` and `activeToolId` is a
- * style-bearing tool): renders `nextShapeStyle`'s current values instead of
- * a selection's; on change, calls `onArmStyle` (-> `SetNextStyle`) instead.
- * Selection is checked FIRST and unconditionally short-circuits into
- * selection mode — armed mode is only ever reached with an EMPTY selection,
- * so arming a tool can never override styling shapes that are actually
- * selected. Renders null when neither mode applies (empty selection, no
- * style-bearing tool armed — e.g. `select`/`hand`).
- * `onPointerDown`/`onPointerUp` stop propagation so a click on a control
- * never reaches Viewport's own pointer handling (canvas-react/src/
- * Viewport.tsx) and gets misread as the start of a canvas gesture —
- * mirrors v1 ContextualStylePanel's `stopEventPropagation` wrapping, using a
- * local helper since this package may not import tldraw. REGRESSION FIX: the
- * container itself is `pointerEvents: 'none'` (PANEL_STYLE) — only the
- * controls (`swatchButtonStyle`/`segButtonStyle`) opt back in with
- * `pointerEvents: 'auto'` — so this stopPropagation only ever fires for a
- * control click (which still bubbles up through the pointer-events:none
- * container in the ordinary DOM way; CSS `pointer-events` governs
- * hit-testing, not event propagation). A pointer over empty panel space now
- * passes straight through to the canvas instead of being eaten by the
- * container, which used to block every drag/double-click/delete gesture
- * aimed at a selected shape wherever the panel overlapped it.
- */
 export function StylePanel({
 	selection,
 	snapshot,
@@ -585,6 +389,8 @@ export function StylePanel({
 	nextShapeStyle,
 	onStyleChange,
 	onArmStyle,
+	openSlot,
+	onOpenSlotChange,
 }: StylePanelProps) {
 	if (isGesturing) return null
 
@@ -594,34 +400,79 @@ export function StylePanel({
 			const shape = snapshot.byId.get(id)
 			if (shape) shapes.push(shape)
 		}
-		const axes = new Set(relevantAxes(shapes))
-		if (axes.size === 0) return null
+		const slots = toolbarSlots(shapes.map((s) => s.kind))
+		if (slots.length === 0) return null
 
-		const position = computePosition(snapshot, selection, camera, viewportSize)
-		const groups = AXIS_GROUPS.map((group) => group.filter((axis) => axes.has(axis))).filter((group) => group.length > 0)
+		const width = barWidth(slots)
+		const bar = computeBarBox(snapshot, selection, camera, viewportSize, width)
+		const openIndex = slots.findIndex((s) => s.id === openSlot)
+		const open = openIndex >= 0 ? slots[openIndex]! : undefined
+
+		let popover: ReactNode = null
+		if (open) {
+			const pos = popoverPosition(
+				{ left: bar.left, top: bar.top, width, height: BAR_HEIGHT },
+				{ left: bar.left + triggerOffset(slots, openIndex), width: TRIGGER_WIDTH_PX },
+				POPOVER_MAX,
+				viewportSize,
+				bar.side,
+				MARGIN,
+			)
+			// `pos` bounds a POPOVER_MAX box; the real, usually smaller card is
+			// centred in it and hugs the bar-side edge so it stays by its trigger.
+			const placement: CSSProperties = {
+				left: pos.left + POPOVER_MAX.width / 2,
+				top: bar.side === 'above' ? pos.top + POPOVER_MAX.height : pos.top,
+				transform: bar.side === 'above' ? 'translate(-50%, -100%)' : 'translateX(-50%)',
+			}
+			const fixedWidth = POPOVER_WIDTH_BY_SLOT[open.id]
+			popover = (
+				<div data-style-popover={open.id} style={{ ...POPOVER_STYLE, ...placement, ...(fixedWidth ? { width: fixedWidth } : {}) }}>
+					{open.axes.map((axis) => (
+						<AxisRow key={axis} axis={axis} value={currentValue(shapes, axis)} onStyleChange={onStyleChange} showLabel={open.axes.length > 1} />
+					))}
+				</div>
+			)
+		}
 
 		return (
 			<div
-				ref={panelRefCallback}
 				data-testid="ew-style-panel"
 				data-canvas-v2-style-panel
 				data-style-panel-mode="selection"
 				onPointerDown={stopPropagation}
 				onPointerUp={stopPropagation}
-				style={{ ...PANEL_STYLE, ...position }}
+				style={WRAPPER_STYLE}
 			>
-				{groups.map((group) => (
-					<div key={group.join('-')} style={ROW_GROUP_STYLE}>
-						{group.map((axis) => (
-							<AxisRow key={axis} axis={axis} value={currentValue(shapes, axis)} onStyleChange={onStyleChange} />
-						))}
-					</div>
-				))}
+				<div style={{ ...BAR_STYLE, left: bar.left, top: bar.top, width }}>
+					{slots.flatMap((slot) => {
+						const value = slot.id === 'more' ? undefined : currentValue(shapes, slot.axes[0]!)
+						const isOpen = openSlot === slot.id
+						const title = triggerTitle(slot, value)
+						const trigger = (
+							<button
+								key={slot.id}
+								type="button"
+								data-style-trigger={slot.id}
+								aria-haspopup="true"
+								aria-expanded={isOpen}
+								data-style-mixed={value === 'mixed' ? 'true' : undefined}
+								title={title}
+								aria-label={title}
+								style={triggerStyle(isOpen)}
+								onClick={() => onOpenSlotChange(isOpen ? null : slot.id)}
+							>
+								{triggerFace(slot, value)}
+							</button>
+						)
+						return slot.id === 'more' ? [<div key="divider" style={DIVIDER_STYLE} />, trigger] : [trigger]
+					})}
+				</div>
+				{popover}
 			</div>
 		)
 	}
 
-	// AS3: nothing selected — arm the tool instead, if it's style-bearing.
 	const armedAxes = new Set(relevantAxesForTool(activeToolId))
 	if (armedAxes.size === 0) return null
 
@@ -629,13 +480,12 @@ export function StylePanel({
 
 	return (
 		<div
-			ref={panelRefCallback}
 			data-testid="ew-style-panel"
 			data-canvas-v2-style-panel
 			data-style-panel-mode="armed"
 			onPointerDown={stopPropagation}
 			onPointerUp={stopPropagation}
-			style={{ ...PANEL_STYLE, ...ARMED_PANEL_POSITION }}
+			style={ARMED_PANEL_STYLE}
 		>
 			{armedGroups.map((group) => (
 				<div key={group.join('-')} style={ROW_GROUP_STYLE}>

@@ -59,6 +59,8 @@ export function CanvasSurface({ session, editorState, snapshot, viewportSize, wo
 				nextShapeStyle={editorState.nextShapeStyle}
 				onStyleChange={session.onStyleChange}
 				onArmStyle={session.onArmStyle}
+				openSlot={null}
+				onOpenSlotChange={() => {}}
 			/>
 		</Viewport>
 	)
