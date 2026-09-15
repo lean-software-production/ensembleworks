@@ -28,7 +28,7 @@ export default definePluginApp((app) => {
   app.slots.navPanel({
     id: "canvas",
     title: "Canvas",
-    icon: "PenTool",
+    icon: "Layers",
     // Routed at /plugins/canvas/canvas. BB renders the title bar itself and
     // gives the component the full-bleed body below it with zero padding —
     // which is exactly what a canvas wants, so CanvasPanel fills it edge to
@@ -57,7 +57,7 @@ export default definePluginApp((app) => {
   app.slots.threadPanelAction({
     id: TRANSCRIPT_ACTION,
     title: "Room transcript",
-    icon: "MessageCircle",
+    icon: "MessageSquare",
     layout: "flush",
     component: TranscriptView,
   });
@@ -69,7 +69,7 @@ export default definePluginApp((app) => {
   app.slots.experimental_newThreadPanelAction({
     id: TRANSCRIPT_ACTION,
     title: "Room transcript",
-    icon: "MessageCircle",
+    icon: "MessageSquare",
     layout: "flush",
     component: TranscriptView,
   });
