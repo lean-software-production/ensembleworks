@@ -3,7 +3,7 @@ import { CanvasSession } from "./session.js";
 import { useCanvasConnection } from "./connection-runtime.js";
 
 export function CanvasPanel({ subPath }: PluginNavPanelProps) {
-  const { session, error, connectionState, identities, selfName, agents } =
+  const { session, error, connectionState, identities, selfName } =
     useCanvasConnection({ subPath });
   return (
     <div className="relative flex h-full min-h-0 w-full flex-col">
@@ -32,12 +32,6 @@ export function CanvasPanel({ subPath }: PluginNavPanelProps) {
           subPath={subPath}
           identities={identities}
           selfName={selfName}
-          agentLinks={agents.agentLinks}
-          pendingShapeId={agents.pendingShapeId}
-          onRunNote={agents.runNote}
-          onUnlinkNote={agents.unlinkNote}
-          onAttachThread={agents.attachThread}
-          loadThreadOptions={agents.loadThreadOptions}
         />
       )}
     </div>

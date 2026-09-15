@@ -7,7 +7,8 @@
 //                     the bus at all — it seeds itself over rpc and stays live
 //                     off the room's realtime identity broadcast.
 //   SpeakerRings      a layer over the canvas: a ring on the cursor of whoever
-//                     is talking, positioned exactly like AgentLayer's badges.
+//                     is talking, positioned with the same worldBounds ->
+//                     worldToScreen transform the collaborator cursors use.
 //
 // THE THIRD SURFACE HAS MOVED OUT. `CanvasHeader` used to be the navPanel's
 // `headerContent`: an avatar stack plus the audio control, rendered by BB into
@@ -121,7 +122,7 @@ export interface SpeakerRingsProps {
 /**
  * A pulsing ring on the cursor of everyone who is talking.
  *
- * Plugin chrome layered over the viewport, exactly like AgentLayer: it cannot
+ * Plugin chrome layered over the viewport, the same idiom the retired agent-badge overlay used: it cannot
  * be a canvas-react change (this spike consumes those packages unmodified) and
  * it must not be a shape (who is talking is ephemeral bb state, not document
  * content). `pointer-events: none` throughout — a ring is never a target.

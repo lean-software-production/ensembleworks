@@ -1,17 +1,12 @@
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
-import { attachVerdictFor } from "./agent-attach.js";
-import { AgentLinks, threadTitleFor } from "./agents.js";
 import { base64ToBytes } from "./base64.js";
 import { threadListArgsFor, threadPickerOptions } from "./thread-picker.js";
 import { DEFAULT_QUERY_LIMIT, TranscriptStore } from "./transcript.js";
-import { AGENT_CHANNEL } from "./wire.js";
 import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
-import { createThreadExcerptReader } from "./thread-excerpts.js";
 
 export interface RpcHandlerDependencies {
   readonly room: CanvasRoomHost;
-  readonly agents: AgentLinks;
   readonly transcript: TranscriptStore;
   readonly sdk: BbPluginApi["sdk"];
   readonly resolveProjectId: () => Promise<string>;
@@ -21,25 +16,33 @@ export interface RpcHandlerDependencies {
   };
 }
 
+/** Longest title a spawned thread's title is trimmed to. Moved here from the
+ * retired canvas/agents.ts with `canvas_run_note`'s replacement,
+ * `canvas_spawn_thread` — the only remaining caller. */
+const SPAWN_TITLE_LENGTH = 40;
+
+/**
+ * The thread title for a spawned prompt: `Canvas: ` plus the first
+ * SPAWN_TITLE_LENGTH characters. Whitespace is collapsed first — a prompt
+ * seeded from a frame's children is multi-shape by nature and a raw newline
+ * in a sidebar row is not a title.
+ */
+function spawnTitleFor(prompt: string): string {
+  const flat = prompt.replace(/\s+/g, " ").trim();
+  return `Canvas: ${flat.length <= SPAWN_TITLE_LENGTH ? flat : flat.slice(0, SPAWN_TITLE_LENGTH)}`;
+}
+
 export function createRpcHandlers(
   deps: RpcHandlerDependencies,
 ): PluginRpcHandlers<typeof rpcContract> {
   const {
     room,
-    agents,
     transcript,
     resolveProjectId,
-    realtime,
     log,
   } = deps;
 
-  const readExcerpts = createThreadExcerptReader(
-    deps.sdk.threads,
-    (threadId) => agents.shapeForThread(threadId) !== null,
-  );
-
   return {
-    canvas_thread_excerpts: ({ threadIds }) => readExcerpts(threadIds),
     canvas_join: ({ clientId, name }) => {
       room.join(clientId, Date.now(), name);
       return { room: room.room };
@@ -55,54 +58,29 @@ export function createRpcHandlers(
       room.leave(clientId);
       return { ok: true } as const;
     },
-    canvas_run_note: async ({ shapeId, text }) => {
+    canvas_spawn_thread: async ({ prompt }) => {
       const projectId = await resolveProjectId();
       const thread = await deps.sdk.threads.spawn({
         projectId,
         environment: { type: "project-default" },
-        prompt: text,
-        title: threadTitleFor(text),
+        prompt,
+        title: spawnTitleFor(prompt),
       });
-      const link = await agents.record(shapeId, thread.id, "running");
-      realtime.publish(AGENT_CHANNEL, link);
-      log.info(
-        `note ${shapeId} -> thread ${thread.id} in project ${projectId}`,
-      );
-      return link;
-    },
-    canvas_attach_thread: async ({ shapeId, threadId }) => {
-      const canvasProjectId = await resolveProjectId();
-      const thread = await deps.sdk.threads.get({ threadId });
-      const verdict = attachVerdictFor({
-        thread,
-        shapeId,
-        holderShapeId: agents.shapeForThread(threadId),
-        canvasProjectId,
-      });
-      if (!verdict.ok) throw new Error(verdict.message);
-      const link = await agents.record(shapeId, threadId, verdict.status);
-      realtime.publish(AGENT_CHANNEL, link);
-      log.info(
-        `shape ${shapeId} attached to thread ${threadId} (${verdict.status})`,
-      );
-      return link;
+      log.info(`spawned thread ${thread.id} in project ${projectId}`);
+      return { threadId: thread.id };
     },
     canvas_thread_options: async () => {
       const projectId = await resolveProjectId();
       const rows = await deps.sdk.threads.list(threadListArgsFor(projectId));
-      const attachedBy = Object.fromEntries(
-        agents.links.map((link) => [link.threadId, link.shapeId]),
-      );
-      return { options: threadPickerOptions(rows, attachedBy) };
+      // No shape ever "holds" a thread through this plugin's own bookkeeping
+      // any more (the kv-backed launch-or-attach links are retired — see
+      // docs/plans/2026-09-15-bb-thread-frame.md); a `bbthread` shape's own
+      // `threadId` prop is the only binding, and this handler has no reason
+      // to walk the document just to populate a mark the picker does not
+      // currently render differently. See the rpc contract's own note on
+      // `attachedShapeId` for why the field stays on the wire regardless.
+      return { options: threadPickerOptions(rows, {}) };
     },
-    canvas_unlink_agent: async ({ shapeId }) => {
-      const link = await agents.remove(shapeId);
-      if (link === null) return { unlinked: false };
-      realtime.publish(AGENT_CHANNEL, { shapeId, unlinked: true });
-      log.info(`note ${shapeId} unlinked from thread ${link.threadId}`);
-      return { unlinked: true };
-    },
-    canvas_agents: () => ({ links: agents.links }),
     // Kept as an explicit compatibility result for existing Canvas bundles.
     // Presence and Huddle now own these capabilities and their configuration.
     canvas_roster: () => ({ members: [] }),

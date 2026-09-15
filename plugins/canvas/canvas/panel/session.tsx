@@ -1,8 +1,7 @@
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { useDocSnapshot, useEditorState } from "@ensembleworks/canvas-react";
 import { useCanvasSession, type CanvasHost } from "@ensembleworks/canvas-ui";
 import { toast } from "sonner";
-import { promptTextFor } from "../agents-view.js";
 import { useSessionDebug } from "./session-debug.js";
 import { useSessionPages } from "./session-pages.js";
 import { useSessionPresence } from "./session-presence.js";
@@ -16,12 +15,6 @@ export function CanvasSession({
   subPath,
   identities,
   selfName,
-  agentLinks,
-  pendingShapeId,
-  onRunNote,
-  onUnlinkNote,
-  onAttachThread,
-  loadThreadOptions,
 }: CanvasSessionProps) {
   const { editor, toolContext, tools, presenceStore, presencePublisher, selfKey } = session;
   const editorState = useEditorState(editor);
@@ -66,20 +59,6 @@ export function CanvasSession({
   });
   const openThread = useThreadReturn({ editor, subPath, navigate, cancelAndReset: canvas.cancelAndReset });
 
-  const handleRunNote = useCallback(
-    (shapeId: string) => {
-      const text = promptTextFor(
-        snapshot.byId.get(shapeId),
-        editor.doc.getText(shapeId),
-      );
-      if (text.length === 0) {
-        toast.error("This note is empty — type a prompt into it first.");
-        return;
-      }
-      onRunNote(shapeId, text);
-    },
-    [editor, snapshot, onRunNote],
-  );
   return (
     <SessionView
       editorState={editorState}
@@ -93,13 +72,7 @@ export function CanvasSession({
       av={presence.av.speaking}
       selfKey={selfKey}
       canvas={canvas}
-      agentLinks={agentLinks}
-      pendingShapeId={pendingShapeId}
-      onRun={handleRunNote}
       onOpen={openThread}
-      onUnlink={onUnlinkNote}
-      onAttach={onAttachThread}
-      loadThreadOptions={loadThreadOptions}
       pageSwitcher={pageSwitcher}
     />
   );

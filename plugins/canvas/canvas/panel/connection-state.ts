@@ -3,10 +3,8 @@ import { useRealtimeConnectionState } from "@get-bb/plugin-sdk/app";
 
 export function useConnectionState({
   resync,
-  refreshAgents,
 }: {
   readonly resync: (reason: string) => void;
-  readonly refreshAgents: () => void;
 }) {
   const connectionState = useRealtimeConnectionState();
   const previousConnectionState = useRef(connectionState);
@@ -15,7 +13,6 @@ export function useConnectionState({
     previousConnectionState.current = connectionState;
     if (connectionState !== "connected" || previous !== "reconnecting") return;
     resync("canvas reconnect");
-    refreshAgents();
-  }, [connectionState, resync, refreshAgents]);
+  }, [connectionState, resync]);
   return connectionState;
 }

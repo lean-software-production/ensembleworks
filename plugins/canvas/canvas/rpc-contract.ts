@@ -1,6 +1,5 @@
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
-import { AGENT_STATUSES } from "./wire.js";
 import { MAX_PATH_LENGTH } from "./dock/where.js";
 import { MAX_QUERY_LIMIT } from "./transcript.js";
 import { MAX_NAME_LENGTH } from "./identity.js";
@@ -30,25 +29,9 @@ const pathSchema = z
   })
   .optional();
 
-/** One shape -> thread link, on the wire. Mirrors `CanvasAgentLink`. */
-const agentLinkSchema = z
-  .object({
-    shapeId: z.string().min(1),
-    threadId: z.string().min(1),
-    status: z.enum(AGENT_STATUSES),
-  })
-  .strict();
-
 // Schemas run at the wire boundary. Handler input/output are inferred from
 // this shared contract; CanvasPanel.tsx imports only its type.
 export const rpcContract = defineRpcContract({
-  canvas_thread_excerpts: {
-    input: z.object({ threadIds: z.array(z.string().min(1).max(200)).max(20) }).strict(),
-    output: z.record(z.string(), z.object({
-      text: z.string().max(320),
-      label: z.string().max(80),
-    }).strict()),
-  },
   // The client half of the canvas transport. Replies are never returned here:
   // every server -> client frame goes out over bb.realtime on CANVAS_CHANNEL,
   // because a SyncRequest can produce several frames and some server -> client
@@ -85,57 +68,40 @@ export const rpcContract = defineRpcContract({
     output: z.object({ ok: z.literal(true) }).strict(),
   },
   /**
-   * Run a note as an agent: spawn a bb thread on the note's text and bind it to
-   * the note. `shapeId` is the note the panel had selected; `text` is the live
-   * document text it read at click time (the panel reads it, not the backend —
-   * the backend's own copy of the doc is authoritative but the click is about
-   * what the user can SEE, and reading it once on the client keeps this handler
-   * from having to guess which of a shape's text fields the user meant).
+   * Spawn a real bb thread from a prompt — what binds a `bbthread` frame to a
+   * NEW thread when its picker's "New thread" arm is chosen rather than an
+   * existing one (see docs/plans/2026-09-15-bb-thread-frame.md). `prompt` is
+   * text the caller has already assembled (the plan: seeded from the frame's
+   * child shapes' text) — this handler only spawns and returns the id; it
+   * writes no kv row and publishes nothing, unlike the retired
+   * `canvas_run_note` it replaces. The shape body records the returned
+   * `threadId` onto itself via the ordinary `UpdateProps` path, which is a
+   * canvas-document write like any other and needs no rpc of its own.
    */
-  canvas_run_note: {
-    input: z
-      .object({
-        shapeId: z.string().min(1).max(200),
-        // Capped rather than unbounded: this becomes an agent prompt, and a
-        // note is a sticky, not a document.
-        text: z.string().trim().min(1).max(20_000),
-      })
-      .strict(),
-    output: agentLinkSchema,
+  canvas_spawn_thread: {
+    input: z.object({ prompt: z.string().trim().min(1).max(8_000) }).strict(),
+    output: z.object({ threadId: z.string() }).strict(),
   },
   /**
-   * Bind a shape to a thread that ALREADY EXISTS in bb — the attach arm of the
-   * launch-or-attach affordance.
-   *
-   * NO PROMPT, AND THEREFORE NO KIND GATE. `canvas_run_note` above needs a
-   * note's body to spawn on; this needs two ids, so a frame, a rectangle or an
-   * image can carry a badge just as well (canvas/agent-arms.ts owns that
-   * asymmetry). What it does need is a thread that resolves AND is usable, and
-   * both halves of that check are the handler's — see canvas/agent-attach.ts.
-   *
-   * REJECTS RATHER THAN RETURNING A REFUSAL SHAPE, like `canvas_run_note` and
-   * unlike `canvas_av_token`. The panel already toasts `cause.message` for a
-   * failed run, so the refusals arrive on a path that exists; and every refusal
-   * here is a sentence for a human, not a code a caller branches on.
-   */
-  canvas_attach_thread: {
-    input: z
-      .object({
-        shapeId: z.string().min(1).max(200),
-        threadId: z.string().min(1).max(200),
-      })
-      .strict(),
-    output: agentLinkSchema,
-  },
-  /**
-   * The threads the attach picker may offer. Server-side because the frontend
-   * has no bb SDK at all — `bb.sdk` exists only in this process.
+   * The threads a `bbthread` frame's picker may offer, for binding to an
+   * EXISTING project thread (the alternative to `canvas_spawn_thread` above).
+   * Server-side because the frontend has no bb SDK at all — `bb.sdk` exists
+   * only in this process.
    *
    * WHICH threads, in what ORDER, and how many, are all
    * canvas/thread-picker.ts's decisions; this method is the fetch around them.
    * The query the user types is NOT one of them: filtering happens in the
    * browser over this answer, so typing does not cost a round trip per
    * keystroke, which is the same call the page popover's filter makes.
+   *
+   * `attachedShapeId` IS ALWAYS NULL FOR NOW. It named the shape a kv-backed
+   * link already held a thread for (the retired launch-or-attach spike); that
+   * bookkeeping is gone with it (docs/plans/2026-09-15-bb-thread-frame.md —
+   * "kv link data is thrown away, no migration") and a `bbthread` shape's own
+   * `threadId` prop is the only binding that exists now. The field stays on
+   * the wire rather than being ripped out mid-cutover: a `bbthread` body could
+   * resurrect the "already bound elsewhere" mark by scanning the document for
+   * a shape whose `threadId` matches a row, without another schema change.
    */
   canvas_thread_options: {
     input: z.null(),
@@ -153,33 +119,6 @@ export const rpcContract = defineRpcContract({
         ),
       })
       .strict(),
-  },
-  /**
-   * Break a note's link to its agent thread, on a human's say-so ("Unlink
-   * thread" on the badge).
-   *
-   * The THREAD IS UNTOUCHED — not archived, not deleted, not stopped. This is
-   * the "get this badge off my sticky" action, and destroying a conversation is
-   * a decision that belongs to bb's own thread UI, where it can be confirmed
-   * and undone. `unlinked: false` is the honest answer for a shape that had no
-   * link (a stale second tab pressing the same button); it is not an error,
-   * because "there is no link on this note" is precisely the state the caller
-   * asked for.
-   */
-  canvas_unlink_agent: {
-    input: z.object({ shapeId: z.string().min(1).max(200) }).strict(),
-    output: z.object({ unlinked: z.boolean() }).strict(),
-  },
-  /**
-   * Every shape -> thread link the room knows. A freshly mounted panel calls
-   * this once so badges are on screen immediately, rather than appearing only
-   * for threads that happen to change status while it is watching; it is also
-   * what a panel calls after a realtime reconnect, because status messages are
-   * ephemeral and whatever was published during the gap is simply gone.
-   */
-  canvas_agents: {
-    input: z.null(),
-    output: z.object({ links: z.array(agentLinkSchema) }).strict(),
   },
   /**
    * Who is in the room, by name. What the sidebar accessory's "N online" count

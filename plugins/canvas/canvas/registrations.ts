@@ -1,12 +1,11 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
-import type { AgentLinks } from "./agents.js";
 import {
   CF_ACCESS_EMAIL_HEADER,
   IDENTITY_ROUTE_PATH,
   resolveIdentity,
 } from "./identity.js";
 import type { CanvasRoomHost } from "./room.js";
-import { AGENT_CHANNEL, CANVAS_CHANNEL, TRANSCRIPT_CHANNEL } from "./wire.js";
+import { CANVAS_CHANNEL, TRANSCRIPT_CHANNEL } from "./wire.js";
 import {
   filterFor,
   mentionItems,
@@ -30,24 +29,10 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 export function registerBackground(
   bb: BbPluginApi,
   room: CanvasRoomHost,
-  agents: AgentLinks,
 ): void {
   bb.background.service("canvas-gc", {
     async start(signal) {
       bb.realtime.publish(CANVAS_CHANNEL, { hello: Date.now() });
-      const dropped = await agents.sweep(async (threadId) => {
-        const thread = await bb.sdk.threads.get({ threadId });
-        return { archivedAt: thread.archivedAt, deletedAt: thread.deletedAt };
-      });
-      for (const link of dropped) {
-        bb.realtime.publish(AGENT_CHANNEL, {
-          shapeId: link.shapeId,
-          unlinked: true,
-        });
-        bb.log.info(
-          `note ${link.shapeId} unlinked: thread ${link.threadId} is gone`,
-        );
-      }
       while (!signal.aborted) {
         await sleep(30_000, signal);
         if (signal.aborted) break;
@@ -115,31 +100,4 @@ export function registerMentions(
       };
     },
   });
-}
-
-export function registerAgentEvents(bb: BbPluginApi, agents: AgentLinks): void {
-  for (
-    const [event, status] of [["thread.active", "running"], [
-      "thread.idle",
-      "idle",
-    ], ["thread.failed", "failed"]] as const
-  ) {
-    bb.events.on(event, async ({ thread }) => {
-      const link = await agents.apply(thread.id, status);
-      if (link !== null) bb.realtime.publish(AGENT_CHANNEL, link);
-    });
-  }
-  for (const event of ["thread.archived", "thread.deleted"] as const) {
-    bb.events.on(event, async ({ thread }) => {
-      const link = await agents.removeByThread(thread.id);
-      if (link === null) return;
-      bb.realtime.publish(AGENT_CHANNEL, {
-        shapeId: link.shapeId,
-        unlinked: true,
-      });
-      bb.log.info(
-        `note ${link.shapeId} unlinked: thread ${thread.id} ${event}`,
-      );
-    });
-  }
 }
