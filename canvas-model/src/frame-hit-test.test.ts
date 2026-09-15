@@ -8,7 +8,10 @@
 // this test can't silently drift from the renderer it must match.
 import assert from 'node:assert/strict'
 import { makeDocument } from './document.js'
-import { hitTestPoint, FRAME_HEADER_HEIGHT, FRAME_EDGE_MARGIN } from './geometry.js'
+import {
+  hitTestPoint, FRAME_HEADER_HEIGHT, FRAME_EDGE_MARGIN,
+  isFrameLike, localBounds, bbthreadPaneLocalBounds, bbthreadWorkspaceLocalBounds, BBTHREAD_PANE_FRACTION,
+} from './geometry.js'
 
 const base = () => ({ index: 'a1', isLocked: false, opacity: 1, meta: {} })
 
@@ -78,5 +81,58 @@ const geoDoc = makeDocument({
   bindings: [],
 })
 assert.equal(hitTestPoint(geoDoc, geoDoc.byId.get('shape:geo')!, { x: 50, y: 50 }), true, 'a plain geo shape stays a solid hit test (dead center hits)')
+
+// ============================================================================
+// bb-thread-frame task — 'bbthread': isFrameLike, default size, header/edge
+// hit exactly like a frame, PLUS a solid right-third thread pane below the
+// header, hollow everywhere else in the body.
+// ============================================================================
+
+assert.equal(isFrameLike('frame'), true)
+assert.equal(isFrameLike('bbthread'), true)
+assert.equal(isFrameLike('geo'), false)
+
+// Default size: 960x600 (no props.w/h).
+{
+  const bare = { id: 'shape:bb0', kind: 'bbthread', parentId: 'page:p', x: 0, y: 0, rotation: 0, props: {}, ...base() } as any
+  const lb = localBounds(bare)
+  assert.deepEqual({ w: lb.maxX - lb.minX, h: lb.maxY - lb.minY }, { w: 960, h: 600 }, 'bbthread default size is 960x600')
+}
+
+// A 900x600 bbthread at the origin -- local box [0,900]x[0,600].
+const bbDoc = makeDocument({
+  pages: [{ id: 'page:p', name: 'P' }],
+  shapes: [{ id: 'shape:bb', kind: 'bbthread', parentId: 'page:p', x: 0, y: 0, rotation: 0, props: { w: 900, h: 600 }, ...base() } as any],
+  bindings: [],
+})
+const bbthread = bbDoc.byId.get('shape:bb')!
+
+// Pane bounds: right third (x in [600,900]), below the header (y in [24,600]).
+{
+  const pane = bbthreadPaneLocalBounds(bbthread)
+  assert.deepEqual(pane, { minX: 900 * (1 - BBTHREAD_PANE_FRACTION), minY: FRAME_HEADER_HEIGHT, maxX: 900, maxY: 600 })
+  const workspace = bbthreadWorkspaceLocalBounds(bbthread)
+  assert.deepEqual(workspace, { minX: 0, minY: FRAME_HEADER_HEIGHT, maxX: 900 * (1 - BBTHREAD_PANE_FRACTION), maxY: 600 })
+}
+
+// (1) a point in the solid pane HITS.
+assert.equal(hitTestPoint(bbDoc, bbthread, { x: 800, y: 300 }), true, 'a point inside the solid thread pane hits')
+
+// (2) a point deep in the hollow workspace MISSES.
+assert.equal(hitTestPoint(bbDoc, bbthread, { x: 200, y: 300 }), false, 'a point deep in the hollow workspace misses')
+
+// (3) the header band still hits, exactly like a frame.
+assert.equal(
+  hitTestPoint(bbDoc, bbthread, { x: 150, y: -FRAME_HEADER_HEIGHT / 2 }),
+  true,
+  'the header band hits a bbthread exactly like a frame',
+)
+
+// (4) the border edge margin still hits, exactly like a frame.
+assert.equal(
+  hitTestPoint(bbDoc, bbthread, { x: FRAME_EDGE_MARGIN - 1, y: 300 }),
+  true,
+  'the left edge margin hits a bbthread exactly like a frame',
+)
 
 console.log('ok: frame-hit-test')

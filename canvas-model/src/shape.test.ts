@@ -11,10 +11,10 @@ import {
 } from './shape.js'
 import { validateAsset } from './document.js'
 
-// Every kind the room can contain is enumerated (9 tldraw incl. group + image + 6 custom).
+// Every kind the room can contain is enumerated (9 tldraw incl. group + image + 6 custom + bbthread).
 assert.deepEqual(
   [...SHAPE_KINDS].sort(),
-  ['arrow','draw','file-viewer','frame','geo','group','highlight','iframe','image','line','neko','note','roadmap','screenshare','terminal','text'].sort(),
+  ['arrow','bbthread','draw','file-viewer','frame','geo','group','highlight','iframe','image','line','neko','note','roadmap','screenshare','terminal','text'].sort(),
 )
 
 const note = {
@@ -429,3 +429,20 @@ assert.ok(
 }
 
 console.log('ok: image props schema (M2, assets/image sub-cycle)')
+
+// bb-thread-frame task — bbthread props: box + optional name + optional
+// threadId, mirroring frame's own shape.
+function bbthreadWith(props: Record<string, unknown>) {
+  return {
+    id: 'shape:bb1', kind: 'bbthread', parentId: 'page:p', index: 'a1',
+    x: 0, y: 0, rotation: 0, isLocked: false, opacity: 1, meta: {}, props,
+  }
+}
+assert.ok(validateShape(bbthreadWith({ w: 960, h: 600 })).ok, 'a bare bbthread (no name/threadId) validates')
+assert.ok(
+  validateShape(bbthreadWith({ w: 960, h: 600, name: 'Design review', threadId: 'thread:abc' })).ok,
+  'a bbthread with name + threadId validates',
+)
+assert.ok(!validateShape(bbthreadWith({ threadId: 123 })).ok, 'a non-string threadId is rejected')
+assert.ok(!validateShape(bbthreadWith({ name: 42 })).ok, 'a non-string name is rejected')
+console.log('ok: bbthread props schema')

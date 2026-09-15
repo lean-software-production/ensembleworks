@@ -12,12 +12,12 @@
 // measures. That is exactly the computation pageBounds/worldBounds already
 // trust, so a future change to a kind's default size (or the note special
 // case) is picked up here for free, with zero duplicated numbers.
-import { indexBetween, localBounds, STYLE_VALUE_SETS, type Bounds, type Shape } from '@ensembleworks/canvas-model'
+import { indexBetween, isFrameLike, localBounds, STYLE_VALUE_SETS, type Bounds, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from '../intents.js'
 import { crossedThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
 
-export type CreateKind = 'note' | 'text' | 'geo' | 'frame'
+export type CreateKind = 'note' | 'text' | 'geo' | 'frame' | 'bbthread'
 
 interface Idle {
   readonly mode: 'idle'
@@ -198,12 +198,13 @@ function makeId(event: { readonly t: number; readonly x: number; readonly y: num
   return `shape:${event.t}-${Math.round(event.x)}-${Math.round(event.y)}-${salt}`
 }
 
-// Frame capture (v1 rule, our choice): when a newly-created FRAME's final
-// world bounds fully CONTAIN existing shapes, those shapes are reparented
-// into it. Only ROOT-LEVEL shapes (parentId === pageId) are eligible — a
+// Frame capture (v1 rule, our choice): when a newly-created FRAME-LIKE
+// shape's (canvas-model's isFrameLike — frame or bbthread) final world
+// bounds fully CONTAIN existing shapes, those shapes are reparented into
+// it. Only ROOT-LEVEL shapes (parentId === pageId) are eligible — a
 // shape already nested under some OTHER frame/group is never stolen, even
-// if it's geometrically contained too. `frame` is root-level and
-// rotation-0 by construction (this tool never creates a rotated frame), so
+// if it's geometrically contained too. `frame`/`bbthread` are root-level and
+// rotation-0 by construction (this tool never creates a rotated one), so
 // its own x/y/w/h ARE its world bounds directly — no doc/parent-chain walk
 // needed.
 //
@@ -245,7 +246,7 @@ const AUTO_EDIT_KINDS: ReadonlySet<CreateKind> = new Set(['note', 'text'])
 function finalizeIntents(ctx: ToolContext, shape: Shape): Intent[] {
   const intents: Intent[] = [{ type: 'CreateShape', shape }, { type: 'SetSelection', ids: [shape.id] }]
   if (AUTO_EDIT_KINDS.has(shape.kind as CreateKind)) intents.push({ type: 'BeginEdit', id: shape.id })
-  if (shape.kind === 'frame') intents.push(...frameCaptureIntents(ctx, shape))
+  if (isFrameLike(shape.kind)) intents.push(...frameCaptureIntents(ctx, shape))
   return intents
 }
 

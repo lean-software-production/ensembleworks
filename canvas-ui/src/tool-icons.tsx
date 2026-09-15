@@ -13,6 +13,12 @@ const PATHS: Record<ToolId, ReactNode> = {
 	text: <path d="M5 7V5h14v2M12 5v14M9 19h6" />,
 	geo: <rect x="4" y="6" width="16" height="12" rx="1.5" />,
 	frame: <path d="M8 3v18M16 3v18M3 8h18M3 16h18" />,
+	bbthread: (
+		<>
+			<rect x="4" y="5" width="16" height="14" rx="1" />
+			<rect x="14" y="5" width="6" height="14" fill="currentColor" stroke="none" />
+		</>
+	),
 	arrow: <path d="M5 19L19 5M10 5h9v9" />,
 	draw: <path d="M4 17c2.5-5 4.5 1.5 7.5-3.5S15.5 7 20 6" />,
 	line: (

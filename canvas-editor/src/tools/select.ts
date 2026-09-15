@@ -103,6 +103,7 @@
 // live-read shim is gone with it.
 import {
   computeExcludedIds,
+  isFrameLike,
   isPointInFrameHeaderBand,
   isTextCapableKind,
   pageIdOf,
@@ -551,18 +552,20 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // "did the shape actually resolve" check needed because a vanished
         // target can't be hit-tested as `targetId` in the first place.
         const shape = ctx.snapshot().byId.get(targetId)
-        // FRAME RENAME (frame-interaction task, gap 1): a double-click that
-        // lands specifically on the frame's HEADER band (canvas-model's
-        // isPointInFrameHeaderBand — the header label, not the body/border)
-        // also begins editing, in place of the ordinary isTextCapableKind
-        // gate (a frame is never text-capable — canvas-model/src/shape.ts's
-        // TEXT_CAPABLE_KINDS deliberately excludes it). The generic
-        // BeginEdit(target)/editingId machinery is reused verbatim; it's the
-        // CLIENT's job (client/src/canvas-v2, DOM authoring layer) to mount
-        // a name-input editor instead of the richText TextEditor when
-        // editingId resolves to a frame — this FSM only decides WHEN to
-        // fire the intent, never what UI renders for it.
-        const opensFrameRename = shape?.kind === 'frame' && isPointInFrameHeaderBand(ctx.snapshot(), shape, worldOf(event))
+        // FRAME RENAME (frame-interaction task, gap 1; extended to
+        // 'bbthread' by isFrameLike, bb-thread-frame task): a double-click
+        // that lands specifically on a frame-like shape's HEADER band
+        // (canvas-model's isPointInFrameHeaderBand — the header label, not
+        // the body/border) also begins editing, in place of the ordinary
+        // isTextCapableKind gate (a frame-like shape is never text-capable —
+        // canvas-model/src/shape.ts's TEXT_CAPABLE_KINDS deliberately
+        // excludes both). The generic BeginEdit(target)/editingId machinery
+        // is reused verbatim; it's the CLIENT's job (client/src/canvas-v2,
+        // DOM authoring layer) to mount a name-input editor instead of the
+        // richText TextEditor when editingId resolves to a frame-like shape
+        // — this FSM only decides WHEN to fire the intent, never what UI
+        // renders for it.
+        const opensFrameRename = shape !== undefined && isFrameLike(shape.kind) && isPointInFrameHeaderBand(ctx.snapshot(), shape, worldOf(event))
         if (state.doubleClick && shape && (isTextCapableKind(shape.kind) || opensFrameRename)) {
           intents.push({ type: 'SetSelection', ids: [targetId] })
           intents.push({ type: 'BeginEdit', id: targetId })
@@ -696,10 +699,14 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // appear in the 'contain' (full-enclosure) query.
       const intersectIds = ctx.queryMarquee(bounds, 'intersect')
       const snapshot = ctx.snapshot()
-      const ids = intersectIds.some((id) => snapshot.byId.get(id)?.kind === 'frame')
+      const isFrameLikeId = (id: string) => {
+        const kind = snapshot.byId.get(id)?.kind
+        return kind !== undefined && isFrameLike(kind)
+      }
+      const ids = intersectIds.some(isFrameLikeId)
         ? (() => {
             const containedIds = new Set(ctx.queryMarquee(bounds, 'contain'))
-            return intersectIds.filter((id) => snapshot.byId.get(id)?.kind !== 'frame' || containedIds.has(id))
+            return intersectIds.filter((id) => !isFrameLikeId(id) || containedIds.has(id))
           })()
         : intersectIds
       return { state: IDLE, intents: [{ type: 'SetSelection', ids }] }

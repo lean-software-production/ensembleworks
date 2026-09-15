@@ -5,7 +5,19 @@ import type { StyleChange } from './style-controls.js'
 import { ToolIcon } from './tool-icons.js'
 import { UI_VARS } from './theme.js'
 
-export const TOOL_ORDER: readonly { readonly id: ToolId; readonly label: string }[] = [
+/** One toolbar row: a tool id + its button label. Exported so a host that
+ * passes a custom `tools` list (e.g. the BB plugin appending its own
+ * plugin-only tool) can build one without re-declaring this shape. */
+export interface ToolbarRow {
+	readonly id: ToolId
+	readonly label: string
+}
+
+// bb-thread-frame task — 'bbthread' is DELIBERATELY absent here: it is a
+// plugin-only tool (the web app must never show it). The BB plugin passes
+// its own `tools` prop — `[...TOOL_ORDER, { id: 'bbthread', label: 'Thread' }]`
+// — to `Toolbar` instead of relying on this default list.
+export const TOOL_ORDER: readonly ToolbarRow[] = [
 	{ id: 'select', label: 'Select' },
 	{ id: 'hand', label: 'Hand' },
 	{ id: 'note', label: 'Note' },
@@ -28,6 +40,11 @@ export interface ToolbarProps {
 	readonly nextShapeStyle?: Record<string, unknown>
 	/** `SetNextStyle`; a host that omits it gets no flyout. */
 	readonly onArmStyle?: StyleChange
+	/** The tool rows to render, in order. Defaults to `TOOL_ORDER` (the web
+	 * app's set) — a host that ships additional plugin-only tools (e.g. the
+	 * BB plugin's 'bbthread') passes its own extended list instead of
+	 * mutating the shared default. */
+	readonly tools?: readonly ToolbarRow[]
 }
 
 const containerStyle: CSSProperties = {
@@ -67,7 +84,7 @@ const ROW_STYLE: CSSProperties = { display: 'flex', flexDirection: 'row', gap: 2
 
 const SEPARATOR_STYLE: CSSProperties = { height: 1, margin: '2px 4px', background: UI_VARS.panelBorder }
 
-export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'horizontal', nextShapeStyle, onArmStyle }: ToolbarProps) {
+export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'horizontal', nextShapeStyle, onArmStyle, tools = TOOL_ORDER }: ToolbarProps) {
 	const vertical = orientation === 'vertical'
 	const showFlyout = vertical && nextShapeStyle !== undefined && onArmStyle !== undefined
 	return (
@@ -79,7 +96,7 @@ export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'hori
 			style={{ ...containerStyle, flexDirection: vertical ? 'column' : 'row', ...style }}
 		>
 			<div data-canvas-toolbar-scroller style={vertical ? RAIL_SCROLLER_STYLE : ROW_STYLE}>
-				{TOOL_ORDER.map(({ id, label }) => {
+				{tools.map(({ id, label }) => {
 					const shortcut = TOOL_SHORTCUT_LABEL[id]
 					const title = shortcut ? `${label} (${shortcut})` : label
 					const active = activeToolId === id

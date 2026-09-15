@@ -116,7 +116,7 @@
 // component only reads editor/doc state and forwards raw DOM change/key
 // events, exactly like Viewport.tsx forwards raw pointer/wheel/key events.
 import { useEffect, useRef, type ChangeEvent, type CompositionEvent, type KeyboardEvent } from 'react'
-import { localBounds, type Shape } from '@ensembleworks/canvas-model'
+import { isFrameLike, localBounds, type Shape } from '@ensembleworks/canvas-model'
 import { computeAutosizeProps, type ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { shapeBodyTransform } from './ShapeBody.js'
@@ -313,7 +313,7 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit, onAutosize }:
   // effects elsewhere in this codebase lean on.
   useEffect(() => {
     if (!editingId || !shape || !onAutosize) return
-    if (isEmbedKind(shape.kind) || shape.kind === 'frame' || typeof liveText !== 'string') return
+    if (isEmbedKind(shape.kind) || isFrameLike(shape.kind) || typeof liveText !== 'string') return
     const s = editorTextStyle(shape)
     const { maxX: boxW } = localBounds(shape)
     // MEASUREMENT PADDING, fixer round: the RENDERED STATIC BODY's padding
@@ -349,15 +349,16 @@ export function TextEditor({ toolContext, onTextChange, onEndEdit, onAutosize }:
   // textarea over a live terminal session. Guarded here, at the mount
   // decision, rather than trusting every future trigger to remember.
   if (isEmbedKind(shape.kind)) return null
-  // FRAME GUARD (frame-interaction task, gap 1): select.ts's double-click
-  // gate now ALSO fires BeginEdit for a frame (header-band click, not
-  // text-capability — see select.ts's `opensFrameRename`). A frame's
-  // editingId is rendered by the SEPARATE FrameNameEditor (a plain
-  // `props.name` input, not richText), never this component: a frame
-  // carries no doc text container for `editor.doc.getText` to read, and a
-  // full-body textarea would be the wrong affordance/geometry entirely
-  // (rename is the small header label, not the frame's whole interior).
-  if (shape.kind === 'frame') return null
+  // FRAME GUARD (frame-interaction task, gap 1; extended to 'bbthread' by
+  // isFrameLike, bb-thread-frame task): select.ts's double-click gate now
+  // ALSO fires BeginEdit for a frame-like shape (header-band click, not
+  // text-capability — see select.ts's `opensFrameRename`). A frame-like
+  // shape's editingId is rendered by the SEPARATE FrameNameEditor (a plain
+  // `props.name` input, not richText), never this component: it carries no
+  // doc text container for `editor.doc.getText` to read, and a full-body
+  // textarea would be the wrong affordance/geometry entirely (rename is the
+  // small header label, not the shape's whole interior).
+  if (isFrameLike(shape.kind)) return null
 
   const { maxX: w, maxY: h } = localBounds(shape) // localBounds is always {minX:0, minY:0, maxX:w, maxY:h} — geometry.ts's contract, same as ShapeBody.tsx
   const text = toolContext.editor.doc.getText(editingId) // READ through editor.doc — see module header's "not an import" note

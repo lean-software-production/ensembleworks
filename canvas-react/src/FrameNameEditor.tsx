@@ -23,7 +23,7 @@
 // via `onEndEdit()`. Both are the CALLER's job (client/src/canvas-v2) to
 // turn into UpdateProps/EndEdit Intents through `editor.apply`.
 import { useRef, type ChangeEvent, type FocusEvent, type KeyboardEvent } from 'react'
-import { localBounds } from '@ensembleworks/canvas-model'
+import { isFrameLike, localBounds } from '@ensembleworks/canvas-model'
 import type { ToolContext } from '@ensembleworks/canvas-editor'
 import { useDocSnapshot, useEditorState } from './use-editor-state.js'
 import { shapeBodyTransform } from './ShapeBody.js'
@@ -91,7 +91,7 @@ export function FrameNameEditor({ toolContext, onNameChange, onEndEdit }: FrameN
   const inputRef = useRef<HTMLInputElement>(null)
   const editingId = editorState.editingId
   const shape = editingId ? snapshot.byId.get(editingId) : undefined
-  if (!editingId || !shape || shape.kind !== 'frame') return null // no active frame edit, or it vanished/isn't a frame (TextEditor.tsx owns every other kind)
+  if (!editingId || !shape || !isFrameLike(shape.kind)) return null // no active frame-like edit, or it vanished/isn't frame-like (TextEditor.tsx owns every other kind)
 
   const { maxX: w, maxY: h } = localBounds(shape)
   const name = frameNameValue(shape.props as Record<string, unknown>)
