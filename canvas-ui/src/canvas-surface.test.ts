@@ -4,7 +4,7 @@ import { createElement, type ReactNode } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import { createToolContext, createToolSet, createInitialToolStates, Editor } from '@ensembleworks/canvas-editor'
-import { CanvasSurface, effectiveOpenSlot, selectionKey } from './CanvasSurface.js'
+import { CanvasSurface, effectiveOpenSlot, routeSurfaceInput, selectionKey } from './CanvasSurface.js'
 import type { CanvasSession } from './use-canvas-session.js'
 
 const doc = LoroCanvasDoc.create({ peerId: 1n })
@@ -53,3 +53,28 @@ assert.equal(effectiveOpenSlot(state, new Set(['shape:b', 'shape:a']), false), '
 assert.equal(effectiveOpenSlot(state, new Set(['shape:a']), false), null, 'selection change closes it')
 assert.equal(effectiveOpenSlot(state, sel, true), null, 'a gesture closes it')
 console.log('ok: open popover closes on selection change and gesture')
+
+{
+	const key = (type: 'keydown' | 'keyup', k: string) => ({ type, key: k, modifiers: { shift: false, alt: false, ctrl: false, meta: false }, t: 0 })
+	let closed = 0
+	const forwarded: string[] = []
+	const close = () => closed++
+	const forward = (e: { type: string }) => {
+		forwarded.push(e.type)
+		return true
+	}
+	assert.equal(routeSurfaceInput(key('keydown', 'Escape'), 'color', close, forward), undefined, 'consumed Escape asks for no preventDefault')
+	assert.equal(closed, 1, 'Escape with a popover open closes it')
+	assert.deepEqual(forwarded, [], 'and never reaches the tool')
+
+	assert.equal(routeSurfaceInput(key('keydown', 'Escape'), null, close, forward), true, "forward's return value is preserved")
+	assert.equal(closed, 1, 'Escape with no popover open does not close anything')
+	assert.deepEqual(forwarded, ['keydown'], 'and reaches the tool')
+
+	routeSurfaceInput(key('keydown', 'Enter'), 'color', close, forward)
+	routeSurfaceInput(key('keyup', 'Escape'), 'color', close, forward)
+	routeSurfaceInput({ type: 'pointerdown', x: 0, y: 0, button: 0, pointerId: 1, modifiers: {}, t: 0 } as never, 'color', close, forward)
+	assert.equal(closed, 1, 'other input never closes the popover')
+	assert.deepEqual(forwarded, ['keydown', 'keydown', 'keyup', 'pointerdown'], 'other input is forwarded unchanged')
+	console.log('ok: Escape at the surface closes an open popover without reaching the tool')
+}

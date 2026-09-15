@@ -3,7 +3,7 @@
 // one `CanvasSession`. Hosts add their own world content and screen overlays
 // through the two slots.
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
-import type { EditorState, ToolbarSlotId } from '@ensembleworks/canvas-editor'
+import type { EditorState, InputEvent, ToolbarSlotId } from '@ensembleworks/canvas-editor'
 import { currentSnapResult } from '@ensembleworks/canvas-editor'
 import type { CanvasDocument } from '@ensembleworks/canvas-model'
 import { FrameNameEditor, Grid, Overlay, ShapeLayer, TextEditor, Viewport, WorldLayer, type ViewportSize } from '@ensembleworks/canvas-react'
@@ -40,6 +40,24 @@ export function effectiveOpenSlot(state: OpenSlotState, selection: ReadonlySet<s
 	return state.slot
 }
 
+/** Viewport input routing while a style popover may be open: Escape with a
+ * popover open closes the popover and is consumed, so the tool never cancels
+ * or deselects. This covers browsers where clicking a trigger leaves focus on
+ * the Viewport (Safari, macOS Firefox), which the panel's own key handler
+ * never sees. Everything else goes to `forward` unchanged. */
+export function routeSurfaceInput(
+	event: InputEvent,
+	openSlot: ToolbarSlotId | null,
+	closePopover: () => void,
+	forward: (event: InputEvent) => boolean | void,
+): boolean | void {
+	if (event.type === 'keydown' && event.key === 'Escape' && openSlot !== null) {
+		closePopover()
+		return
+	}
+	return forward(event)
+}
+
 export function CanvasSurface({ session, editorState, snapshot, viewportSize, worldLayers, overlays }: CanvasSurfaceProps) {
 	const { editor, toolContext } = session
 	const onTextChange = useCallback((id: string, text: string) => editor.apply({ type: 'SetText', id, text }), [editor])
@@ -53,13 +71,17 @@ export function CanvasSurface({ session, editorState, snapshot, viewportSize, wo
 		(slot: ToolbarSlotId | null) => setOpenState({ slot, selectionKey: selectionKey(editorState.selection) }),
 		[editorState.selection],
 	)
+	const onInput = useCallback(
+		(event: InputEvent) => routeSurfaceInput(event, openSlot, () => onOpenSlotChange(null), session.handleInput),
+		[openSlot, onOpenSlotChange, session.handleInput],
+	)
 	// A gesture that ends on the same selection would otherwise reopen the popover.
 	useEffect(() => {
 		if (session.isGesturing) setOpenState((s) => (s.slot === null ? s : { ...s, slot: null }))
 	}, [session.isGesturing])
 
 	return (
-		<Viewport onInput={session.handleInput} onViewportBlur={session.cancelAndReset} onPointerCancel={session.cancelAndReset} style={{ position: 'absolute', inset: 0 }}>
+		<Viewport onInput={onInput} onViewportBlur={session.cancelAndReset} onPointerCancel={session.cancelAndReset} style={{ position: 'absolute', inset: 0 }}>
 			<Grid camera={editorState.camera} />
 			<WorldLayer camera={editorState.camera}>
 				<ShapeLayer toolContext={toolContext} camera={editorState.camera} viewportSize={viewportSize} dispatch={session.dispatch} />
