@@ -114,6 +114,47 @@ Which project a spawned or listed thread lives in is still the plugin's
 that setting rather than guessing — see `canvas/agent-project.ts` for the full
 argument.
 
+**The pane has four states**, decided by `bbthreadPaneState`
+(`canvas/shapes/bbthread-model.ts`):
+
+| State | When | Shown |
+| --- | --- | --- |
+| `unbound` | no `threadId` on the shape | the picker (a filter box + rows from `canvas_thread_options`) and a **New thread from these elements** button, seeded from the frame's own children's text (`spawnPromptFor`) and disabled when they carry no text at all |
+| `loading` | a `threadId` is set, but the host's live thread list (`experimental_useSidebarThreads`) isn't `ready` yet | a plain "Loading…" line — covers both `loading` and a transient `error` from the host, which get the same treatment here: neither says anything more specific than "not resolved yet" |
+| `bound` | `ready`, and a live, non-archived row matches | the thread's title, a status pill (`working` / `idle` / `attention` / `failed`, from the row's `indicator`/`hasPendingInteraction`/activity counters), the host `ThreadChat` itself, and the footer's short id + **Open full →** |
+| `gone` | `ready`, but no row matches the `threadId`, or the match is archived | a short explanation and an **Unbind** button |
+
+**Unbind writes `threadId: ""`, not `undefined`.** `UpdateProps` is a
+props-only *merge* (`canvas-doc`'s `updateProps`), and the CRDT layer turns a
+merged-in `undefined` back into `null`, which the shape's own
+`threadId: z.string().optional()` schema then rejects — so there is no way to
+truly *remove* the key from here. Writing `""` instead, and treating it
+identically to "absent" everywhere a `bbthread` shape's binding is read
+(`threadIdOf`, `canvas/thread-frames.ts`'s own `stringProp`), is this plugin's
+one workaround for that gap.
+
+**The pane is the only solid part of the frame's interior**, and it follows
+the same idle/focused policy the web app's canvas-v2 embeds use (reimplemented
+locally — this plugin does not import from `client/`, see
+`canvas/shapes/bbthread-model.ts`'s INTERACTION MODE section): a single click
+selects or drags the frame like any other shape, exactly as it would over the
+frame's hollow left two-thirds; **double-click the pane** to focus it, which
+stops its own pointer/wheel/keyboard events from reaching the canvas so the
+timeline scrolls and clicks land on the picker/`ThreadChat` instead of arming
+a drag or a marquee; **Escape, or a click outside the pane**, returns to idle.
+Hit-testing itself (which part of a `bbthread` shape is "solid") is
+canvas-model's job, not this component's — see `isFrameLike`,
+`bbthreadPaneLocalBounds` and `bbthreadWorkspaceLocalBounds` in
+`canvas-model/src/geometry.ts`.
+
+| File | What it owns |
+| --- | --- |
+| `canvas/shapes/bbthread-model.ts` | every pure decision: pane state, the spawn prompt, the idle/focused reducer, and the pane's own internal layout (title row / body / footer) |
+| `canvas/shapes/BbThreadShape.tsx` | the body — "hands only", wires the model's decisions to real DOM and to `ThreadChat`/`experimental_useSidebarThreads`/`useRpc` |
+| `canvas/shapes/bbthread-host.ts` | how the body's **Open full →** button reaches the canvas session's own thread-return navigation, without widening `ShapeBodyProps` for one shape |
+| `canvas/thread-picker.ts` | the picker's ordering/filtering (shared with the retired launch-or-attach spike) |
+| `canvas/thread-frames.ts` | the `bb canvas thread-frames` CLI read |
+
 ### Who is at the canvas
 
 Cursors are labelled with a real name, and each name gets its own colour.

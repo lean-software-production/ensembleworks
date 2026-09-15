@@ -1,0 +1,359 @@
+// The `bbthread` shape's body — "hands only": every decision it renders
+// comes from bbthread-model.ts (state, layout, interaction mode, the spawn
+// prompt); this file only wires those decisions to real DOM elements and the
+// host SDK's `ThreadChat`/`experimental_useSidebarThreads`/`useRpc` hooks.
+// See docs/plans/2026-09-15-bb-thread-frame.md and this plugin's README's
+// "The bb thread frame" section.
+//
+// NOT AN EMBED (canvas-react's `registerShape` `{ embed: true }` flag):
+// `ThreadChat` keeps its own connection to the thread and re-fetches on
+// mount, exactly like RoadmapShape.tsx's own "not an embed" note — a
+// cull-unmount just means the next mount re-subscribes.
+//
+// MEMO STRATEGY (shapeRegistry.ts's ShapeBodyProps doc comment): wrapped in
+// `React.memo` with a CONTENT comparator on `shape` alone
+// (`stableStringify`, canvas-model's canonical serialization) — `snapshot`
+// changes identity every doc commit regardless of whether this shape's own
+// children changed, and diffing against it would defeat the whole point of
+// memoizing a body this heavy (a live `ThreadChat` mount). CONSEQUENCE,
+// STATED PLAINLY: `snapshot`/`getText` are read ONLY inside the "New thread
+// from these elements" codepath (computed where used, never hoisted into a
+// `useMemo` keyed on `snapshot` — that would still only run when this
+// component actually re-renders, so it buys nothing but a false sense of
+// reactivity) — so the composed prompt reflects the workspace's children as
+// of this body's LAST GENUINE re-render (a `shape`-content change: `name`,
+// `threadId`, position, etc.), not necessarily the absolute latest doc
+// state if children were added/removed with no change to the frame's own
+// props in between. Accepted for this pilot (docs/plans/2026-09-15-bb-
+// thread-frame.md) — the comparator's win is worth more than perfect
+// spawn-prompt freshness, and the common case (add children, then click
+// "New thread") re-renders anyway via the pointer/selection activity that
+// usually surrounds it.
+import {
+  memo,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
+  type RefObject,
+  type WheelEvent as ReactWheelEvent,
+} from "react";
+import { childrenOf, stableStringify, type Shape } from "@ensembleworks/canvas-model";
+import type { ShapeBodyProps } from "@ensembleworks/canvas-react";
+import { ThreadChat, experimental_useSidebarThreads, useRpc } from "@get-bb/plugin-sdk/app";
+import type { rpcContract } from "../rpc-contract.js";
+import { filterThreadOptions, type ThreadOption } from "../thread-picker.js";
+import { openBbThread } from "./bbthread-host.js";
+import {
+  bbthreadPaneState,
+  paneLayout,
+  reduceInteractionMode,
+  shouldSwallowEvents,
+  spawnPromptFor,
+  threadIdOf,
+  type InteractionMode,
+  type PaneState,
+  type PaneTone,
+} from "./bbthread-model.js";
+
+const DEFAULT_LABEL = "Thread frame";
+
+/** `shape.props.name`, defaulted to "Thread frame" — canvas-react's
+ * FrameShape.tsx's own `frameLabel` rule (that file is not on canvas-react's
+ * public barrel, so it is restated here rather than imported), plus a
+ * " · Thread frame" suffix when a name IS set, so a bbthread's header always
+ * says what kind of frame it is (matches the plan's mockup: "YAK MAP ·
+ * THREAD FRAME"). */
+function bbthreadLabel(shape: Shape): string {
+  const raw = (shape.props as Record<string, unknown>).name;
+  const name = typeof raw === "string" ? raw.trim() : "";
+  return name.length > 0 ? `${name} · ${DEFAULT_LABEL}` : DEFAULT_LABEL;
+}
+
+const TONE_COLOR: Record<PaneTone, string> = {
+  working: "#0a7f3f",
+  idle: "var(--muted-foreground)",
+  attention: "#b45309",
+  failed: "#b91c1c",
+};
+
+function boundsStyle(b: { minX: number; minY: number; maxX: number; maxY: number }): CSSProperties {
+  return { position: "absolute", left: b.minX, top: b.minY, width: Math.max(0, b.maxX - b.minX), height: Math.max(0, b.maxY - b.minY) };
+}
+
+function TonePill({ tone, label }: { readonly tone: PaneTone; readonly label: string }) {
+  return (
+    <span
+      style={{
+        fontSize: 10,
+        fontWeight: 600,
+        letterSpacing: 0.4,
+        textTransform: "uppercase",
+        color: TONE_COLOR[tone],
+        border: `1px solid ${TONE_COLOR[tone]}`,
+        borderRadius: 3,
+        padding: "1px 6px",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+interface PickerProps {
+  readonly options: readonly ThreadOption[] | null;
+  readonly error: string | null;
+  readonly query: string;
+  readonly onQuery: (q: string) => void;
+  readonly onPick: (threadId: string) => void;
+  readonly spawnDisabled: boolean;
+  readonly busy: boolean;
+  readonly onSpawn: () => void;
+}
+
+/** The unbound pane's content: a filter box + row list, and the spawn
+ * button. A row's own click binds directly (`onPick`); nothing here decides
+ * WHICH threads are offered or in what order — that's
+ * `canvas_thread_options`'s job server-side, filtered client-side by
+ * `filterThreadOptions` (thread-picker.ts), the same pure rule the retired
+ * launch-or-attach picker used. */
+function UnboundPicker({ options, error, query, onQuery, onPick, spawnDisabled, busy, onSpawn }: PickerProps) {
+  const rows = options === null ? [] : filterThreadOptions(options, query);
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, padding: 8, minHeight: 0, flex: 1 }}>
+      <input
+        data-canvas-bbthread="picker"
+        placeholder="Find a thread…"
+        value={query}
+        onChange={(e) => onQuery(e.target.value)}
+        style={{ font: "inherit", fontSize: 12, padding: "4px 6px", border: "1px solid var(--border)", borderRadius: 4, background: "var(--background)", color: "var(--foreground)" }}
+      />
+      <div style={{ flex: 1, minHeight: 0, overflow: "auto", display: "flex", flexDirection: "column", gap: 2 }}>
+        {error !== null && <div style={{ fontSize: 11, color: TONE_COLOR.failed }}>{error}</div>}
+        {options === null && error === null && <div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>Loading threads…</div>}
+        {options !== null && rows.length === 0 && <div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>No threads in this project yet.</div>}
+        {rows.map((option) => (
+          <button
+            key={option.threadId}
+            data-canvas-bbthread="picker"
+            onClick={() => onPick(option.threadId)}
+            style={{ textAlign: "left", font: "inherit", fontSize: 12, padding: "4px 6px", border: "none", borderRadius: 4, background: "transparent", cursor: "pointer", color: "var(--foreground)" }}
+          >
+            {option.label}
+          </button>
+        ))}
+      </div>
+      <button
+        data-canvas-bbthread="spawn"
+        disabled={spawnDisabled || busy}
+        onClick={onSpawn}
+        style={{
+          font: "inherit",
+          fontSize: 12,
+          padding: "6px 8px",
+          border: "1px solid var(--border)",
+          borderRadius: 4,
+          background: spawnDisabled || busy ? "var(--muted)" : "var(--primary)",
+          color: spawnDisabled || busy ? "var(--muted-foreground)" : "var(--primary-foreground)",
+          cursor: spawnDisabled || busy ? "default" : "pointer",
+        }}
+      >
+        {busy ? "Spawning…" : "New thread from these elements"}
+      </button>
+    </div>
+  );
+}
+
+interface BbThreadInteraction {
+  readonly mode: InteractionMode;
+  readonly swallow: boolean;
+  readonly onDoubleClick: () => void;
+}
+
+/** The idle/focused DOM wiring: a double-click on the pane focuses it
+ * (pointer/wheel/keydown then stop reaching the canvas); Escape or a
+ * pointerdown outside the pane's own root exits — same shape as the web
+ * app's `useInteractionMode` hook, reimplemented against
+ * bbthread-model.ts's reducer (see that file's INTERACTION MODE section for
+ * why this plugin cannot import the original). */
+function useBbThreadInteraction(rootRef: RefObject<HTMLDivElement | null>): BbThreadInteraction {
+  const [mode, setMode] = useState<InteractionMode>("idle");
+  useEffect(() => {
+    if (mode !== "focused") return;
+    const exit = () => setMode((m) => reduceInteractionMode(m, "exit-request"));
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") exit();
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      const root = rootRef.current;
+      if (root && e.target instanceof Node && !root.contains(e.target)) exit();
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown, true);
+      document.removeEventListener("pointerdown", onPointerDown, true);
+    };
+  }, [mode, rootRef]);
+  return { mode, swallow: shouldSwallowEvents(mode), onDoubleClick: () => setMode((m) => reduceInteractionMode(m, "focus-request")) };
+}
+
+function BbThreadShapeInner({ shape, snapshot, getText, dispatch }: ShapeBodyProps) {
+  const rpc = useRpc<typeof rpcContract>();
+  const sidebar = experimental_useSidebarThreads();
+  const threadId = threadIdOf(shape);
+  const thread = threadId === null ? undefined : sidebar.threads.find((t) => t.id === threadId);
+  const pane: PaneState = bbthreadPaneState(shape, thread, sidebar.status);
+  const layout = paneLayout(shape);
+
+  const rootRef = useRef<HTMLDivElement>(null);
+  const { swallow, onDoubleClick } = useBbThreadInteraction(rootRef);
+  const swallowHandlers = swallow
+    ? { onPointerDown: (e: ReactPointerEvent) => e.stopPropagation(), onWheel: (e: ReactWheelEvent) => e.stopPropagation(), onKeyDown: (e: ReactKeyboardEvent) => e.stopPropagation() }
+    : {};
+
+  const [options, setOptions] = useState<ThreadOption[] | null>(null);
+  const [query, setQuery] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [pickerError, setPickerError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pane.kind !== "unbound") return;
+    let cancelled = false;
+    rpc
+      .call("canvas_thread_options", null)
+      .then((result) => {
+        if (!cancelled) setOptions(result.options);
+      })
+      .catch((cause: unknown) => {
+        if (!cancelled) setPickerError(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pane.kind, rpc, shape.id]);
+
+  const bind = (nextThreadId: string) => dispatch?.([{ type: "UpdateProps", id: shape.id, props: { threadId: nextThreadId } }]);
+  const unbind = () => dispatch?.([{ type: "UpdateProps", id: shape.id, props: { threadId: "" } }]);
+
+  const spawnPrompt = pane.kind === "unbound" ? spawnPromptFor(childrenOf(snapshot, shape.id), (id) => getText?.(id) ?? "") : null;
+  const spawn = () => {
+    if (spawnPrompt === null) return;
+    setBusy(true);
+    setPickerError(null);
+    rpc
+      .call("canvas_spawn_thread", { prompt: spawnPrompt })
+      .then((result) => bind(result.threadId))
+      .catch((cause: unknown) => setPickerError(cause instanceof Error ? cause.message : String(cause)))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div data-shape-body="bbthread" style={{ width: "100%", height: "100%", boxSizing: "border-box", position: "relative", border: "1px solid var(--border)", background: "var(--background)" }}>
+      <div
+        data-shape-frame-header=""
+        style={{
+          position: "absolute",
+          left: -7,
+          bottom: "100%",
+          height: 24,
+          maxWidth: "100%",
+          boxSizing: "border-box",
+          display: "flex",
+          alignItems: "center",
+          padding: "0 6px",
+          fontSize: 12,
+          borderRadius: 4,
+          overflow: "hidden",
+          whiteSpace: "nowrap",
+          textOverflow: "ellipsis",
+        }}
+      >
+        {bbthreadLabel(shape)}
+      </div>
+      <div data-canvas-bbthread="workspace" style={{ ...boundsStyle(layout.workspace), pointerEvents: "none" }} />
+      <div
+        ref={rootRef}
+        data-canvas-bbthread="pane"
+        onDoubleClick={onDoubleClick}
+        {...swallowHandlers}
+        style={{ ...boundsStyle(layout.pane), display: "flex", flexDirection: "column", borderLeft: "1px solid var(--border)", background: "var(--card)", overflow: "hidden" }}
+      >
+        <div
+          style={{
+            flex: `0 0 ${layout.paneHeaderRow.maxY - layout.paneHeaderRow.minY}px`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            padding: "0 8px",
+            borderBottom: "1px solid var(--border)",
+          }}
+        >
+          {pane.kind === "bound" ? (
+            <>
+              <span style={{ fontSize: 12, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{pane.title}</span>
+              <TonePill tone={pane.tone} label={pane.statusLabel} />
+            </>
+          ) : (
+            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--muted-foreground)" }}>
+              {pane.kind === "unbound" ? "Pick a thread" : pane.kind === "loading" ? "Thread" : "Thread unavailable"}
+            </span>
+          )}
+        </div>
+        <div style={{ flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          {pane.kind === "unbound" && (
+            <UnboundPicker options={options} error={pickerError} query={query} onQuery={setQuery} onPick={bind} spawnDisabled={spawnPrompt === null} busy={busy} onSpawn={spawn} />
+          )}
+          {pane.kind === "loading" && <div style={{ padding: 8, fontSize: 11, color: "var(--muted-foreground)" }}>Loading…</div>}
+          {pane.kind === "gone" && (
+            <div style={{ padding: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+              <div style={{ fontSize: 11, color: "var(--muted-foreground)" }}>This frame&apos;s thread is archived or no longer available.</div>
+              <button
+                data-canvas-bbthread="unbind"
+                onClick={unbind}
+                style={{ alignSelf: "flex-start", font: "inherit", fontSize: 12, padding: "4px 8px", border: "1px solid var(--border)", borderRadius: 4, background: "transparent", cursor: "pointer", color: "var(--foreground)" }}
+              >
+                Unbind
+              </button>
+            </div>
+          )}
+          {pane.kind === "bound" && threadId !== null && <ThreadChat threadId={threadId} variant="timeline" layout="contained" className="bbthread-chat" />}
+        </div>
+        <div
+          style={{
+            flex: `0 0 ${layout.paneFooter.maxY - layout.paneFooter.minY}px`,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 8,
+            padding: "0 8px",
+            borderTop: "1px solid var(--border)",
+          }}
+        >
+          {pane.kind === "bound" && threadId !== null && (
+            <>
+              <span style={{ fontSize: 10, color: "var(--muted-foreground)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{threadId}</span>
+              <button
+                data-canvas-bbthread="open"
+                onClick={() => openBbThread(threadId)}
+                style={{ font: "inherit", fontSize: 11, fontWeight: 600, padding: 0, border: "none", background: "transparent", cursor: "pointer", color: "var(--primary)" }}
+              >
+                Open full →
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function bbthreadPropsEqual(a: ShapeBodyProps, b: ShapeBodyProps): boolean {
+  return a.shape.id === b.shape.id && stableStringify(a.shape) === stableStringify(b.shape);
+}
+
+export const BbThreadShape = memo(BbThreadShapeInner, bbthreadPropsEqual);

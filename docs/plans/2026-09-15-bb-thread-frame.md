@@ -45,3 +45,16 @@ CLI: `bb canvas thread-frames [--json]` lists every bbthread shape: id, name, th
 audit:quality:compare && bb plugin build .` — the deletion breaks the frozen baseline, so re-baseline explicitly.
 Interaction contract: `bbthread-pane-is-solid` (a drag starting in the pane translates the shape; one in the
 workspace does not). RED recorded before the model/editor change lands.
+
+**Re-baseline note (2026-09-15, shape-body task).** `quality-audit-baseline.json`'s three drift invariants
+(`productionTokenLines`, `decisionPoints`, `localImportCycleCount`) are refreshed to this branch's numbers
+(9835 / 1149 / 0) — the launch-or-attach deletion (dc70212) plus this task's `BbThreadShape.tsx`/
+`bbthread-model.ts`/`bbthread-host.ts` addition moved both far enough from the frozen `ee79ab4` snapshot
+(11303 / 1153) to trip the ±5%/no-more-than-5%-drop checks. `moduleDebt`/`functionDebt`/`totalDebt` are
+DELIBERATELY left pointing at the original `ee79ab4` numbers (2990 / 2283 / 5273), not reset to this branch's
+own near-zero debt (33, all of it pre-existing in `canvas/dock/model.ts`, untouched by this task): the
+improvement percentage is a standing "how far we've come since ee79ab4" record, and resetting it to a
+current already-low number would make `(frozen.totalDebt - result.totalDebt) / frozen.totalDebt` read 0% the
+moment nothing new is added — failing a check whose job is to catch NEW debt, not to demand improvement on
+top of improvement. `npm run audit:quality:compare` passes as of this note (99.37% improvement vs `ee79ab4`,
+0% drift on all three invariants).

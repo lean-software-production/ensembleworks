@@ -34,7 +34,7 @@ const neutral = (color: unknown) => color === undefined || color === "black";
 export function canvasShapeThemeCss(doc: CanvasDocument): string {
   const scope = "[data-canvas-themed]";
   const rules = [
-    `${scope} [data-shape-body="frame"]{background:var(--background)!important;border-color:var(--border)!important}`,
+    `${scope} [data-shape-body="frame"],${scope} [data-shape-body="bbthread"]{background:var(--background)!important;border-color:var(--border)!important}`,
     `${scope} [data-shape-frame-header]{background:var(--card)!important;color:var(--foreground)!important;box-shadow:inset 0 0 0 1px var(--border)!important}`,
   ];
   for (const shape of doc.byId.values()) {

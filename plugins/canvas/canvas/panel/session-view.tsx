@@ -3,7 +3,12 @@ import { useMemo, type ComponentProps, type ReactNode, type RefObject } from "re
 import type { EditorState } from "@ensembleworks/canvas-editor";
 import type { CanvasDocument } from "@ensembleworks/canvas-model";
 import { Cursors, type ViewportSize } from "@ensembleworks/canvas-react";
-import { CanvasSurface, Toolbar, type CanvasSession } from "@ensembleworks/canvas-ui";
+import { CanvasSurface, Toolbar, TOOL_ORDER, type CanvasSession } from "@ensembleworks/canvas-ui";
+
+// bb-thread-frame task: 'bbthread' is a plugin-only tool — the web app's
+// TOOL_ORDER (canvas-ui's Toolbar.tsx) deliberately omits it, so this is the
+// one call site that appends it, for this host only.
+const BB_TOOLBAR_TOOLS = [...TOOL_ORDER, { id: "bbthread", label: "Thread" }] as const;
 import { SpeakerRings } from "../roster-ui.js";
 import {
   chromeCardColumnStyle,
@@ -121,6 +126,7 @@ function CanvasChrome({ canvas, editorState }: SessionViewProps) {
             onSelectTool={canvas.selectTool}
             nextShapeStyle={editorState.nextShapeStyle}
             onArmStyle={canvas.onArmStyle}
+            tools={BB_TOOLBAR_TOOLS}
             style={{ background: "transparent", border: "none", padding: 0 }}
           />
         </div>
