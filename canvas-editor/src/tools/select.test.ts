@@ -650,4 +650,80 @@ function frameSetup() {
   console.log('ok: double-click on a frame border does not begin editing')
 }
 
+// ============================================================================
+// Resizable pane task (docs/plans/2026-09-15-bb-thread-frame.md's "Resizable
+// pane" section): a drag starting on a bbthread's divider band resizes the
+// pane (writes `paneFraction`) in place instead of translating the shape --
+// takes precedence over both the pane-is-solid translate and the pane
+// double-click-to-edit gate.
+// ============================================================================
+function bbthreadSetup() {
+  const doc = LoroCanvasDoc.create({ peerId: 1n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  // 900x600 at the origin -- default paneFraction (1/3) puts the pane's left
+  // edge (the divider) at local x = 900 * (1 - 1/3) = 600.
+  doc.putShape({
+    id: 'shape:bb', kind: 'bbthread', parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 900, h: 600 },
+  } as Shape)
+  doc.commit()
+  const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+  const ctx = createToolContext(editor)
+  const tool = createSelectTool(ctx)
+  return { doc, editor, ctx, tool }
+}
+
+// ============================================================================
+// 22. A drag starting on the divider resizes the pane (paneFraction), leaves
+//    the shape's own position untouched, and returns to idle on pointerup
+//    (no lastClick memory -- a resize is never a click).
+// ============================================================================
+{
+  const { doc, editor, tool } = bbthreadSetup()
+  const events = script().down(600, 300).move(450, 300).up().events()
+  const finalState = run(editor, tool, events)
+  const bb = doc.getShape('shape:bb')!
+  assert.equal(bb.x, 0, 'the shape did not translate')
+  assert.equal(bb.y, 0)
+  assert.ok(
+    typeof (bb.props as Record<string, unknown>).paneFraction === 'number' &&
+      Math.abs((bb.props as Record<string, number>).paneFraction - 0.5) < 1e-9,
+    `paneFraction should resolve to 0.5, got ${JSON.stringify((bb.props as Record<string, unknown>).paneFraction)}`,
+  )
+  assert.equal((finalState as { mode: string }).mode, 'idle', 'resizingPane returns to idle on pointerup')
+  console.log('ok: dragging the bbthread divider resizes the pane instead of translating the shape')
+}
+
+// ============================================================================
+// 23. The resize clamps at BBTHREAD_PANE_MAX_FRACTION (2/3) -- dragging the
+//    divider far past that fraction settles the prop at the ceiling, not the
+//    raw (unclamped) fraction the cursor position would imply.
+// ============================================================================
+{
+  const { doc, editor, tool } = bbthreadSetup()
+  const events = script().down(600, 300).move(100, 300).up().events()
+  run(editor, tool, events)
+  const bb = doc.getShape('shape:bb')!
+  const TWO_THIRDS = 2 / 3
+  assert.ok(
+    Math.abs((bb.props as Record<string, number>).paneFraction - TWO_THIRDS) < 1e-9,
+    `paneFraction should clamp at 2/3, got ${JSON.stringify((bb.props as Record<string, unknown>).paneFraction)}`,
+  )
+  console.log('ok: dragging the bbthread divider past the max clamps paneFraction at 2/3')
+}
+
+// ============================================================================
+// 24. A double-click starting ON the divider never begins pane editing --
+//    the divider gate wins over the pane double-click gate because Idle's
+//    pointerdown routes straight to resizingPane, never creating a Pointing
+//    state for the double-click check to fire from.
+// ============================================================================
+{
+  const { editor, tool } = bbthreadSetup()
+  const events = script().down(600, 300).up().down(600, 300).up().events()
+  run(editor, tool, events)
+  assert.equal(editor.get().editingId, null, 'a double-click on the divider does not begin pane editing')
+  console.log('ok: a double-click starting on the bbthread divider does not begin pane editing')
+}
+
 console.log('ok: select tool FSM (select/marquee/translate)')

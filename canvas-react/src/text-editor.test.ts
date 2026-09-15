@@ -90,6 +90,7 @@ function fakeToolContext(editingId: string | null): ToolContext {
     selection: new Set<string>(),
     hover: null,
     editingId,
+    editingRegion: editingId === null ? null : 'body',
     nextShapeStyle: {},
     currentPageId: 'page:p',
   })

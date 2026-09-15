@@ -8,7 +8,7 @@
  * TOOL-SWITCHING MODEL (decided here, v1 — documented rather than left
  * implicit): one `ToolId` is "active" at a time, chosen by the toolbar.
  * Every tool OTHER than 'select' just gets every InputEvent handed straight
- * to its own Tool<S> instance — hand/note/text/geo/frame/arrow all already
+ * to its own Tool<S> instance — hand/note/text/geo/frame/bbthread/arrow all already
  * encapsulate their own complete FSM.
  *
  * 'select' is special: canvas-editor ships `select` and `transform` as TWO
@@ -43,7 +43,7 @@ import type { SnapResult } from '@ensembleworks/canvas-model'
 
 /** The toolbar's tool identifiers — see canvas-ui's Toolbar.tsx `TOOL_ORDER`
  * for the button list. 'transform' is deliberately ABSENT (see module header). */
-export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'arrow' | 'draw' | 'line'
+export type ToolId = 'select' | 'hand' | 'note' | 'text' | 'geo' | 'frame' | 'bbthread' | 'arrow' | 'draw' | 'line'
 
 /** One `Tool<unknown>` instance per `ToolId`, built ONCE per `ToolContext` —
  * mirrors every tool factory's own "call once per Editor/ToolContext"
@@ -59,6 +59,7 @@ export interface ToolSet {
 	readonly text: Tool<CreateState>
 	readonly geo: Tool<CreateState>
 	readonly frame: Tool<CreateState>
+	readonly bbthread: Tool<CreateState>
 	readonly arrow: Tool<ArrowState>
 	readonly draw: Tool<DrawState>
 	readonly line: Tool<LineState>
@@ -73,6 +74,7 @@ export function createToolSet(ctx: ToolContext): ToolSet {
 		text: createKindTool('text'),
 		geo: createKindTool('geo'),
 		frame: createKindTool('frame'),
+		bbthread: createKindTool('bbthread'),
 		arrow: createArrowTool(ctx),
 		draw: createDrawTool(ctx),
 		line: createLineTool(ctx),
@@ -95,6 +97,7 @@ export function createInitialToolStates(tools: ToolSet): ToolStates {
 		text: tools.text.initialState,
 		geo: tools.geo.initialState,
 		frame: tools.frame.initialState,
+		bbthread: tools.bbthread.initialState,
 		arrow: tools.arrow.initialState,
 		draw: tools.draw.initialState,
 		line: tools.line.initialState,
@@ -180,7 +183,7 @@ export function shouldFallBackToSelect(active: ToolId, editingIdBefore: string |
  * carries a shape id to delete):
  *  - arrow ('drawing' state): carries `id` — the arrow shape already exists
  *    in the doc mid-draw. COVERED: emits DeleteShapes([id]).
- *  - note/text/geo/frame create ('dragging' state): carries `id` — the
+ *  - note/text/geo/frame/bbthread create ('dragging' state): carries `id` — the
  *    drag-to-size preview shape already exists in the doc. COVERED: emits
  *    DeleteShapes([id]).
  *  - select ('dragging'/'marquee'/'pointing' states): NEVER creates a shape
@@ -312,7 +315,7 @@ export function cancelActiveTool(tools: ToolSet, states: ToolStates, active: Too
 		// mid-drag line must be deleted the same way (Task W1, D-5).
 		const s = states.line as LineState
 		if (s.mode === 'drawing') intents.push({ type: 'DeleteShapes', ids: [s.id] })
-	} else if (active === 'note' || active === 'text' || active === 'geo' || active === 'frame') {
+	} else if (active === 'note' || active === 'text' || active === 'geo' || active === 'frame' || active === 'bbthread') {
 		const s = states[active] as CreateState
 		if (s.mode === 'dragging') intents.push({ type: 'DeleteShapes', ids: [s.id] })
 	} else if (active === 'select') {

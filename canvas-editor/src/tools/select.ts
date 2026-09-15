@@ -102,11 +102,18 @@
 // drag start; the prior model's `liveBoundsAdapter`/`candidateBoundsAfterDelta`
 // live-read shim is gone with it.
 import {
+  BBTHREAD_PANE_MAX_FRACTION,
+  BBTHREAD_PANE_MIN_FRACTION,
   computeExcludedIds,
+  isFrameLike,
+  isPointInBbthreadPane,
   isPointInFrameHeaderBand,
+  isPointOnBbthreadDivider,
   isTextCapableKind,
+  localBounds,
   pageIdOf,
   snapCandidates,
+  toLocalPoint,
   worldBounds,
   type Bounds,
   type CanvasDocument,
@@ -209,7 +216,46 @@ interface Marquee {
   readonly downScreen: { readonly x: number; readonly y: number }
 }
 
-export type SelectState = Idle | Pointing | Dragging | Marquee
+/** Resizable-pane task (docs/plans/2026-09-15-bb-thread-frame.md's
+ * "Resizable pane" section) — entered from Idle instead of Pointing when a
+ * pointerdown lands on a bbthread's divider band (canvas-model's
+ * `isPointOnBbthreadDivider`), taking precedence over BOTH the ordinary
+ * pane-is-solid translate path (Pointing->Dragging, which the divider band
+ * would otherwise also qualify for — it sits inside the solid pane) and the
+ * pane double-click-to-edit gate (onPointing's `opensBbthreadPane`), which
+ * never even gets a look-in because this mode is entered straight from
+ * Idle's pointerdown, before a Pointing state (and hence a double-click
+ * check) is ever created. Every pointermove commits a `paneFraction`
+ * UpdateProps directly (no threshold gate, unlike Pointing->Dragging — a
+ * resize starts moving on the very first move, exactly like Dragging's own
+ * per-move commits); pointerup returns to Idle with no intents. Nothing to
+ * revert on cancel (tool-loop.ts's `cancelActiveTool`): each move's
+ * UpdateProps is already committed, the exact same posture Dragging's own
+ * translate takes (see that function's cancelActiveTool 'select' branch,
+ * which reverts only the transform composite's leg, never a plain
+ * Dragging/Marquee/ResizingPane gesture of select's OWN FSM). */
+interface ResizingPane {
+  readonly mode: 'resizingPane'
+  /** The bbthread shape being resized. */
+  readonly id: string
+  /** The shape's local width (`localBounds(shape).maxX`), frozen at the
+   * Idle->ResizingPane transition — the divisor `(w - localX) / w` needs to
+   * stay fixed across the whole gesture, exactly like Dragging's own frozen
+   * `startBounds`; a resize never changes the shape's own w/h, so this never
+   * goes stale mid-gesture. */
+  readonly w: number
+  /** The doc/index-free CanvasDocument snapshot read ONCE at the
+   * Idle->ResizingPane transition (see the module header's REBUILD-CADENCE
+   * DISCIPLINE section) — reused by every subsequent pointermove's
+   * `toLocalPoint` call for the shape's world->local projection. Safe to
+   * freeze: this gesture only ever writes `paneFraction`, never the shape's
+   * x/y/rotation/parent chain, so the frozen transform this snapshot yields
+   * never goes stale mid-gesture the way a moving shape's OWN position
+   * would. */
+  readonly snapshot: CanvasDocument
+}
+
+export type SelectState = Idle | Pointing | Dragging | Marquee | ResizingPane
 
 const IDLE: Idle = { mode: 'idle', lastClick: null }
 
@@ -396,6 +442,8 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
           return onDragging(state, event)
         case 'marquee':
           return onMarquee(state, event)
+        case 'resizingPane':
+          return onResizingPane(state, event)
       }
     },
   }
@@ -403,6 +451,40 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
   function onIdle(state: Idle, event: InputEvent): { state: SelectState; intents: Intent[] } {
     if (event.type === 'pointerdown') {
       const hit = ctx.hitTestTopmost(worldOf(event))
+      const editingId = editor.get().editingId
+      // END-EDIT-ON-OUTSIDE-CLICK (pane input routing task): a pointerdown
+      // that lands on anything OTHER than the shape currently being edited
+      // ends that edit FIRST, before the normal pointing/selection
+      // machinery below decides what this click means. Today this only
+      // matters at the FSM level for a kind with no DOM editing surface of
+      // its own (a bbthread's thread pane has no textarea to blur) — every
+      // text-capable kind already gets this for free from TextEditor.tsx's
+      // own blur handler, so this EndEdit is harmless-but-redundant there
+      // (editor.ts's EndEdit is idempotent once editingId is already null,
+      // and here editingId is still non-null at the moment this fires, same
+      // as any other EndEdit emission). A click on the editing shape itself
+      // (hit === editingId) is explicitly excluded — that's a normal
+      // re-click within the same edit, not an "outside" click. Computed here
+      // (before the divider check below) because BOTH the divider path and
+      // the ordinary pointing path need the exact same EndEdit intent.
+      const endEditIntents: Intent[] = editingId !== null && hit !== editingId ? [{ type: 'EndEdit' }] : []
+      // RESIZABLE PANE (docs/plans/2026-09-15-bb-thread-frame.md's
+      // "Resizable pane" section): a pointerdown landing on a bbthread's
+      // divider band (canvas-model's isPointOnBbthreadDivider) enters
+      // ResizingPane directly from Idle — BEFORE the ordinary Pointing
+      // transition below ever runs — so it takes precedence over both the
+      // pane-is-solid translate path (the divider sits inside that same
+      // solid pane) and the pane double-click-to-edit gate (onPointing's
+      // opensBbthreadPane, which never gets a look-in: a Pointing state is
+      // never created for a divider-starting gesture in the first place).
+      if (hit !== null) {
+        const snapshot = ctx.snapshot()
+        const hitShape = snapshot.byId.get(hit)
+        if (hitShape && hitShape.kind === 'bbthread' && isPointOnBbthreadDivider(snapshot, hitShape, worldOf(event))) {
+          const w = localBounds(hitShape).maxX
+          return { state: { mode: 'resizingPane', id: hit, w, snapshot }, intents: endEditIntents }
+        }
+      }
       // Double-click candidacy, decided ONCE here (see the module header):
       // same target as the last completed click, within the shared
       // isDoubleClick window/radius (event.t/x/y deltas only).
@@ -413,7 +495,7 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         isDoubleClick(state.lastClick, event)
       return {
         state: { mode: 'pointing', downScreen: { x: event.x, y: event.y }, targetId: hit, shiftDown: event.modifiers.shift, doubleClick },
-        intents: [],
+        intents: endEditIntents,
       }
     }
     if (event.type === 'pointermove') {
@@ -445,6 +527,22 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         }
       }
       return { state, intents: [] }
+    }
+    // ESCAPE-ENDS-EDITING (pane input routing task, docs/plans/
+    // 2026-09-15-bb-thread-frame.md's follow-up section): mirrors the
+    // browser path's session/keyboard.ts `resolveShortcut` change (a new
+    // 'endEdit' ShortcutCommand) at the FSM level, where no session layer
+    // sits between raw input and this tool — library.test.ts's fsm-runner
+    // feeds a 'key' GestureOp straight to this tool's onEvent, so ending an
+    // edit on Escape has to be a decision this FSM makes itself too, not
+    // something only the browser's session wiring handles. A region with its
+    // OWN DOM editing surface (note/text/geo's TextEditor.tsx textarea, a
+    // frame-like name's FrameNameEditor.tsx input) already ends its edit on
+    // Escape via that surface's own keydown handling before a keydown would
+    // reach here in a real browser — this branch is what a region with NO
+    // such surface (a bbthread's thread pane) relies on instead.
+    if (event.type === 'keydown' && event.key === 'Escape' && editor.get().editingId !== null) {
+      return { state, intents: [{ type: 'EndEdit' }] }
     }
     if (event.type === 'keydown') {
       // Arrow-key nudge (Task keyboard/K1) — only while idle: a nudge
@@ -551,21 +649,35 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
         // "did the shape actually resolve" check needed because a vanished
         // target can't be hit-tested as `targetId` in the first place.
         const shape = ctx.snapshot().byId.get(targetId)
-        // FRAME RENAME (frame-interaction task, gap 1): a double-click that
-        // lands specifically on the frame's HEADER band (canvas-model's
-        // isPointInFrameHeaderBand — the header label, not the body/border)
-        // also begins editing, in place of the ordinary isTextCapableKind
-        // gate (a frame is never text-capable — canvas-model/src/shape.ts's
-        // TEXT_CAPABLE_KINDS deliberately excludes it). The generic
-        // BeginEdit(target)/editingId machinery is reused verbatim; it's the
-        // CLIENT's job (client/src/canvas-v2, DOM authoring layer) to mount
-        // a name-input editor instead of the richText TextEditor when
-        // editingId resolves to a frame — this FSM only decides WHEN to
-        // fire the intent, never what UI renders for it.
-        const opensFrameRename = shape?.kind === 'frame' && isPointInFrameHeaderBand(ctx.snapshot(), shape, worldOf(event))
-        if (state.doubleClick && shape && (isTextCapableKind(shape.kind) || opensFrameRename)) {
+        // FRAME RENAME (frame-interaction task, gap 1; extended to
+        // 'bbthread' by isFrameLike, bb-thread-frame task): a double-click
+        // that lands specifically on a frame-like shape's HEADER band
+        // (canvas-model's isPointInFrameHeaderBand — the header label, not
+        // the body/border) also begins editing, in place of the ordinary
+        // isTextCapableKind gate (a frame-like shape is never text-capable —
+        // canvas-model/src/shape.ts's TEXT_CAPABLE_KINDS deliberately
+        // excludes both). The generic BeginEdit(target)/editingId machinery
+        // is reused verbatim; it's the CLIENT's job (client/src/canvas-v2,
+        // DOM authoring layer) to mount a name-input editor instead of the
+        // richText TextEditor when editingId resolves to a frame-like shape
+        // — this FSM only decides WHEN to fire the intent, never what UI
+        // renders for it.
+        const opensFrameRename = shape !== undefined && isFrameLike(shape.kind) && isPointInFrameHeaderBand(ctx.snapshot(), shape, worldOf(event))
+        // PANE INPUT ROUTING (pane input routing task, docs/plans/
+        // 2026-09-15-bb-thread-frame.md's follow-up section): a double-click
+        // landing inside a bbthread's solid thread pane (canvas-model's
+        // isPointInBbthreadPane) also begins editing, exactly like
+        // isTextCapableKind/opensFrameRename above — 'bbthread' is never
+        // text-capable, and this is a DIFFERENT region of the shape than its
+        // header band, so it gets its own gate rather than folding into
+        // either existing condition. `region: 'body'` distinguishes this
+        // from a header-band rename (`region: 'name'`) so the CLIENT knows
+        // which editing surface to mount (FrameNameEditor vs the pane
+        // itself) — see editor.ts's EditorState.editingRegion.
+        const opensBbthreadPane = shape !== undefined && shape.kind === 'bbthread' && isPointInBbthreadPane(ctx.snapshot(), shape, worldOf(event))
+        if (state.doubleClick && shape && (isTextCapableKind(shape.kind) || opensFrameRename || opensBbthreadPane)) {
           intents.push({ type: 'SetSelection', ids: [targetId] })
-          intents.push({ type: 'BeginEdit', id: targetId })
+          intents.push({ type: 'BeginEdit', id: targetId, region: opensFrameRename ? 'name' : 'body' })
         } else if (state.shiftDown) {
           intents.push({ type: 'SetSelection', ids: toggleOrAdd(editor.get().selection, targetId) })
         } else {
@@ -696,13 +808,46 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // appear in the 'contain' (full-enclosure) query.
       const intersectIds = ctx.queryMarquee(bounds, 'intersect')
       const snapshot = ctx.snapshot()
-      const ids = intersectIds.some((id) => snapshot.byId.get(id)?.kind === 'frame')
+      const isFrameLikeId = (id: string) => {
+        const kind = snapshot.byId.get(id)?.kind
+        return kind !== undefined && isFrameLike(kind)
+      }
+      const ids = intersectIds.some(isFrameLikeId)
         ? (() => {
             const containedIds = new Set(ctx.queryMarquee(bounds, 'contain'))
-            return intersectIds.filter((id) => snapshot.byId.get(id)?.kind !== 'frame' || containedIds.has(id))
+            return intersectIds.filter((id) => !isFrameLikeId(id) || containedIds.has(id))
           })()
         : intersectIds
       return { state: IDLE, intents: [{ type: 'SetSelection', ids }] }
+    }
+    return { state, intents: [] }
+  }
+
+  // RESIZABLE PANE (docs/plans/2026-09-15-bb-thread-frame.md's "Resizable
+  // pane" section): every pointermove projects the CURRENT cursor into the
+  // resized shape's own local frame (via the FROZEN snapshot/w captured at
+  // the Idle->ResizingPane transition — see that state's doc comment) and
+  // commits the resulting clamped fraction directly, no threshold gate (a
+  // resize tracks the cursor from its very first move, unlike Pointing-
+  // >Dragging's crossedThreshold gate — there is no "was this actually a
+  // click" ambiguity here, since a divider-starting gesture is NEVER a
+  // click target itself). pointerup returns to Idle with NO intents: like
+  // Dragging's own translate, every move already committed its own
+  // UpdateProps, so there is nothing left to flush at gesture end.
+  function onResizingPane(state: ResizingPane, event: InputEvent): { state: SelectState; intents: Intent[] } {
+    if (event.type === 'pointermove') {
+      const shape = state.snapshot.byId.get(state.id)
+      // TOLERANCE: a mid-gesture remote delete of the target shape is not
+      // this tool's problem to detect (same posture as onDragging's own
+      // TOLERANCE CONTRACT note) — simply stop emitting further UpdateProps
+      // for an id that no longer resolves, rather than throwing.
+      if (!shape) return { state, intents: [] }
+      const local = toLocalPoint(state.snapshot, shape, worldOf(event))
+      const fraction = Math.min(BBTHREAD_PANE_MAX_FRACTION, Math.max(BBTHREAD_PANE_MIN_FRACTION, (state.w - local.x) / state.w))
+      return { state, intents: [{ type: 'UpdateProps', id: state.id, props: { paneFraction: fraction } }] }
+    }
+    if (event.type === 'pointerup') {
+      return { state: IDLE, intents: [] }
     }
     return { state, intents: [] }
   }

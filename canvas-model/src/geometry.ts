@@ -1,6 +1,19 @@
 import { type CanvasDocument } from './document.js'
 import { isPageId, type PageId } from './ids.js'
-import { isFixedSizeKind, type Shape } from './shape.js'
+import { isFixedSizeKind, type Shape, type ShapeKind } from './shape.js'
+
+// bb-thread-frame task — the kinds that behave like a FRAME for hit-testing
+// (hollow interior + header band + edge-margin border): 'frame' itself, plus
+// 'bbthread' (a frame-like container whose right third additionally renders
+// a solid thread pane — see bbthreadPaneLocalBounds below). Every one of
+// this file's frame-only branches (frameHeaderLocalBounds callers,
+// isPointInFrameHeaderBand, hitTestPoint, shapeHitIndexBounds) is keyed off
+// this predicate instead of a literal `kind === 'frame'` check, so bbthread
+// gets the same header/edge-margin treatment for free, with nothing to keep
+// in sync by hand.
+export function isFrameLike(kind: ShapeKind): boolean {
+  return kind === 'frame' || kind === 'bbthread'
+}
 
 // ============================================================================
 // ROTATION CONVENTION (NORMATIVE — the renderer, the editor, and the Phase-5
@@ -84,6 +97,7 @@ function composeTransform(parent: RigidTransform, local: RigidTransform): RigidT
 const DEFAULTS: Partial<Record<Shape['kind'], { w: number; h: number }>> = {
   geo: { w: 220, h: 120 }, frame: { w: 800, h: 600 },
   text: { w: 200, h: 40 }, image: { w: 200, h: 200 },
+  bbthread: { w: 960, h: 600 },
 }
 // Rendered size, clamped to >= 0 so inverted bounds can never reach downstream
 // rectangle math. Notes never store w/h in tldraw: their real rendered size is
@@ -462,10 +476,127 @@ export function frameHeaderLocalBounds(shape: Shape): Bounds {
  * (frame-interaction task, gap 1) — doesn't have to re-derive the same
  * local-space band test. */
 export function isPointInFrameHeaderBand(doc: CanvasDocument, shape: Shape, point: Point): boolean {
-  if (shape.kind !== 'frame') return false
+  if (!isFrameLike(shape.kind)) return false
   const local = toLocalPoint(doc, shape, point)
   const header = frameHeaderLocalBounds(shape)
   return local.x >= header.minX && local.x <= header.maxX && local.y >= header.minY && local.y <= header.maxY
+}
+
+// ============================================================================
+// BBTHREAD PANE (bb-thread-frame task): a bbthread shape is a frame-like
+// container (isFrameLike) whose right third — BELOW the header band — is a
+// solid "thread pane" (the BB plugin's ThreadChat mount), unlike an ordinary
+// frame's fully-hollow interior. `bbthreadWorkspaceLocalBounds` is the
+// complementary left-two-thirds region (below the header) where captured
+// children live, staying hollow exactly like a frame's interior.
+// ============================================================================
+
+/** The fraction of a bbthread's width given to the solid thread pane, from
+ * the right edge — the DEFAULT, used whenever `shape.props.paneFraction` is
+ * absent/non-numeric. See `paneFractionOf` below for the resolved-per-shape
+ * value (resizable-pane task, docs/plans/2026-09-15-bb-thread-frame.md's
+ * "Resizable pane" section). */
+export const BBTHREAD_PANE_FRACTION = 1 / 3
+
+/** Resizable-pane task — the pane's width can never shrink narrower than
+ * this fraction of the shape's total width (a floor that keeps the thread
+ * timeline usable) or wider than `BBTHREAD_PANE_MAX_FRACTION` (a ceiling
+ * that keeps the hollow workspace from disappearing entirely). Both bound
+ * `paneFractionOf`'s clamp AND canvas-editor's `resizingPane` drag mode,
+ * which computes the SAME clamp on every pointermove — kept here, not
+ * re-derived there, so the two can never silently drift apart. */
+export const BBTHREAD_PANE_MIN_FRACTION = 0.2
+export const BBTHREAD_PANE_MAX_FRACTION = 2 / 3
+
+/** The bbthread's RESOLVED pane fraction: `shape.props.paneFraction` when it
+ * is a finite number, clamped to [BBTHREAD_PANE_MIN_FRACTION,
+ * BBTHREAD_PANE_MAX_FRACTION] — falling back to the default
+ * (BBTHREAD_PANE_FRACTION, itself inside that range) when the prop is
+ * absent or not a finite number (an older client's un-set shape, or a
+ * malformed/NaN value some future writer manages to store). Clamping lives
+ * HERE, the reader, not in the schema (canvas-model/src/shape.ts's bbthread
+ * props accept any finite number) — see that schema's own doc comment for
+ * why: a stored value briefly outside range (a future writer's bug, a
+ * relaxed max in some later release) still round-trips losslessly instead
+ * of being silently rewritten by every reader that happens to touch it. */
+export function paneFractionOf(shape: Shape): number {
+  const raw = (shape.props as { paneFraction?: unknown }).paneFraction
+  const value = typeof raw === 'number' && Number.isFinite(raw) ? raw : BBTHREAD_PANE_FRACTION
+  return Math.min(BBTHREAD_PANE_MAX_FRACTION, Math.max(BBTHREAD_PANE_MIN_FRACTION, value))
+}
+
+/** The bbthread's thread-pane rect, in the shape's OWN local frame: the
+ * right `paneFractionOf(shape)` of its width, BELOW the header band (local
+ * y in [FRAME_HEADER_HEIGHT, h]). Meaningless for any other kind — callers
+ * only invoke this once `shape.kind === 'bbthread'` is already established
+ * (hitTestPoint below). */
+export function bbthreadPaneLocalBounds(shape: Shape): Bounds {
+  const lb = localBounds(shape)
+  const fraction = paneFractionOf(shape)
+  return {
+    minX: lb.maxX * (1 - fraction), minY: FRAME_HEADER_HEIGHT,
+    maxX: lb.maxX, maxY: lb.maxY,
+  }
+}
+
+/** The bbthread's hollow workspace rect, in the shape's OWN local frame: the
+ * left `1 - paneFractionOf(shape)` of its width, BELOW the header band — the
+ * complement of `bbthreadPaneLocalBounds` (same y-range, x from 0 up to the
+ * pane's left edge). Where creation-time-captured children (isFrameLike's
+ * frame-capture treatment) live. */
+export function bbthreadWorkspaceLocalBounds(shape: Shape): Bounds {
+  const lb = localBounds(shape)
+  const fraction = paneFractionOf(shape)
+  return {
+    minX: lb.minX, minY: FRAME_HEADER_HEIGHT,
+    maxX: lb.maxX * (1 - fraction), maxY: lb.maxY,
+  }
+}
+
+/** Resizable-pane task — how close to the pane's left edge (in WORLD units,
+ * both inside and outside it) still counts as grabbing the DIVIDER rather
+ * than the pane's body or the hollow workspace beside it. Mirrors
+ * FRAME_EDGE_MARGIN's "comfortable click target" tradeoff/value, halved (a
+ * narrower target than a whole frame's border, since the divider sits deep
+ * inside the shape rather than along its outer edge — a wide margin there
+ * would eat into the workspace/pane click targets on either side). */
+export const BBTHREAD_DIVIDER_MARGIN = 6
+
+/** True iff WORLD `point` falls within `BBTHREAD_DIVIDER_MARGIN` of `shape`'s
+ * pane's left edge (`bbthreadPaneLocalBounds(shape).minX`), at a y within the
+ * pane's own y-range — false for any non-'bbthread' kind. Resizable-pane
+ * task — canvas-editor's select tool gates its `resizingPane` drag mode on
+ * this (taking precedence over the ordinary pane-is-solid translate AND the
+ * pane double-click-to-edit gate, both of which the divider band otherwise
+ * overlaps), and `hitTestPoint` below folds it into the bbthread's overall
+ * hit region so the band right OUTSIDE the pane's own bounds (the half of
+ * the margin that spills into the hollow workspace) still resolves as a hit
+ * on the shape instead of a miss. */
+export function isPointOnBbthreadDivider(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+  if (shape.kind !== 'bbthread') return false
+  const local = toLocalPoint(doc, shape, point)
+  const pane = bbthreadPaneLocalBounds(shape)
+  return (
+    Math.abs(local.x - pane.minX) <= BBTHREAD_DIVIDER_MARGIN &&
+    local.y >= pane.minY && local.y <= pane.maxY
+  )
+}
+
+/** True iff WORLD `point` falls in `shape`'s thread pane
+ * (`bbthreadPaneLocalBounds`) — false for any non-'bbthread' kind, or for a
+ * point that lands on the bbthread's header/border/hollow workspace
+ * instead. Pane input routing task (docs/plans/2026-09-15-bb-thread-frame.md's
+ * "Pane input routing" follow-up) — mirrors `isPointInFrameHeaderBand`'s own
+ * shape (local-space band test, exposed standalone) so canvas-editor's select
+ * tool can distinguish "double-click landed in the solid thread pane" (begins
+ * editing with `region: 'body'`) from "landed in the header band"
+ * (`isPointInFrameHeaderBand`, `region: 'name'`) without re-deriving either
+ * local-space test itself. */
+export function isPointInBbthreadPane(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+  if (shape.kind !== 'bbthread') return false
+  const local = toLocalPoint(doc, shape, point)
+  const pane = bbthreadPaneLocalBounds(shape)
+  return local.x >= pane.minX && local.x <= pane.maxX && local.y >= pane.minY && local.y <= pane.maxY
 }
 
 // Is `point` (world/page space) inside this shape's rotated box? Inverse-
@@ -478,22 +609,34 @@ export function isPointInFrameHeaderBand(doc: CanvasDocument, shape: Shape, poin
 // has no meaningful local box to test against, so this delegates to
 // arrowHitTest (line/curve-proximity, not box containment) instead.
 //
-// FRAME SPECIAL CASE (frame-interaction task, gaps 2/3/5): a frame hits
+// FRAME-LIKE SPECIAL CASE (frame-interaction task, gaps 2/3/5; extended to
+// 'bbthread' by isFrameLike, bb-thread-frame task): a frame-like shape hits
 // iff the point falls in its HEADER band (frameHeaderLocalBounds, above —
-// selects/drags the frame by its name label) OR within FRAME_EDGE_MARGIN of
-// its border (selects/drags the frame by its edge) — the interior beyond
-// that margin is a deliberate MISS, so a marquee started there rubber-bands
-// the frame's children instead of moving the frame. Every other kind keeps
-// the original solid-box test unchanged (gap 5's broader "every kind"
-// fill-awareness is explicitly NOT implemented here — scoped to frame only,
-// the high-impact case; see this task's report).
+// selects/drags the shape by its name label) OR within FRAME_EDGE_MARGIN of
+// its border (selects/drags it by its edge) OR — bbthread only — inside its
+// solid thread pane (bbthreadPaneLocalBounds) — the REMAINING interior is a
+// deliberate MISS, so a marquee started there rubber-bands the shape's
+// children instead of moving the shape itself. Every other kind keeps the
+// original solid-box test unchanged (gap 5's broader "every kind"
+// fill-awareness is explicitly NOT implemented here — scoped to frame-like
+// kinds only, the high-impact case; see this task's report).
 export function hitTestPoint(doc: CanvasDocument, shape: Shape, point: Point): boolean {
   if (shape.kind === 'arrow') return arrowHitTest(doc, shape, point)
   const local = toLocalPoint(doc, shape, point)
   const lb = localBounds(shape)
-  if (shape.kind === 'frame') {
+  if (isFrameLike(shape.kind)) {
     const header = frameHeaderLocalBounds(shape)
     if (local.x >= header.minX && local.x <= header.maxX && local.y >= header.minY && local.y <= header.maxY) return true
+    if (shape.kind === 'bbthread') {
+      const pane = bbthreadPaneLocalBounds(shape)
+      if (local.x >= pane.minX && local.x <= pane.maxX && local.y >= pane.minY && local.y <= pane.maxY) return true
+      // Resizable-pane task: the divider's margin straddles the pane's left
+      // edge, so half of it (paneLeft - margin .. paneLeft) falls just
+      // OUTSIDE the pane rect just tested above, in the otherwise-hollow
+      // workspace -- without this, a pointerdown grabbing that half of the
+      // divider would miss the shape entirely and start a marquee instead.
+      if (isPointOnBbthreadDivider(doc, shape, point)) return true
+    }
     const inBox = local.x >= lb.minX && local.x <= lb.maxX && local.y >= lb.minY && local.y <= lb.maxY
     if (!inBox) return false
     return (
@@ -505,19 +648,20 @@ export function hitTestPoint(doc: CanvasDocument, shape: Shape, point: Point): b
 }
 
 // The bounds spatial-index.ts buckets a shape under (Task frame-interaction,
-// gap 2): identical to worldBounds for every kind EXCEPT frame, where it is
-// widened to also cover the header band (frameHeaderLocalBounds) rotated
+// gap 2; extended to 'bbthread' by isFrameLike, bb-thread-frame task):
+// identical to worldBounds for every kind EXCEPT frame-like ones, where it
+// is widened to also cover the header band (frameHeaderLocalBounds) rotated
 // into world space — otherwise a click on the header, which sits OUTSIDE
-// worldBounds' own box, would hash to a grid cell that never lists the frame
-// as a candidate at all, and hitTestPoint's header branch above would never
-// even run. Deliberately NOT folded into worldBounds itself: worldBounds
+// worldBounds' own box, would hash to a grid cell that never lists the
+// shape as a candidate at all, and hitTestPoint's header branch above would
+// never even run. Deliberately NOT folded into worldBounds itself: worldBounds
 // also feeds transform.ts's resize-handle placement and Selection.tsx's
-// selection-outline box, where "the frame's real geometry" (not the header
+// selection-outline box, where "the shape's real geometry" (not the header
 // chrome) is the correct answer — widening THOSE would move resize handles
 // and the outline up into the header, a regression this task doesn't own.
 export function shapeHitIndexBounds(doc: CanvasDocument, shape: Shape): Bounds {
   const base = worldBounds(doc, shape)
-  if (shape.kind !== 'frame') return base
+  if (!isFrameLike(shape.kind)) return base
   const t = worldTransform(doc, shape)
   const header = frameHeaderLocalBounds(shape)
   const corners = [

@@ -3,10 +3,12 @@ import { useMemo, type ComponentProps, type ReactNode, type RefObject } from "re
 import type { EditorState } from "@ensembleworks/canvas-editor";
 import type { CanvasDocument } from "@ensembleworks/canvas-model";
 import { Cursors, type ViewportSize } from "@ensembleworks/canvas-react";
-import { CanvasSurface, Toolbar, type CanvasSession } from "@ensembleworks/canvas-ui";
-import { AgentLayer } from "../agents-ui.js";
-import type { ThreadOption } from "../thread-picker.js";
-import type { CanvasAgentLink } from "../wire.js";
+import { CanvasSurface, Toolbar, TOOL_ORDER, type CanvasSession } from "@ensembleworks/canvas-ui";
+
+// bb-thread-frame task: 'bbthread' is a plugin-only tool — the web app's
+// TOOL_ORDER (canvas-ui's Toolbar.tsx) deliberately omits it, so this is the
+// one call site that appends it, for this host only.
+const BB_TOOLBAR_TOOLS = [...TOOL_ORDER, { id: "bbthread", label: "Thread" }] as const;
 import { SpeakerRings } from "../roster-ui.js";
 import {
   chromeCardColumnStyle,
@@ -36,13 +38,13 @@ export interface SessionViewProps {
   readonly av: ComponentProps<typeof SpeakerRings>["speaking"];
   readonly selfKey: string;
   readonly canvas: CanvasSession;
-  readonly agentLinks: Readonly<Record<string, CanvasAgentLink>>;
-  readonly pendingShapeId: string | null;
-  readonly onRun: (shapeId: string) => void;
+  /** Opens a thread from the canvas, remembering how to get back to this
+   * page/camera/selection (session-thread-return.ts's `useThreadReturn`).
+   * Unused by anything in this file for now — the retired agent-badge overlay
+   * was its only caller — but kept on the prop chain because the coming
+   * `bbthread` shape body's "Open full →" footer button is exactly this call
+   * (docs/plans/2026-09-15-bb-thread-frame.md). */
   readonly onOpen: (threadId: string) => void;
-  readonly onUnlink: (shapeId: string) => void;
-  readonly onAttach: (shapeId: string, threadId: string) => void;
-  readonly loadThreadOptions: () => Promise<ThreadOption[]>;
   readonly pageSwitcher: PageSwitcherView;
 }
 
@@ -77,13 +79,6 @@ function CanvasViewport({
   av,
   selfKey,
   canvas,
-  agentLinks,
-  pendingShapeId,
-  onRun,
-  onOpen,
-  onUnlink,
-  onAttach,
-  loadThreadOptions,
 }: SessionViewProps) {
   return (
     <div
@@ -106,20 +101,6 @@ function CanvasViewport({
             currentPageId={editorState.currentPageId}
           />
         }
-      />
-      <AgentLayer
-        doc={snapshot}
-        camera={editorState.camera}
-        viewportSize={viewportSize}
-        selection={editorState.selection}
-        links={agentLinks}
-        currentPageId={editorState.currentPageId}
-        pendingShapeId={pendingShapeId}
-        onRun={onRun}
-        onOpen={onOpen}
-        onUnlink={onUnlink}
-        onAttach={onAttach}
-        loadThreadOptions={loadThreadOptions}
       />
       <SpeakerRings
         presence={presenceAll}
@@ -145,6 +126,7 @@ function CanvasChrome({ canvas, editorState }: SessionViewProps) {
             onSelectTool={canvas.selectTool}
             nextShapeStyle={editorState.nextShapeStyle}
             onArmStyle={canvas.onArmStyle}
+            tools={BB_TOOLBAR_TOOLS}
             style={{ background: "transparent", border: "none", padding: 0 }}
           />
         </div>

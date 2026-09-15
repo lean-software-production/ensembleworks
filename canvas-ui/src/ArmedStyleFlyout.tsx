@@ -79,7 +79,7 @@ const CARD_STYLE: CSSProperties = {
 
 const HEADING_STYLE: CSSProperties = { margin: 0, fontSize: 12, fontWeight: 600 }
 
-const TOOL_HEADINGS: Partial<Record<ToolId, string>> = { note: 'Note', text: 'Text', geo: 'Shape', arrow: 'Arrow', frame: 'Frame' }
+const TOOL_HEADINGS: Partial<Record<ToolId, string>> = { note: 'Note', text: 'Text', geo: 'Shape', arrow: 'Arrow', frame: 'Frame', bbthread: 'Thread' }
 
 function stopPropagation(e: { stopPropagation(): void }): void {
 	e.stopPropagation()

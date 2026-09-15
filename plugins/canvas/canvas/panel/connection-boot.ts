@@ -1,7 +1,8 @@
 import { useEffect, type Dispatch, type MutableRefObject, type SetStateAction } from "react";
 import { Editor, createToolContext, createToolSet } from "@ensembleworks/canvas-editor";
 import { PresenceStore, SyncClientPeer } from "@ensembleworks/canvas-sync";
-import { registerCoreShapes } from "@ensembleworks/canvas-react";
+import { registerCoreShapes, registerShape } from "@ensembleworks/canvas-react";
+import { BbThreadShape } from "../shapes/BbThreadShape.js";
 import { createBbTransport, newPeerId, type BbTransport } from "../../transport.js";
 import { fetchIdentity } from "../identity.js";
 import { resolvePageId } from "../page.js";
@@ -82,6 +83,12 @@ export function useConnectionBoot({
       });
       const toolContext = createToolContext(editor);
       registerCoreShapes();
+      // Plugin-only shape (docs/plans/2026-09-15-bb-thread-frame.md): the
+      // web app never registers this kind — see canvas-ui's Toolbar.tsx
+      // TOOL_ORDER comment. Idempotent (registerShape overwrites, never
+      // errors on a second call), so re-running this effect on reconnect is
+      // safe.
+      registerShape("bbthread", BbThreadShape);
       const next: Session = {
         peer,
         editor,

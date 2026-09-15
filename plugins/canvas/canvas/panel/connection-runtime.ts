@@ -6,7 +6,6 @@ import {
 } from "../../transport.js";
 import type { rpcContract } from "../../server";
 import { tabClientId } from "../tab-id.js";
-import { useAgentSync } from "./agent-sync.js";
 import { useConnectionBoot } from "./connection-boot.js";
 import { useConnectionEvents } from "./connection-events.js";
 import { useConnectionState } from "./connection-state.js";
@@ -27,7 +26,6 @@ export function useCanvasConnection({ subPath }: Pick<PluginNavPanelProps, "subP
   const [selfName, setSelfName] = useState<string | null>(null);
   const selfNameRef = useRef<string | null>(null);
   const [identities, setIdentities] = useState<Record<string, string>>({});
-  const agents = useAgentSync(rpcRef);
   const makeTransport = useCallback(
     (): BbTransport =>
       createBbTransport({
@@ -84,9 +82,6 @@ export function useCanvasConnection({ subPath }: Pick<PluginNavPanelProps, "subP
     selfNameRef,
     setError,
   });
-  const connectionState = useConnectionState({
-    resync,
-    refreshAgents: agents.refreshAgents,
-  });
-  return { session, error, connectionState, identities, selfName, agents };
+  const connectionState = useConnectionState({ resync });
+  return { session, error, connectionState, identities, selfName };
 }

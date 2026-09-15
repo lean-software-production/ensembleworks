@@ -10,7 +10,7 @@ import type { EditorState } from '@ensembleworks/canvas-editor'
 import { NoteShape, authorOf, noteStyle, noteLabel, noteShadow } from './NoteShape.js'
 
 function editorStateWith(overrides: Partial<EditorState> = {}): EditorState {
-  return { camera: { x: 0, y: 0, z: 1 }, selection: new Set(), hover: null, editingId: null, nextShapeStyle: {}, currentPageId: 'page:p', ...overrides }
+  return { camera: { x: 0, y: 0, z: 1 }, selection: new Set(), hover: null, editingId: null, editingRegion: null, nextShapeStyle: {}, currentPageId: 'page:p', ...overrides }
 }
 
 function noteShape(overrides: Partial<Shape> = {}): Shape {

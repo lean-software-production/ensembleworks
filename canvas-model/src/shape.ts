@@ -7,7 +7,7 @@ import { shapeIdField, parentIdField, type ShapeId, type ParentId } from './ids.
 // (contracts/src/shapes.ts).
 export const SHAPE_KINDS = [
   'note', 'text', 'geo', 'arrow', 'frame', 'group', 'line', 'draw', 'highlight', 'image',
-  'terminal', 'iframe', 'neko', 'roadmap', 'screenshare', 'file-viewer',
+  'terminal', 'iframe', 'neko', 'roadmap', 'screenshare', 'file-viewer', 'bbthread',
 ] as const
 export type ShapeKind = (typeof SHAPE_KINDS)[number]
 
@@ -20,12 +20,14 @@ export type ShapeKind = (typeof SHAPE_KINDS)[number]
 // shapeRegistry.ts) even if it wanted to. Living here instead — a fixed,
 // pure fact about a ShapeKind literal, exactly like SHAPE_KINDS itself — is
 // the seam BOTH packages can share with no cross-import at all.
-// EXCLUDED, deliberately: 'frame' (a container, not text content), 'arrow'
-// (its optional label is real richText too, but arrow-label double-click
-// editing is a documented Phase-4 parity gap, not this unit's scope), every
-// structural kind (group/line/draw/highlight/image), and the six custom
-// HTML-embed kinds (terminal/iframe/neko/roadmap/screenshare/file-viewer) —
-// none of which carry a plain-text body a textarea could ever edit.
+// EXCLUDED, deliberately: 'frame' and 'bbthread' (frame-like containers, not
+// text content — bbthread additionally carries a solid thread pane that is
+// never plain-text editable either), 'arrow' (its optional label is real
+// richText too, but arrow-label double-click editing is a documented Phase-4
+// parity gap, not this unit's scope), every structural kind (group/line/
+// draw/highlight/image), and the six custom HTML-embed kinds (terminal/
+// iframe/neko/roadmap/screenshare/file-viewer) — none of which carry a
+// plain-text body a textarea could ever edit.
 export const TEXT_CAPABLE_KINDS = ['note', 'text', 'geo'] as const
 export type TextCapableKind = (typeof TEXT_CAPABLE_KINDS)[number]
 
@@ -268,6 +270,19 @@ const propsByKind: Record<ShapeKind, z.ZodTypeAny> = {
   // UNTYPED, so a non-string/non-null assetId wrongly validated.
   image: box.extend({ assetId: z.string().nullable().optional() }),
   terminal: box, iframe: box, neko: box, roadmap: box, screenshare: box, 'file-viewer': box,
+  // bb-thread-frame task — a frame-like container (canvas-model/src/
+  // geometry.ts's isFrameLike) whose right third renders a solid "thread
+  // pane" (the BB plugin's ThreadChat mount). `name` mirrors frame's own
+  // header label; `threadId` is the bound project thread's id, absent
+  // ("unbound") until the plugin's picker/spawn flow sets it. `paneFraction`
+  // (resizable-pane task, docs/plans/2026-09-15-bb-thread-frame.md) is the
+  // synced width of the pane as a fraction of the shape's total width, from
+  // the right edge — any finite number validates here; clamping to
+  // [BBTHREAD_PANE_MIN_FRACTION, BBTHREAD_PANE_MAX_FRACTION] is the READER's
+  // job (geometry.ts's `paneFractionOf`), not the schema's, so an
+  // out-of-range or stale value from an older client still round-trips
+  // losslessly through the doc.
+  bbthread: box.extend({ name: z.string().optional(), threadId: z.string().optional(), paneFraction: z.number().optional() }),
 }
 
 // The strict envelope shared by every shape. props is refined per-kind below.

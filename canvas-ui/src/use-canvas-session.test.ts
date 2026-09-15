@@ -221,3 +221,23 @@ function note(h: Harness): { x: number; y: number } {
 	await h.unmount()
 	console.log('ok: (e) body Enter begins editing with its default suppressed; body arrows nudge')
 }
+
+// (f) Escape while editing resolves to 'endEdit' (not 'cancel') — it must
+// end ONLY the edit (pane input routing task, docs/plans/
+// 2026-09-15-bb-thread-frame.md's follow-up section): the active tool stays
+// 'select' and no in-flight gesture is torn down.
+{
+	const h = await mount()
+	await act(async () => h.editor.apply({ type: 'SetSelection', ids: ['shape:n'] }))
+	await act(async () => {
+		keydown(h.body, 'Enter')
+	})
+	assert.equal(h.editor.get().editingId, 'shape:n', 'precondition: shape:n is being edited')
+	await act(async () => {
+		keydown(h.body, 'Escape')
+	})
+	assert.equal(h.editor.get().editingId, null, 'Escape while editing ends the edit')
+	assert.ok(h.editor.doc.getShape('shape:n'), 'Escape must not delete the shape being edited')
+	await h.unmount()
+	console.log("ok: (f) Escape while editing resolves to 'endEdit' and ends the edit")
+}

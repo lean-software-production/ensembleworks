@@ -533,6 +533,16 @@ function pageObs(
     renderedArrowIds: () => sample.renderedArrowIds,
     openStylePopover: () => sample.openStylePopover,
     armedFlyoutTools: () => sample.armedFlyoutTools,
+    // Resizable-pane task's Obs.shapeProp(id, key) doc comment (interaction-
+    // contracts/src/types.ts): reads the shape's RAW prop value off the SAME
+    // pre-sampled snapshot shapeStyle already reads its `props` object from
+    // (sampleShapeStyles, above) — no new sampling pass needed, since that
+    // snapshot already holds the shape's whole props object, not just the
+    // string/number-narrowed subset shapeStyle exposes. `undefined` when the
+    // shape is absent from `sample.styles` (mirrors the fsm adapter's
+    // `editor.doc.getShape(id)?.props[key]` optional-chain) or carries no
+    // such key.
+    shapeProp: (id: string, key: string) => sample.styles[id]?.props[key],
   }
 }
 

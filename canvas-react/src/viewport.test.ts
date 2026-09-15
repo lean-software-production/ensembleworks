@@ -31,7 +31,7 @@ import { worldToScreen, type Camera } from '@ensembleworks/canvas-editor'
 import { cameraTransform, WorldLayer } from './WorldLayer.js'
 import { Grid } from './Grid.js'
 import { Viewport } from './Viewport.js'
-import { keyEventToInput, pointerEventToInput, wheelEventToInput, type KeyEventLike, type PointerEventLike, type RectLike, type WheelEventLike } from './dom-events.js'
+import { keyEventToInput, pointerEventToInput, wheelEventToInput, yieldsToInteractive, type KeyEventLike, type PointerEventLike, type RectLike, type WheelEventLike } from './dom-events.js'
 
 // ============================================================================
 // 1. cameraTransform: exact string for two hand-picked cameras.
@@ -182,6 +182,25 @@ import { keyEventToInput, pointerEventToInput, wheelEventToInput, type KeyEventL
 }
 
 // ============================================================================
+// 5b. yieldsToInteractive (pane input routing task) — fabricated targets,
+//    no real DOM (this file's own no-DOM house style).
+// ============================================================================
+{
+  assert.equal(yieldsToInteractive(null), false, 'a null target never yields')
+
+  const nonElement = {} as unknown as EventTarget
+  assert.equal(yieldsToInteractive(nonElement), false, 'a structural value with no closest() never yields')
+
+  const insideInteractive = { closest: () => ({}) } as unknown as EventTarget
+  assert.equal(yieldsToInteractive(insideInteractive), true, 'a target whose closest() finds a match yields')
+
+  const outsideInteractive = { closest: () => null } as unknown as EventTarget
+  assert.equal(yieldsToInteractive(outsideInteractive), false, 'a target whose closest() finds nothing does not yield')
+
+  console.log('ok: yieldsToInteractive — null / non-Element / matching / non-matching fabricated targets')
+}
+
+// ============================================================================
 // 6. Viewport composition smoke (renderToStaticMarkup — see the ACKNOWLEDGED
 //    LIMITATION in the header for what this deliberately cannot cover):
 //    the root div is focusable (tabindex="0" — without it neither key
@@ -273,6 +292,16 @@ import { keyEventToInput, pointerEventToInput, wheelEventToInput, type KeyEventL
   })
 
   console.log('ok: Viewport — a real pointercancel DOM event invokes onPointerCancel exactly once')
+}
+
+// touch-action: the viewport root must opt out of the browser's own touch
+// gestures (page scroll / pinch), or a finger drag never becomes a canvas
+// gesture — it is cancelled at its first move. A pure-markup assertion on the
+// rendered inline style; the behaviour itself needs a real touch device.
+{
+  const html = renderToStaticMarkup(createElement(Viewport, { onInput: () => false }, null))
+  assert.ok(/touch-action:\s*none/.test(html), `viewport root must render touch-action:none, got: ${html.slice(0, 200)}`)
+  console.log('ok: viewport root sets touch-action:none')
 }
 
 console.log('ok: viewport (transform string, worldToScreen agreement, WorldLayer/Grid rendering, dom-events mappers, composition smoke, pointercancel wiring)')

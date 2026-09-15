@@ -1,20 +1,21 @@
 import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { dumpModel } from "@ensembleworks/canvas-doc";
 import type { CanvasRoomHost } from "./room.js";
-import type { AgentLinks } from "./agents.js";
 import { parseTranscriptArgs, type TranscriptStore } from "./transcript.js";
 import { formatTranscriptLine } from "./transcript-view.js";
+import { formatThreadFrames, threadFrameRows } from "./thread-frames.js";
 
 export function registerCanvasCli(
   bb: BbPluginApi,
   room: CanvasRoomHost,
-  agents: AgentLinks,
   transcript: TranscriptStore,
 ): void {
   const usage = [
     "Usage:",
     "  bb canvas status [--json]   Room, connected clients, shape count",
     "  bb canvas shapes [--json]   Every shape id in the room",
-    "  bb canvas agents [--json]   Every shape -> agent-thread link",
+    "  bb canvas thread-frames [--json]",
+    "                              Every bbthread frame and its children",
     "  bb canvas transcript [--since 10m|2h|1d] [--search TEXT] [--speaker NAME] [--limit N] [--json]",
     "                              What was said in the room",
   ].join("\n");
@@ -33,9 +34,9 @@ export function registerCanvasCli(
         usage: "bb canvas shapes [--json]",
       },
       {
-        name: "agents",
-        summary: "List every note -> agent-thread link and its status",
-        usage: "bb canvas agents [--json]",
+        name: "thread-frames",
+        summary: "List every bbthread frame — its name, bound thread, and children",
+        usage: "bb canvas thread-frames [--json]",
       },
       {
         name: "transcript",
@@ -108,17 +109,14 @@ export function registerCanvasCli(
               ? "No shapes."
               : shapeIds.join("\n"),
           };
-        case "agents": {
-          const links = agents.links;
+        case "thread-frames": {
+          const rows = threadFrameRows(
+            dumpModel(room.peer.doc),
+            (shapeId) => room.peer.doc.getText(shapeId),
+          );
           return {
             exitCode: 0,
-            stdout: json
-              ? JSON.stringify(links)
-              : links.length === 0
-              ? "No shapes are linked to agent threads."
-              : links.map((link) =>
-                `${link.status.padEnd(7)} ${link.shapeId}  ->  ${link.threadId}`
-              ).join("\n"),
+            stdout: json ? JSON.stringify(rows) : formatThreadFrames(rows),
           };
         }
       }
