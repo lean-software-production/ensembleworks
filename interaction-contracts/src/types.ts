@@ -353,12 +353,20 @@ export interface Contract {
    * conformance-suite subsumption). Unused until a later unit needs it. */
   readonly scope?: 'per-kind'
   /** Which tool FSM the runner drives this contract through. 'select' (the
-   * default — click/drag/marquee via tools/select.ts) or 'select+transform'
+   * default — click/drag/marquee via tools/select.ts), 'select+transform'
    * (the client's shipped composite: select PLUS resize/rotate handles via
-   * tools/transform.ts). A contract that must exercise handle-dragging (e.g.
+   * tools/transform.ts), or a `create:<kind>` variant driving tools/create.ts
+   * for that kind. A contract that must exercise handle-dragging (e.g.
    * no-transform-while-typing, Phase E extension) sets 'select+transform'.
-   * Pure string union — this module still imports NOTHING. */
-  readonly tool?: 'select' | 'select+transform'
+   * Pure string union — this module still imports NOTHING.
+   *
+   * FSM-LANE ONLY, always was: the BROWSER runner ignores this field entirely
+   * — it drives the real app, where the armed tool is whatever the gesture
+   * clicked on the toolbar. That is why the `create:` variants (added by the
+   * frame-membership task, so "a shape drawn inside a frame joins it" can be
+   * pinned at the FSM level rather than only in a browser lane this repo
+   * cannot always run) need no browser-adapter counterpart. */
+  readonly tool?: 'select' | 'select+transform' | 'create:note' | 'create:text' | 'create:geo' | 'create:frame' | 'create:bbthread'
   /** Shapes to seed before the gesture. Default: none. */
   scene?(): readonly SceneShape[]
   /** Task H1 — a payload to pre-seed the OS clipboard with, BEFORE the

@@ -12,7 +12,8 @@
 // measures. That is exactly the computation pageBounds/worldBounds already
 // trust, so a future change to a kind's default size (or the note special
 // case) is picked up here for free, with zero duplicated numbers.
-import { indexBetween, isFrameLike, localBounds, STYLE_VALUE_SETS, type Bounds, type Shape } from '@ensembleworks/canvas-model'
+import { centroid, indexBetween, isFrameLike, localBounds, STYLE_VALUE_SETS, toLocalPoint, worldBounds, worldTransform, type Bounds, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
+import { frameAtPoint, frameCandidates } from './frame-membership.js'
 import type { Intent } from '../intents.js'
 import { crossedThreshold, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
@@ -217,15 +218,23 @@ function makeId(event: { readonly t: number; readonly x: number; readonly y: num
 // downstream tolerance to swallow an intent we KNOW is wrong at emission
 // time would be sloppy — filter it here. (Click-create never hits this: no
 // commit happens mid-gesture, so the frame isn't in the snapshot yet.)
-function frameCaptureIntents(ctx: ToolContext, frame: Shape): Intent[] {
+// The ids a newly drawn FRAME adopts. `frame` is still page-parented when
+// this runs (see finalizeIntents' ordering note), so its own x/y ARE world
+// coordinates and the marquee box can be built from them directly.
+//
+// `siblingParentId` is the parent the new frame will ITSELF end up under —
+// the page normally, but an enclosing frame when the new one is drawn inside
+// another (frames nest). Capture is restricted to that parent's children,
+// which is the pre-existing rule generalized: it used to be hardcoded to the
+// page, which silently captured NOTHING when a frame was drawn inside another
+// frame, because the shapes in view were the outer frame's children, not the
+// page's.
+function frameCaptureIds(ctx: ToolContext, frame: Shape, siblingParentId: string): string[] {
   const w = (frame.props as { w?: number }).w ?? 0
   const h = (frame.props as { h?: number }).h ?? 0
   const bounds: Bounds = { minX: frame.x, minY: frame.y, maxX: frame.x + w, maxY: frame.y + h }
-  const pageId = frame.parentId
-  const contained = ctx.queryMarquee(bounds, 'contain')
-    .filter((id) => id !== frame.id && ctx.snapshot().byId.get(id)?.parentId === pageId)
-  if (contained.length === 0) return []
-  return [{ type: 'ReparentShapes', ids: contained, parentId: frame.id }]
+  return ctx.queryMarquee(bounds, 'contain')
+    .filter((id) => id !== frame.id && ctx.snapshot().byId.get(id)?.parentId === siblingParentId)
 }
 
 // tldraw parity, checked against source: note's and text's own Pointing
@@ -243,10 +252,59 @@ function frameCaptureIntents(ctx: ToolContext, frame: Shape): Intent[] {
 // auto-edits.
 const AUTO_EDIT_KINDS: ReadonlySet<CreateKind> = new Set(['note', 'text'])
 
+// Re-express a just-drawn, still-page-parented shape as a CHILD of `home`:
+// its envelope converted into that frame's local coordinates (so it is born
+// exactly where it was drawn, never offset by the frame's transform), and its
+// z-index recomputed among the frame's OWN children rather than the page's —
+// otherwise a shape created inside a frame could be born underneath siblings
+// it was drawn on top of.
+function bornInside(ctx: ToolContext, doc: CanvasDocument, shape: Shape, home: Shape): Shape {
+  const origin = toLocalPoint(doc, home, { x: shape.x, y: shape.y })
+  return {
+    ...shape,
+    parentId: home.id as Shape['parentId'],
+    x: origin.x,
+    y: origin.y,
+    // Created shapes are always born unrotated in WORLD terms; under a rotated
+    // frame that means a local rotation that cancels the parent's (the same
+    // subtraction editor.ts's ReparentShapes does).
+    rotation: shape.rotation - worldTransform(doc, home).rotation,
+    index: topIndex(ctx, home.id),
+  } as Shape
+}
+
+// MEMBERSHIP AT CREATION (frame-membership task, second half — reported from
+// live dogfooding). Creation-time capture used to run in ONE direction only:
+// a frame drawn AROUND existing shapes adopted them, but a shape drawn INSIDE
+// an existing frame was parented to the page — visually inside the frame,
+// belonging to nothing, left behind the moment the frame moved.
+//
+// The membership rule is frame-membership.ts's, shared verbatim with
+// select.ts's drop path, so creating a shape somewhere and dragging one to
+// that same spot can never disagree.
+//
+// ORDERING: `shape` arrives page-parented with WORLD x/y, and everything that
+// needs world coordinates (the centre test, and a new frame's own capture
+// box) is computed BEFORE `bornInside` converts the envelope. The shape is
+// then created ONCE, already in its frame — deliberately not
+// CreateShape-then-ReparentShapes, which would work but would put an
+// un-parenting step in front of the delete when the user undoes the create.
 function finalizeIntents(ctx: ToolContext, shape: Shape): Intent[] {
-  const intents: Intent[] = [{ type: 'CreateShape', shape }, { type: 'SetSelection', ids: [shape.id] }]
-  if (AUTO_EDIT_KINDS.has(shape.kind as CreateKind)) intents.push({ type: 'BeginEdit', id: shape.id })
-  if (isFrameLike(shape.kind)) intents.push(...frameCaptureIntents(ctx, shape))
+  const doc = ctx.snapshot()
+  const pageId = shape.parentId
+  // `shape` is still page-parented, so worldBounds needs nothing from `doc`
+  // beyond the (absent) page — this works in the CLICK path too, where the
+  // shape has never been committed.
+  const centre = centroid(worldBounds(doc, shape))
+  const home = frameAtPoint(doc, centre, frameCandidates(doc, new Set([shape.id]), pageId))
+  // Computed against the WORLD box, and against the siblings the new frame
+  // will actually have, before any conversion below.
+  const captured = isFrameLike(shape.kind) ? frameCaptureIds(ctx, shape, home?.id ?? pageId) : []
+
+  const born = home ? bornInside(ctx, doc, shape, home) : shape
+  const intents: Intent[] = [{ type: 'CreateShape', shape: born }, { type: 'SetSelection', ids: [born.id] }]
+  if (AUTO_EDIT_KINDS.has(born.kind as CreateKind)) intents.push({ type: 'BeginEdit', id: born.id })
+  if (captured.length > 0) intents.push({ type: 'ReparentShapes', ids: captured, parentId: born.id })
   return intents
 }
 

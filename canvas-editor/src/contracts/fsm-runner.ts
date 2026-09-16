@@ -14,6 +14,7 @@ import { Editor } from '../editor.js'
 import type { InputEvent, Modifiers, Tool } from '../input.js'
 import { screenToWorld, worldToScreen } from '../input.js'
 import { script } from '../script.js'
+import { createCreateTool, type CreateKind } from '../tools/create.js'
 import { createSelectAndTransformTool } from '../tools/select-and-transform.js'
 import { createSelectTool } from '../tools/select.js'
 import { createToolContext } from '../tools/tool-context.js'
@@ -351,9 +352,15 @@ export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
   // ships (createSelectAndTransformTool) so a handle-drag contract exercises
   // the real dispatch — transform.ts gets first crack at each pointerdown,
   // exactly as in the browser.
+  // `create:<kind>` drives tools/create.ts for that kind — the seam the
+  // frame-membership task added so a creation-time rule can be pinned here
+  // rather than only in the browser lane (every pre-existing create-tool
+  // contract is level:'browser' purely because this seam did not exist).
   const tool: Tool<unknown> = contract.tool === 'select+transform'
     ? (createSelectAndTransformTool(ctx) as Tool<unknown>)
-    : (createSelectTool(ctx) as Tool<unknown>)
+    : contract.tool?.startsWith('create:')
+      ? (createCreateTool(ctx, contract.tool.slice('create:'.length) as CreateKind) as Tool<unknown>)
+      : (createSelectTool(ctx) as Tool<unknown>)
   const startRect = visibleWorldRectOf(editor.get().camera)
 
   // Drag-observation baseline (Pilot 2): each seeded shape's START world

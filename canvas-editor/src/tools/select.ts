@@ -104,8 +104,6 @@
 import {
   BBTHREAD_PANE_MAX_FRACTION,
   BBTHREAD_PANE_MIN_FRACTION,
-  bbthreadWorkspaceLocalBounds,
-  centroid,
   computeExcludedIds,
   isFrameLike,
   isPointInBbthreadPane,
@@ -119,11 +117,10 @@ import {
   worldBounds,
   type Bounds,
   type CanvasDocument,
-  type Point,
-  type Shape,
   type SnapResult,
   type SpatialIndex,
 } from '@ensembleworks/canvas-model'
+import { frameCandidates, frameFor } from './frame-membership.js'
 import type { Intent } from '../intents.js'
 import { crossedThreshold, isDoubleClick, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
@@ -413,111 +410,28 @@ function snapExcludedIds(snapshot: CanvasDocument, movingIds: readonly string[],
 // FRAME MEMBERSHIP ON DROP (frame-membership task —
 // docs/plans/2026-09-15-bb-thread-frame.md's "Membership", which deferred
 // exactly this). Until now the ONE producer of a ReparentShapes intent was
-// create.ts's frame-capture: draw a frame around some shapes and they become
+// create.ts's frame-capture: draw a frame around some shapes and they became
 // its children, and after that membership never changed again — a shape
 // dragged into an existing frame stayed a page-level shape that merely
 // overlapped it, and a shape dragged out of one followed that frame around
-// the canvas forever. This block closes both directions, on pointerup of a
+// the canvas forever. This closes both directions, on pointerup of a
 // select-tool translate.
 //
-// CENTRE, NOT FULL CONTAINMENT (a deliberate choice, argued rather than
-// inherited): the drop target for a dragged shape is the frame whose
-// membership region contains that shape's world-bounds CENTRE. Full
-// containment reads stricter but behaves worse in the two cases users
-// actually hit — a shape LARGER than the frame (or one deliberately hung off
-// a frame's edge) can never be dropped in at all, and thefailure mode is silent.
-// tldraw itself resolves the drop target from a POINT too (its
-// DragAndDropManager tests the pointer's page point, not the shape's box);
-// the centre is that same point-shaped rule, made per-shape so a multi-shape
-// selection straddling two frames lands each shape where it visibly sits
-// rather than sending all of them wherever the cursor happened to be.
-//
-// DEEPEST WINS: frames nest, so the target is the deepest candidate
-// containing the centre — dropping into a frame inside a frame means the
-// inner one. Ties (two overlapping SIBLING frames) break on the fractional
-// `index`, i.e. the one painted on top, which is the one the user sees
-// themselves dropping onto.
+// The RULE ITSELF (centre-containment, deepest-wins, bbthread's
+// workspace-only region) lives in frame-membership.ts, shared with the OTHER
+// moment that can change membership — create.ts, for a shape drawn inside a
+// frame. See that module's header for why it is centre and not full
+// containment.
 // ============================================================================
 
-/** The region of a frame-like shape that CAPTURES a dropped shape, in that
- * shape's own local frame. For an ordinary frame that is its whole body; for
- * a `bbthread` it is only the hollow WORKSPACE (canvas-model's
- * `bbthreadWorkspaceLocalBounds`) — the right-hand thread pane is a solid,
- * host-rendered timeline, and a shape dropped over it is sitting ON the pane,
- * not IN the workspace, so capturing it there would produce a child the pane
- * immediately paints over. Keyed off the kind the same way hitTestPoint's own
- * bbthread branch is, so the two can't disagree about where the pane starts. */
-function membershipLocalBounds(frame: Shape): Bounds {
-  return frame.kind === 'bbthread' ? bbthreadWorkspaceLocalBounds(frame) : localBounds(frame)
-}
-
-/** Inclusive point-in-rect, matching the rest of this file's hit tests. */
-function boundsContain(b: Bounds, p: Point): boolean {
-  return p.x >= b.minX && p.x <= b.maxX && p.y >= b.minY && p.y <= b.maxY
-}
-
-/** How many ancestors `shape` has — the "deepest wins" ordering key.
- * Visited-set-guarded so a malformed pre-existing cycle terminates instead of
- * hanging, the same discipline as geometry.ts's worldTransform and editor.ts's
- * canReparent. */
-function treeDepth(doc: CanvasDocument, shape: Shape): number {
-  const visited = new Set<string>([shape.id])
-  let depth = 0
-  let parent = doc.byId.get(shape.parentId)
-  while (parent && !visited.has(parent.id)) {
-    visited.add(parent.id)
-    depth++
-    parent = doc.byId.get(parent.parentId)
-  }
-  return depth
-}
-
-/** The frame-like shape a dropped shape lands in, or null for "the page".
- * `excluded` is the drag's OWN `excludedIds` (the moving shapes, all their
- * descendants, and every shape off the current page — see `snapExcludedIds`),
- * which is what keeps a dragged frame from being offered its own children, or
- * itself, as a drop target. */
-function dropTargetFor(doc: CanvasDocument, dropped: Shape, candidates: readonly Shape[]): Shape | null {
-  const centre = centroid(worldBounds(doc, dropped))
-  let best: Shape | null = null
-  let bestDepth = -1
-  for (const frame of candidates) {
-    if (!boundsContain(membershipLocalBounds(frame), toLocalPoint(doc, frame, centre))) continue
-    const depth = treeDepth(doc, frame)
-    if (depth > bestDepth || (best !== null && depth === bestDepth && frame.index > best.index)) {
-      best = frame
-      bestDepth = depth
-    }
-  }
-  return best
-}
-
-/** The ReparentShapes intents a finished translate implies — one per DISTINCT
- * new parent, so a multi-shape drop into one frame is a single intent.
- *
- * Reads a FRESH `ctx.snapshot()` (not the drag's frozen one): this runs at
- * pointerup, AFTER the last pointermove's TranslateShapes has been committed,
- * and the whole question is where the shapes ENDED UP. That is also why the
- * REBUILD-CADENCE DISCIPLINE this file otherwise keeps is not violated — the
- * rebuild happens once per gesture, at its end, never per pointermove.
- *
- * WHAT IT DELIBERATELY LEAVES ALONE:
- *  - a moving shape whose parent is unchanged (the common case — nothing is
- *    emitted, so an ordinary drag inside the page still commits ONE intent);
- *  - a moving shape with no drop target whose parent is NOT frame-like: only
- *    a frame's child is ever RELEASED to the page, so an unrelated nesting
- *    this tool didn't create is never quietly flattened;
- *  - every shape that is not itself being dragged — a frame moved with its
- *    children never reconsiders them (they are excluded, and they never leave
- *    their parent's frame because the parent IS what moved). */
 function dropTargetIntents(ctx: ToolContext, movingIds: readonly string[], excluded: ReadonlySet<string>, pageId: string): Intent[] {
   const doc = ctx.snapshot()
-  const candidates = doc.shapes.filter((s) => isFrameLike(s.kind) && !excluded.has(s.id) && pageIdOf(doc, s) === pageId)
+  const candidates = frameCandidates(doc, excluded, pageId)
   const byParent = new Map<string, string[]>()
   for (const id of movingIds) {
     const shape = doc.byId.get(id)
     if (!shape) continue // TOLERANCE: a mid-drag remote delete — nothing to reparent.
-    const target = dropTargetFor(doc, shape, candidates)
+    const target = frameFor(doc, shape, candidates)
     const nextParentId = target ? target.id : pageId
     if (nextParentId === shape.parentId) continue
     if (target === null && !isFrameLike(doc.byId.get(shape.parentId)?.kind ?? 'geo')) continue

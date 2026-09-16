@@ -16,6 +16,7 @@ import { bbthreadPaneRegionDoesNotCapture } from './contracts/bbthread-pane-regi
 import { dragIntoFrameReparents } from './contracts/drag-into-frame-reparents.js'
 import { dragOutOfFrameReleasesToPage } from './contracts/drag-out-of-frame-releases-to-page.js'
 import { frameKeepsItsChildrenWhenMoved } from './contracts/frame-keeps-its-children-when-moved.js'
+import { shapeCreatedInsideAFrameJoinsIt } from './contracts/shape-created-inside-a-frame-joins-it.js'
 import { editingEndsOnOutsideClick } from './contracts/editing-ends-on-outside-click.js'
 import { arrowHandleDragPreviewsHover } from './contracts/arrow-handle-drag-previews-hover.js'
 import { arrowMidHandleBends } from './contracts/arrow-mid-handle-bends.js'
@@ -108,4 +109,5 @@ export const CONTRACTS: readonly Contract[] = [
   dragOutOfFrameReleasesToPage,
   frameKeepsItsChildrenWhenMoved,
   bbthreadPaneRegionDoesNotCapture,
+  shapeCreatedInsideAFrameJoinsIt,
 ]
