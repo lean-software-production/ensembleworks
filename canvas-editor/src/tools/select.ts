@@ -120,6 +120,7 @@ import {
   type SnapResult,
   type SpatialIndex,
 } from '@ensembleworks/canvas-model'
+import { frameCandidates, frameFor } from './frame-membership.js'
 import type { Intent } from '../intents.js'
 import { crossedThreshold, isDoubleClick, screenToWorld, type InputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
@@ -403,6 +404,46 @@ function snapExcludedIds(snapshot: CanvasDocument, movingIds: readonly string[],
   const excluded = computeExcludedIds(snapshot, movingIds)
   for (const s of snapshot.shapes) if (pageIdOf(snapshot, s) !== pageId) excluded.add(s.id)
   return excluded
+}
+
+// ============================================================================
+// FRAME MEMBERSHIP ON DROP (frame-membership task —
+// docs/plans/2026-09-15-bb-thread-frame.md's "Membership", which deferred
+// exactly this). Until now the ONE producer of a ReparentShapes intent was
+// create.ts's frame-capture: draw a frame around some shapes and they became
+// its children, and after that membership never changed again — a shape
+// dragged into an existing frame stayed a page-level shape that merely
+// overlapped it, and a shape dragged out of one followed that frame around
+// the canvas forever. This closes both directions, on pointerup of a
+// select-tool translate.
+//
+// The RULE ITSELF (centre-containment, deepest-wins, bbthread's
+// workspace-only region) lives in frame-membership.ts, shared with the OTHER
+// moment that can change membership — create.ts, for a shape drawn inside a
+// frame. See that module's header for why it is centre and not full
+// containment.
+// ============================================================================
+
+function dropTargetIntents(ctx: ToolContext, movingIds: readonly string[], excluded: ReadonlySet<string>, pageId: string): Intent[] {
+  const doc = ctx.snapshot()
+  const candidates = frameCandidates(doc, excluded, pageId)
+  const byParent = new Map<string, string[]>()
+  for (const id of movingIds) {
+    const shape = doc.byId.get(id)
+    if (!shape) continue // TOLERANCE: a mid-drag remote delete — nothing to reparent.
+    const target = frameFor(doc, shape, candidates)
+    const nextParentId = target ? target.id : pageId
+    if (nextParentId === shape.parentId) continue
+    if (target === null && !isFrameLike(doc.byId.get(shape.parentId)?.kind ?? 'geo')) continue
+    const group = byParent.get(nextParentId)
+    if (group) group.push(id)
+    else byParent.set(nextParentId, [id])
+  }
+  // Emitted in first-seen parent order — deterministic for replay, and the
+  // editor's ReparentShapes is per-id tolerant anyway (canReparent skips an
+  // id whose move would cycle, e.g. a frame dropped onto its own descendant,
+  // without disturbing the rest of the batch).
+  return [...byParent].map(([parentId, ids]): Intent => ({ type: 'ReparentShapes', ids, parentId }))
 }
 
 function toggleOrAdd(current: ReadonlySet<string>, id: string): string[] {
@@ -767,7 +808,17 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       return { state: { ...state, applied: { dx: totalDx, dy: totalDy }, snapResult }, intents }
     }
     if (event.type === 'pointerup') {
-      return { state: IDLE, intents: [] } // a drag is never a click: nothing to remember for double-click
+      // Frame membership is settled HERE, once, on the completed drop — see
+      // the FRAME MEMBERSHIP ON DROP block above. Deliberately NOT per
+      // pointermove: mid-drag reparenting would rewrite the moving shapes'
+      // frame of reference under the absolute-anchor translate math, and
+      // would spray an undo-stack entry per frame boundary crossed.
+      // UNDO GRANULARITY: this is its own commit, one step behind the last
+      // move's TranslateShapes — the per-pointermove-commit granularity this
+      // engine already has (CLAUDE.md's Phase-4 note), neither widened nor
+      // narrowed by this task.
+      const intents = dropTargetIntents(ctx, state.movingIds, state.excludedIds, editor.get().currentPageId)
+      return { state: IDLE, intents } // a drag is never a click: nothing to remember for double-click
     }
     return { state, intents: [] }
   }

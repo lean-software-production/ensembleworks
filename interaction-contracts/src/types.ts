@@ -98,6 +98,17 @@ export interface SceneShape {
   readonly y: number
   readonly w: number
   readonly h: number
+  /** Optional parent — the id of ANOTHER scene shape this one is seeded
+   * UNDER (its x/y are then that parent's LOCAL coordinates, exactly as in
+   * the doc), defaulting to the scene's page when absent. frame-membership
+   * task: the drag-OUT contract has to start from a shape that is ALREADY a
+   * frame's child, which no gesture can set up (creation-time capture only
+   * fires for a frame drawn around existing shapes, a different gesture with
+   * different coordinates) — so the seed has to express it directly.
+   * ORDERING CONTRACT: a parent must appear EARLIER in the `scene()` array
+   * than its children — both runners seed in array order, and the underlying
+   * doc refuses to place a node under a parent that isn't in the tree yet. */
+  readonly parentId?: string
 }
 
 /** The observation interface — the ONLY thing invariants may read. Grows one
@@ -312,6 +323,25 @@ export interface Obs {
    * the shape from its pre-sampled snapshot (the same one `shapeStyle`
    * already reads its `props` object from). */
   shapeProp(id: string, key: string): unknown
+  /** A shape's CURRENT parent id — a `page:`-prefixed page id when the shape
+   * sits at the page root, another shape's id when it is that shape's child,
+   * or null when the shape is absent. frame-membership task
+   * (docs/plans/2026-09-15-bb-thread-frame.md's "Membership") — drag-into-/
+   * drag-out-of-frame reparenting is a change to the shape TREE, and no
+   * existing probe can see the tree: `shapeDisplacement` reads raw LOCAL
+   * x/y, which a reparent rewrites wholesale (a shape that did not move in
+   * world space reports a large displacement the moment its frame of
+   * reference changes), so it can neither confirm nor deny membership.
+   * A contract asserts page-root membership by the `page:` PREFIX rather
+   * than a literal id, because the two runners name their page differently
+   * (the FSM runner seeds 'page:p'; the browser runner uses the live room's
+   * `window.__ew.editor.pageId`) — the prefix is the one thing both share
+   * (canvas-model's `isPageId`). Available at BOTH levels (reads doc state,
+   * not the DOM) — no throw-stub: the FSM adapter reads
+   * `editor.doc.getShape(id)?.parentId ?? null` directly, the browser
+   * adapter pre-samples the same field for the id union `shapeStyle`/
+   * `shapeKind` already sample. */
+  shapeParent(id: string): string | null
 }
 
 /** A contract declaration = data. */
@@ -323,12 +353,20 @@ export interface Contract {
    * conformance-suite subsumption). Unused until a later unit needs it. */
   readonly scope?: 'per-kind'
   /** Which tool FSM the runner drives this contract through. 'select' (the
-   * default — click/drag/marquee via tools/select.ts) or 'select+transform'
+   * default — click/drag/marquee via tools/select.ts), 'select+transform'
    * (the client's shipped composite: select PLUS resize/rotate handles via
-   * tools/transform.ts). A contract that must exercise handle-dragging (e.g.
+   * tools/transform.ts), or a `create:<kind>` variant driving tools/create.ts
+   * for that kind. A contract that must exercise handle-dragging (e.g.
    * no-transform-while-typing, Phase E extension) sets 'select+transform'.
-   * Pure string union — this module still imports NOTHING. */
-  readonly tool?: 'select' | 'select+transform'
+   * Pure string union — this module still imports NOTHING.
+   *
+   * FSM-LANE ONLY, always was: the BROWSER runner ignores this field entirely
+   * — it drives the real app, where the armed tool is whatever the gesture
+   * clicked on the toolbar. That is why the `create:` variants (added by the
+   * frame-membership task, so "a shape drawn inside a frame joins it" can be
+   * pinned at the FSM level rather than only in a browser lane this repo
+   * cannot always run) need no browser-adapter counterpart. */
+  readonly tool?: 'select' | 'select+transform' | 'create:note' | 'create:text' | 'create:geo' | 'create:frame' | 'create:bbthread'
   /** Shapes to seed before the gesture. Default: none. */
   scene?(): readonly SceneShape[]
   /** Task H1 — a payload to pre-seed the OS clipboard with, BEFORE the

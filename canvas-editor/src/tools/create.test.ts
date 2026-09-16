@@ -586,4 +586,103 @@ for (const kind of ['geo', 'frame', 'bbthread'] as const) {
   console.log('ok: drag-create text begins editing immediately (tldraw parity)')
 }
 
+// ============================================================================
+// MEMBERSHIP AT CREATION (frame-membership task, second half). The contract
+// `shape-created-inside-a-frame-joins-it` pins the headline rule; these pin
+// the cases around it: the shape is born WHERE IT WAS DRAWN (no offset by the
+// frame's transform), its z-index is computed among the frame's children, a
+// bbthread's pane does not capture, frames nest, and a nested frame still
+// adopts the shapes it is drawn around.
+// ============================================================================
+
+function frameSetup(kind: string, w: number, h: number) {
+  const doc = LoroCanvasDoc.create({ peerId: 1n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape({
+    id: 'shape:home', kind, parentId: 'page:p', index: 'a1', x: 0, y: 0, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w, h },
+  } as Shape)
+  doc.commit()
+  const editor = new Editor({ doc, now: () => 0, random: () => 0.5, pageId: 'page:p' })
+  return { doc, editor, ctx: createToolContext(editor) }
+}
+
+// ============================================================================
+// 9. A geo drawn inside a frame is born as its CHILD, positioned so it lands
+//    exactly where it was drawn (local coords, not the world ones).
+// ============================================================================
+{
+  const { doc, editor, ctx } = frameSetup('frame', 400, 400)
+  // Give the frame a non-zero origin so a missing conversion is visible.
+  doc.putShape({ ...doc.getShape('shape:home')!, x: 100, y: 50 } as Shape)
+  doc.commit()
+  run(editor, createCreateTool(ctx, 'geo'), script().down(200, 150).move(300, 250).up().events())
+  const created = doc.listShapes().find((sh) => sh.id !== 'shape:home')!
+  assert.equal(created.parentId, 'shape:home', 'a geo drawn inside the frame is born as its child')
+  // Drawn from world (200,150) to (300,250); the frame sits at world (100,50),
+  // so the LOCAL origin must be (100,100) — not the world (200,150).
+  assert.equal(created.x, 100, 'born at the frame-LOCAL x, so it lands where it was drawn')
+  assert.equal(created.y, 100, 'born at the frame-LOCAL y')
+  console.log('ok: a shape drawn inside a frame is born as its child, in the frame\'s local coordinates')
+}
+
+// ============================================================================
+// 10. Its z-index is computed among the FRAME's children, not the page's — a
+//    shape drawn on top of an existing sibling must not be born underneath it.
+// ============================================================================
+{
+  const { doc, editor, ctx } = frameSetup('frame', 400, 400)
+  doc.putShape({
+    id: 'shape:sibling', kind: 'geo', parentId: 'shape:home', index: 'a5', x: 10, y: 10,
+    rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 50, h: 50 },
+  } as Shape)
+  doc.commit()
+  run(editor, createCreateTool(ctx, 'geo'), script().down(100, 100).move(300, 300).up().events())
+  const created = doc.listShapes().find((sh) => sh.id !== 'shape:home' && sh.id !== 'shape:sibling')!
+  assert.equal(created.parentId, 'shape:home')
+  assert.ok(created.index > 'a5', `the new child must sort ABOVE its existing sibling 'a5', got ${JSON.stringify(created.index)}`)
+  console.log('ok: a shape created inside a frame is indexed above the frame\'s existing children')
+}
+
+// ============================================================================
+// 11. A bbthread's THREAD PANE does not capture on creation either — the same
+//    workspace-only rule the drop path uses (frame-membership.ts is shared).
+// ============================================================================
+{
+  const { doc, editor, ctx } = frameSetup('bbthread', 900, 600)
+  // Centre lands at (750,300): inside the pane (x >= 600), not the workspace.
+  run(editor, createCreateTool(ctx, 'geo'), script().down(700, 250).move(800, 350).up().events())
+  const created = doc.listShapes().find((sh) => sh.id !== 'shape:home')!
+  assert.equal(created.parentId, 'page:p', 'a shape drawn over the bbthread PANE stays on the page')
+
+  // ...while the same gesture in the workspace DOES join it.
+  const { doc: doc2, editor: e2, ctx: c2 } = frameSetup('bbthread', 900, 600)
+  run(e2, createCreateTool(c2, 'geo'), script().down(200, 250).move(300, 350).up().events())
+  const created2 = doc2.listShapes().find((sh) => sh.id !== 'shape:home')!
+  assert.equal(created2.parentId, 'shape:home', 'the same gesture in the WORKSPACE joins the bbthread')
+  console.log('ok: creation membership uses the bbthread workspace, never the thread pane')
+}
+
+// ============================================================================
+// 12. Frames NEST, and a nested frame still adopts what it is drawn around —
+//    capture is restricted to the siblings the new frame will actually have
+//    (its enclosing frame's children), not hardcoded to the page's.
+// ============================================================================
+{
+  const { doc, editor, ctx } = frameSetup('frame', 600, 600)
+  doc.putShape({
+    id: 'shape:inhabitant', kind: 'geo', parentId: 'shape:home', index: 'a2', x: 150, y: 150,
+    rotation: 0, isLocked: false, opacity: 1, meta: {}, props: { w: 100, h: 100 },
+  } as Shape)
+  doc.commit()
+  // Draw an inner frame from (100,100) to (400,400) — inside shape:home, and
+  // fully enclosing shape:inhabitant's world box [150,250]x[150,250].
+  run(editor, createCreateTool(ctx, 'frame'), script().down(100, 100).move(400, 400).up().events())
+  const inner = doc.listShapes().find((sh) => sh.id !== 'shape:home' && sh.id !== 'shape:inhabitant')!
+  assert.equal(inner.parentId, 'shape:home', 'a frame drawn inside another frame nests under it')
+  assert.equal(doc.getShape('shape:inhabitant')!.parentId, inner.id,
+    'and it still adopts the shape it was drawn around, even though that shape was the OUTER frame\'s child')
+  console.log('ok: a frame drawn inside a frame nests, and still captures its enclosing frame\'s children')
+}
+
 console.log('ok: create tools (note/text/geo/frame/bbthread) + frame capture')

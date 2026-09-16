@@ -14,6 +14,7 @@ import { Editor } from '../editor.js'
 import type { InputEvent, Modifiers, Tool } from '../input.js'
 import { screenToWorld, worldToScreen } from '../input.js'
 import { script } from '../script.js'
+import { createCreateTool, type CreateKind } from '../tools/create.js'
 import { createSelectAndTransformTool } from '../tools/select-and-transform.js'
 import { createSelectTool } from '../tools/select.js'
 import { createToolContext } from '../tools/tool-context.js'
@@ -119,8 +120,13 @@ function makeObs(
       return { ...startRect }
     },
     shapeDisplacement(id: string) {
-      // NOTE: compares raw shape.x/y (LOCAL coords) — local == world here only
-      // because seedScene parents every shape directly to page:p, unrotated.
+      // NOTE: compares raw shape.x/y (LOCAL coords) — local == world only for
+      // a shape parented directly to the (unrotated) page, which is every
+      // shape a scene seeds unless it declares SceneShape.parentId. For a
+      // shape that IS (or BECOMES, via a drag-into-frame reparent) a frame's
+      // child, this reports LOCAL displacement, which is not world motion:
+      // a membership-shaped contract must read `shapeParent` instead, and a
+      // motion-shaped one must not be pointed at a nested shape.
       const start = startPositions.get(id)
       if (!start) throw new Error(`shapeDisplacement: no seeded shape with id ${JSON.stringify(id)}`)
       const shape = editor.doc.getShape(id)
@@ -284,6 +290,11 @@ function makeObs(
       // interface doc comment.
       return editor.doc.getShape(id)?.props[key]
     },
+    shapeParent(id: string) {
+      // frame-membership task — a doc read, like shapeKind/shapeProp: no
+      // throw-stub, both adapters are REAL.
+      return editor.doc.getShape(id)?.parentId ?? null
+    },
   }
 }
 
@@ -294,8 +305,16 @@ function seedScene(doc: LoroCanvasDoc, contract: Contract): void {
     // cannot import the model's branded types), so the seam validates here —
     // a malformed id prefix or unknown kind must fail LOUDLY at seeding time,
     // never reach the doc as a silently malformed shape.
+    // SceneShape.parentId (frame-membership task) — a scene shape may be
+    // seeded UNDER another scene shape (its x/y are then that parent's LOCAL
+    // coordinates). Defaults to the page, which is what every pre-existing
+    // scene declaration means. The ORDERING CONTRACT (types.ts's SceneShape
+    // doc comment) is what makes the single in-array-order pass below
+    // sufficient: LoroCanvasDoc.putShape retains an unknown parentId in the
+    // shape's data but places the node at the ROOT, so a child seeded before
+    // its parent would silently land on the page instead of failing loudly.
     const v = validateShape({
-      id: s.id, kind: s.kind, parentId: 'page:p', index: 'a1',
+      id: s.id, kind: s.kind, parentId: s.parentId ?? 'page:p', index: 'a1',
       x: s.x, y: s.y, rotation: 0, isLocked: false, opacity: 1, meta: {},
       props: { w: s.w, h: s.h },
     })
@@ -333,9 +352,15 @@ export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
   // ships (createSelectAndTransformTool) so a handle-drag contract exercises
   // the real dispatch — transform.ts gets first crack at each pointerdown,
   // exactly as in the browser.
+  // `create:<kind>` drives tools/create.ts for that kind — the seam the
+  // frame-membership task added so a creation-time rule can be pinned here
+  // rather than only in the browser lane (every pre-existing create-tool
+  // contract is level:'browser' purely because this seam did not exist).
   const tool: Tool<unknown> = contract.tool === 'select+transform'
     ? (createSelectAndTransformTool(ctx) as Tool<unknown>)
-    : (createSelectTool(ctx) as Tool<unknown>)
+    : contract.tool?.startsWith('create:')
+      ? (createCreateTool(ctx, contract.tool.slice('create:'.length) as CreateKind) as Tool<unknown>)
+      : (createSelectTool(ctx) as Tool<unknown>)
   const startRect = visibleWorldRectOf(editor.get().camera)
 
   // Drag-observation baseline (Pilot 2): each seeded shape's START world

@@ -12,6 +12,11 @@ import { bbthreadPaneDoubleClickBeginsEditing } from './contracts/bbthread-pane-
 import { bbthreadEscapeEndsEditing } from './contracts/bbthread-escape-ends-editing.js'
 import { bbthreadDividerDragResizesPane } from './contracts/bbthread-divider-drag-resizes-pane.js'
 import { bbthreadDividerDragClampsAtTwoThirds } from './contracts/bbthread-divider-drag-clamps-at-two-thirds.js'
+import { bbthreadPaneRegionDoesNotCapture } from './contracts/bbthread-pane-region-does-not-capture.js'
+import { dragIntoFrameReparents } from './contracts/drag-into-frame-reparents.js'
+import { dragOutOfFrameReleasesToPage } from './contracts/drag-out-of-frame-releases-to-page.js'
+import { frameKeepsItsChildrenWhenMoved } from './contracts/frame-keeps-its-children-when-moved.js'
+import { shapeCreatedInsideAFrameJoinsIt } from './contracts/shape-created-inside-a-frame-joins-it.js'
 import { editingEndsOnOutsideClick } from './contracts/editing-ends-on-outside-click.js'
 import { arrowHandleDragPreviewsHover } from './contracts/arrow-handle-drag-previews-hover.js'
 import { arrowMidHandleBends } from './contracts/arrow-mid-handle-bends.js'
@@ -97,4 +102,12 @@ export const CONTRACTS: readonly Contract[] = [
   selectIgnoresOtherPages,
   styleTriggerEnter,
   railFlyoutFollowsTool,
+  // frame-membership task (docs/plans/2026-09-15-bb-thread-frame.md's
+  // "Membership"): drag-into / drag-out reparenting, its frame-moves
+  // guard-rail, and bbthread's workspace-only capture region.
+  dragIntoFrameReparents,
+  dragOutOfFrameReleasesToPage,
+  frameKeepsItsChildrenWhenMoved,
+  bbthreadPaneRegionDoesNotCapture,
+  shapeCreatedInsideAFrameJoinsIt,
 ]

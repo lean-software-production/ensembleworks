@@ -4,7 +4,7 @@
 // mutators; everything upstream (tools, scripts, the renderer) only ever
 // produces or reads Intents/EditorState.
 import type { CanvasDoc } from '@ensembleworks/canvas-doc'
-import { assetSchema, bindingSchema, plainText, toLocalPoint, type Binding, type CanvasDocument, type Page, type Point, type Shape } from '@ensembleworks/canvas-model'
+import { assetSchema, bindingSchema, plainText, toLocalPoint, worldTransform, type Binding, type CanvasDocument, type Page, type Point, type Shape } from '@ensembleworks/canvas-model'
 import type { Intent } from './intents.js'
 
 // ============================================================================
@@ -594,11 +594,44 @@ export class Editor {
           // could still throw where the model walk said fine. The contract
           // is "never leak", so the engine's own guard is caught and
           // treated as one more skip, not propagated.
+          // WORLD POSITION IS PRESERVED (frame-membership task). A shape's
+          // x/y/rotation live in its PARENT's frame, so a bare
+          // doc.reparent — which rewrites the edge and nothing else —
+          // teleports the shape by the new parent's whole transform. That
+          // is never what a reparent MEANS at this layer: every caller
+          // (create.ts's frame capture, select.ts's drop targeting) is
+          // expressing a change of OWNERSHIP for a shape the user can see
+          // sitting still. So the envelope is re-expressed in the new
+          // parent's frame here, once, rather than each caller computing a
+          // compensating TranslateShapes it would then have to keep in sync
+          // with this file's transform conventions.
+          //
+          // The maths is exactly geometry.ts's composition, inverted: the
+          // shape's world transform is read BEFORE the move, then projected
+          // back through the TARGET's own world transform —
+          // `toLocalPoint(target, worldOrigin)` for the position (the same
+          // helper worldToParentFrame already uses for Resize/Rotate
+          // anchors) and a plain rotation SUBTRACTION for the angle (world
+          // rotation composes additively — see RotateShapes' note). A page
+          // target has no transform of its own, so the world values pass
+          // through unchanged.
+          const live = liveDocAdapter(this.doc)
+          const before = worldTransform(live, shape)
+          const target = intent.parentId.startsWith('page:') ? undefined : this.doc.getShape(intent.parentId)
+          const origin = target ? toLocalPoint(live, target, { x: before.x, y: before.y }) : { x: before.x, y: before.y }
+          const rotation = before.rotation - (target ? worldTransform(live, target).rotation : 0)
+          const next: Shape = { ...shape, parentId: intent.parentId as Shape['parentId'], x: origin.x, y: origin.y, rotation }
           try {
             this.doc.reparent(id, intent.parentId)
+            // Placement first, data second — the same discipline
+            // LoroCanvasDoc's own reparent/putShape pair documents: the
+            // node has to BE under its new parent before the re-expressed
+            // envelope is written, or putShape's placeInTree would undo the
+            // move it is meant to complete.
+            this.doc.putShape(next)
             mutated = true
             undo.push({ op: 'putShape', shape })
-            redo.push({ op: 'putShape', shape: { ...shape, parentId: intent.parentId as Shape['parentId'] } })
+            redo.push({ op: 'putShape', shape: next })
           } catch { /* skip */ }
         }
         return { state, docMutated: mutated, stateChanged: false, undo, redo }
