@@ -40,6 +40,9 @@ import {
   TAB_DRAGGED_OPACITY,
   TAB_DRAG_ARM_PX,
   TAB_DRAG_PRIMARY_BUTTON,
+  TAB_DRAG_COARSE_SLOP_PX,
+  TAB_DRAG_DRAGGING_TOUCH_ACTION,
+  TAB_DRAG_LONG_PRESS_MS,
   TAB_DRAG_TOUCH_ACTION,
   TAB_DRAG_USER_SELECT,
   TAB_DROP_LINE_PAINT,
@@ -49,6 +52,8 @@ import {
   showsDropLineAt,
   tabDragBlocksContextMenu,
   tabDragIsActive,
+  tabDragIsCoarse,
+  tabDragTouchAction,
   tabDragPaint,
   tabDragPresentation,
   tabDragTakesMeasurement,
@@ -91,6 +96,15 @@ const down = (
 const move = (x: number, pointerId = 1): TabDragEvent => ({ type: "move", pointerId, x });
 const up = (x: number, pointerId = 1): TabDragEvent => ({ type: "up", pointerId, x });
 const click = (index: number, id: string): TabDragEvent => ({ type: "click", index, id });
+/** A FINGER press (mobile-touch task) — the same `down`, with the pointerType
+ * that puts it under the long-press rule instead of the arm-on-movement one. */
+const downTouch = (
+  index: number,
+  id: string,
+  x: number,
+  pointerId = 1,
+): TabDragEvent => ({ type: "down", index, id, pointerId, button: 0, x, pointerType: "touch" });
+const hold = (pointerId = 1): TabDragEvent => ({ type: "hold", pointerId });
 const cancel: TabDragEvent = { type: "cancel" };
 const contextMenu: TabDragEvent = { type: "context-menu" };
 
@@ -153,6 +167,129 @@ describe("the arm distance — what separates a click from a drag", () => {
     expect(run([down(0, "page:p", 100), move(Number.POSITIVE_INFINITY)]).state.phase).toBe(
       "pressed",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A FINGER ARMS ON A LONG PRESS, NOT ON MOVEMENT (mobile-touch task,
+// 2026-09-16) — the inversion of the rule above, and why it had to invert: the
+// strip is `overflowX: auto`, so a horizontal finger drag across a tab is
+// overwhelmingly "scroll this strip", not "reorder this page". Arming on
+// movement made those the SAME gesture and reordering won every time, which is
+// why every tab used to carry `touch-action: none` and the strip could not be
+// scrolled by dragging a tab at all.
+
+describe("a finger arms on a long press", () => {
+  it("tells a finger from everything else, per EVENT not per device", () => {
+    expect(tabDragIsCoarse("touch")).toBe(true);
+    // A pen is a FINE pointer that happens not to be a mouse — it points
+    // precisely, and taking its user's press away after 400ms is a surprise.
+    expect(tabDragIsCoarse("pen")).toBe(false);
+    expect(tabDragIsCoarse("mouse")).toBe(false);
+    // Unknown device => fine, i.e. the pre-mobile behaviour: every script in
+    // this file that omits a pointerType keeps meaning exactly what it meant.
+    expect(tabDragIsCoarse(undefined)).toBe(false);
+    expect(tabDragIsCoarse("")).toBe(false);
+  });
+
+  it("waits ~400ms, shorter than the platform's own long press", () => {
+    // ABSOLUTE, and the number is chosen AGAINST something: the touch
+    // context-menu gesture is ~500ms on both major engines, so a reorder that
+    // armed after it would race a menu the user never asked for. Arming first
+    // is what makes tabDragBlocksContextMenu's refusal decisive rather than a
+    // coin toss. Retune this above 500 and that inverts silently.
+    expect(TAB_DRAG_LONG_PRESS_MS).toBe(400);
+    expect(TAB_DRAG_LONG_PRESS_MS).toBeLessThan(500);
+  });
+
+  it("does NOT arm a finger on movement, however far it travels", () => {
+    // THE HEADLINE. 40px of horizontal travel is a drag for a mouse (see the
+    // arm-distance describe above) and must NOT be one for a finger.
+    expect(run([downTouch(0, "page:p", 100), move(140)]).state.phase).not.toBe("dragging");
+  });
+
+  it("arms a finger on the hold, with the tab lifted where it was pressed", () => {
+    const held = run([downTouch(1, "page:q", 150), hold()]);
+    expect(held.state.phase).toBe("dragging");
+    // A hold is by definition stationary, so the preview starts at zero offset.
+    expect(tabDragPresentation(held.state, THREE_BOXES).translateX).toBe(0);
+    expect(tabDragPresentation(held.state, THREE_BOXES).draggedIndex).toBe(1);
+    // ...and the first move after it steers from there, as an ordinary drag.
+    const steered = run([downTouch(1, "page:q", 150), hold(), move(210)]);
+    expect(tabDragPresentation(steered.state, THREE_BOXES).translateX).toBe(60);
+  });
+
+  it("still lets a finger tap to switch — a hold that never came", () => {
+    const tapped = run([downTouch(0, "page:p", 100), up(100), click(0, "page:p")]);
+    expect(tapped.effects.at(-1)).toEqual({ kind: "switch", id: "page:p" });
+  });
+
+  it("hands a finger that moves first to the scroller, and eats the click", () => {
+    // Past the slop the finger has said it is scrolling. The press is given
+    // away — `suppress`, not `idle`, because on the engines that keep
+    // delivering pointer events through a pan the release still produces a
+    // `click`, and that click would switch the page the user scrolled past.
+    const scrolled = run([downTouch(0, "page:p", 100), move(200)]);
+    expect(scrolled.state.phase).toBe("suppress");
+    // A hold arriving after that is inert: the gesture is gone.
+    expect(run([downTouch(0, "page:p", 100), move(200), hold()]).state.phase).toBe("suppress");
+    const released = run([downTouch(0, "page:p", 100), move(200), up(200), click(0, "page:p")]);
+    expect(released.effects.every((e) => e.kind === "none")).toBe(true);
+  });
+
+  it("tolerates a resting finger's jitter while it waits", () => {
+    // ABSOLUTE: ten pixels, not the mouse's four. A finger on glass wanders
+    // several pixels with no intent behind it, and a slop set as low as the
+    // arm distance would hand an ordinary tap-and-hold to the scroller before
+    // the hold ever landed.
+    expect(TAB_DRAG_COARSE_SLOP_PX).toBe(10);
+    expect(run([downTouch(0, "page:p", 100), move(108), hold()]).state.phase).toBe("dragging");
+    expect(run([downTouch(0, "page:p", 100), move(112), hold()]).state.phase).toBe("suppress");
+    // Symmetric leftwards, like the arm distance.
+    expect(run([downTouch(0, "page:p", 100), move(92), hold()]).state.phase).toBe("dragging");
+    expect(run([downTouch(0, "page:p", 100), move(88), hold()]).state.phase).toBe("suppress");
+  });
+
+  it("refuses a hold that is not this gesture's own", () => {
+    // Every one of these is a timer the caller did not have to remember to
+    // cancel correctly — the machine is inert to all of them rather than
+    // trusting the component's bookkeeping.
+    expect(run([hold()]).state.phase).toBe("idle");                                  // no press at all
+    expect(run([downTouch(0, "page:p", 100), hold(2)]).state.phase).toBe("pressed");  // another pointer
+    expect(run([downTouch(0, "page:p", 100), up(100), hold()]).state.phase).toBe("idle"); // already released
+    // ...and, load-bearing: A MOUSE HELD STILL DOES NOT LIFT A TAB. A caller
+    // that naively timed every pointer still cannot change what a mouse press
+    // means.
+    expect(run([down(0, "page:p", 100), hold()]).state.phase).toBe("pressed");
+  });
+
+  it("takes the touch context menu, which is the cost of all this", () => {
+    // NAMED, not discovered: a stationary long press WAS the platform's
+    // context-menu gesture and this claims it. Once the hold lands the menu is
+    // refused, so on a phone the per-tab menu is reachable by the keyboard
+    // context-menu key, a right-click on a device that has one, or the Pages
+    // popover — not by holding a tab.
+    expect(tabDragBlocksContextMenu(run([downTouch(0, "page:p", 100)]).state)).toBe(false);
+    expect(tabDragBlocksContextMenu(run([downTouch(0, "page:p", 100), hold()]).state)).toBe(true);
+    // A MOUSE right-click is untouched: it never presses (TAB_DRAG_PRIMARY_
+    // BUTTON), so nothing here can ever block its menu.
+    expect(tabDragBlocksContextMenu(run([down(0, "page:p", 100, 1, 2)]).state)).toBe(false);
+  });
+
+  it("cancels a held-then-lifted tab like any other drag", () => {
+    // The hold produced a real `dragging`, so Escape/pointercancel owes a
+    // suppression exactly as a mouse drag does — the click after the release
+    // must not switch the page the gesture just put back.
+    const escaped = run([downTouch(0, "page:p", 100), hold(), move(150), cancel]);
+    expect(escaped.state.phase).toBe("suppress");
+    expect(escaped.effects.every((e) => e.kind !== "drop")).toBe(true);
+  });
+
+  it("drops a held tab into its new order, like any other drag", () => {
+    // END TO END on a finger: press, hold, sweep past a neighbour's midpoint,
+    // release -> one drop effect, the same one a mouse drag produces.
+    const dropped = run([downTouch(0, "page:p", 50), hold(), move(160), up(160)]);
+    expect(dropped.effects.at(-1)).toEqual({ kind: "drop", id: "page:p", index: 0, pointerX: 160 });
   });
 });
 
@@ -568,17 +705,36 @@ describe("the feedback rule while dragging", () => {
   });
 
   it("declares the browser-stealing defences as values, on every tab", () => {
-    // `touch-action: none` is what stops the browser deciding this horizontal
-    // finger drag was a scroll of the strip (which is `overflowX: auto`) and
-    // sending a pointercancel instead of the moves. `user-select: none` stops
-    // the tab's own label being selected as the pointer sweeps across it.
-    expect(TAB_DRAG_TOUCH_ACTION).toBe("none");
+    // `user-select: none` stops the tab's own label being selected as the
+    // pointer sweeps across it.
+    //
+    // `touch-action` IS NO LONGER A FLAT `none` (mobile-touch task,
+    // 2026-09-16). It was, and the cost was that a touch user could not scroll
+    // the strip — which is `overflowX: auto`, because pages are unbounded — by
+    // dragging a TAB at all. Now that a reorder arms on a LONG PRESS rather
+    // than on movement, a horizontal finger drag is no longer how a reorder
+    // starts, so it can go to the scroller: `pan-x` at rest, `none` only once
+    // a drag is actually in flight.
+    expect(TAB_DRAG_TOUCH_ACTION).toBe("pan-x");
+    expect(TAB_DRAG_DRAGGING_TOUCH_ACTION).toBe("none");
     expect(TAB_DRAG_USER_SELECT).toBe("none");
-    const p = tabDragPresentation(IDLE_TAB_DRAG, THREE_BOXES);
+    const idle = tabDragPresentation(IDLE_TAB_DRAG, THREE_BOXES);
     for (const index of [0, 1, 2]) {
-      expect(tabDragPaint(p, index).touchAction).toBe(TAB_DRAG_TOUCH_ACTION);
-      expect(tabDragPaint(p, index).userSelect).toBe(TAB_DRAG_USER_SELECT);
+      expect(tabDragPaint(idle, index).touchAction).toBe("pan-x");
+      expect(tabDragPaint(idle, index).userSelect).toBe(TAB_DRAG_USER_SELECT);
     }
+    // EVERY tab hardens, not just the lifted one: the pointer travels across
+    // its neighbours, and a neighbour still advertising `pan-x` is a scroller
+    // waiting to take the gesture mid-drag.
+    const dragging = tabDragPresentation(
+      run([downTouch(1, "page:q", 150), hold()]).state,
+      THREE_BOXES,
+    );
+    for (const index of [0, 1, 2]) {
+      expect(tabDragPaint(dragging, index).touchAction).toBe("none");
+    }
+    expect(tabDragTouchAction(false)).toBe("pan-x");
+    expect(tabDragTouchAction(true)).toBe("none");
   });
 
   it("gives the drop line a width that is visible but not a bar", () => {
@@ -607,6 +763,7 @@ const PRESSED_ON_0: TabDragState = {
   id: "a",
   pointerId: 1,
   startX: 90,
+  coarse: false,
 };
 const DRAGGING_0: TabDragState = {
   phase: "dragging",
@@ -825,7 +982,10 @@ describe("the component hands the gesture over rather than deciding it", () => {
     // mean "no button pressed" and the strip would be dead to every click.
     const downArgs = callArguments(SWITCHER, "dispatchDrag");
     expect(SWITCHER).toMatch(
-      /\{\s*type:\s*"down",\s*index,\s*id,\s*pointerId:\s*event\.pointerId,\s*button:\s*event\.button,\s*x:\s*event\.clientX,?\s*\}/,
+      // `pointerType` joined the literal on 2026-09-16 (mobile-touch task):
+      // without it every press reads as a fine pointer and the long-press rule
+      // is unreachable — the machine would be correct and the feature dead.
+      /\{\s*type:\s*"down",\s*index,\s*id,\s*pointerId:\s*event\.pointerId,\s*button:\s*event\.button,\s*x:\s*event\.clientX,\s*pointerType:\s*event\.pointerType,?\s*\}/,
     );
     expect(downArgs).not.toMatch(/button:\s*event\.buttons/);
     expect(SWITCHER).not.toMatch(/button:\s*event\.buttons/);
@@ -856,7 +1016,7 @@ describe("the component hands the gesture over rather than deciding it", () => {
     const from = SWITCHER.indexOf("const beginTabDrag");
     // SWITCHER is comment-stripped, so the bound has to be a piece of CODE:
     // beginTabDrag's own dependency array is the last thing in it.
-    const to = SWITCHER.indexOf("[dispatchDrag, measureTabs]");
+    const to = SWITCHER.indexOf("[dispatchDrag, measureTabs, clearHoldTimer]");
     expect(from).toBeGreaterThan(-1);
     expect(to).toBeGreaterThan(from);
     expect(captures[0]!.pos).toBeGreaterThan(from);
@@ -865,6 +1025,46 @@ describe("the component hands the gesture over rather than deciding it", () => {
     // typechecks just as well.
     expect(callsTo(SWITCHER, "event.currentTarget.setPointerCapture")).toHaveLength(1);
     expect(SWITCHER).not.toMatch(/setPointerCapture\(event\.button/);
+  });
+
+  it("owns the long-press TIMER, and sets it only for a finger that pressed", () => {
+    // THE TIMER HAD TO LAND SOMEWHERE, and tab-drag.ts is asserted clock-free
+    // (see "reads no clock and sets no timer" below) precisely so it does not
+    // land there — a rule armed by elapsed time inside that module would be
+    // invisible to every behavioural test in this file and fail only on a
+    // tablet. So the component holds the `setTimeout` and the machine holds
+    // what a `hold` MEANS, and this guard is what keeps the halves matched.
+    const timers = callsTo(SWITCHER, "setTimeout");
+    expect(timers).toHaveLength(1);
+    // The DURATION comes from the module's constant, never a literal here: a
+    // number written in the .tsx could drift past the platform's own ~500ms
+    // long press, silently handing the gesture back to the context menu.
+    expect(timers[0]!.text).toMatch(/TAB_DRAG_LONG_PRESS_MS/);
+    expect(SWITCHER).not.toMatch(/setTimeout\([^)]*,\s*\d+\s*\)/);
+    // The hold it sends names the pointer it was set for — a `hold` for the
+    // wrong pointer is one the machine refuses, and that refusal is only
+    // reachable if the component passes an id at all.
+    expect(SWITCHER).toMatch(/dispatchDrag\(\{\s*type:\s*"hold",\s*pointerId\s*\}\)/);
+    // ...and only for a FINGER that actually took the press. Both halves: a
+    // component that timed every pointer would let a mouse press-and-wait
+    // reach the machine (which refuses it — but the refusal is the second
+    // line of defence, not the first), and one that skipped the phase check
+    // would time a press the machine had already declined.
+    expect(SWITCHER).toMatch(/tabDragIsCoarse\(event\.pointerType\)\s*&&\s*dragRef\.current\.phase === "pressed"/);
+  });
+
+  it("clears that timer on the press, and on unmount", () => {
+    // THREE PLACES, and each is a different way a stale timer lifts a tab
+    // nobody is holding: a fresh press (the previous gesture's timer is still
+    // pending), any transition out of `pressed` (asserted in the dispatchDrag
+    // body test above), and unmount (a dispatch into a dead component).
+    expect(callsTo(SWITCHER, "clearTimeout")).toHaveLength(1);
+    const from = SWITCHER.indexOf("const beginTabDrag");
+    const clears = callsTo(SWITCHER, "clearHoldTimer").filter((call) => call.pos > from);
+    expect(clears.length).toBeGreaterThan(0);
+    // The unmount effect returns the clearer itself — the form that cannot
+    // forget to call it.
+    expect(SWITCHER).toMatch(/useEffect\(\(\) => clearHoldTimer, \[clearHoldTimer\]\)/);
   });
 
   it("switches through the machine's click, never around it", () => {
@@ -1117,6 +1317,10 @@ describe("the wiring seams — the component RUNS these decisions, not merely na
       "const step = nextTabDrag(dragRef.current, event);",
       "dragRef.current = step.state;",
       "setDragState(step.state);",
+      // FIVE since 2026-09-16 (mobile-touch task): a pending long-press timer
+      // outlives only a press that is still a press. A stale one firing later
+      // lifts a tab the user let go of.
+      "if (step.state.phase !== \"pressed\") clearHoldTimer();",
       "runDragEffect(step.effect);",
     ]);
   });

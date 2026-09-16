@@ -18,19 +18,37 @@
 //     `tabDragBlocksContextMenu` and the `context-menu` event below)
 //
 // HOW THE LONG PRESS IS SHARED WITH THAT MENU, which is the question a tablet
-// will answer badly if it is left implicit. On touch, a stationary long press
-// is the platform's context-menu gesture, and it is also the obvious reading of
-// the owner's words "click and hold". This module resolves the collision by
-// ARMING ON MOVEMENT AND ONLY ON MOVEMENT: there is no timer here and no
-// injected clock, so a press that does not move is, and stays, merely
-// `pressed` — nothing is lifted, nothing is previewed, and
-// `tabDragBlocksContextMenu` says the menu may open. A press that HAS moved
-// past the arm distance owns the gesture and blocks the menu instead. The
-// consequence, stated so it is a choice rather than a discovery: "hold still
-// and the tab picks itself up" is NOT a thing this gesture does, on any input
-// device. You hold and you MOVE. tests/tab-drag.test.ts asserts the absence of
-// a clock directly from this file's source, because a timer-armed drag would
-// pass every behavioural test in that file and only fail on a tablet.
+// will answer badly if it is left implicit. THE ANSWER IS NOW DIFFERENT PER
+// DEVICE (mobile-touch task, 2026-09-16) — the original, single rule is kept
+// verbatim below because half of it still stands:
+//
+//   * A FINE POINTER (mouse, pen, unknown) ARMS ON MOVEMENT AND ONLY ON
+//     MOVEMENT, exactly as before: a press that does not move is, and stays,
+//     merely `pressed`. "Hold still and the tab picks itself up" is NOT a
+//     thing this gesture does with a mouse. You hold and you MOVE.
+//
+//   * A COARSE POINTER (a finger) ARMS ON A LONG PRESS, and a press that MOVES
+//     first is given away to the strip's scroller. This inverts the fine-
+//     pointer rule, and it has to: the strip is `overflowX: auto` because pages
+//     are unbounded, so on a phone a horizontal finger drag across a tab is
+//     overwhelmingly "scroll this strip", not "reorder this page". Arming on
+//     movement meant those two gestures were the SAME gesture, and reordering
+//     won every time — which is why every tab carried `touch-action: none` and
+//     a touch user could not scroll the strip by dragging a tab at all.
+//
+// STILL NO CLOCK IN THIS FILE, which tests/tab-drag.test.ts asserts directly
+// from this source. The long press is a `hold` EVENT the caller delivers when
+// its own timer fires (TAB_DRAG_LONG_PRESS_MS below is the duration, a number,
+// not a read of one) — the same shape as every other event here, so the whole
+// rule stays replayable and no timer hides inside a transition.
+//
+// THE COST TO THE TAB CONTEXT MENU, named rather than discovered: a stationary
+// long press on touch was the platform's context-menu gesture and this takes
+// it. `tabDragBlocksContextMenu` therefore starts refusing the menu once the
+// hold lands, so on a phone the per-tab menu is reachable by the keyboard
+// context-menu key, by a right-click on a device that has one, and through the
+// Pages popover — not by holding a tab. That is a trade the owner may want to
+// revisit; it is not a thing that fell out.
 //
 // WHY A MODULE AND NOT HANDLERS IN THE .tsx — the same reason canvas/pages/
 // page-tabs-fit.ts, canvas/pages/chrome-dock.ts and canvas/dock/squeeze.ts give
@@ -82,6 +100,59 @@
 export const TAB_DRAG_ARM_PX = 4;
 
 /**
+ * How long a FINGER must rest on a tab before it picks the tab up.
+ *
+ * 400ms, and the number is chosen against the platform's own long press rather
+ * than for feel: the touch context-menu gesture is ~500ms on both major
+ * engines, and a reorder that armed AFTER it would race a menu the user never
+ * asked for. Arming first is what makes `tabDragBlocksContextMenu`'s refusal
+ * (see there) decisive instead of a coin toss.
+ *
+ * NOT A CLOCK. This module reads no time and never will (see the file header);
+ * the number travels OUT to the caller, which owns the `setTimeout` and sends
+ * a `hold` event when it fires. Exported for exactly that reason — a duration
+ * written inline in the component is a decision no test can read, which is the
+ * same argument every other constant here makes for itself.
+ *
+ * NOT TUNED IN A BROWSER. Nothing in this repo has been.
+ */
+export const TAB_DRAG_LONG_PRESS_MS = 400;
+
+/**
+ * How far a FINGER may wander during that wait before the press is given away
+ * to the strip's scroller entirely.
+ *
+ * TEN PIXELS, not TAB_DRAG_ARM_PX's four, and the two numbers answer opposite
+ * questions — which is why this is a second constant and not a reuse. Four
+ * pixels is "has this mouse moved ENOUGH to mean a drag"; ten is "has this
+ * finger moved enough to mean the user is NOT holding still", and a finger
+ * resting on glass jitters several pixels without any intent behind it. Set it
+ * as low as the arm distance and an ordinary tap-and-hold would be handed to
+ * the scroller before the hold ever landed.
+ *
+ * ABSOLUTE HORIZONTAL TRAVEL, like TAB_DRAG_ARM_PX, because this module has no
+ * `y` — see that constant's own note on the cost.
+ */
+export const TAB_DRAG_COARSE_SLOP_PX = 10;
+
+/**
+ * Which `PointerEvent.pointerType` values get the long-press rule.
+ *
+ * 'touch' alone. A pen is a fine pointer that happens not to be a mouse — it
+ * points precisely, its user is resting a hand on the screen, and taking their
+ * press away after 400ms would be a surprise. An absent/unknown pointerType is
+ * fine too (the pre-mobile behaviour, so nothing that already worked moves).
+ *
+ * PER EVENT, NOT PER DEVICE — deliberately not a `(pointer: coarse)` media
+ * query. A touchscreen laptop delivers both kinds to the same tab strip, and a
+ * device-level answer is wrong for half of them. (canvas-editor's
+ * `bbthreadDividerMargin` states the same rule at length for the canvas side.)
+ */
+export function tabDragIsCoarse(pointerType: string | undefined): boolean {
+  return pointerType === "touch";
+}
+
+/**
  * Which `PointerEvent.button` may begin a gesture on a tab.
  *
  * ZERO — the PRIMARY button (left mouse, a touch contact, a pen tip). Every
@@ -101,25 +172,43 @@ export const TAB_DRAG_PRIMARY_BUTTON = 0;
 /**
  * What the tab tells the browser about touch gestures that start on it.
  *
- * `none` — the browser may not interpret a touch here as a scroll or a zoom, so
- * every move is delivered to us instead of being replaced by a `pointercancel`
- * partway through the drag.
+ * `pan-x` NORMALLY, `none` ONCE A DRAG IS IN FLIGHT — see `tabDragTouchAction`
+ * below, which picks between them; these two constants are just the values.
  *
- * THE COST, AND IT IS REAL: the strip itself is `overflowX: auto`
- * (PageSwitcher.tsx — pages are unbounded, so the strip scrolls rather than
- * wrapping), and with `none` on every tab a touch user can no longer scroll
- * that strip by dragging a TAB; they must drag the strip's own background, or
- * use the Pages popover, which lists every page at any width and is reached
- * from bb's command palette ("Canvas: go to page…") now that its toolbar button
- * has gone. `pan-x` was the
- * alternative and is strictly worse for this gesture: it hands a horizontal
- * finger drag to the scroller, which is precisely the theft this exists to
- * prevent, and horizontal is the only direction this drag has.
+ * THE VALUE WAS A FLAT `none` UNTIL 2026-09-16 and its own note recorded the
+ * cost: the strip is `overflowX: auto` (pages are unbounded, so it scrolls
+ * rather than wrapping), and with `none` on every tab a touch user could not
+ * scroll that strip by dragging a TAB at all — only by finding its background.
+ * That note also rejected `pan-x` outright, on the grounds that it "hands a
+ * horizontal finger drag to the scroller, which is precisely the theft this
+ * exists to prevent". What changed is not the reasoning but the GESTURE: with
+ * the long press above, a horizontal finger drag is no longer how a reorder
+ * starts, so handing it to the scroller costs the reorder nothing and buys back
+ * the scrolling. `none` is still what a LIVE drag needs, for the original
+ * reason — every move must reach us rather than becoming a `pointercancel`.
  *
- * INFERENCE FROM THE `touch-action` SPEC, NOT AN OBSERVATION — no browser has
- * been pointed at this.
+ * THE HONEST GAP, because it decides whether this works at all and cannot be
+ * closed here: `touch-action` is evaluated by the compositor when the touch
+ * BEGINS, so a tab that starts a gesture as `pan-x` and becomes `none` 400ms
+ * later may or may not have its subsequent moves delivered — engines differ,
+ * and NO BROWSER HAS BEEN POINTED AT THIS (nothing in this repo has). If an
+ * engine refuses to re-latch, the drag that the hold armed is taken away as a
+ * `pointercancel`, which this machine already treats as `cancel`: the tab is
+ * put back, nothing is written to the document, and the strip scrolls. That is
+ * the pre-2026-09-16 behaviour minus the reorder, not a corruption — but it
+ * would mean touch reordering silently does not work, and it is the FIRST
+ * thing to check on a real phone.
  */
-export const TAB_DRAG_TOUCH_ACTION = "none" as const;
+export const TAB_DRAG_TOUCH_ACTION = "pan-x" as const;
+export const TAB_DRAG_DRAGGING_TOUCH_ACTION = "none" as const;
+
+/** Which of the two a tab wears right now. A drag in flight ANYWHERE in the
+ * strip puts every tab on `none`, not just the lifted one: the pointer travels
+ * across its neighbours, and a neighbour still advertising `pan-x` is a
+ * scroller waiting to take the gesture mid-drag. */
+export function tabDragTouchAction(dragging: boolean): typeof TAB_DRAG_TOUCH_ACTION | typeof TAB_DRAG_DRAGGING_TOUCH_ACTION {
+  return dragging ? TAB_DRAG_DRAGGING_TOUCH_ACTION : TAB_DRAG_TOUCH_ACTION;
+}
 
 /**
  * Whether the tab's own label can be text-selected.
@@ -210,6 +299,12 @@ export type TabDragState =
       readonly id: string;
       readonly pointerId: number;
       readonly startX: number;
+      /** Is this a FINGER (see `tabDragIsCoarse`)? Decides which of the two
+       * arming rules this press lives under — the long press, or movement —
+       * and is captured at the `down` rather than re-derived later, because
+       * `move`/`hold` carry no device of their own and a gesture must not be
+       * able to change its mind about what it is halfway through. */
+      readonly coarse: boolean;
     }
   | {
       readonly phase: "dragging";
@@ -233,12 +328,24 @@ export type TabDragEvent =
       readonly pointerId: number;
       readonly button: number;
       readonly x: number;
+      /** Raw `PointerEvent.pointerType`. OPTIONAL — omitted is "unknown
+       * device", which `tabDragIsCoarse` reads as fine, i.e. the exact
+       * pre-mobile behaviour, so every pre-2026-09-16 test script keeps
+       * meaning what it meant. */
+      readonly pointerType?: string;
     }
   | { readonly type: "move"; readonly pointerId: number; readonly x: number }
   | { readonly type: "up"; readonly pointerId: number; readonly x: number }
   /** Escape, `pointercancel`, `lostpointercapture`, or the window losing focus.
    * Deliberately ONE event for all four: they mean the same thing to this
    * machine, and four near-identical branches is how they drift apart. */
+  /** THE CALLER'S LONG-PRESS TIMER FIRED (mobile-touch task) — it has been
+   * TAB_DRAG_LONG_PRESS_MS since the press, and the finger is still down. The
+   * caller sends this blind; every judgement about whether it means anything
+   * (right pointer? right phase? a finger at all?) is made in the transition
+   * below, so a stale timer from an abandoned gesture is inert rather than
+   * something the caller has to remember to clear correctly. */
+  | { readonly type: "hold"; readonly pointerId: number }
   | { readonly type: "cancel" }
   /**
    * A CONTEXT MENU HAS TAKEN THIS GESTURE — a right-click, a touch long press,
@@ -320,6 +427,7 @@ export function nextTabDrag(
           id: event.id,
           pointerId: event.pointerId,
           startX: event.x,
+          coarse: tabDragIsCoarse(event.pointerType),
         },
         effect: NONE,
       };
@@ -337,6 +445,17 @@ export function nextTabDrag(
       if (state.phase === "dragging") {
         return { state: { ...state, pointerX: event.x }, effect: NONE };
       }
+      // A FINGER THAT MOVES IS SCROLLING, NOT REORDERING (mobile-touch task).
+      // Past the slop it has said so, and the press is given away outright:
+      // `suppress`, not `idle`, because on the engines that DO keep delivering
+      // pointer events through a pan the release still produces a `click`, and
+      // that click would switch the page the user was only scrolling past.
+      // Under the slop it is still holding still, so the hold stays possible.
+      if (state.coarse) {
+        return Math.abs(event.x - state.startX) <= TAB_DRAG_COARSE_SLOP_PX
+          ? { state, effect: NONE }
+          : { state: { phase: "suppress" }, effect: NONE };
+      }
       if (Math.abs(event.x - state.startX) <= TAB_DRAG_ARM_PX) {
         return { state, effect: NONE };
       }
@@ -348,6 +467,34 @@ export function nextTabDrag(
           pointerId: state.pointerId,
           startX: state.startX,
           pointerX: event.x,
+        },
+        effect: NONE,
+      };
+    }
+
+    case "hold": {
+      // INERT UNLESS IT IS THIS GESTURE'S OWN HOLD, ON A FINGER, STILL
+      // PRESSED. Every other case is a timer the caller did not have to
+      // remember to cancel: the press already became a drag, or was given to
+      // the scroller, or ended, or belonged to another pointer entirely.
+      if (state.phase !== "pressed") return { state, effect: NONE };
+      if (event.pointerId !== state.pointerId) return { state, effect: NONE };
+      // A MOUSE HELD STILL DOES NOT LIFT A TAB. The fine-pointer rule is
+      // unchanged and this is where that promise is kept — a caller that sets
+      // a timer for every pointer, not just fingers, still cannot change what
+      // a mouse press means.
+      if (!state.coarse) return { state, effect: NONE };
+      return {
+        state: {
+          phase: "dragging",
+          index: state.index,
+          id: state.id,
+          pointerId: state.pointerId,
+          startX: state.startX,
+          // The tab lifts UNDER THE FINGER, having travelled nowhere: the hold
+          // is by definition stationary, so the preview starts at zero offset
+          // and the first move after it steers from there.
+          pointerX: state.startX,
         },
         effect: NONE,
       };
@@ -479,11 +626,19 @@ export function tabDragTakesMeasurement(before: TabDragState, after: TabDragStat
  *   * `dragging` -> BLOCK. A menu over a tab that is currently following the
  *     pointer is both a broken-looking overlay and a second, unasked-for effect
  *     from one gesture.
- *   * everything else -> ALLOW. A stationary long press is only ever `pressed`
- *     (this module has no timer, see the file header), so the touch
- *     context-menu gesture is uncontested; a plain right-click never presses at
- *     all (TAB_DRAG_PRIMARY_BUTTON); and `suppress` is already past the
- *     release.
+ *   * everything else -> ALLOW. A plain right-click never presses at all
+ *     (TAB_DRAG_PRIMARY_BUTTON), and `suppress` is already past the release.
+ *
+ * WHAT CHANGED ON 2026-09-16 (mobile-touch task), because this paragraph used
+ * to say the opposite and the RULE below is untouched while its CONSEQUENCE
+ * inverted: it read "a stationary long press is only ever `pressed` (this
+ * module has no timer), so the touch context-menu gesture is uncontested". A
+ * stationary long press on a FINGER is now exactly what reaches `dragging`
+ * (via the `hold` event), and at TAB_DRAG_LONG_PRESS_MS — deliberately shorter
+ * than the platform's own ~500ms menu gesture — it gets there first. So the
+ * touch context-menu gesture is no longer uncontested; it is lost. See the
+ * file header's "THE COST TO THE TAB CONTEXT MENU" for where the menu still
+ * is. A mouse right-click and the keyboard context-menu key are untouched.
  *
  * What a caller DOES with `true` is the caller's business; this only says
  * whether a reorder is in progress. What the SHIPPED caller does, stated so the
@@ -608,7 +763,7 @@ export function showsDropLineAt(presentation: TabDragPresentation, slot: number)
 export interface TabDragPaint {
   readonly transform: string;
   readonly opacity: number;
-  readonly touchAction: typeof TAB_DRAG_TOUCH_ACTION;
+  readonly touchAction: ReturnType<typeof tabDragTouchAction>;
   readonly userSelect: typeof TAB_DRAG_USER_SELECT;
 }
 
@@ -630,7 +785,7 @@ export function tabDragPaint(
   return {
     transform: dragged ? `translateX(${presentation.translateX}px)` : "none",
     opacity: dragged ? TAB_DRAGGED_OPACITY : 1,
-    touchAction: TAB_DRAG_TOUCH_ACTION,
+    touchAction: tabDragTouchAction(presentation.draggedIndex !== null),
     userSelect: TAB_DRAG_USER_SELECT,
   };
 }
