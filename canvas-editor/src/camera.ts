@@ -61,6 +61,32 @@ export function zoomAboutPoint(camera: Camera, screenPoint: { readonly x: number
   }
 }
 
+/** Multiplicative step used by discrete zoom-button UI (manual zoom in/out
+ * controls) — NOT the continuous wheel/pinch curve above, which has its own
+ * per-tick clamp (ZOOM_DELTA_CLAMP). 1.25 (a 25% step) is a plain UI choice,
+ * unrelated to tldraw's zoomSteps array (this seam doesn't replicate that
+ * discrete-step behavior — see the MIN_ZOOM/MAX_ZOOM comment above). */
+export const ZOOM_STEP_FACTOR = 1.25
+
+/**
+ * Sets `camera`'s zoom to the ABSOLUTE level `z` (clamped to [MIN_ZOOM,
+ * MAX_ZOOM]) while keeping the WORLD point currently under `screenPoint`
+ * fixed under it — the same invariant as `zoomAboutPoint`, just parameterized
+ * by a target zoom level instead of a multiplicative factor (what a "reset to
+ * 100%" or "set zoom to N%" control needs, where the caller knows the level
+ * it wants, not the factor from the current one).
+ *
+ * Implemented ON TOP OF `zoomAboutPoint` rather than re-deriving the xy
+ * correction: the factor that lands exactly on `clampZoom(z)` regardless of
+ * `camera.z` is `clampZoom(z) / camera.z` (clampZoom is idempotent, so
+ * `zoomAboutPoint`'s own `clampZoom(camera.z * factor)` collapses back to
+ * `clampZoom(z)` exactly) — one formula, one place a sign or clamp-order bug
+ * could hide.
+ */
+export function zoomToLevelAbout(camera: Camera, screenPoint: { readonly x: number; readonly y: number }, z: number): Camera {
+  return zoomAboutPoint(camera, screenPoint, clampZoom(z) / camera.z)
+}
+
 // Plain-wheel pan speed and the per-tick zoom-delta clamp below both mirror
 // tldraw's defaults (DEFAULT_CAMERA_OPTIONS: panSpeed: 1, zoomSpeed: 1 — the
 // installed @tldraw editor package, src/lib/constants.ts) at speed 1 (i.e.

@@ -23,10 +23,12 @@ document; the plugin backend is the authoritative peer and persists it.
   (`transcript.ts`, `transcript-view.ts`, `transcript-ui.tsx`), the header ↔
   body seam (`panel-bus.ts`), and the frontend mount (`CanvasPanel.tsx`) with
   its page resolution and presence publisher. The canvas controls (tools,
-  shortcuts, toolbar, style panel, text editing) come from the shared
-  `@ensembleworks/canvas-ui` package, the same one the EnsembleWorks web app
-  mounts; this plugin supplies the bb transport, theme mapping, page tabs and
-  dock.
+  shortcuts, toolbar, style panel, text editing, zoom controls) come from the
+  shared `@ensembleworks/canvas-ui` package, the same one the EnsembleWorks
+  web app mounts; this plugin supplies the bb transport, theme mapping, page
+  tabs and dock. `panel/session-view.tsx` docks the manual zoom controls
+  (zoom out / level readout that resets to 100% / zoom in) to the stage's
+  bottom-right corner, opposite the left-centred tool rail.
 - `transport.ts` — the client half of the transport: outbound frames over rpc,
   inbound frames off `bb.realtime`.
 - `app.tsx` — registers the full-bleed **Canvas** nav panel, its sidebar count

@@ -3,7 +3,7 @@ import { useMemo, type ComponentProps, type ReactNode, type RefObject } from "re
 import type { EditorState } from "@ensembleworks/canvas-editor";
 import type { CanvasDocument } from "@ensembleworks/canvas-model";
 import { Cursors, type ViewportSize } from "@ensembleworks/canvas-react";
-import { CanvasSurface, Toolbar, TOOL_ORDER, type CanvasSession } from "@ensembleworks/canvas-ui";
+import { CanvasSurface, Toolbar, TOOL_ORDER, ZoomControls, type CanvasSession } from "@ensembleworks/canvas-ui";
 
 // bb-thread-frame task: 'bbthread' is a plugin-only tool — the web app's
 // TOOL_ORDER (canvas-ui's Toolbar.tsx) deliberately omits it, so this is the
@@ -16,6 +16,7 @@ import {
   chromeTabRowStyle,
   chromeToolbarStyle,
   chromeWrapperStyle,
+  chromeZoomStyle,
 } from "./shared.js";
 
 type CursorPresence = ComponentProps<typeof Cursors>["presence"];
@@ -61,6 +62,13 @@ export function SessionView(props: SessionViewProps) {
         <div data-canvas-stage className="relative flex min-h-0 flex-1 flex-col" style={chromeStageStyle}>
           <CanvasViewport {...props} />
           <CanvasChrome {...props} />
+          <div data-canvas-zoom-controls style={chromeZoomStyle}>
+            <ZoomControls
+              camera={props.editorState.camera}
+              viewportSize={props.viewportSize}
+              onSetCamera={(c) => props.canvas.dispatch([{ type: "SetCamera", x: c.x, y: c.y, z: c.z }])}
+            />
+          </div>
         </div>
         {pageSwitcher.overlays}
       </div>
