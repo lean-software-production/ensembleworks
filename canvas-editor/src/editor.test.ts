@@ -1320,4 +1320,42 @@ const normalize = (m: CanvasDocument) => ({
   console.log('ok: MoveArrowTerminal on a vanished arrow is a total no-op')
 }
 
+// ============================================================================
+// 20. ReparentShapes PRESERVES WORLD POSITION (frame-membership task). A bare
+//     tree-edge rewrite would teleport the shape by the new parent's whole
+//     transform, because x/y/rotation are expressed in the PARENT's frame --
+//     so the envelope is re-expressed on the way in (and restored on undo).
+//     Checked through a ROTATED parent, the case a naive "subtract the
+//     parent's x/y" fix silently gets wrong.
+// ============================================================================
+{
+  const { editor } = makeEditor(1n)
+  const HALF_PI = Math.PI / 2
+  editor.apply({ type: 'CreateShape', shape: shape('shape:frame', { kind: 'frame', x: 300, y: 200, rotation: HALF_PI, props: { w: 400, h: 400 } }) })
+  editor.apply({ type: 'CreateShape', shape: shape('shape:kid', { kind: 'geo', x: 40, y: 60, props: { w: 100, h: 100 } }) })
+
+  const live: CanvasDocument = {
+    pages: [], shapes: [], bindings: [], assets: [], assetById: new Map(),
+    byId: { get: (id: string) => editor.doc.getShape(id) } as unknown as CanvasDocument['byId'],
+  }
+  const before = worldTransform(live, editor.doc.getShape('shape:kid')!)
+
+  editor.apply({ type: 'ReparentShapes', ids: ['shape:kid'], parentId: 'shape:frame' })
+  const moved = editor.doc.getShape('shape:kid')!
+  assert.equal(moved.parentId, 'shape:frame', 'sanity: the tree edge did move')
+  const after = worldTransform(live, moved)
+  assert.ok(Math.abs(after.x - before.x) < 1e-9 && Math.abs(after.y - before.y) < 1e-9,
+    `world position must survive the reparent: before ${JSON.stringify(before)}, after ${JSON.stringify(after)}`)
+  assert.ok(Math.abs(after.rotation - before.rotation) < 1e-9, 'world rotation must survive the reparent too')
+  assert.ok(Math.abs(moved.x - 40) > 1e-6 || Math.abs(moved.y - 60) > 1e-6,
+    'sanity: the LOCAL envelope really was re-expressed (a no-op rewrite would prove nothing)')
+
+  editor.undo()
+  const restored = editor.doc.getShape('shape:kid')!
+  assert.equal(restored.parentId, 'page:p', 'undo restores the old parent')
+  assert.equal(restored.x, 40, 'undo restores the old LOCAL x, not the re-expressed one')
+  assert.equal(restored.y, 60, 'undo restores the old LOCAL y')
+  console.log('ok: ReparentShapes preserves world position through a rotated parent, and undo restores the original local envelope')
+}
+
 console.log('ok: canvas-editor editor + intents')

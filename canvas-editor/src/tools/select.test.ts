@@ -1,7 +1,7 @@
 // Run: bun src/tools/select.test.ts
 import assert from 'node:assert/strict'
 import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
-import type { Shape } from '@ensembleworks/canvas-model'
+import { centroid, worldBounds, type CanvasDocument, type Shape } from '@ensembleworks/canvas-model'
 import { Editor } from '../editor.js'
 import { run, script } from '../script.js'
 import { createSelectTool } from './select.js'
@@ -503,6 +503,138 @@ function setup() {
   assert.equal(a.x, 300, 'shift-constrained drag still applies the full delta on the dominant (x) axis')
   assert.equal(a.y, 0, 'a snap target close to the LOCKED axis must never reintroduce movement there')
   console.log('ok: shift-constrained drag holds the locked axis at zero even next to a snap target')
+}
+
+// ============================================================================
+// FRAME MEMBERSHIP ON DROP (frame-membership task) -- the contracts in
+// @ensembleworks/interaction-contracts pin the four user-visible rules
+// (drag-in reparents, drag-out releases, a moved frame keeps its children,
+// a bbthread's pane never captures); these unit tests pin the cases a seeded
+// contract gesture is a clumsy vehicle for: nested frames, multi-select, the
+// cycle guard, and the no-visual-jump guarantee the reparent rides on.
+// ============================================================================
+
+// Outer 600x600 frame at the origin, an inner 300x300 frame nested inside it
+// at the outer frame's local (100,100) -- i.e. world [100,400]x[100,400] --
+// and a loose geo parked well clear at [900,1000]x[100,200].
+function nestedFrameSetup() {
+  const doc = LoroCanvasDoc.create({ peerId: 1n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape(kindShape('frame', 'shape:outer', 0, 0, 600, 600))
+  doc.putShape({ ...kindShape('frame', 'shape:inner', 100, 100, 300, 300), parentId: 'shape:outer' } as Shape)
+  doc.putShape(geoShape('shape:loose', 900, 100))
+  doc.putShape(geoShape('shape:loose2', 900, 300))
+  doc.commit()
+  const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+  const ctx = createToolContext(editor)
+  return { doc, editor, ctx, tool: createSelectTool(ctx) }
+}
+
+const centreOf = (doc: LoroCanvasDoc, id: string) => {
+  const live = { pages: [], shapes: [], bindings: [], assets: [], assetById: new Map(), byId: { get: (i: string) => doc.getShape(i) } } as unknown as CanvasDocument
+  return centroid(worldBounds(live, doc.getShape(id)!))
+}
+
+// ============================================================================
+// 25. DEEPEST FRAME WINS: dropping a shape where two nested frames both
+//    contain its centre parents it to the INNER one, not the outer.
+// ============================================================================
+{
+  const { doc, editor, tool } = nestedFrameSetup()
+  // Grab shape:loose dead-centre (950,150) and drop its centre at (250,250) --
+  // inside the inner frame, which is itself inside the outer.
+  run(editor, tool, script().down(950, 150).move(600, 300).move(250, 250).up().events())
+  assert.equal(doc.getShape('shape:loose')!.parentId, 'shape:inner', 'the DEEPEST containing frame takes the drop, not the outer one')
+  console.log('ok: a drop inside nested frames lands in the deepest one')
+}
+
+// ============================================================================
+// 26. NO VISUAL JUMP: the reparent on pointerup must not move the shape. Its
+//    world centre immediately BEFORE the up event and immediately after must
+//    be identical -- x/y live in the parent's frame, so a bare tree-edge
+//    rewrite would teleport it by the new parent's whole transform.
+// ============================================================================
+{
+  const { doc, editor, tool } = nestedFrameSetup()
+  const moves = script().down(950, 150).move(600, 300).move(250, 250).events()
+  let state: unknown = tool.initialState
+  for (const event of moves) {
+    const r = tool.onEvent(state as never, event)
+    state = r.state
+    if (r.intents.length > 0) editor.applyAll(r.intents)
+  }
+  const beforeUp = centreOf(doc, 'shape:loose')
+  const up = tool.onEvent(state as never, script().down(0, 0).up().events()[1]!)
+  if (up.intents.length > 0) editor.applyAll(up.intents)
+  assert.equal(doc.getShape('shape:loose')!.parentId, 'shape:inner', 'sanity: the pointerup really did reparent')
+  const afterUp = centreOf(doc, 'shape:loose')
+  assert.ok(Math.abs(afterUp.x - beforeUp.x) < 1e-9 && Math.abs(afterUp.y - beforeUp.y) < 1e-9,
+    `the drop must not move the shape: before ${JSON.stringify(beforeUp)}, after ${JSON.stringify(afterUp)}`)
+  console.log('ok: a drop-into-frame reparent leaves the shape exactly where it was drawn')
+}
+
+// ============================================================================
+// 27. MULTI-SELECT: two shapes dragged together into one frame land as ONE
+//    ReparentShapes intent (grouped by target), and both become its children.
+// ============================================================================
+{
+  const { doc, editor, ctx } = nestedFrameSetup()
+  const tool = createSelectTool(ctx)
+  editor.apply({ type: 'SetSelection', ids: ['shape:loose', 'shape:loose2'] })
+  // Grab one of the two selected shapes and drag the pair left by 700 --
+  // loose's centre lands at (250,150), loose2's at (250,350): both inside the
+  // inner frame's world box [100,400]x[100,400].
+  const events = script().down(950, 150).move(600, 150).move(250, 150).events()
+  let state: unknown = tool.initialState
+  for (const event of events) {
+    const r = tool.onEvent(state as never, event)
+    state = r.state
+    if (r.intents.length > 0) editor.applyAll(r.intents)
+  }
+  const up = tool.onEvent(state as never, script().down(0, 0).up().events()[1]!)
+  const reparents = up.intents.filter((i) => i.type === 'ReparentShapes')
+  assert.equal(reparents.length, 1, `two shapes dropped into ONE frame must emit one grouped ReparentShapes, got ${JSON.stringify(up.intents)}`)
+  editor.applyAll(up.intents)
+  assert.equal(doc.getShape('shape:loose')!.parentId, 'shape:inner')
+  assert.equal(doc.getShape('shape:loose2')!.parentId, 'shape:inner')
+  console.log('ok: a multi-shape drop into one frame emits a single grouped ReparentShapes')
+}
+
+// ============================================================================
+// 28. A FRAME IS NEVER DROPPED INTO ITS OWN DESCENDANT: dragging the outer
+//    frame so its centre sits over its own inner child frame leaves it on the
+//    page -- the drag's excludedIds keep a moving shape's own descendants out
+//    of the candidate set (and editor.ts's canReparent is the second net).
+// ============================================================================
+{
+  const { doc, editor, tool } = nestedFrameSetup()
+  // Grab the outer frame by its left border band (its interior is hollow) and
+  // shove it right so its centre passes over the inner frame it carries.
+  run(editor, tool, script().down(2, 300).move(102, 300).move(202, 300).up().events())
+  const outer = doc.getShape('shape:outer')!
+  assert.equal(outer.parentId, 'page:p', 'the outer frame stays on the page -- never reparented under its own child')
+  assert.equal(doc.getShape('shape:inner')!.parentId, 'shape:outer', 'and the inner frame is still its child')
+  assert.equal(outer.x, 200, 'sanity: the frame really did move (otherwise this proves nothing)')
+  console.log('ok: a dragged frame is never reparented into its own descendant')
+}
+
+// ============================================================================
+// 29. BBTHREAD WORKSPACE CAPTURES: the positive half of
+//    bbthread-pane-region-does-not-capture -- a drop into the hollow
+//    workspace (the left 2/3) DOES make the shape a child.
+// ============================================================================
+{
+  const doc = LoroCanvasDoc.create({ peerId: 1n })
+  doc.putPage({ id: 'page:p', name: 'P' })
+  doc.putShape(kindShape('bbthread', 'shape:bb', 0, 0, 900, 600))
+  doc.putShape(geoShape('shape:loose', 1200, 100))
+  doc.commit()
+  const editor = new Editor({ doc, now: () => 0, random: FIXED_RANDOM, pageId: 'page:p' })
+  const tool = createSelectTool(createToolContext(editor))
+  // Centre from (1250,150) to (300,300): well inside the workspace (x < 600).
+  run(editor, tool, script().down(1250, 150).move(700, 200).move(300, 300).up().events())
+  assert.equal(doc.getShape('shape:loose')!.parentId, 'shape:bb', 'a drop into the bbthread WORKSPACE captures the shape')
+  console.log('ok: a drop into a bbthread workspace makes the shape its child')
 }
 
 console.log('ok: select tool FSM (select/marquee/translate)')

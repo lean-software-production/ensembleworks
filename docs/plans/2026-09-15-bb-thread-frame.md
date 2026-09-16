@@ -5,6 +5,17 @@ Owner decisions (2026-09-15):
 - The right pane renders the host `ThreadChat` with `variant: "timeline"` (read-only, no composer).
 - A frame binds to a thread by picking an existing project thread OR spawning a new one seeded from its child shapes' text.
 - Membership is creation-time capture only (as plain frames today). Drag-in/out reparenting is a follow-up.
+  **DONE (2026-09-16, frame-membership task):** the follow-up landed. A completed select-tool translate now
+  settles membership on pointerup (`canvas-editor/src/tools/select.ts`'s `dropTargetIntents`): each dragged
+  shape joins the DEEPEST frame-like shape whose membership region contains its world-bounds centre, or is
+  released to the page when it has left one. For `bbthread` the membership region is the WORKSPACE
+  (`bbthreadWorkspaceLocalBounds`), never the thread pane. `ReparentShapes` now re-expresses the moved
+  shape's envelope in its new parent's frame, so a reparent never moves the shape on screen (and undo
+  restores the original local envelope). Contracts: `drag-into-frame-reparents`,
+  `drag-out-of-frame-releases-to-page`, `frame-keeps-its-children-when-moved`,
+  `bbthread-pane-region-does-not-capture`. NOT done: a drop-target highlight on the frame under the drag
+  (the plan's optional visual) — deliberately deferred rather than shipped unverified, since no browser is
+  available to this task.
 - Agent access to the frame's children: a minimal `bb canvas thread-frames` CLI read.
 - The old attach-thread / badge / thread-card / thread-overview code is deleted; kv link data is thrown away, no migration.
 

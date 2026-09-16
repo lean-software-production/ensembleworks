@@ -31,10 +31,12 @@ function countingBuilder() {
 
 // ============================================================================
 // 1. LAZY CADENCE (the load-bearing assertion): a 50-move drag-translate —
-//    which COMMITS once per pointermove — triggers ZERO index rebuilds while
-//    nothing queries the context mid-gesture, and exactly ONE rebuild on the
-//    first query afterwards. An eager rebuild-in-listener implementation
-//    fails this with builds ≈ 51.
+//    which COMMITS once per pointermove — triggers ZERO index rebuilds for
+//    all 50 of those moves; the gesture's only rebuild is the single one its
+//    POINTERUP costs (select.ts's frame-membership drop pass reads a fresh
+//    ctx.snapshot() there, deliberately once per gesture — see that file's
+//    `dropTargetIntents`), and a query afterwards then costs nothing more. An
+//    eager rebuild-in-listener implementation fails this with builds ≈ 51.
 // ============================================================================
 {
   const { editor } = setup()
@@ -48,10 +50,10 @@ function countingBuilder() {
   // each committing a TranslateShapes, none querying.
   const events = script().down(50, 50).move(150, 150, { steps: 49 }).up().events()
   run(editor, tool, events)
-  assert.equal(counter.builds, 1, 'a 50-move drag (50 per-move commits) triggers ZERO rebuilds — the listener only marks dirty')
+  assert.equal(counter.builds, 2, 'a 50-move drag costs ONE rebuild in total — the pointerup drop pass\'s single snapshot() read, never one per move')
 
   const hit = ctx.hitTestTopmost({ x: 150, y: 150 }) // shape:a moved +100/+100 → now [100,200]²
-  assert.equal(counter.builds, 2, 'the FIRST query after the dirty gesture triggers exactly ONE rebuild')
+  assert.equal(counter.builds, 2, 'a query after that gesture reuses the pair the pointerup already rebuilt — no second rebuild')
   assert.equal(hit, 'shape:a', 'and that rebuild sees the post-drag doc state')
 
   ctx.hitTestTopmost({ x: 150, y: 150 })
@@ -144,8 +146,10 @@ function countingBuilder() {
 
 // ============================================================================
 // 5. index() rebuilt lazily WITH snapshot() during an unqueried multi-commit
-//    drag: zero rebuilds mid-gesture, exactly one on the first post-drag
-//    query, whether that first query is index() or snapshot().
+//    drag: zero rebuilds across the 50 committing MOVES, exactly one for the
+//    whole gesture (paid at pointerup by select.ts's drop pass — see test 1),
+//    and none again on the next read, whether that read is index() or
+//    snapshot().
 // ============================================================================
 {
   const { editor } = setup()
@@ -154,10 +158,10 @@ function countingBuilder() {
   const tool = createSelectTool(ctx)
   const events = script().down(50, 50).move(150, 150, { steps: 49 }).up().events()
   run(editor, tool, events)
-  assert.equal(counter.builds, 1, 'a 50-move drag triggers ZERO index rebuilds while unqueried')
+  assert.equal(counter.builds, 2, 'a 50-move drag triggers ZERO rebuilds for its moves — just the one its pointerup drop pass reads')
 
   const idx = ctx.index()
-  assert.equal(counter.builds, 2, 'the first post-drag query — index() this time — triggers exactly ONE rebuild')
+  assert.equal(counter.builds, 2, 'the first post-drag query — index() this time — reuses that pair, no further rebuild')
   assert.ok(idx.boundsById.get('shape:a'), 'and the rebuilt index reflects the post-drag doc state')
 
   ctx.dispose()

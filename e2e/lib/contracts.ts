@@ -71,8 +71,15 @@ async function seedScene(page: Page, contract: Contract): Promise<void> {
   await page.evaluate((shapes) => {
     const ew = (window as any).__ew
     for (const s of shapes) {
+      // SceneShape.parentId (frame-membership task) — seed this shape UNDER
+      // another scene shape when it declares one (its x/y are then that
+      // parent's LOCAL coordinates), else at the page root, which is what
+      // every pre-existing scene declaration means. The ORDERING CONTRACT
+      // (interaction-contracts' SceneShape doc comment) makes this single
+      // in-array-order pass sufficient: a child seeded before its parent
+      // would land at the root instead of failing loudly.
       ew.doc.putShape({
-        id: s.id, kind: s.kind, parentId: ew.editor.pageId, index: 'a1',
+        id: s.id, kind: s.kind, parentId: s.parentId ?? ew.editor.pageId, index: 'a1',
         x: s.x, y: s.y, rotation: 0, isLocked: false, opacity: 1, meta: {},
         props: { w: s.w, h: s.h },
       })
@@ -394,6 +401,21 @@ async function sampleShapeTexts(page: Page, shapeIds: readonly string[]): Promis
   }, shapeIds)
 }
 
+// frame-membership task's Obs.shapeParent(id) doc comment (interaction-
+// contracts/src/types.ts) — same pre-sample-then-read-synchronously shape as
+// sampleShapeKinds, reading the shape's `parentId` envelope field. A shape
+// absent from the doc gets `null`. Sampled over the SAME id union
+// (seeded scene ids ∪ current selection) every other per-id sampler uses.
+async function sampleShapeParents(page: Page, shapeIds: readonly string[]): Promise<Readonly<Record<string, string | null>>> {
+  if (shapeIds.length === 0) return {}
+  return page.evaluate((ids) => {
+    const ew = (window as any).__ew
+    const out: Record<string, string | null> = {}
+    for (const id of ids) out[id] = ew.doc.getShape(id)?.parentId ?? null
+    return out
+  }, shapeIds)
+}
+
 /** One actor's pre-sampled observation values — see `pageObs`'s doc comment
  * for why these must be sampled BEFORE `contract.check` runs rather than
  * read lazily from inside an `Obs` method. */
@@ -416,6 +438,7 @@ interface ActorSample {
   readonly renderedArrowIds: readonly string[]
   readonly openStylePopover: string | null
   readonly armedFlyoutTools: readonly string[]
+  readonly parents: Readonly<Record<string, string | null>>
 }
 
 /** Samples everything ANY browser contract's `check` might read off one
@@ -466,6 +489,8 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
   // — reuses styleIds (seeded scene ids ∪ current selection) rather than a
   // separate sample pass.
   const labelOverflow = await sampleLabelOverflow(page, styleIds)
+  // frame-membership task: same union rationale as kinds/assetSrcs above.
+  const parents = await sampleShapeParents(page, styleIds)
   const hoveredId = await sampleHoveredId(page)
   const renderedArrowIds = await sampleRenderedArrowIds(page)
   const openStylePopover = await page.evaluate(() => document.querySelector('[data-style-popover]')?.getAttribute('data-style-popover') ?? null)
@@ -475,7 +500,7 @@ async function sampleActor(page: Page, sceneShapeIds: readonly string[]): Promis
       (flyout) => flyout.parentElement?.querySelector(':scope > [data-canvas-tool]')?.getAttribute('data-canvas-tool') ?? '(unattached)',
     ),
   )
-  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId, renderedArrowIds, openStylePopover, armedFlyoutTools }
+  return { spans, editingShape, editingIndicators, styles, texts, selection, shapeCount, paintOrder, kinds, assetSrcs, pageCount, bindings, shapeIds, labelOverflow, hoveredId, renderedArrowIds, openStylePopover, armedFlyoutTools, parents }
 }
 
 /** Build a synchronous, pre-sampled Obs for exactly the observation(s) a
@@ -543,6 +568,9 @@ function pageObs(
     // `editor.doc.getShape(id)?.props[key]` optional-chain) or carries no
     // such key.
     shapeProp: (id: string, key: string) => sample.styles[id]?.props[key],
+    // frame-membership task — reads the pre-sampled `parentId` envelope
+    // field (sampleShapeParents, above); null for an absent shape.
+    shapeParent: (id: string) => sample.parents[id] ?? null,
   }
 }
 
