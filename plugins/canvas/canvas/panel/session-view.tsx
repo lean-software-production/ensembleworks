@@ -52,8 +52,12 @@ export interface SessionViewProps {
 export function SessionView(props: SessionViewProps) {
   const pageSwitcher = props.pageSwitcher;
   const shapeThemeCss = useMemo(() => canvasShapeThemeCss(props.snapshot), [props.snapshot]);
+  // data-no-sidebar-swipe: BB's mobile shell opens the left sidebar on a swipe
+  // that starts anywhere its handler does not exclude (it checks
+  // `closest('[data-no-sidebar-swipe]')` among others). A leftward pan of the
+  // canvas is exactly that gesture, so the whole panel opts out.
   return (
-    <div ref={props.panelRef} data-canvas-themed style={canvasThemeStyle} className="flex h-full min-h-0 w-full flex-row">
+    <div ref={props.panelRef} data-canvas-themed data-no-sidebar-swipe="" style={canvasThemeStyle} className="flex h-full min-h-0 w-full flex-row">
       <style>{shapeThemeCss}</style>
       <div className="relative flex h-full min-h-0 min-w-0 flex-1 flex-col">
         <div data-canvas-page-tab-row style={chromeTabRowStyle}>
