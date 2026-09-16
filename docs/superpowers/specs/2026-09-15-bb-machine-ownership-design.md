@@ -108,10 +108,22 @@ header. Nothing touched the shared server.
 - **Hook stack:** `invokeHook` → `invokeWrapped` → bb's own `runEventLoopWork`
   (`AsyncLocalStorage.run`), then `decideWithinBox`. bb's ALS nests inside ours without
   clobbering it.
-- **Not yet tested:** follow-ups (`POST /threads/:id/send`), drains and Send-now. With no
-  working provider, the test thread stayed `active` and every follow-up queued behind
-  it ("still starting"). This needs a run with a real or replay provider, or a check on a dev
-  box. It matters for the read-only rule.
+- **Follow-ups, drains, Send-now (2026-09-16, second run).** With no provider, a turn hangs
+  in `active`. `POST /threads/:id/stop` puts the thread back to `idle`, which is enough to
+  exercise the dispatch paths. Results:
+  - A follow-up `POST /threads/:id/send` **passes the hook with the sender's identity**
+    (matt's follow-up was rejected, david's proceeded). The read-only rule works inline.
+  - `sendAt` in the future **queues with no hook call**. **Send-now**
+    (`POST …/queued-messages/:id/send`) then **dispatches with no hook call either**.
+    The bypass is confirmed.
+  - When a scheduled message comes due, the drain passes the hook with
+    `queuedMessage` set and **store `null`**. That was expected: no request.
+  - **The `message.queued` and `message.dispatched` events run inside the request's
+    context.** `message.queued` saw the sender (jeremy, matt), and Send-now's
+    `message.dispatched` saw the person who pressed it. So Identity *can* attribute
+    drains (record `queuedMessageId → email` on `message.queued`, and look it up when the
+    hook sees `queuedMessage`). It can also notice a Send-now by a non-starter afterwards,
+    and stop the turn plus post a notice if the guardrail is on.
 - A useful find along the way: the daemon and CLI read `BB_SERVER_HEADERS`, so an agent's
   CLI calls could carry a per-machine header later.
 
