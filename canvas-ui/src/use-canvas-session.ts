@@ -234,10 +234,21 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 			// is a no-op for every mouse, pen and synthetic event.
 			if (event.type === 'pointerdown' || event.type === 'pointermove' || event.type === 'pointerup') {
 				const mt = reduceMultiTouch(multiTouchRef.current, event)
-				multiTouchRef.current = mt.state
 				// The second finger interrupted a real one-finger gesture: unwind it
 				// through the same path blur/pointercancel use.
+				//
+				// ORDER IS LOAD-BEARING, and getting it wrong is silent. `cancelAndReset`
+				// ALSO resets the recognizer — it has to, because blur/pointercancel take
+				// the fingers away without ever delivering the pointerups it waits for —
+				// so storing `mt.state` BEFORE this call let the cancel wipe the pinch on
+				// the very event that armed it. Every later move then read as an ordinary
+				// drag: no zoom at all, and the shape under the first finger dragged
+				// around. Store the recognizer's verdict AFTER, so it is the last word on
+				// its own state. Pinned by use-canvas-session.test.ts's case (g), which
+				// exists because both FSM contracts stayed green through that bug: they
+				// drive the reducer from the runner and cannot see this wiring.
 				if (mt.cancelGesture) cancelAndReset()
+				multiTouchRef.current = mt.state
 				if (mt.pinch) editor.apply({ type: 'SetCamera', ...applyPinch(editor.get().camera, mt.pinch) })
 				if (!mt.forward) {
 					// The style panel hides mid-gesture; a pinch is one.
