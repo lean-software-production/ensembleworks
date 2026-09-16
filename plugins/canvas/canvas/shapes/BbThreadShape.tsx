@@ -60,12 +60,13 @@
 // spawn-prompt freshness, and the common case (add children, then click
 // "New thread") re-renders anyway via the pointer/selection activity that
 // usually surrounds it.
-import { memo, useEffect, useState, type CSSProperties } from "react";
+import { memo, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { childrenOf, stableStringify, type Shape } from "@ensembleworks/canvas-model";
 import type { ShapeBodyProps } from "@ensembleworks/canvas-react";
 import { ThreadChat, experimental_useSidebarThreads, useRpc } from "@get-bb/plugin-sdk/app";
 import type { rpcContract } from "../rpc-contract.js";
 import { filterThreadOptions, type ThreadOption } from "../thread-picker.js";
+import { useFollowLatest } from "./bbthread-follow.js";
 import { openBbThread } from "./bbthread-host.js";
 import {
   bbthreadPaneState,
@@ -212,6 +213,22 @@ function BbThreadShapeInner({ shape, snapshot, editorState, getText, dispatch }:
     if (interaction.interactive) setFocusRequest((n) => n + 1);
   }, [interaction.interactive]);
 
+  // Autoscroll while idle (2026-09-16 follow-up): a callback ref (state, not
+  // `useRef`) so the `useFollowLatest` effect re-attaches the moment the chat
+  // wrapper div actually mounts — it renders only in the "bound" pane state
+  // (see the wrapper below), which can appear well after this component's
+  // own first render (e.g. the thread is still loading on mount). A plain
+  // `useRef` would silently miss that transition: the effect runs once
+  // against whatever `rootRef.current` was AT EFFECT-SETUP TIME, and nothing
+  // about `enabled` flipping later re-reads it. `chatRootRef` is a fresh
+  // object each time the DOM node itself changes (memoized on `chatRootEl`,
+  // not on every render), so `useFollowLatest`'s effect — which depends on
+  // the ref object's identity — reliably re-runs exactly when the node
+  // appears, changes, or disappears.
+  const [chatRootEl, setChatRootEl] = useState<HTMLDivElement | null>(null);
+  const chatRootRef = useMemo(() => ({ current: chatRootEl }), [chatRootEl]);
+  useFollowLatest(chatRootRef, !interaction.interactive);
+
   const [options, setOptions] = useState<ThreadOption[] | null>(null);
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState(false);
@@ -330,7 +347,9 @@ function BbThreadShapeInner({ shape, snapshot, editorState, getText, dispatch }:
             </div>
           )}
           {pane.kind === "bound" && threadId !== null && (
-            <ThreadChat threadId={threadId} variant={chatVariant} layout="contained" className="bbthread-chat" focusRequest={focusRequest} />
+            <div ref={setChatRootEl} data-canvas-bbthread="chat" style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
+              <ThreadChat threadId={threadId} variant={chatVariant} layout="contained" className="bbthread-chat" focusRequest={focusRequest} />
+            </div>
           )}
         </div>
         <div

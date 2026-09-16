@@ -7,11 +7,14 @@ import type { Shape } from "@ensembleworks/canvas-model";
 import { BBTHREAD_DIVIDER_MARGIN } from "@ensembleworks/canvas-model";
 import {
   bbthreadPaneState,
+  isScrollable,
   paneInteraction,
   paneLayout,
+  pickScrollTargets,
   spawnPromptFor,
   threadIdOf,
   toneFor,
+  type ScrollCandidate,
   type PaneState,
   type SidebarThreadLike,
 } from "../canvas/shapes/bbthread-model.js";
@@ -256,15 +259,16 @@ describe("paneLayout", () => {
     const layout = paneLayout(bbthread());
     // header band: canvas-model's own frameHeaderLocalBounds — 24px above the box.
     expect(layout.header).toEqual({ minX: 0, minY: -24, maxX: 960, maxY: 0 });
-    // workspace: left two-thirds, below the header.
-    expectBoundsClose(layout.workspace, { minX: 0, minY: 24, maxX: 640, maxY: 600 });
-    // pane: right third, below the header.
-    expectBoundsClose(layout.pane, { minX: 640, minY: 24, maxX: 960, maxY: 600 });
+    // workspace: left two-thirds, spanning the shape's full local height —
+    // the header band sits above this, at negative y, not inside [0,h].
+    expectBoundsClose(layout.workspace, { minX: 0, minY: 0, maxX: 640, maxY: 600 });
+    // pane: right third, spanning the same full [0,600] height.
+    expectBoundsClose(layout.pane, { minX: 640, minY: 0, maxX: 960, maxY: 600 });
     // the pane's own title row and footer, at their fixed heights.
-    expectBoundsClose(layout.paneHeaderRow, { minX: 640, minY: 24, maxX: 960, maxY: 56 });
+    expectBoundsClose(layout.paneHeaderRow, { minX: 640, minY: 0, maxX: 960, maxY: 32 });
     expectBoundsClose(layout.paneFooter, { minX: 640, minY: 564, maxX: 960, maxY: 600 });
     // the body fills what's left between them.
-    expectBoundsClose(layout.paneBody, { minX: 640, minY: 56, maxX: 960, maxY: 564 });
+    expectBoundsClose(layout.paneBody, { minX: 640, minY: 32, maxX: 960, maxY: 564 });
   });
 
   it("never inverts the pane body for a pane too short for its own header+footer rows", () => {
@@ -286,13 +290,64 @@ describe("paneLayout", () => {
 
   it("follows a non-default paneFraction — 0.5 starts the pane at w/2", () => {
     const layout = paneLayout(bbthread({ paneFraction: 0.5 }));
-    expectBoundsClose(layout.pane, { minX: 480, minY: 24, maxX: 960, maxY: 600 });
-    expectBoundsClose(layout.workspace, { minX: 0, minY: 24, maxX: 480, maxY: 600 });
+    expectBoundsClose(layout.pane, { minX: 480, minY: 0, maxX: 960, maxY: 600 });
+    expectBoundsClose(layout.workspace, { minX: 0, minY: 0, maxX: 480, maxY: 600 });
     expectBoundsClose(layout.divider, {
       minX: 480 - BBTHREAD_DIVIDER_MARGIN,
       maxX: 480 + BBTHREAD_DIVIDER_MARGIN,
-      minY: 24,
+      minY: 0,
       maxY: 600,
     });
+  });
+});
+
+describe("isScrollable", () => {
+  it("accepts overflow-y: auto with content taller than the box", () => {
+    expect(isScrollable({ overflowY: "auto", scrollHeight: 500, clientHeight: 200 })).toBe(true);
+  });
+
+  it("accepts overflow-y: scroll with content taller than the box", () => {
+    expect(isScrollable({ overflowY: "scroll", scrollHeight: 500, clientHeight: 200 })).toBe(true);
+  });
+
+  it("rejects overflow-y: visible even when content overflows", () => {
+    expect(isScrollable({ overflowY: "visible", scrollHeight: 500, clientHeight: 200 })).toBe(false);
+  });
+
+  it("rejects overflow-y: hidden even when content overflows", () => {
+    expect(isScrollable({ overflowY: "hidden", scrollHeight: 500, clientHeight: 200 })).toBe(false);
+  });
+
+  it("rejects overflow-y: auto with nothing overflowing yet (scrollHeight === clientHeight)", () => {
+    expect(isScrollable({ overflowY: "auto", scrollHeight: 200, clientHeight: 200 })).toBe(false);
+  });
+
+  it("rejects overflow-y: auto when scrollHeight is somehow smaller than clientHeight", () => {
+    expect(isScrollable({ overflowY: "auto", scrollHeight: 100, clientHeight: 200 })).toBe(false);
+  });
+});
+
+describe("pickScrollTargets", () => {
+  function candidate(id: string, overrides: Partial<ScrollCandidate<string>> = {}): ScrollCandidate<string> {
+    return { element: id, overflowY: "auto", scrollHeight: 500, clientHeight: 200, ...overrides };
+  }
+
+  it("returns the elements of every scrollable candidate", () => {
+    const candidates = [candidate("a"), candidate("b", { overflowY: "hidden" }), candidate("c")];
+    expect(pickScrollTargets(candidates)).toEqual(["a", "c"]);
+  });
+
+  it("preserves candidate order rather than imposing one", () => {
+    const candidates = [candidate("outer", { scrollHeight: 300, clientHeight: 200 }), candidate("inner", { scrollHeight: 900, clientHeight: 100 })];
+    expect(pickScrollTargets(candidates)).toEqual(["outer", "inner"]);
+  });
+
+  it("returns an empty array when nothing is scrollable", () => {
+    const candidates = [candidate("a", { overflowY: "visible" }), candidate("b", { scrollHeight: 200, clientHeight: 200 })];
+    expect(pickScrollTargets(candidates)).toEqual([]);
+  });
+
+  it("returns an empty array for an empty candidate list", () => {
+    expect(pickScrollTargets([])).toEqual([]);
   });
 });

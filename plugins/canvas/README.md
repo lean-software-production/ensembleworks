@@ -154,7 +154,10 @@ answer: it sets `data-canvas-interactive` on the pane only while interactive,
 and shows a small hint ("Double-click to read or reply · Esc to leave", etc)
 while it isn't. While focused the pane also switches the host `ThreadChat` to
 `variant: "compact"` so you can reply in place, right there in the composer;
-idle stays `variant: "timeline"` — read-only, no composer. Hit-testing itself (which part of a `bbthread` shape is "solid") is
+idle stays `variant: "timeline"` — read-only, no composer. In view mode the
+pane follows the newest turn as it streams in (`useFollowLatest`,
+`canvas/shapes/bbthread-follow.ts`); focusing the pane to reply stops the
+follow so your own scrolling is never fought. Hit-testing itself (which part of a `bbthread` shape is "solid") is
 canvas-model's job, not this component's — see `isFrameLike`,
 `bbthreadPaneLocalBounds` and `bbthreadWorkspaceLocalBounds` in
 `canvas-model/src/geometry.ts`.
@@ -175,8 +178,9 @@ work while you're mid-read of the thread, not just when the pane is idle.
 
 | File | What it owns |
 | --- | --- |
-| `canvas/shapes/bbthread-model.ts` | every pure decision: pane state, the spawn prompt, `paneInteraction` (interactive/hint, from editor state), and the pane's own internal layout (title row / body / footer) |
+| `canvas/shapes/bbthread-model.ts` | every pure decision: pane state, the spawn prompt, `paneInteraction` (interactive/hint, from editor state), the pane's own internal layout (title row / body / footer), and which DOM descendants of the chat root count as a follow-scroll target (`isScrollable`/`pickScrollTargets`) |
 | `canvas/shapes/BbThreadShape.tsx` | the body — "hands only", wires the model's decisions to real DOM and to `ThreadChat`/`experimental_useSidebarThreads`/`useRpc` |
+| `canvas/shapes/bbthread-follow.ts` | `useFollowLatest` — the DOM-only plumbing (MutationObserver/ResizeObserver, `scrollTop` writes) behind "the pane follows the newest turn" while idle |
 | `canvas/shapes/bbthread-host.ts` | how the body's **Open full →** button reaches the canvas session's own thread-return navigation, without widening `ShapeBodyProps` for one shape |
 | `canvas/thread-picker.ts` | the picker's ordering/filtering (shared with the retired launch-or-attach spike) |
 | `canvas/thread-frames.ts` | the `bb canvas thread-frames` CLI read |

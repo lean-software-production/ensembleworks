@@ -484,11 +484,16 @@ export function isPointInFrameHeaderBand(doc: CanvasDocument, shape: Shape, poin
 
 // ============================================================================
 // BBTHREAD PANE (bb-thread-frame task): a bbthread shape is a frame-like
-// container (isFrameLike) whose right third — BELOW the header band — is a
-// solid "thread pane" (the BB plugin's ThreadChat mount), unlike an ordinary
-// frame's fully-hollow interior. `bbthreadWorkspaceLocalBounds` is the
-// complementary left-two-thirds region (below the header) where captured
-// children live, staying hollow exactly like a frame's interior.
+// container (isFrameLike) whose right third — spanning the shape's FULL
+// local height (local y in [0, h], same as the frame's own border box) — is
+// a solid "thread pane" (the BB plugin's ThreadChat mount), unlike an
+// ordinary frame's fully-hollow interior. The header band
+// (frameHeaderLocalBounds) sits ABOVE this, outside [0, h] entirely (local y
+// in [-FRAME_HEADER_HEIGHT, 0)) — same as a plain frame's — so the pane and
+// header never overlap; there is no separate strip reserved for the header
+// inside the shape's own box. `bbthreadWorkspaceLocalBounds` is the
+// complementary left-two-thirds region (same full [0, h] span) where
+// captured children live, staying hollow exactly like a frame's interior.
 // ============================================================================
 
 /** The fraction of a bbthread's width given to the solid thread pane, from
@@ -526,29 +531,32 @@ export function paneFractionOf(shape: Shape): number {
 }
 
 /** The bbthread's thread-pane rect, in the shape's OWN local frame: the
- * right `paneFractionOf(shape)` of its width, BELOW the header band (local
- * y in [FRAME_HEADER_HEIGHT, h]). Meaningless for any other kind — callers
- * only invoke this once `shape.kind === 'bbthread'` is already established
- * (hitTestPoint below). */
+ * right `paneFractionOf(shape)` of its width, spanning the shape's FULL
+ * local height (local y in [0, h] — the header band lives entirely above
+ * this, at negative y, per frameHeaderLocalBounds; there is no dead strip
+ * between the header and the pane). Meaningless for any other kind —
+ * callers only invoke this once `shape.kind === 'bbthread'` is already
+ * established (hitTestPoint below). */
 export function bbthreadPaneLocalBounds(shape: Shape): Bounds {
   const lb = localBounds(shape)
   const fraction = paneFractionOf(shape)
   return {
-    minX: lb.maxX * (1 - fraction), minY: FRAME_HEADER_HEIGHT,
+    minX: lb.maxX * (1 - fraction), minY: lb.minY,
     maxX: lb.maxX, maxY: lb.maxY,
   }
 }
 
 /** The bbthread's hollow workspace rect, in the shape's OWN local frame: the
- * left `1 - paneFractionOf(shape)` of its width, BELOW the header band — the
- * complement of `bbthreadPaneLocalBounds` (same y-range, x from 0 up to the
- * pane's left edge). Where creation-time-captured children (isFrameLike's
- * frame-capture treatment) live. */
+ * left `1 - paneFractionOf(shape)` of its width, spanning the same full
+ * [0, h] local height as the pane — the complement of
+ * `bbthreadPaneLocalBounds` (same y-range, x from 0 up to the pane's left
+ * edge). Where creation-time-captured children (isFrameLike's frame-capture
+ * treatment) live. */
 export function bbthreadWorkspaceLocalBounds(shape: Shape): Bounds {
   const lb = localBounds(shape)
   const fraction = paneFractionOf(shape)
   return {
-    minX: lb.minX, minY: FRAME_HEADER_HEIGHT,
+    minX: lb.minX, minY: lb.minY,
     maxX: lb.maxX * (1 - fraction), maxY: lb.maxY,
   }
 }

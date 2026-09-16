@@ -1,5 +1,5 @@
 // bb-thread-frame task — the `bbthread` shape's WORKSPACE (the left two
-// thirds below the header band, where the frame's captured children live)
+// thirds, spanning the shape's full local height, where the frame's captured children live)
 // stays hollow, exactly like an ordinary frame's interior
 // (frame-interior-is-hollow) -- only the right-third thread pane
 // (bbthread-pane-is-solid) is solid. This contract proves a drag started

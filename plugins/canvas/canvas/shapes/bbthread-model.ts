@@ -5,7 +5,7 @@
 // than re-deciding inline, so this file is where the real unit tests live
 // (bbthread-model.test.ts) — see docs/plans/2026-09-15-bb-thread-frame.md.
 //
-// FOUR THINGS LIVE HERE:
+// FIVE THINGS LIVE HERE:
 //   1. `bbthreadPaneState` — what the pane shows: unbound / loading / bound
 //      (with a title, a status pill and a tone) / gone.
 //   2. `spawnPromptFor` — the seed prompt for "New thread from these
@@ -25,6 +25,13 @@
 //      `frameHeaderLocalBounds`, which already know the OUTER pane/workspace/
 //      header split (hit-testing depends on it); this file only subdivides
 //      the pane's own interior, which hit-testing has no opinion about.
+//   5. `isScrollable`/`pickScrollTargets` — the "autoscroll while idle"
+//      follow-up's pure decision of which DOM descendants of the chat root
+//      count as a follow target. `bbthread-follow.ts`'s `useFollowLatest`
+//      hook is the DOM-only plumbing around this (walk the real tree, read
+//      computed style, set `scrollTop`) — deliberately NOT unit-tested per
+//      this plugin's house "no jsdom" rule (see tests/lib/source.ts's own
+//      header); this module's pieces are the part that can be, and are.
 import type { Bounds, Shape } from "@ensembleworks/canvas-model";
 import { BBTHREAD_DIVIDER_MARGIN, bbthreadPaneLocalBounds, bbthreadWorkspaceLocalBounds, frameHeaderLocalBounds } from "@ensembleworks/canvas-model";
 import { promptTextFor } from "../shape-text.js";
@@ -241,7 +248,9 @@ export interface BbThreadLayout {
   readonly pane: Bounds;
   /** The draggable resize strip: a vertical band centred on the pane's left
    * edge, `2 * BBTHREAD_DIVIDER_MARGIN` wide, spanning the pane's y-range
-   * (below the header). canvas-editor's select tool hit-tests the same band
+   * (the shape's full local height — the header band sits above this, at
+   * negative y, exactly like a plain frame's). canvas-editor's select tool
+   * hit-tests the same band
    * (`isPointOnBbthreadDivider`, canvas-model) to enter its resizing mode; this
    * is only the RENDERED rect, restated here so BbThreadShape.tsx draws it
    * from the same one function as every other rect it needs. */
@@ -273,4 +282,52 @@ export function paneLayout(shape: Shape): BbThreadLayout {
   const bodyMaxY = Math.max(paneHeaderRow.maxY, paneFooter.minY);
   const paneBody: Bounds = { minX: pane.minX, minY: paneHeaderRow.maxY, maxX: pane.maxX, maxY: bodyMaxY };
   return { header, workspace, pane, divider, paneHeaderRow, paneBody, paneFooter };
+}
+
+// ---------------------------------------------------------------------------
+// 5. FOLLOW-LATEST SCROLL TARGETS ("autoscroll while idle" follow-up)
+// ---------------------------------------------------------------------------
+
+/** The subset of a DOM element's live scroll state `isScrollable` needs — a
+ * plain structural type, not `HTMLElement`, so this stays importable (and
+ * testable) from a vitest environment with no DOM. `bbthread-follow.ts`'s
+ * real hook reads these three fields off actual elements
+ * (`getComputedStyle(el).overflowY`, `el.scrollHeight`, `el.clientHeight`)
+ * and hands them here — this module never touches the DOM itself. */
+export interface ScrollMetrics {
+  readonly overflowY: string;
+  readonly scrollHeight: number;
+  readonly clientHeight: number;
+}
+
+/** True iff an element with these metrics is BOTH configured to scroll
+ * (`overflow-y: auto` or `scroll` — `visible`/`hidden`/anything else never
+ * counts, even when its content overflows) AND actually has something to
+ * scroll (its content taller than its own box). An `overflow-y: auto`
+ * element with nothing overflowing YET (`scrollHeight === clientHeight`) is
+ * not a real follow target: setting its `scrollTop` would be a harmless
+ * no-op, but reporting it as found would stop `pickScrollTargets` from also
+ * reporting a sibling or nested descendant that is the one actually
+ * growing (e.g. `ThreadChat`'s own message list, mounted inside an outer
+ * layout wrapper that never scrolls). */
+export function isScrollable(metrics: ScrollMetrics): boolean {
+  return (metrics.overflowY === "auto" || metrics.overflowY === "scroll") && metrics.scrollHeight > metrics.clientHeight;
+}
+
+/** One scroll-candidate element paired with its metrics. `element` is a type
+ * parameter (never `HTMLElement`) for the same DOM-free reason as
+ * `ScrollMetrics` above. */
+export interface ScrollCandidate<E> extends ScrollMetrics {
+  readonly element: E;
+}
+
+/** Every candidate in `candidates` that `isScrollable` accepts, in the order
+ * given. `useFollowLatest` (bbthread-follow.ts) collects candidates by
+ * walking the chat root and its descendants, then sets `scrollTop =
+ * scrollHeight` on each element this returns — this function does not
+ * itself impose an ordering beyond "whatever order candidates arrived in";
+ * nothing about tree depth makes one scrollable descendant more deserving
+ * of being followed before another. */
+export function pickScrollTargets<E>(candidates: readonly ScrollCandidate<E>[]): readonly E[] {
+  return candidates.filter(isScrollable).map((c) => c.element);
 }

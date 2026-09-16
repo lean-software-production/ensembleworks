@@ -3,7 +3,8 @@
 // draggable, and width is a synced shape prop (`paneFraction`), not local UI
 // state. A drag starting ON the divider (canvas-model's
 // isPointOnBbthreadDivider — a BBTHREAD_DIVIDER_MARGIN-wide band straddling
-// the pane's left edge, below the header) must resize the pane in place —
+// the pane's left edge, spanning the shape's full local height) must resize
+// the pane in place —
 // NOT translate the shape, which is what a drag anywhere else in the solid
 // pane does (see bbthread-pane-is-solid.ts) because the divider sits inside
 // that same solid region.

@@ -108,12 +108,15 @@ const bbDoc = makeDocument({
 })
 const bbthread = bbDoc.byId.get('shape:bb')!
 
-// Pane bounds: right third (x in [600,900]), below the header (y in [24,600]).
+// Pane bounds: right third (x in [600,900]), spanning the shape's FULL local
+// height (y in [0,600]) -- the header band sits entirely above this, at
+// negative y, exactly like a plain frame's; there is no dead strip between
+// the header and the pane.
 {
   const pane = bbthreadPaneLocalBounds(bbthread)
-  assert.deepEqual(pane, { minX: 900 * (1 - BBTHREAD_PANE_FRACTION), minY: FRAME_HEADER_HEIGHT, maxX: 900, maxY: 600 })
+  assert.deepEqual(pane, { minX: 900 * (1 - BBTHREAD_PANE_FRACTION), minY: 0, maxX: 900, maxY: 600 })
   const workspace = bbthreadWorkspaceLocalBounds(bbthread)
-  assert.deepEqual(workspace, { minX: 0, minY: FRAME_HEADER_HEIGHT, maxX: 900 * (1 - BBTHREAD_PANE_FRACTION), maxY: 600 })
+  assert.deepEqual(workspace, { minX: 0, minY: 0, maxX: 900 * (1 - BBTHREAD_PANE_FRACTION), maxY: 600 })
 }
 
 // (1) a point in the solid pane HITS.
@@ -189,8 +192,8 @@ assert.equal(paneFractionOf(bbBare({ w: 900, h: 600, paneFraction: 5 })), BBTHRE
   const half = bbBare({ w: 900, h: 600, paneFraction: 0.5 })
   const halfDoc = makeDocument({ pages: [{ id: 'page:p', name: 'P' }], shapes: [half], bindings: [] })
   const halfShape = halfDoc.byId.get('shape:bb2')!
-  assert.deepEqual(bbthreadPaneLocalBounds(halfShape), { minX: 450, minY: FRAME_HEADER_HEIGHT, maxX: 900, maxY: 600 }, 'the pane bounds follow a resized paneFraction')
-  assert.deepEqual(bbthreadWorkspaceLocalBounds(halfShape), { minX: 0, minY: FRAME_HEADER_HEIGHT, maxX: 450, maxY: 600 }, 'the workspace bounds follow a resized paneFraction')
+  assert.deepEqual(bbthreadPaneLocalBounds(halfShape), { minX: 450, minY: 0, maxX: 900, maxY: 600 }, 'the pane bounds follow a resized paneFraction')
+  assert.deepEqual(bbthreadWorkspaceLocalBounds(halfShape), { minX: 0, minY: 0, maxX: 450, maxY: 600 }, 'the workspace bounds follow a resized paneFraction')
 }
 
 // (7) isPointOnBbthreadDivider: a point within BBTHREAD_DIVIDER_MARGIN of the
@@ -205,7 +208,7 @@ assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600 - (BBTHREAD_DIVI
 assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600 + (BBTHREAD_DIVIDER_MARGIN - 1), y: 300 }), true, 'just inside the pane-side of the divider margin hits')
 assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600 - (BBTHREAD_DIVIDER_MARGIN + 1), y: 300 }), false, 'just past the workspace-side margin misses')
 assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600 + (BBTHREAD_DIVIDER_MARGIN + 1), y: 300 }), false, 'just past the pane-side margin misses')
-assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600, y: FRAME_HEADER_HEIGHT - 1 }), false, 'above the pane (in the header band) misses')
+assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600, y: -1 }), false, 'above the pane (in the header band) misses')
 assert.equal(isPointOnBbthreadDivider(bbDoc, bbthread, { x: 600, y: 601 }), false, 'below the pane (past the shape) misses')
 assert.equal(isPointOnBbthreadDivider(doc, frame, { x: 600, y: 300 }), false, 'a plain frame has no divider at all')
 

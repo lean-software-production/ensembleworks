@@ -24,7 +24,7 @@ export const bbthreadPaneDoubleClickBeginsEditing: Contract = {
   when: 'at-end',
   scene: () => [
     // A 900x600 bbthread at the origin -- the right-third pane spans local x
-    // in [600,900], y in [24,600] (below FRAME_HEADER_HEIGHT). (800,300) is
+    // in [600,900], spanning the full local height y in [0,600] (the header band sits above this, at negative y, exactly like a plain frame's). (800,300) is
     // well inside the pane, clear of both the header band and the 8px edge
     // margin on every side (mirrors bbthread-pane-is-solid.ts's own fixture).
     { id: BBTHREAD_ID, kind: 'bbthread', x: 0, y: 0, w: 900, h: 600 },

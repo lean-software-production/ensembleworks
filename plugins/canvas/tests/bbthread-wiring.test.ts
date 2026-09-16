@@ -25,6 +25,7 @@ import {
 
 const SHAPE = readFileSync(new URL("../canvas/shapes/BbThreadShape.tsx", import.meta.url), "utf8");
 const BOOT = readFileSync(new URL("../canvas/panel/connection-boot.ts", import.meta.url), "utf8");
+const FOLLOW = readFileSync(new URL("../canvas/shapes/bbthread-follow.ts", import.meta.url), "utf8");
 
 describe("BbThreadShape renders the pure decisions, not inline logic", () => {
   it("computes the pane state with bbthreadPaneState, not a reimplemented rule", () => {
@@ -141,5 +142,65 @@ describe("connection-boot registers the plugin-only 'bbthread' kind", () => {
   it("imports BbThreadShape and registerShape from the right modules", () => {
     expect(BOOT).toContain('import { registerCoreShapes, registerShape } from "@ensembleworks/canvas-react";');
     expect(BOOT).toContain('import { BbThreadShape } from "../shapes/BbThreadShape.js";');
+  });
+});
+
+describe("autoscroll while idle (2026-09-16 follow-up)", () => {
+  it("calls useFollowLatest with !interaction.interactive as the enabled flag", () => {
+    const calls = callsTo(SHAPE, "useFollowLatest");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.text).toBe("useFollowLatest(chatRootRef, !interaction.interactive)");
+  });
+
+  it('wraps ThreadChat in a data-canvas-bbthread="chat" div carrying the chat root ref, nested inside the pane but distinct from it', () => {
+    const chat = jsxElementRange(SHAPE, 'data-canvas-bbthread="chat"');
+    const pane = jsxElementRange(SHAPE, 'data-canvas-bbthread="pane"');
+    const text = SHAPE.slice(chat.start, chat.end);
+    expect(chat.start).toBeGreaterThan(pane.start);
+    expect(chat.end).toBeLessThan(pane.end);
+    expect(text).toContain("ref={setChatRootEl}");
+    expect(text).toContain("<ThreadChat");
+    expect(text).toContain("flex: 1");
+    expect(text).toContain("minHeight: 0");
+    expect(text).toContain('flexDirection: "column"');
+  });
+
+  it("never wraps the unbound picker or the gone/loading messages — only a bound ThreadChat is followed", () => {
+    const chat = jsxElementRange(SHAPE, 'data-canvas-bbthread="chat"');
+    const text = SHAPE.slice(chat.start, chat.end);
+    expect(text).not.toContain("UnboundPicker");
+    expect(text).not.toContain("archived or no longer available");
+    expect(text).not.toContain("Loading…");
+  });
+
+  it("re-derives chatRootRef with useMemo keyed on chatRootEl, not a plain useRef", () => {
+    // A plain `useRef` would freeze `rootRef.current` at whatever it was when
+    // `useFollowLatest`'s effect first ran — missing the "bound" wrapper div
+    // mounting later than this component's own first render (RED, recorded
+    // in the task report: with `const chatRootRef = useRef<...>(null)` swapped
+    // in, a thread that finishes loading in view mode never starts following).
+    expect(initializerText(SHAPE, "chatRootRef")).toBe("useMemo(() => ({ current: chatRootEl }), [chatRootEl])");
+  });
+});
+
+describe("useFollowLatest (bbthread-follow.ts) disconnects everything it observes", () => {
+  it("bails out before touching the DOM when disabled", () => {
+    const effect = topLevelEffectIn(FOLLOW, "useFollowLatest", "MutationObserver");
+    const statements = effectStatements(effect);
+    expect(statements[0]).toBe("if (!enabled) return;");
+  });
+
+  it("returns a cleanup that disconnects both observers and cancels the pending frame", () => {
+    const effect = topLevelEffectIn(FOLLOW, "useFollowLatest", "MutationObserver");
+    const statements = effectStatements(effect);
+    const cleanup = statements.at(-1) ?? "";
+    expect(cleanup.startsWith("return")).toBe(true);
+    expect(cleanup).toContain("mutationObserver.disconnect()");
+    expect(cleanup).toContain("resizeObserver?.disconnect()");
+    expect(cleanup).toContain("cancelAnimationFrame(frame)");
+  });
+
+  it("observes childList, subtree and characterData on the mutation observer", () => {
+    expect(countInCode(FOLLOW, "childList: true, subtree: true, characterData: true")).toBe(1);
   });
 });
