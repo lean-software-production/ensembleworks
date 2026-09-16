@@ -84,7 +84,38 @@ Remaining unknowns: which Linux user runs unknown hosts (laptops, `ensembleworks
 machines other than the team one), and whether follow-ups sent as `bb thread send` from a
 person's own shell (no header, so no identity) are allowed. Default: allowed, starter unknown.
 
-Spikes still worth running first: **S7** (does the ALS store reach the hook in real bb?),
+### S7 result (2026-09-16): the monkey patch works in real bb 0.43.0
+
+Setup: a throwaway `bb-app` (Node 24.19, its own `--data-dir`, `HOME` set to a temp dir,
+ports 39886/39887) with a spike plugin that patches `http.Server.prototype.emit`, and
+a `message.dispatch` handler that echoes `als.getStore()` back in its `reject` message.
+Threads were created with `POST /api/v1/threads` and a `cf-access-authenticated-user-email`
+header. Nothing touched the shared server.
+
+- **The hook sees the right person** for creates from the app, with or without a header
+  (a CLI-style request with no header gives a store whose email is null), for three
+  concurrent creates as different people, after `bb plugin reload`, and when a new
+  provider is used for the first time.
+- **A rejected create leaves no thread** (`/threads/count` stays 0). A refusal is clean.
+- **Lesson 1, patch lifecycle.** bb loads a plugin more than once (at startup and on
+  reload), and it disposes the old generation *after* the new one has loaded. A
+  "restore `emit` in `onDispose`" pattern therefore silently removes the live patch.
+  The fix: patch once per process behind a `Symbol.for` global, never unpatch, and read the
+  store through that singleton.
+- **Lesson 2, startup race.** A request that arrives while plugins are still loading is
+  handled before the patch exists. Its hook still runs later, with no store. That's
+  benign: it degrades to "unknown", which is the high-trust design's fallback anyway.
+- **Hook stack:** `invokeHook` → `invokeWrapped` → bb's own `runEventLoopWork`
+  (`AsyncLocalStorage.run`), then `decideWithinBox`. bb's ALS nests inside ours without
+  clobbering it.
+- **Not yet tested:** follow-ups (`POST /threads/:id/send`), drains and Send-now. With no
+  working provider, the test thread stayed `active` and every follow-up queued behind
+  it ("still starting"). This needs a run with a real or replay provider, or a check on a dev
+  box. It matters for the read-only rule.
+- A useful find along the way: the daemon and CLI read `BB_SERVER_HEADERS`, so an agent's
+  CLI calls could carry a per-machine header later.
+
+Spikes still worth running first: **S7 follow-ups** (above),
 **S2** (do the Access headers reach a plugin HTTP route through cloudflared?), **S3-lite**
 (what does the new-thread composer know before submit, so the banner can be useful?).
 Open questions 1, 2, 3 and 7 are answered just below.
