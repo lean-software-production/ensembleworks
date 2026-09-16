@@ -3,6 +3,7 @@
 // the component so the host-agnostic chrome file stays close to markup only,
 // and so this logic is testable without a DOM emulator (there is none in
 // this package — see toolbar.test.ts's header for the same reasoning).
+import { controlSizePx } from './pointer-metrics.js'
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP_FACTOR, zoomAboutPoint, zoomToLevelAbout, type Camera } from '@ensembleworks/canvas-editor'
 
 export type ZoomControlAction = 'in' | 'out' | 'reset'
@@ -50,25 +51,18 @@ export function zoomControlDisabled(camera: Camera): ZoomControlDisabled {
 }
 
 /** The zoom pill's button box, in CSS px, for a fine or a coarse pointer
- * (mobile-touch task, scope 3).
+ * (mobile-touch task, scope 3). The SIZE comes from pointer-metrics.ts, shared
+ * with the tool rail so the two cannot drift; the gap/padding are this pill's
+ * own.
  *
  * 28 IS UNDER HALF A FINGER. The pill's buttons were a flat 28x28 — fine for a
- * cursor, and well under the ~44px the platform guidance asks for (Apple HIG
- * 44pt, Material 48dp, WCAG 2.5.5's 44x44 CSS px). They are also the ONLY
- * zoom affordance a touch user had before pinch existed, and they sit in a
- * corner, where a miss lands on the canvas and starts a marquee.
+ * cursor, and well under the ~44px guidance COARSE_TARGET_PX cites. They are
+ * also the ONLY zoom affordance a touch user had before pinch existed, and they
+ * sit in a corner, where a miss lands on the canvas and starts a marquee.
  *
- * A DEVICE QUERY IS THE RIGHT SIGNAL HERE, unlike the canvas's per-event hit
- * tolerances (canvas-editor's `hitTolerancePx`/`bbthreadDividerMargin`, which
- * deliberately refuse one): a rendered box has to have ONE size, chosen before
- * any pointer arrives, so there is no event to read. `(pointer: coarse)` — the
- * PRIMARY pointer — is the best available answer, and its known failure is a
- * touchscreen laptop, where the mouse user gets finger-sized buttons. That is
- * the harmless direction of the error.
- *
- * Pure and parameterised rather than a `matchMedia` call inside the component,
- * for the reason this whole module exists: a number written in the .tsx is a
- * decision no test in this package can read (there is no DOM emulator here). */
+ * The gap widens with them: three 44px buttons two pixels apart read as one
+ * 136px slab, and the boundary between "zoom out" and "reset" stops being
+ * visible at exactly the size where hitting the right one starts to matter. */
 export interface ZoomControlMetrics {
 	readonly buttonSize: number
 	readonly gap: number
@@ -76,10 +70,11 @@ export interface ZoomControlMetrics {
 }
 
 export const FINE_ZOOM_BUTTON_PX = 28
-export const COARSE_ZOOM_BUTTON_PX = 44
 
 export function zoomControlMetrics(coarsePointer: boolean): ZoomControlMetrics {
-	return coarsePointer
-		? { buttonSize: COARSE_ZOOM_BUTTON_PX, gap: 4, padding: 4 }
-		: { buttonSize: FINE_ZOOM_BUTTON_PX, gap: 2, padding: 4 }
+	return {
+		buttonSize: controlSizePx(coarsePointer, FINE_ZOOM_BUTTON_PX),
+		gap: coarsePointer ? 6 : 2,
+		padding: 4,
+	}
 }

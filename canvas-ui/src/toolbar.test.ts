@@ -2,7 +2,8 @@
 import assert from 'node:assert/strict'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { Toolbar, TOOL_ORDER } from './Toolbar.js'
+import { COARSE_TARGET_PX } from './pointer-metrics.js'
+import { FINE_TOOL_BUTTON_PX, Toolbar, TOOL_ORDER } from './Toolbar.js'
 import { ArmedStyleFlyout, armedValue } from './ArmedStyleFlyout.js'
 
 /** The opening tag of the first element carrying `attr`. */
@@ -152,3 +153,31 @@ console.log('ok: vertical rail with an armed flyout beside the active style tool
 	assert.match(openingTag(railHtml, 'data-style-panel-mode="armed"'), /pointer-events:auto/)
 	console.log('ok: flyout card takes pointers')
 }
+
+// ---------------------------------------------------------------------------
+// FINGER-SIZED TOOL BUTTONS (mobile-touch task, scope 3). The rail is the
+// most-tapped chrome on the canvas and its buttons were a flat 32px — under
+// three quarters of a fingertip, and a miss lands on the canvas behind it.
+{
+	const coarse = renderToStaticMarkup(
+		createElement(Toolbar, { activeToolId: 'select' as const, onSelectTool: () => {}, coarsePointer: true }),
+	)
+	const fine = renderToStaticMarkup(
+		createElement(Toolbar, { activeToolId: 'select' as const, onSelectTool: () => {}, coarsePointer: false }),
+	)
+	// ABSOLUTE on both sides: "coarse is bigger" would survive a retune to 34px,
+	// which is still not a touch target.
+	assert.equal(COARSE_TARGET_PX, 44, 'the shared touch target is 44px')
+	assert.equal(FINE_TOOL_BUTTON_PX, 32, 'a fine pointer keeps the 32px rail button')
+	assert.match(coarse, /data-canvas-tool="select"[^>]*style="[^"]*width:44px/, 'the coarse rail renders 44px buttons')
+	assert.match(fine, /data-canvas-tool="select"[^>]*style="[^"]*width:32px/, 'the fine rail renders 32px buttons')
+	assert.ok(!fine.includes('width:44px'), 'a fine pointer never gets the touch size')
+	// The rail already scrolls when it outgrows its host, which is what makes
+	// the taller buttons safe on a short viewport — pinned so a later tidy-up
+	// of the scroller style cannot quietly push tools off the edge instead.
+	const coarseRail = renderToStaticMarkup(
+		createElement(Toolbar, { activeToolId: 'select' as const, onSelectTool: () => {}, orientation: 'vertical' as const, coarsePointer: true }),
+	)
+	assert.match(coarseRail, /overflow-y:auto/, 'the vertical rail still scrolls rather than clipping its tools')
+}
+console.log('ok: Toolbar buttons reach a 44px touch target on a coarse pointer')

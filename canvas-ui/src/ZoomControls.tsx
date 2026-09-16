@@ -8,6 +8,7 @@
 import type { CSSProperties } from 'react'
 import type { Camera } from '@ensembleworks/canvas-editor'
 import { zoomControlDisabled, zoomControlIntent, zoomControlMetrics, type ZoomControlMetrics } from './zoom-controls-model.js'
+import { prefersCoarsePointer } from './pointer-metrics.js'
 import { UI_VARS } from './theme.js'
 
 export interface ZoomControlsProps {
@@ -22,17 +23,12 @@ export interface ZoomControlsProps {
 	 * the right signal for a rendered box, where the canvas's own hit tolerances
 	 * deliberately use the per-event pointerType instead.
 	 *
-	 * A PROP, defaulted from `matchMedia`, rather than a hook reading it
-	 * directly: this package has no DOM emulator, so a test can only reach this
-	 * decision by passing it, and a host that knows better (a mobile shell) can
-	 * say so. `matchMedia` is feature-checked — happy-dom/SSR may not have it,
-	 * and "no media query" must mean fine, not a crash. */
+	 * A PROP, defaulted from `prefersCoarsePointer` (pointer-metrics.ts), for
+	 * the reasons that module states. */
 	readonly coarsePointer?: boolean
 }
 
-function prefersCoarsePointer(): boolean {
-	return typeof globalThis.matchMedia === 'function' && globalThis.matchMedia('(pointer: coarse)').matches
-}
+
 
 function containerStyle(metrics: ZoomControlMetrics): CSSProperties {
 	return {

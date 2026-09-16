@@ -4,6 +4,7 @@ import { ArmedStyleFlyout } from './ArmedStyleFlyout.js'
 import type { StyleChange } from './style-controls.js'
 import { ToolIcon } from './tool-icons.js'
 import { UI_VARS } from './theme.js'
+import { controlSizePx, prefersCoarsePointer } from './pointer-metrics.js'
 
 /** One toolbar row: a tool id + its button label. Exported so a host that
  * passes a custom `tools` list (e.g. the BB plugin appending its own
@@ -40,6 +41,11 @@ export interface ToolbarProps {
 	readonly nextShapeStyle?: Record<string, unknown>
 	/** `SetNextStyle`; a host that omits it gets no flyout. */
 	readonly onArmStyle?: StyleChange
+	/** Is this device's PRIMARY pointer coarse (a finger)? Sizes the tool
+	 * buttons to a touch target. Defaults from `matchMedia` — see
+	 * pointer-metrics.ts for why a device query is right for a rendered box and
+	 * why it arrives as a prop. */
+	readonly coarsePointer?: boolean
 	/** The tool rows to render, in order. Defaults to `TOOL_ORDER` (the web
 	 * app's set) — a host that ships additional plugin-only tools (e.g. the
 	 * BB plugin's 'bbthread') passes its own extended list instead of
@@ -60,10 +66,18 @@ const containerStyle: CSSProperties = {
 	border: `1px solid ${UI_VARS.panelBorder}`,
 }
 
-function buttonStyle(active: boolean): CSSProperties {
+/** The rail's fine-pointer button side. A coarse pointer gets
+ * COARSE_TARGET_PX instead (pointer-metrics.ts) — at 32px the rail's buttons
+ * were under three quarters of a fingertip, and they are the most-tapped chrome
+ * on the canvas. The rail already scrolls when it outgrows its host
+ * (RAIL_SCROLLER_STYLE), which is what makes the taller buttons safe on a short
+ * viewport. */
+export const FINE_TOOL_BUTTON_PX = 32
+
+function buttonStyle(active: boolean, size: number): CSSProperties {
 	return {
-		width: 32,
-		height: 32,
+		width: size,
+		height: size,
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
@@ -84,8 +98,9 @@ const ROW_STYLE: CSSProperties = { display: 'flex', flexDirection: 'row', gap: 2
 
 const SEPARATOR_STYLE: CSSProperties = { height: 1, margin: '2px 4px', background: UI_VARS.panelBorder }
 
-export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'horizontal', nextShapeStyle, onArmStyle, tools = TOOL_ORDER }: ToolbarProps) {
+export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'horizontal', nextShapeStyle, onArmStyle, tools = TOOL_ORDER, coarsePointer }: ToolbarProps) {
 	const vertical = orientation === 'vertical'
+	const buttonSize = controlSizePx(coarsePointer ?? prefersCoarsePointer(), FINE_TOOL_BUTTON_PX)
 	const showFlyout = vertical && nextShapeStyle !== undefined && onArmStyle !== undefined
 	return (
 		<div
@@ -110,7 +125,7 @@ export function Toolbar({ activeToolId, onSelectTool, style, orientation = 'hori
 								aria-label={title}
 								title={title}
 								onClick={() => onSelectTool(id)}
-								style={buttonStyle(active)}
+								style={buttonStyle(active, buttonSize)}
 							>
 								<ToolIcon tool={id} />
 							</button>
