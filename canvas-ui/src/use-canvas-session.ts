@@ -5,6 +5,7 @@
 // embeds) reach it only through the small `CanvasHost` port.
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react'
 import {
+	applyPinch,
 	applyWheel,
 	buildSetStyleIntent,
 	cancelActiveTool,
@@ -15,6 +16,8 @@ import {
 	pasteIntents,
 	redoWithRepair,
 	reorderSelectionIntents,
+	IDLE_MULTI_TOUCH,
+	reduceMultiTouch,
 	resolveShortcut,
 	selectAllIntents,
 	shouldFallBackToSelect,
@@ -23,6 +26,7 @@ import {
 	type InputEvent,
 	type Intent,
 	type KeyInputEvent,
+	type MultiTouchState,
 	type ShortcutCommand,
 	type StyleAxis,
 	type StyleValue,
@@ -100,7 +104,18 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 
 	const dispatch = useCallback((intents: Intent[]) => editor.applyAll(intents), [editor])
 
+	// The two-finger recognizer's state (canvas-editor's multi-touch.ts). A ref,
+	// not React state: it is read and written synchronously inside one pointer
+	// event and nothing renders from it, so a setState per pointermove would be
+	// a re-render per finger-move for no visible change.
+	const multiTouchRef = useRef<MultiTouchState>(IDLE_MULTI_TOUCH)
+
 	const cancelAndReset = useCallback(() => {
+		// Every abandonment trigger (blur, pointercancel, Escape, tool switch)
+		// also takes the pointers away without delivering the pointerups the
+		// recognizer waits for — a suppression left standing would silently eat
+		// the user's NEXT gesture entirely.
+		multiTouchRef.current = IDLE_MULTI_TOUCH
 		const { states, intents } = cancelActiveTool(tools, toolStatesRef.current, activeToolIdRef.current, editor)
 		if (intents.length > 0) editor.applyAll(intents)
 		toolStatesRef.current = states
@@ -212,6 +227,35 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 
 	const handleInput = useCallback(
 		(event: InputEvent): boolean | void => {
+			// TWO FINGERS FIRST (mobile-touch task): the recognizer sits ahead of
+			// everything else in the funnel, because "these two touches are one
+			// pinch" has to be decided before any of them is allowed to look like
+			// a drag. Non-touch and id-less events pass straight through, so this
+			// is a no-op for every mouse, pen and synthetic event.
+			if (event.type === 'pointerdown' || event.type === 'pointermove' || event.type === 'pointerup') {
+				const mt = reduceMultiTouch(multiTouchRef.current, event)
+				// The second finger interrupted a real one-finger gesture: unwind it
+				// through the same path blur/pointercancel use.
+				//
+				// ORDER IS LOAD-BEARING, and getting it wrong is silent. `cancelAndReset`
+				// ALSO resets the recognizer — it has to, because blur/pointercancel take
+				// the fingers away without ever delivering the pointerups it waits for —
+				// so storing `mt.state` BEFORE this call let the cancel wipe the pinch on
+				// the very event that armed it. Every later move then read as an ordinary
+				// drag: no zoom at all, and the shape under the first finger dragged
+				// around. Store the recognizer's verdict AFTER, so it is the last word on
+				// its own state. Pinned by use-canvas-session.test.ts's case (g), which
+				// exists because both FSM contracts stayed green through that bug: they
+				// drive the reducer from the runner and cannot see this wiring.
+				if (mt.cancelGesture) cancelAndReset()
+				multiTouchRef.current = mt.state
+				if (mt.pinch) editor.apply({ type: 'SetCamera', ...applyPinch(editor.get().camera, mt.pinch) })
+				if (!mt.forward) {
+					// The style panel hides mid-gesture; a pinch is one.
+					setIsGesturing(mt.state.pointers.size > 0)
+					return
+				}
+			}
 			if (event.type === 'pointerdown') setIsGesturing(true)
 			if (event.type === 'pointerup') setIsGesturing(false)
 			if (event.type === 'pointermove') hostRef.current.onCursorScreen({ x: event.x, y: event.y })
@@ -224,7 +268,7 @@ export function useCanvasSession(options: UseCanvasSessionOptions): CanvasSessio
 			// The Viewport preventDefaults on true (an Enter that began an edit).
 			return dispatchToTool(event)
 		},
-		[editor, handleShortcut, dispatchToTool],
+		[editor, handleShortcut, dispatchToTool, cancelAndReset],
 	)
 
 	// Whether the user's last pointerdown or focus landed inside the keyboard

@@ -1,3 +1,4 @@
+export * from './pointer-metrics.js'
 export * from './theme.js'
 export * from './tool-icons.js'
 export * from './Toolbar.js'

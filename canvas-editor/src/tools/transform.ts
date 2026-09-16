@@ -25,7 +25,7 @@ import {
   centroid, isFixedSizeSelection, resolveArrowAnchor, routeArrow, worldBounds, type Bounds, type CanvasDocument, type Point, type Shape,
 } from '@ensembleworks/canvas-model'
 import type { ArrowBinding, Intent } from '../intents.js'
-import { crossedThreshold, screenToWorld, worldToScreen, type Camera, type InputEvent, type Tool } from '../input.js'
+import { crossedThreshold, screenToWorld, worldToScreen, type Camera, type InputEvent, type PointerInputEvent, type Tool } from '../input.js'
 import { arrowHandles, bendFromPoint, hitArrowHandle, type ArrowHandleId } from './arrow-handles.js'
 import type { ToolContext } from './tool-context.js'
 
@@ -108,6 +108,40 @@ export function hitHandle(handles: readonly Handle[], screenPoint: Point, camera
  * hitHandle call below and the rendered square's side length), so the visual
  * target and the hit target can't silently drift apart. */
 export const HIT_TOLERANCE_PX = 8
+
+/** The same tolerance for a FINGERTIP (mobile-touch task, scope 3): 22 screen
+ * px of radius is the ~44px square target the platform guidance asks for
+ * (Apple HIG 44pt, Material 48dp, WCAG 2.5.5). At the fine-pointer 8, touching
+ * near a corner handle MISSES it and falls through to select.ts's ordinary
+ * body-drag — so on a phone a shape can be moved but never resized, and the
+ * failure is silent (something happens, just the wrong thing).
+ *
+ * THE RENDERED GLYPH IS NOT RESIZED TO MATCH, and this is a deliberate,
+ * declared divergence from the "one number, two consumers" rule stated on
+ * HIT_TOLERANCE_PX above. The glyph is drawn per SELECTION (canvas-react's
+ * overlay/Handles.tsx renders off the camera and the selection, and has no
+ * pointer event in hand), while the tolerance is chosen per POINTER EVENT — a
+ * touchscreen laptop delivers both kinds to the same selection, so there is no
+ * single correct glyph size to mirror. Growing the invisible target beyond the
+ * visible mark is standard touch practice, but it does mean a coarse-pointer
+ * user sees an 8px square and grabs a 44px one. Making the glyph itself
+ * finger-sized (on a coarse-primary device) is a follow-up the PR body records
+ * rather than something this change smuggles in. */
+export const COARSE_HIT_TOLERANCE_PX = 22
+
+/** Which of the two tolerances THIS pointer event gets. Read off the event's
+ * own pointerType rather than a device-level `(pointer: coarse)` media query,
+ * for the reason canvas-editor's `bbthreadDividerMargin` states at length: a
+ * device answer is wrong for half the events a hybrid device delivers. No
+ * pointerType (a hand-built script, a synthetic event) means fine — the
+ * pre-mobile behaviour, so nothing that existed before this change moves.
+ *
+ * No zoom term, unlike the divider margin: `hitHandle` already compares in
+ * SCREEN space (it projects each handle through the camera first), so this
+ * number is screen pixels all the way down and needs no correction. */
+export function hitTolerancePx(pointerType?: PointerInputEvent['pointerType']): number {
+  return pointerType === 'touch' ? COARSE_HIT_TOLERANCE_PX : HIT_TOLERANCE_PX
+}
 
 const OPPOSITE: Partial<Record<HandleId, HandleId>> = {
   nw: 'se', ne: 'sw', se: 'nw', sw: 'ne', n: 's', s: 'n', e: 'w', w: 'e',
@@ -360,7 +394,7 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
       const soleShape = ctx.snapshot().byId.get(ids[0]!)
       if (soleShape && soleShape.kind === 'arrow') {
         const handles = arrowHandles(ctx.snapshot(), soleShape)
-        const hit = hitArrowHandle(handles, { x: event.x, y: event.y }, editor.get().camera, HIT_TOLERANCE_PX)
+        const hit = hitArrowHandle(handles, { x: event.x, y: event.y }, editor.get().camera, hitTolerancePx(event.pointerType))
         if (!hit) return { state, intents: [] } // miss: falls through to select.ts's ordinary body-drag
         return {
           state: { mode: 'pointingArrow', downScreen: { x: event.x, y: event.y }, arrowId: soleShape.id, handle: hit },
@@ -385,7 +419,7 @@ export function createTransformTool(ctx: ToolContext): Tool<TransformState> {
     const hittable = isFixedSizeSelection(ctx.snapshot(), ids)
       ? handlesAtStart.filter((h) => h.kind === 'rotate')
       : handlesAtStart
-    const hit = hitHandle(hittable, { x: event.x, y: event.y }, editor.get().camera, HIT_TOLERANCE_PX)
+    const hit = hitHandle(hittable, { x: event.x, y: event.y }, editor.get().camera, hitTolerancePx(event.pointerType))
     if (!hit) return { state, intents: [] } // miss: this tool never changes selection itself
     return {
       state: { mode: 'pointing', downScreen: { x: event.x, y: event.y }, handle: hit, ids, handlesAtStart, shiftDown: event.modifiers.shift },

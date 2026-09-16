@@ -3,6 +3,7 @@
 // the component so the host-agnostic chrome file stays close to markup only,
 // and so this logic is testable without a DOM emulator (there is none in
 // this package — see toolbar.test.ts's header for the same reasoning).
+import { controlSizePx } from './pointer-metrics.js'
 import { MAX_ZOOM, MIN_ZOOM, ZOOM_STEP_FACTOR, zoomAboutPoint, zoomToLevelAbout, type Camera } from '@ensembleworks/canvas-editor'
 
 export type ZoomControlAction = 'in' | 'out' | 'reset'
@@ -47,4 +48,33 @@ export interface ZoomControlDisabled {
  * label. */
 export function zoomControlDisabled(camera: Camera): ZoomControlDisabled {
 	return { in: camera.z >= MAX_ZOOM, out: camera.z <= MIN_ZOOM }
+}
+
+/** The zoom pill's button box, in CSS px, for a fine or a coarse pointer
+ * (mobile-touch task, scope 3). The SIZE comes from pointer-metrics.ts, shared
+ * with the tool rail so the two cannot drift; the gap/padding are this pill's
+ * own.
+ *
+ * 28 IS UNDER HALF A FINGER. The pill's buttons were a flat 28x28 — fine for a
+ * cursor, and well under the ~44px guidance COARSE_TARGET_PX cites. They are
+ * also the ONLY zoom affordance a touch user had before pinch existed, and they
+ * sit in a corner, where a miss lands on the canvas and starts a marquee.
+ *
+ * The gap widens with them: three 44px buttons two pixels apart read as one
+ * 136px slab, and the boundary between "zoom out" and "reset" stops being
+ * visible at exactly the size where hitting the right one starts to matter. */
+export interface ZoomControlMetrics {
+	readonly buttonSize: number
+	readonly gap: number
+	readonly padding: number
+}
+
+export const FINE_ZOOM_BUTTON_PX = 28
+
+export function zoomControlMetrics(coarsePointer: boolean): ZoomControlMetrics {
+	return {
+		buttonSize: controlSizePx(coarsePointer, FINE_ZOOM_BUTTON_PX),
+		gap: coarsePointer ? 6 : 2,
+		padding: 4,
+	}
 }

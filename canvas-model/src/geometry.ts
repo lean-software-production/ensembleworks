@@ -570,6 +570,20 @@ export function bbthreadWorkspaceLocalBounds(shape: Shape): Bounds {
  * would eat into the workspace/pane click targets on either side). */
 export const BBTHREAD_DIVIDER_MARGIN = 6
 
+/** The same band, sized for a FINGERTIP (mobile-touch task, scope 3). ~44
+ * screen px of total target — the long-standing platform touch-target
+ * guidance (Apple HIG 44pt, Material 48dp, WCAG 2.5.5's 44x44 CSS px) — is 22
+ * either side of the edge. NOT a replacement for BBTHREAD_DIVIDER_MARGIN: a
+ * mouse keeps the narrow band (a 44px-wide mouse target here would eat most of
+ * a phone-width pane's own click area), and the caller picks per POINTER
+ * EVENT, not per device — see canvas-editor's `bbthreadDividerMargin`.
+ *
+ * WORLD UNITS, like the constant above, which is the whole reason that caller
+ * exists: this number is only a 44px target at zoom 1. Divided by the camera's
+ * zoom it stays 44 SCREEN px at every scale, which is the actual requirement —
+ * at 25% zoom the unconverted 6 is a 1.5px target even for a mouse. */
+export const COARSE_BBTHREAD_DIVIDER_MARGIN = 22
+
 /** True iff WORLD `point` falls within `BBTHREAD_DIVIDER_MARGIN` of `shape`'s
  * pane's left edge (`bbthreadPaneLocalBounds(shape).minX`), at a y within the
  * pane's own y-range — false for any non-'bbthread' kind. Resizable-pane
@@ -579,13 +593,21 @@ export const BBTHREAD_DIVIDER_MARGIN = 6
  * overlaps), and `hitTestPoint` below folds it into the bbthread's overall
  * hit region so the band right OUTSIDE the pane's own bounds (the half of
  * the margin that spills into the hollow workspace) still resolves as a hit
- * on the shape instead of a miss. */
-export function isPointOnBbthreadDivider(doc: CanvasDocument, shape: Shape, point: Point): boolean {
+ * on the shape instead of a miss.
+ *
+ * `margin` (mobile-touch task, scope 3) defaults to the mouse-sized
+ * BBTHREAD_DIVIDER_MARGIN, which is what `hitTestPoint` below passes — the
+ * shape's own hit region must not silently grow into its hollow workspace just
+ * because SOME caller might be a finger. The select tool passes a
+ * zoom-and-pointer-derived margin instead (canvas-editor's
+ * `bbthreadDividerMargin`), and reaches the shape by its own bounds query
+ * rather than through hitTestPoint, exactly so the two can differ. */
+export function isPointOnBbthreadDivider(doc: CanvasDocument, shape: Shape, point: Point, margin: number = BBTHREAD_DIVIDER_MARGIN): boolean {
   if (shape.kind !== 'bbthread') return false
   const local = toLocalPoint(doc, shape, point)
   const pane = bbthreadPaneLocalBounds(shape)
   return (
-    Math.abs(local.x - pane.minX) <= BBTHREAD_DIVIDER_MARGIN &&
+    Math.abs(local.x - pane.minX) <= margin &&
     local.y >= pane.minY && local.y <= pane.maxY
   )
 }

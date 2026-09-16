@@ -7,7 +7,8 @@
 // result and wires clicks to them.
 import type { CSSProperties } from 'react'
 import type { Camera } from '@ensembleworks/canvas-editor'
-import { zoomControlDisabled, zoomControlIntent } from './zoom-controls-model.js'
+import { zoomControlDisabled, zoomControlIntent, zoomControlMetrics, type ZoomControlMetrics } from './zoom-controls-model.js'
+import { prefersCoarsePointer } from './pointer-metrics.js'
 import { UI_VARS } from './theme.js'
 
 export interface ZoomControlsProps {
@@ -17,23 +18,35 @@ export interface ZoomControlsProps {
 	readonly onSetCamera: (camera: Camera) => void
 	/** Merged over the pill's own container style — hosts use it for placement. */
 	readonly style?: CSSProperties
+	/** Is this device's PRIMARY pointer coarse (a finger)? Sizes the buttons to
+	 * a ~44px touch target — see `zoomControlMetrics` for why a device query is
+	 * the right signal for a rendered box, where the canvas's own hit tolerances
+	 * deliberately use the per-event pointerType instead.
+	 *
+	 * A PROP, defaulted from `prefersCoarsePointer` (pointer-metrics.ts), for
+	 * the reasons that module states. */
+	readonly coarsePointer?: boolean
 }
 
-const containerStyle: CSSProperties = {
-	display: 'inline-flex',
-	alignItems: 'center',
-	gap: 2,
-	boxSizing: 'border-box',
-	padding: 4,
-	borderRadius: 8,
-	background: UI_VARS.panelBg,
-	border: `1px solid ${UI_VARS.panelBorder}`,
-}
 
-function buttonStyle(disabled: boolean): CSSProperties {
+
+function containerStyle(metrics: ZoomControlMetrics): CSSProperties {
 	return {
-		height: 28,
-		minWidth: 28,
+		display: 'inline-flex',
+		alignItems: 'center',
+		gap: metrics.gap,
+		boxSizing: 'border-box',
+		padding: metrics.padding,
+		borderRadius: 8,
+		background: UI_VARS.panelBg,
+		border: `1px solid ${UI_VARS.panelBorder}`,
+	}
+}
+
+function buttonStyle(disabled: boolean, metrics: ZoomControlMetrics): CSSProperties {
+	return {
+		height: metrics.buttonSize,
+		minWidth: metrics.buttonSize,
 		display: 'inline-flex',
 		alignItems: 'center',
 		justifyContent: 'center',
@@ -50,17 +63,18 @@ function buttonStyle(disabled: boolean): CSSProperties {
 	}
 }
 
-export function ZoomControls({ camera, viewportSize, onSetCamera, style }: ZoomControlsProps) {
+export function ZoomControls({ camera, viewportSize, onSetCamera, style, coarsePointer }: ZoomControlsProps) {
 	const disabled = zoomControlDisabled(camera)
+	const metrics = zoomControlMetrics(coarsePointer ?? prefersCoarsePointer())
 	return (
-		<div data-canvas-zoom-pill role="group" aria-label="Zoom controls" style={{ ...containerStyle, ...style }}>
+		<div data-canvas-zoom-pill role="group" aria-label="Zoom controls" style={{ ...containerStyle(metrics), ...style }}>
 			<button
 				type="button"
 				data-canvas-zoom="out"
 				aria-label="Zoom out"
 				disabled={disabled.out}
 				onClick={() => onSetCamera(zoomControlIntent(camera, viewportSize, 'out'))}
-				style={buttonStyle(disabled.out)}
+				style={buttonStyle(disabled.out, metrics)}
 			>
 				−
 			</button>
@@ -69,7 +83,7 @@ export function ZoomControls({ camera, viewportSize, onSetCamera, style }: ZoomC
 				data-canvas-zoom="reset"
 				aria-label="Reset zoom to 100%"
 				onClick={() => onSetCamera(zoomControlIntent(camera, viewportSize, 'reset'))}
-				style={buttonStyle(false)}
+				style={buttonStyle(false, metrics)}
 			>
 				{Math.round(camera.z * 100)}%
 			</button>
@@ -79,7 +93,7 @@ export function ZoomControls({ camera, viewportSize, onSetCamera, style }: ZoomC
 				aria-label="Zoom in"
 				disabled={disabled.in}
 				onClick={() => onSetCamera(zoomControlIntent(camera, viewportSize, 'in'))}
-				style={buttonStyle(disabled.in)}
+				style={buttonStyle(disabled.in, metrics)}
 			>
 				+
 			</button>

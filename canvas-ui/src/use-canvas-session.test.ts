@@ -31,6 +31,11 @@ type ShapeT = import('@ensembleworks/canvas-model').Shape
 
 interface Harness {
 	editor: InstanceType<typeof Editor>
+	/** The LIVE session object, re-captured on every render. Tests that drive
+	 * raw InputEvents (the two-finger cases) need `handleInput` itself — the
+	 * Viewport's own `onInput` — because a pinch has NO DOM event to dispatch:
+	 * it is two independent pointer streams the session has to recognize. */
+	session: () => import('./use-canvas-session.js').CanvasSession
 	host: CanvasHost
 	writes: string[]
 	notices: string[]
@@ -63,10 +68,12 @@ async function mount(opts: { rejectWrite?: boolean } = {}): Promise<Harness> {
 		onCursorScreen: () => {},
 	}
 
+	let live: import('./use-canvas-session.js').CanvasSession | null = null
 	function Host() {
 		const scopeRef = useRef<HTMLDivElement | null>(null)
 		const containerRef = useRef<HTMLDivElement | null>(null)
 		const session = useCanvasSession({ editor, toolContext, tools, host, keyboardScopeRef: scopeRef, viewportContainerRef: containerRef })
+		live = session
 		return createElement(
 			'div',
 			null,
@@ -92,6 +99,10 @@ async function mount(opts: { rejectWrite?: boolean } = {}): Promise<Harness> {
 	const q = (sel: string) => container.querySelector(sel) as HTMLElement
 	return {
 		editor,
+		session: () => {
+			assert.ok(live !== null, 'the harness rendered a session')
+			return live!
+		},
 		host,
 		writes,
 		notices,
@@ -240,4 +251,86 @@ function note(h: Harness): { x: number; y: number } {
 	assert.ok(h.editor.doc.getShape('shape:n'), 'Escape must not delete the shape being edited')
 	await h.unmount()
 	console.log("ok: (f) Escape while editing resolves to 'endEdit' and ends the edit")
+}
+
+// ---------------------------------------------------------------------------
+// (g) TWO FINGERS ARE A PINCH, NOT A DRAG (mobile-touch task).
+//
+// WHY THIS LIVES HERE AND NOT IN A CONTRACT, which is the whole point of the
+// case: the FSM contracts (pinch-zooms-about-the-midpoint,
+// pinch-does-not-drag-shapes) drive canvas-editor's `reduceMultiTouch`
+// directly from the runner, so they prove the RECOGNIZER. They cannot see
+// this file's wiring of it — and the wiring is where the bug was. The session
+// armed the pinch, stored it, and then called `cancelAndReset()` to unwind the
+// interrupted one-finger gesture; `cancelAndReset` ALSO resets the recognizer
+// (it has to: blur and pointercancel take the fingers away without delivering
+// the pointerups it waits for), so it wiped the pinch on the very event that
+// armed it. Every later move then read as an ordinary drag. Both contracts
+// stayed green throughout.
+{
+	const h = await mount()
+	const touch = (type: 'pointerdown' | 'pointermove' | 'pointerup', pointerId: number, x: number, y: number) => ({
+		type, x, y,
+		buttons: type === 'pointerup' ? 0 : 1,
+		modifiers: { shift: false, alt: false, ctrl: false, meta: false },
+		t: 0, pointerId, pointerType: 'touch' as const,
+	})
+	const zoomBefore = h.editor.get().camera.z
+	const noteBefore = note(h)
+	await act(async () => {
+		// One finger lands ON the note and drags it a little: a real gesture is
+		// in flight when the second finger arrives, so the cancel path runs.
+		h.session().handleInput(touch('pointerdown', 1, 150, 150))
+		h.session().handleInput(touch('pointermove', 1, 170, 150))
+		// ...second finger, then spread.
+		h.session().handleInput(touch('pointerdown', 2, 350, 150))
+		h.session().handleInput(touch('pointermove', 2, 450, 150))
+		h.session().handleInput(touch('pointermove', 1, 70, 150))
+		h.session().handleInput(touch('pointerup', 1, 70, 150))
+		h.session().handleInput(touch('pointerup', 2, 450, 150))
+	})
+	assert.ok(
+		h.editor.get().camera.z > zoomBefore,
+		`spreading two fingers must zoom the camera in (z ${zoomBefore} -> ${h.editor.get().camera.z})`,
+	)
+	// ...and the note must sit where the PRE-PINCH one-finger drag left it (20px
+	// right at zoom 1) — not dragged on by the pinch, and not rolled back
+	// either: a pinch abandons the gesture it interrupts, it does not revert it.
+	const noteAfter = note(h)
+	assert.deepEqual(
+		{ dx: noteAfter.x - noteBefore.x, dy: noteAfter.y - noteBefore.y },
+		{ dx: 20, dy: 0 },
+		'the two touches must never reach the select tool as a drag',
+	)
+	await h.unmount()
+	console.log('ok: (g) two fingers pinch the camera and never drag a shape')
+}
+
+// (h) ...and the session is left clean afterwards: the next one-finger gesture
+// works. A suppression that outlived its fingers would silently eat it.
+{
+	const h = await mount()
+	const touch = (type: 'pointerdown' | 'pointermove' | 'pointerup', pointerId: number, x: number, y: number) => ({
+		type, x, y,
+		buttons: type === 'pointerup' ? 0 : 1,
+		modifiers: { shift: false, alt: false, ctrl: false, meta: false },
+		t: 0, pointerId, pointerType: 'touch' as const,
+	})
+	await act(async () => {
+		h.session().handleInput(touch('pointerdown', 1, 150, 150))
+		h.session().handleInput(touch('pointerdown', 2, 350, 150))
+		h.session().handleInput(touch('pointermove', 2, 450, 150))
+		h.session().handleInput(touch('pointerup', 1, 150, 150))
+		h.session().handleInput(touch('pointerup', 2, 450, 150))
+	})
+	const before = note(h)
+	await act(async () => {
+		h.session().handleInput(touch('pointerdown', 3, 150, 150))
+		h.session().handleInput(touch('pointermove', 3, 190, 150))
+		h.session().handleInput(touch('pointerup', 3, 190, 150))
+	})
+	const after = note(h)
+	assert.ok(after.x !== before.x, 'a one-finger drag after a pinch still moves the shape')
+	await h.unmount()
+	console.log('ok: (h) a pinch does not eat the gesture that follows it')
 }

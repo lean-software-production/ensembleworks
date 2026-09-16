@@ -31,17 +31,24 @@
 // clock domain (input.ts: "t is ALWAYS caller-injected") intact all the way
 // out to the real browser event.
 //
-// SINGLE-POINTER V1 SCOPE (deliberate, not an oversight): these mappers
-// carry NO pointerType (mouse/pen/touch) and NO pointer identity into the
-// mapped InputEvent — input.ts's PointerInputEvent has no field for either,
-// so multi-touch gestures (two simultaneous pointers pinching) and
-// pen/touch discrimination (tldraw's coarse-pointer drag threshold,
-// pressure, tilt) are structurally unrepresentable downstream today. One
-// pointer at a time is the v1 model. Viewport.tsx's pointer CAPTURE does
-// read `e.pointerId` (hence PointerEventLike's optional field below), but
-// that id never enters the mapped event. Widening the event union for
-// multi-pointer/pointer-kind is a Phase 4 concern that starts in
-// canvas-editor's input.ts, not here.
+// MULTI-POINTER (mobile-touch task — this block previously declared a
+// SINGLE-POINTER V1 SCOPE and predicted that "widening the event union for
+// multi-pointer/pointer-kind is a Phase 4 concern that starts in canvas-
+// editor's input.ts, not here"; that is exactly what happened): the mapped
+// event now carries `pointerId` and `pointerType` through verbatim. This
+// module still decides NOTHING with them — it does not know what a pinch is.
+// Two consumers downstream do: canvas-editor's multi-touch.ts (which folds a
+// pair of touch streams into one pinch) and its coarse-pointer hit tolerances.
+// The mapper's job is unchanged: carry what the browser said, interpret none
+// of it.
+//
+// `pointerType` is NARROWED to the 'mouse' | 'pen' | 'touch' union rather than
+// passed as the DOM's bare `string`, because that is what the InputEvent's
+// field is — and an unrecognized value (the spec permits "" for a device that
+// cannot classify itself) maps to `undefined`, i.e. "unknown device", which
+// every consumer already handles as the conservative fine-pointer default.
+// Passing "" through as a truthy-but-meaningless string is how a device with a
+// broken driver would silently get mouse behaviour spelled as something else.
 import type { InputEvent, KeyInputEvent, Modifiers, PointerInputEvent, WheelInputEvent } from '@ensembleworks/canvas-editor'
 
 /** Structural subset of `Element` this predicate needs — real DOM elements
@@ -109,18 +116,17 @@ export interface PointerEventLike extends ModifierFields {
    * doc comment). */
   readonly buttons: number
   readonly timeStamp: number
-  /** OPTIONAL — the mapper never reads it (see SINGLE-POINTER V1 SCOPE in
-   * the module header). Declared here so the structural type stays honest
-   * about what Viewport.tsx's pointer-capture path consumes off the same
-   * event object, and so fabricated test events remain valid without it. */
+  /** OPTIONAL — forwarded onto the mapped event when present (see the
+   * MULTI-POINTER note in the module header), and also what Viewport.tsx's
+   * pointer-capture path consumes off the same event object. Optional so
+   * fabricated test events remain valid without it. */
   readonly pointerId?: number
   /** DOM PointerEvent.pointerType ('mouse' | 'pen' | 'touch'). OPTIONAL:
    * absent on fabricated test events that predate this field, and on any
-   * environment that never sets it. Read ONLY to gate `pressure` below (Task
-   * W1, D-3) — never itself forwarded onto the mapped InputEvent (input.ts's
-   * PointerInputEvent has no pointerType field; see the module header's
-   * SINGLE-POINTER V1 SCOPE note on why device-kind discrimination stays out
-   * of the event union). */
+   * environment that never sets it. Read to gate `pressure` below (Task W1,
+   * D-3) AND forwarded onto the mapped event, narrowed — see the module
+   * header's MULTI-POINTER note. Typed as a bare `string` here because the
+   * DOM's own field is one; `pointerTypeField` does the narrowing. */
   readonly pointerType?: string
   /** DOM PointerEvent.pressure, 0..1. Read ONLY when `pointerType==='pen'`
    * (see `pressureField` below) — a mouse's pressure is a meaningless
@@ -145,6 +151,18 @@ function pressureField(e: PointerEventLike): { pressure: number } | Record<strin
   return e.pointerType === 'pen' && e.pressure !== undefined ? { pressure: e.pressure } : {}
 }
 
+/** The narrowing gate described in the module header's MULTI-POINTER note.
+ * Absent-key discipline, exactly like `pressureField`: an unrecognized or
+ * missing pointerType writes NO key rather than an explicit `undefined`, which
+ * keeps a mapped event structurally identical to a hand-built script one. */
+function pointerTypeField(e: PointerEventLike): { pointerType: PointerInputEvent['pointerType'] } | Record<string, never> {
+  return e.pointerType === 'mouse' || e.pointerType === 'pen' || e.pointerType === 'touch' ? { pointerType: e.pointerType } : {}
+}
+
+function pointerIdField(e: PointerEventLike): { pointerId: number } | Record<string, never> {
+  return typeof e.pointerId === 'number' ? { pointerId: e.pointerId } : {}
+}
+
 export function pointerEventToInput(e: PointerEventLike, viewportRect: RectLike): PointerInputEvent {
   return {
     type: e.type as PointerInputEvent['type'],
@@ -154,6 +172,8 @@ export function pointerEventToInput(e: PointerEventLike, viewportRect: RectLike)
     modifiers: modifiersOf(e),
     t: e.timeStamp,
     ...pressureField(e),
+    ...pointerIdField(e),
+    ...pointerTypeField(e),
   }
 }
 

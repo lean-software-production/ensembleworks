@@ -9,10 +9,11 @@ import { LoroCanvasDoc } from '@ensembleworks/canvas-doc'
 import { centroid, localBounds, medianSize, validateShape, worldBounds, type CanvasDocument } from '@ensembleworks/canvas-model'
 import type { Anchor, Contract, GestureOp, Obs, Rng } from '@ensembleworks/interaction-contracts'
 import { mulberry32 } from '@ensembleworks/interaction-contracts'
-import { applyWheel } from '../camera.js'
+import { applyPinch, applyWheel } from '../camera.js'
 import { Editor } from '../editor.js'
 import type { InputEvent, Modifiers, Tool } from '../input.js'
 import { screenToWorld, worldToScreen } from '../input.js'
+import { IDLE_MULTI_TOUCH, reduceMultiTouch, type MultiTouchState } from '../multi-touch.js'
 import { script } from '../script.js'
 import { createCreateTool, type CreateKind } from '../tools/create.js'
 import { createSelectAndTransformTool } from '../tools/select-and-transform.js'
@@ -73,9 +74,15 @@ function opsToEvents(ops: readonly GestureOp[], editor: Editor): InputEvent[] {
   const b = script()
   for (const op of ops) {
     switch (op.kind) {
-      case 'down': { const p = resolveAnchor(op.at, editor); b.down(p.x, p.y, { modifiers: mods(op.modifiers) }); break }
-      case 'move': { const p = resolveAnchor(op.at, editor); b.move(p.x, p.y, { steps: op.steps ?? 0, modifiers: mods(op.modifiers) }); break }
-      case 'up': { b.up({ modifiers: mods(op.modifiers) }); break }
+      // MULTI-POINTER (mobile-touch task): `pointer`/`pointerType` are passed
+      // straight through to script.ts's builder, which keeps a position per
+      // pointer id — so two interleaved finger streams stay independent. Both
+      // omitted reproduces the single-pointer builder call exactly (the
+      // builder writes no key at all), so no pre-existing contract's event
+      // array changes.
+      case 'down': { const p = resolveAnchor(op.at, editor); b.down(p.x, p.y, { modifiers: mods(op.modifiers), pointerId: op.pointer, pointerType: op.pointerType }); break }
+      case 'move': { const p = resolveAnchor(op.at, editor); b.move(p.x, p.y, { steps: op.steps ?? 0, modifiers: mods(op.modifiers), pointerId: op.pointer, pointerType: op.pointerType }); break }
+      case 'up': { b.up({ modifiers: mods(op.modifiers), pointerId: op.pointer, pointerType: op.pointerType }); break }
       case 'wheel': { const p = resolveAnchor(op.at, editor); b.wheel(op.dx, op.dy, { at: [p.x, p.y], modifiers: mods(op.modifiers) }); break }
       case 'key': { b.key(op.key, { modifiers: mods(op.modifiers) }); break }
       case 'dropFile': {
@@ -384,7 +391,35 @@ export function runContractFsm(contract: Contract, seed: number): FsmRunResult {
 
   const events = opsToEvents(contract.gesture(rng), editor)
   let state: unknown = tool.initialState
+  // The TWO-FINGER RECOGNIZER (mobile-touch task), driven here exactly as
+  // canvas-ui's useCanvasSession drives it in the real client: the SAME pure
+  // reducer, in the same position in the funnel (before the tool sees the
+  // event), so a pinch contract exercises the shipped recognizer rather than a
+  // re-implementation of it. Non-touch/id-less events pass straight through,
+  // which is why every pre-existing contract is unaffected.
+  let multiTouch: MultiTouchState = IDLE_MULTI_TOUCH
   for (const event of events) {
+    if (event.type === 'pointerdown' || event.type === 'pointermove' || event.type === 'pointerup') {
+      const mt = reduceMultiTouch(multiTouch, event)
+      multiTouch = mt.state
+      if (mt.cancelGesture) {
+        // Abandon the single-finger gesture the second finger interrupted.
+        // The FSM-level equivalent of useCanvasSession's `cancelAndReset`:
+        // reset the tool to idle. (This runner drives ONE tool, so there is no
+        // per-tool cleanup-intent table to consult — cancelActiveTool's
+        // deletes only ever apply to create/arrow/draw/line tools, none of
+        // which a contract's `tool` field can select.)
+        state = tool.initialState
+      }
+      if (mt.pinch) editor.apply({ type: 'SetCamera', ...applyPinch(editor.get().camera, mt.pinch) })
+      if (!mt.forward) {
+        if (contract.when === 'every-event') {
+          const failure = contract.check(obs)
+          if (failure) return { contract: contract.name, seed, failure }
+        }
+        continue
+      }
+    }
     const result = tool.onEvent(state, event)
     state = result.state
     if (result.intents.length > 0) editor.applyAll(result.intents)

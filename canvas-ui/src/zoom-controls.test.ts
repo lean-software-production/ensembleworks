@@ -4,6 +4,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MAX_ZOOM, MIN_ZOOM } from '@ensembleworks/canvas-editor'
 import { ZoomControls } from './ZoomControls.js'
+import { zoomControlMetrics } from './zoom-controls-model.js'
 
 const VIEWPORT = { width: 800, height: 600 }
 
@@ -38,3 +39,29 @@ console.log('ok: ZoomControls renders out/reset/in buttons with the current zoom
 }
 
 console.log('ok: ZoomControls markup smoke test')
+
+// ---------------------------------------------------------------------------
+// FINGER-SIZED BUTTONS (mobile-touch task, scope 3). The pill was a flat 28px
+// square per button — under half a fingertip, well below the ~44px platform
+// guidance, and the ONLY zoom affordance a touch user had before pinch
+// existed. It also sits in a corner, where a miss lands on the canvas and
+// starts a marquee.
+{
+	const coarse = renderToStaticMarkup(
+		createElement(ZoomControls, { camera: { x: 0, y: 0, z: 1 }, viewportSize: VIEWPORT, onSetCamera: () => {}, coarsePointer: true }),
+	)
+	const fine = renderToStaticMarkup(
+		createElement(ZoomControls, { camera: { x: 0, y: 0, z: 1 }, viewportSize: VIEWPORT, onSetCamera: () => {}, coarsePointer: false }),
+	)
+	// ABSOLUTE, both sides: asserting only "coarse is bigger" would survive a
+	// retune to 30px, which is still not a touch target.
+	assert.equal(zoomControlMetrics(true).buttonSize, 44, 'a coarse pointer gets a 44px button')
+	assert.equal(zoomControlMetrics(false).buttonSize, 28, 'a fine pointer keeps the 28px button')
+	// ...and the component actually RENDERS the metric rather than merely being
+	// able to compute it — the gap this package has no DOM emulator to close
+	// any other way.
+	assert.match(coarse, /data-canvas-zoom="in"[^>]*style="[^"]*height:44px/, 'the coarse pill renders 44px buttons')
+	assert.match(fine, /data-canvas-zoom="in"[^>]*style="[^"]*height:28px/, 'the fine pill renders 28px buttons')
+	assert.ok(!fine.includes('height:44px'), 'a fine pointer never gets the touch size')
+	console.log('ok: ZoomControls buttons reach a 44px touch target on a coarse pointer')
+}

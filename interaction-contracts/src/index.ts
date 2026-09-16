@@ -11,6 +11,10 @@ import { bbthreadWorkspaceIsHollow } from './contracts/bbthread-workspace-is-hol
 import { bbthreadPaneDoubleClickBeginsEditing } from './contracts/bbthread-pane-double-click-begins-editing.js'
 import { bbthreadEscapeEndsEditing } from './contracts/bbthread-escape-ends-editing.js'
 import { bbthreadDividerDragResizesPane } from './contracts/bbthread-divider-drag-resizes-pane.js'
+import { bbthreadDividerIsFingerSized } from './contracts/bbthread-divider-is-finger-sized.js'
+import { pinchZoomsAboutTheMidpoint } from './contracts/pinch-zooms-about-the-midpoint.js'
+import { pinchDoesNotDragShapes } from './contracts/pinch-does-not-drag-shapes.js'
+import { selectionHandlesAreFingerSized } from './contracts/selection-handles-are-finger-sized.js'
 import { bbthreadDividerDragClampsAtTwoThirds } from './contracts/bbthread-divider-drag-clamps-at-two-thirds.js'
 import { bbthreadPaneRegionDoesNotCapture } from './contracts/bbthread-pane-region-does-not-capture.js'
 import { dragIntoFrameReparents } from './contracts/drag-into-frame-reparents.js'
@@ -86,6 +90,11 @@ export const CONTRACTS: readonly Contract[] = [
   bbthreadPaneDoubleClickBeginsEditing,
   bbthreadEscapeEndsEditing,
   bbthreadDividerDragResizesPane,
+  // Mobile-touch task (pinch/zoom + finger-sized targets).
+  pinchZoomsAboutTheMidpoint,
+  pinchDoesNotDragShapes,
+  bbthreadDividerIsFingerSized,
+  selectionHandlesAreFingerSized,
   bbthreadDividerDragClampsAtTwoThirds,
   editingEndsOnOutsideClick,
   frameHeaderDoubleClickRenames,
