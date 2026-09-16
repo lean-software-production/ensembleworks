@@ -138,6 +138,7 @@ const TOOL_TO_KIND: Partial<Record<ToolId, ShapeKind>> = {
   geo: 'geo',
   arrow: 'arrow',
   frame: 'frame',
+  bbthread: 'bbthread',
 }
 
 /**
@@ -145,10 +146,11 @@ const TOOL_TO_KIND: Partial<Record<ToolId, ShapeKind>> = {
  * `toolId`'s kind WOULD support, when nothing is selected but a style-
  * bearing tool is armed. `select`/`hand` (and any other non-style tool) ->
  * `[]`, matching the panel's empty-selection-and-no-armed-tool -> null case.
- * `frame` has no row in `STYLE_AXES_BY_KIND` (it carries no `props` style
- * axes) so it still reaches here with exactly `['opacity']` — same as an
- * armed frame tool offering only the opacity control, matching v1's parity
- * inclusion of 'frame' in STYLE_TOOLS. There is no shape yet, so — unlike
+ * `frame`/`bbthread` have no row in `STYLE_AXES_BY_KIND` (neither carries
+ * any styled `props` axis) so they still reach here with exactly
+ * `['opacity']` — same as an armed frame/bbthread tool offering only the
+ * opacity control, matching v1's parity inclusion of 'frame' in
+ * STYLE_TOOLS. There is no shape yet, so — unlike
  * `relevantAxes` — this can't fold in a stored VALUE; the panel reads the
  * armed value separately, from `EditorState.nextShapeStyle`
  * (StylePanel.tsx).

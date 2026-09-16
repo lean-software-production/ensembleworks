@@ -3,7 +3,7 @@
 //
 // The strip (canvas/dock/dock.ts) is a content script: imperative DOM in a bb
 // app shell with no React tree and no test harness short of a real browser. So
-// the split is the same one roster.ts and agents-view.ts use, only harder:
+// the split is the same one roster.ts and canvas/shape-text.ts use, only harder:
 // every judgement — who gets a bubble, in what order, who is ringed, whose face
 // is a place the camera can fly to — is a pure function here, and the script is
 // a renderer that makes no decisions of its own. Placement and fold state are

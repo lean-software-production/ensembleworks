@@ -44,6 +44,38 @@
 // canvas-editor's input.ts, not here.
 import type { InputEvent, KeyInputEvent, Modifiers, PointerInputEvent, WheelInputEvent } from '@ensembleworks/canvas-editor'
 
+/** Structural subset of `Element` this predicate needs — real DOM elements
+ * satisfy it for free, and a fabricated test double (`{ closest: () => ({})
+ * }`) needs nothing more (same structural-typing posture as this module's
+ * other Like interfaces). */
+interface ClosestLike {
+  closest(selector: string): unknown
+}
+
+/** True when `target` is (or is nested inside) an element the HOST has
+ * marked `data-canvas-interactive` — the Viewport's "yield to interactive
+ * content" rule (pane input routing task, docs/plans/
+ * 2026-09-15-bb-thread-frame.md's follow-up section): a bb thread pane
+ * mounts this attribute only while it owns real text selection/scroll (the
+ * `editingId === shape.id && editingRegion === 'body'` window — see
+ * canvas-editor's EditorState.editingRegion), so the viewport must not
+ * capture/forward pointer input, must not forward or `preventDefault` a
+ * wheel, and must not forward most keys while the event originated there —
+ * see Viewport.tsx's handlePointer/handleWheel/handleKey for where this
+ * predicate gates each of those three input kinds.
+ *
+ * Duck-typed on `.closest` (not `instanceof Element`) so a fabricated test
+ * double works with no real DOM (this file's/viewport.test.ts's no-DOM
+ * house style) — `null`, a non-Element structural value with no `closest`
+ * method, and a real ancestor chain with no matching element all correctly
+ * report `false`. */
+export function yieldsToInteractive(target: EventTarget | null): boolean {
+  if (target === null) return false
+  const el = target as Partial<ClosestLike>
+  if (typeof el.closest !== 'function') return false
+  return el.closest('[data-canvas-interactive]') !== null
+}
+
 /** Subset of DOMRect this module needs — a plain `{ left, top }` object
  * satisfies it, no real DOMRect required (see fabrication note above). */
 export interface RectLike {

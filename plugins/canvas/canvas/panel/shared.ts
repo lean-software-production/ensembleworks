@@ -47,6 +47,22 @@ export const chromeTabRowStyle: CSSProperties = {
   minWidth: 0,
 };
 
+// The manual zoom controls dock to the OPPOSITE corner from the tool rail
+// (chromeWrapperStyle, left-centred) — bottom-right, out of the rail's own
+// vertical-centre band so neither chrome ever overlaps the other. Same
+// edge-gap/z-index/pointer-events vocabulary as the rail for the same
+// reasons (see chrome-dock.ts's CHROME_DOCK_* comments): clearance from the
+// stage's own edge, painting above the canvas content but below the
+// <body>-portalled popovers, and opting back in to pointer events since the
+// stage/wrapper ancestors it sits over are not otherwise click-through here.
+export const chromeZoomStyle: CSSProperties = {
+  position: "absolute",
+  right: CHROME_DOCK_EDGE_GAP_PX,
+  bottom: CHROME_DOCK_EDGE_GAP_PX,
+  zIndex: CHROME_DOCK_Z_INDEX,
+  pointerEvents: CHROME_DOCK_POINTER_EVENTS.card,
+};
+
 export const chromeCardColumnStyle: CSSProperties = {
   pointerEvents: CHROME_DOCK_POINTER_EVENTS.card,
   display: "flex",

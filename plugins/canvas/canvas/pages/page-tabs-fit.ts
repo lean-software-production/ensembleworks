@@ -86,7 +86,17 @@
  * would mean a retune of the presence strip silently moved the canvas's tab
  * bar.
  */
-export const PAGE_TABS_MIN_PX = 360;
+export const PAGE_TABS_MIN_PX = 240;
+
+/*
+ * WHY 240, AND WHY IT WAS 360 (owner bug, 2026-09-16: "In the mobile view I
+ * can't see the canvas tabs"). A phone-width bb panel measures roughly 360-430
+ * px, and because the gate is seeded hidden the width that REVEALS the row is
+ * MIN + HYSTERESIS — 408 with the old floor — so a phone never qualified. 240
+ * (revealed at 288) admits every phone while still refusing the row on a
+ * sliver; the strip scrolls horizontally, so a name that does not fit is a
+ * scroll, never a clipped label. Still not measured in a browser.
+ */
 
 /*
  * WHY 360, AND WHY IT WAS 720 (owner bug, 2026-09-06: "i'm not seeing the tabs

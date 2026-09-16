@@ -30,6 +30,10 @@ function fakeToolContext(editingId: string | null): ToolContext {
     selection: new Set<string>(),
     hover: null,
     editingId,
+    // Every case in this file exercises the header-rename mount, so a
+    // non-null editingId always carries region 'name' here — the invariant
+    // (editingRegion is null iff editingId is null) still holds.
+    editingRegion: editingId === null ? null : 'name',
     nextShapeStyle: {},
     currentPageId: 'page:p',
   })

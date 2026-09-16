@@ -308,7 +308,13 @@ export interface ReorderPage { readonly type: 'ReorderPage'; readonly id: string
 export interface SetCamera { readonly type: 'SetCamera'; readonly x: number; readonly y: number; readonly z: number }
 export interface SetSelection { readonly type: 'SetSelection'; readonly ids: readonly string[] }
 export interface SetHover { readonly type: 'SetHover'; readonly id: string | null }
-export interface BeginEdit { readonly type: 'BeginEdit'; readonly id: string }
+/** `region` (pane input routing task, docs/plans/2026-09-15-bb-thread-frame.md's
+ * "Pane input routing" follow-up) — WHICH part of `id` is being edited:
+ * 'name' (a frame-like shape's header-band rename input) or 'body' (the
+ * shape's own content — the default, `intent.region ?? 'body'` in
+ * editor.ts's applyOne, so every pre-existing emitter that never set this
+ * field keeps meaning exactly what it always did). */
+export interface BeginEdit { readonly type: 'BeginEdit'; readonly id: string; readonly region?: 'name' | 'body' }
 export interface EndEdit { readonly type: 'EndEdit' }
 
 /** Arm the style a NEWLY-CREATED shape will inherit (Task AS1/AS2) — parity

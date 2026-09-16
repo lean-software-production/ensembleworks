@@ -5,43 +5,6 @@ neutral drawing/text colours, and selection controls update with the host theme.
 Sticky-note colours and explicit drawing colours remain document content. Theme
 adaptation is local presentation and does not alter the shared canvas document.
 
-## Canvas-first experiment
-
-Linked shapes show thread cards below them: BB's title, current status,
-attention/unread information, activity count, project and machine names, and an excerpt of the latest
-assistant response, rendered with BB’s Markdown component. Click a card (or the existing badge's
-**Open thread**) to use BB's full thread view. **Back to canvas** in the thread
-header restores the page, camera, and surviving selection. Threads opened
-elsewhere have a **Canvas** button to enter the map.
-
-Return locations are private to the browser tab, retained in session storage
-(up to 40 visits, with a bounded payload). If the same thread was opened from
-several distinct locations, the header asks which visit to return to. The URL
-carries a return token; opening that URL in another browser still opens the
-page, but cannot restore private view state. Deleted pages fall back through
-the existing page router; deleted or moved shapes are omitted from selection.
-
-Cards follow their linked shapes and scale with canvas zoom, including their text
-and spacing. Partially visible cards are clipped at the viewport edge. Selecting a shape hides its card so its editing controls remain usable.
-**Hide threads** shows a count for the current page and hides cards until the canvas remounts; the existing badges
-and unlink menu remain available. This first experiment covers explicitly linked
-threads, not an automatic layout of every BB thread, generated progress summaries,
-or a change to BB's startup route. Cards can overlap when linked shapes are close.
-
-Response excerpts use BB's output API, refreshed every 15 seconds for up to 20
-visible cards. Reads stop while the tab is hidden or cards are hidden. The server
-only reads explicitly linked threads, caps each excerpt at 320 characters, and
-keeps a bounded 15-second memory cache. Missing or failed reads show a conversation
-fallback. “Latest response” is an excerpt, not a generated progress summary or a
-live token stream. No additional model calls are made.
-
-This change is confined to the Canvas plugin. It does not change the clean-room
-editor/renderer interaction surfaces. Validation includes the plugin typecheck,
-unit tests, structural-quality gate, build, and a browser component test of the
-navigation callbacks and restored editor state. The component test substitutes
-BB routing; it does not establish live host navigation fidelity.
-
-
 The EnsembleWorks multiplayer infinite canvas, mounted as a first-class BB plugin
 panel. Every open **Canvas** page in every bb client edits one shared Loro CRDT
 document; the plugin backend is the authoritative peer and persists it.
@@ -53,16 +16,19 @@ document; the plugin backend is the authoritative peer and persists it.
   sweep, and a `bb canvas` CLI for inspecting the live room.
 - `canvas/` — the room host (`room.ts`), its SQLite snapshot + update log
   (`store.ts`), the shared wire contract (`wire.ts`), the identity contract
-  (`identity.ts`), the note → agent-thread links (`agents.ts`) and their
-  overlay (`agents-ui.tsx`), the roster + audio contract (`roster.ts`,
-  `av.ts`) with its UI (`roster-ui.tsx`), LiveKit (`av-room.ts`), the room
-  transcript (`transcript.ts`, `transcript-view.ts`, `transcript-ui.tsx`), the
-  header ↔ body seam (`panel-bus.ts`), and the frontend mount
-  (`CanvasPanel.tsx`) with its page resolution and presence publisher. The
-  canvas controls (tools, shortcuts, toolbar, style panel, text editing) come
-  from the shared `@ensembleworks/canvas-ui` package, the same one the
-  EnsembleWorks web app mounts; this plugin supplies the bb transport, theme
-  mapping, page tabs, agent layer and dock.
+  (`identity.ts`), the `bb thread frame` control's server-side pieces
+  (`thread-picker.ts`, `agent-project.ts`, `thread-frames.ts` — see below),
+  the roster + audio contract (`roster.ts`, `av.ts`) with its UI
+  (`roster-ui.tsx`), LiveKit (`av-room.ts`), the room transcript
+  (`transcript.ts`, `transcript-view.ts`, `transcript-ui.tsx`), the header ↔
+  body seam (`panel-bus.ts`), and the frontend mount (`CanvasPanel.tsx`) with
+  its page resolution and presence publisher. The canvas controls (tools,
+  shortcuts, toolbar, style panel, text editing, zoom controls) come from the
+  shared `@ensembleworks/canvas-ui` package, the same one the EnsembleWorks
+  web app mounts; this plugin supplies the bb transport, theme mapping, page
+  tabs and dock. `panel/session-view.tsx` docks the manual zoom controls
+  (zoom out / level readout that resets to 100% / zoom in) to the stage's
+  bottom-right corner, opposite the left-centred tool rail.
 - `transport.ts` — the client half of the transport: outbound frames over rpc,
   inbound frames off `bb.realtime`.
 - `app.tsx` — registers the full-bleed **Canvas** nav panel, its sidebar count
@@ -118,93 +84,106 @@ while browser tabs keep their peers alive, so the backend publishes one
 client routine — re-join, then `peer.reconnect`, which re-arms the handshake
 and pushes this peer's full history back up.
 
-## Binding a shape to a bb thread — launch or attach
+## The bb thread frame
 
-Select a single shape and an **Agent ▾** button appears under it, with two arms:
-
-- **Run as new thread** — spawns a real bb thread on the note's text. Notes
-  only, because it is the note's body that becomes the prompt; on any other kind
-  the item is greyed rather than hidden, so it says why.
-- **Attach to existing thread…** — opens a searchable list of the threads
-  already in the canvas's project, most recently updated first, and binds this
-  shape to the one you pick. **Any shape**: attaching sends two ids and no
-  prompt, so a frame, a rectangle or an image can carry a badge just as well.
-
-Either way that shape then carries a status dot in its top-right corner — amber
-and pulsing while the agent is working, green when it is idle, red when it
-failed. Clicking the dot opens a small menu naming the thread, with **Open
-thread** — bb's own chat for it in a 420px panel beside the canvas, where you can
-read the reply and send follow-ups — and **Unlink thread**.
+A native `bbthread` shape binds a piece of the canvas to a real bb thread. Its
+right third renders the host `ThreadChat` — `variant: "timeline"` while idle
+(read-only, just the conversation as it happens) and `variant: "compact"` with
+the host composer once you double-click into it — while its left two thirds
+stay an ordinary hollow frame you can drop other shapes into. Binding happens
+one of two ways: pick an existing project thread from a picker, or spawn a new
+one seeded from the text of the frame's own children (a handful of notes
+sketching the brief, say). Either way the frame's footer offers **Open full →**
+into bb's own thread view.
 
 | Piece | Where |
 | --- | --- |
-| Spawn | rpc `canvas_run_note { shapeId, text }` → `bb.sdk.threads.spawn` |
-| Attach | rpc `canvas_attach_thread { shapeId, threadId }` → `bb.sdk.threads.get`, then the *same* `record` + publish the spawn uses |
-| Picker | rpc `canvas_thread_options` → `bb.sdk.threads.list({ projectId, archived: false })`, ordered and capped by `canvas/thread-picker.ts` |
-| Link | `bb.storage.kv`, one row per shape, mirrored in memory (`canvas/agents.ts`) |
-| Status | `bb.events.on` thread.active/idle/failed → `bb.realtime.publish("canvas:threads", link)` |
-| Unlink | `bb.events.on` thread.archived/deleted, or rpc `canvas_unlink_agent { shapeId }` → `publish("canvas:threads", { shapeId, unlinked: true })` |
-| Seed | rpc `canvas_agents` — every link, on mount and after a realtime reconnect |
-| Chat | the host `ThreadChat` component, `variant: "compact"`, `layout: "contained"` |
+| Pick an existing thread | rpc `canvas_thread_options` → `bb.sdk.threads.list({ projectId, archived: false })`, ordered and capped by `canvas/thread-picker.ts` |
+| Spawn a new thread | rpc `canvas_spawn_thread { prompt }` → `bb.sdk.threads.spawn`, returning `{ threadId }` for the shape to record on itself |
+| Bind the result | an ordinary `UpdateProps` write of `threadId` onto the shape — a canvas-document edit like any other, not a separate rpc |
+| Read from a shell | `bb canvas thread-frames [--json]` — every `bbthread` shape's id, name, bound thread, and direct children (`canvas/thread-frames.ts`) |
+| Chat | the host `ThreadChat` component, `variant: "timeline"` idle / `"compact"` focused, `layout: "contained"` |
 
-Four deliberate choices:
+This replaces an earlier spike (launch a thread from a note, or attach one to
+any shape, tracked in `bb.storage.kv`) rather than extending it: that kv-backed
+link data is simply discarded, with no migration. The binding now lives on the
+shape itself, in the canvas document, because a `bbthread` frame is a real
+`@ensembleworks/canvas-model` shape kind — unlike the old spike, which
+deliberately avoided touching that schema.
 
-- **The link lives in kv, not in the canvas document.** The document is a CRDT
-  whose schema belongs to `@ensembleworks/canvas-model`, and this spike consumes
-  those packages without modifying them — so "this note has a thread" is a bb
-  fact stored on the bb side, not an invented shape field.
-- **Badges are plugin chrome, not shapes.** `canvas/agents-ui.tsx` layers an
-  ordinary absolutely-positioned div over the viewport and positions it with the
-  same `worldBounds` → `worldToScreen` transform the collaborator cursors use, so
-  a badge tracks its note through pan, zoom, drag and remote edits without
-  `canvas-react` knowing agents exist. The layer is `pointer-events: none` except
-  on its own controls, and sits outside `<Viewport>` so a badge click is never
-  also a canvas gesture.
-- **Re-running, or attaching over an existing link, replaces it.** The
-  superseded thread keeps its history and its sidebar row; it just stops being
-  the one that shape points at. A shape is one sticky with one current answer,
-  and a fan-out of orphan badges is worse.
-- **One thread can only badge one shape.** The kv mirror is keyed in both
-  directions (shape → thread *and* thread → shape), so a second shape claiming
-  the same thread would freeze the first shape's badge and steal its lifecycle
-  events. Attaching a thread that another shape already holds is refused, naming
-  that shape; re-attaching the *same* thread to the *same* shape is allowed,
-  because it is idempotent rather than wrong.
-- **Attach verifies, then derives.** `bb.sdk.threads.get` runs *before* anything
-  is written — a kv row pointing at a thread that does not resolve mounts a
-  `ThreadChat` on nothing — and resolving is only half the check, since `get`
-  answers for archived and deleted threads too. The badge's starting status is
-  then read off that thread (`active`/`starting`/`stopping` → running, `idle` →
-  idle, `error` → failed) rather than assumed; only the spawn path is entitled to
-  hardcode "running", because spawning starts a turn.
-- **A badge disappears when its thread ends, and only the LINK ever dies.**
-  `thread.archived` and `thread.deleted` drop the kv row and broadcast
-  `{ shapeId, unlinked: true }`, so the badge goes from every open tab live
-  rather than lingering as a button that opens nothing. **Unlink thread** does
-  the same on a human's say-so and never touches the conversation — no archive,
-  no delete, no stop; destroying a thread is a decision for bb's own thread UI,
-  where it can be confirmed. On load, `canvas-gc`'s first tick also asks
-  `bb.sdk.threads.get` about each surviving link and drops the ones bb reports
-  as already archived or deleted, since those events only reach a *loaded*
-  plugin; a probe that *throws* keeps its link, because "no such thread" and
-  "the call did not work" fail identically and a wrongly dropped badge destroys
-  the only pointer from a note to its conversation.
+Which project a spawned or listed thread lives in is still the plugin's
+`project` setting (`bb plugin config canvas set project proj_…`), and
+**unset is a refusal, not a default**: both rpcs fail with a message naming
+that setting rather than guessing — see `canvas/agent-project.ts` for the full
+argument.
 
-Which project the threads live in is the plugin's `project` setting
-(`bb plugin config canvas set project proj_…`), and **unset is a refusal, not a
-default**: the launch, the picker and the attach all fail with a message naming
-that setting. It used to fall back to the first project bb listed, which meant
-every canvas thread silently landed somewhere the owner was not looking — see
-`canvas/agent-project.ts` for the full argument, including why "guess it when
-there is only one project" was rejected too. `bb canvas agents` prints every link
-and its status from a shell.
+**The pane has four states**, decided by `bbthreadPaneState`
+(`canvas/shapes/bbthread-model.ts`):
 
-Known, spike-level: deleting a *note* leaves its kv row behind (nothing renders
-for it, and the row is overwritten if the id is ever reused) — the canvas
-document has no delete event this plugin observes, unlike the thread side, which
-does. Statuses are ephemeral
-realtime messages, so a panel re-reads `canvas_agents` after a reconnect rather
-than trusting a badge frozen at whatever it last saw.
+| State | When | Shown |
+| --- | --- | --- |
+| `unbound` | no `threadId` on the shape | the picker (a filter box + rows from `canvas_thread_options`) and a **New thread from these elements** button, seeded from the frame's own children's text (`spawnPromptFor`) and disabled when they carry no text at all |
+| `loading` | a `threadId` is set, but the host's live thread list (`experimental_useSidebarThreads`) isn't `ready` yet | a plain "Loading…" line — covers both `loading` and a transient `error` from the host, which get the same treatment here: neither says anything more specific than "not resolved yet" |
+| `bound` | `ready`, and a live, non-archived row matches | the thread's title, a status pill (`working` / `idle` / `attention` / `failed`, from the row's `indicator`/`hasPendingInteraction`/activity counters), the host `ThreadChat` itself, and the footer's short id + **Open full →** |
+| `gone` | `ready`, but no row matches the `threadId`, or the match is archived | a short explanation and an **Unbind** button |
+
+**Unbind writes `threadId: ""`, not `undefined`.** `UpdateProps` is a
+props-only *merge* (`canvas-doc`'s `updateProps`), and the CRDT layer turns a
+merged-in `undefined` back into `null`, which the shape's own
+`threadId: z.string().optional()` schema then rejects — so there is no way to
+truly *remove* the key from here. Writing `""` instead, and treating it
+identically to "absent" everywhere a `bbthread` shape's binding is read
+(`threadIdOf`, `canvas/thread-frames.ts`'s own `stringProp`), is this plugin's
+one workaround for that gap.
+
+**The pane is the only solid part of the frame's interior**, and whether it is
+interactive right now is decided by the EDITOR, not this component
+(docs/plans/2026-09-15-bb-thread-frame.md's "Pane input routing" follow-up): a
+single click selects or drags the frame like any other shape, exactly as it
+would over the frame's hollow left two-thirds; **double-click the pane** to
+start editing it (canvas-editor's select-tool FSM turns that into `BeginEdit
+{ region: 'body' }`), which makes canvas-react's viewport yield every
+pointer/wheel event — and every key but Escape — whose DOM target lands
+inside the pane, so the timeline scrolls and clicks reach the picker/
+`ThreadChat` instead of arming a drag or a marquee; **Escape, or a click
+outside the pane**, ends the edit and hands input back to the canvas. There is
+no local idle/focused reducer in this plugin any more — `BbThreadShape.tsx`
+only reads `editorState.editingId`/`editingRegion` (via
+`paneInteraction`, `canvas/shapes/bbthread-model.ts`) and reflects the
+answer: it sets `data-canvas-interactive` on the pane only while interactive,
+and shows a small hint ("Double-click to read or reply · Esc to leave", etc)
+while it isn't. While focused the pane also switches the host `ThreadChat` to
+`variant: "compact"` so you can reply in place, right there in the composer;
+idle stays `variant: "timeline"` — read-only, no composer. In view mode the
+pane follows the newest turn as it streams in (`useFollowLatest`,
+`canvas/shapes/bbthread-follow.ts`); focusing the pane to reply stops the
+follow so your own scrolling is never fought. Hit-testing itself (which part of a `bbthread` shape is "solid") is
+canvas-model's job, not this component's — see `isFrameLike`,
+`bbthreadPaneLocalBounds` and `bbthreadWorkspaceLocalBounds` in
+`canvas-model/src/geometry.ts`.
+
+**The pane is resizable** — drag its left edge. Width is a synced `paneFraction`
+prop on the shape (`canvas-model`'s `paneFractionOf`, clamped to
+`BBTHREAD_PANE_MIN_FRACTION`–`BBTHREAD_PANE_MAX_FRACTION`, 20%–66% of the
+frame's width), not local UI state, so it survives a reload and shows the same
+to every peer. The drag itself is handled entirely by canvas-editor's select
+tool, never by this plugin: a pointerdown within the divider band
+(`isPointOnBbthreadDivider`) enters a `resizingPane` mode and emits
+`UpdateProps { paneFraction }` on every move. `BbThreadShape.tsx` only DRAWS
+the handle — a thin strip rendered as a SIBLING of the pane div (never nested
+inside it), positioned per `paneLayout(shape).divider`, so it keeps forwarding
+its pointer events to the canvas even while the pane itself is focused and
+carrying `data-canvas-interactive` — which is exactly what makes the handle
+work while you're mid-read of the thread, not just when the pane is idle.
+
+| File | What it owns |
+| --- | --- |
+| `canvas/shapes/bbthread-model.ts` | every pure decision: pane state, the spawn prompt, `paneInteraction` (interactive/hint, from editor state), the pane's own internal layout (title row / body / footer), and which DOM descendants of the chat root count as a follow-scroll target (`isScrollable`/`pickScrollTargets`) |
+| `canvas/shapes/BbThreadShape.tsx` | the body — "hands only", wires the model's decisions to real DOM and to `ThreadChat`/`experimental_useSidebarThreads`/`useRpc` |
+| `canvas/shapes/bbthread-follow.ts` | `useFollowLatest` — the DOM-only plumbing (MutationObserver/ResizeObserver, `scrollTop` writes) behind "the pane follows the newest turn" while idle |
+| `canvas/shapes/bbthread-host.ts` | how the body's **Open full →** button reaches the canvas session's own thread-return navigation, without widening `ShapeBodyProps` for one shape |
+| `canvas/thread-picker.ts` | the picker's ordering/filtering (shared with the retired launch-or-attach spike) |
+| `canvas/thread-frames.ts` | the `bb canvas thread-frames` CLI read |
 
 ### Who is at the canvas
 
@@ -2150,7 +2129,7 @@ Or let `bb plugin dev` rebuild and reload on every save.
 ```
 bb canvas status         # room, who is connected (by name), shapes, pending updates
 bb canvas shapes --json  # every shape id
-bb canvas agents         # every note -> agent-thread link and its live status
+bb canvas thread-frames  # every bbthread frame, its bound thread, and its children
 bb canvas transcript --since 30m   # what the room said in the last half hour
 bb plugin token canvas   # the token the VM's scribe service POSTs with
 bb plugin config canvas  # the project + the three LiveKit settings

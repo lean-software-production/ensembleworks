@@ -298,6 +298,20 @@ export interface Obs {
    * button it is attached to, in DOM order. Browser-only: the flyout is
    * rendered chrome; the FSM adapter throws 'not observable at fsm level'. */
   armedFlyoutTools(): readonly string[]
+  /** A shape's RAW stored prop value at `key` (`props[key]`), or `undefined`
+   * when the shape is absent or carries no such key. Resizable-pane task
+   * (docs/plans/2026-09-15-bb-thread-frame.md's "Resizable pane" section) —
+   * `shapeStyle` cannot answer this: it narrows to `string | number` and
+   * folds a missing/absent value down to `null`, which can't distinguish "no
+   * such shape" from "prop is present but some other type" from "prop is
+   * absent" — irrelevant for a style axis, but load-bearing here, where the
+   * divider-drag contracts need to read `paneFraction` (a `number | undefined`
+   * prop) back out exactly as stored. Available at BOTH levels (reads doc
+   * state, not the DOM) — no throw-stub: the FSM adapter reads
+   * `editor.doc.getShape(id)?.props[key]` directly, the browser adapter reads
+   * the shape from its pre-sampled snapshot (the same one `shapeStyle`
+   * already reads its `props` object from). */
+  shapeProp(id: string, key: string): unknown
 }
 
 /** A contract declaration = data. */

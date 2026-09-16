@@ -691,3 +691,52 @@ export function rootCallee(text: string): string {
     return callee.getText(file).replace(/\s+/g, "");
   }
 }
+
+/**
+ * The `[start, end)` character range of the ONE JSX element whose opening tag
+ * carries `attr="value"` (the exact `name="value"` text, quotes included) —
+ * the WHOLE element (opening tag through closing tag, or the whole thing for
+ * a self-closing element), not just the tag that carries the attribute.
+ *
+ * WHY THIS EXISTS, over `jsxAttributes`/`callsTo`: those answer "what does
+ * this element hold" or "does this call exist", never "where does it sit
+ * relative to another element" — and a guard for "the divider must be a
+ * SIBLING of the pane, not nested inside it" is exactly a question about
+ * ranges. `jsxAttributes` also can't disambiguate here on its own: several
+ * `bbthread` elements share the attribute NAME `data-canvas-bbthread` and
+ * differ only by VALUE (`"pane"`, `"divider"`, `"workspace"`, …), so this
+ * matches on the full `attr="value"` pair rather than the name alone.
+ *
+ * Comparing two ranges from here (`a.start >= b.start && a.end <= b.end` for
+ * "nested inside", `a.start > b.end` for "appears after") is real position
+ * data from the parse tree, not a source-order string search a marker inside
+ * a comment or a string could fool.
+ *
+ * Throws unless exactly one JSX element carries that exact attribute/value
+ * pair.
+ */
+export function jsxElementRange(source: string, attr: string): { readonly start: number; readonly end: number } {
+  const file = parse(source);
+  const found: { start: number; end: number }[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isJsxSelfClosingElement(node) || ts.isJsxOpeningElement(node)) {
+      const carriesAttr = node.attributes.properties.some((attribute) => {
+        if (!ts.isJsxAttribute(attribute)) return false;
+        const name = attribute.name.getText(file);
+        const value = attribute.initializer;
+        const valueText = value !== undefined && ts.isStringLiteral(value) ? value.getText(file) : "";
+        return `${name}=${valueText}` === attr;
+      });
+      if (carriesAttr) {
+        const element: ts.Node = ts.isJsxOpeningElement(node) ? (node.parent as ts.Node) : node;
+        found.push({ start: element.getStart(file), end: element.getEnd() });
+      }
+    }
+    node.forEachChild(visit);
+  };
+  visit(file);
+  if (found.length !== 1) {
+    throw new Error(`expected exactly one JSX element with ${attr}, found ${found.length}`);
+  }
+  return found[0] as { start: number; end: number };
+}

@@ -25,6 +25,7 @@ const DEFAULT_SIZE: Record<CreateKind, { w: number; h: number }> = {
   text: { w: 200, h: 40 },
   geo: { w: 220, h: 120 },
   frame: { w: 800, h: 600 },
+  bbthread: { w: 960, h: 600 },
 }
 
 // ============================================================================
@@ -32,7 +33,7 @@ const DEFAULT_SIZE: Record<CreateKind, { w: number; h: number }> = {
 //    from the factory), default size, CENTERED placement, and the created
 //    shape becomes the selection.
 // ============================================================================
-for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
+for (const kind of ['note', 'text', 'geo', 'frame', 'bbthread'] as const) {
   const { editor, ctx } = setup()
   const tool = createCreateTool(ctx, kind)
   const events = script().down(300, 300).up().events()
@@ -165,6 +166,33 @@ for (const kind of ['note', 'text', 'geo', 'frame'] as const) {
 
   freshCtx.dispose()
   console.log('ok: frame capture reparents only fully-contained root-level shapes')
+}
+
+// ============================================================================
+// 4b. bb-thread-frame task — the SAME creation-time capture applies to
+//    'bbthread' (canvas-model's isFrameLike), not just 'frame': a
+//    fully-contained root-level shape is reparented into a newly-created
+//    bbthread exactly like a frame.
+// ============================================================================
+{
+  const { doc, editor, ctx } = setup()
+  doc.putShape({
+    id: 'shape:bbroot', kind: 'geo', parentId: 'page:p', index: 'a1', x: 10, y: 10, rotation: 0,
+    isLocked: false, opacity: 1, meta: {}, props: { w: 20, h: 20 },
+  } as Shape)
+  doc.commit()
+  ctx.dispose()
+  const freshCtx = createToolContext(editor)
+  const tool = createCreateTool(freshCtx, 'bbthread')
+  const events = script().down(0, 0).move(60, 60).up().events()
+  run(editor, tool, events)
+
+  const bbthread = editor.doc.listShapes().find((s) => s.kind === 'bbthread')!
+  assert.ok(bbthread, 'the drag-created bbthread exists')
+  assert.equal(editor.doc.getShape('shape:bbroot')!.parentId, bbthread.id, 'a fully-contained root-level shape is captured into the new bbthread, same as a frame')
+
+  freshCtx.dispose()
+  console.log('ok: bbthread capture reparents a fully-contained root-level shape (isFrameLike)')
 }
 
 // ============================================================================
@@ -538,7 +566,7 @@ for (const kind of ['note', 'text'] as const) {
   console.log(`ok: click-create ${kind} begins editing immediately (tldraw parity)`)
 }
 
-for (const kind of ['geo', 'frame'] as const) {
+for (const kind of ['geo', 'frame', 'bbthread'] as const) {
   const { editor, ctx } = setup()
   const tool = createCreateTool(ctx, kind)
   run(editor, tool, script().down(300, 300).up().events())
@@ -558,4 +586,4 @@ for (const kind of ['geo', 'frame'] as const) {
   console.log('ok: drag-create text begins editing immediately (tldraw parity)')
 }
 
-console.log('ok: create tools (note/text/geo/frame) + frame capture')
+console.log('ok: create tools (note/text/geo/frame/bbthread) + frame capture')

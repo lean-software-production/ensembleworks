@@ -8,12 +8,10 @@
 // bb-specific wire mapping and transport.ts for the client half that
 // canvas/CanvasPanel.tsx mounts.
 import { type BbPluginApi } from "@get-bb/plugin-sdk";
-import { AgentLinks } from "./canvas/agents.js";
 import { resolveCanvasProjectId } from "./canvas/agent-project.js";
 import { CanvasRoomHost } from "./canvas/room.js";
 import { CANVAS_MIGRATIONS, CanvasStore } from "./canvas/store.js";
 import {
-  registerAgentEvents,
   registerBackground,
   registerHttp,
   registerMentions,
@@ -44,19 +42,11 @@ export default async function plugin(bb: BbPluginApi) {
     },
   });
 
-  // Persisted shape -> thread links, mirrored in memory. Loaded HERE, in the
-  // factory, so the very first `canvas_agents` call after a reload already has
-  // every badge — a panel that mounted before this plugin reloaded would
-  // otherwise show a blank canvas of unlinked notes until each thread happened
-  // to change status.
-  const agents = new AgentLinks(bb.storage.kv);
-  await agents.load();
-  bb.log.info(`restored ${agents.links.length} agent link(s)`);
-
   /**
-   * The project every canvas thread lives in — spawned, listed for the attach
-   * picker, or checked at attach time. The `project` setting, and NOTHING ELSE:
-   * the "else the first project bb lists" fallback that used to be here was a
+   * The project every canvas thread lives in — spawned via
+   * `canvas_spawn_thread`, or listed for a `bbthread` frame's picker via
+   * `canvas_thread_options`. The `project` setting, and NOTHING ELSE: the
+   * "else the first project bb lists" fallback that used to be here was a
    * silent guess that landed the owner's threads in an unrelated project, and
    * canvas/agent-project.ts is the whole argument for removing it.
    *
@@ -91,7 +81,6 @@ export default async function plugin(bb: BbPluginApi) {
   registerBackground(
     bb,
     room,
-    agents,
   );
 
   registerHttp(bb, transcript);
@@ -102,7 +91,6 @@ export default async function plugin(bb: BbPluginApi) {
     rpcContract,
     createRpcHandlers({
       room,
-      agents,
       transcript,
       resolveProjectId,
       realtime: bb.realtime,
@@ -111,12 +99,7 @@ export default async function plugin(bb: BbPluginApi) {
     }),
   );
 
-  registerAgentEvents(
-    bb,
-    agents,
-  );
-
-  registerCanvasCli(bb, room, agents, transcript);
+  registerCanvasCli(bb, room, transcript);
 
   // Cleanup on reload/disable/shutdown; hooks run LIFO. The sanctioned place
   // to clear timers and close connections.

@@ -104,7 +104,7 @@
 // "abandon whatever's in flight", the same as onViewportBlur).
 import { useEffect, useRef, type CSSProperties, type KeyboardEvent, type PointerEvent, type ReactNode, type UIEvent } from 'react'
 import type { InputEvent } from '@ensembleworks/canvas-editor'
-import { keyEventToInput, pointerEventToInput, wheelEventToInput } from './dom-events.js'
+import { keyEventToInput, pointerEventToInput, wheelEventToInput, yieldsToInteractive } from './dom-events.js'
 
 export interface ViewportProps {
   /** Called once per normalized input event, in the order the browser
@@ -151,6 +151,14 @@ export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, c
     const el = elRef.current
     if (!el) return
     function handleWheel(e: WheelEvent): void {
+      // YIELD RULE (pane input routing task, docs/plans/
+      // 2026-09-15-bb-thread-frame.md's follow-up section): a wheel that
+      // originates inside a `data-canvas-interactive` element (a bb thread
+      // pane actively owning scroll) is neither forwarded to the tool NOR
+      // `preventDefault`-ed — the native scroll the pane needs must reach it
+      // unobstructed, and our own ctrl/meta-zoom gesture has no business
+      // hijacking a plain scroll wheel over pane content anyway.
+      if (yieldsToInteractive(e.target)) return
       if (e.ctrlKey || e.metaKey) e.preventDefault() // block the browser's native page-zoom (see module header)
       onInputRef.current(wheelEventToInput(e, el!.getBoundingClientRect()))
     }
@@ -162,6 +170,21 @@ export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, c
   }, [])
 
   function handlePointer(e: PointerEvent<HTMLDivElement>): void {
+    // YIELD RULE (pane input routing task, docs/plans/
+    // 2026-09-15-bb-thread-frame.md's follow-up section): a pointer event
+    // whose target is inside a `data-canvas-interactive` element (a bb
+    // thread pane actively owning text selection) is neither captured nor
+    // forwarded to the tool — the pane needs ordinary pointer behavior
+    // (native text selection, its own click targets) undisturbed by pointer
+    // CAPTURE, which would retarget every subsequent event (including
+    // click/dblclick) at this viewport element instead. Skipping capture on
+    // a yielding pointerdown means a later pointerup for the SAME gesture
+    // never held capture either, so returning here on pointerup too is safe
+    // (there is nothing to release) — the try/catch below stays regardless,
+    // since a yielding element is decided PER EVENT (a caller cannot prove
+    // every pointerdown/pointerup pair in a gesture shares one verdict, e.g.
+    // the pane un-mounting mid-gesture).
+    if (yieldsToInteractive(e.target)) return
     const el = e.currentTarget
     // POINTER CAPTURE — see the module header. Guarded twice: optional-call
     // (`?.`) tolerates environments where the API is absent altogether, and
@@ -211,6 +234,14 @@ export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, c
   }
 
   function handleKey(e: KeyboardEvent<HTMLDivElement>): void {
+    // YIELD RULE (pane input routing task, docs/plans/
+    // 2026-09-15-bb-thread-frame.md's follow-up section): a key event whose
+    // target is inside a `data-canvas-interactive` element yields for every
+    // key EXCEPT Escape — the pane owns ordinary typing/navigation keys
+    // while it has real text selection focus, but Escape must still reach
+    // the session (resolveShortcut's 'endEdit' branch) so there is a way to
+    // leave the pane from the keyboard at all.
+    if (yieldsToInteractive(e.target) && e.key !== 'Escape') return
     const shouldPreventDefault = onInput(keyEventToInput({ type: e.type as 'keydown' | 'keyup', key: e.key, shiftKey: e.shiftKey, altKey: e.altKey, ctrlKey: e.ctrlKey, metaKey: e.metaKey, timeStamp: e.timeStamp }))
     // See ViewportProps.onInput's RETURN VALUE doc comment above — only
     // `keydown` ever asks for this (Enter-to-edit's stray-newline fix); a
@@ -228,7 +259,12 @@ export function Viewport({ onInput, onViewportBlur, onPointerCancel, children, c
       // onKeyDown/onKeyUp never fire (a non-focusable div never receives
       // key events) and onBlur never fires either (nothing to blur FROM).
       tabIndex={0}
-      style={{ position: 'relative', overflow: 'hidden', outline: 'none', ...style }}
+      // touch-action: none — without it a finger drag is claimed by the browser
+      // for page scroll/pinch and arrives here as `pointercancel`, so every
+      // touch gesture dies at its first move. An interactive island (an element
+      // carrying data-canvas-interactive, whose events this viewport yields) may
+      // set its own touch-action to re-enable native scrolling inside it.
+      style={{ position: 'relative', overflow: 'hidden', outline: 'none', touchAction: 'none', ...style }}
       onPointerDown={handlePointer}
       onPointerMove={handlePointer}
       onPointerUp={handlePointer}

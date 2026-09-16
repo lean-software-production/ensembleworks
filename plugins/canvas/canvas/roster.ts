@@ -1,6 +1,6 @@
 // "Who is at this canvas, and who is talking" — the pure half.
 //
-// DOM-free and React-free, the same split agents-view.ts uses: the three
+// DOM-free and React-free, the same split canvas/shape-text.ts uses: the three
 // decisions worth getting right (who is in the roster, where a camera has to
 // sit to centre somebody's cursor, and where a speaking ring lands on screen)
 // are plain functions, and the header/overlay components stay thin adapters.

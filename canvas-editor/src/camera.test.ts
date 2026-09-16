@@ -1,7 +1,7 @@
 // Run: bun src/camera.test.ts
 import assert from 'node:assert/strict'
 import { screenToWorld } from './input.js'
-import { applyWheel, zoomAboutPoint, MIN_ZOOM, MAX_ZOOM } from './camera.js'
+import { applyWheel, zoomAboutPoint, zoomToLevelAbout, MIN_ZOOM, MAX_ZOOM } from './camera.js'
 
 const EPS = 1e-9
 const closeEnough = (a: { x: number; y: number }, b: { x: number; y: number }, eps = EPS) =>
@@ -127,4 +127,43 @@ const NEUTRAL = { shift: false, alt: false, ctrl: false, meta: false }
   console.log('ok: applyWheel treats non-finite dx/dy as a no-op (camera can never be NaN/Infinity-poisoned)')
 }
 
-console.log('ok: camera math (zoomAboutPoint invariance, applyWheel pan/zoom, z-clamp, poison guard)')
+// ============================================================================
+// 7. zoomToLevelAbout: sets the ABSOLUTE zoom level while keeping the world
+//    point under screenPoint fixed — the manual zoom controls' "reset to
+//    100%" case, plus clamping at MIN_ZOOM/MAX_ZOOM.
+// ============================================================================
+{
+  const camera = { x: 10, y: -20, z: 3.3 }
+  const point = { x: 140, y: 260 }
+  const before = screenToWorld(camera, point)
+
+  const reset = zoomToLevelAbout(camera, point, 1)
+  assert.equal(reset.z, 1, 'zoomToLevelAbout lands exactly on the requested absolute level')
+  assert.ok(closeEnough(before, screenToWorld(reset, point), 1e-6), 'reset-to-1 keeps the screen point fixed in world space')
+
+  // Already-at-1 camera resetting to 1 is a true no-op (covers the case a
+  // zoom-control's "reset" button hits when nothing needs to change).
+  const alreadyAt1 = { x: 5, y: 5, z: 1 }
+  const stillReset = zoomToLevelAbout(alreadyAt1, point, 1)
+  assert.deepEqual(stillReset, alreadyAt1, 'resetting an already-1 camera to 1 changes nothing')
+
+  console.log('ok: zoomToLevelAbout resets to an absolute level while preserving the screen point')
+}
+
+{
+  const camera = { x: 0, y: 0, z: 1 }
+  const point = { x: 75, y: 25 }
+  const before = screenToWorld(camera, point)
+
+  const clampedLow = zoomToLevelAbout(camera, point, 0.00001)
+  assert.equal(clampedLow.z, MIN_ZOOM, 'zoomToLevelAbout clamps a too-low target to MIN_ZOOM')
+  assert.ok(closeEnough(before, screenToWorld(clampedLow, point), 1e-6), 'invariance holds when the target clamps to MIN_ZOOM')
+
+  const clampedHigh = zoomToLevelAbout(camera, point, 1000)
+  assert.equal(clampedHigh.z, MAX_ZOOM, 'zoomToLevelAbout clamps a too-high target to MAX_ZOOM')
+  assert.ok(closeEnough(before, screenToWorld(clampedHigh, point), 1e-6), 'invariance holds when the target clamps to MAX_ZOOM')
+
+  console.log('ok: zoomToLevelAbout clamps its target level to [MIN_ZOOM, MAX_ZOOM] while preserving the point invariance')
+}
+
+console.log('ok: camera math (zoomAboutPoint invariance, applyWheel pan/zoom, z-clamp, poison guard, zoomToLevelAbout)')
