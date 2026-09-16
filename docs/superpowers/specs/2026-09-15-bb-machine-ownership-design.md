@@ -1,0 +1,445 @@
+# bb machine ownership: restrict where people start threads, show who owns them
+
+Status: investigation, nothing built. Date: 2026-09-15.
+Scope: the shared bb server `bb-ew-lsp-001` (bb-app 0.43.0). Per-person machines are
+named `<box>-<person>`; a team machine is planned.
+
+## Decisions (2026-09-15, after review) — read this first
+
+1. **High trust; UX first, security later.** The team is four trusted people. The goal
+   now is to prove the ownership UX works, not to stop a determined teammate. Everything
+   below about JWT verification, bypass detection, the gate proxy and source patches is
+   **deferred**, kept as the record of what "secure" would cost. The restriction is a
+   *guardrail*: a clear refusal when someone picks the wrong machine by mistake.
+2. **Merge into Presence and rename it Identity.** One plugin, `identity`
+   (`plugins/identity`, package `bb-plugin-identity`, display name "Identity"), holds
+   presence (viewing and typing), who people are, machine ownership, attribution, the
+   start restriction and the ownership UI. This replaces §4's "separate `people` plugin
+   that Presence depends on". It also settles the fight over the single row glyph: one
+   plugin renders both presence and ownership.
+
+### What the high-trust version looks like
+
+| Concern | Secure design (deferred) | High-trust design (now) |
+|---|---|---|
+| Who is this browser? | Verify `Cf-Access-Jwt-Assertion` against JWKS | Read `Cf-Access-Authenticated-User-Email` on an Identity HTTP route (`GET /whoami`) and trust it. Fall back to "unknown" when it's absent. |
+| Who started this message? | Submit-intent hash, or a source patch | **The `AsyncLocalStorage` monkey patch** (addendum, option M): the hook reads the email header of the request that triggered the dispatch. It is exact, needs no extra round trip, and costs ~50 lines. If the self-test fails, it **degrades open**: starter shown as unknown, no restriction. So a bb upgrade that breaks the patch costs UX only, never blocks work. |
+| Agent and CLI spawns | Lineage from caller-supplied fields is forgeable | Take lineage at face value: a spawn inherits its parent's starter. A spawn with no lineage shows "unknown" and is allowed. |
+| Restriction | `reject` plus detection of every bypass | `message.dispatch` `reject` for an inline start on another person's machine, with a friendly message. Send-now, terminals and raw API calls stay open, and that's accepted. |
+| Mapping | Host id pins, rename detection | Parse `<box>-<person>` from the host name, plus a settings list of team machines and `person → emails`. |
+| Presence | Anonymous | Named: heartbeats go to an HTTP route so the server knows the email, and the popover lists faces instead of counts. |
+
+The README must say plainly: *Identity trusts Cloudflare Access headers and bb's own
+thread metadata; it helps people avoid mistakes and see who's doing what, and it is not
+an access control.*
+
+### Revised plan for the Identity plugin
+
+1. **Rename (mechanical, no behaviour change).** `git mv plugins/presence
+   plugins/identity`; update `package.json` name and `bb.name`, `.bb/plugins.json`, and
+   the realtime channel if it's renamed. The plugin id changes, so each server needs
+   `bb plugin remove presence` + `bb plugin install ./plugins/identity`. Presence keeps no
+   durable state, so nothing is lost.
+2. **People.** A `directory` setting (JSON: `person`, `emails[]`, `displayName`), a
+   `teamMachines` setting, and `GET /whoami`. Named presence: change the heartbeat/typing
+   calls from RPC to HTTP routes, or add a `whoami` step that ties `viewerId` to a person.
+3. **Attribution.** The ALS patch with a boot self-test; a hook that records
+   `threadId → {starter, via: browser|agent|plugin|unknown}` in `bb.storage` on the first
+   dispatch; lineage inheritance for spawns and forks.
+4. **Ownership UI (option B).** Row glyph (presence wins while someone is typing), the
+   header chip, the "Starting as David" banner in the new-thread composer, and an
+   "unknown" state that looks neutral.
+5. **Guardrail.** Reject an inline start whose starter is a known person on another known
+   person's machine; the team machine is always allowed for people. Also reject a follow-up
+   from anyone but the starter, and an automation that isn't on the team machine (see the answers below). Ship behind a
+   `restrictStarts` setting (default off) so the UX can be tried before it bites.
+
+### Answers to the open questions (2026-09-16)
+
+1. **Other people's threads are read-only.** Only the starter sends to a thread. The
+   `message.dispatch` guardrail therefore covers `join-turn` and follow-ups too: reject
+   when the request's email (ALS) is a known person who isn't the thread's starter. In the UI,
+   a composer banner on other people's threads says "Read-only: Matt's thread", and the header
+   chip carries the same state. Accepted gaps at high trust: Stop, Archive and
+   answering a pending approval are unhooked core routes, so they're not blocked. A drain
+   (a queued or scheduled message) has no request, so it's checked against the sender recorded
+   when it was queued if bb exposes one, otherwise allowed.
+2. **Automations run on the team machine only.** Guardrail: `origin: "plugin"` with
+   `originPluginId` = the built-in automations plugin → the host must be a team
+   machine, otherwise reject. The starter is shown as the automation (bb records no creator).
+   Spike: confirm the automations plugin id, and whether workflows and scheduled send should
+   follow the same rule (scheduled send is a person's own message, so probably not).
+3. **The team machine runs as the shared, restricted `ensembleworks-agent` user**, the
+   same Linux user as the infra repo's `ew_bb_machine_user`. It shows as "team", and the header
+   reads "Started by David · runs as ensembleworks-agent on <team machine>". Rule 1 still
+   applies: a team-machine thread is read-only to everyone except its starter.
+   To confirm: is the existing `ew-lsp-001-main` machine the team machine, or will
+   the planned pi-only box be?
+4. **Identity email = the email on the person's GitHub account** (Access uses the GitHub IdP).
+   The directory becomes `person → {github, email, displayName}`. Extend
+   `ew_bb_people` with `github:` (Trevoke's capitalisation) and `email:`, and render
+   it into the Identity `directory` setting.
+
+Remaining unknowns: which Linux user runs unknown hosts (laptops, `ensembleworks-agent`
+machines other than the team one), and whether follow-ups sent as `bb thread send` from a
+person's own shell (no header, so no identity) are allowed. Default: allowed, starter unknown.
+
+Spikes still worth running first: **S7** (does the ALS store reach the hook in real bb?),
+**S2** (do the Access headers reach a plugin HTTP route through cloudflared?), **S3-lite**
+(what does the new-thread composer know before submit, so the banner can be useful?).
+Open questions 1, 2, 3 and 7 are answered just below.
+
+## TL;DR
+
+- **One real server-side checkpoint exists.** The `message.dispatch` hook
+  (`bb.experimental_hooks.on`) runs before any agent turn reaches a provider, and it
+  can `reject`. It covers UI creates, follow-ups, forks, CLI/SDK spawns, plugin
+  spawns (automations, workflows, scheduled send) and retries. It is told which
+  **host** the turn will run on, even before provisioning. Thread *creation* has no
+  hook, and there is no API to move a thread or environment to another machine.
+- **It never sees who asked.** The hook context holds only server facts. Core routes
+  pass no request headers to plugins, the server has no concept of a user, and
+  `origin` / `parentThreadId` / `startedOnBehalfOf` are values the caller supplies.
+  Plugins can read request headers only on **their own** HTTP and WebSocket routes.
+- **Some paths skip the hook.** Send-now on a queued message skips the pass by
+  design (and a future `sendAt` is enough to queue a message). Terminals
+  (`POST /terminals` with a `host_path` target), host file and directory routes, and
+  host rename don't go through it either.
+- **No plugin can be a security boundary here.** The bb API has no auth, and it can be
+  reached from the machines themselves: loopback on ew-lsp-001, where people's
+  daemons run, and the tailnet proxy. Any teammate's agent can `curl` it directly. A
+  plugin can be a solid **guardrail against honest mistakes** plus **attribution**.
+  A real boundary needs a gate in front of the API and changes upstream in bb.
+- **Presence hunch: half right.** Presence is the right *UI surface*, but it's the wrong
+  *foundation*. It is anonymous and ephemeral by design, and it uses RPC, which can't
+  see headers. Recommend a new **`people`** plugin that owns identity, the people
+  directory, host ownership and the attribution ledger, with the dispatch policy
+  living in it too. Presence then uses it to show names.
+
+## 1. Enforcement point
+
+### What the SDK offers a server plugin (SDK 0.4.84, which presence and canvas pin)
+
+| Surface | Can veto? | Notes |
+|---|---|---|
+| `experimental_hooks.on("message.dispatch")` | **yes**: `proceed` / `wait` / `reject` | The only admission hook. Fail-closed: a throw or a timeout over 10s fails the attempt. Runs under a server-wide lock. |
+| `events.on("thread.created" \| "thread.active" \| "message.dispatched" \| "experimental_terminal.input" …)` | no | After the fact. Can be used to detect a violation and then stop or archive the thread. |
+| `experimental_environments.register({ validate })` / `experimental_machines` | refuses only *its own* provider's creates | Doesn't apply to the built-in project-checkout, worktree and personal environments that people's machines use. |
+| RPC / HTTP / CLI / agent tools | n/a | Only the plugin's own endpoints. |
+| App slots / content scripts | UI only | There is no host-picker filter hook. Hiding machines would mean hacking the DOM, and that isn't enforcement. |
+
+The hook context (`MessageDispatchHookContext`) contains `thread`, `project`,
+`environment`, `host` (taken from the environment, or from the start intent before
+provisioning), `environmentIntent`, `input`, `requestedExecution` (so `providerId`
+is there, which could enforce "pi only" on the team machine), `attempt`
+(`start-turn`/`join-turn`), `queuedMessage`, `origin`, `originPluginId`,
+`startedOnBehalfOf` and `parentThreadId`. It has **no request, headers or principal**.
+Confirmed in the server bundle: `buildHookContext` in `src/services/threads/dispatch-hooks.ts`
+builds the context from the DB and nothing else. The built-in `concurrency-limit`
+plugin is prior art for a per-host policy on this hook.
+
+### Coverage matrix (read from source; spike S1 must confirm by running it)
+
+| Path | Passes hook? |
+|---|---|
+| New thread from UI, with first message | yes (host comes from the start intent) |
+| Follow-up, steer or retry in an existing thread | yes |
+| Fork (`POST /threads/fork`, which may name a different host) | yes, at its first send. A seed-only fork runs nothing until a message is sent. |
+| `bb thread spawn` from an agent or a person's shell (origin `cli`) | yes |
+| Plugin spawns: automations, workflows, scheduled send (origin `plugin`) | yes |
+| Provider-internal subagents (e.g. Claude's Task tool) | n/a: same process, same machine, no new bb thread |
+| "Move thread/environment to another machine" | **no such API** in 0.43.0. `PATCH /threads/:id` only takes title/model/parent/section/visibility (`updateThreadRequestSchema`). A handoff is a fork. |
+| Message queued with a future `sendAt`, or because the host is offline, then drained when due | yes: the drain runs the pass |
+| **Same queued message, then Send-now** (`POST /threads/:id/queued-messages/:qid/send`) | **NO**. `if (!sendNow && hasMessageDispatchHooks())`. The time and host-offline waits are recorded *before* the pass, so `sendAt: now+1m` followed by Send-now skips policy entirely. |
+| **Terminals** `POST /terminals` with target `host_path` / `environment` / `thread` | **NO**: gives a raw shell as that Linux user |
+| **Host file and directory routes** (`/threads/:id/host-files/content`, `/hosts/:id/directory`, `/hosts/:id/pick-folder`), `/environments/:id/actions` | **NO** |
+| **Host admin**: `PATCH /hosts/:id {name}`, enroll, suspend, remove | **NO**. Renaming breaks any rule based on the name. |
+| Thread row creation itself | **NO**, by design. A rejected first message may leave a `pending` row (S1). |
+
+Sources: SDK `bundled-types/bb-plugin-sdk.d.ts` L18947–19131 (hook decision, context,
+`PluginHooks`), L18694–18793 (events), L10099 (`createTerminalRequestSchema`),
+L11249/L11446 (create and fork requests: `origin`, `originPluginId`,
+`startedOnBehalfOf` and `parentThreadId` are request fields). Server
+`bb-app/server/dist/start-server.js`: `runMessageDispatchHookPass` (~L207228),
+the send path with the `sendNow` and `sendAt` checks (~L220133–220233), route table (grep `"/terminals"`).
+
+### Can the bypasses be closed from a plugin?
+
+Only after the fact. On `message.dispatched`, `thread.active` or
+`experimental_terminal.input`, re-check owner against host and then call
+`bb.sdk.threads.stop` / archive, and alert. Terminal input can't be stopped
+through the SDK. What a plugin can't do at all: stop a direct API caller. The infra repo's
+`roles/ew_bb/defaults/main.yml` says it plainly: *"Whoever the tailnet policy lets
+reach these ports drives agents — bb has no auth."* On ew-lsp-001 the server is also
+on `127.0.0.1:38886`, on the same box as every person's daemon.
+
+## 2. Identity
+
+- **RPC handlers** are `(input) => output` with no context (`PluginRpcHandlers`,
+  SDK L14368). This is structurally why Presence is anonymous.
+- **HTTP routes** get a Hono `Context` (`PluginHttpHandler`, L19149), and
+  **WebSocket routes** get `{ request, headers }` (L19155). So a plugin *can* read
+  `Cf-Access-Jwt-Assertion` and `Cf-Access-Authenticated-User-Email`, **but only on
+  requests to its own routes**. It cannot read them on `POST /threads`.
+- The server has no user model: no `cf-access` string in the bundle, and no creator
+  field on `ThreadResponse`.
+- **Verify the JWT; never trust the email header.** Access overwrites the header only
+  on traffic that goes through Cloudflare. bb is reachable without going through Cloudflare, from loopback and
+  the tailnet, which is exactly where agents run, so a forged header is trivial there. EW
+  already has a verifier to reuse: `server/src/access-identity.ts` (JWKS from
+  `https://<team>/cdn-cgi/access/certs`, RS256, checks `aud`/`exp`, refetches when a
+  key rotates). It needs the bb Access app's AUD (plugin setting) plus team domain
+  `mrdavidlaing.cloudflareaccess.com`, and egress to Cloudflare. The EW server's
+  "header mode is safe because there are no inbound ports" argument **does not hold for bb**.
+- **Binding identity to an action** has to be done indirectly. Recommended: **submit intent**. A
+  composer customization in the `new-thread` and `thread` scopes
+  (`ComposerView.draft`, `richText.onDraftChange`) posts
+  `{scope, projectId|threadId, sha256(text)}` to the plugin's HTTP route just before
+  submit. The route verifies the JWT and records a short-lived intent. The hook matches
+  `(project or thread, hash(input.text), ±N s)`, which tells it **who sent this message**,
+  both for creates and for follow-ups. No draft text is stored. To forge it, someone has to
+  send identical text to the same place inside the time window. Presence landing is a
+  post-hoc cross-check: the creator's tab shows up on the new thread within seconds.
+- **Requests with no identity** (CLI on a box, agents, automations): the only thing to
+  go on is lineage. That means `parentThreadId` / `sourceThreadId` /
+  `startedOnBehalfOf.senderThreadId`, all of which the caller supplies. `bb thread spawn` sends
+  `startedOnBehalfOf: null` and a parent only when `--parent-self` is given. Rule: a
+  lineage-linked spawn may target **the same host as its parent**. That is no escalation,
+  because an agent there already runs as that user. A spawn with no lineage onto a
+  person's machine is rejected with a message telling the caller to use `--parent-self`.
+  Tell agents this through `bb.agents` context.
+
+## 3. Mapping person → allowed machines
+
+- `Host` carries only `id`, `name`, `type`, `machineProviderId` and lifecycle. There are no
+  labels or metadata (`hostSchema`, SDK L471). `getResource` exists only for
+  plugin-provisioned machines.
+- The naming convention `<box>-<person>` is the only signal today, but **names can be
+  changed by anyone** (`PATCH /hosts/:id`, `updateHostRequestSchema` L8642). So
+  **derive ownership from the name, then pin it by host id**. On first sight, record
+  `hostId → person`. If a later name disagrees with the pin, don't follow it: flag it.
+- **Source of truth: the infra repo.** Extend `ew_bb_people` with `emails: [...]`
+  (and `github:`, because of Trevoke/trevoke) and a `team_machines` list. Ansible renders it
+  into the plugin config with `bb plugin config people set directory '<json>'`, run on the
+  server box in the same play that creates the machines. The plugin validates it against
+  the live `hosts` list and reports `needsConfiguration` if anything is missing.
+  Caveat: plugin config can also be changed over the unauthenticated API.
+
+## 4. Presence fit
+
+> Superseded by Decision 2: merge into Presence and rename it Identity. The analysis
+> below still explains why Presence as it stands can't do this without changes.
+
+What Presence knows about a person: **nothing**. It has a random `viewerId` in
+localStorage and a `tabId` in sessionStorage, uses RPC only (no headers), keeps
+process-local leases that expire after 25s, and its README promises "never retained as
+history" and "does not claim names". Ownership is the opposite: durable, attributable,
+and it carries policy.
+
+So: **a separate `people` plugin** (identity via `/whoami`, people directory, host
+ownership pins, attribution ledger, `message.dispatch` policy, ownership UI). Presence
+then *depends on* it: it swaps `viewerId` for the verified person by calling the
+`people` HTTP route, then shows names and faces. One practical coupling: both want the
+single row glyph `experimental_setThreadRowStatus`, which "temporarily replaces
+a thread's draft glyph". Either one plugin renders both, or they agree on a
+precedence. That argues for eventually folding presence rendering into `people`.
+
+## 5. Thread ownership UX
+
+Facts to show: **starter** (a person, or an agent or automation acting for one),
+**runs as** (the owner of the machine), and **lineage** (fork or spawn parent). The
+policy should keep starter and runs-as equal, except on the team machine. Surfaces that
+exist today: row status glyph (icon + label only, no avatar),
+`experimental_threadHeaderAction`, `homepageSection`, composer `banners` (new-thread
+scope), `experimental_threadList` (full sidebar replacement).
+`PluginSidebarThread.host {id,name}` is already on every row.
+
+### Option A: machine = owner (minimal, no ledger)
+
+```
+ Sidebar                                   Header
+ ● Fix login flow            [MW]          Fix login flow        (MW) mattwynne's machine · ew-lsp-001
+ ● Upgrade tldraw            [DL]
+ ● Nightly digest            [team]
+```
+Shows only who the machine belongs to, taken from the host name and pin. It is always true, needs no
+identity, and works before any of §2 exists. It can't say who *started* a thread, and it
+can't tell an agent or automation from a person. On the team machine it shows only "team".
+
+### Option B: starter, plus machine only when different (recommended)
+
+```
+ Sidebar                                   Header
+ ● Fix login flow            (MW)          Fix login flow   (MW) Matt · runs on ew-lsp-001
+ ● ↳ write tests             (MW)🤖                          ↳ spawned by an agent in "Fix login flow"
+ ● Nightly digest       (DL)⏰ team                           ⏰ automation "Nightly digest" set up by David · team machine (pi)
+ ● Try new prompt       (?) ew-lsp-001-mattwynne             ? starter unknown (CLI, no --parent-self)
+
+ New-thread composer banner
+ ┌──────────────────────────────────────────────────────────────────────────────┐
+ │ Starting as David · allowed: ew-lsp-001-mrdavidlaing, ew-donkeyred-001-…, team │
+ └──────────────────────────────────────────────────────────────────────────────┘
+ Rejection:  "ew-lsp-001-mattwynne is Matt's machine. Pick one of yours or the team machine."
+```
+The avatar is the starter. Agent and automation starters show a glyph plus the human at the
+root of the chain. The machine appears only when it differs from the starter's (team machine, or
+unknown). It carries the most information, but needs the ledger and the intent binding.
+"Unknown" states will show up and must look honest, not alarming.
+
+### Option C: sidebar grouped by person
+
+```
+ ▾ Mine (4)          ▾ Matt (2)  ● ●      ▾ Team machine (1)      ▸ Unknown (1)
+```
+Replace the sidebar with `experimental_threadList`, one section per machine owner, with presence
+faces inline. It reads well for a 4-person team, but it takes over bb's sidebar (a burden
+to keep up with bb, and it clashes with the canvas-first navigation), and it hides
+threads you're collaborating on in someone else's section.
+
+**Recommend B**, falling back to A where the ledger has no entry (for example
+threads that already exist). Forks: the starter is the forker, and lineage shows "forked from
+<thread> (owner)". Threads started by an agent or automation inherit the starter at the root of the chain for
+policy purposes, but always show the agent/automation glyph.
+
+## Recommended approach (secure path — deferred, see Decisions)
+
+1. **Now, as a guardrail:** a `people` plugin with (a) a directory from `ew_bb_people`, (b)
+   host pins, (c) `/whoami` with verified JWT, (d) a submit-intent ledger, (e)
+   `message.dispatch` policy:
+   - team machine: allow (optionally require provider = pi);
+   - person P's machine: allow if the verified sender = P, or if it's a lineage spawn from a thread on the same host;
+   - otherwise reject with the message above;
+   - unknown hosts: a setting, allow by default at first.
+   Add (f) detection of the bypasses: Send-now dispatches and terminal input on another
+   person's machine trigger stop and alert. Add (g) option B UI.
+   Also be explicit in the README: **this is a guardrail, not a security boundary.**
+2. **If the team wants a boundary:** put a gate between cloudflared and bb that verifies the
+   Access JWT and enforces the same policy on create, fork, send, queued-send,
+   terminals and hosts routes. Then close the unauthenticated paths: tailnet proxy
+   and loopback reachable only with a credential; people's daemons not sharing the
+   server's loopback (nftables `meta skuid`, or move the server off the person box).
+3. **Ask bb upstream** for: a trusted identity header forwarded into the hook context
+   (a principal), hooks that are non-bypassable or that also run on Send-now, terminal and
+   host-file admission hooks, and owner labels on hosts.
+
+## Addendum: patching bb core instead of waiting for upstream
+
+Facts: bb is **MIT-licensed and public** (`github.com/get-bb/bb`, very active: pushed
+2026-09-15). Server plugins run **in the server process with no sandbox**: the loader
+`jiti.import`s `server.ts` straight into `start-server.js` (~L328871). The server bundle
+is unminified ESM with `// src/...` file markers, but its internals are module-scoped,
+so a plugin can't reach them. Node built-ins, however, *are* shared.
+
+### Option M: monkey patch from inside a plugin (no fork)
+
+1. **Identity into the hook.** Wrap `http.Server.prototype.emit` so that each
+   `"request"` runs inside `AsyncLocalStorage.run({verified Access identity, peer}, …)`.
+   bb's server (`@hono/node-server` → `http.createServer`) dispatches through that emit,
+   so the store propagates: route handler → `withEvaluationLock` promise chain → our
+   `message.dispatch` handler, which reads `als.getStore()`. Inline sends get the caller's
+   identity. Drains and core-driven sends get *no* store, which is also correct: nobody
+   asked. A Node model of exactly that shape (server created *before* the patch,
+   concurrent requests with different headers, a lock chain, a drain) printed
+   `a@x / null / b@x` and `NO CONTEXT` for the drain (Node 22.12). That is a model, not bb: S7.
+2. **An in-process gate for the unhooked routes.** The same wrapper can answer 403 before
+   calling the original emit. Routes it can decide on from the path alone, after a
+   `bb.sdk` lookup of the thread or environment's host: `POST
+   …/queued-messages/:id/send` (Send-now), `PATCH /hosts/:id`, `/hosts/:id/directory`,
+   `/threads/:id/host-files/content`, `POST /environments/:id/actions`. Routes whose
+   decision is in the **body** (`POST /terminals` target, `POST /threads` host) would
+   need the body buffered and replayed to Hono without breaking its stream handling.
+   That's fragile; prefer the dispatch hook for thread creates, and buffer/replay only for terminals (S8).
+3. **Bonus for callers on the same box:** for loopback TCP, the peer's uid can be found
+   in `/proc/net/tcp` (the `ss -tep` uid column), which tells you the person's Linux user
+   for agents on ew-lsp-001. It is lost for tailnet callers, whose connections come through
+   the systemd socket proxy, and for all of donkeyred.
+
+Costs: it depends on bb *internals*, not the SDK (http emit, ALS continuity, route
+paths, and plugins staying in-process: bb already runs *host* plugins in a worker). Patches
+must be idempotent across `bb plugin reload` (guard with a global symbol, restore in
+`onDispose`), and they break silently on upgrade, so a boot self-test is essential: have the plugin send itself a
+tagged request and assert the hook saw the store, else call `needsConfiguration`.
+Pin `ew_bb_app_version` and re-run S1/S7 on every bump. It still doesn't authenticate
+identity-less callers; it only *knows* they're identity-less, and can refuse
+mutating ones aimed at person machines.
+
+### Option P: carry a source patch
+
+Fork `get-bb/bb` and keep a small patch series on the release tag we pin:
+(a) a request principal (trusted-proxy header → verified identity) threaded into
+`buildHookContext`; (b) Send-now runs `message.dispatch` when a plugin marks its
+policy `hard`; (c) an admission hook for terminals, host files and host rename; (d) owner labels on
+hosts. Build and ship `bb-app` from the fork for the **server only**, because daemons stay stock at
+the same version as long as the patch doesn't touch the wire protocol.
+
+Costs: we own a build and release pipeline for a fast-moving monorepo (the app, server
+and daemon artifacts the server hands to daemons for updates must match), and
+every bb bump means a rebase. Patching `start-server.js` in place from Ansible is cheaper
+but even more brittle than Option M, with none of its self-test ergonomics.
+
+### Recommendation
+
+Spike **M first** (S7, S8). It removes the biggest gap, "hook can't see who", with no
+fork, and it keeps the patch in our plugin repo where tests live. Write (a)–(d) as
+**upstream PRs** at the same time. They match bb's own design language: its docs call
+hooks "questions core asks", and the note on Send-now reads as a policy choice
+rather than a technical limit. Only fall back to **P** if M's in-process assumptions don't hold, or
+upstream says no. None of these closes the unauthenticated loopback and tailnet API; that
+is still step 2 of the recommended approach.
+
+## Spikes (all on a throwaway local bb 0.43.0, never the shared server)
+
+- **S1 Coverage.** A plugin that rejects everything. Run every row of the matrix: UI create,
+  fork, `bb thread spawn`, automation, workflow, scheduled send, `sendAt`+Send-now,
+  host-offline+Send-now, terminal `host_path`. Record pass or bypass, and whether a rejected
+  create leaves a `pending` row.
+- **S2 Headers.** Does a plugin HTTP route with `auth: "local"` accept requests from the
+  Access-fronted origin, and do `Cf-Access-*` headers survive cloudflared → bb? Use a local
+  cloudflared tunnel plus a scratch Access app, not the production one.
+- **S3 Intent binding.** Is the composer draft final before `POST /threads` goes out,
+  and does its text match `PluginDispatchInput.text` (mentions, attachments, slash
+  commands)? Measure the timing window and the false-match rate.
+- **S4 Host pinning.** Enroll, rename, re-enroll: are ids stable, and are names unique?
+- **S5 Exposure.** From a person account on ew-lsp-001, is `127.0.0.1:38886` and the
+  tailnet port reachable (read-only `GET`)? Needs a go-ahead before touching the box.
+- **S7 ALS in real bb.** A plugin patches `http.Server.prototype.emit`; a hook logs
+  `als.getStore()` for a UI create, a CLI spawn (expect a store with no identity) and a drain
+  (expect none). Also check behaviour across `bb plugin reload`.
+- **S8 In-process gate.** Refuse Send-now and `PATCH /hosts/:id` by path; try
+  buffering and replaying the `POST /terminals` body without breaking Hono.
+- **S6 Cross-plugin.** Can presence's app call `people`'s HTTP route, and should they share
+  or merge the row-glyph surface?
+
+## Open questions
+
+1. **Collaboration vs policy.** Typing into someone else's thread runs the agent *as them*.
+   Is that allowed (pairing), limited to some people, or treated like starting a thread?
+2. **Automations.** Who owns one? bb records no creator. Restrict automations to the team
+   machine, or attribute them when created through a plugin-owned flow?
+3. **Team machine rules.** pi-only enforced by `providerId`? Who can start there? Anyone?
+4. **Unknown hosts** (the `ensembleworks-agent` machines, laptops that get enrolled). Allow, deny, or admin only?
+5. **Fail-closed?** If the plugin app isn't loaded in a stale tab, there's no intent. Reject
+   (safe, confusing) or allow and flag (friendly, leaky)?
+6. **Threat model.** Is a guardrail enough for four trusted people, or is the gate from step 2
+   in scope? That decides whether §2's intent binding is worth building at all.
+7. **Emails.** Which address does Access actually assert per person (GitHub IdP primary
+   email)? That has to be added to `ew_bb_people`.
+8. **Admin override.** Does David (or an ops role) get a break-glass path, and how is it recorded?
+
+## Sources
+
+- `plugins/presence/{README.md,server.ts,app.tsx}` in this repo.
+- SDK types: `plugins/canvas/node_modules/@get-bb/plugin-sdk/bundled-types/bb-plugin-sdk.d.ts`
+  (0.4.84): `BbPluginApi` L20081; hooks L18947–19131; events L18694, L19970; HTTP/RPC
+  L19148–19201; `PluginRpcHandlers` L14368; `hostSchema` L471; `updateHostRequestSchema`
+  L8642; create/fork/terminal requests L11249/L11446/L10099;
+  `PluginSidebarThread` L15082; composer scopes and view L15958–16022.
+- Server: `~/.local/share/bb-runtime/lib/node_modules/bb-app/server/dist/start-server.js`
+  (0.43.0): `src/services/threads/dispatch-hooks.ts` (`buildHookContext`,
+  `runMessageDispatchHookPass`); the send path with `sendNow`/`sendAt`; route literals;
+  builtin `concurrency-limit` plugin (per-host dispatch policy).
+- CLI: `host-daemon/dist/bb-chunks/*` (`threads.spawn({origin:"cli", … startedOnBehalfOf:null})`,
+  `--parent-self` reads `BB_THREAD_ID`); the daemon injects `BB_SERVER_URL` into agent shells.
+- Infra: `lean-software-production/infrastructure` `inventory/group_vars/ew.yml`
+  (`ew_bb_people`), `roles/ew_bb/defaults/main.yml` (loopback bind, tailnet proxy, "bb has no auth").
+- Reusable verifier: `server/src/access-identity.ts`.
