@@ -102,8 +102,10 @@
 // drag start; the prior model's `liveBoundsAdapter`/`candidateBoundsAfterDelta`
 // live-read shim is gone with it.
 import {
+  BBTHREAD_DIVIDER_MARGIN,
   BBTHREAD_PANE_MAX_FRACTION,
   BBTHREAD_PANE_MIN_FRACTION,
+  COARSE_BBTHREAD_DIVIDER_MARGIN,
   computeExcludedIds,
   isFrameLike,
   isPointInBbthreadPane,
@@ -122,8 +124,38 @@ import {
 } from '@ensembleworks/canvas-model'
 import { frameCandidates, frameFor } from './frame-membership.js'
 import type { Intent } from '../intents.js'
-import { crossedThreshold, isDoubleClick, screenToWorld, type InputEvent, type Tool } from '../input.js'
+import { crossedThreshold, isDoubleClick, screenToWorld, type InputEvent, type PointerInputEvent, type Tool } from '../input.js'
 import type { ToolContext } from './tool-context.js'
+
+/**
+ * How wide the bbthread pane's divider grab band is, in WORLD units, for the
+ * pointer that produced THIS event (mobile-touch task, scope 3).
+ *
+ * TWO CORRECTIONS TO ONE FLAT CONSTANT, and they are independent:
+ *  - ZOOM. The stored margin is world units, so at 25% zoom canvas-model's 6
+ *    is a 1.5-SCREEN-pixel target and at 400% it is a 24px one. Dividing by
+ *    `zoom` fixes the band in screen space, which is where the user's hand
+ *    actually is. (This is the same reasoning canvas-react's overlay gives for
+ *    drawing handles in screen space: "1px is 1px at any zoom".)
+ *  - DEVICE. A fingertip needs ~44 screen px of target (COARSE_BBTHREAD_
+ *    DIVIDER_MARGIN's own doc comment cites the guidance); a mouse does not,
+ *    and giving it one would eat the click area either side.
+ *
+ * Read off the EVENT's own pointerType, not a device-level `(pointer: coarse)`
+ * media query: a touchscreen laptop and a tablet with a mouse both report a
+ * device answer that is wrong for half the events they deliver. An event with
+ * no pointerType (a hand-built script, a synthetic event) is treated as fine —
+ * the pre-mobile behaviour, so nothing that existed before this change moves.
+ *
+ * A non-finite or non-positive zoom (never produced by camera.ts's clamp, but
+ * this function is exported and cheap to make total) falls back to the raw
+ * screen margin rather than returning NaN, which would make the band match
+ * nothing at all.
+ */
+export function bbthreadDividerMargin(zoom: number, pointerType?: PointerInputEvent['pointerType']): number {
+  const screenPx = pointerType === 'touch' ? COARSE_BBTHREAD_DIVIDER_MARGIN : BBTHREAD_DIVIDER_MARGIN
+  return Number.isFinite(zoom) && zoom > 0 ? screenPx / zoom : screenPx
+}
 
 interface Idle {
   readonly mode: 'idle'
@@ -467,6 +499,29 @@ function toggleOrAdd(current: ReadonlySet<string>, id: string): string[] {
 export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
   const editor = ctx.editor
 
+  /** The topmost bbthread whose divider band (at THIS pointer's margin — see
+   * `bbthreadDividerMargin`) contains the event's world point, or null.
+   *
+   * Candidates come from a degenerate-box `queryMarquee`, which is the
+   * context's page-scoped, index-backed "which shapes are near this point"
+   * read — the same machinery `hitTestTopmost` uses, minus the per-kind
+   * hit-region test we are deliberately bypassing here. Paint order (later
+   * shapes paint on top) decides between overlapping candidates, matching
+   * hitTestTopmost's own topmost rule. */
+  function dividerUnder(event: PointerInputEvent): { shape: import('@ensembleworks/canvas-model').Shape; snapshot: CanvasDocument } | null {
+    const point = worldOf(event)
+    const candidates = new Set(ctx.queryMarquee({ minX: point.x, minY: point.y, maxX: point.x, maxY: point.y }, 'intersect'))
+    if (candidates.size === 0) return null
+    const snapshot = ctx.snapshot()
+    const margin = bbthreadDividerMargin(ctx.editor.get().camera.z, event.pointerType)
+    for (let i = snapshot.shapes.length - 1; i >= 0; i--) {
+      const shape = snapshot.shapes[i]!
+      if (shape.kind !== 'bbthread' || !candidates.has(shape.id)) continue
+      if (isPointOnBbthreadDivider(snapshot, shape, point, margin)) return { shape, snapshot }
+    }
+    return null
+  }
+
   function worldOf(screen: { readonly x: number; readonly y: number }) {
     return screenToWorld(editor.get().camera, screen)
   }
@@ -518,12 +573,21 @@ export function createSelectTool(ctx: ToolContext): Tool<SelectState> {
       // solid pane) and the pane double-click-to-edit gate (onPointing's
       // opensBbthreadPane, which never gets a look-in: a Pointing state is
       // never created for a divider-starting gesture in the first place).
-      if (hit !== null) {
-        const snapshot = ctx.snapshot()
-        const hitShape = snapshot.byId.get(hit)
-        if (hitShape && hitShape.kind === 'bbthread' && isPointOnBbthreadDivider(snapshot, hitShape, worldOf(event))) {
-          const w = localBounds(hitShape).maxX
-          return { state: { mode: 'resizingPane', id: hit, w, snapshot }, intents: endEditIntents }
+      //
+      // NOT GATED ON `hit` (mobile-touch task, scope 3): the grab band is now
+      // wider than the flat margin `hitTestPoint` folds into the shape's own
+      // hit region, so for a finger — or for a mouse at low zoom — the outer
+      // half of the band falls in the bbthread's HOLLOW workspace, where
+      // hitTestPoint correctly reports a miss and `hit` comes back null. The
+      // shape is found by its own bounds query instead. Widening
+      // hitTestPoint to match was the alternative and is worse: it would make
+      // that strip of workspace non-hollow for every caller and every pointer,
+      // including the marquee (bbthread-workspace-is-hollow).
+      {
+        const divider = dividerUnder(event)
+        if (divider) {
+          const w = localBounds(divider.shape).maxX
+          return { state: { mode: 'resizingPane', id: divider.shape.id, w, snapshot: divider.snapshot }, intents: endEditIntents }
         }
       }
       // Double-click candidacy, decided ONCE here (see the module header):

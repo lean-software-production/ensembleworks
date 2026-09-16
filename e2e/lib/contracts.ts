@@ -722,6 +722,21 @@ export async function runContractBrowser(page: Page, contract: Contract, browser
       const actorPage = pages.get(actor)
       if (!actorPage) throw new Error(`gesture op targets actor ${JSON.stringify(actor)}, which was never provisioned`)
       const actorBox = boxes.get(actor)!
+      // MULTI-POINTER / POINTER-KIND ops (mobile-touch task) are NOT supported
+      // at this level and THROW rather than degrade. Playwright's `mouse` API —
+      // the only input this runner drives — has exactly one pointer and no
+      // pointerType at all, so silently running a two-finger declaration as a
+      // one-finger mouse gesture would report a PASS for a contract that was
+      // never actually exercised, which is the one failure mode a contract
+      // runner must never have. Every declaration using these fields is
+      // level:'fsm' (types.ts's GestureOp note), so this is a defensive
+      // backstop, not a reachable path — the mirror image of the FSM runner's
+      // own throws for browser-only primitives (dropFile, 'element' anchors).
+      // Wiring it for real needs CDP's Input.dispatchTouchEvent, or
+      // page.touchscreen plus a hasTouch context; that is a separate unit.
+      if ((op.kind === 'down' || op.kind === 'move' || op.kind === 'up') && (op.pointer !== undefined || op.pointerType !== undefined)) {
+        throw new Error(`multi-pointer/pointerType gesture ops (pointer=${String(op.pointer)}, pointerType=${String(op.pointerType)}) are fsm-level only — the browser runner drives a single mouse`)
+      }
       switch (op.kind) {
         case 'down': {
           const p = await resolveAnchor(actorPage, actorBox, op.at)

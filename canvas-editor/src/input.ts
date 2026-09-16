@@ -34,6 +34,56 @@ export interface PointerInputEvent {
    * so `event.pressure !== undefined` is the pen tool's own pen-vs-mouse
    * test (Task T1, Decision D-3). */
   readonly pressure?: number
+  /** DOM `PointerEvent.pointerId` — the identity that makes MULTI-POINTER
+   * input representable at all (mobile-touch task). `undefined` means "this
+   * source has no pointer identity" (a hand-built script step, a fabricated
+   * test event), and every multi-pointer consumer treats an id-less event as
+   * a plain single pointer — so every pre-existing script/replay stays
+   * byte-identical in meaning. Carried, never interpreted, by the tool FSMs:
+   * only multi-touch.ts's recognizer reads it. */
+  readonly pointerId?: number
+  /** DOM `PointerEvent.pointerType`. `undefined` = unknown device (the same
+   * "no signal" posture `pressure` takes). TWO consumers, both of which need
+   * to know a FINGER from a mouse rather than guess:
+   *   - multi-touch.ts, which only ever forms a pinch out of 'touch'
+   *     pointers (a pen and a finger together is not a pinch, and a mouse
+   *     can never produce two simultaneous pointers anyway);
+   *   - the coarse-pointer hit tolerances (transform.ts's
+   *     `hitTolerancePx`, select.ts's divider band), which widen a small
+   *     fixed target to a finger-sized one.
+   * NOTE this is deliberately NOT the same signal as a CSS `(pointer:
+   * coarse)` media query: that describes the device's PRIMARY pointer, while
+   * this describes the pointer that actually produced THIS event — a tablet
+   * with a mouse attached, or a touchscreen laptop, gives different answers,
+   * and the per-event one is the correct one for a hit test. */
+  readonly pointerType?: 'mouse' | 'pen' | 'touch'
+}
+
+/** A two-finger pinch/pan sample — the ONE event kind no single DOM event
+ * maps to (mobile-touch task). The browser delivers two independent pointer
+ * streams; multi-touch.ts's pure recognizer folds a pair of them into these,
+ * and camera.ts's `applyPinch` is the only consumer. It rides the SAME
+ * `InputEvent` funnel as wheel rather than bypassing it, so a pinch is
+ * replayable, scriptable, and observable by exactly the same machinery a
+ * wheel-zoom is.
+ *
+ * `x`/`y` are the PREVIOUS sample's two-finger midpoint in SCREEN space (the
+ * point the zoom is anchored about — the world point under it is what stays
+ * put), `factor` is the multiplicative zoom for this sample (fingers
+ * spreading => > 1 => zoom IN), and `dx`/`dy` are how far that midpoint
+ * TRAVELLED since the previous sample, in screen pixels — which is the
+ * two-finger PAN half of the same gesture. Note the sign convention differs
+ * from `WheelInputEvent` on purpose and the difference is real: a wheel's
+ * dy is how far the WHEEL turned (content moves the other way), while a
+ * pinch's dx/dy is how far the FINGERS moved (content follows them). */
+export interface PinchInputEvent {
+  readonly type: 'pinch'
+  readonly x: number
+  readonly y: number
+  readonly factor: number
+  readonly dx: number
+  readonly dy: number
+  readonly t: number
 }
 
 export interface KeyInputEvent {
@@ -60,7 +110,13 @@ export interface WheelInputEvent {
   readonly t: number
 }
 
-export type InputEvent = PointerInputEvent | KeyInputEvent | WheelInputEvent
+// NOTE `PinchInputEvent` is part of this union, so a tool FSM's `onEvent`
+// receives it like any other event — every shipped tool simply ignores an
+// event type it does not handle (they all switch on `event.type` and fall
+// through), and the session funnel consumes a pinch itself before dispatch
+// anyway (canvas-ui's useCanvasSession, exactly as it already does for
+// 'wheel').
+export type InputEvent = PointerInputEvent | KeyInputEvent | WheelInputEvent | PinchInputEvent
 
 // tldraw's own drag-start threshold, read from source rather than assumed:
 // node_modules, @tldraw's editor package, dist-cjs/lib/options.js:36 —

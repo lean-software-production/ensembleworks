@@ -23,6 +23,23 @@ export interface StepOptions {
    * event. Threaded onto `down`/`move`/`up` only — `key`/`wheel` events have
    * no pointer-pressure concept. */
   readonly pressure?: number
+  /** Injected `PointerEvent.pointerId` (mobile-touch task) — what makes a
+   * MULTI-POINTER script expressible at all: `.down(…, { pointerId: 2 })`
+   * while pointer 1 is still down is a second finger, and `.move(…,
+   * { pointerId: 1 })` afterwards steers the first one. The builder keeps a
+   * position per pointer id (see `positions` below), so interleaved moves
+   * stay independent instead of sharing one cursor.
+   *
+   * OMITTED = the single-pointer world every pre-existing script lives in:
+   * no `pointerId` key is written onto the event at all (the same absent-key
+   * discipline `pressureField` documents), so every existing script builds a
+   * byte-identical event array. */
+  readonly pointerId?: number
+  /** Injected `PointerEvent.pointerType`. Omitted writes no key — see
+   * `pointerId` above. Needed by any script that drives the two-finger
+   * recognizer (which only tracks 'touch') or a coarse-pointer hit
+   * tolerance. */
+  readonly pointerType?: 'mouse' | 'pen' | 'touch'
 }
 export interface MoveOptions extends StepOptions {
   /** Number of INTERMEDIATE points to interpolate between the previous
@@ -48,6 +65,10 @@ class ScriptBuilder {
   private buttons = 0
   private x = 0
   private y = 0
+  // Per-pointer positions, so a multi-pointer script's interleaved moves do
+  // not share one cursor. Keyed by pointerId; the id-less single-pointer case
+  // keeps using this.x/this.y (untouched, so existing scripts are unaffected).
+  private readonly positions = new Map<number, { x: number; y: number }>()
 
   constructor(opts: { readonly startT?: number; readonly dt?: number }) {
     this.t = opts.startT ?? 0
@@ -76,10 +97,31 @@ class ScriptBuilder {
     return pressure !== undefined ? { pressure } : {}
   }
 
+  /** Same absent-key discipline as `pressureField` — see StepOptions.pointerId. */
+  private pointerFields(opts: StepOptions): Record<string, unknown> {
+    return {
+      ...(opts.pointerId !== undefined ? { pointerId: opts.pointerId } : {}),
+      ...(opts.pointerType !== undefined ? { pointerType: opts.pointerType } : {}),
+    }
+  }
+
+  /** Where the pointer this step drives currently is. A multi-pointer step
+   * reads its OWN last position; an id-less one reads the shared cursor. */
+  private posOf(opts: StepOptions): { x: number; y: number } {
+    if (opts.pointerId === undefined) return { x: this.x, y: this.y }
+    return this.positions.get(opts.pointerId) ?? { x: this.x, y: this.y }
+  }
+
+  private setPos(opts: StepOptions, x: number, y: number): void {
+    if (opts.pointerId !== undefined) this.positions.set(opts.pointerId, { x, y })
+    this.x = x
+    this.y = y
+  }
+
   down(x: number, y: number, opts: StepOptions & { readonly buttons?: number } = {}): this {
     this.buttons = opts.buttons ?? 1
-    this.x = x; this.y = y
-    this.built.push({ type: 'pointerdown', x, y, buttons: this.buttons, modifiers: this.modifiers(opts.modifiers), t: this.tick(), ...this.pressureField(opts.pressure) })
+    this.setPos(opts, x, y)
+    this.built.push({ type: 'pointerdown', x, y, buttons: this.buttons, modifiers: this.modifiers(opts.modifiers), t: this.tick(), ...this.pressureField(opts.pressure), ...this.pointerFields(opts) })
     return this
   }
 
@@ -89,22 +131,25 @@ class ScriptBuilder {
    * landing point — steps+1 pointermove events total, each on its own tick. */
   move(x: number, y: number, opts: MoveOptions = {}): this {
     const steps = opts.steps ?? 0
-    const x0 = this.x, y0 = this.y
+    const start = this.posOf(opts)
+    const x0 = start.x, y0 = start.y
     const modifiers = this.modifiers(opts.modifiers)
     for (let i = 1; i <= steps; i++) {
       const frac = i / (steps + 1)
       const ix = x0 + (x - x0) * frac
       const iy = y0 + (y - y0) * frac
-      this.built.push({ type: 'pointermove', x: ix, y: iy, buttons: this.buttons, modifiers, t: this.tick(), ...this.pressureField(opts.pressure) })
+      this.built.push({ type: 'pointermove', x: ix, y: iy, buttons: this.buttons, modifiers, t: this.tick(), ...this.pressureField(opts.pressure), ...this.pointerFields(opts) })
     }
-    this.x = x; this.y = y
-    this.built.push({ type: 'pointermove', x, y, buttons: this.buttons, modifiers, t: this.tick(), ...this.pressureField(opts.pressure) })
+    this.setPos(opts, x, y)
+    this.built.push({ type: 'pointermove', x, y, buttons: this.buttons, modifiers, t: this.tick(), ...this.pressureField(opts.pressure), ...this.pointerFields(opts) })
     return this
   }
 
   up(opts: StepOptions & { readonly buttons?: number } = {}): this {
     const buttons = opts.buttons ?? 0
-    this.built.push({ type: 'pointerup', x: this.x, y: this.y, buttons, modifiers: this.modifiers(opts.modifiers), t: this.tick(), ...this.pressureField(opts.pressure) })
+    const at = this.posOf(opts)
+    this.built.push({ type: 'pointerup', x: at.x, y: at.y, buttons, modifiers: this.modifiers(opts.modifiers), t: this.tick(), ...this.pressureField(opts.pressure), ...this.pointerFields(opts) })
+    if (opts.pointerId !== undefined) this.positions.delete(opts.pointerId)
     this.buttons = buttons
     return this
   }

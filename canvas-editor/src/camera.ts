@@ -12,7 +12,7 @@
 // ("the installed @tldraw editor package, <path>") — the package's scoped
 // name spelled with a slash would trip boundary.test.ts's raw-text scan,
 // which deliberately does not parse comments out.
-import type { Camera, WheelInputEvent } from './input.js'
+import type { Camera, PinchInputEvent, WheelInputEvent } from './input.js'
 
 /** tldraw's own zoom range, read from source rather than assumed: the
  * installed @tldraw editor package, src/lib/constants.ts —
@@ -155,4 +155,41 @@ export function applyWheel(camera: Camera, event: WheelInputEvent): Camera {
     return zoomAboutPoint(camera, { x: event.x, y: event.y }, wheelZoomFactor(event.dy))
   }
   return { x: camera.x - (event.dx * PAN_SPEED) / camera.z, y: camera.y - (event.dy * PAN_SPEED) / camera.z, z: camera.z }
+}
+
+/**
+ * The two-finger policy — the pinch analogue of `applyWheel`, and the ONLY
+ * consumer of `PinchInputEvent` (mobile-touch task). ONE gesture, BOTH camera
+ * effects: the fingers' spread zooms, and the travel of their midpoint pans,
+ * because on a phone those are never separable — no two fingers change
+ * distance without also moving, and a zoom-only reading makes the canvas feel
+ * like it is fighting the hand.
+ *
+ * Composed from `zoomAboutPoint` rather than re-deriving the camera algebra,
+ * for the reason that function's own header gives: two places that each
+ * re-derive the xy correction are two places a sign or clamp-order bug can
+ * hide. Zoom first, about the PREVIOUS midpoint (the world point under the
+ * fingers at the start of this sample is what must stay under them), then
+ * translate by the midpoint's screen travel converted at the NEW zoom —
+ * `screen = (world + camera.xy) * z`, so moving content `d` screen pixels is
+ * `camera.xy += d / z`, and it has to be the post-zoom z or the pan lands
+ * short at every scale but 1.
+ *
+ * PAN SIGN: `+dx/z`, where applyWheel's plain-wheel pan is `-dx/z`. Not an
+ * inconsistency — a wheel's delta describes how far the WHEEL turned (content
+ * moves opposite), a pinch's describes how far the FINGERS moved (content
+ * follows them, because the user is holding it). See PinchInputEvent's own
+ * doc comment. Pinned by the pinch-pans-with-the-fingers contract.
+ *
+ * POISON GUARD, same posture and the same reason as applyWheel's: a non-finite
+ * dx/dy/factor, or a non-positive factor (a degenerate distance ratio), makes
+ * the WHOLE event a no-op. A NaN reaching the camera is unrecoverable — every
+ * later clamp propagates it — and a factor of 0 would drive z to the MIN_ZOOM
+ * floor in one frame with no way back other than the zoom buttons.
+ */
+export function applyPinch(camera: Camera, event: PinchInputEvent): Camera {
+  if (!Number.isFinite(event.dx) || !Number.isFinite(event.dy)) return camera
+  if (!Number.isFinite(event.factor) || event.factor <= 0) return camera
+  const zoomed = zoomAboutPoint(camera, { x: event.x, y: event.y }, event.factor)
+  return { x: zoomed.x + event.dx / zoomed.z, y: zoomed.y + event.dy / zoomed.z, z: zoomed.z }
 }

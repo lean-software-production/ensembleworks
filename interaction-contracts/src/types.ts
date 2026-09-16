@@ -68,10 +68,28 @@ export type Anchor =
 // single-actor contracts never set it, so every pre-Pilot-5 gesture array
 // (built without this field at all) keeps meaning exactly what it always
 // did — one implicit actor, routed to the runner's ONE existing page/FSM.
+// MULTI-POINTER / POINTER-KIND FIELDS (mobile-touch task) — `pointer` and
+// `pointerType`, carried by the three pointer ops. Both OPTIONAL, and omitting
+// them means exactly what it always meant: ONE anonymous pointer of unstated
+// kind, so every pre-mobile declaration keeps its meaning byte-for-byte.
+//   * `pointer` is a caller-chosen pointer IDENTITY (1, 2, …). Two ops with
+//     different identities are two fingers: `down` p1, `down` p2, then `move`
+//     p2 leaves p1 exactly where it was. This is what makes a pinch — the one
+//     gesture the browser refuses to recognize for you — expressible as data.
+//   * `pointerType` is the DEVICE kind, and it is not decoration: the
+//     two-finger recognizer only ever forms a pinch out of 'touch' pointers,
+//     and the coarse-pointer hit tolerances only widen for one. A contract
+//     that says "with a finger" must say so here or it is testing a mouse.
+// BROWSER SUPPORT: not wired. e2e/lib/contracts.ts drives Playwright's single
+// `mouse` API, which has no second pointer and no pointerType — it THROWS on
+// an op carrying either field rather than silently running a one-finger mouse
+// gesture and reporting a pass (the established browser-only/fsm-only
+// throw-stub posture, pointed the other way). Every declaration using them is
+// level:'fsm'.
 export type GestureOp =
-  | { readonly kind: 'down'; readonly at: Anchor; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
-  | { readonly kind: 'move'; readonly at: Anchor; readonly steps?: number; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
-  | { readonly kind: 'up'; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
+  | { readonly kind: 'down'; readonly at: Anchor; readonly modifiers?: GestureModifiers; readonly actor?: Actor; readonly pointer?: number; readonly pointerType?: 'mouse' | 'pen' | 'touch' }
+  | { readonly kind: 'move'; readonly at: Anchor; readonly steps?: number; readonly modifiers?: GestureModifiers; readonly actor?: Actor; readonly pointer?: number; readonly pointerType?: 'mouse' | 'pen' | 'touch' }
+  | { readonly kind: 'up'; readonly modifiers?: GestureModifiers; readonly actor?: Actor; readonly pointer?: number; readonly pointerType?: 'mouse' | 'pen' | 'touch' }
   | { readonly kind: 'wheel'; readonly dx: number; readonly dy: number; readonly at: Anchor; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
   | { readonly kind: 'key'; readonly key: string; readonly modifiers?: GestureModifiers; readonly actor?: Actor }
   /** Task K (assets/image sub-cycle) — a real HTML5 file drop at a screen
