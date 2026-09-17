@@ -147,8 +147,19 @@ describe("composerBanner", () => {
     expect(banner.detail).toBe(
       "Your machines: ew-lsp-001-mrdavidlaing. Team machine: ew-lsp-001-main. "
       + "BB does not tell a plugin which machine this composer has selected, so this banner cannot check it "
-      + "for you — a start on someone else's machine is caught when the message is dispatched.",
+      + "for you. Nothing else checks it yet either: starting on someone else's machine is recorded, not refused.",
     );
+  });
+
+  it("never promises an enforcement that is not built", () => {
+    // The guardrail (restrictStarts / requireIdentity, step 5) does not exist yet, and
+    // attributeDispatch always proceeds. Copy that implies a start is caught, refused or
+    // blocked would be a lie told in the user's own composer.
+    for (const machines of [[], [davidsMachine, teamMachine, unclaimed]]) {
+      const detail = composerBanner({ me: david, machines }).detail;
+      // Only positive claims are banned: "is recorded, not refused" is the honest form.
+      expect(detail).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
+    }
   });
 
   it("says so plainly when there are no machines to list", () => {

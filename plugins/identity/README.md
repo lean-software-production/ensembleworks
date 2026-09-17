@@ -97,8 +97,10 @@ reject, delay or alter a dispatch.
   An unrecorded starter reads "Starter not recorded", muted — never alarming, never blank.
 - **The new-thread composer** carries "Starting as David", plus the machines that are
   yours. It deliberately makes **no** claim about the machine you picked: a `new-thread`
-  composer customization cannot see the selected machine (SDK 0.4.84 `ComposerView`), so a
-  wrong machine is first caught when the message is dispatched.
+  composer customization cannot see the selected machine (SDK 0.4.84 `ComposerView`). It
+  also does not pretend anything downstream catches it — step 5's guardrail is not built,
+  `attributeDispatch` always proceeds, so a start on someone else's machine is recorded and
+  not refused. `ownership-labels.test.ts` fails if that copy ever promises otherwise.
 
 Read paths: `identity_thread_ownership` (RPC, batched) / `GET …/http/thread-ownership`,
 `identity_machines` (RPC), `GET …/http/host-pins`. The machine list comes from bb's own

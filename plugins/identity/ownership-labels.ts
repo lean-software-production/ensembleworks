@@ -144,6 +144,7 @@ export function composerBanner(input: {
   return {
     title,
     detail: `${lists} BB does not tell a plugin which machine this composer has selected, so this banner cannot `
-      + "check it for you — a start on someone else's machine is caught when the message is dispatched.",
+      + "check it for you. Nothing else checks it yet either: starting on someone else's machine is recorded, "
+      + "not refused.",
   };
 }

@@ -921,8 +921,13 @@ new storage call is time-bounded and swallows its own errors.
   (default `ensembleworks-agent`).
 - **Composer banner.** "Starting as David", plus your machines and the team machine. It
   makes **no** promise about the machine you picked, per S3-lite, and says so in as many
-  words ("BB does not tell a plugin which machine this composer has selected… a start on
-  someone else's machine is caught when the message is dispatched").
+  words. **Corrected 2026-09-18 after review:** the first version ended "…a start on
+  someone else's machine is caught when the message is dispatched", which was false —
+  step 5 is not built and `attributeDispatch` always proceeds, so nothing catches it. The
+  banner now reads "Nothing else checks it yet either: starting on someone else's machine
+  is recorded, not refused", and a test (`never promises an enforcement that is not built`)
+  fails on any copy containing caught/refused/blocked/prevent/stopped. When step 5 lands,
+  that test is the reminder to update the copy deliberately rather than by accident.
 - **Attribution now records the machine.** `starterRecordSchema` gained an optional
   `host: {id, name}` taken from the hook context's `host`, so the header can name the
   machine a thread actually ran on. Records written before this read back as "no machine"
