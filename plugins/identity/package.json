@@ -14,7 +14,7 @@
     "name": "Identity",
     "description": "Who is who on a shared BB server: presence, typing awareness and thread ownership.",
     "branding": {
-      "icon": "UsersRound"
+      "icon": "./assets/icon.svg"
     },
     "server": "./server.ts",
     "app": "./app.tsx"

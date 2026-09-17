@@ -10,7 +10,7 @@
     "name": "Attractor",
     "description": "Runs Graphviz DOT workflow definitions (the Attractor dialect) with BB threads as the agent backend, and renders the workflow DAG with live execution state.",
     "branding": {
-      "icon": "Workflow"
+      "icon": "./assets/icon.svg"
     },
     "server": "./server.ts",
     "app": "./app.tsx",
