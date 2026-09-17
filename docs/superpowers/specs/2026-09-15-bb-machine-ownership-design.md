@@ -124,6 +124,31 @@ an access control.*
    is the truthful label.
 7. **Block thread interactions that carry no identity, where possible.** See "No-identity
    policy" below for what that can and can't cover.
+8. **A person's own shell is refused, and gets an opt-in that makes it identified**
+   (decided 2026-09-17). `bb thread send`/`tell` from a personal terminal reaches the server
+   over loopback (or the tunnel with `BB_SERVER_URL`) with no Access header and no thread id.
+   The plugin runs in the bb *server*, so it cannot see the calling Linux uid — the socket is
+   TCP, not a unix socket, and a `/proc/net/tcp` inode→uid lookup is too fragile to build on.
+   Note that people are denied SSH on the bb box (`roles/ew_bb/tasks/people.yml`), so a
+   "personal shell" is either an admin shell on lsp or a laptop pointed at prod.
+
+   **Refuse under `requireIdentity`, and ship the opt-in in the same change:** a person who
+   wants to drive their own threads from their own terminal exports `BB_SERVER_HEADERS` (the
+   setting found in S7) with `Cf-Access-Authenticated-User-Email: <their email>`, and the
+   send then arrives as them and passes the ordinary starter check.
+   - Keeps enforcement as one rule in `message.dispatch`, with no personal-shell special case.
+   - Costs nothing to build: no verification, and the same trust level the browser path
+     already has, since Identity never verifies the Access JWT (deferred, see Decisions).
+   - Honest about the trust: a self-asserted header is a label, not a credential. Fine under
+     guardrail-not-access-control, and stated rather than hidden.
+   - Rejected alternative: allow and attribute "unknown". That is the one hole wide enough to
+     carry everything else, and it is exactly the shape a mistaken send onto someone else's
+     thread arrives in, so the guardrail would stop meaning anything.
+   - Refusal text must name the fix: "no identity — open bb through the Access URL, send from
+     a thread (`--parent-self`), or export `BB_SERVER_HEADERS`."
+   - **S9 must cover** `bb thread tell` and `spawn` *without* thread context, and an agent's
+     own `bb thread stop --self`. The risk is a rule aimed at human shells catching agents'
+     CLI calls, which carry no header either.
 
 ### No-identity policy (design, 2026-09-17; not built)
 
@@ -134,7 +159,7 @@ Goal: an interaction that can't be tied to a person is refused, instead of runni
 |---|---|---|
 | Browser through Access | email header (ALS), resolved against the directory | refuse (email missing or not in the directory) |
 | Agent inside a thread (`bb thread spawn --parent-self`, `bb thread tell` from a thread, workflows, subagent threads) | **lineage**: `parentThreadId`, `sourceThreadId`, `startedOnBehalfOf.senderThreadId` or the send's `senderThreadId` → that thread's recorded starter | refuse if the linked thread has no recorded starter |
-| Person's own shell or `curl` with no Access header and no lineage | nothing | **refuse** (this is the case you asked to block) |
+| Person's own shell or `curl` with no Access header and no lineage | nothing, unless the shell exports `BB_SERVER_HEADERS` with the person's email (answer 8) | **refuse** (this is the case you asked to block) |
 | Queued/scheduled message draining later (no request) | sender recorded on `message.queued` (runs in the request context, S7) | refuse if nothing was recorded |
 | Automations plugin | origin `plugin` + automations plugin id | allowed only on the team machine (answer 2); starter = "automation" |
 | Other bb-internal plugin dispatches (provider-retry's `threads.retry`, scheduled send, side-chat…) | `originPluginId`, or a retry of a thread whose starter is recorded | allow when the thread already has a recorded starter; spike each plugin before enforcing |
