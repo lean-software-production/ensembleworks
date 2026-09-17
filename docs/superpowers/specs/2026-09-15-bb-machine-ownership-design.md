@@ -889,3 +889,100 @@ Options, cheapest first, none of them yet decided:
 Path 1 alone makes it a work-stopper. Enable it only together with the carve-out or the
 `BB_SERVER_HEADERS` machine header, and re-run S9 on a bb where a provider actually works,
 to close the six rows above that are predictions rather than observations.
+
+### Step 4 built (2026-09-18): the ownership UI (option B)
+
+Landed on `feature/identity-attribution` (`plugins/identity/hosts.ts`,
+`ownership-labels.ts`, `kv.ts`, `host-ref.ts`, plus wiring in `server.ts`, `app.tsx` and
+`sidebar-fallback.ts`). Step 5's guardrails are untouched: **nothing added here can
+reject, delay or alter a dispatch** — the hook still always returns `proceed`, and every
+new storage call is time-bounded and swallows its own errors.
+
+**What it does.**
+- **Host mapping, read-only** (`hosts.ts`). `personFromHostName` takes the last
+  `<box>-<person>` segment and matches it case-insensitively against the directory's
+  `person` ids and `github` handles. `HostPins` pins `hostId -> person` in `bb.storage.kv`
+  on first sight and **does not follow a later name that disagrees** — the pin stands and
+  the disagreement is reported (`GET …/http/host-pins`, and in the header chip's wording).
+  `classifyHost` labels every host `person | team | unclaimed`, in that order of evidence:
+  the new `teamMachines` setting wins (team membership is configuration), then the pin,
+  then the name, and anything left is **unclaimed**, never folded into "team" (answer 6).
+- **Row glyph.** The app polls `identity_thread_ownership` for the sidebar's threads and
+  merges two maps on every paint — ownership underneath, **presence on top** — so a row
+  someone is viewing or typing in still shows presence, exactly as before. The
+  replacement-sidebar fallback badge now carries its own text and colour
+  (`ThreadStatus.badge` / `badgeColor`), so an ownership badge shows initials in a neutral
+  colour rather than a viewer count.
+- **Header chip.** "Started by David · runs as ensembleworks-agent on `<machine>` (team
+  machine)", with the machine clause shown ONLY when the machine is not the starter's own
+  — the thing that makes this option B rather than A. An unrecorded starter reads
+  "Starter not recorded", muted. `runs as` is display only: a person's machine shows their
+  own account, team and unclaimed machines show the new `sharedMachineUser` setting
+  (default `ensembleworks-agent`).
+- **Composer banner.** "Starting as David", plus your machines and the team machine. It
+  makes **no** promise about the machine you picked, per S3-lite, and says so in as many
+  words ("BB does not tell a plugin which machine this composer has selected… a start on
+  someone else's machine is caught when the message is dispatched").
+- **Attribution now records the machine.** `starterRecordSchema` gained an optional
+  `host: {id, name}` taken from the hook context's `host`, so the header can name the
+  machine a thread actually ran on. Records written before this read back as "no machine"
+  (the field is `nullish`), never as a corrupt row — verified live on threads left over
+  from the step-3 probes, which render "Started by David" with no machine clause.
+
+**SDK surfaces verified against `@get-bb/plugin-sdk` 0.4.84 `.d.ts`, and where the note
+was wrong.**
+- `MessageDispatchHookContext.host: Host | null` (L19016) — real, and populated in
+  practice; this is where the pins' "first sight" comes from.
+- `experimental_useSidebarThreads()` (L16685) gives `PluginSidebarThread[]`, each with
+  `host {id, name}` — used only for the id list here, because the recorded host is exact.
+- `ComposerCustomization.banners` with `scopes: ["new-thread"]` (L15986) works, and a
+  SECOND `app.composer.customize({...})` registration alongside the existing typing one is
+  honoured — the banner renders in the real app.
+- `experimental_threadHeaderAction` takes a second registration too; both the presence
+  popover and the ownership chip render in the header.
+- **Correction to the note.** §3 says "derive ownership from the name, then pin it by host
+  id", but there is **no SDK surface for a server plugin to enumerate hosts**: `PluginHosts`
+  (L20043) offers only this plugin's own host client, `ensureSharedPortTunnel` and
+  `declareSharedPorts`, and the app-side hooks expose threads, not hosts. The machine list
+  therefore comes from bb's own `GET /api/v1/hosts` over `bb.server.loopbackBaseUrl`,
+  cached 30s. Confirmed at runtime: that route answers a **bare array** of hosts (not
+  `{hosts: […]}`), which `parseHostList` handles either way.
+- The note's option-B sketch shows an avatar per row; `experimental_setThreadRowStatus`
+  takes only `{icon, label, tone}` (no avatar), so the row carries a lucide glyph plus
+  initials in the fallback badge. Unchanged from §5's own "icon + label only" caveat, but
+  worth restating: the sidebar cannot show faces.
+
+**Runtime verification (throwaway `bb-app` 0.43.0, temp `HOME`, ports 39886/39887,
+2026-09-18).** Everything below was observed, not reasoned about:
+- `GET /host-pins` classified the local host as `person` (name-derived), as `team` once it
+  was listed in `teamMachines`, and as `unclaimed` with a directory matching nobody;
+- **the rename rule held live**: after `PATCH /hosts/:id` renamed the pinned host to
+  `ew-lsp-001-someoneelse`, the classification still reported the pinned person and
+  carried `conflict: {pinnedName, pinnedPerson, currentName}`;
+- a create carrying `cf-access-authenticated-user-email` came back from
+  `GET /thread-ownership` as `starter: <person>, via: browser` with the classified host; a
+  header-less `origin: cli` create as `starter: null, via: unknown`; both threads were
+  created normally (the hook proceeds);
+- in a real browser (`agent-browser`, Access header injected), the sidebar rendered
+  `status "Started by Probe Person · team machine"` with a `PP` badge and
+  `status "Starter not recorded · team machine"` with `?`; the thread header rendered
+  "Started by Probe Person · runs as ensemblew…"; the new-thread composer rendered
+  "Starting as Probe Person" with the machine list and the no-warning sentence.
+- **A real bug the browser caught and the unit tests could not**: `identity_machines`
+  spread its internal cache row whole, so the row's `at` failed the RPC's strict output
+  schema and the banner silently rendered nothing (`invalid_output: Unrecognized key
+  "at"`). The answer now goes through `publicMachineList`, validated against the contract's
+  own schema, with a regression test — the same guard `publicStarter` already had.
+- Thread creation on a throwaway needs an explicit `providerId`/`model`
+  (`"providerId":"claude-code","model":"sonnet"`) plus `environment: {type:
+  "project-default"}`; without them it fails `model_catalog_unavailable` because a temp
+  HOME has no ready provider. Add that to the recipe.
+- Recipe correction: a temp `--data-dir` is **not** fully isolated. Threads from earlier
+  probe runs (and their Identity records) reappeared in a later run's sidebar, so bb is
+  importing thread storage from the real `$HOME`. Harmless here — it accidentally proved
+  the "record with no host" back-compat path — but do not read an empty data dir as an
+  empty server.
+
+**Not done here (deliberately):** step 5 (`restrictStarts` / `requireIdentity`), the
+read-only-thread composer banner on other people's threads (it belongs with the
+guardrail that makes it true), and any avatar in the sidebar (no surface for it).

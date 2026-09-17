@@ -71,11 +71,39 @@ fail-closed and Identity must never be able to block a message.
 
 Read it back with `identity_thread_starter` (RPC) or
 `GET /api/v1/plugins/identity/http/thread-starter?threadId=<id>`, both of which return
-`{ threadId, starter, via, inheritedFrom, recordedAt }` or `null`.
+`{ threadId, starter, via, inheritedFrom, recordedAt, host }` or `null` — `host` being the
+machine bb resolved for that dispatch (`null` on records written before it was recorded).
 
 **Storage policy.** One small record per thread (~200 bytes) plus an insertion-ordered
 index, capped at 2000 threads; past the cap the oldest records are deleted and read
 back as `null`. Attribution is a guardrail aid, not an audit log.
+
+## Ownership UI
+
+Identity **shows** who owns what. It labels; it restricts nothing, and nothing here can
+reject, delay or alter a dispatch.
+
+- **Machines are labelled `person`, `team` or `unclaimed`.** A machine named
+  `<box>-<person>` whose last segment matches a directory `person` or `github` belongs to
+  that person; a machine listed in `teamMachines` is the team's; anything else is
+  **unclaimed** — never silently folded into "team". A host is **pinned** to its person by
+  host id on first sight, and a later rename that disagrees with the pin is *not* followed:
+  the pin stands and the disagreement is reported (`GET …/http/host-pins`, and in the
+  header chip).
+- **Thread rows** show who started the thread ("Started by David · team machine"), except
+  while someone is viewing or typing — **presence wins** that glyph.
+- **The thread header** reads "Started by David · runs as ensembleworks-agent on
+  `<machine>` (team machine)". The machine appears only when it is not the starter's own.
+  An unrecorded starter reads "Starter not recorded", muted — never alarming, never blank.
+- **The new-thread composer** carries "Starting as David", plus the machines that are
+  yours. It deliberately makes **no** claim about the machine you picked: a `new-thread`
+  composer customization cannot see the selected machine (SDK 0.4.84 `ComposerView`), so a
+  wrong machine is first caught when the message is dispatched.
+
+Read paths: `identity_thread_ownership` (RPC, batched) / `GET …/http/thread-ownership`,
+`identity_machines` (RPC), `GET …/http/host-pins`. The machine list comes from bb's own
+`GET /api/v1/hosts` over the loopback base url — the SDK gives a server plugin no way to
+enumerate hosts.
 
 ## Settings
 
@@ -102,11 +130,22 @@ no Access header, for a BB server that is not behind Cloudflare Access (e.g. a
 laptop). On such a server every header-less caller is attributed to this email,
 including agents and the CLI. Leave it empty on a shared server.
 
+### `teamMachines`
+
+Host names of the shared team machines, one per line or comma separated (a JSON array
+works too). A host that matches neither a person nor this list renders as "unclaimed".
+
+### `sharedMachineUser`
+
+Default `ensembleworks-agent`: the account team and unclaimed machines run as, shown in
+the header chip. Display only — Identity never sets or checks it.
+
 ### Setting them
 
 ```
 bb plugin config identity set directory '<json>'
 bb plugin config identity set fallbackEmail 'you@example.com'
+bb plugin config identity set teamMachines 'ew-lsp-001-main'
 bb plugin reload identity
 ```
 
