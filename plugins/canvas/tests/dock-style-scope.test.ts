@@ -292,7 +292,7 @@ describe("the dock stylesheet", () => {
    * Read off the construction block there: the popover holds `.dock-faces`
    * (each face a `.dock-face` wrapping a bubble and a `.dock-jump` link), the
    * `.dock-controls` row of `.dock-btn`s (`.dock-audio` has no rule of its own,
-   * `.dock-mic`, `.dock-camera` and `.dock-transcript` do), and the
+   * `.dock-mic` and `.dock-camera` do), and the
    * `.dock-status` line. `.dock-video` is here because `renderBubbles` is
    * called with `video: true` for the popover's faces and `video: false` for
    * the strip's, so a `<video>` can only ever be attached inside the popover. */
@@ -306,7 +306,6 @@ describe("the dock stylesheet", () => {
     "dock-btn",
     "dock-mic",
     "dock-camera",
-    "dock-transcript",
     "dock-status",
     "dock-video",
   ];

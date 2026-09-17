@@ -8,9 +8,8 @@
 // and its `run` context carries only `threadId`, `projectId` and `openPanel` —
 // there is no navigate and no way to enumerate rows per page. So the palette
 // cannot BE the page list; it is a door onto the one the canvas panel already
-// draws. That door is a module singleton for the same reason
-// canvas/dock/transcript-door.ts is one: two mount points in one bundle with
-// no common React ancestor.
+// draws. That door is a module singleton because two mount points in one
+// bundle have no common React ancestor.
 import { describe, expect, it } from "vitest";
 import {
   decidePageCommandAvailable,

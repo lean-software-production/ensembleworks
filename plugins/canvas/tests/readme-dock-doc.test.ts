@@ -141,7 +141,7 @@ describe("README: the tier ladder is documented in full", () => {
   // The design half — the section that explains WHY the strip squeezes.
   const design = section(
     "#### Narrow screens: presence is what gives up width",
-    "#### The 📜 button",
+    "#### Manual smoke checklist",
   );
   // The instruction half — the smoke steps a human walks the ladder with.
   const smoke = section(

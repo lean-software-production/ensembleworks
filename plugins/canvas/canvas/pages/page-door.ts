@@ -15,21 +15,17 @@
 // focused, which is where the "knows the page's name" speed actually comes
 // from), rather than being the list itself.
 //
-// WHY A MODULE SINGLETON. Identical to canvas/dock/transcript-door.ts's
-// reasoning, which is why this file is short: the palette registration lives
-// in app.tsx at module scope, the page menu lives in a React component inside
-// the nav panel, and there is no common plugin ancestor to hang a context on.
-// One bundle in one window, so a singleton reaches both.
+// WHY A MODULE SINGLETON. The palette registration lives in app.tsx at module
+// scope, the page menu lives in a React component inside the nav panel, and
+// there is no common plugin ancestor to hang a context on. One bundle in one
+// window, so a singleton reaches both.
 //
 // THE HONEST LIMIT, stated rather than glossed: the command can only work
 // while the canvas panel is MOUNTED, because the menu it opens is the panel's.
 // Off the canvas route there is nothing to open and nothing in the palette's
-// context to navigate there with, so the row hides itself — the same
-// `isAvailable` idiom app.tsx's transcript row already uses ("hiding the row
-// where it would decline beats offering a command that does nothing"). That
-// the panel unmounts on a route change is inferred from React route semantics
-// and from the transcript door's measured behaviour on the same host; it has
-// not been observed for this panel.
+// context to navigate there with, so the row hides itself. That the panel
+// unmounts on a route change is inferred from React route semantics; it has not
+// been observed for this panel.
 
 /** What came back from an attempt to open the page menu. `status` is a
  * sentence for the user — a refusal that says nothing is indistinguishable
@@ -68,8 +64,7 @@ export const pageDoor = {
    * unregister for the effect's cleanup — and that unregister only fires if
    * this handler is still the current one, because React runs a departing
    * component's cleanup AFTER the arriving one has registered (StrictMode's
-   * double-mount does exactly this, as does a remount). Copied deliberately
-   * from transcriptDoor.setOpener, including this reason.
+   * double-mount does exactly this, as does a remount).
    */
   setOpener(open: Opener): () => void {
     opener = open;

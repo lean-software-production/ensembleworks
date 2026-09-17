@@ -11,14 +11,7 @@ import { type BbPluginApi } from "@get-bb/plugin-sdk";
 import { resolveCanvasProjectId } from "./canvas/agent-project.js";
 import { CanvasRoomHost } from "./canvas/room.js";
 import { CANVAS_MIGRATIONS, CanvasStore } from "./canvas/store.js";
-import {
-  registerBackground,
-  registerHttp,
-  registerMentions,
-} from "./canvas/registrations.js";
-import {
-  TranscriptStore,
-} from "./canvas/transcript.js";
+import { registerBackground, registerHttp } from "./canvas/registrations.js";
 import { createRpcHandlers } from "./canvas/rpc-handlers.js";
 import { registerCanvasCli } from "./canvas/cli.js";
 import { rpcContract } from "./canvas/rpc-contract.js";
@@ -70,10 +63,6 @@ export default async function plugin(bb: BbPluginApi) {
     publish: (envelope) => bb.realtime.publish(CANVAS_CHANNEL, envelope),
     log: (message) => bb.log.info(message),
   });
-  // The room's OTHER half: what was said in it. Same database, entirely
-  // separate table — the canvas document is a CRDT nobody queries and the
-  // transcript is a query surface nobody edits.
-  const transcript = new TranscriptStore(db);
   // LIFO: this runs before the host closes the database handle, so the final
   // compaction still has somewhere to write.
   bb.onDispose(() => room.close());
@@ -83,15 +72,12 @@ export default async function plugin(bb: BbPluginApi) {
     room,
   );
 
-  registerHttp(bb, transcript);
-
-  registerMentions(bb, transcript);
+  registerHttp(bb);
 
   bb.rpc.register(
     rpcContract,
     createRpcHandlers({
       room,
-      transcript,
       resolveProjectId,
       realtime: bb.realtime,
       log: bb.log,
@@ -99,7 +85,7 @@ export default async function plugin(bb: BbPluginApi) {
     }),
   );
 
-  registerCanvasCli(bb, room, transcript);
+  registerCanvasCli(bb, room);
 
   // Cleanup on reload/disable/shutdown; hooks run LIFO. The sanctioned place
   // to clear timers and close connections.

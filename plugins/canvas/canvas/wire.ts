@@ -10,46 +10,6 @@ export const ROOM_ID = "main";
 export const CANVAS_CHANNEL = "canvas:main";
 
 /**
- * The realtime channel the room transcript rides — one message per ingested
- * utterance. Separate from the other two for the same reason they are separate
- * from each other: a panel that only wants to tail the conversation should not
- * be decoding CRDT frame envelopes at pointer cadence, and a transcript line is
- * human-scale, low-rate, and interesting to surfaces that have no canvas at all.
- */
-export const TRANSCRIPT_CHANNEL = "canvas:transcript";
-
-/**
- * One utterance in the room. The SAME object is the scribe route's input, the
- * durable row, the realtime message, and the rpc result — one shape, no
- * translation layer.
- *
- * `ts` is epoch milliseconds. The scribe service (LiveKit -> Whisper, on the
- * VM) may stamp its own — an utterance is timed by when it was SPOKEN, not by
- * when the POST happened to land — and the route defaults it to server now when
- * it does not.
- */
-export interface TranscriptEntry {
-  ts: number;
-  speaker: string;
-  text: string;
-}
-
-/**
- * Decode a realtime payload from TRANSCRIPT_CHANNEL, or null when it is not a
- * well-formed entry. Every field is checked: this reaches React as a row's
- * key, colour and text, and a malformed message should cost one line, never
- * the panel.
- */
-export function transcriptEntryFrom(payload: unknown): TranscriptEntry | null {
-  if (typeof payload !== "object" || payload === null) return null;
-  const entry = payload as Partial<TranscriptEntry>;
-  if (typeof entry.ts !== "number" || !Number.isFinite(entry.ts)) return null;
-  if (typeof entry.speaker !== "string" || entry.speaker.length === 0) return null;
-  if (typeof entry.text !== "string" || entry.text.length === 0) return null;
-  return { ts: entry.ts, speaker: entry.speaker, text: entry.text };
-}
-
-/**
  * Server -> client envelope. realtime is broadcast-only, so `to` is the
  * address and every client drops envelopes that are not its own. `data` is a
  * base64 canvas-sync frame.

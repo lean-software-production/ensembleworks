@@ -1,7 +1,6 @@
 import { defineRpcContract } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import { MAX_PATH_LENGTH } from "./dock/where.js";
-import { MAX_QUERY_LIMIT } from "./transcript.js";
 import { MAX_NAME_LENGTH } from "./identity.js";
 
 /** A client address minted by transport.ts's `newClientId()`. */
@@ -230,44 +229,6 @@ export const rpcContract = defineRpcContract({
         })
         .strict(),
     ]),
-  },
-  /**
-   * Read the room transcript — what was SAID in the room (see
-   * canvas/transcript.ts), as opposed to what was drawn on it.
-   *
-   * `sinceMs` is an ABSOLUTE epoch-millisecond lower bound, not a duration:
-   * the caller is a browser tab or an agent that already knows the clock, and
-   * `bb canvas transcript --since 10m` turns its duration into one of these
-   * before it gets here. Every filter is an AND; `search` is a substring of the
-   * utterance text, `speaker` an exact (case-insensitive) name.
-   *
-   * `limit` is the TAIL: the newest N matching entries, then returned oldest
-   * first so a caller renders it top to bottom without reversing anything.
-   */
-  canvas_transcript_feed: {
-    input: z.object({ after: z.number().int().nonnegative(), limit: z.number().int().min(1).max(100) }).strict(),
-    output: z.object({ streamId: z.string(), entries: z.array(z.object({
-      id: z.number().int().positive(), ts: z.number(), speaker: z.string(), text: z.string(),
-    }).strict()), hasMore: z.boolean(), nextCursor: z.number().int().nonnegative() }).strict(),
-  },
-  canvas_transcript_query: {
-    input: z
-      .object({
-        sinceMs: z.number().optional(),
-        search: z.string().max(500).optional(),
-        speaker: z.string().max(200).optional(),
-        limit: z.number().int().min(1).max(MAX_QUERY_LIMIT).optional(),
-      })
-      .strict(),
-    output: z
-      .object({
-        entries: z.array(
-          z
-            .object({ ts: z.number(), speaker: z.string(), text: z.string() })
-            .strict(),
-        ),
-      })
-      .strict(),
   },
   /** Spike-only introspection; the UI does not need it, tests and humans do. */
   canvas_debug: {

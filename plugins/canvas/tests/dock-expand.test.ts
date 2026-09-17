@@ -96,32 +96,3 @@ describe("nextExpanded — the jump link", () => {
     expect(nextExpanded(false, { type: "jump" })).toBe(false);
   });
 });
-
-describe("nextExpanded — the transcript button", () => {
-  it("folds when the transcript panel opened", () => {
-    // The button lives in the popover's controls row now, so the popover is
-    // physically over the panel it just opened. Same reasoning as "pan" and
-    // "jump" above: you asked to look at something, and the popover is in
-    // front of it.
-    expect(nextExpanded(true, { type: "transcript" })).toBe(false);
-  });
-
-  it("changes nothing when the popover was already folded", () => {
-    // A folded strip cannot have produced this event today, but the
-    // transition must never be the thing that OPENS a popover in response to
-    // being sent somewhere.
-    expect(nextExpanded(false, { type: "transcript" })).toBe(false);
-  });
-
-  it("still lets a refusal force the popover open", () => {
-    // A decline is reported on the status line, which lives INSIDE the
-    // popover. Only the opened branch folds; the refusal branch sets a status
-    // and this is what keeps that readable.
-    expect(
-      nextExpanded(false, {
-        type: "status",
-        text: "BB declined to open the room transcript panel here.",
-      }),
-    ).toBe(true);
-  });
-});

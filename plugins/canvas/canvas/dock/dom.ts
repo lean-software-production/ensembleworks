@@ -11,7 +11,6 @@ export interface DockDom {
   readonly audioButton: HTMLButtonElement;
   readonly micButton: HTMLButtonElement;
   readonly cameraButton: HTMLButtonElement;
-  readonly scribe: HTMLButtonElement;
   readonly status: HTMLParagraphElement;
 }
 export function createDockDom(squeeze: string): DockDom {
@@ -62,11 +61,7 @@ export function createDockDom(squeeze: string): DockDom {
   const audioButton = button("dock-btn dock-audio", "", "");
   const micButton = button("dock-btn dock-mic", "", "");
   const cameraButton = button("dock-btn dock-camera", "", "");
-  const scribe = button("dock-btn dock-transcript", "Transcript", "Open the room transcript");
-  scribe.dataset.canvasDockScribe = "";
-  scribe.setAttribute("aria-label", "Open the room transcript");
-  scribe.hidden = true;
-  controls.append(audioButton, micButton, cameraButton, scribe);
+  controls.append(audioButton, micButton, cameraButton);
 
   const status = document.createElement("p");
   status.className = "dock-status";
@@ -75,7 +70,7 @@ export function createDockDom(squeeze: string): DockDom {
   popover.append(faces, controls, status);
   root.append(strip);
   document.body.appendChild(popover);
-  return { style, root, strip, bubbles, overflow, popover, faces, audioButton, micButton, cameraButton, scribe, status };
+  return { style, root, strip, bubbles, overflow, popover, faces, audioButton, micButton, cameraButton, status };
 }
 
 function button(className: string, text: string, title: string): HTMLButtonElement {

@@ -13,11 +13,7 @@ import { toast } from "sonner";
 import { CanvasPanel } from "./canvas/CanvasPanel.js";
 import { decidePageCommandAvailable, pageDoor } from "./canvas/pages/page-door.js";
 import { CANVAS_PANEL_PATH } from "./canvas/pages/page-route.js";
-import { TranscriptView } from "./canvas/transcript-ui.js";
 import { CanvasReturnAction } from "./canvas/thread-return-ui.js";
-
-/** The `threadPanelAction` id, referenced by the palette row that opens it. */
-const TRANSCRIPT_ACTION = "transcript";
 
 export default definePluginApp((app) => {
   app.slots.experimental_threadHeaderAction({
@@ -44,50 +40,6 @@ export default definePluginApp((app) => {
     component: CanvasPanel,
   });
 
-  // The room transcript: three registrations and four doors, ONE component.
-  //
-  // It is deliberately not a tab on the canvas page: what the room said out
-  // loud is context for whatever you are doing in bb, and the place you most
-  // want it is beside the thread you are briefing — next to Terminal, in the
-  // right panel, on any thread.
-  //
-  // "flush": the view owns its own scrolling (it has a pinned live tail) and
-  // its own footer (the search box), which the host's padded scroll container
-  // would fight.
-  app.slots.threadPanelAction({
-    id: TRANSCRIPT_ACTION,
-    title: "Room transcript",
-    icon: "MessageSquare",
-    layout: "flush",
-    component: TranscriptView,
-  });
-
-  // The New-thread screen has its own panel launcher and none of the thread
-  // one's registrations, so the same action is declared again for it. This is
-  // the surface where the transcript earns the most: writing the prompt for a
-  // brand-new agent while reading what the room just decided.
-  app.slots.experimental_newThreadPanelAction({
-    id: TRANSCRIPT_ACTION,
-    title: "Room transcript",
-    icon: "MessageSquare",
-    layout: "flush",
-    component: TranscriptView,
-  });
-
-  app.slots.commandPaletteAction({
-    id: "open-transcript",
-    // Self-identifying: the palette matches the query against this title, and
-    // it sits among every core bb command.
-    title: "Canvas: open room transcript",
-    // The palette opens anywhere — over Settings, over a plugin page — and
-    // `openPanel` only has somewhere to go on the main thread view. Hiding the
-    // row where it would decline beats offering a command that does nothing.
-    isAvailable: ({ threadId }) => threadId !== null,
-    run: ({ openPanel }) => {
-      openPanel({ actionId: TRANSCRIPT_ACTION, title: "Room transcript" });
-    },
-  });
-
   // Pages, from anywhere: the zero-pixel surface of the three the design doc's
   // D-2 asks for. It cannot BE the page list — `commandPaletteAction` is one
   // static row registered here, with no way to enumerate rows per page and no
@@ -99,9 +51,8 @@ export default definePluginApp((app) => {
     // The ellipsis is the promise the row keeps: it opens a picker rather than
     // going straight somewhere.
     title: "Canvas: go to page…",
-    // The same idiom as the transcript row above: the list lives in the canvas
-    // panel, so off the canvas route there is nothing to open. Hiding the row
-    // beats offering a command that does nothing.
+    // The list lives in the canvas panel, so off the canvas route there is
+    // nothing to open. Hiding the row beats offering a command that does nothing.
     isAvailable: () => decidePageCommandAvailable({ hasDoor: pageDoor.hasOpener() }),
     run: () => {
       const outcome = pageDoor.open();

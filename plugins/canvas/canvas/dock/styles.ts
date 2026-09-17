@@ -242,14 +242,7 @@ export const DOCK_STYLES = `
       background it computes to about rgb(213,215,219) against bb's
       rgb(220,220,220). A mid grey is the one hue that can do that.
 
-   ONE CONTROL, NOT TWO. An earlier version of this block styled the strip and
-   a 📜 transcript button together, because a bordered strip beside a
-   borderless glyph read as one control and one piece of stray text. The
-   transcript button has since moved into the popover (".dock-transcript",
-   below, on the ".dock-btn" treatment its neighbours there wear): bb's header
-   row is the scarce surface — on a narrow screen it holds the page title and
-   everything bb itself wants there — and the popover, which we open on demand,
-   is not. So the measurements above now describe exactly one thing. */
+   The measurements above describe exactly one control. */
 
 #canvas-av-dock .dock-strip {
   box-sizing: border-box;
@@ -856,13 +849,8 @@ export const DOCK_STYLES = `
   visibility: hidden;
 }
 
-/* WRAPS, since the transcript button made this four labelled controls rather
-   than three. The popover is "width: max-content" capped at "min(80vw, 420px)",
-   so on a narrow viewport the cap binds and an unwrapped line would resolve by
-   shrinking the buttons — squashing four labels instead of moving one onto a
-   second line. Wrapping is the ONLY thing that changed here; the row is still
-   one line everywhere it fits, which is everywhere the popover is not being
-   squeezed. */
+/* The popover is width-capped on narrow viewports, so its controls wrap rather
+   than shrinking below their usable label width. */
 #canvas-av-dock-popover .dock-controls {
   display: flex;
   flex-wrap: wrap;
@@ -893,19 +881,6 @@ export const DOCK_STYLES = `
 #canvas-av-dock-popover .dock-mic[data-canvas-dock-mic="muted"],
 #canvas-av-dock-popover .dock-camera[data-canvas-dock-camera="on"] {
   border-color: rgba(63, 185, 107, 0.7);
-}
-
-/* The transcript button needs no geometry of its own — it is a ".dock-btn"
-   with a word in it, exactly like the three beside it, which is the whole
-   argument for moving it here off bb's header row.
-
-   The one rule it does get is this. ".dock-btn" above sets no "display", so
-   the UA's own "[hidden] { display: none }" already hides it today; this pins
-   that, because it is hidden on every non-thread route (the common case, not
-   an edge one) and a later "display: inline-flex" on .dock-btn would otherwise
-   turn a control with nowhere to go back on with nothing to notice it. */
-#canvas-av-dock-popover .dock-transcript[hidden] {
-  display: none;
 }
 
 #canvas-av-dock-popover .dock-status {

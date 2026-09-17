@@ -1,4 +1,3 @@
-import { transcriptClick } from "./view.js";
 import type { DockDom } from "./dom.js";
 import type { ExpandEvent } from "./expand.js";
 
@@ -11,13 +10,11 @@ import type { ExpandEvent } from "./expand.js";
 // later click and therefore folds the widget before an outside control acts.
 // A target in either of the two owned trees is inside; the popover is a body
 // child rather than a root descendant, so checking only root.contains would
-// fold the widget before Join audio, Mute, Camera, or Transcript could run.
+// fold the widget before Join audio, Mute, or Camera could run.
 //
-// Escape, strip-click, popover-click, and transcript-click are all expressed
-// as the existing expand events. No event policy is recreated here: the
-// expand state machine remains the only authority for whether a gesture
-// changes the folded state. The transcript adapter likewise remains the only
-// authority for whether a refused opener should keep the popover visible.
+// Escape, strip-click, and popover-click are expressed as the existing expand
+// events. No event policy is recreated here: the expand state machine remains
+// the only authority for whether a gesture changes the folded state.
 export interface DockInteractionsOptions {
   readonly dom: DockDom;
   readonly apply: (event: ExpandEvent) => void;
@@ -42,10 +39,6 @@ export function createDockInteractions(options: DockInteractionsOptions): DockIn
     }
     options.apply({ type: "outside-click" });
   };
-  const onTranscriptClick = (event: MouseEvent): void => {
-    transcriptClick(options.setStatus, options.apply, event);
-  };
-
   options.dom.strip.addEventListener(
     "click",
     () => options.apply({ type: "strip-click" }),
@@ -53,10 +46,6 @@ export function createDockInteractions(options: DockInteractionsOptions): DockIn
   options.dom.popover.addEventListener(
     "click",
     () => options.apply({ type: "popover-click" }),
-  );
-  options.dom.scribe.addEventListener(
-    "click",
-    onTranscriptClick,
   );
   document.addEventListener("keydown", onKeyDown);
   document.addEventListener("pointerdown", onPointerDown);
