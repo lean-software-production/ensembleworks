@@ -768,6 +768,15 @@ now closed, on the same branch:
   reach happy-dom's `.d.ts` through the *parent monorepo's* hoisted `node_modules`, which
   this isolated package does not own — `skipLibCheck` is relaxed there and only there.
 
+**Wiring re-verified on a throwaway bb (2026-09-18), because the hook body moved.** The
+refactor was re-run, not just re-read: throwaway `bb-app` 0.43.0, temp `HOME`, ports
+39886/39887, Identity path-installed with a one-person `directory`. A create carrying
+`cf-access-authenticated-user-email` came back from `GET /thread-starter` as
+`{"starter":{"person":"mrdavidlaing",…},"via":"browser"}`; a header-less `origin: cli`
+create as `{"starter":null,"via":"unknown"}`; a thread id never seen as `null`; and the
+plugin log carried the matching `thread … started by …` lines. Both threads were created
+normally — the hook proceeds, as designed.
+
 ### S9 result (2026-09-18): what identity each built-in dispatch path actually carries
 
 Setup: a throwaway `bb-app` 0.43.0 (Node 24.19, own `--data-dir`, `HOME` in a temp dir,
