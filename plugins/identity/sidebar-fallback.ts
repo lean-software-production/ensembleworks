@@ -5,8 +5,13 @@ type NativeThreadStatus = {
 };
 
 export type ThreadStatus = NativeThreadStatus & {
-  viewers: number;
-  typing: number;
+  /**
+   * What the fallback badge shows on a replacement sidebar that renders no native
+   * status: a viewer count for presence, a starter's initials for ownership.
+   */
+  badge: string;
+  /** That badge's background, so presence and ownership read differently at a glance. */
+  badgeColor: string;
 };
 
 export type ThreadStatusSetter = (threadId: string, status: NativeThreadStatus | null) => void;
@@ -83,13 +88,10 @@ function reconcileFallbackDots(): void {
     }
 
     const badge = existing instanceof HTMLElement ? existing : createBadge(document);
-    const count = String(status.viewers);
-    if (badge.textContent !== count) badge.textContent = count;
+    if (badge.textContent !== status.badge) badge.textContent = status.badge;
     badge.setAttribute("aria-label", status.label);
     badge.setAttribute("title", status.label);
-    badge.style.background = status.typing > 0
-      ? "var(--warning, #f59e0b)"
-      : "var(--success, #22c55e)";
+    badge.style.background = status.badgeColor;
     if (!existing) anchor.append(badge);
     liveBadges.add(badge);
   }

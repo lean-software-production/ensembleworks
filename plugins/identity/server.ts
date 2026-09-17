@@ -167,6 +167,8 @@ export function parseHostList(payload: unknown): HostRef[] {
 const machineList = z.object({
   me: personSummary.nullable(),
   machines: z.array(hostClassification),
+  /** The account team and unclaimed machines run as, for the header chip's wording. */
+  sharedMachineUser: z.string(),
   /** Why the list is empty, when it is. Null when the list was read successfully. */
   unavailable: z.string().nullable(),
 }).strict();
@@ -603,7 +605,7 @@ export default async function plugin(bb: BbPluginApi) {
     }),
     identity_machines: async () => {
       const listed = await machines();
-      return { me: whoamiFor(requestContext.current()?.email ?? null).person, ...listed };
+      return { me: whoamiFor(requestContext.current()?.email ?? null).person, sharedMachineUser, ...listed };
     },
     presence_heartbeat: ({ tabId, viewerId, location }) => {
       const person = summarize(currentIdentity().person);

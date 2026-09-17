@@ -2,14 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import * as Popover from "@radix-ui/react-popover";
 import {
   definePluginApp,
+  experimental_useSidebarThreads,
   useBbContext,
   useComposerView,
   useRealtime,
   useRealtimeConnectionState,
   useRpc,
 } from "@get-bb/plugin-sdk/app";
-import type { PresenceLocation, PresentPerson, rpcContract, WhoAmI } from "./server.js";
+import type { MachineList, PresenceLocation, PresentPerson, rpcContract, ThreadOwnership, WhoAmI } from "./server.js";
 import { initials, presenceLabel } from "./presence-labels.js";
+import { composerBanner, headerChip, ownershipRowStatus } from "./ownership-labels.js";
 import {
   mountThreadStatusFallback,
   replaceThreadStatuses,
@@ -18,6 +20,9 @@ import {
 
 const HEARTBEAT_MS = 10_000;
 const REFRESH_MS = 5_000;
+/** Ownership is durable, so it is polled far less often than presence. */
+const OWNERSHIP_REFRESH_MS = 60_000;
+const OWNERSHIP_BADGE_COLOR = "var(--muted-foreground, #6b7280)";
 
 function stableId(storage: Storage, key: string): string {
   const current = storage.getItem(key);
@@ -61,17 +66,31 @@ function PresenceCoordinator() {
     }).catch(() => undefined);
   }, [locationKey, ownTabId, ownViewerId, rpc]);
 
+  /**
+   * The two glyph sources, kept apart and merged on every paint: PRESENCE WINS.
+   * A thread someone is looking at (or typing in) shows that; every other row falls
+   * back to who started it.
+   */
+  const ownershipRef = useRef(new Map<string, ThreadStatus>());
+  const presenceRef = useRef(new Map<string, ThreadStatus>());
+  const paint = useCallback(() => {
+    const merged = new Map(ownershipRef.current);
+    for (const [threadId, status] of presenceRef.current) merged.set(threadId, status);
+    replaceThreadStatuses(merged);
+  }, []);
+
   const refresh = useCallback(() => {
     void rpc.call("presence_snapshot", { excludeViewerId: ownViewerId }).then(({ threads }) => {
-      replaceThreadStatuses(new Map(threads.map((entry) => [entry.threadId, {
+      presenceRef.current = new Map(threads.map((entry) => [entry.threadId, {
         icon: entry.typing > 0 ? "Edit" : "UsersRound",
         label: presenceLabel(entry),
         tone: entry.typing > 0 ? "running" as const : "default" as const,
-        viewers: entry.viewers,
-        typing: entry.typing,
-      }])));
+        badge: String(entry.viewers),
+        badgeColor: entry.typing > 0 ? "var(--warning, #f59e0b)" : "var(--success, #22c55e)",
+      }]));
+      paint();
     }).catch(() => undefined);
-  }, [ownViewerId, rpc]);
+  }, [ownViewerId, paint, rpc]);
 
   useEffect(() => {
     heartbeat();
@@ -109,8 +128,117 @@ function PresenceCoordinator() {
     void rpc.call("presence_leave", { tabId: ownTabId }).catch(() => undefined);
   }, [ownTabId, rpc]);
 
+  // Ownership glyphs: one batched call for the threads the sidebar is showing.
+  const sidebar = experimental_useSidebarThreads();
+  const threadIds = useMemo(
+    () => sidebar.threads.map((thread) => thread.id).sort().join(","),
+    [sidebar.threads],
+  );
+  const refreshOwnership = useCallback(() => {
+    const ids = threadIds.length === 0 ? [] : threadIds.split(",");
+    if (ids.length === 0) {
+      ownershipRef.current = new Map();
+      paint();
+      return;
+    }
+    void rpc.call("identity_thread_ownership", { threadIds: ids }).then(({ threads }) => {
+      ownershipRef.current = new Map(threads.map((entry) => {
+        const status = ownershipRowStatus(entry);
+        return [entry.threadId, {
+          icon: status.icon,
+          label: status.label,
+          tone: status.tone,
+          badge: status.badge,
+          badgeColor: OWNERSHIP_BADGE_COLOR,
+        }] as const;
+      }));
+      paint();
+    }).catch(() => undefined);
+  }, [paint, rpc, threadIds]);
+
+  useEffect(() => {
+    refreshOwnership();
+    const timer = window.setInterval(refreshOwnership, OWNERSHIP_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [refreshOwnership]);
+
   useRealtime("presence-changed", refresh);
   return null;
+}
+
+/**
+ * The thread header chip: "Started by David · runs as ensembleworks-agent on
+ * <machine>", the machine shown only when it differs from the starter (option B).
+ * Display only — it never blocks or alters anything.
+ */
+function ThreadOwnershipChip({ threadId }: { threadId: string }) {
+  const rpc = useRpc<typeof rpcContract>();
+  const [ownership, setOwnership] = useState<ThreadOwnership | null>(null);
+  const [sharedUser, setSharedUser] = useState("ensembleworks-agent");
+  useEffect(() => {
+    let live = true;
+    void rpc.call("identity_thread_ownership", { threadIds: [threadId] }).then(({ threads }) => {
+      if (live) setOwnership(threads[0] ?? null);
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [rpc, threadId]);
+  useEffect(() => {
+    let live = true;
+    void rpc.call("identity_machines").then((result: MachineList) => {
+      // The chip needs only the shared account's name; it rides along with the
+      // machine list rather than costing a second call.
+      if (live) setSharedUser(result.sharedMachineUser);
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [rpc]);
+  if (ownership === null) return null;
+  const chip = headerChip(ownership, { sharedUser });
+  return (
+    <span
+      title={chip.text}
+      style={{
+        alignItems: "center",
+        color: chip.tone === "muted" ? "var(--muted-foreground)" : "var(--foreground)",
+        display: "inline-flex",
+        fontSize: 12,
+        gap: 6,
+        maxWidth: 420,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap",
+      }}
+    >
+      {chip.text}
+    </span>
+  );
+}
+
+/**
+ * The new-thread composer banner: "Starting as David", plus the machines that are
+ * yours. It deliberately makes NO claim about the machine you picked — a `new-thread`
+ * composer customization cannot see it (spike S3-lite).
+ */
+function StartingAsBanner() {
+  const rpc = useRpc<typeof rpcContract>();
+  const [list, setList] = useState<MachineList | null>(null);
+  useEffect(() => {
+    let live = true;
+    void rpc.call("identity_machines").then((result) => {
+      if (live) setList(result);
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [rpc]);
+  if (list === null) return null;
+  const banner = composerBanner({ me: list.me, machines: list.machines });
+  return (
+    <div style={{ display: "flex", flexDirection: "column", fontSize: 12, gap: 2, lineHeight: 1.4 }}>
+      <span style={{ fontWeight: 600 }}>{banner.title}</span>
+      <span style={{ color: "var(--muted-foreground)" }}>
+        {banner.detail}
+        {list.unavailable === null ? null : ` ${list.unavailable}.`}
+      </span>
+    </div>
+  );
 }
 
 /** Invisible composer surface: observes text, never sends draft content. */
@@ -358,4 +486,14 @@ export default definePluginApp((app) => {
   app.slots.experimental_appOverlay({ id: "presence-coordinator", component: PresenceCoordinator });
   app.composer.customize({ id: "typing-awareness", scopes: ["thread"], actions: [{ id: "typing-pulse", component: TypingPulse }] });
   app.slots.experimental_threadHeaderAction({ id: "thread-presence", title: "People here", component: ThreadPresence });
+  app.slots.experimental_threadHeaderAction({
+    id: "thread-ownership",
+    title: "Who started this thread",
+    component: ThreadOwnershipChip,
+  });
+  app.composer.customize({
+    id: "ownership-banner",
+    scopes: ["new-thread"],
+    banners: [{ id: "starting-as", chrome: "card", component: StartingAsBanner }],
+  });
 });
