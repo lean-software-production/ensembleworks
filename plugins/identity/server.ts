@@ -139,6 +139,16 @@ export function ownershipFor(
 }
 
 /**
+ * The machine-list answer, validated against the very schema the RPC contract
+ * publishes — the same guard `publicStarter` gives the starter read path. It exists
+ * because a leaked internal field (the cache's `at`) failed strict output validation at
+ * runtime, in the browser, where nothing surfaced it but a silently empty banner.
+ */
+export function publicMachineList(listed: MachineList): MachineList {
+  return machineList.parse(listed);
+}
+
+/**
  * The machines bb knows, read from bb's own `GET /api/v1/hosts`.
  *
  * There is NO SDK surface for this: `PluginHosts` (SDK 0.4.84) offers only this
@@ -520,7 +530,9 @@ export default async function plugin(bb: BbPluginApi) {
   let machineCache: { at: number; machines: HostClassification[]; unavailable: string | null } | null = null;
   const MACHINE_CACHE_MS = 30_000;
   const machines = async (): Promise<{ machines: HostClassification[]; unavailable: string | null }> => {
-    if (machineCache !== null && Date.now() - machineCache.at < MACHINE_CACHE_MS) return machineCache;
+    if (machineCache !== null && Date.now() - machineCache.at < MACHINE_CACHE_MS) {
+      return { machines: machineCache.machines, unavailable: machineCache.unavailable };
+    }
     let hosts: HostRef[] = [];
     let unavailable: string | null = null;
     try {
@@ -537,7 +549,7 @@ export default async function plugin(bb: BbPluginApi) {
       classified.push(await classifyWithPin(host));
     }
     machineCache = { at: Date.now(), machines: classified, unavailable };
-    return machineCache;
+    return { machines: classified, unavailable };
   };
 
   /** The host pins' disagreements, for an operator. Nothing acts on them. */
@@ -604,8 +616,15 @@ export default async function plugin(bb: BbPluginApi) {
       threads: await Promise.all(threadIds.map((wanted) => ownership(wanted))),
     }),
     identity_machines: async () => {
+      // Only the contract's fields: the cache row also carries its own `at`, and the
+      // RPC output schema is strict, so spreading it whole fails validation.
       const listed = await machines();
-      return { me: whoamiFor(requestContext.current()?.email ?? null).person, sharedMachineUser, ...listed };
+      return publicMachineList({
+        me: whoamiFor(requestContext.current()?.email ?? null).person,
+        sharedMachineUser,
+        machines: listed.machines,
+        unavailable: listed.unavailable,
+      });
     },
     presence_heartbeat: ({ tabId, viewerId, location }) => {
       const person = summarize(currentIdentity().person);

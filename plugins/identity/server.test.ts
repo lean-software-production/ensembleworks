@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEASE_TTL_MS, PresenceStore, TYPING_TTL_MS, ownershipFor, parseHostList, publicStarter } from "./server.js";
+import { LEASE_TTL_MS, PresenceStore, TYPING_TTL_MS, ownershipFor, parseHostList, publicMachineList, publicStarter } from "./server.js";
 import type { HostClassification } from "./hosts.js";
 
 describe("PresenceStore", () => {
@@ -225,5 +225,24 @@ describe("parseHostList", () => {
 
   it("is empty for a payload it does not understand", () => {
     expect(parseHostList({ error: "nope" })).toEqual([]);
+  });
+});
+
+describe("publicMachineList", () => {
+  const listed = {
+    me: { person: "mrdavidlaing", displayName: "David", github: "mrdavidlaing" },
+    sharedMachineUser: "ensembleworks-agent",
+    machines: [{ kind: "team" as const, hostId: "h3", hostName: "ew-lsp-001-main", conflict: null }],
+    unavailable: null,
+  };
+
+  it("validates against the contract's own schema", () => {
+    expect(publicMachineList(listed)).toEqual(listed);
+  });
+
+  it("refuses a payload carrying anything the contract does not publish", () => {
+    // The real bug this guards: the internal cache row also carries `at`, and spreading
+    // it whole into the answer failed strict output validation at runtime.
+    expect(() => publicMachineList({ ...listed, at: 1 } as unknown as typeof listed)).toThrow();
   });
 });
