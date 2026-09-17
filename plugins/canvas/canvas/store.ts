@@ -21,20 +21,6 @@ export const CANVAS_MIGRATIONS = [
      blob BLOB NOT NULL,
      PRIMARY KEY (room, seq)
    )`,
-  // The room transcript (see canvas/transcript.ts). Deliberately NOT part of
-  // the canvas document: an utterance is not a shape, nobody edits it, and it
-  // must be queryable by time/speaker/text — which is a table, not a CRDT.
-  `CREATE TABLE IF NOT EXISTS canvas_transcript (
-     id INTEGER PRIMARY KEY,
-     ts INTEGER NOT NULL,
-     speaker TEXT NOT NULL,
-     text TEXT NOT NULL
-   )`,
-  // Every query this plugin runs is a time window (a tail, a "--since", a
-  // mention's last-15-minutes) and every one of them reads it newest-first.
-  `CREATE INDEX IF NOT EXISTS canvas_transcript_ts ON canvas_transcript (ts)`,
-  `CREATE TABLE IF NOT EXISTS canvas_transcript_feed (id TEXT NOT NULL)`,
-  `INSERT INTO canvas_transcript_feed (id) SELECT lower(hex(randomblob(16))) WHERE NOT EXISTS (SELECT 1 FROM canvas_transcript_feed)`,
 ];
 
 export class CanvasStore {

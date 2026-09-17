@@ -11,16 +11,14 @@ document; the plugin backend is the authoritative peer and persists it.
 
 - `server.ts` — the backend: one authoritative `SyncServerPeer` for room
   `main`, the rpc half of its transport (`canvas_join` / `canvas_frame` /
-  `canvas_ping` / `canvas_leave`), the `identity` and `scribe` HTTP routes, the
-  transcript query rpc and `@transcript` mention provider, an idle-client
+  `canvas_ping` / `canvas_leave`) and the `identity` HTTP route, an idle-client
   sweep, and a `bb canvas` CLI for inspecting the live room.
 - `canvas/` — the room host (`room.ts`), its SQLite snapshot + update log
   (`store.ts`), the shared wire contract (`wire.ts`), the identity contract
   (`identity.ts`), the `bb thread frame` control's server-side pieces
   (`thread-picker.ts`, `agent-project.ts`, `thread-frames.ts` — see below),
   the roster + audio contract (`roster.ts`, `av.ts`) with its UI
-  (`roster-ui.tsx`), LiveKit (`av-room.ts`), the room transcript
-  (`transcript.ts`, `transcript-view.ts`, `transcript-ui.tsx`), the header ↔
+  (`roster-ui.tsx`), LiveKit (`av-room.ts`), and the header ↔
   body seam (`panel-bus.ts`), and the frontend mount (`CanvasPanel.tsx`) with
   its page resolution and presence publisher. The canvas controls (tools,
   shortcuts, toolbar, style panel, text editing, zoom controls) come from the
@@ -32,13 +30,8 @@ document; the plugin backend is the authoritative peer and persists it.
 - `transport.ts` — the client half of the transport: outbound frames over rpc,
   inbound frames off `bb.realtime`.
 - `app.tsx` — registers the full-bleed **Canvas** nav panel, its sidebar count
-  (`experimental_sidebarAccessory`), the presence strip that lives in bb's
-  title bar on every route (`contentScripts`), and the room transcript's four
-  doors (thread panel, new-thread panel, command palette, and the **Transcript**
-  button in the presence strip's popover — reached through the
-  `experimental_threadHeaderAction` relay).
-- `skills/room-transcript/` — the plugin skill that teaches agents to read the
-  room's spoken conversation.
+  (`experimental_sidebarAccessory`), and the presence strip that lives in bb's
+  title bar on every route (`contentScripts`).
 
 Try it: open **Canvas** in the sidebar in two browser tabs, draw a note in one,
 and watch it (and the other tab's cursor) appear in the other.
@@ -432,15 +425,11 @@ either — the strip is the mic glyph and a bare count, and the count loses its
 strip** opens a popover hanging below it — a child of `<body>`, positioned in
 **viewport** coordinates rather than in the bar's own, for the reasons under
 *The popover stays on the screen* below — with the fuller thing: 44px faces, live
-`<video>` tiles for anyone with a camera on, Join/Leave, mute, camera, the
-**Transcript** button on thread routes, and the status line. It folds on a
-second click, on Escape, on a click outside, whenever the strip is re-anchored
-into a different header, and whenever a click inside it sends you somewhere
-else — flying the canvas camera to a face, taking somebody's jump link, or
-opening the transcript panel. That last one folds on an **accepted** open only:
-a refusal answers on the status line, and the status line is rendered inside the
-popover, so folding on it would delete the only explanation the user gets
-(`decideTranscriptClick`). **Nothing is persisted** — the old
+`<video>` tiles for anyone with a camera on, Join/Leave, mute, camera, and the
+status line. It folds on a second click, on Escape, on a click outside, whenever
+the strip is re-anchored into a different header, and whenever a click inside it
+sends you somewhere else — flying the canvas camera to a face or taking
+somebody's jump link. **Nothing is persisted** — the old
 `canvas-av-dock:collapsed` and `canvas-av-dock:position` keys are gone, and are
 actively deleted on mount.
 
@@ -568,8 +557,7 @@ is a flex line, so the overflow comes out of the page **title**, which shrinks
 until it is an ellipsis. Presence quietly eating the name of the page you are on
 is the bug `canvas/dock/squeeze.ts` exists to prevent. The header is the scarce
 resource here and the strip is the guest in it, so the strip is what gives —
-the same reasoning that moved the Transcript button off that row and into the
-popover, below.
+the same reasoning that keeps the strip's controls inside its popover.
 
 **The honest signal is the container's width, and the obvious alternative is
 worthless in a way that looks precise.** "Row width minus the widths of the
@@ -709,109 +697,6 @@ was actually measured, which is what let `buildDockModel` drop the old
 section — the tiers, the thresholds, the band, and what an unmeasurable
 container means — is `tests/dock-squeeze.test.ts`'s; `canvas/dock/dock.ts`
 measures, writes the attribute, and decides nothing.
-
-#### The 📜 button — how it was ruled out, and how it got built anyway
-
-`mockups/transcript-sidebar.html` shows a fourth door to the room transcript on
-this widget. It is now **implemented** (the **Transcript** button in the strip's
-popover, beside Join audio / Mute / Camera on, on thread routes only — it began
-life as a bare 📜 glyph next to the strip in bb's header row and moved because
-that row is the scarce surface on a narrow screen; the popover is not). Both
-halves of that sentence are worth keeping, because the reasoning that said it
-was impossible was mostly right and the way past it is narrow.
-
-**What the original note said (SDK 0.4.21), and what still holds.** A content
-script has no React fiber and no context, so it cannot call a hook; and:
-
-- `PluginContentScriptContext` carries `pluginId`, `generation`, `signal` and
-  `experimental_setThreadRowStatus` — **confirmed against the running bundle**,
-  not just the `.d.ts`: bb constructs it as
-  `t.mount({ pluginId: e, generation: n, signal: r.signal, experimental_setThreadRowStatus: … })`.
-  No navigation, no panel control.
-- Every sanctioned open is either a **hook** (`useBbNavigate().openThreadPanel`)
-  or an **argument the host hands to a registration callback** (`openPanel` on
-  `threadPanelAction` / `messageAction` / `commandPaletteAction` `run`).
-- `globalThis.__bbPluginRuntime` exposes React, the Radix primitives, sonner and
-  `pluginSdkApp` (those same hooks). There is still no imperative navigate on it.
-
-**2026-09-01 — what changed, and what did not** (bb 0.40.0, SDK 0.4.21). The
-product owner has since sanctioned guarded client-side navigation with a hard
-fallback, and it ships in `canvas/dock/navigate.ts` for the jump-to-a-teammate
-link. That retires the "pushing history at bb's router is out of bounds" half of
-the old argument — and it **does not help here**, for a reason worth recording:
-
-1. **Thread panels are not URL-addressable.** Measured on the running app, both
-   sanctioned ways of opening the transcript (the right panel's launcher row and
-   ⌘⇧P → "Canvas: open room transcript") leave everything about the URL alone:
-
-   ```
-   launcher  before {"url":"…/threads/thr_cjnyuqz388","state":{"idx":0},"len":3}
-             after  {"url":"…/threads/thr_cjnyuqz388","state":{"idx":0},"len":3,"hash":"","search":""}
-   palette   after  tabs "Info|Diff" → "Info|Diff|Room transcript",
-                    {"url":"…/threads/thr_cjnyuqz388","state":{"idx":0},"len":6}
-   ```
-
-   No path change, no query, no hash, `history.state` unchanged, `history.length`
-   does not increment. The open tab's identity lives in **localStorage**, under
-   `bb.thread.fixedPanelTabsState-<threadId>-1`. Reloading the same URL re-opens
-   the panel *from that record*, so the same link opens or does not open the
-   panel depending on per-browser state — it is not a deep link, and there is
-   nothing for `navigate.ts` to push. `useBbNavigate().toPluginPanel` *is* a real
-   router navigate (`/plugins/canvas/canvas/<subPath>` renders `CanvasPanel`,
-   verified), but it addresses **nav** panels, which the transcript is not.
-
-2. **The obvious relay is ruled out by evidence, not by argument.**
-   `openThreadPanel` resolves its opener from a React context
-   (`let r = useContext(mB); … e => r?.({...e, pluginId:t}) ?? false`) that bb
-   provides inside its thread route. Walking `__reactFiber$` `.return` chains on
-   the live app for an ancestor whose `memoizedProps.openThreadPanel` is a
-   function:
-
-   | surface | provider in its ancestor chain? |
-   | --- | --- |
-   | `#canvas-av-dock` (the strip node) | no `__reactFiber$` key at all — outside React |
-   | its parent, the header actions cluster | **yes**, at depth 29 |
-   | `[data-testid="app-page-header-content-row"]` | **yes**, at depth 28 |
-   | `CanvasOnlineCount` (`experimental_sidebarAccessory`) | **no** — absent from all 92 fibers |
-
-   So the plugin's one always-mounted React surface is on exactly the wrong side
-   of the tree: `openThreadPanel` there would return `false`.
-
-3. **The door that works is `experimental_threadHeaderAction`.** It renders into
-   the thread header's action row — the same cluster the strip is prepended into,
-   proven above to be inside the provider. `canvas/dock/transcript-door-slot.tsx`
-   registers a component that renders `null` and publishes that hook into the
-   module singleton in `canvas/dock/transcript-door.ts`; the popover's Transcript
-   button
-   calls it. This is the identical seam `canvas/panel-bus.ts` already uses for
-   `panTo` — two mount points with no common plugin ancestor, one bundle in one
-   window, so a module singleton reaches both. Executed and observed, not just
-   inferred: clicking the button logs
-   `[canvas] openThreadPanel(transcript) returned true` and the "Room transcript"
-   tab appears with live lines, URL unchanged.
-
-   Two limits, both properties of the object rather than of the workaround.
-   **Thread routes only** — the slot is not rendered on the compose screen or
-   any non-thread route, and there is no door of any kind on
-   `/plugins/canvas/canvas`, `/settings` or `/` (bb's own palette row hides
-   itself there by the same `threadId !== null` test). The button is therefore
-   hidden everywhere else rather than drawn dead. **Last writer wins** in a
-   split layout, which mounts one header per pane; bb's own quick palette
-   resolves its opener from a module-level Map the same way
-   (`for (let t of _B.values()) e = t`), so the failure mode is the host's.
-
-4. **Palette synthesis works and is refused.** Dispatching a synthetic
-   `keydown` for ⌘⇧P, setting the palette input through React's native-setter
-   workaround and pressing Enter *does* open the panel — it was tried, and a
-   plain synthetic `click` on the row notably does **not** work, so even the
-   activation path had to be found by trial. It is refused because it couples
-   this spike to five undocumented things at once: the palette keybinding, the
-   input's placeholder string, the row's title string, cmdk's keyboard-only
-   activation semantics, and React's controlled-input native-setter trick. The
-   keybinding alone is enough: on this very machine the `bb-ui-reference` plugin
-   was already swallowing ⌘⇧P, so another installed plugin can silently take the
-   binding the hack depends on. It also flashes the palette open and shut in
-   front of the user.
 
 #### Manual smoke checklist
 
@@ -1063,28 +948,6 @@ Call them **A** and **B** below.
     anchor chain (`before` / `before` / `row` / `fixed`) and minimised-on-load
     must be exactly as before.
 
-**The transcript door**
-
-43. **The button lives in the popover, not on the strip.** On a **thread**
-    route, fold the popover and look at the strip: faces, `+N` and the mic
-    glyph, and nothing else (at `bare`, just the mic glyph and the count —
-    fewer things on the strip, never more). Unfold it — the fourth labelled control beside
-    Join audio / Mute / Camera is **Transcript**
-    (`#canvas-av-dock-popover .dock-transcript` — the POPOVER's root, since the
-    popover left the strip's tree; it still answers to
-    `[data-canvas-dock-scribe]`; deploy checks grep for that attribute, so it
-    survived the move deliberately). Click it: the room transcript opens in the
-    thread's right panel and the popover **folds**.
-44. **It hides where it has no door.** Go to **Settings**, whose header
-    publishes no thread panel, and unfold the popover:
-    `document.querySelector("[data-canvas-dock-scribe]").hidden` is `true` —
-    the button is absent rather than present and dead. Return to a thread and it
-    is back. Only an *accepted* open folds the popover: if the host ever
-    declines, the refusal is a sentence on the popover's own status line and the
-    popover stays open, because folding would hide the only explanation there
-    is. (`tests/dock-transcript-door.test.ts` pins that half offline — there is
-    no way to force a decline from the console.)
-
 **The squeeze — giving the page title its width back**
 
 The strip narrows as its *container* does, in four named tiers. Everything here
@@ -1242,7 +1105,7 @@ gutter the 8px margin could not absorb) and writes.
     anchor.ts and bb's layout, not observed.
 55. **The controls still work, and this is the one that would have been
     catastrophic.** Open the popover and press **Join audio**, then **Mute**,
-    then a face, then **Transcript**. The popover must not vanish on the way
+    then a face. The popover must not vanish on the way
     *down*: outside-click dismissal now has two roots to test containment
     against (`insideWidget` in `canvas/dock/dock.ts`), and a version that tested
     only `#canvas-av-dock` would fold the popover on `pointerdown` for every
@@ -1369,9 +1232,6 @@ browser, and nothing about it has been observed.
     for any room up to `MAX_DOCK_BUBBLES`; above that the popover folds its own
     tail and the strip's count is the larger, honest number. Widen again and the
     faces come back at `480`, not at 432 — the band, step 45.
-62. **The Transcript button is in the popover's control row, not in bb's
-    header.** On a **thread**, with the popover open:
-
     ```js
     const b = document.querySelector("[data-canvas-dock-scribe]");
     document.querySelectorAll("[data-canvas-dock-scribe]").length;          // 1
@@ -1745,139 +1605,6 @@ every branch that hands a click back to the browser, is pinned by
 rot silently the next time bb changes, so it is tested rather than hoped for.
 
 
-## The room transcript
-
-The canvas room is a voice room, so it produces a second stream beside the
-drawing: **what was said**. On the production VM a systemd service (LiveKit →
-Whisper) POSTs each utterance to this plugin.
-
-**The transcript is not a bb thread.** A thread is a conversation *with an
-agent* — turns, a provider, a runtime. A room transcript is a firehose of short
-utterances from humans talking to each other; nobody replies to it, and every
-question anyone asks of it is a query ("the last ten minutes", "everything
-Alice said", "did we mention Postgres"). That is a table with an index on time.
-Modelling it as a thread would buy agent affordances nobody wants and cost
-every query everybody does.
-
-| Direction | Surface |
-| --- | --- |
-| In | `POST …/http/scribe`, `auth: "token"` |
-| Out, live | realtime `canvas:transcript`, one message per utterance |
-| Out, query | rpc `canvas_transcript_query` |
-| Out, shell | `bb canvas transcript` |
-| Out, agent | the `@transcript` mention + the `room-transcript` skill |
-
-### Ingest
-
-`auth: "token"` is the only right mode here: the caller is a **machine**, not a
-bb app origin (`"local"` would reject it) and not a webhook with a signature of
-its own to verify (`"none"` would let anything on the box write into the room's
-memory). The service carries `bb plugin token canvas` in `x-bb-plugin-token`.
-
-```
-TOKEN=$(bb plugin token canvas)
-curl -X POST -H "x-bb-plugin-token: $TOKEN" -H "content-type: application/json" \
-  -d '{"speaker":"alice","text":"the transcript route is live"}' \
-  http://127.0.0.1:38886/api/v1/plugins/canvas/http/scribe
-# {"ok":true,"inserted":1}
-
-# a batch — what the service sends when it catches up after a blip
-curl -X POST -H "x-bb-plugin-token: $TOKEN" -H "content-type: application/json" \
-  -d '[{"speaker":"bob","text":"can you hear me"},{"speaker":"alice","text":"loud and clear"}]' \
-  …/http/scribe
-# {"ok":true,"inserted":2}
-```
-
-Three deliberate choices in the body contract:
-
-- **`ts` is optional and defaults to server-now.** An utterance is timed by when
-  it was *spoken*, so a producer that knows better says so; one that does not
-  gets the only honest answer available.
-- **Unknown fields are tolerated, known ones are not.** The producer is a
-  service on another machine this repo does not own. When it grows a
-  `confidence` field, the room should keep working — not refuse every utterance
-  until both sides ship together. `speaker` and `text` are still validated
-  strictly, and the error *names the field* (`at 1.text`) rather than the vague
-  root failure a zod union would report.
-- **A batch lands whole or not at all**, in one transaction. Half a minute of
-  conversation is worse than none, because nobody can tell it is half.
-
-### Reading it
-
-```
-bb canvas transcript                        # the last 200 utterances
-bb canvas transcript --since 10m            # 45s | 10m | 2h | 1d — the unit is required
-bb canvas transcript --since 2h --speaker alice
-bb canvas transcript --search "rate limit"  # substring of what was SAID
-bb canvas transcript --limit 50 --json
-```
-
-`--limit` (default 200, max 1000) is the **tail**, and output is always
-**oldest first**. Both halves are deliberate: a reader asking for 50 lines of a
-four-hour day wants the last 50, and reading order is the opposite of "newest
-first", so the reversal happens once, in the store, and every consumer renders
-top to bottom. The rpc takes the same filters, with `sinceMs` as an *absolute*
-epoch bound (the CLI turns its duration into one).
-
-A search is a substring, never a `LIKE` pattern — `--search "100%"` finds the
-one line that says it, not every line in the room.
-
-### For agents
-
-`@transcript` in any composer offers **Last 15 minutes**, **Last hour**,
-**Today**, and — once you have typed something — **matches for …**, each with a
-live count so an empty window is visible *before* it costs a send. The items are
-**windows, not rows**: `resolve` runs at send time, so "the last 15 minutes"
-means the 15 minutes before the agent reads them, not before the user typed.
-
-The block is capped at ~8000 characters, dropping the **oldest** lines and
-saying so in its header. Oldest-first is the only defensible direction: an agent
-catching up needs the *end* of the conversation, and a block that silently
-stopped ten minutes short of now is worse than useless.
-
-`skills/room-transcript/SKILL.md` is the standing knowledge that goes with it —
-the CLI's grammar, plus how to read a transcript well (they are lossy, turn-taking
-is implicit, and a transcript is not a decision record).
-
-### Where the UI lives, and where it does not
-
-There is deliberately **no transcript tab on the canvas page**. What the room
-said out loud is ambient context for everything you do in bb, and the place you
-most want it is beside the agent you are briefing. So one `TranscriptView` is
-registered in three slots, and reached through **four** doors:
-
-| Slot | Where it shows up |
-| --- | --- |
-| `threadPanelAction` | any thread's right panel, next to Terminal |
-| `experimental_newThreadPanelAction` | the New-thread screen's panel |
-| `commandPaletteAction` | ⌘⇧P → "Canvas: open room transcript" |
-
-The fourth door is not a slot of its own: it is the **Transcript button in the
-presence strip's popover**, which relays `useBbNavigate().openThreadPanel` out of an
-`experimental_threadHeaderAction` that renders nothing
-(`canvas/dock/transcript-door.ts`, `canvas/dock/transcript-door-slot.tsx`) and
-opens the *same* `threadPanelAction` registration as the launcher row. It is
-visible on thread routes only, because that is the only surface the panel
-exists on. See "The 📜 button — how it was ruled out, and how it got built
-anyway" above for the measurements behind that.
-
-The palette row uses `isAvailable` to hide itself where `openPanel` would
-decline (it only has somewhere to go on the main thread view) — a command that
-does nothing is worse than a command that is not there. All three slots use
-`layout: "flush"`, because the view owns its own scrolling (a pinned live tail)
-and its own footer (the search box), which the host's padded scroll container
-would fight.
-
-The view seeds itself over rpc, follows `canvas:transcript` live, and re-reads
-after a realtime reconnect — those signals are ephemeral and never replayed, so
-every utterance during a socket gap is otherwise simply gone. Live rows are
-filtered by the *same* predicate the server applied, so a row that appears while
-you are searching is a row that survives the next refetch. Auto-scroll follows
-the live edge only while you are watching it; scrolling up to read is a
-deliberate act, and yanking the viewport back mid-sentence is the worst thing a
-live log can do — so the tail unpins, and **Jump to live ↓** appears. Speakers
-are coloured with the same name → hue hash the cursors and avatars use, so one
-person is one colour everywhere in this plugin.
 
 The canvas packages (`@ensembleworks/canvas-model`, `-doc`, `-sync`, `-editor`,
 `-react`, `-ui`) are consumed as `file:` deps straight from the EnsembleWorks
@@ -2081,9 +1808,8 @@ git installs) so people installing your plugin never need npm.
 - `bb.server` — backend entry (required).
 - `bb.app` — frontend entry. Delete it, `app.tsx`, `components/`,
   `hooks/`, and `lib/` for a headless plugin.
-- `bb.skills` — skill roots; omitted here, so BB reads `skills/`, which holds
-  `room-transcript`. Each directory with a `SKILL.md` is one skill, named after
-  the directory.
+- `bb.skills` — optional skill roots. When present, each directory with a
+  `SKILL.md` is one skill, named after the directory.
 - `bb.name` and `bb.description` — required human-facing identity.
 - `bb.branding` — required; declare `icon` as a BB icon name or a
   plugin-relative compact SVG, or declare `logo.light` (with optional
@@ -2130,8 +1856,6 @@ Or let `bb plugin dev` rebuild and reload on every save.
 bb canvas status         # room, who is connected (by name), shapes, pending updates
 bb canvas shapes --json  # every shape id
 bb canvas thread-frames  # every bbthread frame, its bound thread, and its children
-bb canvas transcript --since 30m   # what the room said in the last half hour
-bb plugin token canvas   # the token the VM's scribe service POSTs with
 bb plugin config canvas  # the project + the three LiveKit settings
 npm test                 # vitest: the backend + transport suite (no bb server needed)
 ```

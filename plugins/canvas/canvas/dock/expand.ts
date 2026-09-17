@@ -30,10 +30,6 @@ export type ExpandEvent =
   | { readonly type: "pan" }
   /** A jump link was taken — bb is navigating to where that person is. */
   | { readonly type: "jump" }
-  /** The room transcript panel was actually opened. Only the ACCEPTED open
-   * raises this: a refusal is reported on the status line, which lives inside
-   * the popover. */
-  | { readonly type: "transcript" }
   /** The status line changed. Empty text means "cleared". */
   | { readonly type: "status"; readonly text: string };
 
@@ -63,11 +59,6 @@ export function nextExpanded(expanded: boolean, event: ExpandEvent): boolean {
     // events rather than one reused one.
     case "pan":
     case "jump":
-    // And the third of the same kind, now that the 📜 button lives in the
-    // popover's own controls row rather than in bb's header: the transcript
-    // panel opens where the popover is hanging. The reasoning above is
-    // unchanged, which is why this is a case label and not a paragraph.
-    case "transcript":
       return false;
     case "popover-click":
       return expanded;

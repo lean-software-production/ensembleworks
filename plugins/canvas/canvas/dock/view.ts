@@ -14,11 +14,6 @@ import {
 } from "./model.js";
 import { EMPTY_MODEL, renderBubbles, type BubbleNode } from "./dom-render.js";
 import { EXPANDED_AT_LOAD, nextExpanded, type ExpandEvent } from "./expand.js";
-import {
-  decideDoorVisible,
-  decideTranscriptClick,
-  transcriptDoor,
-} from "./transcript-door.js";
 import type { DockDom } from "./dom.js";
 import type { DockRepaint } from "./repaint.js";
 import type { DockRoute } from "./route.js";
@@ -39,8 +34,6 @@ import { maxBubblesFor, type SqueezeTier } from "./squeeze.js";
 // Status is written to both root and popover because the popover is a body
 // child. A non-empty status forces expansion through the existing state machine
 // and the final render is retained on both changed and unchanged transitions.
-// The transcript control remains a relay to transcript-door.ts, whose outcome
-// decides whether the status is visible and whether the popover folds.
 export interface DockViewOptions {
   readonly dom: DockDom;
   readonly route: DockRoute;
@@ -212,9 +205,6 @@ function paintDockIndicators(dom: DockDom, model: DockModel): void {
   const overflowElement = dom.overflow;
   overflowElement.textContent = count;
   overflowElement.hidden = count === "";
-  const hasOpener = transcriptDoor.hasOpener();
-  const transcriptVisible = decideDoorVisible({ hasOpener });
-  dom.scribe.hidden = !transcriptVisible;
 }
 
 function renderStripBubbles(
@@ -342,18 +332,4 @@ function paintCameraButton(
     "aria-label",
     title,
   );
-}
-
-export function transcriptClick(
-  setStatus: (text: string) => void,
-  apply: (event: ExpandEvent) => void,
-  event: Event,
-): void {
-  event.stopPropagation();
-  const outcome = transcriptDoor.open();
-  const decision = decideTranscriptClick(outcome);
-  setStatus(decision.status);
-  if (decision.fold) {
-    apply({ type: "transcript" });
-  }
 }

@@ -5,15 +5,7 @@ import {
   resolveIdentity,
 } from "./identity.js";
 import type { CanvasRoomHost } from "./room.js";
-import { CANVAS_CHANNEL, TRANSCRIPT_CHANNEL } from "./wire.js";
-import {
-  filterFor,
-  mentionItems,
-  mentionWindowFor,
-  parseIngest,
-  transcriptBlock,
-  type TranscriptStore,
-} from "./transcript.js";
+import { CANVAS_CHANNEL } from "./wire.js";
 import os from "node:os";
 
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
@@ -36,17 +28,13 @@ export function registerBackground(
       while (!signal.aborted) {
         await sleep(30_000, signal);
         if (signal.aborted) break;
-        const nowMs = Date.now();
-        room.sweep(nowMs);
+        room.sweep(Date.now());
       }
     },
   });
 }
 
-export function registerHttp(
-  bb: BbPluginApi,
-  transcript: TranscriptStore,
-): void {
+export function registerHttp(bb: BbPluginApi): void {
   bb.http.route(
     "GET",
     IDENTITY_ROUTE_PATH,
@@ -58,46 +46,4 @@ export function registerHttp(
         ),
       ),
   );
-  bb.http.route("POST", "/scribe", async (context) => {
-    let body: unknown;
-    try {
-      body = await context.req.json();
-    } catch {
-      return context.json({ ok: false, error: "body must be JSON" }, 400);
-    }
-    const parsed = parseIngest(body, Date.now());
-    if (!parsed.ok) {
-      bb.log.warn(`scribe rejected a payload: ${parsed.error}`);
-      return context.json({ ok: false, error: parsed.error }, 400);
-    }
-    transcript.insert(parsed.entries);
-    for (const entry of parsed.entries) {
-      bb.realtime.publish(TRANSCRIPT_CHANNEL, entry);
-    }
-    return context.json({ ok: true, inserted: parsed.entries.length });
-  }, { auth: "token" });
-}
-
-export function registerMentions(
-  bb: BbPluginApi,
-  transcript: TranscriptStore,
-): void {
-  bb.ui.registerMentionProvider({
-    id: "transcript",
-    label: "Room transcript",
-    search: ({ query }) =>
-      mentionItems(query, Date.now(), (filter) => transcript.count(filter)),
-    resolve: (itemId) => {
-      const window = mentionWindowFor(itemId);
-      if (window === null) {
-        return { context: `Room transcript: unknown window "${itemId}".` };
-      }
-      return {
-        context: transcriptBlock(
-          window.label,
-          transcript.query(filterFor(window, Date.now())),
-        ),
-      };
-    },
-  });
 }

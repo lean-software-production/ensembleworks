@@ -1,13 +1,11 @@
 import type { BbPluginApi, PluginRpcHandlers } from "@get-bb/plugin-sdk";
 import { base64ToBytes } from "./base64.js";
 import { threadListArgsFor, threadPickerOptions } from "./thread-picker.js";
-import { DEFAULT_QUERY_LIMIT, TranscriptStore } from "./transcript.js";
 import type { rpcContract } from "../server.js";
 import type { CanvasRoomHost } from "./room.js";
 
 export interface RpcHandlerDependencies {
   readonly room: CanvasRoomHost;
-  readonly transcript: TranscriptStore;
   readonly sdk: BbPluginApi["sdk"];
   readonly resolveProjectId: () => Promise<string>;
   readonly realtime: { publish(channel: string, payload: unknown): void };
@@ -37,7 +35,6 @@ export function createRpcHandlers(
 ): PluginRpcHandlers<typeof rpcContract> {
   const {
     room,
-    transcript,
     resolveProjectId,
     log,
   } = deps;
@@ -88,15 +85,6 @@ export function createRpcHandlers(
       ok: false as const,
       error: "not_configured" as const,
       detail: "Canvas no longer owns AV. Install and configure the Huddle plugin.",
-    }),
-    canvas_transcript_feed: ({ after, limit }) => transcript.feed(after, limit),
-    canvas_transcript_query: ({ sinceMs, search, speaker, limit }) => ({
-      entries: transcript.query({
-        sinceMs,
-        search,
-        speaker,
-        limit: limit ?? DEFAULT_QUERY_LIMIT,
-      }),
     }),
     canvas_debug: () => ({
       room: room.room,
