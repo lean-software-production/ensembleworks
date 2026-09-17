@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { LEASE_TTL_MS, PresenceStore, TYPING_TTL_MS, publicStarter } from "./server.js";
+import { LEASE_TTL_MS, PresenceStore, TYPING_TTL_MS, ownershipFor, parseHostList, publicStarter } from "./server.js";
+import type { HostClassification } from "./hosts.js";
 
 describe("PresenceStore", () => {
   it("excludes the local viewer and aggregates another viewer's tabs", () => {
@@ -145,10 +146,84 @@ describe("publicStarter", () => {
       via: "browser",
       inheritedFrom: null,
       recordedAt: 500,
+      host: null,
     });
   });
 
   it("validates its output against the RPC contract's schema, on both arms", () => {
     expect(() => publicStarter({ ...stored, via: "telepathy" as unknown as typeof stored.via })).toThrow();
+  });
+});
+
+describe("publicStarter, with the machine the thread ran on", () => {
+  const stored = {
+    threadId: "thr_1",
+    starter: { person: "mattwynne", displayName: "Matt", github: "mattwynne" },
+    email: "matt@example.com",
+    via: "browser" as const,
+    origin: "app" as const,
+    originPluginId: null,
+    inheritedFrom: null,
+    recordedAt: 500,
+    host: { id: "h1", name: "ew-lsp-001-mattwynne" },
+  };
+
+  it("carries the recorded host through", () => {
+    expect(publicStarter(stored)?.host).toEqual({ id: "h1", name: "ew-lsp-001-mattwynne" });
+  });
+
+  it("reads a record written before hosts were recorded as no host", () => {
+    const { host: _host, ...older } = stored;
+    expect(publicStarter(older)?.host).toBeNull();
+  });
+});
+
+describe("ownershipFor", () => {
+  const classify = (host: { id: string; name: string }): HostClassification => ({
+    kind: "team",
+    hostId: host.id,
+    hostName: host.name,
+    conflict: null,
+  });
+
+  it("is an unknown, never-null-looking view when nothing was recorded", () => {
+    expect(ownershipFor("thr_1", null, classify)).toEqual({
+      threadId: "thr_1",
+      starter: null,
+      via: "unknown",
+      inheritedFrom: null,
+      host: null,
+    });
+  });
+
+  it("classifies the recorded host", () => {
+    const view = ownershipFor("thr_1", publicStarter({
+      threadId: "thr_1",
+      starter: { person: "mrdavidlaing", displayName: "David", github: "mrdavidlaing" },
+      email: null,
+      via: "browser",
+      origin: "app",
+      originPluginId: null,
+      inheritedFrom: null,
+      recordedAt: 1,
+      host: { id: "h3", name: "ew-lsp-001-main" },
+    }), classify);
+    expect(view.host?.kind).toBe("team");
+    expect(view.starter?.displayName).toBe("David");
+  });
+});
+
+describe("parseHostList", () => {
+  it("reads bb's own GET /api/v1/hosts payload", () => {
+    expect(parseHostList({ hosts: [{ id: "h1", name: "ew-lsp-001-main", lifecycle: { phase: "active" } }] }))
+      .toEqual([{ id: "h1", name: "ew-lsp-001-main" }]);
+  });
+
+  it("reads a bare array, and ignores anything that is not a host", () => {
+    expect(parseHostList([{ id: "h1", name: "a" }, { id: 2 }, null, "x"])).toEqual([{ id: "h1", name: "a" }]);
+  });
+
+  it("is empty for a payload it does not understand", () => {
+    expect(parseHostList({ error: "nope" })).toEqual([]);
   });
 });

@@ -23,6 +23,7 @@ function facts(overrides: Partial<AttributionFacts> = {}): AttributionFacts {
     origin: null,
     originPluginId: null,
     lineage: [],
+    host: null,
     now: 1_000,
     ...overrides,
   };
@@ -95,6 +96,7 @@ describe("decideAttribution", () => {
       originPluginId: null,
       inheritedFrom: null,
       recordedAt: 1_000,
+      host: null,
     });
   });
 
@@ -249,6 +251,7 @@ describe("factsFromDispatch", () => {
     startedOnBehalfOf: { initiator: "agent" as const, senderThreadId: "thr_sender" },
     parentThreadId: "thr_hook_parent",
     queuedMessage: { senderThreadId: "thr_queued_sender" },
+    host: { id: "h1", name: "ew-lsp-001-mrdavidlaing" },
   };
 
   it("maps every lineage field bb actually exposes, hook context and thread alike", () => {
@@ -259,6 +262,7 @@ describe("factsFromDispatch", () => {
       origin: "cli",
       originPluginId: null,
       lineage: ["thr_sender", "thr_queued_sender", "thr_hook_parent", "thr_fork_source"],
+      host: { id: "h1", name: "ew-lsp-001-mrdavidlaing" },
       now: 7,
     });
   });
@@ -330,6 +334,7 @@ describe("attributeDispatch", () => {
     startedOnBehalfOf: null,
     parentThreadId: null,
     queuedMessage: null,
+    host: { id: "h3", name: "ew-lsp-001-main" },
   };
 
   it("always proceeds, and records the starter", async () => {
@@ -387,5 +392,52 @@ describe("attributeDispatch", () => {
     });
     expect(logs).toEqual([]);
     expect(await ledger.get("thr_new")).toMatchObject({ starter: matt });
+  });
+});
+
+describe("attributeDispatch and the machine", () => {
+  const onTeamMachine = {
+    thread: { id: "thr_new", parentThreadId: null, sourceThreadId: null },
+    origin: "app" as const,
+    originPluginId: null,
+    startedOnBehalfOf: null,
+    parentThreadId: null,
+    queuedMessage: null,
+    host: { id: "h3", name: "ew-lsp-001-main" },
+  };
+  const deps = (extra: Partial<Parameters<typeof attributeDispatch>[1]> = {}) => ({
+    ledger: new AttributionLedger(new FakeKv()),
+    identity: () => ({ email: "david@example.com", person: david }),
+    now: () => 4_000,
+    log: { info: () => undefined, warn: () => undefined },
+    ...extra,
+  });
+
+  it("records the machine the dispatch was headed for", async () => {
+    const ledger = new AttributionLedger(new FakeKv());
+    await attributeDispatch(onTeamMachine, deps({ ledger }));
+    expect((await ledger.get("thr_new"))?.host).toEqual({ id: "h3", name: "ew-lsp-001-main" });
+  });
+
+  it("offers the machine to the host pins, and still proceeds when that throws", async () => {
+    const seen: unknown[] = [];
+    expect(await attributeDispatch(onTeamMachine, deps({
+      observeHost: async (host) => {
+        seen.push(host);
+      },
+    }))).toEqual({ action: "proceed" });
+    expect(seen).toEqual([{ id: "h3", name: "ew-lsp-001-main" }]);
+
+    expect(await attributeDispatch(onTeamMachine, deps({
+      observeHost: async () => {
+        throw new Error("pins are down");
+      },
+    }))).toEqual({ action: "proceed" });
+  });
+
+  it("records no machine when bb named none", async () => {
+    const ledger = new AttributionLedger(new FakeKv());
+    await attributeDispatch({ ...onTeamMachine, host: null }, deps({ ledger }));
+    expect((await ledger.get("thr_new"))?.host).toBeNull();
   });
 });

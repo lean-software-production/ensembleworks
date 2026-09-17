@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { hostRefSchema, type HostRef } from "./host-ref.js";
 import { KV_TIMEOUT_MS, TIMED_OUT, withTimeout, type KvLike } from "./kv.js";
 
 export type { KvLike } from "./kv.js";
@@ -39,6 +40,12 @@ export const starterRecordSchema = z.object({
   /** The thread this starter was inherited from, for a lineage dispatch. */
   inheritedFrom: z.string().nullable(),
   recordedAt: z.number(),
+  /**
+   * The machine the dispatch was headed for, as bb resolved it. Optional because
+   * records written before step 4 do not have it; those read back as "no machine",
+   * never as a corrupt row.
+   */
+  host: hostRefSchema.nullish(),
 }).strict();
 export type StarterRecord = z.infer<typeof starterRecordSchema>;
 
@@ -92,6 +99,8 @@ export type AttributionFacts = {
   origin: DispatchOrigin;
   originPluginId: string | null;
   lineage: readonly string[];
+  /** The machine bb resolved for this dispatch (`context.host`), or null. */
+  host: HostRef | null;
   now: number;
 };
 
@@ -117,6 +126,7 @@ export function decideAttribution(
     origin: facts.origin,
     originPluginId: facts.originPluginId,
     recordedAt: facts.now,
+    host: facts.host,
   } as const;
 
   if (facts.person !== null) {
@@ -150,6 +160,8 @@ export type DispatchContextLike = {
   startedOnBehalfOf: { senderThreadId: string } | null;
   parentThreadId: string | null;
   queuedMessage: { senderThreadId: string | null } | null;
+  /** The machine the turn will run on; null when neither environment nor intent names one. */
+  host: { id: string; name: string } | null;
 };
 
 /** Turn one dispatch plus the requester's identity into the facts of an attribution. */
@@ -171,6 +183,7 @@ export function factsFromDispatch(
       sourceThreadId: context.thread.sourceThreadId,
       senderThreadIds: [context.startedOnBehalfOf?.senderThreadId, context.queuedMessage?.senderThreadId],
     }),
+    host: context.host === null ? null : { id: context.host.id, name: context.host.name },
     now,
   };
 }
@@ -302,6 +315,12 @@ export type DispatchDeps = {
   identity: () => { email: string | null; person: StarterSummary | null };
   now: () => number;
   log: { info: (message: string) => void; warn: (message: string) => void };
+  /**
+   * Called with the machine this dispatch is headed for, so the host pins see every
+   * host bb itself names. Observe-only, time-bounded by the pins' own kv timeout, and
+   * its failure is swallowed like everything else here.
+   */
+  observeHost?: (host: HostRef) => Promise<unknown>;
 };
 
 /**
@@ -321,6 +340,7 @@ export async function attributeDispatch(
     const inheritable = new Map(await Promise.all(
       facts.lineage.map(async (id) => [id, await deps.ledger.get(id)] as const),
     ));
+    if (facts.host !== null && deps.observeHost !== undefined) await deps.observeHost(facts.host);
     const decided = decideAttribution(facts, (id) => inheritable.get(id) ?? null);
     const outcome = await deps.ledger.record(decided);
     if (outcome.recorded) {

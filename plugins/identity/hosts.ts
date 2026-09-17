@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { HostRef } from "./host-ref.js";
 import { KV_TIMEOUT_MS, TIMED_OUT, withTimeout, type KvLike } from "./kv.js";
 import type { Person } from "./people.js";
 import type { StarterSummary } from "./attribution.js";
@@ -17,9 +18,8 @@ import type { StarterSummary } from "./attribution.js";
  * for a human to look at.
  */
 
-export type HostRef = { id: string; name: string };
-
-export const hostRefSchema = z.object({ id: z.string(), name: z.string() }).strict();
+export { hostRefSchema } from "./host-ref.js";
+export type { HostRef } from "./host-ref.js";
 
 export const hostPinSchema = z.object({
   hostId: z.string().min(1),
