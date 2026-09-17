@@ -721,3 +721,116 @@ at all — unchanged from S7's accepted gap, and worth naming in step 5's design
 - Infra: `lean-software-production/infrastructure` `inventory/group_vars/ew.yml`
   (`ew_bb_people`), `roles/ew_bb/defaults/main.yml` (loopback bind, tailnet proxy, "bb has no auth").
 - Reusable verifier: `server/src/access-identity.ts`.
+
+### S9 result (2026-09-18): what identity each built-in dispatch path actually carries
+
+Setup: a throwaway `bb-app` 0.43.0 (Node 24.19, own `--data-dir`, `HOME` in a temp dir,
+ports 39886/39887, its own git project) with a **throwaway observer plugin** (not in the
+repo) that installs the same `http.Server.prototype.emit` ALS patch as
+`plugins/identity/request-context.ts`, and logs, as JSON: every non-GET request
+(method, URL, Access email), the FULL `message.dispatch` context, and the
+`message.queued` / `message.dispatched` / `thread.created` / `thread.active` events with
+the ALS store they ran in. Nothing touched a real server. Each row below is either
+**observed** on that bb or explicitly marked as read from source.
+
+"ALS email" is what `requestContext.current()?.email` returns *inside the
+`message.dispatch` handler*. "Lineage" is what the hook context (or `context.thread`)
+actually exposes — not what the caller sent.
+
+| Path | Request? | ALS email | `origin` | `originPluginId` | Lineage in the hook | Verdict under the proposed policy |
+|---|---|---|---|---|---|---|
+| Browser create through Access (`POST /threads`, `origin: app` + email header) | yes | the person | `app` | – | none needed | **allow** (identified) |
+| Browser follow-up / queued send with the header (`POST /threads/:id/send`) | yes | the person | `null` | – | none | **allow** (identified). Observed here for the queued variant (`message.queued` ran as jeremy / matt); the inline variant was confirmed in S7 |
+| Header-less create, `origin: cli` (person's shell, `curl`, or `bb thread spawn` with no `--parent-self`) | yes | `null` | `cli` | – | none | **refuse** — this is the case answer 8 asks to block |
+| `bb thread spawn --parent-self` (agent inside a thread) | yes | `null` | `cli` | – | `context.parentThreadId` **and** `thread.parentThreadId` = the parent | **allow** via lineage |
+| **`bb thread tell <id> "…"` from inside a thread (`BB_THREAD_ID` set), immediate** | yes | `null` | `null` | – | **none** | **refuse — wrongly.** See below |
+| `bb thread tell` from a shell with no thread context | yes | `null` | `null` | – | none | refuse (intended) — **byte-for-byte identical to the row above** |
+| `bb thread tell … --send-at 30s` from inside a thread (queues, then drains) | drain: **no request** | `null` | `null` | – | `queuedMessage.senderThreadId` = the sender thread, `initiator: "agent"` | **allow** via the queued row's lineage |
+| Person's scheduled send (`sendAt` in the future), when it drains | drain: **no request** | `null` | `null` | – | `queuedMessage` set, `senderThreadId: null` | allow **only** via a sender recorded at `message.queued` (which does run in the sender's request context: observed as jeremy / matt) |
+| Same queued message, **Send-now** (`POST …/queued-messages/:id/send`) | yes | the presser | — | — | — | **hook never runs** (bypass re-confirmed). `message.dispatched` *does* run in the presser's context (observed as david), so it can only be caught afterwards |
+| `bb thread retry` on an errored thread (CLI, no header) | yes | `null` | `null` | – | none (`queuedMessage` null; `input` is the replayed message) | **refuse** unless a "the thread already has a recorded starter" carve-out is added |
+| provider-retry plugin (`bb.sdk.threads.retry` from a `turn failed` event handler) | **not exercised** (needs a real provider hitting a limit) | expected `null` | expected `null` | expected `null` | a retry of an existing thread | allow via the recorded starter — **prediction from source** (`builtin-plugins/provider-retry/dist/server.js`), not observed |
+| **Automation firing (scheduled agent run)** | yes — the plugin SDK issues its own loopback `POST /api/v1/threads` | `null` | `plugin` | `automations` | none (`threads.spawn` is called with no parent / `startedOnBehalfOf`) | allow under answer 2's rule (team machine only); starter = "automation" |
+| Automation whose target is an **existing thread** (`bb.sdk.threads.send`) | **not exercised** | expected `null` | **`null`** | **`null`** | none | **refuse — and invisible as an automation.** The SDK plugin bridge stamps `origin: "plugin"` + `originPluginId` on `threads.spawn` and `threads.fork` **only**; `threads.send` is not wrapped (source: `start-server.js` plugin-SDK bridge) |
+| Workflow **child thread** spawn | **not exercised** — the run failed before spawning (no working provider under a temp HOME) | expected `null` | expected `plugin` | expected `workflows` | none (`threads.spawn`, `visibility: "hidden"`, no parent) | allow only if plugin origins are allowed — **prediction from source** |
+| Workflow **completion notice** back into the origin thread | **yes** (loopback SDK call) | `null` | `null` | `null` | none | **refuse — wrongly.** Observed: `[BB workflow finished · wfr_…]` dispatched with every identity field empty |
+| Side-chat (`createSideChat` RPC → `bb.sdk.threads.fork`) | the RPC runs in the clicker's context (observed: matt), but the plugin's fork is a **new loopback request with no header** | `null` at dispatch | `plugin` | `side-chat` | `sourceThreadId` = the main thread (source) | allow via lineage. The fork itself could not complete here (`fork_source_session_unavailable`: forking needs a live provider session) |
+| Fork from the UI (`POST /threads/fork`) | yes (header observed on the route) | the forker | `app` | – | the new thread gets `sourceThreadId`; `originKind: "fork"` forces `parentThreadId` to null (source) | allow. **Only partially exercised**: bb refuses a fork whose source has no live session, so no fork reached the hook |
+| `bb thread stop --self` (agent stopping itself) | yes: `POST /threads/:id/stop`, no header | n/a | n/a | n/a | n/a | **no dispatch hook at all** — unaffected by the policy, and must stay that way |
+| Requests handled while the plugin is still loading | yes, but before the patch exists | `null` | as sent | as sent | as sent | refused with `requireIdentity` on; the startup-race caveat in the design stands |
+
+Notes on what was tried and could not be reached, so the gaps are honest:
+
+- **No working provider under a temp `HOME`.** `codex` and `claude-code` are listed as
+  available but have no credentials there, so every turn fails at
+  `ai_service_auth_required`. That blocks anything downstream of a real model turn:
+  a live `join-turn` attempt (every observed dispatch was `attempt: "start-turn"`),
+  a UI fork or side chat (both need a live session to clone), the workflow's own child
+  spawn, and provider-retry. Threads still reach `error`/`idle` quickly, which is why the
+  create / send / retry / drain / automation rows above *are* real.
+- **`bb workflows run` was exercised** (`--script` with a literal `meta`, run with
+  `BB_THREAD_ID`/`BB_PROJECT_ID`/`BB_ENVIRONMENT_ID` set): it validated, queued and ran,
+  but died before spawning a worker, so only its notification send was observed.
+- **Two useful side-facts.** (1) A queued message that comes due while the thread is busy
+  is **re-queued with no request context**, so the `queuedMessageId → sender` record that
+  answer 1 relies on must be first-write-wins, or the re-queue erases the sender.
+  (2) `bb automation list --json` carries `origin: "human" | …` and `createdByThreadId` on
+  the automation record — real creator lineage, but held in the automations plugin's own
+  store, so Identity cannot read it from the hook.
+
+#### The `bb thread tell` finding, in detail
+
+`bb thread tell` **does** send lineage: the CLI sets
+`senderThreadId = BB_THREAD_ID` when it differs from the target
+(`host-daemon/dist/bb-chunks/thread-4NQQD3A7.js`, the `tell` and `edit-message` actions).
+bb records it too — the thread's `client/turn/requested` event carries
+`initiator: "agent"`, `senderThreadId: "thr_…"` and even rewrites the text to
+`[bb message from thread:thr_…]\n\n<message>`.
+
+None of that is visible to `message.dispatch`:
+
+- `MessageDispatchHookContext` has **no `senderThreadId`** — the field exists only on a
+  **queued** row (`context.queuedMessage.senderThreadId`), which an immediate send never
+  creates;
+- the `[bb message from thread:…]` prefix is added **after** the hook — the hook's
+  `input.text` is the bare message (verified by diffing the observer's dispatch payload
+  against the stored event);
+- so an agent's `bb thread tell` and a human's header-less `bb thread tell` produce two
+  dispatch contexts that are **identical in every field**.
+
+#### What this means for `requireIdentity`
+
+Turning the no-identity policy on as designed would refuse four paths that are
+legitimate:
+
+1. **An agent's own `bb thread tell` from inside its thread** — the exact case answer 8
+   flagged. The caller supplies lineage; bb just doesn't pass it to the hook. This is the
+   one that would bite daily, because it is how agents report back into a parent thread.
+2. **`bb thread retry` (and `bb thread edit-message`, same shape, untested)** — no
+   identity, no lineage, no `origin`.
+3. **A plugin's follow-up `threads.send`** — the workflow completion notice (observed) and
+   an automation whose target is an existing thread (source). `threads.send` is not
+   stamped by the plugin SDK bridge, so these arrive as anonymous as a stray `curl`, and
+   answer 2's "automations only on the team machine" rule cannot see them either.
+4. **Anything during plugin load**, as already accepted.
+
+Options, cheapest first, none of them yet decided:
+
+- **Carve-out: allow a send/retry into a thread that already has a recorded starter.**
+  Cheap and it un-breaks 1, 2 and 3 at once — but it gives up rule 1's read-only
+  enforcement for follow-ups, because a human on a wrong shell reaches a started thread
+  the same way an agent does. Note Identity only records a starter from a *hooked*
+  dispatch, so a thread whose first message went out through Send-now has no record.
+- **`BB_SERVER_HEADERS` on agent machines** (the S7 find): the daemon injects it into
+  agent shells, so agents' CLI calls could carry a per-machine header and become
+  identified, leaving the refusal aimed only at human shells. That is answer 8's opt-in,
+  applied to machines rather than people, and it is the only option that keeps rule 1.
+- **Upstream ask:** put `senderThreadId` and `initiator` on `MessageDispatchHookContext`,
+  and stamp `origin`/`originPluginId` on `threads.send` the way `spawn`/`fork` already
+  are. Both are small, and both are exactly the "a plugin should be able to tell who
+  asked" gap this whole note is about.
+
+**Recommendation: do not enable `requireIdentity` on the strength of this spike alone.**
+Path 1 alone makes it a work-stopper. Enable it only together with the carve-out or the
+`BB_SERVER_HEADERS` machine header, and re-run S9 on a bb where a provider actually works,
+to close the six rows above that are predictions rather than observations.
