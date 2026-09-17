@@ -127,9 +127,44 @@ header. Nothing touched the shared server.
 - A useful find along the way: the daemon and CLI read `BB_SERVER_HEADERS`, so an agent's
   CLI calls could carry a per-machine header later.
 
-Spikes still worth running first: **S7 follow-ups** (above),
-**S2** (do the Access headers reach a plugin HTTP route through cloudflared?), **S3-lite**
-(what does the new-thread composer know before submit, so the banner can be useful?).
+### S2 result (2026-09-17): the header reaches plugin routes; local auth accepts Access traffic
+
+- **Source.** Plugin HTTP and RPC routes with `auth: "local"` go through
+  `browserRequestProblem` → `isTrustedOrigin` (bb-app 0.43.0 `start-server.js`). A
+  request with no `Origin` passes. Otherwise the `Origin` must be one of `BB_APP_URL`'s
+  origins, or equal the request's own `Host` / `X-Forwarded-Host` (scheme from
+  `X-Forwarded-Proto`). Mutations also need `content-type: application/json`.
+- **Throwaway bb, Identity installed**, email header `matt@mattwynne.net`, public origin
+  `https://bb-ew-lsp-001.ensembleworks.dev`:
+  1. `GET /whoami` with `Host` = the public name and `Origin` = the public origin gives Matt.
+  2. `POST rpc/identity_whoami` with `Host: 127.0.0.1` and `X-Forwarded-Host` = the public
+     name gives Matt.
+  3. The same, but with no forwarded host and no `BB_APP_URL`, gives `403 forbidden_origin`.
+- **What that means for ew-lsp-001:** Presence's RPCs already work there through Access,
+  so one of cases 1 and 2 (or `BB_APP_URL`) already holds for that tunnel. The one link not
+  tested locally is Cloudflare injecting `Cf-Access-Authenticated-User-Email` on origin
+  requests, which is documented Access behaviour. **Final check once Identity is deployed:**
+  open `https://bb-ew-lsp-001.ensembleworks.dev/api/v1/plugins/identity/http/whoami` in a
+  browser; it should name you.
+
+### S3-lite result (2026-09-17): the new-thread composer can't see the chosen machine
+
+From the SDK types (0.4.84 `bb-plugin-sdk.d.ts`, `PluginComposerScope`
+L15958–15975, `ComposerView` L16010–16022): a composer customization in the `new-thread` scope
+gets `projectId`, the draft text, the attachment count and submit state. It does
+**not** get the selected machine, environment, provider or model. `NewThreadComposerProps`
+only *seeds* those choices for a plugin-rendered composer and doesn't report them back. So:
+- the "Starting as David" banner can show who you are and list your allowed machines, but it
+  **can't warn before submit** that the selected machine isn't yours;
+- the dispatch refusal message is the first point where the wrong machine is caught. Its
+  wording has to do the teaching ("ew-lsp-001-mattwynne is Matt's machine. Pick one of
+  yours…").
+- Changing that would need a new SDK surface (an upstream ask), or Identity rendering its own
+  new-thread composer via `NewThreadComposer`, which is heavy.
+
+Not verified at runtime; this is a reading of the types.
+
+Spikes S7 (including follow-ups), S2 and S3-lite are done (results above). Remaining S2 check: open `/api/v1/plugins/identity/http/whoami` through Access once Identity is deployed.
 Open questions 1, 2, 3 and 7 are answered just below.
 
 ## TL;DR
