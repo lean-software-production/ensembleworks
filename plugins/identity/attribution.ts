@@ -134,6 +134,43 @@ export function decideAttribution(
   return { ...base, starter: null, via: "unknown", inheritedFrom: null };
 }
 
+/**
+ * The shape of bb's `MessageDispatchHookContext` that attribution reads. Structural on
+ * purpose: this module never imports the SDK, and typecheck still proves the field
+ * names exist, because server.ts passes the real hook context in.
+ */
+export type DispatchContextLike = {
+  thread: { id: string; parentThreadId: string | null; sourceThreadId: string | null };
+  origin: DispatchOrigin;
+  originPluginId: string | null;
+  startedOnBehalfOf: { senderThreadId: string } | null;
+  parentThreadId: string | null;
+  queuedMessage: { senderThreadId: string | null } | null;
+};
+
+/** Turn one dispatch plus the requester's identity into the facts of an attribution. */
+export function factsFromDispatch(
+  context: DispatchContextLike,
+  identity: { email: string | null; person: StarterSummary | null },
+  now: number,
+): AttributionFacts {
+  return {
+    threadId: context.thread.id,
+    email: identity.email,
+    person: identity.person,
+    origin: context.origin,
+    originPluginId: context.originPluginId,
+    lineage: lineageOf({
+      threadId: context.thread.id,
+      // The hook context's own parent, falling back to the thread row's.
+      parentThreadId: context.parentThreadId ?? context.thread.parentThreadId,
+      sourceThreadId: context.thread.sourceThreadId,
+      senderThreadIds: [context.startedOnBehalfOf?.senderThreadId, context.queuedMessage?.senderThreadId],
+    }),
+    now,
+  };
+}
+
 /** The slice of `bb.storage.kv` this ledger uses. */
 export type KvLike = {
   get<T>(key: string): Promise<T | undefined>;

@@ -1,7 +1,18 @@
 import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
+import {
+  AttributionLedger,
+  decideAttribution,
+  factsFromDispatch,
+} from "./attribution.js";
 import { identityFor, parseDirectory, type Person } from "./people.js";
-import { ACCESS_EMAIL_HEADER, installRequestContext, normalizeEmail } from "./request-context.js";
+import {
+  ACCESS_EMAIL_HEADER,
+  installRequestContext,
+  normalizeEmail,
+  selfTestRequestContext,
+  type SelfTestResult,
+} from "./request-context.js";
 
 export const LEASE_TTL_MS = 25_000;
 export const TYPING_TTL_MS = 3_000;
@@ -34,17 +45,31 @@ const whoami = z.object({
   email: z.string().nullable(),
   person: personSummary.nullable(),
 }).strict();
+const threadId = z.string().min(1).max(200);
+/** Who started a thread: the recorded starter, or null when nothing was ever recorded. */
+const threadStarter = z.object({
+  threadId: z.string(),
+  starter: personSummary.nullable(),
+  via: z.enum(["browser", "agent", "plugin", "unknown"]),
+  inheritedFrom: z.string().nullable(),
+  recordedAt: z.number(),
+}).strict().nullable();
 
 export type PresenceLocation = z.infer<typeof location>;
 export type LeasePerson = z.infer<typeof personSummary>;
 export type PresentPerson = z.infer<typeof presentPerson>;
 export type ThreadPresence = z.infer<typeof threadPresence>;
 export type WhoAmI = z.infer<typeof whoami>;
+export type ThreadStarter = z.infer<typeof threadStarter>;
 
 export const rpcContract = defineRpcContract({
   identity_whoami: {
     input: z.object({}).strict().nullish(),
     output: whoami,
+  },
+  identity_thread_starter: {
+    input: z.object({ threadId }).strict(),
+    output: threadStarter,
   },
   presence_heartbeat: {
     input: z.object({ tabId: opaqueId, viewerId: opaqueId, location }).strict(),
@@ -277,6 +302,11 @@ export default async function plugin(bb: BbPluginApi) {
 
   /** Identity of whoever made the current request; unknown outside a request (startup race). */
   const currentIdentity = (email = requestContext.current()?.email ?? null) => identityFor(people, email, fallbackEmail);
+  /** The current requester as attribution wants them: their email plus resolved person. */
+  const whoamiPerson = () => {
+    const identity = currentIdentity();
+    return { email: identity.email, person: summarize(identity.person) };
+  };
   const whoamiFor = (email: string | null): WhoAmI => {
     const identity = currentIdentity(email);
     return { email: identity.email, person: summarize(identity.person) };
@@ -291,8 +321,98 @@ export default async function plugin(bb: BbPluginApi) {
     return c.json(whoamiFor(normalizeEmail(c.req.header(ACCESS_EMAIL_HEADER))));
   }, { auth: "local" });
 
+  // ── Attribution (step 3): observe and record who started each thread. ─────────────
+  const ledger = new AttributionLedger(bb.storage.kv);
+  const publicStarter = (record: Awaited<ReturnType<AttributionLedger["get"]>>): ThreadStarter =>
+    record === null
+      ? null
+      : {
+        threadId: record.threadId,
+        starter: record.starter,
+        via: record.via,
+        inheritedFrom: record.inheritedFrom,
+        recordedAt: record.recordedAt,
+      };
+
+  /**
+   * The self-test's own route. It reports the email the ASYNC CONTEXT holds — not the
+   * header off this request — so a reply naming the tagged email proves the patch is
+   * carrying facts through bb's real server into plugin code in this process.
+   */
+  bb.http.route("GET", "/request-context-probe", (c) => {
+    return c.json({ email: requestContext.current()?.email ?? null });
+  }, { auth: "local" });
+
+  bb.experimental_hooks.on("message.dispatch", async (context) => {
+    // NEVER rejects and never throws: hooks are fail-closed, and attribution only
+    // observes. Step 5's guardrails are a later, separate change.
+    try {
+      const facts = factsFromDispatch(context, whoamiPerson(), Date.now());
+      const inheritable = new Map(await Promise.all(
+        facts.lineage.map(async (id) => [id, await ledger.get(id)] as const),
+      ));
+      const decided = decideAttribution(facts, (id) => inheritable.get(id) ?? null);
+      const outcome = await ledger.record(decided);
+      if (outcome.recorded) {
+        bb.log.info(
+          `identity: thread ${decided.threadId} started by ${decided.starter?.person ?? "unknown"} `
+          + `(via ${decided.via}${decided.inheritedFrom ? `, inherited from ${decided.inheritedFrom}` : ""})`,
+        );
+      }
+    } catch (error) {
+      bb.log.warn(`identity: could not record attribution: ${(error as Error).message}`);
+    }
+    return { action: "proceed" } as const;
+  });
+
+  bb.http.route("GET", "/thread-starter", async (c) => {
+    const wanted = threadId.safeParse(c.req.query("threadId"));
+    if (!wanted.success) {
+      return c.json({ error: "threadId is required (1-200 characters)" }, 400);
+    }
+    return c.json(publicStarter(await ledger.get(wanted.data)));
+  }, { auth: "local" });
+
+  /**
+   * Boot self-test: prove the ALS patch is live in THIS process, by driving one request
+   * through bb's own server. It runs after the server is listening (`loopbackBaseUrl` is
+   * bind-gated and throws before that), retries a few times while it comes up, and
+   * NEVER restores `emit` — S7's lesson 1 is that restoring the patch silently kills it.
+   * A failure degrades Identity to "no identity": everything attributes as unknown, and
+   * no dispatch is affected, because the hook always proceeds.
+   */
+  let selfTest: SelfTestResult | null = null;
+  const probe = async (headers: Record<string, string>): Promise<unknown> => {
+    const response = await fetch(`${bb.server.loopbackBaseUrl}/api/v1/plugins/${bb.pluginId}/http/request-context-probe`, {
+      headers,
+    });
+    if (!response.ok) throw new Error(`probe route answered ${response.status}`);
+    return await response.json();
+  };
+  const runSelfTest = async (attemptsLeft: number): Promise<void> => {
+    try {
+      selfTest = await selfTestRequestContext(requestContext, { probe });
+    } catch (error) {
+      selfTest = { ok: false, detail: `the self-test could not run: ${(error as Error).message}` };
+    }
+    if (!selfTest.ok && attemptsLeft > 0) {
+      selfTestTimer = setTimeout(() => void runSelfTest(attemptsLeft - 1), 1_000);
+      return;
+    }
+    if (selfTest.ok) {
+      bb.log.info(`identity: request-context self-test PASSED — ${selfTest.detail}`);
+      return;
+    }
+    bb.log.warn(
+      `identity: request-context self-test FAILED — ${selfTest.detail}. Attribution and named `
+      + "presence degrade to unknown; nothing is blocked.",
+    );
+  };
+  let selfTestTimer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => void runSelfTest(5), 500);
+
   bb.rpc.register(rpcContract, {
     identity_whoami: () => whoamiFor(requestContext.current()?.email ?? null),
+    identity_thread_starter: async ({ threadId: wanted }) => publicStarter(await ledger.get(wanted)),
     presence_heartbeat: ({ tabId, viewerId, location }) => {
       const person = summarize(currentIdentity().person);
       const affected = store.heartbeat(tabId, viewerId, location, Date.now(), person);
@@ -314,5 +434,11 @@ export default async function plugin(bb: BbPluginApi) {
     presence_thread: ({ threadId, excludeViewerId }) => store.thread(threadId, excludeViewerId),
     presence_typing_list: ({ threadId }) => ({ count: store.thread(threadId, "__legacy-no-viewer__").typing }),
   });
-  bb.onDispose(() => store.clear());
+  bb.onDispose(() => {
+    store.clear();
+    if (selfTestTimer !== undefined) clearTimeout(selfTestTimer);
+    // Deliberately NOT unpatching the request context: bb disposes the old generation
+    // after the new one has loaded, so restoring `emit` here would remove the live
+    // patch (S7, lesson 1).
+  });
 }

@@ -24,6 +24,8 @@ export type RequestContext = {
 export const ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email";
 
 const GLOBAL_KEY = Symbol.for("ew.identity.requestContext.v1");
+/** Stamped on the patched `emit` so the self-test can tell OUR patch is the live one. */
+const PATCH_MARKER = Symbol.for("ew.identity.requestContext.patched.v1");
 
 export function normalizeEmail(value: string | string[] | null | undefined): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -67,8 +69,53 @@ export function installRequestContext(): RequestContext {
     }
     return emit.call(this, event, ...args);
   } as typeof http.Server.prototype.emit;
+  Object.defineProperty(http.Server.prototype.emit, PATCH_MARKER, { value: true });
 
   const context: RequestContext = { current: () => als.getStore() };
   globals[GLOBAL_KEY] = context;
   return context;
+}
+
+/** Is the `emit` currently on the prototype our patch? */
+export function requestContextPatchIsLive(): boolean {
+  const emit = http.Server.prototype.emit as unknown as Record<symbol, unknown>;
+  return emit[PATCH_MARKER] === true;
+}
+
+export type SelfTestResult = { ok: boolean; detail: string };
+
+export const SELF_TEST_EMAIL = "identity-self-test@localhost.invalid";
+
+/**
+ * Prove the patch is live IN THIS PROCESS: check that the `emit` on the prototype is
+ * still ours (S7's lesson 1 — a later generation restoring `emit` silently removed the
+ * live patch), then drive one real request through the server carrying a tagged email
+ * and assert the handler read that email back out of the async context rather than off
+ * the request.
+ *
+ * Never throws and never touches the patch: a failure is REPORTED, and Identity carries
+ * on with no identity (starter "unknown"), because a broken patch must cost UX only and
+ * must never block bb from working.
+ */
+export async function selfTestRequestContext(
+  context: RequestContext,
+  options: { probe: (headers: Record<string, string>) => Promise<unknown> },
+): Promise<SelfTestResult> {
+  if (!requestContextPatchIsLive()) {
+    return { ok: false, detail: "the live http.Server.prototype.emit is not Identity's patch" };
+  }
+  if (context.current() !== undefined) {
+    return { ok: false, detail: "the self-test itself already runs inside a request context" };
+  }
+  let seen: unknown;
+  try {
+    seen = await options.probe({ [ACCESS_EMAIL_HEADER]: SELF_TEST_EMAIL });
+  } catch (error) {
+    return { ok: false, detail: `the self-test probe failed: ${(error as Error).message}` };
+  }
+  const email = (seen as { email?: unknown } | null)?.email;
+  if (email !== SELF_TEST_EMAIL) {
+    return { ok: false, detail: `the probe's request context had email ${JSON.stringify(email ?? null)}` };
+  }
+  return { ok: true, detail: "request context is live (probe saw its own tagged email)" };
 }

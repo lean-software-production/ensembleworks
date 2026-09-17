@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import {
   AttributionLedger,
   decideAttribution,
+  factsFromDispatch,
   lineageOf,
   viaForOrigin,
   type AttributionFacts,
@@ -235,5 +236,38 @@ describe("AttributionLedger", () => {
     const unlucky = new AttributionLedger(broken);
     expect(await unlucky.get("thr_1")).toBeNull();
     expect(await unlucky.record(record({ threadId: "thr_1" }))).toEqual({ recorded: false, record: null });
+  });
+});
+
+describe("factsFromDispatch", () => {
+  const identity = { email: "david@example.com", person: david };
+  const dispatch = {
+    thread: { id: "thr_self", parentThreadId: "thr_thread_parent", sourceThreadId: "thr_fork_source" },
+    origin: "cli" as const,
+    originPluginId: null,
+    startedOnBehalfOf: { initiator: "agent" as const, senderThreadId: "thr_sender" },
+    parentThreadId: "thr_hook_parent",
+    queuedMessage: { senderThreadId: "thr_queued_sender" },
+  };
+
+  it("maps every lineage field bb actually exposes, hook context and thread alike", () => {
+    expect(factsFromDispatch(dispatch, identity, 7)).toEqual({
+      threadId: "thr_self",
+      email: "david@example.com",
+      person: david,
+      origin: "cli",
+      originPluginId: null,
+      lineage: ["thr_sender", "thr_queued_sender", "thr_hook_parent", "thr_fork_source"],
+      now: 7,
+    });
+  });
+
+  it("falls back to the thread's own parent when the hook context carries none", () => {
+    expect(factsFromDispatch({
+      ...dispatch,
+      startedOnBehalfOf: null,
+      queuedMessage: null,
+      parentThreadId: null,
+    }, { email: null, person: null }, 7).lineage).toEqual(["thr_thread_parent", "thr_fork_source"]);
   });
 });

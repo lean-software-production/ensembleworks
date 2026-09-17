@@ -26,6 +26,7 @@
     "app.tsx",
     "sidebar-fallback.ts",
     "request-context.ts",
+    "attribution.ts",
     "people.ts",
     "presence-labels.ts",
     "components",
