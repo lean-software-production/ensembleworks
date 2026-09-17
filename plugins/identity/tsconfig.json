@@ -25,6 +25,9 @@
     "server.ts",
     "app.tsx",
     "sidebar-fallback.ts",
+    "request-context.ts",
+    "people.ts",
+    "presence-labels.ts",
     "components",
     "lib",
     "hooks"

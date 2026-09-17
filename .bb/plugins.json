@@ -5,7 +5,7 @@
   "plugins": [
     { "name": "canvas", "source": "./plugins/canvas" },
     { "name": "communications-hub", "source": "./plugins/communications-hub" },
-    { "name": "presence", "source": "./plugins/presence" },
+    { "name": "identity", "source": "./plugins/identity" },
     { "name": "huddle", "source": "./plugins/huddle" },
     { "name": "fabro", "source": "./plugins/bb-plugin-fabro" }
   ]

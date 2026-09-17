@@ -16,7 +16,7 @@
  * The thread id is read via `useComposerView()`'s scope rather than
  * `useBbContext()`: the customization's `scopes: ["thread"]` guarantees the
  * mounted composer is always a `{ kind: "thread" }` scope, and
- * `plugins/presence/app.tsx`'s own composer customization (`TypingPulse`)
+ * `plugins/identity/app.tsx`'s own composer customization (`TypingPulse`)
  * already establishes `scope.kind === "thread" ? scope.threadId : null` as
  * this repo's idiom for reading it defensively anyway.
  *

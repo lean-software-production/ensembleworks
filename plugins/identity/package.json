@@ -1,5 +1,5 @@
 {
-  "name": "bb-plugin-presence",
+  "name": "bb-plugin-identity",
   "version": "0.1.0",
   "type": "module",
   "scripts": {
@@ -11,8 +11,8 @@
     "bbPluginSdk": ">=0.4.84"
   },
   "bb": {
-    "name": "Presence",
-    "description": "Anonymous, expiring BB whereabouts and typing awareness.",
+    "name": "Identity",
+    "description": "Who is who on a shared BB server: presence, typing awareness and thread ownership.",
     "branding": {
       "icon": "UsersRound"
     },

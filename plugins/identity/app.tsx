@@ -8,7 +8,8 @@ import {
   useRealtimeConnectionState,
   useRpc,
 } from "@get-bb/plugin-sdk/app";
-import type { PresenceLocation, rpcContract } from "./server.js";
+import type { PresenceLocation, PresentPerson, rpcContract, WhoAmI } from "./server.js";
+import { initials, presenceLabel } from "./presence-labels.js";
 import {
   mountThreadStatusFallback,
   replaceThreadStatuses,
@@ -32,11 +33,6 @@ function viewerId(): string {
 
 function tabId(): string {
   return stableId(sessionStorage, "bb-presence-tab-id");
-}
-
-function presenceLabel(viewers: number, typing: number): string {
-  const viewing = `${viewers} other ${viewers === 1 ? "viewer" : "viewers"}`;
-  return typing > 0 ? `${viewing} · ${typing} typing` : viewing;
 }
 
 function PresenceCoordinator() {
@@ -69,7 +65,7 @@ function PresenceCoordinator() {
     void rpc.call("presence_snapshot", { excludeViewerId: ownViewerId }).then(({ threads }) => {
       replaceThreadStatuses(new Map(threads.map((entry) => [entry.threadId, {
         icon: entry.typing > 0 ? "Edit" : "UsersRound",
-        label: presenceLabel(entry.viewers, entry.typing),
+        label: presenceLabel(entry),
         tone: entry.typing > 0 ? "running" as const : "default" as const,
         viewers: entry.viewers,
         typing: entry.typing,
@@ -154,12 +150,24 @@ function TypingPulse() {
 function ThreadPresence({ threadId }: { threadId: string }) {
   const rpc = useRpc<typeof rpcContract>();
   const ownViewerId = useMemo(viewerId, []);
-  const [presence, setPresence] = useState({ viewers: 0, typing: 0 });
+  const [presence, setPresence] = useState<{ viewers: number; typing: number; people: PresentPerson[] }>({
+    viewers: 0,
+    typing: 0,
+    people: [],
+  });
+  const [me, setMe] = useState<WhoAmI | null>(null);
   const refresh = useCallback(() => {
     void rpc.call("presence_thread", { threadId, excludeViewerId: ownViewerId })
-      .then(({ viewers, typing }) => setPresence({ viewers, typing }))
+      .then(({ viewers, typing, people }) => setPresence({ viewers, typing, people: people ?? [] }))
       .catch(() => undefined);
   }, [ownViewerId, rpc, threadId]);
+  useEffect(() => {
+    let live = true;
+    void rpc.call("identity_whoami").then((result) => {
+      if (live) setMe(result);
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [rpc]);
   useEffect(() => {
     refresh();
     const timer = window.setInterval(refresh, REFRESH_MS);
@@ -171,13 +179,20 @@ function ThreadPresence({ threadId }: { threadId: string }) {
     if (Array.isArray(threadIds) && threadIds.includes(threadId)) refresh();
   });
   if (presence.viewers === 0) return null;
-  const label = presenceLabel(presence.viewers, presence.typing);
-  const viewerDetail = presence.viewers === 1
-    ? "1 other viewer is here"
-    : `${presence.viewers} other viewers are here`;
-  const typingDetail = presence.typing === 1
-    ? "1 viewer is typing"
-    : `${presence.typing} viewers are typing`;
+  const label = presenceLabel(presence);
+  const anonymousViewers = Math.max(0, presence.viewers - presence.people.length);
+  const namedTypers = presence.people.filter((entry) => entry.typing).length;
+  const anonymousTypers = Math.max(0, presence.typing - namedTypers);
+  const viewerDetail = presence.people.length > 0
+    ? `+${anonymousViewers} ${anonymousViewers === 1 ? "other" : "others"}`
+    : presence.viewers === 1
+      ? "1 other viewer is here"
+      : `${presence.viewers} other viewers are here`;
+  const typingDetail = presence.people.length > 0
+    ? `${anonymousTypers} of them ${anonymousTypers === 1 ? "is" : "are"} typing`
+    : presence.typing === 1
+      ? "1 viewer is typing"
+      : `${presence.typing} viewers are typing`;
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
@@ -220,17 +235,69 @@ function ThreadPresence({ threadId }: { threadId: string }) {
           }}
         >
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>People here</div>
-          <PresenceDetail icon={<UsersRoundIcon />} text={viewerDetail} />
-          {presence.typing > 0 ? (
+          {presence.people.map((entry) => <PersonRow key={entry.person} entry={entry} />)}
+          {presence.people.length === 0 || anonymousViewers > 0 ? (
+            <PresenceDetail icon={<UsersRoundIcon />} text={viewerDetail} />
+          ) : null}
+          {(presence.people.length === 0 ? presence.typing : anonymousTypers) > 0 ? (
             <PresenceDetail icon={<TypingIcon />} text={typingDetail} tone="warning" />
           ) : null}
           <div style={{ color: "var(--muted-foreground)", fontSize: 11, lineHeight: 1.4, marginTop: 10 }}>
-            Presence is anonymous for now. Names and individual activity can appear here when BB exposes viewer identity.
+            {identityFooter(me)}
           </div>
           <Popover.Arrow style={{ fill: "var(--popover, var(--background))" }} />
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
+  );
+}
+
+function identityFooter(me: WhoAmI | null): string {
+  if (me?.person) return `You are ${me.person.displayName}.`;
+  if (me?.email) return `Signed in as ${me.email}, not in the Identity directory.`;
+  return "You are anonymous here. Names appear once Identity's directory is configured and this BB server sits behind Cloudflare Access.";
+}
+
+function PersonRow({ entry }: { entry: PresentPerson }) {
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  return (
+    <div style={{ alignItems: "center", display: "flex", gap: 8, fontSize: 12, lineHeight: 1.5, marginBottom: 4 }}>
+      {avatarFailed ? (
+        <span
+          aria-hidden="true"
+          style={{
+            alignItems: "center",
+            background: "var(--muted, rgba(127, 127, 127, 0.2))",
+            borderRadius: "50%",
+            display: "inline-flex",
+            flex: "0 0 auto",
+            fontSize: 9,
+            fontWeight: 600,
+            height: 20,
+            justifyContent: "center",
+            width: 20,
+          }}
+        >
+          {initials(entry.displayName)}
+        </span>
+      ) : (
+        <img
+          src={`https://github.com/${encodeURIComponent(entry.github)}.png?size=40`}
+          alt={entry.displayName}
+          width={20}
+          height={20}
+          onError={() => setAvatarFailed(true)}
+          style={{ borderRadius: "50%", flex: "0 0 auto" }}
+        />
+      )}
+      <span style={{ flex: "1 1 auto" }}>{entry.displayName}</span>
+      {entry.typing ? (
+        <span style={{ alignItems: "center", color: "var(--warning, var(--foreground))", display: "inline-flex", gap: 4 }}>
+          <TypingIcon />
+          typing
+        </span>
+      ) : null}
+    </div>
   );
 }
 
