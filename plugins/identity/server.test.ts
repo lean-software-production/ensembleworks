@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { LEASE_TTL_MS, PresenceStore, TYPING_TTL_MS } from "./server.js";
+import { LEASE_TTL_MS, PresenceStore, TYPING_TTL_MS, publicStarter } from "./server.js";
 
 describe("PresenceStore", () => {
   it("excludes the local viewer and aggregates another viewer's tabs", () => {
@@ -119,5 +119,36 @@ describe("PresenceStore", () => {
       expect([...store.heartbeat("tab", "viewer", here, 3_000, matt)]).toEqual(["t"]);
       expect(store.thread("t", "local", 3_000).people).toEqual([{ ...matt, typing: false }]);
     });
+  });
+});
+
+describe("publicStarter", () => {
+  const stored = {
+    threadId: "thr_1",
+    starter: { person: "mattwynne", displayName: "Matt", github: "mattwynne" },
+    email: "matt@example.com",
+    via: "browser" as const,
+    origin: "app" as const,
+    originPluginId: null,
+    inheritedFrom: null,
+    recordedAt: 500,
+  };
+
+  it("is null when nothing was recorded", () => {
+    expect(publicStarter(null)).toBeNull();
+  });
+
+  it("drops the private email and keeps only the contract's fields", () => {
+    expect(publicStarter(stored)).toEqual({
+      threadId: "thr_1",
+      starter: stored.starter,
+      via: "browser",
+      inheritedFrom: null,
+      recordedAt: 500,
+    });
+  });
+
+  it("validates its output against the RPC contract's schema, on both arms", () => {
+    expect(() => publicStarter({ ...stored, via: "telepathy" as unknown as typeof stored.via })).toThrow();
   });
 });

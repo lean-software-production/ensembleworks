@@ -192,16 +192,67 @@ const INDEX_KEY = "identity/starter/v1/index";
  */
 export const MAX_STARTER_RECORDS = 2_000;
 
+/**
+ * The read-through cache is bounded SEPARATELY from storage, and much smaller: the read
+ * path (`identity_thread_starter`, `GET /thread-starter`) caches every thread id it is
+ * asked about, including misses, so a storage-sized cap would not bound it at all — a
+ * caller can ask about ids that were never written. Oldest-inserted entries are dropped
+ * first; the cache only ever saves a kv round-trip, so dropping one is free.
+ */
+export const MAX_CACHED_STARTERS = 256;
+
+/**
+ * How long any one kv call may take before the ledger gives up and answers "no record".
+ *
+ * The dispatch hook is on bb's critical path and an SDK hook that exceeds 10s fails the
+ * attempt, so a wedged kv is the one way this observe-only code could still affect a
+ * dispatch. Lineage reads run in parallel, so the whole hook's storage budget is about
+ * two of these (the lineage reads, then the write), well inside the 10s ceiling.
+ */
+export const KV_TIMEOUT_MS = 1_000;
+
+const TIMED_OUT = Symbol("kv-timeout");
+
+/** Resolve `work` or, after `ms`, the `TIMED_OUT` sentinel. Never leaves a timer armed. */
+async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      work,
+      new Promise<typeof TIMED_OUT>((resolve) => {
+        timer = setTimeout(() => resolve(TIMED_OUT), ms);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export class AttributionLedger {
   readonly #kv: KvLike;
   readonly #max: number;
-  /** Read-through cache; `null` means "storage says there is no record". */
+  readonly #cacheMax: number;
+  readonly #timeoutMs: number;
+  /** Bounded read-through cache; `null` means "storage says there is no record". */
   readonly #cache = new Map<string, StarterRecord | null>();
   #index: string[] | null = null;
 
-  constructor(kv: KvLike, options: { max?: number } = {}) {
+  constructor(kv: KvLike, options: { max?: number; cacheMax?: number; timeoutMs?: number } = {}) {
     this.#kv = kv;
     this.#max = Math.max(1, options.max ?? MAX_STARTER_RECORDS);
+    this.#cacheMax = Math.max(1, options.cacheMax ?? MAX_CACHED_STARTERS);
+    this.#timeoutMs = Math.max(1, options.timeoutMs ?? KV_TIMEOUT_MS);
+  }
+
+  /** Cache `record` under `threadId`, dropping the oldest entry when the cache is full. */
+  #remember(threadId: string, record: StarterRecord | null): void {
+    this.#cache.delete(threadId);
+    this.#cache.set(threadId, record);
+    while (this.#cache.size > this.#cacheMax) {
+      const oldest = this.#cache.keys().next();
+      if (oldest.done === true) break;
+      this.#cache.delete(oldest.value);
+    }
   }
 
   /**
@@ -214,14 +265,16 @@ export class AttributionLedger {
     if (cached !== undefined) return cached;
     let record: StarterRecord | null = null;
     try {
-      const stored = await this.#kv.get<unknown>(KEY_PREFIX + threadId);
+      const stored = await withTimeout(this.#kv.get<unknown>(KEY_PREFIX + threadId), this.#timeoutMs);
+      // A hung kv is a failure, not an answer: do not cache it, and never wait it out.
+      if (stored === TIMED_OUT) return null;
       const parsed = stored === undefined ? null : starterRecordSchema.safeParse(stored);
       record = parsed && parsed.success ? parsed.data : null;
     } catch {
       // Unreadable storage: treat as no record, and do not cache the failure.
       return null;
     }
-    this.#cache.set(threadId, record);
+    this.#remember(threadId, record);
     return record;
   }
 
@@ -237,9 +290,13 @@ export class AttributionLedger {
     const existing = await this.get(record.threadId);
     if (existing !== null) return { recorded: false, record: existing };
     try {
-      await this.#kv.set(KEY_PREFIX + record.threadId, record);
-      this.#cache.set(record.threadId, record);
-      await this.#appendToIndex(record.threadId);
+      const written = await withTimeout(this.#kv.set(KEY_PREFIX + record.threadId, record), this.#timeoutMs);
+      if (written === TIMED_OUT) {
+        this.#cache.delete(record.threadId);
+        return { recorded: false, record: null };
+      }
+      this.#remember(record.threadId, record);
+      await withTimeout(this.#appendToIndex(record.threadId), this.#timeoutMs);
       return { recorded: true, record };
     } catch {
       this.#cache.delete(record.threadId);
@@ -262,4 +319,49 @@ export class AttributionLedger {
       await this.#kv.delete(KEY_PREFIX + id);
     }
   }
+}
+
+/** The ledger slice one dispatch needs — the class, or a fake in a test. */
+export type LedgerLike = {
+  get(threadId: string): Promise<StarterRecord | null>;
+  record(record: StarterRecord): Promise<{ recorded: boolean; record: StarterRecord | null }>;
+};
+
+export type DispatchDeps = {
+  ledger: LedgerLike;
+  /** The requester's identity, read from the async request context. May throw. */
+  identity: () => { email: string | null; person: StarterSummary | null };
+  now: () => number;
+  log: { info: (message: string) => void; warn: (message: string) => void };
+};
+
+/**
+ * The whole body of the `message.dispatch` hook, as a testable function.
+ *
+ * Its contract, which its tests hold it to: it ALWAYS returns `{ action: "proceed" }`,
+ * it never throws, and it never rejects or delays a dispatch. Every failure — a wedged
+ * kv, a throwing identity lookup, a corrupt row — degrades to a warning and a proceed.
+ * Step 5's guardrails are a later, separate change; nothing here may refuse anything.
+ */
+export async function attributeDispatch(
+  context: DispatchContextLike,
+  deps: DispatchDeps,
+): Promise<{ action: "proceed" }> {
+  try {
+    const facts = factsFromDispatch(context, deps.identity(), deps.now());
+    const inheritable = new Map(await Promise.all(
+      facts.lineage.map(async (id) => [id, await deps.ledger.get(id)] as const),
+    ));
+    const decided = decideAttribution(facts, (id) => inheritable.get(id) ?? null);
+    const outcome = await deps.ledger.record(decided);
+    if (outcome.recorded) {
+      deps.log.info(
+        `identity: thread ${decided.threadId} started by ${decided.starter?.person ?? "unknown"} `
+        + `(via ${decided.via}${decided.inheritedFrom ? `, inherited from ${decided.inheritedFrom}` : ""})`,
+      );
+    }
+  } catch (error) {
+    deps.log.warn(`identity: could not record attribution: ${(error as Error).message}`);
+  }
+  return { action: "proceed" } as const;
 }

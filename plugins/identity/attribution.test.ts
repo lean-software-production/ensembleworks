@@ -9,6 +9,7 @@ import {
   type KvLike,
   type StarterRecord,
   type StarterSummary,
+  attributeDispatch,
 } from "./attribution.js";
 
 const matt: StarterSummary = { person: "mattwynne", displayName: "Matt", github: "mattwynne" };
@@ -269,5 +270,122 @@ describe("factsFromDispatch", () => {
       queuedMessage: null,
       parentThreadId: null,
     }, { email: null, person: null }, 7).lineage).toEqual(["thr_thread_parent", "thr_fork_source"]);
+  });
+});
+
+describe("AttributionLedger cache bounds", () => {
+  it("bounds the read-through cache, so queries for unknown threads cannot grow it forever", async () => {
+    const kv = new FakeKv();
+    const ledger = new AttributionLedger(kv, { cacheMax: 2 });
+    await ledger.get("thr_a");
+    await ledger.get("thr_b");
+    await ledger.get("thr_c");
+    kv.reads = 0;
+    await ledger.get("thr_a");
+    expect(kv.reads).toBe(1);
+    await ledger.get("thr_c");
+    expect(kv.reads).toBe(1);
+  });
+});
+
+describe("AttributionLedger timeouts", () => {
+  const hangingKv: KvLike = {
+    get: () => new Promise<never>(() => {}),
+    set: () => new Promise<never>(() => {}),
+    delete: () => new Promise<never>(() => {}),
+    list: () => new Promise<never>(() => {}),
+  };
+
+  it("gives up on a hung read rather than hanging the dispatch hook", async () => {
+    const ledger = new AttributionLedger(hangingKv, { timeoutMs: 10 });
+    expect(await ledger.get("thr_1")).toBeNull();
+  });
+
+  it("gives up on a hung write too", async () => {
+    const ledger = new AttributionLedger(hangingKv, { timeoutMs: 10 });
+    expect(await ledger.record(record({ threadId: "thr_1" }))).toEqual({ recorded: false, record: null });
+  });
+
+  it("does not cache a timed-out read", async () => {
+    let calls = 0;
+    const slowOnce: KvLike = {
+      ...hangingKv,
+      get: <T,>(_key: string): Promise<T | undefined> => {
+        calls += 1;
+        return calls === 1 ? new Promise<never>(() => {}) : Promise.resolve(undefined);
+      },
+    };
+    const ledger = new AttributionLedger(slowOnce, { timeoutMs: 10 });
+    expect(await ledger.get("thr_1")).toBeNull();
+    expect(await ledger.get("thr_1")).toBeNull();
+    expect(calls).toBe(2);
+  });
+});
+
+describe("attributeDispatch", () => {
+  const dispatchContext = {
+    thread: { id: "thr_new", parentThreadId: "thr_parent", sourceThreadId: null },
+    origin: "app" as const,
+    originPluginId: null,
+    startedOnBehalfOf: null,
+    parentThreadId: null,
+    queuedMessage: null,
+  };
+
+  it("always proceeds, and records the starter", async () => {
+    const kv = new FakeKv();
+    const ledger = new AttributionLedger(kv);
+    const logs: string[] = [];
+    const result = await attributeDispatch(dispatchContext, {
+      ledger,
+      identity: () => ({ email: "david@example.com", person: david }),
+      now: () => 4_000,
+      log: { info: (m) => logs.push(`info:${m}`), warn: (m) => logs.push(`warn:${m}`) },
+    });
+    expect(result).toEqual({ action: "proceed" });
+    expect(await ledger.get("thr_new")).toMatchObject({ starter: david, via: "browser" });
+    expect(logs.some((line) => line.startsWith("info:"))).toBe(true);
+  });
+
+  it("proceeds and warns when the ledger throws", async () => {
+    const logs: string[] = [];
+    const exploding = {
+      get: () => Promise.reject(new Error("boom")),
+      record: () => Promise.reject(new Error("boom")),
+    };
+    const result = await attributeDispatch(dispatchContext, {
+      ledger: exploding,
+      identity: () => ({ email: null, person: null }),
+      now: () => 4_000,
+      log: { info: (m) => logs.push(`info:${m}`), warn: (m) => logs.push(`warn:${m}`) },
+    });
+    expect(result).toEqual({ action: "proceed" });
+    expect(logs.join("\n")).toContain("boom");
+  });
+
+  it("proceeds when resolving the requester's identity throws", async () => {
+    const logs: string[] = [];
+    const result = await attributeDispatch(dispatchContext, {
+      ledger: new AttributionLedger(new FakeKv()),
+      identity: () => { throw new Error("no directory"); },
+      now: () => 4_000,
+      log: { info: (m) => logs.push(`info:${m}`), warn: (m) => logs.push(`warn:${m}`) },
+    });
+    expect(result).toEqual({ action: "proceed" });
+    expect(logs.join("\n")).toContain("no directory");
+  });
+
+  it("stays silent about a thread whose starter was already recorded", async () => {
+    const ledger = new AttributionLedger(new FakeKv());
+    await ledger.record(record({ threadId: "thr_new" }));
+    const logs: string[] = [];
+    await attributeDispatch(dispatchContext, {
+      ledger,
+      identity: () => ({ email: "david@example.com", person: david }),
+      now: () => 4_000,
+      log: { info: (m) => logs.push(`info:${m}`), warn: (m) => logs.push(`warn:${m}`) },
+    });
+    expect(logs).toEqual([]);
+    expect(await ledger.get("thr_new")).toMatchObject({ starter: matt });
   });
 });

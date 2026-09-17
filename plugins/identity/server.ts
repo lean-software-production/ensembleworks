@@ -2,8 +2,9 @@ import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 import {
   AttributionLedger,
-  decideAttribution,
-  factsFromDispatch,
+  attributeDispatch,
+  starterSummarySchema,
+  type StarterRecord,
 } from "./attribution.js";
 import { identityFor, parseDirectory, type Person } from "./people.js";
 import {
@@ -24,11 +25,11 @@ const location = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("project"), projectId: z.string().min(1).max(200) }).strict(),
   z.object({ kind: z.literal("elsewhere") }).strict(),
 ]);
-const personSummary = z.object({
-  person: z.string(),
-  displayName: z.string(),
-  github: z.string(),
-}).strict();
+/**
+ * Shared with attribution rather than re-declared: the two used to be identical copies,
+ * and a drift between them would have surfaced only as a runtime validation throw.
+ */
+const personSummary = starterSummarySchema;
 const presentPerson = personSummary.extend({ typing: z.boolean() }).strict();
 /**
  * `viewers` and `typing` count distinct viewer keys (person ?? viewerId), so one person
@@ -61,6 +62,22 @@ export type PresentPerson = z.infer<typeof presentPerson>;
 export type ThreadPresence = z.infer<typeof threadPresence>;
 export type WhoAmI = z.infer<typeof whoami>;
 export type ThreadStarter = z.infer<typeof threadStarter>;
+
+/**
+ * The public view of a stored starter: the contract's fields only (the recorded email is
+ * deliberately private), validated against the very schema the RPC contract publishes so
+ * the HTTP arm and the RPC arm can never answer differently.
+ */
+export function publicStarter(record: StarterRecord | null): ThreadStarter {
+  if (record === null) return null;
+  return threadStarter.parse({
+    threadId: record.threadId,
+    starter: record.starter,
+    via: record.via,
+    inheritedFrom: record.inheritedFrom,
+    recordedAt: record.recordedAt,
+  });
+}
 
 export const rpcContract = defineRpcContract({
   identity_whoami: {
@@ -323,16 +340,6 @@ export default async function plugin(bb: BbPluginApi) {
 
   // ── Attribution (step 3): observe and record who started each thread. ─────────────
   const ledger = new AttributionLedger(bb.storage.kv);
-  const publicStarter = (record: Awaited<ReturnType<AttributionLedger["get"]>>): ThreadStarter =>
-    record === null
-      ? null
-      : {
-        threadId: record.threadId,
-        starter: record.starter,
-        via: record.via,
-        inheritedFrom: record.inheritedFrom,
-        recordedAt: record.recordedAt,
-      };
 
   /**
    * The self-test's own route. It reports the email the ASYNC CONTEXT holds — not the
@@ -348,27 +355,15 @@ export default async function plugin(bb: BbPluginApi) {
     return c.json(selfTest ?? { ok: false, detail: "the self-test has not finished yet" });
   }, { auth: "local" });
 
-  bb.experimental_hooks.on("message.dispatch", async (context) => {
-    // NEVER rejects and never throws: hooks are fail-closed, and attribution only
-    // observes. Step 5's guardrails are a later, separate change.
-    try {
-      const facts = factsFromDispatch(context, whoamiPerson(), Date.now());
-      const inheritable = new Map(await Promise.all(
-        facts.lineage.map(async (id) => [id, await ledger.get(id)] as const),
-      ));
-      const decided = decideAttribution(facts, (id) => inheritable.get(id) ?? null);
-      const outcome = await ledger.record(decided);
-      if (outcome.recorded) {
-        bb.log.info(
-          `identity: thread ${decided.threadId} started by ${decided.starter?.person ?? "unknown"} `
-          + `(via ${decided.via}${decided.inheritedFrom ? `, inherited from ${decided.inheritedFrom}` : ""})`,
-        );
-      }
-    } catch (error) {
-      bb.log.warn(`identity: could not record attribution: ${(error as Error).message}`);
-    }
-    return { action: "proceed" } as const;
-  });
+  // Observe-only, and bounded: `attributeDispatch` always proceeds, never throws, and the
+  // ledger's own kv timeout caps how long it can hold a dispatch up. See its unit tests.
+  bb.experimental_hooks.on("message.dispatch", (context) =>
+    attributeDispatch(context, {
+      ledger,
+      identity: whoamiPerson,
+      now: () => Date.now(),
+      log: { info: (message) => bb.log.info(message), warn: (message) => bb.log.warn(message) },
+    }));
 
   bb.http.route("GET", "/thread-starter", async (c) => {
     const wanted = threadId.safeParse(c.req.query("threadId"));
