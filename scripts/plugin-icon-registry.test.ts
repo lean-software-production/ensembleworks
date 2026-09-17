@@ -22,6 +22,14 @@
 // indistinguishable in the rail. An icon that does not identify its plugin is
 // not doing its job.
 //
+// WHY DUPLICATES ARE KEYED ON ARTWORK, NOT ON THE MANIFEST STRING. Once the
+// suite moved to the shared "Stage" icon system, all six plugins declare the
+// byte-identical string "./assets/icon.svg" while shipping six different
+// drawings. Comparing the declared string would flag all six as duplicates;
+// comparing the resolved artwork is what the check actually means, so a
+// plugin-relative icon is keyed on the SHA-256 of its file. Copy another
+// plugin's SVG verbatim and this still catches you.
+//
 // REGENERATING scripts/bb-host-glyphs.json AFTER A BB UPGRADE. The list is
 // vendored because the repo cannot query a running bb server at test time, and
 // a stale list is still far better than no check (it can only produce a false
@@ -32,6 +40,7 @@
 // same file (its artwork lazy-loads from icon-extended-*.js). Union the two.
 import assert from 'node:assert/strict'
 import { readdirSync, readFileSync, existsSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 
 const PLUGINS = 'plugins'
@@ -59,13 +68,25 @@ for (const dir of readdirSync(PLUGINS, { withFileTypes: true })) {
     continue
   }
 
+  let key = icon
   if (icon.startsWith('./')) {
     // Plugin-relative artwork (Canvas ships ./assets/icon.svg). The host
     // resolves it as a file, so the only thing to check is that it is there —
     // a missing file is the same silent-fallback failure by another route.
     const artwork = join(PLUGINS, dir.name, icon.slice(2))
-    if (!existsSync(artwork)) {
+    if (!icon.toLowerCase().endsWith('.svg')) {
+      // BB's own manifest schema rejects this, but it fails at plugin-load
+      // time on someone's machine rather than here.
+      failures.push(`${manifestPath}: plugin-owned bb.branding.icon must be an .svg file, got ${icon}`)
+    } else if (!existsSync(artwork)) {
       failures.push(`${manifestPath}: bb.branding.icon points at ${icon}, which does not exist`)
+    } else {
+      // The host renders plugin SVGs as a CSS mask filled with currentColor
+      // (backgroundColor: currentColor + maskImage: url(...)), so only the
+      // alpha channel survives. Artwork that paints itself with fills and no
+      // strokes still works, but any COLOUR in the file is silently discarded
+      // -- worth knowing before someone tries to brand one of these.
+      key = `sha256:${createHash('sha256').update(readFileSync(artwork)).digest('hex')}`
     }
   } else if (!known.has(icon)) {
     const hint = nearest(icon)
@@ -76,16 +97,17 @@ for (const dir of readdirSync(PLUGINS, { withFileTypes: true })) {
     )
   }
 
-  const owners = declared.get(icon) ?? []
+  const owners = declared.get(key) ?? []
   owners.push(dir.name)
-  declared.set(icon, owners)
+  declared.set(key, owners)
 }
 
-for (const [icon, owners] of declared) {
+for (const [key, owners] of declared) {
   if (owners.length > 1) {
+    const what = key.startsWith('sha256:') ? 'identical icon artwork' : `the glyph "${key}"`
     failures.push(
-      `bb.branding.icon "${icon}" is declared by ${owners.length} plugins ` +
-        `(${owners.join(', ')}) — they are indistinguishable in the sidebar. Give each its own.`,
+      `${owners.length} plugins share ${what} (${owners.join(', ')}) — they are ` +
+        `indistinguishable in the sidebar. Give each its own.`,
     )
   }
 }
