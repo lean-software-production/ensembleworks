@@ -48,7 +48,8 @@ an access control.*
    dispatch; lineage inheritance for spawns and forks.
 4. **Ownership UI (option B).** Row glyph (presence wins while someone is typing), the
    header chip, the "Starting as David" banner in the new-thread composer, and an
-   "unknown" state that looks neutral.
+   "unknown" state that looks neutral. A host that matches neither a person nor
+   `teamMachines` renders as **"unclaimed"**, distinct from "team" (answer 6).
 5. **Guardrail.** Reject an inline start whose starter is a known person on another known
    person's machine; the team machine is always allowed for people. Also reject a follow-up
    from anyone but the starter, and an automation that isn't on the team machine (see the answers below). Ship behind a
@@ -84,9 +85,43 @@ an access control.*
 
 5. **Team machine = `ew-lsp-001-main`**, running as `ensembleworks-agent`. Put it in the
    `teamMachines` setting.
-6. **Hosts that don't match a person or the team list** also run as `ensembleworks-agent`
-   (as far as Identity is concerned they are treated like the team machine: shown as
-   "shared", no per-person restriction). To confirm when such a host actually shows up.
+6. **Hosts that don't match a person or the team list run as `ensembleworks-agent`, and
+   Identity shows them as "unclaimed" — not as the team machine** (decided 2026-09-17).
+
+   *The Linux user.* `ensembleworks-agent` is already the answer in infra:
+   `roles/ew_bb/defaults/main.yml` sets `ew_bb_machine_user: ensembleworks-agent`, and
+   `ew_bb_machines[].user` is optional, so an ansible-declared machine that names no owner
+   already runs as it. Person machines are different by construction
+   (`roles/ew_bb/tasks/people.yml`: the person's own locked, unprivileged account, 0700
+   home, no sudo/docker/ssh). Options weighed and not taken:
+   - a separate shared bb user (`bb-shared`) — keeps bb threads out of the canvas-terminal
+     home and off the GitHub-token grant, but needs a new bootstrap account and duplicate
+     credential seeding for a class with no instances today;
+   - a per-host `bb-<machine>` user — best isolation, and the ansible loop already supports
+     per-entry `user:`, but N accounts and N credential seedings for hosts that are mostly
+     ephemeral;
+   - refusing to run threads on any machine that declares neither owner nor team — forces
+     the question at provisioning, but makes an ad-hoc laptop daemon unusable until declared.
+
+   Either of the first two stays a one-line `user:` change per machine entry, with no
+   Identity code change, if the trade-off below ever bites.
+
+   *Caveat, accepted.* On prod boxes `ensembleworks-agent` is also the canvas-terminal
+   sandbox user (README, "Terminal sandbox user"): its home holds `AGENTS.md` and
+   `.config/ensembleworks/term.env` (API keys), and it can mint `ensembleworks[bot]` tokens
+   through the `ensembleworks-gh-token` sudo wrapper. So a thread on an unclaimed host there
+   inherits all of that, and shares one home with the team machine's threads and every
+   canvas terminal. Acceptable under the guardrail-not-access-control model; revisit if
+   unclaimed hosts ever become long-lived.
+
+   *What Identity does.* Do **not** fold an unmapped host into "shared/allowed" silently.
+   Show it as **unclaimed**, a state distinct from "team"; allow starts (the guardrail exists
+   to stop someone starting on another *person's* machine, which this isn't); and record the
+   `hostId` on first sighting next to the `hostId → person` pin. That is what catches the
+   real mistake mode — a typo'd or freshly renamed person machine (`ew-lap-002-mat`) would
+   otherwise quietly become a de-facto shared box. Machines joined from someone's laptop land
+   here too: they run as whoever launched them and Identity cannot know that, so "unclaimed"
+   is the truthful label.
 7. **Block thread interactions that carry no identity, where possible.** See "No-identity
    policy" below for what that can and can't cover.
 
@@ -553,7 +588,7 @@ is still step 2 of the recommended approach.
 2. **Automations.** Who owns one? bb records no creator. Restrict automations to the team
    machine, or attribute them when created through a plugin-owned flow?
 3. **Team machine rules.** pi-only enforced by `providerId`? Who can start there? Anyone?
-4. **Unknown hosts** (the `ensembleworks-agent` machines, laptops that get enrolled). Allow, deny, or admin only?
+4. ~~**Unknown hosts** (the `ensembleworks-agent` machines, laptops that get enrolled). Allow, deny, or admin only?~~ **Answered 2026-09-17: run as `ensembleworks-agent`, shown as "unclaimed", starts allowed, hostId recorded on first sighting — see answer 6 above.**
 5. **Fail-closed?** If the plugin app isn't loaded in a stale tab, there's no intent. Reject
    (safe, confusing) or allow and flag (friendly, leaky)?
 6. **Threat model.** Is a guardrail enough for four trusted people, or is the gate from step 2
