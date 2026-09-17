@@ -73,16 +73,66 @@ an access control.*
    same Linux user as the infra repo's `ew_bb_machine_user`. It shows as "team", and the header
    reads "Started by David · runs as ensembleworks-agent on <team machine>". Rule 1 still
    applies: a team-machine thread is read-only to everyone except its starter.
-   To confirm: is the existing `ew-lsp-001-main` machine the team machine, or will
-   the planned pi-only box be?
+   **Confirmed 2026-09-17: `ew-lsp-001-main` is the shared team machine**, running as
+   `ensembleworks-agent`.
 4. **Identity email = the email on the person's GitHub account** (Access uses the GitHub IdP).
    The directory becomes `person → {github, email, displayName}`. Extend
    `ew_bb_people` with `github:` (Trevoke's capitalisation) and `email:`, and render
    it into the Identity `directory` setting.
 
-Remaining unknowns: which Linux user runs unknown hosts (laptops, `ensembleworks-agent`
-machines other than the team one), and whether follow-ups sent as `bb thread send` from a
-person's own shell (no header, so no identity) are allowed. Default: allowed, starter unknown.
+### Answers (2026-09-17)
+
+5. **Team machine = `ew-lsp-001-main`**, running as `ensembleworks-agent`. Put it in the
+   `teamMachines` setting.
+6. **Hosts that don't match a person or the team list** also run as `ensembleworks-agent`
+   (as far as Identity is concerned they are treated like the team machine: shown as
+   "shared", no per-person restriction). To confirm when such a host actually shows up.
+7. **Block thread interactions that carry no identity, where possible.** See "No-identity
+   policy" below for what that can and can't cover.
+
+### No-identity policy (design, 2026-09-17; not built)
+
+Goal: an interaction that can't be tied to a person is refused, instead of running as
+"unknown". What "identity" means for each kind of caller:
+
+| Caller | How Identity knows who it is | Verdict when unknown |
+|---|---|---|
+| Browser through Access | email header (ALS), resolved against the directory | refuse (email missing or not in the directory) |
+| Agent inside a thread (`bb thread spawn --parent-self`, `bb thread tell` from a thread, workflows, subagent threads) | **lineage**: `parentThreadId`, `sourceThreadId`, `startedOnBehalfOf.senderThreadId` or the send's `senderThreadId` → that thread's recorded starter | refuse if the linked thread has no recorded starter |
+| Person's own shell or `curl` with no Access header and no lineage | nothing | **refuse** (this is the case you asked to block) |
+| Queued/scheduled message draining later (no request) | sender recorded on `message.queued` (runs in the request context, S7) | refuse if nothing was recorded |
+| Automations plugin | origin `plugin` + automations plugin id | allowed only on the team machine (answer 2); starter = "automation" |
+| Other bb-internal plugin dispatches (provider-retry's `threads.retry`, scheduled send, side-chat…) | `originPluginId`, or a retry of a thread whose starter is recorded | allow when the thread already has a recorded starter; spike each plugin before enforcing |
+
+What it **can** enforce: everything that becomes an agent turn, because it all passes
+`message.dispatch` (creates, follow-ups, steers, forks, spawns, drains, retries), except
+Send-now.
+
+What it **can't** enforce from the hook (accepted gaps, same as before):
+- **Send-now** skips the hook. Mitigation: `message.dispatched` runs in the requester's
+  context, so a Send-now with no identity (or by a non-starter) can be caught afterwards:
+  stop the turn and post a notice.
+- **Unhooked routes**: terminals, Stop, Archive, answering approvals, host routes. The
+  request-context patch *could* refuse these with a 403 when the request has no identity,
+  but agents' own CLI calls (`bb thread stop --self`, reading timelines) also arrive with no
+  header and no thread id in the request, so a blanket block would break agents. Leave these
+  open unless the CLI can be made to send a per-machine header (`BB_SERVER_HEADERS`, noted
+  in S7).
+
+Rollout details:
+- Setting `requireIdentity` (default **off**), turned on for ew-lsp-001 only. A laptop bb
+  with no Access has no identity at all; there, leave it off or set `fallbackEmail`.
+- Refusal text names the reason and the fix, e.g. "This message has no identity: open bb
+  through https://bb-ew-lsp-001.ensembleworks.dev, or send from a thread
+  (`bb thread spawn --parent-self`)."
+- Startup race: requests during plugin load have no identity. With `requireIdentity` on,
+  they'd be refused; that's acceptable (rare, retryable) but the message should say "try
+  again".
+- **Spike before enforcing (S9):** on a throwaway bb, list the `origin`, `originPluginId`,
+  lineage fields and ALS store for each built-in path (automations, workflows,
+  provider-retry, scheduled-send, side-chat, fork from the UI, `bb thread spawn` with and
+  without `--parent-self`, `bb thread tell` from a thread). Check that nothing
+  legitimate arrives identity-less before turning the policy on.
 
 ### S7 result (2026-09-16): the monkey patch works in real bb 0.43.0
 
