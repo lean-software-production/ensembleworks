@@ -10,7 +10,7 @@
     "name": "Fabro",
     "description": "Run project-owned Fabro workflows with live DAG cards and thread-reviewed delivery.",
     "branding": {
-      "icon": "Workflow"
+      "icon": "Layers"
     },
     "server": "./server.ts",
     "host": "./host.ts",

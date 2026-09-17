@@ -13,7 +13,7 @@
     "name": "Huddle",
     "description": "Join a LiveKit huddle from any BB thread.",
     "branding": {
-      "icon": "AudioWaveform"
+      "icon": "Mic"
     },
     "server": "./server.ts",
     "app": "./app.tsx"
