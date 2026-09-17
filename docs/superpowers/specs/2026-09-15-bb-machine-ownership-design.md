@@ -1,6 +1,7 @@
 # bb machine ownership: restrict where people start threads, show who owns them
 
-Status: steps 1-2 built, merged (PR #101) and deployed to ew-lsp-001; steps 3-5 designed only. Date: 2026-09-15, updated 2026-09-17.
+Status: steps 1-2 built, merged (PR #101) and deployed to ew-lsp-001; step 3 (attribution) built on
+`feature/identity-attribution`; steps 4-5 designed only. Date: 2026-09-15, updated 2026-09-17.
 Scope: the shared bb server `bb-ew-lsp-001` (bb-app 0.43.0). Per-person machines are
 named `<box>-<person>`; a team machine is planned.
 
@@ -621,6 +622,87 @@ is still step 2 of the recommended approach.
 7. **Emails.** Which address does Access actually assert per person (GitHub IdP primary
    email)? That has to be added to `ew_bb_people`.
 8. **Admin override.** Does David (or an ops role) get a break-glass path, and how is it recorded?
+
+### Step 3 built (2026-09-17): attribution, with a boot self-test
+
+Landed on `feature/identity-attribution` (`plugins/identity/attribution.ts`, plus the
+self-test in `request-context.ts` and the wiring in `server.ts`). Step 3 of the revised
+plan is done; steps 4 and 5 are untouched, and **nothing in this change can reject a
+dispatch** — the hook always returns `proceed` and swallows its own errors.
+
+**What it does.**
+- `message.dispatch` records `threadId -> {starter, email, via, origin, originPluginId,
+  inheritedFrom, recordedAt}` in `bb.storage.kv` on the FIRST dispatch for a thread.
+  First write wins, so a follow-up by someone else never takes a thread over.
+- `via` is `browser` (identified, `origin: app`/none), `agent` (identified `cli`/`sdk`,
+  or a lineage inheritance), `plugin` (plugin origin, no identity, no lineage) or
+  `unknown`. An email that matches nobody is `unknown` and is still recorded, never an
+  error.
+- Lineage priority: `startedOnBehalfOf.senderThreadId`, `queuedMessage.senderThreadId`,
+  `context.parentThreadId ?? thread.parentThreadId`, `thread.sourceThreadId`. A linked
+  thread whose own starter is unknown is skipped.
+- Read path: RPC `identity_thread_starter` and `GET …/http/thread-starter?threadId=`,
+  both returning `{threadId, starter, via, inheritedFrom, recordedAt}` or `null`. The
+  recorded email is deliberately NOT exposed on the read path; only the resolved person.
+- **Boot self-test:** the prototype's live `emit` is checked for Identity's own patch
+  marker, then one real request is driven through bb's server to
+  `GET …/http/request-context-probe`, whose handler reports the email from the ASYNC
+  CONTEXT rather than the header. Verdict logged, and served by
+  `GET …/http/request-context-self-test`. It never restores `emit` (S7 lesson 1), and a
+  failure only degrades Identity to "no identity".
+- **Storage policy, stated:** one ~200-byte record per thread plus an insertion-ordered
+  index, capped at 2000 threads (`MAX_STARTER_RECORDS`); past the cap the oldest are
+  deleted and read back as `null`. Attribution is a guardrail aid, not an audit log, and
+  the cap keeps the index row far inside kv's 256KB per-value limit.
+
+**SDK surfaces verified against `@get-bb/plugin-sdk` 0.4.84 `.d.ts` (not taken on trust).**
+- `bb.experimental_hooks.on("message.dispatch", handler)` — the only hook
+  (`PluginHookSignatures`, L19084). Confirmed fail-closed: a throw or >10s fails the
+  attempt, and the whole pass runs under one server-wide lock — which is what makes
+  first-write-wins safe against two concurrent first dispatches.
+- `MessageDispatchHookContext` (L19016) carries `thread`, `origin`, `originPluginId`,
+  `startedOnBehalfOf`, `parentThreadId`, `queuedMessage`. **Correction to this note:**
+  `sourceThreadId` is NOT a hook-context field — it lives on `context.thread`
+  (`threadResponseSchema`, L12781), as does a second `parentThreadId`. The
+  "No-identity policy" table's lineage list should be read that way. A queued row's
+  `senderThreadId` is on `threadQueuedMessageSchema` (L4140).
+- `StartedOnBehalfOf` is `{initiator: "agent"|"system", senderThreadId: string}` (L11241).
+- `ThreadCreateOrigin` is exactly `app | cli | plugin | sdk` (L11210); the hook context's
+  `origin` is nullable for core-driven sends.
+- `bb.storage.kv` is `get/set/delete/list(prefix)` with ≤256KB values (L18606).
+- `bb.server.loopbackBaseUrl` (L19990) is bind-gated and throws before the server
+  listens, so the self-test runs on a delayed timer with retries.
+
+**Runtime probe (throwaway bb-app 0.43.0, temp HOME, ports 39886/39887, 2026-09-17).**
+All confirmed against real bb, not just unit tests:
+- self-test: `{"ok":true,"detail":"request context is live (probe saw its own tagged
+  email, nested in the loading request's context)"}`;
+- `POST /api/v1/threads` with `cf-access-authenticated-user-email: david@example.com`
+  → `starter: mrdavidlaing, via: browser`;
+- the same create with no header and no lineage → `starter: null, via: unknown`;
+- a header-less `origin: cli, originKind: fork, sourceThreadId: <david's thread>` create
+  → `starter: mrdavidlaing, via: agent, inheritedFrom: <david's thread>`;
+- a follow-up `POST /threads/:id/send` from `stranger@example.com` did NOT rewrite the
+  starter (first write wins);
+- both read paths answer, `null` for an unrecorded thread, 400 for a missing `threadId`.
+- Recipe corrections for the next spike: `POST /api/v1/threads` takes `input: [blocks]`
+  (not `message`), requires `origin`, and `sourceThreadId` requires `originKind`;
+  `POST /threads/:id/send` requires a `mode`; `startedOnBehalfOf` requires a
+  `sourceThreadId` or `parentThreadId` alongside it. `bb plugin logs identity` is where
+  `bb.log` output lands — not the server log.
+
+**Wrong belief corrected, found only by the probe.** The first cut of the self-test
+refused to run when it was already inside a request context. In real bb the plugin
+factory — and any timer it schedules — runs inside the async context of the request that
+loaded the plugin (`bb plugin reload` is an HTTP request), so the self-test failed on
+every single load. Nesting is now noted in the verdict's detail instead of failing it;
+the verdict still comes from the probe's own separate request. There is a regression test
+for it in `request-context.test.ts`.
+
+**Not done here (deliberately):** the ownership UI (step 4) and the `restrictStarts` /
+`requireIdentity` guardrails (step 5). Send-now still skips the hook, so a thread whose
+first message goes out through Send-now is recorded on its next hooked dispatch, or not
+at all — unchanged from S7's accepted gap, and worth naming in step 5's design.
 
 ## Sources
 

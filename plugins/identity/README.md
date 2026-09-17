@@ -33,6 +33,50 @@ typing pulses carry a person when one is known, and stay anonymous otherwise.
 A request that arrives while plugins are still loading carries no context and is
 treated as anonymous.
 
+### Boot self-test
+
+The request context is a monkey patch of `http.Server.prototype.emit`, installed
+once per process and never removed, so a BB upgrade could break it silently. At
+load Identity therefore self-tests it: it checks the live `emit` is still its own
+patch, then drives one request through BB's own server carrying a tagged email and
+asserts the handler read that email back out of the *async context*. The verdict is
+logged (`bb plugin logs identity`) and served by
+`GET /api/v1/plugins/identity/http/request-context-self-test`.
+
+A failure degrades Identity to "no identity" — presence stays anonymous and
+attribution records `unknown`. Nothing is ever blocked, and the patch is never
+restored: BB disposes the old plugin generation *after* the new one loads, so
+restoring `emit` would remove the live patch.
+
+## Attribution
+
+Identity records **who started each thread**. On the first `message.dispatch` for a
+thread it writes `threadId -> { starter, via }` to its own KV storage:
+
+- `via: browser` — the dispatch's request carried an Access email that matched a
+  person in the directory (`origin: app`, or none);
+- `via: agent` — the same, from `origin: cli`/`sdk`; or a dispatch with no identity
+  of its own that inherited a **lineage** thread's starter
+  (`startedOnBehalfOf.senderThreadId`, a queued message's `senderThreadId`, the hook's
+  or the thread's `parentThreadId`, or a fork's `sourceThreadId`, in that order);
+- `via: plugin` — a plugin-origin dispatch (an automation, a scheduled send) with no
+  identity and no lineage;
+- `via: unknown` — nothing identified it: a header-less shell, a drain, an email that
+  matches nobody, or a request that beat the patch during plugin load.
+
+**First write wins**: a thread's starter is never rewritten by a later dispatch, so a
+follow-up from someone else cannot take a thread over. The hook only observes — it
+always proceeds, never rejects, and swallows its own errors, because BB hooks are
+fail-closed and Identity must never be able to block a message.
+
+Read it back with `identity_thread_starter` (RPC) or
+`GET /api/v1/plugins/identity/http/thread-starter?threadId=<id>`, both of which return
+`{ threadId, starter, via, inheritedFrom, recordedAt }` or `null`.
+
+**Storage policy.** One small record per thread (~200 bytes) plus an insertion-ordered
+index, capped at 2000 threads; past the cap the oldest records are deleted and read
+back as `null`. Attribution is a guardrail aid, not an audit log.
+
 ## Settings
 
 ### `directory`
