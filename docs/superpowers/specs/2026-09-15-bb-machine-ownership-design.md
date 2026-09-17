@@ -1,6 +1,6 @@
 # bb machine ownership: restrict where people start threads, show who owns them
 
-Status: investigation, nothing built. Date: 2026-09-15.
+Status: steps 1-2 built, merged (PR #101) and deployed to ew-lsp-001; steps 3-5 designed only. Date: 2026-09-15, updated 2026-09-17.
 Scope: the shared bb server `bb-ew-lsp-001` (bb-app 0.43.0). Per-person machines are
 named `<box>-<person>`; a team machine is planned.
 
@@ -196,6 +196,13 @@ header. Nothing touched the shared server.
   requests, which is documented Access behaviour. **Final check once Identity is deployed:**
   open `https://bb-ew-lsp-001.ensembleworks.dev/api/v1/plugins/identity/http/whoami` in a
   browser; it should name you.
+- **Confirmed on ew-lsp-001 (2026-09-17), S2 closed.** After the merge of PR #101 and the
+  deploy, that URL returns
+  `{"email":"david@davidlaing.com","person":{"person":"mrdavidlaing","displayName":"David Laing","github":"mrdavidlaing"}}`.
+  So Cloudflare does inject `Cf-Access-Authenticated-User-Email` on origin requests, the
+  `auth: "local"` origin check accepts Access traffic through the real tunnel, and the
+  directory matches a secondary email (`david@davidlaing.com`, not the primary
+  `mrdavidlaing@gmail.com`) to the right person.
 
 ### S3-lite result (2026-09-17): the new-thread composer can't see the chosen machine
 
@@ -214,7 +221,8 @@ only *seeds* those choices for a plugin-rendered composer and doesn't report the
 
 Not verified at runtime; this is a reading of the types.
 
-Spikes S7 (including follow-ups), S2 and S3-lite are done (results above). Remaining S2 check: open `/api/v1/plugins/identity/http/whoami` through Access once Identity is deployed.
+Spikes S7 (including follow-ups), S2 and S3-lite are done (results above); S2's through-Access
+check was confirmed on ew-lsp-001 on 2026-09-17, so steps 1 and 2 are fully verified in prod.
 Open questions 1, 2, 3 and 7 are answered just below.
 
 ## TL;DR
