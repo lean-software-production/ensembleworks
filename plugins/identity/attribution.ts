@@ -1,4 +1,8 @@
 import { z } from "zod";
+import { KV_TIMEOUT_MS, TIMED_OUT, withTimeout, type KvLike } from "./kv.js";
+
+export type { KvLike } from "./kv.js";
+export { KV_TIMEOUT_MS } from "./kv.js";
 
 /**
  * Attribution: who started a thread, and how the dispatch that started it reached bb.
@@ -171,14 +175,6 @@ export function factsFromDispatch(
   };
 }
 
-/** The slice of `bb.storage.kv` this ledger uses. */
-export type KvLike = {
-  get<T>(key: string): Promise<T | undefined>;
-  set(key: string, value: unknown): Promise<void>;
-  delete(key: string): Promise<void>;
-  list(prefix?: string): Promise<string[]>;
-};
-
 const KEY_PREFIX = "identity/starter/v1/thread/";
 const INDEX_KEY = "identity/starter/v1/index";
 
@@ -200,33 +196,6 @@ export const MAX_STARTER_RECORDS = 2_000;
  * first; the cache only ever saves a kv round-trip, so dropping one is free.
  */
 export const MAX_CACHED_STARTERS = 256;
-
-/**
- * How long any one kv call may take before the ledger gives up and answers "no record".
- *
- * The dispatch hook is on bb's critical path and an SDK hook that exceeds 10s fails the
- * attempt, so a wedged kv is the one way this observe-only code could still affect a
- * dispatch. Lineage reads run in parallel, so the whole hook's storage budget is about
- * two of these (the lineage reads, then the write), well inside the 10s ceiling.
- */
-export const KV_TIMEOUT_MS = 1_000;
-
-const TIMED_OUT = Symbol("kv-timeout");
-
-/** Resolve `work` or, after `ms`, the `TIMED_OUT` sentinel. Never leaves a timer armed. */
-async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<typeof TIMED_OUT>((resolve) => {
-        timer = setTimeout(() => resolve(TIMED_OUT), ms);
-      }),
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
 
 export class AttributionLedger {
   readonly #kv: KvLike;
