@@ -623,6 +623,26 @@ is still step 2 of the recommended approach.
    email)? That has to be added to `ew_bb_people`.
 8. **Admin override.** Does David (or an ops role) get a break-glass path, and how is it recorded?
 
+### Throwaway-bb recipe: two corrections (2026-09-18)
+
+Both of these cost an agent-run each, because the recipe as written says the opposite.
+
+- **Leave `http_proxy` / `https_proxy` SET.** The older advice ("unset the `*_proxy` vars
+  before calling the `bb` CLI") is wrong for installs: `bb plugin install` makes the
+  server npm-install esbuild and tailwind, and without the proxy that fetch hangs
+  forever with no error. Keep the proxy env vars in place for the whole session.
+- **A fresh `--data-dir` has no connected host for 20-40 seconds.** Anything needing a
+  host (creating a project with `source: {hostId, path, type: "local_path"}`, and so any
+  thread at all) fails until the local host daemon has enrolled and connected. Poll
+  `GET /api/v1/hosts` until one reports connected instead of sleeping a fixed amount.
+
+Still true from the original recipe: `bb-app`, never `bb-server`; Node >= 22.19; one
+script per Bash call (start, probe, stop); `kill -- -$PGID`, never `pkill -f`; plugin
+output is read with `bb plugin logs <id>`, not from the server log; and a temp `HOME`
+has no authenticated provider, so forks and real turns fail
+(`fork_source_session_unavailable`, `internal_error`) — report that rather than faking
+a result.
+
 ### Step 3 built (2026-09-17): attribution, with a boot self-test
 
 Landed on `feature/identity-attribution` (`plugins/identity/attribution.ts`, plus the
@@ -721,6 +741,32 @@ at all — unchanged from S7's accepted gap, and worth naming in step 5's design
 - Infra: `lean-software-production/infrastructure` `inventory/group_vars/ew.yml`
   (`ew_bb_people`), `roles/ew_bb/defaults/main.yml` (loopback bind, tailnet proxy, "bb has no auth").
 - Reusable verifier: `server/src/access-identity.ts`.
+
+### Step 3 hardened (2026-09-18): the validator's findings closed
+
+A validation pass on step 3 passed it with nothing blocking, but left five notes. All are
+now closed, on the same branch:
+
+- **The read-through cache is bounded separately from storage** (`MAX_CACHED_STARTERS`,
+  256, oldest-first). The storage cap never bounded it: the read path
+  (`identity_thread_starter`, `GET /thread-starter`) caches every threadId it is *asked*
+  about, misses included, so a caller could grow it without ever writing anything.
+- **Every kv call the ledger makes is time-bounded** (`KV_TIMEOUT_MS`, 1s). An SDK hook
+  that exceeds 10s fails the attempt, so a wedged kv was the one remaining way this
+  observe-only code could still affect a dispatch. Lineage reads run in parallel, so the
+  hook's whole storage budget is about two timeouts. A timed-out read is a failure, not
+  an answer: it is never cached.
+- **The hook body is `attributeDispatch`, a plain function with its contract under test**
+  — always `{action: "proceed"}`, never throws, warns instead. Tested for a throwing
+  ledger, a throwing identity lookup and an already-recorded thread.
+- **`publicStarter` validates against the schema the RPC contract publishes**, so the
+  HTTP arm and the RPC arm cannot answer differently; it is exported and unit-tested.
+- **`personSummary` and `starterSummarySchema` were identical copies**; `server.ts` now
+  imports the one in `attribution.ts`, so they cannot drift into a runtime throw.
+- **The tests are typechecked** via a sibling `tsconfig.test.json` (the main include list
+  deliberately lists source files only). It is separate because the tests' vitest types
+  reach happy-dom's `.d.ts` through the *parent monorepo's* hoisted `node_modules`, which
+  this isolated package does not own — `skipLibCheck` is relaxed there and only there.
 
 ### S9 result (2026-09-18): what identity each built-in dispatch path actually carries
 
