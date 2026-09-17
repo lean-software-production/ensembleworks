@@ -104,9 +104,11 @@ export async function selfTestRequestContext(
   if (!requestContextPatchIsLive()) {
     return { ok: false, detail: "the live http.Server.prototype.emit is not Identity's patch" };
   }
-  if (context.current() !== undefined) {
-    return { ok: false, detail: "the self-test itself already runs inside a request context" };
-  }
+  // The plugin factory — and any timer it schedules — runs inside the async context of
+  // the request that loaded the plugin (`bb plugin reload` is an HTTP request), so this
+  // is normal and must NOT fail the test. It is only worth naming in the detail: the
+  // verdict itself comes from the probe's own, separate request.
+  const nested = context.current() !== undefined ? ", nested in the loading request's context" : "";
   let seen: unknown;
   try {
     seen = await options.probe({ [ACCESS_EMAIL_HEADER]: SELF_TEST_EMAIL });
@@ -117,5 +119,5 @@ export async function selfTestRequestContext(
   if (email !== SELF_TEST_EMAIL) {
     return { ok: false, detail: `the probe's request context had email ${JSON.stringify(email ?? null)}` };
   }
-  return { ok: true, detail: "request context is live (probe saw its own tagged email)" };
+  return { ok: true, detail: `request context is live (probe saw its own tagged email${nested})` };
 }

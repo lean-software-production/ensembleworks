@@ -343,6 +343,11 @@ export default async function plugin(bb: BbPluginApi) {
     return c.json({ email: requestContext.current()?.email ?? null });
   }, { auth: "local" });
 
+  /** The boot self-test's verdict, so an operator can read it without digging in logs. */
+  bb.http.route("GET", "/request-context-self-test", (c) => {
+    return c.json(selfTest ?? { ok: false, detail: "the self-test has not finished yet" });
+  }, { auth: "local" });
+
   bb.experimental_hooks.on("message.dispatch", async (context) => {
     // NEVER rejects and never throws: hooks are fail-closed, and attribution only
     // observes. Step 5's guardrails are a later, separate change.

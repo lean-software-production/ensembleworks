@@ -1,7 +1,7 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { installRequestContext, selfTestRequestContext } from "./request-context.js";
+import { installRequestContext, selfTestRequestContext, type SelfTestResult } from "./request-context.js";
 
 const context = installRequestContext();
 let server: http.Server;
@@ -99,6 +99,31 @@ describe("selfTestRequestContext", () => {
     const result = await selfTestRequestContext(context, { probe: () => Promise.resolve({ email: "someone@else" }) });
     expect(result.ok).toBe(false);
     expect(result.detail).toMatch(/someone@else/);
+  });
+
+  it("passes when it is itself called inside a request context (a plugin reload is one)", async () => {
+    // Found in real bb 0.43.0: the factory and any timer it schedules run inside the
+    // async context of the request that loaded the plugin (`bb plugin reload`), so a
+    // self-test that refuses to run there never runs at all.
+    gate = Promise.resolve();
+    const inside = await new Promise<SelfTestResult>((resolve, reject) => {
+      const server = http.createServer(async (_req, res) => {
+        try {
+          resolve(await selfTestRequestContext(context, { probe: (headers) => get("/self-test", headers) }));
+        } catch (error) {
+          reject(error as Error);
+        }
+        res.end("ok");
+      });
+      server.listen(0, "127.0.0.1", () => {
+        const port = (server.address() as AddressInfo).port;
+        void fetch(`http://127.0.0.1:${port}/reload`, {
+          headers: { "cf-access-authenticated-user-email": "loader@example.com" },
+        }).finally(() => server.close());
+      });
+    });
+    expect(inside.ok).toBe(true);
+    expect(inside.detail).toMatch(/nested in the loading request's context/);
   });
 
   it("leaves the patch installed — it never restores emit", async () => {
