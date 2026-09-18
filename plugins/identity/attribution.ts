@@ -356,6 +356,24 @@ export type LedgerLike = {
 export type DispatchDecision = { action: "proceed" } | { action: "reject"; message: string };
 
 /**
+ * What the guardrail decided, and what it did about it.
+ *
+ * `verdict` and `action` are separate because of audit mode: in `audit` the verdict can
+ * be a refusal while the action is always `proceed`. The dispatch audit line carries
+ * both, and the difference between them is the "what we would have blocked" the audit
+ * exists to report.
+ */
+export type GuardOutcome = {
+  /** The `enforcement` setting in force: "off" | "audit" | "enforce". */
+  mode: string;
+  /** How the machine classified ("person" | "team" | "unclaimed"), when one was named. */
+  hostKind: string | null;
+  verdict: { action: "proceed" } | { action: "reject"; rule: string; message: string };
+  /** What the hook returns. Never a rejection unless the mode is `enforce`. */
+  action: DispatchDecision;
+};
+
+/**
  * The guardrail's decision function (step 5, `guardrail.ts`), injected rather than
  * imported so this module stays the OBSERVE half: with no `guard`, attribution can only
  * ever proceed, which is exactly what its tests still hold it to.
@@ -364,7 +382,20 @@ export type Guard = (input: {
   facts: AttributionFacts;
   /** The thread's already-recorded attribution: null means this dispatch is its first. */
   existing: StarterRecord | null;
-}) => DispatchDecision | Promise<DispatchDecision>;
+}) => GuardOutcome | Promise<GuardOutcome>;
+
+/** Everything one dispatch knows, handed to the audit log (stream b). */
+export type DispatchAuditRecord = {
+  facts: AttributionFacts;
+  /** The starter already on record, or null when this dispatch is the thread's first. */
+  existing: StarterRecord | null;
+  outcome: GuardOutcome;
+  /**
+   * The attribution this dispatch would be recorded as — null when it was refused, which
+   * is deliberately never recorded.
+   */
+  decided: StarterRecord | null;
+};
 
 /**
  * The whole hook's time budget, well inside the SDK's 10s fail-closed ceiling.
@@ -389,6 +420,12 @@ export type DispatchDeps = {
   budgetMs?: number;
   /** The requester's identity, read from the async request context. May throw. */
   identity: () => { email: string | null; person: StarterSummary | null; viaFallback?: boolean };
+  /**
+   * The audit log (stream b), injected. Absent means no audit logging at all, which is
+   * what `enforcement: off` gets. It must never throw — `emitAudit` swallows — but this
+   * call is wrapped anyway, because a logging bug may not fail a dispatch.
+   */
+  audit?: (record: DispatchAuditRecord) => void;
   now: () => number;
   log: { info: (message: string) => void; warn: (message: string) => void };
   /**
@@ -441,18 +478,23 @@ async function decideDispatch(context: DispatchContextLike, deps: DispatchDeps):
         : undefined,
     ]);
 
-    const decision = deps.guard === undefined
-      ? { action: "proceed" as const }
+    const proceed = { action: "proceed" as const };
+    const guarded: GuardOutcome = deps.guard === undefined
+      ? { mode: "off", hostKind: null, verdict: proceed, action: proceed }
       : await deps.guard({ facts, existing });
-    if (decision.action === "reject") {
-      deps.log.info(`identity: refused a dispatch on thread ${facts.threadId} — ${decision.message}`);
+    const refused = guarded.action.action === "reject";
+    // A refused dispatch is never recorded (the message never runs), so the attribution
+    // it WOULD have had is computed for the audit line only.
+    const decided = decideAttribution(facts, (id) => inheritable.get(id) ?? null);
+    audit(deps, { facts, existing, outcome: guarded, decided: refused ? null : decided });
+    if (guarded.action.action === "reject") {
+      deps.log.info(`identity: refused a dispatch on thread ${facts.threadId} — ${guarded.action.message}`);
       // Only the two fields bb's `MessageDispatchHookDecision` declares: the guardrail's
       // own `rule` is for Identity's logs and tests, and an extra key handed to core is
       // exactly the shape that failed strict output validation on the machine-list RPC.
-      return { action: "reject", message: decision.message };
+      return { action: "reject", message: guarded.action.message };
     }
 
-    const decided = decideAttribution(facts, (id) => inheritable.get(id) ?? null);
     const outcome = await deps.ledger.record(decided);
     if (outcome.recorded) {
       deps.log.info(
@@ -464,4 +506,14 @@ async function decideDispatch(context: DispatchContextLike, deps: DispatchDeps):
     deps.log.warn(`identity: could not record attribution: ${(error as Error).message}`);
   }
   return { action: "proceed" };
+}
+
+/** Hand one dispatch to the audit log, never letting a logging failure reach the hook. */
+function audit(deps: DispatchDeps, record: DispatchAuditRecord): void {
+  if (deps.audit === undefined) return;
+  try {
+    deps.audit(record);
+  } catch (error) {
+    deps.log.warn(`identity: could not write an audit line: ${(error as Error).message}`);
+  }
 }

@@ -1,4 +1,5 @@
-import type { AttributionFacts, DispatchOrigin, StarterRecord, StarterSummary } from "./attribution.js";
+import type { AttributionFacts, DispatchOrigin, GuardOutcome, StarterRecord, StarterSummary } from "./attribution.js";
+import type { EnforcementMode } from "./audit.js";
 import type { HostRef } from "./host-ref.js";
 import { machineDescription } from "./ownership-labels.js";
 import type { HostClassification } from "./hosts.js";
@@ -65,7 +66,7 @@ export type GuardrailMachines = {
   teamMachines: readonly string[];
 };
 
-const SETTING_NOTE = "(Identity's restrictStarts setting refused this.)";
+const SETTING_NOTE = "(Identity's enforcement setting is set to enforce.)";
 
 function list(names: readonly string[]): string {
   return names.join(", ");
@@ -138,7 +139,20 @@ export function decideGuardrail(
 }
 
 /**
- * The guard the dispatch hook calls: classify the machine, then decide.
+ * The guard the dispatch hook calls: classify the machine, decide, then decide whether to
+ * ACT on that decision.
+ *
+ * The three-way `enforcement` setting lives here, and the split between `verdict` and
+ * `action` is the whole of audit mode:
+ * - `off` — nothing is classified and nothing is decided; today's behaviour.
+ * - `audit` — the IDENTICAL decision is computed, reported as `verdict`, and then not
+ *   acted on (`action` is always `proceed`).
+ * - `enforce` — the same decision, returned as the action too.
+ *
+ * `audit` deliberately runs the same `decideGuardrail` call as `enforce`, rather than a
+ * parallel "what would have happened" estimator: a dry run that models the real rule
+ * instead of running it is a dry run that lies. A test drives the same facts through both
+ * modes and asserts the verdicts are equal.
  *
  * `classify` is the same pinned classification the ownership UI uses (`hosts.ts`), not a
  * second derivation — a refusal and the chip it contradicts would be worse than no
@@ -146,23 +160,31 @@ export function decideGuardrail(
  * the network to word itself.
  */
 export function makeGuardrail(deps: {
-  enabled: () => boolean;
+  mode: () => EnforcementMode;
   classify: (host: HostRef) => Promise<HostClassification>;
   machines: (requester: StarterSummary | null) => GuardrailMachines;
-}): (input: { facts: AttributionFacts; existing: StarterRecord | null }) => Promise<GuardrailDecision> {
+}): (input: { facts: AttributionFacts; existing: StarterRecord | null }) => Promise<GuardOutcome> {
   return async ({ facts, existing }) => {
-    if (!deps.enabled()) return { action: "proceed" };
+    const mode = deps.mode();
+    const proceed = { action: "proceed" } as const;
+    if (mode === "off") return { mode, hostKind: null, verdict: proceed, action: proceed };
     const host = facts.host === null ? null : await deps.classify(facts.host);
     // A `fallbackEmail` identity is a display default, not a person asking: on a server
     // configured with one, every header-less caller — all four of S9's agent paths —
     // would otherwise arrive here positively identified and become refusable.
     const requester = facts.viaFallback ? null : facts.person;
-    return decideGuardrail(true, {
+    const verdict = decideGuardrail(true, {
       requester,
       recorded: existing === null ? null : { starter: existing.starter },
       host,
       origin: facts.origin,
       originPluginId: facts.originPluginId,
     }, deps.machines(requester));
+    // The ONE place the mode changes what happens. Everything above it is identical in
+    // `audit` and `enforce`, which is what makes an audit line worth reading.
+    const action = mode === "enforce" && verdict.action === "reject"
+      ? { action: "reject" as const, message: verdict.message }
+      : proceed;
+    return { mode, hostKind: host?.kind ?? null, verdict, action };
   };
 }

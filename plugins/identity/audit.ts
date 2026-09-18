@@ -1,6 +1,4 @@
-import type { AttributionFacts, DispatchOrigin, StarterSummary, Via } from "./attribution.js";
-import type { GuardrailDecision, GuardrailRule } from "./guardrail.js";
-import type { HostKind } from "./hosts.js";
+import type { AttributionFacts, DispatchOrigin, GuardOutcome, StarterSummary, Via } from "./attribution.js";
 
 /**
  * Audit mode: what identity actually reaches Identity, written down.
@@ -228,15 +226,15 @@ export type DispatchAuditInput = {
   requestPath: string | null;
   mode: EnforcementMode;
   facts: AttributionFacts;
-  /** How the machine classified, when one was named. */
-  hostKind: HostKind | null;
+  /** How the machine classified ("person" | "team" | "unclaimed"), when one was named. */
+  hostKind: string | null;
   /** The starter already on record for this thread, if any. */
   recordedStarter: StarterSummary | null;
   /** The starter this dispatch would be attributed to, and how it reached bb. */
   starter: StarterSummary | null;
   via: Via | null;
   /** What the guardrail decided — identical in `audit` and `enforce`. */
-  verdict: GuardrailDecision;
+  verdict: GuardOutcome["verdict"];
   /** What the hook actually returned. In `audit` this is always `proceed`. */
   action: "proceed" | "reject";
 };
@@ -273,7 +271,7 @@ export function dispatchAuditLine(input: DispatchAuditInput): AuditLine {
     starter: input.starter?.person ?? null,
     via: input.via,
     verdict: input.verdict.action,
-    rule: rejected ? ((input.verdict as { rule: GuardrailRule }).rule) : null,
+    rule: rejected ? ((input.verdict as { rule: string }).rule) : null,
     refusal: rejected ? ((input.verdict as { message: string }).message) : null,
     action: input.action,
   };

@@ -11,14 +11,32 @@ import http from "node:http";
  * see who is doing what; it is not an access control.
  */
 export type RequestFacts = {
+  /**
+   * A short id for this request, unique within this process's lifetime. It is what joins
+   * the audit log's three streams: a dispatch line carries the id of the request that
+   * caused it, so `bb plugin logs identity | jq` can put a refusal next to the POST that
+   * triggered it.
+   */
+  id: string;
   email: string | null;
   method: string | undefined;
   url: string | undefined;
 };
 
+/** Called with the facts of every http request bb handles. Must not throw; wrapped anyway. */
+export type RequestObserver = (facts: RequestFacts) => void;
+
 export type RequestContext = {
   /** The facts of the request being handled, or undefined outside any request. */
   current(): RequestFacts | undefined;
+  /**
+   * Watch every request. Returns a disposer.
+   *
+   * Observers are per-generation and DO come off on dispose, unlike the `emit` patch
+   * itself (S7 lesson 1): a disposer removes only the callback it registered, so a
+   * reloaded generation's observer is never removed by the old generation's dispose.
+   */
+  observe(observer: RequestObserver): () => void;
 };
 
 export const ACCESS_EMAIL_HEADER = "cf-access-authenticated-user-email";
@@ -55,23 +73,41 @@ export function installRequestContext(): RequestContext {
   if (existing) return existing;
 
   const als = new AsyncLocalStorage<RequestFacts>();
+  const observers = new Set<RequestObserver>();
+  let counter = 0;
+  const boot = Math.floor(Math.random() * 0xffffff).toString(36);
   const originalEmit = http.Server.prototype.emit;
   const emit = originalEmit as (this: http.Server, event: string | symbol, ...args: unknown[]) => boolean;
   http.Server.prototype.emit = function patchedEmit(this: http.Server, event: string | symbol, ...args: unknown[]) {
     if (event === "request") {
       const request = args[0] as http.IncomingMessage;
+      counter += 1;
       const facts: RequestFacts = {
+        id: `${boot}-${counter.toString(36)}`,
         email: normalizeEmail(request.headers[ACCESS_EMAIL_HEADER]),
         method: request.method,
         url: request.url,
       };
+      for (const observer of observers) {
+        try {
+          observer(facts);
+        } catch {
+          // An audit line is never worth failing a request over.
+        }
+      }
       return als.run(facts, () => emit.call(this, event, ...args));
     }
     return emit.call(this, event, ...args);
   } as typeof http.Server.prototype.emit;
   Object.defineProperty(http.Server.prototype.emit, PATCH_MARKER, { value: true });
 
-  const context: RequestContext = { current: () => als.getStore() };
+  const context: RequestContext = {
+    current: () => als.getStore(),
+    observe: (observer) => {
+      observers.add(observer);
+      return () => observers.delete(observer);
+    },
+  };
   globals[GLOBAL_KEY] = context;
   return context;
 }

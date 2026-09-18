@@ -39,16 +39,21 @@ describe("installRequestContext", () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     releaseGate();
     const results = await Promise.all(pending);
-    expect(results).toEqual([
+    expect(results).toMatchObject([
       { email: "matt@example.com", method: "GET", url: "/r0" },
       { email: "david@example.com", method: "GET", url: "/r1" },
       { email: "trevoke@example.com", method: "GET", url: "/r2" },
     ]);
+    // Every request carries its own id, so an audit line about a dispatch can be joined
+    // to the request that caused it.
+    const ids = results.map((facts) => (facts as { id: string }).id);
+    expect(new Set(ids).size).toBe(3);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-z]+-[0-9a-z]+$/);
   });
 
   it("records a null email when the header is absent or empty", async () => {
     gate = Promise.resolve();
-    expect(await get("/none")).toEqual({ email: null, method: "GET", url: "/none" });
+    expect(await get("/none")).toMatchObject({ email: null, method: "GET", url: "/none" });
     expect(await get("/empty", { "cf-access-authenticated-user-email": "  " }))
       .toMatchObject({ email: null });
   });
@@ -64,7 +69,7 @@ describe("installRequestContext", () => {
     expect(http.Server.prototype.emit).toBe(emitAfterFirst);
     gate = Promise.resolve();
     expect(await get("/again", { "cf-access-authenticated-user-email": "x@y.z" }))
-      .toEqual({ email: "x@y.z", method: "GET", url: "/again" });
+      .toMatchObject({ email: "x@y.z", method: "GET", url: "/again" });
   });
 });
 
@@ -130,5 +135,33 @@ describe("selfTestRequestContext", () => {
     const before = http.Server.prototype.emit;
     await selfTestRequestContext(context, { probe: (headers) => get("/self-test", headers) });
     expect(http.Server.prototype.emit).toBe(before);
+  });
+});
+
+describe("the request observer — the audit log's request stream", () => {
+  it("sees every request, with the same facts the handler reads", async () => {
+    gate = Promise.resolve();
+    const seen: { id: string; email: string | null; url: string | undefined }[] = [];
+    const stop = context.observe((facts) => seen.push({ id: facts.id, email: facts.email, url: facts.url }));
+    const handled = await get("/observed", { "cf-access-authenticated-user-email": "matt@example.com" });
+    stop();
+    await get("/after-stop");
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ email: "matt@example.com", url: "/observed" });
+    // The id on the line and the id in the handler's context are the same request.
+    expect(seen[0]?.id).toBe((handled as { id: string }).id);
+  });
+
+  it("survives an observer that throws: a log may never break bb's request handling", async () => {
+    gate = Promise.resolve();
+    const stop = context.observe(() => {
+      throw new Error("observer is broken");
+    });
+    try {
+      expect(await get("/still-served", { "cf-access-authenticated-user-email": "x@y.z" }))
+        .toMatchObject({ email: "x@y.z" });
+    } finally {
+      stop();
+    }
   });
 });

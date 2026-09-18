@@ -5,7 +5,14 @@ import {
   makeGuardrail,
   type GuardrailFacts,
 } from "./guardrail.js";
-import { AttributionLedger, attributeDispatch, type DispatchContextLike, type StarterSummary } from "./attribution.js";
+import type { EnforcementMode } from "./audit.js";
+import {
+  AttributionLedger,
+  attributeDispatch,
+  type DispatchAuditRecord,
+  type DispatchContextLike,
+  type StarterSummary,
+} from "./attribution.js";
 import type { HostClassification } from "./hosts.js";
 import type { KvLike } from "./kv.js";
 
@@ -35,7 +42,7 @@ function facts(overrides: Partial<GuardrailFacts> = {}): GuardrailFacts {
   return { requester: david, recorded: null, host: davidsMachine, origin: "app", originPluginId: null, ...overrides };
 }
 
-describe("decideGuardrail, with restrictStarts OFF", () => {
+describe("decideGuardrail, with enforcement OFF", () => {
   it("proceeds on everything it would otherwise refuse", () => {
     for (const input of [
       facts({ host: mattsMachine }),
@@ -76,7 +83,7 @@ describe("rule A: a start on another person's machine", () => {
     expect(decision.rule).toBe("start-on-another-persons-machine");
     expect(decision.message).toBe(
       "ew-lsp-001-mattwynne is Matt's machine. Pick one of yours (ew-lsp-001-mrdavidlaing), or the team "
-      + "machine (ew-lsp-001-main), and start the thread there. (Identity's restrictStarts setting refused this.)",
+      + "machine (ew-lsp-001-main), and start the thread there. (Identity's enforcement setting is set to enforce.)",
     );
   });
 
@@ -97,7 +104,7 @@ describe("rule A: a start on another person's machine", () => {
     if (decision.action !== "reject") return;
     expect(decision.message).toBe(
       "ew-lsp-001-mattwynne is Matt's machine. Identity knows no machine of your own yet; start the thread "
-      + "on the team machine (ew-lsp-001-main) instead. (Identity's restrictStarts setting refused this.)",
+      + "on the team machine (ew-lsp-001-main) instead. (Identity's enforcement setting is set to enforce.)",
     );
   });
 
@@ -107,7 +114,7 @@ describe("rule A: a start on another person's machine", () => {
     if (decision.action !== "reject") return;
     expect(decision.message).toBe(
       "ew-lsp-001-mattwynne is Matt's machine. Identity knows no machine of your own yet, and no team machine "
-      + "is configured. (Identity's restrictStarts setting refused this.)",
+      + "is configured. (Identity's enforcement setting is set to enforce.)",
     );
   });
 });
@@ -223,7 +230,7 @@ const classify = async (host: { id: string; name: string }): Promise<HostClassif
         ? { ...davidsMachine, hostId: host.id, hostName: host.name }
         : { kind: "unclaimed", hostId: host.id, hostName: host.name, conflict: null };
 
-function hookDeps(options: { enabled: boolean; identity: () => { email: string | null; person: StarterSummary | null; viaFallback?: boolean }; ledger?: AttributionLedger }) {
+function hookDeps(options: { mode: EnforcementMode; identity: () => { email: string | null; person: StarterSummary | null; viaFallback?: boolean }; ledger?: AttributionLedger }) {
   const ledger = options.ledger ?? new AttributionLedger(kv());
   return {
     ledger,
@@ -231,7 +238,7 @@ function hookDeps(options: { enabled: boolean; identity: () => { email: string |
     now: () => 4_000,
     log: { info: () => undefined, warn: () => undefined },
     guard: makeGuardrail({
-      enabled: () => options.enabled,
+      mode: () => options.mode,
       classify,
       machines: () => machineNames,
     }),
@@ -243,7 +250,7 @@ describe("attributeDispatch with the guardrail wired in", () => {
     const ledger = new AttributionLedger(kv());
     const decision = await attributeDispatch(
       dispatch({ origin: "app" }),
-      hookDeps({ enabled: true, identity: () => ({ email: "david@example.com", person: david }), ledger }),
+      hookDeps({ mode: "enforce", identity: () => ({ email: "david@example.com", person: david }), ledger }),
     );
     expect(decision).toEqual({
       action: "reject",
@@ -258,7 +265,7 @@ describe("attributeDispatch with the guardrail wired in", () => {
     // it cannot, because the guardrail reads the LEDGER, not the attempt kind, and a
     // refused dispatch is deliberately never recorded.
     const ledger = new AttributionLedger(kv());
-    const deps = hookDeps({ enabled: true, identity: () => ({ email: "david@example.com", person: david }), ledger });
+    const deps = hookDeps({ mode: "enforce", identity: () => ({ email: "david@example.com", person: david }), ledger });
     expect((await attributeDispatch(dispatch({ origin: "app" }), deps)).action).toBe("reject");
     expect((await attributeDispatch(dispatch({ origin: null }), deps)).action).toBe("reject");
   });
@@ -271,7 +278,7 @@ describe("attributeDispatch with the guardrail wired in", () => {
     // Attribution still records the person; only the refusal ignores it.
     const ledger = new AttributionLedger(kv());
     const deps = hookDeps({
-      enabled: true,
+      mode: "enforce",
       identity: () => ({ email: "david@example.com", person: david, viaFallback: true }),
       ledger,
     });
@@ -286,7 +293,7 @@ describe("attributeDispatch with the guardrail wired in", () => {
     expect(await attributeDispatch(
       dispatch({ thread: { id: "thr_matt", parentThreadId: null, sourceThreadId: null } }),
       hookDeps({
-        enabled: true,
+        mode: "enforce",
         identity: () => ({ email: "david@example.com", person: david, viaFallback: true }),
         ledger: mattsThread,
       }),
@@ -297,7 +304,7 @@ describe("attributeDispatch with the guardrail wired in", () => {
     const ledger = new AttributionLedger(kv());
     expect(await attributeDispatch(
       dispatch({ origin: "app" }),
-      hookDeps({ enabled: false, identity: () => ({ email: "david@example.com", person: david }), ledger }),
+      hookDeps({ mode: "off", identity: () => ({ email: "david@example.com", person: david }), ledger }),
     )).toEqual({ action: "proceed" });
     expect(await ledger.get("thr_new")).toMatchObject({ starter: david });
   });
@@ -329,7 +336,7 @@ describe("attributeDispatch with the guardrail wired in", () => {
         recordedAt: 1,
         host: { id: "h2", name: "ew-lsp-001-mattwynne" },
       });
-      expect([name, await attributeDispatch(context, hookDeps({ enabled: true, identity: anonymous, ledger }))])
+      expect([name, await attributeDispatch(context, hookDeps({ mode: "enforce", identity: anonymous, ledger }))])
         .toEqual([name, { action: "proceed" }]);
     }
   });
@@ -349,7 +356,7 @@ describe("attributeDispatch with the guardrail wired in", () => {
     });
     const decision = await attributeDispatch(
       dispatch({ host: { id: "h1", name: "ew-lsp-001-mrdavidlaing" } }),
-      hookDeps({ enabled: true, identity: () => ({ email: "matt@example.com", person: matt }), ledger }),
+      hookDeps({ mode: "enforce", identity: () => ({ email: "matt@example.com", person: matt }), ledger }),
     );
     expect(decision.action).toBe("reject");
   });
@@ -365,5 +372,153 @@ describe("attributeDispatch with the guardrail wired in", () => {
       },
     });
     expect(decision).toEqual({ action: "proceed" });
+  });
+});
+
+// ── audit mode: the same decision, taken by the same code, and then not acted on ──
+
+describe("audit mode", () => {
+  /**
+   * THE property that makes audit worth anything: `audit` must compute the decision
+   * `enforce` would return, from the same code path — not from a parallel "what would
+   * have happened" estimator, which is the classic way a dry run lies. The test drives
+   * the SAME facts through both modes and compares.
+   */
+  const table: Array<[string, GuardrailFacts]> = [
+    ["a start on another person's machine", facts({ host: mattsMachine })],
+    ["a start on your own machine", facts({ host: davidsMachine })],
+    ["a start on the team machine", facts({ host: teamMachine })],
+    ["a start on an unclaimed machine", facts({ host: unclaimed })],
+    ["a follow-up by a non-starter", facts({ recorded: { starter: matt }, host: teamMachine })],
+    ["the starter's own follow-up", facts({ recorded: { starter: david }, host: davidsMachine })],
+    ["an anonymous dispatch", facts({ requester: null, origin: null, host: mattsMachine })],
+    [
+      "an automation off the team machine",
+      facts({ requester: null, origin: "plugin", originPluginId: AUTOMATIONS_PLUGIN_ID, host: unclaimed }),
+    ],
+    [
+      "an automation on the team machine",
+      facts({ requester: null, origin: "plugin", originPluginId: AUTOMATIONS_PLUGIN_ID, host: teamMachine }),
+    ],
+  ];
+
+  const guardFor = (mode: EnforcementMode) => makeGuardrail({
+    mode: () => mode,
+    classify,
+    machines: () => machineNames,
+  });
+
+  const factsFor = (input: GuardrailFacts) => ({
+    facts: {
+      threadId: "thr_x",
+      email: input.requester === null ? null : "david@example.com",
+      person: input.requester,
+      viaFallback: false,
+      origin: input.origin,
+      originPluginId: input.originPluginId,
+      lineage: [] as string[],
+      host: input.host === null ? null : { id: input.host.hostId, name: input.host.hostName },
+      now: 1,
+    },
+    existing: input.recorded === null || input.recorded.starter === null ? null : {
+      threadId: "thr_x",
+      starter: input.recorded.starter,
+      email: "someone@example.com",
+      via: "browser" as const,
+      origin: "app" as const,
+      originPluginId: null,
+      inheritedFrom: null,
+      recordedAt: 1,
+      host: null,
+    },
+  });
+
+  it("computes, in audit, exactly the decision enforce returns", async () => {
+    for (const [name, input] of table) {
+      const audited = await guardFor("audit")(factsFor(input));
+      const enforced = await guardFor("enforce")(factsFor(input));
+      expect([name, audited.verdict]).toEqual([name, enforced.verdict]);
+      expect([name, enforced.action]).toEqual([name, enforced.verdict.action === "reject"
+        ? { action: "reject", message: enforced.verdict.message }
+        : { action: "proceed" }]);
+    }
+  });
+
+  it("never refuses in audit, whatever it decided", async () => {
+    for (const [name, input] of table) {
+      const audited = await guardFor("audit")(factsFor(input));
+      expect([name, audited.action]).toEqual([name, { action: "proceed" }]);
+    }
+  });
+
+  it("decides nothing at all with enforcement off", async () => {
+    for (const [, input] of table) {
+      const off = await guardFor("off")(factsFor(input));
+      expect(off).toMatchObject({ mode: "off", verdict: { action: "proceed" }, action: { action: "proceed" } });
+    }
+  });
+
+  it("reports the machine's classification, so a log line can say which kind it was", async () => {
+    const audited = await guardFor("audit")(factsFor(facts({ host: mattsMachine })));
+    expect(audited.hostKind).toBe("person");
+    expect((await guardFor("audit")(factsFor(facts({ host: null })))).hostKind).toBeNull();
+  });
+});
+
+describe("attributeDispatch in audit mode", () => {
+  function auditingDeps(mode: EnforcementMode, ledger: AttributionLedger) {
+    const records: DispatchAuditRecord[] = [];
+    return {
+      records,
+      deps: {
+        ...hookDeps({ mode, identity: () => ({ email: "david@example.com", person: david }), ledger }),
+        audit: (record: DispatchAuditRecord) => records.push(record),
+      },
+    };
+  }
+
+  it("lets David's start on Matt's machine through, and logs that enforce would have refused it", async () => {
+    const ledger = new AttributionLedger(kv());
+    const { records, deps } = auditingDeps("audit", ledger);
+    expect(await attributeDispatch(dispatch({ origin: "app" }), deps)).toEqual({ action: "proceed" });
+    expect(records).toHaveLength(1);
+    expect(records[0]?.outcome).toMatchObject({
+      mode: "audit",
+      hostKind: "person",
+      verdict: { action: "reject", rule: "start-on-another-persons-machine" },
+      action: { action: "proceed" },
+    });
+    // It really ran, so it really is this thread's start: recorded, like any other.
+    expect(await ledger.get("thr_new")).toMatchObject({ starter: david });
+    expect(records[0]?.decided).toMatchObject({ starter: david });
+  });
+
+  it("logs the refusal in enforce, and records nothing for a dispatch that never ran", async () => {
+    const ledger = new AttributionLedger(kv());
+    const { records, deps } = auditingDeps("enforce", ledger);
+    expect((await attributeDispatch(dispatch({ origin: "app" }), deps)).action).toBe("reject");
+    expect(records[0]?.outcome.action).toMatchObject({ action: "reject" });
+    expect(records[0]?.decided).toBeNull();
+    expect(await ledger.get("thr_new")).toBeNull();
+  });
+
+  it("still logs a dispatch no rule fired on, because 'carried identity and was fine' is the answer half the time", async () => {
+    const ledger = new AttributionLedger(kv());
+    const { records, deps } = auditingDeps("audit", ledger);
+    await attributeDispatch(dispatch({ origin: "app", host: { id: "h1", name: "ew-lsp-001-mrdavidlaing" } }), deps);
+    expect(records[0]?.outcome.verdict).toEqual({ action: "proceed" });
+    expect(records[0]?.facts).toMatchObject({ email: "david@example.com", origin: "app" });
+  });
+
+  it("proceeds when the audit logger itself throws: a log may not fail a message", async () => {
+    const ledger = new AttributionLedger(kv());
+    const deps = {
+      ...hookDeps({ mode: "audit", identity: () => ({ email: "david@example.com", person: david }), ledger }),
+      audit: () => {
+        throw new Error("logger is broken");
+      },
+    };
+    expect(await attributeDispatch(dispatch({ origin: "app" }), deps)).toEqual({ action: "proceed" });
+    expect(await ledger.get("thr_new")).toMatchObject({ starter: david });
   });
 });
