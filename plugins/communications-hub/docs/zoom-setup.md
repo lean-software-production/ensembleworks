@@ -177,8 +177,9 @@ if answers stop arriving altogether, the row drops the roster after twelve
 seconds and says "Presence unavailable — BB is not getting updates" rather than
 presenting a minute-old list as the room. The room name and its join link stay:
 those are configuration, not observation.
-observed since the socket connected, so it is reported as partial and the UI
-never presents it as a headcount. Whether RTMS replays an initial roster, and
+
+The roster includes only people observed since the socket connected, so it is
+reported as partial and the UI never presents it as a headcount. Whether RTMS replays an initial roster, and
 how a reconnect recovers completeness, is not established here — so a reconnect
 starts from an empty roster rather than carrying stale membership across. A lost
 or paused stream hides the roster and clears any speaking indicator. Nothing
@@ -232,9 +233,9 @@ surface, and dropped when the sitting ends. They are displayed as what they are
 — a still captured at a stated time, never live video. Image bytes are never
 logged, and a frame that fails any check is counted only as a number.
 
-The video handshake asks for Zoom's documented active-speaker still feed:
+The video handshake asks for Zoom's documented individual-participant feed:
 `media_type` VIDEO (2) carrying RAW_VIDEO (3) as JPG (5) at SD (1) and 1fps,
-with `data_opt` VIDEO_SINGLE_ACTIVE_STREAM (3) — see the
+with `data_opt` VIDEO_SINGLE_INDIVIDUAL_STREAM (4) — see the
 [media parameter definitions](https://developers.zoom.us/docs/rtms/media-parameter-definition/)
 and [single video stream](https://developers.zoom.us/docs/rtms/meetings/video-single-stream/)
 pages, locked by `tests/zoom-rtms-contract.test.ts`. When that second media
@@ -246,6 +247,24 @@ media data is sent; the acknowledgement for the transcript connection does not
 cover a socket opened later. The setting stays off by default because video
 access is a consent decision for the deployment, not because the parameters are
 in doubt.
+
+## 9. Quieten Zoom's email notifications
+
+A persistent room emails the host user every time anybody joins. That is not a misconfiguration: a room is join-before-host and the host user never arrives, so every join is an "attendees joined before host" event. A room in regular use will bury that mailbox.
+
+These live under **Settings > Email Notification** and are per-user, with no per-meeting override in either the Zoom UI or the API, so they are turned off once for the host user rather than per room. Signed in as the host user, turn off:
+
+| Zoom notification | Why it is noise here |
+| --- | --- |
+| When attendees join meeting before host | Fires on every join into every room. The flood. |
+| When an alternative host is set or removed from a meeting | Alternate-host events never start capture; see section 5. |
+| When meetings are about to expire | Zoom's Monday email duplicates BB's own sixty-day room-expiry warning. |
+
+Leave **When a cloud recording is available**, **When a meeting is cancelled**, and **When someone scheduled a meeting for a host** on. They are infrequent, and they carry things BB does not know.
+
+Turning off the expiry notice gives up Zoom's backstop, so BB's warning becomes the only expiry signal and only someone opening the Communications page will see it. `bb communications rooms` reports the same expiry dates without the UI, which suits a reminder or a scheduled check.
+
+An account administrator can lock any of these under **Admin > Account Management > Account Settings > Email Notification**, in which case the host user's toggle is greyed out and the change has to be made there instead. If the settings cannot be reached at all, a mail rule on `no-reply@zoom.us` with `has joined` in the subject is the fallback, but a broader rule on the sender alone would hide the cancellation and recording notices too.
 
 ## Capture coverage and recovery
 
