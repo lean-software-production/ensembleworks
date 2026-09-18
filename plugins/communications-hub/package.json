@@ -62,6 +62,7 @@
   "scripts": {
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "build": "bb plugin build"
+    "build": "bb plugin build",
+    "check:browser": "vite build --config tools/presence-harness/vite.config.mjs && node tools/presence-harness/check.mjs"
   }
 }

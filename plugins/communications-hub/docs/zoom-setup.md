@@ -128,7 +128,127 @@ This is identity by convention, not proof. A stranger holding the plain link can
 
 Transcript attribution follows the display name for that reason. The participant id Zoom sends identifies a connection rather than a person - one human joining from two browsers produces two - so it is used only to separate unattributed speech.
 
-## 8. Quieten Zoom's email notifications
+## 8. Participant presence (experimental, off by default)
+
+The sidebar shows one compact row for a selected room: a status dot, the room
+name, up to three faces and a "+N" overflow, with names, active-speaker status
+and the room's links one click away. With presence switched off — the default —
+that row still works: it shows the room and says "No active stream", because
+**an absent signal is not an empty room**. A capture whose presence is off opens
+no roster at all, so a transcript that is happily capturing can never be shown
+as a live presence stream: the two are separate signals and the row reports the
+one it actually has.
+
+Turning presence on makes the plugin ask Zoom's signaling socket for participant
+join, participant leave, active-speaker and camera on/off events. Two settings
+govern it:
+
+| Setting | Meaning |
+| --- | --- |
+| `Subscribe to Zoom participant events (experimental)` | Sends the event subscription after transcript capture is established. Off by default. |
+| `Zoom presence event codes` | An escape hatch for the numeric event ids, e.g. `speaker=2,join=3,leave=4,camera_on=8,camera_off=9`. Blank uses the published table; an override corrects only the codes it names. |
+
+**The event numbers, and where they come from.** Zoom identifies signaling
+events by number. The table this plugin ships with is Zoom's published
+`RTMS_EVENT_TYPE` as of 2026-09-18 — ACTIVE_SPEAKER_CHANGE 2, PARTICIPANT_JOIN
+3, PARTICIPANT_LEAVE 4, PARTICIPANT_VIDEO_ON 8, PARTICIPANT_VIDEO_OFF 9 — and
+`tests/zoom-rtms-contract.test.ts` locks it to that reference:
+
+- [event reference](https://developers.zoom.us/docs/rtms/event-reference/)
+- [data types](https://developers.zoom.us/docs/rtms/data-types/)
+
+FIRST_PACKET_TIMESTAMP (1) and MEDIA_CONNECTION_INTERRUPTED (7) are deliberately
+NOT subscribed to: Zoom sends both unasked and documents that subscribing to
+them breaks the app. The codes remain a setting only as an escape hatch should a
+deployment meet a different enum; events that arrive with a NAME rather than a
+number are decoded by name and ignore the table entirely. An unrecognised event
+is ignored, never guessed at.
+
+A camera event names people, so it is also evidence that those participants are
+in the meeting — someone whose camera comes on before we ever saw them join is
+added to the roster, which stays "partial" as always. Camera state is reported
+as `on`, `off` or `unknown`; silence is never turned into a mute state, because
+Zoom never tells us one.
+
+**When the sidebar stops hearing from BB.** The row is fed by a poll. Every
+answer carries how long the active-speaker ring may stay lit, so the ring
+expires on the reader's own clock rather than on the next successful poll — and
+if answers stop arriving altogether, the row drops the roster after twelve
+seconds and says "Presence unavailable — BB is not getting updates" rather than
+presenting a minute-old list as the room. The room name and its join link stay:
+those are configuration, not observation.
+
+The roster includes only people observed since the socket connected, so it is
+reported as partial and the UI never presents it as a headcount. Whether RTMS replays an initial roster, and
+how a reconnect recovers completeness, is not established here — so a reconnect
+starts from an empty roster rather than carrying stale membership across. A lost
+or paused stream hides the roster and clears any speaking indicator. Nothing
+about presence is stored: it lives in memory for the sitting and is gone when
+the sitting, the room or the plugin generation ends.
+
+### Optional still portraits
+
+`Request low-rate still portraits` opens a second media socket for the meeting's
+video connection and keeps ONE recent still per participant, in memory, for the
+duration of the sitting. It is a presence feature and follows the presence
+switch: with participant events off there is no roster to file a face against,
+so no video socket is opened either. It requires video access on your own Zoom app; the
+app described in this document requests `meeting:read:meeting_transcript` only,
+so **with the scopes above this feature simply reports itself unavailable and
+faces fall back to initials.** Do not add Zoom scopes to try it without deciding
+that separately — a meeting's video is a much larger consent question than its
+transcript, and the participant notice changes with it.
+
+The connection uses individual stream mode (SD JPEG, 1 fps) with no continuous
+subscription. Camera-on requests a first portrait; active-speaker events request
+another only after a 30-second cooldown per participant. The app unsubscribes
+after one accepted frame, or after five seconds without one. Speaker changes,
+camera-off and departure cancel the pending subscription. Frames from anyone
+other than the selected participant are ignored. The last accepted still stays
+visible between requests. This on-demand flow needs live verification with the
+configured Zoom app; controlled tests alone do not measure its bandwidth savings.
+
+Everything about the video path is droppable by design: a missing video URL, an
+unsafe one, a refused handshake, a malformed or oversized frame, or too many
+unusable frames in one sitting each retire portraits for that sitting and touch
+nothing else. Transcript capture has its own socket, its own limits and its own
+retry budget, and is never affected. When video retires mid-meeting the sitting
+stops advertising portraits and the stills it held are dropped — server-side and
+in the browser — so a face falls back to initials rather than showing a picture
+from a feed that has stopped.
+
+Images are validated on the way in: the message must be Zoom's video data type,
+its payload must be canonical base64 matching the frame's own declared byte
+length, and the bytes must be a structurally complete JPEG within a size limit,
+carrying their own participant id, with a timestamp that moves forward. "A
+structurally complete JPEG" is checked against the segment structure, not the
+boundary bytes: markers are walked from SOI, the frame header has to declare a
+non-zero size and between one and four components in a segment of exactly the
+matching length, the scan has to select components that frame declared, and
+entropy-coded data has to follow the scan before the closing EOI. `ff d8 ff c0
+00 02 ff da 00 02 ff d9` — an empty frame and an empty scan, every declared
+length legal — is kept as a regression fixture. Accepted stills are
+throttled, bounded in number, served only over the authenticated plugin rpc
+surface, and dropped when the sitting ends. They are displayed as what they are
+— a still captured at a stated time, never live video. Image bytes are never
+logged, and a frame that fails any check is counted only as a number.
+
+The video handshake asks for Zoom's documented individual-participant feed:
+`media_type` VIDEO (2) carrying RAW_VIDEO (3) as JPG (5) at SD (1) and 1fps,
+with `data_opt` VIDEO_SINGLE_INDIVIDUAL_STREAM (4) — see the
+[media parameter definitions](https://developers.zoom.us/docs/rtms/media-parameter-definition/)
+and [single video stream](https://developers.zoom.us/docs/rtms/meetings/video-single-stream/)
+pages, locked by `tests/zoom-rtms-contract.test.ts`. When that second media
+connection's data handshake succeeds, the plugin sends its own `CLIENT_READY_ACK`
+(`msg_type` 7) on the signaling connection, which is what the
+[event reference](https://developers.zoom.us/docs/rtms/event-reference/)
+requires after a data handshake response "from the media connection" and before
+media data is sent; the acknowledgement for the transcript connection does not
+cover a socket opened later. The setting stays off by default because video
+access is a consent decision for the deployment, not because the parameters are
+in doubt.
+
+## 9. Quieten Zoom's email notifications
 
 A persistent room emails the host user every time anybody joins. That is not a misconfiguration: a room is join-before-host and the host user never arrives, so every join is an "attendees joined before host" event. A room in regular use will bury that mailbox.
 

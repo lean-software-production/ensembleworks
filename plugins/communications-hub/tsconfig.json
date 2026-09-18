@@ -27,6 +27,7 @@
     "lib",
     "hooks",
     "src",
-    "tests"
+    "tests",
+    "tools"
   ]
 }

@@ -9,6 +9,7 @@ A persistent conversation library for one BB instance. Import a transcript or ca
 - Independent thread attachments and explicit reading cursors.
 - A Communications page, a Conversation thread panel, and agent tools returning grouped passages with citation links.
 - A Zoom RTMS source adapter, enabled separately after app/webhook configuration.
+- A 36px room-presence row above the sidebar footer: one selected room, a status dot, up to three faces, and a popover with names, the Zoom link and the current conversation. See [room presence](#room-presence-in-the-sidebar).
 
 Read the [canonical glossary](docs/glossary.md), [MVP spec](docs/superpowers/specs/2026-09-10-communications-hub.md), and [Zoom setup](docs/zoom-setup.md). Repository instructions in [AGENTS.md](AGENTS.md) require future agents to use these terms.
 
@@ -96,6 +97,51 @@ Capture requires the BB process to remain running. A restart marks previously ac
 
 Transcripts are kept in the plugin's SQLite database under BB's data directory. There is no automatic retention/deletion policy in this proof of concept. Do not assume uninstalling BB configuration securely deletes stored data or backups. The BB instance is the access boundary: per-user/per-project transcript access controls are not implemented. Realtime events contain only change notifications, not transcript text. Secrets are stored with BB's secret settings.
 
+## Room presence in the sidebar
+
+One line, immediately above bb's sidebar footer, for ONE room at a time:
+a status dot, the room name, up to three faces with a ring on the active
+speaker, and "+N" for the rest. Clicking or pressing Enter opens a bounded,
+scrollable popover with the names, honest per-person status, a room picker when
+there is more than one room, **Open Zoom room** (the saved join link, opened by
+whichever Zoom client the user prefers — BB never joins a meeting itself) and a
+link to the current conversation. Escape, the close button, or a click elsewhere
+dismisses it; Escape and the close button return focus to the row.
+
+It is a content script (`app.contentScripts.register`), which is the only
+surface bb offers that survives route and thread navigation. Placement is one
+node that MOVES — into the mobile drawer when it opens, back out when it closes,
+and out of the document entirely on a route with no sidebar — so a re-render can
+never leave a second row behind. A narrow sidebar drops the room name; bb's
+collapsed icon rail shows a dot and a bare count. The row never joins the
+scrolling thread list, so the list keeps its own scroll.
+
+What it claims is bounded by what was observed: "N people seen here · list may
+be incomplete", never a headcount. No live stream means "No active stream — BB
+cannot tell who is here", which is not a claim that the room is empty. See
+[Zoom setup §8](docs/zoom-setup.md) for the two experimental settings that make
+participant events and still portraits available at all, and why both are off by
+default.
+
+```sh
+bb communications presence                 # what the row is showing, as JSON
+bb communications presence-select ROOM_ID  # choose the room ("-" clears it)
+```
+
+```sh
+npm run check:browser -- ./screenshots     # measure it in a real Chromium
+```
+
+Portraits use on-demand individual video subscriptions: camera-on requests an
+initial still; speaker events request a refresh at most once every 30 seconds
+per participant. Each request ends after one accepted image or a five-second
+timeout. Zoom sends no video while unsubscribed. This mode still needs a live
+Zoom integration check; actual bandwidth savings have not been measured.
+
+The last captured portrait stays visible while a replacement loads and while the
+participant is quiet. Stills remain bounded in memory and are cleared when the
+participant leaves, presence is lost, or the sitting ends.
+
 ## Deliberate limits
 
 - Imports are at most 1 MB UTF-8 and 10,000 segments; malformed timed files fail atomically.
@@ -104,11 +150,13 @@ Transcripts are kept in the plugin's SQLite database under BB's data directory. 
 - Keyword search matches all supplied words. Semantic search is not included.
 - Imports create separate conversations. Merging a polished transcript into an existing live conversation is deferred; existing passage IDs are not overwritten.
 - One configured Zoom connection, hosted meetings only, no audio/video storage, OAuth wizard, or remote hosted hub.
+- Presence is ephemeral and observation-only: never persisted, never claimed complete, dropped on interruption, reconnect, room archive/delete, sitting end and plugin reload. In the browser it also ages out: the speaker ring expires on the reader's own clock and a row that has stopped being refreshed drops its roster after twelve seconds rather than showing a stale one.
+- Presence's Zoom event codes and video media parameters follow Zoom's published RTMS reference (locked by `tests/zoom-rtms-contract.test.ts`), but have never been exchanged with a live meeting from this repository — so presence is opt-in, and portraits additionally need video access on your own Zoom app.
 - Zoom protocol tests do not establish successful integration with a real Zoom account. A live test requires app credentials, developer credits, host configuration, and a reachable HTTPS webhook.
 
 ## Development
 
-The hub is `src/hub.ts`, canonical data types are `src/domain.ts`, source adapters are under `src/adapters/`, and BB RPC contracts are in `src/contracts.ts`. `server.ts` registers BB interfaces. `app.tsx` registers UI surfaces. Use only public SDK declarations under `node_modules/@get-bb/plugin-sdk/bundled-types/`.
+The hub is `src/hub.ts`, canonical data types are `src/domain.ts`, source adapters are under `src/adapters/`, and BB RPC contracts are in `src/contracts.ts`. `server.ts` registers BB interfaces. `app.tsx` registers UI surfaces. Room presence is `src/presence/` — `roster.ts` (what may be claimed), `portraits.ts` (bounded validated stills), `service.ts` (sittings and sessions), `view.ts` (the hub-facing view) and `ui/` (the sidebar row: pure `anchor.ts`/`layout.ts`/`model.ts` decisions, `strip.ts` DOM, `mount.ts` lifecycle). Zoom wire details for presence stay in `src/adapters/zoom-presence.ts`. Use only public SDK declarations under `node_modules/@get-bb/plugin-sdk/bundled-types/`.
 
 ```sh
 npm test
