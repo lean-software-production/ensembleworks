@@ -322,11 +322,8 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
   // vocabulary — for graph-authoring convenience. Map those two down to the
   // closest BB-supported mode before ever reaching `spawn` (whose own zod
   // schema would otherwise reject an unknown literal outright):
-  // `workspace-write` -> `accept-edits` (both auto-approve file edits, just
-  // scoped differently), `readonly` -> `auto` (BB's most conservative real
-  // mode — it still prompts before anything a more permissive mode would
-  // auto-approve, which is the closest available approximation of "never
-  // write silently"). See README "Deviations from the plan".
+  // `workspace-write` -> `accept-edits`, `readonly` -> `auto` (BB has no
+  // read-only spawn mode). See README "Deviations from the plan".
   function toBbPermissionMode(mode: string | undefined): "accept-edits" | "auto" | "full" | undefined {
     if (mode === "workspace-write") return "accept-edits";
     if (mode === "readonly") return "auto";
@@ -345,12 +342,13 @@ export function createThreadAgentBackend(bb: BbPluginApi): AgentBackend {
     const model = style.model ?? defaults?.model;
     if (!model) throw new Error(`no model could be resolved for node "${node.id}" (no stylesheet/node model and no thread default execution options)`);
     const reasoningLevel = style.reasoningEffort ?? defaults?.reasoningLevel;
-    // permission_mode resolution mirrors model/provider/reasoning_effort's own
-    // order: the node's own declared attribute wins, then the graph's
-    // default_permission_mode, then whatever the origin thread would use by
-    // default — BB may still cap a spawned worker at the origin thread's own
-    // permission ceiling regardless of what is requested here.
-    const permissionMode = toBbPermissionMode(node.permissionMode ?? graph.defaultPermissionMode ?? defaults?.permissionMode);
+    // Attractor workers default to BB's "Approve for me" (`auto`) mode:
+    // automatic approval within the workspace, rather than unrestricted
+    // access. A node's own declaration still wins, followed by the graph's
+    // default_permission_mode. BB may still cap a spawned worker at the
+    // origin thread's own permission ceiling regardless of what is requested
+    // here, so this is a requested default rather than a privilege escalation.
+    const permissionMode = toBbPermissionMode(node.permissionMode ?? graph.defaultPermissionMode ?? "auto");
 
     const catalog = await bb.sdk.providers.models({ environmentId, providerId });
     const known = catalog.models.some((m) => m.model === model || m.id === model);

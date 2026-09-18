@@ -108,7 +108,7 @@ describe("createThreadAgentBackend: spawning", () => {
       providerId: "anthropic",
       model: "claude-sonnet-5",
       reasoningLevel: "medium",
-      permissionMode: "full",
+      permissionMode: "auto",
       visibility: "hidden",
     });
   });
@@ -213,13 +213,20 @@ describe("createThreadAgentBackend: spawning", () => {
     expect(spawnCalls[1]).toMatchObject({ permissionMode: "auto" });
   });
 
-  it("falls back to the origin thread's default execution permission mode when neither the node nor the graph declares one", async () => {
+  it("defaults an undeclared worker to auto even when the origin thread default is full", async () => {
     const host = makeHost();
     const spawnCalls: unknown[] = [];
     host.harness.sdk.stub("threads.spawn", async (args: unknown) => {
       spawnCalls.push(args);
       return makeThreadResponse({ id: "worker-thread" });
     });
+    host.harness.sdk.stub("threads.defaultExecutionOptions", async () => ({
+      model: "claude-sonnet-5",
+      reasoningLevel: "medium",
+      permissionMode: "full",
+      serviceTier: "default",
+      source: "client/thread/start",
+    }));
     const backend = createThreadAgentBackend(host.bb);
     const g = graph(PLAN_GRAPH);
     const runPromise = backend.run(baseInput(g, "plan"));
@@ -227,7 +234,7 @@ describe("createThreadAgentBackend: spawning", () => {
     await host.harness.behavior.emitThreadEvent("thread.idle", { thread: makeThreadResponse({ id: "worker-thread" }), lastAssistantText: "done" });
     await runPromise;
 
-    expect(spawnCalls[0]).toMatchObject({ permissionMode: "full" });
+    expect(spawnCalls[0]).toMatchObject({ permissionMode: "auto" });
   });
 
   it("fails the stage with a clear error rather than silently substituting an unknown model", async () => {
