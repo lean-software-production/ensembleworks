@@ -1124,3 +1124,124 @@ how you pin the machine a dispatch is headed for. `POST /threads/:id/send` wants
 `mode: "auto"` (the modes are `queue-if-active | steer-if-active | auto | start | steer`).
 Poll `GET /api/v1/hosts` for `status == "connected"` — matching the substring `connected`
 also matches `disconnected`.
+
+### Step 6 built (2026-09-18): audit mode — what identity actually reaches us
+
+Landed on `feature/identity-attribution` (`plugins/identity/audit.ts`, plus the setting,
+the guard's mode split, the three log streams and the chip wording in `guardrail.ts`,
+`attribution.ts`, `request-context.ts`, `server.ts`, `ownership-labels.ts` and `app.tsx`).
+
+The owner's ask: install Identity on the real server, have it show what identity it can
+resolve across the UX, and keep a verbose log to analyse which human actions and which
+agent actions carry identity — "like enabling restrictions, but instead of blocking
+things we just log what we would have blocked (and what we couldn't block)". Two owner
+decisions taken as given: **one three-way setting**, and **logs through `bb.log` only**
+(no ring buffer, no `/audit` route, no UI log page).
+
+**`enforcement: off | audit | enforce` replaces `restrictStarts` outright** — no
+migration, no compatibility shim: `restrictStarts` was never enabled anywhere and its PR
+is unmerged. `off` is the default and logs nothing. `audit` and `enforce` both log.
+Anything unrecognised parses as `off`.
+
+**The property that makes audit worth anything.** `audit` and `enforce` run the SAME
+`decideGuardrail` call; the guard returns a `verdict` and an `action`, and the mode
+decides only whether they differ. There is no parallel "what would have happened"
+estimator — that is the classic way a dry run lies. `guardrail.test.ts` drives nine
+fact-shapes (start on another's machine / own / team / unclaimed, follow-up by a
+non-starter, the starter's own, anonymous, automation on and off a team machine) through
+both modes and asserts the verdicts are equal, and that `audit` never refuses.
+
+**The three streams, all `identity-audit <json>` through `bb.log`.** Every line carries
+`v` (schema version, 1), `kind`, `at`, and the `req` id that joins them:
+
+| kind | when | fields |
+|---|---|---|
+| `request` | every mutation the ALS patch sees — including the routes the hook never does (terminals, Stop, Archive, approvals, host routes, plugin RPCs) | `req, method, path, access, person` |
+| `request.rollup` | once a minute, for everything not given its own line | `from, at, total, dropped, buckets[{method,path,access,person,count}]` |
+| `dispatch` | every `message.dispatch` | `req, method, path, mode, threadId, email, person, viaFallback, origin, originPluginId, lineage, host{id,name,kind}, recordedStarter, starter, via, verdict, rule, refusal, action` |
+| `message.queued` / `message.dispatched` | the post-dispatch events, which run in the requester's context and so see Send-now and drains | `req, method, path, mode, entryId, threadId, senderThreadId, access, email, person` |
+
+`verdict` and `action` are separate fields on purpose: in `audit` they differ, and that
+difference is the product. Emails appear by design (that is the question); message bodies
+and thread content never do. A refusal message is mode-neutral ("Refused by Identity's
+machine-ownership guardrail") precisely because an audit line carries it as a
+counterfactual.
+
+**The volume policy, and the measurement behind it.** Measured on a throwaway bb, not
+guessed:
+
+- *Idle, nothing open:* the host daemon posts `/internal/session/events` every few
+  seconds — four individual lines a minute before it was added to the rollup set.
+- *Under a simulated two-tab browser load* replaying the real client cadence
+  (`HEARTBEAT_MS` 10s, `REFRESH_MS` 5s, plus `GET /threads` polling): **103 requests in a
+  63-second window produced exactly ONE audit line** — the rollup. Its buckets:
+  `presence_snapshot` 24, `GET /threads` 24, `GET /hosts` 18,
+  `/internal/skills/tree/:id` 15, `presence_heartbeat` 12, `/internal/session/events` 3.
+  Over the whole run, individual `request` lines totalled **three** (two thread creates
+  and one settings write).
+
+So the policy chosen: **a mutation gets its own line; everything else is counted.**
+"Everything else" is every read (GET/HEAD/OPTIONS), Identity's own presence RPCs, any
+plugin RPC whose method name contains `presence` (Canvas is busy and its chatter is the
+same kind of noise), `/api/v1/events`, `*/events/stream`, and `/internal/session/*`.
+Rollup paths are normalised (`/threads/:id/send`, `/hosts/:id`) so a bucket is a shape,
+not one row per thread, and the bucket list is capped at 200 with the overflow counted in
+`dropped`. The window is flushed lazily by the next request past 60s and on dispose — no
+timer, because this code must never keep the process alive or fire inside a dispatch.
+Candidates not taken: a settings knob for which paths are logged (a second setting, and
+the answer changes per deployment anyway — revisit if the fixed list is wrong on the real
+server), and logging every request (the measurement above says ~100 lines/minute per two
+tabs, which is exactly the flood that gets a feature switched off on day one).
+
+**The UX half.** In `audit` the header chip appends what enforcement WOULD have done —
+"Started by Matt · would be refused — Matt's thread (audit mode, so it went through)", or
+for a start on the wrong machine "this start would be refused — Matt's machine (audit
+mode, so it went through)" — and nothing at all when nothing would have been refused, or
+when the viewer cannot be named. Step 4's honesty guard ("never promises an enforcement
+that is not switched on") now also covers audit's copy, in both tenses: the audit wording
+may not claim anything *was* caught/refused/blocked/prevented/stopped either. The
+composer banner and the read-only banner both gained their audit wording under the same
+guard.
+
+**Runtime verification (throwaway `bb-app` 0.43.0, temp `HOME`, ports 39886/39887,
+2026-09-18).** Local host renamed `ew-lsp-001-mattwynne`, directory holding David and
+Matt, `teamMachines: ew-lsp-001-main`:
+
+- `off`, David starts on Matt's machine → `HTTP 201`, and **0** audit lines.
+- `audit` **set at runtime with no reload**, same start → `HTTP 201`, and
+  `{"v":1,"kind":"dispatch","req":"9581y-l","method":"POST","path":"/api/v1/threads","mode":"audit","threadId":"thr_z9j3qwjqhf","email":"david@example.com","person":"mrdavidlaing","viaFallback":false,"origin":"app","originPluginId":null,"lineage":[],"host":{"id":"host_q4tsjtjku9","name":"ew-lsp-001-mattwynne","kind":"person"},"recordedStarter":null,"starter":"mrdavidlaing","via":"browser","verdict":"reject","rule":"start-on-another-persons-machine","refusal":"ew-lsp-001-mattwynne is Matt's machine. …","action":"proceed"}`
+- `enforce`, same start → `HTTP 409 {"code":"dispatch_rejected","message":"ew-lsp-001-mattwynne is Matt's machine. Identity knows no machine of your own yet; start the thread on the team machine (ew-lsp-001-main) instead. …"}`
+- An anonymous (header-less) start in `audit` → `HTTP 201` and a line with
+  `"person":null,"via":"unknown","verdict":"proceed"` — anonymity is still never a
+  violation.
+- The worked query, run for real:
+  `bb plugin logs identity | jq -r 'select(.message|startswith("identity-audit")) | .message[15:]' | jq -r 'select(.kind=="request") | "\(.method) \(.path) access=\(.access) person=\(.person)"' | sort | uniq -c | sort -rn`
+
+**Three things only running it found**, all fixed on the branch:
+1. The dispatch stream was gated when the hook was REGISTERED, so flipping the setting
+   from `off` to `audit` left it silent until the next plugin reload. The first probe run
+   hid this, because `bb plugin config set` happened to reload the plugin.
+2. `/internal/session/events` (see the measurement above).
+3. `bb plugin logs identity` wraps each line in its own JSON envelope
+   (`{"ts","level","message"}`), so a `sed 's/.*identity-audit //' | jq` pipeline could
+   never have worked; the payload is the tail of `.message`.
+
+**What audit still cannot see.**
+- **Send-now and drains**, except after the fact: the hook never runs for them, so there
+  is no verdict to report — only stream (c)'s statement of what identity they carried.
+  Neither was exercised here: a provider-less temp `HOME` cannot run a turn, so nothing
+  queued and no `message.queued` / `message.dispatched` line was ever observed. The code
+  path is unit-tested and the SDK types check; the runtime evidence is still missing.
+- **Unhooked routes** (terminals, Stop, Archive, answering approvals, host routes) appear
+  in stream (a) as requests with their identity, and nowhere else — there is no verdict
+  for them because there is no rule that could have run.
+- **Rule C's blind spot** is unchanged: an automation targeting an existing thread arrives
+  through `threads.send`, which the plugin-SDK bridge does not stamp, so audit reports it
+  as an anonymous dispatch like any other.
+- **The browser was simulated, not driven.** The volume numbers replay the real client
+  cadence read from `app.tsx` with `curl`; `agent-browser` cannot run inside this sandbox,
+  so a real tab's full request mix (bb's own polling beyond what was replayed) is
+  unmeasured. The rollup makes that a counting difference, not a flood risk.
+- **Audit says nothing about who a person IS.** Every email is still the unverified
+  `Cf-Access-Authenticated-User-Email`. An audit log built on a header anyone on loopback
+  can set is evidence about honest traffic, not about an attacker.
