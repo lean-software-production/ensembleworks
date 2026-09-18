@@ -128,6 +128,24 @@ This is identity by convention, not proof. A stranger holding the plain link can
 
 Transcript attribution follows the display name for that reason. The participant id Zoom sends identifies a connection rather than a person - one human joining from two browsers produces two - so it is used only to separate unattributed speech.
 
+## 8. Quieten Zoom's email notifications
+
+A persistent room emails the host user every time anybody joins. That is not a misconfiguration: a room is join-before-host and the host user never arrives, so every join is an "attendees joined before host" event. A room in regular use will bury that mailbox.
+
+These live under **Settings > Email Notification** and are per-user, with no per-meeting override in either the Zoom UI or the API, so they are turned off once for the host user rather than per room. Signed in as the host user, turn off:
+
+| Zoom notification | Why it is noise here |
+| --- | --- |
+| When attendees join meeting before host | Fires on every join into every room. The flood. |
+| When an alternative host is set or removed from a meeting | Alternate-host events never start capture; see section 5. |
+| When meetings are about to expire | Zoom's Monday email duplicates BB's own sixty-day room-expiry warning. |
+
+Leave **When a cloud recording is available**, **When a meeting is cancelled**, and **When someone scheduled a meeting for a host** on. They are infrequent, and they carry things BB does not know.
+
+Turning off the expiry notice gives up Zoom's backstop, so BB's warning becomes the only expiry signal and only someone opening the Communications page will see it. `bb communications rooms` reports the same expiry dates without the UI, which suits a reminder or a scheduled check.
+
+An account administrator can lock any of these under **Admin > Account Management > Account Settings > Email Notification**, in which case the host user's toggle is greyed out and the change has to be made there instead. If the settings cannot be reached at all, a mail rule on `no-reply@zoom.us` with `has joined` in the subject is the fallback, but a broader rule on the sender alone would hide the cancellation and recording notices too.
+
 ## Capture coverage and recovery
 
 Transcript timestamps are relative to a stable capture anchor: the first accepted `meeting.rtms_started` event for that Zoom meeting occurrence. They may therefore differ from the meeting's actual start time. The anchor is persisted so reconnects and plugin reloads keep the same timeline.
