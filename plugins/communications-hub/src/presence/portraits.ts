@@ -213,8 +213,12 @@ export class PortraitStore {
  * ITU-T T.81 §B.2.2: `Lf P Y X Nf` then `Nf` three-byte component
  * specifications, so the segment is exactly `8 + 3 × Nf` bytes long. A segment
  * whose declared length merely *fits in the buffer* proves nothing — `ff c0 00
- * 02` is a legal length and an impossible frame. Returns the component ids the
- * scan is allowed to name, or null when the header cannot describe an image.
+ * 02` is a legal length and an impossible frame. Neither does a well-sized one
+ * whose component identifiers repeat: §B.2.2 requires the Ci to be distinct
+ * precisely because a scan selects components BY identifier, so a frame that
+ * names two components `1` cannot say which one a selector means. Returns the
+ * component ids the scan is allowed to name, or null when the header cannot
+ * describe an image.
  */
 function frameComponents(bytes: Uint8Array, at: number, length: number): Set<number> | null {
   if (length < 8) return null;
@@ -229,6 +233,7 @@ function frameComponents(bytes: Uint8Array, at: number, length: number): Set<num
   if (length !== 8 + 3 * count) return null;
   const components = new Set<number>();
   for (let index = 0; index < count; index += 1) components.add(bytes[at + 8 + index * 3]!);
+  if (components.size !== count) return null;
   return components;
 }
 
@@ -237,18 +242,24 @@ function frameComponents(bytes: Uint8Array, at: number, length: number): Set<num
  *
  * ITU-T T.81 §B.2.3: `Ls Ns` then `Ns` two-byte component selectors and three
  * trailing bytes, so the segment is exactly `6 + 2 × Ns` long and every
- * selector has to name a component the frame declared. A scan that selects
- * nothing, or selects a component that does not exist, cannot be decoded.
+ * selector has to name a component the frame declared, each at most once — the
+ * scan's data units are interleaved one component at a time, so naming the same
+ * component twice describes an ordering that does not exist. A scan that
+ * selects nothing, selects a component that does not exist, or selects one
+ * twice, cannot be decoded.
  */
 function scanIsCoherent(bytes: Uint8Array, at: number, length: number, components: Set<number>): boolean {
   if (length < 6) return false;
   const count = bytes[at + 2]!;
   if (count < 1 || count > 4) return false;
   if (length !== 6 + 2 * count) return false;
+  const selected = new Set<number>();
   for (let index = 0; index < count; index += 1) {
-    if (!components.has(bytes[at + 3 + index * 2]!)) return false;
+    const selector = bytes[at + 3 + index * 2]!;
+    if (!components.has(selector)) return false;
+    selected.add(selector);
   }
-  return true;
+  return selected.size === count;
 }
 
 /**
@@ -259,16 +270,29 @@ function scanIsCoherent(bytes: Uint8Array, at: number, length: number, component
  * that will not serve a picture it cannot vouch for. So the marker segments are
  * walked from SOI, and each one has to be internally coherent, not merely
  * well-sized: the frame header has to declare a real size and between one and
- * four components in a segment of exactly the matching length, the scan has to
- * select components that frame declared, and entropy-coded data has to actually
- * follow the scan before the closing EOI. `ff d8 ff c0 00 02 ff da 00 02 ff d9`
- * — an empty frame and an empty scan, every length legal — is the payload that
- * made those checks necessary and is kept as a fixture.
+ * four DISTINCTLY identified components in a segment of exactly the matching
+ * length, the scan has to select components that frame declared and select each
+ * at most once, and entropy-coded data has to actually follow the scan before
+ * the closing EOI. Two payloads are kept as fixtures because each got past an
+ * earlier version of this walk: `ff d8 ff c0 00 02 ff da 00 02 ff d9` — an empty
+ * frame and an empty scan, every length legal — and a two-component frame that
+ * gives both components the identifier `1`, which Chromium refuses to decode.
  *
- * This is a validation, not a decode. It proves the bytes are laid out as a
- * JPEG, describe an image, and are not truncated; it does not prove the
- * entropy-coded data decodes to a picture, which would need a decoder this
- * plugin has no business carrying. What it rules out is everything the feed can
+ * This is a validation, not a decode — and the boundary matters, because it is
+ * where the UI has to take over. It proves the bytes are laid out as a JPEG,
+ * that the frame and scan headers describe one coherent image, and that the
+ * image is not truncated. It does NOT prove:
+ *
+ * - that the entropy-coded data decodes to a picture — that needs a Huffman
+ *   decoder and an IDCT this plugin has no business carrying;
+ * - that the quantisation and Huffman tables a scan refers to were defined;
+ * - that a progressive image's successive scans cover its coefficients.
+ *
+ * So a validated frame can still be one the browser refuses to draw, and the
+ * strip is required to handle that: a portrait `<img>` that fires `error` falls
+ * back to the person's initials (see `face()` in `ui/strip.ts`), so the residue
+ * this validator cannot catch degrades to a face without a picture rather than
+ * an empty hole. What the walk itself rules out is everything the feed can
  * plausibly get wrong: garbage, a truncated frame, another format, or somebody
  * else's bytes in a JPEG-shaped wrapper.
  */

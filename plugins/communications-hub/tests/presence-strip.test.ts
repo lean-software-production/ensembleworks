@@ -519,6 +519,28 @@ describe("the presence popover", () => {
     expect(popover()!.querySelector(".ewzp-person .ewzp-face")!.textContent).toBe("AD");
   });
 
+  it("falls back to initials when the browser cannot decode the still", async () => {
+    // The store validates a frame's STRUCTURE, not its entropy-coded data, so a
+    // frame can be accepted and still be undecodable by the browser that has to
+    // draw it. When that happens the face must read as a person without a
+    // picture — initials — rather than as an empty hole with alt text.
+    sidebar();
+    const harness = mount({
+      view: view({ portraits: true, participants: [participant({ portraitAt: NOW - 1_000 })], knownCount: 1 }),
+      portrait: { participantId: "conversation-1:1", capturedAt: NOW - 1_000, dataUrl: "data:image/jpeg;base64,AA==" },
+    });
+    await harness.strip.refresh();
+    await flush();
+    row()!.click();
+
+    const image = popover()!.querySelector<HTMLImageElement>(".ewzp-person img");
+    expect(image).not.toBeNull();
+    image!.dispatchEvent(new Event("error"));
+
+    expect(popover()!.querySelector(".ewzp-person img")).toBeNull();
+    expect(popover()!.querySelector(".ewzp-person .ewzp-face")!.textContent).toBe("AD");
+  });
+
   it("never asks for an image when portraits are not running", async () => {
     sidebar();
     const harness = mount({ view: view({ participants: [participant({ portraitAt: NOW })], portraits: false }) });

@@ -260,4 +260,46 @@ describe("jpeg detection", () => {
     // image, so the checks above are rejecting the emptiness, not the shape.
     expect(isJpeg(new Uint8Array([...SOI, ...FRAME, ...SCAN, 0x42, ...EOI]))).toBe(true);
   });
+
+  it("refuses a frame whose component identifiers are not unique", () => {
+    // The exact payload an adversarial validation pass got past the structural
+    // walk. The frame declares two components and gives both the identifier 1,
+    // so a scan selector naming component 1 cannot say which of the two it
+    // means: the frame does not describe a decodable image. Chromium agrees —
+    // loading these bytes as a data URL fires `error` with naturalWidth 0.
+    expect(isJpeg(new Uint8Array([
+      ...SOI,
+      0xff, 0xc0, 0x00, 0x0e, 0x08, 0x00, 0x01, 0x00, 0x01, 0x02, 0x01, 0x11, 0x00, 0x01, 0x11, 0x00,
+      ...SCAN, 0x42, ...EOI,
+    ]))).toBe(false);
+    // The identical frame with two DISTINCT identifiers is structurally
+    // complete, so it is the duplication being refused and not two-component
+    // frames as such.
+    expect(isJpeg(new Uint8Array([
+      ...SOI,
+      0xff, 0xc0, 0x00, 0x0e, 0x08, 0x00, 0x01, 0x00, 0x01, 0x02, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00,
+      ...SCAN, 0x42, ...EOI,
+    ]))).toBe(true);
+  });
+
+  it("refuses a scan that selects the same component twice", () => {
+    /** A frame declaring two distinct components, 1 and 2. */
+    const TWO = [
+      0xff, 0xc0, 0x00, 0x0e, 0x08, 0x00, 0x01, 0x00, 0x01, 0x02, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00,
+    ];
+    // Two selectors, both naming component 1: the scan claims to carry two
+    // components' data and names one of them twice, which no decoder can
+    // interleave. Same defect as the frame case, one segment further on.
+    expect(isJpeg(new Uint8Array([
+      ...SOI, ...TWO,
+      0xff, 0xda, 0x00, 0x0a, 0x02, 0x01, 0x00, 0x01, 0x00, 0x00, 0x3f, 0x00,
+      0x42, ...EOI,
+    ]))).toBe(false);
+    // The same scan selecting each declared component once is coherent.
+    expect(isJpeg(new Uint8Array([
+      ...SOI, ...TWO,
+      0xff, 0xda, 0x00, 0x0a, 0x02, 0x01, 0x00, 0x02, 0x00, 0x00, 0x3f, 0x00,
+      0x42, ...EOI,
+    ]))).toBe(true);
+  });
 });

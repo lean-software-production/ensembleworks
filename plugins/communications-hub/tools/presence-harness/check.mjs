@@ -333,6 +333,77 @@ async function open(page, options = {}) {
   await page.close();
 }
 
+// ── A still the validator accepts and the browser cannot draw ───────────────
+//
+// `isJpeg` validates STRUCTURE, not entropy-coded data, and that boundary is
+// only defensible if the UI covers the residue. These bytes are the exact shape
+// the store accepts — SOI, a two-component frame with distinct identifiers, a
+// coherent scan, one byte of scan data, EOI — and Chromium still refuses to
+// decode them. jsdom cannot answer this: it has no image decoder, so only a
+// real browser can say whether the face ends up as a picture, an empty hole, or
+// initials.
+{
+  const page = await browser.newPage({ viewport: { width: 1_280, height: 900 } });
+  const undecodable = Buffer.from([
+    0xff, 0xd8,
+    0xff, 0xc0, 0x00, 0x0e, 0x08, 0x00, 0x01, 0x00, 0x01, 0x02, 0x01, 0x11, 0x00, 0x02, 0x11, 0x00,
+    0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00,
+    0x42,
+    0xff, 0xd9,
+  ]).toString("base64");
+  /** The duplicate-identifier frame the validator now refuses outright. */
+  const duplicateIds = Buffer.from([
+    0xff, 0xd8,
+    0xff, 0xc0, 0x00, 0x0e, 0x08, 0x00, 0x01, 0x00, 0x01, 0x02, 0x01, 0x11, 0x00, 0x01, 0x11, 0x00,
+    0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00,
+    0x42,
+    0xff, 0xd9,
+  ]).toString("base64");
+
+  await page.goto(base);
+  await page.waitForFunction(() => window.__ready === true);
+
+  const decoded = await page.evaluate(async ([valid, duplicate]) => {
+    const load = (base64) => new Promise((resolve) => {
+      const image = new Image();
+      image.addEventListener("load", () => resolve({ loaded: true, width: image.naturalWidth }));
+      image.addEventListener("error", () => resolve({ loaded: false, width: image.naturalWidth }));
+      image.src = `data:image/jpeg;base64,${base64}`;
+    });
+    return { valid: await load(valid), duplicate: await load(duplicate) };
+  }, [undecodable, duplicateIds]);
+  check("Chromium refuses the duplicate-identifier frame",
+    decoded.duplicate.loaded === false, JSON.stringify(decoded.duplicate));
+  check("Chromium refuses a structurally valid frame with no real picture in it",
+    decoded.valid.loaded === false, JSON.stringify(decoded.valid));
+
+  const face = await page.evaluate(async (base64) => {
+    window.__portrait = {
+      participantId: "conversation-1:0",
+      capturedAt: Date.now(),
+      dataUrl: `data:image/jpeg;base64,${base64}`,
+    };
+    window.__setView({ portraits: true }, 2);
+    window.__view.room.participants[0].portraitAt = window.__portrait.capturedAt;
+    await window.__strip.refresh();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    document.querySelector("#ewzp-row-root .ewzp-row").click();
+    // Long enough for the decode to fail and the error handler to run.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const person = document.querySelector("#ewzp-popover .ewzp-person .ewzp-face");
+    return {
+      images: document.querySelectorAll("#ewzp-popover .ewzp-person img").length,
+      text: person.textContent,
+      size: person.getBoundingClientRect().width,
+    };
+  }, undecodable);
+  check("a still the browser cannot draw leaves no broken image", face.images === 0, String(face.images));
+  check("the face falls back to initials", face.text === "AL", face.text);
+  check("the face keeps its circle", face.size >= 16, `${face.size}px`);
+  await page.screenshot({ path: join(shots, "presence-undecodable-still.png") });
+  await page.close();
+}
+
 await browser.close();
 server.close();
 

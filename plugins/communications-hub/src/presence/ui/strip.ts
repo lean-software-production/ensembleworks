@@ -74,6 +74,14 @@ function face(
     // A still is described as a still. The alternative — an <img> that reads as
     // a person's live camera — is the dishonest version of this feature.
     image.alt = input.hint ?? `Still image of ${input.label}`;
+    // The store validates a frame's structure, not its entropy-coded data (see
+    // `isJpeg`), so bytes it accepted can still be bytes this browser will not
+    // draw. A broken <img> renders as an empty hole with alt text; a person
+    // without a usable picture should look like every other person without one.
+    image.addEventListener("error", () => {
+      image.remove();
+      node.textContent = input.initials;
+    }, { once: true });
     node.append(image);
   } else {
     node.textContent = input.initials;

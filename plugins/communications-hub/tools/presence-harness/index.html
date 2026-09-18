@@ -89,10 +89,14 @@
   // window without the run having to wait out twelve real seconds.
   window.__clockOffset = 0;
   window.__rpcBroken = false;
+  // The still `presence.portrait` answers with, or null for no picture. A check
+  // sets this to hand the real strip a real data URL and see what Chromium
+  // actually does with those bytes.
+  window.__portrait = null;
   window.fetch = async (input) => {
     if (window.__rpcBroken) throw new Error("presence rpc is down");
     const url = String(input);
-    const result = url.endsWith("presence.portrait") ? null : window.__view;
+    const result = url.endsWith("presence.portrait") ? window.__portrait : window.__view;
     return { ok: true, status: 200, json: async () => ({ ok: true, result }) };
   };
 
