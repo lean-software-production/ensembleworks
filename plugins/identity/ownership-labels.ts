@@ -1,6 +1,7 @@
 import { initials } from "./presence-labels.js";
 import type { HostClassification } from "./hosts.js";
 import type { StarterSummary, Via } from "./attribution.js";
+import type { EnforcementMode } from "./audit.js";
 
 /**
  * The wording of the ownership UI (option B in the design note): who started a thread,
@@ -70,18 +71,64 @@ function machineDiffers(view: OwnershipView): view is OwnershipView & { host: Ho
 export type OwnershipChip = { text: string; tone: "default" | "muted" };
 
 /**
+ * What enforcement WOULD have done, for the chip to say in `audit` mode.
+ *
+ * Audit exists so the team can evaluate the guardrail by USING bb, not by reading logs:
+ * the chip names the rule that would have fired and, in the same breath, that it did not
+ * fire. It is null in every other mode and whenever nothing would have been refused —
+ * the honest answer to "what would have happened?" is usually "nothing".
+ *
+ * It mirrors the guardrail's two person-facing rules (`guardrail.ts`), from the same
+ * facts the chip already has: rule B (someone else's thread) first, then rule A (a start
+ * on another person's machine), which is the order the guardrail itself decides in.
+ */
+export function wouldBeRefused(input: {
+  enforcement: EnforcementMode;
+  me: StarterSummary | null;
+  starter: StarterSummary | null;
+  host: HostClassification | null;
+}): string | null {
+  if (input.enforcement !== "audit" || input.me === null) return null;
+  const { me, starter, host } = input;
+  if (starter !== null && starter.person !== me.person) {
+    return `would be refused — ${starter.displayName}'s thread (audit mode, so it went through)`;
+  }
+  if (starter !== null && host !== null && host.kind === "person" && host.person.person !== starter.person) {
+    return `this start would be refused — ${machineDescription(host)} (audit mode, so it went through)`;
+  }
+  return null;
+}
+
+/**
  * The thread-header chip: "Started by David · runs as ensembleworks-agent on
  * ew-lsp-001-main (team machine)".
  */
-export function headerChip(view: OwnershipView, options: { sharedUser: string }): OwnershipChip {
+export function headerChip(
+  view: OwnershipView,
+  options: {
+    sharedUser: string;
+    /** The mode in force; only `audit` adds a would-have clause. */
+    enforcement?: EnforcementMode;
+    /** Who is reading the chip, so rule B's "someone else's thread" can be answered. */
+    me?: StarterSummary | null;
+  },
+): OwnershipChip {
   const known = view.starter !== null || view.via === "plugin";
   const lead = known ? `Started by ${starterPhrase(view)}` : "Starter not recorded";
-  if (!machineDiffers(view)) return { text: lead, tone: known ? "default" : "muted" };
+  const would = wouldBeRefused({
+    enforcement: options.enforcement ?? "off",
+    me: options.me ?? null,
+    starter: view.starter,
+    host: view.host,
+  });
+  const audit = would === null ? "" : ` · ${would}`;
+  if (!machineDiffers(view)) return { text: `${lead}${audit}`, tone: known ? "default" : "muted" };
   const host = view.host;
   // Only a person-owned host can carry a conflict, so the pinned owner is its person.
   const conflict = host.conflict === null ? "" : ` — renamed since it was pinned to ${host.person.displayName}`;
   return {
-    text: `${lead} · runs as ${runsAs(host, options.sharedUser)} on ${host.hostName} (${machineDescription(host)})${conflict}`,
+    text: `${lead} · runs as ${runsAs(host, options.sharedUser)} on ${host.hostName} `
+      + `(${machineDescription(host)})${conflict}${audit}`,
     tone: known ? "default" : "muted",
   };
 }
@@ -123,8 +170,8 @@ export type OwnershipBanner = { title: string; detail: string };
 export function composerBanner(input: {
   me: StarterSummary | null;
   machines: readonly HostClassification[];
-  /** Whether the guardrail is actually switched on, which changes what this may promise. */
-  restrictStarts: boolean;
+  /** The mode in force, which changes what this banner may promise. */
+  enforcement: EnforcementMode;
 }): OwnershipBanner {
   if (input.me === null) {
     return {
@@ -137,23 +184,30 @@ export function composerBanner(input: {
     .map((host) => host.hostName);
   const team = input.machines.filter((host) => host.kind === "team").map((host) => host.hostName);
   const title = `Starting as ${input.me.displayName}`;
-  if (mine.length === 0 && team.length === 0) {
-    return {
-      title,
-      detail: "No machines of yours are known yet. BB does not tell a plugin which machine this composer has selected.",
-    };
-  }
   const lists = [
     mine.length > 0 ? `Your machines: ${mine.join(", ")}.` : "No machines of your own are known yet.",
     team.length > 0 ? `Team machine: ${team.join(", ")}.` : null,
   ].filter((part): part is string => part !== null).join(" ");
   // What happens after you press send is the only part of this that the setting changes.
-  // With `restrictStarts` off nothing refuses anything, and saying otherwise would be a
-  // lie told in the user's own composer (there is a test for exactly that).
-  const afterwards = input.restrictStarts
+  // With enforcement off nothing refuses anything; in audit the same decision is taken
+  // and then not acted on. Saying otherwise would be a lie told in the user's own
+  // composer (there is a test for exactly that, in both modes).
+  const afterwards = input.enforcement === "enforce"
     ? "The dispatch itself is checked though: starting on someone else's machine is refused, with a message "
       + "naming whose it is."
-    : "Nothing else checks it yet either: starting on someone else's machine is recorded, not refused.";
+    : input.enforcement === "audit"
+      ? "The dispatch itself is judged though: in audit mode, starting on someone else's machine is written to "
+        + "Identity's log as a would-refuse, and then goes ahead anyway."
+      : "Nothing else checks it yet either: starting on someone else's machine is recorded, not refused.";
+  if (mine.length === 0 && team.length === 0) {
+    // Even with nothing to list, the mode sentence still ships: "what happens when I
+    // press send" is the one thing this banner can always answer truthfully.
+    return {
+      title,
+      detail: "No machines of yours are known yet. BB does not tell a plugin which machine this composer has "
+        + `selected. ${afterwards}`,
+    };
+  }
   return {
     title,
     detail: `${lists} BB does not tell a plugin which machine this composer has selected, so this banner cannot `
@@ -175,16 +229,23 @@ export function composerBanner(input: {
 export function readOnlyBanner(input: {
   me: StarterSummary | null;
   starter: StarterSummary | null;
-  restrictStarts: boolean;
+  enforcement: EnforcementMode;
 }): OwnershipBanner | null {
   const { me, starter } = input;
   if (me === null || starter === null || me.person === starter.person) return null;
   const name = starter.displayName;
-  if (!input.restrictStarts) {
+  if (input.enforcement === "off") {
     return {
       title: `${name}'s thread`,
       detail: `Other people's threads are meant to be ${name}'s to drive, but nothing enforces that here: `
-        + "Identity's restrictStarts setting is off.",
+        + "Identity's enforcement setting is off.",
+    };
+  }
+  if (input.enforcement === "audit") {
+    return {
+      title: `${name}'s thread`,
+      detail: `Other people's threads are meant to be ${name}'s to drive. In audit mode a message from you here `
+        + "is written to Identity's log as a would-refuse, and then goes through anyway.",
     };
   }
   return {

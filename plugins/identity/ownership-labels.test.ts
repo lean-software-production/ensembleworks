@@ -143,7 +143,7 @@ describe("composerBanner", () => {
     const banner = composerBanner({
       me: david,
       machines: [davidsMachine, mattsMachine, teamMachine, unclaimed],
-      restrictStarts: false,
+      enforcement: "off",
     });
     expect(banner.title).toBe("Starting as David");
     expect(banner.detail).toBe(
@@ -154,14 +154,25 @@ describe("composerBanner", () => {
   });
 
   it("never promises an enforcement that is not switched on", () => {
-    // Step 5 built `restrictStarts`, and it defaults to OFF. With it off nothing refuses
-    // a start, so copy implying one is caught, refused or blocked would be a lie told in
-    // the user's own composer. The guard now turns on the SETTING, not on step 5's
-    // existence — which is the same promise, made conditional rather than deleted.
+    // Step 5 built the guardrail behind a setting that defaults to OFF. With it off
+    // nothing refuses a start, so copy implying one is caught, refused or blocked would
+    // be a lie told in the user's own composer.
     for (const machines of [[], [davidsMachine, teamMachine, unclaimed]]) {
-      const detail = composerBanner({ me: david, machines, restrictStarts: false }).detail;
+      const detail = composerBanner({ me: david, machines, enforcement: "off" }).detail;
       // Only positive claims are banned: "is recorded, not refused" is the honest form.
       expect(detail).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
+    }
+  });
+
+  it("in audit, says what would happen without claiming anything was stopped", () => {
+    // Audit mode computes the same refusal `enforce` would, and then lets the message
+    // through. Copy that implied the message was caught, refused or blocked would be
+    // false in exactly the mode the team is meant to evaluate this in.
+    for (const machines of [[], [davidsMachine, teamMachine, unclaimed]]) {
+      const detail = composerBanner({ me: david, machines, enforcement: "audit" }).detail;
+      expect(detail).toMatch(/audit mode/i);
+      expect(detail).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
+      expect(detail).not.toMatch(/\b(was|were|has been|have been)\s+(caught|refused|blocked|prevented|stopped)\b/i);
     }
   });
 
@@ -169,7 +180,7 @@ describe("composerBanner", () => {
     const detail = composerBanner({
       me: david,
       machines: [davidsMachine, teamMachine, unclaimed],
-      restrictStarts: true,
+      enforcement: "enforce",
     }).detail;
     expect(detail).toMatch(/starting on someone else's machine is refused/i);
     // Still honest about what the banner itself cannot do (S3-lite).
@@ -177,12 +188,13 @@ describe("composerBanner", () => {
   });
 
   it("says so plainly when there are no machines to list", () => {
-    expect(composerBanner({ me: david, restrictStarts: false, machines: [] }).detail)
-      .toBe("No machines of yours are known yet. BB does not tell a plugin which machine this composer has selected.");
+    expect(composerBanner({ me: david, enforcement: "off", machines: [] }).detail)
+      .toBe("No machines of yours are known yet. BB does not tell a plugin which machine this composer has "
+        + "selected. Nothing else checks it yet either: starting on someone else's machine is recorded, not refused.");
   });
 
   it("is neutral, not alarming, for an unrecognised sign-in", () => {
-    expect(composerBanner({ me: null, restrictStarts: false, machines: [teamMachine] })).toEqual({
+    expect(composerBanner({ me: null, enforcement: "off", machines: [teamMachine] })).toEqual({
       title: "Starting as an unrecognised sign-in",
       detail: "Threads you start will show no starter. Add your email to Identity's directory setting to be named.",
     });
@@ -191,22 +203,67 @@ describe("composerBanner", () => {
 
 describe("readOnlyBanner", () => {
   it("names whose thread this is when the guardrail is on", () => {
-    expect(readOnlyBanner({ me: david, starter: matt, restrictStarts: true })).toEqual({
+    expect(readOnlyBanner({ me: david, starter: matt, enforcement: "enforce" })).toEqual({
       title: "Read-only: Matt's thread",
       detail: "Only Matt can send to it. Ask Matt, or start a thread of your own.",
     });
   });
 
   it("does not claim read-only when the setting is off, because nothing enforces it", () => {
-    const banner = readOnlyBanner({ me: david, starter: matt, restrictStarts: false });
+    const banner = readOnlyBanner({ me: david, starter: matt, enforcement: "off" });
     expect(banner?.title).toBe("Matt's thread");
     expect(banner?.detail).not.toMatch(/\b(is|are|will be|gets?)\s+(caught|refused|blocked|prevented|stopped)\b/i);
-    expect(banner?.detail).toContain("restrictStarts");
+    expect(banner?.detail).toContain("enforcement");
   });
 
   it("says nothing on your own thread, an unrecorded one, or to an unrecognised sign-in", () => {
-    expect(readOnlyBanner({ me: david, starter: david, restrictStarts: true })).toBeNull();
-    expect(readOnlyBanner({ me: david, starter: null, restrictStarts: true })).toBeNull();
-    expect(readOnlyBanner({ me: null, starter: matt, restrictStarts: true })).toBeNull();
+    expect(readOnlyBanner({ me: david, starter: david, enforcement: "enforce" })).toBeNull();
+    expect(readOnlyBanner({ me: david, starter: null, enforcement: "enforce" })).toBeNull();
+    expect(readOnlyBanner({ me: null, starter: matt, enforcement: "enforce" })).toBeNull();
+  });
+});
+
+describe("the header chip in audit mode", () => {
+  const options = { sharedUser: "ensembleworks-agent" };
+
+  it("says what enforcement would have done, and that it did not do it", () => {
+    const chip = headerChip(view({ starter: matt, host: mattsMachine }), {
+      ...options,
+      enforcement: "audit",
+      me: david,
+    });
+    expect(chip.text).toContain("Started by Matt");
+    expect(chip.text).toMatch(/would be refused/i);
+    expect(chip.text).toContain("Matt's thread");
+    expect(chip.text).toMatch(/audit mode/i);
+    // The honesty guard, extended to audit: never a claim that something WAS blocked.
+    expect(chip.text).not.toMatch(/\b(was|were|has been|have been)\s+(caught|refused|blocked|prevented|stopped)\b/i);
+  });
+
+  it("names the machine when the start itself is what enforce would have refused", () => {
+    const chip = headerChip(view({ starter: david, host: mattsMachine }), {
+      ...options,
+      enforcement: "audit",
+      me: david,
+    });
+    expect(chip.text).toMatch(/would be refused/i);
+    expect(chip.text).toContain("Matt's machine");
+  });
+
+  it("says nothing extra when nothing would have been refused", () => {
+    expect(headerChip(view(), { ...options, enforcement: "audit", me: david }).text)
+      .toBe("Started by David");
+  });
+
+  it("says nothing extra outside audit mode, in either direction", () => {
+    for (const enforcement of ["off", "enforce"] as const) {
+      const chip = headerChip(view({ starter: matt, host: mattsMachine }), { ...options, enforcement, me: david });
+      expect(chip.text).not.toMatch(/would be refused/i);
+    }
+  });
+
+  it("says nothing extra when it cannot name the viewer", () => {
+    expect(headerChip(view({ starter: matt, host: mattsMachine }), { ...options, enforcement: "audit", me: null }).text)
+      .not.toMatch(/would be refused/i);
   });
 });

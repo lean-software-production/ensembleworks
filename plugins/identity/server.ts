@@ -14,6 +14,19 @@ import {
   type HostClassification,
 } from "./hosts.js";
 import { makeGuardrail } from "./guardrail.js";
+import {
+  AUDIT_SCHEMA_VERSION,
+  ENFORCEMENT_MODES,
+  RequestAuditor,
+  dispatchAuditLine,
+  emitAudit,
+  formatAuditLine,
+  normalizeAuditPath,
+  parseEnforcement,
+  postDispatchAuditLine,
+  type AuditLine,
+  type EnforcementMode,
+} from "./audit.js";
 import { identityFor, parseDirectory, type Person } from "./people.js";
 import {
   ACCESS_EMAIL_HEADER,
@@ -182,10 +195,10 @@ const machineList = z.object({
   /** The account team and unclaimed machines run as, for the header chip's wording. */
   sharedMachineUser: z.string(),
   /**
-   * Whether the guardrail is switched on. The UI must not promise an enforcement the
-   * server is not performing, so every banner that mentions one reads this.
+   * Which enforcement mode is in force. The UI must not promise an enforcement the
+   * server is not performing, so every banner and chip that mentions one reads this.
    */
-  restrictStarts: z.boolean(),
+  enforcement: z.enum(ENFORCEMENT_MODES),
   /** Why the list is empty, when it is. Null when the list was read successfully. */
   unavailable: z.string().nullable(),
 }).strict();
@@ -426,16 +439,20 @@ export default async function plugin(bb: BbPluginApi) {
         + "the thread header chip. Display only — Identity never sets or checks it.",
       default: "ensembleworks-agent",
     },
-    restrictStarts: {
-      type: "boolean",
-      label: "Restrict where threads are started",
+    enforcement: {
+      type: "select",
+      label: "Enforcement",
+      options: [...ENFORCEMENT_MODES],
       description:
-        "Refuse a known person's start on another person's machine, a known person's message into "
-        + "someone else's thread, and an automation off a team machine. A dispatch Identity cannot tie "
-        + "to a person is ALWAYS allowed — that is the normal shape of every agent path, and an identity "
-        + "supplied by Fallback email counts as untied here, so it is never refused either. Default off: "
-        + "turn it on once the ownership labels look right.",
-      default: false,
+        "off: record who started what, label it in the UI, and never refuse anything. "
+        + "audit: take the SAME decision enforcement would, write it to the log (`bb plugin logs identity`) "
+        + "as a would-refuse, and let the message through anyway. "
+        + "enforce: act on that decision — refuse a known person's start on another person's machine, their "
+        + "message into someone else's thread, and an automation off a team machine. "
+        + "A dispatch Identity cannot tie to a person is ALWAYS allowed in every mode — that is the normal "
+        + "shape of every agent path — and an identity supplied by Fallback email counts as untied. "
+        + "audit and enforce both log; off logs nothing. Emails appear in those log lines by design.",
+      default: "off",
     },
     fallbackEmail: {
       type: "string",
@@ -453,19 +470,19 @@ export default async function plugin(bb: BbPluginApi) {
   let fallbackEmail = "";
   let teamMachines: string[] = [];
   let sharedMachineUser = "ensembleworks-agent";
-  let restrictStarts = false;
+  let enforcement: EnforcementMode = "off";
   const applySettings = (
     values: {
       directory: string;
       fallbackEmail: string;
       teamMachines: string;
       sharedMachineUser: string;
-      restrictStarts: boolean;
+      enforcement: string;
     },
     reportInvalid: boolean,
   ) => {
     fallbackEmail = values.fallbackEmail;
-    restrictStarts = values.restrictStarts;
+    enforcement = parseEnforcement(values.enforcement);
     teamMachines = parseTeamMachines(values.teamMachines);
     sharedMachineUser = values.sharedMachineUser.trim() || "ensembleworks-agent";
     const parsed = parseDirectory(values.directory);
@@ -491,6 +508,52 @@ export default async function plugin(bb: BbPluginApi) {
     bb.log.warn(`identity: could not read settings: ${(error as Error).message}`);
   }
   settings.onChange((next) => applySettings(next, false));
+
+  // ── Audit mode (2026-09-18): what identity actually reaches us ──────────────────
+  //
+  // Three streams, all through `bb.log` and nothing else (owner's decision: no ring
+  // buffer, no /audit route, no UI log page). One JSON object per line, prefixed so
+  // `bb plugin logs identity | sed -n 's/.*identity-audit //p' | jq` works.
+  //
+  // Nothing here may refuse or delay a dispatch: `emitAudit` swallows its own failures,
+  // the dispatch stream runs inside the hook's existing 5s fail-open deadline, and the
+  // request stream runs on the request thread but does no I/O at all.
+  const auditLine = (line: AuditLine) => {
+    bb.log.info(formatAuditLine(line));
+  };
+  const auditing = () => enforcement !== "off";
+
+  /**
+   * Stream (a): the request stream. The ALS patch sees EVERY http request bb handles —
+   * including the routes the dispatch hook never sees (terminals, Stop, Archive,
+   * answering approvals, host routes, plugin RPCs), which is what answers the owner's
+   * question about which actions carry identity.
+   *
+   * Volume is the real problem here, so `RequestAuditor` gives mutations their own line
+   * and counts everything else into a rollup. See `audit.ts` for the policy and the
+   * design note for the measurement behind it.
+   */
+  const requestAuditor = new RequestAuditor({ emit: auditLine, now: () => Date.now() });
+  const stopObserving = requestContext.observe((facts) => {
+    if (!auditing()) return;
+    requestAuditor.observe({
+      id: facts.id,
+      method: facts.method,
+      url: facts.url,
+      email: facts.email,
+      person: summarize(identityFor(people, facts.email, fallbackEmail).person),
+    });
+  });
+
+  /** The request this code is running for, as an audit line's correlation fields. */
+  const currentRequestFields = () => {
+    const facts = requestContext.current();
+    return {
+      requestId: facts?.id ?? null,
+      requestMethod: facts?.method?.toUpperCase() ?? null,
+      requestPath: facts === undefined ? null : normalizeAuditPath(facts.url),
+    };
+  };
 
   /** Identity of whoever made the current request; unknown outside a request (startup race). */
   const currentIdentity = (email = requestContext.current()?.email ?? null) => identityFor(people, email, fallbackEmail);
@@ -545,7 +608,7 @@ export default async function plugin(bb: BbPluginApi) {
    * to word itself, and the hook is on bb's critical path.
    */
   const guard = makeGuardrail({
-    enabled: () => restrictStarts,
+    mode: () => enforcement,
     classify: classifyWithPin,
     machines: (requester) => ({
       yourMachines: requester === null ? [] : (machineCache?.machines ?? [])
@@ -567,7 +630,56 @@ export default async function plugin(bb: BbPluginApi) {
       // sight. `HostPins` never throws and bounds its own storage calls.
       observeHost: (host) => pins.observe(host),
       log: { info: (message) => bb.log.info(message), warn: (message) => bb.log.warn(message) },
+      /**
+       * Stream (b): every dispatch, with the full attribution facts PLUS the guardrail's
+       * verdict — the rule that would have fired and the refusal it would have produced —
+       * next to the action actually returned. In `audit` those two differ, and that
+       * difference is the point.
+       */
+      audit: auditing()
+        ? (record) => {
+          emitAudit(auditLine, dispatchAuditLine({
+            at: Date.now(),
+            ...currentRequestFields(),
+            mode: enforcement,
+            facts: record.facts,
+            hostKind: record.outcome.hostKind,
+            recordedStarter: record.existing?.starter ?? null,
+            starter: record.decided?.starter ?? null,
+            via: record.decided?.via ?? null,
+            verdict: record.outcome.verdict,
+            action: record.outcome.action.action,
+          }));
+        }
+        : undefined,
     }));
+
+  /**
+   * Stream (c): the post-dispatch events. Per S7 these run in the REQUESTER's async
+   * context, so they see the paths the hook never does — Send-now, and a queued row
+   * draining later. This is the "what we couldn't block" half: it reports identity, it
+   * cannot act on it.
+   */
+  for (const event of ["message.queued", "message.dispatched"] as const) {
+    bb.events.on(event, ({ entry }) => {
+      if (!auditing()) return;
+      const facts = requestContext.current();
+      const identity = identityFor(people, facts?.email ?? null, fallbackEmail);
+      emitAudit(auditLine, postDispatchAuditLine({
+        kind: event,
+        at: Date.now(),
+        ...currentRequestFields(),
+        mode: enforcement,
+        entryId: entry.id ?? null,
+        threadId: entry.threadId ?? null,
+        senderThreadId: entry.senderThreadId ?? null,
+        // A drain has no request at all, so it has no email either — that is the fact
+        // being reported, not a failure.
+        email: facts === undefined ? null : identity.email,
+        person: facts === undefined ? null : summarize(identity.person),
+      }));
+    });
+  }
 
   const ownership = async (wanted: string): Promise<ThreadOwnership> => {
     const record = publicStarter(await ledger.get(wanted));
@@ -674,7 +786,7 @@ export default async function plugin(bb: BbPluginApi) {
       return publicMachineList({
         me: whoamiFor(requestContext.current()?.email ?? null).person,
         sharedMachineUser,
-        restrictStarts,
+        enforcement,
         machines: listed.machines,
         unavailable: listed.unavailable,
       });
@@ -702,6 +814,10 @@ export default async function plugin(bb: BbPluginApi) {
   });
   bb.onDispose(() => {
     store.clear();
+    stopObserving();
+    // The rollup window is flushed lazily by the next request, so a reload would
+    // otherwise lose the counters gathered since the last one.
+    requestAuditor.flush();
     if (selfTestTimer !== undefined) clearTimeout(selfTestTimer);
     // Deliberately NOT unpatching the request context: bb disposes the old generation
     // after the new one has loaded, so restoring `emit` here would remove the live

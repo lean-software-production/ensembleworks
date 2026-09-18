@@ -232,7 +232,7 @@ describe("publicMachineList", () => {
   const listed = {
     me: { person: "mrdavidlaing", displayName: "David", github: "mrdavidlaing" },
     sharedMachineUser: "ensembleworks-agent",
-    restrictStarts: false,
+    enforcement: "off" as const,
     machines: [{ kind: "team" as const, hostId: "h3", hostName: "ew-lsp-001-main", conflict: null }],
     unavailable: null,
   };

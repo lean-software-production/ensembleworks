@@ -11,6 +11,7 @@ import {
   parseEnforcement,
   postDispatchAuditLine,
   requestStreamChoice,
+  type AuditLine,
 } from "./audit.js";
 import type { StarterSummary } from "./attribution.js";
 
@@ -309,7 +310,7 @@ describe("formatAuditLine / emitAudit", () => {
   });
 
   it("survives a value JSON cannot serialize, rather than failing the caller", () => {
-    const cyclic: Record<string, unknown> = { v: 1, kind: "request", at: 1 };
+    const cyclic: AuditLine = { v: 1, kind: "request", at: 1 };
     cyclic.self = cyclic;
     const sink = vi.fn();
     expect(() => emitAudit(sink, cyclic)).not.toThrow();

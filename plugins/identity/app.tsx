@@ -170,11 +170,15 @@ function PresenceCoordinator() {
  * The thread header chip: "Started by David · runs as ensembleworks-agent on
  * <machine>", the machine shown only when it differs from the starter (option B).
  * Display only — it never blocks or alters anything.
+ *
+ * In `audit` mode it also carries what enforcement WOULD have done ("would be refused —
+ * Matt's thread"), so the team can evaluate the guardrail by using bb rather than by
+ * reading logs.
  */
 function ThreadOwnershipChip({ threadId }: { threadId: string }) {
   const rpc = useRpc<typeof rpcContract>();
   const [ownership, setOwnership] = useState<ThreadOwnership | null>(null);
-  const [sharedUser, setSharedUser] = useState("ensembleworks-agent");
+  const [list, setList] = useState<MachineList | null>(null);
   useEffect(() => {
     let live = true;
     void rpc.call("identity_thread_ownership", { threadIds: [threadId] }).then(({ threads }) => {
@@ -184,15 +188,19 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
   }, [rpc, threadId]);
   useEffect(() => {
     let live = true;
+    // The shared account's name, who I am and which mode is in force all ride along with
+    // the machine list rather than costing a call each.
     void rpc.call("identity_machines").then((result: MachineList) => {
-      // The chip needs only the shared account's name; it rides along with the
-      // machine list rather than costing a second call.
-      if (live) setSharedUser(result.sharedMachineUser);
+      if (live) setList(result);
     }).catch(() => undefined);
     return () => { live = false; };
   }, [rpc]);
   if (ownership === null) return null;
-  const chip = headerChip(ownership, { sharedUser });
+  const chip = headerChip(ownership, {
+    sharedUser: list?.sharedMachineUser ?? "ensembleworks-agent",
+    enforcement: list?.enforcement ?? "off",
+    me: list?.me ?? null,
+  });
   return (
     <span
       title={chip.text}
@@ -240,13 +248,13 @@ function BannerBody({ title, detail }: { title: string; detail: string }) {
  * The new-thread composer banner: "Starting as David", plus the machines that are
  * yours. It deliberately makes NO claim about the machine you picked — a `new-thread`
  * composer customization cannot see it (spike S3-lite) — and what it says about what
- * happens AFTER you send follows `restrictStarts`, so it can never promise an
+ * happens AFTER you send follows the `enforcement` setting, so it can never promise an
  * enforcement the server is not performing.
  */
 function StartingAsBanner() {
   const list = useMachineList();
   if (list === null) return null;
-  const banner = composerBanner({ me: list.me, machines: list.machines, restrictStarts: list.restrictStarts });
+  const banner = composerBanner({ me: list.me, machines: list.machines, enforcement: list.enforcement });
   return (
     <BannerBody
       title={banner.title}
@@ -259,7 +267,8 @@ function StartingAsBanner() {
  * The composer banner on a thread somebody else started: "Read-only: Matt's thread".
  *
  * Rule B is what makes it true, so it ships with rule B and reads the same setting: with
- * `restrictStarts` off it says the thread is Matt's and that nothing enforces that.
+ * enforcement off it says the thread is Matt's and that nothing enforces that, and in
+ * audit that a message here is logged as a would-refuse and goes through anyway.
  */
 function ReadOnlyThreadBanner() {
   const rpc = useRpc<typeof rpcContract>();
@@ -279,7 +288,7 @@ function ReadOnlyThreadBanner() {
   const banner = readOnlyBanner({
     me: list.me,
     starter: ownership.starter,
-    restrictStarts: list.restrictStarts,
+    enforcement: list.enforcement,
   });
   if (banner === null) return null;
   return <BannerBody title={banner.title} detail={banner.detail} />;
