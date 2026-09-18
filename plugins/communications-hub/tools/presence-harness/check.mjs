@@ -288,6 +288,51 @@ async function open(page, options = {}) {
   await page.close();
 }
 
+// ── An answer that has stopped being refreshed ──────────────────────────────
+{
+  const page = await browser.newPage({ viewport: { width: 1_280, height: 900 } });
+  await open(page, { count: 6 });
+  const live = await page.evaluate(() => ({
+    speaking: document.querySelectorAll('#ewzp-row-root .ewzp-face[data-speaking="true"]').length,
+    faces: document.querySelectorAll("#ewzp-row-root .ewzp-face:not(.ewzp-more)").length,
+  }));
+  check("a live answer lights the speaker and shows faces",
+    live.speaking === 1 && live.faces === 3, JSON.stringify(live));
+
+  const stale = await page.evaluate(async () => {
+    window.__rpcBroken = true;
+    window.__clockOffset = 60_000;
+    await window.__strip.refresh();
+    const root = document.querySelector("#ewzp-row-root");
+    const row = root.querySelector(".ewzp-row");
+    row.click();
+    const popover = document.querySelector("#ewzp-popover").getBoundingClientRect();
+    return {
+      height: row.getBoundingClientRect().height,
+      overflowX: row.scrollWidth - row.clientWidth,
+      speaking: root.querySelectorAll('.ewzp-face[data-speaking="true"]').length,
+      faces: root.querySelectorAll(".ewzp-face:not(.ewzp-more)").length,
+      note: row.querySelector(".ewzp-note").textContent,
+      label: row.getAttribute("aria-label"),
+      message: document.querySelector("#ewzp-popover .ewzp-empty").textContent,
+      onScreen: popover.top >= 0 && popover.left >= 0 &&
+        popover.right <= window.innerWidth && popover.bottom <= window.innerHeight,
+    };
+  });
+  check("a minute of failed polls puts the ring out", stale.speaking === 0, String(stale.speaking));
+  check("a minute of failed polls shows nobody", stale.faces === 0, String(stale.faces));
+  check("the stale row says so", stale.note === "No updates", stale.note);
+  check("the stale row names the problem for a screen reader",
+    stale.label.includes("Presence unavailable"), stale.label);
+  check("the stale popover explains rather than claims",
+    stale.message.includes("has not been able to refresh"), stale.message);
+  check("the stale row is still exactly 36px", stale.height === 36, `${stale.height}px`);
+  check("the stale row still clips rather than overflowing", stale.overflowX <= 0, `${stale.overflowX}px`);
+  check("the stale popover is still on screen", stale.onScreen === true);
+  await page.screenshot({ path: join(shots, "presence-stale.png") });
+  await page.close();
+}
+
 await browser.close();
 server.close();
 

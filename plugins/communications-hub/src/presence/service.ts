@@ -63,6 +63,10 @@ export interface PresenceSink {
     at?: number;
   }): boolean;
   acceptPortrait(input: { sittingKey: string; sessionId: string; frame: PortraitFrame }): PortraitResult;
+  /** A media frame that could not be decoded, so it never reached the store. */
+  countPortraitFailure(input: { sittingKey: string; sessionId: string }): void;
+  /** This sitting will not be receiving stills any more. */
+  retirePortraits(input: { sittingKey: string; sessionId: string }): void;
   portraitsExhausted(sittingKey: string): boolean;
   endSitting(input: { sittingKey: string; sessionId?: string }): void;
 }
@@ -159,6 +163,36 @@ export class PresenceService implements PresenceSink {
     });
     for (const id of result.evicted) sitting.roster.forgetPortrait(id);
     return result;
+  }
+
+  /**
+   * Count a video frame the adapter refused before it could become a still.
+   *
+   * It is the same feed failing in the same sitting, so it spends the same
+   * budget — and the budget is what eventually retires a video stream that is
+   * sending nothing readable.
+   */
+  countPortraitFailure(input: { sittingKey: string; sessionId: string }): void {
+    if (!this.current(input.sittingKey, input.sessionId)) return;
+    this.portraitStore.countFailure(input.sittingKey, "malformed-frame");
+  }
+
+  /**
+   * Stop claiming this sitting has portraits, and drop the ones it had.
+   *
+   * Called when the video feed retires mid-meeting: refused, dropped, or out of
+   * budget. Presence itself is unaffected — the people are still in the room —
+   * but a face must not keep offering a picture from a feed that has stopped,
+   * so the capability, the stored bytes and the roster's `portraitAt` all go
+   * together. The client drops its own cache the moment the view says
+   * `portraits: false`.
+   */
+  retirePortraits(input: { sittingKey: string; sessionId: string }): void {
+    const sitting = this.current(input.sittingKey, input.sessionId);
+    if (!sitting) return;
+    sitting.portraits = false;
+    this.portraitStore.dropImages(input.sittingKey);
+    sitting.roster.forgetPortraits();
   }
 
   /** True once this sitting's video has failed often enough to stop asking. */

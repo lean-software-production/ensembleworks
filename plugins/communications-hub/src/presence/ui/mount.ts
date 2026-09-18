@@ -26,6 +26,7 @@
 import type { PresenceView } from "../view.js";
 import { chooseSidebar, decideAnchor, type AnchorAttachment } from "./anchor.js";
 import { decideTier, placePopover, type StripTier } from "./layout.js";
+import { freshen } from "./freshness.js";
 import { popoverModel, rowModel } from "./model.js";
 import { createContentScriptRpc, type ContentScriptRpc } from "./rpc.js";
 import { createStrip } from "./strip.js";
@@ -56,6 +57,8 @@ export interface MountedPresenceStrip {
   refresh(): Promise<void>;
   /** Test seam: re-run the placement decision now. */
   syncAnchor(): void;
+  /** Test seam: redraw from what is already known, as the 500ms tick does. */
+  paint(): void;
   /** Test seam: what the strip currently believes. */
   view(): PresenceView | null;
 }
@@ -98,6 +101,8 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
 
   let disposed = false;
   let view: PresenceView | null = null;
+  /** When the view on screen was actually answered by the server, locally. */
+  let answeredAt: number | null = null;
   let attached: AnchorAttachment<Element> | null = null;
   let tier: StripTier = "full";
   let frame: number | null = null;
@@ -113,6 +118,7 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
         void rpc.call("presence.select", { roomId }).then(
           (next) => {
             view = next as PresenceView;
+            answeredAt = now();
             render();
           },
           () => { /* A failed selection leaves the previous room on screen. */ },
@@ -138,8 +144,16 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
    */
   const paint = (): void => {
     if (disposed || view === null || view.room === null) return;
-    const row = rowModel(view, tier, strip.isOpen());
-    const popover = popoverModel(view, { pluginId: options.pluginId, now: now() });
+    // What is drawn is the last ANSWER, aged by how long ago it arrived: the
+    // speaking ring expires on this clock, and an answer that has stopped being
+    // refreshed stops being presented as the room at all.
+    const { view: shown, stale } = freshen(view, answeredAt === null ? 0 : now() - answeredAt);
+    if (stale && portraits.size > 0) {
+      portraits.clear();
+      requested.clear();
+    }
+    const row = rowModel(shown, tier, strip.isOpen(), stale);
+    const popover = popoverModel(shown, { pluginId: options.pluginId, now: now(), stale });
     // The images are part of what is on screen but not part of the models, so
     // an arriving still has to count as a change.
     const stills = [...portraits].map(([id, held]) => `${id}@${held.capturedAt}`).join(",");
@@ -201,7 +215,10 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
       const next = decideTier(measure(host.root));
       if (next !== tier) {
         tier = next;
-        if (view) strip.renderRow(rowModel(view, tier, strip.isOpen()));
+        // Repaint through `paint`, so a tier change cannot smuggle an unaged
+        // answer back onto the screen.
+        painted = "";
+        paint();
       }
     }
   };
@@ -273,9 +290,12 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
     if (disposed) return;
     try {
       view = await rpc.call("presence.get", null) as PresenceView;
+      answeredAt = now();
     } catch {
-      // Keep the last honest answer on screen rather than blanking the row on a
-      // single failed poll; the next tick will correct it.
+      // One failed poll does not blank the row — but the answer still ages, and
+      // `paint` is what decides when it has aged out. A failure changes nothing
+      // except that `answeredAt` stops moving.
+      paint();
       return;
     }
     render();
@@ -356,6 +376,7 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
     dispose,
     refresh,
     syncAnchor,
+    paint,
     view: () => view,
   };
 }

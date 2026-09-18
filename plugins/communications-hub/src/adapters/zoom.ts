@@ -164,10 +164,12 @@ export function registerZoomWithDependencies(
     zoomApiClientId: { type: "string", label: "Zoom Server-to-Server client ID" },
     zoomApiClientSecret: { type: "string", label: "Zoom Server-to-Server client secret", secret: true },
     zoomHostUser: { type: "string", label: "Zoom host user (email or user ID) that installed the RTMS app" },
-    // Both presence settings default OFF. Their wire details could not be
-    // verified against Zoom's current documentation from the environment this
-    // was built in (see zoom-presence.ts), and an unverified frame must not be
-    // able to disturb transcript capture without somebody choosing it.
+    // Both presence settings default OFF, for different reasons. Presence
+    // sends frames Zoom documents (see zoom-presence.ts) but that this
+    // deployment has never exchanged with a live meeting, and no new frame
+    // should reach the socket people's transcripts depend on without somebody
+    // choosing it. Video additionally needs video access on the deployment's
+    // own Zoom app, which is a consent decision rather than a toggle.
     zoomPresenceEnabled: {
       type: "boolean",
       label: "Subscribe to Zoom participant events (experimental)",
@@ -175,7 +177,7 @@ export function registerZoomWithDependencies(
     },
     zoomPresenceEventCodes: {
       type: "string",
-      label: "Zoom presence event codes, e.g. speaker=2,join=3,leave=4",
+      label: "Override Zoom presence event codes, e.g. speaker=2,join=3,leave=4,camera_on=8,camera_off=9",
     },
     zoomVideoEnabled: {
       type: "boolean",
@@ -278,8 +280,21 @@ export function registerZoomWithDependencies(
           onFrame: (frame) => {
             presence.acceptPortrait({ ...sitting, frame });
           },
+          onUnusableFrame: () => {
+            presence.countPortraitFailure({ ...sitting });
+          },
           shouldContinue: () => !presence.portraitsExhausted(sitting.sittingKey),
-          onUnavailable: (detail) => bb.log.info(`zoom portraits unavailable: ${detail}`),
+          onUnavailable: (detail) => {
+            // Not just a log line: the sitting stops advertising portraits and
+            // drops the ones it holds, so the strip falls back to initials
+            // instead of offering pictures from a feed that has stopped.
+            bb.log.info(`zoom portraits unavailable: ${detail}`);
+            try {
+              presence.retirePortraits({ ...sitting });
+            } catch {
+              // Portrait wiring never faults capture.
+            }
+          },
         }
         : undefined,
       log: (message) => bb.log.warn(message),

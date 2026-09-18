@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CaptureState } from "../src/domain.js";
 import type { PresenceEvent } from "../src/presence/roster.js";
 import type { PortraitFrame } from "../src/presence/portraits.js";
@@ -9,7 +9,8 @@ import {
   type ZoomPresenceOptions,
   type ZoomVideoOptions,
 } from "../src/adapters/zoom-protocol.js";
-import { DEFAULT_ZOOM_PRESENCE_CODES } from "../src/adapters/zoom-presence.js";
+import { DEFAULT_ZOOM_PRESENCE_CODES, ZOOM_VIDEO_MEDIA_PARAMS } from "../src/adapters/zoom-presence.js";
+import { jpegBytes } from "./helpers/jpeg.js";
 
 class ControlledSocket implements RtmsSocket {
   readonly sent: string[] = [];
@@ -40,14 +41,26 @@ class ControlledSocket implements RtmsSocket {
   receive(value: unknown): void {
     this.handlers.message(JSON.stringify(value));
   }
+
+  /** The far end hanging up, as the transport would report it. */
+  remoteClose(code = 1006, reason = "gone"): void {
+    this.closed = true;
+    this.handlers.close(code, reason);
+  }
 }
 
-function jpegBase64(length = 64): string {
-  const bytes = Buffer.alloc(length);
-  bytes.set([0xff, 0xd8, 0xff, 0xe0], 0);
-  bytes[length - 2] = 0xff;
-  bytes[length - 1] = 0xd9;
-  return bytes.toString("base64");
+/** A video-data message in the shape Zoom documents (MEDIA_DATA_VIDEO = 15). */
+function videoFrame(userId: number, timestamp = 1_800_000_000_000): unknown {
+  const bytes = jpegBytes();
+  return {
+    msg_type: 15,
+    content: {
+      user_id: userId,
+      timestamp,
+      length: bytes.byteLength,
+      data: Buffer.from(bytes).toString("base64"),
+    },
+  };
 }
 
 function session(options: {
@@ -169,10 +182,20 @@ describe("Zoom RTMS presence wiring", () => {
     expect(peer.sockets).toHaveLength(3);
     expect(peer.sockets[2]!.url).toBe("wss://rtms.zoom.us/video");
     peer.sockets[2]!.open();
-    expect(JSON.parse(peer.sockets[2]!.sent[0]!)).toMatchObject({ msg_type: 3, media_type: 2 });
+    // The whole outgoing handshake, locked to Zoom's published contract.
+    expect(JSON.parse(peer.sockets[2]!.sent[0]!)).toEqual({
+      msg_type: 3,
+      protocol_version: 1,
+      sequence: expect.any(Number),
+      meeting_uuid: "meeting-uuid",
+      rtms_stream_id: "stream-id",
+      signature: expect.any(String),
+      ...ZOOM_VIDEO_MEDIA_PARAMS,
+      payload_encryption: false,
+    });
 
     peer.sockets[2]!.receive({ msg_type: 4, status_code: 0 });
-    peer.sockets[2]!.receive({ content: { user_id: 7, timestamp: 1_800_000_000_000, data: jpegBase64() } });
+    peer.sockets[2]!.receive(videoFrame(7));
     expect(frames).toHaveLength(1);
     expect(frames[0]!.participantId).toBe("7");
   });
@@ -235,7 +258,7 @@ describe("Zoom RTMS presence wiring", () => {
     peer.sockets[2]!.open();
     peer.sockets[2]!.receive({ msg_type: 4, status_code: 0 });
     allowed = false;
-    peer.sockets[2]!.receive({ content: { user_id: 7, timestamp: 1_800_000_000_000, data: jpegBase64() } });
+    peer.sockets[2]!.receive(videoFrame(7));
 
     expect(frames).toHaveLength(0);
     expect(reasons).toEqual(["Too many unusable video frames; portraits are unavailable"]);
@@ -249,5 +272,109 @@ describe("Zoom RTMS presence wiring", () => {
     peer.connect();
     peer.session.stop();
     expect(peer.sockets[2]!.closed).toBe(true);
+  });
+
+  it("tears the video socket down with the signaling generation that owns it", () => {
+    vi.useFakeTimers();
+    try {
+      reconnectVideo();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  function reconnectVideo(): void {
+    const frames: PortraitFrame[] = [];
+    const peer = session({
+      video: { enabled: true, onFrame: (frame) => frames.push(frame), onUnavailable: () => undefined },
+    });
+    peer.connect();
+    const first = peer.sockets[2]!;
+    first.open();
+    first.receive({ msg_type: 4, status_code: 0 });
+
+    // Zoom drops signaling. The video socket belongs to that generation: it has
+    // to go with it, or the reconnect finds `this.video` still set and never
+    // opens a replacement.
+    peer.sockets[0]!.remoteClose();
+    expect(first.closed).toBe(true);
+
+    // A frame from the superseded socket is not evidence about the new session.
+    first.receive(videoFrame(7));
+    expect(frames).toHaveLength(0);
+
+    // The scheduled reconnect opens a new signaling generation.
+    vi.advanceTimersByTime(3_000);
+    const signaling = peer.sockets.at(-1)!;
+    signaling.open();
+    signaling.receive({
+      msg_type: 2,
+      status_code: 0,
+      media_server: {
+        server_urls: { transcript: "wss://rtms.zoom.us/transcript", video: "wss://rtms.zoom.us/video" },
+      },
+    });
+    const media = peer.sockets.at(-1)!;
+    media.open();
+    media.receive({ msg_type: 4, status_code: 0 });
+    const second = peer.sockets.at(-1)!;
+    expect(second).not.toBe(first);
+    expect(second.url).toBe("wss://rtms.zoom.us/video");
+
+    second.open();
+    second.receive({ msg_type: 4, status_code: 0 });
+    second.receive(videoFrame(9));
+    expect(frames.map((frame) => frame.participantId)).toEqual(["9"]);
+  }
+
+  it("counts an unusable video frame against the video budget", () => {
+    const frames: PortraitFrame[] = [];
+    let unusable = 0;
+    const peer = session({
+      video: {
+        enabled: true,
+        onFrame: (frame) => frames.push(frame),
+        onUnavailable: () => undefined,
+        onUnusableFrame: () => { unusable += 1; },
+      },
+    });
+    peer.connect();
+    peer.sockets[2]!.open();
+    peer.sockets[2]!.receive({ msg_type: 4, status_code: 0 });
+
+    // Every shape of unusable media frame: no id, a broken payload, no
+    // timestamp, and a payload that disagrees with its own declared length.
+    peer.sockets[2]!.receive({ msg_type: 15, content: { timestamp: 1_800_000_000_000, data: "////" } });
+    peer.sockets[2]!.receive({ msg_type: 15, content: { user_id: 7, timestamp: 1_800_000_000_000, data: "!!!!" } });
+    peer.sockets[2]!.receive({ msg_type: 15, content: { user_id: 7, data: "////" } });
+    peer.sockets[2]!.receive({
+      msg_type: 15,
+      content: { user_id: 7, timestamp: 1_800_000_000_000, data: "////", length: 999 },
+    });
+
+    expect(frames).toHaveLength(0);
+    expect(unusable).toBe(4);
+    // Transcript capture is untouched by any of it.
+    expect(peer.states.at(-1)).toEqual({ state: "capturing", detail: "Receiving Zoom transcript" });
+  });
+
+  it("does not count the frames it is not supposed to be reading", () => {
+    let unusable = 0;
+    const peer = session({
+      video: {
+        enabled: true,
+        onFrame: () => undefined,
+        onUnavailable: () => undefined,
+        onUnusableFrame: () => { unusable += 1; },
+      },
+    });
+    peer.connect();
+    peer.sockets[2]!.open();
+    peer.sockets[2]!.receive({ msg_type: 4, status_code: 0 });
+    // A keep-alive and a message type this socket never asked for are not
+    // failures of the video feed, and must not spend its budget.
+    peer.sockets[2]!.receive({ msg_type: 12, timestamp: 1 });
+    peer.sockets[2]!.receive({ msg_type: 17, content: { data: "hello" } });
+    expect(unusable).toBe(0);
   });
 });

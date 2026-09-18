@@ -174,4 +174,19 @@ describe("initials", () => {
     expect(initialsOf(null)).toBe("?");
     expect(initialsOf("김")).toBe("김");
   });
+
+  it("says how long a ring may stay lit, so a client can expire it too", () => {
+    const { roster, now, advance } = rosterAt();
+    roster.setAvailability("live", now());
+    roster.apply({ kind: "speaking", participantId: "1", name: "Ada", at: now() });
+
+    // A client holding this answer knows the hold, not just the boolean, and
+    // can let the ring go out without asking again.
+    expect(roster.participants(now())[0]!.speakingMsRemaining).toBe(3_000);
+    advance(1_000);
+    expect(roster.participants(now())[0]!.speakingMsRemaining).toBe(2_000);
+    advance(5_000);
+    expect(roster.participants(now())[0]!.speaking).toBe(false);
+    expect(roster.participants(now())[0]!.speakingMsRemaining).toBe(0);
+  });
 });

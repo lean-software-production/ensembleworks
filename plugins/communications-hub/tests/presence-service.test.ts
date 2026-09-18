@@ -1,16 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { PresenceService } from "../src/presence/service.js";
 import { PortraitStore } from "../src/presence/portraits.js";
+import { jpegBytes as jpeg } from "./helpers/jpeg.js";
 
 const NOW = 1_800_000_000_000;
-
-function jpeg(length = 64): Uint8Array {
-  const bytes = new Uint8Array(length);
-  bytes.set([0xff, 0xd8, 0xff, 0xe0], 0);
-  bytes[length - 2] = 0xff;
-  bytes[length - 1] = 0xd9;
-  return bytes;
-}
 
 function service() {
   let clock = NOW;
@@ -129,7 +122,7 @@ describe("presence service", () => {
     const people = presence.roomPresence("room-1")!.participants;
     expect(people.find((person) => person.label === "Ada")!.portraitAt).toBeNull();
     expect(people.find((person) => person.label === "Sam")!.portraitAt).toBe(now());
-    expect(presence.portrait(`${sitting.sittingKey}:2`)?.bytes.byteLength).toBe(64);
+    expect(presence.portrait(`${sitting.sittingKey}:2`)?.bytes.byteLength).toBe(128);
     expect(presence.portrait(`${sitting.sittingKey}:1`)).toBeNull();
   });
 
@@ -175,5 +168,48 @@ describe("presence service", () => {
 
     expect(presence.sittingPresence("a")).toBeNull();
     expect(presence.sittingPresence("c")).not.toBeNull();
+  });
+
+  it("retires portraits for a sitting that goes on without them", () => {
+    const { presence, portraits, now } = service();
+    presence.beginSitting({ ...sitting, roomId: "room-1", portraits: true });
+    presence.setAvailability({ ...sitting, availability: "live" });
+    presence.applyEvent({ ...sitting, event: { kind: "joined", participantId: "1", name: "Ada", at: now() } });
+    presence.acceptPortrait({ ...sitting, frame: { participantId: "1", capturedAt: now(), bytes: jpeg() } });
+    expect(presence.roomPresence("room-1")?.portraits).toBe(true);
+    expect(presence.portrait("conversation-1:1")).not.toBeNull();
+
+    presence.retirePortraits({ ...sitting });
+
+    const view = presence.roomPresence("room-1")!;
+    // The capability, the stored image and the roster's claim to have one all
+    // go together: a face must not keep offering a picture nothing can serve.
+    expect(view.portraits).toBe(false);
+    expect(view.participants[0]!.portraitAt).toBeNull();
+    expect(presence.portrait("conversation-1:1")).toBeNull();
+    expect(portraits.get("conversation-1", "1")).toBeNull();
+    // Presence itself carries on: the people are still there.
+    expect(view.participants.map((person) => person.label)).toEqual(["Ada"]);
+  });
+
+  it("refuses to retire portraits on behalf of a superseded session", () => {
+    const { presence, now } = service();
+    presence.beginSitting({ ...sitting, roomId: "room-1", portraits: true });
+    presence.setAvailability({ ...sitting, availability: "live" });
+    presence.applyEvent({ ...sitting, event: { kind: "joined", participantId: "1", name: "Ada", at: now() } });
+
+    presence.retirePortraits({ sittingKey: sitting.sittingKey, sessionId: "stream-other" });
+    expect(presence.roomPresence("room-1")?.portraits).toBe(true);
+  });
+
+  it("counts a frame the adapter could not decode against the video budget", () => {
+    const { presence, portraits } = service();
+    presence.beginSitting({ ...sitting, roomId: "room-1", portraits: true });
+
+    presence.countPortraitFailure({ ...sitting });
+    presence.countPortraitFailure({ sittingKey: sitting.sittingKey, sessionId: "stream-other" });
+
+    // The superseded session's frame is not this sitting's failure.
+    expect(portraits.failureCount("conversation-1")).toBe(1);
   });
 });

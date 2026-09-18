@@ -8,27 +8,31 @@
  *
  * ── WHAT IS VERIFIED, AND WHAT IS NOT ────────────────────────────────────────
  *
- * The transcript path in `zoom-protocol.ts` was verified against live meetings
- * (docs/zoom-setup.md, "Validated behaviour"). The PRESENCE path was not: this
- * environment cannot reach developers.zoom.us (egress to that host is denied, so
- * the current event reference could not be re-read on 2026-09-18), and no live
- * meeting is available here.
+ * The numbers below were read from Zoom's current published reference on
+ * 2026-09-18 and are locked by `tests/zoom-rtms-contract.test.ts`, which cites
+ * the page each one came from:
  *
- * Two deliberate consequences:
+ *   RTMS_EVENT_TYPE      ACTIVE_SPEAKER_CHANGE 2, PARTICIPANT_JOIN 3,
+ *                        PARTICIPANT_LEAVE 4, PARTICIPANT_VIDEO_ON 8,
+ *                        PARTICIPANT_VIDEO_OFF 9
+ *   RTMS_MESSAGE_TYPE    EVENT_SUBSCRIPTION 5, EVENT_UPDATE 6,
+ *                        MEDIA_DATA_VIDEO 15
+ *   MEDIA_DATA_OPTION    VIDEO_SINGLE_ACTIVE_STREAM 3
  *
- * 1. NOTHING IS SENT ON THE WIRE UNLESS AN OPERATOR OPTS IN. The signaling
- *    subscription frame is only built when the `zoomPresenceEnabled` setting is
- *    on. With it off — the default — capture is byte-for-byte what it is today,
- *    so an unverified guess cannot regress transcript capture, which is the
- *    feature people actually depend on.
- * 2. THE NUMERIC EVENT CODES ARE CONFIGURABLE, not asserted. Zoom identifies
- *    signaling events by number; the mapping below is this repo's best record of
- *    it, and the one code we can corroborate from our own source is 7 = media
- *    server change (`zoom-protocol.ts` has reopened the media socket on it since
- *    before this feature). An operator who reads Zoom's current event reference
- *    can correct the rest with `zoomPresenceEventCodes` without a code change —
- *    see docs/zoom-setup.md. Events that arrive NAMED are decoded by name and
- *    ignore the table entirely.
+ * What is still NOT verified is this deployment's own behaviour against a live
+ * meeting: no credentials or meeting are available where this was built, so the
+ * frames are proved against the documentation and controlled sockets only.
+ * Two consequences remain deliberate:
+ *
+ * 1. NOTHING NEW IS SENT ON THE WIRE UNLESS AN OPERATOR OPTS IN. The
+ *    subscription frame is built only when `zoomPresenceEnabled` is on, and the
+ *    video socket only when `zoomVideoEnabled` is. Video additionally needs
+ *    video access on the deployment's own Zoom app, which is not something this
+ *    plugin can grant itself.
+ * 2. THE EVENT TABLE STAYS OVERRIDABLE. `zoomPresenceEventCodes` is an escape
+ *    hatch for a deployment that meets a different enum than the published one;
+ *    it is no longer the reason the defaults exist. Events that arrive NAMED
+ *    are decoded by name and ignore the table entirely.
  *
  * Neither path ever lets the hub claim a complete roster: see `roster.ts`.
  */
@@ -36,63 +40,108 @@
 import type { PresenceEvent } from "../presence/roster.js";
 import type { PortraitFrame } from "../presence/portraits.js";
 
-/** Signaling message carrying an event update (`zoom-protocol.ts` msg_type 6). */
+/** RTMS_MESSAGE_TYPE.EVENT_UPDATE — an event from the signaling connection. */
 export const ZOOM_EVENT_MESSAGE = 6;
-/** Signaling message asking Zoom to deliver a set of events. */
+/** RTMS_MESSAGE_TYPE.EVENT_SUBSCRIPTION — asking for in-session events. */
 export const ZOOM_EVENT_SUBSCRIPTION = 5;
+/** RTMS_MESSAGE_TYPE.MEDIA_DATA_VIDEO — video data from a media connection. */
+export const ZOOM_VIDEO_DATA = 15;
 
 /** Ceiling on one base64 media payload, before decoding. */
 const MAX_PORTRAIT_BASE64 = 400_000;
+
+/**
+ * The video media connection this plugin asks for.
+ *
+ * `media_type: 2` is MEDIA_DATA_TYPE.VIDEO; inside it, RAW_VIDEO (3) as JPG (5)
+ * at SD (1) and 1fps — the smallest, slowest still feed RTMS offers — with
+ * MEDIA_DATA_OPTION.VIDEO_SINGLE_ACTIVE_STREAM (3), which is the active
+ * speaker's video and needs no per-participant subscription. The individual
+ * stream option (4) would require subscribing to one person at a time and is
+ * deliberately not used: presence wants whoever is talking, not a chosen face.
+ */
+export const ZOOM_VIDEO_MEDIA_PARAMS = {
+  media_type: 2,
+  media_params: { video: { content_type: 3, codec: 5, resolution: 1, fps: 1, data_opt: 3 } },
+} as const;
 
 export interface ZoomPresenceCodes {
   readonly speaker: number;
   readonly join: number;
   readonly leave: number;
+  readonly cameraOn: number;
+  readonly cameraOff: number;
 }
 
-/**
- * The mapping this plugin ships with.
- *
- * Recorded, not proved — see the header. It is consistent with the only event
- * code we have independent evidence for (7, media server change), and it is
- * overridable per deployment.
- */
-export const DEFAULT_ZOOM_PRESENCE_CODES: ZoomPresenceCodes = { speaker: 2, join: 3, leave: 4 };
+/** RTMS_EVENT_TYPE, as published. See the header for the citation. */
+export const DEFAULT_ZOOM_PRESENCE_CODES: ZoomPresenceCodes = {
+  speaker: 2,
+  join: 3,
+  leave: 4,
+  cameraOn: 8,
+  cameraOff: 9,
+};
+
+const CODE_ALIASES: Record<keyof ZoomPresenceCodes, readonly string[]> = {
+  speaker: ["speaker", "active_speaker"],
+  join: ["join", "participant_join"],
+  leave: ["leave", "participant_leave"],
+  cameraOn: ["camera_on", "cameraon", "video_on", "participant_video_on"],
+  cameraOff: ["camera_off", "cameraoff", "video_off", "participant_video_off"],
+};
 
 /**
- * Read an operator override such as `speaker=2,join=3,leave=4`.
+ * Read an operator override such as `speaker=2,join=3,leave=4,camera_on=8`.
  *
- * Anything malformed falls back to the shipped table rather than throwing: a
- * typo in a setting must not be able to stop a plugin from loading, and the
- * worst case of the fallback is the behaviour the operator already had.
+ * Unmentioned events keep their published value, so an override can correct one
+ * number without having to restate the rest. Anything malformed — or a table
+ * that would give two events the same code — falls back to the published table
+ * rather than throwing: a typo in a setting must not stop a plugin loading, and
+ * the worst case of the fallback is the documented behaviour.
  */
 export function parsePresenceCodes(value: string | null | undefined): ZoomPresenceCodes {
   if (typeof value !== "string" || value.trim() === "") return DEFAULT_ZOOM_PRESENCE_CODES;
-  const codes: Record<string, number> = {};
+  const given: Record<string, number> = {};
   for (const part of value.split(",")) {
     const [rawKey, rawValue] = part.split("=");
     const key = rawKey?.trim().toLowerCase();
     const parsed = Number(rawValue?.trim());
     if (!key || !Number.isSafeInteger(parsed) || parsed < 0 || parsed > 1_000) continue;
-    codes[key] = parsed;
+    given[key] = parsed;
   }
-  const speaker = codes.speaker ?? codes.active_speaker;
-  const join = codes.join ?? codes.participant_join;
-  const leave = codes.leave ?? codes.participant_leave;
-  if (speaker === undefined || join === undefined || leave === undefined) return DEFAULT_ZOOM_PRESENCE_CODES;
-  if (speaker === join || join === leave || speaker === leave) return DEFAULT_ZOOM_PRESENCE_CODES;
-  return { speaker, join, leave };
+  if (Object.keys(given).length === 0) return DEFAULT_ZOOM_PRESENCE_CODES;
+  const codes = { ...DEFAULT_ZOOM_PRESENCE_CODES } as Record<keyof ZoomPresenceCodes, number>;
+  for (const [field, aliases] of Object.entries(CODE_ALIASES) as [keyof ZoomPresenceCodes, string[]][]) {
+    for (const alias of aliases) {
+      const override = given[alias];
+      if (override !== undefined) {
+        codes[field] = override;
+        break;
+      }
+    }
+  }
+  const values = Object.values(codes);
+  if (new Set(values).size !== values.length) return DEFAULT_ZOOM_PRESENCE_CODES;
+  return codes;
 }
 
-/** The frame that asks for participant and active-speaker events. */
-export function eventSubscriptionFrame(streamId: string, codes: ZoomPresenceCodes): unknown {
+/**
+ * The frame that asks for the participant, speaker and camera events.
+ *
+ * Shaped exactly as Zoom documents the subscription message: `msg_type` and
+ * `events`, nothing else. FIRST_PACKET_TIMESTAMP (1) and
+ * MEDIA_CONNECTION_INTERRUPTED (7) are deliberately absent — Zoom sends both
+ * unasked and documents that subscribing to them breaks the app.
+ */
+export function eventSubscriptionFrame(codes: ZoomPresenceCodes): unknown {
   return {
     msg_type: ZOOM_EVENT_SUBSCRIPTION,
-    rtms_stream_id: streamId,
     events: [
       { event_type: codes.join, subscribe: true },
       { event_type: codes.leave, subscribe: true },
       { event_type: codes.speaker, subscribe: true },
+      { event_type: codes.cameraOn, subscribe: true },
+      { event_type: codes.cameraOff, subscribe: true },
     ],
   };
 }
@@ -132,7 +181,7 @@ function subjects(event: Row): Row[] {
   return participantId(event) === null ? [] : [event];
 }
 
-type NamedKind = "join" | "leave" | "speaker";
+type NamedKind = "join" | "leave" | "speaker" | "camera-on" | "camera-off";
 
 /** A self-describing event needs no lookup table; prefer it when Zoom sends one. */
 function namedKind(event: Row): NamedKind | null {
@@ -142,6 +191,8 @@ function namedKind(event: Row): NamedKind | null {
   if (name.includes("ACTIVE_SPEAKER")) return "speaker";
   if (name.includes("PARTICIPANT_JOIN")) return "join";
   if (name.includes("PARTICIPANT_LEAVE")) return "leave";
+  if (name.includes("VIDEO_ON")) return "camera-on";
+  if (name.includes("VIDEO_OFF")) return "camera-off";
   return null;
 }
 
@@ -151,6 +202,8 @@ function codedKind(event: Row, codes: ZoomPresenceCodes): NamedKind | null {
   if (code === codes.speaker) return "speaker";
   if (code === codes.join) return "join";
   if (code === codes.leave) return "leave";
+  if (code === codes.cameraOn) return "camera-on";
+  if (code === codes.cameraOff) return "camera-off";
   return null;
 }
 
@@ -182,12 +235,29 @@ export function decodeZoomPresenceEvents(
     if (id === null) continue;
     if (kind === "join") events.push({ kind: "joined", participantId: id, name: participantName(subject), at });
     else if (kind === "leave") events.push({ kind: "left", participantId: id, at });
+    else if (kind === "camera-on") events.push({ kind: "camera", participantId: id, on: true, at });
+    else if (kind === "camera-off") events.push({ kind: "camera", participantId: id, on: false, at });
     else events.push({ kind: "speaking", participantId: id, name: participantName(subject), at });
   }
   // An active-speaker event names one person. Several would mean we misread the
   // message, and lighting up a row of rings is worse than lighting up none.
+  // Camera events legitimately carry a list, so this applies to speaker only.
   if (kind === "speaker" && events.length > 1) return [];
   return events;
+}
+
+/** Canonical base64 — the only encoding Zoom documents for media payloads. */
+function decodeBase64(value: string): Buffer | null {
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(value) || value.length % 4 !== 0) return null;
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(value, "base64");
+  } catch {
+    return null;
+  }
+  // Node's decoder is forgiving: it skips characters it cannot use rather than
+  // failing. Re-encoding is what actually proves the payload was intact.
+  return bytes.toString("base64") === value ? bytes : null;
 }
 
 /**
@@ -198,13 +268,24 @@ export function decodeZoomPresenceEvents(
  * misinforms rather than merely missing. Size is bounded before the base64 is
  * decoded, so an oversized frame costs a length check rather than a buffer.
  *
- * Returns null for anything that is not a complete, identified, timestamped
- * image; the caller counts those refusals against the video failure budget and
- * carries on with transcript capture regardless.
+ * Three refusals are worth naming, because each one is a frame that LOOKS
+ * usable:
+ *
+ * - a message that is not MEDIA_DATA_VIDEO. Audio, screen share, transcript and
+ *   chat all arrive with a `content` block of the same shape, and a transcript
+ *   is not a portrait.
+ * - a payload that disagrees with the frame's own `length`, which Zoom
+ *   documents as the size of the binary before base64. A frame carrying six
+ *   bytes and claiming 999 is one we misread or somebody else's.
+ * - non-canonical base64. Node's decoder silently drops what it cannot use, so
+ *   garbage decodes to a short buffer instead of failing.
+ *
+ * Returns null for all of them; the caller counts every refusal against the
+ * video failure budget and carries on with transcript capture regardless.
  */
 export function decodeZoomPortraitFrame(message: unknown): PortraitFrame | null {
   const row = asRow(message);
-  if (!row) return null;
+  if (!row || row.msg_type !== ZOOM_VIDEO_DATA) return null;
   const content = asRow(row.content);
   if (!content) return null;
   const id = participantId(content);
@@ -213,12 +294,13 @@ export function decodeZoomPortraitFrame(message: unknown): PortraitFrame | null 
   if (typeof data !== "string" || data.length === 0 || data.length > MAX_PORTRAIT_BASE64) return null;
   const capturedAt = content.timestamp;
   if (typeof capturedAt !== "number" || !Number.isSafeInteger(capturedAt) || capturedAt <= 0) return null;
-  let bytes: Buffer;
-  try {
-    bytes = Buffer.from(data, "base64");
-  } catch {
-    return null;
+  const bytes = decodeBase64(data);
+  if (bytes === null || bytes.byteLength === 0) return null;
+  const declared = content.length;
+  if (declared !== undefined) {
+    if (typeof declared !== "number" || !Number.isSafeInteger(declared) || declared !== bytes.byteLength) {
+      return null;
+    }
   }
-  if (bytes.byteLength === 0) return null;
   return { participantId: id, capturedAt, bytes: new Uint8Array(bytes) };
 }

@@ -67,6 +67,15 @@ export interface PresenceParticipant {
   readonly lastSpokeAt: number | null;
   /** True only inside the decay window, and only while the signal is live. */
   readonly speaking: boolean;
+  /**
+   * How much of the decay window is left, in ms, at the moment asked.
+   *
+   * Sent on so a CLIENT can expire the ring on its own clock. A boolean alone
+   * is only true of the instant it was computed: a client that polls, or whose
+   * polls start failing, would otherwise hold a ring lit for as long as it
+   * holds the answer.
+   */
+  readonly speakingMsRemaining: number;
   readonly camera: CameraState;
   /** When the newest accepted still for this person was captured, if any. */
   readonly portraitAt: number | null;
@@ -188,7 +197,13 @@ export class SittingRoster {
         return;
       }
       case "camera": {
-        const member = this.members.get(id);
+        // A camera event is an observation of a participant, the same way an
+        // active-speaker event is: Zoom names someone whose camera changed, and
+        // that they are in the meeting follows. Someone we never saw join is
+        // exactly the case rule 2 warns about, so record them and stay
+        // "partial" rather than discarding what we were told.
+        this.observed = true;
+        const member = this.upsert(id, null, event.at);
         if (!member) return;
         member.camera = event.on ? "on" : "off";
         return;
@@ -206,6 +221,11 @@ export class SittingRoster {
   forgetPortrait(participantId: string): void {
     const member = this.members.get(participantId);
     if (member) member.portraitAt = null;
+  }
+
+  /** Drop every still at once: the feed that produced them has retired. */
+  forgetPortraits(): void {
+    for (const member of this.members.values()) member.portraitAt = null;
   }
 
   /**
@@ -243,6 +263,7 @@ export class SittingRoster {
         joinedAt: member.joinedAt,
         lastSpokeAt: member.lastSpokeAt,
         speaking: at < member.speakingUntil,
+        speakingMsRemaining: Math.max(0, member.speakingUntil - at),
         camera: member.camera,
         portraitAt: member.portraitAt,
       };

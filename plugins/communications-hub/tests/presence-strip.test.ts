@@ -6,7 +6,16 @@ import type { ParticipantView, PresenceView } from "../src/presence/view.js";
 const NOW = 1_800_000_000_000;
 
 function participant(overrides: Partial<ParticipantView> = {}): ParticipantView {
-  return { id: "conversation-1:1", label: "Ada", initials: "AD", speaking: false, camera: "unknown", portraitAt: null, ...overrides };
+  return {
+    id: "conversation-1:1",
+    label: "Ada",
+    initials: "AD",
+    speaking: false,
+    speakingMsRemaining: 0,
+    camera: "unknown",
+    portraitAt: null,
+    ...overrides,
+  };
 }
 
 function view(overrides: Partial<NonNullable<PresenceView["room"]>> = {}, rooms = [{ id: "room-1", name: "Team room" }]): PresenceView {
@@ -24,7 +33,7 @@ function view(overrides: Partial<NonNullable<PresenceView["room"]>> = {}, rooms 
       completeness: "partial",
       participants: [
         participant(),
-        participant({ id: "conversation-1:2", label: "Sam", initials: "SA", speaking: true }),
+        participant({ id: "conversation-1:2", label: "Sam", initials: "SA", speaking: true, speakingMsRemaining: 3_000 }),
         participant({ id: "conversation-1:3", label: "Ines", initials: "IN" }),
         participant({ id: "conversation-1:4", label: "Ravi", initials: "RA" }),
       ],
@@ -65,6 +74,12 @@ interface Harness {
   controller: AbortController;
   calls: { method: string; input: unknown }[];
   answer(next: PresenceView): void;
+  /** Make every later rpc call fail, as a dropped backend would. */
+  breakRpc(): void;
+  /** Let rpc answer again. */
+  fixRpc(): void;
+  /** Move the strip's own clock; nothing else advances it. */
+  advance(ms: number): void;
 }
 
 const mounted: Harness[] = [];
@@ -76,12 +91,15 @@ function mount(options: {
   portrait?: { participantId: string; capturedAt: number; dataUrl: string } | null;
 } = {}): Harness {
   let current = options.view ?? view();
+  let broken = false;
+  let clock = NOW;
   const calls: { method: string; input: unknown }[] = [];
   const controller = new AbortController();
   const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const method = url.slice(url.lastIndexOf("/") + 1);
     calls.push({ method, input: init?.body ? JSON.parse(String(init.body)) : null });
+    if (broken) throw new Error("presence rpc is down");
     const result = method === "presence.portrait" ? options.portrait ?? null : current;
     return {
       ok: true,
@@ -94,7 +112,7 @@ function mount(options: {
     pluginId: "communications-hub",
     signal: controller.signal,
     fetchImpl,
-    now: () => NOW,
+    now: () => clock,
     measure: () => options.width ?? 240,
     viewport: () => options.viewport ?? { width: 1_280, height: 900 },
     pollMs: 10_000,
@@ -105,6 +123,15 @@ function mount(options: {
     calls,
     answer(next) {
       current = next;
+    },
+    breakRpc() {
+      broken = true;
+    },
+    fixRpc() {
+      broken = false;
+    },
+    advance(ms) {
+      clock += ms;
     },
   };
   mounted.push(harness);
@@ -141,6 +168,57 @@ describe("the presence row in bb's sidebar", () => {
     // It is NOT inside the scrolling thread list, so the list keeps its own
     // scroll and its own height.
     expect(document.querySelector('[data-sidebar="content"]')!.contains(footer.previousElementSibling)).toBe(false);
+  });
+
+  it("lets the speaking ring expire without waiting for another answer", async () => {
+    sidebar();
+    const harness = mount();
+    await harness.strip.refresh();
+    expect(row()!.querySelector('.ewzp-face[data-speaking="true"]')).not.toBeNull();
+
+    // No new poll, no new answer: just time passing past the hold the server
+    // reported. The ring has to go out on the client's own clock, because the
+    // server only ever sends a boolean that was true when it was asked.
+    harness.advance(4_000);
+    harness.strip.paint();
+    expect(document.querySelector('#ewzp-row-root .ewzp-face[data-speaking="true"]')).toBeNull();
+    // The person is still there — only the claim that they are talking expired.
+    expect(row()!.querySelectorAll(".ewzp-face:not(.ewzp-more)")).toHaveLength(3);
+  });
+
+  it("stops showing people once polling has been failing for long enough", async () => {
+    sidebar();
+    const harness = mount();
+    await harness.strip.refresh();
+    expect(row()!.querySelectorAll(".ewzp-face:not(.ewzp-more)")).toHaveLength(3);
+
+    harness.breakRpc();
+    harness.advance(60_000);
+    await harness.strip.refresh();
+
+    // A minute of failed polls is not evidence that Ada is still in the room,
+    // and a ring left glowing through it would be a lie.
+    expect(document.querySelector('#ewzp-row-root .ewzp-face[data-speaking="true"]')).toBeNull();
+    expect(row()!.querySelectorAll(".ewzp-face:not(.ewzp-more)")).toHaveLength(0);
+    expect(row()!.getAttribute("aria-label")).toContain("Presence unavailable");
+    expect(row()!.textContent).toContain("No updates");
+    // The row stays put and the way into the room stays open.
+    expect(row()!.textContent).toContain("Team room");
+  });
+
+  it("recovers the moment an answer arrives again", async () => {
+    sidebar();
+    const harness = mount();
+    await harness.strip.refresh();
+    harness.breakRpc();
+    harness.advance(60_000);
+    await harness.strip.refresh();
+    expect(row()!.querySelectorAll(".ewzp-face:not(.ewzp-more)")).toHaveLength(0);
+
+    harness.fixRpc();
+    await harness.strip.refresh();
+    expect(row()!.querySelectorAll(".ewzp-face:not(.ewzp-more)")).toHaveLength(3);
+    expect(row()!.textContent).not.toContain("No updates");
   });
 
   it("is one line, one button, and holds no nested controls", async () => {
@@ -182,7 +260,7 @@ describe("the presence row in bb's sidebar", () => {
     sidebar();
     const rail = mount({ width: 64 });
     await rail.strip.refresh();
-    expect(row()!.querySelectorAll(".ewzp-face")).toHaveLength(0);
+    expect(row()!.querySelectorAll(".ewzp-face:not(.ewzp-more)")).toHaveLength(0);
     // A bare count, and no "+": with no faces beside it there is nothing to add to.
     expect(row()!.querySelector(".ewzp-count")!.textContent).toBe("4");
     expect(row()!.getAttribute("aria-label")).toContain("Team room");
@@ -212,7 +290,7 @@ describe("the presence row in bb's sidebar", () => {
     });
     await harness.strip.refresh();
 
-    expect(row()!.querySelectorAll(".ewzp-face")).toHaveLength(0);
+    expect(row()!.querySelectorAll(".ewzp-face:not(.ewzp-more)")).toHaveLength(0);
     expect(row()!.querySelector(".ewzp-note")!.textContent).toBe("Reconnecting");
     row()!.click();
     expect(popover()!.querySelector(".ewzp-empty")!.textContent)
@@ -288,7 +366,7 @@ describe("the presence popover", () => {
     const harness = mount({
       view: view({
         participants: [
-          participant({ label: "Ada", speaking: true }),
+          participant({ label: "Ada", speaking: true, speakingMsRemaining: 3_000 }),
           participant({ id: "conversation-1:2", label: "Sam", camera: "off" }),
           participant({ id: "conversation-1:3", label: "Ines" }),
         ],

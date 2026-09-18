@@ -140,7 +140,8 @@ npm run check:browser -- ./screenshots     # measure it in a real Chromium
 - Keyword search matches all supplied words. Semantic search is not included.
 - Imports create separate conversations. Merging a polished transcript into an existing live conversation is deferred; existing passage IDs are not overwritten.
 - One configured Zoom connection, hosted meetings only, no audio/video storage, OAuth wizard, or remote hosted hub.
-- Presence is ephemeral and observation-only: never persisted, never claimed complete, dropped on interruption, reconnect, room archive/delete, sitting end and plugin reload. Its Zoom event codes and video media parameters are unverified against Zoom's current documentation, which is why both presence settings are off by default.
+- Presence is ephemeral and observation-only: never persisted, never claimed complete, dropped on interruption, reconnect, room archive/delete, sitting end and plugin reload. In the browser it also ages out: the speaker ring expires on the reader's own clock and a row that has stopped being refreshed drops its roster after twelve seconds rather than showing a stale one.
+- Presence's Zoom event codes and video media parameters follow Zoom's published RTMS reference (locked by `tests/zoom-rtms-contract.test.ts`), but have never been exchanged with a live meeting from this repository — so presence is opt-in, and portraits additionally need video access on your own Zoom app.
 - Zoom protocol tests do not establish successful integration with a real Zoom account. A live test requires app credentials, developer credits, host configuration, and a reachable HTTPS webhook.
 
 ## Development

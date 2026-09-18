@@ -18,7 +18,15 @@ const view: PresenceView = {
     availability: "live",
     completeness: "partial",
     participants: [
-      { id: "conversation-1:1", label: "Ada", initials: "AD", speaking: true, camera: "unknown", portraitAt: null },
+      {
+        id: "conversation-1:1",
+        label: "Ada",
+        initials: "AD",
+        speaking: true,
+        speakingMsRemaining: 3_000,
+        camera: "unknown",
+        portraitAt: null,
+      },
     ],
     knownCount: 1,
     portraits: false,

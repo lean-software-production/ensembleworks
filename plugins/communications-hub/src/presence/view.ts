@@ -25,6 +25,14 @@ export const participantViewSchema = z.object({
   label: z.string(),
   initials: z.string(),
   speaking: z.boolean(),
+  /**
+   * How long the ring may stay lit from the moment this answer was produced.
+   *
+   * The client subtracts its own elapsed time from it, so a ring expires on
+   * time even when the next poll is late — or never arrives. See
+   * `ui/freshness.ts`.
+   */
+  speakingMsRemaining: z.number().int().nonnegative(),
   camera: z.enum(["on", "off", "unknown"]),
   /** Present only when a still exists; it is a CACHED IMAGE, never live video. */
   portraitAt: z.number().nullable(),
@@ -131,6 +139,7 @@ function participantView(participant: PresenceParticipant): ParticipantView {
     label: participant.label,
     initials: participant.initials,
     speaking: participant.speaking,
+    speakingMsRemaining: participant.speakingMsRemaining,
     camera: participant.camera,
     portraitAt: participant.portraitAt,
   };

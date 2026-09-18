@@ -1,16 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { PortraitStore, isJpeg } from "../src/presence/portraits.js";
+import { jpegBytes as jpeg, realJpeg, realPng } from "./helpers/jpeg.js";
 
 const NOW = 1_800_000_000_000;
-
-/** A byte-valid JPEG of the requested length: SOI … EOI. */
-function jpeg(length = 64): Uint8Array {
-  const bytes = new Uint8Array(length);
-  bytes.set([0xff, 0xd8, 0xff, 0xe0], 0);
-  bytes[length - 2] = 0xff;
-  bytes[length - 1] = 0xd9;
-  return bytes;
-}
 
 function store(overrides: Partial<ConstructorParameters<typeof PortraitStore>[0]> = {}) {
   let clock = NOW;
@@ -39,11 +31,11 @@ describe("portrait store", () => {
     expect(portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: jpeg() }))
       .toMatchObject({ accepted: true });
     advance(1_500);
-    expect(portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: jpeg(80) }))
+    expect(portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: jpeg(200) }))
       .toMatchObject({ accepted: true });
 
     const held = portraits.get("sitting-1", "1");
-    expect(held?.bytes.byteLength).toBe(80);
+    expect(held?.bytes.byteLength).toBe(200);
     expect(held?.mediaType).toBe("image/jpeg");
   });
 
@@ -84,7 +76,7 @@ describe("portrait store", () => {
       .toMatchObject({ accepted: true });
     advance(2_000);
     // An out-of-order frame must not walk a face backwards in time.
-    expect(portraits.accept("sitting-1", { participantId: "1", capturedAt: first - 1, bytes: jpeg(70) }))
+    expect(portraits.accept("sitting-1", { participantId: "1", capturedAt: first - 1, bytes: jpeg(160) }))
       .toEqual({ accepted: false, reason: "not-newer" });
     expect(portraits.get("sitting-1", "1")?.capturedAt).toBe(first);
   });
@@ -94,10 +86,10 @@ describe("portrait store", () => {
     portraits.beginSitting("sitting-1");
     portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: jpeg() });
     advance(100);
-    expect(portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: jpeg(70) }))
+    expect(portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: jpeg(160) }))
       .toEqual({ accepted: false, reason: "throttled" });
     advance(1_000);
-    expect(portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: jpeg(70) }))
+    expect(portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: jpeg(160) }))
       .toMatchObject({ accepted: true });
   });
 
@@ -153,8 +145,35 @@ describe("portrait store", () => {
     portraits.beginSitting("sitting-1");
     const buffer = jpeg();
     portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: buffer });
-    buffer[4] = 0x7f;
-    expect(portraits.get("sitting-1", "1")?.bytes[4]).toBe(0);
+    buffer[buffer.length - 3] = 0x7f;
+    expect(portraits.get("sitting-1", "1")?.bytes).toEqual(jpeg());
+  });
+
+  it("counts a frame that never reached the store, so the caller can retire the feed", () => {
+    // A frame the adapter could not decode never becomes a PortraitFrame, so
+    // `accept` never sees it. It is still a failure of the video feed, and the
+    // budget is what turns a stream of them into "portraits unavailable".
+    const { store: portraits } = store({ failureBudget: 2 });
+    portraits.beginSitting("sitting-1");
+    portraits.countFailure("sitting-1", "malformed-frame");
+    expect(portraits.exhausted("sitting-1")).toBe(false);
+    portraits.countFailure("sitting-1", "malformed-frame");
+    expect(portraits.failureCount("sitting-1")).toBe(2);
+    expect(portraits.exhausted("sitting-1")).toBe(true);
+    expect(portraits.exhausted("sitting-2")).toBe(false);
+  });
+
+  it("drops a sitting's images when video retires, while the sitting continues", () => {
+    const { store: portraits, now } = store();
+    portraits.beginSitting("sitting-1");
+    portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: jpeg() });
+    portraits.dropImages("sitting-1");
+
+    expect(portraits.get("sitting-1", "1")).toBeNull();
+    // The sitting is still open: a later frame is refused for being unusable,
+    // not for belonging to a sitting that does not exist.
+    expect(portraits.accept("sitting-1", { participantId: "1", capturedAt: now(), bytes: new Uint8Array([1, 2]) }))
+      .toEqual({ accepted: false, reason: "not-jpeg" });
   });
 
   it("clears every sitting on teardown", () => {
@@ -171,5 +190,29 @@ describe("jpeg detection", () => {
     expect(isJpeg(jpeg())).toBe(true);
     expect(isJpeg(new Uint8Array([0xff, 0xd8]))).toBe(false);
     expect(isJpeg(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0xff, 0xd9]))).toBe(false);
+  });
+
+  it("accepts an image this repository did not write, and refuses a PNG", () => {
+    // tests/fixtures/portrait.jpg and .png were produced by Chromium
+    // (page.screenshot). A validator that only this suite's own fixtures can
+    // satisfy proves nothing about a real encoder's output.
+    expect(isJpeg(realJpeg())).toBe(true);
+    expect(isJpeg(realPng())).toBe(false);
+  });
+
+  it("refuses marker-shaped garbage that starts and ends like a JPEG", () => {
+    // The exact frame the validator got past the old boundary-byte check.
+    expect(isJpeg(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0xff, 0xd9]))).toBe(false);
+    // A segment that claims to run past the end of the buffer.
+    expect(isJpeg(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x7f, 0xff, 0xff, 0xd9]))).toBe(false);
+    // Well-formed segments, but no frame header and no scan: not an image.
+    expect(isJpeg(new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x02, 0xff, 0xd9]))).toBe(false);
+    // Random bytes wrapped in the right two markers.
+    const dressed = new Uint8Array([0xff, 0xd8, ...new Array<number>(40).fill(0x41), 0xff, 0xd9]);
+    expect(isJpeg(dressed)).toBe(false);
+  });
+
+  it("refuses an image whose trailing bytes were lost in transit", () => {
+    expect(isJpeg(realJpeg().slice(0, 400))).toBe(false);
   });
 });

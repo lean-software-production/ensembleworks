@@ -8,6 +8,8 @@ import type { CaptureState, SegmentInput } from "../domain.js";
 import type { PresenceEvent } from "../presence/roster.js";
 import type { PortraitFrame } from "../presence/portraits.js";
 import {
+  ZOOM_VIDEO_DATA,
+  ZOOM_VIDEO_MEDIA_PARAMS,
   decodeZoomPortraitFrame,
   decodeZoomPresenceEvents,
   eventSubscriptionFrame,
@@ -34,19 +36,6 @@ const handshakeResponseSchema = z.object({
     })
     .optional(),
 }).passthrough();
-
-/**
- * What the video socket asks for: the lowest-rate still feed there is.
- *
- * Unverified against Zoom's current media-parameter definitions — this
- * environment cannot reach developers.zoom.us — which is why the whole video
- * path is off unless an operator turns it on, and why a refused handshake is
- * treated as "no portraits" rather than as a capture failure.
- */
-const ZOOM_VIDEO_MEDIA_PARAMS = {
-  media_type: 2,
-  media_params: { video: { codec: 5, resolution: 1, fps: 1, data_opt: 1 } },
-} as const;
 
 const dataHandshakeResponseSchema = z.object({
   msg_type: z.literal(4),
@@ -115,6 +104,16 @@ export interface ZoomVideoOptions {
   onFrame(frame: PortraitFrame): unknown;
   /** Called once when this session will not be producing stills after all. */
   onUnavailable(detail: string): unknown;
+  /**
+   * A video-data frame arrived that could not be used.
+   *
+   * Reported rather than swallowed so it spends the VIDEO failure budget: a
+   * feed that is sending us nothing we can read should retire, and the only way
+   * that happens is if somebody counts. No bytes and no reason that could carry
+   * payload are passed — the caller is told that a frame was unusable, nothing
+   * more.
+   */
+  onUnusableFrame?(): unknown;
   /** Asked before each frame is offered, so a spent failure budget stops the feed. */
   shouldContinue?(): boolean;
 }
@@ -315,6 +314,15 @@ export class ZoomRtmsSession {
   private video?: RtmsSocket;
   private videoUrl?: string;
   private videoRetired = false;
+  /**
+   * Which signaling connection the other sockets belong to.
+   *
+   * Every socket Zoom hands us is addressed by a signaling handshake, so a
+   * replaced signaling connection invalidates them all. The counter is what
+   * lets a late callback from a superseded video socket be recognised as such
+   * even if the object identity check somehow passed.
+   */
+  private signalingGeneration = 0;
   private transcriptUrl?: string;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private signalingAttempts = 0;
@@ -362,6 +370,9 @@ export class ZoomRtmsSession {
 
   private openSignaling(): void {
     if (this.disposed || this.terminal) return;
+    // A new signaling connection is a new generation: whatever the previous one
+    // was holding open is no longer addressed by a handshake we own.
+    this.signalingGeneration += 1;
     let socket: RtmsSocket;
     try {
       socket = this.options.socketFactory(this.options.signalingUrl, {
@@ -385,6 +396,12 @@ export class ZoomRtmsSession {
           this.wireDebug("signaling closed", { code, reason, attempts: this.signalingAttempts });
           this.signaling = undefined;
           this.closeMedia();
+          // The video socket was opened against THIS signaling handshake. Left
+          // alive it would keep feeding stills from a connection we no longer
+          // own, and `openVideo` would find `this.video` still set and never
+          // open the replacement. It is closed, not retired: the next
+          // generation opens its own.
+          this.closeVideo();
           this.retrySignaling("Zoom signaling connection closed");
         },
         error: (error) => {
@@ -631,7 +648,7 @@ export class ZoomRtmsSession {
     const presence = this.options.presence;
     if (!presence?.enabled || !this.signaling) return;
     try {
-      this.signaling.send(JSON.stringify(eventSubscriptionFrame(this.options.streamId, presence.codes)));
+      this.signaling.send(JSON.stringify(eventSubscriptionFrame(presence.codes)));
     } catch (error) {
       this.wireDebug("presence subscription failed", {
         message: error instanceof Error ? error.message : "unknown",
@@ -662,10 +679,14 @@ export class ZoomRtmsSession {
       return;
     }
     this.videoUrl = safeUrl;
+    const generation = this.signalingGeneration;
+    /** A socket from a replaced signaling generation speaks for nobody. */
+    const current = (candidate: RtmsSocket): boolean =>
+      this.video === candidate && generation === this.signalingGeneration;
     try {
       const socket = this.options.socketFactory(safeUrl, {
         open: () => {
-          if (this.video !== socket) return;
+          if (!current(socket)) return;
           this.safeVideoSend(socket, {
             msg_type: 3,
             protocol_version: 1,
@@ -678,16 +699,16 @@ export class ZoomRtmsSession {
           });
         },
         message: (data) => {
-          if (this.video === socket) this.handleVideo(data);
+          if (current(socket)) this.handleVideo(data);
         },
         close: (code, reason) => {
-          if (this.video !== socket) return;
+          if (!current(socket)) return;
           this.wireDebug("video closed", { code, reason });
           this.video = undefined;
           this.retireVideo("Zoom video stream closed");
         },
         error: (error) => {
-          if (this.video !== socket) return;
+          if (!current(socket)) return;
           this.wireDebug("video error", { message: error.message });
         },
       });
@@ -717,6 +738,10 @@ export class ZoomRtmsSession {
       }
       return;
     }
+    // Anything else on this socket that is not video data is not the video
+    // feed failing — a keep-alive, or a message type we never asked for. It is
+    // ignored without spending the budget that exists to retire a BROKEN feed.
+    if ((value as Record<string, unknown>).msg_type !== ZOOM_VIDEO_DATA) return;
     if (video.shouldContinue && !video.shouldContinue()) {
       this.retireVideo("Too many unusable video frames; portraits are unavailable");
       return;
@@ -724,7 +749,18 @@ export class ZoomRtmsSession {
     const frame = decodeZoomPortraitFrame(value);
     // Frame contents are never logged: a rejected still is counted by the
     // portrait store, and its bytes go no further than this function.
-    if (frame) video.onFrame(frame);
+    if (frame) {
+      video.onFrame(frame);
+      return;
+    }
+    // A video-data frame we could not read is a failure of this feed, and has
+    // to be counted as one: otherwise a feed sending nothing but garbage is
+    // indistinguishable from a quiet meeting and never retires.
+    try {
+      video.onUnusableFrame?.();
+    } catch {
+      // Counting a failure must never be able to fault the capture session.
+    }
   }
 
   private retireVideo(detail: string): void {

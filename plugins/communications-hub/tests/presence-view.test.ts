@@ -20,6 +20,7 @@ function person(overrides: Partial<PresenceParticipant> = {}): PresenceParticipa
     joinedAt: NOW,
     lastSpokeAt: null,
     speaking: false,
+    speakingMsRemaining: 0,
     camera: "unknown",
     portraitAt: null,
     ...overrides,

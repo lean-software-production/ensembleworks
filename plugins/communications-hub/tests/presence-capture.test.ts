@@ -5,7 +5,9 @@ import type { CaptureState, Registrant, Room, SegmentInput, TranscriptSink } fro
 import { registerZoomWithDependencies, type ZoomAdapterDependencies } from "../src/adapters/zoom.js";
 import type { RtmsSocket } from "../src/adapters/zoom-protocol.js";
 import { DEFAULT_ZOOM_PRESENCE_CODES } from "../src/adapters/zoom-presence.js";
-import { PresenceService } from "../src/presence/service.js";
+import { PresenceService, type SittingPresence } from "../src/presence/service.js";
+import { buildPresenceView } from "../src/presence/view.js";
+import { popoverModel } from "../src/presence/ui/model.js";
 
 const SECRET = "webhook-secret";
 const NOW_MS = 1_800_000_000_000;
@@ -159,6 +161,19 @@ async function setup(settings: Record<string, string | boolean> = {}) {
   return { host, sockets, sink, presence, controller, start, capture };
 }
 
+/** What the popover would actually print for the first person in the room. */
+function personStatusInPopover(presence: SittingPresence, room: Room): string {
+  const view = buildPresenceView({
+    rooms: [room],
+    selectedRoomId: room.id,
+    presence,
+    conversation: null,
+    zoomConfigured: true,
+    now: NOW_MS,
+  });
+  return popoverModel(view, { pluginId: "hub", now: NOW_MS }).people[0]!.status;
+}
+
 describe("a Zoom sitting's presence, from webhook to teardown", () => {
   it("attaches presence to the room the meeting belongs to, and goes live with capture", async () => {
     const context = await setup();
@@ -199,7 +214,8 @@ describe("a Zoom sitting's presence, from webhook to teardown", () => {
     const signaling = context.capture();
 
     const subscription = JSON.parse(signaling.sent.at(-1)!) as { events: { event_type: number }[] };
-    expect(subscription.events.map((entry) => entry.event_type)).toEqual([22, 23, 21]);
+    // The corrected three, and the published camera codes the operator left alone.
+    expect(subscription.events.map((entry) => entry.event_type)).toEqual([22, 23, 21, 8, 9]);
     signaling.receive({ msg_type: 6, event: { event_type: 22, user_id: 5, user_name: "Ada" } });
     expect(context.presence.roomPresence("room-1")?.participants).toHaveLength(1);
   });
@@ -278,6 +294,65 @@ describe("a Zoom sitting's presence, from webhook to teardown", () => {
     expect(interrupted.availability).toBe("interrupted");
     expect(interrupted.participants).toEqual([]);
     expect(interrupted.completeness).toBe("unknown");
+  });
+
+  it("carries a camera event from the signaling socket to what the popover says", async () => {
+    const context = await setup();
+    await context.start();
+    const signaling = context.capture();
+    signaling.receive({
+      msg_type: 6,
+      event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.join, user_id: 1, user_name: "Ada" },
+    });
+
+    signaling.receive({
+      msg_type: 6,
+      event: { event_type: 8, timestamp: NOW_MS, participants: [{ user_id: 1 }] },
+    });
+    expect(context.presence.roomPresence("room-1")?.participants[0]!.camera).toBe("on");
+    expect(personStatusInPopover(context.presence.roomPresence("room-1")!, context.sink.room)).toBe("Camera on");
+
+    signaling.receive({
+      msg_type: 6,
+      event: { event_type: 9, timestamp: NOW_MS, participants: [{ user_id: 1 }] },
+    });
+    expect(context.presence.roomPresence("room-1")?.participants[0]!.camera).toBe("off");
+    expect(personStatusInPopover(context.presence.roomPresence("room-1")!, context.sink.room)).toBe("Camera off");
+  });
+
+  it("takes a camera event as evidence of somebody it never saw join", async () => {
+    const context = await setup();
+    await context.start();
+    const signaling = context.capture();
+    signaling.receive({
+      msg_type: 6,
+      event: { event_type: 8, timestamp: NOW_MS, participants: [{ user_id: 42 }, { user_id: 43 }] },
+    });
+
+    const people = context.presence.roomPresence("room-1")!.participants;
+    expect(people.map((person) => [person.sourceId, person.camera])).toEqual([["42", "on"], ["43", "on"]]);
+    // Still never claimed to be the whole room.
+    expect(context.presence.roomPresence("room-1")!.completeness).toBe("partial");
+  });
+
+  it("stops advertising portraits when this meeting turns out to have no video", async () => {
+    const context = await setup({ zoomVideoEnabled: true });
+    await context.start();
+    // Installed with portraits, because the setting asked for them...
+    expect(context.presence.roomPresence("room-1")?.portraits).toBe(true);
+
+    // ...and the handshake offers no video stream, which is the normal answer
+    // for an app without video access.
+    const signaling = context.capture();
+    expect(context.presence.roomPresence("room-1")?.portraits).toBe(false);
+
+    // Presence itself is untouched, and so is transcript capture.
+    signaling.receive({
+      msg_type: 6,
+      event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.join, user_id: 1, user_name: "Ada" },
+    });
+    expect(context.presence.roomPresence("room-1")?.participants).toHaveLength(1);
+    expect(context.sink.states.at(-1)?.state).toBe("capturing");
   });
 
   it("drops presence when Zoom capture is switched off", async () => {

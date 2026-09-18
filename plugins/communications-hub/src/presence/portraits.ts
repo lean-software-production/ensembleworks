@@ -31,7 +31,9 @@ export type PortraitRejection =
   | "timestamp-out-of-window"
   | "not-newer"
   | "throttled"
-  | "no-sitting";
+  | "no-sitting"
+  /** A video frame the adapter could not decode, so the store never saw it. */
+  | "malformed-frame";
 
 export type PortraitResult =
   | { accepted: true; capturedAt: number; evicted: string[] }
@@ -157,6 +159,29 @@ export class PortraitStore {
     return { capturedAt: image.capturedAt, bytes: image.bytes, mediaType: "image/jpeg" };
   }
 
+  /**
+   * Count a failure for a frame that never reached `accept`.
+   *
+   * The adapter refuses malformed frames before they can become a
+   * `PortraitFrame` at all — wrong message type, broken base64, a payload that
+   * disagrees with its own declared length. Those are failures of the same feed
+   * and spend the same budget; without this a stream of unreadable frames would
+   * look exactly like a quiet meeting and the feed would never retire.
+   */
+  countFailure(sittingKey: string, reason: PortraitRejection): PortraitResult {
+    return this.refuse(sittingKey, reason);
+  }
+
+  /**
+   * Drop a sitting's images while the sitting itself continues.
+   *
+   * Used when video retires mid-meeting: presence carries on from the signaling
+   * events, but the pictures must not outlive the feed that produced them.
+   */
+  dropImages(sittingKey: string): void {
+    this.sittings.get(sittingKey)?.clear();
+  }
+
   /** True once a sitting's video has failed often enough to stop asking. */
   exhausted(sittingKey: string): boolean {
     return (this.failures.get(sittingKey) ?? 0) >= this.failureBudget;
@@ -182,14 +207,53 @@ export class PortraitStore {
   }
 }
 
-/** Real JPEG bytes, start to finish. A truncated frame is a malformed frame. */
+/**
+ * A JPEG, judged by its structure rather than by its first and last few bytes.
+ *
+ * Boundary markers are trivially forgeable — `ff d8 ff e0 … ff d9` is six bytes
+ * of nothing that used to pass — and this store's whole job is to be the thing
+ * that will not serve a picture it cannot vouch for. So the marker segments are
+ * walked from SOI: each one has to declare a length that fits inside the
+ * buffer, a frame header (SOFn) has to appear, and the scan (SOS) has to be
+ * reached with the image ending in EOI.
+ *
+ * This is a validation, not a decode. It proves the bytes are laid out as a
+ * JPEG and are not truncated; it does not prove the entropy-coded data inside
+ * the scan decodes to a picture, which would need a decoder this plugin has no
+ * business carrying. What it rules out is everything the feed can plausibly get
+ * wrong: garbage, a truncated frame, another format, or somebody else's bytes
+ * in a JPEG-shaped wrapper.
+ */
 export function isJpeg(bytes: Uint8Array): boolean {
-  if (bytes.byteLength < 4) return false;
-  for (let index = 0; index < JPEG_START.length; index += 1) {
-    if (bytes[index] !== JPEG_START[index]) return false;
+  const end = bytes.byteLength;
+  if (end < 4) return false;
+  if (bytes[0] !== JPEG_START[0] || bytes[1] !== JPEG_START[1]) return false;
+  if (bytes[end - 2] !== JPEG_END[0] || bytes[end - 1] !== JPEG_END[1]) return false;
+  let index = 2;
+  let sawFrameHeader = false;
+  while (index + 1 < end) {
+    if (bytes[index] !== 0xff) return false;
+    let marker = bytes[index + 1]!;
+    // 0xff may be repeated as fill before a marker.
+    while (marker === 0xff && index + 2 < end) {
+      index += 1;
+      marker = bytes[index + 1]!;
+    }
+    index += 2;
+    // Standalone markers: no length field follows.
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (marker === 0xd8 || marker === 0xd9) return false;
+    if (index + 1 >= end) return false;
+    const length = (bytes[index]! << 8) | bytes[index + 1]!;
+    if (length < 2 || index + length > end) return false;
+    // SOFn — the frame header. 0xc4 (DHT), 0xc8 (JPG) and 0xcc (DAC) share the
+    // range without being frame headers.
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      sawFrameHeader = true;
+    }
+    // SOS: entropy-coded data runs from here to the EOI already checked above.
+    if (marker === 0xda) return sawFrameHeader;
+    index += length;
   }
-  return (
-    bytes[bytes.byteLength - 2] === JPEG_END[0] &&
-    bytes[bytes.byteLength - 1] === JPEG_END[1]
-  );
+  return false;
 }

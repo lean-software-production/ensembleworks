@@ -53,6 +53,7 @@
     label: ["Ada Lovelace", "Sam", "Ines", "Ravi", "Bo", "Kim"][index % 6] + (index > 5 ? ` ${index}` : ""),
     initials: ["AL", "SA", "IN", "RA", "BO", "KI"][index % 6],
     speaking: index === 0,
+    speakingMsRemaining: index === 0 ? 3_000 : 0,
     camera: index === 2 ? "off" : "unknown",
     portraitAt: null,
   }));
@@ -84,7 +85,12 @@
   };
   window.__setView();
 
+  // A clock the check can move, so an answer can be aged past the staleness
+  // window without the run having to wait out twelve real seconds.
+  window.__clockOffset = 0;
+  window.__rpcBroken = false;
   window.fetch = async (input) => {
+    if (window.__rpcBroken) throw new Error("presence rpc is down");
     const url = String(input);
     const result = url.endsWith("presence.portrait") ? null : window.__view;
     return { ok: true, status: 200, json: async () => ({ ok: true, result }) };
@@ -96,6 +102,7 @@
     document,
     pluginId: "communications-hub",
     signal: window.__controller.signal,
+    now: () => Date.now() + window.__clockOffset,
     pollMs: 500,
   });
   window.__ready = true;

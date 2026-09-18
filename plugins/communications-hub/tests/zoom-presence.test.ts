@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { jpegBase64 } from "./helpers/jpeg.js";
 import {
   DEFAULT_ZOOM_PRESENCE_CODES,
   decodeZoomPortraitFrame,
@@ -10,12 +11,9 @@ import {
 const AT = 1_800_000_000_000;
 const codes = DEFAULT_ZOOM_PRESENCE_CODES;
 
-function jpegBase64(length = 64): string {
-  const bytes = Buffer.alloc(length);
-  bytes.set([0xff, 0xd8, 0xff, 0xe0], 0);
-  bytes[length - 2] = 0xff;
-  bytes[length - 1] = 0xd9;
-  return bytes.toString("base64");
+/** Video data as Zoom sends it: MEDIA_DATA_VIDEO, with a `content` block. */
+function videoMessage(content: Record<string, unknown>): unknown {
+  return { msg_type: 15, content };
 }
 
 describe("Zoom presence event decoding", () => {
@@ -23,7 +21,7 @@ describe("Zoom presence event decoding", () => {
     const events = decodeZoomPresenceEvents({
       msg_type: 6,
       event: { event_type: "PARTICIPANT_JOIN", participants: [{ user_id: 16778240, user_name: "Ada" }] },
-    }, { speaker: 99, join: 98, leave: 97 }, AT);
+    }, { speaker: 99, join: 98, leave: 97, cameraOn: 96, cameraOff: 95 }, AT);
 
     expect(events).toEqual([{ kind: "joined", participantId: "16778240", name: "Ada", at: AT }]);
   });
@@ -75,9 +73,14 @@ describe("Zoom presence event decoding", () => {
 
 describe("presence event codes", () => {
   it("ships a table and lets a deployment correct it", () => {
-    expect(parsePresenceCodes("speaker=1,join=2,leave=3")).toEqual({ speaker: 1, join: 2, leave: 3 });
-    expect(parsePresenceCodes(" active_speaker = 6 , participant_join = 7 , participant_leave = 8 "))
-      .toEqual({ speaker: 6, join: 7, leave: 8 });
+    // An override corrects the codes it names and leaves the published values
+    // for the ones it does not.
+    expect(parsePresenceCodes("speaker=1,join=2,leave=3"))
+      .toEqual({ ...DEFAULT_ZOOM_PRESENCE_CODES, speaker: 1, join: 2, leave: 3 });
+    expect(parsePresenceCodes(" active_speaker = 6 , participant_join = 7 , participant_leave = 5 "))
+      .toEqual({ ...DEFAULT_ZOOM_PRESENCE_CODES, speaker: 6, join: 7, leave: 5 });
+    expect(parsePresenceCodes("camera_on=18,camera_off=19"))
+      .toEqual({ ...DEFAULT_ZOOM_PRESENCE_CODES, cameraOn: 18, cameraOff: 19 });
   });
 
   it("falls back to the shipped table rather than throwing on a typo", () => {
@@ -85,17 +88,20 @@ describe("presence event codes", () => {
     expect(parsePresenceCodes("")).toEqual(DEFAULT_ZOOM_PRESENCE_CODES);
     expect(parsePresenceCodes("nonsense")).toEqual(DEFAULT_ZOOM_PRESENCE_CODES);
     expect(parsePresenceCodes("speaker=2,join=2,leave=4")).toEqual(DEFAULT_ZOOM_PRESENCE_CODES);
+    // A correction that collides with a code it did not mention is a typo too.
+    expect(parsePresenceCodes("speaker=8")).toEqual(DEFAULT_ZOOM_PRESENCE_CODES);
     expect(parsePresenceCodes("speaker=x,join=3,leave=4")).toEqual(DEFAULT_ZOOM_PRESENCE_CODES);
   });
 
-  it("asks only for the three events presence needs", () => {
-    expect(eventSubscriptionFrame("stream-1", codes)).toEqual({
+  it("asks only for the events presence needs", () => {
+    expect(eventSubscriptionFrame(codes)).toEqual({
       msg_type: 5,
-      rtms_stream_id: "stream-1",
       events: [
         { event_type: codes.join, subscribe: true },
         { event_type: codes.leave, subscribe: true },
         { event_type: codes.speaker, subscribe: true },
+        { event_type: codes.cameraOn, subscribe: true },
+        { event_type: codes.cameraOff, subscribe: true },
       ],
     });
   });
@@ -103,35 +109,38 @@ describe("presence event codes", () => {
 
 describe("Zoom portrait frame decoding", () => {
   it("takes the participant id and the capture time from the frame itself", () => {
-    const frame = decodeZoomPortraitFrame({
-      msg_type: 17,
-      content: { user_id: 16778240, timestamp: AT, data: jpegBase64() },
-    });
+    const frame = decodeZoomPortraitFrame(videoMessage({
+      user_id: 16778240,
+      timestamp: AT,
+      data: jpegBase64(),
+    }));
     expect(frame?.participantId).toBe("16778240");
     expect(frame?.capturedAt).toBe(AT);
-    expect(frame?.bytes.byteLength).toBe(64);
+    expect(frame?.bytes.byteLength).toBe(128);
   });
 
   it("refuses a frame with no identity, no timestamp, or no payload", () => {
-    expect(decodeZoomPortraitFrame({ content: { timestamp: AT, data: jpegBase64() } })).toBeNull();
-    expect(decodeZoomPortraitFrame({ content: { user_id: 1, data: jpegBase64() } })).toBeNull();
-    expect(decodeZoomPortraitFrame({ content: { user_id: 1, timestamp: AT } })).toBeNull();
-    expect(decodeZoomPortraitFrame({ content: { user_id: 1, timestamp: AT, data: "" } })).toBeNull();
-    expect(decodeZoomPortraitFrame({ content: { user_id: 1, timestamp: -1, data: jpegBase64() } })).toBeNull();
+    expect(decodeZoomPortraitFrame(videoMessage({ timestamp: AT, data: jpegBase64() }))).toBeNull();
+    expect(decodeZoomPortraitFrame(videoMessage({ user_id: 1, data: jpegBase64() }))).toBeNull();
+    expect(decodeZoomPortraitFrame(videoMessage({ user_id: 1, timestamp: AT }))).toBeNull();
+    expect(decodeZoomPortraitFrame(videoMessage({ user_id: 1, timestamp: AT, data: "" }))).toBeNull();
+    expect(decodeZoomPortraitFrame(videoMessage({ user_id: 1, timestamp: -1, data: jpegBase64() }))).toBeNull();
     expect(decodeZoomPortraitFrame(null)).toBeNull();
   });
 
   it("rejects an oversized payload on its length, before decoding it", () => {
-    const huge = "A".repeat(400_001);
-    expect(decodeZoomPortraitFrame({ content: { user_id: 1, timestamp: AT, data: huge } })).toBeNull();
+    const huge = "A".repeat(400_004);
+    expect(decodeZoomPortraitFrame(videoMessage({ user_id: 1, timestamp: AT, data: huge }))).toBeNull();
   });
 
   it("leaves image validation to the store rather than trusting the envelope", () => {
-    // Base64 that decodes to something which is not a JPEG still decodes here;
-    // the portrait store is what refuses it, and it counts the refusal.
-    const frame = decodeZoomPortraitFrame({
-      content: { user_id: 1, timestamp: AT, data: Buffer.from([1, 2, 3]).toString("base64") },
-    });
+    // Base64 that decodes cleanly to something which is not a JPEG still
+    // decodes here; the portrait store is what refuses it, and counts it.
+    const frame = decodeZoomPortraitFrame(videoMessage({
+      user_id: 1,
+      timestamp: AT,
+      data: Buffer.from([1, 2, 3]).toString("base64"),
+    }));
     expect(frame?.bytes).toEqual(new Uint8Array([1, 2, 3]));
   });
 });

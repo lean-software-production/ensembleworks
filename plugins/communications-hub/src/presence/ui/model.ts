@@ -91,7 +91,13 @@ function rowNote(view: PresenceView): string | null {
   }
 }
 
-export function rowModel(view: PresenceView, tier: StripTier, expanded = false): RowModel {
+/**
+ * @param stale Set when the answer behind `view` has stopped being refreshed
+ * (see `freshness.ts`). The row then says so rather than dressing an old
+ * answer up as the room: no dot colour it has not earned, and a note that
+ * names the problem instead of inviting a click.
+ */
+export function rowModel(view: PresenceView, tier: StripTier, expanded = false, stale = false): RowModel {
   const room = view.room;
   const empty: RowModel = {
     present: false,
@@ -114,7 +120,7 @@ export function rowModel(view: PresenceView, tier: StripTier, expanded = false):
     tier,
     roomName: room.roomName,
     showName: tier === "full",
-    dot: dotFor(view),
+    dot: stale ? "idle" : dotFor(view),
     faces: visible.map((participant) => ({
       id: participant.id,
       initials: participant.initials,
@@ -123,7 +129,7 @@ export function rowModel(view: PresenceView, tier: StripTier, expanded = false):
       portraitAt: participant.portraitAt,
     })),
     overflow: Math.max(0, room.participants.length - visible.length),
-    note: rowNote(view),
+    note: stale ? "No updates" : rowNote(view),
     count: room.knownCount,
     // One sentence, and every clause in it is something we can defend: which
     // room, what we actually know about it, and what the control does.
@@ -171,7 +177,7 @@ function emptyMessage(view: PresenceView): string | null {
 
 export function popoverModel(
   view: PresenceView,
-  options: { pluginId: string; now: number },
+  options: { pluginId: string; now: number; stale?: boolean },
 ): PopoverModel {
   const room = view.room;
   const people = (room?.participants ?? []).map((participant) => ({
@@ -188,11 +194,13 @@ export function popoverModel(
   return {
     title: room?.roomName ?? "Zoom presence",
     status: room?.status ?? "No room selected",
-    dot: dotFor(view),
+    dot: options.stale === true ? "idle" : dotFor(view),
     rooms: view.rooms,
     selectedRoomId: view.selectedRoomId,
     people,
-    emptyMessage: emptyMessage(view),
+    emptyMessage: options.stale === true
+      ? "BB has not been able to refresh presence, so it cannot say who is here now."
+      : emptyMessage(view),
     joinUrl: room?.joinUrl ?? null,
     joinable: room?.joinable ?? false,
     joinNote: room && !room.joinable

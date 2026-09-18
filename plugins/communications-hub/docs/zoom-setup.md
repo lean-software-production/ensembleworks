@@ -137,24 +137,43 @@ that row still works: it shows the room and says "No active stream", because
 **an absent signal is not an empty room**.
 
 Turning presence on makes the plugin ask Zoom's signaling socket for participant
-join, participant leave and active-speaker events. Two settings govern it:
+join, participant leave, active-speaker and camera on/off events. Two settings
+govern it:
 
 | Setting | Meaning |
 | --- | --- |
 | `Subscribe to Zoom participant events (experimental)` | Sends the event subscription after transcript capture is established. Off by default. |
-| `Zoom presence event codes` | The numeric event ids to subscribe to and decode, e.g. `speaker=2,join=3,leave=4`. Blank uses the shipped table. |
+| `Zoom presence event codes` | An escape hatch for the numeric event ids, e.g. `speaker=2,join=3,leave=4,camera_on=8,camera_off=9`. Blank uses the published table; an override corrects only the codes it names. |
 
-**Why the codes are a setting.** Zoom identifies signaling events by number, and
-the numbers this plugin ships with could not be re-verified against Zoom's
-current [event reference](https://developers.zoom.us/docs/rtms/event-reference/)
-from the environment this feature was built in. The one code corroborated by our
-own source is 7 (media server change), which the adapter has always acted on.
-Check the event reference for your Zoom app and correct the setting if it
-disagrees; events that arrive with a NAME rather than a number are decoded by
-name and ignore the table entirely. An unrecognised event is ignored, never
-guessed at.
+**The event numbers, and where they come from.** Zoom identifies signaling
+events by number. The table this plugin ships with is Zoom's published
+`RTMS_EVENT_TYPE` as of 2026-09-18 — ACTIVE_SPEAKER_CHANGE 2, PARTICIPANT_JOIN
+3, PARTICIPANT_LEAVE 4, PARTICIPANT_VIDEO_ON 8, PARTICIPANT_VIDEO_OFF 9 — and
+`tests/zoom-rtms-contract.test.ts` locks it to that reference:
 
-**What presence will and will not claim.** The roster only ever contains people
+- [event reference](https://developers.zoom.us/docs/rtms/event-reference/)
+- [data types](https://developers.zoom.us/docs/rtms/data-types/)
+
+FIRST_PACKET_TIMESTAMP (1) and MEDIA_CONNECTION_INTERRUPTED (7) are deliberately
+NOT subscribed to: Zoom sends both unasked and documents that subscribing to
+them breaks the app. The codes remain a setting only as an escape hatch should a
+deployment meet a different enum; events that arrive with a NAME rather than a
+number are decoded by name and ignore the table entirely. An unrecognised event
+is ignored, never guessed at.
+
+A camera event names people, so it is also evidence that those participants are
+in the meeting — someone whose camera comes on before we ever saw them join is
+added to the roster, which stays "partial" as always. Camera state is reported
+as `on`, `off` or `unknown`; silence is never turned into a mute state, because
+Zoom never tells us one.
+
+**When the sidebar stops hearing from BB.** The row is fed by a poll. Every
+answer carries how long the active-speaker ring may stay lit, so the ring
+expires on the reader's own clock rather than on the next successful poll — and
+if answers stop arriving altogether, the row drops the roster after twelve
+seconds and says "Presence unavailable — BB is not getting updates" rather than
+presenting a minute-old list as the room. The room name and its join link stay:
+those are configuration, not observation.
 observed since the socket connected, so it is reported as partial and the UI
 never presents it as a headcount. Whether RTMS replays an initial roster, and
 how a reconnect recovers completeness, is not established here — so a reconnect
@@ -176,19 +195,31 @@ transcript, and the participant notice changes with it.
 
 Everything about the video path is droppable by design: a missing video URL, an
 unsafe one, a refused handshake, a malformed or oversized frame, or too many
-refusals in one sitting each retire portraits for that sitting and touch nothing
-else. Transcript capture has its own socket, its own limits and its own retry
-budget, and is never affected. Images are validated (complete JPEG bytes, within
-a size limit, carrying their own participant id, with a timestamp that moves
-forward), throttled, bounded in number, served only over the authenticated
-plugin rpc surface, and dropped when the sitting ends. They are displayed as
-what they are — a still captured at a stated time, never live video. Image bytes
-are never logged.
+unusable frames in one sitting each retire portraits for that sitting and touch
+nothing else. Transcript capture has its own socket, its own limits and its own
+retry budget, and is never affected. When video retires mid-meeting the sitting
+stops advertising portraits and the stills it held are dropped — server-side and
+in the browser — so a face falls back to initials rather than showing a picture
+from a feed that has stopped.
 
-Media parameters for the video handshake could not be verified against Zoom's
-current [media parameter definitions](https://developers.zoom.us/docs/rtms/media-parameter-definition/)
-from this environment either, which is the second reason this setting is off by
-default.
+Images are validated on the way in: the message must be Zoom's video data type,
+its payload must be canonical base64 matching the frame's own declared byte
+length, and the bytes must be a structurally complete JPEG (markers walked from
+SOI to the scan, ending in EOI) within a size limit, carrying their own
+participant id, with a timestamp that moves forward. Accepted stills are
+throttled, bounded in number, served only over the authenticated plugin rpc
+surface, and dropped when the sitting ends. They are displayed as what they are
+— a still captured at a stated time, never live video. Image bytes are never
+logged, and a frame that fails any check is counted only as a number.
+
+The video handshake asks for Zoom's documented active-speaker still feed:
+`media_type` VIDEO (2) carrying RAW_VIDEO (3) as JPG (5) at SD (1) and 1fps,
+with `data_opt` VIDEO_SINGLE_ACTIVE_STREAM (3) — see the
+[media parameter definitions](https://developers.zoom.us/docs/rtms/media-parameter-definition/)
+and [single video stream](https://developers.zoom.us/docs/rtms/meetings/video-single-stream/)
+pages, locked by `tests/zoom-rtms-contract.test.ts`. The setting stays off by
+default because video access is a consent decision for the deployment, not
+because the parameters are in doubt.
 
 ## Capture coverage and recovery
 
