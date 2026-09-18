@@ -107,18 +107,18 @@ describe("the documented RTMS event contract", () => {
 });
 
 describe("the documented RTMS video contract", () => {
-  it("asks for the active speaker's stream, as JPG stills at the lowest rate", () => {
+  it("asks for individually subscribed JPG stills at the lowest rate", () => {
     expect(ZOOM_VIDEO_MEDIA_PARAMS).toEqual({
       // MEDIA_DATA_TYPE.VIDEO
       media_type: 2,
       media_params: {
         video: {
-          // RAW_VIDEO, JPG, SD, 1fps, VIDEO_SINGLE_ACTIVE_STREAM
+          // RAW_VIDEO, JPG, SD, 1fps, VIDEO_SINGLE_INDIVIDUAL_STREAM
           content_type: 3,
           codec: 5,
           resolution: 1,
           fps: 1,
-          data_opt: 3,
+          data_opt: 4,
         },
       },
     });

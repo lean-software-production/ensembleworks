@@ -101,6 +101,19 @@ describe("portrait store", () => {
       .toMatchObject({ accepted: true });
   });
 
+  it("does not retire healthy video for throttled or duplicate frames", () => {
+    const { store: portraits, now, advance } = store();
+    portraits.beginSitting("sitting-1");
+    for (let i = 0; i < 100; i++) {
+      const frame = { participantId: "1", capturedAt: now(), bytes: jpeg() };
+      portraits.accept("sitting-1", frame);
+      portraits.accept("sitting-1", frame);
+      advance(100);
+    }
+    expect(portraits.failureCount("sitting-1")).toBe(0);
+    expect(portraits.exhausted("sitting-1")).toBe(false);
+  });
+
   it("evicts the least recently accepted face when the sitting is full", () => {
     const { store: portraits, now, advance } = store();
     portraits.beginSitting("sitting-1");
@@ -113,6 +126,16 @@ describe("portrait store", () => {
     expect(result).toMatchObject({ accepted: true, evicted: ["1"] });
     expect(portraits.get("sitting-1", "1")).toBeNull();
     expect(portraits.get("sitting-1", "3")).not.toBeNull();
+  });
+
+  it("retains the last still for a quiet participant until the sitting ends", () => {
+    const { store: portraits, now, advance } = store();
+    portraits.beginSitting("sitting-1");
+    portraits.accept("sitting-1", { participantId: "p", capturedAt: now(), bytes: jpeg() });
+    advance(60 * 60 * 1000);
+    expect(portraits.get("sitting-1", "p")).not.toBeNull();
+    portraits.endSitting("sitting-1");
+    expect(portraits.get("sitting-1", "p")).toBeNull();
   });
 
   it("stops serving a still once it has gone stale", () => {

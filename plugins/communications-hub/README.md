@@ -132,6 +132,16 @@ bb communications presence-select ROOM_ID  # choose the room ("-" clears it)
 npm run check:browser -- ./screenshots     # measure it in a real Chromium
 ```
 
+Portraits use on-demand individual video subscriptions: camera-on requests an
+initial still; speaker events request a refresh at most once every 30 seconds
+per participant. Each request ends after one accepted image or a five-second
+timeout. Zoom sends no video while unsubscribed. This mode still needs a live
+Zoom integration check; actual bandwidth savings have not been measured.
+
+The last captured portrait stays visible while a replacement loads and while the
+participant is quiet. Stills remain bounded in memory and are cleared when the
+participant leaves, presence is lost, or the sitting ends.
+
 ## Deliberate limits
 
 - Imports are at most 1 MB UTF-8 and 10,000 segments; malformed timed files fail atomically.

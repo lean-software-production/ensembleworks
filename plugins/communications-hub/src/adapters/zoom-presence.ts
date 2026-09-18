@@ -17,7 +17,7 @@
  *                        PARTICIPANT_VIDEO_OFF 9
  *   RTMS_MESSAGE_TYPE    EVENT_SUBSCRIPTION 5, EVENT_UPDATE 6,
  *                        MEDIA_DATA_VIDEO 15
- *   MEDIA_DATA_OPTION    VIDEO_SINGLE_ACTIVE_STREAM 3
+ *   MEDIA_DATA_OPTION    VIDEO_SINGLE_INDIVIDUAL_STREAM 4
  *
  * What is still NOT verified is this deployment's own behaviour against a live
  * meeting: no credentials or meeting are available where this was built, so the
@@ -55,14 +55,13 @@ const MAX_PORTRAIT_BASE64 = 400_000;
  *
  * `media_type: 2` is MEDIA_DATA_TYPE.VIDEO; inside it, RAW_VIDEO (3) as JPG (5)
  * at SD (1) and 1fps — the smallest, slowest still feed RTMS offers — with
- * MEDIA_DATA_OPTION.VIDEO_SINGLE_ACTIVE_STREAM (3), which is the active
- * speaker's video and needs no per-participant subscription. The individual
- * stream option (4) would require subscribing to one person at a time and is
- * deliberately not used: presence wants whoever is talking, not a chosen face.
+ * individual stream selection (4). Subscribe to a participant for one still,
+ * then unsubscribe so Zoom sends no video between portrait refreshes.
+ * https://developers.zoom.us/docs/rtms/meetings/video-single-stream/
  */
 export const ZOOM_VIDEO_MEDIA_PARAMS = {
   media_type: 2,
-  media_params: { video: { content_type: 3, codec: 5, resolution: 1, fps: 1, data_opt: 3 } },
+  media_params: { video: { content_type: 3, codec: 5, resolution: 1, fps: 1, data_opt: 4 } },
 } as const;
 
 export interface ZoomPresenceCodes {

@@ -1,3 +1,4 @@
+import { ZoomPortraitSampler } from "./zoom-portrait-sampler.js";
 import { createHash, createHmac } from "node:crypto";
 import { lookup } from "node:dns";
 import { isIP } from "node:net";
@@ -325,6 +326,14 @@ export class ZoomRtmsSession {
   private videoRetired = false;
   /** One CLIENT_READY_ACK per video media connection, and no more. */
   private videoReadyAcknowledged = false;
+  private readonly portraitSampler = new ZoomPortraitSampler((id, subscribe) => {
+    if (!this.signaling || this.videoRetired) return;
+    try {
+      this.signaling.send(JSON.stringify({ msg_type: 28, user_id: Number(id), subscribe, timestamp: Date.now() }));
+    } catch {
+      this.retireVideo("Zoom video subscription failed");
+    }
+  }, () => this.options.presence?.now?.() ?? Date.now());
   /**
    * Which signaling connection the other sockets belong to.
    *
@@ -503,6 +512,9 @@ export class ZoomRtmsSession {
     }
     if (message.msg_type === 8) this.applyStreamState(message.state);
     if (message.msg_type === 9) this.applySessionState(message.state);
+    if (message.msg_type === 29 && message.status_code !== 0 && message.user_id !== undefined) {
+      this.portraitSampler.rejected(String(message.user_id));
+    }
     this.handlePresence(message);
   }
 
@@ -520,6 +532,9 @@ export class ZoomRtmsSession {
     try {
       const events = decodeZoomPresenceEvents(message, presence.codes, presence.now?.() ?? Date.now());
       if (events.length > 0) presence.onEvents(events);
+      if (this.options.video?.enabled && !this.videoRetired) {
+        for (const event of events) this.portraitSampler.event(event);
+      }
     } catch (error) {
       this.wireDebug("presence decode failed", {
         message: error instanceof Error ? error.message : "unknown",
@@ -755,6 +770,7 @@ export class ZoomRtmsSession {
         return;
       }
       this.acknowledgeVideoReady();
+      if (!this.videoRetired) this.portraitSampler.start();
       return;
     }
     // Anything else on this socket that is not video data is not the video
@@ -769,7 +785,10 @@ export class ZoomRtmsSession {
     // Frame contents are never logged: a rejected still is counted by the
     // portrait store, and its bytes go no further than this function.
     if (frame) {
-      video.onFrame(frame);
+      if (this.portraitSampler.wants(frame.participantId)) {
+        const accepted = video.onFrame(frame);
+        if (accepted !== false) this.portraitSampler.captured(frame.participantId);
+      }
       return;
     }
     // A video-data frame we could not read is a failure of this feed, and has
@@ -837,6 +856,7 @@ export class ZoomRtmsSession {
   }
 
   private closeVideo(): void {
+    this.portraitSampler.reset();
     const socket = this.video;
     this.video = undefined;
     // The next video socket is a new media connection and needs its own ack.

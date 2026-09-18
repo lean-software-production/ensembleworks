@@ -124,9 +124,9 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
           () => { /* A failed selection leaves the previous room on screen. */ },
         );
       },
-      portrait: (participantId, capturedAt) => {
+      portrait: (participantId) => {
         const held = portraits.get(participantId);
-        return held && held.capturedAt === capturedAt ? held.dataUrl : null;
+        return held?.dataUrl ?? null;
       },
       openChanged: (open) => {
         if (open) placeOpenPopover();
@@ -147,11 +147,15 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
     // What is drawn is the last ANSWER, aged by how long ago it arrived: the
     // speaking ring expires on this clock, and an answer that has stopped being
     // refreshed stops being presented as the room at all.
-    const { view: shown, stale } = freshen(view, answeredAt === null ? 0 : now() - answeredAt);
+    const { view: aged, stale } = freshen(view, answeredAt === null ? 0 : now() - answeredAt);
     if (stale && portraits.size > 0) {
       portraits.clear();
       requested.clear();
     }
+    // Labels describe the image actually displayed, not a replacement in flight.
+    const shown = { ...aged, room: aged.room ? { ...aged.room, participants: aged.room.participants.map((p) => ({
+        ...p, portraitAt: p.portraitAt === null ? null : (portraits.get(p.id)?.capturedAt ?? p.portraitAt),
+      })) } : null };
     const row = rowModel(shown, tier, strip.isOpen(), stale);
     const popover = popoverModel(shown, { pluginId: options.pluginId, now: now(), stale });
     // The images are part of what is on screen but not part of the models, so
@@ -175,6 +179,11 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
       strip.close();
       return;
     }
+    // Keep the last still during replacement, but only for current members.
+    const live = new Set(view.room.portraits
+      ? view.room.participants.filter((p) => p.portraitAt !== null).map((p) => p.id)
+      : []);
+    for (const id of portraits.keys()) if (!live.has(id)) portraits.delete(id);
     syncAnchor();
     paint();
     void fetchPortraits();
@@ -259,7 +268,7 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
     for (const participant of room.participants.slice(0, PORTRAIT_CACHE)) {
       if (participant.portraitAt === null) continue;
       const held = portraits.get(participant.id);
-      if (held && held.capturedAt === participant.portraitAt) continue;
+      if (held && held.capturedAt >= participant.portraitAt) continue;
       const key = `${participant.id}:${participant.portraitAt}`;
       if (requested.has(key)) continue;
       requested.add(key);
@@ -268,7 +277,10 @@ export function mountPresenceStrip(options: PresenceMountOptions): MountedPresen
           { participantId: string; capturedAt: number; dataUrl: string } | null;
         // The answer is filed under the id the SERVER returned, so a response
         // that arrives for somebody else cannot be pinned to this face.
-        if (result && result.participantId === participant.id) {
+        if (!disposed && result && result.participantId === participant.id
+          && view?.room?.roomId === room.roomId && view.room.portraits
+          && view.room.participants.some((p) => p.id === result.participantId && p.portraitAt !== null)
+          && result.capturedAt > (portraits.get(result.participantId)?.capturedAt ?? -Infinity)) {
           portraits.set(result.participantId, { capturedAt: result.capturedAt, dataUrl: result.dataUrl });
         }
       } catch {

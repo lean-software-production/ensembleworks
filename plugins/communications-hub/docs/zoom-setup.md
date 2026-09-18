@@ -188,7 +188,7 @@ the sitting, the room or the plugin generation ends.
 ### Optional still portraits
 
 `Request low-rate still portraits` opens a second media socket for the meeting's
-video stream and keeps ONE recent still per participant, in memory, for the
+video connection and keeps ONE recent still per participant, in memory, for the
 duration of the sitting. It is a presence feature and follows the presence
 switch: with participant events off there is no roster to file a face against,
 so no video socket is opened either. It requires video access on your own Zoom app; the
@@ -197,6 +197,15 @@ so **with the scopes above this feature simply reports itself unavailable and
 faces fall back to initials.** Do not add Zoom scopes to try it without deciding
 that separately — a meeting's video is a much larger consent question than its
 transcript, and the participant notice changes with it.
+
+The connection uses individual stream mode (SD JPEG, 1 fps) with no continuous
+subscription. Camera-on requests a first portrait; active-speaker events request
+another only after a 30-second cooldown per participant. The app unsubscribes
+after one accepted frame, or after five seconds without one. Speaker changes,
+camera-off and departure cancel the pending subscription. Frames from anyone
+other than the selected participant are ignored. The last accepted still stays
+visible between requests. This on-demand flow needs live verification with the
+configured Zoom app; controlled tests alone do not measure its bandwidth savings.
 
 Everything about the video path is droppable by design: a missing video URL, an
 unsafe one, a refused handshake, a malformed or oversized frame, or too many

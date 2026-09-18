@@ -62,7 +62,7 @@ export interface PortraitStoreOptions {
   maxParticipants?: number;
   /** How far a frame's own timestamp may sit from now, either way. */
   timestampWindowMs?: number;
-  /** A still older than this is not served; the face falls back to initials. */
+  /** Optional expiry; by default retain the last still until sitting cleanup. */
   maxAgeMs?: number;
   /** Rejections tolerated per sitting before the caller stops asking for video. */
   failureBudget?: number;
@@ -92,7 +92,7 @@ export class PortraitStore {
     this.minIntervalMs = options.minIntervalMs ?? 1_000;
     this.maxParticipants = options.maxParticipants ?? 12;
     this.timestampWindowMs = options.timestampWindowMs ?? 120_000;
-    this.maxAgeMs = options.maxAgeMs ?? 300_000;
+    this.maxAgeMs = options.maxAgeMs ?? Number.POSITIVE_INFINITY;
     this.failureBudget = options.failureBudget ?? 32;
   }
 
@@ -202,7 +202,10 @@ export class PortraitStore {
   }
 
   private refuse(sittingKey: string, reason: PortraitRejection): PortraitResult {
-    this.failures.set(sittingKey, (this.failures.get(sittingKey) ?? 0) + 1);
+    // Deliberately skipping valid traffic is not evidence of a broken feed.
+    if (reason !== "throttled" && reason !== "not-newer") {
+      this.failures.set(sittingKey, (this.failures.get(sittingKey) ?? 0) + 1);
+    }
     return { accepted: false, reason };
   }
 }

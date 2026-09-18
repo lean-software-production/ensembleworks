@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadPluginApp, mountPluginContentScripts } from "@get-bb/plugin-sdk/testing/app";
+import { mountPresenceStrip } from "../src/presence/ui/mount.js";
 import type { PresenceView } from "../src/presence/view.js";
 
 const NOW = 1_800_000_000_000;
@@ -97,3 +98,36 @@ describe("presence as a registered content script", () => {
     await mounted.lifecycle.dispose();
   });
 });
+
+ it("keeps the last portrait while a newer still is in flight or fails", async () => {
+    sidebar();
+    const current = structuredClone(view);
+    current.room!.portraits = true;
+    current.room!.participants[0]!.portraitAt = NOW;
+    let reply: ((value: Response) => void) | undefined;
+    let first = true;
+    const response = (result: unknown) => ({ ok: true, json: async () => ({ ok: true, result }) }) as Response;
+    const fetchImpl = vi.fn(async (url: unknown) => {
+      if (String(url).endsWith("presence.get")) return response(structuredClone(current));
+      if (first) {
+        first = false;
+        return response({ participantId: "conversation-1:1", capturedAt: NOW, dataUrl: "data:image/jpeg;base64,old" });
+      }
+      return new Promise<Response>((resolve) => { reply = resolve; });
+    }) as typeof fetch;
+    const mounted = mountPresenceStrip({ document, pluginId: "communications-hub", signal: new AbortController().signal, fetchImpl, now: () => NOW, measure: () => 240 });
+    try {
+      await flush();
+      const image = () => document.querySelector(".ewzp-row img")?.getAttribute("src");
+      expect(image()).toBe("data:image/jpeg;base64,old");
+      current.room!.participants[0]!.portraitAt = NOW + 1000;
+      await mounted.refresh();
+      expect(image()).toBe("data:image/jpeg;base64,old");
+      reply!(response(null));
+      await flush();
+      expect(image()).toBe("data:image/jpeg;base64,old");
+      current.room!.participants = [];
+      await mounted.refresh();
+      expect(image()).toBeUndefined();
+    } finally { mounted.dispose(); }
+ });

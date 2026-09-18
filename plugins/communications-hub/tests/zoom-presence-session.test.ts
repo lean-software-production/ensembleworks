@@ -85,7 +85,9 @@ function session(options: {
     socketFactory: factory,
     onSegments: () => undefined,
     onState: (state, detail) => states.push({ state, detail }),
-    presence: options.presence,
+    presence: options.presence ?? (options.video?.enabled ? {
+      enabled: true, codes: DEFAULT_ZOOM_PRESENCE_CODES, onEvents: () => undefined,
+    } : undefined),
     video: options.video,
   });
 
@@ -228,6 +230,15 @@ describe("Zoom RTMS presence wiring", () => {
     });
 
     peer.sockets[2]!.receive({ msg_type: 4, status_code: 0 });
+    // Unsolicited frames are ignored until an observed speaker is selected.
+    peer.sockets[2]!.receive(videoFrame(7));
+    expect(frames).toHaveLength(0);
+    peer.sockets[0]!.receive({ msg_type: 6, event: { event_type: 2, user_id: 7 } });
+    expect(JSON.parse(peer.sockets[0]!.sent.at(-1)!)).toMatchObject({ msg_type: 28, user_id: 7, subscribe: true });
+    peer.sockets[2]!.receive(videoFrame(8));
+    expect(frames).toHaveLength(0);
+    peer.sockets[2]!.receive(videoFrame(7));
+    expect(JSON.parse(peer.sockets[0]!.sent.at(-1)!)).toMatchObject({ msg_type: 28, user_id: 7, subscribe: false });
     peer.sockets[2]!.receive(videoFrame(7));
     expect(frames).toHaveLength(1);
     expect(frames[0]!.participantId).toBe("7");
@@ -399,6 +410,7 @@ describe("Zoom RTMS presence wiring", () => {
 
     second.open();
     second.receive({ msg_type: 4, status_code: 0 });
+    signaling.receive({ msg_type: 6, event: { event_type: 2, user_id: 9 } });
     second.receive(videoFrame(9));
     expect(frames.map((frame) => frame.participantId)).toEqual(["9"]);
   }

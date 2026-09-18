@@ -297,7 +297,7 @@ export function registerZoomWithDependencies(
         ? {
           enabled: true,
           onFrame: (frame) => {
-            roster.acceptPortrait({ ...sitting, frame });
+            return roster.acceptPortrait({ ...sitting, frame }).accepted;
           },
           onUnusableFrame: () => {
             roster.countPortraitFailure({ ...sitting });
