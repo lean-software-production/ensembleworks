@@ -76,6 +76,12 @@ describe("requestStreamChoice — the volume policy", () => {
     expect(requestStreamChoice("POST", "/api/v1/events")).toBe("rollup");
     expect(requestStreamChoice("POST", "/api/v1/plugins/canvas/rpc/canvas_presence")).toBe("rollup");
   });
+
+  it("rolls up the host daemon's session chatter, which fires every few seconds with no browser at all", () => {
+    // Measured on a throwaway bb (2026-09-18): with nothing open, this POST alone
+    // produced four individual lines a minute. It is a daemon heartbeat, not an action.
+    expect(requestStreamChoice("POST", "/internal/session/events")).toBe("rollup");
+  });
 });
 
 describe("RequestAuditor", () => {

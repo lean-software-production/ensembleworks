@@ -83,7 +83,7 @@ describe("rule A: a start on another person's machine", () => {
     expect(decision.rule).toBe("start-on-another-persons-machine");
     expect(decision.message).toBe(
       "ew-lsp-001-mattwynne is Matt's machine. Pick one of yours (ew-lsp-001-mrdavidlaing), or the team "
-      + "machine (ew-lsp-001-main), and start the thread there. (Identity's enforcement setting is set to enforce.)",
+      + "machine (ew-lsp-001-main), and start the thread there. (Refused by Identity's machine-ownership guardrail.)",
     );
   });
 
@@ -104,7 +104,7 @@ describe("rule A: a start on another person's machine", () => {
     if (decision.action !== "reject") return;
     expect(decision.message).toBe(
       "ew-lsp-001-mattwynne is Matt's machine. Identity knows no machine of your own yet; start the thread "
-      + "on the team machine (ew-lsp-001-main) instead. (Identity's enforcement setting is set to enforce.)",
+      + "on the team machine (ew-lsp-001-main) instead. (Refused by Identity's machine-ownership guardrail.)",
     );
   });
 
@@ -114,7 +114,7 @@ describe("rule A: a start on another person's machine", () => {
     if (decision.action !== "reject") return;
     expect(decision.message).toBe(
       "ew-lsp-001-mattwynne is Matt's machine. Identity knows no machine of your own yet, and no team machine "
-      + "is configured. (Identity's enforcement setting is set to enforce.)",
+      + "is configured. (Refused by Identity's machine-ownership guardrail.)",
     );
   });
 });

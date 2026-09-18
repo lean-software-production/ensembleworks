@@ -636,22 +636,25 @@ export default async function plugin(bb: BbPluginApi) {
        * next to the action actually returned. In `audit` those two differ, and that
        * difference is the point.
        */
-      audit: auditing()
-        ? (record) => {
-          emitAudit(auditLine, dispatchAuditLine({
-            at: Date.now(),
-            ...currentRequestFields(),
-            mode: enforcement,
-            facts: record.facts,
-            hostKind: record.outcome.hostKind,
-            recordedStarter: record.existing?.starter ?? null,
-            starter: record.decided?.starter ?? null,
-            via: record.decided?.via ?? null,
-            verdict: record.outcome.verdict,
-            action: record.outcome.action.action,
-          }));
-        }
-        : undefined,
+      audit: (record) => {
+        // Checked HERE, not at registration: the setting changes at runtime through
+        // `bb plugin config identity set enforcement …`, and a gate evaluated when the
+        // hook was registered kept the dispatch stream silent until the next reload.
+        // (Found by running it on a throwaway, 2026-09-18.)
+        if (!auditing()) return;
+        emitAudit(auditLine, dispatchAuditLine({
+          at: Date.now(),
+          ...currentRequestFields(),
+          mode: enforcement,
+          facts: record.facts,
+          hostKind: record.outcome.hostKind,
+          recordedStarter: record.existing?.starter ?? null,
+          starter: record.decided?.starter ?? null,
+          via: record.decided?.via ?? null,
+          verdict: record.outcome.verdict,
+          action: record.outcome.action.action,
+        }));
+      },
     }));
 
   /**

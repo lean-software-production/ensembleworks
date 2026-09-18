@@ -97,6 +97,10 @@ const PRESENCE_RPCS = ["presence_heartbeat", "presence_typing", "presence_snapsh
 function isHighFrequency(path: string): boolean {
   if (PRESENCE_RPCS.some((rpc) => path.endsWith(`/rpc/${rpc}`))) return true;
   if (/\/rpc\/[a-z0-9_]*presence[a-z0-9_]*$/i.test(path)) return true;
+  // Measured on a throwaway bb with nothing open at all: the host daemon posts
+  // `/internal/session/events` every few seconds, which would otherwise be four
+  // individual lines a minute on an idle server.
+  if (path.startsWith("/internal/session/")) return true;
   return path === "/api/v1/events" || path.endsWith("/events/stream");
 }
 

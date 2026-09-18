@@ -66,7 +66,14 @@ export type GuardrailMachines = {
   teamMachines: readonly string[];
 };
 
-const SETTING_NOTE = "(Identity's enforcement setting is set to enforce.)";
+/**
+ * Appended to every refusal. Deliberately says nothing about which MODE produced it: the
+ * same sentence is the refusal `enforce` returns to a person AND the counterfactual an
+ * `audit` line carries, and an audit line reading "the setting is set to enforce" when it
+ * is set to audit would be a lie in the log. The line's own `mode` and `action` fields say
+ * what actually happened.
+ */
+const SETTING_NOTE = "(Refused by Identity's machine-ownership guardrail.)";
 
 function list(names: readonly string[]): string {
   return names.join(", ");

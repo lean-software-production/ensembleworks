@@ -1,7 +1,8 @@
 # Identity
 
 Identity answers "who is who" on a shared BB server. It is the renamed Presence
-plugin, and is growing toward named presence and thread ownership (see
+plugin, and now covers named presence, attribution, thread ownership, a start
+guardrail and an audit log (see
 `docs/superpowers/specs/2026-09-15-bb-machine-ownership-design.md`).
 
 **Trust statement.** Identity trusts Cloudflare Access headers. It helps people
@@ -97,17 +98,106 @@ reject, delay or alter a dispatch.
   An unrecorded starter reads "Starter not recorded", muted — never alarming, never blank.
 - **The new-thread composer** carries "Starting as David", plus the machines that are
   yours. It deliberately makes **no** claim about the machine you picked: a `new-thread`
-  composer customization cannot see the selected machine (SDK 0.4.84 `ComposerView`). It
-  also does not pretend anything downstream catches it — step 5's guardrail is not built,
-  `attributeDispatch` always proceeds, so a start on someone else's machine is recorded and
-  not refused. `ownership-labels.test.ts` fails if that copy ever promises otherwise.
+  composer customization cannot see the selected machine (SDK 0.4.84 `ComposerView`). What
+  it says about what happens *after* you press send follows the `enforcement` setting, and
+  `ownership-labels.test.ts` fails if that copy ever promises an enforcement that is not
+  switched on — in either tense, so audit's "would be refused" may never read as "was".
+- **In `audit` mode the header chip also says what enforcement would have done**
+  ("Started by Matt · would be refused — Matt's thread (audit mode, so it went through)"),
+  so the team can evaluate the guardrail by using BB rather than by reading logs.
 
 Read paths: `identity_thread_ownership` (RPC, batched) / `GET …/http/thread-ownership`,
 `identity_machines` (RPC), `GET …/http/host-pins`. The machine list comes from bb's own
 `GET /api/v1/hosts` over the loopback base url — the SDK gives a server plugin no way to
 enumerate hosts.
 
+## The guardrail, and audit mode
+
+One three-way setting, `enforcement`:
+
+| Mode | What happens |
+|---|---|
+| `off` (default) | Record who started what, label it in the UI, refuse nothing, log nothing. |
+| `audit` | Take the **same** decision `enforce` would, write it to the log as a would-refuse, and let the message through. |
+| `enforce` | Act on that decision. |
+
+The rules `audit` reports and `enforce` acts on (`guardrail.ts`): **A** a known person's
+start on another *person's* machine (team and unclaimed machines are always fine); **B** a
+known person's message into a thread a different known person started; **C** an automation
+(`origin: plugin`, `originPluginId: automations`) headed for a machine that is not a team
+machine. A dispatch Identity cannot tie to a person is **always allowed, in every mode** —
+that is the normal shape of every agent path (see the design note's S9) — and an identity
+that came from `fallbackEmail` counts as untied.
+
+`audit` and `enforce` run the *same* `decideGuardrail` call; only the returned action
+differs. A test drives the same facts through both modes and asserts the verdicts are
+equal, so audit cannot drift into estimating what enforcement "would have" done.
+
+### The audit log
+
+Audit lines go through `bb.log` and nowhere else — no ring buffer, no HTTP route, no UI
+page. One JSON object per line, prefixed `identity-audit`:
+
+`bb plugin logs identity` emits one JSON envelope per line
+(`{"ts","level","message"}`), so the audit object is the tail of `.message`:
+
+```
+bb plugin logs identity | jq -r 'select(.message|startswith("identity-audit")) | .message[15:]' | jq
+```
+
+Three streams, correlated by a request id (`req`) that the request-context patch stamps on
+every HTTP request, and each carrying `v` (schema version) and `kind`:
+
+- **`request`** — one line per mutation BB handles, including the routes the dispatch hook
+  never sees (terminals, Stop, Archive, answering approvals, host routes, plugin RPCs):
+  `{method, path, access, person, req}`. `access` is whether the Access header was present;
+  `person` is who it resolved to, `null` when nobody.
+- **`request.rollup`** — every read, plus the known high-frequency chatter (Identity's own
+  presence RPCs, `presence`-named plugin RPCs, the event stream), counted rather than
+  itemised: one line per minute with `{method, path, access, person, count}` buckets. This
+  is the volume policy: presence heartbeats fire every 10s per open tab and a per-request
+  line would drown the log. Paths are normalised (`/threads/:id/send`) and the bucket list
+  is capped, with the overflow counted in `dropped`.
+- **`dispatch`** — every `message.dispatch`: the full attribution facts (origin,
+  originPluginId, lineage, ALS email, resolved starter, `via`, the host and its
+  classification), the guardrail `verdict` plus the `rule` and `refusal` text it would have
+  produced, and the `action` actually returned. In `audit` those last two differ, and that
+  difference is the product.
+- **`message.queued` / `message.dispatched`** — the post-dispatch stream. These run in the
+  requester's async context, so they see Send-now and queued drains, the paths that skip
+  the hook entirely. They report identity; they cannot act on it.
+
+**Emails appear in these lines by design** — "which actions carried identity, and whose" is
+the question being answered. Message bodies and thread content never do; identity facts
+only. In `off` and `audit` no dispatch is ever refused or delayed: logging sits inside the
+hook's existing 5s fail-open deadline and swallows its own failures.
+
+Worked examples:
+
+```
+audit () { bb plugin logs identity | jq -r 'select(.message|startswith("identity-audit")) | .message[15:]'; }
+
+# which paths carried identity, and which did not?
+audit | jq -r 'select(.kind=="request") | "\(.method) \(.path) access=\(.access) person=\(.person)"' \
+  | sort | uniq -c | sort -rn
+# …and the same question for the rolled-up traffic
+audit | jq -r 'select(.kind=="request.rollup") | .buckets[] | "\(.count)\t\(.method) \(.path) access=\(.access) person=\(.person)"' \
+  | sort -rn | head
+
+# what would enforcement have refused?
+audit | jq -c 'select(.kind=="dispatch" and .verdict=="reject") | {req,threadId,rule,action,person,host:.host.name}'
+
+# the paths that skip the hook, and what identity they carried
+audit | jq -c 'select(.kind|startswith("message.")) | {kind,threadId,access,person}'
+```
+
 ## Settings
+
+### `enforcement`
+
+`off` | `audit` | `enforce`, default `off`. See "The guardrail, and audit mode" above.
+Anything unrecognised reads as `off`: an unreadable setting must never start refusing
+people's work.
 
 ### `directory`
 
@@ -148,6 +238,7 @@ the header chip. Display only — Identity never sets or checks it.
 bb plugin config identity set directory '<json>'
 bb plugin config identity set fallbackEmail 'you@example.com'
 bb plugin config identity set teamMachines 'ew-lsp-001-main'
+bb plugin config identity set enforcement audit
 bb plugin reload identity
 ```
 
