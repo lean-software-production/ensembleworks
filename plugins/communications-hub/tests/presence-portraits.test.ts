@@ -4,6 +4,14 @@ import { jpegBytes as jpeg, realJpeg, realPng } from "./helpers/jpeg.js";
 
 const NOW = 1_800_000_000_000;
 
+/** Marker segments, spelled out so a structural test can break exactly one. */
+const SOI = [0xff, 0xd8];
+/** SOF0: 8-bit, 1×1, one component (id 1, sampling 1×1, quantisation table 0). */
+const FRAME = [0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00, 0x01, 0x01, 0x01, 0x11, 0x00];
+/** SOS: one component, selecting the frame's component 1. */
+const SCAN = [0xff, 0xda, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00];
+const EOI = [0xff, 0xd9];
+
 function store(overrides: Partial<ConstructorParameters<typeof PortraitStore>[0]> = {}) {
   let clock = NOW;
   const instance = new PortraitStore({
@@ -214,5 +222,42 @@ describe("jpeg detection", () => {
 
   it("refuses an image whose trailing bytes were lost in transit", () => {
     expect(isJpeg(realJpeg().slice(0, 400))).toBe(false);
+  });
+
+  it("refuses segments whose lengths are legal but whose contents cannot describe an image", () => {
+    // The exact 12-byte payload the validator got past the marker walk: SOI, an
+    // EMPTY frame header, an EMPTY scan header, EOI. Every declared length fits
+    // inside the buffer; none of the segments carries the fields a decoder
+    // needs, and there is not one byte of entropy-coded data.
+    expect(isJpeg(new Uint8Array([
+      0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0xff, 0xda, 0x00, 0x02, 0xff, 0xd9,
+    ]))).toBe(false);
+    // A frame header whose fields are all present but which declares no
+    // components: 8 = 2 + precision + height + width + Nf, with Nf = 0.
+    expect(isJpeg(new Uint8Array([
+      ...SOI, 0xff, 0xc0, 0x00, 0x08, 0x08, 0x00, 0x01, 0x00, 0x01, 0x00, ...SCAN, ...EOI,
+    ]))).toBe(false);
+    // A frame header claiming three components in a segment sized for one.
+    expect(isJpeg(new Uint8Array([
+      ...SOI, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x01, 0x00, 0x01, 0x03, 0x01, 0x11, 0x00, ...SCAN, ...EOI,
+    ]))).toBe(false);
+    // A frame header describing a zero-by-zero image.
+    expect(isJpeg(new Uint8Array([
+      ...SOI, 0xff, 0xc0, 0x00, 0x0b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x01, 0x01, 0x11, 0x00, ...SCAN, ...EOI,
+    ]))).toBe(false);
+    // A scan header with no components in it.
+    expect(isJpeg(new Uint8Array([
+      ...SOI, ...FRAME, 0xff, 0xda, 0x00, 0x06, 0x00, 0x00, 0x3f, 0x00, 0x42, ...EOI,
+    ]))).toBe(false);
+    // A scan naming a component the frame never declared.
+    expect(isJpeg(new Uint8Array([
+      ...SOI, ...FRAME, 0xff, 0xda, 0x00, 0x08, 0x01, 0x09, 0x00, 0x00, 0x3f, 0x00, 0x42, ...EOI,
+    ]))).toBe(false);
+    // A complete frame and scan header, and then the image simply stops: no
+    // entropy-coded data between the scan and EOI.
+    expect(isJpeg(new Uint8Array([...SOI, ...FRAME, ...SCAN, ...EOI]))).toBe(false);
+    // The same bytes with one byte of scan data are a structurally complete
+    // image, so the checks above are rejecting the emptiness, not the shape.
+    expect(isJpeg(new Uint8Array([...SOI, ...FRAME, ...SCAN, 0x42, ...EOI]))).toBe(true);
   });
 });

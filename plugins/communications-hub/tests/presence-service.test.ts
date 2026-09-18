@@ -90,13 +90,16 @@ describe("presence service", () => {
 
   it("forgets a room the moment it is archived or deleted", () => {
     const { presence, now } = service();
-    presence.beginSitting({ ...sitting, roomId: "room-1" });
+    presence.beginSitting({ ...sitting, roomId: "room-1", portraits: true });
     presence.setAvailability({ ...sitting, availability: "live" });
     presence.applyEvent({ ...sitting, event: { kind: "joined", participantId: "1", name: "Ada", at: now() } });
+    presence.acceptPortrait({ ...sitting, frame: { participantId: "1", capturedAt: now(), bytes: jpeg() } });
 
     presence.forgetRoom("room-1");
     expect(presence.roomPresence("room-1")).toBeNull();
     expect(presence.sittingPresence(sitting.sittingKey)).toBeNull();
+    // The bytes go with the roster: an archived room keeps no pictures.
+    expect(presence.portrait(`${sitting.sittingKey}:1`)).toBeNull();
   });
 
   it("holds nothing at all after the plugin is disposed", () => {

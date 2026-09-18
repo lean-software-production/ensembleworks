@@ -155,6 +155,39 @@ describe("Zoom RTMS presence wiring", () => {
     expect(received).toEqual([[{ kind: "joined", participantId: "16778240", name: "Ada", at: expect.any(Number) }]]);
   });
 
+  it("reports presence unavailable when the subscription cannot be sent", () => {
+    const unavailable: string[] = [];
+    const peer = session({
+      presence: {
+        enabled: true,
+        codes: DEFAULT_ZOOM_PRESENCE_CODES,
+        onEvents: () => undefined,
+        onUnavailable: (detail) => unavailable.push(detail),
+      },
+    });
+    peer.session.start();
+    const signaling = peer.sockets[0]!;
+    signaling.open();
+    signaling.receive({
+      msg_type: 2,
+      status_code: 0,
+      media_server: { server_urls: { transcript: "wss://rtms.zoom.us/transcript" } },
+    });
+    const send = signaling.send.bind(signaling);
+    signaling.send = (data: string) => {
+      if ((JSON.parse(data) as { msg_type: number }).msg_type === 5) throw new Error("socket closed");
+      send(data);
+    };
+    peer.sockets[1]!.open();
+    peer.sockets[1]!.receive({ msg_type: 4, status_code: 0 });
+
+    // The transcript is capturing and nothing about it changed — but no
+    // participant event can arrive on a subscription Zoom never received, so
+    // presence has to say so rather than ride capture's state.
+    expect(unavailable).toEqual(["Zoom did not accept the participant-event subscription"]);
+    expect(peer.states.at(-1)).toEqual({ state: "capturing", detail: "Receiving Zoom transcript" });
+  });
+
   it("still reopens the media socket on a media-server change while presence is on", () => {
     const peer = session({
       presence: { enabled: true, codes: DEFAULT_ZOOM_PRESENCE_CODES, onEvents: () => undefined },
@@ -198,6 +231,49 @@ describe("Zoom RTMS presence wiring", () => {
     peer.sockets[2]!.receive(videoFrame(7));
     expect(frames).toHaveLength(1);
     expect(frames[0]!.participantId).toBe("7");
+  });
+
+  it("acknowledges readiness for the video media connection, as the wire requires", () => {
+    const peer = session({
+      video: { enabled: true, onFrame: () => undefined, onUnavailable: () => undefined },
+    });
+    peer.connect();
+    const signaling = peer.sockets[0]!;
+    // One ACK so far: the one for the transcript media connection.
+    expect(sentTypes(signaling).filter((type) => type === 7)).toEqual([7]);
+
+    peer.sockets[2]!.open();
+    peer.sockets[2]!.receive({ msg_type: 4, status_code: 0 });
+
+    // Zoom documents CLIENT_READY_ACK as the answer to a data handshake
+    // response FROM A MEDIA CONNECTION — "it needs to send a client ready ack
+    // to the signaling connection … ready to receive media data"
+    // (developers.zoom.us/docs/rtms/event-reference/, Client ready ACK
+    // message). The video socket is a second media connection, so its
+    // handshake needs its own acknowledgement or Zoom sends no video data.
+    expect(sentTypes(signaling).filter((type) => type === 7)).toEqual([7, 7]);
+    expect(JSON.parse(signaling.sent.at(-1)!)).toEqual({ msg_type: 7, rtms_stream_id: "stream-id" });
+  });
+
+  it("acknowledges the video connection once, and never one Zoom refused", () => {
+    const peer = session({
+      video: { enabled: true, onFrame: () => undefined, onUnavailable: () => undefined },
+    });
+    peer.connect();
+    const signaling = peer.sockets[0]!;
+    peer.sockets[2]!.open();
+    peer.sockets[2]!.receive({ msg_type: 4, status_code: 0 });
+    // A repeated handshake response is not a second connection to be ready for.
+    peer.sockets[2]!.receive({ msg_type: 4, status_code: 0 });
+    expect(sentTypes(signaling).filter((type) => type === 7)).toEqual([7, 7]);
+
+    const refused = session({
+      video: { enabled: true, onFrame: () => undefined, onUnavailable: () => undefined },
+    });
+    refused.connect();
+    refused.sockets[2]!.open();
+    refused.sockets[2]!.receive({ msg_type: 4, status_code: 13 });
+    expect(sentTypes(refused.sockets[0]!).filter((type) => type === 7)).toEqual([7]);
   });
 
   it("treats a refused video handshake as no portraits, not as a capture failure", () => {

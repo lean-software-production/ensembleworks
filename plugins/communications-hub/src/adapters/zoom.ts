@@ -236,6 +236,13 @@ export function registerZoomWithDependencies(
 
   function createCapture(input: Omit<ActiveCapture, "session">): ActiveCapture {
     let capture: ActiveCapture | undefined;
+    // Presence exists for this capture only if an operator asked for it. With
+    // the subscription unsent no participant event can ever arrive, so a
+    // sitting installed anyway would report capture's own "capturing" state as
+    // a live presence stream — a green light over a roster that is not merely
+    // empty but impossible. Video hangs off the same switch: a still with no
+    // roster to file it against is a picture of somebody the strip cannot name.
+    const roster = input.presenceEnabled ? presence : undefined;
     // The sitting is named by the hub's own conversation id and the session by
     // the stream id. Presence therefore never learns a Zoom identifier, and a
     // late message from a stream Zoom has already replaced is dropped by the
@@ -259,38 +266,50 @@ export function registerZoomWithDependencies(
       onState: (state, detail) => {
         updateCapture(input.conversationId, state, detail);
         try {
-          presence?.setAvailability({ ...sitting, availability: presenceAvailabilityOf(state) });
+          roster?.setAvailability({ ...sitting, availability: presenceAvailabilityOf(state) });
         } catch {
           // Presence is a view of capture, never a reason for it to fail.
         }
       },
-      presence: presence && input.presenceEnabled
+      presence: roster
         ? {
           enabled: true,
           codes: input.presenceCodes,
           now: dependencies.now,
           onEvents: (events) => {
-            for (const event of events) presence.applyEvent({ ...sitting, event });
+            for (const event of events) roster.applyEvent({ ...sitting, event });
+          },
+          onUnavailable: (detail) => {
+            // The sitting goes, rather than being marked unavailable: capture's
+            // own state changes would otherwise light it up again, and a roster
+            // no subscription feeds is not a room we can describe. The strip
+            // falls back to "No active stream", which is exactly the case.
+            bb.log.warn(`zoom presence unavailable: ${detail}`);
+            try {
+              roster.endSitting(sitting);
+            } catch {
+              // Presence wiring never faults capture.
+            }
           },
         }
         : undefined,
-      video: presence && input.videoEnabled
+      video: roster && input.videoEnabled
         ? {
           enabled: true,
           onFrame: (frame) => {
-            presence.acceptPortrait({ ...sitting, frame });
+            roster.acceptPortrait({ ...sitting, frame });
           },
           onUnusableFrame: () => {
-            presence.countPortraitFailure({ ...sitting });
+            roster.countPortraitFailure({ ...sitting });
           },
-          shouldContinue: () => !presence.portraitsExhausted(sitting.sittingKey),
+          shouldContinue: () => !roster.portraitsExhausted(sitting.sittingKey),
           onUnavailable: (detail) => {
             // Not just a log line: the sitting stops advertising portraits and
             // drops the ones it holds, so the strip falls back to initials
             // instead of offering pictures from a feed that has stopped.
             bb.log.info(`zoom portraits unavailable: ${detail}`);
             try {
-              presence.retirePortraits({ ...sitting });
+              roster.retirePortraits({ ...sitting });
             } catch {
               // Portrait wiring never faults capture.
             }
@@ -317,13 +336,17 @@ export function registerZoomWithDependencies(
     activeByOccurrence.set(capture.meetingUuid, capture);
     // Installed before the socket opens, so the first observation has somewhere
     // to land. A replaced session begins a fresh roster rather than inheriting
-    // the previous one's members.
-    presence?.beginSitting({
-      sittingKey: capture.conversationId,
-      sessionId: capture.streamId,
-      roomId: capture.roomId,
-      portraits: capture.videoEnabled,
-    });
+    // the previous one's members. A capture with presence switched off installs
+    // no sitting at all: the strip then says "no active stream", which is the
+    // truth, rather than showing a live room nobody is ever reported to.
+    if (capture.presenceEnabled) {
+      presence?.beginSitting({
+        sittingKey: capture.conversationId,
+        sessionId: capture.streamId,
+        roomId: capture.roomId,
+        portraits: capture.videoEnabled,
+      });
+    }
     capture.session.start();
   }
 

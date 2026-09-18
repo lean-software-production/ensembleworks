@@ -97,6 +97,15 @@ export interface ZoomPresenceOptions {
    * make a speaking ring that is already expired when it arrives.
    */
   now?(): number;
+  /**
+   * This session will not be reporting participants after all.
+   *
+   * Presence is only ever as true as the subscription behind it. A frame that
+   * could not be sent means no event will ever arrive, and a roster left
+   * standing on capture's own "capturing" state would be a live-looking room
+   * nobody is reporting on. Capture itself is untouched.
+   */
+  onUnavailable?(detail: string): unknown;
 }
 
 export interface ZoomVideoOptions {
@@ -314,6 +323,8 @@ export class ZoomRtmsSession {
   private video?: RtmsSocket;
   private videoUrl?: string;
   private videoRetired = false;
+  /** One CLIENT_READY_ACK per video media connection, and no more. */
+  private videoReadyAcknowledged = false;
   /**
    * Which signaling connection the other sockets belong to.
    *
@@ -646,13 +657,19 @@ export class ZoomRtmsSession {
    */
   private subscribePresence(): void {
     const presence = this.options.presence;
-    if (!presence?.enabled || !this.signaling) return;
+    if (!presence?.enabled) return;
     try {
+      if (!this.signaling) throw new Error("no signaling connection");
       this.signaling.send(JSON.stringify(eventSubscriptionFrame(presence.codes)));
     } catch (error) {
       this.wireDebug("presence subscription failed", {
         message: error instanceof Error ? error.message : "unknown",
       });
+      try {
+        presence.onUnavailable?.("Zoom did not accept the participant-event subscription");
+      } catch {
+        // Presence wiring must never be able to fault the capture session.
+      }
     }
   }
 
@@ -735,7 +752,9 @@ export class ZoomRtmsSession {
       if (handshake.data.status_code !== 0) {
         this.wireDebug("video handshake rejected", { statusCode: handshake.data.status_code });
         this.retireVideo("Zoom refused the video stream; portraits are unavailable");
+        return;
       }
+      this.acknowledgeVideoReady();
       return;
     }
     // Anything else on this socket that is not video data is not the video
@@ -763,6 +782,40 @@ export class ZoomRtmsSession {
     }
   }
 
+  /**
+   * Tell signaling this app is ready for the VIDEO media connection.
+   *
+   * Zoom documents CLIENT_READY_ACK as the answer to a data handshake response
+   * "from the media connection", sent on the signaling connection once "the
+   * signaling and media connections have been established", and says media data
+   * follows it (developers.zoom.us/docs/rtms/event-reference/, "Client ready
+   * ACK message", read 2026-09-18). The video socket is a second media
+   * connection opened after the transcript one, so the acknowledgement the
+   * transcript handshake sent does not cover it: without this, a compliant
+   * server has been told nothing about the video connection's readiness.
+   *
+   * Sent once per video socket, and never for a handshake Zoom refused. It is
+   * deliberately not `safeSend`: a failed send here means no stills, which is a
+   * retired video feed, NOT an interrupted transcript capture.
+   */
+  private acknowledgeVideoReady(): void {
+    if (this.videoReadyAcknowledged || !this.video) return;
+    this.videoReadyAcknowledged = true;
+    const signaling = this.signaling;
+    if (!signaling) {
+      this.retireVideo("Zoom video stream could not be acknowledged; portraits are unavailable");
+      return;
+    }
+    try {
+      signaling.send(JSON.stringify({ msg_type: 7, rtms_stream_id: this.options.streamId }));
+    } catch (error) {
+      this.wireDebug("video ready ack failed", {
+        message: error instanceof Error ? error.message : "unknown",
+      });
+      this.retireVideo("Zoom video stream could not be acknowledged; portraits are unavailable");
+    }
+  }
+
   private retireVideo(detail: string): void {
     if (this.videoRetired) return;
     this.videoRetired = true;
@@ -786,6 +839,8 @@ export class ZoomRtmsSession {
   private closeVideo(): void {
     const socket = this.video;
     this.video = undefined;
+    // The next video socket is a new media connection and needs its own ack.
+    this.videoReadyAcknowledged = false;
     try {
       socket?.close(1000, "closing");
     } catch {

@@ -208,21 +208,69 @@ export class PortraitStore {
 }
 
 /**
+ * The frame header (SOFn) a JPEG has to carry before its scan, read strictly.
+ *
+ * ITU-T T.81 §B.2.2: `Lf P Y X Nf` then `Nf` three-byte component
+ * specifications, so the segment is exactly `8 + 3 × Nf` bytes long. A segment
+ * whose declared length merely *fits in the buffer* proves nothing — `ff c0 00
+ * 02` is a legal length and an impossible frame. Returns the component ids the
+ * scan is allowed to name, or null when the header cannot describe an image.
+ */
+function frameComponents(bytes: Uint8Array, at: number, length: number): Set<number> | null {
+  if (length < 8) return null;
+  const precision = bytes[at + 2]!;
+  const height = (bytes[at + 3]! << 8) | bytes[at + 4]!;
+  const width = (bytes[at + 5]! << 8) | bytes[at + 6]!;
+  const count = bytes[at + 7]!;
+  // 8-bit is baseline; 12 and 16 appear in the extended and lossless modes.
+  if (precision !== 8 && precision !== 12 && precision !== 16) return null;
+  if (width === 0 || height === 0) return null;
+  if (count < 1 || count > 4) return null;
+  if (length !== 8 + 3 * count) return null;
+  const components = new Set<number>();
+  for (let index = 0; index < count; index += 1) components.add(bytes[at + 8 + index * 3]!);
+  return components;
+}
+
+/**
+ * The scan header (SOS), read against the frame it belongs to.
+ *
+ * ITU-T T.81 §B.2.3: `Ls Ns` then `Ns` two-byte component selectors and three
+ * trailing bytes, so the segment is exactly `6 + 2 × Ns` long and every
+ * selector has to name a component the frame declared. A scan that selects
+ * nothing, or selects a component that does not exist, cannot be decoded.
+ */
+function scanIsCoherent(bytes: Uint8Array, at: number, length: number, components: Set<number>): boolean {
+  if (length < 6) return false;
+  const count = bytes[at + 2]!;
+  if (count < 1 || count > 4) return false;
+  if (length !== 6 + 2 * count) return false;
+  for (let index = 0; index < count; index += 1) {
+    if (!components.has(bytes[at + 3 + index * 2]!)) return false;
+  }
+  return true;
+}
+
+/**
  * A JPEG, judged by its structure rather than by its first and last few bytes.
  *
  * Boundary markers are trivially forgeable — `ff d8 ff e0 … ff d9` is six bytes
  * of nothing that used to pass — and this store's whole job is to be the thing
  * that will not serve a picture it cannot vouch for. So the marker segments are
- * walked from SOI: each one has to declare a length that fits inside the
- * buffer, a frame header (SOFn) has to appear, and the scan (SOS) has to be
- * reached with the image ending in EOI.
+ * walked from SOI, and each one has to be internally coherent, not merely
+ * well-sized: the frame header has to declare a real size and between one and
+ * four components in a segment of exactly the matching length, the scan has to
+ * select components that frame declared, and entropy-coded data has to actually
+ * follow the scan before the closing EOI. `ff d8 ff c0 00 02 ff da 00 02 ff d9`
+ * — an empty frame and an empty scan, every length legal — is the payload that
+ * made those checks necessary and is kept as a fixture.
  *
  * This is a validation, not a decode. It proves the bytes are laid out as a
- * JPEG and are not truncated; it does not prove the entropy-coded data inside
- * the scan decodes to a picture, which would need a decoder this plugin has no
- * business carrying. What it rules out is everything the feed can plausibly get
- * wrong: garbage, a truncated frame, another format, or somebody else's bytes
- * in a JPEG-shaped wrapper.
+ * JPEG, describe an image, and are not truncated; it does not prove the
+ * entropy-coded data decodes to a picture, which would need a decoder this
+ * plugin has no business carrying. What it rules out is everything the feed can
+ * plausibly get wrong: garbage, a truncated frame, another format, or somebody
+ * else's bytes in a JPEG-shaped wrapper.
  */
 export function isJpeg(bytes: Uint8Array): boolean {
   const end = bytes.byteLength;
@@ -230,7 +278,7 @@ export function isJpeg(bytes: Uint8Array): boolean {
   if (bytes[0] !== JPEG_START[0] || bytes[1] !== JPEG_START[1]) return false;
   if (bytes[end - 2] !== JPEG_END[0] || bytes[end - 1] !== JPEG_END[1]) return false;
   let index = 2;
-  let sawFrameHeader = false;
+  let components: Set<number> | null = null;
   while (index + 1 < end) {
     if (bytes[index] !== 0xff) return false;
     let marker = bytes[index + 1]!;
@@ -249,10 +297,17 @@ export function isJpeg(bytes: Uint8Array): boolean {
     // SOFn — the frame header. 0xc4 (DHT), 0xc8 (JPG) and 0xcc (DAC) share the
     // range without being frame headers.
     if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
-      sawFrameHeader = true;
+      const declared = frameComponents(bytes, index, length);
+      if (declared === null) return false;
+      components = components ?? declared;
     }
-    // SOS: entropy-coded data runs from here to the EOI already checked above.
-    if (marker === 0xda) return sawFrameHeader;
+    if (marker === 0xda) {
+      if (components === null) return false;
+      if (!scanIsCoherent(bytes, index, length, components)) return false;
+      // Entropy-coded data runs from the end of the scan header to the EOI
+      // already checked above. An image that stops there has no picture in it.
+      return index + length < end - 2;
+    }
     index += length;
   }
   return false;

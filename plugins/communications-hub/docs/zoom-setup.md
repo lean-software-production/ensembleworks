@@ -134,7 +134,10 @@ The sidebar shows one compact row for a selected room: a status dot, the room
 name, up to three faces and a "+N" overflow, with names, active-speaker status
 and the room's links one click away. With presence switched off — the default —
 that row still works: it shows the room and says "No active stream", because
-**an absent signal is not an empty room**.
+**an absent signal is not an empty room**. A capture whose presence is off opens
+no roster at all, so a transcript that is happily capturing can never be shown
+as a live presence stream: the two are separate signals and the row reports the
+one it actually has.
 
 Turning presence on makes the plugin ask Zoom's signaling socket for participant
 join, participant leave, active-speaker and camera on/off events. Two settings
@@ -186,7 +189,9 @@ the sitting, the room or the plugin generation ends.
 
 `Request low-rate still portraits` opens a second media socket for the meeting's
 video stream and keeps ONE recent still per participant, in memory, for the
-duration of the sitting. It requires video access on your own Zoom app; the
+duration of the sitting. It is a presence feature and follows the presence
+switch: with participant events off there is no roster to file a face against,
+so no video socket is opened either. It requires video access on your own Zoom app; the
 app described in this document requests `meeting:read:meeting_transcript` only,
 so **with the scopes above this feature simply reports itself unavailable and
 faces fall back to initials.** Do not add Zoom scopes to try it without deciding
@@ -204,9 +209,15 @@ from a feed that has stopped.
 
 Images are validated on the way in: the message must be Zoom's video data type,
 its payload must be canonical base64 matching the frame's own declared byte
-length, and the bytes must be a structurally complete JPEG (markers walked from
-SOI to the scan, ending in EOI) within a size limit, carrying their own
-participant id, with a timestamp that moves forward. Accepted stills are
+length, and the bytes must be a structurally complete JPEG within a size limit,
+carrying their own participant id, with a timestamp that moves forward. "A
+structurally complete JPEG" is checked against the segment structure, not the
+boundary bytes: markers are walked from SOI, the frame header has to declare a
+non-zero size and between one and four components in a segment of exactly the
+matching length, the scan has to select components that frame declared, and
+entropy-coded data has to follow the scan before the closing EOI. `ff d8 ff c0
+00 02 ff da 00 02 ff d9` — an empty frame and an empty scan, every declared
+length legal — is kept as a regression fixture. Accepted stills are
 throttled, bounded in number, served only over the authenticated plugin rpc
 surface, and dropped when the sitting ends. They are displayed as what they are
 — a still captured at a stated time, never live video. Image bytes are never
@@ -217,9 +228,15 @@ The video handshake asks for Zoom's documented active-speaker still feed:
 with `data_opt` VIDEO_SINGLE_ACTIVE_STREAM (3) — see the
 [media parameter definitions](https://developers.zoom.us/docs/rtms/media-parameter-definition/)
 and [single video stream](https://developers.zoom.us/docs/rtms/meetings/video-single-stream/)
-pages, locked by `tests/zoom-rtms-contract.test.ts`. The setting stays off by
-default because video access is a consent decision for the deployment, not
-because the parameters are in doubt.
+pages, locked by `tests/zoom-rtms-contract.test.ts`. When that second media
+connection's data handshake succeeds, the plugin sends its own `CLIENT_READY_ACK`
+(`msg_type` 7) on the signaling connection, which is what the
+[event reference](https://developers.zoom.us/docs/rtms/event-reference/)
+requires after a data handshake response "from the media connection" and before
+media data is sent; the acknowledgement for the transcript connection does not
+cover a socket opened later. The setting stays off by default because video
+access is a consent decision for the deployment, not because the parameters are
+in doubt.
 
 ## Capture coverage and recovery
 

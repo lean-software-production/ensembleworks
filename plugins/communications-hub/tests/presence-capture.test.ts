@@ -7,7 +7,7 @@ import type { RtmsSocket } from "../src/adapters/zoom-protocol.js";
 import { DEFAULT_ZOOM_PRESENCE_CODES } from "../src/adapters/zoom-presence.js";
 import { PresenceService, type SittingPresence } from "../src/presence/service.js";
 import { buildPresenceView } from "../src/presence/view.js";
-import { popoverModel } from "../src/presence/ui/model.js";
+import { popoverModel, rowModel } from "../src/presence/ui/model.js";
 
 const SECRET = "webhook-secret";
 const NOW_MS = 1_800_000_000_000;
@@ -145,13 +145,18 @@ async function setup(settings: Record<string, string | boolean> = {}) {
     await host.harness.behavior.fetchHttp("POST", "/zoom/webhook", signed(startedBody(uuid, stream)));
   };
   /** Take the capture to "capturing", which is when presence goes live. */
-  const capture = (signalingIndex = 0) => {
+  const capture = (signalingIndex = 0, withVideo = false) => {
     const signaling = sockets[signalingIndex]!;
     signaling.handlers.open();
     signaling.receive({
       msg_type: 2,
       status_code: 0,
-      media_server: { server_urls: { transcript: "wss://rtms.zoom.us/transcript" } },
+      media_server: {
+        server_urls: {
+          transcript: "wss://rtms.zoom.us/transcript",
+          ...(withVideo ? { video: "wss://rtms.zoom.us/video" } : {}),
+        },
+      },
     });
     const media = sockets[signalingIndex + 1]!;
     media.handlers.open();
@@ -205,7 +210,71 @@ describe("a Zoom sitting's presence, from webhook to teardown", () => {
       msg_type: 6,
       event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.join, user_id: 1, user_name: "Ada" },
     });
-    expect(context.presence.roomPresence("room-1")?.participants).toEqual([]);
+    // No subscription, no sitting: an event Zoom volunteered anyway cannot make
+    // a roster this capture never opened.
+    expect(context.presence.roomPresence("room-1")).toBeNull();
+  });
+
+  it("shows the presence-off default as no stream, not as a live and empty room", async () => {
+    const context = await setup({ zoomPresenceEnabled: false });
+    await context.start();
+    context.capture();
+
+    // The transcript is capturing, which says nothing about presence: nothing
+    // was subscribed to, so no participant event can ever arrive. A green dot
+    // over "nobody seen here yet" would be capture's light worn by presence.
+    expect(context.presence.roomPresence("room-1")).toBeNull();
+    const view = buildPresenceView({
+      rooms: [context.sink.room],
+      selectedRoomId: context.sink.room.id,
+      presence: context.presence.roomPresence("room-1"),
+      conversation: null,
+      zoomConfigured: true,
+      now: NOW_MS,
+    });
+    expect(view.room).toMatchObject({
+      availability: "unavailable",
+      completeness: "unknown",
+      participants: [],
+      portraits: false,
+      status: "No active stream — BB cannot tell who is here",
+    });
+    expect(rowModel(view, "full").dot).toBe("idle");
+  });
+
+  it("holds no roster for a sitting whose subscription Zoom never received", async () => {
+    const context = await setup();
+    await context.start();
+    const signaling = context.sockets[0]!;
+    signaling.handlers.open();
+    signaling.receive({
+      msg_type: 2,
+      status_code: 0,
+      media_server: { server_urls: { transcript: "wss://rtms.zoom.us/transcript" } },
+    });
+    const send = signaling.send.bind(signaling);
+    signaling.send = (data: string) => {
+      if ((JSON.parse(data) as { msg_type: number }).msg_type === 5) throw new Error("socket closed");
+      send(data);
+    };
+    const media = context.sockets[1]!;
+    media.handlers.open();
+    media.receive({ msg_type: 4, status_code: 0 });
+
+    // Capture is fine; presence is not, and the strip is told the difference.
+    expect(context.sink.states.at(-1)?.state).toBe("capturing");
+    expect(context.presence.roomPresence("room-1")).toBeNull();
+  });
+
+  it("opens no portrait feed for a presence stream nobody subscribed to", async () => {
+    const context = await setup({ zoomPresenceEnabled: false, zoomVideoEnabled: true });
+    await context.start();
+    // Zoom offers a video stream, and this meeting still must not open it.
+    context.capture(0, true);
+
+    // Stills are a presence feature: with no roster to file them against they
+    // could only be pictures of people the strip never mentions.
+    expect(context.sockets).toHaveLength(2);
   });
 
   it("honours an operator's corrected event codes", async () => {

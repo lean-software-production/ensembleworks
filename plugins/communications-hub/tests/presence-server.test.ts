@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createFakePluginHost, makeThreadResponse } from "@get-bb/plugin-sdk/testing";
 import plugin from "../server";
 import type { PresenceView } from "../src/presence/view";
+import { PresenceService } from "../src/presence/service";
 
 const hosts: ReturnType<typeof createFakePluginHost>[] = [];
 
@@ -128,6 +129,30 @@ describe("presence over the plugin's rpc surface", () => {
     const open = registrations.httpRoutes.filter((route) => route.auth === "none");
     expect(open.map((route) => route.path)).toEqual(["/zoom/webhook"]);
     expect(registrations.httpRoutes.some((route) => route.path.includes("presence"))).toBe(false);
+  });
+
+  it("drops a room's presence when the CLI archives it, exactly as the panel does", async () => {
+    stubZoomApi();
+    const forget = vi.spyOn(PresenceService.prototype, "forgetRoom");
+    const host = await setup();
+    const room = await host.harness.behavior.callRpc("rooms.create", { name: "Team room" }) as { id: string };
+
+    const archived = await host.harness.behavior.runCli(["archive-room", room.id]);
+    expect(archived.exitCode).toBe(0);
+    // A room nobody can join must not keep a roster or a face in memory until
+    // the socket happens to notice, whichever surface archived it.
+    expect(forget).toHaveBeenCalledWith(room.id);
+  });
+
+  it("drops a room's presence when the CLI deletes it at Zoom", async () => {
+    stubZoomApi();
+    const forget = vi.spyOn(PresenceService.prototype, "forgetRoom");
+    const host = await setup();
+    const room = await host.harness.behavior.callRpc("rooms.create", { name: "Team room" }) as { id: string };
+
+    const deleted = await host.harness.behavior.runCli(["delete-room", room.id]);
+    expect(deleted.exitCode).toBe(0);
+    expect(forget).toHaveBeenCalledWith(room.id);
   });
 
   it("is readable from the CLI, for a human debugging the strip", async () => {

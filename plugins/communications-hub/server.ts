@@ -149,6 +149,16 @@ export default async function plugin(bb:BbPluginApi) {
     } finally {if(startingWatches.get(threadId)===request)startingWatches.delete(threadId);}
   };
   const watchStatus=(threadId:string)=>({watch:hub.getWatch(threadId)});
+  /**
+   * Archiving and deleting a room, for every surface that can do it.
+   *
+   * Presence cleanup belongs to the act, not to the panel that performed it:
+   * the rpc handlers and the CLI commands both go through these, so a room
+   * archived from a terminal cannot keep a roster and a face in memory until
+   * the socket happens to notice.
+   */
+  const archiveRoom=(roomId:string)=>{const room=hub.archiveRoom(roomId);presence.forgetRoom(roomId);return room;};
+  const deleteRoom=async(roomId:string)=>{const room=await zoom.deleteRoom(roomId);presence.forgetRoom(roomId);return room;};
   const importTranscript=(raw:unknown)=>{const i=importInput.parse(raw);return hub.importConversation(i.title,parseTranscript(i.text,i.format));};
   const citationBase=(page:TranscriptPage)=>`${(bb.server.experimental_appUrl ?? bb.server.loopbackBaseUrl).replace(/\/$/,'')}/plugins/${bb.pluginId}/communications/${page.conversation.id}/`;
   const readPayload=(page:TranscriptPage)=>buildReadPayload(page,citationBase(page));
@@ -170,12 +180,9 @@ export default async function plugin(bb:BbPluginApi) {
     'watch.stop':({threadId})=>{stopWatch(threadId);return {ok:true};},
     'rooms.list':({includeArchived})=>hub.listRooms({includeArchived}),
     'rooms.create':({name})=>zoom.createRoom(name),
-    // Archiving and deleting drop the room's presence at once rather than
-    // waiting for a socket to notice: a room nobody can join must not keep
-    // showing faces.
-    'rooms.archive':({roomId})=>{const room=hub.archiveRoom(roomId);presence.forgetRoom(roomId);return room;},
+    'rooms.archive':({roomId})=>archiveRoom(roomId),
     'rooms.renew':({roomId})=>zoom.renewRoom(roomId),
-    'rooms.delete':async({roomId})=>{const room=await zoom.deleteRoom(roomId);presence.forgetRoom(roomId);return room;},
+    'rooms.delete':({roomId})=>deleteRoom(roomId),
     'presence.get':()=>presenceView(),
     'presence.select':({roomId})=>selectPresenceRoom(roomId),
     'presence.portrait':presencePortrait,
@@ -258,9 +265,9 @@ export default async function plugin(bb:BbPluginApi) {
         case 'rename':if(a.length!==2)throw new Error(usage);result=hub.renameConversation(a[0]!,a[1]!);break;
         case 'rooms':if(a.length>1||(a.length===1&&a[0]!=='--include-archived'))throw new Error(usage);result=hub.listRooms({includeArchived:a[0]==='--include-archived'});break;
         case 'create-room':if(a.length!==1)throw new Error(usage);result=await zoom.createRoom(a[0]!);break;
-        case 'archive-room':if(a.length!==1)throw new Error(usage);result=hub.archiveRoom(a[0]!);break;
+        case 'archive-room':if(a.length!==1)throw new Error(usage);result=archiveRoom(a[0]!);break;
         case 'renew-room':if(a.length!==1)throw new Error(usage);result=await zoom.renewRoom(a[0]!);break;
-        case 'delete-room':if(a.length!==1)throw new Error(usage);result=await zoom.deleteRoom(a[0]!);break;
+        case 'delete-room':if(a.length!==1)throw new Error(usage);result=await deleteRoom(a[0]!);break;
         case 'registrants':if(a.length!==1)throw new Error(usage);result=hub.listRegistrants(a[0]!);break;
         case 'register':if(a.length!==3)throw new Error(usage);result=await zoom.addRegistrant(a[0]!,{name:a[1]!,email:a[2]!});break;
         case 'presence':if(a.length)throw new Error(usage);result=await presenceView();break;
