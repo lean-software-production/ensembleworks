@@ -102,18 +102,19 @@ export function decideGuardrail(
     // Rule A — a start on another person's machine (answer 6: team and unclaimed are fine).
     if (facts.recorded === null && facts.host !== null && facts.host.kind === "person"
       && facts.host.person.person !== requester.person) {
-      const yours = machines.yourMachines.length > 0
+      // The machine names come from memory (see `makeGuardrail`), so any of the three
+      // shapes below is a normal state — and each has to read like a sentence.
+      const team = machines.teamMachines.length > 0 ? list(machines.teamMachines) : null;
+      const fix = machines.yourMachines.length > 0
         ? `Pick one of yours (${list(machines.yourMachines)})`
-        : "Identity knows no machine of your own yet";
-      const team = machines.teamMachines.length > 0
-        ? `, or the team machine (${list(machines.teamMachines)}),`
-        : ",";
+          + `${team === null ? "" : `, or the team machine (${team})`}, and start the thread there.`
+        : team === null
+          ? "Identity knows no machine of your own yet, and no team machine is configured."
+          : `Identity knows no machine of your own yet; start the thread on the team machine (${team}) instead.`;
       return {
         action: "reject",
         rule: "start-on-another-persons-machine",
-        message:
-          `${facts.host.hostName} is ${machineDescription(facts.host)}. `
-          + `${yours}${team} and start the thread there. ${SETTING_NOTE}`,
+        message: `${facts.host.hostName} is ${machineDescription(facts.host)}. ${fix} ${SETTING_NOTE}`,
       };
     }
     return { action: "proceed" };

@@ -74,10 +74,10 @@ describe("rule A: a start on another person's machine", () => {
     expect(decision.action).toBe("reject");
     if (decision.action !== "reject") return;
     expect(decision.rule).toBe("start-on-another-persons-machine");
-    expect(decision.message).toContain("ew-lsp-001-mattwynne is Matt's machine");
-    expect(decision.message).toContain("ew-lsp-001-mrdavidlaing");
-    expect(decision.message).toContain("ew-lsp-001-main");
-    expect(decision.message).toContain("restrictStarts");
+    expect(decision.message).toBe(
+      "ew-lsp-001-mattwynne is Matt's machine. Pick one of yours (ew-lsp-001-mrdavidlaing), or the team "
+      + "machine (ew-lsp-001-main), and start the thread there. (Identity's restrictStarts setting refused this.)",
+    );
   });
 
   it("allows a person to start on their own machine, the team machine, or an unclaimed one", () => {
@@ -86,11 +86,29 @@ describe("rule A: a start on another person's machine", () => {
     }
   });
 
-  it("says so plainly when the person has no machines of their own to suggest", () => {
+  it("points at the team machine when Identity knows none of the person's own", () => {
+    // The machine names are read from memory only (a warm cache), so "none of yours" is a
+    // normal state — the refusal still has to read like a sentence and name a fix.
+    const decision = decideGuardrail(true, facts({ host: mattsMachine }), {
+      yourMachines: [],
+      teamMachines: ["ew-lsp-001-main"],
+    });
+    expect(decision.action).toBe("reject");
+    if (decision.action !== "reject") return;
+    expect(decision.message).toBe(
+      "ew-lsp-001-mattwynne is Matt's machine. Identity knows no machine of your own yet; start the thread "
+      + "on the team machine (ew-lsp-001-main) instead. (Identity's restrictStarts setting refused this.)",
+    );
+  });
+
+  it("still reads as a sentence when Identity knows no machines at all", () => {
     const decision = decideGuardrail(true, facts({ host: mattsMachine }), { yourMachines: [], teamMachines: [] });
     expect(decision.action).toBe("reject");
     if (decision.action !== "reject") return;
-    expect(decision.message).toContain("no machine of your own");
+    expect(decision.message).toBe(
+      "ew-lsp-001-mattwynne is Matt's machine. Identity knows no machine of your own yet, and no team machine "
+      + "is configured. (Identity's restrictStarts setting refused this.)",
+    );
   });
 });
 
@@ -232,6 +250,17 @@ describe("attributeDispatch with the guardrail wired in", () => {
       message: expect.stringContaining("ew-lsp-001-mattwynne is Matt's machine") as unknown as string,
     });
     expect(await ledger.get("thr_new")).toBeNull();
+  });
+
+  it("refuses the retry too: a refused start recorded nothing, so it is still a start", async () => {
+    // bb creates the thread row before the hook runs, so a refused start leaves an empty
+    // thread behind. Sending into it again must not sneak past as a "follow-up" — which
+    // it cannot, because the guardrail reads the LEDGER, not the attempt kind, and a
+    // refused dispatch is deliberately never recorded.
+    const ledger = new AttributionLedger(kv());
+    const deps = hookDeps({ enabled: true, identity: () => ({ email: "david@example.com", person: david }), ledger });
+    expect((await attributeDispatch(dispatch({ origin: "app" }), deps)).action).toBe("reject");
+    expect((await attributeDispatch(dispatch({ origin: null }), deps)).action).toBe("reject");
   });
 
   it("proceeds and records when the setting is off", async () => {
