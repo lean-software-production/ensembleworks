@@ -5,6 +5,14 @@ import type { ClientRequestArgs } from "node:http";
 import WebSocket from "ws";
 import { z } from "zod";
 import type { CaptureState, SegmentInput } from "../domain.js";
+import type { PresenceEvent } from "../presence/roster.js";
+import type { PortraitFrame } from "../presence/portraits.js";
+import {
+  decodeZoomPortraitFrame,
+  decodeZoomPresenceEvents,
+  eventSubscriptionFrame,
+  type ZoomPresenceCodes,
+} from "./zoom-presence.js";
 
 const MAX_MESSAGE_BYTES = 256 * 1024;
 const MAX_RECONNECT_ATTEMPTS = 4;
@@ -15,9 +23,30 @@ const handshakeResponseSchema = z.object({
   status_code: z.number().int(),
   reason: z.string().optional(),
   media_server: z
-    .object({ server_urls: z.object({ transcript: z.string() }).passthrough() })
+    .object({
+      server_urls: z.object({
+        transcript: z.string(),
+        // Present only for a deployment whose own Zoom app has video access.
+        // Absent is the normal case and is not an error: portraits are optional
+        // and their absence never touches the transcript socket.
+        video: z.string().optional(),
+      }).passthrough(),
+    })
     .optional(),
 }).passthrough();
+
+/**
+ * What the video socket asks for: the lowest-rate still feed there is.
+ *
+ * Unverified against Zoom's current media-parameter definitions — this
+ * environment cannot reach developers.zoom.us — which is why the whole video
+ * path is off unless an operator turns it on, and why a refused handshake is
+ * treated as "no portraits" rather than as a capture failure.
+ */
+const ZOOM_VIDEO_MEDIA_PARAMS = {
+  media_type: 2,
+  media_params: { video: { codec: 5, resolution: 1, fps: 1, data_opt: 1 } },
+} as const;
 
 const dataHandshakeResponseSchema = z.object({
   msg_type: z.literal(4),
@@ -58,6 +87,38 @@ export interface RtmsSocket {
 
 export type RtmsSocketFactory = (url: string, handlers: SocketHandlers) => RtmsSocket;
 
+/**
+ * Optional presence and portrait wiring.
+ *
+ * Both halves are strictly additive: with `presence.enabled` false the session
+ * sends exactly the frames it has always sent, and with `video.enabled` false it
+ * opens exactly the sockets it has always opened. Nothing in either path is
+ * allowed to change transcript capture — a refused subscription, a refused video
+ * handshake, or a malformed frame is reported and dropped.
+ */
+export interface ZoomPresenceOptions {
+  enabled: boolean;
+  codes: ZoomPresenceCodes;
+  onEvents(events: PresenceEvent[]): unknown;
+  /**
+   * The clock observations are stamped with.
+   *
+   * Supplied by the adapter so that the stamp and the roster's decay window are
+   * read from ONE clock. Two clocks disagreeing by a few seconds is enough to
+   * make a speaking ring that is already expired when it arrives.
+   */
+  now?(): number;
+}
+
+export interface ZoomVideoOptions {
+  enabled: boolean;
+  onFrame(frame: PortraitFrame): unknown;
+  /** Called once when this session will not be producing stills after all. */
+  onUnavailable(detail: string): unknown;
+  /** Asked before each frame is offered, so a spent failure budget stops the feed. */
+  shouldContinue?(): boolean;
+}
+
 export interface ZoomRtmsSessionOptions {
   meetingUuid: string;
   streamId: string;
@@ -69,6 +130,8 @@ export interface ZoomRtmsSessionOptions {
   onSegments(segments: SegmentInput[]): unknown;
   onState(state: CaptureState, detail?: string | null): unknown;
   onTerminal?(): unknown;
+  presence?: ZoomPresenceOptions;
+  video?: ZoomVideoOptions;
   /**
    * Optional wire diagnostics sink for capture bring-up. Receives connection
    * close codes, socket errors and rejected handshake status codes only;
@@ -249,6 +312,9 @@ function truncateUtf16(value: string, max: number): string {
 export class ZoomRtmsSession {
   private signaling?: RtmsSocket;
   private media?: RtmsSocket;
+  private video?: RtmsSocket;
+  private videoUrl?: string;
+  private videoRetired = false;
   private transcriptUrl?: string;
   private reconnectTimer?: ReturnType<typeof setTimeout>;
   private signalingAttempts = 0;
@@ -393,6 +459,7 @@ export class ZoomRtmsSession {
         return;
       }
       this.signalingAttempts = 0;
+      this.videoUrl = handshake.data.media_server.server_urls.video;
       try {
         this.openMedia(handshake.data.media_server.server_urls.transcript);
       } catch {
@@ -408,6 +475,28 @@ export class ZoomRtmsSession {
     }
     if (message.msg_type === 8) this.applyStreamState(message.state);
     if (message.msg_type === 9) this.applySessionState(message.state);
+    this.handlePresence(message);
+  }
+
+  /**
+   * Presence observations ride the signaling socket beside everything else.
+   *
+   * Decoding runs last and returns nothing for every message the transcript path
+   * already understood, so adding it cannot change how a keep-alive, a handshake
+   * or a stream-state message is handled. A decoder failure is contained here:
+   * presence is the feature that degrades, never capture.
+   */
+  private handlePresence(message: Record<string, unknown>): void {
+    const presence = this.options.presence;
+    if (!presence?.enabled) return;
+    try {
+      const events = decodeZoomPresenceEvents(message, presence.codes, presence.now?.() ?? Date.now());
+      if (events.length > 0) presence.onEvents(events);
+    } catch (error) {
+      this.wireDebug("presence decode failed", {
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
   }
 
   private handleMedia(data: string | Uint8Array): void {
@@ -428,6 +517,11 @@ export class ZoomRtmsSession {
       this.mediaAttempts = 0;
       this.safeSend(this.signaling, { msg_type: 7, rtms_stream_id: this.options.streamId });
       this.emitState("capturing", "Receiving Zoom transcript");
+      // Only after transcript capture is established: the two optional paths ask
+      // for things this app may have no access to, and neither is allowed to
+      // delay or endanger the stream people rely on.
+      this.subscribePresence();
+      this.openVideo();
       return;
     }
     const transcript = transcriptSchema.safeParse(value);
@@ -526,6 +620,143 @@ export class ZoomRtmsSession {
     }
   }
 
+  /**
+   * Ask Zoom for participant and active-speaker events.
+   *
+   * Deliberately not `safeSend`: that reports a failed send as an interrupted
+   * CAPTURE, which would be a lie here. A subscription that cannot be sent means
+   * there are no presence events, and the strip says so.
+   */
+  private subscribePresence(): void {
+    const presence = this.options.presence;
+    if (!presence?.enabled || !this.signaling) return;
+    try {
+      this.signaling.send(JSON.stringify(eventSubscriptionFrame(this.options.streamId, presence.codes)));
+    } catch (error) {
+      this.wireDebug("presence subscription failed", {
+        message: error instanceof Error ? error.message : "unknown",
+      });
+    }
+  }
+
+  /**
+   * Open the optional still feed.
+   *
+   * Everything about this socket is allowed to fail. No video URL, an unsafe
+   * one, a refused handshake, a dropped connection, a spent failure budget —
+   * each retires the feed for this session with a reason, and none of them
+   * touches capture state, the transcript socket, or the reconnect budget.
+   */
+  private openVideo(url = this.videoUrl): void {
+    const video = this.options.video;
+    if (!video?.enabled || this.disposed || this.terminal || this.videoRetired || this.video) return;
+    if (!url) {
+      this.retireVideo("Zoom offered no video stream for this meeting");
+      return;
+    }
+    let safeUrl: string;
+    try {
+      safeUrl = assertSafeZoomWssUrl(url).href;
+    } catch {
+      this.retireVideo("Zoom supplied an unsafe video destination");
+      return;
+    }
+    this.videoUrl = safeUrl;
+    try {
+      const socket = this.options.socketFactory(safeUrl, {
+        open: () => {
+          if (this.video !== socket) return;
+          this.safeVideoSend(socket, {
+            msg_type: 3,
+            protocol_version: 1,
+            sequence: Date.now(),
+            meeting_uuid: this.options.meetingUuid,
+            rtms_stream_id: this.options.streamId,
+            signature: this.handshakeSignature(),
+            ...ZOOM_VIDEO_MEDIA_PARAMS,
+            payload_encryption: false,
+          });
+        },
+        message: (data) => {
+          if (this.video === socket) this.handleVideo(data);
+        },
+        close: (code, reason) => {
+          if (this.video !== socket) return;
+          this.wireDebug("video closed", { code, reason });
+          this.video = undefined;
+          this.retireVideo("Zoom video stream closed");
+        },
+        error: (error) => {
+          if (this.video !== socket) return;
+          this.wireDebug("video error", { message: error.message });
+        },
+      });
+      this.video = socket;
+    } catch {
+      this.retireVideo("Zoom video connection failed");
+    }
+  }
+
+  private handleVideo(data: string | Uint8Array): void {
+    const video = this.options.video;
+    if (!video?.enabled) return;
+    const value = asJson(data);
+    if (!value || typeof value !== "object") return;
+    const keepAlive = keepAliveSchema.safeParse(value);
+    if (keepAlive.success) {
+      this.safeVideoSend(this.video, { msg_type: 13, timestamp: keepAlive.data.timestamp });
+      return;
+    }
+    const handshake = dataHandshakeResponseSchema.safeParse(value);
+    if (handshake.success) {
+      // A refused video handshake is the expected answer for an app without
+      // video access. It retires the feed and says nothing about the transcript.
+      if (handshake.data.status_code !== 0) {
+        this.wireDebug("video handshake rejected", { statusCode: handshake.data.status_code });
+        this.retireVideo("Zoom refused the video stream; portraits are unavailable");
+      }
+      return;
+    }
+    if (video.shouldContinue && !video.shouldContinue()) {
+      this.retireVideo("Too many unusable video frames; portraits are unavailable");
+      return;
+    }
+    const frame = decodeZoomPortraitFrame(value);
+    // Frame contents are never logged: a rejected still is counted by the
+    // portrait store, and its bytes go no further than this function.
+    if (frame) video.onFrame(frame);
+  }
+
+  private retireVideo(detail: string): void {
+    if (this.videoRetired) return;
+    this.videoRetired = true;
+    this.closeVideo();
+    try {
+      this.options.video?.onUnavailable(detail);
+    } catch {
+      // Portrait wiring must never be able to fault the capture session.
+    }
+  }
+
+  private safeVideoSend(socket: RtmsSocket | undefined, value: unknown): void {
+    if (!socket) return;
+    try {
+      socket.send(JSON.stringify(value));
+    } catch {
+      this.retireVideo("Zoom video connection failed while sending");
+    }
+  }
+
+  private closeVideo(): void {
+    const socket = this.video;
+    this.video = undefined;
+    try {
+      socket?.close(1000, "closing");
+    } catch {
+      // Best-effort: the feed is optional and its teardown is idempotent.
+    }
+  }
+
   private closeMedia(): void {
     const socket = this.media;
     this.media = undefined;
@@ -539,6 +770,7 @@ export class ZoomRtmsSession {
   private closeSockets(): void {
     const signaling = this.signaling;
     this.signaling = undefined;
+    this.closeVideo();
     this.closeMedia();
     try {
       signaling?.close(1000, "closing");

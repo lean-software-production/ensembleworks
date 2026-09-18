@@ -1,0 +1,300 @@
+import { createHmac } from "node:crypto";
+import { createFakePluginHost } from "@get-bb/plugin-sdk/testing";
+import { describe, expect, it } from "vitest";
+import type { CaptureState, Registrant, Room, SegmentInput, TranscriptSink } from "../src/domain.js";
+import { registerZoomWithDependencies, type ZoomAdapterDependencies } from "../src/adapters/zoom.js";
+import type { RtmsSocket } from "../src/adapters/zoom-protocol.js";
+import { DEFAULT_ZOOM_PRESENCE_CODES } from "../src/adapters/zoom-presence.js";
+import { PresenceService } from "../src/presence/service.js";
+
+const SECRET = "webhook-secret";
+const NOW_MS = 1_800_000_000_000;
+const MEETING_ID = "88800011122";
+
+/** The smallest sink a capture needs, with one room already created by BB. */
+class RoomSink implements TranscriptSink {
+  readonly states: { conversationId: string; state: CaptureState }[] = [];
+  readonly room: Room = {
+    id: "room-1",
+    name: "Team room",
+    sourceId: "zoom",
+    externalId: MEETING_ID,
+    joinUrl: "https://zoom.us/j/88800011122",
+    hostUser: "host@example.com",
+    createdAt: NOW_MS,
+    archivedAt: null,
+    expiresAt: null,
+    sourceDeletedAt: null,
+  };
+
+  ensureConversation(_sourceId: string, externalId: string): { id: string } {
+    return { id: `conversation-${externalId}` };
+  }
+
+  appendSegments(_conversationId: string, _segments: SegmentInput[]): void {}
+  setCapture(conversationId: string, state: CaptureState): void {
+    this.states.push({ conversationId, state });
+  }
+  findRoom(sourceId: string, externalId: string): Room | null {
+    return sourceId === "zoom" && externalId === this.room.externalId ? this.room : null;
+  }
+  getRoom(): Room {
+    return this.room;
+  }
+  createRoom(): Room {
+    return this.room;
+  }
+  setRoomExpiry(): Room {
+    return this.room;
+  }
+  markRoomDeleted(): Room {
+    return this.room;
+  }
+  createRegistrant(): Registrant {
+    throw new Error("not used");
+  }
+  setConversationRoom(): void {}
+  renameIfUnchanged(): void {}
+}
+
+class ControlledSocket implements RtmsSocket {
+  readonly sent: string[] = [];
+  closed = false;
+
+  constructor(
+    readonly url: string,
+    readonly handlers: {
+      open(): void;
+      message(data: string | Uint8Array): void;
+      close(code: number, reason: string): void;
+      error(error: Error): void;
+    },
+  ) {}
+
+  send(data: string): void {
+    this.sent.push(data);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  receive(value: unknown): void {
+    this.handlers.message(JSON.stringify(value));
+  }
+}
+
+function signed(body: string): RequestInit {
+  const timestamp = String(NOW_MS / 1_000);
+  const digest = createHmac("sha256", SECRET).update(`v0:${timestamp}:${body}`).digest("hex");
+  return {
+    headers: {
+      "content-type": "application/json",
+      "x-zm-request-timestamp": timestamp,
+      "x-zm-signature": `v0=${digest}`,
+    },
+    body,
+  };
+}
+
+const startedBody = (uuid = "occurrence-1", stream = "stream-1") => JSON.stringify({
+  event: "meeting.rtms_started",
+  event_ts: NOW_MS,
+  payload: {
+    meeting_uuid: uuid,
+    meeting_id: MEETING_ID,
+    is_original_host: true,
+    rtms_stream_id: stream,
+    server_urls: "wss://rtms.zoom.us/signal",
+  },
+});
+
+const stoppedBody = (uuid = "occurrence-1", stream = "stream-1") => JSON.stringify({
+  event: "meeting.rtms_stopped",
+  event_ts: NOW_MS,
+  payload: { meeting_uuid: uuid, rtms_stream_id: stream, stop_reason: 6 },
+});
+
+async function setup(settings: Record<string, string | boolean> = {}) {
+  const sockets: ControlledSocket[] = [];
+  const host = createFakePluginHost({
+    settings: {
+      zoomClientId: "client-id",
+      zoomClientSecret: "client-secret",
+      zoomWebhookSecret: SECRET,
+      zoomEnabled: true,
+      zoomPresenceEnabled: true,
+      ...settings,
+    },
+  });
+  const dependencies: ZoomAdapterDependencies = {
+    fetch: () => Promise.reject(new Error("no HTTP in presence tests")),
+    now: () => NOW_MS,
+    socketFactory: (url, handlers) => {
+      const socket = new ControlledSocket(url, handlers);
+      sockets.push(socket);
+      return socket;
+    },
+  };
+  const sink = new RoomSink();
+  const presence = new PresenceService({ now: () => NOW_MS });
+  const controller = registerZoomWithDependencies(host.bb, sink, dependencies, presence);
+  const start = async (uuid?: string, stream?: string) => {
+    await host.harness.behavior.fetchHttp("POST", "/zoom/webhook", signed(startedBody(uuid, stream)));
+  };
+  /** Take the capture to "capturing", which is when presence goes live. */
+  const capture = (signalingIndex = 0) => {
+    const signaling = sockets[signalingIndex]!;
+    signaling.handlers.open();
+    signaling.receive({
+      msg_type: 2,
+      status_code: 0,
+      media_server: { server_urls: { transcript: "wss://rtms.zoom.us/transcript" } },
+    });
+    const media = sockets[signalingIndex + 1]!;
+    media.handlers.open();
+    media.receive({ msg_type: 4, status_code: 0 });
+    return signaling;
+  };
+  return { host, sockets, sink, presence, controller, start, capture };
+}
+
+describe("a Zoom sitting's presence, from webhook to teardown", () => {
+  it("attaches presence to the room the meeting belongs to, and goes live with capture", async () => {
+    const context = await setup();
+    await context.start();
+
+    // Installed before the socket opens, so the first observation has somewhere
+    // to land.
+    expect(context.presence.roomPresence("room-1")?.availability).toBe("connecting");
+    const signaling = context.capture();
+    expect(context.presence.roomPresence("room-1")?.availability).toBe("live");
+
+    signaling.receive({
+      msg_type: 6,
+      event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.join, user_id: 16778240, user_name: "Ada" },
+    });
+    const live = context.presence.roomPresence("room-1")!;
+    expect(live.participants.map((person) => person.label)).toEqual(["Ada"]);
+    expect(live.completeness).toBe("partial");
+    expect(live.sittingKey).toBe("conversation-occurrence-1");
+  });
+
+  it("sends no subscription at all when presence is switched off", async () => {
+    const context = await setup({ zoomPresenceEnabled: false });
+    await context.start();
+    const signaling = context.capture();
+
+    expect(signaling.sent.map((raw) => (JSON.parse(raw) as { msg_type: number }).msg_type)).toEqual([1, 7]);
+    signaling.receive({
+      msg_type: 6,
+      event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.join, user_id: 1, user_name: "Ada" },
+    });
+    expect(context.presence.roomPresence("room-1")?.participants).toEqual([]);
+  });
+
+  it("honours an operator's corrected event codes", async () => {
+    const context = await setup({ zoomPresenceEventCodes: "speaker=21,join=22,leave=23" });
+    await context.start();
+    const signaling = context.capture();
+
+    const subscription = JSON.parse(signaling.sent.at(-1)!) as { events: { event_type: number }[] };
+    expect(subscription.events.map((entry) => entry.event_type)).toEqual([22, 23, 21]);
+    signaling.receive({ msg_type: 6, event: { event_type: 22, user_id: 5, user_name: "Ada" } });
+    expect(context.presence.roomPresence("room-1")?.participants).toHaveLength(1);
+  });
+
+  it("empties the room when the stream stops, rather than leaving ghosts", async () => {
+    const context = await setup();
+    await context.start();
+    const signaling = context.capture();
+    signaling.receive({
+      msg_type: 6,
+      event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.join, user_id: 1, user_name: "Ada" },
+    });
+
+    await context.host.harness.behavior.fetchHttp("POST", "/zoom/webhook", signed(stoppedBody()));
+    // Not "an empty meeting": no presence at all, which is what makes the strip
+    // say there is no active stream.
+    expect(context.presence.roomPresence("room-1")).toBeNull();
+  });
+
+  it("starts the next sitting in the same room from nobody", async () => {
+    const context = await setup();
+    await context.start();
+    const first = context.capture();
+    first.receive({
+      msg_type: 6,
+      event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.join, user_id: 1, user_name: "Ada" },
+    });
+    await context.host.harness.behavior.fetchHttp("POST", "/zoom/webhook", signed(stoppedBody()));
+
+    await context.start("occurrence-2", "stream-2");
+    const second = context.capture(2);
+    expect(context.presence.roomPresence("room-1")?.participants).toEqual([]);
+    second.receive({
+      msg_type: 6,
+      event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.join, user_id: 1, user_name: "Sam" },
+    });
+    // The same Zoom user id in a new sitting is a different person, and the hub
+    // ids say so.
+    const people = context.presence.roomPresence("room-1")!.participants;
+    expect(people.map((person) => person.label)).toEqual(["Sam"]);
+    expect(people[0]!.id).toBe("conversation-occurrence-2:1");
+  });
+
+  it("ignores a late message from a stream Zoom has already replaced", async () => {
+    const context = await setup();
+    await context.start("occurrence-1", "stream-1");
+    const first = context.capture();
+    // A second start for the same occurrence: the new stream supersedes the old.
+    await context.start("occurrence-1", "stream-2");
+    const second = context.capture(2);
+    second.receive({
+      msg_type: 6,
+      event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.join, user_id: 2, user_name: "Sam" },
+    });
+
+    first.receive({
+      msg_type: 6,
+      event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.join, user_id: 9, user_name: "Ghost" },
+    });
+    expect(context.presence.roomPresence("room-1")?.participants.map((person) => person.label))
+      .toEqual(["Sam"]);
+  });
+
+  it("hides the roster while the connection is interrupted", async () => {
+    const context = await setup();
+    await context.start();
+    const signaling = context.capture();
+    signaling.receive({
+      msg_type: 6,
+      event: { event_type: DEFAULT_ZOOM_PRESENCE_CODES.speaker, user_id: 1, user_name: "Ada" },
+    });
+    expect(context.presence.roomPresence("room-1")?.participants[0]!.speaking).toBe(true);
+
+    signaling.receive({ msg_type: 8, state: 2 });
+    const interrupted = context.presence.roomPresence("room-1")!;
+    expect(interrupted.availability).toBe("interrupted");
+    expect(interrupted.participants).toEqual([]);
+    expect(interrupted.completeness).toBe("unknown");
+  });
+
+  it("drops presence when Zoom capture is switched off", async () => {
+    const context = await setup();
+    await context.start();
+    context.capture();
+    await context.host.harness.behavior.setSettings({ zoomEnabled: false });
+
+    expect(context.presence.roomPresence("room-1")).toBeNull();
+  });
+
+  it("drops presence when the plugin is disposed", async () => {
+    const context = await setup();
+    await context.start();
+    context.capture();
+
+    await context.host.harness.lifecycle.dispose();
+    expect(context.presence.roomPresence("room-1")).toBeNull();
+  });
+});

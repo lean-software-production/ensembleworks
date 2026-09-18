@@ -9,6 +9,9 @@ import {
   zoomWebSocketFactory,
   type RtmsSocketFactory,
 } from "./zoom-protocol.js";
+import { parsePresenceCodes, type ZoomPresenceCodes } from "./zoom-presence.js";
+import type { PresenceSink } from "../presence/service.js";
+import type { PresenceAvailability } from "../presence/roster.js";
 
 const MAX_WEBHOOK_BYTES = 64 * 1024;
 const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
@@ -112,7 +115,27 @@ interface ActiveCapture {
   anchorMs: number;
   clientId: string;
   clientSecret: string;
+  /** The room this sitting happens in, so presence can be forgotten with it. */
+  roomId: string | null;
+  presenceEnabled: boolean;
+  presenceCodes: ZoomPresenceCodes;
+  videoEnabled: boolean;
   session: ZoomRtmsSession;
+}
+
+/**
+ * Capture state, read as a statement about the presence signal.
+ *
+ * "paused" and "interrupted" both mean the same thing for presence: we are no
+ * longer being told who is in the room, so the roster stops being evidence. It
+ * is emphatically NOT the same as an empty room, which is why neither maps to
+ * "live" with zero participants.
+ */
+function presenceAvailabilityOf(state: CaptureState): PresenceAvailability {
+  if (state === "capturing") return "live";
+  if (state === "connecting") return "connecting";
+  if (state === "paused" || state === "interrupted") return "interrupted";
+  return "unavailable";
 }
 
 const productionDependencies: ZoomAdapterDependencies = {
@@ -121,8 +144,8 @@ const productionDependencies: ZoomAdapterDependencies = {
   fetch: (...args) => globalThis.fetch(...args),
 };
 
-export function registerZoom(bb: BbPluginApi, sink: TranscriptSink): ZoomController {
-  return registerZoomWithDependencies(bb, sink, productionDependencies);
+export function registerZoom(bb: BbPluginApi, sink: TranscriptSink, presence?: PresenceSink): ZoomController {
+  return registerZoomWithDependencies(bb, sink, productionDependencies, presence);
 }
 
 /** Dependency seam for deterministic protocol tests; production uses registerZoom. */
@@ -130,6 +153,7 @@ export function registerZoomWithDependencies(
   bb: BbPluginApi,
   sink: TranscriptSink,
   dependencies: ZoomAdapterDependencies,
+  presence?: PresenceSink,
 ): ZoomController {
   const settings = bb.settings.define({
     zoomClientId: { type: "string", label: "Zoom client ID" },
@@ -140,6 +164,24 @@ export function registerZoomWithDependencies(
     zoomApiClientId: { type: "string", label: "Zoom Server-to-Server client ID" },
     zoomApiClientSecret: { type: "string", label: "Zoom Server-to-Server client secret", secret: true },
     zoomHostUser: { type: "string", label: "Zoom host user (email or user ID) that installed the RTMS app" },
+    // Both presence settings default OFF. Their wire details could not be
+    // verified against Zoom's current documentation from the environment this
+    // was built in (see zoom-presence.ts), and an unverified frame must not be
+    // able to disturb transcript capture without somebody choosing it.
+    zoomPresenceEnabled: {
+      type: "boolean",
+      label: "Subscribe to Zoom participant events (experimental)",
+      default: false,
+    },
+    zoomPresenceEventCodes: {
+      type: "string",
+      label: "Zoom presence event codes, e.g. speaker=2,join=3,leave=4",
+    },
+    zoomVideoEnabled: {
+      type: "boolean",
+      label: "Request low-rate still portraits (needs video access on your Zoom app)",
+      default: false,
+    },
   });
   const activeByConversation = new Map<string, ActiveCapture>();
   const activeByStream = new Map<string, ActiveCapture>();
@@ -156,6 +198,10 @@ export function registerZoomWithDependencies(
     if (activeByOccurrence.get(capture.meetingUuid) === capture) {
       activeByOccurrence.delete(capture.meetingUuid);
     }
+    // A capture that is no longer running holds nobody. The sitting is named by
+    // its session too, so a stale removal cannot tear down the roster of the
+    // session that replaced it.
+    presence?.endSitting({ sittingKey: capture.conversationId, sessionId: capture.streamId });
     rememberFinished(capture);
   }
 
@@ -188,6 +234,11 @@ export function registerZoomWithDependencies(
 
   function createCapture(input: Omit<ActiveCapture, "session">): ActiveCapture {
     let capture: ActiveCapture | undefined;
+    // The sitting is named by the hub's own conversation id and the session by
+    // the stream id. Presence therefore never learns a Zoom identifier, and a
+    // late message from a stream Zoom has already replaced is dropped by the
+    // service rather than believed.
+    const sitting = { sittingKey: input.conversationId, sessionId: input.streamId };
     const session = new ZoomRtmsSession({
       meetingUuid: input.meetingUuid,
       streamId: input.streamId,
@@ -203,7 +254,34 @@ export function registerZoomWithDependencies(
           updateCapture(input.conversationId, "interrupted", "Transcript storage failed");
         }
       },
-      onState: (state, detail) => updateCapture(input.conversationId, state, detail),
+      onState: (state, detail) => {
+        updateCapture(input.conversationId, state, detail);
+        try {
+          presence?.setAvailability({ ...sitting, availability: presenceAvailabilityOf(state) });
+        } catch {
+          // Presence is a view of capture, never a reason for it to fail.
+        }
+      },
+      presence: presence && input.presenceEnabled
+        ? {
+          enabled: true,
+          codes: input.presenceCodes,
+          now: dependencies.now,
+          onEvents: (events) => {
+            for (const event of events) presence.applyEvent({ ...sitting, event });
+          },
+        }
+        : undefined,
+      video: presence && input.videoEnabled
+        ? {
+          enabled: true,
+          onFrame: (frame) => {
+            presence.acceptPortrait({ ...sitting, frame });
+          },
+          shouldContinue: () => !presence.portraitsExhausted(sitting.sittingKey),
+          onUnavailable: (detail) => bb.log.info(`zoom portraits unavailable: ${detail}`),
+        }
+        : undefined,
       log: (message) => bb.log.warn(message),
       onTerminal: () => {
         if (capture) removeActive(capture);
@@ -222,6 +300,15 @@ export function registerZoomWithDependencies(
     activeByConversation.set(capture.conversationId, capture);
     activeByStream.set(capture.streamId, capture);
     activeByOccurrence.set(capture.meetingUuid, capture);
+    // Installed before the socket opens, so the first observation has somewhere
+    // to land. A replaced session begins a fresh roster rather than inheriting
+    // the previous one's members.
+    presence?.beginSitting({
+      sittingKey: capture.conversationId,
+      sessionId: capture.streamId,
+      roomId: capture.roomId,
+      portraits: capture.videoEnabled,
+    });
     capture.session.start();
   }
 
@@ -329,6 +416,10 @@ export function registerZoomWithDependencies(
       anchorMs,
       clientId: currentSettings.zoomClientId.trim(),
       clientSecret: currentSettings.zoomClientSecret.trim(),
+      roomId: room?.id ?? null,
+      presenceEnabled: currentSettings.zoomPresenceEnabled === true,
+      presenceCodes: parsePresenceCodes(currentSettings.zoomPresenceEventCodes),
+      videoEnabled: currentSettings.zoomVideoEnabled === true,
     }));
   }
 
@@ -380,6 +471,10 @@ export function registerZoomWithDependencies(
       anchorMs: current.anchorMs,
       clientId: current.clientId,
       clientSecret: current.clientSecret,
+      roomId: current.roomId,
+      presenceEnabled: currentSettings.zoomPresenceEnabled === true,
+      presenceCodes: parsePresenceCodes(currentSettings.zoomPresenceEventCodes),
+      videoEnabled: currentSettings.zoomVideoEnabled === true,
     }));
   }
 

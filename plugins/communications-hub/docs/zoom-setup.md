@@ -128,6 +128,68 @@ This is identity by convention, not proof. A stranger holding the plain link can
 
 Transcript attribution follows the display name for that reason. The participant id Zoom sends identifies a connection rather than a person - one human joining from two browsers produces two - so it is used only to separate unattributed speech.
 
+## 8. Participant presence (experimental, off by default)
+
+The sidebar shows one compact row for a selected room: a status dot, the room
+name, up to three faces and a "+N" overflow, with names, active-speaker status
+and the room's links one click away. With presence switched off — the default —
+that row still works: it shows the room and says "No active stream", because
+**an absent signal is not an empty room**.
+
+Turning presence on makes the plugin ask Zoom's signaling socket for participant
+join, participant leave and active-speaker events. Two settings govern it:
+
+| Setting | Meaning |
+| --- | --- |
+| `Subscribe to Zoom participant events (experimental)` | Sends the event subscription after transcript capture is established. Off by default. |
+| `Zoom presence event codes` | The numeric event ids to subscribe to and decode, e.g. `speaker=2,join=3,leave=4`. Blank uses the shipped table. |
+
+**Why the codes are a setting.** Zoom identifies signaling events by number, and
+the numbers this plugin ships with could not be re-verified against Zoom's
+current [event reference](https://developers.zoom.us/docs/rtms/event-reference/)
+from the environment this feature was built in. The one code corroborated by our
+own source is 7 (media server change), which the adapter has always acted on.
+Check the event reference for your Zoom app and correct the setting if it
+disagrees; events that arrive with a NAME rather than a number are decoded by
+name and ignore the table entirely. An unrecognised event is ignored, never
+guessed at.
+
+**What presence will and will not claim.** The roster only ever contains people
+observed since the socket connected, so it is reported as partial and the UI
+never presents it as a headcount. Whether RTMS replays an initial roster, and
+how a reconnect recovers completeness, is not established here — so a reconnect
+starts from an empty roster rather than carrying stale membership across. A lost
+or paused stream hides the roster and clears any speaking indicator. Nothing
+about presence is stored: it lives in memory for the sitting and is gone when
+the sitting, the room or the plugin generation ends.
+
+### Optional still portraits
+
+`Request low-rate still portraits` opens a second media socket for the meeting's
+video stream and keeps ONE recent still per participant, in memory, for the
+duration of the sitting. It requires video access on your own Zoom app; the
+app described in this document requests `meeting:read:meeting_transcript` only,
+so **with the scopes above this feature simply reports itself unavailable and
+faces fall back to initials.** Do not add Zoom scopes to try it without deciding
+that separately — a meeting's video is a much larger consent question than its
+transcript, and the participant notice changes with it.
+
+Everything about the video path is droppable by design: a missing video URL, an
+unsafe one, a refused handshake, a malformed or oversized frame, or too many
+refusals in one sitting each retire portraits for that sitting and touch nothing
+else. Transcript capture has its own socket, its own limits and its own retry
+budget, and is never affected. Images are validated (complete JPEG bytes, within
+a size limit, carrying their own participant id, with a timestamp that moves
+forward), throttled, bounded in number, served only over the authenticated
+plugin rpc surface, and dropped when the sitting ends. They are displayed as
+what they are — a still captured at a stated time, never live video. Image bytes
+are never logged.
+
+Media parameters for the video handshake could not be verified against Zoom's
+current [media parameter definitions](https://developers.zoom.us/docs/rtms/media-parameter-definition/)
+from this environment either, which is the second reason this setting is off by
+default.
+
 ## Capture coverage and recovery
 
 Transcript timestamps are relative to a stable capture anchor: the first accepted `meeting.rtms_started` event for that Zoom meeting occurrence. They may therefore differ from the meeting's actual start time. The anchor is persisted so reconnects and plugin reloads keep the same timeline.

@@ -9,6 +9,7 @@ import {
 import type { rpcContract } from "./src/contracts";
 import type { Conversation, Registrant, Room, ThreadAttachment, TranscriptSegment } from "./src/domain";
 import { groupSegments, type SpeakerBlock } from "./src/grouping";
+import { mountPresenceStrip } from "./src/presence/ui/mount";
 import type { ImportFormat } from "./src/adapters/import";
 import { Button } from "./components/ui/button";
 import { Icon } from "./components/ui/icon";
@@ -917,6 +918,27 @@ function ThreadConversationHeader({ threadId, isCompactViewport }: PluginThreadH
 }
 
 export default definePluginApp((app) => {
+  /**
+   * The Zoom presence row, immediately above bb's sidebar footer.
+   *
+   * A content script rather than a slot because the row has to survive route
+   * and thread navigation: every other registration bb offers is scoped to a
+   * page or a panel, and a room you are watching must not disappear when you
+   * open a thread. The host mounts this once per frontend generation and calls
+   * the returned disposer exactly once, which is also what guarantees a single
+   * row: placement moves one node, it never renders a second.
+   */
+  app.contentScripts.register({
+    id: "zoom-presence-row",
+    mount: (context) => {
+      const strip = mountPresenceStrip({
+        document,
+        pluginId: context.pluginId,
+        signal: context.signal,
+      });
+      return () => strip.dispose();
+    },
+  });
   app.slots.navPanel({
     id: "communications", title: "Communications", icon: "MessagesSquare",
     path: "communications", component: CommunicationsPage,

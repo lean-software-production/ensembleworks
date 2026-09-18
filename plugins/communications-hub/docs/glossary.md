@@ -23,6 +23,12 @@
 | Wake-up | A metadata-only message asking an idle thread agent to continue its existing task using newly available passages. Delivery may repeat until processing is acknowledged. |
 | Source key | Adapter-provided identity used to deduplicate retransmitted segments within a conversation. |
 | Provenance | The source connection, external occurrence identity, and source key explaining where a segment came from. |
+| Room presence | Who the hub has observed in a room's current sitting, right now. Ephemeral and in memory only; it is never stored, never part of a transcript, and is lost when the plugin reloads. |
+| Presence participant | One person observed in one sitting, identified by (sitting, source participant id) and never by name. The same source id in another sitting is a different participant. |
+| Presence availability | Whether the presence signal is `unavailable`, `connecting`, `live` or `interrupted`. It describes the signal, not the room: no live signal means BB cannot tell who is there, which is not the same as the room being empty. |
+| Roster completeness | How much of the participant list can be claimed: `unknown` (nothing observed) or `partial` (some observed, others may never have been seen). There is deliberately no "complete" value. |
+| Active speaker | A moment at which a source reported someone became the speaker. It decays after a short hold and is not evidence of continuing speech; silence is never reported as a mute state. |
+| Portrait | One bounded, validated still image held for a participant for the duration of a sitting, when a deployment has configured video access. It is a cached picture, presented as such, and is never live video, never archived, and never part of a transcript. |
 
 Use “conversation” in the UI. “Current conversation” resolves the current thread attachment; it is not global hub state. “Conversation context” means retrieved information, not another stored entity. Timestamps in transcript segments are source-relative milliseconds (file start, or the Zoom adapter’s first capture anchor) or null when unknown; receipt times are Unix milliseconds. The ingestion sequence, not speech time, orders cursor reads so late packets remain discoverable. Speaker blocks are presentation only: pages are still bounded by stored segments, and every member sequence of a block remains individually citable.
 
@@ -31,6 +37,19 @@ Use “conversation” in the UI. “Current conversation” resolves the curren
 The MVP implements conversation attachments and transcript segments. Space subscriptions, Slack/Discord connections, and automatic daily windows are future work. A calendar day is a view/window of a space in its explicitly selected IANA timezone, not a reason to discard reply relationships or split stored messages irreversibly. Do not add channel APIs until an adapter needs them. Keep window membership based on event time and reading cursors based on ingestion sequence.
 
 **Known interruptions** count pauses, local stops, transport failures, and restarts observed during capture. They indicate possible gaps; zero is not proof of complete capture. Zoom speech timing is relative to first capture, which can start after the meeting.
+
+## Room presence
+
+Presence answers "is anything happening in this room" and is subject to one rule
+above all others: **it may only say what has been observed.** The hub sees joins,
+leaves and active-speaker changes from the moment it connects, so its list is a
+floor and never a population — the UI says "N people seen here", not "N in the
+room". Presence lives in memory for the life of a sitting and is dropped when
+the sitting ends, the room is archived or deleted, the connection is interrupted,
+or the plugin reloads; none of those states leaves a face on screen. Capture
+availability is distinct from room occupancy, and a lost signal hides the roster
+rather than freezing it. One room is shown at a time, so presence costs the same
+sidebar space however many rooms exist.
 
 ## Canvas source adapter
 

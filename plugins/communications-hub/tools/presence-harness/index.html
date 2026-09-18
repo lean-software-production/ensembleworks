@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Presence strip harness</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; display: flex; height: 100vh; background: #101114; color: #ededee; font: 13px/1.4 system-ui, sans-serif; }
+  /* A faithful-enough copy of bb's sidebar: a flex column whose thread list
+     scrolls and whose footer is pinned under it. */
+  .sidebar-wrapper { flex: 0 0 auto; width: var(--sidebar-width, 260px); border-right: 1px solid #303137; overflow: hidden; }
+  [data-sidebar="sidebar"] { display: flex; flex-direction: column; height: 100%; width: 100%; background: #18191d; }
+  .brand { height: 46px; display: flex; align-items: center; padding: 0 12px; font-weight: 600; }
+  [data-sidebar="content"] { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 0 8px; }
+  [data-sidebar="content"] .thread { padding: 7px 8px; border-radius: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: #a1a2ac; }
+  [data-sidebar="footer"] { display: flex; gap: 4px; padding: 8px; border-top: 1px solid #292a30; }
+  [data-sidebar="footer"] button { width: 28px; height: 28px; border: 0; border-radius: 5px; background: transparent; color: #9596a0; }
+  main { flex: 1 1 auto; padding: 24px; }
+  /* bb's mobile drawer: a separate sidebar rendered beside the desktop one. */
+  [data-sidebar="panel"] { position: fixed; inset: 0 auto 0 0; width: 280px; z-index: 50; box-shadow: 0 0 40px #000a; }
+  [data-sidebar="panel"][data-state="closed"] { display: none; }
+</style>
+<div class="sidebar-wrapper" id="desktop">
+  <div data-sidebar="sidebar">
+    <div class="brand">bb</div>
+    <div data-sidebar="content" id="threads"></div>
+    <div data-sidebar="footer">
+      <button type="button" aria-label="Settings">⚙</button>
+      <button type="button" aria-label="Extensions">⊞</button>
+    </div>
+  </div>
+</div>
+<main>workspace</main>
+<div data-sidebar="panel" data-state="closed" id="drawer">
+  <div data-sidebar="sidebar">
+    <div class="brand">bb</div>
+    <div data-sidebar="content">drawer threads</div>
+    <div data-sidebar="footer"><button type="button" aria-label="Settings">⚙</button></div>
+  </div>
+</div>
+<script type="module">
+  const threads = document.querySelector("#threads");
+  for (let index = 0; index < 30; index += 1) {
+    const row = document.createElement("div");
+    row.className = "thread";
+    row.textContent = `Thread ${index + 1}`;
+    threads.append(row);
+  }
+
+  const NOW = Date.now();
+  const people = (count) => Array.from({ length: count }, (_, index) => ({
+    id: `conversation-1:${index}`,
+    label: ["Ada Lovelace", "Sam", "Ines", "Ravi", "Bo", "Kim"][index % 6] + (index > 5 ? ` ${index}` : ""),
+    initials: ["AL", "SA", "IN", "RA", "BO", "KI"][index % 6],
+    speaking: index === 0,
+    camera: index === 2 ? "off" : "unknown",
+    portraitAt: null,
+  }));
+
+  window.__setView = (overrides = {}, count = 4, rooms = [{ id: "room-1", name: "Team room" }]) => {
+    const participants = people(count);
+    window.__view = {
+      rooms,
+      selectedRoomId: rooms[0].id,
+      room: {
+        roomId: "room-1",
+        roomName: "Team room",
+        joinUrl: "https://zoom.us/j/88800011122",
+        joinable: true,
+        conversationId: "conversation-1",
+        conversationTitle: "Team room sitting",
+        availability: "live",
+        completeness: "partial",
+        participants,
+        knownCount: participants.length,
+        portraits: false,
+        updatedAt: NOW,
+        status: `${participants.length} people seen here · list may be incomplete`,
+        ...overrides,
+      },
+      reason: "ok",
+      generatedAt: NOW,
+    };
+  };
+  window.__setView();
+
+  window.fetch = async (input) => {
+    const url = String(input);
+    const result = url.endsWith("presence.portrait") ? null : window.__view;
+    return { ok: true, status: 200, json: async () => ({ ok: true, result }) };
+  };
+
+  const { mount } = window.__presence ?? await import("./presence-harness.js").then(() => window.__presence);
+  window.__controller = new AbortController();
+  window.__strip = mount({
+    document,
+    pluginId: "communications-hub",
+    signal: window.__controller.signal,
+    pollMs: 500,
+  });
+  window.__ready = true;
+</script>
+<script type="module" src="./presence-harness.js"></script>
+</html>

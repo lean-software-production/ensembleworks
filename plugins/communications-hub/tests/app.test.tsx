@@ -93,6 +93,15 @@ const registrant: Registrant = {
   createdAt: 1_700_000_050_000,
 };
 
+/** No rooms configured: what every panel test sees, since none of them is about presence. */
+const emptyPresence = {
+  rooms: [],
+  selectedRoomId: null,
+  room: null,
+  reason: "no-rooms" as const,
+  generatedAt: 1_700_000_000_000,
+};
+
 function handlers(
   overrides: Partial<PluginRpcTestHandlers<typeof rpcContract>> = {},
 ): PluginRpcTestHandlers<typeof rpcContract> {
@@ -154,6 +163,9 @@ function handlers(
     }),
     "watch.stop": () => ({ ok: true }),
     "capture.stop": () => ({ ...conversation, captureState: "stopped" }),
+    "presence.get": () => emptyPresence,
+    "presence.select": () => emptyPresence,
+    "presence.portrait": () => null,
     "sources.status": () => ({
       ensembleworks: { enabled: false, conversationId: null },
       canvas: { enabled: false, conversationId: null, cursor: 0 },

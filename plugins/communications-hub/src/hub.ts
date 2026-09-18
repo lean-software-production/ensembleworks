@@ -306,6 +306,18 @@ export class Hub {
    * same millisecond, and ids are random UUIDs, so ordering by id picked an arbitrary one of
    * the two as "latest".
    */
+  /**
+   * The room's most recent sitting as a conversation, or null.
+   *
+   * The sidebar strip offers "open the current conversation" for the room it is
+   * showing, and that link has to keep working after capture ends: a meeting
+   * that finished two minutes ago is exactly when somebody wants to read it.
+   */
+  latestRoomConversation(roomId:string):Conversation|null {
+    this.getRoom(roomId);
+    const id=this.currentRoomConversation(roomId);
+    return id===null?null:this.getConversation(id);
+  }
   private currentRoomConversation(roomId:string):string|null {
     const row=this.db.prepare('SELECT id FROM conversations WHERE roomId=? ORDER BY createdAt DESC,rowid DESC LIMIT 1').get(roomId) as {id:string}|undefined;
     return row?.id ?? null;

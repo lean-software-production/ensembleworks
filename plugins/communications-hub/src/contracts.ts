@@ -2,6 +2,7 @@ import { defineRpcContract } from '@get-bb/plugin-sdk';
 import { z } from 'zod';
 import { attachmentSchema, conversationSchema, registrantSchema, roomSchema, segmentSchema, watchSchema } from './domain';
 import { importFormatSchema } from './adapters/import';
+import { presenceViewSchema } from './presence/view';
 
 export const id=z.string().trim().min(1).max(256);
 const page=z.object({conversation:conversationSchema,segments:z.array(segmentSchema),hasMore:z.boolean(),nextCursor:z.number()});
@@ -30,5 +31,13 @@ export const rpcContract=defineRpcContract({
   'registrants.list':{input:z.object({roomId:id}).strict(),output:z.object({registrants:z.array(registrantSchema)})},
   'registrants.add':{input:z.object({roomId:id,name:z.string().trim().min(1).max(200),email:z.string().trim().min(3).max(320)}).strict(),output:registrantSchema},
   'capture.stop':{input:z.object({conversationId:id}).strict(),output:conversationSchema},
+  // Presence is read-mostly and polled by the sidebar strip, so the read takes no
+  // input at all: which room a client sees is hub state a human chose, not a
+  // parameter a caller can point anywhere.
+  'presence.get':{input:z.null(),output:presenceViewSchema},
+  'presence.select':{input:z.object({roomId:id.nullable()}).strict(),output:presenceViewSchema},
+  // A still is fetched on its own so a poll carries no image bytes. The response
+  // is a data URL for one participant of a CURRENT sitting; anything else is null.
+  'presence.portrait':{input:z.object({participantId:id}).strict(),output:z.object({participantId:z.string(),capturedAt:z.number(),dataUrl:z.string()}).nullable()},
   'sources.status':{input:z.null(),output:z.object({ensembleworks:z.object({enabled:z.boolean(),conversationId:z.string().nullable()}),canvas:z.object({enabled:z.boolean(),conversationId:z.string().nullable(),cursor:z.number()}),zoom:z.object({configured:z.boolean(),enabled:z.boolean(),canCreateRooms:z.boolean()}),webhookPath:z.string(),importReady:z.boolean()})},
 });
