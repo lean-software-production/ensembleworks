@@ -46,9 +46,10 @@ succeeds if every goal-gated node's last outcome was `succeeded` or
 `partially_succeeded`), `model`/`provider`/`reasoning_effort` (or a graph-level
 `model_stylesheet`), `permission_mode` (`accept-edits`\|`workspace-write`\|
 `auto`\|`full`\|`readonly`; a graph-level `default_permission_mode` sets the
-fallback) — **a spawned worker still inherits the origin thread's own
-permission ceiling**, so a node asking for more than that thread allows gets
-capped, not upgraded, `output_schema="routing"` (the stage must call the
+fallback; when neither is specified, workers request `auto` — BB's **Approve
+for me** mode, which auto-approves within the workspace) — **a spawned worker
+still inherits the origin thread's own permission ceiling**, so a node asking
+for more than that thread allows gets capped, not upgraded, `output_schema="routing"` (the stage must call the
 `attractor_result` tool with a structured routing decision instead of just
 answering in text).
 

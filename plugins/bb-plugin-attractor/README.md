@@ -97,9 +97,10 @@ validated in v1), `model`, `provider`, `reasoning_effort`
 (`low`\|`medium`\|`high`), `permission_mode`
 (`accept-edits`\|`workspace-write`\|`auto`\|`full`\|`readonly` — resolved in
 that order against the node's own attribute, then the graph's
-`default_permission_mode`, then the origin thread's own default execution
-permission mode; BB may still cap a spawned worker at the origin thread's
-own permission ceiling regardless of what is requested here), `max_parallel`,
+`default_permission_mode`, then `auto` (BB's **Approve for me** mode, which
+auto-approves within the workspace);
+BB may still cap a spawned worker at the origin thread's own permission
+ceiling regardless of what is requested here), `max_parallel`,
 `question_type`, `join_policy` (`all`\|`any`\|`first` — v1 implements `all`),
 `stdin_source`, `review_target` (a `human` gate's workspace-relative file
 path to show alongside its question — see "Human gates" below; note this is
@@ -175,10 +176,10 @@ each text), and `bb attractor stages`'/the run panel's stage table show
 
 ### Worker prompts (blocked agent/prompt stages)
 
-A worker thread inherits the origin thread's own permission mode/ceiling —
-`permission_mode` (node) and `default_permission_mode` (graph) request a
-mode, but BB may still cap a worker at whatever the origin thread already
-allows. A worker that hits its own prompt mid-turn (a file-edit/command
+A worker thread requests `auto` (BB's **Approve for me** mode, with automatic
+approval inside the workspace) when neither `permission_mode` (node) nor
+`default_permission_mode` (graph) is set. BB may still cap that request at
+the origin thread's own permission ceiling. A worker that hits its own prompt mid-turn (a file-edit/command
 approval, a plan confirmation, a provider question, or a plugin-rendered
 one) stops there exactly like any other BB thread would — before this fix
 the run just showed `running` forever with no visible reason (dogfood run
@@ -883,15 +884,13 @@ screenshot, and three real plugin gaps the run itself exposed.
    flags any other value as `invalid-enum-value`, the same pattern as
    `reasoning_effort`/`on_failure`. `resolveModelTuple` resolves it in the
    same order as model/provider/reasoning_effort: the node's own attribute,
-   then the graph's default, then the origin thread's own default
-   execution permission mode. **Deviation:** BB's own `bb.sdk.threads.spawn`
+   then the graph's default, then `auto` (BB's **Approve for me** mode).
+   **Deviation:** BB's own `bb.sdk.threads.spawn`
    (and `defaultExecutionOptions`) permission-mode vocabulary is only three
    values — `accept-edits` | `auto` | `full` — the dialect's other two
    values don't exist in BB at all. `resolveModelTuple` maps
-   `workspace-write` → `accept-edits` (both auto-approve file edits) and
-   `readonly` → `auto` (BB's most conservative real mode — it still prompts
-   before anything a more permissive mode would auto-approve, the closest
-   available approximation of "never write silently") before ever reaching
+   `workspace-write` → `accept-edits` and `readonly` → `auto` (BB has no
+   read-only spawn mode) before ever reaching
    `spawn`, whose own zod schema would otherwise reject an unrecognised
    literal outright. Tests: `dot/graph.ts` typing + parsing,
    `dot/validate.ts`'s enum check, and `server/backend.ts`'s spawn-args
@@ -1042,8 +1041,8 @@ bb plugin build .
   describes `tab` as "single LLM call, read-only tools", but BB's plugin
   SDK has no per-tool read-only restriction a plugin can apply to a
   spawned worker thread — `bb.sdk.threads.spawn` takes a permission *mode*
-  (`accept-edits`/`auto`/`full`), not a tool allowlist, and that mode
-  already comes from the origin thread's own defaults or the stylesheet.
+  (`accept-edits`/`auto`/`full`), not a tool allowlist, and that mode comes
+  from the node/graph declaration or Attractor's `auto` default.
   `handlers/prompt.ts` is therefore identical to `handlers/agent.ts` in
   v1; a real read-only mode would need either a BB SDK addition or a
   provider-specific permission override, out of scope here.
