@@ -753,9 +753,20 @@ now closed, on the same branch:
   about, misses included, so a caller could grow it without ever writing anything.
 - **Every kv call the ledger makes is time-bounded** (`KV_TIMEOUT_MS`, 1s). An SDK hook
   that exceeds 10s fails the attempt, so a wedged kv was the one remaining way this
-  observe-only code could still affect a dispatch. Lineage reads run in parallel, so the
-  hook's whole storage budget is about two timeouts. A timed-out read is a failure, not
+  observe-only code could still affect a dispatch. A timed-out read is a failure, not
   an answer: it is never cached.
+
+  **Correction (2026-09-18, step 5): "the hook's whole storage budget is about two
+  timeouts" was wrong, and is now replaced.** It was already wrong when step 4 landed —
+  `observeHost` took the worst case to ~6s (lineage 1s, pins get+set 2s, ledger
+  get/set/index 3s) — and step 5's guard adds a classification step on top. Adding up
+  individually-bounded calls was never a safe guarantee, so step 5 put ONE deadline over
+  the whole hook body: `HOOK_BUDGET_MS`, **5s**, inside the SDK's 10s fail-closed ceiling.
+  It fails OPEN — a dispatch Identity cannot decide about in time proceeds, unrecorded
+  and unrefused. Two tests pin it: one hangs the things a kv timeout cannot reach
+  (`observeHost`, the guard) and asserts the hook still answers at the deadline; one
+  asserts a wedged kv finishes a full second inside it, so the deadline stays a backstop
+  rather than the thing normally doing the work.
 - **The hook body is `attributeDispatch`, a plain function with its contract under test**
   — always `{action: "proceed"}`, never throws, warns instead. Tested for a throwing
   ledger, a throwing identity lookup and an already-recorded thread.
@@ -991,3 +1002,109 @@ was wrong.**
 **Not done here (deliberately):** step 5 (`restrictStarts` / `requireIdentity`), the
 read-only-thread composer banner on other people's threads (it belongs with the
 guardrail that makes it true), and any avatar in the sidebar (no surface for it).
+
+### Step 5 built (2026-09-18): the guardrail, `restrictStarts` only
+
+Landed on `feature/identity-attribution` (`plugins/identity/guardrail.ts`, plus the
+setting, the hook wiring and the read-only banner in `server.ts`, `app.tsx` and
+`ownership-labels.ts`). This is the first change in the whole plan that can **refuse** a
+dispatch. `requireIdentity` is deliberately NOT built — see below.
+
+**The setting.** `restrictStarts`, boolean, **default off**. With it off the behaviour is
+exactly what step 4 shipped: record and proceed, always. Nothing else in Identity
+changed behaviour when the setting is off.
+
+**The rules, exactly.** A dispatch is refused only when its requester is POSITIVELY
+IDENTIFIED — a known person from the Access email, or a dispatch bb itself stamped as
+the automations plugin.
+
+- **A — a start on another person's machine.** A known person's dispatch on a thread with
+  no recorded starter, headed for a host `hosts.ts` classifies `person` and not theirs, is
+  refused. `team` and `unclaimed` hosts are always allowed (answer 6). The classification
+  is the same pinned one the ownership chip renders — not a second derivation, because a
+  refusal contradicting the chip beside it would be worse than no guardrail.
+- **B — a follow-up by a non-starter.** A known person's dispatch into a thread whose
+  recorded starter is a DIFFERENT known person is refused (answer 1). A thread with no
+  recorded starter, and a thread whose starter is the requester, are allowed.
+- **C — an automation off the team machine.** `origin: "plugin"` with
+  `originPluginId: "automations"`, headed for a host that is not `team`, is refused
+  (answer 2). An automation bb named no host for is allowed: there is nothing to judge.
+
+"Start" and "follow-up" are decided by the LEDGER (is a starter recorded?), not by the
+hook's `attempt` kind. That matters because bb creates the thread row before the hook
+runs, so a refused start leaves an empty thread behind — and a refused dispatch is
+deliberately never recorded, so sending into that empty thread is still a start and is
+refused again. There is a test for exactly that.
+
+**What `restrictStarts` does NOT cover.** Stated rather than papered over:
+
+- **Anything with no identity — always allowed, by design.** S9 proved four legitimate
+  paths arrive with no identity, no origin and no lineage: an agent's own
+  `bb thread tell`, `bb thread retry`, a plugin's follow-up `threads.send` (a workflow's
+  completion notice), and an automation aimed at an existing thread. Refusing those would
+  break the mechanism agents report into parent threads with. So a human on a header-less
+  shell reaches a thread exactly as an agent does, and rule B does not see them. That hole
+  is the price of not breaking agents, and it is why answer 8's `BB_SERVER_HEADERS`
+  opt-in (or the starter carve-out) is still the open question.
+- **Rule C is blind to the `threads.send` automation shape**, for the same reason: the
+  plugin-SDK bridge stamps `origin`/`originPluginId` on `threads.spawn` and `threads.fork`
+  ONLY. An automation that targets an existing thread is not visible as a plugin origin at
+  all. Rule C can see the scheduled-agent-run shape and nothing else, and says so in code.
+- **Send-now still skips the hook** (unchanged, accepted). A thread whose first message
+  went out through Send-now has no recorded starter, so rule B has nothing to compare
+  against and rule A treats its next dispatch as a start.
+- **Unhooked routes** — terminals, Stop, Archive, answering approvals — are untouched.
+- **A wedged kv turns the guardrail off**, not on: the hook's 5s deadline fails OPEN.
+- **`yourMachines` in a refusal is read from memory only** (the 30s machine-list cache, if
+  something warmed it). A cold cache produces "Identity knows no machine of your own yet;
+  start the thread on the team machine (…) instead" — correct, just less specific. A
+  refusal must never wait on the network to word itself.
+
+**Why `requireIdentity` is unbuilt.** The owner's decision after reading S9: refusing
+identity-less dispatches would break the four paths above, the first of which (an agent's
+`bb thread tell` into its parent thread) would bite daily. It waits on either a
+provider-backed S9 re-run or a choice between the starter carve-out and a per-machine
+`BB_SERVER_HEADERS`. Nothing in step 5 moves toward it: anonymous is not a rule violation
+here, it is the normal shape of an agent.
+
+**The UI that goes with it.**
+- The new-thread composer banner's last sentence now follows the setting: off, it still
+  reads "starting on someone else's machine is recorded, not refused"; on, "The dispatch
+  itself is checked though: starting on someone else's machine is refused, with a message
+  naming whose it is." Step 4's `never promises an enforcement that is not built` test
+  became `…that is not switched on` — the same promise, made conditional on the setting
+  rather than deleted.
+- The read-only banner step 4 deferred now ships, because rule B is what makes it true:
+  "Read-only: Matt's thread / Only Matt can send to it…" with the setting on, and
+  "Matt's thread / …nothing enforces that here: Identity's restrictStarts setting is off"
+  with it off. It renders nothing on your own thread, on a thread with no recorded
+  starter, or for a sign-in Identity cannot name.
+
+**Runtime verification (throwaway `bb-app` 0.43.0, temp `HOME`, ports 39886/39887,
+2026-09-18).** Local host renamed to `ew-lsp-001-mattwynne`, directory holding David and
+Matt, `teamMachines: ew-lsp-001-main`. Verbatim:
+
+- `restrictStarts` OFF, David starts on Matt's machine → `HTTP 201`, and
+  `GET /thread-ownership` → `{"starter":{"person":"mrdavidlaing",…},"via":"browser","host":{"kind":"person","hostName":"ew-lsp-001-mattwynne",…}}`.
+- ON, David starts on Matt's machine →
+  `HTTP 409 {"code":"dispatch_rejected","message":"ew-lsp-001-mattwynne is Matt's machine. Identity knows no machine of your own yet; start the thread on the team machine (ew-lsp-001-main) instead. (Identity's restrictStarts setting refused this.)","details":{"pluginId":"identity"}}`
+- ON, header-less create on the same machine → `HTTP 201` (`started by unknown (via unknown)` in the plugin log).
+- ON, Matt starts on his own machine → `HTTP 201`.
+- ON, David sends into Matt's thread →
+  `HTTP 409 {"code":"dispatch_rejected","message":"This thread was started by Matt, and other people's threads are read-only. Ask Matt to send it, or start a thread of your own. (Identity's restrictStarts setting refused this.)"}`
+- ON, anonymous send into Matt's thread → `HTTP 200 {"ok":true,"delivery":"sent"}`; Matt's
+  own send into it → the same.
+
+**Not exercised, and why.** Rule C (no automation can fire without a working provider
+under a temp `HOME` — `ai_service_auth_required`, the same wall S9 hit); the two banners
+in a real browser (`agent-browser` cannot run in this sandbox — the copy is unit-tested,
+the rendering is not); and the real agent CLI paths (`bb thread tell` / `retry`), which
+are covered by unit tests built from S9's observed dispatch shapes rather than re-run.
+
+**Recipe corrections for the next spike.** `bb plugin install <path>` needs `--yes` when
+not on a TTY. A personal workspace is refused outside the personal project — use
+`environment: {type: "host", hostId, workspace: {type: "unmanaged", path}}`, which is also
+how you pin the machine a dispatch is headed for. `POST /threads/:id/send` wants
+`mode: "auto"` (the modes are `queue-if-active | steer-if-active | auto | start | steer`).
+Poll `GET /api/v1/hosts` for `status == "connected"` — matching the substring `connected`
+also matches `disconnected`.
