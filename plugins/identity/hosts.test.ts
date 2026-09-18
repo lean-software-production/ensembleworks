@@ -92,8 +92,35 @@ describe("classifyHost", () => {
   });
 
   it("classifies a host that is neither as unclaimed, not as team", () => {
+    // Owner answer 6, 2026-09-17: an unmapped host is NEVER silently folded into "team".
+    // That is what catches a typo'd or freshly renamed person machine before it quietly
+    // becomes a de-facto shared box, so this state is worth more than one assertion.
+    expect(classifyHost({ id: "h3", name: "ew-scratch-002" }, { people, teamMachines: team, pin: null }))
+      .toEqual({ kind: "unclaimed", hostId: "h3", hostName: "ew-scratch-002", conflict: null });
+  });
+
+  it("carries no person on an unclaimed host, so nothing downstream can read one", () => {
     const classified = classifyHost({ id: "h3", name: "ew-scratch-002" }, { people, teamMachines: team, pin: null });
-    expect(classified.kind).toBe("unclaimed");
+    expect(Object.hasOwn(classified, "person")).toBe(false);
+  });
+
+  it("calls a typo'd or partial person machine unclaimed, never that person's", () => {
+    for (const name of ["ew-lap-002-mat", "ew-lsp-001-mrdavidlain", "ew-lsp-001-mattwynne-2", "ew-lsp-001-"]) {
+      expect(classifyHost({ id: "h5", name }, { people, teamMachines: team, pin: null }).kind).toBe("unclaimed");
+    }
+  });
+
+  it("calls the team machine unclaimed when the team list has not been configured", () => {
+    // A missing `teamMachines` setting must degrade to "unclaimed", never to "team":
+    // guessing team membership from a name is exactly the silent fold answer 6 forbids.
+    expect(classifyHost({ id: "h2", name: "ew-lsp-001-main" }, { people, teamMachines: [], pin: null }).kind)
+      .toBe("unclaimed");
+  });
+
+  it("calls every host unclaimed when the directory is empty, and none of them team", () => {
+    for (const name of ["ew-lsp-001-mrdavidlaing", "ew-scratch-002", ""]) {
+      expect(classifyHost({ id: "h6", name }, { people: [], teamMachines: [], pin: null }).kind).toBe("unclaimed");
+    }
   });
 
   it("follows the pin, not a later name that disagrees, and flags the disagreement", () => {

@@ -11,7 +11,7 @@ import {
 } from "@get-bb/plugin-sdk/app";
 import type { MachineList, PresenceLocation, PresentPerson, rpcContract, ThreadOwnership, WhoAmI } from "./server.js";
 import { initials, presenceLabel } from "./presence-labels.js";
-import { composerBanner, headerChip, ownershipRowStatus } from "./ownership-labels.js";
+import { composerBanner, headerChip, ownershipRowStatus, readOnlyBanner } from "./ownership-labels.js";
 import {
   mountThreadStatusFallback,
   replaceThreadStatuses,
@@ -213,12 +213,8 @@ function ThreadOwnershipChip({ threadId }: { threadId: string }) {
   );
 }
 
-/**
- * The new-thread composer banner: "Starting as David", plus the machines that are
- * yours. It deliberately makes NO claim about the machine you picked — a `new-thread`
- * composer customization cannot see it (spike S3-lite).
- */
-function StartingAsBanner() {
+/** Who I am, which machines exist, and whether the guardrail is switched on. */
+function useMachineList(): MachineList | null {
   const rpc = useRpc<typeof rpcContract>();
   const [list, setList] = useState<MachineList | null>(null);
   useEffect(() => {
@@ -228,17 +224,65 @@ function StartingAsBanner() {
     }).catch(() => undefined);
     return () => { live = false; };
   }, [rpc]);
-  if (list === null) return null;
-  const banner = composerBanner({ me: list.me, machines: list.machines });
+  return list;
+}
+
+function BannerBody({ title, detail }: { title: string; detail: string }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", fontSize: 12, gap: 2, lineHeight: 1.4 }}>
-      <span style={{ fontWeight: 600 }}>{banner.title}</span>
-      <span style={{ color: "var(--muted-foreground)" }}>
-        {banner.detail}
-        {list.unavailable === null ? null : ` ${list.unavailable}.`}
-      </span>
+      <span style={{ fontWeight: 600 }}>{title}</span>
+      <span style={{ color: "var(--muted-foreground)" }}>{detail}</span>
     </div>
   );
+}
+
+/**
+ * The new-thread composer banner: "Starting as David", plus the machines that are
+ * yours. It deliberately makes NO claim about the machine you picked — a `new-thread`
+ * composer customization cannot see it (spike S3-lite) — and what it says about what
+ * happens AFTER you send follows `restrictStarts`, so it can never promise an
+ * enforcement the server is not performing.
+ */
+function StartingAsBanner() {
+  const list = useMachineList();
+  if (list === null) return null;
+  const banner = composerBanner({ me: list.me, machines: list.machines, restrictStarts: list.restrictStarts });
+  return (
+    <BannerBody
+      title={banner.title}
+      detail={`${banner.detail}${list.unavailable === null ? "" : ` ${list.unavailable}.`}`}
+    />
+  );
+}
+
+/**
+ * The composer banner on a thread somebody else started: "Read-only: Matt's thread".
+ *
+ * Rule B is what makes it true, so it ships with rule B and reads the same setting: with
+ * `restrictStarts` off it says the thread is Matt's and that nothing enforces that.
+ */
+function ReadOnlyThreadBanner() {
+  const rpc = useRpc<typeof rpcContract>();
+  const view = useComposerView();
+  const list = useMachineList();
+  const threadId = view.scope.kind === "thread" ? view.scope.threadId : null;
+  const [ownership, setOwnership] = useState<ThreadOwnership | null>(null);
+  useEffect(() => {
+    if (threadId === null) return;
+    let live = true;
+    void rpc.call("identity_thread_ownership", { threadIds: [threadId] }).then(({ threads }) => {
+      if (live) setOwnership(threads[0] ?? null);
+    }).catch(() => undefined);
+    return () => { live = false; };
+  }, [rpc, threadId]);
+  if (list === null || ownership === null) return null;
+  const banner = readOnlyBanner({
+    me: list.me,
+    starter: ownership.starter,
+    restrictStarts: list.restrictStarts,
+  });
+  if (banner === null) return null;
+  return <BannerBody title={banner.title} detail={banner.detail} />;
 }
 
 /** Invisible composer surface: observes text, never sends draft content. */
@@ -495,5 +539,10 @@ export default definePluginApp((app) => {
     id: "ownership-banner",
     scopes: ["new-thread"],
     banners: [{ id: "starting-as", chrome: "card", component: StartingAsBanner }],
+  });
+  app.composer.customize({
+    id: "read-only-banner",
+    scopes: ["thread"],
+    banners: [{ id: "read-only", chrome: "card", component: ReadOnlyThreadBanner }],
   });
 });

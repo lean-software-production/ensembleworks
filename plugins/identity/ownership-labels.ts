@@ -123,6 +123,8 @@ export type OwnershipBanner = { title: string; detail: string };
 export function composerBanner(input: {
   me: StarterSummary | null;
   machines: readonly HostClassification[];
+  /** Whether the guardrail is actually switched on, which changes what this may promise. */
+  restrictStarts: boolean;
 }): OwnershipBanner {
   if (input.me === null) {
     return {
@@ -145,10 +147,48 @@ export function composerBanner(input: {
     mine.length > 0 ? `Your machines: ${mine.join(", ")}.` : "No machines of your own are known yet.",
     team.length > 0 ? `Team machine: ${team.join(", ")}.` : null,
   ].filter((part): part is string => part !== null).join(" ");
+  // What happens after you press send is the only part of this that the setting changes.
+  // With `restrictStarts` off nothing refuses anything, and saying otherwise would be a
+  // lie told in the user's own composer (there is a test for exactly that).
+  const afterwards = input.restrictStarts
+    ? "The dispatch itself is checked though: starting on someone else's machine is refused, with a message "
+      + "naming whose it is."
+    : "Nothing else checks it yet either: starting on someone else's machine is recorded, not refused.";
   return {
     title,
     detail: `${lists} BB does not tell a plugin which machine this composer has selected, so this banner cannot `
-      + "check it for you. Nothing else checks it yet either: starting on someone else's machine is recorded, "
-      + "not refused.",
+      + `check it for you. ${afterwards}`,
+  };
+}
+
+/**
+ * The composer banner on a thread someone else started.
+ *
+ * Step 4 left this unbuilt on purpose: it is rule B — other people's threads are
+ * read-only (answer 1) — that makes it true, so it ships with rule B. It says "read-only"
+ * only when `restrictStarts` is actually on; with the setting off the thread is someone
+ * else's but nothing stops you, and the banner says that instead of pretending.
+ *
+ * Null (no banner at all) on your own thread, on a thread with no recorded starter, and
+ * for a sign-in Identity cannot name — in none of those can it say anything true.
+ */
+export function readOnlyBanner(input: {
+  me: StarterSummary | null;
+  starter: StarterSummary | null;
+  restrictStarts: boolean;
+}): OwnershipBanner | null {
+  const { me, starter } = input;
+  if (me === null || starter === null || me.person === starter.person) return null;
+  const name = starter.displayName;
+  if (!input.restrictStarts) {
+    return {
+      title: `${name}'s thread`,
+      detail: `Other people's threads are meant to be ${name}'s to drive, but nothing enforces that here: `
+        + "Identity's restrictStarts setting is off.",
+    };
+  }
+  return {
+    title: `Read-only: ${name}'s thread`,
+    detail: `Only ${name} can send to it. Ask ${name}, or start a thread of your own.`,
   };
 }

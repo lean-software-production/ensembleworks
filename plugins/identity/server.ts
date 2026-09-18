@@ -13,6 +13,7 @@ import {
   parseTeamMachines,
   type HostClassification,
 } from "./hosts.js";
+import { makeGuardrail } from "./guardrail.js";
 import { identityFor, parseDirectory, type Person } from "./people.js";
 import {
   ACCESS_EMAIL_HEADER,
@@ -124,7 +125,8 @@ export function publicStarter(record: StarterRecord | null): ThreadStarter {
 export function ownershipFor(
   wanted: string,
   starter: ThreadStarter,
-  classify: (host: HostRef) => HostClassification,
+  /** The recorded machine, already classified; null when there is none to classify. */
+  host: HostClassification | null,
 ): ThreadOwnership {
   if (starter === null) {
     return { threadId: wanted, starter: null, via: "unknown", inheritedFrom: null, host: null };
@@ -134,7 +136,7 @@ export function ownershipFor(
     starter: starter.starter,
     via: starter.via,
     inheritedFrom: starter.inheritedFrom,
-    host: starter.host === null ? null : classify(starter.host),
+    host: starter.host === null ? null : host,
   });
 }
 
@@ -179,6 +181,11 @@ const machineList = z.object({
   machines: z.array(hostClassification),
   /** The account team and unclaimed machines run as, for the header chip's wording. */
   sharedMachineUser: z.string(),
+  /**
+   * Whether the guardrail is switched on. The UI must not promise an enforcement the
+   * server is not performing, so every banner that mentions one reads this.
+   */
+  restrictStarts: z.boolean(),
   /** Why the list is empty, when it is. Null when the list was read successfully. */
   unavailable: z.string().nullable(),
 }).strict();
@@ -384,8 +391,13 @@ function sameLocation(left: PresenceLocation, right: PresenceLocation): boolean 
 
 export default async function plugin(bb: BbPluginApi) {
   const requestContext = installRequestContext();
-  /** Durable hostId -> person pins. Labels only; it restricts nothing. */
+  /** Durable hostId -> person pins. */
   const pins = new HostPins(bb.storage.kv, []);
+  /**
+   * bb's own host list, cached. Declared up here because the guardrail reads it — without
+   * ever refreshing it — to name the machines a refusal should suggest.
+   */
+  let machineCache: { at: number; machines: HostClassification[]; unavailable: string | null } | null = null;
   const settings = bb.settings.define({
     directory: {
       type: "string",
@@ -414,6 +426,16 @@ export default async function plugin(bb: BbPluginApi) {
         + "the thread header chip. Display only — Identity never sets or checks it.",
       default: "ensembleworks-agent",
     },
+    restrictStarts: {
+      type: "boolean",
+      label: "Restrict where threads are started",
+      description:
+        "Refuse a known person's start on another person's machine, a known person's message into "
+        + "someone else's thread, and an automation off a team machine. A dispatch Identity cannot tie "
+        + "to a person is ALWAYS allowed — that is the normal shape of every agent path. Default off: "
+        + "turn it on once the ownership labels look right.",
+      default: false,
+    },
     fallbackEmail: {
       type: "string",
       label: "Fallback email",
@@ -429,11 +451,19 @@ export default async function plugin(bb: BbPluginApi) {
   let fallbackEmail = "";
   let teamMachines: string[] = [];
   let sharedMachineUser = "ensembleworks-agent";
+  let restrictStarts = false;
   const applySettings = (
-    values: { directory: string; fallbackEmail: string; teamMachines: string; sharedMachineUser: string },
+    values: {
+      directory: string;
+      fallbackEmail: string;
+      teamMachines: string;
+      sharedMachineUser: string;
+      restrictStarts: boolean;
+    },
     reportInvalid: boolean,
   ) => {
     fallbackEmail = values.fallbackEmail;
+    restrictStarts = values.restrictStarts;
     teamMachines = parseTeamMachines(values.teamMachines);
     sharedMachineUser = values.sharedMachineUser.trim() || "ensembleworks-agent";
     const parsed = parseDirectory(values.directory);
@@ -498,11 +528,37 @@ export default async function plugin(bb: BbPluginApi) {
     return c.json(selfTest ?? { ok: false, detail: "the self-test has not finished yet" });
   }, { auth: "local" });
 
-  // Observe-only, and bounded: `attributeDispatch` always proceeds, never throws, and the
-  // ledger's own kv timeout caps how long it can hold a dispatch up. See its unit tests.
+  /** Label one machine: the team list, then the pin, then the name, then "unclaimed". */
+  const classifyWithPin = async (host: HostRef): Promise<HostClassification> =>
+    classifyHost(host, { people, teamMachines, pin: await pins.get(host.id) });
+
+  /**
+   * The guardrail (step 5). It refuses only a POSITIVELY IDENTIFIED requester — a known
+   * person, or a dispatch bb stamped as the automations plugin — and only while
+   * `restrictStarts` is on. See guardrail.ts for why an identity-less dispatch is always
+   * allowed (S9: that is the shape of every agent path).
+   *
+   * The machine names in a refusal come from memory only: the team-machines setting, and
+   * the machine list IF it happens to be warm. A refusal must never wait on the network
+   * to word itself, and the hook is on bb's critical path.
+   */
+  const guard = makeGuardrail({
+    enabled: () => restrictStarts,
+    classify: classifyWithPin,
+    machines: (requester) => ({
+      yourMachines: requester === null ? [] : (machineCache?.machines ?? [])
+        .filter((host) => host.kind === "person" && host.person.person === requester.person)
+        .map((host) => host.hostName),
+      teamMachines,
+    }),
+  });
+
+  // The ONE place Identity can refuse a dispatch, and it is bounded: `attributeDispatch`
+  // answers inside its own deadline, never throws, and falls open on any failure.
   bb.experimental_hooks.on("message.dispatch", (context) =>
     attributeDispatch(context, {
       ledger,
+      guard,
       identity: whoamiPerson,
       now: () => Date.now(),
       // Display-only side effect: every machine bb itself names gets pinned on first
@@ -511,15 +567,10 @@ export default async function plugin(bb: BbPluginApi) {
       log: { info: (message) => bb.log.info(message), warn: (message) => bb.log.warn(message) },
     }));
 
-  /** Label one machine: the team list, then the pin, then the name, then "unclaimed". */
-  const classifyWithPin = async (host: HostRef): Promise<HostClassification> =>
-    classifyHost(host, { people, teamMachines, pin: await pins.get(host.id) });
-
   const ownership = async (wanted: string): Promise<ThreadOwnership> => {
     const record = publicStarter(await ledger.get(wanted));
     const host = record?.host ?? null;
-    const classified = host === null ? null : await classifyWithPin(host);
-    return ownershipFor(wanted, record, () => classified ?? { kind: "unclaimed", hostId: host?.id ?? "", hostName: host?.name ?? "", conflict: null });
+    return ownershipFor(wanted, record, host === null ? null : await classifyWithPin(host));
   };
 
   /**
@@ -527,7 +578,6 @@ export default async function plugin(bb: BbPluginApi) {
    * plugin no way to enumerate hosts (see `parseHostList`), and this is only ever used
    * to LIST machines in the composer banner.
    */
-  let machineCache: { at: number; machines: HostClassification[]; unavailable: string | null } | null = null;
   const MACHINE_CACHE_MS = 30_000;
   const machines = async (): Promise<{ machines: HostClassification[]; unavailable: string | null }> => {
     if (machineCache !== null && Date.now() - machineCache.at < MACHINE_CACHE_MS) {
@@ -622,6 +672,7 @@ export default async function plugin(bb: BbPluginApi) {
       return publicMachineList({
         me: whoamiFor(requestContext.current()?.email ?? null).person,
         sharedMachineUser,
+        restrictStarts,
         machines: listed.machines,
         unavailable: listed.unavailable,
       });

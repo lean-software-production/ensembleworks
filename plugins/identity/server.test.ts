@@ -179,15 +179,15 @@ describe("publicStarter, with the machine the thread ran on", () => {
 });
 
 describe("ownershipFor", () => {
-  const classify = (host: { id: string; name: string }): HostClassification => ({
+  const classified: HostClassification = {
     kind: "team",
-    hostId: host.id,
-    hostName: host.name,
+    hostId: "h3",
+    hostName: "ew-lsp-001-main",
     conflict: null,
-  });
+  };
 
   it("is an unknown, never-null-looking view when nothing was recorded", () => {
-    expect(ownershipFor("thr_1", null, classify)).toEqual({
+    expect(ownershipFor("thr_1", null, null)).toEqual({
       threadId: "thr_1",
       starter: null,
       via: "unknown",
@@ -207,7 +207,7 @@ describe("ownershipFor", () => {
       inheritedFrom: null,
       recordedAt: 1,
       host: { id: "h3", name: "ew-lsp-001-main" },
-    }), classify);
+    }), classified);
     expect(view.host?.kind).toBe("team");
     expect(view.starter?.displayName).toBe("David");
   });
@@ -232,6 +232,7 @@ describe("publicMachineList", () => {
   const listed = {
     me: { person: "mrdavidlaing", displayName: "David", github: "mrdavidlaing" },
     sharedMachineUser: "ensembleworks-agent",
+    restrictStarts: false,
     machines: [{ kind: "team" as const, hostId: "h3", hostName: "ew-lsp-001-main", conflict: null }],
     unavailable: null,
   };
